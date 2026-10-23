@@ -21,11 +21,17 @@
  *
  * # When it stops
  *
- * Only on `not_running`: the job finished, parked, or a later one replaced it,
- * and its output is on its record from here on. `launching` (a box still being
- * made), `box_paused`, `box_gone` (the record has yet to move on: its job is
- * recorded lost, and its round carried on in a fresh one), a silent owner and a
- * failed read all go on asking, and keep what the view holds on screen.
+ * On `not_running`: the job finished, parked, or a later one replaced it, and
+ * its output is on its record from here on. And on a refusal the engine says
+ * waiting can't clear (`unavailable` whose `retry_after` is zero: a sandbox
+ * setup somebody has to fix, a refused key), which is the engine saying
+ * nothing should ask again on a timer: asked every three seconds, it was
+ * answered the same each time and logged at warn on the owning node each
+ * time. A reconnect asks again, and so does opening the view again.
+ * `launching` (a box still being made), `box_paused`, `box_gone` (the record
+ * has yet to move on: its job is recorded lost, and its round carried on in a
+ * fresh one), a silent owner and every other failed read go on asking, and
+ * keep what the view holds on screen.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -34,7 +40,14 @@ import { retryDelayMs } from "./useQuery.ts";
 import { utf8Bytes } from "./format.ts";
 import { LIVE_OUTPUT_MAX_BYTES, SANDBOX_TAIL_POLL_MS } from "~/contract/sandbox.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
-import { queryErrorCode, type SandboxTailAnswer } from "~/protocol/index.ts";
+import {
+  isLogRefusal,
+  QueryError,
+  queryErrorCode,
+  type LogRefusal,
+  type QueryRefusal,
+  type SandboxTailAnswer,
+} from "~/protocol/index.ts";
 
 /** What a live view holds, and how it asks for the rest. */
 export interface LiveView {
@@ -151,6 +164,13 @@ export function trimFront(text: string, max: number): { text: string; dropped: n
 export interface LiveTail extends LiveView {
   /** The last failure's code, cleared by the next answer. */
   error: QueryErrorCode | null;
+  /**
+   * What the engine said about that failure beyond its code, cleared with it:
+   * on `unavailable`, its sentence for what happened and whether waiting
+   * changes it, which is what a screen shows in place of the code. A code is
+   * not a sentence a person reads.
+   */
+  refusal: QueryRefusal | LogRefusal | null;
 }
 
 /**
@@ -165,7 +185,7 @@ export function useLiveTail(
 ): LiveTail {
   const { socket } = useClient();
   const { connected } = useConnection();
-  const [state, setState] = useState<LiveTail>({ ...EMPTY_VIEW, error: null });
+  const [state, setState] = useState<LiveTail>({ ...EMPTY_VIEW, error: null, refusal: null });
   // The view the poll asks from: the latest fold, read by the next tick.
   const view = useRef<LiveView>(EMPTY_VIEW);
 
@@ -173,7 +193,7 @@ export function useLiveTail(
   // output appended to it.
   useEffect(() => {
     view.current = EMPTY_VIEW;
-    setState({ ...EMPTY_VIEW, error: null });
+    setState({ ...EMPTY_VIEW, error: null, refusal: null });
   }, [turnId, launchId]);
 
   useEffect(() => {
@@ -182,10 +202,12 @@ export function useLiveTail(
     let timer: ReturnType<typeof setTimeout> | 0 = 0;
     const run = async (): Promise<void> => {
       // The engine's own wait for a refusal it named one for (`retryDelayMs`),
-      // or null. A tail polls whatever the answer, so a refusal waiting cannot
-      // clear (0) or one that named no wait (null) keeps the ordinary poll,
-      // and only a named wait shorter than it brings the next ask forward.
+      // or null. A refusal that named no wait keeps the ordinary poll, and a
+      // named wait shorter than it brings the next ask forward.
       let retryMs: number | null = null;
+      // A refusal waiting can't clear (`retry_after` zero) STOPS the poll
+      // until a reconnect or the view is opened again: see "When it stops".
+      let noWait = false;
       try {
         const answer = await socket.query("sandbox_tail", {
           turn_id: turnId,
@@ -194,16 +216,22 @@ export function useLiveTail(
         });
         if (!live) return;
         view.current = foldTail(view.current, answer);
-        setState({ ...view.current, error: null });
+        setState({ ...view.current, error: null, refusal: null });
       } catch (err) {
         if (!live) return;
         const code = queryErrorCode(err instanceof Error ? err.message : null) ?? "query_failed";
         retryMs = retryDelayMs(code, err);
+        const refusal = err instanceof QueryError ? err.refusal : null;
+        noWait =
+          code === "unavailable" &&
+          refusal !== null &&
+          isLogRefusal(refusal) &&
+          refusal.retryAfter === 0;
         // KEEP what the view holds: one failed read is not a run that said
         // nothing.
-        setState((prev) => ({ ...prev, error: code }));
+        setState((prev) => ({ ...prev, error: code, refusal }));
       } finally {
-        if (live && !view.current.final) {
+        if (live && !view.current.final && !noWait) {
           const next = retryMs ? Math.min(pollMs, retryMs) : pollMs;
           timer = setTimeout(() => void run(), next);
         }

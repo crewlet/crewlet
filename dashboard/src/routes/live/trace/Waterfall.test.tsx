@@ -16,7 +16,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import type { PhaseRecord } from "~/lib/phases.ts";
 import { buildWaterfall } from "~/lib/waterfall.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
+import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
 import type { EventRecord, SandboxTailAnswer } from "~/protocol/index.ts";
 import { phaseRecord } from "~/test/phaseRecord.ts";
 import { SANDBOX_TAIL_POLL_MS } from "~/contract/sandbox.ts";
@@ -75,7 +75,7 @@ const PARKED = [
 /** Mount the Timeline over a stubbed tail answer, counting the asks. */
 function mount(
   events: EventRecord[],
-  tail: SandboxTailAnswer | ((asked: number) => SandboxTailAnswer),
+  tail: SandboxTailAnswer | Error | ((asked: number) => SandboxTailAnswer | Error),
   {
     selected: initial = "",
     now = T0 + 60_000,
@@ -98,8 +98,10 @@ function mount(
   ) => {
     if (what === "sandbox_tail") {
       asked.push(params as Record<string, unknown>);
-      // A FUNCTION ANSWERS THE NTH ASK, for a run whose output grows.
-      return Promise.resolve(typeof tail === "function" ? tail(asked.length) : tail);
+      // A FUNCTION ANSWERS THE NTH ASK, for a run whose output grows; an
+      // ERROR is the engine refusing it.
+      const answer = typeof tail === "function" ? tail(asked.length) : tail;
+      return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer);
     }
     return Promise.resolve({});
   };
@@ -214,6 +216,100 @@ describe("a running coding run's live output", () => {
     expect(liveState({ outcome: "box_gone", turn_id: "t", launch_id: "L" }, false)).toBe(
       "The run's box is gone.",
     );
+  });
+
+  // A FAILED READ IS TOLD IN THE ENGINE'S WORDS, never its code: the
+  // sentence the engine sends for the condition where it sends one, and the
+  // screen's own sentence for the code where it does not. It printed the code
+  // ("The run's output could not be read: unavailable."), which no person can
+  // act on.
+  //
+  // Mutation: print the code again, and every row goes red.
+  test("a failed read is told in the engine's words, never by its code", async () => {
+    const said = "The coding sandbox didn’t answer. Try again in a moment.";
+    for (const [failure, words] of [
+      [new QueryError("unavailable", { code: null, detail: said, retryAfter: 5 }), said],
+      [
+        new QueryError("unavailable", {
+          code: null,
+          detail:
+            "The coding sandbox isn’t set up for this. An administrator needs to fix its setup.",
+          retryAfter: 0,
+        }),
+        "The coding sandbox isn’t set up for this. An administrator needs to fix its setup.",
+      ],
+      [
+        new QueryError("query_failed"),
+        "The engine failed to answer. You can check logs for the details.",
+      ],
+    ] as const) {
+      mount(PARKED, failure, { selected: "run:L1" });
+      expect(await screen.findByText(words)).toBeTruthy();
+      for (const code of ["unavailable", "query_failed"]) {
+        expect(screen.queryByText(new RegExp(code))).toBeNull();
+      }
+      cleanup();
+    }
+  });
+
+  // A READ THAT FAILS OVER OUTPUT ALREADY SHOWN is told the same way, over
+  // what the view holds: the output stays, and the code is never printed. It
+  // printed "Last read failed (query_failed). Retrying." over it.
+  //
+  // Mutation: print the code in the branch for a view that holds an answer,
+  // or drop what it holds on a failed read, and it goes red.
+  test("a failed read over output already shown keeps it and says the engine's words", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false, toFake: ["setTimeout", "clearTimeout"] });
+    const said = "The coding sandbox didn’t answer. Try again in a moment.";
+    mount(
+      PARKED,
+      (n) =>
+        n === 1
+          ? RUNNING
+          : new QueryError("unavailable", { code: null, detail: said, retryAfter: 5 }),
+      { selected: "run:L1" },
+    );
+    await flush();
+    expect(screen.getByText("running go test ./...")).toBeTruthy();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS);
+    });
+    expect(screen.getByText(said)).toBeTruthy();
+    expect(screen.getByText("running go test ./...")).toBeTruthy();
+    for (const code of ["unavailable", "query_failed"]) {
+      expect(screen.queryByText(new RegExp(code))).toBeNull();
+    }
+  });
+
+  // A REFUSAL NO WAIT CLEARS ENDS THE POLL: its zero `retry_after` is the
+  // engine saying nothing should ask again on a timer, and asked every three
+  // seconds it was answered the same each time and logged at warn on the
+  // owning node each time. One a wait clears keeps asking.
+  //
+  // Mutation: keep polling on a refusal with no wait, and the first row goes
+  // red; stop on every refusal, and the second does.
+  test("a refusal no wait clears stops the poll, and one a wait clears does not", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: false, toFake: ["setTimeout", "clearTimeout"] });
+    for (const [retryAfter, asks] of [
+      [0, 1],
+      [5, 4],
+    ] as const) {
+      const { asked } = mount(
+        PARKED,
+        new QueryError("unavailable", {
+          code: null,
+          detail: "The coding sandbox isn’t set up for this.",
+          retryAfter,
+        }),
+        { selected: "run:L1" },
+      );
+      await flush();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(SANDBOX_TAIL_POLL_MS * 3);
+      });
+      expect(asked).toHaveLength(asks);
+      cleanup();
+    }
   });
 
   test("a run that has written nothing says so, which is not a silent owner", async () => {

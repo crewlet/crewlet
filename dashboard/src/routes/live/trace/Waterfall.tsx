@@ -61,6 +61,7 @@ import {
 } from "react";
 import { Button, Callout, Card, CodeBlock, Tag, cx, InlineCode } from "@crewlethq/ui";
 import { ClockGlyph, CircleAlertGlyph, SquareTerminalGlyph, XGlyph } from "@crewlethq/icons/glyphs";
+import { QueryState } from "~/components/common.tsx";
 import { NowLine } from "~/components/time/NowLine.tsx";
 import { SpanBar } from "~/components/time/SpanBar.tsx";
 import { TimeAxis } from "~/components/time/TimeAxis.tsx";
@@ -862,14 +863,15 @@ export function LiveOutput({
   }, [tail.text]);
 
   let notice: ReactNode = null;
-  if (!answer) {
-    notice = tail.error ? (
-      <Callout variant="warning">The run&rsquo;s output could not be read: {tail.error}.</Callout>
-    ) : (
-      <span className="t-caption">Asking the node that runs it…</span>
-    );
-  } else if (tail.error) {
-    notice = <Callout variant="warning">Last read failed ({tail.error}). Retrying.</Callout>;
+  // A FAILED READ IS TOLD IN THE ENGINE'S WORDS (`QueryState`, every screen's
+  // one reading of a failure): its sentence for what happened and whether
+  // waiting changes it. It printed the code, so a person read "unavailable"
+  // or "query_failed" and nothing they could act on. What the view holds stays
+  // under it, stamped with when it was read.
+  if (tail.error) {
+    notice = <QueryState error={tail.error} refusal={tail.refusal} loading={false} />;
+  } else if (!answer) {
+    notice = <span className="t-caption">Asking the node that runs it…</span>;
   } else if (answer.outcome === "owner_silent") {
     notice = (
       <Callout variant="warning">
