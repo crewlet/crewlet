@@ -2888,8 +2888,10 @@ another.
 **What the list says when it is empty is derived from the answer**, never
 from the row count: nothing answered yet and a refusal draw no sentence, and
 "you are caught up" (the person's own `seen_through` watermark exists) is told
-from "nothing has reached you yet". With nothing left to open, the pane says
-**All clear**.
+from "nothing has reached you yet". With nothing left to open in a list that
+holds rows, the pane says **All clear**; beside a list that is empty, whose own
+empty state already says so, the pane holds one quiet line ("New updates open
+here.") rather than a second empty state.
 
 **Two panes above a phone, one below it.** Both columns are present from the
 first paint and the first item not yet dealt with is open until the reader
