@@ -51,7 +51,7 @@ const capacityUsage = `usage: crewlet retention set-capacity <stream> <bytes> -c
     2. crewlet retention set-capacity <stream> <bytes> -confirm <bytes>
     3. restart every node with  crewlet run -mode seal
     4. crewlet retention set-capacity <stream> <bytes> -confirm <bytes>
-    5. restart every node with no -mode
+    5. once every log's window is closed, restart every node with no -mode
 
   crewlet retention maintenance status -stream <stream>  says where it stands
   and what is holding it. The procedure itself is documented once, in
@@ -91,6 +91,7 @@ func retentionSetCapacity(environ config.Source, args []string, stdout, stderr i
 	var answer struct {
 		Mode      string             `json:"mode"`
 		Operation *capacityOperation `json:"operation"`
+		windowsLeft
 	}
 	if err := client.post(context.Background(), path, &answer); err != nil {
 		return err
@@ -99,8 +100,54 @@ func retentionSetCapacity(environ config.Source, args []string, stdout, stderr i
 		fmt.Fprintln(stdout, "no capacity operation is open")
 		return nil
 	}
-	printOperation(stdout, answer.Mode, *answer.Operation, false)
+	printOperation(stdout, answer.Mode, *answer.Operation, pageVerb, answer.windowsLeft)
 	return nil
+}
+
+// windowsLeft is what a capacity gesture's answer names as still standing
+// between the fleet and service: every window open on any log, and every log
+// whose window the node couldn't read.
+type windowsLeft struct {
+	Open   []windowLeft `json:"open_windows"`
+	Unread []string     `json:"unread_windows"`
+}
+
+// windowLeft is one window still open, with what names the command that
+// finishes it.
+type windowLeft struct {
+	Stream         string `json:"stream"`
+	OperationID    string `json:"operation_id"`
+	Phase          string `json:"phase"`
+	TargetMaxBytes uint64 `json:"target_max_bytes"`
+}
+
+// returnToService is the step after a window closed, as the sentence that
+// follows the one saying so.
+//
+// THE FLEET GOES BACK TO SERVICE ONLY ONCE NO LOG HAS A WINDOW OPEN, and only
+// once the node could read whether one has: a node won't start in service
+// otherwise. Said whenever a window closed, it sent an operator resizing two
+// logs into a fleet-wide restart that every node refused, with the second
+// window still open.
+func returnToService(left windowsLeft) string {
+	if len(left.Open) == 0 && len(left.Unread) == 0 {
+		return "Restart every node with no -mode to return the fleet to service."
+	}
+	var b strings.Builder
+	b.WriteString("Don't restart in service yet: a node won't start while a log " +
+		"has a window open.\n")
+	for _, w := range left.Open {
+		fmt.Fprintf(&b, "  %s's window is still open, at %s. Finish it with "+
+			"`crewlet retention set-capacity %s %d -confirm %d`.\n",
+			w.Stream, w.Phase, w.Stream, w.TargetMaxBytes, w.TargetMaxBytes)
+	}
+	for _, stream := range left.Unread {
+		fmt.Fprintf(&b, "  This node couldn't read whether %s has a window open. "+
+			"Check with `crewlet retention maintenance status -stream %s`.\n",
+			stream, stream)
+	}
+	b.WriteString("Once every window is closed, restart every node with no -mode.")
+	return b.String()
 }
 
 // capacityOperation is the operation as this command reads it.
@@ -152,15 +199,38 @@ func (p capacityParty) describe() string {
 	return describeAuthor(p.By, p.OperatorID)
 }
 
+// capacityPage is which command prints an operation, which decides the lines
+// that differ between them.
+type capacityPage int
+
+const (
+	// pageVerb is set-capacity, whose answer at `confirmed` is a window its
+	// own drive has just closed: an unreleased one comes back as a refusal.
+	pageVerb capacityPage = iota
+	// pageStatus is `maintenance status`, which already names what holds
+	// the window and so never points at itself.
+	pageStatus
+	// pageGesture is an exclusion or an abandonment, which changes the
+	// window and closes nothing.
+	pageGesture
+)
+
 // printOperation renders one operation, and what an operator does next.
 //
 // THE NEXT STEP NAMES THE VERB IN FULL. The same lines follow set-capacity,
 // `maintenance status`, `exclude` and `abandon`, so "run this verb again" sent
 // a reader of the status page back to the page, and a reader of an exclusion
 // back to the exclusion, when the next step after either is set-capacity.
-// onStatus is whether the page is `maintenance status`, which already names
-// what holds the window and so does not point at itself.
-func printOperation(stdout io.Writer, mode string, op capacityOperation, onStatus bool) {
+//
+// AND THE LAST STEP IS SAID TOO. A window set-capacity confirmed and closed
+// printed its table and nothing after it, so the one gesture left, returning
+// the fleet to service, was in no answer the operator was given. That step is
+// the fleet's rather than the window's, so it is said from what the answer
+// names as still open ([returnToService]). A confirmed window any other page
+// shows is still open, so there the next step is the verb that closes it.
+func printOperation(stdout io.Writer, mode string, op capacityOperation, page capacityPage,
+	left windowsLeft) {
+
 	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintf(w, "OPERATION\t%s\ton %s\n", op.OperationID, op.Stream)
 	fmt.Fprintf(w, "PHASE\t%s\tattempt %d\n", op.Phase, op.Attempt)
@@ -187,7 +257,7 @@ func printOperation(stdout io.Writer, mode string, op capacityOperation, onStatu
 	verb := fmt.Sprintf("`crewlet retention set-capacity %s %d -confirm %d`",
 		op.Stream, op.TargetMaxBytes, op.TargetMaxBytes)
 	status := ""
-	if !onStatus {
+	if page != pageStatus {
 		status = fmt.Sprintf(" `crewlet retention maintenance status -stream %s` "+
 			"names anything that stops it.", op.Stream)
 	}
@@ -221,7 +291,7 @@ func printOperation(stdout io.Writer, mode string, op capacityOperation, onStatu
 			"Next: restart every node with `crewlet run -mode seal`, then run "+
 			"%s again.\n", verb)
 	case "sealing":
-		if onStatus {
+		if page == pageStatus {
 			fmt.Fprintln(stdout, "Waiting for the barrier.")
 		} else {
 			fmt.Fprintf(stdout, "Waiting for the barrier. `crewlet retention "+
@@ -230,6 +300,14 @@ func printOperation(stdout io.Writer, mode string, op capacityOperation, onStatu
 		}
 	case "sealed":
 		fmt.Fprintf(stdout, "Sealed. Run %s again to verify and confirm.\n", verb)
+	case "confirmed":
+		if page == pageVerb {
+			fmt.Fprintln(stdout, "The ceiling is verified at the target, and the "+
+				"window is closed. "+returnToService(left))
+			return
+		}
+		fmt.Fprintf(stdout, "The ceiling is verified at the target, and the window "+
+			"is still open. Run %s again to close it.\n", verb)
 	}
 }
 
@@ -351,7 +429,7 @@ func maintenanceStatus(environ config.Source, args []string, stdout, stderr io.W
 			words.And(held))
 		return nil
 	}
-	printOperation(stdout, answer.Mode, *answer.Operation, true)
+	printOperation(stdout, answer.Mode, *answer.Operation, pageStatus, windowsLeft{})
 
 	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	// RUNNING AT REQUEST is the process the window recorded for each node as
@@ -515,6 +593,7 @@ func maintenanceAbandon(environ config.Source, args []string, stdout, stderr io.
 	}
 	var answer struct {
 		Operation *capacityOperation `json:"operation"`
+		windowsLeft
 	}
 	// THE CONFIRMATION TRAVELS WITH THE REQUEST, and the node refuses one
 	// naming another operation before it abandons anything. Compared here
@@ -527,12 +606,16 @@ func maintenanceAbandon(environ config.Source, args []string, stdout, stderr io.
 		&answer); err != nil {
 		return err
 	}
+	// NO OPERATION IS A WINDOW CLEARED OUTRIGHT, which an abandonment from
+	// `opened` is. The node answered the window it had cleared, so this
+	// branch never ran and the operator was told to run set-capacity again
+	// for the window they had just abandoned.
 	if answer.Operation == nil {
-		fmt.Fprintln(stdout, "The operation is cleared and the exclusion released. "+
-			"Restart every node with no -mode to return the fleet to service.")
+		fmt.Fprintf(stdout, "The window on %s is closed, and nothing was sent. %s\n",
+			*stream, returnToService(answer.windowsLeft))
 		return nil
 	}
-	printOperation(stdout, "", *answer.Operation, false)
+	printOperation(stdout, "", *answer.Operation, pageGesture, windowsLeft{})
 	return nil
 }
 
@@ -570,7 +653,7 @@ func maintenanceExclude(environ config.Source, args []string, stdout, stderr io.
 	fmt.Fprintf(stdout, "%s is excluded: it no longer has to acknowledge, and "+
 		"an admission it holds no longer stops the window.\n", *node)
 	if answer.Operation != nil {
-		printOperation(stdout, "", *answer.Operation, false)
+		printOperation(stdout, "", *answer.Operation, pageGesture, windowsLeft{})
 	}
 	return nil
 }
