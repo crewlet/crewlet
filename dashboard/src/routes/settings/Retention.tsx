@@ -132,14 +132,7 @@ const ALARMS_ID = "retention-alarms";
  * page's diagnosis and leads it; every panel below states facts and points back
  * up to it rather than saying it again.
  */
-export function RetentionStatus({
-  retention,
-  onTakeBackup,
-}: {
-  retention: QueryResult<RetentionReport>;
-  /** Opens this page's backup dialog, offered to an admin. */
-  onTakeBackup?: () => void;
-}) {
+export function RetentionStatus({ retention }: { retention: QueryResult<RetentionReport> }) {
   const now = useNow();
   const { data, error } = retention;
   // ARRIVING FOR THE ALARMS (`at=alarms`, the engine panel's "Open alarms")
@@ -165,37 +158,33 @@ export function RetentionStatus({
       )}
       {data?.maintenance && <MaintenanceBanner op={data.maintenance} now={now} />}
       <ServedLevelBanner level={data?.read_level} />
-      {data && standing > 0 && (
-        <AlarmList alarms={data.alarms} now={now} onTakeBackup={onTakeBackup} />
-      )}
+      {data && standing > 0 && <AlarmList alarms={data.alarms} now={now} />}
     </>
   );
 }
 
-/** The one alarm whose remedy is a gesture this page offers. */
-const BACKUP_AGE = "backup_age";
-
-/** The standing alarms, each drawn once with the logs it stands on. */
-export function AlarmList({
-  alarms,
-  now,
-  onTakeBackup,
-}: {
-  alarms: RetentionAlarm[];
-  now: number;
-  onTakeBackup?: () => void;
-}) {
+/**
+ * The standing alarms, each drawn once with the logs it stands on.
+ *
+ * ROWS OF THE CARD, NOT CALLOUTS IN IT: a bordered warning callout inside the
+ * bordered card was a frame in a frame. Each alarm is a row on the card's own
+ * inset, ruled from the one above, its warning glyph in the warning ink. And
+ * no alarm carries a Take a backup of its own: the page bar's is one press
+ * away on the same screen, and a second identical button beside the alarm
+ * read as a different gesture.
+ */
+export function AlarmList({ alarms, now }: { alarms: RetentionAlarm[]; now: number }) {
   return (
-    <Card id={ALARMS_ID}>
+    <Card id={ALARMS_ID} padding="none">
       <Card.Header icon={<TriangleAlertGlyph size="sm" />} count={alarms.length}>
         <Card.Title>Alarms</Card.Title>
       </Card.Header>
-      <div className="col gap-2">
+      <ul className="alarm-rows">
         {alarms.map((alarm) => (
           // THE KIND IS THE IDENTITY: the engine raises each one once.
-          <AlarmItem key={alarm.kind} alarm={alarm} now={now} onTakeBackup={onTakeBackup} />
+          <AlarmItem key={alarm.kind} alarm={alarm} now={now} />
         ))}
-      </div>
+      </ul>
     </Card>
   );
 }
@@ -213,15 +202,7 @@ export function AlarmList({
  * says how many records it keeps past its window and the second log of a
  * blocked trim is not read as the first one's.
  */
-export function AlarmItem({
-  alarm,
-  now,
-  onTakeBackup,
-}: {
-  alarm: RetentionAlarm;
-  now: number;
-  onTakeBackup?: () => void;
-}) {
+export function AlarmItem({ alarm, now }: { alarm: RetentionAlarm; now: number }) {
   const lines = alarmLogLines(alarm);
   const only = lines.length === 1 ? lines[0] : undefined;
   const folded = only && !only.term && only.detail === alarm.detail ? only : undefined;
@@ -230,18 +211,12 @@ export function AlarmItem({
   const headlined =
     only?.term !== undefined && only.logs?.length === 1 && only.logs[0]?.detail === alarm.detail;
   return (
-    <Callout
-      variant="warning"
-      title={alarmKindTitle(alarm.kind)}
-      action={
-        alarm.kind === BACKUP_AGE && onTakeBackup ? (
-          <Button variant="secondary" size="small" onClick={onTakeBackup}>
-            Take a backup
-          </Button>
-        ) : undefined
-      }
-    >
+    <li className="alarm-row">
+      <span className="alarm-row-glyph" aria-hidden>
+        <TriangleAlertGlyph size="sm" />
+      </span>
       <div className="alarm-body">
+        <p className="alarm-title">{alarmKindTitle(alarm.kind)}</p>
         <p>
           {folded && (
             <>
@@ -261,7 +236,7 @@ export function AlarmItem({
         )}
         <p className="t-caption muted">{marked(alarm.remedy)}</p>
       </div>
-    </Callout>
+    </li>
   );
 }
 

@@ -7793,7 +7793,10 @@ stands on (logs one term holds are one line, "Trim held by the backup on
 tracker, vectors, pages and usage, for 46h", with each log's own measurement
 under it, since what a log keeps past its replay window is why it is listed and
 no shared date says it; each log a link to its page; a single log whose
-measurement is the alarm's is said once), and the engine's remedy. The backup alarm offers **Take a backup**. Then the record of
+measurement is the alarm's is said once), and the engine's remedy, each a row
+of the one Alarms card with its warning glyph rather than a callout framed
+inside it. The backup they ask for is the page bar's **Take a backup**, the
+only one on the screen. Then the record of
 backups, then **Replication**, then **Log retention**: a row per log with its
 facts and what holds its trim in words ("held by the backup"), and its six
 checks behind a disclosure, each in words beside the term's own name, with the
