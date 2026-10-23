@@ -271,8 +271,8 @@ func (f *LogFile) validate(path Path) error {
 	// is what a `-log-file` run reaches.
 	if f.MaxSizeMB != nil && (*f.MaxSizeMB < 1 || *f.MaxSizeMB > logging.MaxSizeMBCeiling) {
 		p.add(at(path, "max_size_mb"), ErrOutOfRange,
-			"%d (want 1..%d). Rotation cannot be disabled — a log file with no "+
-				"ceiling fills the disk the store is on — and a cap above %d MB "+
+			"%d (want 1..%d). Rotation cannot be disabled, since a log file with no "+
+				"ceiling fills the disk the store is on, and a cap above %d MB "+
 				"(a pebibyte) wraps in the byte arithmetic and rotates every line",
 			*f.MaxSizeMB, logging.MaxSizeMBCeiling, logging.MaxSizeMBCeiling)
 	}
@@ -465,7 +465,7 @@ func (b *Bootstrap) ValidateListeners() error {
 		p.add(field("api.public.port"), ErrConflict,
 			"api.port is 0, so this ingress node serves no HTTP surface, and the "+
 				"public listener moves routes off api.port rather than serving "+
-				"without it — no probe would answer. Set api.port (bind it to a "+
+				"without it, so no probe would answer. Set api.port (bind it to a "+
 				"private address to keep it unreachable from outside), or remove "+
 				"api.public")
 	}
@@ -583,7 +583,7 @@ func (b *Bootstrap) ValidateRoles() error {
 		if !b.Store.Scratch {
 			p.add(field("store.scratch"), ErrMissing,
 				"a node without %q keeps no durable state, so its store is "+
-					"deleted at every boot — set store.scratch: true to say so, "+
+					"deleted at every boot. Set store.scratch: true to say so, "+
 					"since it is the one setting here that deletes something",
 				placement.RoleData)
 		}
@@ -620,8 +620,8 @@ func (b *Bootstrap) checkRolesAndBroker(p *problems, roles placement.RoleSet) {
 	case !data && kind == placement.BrokerMember:
 		p.add(field("stream.leaf.urls"), ErrMissing,
 			"a node without %q runs its embedded broker as a MEMBER here, and a "+
-				"node without %q joins the fleet as a LEAF of the members' — no "+
-				"JetStream, no replica, no vote. Name the members' leaf listeners "+
+				"node without %q joins the fleet as a LEAF of the members' (no "+
+				"JetStream, no replica, no vote). Name the members' leaf listeners "+
 				"here, or add %q to node.roles", placement.RoleData,
 			placement.RoleData, placement.RoleData)
 	}
@@ -642,8 +642,8 @@ func (b *Bootstrap) checkRolesAndBroker(p *problems, roles placement.RoleSet) {
 // needsData is why each role a node without data cannot run needs `data` — see
 // [Bootstrap.checkRolesAndBroker].
 var needsData = map[placement.NodeRole]string{
-	placement.RoleWorkers: "the company-wide duties — the log trim, the " +
-		"embedding pass, the maintenance sweep, the scheduler — read and " +
+	placement.RoleWorkers: "the company-wide duties (the log trim, the " +
+		"embedding pass, the maintenance sweep, the scheduler) read and " +
 		"write this node's own copy of the replicated estate directly",
 	placement.RoleIngress: "the API's retention report, capacity, reanchor, " +
 		"eviction and backup surfaces read this node's own copy of the " +
@@ -765,8 +765,8 @@ func (b *Bootstrap) validateTopology() error {
 	if b.Stream.Type != StreamNATS && len(b.Stream.Cluster.Peers) > 0 && peers == 0 {
 		p.add(field("stream.cluster.peers"), ErrConflict,
 			"names no member but this one: %s. A member that seeds a cluster "+
-				"lists no peers, and one that joins lists the members it joins — "+
-				"remove the list, or name the other members",
+				"lists no peers, and one that joins lists the members it joins. "+
+				"Remove the list, or name the other members",
 			members.discountedList())
 	}
 
@@ -2048,7 +2048,7 @@ func (l *StreamLeaf) validate(path Path, s *Stream, external bool) error {
 		if l.Port != 0 || l.Host != "" || l.Advertise != "" {
 			p.add(at(path, "port"), ErrConflict,
 				"port, host and advertise are a MEMBER's leaf listener, and "+
-					"urls joins this node as a leaf — a node is one side of "+
+					"urls joins this node as a leaf, and a node is one side of "+
 					"the link")
 		}
 		if !s.Cluster.IsZero() {
@@ -2148,8 +2148,8 @@ func (s *Stream) durable(path Path) error {
 	var p problems
 	p.add(at(path, "store_dir"), ErrMissing,
 		"this node's broker is a MEMBER, and a member keeps the estate's state "+
-			"logs on this stream from boot — the identity estate among them, "+
-			"whatever company it runs, or none — and in a fleet the seats' "+
+			"logs on this stream from boot (the identity estate among them, "+
+			"whatever company it runs, or none), and in a fleet the seats' "+
 			"mailboxes and every coordination bucket too. An embedded stream with "+
 			"no store directory keeps its streams in memory: a restart recreates "+
 			"every log empty and this node refuses to serve them permanently. "+
@@ -2282,8 +2282,8 @@ func (s *Stream) validate(path Path) error {
 		for i, raw := range s.Cluster.Peers {
 			if _, ok := routeAddress(raw); !ok {
 				p.add(idx(at(path, "cluster.peers"), i), ErrUnknownValue,
-					"%q is not a member's route URL: want nats://host:port — "+
-						"the embedded server dials each entry's host and port, "+
+					"%q is not a member's route URL: want nats://host:port. "+
+						"The embedded server dials each entry's host and port, "+
 						"and one it cannot dial is never routed to", raw)
 			}
 		}
@@ -2347,7 +2347,7 @@ func (s *Stream) validate(path Path) error {
 				"chat_log_max_bytes %d = %d): the broker refuses a stream whose "+
 				"ceiling it cannot back, so this node would fail to provision one "+
 				"of them. Raise store_max_bytes, or lower the "+
-				"ceilings — and leave headroom, because the state logs reserve only "+
+				"ceilings, and leave headroom, because the state logs reserve only "+
 				"a share of this limit and every other stream on the broker grows "+
 				"inside it",
 			s.StoreMaxBytes, s.TrackerLogMaxBytes, s.TrackerVectorsMaxBytes,
@@ -2545,7 +2545,7 @@ func (c *Coordination) validate(path Path) error {
 			MinLeaseTTL.Seconds(), c.LeaseTTLSeconds)
 	case c.LeaseTTLSeconds > 0 && ttl < MinLeaseTTL:
 		p.add(at(path, "lease_ttl_seconds"), ErrOutOfRange,
-			"%v is below the %v-second floor — leave it unset to take the measured "+
+			"%v is below the %v-second floor: leave it unset to take the measured "+
 				"default, or set at least %v: the lease TTL is also how long the node's "+
 				"heartbeat may go without a beat before its watchdog ends it (exit 75), "+
 				"and a busy but healthy node goes seconds",
