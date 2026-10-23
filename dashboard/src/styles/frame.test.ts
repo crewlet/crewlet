@@ -483,6 +483,23 @@ describe("the frame's layout", () => {
     expect(block(narrow, ".section-frame")).toMatch(/grid-template-columns:\s*minmax\(0, 1fr\)/);
   });
 
+  // THE PICKER'S TOGGLE STANDS OVER THE LIST IT UNFOLDS, on the section's
+  // gutter: the list's glyphs sat 11px right of the toggle's, and the toggle
+  // 4px left of the section's content. The toggle takes the rows' inset less
+  // its border, and the list no gutter of its own inside the picker.
+  test("the folded picker's toggle lines up with its rows and the section", () => {
+    const narrow = atRuleBody(sheet("frame.css"), FOLD);
+    expect(block(narrow, ".section-picker-toggle")).toMatch(
+      /padding:\s*0 calc\(var\(--size-nav-row-pad\) - 1px\)/,
+    );
+    expect(block(narrow, ".section-picker-list > .crewlet-sidebar-nav")).toMatch(
+      /padding-inline:\s*0/,
+    );
+    expect(block(narrow, ".section-picker")).toMatch(
+      /padding:\s*var\(--spacing-2\) var\(--spacing-5\)/,
+    );
+  });
+
   // THE COLUMN IS AS TALL AS THE VIEW, NEVER AS THE GRID. A sticky box moves
   // only inside its grid area, the row the section beside it makes as tall as
   // its content; sized against that area (`min-height: 100%` beside the sticky

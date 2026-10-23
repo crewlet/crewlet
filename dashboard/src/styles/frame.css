@@ -1779,8 +1779,11 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
   /* FOLDED TO ONE ROW, which names where the reader is. Stacked whole, the
      Settings column pushed every section's own content about 520px down —
      below the fold on Nodes and Secrets. */
+  /* ON THE SECTION'S OWN GUTTER, so the toggle starts where the section's
+     content does: the screen padding beside a folded column, the phone's
+     16px below the phone breakpoint. */
   .section-picker {
-    padding: var(--spacing-2) var(--spacing-3);
+    padding: var(--spacing-2) var(--spacing-5);
   }
   .section-picker-toggle {
     display: flex;
@@ -1788,7 +1791,9 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
     gap: var(--spacing-2);
     width: 100%;
     min-height: var(--size-target-min);
-    padding: 0 var(--spacing-2);
+    /* THE ROWS' OWN INSET, less the toggle's border: the toggle's glyph and
+       name stand over the glyphs and names of the list it unfolds. */
+    padding: 0 calc(var(--size-nav-row-pad) - 1px);
     border: 1px solid var(--color-border-default);
     border-radius: var(--radius-sm);
     background: var(--color-surface-elevated);
@@ -1828,6 +1833,12 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
   .section-picker[data-open] .section-picker-list {
     padding-top: var(--spacing-2);
   }
+  /* THE LIST TAKES NO GUTTER OF ITS OWN inside the picker, which is inset
+     already: with the kit's rail gutter on top, its glyphs and names sat 11px
+     right of the toggle's. */
+  .section-picker-list > .crewlet-sidebar-nav {
+    padding-inline: 0;
+  }
 }
 
 @media (width < 640px) {
@@ -1863,6 +1874,9 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
 
   .section-body {
     padding: var(--spacing-4) var(--spacing-4) var(--spacing-9);
+  }
+  .section-picker {
+    padding-inline: var(--spacing-4);
   }
 
   /* ---- A ROW IS A CARD ON A PHONE ---------------------------------------

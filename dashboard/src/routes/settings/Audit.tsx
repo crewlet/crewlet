@@ -882,6 +882,7 @@ export function Audit() {
     return short;
   }, [workData, identity.page, runtimeData, knowledgeData, configData, artifactsData, since]);
 
+  const anyDetail = rows.some((row) => row.detail);
   const columns = useMemo<GridColumn<AuditEntry>[]>(
     () => [
       {
@@ -892,13 +893,13 @@ export function Audit() {
         cell: (row) => <TableDateCell value={row.at} now={now} />,
       },
       {
-        // WHERE GIVES WAY AFTER THE CREDENTIAL AND THE KIND: the subsystem is
+        // WHERE GIVES WAY SECOND, after the author's kind: the subsystem is
         // read off What as often as not, and a log whose When, What and To
         // were drawn 46px wide so that Where could stay said nothing at all.
         key: "source",
         header: "Where",
         shrink: true,
-        drop: 3,
+        drop: 2,
         sortValue: (row) => row.source,
         cell: (row) => <TableTextCell>{SOURCE_LABEL[row.source]}</TableTextCell>,
       },
@@ -918,7 +919,8 @@ export function Audit() {
         key: "as",
         header: "As",
         shrink: true,
-        drop: 2,
+        // FIRST TO GIVE WAY: the author's kind is drawn on Who's own badge.
+        drop: 1,
         sortValue: (row) => row.actorKind,
         cell: (row) =>
           row.actorKind ? (
@@ -933,7 +935,10 @@ export function Audit() {
         key: "through",
         header: "Through",
         shrink: true,
-        drop: 1,
+        // LAST TO GIVE WAY of the three: the credential beside the author is
+        // what an administrator reads the log for, and at 1440 it was hidden
+        // "to fit" while Detail held a page of dashes.
+        drop: 3,
         sortValue: (row) => row.through,
         cell: (row) =>
           row.through ? (
@@ -983,13 +988,15 @@ export function Audit() {
         // THE LINE THAT SAYS WHAT CHANGED is the point of the row, so it keeps
         // a reading width: at zero every content-sized column beside it took
         // its share, and an administrator's read printed as "R…" at 1440.
-        // The credential, the author's kind and the subsystem give way first
+        // The author's kind, the subsystem and the credential give way first
         // (`drop`). 12rem rather than 16: at 16 the floor held 163px of empty
         // track on a page of dashes at 1440 while Through was dropped "to
         // fit", and at 1024 it took half the grid from the columns beside it.
+        // AND A PAGE OF DASHES KEEPS NO READING WIDTH: where no row on screen
+        // carries a detail, the floor is only the dash's.
         key: "detail",
         header: "Detail",
-        floor: "12rem",
+        floor: anyDetail ? "12rem" : "6rem",
         cell: (row) =>
           row.detail ? (
             // THE WHOLE LINE ON THE TITLE, and the serving node under it: the
@@ -1005,7 +1012,7 @@ export function Audit() {
           ),
       },
     ],
-    [now, seatOf],
+    [now, seatOf, anyDetail],
   );
 
   // WHAT EACH SOURCE WITHHELD, said by its source: a socket read refused on
