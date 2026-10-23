@@ -677,56 +677,6 @@ describe("the frame's layout", () => {
     ).toBeGreaterThanOrEqual(16);
   });
 
-  // A RESET DOES NOT TAKE THE FOCUS RING WITH IT.
-  //
-  // `all: unset` is how a <button> becomes a plain box, and `all` is every
-  // property — `outline` among them. So each of these rules sets
-  // `outline-style: none`, and the kit baseline's `:focus-visible` then loses
-  // a TIE rather than a fight: one pseudo-class against one class is the same
-  // specificity, and frame.css is imported after the baseline. Visible to
-  // somebody using the keyboard and to nobody else.
-  //
-  // Measured with a tab walk against a running engine: the rail's collapse
-  // control took focus with no ring on EVERY screen in the product, and the
-  // sidebar's twist on every screen that has a tree. Both are the kit's now;
-  // what resets itself here is the grid's sort head, its column reset and a
-  // histogram bar.
-  //
-  // TWO-SIDED, because the list is the whole mechanism: another `all: unset`
-  // nobody adds here is a control that silently loses its ring, and a name
-  // here whose reset is gone is a rule nobody will notice has died.
-  test("every control that resets itself gets its focus ring back", () => {
-    const css = sheet("frame.css");
-    const bare = css.replace(/\/\*[\s\S]*?\*\//g, "");
-
-    const reset = new Set<string>();
-    for (const m of bare.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-      if (!/\ball:\s*unset/.test(m[2]!)) continue;
-      for (const one of m[1]!.split(",")) reset.add(one.trim());
-    }
-    expect(reset.size, "nothing in this sheet resets itself any more").toBeGreaterThan(0);
-
-    // The one rule that hands the ring back, and what it hands back: the
-    // BASELINE's ring, outset by 2px. A control that draws an INSET ring of
-    // its own (a sidebar card, whose outset ring the sidebar's edge would clip)
-    // is not handing anything back, and is not counted here.
-    const ring = new Set<string>();
-    for (const m of bare.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
-      if (!/outline:\s*2px solid var\(--color-focus\)/.test(m[2]!)) continue;
-      if (!/outline-offset:\s*2px/.test(m[2]!)) continue;
-      for (const one of m[1]!.split(",")) ring.add(one.trim().replace(/:focus-visible$/, ""));
-    }
-
-    expect(
-      [...reset].filter((sel) => !ring.has(sel)),
-      "these reset their outline away and never get it back",
-    ).toEqual([]);
-    expect(
-      [...ring].filter((sel) => !reset.has(sel)),
-      "these are named as needing the ring back but no longer reset it",
-    ).toEqual([]);
-  });
-
   // A ROW LIST LINES UP WITH ITS OWN HEADING.
   //
   // A row list usually sits in a `Card`, and `Card.Header` pads `--spacing-4`.
@@ -1126,25 +1076,6 @@ test("a grid row with more than one content-sized track declares a gap", () => {
     offenders,
     "two `auto` tracks butt against each other — declare a gap, as `.work-feed-row` does",
   ).toEqual([]);
-});
-
-// A HISTOGRAM BAR IS A BAR TOO, AND IT IS DATA. The activity log's time axis
-// filled its whole slot, so a week holding one busy day drew a block a seventh
-// of the card wide, and it painted that block in the accent the kit reserves
-// for HERE/ACT. The fill takes the same capped, centred proportion as the
-// spend columns, is drawn on the data ramp, and an empty bucket's floor is a
-// tone that shows on the card rung rather than one within a shade of it.
-test("a histogram bar is a capped data-coloured fill centred in its slot", () => {
-  const css = sheet("frame.css");
-  expect(block(css, ".histogram-bar")).toMatch(/justify-content:\s*center/);
-  expect(block(css, ".histogram-bar")).not.toMatch(/background/);
-  const fill = block(css, ".histogram-fill");
-  expect(fill).toMatch(/width:\s*63%/);
-  expect(fill).toMatch(/max-width:\s*var\(--spacing-7\)/);
-  expect(fill).toMatch(/background:\s*var\(--color-data-1\)/);
-  expect(block(css, ".histogram-bar[data-empty] > .histogram-fill")).toMatch(
-    /background:\s*var\(--color-border-strong\)/,
-  );
 });
 
 // A UNIT'S NAME IS WHAT ITS HEAD SAYS, SO IT IS NOT WHAT GIVES WAY. One

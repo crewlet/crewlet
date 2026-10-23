@@ -369,8 +369,7 @@ img {
 .org-node,
 .tl-chip,
 .tl-name,
-a.seat-chip,
-.histogram-fill {
+a.seat-chip {
   transition:
     background var(--motion-duration-fast) var(--motion-easing-default),
     border-color var(--motion-duration-fast) var(--motion-easing-default),
