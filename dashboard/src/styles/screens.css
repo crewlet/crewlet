@@ -10247,23 +10247,6 @@ a.live-row:focus-visible {
 /* START A NEW ARTIFACT: a quiet heading over the kinds' tray, which lays
    itself out by its own width (`ArtifactMakeRow`): every kind in view at
    once, none hidden past an edge a reader has to discover by swiping. */
-.artifacts-make {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-}
-.artifacts-make-title,
-.artifacts-group-title {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  margin: 0;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-md);
-  font-weight: var(--font-weight-medium);
-  line-height: 1.4;
-}
-
 /* THE TOOLBAR'S END: the trash and the shape, kept together at the far end
    of whichever line they land on. */
 .artifacts-bar-end {
@@ -10305,9 +10288,6 @@ a.live-row:focus-visible {
 .artifacts-group + .artifacts-group,
 .artifacts-group + * > .artifacts-group {
   margin-top: var(--spacing-5);
-}
-.artifacts-group-title > svg {
-  color: var(--color-text-tertiary);
 }
 
 /* THE GRID: four cards across a laptop's page, three on a narrower one (a
@@ -10385,56 +10365,17 @@ a.live-row:focus-visible {
 /* COMPANY STORAGE, an administrator's line at the foot of All: three quotas
    in a row, each a figure over a thin bar, under a hairline that says the
    gallery has ended. */
-.artifacts-storage {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-  margin-top: var(--spacing-8);
-  padding-top: var(--spacing-6);
-  border-top: 1px solid var(--color-border-default);
+/* THE RELATED ROW at the foot of All: one step under the listing. */
+.artifacts-related {
+  margin-top: var(--spacing-5);
 }
-.artifacts-storage-title {
-  margin: 0;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-}
-.artifacts-storage-quotas {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 14rem));
-  gap: var(--spacing-3) var(--spacing-8);
-  margin: 0;
-}
-@container page (width < 640px) {
-  .artifacts-storage-quotas {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-.artifacts-storage-quota {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  min-width: 0;
-}
-.artifacts-storage-quota > dt {
+
+/* THE QUOTA'S KEY on Settings › File storage, quiet under its figure, as a
+   settings table draws a key. */
+.storage-quota-key {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-2xs);
   color: var(--color-text-tertiary);
-  font-size: var(--font-size-xs);
-}
-.artifacts-storage-quota > dd {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  margin: 0;
-}
-.artifacts-storage-figure {
-  color: var(--color-text-primary);
-  font-size: var(--font-size-sm);
-  font-variant-numeric: tabular-nums;
-}
-.artifacts-storage-note {
-  margin: 0;
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-xs);
 }
 
 /* AN ARTIFACT THE READER CANNOT OPEN, refused or in the trash: one
