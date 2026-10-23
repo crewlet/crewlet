@@ -32,10 +32,9 @@
  * document, changed there, and the key is drawn under each cap's name.
  */
 
-import { Card, EmptyState, SettingsTable } from "@crewlethq/ui";
+import { Card, EmptyState, SettingsTable, PageNote } from "@crewlethq/ui";
 import { BellGlyph, CalendarClockGlyph, GaugeGlyph, NetworkGlyph } from "@crewlethq/icons/glyphs";
 import type { ReactNode } from "react";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { fmtSetting } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";

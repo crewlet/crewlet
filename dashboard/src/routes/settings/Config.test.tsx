@@ -136,11 +136,12 @@ test("the screen says it is read only first, as its page note", async () => {
   const { container } = mount("#/config?lens=audit");
   await screen.findByText("01JCFGAAAA");
   const note = screen.getByText(/Read only here/);
-  expect(note.closest(".page-note")).not.toBeNull();
+  expect(note.closest(".crewlet-page-note")).not.toBeNull();
   expect(note.closest(".crewlet-callout")).toBeNull();
-  expect(container.querySelector(".page-note")).toBe(note.closest(".page-note"));
+  expect(container.querySelector(".crewlet-page-note")).toBe(note.closest(".crewlet-page-note"));
   expect(
-    within(note.closest(".page-note") as HTMLElement).getByText("crewlet config import").tagName,
+    within(note.closest(".crewlet-page-note") as HTMLElement).getByText("crewlet config import")
+      .tagName,
   ).toBe("CODE");
 });
 

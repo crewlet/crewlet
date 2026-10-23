@@ -22,9 +22,8 @@
  * its source says so rather than pointing at a key that does not exist.
  */
 
-import { Card, InlineCode, SettingsTable } from "@crewlethq/ui";
+import { Card, InlineCode, SettingsTable, PageNote } from "@crewlethq/ui";
 import { ClockGlyph, ShieldUserGlyph } from "@crewlethq/icons/glyphs";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { fmtSetting, plural } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";

@@ -51,7 +51,6 @@ import { LENS_LABELS, PROJECT_LENSES, type ProjectLens } from "~/app/scope.ts";
 import { projectArchivedKey } from "~/app/crumbs.ts";
 import { EditProjectButton } from "~/components/writes.tsx";
 import { NewTaskButton } from "~/components/NewTaskButton.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 // THE HEADER'S FACT IS NOT THE TRACKER'S. `components/work.tsx` exports a
 // `Fact` that DRAWS one in an overview strip; this one is the VALUE an
 // [ObjectHeader] renders. Both are right and neither may be renamed for the
@@ -70,6 +69,7 @@ import {
   Tabs,
   Tag,
   TableNumberCell,
+  PageNote,
 } from "@crewlethq/ui";
 import {
   LayoutDashboardGlyph,

@@ -1469,29 +1469,6 @@
   cursor: pointer;
 }
 
-/* ---- The page's own one-line explanation --------------------------------- */
-
-/* NO WORD ALONE ON THE LAST LINE: at the measure, Secrets' note broke to a
-   second line holding "value." and nothing else, which reads as a sentence
-   that stopped rather than one that ended. `pretty` reflows the last lines
-   of every screen's note so its tail carries more than one word. */
-.page-note {
-  margin: 0 0 var(--spacing-3);
-  font-size: var(--font-size-compact);
-  color: var(--color-text-tertiary);
-  max-width: var(--size-measure);
-  text-wrap: pretty;
-}
-/* A PAGE'S LEDE IN A COLUMN THAT SETS ITS OWN RHYTHM keeps no margin of its
-   own: the screen's content and a Settings section are flex columns with a
-   gap, and the lede's 12px on top of it stood the first card 32px under the
-   lede while every other block on the page was 20px apart. */
-.app .crewlet-app-shell__content > .page-note,
-.section-body > .page-note,
-.col > .page-note {
-  margin-bottom: 0;
-}
-
 /* ---- An object's own facts ------------------------------------------------
    ONE rail, replacing `.kv` (flat, no sections) and `.work-props` (sections,
    one screen). They had different label widths, different gaps and different

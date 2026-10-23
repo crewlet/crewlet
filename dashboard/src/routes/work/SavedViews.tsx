@@ -37,7 +37,6 @@
 import { useMemo, type ReactNode } from "react";
 import { Mark } from "~/ui/glyph.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { usePageCoverage, usePageLabels } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
@@ -53,6 +52,7 @@ import {
   TableKeyCell,
   TableEntityCell,
   TableTextCell,
+  PageNote,
 } from "@crewlethq/ui";
 import { ArrowRightGlyph, LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";

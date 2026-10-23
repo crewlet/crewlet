@@ -30,10 +30,10 @@ import {
   StatGroup,
   TableDateCell,
   TableTextCell,
+  PageNote,
 } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { DatabaseGlyph, FolderGlyph, GaugeGlyph } from "@crewlethq/icons/glyphs";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";

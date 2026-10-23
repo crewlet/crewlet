@@ -23,9 +23,8 @@
  */
 
 import { useId } from "react";
-import { Card, EmptyState, List, ListItem } from "@crewlethq/ui";
+import { Card, EmptyState, List, ListItem, PageNote } from "@crewlethq/ui";
 import { GaugeGlyph, ShieldGlyph } from "@crewlethq/icons/glyphs";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { RelatedRow } from "~/app/frame/RelatedRow.tsx";
 import type { OrgProjection } from "~/protocol/index.ts";
 import { EditCharterButton } from "~/routes/agents/header.tsx";

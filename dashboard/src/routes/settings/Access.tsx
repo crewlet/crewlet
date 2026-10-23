@@ -125,6 +125,7 @@ import {
   TableDateCell,
   TableEntityCell,
   TableTextCell,
+  PageNote,
 } from "@crewlethq/ui";
 import {
   EllipsisGlyph,
@@ -163,7 +164,6 @@ import type { ObjectRef } from "~/app/frame/objects.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { linkedSeat } from "~/app/frame/cells.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";

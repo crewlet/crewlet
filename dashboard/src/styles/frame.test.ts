@@ -568,20 +568,6 @@ describe("the frame's layout", () => {
     expect(sheet("screens.css")).not.toMatch(/\.crewlet-stat-group > :last-child:nth-child\(odd\)/);
   });
 
-  // NO WORD ALONE ON A NOTE'S LAST LINE. At the measure, Secrets' note broke
-  // to a second line holding "value." and nothing else — a sentence that
-  // stopped rather than one that ended. Every screen's note reflows its tail,
-  // and no rule anywhere takes that back from one screen's note.
-  test("every screen's page note balances its last line", () => {
-    expect(block(sheet("frame.css"), ".page-note")).toMatch(/text-wrap:\s*pretty/);
-    const elsewhere = ["base.css", "components.css", "screens.css"].flatMap((name) =>
-      sheet(name).includes(".page-note") ? mentioning(sheet(name), ".page-note") : [],
-    );
-    for (const { sel, body } of elsewhere) {
-      expect(body, `${sel} takes the note's wrap back`).not.toMatch(/text-wrap/);
-    }
-  });
-
   test("a grid becomes labelled cards below the phone breakpoint", () => {
     const css = sheet("frame.css");
     const narrow = css.slice(css.indexOf(PHONE));

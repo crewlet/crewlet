@@ -44,6 +44,7 @@ import {
   TableDateCell,
   TableEntityCell,
   TableTextCell,
+  PageNote,
 } from "@crewlethq/ui";
 import {
   CalendarGlyph,
@@ -75,7 +76,6 @@ import {
 import { useNow } from "~/lib/clock.ts";
 import type { LogRefusal, QueryRefusal, ScheduleRow, ScheduleRunRow } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { href } from "~/app/router.tsx";
 import { closedBy } from "~/app/nav.ts";

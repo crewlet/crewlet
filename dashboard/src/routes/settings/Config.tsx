@@ -34,6 +34,7 @@ import {
   TableKeyCell,
   TableTextCell,
   Tag,
+  PageNote,
 } from "@crewlethq/ui";
 import {
   FileTextGlyph,
@@ -44,7 +45,6 @@ import {
   SlidersVerticalGlyph,
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
 import { usePageLabels } from "~/app/Shell.tsx";

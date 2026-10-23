@@ -24,7 +24,7 @@ import { fmtMinutes } from "~/lib/work.ts";
 import { plural } from "~/lib/format.ts";
 import { href, useParam } from "~/app/router.tsx";
 import { SeatCard, Section } from "~/components/common.tsx";
-import { Card, cx, EmptyState, EmptyValue, SegmentedControl, Tag } from "@crewlethq/ui";
+import { Card, cx, EmptyState, EmptyValue, SegmentedControl, Tag, PageNote } from "@crewlethq/ui";
 import { UsersGlyph } from "@crewlethq/icons/glyphs";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -44,7 +44,6 @@ import {
 } from "~/lib/seats.ts";
 import { loadFraction, loadRows, loadSentence, loadTone, type Load } from "~/lib/workload.ts";
 import type { AgentRow } from "~/protocol/index.ts";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
