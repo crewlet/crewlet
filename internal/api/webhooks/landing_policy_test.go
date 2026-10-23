@@ -74,6 +74,9 @@ func TestTheLandingPagesAllowExactlyTheirOwnInlineBlocks(t *testing.T) {
 					"X-Frame-Options":        "DENY",
 					"X-Content-Type-Options": "nosniff",
 					"Referrer-Policy":        "no-referrer",
+					// Each says what one request found, and an address
+					// that carries a one-time link or code.
+					"Cache-Control": "no-store",
 				} {
 					if got := header.Get(key); got != want {
 						t.Errorf("%s: %s = %q, want %q", name, key, got, want)
