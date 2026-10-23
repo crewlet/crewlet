@@ -1288,8 +1288,10 @@ a.oc-key:hover {
 /* THE APPROVED AGENT ARTBOARD: a head flush with the sheet — the badge, the
    name, the kind and state, the line that places the seat, and the tab strip
    sitting on the head's own rule — and the tab's panel under it at the
-   artboard's 28px inset. The sheet's own padding is taken back, the same way
-   the task page and the Inbox take it, so the rule runs edge to edge. */
+   shell's gutter, the screen padding every page bar's trail starts at: at
+   the artboard's 28px the head, tabs and body stood 8px right of the crumb
+   above them. The sheet's own padding is taken back, the same way the task
+   page and the Inbox take it, so the rule runs edge to edge. */
 .app .crewlet-app-shell__content:has(> .prof-frame) {
   padding: 0;
   gap: 0;
@@ -1303,7 +1305,7 @@ a.oc-key:hover {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-4);
-  padding: 22px 28px 0;
+  padding: var(--spacing-5) var(--spacing-5) 0;
   border-bottom: 1px solid var(--color-border-default);
 }
 .prof-id {
@@ -1355,7 +1357,7 @@ a.oc-key:hover {
   flex-direction: column;
   gap: var(--spacing-4);
   min-width: 0;
-  padding: 20px 28px 32px;
+  padding: var(--spacing-5) var(--spacing-5) var(--spacing-8);
 }
 .prof-notices {
   display: flex;
@@ -1386,6 +1388,12 @@ a.oc-key:hover {
 }
 .prof-pair > * {
   min-width: 0;
+}
+/* A PAIR WITH ONE CARD LEFT GIVES IT THE ROW: where the company runs no
+   Crewlet Works the seat's Assigned work draws nothing, and Turns per day sat
+   in the left track beside a 334px hole. */
+.prof-pair > :only-child {
+  grid-column: 1 / -1;
 }
 .prof-card,
 .prof-turn {
@@ -1997,6 +2005,15 @@ a.prof-row:hover {
   gap: var(--spacing-2);
   flex-wrap: wrap;
   min-width: 0;
+}
+/* THE CHECK, DISCARD AND REVIEW AND SAVE ARE ONE GROUP at the row's end, and
+   wrap together: the toolbar's last line holds all three or none. */
+.org-builder-save {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  flex: none;
+  margin-left: auto;
 }
 
 /* Undo, Redo, Discard, Expand all and Collapse all move into the More menu at
@@ -3904,7 +3921,6 @@ a.knowledge-reader-how:hover {
   justify-content: space-between;
   gap: var(--spacing-3) var(--spacing-6);
   flex-wrap: wrap;
-  margin-bottom: var(--spacing-4);
 }
 .int-bar > .page-note {
   margin: 0;
@@ -9878,12 +9894,14 @@ a.live-row:focus-visible {
 /* THE COMPANY'S THREE WINDOWS side by side, on the same elevated rung and at
    the same gap as the Spend overview's tiles, so a window reads as the same
    object on both screens. They stack below the width where a tile's figure,
-   bar and ceiling editor no longer fit a third of the card. */
+   bar and ceiling editor no longer fit a third of the card. THE CARD'S
+   INSET ON EVERY SIDE: with none on top the tiles sat flush against the
+   header's rule while keeping 16px on the other three. */
 .budget-tiles {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--spacing-3);
-  padding: 0 var(--spacing-4) var(--spacing-4);
+  padding: var(--spacing-4);
 }
 @container page (width < 760px) {
   .budget-tiles {

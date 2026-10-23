@@ -2416,3 +2416,21 @@ test("the trail names the seat and the unit it sits in, and titles the tab with 
   expect(unit.getAttribute("href")).toBe("#/company/org/teams/core");
   expect(document.title).toBe("SWE · Crewlet");
 });
+
+// WITHOUT CREWLET WORKS, MESSAGE AND ASSIGN TAKE THEIR WRAPPERS WITH THEM:
+// the buttons drew nothing and their empty spans still took the bar's gap.
+// Mutation: keep the spans whatever the services, and the bar holds two
+// empty children.
+test("a company running no Crewlet Works leaves no empty slot in the seat's bar", async () => {
+  mount("#/company/org/seats/swe", {
+    shell: true,
+    agents: [WORKING],
+    org: { ...ORG, services: { tracker: "jira", knowledge: "native" } } as OrgProjection,
+  });
+  await settle();
+  const bar = document.getElementById(PAGE_ACTIONS_SLOT) as HTMLElement;
+  expect(
+    [...bar.querySelectorAll(":scope > span")].filter((s) => s.childElementCount === 0),
+  ).toEqual([]);
+  expect(within(bar).queryByRole("button", { name: /^Message/ })).toBeNull();
+});

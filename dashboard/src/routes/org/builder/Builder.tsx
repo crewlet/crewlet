@@ -44,6 +44,7 @@
  * from a canvas alone would open invisibly behind it.
  */
 
+import { engineSentence } from "./EngineSentence.tsx";
 import {
   useCallback,
   useEffect,
@@ -1685,33 +1686,37 @@ function BuilderScreen({
                 onChoose={setChosen}
               />
             )}
-            <span className="spacer" />
-            {/* ON THE TABLE ONLY: the visualization draws it at the end of the
-                chart's own zoom bar, where the console chart keeps it. */}
-            {view === "table" && <FullscreenToggle container={container} />}
-            <Tag variant={look.tone} leadingIcon={<look.icon />}>
-              {look.label}
-            </Tag>
-            <span className="org-builder-wide">
+            {/* THE SAVE CLUSTER WRAPS AS ONE, at the row's end: wrapping item by
+                item, Review and save dropped alone to the start of a second
+                row at 1024 while the check and Discard stayed on the first. */}
+            <span className="org-builder-save">
+              {/* ON THE TABLE ONLY: the visualization draws it at the end of
+                  the chart's own zoom bar, where the console chart keeps it. */}
+              {view === "table" && <FullscreenToggle container={container} />}
+              <Tag variant={look.tone} leadingIcon={<look.icon />}>
+                {look.label}
+              </Tag>
+              <span className="org-builder-wide">
+                <Button
+                  size="small"
+                  variant="ghost"
+                  onClick={handlers.discard}
+                  disabled={readOnly || !changed}
+                >
+                  Discard changes
+                </Button>
+              </span>
               <Button
                 size="small"
-                variant="ghost"
-                onClick={handlers.discard}
-                disabled={readOnly || !changed}
+                variant="primary"
+                leadingIcon={<SaveGlyph />}
+                onClick={openReview}
+                disabled={!rules.review || save.unsettled}
+                title={rules.reason ?? undefined}
               >
-                Discard changes
+                Review and save
               </Button>
             </span>
-            <Button
-              size="small"
-              variant="primary"
-              leadingIcon={<SaveGlyph />}
-              onClick={openReview}
-              disabled={!rules.review || save.unsettled}
-              title={rules.reason ?? undefined}
-            >
-              Review and save
-            </Button>
           </div>
         )}
 
@@ -2242,7 +2247,7 @@ function DocumentProblems({ problems }: { problems: readonly PlacedProblem[] }) 
       <ul className="col gap-1">
         {problems.map((p, i) => (
           <li key={i}>
-            <span>{p.message}</span>
+            <span>{engineSentence(p.message)}</span>
             {p.link === "integrations" && (
               <>
                 {" "}

@@ -18,6 +18,7 @@
  * recognize this save if its answer is lost (`useSave.ts`).
  */
 
+import { engineSentence } from "./EngineSentence.tsx";
 import { useState } from "react";
 import { plural } from "~/lib/format.ts";
 import { handleLabel } from "~/lib/seats.ts";
@@ -258,7 +259,7 @@ export function ReviewSaveDialog({
       {status === "problems" && documentProblems.length > 0 && (
         <ul className="org-builder-list" aria-label="Problems with the whole configuration">
           {documentProblems.map((p, i) => (
-            <li key={i}>{p.message}</li>
+            <li key={i}>{engineSentence(p.message)}</li>
           ))}
         </ul>
       )}
@@ -315,7 +316,7 @@ export function ReviewSaveDialog({
           <strong>The engine will run this, with {plural(warnings.length, "warning")}</strong>
           <ul className="org-builder-list">
             {warnings.map((w, i) => (
-              <li key={i}>{w.message}</li>
+              <li key={i}>{engineSentence(w.message)}</li>
             ))}
           </ul>
         </section>

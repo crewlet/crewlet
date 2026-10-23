@@ -1677,6 +1677,25 @@ describe("the Spend overview's rows", () => {
     expect(block(css, ".spend-tiles:empty")).toMatch(/display:\s*none/);
   });
 
+  // A LONE CARD TAKES ITS ROW: without Crewlet Works a seat's Assigned work
+  // draws nothing, and Turns per day sat beside a 334px hole.
+  test("a seat's pair gives a lone card the whole row", () => {
+    expect(block(css, ".prof-pair > :only-child")).toMatch(/grid-column:\s*1 \/ -1/);
+  });
+
+  // THE SEAT PAGE IS ON THE SHELL'S GUTTER, the one the page bar's trail
+  // starts at: at 28px its head and body stood 8px right of the crumb.
+  test("a seat's head and body start where the page bar's trail does", () => {
+    expect(block(css, ".prof-head")).toMatch(/padding:\s*var\(--spacing-5\) var\(--spacing-5\) 0/);
+    expect(block(css, ".prof-body")).toMatch(/padding:\s*var\(--spacing-5\) var\(--spacing-5\)/);
+  });
+
+  // THE COMPANY'S BUDGET TILES KEEP THE CARD'S INSET ON EVERY SIDE: with none
+  // on top they sat flush against the header's rule.
+  test("the company's budget tiles are inset on every side", () => {
+    expect(block(css, ".budget-tiles")).toMatch(/padding:\s*var\(--spacing-4\);/);
+  });
+
   // ONE CARD HEADER IN SETTINGS: Spend's cards drew a bespoke head (a 16px
   // title, no icon, the caption at its end) beside every other card's kit
   // header. They head with `Card.Header` now, and the bespoke rule is gone.

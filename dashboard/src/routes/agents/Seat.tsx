@@ -341,19 +341,26 @@ export function SeatScreen({ handle }: { handle: string }) {
         )}
         {/* FOLDED ON A PHONE into the bar's "More" (published above), all
             but the one action the bar keeps in view. */}
-        <span className={paused ? "page-action-folds" : undefined}>
-          {/* HELD ON YOUR OWN SEAT BY ITSELF (`useMessageSeatAccess`), as
-              everywhere the button is drawn. */}
-          <MessageSeatButton handle={seat.handle} />
-        </span>
-        <span className="page-action-folds">
-          <AssignToSeatButton
-            handle={seat.handle}
-            name={seat.name}
-            open={assigning}
-            onOpenChange={setAssigning}
-          />
-        </span>
+        {/* THE TRACKER'S TWO WRITES, and their wrappers with them: where the
+            company runs no Crewlet Works the buttons draw nothing, and their
+            empty spans still took the bar's gap. */}
+        {runs.tracker && (
+          <>
+            <span className={paused ? "page-action-folds" : undefined}>
+              {/* HELD ON YOUR OWN SEAT BY ITSELF (`useMessageSeatAccess`), as
+                  everywhere the button is drawn. */}
+              <MessageSeatButton handle={seat.handle} />
+            </span>
+            <span className="page-action-folds">
+              <AssignToSeatButton
+                handle={seat.handle}
+                name={seat.name}
+                open={assigning}
+                onOpenChange={setAssigning}
+              />
+            </span>
+          </>
+        )}
         {!human && (
           <span className={paused ? undefined : "page-action-folds"}>
             <PauseSeatButton
