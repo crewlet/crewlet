@@ -137,6 +137,33 @@ func TestARefusedBootIsToldTheModeItsWindowIsIn(t *testing.T) {
 	}
 }
 
+// A CEILING ALREADY AT THE TARGET OPENS NO WINDOW.
+//
+// With no window open, the verb opened one whatever the log's ceiling was, so
+// running it again after its own window had closed (its answer lost on the way
+// back, the retry an operator reaches for) opened a new window to set the
+// ceiling it already had, and asked for three more fleet-wide restarts. A
+// window already open on the same target is still a resume.
+//
+// Mutation: drop the check and a window opens.
+func TestACeilingAlreadyAtTheTargetOpensNoWindow(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	e, fleet := capacityFixture(t, "node-1", statelog.ModeSeal)
+	_, err := e.openCapacity(ctx, CapacityRequest{
+		Stream: "CREWLET_TRACKER_LOG", TargetMaxBytes: 1 << 33, By: "ops-3",
+	}, jetstream.LogStats{MaxBytes: 1 << 33}, unstatedRoom)
+	said, told := statelog.Tell(err)
+	if !told || !strings.Contains(said, "already 8589934592 bytes") {
+		t.Fatalf("a target the log already has answered %v, want it told that "+
+			"there's nothing to change", err)
+	}
+	if held, found, err := fleet.Maintenance(ctx, "CREWLET_TRACKER_LOG"); err != nil || found {
+		t.Fatalf("a window was opened to set the ceiling the log has (found=%t, "+
+			"err=%v): %+v", found, err, held)
+	}
+}
+
 // TestAnUnreadableOperationIsNotAnAbsentOne.
 //
 // Reading a coordination failure as "no maintenance" is the exact admission
