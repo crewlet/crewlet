@@ -665,12 +665,19 @@ func (a *App) serveMaintenanceStatus(w http.ResponseWriter, r *http.Request) {
 // ([engine.ConfirmMismatchError]). It used to be compared by the CLI after the
 // abandonment had run.
 func (a *App) serveAbandon(w http.ResponseWriter, r *http.Request) {
+	// THE LOG FIRST, so the refusal of a missing confirmation can name the
+	// status read as the CLI takes it, which needs the log.
+	stream := r.URL.Query().Get("stream")
+	if stream == "" {
+		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeStreamRequired)
+		return
+	}
 	confirm := r.URL.Query().Get("confirm")
 	if confirm == "" {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeConfirmRequired, map[string]string{
-			"detail": "repeat the open operation's id in ?confirm=, which " +
-				"`crewlet retention maintenance status` shows: a window is " +
-				"abandoned knowing which one it is",
+			"detail": fmt.Sprintf("repeat the open operation's id in ?confirm=, "+
+				"which `crewlet retention maintenance status -stream %s` shows: a "+
+				"window is abandoned knowing which one it is", stream),
 		})
 		return
 	}
@@ -725,8 +732,8 @@ func (a *App) capacityGesture(w http.ResponseWriter, r *http.Request, gesture, w
 		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeConfirmRequired, httpjson.Detail{
 			"detail": fmt.Sprintf("the operation open on %s is %s, not %s, so "+
 				"nothing was abandoned: read `crewlet retention maintenance "+
-				"status`, then repeat its id in ?confirm=",
-				mismatch.Stream, mismatch.Open, mismatch.Named),
+				"status -stream %s`, then repeat its id in ?confirm=",
+				mismatch.Stream, mismatch.Open, mismatch.Named, mismatch.Stream),
 			"operation": operationOrNil(op),
 		})
 		return

@@ -386,7 +386,8 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 		"couldn't establish whether the capacity window on %s was opened: the "+
 			"create may never have been received and may still be outstanding, "+
 			"so this fleet may already be excluded. Read `crewlet retention "+
-			"maintenance status` before trying again", req.Stream)
+			"maintenance status -stream %s` before trying again", req.Stream,
+		req.Stream)
 }
 
 // driveCapacity advances the operation as far as this mode's evidence allows.
@@ -872,12 +873,15 @@ func (e *Engine) applyFailure(ctx context.Context, op coord.MaintenanceOperation
 			"and the operation stays open. Restart the fleet with `-mode seal` to "+
 			"retire it", op.Stream, op.TargetMaxBytes)
 	}
+	// THE ABANDONMENT NAMED IN FULL, its confirmation included: the node
+	// refuses one that doesn't repeat the operation's id, so the command
+	// this named was refused as written.
 	return stopped(err, "the broker refused to set %s's ceiling to %d and "+
 		"wrote nothing%s. A target is chosen once for the life of an operation, "+
 		"so abandon this one with `crewlet retention maintenance abandon "+
-		"-stream %s` and open another at a ceiling that fits",
+		"-stream %s -confirm %s` and open another at a ceiling that fits",
 		op.Stream, op.TargetMaxBytes, e.capacityRefusal(ctx, op.TargetMaxBytes),
-		op.Stream)
+		op.Stream, op.OperationID)
 }
 
 // streamVolume is the directory the state logs' ceilings were derived from,
