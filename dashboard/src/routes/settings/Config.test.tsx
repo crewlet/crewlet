@@ -14,7 +14,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { changeValue, ConfigScreen, RevisionPeek } from "./Config.tsx";
 import { Router } from "~/app/router.tsx";
@@ -127,6 +127,21 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   location.hash = "#/";
+});
+
+// READ ONLY, SAID FIRST: the note leads the screen as its page note on every
+// lens, never a callout under the last card. Mutation: move it back under the
+// cards and the note is no longer the content's first element.
+test("the screen says it is read only first, as its page note", async () => {
+  const { container } = mount("#/config?lens=audit");
+  await screen.findByText("01JCFGAAAA");
+  const note = screen.getByText(/Read only here/);
+  expect(note.closest(".page-note")).not.toBeNull();
+  expect(note.closest(".crewlet-callout")).toBeNull();
+  expect(container.querySelector(".page-note")).toBe(note.closest(".page-note"));
+  expect(
+    within(note.closest(".page-note") as HTMLElement).getByText("crewlet config import").tagName,
+  ).toBe("CODE");
 });
 
 test("a revision row renders the server's own field names", async () => {

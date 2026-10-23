@@ -7893,7 +7893,8 @@ changed (against the active revision, the active revision's own changes were
 empty). **It is read-only for the document**: a revision is written by
 `PUT /config`, `crewlet config import`, or a screen's own scoped write (a
 budget ceiling, the org builder), each of which validates against the schema
-before anything is stored.
+before anything is stored, and the screen says so first, as its page note on
+every lens.
 
 ## How it is built
 

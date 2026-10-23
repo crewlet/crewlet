@@ -22,7 +22,6 @@ import { Mark } from "~/ui/glyph.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import {
   ButtonLink,
-  Callout,
   Card,
   CodeBlock,
   CopyButton,
@@ -45,6 +44,7 @@ import {
   SlidersVerticalGlyph,
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 
 import { usePageLabels } from "~/app/Shell.tsx";
@@ -666,6 +666,14 @@ export function ConfigScreen({
         </PageActions>
       )}
 
+      {/* WHAT THE SCREEN IS, said first and once, as every Settings page
+          that needs it says it: a callout under the last card was a footnote
+          a reader met after everything it qualifies. */}
+      <PageNote>
+        Read only here. Change the company document with{" "}
+        <InlineCode>crewlet config import</InlineCode>.
+      </PageNote>
+
       {/* THE REVISION THIS PATH NAMES, above the lens rather than below it:
           the reader followed a link to one revision, so what it is has to be
           the first thing on the screen and the lens they land on is a second
@@ -1040,10 +1048,6 @@ export function ConfigScreen({
           </QueryState>
         </>
       )}
-
-      <Callout variant="neutral">
-        Read-only here. Change it with <InlineCode>crewlet config import</InlineCode>.
-      </Callout>
     </>
   );
 }
