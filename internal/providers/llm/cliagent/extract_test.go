@@ -449,24 +449,56 @@ func TestNoOutputAtAllIsReportedAsNoOutput(t *testing.T) {
 
 // A spent plan is the vendor's own sentence, and whether THIS build's profile
 // can find the answer field says nothing about whether the vendor said it.
-// Classified off the whole of stdout, so a drifted profile still yields a real
-// rate limit rather than burning the chain's next member on a server fault.
+// Classified off the whole of stdout when no answer was located, so a drifted
+// profile still yields a real rate limit — on the terms an answer is read on:
+// the vendor's report opens what the CLI printed, or the CLI said the run
+// failed.
+//
+// And only on those terms. A drifted profile cannot tell the model's words from
+// the vendor's either — the model's answer is somewhere in that stdout — so a
+// sentinel in a field this build does not read, on a run the CLI did not report
+// failed, is the profile drift it looks like: a server failure, which still
+// moves the chain on, and not a spent plan that sits the entry out.
 func TestASpentPlanIsRecognisedEvenWhenTheAnswerIsNotLocated(t *testing.T) {
 	t.Parallel()
 	p, err := cliprofile.Load("claude-code", nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	prov := &Provider{profile: p, model: "haiku", agent: "claude-code", key: "default", now: time.Now}
-	// Valid JSON with no `result` field: nothing for text_paths to find, and
-	// the vendor's sentinel sitting in a field this build never reads.
-	_, err = prov.completion(t.Context(), "prompt", true, &rawResult{
-		stdout: `{"note":"Usage limit reached \u00b7 continuing automatically"}`}, "")
-	if err == nil {
-		t.Fatal("a spent plan produced a completion")
-	}
-	if got := llm.KindOf(err); got != llm.KindRateLimit {
-		t.Fatalf("kind = %v, want rate limit", got)
+	for name, tc := range map[string]struct {
+		stdout string
+		want   llm.ErrorKind
+	}{
+		// Prose where the document should be, and a document with no
+		// `result` field after it: nothing for text_paths to find.
+		"the report printed where the document should be": {
+			stdout: "Usage limit reached \u00b7 resets 3pm (Europe/Berlin)\n" +
+				`{"type":"result","subtype":"error"}`,
+			want: llm.KindRateLimit,
+		},
+		"the sentinel in a run the CLI reported failed": {
+			stdout: `{"is_error":true,"note":"Usage limit reached \u00b7 continuing automatically"}`,
+			want:   llm.KindRateLimit,
+		},
+		"the sentinel in a field nothing reads, on a clean run": {
+			stdout: `{"note":"Usage limit reached \u00b7 continuing automatically"}`,
+			want:   llm.KindServer,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			prov := &Provider{profile: p, model: "haiku", agent: "claude-code", key: "default", now: time.Now}
+			if out := extract(p, tc.stdout); out.located {
+				t.Fatalf("the answer was located (%q) — this case is about one that is not", out.text)
+			}
+			_, err := prov.completion(t.Context(), "prompt", true, &rawResult{stdout: tc.stdout}, "")
+			if got := llm.KindOf(err); err == nil || got != tc.want {
+				t.Fatalf("kind = %v (err %v), want %v", got, err, tc.want)
+			}
+			if sat := prov.benched() != nil; sat != (tc.want == llm.KindRateLimit) {
+				t.Errorf("sat out = %v, want it only for a spent plan", sat)
+			}
+		})
 	}
 }
 
@@ -496,7 +528,7 @@ func TestAMarkerThatCarriesAResetInstantSitsTheEntryOutUntilIt(t *testing.T) {
 	// test that asserts nothing.
 	reset := time.Now().Add(45 * time.Minute).Unix()
 	_, err = prov.completion(t.Context(), "prompt", true, &rawResult{stdout: fmt.Sprintf(
-		`{"note":"quota spent|%d"}`, reset)}, "")
+		`{"type":"result","result":"quota spent|%d"}`, reset)}, "")
 	if err == nil {
 		t.Fatal("a spent plan produced a completion")
 	}

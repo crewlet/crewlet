@@ -22,6 +22,20 @@ import (
 // ONE login, so there is one thing to bench, and it is benched here rather than
 // in the chain because only the backend knows the reset instant its CLI named.
 //
+// # Only on the vendor's word
+//
+// A sit-out takes a working entry from every seat on the node, so what starts
+// one has to be the vendor's report and never the model's sentence. The
+// classification is what guarantees it, not this file: a sentinel counts on
+// stderr, in a run the CLI reported failed, in the CLI's own failure event, or
+// where it OPENS what a clean run said — the vendor's sentence standing where
+// the answer should be — and nowhere else (classifyMarkers). A seat writing
+// about the GitHub rate limit, or a tool call carrying "Usage limit reached"
+// in its arguments, is an answer, so every rate limit that reaches
+// [Provider.bench] is evidence from the CLI. That rule, and not the wording of
+// a sentinel, is what makes the shipped profiles' generic, unmeasured
+// sentinels — Copilot's "rate limit", Cursor's "quota" — safe to bench on.
+//
 // # On this node, and for not too long
 //
 // The bench is the provider's own and is not shared with the fleet: every

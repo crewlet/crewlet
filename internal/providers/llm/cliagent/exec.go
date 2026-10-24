@@ -586,18 +586,18 @@ func classifyFailureEvents(p cliprofile.Profile, stdout string) (markerHit, bool
 	for _, marker := range p.LimitMarkers {
 		for _, f := range failures {
 			if f.class == marker.Sentinel {
-				return markerHit{Kind: llm.KindRateLimit, Said: f.line}, true
+				return markerHit{Kind: llm.KindRateLimit, Said: f.line, Source: sourceEvent}, true
 			}
 		}
 	}
 	for _, marker := range p.AuthMarkers {
 		for _, f := range failures {
 			if f.class == marker.Sentinel {
-				return markerHit{Kind: llm.KindAuth, Said: f.line}, true
+				return markerHit{Kind: llm.KindAuth, Said: f.line, Source: sourceEvent}, true
 			}
 		}
 	}
-	return markerHit{Kind: llm.KindFatal}, false
+	return markerHit{}, false
 }
 
 func decodeObject(s string) (map[string]any, bool) {

@@ -497,31 +497,57 @@ func TestAnEmptyAnswerIsRetryableRatherThanFatal(t *testing.T) {
 const claudeOverloaded = `{"type":"result","subtype":"success","is_error":true,` +
 	`"result":"API Error: 529 {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}"}`
 
-// claudeCodeShape is the overrides that make the fake CLI read like Claude
-// Code: one JSON document, the answer at `result`, the failure flag at
-// `is_error`, and the shipped profile's own markers — so a case built on it
-// says what the real entry would do with the same output.
-func claudeCodeShape(t *testing.T) map[string]any {
+// shippedShape is the overrides that make the fake CLI's output read as the
+// named built-in profile reads it: its output mode, where its answer and its
+// failure flag are, its markers and where they are matched — so a case built
+// on it says what the shipped entry would make of the same output.
+func shippedShape(t *testing.T, agent string) map[string]any {
 	t.Helper()
-	builtin, ok := cliprofile.Builtin("claude-code")
+	builtin, ok := cliprofile.Builtin(agent)
 	if !ok {
-		t.Fatal("no built-in claude-code profile")
+		t.Fatalf("no built-in %s profile", agent)
 	}
-	limits := make([]any, 0, len(builtin.LimitMarkers))
+	shape := map[string]any{
+		"output":       string(builtin.EffectiveOutput()),
+		"marker_scope": string(builtin.EffectiveMarkerScope()),
+	}
+	set := func(key string, values []any) {
+		if len(values) > 0 {
+			shape[key] = values
+		}
+	}
+	paths := func(ps []cliprofile.Path) []any {
+		out := make([]any, 0, len(ps))
+		for _, path := range ps {
+			out = append(out, toAny(path))
+		}
+		return out
+	}
+	var limits, auths []any
 	for _, m := range builtin.LimitMarkers {
 		limits = append(limits, map[string]any{"sentinel": m.Sentinel})
 	}
-	auths := make([]any, 0, len(builtin.AuthMarkers))
 	for _, m := range builtin.AuthMarkers {
 		auths = append(auths, map[string]any{"sentinel": m.Sentinel})
 	}
-	return map[string]any{
-		"output":        "json",
-		"text_paths":    []any{[]any{"result"}},
-		"error_paths":   []any{[]any{"is_error"}},
-		"limit_markers": limits,
-		"auth_markers":  auths,
+	set("limit_markers", limits)
+	set("auth_markers", auths)
+	set("text_paths", paths(builtin.TextPaths))
+	set("error_paths", paths(builtin.ErrorPaths))
+	set("event_type_path", toAny(builtin.EventTypePath))
+	set("text_events", toAny(builtin.TextEvents))
+	set("marker_events", toAny(builtin.MarkerEvents))
+	set("marker_path", toAny(builtin.MarkerPath))
+	return shape
+}
+
+// toAny is a list of strings as the []any an overrides map carries.
+func toAny(ss []string) []any {
+	out := make([]any, 0, len(ss))
+	for _, s := range ss {
+		out = append(out, s)
 	}
+	return out
 }
 
 // A VENDOR OUTAGE IS A SERVER FAILURE, NOT A FATAL ONE. Claude Code relays an
@@ -536,7 +562,7 @@ func claudeCodeShape(t *testing.T) map[string]any {
 func TestAFailedRunIsAServerFailureThatDoesNotSitTheEntryOut(t *testing.T) {
 	t.Parallel()
 	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": claudeOverloaded, "FAKE_EXIT": "1"},
-		claudeCodeShape(t))
+		shippedShape(t, "claude-code"))
 	_, err := ask(t, p, llm.Request{})
 	if got := llm.KindOf(err); got != llm.KindServer {
 		t.Fatalf("kind = %v, want server (err %v)", got, err)
@@ -559,7 +585,7 @@ func TestAFailedRunIsAServerFailureThatDoesNotSitTheEntryOut(t *testing.T) {
 func TestAChainWalksPastAHeadWhoseCLIFailed(t *testing.T) {
 	t.Parallel()
 	head := fakeProvider(t, map[string]string{"FAKE_STDOUT": claudeOverloaded, "FAKE_EXIT": "1"},
-		claudeCodeShape(t))
+		shippedShape(t, "claude-code"))
 	backup := fakeProvider(t, map[string]string{"FAKE_STDOUT": "from the backup"}, nil)
 	var seen []chain.Fallback
 	walk, err := chain.New([]chain.Member{{Key: "plan", Provider: head}, {Key: "key", Provider: backup}},

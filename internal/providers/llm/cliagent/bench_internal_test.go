@@ -136,7 +136,9 @@ func TestALaterBenchNeverShortensAnEarlierOne(t *testing.T) {
 // Mutation: bench every classified marker, and the entry sits out.
 func TestARejectedLoginDoesNotSitTheEntryOut(t *testing.T) {
 	t.Parallel()
-	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": "Not logged in · Please run /login"},
+	// A refused login is a FAILED run, which is what lets the sentinel stand
+	// mid-line: on a clean exit it would have to open the answer.
+	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": "Not logged in · Please run /login", "FAKE_EXIT": "1"},
 		map[string]any{"auth_markers": []any{map[string]any{"sentinel": "Please run /login"}}})
 	if _, err := ask(t, p, llm.Request{}); llm.KindOf(err) != llm.KindAuth {
 		t.Fatalf("the rejected login answered %v, want auth", err)

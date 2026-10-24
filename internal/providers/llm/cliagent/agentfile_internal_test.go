@@ -389,7 +389,7 @@ func TestTheKimiProfileClassifiesTheFailuresItsCLIActuallyPrints(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			hit, ok := classifyMarkers(p, "", "", tc.stderr)
+			hit, ok := classifyMarkers(p, cliOutput{stderr: tc.stderr, failed: true})
 			if !ok {
 				t.Fatalf("no marker fired on what the CLI really printed:\n%s", tc.stderr)
 			}

@@ -192,8 +192,10 @@ type StdinLogin struct {
 // limit" appears in a model's own answer about rate limits, and a vendor's
 // wording changes under it. So a marker matches by
 // STRUCTURE: a literal sentinel the vendor emits verbatim, plus the field
-// that carries the reset instant. A marker that finds its sentinel but no
-// reset value still classifies; one that finds neither does not fire.
+// that carries the reset instant — and, in what a run that did not fail
+// says, only where the sentinel opens it ([MarkerScope]). A marker that finds
+// its sentinel but no reset value still classifies; one that finds neither
+// does not fire.
 type LimitMarker struct {
 	// Sentinel is the exact substring the vendor emits. It is compared
 	// case-sensitively against the extracted text: the vendors write these
@@ -219,17 +221,27 @@ type LimitMarker struct {
 // The default searches the model's ANSWER as well as stderr, and it has to:
 // Claude Code reports a spent plan on a ZERO exit with the vendor's sentence
 // about the plan standing where the answer should be, so a marker that
-// searched stderr alone would never fire and the fallback chain would never
-// carry the seat onto a metered key.
+// searched stderr alone would never fire and the entry would never sit out.
 //
-// It is also a false-positive surface, and a real one rather than a
-// theoretical one: the haystack is the model's own words, so a seat ASKED
-// about rate limits — "what is our quota?" — can answer in prose that trips a
-// generic sentinel, and a KindRateLimit benches a perfectly good credential.
-// This file already lost a "429" sentinel to exactly that.
+// THE ANSWER IS SEARCHED ON TERMS, because on a healthy run it is the model's
+// own words — its prose and the arguments of every tool call it makes. On a run
+// the CLI did not report failed, a sentinel counts only where it BEGINS the
+// answer's first non-empty line, so that the answer IS the vendor's report; it
+// counts anywhere only in a run the CLI reported failed, by a non-zero exit or
+// [Profile.ErrorPaths]. (Stderr is matched anywhere: the answer does not reach
+// it.) Matched anywhere on every run, a seat ASKED about rate limits — "what
+// is our quota?" — answered in prose that tripped a generic sentinel, the
+// answer was thrown away as a spent plan, and the entry sat out for every seat
+// on the node. The anchoring is what makes the shipped GENERIC sentinels safe
+// to keep — "rate limit", "quota", "usage limit" are not measured vendor
+// sentences, and a vendor's report opening with one is the only place they
+// count on a clean run. Nothing about it saves a sentinel that is not words:
+// this file lost a "429" to the same false positive, and an answer can open
+// with digits as readily as mention them.
 //
-// So a CLI that reports its failures on STDERR and nowhere else says so, and
-// its markers stop being matched against anything the model said. That is not
+// A CLI that reports its failures on STDERR and nowhere else narrows it
+// further, and its markers stop being matched against anything the model said,
+// in a failed run or not. That is not
 // a guess per profile: kimi-code writes `provider.rate_limit: …` to stderr
 // with the answer stream empty, pi writes `<status>: <the provider's JSON>`
 // to stderr with stdout empty, and hermes writes `hermes -z: agent failed: …`
@@ -2041,13 +2053,14 @@ func (p *Profile) EffectiveOutput() OutputMode {
 // "" when it can.
 //
 // A SENTINEL IS THE VENDOR'S WORDS. It is matched as a plain substring against
-// whatever the CLI printed — which on a healthy run is the model's own answer
-// — so a sentinel that can occur inside ordinary text does not recognise a
-// spent plan, it misclassifies arbitrary replies as one. And the cost is not
-// a wrong log line: both kinds a marker produces, KindRateLimit and KindAuth,
-// hand the seat to the fallback chain, and a rate limit SITS THE ENTRY OUT for
-// a while besides (internal/providers/llm/cliagent, bench.go). A company
-// degrades quietly.
+// stderr and a failed run's output, and against the opening of a healthy
+// run's answer — which is the model's own ([MarkerScope]) — so a sentinel that
+// can occur inside ordinary text does not recognise a spent plan, it
+// misclassifies arbitrary replies as one. And the cost is not a wrong log
+// line: both kinds a marker produces, KindRateLimit and KindAuth, hand the
+// seat to the fallback chain, and a rate limit SITS THE ENTRY OUT for a while
+// besides (internal/providers/llm/cliagent, bench.go). A company degrades
+// quietly.
 //
 // The shipped profiles carried `sentinel: "429"`, which is the failure in its
 // purest form: three digits matched inside free text, so a model quoting an

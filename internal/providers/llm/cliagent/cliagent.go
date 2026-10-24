@@ -33,7 +33,9 @@
 // coarse kind. The one classification that is genuinely its own is a SPENT
 // SUBSCRIPTION, which arrives as prose on a SUCCESSFUL exit and is recognised
 // by a vendor's verbatim sentinel plus the reset instant it carries — never
-// by keyword, which is how the same recognition was got wrong twice before.
+// by keyword, which is how the same recognition was got wrong twice before,
+// and on such an exit only where the sentinel OPENS what the CLI said, which
+// is otherwise the model's own words (see [classifyMarkers]).
 package cliagent
 
 import (
@@ -45,6 +47,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -593,12 +596,22 @@ func (p *Provider) completion(
 	// The events scope reads neither as text: it decodes the whole of
 	// stdout and looks only at the CLI's own failure events — see
 	// [cliprofile.MarkerScope] — which is why stdout itself is handed over
-	// beside what was said.
+	// beside what was said. And whether the CLI said the run FAILED is
+	// handed over too, because it decides where in what was said a
+	// sentinel may stand — see [classifyMarkers].
 	said := nonEmpty(out.text, res.stdout)
-	if hit, ok := classifyMarkers(p.profile, said, res.stdout, res.stderr); ok {
+	if hit, ok := classifyMarkers(p.profile, cliOutput{
+		said: said, stdout: res.stdout, stderr: res.stderr,
+		failed: res.exitCode != 0 || out.failed,
+	}); ok {
 		reason := nonEmpty(hit.Said, firstLine(said, res.stderr))
 		if hit.Kind == llm.KindRateLimit {
 			p.bench(hit.Retry, reason)
+			// WHERE IT MATCHED, beside what it matched: a sit-out takes the
+			// entry from every seat on this node, and the one question an
+			// operator who doubts it has is whether the vendor said it.
+			log.WarnContext(ctx, "cli_agent_limit_reported", "provider", p.key, "agent", p.agent,
+				"source", string(hit.Source), "said", reason)
 		}
 		return nil, p.fail(hit.Kind, fmt.Errorf("%s", reason))
 	}
@@ -767,53 +780,135 @@ func (p *Provider) completion(
 // "usage limit" case-insensitively across a reply is what made this wrong
 // before: a model asked about rate limits writes the phrase itself, and every
 // such answer was thrown away as a spent plan.
+//
 // A FUNCTION OF THE PROFILE, not a method on the provider: what a vendor's
 // spent plan looks like is a property of the profile table, and the only way
 // to check a shipped profile's sentinels against the output its CLI actually
 // produces is to be able to ask without a running provider.
 //
-// said is what the CLI said — the located answer, or the whole of stdout when
-// none was located — and stdout is the whole of it, which only the events
-// scope reads, and only as decoded events.
-func classifyMarkers(p cliprofile.Profile, said, stdout, stderr string) (markerHit, bool) {
-	// THE ANSWER IS A HAYSTACK ONLY WHERE A VENDOR PUTS ITS FAILURES IN
-	// ONE — see [cliprofile.MarkerScope]. Searching the model's own words is what
-	// makes a spent Claude Code plan recognisable at all, and it is also
-	// how a seat asked "what is our quota?" answers in prose that benches
-	// its own credential. A profile whose CLI reports on stderr and
-	// nowhere else opts out, and then no sentence the model writes can
-	// classify anything.
-	var haystacks []string
+// # What the model said is not the vendor's report
+//
+// Verbatim is not enough on its own, because what the CLI said on stdout is,
+// on every healthy run, the MODEL's words — its prose, and the arguments of
+// every tool call it makes — and a seat asked to add backoff for the GitHub
+// API writes "rate limit" as readily as a vendor reports one. Matched anywhere
+// in there, a sentence the model wrote threw its answer away as a spent plan
+// and sat the entry out for every seat on the node, and the redelivered turn
+// wrote it again a minute later. So in the default scope a sentinel in what
+// was said counts in two places only:
+//
+//   - ANYWHERE, in a run the CLI itself reported failed — a non-zero exit,
+//     or its own failure flag ([cliprofile.Profile.ErrorPaths]). The CLI has
+//     said this was no answer; what it printed is its account of why.
+//   - AT THE START, in a run it did not: the sentinel begins the first
+//     non-empty line, so that what was said IS the vendor's report rather
+//     than an answer that mentions one. That is the shape of the clean-exit
+//     report this package has measured — Claude Code's spent plan, a line
+//     beginning "Usage limit reached" standing where the answer should be —
+//     and it is what makes the shipped profiles' generic, unmeasured
+//     sentinels ("rate limit", "quota") safe to keep: a model's answer that
+//     merely mentions one, or a tool call that carries one in its
+//     arguments, is not classified at all, and comes back as the answer it
+//     is.
+//
+// Stderr is matched anywhere: it is the CLI's own channel, and the answer
+// does not reach it. The events scope reads the CLI's own failure
+// events and nothing else, and the stderr scope stderr alone — see
+// [cliprofile.MarkerScope].
+func classifyMarkers(p cliprofile.Profile, out cliOutput) (markerHit, bool) {
+	var haystacks []haystack
 	switch p.EffectiveMarkerScope() {
 	case cliprofile.MarkerScopeEvents:
-		return classifyFailureEvents(p, stdout)
+		return classifyFailureEvents(p, out.stdout)
 	case cliprofile.MarkerScopeStderr:
-		haystacks = []string{stderr}
+		haystacks = []haystack{{text: out.stderr, source: sourceStderr}}
 	default:
-		haystacks = []string{said, stderr}
+		said := haystack{text: out.said, source: sourceReport, anchored: true}
+		if out.failed {
+			said = haystack{text: out.said, source: sourceFailedRun}
+		}
+		haystacks = []haystack{said, {text: out.stderr, source: sourceStderr}}
 	}
 	for _, marker := range p.LimitMarkers {
 		for _, hay := range haystacks {
-			idx := strings.Index(hay, marker.Sentinel)
-			if idx < 0 {
+			idx, found := hay.find(marker.Sentinel)
+			if !found {
 				continue
 			}
 			return markerHit{
-				Kind:  llm.KindRateLimit,
-				Retry: resetAfter(hay[idx:], marker),
-				Said:  lineAt(hay, idx),
+				Kind:   llm.KindRateLimit,
+				Retry:  resetAfter(hay.text[idx:], marker),
+				Said:   lineAt(hay.text, idx),
+				Source: hay.source,
 			}, true
 		}
 	}
 	for _, marker := range p.AuthMarkers {
 		for _, hay := range haystacks {
-			if idx := strings.Index(hay, marker.Sentinel); idx >= 0 {
-				return markerHit{Kind: llm.KindAuth, Said: lineAt(hay, idx)}, true
+			if idx, found := hay.find(marker.Sentinel); found {
+				return markerHit{Kind: llm.KindAuth, Said: lineAt(hay.text, idx), Source: hay.source}, true
 			}
 		}
 	}
-	return markerHit{Kind: llm.KindFatal}, false
+	return markerHit{}, false
 }
+
+// cliOutput is what one finished run gives [classifyMarkers] to read.
+type cliOutput struct {
+	// said is what the CLI said: the located answer, or the whole of stdout
+	// when none was located.
+	said string
+	// stdout is the whole of it, which only the events scope reads, and only
+	// as decoded events.
+	stdout string
+	// stderr is the CLI's own diagnostic channel.
+	stderr string
+	// failed is the CLI's own word that the run failed: a non-zero exit, or
+	// the flag at the profile's error_paths.
+	failed bool
+}
+
+// haystack is one text a sentinel may be found in, and on what terms.
+type haystack struct {
+	text   string
+	source markerSource
+	// anchored admits a sentinel only where it BEGINS the text's first
+	// non-empty line — the rule for what a run that did not fail said on
+	// stdout, which is the model's words unless it is the vendor's report.
+	anchored bool
+}
+
+// find is the byte offset of sentinel in the haystack, on its terms.
+func (h haystack) find(sentinel string) (int, bool) {
+	if !h.anchored {
+		idx := strings.Index(h.text, sentinel)
+		return idx, idx >= 0
+	}
+	// The first non-space byte opens the first non-empty line, trimmed.
+	start := strings.IndexFunc(h.text, func(r rune) bool { return !unicode.IsSpace(r) })
+	if start < 0 || !strings.HasPrefix(h.text[start:], sentinel) {
+		return -1, false
+	}
+	return start, true
+}
+
+// markerSource is where a sentinel matched — the evidence that the vendor,
+// and not the model, said it.
+type markerSource string
+
+const (
+	// sourceReport is what a run that did not fail said on stdout, which is
+	// the vendor's report: the sentinel begins its first non-empty line.
+	sourceReport markerSource = "report"
+	// sourceFailedRun is what a run the CLI reported failed said on stdout,
+	// where a sentinel counts anywhere.
+	sourceFailedRun markerSource = "failed-run"
+	// sourceStderr is the CLI's stderr.
+	sourceStderr markerSource = "stderr"
+	// sourceEvent is one of the CLI's own failure events, under
+	// [cliprofile.MarkerScopeEvents].
+	sourceEvent markerSource = "event"
+)
 
 // markerHit is what a matched sentinel tells the caller.
 //
@@ -829,6 +924,8 @@ type markerHit struct {
 	// Said is the line the sentinel matched on — the vendor's own words,
 	// in the place the vendor put them.
 	Said string
+	// Source is where it matched, which is why it counts as the vendor's.
+	Source markerSource
 }
 
 // lineAt returns the line of s containing byte offset idx, trimmed.

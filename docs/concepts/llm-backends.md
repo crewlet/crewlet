@@ -601,12 +601,31 @@ a model call.
 Both recognitions are `limit_markers` / `auth_markers` on the profile: a
 literal substring the vendor emits, plus (where it carries one) the field
 holding the reset instant, so the sit-out is a datum rather than a
-guess. They are matched against whatever the CLI printed — which on a
-healthy call is **the model's own answer** — and a limit match sits the entry
-out and hands the seat to the next entry in the chain. Under
+guess. They are matched against what the CLI printed, and on a healthy call
+that is **the model's own answer** — its prose and the arguments of every tool
+call it makes — while a limit match throws the answer away, sits the entry out
+for every seat on the node and hands the seat to the next entry in the chain.
+So what the CLI said on stdout is read on terms:
+
+- In a run the CLI **reported failed** — a non-zero exit, or its own failure
+  flag (`error_paths`) — a sentinel counts anywhere in it. The CLI has said
+  this was no answer, so what it printed is its account of why.
+- In a run it did **not**, a sentinel counts only where it **opens** what was
+  said: the first non-empty line begins with it. That is the vendor's report
+  standing where the answer should be — Claude Code's
+  `Usage limit reached · resets …` — and an answer that merely mentions a
+  limit, or a tool call carrying one in its arguments, is the answer it is.
+
+Stderr is matched anywhere: the answer does not reach it. The anchoring is what
+makes the built-in profiles' generic sentinels safe to ship — Copilot's and
+Grok's `rate limit`, Cursor's `quota` are not measured vendor sentences, and
+on a clean run they count only as the opening of a report. Under
 `marker_scope: events` a sentinel is instead the failure *class*, compared whole
 with the CLI's own failure event and nothing else
 (see [CLI flags drift](#cli-flags-drift--and-thats-a-config-edit-not-a-release)).
+Every sit-out logs `cli_agent_limit_reported` with where its sentinel matched —
+`report`, `failed-run`, `stderr` or `event` — and the line it matched, so one
+you doubt can be traced to what the vendor said.
 
 So a sentinel has to be the vendor's *wording*, and a profile is refused
 at `crewlet validate` if one contains no letters. The rule exists because
@@ -1489,9 +1508,13 @@ Output that is not JSON at all is still an answer: a CLI that printed a
 banner, a warning, or the vendor's own sentence about a spent plan is
 read as prose rather than refused, which is what lets the
 [limit sentinels](#falling-back-between-entries) be recognised on a
-zero exit. Those sentinels are matched against the CLI's whole stdout
-and stderr, so a drifted profile still yields a real `rate_limit`
-rather than a server fault.
+zero exit. Where no answer is located they are matched against the
+CLI's whole stdout instead, on the terms an answer is read on — the
+vendor's report opens it, or the run failed
+([What a sentinel may be](#what-a-sentinel-may-be)) — so a drifted
+profile still yields a real `rate_limit` where the vendor said one, and
+a sentinel buried in a field this build no longer reads is the drift it
+looks like.
 
 **Why the last two are failures rather than answers.** They used to be
 one case with the empty one, and the answer handed back was the CLI's raw
@@ -2211,13 +2234,14 @@ Sentinels are matched against the extracted **answer** as well as stderr, and
 they have to be: Claude Code reports a spent plan on a *zero* exit with the
 vendor's sentence standing where the answer should be, so a marker confined to
 stderr would never fire and the fallback chain would never carry the seat onto
-its next entry. The cost is that a seat *asked* about rate limits can answer in
-prose — "our quota resets hourly" — that trips a generic sentinel and sits
-a perfectly good entry out. This page's own history has that bug: a bare
-`429` sentinel was dropped for exactly it.
+its next entry. In a run the CLI did not report failed, a sentinel in the
+answer counts only where it opens it ([What a sentinel may be](#what-a-sentinel-may-be)),
+so a seat *asked* about rate limits — "our quota resets hourly" — gets its
+answer back rather than sitting a working entry out; a run the CLI reports
+failed is matched throughout.
 
-So a CLI whose failures reach stderr and nowhere else declares that, and then
-nothing the model writes classifies anything:
+A CLI whose failures reach stderr and nowhere else narrows that further, and
+then nothing the model writes classifies anything, in a failed run or not:
 
 ```yaml
 marker_scope: stderr        # or answer-and-stderr (the default), or events

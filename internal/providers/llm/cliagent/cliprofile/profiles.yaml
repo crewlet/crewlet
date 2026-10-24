@@ -143,10 +143,14 @@ claude-code:
   # Two sentinels, because a spent window reaches the operator either way:
   # the CLI's own line (every live variant begins with this exact prefix —
   # "… · continuing automatically", "… · finishing up", "… · resets") and the
-  # API error it relays. Neither carries a reset instant any more, so there is
-  # no reset_separator: resetAfter then returns 0 and the entry sits out the
-  # backend's one minute, which is the honest answer rather than an invented
-  # window.
+  # API error it relays. They are matched on different terms
+  # (cliprofile.MarkerScope): the line stands as the whole answer on a clean
+  # exit, so it counts where it OPENS the answer, and the relayed error sits
+  # after "API Error: 429", so it counts only in a run the CLI flags failed —
+  # a non-zero exit or is_error. Neither carries a reset instant any more, so
+  # there is no reset_separator: resetAfter then returns 0 and the entry sits
+  # out the backend's one minute, which is the honest answer rather than an
+  # invented window.
   limit_markers:
     - sentinel: "Usage limit reached"
     - sentinel: '"type":"rate_limit_error"'
@@ -572,6 +576,12 @@ cursor-agent:
   login_args: ["login"]
   logout_args: ["logout"]
   status_args: ["status"]
+  # NOT MEASURED, the markers below: generic phrases rather than this CLI's
+  # own sentences, safe to keep only because of WHERE they are matched — on
+  # stderr, in a run the CLI reported failed, or where one OPENS a clean
+  # run's answer, never inside it (cliprofile.MarkerScope). A model writing
+  # about a quota is answering. If your CLI reports these differently,
+  # override them.
   limit_markers:
     - sentinel: "usage limit"
     - sentinel: "quota"
@@ -622,6 +632,12 @@ copilot:
   api_key_env: "GITHUB_TOKEN"
   login_args: ["login"]
   logout_args: ["logout"]
+  # NOT MEASURED, the markers below: generic phrases rather than this CLI's
+  # own sentences, safe to keep only because of WHERE they are matched — on
+  # stderr, in a run the CLI reported failed, or where one OPENS a clean
+  # run's answer, never inside it (cliprofile.MarkerScope). A model writing
+  # about a rate limit is answering. If your CLI reports these differently,
+  # override them.
   limit_markers:
     - sentinel: "usage limit"
     - sentinel: "rate limit"
@@ -686,6 +702,12 @@ grok:
   # variable". GROK_API_KEY is the community npm build's variable and this
   # is not that program.
   api_key_env: "XAI_API_KEY"
+  # NOT MEASURED, the markers below: generic phrases rather than this CLI's
+  # own sentences, safe to keep only because of WHERE they are matched — on
+  # stderr, in a run the CLI reported failed, or where one OPENS a clean
+  # run's answer, never inside it (cliprofile.MarkerScope). A model writing
+  # about a rate limit is answering. If your CLI reports these differently,
+  # override them.
   limit_markers:
     - sentinel: "rate limit"
   auth_markers:
