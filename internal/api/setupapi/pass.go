@@ -16,7 +16,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Running a third-party app's provisioning from the dashboard.
+// Running a third-party app's provisioning pass over the API.
 //
 // # Two routes, one machine
 //
@@ -53,7 +53,8 @@ type Status interface {
 	LoadIntegrations(ctx context.Context) ([]integration.State, error)
 }
 
-// provisionRequest is what the dashboard sends.
+// provisionRequest is the body of POST /setup/integrations/{kind}/provision;
+// the check route reads none.
 //
 // It carried `seats` and `dry_run` and neither reached anything: no pass read
 // either field, so a caller asking for a dry run got a real one that created
@@ -61,8 +62,8 @@ type Status interface {
 // rather than stubbed.
 type provisionRequest struct {
 	// Recreate re-registers hooks with a fresh secret. DESTRUCTIVE across
-	// deployments, so the dashboard gates it behind a typed confirmation
-	// and this route names that in its own answer.
+	// deployments ([setup.PassInput.Recreate]), so a pass takes it only
+	// when the caller sends it — and no dashboard screen does.
 	//
 	// The pass is handed it spelled as this field is ([recreateSwitch]).
 	Recreate bool `json:"recreate_webhooks"`
