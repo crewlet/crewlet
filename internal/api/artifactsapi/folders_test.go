@@ -264,6 +264,49 @@ func TestAnInvisibleFolderIsNotFoundLikeAnUnknownOne(t *testing.T) {
 	}
 }
 
+// A FOLDER IS NAMED ONLY TO A READER WHO SEES IT, by its id as by its path:
+// bob reads jane's tucked page, filed in her private `inner`, and is answered
+// no folder, the top level he sees; jane is answered `inner`. A history row's
+// move names its folders on the same rule, so a move out of a private folder
+// into a company one tells bob where it went and not where it was.
+//
+// Mutation: answer the head's folder unshaped and bob is told the id of a
+// folder he cannot see.
+func TestAFolderIsNamedOnlyToAReaderWhoSeesIt(t *testing.T) {
+	t.Parallel()
+	g := newRig(t, true)
+	bob, jane := person("bob"), person("jane")
+	if d, err := g.svc.Gate().Detail(t.Context(), g.estate, bob, tucked); err != nil || d.Folder != "" {
+		t.Errorf("bob is answered the folder %q (%v)", d.Folder, err)
+	}
+	if d, err := g.svc.Gate().Detail(t.Context(), g.estate, jane, tucked); err != nil || d.Folder != inner {
+		t.Errorf("jane is answered the folder %q (%v), want inner", d.Folder, err)
+	}
+	if d, err := g.svc.Gate().Detail(t.Context(), g.estate, bob, notes); err != nil || d.Folder != campaigns {
+		t.Errorf("bob is answered the folder %q (%v) for notes, want campaigns", d.Folder, err)
+	}
+	a, err := g.svc.Gate().Read(t.Context(), bob, tucked, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := artifactsdomain.HistoryPage{Entries: []artifactsdomain.HistoryEntry{
+		{Op: string(artifactsdomain.OpMove), Summary: artifactsdomain.HistorySummary{
+			FromFolder: inner, ToFolder: campaigns}},
+		{Op: string(artifactsdomain.OpMove), Summary: artifactsdomain.HistorySummary{
+			FromFolder: campaigns, ToFolder: nowhere}},
+	}}
+	shown, err := g.svc.Gate().History(t.Context(), g.estate, a, moved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := shown.Entries[0].Summary; got.FromFolder != "" || got.ToFolder != campaigns {
+		t.Errorf("bob is shown the move %+v, want from the top level he sees to campaigns", got)
+	}
+	if got := shown.Entries[1].Summary; got.FromFolder != campaigns || got.ToFolder != "" {
+		t.Errorf("bob is shown the move %+v, want a removed folder unnamed", got)
+	}
+}
+
 // FILING ASKS THE FOLDER AND THE ARTIFACT: editor on the artifact AND
 // contributor on the destination, and a move writes nothing but the move
 // (a folder grants nothing, so no share rides it).

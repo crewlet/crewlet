@@ -321,7 +321,8 @@ flowchart TD
   is answered as one that does not exist.
 - **An artifact in a folder you cannot see is at your top level.** Bob opens a
   page shared with him that its owner keeps in her own Drafts; he finds it at
-  his top level, and is never told the folder's name.
+  his top level, and is never told the folder's name or its id, on the page
+  itself or in its history.
 - **Filing asks the artifact and the folder.** Moving an artifact needs
   `editor` on it and `contributor` on the folder it goes to. A folder's owner,
   the owner's lead (for an agent's folder) and an administrator manage it:

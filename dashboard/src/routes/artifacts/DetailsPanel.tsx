@@ -57,17 +57,15 @@ export function DetailsPanel({
       <dl className="artifact-facts">
         <dt>Kind</dt>
         <dd>{KIND_WORDS[detail.kind]}</dd>
-        {/* WHERE IT IS KEPT, a link to the folder's page where the reader can
-            see it, and never a folder's name where they cannot. Move… is held
-            with its reason, never hidden. */}
+        {/* WHERE IT IS KEPT, a link to the folder's page; the engine names
+            no folder the reader cannot see, which reads as not in a folder.
+            Move… is held with its reason, never hidden. */}
         <dt>Folder</dt>
         <dd className="artifact-folder-fact">
           {place.at === "folder" ? (
             <a className="prose-link" href={href(artifactFolderPath(place.id))}>
               {place.path}
             </a>
-          ) : place.at === "hidden" ? (
-            "In a folder you cannot see"
           ) : place.at === "reading" ? (
             "Reading…"
           ) : (

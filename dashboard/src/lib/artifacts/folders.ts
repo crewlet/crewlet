@@ -353,23 +353,19 @@ function nameKey(name: string): string {
 
 /**
  * Where an artifact is kept, as this reader can say it: at the top level, in
- * a folder they see (its path), in a folder they cannot see, or not yet known
- * while the tree is read. A folder the reader cannot see is never named.
+ * a folder they see (its path), or not yet known while the tree is read. The
+ * engine names a folder only to a reader who sees it, so an artifact in a
+ * folder the reader cannot see arrives at their top level, as the listing
+ * places it, and a folder the tree does not hold is one it has not caught up
+ * with yet.
  */
 export type ArtifactPlace =
-  | { at: "top" }
-  | { at: "folder"; id: string; name: string; path: string }
-  | { at: "hidden" }
-  | { at: "reading" };
+  { at: "top" } | { at: "folder"; id: string; name: string; path: string } | { at: "reading" };
 
 /** The place of an artifact filed in `folder` (absent or `""` for the top level), read off the reader's tree. */
-export function artifactPlace(
-  folder: string | undefined,
-  index: FolderIndex,
-  read: boolean,
-): ArtifactPlace {
+export function artifactPlace(folder: string | undefined, index: FolderIndex): ArtifactPlace {
   if (!folder) return { at: "top" };
   const found = index.get(folder);
   if (found) return { at: "folder", id: found.id, name: found.name, path: index.label(found.id) };
-  return read ? { at: "hidden" } : { at: "reading" };
+  return { at: "reading" };
 }

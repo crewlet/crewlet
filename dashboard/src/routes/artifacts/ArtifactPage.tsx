@@ -157,7 +157,7 @@ const BACK = { href: href(["artifacts"]), label: "Back to artifacts" };
  */
 function useWayBack(folder: string | undefined) {
   const tree = useFolderTree(Boolean(folder));
-  const place = artifactPlace(folder, tree.index, tree.data !== null);
+  const place = artifactPlace(folder, tree.index);
   const back =
     place.at === "folder"
       ? { href: href(artifactFolderPath(place.id)), label: `Back to ${place.name}` }

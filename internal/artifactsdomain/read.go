@@ -78,7 +78,9 @@ type Head struct {
 
 	// Folder is the folder the artifact is filed in, empty at the top
 	// level. A folder grants nothing: who may open the artifact is still
-	// its owner and its own shares.
+	// its owner and its own shares. A listing names it only to a viewer who
+	// sees the folder, and a surface answering one artifact does the same
+	// (artifactsapi's shownFolder); the raw value is what a decision reads.
 	Folder string `json:"folder,omitempty"`
 
 	HeadNumber   int                    `json:"head_number"`
@@ -381,7 +383,7 @@ type ListItem struct {
 
 	// FolderPath is the path of the folder the artifact is filed in as the
 	// viewer sees it ("Marketing/Q4/"), empty at the top level or in a folder
-	// the viewer cannot see.
+	// the viewer cannot see, where the head's Folder is empty too.
 	FolderPath string `json:"folder_path,omitempty"`
 }
 
@@ -1514,8 +1516,14 @@ func (s listSpec) run(ctx context.Context, tx *sql.Tx) (ListPage, error) {
 		if opened > 0 {
 			item.OpenedAt = store.DecodeTime(opened)
 		}
+		// A FOLDER THE VIEWER CANNOT SEE IS NEVER NAMED, by its path or by
+		// its id: the row reads as at the top level they see, where the
+		// listing places it, and two rows sharing an id would otherwise say
+		// they sit together somewhere hidden.
 		if tree.live(head.Folder) != nil {
 			item.FolderPath = tree.path(head.Folder)
+		} else {
+			item.Folder = ""
 		}
 		page.Contents = append(page.Contents, item)
 		switch s.sort {

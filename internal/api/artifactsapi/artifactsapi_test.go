@@ -683,14 +683,14 @@ func TestAShareStoredBeforeTheGrantRuleIsListedAndWithdrawn(t *testing.T) {
 func TestAViewerSeesTheOwnerAndACountNotTheAudience(t *testing.T) {
 	t.Parallel()
 	g := newRig(t, true)
-	viewer, err := g.svc.Gate().Detail(t.Context(), person("bob"), page)
+	viewer, err := g.svc.Gate().Detail(t.Context(), g.estate, person("bob"), page)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if viewer.Shares != nil || viewer.ShareCount != 3 || viewer.Role != artifacts.RoleViewer || viewer.Writer {
 		t.Errorf("a viewer is shown %+v", viewer)
 	}
-	editor, err := g.svc.Gate().Detail(t.Context(), person("sam"), page)
+	editor, err := g.svc.Gate().Detail(t.Context(), g.estate, person("sam"), page)
 	if err != nil || len(editor.Shares) != 3 || !editor.Writer {
 		t.Errorf("an editor is shown %d shares, writer %v (%v)", len(editor.Shares), editor.Writer, err)
 	}
@@ -703,7 +703,10 @@ func TestAViewerSeesTheOwnerAndACountNotTheAudience(t *testing.T) {
 		{Op: string(artifactsdomain.OpReadElevated), Number: 2},
 		{Op: string(artifactsdomain.OpShare), Summary: artifactsdomain.HistorySummary{Audience: "seat:bob", Role: "viewer"}},
 	}}
-	shown := a.History(history)
+	shown, err := g.svc.Gate().History(t.Context(), g.estate, a, history)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(shown.Entries) != 2 || shown.Entries[1].Summary.Audience != "" {
 		t.Errorf("a viewer is shown the history %+v", shown.Entries)
 	}

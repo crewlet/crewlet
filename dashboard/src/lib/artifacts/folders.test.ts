@@ -192,15 +192,16 @@ describe("where an artifact is kept", () => {
     expect(pathWords(undefined)).toBe("");
   });
 
-  test("a folder the reader sees by its path, one they cannot see never by name, and nothing until the tree is read", () => {
-    expect(artifactPlace(undefined, index, true)).toEqual({ at: "top" });
-    expect(artifactPlace("q", index, true)).toEqual({
+  // THE ENGINE NAMES NO FOLDER THE READER CANNOT SEE, so an id the tree does
+  // not hold is one it has not caught up with, never a hidden place.
+  test("a folder the reader sees by its path, and nothing until the tree holds it", () => {
+    expect(artifactPlace(undefined, index)).toEqual({ at: "top" });
+    expect(artifactPlace("q", index)).toEqual({
       at: "folder",
       id: "q",
       name: "Q4 review",
       path: "Marketing › Q4 review",
     });
-    expect(artifactPlace("hidden", index, true)).toEqual({ at: "hidden" });
-    expect(artifactPlace("hidden", index, false)).toEqual({ at: "reading" });
+    expect(artifactPlace("new", index)).toEqual({ at: "reading" });
   });
 });

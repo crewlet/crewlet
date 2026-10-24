@@ -6617,8 +6617,10 @@ one folder at most 1000 children.
 
 **Listing by folder.** The listing places every row in the tree as its reader
 sees it: an artifact filed in a folder the reader cannot see is at their top
-level, never hidden by it, and its `folder_path` is answered only where they
-see that folder. A `prefix` or `folder` that names nothing the caller sees is
+level, never hidden by it, and its `folder` and `folder_path` are answered only
+where they see that folder. One artifact's head and its history's moves
+(`from_folder`, `to_folder`) name a folder on the same rule, so a folder's id
+reaches nobody it is not shown to. A `prefix` or `folder` that names nothing the caller sees is
 `404 not_found`, never an empty page. The continuation token carries the
 folder's id rather than its path, so a rename between two pages does not move
 the next one, and a token is held to the delimiter it was minted under. Each

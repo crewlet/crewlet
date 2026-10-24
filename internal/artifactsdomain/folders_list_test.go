@@ -81,13 +81,15 @@ func sortedIDs(ids ...artifacts.ID) []artifacts.ID {
 
 // THE TOP LEVEL, ONE LEVEL AT A TIME: what is filed in no folder, or in one
 // the reader cannot see (bob is shown jane's Drafts' artifact at his top level,
-// never hidden by a folder he cannot see, and never told its folder), and the
+// never hidden by a folder he cannot see, and never told its folder, by its
+// path or by its id), and the
 // child folders as common prefixes, each counting only what the reader may
 // open.
 //
 // Mutation: count a folder's artifacts without the visibility predicate and
 // bob's Marketing counts jane's hidden artifact; place an artifact in an
-// invisible folder nowhere and bob never sees inDrafts.
+// invisible folder nowhere and bob never sees inDrafts; keep a row's folder id
+// unscrubbed and bob is told the id of jane's Drafts.
 func TestTheTopLevelHoldsWhatNoVisibleFolderDoes(t *testing.T) {
 	t.Parallel()
 	g := newGallery(t)
@@ -97,8 +99,8 @@ func TestTheTopLevelHoldsWhatNoVisibleFolderDoes(t *testing.T) {
 		t.Errorf("bob's top level holds %v", got)
 	}
 	for _, item := range bob.Contents {
-		if item.FolderPath != "" {
-			t.Errorf("bob is told %s is filed in %q", item.Title, item.FolderPath)
+		if item.FolderPath != "" || item.Folder != "" {
+			t.Errorf("bob is told %s is filed in %q (folder %q)", item.Title, item.FolderPath, item.Folder)
 		}
 	}
 	if len(bob.CommonPrefixes) != 1 || bob.CommonPrefixes[0] != (artifactsdomain.CommonPrefix{

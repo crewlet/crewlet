@@ -2,6 +2,7 @@ package artifactsapi
 
 import (
 	"context"
+	"errors"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
@@ -126,16 +127,88 @@ func (g Gate) SeenBy(ctx context.Context, reads SeenByReads, p iam.Principal, id
 }
 
 // Detail answers artifact id's head as p is shown it: [Gate.Read] and the
-// shaping.
-func (g Gate) Detail(ctx context.Context, p iam.Principal, id artifacts.ID) (Detail, error) {
+// shaping, its folder named only where p sees it ([Gate.shownFolder]).
+func (g Gate) Detail(ctx context.Context, reads FolderReads, p iam.Principal, id artifacts.ID) (Detail, error) {
 	a, err := g.Read(ctx, p, id, 0)
 	if err != nil {
 		return Detail{}, err
 	}
-	return g.detail(ctx, a)
+	d, err := g.detail(ctx, a)
+	if err != nil {
+		return Detail{}, err
+	}
+	shown := folderShowing{g: g, reads: reads, p: p}
+	if d.Folder, err = shown.folder(ctx, d.Folder); err != nil {
+		return Detail{}, err
+	}
+	return d, nil
 }
 
-// History shapes a history page for the reader a admitted.
-func (a Admission) History(page artifactsdomain.HistoryPage) artifactsdomain.HistoryPage {
-	return shapeHistory(page, a.Role())
+// History shapes a history page for the reader a admitted: by their role, and
+// with a move's folders named only where they see them.
+func (g Gate) History(ctx context.Context, reads FolderReads, a Admission,
+	page artifactsdomain.HistoryPage) (artifactsdomain.HistoryPage, error) {
+
+	page = shapeHistory(page, a.Role())
+	shown := folderShowing{g: g, reads: reads, p: a.Principal, seen: map[string]string{}}
+	for i := range page.Entries {
+		e := &page.Entries[i]
+		var err error
+		if e.Summary.FromFolder, err = shown.folder(ctx, e.Summary.FromFolder); err != nil {
+			return artifactsdomain.HistoryPage{}, err
+		}
+		if e.Summary.ToFolder, err = shown.folder(ctx, e.Summary.ToFolder); err != nil {
+			return artifactsdomain.HistoryPage{}, err
+		}
+	}
+	return page, nil
+}
+
+// folderShowing names folders to one reader: a folder's id where p sees the
+// folder, and empty where p does not (one removed since, or one they cannot
+// see), which reads as the top level they see. A folder's id is never
+// disclosed to somebody the folder is not shown to (the tree read's rule,
+// [Gate.DecideFolder]'s visibility), and two artifacts never tell a reader
+// they sit together somewhere hidden. seen, where set, holds each id decided
+// once, for a page naming one folder many times.
+type folderShowing struct {
+	g     Gate
+	reads FolderReads
+	p     iam.Principal
+	seen  map[string]string
+}
+
+// folder is id as p is shown it.
+func (s folderShowing) folder(ctx context.Context, id string) (string, error) {
+	if id == "" {
+		return "", nil
+	}
+	if shown, ok := s.seen[id]; ok {
+		return shown, nil
+	}
+	shown, err := s.decide(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	if s.seen != nil {
+		s.seen[id] = shown
+	}
+	return shown, nil
+}
+
+// decide reads folder id and decides whether p sees it.
+func (s folderShowing) decide(ctx context.Context, id string) (string, error) {
+	f, err := s.g.readFolder(ctx, s.reads, id)
+	switch {
+	case errors.Is(err, ErrNoSuchFolder):
+		return "", nil
+	case err != nil:
+		return "", err
+	}
+	visible, err := authz.Visible(ctx, s.p, artifactsdomain.FolderObject(f, s.g.settings().AgentsManageOthers),
+		s.g.Chart, s.g.now())
+	if err != nil || !visible {
+		return "", err
+	}
+	return id, nil
 }

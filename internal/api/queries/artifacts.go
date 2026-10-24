@@ -238,7 +238,7 @@ func (s artifactsAnswers) artifact(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	detail, err := s.Gate.Detail(ctx, asking, id)
+	detail, err := s.Gate.Detail(ctx, s.Reads, asking, id)
 	return detail, artifactFailure("artifact", err)
 }
 
@@ -277,7 +277,8 @@ func (s artifactsAnswers) history(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, artifactFailure("artifact_history", err)
 	}
-	return a.History(page), nil
+	shown, err := s.Gate.History(ctx, s.Reads, a, page)
+	return shown, artifactFailure("artifact_history", err)
 }
 
 // assets answers an artifact's live assets.

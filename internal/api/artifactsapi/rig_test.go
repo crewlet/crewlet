@@ -60,6 +60,9 @@ var (
 	// legacy carries a share an earlier build wrote to a login named as a
 	// seat, which reaches nobody and which its owner must still remove.
 	legacy = artifacts.IDFor("jane's page shared with a login")
+	// tucked is shared with bob as viewer and filed in jane's private `inner`,
+	// a folder bob cannot see.
+	tucked = artifacts.IDFor("jane's tucked page")
 )
 
 // files of the page's version 2.
@@ -180,6 +183,10 @@ func heads() map[artifacts.ID]artifactsdomain.Head {
 			OwnerKind: iam.ActorAgent, HeadNumber: 1, Status: artifactsdomain.StatusLive},
 		binned: {ID: binned, Kind: artifacts.KindHTML, Title: "Binned", Owner: "jane",
 			OwnerKind: iam.ActorHuman, HeadNumber: 1, Status: artifactsdomain.StatusTrashed},
+		tucked: {ID: tucked, Kind: artifacts.KindDoc, Title: "Tucked away", Owner: "jane",
+			OwnerKind: iam.ActorHuman, HeadNumber: 1, Status: artifactsdomain.StatusLive,
+			Shares: []artifacts.Share{share(artifacts.AudienceSeat, "bob", artifacts.RoleViewer)},
+			Folder: inner},
 		legacy: {ID: legacy, Kind: artifacts.KindHTML, Title: "Old share", Owner: "jane",
 			OwnerKind: iam.ActorHuman, HeadNumber: 1, Status: artifactsdomain.StatusLive,
 			Shares: []artifacts.Share{share(artifacts.AudienceSeat, "token:maya", artifacts.RoleViewer)}},
