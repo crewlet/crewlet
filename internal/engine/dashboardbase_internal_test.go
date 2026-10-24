@@ -29,7 +29,7 @@ func TestPeopleAreLinkedToTheDashboardAndVendorsToThePublicBase(t *testing.T) {
 	if got := e.publicBase(c); got != "https://crewlet.example.com" {
 		t.Errorf("a page change links on %q, want the dashboard's address", got)
 	}
-	if got := skillVariables(e.resolver(), c, e.publicBase(c))[config.ReservedBaseURLVariable]; got != "https://crewlet.example.com" {
+	if got := skillVariables(e.resolver(), c, e.publicBase(c), kitVersion())[config.ReservedBaseURLVariable]; got != "https://crewlet.example.com" {
 		t.Errorf("${%s} = %q, want the dashboard's address", config.ReservedBaseURLVariable, got)
 	}
 	if got := e.webhookBase; got != "https://hooks.example.com" {
@@ -55,8 +55,9 @@ func TestNoDashboardBaseComposesNoLink(t *testing.T) {
 	if got := e.publicBase(c); got != "" {
 		t.Errorf("a page change links on %q, want no link", got)
 	}
-	if vars := skillVariables(e.resolver(), c, e.publicBase(c)); vars != nil {
-		t.Errorf("skill variables = %v, want none: nothing names the dashboard", vars)
+	if _, set := skillVariables(e.resolver(), c, e.publicBase(c), kitVersion())[config.ReservedBaseURLVariable]; set {
+		t.Errorf("${%s} is set, want it undefined: nothing names the dashboard",
+			config.ReservedBaseURLVariable)
 	}
 }
 

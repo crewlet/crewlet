@@ -23,17 +23,23 @@ import (
 )
 
 // THE ARTIFACTS TOOLS: one tool per action, each named for its authority
-// row (list_artifacts, get_artifact, create_artifact, publish_artifact,
-// update_artifact, share_artifact, unshare_artifact, upload_artifact_asset).
-// Registered for seats and in the operator catalogue from the hooks below,
-// which [Register] and [OperatorTools] already append.
+// row (list_artifacts, get_artifact, list_dashboard_sources,
+// get_company_brand, create_artifact, publish_artifact, update_artifact,
+// share_artifact, unshare_artifact, upload_artifact_asset,
+// create_artifact_folder, move_artifact). Registered for seats and in the
+// operator catalogue from the hooks below, which [Register] and
+// [OperatorTools] already append.
 //
 // Nothing that takes an artifact out of circulation is a tool: trash, restore,
 // purge and transfer are a person's gestures on the HTTP surface, so a
 // prompt-injected agent cannot take a team's sheet offline. Nor is `force`:
 // discarding a colleague's newer version is a present person's decision
 // (`artifacts.publish.force`), so a stale publish is answered with the live
-// version to merge onto and nothing else.
+// version to merge onto and nothing else. Nor is reorganising a team's
+// folders: renaming, moving, removing and unfiling are a folder owner's
+// gestures (`artifacts.folder.*`), and adopting the brand an administrator's
+// (`artifacts.brand.*`). An agent files its own work and creates subfolders
+// inside a tree somebody made.
 //
 // # Every verb is decided twice inside a turn somebody woke
 //
@@ -78,13 +84,17 @@ const (
 	ShareArtifactTool       = string(authz.ActionArtifactShare)
 	UnshareArtifactTool     = string(authz.ActionArtifactUnshare)
 	UploadArtifactAssetTool = string(authz.ActionArtifactAsset)
+
+	CompanyBrandTool         = string(authz.ActionBrandRead)
+	CreateArtifactFolderTool = string(authz.ActionArtifactFolderCreate)
+	MoveArtifactTool         = string(authz.ActionArtifactMove)
 )
 
-// ArtifactTools are the nine, reads first.
+// ArtifactTools are the twelve, reads first.
 func ArtifactTools() []string {
-	return []string{ListArtifactsTool, GetArtifactTool, DashboardSourcesTool, CreateArtifactTool,
-		PublishArtifactTool, UpdateArtifactTool, ShareArtifactTool,
-		UnshareArtifactTool, UploadArtifactAssetTool}
+	return []string{ListArtifactsTool, GetArtifactTool, DashboardSourcesTool, CompanyBrandTool,
+		CreateArtifactTool, PublishArtifactTool, UpdateArtifactTool, ShareArtifactTool,
+		UnshareArtifactTool, UploadArtifactAssetTool, CreateArtifactFolderTool, MoveArtifactTool}
 }
 
 // ArtifactReader is the artifacts domain's read side as these tools ask it,
@@ -94,16 +104,28 @@ type ArtifactReader interface {
 	List(ctx context.Context, v artifactsdomain.Viewer, q artifactsdomain.ListQuery) (artifactsdomain.ListPage, error)
 	Version(ctx context.Context, id artifacts.ID, number int) (artifactsdomain.Version, error)
 	Versions(ctx context.Context, id artifacts.ID, cursor string, limit int) (artifactsdomain.VersionPage, error)
+
+	// Folders is every live folder v can see, and ResolveFolder one folder
+	// by id or path among those every viewer in within can see.
+	Folders(ctx context.Context, v artifactsdomain.Viewer, fresh statelog.Freshness) (artifactsdomain.FolderTree, error)
+	ResolveFolder(ctx context.Context, ref string, within []artifactsdomain.Viewer,
+		fresh statelog.Freshness) (artifactsdomain.Folder, error)
+
+	// Brand is the company's adopted brand, false when none is adopted.
+	Brand(ctx context.Context, fresh statelog.Freshness) (artifactsdomain.Adoption, bool, error)
 }
 
 // ArtifactWriter is the domain's write side for the writes that move no
-// bytes: a patch of the displayed fields, the shares, and the record of an
-// administrator's elevated read.
+// bytes: a patch of the displayed fields, the shares, the record of an
+// administrator's elevated read, a folder chain made, and an artifact filed.
 type ArtifactWriter interface {
 	Patch(ctx context.Context, c artifactsdomain.Call, id artifacts.ID, p artifactsdomain.Patch) (artifactsdomain.Written, error)
 	Share(ctx context.Context, c artifactsdomain.Call, id artifacts.ID, s artifacts.Share) (artifactsdomain.Written, error)
 	Unshare(ctx context.Context, c artifactsdomain.Call, id artifacts.ID, a artifacts.Audience) (artifactsdomain.Written, error)
 	ReadElevated(ctx context.Context, c artifactsdomain.Call, id artifacts.ID, version int) (artifactsdomain.Written, error)
+	CreateFolders(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.FolderCreateInput) (
+		artifactsdomain.FolderCreated, error)
+	Move(ctx context.Context, c artifactsdomain.Call, id artifacts.ID, folder string) (artifactsdomain.Written, error)
 }
 
 // ArtifactPublisher is THE publish pipeline (internal/artifactupload's
@@ -205,6 +227,17 @@ type ArtifactDeps struct {
 	// Now is the clock decisions are taken at; nil is the wall clock.
 	Now func() time.Time
 
+	// KitVersion is the newest artifact kit release this build embeds, the
+	// one a page linked now is sure to be served at: what get_company_brand
+	// answers beside the brand. Nil, or empty, answers none.
+	KitVersion func() string
+
+	// FolderTurns is this node's tally of the folder records each agent turn
+	// segment writes, shared by every registry the node builds. Nil serves
+	// no create_artifact_folder: a create path with no guardrail would let a
+	// looping turn bury the company's tree.
+	FolderTurns *FolderTurns
+
 	// Set by [Register] and [OperatorTools] from the deps around them.
 	work             WorkDeps
 	compact          *compact.Compactor
@@ -292,12 +325,15 @@ func artifactToolSet(a ArtifactDeps) []candidate {
 		{&listArtifacts{deps: a}, on},
 		{&getArtifact{deps: a}, on},
 		{&dashboardSources{}, on},
+		{&companyBrand{deps: a}, on},
 		{&createArtifact{deps: a}, on},
 		{&publishArtifact{deps: a}, on},
 		{&updateArtifact{deps: a}, on},
 		{&shareArtifact{deps: a}, on},
 		{&unshareArtifact{deps: a}, on},
 		{&uploadArtifactAsset{deps: a}, on},
+		{&createArtifactFolder{deps: a}, on && a.FolderTurns != nil},
+		{&moveArtifact{deps: a}, on},
 	}
 }
 
@@ -306,10 +342,10 @@ func artifactToolSet(a ArtifactDeps) []candidate {
 //
 // EVERY WRITE IS OPEN-WORLD: an artifact is read by the people it is shared
 // with, so a worker acting under its parent's name is kept off every one of
-// them ([mcp.WritesToSharedSurface]), and handed the three reads.
+// them ([mcp.WritesToSharedSurface]), and handed the four reads.
 func artifactAnnotations(name string) (tools.Annotations, bool) {
 	switch name {
-	case ListArtifactsTool, GetArtifactTool, DashboardSourcesTool:
+	case ListArtifactsTool, GetArtifactTool, DashboardSourcesTool, CompanyBrandTool:
 		// Reads, and idempotent. get_artifact may condense a long file a
 		// colleague wrote through the auxiliary model, which is a read's
 		// cost the way query_episodes' condensing is, and writes nothing a
@@ -338,6 +374,15 @@ func artifactAnnotations(name string) (tools.Annotations, bool) {
 		// IDEMPOTENT: the same share again, or an absent one withdrawn,
 		// writes nothing. Not destructive: an audience withdrawn is shared
 		// again by the same call, and nothing anybody wrote is lost.
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No,
+			Idempotent: mcp.Yes, OpenWorld: mcp.Yes}, true
+	case CreateArtifactFolderTool, MoveArtifactTool:
+		// IDEMPOTENT: a chain that already exists is answered as it is, and
+		// an artifact already in its folder is moved nowhere. NOT
+		// DESTRUCTIVE: a folder is made and nothing removed, and filing
+		// never changes who may open anything (a folder grants nothing), so
+		// the previous place is one more move away. Open-world all the same:
+		// a team finds its work where these put it.
 		return tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No,
 			Idempotent: mcp.Yes, OpenWorld: mcp.Yes}, true
 	}
@@ -729,7 +774,8 @@ func artifactReadFailure(ctx context.Context, tool, ref string, err error) tools
 		return artifactNotFound(tool, ref)
 	case errors.Is(err, artifactsdomain.ErrBadCursor):
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused that "+
-			"`after`: pass the `next` of the previous page unchanged.", tool))
+			"`continuation_token`: pass the `next_continuation_token` of the previous page "+
+			"unchanged, with the same `prefix`.", tool))
 	}
 	if why, ok := Condition(err); ok {
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not "+

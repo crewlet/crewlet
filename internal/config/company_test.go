@@ -1000,3 +1000,19 @@ func TestTheBaseURLVariableIsReserved(t *testing.T) {
 	// not the idea of an operator-declared URL.
 	mustCompany(t, "name: Acme\nskill_variables:\n  wiki_base_url: https://wiki.example.com\n")
 }
+
+// THE KIT VERSION IS THE BUILD'S, never the company's: a declared value keeps
+// naming one kit after an upgrade embeds the next, and a page linked to a kit
+// older than the brand slots never takes the company's brand.
+func TestTheKitVersionVariableIsReserved(t *testing.T) {
+	t.Parallel()
+	err := rejects(t,
+		"name: Acme\nskill_variables:\n  "+ReservedKitVersionVariable+": 0.38.0\n",
+		"skill_variables."+ReservedKitVersionVariable)
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("want ErrConflict, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "newest artifact kit this build embeds") {
+		t.Errorf("the refusal must say where the value comes from; got:\n%v", err)
+	}
+}

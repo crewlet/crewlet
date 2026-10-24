@@ -308,7 +308,7 @@ func ParseIndex(raw []byte) (*Index, []Finding) {
 	case len(idx.Title) > MaxTitleBytes || !utf8.ValidString(idx.Title):
 		bad("title is longer than %d bytes", MaxTitleBytes)
 	}
-	if _, ok := ThemeByID(idx.Theme); idx.Theme != "" && !ok {
+	if _, ok := ThemeByID(idx.Theme); idx.Theme != "" && idx.Theme != BrandTheme && !ok {
 		bad("theme is %q, and a deck's theme is one of %s", idx.Theme, strings.Join(themeIDs(), ", "))
 	}
 	if idx.Lists != "" && idx.Lists != "css" {

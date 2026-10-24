@@ -39,6 +39,14 @@ var (
 // answering with a value naming what it was asked.
 type apiArtifacts struct{}
 
+func (apiArtifacts) Brand(context.Context, statelog.Freshness) (artifactsdomain.Adoption, bool, error) {
+	return artifactsdomain.Adoption{}, false, nil
+}
+
+func (apiArtifacts) BrandFile(context.Context, objstore.Hash) (artifactsdomain.BrandFile, error) {
+	return artifactsdomain.BrandFile{}, artifactsdomain.ErrNotFound
+}
+
 func (apiArtifacts) Artifact(_ context.Context, id artifacts.ID, _ statelog.Freshness) (
 	artifactsdomain.Head, statelog.Position, error) {
 	if id != apiPage {
@@ -127,6 +135,9 @@ func (a apiArtifacts) Restore(context.Context, artifactsdomain.Call, artifacts.I
 	return a.applied()
 }
 func (a apiArtifacts) Purge(context.Context, artifactsdomain.Call, artifacts.ID) (artifactsdomain.Written, error) {
+	return a.applied()
+}
+func (a apiArtifacts) ClearBrand(context.Context, artifactsdomain.Call) (artifactsdomain.Written, error) {
 	return a.applied()
 }
 func (a apiArtifacts) RemoveAsset(context.Context, artifactsdomain.Call, artifacts.ID, uuid.UUID) (

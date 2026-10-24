@@ -4781,9 +4781,10 @@ The **same tools a seat holds**, not a parallel implementation: `list_work_items
 `task_activity`, `my_work`,
 `list_pages`, `get_page`, `write_page`, `save_page`, `comment_on_page`,
 `search_knowledge`, and, wherever the node takes artifact uploads,
-`list_artifacts`, `get_artifact`, `create_artifact`, `publish_artifact`,
-`update_artifact`, `share_artifact`, `unshare_artifact`,
-`upload_artifact_asset`, `read_artifact_data`, `query_artifact_data`,
+`list_artifacts`, `get_artifact`, `get_company_brand`, `create_artifact`,
+`publish_artifact`, `update_artifact`, `share_artifact`, `unshare_artifact`,
+`upload_artifact_asset`, `create_artifact_folder`, `move_artifact`,
+`read_artifact_data`, `query_artifact_data`,
 `write_artifact_data` and `set_artifact_schema` (see
 [Artifacts](../guides/tools-and-mcp.md#artifacts)); each artifact write answers
 its `op_id` here as the tracker's do. A schema, a default, a trimmed field and the wording of a
@@ -6575,7 +6576,10 @@ The API origin **never renders an artifact**:
   `sample` (a deck of every layout once, drawn in that theme, as the same
   canonical tree a version's deck is answered as), `layouts`, each its `id`,
   `name`, `description` and `heading` (the title a slide of it opens with), and
-  `default`, the plan a starter opens with when it names none. The create page
+  `default`, the plan a starter opens with when it names none. Whenever the
+  company has adopted a brand, its theme (`brand`, named for the brand, its
+  colours and typefaces resolved from the adoption) comes first; the answer is
+  composed per request, so an adoption or a clear shows at once. The create page
   draws its theme picker and preview from it, and the deck editor adds a slide
   from the sample of the theme its deck's index names (see
   [Slide Format](slide-format.md#the-index)).
@@ -6598,8 +6602,10 @@ The API origin **never renders an artifact**:
   which is each viewer's); for a design (`design`), its title, board count,
   cover board, the `bounds` every board and note fits in, each board's `path`,
   `title`, `x`, `y`, `w` and `h` in the canvas's order and the number of
-  `notes`, read from `canvas.json` alone. The gallery draws each as the card's
-  cover (a design's as a schematic). Any other kind answers its kind alone. A
+  `notes`, read from `canvas.json` alone; for a brand kit (`brand`), its whole
+  `brand.json` as `brand.document`, read under the brand format again. The
+  gallery draws each as the card's cover (a design's as a schematic). Any other
+  kind answers its kind alone. A
   cover is not an open, so none is recorded. A node keeps the decks, docs and
   canvases it has read by version (16 MiB of their files at most for each),
   and the boards (64 MiB of their spec and file datasets), since a version
@@ -6671,6 +6677,33 @@ The API origin **never renders an artifact**:
   (`429 throttled`, with `Retry-After`). A deployment with no
   `api.artifacts.external_url` is `409 artifact_origin_unset`.
 
+### The company's brand
+
+A brand kit is an artifact of kind `brand` (its `brand.json` and the logos and
+faces it names, held to the
+[brand format](../concepts/artifacts.md#the-company-brand) at publish). The
+company's brand is the one version of one kit an administrator **adopted**:
+the adoption snapshots that version's index, the stylesheet generated from it
+and a copy of every file it serves, so publishing to the kit, trashing it or
+purging it changes nothing until somebody adopts again. What is adopted is the
+company's public face: everybody reads it.
+
+| Method and path | Verb | What it does |
+|---|---|---|
+| `GET /brand` | `get_company_brand` (everybody's) | The adopted brand, or `{"brand": null}`: the `kit` and its `kit_version`, the `document` (the adopted `brand.json`), the generated stylesheet's `css_sha`, every served file in `files` (`slot`, `content_type` and `object` as `{hash, size}`, the stylesheet first), `adopted_by` and `adopted_at`. `newer_version` and `newer_by` name the kit's newest version and its publisher where it is newer than the adopted one, answered only to a reader who may open the kit (by a share, or as an administrator, which reads no content and leaves no elevated-read record). Also the `brand` question on the socket |
+| `GET /brand/files/{hash}` | `get_company_brand` | One file an adoption serves, by its SHA-256: an **attachment**, an SVG as `text/plain`, under the API's own policy, as every artifact file is. A hash no current or retained adoption serves is `404` |
+| `POST /brand/adoptions` | `artifacts.brand.adopt` (an administrator, a person present, a recent proof) | `{"kit": "<id>", "version": <n>}`: adopt that version. Reading the kit is decided as any content read, so an administrator with no share on it is admitted on the admin path and the read recorded. The kit is read back and held to the brand format (`422 policy_refused` with its `findings`, code `brand_format`), its text colour on its light ground must reach 4.5:1 (`422 brand_contrast`, with `contrast`: the pair, its two colours, the unrounded `ratio` and the `min`), and a version the kit no longer keeps is `404 not_found`. The adoption also labels the version `Adopted <date>` where that label is free. Carries an `Idempotency-Key` |
+| `DELETE /brand/adoptions/current` | `artifacts.brand.clear` (an administrator, a person present, a recent proof) | Withdraw the adopted brand. A framed page pinned to its stylesheet keeps it while its version is retained. Clearing when nothing is adopted answers success and writes nothing. Carries an `Idempotency-Key` |
+
+A framed version (`html`, `design`) **pins** the stylesheet adopted when it is
+published: its `versions` answer carries it as `brand`, and the artifact origin
+places `<link rel="stylesheet" href="/_crewlet/brand/<sha256>.css">` at the top
+of every document of that version it serves, leaving the author's bytes as
+they are. A page whose `<html>` element carries `data-crewlet-brand="off"` is
+served without it, and an `html` version whose entry page says so pins none. A
+deck copies the brand into its own files when it is created, and a doc and a
+dashboard follow the adopted brand live, drawn by the dashboard.
+
 ### Refusals
 
 | Status | `error` | When |
@@ -6698,6 +6731,7 @@ The API origin **never renders an artifact**:
 | `415` | `media_type_refused` | A file type an artifact may not publish |
 | `422` | `upload_mismatch` / `content_refused` | Bytes that are not the declared ones, or not what their type promises |
 | `422` | `edit_refused` / `policy_refused` | An edit that matched zero or several times (`index`, `matches`), or a page the publish policy refuses (`findings`) |
+| `422` | `brand_contrast` | An adoption whose text colour does not reach 4.5:1 on its light ground; `contrast` names the pair |
 | `422` | `capability_unknown` / `contract_unknown` / `credential_refused` / `invalid` | A capability or runtime this build does not serve, a credential in what an agent published, or a value the domain refuses |
 | `429` | `uploads_outstanding` | The pending-upload budget is spent; `Retry-After` is when the earliest hold lapses |
 | `429` | `throttled` | Ready reports past one credential's rate; `Retry-After` is when the next is admitted |

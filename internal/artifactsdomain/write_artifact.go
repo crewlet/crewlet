@@ -44,6 +44,10 @@ func (w *Writer) Create(ctx context.Context, c Call, in CreateInput) (Published,
 	id := artifacts.IDFor(opID)
 	versionID := versionIDOf(opID)
 	subject, scope := createScope(id, in)
+	pins := pinsBrand(in.Kind, in.First)
+	if pins {
+		scope = withBrand(ArtifactSubject(id), scope)
+	}
 	shares := make([]artifacts.Share, len(in.Shares))
 	for i, s := range in.Shares {
 		shares[i] = artifacts.Share{Audience: s.Audience, Role: s.Role,
@@ -95,6 +99,13 @@ func (w *Writer) Create(ctx context.Context, c Call, in CreateInput) (Published,
 			}
 			if err := checkQuota(ctx, tx, c.Authority.Limits, 1, plan.added); err != nil {
 				return statelog.Decision{}, err
+			}
+			if pins {
+				brand, read := currentCSSSha(ctx, tx)
+				if read != nil {
+					return statelog.Decision{}, read
+				}
+				payload.Version.Brand = brand
 			}
 			return w.decision(stamp, c, subject, OpCreate, scope, opID, payload, at)
 		}))
@@ -288,6 +299,14 @@ func (w *Writer) Publish(ctx context.Context, c Call, in PublishInput) (Publishe
 	id := in.Artifact.String()
 	versionID := versionIDOf(opID)
 	subject, scope := ArtifactSubject(in.Artifact), ScopeSet{Subject: true}
+	kind, err := w.kindOf(ctx, in.Artifact)
+	if err != nil {
+		return Published{}, err
+	}
+	pins := pinsBrand(kind, in)
+	if pins {
+		scope = withBrand(subject, scope)
+	}
 	var number int
 	res, err := w.publish(ctx, request(subject, scope, opID, statelog.PatternArbitrated,
 		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
@@ -301,7 +320,7 @@ func (w *Writer) Publish(ctx context.Context, c Call, in PublishInput) (Publishe
 			if !in.Force && in.Base != head.HeadNumber {
 				return statelog.Decision{}, versionMovedTx(ctx, tx, id)
 			}
-			v, err := versionFor(ctx, tx, head, in, c.Authority.Limits, versionID.String(), at)
+			v, err := versionFor(ctx, tx, head, in, c.Authority.Limits, versionID.String(), at, pins)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -325,10 +344,17 @@ func (w *Writer) Publish(ctx context.Context, c Call, in PublishInput) (Publishe
 // (a rollback's carried from the version it restores), its retention list, and
 // every refusal the applier would make, made here first.
 func versionFor(ctx context.Context, tx *sql.Tx, head Head, in PublishInput,
-	limits artifacts.Limits, versionID string, at time.Time) (VersionPayload, error) {
+	limits artifacts.Limits, versionID string, at time.Time, pins bool) (VersionPayload, error) {
 
 	id := head.ID.String()
 	m, contract, caps := in.Manifest, in.Contract, in.Capabilities
+	brand := ""
+	if pins && in.RestoredFrom == 0 {
+		var err error
+		if brand, err = currentCSSSha(ctx, tx); err != nil {
+			return VersionPayload{}, err
+		}
+	}
 	if in.RestoredFrom != 0 {
 		from, found, err := readVersionTx(ctx, tx, id, in.RestoredFrom)
 		if err != nil {
@@ -347,6 +373,12 @@ func versionFor(ctx context.Context, tx *sql.Tx, head Head, in PublishInput,
 		}
 		if caps == nil {
 			caps = from.Capabilities
+		}
+		// A ROLLBACK RESTORES THE PAGE AS IT WAS SERVED, its stylesheet
+		// included: the version it restores is retained, so the adoption it
+		// pinned is still served.
+		if pins {
+			brand = from.Brand
 		}
 	}
 	m = manifest.Canonical(m)
@@ -400,7 +432,7 @@ func versionFor(ctx context.Context, tx *sql.Tx, head Head, in PublishInput,
 		Number: head.HeadNumber + 1, VersionID: versionID,
 		Base: head.HeadNumber, Forced: in.Force, RestoredFrom: in.RestoredFrom,
 		Label: in.Label, Contract: contract, Capabilities: canonicalCapabilities(caps),
-		Manifest: m, Prune: prune, SearchText: in.SearchText,
+		Manifest: m, Prune: prune, SearchText: in.SearchText, Brand: brand,
 	}, nil
 }
 

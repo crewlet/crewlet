@@ -6,7 +6,7 @@ like a document, shared like a file, served like a web page, and it can keep
 **shared data** that every viewer reads and writes together, while everybody
 in it sees who else is there.
 
-Five kinds ship in this release:
+Seven kinds ship in this release:
 
 | Kind | What it is | Who draws it |
 |---|---|---|
@@ -16,6 +16,7 @@ Five kinds ship in this release:
 | `dashboard` | A board of figures over datasets: the artifact's own store, the engine's own domains, files and calculations | The dashboard's own widgets, every live figure answered as its viewer |
 | `sheet` | A native sheet: rows and typed columns, with no page at all | The dashboard, from the sheet's schema alone |
 | `design` | A canvas of artboards (`canvas.json`), each an HTML page, with titles and stickies beside them | The dashboard draws the canvas and the notes; each artboard runs in a sandboxed frame of its own |
+| `brand` | A brand kit: the company's name, logos, colours, two typefaces and voice (`brand.json`), one version of which an administrator adopts as [the company brand](#the-company-brand) | The dashboard, from the kit's index; it carries no author code |
 
 The motivating case is a review table an agent hands to a team: the agent
 publishes it, three reviewers and the agent tick boxes and pick statuses in it
@@ -56,9 +57,11 @@ cross-package rules are architecture decision records:
 [ADR-0038](https://github.com/crewlet/crewlet/blob/main/adr/0038-presence-is-told-never-stored.md)
 (presence),
 [ADR-0039](https://github.com/crewlet/crewlet/blob/main/adr/0039-a-cold-store-lives-in-object-storage-and-returns-through-the-log.md)
-(what the datastore keeps hot) and
+(what the datastore keeps hot),
 [ADR-0040](https://github.com/crewlet/crewlet/blob/main/adr/0040-content-a-model-reads-carries-its-provenance.md)
-(what an agent reads).
+(what an agent reads) and
+[ADR-0048](https://github.com/crewlet/crewlet/blob/main/adr/0048-the-adopted-brand-is-the-companys-public-face.md)
+(the company brand).
 
 Running the serving origin is [Serving artifacts](../guides/artifacts-serving.md).
 Writing a page is [Authoring artifacts](../guides/artifact-authoring.md), and
@@ -404,7 +407,8 @@ sequenceDiagram
 ```
 
 - **A listener of its own.** `api.artifacts` serves one file of a ticket's
-  version, one asset of a ticket's artifact, and the embedded runtime and kit.
+  version, one asset of a ticket's artifact, the embedded runtime and kit,
+  and the files of the company's adopted brand by their hash.
   It mounts no guard, no API route and no probe, never reads a cookie and never
   sets one.
 - **A view ticket** in the path names one principal, one artifact, one
@@ -587,19 +591,43 @@ for the authority verb it asks:
 
 | Tool | Does |
 |---|---|
-| `list_artifacts` | Lists what the seat may open: its own, shared with it, company-wide, its reports' |
+| `list_artifacts` | Lists what the seat may open: its own, shared with it, company-wide, its reports'; one folder's level by `prefix` and `delimiter`, as S3 lists a bucket |
 | `get_artifact` | Reads a head, its versions and its files, a page at a time |
-| `create_artifact` | Creates an artifact from inline files, the turn's sandbox or a project file |
+| `get_company_brand` | Reads the company's adopted brand: colours, typefaces, logos, the brand slide theme, the kit version to link and the fenced voice |
+| `create_artifact` | Creates an artifact from inline files, the turn's sandbox, a project file or the brand's logos and faces (`from_brand`), or a deck from a `starter` plan; `folder` files it |
 | `publish_artifact` | Publishes a version against a base, with whole files or edits |
 | `update_artifact` | Changes the title, description, icon or a version label |
 | `share_artifact`, `unshare_artifact` | Shares with seats and units, or removes a share |
 | `upload_artifact_asset` | Adds an asset, when the head declares `assets` |
+| `create_artifact_folder` | Creates a folder, or a chain of them, inside a folder that exists |
+| `move_artifact` | Files up to 25 artifacts in a folder, or takes them to the top level, each decided on its own |
 | `read_artifact_data`, `query_artifact_data` | Reads a store's documents |
 | `write_artifact_data` | Writes a batch of ops |
 | `set_artifact_schema` | Declares collections and columns |
 
 Per turn segment an agent may publish 20 times (10 on one artifact), write
-128 MiB, make 1000 datastore ops and send 1 MiB of inline content in one call.
+128 MiB, make 1000 datastore ops, make 5 folder records and send 1 MiB of
+inline content in one call.
+
+**Filing is an agent's; reorganising is a person's.** A [folder](#folders)
+grants nothing, so an agent files its own work and tidies what it may edit,
+each move asking editor on the artifact and contributor on the destination
+through the requester ceiling. It creates subfolders inside a tree a person
+made, and only when asked or for a set of related artifacts no folder fits.
+Top-level folders, renames, moves of a folder and removals are a person's
+gestures. A folder reference resolves only among the folders the agent and
+whoever it works for can both see, and a turn a stranger woke sees none.
+
+**The brand is applied for the agent where the engine draws.** Pages, designs,
+docs and dashboards take the [adopted brand](#the-company-brand) with no step of
+the agent's. What it writes literally, a slide's inline styles, a logo in a
+version, a typeface, it reads from `get_company_brand` and copies with
+`from_brand`; a deck begun from `starter` with `theme: "brand"` is drawn in the
+brand by the engine. The brand's voice is the one free text, fenced under the
+`company` trust: tone and wording, never the task, the tools, the recipients
+or access. The bundled artifacts skill names the kit version to link as
+`${crewlet_kit_version}`, which the engine sets to the newest kit it embeds,
+the one that reads the brand.
 A stale base version is refused with the live version, its author, its time,
 the changed paths and the start of each changed file, which is what the agent
 merges from.
@@ -837,6 +865,64 @@ has the format.
   and a point in the board's own coordinates (`canvasformat.Anchor`), so it
   stays on its spot however the board is moved. The shape is fixed now;
   comments arrive in a later release.
+
+---
+
+## The company brand
+
+A **brand kit** is an artifact of kind `brand`: a closed `brand.json` naming
+the company's name and tagline, its logos (a primary one for light grounds,
+one for dark grounds and a square mark), its colour roles (`primary` and
+optionally `secondary`, `text`, `light_ground`, `dark_ground` and
+`primary_on_dark`, each `#rrggbb`), a heading and a body typeface (a face the
+artifact kit ships, a curated system stack, or an uploaded WOFF2 family the
+publisher attests the company may embed), and a short voice: a summary, a few
+lines to write like and a few to avoid. Anybody with the artifacts app may draft
+one, agents included, and many may exist.
+
+- **Held to its format at publish.** `brand.json` is read strictly
+  (`internal/artifacts/brandformat`): an unknown key, a key written twice, a
+  value outside its grammar, a file the index does not name, and a logo or
+  face outside its asset rule are each refused, naming the file, the line and
+  the fix. A logo is stored in the form the engine writes, never as uploaded:
+  an SVG re-serialised from an allowlist that admits no script, style, foreign
+  content, animation or outside reference (`internal/artifacts/svgsafe`, the
+  one allowlist a slide's drawings are held to too), a PNG or WebP without its
+  metadata and never animated. A draft is never refused for its contrast.
+- **The company brand is an adoption.** An administrator, a person, at a
+  recent proof of identity, adopts one version of one kit on Company › Brand
+  (`POST /brand/adoptions`). The adoption **snapshots** that version: its
+  index, a stylesheet generated from it once, and a copy of every logo and
+  face, each an object of the adoption's own. Publishing a newer draft,
+  trashing the kit or purging it changes nothing until somebody adopts again,
+  and the page shows a newer version waiting to be reviewed. An adoption is
+  refused when the brand's text does not reach 4.5:1 on its light ground;
+  every other pair (the label on the accent, the dark mode's text, the accent
+  on each ground) is listed as a warning.
+- **The company's public face.** Everybody reads the adopted brand: every
+  person, every page and every agent, whatever the conversation it serves
+  (`GET /brand`, the `get_company_brand` tool). Put nothing in it that is not
+  meant for anybody who sees what the company publishes.
+- **How each kind follows it.** A doc and a dashboard follow the adopted brand
+  live: the dashboard draws them in its tokens. A framed page (`html`,
+  `design`) **pins** the stylesheet adopted when its version is published, and
+  the artifact origin places it at the top of each document it serves, so a
+  rebrand never restyles a page nobody reviewed under it; publishing again
+  takes the current brand. A page keeps its own design with
+  `<html data-crewlet-brand="off">`. A deck copies the brand's theme, faces and
+  logo into its own files when it is created from the brand starter.
+- **One stylesheet, inputs only.** The generated stylesheet defines the artifact
+  kit's `--brand-*` input slots on `:root` and an `@font-face` per uploaded
+  face, nothing else, and the kit (`@crewlethq/artifact-kit` 0.47.0 onward)
+  restyles its own tokens from them, so a page already written with the kit's
+  tokens follows the brand without a change. Its files are served on the
+  artifact origin at `/_crewlet/brand/<sha256>.<ext>`, only while an adoption
+  or a page pinned to one names them.
+- **Voice is for writing, never for instructions.** An agent reads the voice
+  only through `get_company_brand`, fenced as company-adopted text that
+  governs tone and wording and never the task, the tools, the recipients or
+  anybody's access. A rule every message must follow belongs in a standing
+  policy on Company › Principles.
 
 ---
 

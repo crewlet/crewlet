@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/brandformat"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactupload"
@@ -23,7 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// WHERE AN AGENT'S FILES COME FROM: four sources, one write path.
+// WHERE AN AGENT'S FILES COME FROM: five sources, one write path.
 //
 // Inline text (`content`, `files[...].content`) rides the call itself, at most
 // [artifacts.MaxInlineBytes] decoded across it, because anything larger cannot
@@ -34,7 +35,10 @@ import (
 // then put through the engine's own transfer leg, so the bytes a version names
 // were reserved before they moved and are read back verified before the
 // version is decided. A project file is copied rather than shared, because the
-// object store never shares one object between two rows (ADR-0026).
+// object store never shares one object between two rows (ADR-0026). A logo or a
+// face of the company's adopted brand (`from_brand`) is copied by the publish
+// pipeline itself from the adoption's snapshot, named by its slot and never by
+// a path or an object, so a copy reads only what an administrator adopted.
 //
 // # The box is walked by the engine, and never uploads
 //
@@ -45,11 +49,12 @@ import (
 // out. One more file than a version holds is a refusal, never a truncation.
 
 // artifactFile is one path of the next version and where its bytes come from:
-// exactly one of inline, stream and remove.
+// exactly one of inline, stream, brand and remove.
 type artifactFile struct {
 	path   string
 	inline []byte
 	stream *streamedFile
+	brand  brandformat.Slot
 	remove bool
 }
 
@@ -143,7 +148,7 @@ func (s *fileSources) parseFiles(ctx context.Context, args map[string]any, patch
 	m, ok := raw.(map[string]any)
 	if !ok {
 		r := failed(s.tool + " takes `files` as an object of published paths, each to " +
-			"`{content}`, `{from_sandbox}` or `{from_project_file}`.")
+			"`{content}`, `{from_sandbox}`, `{from_project_file}` or `{from_brand}`.")
 		return &r
 	}
 	keys := make([]string, 0, len(m))
@@ -171,7 +176,7 @@ func (s *fileSources) parseFiles(ctx context.Context, args map[string]any, patch
 		spec, ok := v.(map[string]any)
 		if !ok {
 			r := failed(fmt.Sprintf("%s: %q must be `{content}`, `{from_sandbox}`, "+
-				"`{from_project_file}` or null.", s.tool, p))
+				"`{from_project_file}`, `{from_brand}` or null.", s.tool, p))
 			return &r
 		}
 		if refusal := s.parseSpec(ctx, p, spec); refusal != nil {
@@ -184,28 +189,37 @@ func (s *fileSources) parseFiles(ctx context.Context, args map[string]any, patch
 func (s *fileSources) parseSpec(ctx context.Context, p string, spec map[string]any) *tools.Result {
 	for field := range spec {
 		switch field {
-		case "content", "encoding", "from_sandbox", "from_project_file":
+		case "content", "encoding", "from_sandbox", "from_project_file", "from_brand":
 		default:
 			r := failed(fmt.Sprintf("%s: %q carries %q, and a file takes `content` (with "+
-				"an optional `encoding`), `from_sandbox` or `from_project_file`.", s.tool, p, field))
+				"an optional `encoding`), `from_sandbox`, `from_project_file` or `from_brand`.",
+				s.tool, p, field))
 			return &r
 		}
 	}
 	content, hasContent := spec["content"]
 	box, hasBox := spec["from_sandbox"]
 	project, hasProject := spec["from_project_file"]
+	brand, hasBrand := spec["from_brand"]
 	n := 0
-	for _, has := range []bool{hasContent, hasBox, hasProject} {
+	for _, has := range []bool{hasContent, hasBox, hasProject, hasBrand} {
 		if has {
 			n++
 		}
 	}
 	if n != 1 {
 		r := failed(fmt.Sprintf("%s: %q must name exactly one of `content`, "+
-			"`from_sandbox` and `from_project_file`.", s.tool, p))
+			"`from_sandbox`, `from_project_file` and `from_brand`.", s.tool, p))
 		return &r
 	}
 	switch {
+	case hasBrand:
+		raw, _ := brand.(string)
+		slot, refusal := s.brandSlot(p, raw)
+		if refusal != nil {
+			return refusal
+		}
+		return s.add(artifactFile{path: p, brand: slot})
 	case hasContent:
 		text, ok := content.(string)
 		if !ok {
@@ -228,6 +242,32 @@ func (s *fileSources) parseSpec(ctx context.Context, p string, spec map[string]a
 		return refusal
 	}
 	return s.add(f)
+}
+
+// brandSlot is a `from_brand` value: a logo's slot, a face's (its regular
+// file), or one file of an uploaded family (`font.heading.1`), or the refusal
+// naming the slots there are. Whether the adopted brand holds it is the
+// pipeline's to answer, from the adoption it copies.
+func (s *fileSources) brandSlot(p, raw string) (brandformat.Slot, *tools.Result) {
+	slot := brandformat.Slot(strings.TrimSpace(raw))
+	if slices.Contains(brandformat.SourceSlots, slot) {
+		return slot, nil
+	}
+	for _, face := range []brandformat.Slot{brandformat.SlotFontHeading, brandformat.SlotFontBody} {
+		for i := range brandformat.MaxFontFilesPerFamily {
+			if slot == brandformat.FontFileSlot(face, i) {
+				return slot, nil
+			}
+		}
+	}
+	names := make([]string, len(brandformat.SourceSlots))
+	for i, v := range brandformat.SourceSlots {
+		names[i] = string(v)
+	}
+	r := failed(fmt.Sprintf("%s: %q copies `from_brand` %q, which is no slot of the brand; "+
+		"take one of %s (get_company_brand lists what your company's brand holds).", s.tool, p,
+		clip(raw), strings.Join(names, ", ")))
+	return "", &r
 }
 
 // openBox reattaches the box of the coding run this turn launched, once per
@@ -494,6 +534,10 @@ func (s *fileSources) stage(ctx context.Context, call artifactsdomain.Call, id a
 		switch {
 		case f.remove:
 			specs = append(specs, artifactupload.FileSpec{Path: f.path, Remove: true})
+		case f.brand != "":
+			// THE PIPELINE COPIES IT from the adopted brand's snapshot: no
+			// byte of it rides this call or its upload.
+			specs = append(specs, artifactupload.FileSpec{Path: f.path, Brand: f.brand})
 		case f.stream == nil:
 			specs = append(specs, artifactupload.FileSpec{Path: f.path, Inline: f.inline})
 		case carried[f.path]:

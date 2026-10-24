@@ -318,6 +318,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"artifact_access":       "decided_by:" + string(authz.ActionArtifactRead),
 		"artifact_usage":        "decided_by:" + string(authz.ActionArtifactUsage),
 		"artifact_trail":        "decided_by:" + string(authz.ActionAuditRead),
+		"brand":                 "decided_by:" + string(authz.ActionBrandRead),
 		"artifact_data":         "decided_by:" + string(authz.ActionArtifactDataRead),
 		"artifact_data_doc":     "decided_by:" + string(authz.ActionArtifactDataRead),
 		"artifact_data_query":   "decided_by:" + string(authz.ActionArtifactDataQuery),

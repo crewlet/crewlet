@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -122,6 +123,31 @@ type estate struct {
 	versions  int
 	listed    []artifactsdomain.Viewer
 	listItems []artifactsdomain.ListItem
+
+	// adoption is the company's adopted brand, nil for none.
+	adoption *artifactsdomain.Adoption
+}
+
+func (e *estate) Brand(context.Context, statelog.Freshness) (artifactsdomain.Adoption, bool, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.adoption == nil {
+		return artifactsdomain.Adoption{}, false, nil
+	}
+	return *e.adoption, true, nil
+}
+
+func (e *estate) BrandFile(_ context.Context, hash objstore.Hash) (artifactsdomain.BrandFile, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.adoption != nil {
+		for _, f := range e.adoption.Files {
+			if f.Object.Hash == hash {
+				return f, nil
+			}
+		}
+	}
+	return artifactsdomain.BrandFile{}, artifactsdomain.ErrNotFound
 }
 
 func heads() map[artifacts.ID]artifactsdomain.Head {
@@ -268,6 +294,9 @@ func (w *writes) Restore(_ context.Context, c artifactsdomain.Call, id artifacts
 }
 func (w *writes) Purge(_ context.Context, c artifactsdomain.Call, id artifacts.ID) (artifactsdomain.Written, error) {
 	return w.record("purge", c, id, nil)
+}
+func (w *writes) ClearBrand(_ context.Context, c artifactsdomain.Call) (artifactsdomain.Written, error) {
+	return w.record("clear_brand", c, artifacts.ID{}, nil)
 }
 func (w *writes) RemoveAsset(_ context.Context, c artifactsdomain.Call, id artifacts.ID, a uuid.UUID) (
 	artifactsdomain.Written, error) {
@@ -529,6 +558,17 @@ func (p *pipeline) Check(_ context.Context, c artifactsdomain.Call, _ artifacts.
 	p.note("check", c)
 	p.checks = append(p.checks, files)
 	return p.report, p.err
+}
+
+func (p *pipeline) AdoptBrand(_ context.Context, c artifactsdomain.Call, kit artifacts.ID, version int) (
+	artifactsdomain.Written, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.note(fmt.Sprintf("adopt_brand:%s:%d", kit, version), c)
+	if p.err != nil {
+		return artifactsdomain.Written{}, p.err
+	}
+	return artifactsdomain.Written{Result: statelog.Result{Outcome: statelog.OutcomeApplied}}, nil
 }
 
 func (p *pipeline) verbs() []string {

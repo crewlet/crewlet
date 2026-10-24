@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/brandformat"
 	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
 	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
@@ -31,7 +32,7 @@ import (
 type Reads interface {
 	Heads
 	FolderReads
-	Version(ctx context.Context, id artifacts.ID, number int) (artifactsdomain.Version, error)
+	BrandReads
 }
 
 // Writes is the artifacts estate's write side the routes that need no bytes
@@ -49,6 +50,7 @@ type Writes interface {
 	LinkWorkItem(ctx context.Context, c artifactsdomain.Call, id artifacts.ID, item string) (
 		artifactsdomain.Written, error)
 	Trash(ctx context.Context, c artifactsdomain.Call, id artifacts.ID) (artifactsdomain.Written, error)
+	ClearBrand(ctx context.Context, c artifactsdomain.Call) (artifactsdomain.Written, error)
 	Restore(ctx context.Context, c artifactsdomain.Call, id artifacts.ID) (artifactsdomain.Written, error)
 	Purge(ctx context.Context, c artifactsdomain.Call, id artifacts.ID) (artifactsdomain.Written, error)
 	RemoveAsset(ctx context.Context, c artifactsdomain.Call, id artifacts.ID, asset uuid.UUID) (
@@ -74,6 +76,8 @@ type Pipeline interface {
 		artifactsdomain.Asset, error)
 	Check(ctx context.Context, c artifactsdomain.Call, kind artifacts.Kind, entry string,
 		files []artifactupload.CheckFile) (artifactupload.CheckReport, error)
+	AdoptBrand(ctx context.Context, c artifactsdomain.Call, kit artifacts.ID, version int) (
+		artifactsdomain.Written, error)
 }
 
 // Objects is the object store a version's bytes are read back through, each
@@ -162,6 +166,7 @@ type Service struct {
 	docs     *formatCache[docindex.Doc]
 	boards   *formatCache[*dashspec.Board]
 	canvases *formatCache[canvasformat.Canvas]
+	brands   *formatCache[brandformat.Brand]
 }
 
 // New builds the surface.
@@ -195,7 +200,8 @@ func New(opts Options) (*Service, error) {
 		objects: opts.Objects, workItems: opts.WorkItems, frames: opts.Frames, ready: opts.Ready, pace: pace,
 		checks: newCheckLimiter(pace),
 		decks:  newDeckCache(opts.Objects), docs: newDocCache(opts.Objects),
-		boards: newBoardCache(opts.Objects), canvases: newCanvasCache(opts.Objects)}, nil
+		boards: newBoardCache(opts.Objects), canvases: newCanvasCache(opts.Objects),
+		brands: newBrandCache(opts.Objects)}, nil
 }
 
 // Gate is the surface's admission, which the read questions take too.
@@ -238,6 +244,11 @@ func (s *Service) Routes(mux authz.Mux) error {
 	createFolder := authz.Policy{Action: authz.ActionArtifactFolderCreate, Object: func(*http.Request) authz.Object {
 		return authz.Object{Kind: authz.KindArtifactFolder}
 	}}
+	brand := func(a authz.Action) authz.Policy {
+		return authz.Policy{Action: a, Object: func(*http.Request) authz.Object {
+			return authz.Object{Kind: authz.KindCompany}
+		}}
+	}
 	var failures []error
 	for _, route := range []struct {
 		pattern string
@@ -278,6 +289,10 @@ func (s *Service) Routes(mux authz.Mux) error {
 		{"POST /artifact-folders", createFolder, s.createFolder},
 		{"PATCH /artifact-folders/{id}", pre, s.patchFolder},
 		{"DELETE /artifact-folders/{id}", pre, s.removeFolder},
+		{"GET /brand", brand(authz.ActionBrandRead), s.brand},
+		{"GET /brand/files/{hash}", brand(authz.ActionBrandRead), s.brandFile},
+		{"POST /brand/adoptions", brand(authz.ActionBrandAdopt), s.adoptBrand},
+		{"DELETE /brand/adoptions/current", brand(authz.ActionBrandClear), s.clearBrand},
 	} {
 		if err := router.Handle(route.pattern, route.policy, route.handler); err != nil {
 			failures = append(failures, err)

@@ -120,6 +120,12 @@ type PublishInput struct {
 
 	// SearchText is at most artifacts.MaxSearchTextBytes.
 	SearchText string
+
+	// BrandOff is a version whose page opts out of the company's adopted
+	// brand (`<html data-crewlet-brand="off">`, found by the linter): a
+	// framed version so marked pins no stylesheet. Every other framed
+	// version pins the one adopted when it is published.
+	BrandOff bool
 }
 
 // Published is a version a write landed.
@@ -608,6 +614,34 @@ func labelled(ctx context.Context, tx *sql.Tx, id string) (int, error) {
 		return 0, fmt.Errorf("artifactsdomain: count %s's labels: %w", id, err)
 	}
 	return n, nil
+}
+
+// pinsBrand reports whether a version of kind pins the adopted brand's
+// stylesheet: a framed kind (a page the artifact origin serves, where the
+// stylesheet's link is placed) whose page does not opt out. A native kind is
+// drawn by the dashboard, which follows the adopted brand live, and a deck is
+// branded by the copy its starter made.
+func pinsBrand(kind artifacts.Kind, in PublishInput) bool {
+	return kind.Framed() && !in.BrandOff
+}
+
+// kindOf is an artifact's kind as this node's rows hold it, read before a
+// publish so its scope names the brand exactly when its apply reads the
+// brand's rows. A kind is fixed at create, so a stale row answers it; an
+// artifact this node does not hold answers none, and the decide refuses it.
+func (w *Writer) kindOf(ctx context.Context, id artifacts.ID) (artifacts.Kind, error) {
+	var kind artifacts.Kind
+	err := w.db.Read(ctx, func(tx *sql.Tx) error {
+		head, found, err := readHeadTx(ctx, tx, id.String())
+		if found {
+			kind = head.Kind
+		}
+		return err
+	})
+	if err != nil {
+		return "", fmt.Errorf("artifactsdomain: read artifact %s's kind: %w", id, err)
+	}
+	return kind, nil
 }
 
 // sourceIDOf is the source subject id an artifact's head holds, empty for none.
