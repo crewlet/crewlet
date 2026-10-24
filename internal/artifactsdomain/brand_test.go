@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/brandformat"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -116,6 +117,10 @@ func TestAnAdoptionSnapshotsOneVersionAndServesItsFiles(t *testing.T) {
 		t.Fatalf("the adoption serves %+v, want %+v", got.Files, in.Files)
 	case got.AdoptedBy.Name != "maya":
 		t.Errorf("the adoption names %q as its adopter", got.AdoptedBy.Name)
+	case got.KitAuthor.Name != "jane" || got.KitAuthor.Kind != iam.ActorHuman:
+		// WHO WROTE THE BRAND is kept beside who adopted it, copied from the
+		// version by the apply.
+		t.Errorf("the adoption names %+v as the kit's author, want jane", got.KitAuthor)
 	}
 	for _, f := range in.Files {
 		served, err := n.reader.BrandFile(t.Context(), f.Object.Hash)

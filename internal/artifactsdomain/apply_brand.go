@@ -126,10 +126,13 @@ func (a *Applier) applyAdopt(ctx context.Context, tx *sql.Tx, c applyContext, p 
 	case head.status == string(StatusTrashed):
 		return refuse(RefusedTrashed)
 	}
-	var label string
+	// THE VERSION'S AUTHOR is who wrote the brand, the voice included: copied
+	// into the adoption beside its adopter, so the voice is never fenced as
+	// words the administrator wrote.
+	var label, author, authorKind string
 	err = tx.QueryRowContext(ctx, `
-		SELECT label FROM artifact_versions WHERE artifact_id = ? AND number = ?`,
-		p.Kit, p.KitVersion).Scan(&label)
+		SELECT label, author, author_kind FROM artifact_versions WHERE artifact_id = ? AND number = ?`,
+		p.Kit, p.KitVersion).Scan(&label, &author, &authorKind)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return refuse(RefusedVersionNotFound)
@@ -144,17 +147,18 @@ func (a *Applier) applyAdopt(ctx context.Context, tx *sql.Tx, c applyContext, p 
 	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO artifact_brand
 			(key, kit_id, kit_version, brand_json, css_sha, adopted_by, adopted_by_kind,
-			 operator_id, adopted_at, position, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 operator_id, adopted_at, position, version, kit_author, kit_author_kind)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (key) DO UPDATE SET
 			kit_id = excluded.kit_id, kit_version = excluded.kit_version,
 			brand_json = excluded.brand_json, css_sha = excluded.css_sha,
 			adopted_by = excluded.adopted_by, adopted_by_kind = excluded.adopted_by_kind,
 			operator_id = excluded.operator_id, adopted_at = excluded.adopted_at,
-			position = excluded.position, version = excluded.version
+			position = excluded.position, version = excluded.version,
+			kit_author = excluded.kit_author, kit_author_kind = excluded.kit_author_kind
 		WHERE excluded.version > artifact_brand.version`,
 		brandKey, p.Kit, p.KitVersion, p.BrandJSON, p.CSSSha, actor.Name, string(actor.Kind),
-		actor.OperatorID, c.at(), c.packed, c.packed); err != nil {
+		actor.OperatorID, c.at(), c.packed, c.packed, author, authorKind); err != nil {
 		return 0, fmt.Errorf("artifactsdomain: adopt kit %s version %d at %s: %w", p.Kit,
 			p.KitVersion, c.position, err)
 	}

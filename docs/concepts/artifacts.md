@@ -626,7 +626,9 @@ version, a typeface, it reads from `get_company_brand` and copies with
 `from_brand`; a deck begun from `starter` with `theme: "brand"` is drawn in the
 brand by the engine. The brand's voice is the one free text, fenced under the
 `company` trust: tone and wording, never the task, the tools, the recipients
-or access. The bundled artifacts skill names the kit version to link as
+or access. Its fence names who wrote it (the author of the adopted version,
+possibly an agent) beside the administrator who adopted it, which the
+adoption records. The bundled artifacts skill names the kit version to link as
 `${crewlet_kit_version}`, which the engine sets to the newest kit it embeds,
 the one that reads the brand.
 A stale base version is refused with the live version, its author, its time,

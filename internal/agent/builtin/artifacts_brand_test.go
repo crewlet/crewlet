@@ -156,6 +156,18 @@ func TestTheBrandVoiceArrivesFencedAsTheCompanys(t *testing.T) {
 	if len(seen) != 1 {
 		t.Fatalf("the brand answer carries %d fences, want the voice's alone", len(seen))
 	}
+
+	// WHO WROTE IT IS NAMED BESIDE WHO ADOPTED IT: a kit an agent drafted is
+	// never fenced as words the administrator wrote.
+	r.f.mu.Lock()
+	r.f.adoption.KitAuthor = iam.Actor{Name: "agent-designer", Kind: iam.ActorAgent}
+	r.f.mu.Unlock()
+	got = r.call(t, turn, builtin.CompanyBrandTool, map[string]any{})
+	seen, _ = fencesIn(t, b, got.Output)
+	assertFences(t, seen, []wantFence{
+		{"source=brand_voice trust=company authors=agent:agent-designer,human:founder",
+			"Plain words, short sentences"},
+	})
 }
 
 // NO BRAND IS AN ANSWER, NOT A REFUSAL: `brand` is null with the kit version

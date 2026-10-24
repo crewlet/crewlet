@@ -75,6 +75,11 @@ type Adoption struct {
 	AdoptedBy iam.Actor `json:"adopted_by"`
 	AdoptedAt time.Time `json:"adopted_at"`
 
+	// KitAuthor is who published the adopted version: who wrote the brand,
+	// its voice included, which the adopter only adopted. Empty for an
+	// adoption recorded before the engine kept it.
+	KitAuthor iam.Actor `json:"kit_author"`
+
 	// Position is the packed position of the adoption record.
 	Position int64 `json:"position"`
 }
@@ -474,15 +479,15 @@ func (r *Reader) BrandFile(ctx context.Context, hash objstore.Hash) (BrandFile, 
 // readAdoptionTx is the adopted brand as tx holds it, false for none.
 func readAdoptionTx(ctx context.Context, tx *sql.Tx) (Adoption, bool, error) {
 	var (
-		a                 Adoption
-		kit, by, kind, op string
-		at                int64
+		a                                     Adoption
+		kit, by, kind, op, author, authorKind string
+		at                                    int64
 	)
 	err := tx.QueryRowContext(ctx, `
 		SELECT kit_id, kit_version, brand_json, css_sha, adopted_by, adopted_by_kind,
-		       operator_id, adopted_at, position
+		       operator_id, adopted_at, position, kit_author, kit_author_kind
 		FROM artifact_brand WHERE key = ?`, brandKey).Scan(&kit, &a.KitVersion, &a.BrandJSON,
-		&a.CSSSha, &by, &kind, &op, &at, &a.Position)
+		&a.CSSSha, &by, &kind, &op, &at, &a.Position, &author, &authorKind)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Adoption{}, false, nil
 	}
@@ -493,6 +498,7 @@ func readAdoptionTx(ctx context.Context, tx *sql.Tx) (Adoption, bool, error) {
 		return Adoption{}, false, fmt.Errorf("artifactsdomain: the adopted brand names kit %q: %w", kit, err)
 	}
 	a.AdoptedBy = iam.Actor{Name: by, Kind: iam.ActorKind(kind), OperatorID: op}
+	a.KitAuthor = iam.Actor{Name: author, Kind: iam.ActorKind(authorKind)}
 	a.AdoptedAt = store.DecodeTime(at)
 	rows, err := tx.QueryContext(ctx, `
 		SELECT slot, content_type, object, hash, size FROM artifact_brand_files

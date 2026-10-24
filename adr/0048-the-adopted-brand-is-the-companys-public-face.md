@@ -46,7 +46,8 @@ The stylesheet defines only the artifact kit's `--brand-*` input slots on
 `:root` and an `@font-face` per uploaded face, re-checking every value it
 writes; an SVG logo is stored as `internal/artifacts/svgsafe` re-serialises it;
 the brand's voice reaches a model only through the tool, fenced as
-company-adopted text. The adoption also labels the version it adopts where the
+company-adopted text naming both who wrote it (the adopted version's author)
+and who adopted it. The adoption also labels the version it adopts where the
 label is free, as provenance: the snapshot never depends on it.
 
 ## Why the obvious alternatives are wrong

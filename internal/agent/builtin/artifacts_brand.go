@@ -107,11 +107,23 @@ func (t *companyBrand) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if voice := voiceText(b.Voice); voice != "" {
 		brand["voice"] = voice
 		read.fenceAt(fieldPath{}.key("brand").key("voice"), provenance.SourceBrandVoice,
-			provenance.TrustCompany,
-			[]provenance.Author{read.writer(adoption.AdoptedBy.Name, adoption.AdoptedBy.Kind)}, voice)
+			provenance.TrustCompany, voiceAuthors(read, adoption), voice)
 	}
 	out["brand"] = brand
 	return read.answer(ctx, t.Name(), out, "")
+}
+
+// voiceAuthors are who the adopted voice's fence names: who published the
+// adopted version, who WROTE it (possibly an agent), and the administrator who
+// adopted it (the fence names each once). The trust is `company` either way;
+// what the fence must not say is that the administrator wrote words an agent
+// drafted. An adoption recorded before its author was kept names its adopter.
+func voiceAuthors(read *foreignRead, adoption artifactsdomain.Adoption) []provenance.Author {
+	var out []provenance.Author
+	if a := adoption.KitAuthor; a.Name != "" {
+		out = append(out, read.writer(a.Name, a.Kind))
+	}
+	return append(out, read.writer(adoption.AdoptedBy.Name, adoption.AdoptedBy.Kind))
 }
 
 // The kit tokens the adopted brand restyles, by the role that fills each: what
