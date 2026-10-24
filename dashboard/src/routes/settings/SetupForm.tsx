@@ -39,15 +39,20 @@
  * no way for a closed tab to leave the write half done.
  */
 
-import { Fragment, useCallback, useMemo, useRef, useState } from "react";
-import { Button, Callout, InlineCode, Modal, Tag, useToast } from "@crewlethq/ui";
-import { PlugGlyph, CopyGlyph, FileTextGlyph, LinkGlyph } from "@crewlethq/icons/glyphs";
+import { Fragment, useCallback, useId, useMemo, useRef, useState } from "react";
+import { Button, Callout, InlineCode, StatusDot, Tag, useToast } from "@crewlethq/ui";
+import { CopyGlyph, FileTextGlyph, LinkGlyph } from "@crewlethq/icons/glyphs";
 import { Field, type FieldKind } from "~/ui/Field.tsx";
 import { marked, paths, Problems } from "~/ui/Problems.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import { isWholeReference } from "~/lib/references.ts";
 import { useSecretNames } from "~/lib/useSecretNames.ts";
-import type { SetupRequirement, SetupSeatState, SetupToolState } from "~/protocol/index.ts";
+import type {
+  SetupRequirement,
+  SetupSeatState,
+  SetupToolState,
+  SetupVerdict,
+} from "~/protocol/index.ts";
 import { href } from "~/app/router.tsx";
 
 /** What the engine answers a submission with. */
@@ -79,7 +84,7 @@ interface Submitted {
  * two inputs that mattered. The Fix control is gone: a tile's one action —
  * Continue for a form left unfinished, Rotate token for a credential the
  * vendor refused or is about to — opens the same settings, never a narrowed
- * copy (see `actionFor` in Integrations.tsx). A rotation changes the words the
+ * copy (see `actionFor` in integrations/catalogue.tsx). A rotation changes the words the
  * dialog opens with (`rotate`), not which fields it shows.
  *
  * So nothing ever passed an argument, and the branch could not be reached.
@@ -315,7 +320,7 @@ export interface SetupSection {
   seat?: string;
 }
 
-export function SetupDialog({
+export function SetupForm({
   sections,
   title,
   rotate,
@@ -351,6 +356,7 @@ export function SetupDialog({
   onDone: () => void;
 }) {
   const toast = useToast();
+  const headingId = useId();
   // THE NAMES THIS COMPANY HOLDS, so typing `$` in any box offers them.
   const { names: secretNames, refresh: refreshSecrets } = useSecretNames();
   // Keyed by SECTION rather than by vendor, because a per-seat vendor has
@@ -604,6 +610,8 @@ export function SetupDialog({
     setMoreOpen(e.currentTarget.open);
   };
   const [error, setError] = useState("");
+  // WHAT THE APP SAID about the value in each credential box, by value key.
+  const [verdicts, setVerdicts] = useState<Record<string, SetupVerdict | "checking">>({});
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   /**
@@ -848,40 +856,24 @@ export function SetupDialog({
   }
 
   return (
-    <Modal
-      open
-      title={
-        rotate !== undefined && !connecting
-          ? `Rotate the ${title} token`
+    // IN PLACE, in the tool's own pane: the directory stays beside it, and the
+    // header above it already names the tool, so the form's heading names
+    // the gesture. A form, so Enter in a field submits as the dialog did.
+    <form
+      className="int-setup"
+      aria-labelledby={headingId}
+      onSubmit={(e) => {
+        e.preventDefault();
+        void submit();
+      }}
+    >
+      <h3 id={headingId} className="int-setup-title">
+        {rotate !== undefined && !connecting
+          ? `Replace the ${title} key`
           : connecting
             ? `Connect ${title}`
-            : `${title} settings`
-      }
-      icon={<PlugGlyph size="md" />}
-      onClose={onClose}
-      // A CONNECT IS SEVERAL WRITES IN ORDER — the credential sealed, the
-      // `${VAR}` pointer merged, the epoch advanced — so a dismissal
-      // half-way leaves a company in a state nobody chose and nobody saw.
-      dismissable={!busy}
-      closeDisabledReason="Waiting for the engine to finish writing."
-      size="md"
-      stackBody
-      onSubmit={() => void submit()}
-      footer={
-        // NO `.spacer` ANY MORE. uilet's footer pushes its actions to the
-        // inline end itself, and carries a `footerStart` slot for what the
-        // spacer used to be shoved past — so the hand-spelled push is one of
-        // the things the port takes away rather than carries over.
-        <>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button variant="primary" type="submit" disabled={busy}>
-            {busy ? (connecting ? "Connecting" : "Saving") : connecting ? "Connect" : "Save"}
-          </Button>
-        </>
-      }
-    >
+            : `${title} settings`}
+      </h3>
       {/* ONE FORM OVER THE WHOLE TOOL.
           Atlassian is Jira and Confluence, and it rendered as two blocks
           under two headings, each with its own intro and its own "More
@@ -1099,7 +1091,19 @@ export function SetupDialog({
           <Problems detail={error} />
         </Callout>
       )}
-    </Modal>
+      <div className="int-setup-actions">
+        <Button
+          variant="ghost"
+          onClick={onClose}
+          disabledReason={busy ? "Waiting for the engine to finish writing." : undefined}
+        >
+          Cancel
+        </Button>
+        <Button variant="primary" type="submit" disabled={busy}>
+          {busy ? (connecting ? "Connecting" : "Saving") : connecting ? "Connect" : "Save"}
+        </Button>
+      </div>
+    </form>
   );
 
   /**
@@ -1182,7 +1186,17 @@ export function SetupDialog({
             label={r.label}
             kind={r.kind === "toggle" ? "choice" : (r.kind as FieldKind)}
             value={values[key] ?? ""}
-            onChange={(v) => setValues((c) => ({ ...c, [key]: v }))}
+            onChange={(v) => {
+              setValues((c) => ({ ...c, [key]: v }));
+              // A VERDICT IS ABOUT THE VALUE IT CHECKED: typing over it
+              // makes it a verdict about something no longer in the box.
+              setVerdicts((was) => {
+                if (!(key in was)) return was;
+                const next = { ...was };
+                delete next[key];
+                return next;
+              });
+            }}
             // THE DOTS THAT SAY A CREDENTIAL IS HELD, and only that: a
             // placeholder is not a value, so any keystroke produces
             // exactly what was typed. See [HELD].
@@ -1264,11 +1278,113 @@ export function SetupDialog({
                     {r.link_text ? "." : null}
                   </>
                 )}
+                {/* WHEN THE APP PROVES IT, for a credential the engine
+                    cannot check ahead without acting on it: the engine's
+                    own sentence, so the form never offers a test it would
+                    have to fake. */}
+                {r.check_note && <> {r.check_note}</>}
               </>
             }
           />
         ) : null}
+        {r.checkable && editable(section, r) && (
+          <KeyCheck
+            verdict={verdicts[key]}
+            onTest={() => void check(section, r)}
+            empty={(values[key] ?? "").trim() === ""}
+            held={r.present}
+          />
+        )}
       </div>
     );
   }
+
+  /**
+   * Check one typed credential at the app WITHOUT STORING IT
+   * (`POST /setup/integrations/{kind}/verify`), with the section's other typed
+   * values beside it, since a key is checked against the site or region the
+   * form names. The engine reads anything not typed from what is stored.
+   */
+  async function check(section: SetupSection, r: SetupRequirement): Promise<void> {
+    const key = valueKey(section, r);
+    const value = (values[key] ?? "").trim();
+    if (value === "") return;
+    const typed: Record<string, string> = {};
+    for (const other of ownBy.get(sectionKey(section)) ?? []) {
+      if (other.field === r.field) continue;
+      const v = (values[valueKey(section, other)] ?? "").trim();
+      if (v !== "") typed[other.field] = v;
+    }
+    setVerdicts((was) => ({ ...was, [key]: "checking" }));
+    try {
+      const answer = (await rest.post(`/setup/integrations/${section.tool.key}/verify`, {
+        field: r.field,
+        value,
+        ...(section.seat ? { seat: section.seat } : {}),
+        ...(Object.keys(typed).length > 0 ? { values: typed } : {}),
+      })) as SetupVerdict;
+      setVerdicts((was) => ({ ...was, [key]: answer }));
+    } catch (err) {
+      // THE CHECK DID NOT RUN, which is not the app refusing the key: a
+      // request the engine turned away (a ${NAME} that names no secret, a
+      // field the check needs left empty) says why and claims nothing.
+      setVerdicts((was) => ({
+        ...was,
+        [key]: {
+          outcome: "unchecked",
+          detail:
+            err instanceof RestError
+              ? err.detail || err.hint || err.code || "The engine refused the check."
+              : String(err),
+        },
+      }));
+    }
+  }
+}
+
+const VERDICT_TONE = {
+  works: "success",
+  refused: "danger",
+  unreachable: "warning",
+  unchecked: "neutral",
+} as const;
+
+/**
+ * A credential's Test control and what the app said about the value in the box.
+ *
+ * A TEST OF THE BOX, NEVER OF THE STORE: an empty box over a held key has
+ * nothing to send, so the control waits for a value, and says the held one
+ * stays when nothing is typed.
+ */
+function KeyCheck({
+  verdict,
+  onTest,
+  empty,
+  held,
+}: {
+  verdict: SetupVerdict | "checking" | undefined;
+  onTest: () => void;
+  empty: boolean;
+  held: boolean;
+}) {
+  return (
+    <div className="int-key-check">
+      <Button
+        size="small"
+        variant="secondary"
+        disabledReason={empty ? "Type or paste a key to test it" : undefined}
+        disabled={verdict === "checking"}
+        onClick={() => {
+          if (!empty) onTest();
+        }}
+      >
+        {verdict === "checking" ? "Testing" : "Test key"}
+      </Button>
+      {verdict !== undefined && verdict !== "checking" ? (
+        <StatusDot tone={VERDICT_TONE[verdict.outcome] ?? "neutral"}>{verdict.detail}</StatusDot>
+      ) : empty && held ? (
+        <span className="t-caption">A key is stored. Leave this empty to keep it.</span>
+      ) : null}
+    </div>
+  );
 }

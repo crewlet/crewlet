@@ -37,7 +37,7 @@ import { useRest } from "~/lib/useRest.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { rest, type SecretRow } from "~/protocol/index.ts";
 import { OPERATOR_SOURCE } from "~/contract/audit.ts";
-import { CATALOG, entryState } from "~/routes/settings/Integrations.tsx";
+import { CATALOG, entryState } from "~/routes/settings/integrations/catalogue.tsx";
 import { useRetentionReport } from "~/routes/settings/Retention.tsx";
 import {
   FINDING_WORDS,

@@ -3885,186 +3885,257 @@ a.knowledge-reader-how:hover {
   }
 }
 
-/* ---- The integrations catalogue ---------------------------------------------
-   The tiles are the kit's (`CatalogTile` on a `TileGrid`), so this screen
-   draws only what is its own: the address vendors deliver to, said once as a
-   quiet fact under the catalogue or under one tool's header. */
-.int-address {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--spacing-1) var(--spacing-2);
-  margin: 0;
-  min-width: 0;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-.int-address > svg {
-  flex: none;
-}
+/* ---- Company › Integrations ------------------------------------------------
+   The directory and the column beside it are the kit's (`DirectoryList` in a
+   `ListDetail`), so this screen draws only what fills the detail: a tool's or
+   a service's tabs, its issues, its agents, a feed, and the engine's address
+   at the foot of the directory. No part draws a frame inside a frame: rows are
+   divided by hairlines. */
 
-/* ---- One integration's own page -------------------------------------------
-   The card a tile's Manage leads to: a bordered box that discloses the tool's
-   agents and faulted surfaces, with the settings square and Disconnect in its
-   head. */
-
-.int-card {
-  background: var(--color-surface-subtle);
-  border: 1px solid var(--color-border-hover);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  transition: border-color var(--motion-duration-base) var(--motion-easing-emphasized);
+/* On a phone the detail is the whole page, and this is its way back. */
+.int-back {
+  display: none;
+  align-self: flex-start;
 }
-.int-card:hover {
-  border-color: var(--color-border-strong);
-}
-
-/* A tool nobody has connected: one row, no disclosure. */
-.int-card-absent {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-4);
-  padding: var(--spacing-4) var(--spacing-6);
-}
-/* NOT DIMMED. An unconfigured tool is the one a reader came here to set up,
-   so it is the last thing that should look switched off: greying it reads as
-   "unavailable" when it means "available, and yours to connect". The state is
-   already said twice, in the badge and in the action beside it, and colour
-   here carries STATE and never identity. The only difference from a connected
-   card is that there is nothing yet to disclose. */
-.int-card-absent:hover {
-  border-color: var(--color-border-hover);
-}
-
-.int-card-head {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-3);
-  padding-right: var(--spacing-6);
-}
-
-/* The disclosure is the identity block rather than the whole header, so the
-   card's own buttons are not nested inside a button and a keyboard reader
-   gets one predictable target. */
-.int-card-toggle {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-4);
-  flex: 1;
-  min-width: 0;
-  padding: var(--spacing-4) var(--spacing-2) var(--spacing-4) var(--spacing-6);
-  background: none;
-  border: none;
-  cursor: pointer;
-  text-align: left;
-  color: inherit;
-  font: inherit;
-}
-/* Hovering the disclosure tints the whole header rather than the strip the
-   button happens to cover: the row is what a reader perceives as the thing
-   they are about to press, and a highlight stopping halfway reads as a
-   rendering fault. */
-.int-card-head:has(.int-card-toggle:hover) {
-  background: var(--color-surface-hover);
-}
-.int-card-toggle:focus-visible {
-  outline: 2px solid var(--color-brand-accent);
-  outline-offset: -2px;
-}
-
-/* The third-party app's mark (`VendorMark`, from @crewlethq/icons), in a
-   circle the way the console draws it. Its colours are the third-party app's
-   own; see the "one rule" in reference/dashboard-design.md for why that is the
-   one exception to colour carrying state. */
-.int-brand {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: var(--size-row-lg);
-  height: var(--size-row-lg);
-  border-radius: var(--radius-pill);
-  background: var(--color-surface-elevated);
-  color: var(--color-text-primary);
-}
-.int-heading {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  flex: 1;
-}
-.int-name {
-  font-size: var(--font-size-sm);
-  font-weight: 600;
-  color: var(--color-text-primary);
-}
-/* The second line carries whatever the card most needs to say: what the tool
-   is for when there is nothing wrong, and what is wrong when there is. */
-.int-desc {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-.int-desc.attention {
-  color: var(--color-feedback-warning-ink);
-}
-
-.int-card-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  flex: none;
-}
-
-/* A real control rather than decoration inside the identity button, so it
-   can sit beside the actions and still toggle the body. */
-.int-chevron {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--size-row-sm);
-  height: var(--size-row-sm);
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--color-text-tertiary);
-  cursor: pointer;
-}
-.int-chevron:hover {
-  background: var(--color-surface-hover);
-  color: var(--color-text-primary);
-}
-.int-chevron:focus-visible {
-  outline: 2px solid var(--color-brand-accent);
-  outline-offset: 2px;
-}
-.int-chevron svg {
-  transition: transform var(--motion-duration-base) var(--motion-easing-emphasized);
-}
-.int-chevron.is-open svg {
-  transform: rotate(180deg);
-}
-@media (prefers-reduced-motion: reduce) {
-  .int-chevron svg {
-    transition: none;
+@media (width < 640px) {
+  .int-back {
+    display: inline-flex;
   }
 }
 
-.int-card-body {
+.int-detail,
+.int-tab,
+.int-agents,
+.int-service-off {
   display: flex;
   flex-direction: column;
-  padding: var(--spacing-1) var(--spacing-6) var(--spacing-3);
-  border-top: 1px solid var(--color-border-default);
+  gap: var(--spacing-5);
+  min-width: 0;
+}
+.int-agents {
+  gap: var(--spacing-4);
+}
+.int-service-off {
+  max-width: 44rem;
+}
+/* THE COLUMN SPACES ITS PARTS, so prose and headings inside it carry no
+   margin of their own, and a lone control keeps its own width. */
+:where(.int-detail, .int-tab, .int-agents, .int-service-off, .int-before, .int-soon-copy)
+  > :where(p, h3) {
+  margin: 0;
+}
+:where(.int-detail, .int-tab, .int-agents) > :where(a, button) {
+  align-self: flex-start;
+}
+.int-detail h3.t-label,
+.int-before h3.t-label {
+  margin-bottom: var(--spacing-2);
+}
+.int-checks svg {
+  color: var(--color-feedback-success-ink);
 }
 
-/* ONE ROW PER THING THE CARD IS MADE OF, surfaces and seats alike, separated
-   by a rule rather than by whitespace. The body used to stack loose lines of
-   prose, which made a tool with three surfaces read as one paragraph with no
-   edges: nothing said where Jira stopped and Confluence began. */
+.int-row-start {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+/* What connecting gives the agents, how each gets in, and what to have ready. */
+.int-before {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr));
+  gap: var(--spacing-5);
+}
+
+/* ONE ISSUE A ROW: what is wrong, who owes the next move, and the control
+   that makes it. */
+.int-issues,
+.int-seats {
+  display: flex;
+  flex-direction: column;
+}
+.int-issues > * + *,
+.int-seats > * + * {
+  border-top: 1px solid var(--color-border-default);
+}
+.int-issue {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3) 0;
+}
+.int-issue:has(.int-issue-mark) {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+.int-issue-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+.int-issue-problem {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+.int-issue-owner {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+.int-issue-act:empty {
+  display: none;
+}
+
+/* AN AGENT'S LINE: its mark, its name and one line under it, its standing,
+   and its own step at the app where it has one. */
+.int-seat {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3) 0;
+  min-width: 0;
+}
+.int-seat-id {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.int-seat-id .t-caption {
+  overflow-wrap: anywhere;
+}
+.int-seat-act:empty {
+  display: none;
+}
+@media (width < 640px) {
+  .int-issue,
+  .int-issue:has(.int-issue-mark) {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .int-issue:not(:has(.int-issue-mark)) .int-issue-act {
+    grid-column: 1 / -1;
+  }
+  .int-issue:has(.int-issue-mark) .int-issue-act {
+    grid-column: 2;
+  }
+  .int-seat {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+  .int-seat-act {
+    grid-column: 2 / -1;
+  }
+}
+
+/* A FEED: one change or one item a line, its time at the end. */
+.int-feed {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.int-feed > * + * {
+  border-top: 1px solid var(--color-border-default);
+}
+.int-feed-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--spacing-3);
+  padding: var(--spacing-2) 0;
+  font-size: var(--font-size-sm);
+}
+.int-feed-what {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text-primary);
+  text-decoration: none;
+}
+a.int-feed-what:hover {
+  text-decoration: underline;
+}
+.int-feed-what strong {
+  font-weight: var(--font-weight-semibold);
+}
+.int-feed-at {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* CREWLET CHAT, still to come: its mark large on the brand's soft ground. */
+.int-soon {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--spacing-6);
+  align-items: start;
+  padding: var(--spacing-6);
+  border-radius: var(--radius-xl);
+  background: var(--color-brand-accent-soft);
+}
+.int-soon-copy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+@media (width < 640px) {
+  .int-soon {
+    grid-template-columns: minmax(0, 1fr);
+    padding: var(--spacing-4);
+  }
+}
+.int-step-title {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* THE ADDRESS APPS DELIVER TO, at the foot of the directory: a small label
+   over the address, cut to fit, with the whole of it in its title. */
+.int-engine-address {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+/* THE SETTINGS FORM, in the pane where the tabs were: its heading, the
+   fields, and the actions ruled off at its foot. */
+.int-setup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+  min-width: 0;
+  max-width: 44rem;
+}
+.int-setup-title {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+}
+.int-setup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--spacing-2);
+  padding-top: var(--spacing-4);
+  border-top: 1px solid var(--color-border-default);
+}
+/* A KEY'S CHECK, under its field: the control and the engine's verdict. */
+.int-key-check {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-3);
+  font-size: var(--font-size-sm);
+}
+
+/* ONE ROW PER THING A TOOL IS MADE OF, surfaces and seats alike, separated
+   by a rule rather than by whitespace: stacked as loose lines of prose, a tool
+   with three surfaces read as one paragraph with no edges, and nothing said
+   where Jira stopped and Confluence began. */
 .int-rows {
   list-style: none;
   margin: 0;
@@ -4173,16 +4244,11 @@ a.knowledge-reader-how:hover {
  * something that needs attention. It was a chip out on the right next to
  * "ready", where two chips on one row read as two verdicts and a reader
  * scanning a roster for what is wrong stopped on "read-only" every time.
+ *
+ * THROUGH THE TOKENS, all of it: the pill is made small by its PADDING on the
+ * smallest step of the type ramp (--font-size-2xs), never by a size of its own,
+ * because a step nothing else uses is a scale of ten pretending to be nine.
  */
-/* THROUGH THE TOKENS, all of it. This arrived with six literals — a 9px
-   font-size off the nine-step ramp, its own margin, padding, radius,
-   line-height and tracking — and the design rules name that as the one thing
-   a change may not do: "No new colour, size, radius or spacing literal. If a
-   component needs one, the TOKEN is what gets added."
-   
-   --font-size-2xs is the smallest step and the pill is made small by its PADDING
-   rather than by a tenth type size, because a step nothing else uses is a
-   scale of ten pretending to be a scale of nine. */
 .int-seat-tier {
   margin-left: var(--spacing-2);
   padding: 0 var(--spacing-1);
@@ -4494,19 +4560,6 @@ a.knowledge-reader-how:hover {
   color: var(--color-text-tertiary);
 }
 
-/* THE OTHER FINDINGS, ruled off. A disclosure that opens into more sentences
-   needs to be visibly not part of the sentence above it. */
-.int-more {
-  margin: 0;
-  padding-top: var(--spacing-2);
-  border-top: 1px solid var(--color-border-default);
-}
-.int-more .int-findings > li {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-}
-
 /* THE DISCLOSURE INSIDE THE BODY IS THE ONLY CONTROL IN ITS ROW, so it is
    drawn at the muted step rather than the faint one: tokens.css marks
    --color-text-muted decoration only, never a fact, and it falls under the 4.5:1
@@ -4549,7 +4602,7 @@ details > summary.int-summary::-webkit-details-marker {
    meant reading the whole line. Laid out, the same six are one glance.
 
    Scrolls past a point rather than growing, because thirty-six service
-   accounts is the measured case and a card is not a page. */
+   accounts is the measured case and a peek is not a page. */
 .int-subjects {
   display: flex;
   flex-wrap: wrap;
@@ -4565,9 +4618,8 @@ details > summary.int-summary::-webkit-details-marker {
   padding: 1px var(--spacing-2);
   border: 1px solid var(--color-border-hover);
   border-radius: var(--radius-sm);
-  /* THE RUNG ABOVE ITS GROUND. A chip inside `.int-card`, which is a panel, so
-   at the panel rung it drew nothing — and it drew nothing before this ramp was
-   named either, when both were the page's colour. */
+  /* THE RUNG ABOVE ITS GROUND: a chip sits on a peek's panel, and at the
+     panel's own rung it drew nothing. */
   background: var(--color-surface-elevated);
   color: var(--color-text-tertiary);
   font-size: var(--font-size-xs);

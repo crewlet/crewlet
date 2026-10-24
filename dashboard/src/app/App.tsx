@@ -228,7 +228,9 @@ export function screenFor(route: Resolved): ReactNode {
     case "policies":
       return <Policies />;
     case "integrations":
-      return <Integrations key={route.kind ?? ""} kind={route.kind} />;
+      // ONE PAGE FOR EVERY SELECTION, never keyed on it: the directory holds
+      // its place and its readings while the detail beside it changes.
+      return <Integrations kind={route.kind} />;
     case "budgets":
       return <Budgets />;
     case "models":

@@ -15,16 +15,12 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import {
   CATALOG,
-  EntryRow,
-  SeatStep,
   IN_FLIGHT,
-  Reconcile,
-  byConfiguredThenName,
   disconnectOrder,
   docHref,
   entryState,
   phaseTone,
-} from "./Integrations.tsx";
+} from "./catalogue.tsx";
 import {
   INTEGRATION_TOOLS,
   type IntegrationRow,
@@ -34,18 +30,6 @@ import {
 import { repoRoot } from "~/test/engineFiles.ts";
 
 afterEach(cleanup);
-
-// NULL RENDERS NOTHING. It is either a process with no loop to ask or a
-// surface the loop has not reached, and neither is a claim that the surface
-// is fine. Anything drawn here would be the invented health this screen
-// refuses to show.
-test("a surface with no status renders nothing", () => {
-  const { container } = render(<Reconcile status={null} />);
-  expect(container.innerHTML).toBe("");
-
-  const absent = render(<Reconcile status={undefined} />);
-  expect(absent.container.innerHTML).toBe("");
-});
 
 // THE TONE NAMES ARE THE DESIGN SYSTEM'S HERE AND BELOW — `success`,
 // `warning`, `danger` where this screen used to spell them `positive`,
@@ -76,178 +60,6 @@ test("the tone follows how much is not working", () => {
   for (const phase of ["provisioning", "activating", "awaiting_admin", "disconnecting"]) {
     expect(phaseTone(phase)).toBe("warning");
   }
-});
-
-// The detail is the sentence that saves somebody reading logs, and it is the
-// whole of what this band says.
-//
-// NEITHER AN ACTOR CLAUSE NOR A LINK BESIDE IT. "you, at the third-party app"
-// named a place the sentence already names — and names better, because it
-// says which app and what to do there — and the anchor under it read "Open
-// where this is fixed", unlabelled, directly above the agent row's own
-// "Install on GitHub" button pointing at the same address. Two controls for
-// one act and a clause repeating the sentence above it.
-test("a blocked surface says what to do", () => {
-  render(
-    <Reconcile
-      status={{
-        phase: "degraded",
-        actor: "admin",
-        detail: "swe has no Jira account, so no issue reaches it",
-        action_url: "https://jira.example.com/admin",
-        findings: [{ kind: "identity_failed", subject: "swe" }],
-      }}
-    />,
-  );
-  expect(screen.getByText(/swe has no Jira account/)).toBeTruthy();
-  expect(screen.queryByText(/at the third-party app/)).toBeNull();
-  // AND NO LINK, because this status carries an action_url on the REPORT
-  // rather than on a finding: the anchor belongs to the finding the headline
-  // is, so a row whose findings carry none offers none.
-  expect(screen.queryByRole("link")).toBeNull();
-});
-
-// A FINDING THE ENGINE DELIBERATELY WILL NOT ACT ON SAYS WHERE TO GO, BY NAME.
-//
-// An account somebody else disabled is reported rather than reversed — the
-// engine must not undo a person's decision on every tick — and that leaves a
-// sentence telling them to do it at the app. Handing them nothing to press is
-// the other half of the decision left undone, over an engine that holds the
-// credentials and is declining to use them on purpose.
-//
-// NAMED, which is the difference from the anchor this replaced: "Open where
-// this is fixed" said nothing and duplicated a button beside it.
-test("a finding the engine will not act on links to the app by name", () => {
-  render(
-    <Reconcile
-      appName="Datadog"
-      status={{
-        phase: "degraded",
-        actor: "admin",
-        detail: "sre's Datadog service account is disabled and was not disabled by this engine",
-        findings: [
-          {
-            kind: "identity_failed",
-            subject: "sre",
-            detail: "sre's Datadog service account is disabled and was not disabled by this engine",
-            action_url: "https://app.datadoghq.com/organization-settings/users?filter=disabled",
-          },
-        ],
-      }}
-    />,
-  );
-  const link = screen.getByRole("link");
-  expect(link.getAttribute("href")).toContain("app.datadoghq.com");
-  expect(link.textContent).toContain("Datadog");
-});
-
-// AN OPERATOR'S OWN FINDING NAMES NO PLACE.
-//
-// It read "you, in the company configuration", which named a place this
-// screen IS: the note sits inside the card whose Settings control opens the
-// very form the fix is made in, so it sent a reader looking elsewhere for
-// what was already in front of them. The finding's own sentence says what to
-// change, and the admin's clause stays because the third-party app is
-// genuinely somewhere else.
-test("a finding the operator owns carries no place to go", () => {
-  render(
-    <Reconcile
-      status={{
-        phase: "unconfigured",
-        actor: "operator",
-        detail: "the webhook secret resolved to nothing",
-      }}
-    />,
-  );
-  expect(screen.getByText(/the webhook secret resolved to nothing/)).toBeTruthy();
-  expect(screen.queryByText(/company configuration/)).toBeNull();
-});
-
-// THE FINDINGS BEHIND THE HEADLINE. The report says what to do next and the
-// findings say what is actually wrong, so an operator who fixes the first
-// should not wait a full pass to learn there were four more.
-test("the findings the phase was not derived from are still reachable", () => {
-  render(
-    <Reconcile
-      status={{
-        phase: "degraded",
-        actor: "admin",
-        // THE REPORT'S DETAIL IS THE WINNING FINDING'S. Classify copies it,
-        // which is what makes matching by identity possible at all.
-        detail: "ceo needs maintainer",
-        findings: [
-          { kind: "grant_short", subject: "ceo", detail: "ceo needs maintainer" },
-          { kind: "grant_excess", subject: "cto", detail: "cto holds owner on api-gateway" },
-        ],
-      }}
-    />,
-  );
-  expect(screen.getByText(/1 more finding/)).toBeTruthy();
-  expect(screen.getByText(/cto holds owner/)).toBeTruthy();
-  // AND THE HEADLINE IS NOT REPEATED under it.
-  expect(screen.getAllByText(/ceo needs maintainer/)).toHaveLength(1);
-});
-
-// THE REPORTED FINDING IS NOT ALWAYS FIRST.
-//
-// This dropped element zero and rendered the tail, so whenever Classify's
-// winner sat anywhere else a real finding was hidden and the headline was
-// re-printed as "1 more finding". The engine promotes the winner to the front,
-// but identity, not position, is what the screen relies on.
-test("the headline finding is matched by identity, not by position", () => {
-  render(
-    <Reconcile
-      status={{
-        phase: "unconfigured",
-        actor: "operator",
-        detail: "the organization credential was refused",
-        findings: [
-          { kind: "grant_excess", subject: "ceo", detail: "ceo holds owner on api-gateway" },
-          {
-            kind: "credential_rejected",
-            subject: "org",
-            detail: "the organization credential was refused",
-          },
-        ],
-      }}
-    />,
-  );
-  expect(screen.getByText(/1 more finding/)).toBeTruthy();
-  // The one the report did NOT summarise, which was the one being hidden.
-  expect(screen.getByText(/ceo holds owner/)).toBeTruthy();
-  expect(screen.getAllByText(/the organization credential was refused/)).toHaveLength(1);
-});
-
-// A COUNT SUFFIX IS NOT PART OF THE SENTENCE. Classify appends "(and 2 more)"
-// when several findings share the winning kind, so a literal compare would
-// never match and the headline would render twice.
-test("a report counting its own kind still matches its finding", () => {
-  render(
-    <Reconcile
-      status={{
-        phase: "degraded",
-        actor: "admin",
-        detail: "ceo needs maintainer (and 1 more)",
-        findings: [
-          { kind: "grant_short", subject: "ceo", detail: "ceo needs maintainer" },
-          { kind: "grant_short", subject: "cto", detail: "cto needs maintainer" },
-        ],
-      }}
-    />,
-  );
-  expect(screen.getByText(/1 more finding/)).toBeTruthy();
-  expect(screen.getByText(/cto needs maintainer/)).toBeTruthy();
-});
-
-// A pass that could not read the surface is a FAULT, not a finding, and it is
-// labelled as one rather than rendered as something about the vendor.
-test("a failed pass is reported as a failed pass", () => {
-  render(
-    <Reconcile
-      status={{ phase: "activating", actor: "engine", last_error: "502 from the instance" }}
-    />,
-  );
-  expect(screen.getByText(/Last pass failed: 502 from the instance/)).toBeTruthy();
 });
 
 // --- one row per tool ----------------------------------------------------- //
@@ -369,106 +181,6 @@ test("every Learn more names an engine page, spelled as the site serves it", () 
   }
 });
 
-// A CARD'S BODY IS ITS AGENTS, not a restatement of its header.
-//
-// It opened with a row per surface — "Jira, /webhooks/jira, Connected" —
-// under a header already saying Connected, so the first thing a reader saw
-// on opening a card was the engine repeating the tag above it and naming a
-// route nobody has to paste any more, now that the loop registers the hook.
-test("a working surface adds nothing to the card", () => {
-  render(
-    <EntryRow
-      entry={atlassian}
-      rows={rowsOf(
-        {
-          key: "jira",
-          configured: true,
-          inbound: 4,
-          inbound_path: "/webhooks/jira",
-          reconcile: { phase: "ready" },
-        },
-        { key: "confluence", configured: true, inbound: 1, reconcile: { phase: "ready" } },
-      )}
-    />,
-  );
-  expect(screen.getByRole("button", { name: /Hide Atlassian details/ })).toBeTruthy();
-  expect(screen.queryByText("/webhooks/jira")).toBeNull();
-  expect(screen.queryByText("Jira")).toBeNull();
-  expect(screen.queryByText("Confluence")).toBeNull();
-});
-
-// AND A BROKEN ONE STILL SAYS SO, AND SAYS WHICH. The header rolls up to the
-// least ready surface, so a tool with two of them has two answers and only
-// one fits in the tag.
-test("a faulted surface says what is wrong and which surface it is", () => {
-  render(
-    <EntryRow
-      entry={atlassian}
-      rows={rowsOf(
-        { key: "jira", configured: true, reconcile: { phase: "ready" } },
-        {
-          key: "confluence",
-          configured: true,
-          secret_usable: false,
-          reconcile: { phase: "degraded", detail: "the webhook secret did not resolve" },
-        },
-      )}
-    />,
-  );
-  expect(screen.getByRole("button", { name: /Hide Atlassian details/ })).toBeTruthy();
-  expect(screen.getByText("Confluence")).toBeTruthy();
-  expect(screen.getByText("secret unresolved")).toBeTruthy();
-  // And the surface that works is not listed beside it.
-  expect(screen.queryByText("Jira")).toBeNull();
-});
-
-// THE LINE UNDER A TOOL'S NAME IS WHAT THE TOOL IS, never how it is doing.
-//
-// It carried the roll-up's status sentence in amber, so a card's identity was
-// replaced by its latest complaint: a reader scanning the list for GitHub
-// found a warning where the name's own line belongs, on every card that had
-// anything to report. What is wrong belongs in the body, with the badge that
-// names the surface, the loop's own sentence, and the link that fixes it.
-test("a card's header says what the tool is, not what is wrong with it", () => {
-  const rows = rowsOf({
-    key: "github",
-    configured: true,
-    secret_usable: false,
-    reconcile: {
-      phase: "awaiting_admin",
-      actor: "admin",
-      detail: "sre-lead has no GitHub App of its own",
-    },
-  });
-  const { container } = render(
-    <EntryRow entry={CATALOG.find((e) => e.key === "github")!} rows={rows} />,
-  );
-
-  // THE CATALOGUE'S OWN LINE, and only it, in the card's head.
-  const head = container.querySelector(".int-card-toggle")!;
-  expect(head.textContent).toContain(CATALOG.find((e) => e.key === "github")!.description);
-  expect(head.textContent).not.toMatch(/sre-lead has no GitHub App/);
-
-  // AND THE COMPLAINT IS IN THE BODY, which the page opens on.
-  expect(screen.getByRole("button", { name: /Hide GitHub details/ })).toBeTruthy();
-  expect(screen.getByText(/sre-lead has no GitHub App/)).toBeTruthy();
-  expect(screen.getByText("secret unresolved")).toBeTruthy();
-});
-
-// A TOOL NOBODY SET UP HAS NOTHING TO DISCLOSE, so it gets no disclosure: a
-// chevron that opens an empty box is a control that lies.
-test("an absent tool is a plain card with no disclosure and no badge", () => {
-  const { container } = render(<EntryRow entry={slack} rows={rowsOf()} />);
-  // NO STATUS BADGE. Nothing has been configured, so there is nothing to
-  // report; the Connect button is the whole message.
-  // uilet's pill, which is what the status badge is drawn from now.
-  expect(container.querySelector(".crewlet-tag")).toBeNull();
-  expect(screen.queryByRole("button", { name: /details/i })).toBeNull();
-  // And it still says what the tool is for, because the catalogue is what
-  // tells a reader the engine serves it at all.
-  expect(screen.getByText(slack.description)).toBeTruthy();
-});
-
 // A TEARDOWN IS AMBER AND OFFERS NOTHING, the same as every other state the
 // engine is working through. It was the one in-flight state drawn neutral on
 // the card while its own surface drew amber below it.
@@ -493,10 +205,9 @@ import {
   deliveryEvent,
   formBlocked,
   sectionsFor,
-  tileMeta,
   ROTATE_FINDINGS,
-} from "./Integrations.tsx";
-import type { Entry } from "./Integrations.tsx";
+} from "./catalogue.tsx";
+import type { Entry } from "./catalogue.tsx";
 import type { SetupToolState } from "~/protocol/types.ts";
 import type { ReconcileFinding } from "~/contract/integrations.ts";
 
@@ -700,62 +411,6 @@ test("a reason leads a tile as a sentence", () => {
   expect(asSentence("")).toBe("");
 });
 
-// THE FOOT COUNTS WHAT THE ENGINE SENT, and only a count it could make.
-test("a tile's foot counts agents, credentials and deliveries", () => {
-  const present = [
-    {
-      surface: { key: "gitlab", name: "GitLab" },
-      row: { key: "gitlab", configured: true, inbound: 12 },
-    },
-  ];
-  const roster = toolState({
-    key: "gitlab",
-    seats: [
-      { handle: "cto", requirements: [], satisfied: true },
-      { handle: "swe", requirements: [], satisfied: true },
-    ],
-  });
-  expect(tileMeta(present, roster, [expiring], true)).toBe("2 agents · 1 expiring · 12 deliveries");
-  // A NODE THAT COULD NOT READ ITS EVENT LOG sends zero for every surface, so
-  // no count is drawn rather than "nothing delivered".
-  expect(tileMeta(present, roster, [], false)).toBe("2 agents");
-  // AND A TOOL NOBODY CONNECTED HAS NOTHING TO COUNT.
-  expect(tileMeta([], roster, [], true)).toBe("");
-});
-
-// A RELAYED DELIVERY IS COUNTED ONCE ON THE CARD. The engine counts each
-// delivery at the ingress it arrived at, so a Jira event the Forge relay
-// carried is in `forge`'s count and not in `jira`'s, and the Atlassian card —
-// which sums its surfaces — counts it once. Counted under the product as well,
-// the card drew every Cloud tenant's relayed traffic twice.
-test("an Atlassian card sums its surfaces' deliveries once each", () => {
-  const present = [
-    { surface: { key: "jira", name: "Jira" }, row: { key: "jira", configured: true, inbound: 1 } },
-    {
-      surface: { key: "confluence", name: "Confluence" },
-      row: { key: "confluence", configured: true, inbound: 0 },
-    },
-    {
-      surface: { key: "forge", name: "Forge relay" },
-      row: { key: "forge", configured: true, inbound: 2 },
-    },
-  ];
-  expect(tileMeta(present, undefined, [], true)).toBe("3 deliveries");
-});
-
-// A MATTERMOST CARD COUNTS ITS POSTS. Its socket records each post it presents
-// to a seat, so the count is a measurement like any other surface's — where it
-// used to be null, and the card drew no count at all over a busy chat.
-test("a socket surface's deliveries are counted like a webhook's", () => {
-  const present = [
-    {
-      surface: { key: "mattermost", name: "Mattermost" },
-      row: { key: "mattermost", configured: true, inbound: 5 },
-    },
-  ];
-  expect(tileMeta(present, undefined, [], true)).toBe("5 deliveries");
-});
-
 // A DELIVERY ROW SHOWS WHAT THE PROVIDER CALLED IT, whichever edge it came in
 // on: the engine files a row under its edge's prefix and the provider's own
 // event name, and the operator is matching the name against their console.
@@ -805,35 +460,6 @@ test("an informational roster stays one section", () => {
   const sections = sectionsFor(datadog, new Map([["datadog", tool]]));
   expect(sections.map((s) => s.name)).toEqual(["Datadog"]);
   expect(sections.map((s) => s.seat)).toEqual([undefined]);
-});
-
-// AND THE ROSTER IS COUNTED ONCE. A per-seat app contributes one section per
-// agent, all carrying the same tool, so reading the seats off every section
-// rendered each agent as many times as there were sections.
-test("a roster is listed once however many sections carry it", () => {
-  render(
-    <EntryRow
-      entry={slack}
-      rows={rowsOf({ key: "slack", configured: true })}
-      sections={sectionsFor(
-        slack,
-        new Map([
-          [
-            "slack",
-            toolState({
-              key: "slack",
-              configured: true,
-              requirements: [],
-              seats_required: true,
-              seats: [{ handle: "sre-lead", name: "SRE Lead", requirements: [], satisfied: true }],
-            }),
-          ],
-        ]),
-      )}
-    />,
-  );
-  expect(screen.getByRole("button", { name: /Hide Slack details/ })).toBeTruthy();
-  expect(screen.getAllByText("SRE Lead").length).toBe(1);
 });
 
 // A company whose Slack block exists and whose seats hold no app is not
@@ -921,202 +547,6 @@ test("a per-seat app leaves the work to the agent's own row", () => {
 
 // --- what a card offers, and what it no longer does ------------------------ //
 
-// CONNECTING IS THE PERMISSION, so nothing on a connected card asks for one
-// again. The reconcile loop registers the hooks and creates the accounts on
-// its own timer now, which took the meaning out of every button that used to
-// stand for a permission a person had to grant a second time: Run setup and
-// Recheck per surface, and Manage in the header beside Disconnect.
-test("a connected card offers no pass controls", () => {
-  render(
-    <EntryRow
-      entry={atlassian}
-      rows={rowsOf({ key: "jira", configured: true }, { key: "confluence", configured: true })}
-      sections={[
-        { name: "Jira", tool: toolState({ key: "jira", can_provision: true }) },
-        { name: "Confluence", tool: toolState({ key: "confluence", can_provision: true }) },
-      ]}
-      onOpen={() => {}}
-      onDisconnect={() => {}}
-    />,
-  );
-
-  expect(screen.getByRole("button", { name: /Hide Atlassian details/ })).toBeTruthy();
-  for (const gone of ["Run setup", "Recheck", "Manage"]) {
-    expect(screen.queryByRole("button", { name: gone })).toBeNull();
-  }
-  expect(screen.getByRole("button", { name: "Disconnect" })).toBeTruthy();
-});
-
-// SETTINGS SIT BESIDE THE DISCLOSURE, as a square the size of the chevron.
-//
-// At the foot of the open card it was an always-available control behind a
-// disclosure and one scroll away; as a labelled button in the header it
-// competed with Disconnect for the reader's eye. An icon square does
-// neither, and it is available without opening the card.
-test("settings open from the header, beside the chevron", () => {
-  let opened = 0;
-  render(
-    <EntryRow
-      entry={CATALOG.find((e) => e.key === "datadog")!}
-      rows={rowsOf({ key: "datadog", configured: true })}
-      sections={[{ name: "Datadog", tool: toolState({ key: "datadog" }) }]}
-      onOpen={() => {
-        opened += 1;
-      }}
-      onDisconnect={() => {}}
-    />,
-  );
-
-  // Closed, without opening the card at all.
-  fireEvent.click(screen.getByRole("button", { name: "Datadog settings" }));
-  expect(opened).toBe(1);
-});
-
-// AND A TOOL NOBODY HAS CONNECTED HAS NO SETTINGS TO OPEN: its Connect
-// button is the whole of what it offers.
-test("an unconnected tool offers no settings square", () => {
-  render(
-    <EntryRow
-      entry={CATALOG.find((e) => e.key === "gitlab")!}
-      rows={rowsOf()}
-      sections={[{ name: "GitLab", tool: toolState({ key: "gitlab", configured: false }) }]}
-      onOpen={() => {}}
-    />,
-  );
-  expect(screen.queryByRole("button", { name: "GitLab settings" })).toBeNull();
-  expect(screen.getByRole("button", { name: "Connect GitLab" })).toBeTruthy();
-});
-
-// A ROW'S CONNECT IS SECONDARY. The screen is a list of integrations and
-// every unconnected one carries the button, so drawn primary the page had six
-// stacked claims to be the one thing to press.
-test("a card's Connect is a secondary button", () => {
-  render(
-    <EntryRow
-      entry={CATALOG.find((e) => e.key === "gitlab")!}
-      rows={rowsOf()}
-      sections={[{ name: "GitLab", tool: toolState({ key: "gitlab", configured: false }) }]}
-      onOpen={() => {}}
-    />,
-  );
-  const connect = screen.getByRole("button", { name: "Connect GitLab" });
-  expect(connect.className).toContain("crewlet-btn--secondary");
-  expect(connect.className).not.toContain("crewlet-btn--primary");
-});
-
-// THE AGENTS ARE THE POINT, so the card lists them.
-//
-// Only Slack had a roster, because it was the only app with a route per seat
-// and the roster was built from that. Every other card opened on a surface
-// row and nothing else: Connected, over no answer at all to which of this
-// company's agents can actually work in the app.
-test("the card lists each agent and what it holds", () => {
-  render(
-    <EntryRow
-      entry={CATALOG.find((e) => e.key === "datadog")!}
-      rows={rowsOf({ key: "datadog", configured: true })}
-      sections={[
-        {
-          name: "Datadog",
-          tool: toolState({
-            key: "datadog",
-            seats: [
-              {
-                handle: "sre-lead",
-                name: "SRE Lead",
-                requirements: [],
-                present: true,
-                satisfied: true,
-                detail: "mcp_env.datadog.DD_APP_KEY",
-              },
-              {
-                handle: "cto",
-                name: "CTO",
-                requirements: [],
-                present: false,
-                satisfied: false,
-                detail: "not in Datadog yet, created on the next sync",
-              },
-            ],
-          }),
-        },
-      ]}
-    />,
-  );
-  expect(screen.getByRole("button", { name: /Hide Datadog details/ })).toBeTruthy();
-  expect(screen.getByText("SRE Lead")).toBeTruthy();
-  expect(screen.getByText("CTO")).toBeTruthy();
-  // AND WHAT EACH ONE HOLDS. A roster of names with no state is a list of
-  // agents, not an answer about the integration.
-  expect(screen.getByText("mcp_env.datadog.DD_APP_KEY")).toBeTruthy();
-  expect(screen.getByText("not in Datadog yet, created on the next sync")).toBeTruthy();
-});
-
-// ONE ROW PER AGENT, whatever the card is made of.
-//
-// A company with one agent saw three rows on Atlassian — Organization, Jira,
-// Confluence — because every surface reports its own roster and the card
-// listed them all. They are one person's one account: Atlassian is where it
-// is created, and the two products are what it then works in.
-test("an agent is listed once however many surfaces report it", () => {
-  const seat = (detail: string, satisfied: boolean) => [
-    { handle: "sre-lead", name: "SRE Lead", requirements: [], satisfied, detail },
-  ];
-  render(
-    <EntryRow
-      entry={atlassian}
-      rows={rowsOf({ key: "jira", configured: true }, { key: "confluence", configured: true })}
-      sections={[
-        {
-          name: "Organization",
-          tool: toolState({
-            key: "atlassian",
-            can_provision: true,
-            seats: seat("mcp_env.atlassian.JIRA_API_TOKEN", true),
-          }),
-        },
-        {
-          name: "Jira",
-          tool: toolState({ key: "jira", seats: seat("no Jira credential yet", false) }),
-        },
-        {
-          name: "Confluence",
-          tool: toolState({
-            key: "confluence",
-            seats: seat("no Confluence credential yet", false),
-          }),
-        },
-      ]}
-    />,
-  );
-  expect(screen.getByRole("button", { name: /Hide Atlassian details/ })).toBeTruthy();
-  expect(screen.getAllByText("SRE Lead").length).toBe(1);
-  // THE SURFACE THAT PROVISIONS WINS, because its answer is about the
-  // account rather than about one product's credential slot.
-  expect(screen.getByText("mcp_env.atlassian.JIRA_API_TOKEN")).toBeTruthy();
-  expect(screen.queryByText(/no Confluence credential/)).toBeNull();
-});
-
-// WHAT THIS COMPANY HAS COMES FIRST, then what it could have.
-//
-// Connected covers ATTEMPTED as well as working: a card with a block behind
-// it, whatever the loop says about it, because a broken integration is one
-// this company has and is the row most worth reaching first. Sorting on
-// health instead would move a row out from under the cursor of somebody
-// watching an app recover, which is exactly when they are looking at it.
-test("configured integrations lead the list, each half alphabetical", () => {
-  const rows = rowsOf(
-    // Datadog works; Jira is broken. Both are this company's.
-    { key: "datadog", configured: true, reconcile: { phase: "ready" } },
-    { key: "jira", configured: true, reconcile: { phase: "degraded", detail: "x" } },
-  );
-  const order = [...CATALOG].sort(byConfiguredThenName(rows)).map((e) => e.name);
-  expect(order).toEqual(["Atlassian", "Datadog", "GitHub", "GitLab", "Mattermost", "Slack"]);
-  // And with nothing configured it is plain alphabetical, unchanged.
-  const empty = [...CATALOG].sort(byConfiguredThenName(rowsOf())).map((e) => e.name);
-  expect(empty).toEqual([...empty].sort((a, b) => a.localeCompare(b)));
-});
-
 // DISCONNECT MEANS THE CARD, and the provisioner goes last.
 //
 // It took the surface that happened to be listed first: on Atlassian the
@@ -1200,94 +630,7 @@ test("disconnect skips the surfaces this company does not have", () => {
   expect(disconnectOrder(atlassian, new Map(), sections)).toEqual(["jira"]);
 });
 
-// A DROP IS A PROBLEM, so it survives the counters being removed.
-//
-// The three counters were dropped from the surface line because all three
-// read zero on a healthy surface. One of them carried a real fault: a
-// delivery this engine verified and then routed nowhere means whatever sent
-// it is reaching the engine and reaching no agent. That becomes a sentence,
-// beside the reconcile findings, rather than a number to interpret.
-test("a dropped delivery is stated, not counted", () => {
-  render(
-    <EntryRow
-      entry={CATALOG.find((e) => e.key === "github")!}
-      rows={rowsOf({ key: "github", configured: true, inbound: 12, skipped: 3 })}
-    />,
-  );
-  expect(screen.getByRole("button", { name: /Hide GitHub details/ })).toBeTruthy();
-  expect(screen.getByText(/3 deliveries were verified and dropped/)).toBeTruthy();
-  expect(screen.getByText("They reached no seat.")).toBeTruthy();
-});
-
-// And a surface dropping nothing says nothing, which is the whole reason the
-// counters went: a zero is not news.
-test("a surface dropping nothing carries no note about it", () => {
-  render(
-    <EntryRow
-      entry={CATALOG.find((e) => e.key === "github")!}
-      rows={rowsOf({ key: "github", configured: true, inbound: 12, skipped: 0 })}
-    />,
-  );
-  expect(screen.getByRole("button", { name: /Hide GitHub details/ })).toBeTruthy();
-  expect(screen.queryByText(/verified and dropped/)).toBeNull();
-});
-
 // --- disconnecting ---------------------------------------------------------- //
-
-// A TOOL NOBODY CONFIGURED HAS NOTHING TO DISCONNECT FROM, so it offers no
-// control for it. Otherwise a catalogue of six unconfigured third-party apps
-// would carry six buttons that undo nothing.
-test("an unconfigured tool offers no disconnect", () => {
-  render(<EntryRow entry={slack} rows={rowsOf()} onDisconnect={() => {}} />);
-  expect(screen.queryByRole("button", { name: "Disconnect" })).toBeNull();
-});
-
-// And a connected one does, beside its own action rather than hidden in the
-// body: taking an integration away is a decision about the whole tool.
-test("a connected tool offers a disconnect", () => {
-  const asked: string[] = [];
-  render(
-    <EntryRow
-      entry={CATALOG.find((e) => e.key === "github")!}
-      rows={rowsOf({ key: "github", configured: true })}
-      onDisconnect={() => asked.push("github")}
-    />,
-  );
-  fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
-  expect(asked).toEqual(["github"]);
-});
-
-// BUT NOT ON A MANAGED DOCUMENT (ADR-0030): a disconnect removes the block,
-// which the managing system would put straight back, so the control is drawn
-// and held with who manages the document — and an agent's app, which is
-// recorded on its seat, is held the same way before the host makes one.
-test("a managed document holds the disconnect and an agent's app", () => {
-  const asked: string[] = [];
-  const managed = "Managed by gitops. Change it there.";
-  render(
-    <>
-      <EntryRow
-        entry={CATALOG.find((e) => e.key === "github")!}
-        rows={rowsOf({ key: "github", configured: true })}
-        managed={managed}
-        onDisconnect={() => asked.push("github")}
-      />
-      <SeatStep
-        app="GitHub"
-        toolKey="github"
-        seat={{ handle: "sre-lead", requirements: [], satisfied: false, step: "create_app" }}
-        managed={managed}
-      />
-    </>,
-  );
-  const disconnect = screen.getByRole("button", { name: "Disconnect" });
-  expect(disconnect.getAttribute("aria-disabled")).toBe("true");
-  fireEvent.click(disconnect);
-  expect(asked).toEqual([]);
-  const create = screen.getByRole("button", { name: "Create app on GitHub" });
-  expect(create.getAttribute("aria-disabled")).toBe("true");
-  expect(document.body.textContent).toContain("Managed by gitops");
-});
 
 // ALPHABETICAL, and it replaced a connected-first sort deliberately.
 //
@@ -1360,50 +703,30 @@ test("disconnect skips a surface this company never configured", () => {
   expect(disconnectOrder(atlassian, new Map(), sections)).toEqual(["jira"]);
 });
 
-// A CARD CANNOT BE CONNECTED AND OFFER TO CONNECT.
-//
-// The two halves of this screen arrive separately and the socket's rows are
-// quicker. Straight after a connect the rows already say the block exists
-// while the setup listing is still the pre-connect one, so the card drew
-// "Connect" beside a tag reading Connected: two controls describing the same
-// tool, disagreeing, with the button the wrong one.
-test("a stale setup listing never contradicts the tag", () => {
-  const connected = entryState(
-    atlassian,
-    rowsOf({ key: "jira", configured: true, reconcile: { phase: "ready" } }),
-    rolled("atlassian", "connected", "Connected"),
-  );
-  const behind = [
-    toolState({ key: "atlassian", configured: false }),
-    toolState({ key: "jira", configured: false }),
-  ];
-  // present: the rows say this company has the tool, so its page.
-  expect(actionFor(connected, behind, true, [], false).kind).toBe("manage");
-  // AND A TOOL NOBODY HAS CONNECTED STILL OFFERS CONNECT. With no rows there
-  // is no tag to contradict, and the button is the only thing on the card
-  // that says anything.
-  expect(actionFor(connected, behind, false, [], false).label).toBe("Connect");
-});
-
 // --- an agent's own app, in the two acts a person performs ---------------- //
 
 import { waitFor } from "@testing-library/react";
 import { vi } from "vitest";
 import type { SetupSeatState } from "~/protocol/types.ts";
+import { deriveTool, type Model } from "./model.ts";
+import { AgentList } from "./parts.tsx";
 
 const github = CATALOG.find((e) => e.key === "github")!;
 
-/** One GitHub card with this roster, opened. */
+/** GitHub's Agents tab with this roster, as the app's page draws it. */
 function roster(...seats: SetupSeatState[]): { container: HTMLElement } {
-  const rendered = render(
-    <EntryRow
-      entry={github}
-      rows={rowsOf({ key: "github", configured: true })}
-      sections={[{ name: "GitHub", tool: toolState({ key: "github", seats }) }]}
-    />,
-  );
-  expect(screen.getByRole("button", { name: /Hide GitHub details/ })).toBeTruthy();
-  return rendered;
+  const tool = deriveTool(github, {
+    rows: rowsOf({ key: "github", configured: true }),
+    rollups: undefined,
+    setup: new Map([["github", toolState({ key: "github", seats })]]),
+    guarded: false,
+    trafficKnown: true,
+    isSeat: () => true,
+    avatarOf: () => null,
+  });
+  // THE PARTS OF THE MODEL THE LIST READS: the rest is the page's.
+  const model = { guarded: false, managed: null, check: async () => "" } as unknown as Model;
+  return render(<AgentList tool={tool} model={model} />);
 }
 
 function seatOf(over: Partial<SetupSeatState>): SetupSeatState {
@@ -1509,9 +832,9 @@ test("a seat's tier is a tag on its name, not a second status chip", () => {
   expect(tier.className).toContain("int-seat-tier--full_access");
   // BESIDE THE NAME, which is what makes it read as an attribute of the
   // agent rather than a verdict on it.
-  expect(tier.closest(".int-row-name")).not.toBeNull();
-  // AND NOT AMONG THE BADGES, where the status is the only answer.
-  expect(tier.closest(".int-row-badges")).toBeNull();
+  expect(tier.closest(".int-seat-name")).not.toBeNull();
+  // AND NOT THE STATUS, which is the row's only verdict.
+  expect(tier.closest(".crewlet-tag")).toBeNull();
   // AND WHAT IT GRANTS IS REACHABLE. Three words on a pill cannot say what
   // full access does and does not include; the sentence that can is the
   // engine's own.
@@ -1519,8 +842,9 @@ test("a seat's tier is a tag on its name, not a second status chip", () => {
 
   // WHAT IT REACHES is the line underneath, which is the one thing two
   // finished seats on one card differ by.
+  // VERBATIM: a repository list made a sentence named "Acme/api".
   expect(screen.getByText("acme/api, acme/web")).toBeTruthy();
-  expect(screen.getByText("ready")).toBeTruthy();
+  expect(screen.getByText("Ready")).toBeTruthy();
 });
 
 // A TOOL WITH NO TIERS SHOWS NO TAG. Slack gives an agent an app and no
@@ -1642,7 +966,7 @@ test("the engine's refusal is reported beside the agent it was refused for", asy
 // --- the listing, and when it is worth reading again ---------------------- //
 
 import { act } from "@testing-library/react";
-import { useSetup } from "./Integrations.tsx";
+import { useSetup } from "./catalogue.tsx";
 
 /** The hook alone: it reaches for `rest` and for no context at all. */
 function Probe() {
@@ -1744,99 +1068,6 @@ test("the disconnect roster lists each agent once", () => {
   expect(seats.map((s) => s.handle)).toEqual(["sre-lead"]);
 });
 
-// AN AGENT THE LOOP HAS A FINDING ABOUT IS NOT BADGED READY.
-//
-// The roster and the reconcile rows come from two endpoints and meet on this
-// card, so this is the only place the contradiction could be resolved.
-// `satisfied` answers "a credential is sealed where this app looks for it",
-// which stays true of a seat the app is refusing — and the card said an agent
-// had no Jira account, that Atlassian was still setting it up, and that the
-// same agent was **ready**, all at once.
-test("an agent a surface reports on is not badged ready", () => {
-  render(
-    <EntryRow
-      entry={atlassian}
-      rows={rowsOf(
-        { key: "atlassian", configured: true },
-        {
-          key: "jira",
-          configured: true,
-          reconcile: {
-            phase: "activating",
-            actor: "provider",
-            findings: [
-              {
-                kind: "grant_pending",
-                subject: "sre-lead",
-                detail: "Atlassian is still giving SRE Lead's new account access to Jira",
-              },
-            ],
-          },
-        },
-      )}
-      sections={sectionsFor(
-        atlassian,
-        new Map([
-          [
-            "jira",
-            toolState({
-              key: "jira",
-              configured: true,
-              requirements: [],
-              can_provision: true,
-              seats: [
-                {
-                  handle: "sre-lead",
-                  name: "SRE Lead",
-                  requirements: [],
-                  satisfied: true,
-                  detail: "sre-lead-...@serviceaccount.atlassian.com",
-                },
-              ],
-            }),
-          ],
-        ]),
-      )}
-    />,
-  );
-  expect(screen.getByRole("button", { name: /Hide Atlassian details/ })).toBeTruthy();
-  expect(screen.queryByText("ready")).toBeNull();
-  expect(screen.getByText("not ready")).toBeTruthy();
-  // AND THE REASON IS PRINTED ONCE. The surface's own band carries it; the
-  // row keeps who this agent is at the app, which is the question the roster
-  // exists to answer and stays true of a seat the app is refusing.
-  expect(screen.getAllByText(/still giving SRE Lead's new account access/).length).toBe(1);
-  expect(screen.getByText(/serviceaccount\.atlassian\.com/)).toBeTruthy();
-});
-
-// AND AN AGENT NOBODY HAS A FINDING ABOUT KEEPS ITS BADGE, so this does not
-// turn every roster amber.
-test("an agent no surface reports on is still badged ready", () => {
-  render(
-    <EntryRow
-      entry={atlassian}
-      rows={rowsOf({ key: "atlassian", configured: true }, { key: "jira", configured: true })}
-      sections={sectionsFor(
-        atlassian,
-        new Map([
-          [
-            "jira",
-            toolState({
-              key: "jira",
-              configured: true,
-              requirements: [],
-              can_provision: true,
-              seats: [{ handle: "sre-lead", name: "SRE Lead", requirements: [], satisfied: true }],
-            }),
-          ],
-        ]),
-      )}
-    />,
-  );
-  expect(screen.getByRole("button", { name: /Hide Atlassian details/ })).toBeTruthy();
-  expect(screen.getByText("ready")).toBeTruthy();
-});
-
 // DISCONNECT IS NEVER A SILENT NO-OP, AND THE ROWS ARE WHAT KEEPS IT FROM
 // BEING ONE.
 //
@@ -1857,209 +1088,4 @@ test("an unconfigured surface stays out of the disconnect order", () => {
   expect(disconnectOrder(atlassian, rowsOf({ key: "jira", configured: true }), [])).toEqual([
     "jira",
   ]);
-});
-
-// AN ADVISORY FINDING DOES NOT UN-READY A WORKING AGENT.
-//
-// Two of the engine's kinds carry a verdict of `ready` — a permission wider
-// than the role asked for, a registration it no longer manages but which is
-// still delivering. Both are notes on a healthy integration, and Classify
-// ranks them beneath every real problem for that reason. Badging the agent
-// amber contradicted the card's own Connected tag, on a seat with nothing
-// wrong with it.
-test("an advisory finding leaves the agent badged ready", () => {
-  render(
-    <EntryRow
-      entry={atlassian}
-      rows={rowsOf(
-        { key: "atlassian", configured: true },
-        {
-          key: "jira",
-          configured: true,
-          reconcile: {
-            phase: "ready",
-            actor: "admin",
-            findings: [
-              {
-                kind: "grant_excess",
-                subject: "sre-lead",
-                detail: "sre-lead holds more access than its role asks for",
-                phase: "ready",
-                actor: "admin",
-              },
-            ],
-          },
-        },
-      )}
-      sections={sectionsFor(
-        atlassian,
-        new Map([
-          [
-            "jira",
-            toolState({
-              key: "jira",
-              configured: true,
-              requirements: [],
-              can_provision: true,
-              seats: [{ handle: "sre-lead", name: "SRE Lead", requirements: [], satisfied: true }],
-            }),
-          ],
-        ]),
-      )}
-    />,
-  );
-  expect(screen.getByRole("button", { name: /Hide Atlassian details/ })).toBeTruthy();
-  // "not ready" is the discriminating half: with the bug the roster row
-  // carried it. getAllByText for the positive half because a card whose
-  // surfaces are ready has more than one badge saying so.
-  expect(screen.queryByText("not ready")).toBeNull();
-  expect(screen.getAllByText("ready").length).toBeGreaterThan(0);
-});
-
-// AND A FINDING WHOSE VERDICT THIS BUILD CANNOT READ IS A FAULT, not an
-// advisory. A newer peer can write a kind this build has never heard of, under
-// a phase it has never heard of either — read as advisory, that would hide a
-// broken agent behind a green badge. Only `ready` is advisory.
-test("a finding of a kind and phase this build does not know still un-readies the agent", () => {
-  render(
-    <EntryRow
-      entry={atlassian}
-      rows={rowsOf(
-        { key: "atlassian", configured: true },
-        {
-          key: "jira",
-          configured: true,
-          reconcile: {
-            phase: "degraded",
-            actor: "admin",
-            findings: [
-              {
-                kind: "something_newer",
-                phase: "something_newer",
-                actor: "admin",
-                subject: "sre-lead",
-                detail: "unknown",
-              },
-            ],
-          },
-        },
-      )}
-      sections={sectionsFor(
-        atlassian,
-        new Map([
-          [
-            "jira",
-            toolState({
-              key: "jira",
-              configured: true,
-              requirements: [],
-              can_provision: true,
-              seats: [{ handle: "sre-lead", name: "SRE Lead", requirements: [], satisfied: true }],
-            }),
-          ],
-        ]),
-      )}
-    />,
-  );
-  expect(screen.getByRole("button", { name: /Hide Atlassian details/ })).toBeTruthy();
-  expect(screen.getByText("not ready")).toBeTruthy();
-});
-
-// THE HEADLINE FINDING IS LAID OUT IN FOUR SLOTS, not rendered as one
-// paragraph carrying all of them.
-//
-// Measured on a live card, as one unbroken line: "1 agent(s) have no GitHub
-// App of their own, so nothing they do on GitHub is theirs: sre-lead. Create
-// one per agent from Company › Integrations, GitHub offers no API for it,
-// so it is a click there and nothing else can do it.all 1 agents without an
-// app". A problem, a name, an instruction and a disclosure summary, at one
-// weight, with the last running into the sentence before it.
-test("a finding renders its problem, subjects and remedy as separate parts", () => {
-  render(
-    <Reconcile
-      appName="GitHub"
-      status={{
-        phase: "awaiting_admin",
-        actor: "admin",
-        detail: "4 agents have no GitHub App of their own",
-        findings: [
-          {
-            kind: "approval_required",
-            subject: "agents without an app",
-            detail: "4 agents have no GitHub App of their own",
-            remedy: "Create one per agent — GitHub offers no API for it.",
-            subjects: ["sre-lead", "cs-lead", "swe", "pm"],
-          },
-        ],
-      }}
-    />,
-  );
-  // EVERY SUBJECT IS A THING ON SCREEN, scannable, rather than prose inside
-  // the sentence.
-  for (const handle of ["sre-lead", "cs-lead", "swe", "pm"]) {
-    expect(screen.getByText(handle)).toBeTruthy();
-  }
-  // AND THE REMEDY IS ITS OWN ELEMENT, so it can be laid out under the
-  // problem at a quieter weight rather than appended to the sentence.
-  const remedy = screen.getByText(/Create one per agent/);
-  expect(remedy.className).toContain("int-note-remedy");
-  expect(remedy.textContent).not.toContain("no GitHub App of their own");
-});
-
-// A LIST LONGER THAN THE CARD EXPANDS IN PLACE.
-//
-// The reason the rest are folded is width rather than secrecy, and the
-// measured long case — thirty-six Datadog service accounts — is a list
-// somebody is working through, so it must not send them elsewhere to read it.
-test("a long subject list folds to a count that expands", () => {
-  const many = Array.from({ length: 12 }, (_, i) => `agent-${i}@agents.test.invalid`);
-  render(
-    <Reconcile
-      appName="Datadog"
-      status={{
-        phase: "ready",
-        detail: "Crewlet made 12 enabled service accounts matching no seat",
-        findings: [
-          {
-            kind: "registration_orphaned",
-            subject: "datadog service accounts",
-            detail: "Crewlet made 12 enabled service accounts matching no seat",
-            subjects: many,
-          },
-        ],
-      }}
-    />,
-  );
-  const last = "agent-11@agents.test.invalid";
-  expect(screen.queryByText(last)).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: /\+6 more/ }));
-  expect(screen.getByText(last)).toBeTruthy();
-});
-
-// AND ONE SUBJECT IS NOT A DISCLOSURE SAYING "all 1 agents".
-//
-// The summary was built as `all {n} {subject}s`, so a finding about one thing
-// read "all 1 agents without an app" — ungrammatical twice — under a sentence
-// that had already named the agent, and needed a click to reveal what it had
-// just repeated.
-test("one subject is shown, not hidden behind a count", () => {
-  render(
-    <Reconcile
-      appName="GitHub"
-      status={{
-        phase: "awaiting_admin",
-        detail: "sre-lead has no GitHub App of its own",
-        findings: [
-          {
-            kind: "approval_required",
-            subject: "agents without an app",
-            detail: "sre-lead has no GitHub App of its own",
-            subjects: ["sre-lead"],
-          },
-        ],
-      }}
-    />,
-  );
-  expect(screen.queryByText(/all 1/)).toBeNull();
-  expect(screen.queryByRole("button", { name: /more/ })).toBeNull();
 });

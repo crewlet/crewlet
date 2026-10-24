@@ -1,0 +1,699 @@
+/**
+ * The detail of a service built into Crewlet, laid out as a third-party
+ * app's is (a header with its state and one line, the counts, and Overview,
+ * Agents, Activity and Settings) and filled only with what the engine answers.
+ *
+ * WHAT EACH PART READS, and why it is honest:
+ *
+ *  - WHO WORKS IN IT. Every agent seat holds both of Crewlet's apps
+ *    (`iam.Apps`), so the Agents tab lists every agent rather than a roster
+ *    of who connected. What it adds per agent is what the engine counts:
+ *    open, blocked and overdue work (`work_workload`), and the space an agent
+ *    writes in and the pages it reads at onboarding (the company document and
+ *    the derived chart).
+ *  - THE COUNTS. Projects and their open tasks (`work_projects`), spaces and
+ *    their pages (`containers`), and the newest change on each log
+ *    (`work_activity`, `page_activity`). No delivery count, because a
+ *    built-in service has no inbound edge to count.
+ *  - THE SETTINGS. The company document's `tracker` and `knowledge` blocks,
+ *    with the engine's own defaults where a key is unset, read only by an
+ *    Admin, as the `config` question is.
+ *
+ * A service the company runs elsewhere says what replaces it and what
+ * running it here would mean, with no control: switching is not offered yet.
+ */
+
+import { useMemo, useState, type ReactNode } from "react";
+import {
+  ButtonLink,
+  Callout,
+  DescriptionList,
+  EmptyValue,
+  List,
+  StatusDot,
+  Tabs,
+  Tag,
+} from "@crewlethq/ui";
+import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
+import { VendorMark } from "@crewlethq/icons";
+import { CheckGlyph } from "@crewlethq/icons/glyphs";
+import { href } from "~/app/router.tsx";
+import { useQuery } from "~/lib/useQuery.ts";
+import { useOrg } from "~/lib/store-hooks.ts";
+import { documentUnits, handleLabel, indexOrg, type Seat } from "~/lib/seats.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { useServicesAsk } from "~/lib/services.ts";
+import { useNow } from "~/lib/clock.ts";
+import { KNOWLEDGE, TRACKER, needsWords } from "~/lib/access.ts";
+import { fmtCount, plural, relTime } from "~/lib/format.ts";
+import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import type { CompanyDocument } from "~/protocol/types.ts";
+import { ServiceMark, ServiceState } from "./parts.tsx";
+import type { BuiltInService, Model } from "./model.ts";
+
+/** What a settings row says for a key the company document leaves unset. */
+const DEFAULT = "The engine's default";
+
+/** What a service gives the company, for the off state and Chat. */
+const GIVES: Record<BuiltInService["key"], string[]> = {
+  works: [
+    "Projects and tasks, on boards and lists",
+    "An inbox and My work for every person",
+    "Asks that wait on a person's decision",
+  ],
+  knowledge: [
+    "Spaces and pages, with every revision kept",
+    "Search across pages and work, by words and meaning",
+    "Skills and diaries the agents read before they act",
+  ],
+  chat: [
+    "Talk with any agent from inside Crewlet",
+    "Keep a conversation beside the work it is about",
+    "Nothing to install: your agents are already here",
+  ],
+};
+
+/** Where a seat works and writes, from the company document. */
+function homeOf(
+  doc: CompanyDocument | null | undefined,
+  handle: string,
+): { project?: string; space?: string } {
+  for (const role of doc?.roles ?? []) {
+    if (role.handle === handle) {
+      return {
+        ...(role.project ? { project: role.project } : {}),
+        ...(role.space ? { space: role.space } : {}),
+      };
+    }
+  }
+  for (const unit of documentUnits(doc)) {
+    if ((unit.roles ?? []).some((r) => r.handle === handle)) {
+      return {
+        ...(unit.project ? { project: unit.project } : {}),
+        ...(unit.space ? { space: unit.space } : {}),
+      };
+    }
+  }
+  return {};
+}
+
+function block(
+  doc: CompanyDocument | null | undefined,
+  key: "tracker" | "knowledge",
+): Record<string, unknown> {
+  const value = (doc as Record<string, unknown> | null | undefined)?.[key];
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+/** What replaces a service the company does not run here. */
+function Elsewhere({ service, model }: { service: BuiltInService; model: Model | null }) {
+  const by = service.replacedBy;
+  const tool = model?.byKey.get("atlassian");
+  const what = service.key === "works" ? "tasks" : "pages";
+  return (
+    <div className="int-service-off">
+      <Callout
+        variant="neutral"
+        icon={by ? <VendorMark vendor="atlassian" size="md" /> : undefined}
+        title={by ? `${by.name} does this for your company` : "Your company runs none"}
+      >
+        {by
+          ? `Your agents work in ${by.name} through the Atlassian integration, so ${service.name} stays off. Running both would leave two places for the same ${what}.`
+          : `The company document turns ${service.name} off and names nothing in its place.`}
+      </Callout>
+      <section aria-label={`What ${service.name} would give you`}>
+        <h3 className="t-label">Running it here would give you</h3>
+        <List variant="plain" className="int-checks">
+          {GIVES[service.key].map((line) => (
+            <List.Item key={line} leading={<CheckGlyph size="sm" aria-hidden />}>
+              {line}
+            </List.Item>
+          ))}
+        </List>
+      </section>
+      <p className="t-caption">
+        The company document decides which system holds the company&apos;s {what}, so this page
+        offers no switch: moving them is a change to plan, not a toggle.
+      </p>
+      {by && (
+        <div className="int-row-start">
+          <ButtonLink
+            size="small"
+            variant="secondary"
+            href={href(["company", "integrations", by.key])}
+          >
+            Open {by.name}
+          </ButtonLink>
+          {tool && !tool.configured && (
+            <span className="t-caption">Atlassian is not connected.</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One agent's line on a service's Agents tab. */
+function AgentLine({ seat, detail, state }: { seat: Seat; detail: string; state: ReactNode }) {
+  return (
+    <div className="int-seat">
+      <SeatAvatar name={seat.name} kind="agent" avatar={seat.avatar} size="sm" decorative />
+      <div className="int-seat-id">
+        <span className="int-seat-name">{seat.name}</span>
+        <span className="t-caption">{detail}</span>
+      </div>
+      {state}
+      <span className="int-seat-act" />
+    </div>
+  );
+}
+
+/** A row of a service's activity feed. */
+function FeedRow({
+  who,
+  what,
+  at,
+  now,
+}: {
+  who: string;
+  what: ReactNode;
+  at: string;
+  now: number;
+}) {
+  return (
+    <li className="int-feed-row">
+      <span className="int-feed-what">
+        <strong>{who}</strong> {what}
+      </span>
+      <span className="t-caption int-feed-at">{relTime(at, now)}</span>
+    </li>
+  );
+}
+
+const VERBS: Record<string, string> = {
+  created: "created",
+  updated: "updated",
+  commented: "commented on",
+  assigned: "assigned",
+  moved: "moved",
+  closed: "closed",
+  reopened: "reopened",
+  removed: "removed",
+  restored: "restored",
+  asked: "asked on",
+  answered: "answered on",
+  edited: "edited",
+  renamed: "renamed",
+  page_created: "created",
+  page_edited: "edited",
+};
+
+function verb(kind: string): string {
+  return VERBS[kind] ?? kind.replace(/_/g, " ");
+}
+
+type Tab = "overview" | "agents" | "activity" | "settings";
+
+function useTab(): [Tab, (t: string) => void] {
+  const [tab, setTab] = useState<Tab>("overview");
+  return [tab, (t) => setTab(t as Tab)];
+}
+
+function ServiceTabs({
+  name,
+  tab,
+  onTab,
+  agents,
+}: {
+  name: string;
+  tab: Tab;
+  onTab: (t: string) => void;
+  agents: number;
+}) {
+  return (
+    <Tabs
+      variant="underline"
+      ariaLabel={`${name} sections`}
+      value={tab}
+      onValueChange={onTab}
+      items={[
+        { value: "overview", label: "Overview" },
+        { value: "agents", label: "Agents", count: agents },
+        { value: "activity", label: "Activity" },
+        { value: "settings", label: "Settings" },
+      ]}
+    />
+  );
+}
+
+export function ServicePane({ service, model }: { service: BuiltInService; model: Model | null }) {
+  const head: Head = (line, actions, facts) => (
+    <ObjectHeader
+      kind="Built into Crewlet"
+      icon="plug"
+      mark={<ServiceMark service={service} size={36} />}
+      title={service.name}
+      status={<ServiceState service={service} />}
+      description={line}
+      facts={facts}
+      actions={actions}
+    />
+  );
+  if (service.key === "chat") return <ChatPane service={service} head={head} />;
+  if (!service.known) return <div className="int-detail">{head(service.sentence)}</div>;
+  if (!service.on) {
+    return (
+      <div className="int-detail">
+        {head(service.sentence)}
+        <Elsewhere service={service} model={model} />
+      </div>
+    );
+  }
+  return service.key === "works" ? (
+    <WorksPane service={service} head={head} />
+  ) : (
+    <KnowledgePane service={service} head={head} />
+  );
+}
+
+type Head = (line: ReactNode, actions?: ReactNode, facts?: Fact[]) => ReactNode;
+
+function WorksPane({ service, head }: { service: BuiltInService; head: Head }) {
+  const viewer = useViewer();
+  const ask = useServicesAsk();
+  const enabled = ask.tracker && viewer.tracker;
+  const now = useNow();
+  const org = useOrg();
+  const agents = useMemo(() => indexOrg(org).seats.filter((s) => s.kind === "agent"), [org]);
+  const projects = useQuery("work_projects", { limit: 200 }, { enabled, pollMs: 120_000 });
+  const workload = useQuery("work_workload", undefined, { enabled, pollMs: 60_000 });
+  const feed = useQuery(
+    "work_activity",
+    { container: "workspace", limit: 20 },
+    { enabled, pollMs: 60_000 },
+  );
+  const config = useQuery("config", undefined, { enabled: viewer.admin });
+  const [tab, setTab] = useTab();
+
+  const rows = projects.data?.projects ?? [];
+  const open = projects.data
+    ? rows.reduce((n, p) => n + p.task_counts.todo + p.task_counts.active, 0)
+    : null;
+  const load = new Map((workload.data?.rows ?? []).map((r) => [r.handle, r]));
+  const busy = agents.filter((a) => (load.get(a.handle)?.open ?? 0) > 0).length;
+  const records = feed.data?.records ?? [];
+  const latest = records[0]?.at;
+  const keys = feed.data?.keys ?? {};
+  const nameOf = (handle: string | undefined) =>
+    agents.find((a) => a.handle === handle)?.name ?? handle ?? "Someone";
+  const tracker = block(config.data, "tracker");
+  // AN UNSET KEY IS THE ENGINE'S DEFAULT, said as such: a copy of the
+  // engine's constant here would be a second answer that drifts.
+  const retention =
+    typeof tracker.inbox_retention_days === "number" && tracker.inbox_retention_days > 0
+      ? `${tracker.inbox_retention_days} days`
+      : DEFAULT;
+
+  if (!enabled) {
+    return (
+      <div className="int-detail">
+        {head(service.sentence)}
+        <Callout variant="neutral">
+          {needsWords("Seeing its projects, tasks and who is working on what", [TRACKER])}
+        </Callout>
+      </div>
+    );
+  }
+
+  return (
+    <div className="int-detail">
+      {/* THE LINE IS WHAT THE SERVICE IS; the counts are the facts under it,
+          said once. */}
+      {head(
+        service.sentence,
+        service.open && (
+          <ButtonLink size="small" variant="primary" href={href(service.open.path)}>
+            {service.open.label}
+          </ButtonLink>
+        ),
+        [
+          {
+            label: "Projects",
+            value: projects.data ? (
+              fmtCount(projects.data.census.active)
+            ) : (
+              <EmptyValue label="Reading" />
+            ),
+          },
+          {
+            label: "Open tasks",
+            value: open === null ? <EmptyValue label="Reading" /> : fmtCount(open),
+          },
+          {
+            label: "Agents with work",
+            value: workload.data ? `${busy} of ${agents.length}` : <EmptyValue label="Reading" />,
+          },
+          {
+            label: "Last change",
+            value: latest ? relTime(latest, now) : <EmptyValue label="No change yet" />,
+          },
+        ],
+      )}
+      <ServiceTabs name={service.name} tab={tab} onTab={setTab} agents={agents.length} />
+      {tab === "overview" && (
+        <div className="int-tab">
+          <section aria-label="Projects">
+            <h3 className="t-label">Projects</h3>
+            <ul className="int-feed">
+              {rows.map((p) => (
+                <li key={p.key} className="int-feed-row">
+                  <a className="int-feed-what" href={href(["work", p.key])}>
+                    <strong>{p.name}</strong> <span className="mono">{p.key}</span>
+                  </a>
+                  <span className="t-caption int-feed-at">
+                    {p.task_counts.todo + p.task_counts.active} open · {p.task_counts.done} done
+                  </span>
+                </li>
+              ))}
+              {projects.data && rows.length === 0 && <li className="t-caption">No project yet.</li>}
+            </ul>
+          </section>
+        </div>
+      )}
+      {tab === "agents" && (
+        <div className="int-tab">
+          <p className="t-caption">
+            Every agent works in Crewlet Works: it holds the Tracker app with its seat.
+          </p>
+          <div className="int-seats">
+            {agents.map((a) => {
+              const row = load.get(a.handle);
+              const home = homeOf(config.data, a.handle);
+              const detail = [
+                home.project ? `Files work in ${home.project}` : "",
+                row ? `${row.blocked} blocked · ${row.overdue} overdue` : "",
+              ]
+                .filter(Boolean)
+                .join(" · ");
+              return (
+                <AgentLine
+                  key={a.handle}
+                  seat={a}
+                  detail={detail || handleLabel(a.handle)}
+                  state={
+                    <Tag
+                      size="sm"
+                      variant={row && row.open > 0 ? "info" : "neutral"}
+                      appearance={row && row.open > 0 ? "soft" : "outline"}
+                    >
+                      {row && row.open > 0 ? `${row.open} open` : "Nothing open"}
+                    </Tag>
+                  }
+                />
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {tab === "activity" && (
+        <div className="int-tab">
+          <ul className="int-feed">
+            {records.map((r) => (
+              <FeedRow
+                key={r.id}
+                who={nameOf(r.actor)}
+                what={
+                  <>
+                    {verb(r.kind)}{" "}
+                    <span className="mono">{r.subject_key ?? keys[r.subject_id] ?? "a task"}</span>
+                    {r.excerpt ? <span className="t-caption"> · {r.excerpt}</span> : null}
+                  </>
+                }
+                at={r.at}
+                now={now}
+              />
+            ))}
+            {feed.data && records.length === 0 && (
+              <li className="t-caption">Nothing has changed yet.</li>
+            )}
+          </ul>
+        </div>
+      )}
+      {tab === "settings" && (
+        <div className="int-tab">
+          <DescriptionList
+            dense
+            items={[
+              ["Work tracker", "Crewlet Works"],
+              [
+                "Inbox keeps a row for",
+                viewer.admin ? retention : <EmptyValue label="Admins see this" />,
+              ],
+              [
+                "Projects the chart declares",
+                viewer.admin ? (
+                  documentUnits(config.data)
+                    .map((u) => u.project)
+                    .filter(Boolean)
+                    .join(", ") || <EmptyValue label="None" />
+                ) : (
+                  <EmptyValue label="Admins see this" />
+                ),
+              ],
+            ]}
+          />
+          <p className="t-caption">These live in the company document, under tracker.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function KnowledgePane({ service, head }: { service: BuiltInService; head: Head }) {
+  const viewer = useViewer();
+  const ask = useServicesAsk();
+  const enabled = ask.knowledge && viewer.knowledge;
+  const now = useNow();
+  const org = useOrg();
+  const index = useMemo(() => indexOrg(org), [org]);
+  const agents = useMemo(() => index.seats.filter((s) => s.kind === "agent"), [index]);
+  const chains = useMemo(
+    () => new Map((org?.derived?.seats ?? []).map((s) => [s.handle, s.onboarding_chain ?? []])),
+    [org],
+  );
+  const containers = useQuery("containers", undefined, { enabled, pollMs: 60_000 });
+  const feed = useQuery("page_activity", { limit: 20 }, { enabled, pollMs: 60_000 });
+  const config = useQuery("config", undefined, { enabled: viewer.admin });
+  const [tab, setTab] = useTab();
+
+  const spaces = containers.data?.containers ?? [];
+  const pages = containers.data ? spaces.reduce((n, c) => n + c.pages, 0) : null;
+  const changes = feed.data?.changes ?? [];
+  const latest = changes[0]?.at;
+  const knowledge = block(config.data, "knowledge");
+  const nameOf = (handle: string | undefined) =>
+    index.byHandle.get(handle ?? "")?.name ?? handle ?? "Someone";
+  const skills =
+    typeof knowledge.skills_container === "string" ? knowledge.skills_container : undefined;
+  const scope = Array.isArray(knowledge.scope) ? (knowledge.scope as string[]) : [];
+
+  if (!enabled) {
+    return (
+      <div className="int-detail">
+        {head(service.sentence)}
+        <Callout variant="neutral">
+          {needsWords("Seeing its spaces, pages and what changed", [KNOWLEDGE])}
+        </Callout>
+      </div>
+    );
+  }
+
+  return (
+    <div className="int-detail">
+      {head(
+        service.sentence,
+        service.open && (
+          <ButtonLink size="small" variant="primary" href={href(service.open.path)}>
+            {service.open.label}
+          </ButtonLink>
+        ),
+        [
+          {
+            label: "Spaces",
+            value: containers.data ? fmtCount(spaces.length) : <EmptyValue label="Reading" />,
+          },
+          {
+            label: "Pages",
+            value: pages === null ? <EmptyValue label="Reading" /> : fmtCount(pages),
+          },
+          {
+            label: "Last edit",
+            value: latest ? relTime(latest, now) : <EmptyValue label="No edit yet" />,
+          },
+        ],
+      )}
+      <ServiceTabs name={service.name} tab={tab} onTab={setTab} agents={agents.length} />
+      {tab === "overview" && (
+        <div className="int-tab">
+          <section aria-label="Spaces">
+            <h3 className="t-label">Spaces</h3>
+            <ul className="int-feed">
+              {spaces.map((c) => (
+                <li key={c.key} className="int-feed-row">
+                  <a className="int-feed-what" href={href(["knowledge", c.key])}>
+                    <strong>{c.name || c.key}</strong> <span className="mono">{c.key}</span>
+                  </a>
+                  <span className="t-caption int-feed-at">{plural(c.pages, "page")}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        </div>
+      )}
+      {tab === "agents" && (
+        <div className="int-tab">
+          <p className="t-caption">
+            Every agent reads and writes the knowledge base: it holds the Knowledge app with its
+            seat.
+          </p>
+          <div className="int-seats">
+            {agents.map((a) => {
+              const home = homeOf(config.data, a.handle);
+              const space = home.space ? spaces.find((c) => c.key === home.space) : undefined;
+              const chain = chains.get(a.handle) ?? [];
+              return (
+                <AgentLine
+                  key={a.handle}
+                  seat={a}
+                  detail={
+                    [
+                      home.space
+                        ? `Writes in ${home.space}${space ? ` (${plural(space.pages, "page")})` : ""}`
+                        : "",
+                      chain.length > 0
+                        ? `Reads ${plural(chain.length, "onboarding page")} first`
+                        : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" · ") || handleLabel(a.handle)
+                  }
+                  state={
+                    <StatusDot tone={home.space || !viewer.admin ? "success" : "neutral"}>
+                      {home.space
+                        ? "Has a space"
+                        : viewer.admin
+                          ? "No space of its own"
+                          : "Reads and writes"}
+                    </StatusDot>
+                  }
+                />
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {tab === "activity" && (
+        <div className="int-tab">
+          <ul className="int-feed">
+            {changes.map((c) => (
+              <FeedRow
+                key={c.id}
+                who={nameOf(c.actor)}
+                what={
+                  <>
+                    {verb(c.kind)}{" "}
+                    <a className="prose-link" href={href(["knowledge", "pages", c.page_id])}>
+                      {c.title || "a page"}
+                    </a>
+                    {c.container ? <span className="t-caption"> in {c.container}</span> : null}
+                  </>
+                }
+                at={c.at}
+                now={now}
+              />
+            ))}
+            {feed.data && changes.length === 0 && (
+              <li className="t-caption">No page has changed yet.</li>
+            )}
+          </ul>
+        </div>
+      )}
+      {tab === "settings" && (
+        <div className="int-tab">
+          <DescriptionList
+            dense
+            items={[
+              ["Knowledge base", "Crewlet Knowledge"],
+              ...(viewer.admin
+                ? ([
+                    [
+                      "Company pages",
+                      typeof knowledge.root_space === "string" ? knowledge.root_space : DEFAULT,
+                    ],
+                    ["Tool skills", skills === "" ? "Off" : (skills ?? DEFAULT)],
+                    ["Search reaches", scope.length > 0 ? scope.join(", ") : "Every space"],
+                    [
+                      "Search by meaning",
+                      knowledge.vectors === false
+                        ? "Off"
+                        : knowledge.vectors === true
+                          ? "On"
+                          : "When an embeddings provider is set",
+                    ],
+                  ] as [string, string][])
+                : ([["Everything else", "Admins see this"]] as [string, string][])),
+            ]}
+          />
+          <p className="t-caption">These live in the company document, under knowledge.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Crewlet Chat: what it will do, and nothing it cannot count yet. */
+function ChatPane({ service, head }: { service: BuiltInService; head: Head }) {
+  return (
+    <div className="int-detail">
+      {head("Talk with your agents in Crewlet itself.")}
+      <div className="int-soon">
+        <div aria-hidden>
+          <ServiceMark service={{ ...service, soon: false }} size={64} />
+        </div>
+        <div className="int-soon-copy">
+          <h3 className="int-step-title">Coming soon</h3>
+          <p className="t-body">
+            Chat puts the conversation where the work already is, so asking an agent something does
+            not mean leaving Crewlet for another app.
+          </p>
+          <List variant="plain" className="int-checks">
+            {GIVES.chat.map((line) => (
+              <List.Item key={line} leading={<CheckGlyph size="sm" aria-hidden />}>
+                {line}
+              </List.Item>
+            ))}
+          </List>
+          <p className="t-caption">
+            Until it ships, your team talks with agents in Slack or Mattermost.
+          </p>
+          <div className="int-row-start">
+            <ButtonLink
+              size="small"
+              variant="secondary"
+              href={href(["company", "integrations", "slack"])}
+            >
+              Slack
+            </ButtonLink>
+            <ButtonLink
+              size="small"
+              variant="secondary"
+              href={href(["company", "integrations", "mattermost"])}
+            >
+              Mattermost
+            </ButtonLink>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -114,6 +114,7 @@ export function FactLine({ facts }: { facts: Fact[] }) {
 export function ObjectHeader({
   kind,
   icon,
+  mark,
   identifier,
   within,
   title,
@@ -127,6 +128,8 @@ export function ObjectHeader({
   kind: string;
   /** The eyebrow's glyph: a name from the glyph set, or a drawn glyph (an artifact's own icon). */
   icon?: GlyphName | ReactElement;
+  /** The object's own mark beside its title: a vendor's, a product's. See uilet's `ObjectHeader.mark`. */
+  mark?: ReactNode;
   /** The key, handle or id, in the mono face. */
   identifier?: string;
   /** WHOSE the object is, where that is part of its identity and is a name rather than a key. */
@@ -144,6 +147,7 @@ export function ObjectHeader({
     <KitObjectHeader
       kind={kind}
       icon={typeof icon === "string" ? <NamedGlyph name={icon} size="xs" /> : icon}
+      mark={mark}
       description={description}
       identifier={identifier}
       within={within}

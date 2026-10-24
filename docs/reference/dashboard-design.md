@@ -48,17 +48,21 @@ engine's in both directions.
 
 There are five exceptions, and each is held to exactly what makes it one.
 
-The first is a **third-party app's own mark** on the Integrations
-screen (`VendorMark`, from `@crewlethq/icons`): Slack's four colours,
+The first is a **third-party app's own mark** on Company › Integrations
+(`VendorMark`, from `@crewlethq/icons`): Slack's four colours,
 Atlassian's blue, GitLab's orange,
 Datadog's violet, drawn as the third-party app draws them. A mark is identity by
 definition, and a recoloured Slack mark is not Slack's. The exception is held
 to exactly that: a mark is drawn only beside the third-party app's name,
 nothing reads state from it, none of its hues is reused as a token, and the
 integration's STATE beside it is carried by the status tone like everything
-else. A tool the company has not set up keeps its mark, drained of its
-colour (the kit's `muted` mark) — the mark rather than the tile, because the
-mark is decoration beside the name and the tile's text keeps its contrast.
+else. A tool the company has not set up keeps its mark at full strength:
+whether it is connected is the state beside it, and a drained Datadog read as
+a placeholder image rather than as Datadog. Crewlet's own services carry their
+**product marks** (`ProductMark`) on the same terms: drawn only beside the
+service's name, the one place the brand's violet is identity rather than a
+token, and Crewlet Chat's *coming soon* is the mark's own soon state, never a
+greyed copy.
 
 The second exception is the organization's two charts, **Company › Org chart**
 and **Org chart › Edit org**, which draw it the way the console's org chart does:
@@ -667,7 +671,7 @@ Settings and Preferences as glyphs beside them.
 | **Policies** | `#/company/policies` | none |
 | **Org chart** | `#/company/org` | none |
 | **Schedules** | `#/company/schedules` | none |
-| **Integrations** | `#/company/integrations` | none; locked for a reader who is not an admin, as connecting a tool always was |
+| **Integrations** | `#/company/integrations` | none; every reader opens it, and an app's state and connecting are an Admin's on the page itself |
 | **Budgets** | `#/company/budgets` | none (tokens only; nothing in this product renders money) |
 | *Workspace* | | |
 | **Work** | `#/work` | — |
@@ -799,7 +803,8 @@ reads. An APP's sections need that app: Inbox, My work, Work and Settings ›
 Expensive tasks are the tracker's, Knowledge is the knowledge base's. And the
 company-wide TRANSCRIPTS (Live › Turns, Agent-to-agent and the Event log,
 Knowledge › Agent diaries, and a seat's Turns and Memory tabs to anybody but its
-lead), Company › Integrations and every other Settings page are admin's. Every comparison goes through
+lead) and every other Settings page are admin's; Company › Integrations is
+every reader's, with an app's state and connecting kept for Admins on the page. Every comparison goes through
 `lib/access.ts`'s `holdsAny`, which counts every app an admin carries, so an
 administrator is never drawn a lock on an app. A sidebar row is
 locked only when NOTHING in its workspace is open, its title naming the access
@@ -852,8 +857,9 @@ widget shows where it is placed. An address under a hidden
 place draws a notice in place (`app/ServiceNotice.tsx`): what the company runs
 instead, in the engine's word, and why the page asked for is not here (a New
 design address says a design is made by an agent working a task). It is
-readable by every signed-in reader, and offers Company › Integrations only to
-a reader who may open it, since Integrations is an administrator's page. It
+readable by every signed-in reader, and offers the service's own page under
+Company › Integrations (`#/company/integrations/works` or `/knowledge`) to a
+reader who may open it, which is every reader. It
 is drawn only once the engine has answered, so a deep link opened on a cold
 tab is never refused on a guess. Until the org projection arrives every
 place is DRAWN as if its service ran, so nothing is hidden on a guess, but no
@@ -1159,7 +1165,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/company/org/edit` | **Org chart › Edit org**: the builder, opened from the chart's button, where the charter and the standing policies are written too *(saves as an admin, or as a unit's lead inside the units they lead)* | `view=visualization\|table` · `chart=structure\|reporting` · `unit=` · `seat=` (the selection; arriving with one opens its editor) · `add=unit\|agent\|human` (opens the Add once, then leaves the address) · `edit=charter\|policies` (opens the company's charter once, at its top or at its Policies, then leaves the address) · `project=` (with `unit=` or `seat=`: Work's New project, which opens that node's editor on its Project field holding the key, then leaves the address) |
 | `#/company/org/seats/{handle}` | **Seat**, an agent's or a person's profile; a person's says what holds the seat, its holder, the open invitation that names it (with **Cancel invitation**), or nobody, with **Invite** and **Add person**, the gestures drawn for an admin. Handles live only under `seats/` | agent: `tab=overview\|work\|turns\|memory\|schedules\|settings` · `conversation=` (Memory); human: overview · work · settings |
 | `#/company/schedules` · `#/company/schedules/{scope_type}/{scope_id}/{name}` | **Schedules**, recurring work, its figures drawn once there is a schedule to count, and with none an empty state offering the configuration a schedule is written in to a reader who may open it; one schedule | |
-| `#/company/integrations` · `#/company/integrations/{kind}` | **Integrations**: **Built into Crewlet** first (Crewlet Works, Crewlet Knowledge, and Crewlet Chat, coming soon), each saying from the engine's own word whether the company runs it, runs another system in its place (Jira, Confluence) or none, with its counts and the way in where it is run; then the third-party catalogue, one tile per tool, under its own heading with its filter, on the same three-track grid so every tile edge lines up, and the address vendors deliver to as a quiet, copyable line under it. A tile draws a state only where it carries one (On, Connected, Needs attention); a service not run here or not yet shipped says so as its foot's quiet fact. No tabs *(needs Admin access)* | |
+| `#/company/integrations` · `#/company/integrations/{kind}` | **Integrations**: a directory grouped by need (Chat, Work tracking, Docs and knowledge, Code, Observability), Crewlet's own service first in each, Atlassian listed as Jira and Confluence, and the address apps deliver to at its foot; beside it the page of the line chosen (an app's Overview, Agents, Activity and Settings, its settings form opening in place; a service's counts, agents, activity and settings, or what does its work instead), and with nothing chosen what needs a look. `{kind}` is an app's key, a surface (`atlassian` and `forge` select Jira) or a service (`works`, `knowledge`, `chat`). Every reader's; an app's state and connecting are an Admin's | |
 | `#/company/budgets` | **Budgets**, the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an admin whose credential the document admits), and what is refusing. Last in Company: what the company decides, while what it spent is Settings › Token spend | `window=` is not read here |
 | `#/live` | **Live › Now running** — the running turns, the coding runs waiting on a person and the rest in a box, the activity strip and the recent phases | `window=15m\|1h\|6h` (the activity strip) · `seat=` (a handle) · `phase=` · `failed=true` (the same spelling Turns uses) |
 | `#/live/turns` · `#/live/turns/{id}` | **Turns** — the turns that ended over the window, counted by the engine, then every turn one row each; one turn *(needs Admin access)* | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `seat=` (a handle) · `failed=true\|false` · `sort=-started\|-tokens` (the engine's order) |
@@ -7558,58 +7564,121 @@ at the chart without claiming anything about its seats. A token is still
 declared in Tier A (`api.auth.tokens`) and changes at a restart. **It never
 reads a value back** — not a token's, not a password's, not a second factor's.
 
-**Company › Integrations** (`#/company/integrations`) is admin's, as connecting a
-tool always was, and lives under Company because which services the company
-runs and which apps it connects are the company's decisions, not the
-engine's. It has no tabs. It leads with **Built into Crewlet**, a row of cards
-for Crewlet's own services (Crewlet Works, Crewlet Knowledge, and Crewlet Chat,
-marked coming soon), drawn as a catalogue tile is: each says, from the
-engine's own word, whether the company runs it, runs another system in its
-place (Jira, Confluence) or none, with the count the service already answers
-(the projects Works holds, the spaces Knowledge holds) and the way in where it
-is run. Turning a service on or off is not offered: the company document
-decides it, and a switch here that did nothing would be a lie. The row has
-its own grid, three tracks for its three tiles, and a tile with no way in
-(Chat, or a service run elsewhere) draws no footer.
+**Company › Integrations** (`#/company/integrations`) is **every reader's**, and
+lives under Company because which services the company runs and which apps it
+connects are the company's decisions, not the engine's. It is a **directory
+beside a detail** (the kit's `DirectoryList` in a `ListDetail`): the list holds
+its place while the detail scrolls beside it (above a phone's width the screen
+asks the frame for the window's height, as the Inbox does), and on a phone the
+two are one column, the list until something is chosen, then the detail with a
+way back.
 
-Under it, under its own **Third-party apps** heading, with the All, Connected
-and Available filter and the address vendors deliver to (both are about these
-tiles alone), the third-party catalogue is a grid of **tiles, one per tool**, Slack, Mattermost,
-Atlassian, GitHub, GitLab, Datadog — each with the vendor's mark, the
-engine's word for its state (`tools[].label` from `integration.Rollup`, the
-same word everywhere the tool is named), one sentence and **one action**. The
-sentence is the roll-up's `reason` while something is owed, and what the tool
-does for the company otherwise. The foot counts what the engine sent: the
-agents on its roster, the credentials it holds a finding about, and the
-deliveries this node counted (only when `traffic_known`). **All · Connected ·
-Available** narrows the grid, with the rows' own counts. The action is exactly
-one of five, decided by `actionFor` from the same inputs as the tag:
+The directory is **grouped by need**, and each of Crewlet's own services opens
+its group, so the built-in answer sits beside the apps that answer the same
+need:
+
+| Group | Lines |
+|---|---|
+| Chat | Crewlet Chat (coming soon), Slack, Mattermost |
+| Work tracking | Crewlet Works, Jira |
+| Docs and knowledge | Crewlet Knowledge, Confluence |
+| Code | GitHub, GitLab |
+| Observability | Datadog |
+
+**Atlassian is listed by product**: it is one connection that serves two needs,
+so Jira sits under work tracking and Confluence under docs, each with its own
+product's state, and both open the one Atlassian page, since it is one key and
+one account per agent. A line carries its mark, its name (a product's app as a
+hint under it) and its state only where it carries one: **On**, **Off** or
+**Soon** for a service (none on a node running no company, which is "not known
+yet", never Off), and for an app the engine's bucket (*Connected*, *Needs
+attention*, *Setting up*), never *Not connected* repeated down the list. The
+**address apps deliver to** is the list's foot, said once, cut to fit with the
+whole of it in its title and copied with a press.
+
+**The address is the selection**: `#/company/integrations/{kind}` selects an
+app's key, a surface (`jira`, `confluence`, and the `forge` relay and
+`atlassian` select Jira's line) or a service (`works`, `knowledge`, `chat`), so
+every address the earlier tile page printed still lands on its tool. The bare
+address shows, beside the list, **what needs a look**: each issue under its
+app's name, linking to the app's page rather than fixing it out of context.
+
+**An app's page** is its header (the kit's `ObjectHeader` carrying the vendor's
+own mark, the engine's word for its state, its one-line description, and the
+facts: agents ready and the deliveries this node counted, only when
+`traffic_known`) and four tabs:
+
+- **Overview**: the issues, each its own row with what is wrong, what it is
+  about (its subjects as chips, a long list folded to a count that expands in
+  place), what to do, **who owes the next move** (*Waiting on you*, *Crewlet is
+  on it*, *The app is on it*) and the one control that answers it; the reconcile
+  loop's findings in the engine's words, and the facts a surface's own row
+  states (a secret that did not resolve, an address that moved, deliveries that
+  reach no agent, a pass that failed with nothing to show for it), each said
+  once. A working tool says so, and an advisory (an access wider than asked) is
+  a note, never an issue.
+- **Agents**: each agent with its standing, its tier where the app grades one
+  (the engine's own words, beside the name, weighted by trust only on a scale
+  the engine names), what it reaches, and its own step at the app (*Create app
+  on GitHub*, *Install on GitHub*); and **Check now**, which asks the reconcile
+  loop to look at the tool at once (`POST /setup/integrations/{kind}/check`).
+- **Activity**: the provisioning passes and each surface's deliveries.
+- **Settings**: what the tool is set to, a credential named and never shown.
+
+The header's one action is exactly one of four, decided by `actionFor` from
+the same inputs as the state:
 
 | Action | When | What it does |
 |---|---|---|
-| **Connect** | nothing configured | opens the tool's setup form |
-| **Continue** | a requirement unanswered, or a surface of a partly-connected tool not yet configured | opens the same form |
-| **Rotate token** | a `credential_expiring` or `credential_rejected` finding on a configured surface | opens the same form, titled *Rotate the {tool} token*, with the engine's reason first — type the new token over the held one and save; the engine seals it and re-activates the configuration |
-| **Manage** | anything else configured, including a tool the engine is mid-flight on | goes to `#/company/integrations/{tool}` |
-| **Learn more** | nothing configured and this build answers no form for it | opens the tool's page on docs.crewlet.ai |
+| **Connect** | nothing configured | opens the tool's settings form in the pane |
+| **Finish setup** | a requirement unanswered, or a surface of a partly-connected tool not yet configured | opens the same form |
+| **Replace key** | a `credential_expiring` or `credential_rejected` finding on a configured surface | opens the same form, headed *Replace the {tool} key*, with the engine's reason first |
+| *(none)* | anything else, including a tool this build answers no form for | the page is the tool's management, or links its docs |
 
-The section is admin's, so a reader without Admin meets the section's refusal
-in its place rather than a disabled form. On a [managed
-document](../concepts/configuration.md#managed-configuration), for a credential
-that is not one of its writers, the screen leads with a callout carrying the
-managed sentence, and **Connect** and **Continue** are disabled with it — they
-write the document — while **Rotate token** stays open: a rotation seals a
-value the document already names and changes nothing in it, which is the
-break-glass a managed deployment keeps for a person. On the tool's own page the
-same holds **Disconnect** and an agent's **Create app on GitHub**, and leaves
-the settings form, through which a credential is rotated, open. A
-tile carries no Disconnect: **the tool's own page is where Manage goes**, and
-it holds everything else — the facts, the agents and any faulted surface
-(open on arrival, behind a disclosure that can fold it away), each agent's own
-step at the vendor (*Create app on GitHub*, *Install on GitHub*), the settings
-square, **Disconnect**, the provisioning passes and each surface's deliveries.
-The catalogue ends at the tools this build serves: every other tool an agent
-can reach is an MCP server, added on Settings › MCP Tools. See [integration reconcile](../concepts/integration-reconcile.md#what-the-dashboard-shows).
+beside **Settings** and **Disconnect** on a connected tool. **The settings form
+opens in the pane** in place of the tabs, with the directory still beside it:
+connecting, finishing setup and replacing a key never leave the page. A tool
+not yet connected shows, in place of the tabs, what connecting gives the
+agents, how each gets in, and what to have ready. A credential the engine can
+check carries **Test key** under its field: one read-only call to the app
+(`POST /setup/integrations/{kind}/verify`), whose verdict (*works*, *refused*,
+*unreachable*, or not checked, with the app's reason) shows under the field
+and goes when the value is typed over; a credential the app proves only by
+using it says how, in its help. A check the engine turned away (a `${NAME}`
+naming no secret) says why and claims no verdict.
+
+**Crewlet's own services** have pages laid out as an app's and filled only
+with what the engine answers. Crewlet Works counts projects and their open
+tasks, lists the projects, every agent with its open, blocked and overdue
+work, the newest changes, and the `tracker` block's settings; Crewlet
+Knowledge counts spaces and pages, lists the spaces, every agent's own space
+and onboarding pages, the newest edits, and the `knowledge` block's settings.
+An unset key reads *The engine's default* rather than a copy of the engine's
+constant. A service the company runs elsewhere says what does its work instead
+(*Jira does this for your company*, with the way to Jira's page), what running
+it here would give, and that the company document decides it: turning a
+service on or off is not offered, since a switch here that did nothing would
+be a lie. Crewlet Chat is coming soon, pointing at Slack and Mattermost
+meanwhile.
+
+**A reader without Admin** sees the whole directory: the services with their
+states and their pages in full (each count read only where the reader holds
+that service's app), and the apps with no state, each page saying an admin
+connects and manages apps (and offering the sign-in to a reader who is
+nobody). Nothing on it asks a question the engine keeps for Admins: the
+`integrations` question, `/setup` and the `config` answer are read only for an
+Admin, and the address at the foot is the setup listing's, so it is not shown.
+
+On a [managed document](../concepts/configuration.md#managed-configuration),
+for a credential that is not one of its writers, the page leads with a callout
+carrying the managed sentence, and **Connect**, **Finish setup**,
+**Disconnect** and an agent's **Create app on GitHub** are disabled with it
+(they write the document), while **Replace key** and the settings form stay
+open: a rotation seals a value the document already names and changes nothing
+in it, which is the break-glass a managed deployment keeps for a person. The
+directory ends at the tools this build serves: every other tool an agent can
+reach is an MCP server, added on Settings › MCP Tools. See [integration
+reconcile](../concepts/integration-reconcile.md#what-the-dashboard-shows).
 
 **MCP Tools** (`#/settings/mcp-tools`, once Tools & MCP) is admin's, like every engine setting: it is where MCP
 servers are added and their launches read, and which tools a seat has is
@@ -9009,14 +9078,11 @@ to.
    never read back — no route returns either again, and the screen says so. A
    token the reader types on the sign-in screen is the other direction: it is
    sent once and kept nowhere.
-9. **A catalogue tile carries one action.** Company › Integrations draws
-   one tile per tool with exactly one control — Connect, Continue, Rotate
-   token, Manage or Learn more — because a grid is read in one glance, and
-   the card it replaced carried a tag, a Connect, a Disconnect, a settings
-   square and a chevron to say that nothing was owed. Everything else a tool
-   offers is on its own page, where the card that discloses its agents keeps
-   its disclosure on the identity block, never the whole header, so the
-   card's own buttons are not nested inside a button.
+9. **A directory line carries no control.** Company › Integrations lists
+   every tool and service as one link with its mark, its name and its state
+   where it has one, because a list is read in one glance; what a tool offers
+   (its one action, Settings, Disconnect, an agent's own step) is on its page
+   beside the list, where the reason for each sits next to it.
 10. **Every screen, section and filter is in the URL**, and obeys the
     push/replace table above.
 11. **A screen subscribes to the slices it reads and no others.**

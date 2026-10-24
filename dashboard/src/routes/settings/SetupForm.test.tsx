@@ -1,5 +1,5 @@
 /**
- * The setup dialog renders a form from data, and never renders a value.
+ * The setup form renders a form from data, and never renders a value.
  *
  * The invariant worth breaking a build over is the second one: no route the
  * engine serves returns a credential, so any value on this page would have to
@@ -7,37 +7,33 @@
  *
  * # `baseElement`, not `container`
  *
- * The dialog is `@crewlethq/ui`'s Modal, which PORTALS its surface to the
- * layer container — `document.body` with no `LayerHost` above it, which is
- * every test here. So the markup is no longer inside the div `render` returns
- * and `container` sees an empty box: `container.querySelectorAll('input[type=
- * "password"]').length` would have gone on reporting zero for ever, which is
- * this file's headline invariant passing by seeing nothing at all.
- *
- * `baseElement` is `document.body`, so it holds the portal and the container
- * both. It is the same query against the place the markup actually is, which
- * is the only thing that moved.
+ * The form is drawn in place, in the tool's own pane, but a picker's option
+ * list is a LAYER that renders into the layer host's container rather than
+ * beside its trigger (see `render` below). So these tests query
+ * `baseElement`, which is `document.body` and holds the form and every layer
+ * it opens, rather than `container`, which would see the form and none of
+ * what it opened.
  */
 
 import type { ReactElement } from "react";
 import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 
 // uilet's PROVIDER, which is the one `app/App.tsx` mounts now. Our own
-// context is no longer supplied anywhere, so a dialog tested under it would
+// context is no longer supplied anywhere, so a form tested under it would
 // pass while writing its confirmation into a hook nothing is listening to.
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { afterEach, expect, test, vi } from "vitest";
 import {
   HELD,
-  SetupDialog,
+  SetupForm,
   fieldsFor,
   fillTemplate,
   gateOpen,
   neededField,
   shownField,
   vendorLink,
-} from "./SetupDialog.tsx";
-import type { SetupRequirement, SetupToolState } from "~/protocol/index.ts";
+} from "./SetupForm.tsx";
+import type { SetupRequirement, SetupToolState, SetupVerdict } from "~/protocol/index.ts";
 
 function req(over: Partial<SetupRequirement>): SetupRequirement {
   return {
@@ -110,7 +106,7 @@ function stubFetch(handler: (path: string, init?: RequestInit) => Response) {
 }
 
 /**
- * The dialog's WRITE, which is not always its first request.
+ * The form's WRITE, which is not always its first request.
  *
  * It reads the company's sealed entry NAMES when it opens, so typing `$` in
  * a box can offer them, and a test indexing calls[0] was asserting against
@@ -139,7 +135,7 @@ afterEach(() => {
  *
  * NOT A TEST CONVENIENCE. A picker's option list, like a dialog, is a LAYER:
  * it renders into the host's container rather than beside its trigger, so
- * without one the list opens — `aria-expanded` really does turn true — and
+ * without one the list opens (`aria-expanded` really does turn true) and
  * its options are nowhere in the document. A suite that mounted no host would
  * assert against a control whose every choice is unreachable, which is a state
  * the product cannot be in and a test can sit in indefinitely.
@@ -154,7 +150,7 @@ function render(ui: ReactElement): ReturnType<typeof rtlRender> {
  * THE LABEL RATHER THAN THE VALUE, because there is no longer a value to
  * read: a choice field draws uilet's LISTBOX, whose trigger is a button
  * carrying the chosen option's own words. That is not a weaker assertion than
- * the `(… as HTMLSelectElement).value` these replaced — it is the stronger
+ * the `(… as HTMLSelectElement).value` these replaced; it is the stronger
  * one, since a value the control holds and never shows is a value the
  * operator cannot act on. It is also what caught the reason for the change:
  * the listbox is the only mode that can draw a choice's second line, and a
@@ -169,7 +165,7 @@ function showing(label: RegExp | string): string {
  * Open a picker and press one of its options, by the words on it.
  *
  * MOUSEDOWN, NOT CLICK, and this is measured rather than assumed: uilet's
- * listbox commits on `mousedown`, which is the only choice that works — a
+ * listbox commits on `mousedown`, which is the only choice that works: a
  * popup that waited for `click` would have the trigger's own blur close the
  * list out from under the press. `fireEvent.click` on an option fires and
  * changes nothing, which is the shape that would have left these tests
@@ -188,7 +184,7 @@ function choose(trigger: HTMLElement, option: RegExp | string): void {
 
 test("the form is rendered from the requirement list", () => {
   render(
-    <SetupDialog
+    <SetupForm
       sections={[{ name: "Datadog", tool }]}
       title="Datadog"
       onClose={() => {}}
@@ -204,7 +200,7 @@ test("the form is rendered from the requirement list", () => {
 // asking them to invent a password.
 test("a mintable secret is not on the form at all", () => {
   const { baseElement } = render(
-    <SetupDialog
+    <SetupForm
       sections={[{ name: "Datadog", tool }]}
       title="Datadog"
       onClose={() => {}}
@@ -227,7 +223,7 @@ test("a mintable secret is not on the form at all", () => {
 // process actually knows.
 test("a stored credential shows the dots as a PLACEHOLDER, never a value", () => {
   render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "GitLab",
@@ -255,7 +251,7 @@ test("a stored credential shows the dots as a PLACEHOLDER, never a value", () =>
   const input = screen.getByLabelText("Group Owner token") as HTMLInputElement;
   // EMPTY, WITH THE DOTS AS THE PLACEHOLDER. Seeded as the VALUE, the
   // sentinel had to be recognised on the way out by an exact string compare
-  // — so any edit that left the box holding something other than exactly
+  // so any edit that left the box holding something other than exactly
   // those sixteen characters submitted the whole string as the credential,
   // and two ordinary gestures did that: typing at the caret without
   // select-all, and the ${NAME} completion, which keeps everything before
@@ -278,7 +274,7 @@ test("untouched dots are not submitted", async () => {
     () => new Response(JSON.stringify({ revision_id: "r", wrote_secrets: [] }), { status: 201 }),
   );
   render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "GitLab",
@@ -318,7 +314,7 @@ test("untouched dots are not submitted", async () => {
 //
 // Atlassian is two config blocks and one product family: the account email
 // and the API token are the same Atlassian account, and asking for each of
-// them twice under two headings in one dialog is one question with two
+// them twice under two headings in one form is one question with two
 // inputs, which eventually holds two answers.
 test("a shared field appears once and is submitted to both surfaces", async () => {
   const spy = stubFetch(
@@ -334,7 +330,7 @@ test("a shared field appears once and is submitted to both surfaces", async () =
     ],
   });
   render(
-    <SetupDialog
+    <SetupForm
       sections={[
         { name: "Jira", tool: atlassian("jira", "Jira site") },
         { name: "Confluence", tool: atlassian("confluence", "Confluence site") },
@@ -359,7 +355,7 @@ test("a shared field appears once and is submitted to both surfaces", async () =
   // WRITTEN TO BOTH. Submitting only what was on screen would leave the
   // second block without the value the first one collected.
   //
-  // COUNTED AS WRITES rather than as requests: the dialog also READS the
+  // COUNTED AS WRITES rather than as requests: the form also READS the
   // company's sealed entry names when it opens, so waiting for two requests
   // stopped waiting before the second block was written. See [sent].
   const writes = () =>
@@ -375,7 +371,7 @@ test("a shared field appears once and is submitted to both surfaces", async () =
 //
 // Jira and Confluence both declare `url` and they are different addresses.
 // Keyed on the name alone the second section's value overwrote the first's,
-// so the Jira site input showed the Confluence address — and saving would
+// so the Jira site input showed the Confluence address, and saving would
 // have written it into Jira's block.
 test("a field name shared by two surfaces holds two values", () => {
   const surface = (key: string, label: string, value: string) => ({
@@ -385,7 +381,7 @@ test("a field name shared by two surfaces holds two values", () => {
     requirements: [req({ field: "url", label, kind: "url", connect: true, present: true, value })],
   });
   render(
-    <SetupDialog
+    <SetupForm
       sections={[
         { name: "Jira", tool: surface("jira", "Jira site", "https://acme.atlassian.net") },
         {
@@ -420,7 +416,7 @@ test("a hidden field is submitted from its default and never rendered", async ()
     () => new Response(JSON.stringify({ revision_id: "r", wrote_secrets: [] }), { status: 201 }),
   );
   render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "Datadog",
@@ -457,7 +453,7 @@ test("a hidden field is submitted from its default and never rendered", async ()
 // A LINK THAT NEEDS AN ANSWER IS NOT A LINK UNTIL IT HAS ONE.
 //
 // Atlassian's API keys live at a per-organization address, so until somebody
-// has typed the organization id there is no page to open — and a link to the
+// has typed the organization id there is no page to open, and a link to the
 // console's front door sends them somewhere they then have to navigate out
 // of, which is worse than no link at all.
 test("a templated vendor link waits for the field it needs", () => {
@@ -478,15 +474,15 @@ test("a templated vendor link waits for the field it needs", () => {
 
 // CONNECT FIELDS COME FIRST, AND NOTHING IS HIDDEN.
 //
-// This used to assert the opposite half — that a finding narrowed the form to
-// the fields clearing it — over an argument nothing ever passed, because the
+// This used to assert the opposite half (that a finding narrowed the form to
+// the fields clearing it) over an argument nothing ever passed, because the
 // Fix control that would have passed it was removed. What the function
 // actually promises is an ordering: the person pasting an API key finds it at
 // the top, and the person changing a fallback seat can still reach it.
 test("connect fields come first and every field survives", () => {
   // DECLARED OUT OF ORDER ON PURPOSE, and not read off the shared fixture.
   // That fixture already lists its connect fields first, so asserting against
-  // its own order passes whatever this function does — the first version of
+  // its own order passes whatever this function does. The first version of
   // this test did exactly that and stayed green when the partition was
   // deleted. A list the partition has to actually move is the only one that
   // can fail.
@@ -512,7 +508,7 @@ test("submitting asks for the mint and sends only what was filled in", async () 
     () => new Response(JSON.stringify({ revision_id: "r", wrote_secrets: [] }), { status: 201 }),
   );
   render(
-    <SetupDialog
+    <SetupForm
       sections={[{ name: "Datadog", tool }]}
       title="Datadog"
       onClose={() => {}}
@@ -537,7 +533,7 @@ test("submitting asks for the mint and sends only what was filled in", async () 
   // A SEEDED DEFAULT IS SENT, THOUGH, and that is the contract rather than an
   // exception to it: a default is offered on screen, so it is submitted as
   // what was on screen. Withheld, the form would show an answer and store a
-  // different one — see `seed`.
+  // different one. See `seed`.
   expect(body.values.route_to).toBe("none");
 });
 
@@ -555,7 +551,7 @@ test("a literal_in_config refusal is shown against its field", async () => {
       ),
   );
   render(
-    <SetupDialog
+    <SetupForm
       sections={[{ name: "Datadog", tool }]}
       title="Datadog"
       onClose={() => {}}
@@ -576,10 +572,10 @@ test("a literal_in_config refusal is shown against its field", async () => {
 // A form that opens with a credential field asks for a secret before saying
 // what it is for. The sentence comes from the engine, with the app whose
 // requirements it introduces, because this screen knows nothing about any
-// app — the same rule every label and help line here already follows.
+// app, the same rule every label and help line here already follows.
 test("the form opens with the engine's own summary", () => {
   render(
-    <SetupDialog
+    <SetupForm
       sections={[{ name: "Datadog", tool: { ...tool, summary: "Datadog sends firing monitors." } }]}
       title="Datadog"
       onClose={() => {}}
@@ -593,7 +589,7 @@ test("the form opens with the engine's own summary", () => {
 // reader guess which one a form with three sections is sending them to.
 test("an external link names the app it opens", () => {
   render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "Datadog",
@@ -621,14 +617,14 @@ test("an external link names the app it opens", () => {
 // ONE FORM, CONNECT FIELDS FIRST.
 //
 // The connect form and the settings form are the same form, because two
-// forms behind one dialog made an app's settings a screen its operator had
+// forms behind one form made an app's settings a screen its operator had
 // never seen. What the split was protecting is the ORDER: asking which seat
 // an alert wakes while somebody is pasting an API key asks the second
 // question before the first is answered, and ordering answers that without
 // putting the routing fields somewhere a person cannot reach them.
 test("the connect form leads with the fields that establish the connection", () => {
   render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "Datadog",
@@ -713,8 +709,8 @@ test("connecting and managing render one identical form", () => {
       kind: "handle",
       present,
       value: present ? "sre-lead" : undefined,
-      // THE DEFAULT THE ENGINE DECLARES. Both picker kinds ship one —
-      // TestEveryChoiceOpensOnAnAnswer pins it across every vendor — and
+      // THE DEFAULT THE ENGINE DECLARES. Both picker kinds ship one
+      // (TestEveryChoiceOpensOnAnAnswer pins it across every vendor), and
       // without it the connect side of this comparison opens on a "Choose
       // one" the settings side does not have, which is precisely the "the
       // settings form is a different screen" divergence this test exists to
@@ -735,7 +731,7 @@ test("connecting and managing render one identical form", () => {
   // looks different is the form itself.
   const formOf = (configured: boolean): string => {
     const view = render(
-      <SetupDialog
+      <SetupForm
         sections={[
           {
             name: "Datadog",
@@ -751,7 +747,7 @@ test("connecting and managing render one identical form", () => {
     // Two things are allowed to differ, and only two. React mints an id per
     // rendered field, so a second render of the same form has different
     // ones. And a credential this company already holds shows the dots as
-    // its PLACEHOLDER — the field, its label, its help and its required
+    // its PLACEHOLDER: the field, its label, its help and its required
     // mark are all the same, and what it SHOWS is the state the form is
     // reporting.
     //
@@ -791,7 +787,7 @@ test("connecting and managing render one identical form", () => {
 // an app read as filling in a configuration file.
 test("only the connect fields are open, the rest are folded away", () => {
   const { baseElement } = render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "Datadog",
@@ -832,7 +828,7 @@ test("only the connect fields are open, the rest are folded away", () => {
 // nothing is a control that opens an empty box.
 test("a form with one group folds nothing away", () => {
   const { baseElement } = render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "Datadog",
@@ -861,7 +857,7 @@ test("a form with one group folds nothing away", () => {
 // somebody to change one field.
 test("a stored setting is what the form opens on", () => {
   render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "Datadog",
@@ -904,7 +900,7 @@ test("an untouched credential is not written", async () => {
     () => new Response(JSON.stringify({ revision_id: "r", wrote_secrets: [] }), { status: 201 }),
   );
   render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "Datadog",
@@ -950,7 +946,7 @@ test("the toggle opens on what the app is set to", () => {
   const enabled = req({ field: "enabled", label: "Accept deliveries", kind: "toggle" });
   const open = (configured: boolean, value: string) => {
     const view = render(
-      <SetupDialog
+      <SetupForm
         sections={[
           {
             name: "Datadog",
@@ -976,11 +972,11 @@ test("the toggle opens on what the app is set to", () => {
 // NOTHING TO JUDGE IS NOT "UNCONFIGURED".
 //
 // every() is true of an empty list, so a tool whose setup read was refused
-// arrived with no sections and called itself unconnected: the dialog opened
+// arrived with no sections and called itself unconnected: the form opened
 // titled "Connect X", with a Connect button, over an integration the card
 // beside it was reporting Connected.
-test("a dialog with no sections does not claim to be connecting", () => {
-  render(<SetupDialog sections={[]} title="Datadog" onClose={() => {}} onDone={() => {}} />);
+test("a form with no sections does not claim to be connecting", () => {
+  render(<SetupForm sections={[]} title="Datadog" onClose={() => {}} onDone={() => {}} />);
   expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
   expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
 });
@@ -989,7 +985,7 @@ test("a dialog with no sections does not claim to be connecting", () => {
 // unconfigured one.
 test("a configured app shows every field", () => {
   render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "Datadog",
@@ -1016,7 +1012,7 @@ test("a configured app shows every field", () => {
 // of connecting, and an empty form is worse than a long one.
 test("an app with no connect fields declared shows the whole form", () => {
   render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "Jira",
@@ -1040,7 +1036,7 @@ test("an app with no connect fields declared shows the whole form", () => {
 // settings for an app that is already connected.
 test("the button reads Connect before there is a connection and Save after", () => {
   const { unmount } = render(
-    <SetupDialog
+    <SetupForm
       sections={[{ name: "Datadog", tool: { ...tool, configured: false } }]}
       title="Datadog"
       onClose={() => {}}
@@ -1051,7 +1047,7 @@ test("the button reads Connect before there is a connection and Save after", () 
   unmount();
 
   render(
-    <SetupDialog
+    <SetupForm
       sections={[{ name: "Datadog", tool: { ...tool, configured: true } }]}
       title="Datadog"
       onClose={() => {}}
@@ -1069,7 +1065,7 @@ test("the button reads Connect before there is a connection and Save after", () 
 // on screen.
 test("a field with a default opens holding it", () => {
   render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "Datadog",
@@ -1104,7 +1100,7 @@ test("a field with a default opens holding it", () => {
 // on top of a working setting quietly proposes changing it.
 test("a field this company has answered keeps its answer", () => {
   render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "Datadog",
@@ -1174,7 +1170,7 @@ test("fillTemplate passes text with no placeholder through unchanged", () => {
 // however much had been typed.
 test("a link cites a shared field from another section", () => {
   render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "Organization",
@@ -1228,7 +1224,7 @@ test("a link cites a shared field from another section", () => {
 // it ends ("Find the Jira site value under") stopping at nothing.
 test("a link citing an unanswered field keeps its words and loses its anchor", () => {
   render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "Jira",
@@ -1268,7 +1264,7 @@ test("a value shared across surfaces renders after them", () => {
     req({ field: "token", label: "API token", kind: "secret", shared: true, connect: true }),
   ];
   render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "Jira",
@@ -1313,7 +1309,7 @@ test("a value shared across surfaces renders after them", () => {
 // behind this field".
 test("a secret pointing at the store opens naming the entry it reads", () => {
   render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "Datadog",
@@ -1348,7 +1344,7 @@ test("a secret pointing at the store opens naming the entry it reads", () => {
 // unanswered question on a form that is already complete.
 test("a literal credential still shows only that it is held", () => {
   render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "Datadog",
@@ -1375,7 +1371,7 @@ test("a literal credential still shows only that it is held", () => {
 //
 // The sentinel was the input's value and payloadFor recognised it by an
 // exact string compare, so anything that left the box holding something
-// else went to the engine whole — dots and all — and was sealed as the
+// else went to the engine whole (dots and all) and was sealed as the
 // credential by name. Inserting at the caret without select-all is the
 // ordinary way to do that.
 test("typing after the dots submits only what was typed", async () => {
@@ -1385,7 +1381,7 @@ test("typing after the dots submits only what was typed", async () => {
     return new Response(JSON.stringify({ revision_id: "r", wrote_secrets: [] }), { status: 201 });
   });
   render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "Datadog",
@@ -1417,7 +1413,7 @@ test("typing after the dots submits only what was typed", async () => {
 // shown only where there is a credential to keep somewhere.
 test("the secrets recommendation appears only on a form with a credential", () => {
   const { unmount } = render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "Datadog",
@@ -1436,7 +1432,7 @@ test("the secrets recommendation appears only on a form with a credential", () =
   unmount();
 
   render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "Datadog",
@@ -1468,7 +1464,7 @@ test("the secrets recommendation appears only on a form with a credential", () =
 // organization of that name.
 test("a link built from a referenced field uses what the reference reads", () => {
   render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "Organization",
@@ -1510,7 +1506,7 @@ test("a link built from a referenced field uses what the reference reads", () =>
 // the name of a missing entry in its path.
 test("a link built from an unresolved reference is not drawn", () => {
   render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "Organization",
@@ -1548,7 +1544,7 @@ test("a link built from an unresolved reference is not drawn", () => {
 /**
  * A per-seat app: each agent has its own app at the vendor, so each has its
  * own credentials and its own delivery route. Slack's shape, and the reason
- * this dialog has more than one section.
+ * this form has more than one section.
  */
 const perSeatTool: SetupToolState = {
   key: "slack",
@@ -1622,12 +1618,12 @@ function perSeatSections() {
 // ONE FOLDED BLOCK PER AGENT.
 //
 // A per-seat app asks for the same credentials once per agent, so a company
-// with ten agents opened a dialog with twenty inputs in one scroll and no way
-// to see how many were left. Folded, the dialog opens as the roster it is:
+// with ten agents opened a form with twenty inputs in one scroll and no way
+// to see how many were left. Folded, the form opens as the roster it is:
 // every agent named, each saying whether it is done.
 test("a per-seat app gives every agent its own collapsible block", () => {
   const { baseElement } = render(
-    <SetupDialog sections={perSeatSections()} title="Slack" onClose={() => {}} onDone={() => {}} />,
+    <SetupForm sections={perSeatSections()} title="Slack" onClose={() => {}} onDone={() => {}} />,
   );
   const blocks = [...baseElement.querySelectorAll("details.int-seat-form")];
   expect(blocks.length).toBe(2);
@@ -1653,7 +1649,7 @@ test("a per-seat app gives every agent its own collapsible block", () => {
 // exactly like an app with nothing to do.
 test("an app the engine cannot provision says so before the blocks", () => {
   render(
-    <SetupDialog sections={perSeatSections()} title="Slack" onClose={() => {}} onDone={() => {}} />,
+    <SetupForm sections={perSeatSections()} title="Slack" onClose={() => {}} onDone={() => {}} />,
   );
   expect(
     screen.getByText(/Slack does not support automatic agent provisioning at the moment/),
@@ -1671,7 +1667,7 @@ test("an app the engine cannot provision says so before the blocks", () => {
 // instructions for one step is how one of them goes stale.
 test("an agent's block does not ask for its delivery address twice", () => {
   const { baseElement } = render(
-    <SetupDialog sections={perSeatSections()} title="Slack" onClose={() => {}} onDone={() => {}} />,
+    <SetupForm sections={perSeatSections()} title="Slack" onClose={() => {}} onDone={() => {}} />,
   );
   const blocks = [...baseElement.querySelectorAll("details.int-seat-form")];
   expect(blocks[0]!.textContent).not.toContain("Paste that address");
@@ -1680,16 +1676,16 @@ test("an agent's block does not ask for its delivery address twice", () => {
 
 // A SEAT'S OPTIONAL FIELD STAYS WITH ITS SEAT.
 //
-// Gathered into the dialog's shared "More settings" fold, an agent's optional
+// Gathered into the form's shared "More settings" fold, an agent's optional
 // fields lost the one thing that said whose they were: a three-agent company
 // showed three identical "Default channel" boxes in one list.
 test("an agent's optional field is inside that agent's block", () => {
   const { baseElement } = render(
-    <SetupDialog sections={perSeatSections()} title="Slack" onClose={() => {}} onDone={() => {}} />,
+    <SetupForm sections={perSeatSections()} title="Slack" onClose={() => {}} onDone={() => {}} />,
   );
   const blocks = [...baseElement.querySelectorAll("details.int-seat-form")];
   expect(blocks[0]!.textContent).toContain("Default channel");
-  // ONCE, AND ONLY THERE. Gathered at the foot of the dialog it appeared per
+  // ONCE, AND ONLY THERE. Gathered at the foot of the form it appeared per
   // agent with nothing saying whose each one was.
   expect(screen.getAllByText("Default channel").length).toBe(1);
   expect(blocks[1]!.textContent).not.toContain("Default channel");
@@ -1725,7 +1721,7 @@ test("a vendor link inside an agent's block names the app", () => {
     ],
   };
   render(
-    <SetupDialog
+    <SetupForm
       sections={[{ name: "SRE Lead", tool: linked, seat: "sre-lead" }]}
       title="Slack"
       onClose={() => {}}
@@ -1739,7 +1735,7 @@ test("a vendor link inside an agent's block names the app", () => {
 // A CLOSED BLOCK IS STILL A BLOCK SOMEBODY CAN OPEN.
 test("an agent's block opens when its summary is clicked", () => {
   const { baseElement } = render(
-    <SetupDialog sections={perSeatSections()} title="Slack" onClose={() => {}} onDone={() => {}} />,
+    <SetupForm sections={perSeatSections()} title="Slack" onClose={() => {}} onDone={() => {}} />,
   );
   const blocks = [...baseElement.querySelectorAll("details.int-seat-form")];
   const closed = blocks[1] as HTMLDetailsElement;
@@ -1764,7 +1760,7 @@ test("an agent's block offers the manifest its app is built from", () => {
     seats: [{ ...perSeatTool.seats![0]!, manifest: '{\n  "display_information": {}\n}' }],
   };
   const { baseElement } = render(
-    <SetupDialog
+    <SetupForm
       sections={[{ name: "SRE Lead", tool: withManifest, seat: "sre-lead" }]}
       title="Slack"
       onClose={() => {}}
@@ -1774,7 +1770,7 @@ test("an agent's block offers the manifest its app is built from", () => {
   const block = baseElement.querySelector("details.int-seat-form");
   // NOT "for SRE Lead": the block this sits in is that agent's and carries
   // their name two lines above, so repeating it says nothing and pushes the
-  // words that do off the end of a narrow dialog.
+  // words that do off the end of a narrow form.
   expect(block?.textContent).toContain("App manifest");
   expect(block?.textContent).not.toContain("App manifest for");
   expect(baseElement.querySelector(".int-manifest-text")?.textContent).toContain(
@@ -1791,7 +1787,7 @@ test("an agent's block offers the manifest its app is built from", () => {
 // there is no app definition worth pasting.
 test("an agent with no manifest is offered no manifest", () => {
   const { baseElement } = render(
-    <SetupDialog
+    <SetupForm
       sections={[{ name: "SRE Lead", tool: perSeatTool, seat: "sre-lead" }]}
       title="Slack"
       onClose={() => {}}
@@ -1815,7 +1811,7 @@ test("the manifest can be copied", async () => {
     seats: [{ ...perSeatTool.seats![0]!, manifest }],
   };
   render(
-    <SetupDialog
+    <SetupForm
       sections={[{ name: "SRE Lead", tool: withManifest, seat: "sre-lead" }]}
       title="Slack"
       onClose={() => {}}
@@ -1844,7 +1840,7 @@ test("an agent with no manifest is told why not", () => {
     ],
   };
   const { baseElement } = render(
-    <SetupDialog
+    <SetupForm
       sections={[{ name: "SRE Lead", tool: noted, seat: "sre-lead" }]}
       title="Slack"
       onClose={() => {}}
@@ -1871,7 +1867,7 @@ test("a seat carrying a manifest shows no missing-manifest note", () => {
     ],
   };
   render(
-    <SetupDialog
+    <SetupForm
       sections={[{ name: "SRE Lead", tool: both, seat: "sre-lead" }]}
       title="Slack"
       onClose={() => {}}
@@ -1900,7 +1896,7 @@ test("copying the manifest does not toggle its disclosure", () => {
     seats: [{ ...perSeatTool.seats![0]!, manifest }],
   };
   const { baseElement } = render(
-    <SetupDialog
+    <SetupForm
       sections={[{ name: "SRE Lead", tool: withManifest, seat: "sre-lead" }]}
       title="Slack"
       onClose={() => {}}
@@ -1921,7 +1917,7 @@ test("copying the manifest does not toggle its disclosure", () => {
 // ONE SAVE IS ONE WRITE, and only for what changed.
 //
 // seed() fills the form from what the engine reports, and payloadFor sent
-// every value it found — so every configured section was submitted whether or
+// every value it found, so every configured section was submitted whether or
 // not anybody touched it. Each POST is a revision and an epoch: nothing on
 // the write path compares a submitted value against what is stored, and the
 // activation advances unconditionally. Editing one seat of a three-seat app
@@ -1959,7 +1955,7 @@ test("only the section that changed is written", async () => {
     },
   });
   render(
-    <SetupDialog
+    <SetupForm
       sections={[seat("ceo"), seat("cto"), seat("swe")]}
       title="Slack"
       onClose={() => {}}
@@ -1985,7 +1981,7 @@ test("a save that changed nothing writes nothing", async () => {
     () => new Response(JSON.stringify({ revision_id: "r", wrote_secrets: [] }), { status: 201 }),
   );
   render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "GitLab",
@@ -2018,7 +2014,7 @@ test("a save that changed nothing writes nothing", async () => {
 });
 
 // A SAVE SAYS IT SAVED. The title and the button branch on whether this is a
-// connection or an edit, and the toast did not — so a dialog headed "Datadog
+// connection or an edit, and the toast did not, so a form headed "Datadog
 // settings", submitted with a Save button, confirmed with "Datadog
 // connected".
 test("saving a connected app does not say it connected", async () => {
@@ -2027,7 +2023,7 @@ test("saving a connected app does not say it connected", async () => {
   );
   render(
     <ToastProvider>
-      <SetupDialog
+      <SetupForm
         sections={[
           {
             name: "Datadog",
@@ -2072,9 +2068,9 @@ test("saving a connected app does not say it connected", async () => {
 
 // A REFUSAL NEVER HIDES BEHIND THE FOLD.
 //
-// The disclosure is closed in both directions on purpose — a settings form
+// The disclosure is closed in both directions on purpose (a settings form
 // that sprang open because a field inside it was unset would differ from the
-// connect form — and it opens when a submission is refused for something
+// connect form), and it opens when a submission is refused for something
 // inside it. That was true of exactly one error code. The ordinary refusal, a
 // config validation listing the values it will not accept, went to the banner
 // with the fold shut: a Datadog operator read
@@ -2096,7 +2092,7 @@ test("a refusal opens the fold hiding the field it names", async () => {
       ),
   );
   const { baseElement } = render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "Datadog",
@@ -2140,7 +2136,7 @@ test("a refusal opens the fold hiding the field it names", async () => {
   expect(more.open).toBe(false);
 
   // Something to submit, which is what an operator filling the connect fields
-  // leaves behind: with nothing changed the dialog never reaches the engine.
+  // leaves behind: with nothing changed the form never reaches the engine.
   fireEvent.change(screen.getByLabelText(/API key/), { target: { value: "dd-api-key" } });
   fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
   expect(await screen.findByText(/names an owner/)).toBeDefined();
@@ -2166,7 +2162,7 @@ test("a refusal naming a visible field leaves the fold shut", async () => {
       ),
   );
   const { baseElement } = render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "Datadog",
@@ -2206,7 +2202,7 @@ test("a refusal naming a visible field leaves the fold shut", async () => {
 // A FIELD REQUIRED BY AN ANSWER IS HIDDEN UNTIL THAT ANSWER IS GIVEN.
 //
 // GitHub's organization token is the pair this exists for. Stated `required`
-// it blocked a connect that needed nothing — a hand-minted personal access
+// it blocked a connect that needed nothing: a hand-minted personal access
 // token demanded before anything worked. Stated optional it let the API store
 // "cover every repository in the organization" with nothing able to register
 // the hook, which is a company one apply later holding a demand it cannot
@@ -2229,7 +2225,7 @@ test("a gated field is hidden until its answer is chosen", () => {
 test("a gated field is required exactly when it is shown", () => {
   // THE TWO ARE ONE DECISION. A field shown under an answer that needs it is
   // a field that needs it, and splitting them would allow "visible but
-  // optional" — a form asking a question whose answer it will ignore.
+  // optional", a form asking a question whose answer it will ignore.
   expect(neededField(gated, () => "false")).toBe(false);
   expect(neededField(gated, () => "true")).toBe(true);
   // AND AN UNGATED FIELD ANSWERS TO `required` ALONE.
@@ -2240,7 +2236,7 @@ test("a gated field is required exactly when it is shown", () => {
 //
 // The resolver is REQUIRED rather than optional, which is not a style choice:
 // optional, it defaulted to "no answers, so the gate is shut", and one render
-// site asked whether to draw a field without passing any — reading its own
+// site asked whether to draw a field without passing any, reading its own
 // gate as closed while the list deciding the fold, a metre away, had the
 // answers and said show it. The organization token never appeared, however
 // the choice beside it was set. Required, every caller is a compile error
@@ -2258,11 +2254,11 @@ test("an ungated field ignores the answers", () => {
 // distinguishes them as "Crewlet reads your sites and creates each agent's
 // account" against "Self-hosted. Give each product's address and its own
 // token." The form accepted that sentence and drew it nowhere, because a
-// native `<option>` holds one line — so an operator chose between two
+// native `<option>` holds one line, so an operator chose between two
 // deployments of the same vendor by their names alone.
 test("a choice's hint is drawn beside it, not dropped", () => {
   render(
-    <SetupDialog
+    <SetupForm
       sections={[
         {
           name: "Atlassian",
@@ -2329,7 +2325,7 @@ test("choosing the gated answer reveals its field", () => {
     ],
   };
   render(
-    <SetupDialog
+    <SetupForm
       sections={[{ name: "GitHub", tool: coverage }]}
       title="GitHub"
       onClose={() => {}}
@@ -2355,7 +2351,7 @@ test("choosing the gated answer reveals its field", () => {
 // option is never the truth on a form somebody has opened.
 test("a dropdown holding an answer offers no placeholder", () => {
   const { baseElement } = render(
-    <SetupDialog
+    <SetupForm
       sections={[{ name: "Datadog", tool }]}
       title="Datadog"
       onClose={() => {}}
@@ -2371,9 +2367,9 @@ test("a dropdown holding an answer offers no placeholder", () => {
 
 // AND A STORED ANSWER THE LIST NO LONGER OFFERS KEEPS ITS OWN OPTION.
 //
-// A form may narrow its choices — GitHub's coverage question offers two of
-// the three modes its config accepts — and a company already holding the
-// dropped one must not open the dialog to find a different answer selected,
+// A form may narrow its choices (GitHub's coverage question offers two of
+// the three modes its config accepts), and a company already holding the
+// dropped one must not open the form to find a different answer selected,
 // and then save it. Without this the select matches nothing, and dropping the
 // placeholder would silently show the first option instead.
 test("a value the choices do not contain is shown as itself", () => {
@@ -2398,7 +2394,7 @@ test("a value the choices do not contain is shown as itself", () => {
     ],
   };
   const { baseElement } = render(
-    <SetupDialog
+    <SetupForm
       sections={[{ name: "GitHub", tool: narrowed }]}
       title="GitHub"
       onClose={() => {}}
@@ -2412,7 +2408,7 @@ test("a value the choices do not contain is shown as itself", () => {
 // A GATED FIELD SAYS IT IS REQUIRED, AND SITS UNDER THE ANSWER THAT REVEALED
 // IT.
 //
-// Required is the unmarked default on this form, which is right — most fields
+// Required is the unmarked default on this form, which is right: most fields
 // are required and marking them all is noise. A field that appeared because
 // of an answer is the exception: its requiredness is news, and it is the one
 // thing standing between that answer and its working.
@@ -2439,7 +2435,7 @@ test("a revealed field is marked required and follows its question", () => {
     ],
   };
   const { baseElement } = render(
-    <SetupDialog
+    <SetupForm
       sections={[{ name: "GitHub", tool: coverage }]}
       title="GitHub"
       onClose={() => {}}
@@ -2458,26 +2454,21 @@ test("a revealed field is marked required and follows its question", () => {
 });
 
 /*
- * A WRITE IN FLIGHT CANNOT BE DISMISSED BY A STRAY PRESS.
+ * A WRITE IN FLIGHT CANNOT BE CANCELLED.
  *
- * `ui/Dialog.tsx` used to assert this over a bare shell, and the mechanism
- * behind it is uilet's now: `Modal` feeds its `dismissable` prop to the layer
- * stack, whose Escape path and veil path are both guarded by
- * `entry.dismissable()`. What is NOT uilet's, and what this file is the right
- * place for, is that this dialog passes `dismissable={!busy}` at all.
+ * A connect is several writes in order (the credential sealed, the `${VAR}`
+ * pointer merged into the company configuration, the epoch advanced), so a
+ * form closed part-way leaves a company in a state nobody chose and, worse,
+ * nobody saw: pointer-first refuses every delivery, value-only reaches no
+ * running seat. So Cancel says why it cannot be pressed while the engine is
+ * writing, and pressing it anyway closes nothing.
  *
- * It is the sharp case on this screen. A connect is several writes in order —
- * the credential sealed, the `${VAR}` pointer merged into the company
- * configuration, the epoch advanced — so a surface dismissed part-way leaves a
- * company in a state nobody chose and, worse, nobody saw: pointer-first
- * refuses every delivery, value-only reaches no running seat.
- *
- * TWO-SIDED, because the assertion is worthless on its own: a surface that
+ * TWO-SIDED, because the assertion is worthless on its own: a Cancel that
  * never closed would pass the busy half. So the same press is made before the
  * write starts, where it must close.
  */
-test("a dialog mid-write refuses Escape and a press on the veil, and otherwise takes both", async () => {
-  // A WRITE THAT NEVER SETTLES, so `busy` is still true when the presses land.
+test("a form mid-write refuses Cancel, and otherwise takes it", async () => {
+  // A WRITE THAT NEVER SETTLES, so `busy` is still true when the press lands.
   // A resolved one races the assertion against the component's own cleanup.
   let writing = false;
   const spy = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -2490,42 +2481,37 @@ test("a dialog mid-write refuses Escape and a press on the veil, and otherwise t
   Object.defineProperty(globalThis, "fetch", { writable: true, value: spy });
 
   const closed = vi.fn();
-  const { baseElement } = render(
-    <SetupDialog
+  render(
+    <SetupForm
       sections={[{ name: "Datadog", tool }]}
       title="Datadog"
       onClose={closed}
       onDone={() => {}}
     />,
   );
-  const veil = () => baseElement.querySelector(".crewlet-modal-overlay") as Element;
+  const cancel = () => screen.getByRole("button", { name: "Cancel" });
 
-  // THE CONTROL. Nothing is in flight, so both gestures close.
-  fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+  // THE CONTROL. Nothing is in flight, so Cancel closes.
+  expect(cancel().getAttribute("aria-disabled")).not.toBe("true");
+  fireEvent.click(cancel());
   expect(closed).toHaveBeenCalledTimes(1);
-  // ON THE CLICK, NOT THE POINTERDOWN — the stack arms on the press and fires
-  // on the click, so that a tap's compatibility click cannot land on whatever
-  // the veil was covering.
-  fireEvent.pointerDown(veil());
-  fireEvent.click(veil());
-  expect(closed).toHaveBeenCalledTimes(2);
 
   fireEvent.click(screen.getByRole("button", { name: /Connect|Save/ }));
   await vi.waitFor(() => expect(writing).toBe(true));
 
-  // AND NOW NEITHER OF THEM DOES.
-  fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
-  fireEvent.pointerDown(veil());
-  fireEvent.click(veil());
-  expect(closed).toHaveBeenCalledTimes(2);
+  // AND NOW IT DOES NOT, and says why rather than just going grey.
+  expect(cancel().getAttribute("aria-disabled")).toBe("true");
+  expect(screen.getByText("Waiting for the engine to finish writing.")).toBeTruthy();
+  fireEvent.click(cancel());
+  expect(closed).toHaveBeenCalledTimes(1);
 });
 
 // ROTATE TOKEN OPENS THE SAME FORM, SAID DIFFERENTLY.
 //
 // The tile's Rotate token is the answer to a `credential_expiring` or
 // `credential_rejected` finding, and the fields it needs are the ones the
-// settings form already has — narrowing to one finding is a decision this
-// dialog reversed (see `fieldsFor`). What a rotation changes is the WORDS: the
+// settings form already has. Narrowing to one finding is a decision this
+// form reversed (see `fieldsFor`). What a rotation changes is the WORDS: the
 // title names the gesture and the engine's reason is said first, beside the
 // one thing to do, because a credential box that opens empty over a held
 // value looks like one that holds nothing.
@@ -2540,7 +2526,7 @@ test("a rotation names itself and says why, over the same fields", () => {
   };
   const reason = "The Datadog application key was refused by Datadog.";
   render(
-    <SetupDialog
+    <SetupForm
       sections={[{ name: "Datadog", tool: held }]}
       title="Datadog"
       rotate={reason}
@@ -2548,7 +2534,7 @@ test("a rotation names itself and says why, over the same fields", () => {
       onDone={() => {}}
     />,
   );
-  expect(screen.getByRole("dialog", { name: "Rotate the Datadog token" })).toBeTruthy();
+  expect(screen.getByRole("form", { name: "Replace the Datadog key" })).toBeTruthy();
   expect(screen.getByText(reason)).toBeTruthy();
   expect(
     screen.getByText("Create a new token in Datadog, paste it here and save. No restart needed."),
@@ -2557,10 +2543,10 @@ test("a rotation names itself and says why, over the same fields", () => {
   expect(screen.getByLabelText(/Fallback seat/)).toBeTruthy();
   cleanup();
 
-  // AND A TOOL NOTHING HAS CONFIGURED HAS NOTHING TO ROTATE: the dialog is
+  // AND A TOOL NOTHING HAS CONFIGURED HAS NOTHING TO ROTATE: the form is
   // the connect form whatever asked for it.
   render(
-    <SetupDialog
+    <SetupForm
       sections={[{ name: "Datadog", tool }]}
       title="Datadog"
       rotate={reason}
@@ -2568,12 +2554,12 @@ test("a rotation names itself and says why, over the same fields", () => {
       onDone={() => {}}
     />,
   );
-  expect(screen.getByRole("dialog", { name: "Connect Datadog" })).toBeTruthy();
+  expect(screen.getByRole("form", { name: "Connect Datadog" })).toBeTruthy();
   expect(screen.queryByText(reason)).toBeNull();
 });
 
 // A SURFACE'S HEADING ONLY TELLS SURFACES APART. A per-seat app's one company
-// group sits under the dialog's own "Connect Slack", so a heading naming
+// group sits under the form's own "Connect Slack", so a heading naming
 // Slack again said the vendor twice; a sheet setting up two surfaces names
 // each, as a real subheading in the words as written.
 test("a sheet names its company group only when it holds more than one", () => {
@@ -2585,7 +2571,7 @@ test("a sheet names its company group only when it holds more than one", () => {
   });
   const slack = { ...perSeatTool, requirements: [...perSeatTool.requirements, companyField] };
   const one = render(
-    <SetupDialog
+    <SetupForm
       sections={[
         { name: "Slack", tool: slack },
         { name: "SRE Lead", tool: slack, seat: "sre-lead" },
@@ -2597,4 +2583,238 @@ test("a sheet names its company group only when it holds more than one", () => {
   );
   expect(one.baseElement.querySelector(".int-section")).toBeNull();
   // Mutation: drop the group count from the condition and the heading is back.
+});
+
+/**
+ * A tool with one checkable key and the site it is checked against.
+ *
+ * NOTHING ELSE ON IT, so a check's body can be asserted whole: the shared
+ * fixture seeds a toggle and a default seat, and both would ride in the
+ * `values` beside the key.
+ */
+const checkable: SetupToolState = {
+  ...tool,
+  requirements: [
+    req({ field: "site", label: "Datadog site", config_path: "integrations.datadog.site" }),
+    req({
+      field: "api_key",
+      label: "API key",
+      kind: "secret",
+      checkable: true,
+      connect: true,
+      config_path: "integrations.datadog.api_key",
+    }),
+  ],
+};
+
+/**
+ * Answer the form's reads, and a check with `verdict`, recording each check.
+ */
+function stubCheck(verdict: SetupVerdict): {
+  checks: { path: string; body: unknown }[];
+} {
+  const checks: { path: string; body: unknown }[] = [];
+  stubFetch((path, init) => {
+    if (String(init?.method ?? "GET").toUpperCase() === "GET") {
+      return new Response("[]", { status: 200 });
+    }
+    checks.push({ path, body: JSON.parse(String(init?.body ?? "{}")) });
+    return new Response(JSON.stringify(verdict), { status: 200 });
+  });
+  return { checks };
+}
+
+// A CHECK ASKS ABOUT THE BOX, WITH WHAT THE FORM NAMES BESIDE IT. A key is
+// checked against the site or region the form names, so the other typed
+// values travel with it, and nothing is stored: the check is its own route,
+// never the setup write.
+test("a key check posts the typed value and the form's other values, and shows the verdict", async () => {
+  const { checks } = stubCheck({ outcome: "works", detail: "Datadog accepted the key." });
+  render(
+    <SetupForm
+      sections={[{ name: "Datadog", tool: checkable }]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  fireEvent.change(screen.getByLabelText("Datadog site"), { target: { value: "datadoghq.eu" } });
+  fireEvent.change(screen.getByLabelText("API key"), { target: { value: " dd-key-1 " } });
+  fireEvent.click(screen.getByRole("button", { name: "Test key" }));
+
+  const verdict = await screen.findByText("Datadog accepted the key.");
+  expect(checks).toEqual([
+    {
+      path: "/setup/integrations/datadog/verify",
+      body: { field: "api_key", value: "dd-key-1", values: { site: "datadoghq.eu" } },
+    },
+  ]);
+  expect(
+    verdict.closest(".crewlet-status")?.querySelector(".crewlet-status-dot--success"),
+  ).toBeTruthy();
+});
+
+// A SEAT'S KEY IS CHECKED AS THAT SEAT'S. A per-seat app's credential belongs
+// to one agent, so the engine has to be told which one to read the rest from.
+test("a key check in an agent's section names the seat", async () => {
+  const { checks } = stubCheck({ outcome: "works", detail: "Slack accepted the token." });
+  const slack: SetupToolState = {
+    ...perSeatTool,
+    seats: perSeatTool.seats?.map((seat) =>
+      seat.handle === "sre-lead"
+        ? {
+            ...seat,
+            requirements: seat.requirements.map((r) =>
+              r.field === "bot_token" ? { ...r, checkable: true } : r,
+            ),
+          }
+        : seat,
+    ),
+  };
+  render(
+    <SetupForm
+      sections={[
+        { name: "Slack", tool: slack },
+        { name: "SRE Lead", tool: slack, seat: "sre-lead" },
+      ]}
+      title="Slack"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  fireEvent.change(screen.getByLabelText("Bot token"), { target: { value: "xoxb-1" } });
+  fireEvent.click(screen.getByRole("button", { name: "Test key" }));
+  await screen.findByText("Slack accepted the token.");
+  expect(checks).toEqual([
+    {
+      path: "/setup/integrations/slack/verify",
+      body: { field: "bot_token", value: "xoxb-1", seat: "sre-lead" },
+    },
+  ]);
+});
+
+// A REFUSAL IS NEVER DRAWN AS SUCCESS. The engine's own sentence says what the
+// app said, and its tone has to say it too, or a refused key reads as a green
+// light to a reader who skims.
+test("a refused key shows the app's reason in the danger tone", async () => {
+  stubCheck({ outcome: "refused", detail: "Datadog refused the key: 403 Forbidden." });
+  render(
+    <SetupForm
+      sections={[{ name: "Datadog", tool: checkable }]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  fireEvent.change(screen.getByLabelText("API key"), { target: { value: "dd-bad" } });
+  fireEvent.click(screen.getByRole("button", { name: "Test key" }));
+
+  const verdict = await screen.findByText("Datadog refused the key: 403 Forbidden.");
+  const status = verdict.closest(".crewlet-status");
+  expect(status?.querySelector(".crewlet-status-dot--danger")).toBeTruthy();
+  expect(status?.querySelector(".crewlet-status-dot--success")).toBeNull();
+});
+
+// A CHECK THE ENGINE TURNED AWAY DID NOT RUN, which is not the app refusing
+// the key: the reason is shown, in no verdict's tone. Mutation: read every
+// failed request as `refused` and the danger dot comes back.
+test("a check the engine turns away says why and claims no verdict", async () => {
+  stubFetch((_path, init) =>
+    String(init?.method ?? "GET").toUpperCase() === "GET"
+      ? new Response("[]", { status: 200 })
+      : new Response(
+          JSON.stringify({ error: "invalid_input", detail: "There is no secret DD_KEY." }),
+          { status: 400 },
+        ),
+  );
+  render(
+    <SetupForm
+      sections={[{ name: "Datadog", tool: checkable }]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  fireEvent.change(screen.getByLabelText("API key"), { target: { value: "${DD_KEY}" } });
+  fireEvent.click(screen.getByRole("button", { name: "Test key" }));
+
+  const said = await screen.findByText(/There is no secret DD_KEY\./);
+  const status = said.closest(".crewlet-status");
+  expect(status?.querySelector(".crewlet-status-dot--danger")).toBeNull();
+  expect(status?.querySelector(".crewlet-status-dot--success")).toBeNull();
+});
+
+// A VERDICT IS ABOUT THE VALUE IT CHECKED. Typing over the key makes the
+// verdict one about a value no longer in the box, so it goes.
+test("editing a checked key clears its verdict", async () => {
+  stubCheck({ outcome: "works", detail: "Datadog accepted the key." });
+  render(
+    <SetupForm
+      sections={[{ name: "Datadog", tool: checkable }]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  const box = screen.getByLabelText("API key");
+  fireEvent.change(box, { target: { value: "dd-key-1" } });
+  fireEvent.click(screen.getByRole("button", { name: "Test key" }));
+  await screen.findByText("Datadog accepted the key.");
+
+  fireEvent.change(box, { target: { value: "dd-key-12" } });
+  expect(screen.queryByText("Datadog accepted the key.")).toBeNull();
+});
+
+// NO TEST THE ENGINE WOULD HAVE TO FAKE. A credential the engine cannot check
+// without acting on it is not marked checkable, and the form offers nothing.
+test("a requirement that is not checkable has no key check", () => {
+  stubCheck({ outcome: "works", detail: "unused" });
+  render(
+    <SetupForm
+      sections={[
+        {
+          name: "Datadog",
+          tool: {
+            ...checkable,
+            requirements: checkable.requirements.map((r) => ({ ...r, checkable: false })),
+          },
+        },
+      ]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect(screen.getByLabelText("API key")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Test key" })).toBeNull();
+});
+
+// WHEN THE APP PROVES IT, SAID WHERE THE KEY IS TYPED. A credential that
+// cannot be checked ahead carries the engine's sentence on when it will be,
+// and it belongs in the field's own help rather than nowhere.
+test("a requirement's check note is part of its help", () => {
+  stubCheck({ outcome: "works", detail: "unused" });
+  const note = "Slack proves it with the first event it sends.";
+  render(
+    <SetupForm
+      sections={[
+        {
+          name: "Datadog",
+          tool: {
+            ...checkable,
+            requirements: checkable.requirements.map((r) =>
+              r.field === "api_key"
+                ? { ...r, checkable: false, help: "Paste the key.", check_note: note }
+                : r,
+            ),
+          },
+        },
+      ]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  const help = screen.getByText(/Paste the key\./);
+  expect(help.textContent).toContain(note);
 });

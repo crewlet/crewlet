@@ -3769,6 +3769,19 @@ export interface SetupRequirement {
    * already the value) and on a reference naming nothing.
    */
   resolved_value?: string;
+  /**
+   * Whether the engine can check a typed value for this field at the app
+   * without storing it (`POST /setup/integrations/{kind}/verify`): the form
+   * offers Test key only where this is set.
+   */
+  checkable?: boolean;
+  /**
+   * For a credential the engine cannot check ahead without acting on it,
+   * the engine's sentence on when the app proves it ("Slack proves it with
+   * the first event it signs."). The form says it rather than offering a
+   * test it would have to fake.
+   */
+  check_note?: string;
   mintable?: boolean;
   /**
    * Written without being asked for.
@@ -3976,6 +3989,20 @@ export interface SetupRun {
   findings?: ReconcileFinding[];
   error?: string;
   report?: ReconcileStatus;
+}
+
+/** What checking one typed credential at the app, without storing it, found. */
+export type VerifyOutcome = "works" | "refused" | "unreachable" | "unchecked";
+
+/**
+ * The answer of `POST /setup/integrations/{kind}/verify`: `works` (the app
+ * accepted it), `refused` (the app answered and refused it), `unreachable`
+ * (the app did not answer; nothing was stored) or `unchecked` (the app only
+ * proves this value later), with one sentence for a person.
+ */
+export interface SetupVerdict {
+  outcome: VerifyOutcome;
+  detail: string;
 }
 
 export interface SetupListing {

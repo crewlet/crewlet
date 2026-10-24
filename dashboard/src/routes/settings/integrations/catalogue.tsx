@@ -1,26 +1,18 @@
 /**
- * The third-party tools agents work on, and whether each one is working.
+ * The third-party apps this build serves, and the readings every surface that
+ * names one shares: the catalogue (`CATALOG`), a tool's state off the engine's
+ * roll-up (`entryState`), its counts, the action it offers, its setup passes,
+ * its deliveries, and the peek a link to it opens (`IntegrationPeek`).
  *
- * Laid out as a GRID OF TILES, the shape the rest of the product's catalogues
- * take (the kit's `CatalogTile` on a `TileGrid`, the grid Built into Crewlet
- * above it uses, so every tile edge on the page lines up): one tile per TOOL
- * with its mark, its name, the engine's word for its state once it is set
- * up, one sentence (what is owed when something is, what the tool is for
- * otherwise) and a foot carrying a quiet count and ONE action
- * ([IntegrationTile]). Connected tools come first. Every tool this build
- * serves is listed whether or not this company set it up, so the reader sees
- * the whole catalogue rather than only the part they configured. Every other
- * tool an agent can reach is an MCP server, which Settings › MCP Tools adds.
+ * The page is `Directory.tsx` and its two panes; the Home widget and the peek
+ * read the same functions, so no surface claims something about a tool
+ * another does not.
  *
- * A tile is the tool, not the engine's plumbing for it. Atlassian is one tile
- * although the engine reaches it over three surfaces (Jira, Confluence and
- * the Forge relay), because that is how the company thinks of it; the tile's
- * state is the ENGINE's roll-up of its surfaces (`integration.Rollup`, sent as
- * the answer's `tools`), and its sentence names the surface that is not
- * ready. The counts, the inbound paths, the reconcile findings and every
- * agent's own step are on the tool's own page (`#/company/integrations/{kind}`,
- * [EntryRow]), so an operator who needs to know why can open it without the
- * catalogue leading with it.
+ * An app is the tool, not the engine's plumbing for it. Atlassian is one entry
+ * although the engine reaches it over three surfaces (Jira, Confluence and the
+ * Forge relay), because that is how the company thinks of it; its state is the
+ * ENGINE's roll-up of its surfaces (`integration.Rollup`, sent as the answer's
+ * `tools`).
  *
  * Every count is THREE-VALUED (a number, zero, or `null` meaning "this
  * process cannot say"), and so is the reconcile block: `null` is a process
@@ -28,20 +20,14 @@
  * claim that the tool is fine.
  */
 
-import { BuiltIn } from "./BuiltIn.tsx";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Button,
   ButtonLink,
-  Callout,
   Card,
-  CatalogTile,
-  Copyable,
   EmptyState,
   EmptyValue,
   InlineCode,
-  Section,
-  SegmentedControl,
   Skeleton,
   TableDateCell,
   TableEntityCell,
@@ -50,20 +36,13 @@ import {
   TableStatusCell,
   TableTextCell,
   Tag,
-  TileGrid,
   type Tone,
 } from "@crewlethq/ui";
-import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import {
   PlugGlyph,
-  ChevronDownGlyph,
-  KeyGlyph,
   LayersGlyph,
-  LinkGlyph,
   InboxGlyph,
   RotateCwGlyph,
-  SettingsGlyph,
-  ShieldGlyph,
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 import { VendorMark, type Vendor } from "@crewlethq/icons";
@@ -74,10 +53,8 @@ import { type DataGridColumn } from "@crewlethq/ui";
 import { linkedSeat } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
-import { usePageLabels } from "~/app/Shell.tsx";
 import { useNow } from "~/lib/clock.ts";
 import {
-  asSentence,
   fmtDate,
   fmtDateTime,
   plural,
@@ -86,18 +63,11 @@ import {
   fmtCount,
   fmtDuration,
 } from "~/lib/format.ts";
-import { useRecheck } from "./recheck.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { useManagedConfig } from "~/lib/useWriteAccess.ts";
-import type { AgentAvatar } from "~/lib/avatar.ts";
-import { indexOrg, seatLookup, useSeatBadgeOf } from "~/lib/seats.ts";
-import { SetupDialog } from "./SetupDialog.tsx";
-import { DisconnectDialog } from "./DisconnectDialog.tsx";
+import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { rest, RestError } from "~/protocol/index.ts";
-import { goSignIn } from "~/lib/session.ts";
 import { ADMIN, needsWords } from "~/lib/access.ts";
-import { useViewer } from "~/lib/viewer.ts";
 import { useRest } from "~/lib/useRest.ts";
 import type { EventRecord, SetupRun } from "~/protocol/types.ts";
 import {
@@ -105,7 +75,6 @@ import {
   type IntegrationRow,
   type IntegrationTool,
   type ReconcileFinding,
-  type ReconcileStatus,
 } from "~/contract/integrations.ts";
 import type { SetupListing, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
 
@@ -292,31 +261,6 @@ export function phaseTone(phase: string): Tone {
   }
 }
 
-/** Who has to act, phrased for the person reading it. */
-function actorLabel(actor: string | undefined): string {
-  switch (actor) {
-    case "engine":
-      return "the engine is working on it";
-    case "provider":
-      return "the third-party app is applying it";
-    // THE ADMIN IS UNLABELLED TOO, on the same reasoning as the operator
-    // below. "you, at the third-party app" named a place the finding's own
-    // sentence already names — and names better, because it says WHICH app
-    // and what to do there — so the clause was a second, vaguer copy of the
-    // instruction sitting beside it.
-    case "admin":
-      return "";
-    // THE OPERATOR IS UNLABELLED, and deliberately. "you, in the company
-    // configuration" named a place this screen IS: the note sits inside the
-    // card whose Settings control opens the very form the fix is made in, so
-    // it sent a reader looking elsewhere for what was already in front of
-    // them. The finding's own sentence says what to change; where is not a
-    // second fact worth a clause.
-    default:
-      return "";
-  }
-}
-
 /** A tool's rolled-up state: the pill under its name, and what is owed when something is. */
 export interface EntryState {
   /**
@@ -351,9 +295,9 @@ export interface EntryState {
   surface?: string;
 }
 
-type Present = { surface: Surface; row: IntegrationRow };
+export type Present = { surface: Surface; row: IntegrationRow };
 
-function presentSurfaces(entry: Entry, rows: Map<string, IntegrationRow>): Present[] {
+export function presentSurfaces(entry: Entry, rows: Map<string, IntegrationRow>): Present[] {
   return entry.surfaces
     .map((s) => ({ surface: s, row: rows.get(s.key) }))
     .filter((p): p is Present => p.row !== undefined);
@@ -416,7 +360,7 @@ export function entryState(
  * arrived there". Where no surface can say at all the answer stays null, which
  * is the absence [TableNumberCell] draws and the one this screen means by it.
  */
-function total(
+export function total(
   present: Present[],
   pick: (row: IntegrationRow) => number | null | undefined,
 ): number | null {
@@ -430,7 +374,7 @@ function total(
 }
 
 /** The most recent of an instant across a tool's surfaces, or null. */
-function latestOf(
+export function latestOf(
   present: Present[],
   pick: (row: IntegrationRow) => string | null | undefined,
 ): string | null {
@@ -451,7 +395,7 @@ function latestOf(
  * as the whole tool's — on a card whose every other roll-up reports the LEAST
  * ready surface, that is the wrong end of the list every time.
  */
-function soonestOf(
+export function soonestOf(
   present: Present[],
   pick: (row: IntegrationRow) => string | null | undefined,
 ): string | null {
@@ -572,157 +516,6 @@ export function integrationFacts(
  * findings can legitimately render the same sentence for different seats, and
  * the report stands for exactly one of them.
  */
-/*
- * GENERIC, because it is a filter: it returns the findings it was handed and
- * has no business narrowing them. Typed to a literal shape it silently
- * DROPPED every field that shape did not list — so the caller got back
- * findings with no `remedy`, `subjects` or `action_url` on them, and the
- * renderer could not lay out what the engine had sent.
- */
-export function withoutHeadline<T extends { kind: string; subject?: string; detail?: string }>(
-  findings: T[],
-  detail: string,
-): T[] {
-  const headline = detail.replace(/ \(and \d+ more\)$/, "").trim();
-  if (headline === "") return findings;
-  let dropped = false;
-  return findings.filter((f) => {
-    if (dropped || (f.detail ?? "").trim() !== headline) return true;
-    dropped = true;
-    return false;
-  });
-}
-
-/**
- * What the reconcile loop last found for one surface.
- *
- * Renders NOTHING when the status is null, and the silence is the point: this
- * node may not have been able to read the fleet's rows, and the loop may not
- * have reached this surface yet, and neither of those is a claim that the
- * surface is healthy. A green tick here would be exactly the invented health
- * this screen has always refused to show.
- */
-export function Reconcile({
-  status,
-  appName,
-}: {
-  status: ReconcileStatus | null | undefined;
-  /**
-   * The app this surface belongs to, for naming the link a finding carries.
-   *
-   * A LINK THAT SAYS WHERE IT GOES. The anchor here used to read "Open where
-   * this is fixed", which named nothing and sat under a sentence that already
-   * said where — and beside the agent row's own "Install on GitHub" button,
-   * pointing at the same address. It was removed for that. What a finding
-   * carries now is a place the engine DELIBERATELY will not act: an account
-   * somebody else disabled, which it reports rather than reversing. Telling
-   * somebody to do it at the app and handing them nothing is the other half
-   * of that decision left undone.
-   */
-  appName?: string;
-}) {
-  // NOTHING TO SAY WITHOUT A REPORT. This once fell back to the row's own
-  // `detail`, which the engine has never sent, so the fallback drew nothing on
-  // every surface it was written for. What a surface with no loop CAN say —
-  // paused, a secret that does not resolve, nothing routing — is on the
-  // badges its row draws beside this.
-  if (!status) return null;
-
-  const actor = actorLabel(status.actor);
-  // The findings the phase was NOT derived from. The report says what to do
-  // next and the findings say what is actually wrong, so an operator who
-  // fixes the first should not wait a full pass to learn there was a second.
-  //
-  // BY IDENTITY, NOT BY POSITION. A pass's findings are stored with the
-  // reported one first (integration.Promote), but while a disconnect is
-  // pending the report is State.Reported's "this integration is being
-  // removed" and the findings beside it are the last pass's, none of them the
-  // headline — so dropping element zero would hide a real finding and
-  // re-print the headline as "1 more finding". See withoutHeadline.
-  //
-  // Matched on the DETAIL, which is what the report carries and what this
-  // list renders, so the comparison is between the two strings actually on
-  // screen rather than between a rendered string and a reconstructed one.
-  // A count suffix — Classify appends "(and 2 more)" when several findings
-  // share the winning kind — is stripped from the report's side first.
-  const others = withoutHeadline(status.findings ?? [], status.detail ?? "");
-  // AND THE ONE THE HEADLINE IS, which is whichever finding `others` left
-  // out: its sentence is already on screen, and what is not is its subject
-  // list. Derived by difference rather than by a second match, so the two
-  // cannot disagree about which finding the headline stands for.
-  const reported = (status.findings ?? []).find((f) => !others.includes(f));
-
-  // A WORKING SURFACE SAYS NOTHING.
-  //
-  // The band used to carry the loop's own clock — when it last settled and
-  // when it next runs — under every surface, which is the engine narrating
-  // its schedule to somebody who asked what state their integration is in.
-  // On a healthy surface that timestamp was the ONLY thing in the band, so
-  // the card grew a grey stripe per surface saying nothing had happened.
-  // The tag says the state; the band is for what a person has to act on.
-  // THE REPORTED FINDING'S OWN LINK, named. See `appName`: a bare "Open
-  // where this is fixed" was removed, and an anchor that says which app it
-  // opens is the opposite case — a finding whose whole content is "a person
-  // has to do this at the app" needs somewhere to send them.
-  const where = reported?.action_url ?? "";
-  if (!status.detail && !status.last_error && others.length === 0 && !where) {
-    return null;
-  }
-
-  return (
-    <div className="int-row-note">
-      <div className="int-row-note-text">
-        {/* THE HEADLINE FINDING, laid out: what is wrong, which things,
-            what to do, where to do it. Four slots at three weights, in the
-            order somebody reads them — rather than one paragraph carrying
-            all four, which is what this replaced. */}
-        {status.detail && <p className="int-note-problem">{status.detail}</p>}
-        {reported && <FindingSubjects of={reported} />}
-        {(reported?.remedy || where) && (
-          <p className="int-note-remedy">
-            {reported?.remedy}
-            {where && (
-              <a className="prose-link" href={where} target="_blank" rel="noreferrer">
-                Open {appName || "the app"}
-              </a>
-            )}
-          </p>
-        )}
-        {actor && <span className="int-row-note-when">{actor}</span>}
-
-        {status.last_error && (
-          <span className="int-row-note-when" title="the last pass could not read this surface">
-            Last pass failed: {status.last_error}
-          </span>
-        )}
-
-        {/* THE REST, behind one disclosure and RULED OFF from the headline.
-            Its summary used to butt straight against the sentence above it,
-            so `…nothing else can do it.` and `1 more finding` read as one
-            run-on line. */}
-        {others.length > 0 && (
-          <details className="int-more">
-            <summary className="int-summary">
-              {others.length} more finding{others.length === 1 ? "" : "s"}
-            </summary>
-            <ul className="col int-findings">
-              {others.map((f, i) => (
-                <li key={`${f.kind}:${f.subject ?? ""}:${i}`}>
-                  <span className="int-note-problem">
-                    {f.detail || `${f.kind.replace(/_/g, " ")}${f.subject ? `: ${f.subject}` : ""}`}
-                  </span>
-                  <FindingSubjects of={f} />
-                  {f.remedy && <span className="int-note-remedy">{f.remedy}</span>}
-                </li>
-              ))}
-            </ul>
-          </details>
-        )}
-      </div>
-    </div>
-  );
-}
-
 /** How many subjects a finding shows before the rest go behind a count. */
 const SUBJECT_CHIPS = 6;
 
@@ -747,11 +540,10 @@ const SUBJECT_CHIPS = 6;
  * folded here is width, not secrecy — and the measured case, thirty-six
  * service accounts, is a list somebody is working through.
  *
- * Renders nothing for the ordinary finding about one thing, which sends no
- * list at all.
+ * Renders nothing for a finding that names no list, the ordinary finding
+ * about one thing.
  */
-function FindingSubjects({ of }: { of: ReconcileFinding }) {
-  const all = of.subjects ?? [];
+export function FindingSubjects({ subjects: all }: { subjects: readonly string[] }) {
   const [open, setOpen] = useState(false);
   if (all.length === 0) return null;
   const shown = open ? all : all.slice(0, SUBJECT_CHIPS);
@@ -776,23 +568,6 @@ function FindingSubjects({ of }: { of: ReconcileFinding }) {
       )}
     </ul>
   );
-}
-
-/**
- * The order the catalogue is read in: what this company has, then what it
- * could have, each half alphabetical.
- *
- * CONFIGURED COVERS ATTEMPTED as well as working — a card with a block
- * behind it, whatever the loop says about it — because a broken integration
- * is one this company HAS, and is the row most worth reaching first. Sorting
- * on health instead would move a row out from under the cursor of somebody
- * watching an app recover, which is exactly when they are looking at it.
- */
-export function byConfiguredThenName(
-  rows: Map<string, IntegrationRow>,
-): (a: Entry, b: Entry) => number {
-  const rank = (entry: Entry) => (entry.surfaces.some((s) => rows.has(s.key)) ? 0 : 1);
-  return (a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name);
 }
 
 /**
@@ -902,100 +677,6 @@ function SurfaceBadges({ row }: { row: IntegrationRow }) {
   );
 }
 
-/** Whether one surface has anything to report: [SurfaceRow] renders iff so. */
-function surfaceFaulted(row: IntegrationRow): boolean {
-  return (
-    row.secret_usable === false ||
-    row.routes === false ||
-    row.enabled === false ||
-    row.endpoint_current === false ||
-    (typeof row.skipped === "number" && row.skipped > 0) ||
-    Boolean(row.reconcile?.detail) ||
-    Boolean(row.reconcile?.last_error) ||
-    withoutHeadline(row.reconcile?.findings ?? [], row.reconcile?.detail ?? "").length > 0
-  );
-}
-
-/**
- * What one surface has to report, or nothing.
- *
- * A CARD'S BODY IS ITS AGENTS. It used to open with a row per surface —
- * "Jira, /webhooks/jira, Connected" — under a header already saying
- * Connected, so the first thing a reader saw on opening a card was the
- * engine restating the tag above it and naming a route nobody has to paste
- * any more, now that the loop registers the hook itself.
- *
- * A surface with a PROBLEM still has to say so, and say which surface it is,
- * because the header rolls up to the least ready one and a tool with two
- * surfaces has two answers. So this renders when there is a fault and stays
- * out of the way when there is not.
- */
-function SurfaceRow({
-  surface,
-  row,
-  named,
-  base,
-}: {
-  surface: Surface;
-  row: IntegrationRow;
-  /** Whether to say which surface this is. */
-  named: boolean;
-  /** The address this deployment is reachable at now, for the note below. */
-  base?: string;
-}) {
-  const dropped = typeof row.skipped === "number" && row.skipped > 0;
-  if (!surfaceFaulted(row)) return null;
-
-  return (
-    <li className="int-row">
-      <div className="int-row-identity">
-        {named && <span className="int-row-name">{surface.name}</span>}
-      </div>
-
-      <div className="int-row-badges">
-        <SurfaceBadges row={row} />
-      </div>
-      {/* BOTH ADDRESSES, because the fix is to replace one with the other
-          at the third-party app and a reader cannot do that from a badge.
-
-          ONE SENTENCE IN ONE ELEMENT. The note's text is a flex column, so
-          every text node and every code chip beside it became a row of its
-          own: one sentence was drawn as five stacked fragments with the two
-          addresses on lines by themselves. */}
-      {row.endpoint_current === false && (
-        <div className="int-row-note">
-          <span className="int-row-note-text">
-            <span>
-              Registered at <InlineCode>{row.endpoint}</InlineCode>, now{" "}
-              <InlineCode>{base ?? "no public address"}</InlineCode>. Update it in {surface.name}.
-            </span>
-          </span>
-        </div>
-      )}
-
-      {dropped && (
-        <div className="int-row-note">
-          <span className="int-row-note-text">
-            {/* ONE STRING, not a number beside its own noun. Split across
-                nodes it reads as three fragments to a screen reader, and no
-                test can match the sentence a person sees. */}
-            <span>
-              {row.skipped === 1
-                ? "1 delivery was verified and dropped"
-                : `${(row.skipped ?? 0).toLocaleString()} deliveries were verified and dropped`}
-            </span>
-            <span className="int-row-note-when">
-              {row.skipped === 1 ? "It reached no seat." : "They reached no seat."}
-            </span>
-          </span>
-        </div>
-      )}
-
-      <Reconcile status={row.reconcile} appName={surface.name} />
-    </li>
-  );
-}
-
 /**
  * The one thing a tile offers.
  *
@@ -1036,7 +717,7 @@ export const ROTATE_FINDINGS: ReadonlySet<string> = new Set([
 ]);
 
 /** The credential findings the loop holds on a tool, across its surfaces. */
-function credentialFindings(present: Present[]): ReconcileFinding[] {
+export function credentialFindings(present: Present[]): ReconcileFinding[] {
   return present.flatMap((p) =>
     (p.row.reconcile?.findings ?? []).filter((f) => ROTATE_FINDINGS.has(f.kind)),
   );
@@ -1170,7 +851,7 @@ interface AppManifest {
  * the person, and the confirmation page would come back as a string with
  * nowhere to display it.
  */
-export function postManifest(answer: AppManifest): void {
+function postManifest(answer: AppManifest): void {
   const form = document.createElement("form");
   form.method = "post";
   form.action = answer.action_url;
@@ -1305,7 +986,7 @@ export function SeatStep({
 }
 
 /** The setup listing's tools behind a card's sections, once each. */
-function toolsOf(sections: { tool: SetupToolState }[] | undefined): SetupToolState[] {
+export function toolsOf(sections: { tool: SetupToolState }[] | undefined): SetupToolState[] {
   // BY KEY, because a per-seat app contributes one section per agent and
   // they all carry the same tool. Counting it once per section made a roster
   // of one agent render four rows on the Atlassian card.
@@ -1324,7 +1005,7 @@ function toolsOf(sections: { tool: SetupToolState }[] | undefined): SetupToolSta
  * credential slot; where neither, the first roster with anything in it is as
  * good as any, since they read the same seat's mcp_env.
  */
-function rosterOf(tools: SetupToolState[]): SetupToolState | undefined {
+export function rosterOf(tools: SetupToolState[]): SetupToolState | undefined {
   const rosters = tools.filter((t) => (t.seats ?? []).length > 0);
   return (
     rosters.find((t) => t.seats_required) ?? rosters.find((t) => t.can_provision) ?? rosters[0]
@@ -1350,530 +1031,6 @@ export function formBlocked(sections: unknown[], guarded: boolean): string | und
     : "The engine did not say what this integration needs, so there is no form to open.";
 }
 
-/** Each form-opening action's accessible name, for one tool. */
-const ACTION_NAMES: Record<"connect" | "continue" | "rotate", (name: string) => string> = {
-  connect: (name) => `Connect ${name}`,
-  continue: (name) => `Continue ${name} setup`,
-  rotate: (name) => `Rotate token for ${name}`,
-};
-
-/**
- * A tile's one action, drawn.
- *
- * MANAGE AND LEARN MORE ARE LINKS, because they go somewhere: the tool's own
- * page, and its page on docs.crewlet.ai. The other three open the settings
- * form and are buttons. Rotate token is the one primary, because it is the
- * only one with a date on it; a list's other row actions are secondary, and
- * Learn more is the quietest because nothing is owed on a tile that carries
- * it.
- */
-export function ActionButton({
-  entry,
-  action,
-  blocked,
-  managed = null,
-  onOpen,
-}: {
-  entry: Entry;
-  action: TileAction;
-  /** From [formBlocked]: why the form cannot open, for the three that open it. */
-  blocked?: string;
-  /**
-   * Why the company document cannot be changed from here (ADR-0030), or
-   * null. It holds Connect and Continue, which write the document, and NOT
-   * Rotate token: a rotation seals a value the document already names and
-   * changes nothing in it, which is the break-glass a managed deployment
-   * keeps for a person.
-   */
-  managed?: string | null;
-  onOpen: () => void;
-}) {
-  switch (action.kind) {
-    case "manage":
-      return (
-        <ButtonLink
-          size="small"
-          variant="secondary"
-          href={href(["company", "integrations", entry.key])}
-          aria-label={`Manage ${entry.name}`}
-        >
-          Manage
-        </ButtonLink>
-      );
-    case "learn":
-      return (
-        <ButtonLink
-          size="small"
-          variant="ghost"
-          external
-          href={docHref(entry)}
-          aria-label={`Learn more about ${entry.name}`}
-        >
-          Learn more
-        </ButtonLink>
-      );
-    default: {
-      const held = blocked ?? (action.kind === "rotate" ? undefined : (managed ?? undefined));
-      return (
-        <Button
-          size="small"
-          variant={action.kind === "rotate" ? "primary" : "secondary"}
-          disabledReason={held}
-          // NAMED FOR THE TOOL, with the visible label at its start (the
-          // label is in the name, WCAG 2.5.3): a grid of tiles is a column of
-          // "Connect" buttons in a screen reader's list of controls.
-          aria-label={ACTION_NAMES[action.kind](entry.name)}
-          onClick={() => {
-            if (!held) onOpen();
-          }}
-        >
-          {action.label}
-        </Button>
-      );
-    }
-  }
-}
-
-/**
- * The quiet line at a tile's foot: what the tool is made of, counted.
- *
- * FACTS THE ENGINE SENT, never an estimate: the agents on its roster, the
- * credentials it holds findings about, and the deliveries this node counted —
- * the last only when `traffic_known`, because a node that could not read its
- * event log sends zero for every surface, and "0 deliveries" there is the
- * alarming answer on precisely the node that did not look. Empty on a tool
- * nobody has connected, which has nothing yet to count.
- */
-export function tileMeta(
-  present: Present[],
-  roster: SetupToolState | undefined,
-  credentials: ReconcileFinding[],
-  trafficKnown: boolean,
-): string {
-  if (present.length === 0) return "";
-  const parts: string[] = [];
-  const seats = roster?.seats?.length ?? 0;
-  if (seats > 0) parts.push(plural(seats, "agent"));
-  const expiring = credentials.filter((f) => f.kind === "credential_expiring").length;
-  const rejected = credentials.filter((f) => f.kind === "credential_rejected").length;
-  if (expiring > 0) parts.push(`${expiring} expiring`);
-  if (rejected > 0) parts.push(`${rejected} refused`);
-  const delivered = trafficKnown ? total(present, (r) => r.inbound) : null;
-  if (delivered !== null) {
-    parts.push(delivered === 0 ? "nothing delivered" : plural(delivered, "delivery", "deliveries"));
-  }
-  return parts.join(" · ");
-}
-
-/**
- * One integration in the catalogue: a tile with its mark, its name, the
- * engine's word for its state once the company has set it up, one sentence
- * and ONE action.
- *
- * THE SENTENCE IS WHAT IS OWED WHEN SOMETHING IS, and what the tool does
- * otherwise. The engine's roll-up carries a reason exactly when a person or
- * the engine has something left to do, and that is the sentence a reader
- * scanning the tiles came for; on a working tool the reason is empty and the
- * tile says what the tool is for, which is what tells a reader the engine
- * serves it at all.
- */
-export function IntegrationTile({
-  entry,
-  rows,
-  rollups,
-  sections,
-  trafficKnown,
-  guarded,
-  managed = null,
-  onOpen,
-}: {
-  entry: Entry;
-  rows: Map<string, IntegrationRow>;
-  rollups?: IntegrationTool[];
-  sections: { name: string; tool: SetupToolState; seat?: string }[];
-  trafficKnown: boolean;
-  guarded: boolean;
-  /** Why the company document cannot be changed from here, or null; see [ActionButton]. */
-  managed?: string | null;
-  /** Open the settings form for this tool, for the action the tile carries. */
-  onOpen: (action: TileAction, reason: string) => void;
-}) {
-  const present = presentSurfaces(entry, rows);
-  const tools = toolsOf(sections);
-  const state = entryState(entry, rows, rollups);
-  const credentials = credentialFindings(present);
-  const action = actionFor(state, tools, present.length > 0, credentials, guarded);
-  const meta = tileMeta(present, rosterOf(tools), credentials, trafficKnown);
-  const reason = asSentence(state.reason ?? "");
-  const configured = present.length > 0;
-  return (
-    <CatalogTile
-      // NOT SET UP IS THE QUIETER GROUND, never a drained mark: the mark is
-      // the vendor's own drawing at full strength on every tile, and a grey
-      // Datadog read as a placeholder image rather than as Datadog.
-      quiet={!configured}
-      mark={<VendorMark vendor={entry.vendor} size="lg" />}
-      title={entry.name}
-      status={
-        configured && state.tag !== "" ? (
-          <Tag size="sm" variant={state.tone} appearance={state.outline ? "outline" : "soft"}>
-            {state.tag}
-          </Tag>
-        ) : undefined
-      }
-      description={reason || entry.description}
-      meta={meta}
-      action={
-        <ActionButton
-          entry={entry}
-          action={action}
-          blocked={formBlocked(sections, guarded)}
-          managed={managed}
-          onOpen={() => onOpen(action, reason)}
-        />
-      }
-    />
-  );
-}
-
-/**
- * One integration on its own page: the tool's agents, whatever is wrong with
- * a surface, and the controls a tile leaves here — the settings form, the
- * owed action, and Disconnect.
- *
- * THE DISCLOSURE STAYS, open. A page about one tool opens on the tool, and the
- * body is what the page is for; the chevron is there so a reader who came for
- * the passes and deliveries below can fold the roster out of the way.
- *
- * The body is where the engine's own plumbing lives: a row per faulted surface
- * with what the reconcile loop last found, and a row per agent with its own
- * step at the third-party app. None of that belongs in a catalogue tile.
- */
-export function EntryRow({
-  entry,
-  rows,
-  rollups,
-  sections,
-  publicBase,
-  guarded = false,
-  managed = null,
-  avatarOf,
-  onOpen,
-  onDisconnect,
-}: {
-  entry: Entry;
-  rows: Map<string, IntegrationRow>;
-  /** How an agent on the tool's roster is drawn, by handle, off the chart. */
-  avatarOf?: (handle: string) => AgentAvatar | null | undefined;
-  /** The answer's `tools`: the engine's roll-up of every tool. */
-  rollups?: IntegrationTool[];
-  /**
-   * The address third-party apps reach this deployment on right now, for the
-   * row that has to say what a moved registration should be changed to.
-   */
-  publicBase?: string;
-  /** The engine's setup state per surface this tool is made of. */
-  sections?: { name: string; tool: SetupToolState; seat?: string }[];
-  /** Whether the setup listing was refused, for [formBlocked]. */
-  guarded?: boolean;
-  /**
-   * Why the company document cannot be changed from here — another system
-   * manages it (ADR-0030) — or null. It holds what writes the document
-   * (Connect, Continue, Disconnect, an agent's app) and leaves the settings
-   * form and Rotate token, through which a credential is rotated.
-   */
-  managed?: string | null;
-  /**
-   * Open the settings form — for the action named, or for the settings square
-   * when none is. Absent where nothing may open it.
-   */
-  onOpen?: (action: TileAction | null, reason: string) => void;
-  /** Take the tool away. Absent for a tool nothing has configured. */
-  onDisconnect?: () => void;
-}) {
-  const [open, setOpen] = useState(true);
-  const present = presentSurfaces(entry, rows);
-  const absent = present.length === 0;
-  const tools = toolsOf(sections);
-  const state = entryState(entry, rows, rollups);
-  const credentials = credentialFindings(present);
-  const action = actionFor(state, tools, !absent, credentials, guarded);
-  const blocked = formBlocked(sections ?? [], guarded);
-  // WHAT THE LOOP IS SAYING ABOUT EACH AGENT, across every surface on this
-  // card.
-  //
-  // The roster and the reconcile rows come from two endpoints and meet here,
-  // which is why this is the only place the contradiction could be resolved.
-  // The roster's `satisfied` means "a credential is sealed where this app
-  // looks for it" — a real fact, and not the one a reader takes from a green
-  // badge marked ready. Measured: the card said an agent had no Jira account
-  // and that Atlassian was still setting it up, with the same agent's row
-  // underneath badged ready, because the ${VAR} resolved.
-  const seatNotes = seatFindings(present);
-  const roster = rosterOf(tools);
-  const seats = roster?.seats ?? [];
-  const bodyID = `int-body-${entry.key}`;
-
-  // THE PAGE CARRIES WHAT THE TILE WOULD HAVE, MINUS MANAGE — this IS where
-  // Manage goes — plus the two controls a tile leaves here: the settings form
-  // (the square) and Disconnect. An owed action (Continue, Rotate token) is
-  // the card's one labelled button beside them, because on this page it is
-  // still the thing a person came to do.
-  const owed = action.kind === "manage" ? null : action;
-  const actions = (
-    <>
-      {owed && onOpen && (
-        <ActionButton
-          entry={entry}
-          action={owed}
-          blocked={blocked}
-          managed={managed}
-          onOpen={() => onOpen(owed, asSentence(state.reason ?? ""))}
-        />
-      )}
-      {!absent && onDisconnect && (
-        <Button
-          size="small"
-          variant="ghost"
-          disabledReason={managed ?? undefined}
-          onClick={() => {
-            if (!managed) onDisconnect();
-          }}
-        >
-          Disconnect
-        </Button>
-      )}
-    </>
-  );
-
-  // NOT CONNECTED IS A PLAIN CARD. There is nothing to disclose, so it gets
-  // no disclosure: a chevron that opens an empty box is a control that lies.
-  if (absent) {
-    return (
-      <div className="int-card int-card-absent">
-        <span className="int-brand" aria-hidden>
-          <VendorMark vendor={entry.vendor} size="lg" muted />
-        </span>
-        <span className="int-heading">
-          <span className="int-name">{entry.name}</span>
-          <span className="int-desc">{entry.description}</span>
-        </span>
-        <div className="int-card-actions">{actions}</div>
-      </div>
-    );
-  }
-
-  return (
-    <section className="int-card" aria-label={`${entry.name} agents and surfaces`}>
-      <div className="int-card-head">
-        {/* THE DISCLOSURE IS THE IDENTITY BLOCK, not the whole header, so the
-            row's own buttons are not nested inside a button and a keyboard
-            reader gets one predictable target. */}
-        <button
-          type="button"
-          className="int-card-toggle"
-          aria-expanded={open}
-          aria-controls={bodyID}
-          onClick={() => setOpen((was) => !was)}
-        >
-          <span className="int-brand" aria-hidden>
-            <VendorMark vendor={entry.vendor} size="lg" />
-          </span>
-          <span className="int-heading">
-            <span className="int-name">Agents and surfaces</span>
-            {/* WHAT THE TOOL IS, never how it is doing: the header above
-                carries the state, and what is wrong is a note in the body. */}
-            <span className="int-desc">{entry.description}</span>
-          </span>
-        </button>
-        <div className="int-card-actions">
-          {/* OURS, NOT `IconButton`. This square is a DISCLOSURE TRIGGER: it
-              carries `aria-expanded` and `aria-controls` over the card body,
-              and `.int-chevron` is what rotates the glyph when the card opens
-              — a state uilet's icon button has no expression for, since its
-              only stateful prop is `pressed`. The mark inside it is the
-              design system's. */}
-          <button
-            type="button"
-            className={open ? "int-chevron is-open" : "int-chevron"}
-            aria-expanded={open}
-            aria-controls={bodyID}
-            aria-label={open ? `Hide ${entry.name} details` : `Show ${entry.name} details`}
-            onClick={() => setOpen((was) => !was)}
-          >
-            <ChevronDownGlyph size="sm" />
-          </button>
-          {/* SETTINGS BESIDE THE DISCLOSURE, as a square the size of the
-              chevron: chrome belonging to the card, next to the other control
-              that is. The same form Connect opened, never a narrowed copy.
-              Disabled with its reason rather than hidden, like every write. */}
-          {onOpen && (
-            // THE SAME SQUARE AS THE CHEVRON BESIDE IT, which is why it keeps
-            // `.int-chevron` and is not an `IconButton`: uilet's sizes it from
-            // its own scale, and a settings square a few pixels off its
-            // neighbour is the one thing this pair must not be.
-            <button
-              type="button"
-              className="int-chevron"
-              aria-label={`${entry.name} settings`}
-              aria-disabled={blocked ? true : undefined}
-              title={blocked ?? `${entry.name} settings`}
-              onClick={() => {
-                if (!blocked) onOpen(null, "");
-              }}
-            >
-              <SettingsGlyph size="sm" />
-            </button>
-          )}
-          {actions}
-        </div>
-      </div>
-
-      {open && (
-        <div className="int-card-body" id={bodyID}>
-          {/* ONE LIST, the agents and anything wrong with a surface. They are
-              two kinds of the same thing to a reader (this tool, and whether
-              it works), and two lists put an arbitrary seam down the middle
-              of a card whose every row is an agent. A working surface adds
-              nothing, so on a healthy tool this list IS the roster. */}
-          <ul className="int-rows">
-            {present.map((p) => (
-              <SurfaceRow
-                key={p.surface.key}
-                surface={p.surface}
-                row={p.row}
-                // NAMED ON EVERY TOOL. A single-surface tool once left the
-                // row's identity empty, so a faulted Mattermost drew a lone
-                // "routes nowhere" badge at the end of a blank line.
-                named
-                base={publicBase}
-              />
-            ))}
-            {/* A BODY WITH NOTHING IN IT SAYS SO, rather than opening onto an
-                empty box under a chevron that promised something. */}
-            {seats.length === 0 && !present.some((p) => surfaceFaulted(p.row)) && (
-              <li className="int-row">
-                <span className="int-row-detail">Nothing to report.</span>
-              </li>
-            )}
-            {seats.map((seat) => (
-              <li key={seat.handle} className="int-row int-seat-row">
-                {/* THE AGENT'S OWN MARK, the same one the org chart, the
-                    people list and every seat chip render. An agent should
-                    look like itself wherever it appears, which is also what
-                    the console does on its roster: a row of bare names reads
-                    as configuration, and a row with the agent's mark reads
-                    as the person it stands for. */}
-                <SeatAvatar
-                  name={seat.name || seat.handle}
-                  kind="agent"
-                  avatar={avatarOf?.(seat.handle)}
-                  size="sm"
-                  decorative
-                />
-                <div className="int-row-identity">
-                  <span className="int-row-name">
-                    {seat.name || seat.handle}
-                    {/* HOW MUCH THIS AGENT MAY DO, beside its name and drawn
-                        quieter than a status tag: it is a standing fact about
-                        the agent rather than something needing attention.
-                        The console states it here for that reason, and this
-                        roster is its counterpart.
-                        It was a chip out on the right beside "ready", where
-                        two chips on one row read as two verdicts and a
-                        reader scanning for what is wrong stopped on "read
-                        only" every time. */}
-                    {seat.tier_label && (
-                      <span
-                        // THE WEIGHT CLASS ONLY WHERE THERE IS A TIER. An
-                        // app can grade an agent in a vocabulary this engine
-                        // does not have a scale for — a Datadog role an
-                        // organization made is its own name and nothing else
-                        // — and drawing it in the accent reserved for full
-                        // access would be this screen claiming how much a
-                        // role it has never seen grants.
-                        className={
-                          seat.tier ? `int-seat-tier int-seat-tier--${seat.tier}` : "int-seat-tier"
-                        }
-                        // WHAT THE TIER GRANTS, on hover. Three words on a
-                        // pill cannot say what full access does and does not
-                        // include, and the sentence that can is the engine's
-                        // own, from the package that puts those permissions
-                        // on the token.
-                        title={seat.tier_hint}
-                      >
-                        {seat.tier_label}
-                      </span>
-                    )}
-                  </span>
-                  {/* WHERE THIS AGENT'S OWN CREDENTIAL IS, or what is
-                      missing. It read "no inbound path yet" against every
-                      agent of every app but Slack, because Slack is the only
-                      one with a route per seat: true, and silent about the
-                      thing the row exists to answer, which is whether this
-                      agent can act as itself here. */}
-                  {/* WHAT THIS AGENT IS AT THE APP, which is the question a
-                      roster of agents raises. It showed the delivery ROUTE
-                      instead, on the one app that has one per seat: true, and
-                      the same shape for every agent bar the handle, so it
-                      said nothing a reader could act on and nothing about
-                      which of their apps this one is. The engine's sentence
-                      wins; the path is the fallback for a node too old to
-                      send one. */}
-                  {/* THE ROW KEEPS ITS OWN SENTENCE, which is who this agent
-                      IS at the app. The loop's reason for the badge beside it
-                      is in the surface's own band above, once — printed here
-                      as well it was the same sentence twice on one card, which
-                      is the shape this whole screen is being cured of. */}
-                  <span className="int-row-detail">
-                    {seat.detail ? (
-                      seat.detail
-                    ) : seat.inbound_path ? (
-                      <InlineCode>{seat.inbound_path}</InlineCode>
-                    ) : (
-                      "nothing set up for this agent"
-                    )}
-                  </span>
-                </div>
-                <div className="int-row-badges">
-                  <SeatBadge satisfied={seat.satisfied} finding={seatNotes.get(seat.handle)} />
-                </div>
-                {/* THE STEP'S OWN CONTROL, outside the badges so a refusal can
-                    take the full width of the row the way a finding does. */}
-                {roster && (
-                  <SeatStep app={entry.name} toolKey={roster.key} seat={seat} managed={managed} />
-                )}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </section>
-  );
-}
-
-/**
- * The findings the loop has about individual agents, keyed by handle.
- *
- * ACROSS EVERY SURFACE ON THE CARD, because one agent's account is one thing
- * and the card's surfaces are three views of it: Atlassian creates the
- * account, Jira and Confluence are what it then works in, and any of the
- * three can be the one that knows this agent cannot work yet.
- *
- * THE FIRST ONE WINS and the order is the card's own surface order, which
- * puts the provisioning surface first — the one whose answer is about the
- * account rather than about a product refusing it.
- */
-function seatFindings(present: Present[]): Map<string, ReconcileFinding> {
-  const out = new Map<string, ReconcileFinding>();
-  for (const p of present) {
-    for (const f of p.row.reconcile?.findings ?? []) {
-      if (f.subject && !advisory(f) && !out.has(f.subject)) out.set(f.subject, f);
-    }
-  }
-  return out;
-}
-
 /**
  * A finding that describes something WORKING.
  *
@@ -1892,40 +1049,8 @@ function seatFindings(present: Present[]): Map<string, ReconcileFinding> {
  * An ABSENT phase is not an advisory: "cannot say" must read as a fault so the
  * badge stays honest.
  */
-function advisory(f: ReconcileFinding): boolean {
+export function advisory(f: ReconcileFinding): boolean {
   return f.phase === "ready";
-}
-
-/**
- * One agent's badge, from what is sealed AND what the loop found.
- *
- * THREE STATES, NOT TWO. `satisfied` answers "is a credential sealed where
- * this app looks for it", which is not the same question as "can this agent
- * work" — and rendering it as **ready** made the card contradict itself, with
- * a green agent under a surface reporting that the same agent had no account.
- *
- * A FINDING THAT NAMES THE AGENT WINS, whatever it is: the loop looked, and
- * the roster did not. Whether it is a wait or a fault is the finding's own
- * verdict, which the surface's own band above already renders — so this says
- * only that the agent is not there yet, in the tone the phase carries.
- */
-function SeatBadge({ satisfied, finding }: { satisfied: boolean; finding?: ReconcileFinding }) {
-  if (finding) {
-    // AMBER FOR A WAIT, and amber for a fault too: the badge is a state, and
-    // the band beside it is where the difference and the remedy are written.
-    // A red agent under a surface saying "nothing has to be done" would be
-    // the same contradiction in the other direction.
-    return (
-      <Tag variant="warning" appearance="outline">
-        not ready
-      </Tag>
-    );
-  }
-  return (
-    <Tag variant={satisfied ? "success" : "neutral"} appearance={satisfied ? "soft" : "outline"}>
-      {satisfied ? "ready" : "not set up"}
-    </Tag>
-  );
 }
 
 /**
@@ -2008,7 +1133,7 @@ export function useSetup(): {
  * out of one that is simply running invites somebody to abandon it a second
  * after asking.
  */
-function stuckDisconnecting(entry: Entry, rows: Map<string, IntegrationRow>): string {
+export function stuckDisconnecting(entry: Entry, rows: Map<string, IntegrationRow>): string {
   for (const surface of entry.surfaces) {
     const reconcile = rows.get(surface.key)?.reconcile;
     if (reconcile?.disconnecting && reconcile.last_error) {
@@ -2036,7 +1161,7 @@ export function deliveryEvent(type: string): string {
   return type.replace(/^(webhook|forge|socket):/, "");
 }
 
-function SurfaceDeliveries({ surface, name }: { surface: string; name: string }) {
+export function SurfaceDeliveries({ surface, name }: { surface: string; name: string }) {
   const nav = useNavigator();
   const now = useNow();
   const org = useOrg();
@@ -2466,7 +1591,7 @@ function concludedLine(run: SetupRun): string {
  * THE FINDINGS ARE THE POINT OF A ROW, so opening one reads the pass itself
  * rather than expanding the row's own copy — see [useSetupRun].
  */
-function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
+export function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
   const now = useNow();
   const { runs, scope, guarded, needs, loading } = useSetupRuns(kinds);
   // WHICH PASS IS OPEN, as the surface AND the id rather than the id alone:
@@ -2693,7 +1818,7 @@ function PassDetail({
                   {finding.detail ||
                     `${finding.kind.replace(/_/g, " ")}${finding.subject ? `: ${finding.subject}` : ""}`}
                 </span>
-                <FindingSubjects of={finding} />
+                <FindingSubjects subjects={finding.subjects ?? []} />
                 {finding.remedy && <span className="int-note-remedy">{finding.remedy}</span>}
               </li>
             ))}
@@ -2837,6 +1962,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
         kind="Integration"
         icon="plug"
         identifier={entry.key}
+        mark={<VendorMark vendor={entry.vendor} size={28} />}
         title={entry.name}
         status={
           state.tag === "" ? undefined : (
@@ -2943,7 +2069,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
                           {finding.detail ||
                             `${finding.kind.replace(/_/g, " ")}${finding.subject ? `: ${finding.subject}` : ""}`}
                         </span>
-                        <FindingSubjects of={finding} />
+                        <FindingSubjects subjects={finding.subjects ?? []} />
                         {finding.remedy && (
                           <span className="int-note-remedy">{finding.remedy}</span>
                         )}
@@ -2988,480 +2114,6 @@ export function IntegrationPeek({ kind }: { kind: string }) {
           )}
         </QueryState>
       </div>
-    </>
-  );
-}
-
-/** Which half of the catalogue is shown. */
-type Show = "all" | "connected" | "available";
-
-/**
- * The address every inbound integration is built on, said once as a quiet
- * fact under the catalogue (or under one tool's header): what a vendor's
- * webhook form asks for, with a control to copy it.
- */
-function EngineAddress({ value }: { value: string }) {
-  return (
-    <p className="int-address">
-      <LinkGlyph size="sm" aria-hidden />
-      <span>Third-party apps reach this engine at</span>
-      {/* IN FULL: the chip shortens a long value to its ends, and an
-          address cut to "http://12…3812" is one nobody can type. */}
-      <Copyable value={value} display={value} monospace ariaLabel="Copy the engine's address" />
-    </p>
-  );
-}
-
-export function Integrations({ kind }: { kind?: string }) {
-  const viewer = useViewer();
-  // A MANAGED DOCUMENT (ADR-0030): what writes it is held on every card, with
-  // who manages it; a credential's rotation stays open.
-  const managed = useManagedConfig();
-  // HOW EACH AGENT IS DRAWN on a tool's roster and in its disconnect dialog,
-  // off the chart: both are handed the resolver rather than reaching for the
-  // store, so they draw in a test with no provider above them.
-  const badgeOf = useSeatBadgeOf();
-  const avatarOf = useCallback((handle: string) => badgeOf(handle).avatar, [badgeOf]);
-  // Traffic counters are not pushed, and they move slowly; a minute is the
-  // right cadence for "is anything arriving at all".
-  //
-  // FASTER WHILE SOMETHING IS MOVING. A connect or a disconnect starts work
-  // at the engine that takes seconds, and the row is what reports how it
-  // went: at a minute's cadence an operator watched a card say "Waiting for
-  // the provider" long after it had settled, and read the delay as the
-  // failure. The quick cadence is bounded by its own condition, since a
-  // surface that has settled leaves the set.
-  const [settling, setSettling] = useState(false);
-  // SOMETHING WAS JUST ASKED FOR, whether or not anything reflects it yet.
-  //
-  // The quick cadence below is derived from the ROWS, and a connect has no
-  // row to derive it from: the write returns as soon as the revision is
-  // activated, and the read that follows can land before the engine has
-  // applied it. The screen then holds the pre-connect answer, sees nothing
-  // in flight to watch, and waits out the slow poll: an operator pressed
-  // Connect, the card said Connect, and only a manual refresh moved it.
-  //
-  // So a write starts its own window. It is what this screen knows and the
-  // rows do not, and it is bounded, because a connect that never shows up is
-  // a fault to read about rather than a reason to poll for ever.
-
-  const {
-    data,
-    loading,
-    error,
-    refusal,
-    refetch: reread,
-  } = useQuery("integrations", undefined, {
-    pollMs: settling ? 4_000 : 60_000,
-    // AND WHENEVER THIS TAB COMES BACK. Setting an integration up means
-    // leaving for the third-party app and returning, and returning is the
-    // strongest signal there is that the answer moved — stronger than any
-    // interval, and the only one that covers the half of the work done
-    // somewhere this screen never sees. Measured: a GitHub App installed in
-    // about eight seconds, then a card still asking for the install, reloaded
-    // by hand to find out why.
-    refetchOnFocus: true,
-  });
-  const setup = useSetup();
-  // ONE CLOCK for every relative time on the screen, the header's facts
-  // included — two components reading their own is how "4m ago" comes to sit
-  // beside "3m ago" for one instant.
-  const now = useNow();
-  // READ AGAIN AFTER A WRITE, because the first read can land before the
-  // engine has applied the revision it just stored. See [useRecheck].
-  const { watching, watch } = useRecheck(
-    useCallback(() => {
-      // BOTH HALVES, every time. The rows say whether the company has a
-      // surface and the listing says what its form should show, and a
-      // re-read of one leaves the card drawn from two documents that
-      // disagree: that is what put a Continue button beside Connected, and
-      // later left a disconnected card with no control at all.
-      reread();
-      setup.reload();
-    }, [reread, setup]),
-  );
-  const [dialog, setDialog] = useState<{
-    title: string;
-    sections: { name: string; tool: SetupToolState; seat?: string }[];
-    /** Set when the form was opened to rotate a credential: the engine's reason. */
-    rotate?: string;
-  } | null>(null);
-  const [dropping, setDropping] = useState<{
-    name: string;
-    kinds: string[];
-    stuck: string;
-    apps: { handle: string; name: string; url: string }[];
-    appPath?: string;
-  } | null>(null);
-  // WHICH HALF OF THE CATALOGUE IS SHOWN. Per visit: it narrows the tiles,
-  // and remembering it would open the screen on a filter the reader has
-  // forgotten setting, hiding the tile they came for.
-  const [show, setShow] = useState<Show>("all");
-  const rows = new Map((data?.integrations ?? []).map((r) => [r.key, r]));
-  /** Open the settings form for a tool, for the action that asked. */
-  const openForm = (entry: Entry, action: TileAction | null, reason: string) =>
-    setDialog({
-      title: entry.name,
-      sections: sectionsFor(entry, setup.byKey),
-      rotate: action?.kind === "rotate" ? reason : undefined,
-    });
-  // THE SEGMENT IS A DESTINATION, not decoration. `kind` was accepted and
-  // never read, so `#/company/integrations/github` rendered the whole catalogue
-  // — every link into one integration landed on the list it came from. It
-  // matches an entry by its own key OR by any surface it covers, because a
-  // finding and a webhook route both name the SURFACE (`jira`), while the
-  // card is the tool (`atlassian`).
-  const focus = kind
-    ? CATALOG.find((e) => e.key === kind || e.surfaces.some((s) => s.key === kind))
-    : undefined;
-  // THE HEADER'S OWN STATE, out of the same roll-up a card draws — a page and
-  // a card disagreeing about a tool would be two answers to one question on
-  // one screen.
-  const focusState = focus ? entryState(focus, rows, data?.tools) : undefined;
-  // THE CRUMB NAMES THE TOOL, not the segment: `#/company/integrations/jira`
-  // is the Atlassian page, and a trail reading "jira" over a header reading
-  // Atlassian is two names for one object.
-  usePageLabels(useMemo(() => (kind && focus ? { [kind]: focus.name } : {}), [kind, focus]));
-  // WHICH SURFACES OF THIS TOOL A PASS CAN EVEN RUN AGAINST, which is what the
-  // runs route is keyed on: `integration.Kinds`, the same set the setup
-  // listing carries and the same set `DELETE /setup/integrations/{kind}`
-  // accepts. `forge` is a surface of the Atlassian card and is not a kind, so
-  // asking for its runs is a 404 — the same trap `disconnectOrder` fell into.
-  //
-  // EMPTY MEANS THE LISTING IS NOT HERE, not that nothing converges: every
-  // kind is in it whether or not this company configured it, so the only way
-  // to hold none of them is a refused or unfinished read — and a passes panel
-  // drawn from that would report "no pass has run" about a question it never
-  // asked.
-  const focusKinds = focus
-    ? focus.surfaces.filter((s) => setup.byKey.has(s.key)).map((s) => s.key)
-    : [];
-  // A TERMINAL PHASE IS ONE NOBODY IS WAITING ON. Everything else is the
-  // engine mid-flight, and the screen's job while that is true is to keep
-  // looking. Derived from what arrived rather than from what was clicked, so
-  // a pass somebody else started is watched too.
-  const moving = [...rows.values()].some((r) => IN_FLIGHT.has(r.reconcile?.phase ?? ""));
-  useEffect(() => setSettling(moving || watching), [moving, watching]);
-  const configured = CATALOG.filter((e) => e.surfaces.some((s) => rows.has(s.key)));
-  const shown = [...CATALOG]
-    .sort(byConfiguredThenName(rows))
-    .filter((e) => show === "all" || (show === "connected") === configured.includes(e));
-
-  // THE ADDRESS EVERY INBOUND INTEGRATION IS BUILT ON, said once: over the
-  // catalogue it describes, or at the head of one tool's page. It is one
-  // setting, and a screen that asked for it per integration would ask the
-  // operator to keep seven copies consistent. ALWAYS SET: the address vendors
-  // deliver to is Tier A (the public listener's `api.public.external_url`
-  // where one is configured, and `api.external_url` otherwise, `config_path`
-  // naming which), required on every node serving this screen and resolved
-  // before the file is decoded, so a node that answers at all has an address.
-  //
-  // A QUIET FACT, NOT A CALLOUT: it describes the catalogue rather than
-  // warning about it, and a banner over the tiles stacked on the empty
-  // note under it read as two alarms where there was none. See [EngineAddress].
-  const baseAddress = setup.base && <EngineAddress value={setup.base.value} />;
-
-  // THE TILES, OR ONE TOOL'S PAGE, drawn once: on the catalogue they sit
-  // under the third-party heading, and on a tool's page on their own.
-  const catalogue = (
-    <>
-      {/* BOTH HALVES, because a card drawn from one of them is a card with
-          no buttons. See [useSetup]'s `loading`. */}
-      {((loading && !data) || setup.loading) && (
-        <Skeleton variant="text" rows={6} label="Loading" />
-      )}
-      <QueryState error={error} refusal={refusal} loading={loading} empty={undefined}>
-        {/* NOTHING CONNECTED IS SAID ONLY WHERE IT IS NEWS: under the
-            Connected filter, whose list it empties. Over the whole catalogue
-            the filter's own "Connected 0" already says it, and a banner
-            saying it again stood on top of the address note above it. */}
-        {data && !kind && !setup.loading && show === "connected" && configured.length === 0 && (
-          <EmptyState
-            size="compact"
-            icon={<PlugGlyph size={32} />}
-            title="No app is connected yet"
-            description="Every app this engine serves is under Available, with the way to connect it."
-            action={
-              <Button variant="secondary" size="small" onClick={() => setShow("available")}>
-                Show available apps
-              </Button>
-            }
-          />
-        )}
-        {kind && !focus && (
-          <EmptyState
-            icon={<PlugGlyph size="xl" />}
-            title={`This build serves no integration called “${kind}”`}
-            description="See Company › Integrations for the ones available."
-          />
-        )}
-        {/* THE CATALOGUE: WHAT THIS COMPANY HAS, THEN WHAT IT COULD HAVE, each
-            half alphabetical, one tile per tool with one action each.
-
-            Connected covers ATTEMPTED as well as working — a tile with a
-            block behind it, whatever the loop says about it — because a
-            broken integration is one this company has and is the tile most
-            worth reaching first. Sorting on health instead would move a tile
-            out from under the cursor every time an app recovered.
-
-            NOT UNTIL BOTH HALVES HAVE ANSWERED. A tile drawn from the socket
-            alone has no setup listing, so its action could not say whether a
-            form exists behind it; the skeleton above says so honestly. A
-            REFUSED setup read is not waiting: it answers, the banner says so,
-            and the tiles render with their form actions disabled and saying
-            why. */}
-        {!setup.loading && !kind && shown.length > 0 && (
-          <TileGrid columns={3}>
-            {shown.map((entry) => (
-              <IntegrationTile
-                key={entry.key}
-                entry={entry}
-                rows={rows}
-                rollups={data?.tools}
-                sections={sectionsFor(entry, setup.byKey)}
-                trafficKnown={data?.traffic_known ?? false}
-                guarded={setup.guarded}
-                managed={managed}
-                onOpen={(action, reason) => openForm(entry, action, reason)}
-              />
-            ))}
-          </TileGrid>
-        )}
-        {/* ONE TOOL'S PAGE, which is where a tile's Manage goes: the agents,
-            the surfaces that need something, the settings form and
-            Disconnect. A KIND THAT NAMES NOTHING LISTS NOTHING — the empty
-            state above already says the link is dead. */}
-        {!setup.loading && focus && (
-          <EntryRow
-            // EACH SIBLING ITS OWN KEY: the tool's history below is keyed on
-            // the tool too, and two children of one parent sharing a key are
-            // reconciled as one, so every poll appended another card.
-            key={`entry:${focus.key}`}
-            entry={focus}
-            rows={rows}
-            rollups={data?.tools}
-            sections={sectionsFor(focus, setup.byKey)}
-            publicBase={setup.base?.value}
-            guarded={setup.guarded}
-            managed={managed}
-            avatarOf={avatarOf}
-            onOpen={(action, reason) => openForm(focus, action, reason)}
-            onDisconnect={() =>
-              setDropping({
-                name: focus.name,
-                // EVERY SURFACE THE CARD COVERS, not the first one.
-                //
-                // Atlassian is an organization and two products, and
-                // disconnecting took only the surface that happened to be
-                // listed first: the account was deleted, its block removed,
-                // and the card still read Connected because Jira and
-                // Confluence were untouched. A person pressing Disconnect on a
-                // card means the card.
-                kinds: disconnectOrder(focus, rows, sectionsFor(focus, setup.byKey)),
-                stuck: stuckDisconnecting(focus, rows),
-                // WHAT THE ENGINE CANNOT DELETE ITSELF. A seat carries a
-                // manage link only where what it holds has to be removed by
-                // hand, so an integration with nothing to hand over renders no
-                // list at all — each agent once, however many sections carry
-                // the same tool.
-                apps: toolsOf(sectionsFor(focus, setup.byKey))
-                  .flatMap((tool) => tool.seats ?? [])
-                  .filter((seat) => seat.manage_url)
-                  .map((seat) => ({
-                    handle: seat.handle,
-                    // THE AGENT, not the handle: the dialog draws this roster
-                    // the way every other roster in the product draws one.
-                    name: seat.name || seat.handle,
-                    url: seat.manage_url as string,
-                  })),
-                // WHAT IS LEFT TO CLICK once the link has opened, in the app's
-                // own words. Stated once, because it is the same for every
-                // agent.
-                appPath: sectionsFor(focus, setup.byKey).find((s) => s.tool.manage_path)?.tool
-                  .manage_path,
-              })
-            }
-          />
-        )}
-        {/* WHAT HAS BEEN HAPPENING TO IT, above what has been arriving: every
-            finding on this screen comes from a pass, and until this panel
-            existed nothing said that one had ever run — `SetupRun` was
-            declared on the wire and read by nobody. Only on the focused
-            screen, because a history per tool over six cards is six tables
-            nobody came for. */}
-        {focus && focusKinds.length > 0 && (
-          // KEYED ON THE TOOL, so walking from one integration's page to
-          // another's does not carry the open pass across: the detail route is
-          // keyed on (kind, id), and a pass opened on GitHub would be asked
-          // for under Slack and answer 404.
-          <SetupPasses key={`passes:${focus.key}`} entry={focus} kinds={focusKinds} />
-        )}
-
-        {/* WHAT ACTUALLY ARRIVED, one panel per surface the tool covers.
-            Per surface rather than per tool because the event rows carry the
-            SURFACE as their source — Atlassian is an organization and two
-            products, and a Jira delivery and a Confluence one are different
-            answers to "is this working". A silent surface says so rather
-            than being left out, which is the fact an operator came for. */}
-        {focus &&
-          focus.surfaces
-            // `forge` is a relay rather than a source: it hands Jira and
-            // Confluence events on in its own shape and the rows are filed
-            // under the product they belong to, so a panel for it could
-            // only ever be empty.
-            .filter((surface) => surface.key !== "forge")
-            .map((surface) => (
-              <SurfaceDeliveries key={surface.key} surface={surface.key} name={surface.name} />
-            ))}
-      </QueryState>
-    </>
-  );
-
-  return (
-    <>
-      {managed !== null && (
-        <Callout variant="neutral" icon={<ShieldGlyph size="md" />}>
-          {managed}
-        </Callout>
-      )}
-      {setup.guarded && (
-        <Callout variant="neutral" icon={<KeyGlyph size="md" />}>
-          <span>{needsWords("Reading the integrations' setup state", setup.needs)}</span>
-          <span className="spacer" />
-          {/* THE DOOR, FOR A READER WHO IS NOBODY: a banner that only NAMES
-              the missing credential leaves them nothing on the page that can
-              supply it. A signed-in reader lacks a GRANT, which signing in
-              again as themselves would not change, so they get the sentence
-              alone. */}
-          {viewer.anonymous && (
-            <Button size="small" leadingIcon={<KeyGlyph size="sm" />} onClick={goSignIn}>
-              Sign in
-            </Button>
-          )}
-        </Callout>
-      )}
-
-      {/* ONE OBJECT, ONE HEADER. `#/company/integrations/{kind}` is a page about
-          a single tool, and it opened with the catalogue's chrome and a card:
-          the tool's name lived inside the card's disclosure BUTTON, which is a
-          control rather than a title, so nothing on the screen named what it
-          was about until the reader's eye reached the row.
-          The card stays (it carries the actions, the surfaces and the roster),
-          and this is the title and the facts re-homed above it. They are the
-          peek's facts, from one function, so the two frames cannot drift; see
-          [integrationFacts]. */}
-      {focus && focusState && (
-        <ObjectHeader
-          kind="Integration"
-          icon="plug"
-          identifier={focus.key}
-          title={focus.name}
-          status={
-            focusState.tag === "" ? undefined : (
-              <Tag variant={focusState.tone} appearance={focusState.outline ? "outline" : "soft"}>
-                {focusState.tag}
-              </Tag>
-            )
-          }
-          facts={
-            presentSurfaces(focus, rows).length > 0
-              ? integrationFacts(focus, rows, now, {
-                  known: data?.traffic_known ?? false,
-                  since: data?.traffic_since,
-                })
-              : undefined
-          }
-        />
-      )}
-      {kind && baseAddress}
-
-      {dropping && (
-        <DisconnectDialog
-          name={dropping.name}
-          kinds={dropping.kinds}
-          stuck={dropping.stuck || undefined}
-          apps={dropping.apps}
-          appPath={dropping.appPath}
-          avatarOf={avatarOf}
-          onClose={() => setDropping(null)}
-          // The row does not vanish here: the engine keeps the block until
-          // the third-party app teardown succeeds, so what a re-read shows
-          // is the surface moving to Disconnecting.
-          onDone={() => {
-            // BOTH HALVES, AND KEEP LOOKING AT BOTH. A disconnect leaves
-            // the listing calling the surface configured while the rows
-            // already say it is gone, which is the same race as a connect
-            // in the other direction. See [useRecheck].
-            watch();
-          }}
-        />
-      )}
-
-      {dialog && (
-        <SetupDialog
-          sections={dialog.sections}
-          title={dialog.title}
-          rotate={dialog.rotate}
-          onClose={() => setDialog(null)}
-          // BOTH HALVES. The requirements half says what the form should now
-          // show; the status half is what reports whether the connect took,
-          // and it is the one an operator is looking at when the dialog
-          // closes.
-          onDone={() => {
-            // READ, AND KEEP LOOKING: the first read can land before the
-            // engine has applied the revision it just stored. See [useRecheck].
-            watch();
-          }}
-        />
-      )}
-
-      {/* CREWLET'S OWN SERVICES FIRST, on the catalogue's page and never on
-          one tool's: what the company already has, before what it could
-          connect. */}
-      {!kind && <BuiltIn />}
-
-      {kind ? (
-        catalogue
-      ) : (
-        // THE THIRD-PARTY CATALOGUE, under the kit's section heading as Built
-        // into Crewlet is: the filter, the address vendors deliver to and the
-        // note that nothing is connected are all about these tiles, and drawn
-        // above Crewlet's own services they read as governing those too.
-        //
-        // THE FILTER IS THE SECTION'S OWN CONTROL, at the end of its heading
-        // row, as on every catalogue in this product: the counts are what a
-        // reader asks first ("how many do we have?"). The counts are a
-        // READING, so the filter waits for one: "Connected 0" before the rows
-        // answer is a claim that the company was counted.
-        <Section
-          title="Third-party apps"
-          description="Connect the tools the company already uses."
-          actions={
-            data && (
-              <SegmentedControl<Show>
-                semantics="radio"
-                activate="manual"
-                label="Which integrations to show"
-                size="sm"
-                value={show}
-                onValueChange={setShow}
-                options={[
-                  { value: "all", label: "All" },
-                  { value: "connected", label: "Connected", count: configured.length },
-                  {
-                    value: "available",
-                    label: "Available",
-                    count: CATALOG.length - configured.length,
-                  },
-                ]}
-              />
-            )
-          }
-        >
-          {catalogue}
-          {baseAddress}
-        </Section>
-      )}
     </>
   );
 }
