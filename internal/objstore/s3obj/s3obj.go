@@ -395,6 +395,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/aws/smithy-go"
+	"github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 
 	"github.com/crewlet/crewlet/internal/httpx"
@@ -577,6 +578,12 @@ type Backend struct {
 	// client the probe makes them through: the bucket's own transport.
 	presigner *s3.PresignClient
 	http      *http.Client
+
+	// unpaced is the client's API options as the SDK and the configuration
+	// gave them, before the client's own steps ([paced]) were added: what
+	// every presign is built from ([Backend.withoutAttempts]). Clipped, so
+	// nothing appending to it writes beside the options it holds.
+	unpaced []func(*middleware.Stack) error
 
 	// caps is what the boot probe proved of the provider, written once
 	// by Open and read by every put after.
@@ -763,7 +770,9 @@ func open(ctx context.Context, cfg Config, backoff retry.BackoffDelayer, c clock
 		// A THROTTLE SLOWS THE WHOLE CLIENT ([gate]), a request the bucket
 		// keeps failing is given up within a minute ([judge]), and a
 		// request its deadline ends names the bucket's last answer — each
-		// counted into the node's recorder as it happens.
+		// counted into the node's recorder as it happens. Every presign is
+		// built from the options before these ([Backend.withoutAttempts]).
+		b.unpaced = slices.Clip(slices.Clone(o.APIOptions))
 		o.APIOptions = append(o.APIOptions, paced(follows(count, &b.stall), b.gate, b.judge))
 	})
 	b.presigner = s3.NewPresignClient(b.client)

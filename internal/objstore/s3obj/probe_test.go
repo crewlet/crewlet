@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/s3obj"
 	"github.com/crewlet/crewlet/internal/objstore/s3obj/s3fake"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // A CREDENTIAL SCOPED TO ONE PREFIX OPENS THE BUCKET: the probe asks nothing
@@ -211,4 +214,55 @@ func TestASinglePartPutCarriesItsChecksumWhereProven(t *testing.T) {
 			t.Errorf("%s: the put sent checksum %q and the stat read digest %q", name, sent, info.Digest)
 		}
 	}
+}
+
+// A PRESIGN IS NO REQUEST OF THE CLIENT'S: it sends nothing, so none of the
+// client's own steps — the throttle gate, the judge, the request it follows —
+// is on it, nothing of it is counted, and the URL it hands back stores the
+// bytes it was bound to.
+//
+// The SDK builds a presign's stack without the retry step the client's own
+// steps stand beside ([s3obj] paced), so a presign built on the client's
+// options failed — and with it the boot probe, which presigns, so no S3
+// backend opened at all.
+func TestAPresignIsNoRequestOfTheClients(t *testing.T) {
+	t.Parallel()
+	rec := newRecorder(t)
+	srv := s3fake.Start(t, "files")
+	store, err := objstore.NewStore(openCounted(t, srv, rec, nil, s3obj.Clock{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// counted is every series of the two counters a request moves: an
+	// attempt's total, and a request's count and attempts.
+	counted := func() map[string]string {
+		out := map[string]string{}
+		for _, name := range []string{metrics.ObjectsS3Attempts, metrics.ObjectsS3RequestAttempts} {
+			for key, s := range reading(rec, name) {
+				out[name+" "+key] = fmt.Sprintf("total %d, count %d, sum %g", s.Total, s.Count, s.Sum)
+			}
+		}
+		return out
+	}
+	before := counted()
+	if len(before) == 0 {
+		t.Fatal("the open's probe counted no request: the counters this case compares read nothing")
+	}
+	body := []byte("bytes a client puts itself")
+	k := store.Mint()
+	signed, err := store.PresignPut(t.Context(), k, presignOf(body))
+	if err != nil {
+		t.Fatalf("presign: %v", err)
+	}
+	if after := counted(); !reflect.DeepEqual(after, before) {
+		t.Errorf("a presign was counted as the client's request:\nbefore %v\nafter  %v", before, after)
+	}
+	if got := putSigned(t, signed, body); got != http.StatusOK {
+		t.Fatalf("the presigned put answered %d", got)
+	}
+	rc, err := store.Open(t.Context(), objstore.Object{Key: k, Hash: objstore.HashOf(body), Size: int64(len(body))})
+	if err != nil {
+		t.Fatalf("the presigned object does not read back verified: %v", err)
+	}
+	_ = rc.Close()
 }
