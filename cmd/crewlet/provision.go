@@ -8,8 +8,10 @@ import (
 	"io"
 	"maps"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -153,13 +155,16 @@ func (s sinkStore) Set(ctx context.Context, name, value string, by secrets.Autho
 // otherwise open, and create, an empty database at the Tier A path and resolve
 // every stored value as unset.
 //
-// THROUGH A NODE, ONLY WHAT THE COMPANY READS is fetched
-// ([config.Company.VariablesRead], the account the Secrets screen's "read by"
-// gives), because each value comes back through `GET /secrets/{name}?reveal=true`
-// — the one route that hands a credential out, logged by name against the
-// caller and refused to a machine token. Revealing every stored row for a
-// command that reads three would put the whole credential set in this process
-// and the node's log for nothing.
+// THROUGH A NODE, ONLY WHAT THIS COMMAND READS is fetched — the fields its
+// [readScope] names, of the reads [config.Company.VariablesRead] accounts
+// for — because each value comes back through `GET /secrets/{name}?reveal=true`:
+// the one route that hands a credential out, logged by name against the
+// caller and refused to a machine token. Revealing every value the company
+// reads, for a command that reads two of them, put the whole credential set
+// in this process and the node's log for nothing: `crewlet llm login` for
+// one entry revealed every vendor's tokens, and a GitLab provision every
+// model's. See [nodeValues] for why the scope is revealed before the command
+// runs rather than one value at a time as it is read.
 //
 // A node that holds no data (`store.scratch`) has no store of the company's
 // to open, and is refused unless apiURL names one that does.
@@ -182,7 +187,7 @@ func (s sinkStore) Set(ctx context.Context, name, value string, by secrets.Autho
 // caller now needs and none of them should load a second time. Nil when there
 // is no Tier A file at all.
 func companyResolver(ctx context.Context, environ config.Source, company *config.Company,
-	bootstrapPath, apiURL string, notes io.Writer) (*config.Resolver, *config.Bootstrap, func(), error) {
+	scope readScope, bootstrapPath, apiURL string, notes io.Writer) (*config.Resolver, *config.Bootstrap, func(), error) {
 
 	boot, err := companyBootstrap(bootstrapPath)
 	if err != nil {
@@ -198,7 +203,7 @@ func companyResolver(ctx context.Context, environ config.Source, company *config
 		if cerr != nil {
 			return nil, nil, nil, cerr
 		}
-		values, rerr := storedThrough(ctx, client, company, notes)
+		values, rerr := storedThrough(ctx, client, company, scope, notes)
 		if rerr != nil {
 			return nil, nil, nil, fmt.Errorf("read the company's stored values "+
 				"through %s: %w%s", client.base, rerr, revealTakesATierAToken)
@@ -219,7 +224,7 @@ func companyResolver(ctx context.Context, environ config.Source, company *config
 	sv, closeStore, err := openSecretValues(ctx, boot)
 	if err != nil {
 		values, rerr := storedThroughTheRunningNode(ctx, environ, boot, bootstrapPath,
-			company, err, notes)
+			company, scope, err, notes)
 		if rerr != nil {
 			return nil, nil, nil, rerr
 		}
@@ -259,21 +264,21 @@ const revealTakesATierAToken = "\n\nEach value is read with a reveal, which take
 	"tokens, since a machine token is refused a reveal whatever it carries"
 
 // storedThroughTheRunningNode answers a locked store with the values the
-// company reads, through the node holding it — the read half of
+// command reads, through the node holding it — the read half of
 // [throughTheRunningNode], and [store.ErrLocked] is the only error it routes
 // for the same reason: every other failure is a broken node, whose own
 // message an HTTP attempt would replace with a connection refused.
 func storedThroughTheRunningNode(ctx context.Context, environ config.Source,
 	boot *config.Bootstrap, bootstrapPath string, company *config.Company,
-	err error, notes io.Writer) (config.MapSource, error) {
+	scope readScope, err error, notes io.Writer) (*nodeValues, error) {
 
 	if !errors.Is(err, store.ErrLocked) {
 		return nil, err
 	}
 	client, cerr := newSecretsClient(environ, boot, "")
 	if cerr == nil {
-		var values config.MapSource
-		if values, cerr = storedThrough(ctx, client, company, notes); cerr == nil {
+		var values *nodeValues
+		if values, cerr = storedThrough(ctx, client, company, scope, notes); cerr == nil {
 			return values, nil
 		}
 	}
@@ -287,52 +292,186 @@ func storedThroughTheRunningNode(ctx context.Context, environ config.Source,
 		"and they cannot be: %w%s", err, bootstrapPath, cerr, revealTakesATierAToken)
 }
 
-// storedThrough reads, through a running node, every stored value the
-// company reads, and says on notes that it did.
+// storedThrough reads, through a running node, the stored values a command
+// reads, and says on notes that it did.
 //
-// THE LISTING FIRST, which reveals nothing: a name the company reads and the
+// THE LISTING FIRST, which reveals nothing: a name the command reads and the
 // fleet does not hold is left to the environment without a request, exactly
 // as the local table's absence leaves it. A name that went between the
 // listing and its read is absent the same way.
 func storedThrough(ctx context.Context, client *secretsClient, company *config.Company,
-	notes io.Writer) (config.MapSource, error) {
+	scope readScope, notes io.Writer) (*nodeValues, error) {
 
 	rows, err := client.List(ctx)
 	if err != nil {
 		return nil, err
 	}
-	held := make(map[string]bool, len(rows))
-	for _, row := range rows {
-		held[row.Name] = true
+	values := &nodeValues{
+		values: map[string]string{},
+		held:   make(map[string]bool, len(rows)),
+		reveal: func(name string) (string, error) { return client.Get(ctx, name) },
+		where:  client.base,
+		notes:  notes,
 	}
-	values := config.MapSource{}
-	for _, name := range readNames(company) {
-		if !held[name] {
-			continue
-		}
-		value, err := client.Get(ctx, name)
-		switch {
-		case errors.Is(err, secrets.ErrNotFound):
-		case err != nil:
+	for _, row := range rows {
+		values.held[row.Name] = true
+	}
+	for _, name := range scopedNames(company, scope) {
+		if _, _, err := values.revealLocked(name); err != nil {
 			return nil, err
-		default:
-			values[name] = value
 		}
 	}
 	// SAID EVERY TIME, as the environment-only chain is: which chain ran is
 	// what an operator reads first when a value is not the one they set, and
 	// each read here is a line in the node's log under their token.
 	fmt.Fprintf(notes, "resolving ${VAR} through the running node at %s: %d of "+
-		"the company's stored values revealed there, each logged by name.\n",
-		client.base, len(values))
+		"the stored values this command reads revealed there, each logged by name.\n",
+		client.base, len(values.values))
 	return values, nil
 }
 
-// readNames is every variable the company reads, each once, sorted.
-func readNames(company *config.Company) []string {
+// nodeValues is the stored values one command reads, through the running
+// node that holds them: a [config.Source] over the fleet's rows that reveals
+// only what is read.
+//
+// # The command's scope is revealed before it runs
+//
+// Not one value at a time as the command reads it, which would reveal no
+// more and fail worse. A read is a [config.Source] lookup, which has no
+// error to return: a reveal the node refused — a machine token, which is
+// refused every one — could only come back as "unset", and unset is what
+// tells a provisioning run to MINT, so a GitLab provision would replace the
+// key a working hook signs with because its token could not read the one
+// in the store. Revealed up front, the same refusal stops the command
+// before it has done anything.
+//
+// # A read outside the scope is still answered from the fleet
+//
+// Revealed as it is made, and said on notes. A command whose scope missed a
+// field it reads — a new one, say — then resolves the fleet's value rather
+// than the environment's, which is the engine's answer; resolving it as
+// unset would be the same mint. That reveal has no error to return either,
+// so a refused one PANICS: the run stops where it is, as it would on a
+// vendor's own failure part way through, rather than going on to act on a
+// value it does not have.
+type nodeValues struct {
+	// mu guards values and held: a provisioner may read from more than one
+	// goroutine, and a reveal is a request the lock holds across.
+	mu sync.Mutex
+
+	// values is every stored value revealed so far, by name.
+	values map[string]string
+
+	// held is every name the node listed, less those found gone since.
+	held map[string]bool
+
+	// reveal reads one value through the node.
+	reveal func(name string) (string, error)
+
+	// where is the node's address, for what is said on notes.
+	where string
+	notes io.Writer
+}
+
+// Lookup implements [config.Source].
+func (n *nodeValues) Lookup(name string) (string, bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if value, ok := n.values[name]; ok {
+		return value, true
+	}
+	if !n.held[name] {
+		return "", false
+	}
+	value, ok, err := n.revealLocked(name)
+	if err != nil {
+		panic(fmt.Errorf("read ${%s} through the running node at %s: %w — stopping "+
+			"rather than resolving a stored value as unset%s",
+			name, n.where, err, revealTakesATierAToken))
+	}
+	if ok {
+		fmt.Fprintf(n.notes, "revealed ${%s} through the running node at %s as it "+
+			"was read, beyond the values this command reveals before it runs.\n",
+			name, n.where)
+	}
+	return value, ok
+}
+
+// revealLocked reveals one held name, reporting whether the node still held
+// it. n.mu is held, or n is not yet shared.
+func (n *nodeValues) revealLocked(name string) (string, bool, error) {
+	if !n.held[name] {
+		return "", false, nil
+	}
+	value, err := n.reveal(name)
+	switch {
+	case errors.Is(err, secrets.ErrNotFound):
+		delete(n.held, name)
+		return "", false, nil
+	case err != nil:
+		return "", false, err
+	}
+	n.values[name] = value
+	return value, true, nil
+}
+
+// readScope is the fields of the company one command resolves, each named by
+// the path [config.Company.VariablesRead] reports a read at.
+//
+// DECLARED BESIDE THE COMMAND, as a set of fields rather than of variable
+// names, because a field is what the command's code reads: the name behind
+// it is the document's, and differs from one company to the next.
+type readScope func(path string) bool
+
+// companyFields is the scope of these fields of one block at the document's
+// root: companyFields("integrations.gitlab", "url").
+func companyFields(block string, fields ...string) readScope {
+	return func(path string) bool {
+		field, ok := strings.CutPrefix(path, block+".")
+		return ok && slices.Contains(fields, field)
+	}
+}
+
+// memberPath is the start of a path inside a seat or a unit, wherever the
+// hierarchy puts it: `roles[2].`, `units[0].children[1].roles[0].`,
+// `units[3].`.
+var memberPath = regexp.MustCompile(`^(?:units\[\d+\]\.(?:children\[\d+\]\.)*)?(?:roles\[\d+\]\.)?`)
+
+// memberFields is the scope of every field under prefix on a seat or a unit:
+// a seat's `integrations.mattermost.bot_token`, or the `mcp_env.github.`
+// block a seat holds or inherits from its unit.
+func memberFields(prefix string) readScope {
+	return func(path string) bool {
+		end := memberPath.FindStringIndex(path)[1]
+		return end > 0 && strings.HasPrefix(path[end:], prefix)
+	}
+}
+
+// anyOf is the scope of every field one of scopes covers.
+func anyOf(scopes ...readScope) readScope {
+	return func(path string) bool {
+		return slices.ContainsFunc(scopes, func(scope readScope) bool { return scope(path) })
+	}
+}
+
+// mcpEnvBlocks is the scope of these mcp_env servers' blocks, on every seat
+// and every unit — where a seat's own credential at a vendor sits.
+func mcpEnvBlocks(servers ...string) readScope {
+	scopes := make([]readScope, len(servers))
+	for i, server := range servers {
+		scopes[i] = memberFields("mcp_env." + server + ".")
+	}
+	return anyOf(scopes...)
+}
+
+// scopedNames is every variable the company reads at a field in scope, each
+// once, sorted.
+func scopedNames(company *config.Company, scope readScope) []string {
 	var names []string
 	for _, ref := range company.VariablesRead() {
-		names = append(names, ref.Name)
+		if scope(ref.Path) {
+			names = append(names, ref.Name)
+		}
 	}
 	slices.Sort(names)
 	return slices.Compact(names)
@@ -352,6 +491,13 @@ func readNames(company *config.Company) []string {
 func operatorCredential(name string) string {
 	return strings.TrimSpace(config.EnvOnly().Lookup(name))
 }
+
+// gitlabProvisionReads is what `crewlet gitlab provision` resolves of the
+// company: the instance, and the key its hooks sign with, which it mints
+// when that resolves empty ([readScope]). Not the engine's read token, which
+// it never uses: it works with the operator's admin token, read from the
+// environment alone ([operatorCredential]).
+var gitlabProvisionReads = companyFields("integrations.gitlab", "url", "signing_secret")
 
 // runGitLabProvision is `crewlet gitlab provision`.
 func runGitLabProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
@@ -443,7 +589,8 @@ func runGitLabProvision(environ config.Source, args []string, stdout, stderr io.
 	// so a -dry-run does it too — a dry run that could not say this would
 	// be silent about the one outcome an operator most needs warning of.
 	ctx := context.Background()
-	env, boot, closeEnv, err := companyResolver(ctx, environ, company, *sinks.bootstrap,
+	env, boot, closeEnv, err := companyResolver(ctx, environ, company,
+		gitlabProvisionReads, *sinks.bootstrap,
 		*sinks.api, stdout)
 	if err != nil {
 		return err
@@ -708,6 +855,11 @@ func soleVarOf(value string) string {
 	return name
 }
 
+// mattermostProvisionReads is what `crewlet mattermost provision` resolves of
+// the company: the instance alone. The bots' tokens are what it mints, and
+// it works with the operator's admin token ([readScope]).
+var mattermostProvisionReads = companyFields("integrations.mattermost", "url")
+
 // runMattermostProvision is `crewlet mattermost provision`.
 func runMattermostProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
@@ -768,7 +920,8 @@ func runMattermostProvision(environ config.Source, args []string, stdout, stderr
 	}
 	defer closeSink()
 
-	env, _, closeEnv, err := companyResolver(ctx, environ, company, *sinks.bootstrap,
+	env, _, closeEnv, err := companyResolver(ctx, environ, company,
+		mattermostProvisionReads, *sinks.bootstrap,
 		*sinks.api, stdout)
 	if err != nil {
 		return err
@@ -838,6 +991,13 @@ func sortedKeys(m map[string][]string) []string {
 	return out
 }
 
+// mattermostDoctorReads is what `crewlet mattermost doctor` resolves of the
+// company: the instance and its team, and each seat's bot token, which its
+// checks authenticate with ([readScope], [mattermost.SeatTokens]).
+var mattermostDoctorReads = anyOf(
+	companyFields("integrations.mattermost", "url", "team"),
+	memberFields("integrations.mattermost.bot_token"))
+
 // runMattermostDoctor is `crewlet mattermost doctor`.
 func runMattermostDoctor(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
@@ -878,7 +1038,8 @@ func runMattermostDoctor(environ config.Source, args []string, stdout, stderr io
 	}
 
 	ctx := context.Background()
-	env, _, closeEnv, err := companyResolver(ctx, environ, company, *bootstrap, "", stdout)
+	env, _, closeEnv, err := companyResolver(ctx, environ, company, mattermostDoctorReads,
+		*bootstrap, "", stdout)
 	if err != nil {
 		return err
 	}

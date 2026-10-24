@@ -101,8 +101,12 @@ type Credential struct{ Token, Email string }
 // Held reports a seat that carries a credential at all.
 func (c Credential) Held() bool { return strings.TrimSpace(c.Token) != "" }
 
-// servers is the mcp_env blocks this product reads, in order.
-func (p Product) servers() []string {
+// Servers is the mcp_env blocks this product reads a seat's credential from,
+// in order. Exported for the one caller that has to know WHERE a seat's
+// credential can sit without reading it: `crewlet jira provision` asks a
+// running node for exactly the stored values it is about to read, and each
+// one it asks for is a reveal logged by name.
+func (p Product) Servers() []string {
 	switch p {
 	case ProductJira:
 		return []string{org.MCPEnvJira, sharedServer}
@@ -207,7 +211,7 @@ func CredentialAt(
 	if value == nil {
 		return Credential{}, ""
 	}
-	for _, server := range p.servers() {
+	for _, server := range p.Servers() {
 		block := env[server]
 		if len(block) == 0 {
 			continue
@@ -327,7 +331,7 @@ func SeatEmail(env map[string]map[string]string) string {
 
 // seatEmail finds a seat's address slot, and says where.
 func seatEmail(env map[string]map[string]string) (where, value string) {
-	for _, server := range ProductAny.servers() {
+	for _, server := range ProductAny.Servers() {
 		block := env[server]
 		if len(block) == 0 {
 			continue
@@ -346,7 +350,7 @@ func seatEmail(env map[string]map[string]string) (where, value string) {
 // UNRESOLVED, because the provisioner needs the `${VAR}` reference itself:
 // what it plans is where a minted token will be WRITTEN.
 func seatCredential(env map[string]map[string]string) (where, value string) {
-	for _, server := range ProductAny.servers() {
+	for _, server := range ProductAny.Servers() {
 		block := env[server]
 		if len(block) == 0 {
 			continue

@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/jira"
 )
@@ -27,6 +28,16 @@ import (
 // invisible until an issue reaches nobody: which account each seat's
 // credential authenticates as, whether every project the org names exists
 // and agrees about its lead, and whether the inbound webhook is registered.
+
+// jiraProvisionReads is what `crewlet jira provision` resolves of the
+// company: the instance, the org account it reads it with, the key the hook
+// signs with (minted when it resolves empty), and each seat's own Jira
+// credential, whose account it reports ([readScope],
+// [atlassian.CredentialOf]).
+var jiraProvisionReads = anyOf(
+	companyFields("integrations.jira",
+		"url", "cloud_id", "site_url", "email", "token", "webhook_secret"),
+	mcpEnvBlocks(atlassian.ProductJira.Servers()...))
 
 func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
@@ -70,7 +81,8 @@ func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Wr
 	}
 
 	ctx := context.Background()
-	env, boot, closeEnv, err := companyResolver(ctx, environ, company, *sinks.bootstrap,
+	env, boot, closeEnv, err := companyResolver(ctx, environ, company,
+		jiraProvisionReads, *sinks.bootstrap,
 		*sinks.api, stdout)
 	if err != nil {
 		return err

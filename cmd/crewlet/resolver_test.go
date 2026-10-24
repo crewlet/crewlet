@@ -38,7 +38,7 @@ func TestAProvisioningRunResolvesThroughTheSecretStore(t *testing.T) {
 	}
 
 	var notes bytes.Buffer
-	env, _, closeEnv, err := companyResolver(t.Context(), noEnviron, nil, cfg, "", &notes)
+	env, _, closeEnv, err := companyResolver(t.Context(), noEnviron, nil, nil, cfg, "", &notes)
 	if err != nil {
 		t.Fatalf("companyResolver: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestAStoredSecretWinsOverAStaleExport(t *testing.T) {
 	}
 	t.Setenv("CONFLUENCE_TOKEN", "the-stale-export")
 
-	env, _, closeEnv, err := companyResolver(t.Context(), noEnviron, nil, cfg, "", &bytes.Buffer{})
+	env, _, closeEnv, err := companyResolver(t.Context(), noEnviron, nil, nil, cfg, "", &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("companyResolver: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestWithoutAStoreTheRunSaysWhichChainItUsed(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "not-here.yaml")
 
 	var notes bytes.Buffer
-	env, _, closeEnv, err := companyResolver(t.Context(), noEnviron, nil, missing, "", &notes)
+	env, _, closeEnv, err := companyResolver(t.Context(), noEnviron, nil, nil, missing, "", &notes)
 	if err != nil {
 		t.Fatalf("a missing bootstrap is a supported deployment: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestABootstrapWithNoKeyringIsRefused(t *testing.T) {
 	}
 
 	var notes bytes.Buffer
-	_, _, _, err := companyResolver(t.Context(), noEnviron, nil, path, "", &notes)
+	_, _, _, err := companyResolver(t.Context(), noEnviron, nil, nil, path, "", &notes)
 	if err == nil {
 		t.Fatal("a keyringless bootstrap was resolved rather than refused")
 	}
@@ -173,7 +173,7 @@ func TestABrokenBootstrapRefusesRatherThanResolvingFromTheEnvironment(t *testing
 	}
 
 	var notes bytes.Buffer
-	if _, _, _, err := companyResolver(t.Context(), noEnviron, nil, path, "", &notes); err == nil {
+	if _, _, _, err := companyResolver(t.Context(), noEnviron, nil, nil, path, "", &notes); err == nil {
 		t.Fatal("a bootstrap that cannot be read was treated as no bootstrap, " +
 			"so a configured store silently became a stale environment")
 	}
@@ -188,11 +188,11 @@ type revealNode struct {
 	server *httptest.Server
 	held   map[string]string
 
+	mu sync.Mutex
+
 	// refuse, when set, is the status every reveal is answered with, and
 	// its body the engine's own refusal of a machine token.
-	refuse int
-
-	mu       sync.Mutex
+	refuse   int
 	revealed []string
 	tokens   []string
 	stored   map[string]string
@@ -237,9 +237,10 @@ func newRevealNode(t *testing.T, held map[string]string) *revealNode {
 		}
 		n.mu.Lock()
 		n.revealed = append(n.revealed, name)
+		refuse := n.refuse
 		n.mu.Unlock()
-		if n.refuse != 0 {
-			w.WriteHeader(n.refuse)
+		if refuse != 0 {
+			w.WriteHeader(refuse)
 			_, _ = fmt.Fprint(w, `{"error":"token_refused","detail":"a person must be present"}`)
 			return
 		}
@@ -304,48 +305,268 @@ providers:
 var errLockedStore = fmt.Errorf("open store: %w: /var/lib/crewlet/index.db is held by "+
 	"pid 41 on host-a since 2026-01-01T00:00:00Z", store.ErrLocked)
 
-// BESIDE A RUNNING ENGINE THE COMPANY'S VALUES ARE READ THROUGH IT.
+// scopeCompanyDoc reads a variable at every kind of field a command's scope
+// names: two providers.llm entries, one signing in from a token it does not
+// name; company-level vendor blocks; and seat credentials on a seat at the
+// root, on a seat two units down, and inherited from a unit.
+const scopeCompanyDoc = `
+name: Acme
+providers:
+  llm:
+    default:
+      model: sonnet
+      env:
+        CREWLET_TEST_SETTING: "${PROXY_URL}"
+    metered:
+      model: sonnet
+      auth:
+        mode: api-key
+        api_key: "${METERED_KEY}"
+integrations:
+  gitlab:
+    enabled: true
+    url: "${GITLAB_URL}"
+    token: "${GITLAB_READ_TOKEN}"
+    signing_secret: "${GITLAB_SIGNING_SECRET}"
+  github:
+    enabled: true
+    token: "${GITHUB_ORG_TOKEN}"
+    webhook_secret: "${GITHUB_WEBHOOK_SECRET}"
+  mattermost:
+    enabled: true
+    url: "${MATTERMOST_URL}"
+    team: acme
+roles:
+  - name: Chief Executive
+    handle: ceo
+    llm: default
+    integrations:
+      mattermost:
+        bot_token: "${MATTERMOST_BOT_CEO}"
+units:
+  - name: Engineering
+    lead: ceo
+    mcp_env:
+      github:
+        GITHUB_TOKEN: "${GITHUB_TOKEN_ENG}"
+    children:
+      - name: Platform
+        roles:
+          - name: Engineer
+            handle: swe
+            llm: metered
+            mcp_env:
+              jira:
+                JIRA_API_TOKEN: "${JIRA_TOKEN_SWE}"
+            integrations:
+              mattermost:
+                bot_token: "${MATTERMOST_BOT_SWE}"
+`
+
+// scopeNode is a node holding every value scopeCompanyDoc reads, and one it
+// does not read, each stored as "v-" and its name.
+func scopeNode(t *testing.T) *revealNode {
+	t.Helper()
+	held := map[string]string{}
+	for _, name := range []string{
+		"PROXY_URL", "CLAUDE_CODE_OAUTH_TOKEN", "METERED_KEY",
+		"CREWLET_LLM_CLI_METERED_CREDENTIALS", "GITLAB_URL", "GITLAB_READ_TOKEN",
+		"GITLAB_SIGNING_SECRET", "GITHUB_ORG_TOKEN", "GITHUB_WEBHOOK_SECRET",
+		"GITHUB_TOKEN_ENG", "MATTERMOST_URL", "MATTERMOST_BOT_CEO",
+		"MATTERMOST_BOT_SWE", "JIRA_TOKEN_SWE", "READ_BY_NOTHING",
+	} {
+		held[name] = "v-" + name
+	}
+	return newRevealNode(t, held)
+}
+
+func scopeCompany(t *testing.T) *config.Company {
+	t.Helper()
+	company, err := config.ParseCompanyDocument([]byte(scopeCompanyDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return company
+}
+
+// BESIDE A RUNNING ENGINE THE COMPANY'S VALUES ARE READ THROUGH IT — AND A
+// COMMAND REVEALS ONLY WHAT IT READS.
 //
 // The engine holds its store for as long as it runs, and the company's
 // stored values are the fleet's then, inside the engine's own process. Every
 // command that reads the company — `crewlet llm` and the vendor commands —
 // used to stop at the lock, which made `crewlet llm login` impossible beside
-// the seats it signs in. And each value comes back through a REVEAL, so only
-// what the company reads is asked for: a stored name it does not read is
-// never revealed, and a name it reads that the fleet does not hold is left to
-// the environment without a request.
-func TestARunningEngineHandsOverOnlyTheValuesTheCompanyReads(t *testing.T) {
+// the seats it signs in. And each value comes back through a REVEAL, logged
+// by name against the caller, so a command asks for the fields it reads and
+// nothing else: one entry's sign-in for `crewlet llm login`, not every
+// vendor's tokens; a GitLab provision's instance and signing key, not the
+// engine's GitLab token or any model's. A name the fleet does not hold is
+// left to the environment without a request.
+func TestARunningEngineRevealsOnlyWhatTheCommandReads(t *testing.T) {
 	t.Parallel()
-	node := newRevealNode(t, map[string]string{
-		"PROXY_URL":               "http://proxy.example.com:3128",
-		"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-fixture",
-		"GITLAB_TOKEN_SWE":        "glpat-not-read-by-this-company",
-	})
+	for _, tc := range []struct {
+		command string
+		scope   readScope
+		want    []string
+	}{
+		{
+			// The token it signs in from without naming it, and the env
+			// its CLI runs with; the bundle is not stored.
+			"crewlet llm login default", llmEntryReads([]string{"default"}),
+			[]string{"CLAUDE_CODE_OAUTH_TOKEN", "PROXY_URL"},
+		},
+		{
+			"crewlet llm status metered", llmEntryReads([]string{"metered"}),
+			[]string{"CREWLET_LLM_CLI_METERED_CREDENTIALS", "METERED_KEY"},
+		},
+		{
+			"crewlet llm list", llmEntryReads([]string{"default", "metered"}),
+			[]string{"CLAUDE_CODE_OAUTH_TOKEN", "CREWLET_LLM_CLI_METERED_CREDENTIALS",
+				"METERED_KEY", "PROXY_URL"},
+		},
+		{
+			"crewlet gitlab provision", gitlabProvisionReads,
+			[]string{"GITLAB_SIGNING_SECRET", "GITLAB_URL"},
+		},
+		{
+			// The seat credential a unit gives its members, as well as
+			// the org's.
+			"crewlet github provision", githubProvisionReads,
+			[]string{"GITHUB_ORG_TOKEN", "GITHUB_TOKEN_ENG", "GITHUB_WEBHOOK_SECRET"},
+		},
+		{
+			"crewlet jira provision", jiraProvisionReads,
+			[]string{"JIRA_TOKEN_SWE"},
+		},
+		{
+			"crewlet mattermost provision", mattermostProvisionReads,
+			[]string{"MATTERMOST_URL"},
+		},
+		{
+			// A bot token at the root and two units down.
+			"crewlet mattermost doctor", mattermostDoctorReads,
+			[]string{"MATTERMOST_BOT_CEO", "MATTERMOST_BOT_SWE", "MATTERMOST_URL"},
+		},
+		{
+			"crewlet confluence import", confluenceReads, nil,
+		},
+	} {
+		t.Run(tc.command, func(t *testing.T) {
+			t.Parallel()
+			node := scopeNode(t)
+			var notes bytes.Buffer
+			values, err := storedThroughTheRunningNode(t.Context(), tokenEnviron("ops-token"),
+				node.boot(t), "crewlet.yaml", scopeCompany(t), tc.scope, errLockedStore, &notes)
+			if err != nil {
+				t.Fatalf("a running engine's store was refused rather than read through it: %v", err)
+			}
+			if !slices.Equal(node.reveals(), tc.want) {
+				t.Errorf("revealed %v, want only what the command reads, %v",
+					node.reveals(), tc.want)
+			}
+			resolver := config.WithStore(values)
+			for _, name := range tc.want {
+				if got := resolver.Lookup(name); got != "v-"+name {
+					t.Errorf("${%s} resolved to %q, not the fleet's value", name, got)
+				}
+			}
+			for _, token := range node.tokens {
+				if token != "Bearer ops-token" {
+					t.Errorf("a request carried %q, not the invocation's own credential", token)
+				}
+			}
+			if !strings.Contains(notes.String(), node.server.URL) ||
+				!strings.Contains(notes.String(), fmt.Sprintf(": %d of", len(tc.want))) {
+				t.Errorf("the run did not say which chain it read, and how much: %q", notes.String())
+			}
+		})
+	}
+}
 
+// A READ BEYOND THE SCOPE IS STILL THE FLEET'S VALUE, revealed as it is made
+// and said: a command whose scope missed a field it reads resolves what the
+// engine would, rather than reading the stored value as unset — which, for
+// a key a provisioner mints when it resolves empty, replaces a working one.
+// And a name the fleet does not hold costs no request.
+func TestAReadBeyondTheScopeIsStillTheFleetsValue(t *testing.T) {
+	t.Parallel()
+	node := scopeNode(t)
 	var notes bytes.Buffer
 	values, err := storedThroughTheRunningNode(t.Context(), tokenEnviron("ops-token"),
-		node.boot(t), "crewlet.yaml", readingCompany(t), errLockedStore, &notes)
+		node.boot(t), "crewlet.yaml", scopeCompany(t), gitlabProvisionReads, errLockedStore, &notes)
 	if err != nil {
-		t.Fatalf("a running engine's store was refused rather than read through it: %v", err)
+		t.Fatal(err)
 	}
 	resolver := config.WithStore(values)
-	if got := resolver.Value("${PROXY_URL}"); got != "http://proxy.example.com:3128" {
-		t.Errorf("a ${VAR} the company names resolved to %q, not the fleet's value", got)
+	if got := resolver.Value("${GITLAB_READ_TOKEN}"); got != "v-GITLAB_READ_TOKEN" {
+		t.Errorf("a read beyond the scope resolved to %q, not the fleet's value", got)
 	}
-	if got := resolver.Lookup("CLAUDE_CODE_OAUTH_TOKEN"); got != "sk-ant-oat01-fixture" {
-		t.Errorf("the token the entry falls back to resolved to %q, not the fleet's value", got)
+	if !strings.Contains(notes.String(), "${GITLAB_READ_TOKEN}") ||
+		!strings.Contains(notes.String(), "as it was read") {
+		t.Errorf("the reveal beyond the scope was not said: %q", notes.String())
 	}
-	if want := []string{"CLAUDE_CODE_OAUTH_TOKEN", "PROXY_URL"}; !slices.Equal(node.reveals(), want) {
-		t.Errorf("revealed %v, want only what the company reads and the fleet holds, %v",
+	resolver.Value("${GITLAB_READ_TOKEN}")
+	resolver.Value("${NOT_HELD_BY_THE_FLEET}")
+	want := []string{"GITLAB_READ_TOKEN", "GITLAB_SIGNING_SECRET", "GITLAB_URL"}
+	if !slices.Equal(node.reveals(), want) {
+		t.Errorf("revealed %v, want %v: once each, and nothing the fleet does not hold",
 			node.reveals(), want)
 	}
-	for _, token := range node.tokens {
-		if token != "Bearer ops-token" {
-			t.Errorf("a request carried %q, not the invocation's own credential", token)
-		}
+}
+
+// A REFUSED READ BEYOND THE SCOPE STOPS THE RUN. A lookup has no error to
+// return, and the only other answer it has — unset — is the one that mints
+// over a working secret.
+func TestARefusedReadBeyondTheScopeStopsTheRun(t *testing.T) {
+	t.Parallel()
+	node := scopeNode(t)
+	values, err := storedThroughTheRunningNode(t.Context(), tokenEnviron("ops-token"),
+		node.boot(t), "crewlet.yaml", scopeCompany(t), gitlabProvisionReads, errLockedStore,
+		&bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(notes.String(), node.server.URL) {
-		t.Errorf("the run did not say which chain it read: %q", notes.String())
+	node.mu.Lock()
+	node.refuse = http.StatusForbidden
+	node.mu.Unlock()
+
+	defer func() {
+		stopped, ok := recover().(error)
+		if !ok || !strings.Contains(stopped.Error(), "${GITLAB_READ_TOKEN}") ||
+			!strings.Contains(stopped.Error(), "403") {
+			t.Fatalf("a refused reveal stopped the run with %v, want an error naming "+
+				"the variable and the refusal", stopped)
+		}
+	}()
+	got, _ := values.Lookup("GITLAB_READ_TOKEN")
+	t.Fatalf("a refused reveal resolved as %q, which a provisioner reads as unset", got)
+}
+
+// A GITLAB PROVISION BESIDE A RUNNING ENGINE KEEPS THE KEY ITS HOOK SIGNS
+// WITH, reading it through the node — and reveals the two fields it reads
+// and nothing else, none of them as a read beyond its scope.
+func TestAGitLabProvisionThroughANodeRevealsOnlyItsOwnFields(t *testing.T) {
+	t.Parallel()
+	node := scopeNode(t)
+	company := writeFile(t, t.TempDir(), "company.yaml", strings.NewReplacer(
+		"url: https://gitlab.example.com", `url: "${GITLAB_URL}"`,
+		"    enabled: true\n", "    enabled: true\n    token: \"${GITLAB_READ_TOKEN}\"\n",
+	).Replace(gitlabCompanyDoc))
+	var out, errs bytes.Buffer
+	err := runGitLabProvision(tokenEnviron("ops-token"), []string{company, "-dry-run",
+		"-config", bootstrapWithKeyring(t, "k1"), "-api", node.server.URL,
+		"-public-url", "https://crewlet.example.com"}, &out, &errs)
+	if err != nil {
+		t.Fatalf("gitlab provision -dry-run through a node: %v\n%s", err, errs.String())
+	}
+	if !strings.Contains(out.String(), "reused — the configured one already resolves") {
+		t.Errorf("the stored signing key did not reach the plan, which mints over it:\n%s", out.String())
+	}
+	if want := []string{"GITLAB_SIGNING_SECRET", "GITLAB_URL"}; !slices.Equal(node.reveals(), want) {
+		t.Errorf("revealed %v, want the two fields the command reads, %v", node.reveals(), want)
+	}
+	if strings.Contains(out.String(), "as it was read") {
+		t.Errorf("the command read beyond the fields it declares:\n%s", out.String())
 	}
 }
 
@@ -363,7 +584,8 @@ func TestARefusedReadThroughTheNodeSaysBothWhyAndWhatItTakes(t *testing.T) {
 	node.refuse = http.StatusForbidden
 
 	_, err := storedThroughTheRunningNode(t.Context(), tokenEnviron("pat-of-a-person"),
-		node.boot(t), "crewlet.yaml", readingCompany(t), errLockedStore, &bytes.Buffer{})
+		node.boot(t), "crewlet.yaml", readingCompany(t), llmEntryReads([]string{"default"}),
+		errLockedStore, &bytes.Buffer{})
 	if err == nil {
 		t.Fatal("a refused reveal resolved anyway, so a stored value would read as unset")
 	}
@@ -390,7 +612,8 @@ func TestOnlyALockedStoreIsReadThroughTheNode(t *testing.T) {
 	other := errors.New("the keyring cannot open this store")
 
 	_, err := storedThroughTheRunningNode(t.Context(), tokenEnviron("ops-token"),
-		node.boot(t), "crewlet.yaml", readingCompany(t), other, &bytes.Buffer{})
+		node.boot(t), "crewlet.yaml", readingCompany(t), llmEntryReads([]string{"default"}),
+		other, &bytes.Buffer{})
 	if !errors.Is(err, other) || err.Error() != other.Error() {
 		t.Fatalf("an unrelated failure was not returned as it was: %v", err)
 	}
@@ -411,7 +634,7 @@ func TestANamedNodeIsReadAndTheLocalStoreIsLeftAlone(t *testing.T) {
 	storePath := filepath.Join(filepath.Dir(cfg), "index.db")
 
 	env, _, closeEnv, err := companyResolver(t.Context(), tokenEnviron("ops-token"),
-		readingCompany(t), cfg, node.server.URL, &bytes.Buffer{})
+		readingCompany(t), llmEntryReads([]string{"default"}), cfg, node.server.URL, &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("companyResolver through a named node: %v", err)
 	}
@@ -477,10 +700,16 @@ func TestASeatsNodeReadsAndStoresThroughTheDataNodeItNames(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	cfg := seatsNodeTierA(t, dir)
-	node := newRevealNode(t, map[string]string{"FLEET_TOKEN": "fleet-headless-token"})
-	entry := strings.Replace(healthyDoctorEntry(t, "claude", "m"),
-		"auth: {token: fake-headless-token}", `auth: {token: "${FLEET_TOKEN}"}`, 1)
-	company := writeFile(t, dir, "company.yaml", "name: Acme\nproviders:\n  llm:\n"+entry+
+	node := newRevealNode(t, map[string]string{
+		"FLEET_TOKEN": "fleet-headless-token",
+		"OTHER_TOKEN": "another-entry's-token",
+	})
+	signsInFrom := func(key, name string) string {
+		return strings.Replace(healthyDoctorEntry(t, key, "m"),
+			"auth: {token: fake-headless-token}", `auth: {token: "${`+name+`}"}`, 1)
+	}
+	company := writeFile(t, dir, "company.yaml", "name: Acme\nproviders:\n  llm:\n"+
+		signsInFrom("claude", "FLEET_TOKEN")+signsInFrom("other", "OTHER_TOKEN")+
 		"roles:\n  - name: CEO\n    handle: ceo\n    llm: claude\n")
 	base := []string{"doctor", "claude", "-no-smoke", "-company", company, "-config", cfg}
 
@@ -498,8 +727,9 @@ func TestASeatsNodeReadsAndStoresThroughTheDataNodeItNames(t *testing.T) {
 	if !strings.Contains(out.String(), "problems      : none\n") {
 		t.Errorf("the entry's stored token did not reach doctor through the named node:\n%s", out.String())
 	}
+	// THE ENTRY IT NAMES, and not the other one's token beside it.
 	if !slices.Equal(node.reveals(), []string{"FLEET_TOKEN"}) {
-		t.Errorf("revealed %v, want the token the entry reads", node.reveals())
+		t.Errorf("revealed %v, want the token the entry it names reads", node.reveals())
 	}
 
 	where, err := storeLLMSecret(t.Context(), tokenEnviron("ops-token"), cfg, node.server.URL,

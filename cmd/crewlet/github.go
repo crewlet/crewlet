@@ -28,6 +28,14 @@ import (
 // webhooks, on the organization where the credential may and on each named
 // repository where it may not.
 
+// githubProvisionReads is what `crewlet github provision` resolves of the
+// company: the instance, the org token it registers hooks with and the key
+// they sign with (minted when it resolves empty), and each seat's own
+// credential, whose account it reports ([readScope], [github.CredentialOf]).
+var githubProvisionReads = anyOf(
+	companyFields("integrations.github", "url", "token", "webhook_secret"),
+	mcpEnvBlocks(github.SeatEnv))
+
 func runGitHubProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 
@@ -70,7 +78,8 @@ func runGitHubProvision(environ config.Source, args []string, stdout, stderr io.
 	}
 
 	ctx := context.Background()
-	env, boot, closeEnv, err := companyResolver(ctx, environ, company, *sinks.bootstrap,
+	env, boot, closeEnv, err := companyResolver(ctx, environ, company,
+		githubProvisionReads, *sinks.bootstrap,
 		*sinks.api, stdout)
 	if err != nil {
 		return err

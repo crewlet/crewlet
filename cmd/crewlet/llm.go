@@ -137,22 +137,23 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 		return fmt.Errorf("llm %s takes one provider key, got %d", sub, given)
 	}
 
+	if !slices.Contains(llmCommands, sub) {
+		fmt.Fprintf(stderr, llmUsage, defaultCompanyPath, defaultBootstrapPath)
+		return fmt.Errorf("unknown llm command %q", sub)
+	}
+
 	ctx := context.Background()
-	company, resolver, closeResolver, err := loadLLMConfig(ctx, environ, *companyPath,
-		*bootstrapPath, *apiURL, stderr)
+	company, keys, resolver, closeResolver, err := loadLLMConfig(ctx, environ, *companyPath,
+		*bootstrapPath, *apiURL, sub, key, stderr)
 	if err != nil {
 		return err
 	}
 	defer closeResolver()
 
 	if sub == "doctor" {
-		entries, buildErr := doctorEntries(company, resolver, *companyPath)
-		if buildErr != nil {
-			return buildErr
-		}
-		return doctorLLM(ctx, entries, key, !*noSmoke, stdout)
+		return doctorLLM(ctx, doctorEntries(company, keys, resolver), !*noSmoke, stdout)
 	}
-	providers, err := cliAgents(company, resolver, *companyPath)
+	providers, err := cliAgents(company, keys, resolver)
 	if err != nil {
 		return err
 	}
@@ -200,11 +201,13 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 			*bootstrapPath, *apiURL, stdout)
 	case "import":
 		return importLLM(ctx, providers, key, os.Stdin, stdout)
-	default:
-		fmt.Fprintf(stderr, llmUsage, defaultCompanyPath, defaultBootstrapPath)
-		return fmt.Errorf("unknown llm command %q", sub)
 	}
+	return nil
 }
+
+// llmCommands is every `crewlet llm` subcommand, checked before anything is
+// read: an unknown one reads nothing of the company, and reveals nothing.
+var llmCommands = []string{"list", "doctor", "login", "status", "logout", "export", "import"}
 
 // cliAgentProvider pairs a built provider with the key it was configured
 // under, in the order the company document wrote them.
@@ -213,8 +216,8 @@ type cliAgentProvider struct {
 	provider *cliagent.Provider
 }
 
-// loadLLMConfig reads the company document and the resolver its references
-// go through.
+// loadLLMConfig reads the company document, the entries a subcommand
+// addresses ([llmEntries]), and the resolver their references go through.
 //
 // The SAME resolver the provisioning CLIs use — store first, then the
 // environment — because a token rotated into the secret store must win over a
@@ -224,37 +227,77 @@ type cliAgentProvider struct {
 // stored values through that engine ([companyResolver]), which is where they
 // are while it runs: these commands are made to run beside the seats, under
 // the lock beside the credentials directory that both take.
+//
+// THE ADDRESSED ENTRIES ALONE are resolved, because beside a running engine
+// each stored value comes back through a reveal logged by name: `crewlet llm
+// login work` reveals what the `work` entry reads — its token, its key or
+// its bundle, and the ${VAR}s its model and env name — and none of another
+// entry's credentials.
 func loadLLMConfig(ctx context.Context, environ config.Source, companyPath, bootstrapPath,
-	apiURL string, notes io.Writer) (*config.Company, *config.Resolver, func(), error) {
+	apiURL, sub, key string, notes io.Writer) (*config.Company, []string, *config.Resolver, func(), error) {
 
 	company, err := config.LoadCompanyToRun(companyPath, nil)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	resolver, _, closeResolver, err := companyResolver(ctx, environ, company, bootstrapPath,
-		apiURL, notes)
+	keys, err := llmEntries(company, sub, key, companyPath)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	return company, resolver, closeResolver, nil
+	resolver, _, closeResolver, err := companyResolver(ctx, environ, company,
+		llmEntryReads(keys), bootstrapPath, apiURL, notes)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	return company, keys, resolver, closeResolver, nil
 }
 
-// cliAgents builds every provider the company declares, in the order the
-// document wrote them.
-func cliAgents(company *config.Company, resolver *config.Resolver, companyPath string) ([]cliAgentProvider, error) {
-	var out []cliAgentProvider
-	for _, key := range company.Providers.ProviderOrder() {
+// llmEntries is the providers.llm entries a subcommand works on, in the
+// order the document wrote them: every one for `list`, and for a `doctor`
+// that names none; otherwise the entry it names, or the only one there is.
+func llmEntries(company *config.Company, sub, key, companyPath string) ([]string, error) {
+	order := company.Providers.ProviderOrder()
+	sorted := slices.Sorted(slices.Values(order))
+	switch {
+	case len(order) == 0:
+		return nil, fmt.Errorf(
+			"%s declares no providers.llm entries — see "+
+				"docs/concepts/llm-backends.md for the config block",
+			companyPath)
+	case sub == "list" || (sub == "doctor" && key == ""):
+		return order, nil
+	case key == "" && len(order) == 1:
+		return order, nil
+	case key == "":
+		return nil, fmt.Errorf("name a provider: %s", strings.Join(sorted, ", "))
+	case !slices.Contains(order, key) && sub == "doctor":
+		return nil, fmt.Errorf("no provider %q (doctor examines %s)", key, strings.Join(sorted, ", "))
+	case !slices.Contains(order, key):
+		return nil, fmt.Errorf("no provider %q (have %s)", key, strings.Join(sorted, ", "))
+	}
+	return []string{key}, nil
+}
+
+// llmEntryReads is the scope of these entries, whole: building one resolves
+// every ${VAR} it names, and the variables it signs in from without naming
+// them, which [config.Company.VariablesRead] reports at its own fields.
+func llmEntryReads(keys []string) readScope {
+	return func(path string) bool {
+		return slices.ContainsFunc(keys, func(key string) bool {
+			return strings.HasPrefix(path, "providers.llm."+key+".")
+		})
+	}
+}
+
+// cliAgents builds these entries' providers, in the order given.
+func cliAgents(company *config.Company, keys []string, resolver *config.Resolver) ([]cliAgentProvider, error) {
+	out := make([]cliAgentProvider, 0, len(keys))
+	for _, key := range keys {
 		built, err := engine.BuildCLIAgent(key, company.Providers.LLM[key], resolver)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, cliAgentProvider{key: key, provider: built})
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf(
-			"%s declares no providers.llm entries — see "+
-				"docs/concepts/llm-backends.md for the config block",
-			companyPath)
 	}
 	return out, nil
 }
@@ -345,15 +388,15 @@ type doctorEntry struct {
 	diagnose func(ctx context.Context, smoke bool) diagnosis
 }
 
-// doctorEntries is every entry, in the order the document wrote them.
+// doctorEntries is these entries, in the order given.
 //
 // AN ENTRY THAT DOES NOT BUILD IS A REPORT, not an abort. The engine would
 // refuse to apply this document over it, which is precisely what an operator
 // running doctor needs to read — beside every other entry's report, rather
 // than instead of it.
-func doctorEntries(company *config.Company, resolver *config.Resolver, companyPath string) ([]doctorEntry, error) {
-	var out []doctorEntry
-	for _, key := range company.Providers.ProviderOrder() {
+func doctorEntries(company *config.Company, keys []string, resolver *config.Resolver) []doctorEntry {
+	out := make([]doctorEntry, 0, len(keys))
+	for _, key := range keys {
 		entry := doctorEntry{key: key}
 		built, err := engine.BuildCLIAgent(key, company.Providers.LLM[key], resolver)
 		if err != nil {
@@ -381,13 +424,7 @@ func doctorEntries(company *config.Company, resolver *config.Resolver, companyPa
 		}
 		out = append(out, entry)
 	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf(
-			"%s declares no providers.llm entries, which are what doctor "+
-				"examines — see docs/concepts/llm-backends.md",
-			companyPath)
-	}
-	return out, nil
+	return out
 }
 
 // buildFailure is the report for an entry that did not build.
@@ -425,22 +462,9 @@ func (b buildFailure) Render(w io.Writer) {
 	fmt.Fprintf(w, "  - it does not build, so the engine would refuse this document: %v\n", b.err)
 }
 
-func doctorLLM(ctx context.Context, entries []doctorEntry, key string, smoke bool, stdout io.Writer) error {
-	selected := entries
-	if key != "" {
-		i := slices.IndexFunc(entries, func(e doctorEntry) bool { return e.key == key })
-		if i < 0 {
-			keys := make([]string, 0, len(entries))
-			for _, e := range entries {
-				keys = append(keys, e.key)
-			}
-			slices.Sort(keys)
-			return fmt.Errorf("no provider %q (doctor examines %s)", key, strings.Join(keys, ", "))
-		}
-		selected = []doctorEntry{entries[i]}
-	}
+func doctorLLM(ctx context.Context, entries []doctorEntry, smoke bool, stdout io.Writer) error {
 	unhealthy := 0
-	for i, e := range selected {
+	for i, e := range entries {
 		if i > 0 {
 			fmt.Fprintln(stdout)
 		}
@@ -454,7 +478,7 @@ func doctorLLM(ctx context.Context, entries []doctorEntry, key string, smoke boo
 		// A non-zero exit, because `doctor` is what a deploy script runs
 		// before it lets a node take seats — a green-looking command that
 		// exited 0 with problems printed is one nobody gates on.
-		return fmt.Errorf("%d of %d providers have problems", unhealthy, len(selected))
+		return fmt.Errorf("%d of %d providers have problems", unhealthy, len(entries))
 	}
 	return nil
 }

@@ -237,8 +237,8 @@ func (w *stepWalk) command(line string) {
 
 // llm holds a `crewlet llm SUB KEY ...` step to what the command loads before
 // it starts the vendor's CLI ([runLLM]): the company file it names or
-// defaults to, held to the runnable rules, with every entry built, and the
-// entry it names among them.
+// defaults to, held to the runnable rules, carrying the entry it names, and
+// that entry built — the one entry the command resolves and builds.
 func (w *stepWalk) llm(line string, args []string) {
 	w.t.Helper()
 	if len(args) < 2 || strings.HasPrefix(args[1], "-") {
@@ -253,18 +253,14 @@ func (w *stepWalk) llm(line string, args []string) {
 			companyPath = args[i+1]
 		}
 	}
-	company, resolver, closeResolver, err := loadLLMConfig(w.t.Context(), noEnviron,
-		companyPath, defaultBootstrapPath, "", io.Discard)
+	company, keys, resolver, closeResolver, err := loadLLMConfig(w.t.Context(), noEnviron,
+		companyPath, defaultBootstrapPath, "", args[0], key, io.Discard)
 	if err != nil {
 		w.t.Fatalf("`%s` reads the company from %s, and cannot: %v",
 			line, companyPath, err)
 	}
 	defer closeResolver()
-	providers, err := cliAgents(company, resolver, companyPath)
-	if err != nil {
-		w.t.Fatalf("`%s`: %v", line, err)
-	}
-	if _, err := oneProvider(providers, key); err != nil {
+	if _, err := cliAgents(company, keys, resolver); err != nil {
 		w.t.Fatalf("`%s`: %v", line, err)
 	}
 	if !slices.Contains(w.signedIn, key) {
