@@ -10,15 +10,16 @@
  * is adopted.
  */
 
-import { BrandChip, Tag } from "@crewlethq/ui";
+import type { ReactNode } from "react";
+import { BrandChip, BrandScope, Tag } from "@crewlethq/ui";
 import { BadgeCheckGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { useViewer } from "~/lib/viewer.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useRest } from "~/lib/useRest.ts";
 import { readDeck } from "~/lib/artifacts/api.ts";
-import { useAdoptedMark, useBrand } from "~/lib/brand/useBrand.ts";
-import { mayAdoptBrand } from "~/lib/brand/brand.ts";
+import { useAdoptedBrand, useAdoptedMark, useBrand } from "~/lib/brand/useBrand.ts";
+import { faceDrawing, mayAdoptBrand } from "~/lib/brand/brand.ts";
 import type { ArtifactKind } from "~/protocol/index.ts";
 
 /** Where the company's brand is shown and set. */
@@ -147,6 +148,43 @@ export function BrandFact({
       <dt>Brand</dt>
       <dd>{shown}</dd>
     </>
+  );
+}
+
+/**
+ * An artifact's body drawn in the company's adopted brand, LIVE: a doc's
+ * document and a dashboard's board follow the brand an administrator adopts
+ * the moment it is adopted (the kinds the dashboard draws itself, FINAL B4).
+ *
+ * THE BODY, NEVER THE CHROME: the brand's colours and faces restyle the
+ * tokens inside this region only (`BrandScope`), so the bar, the panels and
+ * every control around the body stay the dashboard's own.
+ *
+ * ALWAYS THE SAME TREE: with no brand adopted, or none read yet, the region
+ * is drawn with no input, which keeps every token the page's own, so the
+ * brand arriving restyles the body rather than mounting it again (a board
+ * mounted again would read its datasets again).
+ */
+export function AdoptedBrandScope({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string | undefined;
+}) {
+  const { adoption, assets } = useAdoptedBrand({ logos: false });
+  const doc = adoption?.document;
+  const heading = doc ? faceDrawing(doc.type.heading, assets.face("heading")).stack : "";
+  const body = doc ? faceDrawing(doc.type.body, assets.face("body")).stack : "";
+  return (
+    <BrandScope
+      colors={doc?.colors ?? {}}
+      headingFamily={heading || undefined}
+      bodyFamily={body || undefined}
+      className={className}
+    >
+      {children}
+    </BrandScope>
   );
 }
 

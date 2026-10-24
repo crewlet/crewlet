@@ -11538,6 +11538,10 @@ a.live-row:focus-visible {
 .dashboard-board {
   min-width: 0;
 }
+/* The board's brand region holds the board's column of the body's grid. */
+.dashboard-brand {
+  min-width: 0;
+}
 .dashboard-cell {
   display: flex;
   flex-direction: column;

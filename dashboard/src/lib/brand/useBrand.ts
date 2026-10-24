@@ -200,15 +200,20 @@ function familyFor(source: BrandSource, role: BrandFaceRole): string {
 
 /**
  * Loads a brand's logos and uploaded faces from `source` (null: nothing to
- * load). A kit face or a system stack loads nothing.
+ * load). A kit face or a system stack loads nothing. `logos: false` loads the
+ * faces alone, for a surface that draws text in the brand and no logo.
  */
-export function useBrandAssets(source: BrandSource | null): BrandAssets {
+export function useBrandAssets(
+  source: BrandSource | null,
+  options: { logos?: boolean } = {},
+): BrandAssets {
   const [urls, setUrls] = useState<ReadonlyMap<BrandLogoSlot, string>>(new Map());
   const [faces, setFaces] = useState<ReadonlyMap<BrandFaceRole, string>>(new Map());
   const key = source?.key ?? "";
+  const logos = options.logos ?? true;
 
   useEffect(() => {
-    if (!source) return undefined;
+    if (!source || !logos) return undefined;
     const ctl = new AbortController();
     const made: string[] = [];
     void Promise.all(
@@ -237,7 +242,7 @@ export function useBrandAssets(source: BrandSource | null): BrandAssets {
     // THE SOURCE'S KEY names its files, so an equal source rebuilt each
     // render reads nothing again.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [key, logos]);
 
   useEffect(() => {
     if (!source || typeof FontFace === "undefined") return undefined;
@@ -290,14 +295,19 @@ export function useBrandAssets(source: BrandSource | null): BrandAssets {
   );
 }
 
-/** The adopted brand and its loaded assets, for the surfaces that only show it. */
-export function useAdoptedBrand(): BrandRead & { assets: BrandAssets } {
+/**
+ * The adopted brand and its loaded assets, for the surfaces that only show
+ * it; `logos: false` for one that draws no logo.
+ */
+export function useAdoptedBrand(
+  options: { logos?: boolean } = {},
+): BrandRead & { assets: BrandAssets } {
   const read = useBrand();
   const source = useMemo(
     () => (read.adoption ? adoptionSource(read.adoption) : null),
     [read.adoption],
   );
-  const assets = useBrandAssets(source);
+  const assets = useBrandAssets(source, options);
   return { ...read, assets };
 }
 
