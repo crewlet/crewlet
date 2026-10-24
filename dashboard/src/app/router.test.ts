@@ -51,6 +51,7 @@ import {
 import { CONTAINER_SHAPE, ITEM_KEY_SHAPE, KEY_SHAPE, resolve, resolves } from "./routes.ts";
 import { ALL_PROJECTS, scopeAt } from "./scope.ts";
 import { segmentsOf } from "~/test/routes.ts";
+import { principlesEditHref } from "~/routes/settings/principles/edit/address.ts";
 
 /** Every Settings section's own address but Spend's readings, which `nav gates by app` sets apart. */
 function settingsPaths(): string[][] {
@@ -705,6 +706,31 @@ describe("the breadcrumb", () => {
       expect(crumb.path, `${crumb.label} is not a link`).toBeTruthy();
     }
     expect(crumbs[0]?.icon).toBe(workspaceRow("work")?.icon);
+  });
+
+  // PRINCIPLES IN EDIT IS STILL PRINCIPLES: the parts open are what the page
+  // holds, never another page, so the address the org chart's company node
+  // sends a person to resolves to the same screen, the same sidebar row and
+  // the same trail as the page read. And the builder's address from before
+  // the principles moved is still the builder, opening nothing of its own.
+  // Mutation: give `edit=` a screen of its own in the resolver and the
+  // trail names something else.
+  test("Principles with parts in edit is the same screen, row and trail as Principles", () => {
+    for (const address of [
+      principlesEditHref(),
+      principlesEditHref("vision"),
+      principlesEditHref("policies"),
+      "#/company/principles?edit=mission,policies",
+    ]) {
+      const { path } = parseHash(address);
+      expect(resolve(path)).toEqual(resolve(["company", "principles"]));
+      expect(workspaceOf(path)).toBe("company");
+      expect(crumbsFor(path).map((c) => c.label)).toEqual(["Company", "Principles"]);
+    }
+    for (const old of ["charter", "mission", "vision", "policies"]) {
+      const route = resolve(parseHash(`#/company/org/edit?edit=${old}`).path);
+      expect(route.resolved && route.screen).toBe("org-edit");
+    }
   });
 
   // A SECTION FOLLOWS ITS WORKSPACE, unless it IS the landing page: the chart
