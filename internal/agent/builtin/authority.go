@@ -300,16 +300,21 @@ var subjectOf = map[string]subject{
 	// whether an agent owns it), which no argument states, and inside a
 	// turn somebody woke a second time for whoever the turn is acting for.
 	// So each tool reads the row and asks [authz.DecideWithin] itself (see
-	// artifacts.go). The listing and the create are not here: one is a
-	// filter every row of which is decided as a read, and the other is the
-	// app's own verb, which the gate decides on the app alone and the tool
-	// again with its caller as the owner.
+	// artifacts.go). The listing and the creates are not here: one is a
+	// filter every row of which is decided as a read, and the others (an
+	// artifact, a folder) are the app's own verbs, which the gate decides
+	// on the app alone and the tool again with its caller as the owner,
+	// beside the parent folder's role. Nor is the brand, everybody's read.
 	GetArtifactTool:         {kind: authz.KindArtifact, inTool: true},
 	PublishArtifactTool:     {kind: authz.KindArtifact, inTool: true},
 	UpdateArtifactTool:      {kind: authz.KindArtifact, inTool: true},
 	ShareArtifactTool:       {kind: authz.KindArtifact, inTool: true},
 	UnshareArtifactTool:     {kind: authz.KindArtifact, inTool: true},
 	UploadArtifactAssetTool: {kind: authz.KindArtifact, inTool: true},
+	// A MOVE IS DECIDED PER ARTIFACT by each one's stored row, and its
+	// destination by the folder's top-level owner and shares, neither of
+	// which any argument states (see artifacts_folders.go).
+	MoveArtifactTool: {kind: authz.KindArtifact, inTool: true},
 
 	// AND ITS DATASTORE, decided by the same stored row and then by each
 	// collection's own rules, which the tool settles once it has read the

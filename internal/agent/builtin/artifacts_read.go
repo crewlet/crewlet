@@ -72,8 +72,11 @@ func (t *listArtifacts) Description() string {
 	return "List the artifacts in this Crewlet company that you can open: interactive " +
 		"pages, documents and sheets people and agents publish for each other. " +
 		"`scope` narrows to your own (`mine`), ones shared with you (`shared`), " +
-		"company-wide ones (`company`) or ones agents own (`agents`). Read one with " +
-		"get_artifact."
+		"company-wide ones (`company`) or ones agents own (`agents`). Folders work as S3 " +
+		"prefixes do: `prefix` is a folder's path (`Marketing/Q4/`, empty for the top level), " +
+		"and with `delimiter: \"/\"` the answer is that one level, its artifacts in `contents` " +
+		"and its subfolders in `common_prefixes`; without it, everything beneath the prefix. " +
+		"Each row names its `folder`. Read one with get_artifact."
 }
 
 func (t *listArtifacts) Parameters() map[string]any {
@@ -102,13 +105,25 @@ func (t *listArtifacts) Parameters() map[string]any {
 					string(artifactsdomain.SortCreated), string(artifactsdomain.SortTitle)},
 				"description": "`updated` (the default) lists the most recently changed first.",
 			},
-			"after": map[string]any{
-				"type":        "string",
-				"description": "The `next` of the previous page, to continue.",
+			"prefix": map[string]any{
+				"type": "string",
+				"description": "A folder's path of names from the top level, each followed by " +
+					"`/` (`Marketing/Q4/`), as `common_prefixes` and each row's `folder` give it. " +
+					"Empty or absent is the top level.",
 			},
-			"limit": map[string]any{
+			"delimiter": map[string]any{
+				"type": "string", "enum": []any{artifactsdomain.ListDelimiter},
+				"description": "`/` lists one level: the artifacts directly in the prefix's " +
+					"folder and its subfolders as `common_prefixes`. Absent lists everything " +
+					"beneath the prefix.",
+			},
+			"continuation_token": map[string]any{
+				"type":        "string",
+				"description": "The `next_continuation_token` of the previous page, to continue.",
+			},
+			"max_keys": map[string]any{
 				"type": "integer",
-				"description": fmt.Sprintf("How many to return, 1..%d (default %d).",
+				"description": fmt.Sprintf("How many artifacts to return, 1..%d (default %d).",
 					maxArtifactList, defaultArtifactList),
 			},
 		},
@@ -139,11 +154,16 @@ func (t *listArtifacts) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Kind:              artifacts.Kind(strings.TrimSpace(argString(args, "kind"))),
 		Q:                 strings.TrimSpace(argString(args, "query")),
 		Sort:              artifactsdomain.ListSort(strings.TrimSpace(argString(args, "sort"))),
-		ContinuationToken: strings.TrimSpace(argString(args, "after")),
-		MaxKeys:           argInt(args, "limit", defaultArtifactList),
+		Prefix:            listPrefix(argString(args, "prefix")),
+		Delimiter:         strings.TrimSpace(argString(args, "delimiter")),
+		ContinuationToken: strings.TrimSpace(argString(args, "continuation_token")),
+		MaxKeys:           argInt(args, "max_keys", defaultArtifactList),
 		Fresh:             seatRead,
 	}
 	switch {
+	case q.Delimiter != "" && q.Delimiter != artifactsdomain.ListDelimiter:
+		return failed(fmt.Sprintf("list_artifacts takes `delimiter` as %q alone, or none.",
+			artifactsdomain.ListDelimiter)), nil
 	case q.Scope != "" && !q.Scope.Valid():
 		return failed(fmt.Sprintf("list_artifacts takes `scope` as one of %v.",
 			artifactsdomain.ListScopes)), nil
@@ -155,16 +175,38 @@ func (t *listArtifacts) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return failed(fmt.Sprintf("list_artifacts takes a `query` of at most %d bytes: "+
 			"search for a phrase, not a document.", maxArtifactQuery)), nil
 	case q.MaxKeys < 1 || q.MaxKeys > maxArtifactList:
-		return failed(fmt.Sprintf("list_artifacts takes a `limit` of 1..%d.", maxArtifactList)), nil
+		return failed(fmt.Sprintf("list_artifacts takes a `max_keys` of 1..%d.", maxArtifactList)), nil
 	}
-	viewer, err := t.deps.viewer(ctx, c)
-	if err != nil {
-		return refusedBy(tools.RefusalUnavailable, err, "list_artifacts could not read "+
-			"the company chart, which decides which artifacts are shared with you. "+
-			"This is NOT an empty result. Try again shortly."), nil
+	// A STRANGER'S TURN SEES NO FOLDER: no prefix resolves for it, and no
+	// folder's name is answered, as no artifact is.
+	stranger := c.ceiling.Kind == authz.CeilingStranger
+	var view folderView
+	if stranger {
+		if q.Prefix != "" {
+			_, refusal := t.deps.folderView(ctx, c, t.Name())
+			return *refusal, nil
+		}
+		viewer, err := t.deps.viewer(ctx, c)
+		if err != nil {
+			return chartUnread(err), nil
+		}
+		view.within = []artifactsdomain.Viewer{viewer}
+	} else {
+		var refusal *tools.Result
+		if view, refusal = t.deps.folderView(ctx, c, t.Name()); refusal != nil {
+			return *refusal, nil
+		}
 	}
-	page, err := t.deps.Reader.List(ctx, viewer, q)
-	if err != nil {
+	q.Requester = view.requester
+	page, err := t.deps.Reader.List(ctx, view.within[0], q)
+	switch {
+	case errors.Is(err, artifactsdomain.ErrFolderNotFound):
+		visible, verr := t.deps.visibleFolders(ctx, c, view)
+		if verr != nil {
+			return folderReadFailure(ctx, t.Name(), verr), nil
+		}
+		return folderNotFound(t.Name(), q.Prefix, nearestFolders(visible, q.Prefix)), nil
+	case err != nil:
 		return artifactReadFailure(ctx, t.Name(), "", err), nil
 	}
 	rows := make([]map[string]any, 0, len(page.Contents))
@@ -183,17 +225,53 @@ func (t *listArtifacts) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		if !dec.Allowed || dec.Elevated {
 			continue
 		}
-		rows = append(rows, t.deps.listRow(item.Head, dec.Standing.Role))
+		row := t.deps.listRow(item.Head, dec.Standing.Role)
+		if item.FolderPath != "" && !stranger {
+			row["folder"] = item.FolderPath
+		}
+		rows = append(rows, row)
 	}
-	out := map[string]any{"count": len(rows), "artifacts": rows}
+	var prefixes []map[string]any
+	if !stranger {
+		for _, p := range page.CommonPrefixes {
+			prefixes = append(prefixes, map[string]any{"prefix": p.Prefix, "folder": p.Folder,
+				"name": p.Name, "visibility": string(p.Visibility), "artifacts": p.Items,
+				"folders": p.Folders})
+		}
+	}
+	out := map[string]any{"prefix": q.Prefix, "contents": rows,
+		"key_count": len(rows) + len(prefixes), "is_truncated": page.IsTruncated}
+	if q.Delimiter != "" {
+		out["delimiter"] = q.Delimiter
+		out["common_prefixes"] = prefixes
+	}
 	if page.NextContinuationToken != "" {
-		out["next"] = page.NextContinuationToken
+		out["next_continuation_token"] = page.NextContinuationToken
 	}
 	if !page.Complete {
 		out["complete"] = false
 	}
 	read := newForeignRead(turn, c.self())
-	return read.answer(ctx, t.Name(), out, "Ask for fewer with `limit`, or narrow with `kind` or `query`.")
+	return read.answer(ctx, t.Name(), out, "Ask for fewer with `max_keys`, or narrow with "+
+		"`prefix` and `delimiter`, `kind` or `query`.")
+}
+
+// listPrefix is a `prefix` as the listing takes it: a folder path of names,
+// each followed by "/", or empty for the top level. A path written without
+// its trailing "/" names the same folder, since a name holds no "/".
+func listPrefix(raw string) string {
+	p := strings.Trim(strings.TrimSpace(raw), artifactsdomain.ListDelimiter)
+	if p == "" {
+		return ""
+	}
+	return p + artifactsdomain.ListDelimiter
+}
+
+// chartUnread is a listing that could not read the chart that decides it.
+func chartUnread(err error) tools.Result {
+	return refusedBy(tools.RefusalUnavailable, err, "list_artifacts could not read "+
+		"the company chart, which decides which artifacts are shared with you. "+
+		"This is NOT an empty result. Try again shortly.")
 }
 
 // listRow is one artifact as a listing shows it.
@@ -219,29 +297,39 @@ func (d ArtifactDeps) listRow(h artifactsdomain.Head, role artifacts.Role) map[s
 	return row
 }
 
-// viewer is what the listing narrows by for the caller: their record, the
+// viewer is what the listing narrows by for the caller: [ArtifactDeps.viewerOf]
+// the caller's principal.
+func (d ArtifactDeps) viewer(ctx context.Context, c artifactCaller) (artifactsdomain.Viewer, error) {
+	return d.viewerOf(ctx, c.principal, c.turn)
+}
+
+// viewerOf is what a listing narrows by for principal p: their record, the
 // units their seat sits in (a unit share admits the unit and everything below
 // it, so a seat is reached by every unit above it), and the agents they lead
-// (the lead arm, which opens only an agent owner's artifacts).
+// (the lead arm, which opens only an agent owner's artifacts). The caller's,
+// and the requester's where a turn acts for one (the folder names and rows a
+// listing may disclose are narrowed by both).
 //
 // NEVER THE ADMIN PATH: a listing that surfaced every private artifact by the
 // override would disclose what nobody recorded ([authz.Visible]).
-func (d ArtifactDeps) viewer(ctx context.Context, c artifactCaller) (artifactsdomain.Viewer, error) {
-	v := artifactsdomain.Viewer{Record: iam.RecordOwner(c.principal)}
-	o := d.orgFor(c.turn)
+func (d ArtifactDeps) viewerOf(ctx context.Context, p iam.Principal, turn *turnctx.Turn) (
+	artifactsdomain.Viewer, error) {
+
+	v := artifactsdomain.Viewer{Record: iam.RecordOwner(p)}
+	o := d.orgFor(turn)
 	if o == nil {
 		return v, authz.ErrNoChart
 	}
-	if c.principal.Seat != "" {
-		if seat := o.SeatByHandle(c.principal.Seat); seat != nil {
+	if p.Seat != "" {
+		if seat := o.SeatByHandle(p.Seat); seat != nil {
 			for _, u := range o.UnitChainFor(seat) {
 				v.Units = append(v.Units, u.Key())
 			}
 		}
 	}
-	actor := c.principal.Seat
+	actor := p.Seat
 	if actor == "" {
-		actor = c.principal.Login
+		actor = p.Login
 	}
 	if actor == "" {
 		return v, nil

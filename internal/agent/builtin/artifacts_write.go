@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
+	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactupload"
 	"github.com/crewlet/crewlet/internal/artifactupload/edits"
@@ -36,8 +37,10 @@ const staleTextBudget = 40 << 10
 func filesParam(patch bool) map[string]any {
 	desc := "Files by published path, each `{content}` (with `encoding`: `text`, the " +
 		"default, or `base64`), `{from_sandbox: \"dist/app.js\"}` (a file your coding run " +
-		"wrote in this turn, relative to its workspace) or `{from_project_file: {project, " +
-		"path}}`. Inline content is at most 1 MiB in all."
+		"wrote in this turn, relative to its workspace), `{from_project_file: {project, " +
+		"path}}` or `{from_brand: \"logo.primary\"}` (a logo or typeface of your company's " +
+		"adopted brand, copied in; get_company_brand gives each ready to paste). Inline " +
+		"content is at most 1 MiB in all."
 	if patch {
 		desc += " Null removes a file; files you leave out are kept."
 	}
@@ -167,8 +170,10 @@ func (t *createArtifact) Description() string {
 		"slide deck, or a sheet, shared with the " +
 		"colleagues who must use it. Load the artifacts tool skill first: it is the " +
 		"design contract every page is held to. When a person asked for it, they are " +
-		"made an editor. To change an existing artifact use publish_artifact; the answer " +
-		"carries the `url` to send people."
+		"made an editor. Begin a deck with `starter` rather than writing every slide. " +
+		"When your company has a brand, read get_company_brand before writing slides, " +
+		"logos or typefaces. To change an existing artifact use publish_artifact; the " +
+		"answer carries the `url` to send people."
 }
 
 func (t *createArtifact) Parameters() map[string]any {
@@ -219,9 +224,104 @@ func (t *createArtifact) Parameters() map[string]any {
 					"`weekly-review`. Creating again with the same key answers the " +
 					"artifact you already made rather than a second one.",
 			},
+			"starter": starterParam(),
+			"folder": map[string]any{
+				"type": "string",
+				"description": "The folder to file it in: a folder's id, or its path of names " +
+					"from the top level (`Marketing/Q3`). It must exist and be one you may file " +
+					"in; a missing one is refused, never created. Omit for the top level.",
+			},
 		},
 		"required": []any{"kind", "title"},
 	})
+}
+
+// starterParam is create_artifact's `starter`: a deck begun from a plan the
+// engine composes, in a theme and with the slides named.
+func starterParam() map[string]any {
+	themes := make([]any, 0, len(slideformat.Themes())+1)
+	themes = append(themes, slideformat.BrandTheme)
+	for _, th := range slideformat.Themes() {
+		themes = append(themes, th.ID)
+	}
+	layouts := make([]any, 0, len(slideformat.Layouts()))
+	for _, l := range slideformat.Layouts() {
+		layouts = append(layouts, l.ID)
+	}
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"theme": map[string]any{
+				"type": "string", "enum": themes,
+				"description": "`brand` draws your company's adopted brand (its colours, faces " +
+					"and logo); otherwise one of the engine's themes. Default `" +
+					slideformat.DefaultTheme + "`.",
+			},
+			"slides": map[string]any{
+				"type": "array", "maxItems": slideformat.MaxPlanSlides,
+				"items": map[string]any{
+					"type":     "object",
+					"required": []any{"layout"},
+					"properties": map[string]any{
+						"layout": map[string]any{"type": "string", "enum": layouts},
+						"title":  map[string]any{"type": "string"},
+					},
+				},
+				"description": "The slides it opens with, in order, each a layout and its " +
+					"title (a cover's is the deck's title).",
+			},
+		},
+		"description": "For a `slides` deck only: begin from the engine's composer, with no " +
+			"`content`, `files`, `source` or `entry`. A plan costs a few lines where writing " +
+			"every slide costs thousands; fill the text in afterwards with `edits`.",
+	}
+}
+
+// starterArg reads `starter`: absent, or a deck plan.
+func starterArg(args map[string]any) (*slideformat.Plan, string) {
+	raw, present := args["starter"]
+	if !present || raw == nil {
+		return nil, ""
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return nil, "create_artifact takes `starter` as `{theme, slides: [{layout, title}]}`."
+	}
+	plan := &slideformat.Plan{}
+	for field, v := range m {
+		switch field {
+		case "theme":
+			theme, ok := v.(string)
+			if !ok {
+				return nil, "create_artifact: `starter.theme` is a theme's id."
+			}
+			plan.Theme = strings.TrimSpace(theme)
+		case "slides":
+			list, ok := v.([]any)
+			if !ok {
+				return nil, "create_artifact: `starter.slides` is a list of `{layout, title}`."
+			}
+			for i, item := range list {
+				slide, ok := item.(map[string]any)
+				if !ok {
+					return nil, fmt.Sprintf("create_artifact: starter slide %d is not an object.", i+1)
+				}
+				for key := range slide {
+					if key != "layout" && key != "title" {
+						return nil, fmt.Sprintf("create_artifact: starter slide %d carries %q, and "+
+							"a slide takes `layout` and `title`.", i+1, key)
+					}
+				}
+				plan.Slides = append(plan.Slides, slideformat.PlanSlide{
+					Layout: strings.TrimSpace(argString(slide, "layout")),
+					Title:  strings.TrimSpace(argString(slide, "title"))})
+			}
+		default:
+			return nil, fmt.Sprintf("create_artifact: `starter` carries %q, and takes `theme` "+
+				"and `slides`.", field)
+		}
+	}
+	return plan, ""
 }
 
 func (t *createArtifact) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
@@ -256,6 +356,12 @@ func (t *createArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if dec.Unknown() || !dec.Allowed {
 		return authorityRefusal(t.Name(), DecisionError(authz.ActionArtifactCreate, dec)), nil
 	}
+	// THE FOLDER IS DECIDED BEFORE A BYTE MOVES: a folder the call may not
+	// name, or may not file in, refuses the create with nothing uploaded.
+	folder, folderPath, refusal := t.folder(ctx, c, args)
+	if refusal != nil {
+		return *refusal, nil
+	}
 
 	files := newFileSources(t.deps, c, t.Name())
 	_, hasContent := args["content"]
@@ -265,7 +371,18 @@ func (t *createArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	_, hasFiles := args["files"]
 	entry := strings.TrimSpace(argString(args, "entry"))
+	plan, why := starterArg(args)
+	if why != "" {
+		return failed(why), nil
+	}
 	switch {
+	case plan != nil && spec.Format != artifacts.FormatSlides:
+		return failed(fmt.Sprintf("create_artifact: `starter` begins a slide deck, and a %s "+
+			"begins from its `content` or `files`.", kind)), nil
+	case plan != nil && (hasContent || hasFiles || hasSource || entry != ""):
+		return failed("create_artifact takes `starter` alone: the engine composes the deck's " +
+			"files and its entry, so `content`, `files`, `source` and `entry` are not " +
+			"combined with it. Change the slides with publish_artifact `edits` afterwards."), nil
 	case hasSource && (hasContent || hasFiles):
 		return failed("create_artifact takes `source` alone: a build's output is the " +
 			"whole file set, so `content` and `files` are not combined with it."), nil
@@ -296,9 +413,9 @@ func (t *createArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			return *refusal, nil
 		}
 	}
-	if spec.Store != artifacts.StoreContent && len(files.files) == 0 {
+	if spec.Store != artifacts.StoreContent && len(files.files) == 0 && plan == nil {
 		return failed("create_artifact needs the page: `content` for the entry page, " +
-			"`files`, or a build's `source`."), nil
+			"`files`, a build's `source`, or a deck's `starter`."), nil
 	}
 	if entry == "" {
 		entry = carriedEntry(spec, files)
@@ -317,6 +434,7 @@ func (t *createArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Upload: upload, Files: specs, Entry: entry,
 		Label:    strings.TrimSpace(argString(args, "label")),
 		Contract: strings.TrimSpace(argString(args, "contract")), Capabilities: caps,
+		Starter: plan != nil, Deck: plan, Folder: folder,
 	})
 	if err != nil {
 		return publishFailure(ctx, t.Name(), c, err), nil
@@ -327,11 +445,37 @@ func (t *createArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	t.deps.settle(ctx, published.Result.Position)
 	out := t.deps.publishedAnswer(c, published, report, "created")
+	if folderPath != "" {
+		out["folder"] = folderPath
+	}
 	if len(shares) > 0 {
 		out["shared_with"] = []map[string]any{{"to": shareTarget(shares[0].Audience),
 			"role": string(shares[0].Role)}}
 	}
 	return jsonResult(out)
+}
+
+// folder is the folder a create files into, by id, with its path ("" for the
+// top level), under both of filing's decisions, or the refusal.
+func (t *createArtifact) folder(ctx context.Context, c artifactCaller, args map[string]any) (
+	string, string, *tools.Result) {
+
+	ref := strings.TrimSpace(argString(args, "folder"))
+	if ref == "" {
+		return "", "", nil
+	}
+	view, refusal := t.deps.folderView(ctx, c, t.Name())
+	if refusal != nil {
+		return "", "", refusal
+	}
+	f, p, _, refusal := t.deps.resolveFolder(ctx, c, t.Name(), ref, view)
+	if refusal != nil {
+		return "", "", refusal
+	}
+	if _, refusal := t.deps.decideFiling(ctx, c, t.Name(), f, p); refusal != nil {
+		return "", "", refusal
+	}
+	return f.ID, p, nil
 }
 
 // requesterShare is the share an agent's new artifact is created with: the
