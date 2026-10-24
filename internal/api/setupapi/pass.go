@@ -61,8 +61,8 @@ type Status interface {
 // rather than stubbed.
 type provisionRequest struct {
 	// Recreate re-registers hooks with a fresh secret. DESTRUCTIVE across
-	// deployments, so the dashboard gates it behind a typed confirmation
-	// and this route names that in its own answer.
+	// deployments ([setup.PassInput.Recreate]), so a pass takes it only
+	// when the caller sends it — and no dashboard screen does.
 	//
 	// The pass is handed it spelled as this field is ([recreateSwitch]).
 	Recreate bool `json:"recreate_webhooks"`
