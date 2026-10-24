@@ -1603,7 +1603,8 @@ func collision(claims []pathClaim, i int, scope SeedScope) string {
 // them is a login nothing ever finds. And two credential paths sharing a base
 // name are ONE file in the shared directory and in every bundle, so the second
 // overwrote the first there, and every seat was seeded with one login in both
-// places.
+// places — as one named [BundleManifest] would be one entry in every bundle with
+// the manifest saying which CLI the bundle was exported from.
 //
 // A volatile path may name a directory — most do — so it is held only to
 // staying inside the home.
@@ -1627,8 +1628,14 @@ func (p *Profile) validateHomePaths(add func(string, ...any)) {
 		}
 	}
 	byName := map[string]string{}
-	for _, rel := range p.CredentialPaths {
+	for i, rel := range p.CredentialPaths {
 		name := filepath.Base(rel)
+		if name == BundleManifest {
+			add("credential_paths[%d] %q has the file name %s, which every bundle keeps its "+
+				"manifest under — the entry naming the CLI it was exported from — so a login "+
+				"file by that name could not travel in one", i, rel, BundleManifest)
+			continue
+		}
 		if first, taken := byName[name]; taken {
 			add("credential_paths names %q and %q, which share the file name %s — the "+
 				"shared directory and every bundle keep a login file under its file name, "+

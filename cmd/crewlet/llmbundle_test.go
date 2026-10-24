@@ -1,16 +1,15 @@
 package main
 
 import (
-	"archive/tar"
 	"bytes"
-	"compress/gzip"
-	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
@@ -66,27 +65,58 @@ roles:
 		filepath.Join(state, "custom", "credentials", "creds.json")
 }
 
-// llmBundle packs one creds.json the way `crewlet llm export` does.
+// llmBundle is a bundle of the entry's CLI, `custom`, holding one creds.json:
+// exported by `crewlet llm export`'s own writer from a state directory of its
+// own, so it is a bundle the export writes — the CLI it names included —
+// rather than this file's copy of one.
 func llmBundle(t *testing.T, body string) string {
 	t.Helper()
-	var raw bytes.Buffer
-	zw := gzip.NewWriter(&raw)
-	tw := tar.NewWriter(zw)
-	if err := tw.WriteHeader(&tar.Header{
-		Name: "creds.json", Mode: 0o600, Size: int64(len(body)), Typeflag: tar.TypeReg,
-	}); err != nil {
+	p, err := cliagent.New(cliagent.Config{
+		Key: "sub", Agent: "custom", StateDir: t.TempDir(), Timeout: time.Second, MaxConcurrent: 1,
+		Overrides: map[string]any{
+			"binary": "true", "complete_args": []any{"-p"}, "output": "text",
+			"credential_paths": []any{".fake/creds.json"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("building the exporting entry: %v", err)
+	}
+	login := filepath.Join(p.Workspace().CredentialsDir(), "creds.json")
+	if err := os.MkdirAll(filepath.Dir(login), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tw.Write([]byte(body)); err != nil {
+	if err := os.WriteFile(login, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := tw.Close(); err != nil {
+	blob, err := p.ExportBundle()
+	if err != nil {
+		t.Fatalf("ExportBundle: %v", err)
+	}
+	return blob
+}
+
+// codexBundle is a bundle `crewlet llm export` writes from a codex login, from
+// a state directory of its own: another CLI's, to the `custom` entry above.
+func codexBundle(t *testing.T, body string) string {
+	t.Helper()
+	p, err := cliagent.New(cliagent.Config{
+		Key: "sub", Agent: "codex", StateDir: t.TempDir(), Timeout: time.Second, MaxConcurrent: 1,
+	})
+	if err != nil {
+		t.Fatalf("building the exporting entry: %v", err)
+	}
+	login := filepath.Join(p.Workspace().CredentialsDir(), "auth.json")
+	if err := os.MkdirAll(filepath.Dir(login), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := zw.Close(); err != nil {
+	if err := os.WriteFile(login, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return base64.StdEncoding.EncodeToString(raw.Bytes())
+	blob, err := p.ExportBundle()
+	if err != nil {
+		t.Fatalf("ExportBundle: %v", err)
+	}
+	return blob
 }
 
 // runSub runs `crewlet llm <sub> sub` with extra flags against the company.
@@ -214,6 +244,42 @@ func TestTheCommandsThatAnswerAsTheEngineRestoreTheBundleFirst(t *testing.T) {
 				t.Errorf("%s does not report the restored login (%q):\n%s", c.command, c.say, out.String())
 			}
 		})
+	}
+}
+
+// A BUNDLE FROM ANOTHER CLI IS REFUSED BY EVERY COMMAND THAT RESTORES IT, as
+// the engine refuses it: an entry moved to another CLI keeps the bundle it was
+// configured with, which names the CLI it was exported from. `status` says so
+// on stderr and restores nothing, and `doctor` reports it with the export that
+// replaces it — named with the entry's key, where it named a bare `crewlet llm
+// export`, which a company of more than one entry refuses for want of one.
+//
+// Mutation: drop the key from doctor's remedy, or the manifest's check from the
+// restore, and this is red.
+func TestABundleFromAnotherCLIIsRefusedByTheCommandsThatRestoreIt(t *testing.T) {
+	flags, login := bundledEntry(t, codexBundle(t, `{"token":"k-codex"}`))
+
+	stdout, _, err := runSub(t, flags, "doctor", "-no-smoke")
+	if err == nil {
+		t.Error("doctor called an entry whose bundle is another CLI's healthy")
+	}
+	for _, want := range []string{`it names "codex"`, "export the bundle again (`crewlet llm export sub`)"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("doctor does not say %q:\n%s", want, stdout)
+		}
+	}
+
+	_, stderr, err := runSub(t, flags, "status")
+	if err != nil {
+		t.Fatalf("status: %v (%s)", err, stderr)
+	}
+	for _, want := range []string{"did not restore", `it names "codex"`, `"sub" moved to "custom"`} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("status does not say %q:\n%s", want, stderr)
+		}
+	}
+	if got := readLogin(t, login); got != "" {
+		t.Errorf("another CLI's bundle was restored as the entry's login: %q", got)
 	}
 }
 

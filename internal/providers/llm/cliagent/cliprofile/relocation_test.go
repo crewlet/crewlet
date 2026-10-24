@@ -339,10 +339,11 @@ func TestASeedPathThatClimbsOutAndBackInIsRefusedAtLoad(t *testing.T) {
 // out on every call — so an override like `credential_paths: [../auth.json]`
 // loaded, was admitted by every write path, and failed every call's seed. A
 // login path names a FILE besides, read and carried by its base name, and two
-// sharing a base name are one file in the shared directory and every bundle.
-// And a host path is adopted under its base name, so one whose base name no
-// credential path has is a login `-from-host` adopts and no seat reads, which
-// is what copilot did with gh's hosts.yml.
+// sharing a base name are one file in the shared directory and every bundle —
+// as one named like a bundle's manifest is one entry with it. And a host path
+// is adopted under its base name, so one whose base name no credential path
+// has is a login `-from-host` adopts and no seat reads, which is what copilot
+// did with gh's hosts.yml.
 func TestALoginOrVolatilePathIsCheckedAtLoad(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -372,6 +373,11 @@ func TestALoginOrVolatilePathIsCheckedAtLoad(t *testing.T) {
 		"two credential paths with one file name": {
 			map[string]any{"credential_paths": []any{".a/auth.json", ".b/auth.json"}},
 			`credential_paths names ".a/auth.json" and ".b/auth.json", which share the file name auth.json`,
+		},
+		"a credential path named like a bundle's manifest": {
+			map[string]any{"credential_paths": []any{".vendor/auth.json", ".vendor/" + BundleManifest}},
+			`credential_paths[1] ".vendor/` + BundleManifest + `" has the file name ` + BundleManifest +
+				`, which every bundle keeps its manifest under`,
 		},
 		"a host credential path climbing out": {
 			map[string]any{"host_credential_paths": []any{"../.ssh/id_ed25519"}},

@@ -380,7 +380,7 @@ func TestTheReportCarriesEveryLineTheDocsPromise(t *testing.T) {
 func TestDoctorNamesTheLogoutThatKeepsABundleOut(t *testing.T) {
 	t.Parallel()
 	p := loginProvider(t)
-	p.bundle = bundleOf(t, "creds.json", `{"token":"k-bundled"}`)
+	p.bundle = bundleOf(t, p.agent, "creds.json", `{"token":"k-bundled"}`)
 	if err := p.RestoreConfiguredBundle(t.Context()); err != nil {
 		t.Fatalf("restore: %v", err)
 	}

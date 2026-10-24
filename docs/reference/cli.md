@@ -2179,10 +2179,11 @@ seats](../concepts/llm-backends.md#token-refresh-across-seats). A
 document from another build, say), saying so, where `status` keeps refusing it.
 
 **`export`** packs a login into one portable blob so another host can come up
-already authenticated. `-secret-store` writes it to the [secret
-store](../concepts/secret-store.md) instead of stdout; without it the blob goes
-to stdout in the clear, which is what you want when piping into your own
-secret manager and never what you want in a shell history.
+already authenticated: the entry's credential files, and a manifest naming the
+CLI they were exported from (`crewlet-bundle.json`). `-secret-store` writes it
+to the [secret store](../concepts/secret-store.md) instead of stdout; without
+it the blob goes to stdout in the clear, which is what you want when piping
+into your own secret manager and never what you want in a shell history.
 
 **`import`** is the other half, and it reads the bundle from **stdin** — a
 credential on argv is visible in `ps` and lands in shell history, and the
@@ -2195,7 +2196,8 @@ crewlet llm export claude | ssh other-host crewlet llm import claude
 It **refuses to overwrite an existing login**, loudly: a host that has been
 running holds the fresher refresh token, and restoring a boot-time blob over
 it is how a fleet logs itself out. `crewlet llm logout <KEY>` first if you
-mean to replace it.
+mean to replace it. And it refuses a bundle that does not name the entry's CLI
+as the one it was exported from (below), writing nothing.
 
 **`logout`** removes the login (and revokes it with the vendor where the CLI
 has a logout of its own), and **records the logout** in the CLI's share of the
@@ -2222,13 +2224,15 @@ container before its first turn rather than after an operator remembers a
 command; `import` is for the hosts that are already up. See [environment
 variables](environment-variables.md).
 
-A bundle **belongs to the CLI it was exported from**, though it is keyed by the
-entry: one exported before the entry moved to another CLI holds files the new
-CLI does not keep, so a restore into the new CLI's empty directory refuses it —
-at boot and apply as `cli_agent_bundle_restore_failed`, and in `list`, `status`,
-`export` and `doctor` — until the new CLI is signed in and its own bundle
-exported in its place: see [an entry moved to another
-CLI](../concepts/llm-backends.md#an-entry-moved-to-another-cli).
+A bundle **belongs to the CLI it was exported from**, and names it, though it
+is keyed by the entry: one exported before the entry moved to another CLI
+names the old CLI, so a restore into the new CLI's empty directory refuses it
+and writes nothing — even where the two CLIs keep a login file under one name,
+as six keep an `auth.json` — at boot and apply as
+`cli_agent_bundle_restore_failed`, in `list`, `status`, `export` and `doctor`,
+and in `import`, until the new CLI is signed in and its own bundle exported in
+its place. A bundle that names no CLI is refused the same way: see [an entry
+moved to another CLI](../concepts/llm-backends.md#an-entry-moved-to-another-cli).
 
 ---
 

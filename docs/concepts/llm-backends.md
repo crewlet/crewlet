@@ -515,18 +515,22 @@ login directory of its own, signed out until you sign it in (`crewlet llm login
 finds the old CLI's login where it was left.
 
 **A credential bundle does not move with it.** A bundle belongs to the CLI it
-was exported from, but it is keyed by the entry —
+was exported from, and names it, but it is keyed by the entry —
 `CREWLET_LLM_CLI_<KEY>_CREDENTIALS`, or the secret `auth.credential_bundle`
-references — so after the move it still holds the old CLI's files, which the
-new one does not keep. Wherever the new CLI's credential directory is empty —
+references — so after the move it still holds the old CLI's login and names
+the old CLI. A restore reads that name rather than the files' names, which
+cannot tell two CLIs apart: Codex, Cursor Agent, Grok, Hermes, Muse Code and Pi
+each keep a login in an `auth.json`, and Gemini CLI and Qwen Code in an
+`oauth_creds.json`. Wherever the new CLI's credential directory is empty —
 every node you have not signed it in on, and every container on a fresh
-volume — each boot and apply refuses the bundle, logged as
-`cli_agent_bundle_restore_failed`, and `crewlet llm list`, `status`, `export`
-and `doctor` say so too, until it is replaced: sign the new CLI in, then export
-its bundle in the old one's place (`crewlet llm export <key> -secret-store`, or
-pipe `crewlet llm export <key>` into the secret `auth.credential_bundle`
-references). A deployment that relies on the bundle runs the entry signed out
-until then.
+volume — each boot and apply refuses the bundle and writes nothing, logged as
+`cli_agent_bundle_restore_failed` with the CLI the bundle names, and `crewlet
+llm list`, `status`, `export` and `doctor` say so too, as `crewlet llm import`
+does for a bundle of another CLI's, until it is replaced: sign the new CLI in,
+then export its bundle in the old one's place (`crewlet llm export <key>
+-secret-store`, or pipe `crewlet llm export <key>` into the secret
+`auth.credential_bundle` references). A deployment that relies on the bundle
+runs the entry signed out until then.
 
 ### Auxiliary work and latency
 
@@ -2032,14 +2036,19 @@ or whatever variable the entry's `auth.credential_bundle` names. Each node then
 holds its own copy of one refresh token, so where the vendor rotates refresh
 tokens two nodes fork it exactly as `-from-host` forks yours — a headless token
 (option 2) or a key (option 5) is the better answer for a fleet. The blob is
-validated on the way back in — only the
-profile's own credential paths, files only, size-capped — because an
-archive is an execution surface if it is unpacked on trust; so a bundle
-restores only into the CLI it was exported from, and an entry [moved to another
+validated whole on the way back in, before anything is written — only the
+profile's own credential paths, files only, each once, size-capped — because
+an archive is an execution surface if it is unpacked on trust. And it restores
+only into the CLI it was exported from, which it names: a bundle naming
+another CLI, or none, is refused by the restore and by `import` alike, even
+where its files carry names the CLI keeps, so an entry [moved to another
 CLI](#an-entry-moved-to-another-cli) needs its bundle exported again.
 
-Only the credential files — and a CLI's exported login document — travel.
-Sessions, history, and caches never go into a bundle.
+Only the credential files — and a CLI's exported login document — travel,
+beside a manifest naming the CLI (`crewlet-bundle.json`, `{"agent": "codex"}`;
+an entry that leaves `agent` out exports as `claude-code`), which is never
+written into the credential directory. Sessions, history, and caches never go
+into a bundle.
 
 **Between two hosts that share no database**, pipe it instead:
 
@@ -2425,7 +2434,7 @@ lists and single values replace wholesale.
 | `api_key_env` | The variable a metered key goes in (`auth.api_key`, or this variable itself, under `auth.mode: api-key`). |
 | `model_names_provider` | The CLI reads its model as `<provider>/<model>`, split at the first slash, so a `model` with nothing before or after that slash (as the CLI is handed it, through `model_args`) is refused on a write. Declared by `opencode` only — measured from its source; `hermes` and `pi` document a `provider/id` model but are not known to refuse a bare one. |
 | `env_sign_in` | The CLI reads its model provider's key from its own environment, so a [credential-named](#6-a-provider-key-in-env-opencode-hermes-pi) variable in the entry's `env` signs it in. |
-| `credential_paths` | The login files, relative to the seat home: each must name a file inside it (not the home itself, not a path ending in a separator), and no two may share a file name, since the shared directory and a bundle keep each under its name. |
+| `credential_paths` | The login files, relative to the seat home: each must name a file inside it (not the home itself, not a path ending in a separator), no two may share a file name, and none may be named `crewlet-bundle.json` (a bundle's manifest, naming the CLI it was exported from) or, beside a `credential_store`, `exported-credentials` (the store's document): the shared directory and a bundle keep each file under its name. |
 | `volatile_paths` | Sessions, transcripts and history, deleted before and after every call. Each must stay inside the seat home; a directory is fine. |
 | `login_args` | The vendor's own interactive login, for `crewlet llm login`. |
 | `capture_token_args` | The command that mints a headless token on stdout (`-capture-token`). |

@@ -447,8 +447,11 @@ func (b bundleFailure) Healthy() bool { return false }
 func (b bundleFailure) Render(w io.Writer) {
 	fmt.Fprintf(w, "%-14s: %s\n", "provider", b.key)
 	fmt.Fprintln(w, "problems:")
+	// THE ENTRY'S KEY, which is what `crewlet llm export` takes: a bare one
+	// is refused wherever the company has more than one entry, so the remedy
+	// printed under one of them was a command that asks which.
 	fmt.Fprintf(w, "  - its configured credential bundle did not restore, so the engine would run it "+
-		"signed out — export the bundle again (`crewlet llm export`): %v\n", b.err)
+		"signed out — export the bundle again (`crewlet llm export %s`): %v\n", b.key, b.err)
 }
 
 func unbuilt(key string, err error) func(context.Context, bool) diagnosis {
