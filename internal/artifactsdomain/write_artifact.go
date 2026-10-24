@@ -304,7 +304,7 @@ func (w *Writer) Publish(ctx context.Context, c Call, in PublishInput) (Publishe
 		return Published{}, err
 	}
 	pins := pinsBrand(kind, in)
-	if pins {
+	if namesBrand(kind) {
 		scope = withBrand(subject, scope)
 	}
 	var number int
@@ -462,6 +462,16 @@ func (w *Writer) Patch(ctx context.Context, c Call, id artifacts.ID, p Patch) (W
 		return Written{}, err
 	}
 	subject, scope := ArtifactSubject(id), ScopeSet{Subject: true}
+	if p.Label != nil {
+		// A LABEL'S REMOVAL can retire versions, which may pin the brand.
+		kind, err := w.kindOf(ctx, id) //nolint:govet // shadow: scoped to this block; see .golangci.yml
+		if err != nil {
+			return Written{}, err
+		}
+		if namesBrand(kind) {
+			scope = withBrand(subject, scope)
+		}
+	}
 	res, err := w.publish(ctx, request(subject, scope, opID, statelog.PatternArbitrated,
 		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 			head, err := mustHead(ctx, tx, id.String()) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
@@ -835,7 +845,10 @@ func (w *Writer) purge(ctx context.Context, c Call, id artifacts.ID, guard func(
 		return Written{}, err
 	}
 	step := statelog.StepOpID(opID, "artifact")
-	var gone bool
+	var (
+		gone bool
+		kind artifacts.Kind
+	)
 	if err := w.db.Read(ctx, func(tx *sql.Tx) error { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		head, found, err := readHeadTx(ctx, tx, id.String()) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		switch {
@@ -844,6 +857,7 @@ func (w *Writer) purge(ctx context.Context, c Call, id artifacts.ID, guard func(
 		case found && head.PurgeBegunAt.IsZero() && guard != nil && !guard(head):
 			return errNotPurgeable
 		case found:
+			kind = head.Kind
 			return nil
 		}
 		author, marked, err := deletionMarker(ctx, tx, id.String())
@@ -881,6 +895,9 @@ func (w *Writer) purge(ctx context.Context, c Call, id artifacts.ID, guard func(
 	subject := ArtifactSubject(id)
 	res, err := w.onSourced(ctx, id, func(sourceID string) statelog.Request {
 		scope := sourcedScope(id, sourceID)
+		if namesBrand(kind) {
+			scope = withBrand(subject, scope)
+		}
 		return request(subject, scope, step, statelog.PatternArbitrated,
 			func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
 				head, found, err := readHeadTx(ctx, tx, id.String()) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml

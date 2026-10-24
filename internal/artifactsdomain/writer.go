@@ -625,6 +625,14 @@ func pinsBrand(kind artifacts.Kind, in PublishInput) bool {
 	return kind.Framed() && !in.BrandOff
 }
 
+// namesBrand reports whether a write that publishes, retires or purges
+// versions of an artifact of kind names the adopted brand in its scope: a
+// framed kind's version may pin an adoption's stylesheet, so such a record's
+// apply reads the brand's rows ([pinnedBrand]) or prunes them once the last
+// version naming a superseded stylesheet is gone ([deleteVersions]). A
+// version that opts out of the brand still retires older ones that may pin.
+func namesBrand(kind artifacts.Kind) bool { return kind.Framed() }
+
 // kindOf is an artifact's kind as this node's rows hold it, read before a
 // publish so its scope names the brand exactly when its apply reads the
 // brand's rows. A kind is fixed at create, so a stale row answers it; an

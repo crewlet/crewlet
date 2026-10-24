@@ -888,6 +888,10 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, c applyContext, id
 		id, id).Scan(&versions, &assets); err != nil {
 		return 0, fmt.Errorf("artifactsdomain: count what purging %s removes: %w", id, err)
 	}
+	pinned, err := pinsAnyBrand(ctx, tx, id, nil)
+	if err != nil {
+		return 0, err
+	}
 	for _, stmt := range []string{
 		`DELETE FROM artifact_versions WHERE artifact_id = ?`,
 		`DELETE FROM artifact_objects WHERE artifact_id = ?`,
@@ -910,6 +914,10 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, c applyContext, id
 		artifacts: -1, bytes: -head.bytesHeld, versions: -versions, assets: -assets,
 	})
 	if err != nil {
+		return 0, err
+	}
+	rows += n
+	if n, err = pruneRetiredBrands(ctx, tx, pinned); err != nil {
 		return 0, err
 	}
 	rows += n
@@ -1035,11 +1043,19 @@ func retiredEntries(ctx context.Context, tx *sql.Tx, id string, prune []int, bel
 	return out, true, nil
 }
 
-// deleteVersions removes the versions a record retires.
+// deleteVersions removes the versions a record retires, and with them the files
+// of a superseded adoption the last of them pinned ([pruneRetiredBrands]).
 func deleteVersions(ctx context.Context, tx *sql.Tx, id string, numbers []int) (int, error) {
+	if len(numbers) == 0 {
+		return 0, nil
+	}
+	pinned, err := pinsAnyBrand(ctx, tx, id, numbers)
+	if err != nil {
+		return 0, err
+	}
 	rows := 0
 	for _, n := range numbers {
-		res, err := tx.ExecContext(ctx,
+		res, err := tx.ExecContext(ctx, //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			`DELETE FROM artifact_versions WHERE artifact_id = ? AND number = ?`, id, n)
 		if err != nil {
 			return 0, fmt.Errorf("artifactsdomain: retire %s version %d: %w", id, n, err)
@@ -1047,7 +1063,44 @@ func deleteVersions(ctx context.Context, tx *sql.Tx, id string, numbers []int) (
 		k, _ := res.RowsAffected()
 		rows += int(k)
 	}
-	return rows, nil
+	pruned, err := pruneRetiredBrands(ctx, tx, pinned)
+	return rows + pruned, err
+}
+
+// pinsAnyBrand reports whether any version of artifact id numbered in numbers
+// (every version where numbers is nil) pins an adoption's stylesheet, read
+// before the versions are deleted.
+func pinsAnyBrand(ctx context.Context, tx *sql.Tx, id string, numbers []int) (bool, error) {
+	query := `SELECT EXISTS (SELECT 1 FROM artifact_versions WHERE artifact_id = ? AND brand != ''`
+	args := []any{id}
+	if numbers != nil {
+		query += ` AND number IN (` + strings.TrimSuffix(strings.Repeat("?, ", len(numbers)), ", ") + `)`
+		for _, n := range numbers {
+			args = append(args, n)
+		}
+	}
+	var pinned bool
+	if err := tx.QueryRowContext(ctx, query+`)`, args...).Scan(&pinned); err != nil {
+		return false, fmt.Errorf("artifactsdomain: read whether %s's retired versions pin a brand: %w", id, err)
+	}
+	return pinned, nil
+}
+
+// pruneRetiredBrands prunes, after versions that pinned a stylesheet are gone
+// (pinned), the files of every superseded adoption no retained version names
+// any more ([pruneBrandFiles] against the adoption that stands), so a page
+// pinned to an old brand keeps it served while it is retained and not an
+// apply longer. A record retiring a pinned version names the brand in its
+// scope ([namesBrand]); one whose versions pin nothing touches no brand row.
+func pruneRetiredBrands(ctx context.Context, tx *sql.Tx, pinned bool) (int, error) {
+	if !pinned {
+		return 0, nil
+	}
+	current, err := currentCSSSha(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+	return pruneBrandFiles(ctx, tx, current)
 }
 
 // ---- the reference table ------------------------------------------------ //

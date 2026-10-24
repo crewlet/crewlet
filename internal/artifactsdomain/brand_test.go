@@ -2,6 +2,8 @@ package artifactsdomain_test
 
 import (
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -332,6 +334,62 @@ func TestASupersededAdoptionIsServedWhileAVersionPinsIt(t *testing.T) {
 	// A CLEAR WHEN NOTHING IS ADOPTED appends nothing and answers success.
 	if _, err := n.writer.ClearBrand(t.Context(), admin()); err != nil {
 		t.Errorf("a second clear: %v", err)
+	}
+}
+
+// A SUPERSEDED ADOPTION GOES WITH THE LAST VERSION THAT PINS IT, in the apply
+// that retires or purges that version, not at some later adoption: a page's
+// retention retiring one pinned version keeps the brand served while another
+// page still pins it, and purging that page withdraws it.
+//
+// Mutation: prune only in the adoption and clear applies, and the purged
+// page's brand is still served.
+func TestASupersededAdoptionGoesWithTheLastVersionThatPinsIt(t *testing.T) {
+	t.Parallel()
+	n := newHarness(t)
+	jane := person("jane", artifacts.RoleOwner)
+	index := kitIndex(t, "Acme", "#111111")
+	kit := n.createKit(jane, "Acme brand", index)
+	old := adoption(t, kit, 1, index, "old")
+	if _, err := n.writer.AdoptBrand(t.Context(), admin(), old); err != nil {
+		t.Fatalf("adopt the old brand: %v", err)
+	}
+	saves := n.create(jane, "Saves itself", upload(t, "index.html", "<p>1</p>")).Artifact
+	kept := n.create(jane, "Kept as it was", upload(t, "index.html", "<p>kept</p>")).Artifact
+	if _, err := n.writer.AdoptBrand(t.Context(), admin(), adoption(t, kit, 1, index, "new")); err != nil {
+		t.Fatalf("adopt the new brand: %v", err)
+	}
+	served := func() bool {
+		t.Helper()
+		_, err := n.reader.BrandFile(t.Context(), old.Files[0].Object.Hash)
+		if err != nil && !errors.Is(err, artifactsdomain.ErrNotFound) {
+			t.Fatalf("read the old stylesheet: %v", err)
+		}
+		return err == nil
+	}
+
+	// RETENTION RETIRES THE FIRST PAGE'S PINNED VERSION, while the second
+	// page still pins the old brand.
+	for number := 2; number <= artifacts.VersionsKeptUnlabelled+1; number++ {
+		in := page(upload(t, "index.html", fmt.Sprintf("<p>%d</p>", number)))
+		in.Artifact, in.Base = saves, number-1
+		if _, err := n.writer.Publish(t.Context(), jane, in); err != nil {
+			t.Fatalf("publish %d: %v", number, err)
+		}
+	}
+	if slices.Contains(n.versionNumbers(saves), 1) {
+		t.Fatal("retention kept the first version")
+	}
+	if !served() {
+		t.Error("the old brand went while a retained version still pins it")
+	}
+
+	// PURGING THE LAST PAGE THAT PINS IT withdraws it in the same apply.
+	if _, err := n.writer.Purge(t.Context(), jane, kept); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if served() {
+		t.Error("the old brand is served after the last version pinning it was purged")
 	}
 }
 

@@ -44,8 +44,9 @@ import (
 // ([VersionPayload.Brand], `artifact_versions.brand`), and the artifact origin
 // places that stylesheet's link when it serves the version. So an adoption's
 // files stay served while it is current or any retained version names its
-// stylesheet: the applier prunes a superseded adoption's rows at the next
-// adoption or clear once no retained version names it, never sooner.
+// stylesheet: the applier prunes a superseded adoption's rows once neither
+// holds, at the next adoption or clear, or in the apply that retires or purges
+// the last version naming it, and never sooner.
 //
 // What the adoption serves is the company's public face: every artifact,
 // every agent and the public brand route on the artifact listener read it, so

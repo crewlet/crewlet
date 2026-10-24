@@ -97,8 +97,10 @@
 // retention, trash and purge never reach what pages are served. A framed
 // version pins the stylesheet adopted when it is published (and names the
 // brand in its scope, since its apply reads the brand's rows); a superseded
-// adoption's files are pruned at the next adoption or clear once no retained
-// version pins them. The adopted brand is the company's public face, served by
+// adoption's files are pruned once no retained version pins them, at the next
+// adoption or clear or in the apply that retires or purges the last version
+// pinning them (a record that may retire a framed version names the brand in
+// its scope too). The adopted brand is the company's public face, served by
 // its bytes (ADR-0048).
 //
 // # Attribution is a seat handle
