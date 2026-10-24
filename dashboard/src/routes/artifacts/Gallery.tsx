@@ -69,7 +69,7 @@ import { offeredKinds } from "~/app/nav.ts";
 import { useServicesRun } from "~/lib/services.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
-import { TRASH_KEPT, isArtifactKind } from "~/lib/artifacts/words.ts";
+import { TRASH_KEPT, isArtifactKind, type MakeKind } from "~/lib/artifacts/words.ts";
 import { NewArtifactButton } from "./new/NewArtifactMenu.tsx";
 import {
   DEFAULT_SORT,
@@ -87,7 +87,8 @@ import {
 } from "./listing.tsx";
 import { useGallerySelection } from "./selection.ts";
 import { MoveDialog } from "./MoveDialog.tsx";
-import type { ArtifactKind, ArtifactListScope } from "~/protocol/index.ts";
+import type { ArtifactListScope } from "~/protocol/index.ts";
+import { BrandMakeChip } from "~/components/brand.tsx";
 
 /** The scope each section asks the engine about. All is everything the reader can see. */
 const SCOPE: Readonly<Record<ArtifactSection, ArtifactListScope>> = {
@@ -100,7 +101,7 @@ const SCOPE: Readonly<Record<ArtifactSection, ArtifactListScope>> = {
 export const MAKE_TITLE = "Start a new artifact";
 
 /** What each kind is called on the Make row: the kind's word, said as what one makes. */
-const MAKE_WORDS: Readonly<Record<ArtifactKind, string>> = {
+const MAKE_WORDS: Readonly<Record<MakeKind, string>> = {
   doc: "Docs",
   slides: "Slides",
   design: "Design",
@@ -114,7 +115,7 @@ const MAKE_WORDS: Readonly<Record<ArtifactKind, string>> = {
  * a reader gets, never who makes it, since most kinds are written by a person
  * or asked of an agent alike.
  */
-const MAKE_DETAILS: Readonly<Record<ArtifactKind, string>> = {
+const MAKE_DETAILS: Readonly<Record<MakeKind, string>> = {
   doc: "Write and print",
   slides: "A deck to present",
   design: "Screens on a canvas",
@@ -362,7 +363,9 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
 function MakeRow() {
   const runs = useServicesRun();
   return (
-    <Section title={MAKE_TITLE}>
+    // THE COMPANY'S BRAND beside the kinds it applies to, one press from
+    // where it is set (`BrandMakeChip`).
+    <Section title={MAKE_TITLE} actions={<BrandMakeChip />}>
       <ArtifactMakeRow
         aria-label={MAKE_TITLE}
         items={offeredKinds(runs).map((k) => ({

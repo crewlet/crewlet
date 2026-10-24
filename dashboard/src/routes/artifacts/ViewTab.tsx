@@ -5,8 +5,8 @@
  * each, on a canvas drawn here); a native kind is drawn here from its closed
  * format (a doc by the element-constructing Markdown renderer, a deck by
  * the slide renderer, a dashboard's widgets by the design system's figures
- * over datasets read as the reader, a sheet from its schema), since it runs no
- * author code.
+ * over datasets read as the reader, a sheet from its schema, a brand kit as
+ * the company's Brand page draws it), since it runs no author code.
  */
 
 import type { ReactNode } from "react";
@@ -14,6 +14,7 @@ import type { PresenceMember } from "@crewlethq/ui";
 import type { ArtifactDetail, ArtifactKind } from "~/protocol/index.ts";
 import type { ArtifactRoom } from "~/lib/artifacts/room.ts";
 import type { ArtifactDataStore } from "~/lib/artifacts/datastore.ts";
+import { BrandView } from "./BrandView.tsx";
 import { DashboardView } from "./DashboardView.tsx";
 import { FrameView } from "./FrameView.tsx";
 import { DesignView } from "./DesignView.tsx";
@@ -87,6 +88,7 @@ export const KIND_VIEWS: Readonly<Record<ArtifactKind, (props: KindViewProps) =>
       {...(onPublished ? { onPublished } : {})}
     />
   ),
+  brand: ({ detail, version }) => <BrandView detail={detail} version={version} />,
 };
 
 export function ViewTab(props: KindViewProps) {

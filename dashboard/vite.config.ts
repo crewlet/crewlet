@@ -205,6 +205,10 @@ const DESIGN_SYSTEM_SHEET = "virtual:crewlet-design-system.css";
 const DESIGN_SYSTEM_ID = `\0${DESIGN_SYSTEM_SHEET}`;
 const EMPTIED_ID = "\0crewlet-design-system-sheet-already-loaded";
 const UI_DIST = fileURLToPath(new URL("./node_modules/@crewlethq/ui/dist/", import.meta.url));
+const TOKENS_CSS = fileURLToPath(
+  new URL("./node_modules/@crewlethq/tokens/dist/css/", import.meta.url),
+);
+const APP_SRC = fileURLToPath(new URL("./src/", import.meta.url));
 const ICONS_DIST = fileURLToPath(new URL(`${ICONS}/dist/`, import.meta.url));
 
 /** `path` as the filesystem resolves it, or as given where nothing is there. */
@@ -233,8 +237,29 @@ export function isComponentSheet(file: string, ui: string, icons: string): boole
   return under(icons) || (under(ui) && at !== real(join(ui, "styles.css")));
 }
 
+/**
+ * Whether `file` is a token stylesheet the KIT imports for itself rather than
+ * the application: `BrandScope` imports the brand-scope mapping beside its
+ * own sheet, and main.tsx loads that mapping with the rest of the design
+ * system, so the kit's import is answered empty as a component sheet is and
+ * the rules stay in one place. The application's own imports (anything under
+ * `src/`) are its, and are kept. Judged on real paths, as above.
+ */
+export function isKitTokenSheet(
+  file: string,
+  importer: string,
+  tokensCss: string,
+  appSrc: string,
+): boolean {
+  if (!file.endsWith(".css")) return false;
+  const inside = (path: string, dir: string) => real(path).startsWith(real(dir) + sep);
+  return inside(file, tokensCss) && !inside(importer, appSrc);
+}
+
 function designSystemSheet(): Plugin {
   const componentSheet = (file: string) => isComponentSheet(file, UI_DIST, ICONS_DIST);
+  const kitTokenSheet = (file: string, importer: string) =>
+    isKitTokenSheet(file, importer, TOKENS_CSS, APP_SRC);
   return {
     name: "crewlet:design-system-sheet",
     enforce: "pre",
@@ -242,7 +267,10 @@ function designSystemSheet(): Plugin {
       if (source === DESIGN_SYSTEM_SHEET) return DESIGN_SYSTEM_ID;
       if (!source.endsWith(".css") || !importer) return null;
       const resolved = await this.resolve(source, importer, { ...options, skipSelf: true });
-      return resolved && componentSheet(resolved.id.split("?")[0] ?? "") ? EMPTIED_ID : null;
+      const file = resolved?.id.split("?")[0] ?? "";
+      return resolved && (componentSheet(file) || kitTokenSheet(file, importer.split("?")[0] ?? ""))
+        ? EMPTIED_ID
+        : null;
     },
     load(id) {
       if (id === EMPTIED_ID) return "export {};";
@@ -379,6 +407,9 @@ export default defineConfig({
       // Making, renaming, moving and removing an artifact folder
       // (lib/artifacts/api.ts). The tree is read over the socket.
       "/artifact-folders": { target: "http://localhost:8000" },
+      // The adopted brand's files and its adoption (lib/brand/api.ts). The
+      // brand itself is the socket's question.
+      "/brand": { target: "http://localhost:8000" },
     },
   },
 });

@@ -40,8 +40,7 @@
  * party's string and `servers` is a legal one.
  */
 
-import { isArtifactKind } from "~/lib/artifacts/words.ts";
-import type { ArtifactKind } from "~/protocol/index.ts";
+import { isMakeKind, type MakeKind } from "~/lib/artifacts/words.ts";
 import {
   framelessOf,
   RESERVED_SEGMENTS,
@@ -161,7 +160,7 @@ export const ORG_EDIT_PATH: readonly string[] = ["company", "org", "edit"];
  * asking an agent for a dashboard are three different gestures. Here for the
  * reason [artifactPath] is: the frame links to it.
  */
-export function newArtifactPath(kind: ArtifactKind): string[] {
+export function newArtifactPath(kind: MakeKind): string[] {
   return ["artifacts", "new", kind];
 }
 
@@ -192,6 +191,7 @@ export type FramedScreen =
   | { screen: "item"; id: string }
   | { screen: "overview" }
   | { screen: "policies" }
+  | { screen: "brand" }
   | { screen: "org-chart" }
   | { screen: "roster" }
   | { screen: "teams"; unit?: string }
@@ -220,7 +220,7 @@ export type FramedScreen =
   | { screen: "artifact-folder"; id: string }
   | { screen: "artifact"; id: string }
   /** A kind's own create page, or, with no kind, the address that redirects to one. */
-  | { screen: "new-artifact"; kind: ArtifactKind | null }
+  | { screen: "new-artifact"; kind: MakeKind | null }
   | { screen: "models"; id?: string }
   | { screen: "mcp-tools"; server?: string; tool?: string }
   | { screen: "secrets"; name?: string }
@@ -389,7 +389,7 @@ function work(rest: string[], screen: Make, under: Under): Route {
 
 /**
  * Company's rows, each under `#/company`: the Overview at the bare address,
- * then Policies, the Org chart, Schedules, Integrations and Budgets.
+ * then Policies, Brand, the Org chart, Schedules, Integrations and Budgets.
  */
 function company(rest: string[], screen: Make, under: Under): Route {
   const [first, ...tail] = rest;
@@ -398,6 +398,8 @@ function company(rest: string[], screen: Make, under: Under): Route {
   switch (first) {
     case "policies":
       return tail.length ? none("policies", "Policies") : screen({ screen: "policies" });
+    case "brand":
+      return tail.length ? none("brand", "Brand") : screen({ screen: "brand" });
     case "org":
       return org(tail, screen, under);
     case "schedules":
@@ -519,13 +521,15 @@ function artifactsRoute(rest: string[], screen: Make, under: Under): Route {
   if (first === "new") {
     if (tail.length === 0) return screen({ screen: "new-artifact", kind: null });
     const [kind, ...more] = tail;
-    if (more.length === 0 && kind !== undefined && isArtifactKind(kind)) {
+    if (more.length === 0 && kind !== undefined && isMakeKind(kind)) {
       return screen({ screen: "new-artifact", kind });
     }
     return missing(
       "artifacts",
       under("Artifacts"),
-      "a new artifact is a doc, slides, a sheet, a design, a dashboard or an HTML page",
+      kind === "brand" && more.length === 0
+        ? "the company's brand is set up on Company › Brand"
+        : "a new artifact is a doc, slides, a sheet, a design, a dashboard or an HTML page",
     );
   }
   // THE FOLDERS: the section, and one folder by the id the engine minted

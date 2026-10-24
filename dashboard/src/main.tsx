@@ -30,6 +30,12 @@ import "@crewlethq/tokens/css/themes/all";
 import "@crewlethq/tokens/css/density";
 import "@crewlethq/tokens/css/fonts";
 import "@crewlethq/tokens/css/base";
+// THE BRAND SCOPE'S MAPPING (`BrandScope`): inside a doc's document and a
+// board, the company's adopted brand restyles the tokens, and nowhere else.
+// Here, with the rest of the design system, because the kit's own import of
+// it from its component is answered empty (`vite.config.ts`'s
+// `designSystemSheet`), as every component sheet is.
+import "@crewlethq/tokens/css/brand-scope";
 // THE COMPONENTS' SHEETS, WHOLE AND HERE — not one per component as each
 // module is reached, which a code-split build turns into a sheet per lazy
 // chunk appended after ours. `vite.config.ts`'s `designSystemSheet` says why
