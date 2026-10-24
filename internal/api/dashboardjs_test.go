@@ -1055,7 +1055,13 @@ const (
 	// sheet rather than adding to it, and the rail head's status, the
 	// engine's state beside the company's name, brought its rules and its
 	// component into the shell: 312.1 KiB. 314 KiB, the same two seconds.
-	initialBudget = 314 << 10
+	// uilet 0.46 and 0.47's editing pieces (the inline editor, the character
+	// count, the list's undo, drag, limit and narrow-row rules, the one-line
+	// textarea, the passage and compact registers) ride the one sheet by the
+	// same rule (1.4 KiB), and FormField's limit brought the character count
+	// into the entry's graph with it (1.1 KiB): 315.1 KiB. 316 KiB, still
+	// under two seconds on that link.
+	initialBudget = 316 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
