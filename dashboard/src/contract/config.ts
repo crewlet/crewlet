@@ -57,3 +57,56 @@ export interface SeatHeldHolder {
   /** When that invitation lapses and frees the seat on its own. */
   expires_at?: string;
 }
+
+/**
+ * The company's charter as `GET /config/charter` answers it and
+ * `PUT /config/charter` takes it (`config.Charter`): what Company › Principles
+ * shows and edits in place. Every field is always sent, `""` and `[]` when
+ * nothing is written, and a write names all three.
+ *
+ * HELD BY `internal/api/configapi.TestTheDashboardReadsTheCharterTheEngineSends`,
+ * both ways: a field the engine adds is one an editor would drop on its next
+ * save, since the write replaces the charter whole.
+ */
+export interface Charter {
+  mission: string;
+  vision: string;
+  /** In the order every seat reads them. */
+  policies: string[];
+}
+
+/**
+ * What a `412 version_moved` from `PUT /config/charter` carries beside the
+ * engine's envelope: the charter as it stands now, and its tag. The editor
+ * shows the person their draft beside `current`, and sends the draft again
+ * under `etag` to keep it.
+ *
+ * HELD BY `internal/api/configapi.TestTheDashboardReadsWhatACharterConflictSends`.
+ */
+export interface CharterMoved {
+  current: Charter;
+  etag: string;
+}
+
+/*
+ * THE CHARTER'S BOUNDS, in CHARACTERS (code points, as the kit's
+ * `countCharacters` and the engine's `utf8.RuneCountInString` both count them):
+ * the engine's `config.MaxMissionChars`, `MaxVisionChars`, `MaxPolicyChars`
+ * and `MaxPolicies`. Every character of the charter is in every seat's prompt
+ * on every round, so the engine refuses a charter past them rather than cut
+ * it. The editor marks a draft past one before Save, which only works at the
+ * engine's own figures: a copy above them sends drafts the engine refuses,
+ * and one below refuses drafts it would take. The mission and each policy
+ * are also ONE LINE (the vision may hold paragraphs), which the engine
+ * refuses at `mission` or `policies[i]` with kind `shape`. Held by
+ * `internal/api/configapi.TestTheDashboardBoundsTheCharterAtTheEnginesCaps`.
+ */
+
+/** The most characters the mission holds. */
+export const MISSION_MAX_CHARS = 1024;
+/** The most characters the vision holds. */
+export const VISION_MAX_CHARS = 2048;
+/** The most characters one policy holds. */
+export const POLICY_MAX_CHARS = 1024;
+/** The most policies a company keeps. */
+export const POLICIES_MAX = 25;

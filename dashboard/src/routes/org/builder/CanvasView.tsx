@@ -122,6 +122,8 @@ import {
   leadMenu,
   refusedEntry,
   leadSentence,
+  editGlyph,
+  editLabel,
   moveKey,
   reportingMenu,
   type OpenScreen,
@@ -130,13 +132,7 @@ import { nodeTone, ReportingMarks, SeatMarks, UnitMarks, handleLabel } from "./n
 import { NodeGlyph, NodeToggle, seatKindLabel, seatMark, unitTypeLabel } from "~/ui/orgNodes.tsx";
 import { useReorder, type Reorder } from "./reorder.ts";
 import { useOpenScreen, useReporting, useStructure } from "./useCharts.ts";
-import {
-  NetworkGlyph,
-  XGlyph,
-  Repeat2Glyph,
-  TrashGlyph,
-  PencilGlyph,
-} from "@crewlethq/icons/glyphs";
+import { NetworkGlyph, XGlyph, Repeat2Glyph, TrashGlyph } from "@crewlethq/icons/glyphs";
 import {
   AddPill,
   EmptyState,
@@ -864,8 +860,8 @@ function NodeActions({
   return (
     <div {...card.actions(id)}>
       <IconButton
-        label={`Edit ${label}`}
-        icon={<PencilGlyph />}
+        label={editLabel(api, view, label)}
+        icon={editGlyph(api, view)}
         size="sm"
         variant="ghost"
         tabIndex={-1}

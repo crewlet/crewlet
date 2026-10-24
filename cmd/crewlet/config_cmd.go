@@ -60,6 +60,10 @@ A keyring rotation needs BOTH halves: "crewlet config rekey" moves the company
 document and "crewlet secrets rekey" moves the secret store. Run both before
 dropping a retired key from secrets.keys, or whatever is still sealed under it
 becomes unreadable.
+An import never refuses a company file for its charter (a mission or policy
+past its length, or on two lines): it prints each fault as a warning and
+imports, offline or through a running node, which it reaches as an admin's
+import (PUT /config?import=true) rather than as an edit.
 `
 
 // configSubcommands is every `crewlet config` subcommand. It is what the
@@ -734,6 +738,16 @@ func importCompany(ctx context.Context, t importTarget, stdout io.Writer) error 
 	summary := strings.TrimSpace(t.summary)
 	if summary == "" {
 		summary = "imported from " + t.path
+	}
+
+	// THE CHARTER'S FAULTS ARE SAID, NEVER REFUSED HERE. An import is how a
+	// company is restored and migrated, and a file that ran yesterday under a
+	// build without the charter's rules must import today; what an editor is
+	// refused is only a change that leaves a part at fault
+	// ([config.Company.ValidateCharterChange]). Said up front, whichever route
+	// the import takes, so the operator reads what every node will warn about.
+	for _, w := range company.CharterWarnings() {
+		fmt.Fprintln(stdout, warningLine(w))
 	}
 
 	boot, err := loadBootstrapForStore(t.bootstrapPath)

@@ -100,7 +100,7 @@ function everyOperation(): Operation[] {
     { type: "setManages", target: "seat:ceo", manages: ["engineering"] },
     { type: "setScheduleEnabled", target: "unit:engineering", schedule: "standup", enabled: false },
     { type: "setDatadogRouteTo", routeTo: "dev" },
-    { type: "updateCompany", set: [{ path: ["vision"], value: "Everywhere" }] },
+    { type: "updateCompany", set: [{ path: ["name"], value: "Acme Labs" }] },
     {
       type: "edit",
       target: "seat:sre",
@@ -122,17 +122,14 @@ function everyOperation(): Operation[] {
 }
 
 function templateOperation(): Operation {
-  const built = templateIntent(
-    { template: "new_company", charter: { name: "Acme" } },
-    countingKeys(),
-  );
+  const built = templateIntent({ template: "new_company", name: "Acme" }, countingKeys());
   if (!built.ok) throw new Error(built.message);
   const result = record(EMPTY_DRAFT, built.intent);
   if (!result.ok) throw new Error(result.message);
   return result.op;
 }
 
-const charterEdit = everyOperation().find((op) => op.type === "updateCompany")!;
+const companyEdit = everyOperation().find((op) => op.type === "updateCompany")!;
 
 const kept = (overrides: Partial<KeptDraft> = {}): KeptDraft => ({
   v: OPERATIONS_VERSION,
@@ -192,6 +189,13 @@ describe("keeping and restoring", () => {
     const cases: [string, unknown][] = [
       ["not JSON", "{"],
       ["another version", kept({ v: OPERATIONS_VERSION + 1 })],
+      // Version 2 could hold a change to the company's principles, which
+      // only Company › Principles writes now.
+      ["an older version", kept({ v: OPERATIONS_VERSION - 1 })],
+      [
+        "a change to the principles",
+        kept({ ops: [{ type: "updateCompany", changes: [{ path: ["mission"], after: "x" }] }] }),
+      ],
       ["an unknown mode", { ...kept(), mode: "merge" }],
       ["an edit without its revision", kept({ baseRevision: null })],
       ["a create with a revision", kept({ mode: "create", baseRevision: "rev-1" })],
@@ -212,7 +216,7 @@ describe("keeping and restoring", () => {
       ],
       [
         "over the cap",
-        kept({ ops: Array.from({ length: MAX_KEPT_OPERATIONS + 1 }, () => charterEdit) }),
+        kept({ ops: Array.from({ length: MAX_KEPT_OPERATIONS + 1 }, () => companyEdit) }),
       ],
     ];
     for (const [label, value] of cases) {
@@ -229,7 +233,7 @@ describe("keeping and restoring", () => {
   test("a draft over the cap is not kept, and a kept one it replaces is removed", () => {
     const storage = new MemoryStorage();
     keepDraft(storage, kept({ ops: everyOperation().slice(0, 1) }));
-    const big = kept({ ops: Array.from({ length: MAX_KEPT_OPERATIONS + 1 }, () => charterEdit) });
+    const big = kept({ ops: Array.from({ length: MAX_KEPT_OPERATIONS + 1 }, () => companyEdit) });
     expect(keepDraft(storage, big)).toBe("too_large");
     expect(storage.items.size).toBe(0);
   });

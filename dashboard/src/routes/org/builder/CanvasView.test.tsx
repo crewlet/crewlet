@@ -692,7 +692,7 @@ describe("what a node offers a pointer", () => {
     mount();
     expect(controls("Acme")).toEqual([
       "Collapse Acme",
-      "Edit Acme",
+      "Edit principles",
       "Actions for Acme",
       "Add to Acme",
     ]);

@@ -15,7 +15,7 @@ import { describe, expect, test } from "vitest";
 import type { CompanyDocument } from "~/protocol/index.ts";
 import { COMPANY_KEY } from "./keys.ts";
 import { allSeats, locate } from "./draft.ts";
-import { toDocument } from "./document.ts";
+import { buildPatch, toDocument } from "./document.ts";
 import { replay } from "./history.ts";
 import type { Intent } from "./operations.ts";
 import { OPERATIONS_VERSION } from "./operations.ts";
@@ -74,10 +74,7 @@ function keyedEdit(doc: CompanyDocument = fixtureCompany()): BuilderState {
 
 describe("mode guards", () => {
   const template = (): Intent => {
-    const built = templateIntent(
-      { template: "new_company", charter: { name: "Acme" } },
-      countingKeys(),
-    );
+    const built = templateIntent({ template: "new_company", name: "Acme" }, countingKeys());
     if (!built.ok) throw new Error(built.message);
     return built.intent;
   };
@@ -211,10 +208,7 @@ describe("loading the base", () => {
   });
 
   test("before anything is loaded, neither an edit nor a template is recorded", () => {
-    const template = templateIntent(
-      { template: "new_company", charter: { name: "Acme" } },
-      countingKeys(),
-    );
+    const template = templateIntent({ template: "new_company", name: "Acme" }, countingKeys());
     if (!template.ok) throw new Error(template.message);
     expect(run(INITIAL_BUILDER, { type: "record", intent: template.intent }).refusal).toMatchObject(
       { reason: "mode" },
@@ -292,7 +286,7 @@ describe("editing", () => {
       revision: null,
     });
     expect(hasChanges(create)).toBe(false);
-    const built = templateIntent({ template: "empty", charter: { name: "Acme" } }, countingKeys());
+    const built = templateIntent({ template: "empty", name: "Acme" }, countingKeys());
     if (!built.ok) throw new Error(built.message);
     expect(hasChanges(run(create, { type: "record", intent: built.intent }))).toBe(true);
   });
@@ -510,10 +504,7 @@ describe("keeping the log", () => {
       document: null,
       revision: null,
     });
-    const built = templateIntent(
-      { template: "new_company", charter: { name: "Acme" } },
-      countingKeys(),
-    );
+    const built = templateIntent({ template: "new_company", name: "Acme" }, countingKeys());
     if (!built.ok) throw new Error(built.message);
     const edited = run(create, { type: "record", intent: built.intent });
     const sent = toDocument(edited.draft).document;
@@ -542,7 +533,7 @@ describe("keeping the log", () => {
     expect(
       run(undescribed, {
         type: "record",
-        intent: { type: "updateCompany", set: [{ path: ["vision"], value: "v" }] },
+        intent: { type: "updateCompany", set: [{ path: ["name"], value: "Acme Labs" }] },
       }).refusal,
     ).toBeNull();
   });
@@ -584,6 +575,38 @@ describe("updating onto a newer revision", () => {
     expect(JSON.stringify(replay(adopted.baseDraft, adopted.log.ops).draft)).toBe(
       JSON.stringify(adopted.draft),
     );
+  });
+
+  // PRINCIPLES WRITTEN ON THEIR OWN PAGE WHILE A DRAFT WAS OPEN SURVIVE IT.
+  // Company › Principles saves a new revision; the draft's save then meets it
+  // and is updated onto it, and nothing the builder records or sends can put
+  // the older mission, vision or policies back.
+  test("principles another page saved meanwhile are kept, and never sent back", () => {
+    const doc = fixtureCompany();
+    const state = run(keyedEdit(doc), {
+      type: "record",
+      intent: { type: "renameSeat", target: "seat:dev", name: "Developer" },
+    });
+    const theirs = {
+      ...fixtureCompany(),
+      mission: "Theirs.",
+      vision: "Their vision.",
+      policies: ["Their policy."],
+    };
+    const adopted = run(
+      state,
+      { type: "updateBegin", document: theirs, revision: "rev-2", derived: fixtureDerived(theirs) },
+      { type: "updateConfirm" },
+    );
+    expect(adopted.base).toMatchObject({ revision: "rev-2" });
+    const out = toDocument(adopted.draft).document;
+    expect(out).toMatchObject({
+      mission: "Theirs.",
+      vision: "Their vision.",
+      policies: ["Their policy."],
+    });
+    const patch = buildPatch(theirs, out);
+    expect(Object.keys(patch)).toEqual(["units"]);
   });
 
   test("cancelling leaves the draft as it was", () => {

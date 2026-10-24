@@ -41,6 +41,12 @@ type ConfigRevisionActivated struct {
 	// has an author, and the engine's own writes are `system`.
 	CreatedByKind string `json:"created_by_kind"`
 	OperatorID    string `json:"operator_id,omitempty"`
+	// RevisionSource is where the revision came from, as the revision records
+	// it: `api` for a write through /config, `file` for an import of a file
+	// (`crewlet config import`, offline or against a running node). Named
+	// apart from the envelope's own `source`, which names the author. Additive:
+	// empty from a build that did not send it.
+	RevisionSource string `json:"revision_source,omitempty"`
 }
 
 // EventType is the "config_revision_activated" wire type.

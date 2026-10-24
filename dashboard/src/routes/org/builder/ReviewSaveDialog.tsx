@@ -59,14 +59,13 @@ export function changeSentences(changes: ChangeSet): { changes: string[]; conseq
     out.push(`Moves ${m.ref.name} from ${place(m.from)} to ${place(m.to)}.`);
   }
   for (const e of changes.edited) out.push(`Edits ${e.ref.name}: ${e.fields.join(", ")}.`);
-  if (changes.charter.length > 0) out.push(`Edits the charter: ${changes.charter.join(", ")}.`);
-
-  const follow: string[] = [];
   if (changes.companyRename) {
-    follow.push(
+    out.push(
       `Renames the company from ${changes.companyRename.before} to ${changes.companyRename.after}.`,
     );
   }
+
+  const follow: string[] = [];
   for (const group of changes.onboarding) {
     const one = group.seats.length === 1;
     follow.push(

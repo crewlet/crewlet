@@ -53,6 +53,61 @@ A tokens, so it is never refused: `crewlet validate` and every `/config` write
 name it in an `advisory` warning at `roles`, and every node logs that warning
 when it applies the company ([`config_advisory`](#what-an-applied-company-is-worth-knowing)).
 
+### Mission, vision and policies
+
+The company's **charter** is `mission`, `vision` and `policies`: what the
+company is for, where it is going, and the standing rules it runs by. Every
+seat is handed all three word for word at the top of its prompt, on every
+round of every turn, so a seat never needs a knowledge lookup to know them.
+
+```yaml
+mission: Help friends split shared costs fairly.
+vision: Splitting a bill is never the awkward part of a trip again.
+policies:
+  - Every amount is exact to the cent.
+  - Work is tracked on the board, and nothing ships without acceptance criteria.
+```
+
+An administrator edits them in place on **Company › Principles**, which writes
+through [`PUT /config/charter`](../reference/api-endpoints.md#the-charter-mission-vision-and-policies):
+a new revision of the whole document like any other write, conditional on the
+charter itself rather than on the revision, so a draft is refused only when
+somebody changed the charter meanwhile.
+
+Because every character reaches every prompt, the charter is bounded, in
+characters: the mission at 1024, the vision at 2048, at most 25 policies of at
+most 1024 each. The mission and each policy are one line, since a seat reads
+the mission inline and each policy as one item of a list; the vision may be
+written in paragraphs, and the prompt quotes it line by line so no line of it
+reads as the prompt's own. A policy may not be blank or repeat another word for
+word. Every bound is counted on the value as it is stored, with the space
+around it trimmed.
+
+These rules judge what an edit CHANGES, against the stored revision it
+replaces, so an old fault never locks a company out:
+
+- **An edit through the API** (`PUT /config/charter`, `PATCH /config`, `PUT
+  /config` from the org builder or a script, a per-entity write, `/setup`) is
+  refused only for a part it changes and leaves at fault: a mission or vision it
+  edits, a policy it adds or edits, a policy count it raises past the bound, a
+  repeat it adds. Reordering policies changes none of them. A write that leaves
+  a faulty part untouched (a budget, a seat, another policy) is admitted, with a
+  warning naming the part in its answer.
+- **An import never refuses for the charter**: `crewlet config import` into a
+  stopped node, `-company` and `-import-company` at boot, a restore and a
+  migration. A file that ran under an earlier build imports with its faults
+  printed as warnings, and every node logs them as `org_admission_warning` when
+  it applies the company, because refusing there would leave an upgraded node
+  unable to boot on its own file. An import sent to a running node is too: the
+  CLI sends it as `PUT /config?import=true`, which judges the charter
+  warn-only, is `admin`'s alone and records the revision as imported from a
+  file. The dashboard never sends it.
+- **`crewlet validate`** prints the faults as warnings and exits 0: it cannot
+  know what the store holds, so it cannot know whether a write of the file
+  would edit the faulty part.
+
+A stored revision that breaks one still applies.
+
 ### Tier A example (`crewlet.yaml`)
 
 ```yaml
@@ -788,6 +843,8 @@ The difference between the last two is the **admission rules**: authoring hygien
 A seat may not be called `none` either — what `integrations.datadog.route_to` means by nobody, so a seat of that name would be silenced by its own handle. That one is a runnable rule.
 
 A written document is refused for breaking one. A revision being applied that breaks one is applied, booted on, reloaded and reverted to like any other, and each node logs `org_admission_warning` once per violation when it applies the epoch. Every other rule is a **runnable** rule, and nothing applies a revision that breaks one.
+
+The [charter's rules](#mission-vision-and-policies) are judged on an edit's **change** rather than on the document it leaves: an API write is refused only for a fault in a part of the charter it changes, judged against the stored revision it replaces, and an import (offline, at boot, to a running node, a restore) is never refused for one. Every fault an edit leaves untouched, and every fault an import carries, is warned about like an admission rule, on the write's answer, in the import's output and as `org_admission_warning` on every apply.
 
 ### What an applied company is worth knowing
 

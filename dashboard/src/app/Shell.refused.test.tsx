@@ -198,7 +198,7 @@ test("a session holding no app is dialled, and its sidebar locks the apps by nam
   expect(row(/^Work/).querySelector("[title='Needs Tracker access']")).not.toBeNull();
   expect(row(/^Knowledge/).querySelector("[title='Needs Knowledge access']")).not.toBeNull();
   expect(row(/^Home/).querySelector(".crewlet-locked-label")).toBeNull();
-  expect(row(/^Overview/).querySelector(".crewlet-locked-label")).toBeNull();
+  expect(row(/^Principles/).querySelector(".crewlet-locked-label")).toBeNull();
   expect(row(/^Org chart/).querySelector(".crewlet-locked-label")).toBeNull();
   // NOTHING SAYS IT WAS REFUSED: there is no refusal to say.
   expect(screen.queryByText("You can’t use Crewlet right now")).toBeNull();

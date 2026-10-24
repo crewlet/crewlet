@@ -48,7 +48,7 @@ import { KNOWLEDGE, TRACKER, needsWords } from "~/lib/access.ts";
 import { fmtCount, plural, relTime } from "~/lib/format.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { CompanyDocument } from "~/protocol/types.ts";
-import { ServiceMark, ServiceState } from "./parts.tsx";
+import { FeedRow, ServiceMark, ServiceState } from "./parts.tsx";
 import type { BuiltInService, Model } from "./model.ts";
 
 /** What a settings row says for a key the company document leaves unset. */
@@ -115,11 +115,11 @@ function Elsewhere({ service, model }: { service: BuiltInService; model: Model |
       <Callout
         variant="neutral"
         icon={by ? <VendorMark vendor="atlassian" size="md" /> : undefined}
-        title={by ? `${by.name} does this for your company` : "Your company runs none"}
+        title={by ? `${by.name} does this for your company` : "Nothing does this for your company"}
       >
         {by
-          ? `Your agents work in ${by.name} through the Atlassian integration, so ${service.name} stays off. Running both would leave two places for the same ${what}.`
-          : `The company document turns ${service.name} off and names nothing in its place.`}
+          ? `Your agents work in ${by.name} through the Atlassian integration, so ${service.name} is not in use. Running both would leave two places for the same ${what}.`
+          : `The company document leaves ${service.name} out and names nothing in its place.`}
       </Callout>
       <section aria-label={`What ${service.name} would give you`}>
         <h3 className="t-label">Running it here would give you</h3>
@@ -165,28 +165,6 @@ function AgentLine({ seat, detail, state }: { seat: Seat; detail: string; state:
       {state}
       <span className="int-seat-act" />
     </div>
-  );
-}
-
-/** A row of a service's activity feed. */
-function FeedRow({
-  who,
-  what,
-  at,
-  now,
-}: {
-  who: string;
-  what: ReactNode;
-  at: string;
-  now: number;
-}) {
-  return (
-    <li className="int-feed-row">
-      <span className="int-feed-what">
-        <strong>{who}</strong> {what}
-      </span>
-      <span className="t-caption int-feed-at">{relTime(at, now)}</span>
-    </li>
   );
 }
 

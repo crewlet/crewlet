@@ -11,9 +11,11 @@
  * wrong: by the time an answer lands the operator may have moved, added or
  * removed a node, and `units[1]` may be a different unit.
  *
- * Only `roles`, `units` and the charter fields map onto nodes, because those
+ * Only `roles`, `units` and the company's name map onto nodes, because those
  * are what the builder draws. Everything else stays at document level:
- * `integrations.*` with a link to Company › Integrations (the Datadog
+ * the principles (`mission`, `vision`, `policies`) with a link to Company ›
+ * Principles, the one place they are written, `integrations.*` with a link
+ * to Company › Integrations (the Datadog
  * fallback and GitLab access levels are edited from seats, but a problem at
  * the company's integration block is fixed there), and any schedule problem,
  * mapped or not, with a link to the Schedules screen, because the builder
@@ -29,7 +31,8 @@
 import type { ConfigProblem, ConfigWarning, Derived } from "~/protocol/index.ts";
 import { COMPANY_KEY, seatKey, unitKey, type NodeKey } from "./keys.ts";
 import {
-  CHARTER_FIELDS,
+  COMPANY_FIELDS,
+  PRINCIPLES_FIELDS,
   pathOfSegments,
   placeDerivation,
   type IndexedDocument,
@@ -37,7 +40,7 @@ import {
 } from "./document.ts";
 
 /** Where a problem sends the operator when the builder cannot fix it. */
-export type ProblemLink = "integrations" | "schedules";
+export type ProblemLink = "integrations" | "schedules" | "principles";
 
 /** One problem or warning, placed. */
 export interface PlacedProblem {
@@ -136,7 +139,7 @@ function locate(
     }
     return { node: null, field: [...segments] };
   }
-  if (typeof head === "string" && (CHARTER_FIELDS as readonly string[]).includes(head)) {
+  if (typeof head === "string" && (COMPANY_FIELDS as readonly string[]).includes(head)) {
     return { node: COMPANY_KEY, field: [...segments] };
   }
   return { node: null, field: [...segments] };
@@ -156,6 +159,9 @@ function linkFor(
   if (node !== null && node !== COMPANY_KEY) return field[0] === "schedules" ? "schedules" : null;
   if (segments[0] === "scheduling") return "schedules";
   if (segments[0] === "integrations") return "integrations";
+  const head = segments[0];
+  if (typeof head === "string" && (PRINCIPLES_FIELDS as readonly string[]).includes(head))
+    return "principles";
   return null;
 }
 

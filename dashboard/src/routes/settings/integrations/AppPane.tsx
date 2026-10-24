@@ -13,8 +13,9 @@ import { useNow } from "~/lib/clock.ts";
 import { asSentence, plural } from "~/lib/format.ts";
 import { SetupForm } from "../SetupForm.tsx";
 import { SetupPasses, SurfaceDeliveries, integrationFacts } from "./catalogue.tsx";
-import { toolFacts, type Intent, type Model, type Tool } from "./model.ts";
+import { workingLine, type Intent, type Model, type Tool } from "./model.ts";
 import {
+  actionName,
   AgentList,
   BeforeYouStart,
   BucketTag,
@@ -49,7 +50,7 @@ function PrimaryAction({
     <Button
       size="small"
       variant="primary"
-      aria-label={`${label} ${tool.entry.name}`}
+      aria-label={actionName(label, tool.entry.name)}
       disabledReason={held}
       onClick={() => {
         if (!held) onOpen(intent);
@@ -64,13 +65,18 @@ export function AppPane({
   tool,
   model,
   onDisconnect,
+  arrive,
 }: {
   tool: Tool;
   model: Model;
   onDisconnect: () => void;
+  /** Open the settings form on arrival: the landing's Connect sends a reader here to connect. */
+  arrive?: Intent | undefined;
 }) {
   const now = useNow();
-  const [open, setOpen] = useState<Intent | null>(null);
+  // ONLY WHERE THE INTENT CAN BE TAKEN: an arrival asking to connect a tool
+  // whose form cannot open lands on the page, which says why.
+  const [open, setOpen] = useState<Intent | null>(arrive && !tool.blocked ? arrive : null);
   const [tab, setTab] = useState("overview");
   const facts = useMemo<Fact[] | undefined>(() => {
     if (!tool.configured) return undefined;
@@ -190,7 +196,7 @@ export function AppPane({
               ))}
             </div>
           ) : (
-            <StatusDot tone="success">Working. {toolFacts(tool)}</StatusDot>
+            <StatusDot tone="success">{workingLine(tool)}</StatusDot>
           )}
           {/* ADVISORIES ARE SAID, never raised: the tool works, and what the
               loop noticed (an access wider than asked) is worth reading once. */}

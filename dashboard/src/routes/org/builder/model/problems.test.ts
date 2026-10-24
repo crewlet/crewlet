@@ -81,10 +81,27 @@ describe("placeProblems", () => {
     expect(placeProblems(now, answer).byNode.has("seat:vp-engineering")).toBe(true);
   });
 
-  test("charter fields belong to the company node", () => {
+  test("the company's name belongs to the company node", () => {
     const { sent } = sentFixture();
-    const index = placeProblems(sent, { problems: [problem(["name"]), problem(["policies", 0])] });
-    expect(index.byNode.get(COMPANY_KEY)?.map((p) => p.field)).toEqual([["name"], ["policies", 0]]);
+    const index = placeProblems(sent, { problems: [problem(["name"])] });
+    expect(index.byNode.get(COMPANY_KEY)?.map((p) => p.field)).toEqual([["name"]]);
+  });
+
+  // THE PRINCIPLES HAVE NO FORM HERE: a problem with the mission, the vision
+  // or a policy is fixed on Company › Principles, so it stays at document
+  // level with that link rather than on a company node whose form cannot
+  // show the field.
+  test("a problem with the principles links to Company › Principles", () => {
+    const { sent } = sentFixture();
+    const index = placeProblems(sent, {
+      problems: [problem(["mission"]), problem(["vision"]), problem(["policies", 0])],
+    });
+    expect(index.byNode.has(COMPANY_KEY)).toBe(false);
+    expect(index.document.map((p) => [p.node, p.link])).toEqual([
+      [null, "principles"],
+      [null, "principles"],
+      [null, "principles"],
+    ]);
   });
 
   test("what the builder cannot fix stays at document level, linked to where it is fixed", () => {

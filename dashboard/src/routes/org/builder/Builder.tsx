@@ -71,6 +71,9 @@ import {
   configGuardedReason,
   useManagedConfig,
 } from "~/lib/useWriteAccess.ts";
+import { PRINCIPLES_PATH } from "~/app/routes.ts";
+import { principlesEditQuery } from "~/routes/settings/principles/edit/address.ts";
+import { useMayWriteCharter } from "~/routes/settings/principles/edit/access.ts";
 import { managedSentence } from "~/protocol/configAnswer.ts";
 import { useLeadScope, type LedUnit } from "~/lib/leadScope.ts";
 import type { ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
@@ -82,6 +85,7 @@ import {
   type BuilderApi,
   type BuilderViewHandle,
   type ChartKind,
+  type CompanyEdit,
   type EditorPreset,
   type EditorSectionName,
 } from "./BuilderContext.tsx";
@@ -130,7 +134,7 @@ import { useCheck } from "./useCheck.ts";
 import { useDraftKeeping } from "./useDraftKeeping.ts";
 import { addMenu, nodeMenu } from "./nodeActions.tsx";
 import { useOpenScreen, useStructure } from "./useCharts.ts";
-import { screenPath } from "./dialogParts.tsx";
+import { PROBLEM_LINKS, ScreenLink, screenPath } from "./dialogParts.tsx";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { ChartSwitch, chartKindOf } from "~/ui/orgNodes.tsx";
 import {
@@ -438,10 +442,11 @@ interface SelectionParams {
 /**
  * Whether a key still names something in the draft.
  *
- * The company is a node like any other to a view (its card carries the
- * charter's Edit and the Add menu) and the only one `locate` cannot find: it
- * is the tree's root rather than an element of a list. Read as absent, a
- * selected company card was cleared again on the next state change.
+ * The company is a node like any other to a view (its card carries an Edit,
+ * which opens Company › Principles, and the Add menu) and the only one
+ * `locate` cannot find: it is the tree's root rather than an element of a
+ * list. Read as absent, a selected company card was cleared again on the next
+ * state change.
  */
 function isPresent(state: BuilderState, key: NodeKey): boolean {
   return key === COMPANY_KEY || locate(state.draft, key) !== undefined;
@@ -478,17 +483,6 @@ function keyOfParams(state: BuilderState, params: SelectionParams): NodeKey | nu
   return null;
 }
 
-/**
- * What an `edit=` asks the company's editor to open at: its top for the
- * charter, its Policies list for `policies`, or `null` for a value that names
- * neither.
- */
-function charterPartOf(value: string): { section?: EditorSectionName } | null {
-  if (value === "charter") return {};
-  if (value === "policies") return { section: "policies" };
-  return null;
-}
-
 /** The kind an `add=` asks for, or `null` for a value that names none. */
 function addKindOf(value: string): AddKind | null {
   return value === "unit" || value === "agent" || value === "human" ? value : null;
@@ -496,9 +490,10 @@ function addKindOf(value: string): AddKind | null {
 
 /**
  * What the address a reader ARRIVED at asks the builder to do, beyond showing
- * the organization: open one node's editor (`seat=` or `unit=`), open an
- * Add (`add=`, under the unit `unit=` names or at the company's root), or open
- * the company's charter (`edit=charter`, or `edit=policies` on its Policies).
+ * the organization: open one node's editor (`seat=` or `unit=`), or open an
+ * Add (`add=`, under the unit `unit=` names or at the company's root). The
+ * company's principles are not opened here: they are written on Company ›
+ * Principles, which every way into them links to directly.
  *
  * WHY A LINK OPENS SOMETHING AT ALL. Every way into this section from another
  * screen is a request to change one thing: the profile's "Edit" beside a
@@ -521,9 +516,9 @@ function addKindOf(value: string): AddKind | null {
  * this section from the profile a node's "Open seat" went to, mounts on the
  * address the builder itself wrote, and nothing in it tells that from a link
  * somebody sent: both open the editor. `docs/guides/org-builder.md` says so.
- * Telling them apart needs a request the address spends (an `edit=` the link
- * sets and this removes, as `add=` is), which is a change to the section's
- * URL grammar rather than to this effect.
+ * Telling them apart needs a request the address spends (a parameter the
+ * link sets and this removes, as `add=` is), which is a change to the
+ * section's URL grammar rather than to this effect.
  *
  * AND ONLY WHEN THE BUILDER CAN EDIT. The draft has to be loaded, in edit
  * mode and not paused — a kept draft waiting for Keep or Discard, a save whose
@@ -535,13 +530,6 @@ interface Arrival {
   readonly unit: string;
   readonly seat: string;
   readonly add: string;
-  /**
-   * The part of the company's charter to open (`charter` or `policies`), from
-   * Company › Overview's Edit charter and Company › Policies' Edit policies.
-   * Taken out of the address once answered, as `add=` is: it is a request,
-   * never the selection.
-   */
-  readonly edit: string;
   /**
    * A tracker project key for the node, from Work's New project: its editor
    * opens on the Project field holding the key, not yet applied. Taken out of
@@ -695,7 +683,6 @@ function BuilderScreen({
   const [unitParam] = useParam("unit", "", "filter");
   const [seatParam] = useParam("seat", "", "filter");
   const [addParam] = useParam("add", "", "filter");
-  const [editParam] = useParam("edit", "", "filter");
   const [projectParam] = useParam("project", "", "filter");
   const viewPanel = useId();
   const chartPanel = useId();
@@ -1150,12 +1137,29 @@ function BuilderScreen({
     [readOnlyReason, announce, openDialog],
   );
 
+  // WHAT THE COMPANY NODE'S EDIT OPENS. Its principles are written on Company ›
+  // Principles and nowhere else, so once a company exists its Edit goes there,
+  // with the page in edit for a reader who may write them and plainly for one
+  // who may not, as a seat's Edit opens a read-only editor. Who may write them
+  // is the page's own gate (`useMayWriteCharter`), so the builder never offers
+  // an editor the page then withholds. A company this draft is still CREATING
+  // has no page yet, so its Edit is the name form. The move goes through the
+  // leave guard, and the draft is kept for the return either way
+  // (`useDraftKeeping`).
+  const principlesWritable = useMayWriteCharter();
+  const principles: CompanyEdit =
+    state.mode === "create" ? null : principlesWritable ? "write" : "read";
+  const openPrinciples = useCallback(() => {
+    if (principles === "write") nav.to(PRINCIPLES_PATH, principlesEditQuery());
+    else nav.to(PRINCIPLES_PATH);
+  }, [principles, nav]);
+
   // WHAT THE ADDRESS THIS BUILDER WAS MOUNTED ON ASKED FOR — see [Arrival].
   // Read once, in the first render, and spent the moment it is answered or the
   // reader moves the selection before the builder could answer it.
   const arrival = useRef<Arrival | null>(
-    unitParam !== "" || seatParam !== "" || addParam !== "" || editParam !== ""
-      ? { unit: unitParam, seat: seatParam, add: addParam, edit: editParam, project: projectParam }
+    unitParam !== "" || seatParam !== "" || addParam !== ""
+      ? { unit: unitParam, seat: seatParam, add: addParam, project: projectParam }
       : null,
   );
   useEffect(() => {
@@ -1177,13 +1181,6 @@ function BuilderScreen({
       // company's root is not what the link meant either.
       if (asked.unit !== "" && parent === null) return;
       openDialog({ type: "add", parent, kind });
-      return;
-    }
-    if (asked.edit !== "") {
-      nav.filter({ edit: null });
-      const part = charterPartOf(asked.edit);
-      if (part === null) return;
-      openDialog({ type: "editor", key: COMPANY_KEY, ...part });
       return;
     }
     if (asked.project !== "") nav.filter({ project: null });
@@ -1433,7 +1430,12 @@ function BuilderScreen({
             .map((p) => p.source as ConfigProblem)
         : [],
       selection: { key: selection, select },
-      openEditor: (key, section) => openDialog({ type: "editor", key, section }),
+      openEditor: (key, section) =>
+        key === COMPANY_KEY && principles !== null
+          ? openPrinciples()
+          : openDialog({ type: "editor", key, section }),
+      openCompanyRename: () => openIfWritable({ type: "editor", key: COMPANY_KEY }),
+      principles,
       openAdd: (parent, kind) => openIfWritable({ type: "add", parent, kind }),
       openMove: (key) => openIfWritable({ type: "move", key }),
       openDelete: (key) => openIfWritable({ type: "remove", key }),
@@ -1454,6 +1456,8 @@ function BuilderScreen({
     select,
     openDialog,
     openIfWritable,
+    openPrinciples,
+    principles,
     announce,
     focusNode,
     readOnly,
@@ -2275,20 +2279,10 @@ function DocumentProblems({ problems }: { problems: readonly PlacedProblem[] }) 
         {problems.map((p, i) => (
           <li key={i}>
             <span>{engineSentence(p.message)}</span>
-            {p.link === "integrations" && (
+            {p.link !== null && (
               <>
                 {" "}
-                <a className="t-link prose-link" href={href(screenPath("integrations"))}>
-                  Open Integrations
-                </a>
-              </>
-            )}
-            {p.link === "schedules" && (
-              <>
-                {" "}
-                <a className="t-link prose-link" href={href(screenPath("schedules"))}>
-                  Open Schedules
-                </a>
+                <ScreenLink to={p.link}>{PROBLEM_LINKS[p.link]}</ScreenLink>
               </>
             )}
           </li>

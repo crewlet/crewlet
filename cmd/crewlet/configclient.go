@@ -77,8 +77,12 @@ func (c *configClient) Import(ctx context.Context, doc []byte, summary string) (
 		return "", 0, fmt.Errorf("the /config client for %s has no answer cap, so it could "+
 			"read no answer at all; it is built by newConfigClient", c.base)
 	}
+	// AS AN IMPORT, which is what this is: a restored or migrated file, whose
+	// charter faults the node warns about rather than refuses, as an offline
+	// import and a boot import do (configapi's mayImport). Judged as an edit,
+	// a file restoring an older charter was refused for a part it changed back.
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut,
-		c.base+"/config", bytes.NewReader(doc))
+		c.base+"/config?import=true", bytes.NewReader(doc))
 	if err != nil {
 		return "", 0, err
 	}

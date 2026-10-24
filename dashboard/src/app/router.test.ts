@@ -51,6 +51,7 @@ import {
 import { CONTAINER_SHAPE, ITEM_KEY_SHAPE, KEY_SHAPE, resolve, resolves } from "./routes.ts";
 import { ALL_PROJECTS, scopeAt } from "./scope.ts";
 import { segmentsOf } from "~/test/routes.ts";
+import { principlesEditHref } from "~/routes/settings/principles/edit/address.ts";
 
 /** Every Settings section's own address but Spend's readings, which `nav gates by app` sets apart. */
 function settingsPaths(): string[][] {
@@ -98,9 +99,9 @@ describe("navigation identity", () => {
   test("a detail resolves to the workspace that holds it", () => {
     expect(workspaceOf(["company", "org", "seats", "pm"])).toBe("org");
     // THE LONGEST PREFIX A ROW OWNS DECIDES: every Company row is under
-    // `#/company`, and the bare address is the Overview's.
+    // `#/company`, and the bare address is Principles', the Company landing.
     expect(workspaceOf(["company"])).toBe("company");
-    expect(workspaceOf(["company", "policies"])).toBe("policies");
+    expect(workspaceOf(["company", "principles"])).toBe("company");
     expect(workspaceOf(["company", "schedules", "role", "ceo", "standup"])).toBe("schedules");
     expect(workspaceOf(["company", "integrations", "github"])).toBe("integrations");
     expect(workspaceOf(["settings", "spend", "tasks"])).toBe("settings");
@@ -161,7 +162,6 @@ describe("navigation identity", () => {
       inbox: "i",
       me: "m",
       company: "c",
-      policies: "o",
       org: "a",
       schedules: "d",
       integrations: "n",
@@ -214,30 +214,35 @@ describe("am I already here", () => {
 });
 
 describe("the navigation grammar", () => {
-  // FOURTEEN WORKSPACES ARE SIDEBAR ROWS, in four runs, and the sidebar draws
+  // THIRTEEN WORKSPACES ARE SIDEBAR ROWS, in four runs, and the sidebar draws
   // them and nothing else from the table: a section that became a sidebar row
-  // is a second column of navigation arriving one row at a time. The FIFTEENTH
+  // is a second column of navigation arriving one row at a time. The FOURTEENTH
   // is the reader's own Account, which has no row (the user block at the
   // sidebar's foot is the reader, and its menu links it) and is a workspace
   // all the same, so the palette and its chord reach it.
-  test("the sidebar's rows are fourteen workspaces, in the story's order, and the menu holds the fifteenth", () => {
+  test("the sidebar's rows are thirteen workspaces, in the story's order, and the menu holds the fourteenth", () => {
     const run = (place: string) => WORKSPACES.filter((w) => w.place === place).map((w) => w.key);
     expect(run("you")).toEqual(["home", "inbox", "me"]);
-    expect(run("company")).toEqual([
-      "company",
-      "policies",
-      "org",
-      "schedules",
-      "integrations",
-      "budgets",
-    ]);
+    expect(run("company")).toEqual(["company", "org", "schedules", "integrations", "budgets"]);
     expect(run("workspace")).toEqual(["work", "knowledge", "artifacts", "live"]);
     expect(run("foot")).toEqual(["settings"]);
     expect(run("menu")).toEqual(["account"]);
-    // THE COMPANY'S FIRST ROW IS "Overview", the same name in the sidebar,
-    // the trail and the palette, which finds it by "company" too.
-    expect(workspaceRow("company")?.label).toBe("Overview");
-    expect(DESTINATIONS.find((d) => d.key === "company")?.keywords).toContain("company");
+    // THE COMPANY'S FIRST ROW IS "Principles", the same name in the sidebar,
+    // the trail and the palette, which finds it by what the page holds.
+    expect(workspaceRow("company")?.label).toBe("Principles");
+    const words = (key: string) => DESTINATIONS.find((d) => d.key === key)?.keywords ?? [];
+    expect(words("company")).toEqual(
+      expect.arrayContaining(["mission", "vision", "policies", "charter"]),
+    );
+    // WHAT THE PAGE NO LONGER HOLDS is found where it lives: the company's
+    // name on the Org chart, whose company node renames it, and its clock in
+    // the company document.
+    expect(words("company")).not.toContain("company name");
+    expect(words("company")).not.toContain("timezone");
+    expect(words("org")).toContain("company name");
+    expect(words("settings-config")).toContain("timezone");
+    // ONE ROW FOR THE TWO PAGES IT REPLACED, and their addresses gone with them.
+    expect(DESTINATIONS.some((d) => d.label === "Overview" || d.label === "Policies")).toBe(false);
   });
 
   // SETTINGS IS FOUR GROUPS, in this order, and lists only what lives in it.
@@ -366,7 +371,7 @@ describe("the navigation grammar", () => {
     const OVERVIEW = [
       [],
       ["company"],
-      ["company", "policies"],
+      ["company", "principles"],
       ["company", "org"],
       ["company", "org", "roster"],
       ["company", "schedules"],
@@ -703,6 +708,31 @@ describe("the breadcrumb", () => {
     expect(crumbs[0]?.icon).toBe(workspaceRow("work")?.icon);
   });
 
+  // PRINCIPLES IN EDIT IS STILL PRINCIPLES: the parts open are what the page
+  // holds, never another page, so the address the org chart's company node
+  // sends a person to resolves to the same screen, the same sidebar row and
+  // the same trail as the page read. And the builder's address from before
+  // the principles moved is still the builder, opening nothing of its own.
+  // Mutation: give `edit=` a screen of its own in the resolver and the
+  // trail names something else.
+  test("Principles with parts in edit is the same screen, row and trail as Principles", () => {
+    for (const address of [
+      principlesEditHref(),
+      principlesEditHref("vision"),
+      principlesEditHref("policies"),
+      "#/company/principles?edit=mission,policies",
+    ]) {
+      const { path } = parseHash(address);
+      expect(resolve(path)).toEqual(resolve(["company", "principles"]));
+      expect(workspaceOf(path)).toBe("company");
+      expect(crumbsFor(path).map((c) => c.label)).toEqual(["Company", "Principles"]);
+    }
+    for (const old of ["charter", "mission", "vision", "policies"]) {
+      const route = resolve(parseHash(`#/company/org/edit?edit=${old}`).path);
+      expect(route.resolved && route.screen).toBe("org-edit");
+    }
+  });
+
   // A SECTION FOLLOWS ITS WORKSPACE, unless it IS the landing page: the chart
   // is "Org chart", the roster "Org chart › Roster". A Company row's own page
   // is its row alone.
@@ -713,10 +743,13 @@ describe("the breadcrumb", () => {
       "Roster",
     ]);
     // THE COMPANY'S LANDING IS ITS GROUP, THEN THE PAGE: the row reads
-    // Overview under the Company heading, and the trail says both.
-    expect(crumbsFor(["company"]).map((c) => c.label)).toEqual(["Company", "Overview"]);
-    expect(crumbsFor(["company"])[0]?.path).toBeUndefined();
-    expect(titleOf(crumbsFor(["company"]))).toBe("Overview");
+    // Principles under the Company heading, and the trail says both, at the
+    // bare address and at the page's own.
+    for (const path of [["company"], ["company", "principles"]]) {
+      expect(crumbsFor(path).map((c) => c.label)).toEqual(["Company", "Principles"]);
+      expect(crumbsFor(path)[0]?.path).toBeUndefined();
+      expect(titleOf(crumbsFor(path))).toBe("Principles");
+    }
     expect(crumbsFor(["company", "integrations"]).map((c) => c.label)).toEqual(["Integrations"]);
     expect(crumbsFor(["settings", "mcp-tools"]).map((c) => c.label)).toEqual([
       "Settings",
