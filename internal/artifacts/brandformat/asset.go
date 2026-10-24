@@ -93,6 +93,40 @@ func inspect(path, essence string, data []byte) (asset, []Finding) {
 	return refuse("%s is not a logo (SVG, PNG or WebP) or a face (WOFF2)", essence)
 }
 
+// MaxBytes is the most bytes a file of essence may be, false for an essence a
+// kit holds no file of: what a reader that knows a file's size holds it to
+// before reading any of it ([Sizer]).
+func MaxBytes(essence string) (int, bool) {
+	switch essence {
+	case "image/svg+xml":
+		return MaxSVGBytes, true
+	case "image/png", "image/webp":
+		return MaxImageBytes, true
+	case fontEssence:
+		return MaxFontFileBytes, true
+	}
+	return 0, false
+}
+
+// TooLarge is why a file of essence and size bytes is past its bound, in the
+// words its own check says it in, or "" when it is inside it.
+func TooLarge(essence string, size int64) string {
+	limit, ok := MaxBytes(essence)
+	if !ok || size <= int64(limit) {
+		return ""
+	}
+	switch essence {
+	case "image/svg+xml":
+		return fmt.Sprintf("the file is %d bytes and a drawing may be at most %d: simplify its paths "+
+			"or export it at a lower precision", size, limit)
+	case fontEssence:
+		return fmt.Sprintf("the font is %d bytes and a face's file may be at most %d: subset it", size, limit)
+	case "image/png":
+		return fmt.Sprintf("the PNG is %d bytes and a logo may be at most %d: export it smaller", size, limit)
+	}
+	return fmt.Sprintf("the WebP is %d bytes and a logo may be at most %d: export it smaller", size, limit)
+}
+
 // rasterShape is why a raster logo of w by h pixels is not a logo's shape, or
 // "" when it is: between 1:8 and 8:1, the bound a drawing's viewBox is held to
 // ([svgsafe.MinAspect], [svgsafe.MaxAspect]), so a 4096 by 1 strip is no more

@@ -51,6 +51,13 @@ func (r *run) sanitizeBrandAssets(ctx context.Context) error {
 			if !f.hasObj {
 				continue
 			}
+			// PAST ITS BOUND BY ITS RECORDED SIZE is refused before a byte
+			// of it is read.
+			if msg := brandformat.TooLarge(essence, f.entry.Object.Size); msg != "" {
+				refusals = append(refusals, brandFindings(&brandformat.Refused{Findings: []brandformat.Finding{
+					{Path: p, Rule: brandformat.RuleAsset, Message: msg}}})...)
+				continue
+			}
 			// A RASTER UPLOAD IS HELD AS THE OBJECT IT ARRIVED AS: its
 			// bytes are read back, verified, to be sanitised.
 			read, err := readObject(ctx, r.s.objects, f.entry.Object, true)
@@ -63,10 +70,7 @@ func (r *run) sanitizeBrandAssets(ctx context.Context) error {
 		var refused *brandformat.Refused
 		switch {
 		case errors.As(err, &refused):
-			var policy *lint.Refusal
-			if errors.As(brandRefusal(refused), &policy) {
-				refusals = append(refusals, policy.Findings...)
-			}
+			refusals = append(refusals, brandFindings(refused)...)
 			continue
 		case err != nil:
 			return err
@@ -76,6 +80,16 @@ func (r *run) sanitizeBrandAssets(ctx context.Context) error {
 	}
 	if len(refusals) > 0 {
 		return &lint.Refusal{Findings: refusals}
+	}
+	return nil
+}
+
+// brandFindings is a brand refusal's findings in the linter's shape
+// ([brandRefusal]), for a run that gathers every file's before it answers.
+func brandFindings(refused *brandformat.Refused) []lint.Finding {
+	var policy *lint.Refusal
+	if errors.As(brandRefusal(refused), &policy) {
+		return policy.Findings
 	}
 	return nil
 }
@@ -259,6 +273,16 @@ func (v storedSource) Essence(p string) (string, bool) {
 		return "", false
 	}
 	return typ.Essence(), true
+}
+
+// Size is the size the version's manifest records for the file at p, which
+// brandformat holds to its bound before reading it ([brandformat.Sizer]).
+func (v storedSource) Size(p string) (int64, bool) {
+	e, ok := manifest.EntryAt(v.m, p)
+	if !ok {
+		return 0, false
+	}
+	return e.Object.Size, true
 }
 
 func (v storedSource) Read(p string) ([]byte, error) {

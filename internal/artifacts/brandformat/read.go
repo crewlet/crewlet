@@ -568,6 +568,13 @@ func (r *reader) files(src Source, b Brand) ([]KitFile, error) {
 	return out, nil
 }
 
+// Sizer is a [Source] that knows each file's size before reading it, as a
+// stored version's manifest does: a file past its bound ([MaxBytes]) is then
+// refused from its size, without a byte of it read.
+type Sizer interface {
+	Size(path string) (int64, bool)
+}
+
 // file holds one file the index names: the version holds it, as one of the
 // essences the field takes, and it is inside its asset rule.
 func (r *reader) file(src Source, field, path string, essences []string) (KitFile, bool, error) {
@@ -579,6 +586,14 @@ func (r *reader) file(src Source, field, path string, essences []string) (KitFil
 	if !slices.Contains(essences, essence) {
 		r.field(field, RuleAsset, "%s is %s, and the field takes %s", path, essence, strings.Join(essences, ", "))
 		return KitFile{}, false, nil
+	}
+	if sized, ok := src.(Sizer); ok {
+		if size, known := sized.Size(path); known {
+			if msg := TooLarge(essence, size); msg != "" {
+				r.found = append(r.found, Finding{Path: path, Rule: RuleAsset, Message: msg})
+				return KitFile{}, false, nil
+			}
+		}
 	}
 	data, err := src.Read(path)
 	if err != nil {

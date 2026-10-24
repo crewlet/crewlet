@@ -54,9 +54,8 @@ type pngChunk struct {
 
 // sanitizePNG answers a PNG's stored form and its size in pixels.
 func sanitizePNG(data []byte) ([]byte, int, int, error) {
-	if len(data) > MaxImageBytes {
-		return nil, 0, 0, fmt.Errorf("the PNG is %d bytes and a logo may be at most %d: export it smaller",
-			len(data), MaxImageBytes)
+	if msg := TooLarge("image/png", int64(len(data))); msg != "" {
+		return nil, 0, 0, errors.New(msg)
 	}
 	if !bytes.HasPrefix(data, pngSignature) {
 		return nil, 0, 0, errors.New("the file is not a PNG: it does not begin with the PNG signature")

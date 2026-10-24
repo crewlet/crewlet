@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"math"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -344,5 +345,44 @@ func TestAKitIsSearchedByItsWords(t *testing.T) {
 	}
 	if strings.Contains(text, b.Colors.Primary) || strings.Contains(text, b.Logos.Primary) {
 		t.Errorf("the search text %q carries a colour or a path", text)
+	}
+}
+
+// sizedVersion is a version that knows its files' sizes, as a stored one's
+// manifest does, and records every file it is asked to read.
+type sizedVersion struct {
+	version
+	sizes map[string]int64
+	read  []string
+}
+
+func (v *sizedVersion) Size(p string) (int64, bool) {
+	n, ok := v.sizes[p]
+	return n, ok
+}
+
+func (v *sizedVersion) Read(p string) ([]byte, error) {
+	v.read = append(v.read, p)
+	return v.version.Read(p)
+}
+
+// A FILE PAST ITS BOUND BY ITS RECORDED SIZE IS NEVER READ: a reader that
+// knows a file's size refuses it from that, in the words its own check uses,
+// before a byte of it is in memory.
+//
+// Mutation: drop the size check and the oversized logo is read before it is
+// refused.
+func TestAFilePastItsBoundIsRefusedBeforeItIsRead(t *testing.T) {
+	t.Parallel()
+	src := &sizedVersion{version: kit(t), sizes: map[string]int64{
+		"logos/on-dark.png": brandformat.MaxImageBytes + 1,
+	}}
+	_, err := brandformat.ReadKit(src)
+	findings := refusal(t, err)
+	if !names(findings, brandformat.RuleAsset, "export it smaller") {
+		t.Errorf("findings %v, want the PNG's bound", findings)
+	}
+	if slices.Contains(src.read, "logos/on-dark.png") {
+		t.Error("the oversized logo was read before it was refused")
 	}
 }

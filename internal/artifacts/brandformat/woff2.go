@@ -30,10 +30,10 @@ const (
 
 // checkWOFF2 holds a WOFF2 file's header to the bounds.
 func checkWOFF2(data []byte) error {
+	if msg := TooLarge(fontEssence, int64(len(data))); msg != "" {
+		return errors.New(msg)
+	}
 	switch {
-	case len(data) > MaxFontFileBytes:
-		return fmt.Errorf("the font is %d bytes and a face's file may be at most %d: subset it", len(data),
-			MaxFontFileBytes)
 	case len(data) < woff2HeaderBytes || string(data[0:4]) != "wOF2":
 		return errors.New("the file is not a WOFF2 font: convert the face to WOFF2")
 	}

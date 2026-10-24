@@ -38,9 +38,8 @@ type webpChunk struct {
 
 // sanitizeWebP answers a WebP's stored form and its size in pixels.
 func sanitizeWebP(data []byte) ([]byte, int, int, error) {
-	if len(data) > MaxImageBytes {
-		return nil, 0, 0, fmt.Errorf("the WebP is %d bytes and a logo may be at most %d: export it smaller",
-			len(data), MaxImageBytes)
+	if msg := TooLarge("image/webp", int64(len(data))); msg != "" {
+		return nil, 0, 0, errors.New(msg)
 	}
 	if len(data) < 12 || string(data[0:4]) != "RIFF" || string(data[8:12]) != "WEBP" {
 		return nil, 0, 0, errors.New("the file is not a WebP: it is not a RIFF WEBP container")

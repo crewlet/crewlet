@@ -161,6 +161,19 @@ func (v versionSource) Essence(p string) (string, bool) {
 	return typ.Essence(), true
 }
 
+// Size is the file at p's size: the bytes the run holds for it, or the size
+// its object records ([brandformat.Sizer]).
+func (v versionSource) Size(p string) (int64, bool) {
+	e, ok := manifest.EntryAt(v.m, p)
+	if !ok {
+		return 0, false
+	}
+	if f := v.run.files[p]; f != nil && f.text != nil && !f.carried {
+		return int64(len(f.text)), true
+	}
+	return e.Object.Size, true
+}
+
 func (v versionSource) Read(p string) ([]byte, error) {
 	e, ok := manifest.EntryAt(v.m, p)
 	if !ok {
