@@ -10459,6 +10459,17 @@ a.live-row:focus-visible {
   padding: 0;
   list-style: none;
 }
+/* ONE HEIGHT A ROW: a tile whose words wrap ("Everyone" over "Nothing you
+   can open yet") stood taller than its neighbours, so each tile fills the
+   row's cell rather than its own content's height. */
+.artifacts-folders > li {
+  display: flex;
+  min-width: 0;
+}
+.artifacts-folders > li > * {
+  flex: 1 1 auto;
+  min-width: 0;
+}
 @container page (width < 1000px) {
   .artifacts-folders {
     grid-template-columns: repeat(3, minmax(0, 1fr));
