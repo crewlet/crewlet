@@ -72,12 +72,8 @@ import {
 } from "./listing.tsx";
 import { useGallerySelection } from "./selection.ts";
 import { MoveDialog } from "./MoveDialog.tsx";
-import {
-  FolderMenu,
-  NewFolderDialog,
-  useNewFolderAccess,
-  useVisibilityWords,
-} from "./FolderDialogs.tsx";
+import { NewFolderDialog, useNewFolderAccess, useVisibilityWords } from "./FolderDialogs.tsx";
+import { FolderMenu } from "./FolderMenu.tsx";
 
 /** The tiles of a place's folders: a gallery of `FolderTile`s, each with its own menu. */
 export function FolderTiles({

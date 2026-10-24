@@ -27,7 +27,8 @@ import { artifactFoldersPath } from "~/app/routes.ts";
 import { QueryState } from "~/components/common.tsx";
 import { useFolderTree } from "~/lib/artifacts/folders.ts";
 import { FolderView } from "./FolderView.tsx";
-import { FolderMenu, aboveRemoved, useVisibilityWords } from "./FolderDialogs.tsx";
+import { useVisibilityWords } from "./FolderDialogs.tsx";
+import { FolderMenu, aboveRemoved } from "./FolderMenu.tsx";
 
 export function ArtifactFolderPage({ id }: { id: string }) {
   const tree = useFolderTree();
