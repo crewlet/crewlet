@@ -30,8 +30,8 @@
  * Every Company row lives under `#/company`, so the first segment cannot say
  * which row a page is in. A row owns a prefix (`owns`, its landing unless it
  * says otherwise) and an address is in the row owning the LONGEST prefix of
- * it: `#/company/org/roster` is the Org chart's, `#/company` alone is the
- * Overview's. Settings lands on its first section, `#/settings/models`, and
+ * it: `#/company/org/roster` is the Org chart's, `#/company` alone is
+ * Principles'. Settings lands on its first section, `#/settings/models`, and
  * owns all of `#/settings`.
  *
  * # Addresses that moved
@@ -1124,7 +1124,7 @@ export function ownedBy(row: WorkspaceRow): readonly string[] {
  * Which workspace a route belongs to, so the sidebar marks the right row.
  *
  * The row owning the LONGEST PREFIX of the address decides ([ownedBy]):
- * `#/company/org/roster` is the Org chart's, `#/company` the Overview's. The
+ * `#/company/org/roster` is the Org chart's, `#/company` Principles'. The
  * empty fragment is Home, which is the landing screen. An address no row owns
  * answers "", never the first row: a sidebar that marked a workspace for a
  * path it does not hold would tell the reader they are somewhere they are not.

@@ -4,9 +4,9 @@
  * # What is on it, and what is not
  *
  * The WORKSPACES, from `nav.ts`'s one table, in its groups (`SIDEBAR_GROUPS`):
- * the three that are about you (Home, Inbox, My work), then Company (Overview,
- * Policies, Org chart, Schedules, Integrations, Budgets), then Workspace
- * (Worklet, Chatlet, Doclet, Artifacts, Live), and Settings at the foot.
+ * the three that are about you (Home, Inbox, My work), then Company
+ * (Principles, Brand, Org chart, Schedules, Integrations, Budgets), then
+ * Workspace (Worklet, Chatlet, Doclet, Artifacts, Live), and Settings at the foot.
  * Then three LIVE SHORTCUTS, each a real object with its own path: the views
  * this reader pinned, the pages they starred, and the turns running now.
  * Nothing else. A workspace's own sections are tabs in its page header and its
