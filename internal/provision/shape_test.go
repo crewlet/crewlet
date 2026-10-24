@@ -31,12 +31,15 @@ func TestTheShapeOfAValueNeverRepeatsIt(t *testing.T) {
 
 // AND IT KEEPS THE TWO CASES APART, because their fixes differ: a literal
 // needs a variable, a composite needs the variable to be the whole value.
-// Collapsed into "not a reference", an operator has to work out which.
+// Collapsed into "not a reference", an operator has to work out which. A slot
+// holding nothing is neither, and says so: called "a literal", an unset field
+// sent its operator looking for a value that is not there.
 func TestTheShapeTellsALiteralFromAComposite(t *testing.T) {
 	t.Parallel()
 	for value, want := range map[string]string{
 		"whsec_literal":                 "a literal",
-		"":                              "a literal",
+		"":                              "empty",
+		"  ":                            "empty",
 		"${WEBHOOK_SECRET}-with-a-tail": "a reference embedded in other text",
 		"https://${HOST}/wiki":          "a reference embedded in other text",
 	} {
