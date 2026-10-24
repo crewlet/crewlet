@@ -777,6 +777,13 @@ describe("the breadcrumb", () => {
       expect(titleOf(crumbsFor(path))).toBe("Principles");
     }
     expect(crumbsFor(["company", "integrations"]).map((c) => c.label)).toEqual(["Integrations"]);
+    // THE BRAND READS AS ITS SIBLING DOES: the group under the landing's
+    // glyph, not a link, then the page.
+    const brand = crumbsFor(["company", "brand"]);
+    expect(brand.map((c) => c.label)).toEqual(["Company", "Brand"]);
+    expect(brand[0]?.path).toBeUndefined();
+    expect(brand[0]?.icon).toBe(crumbsFor(["company"])[0]?.icon);
+    expect(titleOf(brand)).toBe("Brand");
     expect(crumbsFor(["settings", "mcp-tools"]).map((c) => c.label)).toEqual([
       "Settings",
       "MCP Tools",
