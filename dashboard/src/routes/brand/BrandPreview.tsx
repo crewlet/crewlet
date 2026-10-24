@@ -20,6 +20,10 @@ import {
 import { MoonGlyph, SunGlyph } from "@crewlethq/icons/glyphs";
 import type { BrandDocument } from "~/protocol/index.ts";
 import { faceDrawing } from "~/lib/brand/brand.ts";
+// THE BRAND'S OWN SHEET, imported here because every surface that draws a
+// brand draws this preview or its sample: Company › Brand, a kit's view and a
+// kit's gallery cover. It arrives with them rather than in the first paint.
+import "~/styles/brand.css";
 import type { BrandAssets } from "~/lib/brand/useBrand.ts";
 
 const KINDS = [
