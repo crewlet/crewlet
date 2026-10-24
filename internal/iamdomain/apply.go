@@ -394,6 +394,13 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		// history row either, which is why it is absent from the class
 		// table rather than classified.
 		return 0, nil
+	case KindTrimmed:
+		// THE TRIM'S OWN RECORD. The framework removes this log's anchors
+		// below the floor its subject names, in this same transaction
+		// (ADR-0046); this domain writes nothing for it — no row and no
+		// trail row, which is why it is listed as silent rather than
+		// classified.
+		return 0, nil
 	case KindDirectory:
 		rows, err = a.applyDirectory(ctx, tx, &at)
 	case KindPerson:

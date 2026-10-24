@@ -265,10 +265,12 @@ func (s *ScopeSet) UnmarshalJSON(b []byte) error {
 // IT SWITCHES ON THE SUBJECT KIND FIRST, for three kinds whose scope is a
 // property of what they ARE rather than of what their writer declared:
 //
-//   - A BARRIER resolves to the framework's own [statelog.FrameworkScope], which
-//     intersects nothing. A barrier writes no row, so a scope that intersected
-//     anything would make every linearizable read wait behind every other.
-//     The framework publishes barriers itself, with that scope already on the
+//   - A BARRIER and a TRIMMED record resolve to the framework's own
+//     [statelog.FrameworkScope], which intersects nothing. Neither writes a
+//     row of this domain's, so a scope that intersected anything would make
+//     every read of it wait behind a record that changed none of its rows —
+//     for a barrier, every linearizable read behind every other. The
+//     framework publishes both itself, with that scope already on its
 //     envelope, so this is the arm that reads one back.
 //
 //   - AN EVICTION and a GENERATION resolve to the ROOT, and they are the only
@@ -287,7 +289,7 @@ func (s *ScopeSet) UnmarshalJSON(b []byte) error {
 // about those people will probe.
 func (s ScopeSet) Resolve(subject Subject) statelog.ScopeSet {
 	switch subject.Kind {
-	case KindBarrier:
+	case KindBarrier, KindTrimmed:
 		return statelog.ScopeSet{Paths: []string{statelog.FrameworkScope}}
 	case KindEviction, KindGeneration:
 		return statelog.ScopeSet{Paths: []string{pathDomain}}

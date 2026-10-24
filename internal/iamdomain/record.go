@@ -281,6 +281,11 @@ const (
 	// OpBarrier is the read index's payload-free append.
 	OpBarrier OpKind = "barrier"
 
+	// OpTrimmed is the trim's payload-free record that removes the
+	// arbitration anchors below a floor (ADR-0046). Its subject is
+	// [KindTrimmed].
+	OpTrimmed OpKind = "trimmed"
+
 	// OpEviction gates a node's records on this log, or readmits it. Its
 	// subject is [KindEviction].
 	OpEviction OpKind = "eviction"
@@ -289,11 +294,11 @@ const (
 	OpGeneration OpKind = "generation"
 )
 
-// OpKinds are the sixteen, in the order they are documented.
+// OpKinds are the seventeen, in the order they are documented.
 var OpKinds = []OpKind{
 	OpInvite, OpCancel, OpEnrol, OpIdentity, OpUpdate, OpStatus, OpRevoke,
 	OpPassword, OpRemove, OpOpen, OpClose, OpInvalidate, OpSweep, OpBarrier,
-	OpEviction, OpGeneration,
+	OpTrimmed, OpEviction, OpGeneration,
 }
 
 // Valid reports whether an op off the wire is one this build knows.
@@ -330,7 +335,8 @@ type RecordEnvelope struct {
 	// barrier, deliberately — an op id is what
 	// invites a message id, and a duplicate ack is served out of the
 	// dedupe window with no quorum round trip at all, which is the one
-	// thing a read barrier must never be.
+	// thing a read barrier must never be — and empty on a trimmed record,
+	// whose identical copies are each meant to land.
 	OpID string `json:"op_id,omitempty"`
 
 	// Subject is the object this record arbitrates on.
@@ -357,7 +363,8 @@ type RecordEnvelope struct {
 	// Writer is the publishing node's id, read by the eviction gate — which
 	// runs before any kind rule, on a node that may not be able to decode
 	// the payload at all. Empty on a barrier, which writes no rows for a
-	// gate to drop.
+	// gate to drop — and SET on a trimmed record, which removes anchors,
+	// so an evicted node's must be droppable.
 	//
 	// IT AND Gen ARE THE FRAMEWORK'S STAMP ([statelog.Stamp]), set from the
 	// stamp a decide is handed — or, on the one record nothing decides, a
@@ -425,9 +432,10 @@ type MutationRecord struct {
 	// nobody could decode, and a person's id in a stalled-log report is a
 	// durable, replicated statement that this person exists.
 	//
-	// Empty on a barrier, a sweep, an eviction, a generation, an
-	// invalidation and an invitation's issue — the records that are about
-	// nobody; for a directory record about somebody it is that person.
+	// Empty on a barrier, a trimmed record, a sweep, an eviction, a
+	// generation, an invalidation and an invitation's issue — the records
+	// that are about nobody; for a directory record about somebody it is
+	// that person.
 	Person string `json:"person,omitempty"`
 
 	// Actor and ActorKind are who did this.
@@ -651,17 +659,19 @@ func (rec MutationRecord) encodeWith(fields statelog.RecordFields) ([]byte, erro
 // that node, a deferred invalidation every bearer the company ended still
 // honoured there, a deferred eviction every record the evicted node appends
 // still applied — and its shape may therefore only ever grow by addition
-// ([GateRecordVersion]); and the read index's barrier and a reanchor's
-// generation, because an older node RETAINS a record it cannot read — a
-// barrier is then a linearizable read on that node that waits for ever, and a
-// generation a transition it never makes.
+// ([GateRecordVersion]); and the read index's barrier, the trim's trimmed
+// record and a reanchor's generation, because an older node RETAINS a record
+// it cannot read — a barrier is then a linearizable read on that node that
+// waits for ever, a trimmed record every anchor it names kept on that node,
+// and a generation a transition it never makes.
 //
 // THE ONE EXCEPTION is a gate's own APPLY changing
 // ([statelog.VersionedField.Gate]): no older build can honour that rule, so
 // the record rides the version it arrived at and every older node halts there
 // — the only answer that is not a divergence.
 func (rec MutationRecord) readByEveryBuild() bool {
-	return rec.InstallsGate() || rec.Op == OpBarrier || rec.Op == OpGeneration
+	return rec.InstallsGate() || rec.Op == OpBarrier || rec.Op == OpTrimmed ||
+		rec.Op == OpGeneration
 }
 
 // recordFields is every top-level name this build writes.
@@ -707,6 +717,51 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 			// that choice is not read.
 			Scope: RootScope(),
 			Gen:   env.Gen,
+		},
+	})
+}
+
+// EncodeTrimmed renders the trim's trimmed record ([statelog.TrimmedEnvelope],
+// ADR-0046) as one of this domain's own records — the barrier's split: the
+// framework owns when one is appended, what it removes and the floor its
+// subject names, and the domain owns what a record on its log looks like.
+//
+// THE WRITER TRAVELS, unlike a barrier's: a trimmed record removes rows, so the
+// eviction gate must be able to drop an evicted node's. NO OP ID, asserted —
+// one becomes a message id and a ledger row nothing resolves. NO PERSON, since
+// it is about nobody, so no removal's tombstone ever holds one back. And the
+// floor is CHECKED here, at the write, rather than in [Subject.Validate], which
+// the read path runs too: a refusal there would turn one malformed record into
+// an applier that stops on every node, where the framework's apply faults
+// instead.
+func EncodeTrimmed(env statelog.Envelope) ([]byte, error) {
+	if env.Kind != statelog.TrimmedKind || env.Subject.Kind != statelog.TrimmedKind {
+		return nil, fmt.Errorf("iamdomain: a %q envelope on %q is not a trimmed record",
+			env.Kind, env.Subject)
+	}
+	if env.OpID != "" {
+		return nil, fmt.Errorf("iamdomain: a trimmed record carries no op id and " +
+			"this one has one — an op id becomes a message id and a ledger row " +
+			"nothing resolves")
+	}
+	floor, err := statelog.TrimmedFloor(Domain{}.Stream().Name, env.Subject)
+	if err != nil {
+		return nil, fmt.Errorf("iamdomain: %w", err)
+	}
+	return Encode(MutationRecord{
+		RecordEnvelope: RecordEnvelope{
+			// THE BASE VERSION for ever, for the barrier's reason: a
+			// trimmed record an older peer retained is every anchor it
+			// names kept on that peer.
+			V:       BaseRecordVersion,
+			Subject: TrimmedSubject(floor),
+			Op:      OpTrimmed,
+			// RESOLVED FROM ITS KIND to the framework's own scope, as a
+			// barrier's is ([ScopeSet.Resolve]); the root is stated
+			// because a scope must encode to something.
+			Scope:  RootScope(),
+			Gen:    env.Gen,
+			Writer: env.Writer,
 		},
 	})
 }

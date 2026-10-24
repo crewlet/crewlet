@@ -156,16 +156,17 @@ func (Domain) Stream() statelog.StreamSpec {
 		MaxRecordBytes: IamMaxRecordBytes,
 		Duplicates:     IamLogDuplicates,
 		Replay:         statelog.ReplayStrict,
-		// SEVEN OF THE EIGHT KINDS. A barrier shares one subject across the
+		// SEVEN OF THE NINE KINDS. A barrier shares one subject across the
 		// whole domain, so an expectation there would serialise every
 		// linearizable read behind every other one and write an anchor
 		// row per read into the transaction holding this store's only
-		// writer.
+		// writer; and the trim's trimmed record removes anchors, so
+		// arbitrated it would write one of its own (ADR-0046).
 		ArbitratedKinds: arbitratedKinds(),
 	}
 }
 
-// arbitratedKinds is the nine, derived from the enum rather than typed again —
+// arbitratedKinds is the seven, derived from the enum rather than typed again —
 // a list written twice is a kind that arbitrates in one place and not the
 // other, which wedges that subject the first time a gate drops a record.
 func arbitratedKinds() []string {

@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // A SUBJECT ROUND-TRIPS THROUGH THE LOG'S GRAMMAR, including an id's dots.
@@ -23,6 +24,8 @@ func TestASubjectRoundTripsThroughTheWireGrammar(t *testing.T) {
 		"a reanchor":        iamdomain.GenerationSubject(3),
 		"the invalidation":  iamdomain.InvalidationSubject(),
 		"the barrier":       iamdomain.BarrierSubject(),
+		"a trimmed record": iamdomain.TrimmedSubject(statelog.Position{
+			Stream: topics.IamLogStream, Generation: 2, Seq: 41}),
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -109,8 +112,9 @@ func TestTheSingletonKindsAreTheOnesWithNoId(t *testing.T) {
 	}
 }
 
-// EVERY KIND BUT THE BARRIER ARBITRATES, and the declaration the stream is
-// created with is DERIVED from that rather than typed again.
+// EVERY KIND BUT THE BARRIER AND THE TRIMMED RECORD ARBITRATES, and the
+// declaration the stream is created with is DERIVED from that rather than typed
+// again.
 //
 // A list written twice is a kind that arbitrates in one place and not the
 // other, which wedges that subject the first time a gate drops a record.
@@ -130,30 +134,33 @@ func TestTheArbitratedKindsAreDerivedFromTheEnum(t *testing.T) {
 					true: "names", false: "does not name"}[named])
 		}
 	}
-	if len(spec.ArbitratedKinds) != len(iamdomain.ObjectKinds)-1 {
+	if len(spec.ArbitratedKinds) != len(iamdomain.ObjectKinds)-2 {
 		t.Errorf("the stream arbitrates %d of %d kinds — the barrier shares one "+
 			"subject across the whole domain, so an expectation there would "+
-			"serialise every linearizable read behind every other one",
+			"serialise every linearizable read behind every other one, and a "+
+			"trimmed record removes anchors, so arbitrated it would write one of "+
+			"its own (ADR-0046)",
 			len(spec.ArbitratedKinds), len(iamdomain.ObjectKinds))
 	}
 }
 
-// EXACTLY FOUR KINDS MAY STATE THE WHOLE ESTATE AS THEIR SCOPE.
+// EXACTLY FIVE KINDS MAY STATE THE WHOLE ESTATE AS THEIR SCOPE.
 //
 // Both directions, because each failure is silent in its own way: a kind that
 // gained the permission would freeze every login in the company on the first
 // record a node could not decode, and one that lost it would be a gate or a
 // reanchor blocking only some reads while licensing the rest.
 //
-// EVERY ONE OF THE FOUR IS A KIND THAT IS NEVER DEFERRED, which is what makes
-// the permission affordable: three install a gate and the fourth declares the
-// framework's own barrier scope, so none of them can be the record a node
-// cannot decode.
-func TestExactlyFourKindsMayClaimTheWholeEstate(t *testing.T) {
+// EVERY ONE OF THE FIVE IS A KIND THAT IS NEVER DEFERRED, which is what makes
+// the permission affordable: three install a gate and the other two — the read
+// index's barrier and the trim's trimmed record — are framework records every
+// build reads, whose scope resolves to the framework's own and intersects
+// nothing, so none of them can be the record a node cannot decode.
+func TestExactlyFiveKindsMayClaimTheWholeEstate(t *testing.T) {
 	t.Parallel()
 	want := []iamdomain.ObjectKind{
 		iamdomain.KindInvalidation, iamdomain.KindEviction,
-		iamdomain.KindGeneration, iamdomain.KindBarrier,
+		iamdomain.KindGeneration, iamdomain.KindBarrier, iamdomain.KindTrimmed,
 	}
 	for _, kind := range iamdomain.ObjectKinds {
 		got := kind.RootScoped()

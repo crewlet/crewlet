@@ -92,6 +92,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // ObjectKind is what a subject on the iam log addresses.
@@ -102,7 +103,7 @@ import (
 // reported to an operator with that literal in it.
 type ObjectKind string
 
-// The eight kinds.
+// The nine kinds.
 //
 // EXPORTED AND ENUMERATED because four readers that cannot see each other all
 // compare against them: the publisher builds the subject, the wake feed's
@@ -217,12 +218,25 @@ const (
 	// KindBarrier is the read index's payload-free append, on ONE subject
 	// for the whole domain.
 	//
-	// The only kind that writes no row on any node, which is why its table
-	// declaration is the EMPTY set stated explicitly rather than left out.
+	// One of the two kinds that write no row of this domain's on any node —
+	// the other is [KindTrimmed] — which is why its table declaration is the
+	// EMPTY set stated explicitly rather than left out.
 	KindBarrier ObjectKind = "barrier"
+
+	// KindTrimmed is the trim's record that removes the arbitration anchors
+	// below what the log no longer holds — [statelog.TrimmedKind], ADR-0046
+	// — on one subject per floor, which the subject's id names.
+	//
+	// THE FRAMEWORK REMOVES THE ANCHORS, in the transaction that applies the
+	// record, on every node at the same position; this domain writes nothing
+	// for it — no row and no trail — and has the case that says so, for the
+	// barrier's reason. Without it every directory, person and session
+	// subject this log ever carried kept an anchor on every data node for the
+	// life of the deployment, a session lineage per sign-in among them.
+	KindTrimmed ObjectKind = statelog.TrimmedKind
 )
 
-// ObjectKinds are the eight, and THE ORDER IS LOAD-BEARING.
+// ObjectKinds are the nine, and THE ORDER IS LOAD-BEARING.
 //
 // [statelogtest] publishes the FIRST THREE a domain declares, twice each, in
 // order — so the declaration decides what the framework's own suite certifies,
@@ -237,6 +251,7 @@ const (
 var ObjectKinds = []ObjectKind{
 	KindDirectory, KindPerson, KindSession,
 	KindInvalidation, KindSweep, KindEviction, KindGeneration, KindBarrier,
+	KindTrimmed,
 }
 
 // Valid reports whether a kind off the wire is one this build knows.
@@ -245,15 +260,19 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation.
 //
-// SEVEN OF EIGHT DO. The barrier shares one subject across the whole domain, so
+// SEVEN OF NINE DO. The barrier shares one subject across the whole domain, so
 // an expectation there would serialise every linearizable read behind every
 // other one and write an anchor row per read into the transaction holding this
-// store's only writer.
-func (k ObjectKind) Arbitrated() bool { return k != KindBarrier }
+// store's only writer. A trimmed record REMOVES anchors, and identical ones are
+// each meant to land, so an expectation would refuse every one after the first
+// and an anchor of its own would be the one row it exists not to leave behind.
+func (k ObjectKind) Arbitrated() bool {
+	return k != KindBarrier && k != KindTrimmed
+}
 
 // Identified reports whether this kind's subject carries an id.
 //
-// FIVE OF EIGHT DO. The directory, the invalidation and the barrier are the
+// SIX OF NINE DO. The directory, the invalidation and the barrier are the
 // kinds with exactly one object in the whole domain, and each is a singleton
 // for a reason stated at its constant rather than because an id was hard to
 // choose.
@@ -268,10 +287,11 @@ func (k ObjectKind) Identified() bool {
 // GatedByRemoval reports whether a record on this kind can be ABOUT a person,
 // and so whether a removal's tombstone may drop it ([markedPerson]).
 //
-// THREE OF EIGHT ARE: a person's own subject, which names them; and the
+// THREE OF NINE ARE: a person's own subject, which names them; and the
 // directory and a session, whose subjects name nobody and a lineage, and
 // whose person is in the record's payload. An invalidation, a sweep, an
-// eviction, a generation and a barrier are about no person at all, so no
+// eviction, a generation, a barrier and a trimmed record are about no person
+// at all, so no
 // tombstone holds one back — and stating that on the kind is what lets the
 // applier and the publisher's reader ask one rule rather than each decoding
 // whatever body it is handed.
@@ -286,7 +306,7 @@ func (k ObjectKind) GatedByRemoval() bool {
 // RootScoped reports whether a record on this kind may state the whole estate
 // as its scope.
 //
-// FOUR OF EIGHT MAY, and it is the tightest rule in this package because the
+// FIVE OF NINE MAY, and it is the tightest rule in this package because the
 // cost of the root term here is the highest in the tree: a deferred record at
 // the root blocks every read whose closure it covers, which is every read in
 // the domain — so one record a node cannot decode would freeze every
@@ -299,13 +319,15 @@ func (k ObjectKind) GatedByRemoval() bool {
 // — a node that cannot decode a record saying this log was reanchored cannot
 // certify any read over it either. A BARRIER may because its scope is the
 // framework's own [statelog.FrameworkScope], which intersects nothing, and what
-// it declares is never read. An INVALIDATION may for the eviction's reason and
+// it declares is never read — and a TRIMMED record for the same reason: its
+// scope resolves from its kind to that sentinel, and it is read by every build
+// for ever ([statelog.TrimmedVersion]). An INVALIDATION may for the eviction's reason and
 // must: it installs a gate too, so it is never deferred, and it is about
 // everybody — a bucket would be a claim that it ends one sixty-fourth of the
 // company's sessions.
 func (k ObjectKind) RootScoped() bool {
 	switch k {
-	case KindInvalidation, KindEviction, KindGeneration, KindBarrier:
+	case KindInvalidation, KindEviction, KindGeneration, KindBarrier, KindTrimmed:
 		return true
 	}
 	return false
@@ -368,6 +390,14 @@ func GenerationSubject(generation uint32) Subject {
 
 // BarrierSubject is the read index's one subject.
 func BarrierSubject() Subject { return Subject{Kind: KindBarrier} }
+
+// TrimmedSubject names the trimmed record whose floor is floor, in the
+// framework's ONE spelling of it ([statelog.TrimmedSubject]) — the framework
+// reads the floor back from the id, and the dot inside it is no separator here
+// (see [Subject.Validate]).
+func TrimmedSubject(floor statelog.Position) Subject {
+	return Subject{Kind: KindTrimmed, ID: statelog.TrimmedSubject(floor).ID}
+}
 
 // String renders the subject's own path — what the framework appends to the
 // domain's subject prefix.

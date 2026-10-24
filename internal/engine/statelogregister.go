@@ -478,6 +478,7 @@ func register() []registration {
 					Gates: iamdomain.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
 			},
 			Barrier:    iamdomain.EncodeBarrier,
+			Trimmed:    iamdomain.EncodeTrimmed,
 			Generation: iamdomain.GenerationRecord{},
 			NewGate: func(s *stateLog, _ *runningLog,
 				publisher *statelog.Publisher) (gateWrite, error) {
