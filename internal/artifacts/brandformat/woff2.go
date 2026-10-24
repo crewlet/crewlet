@@ -33,8 +33,7 @@ func checkWOFF2(data []byte) error {
 	if msg := TooLarge(fontEssence, int64(len(data))); msg != "" {
 		return errors.New(msg)
 	}
-	switch {
-	case len(data) < woff2HeaderBytes || string(data[0:4]) != "wOF2":
+	if len(data) < woff2HeaderBytes || string(data[0:4]) != "wOF2" {
 		return errors.New("the file is not a WOFF2 font: convert the face to WOFF2")
 	}
 	flavor := binary.BigEndian.Uint32(data[4:8])
