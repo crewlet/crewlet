@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
@@ -209,27 +210,84 @@ func servesGit(b *config.Bootstrap) bool {
 }
 
 // mountCode registers the code host's routes — see the file's doc for which
-// are mounted where.
+// are mounted where — each through [authz.Router] on the verb it is decided
+// by, and refuses a route mounted with no policy, as every guarded surface
+// does.
+//
+// # Which verb, and why the guard alone was not enough
+//
+// They were mounted on the plain table, so they asked only what the guard in
+// front of every route asks — whether somebody resolved — and a person holding
+// nothing but the overview, or a machine token carrying one app, could start a
+// verify, and its repair, of every repository a git node keeps. Now:
+//
+//   - THE READS AND THE GIT ROUTES admit everybody the guard resolved
+//     ([authz.ActionCodeRead], [authz.ActionCodeGit]): what each may read,
+//     fetch or push is the per-repository grant the serving node derives from
+//     the chart once the repository is read (code.GrantOf, ADR-0054), which
+//     no route can ask before it.
+//   - A VERIFY AND ITS READ are the deployment's own controls, admin's as a
+//     backup is, decided by [deploymentPolicy] — a check of THIS NODE's copy
+//     that reads every byte of it and holds a maintenance slot, and with a
+//     repair rewrites what every fetch on the node is served from: an
+//     operation on the node, which no repository's grant decides.
+//
+// A GIT ROUTE'S REFUSAL IS IN GIT'S FORM ([gitRefusal]): git prints one line
+// of text and nothing of the JSON envelope a REST route answers.
 //
 // The git patterns are the host's own constants, so the path a handler reads
 // its repository from is the path it was mounted at, and this file spells no
 // git path a classifier gate would have to allow.
-func (a *App) mountCode(mux httpjson.Router) {
+func (a *App) mountCode(mux authz.Mux) error {
+	guard := authz.ContextGuard(authz.NoChart{})
+	rest := authz.NewRouter(mux, guard)
+	var failures []error
+	mount := func(router *authz.Router, pattern string, p authz.Policy, h http.Handler) {
+		if err := router.Handle(pattern, p, h); err != nil {
+			failures = append(failures, err)
+		}
+	}
 	if a.servesGit {
-		mux.Handle(host.PatternInfoRefs, a.gitRoute(GitRoutes.InfoRefs))
-		mux.Handle(host.PatternUploadPack, a.gitRoute(GitRoutes.UploadPack))
-		mux.Handle(host.PatternReceivePack, a.gitRoute(GitRoutes.ReceivePack))
+		git := authz.NewRouter(mux, guard).Refusing(gitRefusal)
+		transport := authz.Policy{Action: authz.ActionCodeGit}
+		mount(git, host.PatternInfoRefs, transport, a.gitRoute(GitRoutes.InfoRefs))
+		mount(git, host.PatternUploadPack, transport, a.gitRoute(GitRoutes.UploadPack))
+		mount(git, host.PatternReceivePack, transport, a.gitRoute(GitRoutes.ReceivePack))
 		// A WRITE TO THE DRAIN GATE, refused while draining like every
 		// POST: a check is new work on the node, a repair a write into its
 		// copy. Only where git is served: it checks THIS node's cache, which
 		// a node without the role does not keep — and so is the read of one,
 		// which a draining node still answers.
-		mux.HandleFunc("POST /code/repos/{name}/verify", a.serveCodeVerify)
-		mux.HandleFunc("GET /code/repos/{name}/verify/{id}", a.serveCodeVerification)
+		for pattern, h := range map[string]http.HandlerFunc{
+			"POST /code/repos/{name}/verify":     a.serveCodeVerify,
+			"GET /code/repos/{name}/verify/{id}": a.serveCodeVerification,
+		} {
+			mount(rest, pattern, deploymentPolicy(pattern), h)
+		}
 	}
-	mux.Handle("GET /code/repos", a.serveCodeRead(code.ReadRepos, "code_repos"))
-	mux.Handle("GET /code/repos/{name}", a.serveCodeRead(code.ReadRepo, "code_repo"))
-	mux.Handle("GET /code/repos/{name}/pushes", a.serveCodeRead(code.ReadPushes, "code_pushes"))
+	read := authz.Policy{Action: authz.ActionCodeRead}
+	mount(rest, "GET /code/repos", read, a.serveCodeRead(code.ReadRepos, "code_repos"))
+	mount(rest, "GET /code/repos/{name}", read, a.serveCodeRead(code.ReadRepo, "code_repo"))
+	mount(rest, "GET /code/repos/{name}/pushes", read, a.serveCodeRead(code.ReadPushes, "code_pushes"))
+	return errors.Join(failures...)
+}
+
+// gitRefusal renders a request a git route's router did not admit in the one
+// form git prints — a line of text, never the JSON envelope, which git shows
+// nothing of — under the status and the code a JSON route answers the same
+// decision with ([authz.RefusalCode]), so the two cannot drift apart. A
+// decision this node could not make says when to come back, as the envelope's
+// 503 does. Every verb a git route is mounted on admits everybody the guard
+// resolved, so what reaches this is a principal whose stage may not act, or a
+// node that could not decide.
+func gitRefusal(w http.ResponseWriter, _ *http.Request, _ authz.Policy, d authz.Decision) {
+	status, refused := authz.RefusalCode(d)
+	sentence := strings.TrimSuffix(refused.Message(), ".") + " (" + string(refused) + ")"
+	if d.Unknown() {
+		auth.GitUnavailable(w, authz.RetryUndecidedSeconds, sentence)
+		return
+	}
+	auth.GitText(w, status, sentence)
 }
 
 // gitRoute serves one of the host's git handlers, resolved for this request,

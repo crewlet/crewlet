@@ -862,8 +862,11 @@ func New(opts Options) (*App, error) {
 		return nil, fmt.Errorf("api: mount the deployment's controls: %w", err)
 	}
 	// The engine's own git host and its reads: git on a node with the git
-	// role, the reads on every node. See code.go.
-	a.mountCode(mux)
+	// role, the reads on every node, each on the verb it is decided by and
+	// failing the boot where a policy is missing. See code.go.
+	if err := a.mountCode(mux); err != nil {
+		return nil, fmt.Errorf("api: mount the code host's routes: %w", err)
+	}
 	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.csrf, a.stream, a.answer))
 	// The OPERATOR surface: the same tracker and knowledge tools a seat
 	// holds, offered to a person's own assistant over MCP and to the person

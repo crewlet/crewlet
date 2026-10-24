@@ -1260,7 +1260,9 @@ A pack missing or damaged, or an index failing its checksum, is **rebuilt**
 into a new copy (every pack found whole linked rather than downloaded again),
 and so is whatever a repair in place leaves. Every git node keeps its own cache, so **verify each** (`-url`
 names the node); with requests routed by repository, a repository is cached on
-one or two of them.
+one or two of them. A verify is one of the deployment's own controls and takes
+**`admin`**, so the token in `CREWLET_API_TOKEN` must carry it: any other is
+refused naming it, before the node checks anything.
 
 With no `-repo`, every active and archived repository, listed at
 `linearizable` so one declared a moment ago is not missed; `-repo NAME`, as

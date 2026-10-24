@@ -6786,11 +6786,21 @@ What a route answers before git is reached:
 - **No credential, or a refused one**: `401` with `WWW-Authenticate: Basic
   realm="crewlet", charset="UTF-8"`, which is what makes git ask its credential
   helper.
+- **Every caller the guard resolved** reaches git (`code.git`): what a fetch or
+  a push may do is the caller's grant on the repository, decided once it is
+  read — a push from a caller who may push nothing is refused at its
+  advertisement, and every command it carries is judged by the grant.
 - **A draining node** finishes a fetch already begun and refuses a new fetch
   and every request of a push, `503` with `Retry-After: 30` ([During a
   drain](#during-a-drain)).
 
 ### The code reads
+
+Every caller the guard resolved reaches these (`code.read`): what each answers
+is the caller's grant on each repository, decided once the repository is read
+([Who may read and push](../concepts/code-host.md#who-may-read-and-push)) — so
+a repository a caller may not read is left out of a listing, and answered
+`403 not_permitted` alone.
 
 | Route | What it answers |
 |---|---|
@@ -6908,6 +6918,14 @@ read nothing — so a retry costs nothing either:
 A write to the drain — a repair writes into the node's copy — so a draining
 node refuses it.
 Mounted only where git is served.
+
+**Admin's**, as the deployment's other controls are (`fleet.operate`, which
+asks a signed-in person for a recent proof; the read below is `fleet.read`): a
+caller without `admin` is refused `403 unauthorized` naming it, before the node
+is asked anything. The check reads every byte of this node's copy and holds a
+slot of its maintenance lane, and a repair rewrites what every fetch on the
+node is served from — an operation on the node, which no repository's own
+grant decides.
 
 ### `GET /code/repos/{name}/verify/{id}`
 

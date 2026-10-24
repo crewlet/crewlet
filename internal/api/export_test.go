@@ -14,6 +14,11 @@ import (
 // stamps every caller it admits.
 func (a *App) CodeRead(kind code.ReadKind) http.Handler { return a.serveCodeRead(kind, "code read") }
 
+// GitRefusal is [gitRefusal], for the case that holds a git route's refusal to
+// git's own form: on every path the app serves, the guard in front of the
+// router answers first whatever the router could refuse.
+var GitRefusal = gitRefusal
+
 // NativeAbsent is [nativeAbsent] — why a native half is not here — for the
 // external suite, which holds both transports to one answer about it without
 // an engine to put in either posture.
