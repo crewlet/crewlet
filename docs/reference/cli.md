@@ -681,10 +681,12 @@ holds one), and the owner for a person's machine token — with
 invoking operator. Either way that author travels with the revision to every
 node in the fleet.
 
-Through the API it is decided as any `PUT /config` is: `admin`
-writes anything, and a [unit's lead](api-endpoints.md#a-lead-edits-their-own-team)
-may import a file whose every change is inside the units they lead. Offline
-there is nobody to decide on: the store is written by whoever can open it on
+Through the API an import is `admin`'s alone, whatever the file changes:
+`PUT /config?import=true` is refused `403` to a
+[unit's lead](api-endpoints.md#a-lead-edits-their-own-team) before the body is
+read, even for a file whose every change is inside the units they lead, who
+changes their own team with `PUT` or `PATCH /config` or the entity routes
+instead. Offline there is nobody to decide on: the store is written by whoever can open it on
 the host, which is already more than any permission.
 
 It does **not** refuse because the company already exists, and there is no
