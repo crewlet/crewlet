@@ -37,8 +37,7 @@ import (
 // time, instead.
 func TestTheCollectorReadsEveryDeclaredTable(t *testing.T) {
 	t.Parallel()
-	estates := objectEstatesFor(objectsRuntime(), &artifactsdomain.Reader{})
-	if _, err := collect.Sources(references.All, estates...); err != nil {
+	if _, err := collect.Sources(references.All, collectorEstates()...); err != nil {
 		t.Fatalf("the collector cannot be built from the declared tables: %v", err)
 	}
 }
@@ -50,6 +49,13 @@ func TestTheCollectorReadsEveryDeclaredTable(t *testing.T) {
 // read here.
 func objectsRuntime() *native {
 	return &native{trackerObjects: &tracker.Reader{}, codeReader: &code.Reader{}}
+}
+
+// collectorEstates is every estate the collector reads on a data node, as
+// [Engine.startCollectorOver] builds them: [objectsRuntime]'s, and the
+// artifacts log's, which every data node runs ([objectEstatesFor]).
+func collectorEstates() []collect.Estate {
+	return objectEstatesFor(objectsRuntime(), &artifactsdomain.Reader{})
 }
 
 // EVERY REQUIRED TABLE NAMES ITS OWN DOMAIN'S LOG (ADR-0048). A backup reads
@@ -288,12 +294,15 @@ func TestANodeNamingAnotherObjectStoreIsRefusedNamingBoth(t *testing.T) {
 }
 
 // THE OBJECT STORE'S BUCKET COUNTS INTO THE NODE'S RECORDER, from its first
-// request: the check of the bucket that opening it makes is an attempt and a
-// request like any other, so an `s3` node handed its recorder holds
-// `crewlet.objects.s3.attempts{operation=HeadBucket,outcome=answered}` once
-// the store is open. A recorder that stopped at the engine — never handed to
-// the client's constructor — leaves every S3 series the catalogue publishes
-// empty, which reads as a bucket that never throttled anybody.
+// request: the probe that opening it makes is attempts and requests like any
+// other, so an `s3` node handed its recorder holds them once the store is
+// open. The probe stores one object under the prefix (PutObject), deletes it
+// (DeleteObject), makes three presigned puts of its own through the plain
+// transport — no SDK operation, so nothing the counter labels — and deletes
+// the object once more as it ends, however it ended (a second DeleteObject).
+// A recorder that stopped at the engine — never handed to the client's
+// constructor — leaves every S3 series the catalogue publishes empty, which
+// reads as a bucket that never throttled anybody.
 func TestTheObjectStoresBucketCountsIntoTheNodesRecorder(t *testing.T) {
 	t.Parallel()
 	srv := s3fake.Start(t, "files")
@@ -313,16 +322,27 @@ func TestTheObjectStoresBucketCountsIntoTheNodesRecorder(t *testing.T) {
 	if err := openObjects(t.Context(), &boot, out, nil, rec); err != nil {
 		t.Fatalf("open the object store: %v", err)
 	}
+	attempts, requests := map[string]uint64{}, map[string]uint64{}
 	for _, s := range rec.Read() {
-		if s.Name == metrics.ObjectsS3Attempts && s.Attrs["operation"] == "HeadBucket" &&
-			s.Attrs["outcome"] == "answered" {
-			if s.Total != 1 {
-				t.Fatalf("the check at open counted %d answered attempts, want 1", s.Total)
-			}
-			return
+		switch {
+		case s.Name == metrics.ObjectsS3Attempts && s.Attrs["outcome"] == "answered":
+			attempts[s.Attrs["operation"]] += s.Total
+		case s.Name == metrics.ObjectsS3Attempts:
+			t.Errorf("the probe's %s counted an attempt %s; the fake answers every request",
+				s.Attrs["operation"], s.Attrs["outcome"])
+		case s.Name == metrics.ObjectsS3RequestAttempts:
+			requests[s.Attrs["operation"]] += s.Count
 		}
 	}
-	t.Fatalf("the node's recorder holds no answered HeadBucket after the object store opened: %v", rec.Read())
+	want := map[string]uint64{"PutObject": 1, "DeleteObject": 2}
+	if !maps.Equal(attempts, want) {
+		t.Errorf("the node's recorder counted the answered attempts %v after the object store "+
+			"opened, want the probe's %v", attempts, want)
+	}
+	if !maps.Equal(requests, want) {
+		t.Errorf("the node's recorder counted the requests %v after the object store opened, "+
+			"want the probe's %v, one attempt each", requests, want)
+	}
 }
 
 // collectorNode is an engine holding just enough to run the collector's duty

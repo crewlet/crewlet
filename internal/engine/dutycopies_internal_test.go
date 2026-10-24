@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/references"
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
@@ -63,11 +64,11 @@ func everyLog() *stateLog {
 }
 
 // collectorReferences is the collector's references as the engine builds them,
-// from the declared tables over the domains a runtime running a state log
-// offers.
+// from the declared tables over every estate a data node offers
+// ([collectorEstates]).
 func collectorReferences(t *testing.T) collect.References {
 	t.Helper()
-	refs, err := collect.Sources(references.All, objectsRuntime().objectEstates()...)
+	refs, err := collect.Sources(references.All, collectorEstates()...)
 	if err != nil {
 		t.Fatalf("the collector's references: %v", err)
 	}
@@ -112,7 +113,7 @@ func TestADutyDeclinesWhileACopyItDecidesFromIsOutOfService(t *testing.T) {
 			},
 		},
 		"the object collector": {
-			decidesFrom: []string{trackerName, codeName},
+			decidesFrom: []string{trackerName, codeName, artifactsdomain.Domain{}.Name()},
 			turn: func(t *testing.T, e *Engine, claim *countingClaim) {
 				e.collectorTurn(t.Context(), claim.claim,
 					newCollectorDuty(nil, copiesNamedBy(refs), claim.giveBack))
@@ -195,7 +196,7 @@ func TestEveryDutyNamesTheDomainsItDecidesFrom(t *testing.T) {
 	}
 
 	var named []string
-	for _, estate := range objectsRuntime().objectEstates() {
+	for _, estate := range collectorEstates() {
 		named = append(named, estate.Name())
 	}
 	if collector := copiesNamedBy(collectorReferences(t)); !sameNames(collector, named) {
