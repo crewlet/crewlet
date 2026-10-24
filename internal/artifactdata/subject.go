@@ -39,12 +39,19 @@ const (
 	// KindBarrier is the read index's payload-free append, on ONE subject
 	// for the whole domain.
 	KindBarrier ObjectKind = "barrier"
+
+	// KindTrimmed is the trim's record that removes the arbitration anchors
+	// below what the log no longer holds — [statelog.TrimmedKind], ADR-0046
+	// — on one subject per floor, which the subject's id names. The
+	// framework removes the anchors in the transaction that applies it; this
+	// domain writes nothing for it, and has the case that says so.
+	KindTrimmed ObjectKind = statelog.TrimmedKind
 )
 
-// ObjectKinds are the four, and THE ORDER IS LOAD-BEARING: the framework's
+// ObjectKinds are the five, and THE ORDER IS LOAD-BEARING: the framework's
 // conformance suite publishes the first three a domain declares, so a store's
 // write comes first.
-var ObjectKinds = []ObjectKind{KindStore, KindEviction, KindGeneration, KindBarrier}
+var ObjectKinds = []ObjectKind{KindStore, KindEviction, KindGeneration, KindBarrier, KindTrimmed}
 
 // Valid reports whether a kind off the wire is one this build knows.
 func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
@@ -54,9 +61,13 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 //
 // THE STORE IS, although its writes carry none: its schema changes and its
 // purge are arbitrated, and their expectation must be formed against every
-// record on the subject, writes included, so the anchor moves with every one.
-// Only the barrier, on one subject for the whole domain, keeps none.
-func (k ObjectKind) Arbitrated() bool { return k != KindBarrier }
+// record on the subject, writes included, so the anchor moves with every one —
+// which is also why every store a page ever wrote to keeps an anchor until a
+// trimmed record removes it. Only the two framework records keep none: the
+// barrier, on one subject for the whole domain, and the trimmed record, which
+// REMOVES anchors and whose identical copies are each meant to land, so an
+// expectation would refuse every one after the first.
+func (k ObjectKind) Arbitrated() bool { return k != KindBarrier && k != KindTrimmed }
 
 // InstallsGate reports a kind whose unknown version must STOP the applier. A
 // purge is this log's other gate, by its op on an ordinary store subject.
@@ -81,6 +92,13 @@ func GenerationSubject(gen uint32) Subject {
 
 // BarrierSubject is the read index's one subject.
 func BarrierSubject() Subject { return Subject{Kind: KindBarrier} }
+
+// TrimmedSubject names the trimmed record whose floor is floor, in the
+// framework's ONE spelling of it ([statelog.TrimmedSubject]): the framework
+// reads the floor back from the id.
+func TrimmedSubject(floor statelog.Position) Subject {
+	return Subject{Kind: KindTrimmed, ID: statelog.TrimmedSubject(floor).ID}
+}
 
 // String renders the subject's own path.
 func (s Subject) String() string {

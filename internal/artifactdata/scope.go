@@ -146,7 +146,10 @@ func subjectPath(s Subject) string {
 	switch s.Kind {
 	case KindStore:
 		return ScopeTerm{Kind: TermStore, ID: s.ID}.Path()
-	case KindBarrier:
+	case KindBarrier, KindTrimmed:
+		// THE FRAMEWORK'S OWN SCOPE: neither framework record writes a row
+		// of this domain's, so a scope that intersected a store would make
+		// its reads wait behind a record that changed none of them.
 		return statelog.FrameworkScope
 	}
 	return pathDomain
