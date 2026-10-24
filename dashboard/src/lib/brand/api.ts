@@ -14,6 +14,10 @@
  * exactly that: the version stays in the kit's history, and the page offers to
  * review and adopt it.
  *
+ * A FIRST KIT is shared with the company to view, so the version and the
+ * history the Brand page names open for every reader; changing it stays its
+ * owner's, an editor's it is shared with, or an administrator's.
+ *
  * # Every file travels with the version
  *
  * A version names every file it holds, so a save brings each logo and face
@@ -124,10 +128,11 @@ function kitGone(answer: KeyedAnswer): boolean {
   );
 }
 
+/** The version a create or a publish landed (`artifactsapi.publishedAnswer`: `artifact`, `number`). */
 function versionOf(answer: KeyedAnswer): { kit: string; version: number } | null {
   if (answer.kind !== "done") return null;
   const kit = answer.body.artifact;
-  const version = answer.body.version;
+  const version = answer.body.number;
   return typeof kit === "string" && typeof version === "number" ? { kit, version } : null;
 }
 
@@ -176,6 +181,10 @@ async function writeVersion(
             upload: up.upload,
             files: up.files,
             entry: BRAND_ENTRY,
+            // THE COMPANY'S KIT IS EVERY READER'S TO OPEN, as its adopted
+            // brand is everyone's to read: its versions and history are
+            // where the Brand page's version and History lead.
+            shares: [{ audience: { kind: "company" }, role: "viewer" }],
           },
           key: keys.write,
         }

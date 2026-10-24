@@ -168,8 +168,15 @@ export function BrandPage() {
         {
           label: "Version",
           value: String(adoption.kit_version),
-          path: artifactPath(adoption.kit),
-          query: { version: String(adoption.kit_version) },
+          // A LINK ONLY WHERE IT OPENS: the kit an agent drafted may be
+          // shared with nobody, and a reader who cannot see it would land
+          // on Not Found. An administrator opens any artifact.
+          ...(canAdopt
+            ? {
+                path: artifactPath(adoption.kit),
+                query: { version: String(adoption.kit_version) },
+              }
+            : {}),
         },
       ]
     : [];

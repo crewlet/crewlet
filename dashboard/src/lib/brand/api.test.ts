@@ -69,7 +69,7 @@ const intent: Answer = () =>
 test("with no brand adopted, a first kit is made from the files and adopted", async () => {
   const sent = engine([
     [/^POST .*\/artifacts\/uploads$/, intent],
-    [/^POST .*\/artifacts$/, () => json({ artifact: "k-1", version: 1 }, 201)],
+    [/^POST .*\/artifacts$/, () => json({ artifact: "k-1", number: 1 }, 201)],
     [/^POST .*\/brand\/adoptions$/, () => json({}, 200)],
   ]);
   const keys = newBrandSaveKeys();
@@ -82,6 +82,7 @@ test("with no brand adopted, a first kit is made from the files and adopted", as
     title: "FairSplit brand",
     upload: "u-1",
     entry: "brand.json",
+    shares: [{ audience: { kind: "company" }, role: "viewer" }],
   });
   expect(new Headers(create.init.headers).get("Idempotency-Key")).toBe(keys.write);
   // THE INDEX TRAVELS AS THE CANONICAL TEXT a reader of the version reads.
@@ -95,7 +96,7 @@ test("with no brand adopted, a first kit is made from the files and adopted", as
 test("with a brand adopted, a version of its kit is published against the head and adopted", async () => {
   const sent = engine([
     [/^POST .*\/artifacts\/k-1\/uploads$/, intent],
-    [/^POST .*\/artifacts\/k-1\/versions$/, () => json({ artifact: "k-1", version: 8 }, 201)],
+    [/^POST .*\/artifacts\/k-1\/versions$/, () => json({ artifact: "k-1", number: 8 }, 201)],
     [/^POST .*\/brand\/adoptions$/, () => json({}, 202)],
   ]);
   const answer = await saveBrand(save("k-1"), newBrandSaveKeys());
@@ -112,7 +113,7 @@ test("with a brand adopted, a version of its kit is published against the head a
 test("a version that landed and was not adopted says so, with the engine's reason", async () => {
   engine([
     [/^POST .*\/artifacts\/k-1\/uploads$/, intent],
-    [/^POST .*\/artifacts\/k-1\/versions$/, () => json({ artifact: "k-1", version: 8 }, 201)],
+    [/^POST .*\/artifacts\/k-1\/versions$/, () => json({ artifact: "k-1", number: 8 }, 201)],
     [
       /^POST .*\/brand\/adoptions$/,
       () =>
@@ -140,7 +141,7 @@ test("an adopted kit that is gone is replaced by a new kit holding the same file
       () => json({ error: "not_found", message: "Not found." }, 404),
     ],
     [/^POST .*\/artifacts\/uploads$/, intent],
-    [/^POST .*\/artifacts$/, () => json({ artifact: "k-2", version: 1 }, 201)],
+    [/^POST .*\/artifacts$/, () => json({ artifact: "k-2", number: 1 }, 201)],
     [/^POST .*\/brand\/adoptions$/, () => json({}, 200)],
   ]);
   const keys = newBrandSaveKeys();
