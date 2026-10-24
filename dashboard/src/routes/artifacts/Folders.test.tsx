@@ -349,17 +349,63 @@ describe("a folder's page", () => {
 });
 
 describe("Select", () => {
-  test("Select draws a box on every card, and the bar's Move to… is held while a pick may not move", () => {
+  // EACH PICK IS THE ENGINE'S TO DECIDE: a pick the reader may only view is
+  // still sent (a folder's manager may take it to the top level), and one the
+  // engine refuses is named in the move's toast while the rest move.
+  test("Select draws a box on every card, and the bar's Move to… sends every pick, naming what did not move", async () => {
+    contents = contents.map((item) => ({ ...item, folder: Q4 }));
+    answer = () => ({
+      kind: "done",
+      pending: false,
+      body: {
+        results: [
+          { artifact: "a1", outcome: "moved" },
+          {
+            artifact: "a2",
+            outcome: "unauthorized",
+            message: "Moving it needs the “Can edit” role on it.",
+          },
+        ],
+      },
+    });
     mount(<ArtifactFolderPage id={Q4} />, `#/artifacts/folders/${Q4}`);
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Pricing FAQ" }));
     const bar = screen.getByRole("toolbar", { name: "Selection" });
     expect(bar.textContent).toContain("1 selected");
-    expect(
-      within(bar).getByRole("button", { name: "Move to…" }).getAttribute("aria-disabled"),
-    ).not.toBe("true");
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Settlement pulse" }));
     expect(bar.textContent).toContain("2 selected");
+    const move = within(bar).getByRole("button", { name: "Move to…" });
+    expect(move.getAttribute("aria-disabled")).not.toBe("true");
+    fireEvent.click(move);
+    const dialog = await screen.findByRole("dialog", { name: /^Move/ });
+    fireEvent.click(within(dialog).getByRole("option", { name: "Top level" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Move here" }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toMatchObject({
+      method: "POST",
+      path: "/artifacts/folder-moves",
+      body: {
+        items: [
+          { artifact: "a1", folder: "" },
+          { artifact: "a2", folder: "" },
+        ],
+      },
+    });
+    expect(await screen.findByText("Moved 1 of 2 to the top level")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "“Settlement pulse” was not moved. Moving it needs the “Can edit” role on it.",
+      ),
+    ).toBeTruthy();
+  });
+
+  test("the bar's Move to… is held, with its reason, only for a reader without the artifacts app", () => {
+    mount(<ArtifactFolderPage id={Q4} />, `#/artifacts/folders/${Q4}`);
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    authoring = false;
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Pricing FAQ" }));
+    const bar = screen.getByRole("toolbar", { name: "Selection" });
     expect(
       within(bar).getByRole("button", { name: "Move to…" }).getAttribute("aria-disabled"),
     ).toBe("true");

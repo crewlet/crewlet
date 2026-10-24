@@ -66,7 +66,6 @@ import {
   TRASH_KEPT,
   purgeAt,
   purgeSentence,
-  roleIncludes,
 } from "~/lib/artifacts/words.ts";
 import type {
   ArtifactKind,
@@ -462,25 +461,16 @@ export function GalleryToolbar({
 }
 
 /**
- * Why a bulk move of `picked` is held, or undefined when every one may move:
- * the artifacts app, then the "Can edit" role on each. A move only some of
- * the picks allow is held with the count, never applied to the part it can be
- * applied to without saying so.
- */
-export function bulkMoveHold(
-  picked: readonly ArtifactListItem[],
-  author: WriteAccess,
-): string | undefined {
-  if (!author.can) return author.reason;
-  const movable = picked.filter((item) => roleIncludes(item.role, "editor")).length;
-  if (movable === picked.length) return undefined;
-  return `You can move ${movable} of ${picked.length}: moving needs the “${ROLE_WORDS.editor}” role on each artifact. Clear the others first.`;
-}
-
-/**
  * The bar over a listing while its reader picks: the count, Move to… and
  * Clear. `picked` are the rows picked that are drawn; `onMove` opens the
  * Move dialog for them.
+ *
+ * MOVE TO… IS HELD ONLY BY THE ARTIFACTS APP, never by a pick's role. The
+ * engine decides each artifact on its own: an editor files it anywhere they
+ * may file into, and a folder's manager takes anything in it they can read
+ * to the top level, though they could not edit it, which no role on a row
+ * says. So the whole selection is sent, every pick the engine refuses stays
+ * where it was, and the move's toast names it and why (`useMoveArtifacts`).
  */
 export function GallerySelectionBar({
   selection,
@@ -495,7 +485,7 @@ export function GallerySelectionBar({
   onMove: () => void;
   returnFocusRef: RefObject<HTMLButtonElement | null>;
 }) {
-  const hold = bulkMoveHold(picked, author);
+  const hold = author.can ? undefined : author.reason;
   // THE BINDINGS FOLLOW THE BAR: `m` moves what is picked while the bar is
   // up and the move is allowed, and nothing otherwise.
   useKeymap({
