@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/jsoncarry"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -26,7 +27,8 @@ import (
 //   - 1: every shape the base format has.
 //   - 2: the folder tree and the adopted brand: the `folder` and `brand`
 //     subject kinds and every op on them, an artifact's `move`, the `folder`
-//     a create files into, and the `brand` stylesheet a version pins.
+//     a create files into, a create of the `brand` artifact kind (a brand
+//     kit), and the `brand` stylesheet a version pins.
 const RecordVersion = 2
 
 // baseRecordVersion is version 1, the base format. The barrier, a reanchor's
@@ -50,11 +52,20 @@ const GateRecordVersion = 1
 // the end of its dispatch. An op a new kind carries (a folder's `rename`, the
 // brand's `adopt`) needs no row of its own: the kind's row already stamps
 // every record on that subject.
+//
+// A NEW ARTIFACT KIND IS A VALUE TOO, at a create's `mutation.kind`: an older
+// build's create apply refuses a kind it does not serve, so a node at the old
+// version would refuse the very create a newer one applies, and the fleet
+// would diverge. Its row stamps the create, which the older build then
+// retains. Later records on that artifact carry no kind, so the create's row
+// is the one row the kind needs.
 var versionedFields = statelog.RecordFields{
 	{Name: "Subject.Kind folder", Since: 2, Path: []string{"subject", "k"}, Equals: string(KindFolder)},
 	{Name: "Subject.Kind brand", Since: 2, Path: []string{"subject", "k"}, Equals: string(KindBrand)},
 	{Name: "RecordEnvelope.Op move", Since: 2, Path: []string{"op"}, Equals: string(OpMove)},
 	{Name: "CreatePayload.Folder", Since: 2, Op: string(OpCreate), Path: []string{"mutation", "folder"}},
+	{Name: "CreatePayload.Kind brand", Since: 2, Op: string(OpCreate), Path: []string{"mutation", "kind"},
+		Equals: string(artifacts.KindBrand)},
 	{Name: "VersionPayload.Brand", Since: 2, Path: []string{"mutation", "version", "brand"}},
 }
 
