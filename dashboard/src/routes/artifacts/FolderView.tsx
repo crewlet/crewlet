@@ -28,18 +28,26 @@
 import { useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArtifactAccessLabel,
+  ArtifactNameCell,
   Button,
   EmptyState,
   FolderTile,
   LivePreviewBudgetProvider,
+  PrincipalAvatar,
   Section,
+  TableEntityCell,
+  describeFolderContents,
+  type DataGridColumn,
 } from "@crewlethq/ui";
 import { FolderGlyph, FolderOpenGlyph, FolderPlusGlyph } from "@crewlethq/icons/glyphs";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { useKeymap } from "~/app/keymap.ts";
 import { artifactFolderPath, artifactFoldersPath } from "~/app/routes.ts";
 import { QueryState } from "~/components/common.tsx";
+import { ARTIFACT_FOLDER_MAX_DEPTH } from "~/contract/artifacts.ts";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { useNow } from "~/lib/clock.ts";
+import { relTime } from "~/lib/format.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
@@ -107,6 +115,100 @@ export function FolderTiles({
         );
       })}
     </ul>
+  );
+}
+
+/**
+ * The rows of a place's folders, for a reader who reads lists: the folder
+ * glyph and its name over what is inside (`ArtifactNameCell kind="folder"`),
+ * who sees it, its owner and when it last changed, then its menu, each row a
+ * link to the folder's page. A folder row opens; it never expands in place.
+ */
+export function FolderRows({
+  folders,
+  index,
+  label,
+}: {
+  folders: readonly ArtifactFolderItem[];
+  index: FolderIndex;
+  label: string;
+}) {
+  const words = useVisibilityWords();
+  const people = useArtifactPeople();
+  const viewer = useViewer();
+  const now = useNow();
+  const columns: DataGridColumn<ArtifactFolderItem>[] = [
+    {
+      key: "name",
+      header: "Name",
+      floor: "14rem",
+      phoneLead: true,
+      cell: (folder) => (
+        <ArtifactNameCell
+          kind="folder"
+          title={folder.name}
+          detail={describeFolderContents({ artifacts: folder.artifacts, folders: folder.folders })}
+        />
+      ),
+    },
+    {
+      key: "access",
+      header: "Access",
+      width: "9rem",
+      drop: 3,
+      phoneOmit: true,
+      cell: (folder) => {
+        const said = words(folder);
+        return <ArtifactAccessLabel access={said.access} label={said.short} title={said.long} />;
+      },
+    },
+    {
+      key: "owner",
+      header: "Owner",
+      width: "11rem",
+      drop: 2,
+      phoneOmit: true,
+      cell: (folder) => (
+        <TableEntityCell
+          name={
+            viewer.owner !== "" && folder.owner === viewer.owner
+              ? "You"
+              : people.seatName(folder.owner)
+          }
+          badge={<PrincipalAvatar principal={people.seatPrincipal(folder.owner)} size="xs" />}
+        />
+      ),
+    },
+    {
+      key: "updated",
+      header: "Edited",
+      width: "7.5rem",
+      cell: (folder) => (
+        <time className="artifacts-when" dateTime={folder.updated_at} title={folder.updated_at}>
+          {relTime(folder.updated_at, now)}
+        </time>
+      ),
+    },
+    {
+      key: "actions",
+      header: "",
+      action: true,
+      shrink: true,
+      cell: (folder) => <FolderMenu folder={folder} index={index} />,
+    },
+  ];
+  return (
+    <div className="artifacts-list" role="group" aria-label={label}>
+      <DataGrid
+        rows={[...folders]}
+        columns={columns}
+        rowKey={(folder) => folder.id}
+        rowHref={(folder) => href(artifactFolderPath(folder.id))}
+        serverSorted
+        name="artifact-folders"
+        phoneRows="compact"
+      />
+    </div>
   );
 }
 
@@ -207,7 +309,9 @@ export function FolderView({
         <EmptyState
           icon={<FolderGlyph size="xl" />}
           title="No folders yet"
-          description="Folders keep the company's artifacts in order. Moving an artifact into a folder never changes who can open it."
+          // THE NESTING BOUND A NEW TREE IS GIVEN, said before the reader
+          // plans one: a folder records its own bound when it is made.
+          description={`Folders keep the company's artifacts in order, nested up to ${ARTIFACT_FOLDER_MAX_DEPTH} deep. Moving an artifact into a folder never changes who can open it.`}
           action={
             folderHeld === null ? (
               <Button
@@ -300,11 +404,21 @@ export function FolderView({
       />
       {tiles.length > 0 && (
         <Section title="Folders" className="artifacts-group">
-          <FolderTiles
-            folders={tiles}
-            index={index}
-            label={folder ? `Folders in ${name}` : "Folders"}
-          />
+          {/* THE READER'S SHAPE, for folders as for artifacts: tiles in the
+              grid, rows in the list. */}
+          {shape === "grid" ? (
+            <FolderTiles
+              folders={tiles}
+              index={index}
+              label={folder ? `Folders in ${name}` : "Folders"}
+            />
+          ) : (
+            <FolderRows
+              folders={tiles}
+              index={index}
+              label={folder ? `Folders in ${name}` : "Folders"}
+            />
+          )}
         </Section>
       )}
       {listing.first.loading && <GallerySkeleton shape={shape} />}
@@ -317,12 +431,12 @@ export function FolderView({
           empty()
         ) : listing.items.length > 0 ? (
           <Section
+            // THE TREE'S COUNT IS OF EVERYTHING at the top level, so it is
+            // said only while the listing is not cut by a type or whose.
             title={
-              searching
+              searching || folder
                 ? "Artifacts"
-                : folder
-                  ? "Artifacts"
-                  : `Not in a folder${topLevel > 0 ? ` · ${topLevel.toLocaleString()}` : ""}`
+                : `Not in a folder${topLevel > 0 && !filtered ? ` · ${topLevel.toLocaleString()}` : ""}`
             }
             className="artifacts-group"
           >

@@ -195,6 +195,18 @@ describe("the Folders section", () => {
     expect(asked.at(-1)).not.toHaveProperty("folder");
   });
 
+  test("in the list shape the folders are rows, each its contents under its name and a link to its page", () => {
+    localStorage.setItem(STORAGE_KEYS.artifactsShape, "list");
+    mount(<ArtifactFolders />, "#/artifacts/folders");
+    const rows = screen.getByRole("group", { name: "Folders" });
+    const marketing = within(rows)
+      .getByText("Marketing")
+      .closest(".crewlet-data-grid__row") as HTMLElement;
+    expect(marketing.textContent).toContain("12 artifacts · 1 folder");
+    expect(marketing.textContent).toContain("Everyone");
+    expect(screen.queryByRole("list", { name: "Folders" })).toBeNull();
+  });
+
   test("with no folders and nothing at the top level it says so, and offers New folder", () => {
     tree = [];
     contents = [];
