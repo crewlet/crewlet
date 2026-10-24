@@ -198,6 +198,17 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, c applyContext, i
 	if len(carried) > 0 {
 		return no(RefusedCarriedObjectGone, HistorySummary{Paths: carried})
 	}
+	if p.Folder != "" {
+		// THE FOLDER WAS LIVE WHEN THE WRITER DECIDED, on another subject:
+		// a removal that landed since files nothing into it.
+		live, liveErr := folderLive(ctx, tx, p.Folder)
+		if liveErr != nil {
+			return 0, liveErr
+		}
+		if !live {
+			return no(RefusedFolderGone, HistorySummary{ToFolder: p.Folder})
+		}
+	}
 	plan, refusal, err := planObjects(ctx, tx, id, v.Manifest.Files, nil)
 	if err != nil {
 		return 0, err
@@ -232,12 +243,12 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, c applyContext, i
 			(id, label, kind, title, description, icon, owner, owner_kind,
 			 source_key, head_number, contract, capabilities, status,
 			 access_epoch, bytes_held, search_text, created_by, created_by_kind,
-			 created_at, updated_by, updated_by_kind, updated_at, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 created_at, updated_by, updated_by_kind, updated_at, version, folder_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, parsed.Label().String(), string(p.Kind), p.Title, p.Description, p.Icon,
 		p.Owner, string(p.OwnerKind), p.SourceKey, v.Contract, capabilities,
 		string(StatusLive), plan.added, v.SearchText, actor.Name, string(actor.Kind),
-		c.at(), actor.Name, string(actor.Kind), c.at(), c.packed); err != nil {
+		c.at(), actor.Name, string(actor.Kind), c.at(), c.packed, p.Folder); err != nil {
 		return 0, fmt.Errorf("artifactsdomain: create artifact %s at %s: %w", id, c.position, err)
 	}
 	rows++

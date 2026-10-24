@@ -371,6 +371,12 @@ export function historyWords(
         return entry.work_item ? `linked it to ${entry.work_item}` : "linked it to a work item";
       case "read_elevated":
         return `opened version ${number || "?"} as an administrator`;
+      case "move":
+        // THE ROW NAMES FOLDERS BY ID ALONE, so a reader is never told the
+        // name of a folder they cannot see: the sentence says where it went,
+        // never which folder.
+        if (!s.to_folder) return "moved it to the top level";
+        return s.from_folder ? "moved it to another folder" : "filed it in a folder";
       default:
         return entry.op.replaceAll("_", " ");
     }
@@ -403,6 +409,7 @@ const HISTORY_OP_TAGS: Readonly<Record<ArtifactHistoryOp, string>> = {
   asset_remove: "remove asset",
   link_work_item: "link work item",
   read_elevated: "admin read",
+  move: "move",
 };
 
 /** A history op as the audit's What column says it: "admin read", "restore version". */
@@ -436,6 +443,7 @@ const HISTORY_REFUSAL_WORDS: Readonly<Record<string, string>> = {
   label_taken: "another version holds that label",
   version_not_found: "the version does not exist",
   source_taken: "another artifact holds that source",
+  folder_gone: "the folder was removed first",
 };
 
 /** A refused history row's reason in words: "a newer version was published first". */
@@ -457,6 +465,7 @@ function stripPast(said: string): string {
     ["stopped", "stop"],
     ["gave", "give"],
     ["moved", "move"],
+    ["filed", "file"],
     ["began", "begin"],
     ["added", "add"],
     ["removed", "remove"],

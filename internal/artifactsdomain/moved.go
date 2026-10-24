@@ -46,6 +46,14 @@ const (
 	// MoveTransfer is ownership moved.
 	MoveTransfer MoveKind = "transfer"
 
+	// MoveFolder is the artifact filed in another folder. Nothing about who
+	// may open it changed (a folder grants nothing), so it narrows nothing;
+	// it is told so an open page names the folder it is in now. A folder's
+	// removal, which re-files everything it held, tells nothing per
+	// artifact: an unbounded folder would be as many movements in one
+	// batch, for a label every page reads again on its own.
+	MoveFolder MoveKind = "folder"
+
 	// MoveReset names NO artifact: every artifact on this node may have
 	// moved with no committed record to say which, because a batch retained
 	// a record this build cannot read, or an adoption replaced the whole
@@ -56,7 +64,7 @@ const (
 // MoveKinds are every kind of movement.
 var MoveKinds = []MoveKind{
 	MoveVersion, MoveMeta, MoveShare, MoveAsset, MoveTrash, MoveRestore, MovePurge,
-	MoveTransfer, MoveReset,
+	MoveTransfer, MoveFolder, MoveReset,
 }
 
 // Moved is one artifact's movement in a committed batch.
