@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/brandformat"
 	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
@@ -137,6 +138,21 @@ func newCanvasCache(objects Objects) *formatCache[canvasformat.Canvas] {
 				weight = e.Object.Size
 			}
 			return canvas, weight, err
+		})
+}
+
+// newBrandCache reads brand kits through the brand format, each file it names
+// held to its asset rule as at publish.
+func newBrandCache(objects Objects) *formatCache[brandformat.Brand] {
+	return newFormatCache(objects, "brand format", brandformat.ErrRefused,
+		func(artifactsdomain.Version) string { return brandformat.EntryPath },
+		func(src manifestSource, v artifactsdomain.Version) (brandformat.Brand, int64, error) {
+			b, err := brandformat.Read(src)
+			var weight int64
+			if e, ok := manifest.EntryAt(v.Manifest, brandformat.EntryPath); ok {
+				weight = e.Object.Size
+			}
+			return b, weight, err
 		})
 }
 

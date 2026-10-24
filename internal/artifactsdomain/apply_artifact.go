@@ -921,20 +921,24 @@ func writeVersion(ctx context.Context, tx *sql.Tx, c applyContext, id string,
 		forced = 1
 	}
 	versionID := v.VersionID
-	if _, err := uuid.Parse(versionID); err != nil {
+	if _, bad := uuid.Parse(versionID); bad != nil {
 		versionID = ""
+	}
+	brand, err := pinnedBrand(ctx, tx, v.Brand)
+	if err != nil {
+		return 0, err
 	}
 	actor := c.record.actor()
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO artifact_versions
 			(artifact_id, number, version_id, base_number, restored_from, forced,
 			 label, entry, contract, capabilities, files, bytes, manifest, author,
-			 author_kind, created_at, position)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 author_kind, created_at, position, brand)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, v.Number, versionID, v.Base, v.RestoredFrom, forced, v.Label,
 		v.Manifest.Entry, v.Contract, capabilities, len(v.Manifest.Files),
 		manifest.Bytes(v.Manifest), encoded, actor.Name, string(actor.Kind), c.at(),
-		c.packed); err != nil {
+		c.packed, brand); err != nil {
 		return 0, fmt.Errorf("artifactsdomain: write %s version %d: %w", id, v.Number, err)
 	}
 	return 1, nil

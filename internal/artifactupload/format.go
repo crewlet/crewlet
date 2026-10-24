@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/brandformat"
 	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
 	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
@@ -70,6 +71,17 @@ func (r *run) checkFormat(ctx context.Context, m artifacts.Manifest) error {
 		return nil
 	case artifacts.FormatDesign:
 		return r.checkCanvas(versionSource{ctx: ctx, run: r, m: m})
+	case artifacts.FormatBrand:
+		kit, err := brandformat.Read(versionSource{ctx: ctx, run: r, m: m})
+		var refused *brandformat.Refused
+		if errors.As(err, &refused) {
+			return brandRefusal(refused)
+		}
+		if err != nil {
+			return err
+		}
+		r.formatted = kit
+		return nil
 	}
 	return fmt.Errorf("artifactupload: a %s artifact's format %q is not one this pipeline "+
 		"validates", r.kind, spec.Format)
@@ -81,6 +93,17 @@ func slideRefusal(refused *slideformat.Refused) error {
 	out := &lint.Refusal{Findings: make([]lint.Finding, len(refused.Findings))}
 	for i, f := range refused.Findings {
 		out.Findings[i] = lint.Finding{Path: f.Path, Line: f.Line, Code: lint.CodeSlideFormat,
+			Message: string(f.Rule) + ": " + f.Message}
+	}
+	return out
+}
+
+// brandRefusal is a kit's refusal in the linter's shape, for the reason a
+// deck's is: each finding on its own file, at its line where it has one.
+func brandRefusal(refused *brandformat.Refused) error {
+	out := &lint.Refusal{Findings: make([]lint.Finding, len(refused.Findings))}
+	for i, f := range refused.Findings {
+		out.Findings[i] = lint.Finding{Path: f.Path, Line: f.Line, Code: lint.CodeBrandFormat,
 			Message: string(f.Rule) + ": " + f.Message}
 	}
 	return out

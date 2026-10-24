@@ -56,11 +56,11 @@ func ReadKit(src Source) (Kit, error) {
 	essence, ok := src.Essence(EntryPath)
 	switch {
 	case !ok:
-		r.bad(EntryPath, 0, RuleIndex, "the version holds no %s: a brand kit's index is %s at its root",
+		r.bad(0, RuleIndex, "the version holds no %s: a brand kit's index is %s at its root",
 			EntryPath, EntryPath)
 		return Kit{}, r.refused()
 	case essence != "application/json":
-		r.bad(EntryPath, 0, RuleIndex, "%s is %s, and the index is JSON", EntryPath, essence)
+		r.bad(0, RuleIndex, "%s is %s, and the index is JSON", EntryPath, essence)
 		return Kit{}, r.refused()
 	}
 	raw, err := src.Read(EntryPath)
@@ -123,14 +123,15 @@ type reader struct {
 	lines map[string]int
 }
 
-func (r *reader) bad(path string, line int, rule Rule, format string, args ...any) {
-	r.found = append(r.found, Finding{Path: path, Line: line, Rule: rule, Message: fmt.Sprintf(format, args...)})
+// bad reports a finding about the index itself.
+func (r *reader) bad(line int, rule Rule, format string, args ...any) {
+	r.found = append(r.found, Finding{Path: EntryPath, Line: line, Rule: rule, Message: fmt.Sprintf(format, args...)})
 }
 
 // field reports a finding about one field of the index, at the line the
 // field was written on.
 func (r *reader) field(name string, rule Rule, format string, args ...any) {
-	r.bad(EntryPath, r.lines[name], rule, "%s: %s", name, fmt.Sprintf(format, args...))
+	r.bad(r.lines[name], rule, "%s: %s", name, fmt.Sprintf(format, args...))
 }
 
 func (r *reader) refused() error { return &Refused{Findings: r.found} }
@@ -169,21 +170,21 @@ var (
 func (r *reader) decode(raw []byte) (Brand, bool) {
 	switch {
 	case len(raw) > MaxIndexBytes:
-		r.bad(EntryPath, 0, RuleBound, "the index is %d bytes and may be at most %d", len(raw), MaxIndexBytes)
+		r.bad(0, RuleBound, "the index is %d bytes and may be at most %d", len(raw), MaxIndexBytes)
 		return Brand{}, false
 	case !utf8.Valid(raw):
-		r.bad(EntryPath, 0, RuleIndex, "the index is not UTF-8 text")
+		r.bad(0, RuleIndex, "the index is not UTF-8 text")
 		return Brand{}, false
 	}
 	r.lines = map[string]int{}
 	w := &walker{r: r, raw: raw, dec: json.NewDecoder(bytes.NewReader(raw))}
 	w.dec.UseNumber()
 	if err := w.value(indexShape, ""); err != nil {
-		r.bad(EntryPath, w.line(), RuleIndex, "the index is not JSON: %v", err)
+		r.bad(w.line(), RuleIndex, "the index is not JSON: %v", err)
 		return Brand{}, false
 	}
 	if _, err := w.dec.Token(); !errors.Is(err, io.EOF) {
-		r.bad(EntryPath, w.line(), RuleIndex, "the index holds more after its object: one object is the whole file")
+		r.bad(w.line(), RuleIndex, "the index holds more after its object: one object is the whole file")
 		return Brand{}, false
 	}
 	if len(r.found) > 0 {
@@ -193,10 +194,10 @@ func (r *reader) decode(raw []byte) (Brand, bool) {
 	if err := json.Unmarshal(raw, &b); err != nil {
 		var typed *json.UnmarshalTypeError
 		if errors.As(err, &typed) {
-			r.bad(EntryPath, lineAt(raw, typed.Offset), RuleIndex, "%s is a JSON %s, and the format "+
+			r.bad(lineAt(raw, typed.Offset), RuleIndex, "%s is a JSON %s, and the format "+
 				"reads %s there", typed.Field, typed.Value, typed.Type)
 		} else {
-			r.bad(EntryPath, 0, RuleIndex, "the index cannot be read: %v", err)
+			r.bad(0, RuleIndex, "the index cannot be read: %v", err)
 		}
 		return Brand{}, false
 	}
@@ -232,14 +233,14 @@ func (w *walker) value(s *shape, path string) error {
 	switch d {
 	case '{':
 		if s != nil && s.fields == nil {
-			w.r.bad(EntryPath, w.line(), RuleIndex, "%s is an object, and the format reads a value there", path)
+			w.r.bad(w.line(), RuleIndex, "%s is an object, and the format reads a value there", path)
 			s = nil
 		}
 		seen := map[string]bool{}
 		for w.dec.More() {
-			keyTok, err := w.dec.Token()
-			if err != nil {
-				return err
+			keyTok, kerr := w.dec.Token()
+			if kerr != nil {
+				return kerr
 			}
 			key, _ := keyTok.(string)
 			at := w.line()
@@ -250,16 +251,16 @@ func (w *walker) value(s *shape, path string) error {
 			var next *shape
 			switch {
 			case seen[key]:
-				w.r.bad(EntryPath, at, RuleIndex, "%s is written twice: write each key once", name)
+				w.r.bad(at, RuleIndex, "%s is written twice: write each key once", name)
 			case s != nil && s.fields[key] == nil:
-				w.r.bad(EntryPath, at, RuleIndex, "%s is not a key the brand format carries%s", name, known(s))
+				w.r.bad(at, RuleIndex, "%s is not a key the brand format carries%s", name, known(s))
 			case s != nil:
 				next = s.fields[key]
 			}
 			seen[key] = true
 			w.r.lines[name] = at
-			if err := w.value(next, name); err != nil {
-				return err
+			if verr := w.value(next, name); verr != nil {
+				return verr
 			}
 		}
 	case '[':
@@ -268,8 +269,8 @@ func (w *walker) value(s *shape, path string) error {
 			elem = s.elem
 		}
 		for i := 0; w.dec.More(); i++ {
-			if err := w.value(elem, path+"["+strconv.Itoa(i)+"]"); err != nil {
-				return err
+			if verr := w.value(elem, path+"["+strconv.Itoa(i)+"]"); verr != nil {
+				return verr
 			}
 		}
 	}
@@ -511,6 +512,28 @@ func (r *reader) files(src Source, b Brand) ([]KitFile, error) {
 				file.Slot = FontFileSlot(face.slot, i)
 				out = append(out, file)
 			}
+		}
+	}
+	// A KIT IS CLOSED: its index and the files the index names, nothing else.
+	// A file nothing names is one no brand surface shows and no adoption
+	// copies, so it is refused rather than kept as a stowaway the version
+	// carries from publish to publish.
+	named := map[string]bool{EntryPath: true}
+	for _, p := range []string{b.Logos.Primary, b.Logos.OnDark, b.Logos.Mark} {
+		named[p] = true
+	}
+	for _, face := range []Face{b.Type.Heading, b.Type.Body} {
+		for _, f := range face.Files {
+			named[f.Path] = true
+		}
+	}
+	paths := slices.Clone(src.Paths())
+	slices.Sort(paths)
+	for _, p := range paths {
+		if !named[p] {
+			r.found = append(r.found, Finding{Path: p, Rule: RuleReference, Message: "brand.json names " +
+				"no logo or face at this path, and a kit holds its index and the files it names " +
+				"alone: remove it, or name it in brand.json"})
 		}
 	}
 	return out, nil
