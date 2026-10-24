@@ -112,6 +112,7 @@ func TestAPNGOutsideItsRulesIsRefused(t *testing.T) {
 		"after iend":     {append(bytes.Clone(honest), 0), "after its IEND"},
 		"after stream":   {pngWithTail(4, 4, bytes.Repeat(row, 4), []byte("hidden")), "after its compressed stream"},
 		"large profile":  {pngOf(t, 8, 8, chunk("iCCP", make([]byte, 64<<10+1))), "sRGB profile"},
+		"strip":          {pngOf(t, 90, 10), "between 1:8 and 8:1"},
 		"not png":        {[]byte("GIF89a"), "not a PNG"},
 		"too many bytes": {make([]byte, brandformat.MaxImageBytes+1), "at most"},
 	} {
@@ -196,6 +197,7 @@ func TestAWebPOutsideItsRulesIsRefused(t *testing.T) {
 		"not riff":    {[]byte("RIFX....WEBP"), "not a WebP"},
 		"alpha alone": {riff([2]string{"ALPH", "x"}, [2]string{"VP8L", vp8l(8, 8)}), "extended header"},
 		"partition":   {riff([2]string{"VP8 ", "\x10\x02\x00\x9d\x01\x2a\x50\x00\x28\x00"}), "first partition"},
+		"strip":       {riff([2]string{"VP8L", vp8l(1, 9)}), "between 1:8 and 8:1"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

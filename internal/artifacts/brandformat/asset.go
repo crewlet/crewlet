@@ -71,11 +71,17 @@ func inspect(path, essence string, data []byte) (asset, []Finding) {
 		if err != nil {
 			return refuse("%v", err)
 		}
+		if msg := rasterShape("PNG", w, h); msg != "" {
+			return refuse("%s", msg)
+		}
 		return asset{out: out, width: float64(w), height: float64(h)}, nil
 	case "image/webp":
 		out, w, h, err := sanitizeWebP(data)
 		if err != nil {
 			return refuse("%v", err)
+		}
+		if msg := rasterShape("WebP", w, h); msg != "" {
+			return refuse("%s", msg)
 		}
 		return asset{out: out, width: float64(w), height: float64(h)}, nil
 	case fontEssence:
@@ -85,6 +91,18 @@ func inspect(path, essence string, data []byte) (asset, []Finding) {
 		return asset{out: data}, nil
 	}
 	return refuse("%s is not a logo (SVG, PNG or WebP) or a face (WOFF2)", essence)
+}
+
+// rasterShape is why a raster logo of w by h pixels is not a logo's shape, or
+// "" when it is: between 1:8 and 8:1, the bound a drawing's viewBox is held to
+// ([svgsafe.MinAspect], [svgsafe.MaxAspect]), so a 4096 by 1 strip is no more
+// a logo as a PNG than as an SVG.
+func rasterShape(format string, w, h int) string {
+	if aspect := float64(w) / float64(h); aspect < svgsafe.MinAspect || aspect > svgsafe.MaxAspect {
+		return fmt.Sprintf("the %s is %dx%d, %.2f times as wide as it is tall, and a logo is between "+
+			"1:8 and 8:1: crop it to the logo", format, w, h, aspect)
+	}
+	return ""
 }
 
 // ---- what the brand serves ------------------------------------------------ //
