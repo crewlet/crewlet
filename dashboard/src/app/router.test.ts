@@ -229,9 +229,17 @@ describe("the navigation grammar", () => {
     // THE COMPANY'S FIRST ROW IS "Principles", the same name in the sidebar,
     // the trail and the palette, which finds it by what the page holds.
     expect(workspaceRow("company")?.label).toBe("Principles");
-    expect(DESTINATIONS.find((d) => d.key === "company")?.keywords).toEqual(
-      expect.arrayContaining(["mission", "vision", "policies", "charter", "timezone"]),
+    const words = (key: string) => DESTINATIONS.find((d) => d.key === key)?.keywords ?? [];
+    expect(words("company")).toEqual(
+      expect.arrayContaining(["mission", "vision", "policies", "charter"]),
     );
+    // WHAT THE PAGE NO LONGER HOLDS is found where it lives: the company's
+    // name on the Org chart, whose company node renames it, and its clock in
+    // the company document.
+    expect(words("company")).not.toContain("company name");
+    expect(words("company")).not.toContain("timezone");
+    expect(words("org")).toContain("company name");
+    expect(words("settings-config")).toContain("timezone");
     // ONE ROW FOR THE TWO PAGES IT REPLACED, and their addresses gone with them.
     expect(DESTINATIONS.some((d) => d.label === "Overview" || d.label === "Policies")).toBe(false);
   });

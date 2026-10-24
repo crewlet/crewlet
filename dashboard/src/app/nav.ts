@@ -470,12 +470,13 @@ export const WORKSPACES: WorkspaceRow[] = [
     ],
   },
   {
-    // THE COMPANY'S PRINCIPLES: who it is (its name, mission, vision and
-    // clock) and the standing policies every agent reads on every turn, in the
-    // order an agent reads them, which every signed-in reader reads (the
-    // charter is the org projection's). The Company landing: `#/company`
-    // opens it too. The caps the engine holds a turn to are engine settings,
-    // and live once, in Settings › Limits.
+    // THE COMPANY'S PRINCIPLES: its mission, its vision and the standing
+    // policies every agent reads on every turn, in the order an agent reads
+    // them, which every signed-in reader reads (the charter is the org
+    // projection's). Its name is the Org chart's, renamed on the company's
+    // own node, and its clock is the company document's. The Company
+    // landing: `#/company` opens it too. The caps the engine holds a turn to
+    // are engine settings, and live once, in Settings › Limits.
     key: "company",
     label: "Principles",
     icon: "building-complex",
@@ -484,16 +485,7 @@ export const WORKSPACES: WorkspaceRow[] = [
     // too: the longest prefix decides, and every other Company row is longer.
     owns: ["company"],
     hint: "Who the company is and the policies every agent reads on every turn",
-    keywords: [
-      "principles",
-      "mission",
-      "vision",
-      "policies",
-      "charter",
-      "values",
-      "timezone",
-      "company name",
-    ],
+    keywords: ["principles", "mission", "vision", "policies", "charter", "values"],
     chord: "c",
     place: "company",
     renderer: "none",
@@ -505,7 +497,7 @@ export const WORKSPACES: WorkspaceRow[] = [
     icon: "network",
     path: ["company", "org"],
     hint: "The org chart and every seat on it",
-    keywords: ["agents", "seats", "hierarchy", "reporting lines"],
+    keywords: ["agents", "seats", "hierarchy", "reporting lines", "company name"],
     chord: "a",
     place: "company",
     renderer: "tabs",
@@ -969,6 +961,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         icon: "code",
         path: ["settings", "config"],
         hint: "The active company revision, its history and its diffs",
+        keywords: ["company document", "timezone"],
         group: "Engine",
         grants: ["admin"],
       },
