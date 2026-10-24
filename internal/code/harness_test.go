@@ -100,6 +100,29 @@ type node struct {
 	applied func(seq uint64, rows int)
 }
 
+// harnessRoom is what a case may write to the code log with ordinary records:
+// the 64 MiB the harness's ceiling was before a gate reserve shared it. The
+// page-budget case — twenty pushes of the longest refs — writes 7.6 MB
+// (measured), past the 7 MiB a 64 MiB ceiling leaves beside the reserve.
+const harnessRoom = 64 << 20
+
+// harnessLogBytes is the smallest ceiling that leaves ordinary records room
+// bytes beside the code log's GATE RESERVE (statelog.ReservationOf): the code
+// log claims identity, so the top of its ceiling — the larger of a sixteenth
+// of it and seven of its largest appends and a mebibyte, 57 MiB for a log
+// whose largest append is 8 MiB — is kept for the records that install or
+// lift a gate, and ordinary writes are refused `log_full` short of it. The
+// fixed point of ceiling = room + reserve(ceiling), decided by the reserve's
+// own arithmetic rather than a figure written here.
+func harnessLogBytes(room uint64) uint64 {
+	r := statelog.ReservationOf(code.Domain{})
+	ceiling := room
+	for r.Ordinary(ceiling) < room {
+		ceiling = room + r.Bytes(ceiling)
+	}
+	return ceiling
+}
+
 // openLog provisions the code log on an embedded broker and opens it.
 func openLog(t testing.TB) *js.DomainLog {
 	t.Helper()
@@ -117,7 +140,7 @@ func openLog(t testing.TB) *js.DomainLog {
 	// under test: an embedded broker in a temporary directory refuses to
 	// reserve the shipped one.
 	if err := q.EnsureDomainStream(t.Context(), js.DomainStream{
-		Name: spec.Name, Subjects: spec.Subjects, MaxBytes: 64 << 20,
+		Name: spec.Name, Subjects: spec.Subjects, MaxBytes: int64(harnessLogBytes(harnessRoom)),
 		MaxMessageBytes: spec.MaxAppendBytes(), Duplicates: spec.Duplicates,
 	}); err != nil {
 		t.Fatalf("provision the log: %v", err)
