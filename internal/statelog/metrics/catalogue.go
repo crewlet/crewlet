@@ -625,7 +625,7 @@ func Catalogue() []Instrument {
 			Name: ObjectsS3Attempts, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"operation", "outcome"},
 			Shows: "Every attempt this node's S3 client sent its bucket, by S3 " +
-				"`operation` (the API's own name: `HeadBucket`, `HeadObject`, " +
+				"`operation` (the API's own name: `HeadObject`, " +
 				"`GetObject`, `PutObject`, `CreateMultipartUpload`, " +
 				"`UploadPart`, `CompleteMultipartUpload`, " +
 				"`AbortMultipartUpload`, `DeleteObject`, `DeleteObjects`, " +

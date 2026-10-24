@@ -337,6 +337,43 @@ func TestEveryOperationTheBackendSendsIsALabel(t *testing.T) {
 	}
 }
 
+// THE REFERENCE NAMES EXACTLY THE OPERATIONS THE BACKEND LABELS. The
+// attempts counter's catalogue entry lists the `operation` values an operator
+// will meet, and it is the only place that list is published (it renders into
+// docs/reference/metrics.md), so it is held to [s3obj.Operations] in both
+// directions: a name the backend no longer sends is a request the reference
+// documents and no dashboard will ever see — the list kept `HeadBucket` for
+// as long as nothing compared the two — and one it does not name is a series
+// an operator cannot look up.
+func TestTheReferenceNamesExactlyTheOperations(t *testing.T) {
+	t.Parallel()
+	var shows string
+	for _, in := range metrics.Catalogue() {
+		if in.Name == metrics.ObjectsS3Attempts {
+			shows = in.Shows
+		}
+	}
+	const opens = "the API's own name: "
+	_, list, found := strings.Cut(shows, opens)
+	list, _, closed := strings.Cut(list, ")")
+	if !found || !closed {
+		t.Fatalf("the catalogue entry of %s no longer lists its operations after %q: %q",
+			metrics.ObjectsS3Attempts, opens, shows)
+	}
+	var named []string
+	for i, part := range strings.Split(list, "`") {
+		if i%2 == 1 {
+			named = append(named, part)
+		}
+	}
+	slices.Sort(named)
+	declared := slices.Sorted(slices.Values(s3obj.Operations))
+	if !slices.Equal(named, declared) {
+		t.Errorf("the catalogue entry of %s names the operations %v; the backend labels %v",
+			metrics.ObjectsS3Attempts, named, declared)
+	}
+}
+
 // AN ATTEMPT WHOSE SESSION CANNOT BE HAD IS UNREACHED: a directory bucket's
 // head waits for its S3 Express session in GetIdentity, after the gate let it
 // out, and the session request — failing to its bound — is counted as its
