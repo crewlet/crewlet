@@ -31,7 +31,7 @@ Five figures per domain, and no others:
 |---|---|
 | `bytes` | what the log holds now |
 | `max_bytes` | the ceiling the **broker** is enforcing |
-| `reserve_bytes` | on every log that claims identity — the tracker's, the knowledge base's, the code host's and the identity estate's — the top of that ceiling kept for gate records; see [the gate reserve](#the-gate-reserve) |
+| `reserve_bytes` | on every log that claims identity — the tracker's, the knowledge base's, the identity estate's, the artifacts log's, the artifact datastore's and the code host's — the top of that ceiling kept for gate records; see [the gate reserve](#the-gate-reserve) |
 | `headroom_fraction` | how much of the ceiling **ordinary writes** are held to is unused: `max_bytes` less `reserve_bytes` |
 | `bytes_per_day` | what the log took in over the trailing day (`PER DAY` in the table) |
 
@@ -392,7 +392,14 @@ its trim neither publishes nor purges, and the retention answer shows its floor
 `floor_unknown` alarm names each domain whose reads it refuses — those whose
 floor has gone unread past the four heartbeats — with how long that domain's
 floor has gone unread; a domain whose floor began failing more recently is not
-named yet, since its reads are still served.
+named yet, since its reads are still served. That age is this node's own
+observation, taken on its ten-second alarm heartbeat by the **floor watch**
+through the read path's own two steps — each domain's floor read by its key,
+then held to the generation its applier is on — from the first beat that
+failed to the latest, so the alarm names exactly the floors this node's reads
+refuse on, whichever node holds the trim, and forgets the age the moment a
+read succeeds. A floor published at a generation this node has not reached is
+as unusable as one that cannot be read, and the alarm says which it was.
 
 There are two ways a floor cannot be read, and they read differently:
 
@@ -828,12 +835,13 @@ stays: a readmission is judged by it.
 
 The trim counts nodes **per log**, so an eviction is a record on every log it
 counts nodes on — every log that claims identity: the tracker's, the knowledge
-base's, the code host's and the identity estate's. (The vector log and the
-usage log count nothing and get none: a node behind on the vectors is a
-coverage figure, and an evicted node's usage is still what its seats did.) Every
-node running the state log can make the gesture, whichever backends the
+base's, the identity estate's, the artifacts log's, the artifact datastore's
+and the code host's. (The vector log and the usage log count nothing and get
+none: a node behind on the vectors is a coverage figure, and an evicted node's
+usage is still what its seats did.) Every node running the state log can make
+the gesture, whichever backends the
 company uses: every data node runs every one of those logs, and a company on an
-external tracker still runs all four.
+external tracker still runs all six.
 
 **The node you run the gesture on writes every log itself**: every data node
 holds the whole estate, so one gesture on any data node reaches every log. A
@@ -1051,7 +1059,7 @@ the log has already lost or is licensed to lose.
 
 The comparison is the one the node's own [write fence](#the-trim-floor) makes,
 made once for every log before any is written: its last published position
-in each of the four logs, against the higher of each log's published floor and
+in each of the six logs, against the higher of each log's published floor and
 its first surviving sequence. A node that has never published a position is
 judged as holding nothing. Nothing is written to any log on a refusal, and the node needs nothing from you but time: start it if it
 is not running, and it [catches up on its own](#the-join-runbook) — replaying
@@ -1084,9 +1092,10 @@ exists to prevent.
 A single record larger than its log takes is a different refusal,
 `record_too_large`, on a log with room to spare, and no ceiling or trim
 changes it. Every log declares the largest record it publishes — 8 MiB less
-4 KiB on the tracker's, the knowledge base's, the vector changelog's and the
-usage log's, which is the largest the embedded broker's 8 MiB messages carry
-once a record is signed, 128 KiB on the identity
+4 KiB on the tracker's, the knowledge base's, the code host's, the vector
+changelog's and the usage log's, which is the largest the embedded broker's
+8 MiB messages carry once a record is signed, 2 MiB on the artifacts log's,
+1 MiB plus 64 KiB on the artifact datastore's and 128 KiB on the identity
 estate's — and a record past it is refused before it is sent; the stream's
 own `max_msg_size` is that declaration plus 4 KiB for what a stored record
 carries beside it, so the broker holds a peer on another build to it too. Two
@@ -1127,8 +1136,8 @@ evict`](#eviction) — is itself a record on that log, so a
 log that refused it like any other append could never be emptied: the
 eviction was refused, run again, and refused again.
 
-So on the four logs that carry gate records — every log that claims identity:
-the tracker's, the knowledge base's, the code host's and the identity estate's — **ordinary writes are refused at a soft ceiling** below the
+So on the six logs that carry gate records — every log that claims identity:
+the tracker's, the knowledge base's, the identity estate's, the artifacts log's, the artifact datastore's and the code host's — **ordinary writes are refused at a soft ceiling** below the
 broker's, and the top of the ceiling — the **gate reserve**, `reserve_bytes`
 in `crewlet retention status` — takes only the records that install or lift a
 gate: an eviction and the readmission that inverts it. A log full for
@@ -1164,9 +1173,10 @@ So the reserve is the larger of two terms:
 
 | log | largest record | floor | reserve at the floor | ordinary writes at the floor |
 |---|---|---|---|---|
-| tracker, knowledge base | 8 MiB less 4 KiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
-| identity estate | 128 KiB | 64 MiB | 4 MiB (a sixteenth) | 60 MiB |
+| tracker, knowledge base, code host | 8 MiB less 4 KiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
+| artifacts | 2 MiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
 | artifact datastore | 1 MiB plus 64 KiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
+| identity estate | 128 KiB | 64 MiB | 4 MiB (a sixteenth) | 60 MiB |
 
 While a rolling upgrade runs, a node on an older build keeps no reserve, so
 the reserve holds once every node counts its own.
@@ -1180,8 +1190,10 @@ soft ceiling left, is there so that never happens.
 
 A log's Tier A ceiling (`stream.tracker_log_max_bytes`,
 `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
-`stream.code_log_max_bytes`, `stream.iam_log_max_bytes`, `stream.usage_log_max_bytes`) is not a live
-setting: it is the value the log's stream is created with, sized with the
+`stream.code_log_max_bytes`, `stream.artifacts_log_max_bytes`,
+`stream.artifact_data_log_max_bytes`, `stream.iam_log_max_bytes`,
+`stream.usage_log_max_bytes`) is not a live setting: it is the value the log's
+stream is created with, sized with the
 other logs inside what the broker can grant (see
 [Replication](replication.md#how-the-byte-ceilings-are-sized)). Changing a
 running log's ceiling, raising it or lowering it, is a **fleet-wide
@@ -1190,13 +1202,14 @@ maintenance window**, and the reason is not caution:
 - A resize is decided against the usage the log is at, and a publisher makes
   that a moving quantity. The verb decides it before the window opens: a
   target whose soft ceiling — the target less its
-  [gate reserve](#the-gate-reserve), on the four logs that claim identity; the
+  [gate reserve](#the-gate-reserve), on the six logs that claim identity; the
   whole target on the vector changelog and the usage log — is at or below what
   the log already holds is refused, naming both and the least target that
   would do, because that ceiling would refuse every ordinary append the moment
   it applied. So is a target under the floor Tier A holds that log's field to —
-  a gibibyte on the tracker's, the knowledge base's, the code host's and the
-  vector changelog's, 64 MiB on the identity estate's and the usage log's —
+  a gibibyte on the tracker's, the knowledge base's, the code host's, the
+  artifacts log's, the artifact datastore's and the vector changelog's, 64 MiB
+  on the identity estate's and the usage log's —
   naming the field. Anything else is fair, including a target under the
   current ceiling, which is how a log created larger than its budget gives
   the reservation back.
@@ -1927,15 +1940,19 @@ question nobody asks after an hour. The hour is the publisher's own
 five-second resolve budget with a wide margin, and it is its own maintenance
 job, `iam_ops_session`, so what it deletes is counted apart.
 
-Each domain's **arbitration anchors** — one row per subject any writer has ever
-contended on, holding what that subject's last record expects — are swept at
-the log's own **published trim floor**, and never on a clock. An anchor above
-the floor has to stay however old it is: read as absent, it hands the next
-writer an expectation of "this subject holds nothing", which the broker refuses
-for ever against a subject that does. Below the floor there is no record left
-to replay, so there is nothing left for the anchor to be the anchor of. Two
-nodes reading their own wall clocks would delete different rows, which is why
-this one term is a position and not a duration.
+A strict log's **arbitration anchors** — one row per subject any writer has
+ever contended on, holding the position of the last record consumed on it —
+are removed below the log's **first surviving record**, and never on a clock:
+the trim holder appends a `trimmed` record and every node's applier removes the
+same rows in the transaction that applies it (see
+[Anchors below the log are removed by a record](#anchors-below-the-log-are-removed-by-a-record)).
+Below that record there is nothing left to replay, so nothing left for the
+anchor to be the anchor of; an anchor above it names a record the log still
+holds, and removing it would cost that object's next write a read of the log
+for nothing. Two nodes reading their own wall clocks would delete different
+rows, and so would two nodes each deleting below a floor it read itself, which
+is why this term is a position carried by a record rather than a duration or a
+local delete.
 
 The **authentication trail** — `iam_history`, the identity domain's record of
 who did what to whom — is the one table in any domain with **two** horizons,
@@ -1947,8 +1964,8 @@ that is days old, and is a record of a person's working hours for as long as it
 is kept. Keeping the second as long as the first would be storing more about
 people than there is a reason to.
 
-The trail's sweep is the one sweep in the engine that is **a record on the
-log** rather than a local delete. The rows are identity-claimed, so a node
+The trail's sweep is, like the anchors' above, **a record on the log**
+rather than a local delete. The rows are identity-claimed, so a node
 sweeping on its own clock would hold different bytes from its peers, and "N
 byte-identical copies" would quietly become a claim about how synchronised
 their clocks were. The record names *positions* the publisher resolved once —

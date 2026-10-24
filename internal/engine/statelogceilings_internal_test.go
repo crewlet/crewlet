@@ -3,6 +3,9 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strconv"
@@ -12,10 +15,13 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -86,6 +92,141 @@ func TestTheGateReserveAtEveryFloorAbsorbsItsFleet(t *testing.T) {
 	if reserved == 0 {
 		t.Fatal("no registered domain keeps a gate reserve, so this walked nothing")
 	}
+}
+
+// THE RETENTION GUIDE STATES EVERY LOG'S GATE RESERVE AS THE LOG KEEPS IT.
+//
+// docs/guides/retention.md's table of the reserve at each log's floor is what
+// an operator sizes a small log by, and it named three of the six logs that
+// keep one once the code host and the artifacts logs were registered beside
+// the tracker, the knowledge base and the identity estate. So each row is read
+// off the guide and held to [statelog.ReservationOf] at the floor Tier A's own
+// validation holds the log's field to — its largest record, the floor, the
+// reserve there and what ordinary writes keep — and every log that keeps a
+// reserve must have exactly one row and nothing else may, so a log registered
+// later fails here until the guide names it.
+func TestTheRetentionGuideStatesEveryLogsGateReserve(t *testing.T) {
+	t.Parallel()
+	guide, err := os.ReadFile(filepath.Join(sourcetree.Root(t), "docs", "guides", "retention.md"))
+	if err != nil {
+		t.Fatalf("read the retention guide: %v", err)
+	}
+	rows := gateReserveRows(t, string(guide))
+	labels := map[string]string{
+		tracker.Domain{}.Name():         "tracker",
+		pages.Domain{}.Name():           "knowledge base",
+		code.Domain{}.Name():            "code host",
+		artifactsdomain.Domain{}.Name(): "artifacts",
+		artifactdata.Domain{}.Name():    "artifact datastore",
+		iamdomain.Domain{}.Name():       "identity estate",
+	}
+	keys := streamKeys(t)
+	held := map[string]bool{}
+	for _, domain := range registeredDomains() {
+		reservation := statelog.ReservationOf(domain)
+		label, named := labels[domain.Name()]
+		row, listed := rows[label]
+		if !reservation.Kept {
+			if listed {
+				t.Errorf("the guide lists %q, and %s keeps no gate reserve", label, domain.Name())
+			}
+			continue
+		}
+		if !named {
+			t.Errorf("%s keeps a gate reserve and this test knows no row of the guide's "+
+				"table for it — add its label here and its row to the guide", domain.Name())
+			continue
+		}
+		if !listed {
+			t.Errorf("%s keeps a gate reserve and the guide's table has no %q row",
+				domain.Name(), label)
+			continue
+		}
+		held[label] = true
+		ceiling, err := tierACeiling(config.Stream{}, domain, 0)
+		if err != nil {
+			t.Fatalf("tierACeiling: %v", err)
+		}
+		floor := tierAFloor(t, keys, ceiling.Field, ceiling.Bytes)
+		reserve := int64(reservation.Bytes(uint64(floor)))
+		shape := "the fleet term"
+		if reserve == floor/statelog.GateReserveDivisor {
+			shape = "a sixteenth"
+		}
+		want := []string{
+			sizeText(domain.Stream().MaxRecordBytes),
+			sizeText(floor),
+			fmt.Sprintf("%s (%s)", sizeText(reserve), shape),
+			sizeText(floor - reserve),
+		}
+		if !slices.Equal(row, want) {
+			t.Errorf("the guide's %q row says %q; %s keeps %q at its %s floor",
+				label, row, domain.Name(), want, ceiling.Field)
+		}
+	}
+	for label := range rows {
+		if !held[label] {
+			t.Errorf("the guide's table lists %q, which names no log that keeps a gate reserve", label)
+		}
+	}
+}
+
+// gateReserveRows reads the retention guide's table of the gate reserve at
+// each log's floor: every log a row names, against the row's other four cells.
+func gateReserveRows(t *testing.T, guide string) map[string][]string {
+	t.Helper()
+	const header = "| log | largest record | floor | reserve at the floor | ordinary writes at the floor |"
+	_, table, found := strings.Cut(guide, header+"\n")
+	if !found {
+		t.Fatalf("the retention guide has no table headed %q", header)
+	}
+	rows := map[string][]string{}
+	for _, line := range strings.Split(table, "\n") {
+		if !strings.HasPrefix(line, "|") {
+			break
+		}
+		if strings.HasPrefix(line, "|---") {
+			continue
+		}
+		cells := strings.Split(strings.Trim(line, "|"), "|")
+		for i := range cells {
+			cells[i] = strings.TrimSpace(cells[i])
+		}
+		if len(cells) != 5 {
+			t.Fatalf("a gate reserve row has %d cells, want 5: %q", len(cells), line)
+		}
+		for _, label := range strings.Split(cells[0], ", ") {
+			if _, twice := rows[label]; twice {
+				t.Errorf("the guide's table lists %q twice", label)
+			}
+			rows[label] = cells[1:]
+		}
+	}
+	if len(rows) == 0 {
+		t.Fatal("the retention guide's gate reserve table has no rows")
+	}
+	return rows
+}
+
+// sizeText spells a byte count the way the retention guide's tables do: whole
+// gibibytes, kibibytes under a mebibyte, and otherwise the nearest mebibyte
+// with what it is short of or past.
+func sizeText(b int64) string {
+	const kib, mib = int64(1) << 10, int64(1) << 20
+	switch {
+	case b >= gib && b%gib == 0:
+		return fmt.Sprintf("%d GiB", b/gib)
+	case b < mib:
+		return fmt.Sprintf("%d KiB", b/kib)
+	}
+	m := (b + mib/2) / mib
+	switch d := b - m*mib; {
+	case d < 0:
+		return fmt.Sprintf("%d MiB less %d KiB", m, -d/kib)
+	case d > 0:
+		return fmt.Sprintf("%d MiB plus %d KiB", m, d/kib)
+	}
+	return fmt.Sprintf("%d MiB", m)
 }
 
 // A LOG'S DECLARED CEILING IS TIER A'S DEFAULT WHERE THE DEFAULT IS FIXED.
