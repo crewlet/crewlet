@@ -17,7 +17,16 @@ import type { BuilderApi, CompanyEdit } from "./BuilderContext.tsx";
 import type { CompanyView, LeadView, UnitView } from "./chartModel.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import { fixtureCompany } from "./model/testkit.ts";
-import { editLabel, leadChipLabel, leadLabel, leadSentence, nodeMenu } from "./nodeActions.tsx";
+import {
+  cardMenu,
+  editsInPlace,
+  leadChipLabel,
+  leadLabel,
+  leadSentence,
+  nodeMenu,
+  rowMenu,
+} from "./nodeActions.tsx";
+import type { Reorder } from "./reorder.ts";
 import { keyedState, scopedState } from "./testState.ts";
 
 /** A unit with the lead answer under test and nothing else that matters here. */
@@ -107,10 +116,12 @@ describe("a unit's lead, as a screen reader hears it", () => {
 });
 
 /*
- * THE COMPANY'S EDIT IS ITS PRINCIPLES. Its mission, vision and standing
- * policies are written on Company › Principles alone, so once the company
- * exists its Edit goes there, named for them, and the builder's one company
- * field, the name, is an entry of its own.
+ * THE COMPANY HAS NO EDIT. Its mission, vision and standing policies are
+ * written on Company › Principles alone, a page of its own, so its menu
+ * offers that page by name and never an Edit of the node, and the builder's
+ * one company field, the name, is an entry of its own. The node's own surfaces
+ * offer neither the pencil nor the page (`editsInPlace`, `cardMenu`,
+ * `rowMenu`): only the toolbar's whole menu goes there.
  */
 describe("the company's menu", () => {
   const company: CompanyView = {
@@ -128,6 +139,7 @@ describe("the company's menu", () => {
       principles,
       openEditor: vi.fn(),
       openCompanyRename: vi.fn(),
+      openPrinciples: vi.fn(),
       openAdd: vi.fn(),
     } as unknown as BuilderApi;
   }
@@ -136,6 +148,7 @@ describe("the company's menu", () => {
     menu.filter((e): e is MenuItem => e.kind !== "separator");
   const entries = (menu: MenuEntry[]) => items(menu).map((e) => [e.label, e.disabled === true]);
   const item = (menu: MenuEntry[], label: string) => items(menu).find((e) => e.label === label)!;
+  const reorder = { movable: () => false, move: vi.fn() } as unknown as Reorder;
 
   test("a reader who may write them is offered Edit principles and Rename company", () => {
     const at = api("write");
@@ -148,13 +161,13 @@ describe("the company's menu", () => {
       ["Rename company", false],
     ]);
     item(menu, "Edit principles").onSelect();
-    expect(at.openEditor).toHaveBeenCalledWith(COMPANY_KEY);
+    expect(at.openPrinciples).toHaveBeenCalledTimes(1);
+    expect(at.openEditor).not.toHaveBeenCalled();
     item(menu, "Rename company").onSelect();
     expect(at.openCompanyRename).toHaveBeenCalledTimes(1);
   });
 
   test("a reader who may only read them is offered to open them, not to edit them", () => {
-    expect(editLabel(api("read"), company)).toBe("Open principles");
     expect(entries(nodeMenu(api("read"), company, vi.fn()))).toContainEqual([
       "Open principles",
       false,
@@ -176,13 +189,26 @@ describe("the company's menu", () => {
     });
   });
 
-  // A COMPANY STILL BEING CREATED has no Principles page yet: its Edit is the
-  // name form, and it has no separate rename.
-  test("a company this draft is creating is edited like any other node", () => {
-    const at = api(null);
-    expect(editLabel(at, company)).toBe("Edit Acme");
-    const labels = entries(nodeMenu(at, company, vi.fn())).map(([label]) => label);
-    expect(labels).toContain("Edit");
-    expect(labels).not.toContain("Rename company");
+  // A COMPANY STILL BEING CREATED has no Principles page yet: it is named
+  // through Rename company like a saved one, and never through an Edit.
+  test("a company this draft is creating is renamed, and has no Edit", () => {
+    const labels = entries(nodeMenu(api(null), company, vi.fn())).map(([label]) => label);
+    expect(labels).toContain("Rename company");
+    expect(labels).not.toContain("Edit");
+    expect(labels.filter((l) => String(l).includes("principles"))).toEqual([]);
+  });
+
+  // THE NODE ITSELF CARRIES NO EDIT, on either surface: its card and its row
+  // keep Rename company and drop the way to the principles, which is the
+  // toolbar's alone. Mutation: let the subtraction keep the principles entry
+  // and the root of the chart offers an edit again.
+  test("the company's card and row offer no edit of any kind", () => {
+    expect(editsInPlace(company)).toBe(false);
+    for (const surface of [cardMenu, rowMenu]) {
+      const labels = entries(surface(api("write"), company, vi.fn(), reorder)).map(([l]) => l);
+      expect(labels).toContain("Rename company");
+      expect(labels).not.toContain("Edit principles");
+      expect(labels).not.toContain("Edit");
+    }
   });
 });

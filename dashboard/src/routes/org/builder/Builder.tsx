@@ -442,10 +442,10 @@ interface SelectionParams {
 /**
  * Whether a key still names something in the draft.
  *
- * The company is a node like any other to a view (its card carries an Edit,
- * which opens Company › Principles, and the Add menu) and the only one
- * `locate` cannot find: it is the tree's root rather than an element of a
- * list. Read as absent, a selected company card was cleared again on the next
+ * The company is a node like any other to a view (its card carries the Add
+ * menu and Rename company, and selecting it puts its actions on the toolbar)
+ * and the only one `locate` cannot find: it is the tree's root rather than an
+ * element of a list. Read as absent, a selected company card was cleared again on the next
  * state change.
  */
 function isPresent(state: BuilderState, key: NodeKey): boolean {
@@ -1137,15 +1137,15 @@ function BuilderScreen({
     [readOnlyReason, announce, openDialog],
   );
 
-  // WHAT THE COMPANY NODE'S EDIT OPENS. Its principles are written on Company ›
-  // Principles and nowhere else, so once a company exists its Edit goes there,
-  // with the page in edit for a reader who may write them and plainly for one
+  // WHERE THE TOOLBAR'S PRINCIPLES ENTRY GOES. They are written on Company ›
+  // Principles and nowhere else, so once a company exists the toolbar offers
+  // that page, in edit for a reader who may write them and plainly for one
   // who may not, as a seat's Edit opens a read-only editor. Who may write them
   // is the page's own gate (`useMayWriteCharter`), so the builder never offers
   // an editor the page then withholds. A company this draft is still CREATING
-  // has no page yet, so its Edit is the name form. The move goes through the
-  // leave guard, and the draft is kept for the return either way
-  // (`useDraftKeeping`).
+  // has no page yet, so there is no entry. The company's node offers none of
+  // this (`nodeActions.editsInPlace`). The move goes through the leave guard,
+  // and the draft is kept for the return either way (`useDraftKeeping`).
   const principlesWritable = useMayWriteCharter();
   const principles: CompanyEdit =
     state.mode === "create" ? null : principlesWritable ? "write" : "read";
@@ -1430,11 +1430,9 @@ function BuilderScreen({
             .map((p) => p.source as ConfigProblem)
         : [],
       selection: { key: selection, select },
-      openEditor: (key, section) =>
-        key === COMPANY_KEY && principles !== null
-          ? openPrinciples()
-          : openDialog({ type: "editor", key, section }),
+      openEditor: (key, section) => openDialog({ type: "editor", key, section }),
       openCompanyRename: () => openIfWritable({ type: "editor", key: COMPANY_KEY }),
+      openPrinciples,
       principles,
       openAdd: (parent, kind) => openIfWritable({ type: "add", parent, kind }),
       openMove: (key) => openIfWritable({ type: "move", key }),

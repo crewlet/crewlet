@@ -265,8 +265,11 @@ export function FakeView() {
       <button type="button" onClick={() => api.selection.select(COMPANY_KEY)}>
         Select the company
       </button>
-      <button type="button" onClick={() => api.openEditor(COMPANY_KEY)}>
-        Edit the company
+      <button type="button" onClick={() => api.openPrinciples()}>
+        Open the principles
+      </button>
+      <button type="button" onClick={() => api.openCompanyRename()}>
+        Open the company's name form
       </button>
       <button
         type="button"

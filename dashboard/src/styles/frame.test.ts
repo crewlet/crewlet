@@ -1473,3 +1473,42 @@ test("no screen cancels the content column's padding with a negative margin", ()
     );
   }
 });
+
+/*
+ * NO SCREEN PUTS THE CONTENT CAP BACK. The frame lifts the kit's content
+ * column cap (`frame.css`, "NO MAX WIDTH") because these screens are tiles,
+ * tables and boards that want the width a wide window bought, and prose takes
+ * `--size-measure` where it needs one. A screen's own column capped at
+ * `--size-content-max` brings the same defect back on one screen: Knowledge's
+ * landing and a space's outline sat in a 1600px column against the left edge
+ * of a 2560px sheet. Mutation: cap `.knowledge-home` again and this names it.
+ */
+test("no screen's column caps itself at the content maximum the frame lifted", () => {
+  const offenders: string[] = [];
+  for (const name of readdirSync(STYLES).filter((f) => f.endsWith(".css"))) {
+    for (const m of sheet(name).matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      if (/(^|[;\s])max-width:\s*var\(--size-content-max\)/.test(m[2]!)) {
+        offenders.push(`${name}: ${m[1]!.trim()}`);
+      }
+    }
+  }
+  expect(offenders).toEqual([]);
+});
+
+/*
+ * A HEADER'S SENTENCE IS A STATEMENT, NOT PROSE. The kit's page and object
+ * headers held it at `--size-measure` (68ch), so Company › Integrations' one
+ * sentence (70.3ch, measured at its 13px compact size) broke onto a second
+ * line at every width, with most of the header's row empty beside it. The
+ * wide measure is the token for a statement read once, and the two headers
+ * say the same thing. Mutation: pin the kit back to 0.47.0 and both fail.
+ */
+test("a page or object header's sentence takes the wide measure", () => {
+  const kit = kitSheet();
+  for (const selector of [
+    ".crewlet-page-header__description",
+    ".crewlet-object-header__description",
+  ]) {
+    expect(block(kit, selector), selector).toMatch(/max-width:\s*var\(--size-measure-wide\)/);
+  }
+});

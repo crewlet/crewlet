@@ -228,15 +228,16 @@ the unit's editor at its lead.
 
 A node's controls appear when it is reached, by the pointer, by focus or by
 being the selected node: the expander on its leading edge, **Edit** and
-**Delete** down its end, and, under a node that can take a child, the **Add**
+**Delete** down its end (the company has neither, see
+[The company](#the-company)), and, under a node that can take a child, the **Add**
 on the branch its children hang from, which splits into **Add unit**, **Add
 agent seat** and **Add human seat** where it stands.
 
 Every node is one stop in a tree. The arrow keys walk the visible order: Right
 opens a closed unit or steps into an open one, Left closes it or climbs to the
 unit above, Home and End jump, and typing a name moves to the next node it
-matches. On a node, Enter opens its editor, Delete or Backspace deletes it
-(never the company), Alt+Up and Alt+Down move it among its siblings, as they
+matches. On a unit or a seat, Enter or a double-click opens its editor (on the
+company they do nothing), Delete or Backspace deletes it (never the company), Alt+Up and Alt+Down move it among its siblings, as they
 move a row in [the table](#the-table), and the context menu key or
 Shift+F10 opens its menu, which holds everything the node's own controls do
 not. Each unit collapses and expands on its own, and **Expand all** and
@@ -290,9 +291,10 @@ widths the table scrolls sideways in its own box, never the page.
 
 Each row ends in its controls: on the company's row and a unit's, the **Add**
 that splits into **Add unit**, **Add agent seat** and **Add human seat**;
-**Edit** and **Delete** on every row but the company's, which cannot be
-deleted; and a menu of the rest (**Open seat**, **Edit reports**, **Move
-to** and the two moves among the siblings). Where the builder
+**Edit** and **Delete** on every row but the company's, which has no Edit and
+cannot be deleted; and a menu of the rest (**Open seat**, **Edit reports**,
+**Move to** and the two moves among the siblings, and **Rename company** on the
+company's row). Where the builder
 cannot write, the controls are disabled with the reason, never hidden.
 
 **Alt+Up** and **Alt+Down** move a row among its siblings of the same kind (a
@@ -403,7 +405,7 @@ declares.
 
 ## Editing a node
 
-Choose **Edit** on the company, a unit or a seat to open its editor at the side
+Choose **Edit** on a unit or a seat to open its editor at the side
 of the chart. The editor's head shows the node's mark (an agent's profile
 icon, which opens its picker), its name as you type it, and under the name the
 seat's handle and kind (or the unit's type); where the node sits in the
@@ -451,11 +453,12 @@ it names, never shown as a field's error.
 ### The company
 
 The company's **mission**, **vision** and **standing policies** are written on
-**Company › Principles**, in place, and nowhere else. So the company's
-**Edit** (its node's pencil, Enter on it, or **Edit principles** in its menu)
-leaves the builder for that page, opened in edit for a reader who may write
-the principles. A reader who may not is offered **Open principles**, which
-opens the same page to read. Your draft is kept for when you come back (see
+**Company › Principles**, in place, and nowhere else. So the company's node
+carries no **Edit**: no pencil on its card or its row, and Enter or a
+double-click on it does nothing. Select the company and the toolbar's menu
+offers **Edit principles**, which leaves the builder for that page, opened in
+edit for a reader who may write the principles. A reader who may not is offered
+**Open principles**, which opens the same page to read. Your draft is kept for when you come back (see
 [A draft survives a reload](#a-draft-survives-a-reload)); if the principles
 were saved meanwhile, your next save meets the newer revision and is
 [updated onto it](#when-somebody-else-saves-first) like any other.
@@ -463,15 +466,17 @@ The builder never records or sends a change to the principles, so a save from
 here cannot put an older copy of them back.
 
 What the builder writes about the company itself is its name, through
-**Rename company** in the company's menu:
+**Rename company** in the company's menu (on its card and its row, and in the
+toolbar's menu while it is selected):
 
 | You can change | Notes |
 |---|---|
 | Name | Renaming the company asks you to confirm what it does. An agent seat's id is derived from the company name and its handle, so every agent seat gets a new id: each seat's diary and onboarding progress stay under the old id and are no longer read, and every agent seat onboards again. Handles, mailboxes and episodes are unchanged. |
 
 While you are [creating the company](#creating-the-company) it has no
-Principles page yet, so its **Edit** opens the name form in the builder; write
-the principles once it is created, from the next steps the builder shows.
+Principles page yet, so its menu offers **Rename company** alone, which opens
+the name form in the builder; write the principles once it is created, from the
+next steps the builder shows.
 
 A problem the engine reports with the mission, the vision or a policy is listed
 with the problems about the whole configuration, with **Open Principles**

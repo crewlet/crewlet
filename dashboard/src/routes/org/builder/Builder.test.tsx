@@ -590,7 +590,8 @@ describe("the selection in the URL", () => {
   // THE COMPANY IS A NODE TOO, and the only one the draft's tree cannot
   // locate: it is the root rather than an element of a list. Read as absent,
   // the card an operator selected was deselected again on the next answer,
-  // and the company's Edit was unreachable from the toolbar.
+  // and the company's actions were unreachable from the toolbar, the one place
+  // its principles are offered.
   test("the company stays selected, and the toolbar offers the company's actions", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine });
@@ -617,13 +618,13 @@ describe("the selection in the URL", () => {
     expect(screen.getByRole("button", { name: "Actions for Acme, selected" })).toBeDefined();
   });
 
-  // THE COMPANY'S EDIT IS COMPANY › PRINCIPLES, in edit for a reader who may
-  // write the principles and plainly for one who may not, and never a form of
-  // the builder's own, whose draft is kept for the return.
-  test("the company's Edit opens Company › Principles, in edit only for a reader who may write it", async () => {
+  // THE PRINCIPLES ARE COMPANY › PRINCIPLES, in edit for a reader who may
+  // write them and plainly for one who may not, and never a form of the
+  // builder's own, whose draft is kept for the return.
+  test("the principles open Company › Principles, in edit only for a reader who may write them", async () => {
     mountBuilder({ engine: new Engine(company()) });
     await screen.findByText("No problems");
-    fireEvent.click(screen.getByRole("button", { name: "Edit the company" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open the principles" }));
     await waitFor(() => expect(location.hash).toBe("#/company/principles?edit=mission"));
     expect(screen.queryByRole("dialog")).toBeNull();
     cleanup();
@@ -633,7 +634,7 @@ describe("the selection in the URL", () => {
       viewer: () => ({ ...EDITOR, grants: ["tracker", "knowledge"], leads: [] }),
     });
     await screen.findByText("No problems");
-    fireEvent.click(screen.getByRole("button", { name: "Edit the company" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open the principles" }));
     await waitFor(() => expect(location.hash).toBe("#/company/principles"));
   });
 

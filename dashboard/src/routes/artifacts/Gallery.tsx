@@ -68,7 +68,6 @@ import {
   PrincipalAvatar,
 } from "@crewlethq/ui";
 import {
-  GaugeGlyph,
   LayoutGridGlyph,
   ListGlyph,
   PlusGlyph,
@@ -77,7 +76,6 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { href, useNavigator, useParam, useRoute } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { RelatedRow } from "~/app/frame/RelatedRow.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { type DataGridColumn } from "@crewlethq/ui";
 import { useSearchTarget } from "~/app/searchTarget.ts";
@@ -497,17 +495,6 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
             rest
           ))}
       </QueryState>
-      {/* WHERE THE COMPANY'S STORAGE IS READ, a quiet row for a reader who
-          may open Settings › File storage (the row asks the gate itself). */}
-      {section === "all" && !trashed && !filtered && (
-        <RelatedRow
-          className="artifacts-related"
-          path={["settings", "storage"]}
-          icon={<GaugeGlyph size="sm" />}
-          title="Company storage"
-          description="What the company holds against its storage quotas, in Settings › File storage."
-        />
-      )}
     </LivePreviewBudgetProvider>
   );
 }

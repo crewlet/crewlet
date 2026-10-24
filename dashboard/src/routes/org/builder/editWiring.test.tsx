@@ -198,14 +198,24 @@ test("a link that asks for an add opens it once, on that kind, and leaves the ad
 });
 
 /*
- * THE COMPANY'S EDIT IS COMPANY › PRINCIPLES. Its mission, vision and standing
- * policies are written on that page and nowhere else, so the company's Edit
- * leaves the builder for it, in edit for a reader who may write them, whether
- * it is pressed or reached by the row's own key.
+ * THE COMPANY'S PRINCIPLES ARE THE TOOLBAR'S. Its mission, vision and standing
+ * policies are written on Company › Principles and nowhere else, so its row
+ * carries no Edit and Enter on it opens nothing, while the toolbar, with the
+ * company selected, offers Edit principles, which leaves the builder for that
+ * page in edit for a reader who may write them.
  */
-test("the company's Edit opens Company › Principles in edit", async () => {
+test("the company's row has no Edit, and the toolbar opens Company › Principles in edit", async () => {
   mount("#/company/org/edit?view=table");
-  fireEvent.click(await screen.findByRole("button", { name: "Edit principles" }));
+  const acme = (await screen.findAllByRole("row")).find((r) => r.textContent?.includes("Acme"))!;
+  expect(within(acme).queryByRole("button", { name: /^Edit|principles/ })).toBeNull();
+  fireEvent.click(acme);
+  fireEvent.keyDown(acme, { key: "Enter" });
+  await new Promise((r) => setTimeout(r, 20));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(location.hash.startsWith("#/company/org/edit")).toBe(true);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Actions for Acme, selected" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: /Edit principles/ }));
   await waitFor(() => expect(location.hash).toBe("#/company/principles?edit=mission"));
   expect(screen.queryByRole("dialog")).toBeNull();
 });

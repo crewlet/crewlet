@@ -2742,13 +2742,17 @@ a.prof-row:hover {
   }
 }
 
-/* A screen's column: the landing, a space, the results. */
+/* A screen's column: the landing, a space, the results. AT THE SHEET'S FULL
+   WIDTH, as every screen's column is (`frame.css`, "NO MAX WIDTH"): it was
+   capped at `--size-content-max`, which put the landing's tiles and a space's
+   outline in a 1600px column against the left edge of a 2560px sheet with a
+   third of it empty beside them. The tiles' grid divides whatever width it is
+   given, and prose inside a tile takes its own measure. */
 .knowledge-home {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-6);
   width: 100%;
-  max-width: var(--size-content-max);
   min-width: 0;
 }
 
@@ -3505,13 +3509,17 @@ a.knowledge-reader-how:hover {
 
 /* ---- The composer ------------------------------------------------------- */
 
+/* THE PAGE IS WRITTEN AT THE MEASURE IT IS READ AT (`.knowledge-read-page`),
+   with what helps file it beside. The writing column was the rest of a
+   1600px cap instead, so on a wide screen a page was drafted on lines twice
+   as long as the ones it is then read on, and the cap left the sheet's other
+   side empty. */
 .knowledge-composer {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 16rem;
+  grid-template-columns: minmax(0, var(--size-measure)) 16rem;
   gap: var(--spacing-6);
   align-items: start;
   width: 100%;
-  max-width: var(--size-content-max);
 }
 @container page (width < 760px) {
   .knowledge-composer {
@@ -10437,14 +10445,6 @@ a.live-row:focus-visible {
 .artifacts-preview-frame {
   position: absolute;
   inset: 0;
-}
-
-/* COMPANY STORAGE, an administrator's line at the foot of All: three quotas
-   in a row, each a figure over a thin bar, under a hairline that says the
-   gallery has ended. */
-/* THE RELATED ROW at the foot of All: one step under the listing. */
-.artifacts-related {
-  margin-top: var(--spacing-5);
 }
 
 /* THE QUOTA'S KEY on Settings › File storage, quiet under its figure, as a
