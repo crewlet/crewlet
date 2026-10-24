@@ -955,7 +955,7 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 		// reverting to a company that runs must not be refused over one.
 		// The answer's warnings name each one, and each node warns about
 		// it when it applies the epoch.
-		rules: (*config.Company).ValidateRunnable,
+		rules: runnableRules,
 		// THE TARGET'S BYTES AS THEY WERE STORED. A revert carries the old
 		// document, and this build's struct of it is not that document when
 		// a newer peer wrote it: every field this build cannot represent

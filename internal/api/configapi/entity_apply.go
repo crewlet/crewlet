@@ -89,7 +89,7 @@ func entityDraft(kind, id string, body submitted, expect string, create bool) (d
 		// that no longer exists is valid on its own and breaks the
 		// company, and a per-entity surface is exactly where that gets
 		// introduced.
-		rules: (*config.Company).Validate,
+		rules: authoredRules,
 		build: func(b base) (*config.Company, []byte, error) {
 			// A SECOND COPY, so the splice lands on a document that still
 			// has everything the caller did not send, and the prior stays

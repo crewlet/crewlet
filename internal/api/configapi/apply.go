@@ -227,8 +227,10 @@ type draft struct {
 	// build returns the company the write proposes and the bytes that
 	// carry it, which are what is stored.
 	build func(base) (*config.Company, []byte, error)
-	// rules is what the proposed company is held to.
-	rules func(*config.Company) error
+	// rules is what the proposed company is held to, beside the revision it
+	// replaces (nil when nothing is active): [authoredRules] or
+	// [runnableRules].
+	rules func(next, prior *config.Company) error
 	// principal is who asked for the write, which is admitted on what it
 	// changes (admission.go); nil for the engine's own writes, which no
 	// request made.
@@ -343,7 +345,7 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 		}
 	}
 	derived := config.Derive(company)
-	if invalid := d.rules(company); invalid != nil {
+	if invalid := d.rules(company, b.prior); invalid != nil {
 		return nil, &ValidationError{Err: invalid, Derived: derived}
 	}
 	// AFTER THE RULES, because a document that is refused anyway takes no
@@ -461,6 +463,22 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Appl
 	}, nil
 }
 
+// authoredRules is what a document a caller WROTE is held to: every rule
+// [config.Company.Validate] holds, and the charter's on what the write
+// changes, judged against the revision it replaces
+// ([config.Company.ValidateCharterChange]), so a charter fault the write did
+// not touch is a warning on the answer rather than a refusal of the write.
+func authoredRules(next, prior *config.Company) error {
+	return errors.Join(next.Validate(), next.ValidateCharterChange(prior))
+}
+
+// runnableRules is what a stored document re-activated as it is (a reload, a
+// revert) is held to: the rules a running company depends on, and none a
+// build is free to change, since a newer peer may have admitted it.
+func runnableRules(next, _ *config.Company) error {
+	return next.ValidateRunnable()
+}
+
 // patchDraft is a JSON Merge Patch over the active document.
 //
 // sent is the patch as parsed from what an HTTP caller sent, so a key it
@@ -470,7 +488,7 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Appl
 func patchDraft(req ApplyRequest, sent *yaml.Node) draft {
 	return draft{
 		expect: req.Expect, requireActive: true, by: req.By,
-		rules: (*config.Company).Validate,
+		rules: authoredRules,
 		build: func(b base) (*config.Company, []byte, error) {
 			if len(req.Patch) == 0 {
 				return nil, nil, &PatchError{Err: errEmptyPatch}
@@ -522,7 +540,7 @@ func patchDraft(req ApplyRequest, sent *yaml.Node) draft {
 func replaceDraft(incoming *config.Company, built string, by iam.Actor) draft {
 	return draft{
 		expect: built, expectAbsent: built == "", by: by,
-		rules: (*config.Company).Validate,
+		rules: authoredRules,
 		build: func(b base) (*config.Company, []byte, error) {
 			if b.found {
 				// The masks the caller was shown come back as the values
@@ -688,7 +706,7 @@ func (s *Service) Reload(ctx context.Context, summary string, by iam.Actor) (App
 		// have admitted the document under rules this build does not
 		// share — would make a rotation impossible until somebody
 		// restructured the org. The answer's warnings name each one.
-		rules: (*config.Company).ValidateRunnable,
+		rules: runnableRules,
 		// THE STORED BYTES, UNCHANGED, which is what re-publishing the
 		// active document means. Encoding this build's struct of it would
 		// drop every field a newer peer wrote, on the gesture an operator

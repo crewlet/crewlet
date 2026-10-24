@@ -475,7 +475,9 @@ func (c *Company) Warnings() []Warning {
 }
 
 // AdmissionWarnings is every admission rule c breaks, as warnings located
-// exactly like the problems a write keeping them is refused with.
+// exactly like the problems a write keeping them is refused with, and every
+// charter rule it breaks ([Company.CharterWarnings]), which a write is refused
+// for only where it changes the part at fault.
 //
 // Built from those problems rather than beside them, so the two cannot place
 // one violation differently: one warning per entity it is about (a duplicated
@@ -483,7 +485,12 @@ func (c *Company) Warnings() []Warning {
 // problem's path, segments, seat, unit and message. Ref, From and To are
 // empty, because an admission rule names no reference.
 func (c *Company) AdmissionWarnings() []Warning {
-	problems := Problems(c.ValidateAdmission())
+	return append(warningsOf(c.ValidateAdmission()), c.CharterWarnings()...)
+}
+
+// warningsOf is the problems err reports, as admission warnings.
+func warningsOf(err error) []Warning {
+	problems := Problems(err)
 	out := make([]Warning, 0, len(problems))
 	for _, p := range problems {
 		out = append(out, Warning{

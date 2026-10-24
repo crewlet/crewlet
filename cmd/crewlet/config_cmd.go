@@ -736,6 +736,16 @@ func importCompany(ctx context.Context, t importTarget, stdout io.Writer) error 
 		summary = "imported from " + t.path
 	}
 
+	// THE CHARTER'S FAULTS ARE SAID, NEVER REFUSED HERE. An import is how a
+	// company is restored and migrated, and a file that ran yesterday under a
+	// build without the charter's rules must import today; what an editor is
+	// refused is only a change that leaves a part at fault
+	// ([config.Company.ValidateCharterChange]). Said up front, whichever route
+	// the import takes, so the operator reads what every node will warn about.
+	for _, w := range company.CharterWarnings() {
+		fmt.Fprintln(stdout, warningLine(w))
+	}
+
 	boot, err := loadBootstrapForStore(t.bootstrapPath)
 	if err != nil {
 		return err
