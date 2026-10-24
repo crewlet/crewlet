@@ -409,7 +409,7 @@ func runGitLabProvision(environ config.Source, args []string, stdout, stderr io.
 			*mode, strings.Join(gitlab.Modes(), ", "))
 	}
 
-	company, err := config.LoadCompanyToRun(companyPath)
+	company, err := config.LoadCompanyToRun(companyPath, nil)
 	if err != nil {
 		return err
 	}
@@ -724,7 +724,7 @@ func runMattermostProvision(environ config.Source, args []string, stdout, stderr
 		return errors.New("name exactly one company document")
 	}
 
-	company, err := config.LoadCompanyToRun(companyPath)
+	company, err := config.LoadCompanyToRun(companyPath, nil)
 	if err != nil {
 		return err
 	}
@@ -850,7 +850,7 @@ func runMattermostDoctor(environ config.Source, args []string, stdout, stderr io
 		return errors.New("name exactly one company document")
 	}
 
-	company, err := config.LoadCompanyToRun(companyPath)
+	company, err := config.LoadCompanyToRun(companyPath, nil)
 	if err != nil {
 		return err
 	}

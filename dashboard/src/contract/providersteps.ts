@@ -11,9 +11,9 @@
  * file back, so the first step writes the running company to one. That step
  * is `crewlet config export` and not `GET /config?format=yaml`: the read is
  * redacted, and `crewlet llm` refuses a company file still carrying a mask
- * (`config.LoadCompanyToRun`, whose runnable rules refuse one) — as does the
- * import's own check, on either route — while the export is the stored
- * document as it stands. The node is stopped
+ * (`config.LoadCompanyToRun` with no revision to restore one from, since the
+ * command writes none) — the import would restore it, but the sign-in comes
+ * first — while the export is the stored document as it stands. The node is stopped
  * first because the export reads the node's store, which one process holds at
  * a time — `crewlet llm` itself runs beside a running node, reading the stored
  * values through it — and the import then takes the offline route, and the

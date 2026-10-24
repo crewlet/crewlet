@@ -54,7 +54,7 @@ func runGitHubProvision(environ config.Source, args []string, stdout, stderr io.
 		return errors.New("name exactly one company document")
 	}
 
-	company, err := config.LoadCompanyToRun(companyPath)
+	company, err := config.LoadCompanyToRun(companyPath, nil)
 	if err != nil {
 		return err
 	}

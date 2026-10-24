@@ -205,9 +205,10 @@ crewlet run
 - **The file comes from `crewlet config export`**, the active revision as it
   is stored, rather than from `GET /config?format=yaml` or **Copy as YAML**:
   those are redacted, and `crewlet llm` refuses a company file that still
-  carries a `__redacted__` mask, since nothing on its way restores one. A
-  `${NAME}` reference comes out as the reference, and a credential written
-  inline comes out in the clear (a company the builder created holds none).
+  carries a `__redacted__` mask — the import would restore one, but `crewlet
+  llm` writes no revision and restores nothing. A `${NAME}` reference comes
+  out as the reference, and a credential written inline comes out in the
+  clear (a company the builder created holds none).
 - **The entry needs only its model.** `default` drives Claude Code, the
   default CLI, on your subscription; `-capture-token` mints a headless token
   and stores it in the [secret store](../concepts/secret-store.md) under the
@@ -902,9 +903,13 @@ on every import, so a name corrected there would replace that seat or unit. Cred
 in the copy read as `__redacted__` (a whole `${NAME}` reference is shown as it
 is). Importing the file over the running company restores each masked value
 from the active revision by the identity of what holds it (a seat by its
-handle, a unit by its key); a store with no active revision has nothing to
-restore from, which is one more reason a file kept in a repository should
-hold `${NAME}` references rather than values.
+handle, a unit by its key) — `crewlet config import` through a running node
+or offline, and a node starting on the file with either flag, which restores
+from its own active revision. A store with no active revision has nothing to
+restore from, and a member that is new or renamed in the file has nothing of
+its own there, so either is refused naming the field; that is one more reason
+a file kept in a repository should hold `${NAME}` references rather than
+values.
 
 ## A draft survives a reload
 

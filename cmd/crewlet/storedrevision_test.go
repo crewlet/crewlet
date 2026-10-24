@@ -353,7 +353,7 @@ func TestACompanyFileWithADuplicateUnitKeyRunsAndIsRefusedOnlyOnImport(t *testin
 	if err := flags.Parse([]string{"-company", file}); err != nil {
 		t.Fatal(err)
 	}
-	seed, err := cfg.resolveSeed(flags, "")
+	seed, err := cfg.resolveSeed(flags, "", nil)
 	if err != nil {
 		t.Fatalf("crewlet run refused a company file that breaks only an admission rule: %v", err)
 	}

@@ -54,7 +54,7 @@ func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Wr
 		return errors.New("name exactly one company document")
 	}
 
-	company, err := config.LoadCompanyToRun(companyPath)
+	company, err := config.LoadCompanyToRun(companyPath, nil)
 	if err != nil {
 		return err
 	}

@@ -212,7 +212,7 @@ type cliAgentProvider struct {
 func loadLLMConfig(ctx context.Context, environ config.Source, companyPath, bootstrapPath string,
 	notes io.Writer) (*config.Company, *config.Resolver, func(), error) {
 
-	company, err := config.LoadCompanyToRun(companyPath)
+	company, err := config.LoadCompanyToRun(companyPath, nil)
 	if err != nil {
 		return nil, nil, nil, err
 	}

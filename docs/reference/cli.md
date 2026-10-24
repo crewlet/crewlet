@@ -118,6 +118,13 @@ only when it is actually written as a new revision (`-company` into an empty
 store, `-import-company` over a different company): a file that is already the
 active revision, or a bootstrap the store's own company outranks, starts the
 node even when it carries a duplicate unit key stored before the rule existed.
+A file that is a **redacted read** — `crewlet config show`, `GET /config`, the
+dashboard's Copy as YAML, each of which masks an inline credential as
+`__redacted__` — has every mask restored from this node's active revision
+before it is judged, by the identity of what holds it (a seat by its handle, a
+unit by its key), as [`crewlet config import`](#crewlet-config-import) restores
+one; a mask nothing there answers, or a store holding no revision, refuses the
+start naming the field.
 To change a **running** fleet with no restart at all, use
 [`crewlet config import`](#crewlet-config-import), which goes through the
 node's API. The path comes from the
@@ -302,6 +309,17 @@ crewlet config import <company.yaml> [-config PATH] [-api URL] [-summary STR]
 
 Validates the Tier B YAML and writes it as a new active revision, recording the
 previously-active revision as its `parent_revision_id`.
+
+**A redacted read imports over the company it was read from.** `crewlet config
+show`, `GET /config` and the dashboard's Copy as YAML mask every inline
+credential as `__redacted__`, and a file kept in step from them is written back
+with this command: each mask is restored from the revision the import replaces,
+by the identity of what holds it (a seat by its handle, a unit by its key, an
+entry by its key), and only then is the document validated — by the node's
+`PUT /config` through a running node, and here, against this node's active
+revision, offline. A mask nothing there answers — a member that is new or was
+renamed, or a store holding no revision — is refused naming its field, and
+nothing is stored.
 
 **It reaches a running node.** The store is exclusive to one process, so
 against a live engine this cannot open the database — and it no longer needs

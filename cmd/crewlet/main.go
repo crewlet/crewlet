@@ -373,14 +373,29 @@ type tierBSeed struct {
 // [configFlags.load] does: an operator fixing a broker URL only to be told
 // about their org chart on the next boot has been made to pay twice for one
 // edit.
-func (c configFlags) loadForRun(set *flag.FlagSet, importPath string) (
+func (c configFlags) loadForRun(ctx context.Context, set *flag.FlagSet, importPath string) (
 	*config.Bootstrap, tierBSeed, error,
 ) {
 	// See [configFlags.load] for why Tier A resolves environment-only.
 	boot, bootErr := config.LoadBootstrap(*c.bootstrap, config.EnvOnly())
 	bootErr = nameTheNeighbour(*c.bootstrap, bootErr)
 
-	seed, seedErr := c.resolveSeed(set, importPath)
+	// THE REVISION A REDACTED FILE WAS READ FROM is this node's active one,
+	// which its own store holds: a company.yaml kept in sync from Copy as
+	// YAML or `GET /config` carries a mask for every inline credential, and
+	// the file starts the node — which boots on it — and may be imported
+	// over that revision, so it is restored against it as `crewlet config
+	// import` restores one ([config.LoadCompanyToRun]). Read only for a file
+	// with a mask in it, and never from a scratch store, which holds the
+	// previous run's rows and is deleted as the engine opens it.
+	var prior config.PriorRevision
+	if bootErr == nil && !boot.Store.Scratch {
+		prior = func() (*config.Company, error) {
+			company, _, err := companyFromStore(ctx, *c.bootstrap)
+			return company, err
+		}
+	}
+	seed, seedErr := c.resolveSeed(set, importPath, prior)
 	if bootErr == nil && seedErr == nil && seed.Override {
 		seedErr = refuseManagedOverride(boot, seed.Path)
 	}
@@ -396,8 +411,10 @@ func (c configFlags) loadForRun(set *flag.FlagSet, importPath string) (
 	return boot, seed, seedErr
 }
 
-// resolveSeed decides which Tier B file this invocation carries and why.
-func (c configFlags) resolveSeed(set *flag.FlagSet, importPath string) (tierBSeed, error) {
+// resolveSeed decides which Tier B file this invocation carries and why, the
+// file restored against prior where it is a redacted read.
+func (c configFlags) resolveSeed(set *flag.FlagSet, importPath string,
+	prior config.PriorRevision) (tierBSeed, error) {
 	named := strings.TrimSpace(importPath)
 	if named != "" && isFlagSet(set, "company") {
 		// REFUSED rather than resolved by precedence. The two flags ask
@@ -415,7 +432,7 @@ func (c configFlags) resolveSeed(set *flag.FlagSet, importPath string) (tierBSee
 	// boots import nothing from it: see [config.LoadCompanyToRun]. Where the
 	// file IS imported, seedCompany holds it to the admission rules first.
 	if named != "" {
-		company, err := config.LoadCompanyToRun(named)
+		company, err := config.LoadCompanyToRun(named, prior)
 		if err != nil {
 			return tierBSeed{}, err
 		}
@@ -423,7 +440,7 @@ func (c configFlags) resolveSeed(set *flag.FlagSet, importPath string) (tierBSee
 	}
 
 	path := *c.company
-	company, err := config.LoadCompanyToRun(path)
+	company, err := config.LoadCompanyToRun(path, prior)
 	if err == nil {
 		return tierBSeed{Path: path, Company: company}, nil
 	}
@@ -1015,7 +1032,11 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	log := logging.Get("cli")
 	warnUnrecognisedLogNames(log, "flag", "-log-level", *logLevel, "-log-format", *logFormat)
 
-	boot, seed, loadErr := cfg.loadForRun(fs, *importCompany)
+	// A BACKGROUND CONTEXT, because the run's own — cancelled by a signal —
+	// is made below, once the log file this load names is open. What the
+	// load reads is this node's own files, bounded by the store's busy
+	// timeout.
+	boot, seed, loadErr := cfg.loadForRun(context.Background(), fs, *importCompany)
 	if boot == nil {
 		// Tier A itself is what failed, so there is no document naming a
 		// log file and nothing to open. stderr is the whole record.
