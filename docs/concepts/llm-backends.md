@@ -1982,14 +1982,27 @@ because no shipped CLI has one: the `opencode` profile used to, with
 never from argv (which is visible in `ps` and lands in shell history).
 
 Every built-in profile leaves `stdin_login` unset, and the command says so
-rather than failing obscurely:
+rather than failing obscurely, naming only the routes that entry has, chosen by
+its `auth.mode` first as [`doctor`](#how-doctor-judges-a-sign-in) chooses them.
+Under `subscription` those are a login — the CLI's own login where it has a
+login command, and otherwise a login made with the CLI by hand and adopted with
+`-from-host` — and `-capture-token` where the CLI mints a headless token. Under
+`inherit-env` they are the variables the mode forwards, exported in the engine's
+environment, that login, and, where the CLI mints a token, `-capture-token
+-print-token` to export what it prints, never a token stored with
+`-capture-token`. Under `api-key` they are the key alone, never a login or a
+token. Where the CLI names no variable for the mode — no key variable under
+`api-key`, neither variable under `inherit-env`, a pairing every write of the
+configuration refuses — the mode hands the CLI nothing, and the entry is told
+so and to set `auth.mode: subscription` and sign the CLI in with a login, in
+place of the variables. A `subscription` entry is told:
 
 ```
 cliagent: this CLI has no such login command: the "claude-code" CLI
 authenticates through the vendor's browser OAuth flow — there is no
-username/password login to drive. Run `crewlet llm login` (which brokers
-that flow), or `crewlet llm login -capture-token` where the vendor mints
-a headless token. If your build of this CLI does accept a credential,
+username/password login to drive: run `crewlet llm login default`, or mint
+a headless CLAUDE_CODE_OAUTH_TOKEN with `crewlet llm login default
+-capture-token`. If your build of this CLI does accept a credential,
 declare it under providers.llm.default.overrides.stdin_login
 ```
 

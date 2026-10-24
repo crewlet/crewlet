@@ -488,6 +488,216 @@ func TestACLIWithNoCredentialLoginExplainsItself(t *testing.T) {
 	}
 }
 
+// AND IT NAMES ONLY ROUTES THAT RUN. It offered `crewlet llm login` to a CLI
+// that declares no login subcommand, which that command refuses, and
+// `-capture-token` "where the vendor mints a headless token" to every CLI,
+// which that command refuses for one that mints none. Claude Code as shipped
+// is the control: it has both routes, and is told both.
+//
+// Mutation: offer -capture-token whatever the CLI mints, and the custom case
+// is told it; offer `crewlet llm login KEY` whatever the CLI declares, and so
+// is the custom case.
+func TestACredentialLoginRefusalNamesOnlyRoutesThatRun(t *testing.T) {
+	t.Parallel()
+	claude := func(t *testing.T, overrides map[string]any) *Provider {
+		t.Helper()
+		dir := t.TempDir()
+		t.Cleanup(func() { forgetWorkspace(dir) })
+		p, err := New(Config{
+			Key: "sub", Agent: "claude-code", StateDir: dir, Timeout: time.Second,
+			MaxConcurrent: 1, Overrides: overrides,
+		})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		return p
+	}
+	for _, tc := range []struct {
+		name          string
+		provider      func(t *testing.T) *Provider
+		want, notWant []string
+	}{
+		{
+			name:     "claude-code as shipped",
+			provider: func(t *testing.T) *Provider { return claude(t, nil) },
+			want: []string{"run `crewlet llm login sub`",
+				"CLAUDE_CODE_OAUTH_TOKEN with `crewlet llm login sub -capture-token`"},
+		},
+		{
+			name:     "a CLI with no login subcommand",
+			provider: loginProvider,
+			want:     []string{"declares no login subcommand", "`crewlet llm login sub -from-host`"},
+			notWant:  []string{"run `crewlet llm login sub`", "capture-token"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := tc.provider(t).CredentialLogin(t.Context(), "ops@example.com", "hunter2",
+				&bytes.Buffer{}, &bytes.Buffer{})
+			if !errors.Is(err, ErrNoLoginCommand) {
+				t.Fatalf("err = %v, want ErrNoLoginCommand", err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not name %q: %v", want, err)
+				}
+			}
+			for _, bad := range tc.notWant {
+				if strings.Contains(err.Error(), bad) {
+					t.Errorf("the refusal names %q, a route that does not run here: %v", bad, err)
+				}
+			}
+		})
+	}
+}
+
+// A CLI THAT MINTS NO TOKEN IS SENT TO THE LOGIN IT HAS. `-capture-token` on
+// one told the operator to "run `crewlet llm login`" to broker its own login,
+// which a CLI declaring no login subcommand refuses in turn. Codex, which has
+// one, is the control.
+//
+// Mutation: name `crewlet llm login KEY` whatever the CLI declares, and the
+// custom case is told it.
+func TestATokenMintRefusalNamesTheLoginTheCLIHas(t *testing.T) {
+	t.Parallel()
+	codex := func(t *testing.T) *Provider {
+		t.Helper()
+		dir := t.TempDir()
+		t.Cleanup(func() { forgetWorkspace(dir) })
+		p, err := New(Config{
+			Key: "sub", Agent: "codex", StateDir: dir, Timeout: time.Second, MaxConcurrent: 1,
+		})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		return p
+	}
+	for _, tc := range []struct {
+		name          string
+		provider      func(t *testing.T) *Provider
+		want, notWant []string
+	}{
+		{
+			name: "codex", provider: codex,
+			want: []string{`the "codex" CLI mints no headless token`, "run `crewlet llm login sub`"},
+		},
+		{
+			name: "a CLI with no login subcommand", provider: loginProvider,
+			want:    []string{"declares no login subcommand", "`crewlet llm login sub -from-host`"},
+			notWant: []string{"run `crewlet llm login"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := tc.provider(t).CaptureToken(t.Context(), nil, &bytes.Buffer{})
+			if !errors.Is(err, ErrNoLoginCommand) {
+				t.Fatalf("err = %v, want ErrNoLoginCommand", err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not name %q: %v", want, err)
+				}
+			}
+			for _, bad := range tc.notWant {
+				if strings.Contains(err.Error(), bad) {
+					t.Errorf("the refusal names %q, a route this CLI does not have: %v", bad, err)
+				}
+			}
+		})
+	}
+}
+
+// AND THE MODE CHOOSES ITS ROUTES BEFORE THE CLI DOES. Chosen by the CLI alone,
+// an api-key entry was told to run the CLI's login or, on Claude Code, to mint
+// a headless token with `-capture-token` — a login is not what an api-key entry
+// signs in with, and the token is one the mode removes from the CLI's
+// environment and `crewlet llm login` refuses before it mints; an inherit-env
+// Claude Code entry was told the same mint, whose token lands in the secret
+// store that mode never reads, so the command refuses to store it. api-key is
+// now told its key alone, and inherit-env what it forwards, a login and, where
+// the CLI mints, a token minted to stdout to export. Codex, which mints none,
+// is held to the same split. OpenCode under api-key, a pairing every write of
+// the configuration refuses and `crewlet llm` still loads, names no key
+// variable, so the mode hands its CLI nothing and the remedy is the mode's own,
+// a login under subscription: it was told that and, in the same sentence, that
+// a login is not its sign-in.
+//
+// Mutation: choose the routes by the CLI alone, and every case is red; word
+// the opencode case as an api-key entry that keeps its key, and it is red.
+func TestACredentialLoginRefusalFollowsTheEntrysAuthMode(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, agent   string
+		mode          AuthMode
+		want, notWant []string
+	}{
+		{
+			name: "claude-code under api-key", agent: "claude-code", mode: AuthAPIKey,
+			want: []string{"auth.mode is api-key",
+				"providers.llm.sub.auth.api_key, else ANTHROPIC_API_KEY", "`crewlet secrets set`"},
+			notWant: []string{"crewlet llm login sub", "capture-token", "stdin_login"},
+		},
+		{
+			name: "codex under api-key", agent: "codex", mode: AuthAPIKey,
+			want: []string{"auth.mode is api-key",
+				"providers.llm.sub.auth.api_key, else OPENAI_API_KEY", "`crewlet secrets set`"},
+			notWant: []string{"crewlet llm login sub", "stdin_login"},
+		},
+		{
+			name: "claude-code under inherit-env", agent: "claude-code", mode: AuthInheritEnv,
+			want: []string{"run `crewlet llm login sub`", "auth.mode is inherit-env",
+				"CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY from the engine's own process environment",
+				"export one in the engine's environment",
+				"`crewlet llm login sub -capture-token -print-token`",
+				"export it as CLAUDE_CODE_OAUTH_TOKEN in the engine's environment"},
+			notWant: []string{"with `crewlet llm login sub -capture-token`"},
+		},
+		{
+			name: "codex under inherit-env", agent: "codex", mode: AuthInheritEnv,
+			want: []string{"run `crewlet llm login sub`", "auth.mode is inherit-env",
+				"OPENAI_API_KEY from the engine's own process environment",
+				"export it in the engine's environment"},
+			notWant: []string{"capture-token"},
+		},
+		{
+			name: "opencode under api-key, its profile naming no key variable", agent: "opencode",
+			mode: AuthAPIKey,
+			want: []string{"its auth.mode is api-key, which puts its key in no variable",
+				"a pairing every write of the configuration refuses",
+				"set auth.mode: subscription, and sign the CLI in with a login"},
+			notWant: []string{"a login is not this entry's sign-in", "crewlet llm login sub",
+				"capture-token", "stdin_login"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			t.Cleanup(func() { forgetWorkspace(dir) })
+			p, err := New(Config{
+				Key: "sub", Agent: tc.agent, StateDir: dir, Timeout: time.Second, MaxConcurrent: 1,
+				Auth: Auth{Mode: tc.mode},
+			})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			err = p.CredentialLogin(t.Context(), "ops@example.com", "hunter2", &bytes.Buffer{}, &bytes.Buffer{})
+			if !errors.Is(err, ErrNoLoginCommand) {
+				t.Fatalf("err = %v, want ErrNoLoginCommand", err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not name %q: %v", want, err)
+				}
+			}
+			for _, bad := range tc.notWant {
+				if strings.Contains(err.Error(), bad) {
+					t.Errorf("the refusal names %q, a route this mode does not read: %v", bad, err)
+				}
+			}
+		})
+	}
+}
+
 // NO BUILT-IN PROFILE SHIPS A CREDENTIAL LOGIN, because no shipped CLI has
 // one. opencode's did — `auth login --username`, a flag no release of either
 // OpenCode major accepts, which printed usage and exited 1 — and a declared

@@ -119,14 +119,16 @@ func (p *Provider) signInFrom(login map[string][]byte, loginErr error) signIn {
 // and how an operator supplies it.
 //
 // WORDED ONCE, for every message that tells an operator how to sign such an
-// entry in — the doctor's "no sign-in", a remote coding run's refusal and
-// `crewlet llm login`'s refusal of a token the mode never reads. Each used to
-// choose its remedy for itself, and two of them chose it by the CLI's profile
-// alone: an api-key or inherit-env Claude Code entry was told to mint a
-// headless token, which api-key removes from the CLI's environment and
-// inherit-env never looks for in the secret store the token is stored in — and
-// the command that mints one stored it anyway and printed an auth.token snippet
-// that validation refuses under either mode.
+// entry in — the doctor's "no sign-in", a remote coding run's refusal,
+// `crewlet llm login`'s refusal of a token the mode never reads, and its
+// `-username` refusal of a CLI with no credential login
+// ([Provider.CredentialLogin]). Each used to choose its remedy for itself, and
+// three of them chose it by the CLI's profile alone: an api-key or inherit-env
+// Claude Code entry was told to mint a headless token, which api-key removes
+// from the CLI's environment and inherit-env never looks for in the secret
+// store the token is stored in — and the command that mints one stored it
+// anyway and printed an auth.token snippet that validation refuses under
+// either mode.
 //
 // A subscription entry has none: its credentials are a login, which the login
 // commands write, and a headless token, which the mode reads from the secret

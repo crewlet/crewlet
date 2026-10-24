@@ -103,9 +103,11 @@ func (p *Provider) loginLeftNothing() error {
 // ephemeral container with no persistent volume.
 func (p *Provider) CaptureToken(ctx context.Context, in io.Reader, errOut io.Writer) (string, error) {
 	if len(p.profile.CaptureTokenArgs) == 0 {
-		return "", fmt.Errorf("%w: the %q CLI mints no headless token — "+
-			"run `crewlet llm login` to broker its own login instead",
-			ErrNoLoginCommand, p.agent)
+		// The login route this CLI has ([Provider.loginRemedy]): Gemini CLI,
+		// Qwen Code and Grok declare no login subcommand, so "run `crewlet
+		// llm login`" sent them to a second refusal.
+		return "", fmt.Errorf("%w: the %q CLI mints no headless token, so sign it in "+
+			"with a login instead: %s", ErrNoLoginCommand, p.agent, p.loginRemedy(nil))
 	}
 	// MIRRORED WHILE IT IS CAPTURED, and this is the whole difficulty of the
 	// command. A minting command is INTERACTIVE — the CLI renders its UI
@@ -199,13 +201,7 @@ func lastPrintedLine(raw string) string {
 func (p *Provider) CredentialLogin(ctx context.Context, username, password string, out, errOut io.Writer) error {
 	login := p.profile.StdinLogin
 	if login == nil {
-		return fmt.Errorf("%w: the %q CLI authenticates through the vendor's browser "+
-			"OAuth flow — there is no username/password login to drive. Run "+
-			"`crewlet llm login` (which brokers that flow), or "+
-			"`crewlet llm login -capture-token` where the vendor mints a headless "+
-			"token. If your build of this CLI does accept a credential, declare it "+
-			"under providers.llm.%s.overrides.stdin_login",
-			ErrNoLoginCommand, p.agent, p.key)
+		return p.noCredentialLogin()
 	}
 	args := make([]string, 0, len(login.Args))
 	for _, arg := range login.Args {
@@ -227,6 +223,62 @@ func (p *Provider) CredentialLogin(ctx context.Context, username, password strin
 		return p.loginLeftNothing()
 	}
 	return nil
+}
+
+// noCredentialLogin is [Provider.CredentialLogin]'s refusal for a CLI that
+// declares no username/password login, naming the routes this entry has.
+//
+// THE MODE FIRST, THEN THE CLI, since the mode decides what the entry reads at
+// all, in the words [Provider.ModeSignIn] keeps for every message that tells an
+// operator how to sign such an entry in. Chosen by the CLI alone, an api-key
+// entry was offered a login and `-capture-token`, a token the mode removes from
+// the CLI's environment and that `crewlet llm login` refuses before it mints;
+// and an inherit-env one `-capture-token`, whose token lands in the secret
+// store that mode never reads, so the command refuses to store it. So api-key
+// is told its key and nothing else, as the doctor tells it: a login in its
+// directory would sit in every seat's home beside the key, and which of the
+// two the CLI bills is the vendor's precedence rather than the entry's — except
+// on a CLI whose profile names no key variable, a pairing every write of the
+// configuration refuses, where the mode hands the CLI nothing and its remedy
+// is a login under subscription, so the entry is told that and not that a
+// login is not its sign-in. inherit-env is told what it forwards, a login,
+// which it seeds like every mode, and a minted token only to stdout, to
+// export. subscription is told a login and a headless token.
+//
+// ONLY ROUTES THIS CLI HAS, judged as the doctor judges them: its own login
+// command where it declares one ([Provider.loginRemedy]), and -capture-token
+// where it mints a headless token ([Provider.MintsHeadlessToken]). Offered
+// whatever the CLI declared, both sent an operator of a CLI with neither to a
+// second refusal.
+func (p *Provider) noCredentialLogin() error {
+	const lead = "%w: the %q CLI authenticates through the vendor's browser OAuth flow — " +
+		"there is no username/password login to drive"
+	declare := fmt.Sprintf(". If your build of this CLI does accept a credential, declare it "+
+		"under providers.llm.%s.overrides.stdin_login", p.key)
+	sign, fromEnv := p.ModeSignIn()
+	switch {
+	case fromEnv && sign.Mode == AuthAPIKey && len(sign.Variables) == 0:
+		return fmt.Errorf(lead+": %s", ErrNoLoginCommand, p.agent, sign.Missing())
+	case fromEnv && sign.Mode == AuthAPIKey:
+		return fmt.Errorf(lead+", and a login is not this entry's sign-in: its auth.mode is "+
+			"api-key, which %s: %s", ErrNoLoginCommand, p.agent, sign.Reads, sign.Supply)
+	case fromEnv:
+		mint := ""
+		if p.MintsHeadlessToken() {
+			mint = fmt.Sprintf(", or mint a headless %s to stdout, storing nothing, with "+
+				"`crewlet llm login %s -capture-token -print-token`, and export it as %s in "+
+				"the engine's environment", p.profile.TokenEnv, p.key, p.profile.TokenEnv)
+		}
+		return fmt.Errorf(lead+": %s; or, as its auth.mode is %s, which %s, %s%s%s",
+			ErrNoLoginCommand, p.agent, p.loginRemedy(nil), sign.Mode, sign.Reads, sign.Supply,
+			mint, declare)
+	}
+	mint := ""
+	if p.MintsHeadlessToken() {
+		mint = fmt.Sprintf(", or mint a headless %s with `crewlet llm login %s -capture-token`",
+			p.profile.TokenEnv, p.key)
+	}
+	return fmt.Errorf(lead+": %s%s%s", ErrNoLoginCommand, p.agent, p.loginRemedy(nil), mint, declare)
 }
 
 // Logout revokes the login where the CLI can, and removes the credential
