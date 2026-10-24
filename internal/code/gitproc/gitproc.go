@@ -298,7 +298,7 @@
 // arm's six runs span 0.3–1.3 ms of a 2–3 ms process here). What it costs a
 // request is the code host's (internal/code/host, its warm fetch).
 //
-// # Two floors, one pin (ADR-0039)
+// # Two floors, one pin (ADR-0053)
 //
 // A git node runs git 2.55 or newer ([NodeMinVersion], the node floor),
 // checked where a pool is built — [New], and nowhere else, since every git a

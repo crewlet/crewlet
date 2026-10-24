@@ -1,9 +1,9 @@
 /**
- * Adding an MCP server from Settings › Tools & MCP.
+ * Adding an MCP server from Settings › MCP Tools.
  *
  * A NEW CONFIGURATION REVISION, not an act: a server is a `mcp_servers` entry,
  * so the write goes through `protocol/configWrite.ts` like a seat or a budget
- * ceiling, guarded by the operator credential (`useConfigWriteAccess`) rather
+ * ceiling, guarded by Admin (`useConfigWriteAccess`) rather
  * than a seat binding. The button is drawn for every reader and disabled with
  * the reason for one who cannot change the configuration.
  *
@@ -21,10 +21,16 @@
  * A CREDENTIAL IS A POINTER. Every environment value and header is a secret
  * field: typing `$` offers the company's sealed entries by name, and a literal
  * is masked. What the form never does is show a value it did not type.
+ *
+ * A POINTER THAT NAMES NOTHING HOLDS THE SERVER BACK. The engine starts no
+ * server with a value whose `${NAME}` resolves to nothing, so a row says, on
+ * its own, whether it may be unset: ticked, the row is in the server's
+ * `optional_keys` and is left out instead. A row, not a secret: one secret can
+ * sit in two values a server needs differently.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Button, Callout, Disclosure, IconButton, Modal, useToast } from "@crewlethq/ui";
+import { Button, Callout, Checkbox, Disclosure, IconButton, Modal, useToast } from "@crewlethq/ui";
 import { PlugGlyph, PlusGlyph, XGlyph } from "@crewlethq/icons/glyphs";
 import { ConfigField } from "~/components/ConfigField.tsx";
 import {
@@ -40,7 +46,8 @@ import {
   type ServerForm,
 } from "~/lib/mcpServers.ts";
 import { useSecretNames } from "~/lib/useSecretNames.ts";
-import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
+import { configGuardedReason, useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
+import { useWaiting } from "~/lib/waiting.ts";
 import {
   introducedWarnings,
   managedSentence,
@@ -67,7 +74,7 @@ type AddState =
 function addRefusalWords(refusal: ConfigRefusal, name: string): string {
   switch (refusal.kind) {
     case "guarded":
-      return "The engine did not take this token as an operator's, so the server was not added.";
+      return configGuardedReason(refusal.code);
     case "managed":
       return managedSentence(refusal.managedBy);
     case "conflict":
@@ -85,6 +92,8 @@ function addRefusalWords(refusal: ConfigRefusal, name: string): string {
       }
     case "draining":
       return `This node is draining and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`;
+    case "starting":
+      return `This node is still starting and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`;
     case "unreachable":
       return "The engine did not answer, so the server may or may not have been added. Look for it in the list before trying again.";
     case "problems":
@@ -111,6 +120,7 @@ export function AddMcpServerDialog({
   onAdded: (name: string) => void;
 }) {
   const toast = useToast();
+  const waiting = useWaiting();
   const access = useConfigWriteAccess();
   const { names: secrets, refresh } = useSecretNames();
   const [form, setForm] = useState<ServerForm>(emptyServerForm);
@@ -155,7 +165,6 @@ export function AddMcpServerDialog({
       toast.show({
         variant: "success",
         title: `Added ${name}`,
-        message: "Each node starts it once it has applied the new configuration.",
       });
       onAdded(name);
       return;
@@ -168,7 +177,7 @@ export function AddMcpServerDialog({
       });
       return;
     }
-    setState(refused(outcome, name));
+    setState(refused(outcome, name, form.transport));
   };
 
   const submit = () => {
@@ -193,7 +202,7 @@ export function AddMcpServerDialog({
           return;
         }
         if (after.kind !== "valid") {
-          setState(refused(after, name));
+          setState(refused(after, name, form.transport));
           return;
         }
         const warnings = introducedWarnings(
@@ -219,11 +228,7 @@ export function AddMcpServerDialog({
   };
 
   const warned = state.kind === "warned";
-  const blocked = !access.can
-    ? access.reason
-    : busy
-      ? "Waiting for the engine to answer."
-      : undefined;
+  const blocked = !access.can ? access.reason : busy ? waiting.reason : undefined;
   const press = () => {
     if (blocked) return;
     if (warned) confirm();
@@ -237,7 +242,7 @@ export function AddMcpServerDialog({
       open
       size="md"
       title="Add an MCP server"
-      subtitle="Give agents any tool that speaks MCP — shared by the company, or one per seat with its own credentials."
+      subtitle="Shared, or one per seat with its own credentials."
       icon={<PlugGlyph />}
       onClose={onClose}
       onSubmit={press}
@@ -271,14 +276,9 @@ export function AddMcpServerDialog({
           disabled={busy}
           error={errorOf("name")}
           help={
-            nodeOnly.has(form.name.trim()) ? (
-              <>
-                A node still runs a server called <span className="mono">{form.name.trim()}</span>{" "}
-                from an earlier revision. The configuration carries none, so the name is free.
-              </>
-            ) : (
-              "The key a seat declares credentials under, and how the server's tools are labelled in every prompt. It cannot be renamed here later."
-            )
+            nodeOnly.has(form.name.trim())
+              ? "Free to use. An old server by this name is still running."
+              : "Can’t be renamed later."
           }
         />
         <div className="mcp-add-pair">
@@ -316,7 +316,7 @@ export function AddMcpServerDialog({
               {
                 value: "per_seat",
                 label: "One per seat",
-                hint: "Launched only for a seat that declares credentials for it under mcp_env — add those in Edit org.",
+                hint: "Runs for seats with credentials for it. Add them in Edit org.",
               },
             ]}
           />
@@ -331,7 +331,7 @@ export function AddMcpServerDialog({
               placeholder="uvx"
               disabled={busy}
               error={errorOf("command")}
-              help="The executable each node launches. It has to be on the engine host's PATH."
+              help="Must be on the engine host’s PATH."
             />
             <ConfigField
               label="Arguments"
@@ -388,7 +388,7 @@ export function AddMcpServerDialog({
             onChange={(toolPrefix) => edit({ toolPrefix })}
             disabled={busy}
             error={errorOf("toolPrefix")}
-            help="Put before each of its tool names, for a server whose tools would collide with another's."
+            help="Avoids name clashes with other servers."
           />
         </Disclosure>
         <AddStatus state={state} />
@@ -430,7 +430,8 @@ function AddStatus({ state }: { state: AddState }) {
  * `$` offers the sealed entries by name: the header an http server
  * authenticates with is the same token a stdio server reads from its
  * environment, and both belong in the sealed store rather than in the
- * company document.
+ * company document. Each row says whether it may be unset (see the module
+ * doc), said once above the rows rather than under each.
  */
 function PairsEditor({
   noun,
@@ -456,10 +457,13 @@ function PairsEditor({
   return (
     <fieldset className="mcp-add-pairs">
       <legend className="t-label">{label}</legend>
-      {pairs.length === 0 && (
+      {pairs.length === 0 ? (
         <p className="t-caption">
-          None. Credentials go here as <span className="mono">{"${NAME}"}</span> — typing{" "}
-          <span className="mono">$</span> offers the company&apos;s sealed secrets.
+          None. Type <span className="mono">$</span> to insert a secret.
+        </p>
+      ) : (
+        <p className="t-caption">
+          A secret with no value keeps the server from starting, unless its {noun} may be unset.
         </p>
       )}
       {pairs.map((pair, i) => (
@@ -490,6 +494,15 @@ function PairsEditor({
             disabled={disabled}
             onClick={() => onChange(pairs.filter((_, j) => j !== i))}
           />
+          <div className="mcp-add-pair-optional">
+            <Checkbox
+              label={`${capital(noun)} ${i + 1} may be unset`}
+              checked={pair.optional}
+              size="sm"
+              onCheckedChange={(optional: boolean) => set(i, { optional })}
+              disabled={disabled}
+            />
+          </div>
         </div>
       ))}
       {error && (
@@ -516,9 +529,13 @@ function capital(word: string): string {
   return word.charAt(0).toUpperCase() + word.slice(1);
 }
 
-function refused(refusal: ConfigRefusal, name: string): AddState {
+function refused(
+  refusal: ConfigRefusal,
+  name: string,
+  transport: ServerForm["transport"],
+): AddState {
   if (refusal.kind === "problems") {
-    const { fields, rest } = problemsByField(refusal.problems);
+    const { fields, rest } = problemsByField(refusal.problems, transport);
     return {
       kind: "refused",
       message: rest.length > 0 ? rest.join(" ") : addRefusalWords(refusal, name),

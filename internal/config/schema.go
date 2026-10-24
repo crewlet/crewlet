@@ -10,6 +10,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // Tier names one of the two config documents.
@@ -94,7 +95,7 @@ const (
 // Every string position a `secret:"true"` tag covers carries
 // [secretKeyword]: the field itself for one value, `items` for each member
 // of a list, `additionalProperties` for each value of a map — never a map's
-// keys, which are names. The generator reads the tag through [isSecret],
+// keys, which are names. The generator reads the tag through [secrets.Field],
 // the predicate redaction reads it through, and descends exactly as
 // redaction does, so the positions a config read masks and the positions
 // this document calls credentials are one set, and a test holds them to it
@@ -107,11 +108,27 @@ func Schema(tier Tier) ([]byte, error) {
 	var rootType any
 
 	var g *schemaGen
+	// Each `$id` is where the documentation site serves the CURRENT STABLE
+	// copy (/engine/latest/schema/), never a version, because this tree
+	// cannot name its own: the tag is the version and nothing in the source
+	// records one, so a generated file stamped with a version would be a
+	// second record of it that every release made stale. The site serves
+	// each version's copy under that version's own path — /engine/next/ for
+	// main, /engine/vX.Y/ for an older line — and stamps the copy it serves
+	// with that path, so this spelling is read only from a file outside the
+	// site (a checkout, or what `crewlet schema` writes). latest/ is main's
+	// copy until a release of this code exists and the newest such release's
+	// from then on; the site never serves v0.1.0 there, which predates this
+	// engine and whose schema describes another program's configuration. So an
+	// editor resolving this `$id` gets the current release's field list,
+	// which a binary older or newer than that release does not share: the
+	// schema of the binary in hand is `crewlet schema <tier>`, and the
+	// company-architect skill says to prefer it whenever crewlet is installed.
 	switch tier {
 	case TierBootstrap:
 		root = reflect.TypeOf(Bootstrap{})
 		title = "Crewlet bootstrap config (Tier A)"
-		id = "https://docs.crewlet.ai/schema/bootstrap.schema.json"
+		id = "https://docs.crewlet.ai/engine/latest/schema/bootstrap.schema.json"
 		g = newSchemaGen(true)
 		rules = g.bootstrapRules()
 		// An empty Tier A file is a node running on every default, and
@@ -120,7 +137,7 @@ func Schema(tier Tier) ([]byte, error) {
 	case TierCompany:
 		root = reflect.TypeOf(Company{})
 		title = "Crewlet company config (Tier B)"
-		id = "https://docs.crewlet.ai/schema/company.schema.json"
+		id = "https://docs.crewlet.ai/engine/latest/schema/company.schema.json"
 		g = newSchemaGen(false)
 		rules = companyRules()
 		// A company needs at least a name, and ParseCompanyNode refuses an
@@ -331,7 +348,7 @@ func (g *schemaGen) structSchema(t reflect.Type, secret bool) map[string]any {
 		for i := range typ.NumField() {
 			f := typ.Field(i)
 			if inlined(f) {
-				walk(indirect(f.Type), secret || isSecret(f))
+				walk(indirect(f.Type), secret || secrets.Field(f))
 				continue
 			}
 			if f.PkgPath != "" {
@@ -342,7 +359,7 @@ func (g *schemaGen) structSchema(t reflect.Type, secret bool) map[string]any {
 				continue
 			}
 			directives := parseDirectives(f.Tag.Get("js"))
-			schema := g.fieldSchema(f.Type, directives, secret || isSecret(f))
+			schema := g.fieldSchema(f.Type, directives, secret || secrets.Field(f))
 			if desc := f.Tag.Get("desc"); desc != "" {
 				schema["description"] = desc
 			}
@@ -466,18 +483,37 @@ func (g *schemaGen) textSchema(directives map[string]string) map[string]any {
 		return map[string]any{"anyOf": []any{closed, reference}}
 	}
 	out := map[string]any{"type": textTypes}
+	// maxlen is a BYTE bound the validator already enforces, stated where an
+	// editor can see it: a bound that lived only in a field's description
+	// was prose to a schema, so an editor accepted a value `crewlet validate`
+	// then refused. JSON Schema counts characters rather than bytes, and the
+	// two agree on every value a bounded field here admits, because each such
+	// field's own pattern admits ASCII alone. It bounds the field's OWN
+	// spelling and never the reference beside it, whose length says nothing
+	// about the value it resolves to.
+	own := map[string]any{}
+	if v, ok := directives["maxlen"]; ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			own["maxLength"] = n
+		}
+	}
 	if p, ok := directives["pattern"]; ok {
+		own["pattern"] = p
 		// Branches rather than one alternation, so the field's own rule
 		// stays readable as itself — it is the same expression a validator
 		// somewhere compiles, and a test compares the two.
 		branches := []any{
-			map[string]any{"pattern": p},
+			own,
 			map[string]any{"const": ""}, // unset
 		}
 		if reference != nil {
 			branches = append(branches, map[string]any{"pattern": reference["pattern"]})
 		}
 		out["anyOf"] = branches
+		return out
+	}
+	for k, v := range own {
+		out[k] = v
 	}
 	return out
 }
@@ -619,6 +655,13 @@ func inlined(f reflect.StructField) bool {
 // a character class like {0,63} contains a comma. A directive that silently
 // truncated a pattern would put a WRONG rule in a public artifact, which is
 // worse than no rule.
+//
+// THE KEYS THE GENERATOR READS are `required`; for a string `enum`, `pattern`,
+// `maxlen` and `pointer`; and for a number `min` and `max`. A key outside that
+// set, or a bound that is not a number, would be dropped here without a word —
+// a constraint the author meant and the artifact never states — so the suite
+// walks every tag the two tiers carry and refuses both
+// (TestEveryDirectiveMeansWhatItSays).
 func parseDirectives(tag string) map[string]string {
 	if tag == "" {
 		return nil
@@ -782,7 +825,17 @@ func (g *schemaGen) bootstrapRules() []any {
 		"then":     has("stream", has("url", map[string]any{"minLength": 1})),
 	}
 
-	return []any{noFleetOnLocal, noTwoNodeFleet, replicasNeedPeers, externalNeedsURL}
+	// Every node carries a keyring, whatever its roles: every state-log
+	// record is signed and verified under it. Not a `required` directive
+	// on the field, because what the validator refuses is an EMPTY list
+	// as much as an absent one, and a directive can say only the second.
+	keyringOnEveryNode := map[string]any{
+		"$comment": "every node needs secrets.keys: every state-log record is signed under it.",
+		"allOf":    []any{has("secrets", has("keys", map[string]any{"minItems": 1}))},
+	}
+
+	return []any{noFleetOnLocal, noTwoNodeFleet, replicasNeedPeers, externalNeedsURL,
+		keyringOnEveryNode}
 }
 
 // SchemaTiers is every tier a schema can be generated for — what a

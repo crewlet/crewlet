@@ -2,6 +2,8 @@ package livestate
 
 import (
 	"time"
+
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // A SEAT A PERSON PAUSED, as the dashboard draws it.
@@ -19,9 +21,15 @@ import (
 
 // Paused is who paused a seat, when, and why.
 type Paused struct {
-	// By is the person who paused it — the seat their credential is bound
-	// to — or the credential itself when nobody is bound to it.
-	By string `json:"by"`
+	// By is who paused it, ByKind what sort of author that is, and
+	// OperatorID the credential they did it through — the three halves
+	// iam.ActorFor names and the pause record and its event carry: the
+	// seat for a person the identity directory binds to one (kind human),
+	// the login for anybody else. The credential is what an audit asks
+	// about; the author is who a screen names.
+	By         string        `json:"by"`
+	ByKind     iam.ActorKind `json:"by_kind"`
+	OperatorID string        `json:"operator_id,omitempty"`
 
 	// At is when the seat was paused, RFC 3339 in UTC.
 	At string `json:"at"`
@@ -43,10 +51,11 @@ func (p *Paused) clone() *Paused {
 }
 
 // SeedPause is one paused seat as the coordination record holds it, named by
-// the ROLE this projection keys seats by.
+// the AGENT ID this projection keys seats by — which is what the record itself
+// is keyed on (coord.SeatPause.Seat).
 type SeedPause struct {
-	Role   string
-	Paused Paused
+	AgentID string
+	Paused  Paused
 }
 
 // applyPause moves a seat's pause for one event, reporting whether it did.
@@ -59,12 +68,12 @@ func (s *LiveState) applyPause(agent *agentLive, env Envelope, payload map[strin
 	var next *Paused
 	switch env.Type {
 	case "seat_paused":
-		by := str(payload, "paused_by_seat")
-		if by == "" {
-			by = str(payload, "paused_by")
-		}
 		next = &Paused{
-			By: by, At: str(payload, "paused_at"), Reason: str(payload, "reason"),
+			By:          str(payload, "paused_by"),
+			ByKind:      iam.ActorKind(str(payload, "paused_by_kind")),
+			OperatorID:  str(payload, "operator_id"),
+			At:          str(payload, "paused_at"),
+			Reason:      str(payload, "reason"),
 			StopRunning: flag(payload, "stop_running"),
 		}
 	case "seat_resumed":
@@ -84,7 +93,7 @@ func (s *LiveState) applyPause(agent *agentLive, env Envelope, payload map[strin
 }
 
 // SeedPauses sets each named seat's pause from the coordination record,
-// reporting the roles it moved.
+// reporting the seats it moved.
 //
 // A seat the stream has already moved keeps what the stream said: that is
 // newer than any record read before it arrived.
@@ -93,10 +102,10 @@ func (s *LiveState) SeedPauses(pauses []SeedPause) Change {
 	defer s.mu.Unlock()
 	var change Change
 	for _, p := range pauses {
-		if p.Role == "" {
+		if p.AgentID == "" {
 			continue
 		}
-		agent := s.ensureAgent(p.Role)
+		agent := s.ensureAgent(p.AgentID)
 		if !agent.pausedAt.empty() {
 			continue
 		}
@@ -105,7 +114,7 @@ func (s *LiveState) SeedPauses(pauses []SeedPause) Change {
 		if at, err := time.Parse(time.RFC3339Nano, paused.At); err == nil {
 			agent.pausedAt = newStamp(at.UTC().Format(time.RFC3339Nano))
 		}
-		change.agentMoved(p.Role)
+		change.agentMoved(p.AgentID)
 	}
 	return change
 }

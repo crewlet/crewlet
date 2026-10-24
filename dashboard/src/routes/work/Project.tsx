@@ -31,7 +31,7 @@
  * has happened, ordered by the log rather than by anything the rows sort on.
  * FILES is what the work produced and keeps beside it.
  *
- * A LENS IS A SECTION, so each pushes history: a reader who walked Items →
+ * A LENS IS A SECTION, so each pushes history: a reader who walked Tasks →
  * About → History and pressed Back three times walks out through them.
  *
  * # What a person can change here
@@ -46,7 +46,9 @@ import { useMemo, useState, type ReactNode } from "react";
 import { href, useRoute } from "~/app/router.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { usePageCoverage, usePageLabels, usePageMenu } from "~/app/Shell.tsx";
-import { PageActions, PageLenses } from "~/app/frame/PageActions.tsx";
+import { PageActions, PageLenses, lensLabel } from "~/app/frame/PageActions.tsx";
+import { LENS_LABELS, PROJECT_LENSES, type ProjectLens } from "~/app/scope.ts";
+import { projectArchivedKey } from "~/app/crumbs.ts";
 import { EditProjectButton } from "~/components/writes.tsx";
 import { NewTaskButton } from "~/components/NewTaskButton.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -55,19 +57,19 @@ import { PageNote } from "~/app/frame/PageNote.tsx";
 // [ObjectHeader] renders. Both are right and neither may be renamed for the
 // other's benefit, so the type is aliased where it is imported.
 import { ObjectHeader, type Fact as HeaderFact } from "~/app/frame/ObjectHeader.tsx";
-import { NumberCell } from "~/app/frame/cells.tsx";
+
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Coverage, type RowChrome } from "~/components/work.tsx";
 import {
   Callout,
   Card,
-  Count,
   EmptyState,
   EmptyValue,
   Skeleton,
   TabPanel,
   Tabs,
   Tag,
+  TableNumberCell,
 } from "@crewlethq/ui";
 import {
   LayoutDashboardGlyph,
@@ -79,7 +81,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useWriteAccess } from "~/lib/useWriteAccess.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatResolvers } from "~/lib/seats.ts";
-import { fmtDateTime, relTime } from "~/lib/format.ts";
+import { fmtDateTime, relTime, fmtCount } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import {
   pageCount,
@@ -90,6 +92,8 @@ import {
   targetLabel,
   typeName,
   unfinished,
+  itemPath,
+  subjectItem,
 } from "~/lib/work.ts";
 import { describeChange, foldChartReapplies, reapplySentence } from "~/lib/work.ts";
 import { filed, ProjectCensus } from "./census.tsx";
@@ -99,9 +103,6 @@ import { ProjectFiles } from "./Files.tsx";
 import { FEED_PAGE } from "./feed.tsx";
 import { statusDot } from "./shapes/group.tsx";
 import type { WorkGroup, WorkProjectDetail } from "~/protocol/index.ts";
-
-/** The lenses, in the order the strip draws them; the first is the default. */
-const LENSES = ["items", "about", "history", "files"] as const;
 
 /**
  * The region the lenses control. The row is on the page bar and the panel is
@@ -113,7 +114,7 @@ const LENS_PANEL = "project-lens";
 export function Project({ projectKey }: { projectKey: string }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
-  const [lens, setLens] = useTab("lens", LENSES);
+  const [lens, setLens] = useTab("lens", PROJECT_LENSES);
   // THE TRASH IS THE ONE THING THE MAINTAINED COUNTS CANNOT SEE: a removed
   // task leaves them (`internal/tracker/projectsread.go`), so a project whose
   // every item was removed counts zero while `removed=true` has rows to draw.
@@ -132,7 +133,15 @@ export function Project({ projectKey }: { projectKey: string }) {
   // THE NAME THE HEADER DRAWS IS THE NAME THE TRAIL GETS, and it is one
   // string: a screen that resolved it twice would offer the palette a word the
   // page never showed.
-  usePageLabels(detail?.name ? { [projectKey]: detail.name } : {});
+  usePageLabels(
+    detail?.name
+      ? {
+          [projectKey]: detail.name,
+          // AN ARCHIVED PROJECT SAYS SO IN ITS TRAIL, where its name is.
+          ...(detail.archived ? { [projectArchivedKey(projectKey)]: "archived" } : {}),
+        }
+      : {},
+  );
   usePageCoverage(detail);
   // EDIT PROJECT, AS THE BAR'S "MORE" OFFERS IT ON A PHONE: the same dialog
   // the inline button opens, disabled with the same sentence when this reader
@@ -162,12 +171,14 @@ export function Project({ projectKey }: { projectKey: string }) {
     <>
       {detail && (
         <PageLenses>
+          {/* THE CHIPS ALL PROJECTS' LENSES WEAR (`header/PageHeader.tsx`),
+              so the bar reads one way in either scope. */}
           <Tabs
-            size="sm"
+            variant="chip"
             ariaLabel="Lens"
             panelId={LENS_PANEL}
             value={lens}
-            onValueChange={(value) => setLens(value as (typeof LENSES)[number])}
+            onValueChange={(value) => setLens(value as ProjectLens)}
             items={[
               // THE COUNT IS ON THE LENS A READER IS CHOOSING BETWEEN, from
               // the project's own maintained census — no new read, and it
@@ -184,19 +195,14 @@ export function Project({ projectKey }: { projectKey: string }) {
               // read as a contradiction. The kit's Count carries the noun
               // for a screen reader; the title carries it for a pointer.
               {
-                value: "items",
-                label: (
-                  <span className="lens-count" title={`${unfinished(detail.task_counts)} open`}>
-                    Items
-                    <Count value={unfinished(detail.task_counts)} label="open" />
-                  </span>
-                ),
+                value: "tasks",
+                label: lensLabel(LENS_LABELS.tasks, unfinished(detail.task_counts), "open"),
               },
-              { value: "about", label: "About" },
-              { value: "history", label: "History" },
+              { value: "about", label: LENS_LABELS.about },
+              { value: "history", label: LENS_LABELS.history },
               // FILES IS A COLLECTION, but a paged one, so it takes no count
               // for History's reason.
-              { value: "files", label: "Files" },
+              { value: "files", label: LENS_LABELS.files },
             ]}
           />
         </PageLenses>
@@ -220,7 +226,7 @@ export function Project({ projectKey }: { projectKey: string }) {
       </PageActions>
 
       {state.loading && !detail && <Skeleton variant="text" rows={4} label="Loading the project" />}
-      <QueryState error={state.error} loading={state.loading}>
+      <QueryState error={state.error} refusal={state.refusal} loading={state.loading}>
         {detail && (
           <TabPanel id={LENS_PANEL} value={lens} className="work-main">
             {/* A FINDING ON THE PROJECT'S OWN RECORD is over every lens, not
@@ -234,7 +240,7 @@ export function Project({ projectKey }: { projectKey: string }) {
                 narrowing — and it REPLACES the list, because a toolbar of
                 filters over nothing is a set of controls with nothing to
                 control. */}
-            {lens === "items" &&
+            {lens === "tasks" &&
               (nothingFiled ? (
                 <NothingFiled detail={detail} />
               ) : (
@@ -293,7 +299,7 @@ function ProjectAbout({ detail, chrome }: { detail: WorkProjectDetail; chrome: R
         {/* A FAILED BREAKDOWN IS NOT AN EMPTY ONE. This is the only read that
             can say how the open work is distributed, so a refusal rendered as
             no rows would read as a project whose every task is in one status. */}
-        <QueryState error={census.error} loading={census.loading}>
+        <QueryState error={census.error} refusal={census.refusal} loading={census.loading}>
           {census.data && (
             <div className="col">
               {statusCounts(census.data.groups ?? []).map((line) => (
@@ -303,10 +309,7 @@ function ProjectAbout({ detail, chrome }: { detail: WorkProjectDetail; chrome: R
                   <span className="count-chip">{line.count}</span>
                 </div>
               ))}
-              <span className="t-caption">
-                Open work only — the {detail.task_counts.done} done and {detail.task_counts.closed}{" "}
-                closed are in the census above.
-              </span>
+              <span className="t-caption">Open work only.</span>
             </div>
           )}
         </QueryState>
@@ -379,9 +382,8 @@ function ProjectAbout({ detail, chrome }: { detail: WorkProjectDetail; chrome: R
               move finishes. */}
           {detail.shadowed?.length ? (
             <Callout variant="info">
-              This project redeclares {detail.shadowed.length} workspace field
-              {detail.shadowed.length === 1 ? "" : "s"}, so its own declaration is what its tasks
-              are read against.
+              This project overrides {detail.shadowed.length} workspace field
+              {detail.shadowed.length === 1 ? "" : "s"}.
             </Callout>
           ) : null}
         </div>
@@ -409,7 +411,7 @@ function ProjectFeed({ detail, chrome }: { detail: WorkProjectDetail; chrome: Ro
       >
         <Card.Title>Latest changes</Card.Title>
       </Card.Header>
-      <QueryState error={feed.error} loading={feed.loading}>
+      <QueryState error={feed.error} refusal={feed.refusal} loading={feed.loading}>
         {feed.data &&
           (records.length > 0 ? (
             <div className="col gap-2">
@@ -434,7 +436,7 @@ function ProjectFeed({ detail, chrome }: { detail: WorkProjectDetail; chrome: Ro
                   <div className="col gap-1" key={record.id}>
                     <div className="row gap-2">
                       {record.subject_key ? (
-                        <a className="mono t-link" href={href(["work", record.subject_key])}>
+                        <a className="mono t-link" href={href(itemPath(subjectItem(record)))}>
                           {record.subject_key}
                         </a>
                       ) : (
@@ -451,7 +453,9 @@ function ProjectFeed({ detail, chrome }: { detail: WorkProjectDetail; chrome: Ro
                   </div>
                 );
               })}
-              <a className="t-link" href={href(["work", "history"], { project: detail.key })}>
+              {/* THIS PROJECT'S OWN HISTORY LENS: the company's log no longer
+                  narrows to one project, because that is what this lens is. */}
+              <a className="t-link" href={href(["work", detail.key], { lens: "history" })}>
                 Every change →
               </a>
             </div>
@@ -510,7 +514,7 @@ export function ProjectPeek({ projectKey }: { projectKey: string }) {
       {state.loading && !state.data && (
         <Skeleton variant="text" rows={6} label="Loading the project" />
       )}
-      <QueryState error={state.error} loading={state.loading}>
+      <QueryState error={state.error} refusal={state.refusal} loading={state.loading}>
         {detail && (
           <>
             {/* THE SAME FOUR PARTS IN THE SAME ORDER as the page — see
@@ -572,8 +576,9 @@ function ProjectHead({
           own above the work. The numbers in the fact line say how much; the
           bar splits it into done, under way and still to do, which is the fact
           a reader actually wants — "mostly finished", "all in flight" and
-          "barely started" are three different projects. It is a SIBLING rather than a sixth fact because a bar inside `.fact-value` is
-          a bar in a truncated inline box, which is no bar at all. What the bar
+          "barely started" are three different projects. It is a SIBLING rather
+          than a sixth fact because a bar inside a fact's value is a bar in a
+          truncated inline box, which is no bar at all. What the bar
           MEANS is argued in `census.tsx`, where the directory's column reads it
           too.
 
@@ -584,7 +589,7 @@ function ProjectHead({
           THE RAIL SAYS SO IN WORDS AND THE PAGE DOES NOT, which is the one
           place the two frames differ and the reason is structural: on the
           page this header is the About lens, whose lede already ends "Nothing
-          has been filed in it yet" ([projectLede]) and whose Items lens
+          has been filed in it yet" ([projectLede]) and whose Tasks lens
           draws [NothingFiled] — saying it a third time in one viewport is
           noise. The rail has neither to carry the sentence. */}
       {filed(detail.task_counts) > 0 ? (
@@ -627,15 +632,13 @@ function projectLede(detail: WorkProjectDetail): string {
   if (detail.purpose) return detail.purpose;
   const unit = detail.unit.name || detail.unit.key;
   const whose = unit
-    ? `${detail.key} is ${unit}'s project.`
+    ? `${detail.key} is ${unit}’s project.`
     : `${detail.key} is a project no unit in the chart owns.`;
   if (filed(detail.task_counts) === 0) return `${whose} Nothing has been filed in it yet.`;
   // A SENTENCE FOR THE PERSON READING IT, not a configuration key: the lede
   // used to print "A `purpose` on that unit…" with its backticks, which read
   // as a template nobody filled in.
-  return unit
-    ? `${whose} No purpose is set for it — add one to ${unit} in the company configuration and this line will say it.`
-    : whose;
+  return unit ? `${whose} Add a purpose in Edit org.` : whose;
 }
 
 /**
@@ -651,14 +654,14 @@ function projectLede(detail: WorkProjectDetail): string {
  *
  * IT NAMES HOW WORK GETS FILED, because a reader looking at an empty project
  * is looking for the way in — and the way in is on the state itself: New task,
- * filing into this project, as the person the token is bound to.
+ * filing into this project, as the person signed in.
  */
 function NothingFiled({ detail }: { detail: WorkProjectDetail }) {
   return (
     <EmptyState
       icon={<LayoutDashboardGlyph size={32} />}
       title={`No work has been filed in ${detail.name} yet`}
-      description="A seat files work with create_work_item, and an inbound webhook or a schedule is usually what sets one off. You can file one yourself here, recorded under your own name."
+      description="File the first task with New task."
       // THE WAY IN IS THE STATE'S OWN, not only the page bar's: `action` is
       // the slot this design system gives an empty state for exactly that.
       action={<NewTaskButton preset={{ project: detail.key }} />}
@@ -679,7 +682,7 @@ function NoSuchProject({ projectKey }: { projectKey: string }) {
       size="compact"
       icon={<LayoutDashboardGlyph size="xl" />}
       title={`No project called “${projectKey}”`}
-      description="A project key is declared by a unit in the company configuration. Either it never existed, or the unit that declared it has since been renamed — the directory is what this company actually has."
+      description="Nothing in the org declares this project key, and renaming a team moves none. See Projects."
     />
   );
 }
@@ -703,6 +706,7 @@ function projectFacts(detail: WorkProjectDetail, chrome?: RowChrome): HeaderFact
           name={chrome?.seatName?.(detail.lead.handle) ?? detail.lead.handle}
           handle={detail.lead.handle}
           kind={chrome?.seatKind?.(detail.lead.handle)}
+          avatar={chrome?.seatAvatar?.(detail.lead.handle)}
         />
       ) : (
         <span className="muted">nobody</span>
@@ -725,10 +729,19 @@ function projectFacts(detail: WorkProjectDetail, chrome?: RowChrome): HeaderFact
     // THE FOUR COUNTS ARE CELLS, not bare numbers: a project with nothing
     // waiting is the one an operator is most often looking for here, and a
     // zero rendered as a blank or as a dash is the one reading that hides it.
-    { label: "To do", value: <NumberCell value={detail.task_counts.todo} /> },
-    { label: "Active", value: <NumberCell value={detail.task_counts.active} /> },
-    { label: "Done", value: <NumberCell value={detail.task_counts.done} /> },
-    { label: "Closed", value: <NumberCell value={detail.task_counts.closed} /> },
+    {
+      label: "To do",
+      value: <TableNumberCell value={detail.task_counts.todo} format={fmtCount} />,
+    },
+    {
+      label: "Active",
+      value: <TableNumberCell value={detail.task_counts.active} format={fmtCount} />,
+    },
+    { label: "Done", value: <TableNumberCell value={detail.task_counts.done} format={fmtCount} /> },
+    {
+      label: "Closed",
+      value: <TableNumberCell value={detail.task_counts.closed} format={fmtCount} />,
+    },
   ];
 }
 
@@ -740,8 +753,8 @@ function ProjectBanners({ detail }: { detail: WorkProjectDetail }) {
           leaves a project's work routed to nobody. */}
       {!detail.unit.resolved && (
         <Callout variant="warning">
-          This project names the unit <span className="mono">{detail.unit.key}</span>, which the
-          current org chart does not have — work filed here routes to nobody.
+          Its team <span className="mono">{detail.unit.key}</span> is no longer in the org. New work
+          here reaches nobody.
         </Callout>
       )}
     </>

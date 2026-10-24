@@ -34,11 +34,11 @@
  * (`app/Shell.tsx`), so a body that published it from inside another screen
  * fought that screen's own answer: on `#/work/{KEY}?lens=history` both this and
  * `Project` wrote the slot, whichever polled last won, and switching back to
- * the Items lens unmounted this one and cleared the slot to nothing over a page
+ * the Tasks lens unmounted this one and cleared the slot to nothing over a page
  * still showing a project it had read. So: ONLY A SCREEN PUBLISHES TO THE
  * FRAME. The screen publishes and draws no coverage of its own; the lens
  * publishes nothing and states its own rows' coverage inline, which is exactly
- * what the Items lens beside it already does.
+ * what the Tasks lens beside it already does.
  *
  * # The bars are OURS and the rows are the engine's
  *
@@ -82,6 +82,8 @@ import {
   reapplySentence,
   type ChangeLine,
   type LabelContext,
+  itemPath,
+  subjectItem,
 } from "~/lib/work.ts";
 import { FEED_PAGE } from "./feed.tsx";
 import type { WorkActivityAnswer, WorkActivityRecord } from "~/protocol/index.ts";
@@ -106,37 +108,23 @@ const HISTORY_OFFER: Offer = {
   buckets: ["hour", "day"],
 };
 
+/**
+ * All projects' History lens: every change across the company.
+ *
+ * NO PROJECT NARROWING HERE. One project's changes are that project's own
+ * History lens, a switch away in the trail, and a `project=` key on this page
+ * was a second address for the same rows.
+ */
 export function History() {
-  const [project, setProject] = useParam("project", "");
-  return (
-    <>
-      <HistoryView
-        container={project ? `project:${project}` : "workspace"}
-        projectKey={project}
-        onProject={setProject}
-      />
-    </>
-  );
+  return <HistoryView container="workspace" />;
 }
 
 export function HistoryView({
   container,
-  projectKey = "",
-  onProject,
   embedded = false,
 }: {
   /** `workspace`, or `project:KEY`. */
   container: string;
-  projectKey?: string;
-  /**
-   * Narrow to one project, or clear it with `""`.
-   *
-   * ABSENT WHERE THE CONTAINER ALREADY IS ONE PROJECT. On the lens under a
-   * project's header every loaded row carries the same key, so a rail there
-   * would be one chip that narrows nothing and a chip labelled "Show every
-   * project" would leave the page it sits on.
-   */
-  onProject?: (next: string) => void;
   /**
    * This is a LENS inside another screen rather than the screen itself.
    *
@@ -277,11 +265,12 @@ export function HistoryView({
     // it did not resolve falls through to itself rather than to a blank.
     taskKey: (id) => keys[id] ?? "",
     // WHO IS READING, so a sentence the engine addressed to the seat it woke
-    // is re-addressed to whoever is looking at the log. The SEAT HANDLE and not
-    // the operator id, because the records that carry such a sentence are a
-    // person's and a person subject is keyed on the handle — `lib/work.ts` says
-    // so where it compares them.
-    viewer: viewer.handle,
+    // is re-addressed to whoever is looking at the log. The reader's OWN
+    // RECORD's name — their seat when the directory binds them to one, their
+    // login when it does not — because the records that carry such a sentence
+    // are a person's, and a person subject is keyed on exactly that name
+    // (`lib/work.ts` says so where it compares them).
+    viewer: viewer.owner,
   };
 
   const bars: Bar[] = useMemo(
@@ -329,20 +318,6 @@ export function HistoryView({
       },
     );
   }, [records, state.data, index]);
-  // THE THIRD DIMENSION THE RECORD CARRIES. `work_activity` filters on the
-  // project the engine already stamps on every row, and the page already owns
-  // the `project=` key its chip removes — so until this rail existed the only
-  // way into a project narrowing was a link from the project's own page.
-  const projects = useMemo(
-    () =>
-      tally(
-        records,
-        (r) => r.project || "",
-        !!state.data,
-        (value) => value,
-      ),
-    [records, state.data],
-  );
 
   return (
     <>
@@ -358,15 +333,6 @@ export function HistoryView({
         {/* THE DIMENSIONS, as pickers in the one bar — see the file's doc. */}
         <FacetPicker name="Kind" all="Any kind" value={kind} onChange={setKind} facets={kinds} />
         <FacetPicker name="By" all="Anyone" value={actor} onChange={setActor} facets={actors} />
-        {onProject && (
-          <FacetPicker
-            name="Project"
-            all="Every project"
-            value={projectKey}
-            onChange={onProject}
-            facets={projects}
-          />
-        )}
         {/* SAID ONCE, and only where a count is: before the first answer the
             options carry none. */}
         {state.data && records.length > 0 && (
@@ -397,16 +363,7 @@ export function HistoryView({
       </div>
 
       <Card>
-        <Card.Header
-          icon={<ChartNoAxesGanttGlyph size="sm" />}
-          // NOTHING TO DESCRIBE IS NOT A DESCRIPTION OF NOTHING. Drawn
-          // unconditionally this promised bars over an empty card, which is the
-          // rule `Activity`'s own card follows by leaving its subtitle
-          // `undefined` until a series lands.
-          subtitle={
-            records.length > 0 ? `One bar per ${range.bucket}, over the changes loaded.` : undefined
-          }
-        >
+        <Card.Header icon={<ChartNoAxesGanttGlyph size="sm" />}>
           <Card.Title>When</Card.Title>
         </Card.Header>
         {/* NO `onPick`. The event log's bars narrow the window because its own
@@ -440,13 +397,14 @@ export function HistoryView({
 
       <QueryState
         error={state.error}
+        refusal={state.refusal}
         loading={state.loading}
         empty={
           records.length
             ? undefined
             : {
                 title: "Nothing changed in this window",
-                hint: "Widen the window, or take off a filter. A change is written when a seat or an operator writes to the tracker, so a company whose agents are idle has none.",
+                hint: "Widen the window, or remove a filter.",
               }
         }
       >
@@ -468,7 +426,7 @@ export function HistoryView({
       {(more || paging || pageError || head) && (
         <footer className="panel-foot">
           {pageError ? (
-            <QueryState error={pageError} loading={false} />
+            <QueryState error={pageError} refusal={null} loading={false} />
           ) : (
             <>
               {more ? (
@@ -486,12 +444,7 @@ export function HistoryView({
               <span className="spacer" />
               {/* SAID ONLY ONCE THE HEAD IS HELD, because until then it is not
                   true: the first page is re-asked on every poll. */}
-              {head && (
-                <span>
-                  Held still while you page back — change the window or a filter to pick up new
-                  changes.
-                </span>
-              )}
+              {head && <span>Paused while you page back.</span>}
             </>
           )}
         </footer>
@@ -592,14 +545,14 @@ function FacetPicker({
 }
 
 /**
- * Who made a change, by the name the rest of the product uses: the PERSON an
- * operator token was bound to where there was one, the seat otherwise, and the
- * engine where nobody did.
+ * Who made a change, by the name the rest of the product uses: the seat's name
+ * where the author is a seat — an agent, or a person the identity directory
+ * binds to one, whom the engine records AS that seat (`iam.ActorFor`) — the
+ * login of anybody else, and the engine where nobody did.
  */
 export function actorName(record: WorkActivityRecord, chrome: LabelContext): string {
-  const who = record.actor_seat || record.actor;
-  if (!who) return "the engine";
-  return chrome.seatName?.(who) ?? who;
+  if (!record.actor) return "the engine";
+  return chrome.seatName?.(record.actor) ?? record.actor;
 }
 
 /** One change, as the delta it was. */
@@ -619,7 +572,7 @@ function HistoryRow({
       </span>
       <span className="work-log-key">
         {record.subject_key ? (
-          <a className="mono t-link" href={href(["work", record.subject_key])}>
+          <a className="mono t-link" href={href(itemPath(subjectItem(record)))}>
             {record.subject_key}
           </a>
         ) : (
@@ -640,15 +593,17 @@ function HistoryRow({
           wrapped delta grow rather than overflow. */}
       <span className="work-log-what">{describeChange(record, chrome)}</span>
       <span className="work-log-who">
-        {/* THE PERSON, NOT THE TOKEN: a change an operator token made names
-            the credential as `actor` — the audit trail — and the seat it was
-            bound to as `actor_seat`, which is who the row is about. Printed
-            as the token, the log said "founder" where every other screen
-            says Jane Founder; the token stays on the title. */}
+        {/* THE AUTHOR AS EVERY RECORD NAMES THEM (`iam.ActorFor`), and the
+            credential beside it on the title: `operator_id` is what the write
+            came through — a session, a machine token — which is the audit
+            trail's half and not a second name for the author. An agent's own
+            turn carries nothing a reader would ask about there. */}
         <span
           className="truncate"
           title={
-            record.actor_seat && record.actor ? `Through the token ${record.actor}` : undefined
+            record.operator_id && record.actor_kind !== "agent"
+              ? `Written through ${record.operator_id}`
+              : undefined
           }
         >
           {actorName(record, chrome)}

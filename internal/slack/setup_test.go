@@ -162,6 +162,13 @@ func TestEverySlackRequirementNamesAFieldTheSeatHas(t *testing.T) {
 			t.Errorf("%s: %v", r.Field, err)
 		}
 	}
+	// THE CONTROL: the runtime seat's shape, where the identity sits at the
+	// top level, is not the document's, so a path written against it would
+	// be caught rather than written into a seat nobody reads.
+	if err := resolvePath(reflect.TypeFor[config.Role](), "slack.bot_token"); err == nil {
+		t.Error("a path the document does not have resolved, so this walk " +
+			"would not notice one")
+	}
 }
 
 // resolvePath walks a dotted config path through a struct's json tags, the
@@ -196,8 +203,8 @@ func fieldByJSONName(t reflect.Type, name string) (reflect.Type, bool) {
 // THE MANIFEST IS THE ENGINE'S OWN, so the app a person builds by hand and
 // the app the provisioning command pushes are the same app.
 //
-// Seventeen scopes and five event subscriptions decide whether an agent can
-// hear anything, and every one of them is a decision that lives in Go. A
+// The scopes and event subscriptions decide whether an agent can hear
+// anything, and every one of them is a decision that lives in Go. A
 // screen that asked an operator to reproduce them from a table would be
 // asking them to get one wrong, and the failure mode is a bot that reports
 // success and sees an empty workspace.

@@ -25,7 +25,8 @@ var (
 func countingIndex(t *testing.T, appends *atomic.Int64) *statelog.ReadIndex {
 	t.Helper()
 	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
-		&countingAppends{inner: committingLog{seq: barrierAt.Seq}, n: appends}, noCeiling(t),
+		&countingAppends{inner: committingLog{seq: barrierAt.Seq}, n: appends},
+		testSigner(t, probeDomain{}), noCeiling(t),
 		probeEncode, func() uint32 { return barrierAt.Generation }, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
@@ -245,7 +246,7 @@ func TestNoNodeAppendsASecondBarrierToALogWithoutAQuorum(t *testing.T) {
 	t.Run("a full log spends nothing", func(t *testing.T) {
 		t.Parallel()
 		index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), refusingAppender{},
-			noCeiling(t), probeEncode, func() uint32 { return 1 }, nil)
+			testSigner(t, probeDomain{}), noCeiling(t), probeEncode, func() uint32 { return 1 }, nil)
 		if err != nil {
 			t.Fatalf("NewReadIndex: %v", err)
 		}

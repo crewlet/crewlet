@@ -17,6 +17,8 @@
 package engine
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -28,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/anthropic"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 	"github.com/crewlet/crewlet/internal/providers/llm/openai"
 )
 
@@ -47,12 +50,22 @@ import (
 // had just called valid. The epoch carries a nil registry instead, which is
 // what [Company.Models] documents and what the dispatcher reads to hold every
 // seat's work until a provider arrives.
-func buildProviders(c *config.Company, r *config.Resolver) (*phase.Registry, error) {
+//
+// IT ALSO RETURNS EVERY API ENTRY'S RESOLVED ENDPOINT, keyed on the entry: the
+// model, base URL and keys its backend was built with, which is what a coding
+// box run on that entry is handed ([runLLM]). Kept from THIS resolution rather
+// than resolved again at launch, because a box must address the endpoint and
+// carry the key the seat's own calls use, and a second resolution through a
+// resolver whose store moved since would hand it ones no call of this epoch
+// ever made. A cli-agent entry is not in it: its provider holds its own
+// resolved model and sign-in.
+func buildProviders(c *config.Company, r *config.Resolver) (*phase.Registry, map[string]endpoint, error) {
 	order := c.Providers.ProviderOrder()
 	if len(order) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	entries := make([]phase.Entry, 0, len(order))
+	endpoints := make(map[string]endpoint, len(order))
 	for _, key := range order {
 		spec, ok := c.Providers.LLM[key]
 		if !ok {
@@ -60,28 +73,46 @@ func buildProviders(c *config.Company, r *config.Resolver) (*phase.Registry, err
 			// happen — but a silent skip here would produce a registry
 			// missing a provider the operator configured, and the seat
 			// using it would fall back to another model with nothing said.
-			return nil, fmt.Errorf("engine: provider %q is in the order but not in the map", key)
+			return nil, nil, fmt.Errorf("engine: provider %q is in the order but not in the map", key)
 		}
-		p, err := buildProvider(key, spec, r)
+		p, e, err := buildProvider(key, spec, r)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
+		}
+		if spec.Type != config.LLMCLIAgent {
+			endpoints[key] = e
 		}
 		entries = append(entries, phase.Entry{Key: key, Provider: p})
 	}
-	return phase.NewRegistry(entries)
+	registry, err := phase.NewRegistry(entries)
+	if err != nil {
+		return nil, nil, err
+	}
+	return registry, endpoints, nil
 }
 
-// buildProvider constructs one backend.
+// buildProvider constructs one backend, and returns the endpoint it resolved
+// for it — the one resolution [buildProviders] keeps for the entry's coding
+// boxes, so a box and the backend can never be handed two.
 //
 // A provider whose credentials are missing still BUILDS. Every call then comes
 // back a clean 401, which names the provider and the vendor, far easier to
 // diagnose than a constructor that refused to exist and took the whole company
 // down at boot with a message about one key.
-func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm.Provider, error) {
+func buildProvider(key string, spec config.LLMProvider, r *config.Resolver) (llm.Provider, endpoint, error) {
 	e, err := resolveEndpoint(key, spec, r)
 	if err != nil {
-		return nil, err
+		return nil, endpoint{}, err
 	}
+	p, err := buildBackend(key, spec, r, e)
+	if err != nil {
+		return nil, endpoint{}, err
+	}
+	return p, e, nil
+}
+
+// buildBackend is the backend of spec's type over its resolved endpoint.
+func buildBackend(key string, spec config.LLMProvider, r *config.Resolver, e endpoint) (llm.Provider, error) {
 	switch spec.Type {
 	case config.LLMAnthropic:
 		return buildAnthropic(key, spec, e)
@@ -238,6 +269,49 @@ func buildAnthropic(key string, spec config.LLMProvider, e endpoint) (*anthropic
 // log is the package logger.
 var log = logging.Get("engine")
 
+// restoreBundles restores every cli-agent entry's configured credential bundle
+// into its state directory where that directory holds no login yet
+// ([cliagent.Provider.RestoreConfiguredBundle]).
+//
+// A STEP OF ITS OWN, made by the paths that build an epoch to RUN it — a node's
+// boot and every apply — and not by building one: [NewCompany] is also what
+// `crewlet validate` calls, and validating a document must neither write a
+// login onto the host nor wait on the shared login's lock. It runs before
+// anything calls the epoch's models — before the epoch is published, and on an
+// apply before the revision's reflection workers are swapped in behind the
+// running seats ([Engine.prepareReflection]) — so the epoch's first call
+// already finds the login. And on an apply only after every stage that can
+// refuse the revision ([Engine.Apply]), because the state directory it writes
+// is the running epoch's too, and a refused revision must leave no login
+// behind.
+//
+// A failed restore is WARNED and never refuses the epoch: a node with a broken
+// bundle can still be logged in by hand, and refusing a whole revision over one
+// blob is the worse outcome. An entry `crewlet llm logout` emptied restores
+// nothing either ([cliagent.ErrLoggedOut]) — the logout is the operator's
+// decision and outlives every apply until a login is written again — and that
+// is warned as what it is, `cli_agent_bundle_withheld`, naming the logout and
+// how to sign in again, rather than as a bundle that failed.
+func (c *Company) restoreBundles(ctx context.Context) {
+	if c == nil || c.Models == nil {
+		return
+	}
+	for key, provider := range c.Models.All() {
+		cli, ok := provider.(*cliagent.Provider)
+		if !ok {
+			continue
+		}
+		err := cli.RestoreConfiguredBundle(ctx)
+		switch {
+		case err == nil:
+		case errors.Is(err, cliagent.ErrLoggedOut):
+			log.WarnContext(ctx, "cli_agent_bundle_withheld", "provider", key, "detail", err.Error())
+		default:
+			log.WarnContext(ctx, "cli_agent_bundle_restore_failed", "provider", key, "error", err)
+		}
+	}
+}
+
 // BuildCLIAgent constructs one cli-agent provider from its config entry.
 //
 // Exported for `crewlet llm`, which has to build the SAME provider the engine
@@ -287,34 +361,41 @@ func buildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver, apiK
 		auth.APIKey = apiKeys[0]
 	}
 
+	// Config loads this same merged profile under its runnable rules
+	// (LLMProvider.validateCLIProfile), so a failure here is a document
+	// that never went through validation.
+	profile, err := cliprofile.Load(cli.Name(), cli.Overrides)
+	if err != nil {
+		return nil, fmt.Errorf("engine: provider %q: %w", key, err)
+	}
+
 	// Both credentials fall back to a CONVENTIONAL name when the entry
 	// points at none, and both go through the resolver, which reads the
 	// secret store BEFORE the environment. That order is the whole point:
 	// `crewlet llm login <key> -capture-token` writes the token into the
 	// store, and an entry that had to name it explicitly would leave every
 	// operator wiring up a ${VAR} for a value Crewlet itself just wrote.
-	profile, err := cliagent.Load(cli.Name(), cli.Overrides)
-	if err != nil {
-		return nil, fmt.Errorf("engine: provider %q: %w", key, err)
-	}
 	auth.Token = resolveOrConvention(r, cli.Auth.Token, profile.TokenEnv)
+	auth.TokenConfigured = cli.Auth.Token != ""
 	bundle := resolveOrConvention(r, cli.Auth.CredentialBundle, cliagent.BundleVarName(key))
+	bundleConfigured := cli.Auth.CredentialBundle != ""
 
 	return cliagent.New(cliagent.Config{
 		Key: key,
 		// Resolved for the same reason cli.env is: a model written as a
 		// reference would reach the CLI's --model flag as the literal
 		// "${VAR}", and the CLI would reject a model by that name.
-		Model:            r.Value(spec.Model),
-		Agent:            cli.Name(),
-		AgentMode:        cli.AgentMode(),
-		StateDir:         stateDir,
-		Overrides:        cli.Overrides,
-		Timeout:          time.Duration(cli.Timeout() * float64(time.Second)),
-		MaxConcurrent:    cli.Concurrency(),
-		Env:              env,
-		Auth:             auth,
-		CredentialBundle: bundle,
+		Model:                      r.Value(spec.Model),
+		Agent:                      cli.Name(),
+		AgentMode:                  cli.AgentMode(),
+		StateDir:                   stateDir,
+		Overrides:                  cli.Overrides,
+		Timeout:                    time.Duration(cli.Timeout() * float64(time.Second)),
+		MaxConcurrent:              cli.Concurrency(),
+		Env:                        env,
+		Auth:                       auth,
+		CredentialBundle:           bundle,
+		CredentialBundleConfigured: bundleConfigured,
 	})
 }
 

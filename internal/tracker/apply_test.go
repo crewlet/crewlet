@@ -40,7 +40,7 @@ func newApplyHarness(t *testing.T) *applyHarness {
 		}
 	})
 	return &applyHarness{
-		t: t, db: db, applier: tracker.NewApplier(),
+		t: t, db: db, applier: tracker.NewApplier(nil),
 		maxVariables: db.Caps().MaxVariables,
 	}
 }
@@ -834,7 +834,7 @@ func TestAHistoryRowWithNoDeltasStoresAnEmptyObject(t *testing.T) {
 		// recorded.
 		r.at = wednesday.Add(time.Duration(i) * time.Hour)
 		if _, err := lead.WritePriorities(t.Context(), op, "ana",
-			[]string{"t-1"}, nil, tracker.PersonAuthority{Lead: true}); err != nil {
+			[]string{"t-1"}, nil, tracker.PersonAuthority{Authorized: true}); err != nil {
 			t.Fatalf("WritePriorities %s: %v", op, err)
 		}
 		r.drain()

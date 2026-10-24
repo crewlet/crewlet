@@ -18,11 +18,15 @@ import { useMemo, useState } from "react";
 import {
   Button,
   Checkbox,
+  ChoiceButtons,
+  ChoiceList,
   Combobox,
+  Composer,
   FormField,
   Input,
   Modal,
   Select,
+  Stack,
   Textarea,
   type ComboboxOption,
   type SelectOption,
@@ -43,15 +47,17 @@ import {
 import { RefusalNote, WriteButton, pressable } from "./WriteButton.tsx";
 import { QueryState } from "./common.tsx";
 import { useAct } from "~/lib/useAct.ts";
+import { useMessageSeatAccess } from "~/lib/useWriteAccess.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { handleLabel, indexOrg, nameOfIn } from "~/lib/seats.ts";
-import { targetLabel } from "~/lib/work.ts";
+import { itemAddress, targetLabel } from "~/lib/work.ts";
 import { useOpenNewTask } from "~/app/newTask.ts";
 import { STEER_NOTE_MAX_RUNES } from "~/contract/steer.ts";
 import { VIEW_NAME_MAX_BYTES } from "~/contract/work.ts";
 import { textBudget } from "~/lib/format.ts";
+import { useServicesRun } from "~/lib/services.ts";
 
 /**
  * Hand a task to somebody — or to nobody — with a line saying why.
@@ -67,11 +73,18 @@ import { textBudget } from "~/lib/format.ts";
  */
 export function AssignButton({
   item,
+  label,
   version,
   assignee,
 }: {
-  /** The task's key (ENG-42) or id. */
+  /**
+   * The task's address ([itemAddress]): its key (ENG-42), or its id where
+   * another task claimed that key first and the key would hand off the
+   * claimant.
+   */
   item: string;
+  /** What the dialog's words call the task — its key — where `item` is its id. */
+  label?: string;
   /** The `task.version` the page is drawn from. */
   version: number;
   /** Who holds it now, or "". */
@@ -94,6 +107,7 @@ export function AssignButton({
       {open && (
         <AssignDialog
           item={item}
+          named={label || item}
           version={version}
           assignee={assignee}
           write={write}
@@ -112,12 +126,15 @@ const NOBODY = "";
 
 function AssignDialog({
   item,
+  named,
   version,
   assignee,
   write,
   onClose,
 }: {
   item: string;
+  /** What the dialog's words call the task. */
+  named: string;
   version: number;
   assignee: string;
   write: ReturnType<typeof useAct<"update_work_item">>;
@@ -155,7 +172,7 @@ function AssignDialog({
         // unassignment.
         ...(who !== NOBODY && reason.trim() ? { reason: reason.trim() } : {}),
       },
-      { done: who === NOBODY ? `Unassigned ${item}` : `Assigned ${item} to ${name}` },
+      { done: who === NOBODY ? `Unassigned ${named}` : `Assigned ${named} to ${name}` },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) onClose();
   };
@@ -163,7 +180,7 @@ function AssignDialog({
     <Modal
       open
       size="sm"
-      title={`Assign ${item}`}
+      title={`Assign ${named}`}
       icon={<UserPlusGlyph />}
       onClose={onClose}
       onSubmit={() => void submit()}
@@ -202,7 +219,7 @@ function AssignDialog({
             label="Why it is theirs now"
             optional
             htmlFor="assign-reason"
-            helper="The new assignee is woken with this line, and the task's history shows it beside the hand-off."
+            helper="Sent to the new assignee and kept in history."
           >
             <Input
               id="assign-reason"
@@ -226,16 +243,29 @@ function AssignDialog({
  * which task each brings back. The visible word leads the name, so a person
  * speaking "Restore" to voice control still reaches it.
  */
-export function RestoreButton({ item }: { item: string }) {
+export function RestoreButton({
+  item,
+  label,
+}: {
+  /**
+   * The task's address ([itemAddress]): restored by its key, a duplicate in
+   * the trash beside the task that claimed its key would bring back the
+   * claimant — or be refused because the claimant was never removed.
+   */
+  item: string;
+  /** What the control and its toast call the task — its key — where `item` is its id. */
+  label?: string;
+}) {
   const write = useAct("restore_work_item");
+  const named = label || item;
   return (
     <WriteButton
       write={write}
       size="small"
       variant="ghost"
       leadingIcon={<UndoGlyph />}
-      aria-label={`Restore ${item}`}
-      onPress={() => void write.run({ item }, { done: `Restored ${item}` })}
+      aria-label={`Restore ${named}`}
+      onPress={() => void write.run({ item }, { done: `Restored ${named}` })}
     >
       Restore
     </WriteButton>
@@ -404,7 +434,7 @@ function EditProjectDialog({
           label="Target date"
           optional
           htmlFor="project-target"
-          helper="The day the project is meant to be finished, on the company's clock. Empty clears it."
+          helper="Company time zone. Leave empty to clear."
         >
           <div className="row gap-2">
             <Input
@@ -443,8 +473,11 @@ function EditProjectDialog({
  * calendar's month would open on that month for ever.
  *
  * SHARED unless the person keeps it to themselves, which makes it theirs alone
- * (`owner`): a shared view is in everybody's strip, and saving somebody's
- * private query into it is a change to their screen too.
+ * (`personal`): a shared view is in everybody's strip, and saving somebody's
+ * private query into it is a change to their screen too. WHOSE it is then is
+ * the engine's answer and never an argument — the caller's own record, the
+ * one their pins are kept under — so the dialog sends a flag rather than a
+ * name somebody could fill with another person's.
  *
  * On `applied` it hands the new view's id back, so the screen opens it.
  */
@@ -509,7 +542,6 @@ function SaveViewDialog({
 }) {
   const [name, setName] = useState("");
   const [mine, setMine] = useState(false);
-  const as = write.access.can ? write.access.as : "";
   const budget = textBudget(name, VIEW_NAME_MAX_BYTES, "a view's name");
   const blocked = !name.trim()
     ? "Give the view a name first."
@@ -522,7 +554,7 @@ function SaveViewDialog({
     if (!pressable(write, blocked)) return;
     const title = name.trim();
     const result = await write.run(
-      { container, name: title, type, params, ...(mine && as ? { owner: as } : {}) },
+      { container, name: title, type, params, ...(mine ? { personal: true } : {}) },
       { done: `Saved the view ${title}` },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) {
@@ -579,7 +611,7 @@ function SaveViewDialog({
           checked={mine}
           onChange={(event) => setMine(event.target.checked)}
           label="Only for me"
-          description="Kept in your own strip. Otherwise everybody who opens this list sees it."
+          description="Otherwise everyone sees it."
         />
         <RefusalNote write={write} />
       </div>
@@ -588,172 +620,311 @@ function SaveViewDialog({
 }
 
 /**
- * Answer a structured ask with one of its options — the decision, made in
- * place.
+ * How an ask was answered, for the line that replaces its controls.
+ *
+ * `recommended` is set on a choice that was the asker's own recommendation,
+ * which the line says beside it.
+ */
+export type AskAnswer =
+  { kind: "choice"; label: string; recommended: boolean } | { kind: "reply"; text: string };
+
+/** The value the "Something else" choice carries in the list of options. */
+const OTHER = "\u0000other";
+
+/**
+ * The longest reply a decision's "Something else" takes. A reply here is one
+ * direction for the asker, read into its next turn; the engine's comment
+ * ceiling (32 KiB) is the bound on a whole comment and far past what a reader
+ * types into a card, so the field counts down from here instead.
+ */
+const DECISION_REPLY_MAX = 2000;
+
+/**
+ * Answer an ask in place: accept its recommendation, choose another option,
+ * or reply in your own words.
+ *
+ * AT REST, ONE LINE: "Recommended: Greedy only" with Accept and Change.
+ * Accept sends the recommended option; Change opens every option with its
+ * detail line, plus "Something else", whose field sends a reply instead of a
+ * choice. An ask with no recommendation offers Answer in their place, and an
+ * ask with no options at all offers Reply, which opens the field alone. While
+ * the options are open the recommendation line is hidden: the list says it
+ * on the option itself.
  *
  * THE CHOICE IS AN ANSWER TO THE ASK IT BELONGS TO (`answers` names the ask's
  * comment), so the engine checks the option is one the ask offered, closes the
- * ask, and wakes the asker with what was chosen. The recommended option is
- * the primary button: it is the one most answers are, and the asker said so.
+ * ask, and wakes the asker with what was chosen. A reply is the same answer
+ * with a body instead of a choice. ONE WRITE FOR THE WHOLE ASK: an ask takes
+ * one answer, so every way of sending one goes through the one `useAct`, and
+ * nothing else is pressable while it is in flight.
  *
- * ONE WRITE FOR THE WHOLE ASK, never one per option. An ask takes one answer,
- * and with a write per button the other options stayed pressable while the
- * first was in flight — a second, different choice sent to the same ask. So
- * every option sends through the one `useAct`: the pressed one shows it is
- * sending, the rest are disabled with the reason until it settles, and the
- * refusal, if there is one, is drawn once for the ask.
- */
-export function AnswerAskButtons({
-  item,
-  comment,
-  options,
-  recommended,
-}: {
-  /** The task's key or id. */
-  item: string;
-  /** The ask's comment id. */
-  comment: string;
-  /** The ask's options, whose words are the buttons'. */
-  options: readonly { id: string; label: string }[];
-  /** The option the asker recommends, if any. */
-  recommended?: string;
-}) {
-  const write = useAct("comment_on_work_item");
-  const [pressed, setPressed] = useState<string | null>(null);
-  return (
-    <>
-      {options.map((option) => {
-        const mine = write.busy && pressed === option.id;
-        return (
-          <WriteButton
-            key={option.id}
-            write={write}
-            size="small"
-            variant={option.id === recommended ? "primary" : "secondary"}
-            pressing={mine}
-            blocked={write.busy && !mine ? "Your answer to this ask is being sent" : undefined}
-            showRefusal={false}
-            onPress={() => {
-              setPressed(option.id);
-              void write.run(
-                { item, answers: comment, choice: option.id },
-                { done: `Answered ${item}: ${option.label}` },
-              );
-            }}
-          >
-            {option.label}
-          </WriteButton>
-        );
-      })}
-      <RefusalNote write={write} />
-    </>
-  );
-}
-
-/**
- * Answer an ask that offers no options — in words, in place.
+ * THE OPEN STATE IS THE CALLER'S, so a card that lists several asks keeps one
+ * open at a time: opening one closes whichever was.
  *
- * THE SAME ANSWER AN OPTION SENDS, WITH A BODY INSTEAD OF A CHOICE:
- * `comment_on_work_item{item, answers, body}` names the ask's comment, so the
- * engine closes that ask and wakes the asker with the reply. The dialog is the
- * one `AnswerRunButton` opens, because the gesture is the same one — read the
- * question, write the answer, send it as yourself — and a second shape for it
- * would be a second thing to learn.
+ * TWO LAYOUTS OF ONE ANSWER. `line` is the one above, for a list where an ask
+ * is one row among others. `buttons` is for a screen where the question is
+ * the whole of what is open (the Inbox's pane): every option is a button that
+ * sends it with one press, the recommended one first and filled, and
+ * "Something else" opens the field in their place. An ask with no options is
+ * answered in that field from the start. Either way the answer goes through
+ * this one write, so the rules above hold for both.
  */
-export function ReplyAskButton({
+export function AnswerAsk({
   item,
   comment,
   asker,
-  question,
+  options,
+  recommended,
+  open,
+  onOpenChange,
+  onAnswered,
+  layout = "line",
+  label,
 }: {
-  /** The task's key or id. */
+  /**
+   * The task's address ([itemAddress]): its key, or its id where another
+   * task claimed that key first and the key would answer on the claimant.
+   */
   item: string;
-  /** The ask's comment id, which the reply answers. */
+  /** What the answer's toast calls the task — its key — where `item` is its id. */
+  label?: string;
+  /** The ask's comment id, which the answer names. */
   comment: string;
-  /** Who asked, by name, for the dialog's title. */
+  /** Who asked, by name, for the reply field's placeholder. */
   asker: string;
-  /** What they asked, quoted above the answer. */
-  question: string;
+  /** The ask's options; empty for an ask answered in words. */
+  options: readonly { id: string; label: string; detail?: string }[];
+  /** The option the asker recommends, if any. */
+  recommended?: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Called once the engine has the answer. */
+  onAnswered: (answer: AskAnswer) => void;
+  /** How the answer is laid out; see above. */
+  layout?: "line" | "buttons";
 }) {
   const write = useAct("comment_on_work_item");
-  const [open, setOpen] = useState(false);
+  const named = label || item;
+  const rec = options.find((o) => o.id === recommended);
+  const words = options.length === 0;
+  const [chosen, setChosen] = useState<string>(rec?.id ?? (words ? OTHER : ""));
   const [text, setText] = useState("");
+
   const close = () => {
     write.dismiss();
-    setOpen(false);
+    setChosen(rec?.id ?? (words ? OTHER : ""));
+    onOpenChange(false);
   };
-  const blocked = text.trim() ? undefined : "Write the reply first.";
-  const submit = async () => {
-    // THE BUTTON'S OWN GATE, for the dialog's submit: a reply is a comment,
-    // and a second one is not the first sent again.
-    if (!pressable(write, blocked)) return;
+
+  const send = async (choice: string) => {
+    const option = options.find((o) => o.id === choice);
     const body = text.trim();
-    const result = await write.run(
-      { item, answers: comment, body },
-      { done: `Replied to ${asker} on ${item}` },
+    const result = option
+      ? await write.run(
+          { item, answers: comment, choice: option.id },
+          { done: `Answered ${named}: ${option.label}` },
+        )
+      : await write.run(
+          { item, answers: comment, body },
+          { done: `Replied to ${asker} on ${named}` },
+        );
+    if (!result || (result.kind !== "applied" && result.kind !== "pending")) return;
+    onAnswered(
+      option
+        ? { kind: "choice", label: option.label, recommended: option.id === recommended }
+        : { kind: "reply", text: body },
     );
-    if (result && (result.kind === "applied" || result.kind === "pending")) {
-      setText("");
-      close();
-    }
   };
-  return (
+
+  const other = chosen === OTHER;
+  const blocked = other
+    ? text.trim()
+      ? undefined
+      : "Write the reply first."
+    : chosen
+      ? undefined
+      : "Choose an answer first.";
+  const submit = () => {
+    if (pressable(write, blocked)) void send(chosen);
+  };
+  const actions = (
     <>
+      <Button size="small" variant="ghost" onClick={close} disabled={write.busy}>
+        Cancel
+      </Button>
       <WriteButton
         write={write}
         size="small"
-        variant="secondary"
-        leadingIcon={<MessageSquareGlyph />}
+        variant="primary"
+        blocked={blocked}
         showRefusal={false}
-        onPress={() => setOpen(true)}
+        onPress={submit}
       >
-        Reply
+        Submit
       </WriteButton>
-      {open && (
-        <Modal
-          open
-          size="md"
-          title={`Reply to ${asker}`}
-          icon={<MessageSquareGlyph />}
-          onClose={close}
-          onSubmit={() => void submit()}
-          closeDisabledReason={write.busy ? "Waiting for the engine to answer" : undefined}
-          footer={
-            <>
-              <Button variant="secondary" onClick={close} disabled={write.busy}>
-                Cancel
-              </Button>
-              <WriteButton
-                write={write}
-                variant="primary"
-                showRefusal={false}
-                onPress={() => void submit()}
-                blocked={blocked}
-              >
-                Send reply
-              </WriteButton>
-            </>
-          }
-        >
-          <div className="col gap-3">
-            {question && <blockquote className="answer-run-question">{question}</blockquote>}
-            <FormField
-              label="Your reply"
-              htmlFor={`reply-ask-${comment}`}
-              helper={`Posted on ${item} as the answer to this question; ${asker} is woken with it.`}
-            >
-              <Textarea
-                id={`reply-ask-${comment}`}
-                rows={5}
-                value={text}
-                onChange={(event) => setText(event.target.value)}
-              />
-            </FormField>
-            <RefusalNote write={write} />
-          </div>
-        </Modal>
-      )}
     </>
+  );
+  const composer = (
+    <Composer
+      label={words ? `Reply to ${asker}` : "Something else"}
+      value={text}
+      onChange={setText}
+      onSubmit={submit}
+      maxLength={DECISION_REPLY_MAX}
+      placeholder={`Tell ${asker} what you want instead`}
+      disabled={!write.access.can || write.busy}
+      actions={actions}
+      autoFocus
+    />
+  );
+
+  if (layout === "buttons") {
+    // THE FIELD IN THE OPTIONS' PLACE, once "Something else" opened it, and
+    // from the start for an ask that offers none. It takes the focus only
+    // when a press opened it: stepping onto an ask with j or k must not drop
+    // the reader into a field.
+    if (words || open) {
+      return (
+        <Stack gap={2}>
+          <Composer
+            label={`Reply to ${asker}`}
+            value={text}
+            onChange={setText}
+            onSubmit={submit}
+            maxLength={DECISION_REPLY_MAX}
+            placeholder={`Tell ${asker} what you want`}
+            disabled={!write.access.can || write.busy}
+            autoFocus={!words}
+            actions={
+              <>
+                {!words && (
+                  <Button size="small" variant="ghost" onClick={close} disabled={write.busy}>
+                    Cancel
+                  </Button>
+                )}
+                <WriteButton
+                  write={write}
+                  size="small"
+                  variant="primary"
+                  blocked={text.trim() ? undefined : "Write the reply first."}
+                  showRefusal={false}
+                  onPress={submit}
+                >
+                  Send
+                </WriteButton>
+              </>
+            }
+          />
+          <RefusalNote write={write} />
+        </Stack>
+      );
+    }
+    return (
+      <Stack gap={2}>
+        <ChoiceButtons
+          label="Answers"
+          options={options.map((o) => ({ value: o.id, label: o.label, detail: o.detail }))}
+          recommended={recommended}
+          pending={write.busy ? chosen : null}
+          disabledReason={write.access.can ? undefined : write.access.reason}
+          onChoose={(choice) => {
+            if (!pressable(write)) return;
+            setChosen(choice);
+            void send(choice);
+          }}
+        />
+        <WriteButton
+          write={write}
+          size="small"
+          variant="ghost"
+          pressing={false}
+          showRefusal={false}
+          blocked={write.busy ? "Your answer to this ask is being sent" : undefined}
+          onPress={() => {
+            setChosen(OTHER);
+            onOpenChange(true);
+          }}
+        >
+          Something else
+        </WriteButton>
+        <RefusalNote write={write} />
+      </Stack>
+    );
+  }
+
+  if (!open) {
+    return (
+      <div className="decision-answer">
+        <span className="decision-rec">
+          {rec ? (
+            <>
+              Recommended: <strong>{rec.label}</strong>
+            </>
+          ) : words ? (
+            "Answered in words"
+          ) : (
+            "No recommendation"
+          )}
+        </span>
+        <span className="decision-answer-actions">
+          {rec && (
+            <WriteButton
+              write={write}
+              size="small"
+              variant="primary"
+              showRefusal={false}
+              onPress={() => void send(rec.id)}
+            >
+              Accept
+            </WriteButton>
+          )}
+          <WriteButton
+            write={write}
+            size="small"
+            variant={rec ? "secondary" : "primary"}
+            showRefusal={false}
+            pressing={false}
+            blocked={write.busy ? "Your answer to this ask is being sent" : undefined}
+            onPress={() => onOpenChange(true)}
+          >
+            {rec ? "Change" : words ? "Reply" : "Answer"}
+          </WriteButton>
+        </span>
+        <RefusalNote write={write} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="decision-answer is-open">
+      {words ? (
+        composer
+      ) : (
+        <ChoiceList
+          label="Answers"
+          value={chosen}
+          onChange={setChosen}
+          disabled={!write.access.can || write.busy}
+          options={[
+            ...options.map((o) => ({
+              value: o.id,
+              label: o.label,
+              detail: o.detail,
+              tag: o.id === recommended ? "Recommended" : undefined,
+            })),
+            {
+              value: OTHER,
+              label: "Something else",
+              detail: "Reply in your own words instead.",
+              separated: true,
+              panel: composer,
+            },
+          ]}
+          footer={other ? undefined : actions}
+        />
+      )}
+      <RefusalNote write={write} />
+    </div>
   );
 }
 
@@ -863,7 +1034,7 @@ function AnswerRunDialog({
         <FormField
           label="Your answer"
           htmlFor="answer-run-text"
-          helper="The run resumes with this as the answer to its question, as the coding agent reads it."
+          helper="The run resumes with your answer."
         >
           <Textarea
             id="answer-run-text"
@@ -892,6 +1063,11 @@ function AnswerRunDialog({
  * held with the reason where the reader could not file one — a door that
  * opened onto a sheet that then refused would teach the reason one press too
  * late.
+ *
+ * AND HELD ON THE READER'S OWN SEAT, by itself (`useMessageSeatAccess`): an
+ * ask of your own seat is a question only you could answer. Decided here
+ * rather than by each screen that draws the button, because the page held it
+ * while the peek drew it bare.
  */
 export function MessageSeatButton({
   handle,
@@ -901,7 +1077,12 @@ export function MessageSeatButton({
   variant?: "primary" | "secondary";
 }) {
   const write = useAct("create_work_item");
+  const access = useMessageSeatAccess(handle);
   const openNewTask = useOpenNewTask();
+  // A MESSAGE IS AN ASK FILED AS A TASK, so where the company runs no Crewlet
+  // Works there is nothing to file it in and no button (`lib/services.ts`).
+  const runs = useServicesRun();
+  if (!runs.tracker) return null;
   return (
     <WriteButton
       write={write}
@@ -909,6 +1090,10 @@ export function MessageSeatButton({
       variant={variant}
       leadingIcon={<MessageSquareGlyph size="sm" />}
       showRefusal={false}
+      // THE ACT'S OWN REASON IS THE BUTTON'S where it cannot act at all, and
+      // the access above is that same reason then — so this is only ever the
+      // own-seat hold, which ranks after everything else.
+      blocked={access.can ? undefined : access.reason}
       onPress={() => openNewTask({ assignee: handle, ask: handle })}
     >
       Message
@@ -942,7 +1127,13 @@ const ASSIGN_SEARCH = 25;
  * the list was drawn becomes choosable when the term is next searched.
  */
 function assignOptions(
-  hits: readonly { key: string; title: string; assignee?: string }[],
+  hits: readonly {
+    id: string;
+    key: string;
+    key_collision?: boolean;
+    title: string;
+    assignee?: string;
+  }[],
   handle: string,
   nameOf: (handle: string) => string,
 ): ComboboxOption[] {
@@ -951,7 +1142,10 @@ function assignOptions(
   return [...movable, ...theirs].slice(0, ASSIGN_MATCHES).map((hit) => {
     const own = (hit.assignee ?? "") === handle;
     return {
-      value: hit.key,
+      // THE ID IS THE VALUE, the key the label: a key two tasks hold is one
+      // value for two options, and the one that did not claim it is reached
+      // by its id alone (`itemAddress`).
+      value: hit.id,
       label: `${hit.key} · ${hit.title}`,
       hint: own ? "already theirs" : hit.assignee ? `with ${nameOf(hit.assignee)}` : "unassigned",
       ...(own ? { disabled: true } : {}),
@@ -998,6 +1192,10 @@ export function AssignToSeatButton({
     setOwn(next);
     onOpenChange?.(next);
   };
+  // A TASK TO ASSIGN IS CREWLET WORKS', so where the company runs none there
+  // is no button (`lib/services.ts`).
+  const runs = useServicesRun();
+  if (!runs.tracker) return null;
   return (
     <>
       <WriteButton
@@ -1041,9 +1239,14 @@ function AssignToSeatDialog({
   const openNewTask = useOpenNewTask();
   const [term, setTerm] = useState("");
   const [listOpen, setListOpen] = useState(false);
-  const [chosen, setChosen] = useState<{ key: string; title: string; assignee: string } | null>(
-    null,
-  );
+  const [chosen, setChosen] = useState<{
+    id: string;
+    /** What the engine opens this task by ([itemAddress]). */
+    address: string;
+    key: string;
+    title: string;
+    assignee: string;
+  } | null>(null);
   const [reason, setReason] = useState("");
   const q = term.trim();
   // THE BOUND IS THE HOOK'S: a pasted description past it is not sent, and
@@ -1054,14 +1257,14 @@ function AssignToSeatDialog({
     { enabled: q.length >= ASSIGN_MIN_TERM },
   );
   // THE VERSION THE HAND-OFF IS CONDITIONAL ON, read for the task chosen.
-  const read = useQuery("work_item", chosen ? { id: chosen.key } : undefined, {
+  const read = useQuery("work_item", chosen ? { id: chosen.address } : undefined, {
     enabled: chosen !== null,
   });
   // A REFUSED SEARCH LISTS NOTHING: `useQuery` keeps its last answer across
   // a failure, which here is the hits of a term the box no longer holds.
   const hits = q.length >= ASSIGN_MIN_TERM && !search.error ? (search.data?.hits ?? []) : [];
   const options = useMemo(() => assignOptions(hits, handle, nameOf), [hits, handle, nameOf]);
-  const task = read.data && read.data.task.key === chosen?.key ? read.data.task : null;
+  const task = read.data && read.data.task.id === chosen?.id ? read.data.task : null;
   const version = task ? task.version : null;
   // WHOSE IT IS NOW is the READ's, once it lands — the same answer the
   // hand-off's `if_match` is taken from. The search hit's assignee is the
@@ -1083,7 +1286,7 @@ function AssignToSeatDialog({
     if (!pressable(write, blocked) || !chosen || version === null) return;
     const result = await write.run(
       {
-        item: chosen.key,
+        item: chosen.address,
         assignee: handle,
         if_match: version,
         ...(reason.trim() ? { reason: reason.trim() } : {}),
@@ -1158,20 +1361,32 @@ function AssignToSeatDialog({
                 options={options}
                 emptyMessage={
                   search.tooLong ??
+                  search.withheld ??
                   (search.error ? (
-                    <QueryState error={search.error} detail={search.detail} loading={false} />
+                    <QueryState
+                      error={search.error}
+                      refusal={search.refusal}
+                      detail={search.detail}
+                      loading={false}
+                    />
                   ) : search.loading ? (
                     "Searching…"
                   ) : search.data && !search.data.available ? (
-                    "This node is still indexing the tracker — try again in a moment"
+                    "Still indexing. Try again shortly."
                   ) : (
                     "No task matches"
                   ))
                 }
                 onCommit={(option) => {
-                  const hit = hits.find((h) => h.key === option.value);
+                  const hit = hits.find((h) => h.id === option.value);
                   if (!hit) return;
-                  setChosen({ key: hit.key, title: hit.title, assignee: hit.assignee ?? "" });
+                  setChosen({
+                    id: hit.id,
+                    address: itemAddress(hit),
+                    key: hit.key,
+                    title: hit.title,
+                    assignee: hit.assignee ?? "",
+                  });
                   setTerm(`${hit.key} · ${hit.title}`);
                   setListOpen(false);
                 }}
@@ -1186,7 +1401,7 @@ function AssignToSeatDialog({
           // SAID WHERE IT IS READ, not only on a disabled button's title: the
           // match list offers the seat's own tasks too.
           <p className="t-caption">
-            {chosen.key} is already {name}&rsquo;s — find another task, or file a new one.
+            {chosen.key} is already assigned to {name}.
           </p>
         )}
         {chosen && !theirs && (
@@ -1200,7 +1415,7 @@ function AssignToSeatDialog({
               label="Why it is theirs now"
               optional
               htmlFor="assign-seat-reason"
-              helper={`${name} is woken with this line, and the task's history shows it beside the hand-off.`}
+              helper={`Sent to ${name} and kept in history.`}
             >
               <Input
                 id="assign-seat-reason"
@@ -1319,9 +1534,7 @@ function PauseSeatDialog({
   const [reason, setReason] = useState("");
   const [stop, setStop] = useState(false);
   const long = [...reason.trim()].length > PAUSE_REASON_MAX;
-  const blocked = long
-    ? `A reason is one line — at most ${PAUSE_REASON_MAX} characters.`
-    : undefined;
+  const blocked = long ? `Keep the reason under ${PAUSE_REASON_MAX} characters.` : undefined;
   const submit = async () => {
     // THE BUTTON'S OWN GATE, for the dialog's submit.
     if (!pressable(write, blocked)) return;
@@ -1365,8 +1578,7 @@ function PauseSeatDialog({
     >
       <div className="col gap-3">
         <p className="t-body">
-          {name} starts no new turn until somebody resumes it. Work sent to it waits on its inbox,
-          in order, and its scheduled runs are skipped rather than queued.
+          {name} takes no new turns until resumed. Scheduled runs are skipped.
         </p>
         <FormField
           label="Why"
@@ -1386,8 +1598,8 @@ function PauseSeatDialog({
           label="Also stop the current turn"
           description={
             working
-              ? "Without it, the turn it is on finishes first. Stopped, it ends at its next round, what it had not done is lost, and it is not run again."
-              : "It is not on a turn now. Without it, a turn that starts before the pause lands finishes first."
+              ? "Otherwise the current turn finishes first. Unfinished work is lost."
+              : "It isn’t on a turn now."
           }
         />
         <RefusalNote write={write} />
@@ -1408,16 +1620,13 @@ function PauseSeatDialog({
  * A turn parked on a coding run is inside somebody else's loop — a run it
  * launched, or an executor that runs as a coding agent — which reads no notes,
  * and the engine would answer `steer_unsupported` or `not_running` one press
- * too late. Each reason names what to do instead.
+ * too late. A parked turn's reason names what to do instead.
  */
 function steerBlocked(state: { running: boolean; parked: boolean }): string | undefined {
   if (state.parked) {
-    return (
-      "This turn is waiting inside a coding agent's own loop, which reads no notes. " +
-      "Answer the run, or write on the task."
-    );
+    return "A coding run is working. Answer it, or comment on the task.";
   }
-  if (!state.running) return "The turn has ended — a note reaches only a turn that is running.";
+  if (!state.running) return "The turn has ended.";
   return undefined;
 }
 
@@ -1490,7 +1699,7 @@ function SteerTurnDialog({
     length === 0
       ? "Write the note first."
       : length > STEER_NOTE_MAX_RUNES
-        ? `A note is at most ${STEER_NOTE_MAX_RUNES} characters — write anything longer on the task.`
+        ? `Notes are limited to ${STEER_NOTE_MAX_RUNES} characters.`
         : undefined;
   const submit = async () => {
     if (!pressable(write, blocked)) return;
@@ -1530,7 +1739,7 @@ function SteerTurnDialog({
         <FormField
           label="Note"
           htmlFor="steer-turn-note"
-          helper={`Read at the turn's next round, after the call in flight returns, and kept to for the rest of the turn. ${length} of ${STEER_NOTE_MAX_RUNES} characters.`}
+          helper={`Read at the next round. ${length} of ${STEER_NOTE_MAX_RUNES} characters.`}
         >
           <Textarea
             id="steer-turn-note"

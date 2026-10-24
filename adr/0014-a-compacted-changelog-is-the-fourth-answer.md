@@ -1,4 +1,4 @@
-# ADR-0014 — A compacted changelog is the fourth answer to "who has to agree on it?"
+# ADR-0014: A compacted changelog is the fourth answer to "who has to agree on it?"
 
 - **Status:** accepted
 - **Authority:** `internal/learning/memsync`

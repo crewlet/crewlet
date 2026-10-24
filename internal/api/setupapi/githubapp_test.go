@@ -3,75 +3,20 @@ package setupapi_test
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
-	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
-// THE STATE IS THE ONLY THING GUARDING AN UNAUTHENTICATED WRITE.
-//
-// GitHub's redirect carries no engine credential, so what stands between the
-// callback and anybody who can reach the engine is the state alone. It names
-// the seat, it expires, and it is signed: a forged one, a stale one and one
-// from another endpoint all have to be refused, and Slack's landing checks
-// none of these because it only ever prints a code.
-func TestTheAppCallbackStateIsSignedScopedAndExpiring(t *testing.T) {
-	t.Parallel()
-	key := runtoken.KeyFrom("github-app-manifest", []string{"k1:material"})
-	signer := runtoken.New(runtoken.Options{Key: key})
-
-	token := signer.Mint("sre-lead", 15*60*1000000000)
-	if got := signer.Validate(token); got != "sre-lead" {
-		t.Fatalf("a token this signer minted validates as %q", got)
-	}
-
-	// FORGED: the signature is checked, so an attacker naming a seat gets
-	// nothing.
-	if got := signer.Validate("v1.sre-lead.9999999999.deadbeef"); got != "" {
-		t.Errorf("a forged state validated as %q", got)
-	}
-
-	// FROM ANOTHER ENDPOINT: the domain separates these keys, so a token
-	// minted for the telemetry receiver cannot be replayed here.
-	other := runtoken.New(runtoken.Options{
-		Key: runtoken.KeyFrom("otel-run", []string{"k1:material"}),
-	})
-	if got := signer.Validate(other.Mint("sre-lead", 15*60*1000000000)); got != "" {
-		t.Errorf("a token from another endpoint validated as %q", got)
-	}
-
-	// TAMPERED: changing the seat invalidates it, which is what stops one
-	// operator's link writing into another seat.
-	parts := strings.SplitN(token, ".", 4)
-	if len(parts) == 4 {
-		if got := signer.Validate(parts[0] + ".other-seat." + parts[2] + "." + parts[3]); got != "" {
-			t.Errorf("a state pointed at another seat validated as %q", got)
-		}
-	}
-}
-
-// TWO NODES MUST AGREE, or a fleet where the begin and the callback land on
-// different nodes refuses every completion, with a message about the link
-// rather than about the deployment.
-func TestTwoNodesWithTheSameKeyringAgreeOnAState(t *testing.T) {
-	t.Parallel()
-	material := []string{"k2:second", "k1:first"}
-	one := runtoken.New(runtoken.Options{Key: runtoken.KeyFrom("github-app-manifest", material)})
-	// The SAME material in a different order, which is what a re-ordered
-	// document or a map iteration produces.
-	two := runtoken.New(runtoken.Options{
-		Key: runtoken.KeyFrom("github-app-manifest", []string{"k1:first", "k2:second"}),
-	})
-	if got := two.Validate(one.Mint("sre-lead", 15*60*1000000000)); got != "sre-lead" {
-		t.Errorf("a second node validated the first's state as %q", got)
-	}
-}
+// THE STATE'S OWN RULES — sealed, scoped to this flow, expiring, and carrying
+// who began the creation — are held by githubstate_internal_test.go, against
+// the mint and the open themselves. What is held here is the callback around
+// them.
 
 // A NIL CLOCK MUST NOT REACH A REQUEST, and this one reached the worst
 // possible request.
@@ -87,8 +32,8 @@ func TestTwoNodesWithTheSameKeyringAgreeOnAState(t *testing.T) {
 func TestTheServiceAlwaysHasAClock(t *testing.T) {
 	t.Parallel()
 	s := newService(t, setupapi.Options{
-		Company:   func() *config.Company { return &config.Company{} },
-		StateKeys: []string{"k1:material"},
+		WebhookBase: fixtureWebhookBase,
+		Company:     companySource(t, &config.Company{}),
 	})
 	// The flow mints a state, which reads the clock. A nil one panics
 	// here rather than in a request nobody can retry.
@@ -115,15 +60,16 @@ func TestTheServiceAlwaysHasAClock(t *testing.T) {
 // first call gets past the spend, the second does not.
 func TestACallbackStateIsRefusedTheSecondTime(t *testing.T) {
 	t.Parallel()
-	flow := newService(t, setupapi.Options{StateKeys: []string{"k1:material"}}).AppFlow()
-	state := runtoken.New(runtoken.Options{
-		Key: runtoken.KeyFrom("github-app-manifest", []string{"k1:material"}),
-	}).Mint(setupapi.StateSubject("sre-lead", "founder"), 15*time.Minute)
+	flow := newService(t, setupapi.Options{WebhookBase: fixtureWebhookBase}).AppFlow()
+	state, err := flow.MintState("sre-lead", beganBy)
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
 
 	if _, err := flow.Complete(t.Context(), "code-1", state); errors.Is(err, setupapi.ErrStateRefused) {
 		t.Fatalf("the first use of a fresh state was refused: %v", err)
 	}
-	_, err := flow.Complete(t.Context(), "code-2", state)
+	_, err = flow.Complete(t.Context(), "code-2", state)
 	if !errors.Is(err, setupapi.ErrStateRefused) {
 		t.Errorf("Complete twice = %v, want %v: a replayed link must not seal "+
 			"another app over this seat's", err, setupapi.ErrStateRefused)
@@ -140,18 +86,23 @@ func TestACallbackStateIsRefusedTheSecondTime(t *testing.T) {
 func TestAnUnreadableClaimRegistryRefusesTheCallback(t *testing.T) {
 	t.Parallel()
 	flow := newService(t, setupapi.Options{
-		StateKeys: []string{"k1:material"}, StateClaims: blindClaims{},
+		WebhookBase: fixtureWebhookBase, StateClaims: blindClaims{},
 	}).AppFlow()
-	state := runtoken.New(runtoken.Options{
-		Key: runtoken.KeyFrom("github-app-manifest", []string{"k1:material"}),
-	}).Mint(setupapi.StateSubject("sre-lead", "founder"), 15*time.Minute)
+	state, err := flow.MintState("sre-lead", beganBy)
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
 
-	_, err := flow.Complete(t.Context(), "code-1", state)
+	_, err = flow.Complete(t.Context(), "code-1", state)
 	if !errors.Is(err, setupapi.ErrStateRefused) {
 		t.Errorf("Complete = %v, want %v: an unreadable registry has not said "+
 			"this state is unspent", err, setupapi.ErrStateRefused)
 	}
 }
+
+// beganBy is the party a case's state was begun by.
+var beganBy = iam.Actor{Name: "jane.doe", Kind: iam.ActorOperator,
+	OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a"}
 
 // blindClaims is a registry that cannot answer.
 type blindClaims struct{}

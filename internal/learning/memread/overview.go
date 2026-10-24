@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -41,6 +43,9 @@ import (
 
 // OverviewSeat is one seat's row of the overview.
 type OverviewSeat struct {
+	// ID is the seat's agent id, which a row is matched by; Handle its
+	// handle, which a list draws.
+	ID     string `json:"agent_id"`
 	Handle string `json:"handle"`
 
 	// The totals the holder counted — the same counts [Memory] carries
@@ -81,26 +86,42 @@ type Overview struct {
 // AN UNREADABLE LEASE TABLE FAILS THE WHOLE ANSWER as [ErrUnavailable]: with
 // no way to say who holds anything, every row would be a guess, and "held by
 // nobody" is precisely the guess the three-valued lease read exists to refuse.
-func (r *Reader) Overview(ctx context.Context, handles []string) (Overview, error) {
+func (r *Reader) Overview(ctx context.Context, seats []Seat) (Overview, error) {
 	self := NodeOf(r.Owner)
 	out := Overview{
-		Seats:    make([]OverviewSeat, len(handles)),
+		Seats:    make([]OverviewSeat, len(seats)),
 		Coverage: eventfan.Coverage{Nodes: []eventfan.NodeCoverage{{ID: self, Answered: true}}, Complete: true},
 	}
-	at := make(map[string]int, len(handles))
-	for i, h := range handles {
-		out.Seats[i] = OverviewSeat{Handle: h, HeldBy: HolderNone}
-		at[h] = i
+	at := make(map[uuid.UUID]int, len(seats))
+	byID := make(map[uuid.UUID]Seat, len(seats))
+	for i, seat := range seats {
+		out.Seats[i] = OverviewSeat{ID: seat.ID.String(), Handle: seat.Handle, HeldBy: HolderNone}
+		at[seat.ID] = i
+		byID[seat.ID] = seat
+	}
+	// place is where a holder's row goes, matched by the seat's id. Every
+	// caller then puts the ASKER's handle on it: the row was counted by a
+	// holder whose chart may call the seat something else.
+	place := func(row OverviewSeat) (int, bool) {
+		id, err := uuid.Parse(row.ID)
+		if err != nil {
+			return 0, false
+		}
+		i, ok := at[id]
+		return i, ok
 	}
 	if r.Queue == nil {
 		// A NODE WITH NO BROKER IS THE FLEET: every seat is its own.
-		rows, err := r.Local.Overview(ctx, handles)
+		rows, err := r.Local.Overview(ctx, seats)
 		if err != nil {
 			return Overview{}, err
 		}
 		for _, row := range rows {
-			row.HeldBy = self
-			out.Seats[at[row.Handle]] = row
+			if i, ok := place(row); ok {
+				row.HeldBy = self
+				row.Handle = out.Seats[i].Handle
+				out.Seats[i] = row
+			}
 		}
 		return out, nil
 	}
@@ -112,30 +133,33 @@ func (r *Reader) Overview(ctx context.Context, handles []string) (Overview, erro
 			ErrUnavailable, err)
 	}
 	now := r.now()
-	byOwner := map[string][]string{}
+	byOwner := map[string][]Seat{}
 	for _, lease := range leases {
-		handle, ok := coord.SeatHandle(lease.Resource)
-		if _, asked := at[handle]; !ok || !asked || !lease.Live(now) {
+		id, ok := coord.SeatID(lease.Resource)
+		if _, asked := at[id]; !ok || !asked || !lease.Live(now) {
 			continue
 		}
-		byOwner[lease.Owner] = append(byOwner[lease.Owner], handle)
+		byOwner[lease.Owner] = append(byOwner[lease.Owner], byID[id])
 	}
 
-	mark := func(handles []string, node, why string) {
-		for _, h := range handles {
-			out.Seats[at[h]] = OverviewSeat{Handle: h, HeldBy: node, Unavailable: why}
+	mark := func(seats []Seat, node, why string) {
+		for _, seat := range seats {
+			out.Seats[at[seat.ID]] = OverviewSeat{
+				ID: seat.ID.String(), Handle: seat.Handle, HeldBy: node, Unavailable: why,
+			}
 		}
 	}
-	fill := func(rows []OverviewSeat, node string, allowed []string) {
+	fill := func(rows []OverviewSeat, node string, allowed []Seat) {
 		for _, row := range rows {
-			i, ok := at[row.Handle]
-			if !ok || !slices.Contains(allowed, row.Handle) {
+			i, ok := place(row)
+			if !ok || !slices.ContainsFunc(allowed, func(s Seat) bool { return s.ID.String() == row.ID }) {
 				// A ROW FOR A SEAT THIS HOLDER WAS NOT ASKED ABOUT is not
 				// its to give: the lease this read took names somebody
 				// else, or nobody.
 				continue
 			}
 			row.HeldBy = node
+			row.Handle = out.Seats[i].Handle
 			out.Seats[i] = row
 		}
 	}
@@ -145,7 +169,7 @@ func (r *Reader) Overview(ctx context.Context, handles []string) (Overview, erro
 	}
 
 	// ASKED: every holder but this incarnation.
-	asked := map[string][]string{}
+	asked := map[string][]Seat{}
 	for owner, seats := range byOwner {
 		if owner != r.Owner {
 			asked[owner] = seats
@@ -178,12 +202,12 @@ func (r *Reader) Overview(ctx context.Context, handles []string) (Overview, erro
 	// one still arriving is refused per row as [Reader.read] refuses it.
 	if mine := byOwner[r.Owner]; len(mine) > 0 {
 		attached := r.Attached()
-		var ready, arriving []string
-		for _, h := range mine {
-			if slices.Contains(attached, h) {
-				ready = append(ready, h)
+		var ready, arriving []Seat
+		for _, seat := range mine {
+			if slices.Contains(attached, seat.ID) {
+				ready = append(ready, seat)
 			} else {
-				arriving = append(arriving, h)
+				arriving = append(arriving, seat)
 			}
 		}
 		mark(arriving, self, "this node is taking the seat and its memory is still arriving")
@@ -247,18 +271,19 @@ func (r *Reader) Overview(ctx context.Context, handles []string) (Overview, erro
 }
 
 // Overview counts the named seats' memory in THIS node's store: the three
-// totals and the newest live diary entry, one row per handle in the order
-// named. HeldBy is left for the caller, which knows whose tenure it is.
+// totals and the newest live diary entry, one row per seat in the order
+// named, each keyed as [Stores.Memory] keys it. HeldBy is left for the caller,
+// which knows whose tenure it is.
 //
 // The same counts [Stores.Memory] carries, through the same store calls — so
 // a list row and the seat's own page can never disagree about a total.
-func (s *Stores) Overview(ctx context.Context, handles []string) ([]OverviewSeat, error) {
-	out := make([]OverviewSeat, 0, len(handles))
+func (s *Stores) Overview(ctx context.Context, seats []Seat) ([]OverviewSeat, error) {
+	out := make([]OverviewSeat, 0, len(seats))
 	now := s.now()
-	for _, handle := range handles {
-		row := OverviewSeat{Handle: handle}
+	for _, seat := range seats {
+		row := OverviewSeat{ID: seat.ID.String(), Handle: seat.Handle}
 		if s.Diary != nil {
-			if id := s.agentID(handle); id != "" {
+			if id := agentID(seat); id != "" {
 				latest, err := s.Diary.Recent(ctx, id, now, 1)
 				if err != nil {
 					return nil, err
@@ -274,14 +299,14 @@ func (s *Stores) Overview(ctx context.Context, handles []string) ([]OverviewSeat
 			}
 		}
 		if s.Episodes != nil {
-			n, err := s.Episodes.Count(ctx, handle)
+			n, err := s.Episodes.Count(ctx, seat.Handle)
 			if err != nil {
 				return nil, err
 			}
 			row.EpisodesTotal = n
 		}
 		if s.Skills != nil {
-			n, err := s.Skills.Count(ctx, handle, learning.ListOptions{})
+			n, err := s.Skills.Count(ctx, seat.Handle, learning.ListOptions{})
 			if err != nil {
 				return nil, err
 			}

@@ -48,7 +48,8 @@ what model and budget to use. Give rough answers — it proposes a
 concrete org chart and you correct it. It should also, without being
 asked:
 
-- put you in the chart as a **human seat** managing the top agent
+- put you in the chart as a **human seat** managing the top agent — the
+  seat you join the company on, since every person holds one
 - keep every secret as a `${VAR}`, never a literal
 - **skip integrations on the first pass** (step 8 adds them)
 - warn you that handles are effectively permanent
@@ -91,9 +92,13 @@ crewlet run crewlet.yaml -company company.yaml
 
 ### 7. Watch the first turn
 
-Open <http://localhost:8000/>. A company with no integrations has no
-inbound work, which is why the first pass puts a five-minute schedule on
-the top seat purely to prove the loop:
+Open <http://localhost:8000/> and sign in with the API token your
+`crewlet.yaml` declares; then put yourself on your human seat — open it in
+**Company › Org chart** and press **Invite**, exactly as the
+[quickstart's step 4](quickstart.md#4-sign-in-and-invite-yourself)
+describes. A company with no integrations has no inbound work, which is why
+the first pass puts a five-minute schedule on the top seat purely to prove
+the loop:
 
 ```yaml
 schedules:
@@ -102,8 +107,9 @@ schedules:
     task: "Write a short note on what the company should focus on this week."
 ```
 
-Within five minutes the CEO goes `Working`, steps through **Plan →
-Execute → Review**, and returns to `Idle` — every prompt and tool call
+Within five minutes the CEO goes `Working`, steps through **Execute →
+Review** (with **Onboarding** before them on its very first turn), and
+returns to `Idle` — every prompt and tool call
 inspectable. That's the engine, your model, and your config all
 confirmed working, with no external account involved. Delete the
 schedule once real work arrives.
@@ -183,14 +189,23 @@ schema does too — an editor that underlined a config the engine runs
 would teach its author to ignore it. An empty value (`~` or `""`) is
 accepted wherever the engine reads it as unset.
 
+A human seat with no `contact` identity passes both checks, because it is a
+legitimate seat: a person who works only through the dashboard has no chat
+account to name. `crewlet validate` warns about it at the seat's `contact`,
+so nobody is surprised that it cannot be @-mentioned. A company with no
+`kind: human` seat at all passes too — its agents may run it alone through
+the deployment's API tokens — and `crewlet validate` warns at `roles` that
+nobody can be invited into it or created in it, since every person holds a
+human seat.
+
 Everything that turns on more than one field, or on what a value
 *means*, still needs the binary, and the skill tells the assistant to
 check it by reading:
 
 | Gap | Why the schema can't |
 |---|---|
-| `lead` / `manages` naming a role or unit that exists | Reference integrity across the document — not expressible in JSON Schema |
-| A human seat with at least one `contact` identity; a `knowledge.*` scope naming a backend the config configures | Rules that turn on whether a block is present at all, which JSON Schema can state only by enumerating every shape the block can take — and one stated subtly wrong would flag configs the engine runs |
+| `lead` / `manages` naming a seat handle or unit id that exists | Reference integrity across the document — not expressible in JSON Schema |
+| A `knowledge.*` scope naming a backend the config configures | A rule that turns on whether a block is present at all, which JSON Schema can state only by enumerating every shape the block can take — and one stated subtly wrong would flag configs the engine runs |
 | Real IANA timezone | Needs the timezone database |
 | A cron expression — its field count as well as its values (`99 * * * *`) | The schema takes a cron as text; checking one needs a cron parser, which `crewlet validate` runs |
 
@@ -221,16 +236,16 @@ crewlet validate company.yaml -json
       "message": "roles[1].llm: value not in the allowed set: \"nonexistent\" is not a configured provider: providers.llm has primary. A key that misses is not an error at run time: the seat falls back to another model and bills against it, so this is the only place the typo can be seen" },
     { "path": "units[0].roles[0].name", "segments": ["units", 0, "roles", 0, "name"],
       "kind": "conflict", "seat": "software-engineer",
-      "message": "duplicate seat name \"Software Engineer\": 2 seats carry it (handle \"software-engineer\" in unit \"Engineering\"; handle \"software-engineer-2\" in unit \"Engineering\"). A unit's lead and every manages entry name exactly one seat, and resolve to the first seat of that name, so give each of these seats its own name" },
+      "message": "duplicate handle \"software-engineer\": 2 seats derive it (seat \"Software Engineer\" in unit \"Engineering\"; seat \"Software Engineer\" in unit \"Engineering\"). The handle is the canonical seat identity, naming its inbox, its agent id and its external accounts, so give each of these seats a distinct name or an explicit handle" },
     { "path": "units[0].roles[1].name", "segments": ["units", 0, "roles", 1, "name"],
-      "kind": "conflict", "seat": "software-engineer-2",
-      "message": "duplicate seat name \"Software Engineer\": 2 seats carry it (handle \"software-engineer\" in unit \"Engineering\"; handle \"software-engineer-2\" in unit \"Engineering\"). A unit's lead and every manages entry name exactly one seat, and resolve to the first seat of that name, so give each of these seats its own name" }
+      "kind": "conflict", "seat": "software-engineer",
+      "message": "duplicate handle \"software-engineer\": 2 seats derive it (seat \"Software Engineer\" in unit \"Engineering\"; seat \"Software Engineer\" in unit \"Engineering\"). The handle is the canonical seat identity, naming its inbox, its agent id and its external accounts, so give each of these seats a distinct name or an explicit handle" }
   ],
   "warnings": [
     { "kind": "dangling_reference", "ref": "lead",
       "path": "units[0].lead", "segments": ["units", 0, "lead"],
-      "seat": "", "unit": "Engineering", "from": "Engineering", "to": "Tech Lead",
-      "message": "unit \"Engineering\" names lead \"Tech Lead\", which is no seat, so the unit and every descendant inheriting its lead run with no lead. Correct the lead or add a seat with that name" }
+      "seat": "", "unit": "Engineering", "from": "Engineering", "to": "tech-lead",
+      "message": "unit \"Engineering\" names lead \"tech-lead\", which is no seat's handle, so the unit and every descendant inheriting its lead run with no lead. Correct the handle or add a seat that derives it" }
   ]
 }
 ```
@@ -247,7 +262,7 @@ line it is on. The rules above run once it parses:
 ```json
 { "path": "roles[0].backstroy", "segments": ["roles", 0, "backstroy"],
   "kind": "unknown_field", "line": 6,
-  "message": "roles[0].backstroy: unknown field: \"backstroy\" is not a setting: check the spelling, or the block it belongs under (line 6)" }
+  "message": "roles[0].backstroy: unknown field: \"backstroy\" isn't a setting. Check the spelling and the block it's under (line 6)" }
 ```
 
 Each problem carries:
@@ -263,13 +278,17 @@ Each problem carries:
 
 `kind` is a closed set with a fallback deliberately: a loop branching on it
 must never receive an empty string and read it as a field somebody forgot to
-populate. Two seats sharing a name are one message and **one problem per
-seat**, each at the name that seat wrote, so `problems` can hold more entries
-than the prose output has lines (which leads such a message with every path
-it applies to).
+populate. Two seats sharing a handle are one message and **one problem per
+seat**, each at the field that seat wrote — its `handle`, or its `name` where
+the handle is derived from it — so `problems` can hold more entries than the
+prose output has lines (which leads such a message with every path it applies
+to). Two seats merely sharing a *name* are fine: a name is prose, and the
+example above is refused only because neither seat declares a `handle`, so
+both derive the same one.
 
-`warnings` are references that resolve to nothing: a unit `lead`, a root
-seat's `unit`, a `manages` entry, or a GitLab access level naming no seat.
+`warnings` are references that resolve to nothing: a unit `lead` (a seat
+handle), a root seat's `unit` (a unit key), a `manages` entry (either), or a
+GitLab access level naming no seat.
 The engine runs a company with one (live configuration assembles an
 organization in pieces), so a warning never fails validation, but one that
 survives a finished document is a misspelling nothing else will report.
@@ -289,11 +308,10 @@ and a second copy is what makes the loop's log unreadable.
 so a complete config validates *before any secret exists*. You can draft
 and check an entire company offline.
 
-Validation is deep: it builds the `Organization`, so duplicate seat and unit
-names, bad cron expressions, invalid timezones, human seats with no contact
-identity, and a knowledge scope with no backend behind it all fail here
-rather than at run time, and a unit lead naming no seat is reported as a
-warning.
+Validation is deep: it builds the `Organization`, so duplicate handles,
+duplicate unit keys, bad cron expressions, invalid timezones and a
+knowledge scope with no backend behind it all fail here rather than at run
+time, and a unit lead that is no seat's handle is reported as a warning.
 
 `-tier auto` (the default) picks the tier from the document's **keys**, not
 its filename: the one thing this has to get right is the case where the file
@@ -317,7 +335,7 @@ and Helix) you get completion, inline docs from the field docstrings, and
 typo squiggles as you type:
 
 ```yaml
-# yaml-language-server: $schema=https://docs.crewlet.ai/schema/company.schema.json
+# yaml-language-server: $schema=https://docs.crewlet.ai/engine/latest/schema/company.schema.json
 name: "Acme AI"
 ```
 
@@ -379,7 +397,8 @@ checkout, fetch it from
   time.
 - Keep every secret as a `${VAR}` reference, never a literal.
 - Put you in the org chart as a
-  [human seat](../concepts/humans-in-the-org.md#the-founder-seat).
+  [human seat](../concepts/humans-in-the-org.md#the-founder-seat) — the
+  seat you are invited onto once the company runs.
 - Warn you that handles are effectively permanent (see below).
 - Validate after every edit, and not claim success until it passes.
 

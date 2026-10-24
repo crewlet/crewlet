@@ -77,7 +77,7 @@ func DirectPushes() []DirectPush { return []DirectPush{DirectPersons, DirectNone
 func (d DirectPush) Valid() bool { return slices.Contains(DirectPushes(), d) }
 
 // Visibility is who may read a repository besides persons and the tokens of
-// Tier A (ADR-0040): a SEAT'S standing narrows by it, and a person's never
+// Tier A (ADR-0054): a SEAT'S standing narrows by it, and a person's never
 // does — a credential presented by a person, or a token bound to nobody, reads
 // every repository, because a CI token that could not read a unit repository
 // breaks its builds and a Tier A token is the operator's own credential.

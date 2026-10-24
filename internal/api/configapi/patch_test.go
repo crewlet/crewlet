@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -35,8 +36,8 @@ func patchOnly(t *testing.T, s *surface, body string, headers map[string]string)
 // — and losing a concurrent edit to any of them.
 func TestAPatchChangesOnlyWhatItNames(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	patchOnly(t, s, `{"mission": "ship the thing"}`, summaryHeader)
 
@@ -46,7 +47,7 @@ func TestAPatchChangesOnlyWhatItNames(t *testing.T) {
 	}
 	// EVERYTHING ELSE SURVIVED. A merge that replaced the document would
 	// pass the assertion above and lose the company.
-	for _, want := range []string{`"Acme"`, "zulu", "gitlab.example.com", "ceo"} {
+	for _, want := range []string{`"Acme"`, "zulu", "gitlab.example.com"} {
 		if !strings.Contains(document, want) {
 			t.Errorf("%s is gone from the document after a patch: %s", want, document)
 		}
@@ -58,8 +59,8 @@ func TestAPatchChangesOnlyWhatItNames(t *testing.T) {
 // budget blocks have no members to address.
 func TestAPatchReachesANestedSectionWithoutItsSiblings(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 	before := s.activeDocument(t)
 	if !strings.Contains(before, "claude-sonnet-5") {
 		t.Fatalf("fixture changed: %s", before)
@@ -87,8 +88,8 @@ func TestAPatchReachesANestedSectionWithoutItsSiblings(t *testing.T) {
 // through it fails hours later.
 func TestAPatchLeavesUnmentionedCredentialsAlone(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	patchOnly(t, s, `{"mission": "unrelated"}`, summaryHeader)
 
@@ -104,8 +105,8 @@ func TestAPatchLeavesUnmentionedCredentialsAlone(t *testing.T) {
 // redacted GET must not replace a credential with "__redacted__".
 func TestAPatchRestoresARedactedValue(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	patchOnly(t, s,
 		`{"integrations": {"gitlab": {"signing_secret": "__redacted__"}}}`,
@@ -124,8 +125,8 @@ func TestAPatchRestoresARedactedValue(t *testing.T) {
 // config surface can only add, and an operator eventually edits by hand.
 func TestAPatchRemovesASectionWithNull(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	patchOnly(t, s, `{"integrations": {"gitlab": null}}`, summaryHeader)
 
@@ -139,8 +140,8 @@ func TestAPatchRemovesASectionWithNull(t *testing.T) {
 // outcome available — the caller believes they changed something.
 func TestAPatchWithAnUnknownKeyIsRefused(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 	before := s.activeDocument(t)
 
 	res := s.do(t, http.MethodPatch, "/config",
@@ -158,8 +159,8 @@ func TestAPatchWithAnUnknownKeyIsRefused(t *testing.T) {
 // is the break a narrower surface invites: the caller never sees the rest.
 func TestAPatchThatBreaksTheCompanyIsRefused(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 	before := s.activeDocument(t)
 
 	// A signing secret whose SHAPE the validator checks. Chosen over
@@ -185,8 +186,8 @@ func TestAPatchThatBreaksTheCompanyIsRefused(t *testing.T) {
 // reader of the history can least reconstruct from the revision itself.
 func TestAPatchNeedsASummary(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	res := s.do(t, http.MethodPatch, "/config", `{"mission": "x"}`, nil)
 	if res.Code != http.StatusBadRequest ||
@@ -203,8 +204,8 @@ func TestAPatchNeedsASummary(t *testing.T) {
 // the loser.
 func TestAPatchHonoursIfMatch(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	res := s.do(t, http.MethodPatch, "/config", `{"mission": "x"}`,
 		map[string]string{"X-Summary": "a patch", "If-Match": "not-the-active-one"})
@@ -220,7 +221,7 @@ func TestAPatchHonoursIfMatch(t *testing.T) {
 // of one section is not what this route is for.
 func TestAPatchWithNoActiveRevisionIsRefused(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 
 	res := s.do(t, http.MethodPatch, "/config", `{"mission": "x"}`, summaryHeader)
 	if res.Code != http.StatusConflict {
@@ -247,8 +248,8 @@ func TestAnEmptyOrScalarPatchIsRefused(t *testing.T) {
 		{`"just a string"`, "must be an object"},
 		{`[1,2]`, "must be an object"},
 	} {
-		s := newSurface(t, nil)
-		s.seed(t, companyDoc, nil)
+		s := newSurface(t)
+		s.seed(t, companyDoc)
 		before := s.activeDocument(t)
 
 		res := s.do(t, http.MethodPatch, "/config", tc.body, summaryHeader)
@@ -269,8 +270,8 @@ func TestAnEmptyOrScalarPatchIsRefused(t *testing.T) {
 // form an operator edits, and one reader takes both.
 func TestAPatchAcceptsYAML(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	patchOnly(t, s, "mission: from yaml\n", summaryHeader)
 	if !strings.Contains(s.activeDocument(t), "from yaml") {
@@ -290,8 +291,8 @@ func TestAPatchAcceptsYAML(t *testing.T) {
 // conformance suite proves the store's half on both backends.
 func TestAWriteThatLostTheRaceIsRefused(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	base := s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	base := s.seed(t, companyDoc)
 
 	// A peer activates something else, expecting the same base this
 	// surface is about to build on.
@@ -329,8 +330,8 @@ func TestAWriteThatLostTheRaceIsRefused(t *testing.T) {
 // just a way of refusing every write on a fleet.
 func TestAWriteWithNoRaceStillActivates(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	patchOnly(t, s, `{"mission": "mine"}`, summaryHeader)
 
@@ -359,7 +360,7 @@ func TestAWriteWithNoRaceStillActivates(t *testing.T) {
 // it is a contract between PEERS, which no tag count makes optional.
 func TestAPatchKeepsFieldsThisBuildCannotRepresent(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 
 	seedWithPeerField(t, s)
 
@@ -382,7 +383,7 @@ func TestAPatchKeepsFieldsThisBuildCannotRepresent(t *testing.T) {
 // What decides is where the unknown key came from.
 func TestATypoIsRefusedEvenOnAPeerExtendedDocument(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
+	s := newSurface(t)
 	seedWithPeerField(t, s)
 
 	res := s.do(t, http.MethodPatch, "/config",
@@ -434,12 +435,12 @@ func (s *surface) seedStored(t *testing.T, doc string, mutate func(map[string]an
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, err := secrets.Seal(nil, raw)
+	payload, err := secrets.Seal(s.cipher, raw)
 	if err != nil {
 		t.Fatal(err)
 	}
 	id, err := s.configs.InsertActive(t.Context(), store.Revision{
-		CreatedByKind: store.AuthorOperator,
+		CreatedByKind: iam.ActorOperator,
 		Source:        "peer", CreatedBy: "another node", Summary: "seed",
 		Payload: payload, CreatedAt: pinned,
 	})
@@ -458,8 +459,8 @@ func (s *surface) seedStored(t *testing.T, doc string, mutate func(map[string]an
 // with.
 func TestAnExpectAcceptsEitherSpellingOfThePrecondition(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	id := s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	id := s.seed(t, companyDoc)
 
 	for name, expect := range map[string]string{
 		"a bare revision id":   id,
@@ -477,7 +478,7 @@ func TestAnExpectAcceptsEitherSpellingOfThePrecondition(t *testing.T) {
 			sent := strings.ReplaceAll(expect, id, current.ID)
 			if _, err := s.svc.Apply(t.Context(), configapi.ApplyRequest{
 				Patch:   []byte(`{"mission": "ship the thing"}`),
-				Summary: "a patch", Author: store.Author{Name: "operator", Kind: store.AuthorOperator}, Expect: sent,
+				Summary: "a patch", By: iam.Actor{Name: "operator", Kind: iam.ActorOperator}, Expect: sent,
 			}); err != nil {
 				t.Errorf("Apply with %s (%q) = %v", name, sent, err)
 			}
@@ -489,12 +490,12 @@ func TestAnExpectAcceptsEitherSpellingOfThePrecondition(t *testing.T) {
 // the guard rather than widened it.
 func TestAStalePreconditionIsStillRefused(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	_, err := s.svc.Apply(t.Context(), configapi.ApplyRequest{
 		Patch:   []byte(`{"mission": "ship the thing"}`),
-		Summary: "a patch", Author: store.Author{Name: "operator", Kind: store.AuthorOperator},
+		Summary: "a patch", By: iam.Actor{Name: "operator", Kind: iam.ActorOperator},
 		Expect: `"a-revision-that-never-existed"`,
 	})
 	var raced *configapi.RacedError

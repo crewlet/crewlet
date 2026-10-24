@@ -149,7 +149,7 @@ func (r *Refiner) Skip(t Turn) string {
 	if !t.Settled() {
 		return SkipNotSettled
 	}
-	if t.Event.AgentHandle == "" {
+	if t.Seat() == "" {
 		return SkipNoHandle
 	}
 	if len(t.Event.SkillsUsed) == 0 {
@@ -275,7 +275,7 @@ func (r *Refiner) Reflect(ctx context.Context, t Turn) ([]events.Payload, error)
 // have archived one since. Refining an archived skill would resurrect a body
 // nobody will be shown.
 func (r *Refiner) candidates(ctx context.Context, t Turn) ([]Skill, error) {
-	live, err := r.skills.List(ctx, t.Event.AgentHandle, ListOptions{})
+	live, err := r.skills.List(ctx, t.Seat(), ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("learning: listing %s's skills: %w", t.Event.AgentHandle, err)
 	}

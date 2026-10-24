@@ -1,6 +1,10 @@
 package prompts
 
-import "slices"
+import (
+	"slices"
+
+	"github.com/crewlet/crewlet/internal/provenance"
+)
 
 // ExecutorHeader is the executor's contract: decide and act in one pass, then
 // account for it.
@@ -76,6 +80,12 @@ const ExecutorHeader = "\n## Your turn" +
 	"and your team roster are already in this prompt -- no lookup " +
 	"needed."
 
+// untrustedTextHeading titles the standing sentence about fenced text.
+const untrustedTextHeading = "\n## Text somebody else wrote"
+
+// KeyUntrustedText is the outline key of that section.
+const KeyUntrustedText = "untrusted_text"
+
 // executorKnowledgeNote points the executor at the prefetched documentation.
 //
 // APPENDED ONLY WHEN THERE IS A BLOCK. It used to be part of the header and
@@ -86,7 +96,8 @@ const ExecutorHeader = "\n## Your turn" +
 const executorKnowledgeNote = "  Relevant team documentation was surfaced in the " +
 	"`## Relevant knowledge` block below."
 
-// executorSandboxSection is rendered only for sandbox-enabled roles.
+// executorSandboxSection is rendered only where the executor is offered
+// run_sandbox ([ExecutorInput.OffersSandbox]).
 //
 // Gated because it is absent for very nearly every role: unconditional, it
 // would be ~200 tokens of prose about a tool the seat does not have, on every
@@ -122,9 +133,12 @@ type ExecutorInput struct {
 	// with a one-line description, MCP servers by name only.
 	ToolCatalogue string
 
-	// AvailableTools is the tool surface registered for this turn. It
-	// scopes skill matching, and gates the onboarding hint — see
-	// OnboardingHint.
+	// AvailableTools is every name on the surface built for this phase,
+	// the tools the phase adds to it included (`submit_work`, the
+	// discovery pair, `delegate`) — never the registry snapshot it was
+	// built from, which holds none of those. It scopes skill matching,
+	// and gates every section that tells the model to call a tool
+	// (escalation, workers).
 	AvailableTools []string
 
 	// Workers is the rendered `## Your workers` block: one line per
@@ -149,12 +163,6 @@ type ExecutorInput struct {
 	// re-queried mid-turn precisely to preserve prefix caching.
 	EpisodeRecall string
 
-	// OnboardingHint renders only when this agent has not yet completed
-	// onboarding for its current org chain AND mark_onboarded is in
-	// AvailableTools — instructing an agent to call a tool that is not
-	// registered (reflection disabled) is worse than saying nothing.
-	OnboardingHint string
-
 	// PersonalMemory is the agent-scope diary block, already filtered for
 	// relevance to this task. Empty when the filter is unavailable, fails,
 	// or finds no candidates.
@@ -172,6 +180,16 @@ type ExecutorInput struct {
 	// Skills is the tool-skill registry. Nil keeps the prompt free of skill
 	// scaffolding entirely.
 	Skills SkillCatalogue
+
+	// OffersSandbox is whether run_sandbox is on the surface this executor
+	// is offered, which is what the sandbox section teaches.
+	//
+	// THE CALLER'S ANSWER, not the role's gate read here: the gate is not
+	// what says a seat holds the tool. A seat whose executor runs in agent
+	// mode is never offered it — it already holds a shell — whatever its
+	// gate says, and the section rendered off the gate told that seat's
+	// coding CLI about a tool its bridge never lists, on every turn.
+	OffersSandbox bool
 }
 
 // workersPreamble frames the list that follows it.
@@ -206,19 +224,26 @@ const workersPreamble = "Short-lived workers you can hand narrowly-scoped work "
 // that measured each one (`thread_context`, `personal_memory`, …), so a reader
 // can put a block beside what the prefetch recorded about it.
 func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
+	// ONE counter for BOTH renderings of this seat's direct reports — the
+	// identity line's name list and the roster's profiles. Planned once,
+	// here, because the two sections are two views of one team and a cap
+	// each would let them disagree about who is on it while the prompt paid
+	// for both budgets. See [planRoster].
+	reports := planRoster(seat, newRosterAllowance(rosterAllowanceTokens))
+
 	b := NewBuilder("\n")
 	identity := []struct {
 		key   string
 		lines []string
 	}{
-		{"identity", BuildIdentitySection(seat)},
+		{"identity", BuildIdentitySection(seat, reports)},
 		{"company_context", BuildOrgMissionVisionSection(seat)},
 		{"background", buildBackgroundSection(seat)},
 		{"responsibilities", buildResponsibilitiesSection(seat)},
 		{"behavioral_guidelines", buildGuidelinesSection(seat)},
 		{"unit", BuildUnitContextSection(seat)},
 		{"policies", BuildPoliciesSection(seat)},
-		{"team", BuildRosterSection(seat)},
+		{"team", BuildRosterSection(seat, reports)},
 		{"human_colleagues", BuildHumanColleaguesNote(seat)},
 	}
 	empty := true
@@ -243,16 +268,23 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 	// the header says finish the arc, and this says the one case where
 	// finishing means stopping on a branch until somebody answers.
 	b.Heading("escalation", BuildEscalationSection(in.AvailableTools)...)
+	// AND HOW TO READ WHAT OTHER PEOPLE WROTE, before any of it: the thread
+	// below, every page, comment and file a tool answers, and anything an
+	// MCP tool hands back is somebody else's words, and the fences round
+	// them mean something only if the seat was told what. UNCONDITIONAL and
+	// constant ([provenance.StandingInstruction]): the turn's token lives in
+	// the fences, so this section is the same bytes on every turn of every
+	// seat and costs the prompt cache nothing.
+	b.Heading(KeyUntrustedText, untrustedTextHeading, provenance.StandingInstruction)
 
-	if seat.ok() && seat.Role.Sandbox != nil && seat.Role.Sandbox.Enabled {
+	if in.OffersSandbox {
 		b.Heading("sandbox", executorSandboxSection)
 	}
 
 	// FIRST of the prefetched blocks, because it is the trigger's own
 	// context rather than something retrieved about it, and the executor
 	// reads this prompt top-down: what the conversation is before what the
-	// seat remembers about conversations like it, and before the standing
-	// instruction to go and read the team's onboarding pages.
+	// seat remembers about conversations like it.
 	//
 	// "The thread so far" rather than "Thread context", which is what the
 	// chat prompt titles the section it writes into the notification BODY
@@ -261,12 +293,6 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 	// whichever it saw last.
 	if in.ThreadContext != "" {
 		b.Heading(KeyThreadContext, "\n## The thread so far", in.ThreadContext)
-	}
-	// The onboarding hint gates on the tool as well as the marker: the
-	// same rule the memory / skill blocks follow, so a prompt never tells
-	// the model to call something that is not registered.
-	if in.OnboardingHint != "" && slices.Contains(in.AvailableTools, "mark_onboarded") {
-		b.Heading(KeyOnboardingHint, "\n## First-turn onboarding", in.OnboardingHint)
 	}
 	if in.PersonalMemory != "" {
 		b.Heading(KeyPersonalMemory, "\n## Personal memory", in.PersonalMemory)
@@ -312,7 +338,6 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 // them, rather than a second list here drifting from it.
 const (
 	KeyThreadContext     = "thread_context"
-	KeyOnboardingHint    = "onboarding_hint"
 	KeyPersonalMemory    = "personal_memory"
 	KeySynthesizedSkills = "synthesized_skills"
 	KeyRelevantKnowledge = "relevant_knowledge"

@@ -167,10 +167,7 @@ export function CalendarView({
             rendered. The toolbar's count says the same thing from the other end
             — see [countedLabel]. */}
         <div className="work-cal-note">
-          <span>
-            Only work due in this window appears here. Work with no due date, and work due outside
-            these days, is on the list.
-          </span>
+          <span>Only work due in this window. Undated work is on the list.</span>
           {/* A MONTH PAST ITS FIRST PAGE: the chips drawn are the ones loaded,
               so the rest of the window is one press rather than silently cut. */}
           {more && (

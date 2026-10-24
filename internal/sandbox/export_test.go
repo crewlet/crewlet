@@ -10,7 +10,7 @@ import "fmt"
 // itself, since root also holds the engine's records about the box.
 func NewContainerBoxAt(root string) (Sandbox, string) {
 	layout := boxLayout{id: "contract", root: root}
-	return &containerBox{layout: layout, runtime: "docker", container: "contract"}, layout.home()
+	return &containerBox{layout: layout, cli: containerCLI{path: "docker"}, container: "contract"}, layout.home()
 }
 
 // CapReads holds a local box's whole reads to n bytes, for the file contract

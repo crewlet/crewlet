@@ -27,7 +27,8 @@ import (
 // concretely here would have made a provisioner that works on a stopped node
 // and a provisioner that works on a running fleet two different sinks.
 type SecretStore interface {
-	Set(ctx context.Context, name, value, by, source string, now time.Time) error
+	Set(ctx context.Context, name, value string, by secrets.Author,
+		source secrets.Source, now time.Time) error
 	Get(ctx context.Context, name string) (string, error)
 	Unset(ctx context.Context, name string) (bool, error)
 }
@@ -40,20 +41,27 @@ type SecretStore interface {
 // activation rather than on the next deploy of a file.
 type SecretStoreSink struct {
 	values SecretStore
-	by     string
+	by     secrets.Author
 
 	mu      sync.Mutex
 	written []string
 }
 
-// NewSecretStoreSink builds the sink.
-func NewSecretStoreSink(values SecretStore, by string) *SecretStoreSink {
+// NewSecretStoreSink builds the sink, recording every value it seals under by:
+// the party the run is for and the credential it came through.
+func NewSecretStoreSink(values SecretStore, by secrets.Author) *SecretStoreSink {
 	return &SecretStoreSink{values: values, by: by}
 }
 
-// Record implements [TokenSink], write-through.
+// Record implements [TokenSink], write-through, as [secrets.SourceProvision].
+//
+// The word is the store's to keep where the store is the writer: the engine's
+// own pass and a stopped node's table record it, while a `crewlet <vendor>
+// provision` run through a running node reaches that node's `/secrets` route,
+// which stamps its own word whoever calls it.
 func (s *SecretStoreSink) Record(ctx context.Context, name, value string) error {
-	if err := s.values.Set(ctx, name, value, s.by, "provision", time.Now().UTC()); err != nil {
+	if err := s.values.Set(ctx, name, value, s.by, secrets.SourceProvision,
+		time.Now().UTC()); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -149,10 +157,15 @@ func (s *SecretStoreSink) Describe() string {
 // config apply — so a value written here reaches a running process at the
 // next apply and not before, and re-activating the current revision is the
 // documented gesture for exactly this.
+//
+// THROUGH THE RUNNING NODE, which is the only engine there is to rebuild.
+// `crewlet config activate` opens this node's store, so it runs only while
+// the engine is stopped — when a start rebuilds the snapshot anyway — and
+// naming it sent an operator to a command a running engine refuses.
 func (s *SecretStoreSink) NextStep() string {
-	return "re-activate the current revision (`crewlet config activate <uuid>`) " +
-		"so the running engine rebuilds its secret snapshot; a fresh start " +
-		"picks it up on its own"
+	return "re-activate the current revision on a running node " +
+		"(POST /config/reload) so the engine rebuilds its secret snapshot; " +
+		"a fresh start picks it up on its own"
 }
 
 // ---- an env file ------------------------------------------------------ //

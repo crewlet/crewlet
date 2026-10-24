@@ -1,0 +1,722 @@
+package auth_test
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/session"
+	"github.com/crewlet/crewlet/internal/runtoken"
+)
+
+// --- the rig ------------------------------------------------------------ //
+
+const (
+	sessionPerson = "018f3a9c-0000-7000-8000-0000000000aa"
+	sessionStart  = 4096
+	sessionSeat   = "platform-lead"
+)
+
+// signedIn is one person with a live cookie, and the two seams a guard
+// resolves them through.
+type signedIn struct {
+	t       *testing.T
+	at      time.Time
+	signer  *session.Signer
+	cookie  string
+	lineage uuid.UUID
+	dir     *fakeDirectory
+	chart   *fakeChart
+}
+
+// sessionKeyring is the fleet keyring every signer in this file is built
+// from, so a cookie one mints is one another can verify.
+func sessionKeyring() runtoken.Material {
+	return runtoken.Material{
+		ActiveID: "k1",
+		Keys:     []runtoken.KeyMaterial{{ID: "k1", Material: "the-active-key-material"}},
+	}
+}
+
+func newSignedIn(t *testing.T) *signedIn {
+	t.Helper()
+	at := time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC)
+	signer, err := session.New(session.Options{
+		Material: sessionKeyring(),
+		Now:      func() time.Time { return at },
+	})
+	if err != nil {
+		t.Fatalf("build a signer: %v", err)
+	}
+	lineage := lineageAt(t, at)
+	cookie, err := signer.Mint(session.Mint{
+		Lineage: lineage, Person: sessionPerson, Epoch: 3, Generation: 1,
+		StartPosition: sessionStart, AbsoluteExpiresAt: at.Add(8 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("mint: %v", err)
+	}
+	return &signedIn{
+		t: t, at: at, signer: signer, cookie: cookie, lineage: lineage,
+		dir: &fakeDirectory{identity: session.Identity{
+			Applied:    sessionStart,
+			Generation: 1,
+			Session: session.LineageRow{Found: true, Epoch: 3,
+				ProvedAt: at.Add(-10 * time.Minute)},
+			Person: session.PersonRow{
+				Found: true, Epoch: 3, Stage: iam.StageActive,
+				Login: "sarah.chen", Seat: sessionSeat,
+				Grants: []iam.Grant{iam.GrantAdmin},
+			},
+		}},
+		chart: &fakeChart{seats: map[string]session.Seat{
+			sessionSeat: {Handle: sessionSeat, Kind: "human", Unit: "platform"},
+		}},
+	}
+}
+
+// guardWithSession is a guard whose Tier A holds one token and whose session
+// arm reads this rig, on a node serving admin unless posture says otherwise.
+func (s *signedIn) guard(posture ...iam.AdminPosture) *auth.Guard {
+	s.t.Helper()
+	admin := iam.AdminServe
+	if len(posture) > 0 {
+		admin = posture[0]
+	}
+	b := config.DefaultBootstrap()
+	b.API.Auth.Tokens = []config.APIToken{{ID: "ci", Token: "a-tier-a-token"}}
+	b.API.Auth.Admin = admin
+	b.API.ExternalURL = "http://127.0.0.1:8000"
+	arm, err := auth.NewSessions(auth.SessionsDeps{
+		Signer: s.signer, Directory: s.dir, Applier: s.dir, Chart: s.chart,
+		External: b.API.ExternalBase(),
+		Now:      func() time.Time { return s.at },
+	})
+	if err != nil {
+		s.t.Fatalf("build the session arm: %v", err)
+	}
+	return auth.New(&b).WithSessions(arm)
+}
+
+// call runs one request through a guard, presenting whatever the mutator sets.
+type answered struct {
+	status    int
+	body      map[string]any
+	principal iam.Principal
+	how       iam.Resolution
+	cookies   []*http.Cookie
+}
+
+func (s *signedIn) call(g *auth.Guard, method, path string,
+	prepare func(*http.Request)) answered {
+
+	s.t.Helper()
+	var out answered
+	out.how = iam.Unknown
+	handler := g.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		out.principal, out.how = iam.From(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(method, path, nil)
+	if prepare != nil {
+		prepare(req)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	result := rec.Result()
+	defer result.Body.Close()
+	out.status = result.StatusCode
+	out.cookies = result.Cookies()
+	_ = json.NewDecoder(result.Body).Decode(&out.body)
+	return out
+}
+
+// withCookie presents this rig's bearer.
+func (s *signedIn) withCookie(r *http.Request) {
+	r.AddCookie(&http.Cookie{Name: session.CookieBaseName, Value: s.cookie})
+}
+
+// lineageAt mints a uuid7 whose embedded instant is at, by hand: the library
+// reads the clock, and a rig that needs a session to have started at a named
+// moment cannot wait for it.
+func lineageAt(t *testing.T, at time.Time) uuid.UUID {
+	t.Helper()
+	id, err := uuid.NewV7()
+	if err != nil {
+		t.Fatalf("mint a lineage: %v", err)
+	}
+	millis := at.UnixMilli()
+	for i := range 6 {
+		id[i] = byte(millis >> (8 * (5 - i)))
+	}
+	return id
+}
+
+type fakeDirectory struct {
+	identity session.Identity
+	err      error
+
+	// caughtUp is what this node's rows become once its applier reaches
+	// the position a wait asked for, and nil for a node that never gets
+	// there. waitedFor is every position a wait asked for.
+	caughtUp  *session.Identity
+	waitedFor []uint64
+}
+
+// AwaitApplied arrives when the rows a case caught this node up to cover the
+// position, and never otherwise: a node that does not catch up answers as a
+// wait that ran out.
+func (d *fakeDirectory) AwaitApplied(_ context.Context, position uint64) error {
+	d.waitedFor = append(d.waitedFor, position)
+	if d.caughtUp == nil || d.caughtUp.Applied < position {
+		return context.DeadlineExceeded
+	}
+	d.identity = *d.caughtUp
+	return nil
+}
+
+func (d *fakeDirectory) Resolve(context.Context, string, string) (
+	session.Identity, error) {
+
+	if d.err != nil {
+		return session.Identity{}, d.err
+	}
+	return d.identity, nil
+}
+
+type fakeChart struct {
+	seats map[string]session.Seat
+	err   error
+}
+
+func (c *fakeChart) Seat(_ context.Context, ref string) (session.Seat, bool, error) {
+	if c.err != nil {
+		return session.Seat{}, false, c.err
+	}
+	seat, found := c.seats[ref]
+	return seat, found, nil
+}
+
+// --- what a cookie buys ------------------------------------------------- //
+
+// A COOKIE IS A CREDENTIAL, which until this arm existed it was not: a person
+// could sign in, receive a bearer, and be refused by every guarded route on
+// the deployment that minted it.
+func TestASignedInPersonIsResolvedFromTheirCookie(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	got := rig.call(rig.guard(), http.MethodGet, "/agents", rig.withCookie)
+	if got.status != http.StatusOK {
+		t.Fatalf("status %d, want 200 (body %v)", got.status, got.body)
+	}
+	if got.how != iam.Resolved {
+		t.Fatalf("resolution %v, want resolved", got.how)
+	}
+	if got.principal.Login != "sarah.chen" {
+		t.Errorf("login %q, want sarah.chen", got.principal.Login)
+	}
+	if got.principal.Kind != iam.KindPerson {
+		t.Errorf("kind %q, want person", got.principal.Kind)
+	}
+	// THE SEAT COMES FROM THE CHART, which is what lets a lead gate
+	// resolve at all: a principal with no handle leads nobody.
+	if got.principal.Seat != sessionSeat {
+		t.Errorf("seat %q, want %q", got.principal.Seat, sessionSeat)
+	}
+	if got.principal.Position != "platform" {
+		t.Errorf("unit %q, want platform", got.principal.Position)
+	}
+	// THE ROW'S OWN, EXPANDED: admin, and every app it includes.
+	if !slices.Equal(got.principal.Grants, append([]iam.Grant{iam.GrantAdmin},
+		iam.Apps...)) {
+		t.Errorf("grants %v are not the row's own admin, expanded",
+			got.principal.Grants)
+	}
+}
+
+// A SIGNED-IN PERSON'S WRITES NAME THE SESSION THEY CAME THROUGH.
+//
+// The design's actor table: a person at a browser is the AUTHOR of what they
+// write — their seat, bound — and `session:<lineage>` is the operator column
+// beside them, in the tracker, the knowledge base, the chart and the identity
+// trail alike. It used to repeat their login, which the author already names,
+// so two browsers signed in as one person, or a tab left open on a shared
+// machine, were one name in every trail. Mutation: drop Via from the session
+// arm's principal and the operator is the login again.
+func TestASignedInPersonsWritesNameTheirSession(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	got := rig.call(rig.guard(), http.MethodPost, "/work/items", rig.withCookie)
+	if got.status != http.StatusOK || got.how != iam.Resolved {
+		t.Fatalf("a live session's write answered %d (%s)", got.status, got.how)
+	}
+	want := iam.SessionName(rig.lineage.String())
+	if got.principal.Via != want {
+		t.Errorf("the principal acts through %q, want its own session %q",
+			got.principal.Via, want)
+	}
+	if err := got.principal.Validate(); err != nil {
+		t.Errorf("the principal a session composes does not validate: %v", err)
+	}
+	actor := iam.ActorFor(got.principal)
+	if actor.Name != sessionSeat || actor.Kind != iam.ActorHuman ||
+		actor.OperatorID != want {
+		t.Errorf("the write is recorded as %+v, want the seat as the author "+
+			"and the session as the operator", actor)
+	}
+}
+
+// A SESSION'S PROOF COUNTS FOR THIS NODE'S STEP-UP WINDOW, AND NO PROOF IS STALE.
+//
+// The principal's ReauthAt is the instant a step-up surface stops accepting
+// this session's proof: when the session proved who its holder is, plus this
+// node's own `step_up` window. It was read off a person field nothing ever
+// set, so every session was stale from its first request and no person could
+// reach a step-up surface at all — enrolling a second factor included. A
+// session that proved nothing — a Tier A token's exchanged cookie, or a row
+// this node has not applied — stays stale, because a stale-but-set instant
+// would one day make it fresh.
+func TestASessionsProofCountsForTheStepUpWindow(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	got := rig.call(rig.guard(), http.MethodGet, "/agents", rig.withCookie)
+	if got.how != iam.Resolved {
+		t.Fatalf("resolution %v, want resolved", got.how)
+	}
+	proved := rig.dir.identity.Session.ProvedAt
+	want := proved.Add(config.DefaultSessionStepUp)
+	if !got.principal.ReauthAt.Equal(want) {
+		t.Errorf("reauth deadline %s, want the proof at %s plus the %s window",
+			got.principal.ReauthAt, proved, config.DefaultSessionStepUp)
+	}
+	if !got.principal.Fresh(rig.at) {
+		t.Error("a session proved ten minutes ago is stale inside an hour's window")
+	}
+
+	// A PROOF TWO HOURS OLD is outside the hour, so every step-up gesture
+	// asks again.
+	older := newSignedIn(t)
+	older.dir.identity.Session.ProvedAt = older.at.Add(-2 * time.Hour)
+	got = older.call(older.guard(), http.MethodGet, "/agents", older.withCookie)
+	if got.principal.Proved(iam.RecencyStepUp, older.at) {
+		t.Errorf("a proof two hours old reads fresh until %s",
+			got.principal.ReauthAt)
+	}
+
+	unproved := newSignedIn(t)
+	unproved.dir.identity.Session.ProvedAt = time.Time{}
+	got = unproved.call(unproved.guard(), http.MethodGet, "/agents",
+		unproved.withCookie)
+	// THE ZERO DEADLINE, and not a window added to nothing: the two are
+	// both stale, and only the first says "never proved" to a reader of
+	// `reauth_at` rather than naming the year one.
+	if got.how != iam.Resolved || !got.principal.ReauthAt.IsZero() {
+		t.Errorf("a session that proved nothing resolved %v with a reauth "+
+			"deadline %s — want resolved with none", got.how,
+			got.principal.ReauthAt)
+	}
+}
+
+// A CREDENTIAL WITH NOBODY AT A KEYBOARD IS FRESH BY CONSTRUCTION.
+//
+// A Tier A token has no second factor, no session and no person behind it:
+// there is nothing else it could ever present, so presenting it is the proof.
+// Stale, the break-glass credential could not reveal a secret or change who
+// holds authority on the one day it exists for — the day nobody else can sign
+// in. Mutation: stamp it as a session that proved nothing and it is stale.
+func TestATierATokenIsFreshForTheStepUpWindow(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	got := rig.call(rig.guard(), http.MethodGet, "/agents", func(r *http.Request) {
+		r.Header.Set("Authorization", "Bearer a-tier-a-token")
+	})
+	if got.how != iam.Resolved {
+		t.Fatalf("a presented Tier A token resolved %v", got.how)
+	}
+	if !got.principal.Proved(iam.RecencyStepUp, time.Now()) {
+		t.Errorf("a Tier A token is stale for %s", iam.RecencyStepUp)
+	}
+}
+
+// THE ADMIN POSTURE APPLIES TO A PERSON EXACTLY AS IT DOES TO A TOKEN.
+//
+// `api.auth.admin` is a decision-time bound, so turning one node to `refuse`
+// takes effect on that node's next request. Without this a person's row would
+// be the only credential shape the posture did not reach — and the row is the
+// one an administrator edits. And the clamp takes admin and NOTHING ELSE: the
+// row's `[admin]` is expanded into every app before admin is clamped away, so
+// an administrator signed in on a refusing node keeps the company's work.
+//
+// Mutation: compose a session's grants as the row's, unclamped, and admin
+// survives; clamp before expanding and the apps are lost.
+func TestANodeRefusingAdminClampsASignedInPersonsAdminAndKeepsTheirApps(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	got := rig.call(rig.guard(iam.AdminRefuse), http.MethodGet, "/agents",
+		rig.withCookie)
+	if got.how != iam.Resolved {
+		t.Fatalf("resolution %v, want resolved", got.how)
+	}
+	if got.principal.Can(iam.GrantAdmin) {
+		t.Errorf("grants %v survived a node that refuses admin",
+			got.principal.Grants)
+	}
+	for _, app := range iam.Apps {
+		if !got.principal.Can(app) {
+			t.Errorf("grants %v lost %s, which a node refusing admin keeps",
+				got.principal.Grants, app)
+		}
+	}
+}
+
+// AN EXPLICIT CREDENTIAL WINS OVER AN AMBIENT ONE.
+//
+// A browser sends its cookie on every request whether or not the caller meant
+// to; a header is only there because somebody put it there. The control is the
+// second arm: a WRONG header stays anonymous rather than being quietly
+// upgraded by the cookie in the jar, or `curl -H 'Authorization: Bearer
+// typo'` from a signed-in browser would act as the person.
+func TestAnExplicitBearerWinsOverAnAmbientCookie(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	g := rig.guard()
+	got := rig.call(g, http.MethodGet, "/agents", func(r *http.Request) {
+		r.Header.Set("Authorization", "Bearer a-tier-a-token")
+		rig.withCookie(r)
+	})
+	if got.how != iam.Resolved || got.principal.Login != iam.TokenLogin("ci") {
+		t.Errorf("resolved as %q/%v, want the Tier A token",
+			got.principal.Login, got.how)
+	}
+	wrong := rig.call(g, http.MethodGet, "/agents", func(r *http.Request) {
+		r.Header.Set("Authorization", "Bearer not-a-token")
+		rig.withCookie(r)
+	})
+	if wrong.status != http.StatusUnauthorized {
+		t.Errorf("a wrong header beside a good cookie answered %d, want 401",
+			wrong.status)
+	}
+}
+
+// 503 AND NEVER 401 ON A NODE THAT CANNOT TELL.
+//
+// A browser reads 401 as "sign in again" and discards the cookie, so one
+// stalled applier answering 401 signs everybody on that node out and sends
+// them all back to the sign-in form at once. The status is the whole
+// assertion.
+func TestANodeThatCannotReadTheEstateAnswers503AndKeepsTheCookie(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	rig.dir.err = context.DeadlineExceeded
+	got := rig.call(rig.guard(), http.MethodGet, "/agents", rig.withCookie)
+	if got.status != http.StatusServiceUnavailable {
+		t.Fatalf("status %d, want 503", got.status)
+	}
+	if got.body["error"] != string(httpjson.CodeIdentityUnavailable) {
+		t.Errorf("code %v, want %q", got.body["error"],
+			httpjson.CodeIdentityUnavailable)
+	}
+	for _, c := range got.cookies {
+		if c.MaxAge < 0 {
+			t.Errorf("the cookie was cleared on an outage, so the browser has "+
+				"to sign in again once the node recovers: %v", c)
+		}
+	}
+}
+
+// A NODE THAT STAYS BEHIND SERVES READS AND REFUSES WRITES.
+//
+// The `behind` row of the session table, reached through the guard rather
+// than asserted off the map: this node has not applied the record the bearer
+// names, which is a read it can honestly serve from what it has and a write
+// it must not accept — once the wait for the bearer's start has run out. A
+// read never waits, because it is served on the signature and the epoch.
+func TestANodeBehindTheSessionServesReadsAndRefusesWrites(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	rig.dir.identity.Applied = sessionStart - 1
+	rig.dir.identity.Session.Found = false
+	g := rig.guard()
+	if got := rig.call(g, http.MethodGet, "/agents", rig.withCookie); got.status != http.StatusOK {
+		t.Errorf("a read answered %d, want 200", got.status)
+	}
+	if len(rig.dir.waitedFor) != 0 {
+		t.Errorf("a read waited for %v — it is served on the bearer's own "+
+			"proof, and parking it would cost every tab a node's lag", rig.dir.waitedFor)
+	}
+	write := rig.call(g, http.MethodPost, "/work/items", rig.withCookie)
+	if write.status != http.StatusServiceUnavailable {
+		t.Errorf("a write answered %d, want 503", write.status)
+	}
+}
+
+// A WRITE STRAIGHT AFTER SIGNING IN WAITS FOR THE SESSION'S OWN START.
+//
+// A sign-in answers before any node applies the session it opened — the one
+// write in the estate that does not wait — and the bearer carries the position
+// its start landed at, so whoever reads it next owes that position a wait.
+// The request guard used to answer a write on a node below it 503 at once,
+// which is every node for the few hundred milliseconds an apply takes, and
+// every `crewlet iam token -login` run: it signs in and mints in the same
+// breath. The write waits for exactly the bearer's start position and is then
+// decided on the rows. Mutation: drop the wait from the session arm and the
+// write answers 503.
+func TestAWriteStraightAfterSigningInWaitsForItsSession(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	applied := rig.dir.identity
+	rig.dir.identity.Applied = sessionStart - 1
+	rig.dir.identity.Session = session.LineageRow{}
+	rig.dir.caughtUp = &applied
+
+	write := rig.call(rig.guard(), http.MethodPost, "/work/items", rig.withCookie)
+	if write.status != http.StatusOK || write.how != iam.Resolved {
+		t.Fatalf("a write presenting a session this node was about to apply "+
+			"answered %d (%s), want it served once the node caught up",
+			write.status, write.how)
+	}
+	if !slices.Equal(rig.dir.waitedFor, []uint64{sessionStart}) {
+		t.Errorf("the guard waited for %v, want exactly the bearer's start "+
+			"position %d", rig.dir.waitedFor, sessionStart)
+	}
+	if write.principal.Login != "sarah.chen" {
+		t.Errorf("the write resolved as %q, want the person the session is "+
+			"theirs", write.principal.Login)
+	}
+}
+
+// THE ARM IS REFUSED WITHOUT AN APPLIER TO WAIT ON, because without one every
+// write made straight after signing in is a 503 on every node.
+func TestTheSessionArmNeedsAnApplier(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	_, err := auth.NewSessions(auth.SessionsDeps{
+		Signer: rig.signer, Directory: rig.dir, Chart: rig.chart,
+	})
+	if err == nil || !strings.Contains(err.Error(), "applier") {
+		t.Fatalf("a session arm with no applier answered %v, want a refusal "+
+			"naming it", err)
+	}
+}
+
+// AN ENDED SESSION IS 401 AND THE COOKIE IS CLEARED, so a browser stops
+// re-presenting a value that can never work again.
+func TestAnEndedSessionIsRefusedAndTheCookieCleared(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	rig.dir.identity.Session.Ended = true
+	got := rig.call(rig.guard(), http.MethodGet, "/agents", rig.withCookie)
+	if got.status != http.StatusUnauthorized {
+		t.Fatalf("status %d, want 401", got.status)
+	}
+	var cleared bool
+	for _, c := range got.cookies {
+		if c.Name == session.CookieBaseName && c.MaxAge < 0 {
+			cleared = true
+		}
+	}
+	if !cleared {
+		t.Errorf("the cookie was not cleared: %v", got.cookies)
+	}
+}
+
+// A PERSON WHOSE SEAT IS GONE IS 403 NAMING THE SEAT, NOT 401.
+//
+// They are exactly who they say they are and signing in again changes
+// nothing, so 401 would loop a browser through the sign-in page for ever. The
+// detail names the seat, because the person locked out and whoever removed it
+// both need to know which one.
+func TestAPersonWhoseSeatIsGoneIsRefusedNamingIt(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	delete(rig.chart.seats, sessionSeat)
+	got := rig.call(rig.guard(), http.MethodGet, "/agents", rig.withCookie)
+	if got.status != http.StatusForbidden {
+		t.Fatalf("status %d, want 403 (body %v)", got.status, got.body)
+	}
+	if got.body["error"] != string(httpjson.CodeSeatUnavailable) {
+		t.Errorf("code %v, want %q", got.body["error"], httpjson.CodeSeatUnavailable)
+	}
+	detail, _ := got.body["detail"].(string)
+	if !contains(detail, sessionSeat) {
+		t.Errorf("detail %q does not name the seat", detail)
+	}
+	// THE COOKIE SURVIVES, because the bearer is live and works the
+	// moment somebody rebinds them — clearing it would sign out a person
+	// whose only problem is a chart edit.
+	for _, c := range got.cookies {
+		if c.Name == session.CookieBaseName && c.MaxAge < 0 {
+			t.Errorf("the cookie was cleared by a seat refusal: %v", c)
+		}
+	}
+	// AND THEY ARE STILL THE PERSON, with an EMPTY handle. Read on the
+	// one surface the refusal does not cover, since everywhere else the
+	// handler never runs.
+	own := rig.call(rig.guard(), http.MethodPost, "/auth/session", rig.withCookie)
+	if own.how != iam.Resolved {
+		t.Fatalf("resolution %v on /auth/session, want resolved", own.how)
+	}
+	if own.principal.Seat != "" {
+		t.Errorf("seat %q, want empty: a handle the chart could not confirm "+
+			"is the silent fall-through this refusal exists to prevent",
+			own.principal.Seat)
+	}
+	if own.principal.Login != "sarah.chen" {
+		t.Errorf("login %q, want sarah.chen", own.principal.Login)
+	}
+}
+
+// A NODE THAT CANNOT READ THE ORGANISATION IT RUNS IS 503, NOT 403.
+//
+// The control for the case above: a seat this node cannot look up is not a seat
+// that is gone, and refused as one it would tell somebody their seat was
+// removed because this node runs no company yet.
+func TestAnUnreadableOrganisationIsUnavailableRatherThanForbidden(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	rig.chart.err = errors.New("this node runs no company yet")
+	got := rig.call(rig.guard(), http.MethodGet, "/agents", rig.withCookie)
+	if got.status != http.StatusServiceUnavailable {
+		t.Fatalf("status %d, want 503 (body %v)", got.status, got.body)
+	}
+}
+
+// SIGNING OUT STILL WORKS WHEN THE SEAT IS GONE.
+//
+// The seat refusal is written for every guarded route but the `/auth/`
+// surface, whose subject is a person's own credential. Signing out everywhere,
+// reading who you are, stepping up and enrolling a second factor are guarded
+// routes there, and refusing them would leave a leaver with a live bearer and
+// no way to end it. The rows name the routes the surface REGISTERS — they
+// named `/auth/logout-all` and `/auth/totp/enrol`, which nothing serves, and
+// passed only because the spared surface is a prefix. `/auth/logout` itself
+// is unguarded and reaches its handler whatever the guard could say.
+func TestASeatRefusalDoesNotReachTheSignOutRoute(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	delete(rig.chart.seats, sessionSeat)
+	g := rig.guard()
+	for _, path := range []string{auth.PathAuthLogout, "/auth/logout/all",
+		auth.PathAuthSession, auth.PathAuthStepUp, auth.PathAuthTOTP} {
+
+		got := rig.call(g, http.MethodPost, path, rig.withCookie)
+		if got.status != http.StatusOK {
+			t.Errorf("%s answered %d, want 200 (body %v)",
+				path, got.status, got.body)
+		}
+	}
+	// THE CONTROL. Every other guarded route still refuses, so the
+	// exemption is the /auth surface rather than the refusal going away.
+	if got := rig.call(g, http.MethodGet, "/agents", rig.withCookie); //
+	got.status != http.StatusForbidden {
+		t.Errorf("an ordinary route answered %d, want 403", got.status)
+	}
+}
+
+// A COOKIE FROM A NODE WHOSE CLOCK RAN AHEAD IS SERVED.
+//
+// The bearer used to carry a rotation index derived from the minting node's
+// clock, and one ahead of the validating node's clock past a two-minute
+// overlap was called a replay: the request was refused and the person's
+// revocation epoch bumped, which signed them out everywhere. The index was
+// signed, so only a node holding the keyring could have written it — the arm
+// fired on an NTP fault and on nothing else. Mutation: refuse a cookie minted
+// four hours ahead and this is a 401.
+func TestACookieFromANodeWhoseClockRanAheadIsServed(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	rig.cookie = rig.aheadOfTheClock(t)
+	got := rig.call(rig.guard(), http.MethodGet, "/agents", rig.withCookie)
+	if got.status != http.StatusOK {
+		t.Fatalf("status %d, want 200 (body %v)", got.status, got.body)
+	}
+	if got.principal.Login != "sarah.chen" {
+		t.Errorf("login %q, want sarah.chen", got.principal.Login)
+	}
+}
+
+// THE WIRE VALUE IS internal/iam/session's OWN.
+//
+// internal/api/httpjson is a leaf and cannot import that package to share the
+// constant, so the two are held equal here — the same idiom
+// internal/clientsource uses for a value the dashboard declares separately.
+// Drift is silent: a browser would receive a code its own table has no
+// sentence for.
+func TestTheSeatCodeIsTheSessionPackagesOwn(t *testing.T) {
+	t.Parallel()
+	if string(httpjson.CodeSeatUnavailable) != session.CodeNoSeat {
+		t.Errorf("httpjson says %q and session says %q",
+			httpjson.CodeSeatUnavailable, session.CodeNoSeat)
+	}
+}
+
+func contains(haystack, needle string) bool {
+	return len(needle) > 0 && len(haystack) >= len(needle) &&
+		indexOf(haystack, needle) >= 0
+}
+
+func indexOf(haystack, needle string) int {
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return i
+		}
+	}
+	return -1
+}
+
+// ON HTTPS A SESSION AUTHENTICATES ONLY UNDER ITS `__Host-` NAME.
+//
+// A browser sets `__Host-crewlet_session` only from this exact host;
+// `crewlet_session` any sibling host can write with a Domain covering this
+// one. The guard read both, so a sibling that planted ITS OWN valid session
+// under the bare name signed a visitor who held none in as that session's
+// person, and everything they then did landed in an account the sibling's
+// author reads. The same bearer — signed, live, one the rows hold — is
+// resolved under the issued name and is anonymous under the other.
+//
+// Mutation: read the bare name too and the planted cookie resolves.
+func TestOnHTTPSASessionAuthenticatesOnlyUnderItsPrefixedName(t *testing.T) {
+	t.Parallel()
+	rig := newSignedIn(t)
+	b := config.DefaultBootstrap()
+	b.API.Auth.Tokens = []config.APIToken{{ID: "ci", Token: "a-tier-a-token"}}
+	b.API.Auth.Admin = iam.AdminServe
+	b.API.ExternalURL = "https://crewlet.example.com"
+	arm, err := auth.NewSessions(auth.SessionsDeps{
+		Signer: rig.signer, Directory: rig.dir, Applier: rig.dir, Chart: rig.chart,
+		External: b.API.ExternalBase(),
+		Now:      func() time.Time { return rig.at },
+	})
+	if err != nil {
+		t.Fatalf("build the session arm: %v", err)
+	}
+	g := auth.New(&b).WithSessions(arm)
+
+	issued := rig.call(g, http.MethodGet, "/agents", func(r *http.Request) {
+		r.AddCookie(&http.Cookie{Name: session.HostCookieName, Value: rig.cookie})
+	})
+	if issued.how != iam.Resolved {
+		t.Fatalf("the bearer under the issued name resolved as %v, want resolved; "+
+			"the planted case below would say nothing", issued.how)
+	}
+	planted := rig.call(g, http.MethodGet, "/agents", func(r *http.Request) {
+		r.AddCookie(&http.Cookie{Name: session.CookieBaseName, Value: rig.cookie})
+	})
+	if planted.how == iam.Resolved || planted.status == http.StatusOK {
+		t.Errorf("the same bearer under the bare name answered %d as %v: a "+
+			"sibling host that plants its own session signs a visitor in as "+
+			"its author", planted.status, planted.how)
+	}
+}

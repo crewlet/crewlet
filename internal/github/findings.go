@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/setup"
 )
 
 // Findings reads this run as the integration-neutral vocabulary.
@@ -37,44 +38,24 @@ func (r *Result) Findings() []integration.Finding {
 	//
 	// An empty hook list used to be silence, on the reasoning that a
 	// read-only pass produces one by construction and that the public base
-	// "is not on the integrations block today". It IS — it is
-	// `integrations.public_base_url`, and the reconcile loop feeds exactly
-	// that value into every pass — so the silence meant a company that
-	// never set it saw GitHub reported Ready while nothing at GitHub
-	// pointed anywhere. That is the state this whole subsystem exists to
-	// refuse.
+	// "is not on the integrations block today". It IS — it is Tier A's
+	// webhook address (`api.public.external_url` behind a public
+	// listener, `api.external_url` otherwise), and the reconcile loop
+	// feeds exactly that value into every pass — so the silence meant a
+	// company that never set it saw GitHub reported Ready while nothing at
+	// GitHub pointed anywhere. That is the state this whole subsystem
+	// exists to refuse.
 	//
 	// ONCE rather than per target, because there is nothing per-target
 	// about it: no address means no hook anywhere, and one sentence naming
-	// the field is the whole of what an operator has to do.
+	// the field is the whole of what an operator has to do — the field the
+	// address was READ from, which only the caller holding the Tier A can
+	// say ([Result.NoIngressKey]).
 	if r.NoIngress != "" {
 		out = append(out, integration.Finding{
 			Kind:    integration.FindingIngressBlocked,
-			Subject: "integrations.public_base_url",
+			Subject: setup.BaseKey(r.NoIngressKey),
 			Detail:  r.NoIngress,
-		})
-	}
-
-	// AND NO KEY TO SIGN WITH IS THE OTHER WAY TO HAVE NO INGRESS, said
-	// against the field that fixes it.
-	//
-	// INGRESS RATHER THAN CREDENTIAL, on Jira's reasoning: a webhook secret
-	// is not how this engine authenticates AT GitHub — it is what makes a
-	// delivery verifiable when it arrives here, and a route with nothing to
-	// verify with answers 503. It is also what [Requirements] declares:
-	// `webhook_secret` says Blocks: FindingIngressBlocked, and that
-	// declaration is the join the setup screen uses to offer the field that
-	// clears this.
-	if r.NoKeyring {
-		out = append(out, integration.Finding{
-			Kind:    integration.FindingIngressBlocked,
-			Subject: "integrations.github.webhook_secret",
-			Detail: "no webhook was registered because this deployment has no " +
-				"secret to sign deliveries with and this node has no keyring " +
-				"to seal a fresh one into: set secrets.keys in the bootstrap " +
-				"configuration so a pass can mint it, or set the variable " +
-				"integrations.github.webhook_secret points at and register the " +
-				"hooks on the next pass",
 		})
 	}
 

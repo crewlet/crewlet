@@ -2,8 +2,9 @@
  * The three states a reader can be in, and the sentences that depend on them.
  *
  * A screen that folds two of these together is a screen that tells somebody to
- * go and find a credential they already have, or reports a fault where the
- * remedy is a line of company configuration.
+ * sign in when they are signed in, or calls an unbound reader a fault: a
+ * service account or a Tier A token's session acting as itself is ordinary,
+ * and a person is never unbound — every person holds a human seat.
  */
 
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
@@ -21,7 +22,7 @@ vi.mock("./store-hooks.ts", () => ({
 function answering(answer: unknown) {
   const query = vi.fn().mockResolvedValue(answer);
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
 }
 
 afterEach(() => {
@@ -30,11 +31,14 @@ afterEach(() => {
 });
 
 describe("who the dashboard thinks you are", () => {
-  test("a bound token names the seat, and is neither unbound nor anonymous", async () => {
+  test("a bound person names the seat, and is neither unbound nor anonymous", async () => {
+    // ADMIN ALONE, as a stored row may hold it: every app is included, so
+    // the reader is read as holding both without the engine listing them.
     answering({
-      operator_id: "ops-1",
-      operator: true,
+      login: "ana.diaz",
+      grants: ["admin"],
       handle: "ana",
+      owner: "ana",
       name: "Ana Diaz",
       kind: "human",
     });
@@ -42,33 +46,49 @@ describe("who the dashboard thinks you are", () => {
     await waitFor(() => expect(result.current.handle).toBe("ana"));
     expect(result.current.name).toBe("Ana Diaz");
     expect(result.current.kind).toBe("human");
+    expect(result.current.owner).toBe("ana");
+    expect(result.current.admin).toBe(true);
+    expect(result.current.tracker).toBe(true);
+    expect(result.current.knowledge).toBe(true);
     expect(result.current.unbound).toBe(false);
     expect(result.current.anonymous).toBe(false);
   });
 
-  // AN ORDINARY STATE. The remedy is a line of company configuration, and a
-  // screen can only say which line if it has the id to put in it.
-  test("a token no seat claims is UNBOUND and still carries its operator id", async () => {
-    answering({ operator_id: "ops-7", operator: true, handle: "", name: "", kind: "" });
+  // AN ORDINARY STATE. Somebody is signed in and the directory binds them to
+  // no seat: their record is their login, which is what every personal read
+  // asks by.
+  test("a person no seat holds is UNBOUND, and their record is their login", async () => {
+    answering({
+      login: "ops.seven",
+      grants: ["tracker"],
+      handle: "",
+      owner: "ops.seven",
+      name: "",
+      kind: "",
+    });
     const { result } = renderHook(() => useViewer(), { wrapper: ViewerProvider });
     await waitFor(() => expect(result.current.unbound).toBe(true));
-    expect(result.current.operatorID).toBe("ops-7");
+    expect(result.current.login).toBe("ops.seven");
+    expect(result.current.owner).toBe("ops.seven");
+    expect(result.current.admin).toBe(false);
+    expect(result.current.tracker).toBe(true);
+    expect(result.current.knowledge).toBe(false);
     expect(result.current.anonymous).toBe(false);
   });
 
-  test("no token at all is ANONYMOUS, which is a different sentence", async () => {
-    answering({ operator_id: "", operator: false, handle: "", name: "", kind: "" });
+  test("nobody signed in is ANONYMOUS, which is a different sentence", async () => {
+    answering({ login: "", grants: [], handle: "", owner: "", name: "", kind: "" });
     const { result } = renderHook(() => useViewer(), { wrapper: ViewerProvider });
     await waitFor(() => expect(result.current.anonymous).toBe(true));
     expect(result.current.unbound).toBe(false);
-    expect(result.current.operator).toBe(false);
+    expect(result.current.grants).toEqual([]);
   });
 
   // A FAILED READ IS NOT AN ANSWER, and anonymity is the worst of the three
-  // to guess: it locks the app rail, My work and the inbox for an operator
-  // whose token is valid and every one of whose other queries answered. The
-  // engine reports anonymity as an EMPTY operator id with no error, so a throw
-  // here means only that nothing came back.
+  // to guess: it locks the app rail, My work and the inbox for a person whose
+  // session is valid and every one of whose other queries answered. The
+  // engine reports anonymity as an EMPTY login with no error, so a throw here
+  // means only that nothing came back.
   test("a read that failed is nobody yet, not ANONYMOUS", async () => {
     // ONE rejected promise, so the test can wait on the very object the hook
     // awaited: our continuation is attached after the hook's, and microtasks
@@ -78,7 +98,7 @@ describe("who the dashboard thinks you are", () => {
     const refused = Promise.reject(new Error("timeout"));
     const query = vi.fn(() => refused);
     vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-    vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+    vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
     const { result } = renderHook(() => useViewer(), { wrapper: ViewerProvider });
     await act(async () => {
       await refused.catch(() => {});
@@ -90,12 +110,12 @@ describe("who the dashboard thinks you are", () => {
   });
 
   // NOT ANONYMOUS WHILE LOADING. Every first paint has no answer yet, and a
-  // screen that read the loading state as "no credential" would flash "no
-  // credential is presented" at every reader on every navigation.
+  // screen that read the loading state as "nobody" would flash "nobody is
+  // signed in" at every reader on every navigation.
   test("an unanswered query is not yet anybody", () => {
     const query = vi.fn(() => new Promise(() => {}));
     vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-    vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+    vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
     const { result } = renderHook(() => useViewer(), { wrapper: ViewerProvider });
     expect(result.current.loading).toBe(true);
     expect(result.current.anonymous).toBe(false);
@@ -110,14 +130,15 @@ describe("who the dashboard thinks you are", () => {
 describe("one reading", () => {
   test("every reader under one provider shares one query", async () => {
     const query = vi.fn().mockResolvedValue({
-      operator_id: "ops-1",
-      operator: true,
+      login: "ana.diaz",
+      grants: [],
       handle: "ana",
+      owner: "ana",
       name: "Ana Diaz",
       kind: "human",
     });
     vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-    vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+    vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
     const { result } = renderHook(() => [useViewer(), useViewer(), useViewer()], {
       wrapper: ViewerProvider,
     });
@@ -130,7 +151,7 @@ describe("one reading", () => {
   test("outside a provider the hook refuses rather than asking for itself", () => {
     const query = vi.fn();
     vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-    vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+    vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
     // React reports the throw on the console as well as throwing it.
     const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(() => renderHook(() => useViewer())).toThrow(/outside a ViewerProvider/);

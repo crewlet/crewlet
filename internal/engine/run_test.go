@@ -21,7 +21,6 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // newEngine stands up a real engine on an embedded stream in a temp directory.
@@ -84,6 +83,41 @@ func TestABadConfigFailsBeforeAnythingIsClaimed(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("an invalid company built an engine")
+	}
+}
+
+// A NODE WITH NO KEYRING IS REFUSED BEFORE ANYTHING OPENS — THE UNCONFIGURED
+// ONE INCLUDED.
+//
+// The unconfigured node is the case, because it is the one nothing else
+// caught: it used to start no state log until it had a company, so it met no
+// signer and booted keyless, and its first applied revision was read in
+// whatever shape the coordination store held. It runs the core runtime from
+// boot now, and the refusal is still the keyring's own rather than a signer's
+// that happens to come first. And "before anything opens" is the other
+// half: the keyring is built from Tier A alone, so a refusal that came after
+// the store was open would leave the file behind for nothing.
+//
+// Mutation: let openCipher answer nil for an empty keyring and this engine
+// builds; move it back below OpenBackends and the store file exists.
+func TestAKeylessNodeIsRefusedBeforeAnythingOpens(t *testing.T) {
+	t.Parallel()
+	storePath := filepath.Join(t.TempDir(), "crewlet.db")
+	_, err := engine.New(t.Context(), engine.Options{
+		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
+			b.Store.Path = storePath
+			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+			b.Secrets = config.Secrets{}
+		}),
+	})
+	if err == nil {
+		t.Fatal("an unconfigured node with no keyring was built")
+	}
+	if !strings.Contains(err.Error(), "secrets.keys") {
+		t.Errorf("the refusal does not name the keyring: %v", err)
+	}
+	if _, statErr := os.Stat(storePath); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Errorf("the store was opened before the keyring was refused: %v", statErr)
 	}
 }
 
@@ -569,7 +603,7 @@ func TestStopLetsAnInFlightTurnFinish(t *testing.T) {
 		return slices.Contains(e.Node().Host().Held(), "ceo")
 	})
 
-	if err := e.Backends().Queue.Publish(t.Context(), topics.AgentInbox("ceo"),
+	if err := e.Backends().Queue.Publish(t.Context(), seatInbox(e, "ceo"),
 		ev("external_notification")); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
@@ -637,7 +671,7 @@ func TestADrainSaysSoAtOnceAndLeavesTheBackendsOpen(t *testing.T) {
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(e.Node().Host().Held(), "ceo")
 	})
-	if err := e.Backends().Queue.Publish(t.Context(), topics.AgentInbox("ceo"),
+	if err := e.Backends().Queue.Publish(t.Context(), seatInbox(e, "ceo"),
 		ev("external_notification")); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
@@ -888,33 +922,59 @@ func TestAnUnconfiguredEngineTakesItsFirstEpoch(t *testing.T) {
 	}
 }
 
-// A COMPANY'S RECORD IS NOT PUT ON AN IN-MEMORY STREAM, and the knowledge base
-// counts as much as the tracker.
+// A NODE ON AN IN-MEMORY STREAM IS REFUSED AT BOOT, COMPANY OR NONE, BEFORE
+// ANYTHING OPENS.
 //
-// On the native backends an in-memory stream is not "queued events do not
-// survive a restart": the first restart recreates the log empty, and a node
-// whose rows are ahead of it stops serving for good. Measured on a company with
-// no native tracker whose pages were the engine's own: it booted, logged an
-// error, and after one restart its pages applier stopped on the recreated
-// stream and the node never admitted a seat again. The cross-tier rule asked
-// only about the tracker, and the knowledge base is native by default, so the
-// refusal is asserted here, at the door the engine itself goes through, for
-// the pairing the rule missed.
-func TestACompanysRecordIsNotPutOnAnInMemoryStream(t *testing.T) {
+// An in-memory stream is not "queued events do not survive a restart": the
+// first restart recreates every log empty, and a node whose rows are ahead of
+// it stops serving for good. Measured on a company with no native tracker
+// whose pages were the engine's own: it booted, logged an error, and after one
+// restart its pages applier stopped on the recreated stream and the node never
+// admitted a seat again.
+//
+// # The node with no company is the case
+//
+// The rule was a cross-tier one, asked of the company a node booted with or
+// was handed — so a node started with NONE passed it, and it runs the core
+// runtime from boot: the identity estate its first person is invited into, on
+// a log its first restart emptied. The vendor pairing is the second row
+// because it is the case the rule before that one missed: a company on Jira
+// and Confluence keeps no tracker or pages log, and still keeps its people.
+//
+// Mutation: ask the stream only when there is a company, and the first row
+// builds an engine; move the question below OpenBackends, and the store file
+// exists.
+func TestANodeOnAnInMemoryStreamIsRefusedAtBoot(t *testing.T) {
 	t.Parallel()
-	company := parsedCompany(t, companyDoc)
-	company.Tracker.Backend = config.TrackerNone
-	_, err := engine.New(t.Context(), engine.Options{
-		Bootstrap: bootstrap(t, func(b *config.Bootstrap) { b.Stream.StoreDir = "" }),
-		Company:   company,
-	})
-	if err == nil {
-		t.Fatal("a company whose pages are the engine's own booted on an " +
-			"in-memory stream, which its first restart recreates empty")
-	}
-	for _, want := range []string{"stream.store_dir", "knowledge.backend: native"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal does not say %q: %v", want, err)
-		}
+	vendors := parsedCompany(t, companyDoc)
+	vendors.Tracker.Backend = config.TrackerNone
+	vendors.Knowledge.Backend = config.KnowledgeNone
+	for name, company := range map[string]*config.Company{
+		"with no company":                     nil,
+		"with a company on a vendor for both": vendors,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			storePath := filepath.Join(t.TempDir(), "crewlet.db")
+			_, err := engine.New(t.Context(), engine.Options{
+				Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
+					b.Store.Path = storePath
+					b.Stream.StoreDir = ""
+				}),
+				Company: company,
+			})
+			if err == nil {
+				t.Fatal("a node booted on an in-memory stream — its first " +
+					"restart recreates every log it runs empty")
+			}
+			for _, want := range []string{"stream.store_dir", "identity estate"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not say %q: %v", want, err)
+				}
+			}
+			if _, statErr := os.Stat(storePath); !errors.Is(statErr, fs.ErrNotExist) {
+				t.Errorf("the store was opened before the stream was refused: %v", statErr)
+			}
+		})
 	}
 }

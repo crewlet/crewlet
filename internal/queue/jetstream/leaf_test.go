@@ -46,21 +46,17 @@ func openLeafForTest(t *testing.T, cfg Config, opts ...queue.Option) *Queue {
 	if memberCfg.StoreDir == "" {
 		memberCfg.StoreDir = t.TempDir()
 	}
-	member, err := StartServer(t.Context(), memberCfg)
-	if err != nil {
-		t.Fatalf("start the member: %v", err)
-	}
-	t.Cleanup(member.Shutdown)
+	member := startTestServer(t, memberCfg)
 
 	leafCfg := cfg
 	leafCfg.ServerName = "leaf"
 	leafCfg.LeafURLs = []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", member.LeafPort())}
-	leaf, err := StartServer(t.Context(), leafCfg)
-	if err != nil {
-		t.Fatalf("start the leaf: %v", err)
-	}
-	t.Cleanup(leaf.Shutdown)
-	return clientUnderTest(t, leaf, member, opts...)
+	// THE LEAF IS THE BROKER THIS CLIENT IS A CLIENT OF, so it is the one the
+	// BrokerDown capability stops: the client's own connection then goes into
+	// the reconnect loop every connection to a broker that went away does,
+	// which is the outage the reachability cases certify.
+	leaf := startTestServer(t, leafCfg)
+	return clientUnderTest(t, leaf, member.Server, opts...)
 }
 
 // unusedPort is a loopback port nothing held a moment ago, for a leaf that has
@@ -251,7 +247,10 @@ func TestALeafReportsItsLinkGoingDown(t *testing.T) {
 	memberCfg := cfg
 	memberCfg.ServerName = "member"
 	memberCfg.LeafHost = "127.0.0.1"
-	memberCfg.LeafPort = unusedPort(t)
+	// ON [AnyPort], AND ASKED WHICH, as [unusedPort] says a member always
+	// is: started on a port found free a moment earlier, this case lost it
+	// whenever anything else on the machine took it first.
+	memberCfg.LeafPort = AnyPort
 	memberCfg.StoreDir = t.TempDir()
 	member, err := StartServer(t.Context(), memberCfg)
 	if err != nil {
@@ -261,7 +260,7 @@ func TestALeafReportsItsLinkGoingDown(t *testing.T) {
 
 	leafCfg := cfg
 	leafCfg.ServerName = "leaf"
-	leafCfg.LeafURLs = []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", memberCfg.LeafPort)}
+	leafCfg.LeafURLs = []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", member.LeafPort())}
 	leaf, err := StartServer(t.Context(), leafCfg)
 	if err != nil {
 		t.Fatalf("start the leaf: %v", err)

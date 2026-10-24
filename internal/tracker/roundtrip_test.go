@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -56,6 +57,11 @@ type roundTrip struct {
 	// publisher is what the harness's writer appends through, kept so a
 	// writer rebuilt over other coordination writes exactly as this one did.
 	publisher *statelog.Publisher
+
+	// verifier opens a record's frame, because this harness replays the
+	// log exactly as the framework's own loop does and that loop verifies
+	// before any domain decodes.
+	verifier *statelog.Verifier
 
 	// at is the writer's AUTHORED clock, which a case moves when it is
 	// about the order of instants somebody typed. It defaults to
@@ -106,14 +112,17 @@ func newRoundTripWithoutProject(t *testing.T) *roundTrip {
 		}
 	})
 	spec := tracker.Domain{}.Stream()
-	// THE CEILING IS THE ONE FIELD THIS HARNESS OVERRIDES, and it is not a
-	// property under test: the shipped default is sized for five years of a
-	// real company's growth, and an embedded broker in a temporary
-	// directory refuses to reserve it. Everything the domain declares
-	// besides the ceiling is the shipped value.
+	// THE CEILING IS THE ONE FIELD THIS HARNESS OVERRIDES, and it is the
+	// floor Tier A holds stream.tracker_log_max_bytes to: the smallest log any
+	// node runs, which is the one the gate reserve takes the largest share
+	// of, so every write here is admitted against the tightest ordinary
+	// ceiling a production log has — and a reservation an embedded broker
+	// in a temporary directory can grant, where a default sized for years
+	// of a company's growth may not be. Everything else is the domain's
+	// own declaration, its largest record included.
 	if err := q.EnsureDomainStream(t.Context(), js.DomainStream{
-		Name: spec.Name, Subjects: spec.Subjects, MaxBytes: 16 << 20,
-		Duplicates: spec.Duplicates,
+		Name: spec.Name, Subjects: spec.Subjects, MaxBytes: config.TrackerLogMaxBytesFloor,
+		MaxMessageBytes: spec.MaxAppendBytes(), Duplicates: spec.Duplicates,
 	}); err != nil {
 		t.Fatalf("provision the log: %v", err)
 	}
@@ -174,7 +183,7 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, node *store.DB
 	r.metrics = recorder
 	// THE LOG'S GATE RESERVE, reading its usage from the stream as the
 	// engine's does, so every write here is admitted as a production one is.
-	reserve, err := statelog.NewReserve(tracker.Domain{}.Stream().Name,
+	reserve, err := statelog.NewReserve(tracker.Domain{}.Stream(),
 		func(ctx context.Context) (statelog.Usage, error) {
 			stats, err := log.Stats(ctx)
 			return statelog.Usage{Bytes: stats.Bytes, MaxBytes: stats.MaxBytes}, err
@@ -183,8 +192,14 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, node *store.DB
 		t.Fatalf("build the gate reserve: %v", err)
 	}
 	r.reserve = reserve
+	// THE VERIFIER BEFORE THE PUBLISHER, which reads the log's own
+	// records — the one it lost an acknowledgement for, the one a
+	// retry finds — through it, as every reader off the log does.
+	r.verifier = testVerifier(t, tracker.Domain{})
 	publisher, err := statelog.NewPublisher(statelog.Deps{
-		Domain: tracker.Domain{}, Spec: tracker.Domain{}.Stream(), Log: log, Records: log, Rows: rows, Fence: fence,
+		Domain: tracker.Domain{}, Spec: tracker.Domain{}.Stream(), Log: log,
+		Records: statelog.VerifiedLog{Log: log, Verifier: r.verifier},
+		Signer:  testSigner(t, tracker.Domain{}), Rows: rows, Fence: fence,
 		Gates: tracker.NewGates(db.Reader()), Waiter: waiter, Voids: waiter, Identity: waiter, NodeID: nodeID,
 		Metrics:       recorder,
 		Admission:     reserve,
@@ -214,7 +229,7 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, node *store.DB
 	if err != nil {
 		t.Fatalf("tracker reader: %v", err)
 	}
-	r.writer, r.applier = writer, tracker.NewApplier()
+	r.writer, r.applier = writer, tracker.NewApplier(nil)
 	r.reader, r.waiter = reader, waiter
 	return r
 }
@@ -336,6 +351,22 @@ func (r *roundTrip) redeliver(seq uint64) {
 	r.consumed = consumed
 }
 
+// open unwraps one record's signature frame and hands back its body.
+//
+// THE FRAME COMES FIRST, exactly as the framework's own loop does it: a record
+// is signed on its way to the appender, so what a domain decodes is the BODY.
+// A replay that handed the domain's decoder the bytes the log holds would be
+// reading the signature as JSON — the mistake every reader of a signed log
+// has to get right, and the one this harness made for a commit.
+func (r *roundTrip) open(seq uint64, framed []byte) []byte {
+	r.t.Helper()
+	body, verdict := r.verifier.Open(framed)
+	if verdict != statelog.Verified {
+		r.t.Fatalf("record %d did not verify: %s", seq, verdict)
+	}
+	return body
+}
+
 func (r *roundTrip) apply(from, last uint64) {
 	r.t.Helper()
 	for seq := from; seq <= last; seq++ {
@@ -346,7 +377,7 @@ func (r *roundTrip) apply(from, last uint64) {
 		if !ok {
 			continue
 		}
-		env, err := tracker.DecodeEnvelope(payload)
+		env, err := tracker.DecodeEnvelope(r.open(seq, payload))
 		if err != nil {
 			r.t.Fatalf("decode record %d: %v", seq, err)
 		}
@@ -363,7 +394,7 @@ func (r *roundTrip) apply(from, last uint64) {
 			Position: statelog.Position{
 				Stream: tracker.Domain{}.Stream().Name, Generation: env.Gen, Seq: seq,
 			},
-			Payload:  payload,
+			Payload:  r.open(seq, payload),
 			StoredAt: storedAt,
 		}
 		if err := r.db.Tx(r.t.Context(), func(tx *sql.Tx) error {
@@ -443,7 +474,7 @@ func (r *roundTrip) scopeOfLastRecord() statelog.ScopeSet {
 	if err != nil || !ok {
 		r.t.Fatalf("read record %d: %v", last, err)
 	}
-	env, err := tracker.DecodeEnvelope(payload)
+	env, err := tracker.DecodeEnvelope(r.open(last, payload))
 	if err != nil {
 		r.t.Fatalf("decode record %d: %v", last, err)
 	}
@@ -902,4 +933,30 @@ func TestASecondWriteBehindIsRefusedRatherThanWaitingForEver(t *testing.T) {
 	if _, err := r.writer.CreateTask(t.Context(), "op-2", newTask("t-2"), nil); err != nil {
 		t.Fatalf("the same create after the drain: %v", err)
 	}
+}
+
+// testSigner is this suite's record signer.
+//
+// EVERY RECORD ON EVERY STATE LOG IS SIGNED, so a write authority built
+// without one is refused at construction rather than producing records the
+// fleet would refuse one at a time, on every node, for ever. The key is a
+// fixture: what these cases are about is what the domain writes, and the
+// signature's own rules are certified in [statelog].
+func testSigner(t *testing.T, d statelog.Domain) *statelog.Signer {
+	t.Helper()
+	signer, err := statelog.NewSigner(d.Name(), statelog.OneKey("k1", "test-material"))
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	return signer
+}
+
+// testVerifier opens what [testSigner] sealed.
+func testVerifier(t *testing.T, d statelog.Domain) *statelog.Verifier {
+	t.Helper()
+	verifier, err := statelog.NewVerifier(d.Name(), statelog.OneKey("k1", "test-material"))
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	return verifier
 }

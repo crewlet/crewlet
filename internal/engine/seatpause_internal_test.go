@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/turn"
@@ -15,6 +17,8 @@ import (
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -29,32 +33,46 @@ func pausingEngine(t *testing.T) (*Engine, *memory.Queue, *coordmem.Fleet) {
 	e.backends.Fleet = fleet
 	e.startSeatPauses(t.Context())
 	t.Cleanup(e.stopSeatPauses)
-	if _, _, known := e.pauseOf("ceo"); !known {
+	if _, _, known := e.pauseOf(ceoSeat); !known {
 		t.Fatal("the pause watch gave no first answer within its budget on a healthy store")
 	}
 	return e, q.(*memory.Queue), fleet
 }
 
-func pauseSeat(t *testing.T, f coord.SeatPauses, handle string, stop bool) coord.SeatPause {
-	t.Helper()
-	return pauseSeatCtx(t.Context(), t, f, handle, stop)
+// seatOf is the id the engineOn company ("Acme") derives for a seat's handle —
+// what a pause, a hold and a mailbox are keyed by.
+func seatOf(handle string) uuid.UUID {
+	id, _ := org.DeriveAgentID("Acme", handle)
+	return id
 }
 
-func pauseSeatCtx(ctx context.Context, t *testing.T, f coord.SeatPauses, handle string, stop bool) coord.SeatPause {
+// ceoSeat is the fixture's seat every case pauses.
+var ceoSeat = seatOf("ceo")
+
+func pauseSeat(t *testing.T, f coord.SeatPauses, seat uuid.UUID, stop bool) coord.SeatPause {
+	t.Helper()
+	return pauseSeatCtx(t.Context(), t, f, seat, stop)
+}
+
+// pauseSeatCtx pauses one seat as a person does: Jane, through her machine
+// token — the three halves iam.ActorFor makes of a principal.
+func pauseSeatCtx(ctx context.Context, t *testing.T, f coord.SeatPauses, seat uuid.UUID, stop bool) coord.SeatPause {
 	t.Helper()
 	p, created, err := f.CreateSeatPause(ctx, coord.SeatPause{
-		Handle: handle, By: "jane-token", Seat: "jane", Reason: "looping",
-		StopRunning: stop, At: time.Now(),
+		Seat: seat, By: "jane", ByKind: iam.ActorHuman, OperatorID: "pat:jane-token",
+		Reason: "looping", StopRunning: stop, At: time.Now(),
 	})
 	if err != nil || !created {
-		t.Fatalf("CreateSeatPause(%s) = (%v, %v)", handle, created, err)
+		t.Fatalf("CreateSeatPause(%s) = (%v, %v)", seat, created, err)
 	}
 	return p
 }
 
-func pauseHeld(q *memory.Queue, handle string) bool {
-	return slices.Contains(q.PauseHolds(topics.AgentInbox(handle),
-		topics.AgentInboxGroup(handle)), seatPauseHold)
+// pauseHeld reports whether the pause's own hold is on seat's inbox — named by
+// the seat's id, as every one of its mailboxes is.
+func pauseHeld(q *memory.Queue, seat uuid.UUID) bool {
+	return slices.Contains(q.PauseHolds(topics.AgentInbox(seat),
+		topics.AgentInboxGroup(seat)), seatPauseHold)
 }
 
 // seatTurns runs a seat's inbox through a dispatcher reading THIS engine's
@@ -75,7 +93,7 @@ func attachSeat(t *testing.T, e *Engine, q *memory.Queue, handle string) *seatTu
 	turns := &seatTurns{}
 	d := &Dispatcher{
 		Conditions: func(h string) inbox.Conditions {
-			_, paused, known := e.pauseOf(h)
+			paused, known := e.pauseOfHandle(h)
 			return inbox.Conditions{
 				Owned: true, TurnEngineReady: true, AdmitsTriggers: true,
 				Paused: paused, PauseUnknown: !known,
@@ -95,8 +113,8 @@ func attachSeat(t *testing.T, e *Engine, q *memory.Queue, handle string) *seatTu
 			return turn.Result{}, nil
 		},
 	}
-	if err := q.SubscribeBatch(t.Context(), topics.AgentInbox(handle),
-		topics.AgentInboxGroup(handle),
+	if err := q.SubscribeBatch(t.Context(), topics.AgentInbox(seatOf(handle)),
+		topics.AgentInboxGroup(seatOf(handle)),
 		func(ctx context.Context, evs []*events.Event) queue.Result {
 			return d.Dispatch(ctx, handle, evs)
 		},
@@ -108,7 +126,7 @@ func attachSeat(t *testing.T, e *Engine, q *memory.Queue, handle string) *seatTu
 
 func sendTask(t *testing.T, q queue.EventQueue, handle, id string) {
 	t.Helper()
-	if err := q.Publish(t.Context(), topics.AgentInbox(handle),
+	if err := q.Publish(t.Context(), topics.AgentInbox(seatOf(handle)),
 		events.New(types.TaskAssigned{TaskID: id, RoleName: handle}, events.TraceContext{})); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
@@ -130,8 +148,8 @@ func TestAPausedSeatStartsNoNewTurnAndLosesNoDelivery(t *testing.T) {
 	sendTask(t, q, "ceo", "before")
 	waitFor(t, "the unpaused seat to work", func() bool { return len(turns.seen()) == 1 })
 
-	p := pauseSeat(t, fleet, "ceo", false)
-	waitFor(t, "the watch to hold the inbox", func() bool { return pauseHeld(q, "ceo") })
+	p := pauseSeat(t, fleet, ceoSeat, false)
+	waitFor(t, "the watch to hold the inbox", func() bool { return pauseHeld(q, ceoSeat) })
 	sendTask(t, q, "ceo", "during-1")
 	sendTask(t, q, "ceo", "during-2")
 	time.Sleep(50 * time.Millisecond)
@@ -139,14 +157,14 @@ func TestAPausedSeatStartsNoNewTurnAndLosesNoDelivery(t *testing.T) {
 		t.Fatalf("a paused seat ran %v", got)
 	}
 
-	if gone, err := fleet.DeleteSeatPause(t.Context(), "ceo", p.Version); err != nil || !gone {
+	if gone, err := fleet.DeleteSeatPause(t.Context(), ceoSeat, p.Version); err != nil || !gone {
 		t.Fatalf("DeleteSeatPause = (%v, %v)", gone, err)
 	}
 	waitFor(t, "the resume to deliver what waited", func() bool { return len(turns.seen()) == 3 })
 	if got := turns.seen(); !slices.Equal(got, []string{"before", "during-1", "during-2"}) {
 		t.Errorf("turns = %v, want the held mail in the order it was sent", got)
 	}
-	if pauseHeld(q, "ceo") {
+	if pauseHeld(q, ceoSeat) {
 		t.Error("the resume left the pause hold on the inbox")
 	}
 }
@@ -157,27 +175,27 @@ func TestAPausedSeatStartsNoNewTurnAndLosesNoDelivery(t *testing.T) {
 func TestAPausedSeatParksAndHoldsItsInboxWhenADeliveryRacesTheHold(t *testing.T) {
 	t.Parallel()
 	e, q, fleet := pausingEngine(t)
-	p := pauseSeat(t, fleet, "ceo", false)
+	p := pauseSeat(t, fleet, ceoSeat, false)
 	waitFor(t, "the copy to see the pause", func() bool {
-		_, paused, _ := e.pauseOf("ceo")
+		_, paused, _ := e.pauseOf(ceoSeat)
 		return paused
 	})
 	turns := attachSeat(t, e, q, "ceo")
 	// The watch took the hold already. Dropping it here is the state a
 	// delivery races into: the pause has reached this node's copy and the
 	// inbox is not held yet.
-	if err := q.ResumeTopic(t.Context(), topics.AgentInbox("ceo"),
-		topics.AgentInboxGroup("ceo"), seatPauseHold); err != nil {
+	if err := q.ResumeTopic(t.Context(), topics.AgentInbox(ceoSeat),
+		topics.AgentInboxGroup(ceoSeat), seatPauseHold); err != nil {
 		t.Fatalf("ResumeTopic: %v", err)
 	}
 	sendTask(t, q, "ceo", "raced")
-	waitFor(t, "the screening to take the hold", func() bool { return pauseHeld(q, "ceo") })
+	waitFor(t, "the screening to take the hold", func() bool { return pauseHeld(q, ceoSeat) })
 	time.Sleep(50 * time.Millisecond)
 	if got := turns.seen(); len(got) != 0 {
 		t.Fatalf("a delivery that raced the pause ran %v", got)
 	}
 
-	if gone, err := fleet.DeleteSeatPause(t.Context(), "ceo", p.Version); err != nil || !gone {
+	if gone, err := fleet.DeleteSeatPause(t.Context(), ceoSeat, p.Version); err != nil || !gone {
 		t.Fatalf("DeleteSeatPause = (%v, %v)", gone, err)
 	}
 	waitFor(t, "the parked mail after the resume", func() bool {
@@ -190,15 +208,15 @@ func TestAPausedSeatParksAndHoldsItsInboxWhenADeliveryRacesTheHold(t *testing.T)
 func TestAPausedSeatIsAttachedUnderItsHold(t *testing.T) {
 	t.Parallel()
 	e, _, fleet := pausingEngine(t)
-	if got := e.attachHolds("ceo"); len(got) != 0 {
+	if got := e.attachHolds(ceoSeat); len(got) != 0 {
 		t.Fatalf("attachHolds(unpaused) = %v, want none", got)
 	}
-	pauseSeat(t, fleet, "ceo", false)
+	pauseSeat(t, fleet, ceoSeat, false)
 	waitFor(t, "the copy to see the pause", func() bool {
-		_, paused, _ := e.pauseOf("ceo")
+		_, paused, _ := e.pauseOf(ceoSeat)
 		return paused
 	})
-	if got := e.attachHolds("ceo"); !slices.Equal(got, []string{string(inbox.HoldSeatPaused)}) {
+	if got := e.attachHolds(ceoSeat); !slices.Equal(got, []string{string(inbox.HoldSeatPaused)}) {
 		t.Errorf("attachHolds(paused) = %v, want the pause's hold", got)
 	}
 }
@@ -239,9 +257,9 @@ func TestStopEndsTheTurnAtTheNextRoundAndDoesNotReRunIt(t *testing.T) {
 				mu.Unlock()
 				if round == 0 {
 					// Mid-turn, the person pauses with a stop.
-					pauseSeatCtx(ctx, t, fleet, req.Handle, true)
+					pauseSeatCtx(ctx, t, fleet, seatOf(req.Handle), true)
 					waitFor(t, "the copy to see the stop", func() bool {
-						p, paused, _ := e.pauseOf(req.Handle)
+						p, paused, _ := e.pauseOf(seatOf(req.Handle))
 						return paused && p.StopRunning
 					})
 				}
@@ -265,7 +283,8 @@ func TestStopEndsTheTurnAtTheNextRoundAndDoesNotReRunIt(t *testing.T) {
 			stopped = s
 		}
 	}
-	if stopped == nil || stopped.StoppedBy != "jane-token" || stopped.StoppedBySeat != "jane" ||
+	if stopped == nil || stopped.StoppedBy != "jane" ||
+		stopped.StoppedByKind != string(iam.ActorHuman) || stopped.OperatorID != "pat:jane-token" ||
 		stopped.AgentHandle != "ceo" || stopped.Reason != "looping" {
 		t.Errorf("agent_turn_stopped = %+v, want who stopped ceo's turn and why", stopped)
 	}
@@ -283,9 +302,9 @@ func TestOnlyAPauseThatAsksToStopClosesTheFence(t *testing.T) {
 	t.Parallel()
 	e, _, fleet := pausingEngine(t)
 	fence := e.seatFence("ceo")
-	p := pauseSeat(t, fleet, "ceo", false)
+	p := pauseSeat(t, fleet, ceoSeat, false)
 	waitFor(t, "the copy to see the pause", func() bool {
-		_, paused, _ := e.pauseOf("ceo")
+		_, paused, _ := e.pauseOf(ceoSeat)
 		return paused
 	})
 	if err := fence(); err != nil {
@@ -300,39 +319,65 @@ func TestOnlyAPauseThatAsksToStopClosesTheFence(t *testing.T) {
 	if !turn.Stopped(err) {
 		t.Fatalf("fence = %v, want ErrStoppedByPerson", err)
 	}
-	if who, ok := stopOf(err); !ok || who.Seat != "jane" {
+	if who, ok := stopOf(err); !ok || who.By != "jane" || who.Seat != ceoSeat {
 		t.Errorf("the stop names %+v, want the pause that asked for it", who)
 	}
 }
 
-// A REMOVED SEAT LEAVES NO PAUSE BEHIND. The record has no age, so without the
-// apply clearing it a seat later added under the same handle would arrive
-// paused by somebody who paused a different role.
+// A REMOVED SEAT LEAVES NO PAUSE BEHIND. The record has no age, so without a
+// published company clearing it the record would outlive the seat for ever.
+//
+// AND ONLY THE FLEET'S CURRENT COMPANY CLEARS ONE: a node applying a revision
+// the fleet has since replaced does not have a seat the newer one added, and
+// would delete a pause a person had just placed on it. The control is that
+// company, applied from an earlier activation: it clears nothing.
 func TestARemovedSeatLeavesNoPauseBehind(t *testing.T) {
 	t.Parallel()
 	e, _, fleet := pausingEngine(t)
-	pauseSeat(t, fleet, "ceo", false)
-	pauseSeat(t, fleet, "ghost", true)
+	pauseSeat(t, fleet, ceoSeat, false)
+	ghost := seatOf("ghost")
+	pauseSeat(t, fleet, ghost, true)
 	waitFor(t, "the copy to see both", func() bool {
-		_, a, _ := e.pauseOf("ceo")
-		_, b, _ := e.pauseOf("ghost")
+		_, a, _ := e.pauseOf(ceoSeat)
+		_, b, _ := e.pauseOf(ghost)
 		return a && b
 	})
-	e.clearRemovedSeatPauses(t.Context(), companyFor(t, `
+	// EVERY ACTIVATION CARRIES ITS ORIGIN: the store refuses one without.
+	origin := coord.RevisionOrigin{Author: "maya", AuthorKind: iam.ActorHuman,
+		Source: "api", CreatedAt: time.Now()}
+	earlier, err := fleet.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "rev-1", Payload: []byte("{}"), At: time.Now(), Origin: origin})
+	if err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	current, err := fleet.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "rev-2", Payload: []byte("{}"), At: time.Now(), Origin: origin})
+	if err != nil {
+		t.Fatalf("Activate: %v", err)
+	}
+	next := companyFor(t, `
 name: Acme
 roles:
   - name: CEO
     handle: ceo
-`))
+`)
+	next.ActivatedAt = earlier.At
+	e.clearRemovedSeatPauses(t.Context(), next)
+	if all, err := fleet.ListSeatPauses(t.Context()); err != nil || len(all) != 2 {
+		t.Fatalf("a company the fleet has moved past cleared pauses: %+v (%v)", all, err)
+	}
+
+	next.ActivatedAt = current.At
+	e.clearRemovedSeatPauses(t.Context(), next)
 	all, err := fleet.ListSeatPauses(t.Context())
 	if err != nil {
 		t.Fatalf("ListSeatPauses: %v", err)
 	}
-	if len(all) != 1 || all[0].Handle != "ceo" {
+	if len(all) != 1 || all[0].Seat != ceoSeat {
 		t.Fatalf("pauses = %+v, want only the seat the company still has", all)
 	}
 	waitFor(t, "the copy to forget the removed seat", func() bool {
-		_, paused, _ := e.pauseOf("ghost")
+		_, paused, _ := e.pauseOf(ghost)
 		return !paused
 	})
 }
@@ -353,8 +398,8 @@ func (f *endingFleet) WatchSeatPauses(context.Context) (<-chan coord.SeatPauseUp
 	}
 	f.watched = true
 	out := make(chan coord.SeatPauseUpdate, 2)
-	out <- coord.SeatPauseUpdate{Handle: "ceo", Pause: &coord.SeatPause{
-		Handle: "ceo", By: "jane-token", At: time.Now(),
+	out <- coord.SeatPauseUpdate{Seat: ceoSeat, Pause: &coord.SeatPause{
+		Seat: ceoSeat, By: "jane", ByKind: iam.ActorHuman, At: time.Now(),
 	}}
 	out <- coord.SeatPauseUpdate{Current: true}
 	close(out)
@@ -371,13 +416,13 @@ func TestAnUnreachableStoreIsNotUnpaused(t *testing.T) {
 	e.startSeatPauses(t.Context())
 	t.Cleanup(e.stopSeatPauses)
 	time.Sleep(2 * seatPauseRewatchBase)
-	if _, paused, known := e.pauseOf("ceo"); !known || !paused {
+	if _, paused, known := e.pauseOf(ceoSeat); !known || !paused {
 		t.Fatalf("paused=%v known=%v after the store went away, want the pause kept", paused, known)
 	}
-	if !pauseHeld(q.(*memory.Queue), "ceo") {
+	if !pauseHeld(q.(*memory.Queue), ceoSeat) {
 		t.Error("the hold was lifted when the watch ended")
 	}
-	if paused, err := e.seatPaused("ceo"); err != nil || !paused {
+	if paused, err := e.seatPaused(ceoSeat); err != nil || !paused {
 		t.Errorf("seatPaused = (%v, %v), want the kept pause", paused, err)
 	}
 }
@@ -386,10 +431,44 @@ func TestAnUnreachableStoreIsNotUnpaused(t *testing.T) {
 func TestUnreadPausesAreUnknownNotUnpaused(t *testing.T) {
 	t.Parallel()
 	e, _ := engineOn(t)
-	if _, err := e.seatPaused("ceo"); !errors.Is(err, errPausesUnread) {
+	if _, err := e.seatPaused(ceoSeat); !errors.Is(err, errPausesUnread) {
 		t.Errorf("seatPaused before any answer = %v, want errPausesUnread", err)
 	}
-	if _, _, known := e.pauseOf("ceo"); known {
+	if _, _, known := e.pauseOf(ceoSeat); known {
 		t.Error("a node that never read the pauses reported it knew them")
+	}
+}
+
+// A PAUSE IS KEYED ON ITS SEAT'S AGENT ID, and holds that seat alone.
+//
+// The record, the hold and the screening all key on the id derived from the
+// seat's handle (ADR-0013): a colleague beside the paused seat — a different
+// handle, so a different id — is not paused, and the paused seat reads paused
+// by its handle, which is the control.
+//
+// Mutation: answer the screening by anything but the seat's id, and this
+// fails.
+func TestAPauseHoldsItsSeatAlone(t *testing.T) {
+	t.Parallel()
+	e, _, fleet := pausingEngine(t)
+	pauseSeat(t, fleet, ceoSeat, false)
+	waitFor(t, "the copy to see the pause", func() bool {
+		_, paused, _ := e.pauseOf(ceoSeat)
+		return paused
+	})
+	e.epoch.current.Store(companyFor(t, `
+name: Acme
+roles:
+  - name: CEO
+    handle: ceo
+  - name: Chief
+    handle: chief
+`))
+
+	if paused, known := e.pauseOfHandle("ceo"); !known || !paused {
+		t.Errorf("the paused seat reads paused=%v known=%v, want paused", paused, known)
+	}
+	if paused, _ := e.pauseOfHandle("chief"); paused {
+		t.Error("a colleague beside the paused seat reads paused")
 	}
 }

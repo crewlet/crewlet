@@ -1,93 +1,86 @@
 /**
- * The typed cells, and the one thing they must never do.
+ * The grid pieces the engine keeps beside uilet's table cells, and the rules
+ * every grid in the tree is held to.
  *
- * # They may not restate a format
+ * # A figure is spelled by lib/format.ts
  *
- * `lib/format.ts` owns how a number, a count and a duration are SPELLED.
- * These cells wrote their own: `DurationCell` rendered "500ms" where
- * `fmtDuration` then wrote "500 ms", and `TokenCell` abbreviated five thousand as
- * "5.0k" where `fmtCount` writes "5,000". That is worse than a drift — it is
- * a trap, because adopting a cell would silently change every figure in the
- * column, so the module built to make the product consistent could not be
- * adopted without making it inconsistent.
- *
- * These cases hold each cell against the formatter it composes, which is the
- * only way that stays true: a second spelling is a test failure rather than a
- * number somebody notices on a screen six months later.
+ * `lib/format.ts` owns how a count and a duration are SPELLED. The cells once
+ * wrote their own ("500ms" where `fmtDuration` writes "500 ms", "5.0k" where
+ * `fmtCount` writes "5,000"), so adopting one silently changed every figure in
+ * its column. uilet's `TableNumberCell` takes the host's formatter and
+ * defaults to plain locale grouping, so the same trap is one missing prop
+ * away; the gate below holds every call site to a formatter of ours.
  *
  * # Absent is not zero
  *
  * The other half of why a cell exists. "Nothing is estimated" and "everything
  * is estimated at nothing" are different facts, and a grid rendering both as
- * `0` makes the first invisible — while `value || "—"`, which is what three
- * columns in this product did, makes the SECOND invisible instead.
+ * `0` makes the first invisible, while `value || "-"` makes the SECOND
+ * invisible instead.
  */
 
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
-import { EMPTY_VALUE } from "@crewlethq/ui";
+import { EMPTY_VALUE, TableEntityCell, TableNumberCell } from "@crewlethq/ui";
 
-import { DurationCell, NumberCell, SeatCell, TokenCell } from "./cells.tsx";
+import { linkedSeat, plainSeat } from "./cells.tsx";
 import { fmtCount, fmtDuration } from "~/lib/format.ts";
 import { SRC, modules } from "~/test/source.ts";
 
 afterEach(cleanup);
 
-test("a count is spelled the way fmtCount spells it", () => {
+/**
+ * EVERY FIGURE CELL NAMES ITS FORMATTER.
+ *
+ * Scanned as text over the product: each `<TableNumberCell` opening tag must
+ * carry a `format=` prop. Without it the figure is spelled by uilet's default
+ * grouping, which writes "12,345" in a column whose neighbours write "12.3k".
+ */
+test("every TableNumberCell is handed one of our formatters", () => {
+  const files = modules();
+  expect(files.length).toBeGreaterThan(50);
+  let seen = 0;
+  const offenders: string[] = [];
+  for (const { path, text } of files) {
+    if (path.endsWith(".test.tsx")) continue;
+    for (const match of text.matchAll(/<TableNumberCell\b[\s\S]*?\/>/g)) {
+      seen += 1;
+      if (!/\bformat=\{/.test(match[0]))
+        offenders.push(`${path}: ${match[0].replace(/\s+/g, " ")}`);
+    }
+  }
+  // A scan that matched nothing would pass silently.
+  expect(seen).toBeGreaterThan(10);
+  expect(
+    offenders,
+    "a figure is spelled by lib/format.ts: pass format={fmtCount} or format={fmtDuration}",
+  ).toEqual([]);
+});
+
+test("a count and a duration read as their formatters spell them", () => {
   for (const n of [0, 7, 999, 5_000, 12_345, 1_250_000]) {
     cleanup();
-    render(<NumberCell value={n} />);
+    render(<TableNumberCell value={n} format={fmtCount} />);
     expect(screen.getByText(fmtCount(n)), String(n)).toBeTruthy();
   }
-});
-
-test("tokens are spelled the way every other count is", () => {
-  for (const n of [0, 900, 5_000, 250_000, 3_400_000]) {
-    cleanup();
-    render(<TokenCell value={n} />);
-    expect(screen.getByText(fmtCount(n)), String(n)).toBeTruthy();
-  }
-});
-
-test("a duration is spelled the way fmtDuration spells it", () => {
   for (const ms of [0, 500, 5_000, 95_000, 7_200_000]) {
     cleanup();
-    render(<DurationCell ms={ms} />);
+    render(<TableNumberCell value={ms} format={fmtDuration} />);
     expect(screen.getByText(fmtDuration(ms)), String(ms)).toBeTruthy();
   }
 });
 
-test("a zero renders as a zero, in every one of them", () => {
-  // NOT a dash. `t.rounds || "—"` said "not measured" about a turn that
-  // measurably ran no rounds.
-  render(
-    <>
-      <NumberCell value={0} />
-      <TokenCell value={0} />
-    </>,
-  );
-  expect(screen.getAllByText("0").length).toBe(2);
-  expect(screen.queryByText(EMPTY_VALUE)).toBeNull();
-});
-
-test("an absent value renders a dash that says which absence it is", () => {
+test("a zero renders as a zero, and an absence says which absence it is", () => {
   const { container } = render(
     <>
-      <NumberCell value={null} />
-      <TokenCell value={undefined} />
-      <DurationCell ms={null} />
+      <TableNumberCell value={0} format={fmtCount} />
+      <TableNumberCell value={null} format={fmtCount} />
+      <TableNumberCell value={undefined} format={fmtDuration} emptyLabel="Not measured" />
     </>,
   );
-  // ONE MARK, THE DESIGN SYSTEM'S. These cells drew a local `Dash` — an em
-  // dash in a `.cell-dash` span with a `title` — while newer screens drew
-  // `EmptyValue`'s en dash, so the work trash screen showed both at once. And
-  // the absence is READ now rather than hovered: a `title` on a span is a
-  // tooltip no keyboard reaches, which is a poor home for the one fact that
-  // distinguishes "nothing recorded" from "zero".
+  expect(screen.getAllByText("0").length).toBe(1);
   const dashes = container.querySelectorAll(".crewlet-empty-value");
-  expect(dashes.length).toBe(3);
   expect([...dashes].map((d) => d.textContent)).toEqual([
-    `${EMPTY_VALUE}Nothing recorded`,
     `${EMPTY_VALUE}Nothing recorded`,
     `${EMPTY_VALUE}Not measured`,
   ]);
@@ -163,7 +156,7 @@ test("no module spells an absent value with a dash of its own", () => {
 /**
  * A SEAT LOOKS LIKE ITSELF WHEREVER IT APPEARS.
  *
- * `SeatCell` drew its own 22px `.seat-mark` circle holding a robot glyph while
+ * The seat cell once drew its own 22px `.seat-mark` circle holding a robot glyph while
  * the board, the list, the roster and every seat chip drew `Avatar` — so the
  * same engineer was "FE" on the board and an identical generic robot on
  * Search and on a project's Lead panel. Two badges for one seat, and the robot
@@ -171,7 +164,9 @@ test("no module spells an absent value with a dash of its own", () => {
  * a glance, in the slot that should have been saying WHO.
  */
 test("a seat's badge is its initials, the same ones the board draws", () => {
-  const { container } = render(<SeatCell handle="frontend-engineer" name="Frontend Engineer" />);
+  const { container } = render(
+    <TableEntityCell {...linkedSeat({ handle: "frontend-engineer", name: "Frontend Engineer" })} />,
+  );
   // FE, from the name — and `getInitials` would give FE from the handle too,
   // since it splits on hyphens. Either way it is a mark that identifies.
   expect(container.querySelector(".crewlet-avatar")?.textContent).toBe("FE");
@@ -182,12 +177,14 @@ test("a seat's badge is its initials, the same ones the board draws", () => {
 // agent — and losing it would make a person indistinguishable from an agent on
 // every grid in the product.
 test("a human seat is drawn as a person and an agent as an agent", () => {
-  const { container } = render(<SeatCell handle="ada" name="Ada Lovelace" kind="human" />);
+  const { container } = render(
+    <TableEntityCell {...linkedSeat({ handle: "ada", name: "Ada Lovelace", kind: "human" })} />,
+  );
   const badge = container.querySelector(".crewlet-avatar")!;
   expect(badge.classList.contains("crewlet-avatar--human")).toBe(true);
   expect(badge.classList.contains("crewlet-avatar--agent")).toBe(false);
   cleanup();
-  const agent = render(<SeatCell handle="cto" name="Agent CTO" kind="agent" />);
+  const agent = render(<TableEntityCell {...plainSeat({ name: "Agent CTO", kind: "agent" })} />);
   const mark = agent.container.querySelector(".crewlet-avatar")!;
   expect(mark.classList.contains("crewlet-avatar--agent")).toBe(true);
   expect(mark.classList.contains("crewlet-avatar--human")).toBe(false);
@@ -231,4 +228,18 @@ test("no module draws an identity badge of its own", async () => {
       "make one seat tellable from another, and its `kind` outline is what " +
       "makes a human seat tellable from an agent one",
   ).toEqual([]);
+});
+
+// A SEAT LINKS TO ITS PAGE, and a seat with no handle is nobody: the link is
+// the seat's, so a name alone draws the absence rather than a dead link.
+test("a linked seat goes to its page, and no handle is the Nobody absence", () => {
+  render(<TableEntityCell {...linkedSeat({ handle: "cto", name: "Agent CTO" })} />);
+  expect(screen.getByRole("link", { name: "Agent CTO" }).getAttribute("href")).toBe(
+    "#/company/org/seats/cto",
+  );
+  cleanup();
+  const { container } = render(
+    <TableEntityCell {...linkedSeat({ handle: null, name: "Ghost" })} />,
+  );
+  expect(container.textContent).toBe(`${EMPTY_VALUE}Nobody`);
 });

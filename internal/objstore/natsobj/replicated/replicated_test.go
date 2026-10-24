@@ -25,6 +25,14 @@ import (
 // member's loss at.
 const replicas = 3
 
+// ceiling is the byte reservation the bucket is created with, which every
+// bucket must hold (natsobj.Config.MaxBytes): four gibibytes, since the one
+// bucket every benchmark case shares holds the stat case's ten thousand
+// objects of up to 256 KiB at once (some 840 MiB with their metadata) and a
+// 128 MiB object beside the ranged case, and a put past it would be refused
+// as the bucket filling, which no figure may be made of.
+const ceiling = 4 << 30
+
 // fleet is a cluster of [replicas] members at `stream.sync: always`,
 // production's default, each reached through a JetStream client of its own
 // member's — the API every node of the fleet addresses ([jsapi.Embedded]).
@@ -62,7 +70,7 @@ func startFleet(tb testing.TB) *fleet {
 func (f *fleet) bucket(tb testing.TB, i int) *natsobj.Backend {
 	tb.Helper()
 	b, err := natsobj.Open(tb.Context(), f.clients[i],
-		natsobj.Config{Replicas: replicas, Clustered: true})
+		natsobj.Config{MaxBytes: ceiling, Replicas: replicas, Clustered: true})
 	if err != nil {
 		tb.Fatalf("open the bucket through member %d: %v", i, err)
 	}

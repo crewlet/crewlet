@@ -4,20 +4,22 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
-	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/api/opkey"
+	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -25,33 +27,30 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// The act transport is the dashboard's write path, and every case here turns
-// on its one rule: a write is made by the PERSON the presented token is bound
-// to, and by nobody else (ADR-0024). The cases drive the real handler behind
-// the real bearer guard, because "who reached it" is decided by the guard and
-// "who may act" by the handler, and a case that stood either in would prove
-// the half it did not stand in for.
+// The act transport is the dashboard's write path. Every case drives the real
+// handler behind a stand-in for the request guard — a table of bearers and the
+// principals they resolve to — because WHO is calling is decided by the guard
+// and is a value on the request by the time this handler runs (ADR-0024): any
+// principal the guard resolved may act, and what each one may do is the
+// authority table's, exactly as on every other surface.
 
-// A request id a client minted, and a second one: UUIDv7s, as every
-// `request_id` has to be, because the operation derived from one carries its
-// instant ([builtin.RequestOperation]).
-const (
-	requestA = "01927c3a-4e5b-7c6d-8e9f-0a1b2c3d4e5f"
-	requestB = "01927c3a-5f6a-7b8c-9d0e-1f2a3b4c5d6e"
+// The principals the cases act as: two people the identity directory binds to
+// seats, a pipeline's token bound to nobody, and a token that uses the
+// knowledge base and not the tracker.
+var (
+	founder   = person("jane.founder", "jane-founder", iam.Apps...)
+	cofounder = person("kim.cofounder", "kim-cofounder", iam.Apps...)
+	pipeline  = machine("token:ci", iam.GrantTracker)
+	reader    = machine("token:reader", iam.GrantKnowledge)
 )
 
-// boundChart binds the token `founder` to Jane Founder's seat and leaves the
-// token `ci` bound to nobody. It ALSO names the reserved anonymous id on a
-// seat, as a chart built without validation could — the transport must still
-// see nobody there.
-func boundChart() *org.Organization {
+// company is the chart the cases run in: the two people's seats, and an agent.
+func company() *org.Organization {
 	o := &org.Organization{
 		Name: "Nimbus",
 		Roles: []*org.Role{
-			{Name: "Jane Founder", Kind: org.KindHuman,
-				Contact: &org.HumanContact{CrewletOperatorID: "founder"}},
-			{Name: "Night Shift", Kind: org.KindHuman,
-				Contact: &org.HumanContact{CrewletOperatorID: auth.AnonymousOperator}},
+			{Name: "Jane Founder", Kind: org.KindHuman},
+			{Name: "Kim Cofounder", Kind: org.KindHuman},
 			{Name: "CTO"},
 		},
 	}
@@ -128,51 +127,45 @@ func (r *recordingWork) filed() []string {
 }
 
 // actSurface is the operator surface over a recording tracker and a stub
-// knowledge base, bound by [boundChart].
+// knowledge base, in [company].
 func actSurface(t *testing.T, work *recordingWork) *operator.Server {
 	t.Helper()
-	s := newSurface(t, operator.Options{
-		Work: builtin.WorkDeps{
-			Reader: stubWorkReader{}, Writer: work.writer,
-			Actor: operator.WorkActor(boundChart, nil),
-		},
-		Pages: builtin.PageDeps{
-			Reader: stubPageReader{}, Writer: stubPageWriter{},
-			Actor: operator.PageActor,
-		},
-		Org: boundChart,
+	return newSurface(t, operator.Options{
+		Halves: fixed(operator.Halves{
+			Work: builtin.WorkDeps{Reader: stubWorkReader{}, Writer: work.writer},
+			Pages: builtin.PageDeps{
+				Reader: stubPageReader{}, Writer: stubPageWriter{},
+			},
+		}),
+		Org: company,
 	})
-	if s == nil {
-		t.Fatal("a company on both native backends got no surface")
-	}
-	return s
 }
 
-// guarded is the act route behind the real bearer guard, as the app mounts
-// it: `founder`, `cofounder` and `ci` are all valid tokens, and `ci` is
-// nobody's.
-func guarded(s *operator.Server, disabled bool) http.Handler {
-	b := config.DefaultBootstrap()
-	b.API.Auth.Tokens = []config.APIToken{
-		{ID: "founder", Token: "founder-secret"},
-		{ID: "cofounder", Token: "cofounder-secret"},
-		{ID: "ci", Token: "ci-secret"},
-	}
-	b.API.Auth.Disabled = disabled
+// guarded is the act route behind the guard's stand-in, as the app mounts it.
+func guarded(s *operator.Server) http.Handler {
+	dir := &directory{people: map[string]iam.Principal{
+		"founder": founder, "cofounder": cofounder, "ci": pipeline, "reader": reader,
+	}}
 	mux := http.NewServeMux()
 	mux.Handle(operator.ActPattern, s.ActHandler())
-	return auth.New(&b).Middleware(mux)
+	return dir.middleware(mux)
 }
 
-// act posts one request and decodes the JSON answer.
-func act(t *testing.T, h http.Handler, token, tool, contentType, body string) (int, map[string]any) {
+// act posts one request under key — no header where it is empty — and decodes
+// the JSON answer.
+func act(t *testing.T, h http.Handler, bearer, tool, contentType, body,
+	key string) (int, map[string]any) {
+
 	t.Helper()
 	r := httptest.NewRequest(http.MethodPost, operator.ActPathPrefix+tool, strings.NewReader(body))
 	if contentType != "" {
 		r.Header.Set("Content-Type", contentType)
 	}
-	if token != "" {
-		r.Header.Set("Authorization", "Bearer "+token)
+	if bearer != "" {
+		r.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	if key != "" {
+		r.Header.Set(opkey.Header, key)
 	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, r)
@@ -185,264 +178,276 @@ func act(t *testing.T, h http.Handler, token, tool, contentType, body string) (i
 	return rec.Code, answer
 }
 
+// newKey is an operation key as the dashboard mints one per gesture.
+func newKey() string { return statelog.NewOpID(time.Now(), "") }
+
 // createArgs is the one create_work_item call these cases make.
 func createArgs() map[string]any {
 	return map[string]any{"title": "Rotate the signing key", "project": "ENG"}
 }
 
-// createBody is that call under a request id.
-func createBody(requestID string) string {
-	raw, _ := json.Marshal(map[string]any{"request_id": requestID, "args": createArgs()})
+// createBody is that call as the act transport's body.
+func createBody() string {
+	raw, _ := json.Marshal(map[string]any{"args": createArgs()})
 	return string(raw)
 }
 
-// requestOperation is the operation the act transport derives for one call
-// under one request id and token — what every write the call makes is a step
-// of.
-func requestOperation(t *testing.T, token, requestID, tool string,
-	args map[string]any) string {
-
-	t.Helper()
-	op, err := builtin.RequestOperation(token, requestID, tool, args)
-	if err != nil {
-		t.Fatalf("RequestOperation: %v", err)
-	}
-	return op
-}
-
-// NOBODY BUT A PERSON ACTS. A disabled guard's caller is nobody — even on a
-// chart that names the reserved id, which the chart's own validation refuses
-// and this transport must not depend on — and a token no seat binds is a
-// credential acting as itself, which is what /operator/mcp is for. Each is
-// refused `unbound`, naming the remedy that fits it, and the tracker is never
-// reached. The bound token beside them is served, so a transport that refused
-// everybody fails here too.
-func TestAnUnboundOrAnonymousCallerCannotAct(t *testing.T) {
+// ANY PRINCIPAL THE GUARD RESOLVED MAY ACT, and is decided by the authority
+// table on what it holds. A person bound to a seat and a pipeline's token
+// bound to nobody are both served — a credential acting as itself is a
+// legitimate author, attributed under its own login — while a request the
+// guard found nobody behind is `401` and one it could not resolve is `503`,
+// and neither reaches the tracker.
+func TestAnyResolvedPrincipalMayAct(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name, token string
-		disabled    bool
-		status      int
-		code        httpjson.Code
-		remedy      string
+		name, bearer string
+		status       int
+		code         httpjson.Code
 	}{
-		{"a disabled guard's caller", "", true, http.StatusForbidden, operator.CodeUnbound, "api.auth"},
-		{"an unbound token", "ci-secret", false, http.StatusForbidden, operator.CodeUnbound,
-			"contact.crewlet_operator_id: ci"},
-		{"no credential", "", false, http.StatusUnauthorized, httpjson.CodeInvalidToken, ""},
-		{"a wrong credential", "guess", false, http.StatusUnauthorized, httpjson.CodeInvalidToken, ""},
+		{"a bound person", "founder", http.StatusOK, ""},
+		{"an unbound token", "ci", http.StatusOK, ""},
+		{"no credential", "", http.StatusUnauthorized, httpjson.CodeInvalidToken},
+		{"a wrong credential", "guess", http.StatusUnauthorized, httpjson.CodeInvalidToken},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			work := &recordingWork{}
-			h := guarded(actSurface(t, work), tc.disabled)
-			status, answer := act(t, h, tc.token, tracker.CreateWorkItemTool,
-				"application/json", createBody(requestA))
-			if status != tc.status || answer["error"] != string(tc.code) {
+			status, answer := act(t, guarded(actSurface(t, work)), tc.bearer,
+				tracker.CreateWorkItemTool, "application/json", createBody(), newKey())
+			if status != tc.status || (tc.code != "" && answer["error"] != string(tc.code)) {
 				t.Fatalf("answered %d %v, want %d %s", status, answer, tc.status, tc.code)
 			}
-			if tc.remedy != "" && !strings.Contains(answer["hint"].(string), tc.remedy) {
-				t.Errorf("the refusal's hint %q does not name the remedy %q",
-					answer["hint"], tc.remedy)
-			}
-			if actors, _ := work.writes(); len(actors) != 0 {
-				t.Errorf("a caller who is not a person reached the tracker as %+v", actors)
+			if actors, _ := work.writes(); (status == http.StatusOK) != (len(actors) == 1) {
+				t.Errorf("an answer of %d reached the tracker %d times", status, len(actors))
 			}
 		})
 	}
+}
 
+// THE AUTHORITY TABLE DECIDES, in the envelope every surface answers a refusal
+// with: `403 unauthorized`, the rule's reason and the grants that would have
+// admitted the caller — so a screen can say what would change the answer —
+// and nothing written.
+func TestAnActTheTableRefusesIsAnsweredInTheEnvelope(t *testing.T) {
+	t.Parallel()
 	work := &recordingWork{}
-	status, answer := act(t, guarded(actSurface(t, work), false), "founder-secret",
-		tracker.CreateWorkItemTool, "application/json", createBody(requestA))
-	if status != http.StatusOK {
-		t.Fatalf("the bound person was refused: %d %v", status, answer)
+	status, answer := act(t, guarded(actSurface(t, work)), "reader",
+		tracker.CreateWorkItemTool, "application/json", createBody(), newKey())
+	if status != http.StatusForbidden || answer["error"] != string(httpjson.CodeUnauthorized) {
+		t.Fatalf("a reader's create answered %d %v, want 403 unauthorized", status, answer)
+	}
+	grants, _ := answer["grants"].([]any)
+	if answer["reason"] == nil || !slices.Contains(grants, any(string(iam.GrantTracker))) {
+		t.Errorf("the refusal %v does not name its reason and the grant that "+
+			"would have admitted the caller", answer)
+	}
+	if actors, _ := work.writes(); len(actors) != 0 {
+		t.Errorf("a refused act reached the tracker as %+v", actors)
 	}
 }
 
-// A PERSON'S WRITE IS SIGNED BY THEIR TOKEN AND NAMES THEM. The author is the
-// credential and the kind `operator`, exactly as on the MCP transport — a
-// dashboard write reads in an audit as the same person's assistant's would —
-// and the bound seat rides beside them as the person whose own state it is.
-// The answer carries the tool's own receipt with the outcome and the position
-// lifted beside it, which is the floor the caller's next read waits for.
-func TestAnActWriteRecordsTheTokenAsAuthorAndTheBoundSeat(t *testing.T) {
+// A WRITE IS MADE AS ITS PRINCIPAL: a bound person as their seat, kind human,
+// with their login as the credential; an unbound token under its whole login,
+// kind operator. The answer carries the tool's own receipt with the outcome and
+// the position lifted beside it — the floor the caller's next read waits for —
+// and the operation the request was made under, which is what every write it
+// made derived its id from.
+func TestAnActWriteIsMadeAsItsPrincipal(t *testing.T) {
 	t.Parallel()
-	work := &recordingWork{}
-	status, answer := act(t, guarded(actSurface(t, work), false), "founder-secret",
-		tracker.CreateWorkItemTool, "application/json; charset=utf-8", createBody(requestA))
-	if status != http.StatusOK {
-		t.Fatalf("the bound person's create answered %d %v", status, answer)
-	}
-	actors, _ := work.writes()
-	if len(actors) != 1 {
-		t.Fatalf("one act wrote %d times", len(actors))
-	}
-	got := actors[0]
-	if got.Handle != "founder" || got.Kind != tracker.AuthorOperator || got.OperatorID != "founder" {
-		t.Errorf("the write is attributed as %+v — the author is the token and "+
-			"the kind says it is not a seat", got)
-	}
-	if got.Seat != "jane-founder" {
-		t.Errorf("the write names the seat %q, want the person the token is bound to", got.Seat)
-	}
-	if want := requestOperation(t, "founder", requestA, tracker.CreateWorkItemTool,
-		createArgs()); got.Operation != want {
+	for name, tc := range map[string]struct {
+		bearer, author, credential string
+		kind                       tracker.AuthorKind
+	}{
+		"a bound person":   {"founder", "jane-founder", "jane.founder", tracker.AuthorHuman},
+		"an unbound token": {"ci", "token:ci", "token:ci", tracker.AuthorOperator},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			work := &recordingWork{}
+			key := newKey()
+			status, answer := act(t, guarded(actSurface(t, work)), tc.bearer,
+				tracker.CreateWorkItemTool, "application/json; charset=utf-8",
+				createBody(), key)
+			if status != http.StatusOK {
+				t.Fatalf("the create answered %d %v", status, answer)
+			}
+			actors, ops := work.writes()
+			if len(actors) != 1 {
+				t.Fatalf("one act wrote %d times", len(actors))
+			}
+			got := actors[0]
+			if got.Handle != tc.author || got.Kind != tc.kind || got.OperatorID != tc.credential {
+				t.Errorf("the write is attributed as %+v, want %s (%s) through %s",
+					got, tc.author, tc.kind, tc.credential)
+			}
+			op, _ := answer["op_id"].(string)
+			if got.WorkKey != op || statelog.CheckCallerOpID(op) != nil {
+				t.Errorf("the write was made under %q and the answer names %q — "+
+					"the op_id a retry sends back must be the one it was made under",
+					got.WorkKey, op)
+			}
+			at, _ := statelog.OpMintedAt(key)
+			if derived, _ := statelog.OpMintedAt(ops[0]); !derived.Equal(at) {
+				t.Errorf("the write's operation carries the instant %v, want the "+
+					"key's own %v", derived, at)
+			}
+			if answer["tool"] != tracker.CreateWorkItemTool || answer["outcome"] != "applied" ||
+				answer["position"] != "CREWLET_TRACKER_LOG@1:4711" {
 
-		t.Errorf("the write carries the operation %q, want %q: the one the "+
-			"request id names, scoped to the token that sent it", got.Operation, want)
-	}
-
-	if answer["tool"] != tracker.CreateWorkItemTool || answer["outcome"] != "applied" ||
-		answer["position"] != "CREWLET_TRACKER_LOG@1:4711" {
-
-		t.Errorf("the act answered %v, want the tool, applied and the position", answer)
-	}
-	receipt, ok := answer["receipt"].(map[string]any)
-	if !ok || receipt["key"] != "ENG-9" {
-		t.Errorf("the receipt is %v, want the tool's own answer carrying the key it minted",
-			answer["receipt"])
+				t.Errorf("the act answered %v, want the tool, applied and the position", answer)
+			}
+			receipt, ok := answer["receipt"].(map[string]any)
+			if !ok || receipt["key"] != "ENG-9" {
+				t.Errorf("the receipt is %v, want the tool's own answer carrying the key",
+					answer["receipt"])
+			}
+		})
 	}
 }
 
 // A RETRY IS ONE WRITE. A person whose write answered nothing sends it again
-// under the SAME request id, and the operation id every derived write carries
-// is then the first attempt's rather than a new one. A new
-// gesture carries a new id and is a new write. The id is compared in its
-// canonical spelling, so a client that upper-cased it on the retry is still
-// retrying.
-func TestARetriedActWithOneRequestIdIsOneWrite(t *testing.T) {
+// under the SAME key — or the op_id the answer named, which is the same
+// operation — and every write it derives is then the first attempt's rather
+// than a new one. A new gesture carries a new key and is a new write.
+//
+// AND ONE KEY FROM ANOTHER PRINCIPAL IS ANOTHER OPERATION. The key is scoped by
+// who sent it, so nobody collapses — or suppresses — a write of somebody
+// else's by sending its key first.
+func TestARetriedActIsOneWrite(t *testing.T) {
 	t.Parallel()
 	work := &recordingWork{}
-	h := guarded(actSurface(t, work), false)
-	for _, id := range []string{requestA, strings.ToUpper(requestA), requestB} {
-		if status, answer := act(t, h, "founder-secret", tracker.CreateWorkItemTool,
-			"application/json", createBody(id)); status != http.StatusOK {
-			t.Fatalf("request %s answered %d %v", id, status, answer)
+	h := guarded(actSurface(t, work))
+	first, second := newKey(), newKey()
+	_, answer := act(t, h, "founder", tracker.CreateWorkItemTool, "application/json",
+		createBody(), first)
+	returned, _ := answer["op_id"].(string)
+	for _, key := range []string{first, returned, second} {
+		if status, answer := act(t, h, "founder", tracker.CreateWorkItemTool,
+			"application/json", createBody(), key); status != http.StatusOK {
+			t.Fatalf("key %s answered %d %v", key, status, answer)
 		}
 	}
 	_, ops := work.writes()
-	if len(ops) != 3 {
-		t.Fatalf("three acts reached the writer %d times", len(ops))
+	ids := work.filed()
+	if len(ops) != 4 {
+		t.Fatalf("four acts reached the writer %d times", len(ops))
 	}
-	if ops[0] != ops[1] {
-		t.Errorf("a retry of one request wrote under %q and then %q — the ledger "+
-			"cannot collapse it, so it is a second item", ops[0], ops[1])
+	if ops[0] != ops[1] || ops[0] != ops[2] || ids[0] != ids[1] || ids[0] != ids[2] {
+		t.Errorf("one request sent three times wrote under %v filing %v — the "+
+			"ledger cannot collapse it, so it is a second item", ops[:3], ids[:3])
 	}
-	if ops[2] == ops[0] {
+	if ops[3] == ops[0] {
 		t.Errorf("a second gesture wrote under the first one's operation %q", ops[0])
 	}
-	if op := requestOperation(t, "founder", requestA, tracker.CreateWorkItemTool,
-		createArgs()); !strings.HasPrefix(ops[0], op+".") {
 
-		t.Errorf("the create wrote under %q, which is no step of %q — the "+
-			"operation the request id names", ops[0], op)
-	}
-
-	// AND ONE ID FROM ANOTHER TOKEN IS ANOTHER REQUEST. The key is the
-	// credential's and the request's together, so nobody collapses — or
-	// suppresses — a write of somebody else's by sending its id first.
 	other := &recordingWork{}
-	founder := guarded(actSurface(t, other), false)
-	cofounder := guarded(cofounderSurface(t, other), false)
-	act(t, founder, "founder-secret", tracker.CreateWorkItemTool, "application/json", createBody(requestA))
-	act(t, cofounder, "cofounder-secret", tracker.CreateWorkItemTool, "application/json", createBody(requestA))
-	if _, crossed := other.writes(); len(crossed) != 2 || crossed[0] == crossed[1] {
-		t.Errorf("two people sending one request id wrote under %v — the second "+
+	both := guarded(actSurface(t, other))
+	act(t, both, "founder", tracker.CreateWorkItemTool, "application/json", createBody(), first)
+	act(t, both, "cofounder", tracker.CreateWorkItemTool, "application/json", createBody(), first)
+	// AND THE OP_ID THE FIRST PERSON WAS ANSWERED, sent by somebody else,
+	// is scoped again under the sender rather than taken as it is.
+	act(t, both, "cofounder", tracker.CreateWorkItemTool, "application/json", createBody(), returned)
+	if _, crossed := other.writes(); len(crossed) != 3 ||
+		crossed[1] == crossed[0] || crossed[2] == crossed[0] {
+
+		t.Errorf("two people sending one key wrote under %v — the second "+
 			"would be collapsed into the first person's write", crossed)
 	}
 }
 
 // A WRITE NOBODY CAN VOUCH FOR IS ANSWERED AS ONE: 503 `unavailable` WITH
-// `outcome: unknown` beside it — the shape an interrupted call answers — and a
-// next step a person can take.
+// `outcome: unknown` beside it, the operation to retry under, and a
+// Retry-After — the shape an interrupted call answers.
 //
-// A tracker write whose outcome is unknown comes back from its tool as a
-// failed result of class `unavailable` (never a receipt carrying the word,
-// whose key and version would read as the change made). But `unavailable` is
-// also what a tool answers when it refused BEFORE writing anything, and the
-// dashboard reads a 503 `unavailable` with no outcome as "nothing was
-// written": a person told that about a create that landed files it again
-// under a new gesture — a second item. So the class alone is not the answer;
-// the outcome is. And the way on is the person's own: the same request again,
-// under the same `request_id` — never an `op_id`, which this transport refuses
-// beside a request.
+// `unavailable` is also what a tool answers when it refused BEFORE writing
+// anything, and a client reads a 503 with no outcome as "nothing was written":
+// a person told that about a create that landed files it again under a new
+// gesture — a second item. So the class alone is not the answer; the outcome
+// is. And the way on is the person's own: the same request under the same key,
+// never an `op_id` argument, which this transport refuses.
 func TestAnActWhoseWriteIsUnknownSaysSo(t *testing.T) {
 	t.Parallel()
 	work := &recordingWork{outcome: statelog.OutcomeUnknown}
-	status, answer := act(t, guarded(actSurface(t, work), false), "founder-secret",
-		tracker.CreateWorkItemTool, "application/json", createBody(requestA))
-	if status != http.StatusServiceUnavailable || answer["error"] != "unavailable" {
-		t.Fatalf("an unknown create answered %d %v, want 503 unavailable", status, answer)
+	key := newKey()
+	h := guarded(actSurface(t, work))
+	r := httptest.NewRequest(http.MethodPost, operator.ActPathPrefix+tracker.CreateWorkItemTool,
+		strings.NewReader(createBody()))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Authorization", "Bearer founder")
+	r.Header.Set(opkey.Header, key)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	var answer map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &answer); err != nil {
+		t.Fatalf("answer is not JSON: %q", rec.Body)
+	}
+	if rec.Code != http.StatusServiceUnavailable || answer["error"] != "unavailable" {
+		t.Fatalf("an unknown create answered %d %v, want 503 unavailable", rec.Code, answer)
 	}
 	if answer["outcome"] != string(statelog.OutcomeUnknown) {
 		t.Errorf("an unknown create answered outcome %v, want unknown — the class "+
 			"alone reads as a refusal that wrote nothing", answer["outcome"])
 	}
-	if detail, _ := answer["detail"].(string); strings.Contains(detail, "op_id") {
-		t.Errorf("a person is told to send an op_id, which this transport refuses "+
-			"beside a request: %s", detail)
+	actors, _ := work.writes()
+	if len(actors) != 1 || answer["op_id"] != actors[0].WorkKey {
+		t.Errorf("the answer names op_id %v; the write was made under %+v",
+			answer["op_id"], actors)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Error("a write this node can settle by being asked again answered no Retry-After")
+	}
+	if detail, _ := answer["tool_detail"].(string); strings.Contains(detail, "`op_id`") {
+		t.Errorf("a person is told to send an op_id argument, which this transport "+
+			"refuses: %s", detail)
 	}
 }
 
-// AND ON EVERY STORE, not only the tracker's create. The same request id sent
-// twice reaches a knowledge-base write under one call key — the key its
-// operation is derived from — and a project write under one operation, and a
-// second request id reaches each under another. These were the writes whose
-// operations were minted fresh per call, so a retried page comment or tag
-// declaration was a second record.
+// AND ON EVERY STORE, not only the tracker's create. The same key sent twice
+// reaches a knowledge-base write under one operation key and a project write
+// under one operation, and a second key reaches each under another. These
+// were the writes whose operations were minted fresh per call, so a retried
+// page comment or tag declaration was a second record.
 func TestARetriedActIsOneWriteOnEveryStore(t *testing.T) {
 	t.Parallel()
 	kb := &recordingPages{}
 	project := &recordingProject{}
-	s := newSurface(t, operator.Options{
-		Work: builtin.WorkDeps{
-			Reader: stubWorkReader{}, Writer: (&recordingWork{}).writer,
-			ProjectWriter: func(builtin.Actor) builtin.ProjectWriter { return project },
-			Actor:         operator.WorkActor(boundChart, nil),
-		},
-		Pages: builtin.PageDeps{Reader: kb, Writer: kb, Actor: operator.PageActor},
-		Org:   boundChart,
-	})
-	h := guarded(s, false)
+	h := guarded(newSurface(t, operator.Options{
+		Halves: fixed(operator.Halves{
+			Work: builtin.WorkDeps{
+				Reader: stubWorkReader{}, Writer: (&recordingWork{}).writer,
+				ProjectWriter: func(builtin.Actor) builtin.ProjectWriter { return project },
+			},
+			Pages: builtin.PageDeps{Reader: kb, Writer: kb},
+		}),
+		Org: company,
+	}))
 	const (
-		comment = `{"page":"Runbook","body":"the step is wrong"}`
-		tags    = `{"project":"ENG","tags_add":[{"slug":"ops","label":"Ops"}]}`
+		comment = `{"args":{"page":"Runbook","body":"the step is wrong"}}`
+		tags    = `{"args":{"project":"ENG","tags_add":[{"slug":"ops","label":"Ops"}]}}`
 	)
-	for _, id := range []string{requestA, requestA, requestB} {
-		if status, answer := act(t, h, "founder-secret", builtin.CommentOnPageTool,
-			"application/json", `{"request_id":"`+id+`","args":`+comment+`}`); status != http.StatusOK {
+	first, second := newKey(), newKey()
+	for _, key := range []string{first, first, second} {
+		if status, answer := act(t, h, "founder", builtin.CommentOnPageTool,
+			"application/json", comment, key); status != http.StatusOK {
 			t.Fatalf("comment_on_page answered %d %v", status, answer)
 		}
-		if status, answer := act(t, h, "founder-secret", tracker.WriteProjectTool,
-			"application/json", `{"request_id":"`+id+`","args":`+tags+`}`); status != http.StatusOK {
+		if status, answer := act(t, h, "founder", tracker.WriteProjectTool,
+			"application/json", tags, key); status != http.StatusOK {
 			t.Fatalf("write_project answered %d %v", status, answer)
 		}
 	}
-	var seeds []string
-	for _, key := range kb.keys() {
-		seeds = append(seeds, key.Seed)
-	}
-	for store, tc := range map[string]struct {
-		ops        []string
-		tool, args string
-	}{
-		"the knowledge base": {seeds, builtin.CommentOnPageTool, comment},
-		"the project":        {project.ops(), tracker.WriteProjectTool, tags},
+	for store, ops := range map[string][]string{
+		"the knowledge base": kb.keys(),
+		"the project":        project.ops(),
 	} {
-		ops := tc.ops
 		if len(ops) != 3 {
 			t.Fatalf("%s took %d writes for three acts", store, len(ops))
 		}
-		var args map[string]any
-		if err := json.Unmarshal([]byte(tc.args), &args); err != nil {
-			t.Fatal(err)
-		}
-		op := requestOperation(t, "founder", requestA, tc.tool, args)
-		if ops[0] != ops[1] || (ops[0] != op && !strings.HasPrefix(ops[0], op+".")) {
-			t.Errorf("%s took one request as %q and then %q, want the operation "+
-				"%q the request id names — a retry the ledger cannot collapse",
-				store, ops[0], ops[1], op)
+		if ops[0] == "" || ops[0] != ops[1] {
+			t.Errorf("%s took one request as %q and then %q — a retry the ledger "+
+				"cannot collapse", store, ops[0], ops[1])
 		}
 		if ops[2] == ops[0] {
 			t.Errorf("%s took a second gesture under the first one's %q", store, ops[0])
@@ -481,99 +486,127 @@ func (p *recordingProject) ops() []string {
 	return slices.Clone(p.opIDs)
 }
 
-// cofounderSurface is [actSurface] over a chart that also binds a second
-// person, behind a guard that holds both tokens.
-func cofounderSurface(t *testing.T, work *recordingWork) *operator.Server {
-	t.Helper()
-	chart := func() *org.Organization {
-		o := boundChart()
-		o.Roles = append(o.Roles, &org.Role{Name: "Kim Cofounder", Kind: org.KindHuman,
-			Contact: &org.HumanContact{CrewletOperatorID: "cofounder"}})
-		o.Normalize()
-		return o
+// THE ANSWER IS OFFERED TO SOMEBODY WITHOUT THE TRACKER.
+//
+// A person kept off the board may still post the answer to a question an open
+// ask on a work item puts to them — and whether one does is the item's, which
+// nobody has read when a screen asks what to enable. The table says so
+// ([authz.ErrUnresolved] for the comment), which is offerable, so the comment
+// control is enabled and the tool decides on the item; the board's ordinary
+// writes, which no ask admits, are not offered at all.
+func TestActsOffersTheAnswerToAPersonWithoutTracker(t *testing.T) {
+	t.Parallel()
+	s := actSurface(t, &recordingWork{})
+	acts, err := s.Acts(t.Context(), reader)
+	if err != nil {
+		t.Fatalf("Acts: %v", err)
 	}
-	s := newSurface(t, operator.Options{
-		Work: builtin.WorkDeps{
-			Reader: stubWorkReader{}, Writer: work.writer, Actor: operator.WorkActor(chart, nil),
-		},
-		Org: chart,
-	})
-	if s == nil {
-		t.Fatal("no surface")
+	if !slices.Contains(acts, tracker.CommentOnWorkTool) {
+		t.Errorf("somebody without the tracker is not offered %s, so an ask put "+
+			"to them could never be answered from a screen: %v",
+			tracker.CommentOnWorkTool, acts)
 	}
-	return s
+	for _, write := range []string{tracker.CreateWorkItemTool, tracker.UpdateWorkItemTool} {
+		if slices.Contains(acts, write) {
+			t.Errorf("somebody without the tracker is offered %s, which no ask "+
+				"admits them to: %v", write, acts)
+		}
+	}
 }
 
 // A READ IS NOT SERVED HERE. The socket answers every question the dashboard
-// asks; a second read path would be a second answer to them.
+// asks; a second read path would be a second answer to them. And a name the
+// catalogue does not hold is not found, rather than resolved to something
+// near it.
 func TestAReadToolIsRefusedOnTheActTransport(t *testing.T) {
 	t.Parallel()
 	s := actSurface(t, &recordingWork{})
-	body := `{"request_id":"` + requestA + `","args":{"container":"workspace"}}`
-	status, answer := act(t, guarded(s, false), "founder-secret", tracker.ListWorkItemsTool,
-		"application/json", body)
-	if status != http.StatusBadRequest || answer["error"] != string(operator.CodeReadOnlyTool) {
+	body := `{"args":{"container":"workspace"}}`
+	status, answer := act(t, guarded(s), "founder", tracker.ListWorkItemsTool,
+		"application/json", body, newKey())
+	if status != http.StatusBadRequest || answer["error"] != string(httpjson.CodeReadOnlyTool) {
 		t.Fatalf("a read answered %d %v, want 400 read_only_tool", status, answer)
 	}
-	if slices.Contains(s.Acts(), tracker.ListWorkItemsTool) {
-		t.Errorf("the act list %v offers a read", s.Acts())
+	acts, err := s.Acts(t.Context(), founder)
+	if err != nil {
+		t.Fatalf("Acts: %v", err)
 	}
-	// AND A NAME THE CATALOGUE DOES NOT HOLD IS NOT FOUND, rather than
-	// resolved to something near it.
-	status, answer = act(t, guarded(s, false), "founder-secret", "run_sandbox",
-		"application/json", body)
-	if status != http.StatusNotFound || answer["error"] != string(operator.CodeUnknownTool) {
+	if slices.Contains(acts, tracker.ListWorkItemsTool) {
+		t.Errorf("the act list %v offers a read", acts)
+	}
+	if !slices.Contains(acts, tracker.CreateWorkItemTool) {
+		t.Errorf("the act list %v does not offer the create the founder may make", acts)
+	}
+	// AND WHAT THE TABLE WOULD NEVER ADMIT IS NOT OFFERED: a screen enables
+	// exactly the controls a press of could be served.
+	if acts, _ := s.Acts(t.Context(), reader); slices.Contains(acts, tracker.CreateWorkItemTool) {
+		t.Errorf("a reader is offered %v, including a create the table refuses them", acts)
+	}
+	status, answer = act(t, guarded(s), "founder", "run_sandbox",
+		"application/json", body, newKey())
+	if status != http.StatusNotFound || answer["error"] != string(httpjson.CodeUnknownTool) {
 		t.Fatalf("an unknown tool answered %d %v, want 404 unknown_tool", status, answer)
 	}
 }
 
 // A CROSS-SITE FORM CANNOT WRITE. A browser posts `text/plain`, a urlencoded
 // or a multipart form to any origin with no preflight, and a body shaped like
-// JSON would otherwise reach a write; only a body declared as JSON is read.
-// A malformed envelope and an absent or nil request id are refused before any
-// tool runs, each by its own code.
+// JSON would otherwise reach a write; only a body declared as JSON is read. A
+// malformed body and an absent or unusable operation key are refused before
+// any tool runs, each by its own code.
 func TestAFormPostCannotReachTheActTransport(t *testing.T) {
 	t.Parallel()
-	good := createBody(requestA)
+	good := createBody()
 	cases := []struct {
-		name, contentType, body string
-		status                  int
-		code                    httpjson.Code
+		name, contentType, body, key string
+		status                       int
+		code                         httpjson.Code
 	}{
-		{"text/plain", "text/plain", good, http.StatusUnsupportedMediaType, operator.CodeUnsupportedMediaType},
-		{"a urlencoded form", "application/x-www-form-urlencoded", good,
-			http.StatusUnsupportedMediaType, operator.CodeUnsupportedMediaType},
-		{"a multipart form", "multipart/form-data; boundary=x", good,
-			http.StatusUnsupportedMediaType, operator.CodeUnsupportedMediaType},
-		{"no content type", "", good, http.StatusUnsupportedMediaType, operator.CodeUnsupportedMediaType},
-		{"JSON in another charset", "application/json; charset=latin1", good,
-			http.StatusUnsupportedMediaType, operator.CodeUnsupportedMediaType},
-		{"a body that is not JSON", "application/json", "title=x", http.StatusBadRequest, httpjson.CodeInvalidBody},
-		{"a key the envelope does not take", "application/json",
-			`{"requestId":"` + requestA + `","args":{}}`, http.StatusBadRequest, httpjson.CodeInvalidBody},
-		{"two objects", "application/json", good + good, http.StatusBadRequest, httpjson.CodeInvalidBody},
-		{"no request id", "application/json", `{"args":{"title":"x"}}`,
-			http.StatusBadRequest, operator.CodeInvalidRequestID},
-		{"a request id that is not a uuid", "application/json", `{"request_id":"r-1","args":{}}`,
-			http.StatusBadRequest, operator.CodeInvalidRequestID},
-		{"the nil uuid", "application/json",
-			`{"request_id":"00000000-0000-0000-0000-000000000000","args":{}}`,
-			http.StatusBadRequest, operator.CodeInvalidRequestID},
-		// A RANDOM UUID CARRIES NO INSTANT, and the operation derived from
+		{"text/plain", "text/plain", good, newKey(), http.StatusUnsupportedMediaType,
+			httpjson.CodeUnsupportedMediaType},
+		{"a urlencoded form", "application/x-www-form-urlencoded", good, newKey(),
+			http.StatusUnsupportedMediaType, httpjson.CodeUnsupportedMediaType},
+		{"a multipart form", "multipart/form-data; boundary=x", good, newKey(),
+			http.StatusUnsupportedMediaType, httpjson.CodeUnsupportedMediaType},
+		{"no content type", "", good, newKey(), http.StatusUnsupportedMediaType,
+			httpjson.CodeUnsupportedMediaType},
+		{"JSON in another charset", "application/json; charset=latin1", good, newKey(),
+			http.StatusUnsupportedMediaType, httpjson.CodeUnsupportedMediaType},
+		{"a body that is not JSON", "application/json", "title=x", newKey(),
+			http.StatusBadRequest, httpjson.CodeInvalidBody},
+		// A KEY THE BODY DOES NOT TAKE, an operation above all: a client
+		// naming one in the body rather than the header believed its retry
+		// was the same write.
+		{"an operation id in the body", "application/json",
+			`{"op_id":"` + newKey() + `","args":{}}`, newKey(),
+			http.StatusBadRequest, httpjson.CodeInvalidBody},
+		{"two objects", "application/json", good + good, newKey(),
+			http.StatusBadRequest, httpjson.CodeInvalidBody},
+		{"no operation key", "application/json", good, "",
+			http.StatusBadRequest, httpjson.CodeOpIDInvalid},
+		{"a key that is not an operation id", "application/json", good, "r-1",
+			http.StatusBadRequest, httpjson.CodeOpIDInvalid},
+		{"the nil uuid", "application/json", good, uuid.Nil.String(),
+			http.StatusBadRequest, httpjson.CodeOpIDInvalid},
+		// A RANDOM UUID CARRIES NO INSTANT, and an operation derived from
 		// it would read as minted before every row a node's operation
 		// ledger ever lost: answered `unknown` without being made, first
 		// attempt included, on every node old enough to have swept one.
-		{"a version 4 uuid", "application/json", createBody(uuid.NewString()),
-			http.StatusBadRequest, operator.CodeInvalidRequestID},
+		{"a version 4 uuid", "application/json", good, uuid.NewString(),
+			http.StatusBadRequest, httpjson.CodeOpIDInvalid},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			work := &recordingWork{}
-			status, answer := act(t, guarded(actSurface(t, work), false), "founder-secret",
-				tracker.CreateWorkItemTool, tc.contentType, tc.body)
+			status, answer := act(t, guarded(actSurface(t, work)), "founder",
+				tracker.CreateWorkItemTool, tc.contentType, tc.body, tc.key)
 			if status != tc.status || answer["error"] != string(tc.code) {
 				t.Fatalf("answered %d %v, want %d %s", status, answer, tc.status, tc.code)
+			}
+			if tc.code == httpjson.CodeOpIDInvalid && answer["field"] != opkey.Header {
+				t.Errorf("the key's refusal names %v, want the header it is sent in",
+					answer["field"])
 			}
 			if actors, _ := work.writes(); len(actors) != 0 {
 				t.Errorf("a refused request reached the tracker")
@@ -582,27 +615,57 @@ func TestAFormPostCannotReachTheActTransport(t *testing.T) {
 	}
 }
 
-// EVERY REFUSAL CLASS ANSWERS ONE STATUS, and no transport code is also a
-// class. The first is what lets a client decide what to do next from the
-// status alone; the second is what lets it branch on `error` without knowing
-// which half of the vocabulary a code came from.
+// EVERY REFUSAL CLASS ANSWERS ONE STATUS, UNDER ITS OWN NAME, and no transport
+// code is also a class. The first is what lets a client decide what to do next
+// from the status alone; the second is what lets it branch on `error` without
+// knowing which half of the vocabulary a code came from. Asked of [operator.Fail]
+// itself, the one writer every transport answers a refusal through, so what is
+// held is what goes out: a class waiting can clear is a 503 carrying a
+// Retry-After, every other a 4xx, and a class this build does not know is an
+// opaque 500 rather than a status nobody chose.
 func TestEveryRefusalCodeMapsToOneStatus(t *testing.T) {
 	t.Parallel()
+	answer := func(class crewletmcp.Refusal) (*httptest.ResponseRecorder, map[string]any) {
+		rec := httptest.NewRecorder()
+		operator.Fail(rec, crewletmcp.Classify(class, errors.New("the reason")),
+			"the sentence", newKey(), nil)
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("%q answered a body that is not JSON: %q", class, rec.Body)
+		}
+		return rec, body
+	}
 	for _, class := range crewletmcp.Refusals {
-		status, ok := operator.RefusalStatus(class)
-		if !ok {
-			t.Errorf("the refusal class %q answers no status on the act transport", class)
-			continue
+		rec, body := answer(class)
+		code, _ := body["error"].(string)
+		// A FAULT IS THE ONE CLASS ANSWERED 500, and the only 500 a class
+		// may answer: every other one is a refusal the caller acts on.
+		fault := class == crewletmcp.RefusalInternalError
+		switch {
+		case rec.Code < 400 || rec.Code > 599:
+			t.Errorf("the refusal class %q answers %d, which is no refusal", class, rec.Code)
+		case fault != (rec.Code == http.StatusInternalServerError):
+			t.Errorf("the refusal class %q answers %d; only a fault is a 500", class, rec.Code)
+		case code != string(class):
+			t.Errorf("the refusal class %q is answered as %q — a client reads one "+
+				"vocabulary whichever transport refused it", class, code)
+		case !httpjson.Code(code).Valid():
+			t.Errorf("the code %q has no sentence on the envelope's table", code)
 		}
-		if status < 400 || status > 599 {
-			t.Errorf("the refusal class %q answers %d, which is not a refusal", class, status)
+		if again, _ := answer(class); again.Code != rec.Code {
+			t.Errorf("the refusal class %q answered %d and then %d", class,
+				rec.Code, again.Code)
+		}
+		if comeBack := rec.Code == http.StatusServiceUnavailable; comeBack &&
+			rec.Header().Get("Retry-After") == "" {
+			t.Errorf("the refusal class %q answers 503 with no Retry-After", class)
+		}
+		if after := rec.Header().Get("Retry-After"); fault && after != "" {
+			t.Errorf("a fault told its caller to come back in %s seconds", after)
 		}
 	}
-	if _, ok := operator.RefusalStatus(crewletmcp.Refusal("teapot")); ok {
-		t.Error("a class this build does not know was given a status")
-	}
-	if _, ok := operator.RefusalStatus(""); ok {
-		t.Error("an unclassified failure was given a status")
+	if rec, _ := answer("teapot"); rec.Code != http.StatusInternalServerError {
+		t.Errorf("a class this build does not know answered %d, want an opaque 500", rec.Code)
 	}
 	seen := map[string]bool{}
 	for _, code := range operator.ActTransportCodes {
@@ -613,6 +676,9 @@ func TestEveryRefusalCodeMapsToOneStatus(t *testing.T) {
 		if crewletmcp.Refusal(code).Valid() {
 			t.Errorf("the transport code %q is also a refusal class", code)
 		}
+		if !code.Valid() {
+			t.Errorf("the transport code %q has no sentence on the envelope's table", code)
+		}
 	}
 	if len(operator.ActTransportCodes) < 8 {
 		t.Fatalf("the transport lists %d codes; this check is certifying nothing",
@@ -621,17 +687,16 @@ func TestEveryRefusalCodeMapsToOneStatus(t *testing.T) {
 }
 
 // A TOOL'S REFUSAL REACHES THE PERSON AS ITS CLASS, with the tool's own
-// sentence as the detail, at the status the class maps to — here the one a
-// create against a project the stub tracker does not know comes back with.
+// sentence as the detail, at the status the class maps to — here the one an
+// update of an item the stub tracker does not hold comes back with.
 func TestAToolRefusalIsAnsweredByItsClass(t *testing.T) {
 	t.Parallel()
-	body := `{"request_id":"` + requestA + `","args":{"item":"ENG-404","status":"done"}}`
-	status, answer := act(t, guarded(actSurface(t, &recordingWork{}), false), "founder-secret",
-		tracker.UpdateWorkItemTool, "application/json", body)
-	want, _ := operator.RefusalStatus(crewletmcp.RefusalNotFound)
-	if status != want || answer["error"] != string(crewletmcp.RefusalNotFound) {
-		t.Fatalf("an update of a missing item answered %d %v, want %d not_found",
-			status, answer, want)
+	body := `{"args":{"item":"ENG-404","status":"done"}}`
+	status, answer := act(t, guarded(actSurface(t, &recordingWork{})), "founder",
+		tracker.UpdateWorkItemTool, "application/json", body, newKey())
+	if status != http.StatusNotFound || answer["error"] != string(crewletmcp.RefusalNotFound) {
+		t.Fatalf("an update of a missing item answered %d %v, want 404 not_found",
+			status, answer)
 	}
 	if detail, _ := answer["detail"].(string); !strings.Contains(detail, "ENG-404") ||
 		answer["tool"] != tracker.UpdateWorkItemTool {
@@ -654,7 +719,6 @@ func TestTheLargestLegalPageFitsTheActBody(t *testing.T) {
 	// told otherwise, and this is the browser's envelope being measured.
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(map[string]any{
-		"request_id": requestA,
 		"args": map[string]any{
 			"container": "ENG", "title": strings.Repeat("T", pages.MaxTitle),
 			"body": pageBody, "labels": []string{"runbook", "security"},
@@ -666,17 +730,16 @@ func TestTheLargestLegalPageFitsTheActBody(t *testing.T) {
 	if buf.Len() <= pages.MaxBody*2 {
 		t.Fatalf("the envelope is %d bytes; the case is not measuring the worst escape", buf.Len())
 	}
-	status, answer := act(t, guarded(actSurface(t, &recordingWork{}), false), "founder-secret",
-		builtin.WritePageTool, "application/json", buf.String())
+	status, answer := act(t, guarded(actSurface(t, &recordingWork{})), "founder",
+		builtin.WritePageTool, "application/json", buf.String(), newKey())
 	if status != http.StatusOK {
 		t.Fatalf("the largest legal page (%d bytes on the wire, cap %d) answered %d %v",
 			buf.Len(), operator.MaxActBody, status, answer)
 	}
 	// AND THE CAP STILL BINDS just past it.
-	over := `{"request_id":"` + requestA + `","args":{"body":"` +
-		strings.Repeat("x", operator.MaxActBody) + `"}}`
-	if status, answer := act(t, guarded(actSurface(t, &recordingWork{}), false), "founder-secret",
-		builtin.WritePageTool, "application/json", over); status != http.StatusRequestEntityTooLarge ||
+	over := `{"args":{"body":"` + strings.Repeat("x", operator.MaxActBody) + `"}}`
+	if status, answer := act(t, guarded(actSurface(t, &recordingWork{})), "founder",
+		builtin.WritePageTool, "application/json", over, newKey()); status != http.StatusRequestEntityTooLarge ||
 		answer["error"] != string(httpjson.CodeBodyTooLarge) {
 
 		t.Errorf("a body past the cap answered %d %v, want 413 body_too_large", status, answer)
@@ -719,19 +782,18 @@ func TestTheActAnswerLiftsTheToolsOwnOutcome(t *testing.T) {
 }
 
 // A PAGE WRITE STATES ITS OUTCOME AND POSITION, as every work write always
-// has. It answered neither until this transport needed them, so a person's
-// assistant that wrote a page had nothing to hand back as `min_position`, and
-// the read after the write could miss it.
+// has, so a person's assistant that wrote a page has something to hand back as
+// `min_position` and the read after the write includes it.
 func TestAPageWriteStatesItsOutcomeAndPosition(t *testing.T) {
 	t.Parallel()
 	kb := &positionedPages{}
 	s := newSurface(t, operator.Options{
-		Pages: builtin.PageDeps{Reader: kb, Writer: kb, Actor: operator.PageActor},
-		Org:   boundChart,
+		Halves: fixed(operator.Halves{Pages: builtin.PageDeps{Reader: kb, Writer: kb}}),
+		Org:    company,
 	})
-	body := `{"request_id":"` + requestA + `","args":{"page":"Runbook","body":"the step is wrong"}}`
-	status, answer := act(t, guarded(s, false), "founder-secret", builtin.CommentOnPageTool,
-		"application/json", body)
+	body := `{"args":{"page":"Runbook","body":"the step is wrong"}}`
+	status, answer := act(t, guarded(s), "founder", builtin.CommentOnPageTool,
+		"application/json", body, newKey())
 	if status != http.StatusOK || answer["outcome"] != "pending" ||
 		answer["position"] != "CREWLET_PAGES_LOG@2:88" {
 
@@ -754,15 +816,17 @@ func (p *positionedPages) Comment(ctx context.Context, actor pages.Actor, id str
 	}}, err
 }
 
-// AN INTERRUPTED CALL SAYS, IN A KEY, THAT NOBODY KNOWS WHETHER IT LANDED.
+// AN INTERRUPTED CALL SAYS, IN A FIELD, THAT NOBODY KNOWS WHETHER IT LANDED.
 //
-// Both of the transport's 503s carry the class `unavailable`: a tool that
+// Two of the transport's 503s carry the class `unavailable`: a tool that
 // refused before writing anything (a node in maintenance, a sealed log), and
 // a call whose context ended while the write was in flight. They mean
 // opposite things to a person — "nothing happened, try again" and "it may
 // have happened" — and the sentence alone is prose no client should parse.
-// So the interrupted answer carries `outcome: unknown` and the refusal does
-// not, which is how the dashboard tells a person the truth about each.
+// So the interrupted answer carries `outcome: unknown` and the operation to
+// retry under, and the refusal does not, which is how the dashboard tells a
+// person the truth about each. A caller that hung up is answered nothing, and
+// the access log reads it as the client's.
 func TestAnInterruptedActSaysItsOutcomeIsUnknown(t *testing.T) {
 	t.Parallel()
 	decode := func(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
@@ -773,22 +837,26 @@ func TestAnInterruptedActSaysItsOutcomeIsUnknown(t *testing.T) {
 		}
 		return body
 	}
+	key := newKey()
 	r := httptest.NewRequest(http.MethodPost, operator.ActPathPrefix+"create_work_item", nil)
 
 	rec := httptest.NewRecorder()
-	operator.Interrupted(rec, r, "create_work_item", context.DeadlineExceeded, nil)
+	operator.Interrupted(rec, r, key, "create_work_item", context.DeadlineExceeded)
 	body := decode(t, rec)
 	if rec.Code != http.StatusServiceUnavailable || body["error"] != "unavailable" {
 		t.Fatalf("an interrupted call answered %d %v, want 503 unavailable", rec.Code, body)
 	}
-	if body["outcome"] != string(statelog.OutcomeUnknown) {
-		t.Errorf("an interrupted call answered outcome %v, want unknown — a client "+
-			"reading only the class tells a person nothing happened", body["outcome"])
+	if body["outcome"] != string(statelog.OutcomeUnknown) || body["op_id"] != key {
+		t.Errorf("an interrupted call answered %v, want outcome unknown under "+
+			"op_id %s — a client reading only the class tells a person nothing "+
+			"happened", body, key)
 	}
 
 	rec = httptest.NewRecorder()
-	operator.Refuse(rec, r, "create_work_item", "the tracker is sealed for maintenance",
-		crewletmcp.RefusalUnavailable, nil)
+	operator.Fail(rec, crewletmcp.Classify(crewletmcp.RefusalUnavailable,
+		errors.New("the tracker is sealed for maintenance")),
+		"the tracker is sealed for maintenance", key,
+		httpjson.Detail{"tool": "create_work_item"})
 	body = decode(t, rec)
 	if rec.Code != http.StatusServiceUnavailable || body["error"] != "unavailable" {
 		t.Fatalf("a tool's unavailable refusal answered %d %v", rec.Code, body)
@@ -796,5 +864,17 @@ func TestAnInterruptedActSaysItsOutcomeIsUnknown(t *testing.T) {
 	if _, has := body["outcome"]; has {
 		t.Errorf("a tool's refusal claims an outcome %v — it wrote nothing, and "+
 			"saying unknown would tell a person it may have", body["outcome"])
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Error("a refusal a wait can clear answered no Retry-After")
+	}
+
+	gone, cancel := context.WithCancel(t.Context())
+	cancel()
+	rec = httptest.NewRecorder()
+	operator.Interrupted(rec, r.WithContext(gone), key, "create_work_item", context.Canceled)
+	if rec.Code < 400 || rec.Code >= 500 {
+		t.Errorf("a call whose caller hung up was recorded as %d — a 5xx counts "+
+			"a closed tab as this node failing", rec.Code)
 	}
 }

@@ -45,11 +45,13 @@ import (
 // state here. So each row below stands up a pair: an organization this pass
 // has converged, and one where something is genuinely wrong IN A WAY A PERSON
 // HAS TO ACT ON. The two rows break in DIFFERENT ways on purpose — a scoped
-// organization key that cannot create an account, and a node with no keyring
-// to seal a token into — because between them they are the only worlds in
-// this package that put all four of this vendor's finding kinds through the
-// suite. Each outstanding world pins the EXACT kinds it reports, so it cannot
-// quietly converge and go back to certifying nothing.
+// organization key that cannot create an account, and the dashboard's
+// read-only check over agents that have no account yet — because between
+// them they are the only worlds in this package that put three of this
+// vendor's four finding kinds through the suite (the fourth, grant_pending,
+// is the provider's own wait and owed by nobody here). Each outstanding world
+// pins the EXACT kinds it reports, so it cannot quietly converge and go back
+// to certifying nothing.
 //
 // # What counts as a write here, and what does not
 //
@@ -318,11 +320,10 @@ func accountIn(path, suffix string) string {
 // sealedStore is this deployment's own sealed store, and the second place a
 // pass can write.
 //
-// IT HAS NO Mints METHOD, so [provision.CanMint] answers true — which is what
-// makes the pass do its real work. A sink that cannot mint short-circuits
-// every seat before the first request, and a harness whose CONVERGED world was
-// built on one would certify a pass that never ran. That posture is a world in
-// its own right here, and it is the second row's outstanding one.
+// IT IS A SINK, which is what makes the pass do its real work. A check runs
+// with none and creates nothing, and a harness whose CONVERGED world was built
+// on one would certify a pass that never wrote. That posture is a world in its
+// own right here, and it is the second row's outstanding one.
 type sealedStore struct {
 	// forgotten is what a teardown asked this sink to delete.
 	forgotten []string
@@ -449,7 +450,7 @@ func nimbus() *org.Organization {
 // *testing.T of the subtest that owns this world.
 func standUp(
 	t *testing.T, tb integrationtest.TB,
-	vendor *atlassianOrg, tune func(*org.Organization), keyring bool,
+	vendor *atlassianOrg, tune func(*org.Organization), check bool,
 ) *world {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(vendor.serve))
@@ -465,15 +466,14 @@ func standUp(
 	}
 	store := &sealedStore{}
 
-	// A NODE WITH NO KEYRING IS HANDED [provision.ReadOnly], WHICH IS NOT
-	// NIL. nil is the command line's check; this is a running node that has
-	// been told it may seal nothing, and the pass has to tell the two apart
-	// — see [atlassian.Options.Sink]. The store is still built either way so
-	// the write counter reads the same on both, and stays at zero on this
-	// one, which is the point.
+	// A CHECK IS HANDED NO SINK, which is what the dashboard's read-only
+	// pass and the command line's check both pass — see
+	// [atlassian.Options.Sink]. The store is still built either way so the
+	// write counter reads the same on both, and stays at zero on this one,
+	// which is the point.
 	var sink provision.TokenSink = store
-	if !keyring {
-		sink = provision.ReadOnly()
+	if check {
+		sink = nil
 	}
 
 	return &world{vendor: vendor, store: store, opts: atlassian.Options{
@@ -514,7 +514,7 @@ func convergedAtlassian(
 ) *world {
 	t.Helper()
 	vendor := &atlassianOrg{}
-	w := standUp(t, tb, vendor, tune, true)
+	w := standUp(t, tb, vendor, tune, false)
 	plan := w.opts.Plan
 
 	// MORE THAN ONE PASS, because this vendor genuinely takes more than one.
@@ -644,10 +644,9 @@ type broken struct {
 	// answers a scoped organization key. See [atlassianOrg.scopedKey].
 	scopedKey bool
 
-	// keyring is whether this node can seal a credential at all. False
-	// hands the pass [provision.ReadOnly], which is what the reconcile loop
-	// hands a node with no secrets.keys.
-	keyring bool
+	// check runs the pass with no sink, as the dashboard's read-only pass
+	// does: it reads and reports and creates nothing.
+	check bool
 
 	// kinds is EXACTLY what a pass over this world reports, in order. Pinned
 	// rather than counted: a world that starts answering identity_missing
@@ -668,7 +667,7 @@ func outstandingAtlassian(
 ) *world {
 	t.Helper()
 	vendor := &atlassianOrg{scopedKey: b.scopedKey}
-	w := standUp(t, tb, vendor, tune, b.keyring)
+	w := standUp(t, tb, vendor, tune, b.check)
 
 	// THE WORLD PROVES ITSELF BEFORE THE SUITE SEES IT. The suite's own
 	// anti-vacuity clause would catch a world that reported nothing at all;
@@ -725,7 +724,7 @@ func TestTheAtlassianReconcilerMeetsTheContract(t *testing.T) {
 				// answers, and every agent silently has no identity. Only a
 				// person can fix it, at admin.atlassian.com, by issuing an
 				// unscoped key.
-				what: "an organization API key created with scopes", scopedKey: true, keyring: true,
+				what: "an organization API key created with scopes", scopedKey: true,
 				kinds: []integration.FindingKind{
 					integration.FindingIdentityFailed,
 					integration.FindingIdentityFailed,
@@ -758,16 +757,15 @@ func TestTheAtlassianReconcilerMeetsTheContract(t *testing.T) {
 				)
 			},
 			broken: broken{
-				// THE OTHER END OF THE SAME PASS, and the one no retry ever
-				// clears. A node handed [provision.ReadOnly] has nowhere to
-				// seal a minted token, so it must not create the account
-				// either — and it stays that way until somebody sets
-				// secrets.keys in the bootstrap configuration. The three
-				// seats report as having no account because they genuinely
-				// have none, and the two notes survive from the plan.
-				what: "a node with no keyring", keyring: false,
+				// THE OTHER END OF THE SAME PASS: what the dashboard's
+				// read-only check says about a company whose agents have no
+				// accounts yet. A check has nowhere to seal a minted token,
+				// so it creates nothing; the three seats report as having no
+				// account because they genuinely have none — the engine's
+				// work, done by the next writing pass — and the two notes
+				// are the person's, surviving from the plan.
+				what: "a read-only check before the first writing pass", check: true,
 				kinds: []integration.FindingKind{
-					integration.FindingCredentialMissing,
 					integration.FindingIdentityMissing,
 					integration.FindingIdentityMissing,
 					integration.FindingIdentityMissing,

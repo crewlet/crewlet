@@ -1,0 +1,287 @@
+package iamdomain_test
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
+	"github.com/crewlet/crewlet/internal/store"
+)
+
+// THE IDENTITY ESTATE IS CERTIFIED BY THE FRAMEWORK'S OWN SUITE, and it is the
+// FOURTH domain to run it — the third STRICT one.
+//
+// What the three before it could not exercise is the case this one is: a domain
+// whose ROWS ARE CIPHERTEXT. The suite's determinism half compares table
+// CONTENT rather than counting rows, which it has to here — two nodes writing
+// different ciphertext for one record would pass a count and fail the claim
+// that their tables are byte-identical. That the comparison holds at all is
+// what says the sealing happens at the WRITER rather than on each node, which
+// is what keeps a name, an address and a seed ciphertext on the log and in
+// every node's rows alike.
+func TestTheIdentityDomainIsACertifiedDomain(t *testing.T) {
+	t.Parallel()
+	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {
+		return statelogtest.Candidate{
+			Domain: iamdomain.Domain{},
+			// NO DIRECTORY SIGNAL: nothing here rebuilds a registry.
+			Applier: iamdomain.NewApplier("suite-node", nil),
+			// Migrate is nil: these tables ship in the replicated
+			// estate's own migrations, so a fresh store already has
+			// them. A domain that created its tables from test code
+			// would be a schema the suite proved and the migration did
+			// not.
+			Encode: encodeSuiteRecord,
+			// THE PRODUCTION TABLE, which is empty: the base format is
+			// every field this build writes. A row added to it needs a
+			// Carrying here that builds a record carrying the field
+			// through the writer's own encoder, and the suite refuses
+			// a table without one.
+			Fields: iamdomain.VersionedFields(),
+			Kinds:  suiteKinds(),
+			Rows:   iamdomain.NewRows,
+			Write:  suiteWrite,
+			// THE GATE RECORD, which this domain had an applier, a fence
+			// and a table for and no writer — so the trim never learned
+			// an evicted node had left this log.
+			EncodeGate: encodeSuiteGate,
+		}
+	})
+}
+
+// suiteWrite is one write through the identity estate's own [iamdomain.Writer]
+// — the builder every write path in the domain shares, [iamdomain.Writer.request],
+// which is where the framework's stamp is kept or lost.
+func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.ReplicatedReader) error {
+	w, err := iamdomain.NewWriter(iamdomain.WriterDeps{
+		Publisher: pub, DB: db, Actor: "suite", ActorKind: iam.KindMachine,
+		Grants: []iam.Grant{iam.GrantAdmin},
+	})
+	if err != nil {
+		return err
+	}
+	_, err = w.EvictNode(ctx, statelog.NewOpID(time.Now(), "suite-evict"), "suite-peer")
+	return err
+}
+
+// encodeSuiteGate is the eviction record a peer's writer publishes onto this
+// log — or, with readmit, the inverse commit that takes the node back.
+func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
+	opID := "suite-evict-" + node
+	if readmit {
+		opID = "suite-readmit-" + node
+	}
+	return gateSuiteRecord(iamdomain.EvictionSubject(node), iamdomain.OpEviction,
+		"", "suite-peer", opID, iamdomain.RootScope(),
+		iamdomain.Eviction{V: iamdomain.GateRecordVersion, Readmit: readmit, By: "suite"})
+}
+
+// THE IDENTITY ESTATE'S GATE READER KEEPS THE RULE EVERY READER SHARES,
+// certified by the same family as the tracker's and the knowledge base's.
+//
+// This reader answered the eviction before the removal, in two reads, until it
+// took the shared shape — and nothing noticed, because it was tested only
+// against its own idea of the rule. Its removal gate is keyed on the PERSON,
+// so the kind it is asked about is the person's own subject: a record whose
+// person is in its payload is one this reader is never handed
+// ([iamdomain.Gates]).
+func TestTheIdentityGateReaderKeepsTheSharedRule(t *testing.T) {
+	t.Parallel()
+	statelogtest.RunGates(t, func(t *testing.T) statelogtest.GateCandidate {
+		return statelogtest.GateCandidate{
+			Candidate: statelogtest.Candidate{
+				Domain:  iamdomain.Domain{},
+				Applier: iamdomain.NewApplier("suite-node", nil),
+				Encode:  encodeSuiteRecord,
+				Kinds:   suiteKinds(),
+			},
+			Reader: func(db store.ReplicatedReader) statelog.Gates { return iamdomain.NewGates(db) },
+			// A PERSON, which is what a removal takes out of the estate for
+			// ever: its tombstone is this log's deletion marker.
+			Kind: string(iamdomain.KindPerson),
+			// EVERY KIND, the applier asked rather than told which ones the
+			// tombstone covers: a directory record names its person in the
+			// payload alone, so the marker reaches it through the body,
+			// and a session about somebody else must be left alone by both.
+			SubjectKinds: suiteKinds(),
+			// AN ENROLMENT, on the directory: the record that brings a
+			// person into the estate names them in its payload alone.
+			Create: func(id, writer, opID string) ([]byte, error) {
+				return gateSuiteRecord(iamdomain.DirectorySubject(), iamdomain.OpEnrol,
+					id, writer, opID, iamdomain.PeopleScope(id), iamdomain.Enrolled{
+						V: iamdomain.DocumentVersion, Person: gateSuitePerson(nil),
+						Holds: iamdomain.Identifiers{Login: id + ".suite"},
+					})
+			},
+			Write: func(id, writer, opID string) ([]byte, error) {
+				return gateSuiteRecord(iamdomain.PersonSubject(id), iamdomain.OpUpdate,
+					id, writer, opID, iamdomain.PeopleScope(id),
+					gateSuitePerson([]iam.Grant{iam.GrantTracker}))
+			},
+			// A REMOVAL IS THE PURGE: the one record here with no inverse,
+			// and the one that writes the tombstone every later record
+			// about the person is dropped by.
+			Purge: func(id, writer, opID string) ([]byte, error) {
+				return gateSuiteRecord(iamdomain.DirectorySubject(), iamdomain.OpRemove,
+					id, writer, opID, iamdomain.PeopleScope(id),
+					iamdomain.Removal{V: iamdomain.GateRecordVersion})
+			},
+			Evict: func(node, writer, opID string) ([]byte, error) {
+				return gateSuiteRecord(iamdomain.EvictionSubject(node),
+					iamdomain.OpEviction, "", writer, opID, iamdomain.RootScope(),
+					iamdomain.Eviction{V: iamdomain.GateRecordVersion, By: "suite"})
+			},
+			Readmit: func(node, writer, opID string) ([]byte, error) {
+				return gateSuiteRecord(iamdomain.EvictionSubject(node),
+					iamdomain.OpEviction, "", writer, opID, iamdomain.RootScope(),
+					iamdomain.Eviction{V: iamdomain.GateRecordVersion, Readmit: true,
+						By: "suite"})
+			},
+			// AN IDENTITY CHANGE: it arbitrates on the directory, and the
+			// person it moves is in its payload — the record whose removal
+			// gate only the body can name.
+			About: func(id, writer, opID string) (statelog.Subject, []byte, error) {
+				subject := iamdomain.DirectorySubject()
+				body, err := gateSuiteRecord(subject, iamdomain.OpIdentity, id, writer,
+					opID, iamdomain.PeopleScope(id),
+					iamdomain.IdentityChange{V: iamdomain.DocumentVersion,
+						Login: "moved." + id})
+				return statelog.Subject{Kind: string(subject.Kind), ID: subject.ID},
+					body, err
+			},
+		}
+	})
+}
+
+// gateSuiteRecord is one record the gate family applies, written by writer.
+func gateSuiteRecord(subject iamdomain.Subject, op iamdomain.OpKind, person,
+	writer, opID string, scope iamdomain.ScopeSet, payload any) ([]byte, error) {
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return iamdomain.Encode(iamdomain.MutationRecord{
+		RecordEnvelope: iamdomain.RecordEnvelope{
+			V: iamdomain.BaseRecordVersion, OpID: opID, Subject: subject, Op: op,
+			CreatedAt: time.Unix(1_700_000_000, 0).UTC(), Gen: 1, Writer: writer,
+			Scope: scope,
+		},
+		Mutation: body, Person: person, Actor: "suite", ActorKind: iam.KindMachine,
+	})
+}
+
+// gateSuitePerson is an enrolled person's document, holding grants.
+func gateSuitePerson(grants []iam.Grant) iamdomain.Person {
+	return iamdomain.Person{
+		V: iamdomain.DocumentVersion, Kind: iam.KindPerson, Stage: iam.StageActive,
+		NameSealed: "sealed:name", EmailSealed: "sealed:email", Grants: grants,
+	}
+}
+
+// suiteKinds is every kind this domain declares, as the suite takes them.
+func suiteKinds() []string {
+	out := make([]string, 0, len(iamdomain.ObjectKinds))
+	for _, kind := range iamdomain.ObjectKinds {
+		out = append(out, string(kind))
+	}
+	return out
+}
+
+func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
+	rec := iamdomain.MutationRecord{
+		RecordEnvelope: iamdomain.RecordEnvelope{
+			V:         version,
+			OpID:      opID,
+			Subject:   iamdomain.Subject{Kind: iamdomain.ObjectKind(kind), ID: id},
+			CreatedAt: time.Unix(1_700_000_000, 0).UTC(),
+			Gen:       1,
+			Writer:    "suite-node",
+		},
+		Actor:     "suite",
+		ActorKind: iam.KindMachine,
+	}
+	// A SINGLETON KIND NAMES NO OBJECT, whatever id the suite hands it.
+	if !rec.Subject.Kind.Identified() {
+		rec.Subject.ID = ""
+	}
+	op, person, payload, scope := suitePayload(iamdomain.ObjectKind(kind), id)
+	rec.Op = op
+	rec.Person = person
+	rec.Scope = scope
+	if payload != nil {
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		rec.Mutation = body
+	}
+	return iamdomain.Encode(rec)
+}
+
+// suitePerson is the person a session, a status change and a sweep are
+// about.
+const suitePerson = "018f3a9c-0000-7000-8000-00000000f00d"
+
+// suitePayload is one valid (op, person, payload, scope) per kind.
+//
+// # Why the directory and the person are the first two kinds
+//
+// The suite publishes the FIRST THREE kinds a candidate declares, twice each,
+// in order, each pair about the ids it hands over. So the declaration order
+// decides what gets certified — and this domain's first two are a real
+// sequence: the directory enrols a person under the id, and the person's own
+// subject then changes their document. A person record about somebody nobody
+// enrolled writes no row, so the other order would certify a no-op rather
+// than a domain.
+func suitePayload(kind iamdomain.ObjectKind, id string) (
+	iamdomain.OpKind, string, any, iamdomain.ScopeSet) {
+
+	person := iamdomain.PeopleScope(suitePerson)
+	switch kind {
+	case iamdomain.KindDirectory:
+		return iamdomain.OpEnrol, id, iamdomain.Enrolled{
+			V: iamdomain.DocumentVersion,
+			Person: iamdomain.Person{
+				V: iamdomain.DocumentVersion, Kind: iam.KindPerson,
+				Stage:      iam.StageActive,
+				NameSealed: "sealed:name", EmailSealed: "sealed:email",
+				Grants: []iam.Grant{iam.GrantAdmin},
+			},
+			Holds: iamdomain.Identifiers{EmailBlind: "blind-" + id,
+				Login: id + ".suite"},
+		}, iamdomain.PeopleScope(id)
+	case iamdomain.KindPerson:
+		return iamdomain.OpUpdate, id, iamdomain.Person{
+			V: iamdomain.DocumentVersion, Kind: iam.KindPerson,
+			Stage:      iam.StageActive,
+			NameSealed: "sealed:renamed", EmailSealed: "sealed:email",
+			Grants: []iam.Grant{iam.GrantTracker},
+		}, iamdomain.PeopleScope(id)
+	case iamdomain.KindSession:
+		return iamdomain.OpOpen, suitePerson, iamdomain.Session{
+			V: iamdomain.DocumentVersion, Person: suitePerson, Epoch: 1,
+			AbsoluteExpiresAt: time.Unix(1_800_000_000, 0).UTC(),
+		}, person
+	case iamdomain.KindSweep:
+		return iamdomain.OpSweep, "", iamdomain.Sweep{
+			V: iamdomain.DocumentVersion, Bucket: 0,
+		}, iamdomain.BucketScope(0)
+	case iamdomain.KindEviction:
+		return iamdomain.OpEviction, "", iamdomain.Eviction{
+			V: iamdomain.GateRecordVersion, By: "suite",
+		}, iamdomain.RootScope()
+	case iamdomain.KindGeneration:
+		return iamdomain.OpGeneration, "", iamdomain.Generation{
+			V: iamdomain.GateRecordVersion, Generation: 1, By: "suite",
+		}, iamdomain.RootScope()
+	case iamdomain.KindBarrier:
+		return iamdomain.OpBarrier, "", nil, iamdomain.RootScope()
+	}
+	return iamdomain.OpUpdate, suitePerson, nil, person
+}

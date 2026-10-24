@@ -20,6 +20,17 @@
 // [NodeRuntime] is a seam for one reason: it declares, in the consumer, the
 // facts this package asks the engine for, so a route can be tested against
 // fixed answers without standing a node up.
+//
+// # One route table, behind one chain, on one or two listeners
+//
+// Every surface mounts on ONE table ([routeTable]), and every route there
+// states the authority it is decided by where it is mounted — a grant through
+// internal/authz, or its place on internal/api/auth's exemption list. With
+// Tier A's `api.public` set, the routes outside parties call ([auth.Public]:
+// the webhooks, the vendor app landings and the sandbox endpoints) are served
+// on a listener of their own ([App.Public]) and api.port serves the rest — the
+// same table and the same chain behind a partition, so a route is guarded,
+// cross-site checked and drained exactly once whichever socket answers it.
 package api
 
 import (
@@ -27,6 +38,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 var log = logging.Get("api")
@@ -55,15 +67,24 @@ type RuntimeState struct {
 	// AppliedEpoch is the config revision this node is running.
 	AppliedEpoch int64
 
-	// StallLag is how far behind the node's watched duty is, and the
-	// early warning before the watchdog ends the process at the lease TTL.
-	// Zero is "nothing to report" rather than "measured as zero", which is
-	// the same answer a health surface wants for both.
+	// StallLag is how far behind the node's watched duty is: the time
+	// since its last beat, once it has missed one, and the early warning
+	// before the watchdog ends the process at the lease TTL. Zero is
+	// "nothing to report" (the duty is on its beat) rather than "measured
+	// as zero", which is the same answer a health surface wants for both.
 	StallLag time.Duration
 
 	// StartedAt is when the engine started, which is this node's start:
 	// the API is served inside the engine's process.
 	StartedAt string
+
+	// IdentityDuties are the identity estate's fleet-singleton duties THIS
+	// NODE armed, each with the interval it runs at when it holds the
+	// lease. Nil is "armed none", which is a real answer: a node running
+	// no workers arms none — and a duty that was never armed looks from
+	// every other vantage point exactly like one quietly finding nothing
+	// to do.
+	IdentityDuties map[string]time.Duration
 
 	// Seats are the handles this node is serving. The first question about
 	// any fleet, and one previously answerable only by reading three
@@ -89,6 +110,11 @@ type RuntimeState struct {
 	// That is the opposite of an empty slice, which is a real claim that
 	// nothing routes.
 	RoutedSources []string
+
+	// DirectUpload is whether this node's object store hands clients
+	// presigned puts: "available", "unavailable (<reason>)", or "" on a
+	// node running no object store ([engine.Engine.DirectUploadStatus]).
+	DirectUpload string
 
 	// VerifiableSources names the integrations whose RESOLVED verification
 	// material could accept a delivery right now.
@@ -123,13 +149,17 @@ type FleetState struct {
 	LiveNodes *int
 
 	// Alarms are the kinds this node's latest alarm evaluation found
-	// firing, the longest-standing first — the evaluation that set the
+	// firing, the longest-standing first: the evaluation that set the
 	// `crewlet.alarm.active` gauge and wrote the alarm log lines, never a
-	// second one. Nil is "no evaluation has run" (mid-boot, or a node
-	// running no state log), which is the opposite of an empty slice: the
-	// real claim that nothing is firing. Held in memory, so a presence read
-	// that did not finish never costs the envelope its alarms.
-	Alarms []string
+	// second one. ONE ENTRY PER KIND, however many logs a per-log kind
+	// stands on, because the count is how many problems an operator has to
+	// look at and one cause on four logs is one of them, as the gauge
+	// beside it says ([statelog.Alarm.Domains]). Nil is "no evaluation has
+	// run" (mid-boot, or a node running no state log), which is the
+	// opposite of an empty slice: the real claim that nothing is firing.
+	// Held in memory, so a presence read that did not finish never costs
+	// the envelope its alarms.
+	Alarms []statelog.Kind
 }
 
 // NodeRuntime is the seam for facts only the engine can answer.

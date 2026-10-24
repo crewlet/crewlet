@@ -42,6 +42,7 @@ func suspended() execstate.State {
 		Iterations: []ledger.Iteration{{Iteration: 1, Intent: "fix it"}},
 		Task:       "fix the flake",
 		Uncharged:  &execstate.Uncharged{Turns: 1, Input: 900, Output: 120, Workers: 1},
+		SoFar:      &execstate.TurnSoFar{DurationMS: 42_000, Reviews: 2, SentBack: 1, Unaccepted: 1},
 	}
 }
 
@@ -91,6 +92,11 @@ func TestAStateRoundTripsThroughTheRow(t *testing.T) {
 	// row that loses it loses the first half of the turn from its task.
 	if got.Uncharged == nil || *got.Uncharged != *want.Uncharged {
 		t.Fatalf("the uncharged spend did not survive: %+v", got.Uncharged)
+	}
+	// AND WHAT THE TURN MEASURED SO FAR, which the record that ends it states
+	// whole: lost, the turn's earlier spans and reviews count nowhere.
+	if got.SoFar == nil || *got.SoFar != *want.SoFar {
+		t.Fatalf("the turn's measurement so far did not survive: %+v", got.SoFar)
 	}
 }
 

@@ -114,7 +114,7 @@ func TestAStorageRefusalOnABucketIsTerminalAndNotAMissingBucket(t *testing.T) {
 			js := refusingBroker(t, tc.refusal)
 
 			started := time.Now()
-			bucket, err := openBucket(t.Context(), js, tc.clustered,
+			bucket, _, err := openBucket(t.Context(), js, tc.clustered,
 				jetstream.KeyValueConfig{
 					Bucket: "t_capacity", TTL: time.Minute, Replicas: 1,
 				})
@@ -196,7 +196,7 @@ func TestAPlacementRefusalIsRetriedAndThenReportedWithoutAReadBack(t *testing.T)
 	ctx, cancel := context.WithTimeout(t.Context(), 4*jsprovision.PlacementRetry)
 	defer cancel()
 
-	bucket, err := openBucket(ctx, js, true, jetstream.KeyValueConfig{
+	bucket, _, err := openBucket(ctx, js, true, jetstream.KeyValueConfig{
 		Bucket: "t_unplaceable", TTL: time.Minute, Replicas: 3,
 	})
 	if err == nil {
@@ -246,7 +246,7 @@ func TestABucketWithNoApplicableLimitNamesTheClassAndIsNotAMissingBucket(t *test
 	js := refusingBroker(t, refusal)
 
 	started := time.Now()
-	bucket, err := openBucket(t.Context(), js, true, jetstream.KeyValueConfig{
+	bucket, _, err := openBucket(t.Context(), js, true, jetstream.KeyValueConfig{
 		Bucket: "t_nolimit", TTL: time.Minute, Replicas: 3,
 	})
 	elapsed := time.Since(started)
@@ -322,7 +322,7 @@ func TestEveryRefusalNoPeerCouldHaveCausedIsNotReadBack(t *testing.T) {
 			js := refusingBroker(t, refusal)
 
 			started := time.Now()
-			bucket, err := openBucket(t.Context(), js, true, jetstream.KeyValueConfig{
+			bucket, _, err := openBucket(t.Context(), js, true, jetstream.KeyValueConfig{
 				Bucket: "t_refused", TTL: time.Minute, Replicas: 3,
 			})
 			elapsed := time.Since(started)
@@ -369,7 +369,7 @@ func TestABucketAPeerMadeFirstIsReadBackAndOpened(t *testing.T) {
 		t.Fatalf("make the peer's bucket: %v", err)
 	}
 
-	bucket, err := openBucket(t.Context(), js, true, cfg)
+	bucket, _, err := openBucket(t.Context(), js, true, cfg)
 	if err != nil {
 		t.Fatalf("a node that lost the create race to a peer refused to boot "+
 			"over the peer's bucket: %v", err)

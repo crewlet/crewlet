@@ -8,10 +8,15 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/org"
+	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -40,7 +45,7 @@ func TestTheBridgeRouteIsAbsentWithoutABridge(t *testing.T) {
 func TestTheBridgeRouteIsReachableWithoutABearerToken(t *testing.T) {
 	t.Parallel()
 	a := newApp(t, api.Options{
-		Bridge: mcpbridge.New(mcpbridge.Options{Key: []byte("k"), BaseURL: "http://x"}),
+		Bridge: bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "k"), BaseURL: "http://x"}),
 	})
 	res := probe(a, http.MethodPost, mcpbridge.PathPrefix+"not-a-token")
 	if res.StatusCode != http.StatusUnauthorized {
@@ -55,13 +60,18 @@ func TestTheBridgeRouteIsReachableWithoutABearerToken(t *testing.T) {
 // route.
 func TestTheBridgeRouteAnswersEveryTransportVerb(t *testing.T) {
 	t.Parallel()
-	bridge := mcpbridge.New(mcpbridge.Options{Key: []byte("k"), BaseURL: "http://x"})
+	bridge := bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "k"), BaseURL: "http://x"})
 	// The app first: mounting the route is what lets the bridge open a
 	// session at all.
 	a := newApp(t, api.Options{Bridge: bridge})
+	// BOUND TO A SEAT'S TURN, as every executor surface is: the bridge acts
+	// as that seat on every call and opens no session for a surface that
+	// names none.
+	seat := &org.Role{Name: "Dev", DeclaredHandle: "dev"}
 	url := bridge.Open(&mcpbridge.Session{
 		RunID: "run-1", Handle: "dev", Role: "Dev",
-		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil),
+		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).
+			ForTurn(&turnctx.Turn{RunID: "run-1", Seat: seat}),
 	})
 	if url == "" {
 		t.Fatal("no endpoint was minted")
@@ -87,28 +97,53 @@ func probe(a *api.App, method, path string) *http.Response {
 	return rec.Result()
 }
 
+// bridgeFor is [mcpbridge.New] for a keyring a case expects to be usable.
+func bridgeFor(t *testing.T, opts mcpbridge.Options) *mcpbridge.Bridge {
+	t.Helper()
+	bridge, err := mcpbridge.New(opts)
+	if err != nil {
+		t.Fatalf("mcpbridge.New: %v", err)
+	}
+	return bridge
+}
+
+// operatorSurface builds an operator surface whose catalogue is the work half
+// a case names, decided on grants alone and auditing onto a queue nobody
+// reads, and fails the test on a refusal.
+func operatorSurface(t *testing.T, work builtin.WorkDeps) *operator.Server {
+	t.Helper()
+	s, err := operator.New(operator.Options{
+		Halves: func() (operator.Halves, bool) {
+			return operator.Halves{Work: work}, true
+		},
+		Authorize: builtin.Decide(authz.NoChart{}),
+		Audit:     queuememory.New(),
+	})
+	if err != nil {
+		t.Fatalf("operator.New: %v", err)
+	}
+	return s
+}
+
 // THE ACT ROUTE IS MOUNTED BESIDE THE MCP ONE, behind the same guard.
 //
 // What the transport does with a request is internal/api/operator's; what is
 // asserted here is the wiring the app owns: the route exists wherever the
-// operator surface does, answers POST alone, and is ALWAYS guarded — a
-// request with no token is refused by the guard before it reaches the
-// handler, whatever the read posture, because every tool it serves writes.
+// operator surface does, answers POST alone, and is guarded — a request with
+// no credential is refused by the guard before it reaches the handler,
+// because every tool it serves writes and a write with nobody behind it has
+// no author.
 func TestTheActRouteIsMountedBehindTheGuard(t *testing.T) {
 	t.Parallel()
 	b := closedPosture()
-	b.API.Auth.AllowAnonymousRead = true
 	a := newApp(t, api.Options{
 		Bootstrap: &b,
-		Runtime:   &fakeRuntime{},
-		Operator: operatorSurface(t, operator.Options{
-			Work: builtin.WorkDeps{Reader: stubWorkReader{}, Actor: operator.WorkActor(nil, nil)},
-		}),
+		Operator:  operatorSurface(t, builtin.WorkDeps{Reader: stubWorkReader{}}),
 	})
 	post := func(token string) (int, string) {
 		t.Helper()
 		r := httptest.NewRequest(http.MethodPost, operator.ActPathPrefix+tracker.ListWorkItemsTool,
-			strings.NewReader(`{"request_id":"01927c3a-4e5b-7c6d-8e9f-0a1b2c3d4e5f","args":{}}`))
+			strings.NewReader(`{"args":{}}`))
 		r.Header.Set("Content-Type", "application/json")
 		if token != "" {
 			r.Header.Set("Authorization", "Bearer "+token)
@@ -123,13 +158,13 @@ func TestTheActRouteIsMountedBehindTheGuard(t *testing.T) {
 	if status, code := post(""); status != http.StatusUnauthorized ||
 		code != string(httpjson.CodeInvalidToken) {
 
-		t.Errorf("an act with no token answered %d %q, want the guard's 401 "+
-			"even with anonymous reads open", status, code)
+		t.Errorf("an act with no credential answered %d %q, want the guard's 401",
+			status, code)
 	}
-	// THE HANDLER IS REACHED with a token: the read it names is refused by
-	// the transport's own rule, which only the mounted handler can answer.
+	// THE HANDLER IS REACHED with a credential: the read it names is refused
+	// by the transport's own rule, which only the mounted handler can answer.
 	if status, code := post("secret"); status != http.StatusBadRequest ||
-		code != string(operator.CodeReadOnlyTool) {
+		code != string(httpjson.CodeReadOnlyTool) {
 
 		t.Errorf("an authenticated act answered %d %q, want the transport's own "+
 			"read_only_tool — the route is not mounted", status, code)

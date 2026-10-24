@@ -1,4 +1,4 @@
-# ADR-0000 — The decision, as an imperative sentence
+# ADR-0000: The decision, as an imperative sentence
 
 - **Status:** accepted
 - **Authority:** `internal/somepackage`

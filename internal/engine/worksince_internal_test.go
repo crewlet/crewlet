@@ -35,7 +35,7 @@ func TestWhenTheWorkBeganTravelsWithTheWorkKey(t *testing.T) {
 	dispatched := mustDescribeTurn(t, &Engine{}, company, Request{
 		Handle: "swe", RunID: "run-1", WorkKey: "wk-1", WorkSince: began,
 	})
-	live := dispatched.runnerTurn(company, 0, nil, "the task", turn.ToolReply(""))
+	live := dispatched.runnerTurn(company, 0, nil, "the task", turn.ToolReply(""), nil)
 	if live.Context == nil || !live.Context.WorkSince.Equal(began) {
 		t.Fatalf("the turn's tools see the work begin at %+v, want %s", live.Context, began)
 	}
@@ -57,7 +57,7 @@ func TestWhenTheWorkBeganTravelsWithTheWorkKey(t *testing.T) {
 		},
 		Turn: &turnctx.Turn{RunID: "run-1", WorkKey: "wk-1", WorkSince: began, Seat: seat},
 	})
-	resumedTurn := resumedTel.runnerTurn(company, 0, nil, "the task", turn.ToolReply(""))
+	resumedTurn := resumedTel.runnerTurn(company, 0, nil, "the task", turn.ToolReply(""), nil)
 	if resumedTurn.Context == nil || !resumedTurn.Context.WorkSince.Equal(began) {
 		t.Fatalf("the resumed turn's tools see the work begin at %+v, want %s — "+
 			"the second half of the turn would derive different operation ids "+

@@ -4,9 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/artifactdata"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -23,10 +28,12 @@ import (
 // Declared here, by the consumer, and kept to exactly what the operations
 // below and in codeops.go call — the seat surface's tools, the code host, and
 // the operator's own surfaces: the dashboard and REST routes and the
-// operator's MCP. Those reach the estate
-// through this node's router as a seat's tools do, so a node whose copy of the
-// operation's domain is out of service answers its operator from a peer's copy
-// rather than its own, and a node holding no data serves them at all.
+// operator's MCP. Those reach the estate through this node's router as a
+// seat's tools do, so a node whose copy of the operation's domain is out of
+// service answers its operator from a peer's copy rather than its own, and a
+// node holding no data serves them at all. And the identity directory's two
+// reads, which a node holding no data asks for its seats and its party
+// registry.
 
 // TrackerReader is the tracker's read side the surfaces ask of.
 type TrackerReader interface {
@@ -95,19 +102,30 @@ type TrackerWriter interface {
 	RecordTurn(ctx context.Context, opID string, turn tracker.TurnRecord) (tracker.WriteResult, error)
 
 	// The operator's writes, which no seat is handed: saved views, the
-	// catalogue, a person's own state, the trash and the purge.
-	WriteView(ctx context.Context, opID string, view tracker.View) (tracker.WriteResult, error)
+	// catalogue, a person's own state, rewriting one's own remark, the
+	// trash and the purge.
+	//
+	// ViewPrior is the READ a save is decided on — a save replaces a view
+	// whole by id, so who may make one is a question about the view it
+	// overwrites as well as the one it writes — and it is on the writer
+	// because the save that follows it is: the caller asks one seam both
+	// questions, and the write refuses a prior that no longer holds.
+	ViewPrior(ctx context.Context, id string) (tracker.ViewPrior, error)
+	WriteView(ctx context.Context, opID string, view tracker.View,
+		prior tracker.ViewPrior) (tracker.WriteResult, error)
 	WriteTypes(ctx context.Context, opID string, types []tracker.TaskType) (tracker.WriteResult, error)
 	WriteFields(ctx context.Context, opID string, fields []tracker.FieldDef) (tracker.WriteResult, error)
-	MarkInbox(ctx context.Context, opID, handle string,
-		gesture tracker.InboxGesture) (tracker.WriteResult, error)
-	WritePins(ctx context.Context, opID, handle string,
-		gesture tracker.PinGesture) (tracker.WriteResult, error)
+	MarkInbox(ctx context.Context, opID, handle string, gesture tracker.InboxGesture,
+		authority tracker.PersonAuthority) (tracker.WriteResult, error)
+	WritePins(ctx context.Context, opID, handle string, gesture tracker.PinGesture,
+		authority tracker.PersonAuthority) (tracker.WriteResult, error)
+	EditComment(ctx context.Context, opID, taskID, project, commentID, body string,
+		notify *tracker.Notify) (tracker.WriteResult, error)
 	WritePriorities(ctx context.Context, opID, handle string, priorities []string,
 		ifMatch *uint64, authority tracker.PersonAuthority) (tracker.WriteResult, error)
 	RemoveTask(ctx context.Context, opID, id, project string, subtree bool,
 		notify *tracker.Notify) (tracker.WriteResult, error)
-	RestoreTask(ctx context.Context, opID, id, project string,
+	RestoreTask(ctx context.Context, opID, id, project string, alone bool,
 		notify *tracker.Notify) (tracker.WriteResult, error)
 	PurgeTask(ctx context.Context, opID, id, project, reason string) (tracker.WriteResult, error)
 }
@@ -133,16 +151,25 @@ type PageReader interface {
 
 // PageWriter is the knowledge base's write side. The author is an argument
 // of every call rather than a derived writer, which is the pages store's own
-// shape.
+// shape — and so is the caller's operation key ([pages.Actor.OpKey]), which
+// rides on that author.
 type PageWriter interface {
 	Create(ctx context.Context, actor pages.Actor, in pages.NewPage) (pages.Written, error)
 	SavePage(ctx context.Context, actor pages.Actor, pageID string, save pages.Save) (pages.Written, error)
-	Rename(ctx context.Context, actor pages.Actor, pageID, title string, quiet bool,
-		key pages.CallKey) (pages.Written, error)
+	Rename(ctx context.Context, actor pages.Actor, pageID, title string,
+		quiet bool) (pages.Written, error)
 	Comment(ctx context.Context, actor pages.Actor, pageID string,
 		in pages.NewComment) (pages.Comment, pages.Written, error)
 	EditComment(ctx context.Context, actor pages.Actor, pageID, commentID,
-		body string, key pages.CallKey) (pages.Comment, pages.Written, error)
+		body string) (pages.Comment, pages.Written, error)
+
+	// The operator's writes, which no seat is handed: the trash, the purge
+	// and a remark's take-down.
+	Trash(ctx context.Context, actor pages.Actor, pageID string) (pages.Written, error)
+	Restore(ctx context.Context, actor pages.Actor, pageID string) (pages.Written, error)
+	Purge(ctx context.Context, actor pages.Actor, pageID, reason string) (pages.Written, error)
+	RemoveComment(ctx context.Context, actor pages.Actor, pageID, commentID string,
+		authority pages.CommentAuthority) (pages.Written, error)
 }
 
 // KnowledgeSearcher is the native knowledge search over this node's corpus,
@@ -185,6 +212,23 @@ type UsageReader interface {
 	ReadsElided(ctx context.Context, from, to string) (int64, error)
 }
 
+// IdentityReader is the identity directory's read side, as a node holding no
+// data asks it: the two questions its seats and its party registry put to the
+// directory, and no others.
+//
+// FACTS AND NOT VERDICTS, exactly as [iamdomain.Reader] answers them: the row a
+// login binds and how far the serving node can vouch for it, and the seats the
+// directory binds. What a stalled applier or a retained record MEANS — and the
+// chart a binding is resolved against, and the Tier A tokens a node declares —
+// are the ASKING node's, because the request path that decides on them is
+// there and a verdict formed on another node would be a second opinion about
+// whose seat a login is.
+type IdentityReader interface {
+	PersonByLoginVouched(ctx context.Context, login string) (iamdomain.Sighting,
+		iamdomain.Vouch, error)
+	SeatHolders(ctx context.Context) ([]iamdomain.SeatHolder, error)
+}
+
 // Backend is one data node's answer to every operation, over its copy of the
 // estate, resolved PER REQUEST: a node that booted with no company brings its
 // native runtime up at its first apply, and a request that arrives before then
@@ -207,6 +251,21 @@ type Backend struct {
 	// operation is then answered "no backend here".
 	Code CodeServer
 
+	// Identity is the identity directory, which every data node holds from
+	// boot whatever its company keeps — nil only where the node's core
+	// runtime is not up yet, which is answered like any half it does not
+	// run.
+	Identity IdentityReader
+
+	// Artifacts is the artifacts estate, which every data node runs from
+	// boot whatever its company keeps: its reader and its writer, each nil
+	// only where the node's core runtime is not up yet ([ArtifactsHalf]).
+	Artifacts ArtifactsHalf
+
+	// ArtifactData is the artifact datastore, which every data node runs
+	// from boot beside the artifacts estate ([ArtifactDataHalf]).
+	ArtifactData ArtifactDataHalf
+
 	// Committed waits until this node's applier of the floor's log holds a
 	// position — the floor every request carries, the node's own included.
 	Committed func(ctx context.Context, at statelog.Position) error
@@ -218,7 +277,7 @@ type Backend struct {
 	// every data node whose copy does not has run nothing, by a remote asker
 	// and by this node's own router alike — a worse node to ask, never no
 	// node ([Router.route]). A lagging knowledge base never holds back a
-	// tracker read (ADR-0031), for the reason a floor on another domain's log
+	// tracker read (ADR-0045), for the reason a floor on another domain's log
 	// is not waited for ([ready]).
 	//
 	// NOT A SEAT'S ADMISSION, which refuses at a lag of one: a busy
@@ -327,7 +386,7 @@ var errNotAdmitting = errors.New("estate: this copy admits no seat yet")
 // SeatCopy is the domain an operation names when what it asks about is the
 // copy a SEAT is served by, rather than one domain's: every domain whose health
 // gates seat admission ([statelog.Domain.GatesSeatAdmission]) in service at
-// once (ADR-0031). Admission's ping names it ([opPing]), and so does
+// once (ADR-0045). Admission's ping names it ([opPing]), and so does
 // [Router.Serves].
 //
 // EMPTY, and no operation that reads a domain's rows may name it: the gate over
@@ -340,16 +399,22 @@ const SeatCopy = ""
 // declaration. An operation's floor is on its OWN domain's log and no other:
 // see [ready].
 var (
-	trackerDomain = tracker.Domain{}.Name()
-	pagesDomain   = pages.Domain{}.Name()
-	usageDomain   = usage.Domain{}.Name()
-	codeDomain    = code.Domain{}.Name()
+	trackerDomain      = tracker.Domain{}.Name()
+	pagesDomain        = pages.Domain{}.Name()
+	usageDomain        = usage.Domain{}.Name()
+	codeDomain         = code.Domain{}.Name()
+	identityDomain     = iamdomain.Domain{}.Name()
+	artifactsDomain    = artifactsdomain.Domain{}.Name()
+	artifactDataDomain = artifactdata.Domain{}.Name()
 
 	floorStreams = map[string]string{
-		trackerDomain: tracker.Domain{}.Stream().Name,
-		pagesDomain:   pages.Domain{}.Stream().Name,
-		usageDomain:   usage.Domain{}.Stream().Name,
-		codeDomain:    code.Domain{}.Stream().Name,
+		trackerDomain:      tracker.Domain{}.Stream().Name,
+		pagesDomain:        pages.Domain{}.Stream().Name,
+		usageDomain:        usage.Domain{}.Stream().Name,
+		codeDomain:         code.Domain{}.Stream().Name,
+		identityDomain:     iamdomain.Domain{}.Stream().Name,
+		artifactsDomain:    artifactsdomain.Domain{}.Stream().Name,
+		artifactDataDomain: artifactdata.Domain{}.Stream().Name,
 	}
 )
 
@@ -895,7 +960,6 @@ type updateTaskArgs struct {
 	Watch     *tracker.WatchIntent
 	Relate    *tracker.RelationIntent
 	Depend    *tracker.DependentIntent
-	Promote   *tracker.PromoteIntent
 	Checklist *tracker.ChecklistIntent
 	Kind      tracker.ChangeKind
 	Notify    *tracker.Notify
@@ -908,8 +972,8 @@ var opUpdateTask = define("tracker.update_task", opIdempotentWrite, trackerDomai
 			return tracker.WriteResult{}, err
 		}
 		patch := a.Patch
-		patch.Watch, patch.Relate, patch.Depend, patch.Promote, patch.Checklist =
-			a.Watch, a.Relate, a.Depend, a.Promote, a.Checklist
+		patch.Watch, patch.Relate, patch.Depend, patch.Checklist =
+			a.Watch, a.Relate, a.Depend, a.Checklist
 		return w.UpdateTask(ctx, a.OpID, a.ID, a.Project, a.IfMatch, patch, a.Kind, a.Notify)
 	})
 
@@ -1020,9 +1084,29 @@ var opEnsureTags = define("tracker.ensure_tags", opIdempotentWrite, trackerDomai
 // reaches them — routed for the reason every other write is: the node the
 // operator asked may hold no data, or a copy that is out of service.
 
+type viewPriorArgs struct {
+	ID string
+}
+
+// WHAT A SAVE WOULD REPLACE, read for the caller to decide its authority on
+// and hand back to the save. A READ, so it is asked anywhere and repeated
+// freely — and floored like every tracker read, since the asker may have
+// written the view through another node a moment ago. The save that follows
+// it refuses a prior that has moved in its own snapshot, wherever it runs, so
+// a stale answer here is a refusal there rather than a wrong overwrite.
+var opViewPrior = define("tracker.view_prior", opRead, trackerDomain, true,
+	func(ctx context.Context, b Backend, actor *Actor, a viewPriorArgs) (tracker.ViewPrior, error) {
+		w, err := writerFor(b, actor)
+		if err != nil {
+			return tracker.ViewPrior{}, err
+		}
+		return w.ViewPrior(ctx, a.ID)
+	})
+
 type writeViewArgs struct {
-	OpID string
-	View tracker.View
+	OpID  string
+	View  tracker.View
+	Prior tracker.ViewPrior
 }
 
 var opWriteView = define("tracker.write_view", opIdempotentWrite, trackerDomain, true,
@@ -1031,7 +1115,7 @@ var opWriteView = define("tracker.write_view", opIdempotentWrite, trackerDomain,
 		if err != nil {
 			return tracker.WriteResult{}, err
 		}
-		return w.WriteView(ctx, a.OpID, a.View)
+		return w.WriteView(ctx, a.OpID, a.View, a.Prior)
 	})
 
 type writeTypesArgs struct {
@@ -1063,9 +1147,10 @@ var opWriteFields = define("tracker.write_fields", opIdempotentWrite, trackerDom
 	})
 
 type markInboxArgs struct {
-	OpID    string
-	Handle  string
-	Gesture tracker.InboxGesture
+	OpID      string
+	Handle    string
+	Gesture   tracker.InboxGesture
+	Authority tracker.PersonAuthority
 }
 
 // A GESTURE, never the lists: the tracker resolves it against the record its
@@ -1077,13 +1162,14 @@ var opMarkInbox = define("tracker.mark_inbox", opIdempotentWrite, trackerDomain,
 		if err != nil {
 			return tracker.WriteResult{}, err
 		}
-		return w.MarkInbox(ctx, a.OpID, a.Handle, a.Gesture)
+		return w.MarkInbox(ctx, a.OpID, a.Handle, a.Gesture, a.Authority)
 	})
 
 type writePinsArgs struct {
-	OpID    string
-	Handle  string
-	Gesture tracker.PinGesture
+	OpID      string
+	Handle    string
+	Gesture   tracker.PinGesture
+	Authority tracker.PersonAuthority
 }
 
 var opWritePins = define("tracker.write_pins", opIdempotentWrite, trackerDomain, true,
@@ -1092,7 +1178,7 @@ var opWritePins = define("tracker.write_pins", opIdempotentWrite, trackerDomain,
 		if err != nil {
 			return tracker.WriteResult{}, err
 		}
-		return w.WritePins(ctx, a.OpID, a.Handle, a.Gesture)
+		return w.WritePins(ctx, a.OpID, a.Handle, a.Gesture, a.Authority)
 	})
 
 type writePrioritiesArgs struct {
@@ -1110,6 +1196,29 @@ var opWritePriorities = define("tracker.write_priorities", opIdempotentWrite, tr
 			return tracker.WriteResult{}, err
 		}
 		return w.WritePriorities(ctx, a.OpID, a.Handle, a.Priorities, a.IfMatch, a.Authority)
+	})
+
+type editCommentOnTaskArgs struct {
+	OpID      string
+	TaskID    string
+	Project   string
+	CommentID string
+	Body      string
+	Notify    *tracker.Notify
+}
+
+// REWRITING ONE'S OWN REMARK on a work item. Its author is decided in the
+// decide's own snapshot on the serving node ([tracker.ErrNotAuthor]), against
+// the actor this request names — which is why the actor is the SIGNED one
+// (see [Envelopes]): an edit whose author a request could choose would put
+// words in somebody else's mouth.
+var opEditTaskComment = define("tracker.edit_comment", opIdempotentWrite, trackerDomain, true,
+	func(ctx context.Context, b Backend, actor *Actor, a editCommentOnTaskArgs) (tracker.WriteResult, error) {
+		w, err := writerFor(b, actor)
+		if err != nil {
+			return tracker.WriteResult{}, err
+		}
+		return w.EditComment(ctx, a.OpID, a.TaskID, a.Project, a.CommentID, a.Body, a.Notify)
 	})
 
 type removeTaskArgs struct {
@@ -1133,6 +1242,7 @@ type restoreTaskArgs struct {
 	OpID    string
 	ID      string
 	Project string
+	Alone   bool
 	Notify  *tracker.Notify
 }
 
@@ -1142,7 +1252,7 @@ var opRestoreTask = define("tracker.restore_task", opIdempotentWrite, trackerDom
 		if err != nil {
 			return tracker.WriteResult{}, err
 		}
-		return w.RestoreTask(ctx, a.OpID, a.ID, a.Project, a.Notify)
+		return w.RestoreTask(ctx, a.OpID, a.ID, a.Project, a.Alone, a.Notify)
 	})
 
 type purgeTaskArgs struct {
@@ -1248,6 +1358,12 @@ var opRevision = define("pages.revision", opRead, pagesDomain, false,
 		return aRevision{Revision: rev, Found: found}, err
 	})
 
+// keyed reports a page write the caller made REPEATABLE: one whose actor
+// carries the caller's own operation key ([pages.Actor.OpKey]), from which the
+// pages store derives the operation id — bound to what the write says — and a
+// create its page's id, so a repeat under it is the same operation.
+func keyed(actor pages.Actor) bool { return strings.TrimSpace(actor.OpKey) != "" }
+
 type createPageArgs struct {
 	Actor pages.Actor
 	Page  pages.NewPage
@@ -1259,7 +1375,7 @@ var opCreatePage = define("pages.create", opOnceWrite, pagesDomain, false,
 			return pages.Written{}, errNoHalf
 		}
 		return b.PageWriter.Create(ctx, a.Actor, a.Page)
-	}).repeatableWhen(func(a createPageArgs) bool { return a.Page.CallKey.String() != "" })
+	}).repeatableWhen(func(a createPageArgs) bool { return keyed(a.Actor) })
 
 type savePageArgs struct {
 	Actor  pages.Actor
@@ -1273,14 +1389,13 @@ var opSavePage = define("pages.save", opOnceWrite, pagesDomain, false,
 			return pages.Written{}, errNoHalf
 		}
 		return b.PageWriter.SavePage(ctx, a.Actor, a.PageID, a.Save)
-	}).repeatableWhen(func(a savePageArgs) bool { return a.Save.CallKey.String() != "" })
+	}).repeatableWhen(func(a savePageArgs) bool { return keyed(a.Actor) })
 
 type renamePageArgs struct {
 	Actor  pages.Actor
 	PageID string
 	Title  string
 	Quiet  bool
-	Key    pages.CallKey
 }
 
 var opRenamePage = define("pages.rename", opOnceWrite, pagesDomain, false,
@@ -1288,8 +1403,8 @@ var opRenamePage = define("pages.rename", opOnceWrite, pagesDomain, false,
 		if b.PageWriter == nil {
 			return pages.Written{}, errNoHalf
 		}
-		return b.PageWriter.Rename(ctx, a.Actor, a.PageID, a.Title, a.Quiet, a.Key)
-	}).repeatableWhen(func(a renamePageArgs) bool { return a.Key.String() != "" })
+		return b.PageWriter.Rename(ctx, a.Actor, a.PageID, a.Title, a.Quiet)
+	}).repeatableWhen(func(a renamePageArgs) bool { return keyed(a.Actor) })
 
 type commentArgs struct {
 	Actor   pages.Actor
@@ -1303,6 +1418,10 @@ type commented struct {
 	Written pages.Written
 }
 
+// A COMMENT HAS TWO KEYS, and the turn's wins: a remark made from a turn
+// derives its id from the turn's unit of work ([pages.NewComment.TurnKey]) so
+// a re-run posts once, and one made by a person from the caller's own
+// operation key — the order the pages store reads them in.
 var opCommentPage = define("pages.comment", opOnceWrite, pagesDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a commentArgs) (commented, error) {
 		if b.PageWriter == nil {
@@ -1310,14 +1429,15 @@ var opCommentPage = define("pages.comment", opOnceWrite, pagesDomain, false,
 		}
 		c, w, err := b.PageWriter.Comment(ctx, a.Actor, a.PageID, a.Comment)
 		return commented{Comment: c, Written: w}, err
-	}).repeatableWhen(func(a commentArgs) bool { return a.Comment.CallKey.String() != "" })
+	}).repeatableWhen(func(a commentArgs) bool {
+	return strings.TrimSpace(a.Comment.TurnKey) != "" || keyed(a.Actor)
+})
 
 type editCommentArgs struct {
 	Actor     pages.Actor
 	PageID    string
 	CommentID string
 	Body      string
-	Key       pages.CallKey
 }
 
 var opEditComment = define("pages.edit_comment", opOnceWrite, pagesDomain, false,
@@ -1325,9 +1445,72 @@ var opEditComment = define("pages.edit_comment", opOnceWrite, pagesDomain, false
 		if b.PageWriter == nil {
 			return commented{}, errNoHalf
 		}
-		c, w, err := b.PageWriter.EditComment(ctx, a.Actor, a.PageID, a.CommentID, a.Body, a.Key)
+		c, w, err := b.PageWriter.EditComment(ctx, a.Actor, a.PageID, a.CommentID, a.Body)
 		return commented{Comment: c, Written: w}, err
-	}).repeatableWhen(func(a editCommentArgs) bool { return a.Key.String() != "" })
+	}).repeatableWhen(func(a editCommentArgs) bool { return keyed(a.Actor) })
+
+// ---- the operator's page writes ------------------------------------------ //
+
+// The knowledge base's writes no seat is handed — the trash, the purge and a
+// remark's take-down — routed for the reason the operator's tracker writes are.
+// Each is a once-write made repeatable by the caller's key, as every page write
+// is: unkeyed, a second trash is a second record and a second purge a refusal
+// of its own first copy.
+
+type pageRefArgs struct {
+	Actor  pages.Actor
+	PageID string
+}
+
+var opTrashPage = define("pages.trash", opOnceWrite, pagesDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a pageRefArgs) (pages.Written, error) {
+		if b.PageWriter == nil {
+			return pages.Written{}, errNoHalf
+		}
+		return b.PageWriter.Trash(ctx, a.Actor, a.PageID)
+	}).repeatableWhen(func(a pageRefArgs) bool { return keyed(a.Actor) })
+
+var opRestorePage = define("pages.restore", opOnceWrite, pagesDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a pageRefArgs) (pages.Written, error) {
+		if b.PageWriter == nil {
+			return pages.Written{}, errNoHalf
+		}
+		return b.PageWriter.Restore(ctx, a.Actor, a.PageID)
+	}).repeatableWhen(func(a pageRefArgs) bool { return keyed(a.Actor) })
+
+type purgePageArgs struct {
+	Actor  pages.Actor
+	PageID string
+	Reason string
+}
+
+var opPurgePage = define("pages.purge", opOnceWrite, pagesDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a purgePageArgs) (pages.Written, error) {
+		if b.PageWriter == nil {
+			return pages.Written{}, errNoHalf
+		}
+		return b.PageWriter.Purge(ctx, a.Actor, a.PageID, a.Reason)
+	}).repeatableWhen(func(a purgePageArgs) bool { return keyed(a.Actor) })
+
+type removeCommentArgs struct {
+	Actor     pages.Actor
+	PageID    string
+	CommentID string
+
+	// Authority is the caller's answer from the authority table — whether
+	// it may take down a remark it did not write — decided on the asking
+	// node, which holds the grants, and judged against the remark's author
+	// in the serving node's own snapshot.
+	Authority pages.CommentAuthority
+}
+
+var opRemoveComment = define("pages.remove_comment", opOnceWrite, pagesDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a removeCommentArgs) (pages.Written, error) {
+		if b.PageWriter == nil {
+			return pages.Written{}, errNoHalf
+		}
+		return b.PageWriter.RemoveComment(ctx, a.Actor, a.PageID, a.CommentID, a.Authority)
+	}).repeatableWhen(func(a removeCommentArgs) bool { return keyed(a.Actor) })
 
 // knowledgeArgs is a search as it crosses. The seat is its HANDLE and the
 // org is the serving node's own, for the reason the package doc gives:
@@ -1408,7 +1591,7 @@ var opKnowledgeBuilding = define("knowledge.building", opRead, pagesDomain, fals
 // THE USAGE DOMAIN'S READS cross like every other domain's, so a node whose
 // usage copy is out of service answers its operator's spend and activity
 // screens from a peer's copy rather than from the one it stopped serving
-// (ADR-0031). FLOORLESS: no write this node makes lands on the usage log —
+// (ADR-0045). FLOORLESS: no write this node makes lands on the usage log —
 // every node publishes its own days from its own event log — so there is no
 // position an operator's read must see, and the rows are compacted, one per
 // object, each replaced whole.
@@ -1426,7 +1609,7 @@ var opKnowledgeBuilding = define("knowledge.building", opRead, pagesDomain, fals
 // (usage.TestAFullSeatDayRecordFitsOneMessage); re-encoded as read rows each
 // carrying its group's key it is at most a few times that, which the other
 // three quarters hold (TestAUsagePageFitsOneMessage). A reply past the message
-// is refused rather than dropped ([encodeReply]), so a pathological group
+// is refused rather than dropped ([server.encodeReply]), so a pathological group
 // fails loudly.
 const usagePageBytes = queue.MaxPayloadBytes / 4
 
@@ -1513,7 +1696,7 @@ type linkedFromArgs struct {
 // A PAGE'S BACKLINKS READ BOTH CORPORA — the pages and the tasks whose bodies
 // link to it, named from the rows of each, a task's linked-page relations
 // included — so they run only where this node's copies of the knowledge base
-// AND the tracker are in service ([op.alsoReads], ADR-0031). Read straight off
+// AND the tracker are in service ([op.alsoReads], ADR-0045). Read straight off
 // a node's own index, a node whose pages or tracker copy had stopped serving
 // merged a peer's page with links derived from rows it no longer answered for,
 // presented as complete. They carry no floor, for [opKnowledgeSearch]'s
@@ -1525,6 +1708,82 @@ var opLinkedFrom = define("knowledge.linked_from", opRead, pagesDomain, false,
 		}
 		return b.Backlinks.LinkedFrom(ctx, a.PageID)
 	}).floorless().alsoReads(trackerDomain)
+
+// ---- the identity directory ---------------------------------------------- //
+
+// A node holding no data runs seats, and its seats ask the identity directory
+// two things: whose record a login names, which every person verb resolves
+// before it is decided ([iam.OwnerOf]), and who holds each human seat, which
+// the party registry routes inbound messages by and an agent's roster is cut
+// by. ADR-0025 gives such a node no replicated estate and no applier, so both
+// are asked of a data node, floored on the identity log like any read of rows
+// a log derives.
+
+// Binding is the part of a directory row a binding question reads: who holds
+// the login, what kind of principal they are, how far through enrolment they
+// got, and the seat the row binds.
+//
+// NOTHING ELSE CROSSES. [iamdomain.Sighting] also carries the row's credential
+// verifiers and its grants; the asking node decides nothing on either — a
+// binding is about a seat, and a credential is verified only where it is
+// presented — and a verifier on the broker is a value the asker has no use for
+// and an observer would. So the serving node narrows the row before it answers,
+// and this type is what makes that narrowing a property of the wire rather than
+// of every caller's restraint.
+type Binding struct {
+	ID    string
+	Kind  iam.Kind
+	Stage iam.Stage
+	Login string
+	Seat  string
+}
+
+// bindingOf is the binding a directory row holds.
+func bindingOf(seen iamdomain.Sighting) Binding {
+	return Binding{ID: seen.ID, Kind: seen.Kind, Stage: seen.Stage, Login: seen.Login,
+		Seat: seen.Seat}
+}
+
+type bindingArgs struct {
+	Login string
+}
+
+// bound is a binding question's answer: the row, and how far the serving node
+// could vouch for it — read in ONE snapshot there, for
+// [iamdomain.Reader.PersonByLoginVouched]'s reason.
+type bound struct {
+	Binding Binding
+	Vouch   iamdomain.Vouch
+}
+
+// WHOSE RECORD A LOGIN NAMES is decided on the asking node, against its own
+// chart and its own Tier A tokens — this answers the directory's half: the row
+// and the facts a verdict is formed from, never the verdict. A login nobody
+// holds is the zero binding and no error, as the directory answers it.
+var opIdentityBinding = define("identity.binding", opRead, identityDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, a bindingArgs) (bound, error) {
+		if b.Identity == nil {
+			return bound{}, errNoHalf
+		}
+		seen, vouch, err := b.Identity.PersonByLoginVouched(ctx, a.Login)
+		if err != nil {
+			return bound{}, err
+		}
+		return bound{Binding: bindingOf(seen), Vouch: vouch}, nil
+	})
+
+// WHO HOLDS EACH HUMAN SEAT, read whole in one snapshot — the party registry is
+// rebuilt whole from it, never patched. An error is UNKNOWN and crosses as one:
+// an empty answer is a real reading ("nobody is bound to anything"), and an
+// asker that read an outage as one would hand every suspended person's seat
+// back to the chart.
+var opSeatHolders = define("identity.seat_holders", opRead, identityDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, _ struct{}) ([]iamdomain.SeatHolder, error) {
+		if b.Identity == nil {
+			return nil, errNoHalf
+		}
+		return b.Identity.SeatHolders(ctx)
+	})
 
 // served is what a node runs, as a seat's admission asks it.
 type served struct {

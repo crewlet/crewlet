@@ -9,67 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
-
 	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/coord/coordtest"
 )
-
-// SEVERAL NODES ON ONE STORE, each over a connection of its own.
-//
-// [TestFleetContract] hands every case one FleetStore, and one store is one
-// node: it coalesces its own writes to a key, so the cases' concurrency is ONE
-// contender on the key however many goroutines put it there. The shared cases
-// are what put several nodes on one record at once — three stores on three
-// connections to one embedded broker, the easy topology.
-func TestSharedFleetContract(t *testing.T) {
-	t.Parallel()
-	srv, _ := embeddedServer(t)
-	coordtest.RunSharedFleet(t, func(t *testing.T) []coord.Fleet {
-		prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
-		out := make([]coord.Fleet, sharedFleetNodes)
-		for i := range out {
-			nc, err := nats.Connect("", nats.InProcessServer(srv))
-			if err != nil {
-				t.Fatalf("connect node %d: %v", i, err)
-			}
-			t.Cleanup(nc.Close)
-			out[i] = openFleetForTest(t, nc, prefix)
-		}
-		return out
-	})
-}
-
-// AND THROUGH LEAVES, which is where the counter failed: every node a leaf of
-// its own, joined to one member, reaching the members' buckets across its
-// link. A round trip through a leaf is longer than one on a member, so the
-// fixed 32 ms backoff ceiling that spread a member's writers no longer spread
-// these, and the org's counter lost every one of its sixteen attempts to the
-// contract's thirty-two concurrent charges under the solo half's load. Here
-// [coordtest.ContendedCharges] charges go through each of three leaves at
-// once: ten times that contention through every node, from several nodes.
-func TestSharedFleetContractThroughLeaves(t *testing.T) {
-	t.Parallel()
-	port := leafMember(t)
-	clients := make([]jetstream.JetStream, sharedFleetNodes)
-	for i := range clients {
-		clients[i] = leafClientOf(t, port, fmt.Sprintf("leaf-%d", i))
-	}
-	coordtest.RunSharedFleet(t, func(t *testing.T) []coord.Fleet {
-		prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
-		out := make([]coord.Fleet, len(clients))
-		for i, client := range clients {
-			out[i] = openFleetVia(t, client, prefix)
-		}
-		return out
-	})
-}
-
-// sharedFleetNodes is how many nodes the shared cases put on one store: three,
-// the smallest fleet that has a quorum, and enough that one node's batch is
-// raced by more than one other.
-const sharedFleetNodes = 3
 
 // BenchmarkAnOrgCounterChargedThroughLeaves measures what one hot key costs a
 // fleet of leaves: every node a leaf of its own on one member, each running

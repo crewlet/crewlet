@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // A company at every stage of giving its agents Mattermost bots: one opted in
@@ -53,13 +54,9 @@ func mattermostSeats(t *testing.T, s *surface) map[string]map[string]any {
 func TestTheMattermostRosterNamesEveryAgentsBot(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", mattermostDoc,
-		map[string]string{"X-Summary": "a company mid-rollout"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, mattermostDoc)
 	if err := s.vault.Set(t.Context(), "SRE_MATTERMOST_TOKEN", "a-real-bot-token",
-		"test", "test", pinned); err != nil {
+		testAuthor, secrets.SourceAPI, pinned); err != nil {
 		t.Fatal(err)
 	}
 	// THE PASS THIS APP HAS, because what the roster tells a seat with no

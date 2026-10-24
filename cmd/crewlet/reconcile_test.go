@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
@@ -59,7 +60,7 @@ func TestAFirstRunSeedsTheStore(t *testing.T) {
 	// store finds it unconfigured.
 	db := seedStore(t)
 	fleet := coordmemory.NewFleet()
-	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)), nil, testNode, quiet()); err != nil {
+	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)), fixtureCipher, testNode, quiet()); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	active, found, err := db.Configs().Active(t.Context())
@@ -78,10 +79,11 @@ func TestAFirstRunSeedsTheStore(t *testing.T) {
 		t.Errorf("the pointer names %s, want the seeded revision %s",
 			target.RevisionID, active.ID)
 	}
-	// AT ONE INSTANT. The local row's is what this node boots its chart
-	// with next time, and the pointer's is what every node applied it
-	// with: two readings of the clock would put a restart's projects at
-	// an epoch no apply ever stamped.
+	// AT ONE INSTANT. The local row's is what this node's config history
+	// shows and what the reconciler holds against the pointer's: two
+	// readings of the clock would date the activation twice, and the
+	// reconciler's first tick would re-activate the revision locally to
+	// realign what the seed wrote a moment earlier.
 	if store.EncodeTime(active.ActivatedAt) != store.EncodeTime(target.At) {
 		t.Errorf("the seeded revision was activated at %s here and %s on the "+
 			"pointer, want one instant", active.ActivatedAt, target.At)
@@ -96,7 +98,7 @@ func TestAnUnchangedFileSeedsNothing(t *testing.T) {
 	db := seedStore(t)
 	company := parse(t, companyYAML)
 	for range 5 {
-		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seedOf(company), nil, testNode, quiet()); err != nil {
+		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seedOf(company), fixtureCipher, testNode, quiet()); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	}
@@ -119,12 +121,12 @@ func TestAnOverrideImportsAnEditedFileOnce(t *testing.T) {
 	t.Parallel()
 	db := seedStore(t)
 	fleet := coordmemory.NewFleet()
-	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)), nil, testNode, quiet()); err != nil {
+	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)), fixtureCipher, testNode, quiet()); err != nil {
 		t.Fatal(err)
 	}
 	edited := strings.Replace(companyYAML, "name: Acme", "name: Acme Renamed", 1)
 	for range 3 {
-		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, overrideOf(parse(t, edited)), nil, testNode, quiet()); err != nil {
+		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, overrideOf(parse(t, edited)), fixtureCipher, testNode, quiet()); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	}
@@ -145,7 +147,7 @@ func TestAnOverrideImportsAnEditedFileOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	var company map[string]any
-	if err := json.Unmarshal(active.Payload, &company); err != nil {
+	if err := json.Unmarshal(opened(t, active.Payload), &company); err != nil {
 		t.Fatal(err)
 	}
 	if company["name"] != "Acme Renamed" {
@@ -155,7 +157,7 @@ func TestAnOverrideImportsAnEditedFileOnce(t *testing.T) {
 
 func TestASealedStoreDoesNotReseedOnEveryBoot(t *testing.T) {
 	t.Parallel()
-	// THE trap. With a keyring configured the stored payload is ciphertext
+	// THE trap. Every stored payload is sealed, so it is ciphertext
 	// and a fresh nonce makes it differ on every seal, so comparing stored
 	// BYTES would import a new revision on every boot — and move the
 	// pointer, so the whole fleet rebuilds its epoch every restart.
@@ -182,18 +184,22 @@ func TestASealedStoreDoesNotReseedOnEveryBoot(t *testing.T) {
 	}
 	// And what was stored really is sealed.
 	if !secrets.Sealed(revisions[0].Payload) {
-		t.Error("a keyring was configured and the revision was stored in plaintext")
+		t.Error("the revision was stored in plaintext")
 	}
 	if bytes.Contains(revisions[0].Payload, []byte("Acme")) {
 		t.Errorf("the company name survived into the stored form: %s", revisions[0].Payload)
 	}
 }
 
-func TestASealedStoreWithNoKeyringRefusesRatherThanReseeding(t *testing.T) {
+// A STORE SEALED UNDER A KEY THIS NODE DOES NOT HOLD REFUSES RATHER THAN
+// RESEEDING.
+//
+// A node deployed with the wrong keyring — another fleet's Tier A, or a key
+// dropped before every revision was re-sealed off it — cannot read the active
+// revision. Seeding over it would replace a company nobody here can decrypt
+// with one this node happens to have on disk, silently, on a restart.
+func TestAStoreSealedUnderAnotherKeyRefusesRatherThanReseeding(t *testing.T) {
 	t.Parallel()
-	// A node that lost its keyring cannot read the active revision. Seeding
-	// over it would replace a company nobody can decrypt with one this node
-	// happens to have on disk — silently, on a restart.
 	db := seedStore(t)
 	cipher, err := secrets.NewCipher(secrets.Keyring{
 		ActiveID: "k1", Keys: map[string][]byte{"k1": generatedKey(t)},
@@ -205,12 +211,10 @@ func TestASealedStoreWithNoKeyringRefusesRatherThanReseeding(t *testing.T) {
 	if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seedOf(company), cipher, testNode, quiet()); err != nil {
 		t.Fatal(err)
 	}
-	err = seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seedOf(company), nil, testNode, quiet())
-	if err == nil {
-		t.Fatal("a node with no keyring seeded over a sealed revision")
-	}
-	if !strings.Contains(err.Error(), "sealed") {
-		t.Errorf("the error does not say what is wrong: %v", err)
+	err = seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seedOf(company), fixtureCipher, testNode, quiet())
+	if !errors.Is(err, secrets.ErrDecrypt) {
+		t.Fatalf("a seed holding another keyring = %v, want the active revision "+
+			"refused as undecryptable", err)
 	}
 	revisions, err := db.Configs().List(t.Context(), 0, 0)
 	if err != nil {
@@ -219,6 +223,16 @@ func TestASealedStoreWithNoKeyringRefusesRatherThanReseeding(t *testing.T) {
 	if len(revisions) != 1 {
 		t.Fatalf("%d revisions, want the sealed one left alone", len(revisions))
 	}
+}
+
+// opened is a stored payload as the fixture keyring reads it.
+func opened(t *testing.T, payload []byte) []byte {
+	t.Helper()
+	document, err := secrets.Open(fixtureCipher, payload)
+	if err != nil {
+		t.Fatalf("open the stored revision: %v", err)
+	}
+	return document
 }
 
 func generatedKey(t *testing.T) []byte {
@@ -248,7 +262,7 @@ func TestANodeWithNoPointerPublishesItsActiveRevision(t *testing.T) {
 	company := parse(t, companyYAML)
 
 	// A first start, which seeds the revision and publishes the pointer.
-	if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seedOf(company), nil, testNode, quiet()); err != nil {
+	if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seedOf(company), fixtureCipher, testNode, quiet()); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	active, found, err := db.Configs().Active(t.Context())
@@ -259,7 +273,7 @@ func TestANodeWithNoPointerPublishesItsActiveRevision(t *testing.T) {
 	// A restart onto a FRESH coordination store, with the same file and
 	// the same database.
 	fleet := coordmemory.NewFleet()
-	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(company), nil, testNode, quiet()); err != nil {
+	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(company), fixtureCipher, testNode, quiet()); err != nil {
 		t.Fatalf("restart: %v", err)
 	}
 	target, found, err := fleet.Target(t.Context())
@@ -272,6 +286,62 @@ func TestANodeWithNoPointerPublishesItsActiveRevision(t *testing.T) {
 	}
 }
 
+// A BOOT PUBLISHES NO REVISION IT HOLDS IN THE CLEAR.
+//
+// What a node publishes with no pointer to defer to, every peer applies — and
+// every peer refuses a body that is not sealed, this node included. It is
+// refused here instead, naming the command this node's operator runs.
+//
+// The control is the same store holding the revision sealed: published.
+//
+// Mutation: drop the open before the publish and the pointer moves.
+func TestABootPublishesNoRevisionItHoldsInTheClear(t *testing.T) {
+	t.Parallel()
+	document, err := json.Marshal(parse(t, companyYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sealed := range []bool{false, true} {
+		db := seedStore(t)
+		payload := json.RawMessage(document)
+		if sealed {
+			if payload, err = secrets.Seal(fixtureCipher, document); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := db.Configs().InsertActive(t.Context(), store.Revision{
+			Source: "file", CreatedBy: "not-a-node", CreatedByKind: iam.ActorSystem,
+			Summary: "stored before", Payload: payload, CreatedAt: time.Now().UTC(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		fleet := coordmemory.NewFleet()
+		err := seedCompany(t.Context(), db, fleet, nil, tierBSeed{Path: "company.yaml"},
+			fixtureCipher, testNode, quiet())
+		_, published, targetErr := fleet.Target(t.Context())
+		if targetErr != nil {
+			t.Fatal(targetErr)
+		}
+		if sealed {
+			// THE CONTROL.
+			if err != nil || !published {
+				t.Fatalf("a sealed active revision was not published: published=%v err=%v",
+					published, err)
+			}
+			continue
+		}
+		if !errors.Is(err, secrets.ErrUnsealedWithKey) {
+			t.Fatalf("a boot over an unsealed revision = %v, want it refused unsealed", err)
+		}
+		if !strings.Contains(err.Error(), "crewlet config import") {
+			t.Errorf("the refusal does not name the command that brings it back sealed: %v", err)
+		}
+		if published {
+			t.Error("the boot published a revision it holds in the clear")
+		}
+	}
+}
+
 // A node booting into a running fleet must CONVERGE on what the fleet already
 // decided, not overwrite it with whatever its local database happens to say.
 // Without this rule one restarted node could roll a company back.
@@ -279,7 +349,7 @@ func TestAStaleLocalRevisionDoesNotOverwriteTheFleet(t *testing.T) {
 	t.Parallel()
 	db := seedStore(t)
 	fleet := coordmemory.NewFleet()
-	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)), nil, testNode, quiet()); err != nil {
+	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)), fixtureCipher, testNode, quiet()); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	// A PEER activated something else, later.
@@ -289,7 +359,7 @@ func TestAStaleLocalRevisionDoesNotOverwriteTheFleet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("peer activate: %v", err)
 	}
-	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)), nil, testNode, quiet()); err != nil {
+	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)), fixtureCipher, testNode, quiet()); err != nil {
 		t.Fatalf("restart: %v", err)
 	}
 	after, _, err := fleet.Target(t.Context())
@@ -329,7 +399,7 @@ func TestABootstrapSeedDoesNotOverwriteAnExistingCompany(t *testing.T) {
 	t.Parallel()
 	db := seedStore(t)
 	fleet := coordmemory.NewFleet()
-	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)), nil, testNode, quiet()); err != nil {
+	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)), fixtureCipher, testNode, quiet()); err != nil {
 		t.Fatal(err)
 	}
 	before, _, err := db.Configs().Active(t.Context())
@@ -344,7 +414,7 @@ func TestABootstrapSeedDoesNotOverwriteAnExistingCompany(t *testing.T) {
 	// The stale file, booted repeatedly, exactly as a restart would.
 	edited := strings.Replace(companyYAML, "name: Acme", "name: Acme Renamed", 1)
 	for range 3 {
-		if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, edited)), nil, testNode, quiet()); err != nil {
+		if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, edited)), fixtureCipher, testNode, quiet()); err != nil {
 			t.Fatalf("seed: %v", err)
 		}
 	}
@@ -365,7 +435,7 @@ func TestABootstrapSeedDoesNotOverwriteAnExistingCompany(t *testing.T) {
 		t.Errorf("the active revision moved from %s to %s", before.ID, after.ID)
 	}
 	var company map[string]any
-	if err := json.Unmarshal(after.Payload, &company); err != nil {
+	if err := json.Unmarshal(opened(t, after.Payload), &company); err != nil {
 		t.Fatal(err)
 	}
 	if company["name"] != "Acme" {
@@ -610,7 +680,7 @@ func TestNoSeedFileLeavesTheStoreAlone(t *testing.T) {
 	t.Parallel()
 	db := seedStore(t)
 	fleet := coordmemory.NewFleet()
-	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)), nil, testNode, quiet()); err != nil {
+	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)), fixtureCipher, testNode, quiet()); err != nil {
 		t.Fatal(err)
 	}
 	before, _, err := db.Configs().Active(t.Context())
@@ -618,7 +688,7 @@ func TestNoSeedFileLeavesTheStoreAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 	// tierBSeed with no Company: `crewlet run` with no company.yaml.
-	if err := seedCompany(t.Context(), db, fleet, nil, tierBSeed{Path: "company.yaml"}, nil, testNode, quiet()); err != nil {
+	if err := seedCompany(t.Context(), db, fleet, nil, tierBSeed{Path: "company.yaml"}, fixtureCipher, testNode, quiet()); err != nil {
 		t.Fatalf("seed with no file: %v", err)
 	}
 	revisions, err := db.Configs().List(t.Context(), 0, 0)
@@ -644,7 +714,7 @@ func TestNoSeedAndNoRevisionIsNotAFailure(t *testing.T) {
 	t.Parallel()
 	db := seedStore(t)
 	if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil,
-		tierBSeed{Path: "company.yaml"}, nil, testNode, quiet()); err != nil {
+		tierBSeed{Path: "company.yaml"}, fixtureCipher, testNode, quiet()); err != nil {
 		t.Fatalf("an unconfigured node failed to seed: %v", err)
 	}
 	revisions, err := db.Configs().List(t.Context(), 0, 0)

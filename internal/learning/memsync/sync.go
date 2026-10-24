@@ -3,6 +3,7 @@ package memsync
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -40,7 +41,11 @@ const consumerCleanupTimeout = 5 * time.Second
 // couple of pulls.
 const fetchBatch = 256
 
-// AgentIDFor derives a seat's stable id from its handle.
+// AgentIDFor derives a seat's stable id from its handle (ADR-0013), or ""
+// where there is nothing to derive it in. An empty id is no address on the
+// changelog: [Syncer.Publish] carries nothing for it rather than publish to a
+// subject with an empty seat token, which the broker refuses, and
+// [Syncer.Hydrate]'s filter over such a token matches nothing.
 //
 // Injected rather than imported, because the derivation belongs to the
 // organization model and this package needs exactly one function from it —
@@ -72,8 +77,15 @@ type Syncer struct {
 //
 // IT TAKES A JETSTREAM CLIENT rather than a connection, because the client is
 // where the API a broker is addressed in is decided — the embedded fleet's
-// domain or an external cluster's account (see internal/jsapi) — and the
-// caller holds the one its queue already speaks.
+// domain, a leaf's, or an external cluster's account (see internal/jsapi) — and
+// the caller holds the one its queue already speaks.
+//
+// BUILT OVER THE COORDINATION CONNECTION, never the queue's own (ADR-0001): a
+// replay is an ordered consumer over a seat's whole history, and on the queue's
+// connection it would sit on the read loop every mailbox consumes through. On
+// an external broker the two are one connection; on the embedded one the
+// coordination store's is the second, watched one, so losing it stops the node
+// as losing the queue's does.
 func New(db *store.DB, js jetstream.JetStream, agentID AgentIDFor) (*Syncer, error) {
 	if db == nil || js == nil || agentID == nil {
 		return nil, nil
@@ -97,6 +109,9 @@ func (s *Syncer) Publish(ctx context.Context, handle string) (int, error) {
 		return 0, nil
 	}
 	ref := s.seat(handle)
+	if ref.AgentID == "" {
+		return 0, nil
+	}
 	published := 0
 	for _, spec := range tables {
 		mark := s.mark(handle, spec.name)
@@ -109,7 +124,7 @@ func (s *Syncer) Publish(ctx context.Context, handle string) (int, error) {
 			if err != nil {
 				return published, err
 			}
-			subject := spec.subject(handle, row.Values)
+			subject := spec.subject(ref.AgentID, row.Values)
 			if _, err := s.js.Publish(ctx, subject, body); err != nil {
 				return published, fmt.Errorf("memsync: publish a %s row for %s: %w",
 					spec.name, handle, err)
@@ -140,6 +155,7 @@ func (s *Syncer) Hydrate(ctx context.Context, handle string) (int, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, hydrateWait)
 	defer cancel()
+	ref := s.seat(handle)
 
 	// CONTRACT 1 FIRST, before a single row is read.
 	//
@@ -148,8 +164,23 @@ func (s *Syncer) Hydrate(ctx context.Context, handle string) (int, error) {
 	// degraded hydration — it is every seat on this node silently losing
 	// its diary and its episodes, with a `memory_hydrated` line saying
 	// zero rows and nothing anywhere saying why.
-	if err := s.checkIdentity(ctx); err != nil {
+	stream, err := s.checkIdentity(ctx)
+	if err != nil {
 		return 0, err
+	}
+	filter := topics.MemoryPrefix + ref.AgentID + ".>"
+
+	// THE LEADER'S END OF THIS SEAT'S ROWS, before the replay is opened —
+	// see [Syncer.leaderEnd] for why the replay alone cannot be trusted to
+	// have reached it. Nothing there is the leader's answer that the seat
+	// has no memory, which is every seat on a fresh company, and it costs
+	// one round trip rather than a consumer.
+	end, err := s.leaderEnd(ctx, stream, filter)
+	if err != nil {
+		return 0, fmt.Errorf("memsync: find where %s's memory ends: %w", handle, err)
+	}
+	if end == 0 {
+		return 0, nil
 	}
 
 	// An EPHEMERAL consumer over this seat's subjects, from the start of
@@ -158,7 +189,7 @@ func (s *Syncer) Hydrate(ctx context.Context, handle string) (int, error) {
 	// next hydration wants the whole current picture again, not what has
 	// changed since some previous node read it.
 	consumer, err := s.js.CreateConsumer(ctx, topics.MemoryStream, jetstream.ConsumerConfig{
-		FilterSubject: topics.MemoryPrefix + handle + ".>",
+		FilterSubject: filter,
 		DeliverPolicy: jetstream.DeliverAllPolicy,
 		AckPolicy:     jetstream.AckNonePolicy,
 	})
@@ -184,13 +215,13 @@ func (s *Syncer) Hydrate(ctx context.Context, handle string) (int, error) {
 			topics.MemoryStream, consumer.CachedInfo().Name)
 	}()
 
-	// HOW MANY ROWS THERE ARE, BEFORE READING ANY. This runs inside seat
-	// acquisition, so a blind fetch is not affordable: with nothing to
-	// replay it would wait out its own timeout, and the seat would still
-	// be acquiring when its first lease renewal came due. Measured — two
-	// seats hydrating nothing cost four seconds and the node lost both
-	// leases. Asking the consumer what is pending turns the empty case,
-	// which is every seat on a fresh company, into one round trip.
+	// HOW MANY ROWS THE REPLAY'S COPY HOLDS, BEFORE READING ANY. This runs
+	// inside seat acquisition, so a blind fetch is not affordable: a fetch
+	// asks for a number of rows and waits until it has them or its budget
+	// is spent, and one asking for more than are there waits the whole
+	// budget out, while the seat's first lease renewal comes due. Measured
+	// — two seats waiting that out cost four seconds and the node lost
+	// both leases. So every fetch asks for what the copy says it has.
 	info, err := consumer.Info(ctx)
 	if err != nil {
 		// FAILS THE HYDRATION rather than reading as "nothing to carry".
@@ -201,14 +232,24 @@ func (s *Syncer) Hydrate(ctx context.Context, handle string) (int, error) {
 		return 0, fmt.Errorf("memsync: count %s's memory: %w", handle, err)
 	}
 	pending := int(info.NumPending)
-	if pending == 0 {
-		return 0, nil
-	}
 
+	// UNTIL THE REPLAY HAS REACHED THE LEADER'S END, and not merely until
+	// the copy serving it has nothing more to say. A copy that is behind
+	// says it has nothing more while the leader holds the seat's newest
+	// rows; asked for one more row, it hands that row over as soon as it
+	// applies it, which is what the fetch of one below waits for.
 	carried := 0
-	for pending > 0 {
-		want := min(pending, fetchBatch)
-		batch, err := consumer.Fetch(want, jetstream.FetchMaxWait(hydrateWait))
+	var reached uint64
+	for reached < end {
+		want := 1
+		if pending > 0 {
+			want = min(pending, fetchBatch)
+		}
+		// ON THE HYDRATION'S OWN CONTEXT, so the fetches share its one
+		// budget: each used to wait a whole hydrateWait of its own, so a
+		// replay that stalled twice held seat acquisition for twice the
+		// bound this package documents.
+		batch, err := consumer.Fetch(want, jetstream.FetchContext(ctx))
 		if err != nil {
 			return carried, fmt.Errorf("memsync: replay %s: %w", handle, err)
 		}
@@ -216,6 +257,12 @@ func (s *Syncer) Hydrate(ctx context.Context, handle string) (int, error) {
 		if err := s.db.Tx(ctx, func(tx *sql.Tx) error {
 			for msg := range batch.Messages() {
 				got++
+				meta, metaErr := msg.Metadata()
+				if metaErr != nil {
+					return metaErr
+				}
+				reached = max(reached, meta.Sequence.Stream)
+				pending = int(meta.NumPending)
 				row, spec, known, decodeErr := decode(msg.Data())
 				if decodeErr != nil {
 					return decodeErr
@@ -241,12 +288,17 @@ func (s *Syncer) Hydrate(ctx context.Context, handle string) (int, error) {
 			return carried, err
 		}
 		if got == 0 {
-			// The stream said there were more and delivered none:
-			// stopping is the only way this loop is guaranteed to
-			// end, and a short hydration is better than a stuck one.
-			break
+			// THE BUDGET RAN OUT SHORT OF THE LEADER'S END. Refused,
+			// never admitted short: the rows past what the copy
+			// delivered are the seat's NEWEST, and a hydration that
+			// reported success without them is the amnesia this
+			// package exists to prevent, said by no line anywhere.
+			// The seat waits for the next placement sweep, as it does
+			// on every other failure here.
+			return carried, fmt.Errorf("memsync: replay %s: the copy serving it "+
+				"reached sequence %d of the %d the stream's leader holds for "+
+				"this seat before the hydration's budget ran out", handle, reached, end)
 		}
-		pending -= got
 	}
 	log.InfoContext(ctx, "memory_hydrated", "seat", handle, "rows", carried)
 	return carried, nil
@@ -337,13 +389,13 @@ func (s *Syncer) ReplayProtocol() statelog.ReplayProtocol { return statelog.Repl
 // know" resumes against a stream this node cannot identify, which is the whole
 // failure this guard is about. It costs a delayed seat on a broker having a
 // bad minute, which the caller retries.
-func (s *Syncer) checkIdentity(ctx context.Context) error {
-	if s == nil || s.js == nil || s.db == nil {
-		return nil
-	}
-	info, err := s.js.Stream(ctx, topics.MemoryStream)
+//
+// It hands back the stream it identified, which is the handle the hydration
+// then asks the leader through ([Syncer.leaderEnd]).
+func (s *Syncer) checkIdentity(ctx context.Context) (jetstream.Stream, error) {
+	stream, err := s.js.Stream(ctx, topics.MemoryStream)
 	if err != nil {
-		return fmt.Errorf("memsync: read the memory changelog's identity: %w — "+
+		return nil, fmt.Errorf("memsync: read the memory changelog's identity: %w — "+
 			"a seat is not admitted from a stream this node cannot identify, "+
 			"because a recreated one is EMPTY and would hydrate every seat to "+
 			"nothing while reporting success", err)
@@ -351,26 +403,29 @@ func (s *Syncer) checkIdentity(ctx context.Context) error {
 	// THE ONE READING of a stream's identity: the instant stamped at its
 	// creation, which a restored changelog keeps and the broker's own
 	// instant does not ([statelog.CreatedAtKey]).
-	created, err := statelog.StreamCreatedAt(info.CachedInfo())
+	created, err := statelog.StreamCreatedAt(stream.CachedInfo())
 	if err != nil {
-		return fmt.Errorf("memsync: read the memory changelog's identity: %w", err)
+		return nil, fmt.Errorf("memsync: read the memory changelog's identity: %w", err)
 	}
 
 	recorded, known, err := statelog.RecordedIdentity(ctx, s.db, topics.MemoryStream)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	switch state := statelog.IdentityOf(recorded, created, known); state {
 	case statelog.StreamSame:
-		return nil
+		return stream, nil
 	case statelog.StreamFirstSight:
 		// A FRESH NODE, a fresh company, or the first boot after this
 		// guard shipped. Recorded rather than refused: refusing here
 		// would make every first boot an outage.
-		return statelog.RecordIdentity(ctx, s.db, topics.MemoryStream,
-			created, time.Now().UTC())
+		if err := statelog.RecordIdentity(ctx, s.db, topics.MemoryStream,
+			created, time.Now().UTC()); err != nil {
+			return nil, err
+		}
+		return stream, nil
 	case statelog.StreamUnknown:
-		return fmt.Errorf("memsync: the memory changelog reports no creation "+
+		return nil, fmt.Errorf("memsync: the memory changelog reports no creation "+
 			"instant, so this node cannot tell it from a recreated one: %w",
 			statelog.ErrStreamRecreated)
 	default:
@@ -383,9 +438,59 @@ func (s *Syncer) checkIdentity(ctx context.Context) error {
 				"node a blank diary. Nothing here can recover what was on the "+
 				"old stream; an operator who intends the new one clears this "+
 				"node's stream_identity row")
-		return fmt.Errorf("memsync: the memory changelog was created at %s and "+
+		return nil, fmt.Errorf("memsync: the memory changelog was created at %s and "+
 			"this node last saw one created at %s: %w",
 			created.Format(time.RFC3339), recorded.Format(time.RFC3339),
 			statelog.ErrStreamRecreated)
 	}
+}
+
+// leaderEnd is the stream sequence of the newest row the changelog's LEADER
+// holds for one seat's subjects, and 0 when it holds none.
+//
+// # Why the replay is held to it
+//
+// On a fleet the changelog is replicated, and the replay is an ephemeral R1
+// consumer, which the server places on a RANDOM member of the stream
+// (nats-server jetstream_cluster.go, createGroupForConsumer) and which
+// delivers out of THAT member's copy. A follower applies a row a moment after
+// the leader acknowledged it, so a replay hosted on one that is behind counts
+// its own copy, delivers it, and stops — short of the rows the seat's last
+// owner wrote just before placement moved it, which are the seat's newest. The
+// hydration reported that as success, and the seat served with the amnesia
+// this package exists to prevent: the same stale-replica read internal/coord/kv
+// reads through the leader to avoid (walk.go's "Every certifying answer is the
+// LEADER's" has the measurements).
+//
+// So the leader is asked first, and the replay is not done until it has
+// delivered a row at or past this sequence.
+//
+// # Why this read is the leader's
+//
+// The changelog is provisioned with direct gets OFF (internal/queue/jetstream's
+// stream specs), so the client answers a last-message read with
+// `$JS.API.STREAM.MSG.GET`, which only the stream leader answers — the same
+// `MSG.GET` coord/kv's leaderReader asks for on the wire through
+// internal/jsapi's Leader, because its buckets were created with direct gets
+// on and the client would answer them from any replica. It is the client's own
+// call here, and not jsapi's, for a reason of the filter's: it is a WILDCARD
+// over the seat's subjects, and jsapi's Leader.Last refuses an answer on any
+// subject other than the one it asked about. A member that sees no leader
+// answers an error, which fails the hydration rather than reading as a seat
+// with nothing to carry.
+func (s *Syncer) leaderEnd(ctx context.Context, stream jetstream.Stream, filter string) (uint64, error) {
+	if stream.CachedInfo().Config.AllowDirect {
+		// THE PREMISE ABOVE, checked rather than assumed: with direct gets
+		// on, the read below is answered by any replica and proves nothing.
+		return 0, fmt.Errorf("memsync: the memory changelog %s allows direct gets, so "+
+			"its newest row cannot be read from its leader", topics.MemoryStream)
+	}
+	msg, err := stream.GetLastMsgForSubject(ctx, filter)
+	switch {
+	case errors.Is(err, jetstream.ErrMsgNotFound):
+		return 0, nil
+	case err != nil:
+		return 0, err
+	}
+	return msg.Sequence, nil
 }

@@ -16,9 +16,9 @@ import (
 // a query string an attacker controls, and it is rendered into a browser. The
 // contextual escaping is the whole reason to use a template here rather than
 // build the markup by hand. And the page shares an origin with the dashboard,
-// whose operator token is in localStorage: the template's escaping is the
-// first defence, and the policy is the one that holds if the escaping is ever
-// wrong.
+// whose requests carry a signed-in person's session: the template's escaping
+// is the first defence, and the policy is the one that holds if the escaping
+// is ever wrong.
 //
 // BUILT AT THE FIRST REQUEST THAT RENDERS IT, for [githubAppPage]'s reason:
 // every push's proc-receive hook is this binary, and runs every package's init.

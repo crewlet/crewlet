@@ -1,0 +1,1 @@
+var e={attention:`warning`,not_connected:`warning`,connected:`success`,not_in_use:`neutral`};function t(e,t){return e?.find(e=>e.key===t)}export{t as n,e as t};

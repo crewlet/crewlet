@@ -80,7 +80,7 @@ func TestASnapshotThatMovesIsReadAgain(t *testing.T) {
 }
 
 // A STREAM CHANGE IS A FULL SYNC: a log RECREATED under the cache — provisioned
-// anew, its stamp not the one the cache read under (ADR-0035) — answers a
+// anew, its stamp not the one the cache read under (ADR-0049) — answers a
 // delta from the cache's position with the rows of an earlier state, which a
 // delta cannot carry; the cache sees the stream it read from is not this one,
 // reads the whole answer, and converges to the recreated rows — packs they do
@@ -206,7 +206,7 @@ func TestAnAnswerBehindTheCacheChangesNothing(t *testing.T) {
 }
 
 // A LOG RESTORED BEHIND THE CACHE IS FOLLOWED BACK. A broker brought back from
-// an older copy keeps its stream's identity (ADR-0035), so nothing but where it
+// an older copy keeps its stream's identity (ADR-0049), so nothing but where it
 // ends says it went back — and only a read at the log's head can say that: a
 // linearizable answer below a position this cache read, whether its own
 // repository's or another's. The cache then reads the repository whole and

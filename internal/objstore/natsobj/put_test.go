@@ -36,7 +36,7 @@ const suiteStall = 2 * time.Second
 // acrossLink is how the engine opens the bucket on a node whose connection
 // crosses a link to the stream — a leaf, an external cluster's client — at
 // the shipped lease, renewed every [seat.HeartbeatInterval].
-var acrossLink = natsobj.Config{Replicas: 1, AcrossLink: true, LeaseHeartbeat: seat.HeartbeatInterval}
+var acrossLink = natsobj.Config{MaxBytes: testCeiling, Replicas: 1, AcrossLink: true, LeaseHeartbeat: seat.HeartbeatInterval}
 
 // stallingMember is the suite's stalling backend on a member reached over TCP:
 // a client dialing the member through a [link], which the freeze stops in both
@@ -398,7 +398,7 @@ func TestPutsOnOneConnectionShareOneWindow(t *testing.T) {
 		cfg  natsobj.Config
 		want int
 	}{
-		{"on a member's own client", natsobj.Config{Replicas: 1}, natsobj.MemberWindow},
+		{"on a member's own client", natsobj.Config{MaxBytes: testCeiling, Replicas: 1}, natsobj.MemberWindow},
 		{"across a link", acrossLink, natsobj.LinkWindow(acrossLink.LeaseHeartbeat)},
 		{"across a link on a short lease", shortLease, natsobj.LinkWindow(shortLease.LeaseHeartbeat)},
 	} {
@@ -527,7 +527,7 @@ func TestTheLinkLeaseFloorIsOneMessageAHeartbeat(t *testing.T) {
 // loses its seats.
 func TestABucketAcrossALinkNeedsTheNodesHeartbeat(t *testing.T) {
 	t.Parallel()
-	_, err := natsobj.Open(t.Context(), memberClient(t), natsobj.Config{Replicas: 1, AcrossLink: true})
+	_, err := natsobj.Open(t.Context(), memberClient(t), natsobj.Config{MaxBytes: testCeiling, Replicas: 1, AcrossLink: true})
 	if err == nil || !strings.Contains(err.Error(), "LeaseHeartbeat") {
 		t.Fatalf("a bucket opened across a link with no lease heartbeat = %v; want a refusal naming "+
 			"Config.LeaseHeartbeat", err)

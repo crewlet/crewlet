@@ -16,7 +16,14 @@ import (
 type TurnPlace struct {
 	TaskID string `json:"id"`
 	Key    string `json:"key"`
-	Title  string `json:"title"`
+
+	// KeyCollision is the task's [TaskRow.KeyCollision]: its key is one
+	// another task claimed first, so a link built from [TurnPlace.Key]
+	// opens that task and this one is reached by [TurnPlace.TaskID]. See
+	// [ItemAddress].
+	KeyCollision bool `json:"key_collision,omitempty"`
+
+	Title string `json:"title"`
 
 	// Ordinal is the task's own count, exactly [TaskTurn.Ordinal]: zero for
 	// a run with no counted row on the task.
@@ -86,7 +93,7 @@ func readTurnPlaces(ctx context.Context, tx *sql.Tx, runs []string,
 	// THROUGH `tracker_turns_turn_idx` (replicated 0030), newest row first per
 	// run so the fallback below is the first row it sees.
 	rows, err := tx.QueryContext(ctx, `
-		SELECT t.turn_id, t.task_id, k.key, k.title,
+		SELECT t.turn_id, t.task_id, k.key, k.key_collision, k.title,
 		       COALESCE(json_extract(t.document, '$.spend.turns'), 0) > 0
 		  FROM tracker_turns t
 		  JOIN tracker_tasks k ON k.id = t.task_id AND k.removed_at IS NULL
@@ -101,10 +108,13 @@ func readTurnPlaces(ctx context.Context, tx *sql.Tx, runs []string,
 		var run string
 		var place TurnPlace
 		var isCounted bool
-		if err = rows.Scan(&run, &place.TaskID, &place.Key, &place.Title, &isCounted); err != nil {
+		var collision int
+		if err = rows.Scan(&run, &place.TaskID, &place.Key, &collision, &place.Title,
+			&isCounted); err != nil {
 			_ = rows.Close()
 			return fmt.Errorf("tracker: scan a run's task: %w", err)
 		}
+		place.KeyCollision = collision == 1
 		_, placed := out[run]
 		switch {
 		case isCounted && !counted[run]:

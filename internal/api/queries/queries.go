@@ -21,8 +21,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/crewlet/crewlet/internal/coord"
-	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -33,10 +34,33 @@ var (
 	// ErrUnknown is a name nothing answers.
 	ErrUnknown = errors.New("queries: unknown query")
 
-	// ErrUnauthorized is a query that needs an operator and did not get
-	// one. Returned rather than decided here, so the refusal reaches a
-	// client as a code it already handles.
-	ErrUnauthorized = errors.New("queries: query requires an operator")
+	// ErrUnauthorized is a question asked by somebody this node KNOWS,
+	// who does not carry the permission it declares, or whose stage may
+	// not act — or, for a question naming somebody's record, whose
+	// relation to that record does not reach it.
+	// Every such refusal is a [*Refusal], which carries the rule's reason
+	// and the grants that would have admitted the caller; this sentinel is
+	// what a transport branches on.
+	ErrUnauthorized = errors.New("queries: refused on authority")
+
+	// ErrUnauthenticated is a question asked by nobody: a resolver ran and
+	// found no credential.
+	//
+	// DISTINCT FROM [ErrUnauthorized], because the two ask a client for
+	// opposite things — "present a credential" and "the one you presented
+	// does not carry this" — and a narrow reader meets the second the
+	// moment they open a screen outside their access, which is the
+	// ordinary case rather than the exceptional one. Folded together, the
+	// surface tells that reader to go and get a new credential.
+	//
+	// UNREACHABLE THROUGH A WIRED SURFACE TODAY, because the guard answers
+	// an anonymous request before this function is called and every socket
+	// authenticates at its handshake. It is stated anyway: this package is
+	// reached by two transports and the middleware in front of one of them
+	// is not this package's to keep, so a refusal that is correct only
+	// because something upstream happens to answer first is one edit from
+	// being wrong. See [Registry.AnswerWith].
+	ErrUnauthenticated = errors.New("queries: no credential was presented")
 
 	// ErrBadParams is a request this surface understood and refused.
 	ErrBadParams = errors.New("queries: bad parameters")
@@ -60,7 +84,7 @@ func RefusalDetail(err error) string {
 	if err == nil {
 		return ""
 	}
-	var r *refusal
+	var r *classedRefusal
 	if errors.As(err, &r) {
 		return r.sentence
 	}
@@ -72,60 +96,81 @@ func RefusalDetail(err error) string {
 	return strings.TrimSpace(text)
 }
 
-// refusal is an [ErrBadParams] refusal that is also a finer class, with a
-// sentence written for the person who will read it.
+// classedRefusal is an [ErrBadParams] refusal that is also a finer class, with
+// a sentence written for the person who will read it.
+//
+// NOT A [Refusal], which is a refusal on AUTHORITY and answers
+// [ErrUnauthorized]: this one is about the REQUEST, and its remedy is a
+// different parameter rather than a different credential.
 //
 // THE CLASS IS IN THE CHAIN AND NOT IN THE SENTENCE. `%w: %w: …` put both
 // sentinels' Go text in front of the explanation, and a class name is for
 // [errors.Is], never for a reader.
-type refusal struct {
+type classedRefusal struct {
 	sentence string
 	class    error
 }
 
-func (r *refusal) Error() string { return ErrBadParams.Error() + ": " + r.sentence }
+func (r *classedRefusal) Error() string { return ErrBadParams.Error() + ": " + r.sentence }
 
-// Unwrap makes a refusal both [ErrBadParams] and its class to [errors.Is].
-func (r *refusal) Unwrap() []error { return []error{ErrBadParams, r.class} }
+// Unwrap makes a classed refusal both [ErrBadParams] and its class to
+// [errors.Is].
+func (r *classedRefusal) Unwrap() []error { return []error{ErrBadParams, r.class} }
 
 // refuseAs is a refusal of the given class, its sentence formatted from args.
 func refuseAs(class error, format string, args ...any) error {
-	return &refusal{sentence: fmt.Sprintf(format, args...), class: class}
+	return &classedRefusal{sentence: fmt.Sprintf(format, args...), class: class}
 }
 
-// operatorKey is the context key this package carries the caller's operator id
-// under.
+// Refusal is a question refused on AUTHORITY: a caller this node knows, whose
+// grants — or, for a personal question, whose relation to the record it named
+// — do not reach what they asked. It is [ErrUnauthorized] to [errors.Is].
 //
-// THE CONTEXT, NOT THE PARAMS, and the distinction is a security one: params
-// are the caller's own bag, so an id read from there would be an id the caller
-// chose. This one is written in exactly one place — [Registry.AnswerWith],
-// after the operator check — so every question that asks who is calling gets
-// the same answer, on both transports, and no caller can write it.
-//
-// Its own type, unexported, so nothing outside this package can collide with
-// the key or forge a value under it.
-type operatorKey struct{}
+// A TYPE RATHER THAN A WRAPPED SENTENCE, because a surface renders what it
+// carries: the rule's own reason and the grants that would have admitted the
+// caller, as values a client branches on. A sentence written beside the rule
+// — "needs the lead relation or admin" — is a second statement of the rule,
+// and it is the copy that goes stale the day the rule's admin path moves.
+type Refusal struct {
+	// What is what was refused: the question, or — where the question was
+	// admitted and the record it named was not — the verb asked of that
+	// record, which is the more useful half to a reader of the log.
+	What string
 
-// withOperator returns a context carrying the caller's operator id.
-//
-// UNEXPORTED, because both transports reach an answer through
-// [Registry.AnswerWith] and there is nowhere else this may be set from. A
-// package that could stamp its own operator id onto a context would be a
-// second authority on who the caller is, which is the whole thing this key
-// exists to prevent.
-func withOperator(ctx context.Context, operatorID string) context.Context {
-	return context.WithValue(ctx, operatorKey{}, operatorID)
+	// Reason is the rule that decided, in the authority table's own words:
+	// [authz.ReasonNoGrant] for a question's declared permission,
+	// [authz.ReasonStage] for a caller whose stage may not act, and
+	// whatever [authz.Decide] concluded for a record a question named.
+	Reason authz.Reason
+
+	// Grants are the permissions any one of which would have admitted the
+	// caller — [authz.Decision.Grants], or the one permission a question is
+	// registered as requiring. Empty where no permission would.
+	Grants []iam.Grant
 }
 
-// operatorFrom reads the caller's operator id, or "" for an anonymous one.
-//
-// EMPTY IS A REAL ANSWER, not a failure: most questions here are readable
-// without a token, and "nobody presented one" is exactly what a viewer query
-// reports back.
-func operatorFrom(ctx context.Context) string {
-	id, _ := ctx.Value(operatorKey{}).(string)
-	return id
+// refused is the refusal an [authz.Decision] makes of one question.
+func refused(what string, d authz.Decision) *Refusal {
+	return &Refusal{What: what, Reason: d.Reason, Grants: d.Grants}
 }
+
+// Error renders the refusal from its own values, so the sentence in a log can
+// never say something the reason and the grants do not.
+func (r *Refusal) Error() string {
+	var remedy string
+	if len(r.Grants) > 0 {
+		names := make([]string, 0, len(r.Grants))
+		for _, g := range r.Grants {
+			names = append(names, string(g))
+		}
+		remedy = "; carrying " + strings.Join(names, " or ") + " would admit it"
+	}
+	return fmt.Sprintf("queries: %q refused (%s)%s", r.What, r.Reason, remedy)
+}
+
+// Unwrap makes a refusal [ErrUnauthorized], which is what every transport
+// already maps.
+func (r *Refusal) Unwrap() error { return ErrUnauthorized }
 
 // Params are one query's arguments.
 //
@@ -303,11 +348,123 @@ type Answer func(ctx context.Context, p Params) (any, error)
 type entry struct {
 	answer Answer
 
-	// operator marks a question only an authenticated operator may ask.
-	// The config surface is all of them: reading it exposes the whole
-	// company document, including every ${VAR} reference by name.
-	operator bool
+	// posture is who may ask it.
+	//
+	// A POSTURE RATHER THAN A BOOL, which is what makes a narrow reader
+	// possible at all. It was `operator bool` — is there a credential,
+	// yes or no — and under that a token that could read the board could
+	// also read the company document and every ${VAR} reference in it by
+	// name.
+	//
+	// THE ZERO IS REFUSED AT REGISTRATION, not at the first request: an
+	// unstated posture would make a question this build ships ungated,
+	// looking exactly like one somebody decided to leave open.
+	posture Posture
 }
+
+// postureKind is which of the three answers a [Posture] gives.
+type postureKind uint8
+
+const (
+	// postureUnset is the zero, which no question may be registered with.
+	postureUnset postureKind = iota
+	postureEverybody
+	postureRequires
+	postureDecidedBy
+)
+
+// Posture is who may ask a question, declared where it is registered.
+//
+// THREE ANSWERS, and each is a different statement about what the question
+// discloses (ADR-0033):
+//
+//   - [Everybody]: the overview — the org chart, the agents' status, spend,
+//     schedules, the tools — which every principal the guard resolves and
+//     whose stage may act reads, a service account and a token included. A
+//     question that discloses a row of an app beside rows of none (the
+//     company feed, a page's links back to the work) is Everybody and drops
+//     the rows its caller may not see, through [authz.Shows].
+//   - [Requires]: admin, or one app. A question that answers nothing BUT one
+//     app's rows — the board, the pages — or nothing but the company's own
+//     machinery — the document, the audit trail, the deployment.
+//   - [DecidedBy]: any resolved principal may ASK, and the answer decides per
+//     record through the authority table's verb — a seat's trail
+//     (`audit.seat.read`, its lead or admin), a work item somebody may have
+//     been asked a question on (`get_work_item`). Stated here so the gate
+//     that walks the registry can tell a question that decides inside its
+//     answer from one that forgot to decide at all.
+//
+// THE ZERO IS INVALID and [Registry.Register] panics on it: a question with no
+// posture answers to any credential at all, and looks exactly like one
+// somebody decided to leave open.
+type Posture struct {
+	kind  postureKind
+	grant iam.Grant
+	verb  authz.Action
+}
+
+// Everybody is the overview's posture: any resolved principal whose stage may
+// act.
+func Everybody() Posture { return Posture{kind: postureEverybody} }
+
+// Requires is the posture of a question only admin or one app opens. g must
+// be [iam.GrantAdmin] or one of [iam.Apps]; anything else is refused at
+// registration.
+func Requires(g iam.Grant) Posture { return Posture{kind: postureRequires, grant: g} }
+
+// DecidedBy is the posture of a question whose ANSWER decides, per record,
+// through the authority table's verb a. Any resolved principal whose stage may
+// act may ask; what they are shown is that verb's decision. a must be a verb
+// the table has a row for.
+func DecidedBy(a authz.Action) Posture { return Posture{kind: postureDecidedBy, verb: a} }
+
+// Valid reports whether p is a posture a question may be registered with.
+func (p Posture) Valid() bool {
+	switch p.kind {
+	case postureEverybody:
+		return p.grant == "" && p.verb == ""
+	case postureRequires:
+		return p.verb == "" && (p.grant == iam.GrantAdmin || p.grant.IsApp())
+	case postureDecidedBy:
+		_, known := authz.ClassOf(p.verb)
+		return p.grant == "" && known
+	}
+	return false
+}
+
+// String names the posture as a person reads it: "everybody", the permission
+// a [Requires] posture asks for, or "decided_by:<verb>".
+func (p Posture) String() string {
+	switch p.kind {
+	case postureEverybody:
+		return "everybody"
+	case postureRequires:
+		return string(p.grant)
+	case postureDecidedBy:
+		return "decided_by:" + string(p.verb)
+	}
+	return "unset"
+}
+
+// Grant is the permission a [Requires] posture asks for, or "" for any other.
+func (p Posture) Grant() iam.Grant {
+	if p.kind != postureRequires {
+		return ""
+	}
+	return p.grant
+}
+
+// Verb is the authority table's verb a [DecidedBy] posture's answer decides
+// through, or "" for any other.
+func (p Posture) Verb() authz.Action {
+	if p.kind != postureDecidedBy {
+		return ""
+	}
+	return p.verb
+}
+
+// IsEverybody reports whether p is [Everybody].
+func (p Posture) IsEverybody() bool { return p.kind == postureEverybody }
 
 // Registry is the set of questions this process can answer.
 type Registry struct {
@@ -318,19 +475,30 @@ type Registry struct {
 // NewRegistry builds an empty registry.
 func NewRegistry() *Registry { return &Registry{entries: map[string]entry{}} }
 
-// Register adds a question.
+// Register adds a question and DECLARES who may ask it.
 //
-// Registering a name twice is a programming error and panics, rather than
-// silently taking one of them: two answers to one question is exactly the
-// divergence this package exists to prevent, and a wiring mistake that
-// resolved to whichever ran last would be invisible.
-func (r *Registry) Register(name string, answer Answer) {
-	r.register(name, entry{answer: answer})
-}
-
-// RegisterOperator adds a question only an authenticated operator may ask.
-func (r *Registry) RegisterOperator(name string, answer Answer) {
-	r.register(name, entry{answer: answer, operator: true})
+// # Why the posture is at the registration
+//
+// It is the only place that knows. A question's authority is a property of
+// what it discloses — `config` serves the whole company document, `events`
+// serves LLM transcripts, `work_items` serves the board — and none of that is
+// visible from the name, the route or the caller. Stated anywhere else it
+// would be a second list somebody has to keep in step with this one.
+//
+// A ZERO OR INVALID POSTURE PANICS, at wiring time, on every build — a
+// [Requires] of anything but admin or an app, and a [DecidedBy] of a verb the
+// authority table has no row for, included. A question registered without
+// one would answer to any credential at all, which is the exact shape of an
+// ungated surface that looks deliberate — and the panic is at start-up rather
+// than at the first request because a company finding out on the first
+// request has already served it.
+//
+// Registering a name twice panics too, rather than silently taking one of
+// them: two answers to one question is exactly the divergence this package
+// exists to prevent, and a wiring mistake that resolved to whichever ran last
+// would be invisible.
+func (r *Registry) Register(name string, posture Posture, answer Answer) {
+	r.register(name, entry{answer: answer, posture: posture})
 }
 
 func (r *Registry) register(name string, e entry) {
@@ -340,12 +508,26 @@ func (r *Registry) register(name string, e entry) {
 	if e.answer == nil {
 		panic(fmt.Sprintf("queries: %q registered with no answer", name))
 	}
+	if !e.posture.Valid() {
+		panic(fmt.Sprintf("queries: %q registered with the posture %s, which "+
+			"is not one a question may declare — Everybody, Requires(admin or "+
+			"one of %v), or DecidedBy(a verb internal/authz has a row for). A "+
+			"question with no posture answers to any credential at all, and "+
+			"looks exactly like one somebody decided to leave open",
+			name, e.posture.debug(), iam.Apps))
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, dup := r.entries[name]; dup {
 		panic(fmt.Sprintf("queries: %q registered twice", name))
 	}
 	r.entries[name] = e
+}
+
+// debug spells out every field of p, for the registration panic — where the
+// posture is invalid and [Posture.String] would hide what is wrong with it.
+func (p Posture) debug() string {
+	return fmt.Sprintf("{kind %d, grant %q, verb %q}", p.kind, p.grant, p.verb)
 }
 
 // Names lists the registered questions, sorted.
@@ -361,8 +543,8 @@ func (r *Registry) Names() []string {
 // The signature is the socket's, because the socket is the surface with a
 // name-to-question dispatch; a REST route knows its own question and calls the
 // answer directly. Both reach the same function either way.
-func (r *Registry) Answer(ctx context.Context, what string, params map[string]any, operatorID string) (any, error) {
-	return r.AnswerWith(ctx, what, FromMap(params), operatorID)
+func (r *Registry) Answer(ctx context.Context, what string, params map[string]any) (any, error) {
+	return r.AnswerWith(ctx, what, FromMap(params))
 }
 
 // AnswerWith runs one question against already-read parameters.
@@ -372,60 +554,134 @@ func (r *Registry) Answer(ctx context.Context, what string, params map[string]an
 // same authorization check — the alternative is a route that reads its own
 // params and forgets the operator check, which is the shape of the bug this
 // package exists to make impossible.
-func (r *Registry) AnswerWith(ctx context.Context, what string, p Params, operatorID string) (any, error) {
+func (r *Registry) AnswerWith(ctx context.Context, what string, p Params) (any, error) {
 	r.mu.RLock()
 	e, known := r.entries[what]
 	r.mu.RUnlock()
 	if !known {
 		return nil, fmt.Errorf("%w: %q", ErrUnknown, what)
 	}
-	if e.operator && operatorID == "" {
-		return nil, fmt.Errorf("%w: %q", ErrUnauthorized, what)
+	// THE GRANT THE CALLER ACTUALLY CARRIES, from the principal the guard
+	// resolved. An operator id used to travel beside it, converted from
+	// that same principal by each transport and stamped onto the context
+	// here — so a question asking who was calling read a STRING derived
+	// from an answer already in the context. It is gone: every personal
+	// question reads [iam.From] directly, which is the one place the
+	// caller is established.
+	//
+	// AND THE REFUSAL IS THREE-VALUED, which is why the resolution is read
+	// rather than dropped. A principal with no grants is the same zero
+	// value whether nobody presented a credential or this node could not
+	// CHECK the one presented, and those want opposite answers: the first
+	// is about the caller, who has to present something else, and the
+	// second is about the node. Reported as the first, an outage tells
+	// everybody holding a perfectly good credential that theirs is no
+	// good — which is how a company gets taught to reset working passwords
+	// while the identity estate is down.
+	//
+	// A STAGE THAT MAY NOT ACT IS REFUSED HERE, whatever the posture, which
+	// is the authority table's own first check: an [Everybody] question
+	// decides nothing else, so without it a suspended person's live
+	// session would go on reading the overview that every other gesture of
+	// theirs is refused.
+	switch principal, resolution := iam.From(ctx); {
+	case resolution == iam.Unknown:
+		return nil, unresolved(ctx, what)
+	case resolution == iam.Anonymous:
+		// NOBODY IS ASKING, which is a different refusal from a
+		// principal who lacks the permission — see [ErrUnauthenticated].
+		return nil, fmt.Errorf("%w: %q is asked as %s", ErrUnauthenticated,
+			what, e.posture)
+	case !principal.Stage.MayAct():
+		return nil, &Refusal{What: what, Reason: authz.ReasonStage}
+	case e.posture.kind == postureRequires && !principal.Can(e.posture.grant):
+		return nil, &Refusal{What: what, Reason: authz.ReasonNoGrant,
+			Grants: []iam.Grant{e.posture.grant}}
 	}
-	// WHO IS ASKING, for the questions that answer differently per person.
-	// Set here rather than at each transport, because this is the one
-	// function both of them meet at, which is the same reason this package
-	// exists at all.
-	data, err := e.answer(withOperator(ctx, operatorID), p)
-	return data, ClassifyUnavailable(err)
+	data, err := e.answer(ctx, p)
+	return data, ClassifyFailure(err)
 }
 
-// ClassifyUnavailable turns a read this node could not serve YET into
-// [ErrUnavailable], leaving every other failure alone.
+// unresolved is the refusal for a question asked on a context whose principal
+// nobody could establish, classified into the two things that actually cause
+// it — because this package already reports three kinds of failure and these
+// are two of them.
+//
+//   - THE IDENTITY ESTATE COULD NOT BE READ. A resolver ran, said so, and left
+//     its reason behind. That is "not yet": the same [ErrUnavailable] a
+//     state-log read refusal gets, carrying a Retry-After rather than advice
+//     to go and fix a credential that was never wrong.
+//   - NO RESOLVER EVER TOUCHED THIS CONTEXT ([iam.ErrUnresolved]). That is a
+//     wiring bug — a handler reached by a path nobody put through the guard,
+//     or a context somebody forgot to thread — and it never clears by waiting.
+//     So it is a plain failure, which this surface renders as the third thing:
+//     a bug to report. A Retry-After here would send a client round a loop
+//     that can only ever end when somebody edits the routing.
+//
+// Neither is [ErrUnauthorized], and that is the whole point of reading the
+// resolution: the caller's credential is not what is wrong in either case.
+func unresolved(ctx context.Context, what string) error {
+	why := iam.Reason(ctx)
+	if errors.Is(why, iam.ErrUnresolved) {
+		return fmt.Errorf("query %q reached the registry on a context no "+
+			"resolver has answered for: the route is not wired through the "+
+			"guard, or the request context was not threaded: %w", what, why)
+	}
+	return fmt.Errorf("%w: %q cannot be authorized while this node cannot "+
+		"read identity: %w", ErrUnavailable, what, why)
+}
+
+// ClassifyFailure sorts a failed answer into this registry's own vocabulary: a
+// read THIS NODE could not serve becomes [ErrUnavailable], a read whose request
+// named another log's position becomes [ErrBadParams], and every other failure
+// is left alone.
 //
 // AT THE REGISTRY, ONCE, rather than at each answer that reads something
-// that can be briefly unreachable. It was per answer, and the answers that
+// that can be unreachable or refused. It was per answer, and the answers that
 // did not call it were exactly the ones reported: an unreadable lease table
 // reached `fleet` as a plain failure and `sandbox_runs` likewise, so a
 // coordination blip rendered as `query_failed` and a 500, telling a client to
 // give up on a screen that would work in a few seconds. The reference had
 // promised a 503 for both.
 //
-// Three sources of "not yet" ([transient]), and each is its own subsystem's
-// classification rather than a second list here.
+// What this node could not serve is [unavailableHere] — the tools' own rule,
+// each arm of it a sentinel its own subsystem marks, rather than a second list
+// here.
 //
 // A refusal about the REQUEST is never reclassified, even when it wraps one of
 // those: the caller has to change what it asks, and "come back" would send the
 // identical request round a loop.
 //
+// AND ONE REQUEST MISTAKE IS RAISED ONLY BY THE READ ITSELF, so it is
+// classified here as [ErrBadParams]: a position the caller named on another
+// domain's log ([statelog.ErrForeignPosition]) — a `min_position`, or a feed's
+// `cursor` or `since`. The grammar that parses a position cannot know which
+// log a question reads, and the reader can — so the reader refuses it, before
+// it consults anything about this node, and this is where that refusal
+// becomes the caller's. A floor was a `wrong_stream` refusal, answered
+// `unavailable`: a 503 telling a client to ask another node, which refused it
+// identically, and a dashboard telling a person an operator had to act.
+//
 // EXPORTED for the code routes (internal/api/code.go), which answer outside
-// the registry and in its vocabulary: their "not yet" is this classification,
-// never a second list of what clears by waiting.
-func ClassifyUnavailable(err error) error {
+// the registry and in its vocabulary: their "not yet" and their misnamed
+// position are this classification, never a second list of what clears by
+// waiting.
+func ClassifyFailure(err error) error {
 	switch {
 	case err == nil,
 		errors.Is(err, ErrUnavailable),
 		errors.Is(err, ErrBadParams),
 		errors.Is(err, ErrNotFound),
+		errors.Is(err, ErrUnauthenticated),
 		errors.Is(err, ErrUnauthorized):
 		return err
+	case errors.Is(err, statelog.ErrForeignPosition):
+		return fmt.Errorf("%w: %w", ErrBadParams, err)
 	}
-	if transient(err) {
+	if unavailableHere(err) {
 		// WRAPPED, NOT REPLACED, so the refusal's own code, detail and
-		// derived hint survive for [RetryAfter] and for the log.
-		return fmt.Errorf("%w: %w", ErrUnavailable, err)
-	}
-	if errors.Is(err, coord.ErrUnavailable) {
+		// derived hint survive for [statelog.RetryAfter], for the
+		// transport that renders them, and for the log.
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	// A SEAT'S HOLDER THAT COULD NOT ANSWER YET — its lease unreadable, its
@@ -436,44 +692,60 @@ func ClassifyUnavailable(err error) error {
 	return err
 }
 
-// transient reports a read nothing could serve YET:
+// unavailableHere reports a read THIS NODE could not serve — which is never a
+// fault of the request, and never a fault of the server either.
 //
-//   - a state-log read refusal whose code is retryable
-//     ([statelog.ReadRefusal.Retryable]). A node that is behind will catch
-//     up; a node holding a record it cannot decode will not, however long a
-//     caller waits, so that one stays a failure.
-//   - [coord.ErrUnavailable], the coordination contract's own third answer:
+// IT IS THE TOOLS' OWN RULE ([builtin.Condition]) and not a list of this
+// registry's, because the two answer the same reads: the tracker and the
+// knowledge base are read through the estate's router whichever surface asks,
+// and a second list here had already drifted from the first — it knew the
+// router's unserved answer while the tools did not, and the tools knew a queue
+// that is not live, a broker that did not answer, a store held closed while it
+// adopts a snapshot and a wait that ran out, which this one did not, so a read
+// the router could not even send answered `bad_params` or a 500 here. What it
+// covers:
+//
+//   - EVERY state-log refusal ([statelog.ErrUnavailable]), a read's or a
+//     write's, whether or not waiting clears it. A node that is behind will
+//     catch up; a node holding a record it cannot decode, one whose log is
+//     full or whose broker refused the barrier will not — but none of those
+//     is a FAULT, and reported as one (a 500 `query_failed`, with the
+//     refusal's words sent only to the log) it told a caller the server had
+//     broken while hiding the remedy the refusal names. Whether to come back
+//     is carried separately, by [statelog.RetryAfter], which is ZERO for a
+//     refusal waiting cannot clear — so a surface answers it with no
+//     Retry-After and a client does not go round a loop.
+//   - coord.ErrUnavailable, the coordination contract's own third answer:
 //     the store could not be reached, which is neither "held" nor "absent".
-//   - the estate router finding no copy to answer from: no data node serves
-//     the estate right now ([estate.ErrUnserved]) — no live node holds data,
-//     or none that does answers. The tracker and the knowledge base are read
-//     through the router, as a seat's tools read them, so a copy out of
+//   - the estate router finding no copy to answer from (estate.ErrUnserved):
+//     no live node holds data, or none that does answers — a copy out of
 //     service or a peer restarting reaches this surface as this.
+//   - this node's own queue or store not ready for the read, and a read that
+//     ran out of time — see [builtin.Condition] for each.
 //
 // ASKED BY THE ANSWERS as well as the registry, for the answers that read what
 // is left of a failure as a refusal of the request: handed one of these, they
 // told a caller to change a question nothing was wrong with.
-func transient(err error) bool {
-	var refused *statelog.Refused
-	if errors.As(err, &refused) && refused.Code.Retryable() {
-		return true
-	}
-	var unserved *estate.ErrUnserved
-	return errors.Is(err, coord.ErrUnavailable) || errors.As(err, &unserved)
+func unavailableHere(err error) bool {
+	_, ok := builtin.Condition(err)
+	return ok
 }
 
-// RequiresOperator reports whether a question needs one.
+// PostureOf reports who a question is registered as being asked by.
 //
 // THE REGISTRY'S DECLARED POSTURE, readable without running the answer —
 // which is what a gate asserting the posture needs and the only caller there
 // is. Nothing enforces with it: [Registry.AnswerWith] makes the decision for
 // both transports, and each maps the refusal its own way (the socket to
-// `unauthorized`, a REST route to a 401 carrying the same code). It said it
-// was "for a REST route that has to make the same decision before it calls the
-// answer"; no route does, and a second enforcement point is exactly what
-// AnswerWith's own comment says must not exist.
-func (r *Registry) RequiresOperator(what string) bool {
+// `unauthorized`, a REST route to a 403 carrying the same code); a second
+// enforcement point is exactly what AnswerWith's own comment says must not
+// exist.
+//
+// An unregistered name answers the zero posture, which is invalid — so a
+// caller asserting about one is told it is not a question rather than being
+// handed a plausible-looking answer about nothing.
+func (r *Registry) PostureOf(what string) Posture {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.entries[what].operator
+	return r.entries[what].posture
 }

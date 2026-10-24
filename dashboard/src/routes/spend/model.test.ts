@@ -153,7 +153,7 @@ describe("the by-agent lines", () => {
         totals: { input_tokens: 400, output_tokens: 0, total_tokens: 400, calls: 2 },
         by_agent: [row("ceo", 100, 4), row("swe", 300, 0), row("idle", 0, 0)],
       }),
-      (h) => (h === "swe" ? day : undefined),
+      (id) => (id === "id-swe" ? day : undefined),
     );
     expect(lines.map((l) => l.row.handle)).toEqual(["swe", "ceo"]);
     expect(lines.map((l) => l.share)).toEqual([0.75, 0.25]);
@@ -217,11 +217,11 @@ describe("the export", () => {
     );
     const lines = csv.split("\r\n");
     expect(lines[0]).toBe(
-      '"window","section","name","tokens","input_tokens","output_tokens","cache_read_tokens","calls","turns"',
+      "window,section,name,tokens,input_tokens,output_tokens,cache_read_tokens,calls,turns",
     );
-    expect(lines).toContain('"2026-09-23..2026-09-29","phase","execute",90,90,0,0,1,""');
+    expect(lines).toContain("2026-09-23..2026-09-29,phase,execute,90,90,0,0,1,");
     // A seat's handle a person typed is text in a spreadsheet, never a formula.
-    expect(lines).toContain(`"2026-09-23..2026-09-29","agent","'=cmd",90,90,0,0,1,3`);
+    expect(lines).toContain("2026-09-23..2026-09-29,agent,'=cmd,90,90,0,0,1,3");
     expect(csv).not.toMatch(/cost|usd|price/i);
   });
 });

@@ -3,9 +3,11 @@ package jetstream
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -14,10 +16,11 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// capture returns a bridge writing JSON into buf at the given level.
+// capture returns a bridge writing JSON into buf at the given level, declaring
+// a death of its own.
 func capture(buf *bytes.Buffer, level slog.Level) natsLogger {
 	return natsLogger{log: slog.New(slog.NewJSONHandler(buf,
-		&slog.HandlerOptions{Level: level}))}
+		&slog.HandlerOptions{Level: level})), death: newDeath()}
 }
 
 func decode(t *testing.T, buf *bytes.Buffer) map[string]any {
@@ -44,7 +47,8 @@ func TestTheBrokersOwnFailuresReachTheOperator(t *testing.T) {
 	}{
 		{"error", func(l natsLogger) { l.Errorf("stream %q: %v", "INBOX", "no space") }, "ERROR"},
 		{"warn", func(l natsLogger) { l.Warnf("slow consumer on %s", "INBOX") }, "WARN"},
-		// Fatal is an Error line, because the engine owns this process.
+		// Fatal is an Error line, because the engine owns this process —
+		// and a declaration, which the next case holds.
 		{"fatal", func(l natsLogger) { l.Fatalf("listen on %d failed", 4222) }, "ERROR"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -72,16 +76,32 @@ func TestTheBrokersOwnFailuresReachTheOperator(t *testing.T) {
 	}
 }
 
-// Fatalf MUST NOT exit. nats-server returns immediately after every
-// s.Fatalf, so the process surviving is what lets the engine run its own
-// drain instead of vanishing mid-shutdown from inside a library — the same
-// property Options.NoSigs exists to protect.
-func TestFatalfDoesNotEndTheProcess(t *testing.T) {
+// Fatalf MUST NOT exit, AND MUST NOT BE ONLY A LINE.
+//
+// Not exit: the engine owns this process, and a library ending it from inside
+// loses whatever it was in the middle of — the property Options.NoSigs exists
+// to protect. Not only a line: nats-server returns from the step that failed
+// and leaves the server half started, so a Fatalf that was merely logged left
+// a boot waiting for a server that had already given up. The bridge declares
+// the death, and its owner acts on it.
+func TestFatalfDeclaresTheBrokersDeathAndDoesNotEndTheProcess(t *testing.T) {
 	var buf bytes.Buffer
-	capture(&buf, slog.LevelDebug).Fatalf("bind failed")
-	// Reaching this line at all is the assertion; the log is the corroboration.
-	if got := decode(t, &buf)["detail"]; got != "bind failed" {
+	l := capture(&buf, slog.LevelDebug)
+	l.Fatalf("bind failed on %d", 6222)
+	// Reaching this line at all is the first assertion; the log is the
+	// corroboration.
+	if got := decode(t, &buf)["detail"]; got != "bind failed on 6222" {
 		t.Errorf("detail = %v, want the message", got)
+	}
+	select {
+	case <-l.death.Done():
+	default:
+		t.Fatal("a Fatalf was logged and declared nothing, so whoever started " +
+			"the server waits on one that has given up")
+	}
+	if err := l.death.Err(); !errors.Is(err, ErrBrokerDied) ||
+		!strings.Contains(err.Error(), "bind failed on 6222") {
+		t.Errorf("the declared cause is %v, want nats-server's own sentence", err)
 	}
 }
 
@@ -140,10 +160,13 @@ func TestTheEmbeddedServerIsGivenTheLoggerBeforeItStarts(t *testing.T) {
 		t.Fatal("the embedded server is never given a logger; nats-server " +
 			"installs none of its own and discards every line in silence")
 	}
-	start := strings.Index(src, "go ns.Start()")
-	if start < 0 {
+	// THE CALL STATEMENT, however it is wrapped: Start runs on a goroutine
+	// startEmbedded joins, so the line is the call alone.
+	where := regexp.MustCompile(`(?m)^\s*ns\.Start\(\)\s*$`).FindStringIndex(src)
+	if where == nil {
 		t.Fatal("cannot find the server start; this guard has gone stale")
 	}
+	start := where[0]
 	if install > start {
 		t.Error("the logger is installed after Start — the boot, where stream " +
 			"recovery and store failures report, would log nowhere")
@@ -270,7 +293,7 @@ func TestAKeyListingCostsAConsumerAndSaysSoAtDebug(t *testing.T) {
 	rec := &recordedLines{}
 	srv.embedded.ns.SetLoggerV2(rec, true, false, false)
 
-	nc, err := srv.Conn()
+	nc, err := srv.embedded.connect(watched{})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

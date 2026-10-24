@@ -103,11 +103,7 @@ test("a node still serving the draft's base is not updated onto", async () => {
   engine.script = (r) =>
     r.method === "GET" && r.path === "/config" ? json(company(), 200, { ETag: '"r1"' }) : null;
   fireEvent.click(screen.getByRole("button", { name: "Update my draft" }));
-  expect(
-    await screen.findByText(
-      "This node has not caught up with the newer revision yet. Try again in a moment.",
-    ),
-  ).toBeDefined();
+  expect(await screen.findByText("Still catching up. Try again shortly.")).toBeDefined();
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
@@ -120,7 +116,7 @@ test("a draft of a configuration that is no longer active offers to discard and 
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
   expect(
     await screen.findByText(
-      "The configuration this draft edits is no longer active on this engine, so the draft cannot be saved.",
+      "This draft’s configuration is no longer active, so it can’t be saved.",
     ),
   ).toBeDefined();
   engine.script = () => null;
@@ -132,15 +128,14 @@ test("a draft of a configuration that is no longer active offers to discard and 
 });
 
 // A CONFLICT IS SHOWN AS A PERSON READS IT. The builder's own structures
-// (node keys, placements, a removed node, a kind change's stripped fields)
-// were printed as JSON, which put internal keys and credential masks in a
-// table an operator decides from.
+// (node keys, placements, a removed node) were printed as JSON, which put
+// internal keys and credential masks in a table an operator decides from.
 describe("a conflict's values", () => {
   const names: Record<string, string> = {
     "seat:dev": "Dev",
     "seat:qa": "QA",
-    "unit:Engineering": "Engineering",
-    "unit:Sales": "Sales",
+    "unit:engineering": "Engineering",
+    "unit:sales": "Sales",
   };
   const nameOf = (key: string) => names[key] ?? null;
   const cells = (conflict: Conflict) => conflictCells(conflict, nameOf);
@@ -173,18 +168,18 @@ describe("a conflict's values", () => {
       cells({
         subject: "where it sits",
         shape: "parent",
-        base: "unit:Engineering",
+        base: "unit:engineering",
         theirs: COMPANY_KEY,
-        mine: "unit:Sales",
+        mine: "unit:sales",
       }),
     ).toEqual({ base: "Engineering", theirs: "The top of the organization", mine: "Sales" });
     expect(
       cells({
         subject: "position",
         shape: "placement",
-        base: { parent: "unit:Engineering", after: null },
-        theirs: { parent: "unit:Engineering", after: "seat:qa" },
-        mine: { parent: "unit:Engineering", after: "new:gone" },
+        base: { parent: "unit:engineering", after: null },
+        theirs: { parent: "unit:engineering", after: "seat:qa" },
+        mine: { parent: "unit:engineering", after: "new:gone" },
       }),
     ).toEqual({
       base: "Engineering, first",
@@ -193,7 +188,7 @@ describe("a conflict's values", () => {
     });
   });
 
-  test("a removed node reads as the fields that changed, and stripped fields by name only", () => {
+  test("a removed node reads as the fields that changed, never their values", () => {
     const removal = cells({
       subject: "the whole seat",
       shape: "snapshot",
@@ -202,27 +197,8 @@ describe("a conflict's values", () => {
     });
     expect(removal).toEqual({ base: "As it was", theirs: "Changed: goal", mine: "Removed" });
 
-    const stripped = cells({
-      subject: "fields the new kind removes",
-      shape: "fields",
-      base: [
-        { path: ["mcp_env"], before: { tracker: { TOKEN: "__redacted__" } } },
-        { path: ["integrations", "slack"], before: { channel: "OPS" } },
-      ],
-      theirs: [
-        { path: ["mcp_env"], before: { tracker: { TOKEN: "__redacted__" } } },
-        { path: ["integrations", "slack"], before: { channel: "SUP" } },
-        { path: ["email"], before: "dev@example.com" },
-      ],
-    });
-    expect(stripped).toEqual({
-      base: "mcp_env, integrations.slack",
-      theirs: "mcp_env, integrations.slack (changed), email (added)",
-      mine: "Removed",
-    });
-    const shown = JSON.stringify([removal, stripped]);
+    const shown = JSON.stringify(removal);
     expect(shown).not.toContain("__redacted__");
-    expect(shown).not.toContain("OPS");
 
     expect(
       cells({

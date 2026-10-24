@@ -17,7 +17,7 @@ var (
 	//
 	// A nameless seat derives no handle, and therefore no agent id and no
 	// inbox — it is in the chart and unreachable from everywhere else. A
-	// nameless unit can be neither a lead scope nor a manages target.
+	// nameless unit has nothing to render and nothing to mint a key from.
 	ErrMissingName = errors.New("name must not be empty")
 
 	// ErrUnknownKind reports a seat whose kind is neither agent nor human.
@@ -41,72 +41,29 @@ var (
 	// activity attribution.
 	ErrDuplicateHandle = errors.New("duplicate handle")
 
-	// ErrDuplicateSeatName reports two seats carrying one name.
+	// ErrDuplicateUnit reports two units answering to one KEY — the address
+	// [Unit.Key] names, its id, or its name on a unit that declares none.
 	//
-	// A seat is referenced BY NAME: a unit's lead and every manages entry
-	// resolve to the first seat of that name, so a second one is silently
-	// unreachable through either. Two seats can differ in handle and still
-	// collide here, which is why the handle rule does not cover it.
+	// A unit's key is what work, routing and pages are filed under and what
+	// a `manages:` entry and a root seat's `unit:` resolve, so a collision
+	// sends one team's work to whichever unit a reader resolved first.
 	//
-	// An ADMISSION rule (see [Organization.ValidateAdmission]): refused on
-	// a document somebody submits, reported as a warning on a revision
-	// being applied.
-	ErrDuplicateSeatName = errors.New("duplicate seat name")
-
-	// ErrDuplicateUnitName reports two units carrying one name, anywhere in
-	// the tree.
+	// There is deliberately NO duplicate NAME rule, for a seat or a unit. A
+	// name is prose — nothing references a seat or a unit by it — and what
+	// reads one answers a shared name with an honest list.
 	//
-	// A unit is referenced BY NAME: a manages entry naming it expands to the
-	// first unit of that name, a root seat's unit reference moves the seat
-	// into it, and a masked credential is restored against it. Two teams
-	// called "Platform" under different departments read as distinct on
-	// every screen while each of those resolves one of them.
-	//
-	// Compared FOLDED, unlike a seat name: a name is prose, "Platform" and
-	// "platform" are one team, and a reader who cannot tell two units apart
-	// files one team's work under the other the first time they write the
-	// case they remember. Every reference does resolve a unit name as
-	// written, which is what makes that collision quiet rather than what
-	// makes it safe. A seat name is compared exactly because a seat's key
-	// is its handle, which is unique by a runnable rule; a unit's name IS
-	// its key wherever it declares no id.
-	//
-	// The rule that reports this measures a name against other units' IDS
-	// under the same fold, because an id is a lowercase key by rule while a
-	// name is prose. Where the id is what collided, an id is what the
-	// resulting error names, and it carries [ErrDuplicateUnit] alone.
-	//
-	// An ADMISSION rule, like [ErrDuplicateSeatName], and never reported
-	// alone: a name is also a unit's key when it declares no id, so the
-	// error that carries this wraps [ErrDuplicateUnit] as well.
-	ErrDuplicateUnitName = errors.New("duplicate unit name")
-
-	// ErrDuplicateUnit reports two units answering to one key.
-	//
-	// A unit's key is what work, routing and pages are filed under, so a
-	// collision sends one team's work to whichever unit a reader resolved
-	// first, and it arrives by a door nobody watches: an id may collide
-	// with another unit's NAME, and a name with another name that differs
-	// from it only in case, as readily as an id with an id.
-	//
-	// Reported for a duplicate NAME too, in the same error as
-	// [ErrDuplicateUnitName]: on a unit that declares no id the name IS the
-	// key, and a caller branching on either sentinel means the same
-	// collision. Where the id is what collided, this is the only sentinel
-	// the error carries.
+	// An ADMISSION rule (see [Organization.ValidateAdmission]).
 	ErrDuplicateUnit = errors.New("duplicate unit key")
 
 	// ErrDuplicateIdentity reports two seats claiming one external account.
 	//
 	// A contact identity is how an inbound message finds a person, and two
 	// seats declaring one id resolve DIFFERENTLY depending on who is
-	// asking: notification registration keys a map on the identity, so the
-	// LAST seat in chart order silently takes it, while every lookup that
-	// walks the chart answers the FIRST. The person who lost the race keeps
-	// a correct-looking config and stops receiving their own mail — and
-	// with `crewlet_operator_id` the two directions disagree outright, so a
-	// token resolves to one seat's dashboard and that person's wakes go to
-	// another's.
+	// asking: notification registration registers the identity for
+	// NEITHER seat, while every lookup that walks the chart answers the
+	// FIRST. Both people keep a correct-looking config; the second stops
+	// receiving their own mail, and an inbound message from either
+	// resolves to nobody.
 	//
 	// A RUNNABLE rule (see the class note above [Organization.Validate]),
 	// like the duplicate handle it is the contact-field twin of: an
@@ -118,16 +75,16 @@ var (
 	ErrDuplicateIdentity = errors.New("duplicate contact identity")
 
 	// ErrMisplacedUnitRef reports a seat declared inside a unit whose `unit:`
-	// reference names a different unit.
+	// reference keys a different unit.
 	//
 	// The reference PLACES a seat declared at the root: normalization moves
 	// such a seat into the unit it names. A seat already declared inside a
 	// unit is never moved, so on it the reference reads as a placement and
 	// does nothing, and the seat stays where it was written while its author
-	// believes it sits elsewhere. Repeating the enclosing unit's own name
+	// believes it sits elsewhere. Repeating the enclosing unit's own key
 	// says nothing wrong and is accepted.
 	//
-	// An ADMISSION rule, like [ErrDuplicateSeatName]: nothing refused the
+	// An ADMISSION rule, like [ErrDuplicateUnit]: nothing refused the
 	// reference before, and a stored company carrying one runs as it did.
 	ErrMisplacedUnitRef = errors.New("unit reference on a seat inside another unit")
 
@@ -140,24 +97,11 @@ var (
 	// almost always a missing `kind: human`.
 	ErrAgentSeatField = errors.New("human-only field set on an agent seat")
 
-	// ErrNoContact reports a human seat with no external identity. Such a
-	// seat is inert: visible in the chart and impossible for any agent to
-	// mention or reach.
-	ErrNoContact = errors.New("human seat needs at least one contact identity")
-
 	// ErrEmbeddedEnvRef reports a contact value that embeds a ${VAR}
 	// reference inside a longer string. Resolution would substitute it and
 	// register a truncated identity that no webhook payload can ever match,
 	// so the half-formed case fails loudly instead.
 	ErrEmbeddedEnvRef = errors.New("value embeds a ${VAR} reference")
-
-	// ErrReservedOperatorID reports a seat binding [ReservedOperatorID] with
-	// `contact.crewlet_operator_id`. That id is the attribution a DISABLED
-	// auth guard stamps on every caller, so binding it would make everybody
-	// who reaches an unguarded engine that person — their inbox, their
-	// queue, their writes — and would file every disabled-mode write in the
-	// audit trail under their name.
-	ErrReservedOperatorID = errors.New("operator id is reserved")
 
 	// ErrInvalidSchedule reports a schedule that cannot be evaluated: an
 	// empty name or task, a cron expression without five fields or with
@@ -233,13 +177,8 @@ type DuplicateKind string
 const (
 	// DuplicateHandle is two or more seats deriving one handle.
 	DuplicateHandle DuplicateKind = "handle"
-	// DuplicateSeatName is two or more seats carrying one name.
-	DuplicateSeatName DuplicateKind = "seat_name"
-	// DuplicateUnitName is two or more units answering to one key: a name
-	// they share, or an id that is another unit's key. Named for the
-	// sentinel it reports under, and for the field a caller places it at,
-	// which is the name either way.
-	DuplicateUnitName DuplicateKind = "unit_name"
+	// DuplicateUnitKey is two or more units answering to one key.
+	DuplicateUnitKey DuplicateKind = "unit_key"
 	// DuplicateIdentity is two or more seats claiming one external account:
 	// one value of one contact field. Not named for the field that carried
 	// it — every one of them is the same collision, and a kind per
@@ -251,33 +190,33 @@ const (
 // Valid reports whether k is one of the kinds this build reports.
 func (k DuplicateKind) Valid() bool {
 	switch k {
-	case DuplicateHandle, DuplicateSeatName, DuplicateUnitName, DuplicateIdentity:
+	case DuplicateHandle, DuplicateUnitKey, DuplicateIdentity:
 		return true
 	}
 	return false
 }
 
 // DuplicateError is one identity carried by more than one entity: ONE error
-// per duplicated key, naming every entity that carries it, because a name
+// per duplicated key, naming every entity that carries it, because a key
 // used three times is one mistake rather than two pairwise ones.
 //
 // It holds EVERY entity, so a caller placing problems in a document can put
-// one beside each of them. Seats is set for a handle, a seat name or a
-// contact identity, Units for a unit key.
+// one beside each of them. Seats is set for a handle or a contact identity,
+// Units for a unit key.
 type DuplicateError struct {
 	Kind DuplicateKind
-	// Key is the shared handle, seat name, unit key or contact identity,
-	// and for a unit it is the spelling the key was first met in: a unit
-	// key is matched folded, a name and an id alike, and an operator
-	// searches their document for what they wrote rather than for a form
-	// nothing in it contains. An identity is the value as it sits after
-	// [Organization.Normalize], which is the text every consumer routes on.
+	// Key is the shared handle, unit key or contact identity, and for a
+	// unit it is the spelling the key was first met in: a unit key is
+	// matched folded ([NormalizeKey]), and an
+	// operator searches their document for what they wrote rather than for
+	// a form nothing in it contains. An identity is the value as it sits
+	// after [Organization.Normalize], which is the text every consumer
+	// routes on.
 	Key   string
 	Seats []*Role
 	Units []*Unit
 	// Err is the grouped message, wrapping ErrDuplicateHandle,
-	// ErrDuplicateSeatName, ErrDuplicateIdentity, or ErrDuplicateUnitName
-	// and ErrDuplicateUnit together.
+	// ErrDuplicateIdentity or ErrDuplicateUnit.
 	Err error
 }
 

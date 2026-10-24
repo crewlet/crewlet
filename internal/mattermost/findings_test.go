@@ -181,18 +181,3 @@ func TestASuccessfulDecommissionIsNotReportedAsOutstandingWork(t *testing.T) {
 		t.Errorf("phase = %q, want ready", report.Phase)
 	}
 }
-
-// A NODE WITH NO KEYRING STILL SHORT-CIRCUITS EVERYTHING ELSE. It created no
-// account and read no instance, so it has nothing else it could honestly say.
-func TestANodeWithNoKeyringReportsOnlyThat(t *testing.T) {
-	t.Parallel()
-	res := &mattermost.Result{
-		NoKeyring: true,
-		NotAdmin:  "this should never be reached",
-		Disabled:  []mattermost.DisabledSetting{{Key: "EnableBotAccountCreation"}},
-	}
-	findings := res.Findings()
-	if len(findings) != 1 || findings[0].Kind != integration.FindingCredentialMissing {
-		t.Fatalf("findings = %+v, want only the missing keyring", findings)
-	}
-}

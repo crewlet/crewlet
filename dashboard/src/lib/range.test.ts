@@ -18,6 +18,7 @@ import {
   barsOver,
   MAX_BARS,
   TODAY,
+  clockIn,
   companyMidnight,
   todayWindow,
   companyDays,
@@ -37,7 +38,7 @@ describe("the window a URL asked for", () => {
   });
 
   it("falls back for anything outside the vocabulary", () => {
-    // `#/spend?window=` is produced by a route transition for one render, and
+    // `#/settings/spend?window=` is produced by a route transition for one render, and
     // read as a number it is 0 — a window whose two edges are the same
     // instant, which is half-open and names no rows at all.
     for (const bad of ["", "0", "3", "-7", "all", "NaN", "7", "3h"]) {
@@ -122,7 +123,7 @@ describe("the interval a reader named", () => {
     // A heading reading "7 days" over a window somebody chose in March is
     // the one thing a custom range must not say.
     expect(windowLabel("7d")).toBe(RANGE_LABEL["7d"]);
-    expect(windowLabel(parseWindow(SPAN, ANY))).toContain("—");
+    expect(windowLabel(parseWindow(SPAN, ANY))).toContain("–");
   });
 });
 
@@ -490,6 +491,29 @@ describe("today", () => {
     const early = todayWindow(Date.parse("2026-09-22T00:20:00Z"), "UTC");
     expect(bucketFor(early)).toBe("hour");
     expect(spanOf(early)).toBe(20 * 60_000);
+  });
+});
+
+/**
+ * THE TIME OF DAY A ROW UNDER A COMPANY DAY SAYS, on the clock the day is cut
+ * on, so a row and its heading never disagree.
+ */
+describe("the company's clock", () => {
+  it("reads the time of day in the company's zone, not the browser's", () => {
+    const at = Date.parse("2026-09-22T20:05:00Z");
+    expect(clockIn(at, "Asia/Tokyo")).toBe("05:05");
+    expect(clockIn(at, "America/New_York")).toBe("16:05");
+  });
+
+  it("writes five past midnight as 00:05, never 24:05", () => {
+    expect(clockIn(Date.parse("2026-09-22T15:05:00Z"), "Asia/Tokyo")).toBe("00:05");
+  });
+
+  it("reads a zone the runtime cannot read as UTC, as the day is cut", () => {
+    const at = Date.parse("2026-09-22T20:05:00Z");
+    expect(clockIn(at, "Not/A_Zone")).toBe("20:05");
+    expect(clockIn(at, undefined)).toBe("20:05");
+    expect(dayLabelIn(at, "Not/A_Zone")).toBe("2026-09-22");
   });
 });
 

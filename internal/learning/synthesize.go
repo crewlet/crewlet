@@ -228,8 +228,8 @@ func (s *Synthesizer) Skip(t Turn) string {
 		// encodes a procedure the next round may contradict.
 		return SkipNotSettled
 	}
-	if t.Event.AgentHandle == "" {
-		// Skills are keyed (agent_handle, name). Without a handle there is
+	if t.Seat() == "" {
+		// Skills are keyed (agent_handle, name). Without a seat there is
 		// no row to write and no catalogue to read it back from.
 		return SkipNoHandle
 	}
@@ -241,7 +241,7 @@ func (s *Synthesizer) Skip(t Turn) string {
 
 // Reflect drafts one skill, or reports why it did not.
 func (s *Synthesizer) Reflect(ctx context.Context, t Turn) ([]events.Payload, error) {
-	handle := t.Event.AgentHandle
+	handle := t.Seat()
 
 	// THE CAP FIRST, because it is a cheap count and the alternative is
 	// paying for an auxiliary call whose result is thrown away.

@@ -62,10 +62,44 @@ func (s *Store) Backend() Backend { return s.backend }
 // handed the backend: a backend's account of what it stored is never what a
 // row records.
 func (s *Store) Put(ctx context.Context, r io.Reader, limit int64, m PutMeta) (Object, error) {
+	return s.put(ctx, KeyAt(s.now()), r, limit, m)
+}
+
+// PutMinted streams r into the object k names, a key this store minted
+// ([Store.Mint]) for one upload a caller reserved before any byte moved, and
+// answers what a row names it by, exactly as [Store.Put] does.
+//
+// # Why a key minted before the bytes arrive
+//
+// An upload that is reserved first (an artifact's upload intent) names its key
+// when it is reserved, so the same key is the one a presigned put signs and the
+// one the engine streams into: the reservation then knows, before any byte
+// moves, every object it may have to answer for. The key is still minted here,
+// on this store's clock, never by a client.
+//
+// A NAME IS PUT ONCE: the caller holds a claim that no other put of k runs, or
+// has run to its end, before it calls this ([Backend]'s rule). A put that
+// fails leaves nothing under the name, so a failed put may be followed by
+// another under the same claim. And a key too old to be named is refused
+// before a byte is read: bytes stored under it could never be recorded, and
+// would wait for the collector with nothing reserving them.
+func (s *Store) PutMinted(ctx context.Context, k Key, r io.Reader, limit int64, m PutMeta) (Object, error) {
+	if k.IsZero() {
+		return Object{}, errors.New("objstore: a put under a minted key names no key")
+	}
+	if age := s.now().Sub(k.Minted()); age > RecordWithin {
+		return Object{}, fmt.Errorf("objstore: %s was minted %s ago, and no write may name "+
+			"a key minted more than %s before it: mint a fresh key", k,
+			age.Truncate(time.Second), RecordWithin)
+	}
+	return s.put(ctx, k, r, limit, m)
+}
+
+// put is the one put both [Store.Put] and [Store.PutMinted] make.
+func (s *Store) put(ctx context.Context, key Key, r io.Reader, limit int64, m PutMeta) (Object, error) {
 	if limit < 0 {
 		return Object{}, fmt.Errorf("objstore: a put limited to %d bytes", limit)
 	}
-	key := KeyAt(s.now())
 	in := &metered{ctx: ctx, r: r, limit: limit, digest: sha256.New()}
 	err := s.backend.Put(ctx, key.Name(), in, m)
 	switch {

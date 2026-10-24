@@ -490,6 +490,18 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 		s.skip(ctx, r.Source, party.Handle, why, nil)
 		return nil
 	}
+	// AND CAN IT BE ADDRESSED. A seat's mailbox is named by its agent id,
+	// so a party with none has no subject to publish to. Separate from
+	// [Deliverable] beside it, which answers whether this SHOULD be
+	// delivered: that is a policy question about the event and this is a
+	// routing fact about the recipient. Skipped rather than raised, because
+	// the answer is PERMANENT and a nak would retry it for ever.
+	if party.AgentID == uuid.Nil {
+		log.WarnContext(ctx, "notification_unaddressable", "source", r.Source,
+			"handle", party.Handle, "reason", string(ReasonUnaddressable))
+		s.skip(ctx, r.Source, party.Handle, ReasonUnaddressable, nil)
+		return nil
+	}
 	// THREE ANSWERS, NOT TWO. "Under the cap", "over the cap" and "the
 	// valve could not say" are three different facts, and the error is
 	// what tells the last two apart.
@@ -613,7 +625,10 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 		}
 		wake.Payload[TriggerField] = trigger
 	}
-	if err := s.queue.Publish(ctx, topics.AgentInbox(party.Handle), wake); err != nil {
+	// THE PARTY'S ID, never its handle: a seat's mailbox is keyed on the
+	// agent id derived from the handle (ADR-0013). A party with no id never
+	// reaches here — the addressability guard above has already skipped it.
+	if err := s.queue.Publish(ctx, topics.AgentInbox(party.AgentID), wake); err != nil {
 		return fmt.Errorf("notify: wake %s: %w", party.Handle, err)
 	}
 	log.InfoContext(ctx, "notification_routed", "source", r.Source, "handle", party.Handle,
@@ -709,6 +724,10 @@ const (
 	// ReasonSelfAction: the recipient caused the event, and it is not an
 	// outcome they need to hear about ([Deliverable]).
 	ReasonSelfAction SkipReason = "self-action: the recipient caused this event"
+	// ReasonUnaddressable: the recipient resolved to a seat with no agent
+	// id, so it has no mailbox to publish to. Permanent, which is why it is
+	// a skip rather than a retry.
+	ReasonUnaddressable SkipReason = "the seat has no agent id, so it has no mailbox"
 	// ReasonRateLimited: the company's notification rate limit refused the
 	// recipient another wake.
 	ReasonRateLimited SkipReason = "rate limit exceeded"
@@ -720,7 +739,8 @@ const (
 func (r SkipReason) Valid() bool {
 	switch r {
 	case ReasonUnreadable, ReasonRetired, ReasonUnparsed, ReasonParseFailed,
-		ReasonNoSeat, ReasonHumanSeat, ReasonSelfAction, ReasonRateLimited:
+		ReasonNoSeat, ReasonHumanSeat, ReasonSelfAction, ReasonUnaddressable,
+		ReasonRateLimited:
 		return true
 	}
 	return false

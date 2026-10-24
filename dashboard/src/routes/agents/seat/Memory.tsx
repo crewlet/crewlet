@@ -20,7 +20,7 @@
  * two cannot silently disagree.
  */
 
-import { Callout, Card, CodeBlock, EmptyState, Skeleton, Tag } from "@crewlethq/ui";
+import { Callout, Card, CodeBlock, EmptyState, Skeleton, TableKeyCell, Tag } from "@crewlethq/ui";
 import {
   CircleAlertGlyph,
   ClockGlyph,
@@ -49,7 +49,7 @@ export function Memory({ seat, now }: { seat: Seat; now: number }) {
       {memory.loading && !data && (
         <Skeleton variant="text" rows={5} label="Loading this seat's memory" />
       )}
-      <QueryState error={memory.error} loading={memory.loading && !data}>
+      <QueryState error={memory.error} refusal={memory.refusal} loading={memory.loading && !data}>
         {data && (
           <>
             <p className="t-caption">{heldWords(data.held_by)}</p>
@@ -62,7 +62,7 @@ export function Memory({ seat, now }: { seat: Seat; now: number }) {
                 count={data.skills_total}
                 subtitle={cutThen(
                   pageWords(data.skills.length, data.skills_total),
-                  "drafted from its own repeated work, loadable mid-turn",
+                  "learned from repeated work",
                 )}
               >
                 <Card.Title as="h3">Skills it taught itself</Card.Title>
@@ -91,7 +91,7 @@ export function Memory({ seat, now }: { seat: Seat; now: number }) {
                   size="compact"
                   icon={<ZapGlyph size={32} />}
                   title="No learned skills"
-                  description="The learning loop drafts these from repeated work. A young seat has none."
+                  description="Skills learned from repeated work appear here."
                 />
               )}
             </Card>
@@ -100,10 +100,9 @@ export function Memory({ seat, now }: { seat: Seat; now: number }) {
               <Card.Header
                 icon={<UsersGlyph size="sm" />}
                 count={data.counterparties_total}
-                subtitle={cutThen(
-                  pageWords(data.counterparties.length, data.counterparties_total),
-                  "what it believes about the people and seats it works with",
-                )}
+                subtitle={
+                  pageWords(data.counterparties.length, data.counterparties_total) ?? undefined
+                }
               >
                 <Card.Title as="h3">Who it has worked with</Card.Title>
               </Card.Header>
@@ -118,7 +117,7 @@ export function Memory({ seat, now }: { seat: Seat; now: number }) {
                   size="compact"
                   icon={<UsersGlyph size={32} />}
                   title="No counterparty profiles"
-                  description="Built up from observed interactions with the people and seats it works with."
+                  description="They build up as it works with others."
                 />
               )}
             </Card>
@@ -184,7 +183,11 @@ function Conversations({ seat, now }: { seat: Seat; now: number }) {
       <h3 id="prof-conversations" className="prof-section-title">
         Conversations
       </h3>
-      <QueryState error={threads.error} loading={threads.loading && !data}>
+      <QueryState
+        error={threads.error}
+        refusal={threads.refusal}
+        loading={threads.loading && !data}
+      >
         <div className="split thread-split">
           <Card padding="none">
             <Card.Header
@@ -215,7 +218,7 @@ function Conversations({ seat, now }: { seat: Seat; now: number }) {
                       setThread(row.key === thread ? "" : row.key);
                     }}
                   >
-                    <span className="mono t-cell key-cell">{conversationLabel(row.key)}</span>
+                    <TableKeyCell value={row.key} text={conversationLabel(row.key)} />
                     <span className="t-caption">
                       {plural(row.turns, "turn")} ·{" "}
                       <span title={fmtDateTime(row.last_at)}>{relTime(row.last_at, now)}</span>
@@ -230,8 +233,8 @@ function Conversations({ seat, now }: { seat: Seat; now: number }) {
                 title="No conversations recorded"
                 description={
                   data?.held_by === "none"
-                    ? "No node holds this seat, so no copy of its ledger is current."
-                    : "A seat writes one entry per turn that took part in a thread — a chat message, an issue comment, a page discussion."
+                    ? "No node is running this seat."
+                    : "Threads it takes part in appear here."
                 }
               />
             )}
@@ -257,7 +260,7 @@ function Conversations({ seat, now }: { seat: Seat; now: number }) {
                 size="compact"
                 icon={<ClockGlyph size={32} />}
                 title="Nothing selected"
-                description="Choose a thread to see the turns this seat recorded in it."
+                description="Choose a thread."
               />
             ) : data?.entries?.length ? (
               <div className="list">
@@ -270,7 +273,7 @@ function Conversations({ seat, now }: { seat: Seat; now: number }) {
                 size="compact"
                 icon={<ClockGlyph size={32} />}
                 title="No turns in this thread"
-                description="The ledger is trimmed per conversation, so an old thread can list a count it no longer carries the turns for."
+                description="Older turns in this thread were trimmed."
               />
             )}
           </Card>
@@ -339,7 +342,7 @@ export function CounterpartyRow({ profile, now }: { profile: CounterpartyProfile
     <div className="thread-entry">
       <div className="row gap-1">
         {profile.subject.handle ? (
-          <a className="t-cell" href={href(["agents", "seats", profile.subject.handle])}>
+          <a className="t-cell" href={href(["company", "org", "seats", profile.subject.handle])}>
             <strong>{profile.subject.name || profile.subject.handle}</strong>
           </a>
         ) : (
@@ -374,8 +377,7 @@ export function CounterpartyRow({ profile, now }: { profile: CounterpartyProfile
       )}
       {stale && (
         <p className="t-caption">
-          Last corroborated {fmtDateTime(profile.last_corroborated_at)} — this seat is still working
-          with them and has stopped learning about them.
+          Last confirmed {fmtDateTime(profile.last_corroborated_at)}. No longer learning about them.
         </p>
       )}
     </div>

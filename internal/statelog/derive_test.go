@@ -6,9 +6,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // derivingApplier is the probe applier with ONE derived column: probe_derived
@@ -45,42 +45,10 @@ func (d *derivingApplier) times() int {
 	return d.rederived
 }
 
-// restartWith rebuilds the runner over the SAME database with the given
-// applier — a node restarting on a build whose rules are those.
-func (h *applyHarness) restartWith(applier statelog.Applier, probe *probeApplier) {
-	h.t.Helper()
-	h.applier, h.fetch = probe, newProbeFetch()
-	recorder, err := metrics.New()
-	if err != nil {
-		h.t.Fatalf("recorder: %v", err)
-	}
-	h.metrics = recorder
-	// AT THE CHECKPOINT THE ROWS HOLD, as [applyHarness.rebuild] builds a
-	// restarting node's runner — generation 1 on a node that never committed.
-	checkpoint, found, err := statelog.CheckpointOf(h.t.Context(), h.estate,
-		specOf(probeDomain{}).Name)
-	if err != nil {
-		h.t.Fatalf("read the checkpoint: %v", err)
-	}
-	if !found {
-		checkpoint.At.Generation = 1
-	}
-	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: probeDomain{}, Spec: specOf(probeDomain{}), Applier: applier, Fetch: h.fetch, Log: h.fetch,
-		Node: h.db, DB: h.estate,
-		Checkpoint: checkpoint.At, CheckpointStoredAt: checkpoint.StoredAt,
-		Metrics: recorder,
-	})
-	if err != nil {
-		h.t.Fatalf("NewRunner: %v", err)
-	}
-	h.runner = runner
-}
-
 // deriving restarts the harness on a build deriving at version.
 func (h *applyHarness) deriving(version int) *derivingApplier {
 	d := &derivingApplier{probeApplier: newProbeApplier(), version: version}
-	h.restartWith(d, d.probeApplier)
+	h.rebuildWith(probeDomain{}, time.Time{}, d, d.probeApplier)
 	return d
 }
 
@@ -202,13 +170,15 @@ func TestAFreshCheckpointIsStampedWithTheRulesThatDerivedIt(t *testing.T) {
 	}
 
 	fetch := newProbeFetch()
-	// EVERYTHING ELSE A RUNNER NEEDS, so the one refusal left is the one
-	// this asks about: a runner missing its stream is refused first, and
-	// that refusal says nothing about a Deriver.
+	// EVERYTHING ELSE A RUNNER NEEDS, its stream and the keyring included,
+	// so the one refusal left is the one this asks about: a runner missing
+	// either is refused first, and that refusal says nothing about a
+	// Deriver.
 	_, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain: probeDomain{}, Spec: specOf(probeDomain{}),
-		Applier: &derivingApplier{probeApplier: newProbeApplier()},
-		Fetch:   fetch, Log: fetch, Node: h.db, DB: h.estate,
+		Verifier: testVerifier(t, probeDomain{}),
+		Applier:  &derivingApplier{probeApplier: newProbeApplier()},
+		Fetch:    fetch, Log: fetch, Node: h.db, DB: h.estate,
 		Checkpoint: statelog.Position{Generation: 1},
 	})
 	if err == nil || !strings.Contains(err.Error(), "derives at version 0") {

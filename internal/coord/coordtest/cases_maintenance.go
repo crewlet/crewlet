@@ -14,7 +14,7 @@ import (
 // Every case here names a schedule that admitted a publisher while a resize
 // was unresolved, which is the whole failure the mode exists to prevent.
 var maintenanceCases = []fleetCase{
-	{"two coordinators cannot both open a window", func(h *fleetHarness) {
+	{name: "two coordinators cannot both open a window", fn: func(h *fleetHarness) {
 		// FIRST-WRITER-WINS, and the loser has to be able to tell "my
 		// own earlier attempt won" from "somebody else's operation is
 		// here": the id is minted once and reused across create
@@ -28,6 +28,13 @@ var maintenanceCases = []fleetCase{
 		if got.Revision == 0 {
 			h.t.Fatal("the opened operation came back with no revision, so no " +
 				"later mutation can be conditional on anything")
+		}
+		// WHO OPENED IT, both halves: the author and the credential they
+		// opened it through, which a backend that dropped the second would
+		// report as the owner's own gesture.
+		if got.By != mine.By || got.OperatorID != mine.OperatorID {
+			h.t.Fatalf("the opened operation names %q through %q, want %q "+
+				"through %q", got.By, got.OperatorID, mine.By, mine.OperatorID)
 		}
 
 		theirs := window("op-2")
@@ -55,7 +62,7 @@ var maintenanceCases = []fleetCase{
 		}
 	}},
 
-	{"a stale coordinator's write is refused by the revision", func(h *fleetHarness) {
+	{name: "a stale coordinator's write is refused by the revision", fn: func(h *fleetHarness) {
 		// NOT BY THE OPERATION ID. A successor RESUMES the same id, so
 		// an id comparison checks the one quantity guaranteed not to
 		// change — and a coordinator that read `opened`, lost its lease
@@ -92,7 +99,54 @@ var maintenanceCases = []fleetCase{
 		}
 	}},
 
-	{"an interrupted activation is not mistaken for completed cleanup", func(h *fleetHarness) {
+	{name: "who excluded a node and who abandoned the window survive an update", fn: func(h *fleetHarness) {
+		// THE WINDOW IS WHERE A POST-MORTEM READS WHOSE WORD WAIVED AN
+		// ACKNOWLEDGEMENT, and whose decision the fleet is still carrying
+		// out after an abandon: a backend that dropped either reports
+		// both as nobody's.
+		opened, _, err := h.f.OpenMaintenance(h.ctx, window("op-1"))
+		if err != nil {
+			h.t.Fatalf("OpenMaintenance: %v", err)
+		}
+		excluder := coord.MaintenanceParty{By: "dana.sre",
+			OperatorID: "session:0192f00d-0000-7000-8000-0000000000dd"}
+		moved := opened
+		moved.Phase = coord.PhaseSealing
+		moved.Excluded = []string{"node-2"}
+		moved.ExcludedBy = map[string]coord.MaintenanceParty{"node-2": excluder}
+		moved.AbandonedBy = coord.MaintenanceParty{By: "jane.doe",
+			OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a"}
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
+		if err := h.f.UpdateMaintenance(h.ctx, moved); err != nil {
+			h.t.Fatalf("UpdateMaintenance: %v", err)
+		}
+		held, found, err := h.f.Maintenance(h.ctx, opened.Stream)
+		if err != nil || !found {
+			h.t.Fatalf("Maintenance: found=%v err=%v", found, err)
+		}
+		if held.ExcludedBy["node-2"] != excluder ||
+			held.AbandonedBy != moved.AbandonedBy {
+			h.t.Fatalf("the window reads excluded by %+v and abandoned by %+v, "+
+				"want %+v and %+v", held.ExcludedBy, held.AbandonedBy,
+				excluder, moved.AbandonedBy)
+		}
+		// AND THE STORE HOLDS ITS OWN COPY, on the way in and on the way
+		// out: neither the writer's map nor a reader's is the one the next
+		// reader sees. Compared against a value rather than a map, which
+		// an aliased store would have rewritten along with it.
+		moved.ExcludedBy["node-2"] = coord.MaintenanceParty{By: "the writer, later"}
+		held.ExcludedBy["node-2"] = coord.MaintenanceParty{By: "mallory"}
+		again, _, err := h.f.Maintenance(h.ctx, opened.Stream)
+		if err != nil {
+			h.t.Fatalf("Maintenance: %v", err)
+		}
+		if again.ExcludedBy["node-2"] != excluder {
+			h.t.Fatalf("editing a map after writing or reading it rewrote the "+
+				"stored window: %+v", again.ExcludedBy)
+		}
+	}},
+
+	{name: "an interrupted activation is not mistaken for completed cleanup", fn: func(h *fleetHarness) {
 		// THE EXCLUSION IS THE RECORD. Held as two, a crash after the
 		// exclusion and before the operation is byte-identical to a
 		// finished resize whose cleanup was interrupted — and any rule
@@ -119,8 +173,8 @@ var maintenanceCases = []fleetCase{
 		}
 	}},
 
-	{"closing is conditional, so an interrupted delete cannot take a successor's window",
-		func(h *fleetHarness) {
+	{name: "closing is conditional, so an interrupted delete cannot take a successor's window",
+		fn: func(h *fleetHarness) {
 			opened, _, err := h.f.OpenMaintenance(h.ctx, window("op-1"))
 			if err != nil {
 				h.t.Fatalf("OpenMaintenance: %v", err)
@@ -157,7 +211,7 @@ var maintenanceCases = []fleetCase{
 			}
 		}},
 
-	{"an operation that says nothing is refused", func(h *fleetHarness) {
+	{name: "an operation that says nothing is refused", fn: func(h *fleetHarness) {
 		for _, c := range []struct {
 			name string
 			op   coord.MaintenanceOperation
@@ -184,8 +238,8 @@ var maintenanceCases = []fleetCase{
 		}
 	}},
 
-	{"an admission round-trips and is withdrawn only by its own incarnation",
-		func(h *fleetHarness) {
+	{name: "an admission round-trips and is withdrawn only by its own incarnation",
+		fn: func(h *fleetHarness) {
 			// A POSITIVE RECORD FROM EACH SIDE. A coordinator checking
 			// for the ABSENCE of a publisher is back to check-then-act:
 			// a node that read the operation absent and started in the
@@ -229,8 +283,8 @@ var maintenanceCases = []fleetCase{
 			}
 		}},
 
-	{"an acknowledgement round-trips and never reads back as anything else",
-		func(h *fleetHarness) {
+	{name: "an acknowledgement round-trips and never reads back as anything else",
+		fn: func(h *fleetHarness) {
 			// FOUR OTHER KEY CLASSES SHARE THIS BUCKET, so the filters
 			// are what make it safe. An acknowledgement decoded as a
 			// positions row is a node that has applied nothing, and a
@@ -278,7 +332,7 @@ var maintenanceCases = []fleetCase{
 			}
 		}},
 
-	{"an acknowledgement that establishes nothing is refused", func(h *fleetHarness) {
+	{name: "an acknowledgement that establishes nothing is refused", fn: func(h *fleetHarness) {
 		for _, c := range []struct {
 			name string
 			ack  coord.MaintenanceAck
@@ -310,6 +364,7 @@ func window(id string) coord.MaintenanceOperation {
 		Attempt:          1,
 		Participants:     []string{"node-1", "node-2"},
 		EnteredAt:        time.Now().UTC(),
-		By:               "ops-3",
+		By:               "jane.doe",
+		OperatorID:       "pat:0192f00d-0000-7000-8000-00000000000a",
 	}
 }

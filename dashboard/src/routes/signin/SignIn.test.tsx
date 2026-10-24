@@ -1,0 +1,700 @@
+/**
+ * `#/login`: a person signs in as themselves, and the page keeps nothing.
+ *
+ * The invariants worth breaking a build over, in the order they cost when
+ * they go: a sign-in lands where the reader was, REPLACING the sign-in's own
+ * history entry, and the frame it lands in dials the socket for the new
+ * session — the sign-in itself dials nothing; a refusal is
+ * the engine's own sentence and never a branch of this screen's; the second
+ * factor is asked for only when the engine asks; and a token handed to the
+ * exchange is sent once, in the header, and kept nowhere.
+ */
+
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+  vi,
+  type MockInstance,
+} from "vitest";
+import { CHUNKS, loadChunk } from "~/app/lazyScreen.ts";
+import { App } from "~/app/App.tsx";
+import { Router } from "~/app/router.tsx";
+import { currentReader, noteReader } from "~/lib/reader.ts";
+import { recentsKey } from "~/lib/recents.ts";
+import { page } from "~/lib/session.ts";
+import { starsKey } from "~/lib/starred.ts";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { currentSessionNeed, LiveSocket, Store, sessionRestored } from "~/protocol/index.ts";
+
+class InertWebSocket {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSED = 3;
+  readyState = InertWebSocket.CONNECTING;
+  send(): void {}
+  close(): void {}
+}
+
+interface Sent {
+  method: string;
+  path: string;
+  headers: Record<string, string>;
+  body: unknown;
+  /** The status the stubbed engine answered it with. */
+  status: number;
+}
+
+type Answer = { status: number; body: unknown; headers?: Record<string, string> };
+
+/**
+ * A fetch that answers each `METHOD /path` from `routes`, recording what was
+ * sent.
+ *
+ * AND THE COOKIE A SIGN-IN SETS. Once a sign-in route answers with a session,
+ * `GET /auth/session` answers that session, as the engine does for the cookie
+ * the browser now holds. Answering "nobody" for ever, as the routes alone did,
+ * sent every page the sign-in landed on straight back to the form — and the
+ * cases still passed, because a poll caught the address on its way through.
+ * It holds no app: the frame dials the socket for every signed-in principal,
+ * whatever they hold.
+ */
+function engine(routes: Record<string, Answer | Answer[]>): Sent[] {
+  const sent: Sent[] = [];
+  const queues = new Map(
+    Object.entries(routes).map(([k, v]) => [k, Array.isArray(v) ? [...v] : [v]] as const),
+  );
+  let cookie: { person?: string; login?: string; status?: string; expires_at?: string } | null =
+    null;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://engine.test");
+      const method = (init?.method ?? "GET").toUpperCase();
+      const record: Sent = {
+        method,
+        path: url.pathname + url.search,
+        headers: (init?.headers ?? {}) as Record<string, string>,
+        body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+        status: 0,
+      };
+      sent.push(record);
+      if (method === "GET" && url.pathname === "/auth/session" && cookie) {
+        const login = cookie.login ?? "";
+        record.status = 200;
+        return new Response(
+          JSON.stringify({
+            person: cookie.person ?? "",
+            login,
+            kind: login.startsWith("token:") ? "machine" : "person",
+            grants: [],
+            status: cookie.status,
+            expires_at: cookie.expires_at,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      const queue = queues.get(`${method} ${url.pathname}`);
+      const answer = queue && (queue.length > 1 ? queue.shift()! : queue[0]!);
+      record.status = answer?.status ?? 404;
+      if (!answer) return new Response(JSON.stringify({ error: "no_route" }), { status: 404 });
+      const body = answer.body as { status?: unknown } | null;
+      const signsIn =
+        method === "POST" &&
+        url.pathname.startsWith("/auth/") &&
+        answer.status >= 200 &&
+        answer.status < 300 &&
+        typeof body?.status === "string";
+      if (signsIn) cookie = body as typeof cookie;
+      return new Response(JSON.stringify(answer.body), {
+        status: answer.status,
+        headers: { "Content-Type": "application/json", ...answer.headers },
+      });
+    }),
+  );
+  return sent;
+}
+
+const NOBODY: Answer = { status: 401, body: { error: "invalid_token" } };
+/** A deployment somebody has been invited to: the ordinary sign-in page. */
+const CLAIMED: Answer = { status: 200, body: { status: "ok", identity: "ready" } };
+const SIGNED_IN: Answer = {
+  status: 200,
+  body: {
+    person: "p-1",
+    login: "jane.doe",
+    expires_at: "2026-10-05T00:00:00Z",
+    position: "1:9",
+    status: "signed_in",
+  },
+};
+
+/**
+ * The application. A case lets the stubbed engine's answers land, and renders
+ * the page they leave, with [answered].
+ *
+ * NOT A POLL, and the settled page rather than the first one that matched.
+ * A `waitFor` gave every step a second of real time, re-reading the page at
+ * every change, which a loaded machine could not always give the first
+ * sign-in of a file; and it could pass on a hash the page only went THROUGH
+ * — the enrolment case below was once green on exactly that. The engine's
+ * answers are promises, so `act` runs them and the renders they cause to the
+ * end, and what is read is where the page came to rest. The flush is refused
+ * once the case that asks has ended, so a case still running after its time
+ * ran out opens no `act` beside the next one.
+ */
+/** Every answer in flight lands, after `step` if given. */
+async function answered(step?: () => void): Promise<void> {
+  if (step) act(step);
+  await act(async () => {});
+}
+
+/**
+ * The application, with the socket's two dials watched: `start` is the
+ * frame's, for the session it reads, and `reconnect` is nothing a sign-in may
+ * call — it dialled before the frame had read whether the session may read
+ * the company at all.
+ */
+async function mount() {
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  const dial = vi.spyOn(socket, "start");
+  const reconnect = vi.spyOn(socket, "reconnect");
+  // RENDERED UNDER AN AWAITED ACT: a screen reads its chunk through `use`
+  // (`app/lazyScreen.ts`), and a synchronous act stops flushing at the first
+  // render that used a promise, settled or not — so the screen's first effects,
+  // and every answer the stubbed engine gives them, would be left unflushed.
+  await act(async () => {
+    render(
+      <ClientContext.Provider value={{ store, socket }}>
+        <Router>
+          <App />
+        </Router>
+      </ClientContext.Provider>,
+    );
+  });
+  return { dial, reconnect };
+}
+
+function type(label: RegExp | string, value: string) {
+  fireEvent.change(screen.getByLabelText(label), { target: { value } });
+}
+
+/**
+ * What the alerts on the page say. The toaster's two live regions are alerts
+ * as well and stay empty, so only an alert with words in it is a refusal.
+ */
+function alerts(): string[] {
+  return screen
+    .queryAllByRole("alert")
+    .map((el) => el.textContent ?? "")
+    .filter((text) => text !== "");
+}
+
+/** The one refusal the form is showing, once it shows one. */
+async function refusal(): Promise<string> {
+  await answered();
+  expect(alerts()).toHaveLength(1);
+  return alerts()[0]!;
+}
+
+const NEXT = "#/work/ENG-42";
+
+// THE SIGN-IN SCREENS ARE A CHUNK OF THEIR OWN (`app/lazyScreen.ts`), and so is
+// every workspace a finished sign-in lands on. This suite asserts what is drawn
+// and where a reader is sent, not how long a cold `import()` takes under a
+// test transformer — so every chunk is in before a case starts.
+beforeAll(async () => {
+  await Promise.all([...CHUNKS, "signin" as const].map((chunk) => loadChunk(chunk)));
+});
+
+/**
+ * THE SIGN-IN ADDS NOTHING TO THE CONSOLE, on any path a case takes. A browser
+ * logs every 4xx a page loads — the one `401` a signed-out load costs, and a
+ * two-step sign-in's `401 second_factor_required` at the password step — and
+ * no page can stop it; a line of ours beside them would read as a fault on a
+ * screen working as it should. So every case ends with the console as it
+ * found it. Mutation: log a refusal from any form and that case goes red.
+ */
+let consoleLines: MockInstance[] = [];
+
+beforeEach(() => {
+  Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
+  Element.prototype.scrollIntoView = () => {};
+  location.hash = `#/login?next=${encodeURIComponent(NEXT)}`;
+  consoleLines = [vi.spyOn(console, "error"), vi.spyOn(console, "warn")];
+});
+
+afterEach(() => {
+  cleanup();
+  // READ BEFORE THE SPIES ARE RESTORED, and asserted after everything else is
+  // put back, so a case that logged fails alone rather than every case after.
+  const logged = consoleLines.flatMap((line) => line.mock.calls);
+  vi.unstubAllGlobals();
+  sessionRestored();
+  localStorage.clear();
+  sessionStorage.clear();
+  vi.restoreAllMocks();
+  location.hash = "#/";
+  expect(logged).toEqual([]);
+});
+
+describe("signing in with a password", () => {
+  test("it lands where the reader was, replacing the sign-in, and the frame dials", async () => {
+    const sent = engine({
+      "GET /health": CLAIMED,
+      "GET /auth/session": NOBODY,
+      "POST /auth/login": SIGNED_IN,
+    });
+    const { dial, reconnect } = await mount();
+    const depth = history.length;
+
+    type(/login or email/i, "jane.doe");
+    type(/^password$/i, "correct horse battery staple");
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await answered();
+    await answered();
+
+    expect(location.hash).toBe(NEXT);
+    // THE FRAME DIALS, for the session it read; the sign-in dials nothing.
+    expect(dial).toHaveBeenCalled();
+    expect(reconnect).not.toHaveBeenCalled();
+    // A REPLACE, NOT A PUSH: Back from the page the reader asked for must
+    // not land them on a form for a session they already hold.
+    expect(history.length).toBe(depth);
+    const login = sent.find((s) => s.method === "POST" && s.path === "/auth/login");
+    expect(login?.body).toEqual({ login: "jane.doe", password: "correct horse battery staple" });
+  });
+
+  test("a refusal is the engine's own sentence, and the form is kept", async () => {
+    engine({
+      "GET /health": CLAIMED,
+      "GET /auth/session": NOBODY,
+      "POST /auth/login": {
+        status: 401,
+        body: {
+          error: "sign_in_refused",
+          message: "Those sign-in details were not accepted. Check them and try again.",
+        },
+      },
+    });
+    await mount();
+    type(/login or email/i, "jane.doe");
+    type(/^password$/i, "wrong horse battery staple");
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    const alert = await refusal();
+    expect(alert).toBe("Those sign-in details were not accepted. Check them and try again.");
+    // STILL HERE: a mistyped password is not a lost session.
+    expect(location.hash).toBe(`#/login?next=${encodeURIComponent(NEXT)}`);
+    expect((screen.getByLabelText(/login or email/i) as HTMLInputElement).value).toBe("jane.doe");
+  });
+
+  // AND IT COSTS EXACTLY ONE MORE REFUSED REQUEST than a signed-out load does:
+  // the password step's `401 second_factor_required`, which stays a 401 — a
+  // `200` from `/auth/login` is a session opened, and it is typed, so nothing
+  // reads it as signed out (`protocol/rest.ts`). A browser logs it; what is
+  // ours is that it is ONE request, and that the resubmission carrying the
+  // code is the sign-in. Mutation: post the details again before the code
+  // field shows, or send the resubmission twice, and the counts are off.
+  test("the code is asked for only when the engine asks, and sent with the resubmission", async () => {
+    const sent = engine({
+      "GET /health": CLAIMED,
+      "GET /auth/session": NOBODY,
+      "POST /auth/login": [{ status: 401, body: { error: "second_factor_required" } }, SIGNED_IN],
+    });
+    const logins = () => sent.filter((s) => s.method === "POST" && s.path === "/auth/login");
+    await mount();
+    // THE CONTROL: nothing asks for a code before the password has proved
+    // itself, because only the engine knows whether this person holds one.
+    expect(screen.queryByLabelText(/^code$/i)).toBeNull();
+
+    type(/login or email/i, "jane.doe");
+    type(/^password$/i, "correct horse battery staple");
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await answered();
+
+    screen.getByLabelText(/^code$/i);
+    expect(alerts()).toEqual([]);
+    // ONE ATTEMPT BEFORE THE CODE FIELD, without a code, and the only refused
+    // requests so far are the signed-out load's and that one.
+    expect(logins().map((s) => s.body)).toEqual([
+      { login: "jane.doe", password: "correct horse battery staple" },
+    ]);
+    expect(sent.filter((s) => s.status >= 400).map((s) => `${s.method} ${s.path}`)).toEqual([
+      "GET /auth/session",
+      "POST /auth/login",
+    ]);
+    type(/^code$/i, "123456");
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await answered();
+
+    expect(location.hash).toBe(NEXT);
+    // ONE MORE, with the code, and it is the sign-in.
+    expect(logins().map((s) => s.status)).toEqual([401, 200]);
+    expect(logins()[1]?.body).toEqual({
+      login: "jane.doe",
+      password: "correct horse battery staple",
+      code: "123456",
+    });
+  });
+
+  test("a throttled attempt says how long, and the button waits it out", async () => {
+    engine({
+      "GET /health": CLAIMED,
+      "GET /auth/session": NOBODY,
+      "POST /auth/login": {
+        status: 429,
+        body: { error: "throttled", message: "There have been too many failed attempts." },
+        headers: { "Retry-After": "16" },
+      },
+    });
+    await mount();
+    type(/login or email/i, "jane.doe");
+    type(/^password$/i, "correct horse battery staple");
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    const alert = await refusal();
+    expect(alert).toContain("Try again in 16 seconds.");
+    // THE WAIT IS COUNTED DOWN ON THE BUTTON, where the person is looking.
+    expect(
+      (screen.getByRole("button", { name: "Try again in 16s" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  test("a session that may only enrol goes on to the enrolment, carrying next", async () => {
+    engine({
+      "GET /health": CLAIMED,
+      "GET /auth/session": NOBODY,
+      "POST /auth/login": {
+        status: 200,
+        body: { ...(SIGNED_IN.body as object), status: "second_factor_enrolment_required" },
+      },
+      "POST /auth/totp": { status: 200, body: { secret: "JBSWY3DPEHPK3PXP", uri: "otpauth://x" } },
+    });
+    const { dial, reconnect } = await mount();
+    // FROM THE REAL BROWSER'S STATE: the screen's own session read answered
+    // 401, which records that nobody is signed in. Without this the case
+    // passed while the enrolment was routed straight back to this form — a
+    // `waitFor` caught the enrolment's hash on the way through.
+    await answered();
+    expect(currentSessionNeed()).toBe("sign_in");
+    type(/login or email/i, "jane.doe");
+    type(/^password$/i, "correct horse battery staple");
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    const enrol = `#/enrol?next=${encodeURIComponent(NEXT)}`;
+    await answered();
+    expect(location.hash).toBe(enrol);
+    // AND IT STAYS THERE once the frame has followed the need it recorded.
+    await answered();
+    screen.getByText("Set up two-step verification");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(location.hash).toBe(enrol);
+    expect(currentSessionNeed()).toBe("second_factor");
+    // THE SOCKET WAITS: a session that may only enrol is refused it.
+    expect(dial).not.toHaveBeenCalled();
+    expect(reconnect).not.toHaveBeenCalled();
+  });
+});
+
+describe("signing in with the deployment's token", () => {
+  test("the token is sent once, in the header, and kept nowhere", async () => {
+    const sent = engine({
+      "GET /health": CLAIMED,
+      "GET /auth/session": NOBODY,
+      "POST /auth/token": {
+        ...SIGNED_IN,
+        body: { ...(SIGNED_IN.body as object), login: "token:ops" },
+      },
+    });
+    const { dial } = await mount();
+    fireEvent.click(screen.getByRole("button", { name: /use an api token instead/i }));
+    type("API token", "the-break-glass-token-value-long-enough");
+    fireEvent.click(screen.getByRole("button", { name: "Sign in with token" }));
+
+    await answered();
+    await answered();
+
+    expect(location.hash).toBe(NEXT);
+    expect(dial).toHaveBeenCalled();
+    const exchange = sent.find((s) => s.path === "/auth/token");
+    expect(exchange?.headers.Authorization).toBe("Bearer the-break-glass-token-value-long-enough");
+    // NOWHERE: not in either storage area — the frame keeps its recents
+    // there, so what is asserted is that no value holds the token — and not
+    // in any URL this page asked for.
+    for (const area of [localStorage, sessionStorage]) {
+      for (let i = 0; i < area.length; i++) {
+        expect(area.getItem(area.key(i) ?? "") ?? "").not.toContain("the-break-glass");
+      }
+    }
+    expect(sent.some((s) => s.path.includes("the-break-glass"))).toBe(false);
+  });
+
+  // NOBODY JOINED YET: the token is the only way in, so its form is open from
+  // the start and the page says how to begin — while the password form stays,
+  // because password sign-in is always served. The control is a deployment
+  // somebody has joined, where the token waits behind the disclosure. And it
+  // never says nobody was INVITED: `unclaimed` is no person enrolled, which an
+  // open invitation does not change, so it said so beside one just issued.
+  test("an unclaimed deployment opens the token form and says how to begin", async () => {
+    engine({
+      "GET /health": { status: 200, body: { status: "ok", identity: "unclaimed" } },
+      "GET /auth/session": NOBODY,
+    });
+    await mount();
+    await answered();
+    screen.getByText(/nobody has joined yet\. sign in with an api token\./i);
+    expect(screen.queryByText(/nobody has been invited/i)).toBeNull();
+    // A PERSON COMES FROM A SEAT: the way in is the org chart, never a
+    // Settings › People button that no longer invites anybody.
+    screen.getByText(/then invite yourself from Company › Org chart/i);
+    expect(screen.queryByText(/Settings › People/)).toBeNull();
+    // OPEN AND FIRST, not behind the disclosure a claimed deployment keeps it
+    // under, and its button is the primary action.
+    expect(screen.queryByText("Use an API token instead")).toBeNull();
+    expect(screen.getByLabelText("API token")).toBeDefined();
+    const token = screen.getByRole("button", { name: "Sign in with token" });
+    // THE PASSWORD FORM IS STILL SERVED, folded behind its own disclosure.
+    const instead = screen.getByRole("button", { name: /sign in with a password instead/i });
+    expect(token.compareDocumentPosition(instead) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(instead);
+    expect(screen.getByLabelText(/^password$/i)).toBeDefined();
+  });
+
+  test("a claimed deployment keeps the token behind the disclosure (the control)", async () => {
+    engine({ "GET /health": CLAIMED, "GET /auth/session": NOBODY });
+    await mount();
+    await answered();
+    expect(screen.queryByText(/invite yourself/i)).toBeNull();
+    expect(screen.getByLabelText(/^password$/i)).toBeDefined();
+    screen.getByText("Use an API token instead");
+    screen.getByText("Forgot your password? Ask an admin for a reset link.");
+  });
+
+  // "UNKNOWN" IS NOT "UNCLAIMED": a node that cannot read its identity estate
+  // must not tell anybody to invite a founder into a company that has one.
+  test("a node that cannot say whether anybody was invited draws the ordinary page", async () => {
+    engine({
+      "GET /health": { status: 200, body: { status: "degraded", identity: "unknown" } },
+      "GET /auth/session": NOBODY,
+    });
+    await mount();
+    await answered();
+    expect(screen.queryByText(/invite yourself/i)).toBeNull();
+    screen.getByText("Sign in with your login or email.");
+  });
+});
+
+// A TAB WHOSE SESSION ENDED ELSEWHERE IS TOLD SO. Another browser's password
+// change, or its "Sign out" of this session, dropped this one on the plain
+// sign-in form as though it had never been signed in. The CONTROLS: a tab
+// nobody read (a fresh one, or one a sign-out emptied) is not told, and one
+// whose session is still good is told whose it holds instead. Nor is a tab
+// whose node could not say: a 503 from a node behind on the identity log is
+// the engine declining to tell a browser it was signed out, and a page that
+// read it as "nobody" said exactly that. Mutation: drop the notice, show it
+// whatever the tab was, or show it on any refusal rather than a 401.
+describe("a tab whose session ended somewhere else", () => {
+  test.each([
+    ["a tab somebody read, holding no session now", "p-1", NOBODY, true],
+    ["a tab nobody read (the control)", null, NOBODY, false],
+    [
+      "a tab somebody read, on a node that cannot read its identity log",
+      "p-1",
+      {
+        status: 503,
+        body: { error: "unavailable", message: "Try again shortly." },
+        headers: { "Retry-After": "2" },
+      },
+      false,
+    ],
+    [
+      "a tab whose session is still good (the control)",
+      "p-1",
+      {
+        status: 200,
+        body: { person: "p-1", login: "jane.doe", kind: "person", status: "signed_in" },
+      },
+      false,
+    ],
+  ])("%s", async (_, reader, session, told) => {
+    if (reader) noteReader(reader);
+    engine({ "GET /health": CLAIMED, "GET /auth/session": session as Answer });
+    await mount();
+    await answered();
+    expect(screen.queryByText("You were signed out") !== null).toBe(told);
+  });
+});
+
+describe("a browser that is already signed in", () => {
+  test("is told whose session it holds, and may carry on as them", async () => {
+    engine({
+      "GET /health": CLAIMED,
+      "GET /auth/session": {
+        status: 200,
+        body: {
+          person: "p-1",
+          login: "jane.doe",
+          kind: "person",
+          grants: [],
+          status: "signed_in",
+        },
+      },
+    });
+    const { dial } = await mount();
+    await answered();
+    const carry = screen.getByRole("button", { name: "Continue as jane.doe" });
+    // NOT SENT ON UNASKED: "sign in as somebody else" is a thing people mean.
+    expect(location.hash).toBe(`#/login?next=${encodeURIComponent(NEXT)}`);
+    expect(dial).not.toHaveBeenCalled();
+    act(() => carry.click());
+    await answered();
+    await answered();
+    expect(location.hash).toBe(NEXT);
+    expect(dial).toHaveBeenCalled();
+  });
+});
+
+// A SESSION ALSO ENDS WITH NOBODY SIGNING OUT — an idle deadline, a
+// revocation, a sign-out in another tab — and the tab is then ROUTED here with
+// everything its last reader saw still in it: the store's company state, and
+// the builder's kept draft. Only a sign-out reloaded it, so whoever signed in
+// next was served the last person's company, and their unsaved draft as
+// their own.
+describe("a sign-in in a tab somebody else was reading", () => {
+  let reloads: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    reloads = vi.spyOn(page, "reloadInto").mockImplementation(() => {});
+  });
+
+  test("hands the tab over: its storage emptied, the new reader recorded, reloaded where it was going", async () => {
+    engine({
+      "GET /health": CLAIMED,
+      "GET /auth/session": NOBODY,
+      "POST /auth/login": SIGNED_IN,
+    });
+    noteReader("p-9");
+    sessionStorage.setItem("crewlet_org_draft", "{}");
+    const { dial, reconnect } = await mount();
+    type(/login or email/i, "jane.doe");
+    type(/^password$/i, "correct horse battery staple");
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await answered();
+
+    expect(reloads).toHaveBeenCalledWith(NEXT);
+    expect(sessionStorage.getItem("crewlet_org_draft")).toBeNull();
+    expect(currentReader()).toBe("p-1");
+    // THE RELOAD DIALS: a socket dialled in a page about to be dropped is a
+    // connection opened for nothing.
+    expect(dial).not.toHaveBeenCalled();
+    expect(reconnect).not.toHaveBeenCalled();
+  });
+
+  test("a session that may only enrol is handed over into the enrolment", async () => {
+    engine({
+      "GET /health": CLAIMED,
+      "GET /auth/session": NOBODY,
+      "POST /auth/login": {
+        status: 200,
+        body: { ...(SIGNED_IN.body as object), status: "second_factor_enrolment_required" },
+      },
+    });
+    noteReader("p-9");
+    await mount();
+    type(/login or email/i, "jane.doe");
+    type(/^password$/i, "correct horse battery staple");
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await answered();
+    expect(reloads).toHaveBeenCalledWith(`#/enrol?next=${encodeURIComponent(NEXT)}`);
+  });
+
+  // THE CONTROL: the same person back after their session lapsed carries on
+  // where they were — the builder keeps their draft for exactly this.
+  test("the same person signing in again keeps the tab and what it holds", async () => {
+    engine({
+      "GET /health": CLAIMED,
+      "GET /auth/session": NOBODY,
+      "POST /auth/login": SIGNED_IN,
+    });
+    noteReader("p-1");
+    sessionStorage.setItem("crewlet_org_draft", "{}");
+    const { dial } = await mount();
+    type(/login or email/i, "jane.doe");
+    type(/^password$/i, "correct horse battery staple");
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await answered();
+    await answered();
+
+    expect(location.hash).toBe(NEXT);
+    expect(reloads).not.toHaveBeenCalled();
+    expect(dial).toHaveBeenCalled();
+    expect(sessionStorage.getItem("crewlet_org_draft")).toBe("{}");
+  });
+
+  // THE BROWSER IS THE SIGNING-IN PERSON'S, and a list kept per reader in its
+  // localStorage outlives every tab: a key of one's own kept the last person's
+  // titles out of this person's rail and not out of their browser. So every
+  // other reader's recents and stars go, and this person's own stay.
+  test("every other reader's recents and stars leave the browser, and the person's own stay", async () => {
+    engine({
+      "GET /health": CLAIMED,
+      "GET /auth/session": NOBODY,
+      "POST /auth/login": SIGNED_IN,
+    });
+    noteReader("p-9");
+    for (const key of [recentsKey("p-9"), starsKey("p-9"), recentsKey("p-1"), starsKey("p-1")]) {
+      localStorage.setItem(key, "[]");
+    }
+    localStorage.setItem("crewlet_rail_collapsed", "1");
+    await mount();
+    type(/login or email/i, "jane.doe");
+    type(/^password$/i, "correct horse battery staple");
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await answered();
+
+    expect(reloads).toHaveBeenCalledWith(NEXT);
+    expect(localStorage.getItem(recentsKey("p-9"))).toBeNull();
+    expect(localStorage.getItem(starsKey("p-9"))).toBeNull();
+    expect(localStorage.getItem(recentsKey("p-1"))).toBe("[]");
+    expect(localStorage.getItem(starsKey("p-1"))).toBe("[]");
+    // A preference of the browser's own is nobody's list.
+    expect(localStorage.getItem("crewlet_rail_collapsed")).toBe("1");
+  });
+
+  // A TAB NOBODY WAS READING has nothing of anybody's in it to hand over.
+  test("a first sign-in in a fresh tab records its reader and carries on", async () => {
+    engine({
+      "GET /health": CLAIMED,
+      "GET /auth/session": NOBODY,
+      "POST /auth/login": SIGNED_IN,
+    });
+    // ANOTHER TAB'S READER, whose session ended with no sign-out: the tab
+    // that knew them is gone, and their lists are still in the browser.
+    localStorage.setItem(recentsKey("p-9"), "[]");
+    await mount();
+    type(/login or email/i, "jane.doe");
+    type(/^password$/i, "correct horse battery staple");
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await answered();
+
+    expect(location.hash).toBe(NEXT);
+    expect(reloads).not.toHaveBeenCalled();
+    expect(currentReader()).toBe("p-1");
+    expect(localStorage.getItem(recentsKey("p-9"))).toBeNull();
+  });
+});

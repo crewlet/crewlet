@@ -1,4 +1,4 @@
-# ADR-0002 — The stream is the write-ahead log; the SQL estate is derived
+# ADR-0002: The stream is the write-ahead log; the SQL estate is derived
 
 - **Status:** accepted
 - **Authority:** `internal/statelog`

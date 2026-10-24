@@ -14,7 +14,7 @@
           "x-crewlet-secret": true
         },
         "deployment": {
-          "description": "Which Atlassian this company runs: cloud or data_center. Default cloud.",
+          "description": "Which Atlassian this company runs: cloud or data_center. The form opens on cloud; a value written here also decides a Jira or Confluence url whose host is not Atlassian's own.",
           "type": [
             "string",
             "number",
@@ -398,6 +398,33 @@
           "enum": [
             "company",
             "unit",
+            "",
+            null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CompanyArtifacts": {
+      "additionalProperties": false,
+      "properties": {
+        "agents_manage_others": {
+          "description": "Let an agent publish over, update and reshare artifacts it does not own. Off by default.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "seen_by": {
+          "description": "Who sees who has opened an artifact: editors (the default) or nobody.",
+          "enum": [
+            "editors",
+            "nobody",
             "",
             null
           ]
@@ -1273,14 +1300,6 @@
             "null"
           ]
         },
-        "crewlet_operator_id": {
-          "type": [
-            "string",
-            "number",
-            "boolean",
-            "null"
-          ]
-        },
         "github_login": {
           "type": [
             "string",
@@ -1337,15 +1356,6 @@
           "$ref": "#/$defs/Confluence",
           "description": "Confluence instance or Cloud site, org read account and webhook secret. Absent = disabled."
         },
-        "dashboard_base_url": {
-          "description": "HTTPS base a person reaches this deployment's dashboard on, e.g. https://crewlet.example.com; links agents compose for people are built on it. Empty means no link is composed.",
-          "type": [
-            "string",
-            "number",
-            "boolean",
-            "null"
-          ]
-        },
         "datadog": {
           "$ref": "#/$defs/Datadog",
           "description": "Datadog monitor alerts delivered as inbound events. Absent = disabled."
@@ -1374,15 +1384,6 @@
         "mattermost": {
           "$ref": "#/$defs/Mattermost",
           "description": "Mattermost instance and team. Absent = disabled."
-        },
-        "public_base_url": {
-          "description": "HTTPS base a vendor reaches this deployment on, e.g. https://crewlet.example.com. Empty means no inbound address.",
-          "type": [
-            "string",
-            "number",
-            "boolean",
-            "null"
-          ]
         },
         "slack": {
           "$ref": "#/$defs/Slack",
@@ -1730,6 +1731,22 @@
             null
           ]
         },
+        "runtime_env": {
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ],
+            "x-crewlet-secret": true
+          },
+          "description": "Environment for the container runtime's own CLI (not the box); ${VAR} supported.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "state_dir": {
           "description": "Parent directory for box directories; used by both local placements.",
           "type": [
@@ -1813,6 +1830,21 @@
             "null"
           ]
         },
+        "optional_keys": {
+          "description": "Keys of env, headers or a seat's mcp_env block for this server whose value may resolve to nothing; such a key is left out rather than holding the server back.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "request_timeout_seconds": {
           "description": "Cap on one tool call.",
           "minimum": 0,
@@ -1831,7 +1863,7 @@
           ]
         },
         "startup_timeout_seconds": {
-          "description": "Connect, handshake and first tool listing budget.",
+          "description": "Bounds connect and handshake, and separately the first tool listing. 0 is the engine's default.",
           "minimum": 0,
           "type": [
             "number",
@@ -2178,6 +2210,10 @@
             "null"
           ]
         },
+        "avatar": {
+          "$ref": "#/$defs/RoleAvatar",
+          "description": "Agent seats: the Crewlet character and colour the seat is drawn as. Absent = the original Crewlet, in purple."
+        },
         "backstory": {
           "description": "Who this seat is; reaches its prompt.",
           "type": [
@@ -2237,7 +2273,7 @@
               "const": ""
             }
           ],
-          "description": "Canonical slug. Effectively permanent: it derives the seat's durable id.",
+          "description": "Canonical slug, and how lead and manages name this seat. Immutable: it derives the seat's durable id, so changing it removes the seat and creates another.",
           "type": [
             "string",
             "number",
@@ -2555,7 +2591,7 @@
           "description": "Provider chain for spawned sub-agents."
         },
         "manages": {
-          "description": "Seats or units this seat manages; a unit expands to its seats.",
+          "description": "Seat handles or unit keys this seat manages; a unit key expands to its seats.",
           "items": {
             "type": [
               "string",
@@ -2592,7 +2628,7 @@
           ]
         },
         "name": {
-          "description": "Unique seat name; also the source of the auto-derived handle.",
+          "description": "Seat name, shown to people; also the source of the auto-derived handle. Nothing references a seat by it.",
           "type": [
             "string",
             "number",
@@ -2656,7 +2692,7 @@
           "description": "This seat's own token ceilings per calendar window on the company clock: day, week and month, each optional. Absent = only the company's ceilings apply."
         },
         "unit": {
-          "description": "Home unit for a root-level seat; the seat is moved into it.",
+          "description": "Key (id) of the home unit for a root-level seat; the seat is moved into it.",
           "type": [
             "string",
             "number",
@@ -2683,6 +2719,65 @@
       "required": [
         "name"
       ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "RoleAvatar": {
+      "additionalProperties": false,
+      "properties": {
+        "character": {
+          "description": "The Crewlet character this agent seat is drawn as. Absent = crewlet, the original.",
+          "enum": [
+            "crewlet",
+            "hexlet",
+            "peaklet",
+            "prismlet",
+            "towerlet",
+            "bricklet",
+            "gemlet",
+            "coglet",
+            "pluslet",
+            "shieldlet",
+            "stacklet",
+            "sparklet",
+            "cloudlet",
+            "foxlet",
+            "rocketlet",
+            "crownlet",
+            "cactlet",
+            "wisplet",
+            "heartlet",
+            "flasklet",
+            "chiplet",
+            "duolet",
+            "chatlet",
+            "pagelet",
+            "archlet",
+            "dashlet",
+            "octlet",
+            "conelet",
+            "hivelet",
+            "folderlet",
+            "",
+            null
+          ]
+        },
+        "color": {
+          "description": "The colour this agent seat is drawn in. Absent = purple.",
+          "enum": [
+            "purple",
+            "cyan",
+            "green",
+            "amber",
+            "rose",
+            "blue",
+            "",
+            null
+          ]
+        }
+      },
       "type": [
         "object",
         "null"
@@ -2932,6 +3027,21 @@
         "mcp": {
           "$ref": "#/$defs/RoleSandboxMCP"
         },
+        "optional_keys": {
+          "description": "Keys of env whose value may resolve to nothing; such a key is left out of the run rather than refusing it.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "pause_ttl_seconds": {
           "description": "Paused-box TTL. Unset = provider default; 0 = never pause.",
           "minimum": 0,
@@ -3049,7 +3159,7 @@
           ]
         },
         "default_run_in": {
-          "description": "Where a sandbox-enabled seat that names none runs. Required unless the catalogue names exactly one cell, or every sandbox-enabled seat and agent-mode entry names its own run_in.",
+          "description": "Where a box whose placer names no cell runs: a sandbox-enabled seat whose executor is not in agent mode and names no run_in, or an agent-mode providers.llm entry with no cli.run_in. Required unless the catalogue names exactly one cell, or every such seat and entry names its own.",
           "enum": [
             "direct",
             "container",
@@ -3152,7 +3262,7 @@
             ],
             "x-crewlet-secret": true
           },
-          "description": "Files written into the box before commands run.",
+          "description": "Files written into the box before commands run; a body that is exactly one ${VAR} is that variable's value.",
           "type": [
             "object",
             "null"
@@ -3164,6 +3274,21 @@
             "string",
             "number",
             "boolean",
+            "null"
+          ]
+        },
+        "optional_keys": {
+          "description": "Keys of env, or paths of files, whose value may resolve to nothing; left out rather than refusing the run.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
             "null"
           ]
         },
@@ -3848,7 +3973,7 @@
               "const": ""
             }
           ],
-          "description": "Stable identity for this unit, so a rename does not move what is keyed on it. Lowercase, starts with a letter.",
+          "description": "Stable identity for this unit, and how lead, manages and unit references key it. Minted from the name at import when unset. Lowercase, starts with a letter.",
           "type": [
             "string",
             "number",
@@ -3872,7 +3997,7 @@
           ]
         },
         "lead": {
-          "description": "Seat leading this unit; inherited from the parent when empty.",
+          "description": "Handle of the seat leading this unit; inherited from the parent when empty.",
           "type": [
             "string",
             "number",
@@ -3903,7 +4028,7 @@
           ]
         },
         "name": {
-          "description": "Unit name; also what a manages entry can reference.",
+          "description": "Unit name, shown to people. Nothing references a unit by it.",
           "type": [
             "string",
             "number",
@@ -4048,10 +4173,13 @@
       ]
     }
   },
-  "$id": "https://docs.crewlet.ai/schema/company.schema.json",
+  "$id": "https://docs.crewlet.ai/engine/latest/schema/company.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "artifacts": {
+      "$ref": "#/$defs/CompanyArtifacts"
+    },
     "code": {
       "$ref": "#/$defs/Code"
     },

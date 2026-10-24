@@ -215,7 +215,11 @@ func (e *Engine) fillMemory(ctx context.Context, loop *memoryFill) {
 	defer cancel()
 	pass := embeddings.NewPass(memory, time.Now().UTC(), memoryFillRequestsPerTick,
 		shareOf(memoryFillBytesPerTick, liveNodes))
-	report := fillHeldMemory(ctx, host, memorySources(e.backends.Store, e.agentIDOf),
+	// THE SEAT'S DERIVED ID, the diary's key — never a roster lookup, for
+	// [memoryAgentID]'s reason: a seat this node still holds after an apply
+	// removed it keeps an address its rows can be found under.
+	agentIDOf := func(handle string) string { return memoryAgentID(e.Company(), handle) }
+	report := fillHeldMemory(ctx, host, memorySources(e.backends.Store, agentIDOf),
 		provider, pass, loop.resume)
 	loop.resume = report.resume
 	report.log(ctx, provider)

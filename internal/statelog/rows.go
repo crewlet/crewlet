@@ -74,14 +74,21 @@ type Rows interface {
 	Op(ctx context.Context, opID string) (OpEntry, bool, error)
 
 	// LostBefore answers the instant before which the domain's ops table
-	// may have lost rows, reporting false when it has lost none: every row
-	// it no longer holds was applied before it, so "absent" is conclusive
-	// only for an operation minted at or after it. It travels with the
-	// ledger inside a snapshot, and only a sweep moves it — this node's, or
-	// its donor's, inherited with the ledger when an adoption installs that
-	// file; an adoption itself loses nothing — see ledgerloss.go and
-	// [Publisher.vouches].
-	LostBefore(ctx context.Context) (time.Time, bool, error)
+	// may have lost rows of an operation on a subject of this KIND,
+	// reporting false when it has lost none: every row it no longer holds
+	// was applied before it, so "absent" is conclusive only for an
+	// operation minted at or after it. It travels with the ledger inside a
+	// snapshot, and only a sweep moves it — the table's or a kind's own,
+	// this node's, or its donor's, inherited with the ledger when an
+	// adoption installs that file; an adoption itself loses nothing — see
+	// ledgerloss.go and [Publisher.vouches].
+	//
+	// PER KIND, because a domain may sweep one kind's rows sooner than the
+	// rest (internal/maintenance's OpsHorizon.Kinds): the answer is the
+	// later of the table's watermark and that kind's own, so an hourly
+	// sweep of sessions never reads as the whole ledger losing everything
+	// older than an hour. An empty kind asks the table's alone.
+	LostBefore(ctx context.Context, kind string) (time.Time, bool, error)
 }
 
 // Decision is what a domain decided, inside the snapshot, from rows it read
@@ -156,7 +163,7 @@ type Snap struct {
 	// EXPECTATION, and the only thing an expectation is ever formed
 	// from. A zero anchor means this node has consumed nothing on this
 	// subject in this generation — or the trim removed its anchor
-	// because the log holds none of its records (ADR-0032) — which is a
+	// because the log holds none of its records (ADR-0046) — which is a
 	// probe rather than a licence to publish at zero.
 	Anchor Position
 

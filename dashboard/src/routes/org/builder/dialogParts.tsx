@@ -7,7 +7,15 @@
  * in `ui/`, and they are built only from `ui/` components and tokens.
  */
 
-import { createContext, useContext, useId, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { cx } from "@crewlethq/ui";
 import type { HumanContactKey } from "~/protocol/index.ts";
 import { href } from "~/app/router.tsx";
@@ -19,8 +27,19 @@ import type { Segment } from "./model/document.ts";
 import { CONTACT_IDENTITIES } from "./model/templates.ts";
 import type { PlacedProblem, ProblemLink } from "./model/problems.ts";
 import { strandedSentence, type StrandedSchedule } from "./preflight.ts";
-import { TOOL_NAMES, workingNote, type Tool } from "./nodeFacts.ts";
-import { Callout, Combobox, FormField, InlineCode } from "@crewlethq/ui";
+import { workingNote } from "./nodeFacts.ts";
+import {
+  Callout,
+  CharacterPicker,
+  FactList,
+  FormField,
+  HuePicker,
+  InlineCode,
+  Input,
+  SegmentedControl,
+} from "@crewlethq/ui";
+import { AVATAR_CHARACTERS } from "~/contract/avatar.ts";
+import type { AgentAvatar } from "~/lib/avatar.ts";
 
 /** How deep an [EditorSection] sits inside others; 0 for one directly in a drawer or dialog. */
 const SectionDepth = createContext(0);
@@ -39,10 +58,13 @@ type SectionHeading = "h2" | "h3" | "h4" | "h5" | "h6";
 export function EditorSection({
   title,
   hint,
+  aside,
   children,
 }: {
   title: string;
   hint?: ReactNode;
+  /** A short control or tag at the end of the heading's row: a link out, "At least one". */
+  aside?: ReactNode;
   children: ReactNode;
 }) {
   const id = useId();
@@ -54,9 +76,12 @@ export function EditorSection({
        section inside one is a sub-part that takes none. */
     <section className="builder-section col gap-3" data-depth={depth} aria-labelledby={id}>
       <div className="col gap-1">
-        <Heading className="builder-section-title" id={id}>
-          {title}
-        </Heading>
+        <div className="builder-section-head">
+          <Heading className="builder-section-title" id={id}>
+            {title}
+          </Heading>
+          {aside && <span className="builder-section-aside">{aside}</span>}
+        </div>
         {hint && <p className="t-caption">{hint}</p>}
       </div>
       <SectionDepth.Provider value={depth + 1}>{children}</SectionDepth.Provider>
@@ -84,8 +109,8 @@ export function EditorSection({
  * points nowhere.
  */
 export const SCREENS = {
-  integrations: ["settings", "integrations"],
-  schedules: ["agents", "schedules"],
+  integrations: ["company", "integrations"],
+  schedules: ["company", "schedules"],
   /** The company's credentials: Settings › Secrets, the engine's own word
    *  (`/secrets`). */
   secrets: ["settings", "secrets"],
@@ -139,16 +164,6 @@ export function ScreenLink({
   );
 }
 
-/** What a field for a tool nobody connected says instead of the field. */
-export function NotConnected({ tool }: { tool: Tool }) {
-  return (
-    <p className="builder-note muted">
-      {TOOL_NAMES[tool]} is not connected.{" "}
-      <ScreenLink to="integrations">Connect it from Integrations</ScreenLink>
-    </p>
-  );
-}
-
 /**
  * A value the builder shows and does not edit, with why and where it is
  * edited instead.
@@ -161,37 +176,60 @@ export function ReadOnlyFact({
 }: {
   label: string;
   children: ReactNode;
-  reason: ReactNode;
+  /** Why it cannot be changed here: one sentence, shown as the row's tooltip. */
+  reason: string;
   link?: { to: ScreenName; label: string };
 }) {
+  // ONE ROW, the kit's: the label and a lock on the left, the value on the
+  // right, and the reason as the row's tooltip rather than a caption under it.
   return (
-    <div className="builder-fact col gap-1">
-      <span className="t-label">{label}</span>
-      <div className="t-body">{children}</div>
-      <p className="t-caption">
-        {reason}
-        {link && (
-          <>
-            {" "}
-            <ScreenLink to={link.to}>{link.label}</ScreenLink>
-          </>
-        )}
-      </p>
-    </div>
+    <FactList
+      items={[
+        {
+          key: label,
+          label,
+          value: link ? (
+            <>
+              {children} <ScreenLink to={link.to}>{link.label}</ScreenLink>
+            </>
+          ) : (
+            children
+          ),
+          reason,
+        },
+      ]}
+    />
   );
 }
 
 /**
- * Why a name has to be free, said where one is typed.
+ * What a name is, said where one is typed.
  *
- * WHAT NAMES WHAT. A unit's lead and a `manages` entry name a seat, so a seat
- * name must pick out one seat; a `manages` entry and a root seat's `unit:`
- * reference name a unit, so a unit name must pick out one unit. A lead never
- * names a unit, so it is no reason for a unit's name to be unique.
+ * PROSE, NOT AN ADDRESS. A lead and a `manages` entry name a seat by its
+ * handle and a unit by its key (`model/identity.ts`), so two seats or two
+ * units may share a name, and renaming one moves nothing that points at it.
  */
-export const UNIQUE_NAME_HELP = {
-  seat: "Seat names are unique: a lead or a manages entry names exactly one seat.",
-  unit: "Unit names are unique: a manages entry or a unit reference names exactly one unit.",
+export const NAME_HELP = {
+  seat: "Shown to people, and may repeat: everything that names this seat uses its handle.",
+  unit: "Shown to people, and may repeat: everything that names this unit uses its key.",
+} as const;
+
+/**
+ * What a handle or a key is, said where one is chosen and where one is shown.
+ *
+ * AN IDENTITY, CHOSEN ONCE. A seat's agent id, mailbox and memory derive from
+ * its handle, and a unit's schedules and work are filed under its key, so
+ * neither changes after a save: a seat given another handle is another seat.
+ */
+export const IDENTITY_HELP = {
+  seat: "The seat's identity: its mailbox, memory and agent id, and what every lead and manages entry names. It cannot change once saved.",
+  unit: "The unit's identity: what its schedules and work are filed under, and what every manages entry and seat placement names. It cannot change once saved.",
+} as const;
+
+/** Why an existing node's identity is shown and not edited. */
+export const IDENTITY_FIXED = {
+  seat: "A seat’s handle can’t change: its mailbox, memory and agent id hang on it. To use another, replace the seat. Its work stays with this handle.",
+  unit: "A unit's key is its identity: what its schedules and work are filed under. To use another key, remove this unit and add a new one.",
 } as const;
 
 /**
@@ -205,15 +243,11 @@ export const UNIQUE_NAME_HELP = {
  * (`org.DeriveAgentID`): the diary and the onboarding marker are keyed by
  * that id, while the mailbox (`topics.AgentInbox`) and the episodes are keyed
  * by the handle. So a company rename orphans the first two and keeps the
- * rest, and a handle change loses all of them.
+ * rest. A handle never changes: a seat given another one is another seat.
  */
 export const ACKNOWLEDGEMENT_TEXT: Readonly<Record<Acknowledgement, string>> = {
   company_rename:
-    "An agent seat's id is derived from the company name and its handle, so renaming the company gives every agent seat a new id: each seat's diary and onboarding progress stay under the old id and are no longer read, and every agent seat onboards again. Handles, mailboxes and episodes are unchanged.",
-  handle_change:
-    "A seat whose handle changes is a new identity to the engine: its memory, inbox and onboarding start over.",
-  kind_change:
-    "Changing a seat's kind removes the fields listed above, and a removed credential cannot be recovered from the dashboard.",
+    "Every agent onboards again and loses its diary. Handles, mailboxes and episodes stay.",
   credential_servers: "The tool credentials the seats listed above receive will change.",
   mass_removal: "This removes more than half of the company's seats.",
 };
@@ -232,20 +266,39 @@ export const UNIT_TYPES = [
 ] as const;
 
 /**
+ * The value the Custom chip stands for in the row. Never a unit type, so a
+ * type somebody types (even "custom") is never read as the chip itself.
+ */
+const CUSTOM_TYPE = "\u0000custom";
+
+/** The engine's name for the type a unit that names none is run as. */
+const DEFAULT_UNIT_TYPE = "team";
+
+const typeLabel = (type: string) => type.charAt(0).toUpperCase() + type.slice(1);
+
+/** A unit's type as a word, the default type where it names none. */
+export const unitTypeLabel = (type: string) => typeLabel(type.trim() || DEFAULT_UNIT_TYPE);
+
+/**
  * A unit's type: one of the engine's well-known names, or anything else.
  *
- * ONE CONTROL, WHICH IS WHAT THE VALUE IS. This used to be a select whose
- * "Custom type" option revealed a SECOND full-width labelled field under it,
- * so a custom type cost two stacked controls for one string, and the list
- * carried both "Team (the default)" and "Team", which read as two answers.
- * The console draws one row of pills where the Custom pill turns into a box
- * IN ITS OWN PLACE; the same idea here is a field that offers the nine names
- * and takes whatever is typed, because that is exactly what the engine
- * accepts.
+ * ONE ROW OF CHIPS, which is the console's own drawing of this field: a chip
+ * per name the engine knows, the chosen one filled, and a Custom chip that
+ * opens a box of the reader's own IN THE ROW, after it, rather than a second
+ * labelled field stacked under the first. The box was a combobox that offered
+ * the nine names behind a click and a prefix, so a reader had to know a type
+ * existed to be offered it; a row of chips says every answer at once.
  *
- * EMPTY IS THE ENGINE'S DEFAULT, `team` (`org.propagateDownward`), and the
- * placeholder and the help line say so rather than a row in the list
- * standing in for it.
+ * EMPTY IS THE ENGINE'S DEFAULT, `team` (`org.propagateDownward`), so a unit
+ * that names no type is drawn with Team chosen, which is what the engine runs
+ * it as: the chosen chip says it, and no help line under the row repeats it.
+ * Choosing Custom empties the value until something is typed, so what the
+ * row shows and what is saved never differ.
+ *
+ * CHOSEN ON PURPOSE, NOT IN PASSING: the arrows move along the row and Enter
+ * or Space chooses, because choosing Custom puts the reader in its box, and a
+ * row that chose as the arrows moved would pull them out of the row each time
+ * they passed it.
  */
 export function UnitTypeField({
   value,
@@ -258,51 +311,108 @@ export function UnitTypeField({
   error?: string;
   disabled?: boolean;
 }) {
-  const id = useId();
-  const [open, setOpen] = useState(false);
-  // WHAT IS OFFERED IS THE CALLER'S QUESTION, and here it is a prefix of what
-  // has been typed: somebody typing "te" is naming a type, not searching. An
-  // exact match offers the whole list again, so the field can be reopened to
-  // change an answer rather than offering the one already given.
   const typed = value.trim().toLowerCase();
-  const exact = (UNIT_TYPES as readonly string[]).includes(typed);
-  const options = UNIT_TYPES.filter((type) => typed === "" || exact || type.startsWith(typed)).map(
-    (type) => ({ value: type, label: type.charAt(0).toUpperCase() + type.slice(1) }),
-  );
+  const known = (UNIT_TYPES as readonly string[]).includes(typed);
+  const [customOpen, setCustomOpen] = useState(!known && typed !== "");
+  const custom = customOpen || (!known && typed !== "");
+  const [focusBox, setFocusBox] = useState(false);
+  const box = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!focusBox) return;
+    box.current?.focus();
+    setFocusBox(false);
+  }, [focusBox]);
+
   return (
-    <FormField
-      htmlFor={id}
-      label="Type"
-      helper="Informational: the engine runs every unit type the same way. Left empty it is team, the engine's own default."
-      error={error}
-    >
-      {(field) => (
-        <Combobox
-          id={field.id}
-          label="Unit types"
-          value={value}
-          placeholder="team"
-          disabled={disabled ?? false}
-          error={field.invalid}
-          aria-describedby={field.describedBy}
-          open={open && options.length > 0}
-          onOpenChange={setOpen}
-          options={options}
+    <FormField as="fieldset" label="Type" error={error}>
+      {() => (
+        <SegmentedControl
+          label="Unit type"
+          semantics="radio"
+          activate="manual"
+          activateHint={null}
+          layout="chips"
+          value={custom ? CUSTOM_TYPE : known ? typed : DEFAULT_UNIT_TYPE}
+          options={[
+            ...UNIT_TYPES.map((type) => ({ value: type, label: typeLabel(type), disabled })),
+            { value: CUSTOM_TYPE, label: "Custom", disabled },
+          ]}
           onValueChange={(next) => {
+            if (next === CUSTOM_TYPE) {
+              if (!custom) onChange("");
+              setCustomOpen(true);
+              setFocusBox(true);
+              return;
+            }
+            setCustomOpen(false);
             onChange(next);
-            setOpen(true);
           }}
-          // Focus AND a press: the list is what the field is for, so reaching
-          // the field by either route offers it.
-          onFocus={() => setOpen(true)}
-          onClick={() => setOpen(true)}
-          // Closed on the way out, and after the press that chose a name:
-          // blur fires before the list's own mousedown, so the choice is
-          // taken on mousedown rather than on click.
-          onBlur={() => setOpen(false)}
+          trailing={
+            custom ? (
+              <Input
+                ref={box}
+                inputSize="sm"
+                width="xs"
+                aria-label="Custom type"
+                placeholder="Custom type"
+                value={known ? "" : value}
+                disabled={disabled}
+                onChange={(event) => onChange(event.target.value)}
+              />
+            ) : null
+          }
         />
       )}
     </FormField>
+  );
+}
+
+/**
+ * How an agent seat is drawn: its Crewlet character and its colour, chosen
+ * here when the seat is added and in its editor after.
+ *
+ * TWO FIELDS, ONE PICTURE. The character grid draws every option in the
+ * colour chosen below it, so the grid is a preview of the agent it will be,
+ * and the colour row names each colour in words rather than asking for a
+ * swatch to be told apart. The characters offered are the contract's list,
+ * which the engine admits and the design system draws, both held by gates.
+ */
+export function AvatarField({
+  value,
+  onChange,
+  disabled = false,
+  characterError,
+  colorError,
+}: {
+  value: AgentAvatar;
+  onChange: (next: AgentAvatar) => void;
+  disabled?: boolean;
+  /** What the last check said about the character or the block. */
+  characterError?: string | undefined;
+  /** What the last check said about the colour. */
+  colorError?: string | undefined;
+}) {
+  return (
+    <div className="col gap-3">
+      <FormField label="Character" as="fieldset" error={characterError}>
+        <CharacterPicker
+          label="Character"
+          characters={AVATAR_CHARACTERS}
+          value={value.character}
+          hue={value.color}
+          disabled={disabled}
+          onValueChange={(character) => onChange({ ...value, character })}
+        />
+      </FormField>
+      <FormField label="Color" as="fieldset" error={colorError}>
+        <HuePicker
+          label="Color"
+          value={value.color}
+          disabled={disabled}
+          onValueChange={(color) => onChange({ ...value, color })}
+        />
+      </FormField>
+    </div>
   );
 }
 
@@ -447,11 +557,7 @@ export function Refusal({ message }: { message: string | null }) {
  * their answers is what is in the way.
  */
 export function ReadOnlyNote() {
-  return (
-    <Callout variant="neutral">
-      The organization cannot be changed right now, so this change cannot be applied.
-    </Callout>
-  );
+  return <Callout variant="neutral">The org can’t be changed right now.</Callout>;
 }
 
 /** A read-only list of names or sentences, and nothing at all when there are none. */

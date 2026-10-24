@@ -3,14 +3,11 @@ package api_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -20,20 +17,22 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
-	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// healthFrames dials the socket anonymously and returns the snapshot's health
-// and the first health tick after it, both as the tab decodes them.
+// healthFrames dials the socket as the fixture's credential — any resolved
+// principal reads the health push, which is the overview's — and returns the
+// snapshot's health and the first health tick after it, both as the tab
+// decodes them.
 func healthFrames(t *testing.T, a *api.App) (snapshot, tick map[string]any) {
 	t.Helper()
 	srv := httptest.NewServer(a)
 	t.Cleanup(srv.Close)
 	conn, _, err := websocket.Dial(t.Context(),
-		"ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/stream", nil)
+		"ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/stream",
+		&websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer " + fixtureToken}}})
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -96,7 +95,7 @@ func TestTheHealthPushIsTheWholeEnvelope(t *testing.T) {
 	}})
 	a := newApp(t, api.Options{
 		State:          state,
-		Sources:        queries.Sources{Company: active()},
+		Sources:        queries.Sources{Company: active(t)},
 		HealthInterval: 20 * time.Millisecond,
 		Runtime: &fakeRuntime{state: api.RuntimeState{
 			InFlight: 2, Posture: "serve", AppliedEpoch: 41,
@@ -104,7 +103,7 @@ func TestTheHealthPushIsTheWholeEnvelope(t *testing.T) {
 			StallLag: 7 * time.Second,
 		}, fleet: api.FleetState{
 			LiveNodes: &nodes,
-			Alarms:    []string{string(statelog.KindWALLarge), string(statelog.KindApplyLag)},
+			Alarms:    []statelog.Kind{statelog.KindWALLarge, statelog.KindApplyLag},
 		}},
 	})
 	a.Start(t.Context())
@@ -133,10 +132,10 @@ func TestTheHealthPushIsTheWholeEnvelope(t *testing.T) {
 
 // COUNTS, NEVER ROWS — the envelope is public.
 //
-// GET /health is a probe and unguarded, and the push reaches an anonymous
-// tab, so what it says about the fleet and the alarm table is a number and
-// one name. Which nodes hold what, and what each alarm measured, are the
-// operator-only `fleet` and `work_retention` answers.
+// GET /health is a probe and unguarded, so what it says about the fleet and
+// the alarm table is a number and one name: the longest-standing alarm's kind.
+// Which nodes hold what, which logs an alarm stands on and what each alarm
+// measured are the `fleet` and `work_retention` answers, each an admin's.
 //
 // Mutation: carry the alarms' details or the node rows on the envelope, and
 // this fails.
@@ -144,10 +143,10 @@ func TestAnAnonymousHealthReadCarriesCountsOnly(t *testing.T) {
 	t.Parallel()
 	nodes := 2
 	a := newApp(t, api.Options{
-		Sources: queries.Sources{Company: active()},
+		Sources: queries.Sources{Company: active(t)},
 		Runtime: &fakeRuntime{state: api.RuntimeState{Posture: "serve"}, fleet: api.FleetState{
 			LiveNodes: &nodes,
-			Alarms:    []string{string(statelog.KindBackupAge)},
+			Alarms:    []statelog.Kind{statelog.KindBackupAge},
 		}},
 	})
 	_, body := get(t, a, "/health")
@@ -155,9 +154,10 @@ func TestAnAnonymousHealthReadCarriesCountsOnly(t *testing.T) {
 		t.Errorf("nodes = %#v, want a count", body["nodes"])
 	}
 	alarms, _ := body["alarms"].(map[string]any)
-	if got := slices.Sorted(maps.Keys(alarms)); !slices.Equal(got, []string{"count", "worst"}) {
-		t.Errorf("an anonymous read's alarms carry %v, want only the count and the "+
-			"worst's name", got)
+	if got := slices.Sorted(maps.Keys(alarms)); !slices.Equal(got,
+		[]string{"count", "worst"}) {
+		t.Errorf("an anonymous read's alarms carry %v, want only the count and "+
+			"the worst's name", got)
 	}
 }
 
@@ -198,10 +198,11 @@ func TestTheNodeCountIsAbsentWhenPresenceCannotBeRead(t *testing.T) {
 // THE ALARM COUNT IS THE STANDING ALARMS', and "not evaluated" is not zero.
 //
 // The runtime hands the envelope the evaluation the gauge and the log were
-// fed, longest-standing first (the engine half of this is
-// `engine.TestTheAlarmCountEqualsTheRetentionAlarms`). Here: the count is its
-// length, the worst is its head, and a node that has not evaluated its table
-// says nothing rather than `{count: 0}`, which a health card reads as healthy.
+// fed, longest-standing first, one entry per kind however many logs it stands
+// on (the engine half of this is `engine.TestTheHealthAlarmsAreTheRetentionAlarms`).
+// Here: the count is its length, the worst is its head, and a node that has not
+// evaluated its table says nothing rather than `{count: 0}`, which a health
+// card reads as healthy.
 //
 // Mutation: report the last kind as the worst, or send `{count: 0}` for a nil
 // reading, and this fails.
@@ -209,13 +210,17 @@ func TestTheAlarmCountIsTheStandingAlarms(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		what   string
-		alarms []string
+		alarms []statelog.Kind
 		want   map[string]any
 	}{
 		{"no evaluation yet", nil, nil},
-		{"evaluated, nothing firing", []string{}, map[string]any{"count": float64(0)}},
-		{"two firing", []string{"wal_large", "apply_lag"},
-			map[string]any{"count": float64(2), "worst": "wal_large"}},
+		{"evaluated, nothing firing", []statelog.Kind{},
+			map[string]any{"count": float64(0)}},
+		{"two firing, the longest-standing first", []statelog.Kind{
+			statelog.KindTrimBlocked, statelog.KindWALLarge,
+		}, map[string]any{"count": float64(2), "worst": "trim_blocked"}},
+		{"one firing", []statelog.Kind{statelog.KindHistoryPartial},
+			map[string]any{"count": float64(1), "worst": "history_partial"}},
 	} {
 		a := newApp(t, api.Options{Runtime: &fakeRuntime{
 			state: api.RuntimeState{Posture: "serve"},
@@ -249,10 +254,10 @@ func TestAWedgedPresenceReadDoesNotHangTheProbes(t *testing.T) {
 	t.Parallel()
 	runtime := &fakeRuntime{
 		state:         api.RuntimeState{Posture: "serve"},
-		fleet:         api.FleetState{Alarms: []string{string(statelog.KindBackupAge)}},
+		fleet:         api.FleetState{Alarms: []statelog.Kind{statelog.KindBackupAge}},
 		presenceHangs: true,
 	}
-	a := newApp(t, api.Options{Sources: queries.Sources{Company: active()}, Runtime: runtime})
+	a := newApp(t, api.Options{Sources: queries.Sources{Company: active(t)}, Runtime: runtime})
 	srv := httptest.NewServer(a)
 	t.Cleanup(srv.Close)
 
@@ -290,59 +295,5 @@ func TestAWedgedPresenceReadDoesNotHangTheProbes(t *testing.T) {
 	if after := runtime.fleetReads.Load(); after != before {
 		t.Errorf("GET /ready made %d fleet reads, want none: readiness decides nothing on them",
 			after-before)
-	}
-}
-
-// THE SOCKET'S `unavailable` FRAME CARRIES THE SAME RETRY HINT AS THE REST 503.
-//
-// Both come from [stream.RetryAfterSeconds]: the refusal's own derived hint
-// where it has one — how far behind this node is over how fast it drains —
-// and the shared tick's cadence otherwise. The socket used to send the bare
-// code, so a screen waited whatever it had hard-coded while the same question
-// over REST was told what the node actually needed.
-//
-// Mutation: drop the frame's field, or compute it separately from the header,
-// and this fails.
-func TestTheSocketUnavailableFrameCarriesTheSameRetryHintAsREST(t *testing.T) {
-	t.Parallel()
-	a := seededApp(t, nil)
-	a.Queries().Register("behind", func(context.Context, queries.Params) (any, error) {
-		return nil, fmt.Errorf("%w: %w", queries.ErrUnavailable,
-			&statelog.Refused{Code: statelog.RefuseBehind, RetryAfter: 12400 * time.Millisecond})
-	})
-	a.Queries().Register("blip", func(context.Context, queries.Params) (any, error) {
-		return nil, fmt.Errorf("%w: store unreachable", queries.ErrUnavailable)
-	})
-
-	for what, want := range map[string]int{
-		"behind": 12, // the refusal's own hint, rounded
-		"blip":   int(stream.HealthInterval / time.Second),
-	} {
-		rec := httptest.NewRecorder()
-		a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/query/"+what, nil))
-		header, err := strconv.Atoi(rec.Header().Get("Retry-After"))
-		if rec.Code != http.StatusServiceUnavailable || err != nil {
-			t.Fatalf("%s over REST: %d, Retry-After %q", what, rec.Code,
-				rec.Header().Get("Retry-After"))
-		}
-		frame := overSocket(t, a, what, nil)
-		if frame["error"] != stream.CodeUnavailable {
-			t.Fatalf("%s over the socket: %v", what, frame)
-		}
-		got, _ := frame["retry_after_seconds"].(float64)
-		if int(got) != header || header != want {
-			t.Errorf("%s: the socket frame says wait %v s and REST says %d s, want "+
-				"both %d", what, frame["retry_after_seconds"], header, want)
-		}
-	}
-}
-
-// The typed refusal is what the socket reads its hint from, so it must still
-// be an ErrUnavailable to every other reader.
-func TestAnUnavailableErrorIsStillTheSentinel(t *testing.T) {
-	t.Parallel()
-	err := error(&stream.UnavailableError{What: "turns", Hint: time.Second})
-	if !errors.Is(err, stream.ErrUnavailable) {
-		t.Errorf("%v is not stream.ErrUnavailable to errors.Is", err)
 	}
 }

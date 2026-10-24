@@ -1,6 +1,8 @@
 package builtin
 
 import (
+	"slices"
+
 	"github.com/crewlet/crewlet/internal/tools"
 
 	"github.com/crewlet/crewlet/internal/org"
@@ -39,25 +41,30 @@ type OperatorDeps struct {
 	Pages     PageDeps
 	Knowledge KnowledgeSearcher
 
+	// Artifacts and ArtifactData are the artifacts and datastore tools'
+	// dependencies on this surface. Each zero value omits its tools.
+	Artifacts    ArtifactDeps
+	ArtifactData ArtifactDataDeps
+
 	// Org is the company this surface is about, resolved per call because
 	// a config apply replaces it. An operator has no turn and therefore no
 	// org to read from one, so search_knowledge takes it from here — and
 	// with it nil that tool refuses every call it is registered for.
 	Org func() *org.Organization
 
-	// Leads answers whether one handle leads another, which is the one
-	// authority over a person's record that reaches across people. Nil
-	// resolves nothing, which degrades to "your own only" rather than to
-	// a hole — see [Leads].
-	Leads Leads
-
-	// LeadsProject answers whether a handle leads the unit that owns a
-	// project, which is the authority over that project's PLAN. A
-	// separate seam from [Leads] because it is a different question: one
-	// is about a person, the other about a container, and a company can
-	// answer either without answering the other. Nil REFUSES rather than
-	// degrading — see [LeadsProject].
-	LeadsProject LeadsProject
+	// Authorize decides whether the party behind a call may make it, and
+	// it is the SAME seam a seat's registry and the HTTP surface use.
+	//
+	// It replaced `Leads` and `LeadsProject`, which asked the chart the
+	// two relation questions [authz.ClassOwnOrLead] and
+	// [authz.ClassContainer] already ask — from the tool rather than from
+	// the table, two-valued, and consulting no permission at all, so an
+	// admin was refused here while every HTTP route allowed.
+	//
+	// NIL REFUSES EVERYTHING, on [Deps.Authorize]'s rule. Pushed down
+	// into [OperatorDeps.Work] and [OperatorDeps.Pages] by
+	// [OperatorTools], so a caller cannot set the three differently.
+	Authorize Authorizer
 
 	// Runs answers a parked coding run by its turn — see answerrun.go.
 	// A nil desk omits the tool.
@@ -88,6 +95,7 @@ type OperatorDeps struct {
 // write, work before knowledge. Nothing depends on it, and a stable one means
 // two boots of one config advertise the same list.
 func OperatorTools(deps OperatorDeps) []tools.Callable {
+	deps.Work.Authorize, deps.Pages.Authorize = deps.Authorize, deps.Authorize
 	work, pages := deps.Work, deps.Pages
 	// A CALL HERE IS AN OPERATION ITS CALLER HOLDS, because there is no
 	// turn to derive one from: every write answers with its `op_id`, and
@@ -95,19 +103,16 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 	// [WorkDeps.bindOperation] — and this is the only place that says so,
 	// because it is a fact about this surface rather than a setting.
 	work.callerOperations = true
-	candidates := []struct {
-		tool tools.Callable
-		on   bool
-	}{
+	candidates := []candidate{
 		{&listWorkItems{deps: work}, work.Reader != nil},
 		{&getWorkItem{deps: work}, work.Reader != nil},
 		{&createWorkItem{deps: work, pages: pages.Reader}, work.Writer != nil},
-		{&updateWorkItem{deps: work, leads: deps.LeadsProject},
+		{&updateWorkItem{deps: work},
 			work.Writer != nil && work.Reader != nil},
 		{&commentOnWorkItem{deps: work, pages: pages.Reader},
 			work.Writer != nil && work.Reader != nil},
 		{&mergeWorkItem{deps: work}, work.Merges != nil && work.Reader != nil},
-		{&moveWorkItem{deps: work, leads: deps.LeadsProject},
+		{&moveWorkItem{deps: work},
 			work.Moves != nil && work.Reader != nil},
 		{&searchWorkItems{deps: work}, work.Search != nil},
 		// THE VIEW TOOLS ARE HERE AND IN NO SEAT'S REGISTRY. A saved
@@ -122,12 +127,11 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		{&taskActivity{deps: work}, feedReads(work)},
 		{&myWork{deps: work}, feedReads(work)},
 		{&getPerson{deps: work}, work.Reader != nil},
-		{&setPriorities{deps: work, leads: deps.Leads}, work.PersonWriter != nil},
+		{&setPriorities{deps: work}, work.PersonWriter != nil},
 		{&setPins{deps: work}, work.PersonWriter != nil},
 		{&markInbox{deps: work}, work.PersonWriter != nil},
 		{&workInbox{deps: work}, work.Inbox != nil},
-		{&writeProject{deps: work, leads: deps.LeadsProject},
-			work.ProjectWriter != nil},
+		{&writeProject{deps: work}, work.ProjectWriter != nil},
 		{&listProjectFiles{deps: work}, work.Files != nil},
 		{&readProjectFile{deps: work}, work.Files != nil && work.Objects != nil},
 		{&writeProjectFile{deps: work}, work.FileWriter != nil && work.Objects != nil},
@@ -147,25 +151,36 @@ func OperatorTools(deps OperatorDeps) []tools.Callable {
 		// A SEAT IS NEVER GIVEN IT: a question a coding run asked is a
 		// person's to answer, and a seat that could answer its own run's
 		// question would be one guessing on its own behalf.
-		{&answerRun{deps: deps.Runs}, deps.Runs.Desk != nil},
+		{&answerRun{deps: deps.Runs, authorize: deps.Authorize},
+			deps.Runs.Desk != nil},
 		// NOR THESE: whether a seat works is a person's decision about it,
 		// and a seat that could pause a colleague — or resume itself —
 		// would be one overruling the people who run the company.
-		{&pauseSeat{deps: deps.Pauses}, deps.Pauses.Pauses != nil},
-		{&resumeSeat{deps: deps.Pauses}, deps.Pauses.Pauses != nil},
+		{&pauseSeat{deps: deps.Pauses, authorize: deps.Authorize},
+			deps.Pauses.Pauses != nil},
+		{&resumeSeat{deps: deps.Pauses, authorize: deps.Authorize},
+			deps.Pauses.Pauses != nil},
 		// NOR THIS: a note to a running turn is a person redirecting the
 		// work, and a seat that could steer a colleague's turn would be
 		// directing it past the person who asked for the work.
-		{&steerTurn{deps: deps.Steer}, deps.Steer.Asker != nil},
+		{&steerTurn{deps: deps.Steer, authorize: deps.Authorize, org: deps.Org},
+			deps.Steer.Asker != nil},
 		// NOR THIS: it is a person's question answered by a model at the
 		// company's expense, and a seat has search_knowledge and a model
 		// of its own — see answerknowledge.go.
 		{newAnswerKnowledge(deps), answerable(deps)},
 	}
+	candidates = slices.Concat(candidates,
+		artifactOperatorCandidates(deps), artifactDataOperatorCandidates(deps))
 	var out []tools.Callable
 	for _, c := range candidates {
 		if c.on {
-			out = append(out, c.tool)
+			// GATED HERE TOO, and with the same decision a seat's
+			// registry is gated with. An operator's assistant is a
+			// caller like any other: the tools it holds are the same
+			// values, and a catalogue that skipped the wrapper would
+			// be the one surface of three that decided nothing.
+			out = append(out, gate(c.tool, deps.Authorize))
 		}
 	}
 	return out
@@ -180,16 +195,15 @@ func answerable(deps OperatorDeps) bool {
 		a.Models != nil && a.Budget != nil && a.Actor != nil
 }
 
-// newAnswerKnowledge builds the answer tool with its ONE cache: one per
-// catalogue, and a node builds its catalogue again only when what it is built
-// from changes (a native half or a knowledge backend arriving), so this is one
-// cache per node for as long as the node serves the same company's halves —
-// and a catalogue built over another knowledge backend starts with none of the
-// last one's answers, which are not answers from this one.
+// newAnswerKnowledge builds the answer tool over the node's ONE cache, which
+// [AnswerDeps.Cache] carries in: the catalogue is built per request, so a cache
+// built here would be one request's. A company that moves to another
+// knowledge backend never reads the last one's answers from it, because an
+// answer is keyed on the corpus position and only a native knowledge base has
+// one ([answerKnowledge.cacheKey]).
 func newAnswerKnowledge(deps OperatorDeps) *answerKnowledge {
 	return &answerKnowledge{
 		search: deps.Knowledge, items: deps.Work.Search, org: deps.Org,
 		pages: deps.Pages.Reader, tasks: deps.Work.Reader, deps: deps.Answer,
-		cache: newAnswerCache(AnswerCacheEntries),
 	}
 }

@@ -1,7 +1,7 @@
 /**
- * Spend › Budgets: every scope's day, week and month — what it has spent, the
+ * Company › Budgets: every scope's day, week and month, what it has spent, the
  * ceiling it is held to, and whether the gate is refusing it — with each
- * ceiling editable in place by an operator.
+ * ceiling editable in place by an admin.
  *
  * # Its own screen, because it answers a different question from spend
  *
@@ -34,8 +34,8 @@
  * the whole company first (a seat ceiling above the company's never refuses
  * a turn, and the check says so before it is saved), stored as a revision,
  * and applied by every node (`components/budgetWrite.tsx`). The editor is
- * drawn for every reader and disabled with the reason for one without an
- * operator credential.
+ * drawn for every reader and disabled with the reason for one without
+ * Admin.
  *
  * # The counter is the FLEET's, and unreadable is not zero
  *
@@ -46,10 +46,10 @@
  */
 
 import { useMemo } from "react";
-import { Callout, Card, EmptyValue, Meter, Skeleton } from "@crewlethq/ui";
+import { Callout, Card, EmptyValue, Meter, Skeleton, TableEntityCell } from "@crewlethq/ui";
 import { BuildingComplexGlyph, DatabaseGlyph, UsersGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { SeatLabel } from "~/app/frame/cells.tsx";
+import { plainSeat } from "~/app/frame/cells.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
@@ -63,7 +63,7 @@ import { companyDateLabel, fmtCount, fmtExact, relTime } from "~/lib/format.ts";
 import { dayLabelIn } from "~/lib/range.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
+import { useOrgWriteAccess } from "~/lib/useWriteAccess.ts";
 import type { BudgetWindow, BudgetsAnswer } from "~/protocol/types.ts";
 
 /** How often the counters are re-read: the gate's own report cadence is 15s,
@@ -240,7 +240,9 @@ function resetLine(answer: BudgetsAnswer): string {
 export function Budgets() {
   const seatBadge = useSeatBadgeOf();
   const budgets = useQuery("budgets", undefined, { pollMs: BUDGETS_POLL_MS });
-  const access = useConfigWriteAccess();
+  // ANYWHERE: a lead may raise the ceilings of the seats they lead, so the
+  // one blanket reason below is only for a reader who can change none.
+  const access = useOrgWriteAccess("anywhere");
   const now = useNow();
   const { open: openPeek } = usePeekControls();
   const answer = budgets.data;
@@ -264,7 +266,6 @@ export function Budgets() {
     useMemo(() => seats.map((s) => ({ kind: "seat" as const, id: s.handle || s.role })), [seats]),
   );
 
-  const nearPct = answer ? Math.round(answer.near_fraction * 100) : 90;
   const seatWindow = (s: BudgetsAnswer["seats"][number], period: Period) => (
     <SeatWindow
       seat={s.handle}
@@ -279,12 +280,7 @@ export function Budgets() {
 
   return (
     <>
-      <PageNote>
-        What each window may spend on the company clock{zone ? ` (${zone})` : ""}, and what it has.
-        The engine calls a window near at {nearPct}% of its ceiling and refuses a charge that does
-        not fit — a refused seat stops until the window resets on its own, or until its ceiling is
-        raised.
-      </PageNote>
+      <PageNote>Token limits per day, week and month{zone ? ` (${zone})` : ""}.</PageNote>
 
       {/* THE REASON, ONCE, where the pencils are all disabled for the same
           one: every control still says it on its own, but a reader scanning
@@ -297,22 +293,20 @@ export function Budgets() {
       {budgets.loading && !answer && (
         <Skeleton variant="text" rows={4} label="Loading the budget counters" />
       )}
-      {!answer && <QueryState error={budgets.error} loading={budgets.loading} />}
+      {!answer && (
+        <QueryState error={budgets.error} refusal={budgets.refusal} loading={budgets.loading} />
+      )}
 
       {answer && answer.durable === false && (
         <Callout variant="neutral" icon={<DatabaseGlyph size="md" />}>
-          The durable counter could not be READ — which is not the same as it being zero. It lives
-          in the fleet's coordination store; this node could not reach it.
+          Couldn’t read current spend. Try again shortly.
         </Callout>
       )}
 
       {answer && answer.durable && (
         <div className="budgets">
           <Card padding="none">
-            <Card.Header
-              icon={<BuildingComplexGlyph size="sm" />}
-              subtitle="Every seat's spend counts here too, so these bind every seat at once"
-            >
+            <Card.Header icon={<BuildingComplexGlyph size="sm" />} subtitle="Includes every seat">
               <Card.Title>The company</Card.Title>
             </Card.Header>
             <div className="budget-tiles">
@@ -337,6 +331,9 @@ export function Budgets() {
               rows={seats}
               rowKey={(s) => s.agent_id || s.role}
               defaultSort="-month"
+              // THE CARD IS THE FRAME: unflushed, the table drew a bordered
+              // box of its own inside the card's border.
+              flush
               // THE SEAT BESIDE ITS BUDGET: the rail answers "what is it, what
               // was it doing" without losing the row that raised it.
               rowHref={(s) => peekHref({ kind: "seat", id: s.handle || s.role })}
@@ -354,7 +351,7 @@ export function Budgets() {
                   key: "seat",
                   header: "Seat",
                   sortValue: (s) => s.role,
-                  cell: (s) => <SeatLabel {...seatBadge(s.role)} />,
+                  cell: (s) => <TableEntityCell {...plainSeat({ ...seatBadge(s.role) })} />,
                 },
                 // ONE COLUMN PER WINDOW, spelled out: each heading is a word
                 // the phone's card layout reads beside its value.

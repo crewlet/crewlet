@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hiring funnel</title>
+
+<style>
+:root { --bg: #ffffff; --fg: #1d1d1f; --muted: #6b6b70; --accent: #3b5bdb; --card: #f5f5f7; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #111114; --fg: #f2f2f5; --muted: #a0a0a8; --accent: #7b93ff; --card: #1c1c21; }
+}
+body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+main { max-width: 960px; margin: 0 auto; padding: 16px; }
+.card { background: var(--card); border-radius: 12px; padding: 16px; margin: 12px 0; }
+button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--muted); background: var(--card); color: var(--fg); cursor: pointer; }
+svg text { fill: var(--fg); font-size: 16px; } .s1 { fill: #dbe4ff; } .s2 { fill: #bac8ff; } .s3 { fill: #91a7ff; } .s4 { fill: #748ffc; } rect { animation: grow 0.8s ease-out; } @keyframes grow { from { opacity: 0; } to { opacity: 1; } }
+</style>
+</head>
+<body>
+<main>
+<h1>Hiring funnel</h1>
+<svg viewBox="0 0 600 260" role="img" aria-label="Hiring funnel">
+  <rect x="0" y="0" width="600" height="50" rx="8" class="s1"/><text x="20" y="32">Applied 1,240</text>
+  <rect x="60" y="70" width="480" height="50" rx="8" class="s2"/><text x="80" y="102">Screened 410</text>
+  <rect x="140" y="140" width="320" height="50" rx="8" class="s3"/><text x="160" y="172">Interviewed 96</text>
+  <rect x="220" y="210" width="160" height="50" rx="8" class="s4"/><text x="240" y="242">Hired 12</text>
+</svg>
+</main>
+
+</body>
+</html>

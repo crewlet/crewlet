@@ -29,12 +29,11 @@
  *     + 420  the peek
  *     +  10  the scroller's reserved gutter  (`scrollbar-gutter: stable`)
  *     +  40  the screen's padding, x density (`spacing.5` each side)
- *     + 236  Settings' section column, on a screen that draws one —
- *            or 256, Knowledge's tree ([TREE_COLUMN])
+ *     + 236  Settings' section column, where it stands beside the section
+ *            ([SECTION_COLUMN_MIN]; below that it folds to a picker)
  *     + 444  the list
  *
- * = 1160 on a screen, 1396 beside Settings' column and 1416 beside
- * Knowledge's tree, at the normal density.
+ * = 1160 on a screen and 1396 beside Settings' column, at the normal density.
  *
  * The first cut of this counted only the first four terms and the list, and
  * the three it missed are each wide enough to matter: at the 1112 it derived,
@@ -66,6 +65,7 @@
  */
 
 import { breakpoint, density, size, spacing } from "@crewlethq/tokens";
+import { useMediaMatch } from "@crewlethq/ui";
 import type { SectionRenderer } from "./nav.ts";
 
 const px = (value: string): number => Number.parseFloat(value);
@@ -75,6 +75,30 @@ export const SHELL_BREAKPOINT = px(breakpoint.shell);
 
 /** Below this a layout is single-pane and a grid's rows are cards. */
 export const PHONE_BREAKPOINT = px(breakpoint.phone);
+
+/**
+ * A reader whose PRIMARY INPUT IS TOUCH — no hover, a coarse pointer: a phone,
+ * or a tablet held as one. Not a width: a narrow window on a laptop still has
+ * a keyboard, and a wide tablet still has none.
+ *
+ * A KEYCAP IS A HINT FOR A KEYBOARD, so the frame draws none here
+ * ([useKeyHints]): the drawer's search drew "Ctrl + K" on a
+ * phone, a key the reader does not have, and the keycap took the room its own
+ * label needed. Asked this way round — "is it touch?" rather than "is there a
+ * keyboard?" — because no media feature can see a keyboard, and a browser
+ * that answers neither question keeps its hints.
+ */
+export const TOUCH_MEDIA = "(hover: none) and (pointer: coarse)";
+
+/**
+ * Whether the frame draws its KEYCAP hints: everywhere but where the reader's
+ * primary input is touch ([TOUCH_MEDIA]), where a keycap names a key the
+ * reader does not have. The keys still work for a reader who attaches a
+ * keyboard; only the hint is withheld.
+ */
+export function useKeyHints(): boolean {
+  return !useMediaMatch(TOUCH_MEDIA);
+}
 
 /** The peek's resting width, and the range a reader may drag it through. */
 export const PEEK_WIDTH = 420;
@@ -129,33 +153,48 @@ export function densityScale(choice: keyof typeof density): number {
   return Number(density[choice]);
 }
 
-/**
- * Knowledge's tree column: the artboard's 256.
- *
- * WIDER THAN SETTINGS' COLUMN, deliberately. Settings lists nine sections at
- * one level; the tree nests a space, a folder and a page under each other,
- * each level indented, with a space's key on the right — and at the sidebar's
- * 236 a third-level title had under 120px before it was cut.
- */
-export const TREE_COLUMN = 256;
-
 /** How wide the column a workspace draws beside its screens is, if it draws one. */
 export function columnWidth(renderer: SectionRenderer | undefined): number {
   switch (renderer) {
     case "column":
       return px(size.shell.rail);
-    case "tree":
-      return TREE_COLUMN;
     default:
       return 0;
   }
 }
 
+/**
+ * The narrowest a Settings section is drawn BESIDE its column: room for a
+ * grid of six facts and a line of detail (the Audit log's), or a row of four
+ * stat tiles, without cutting a value short. Measured: at 1024 the column
+ * left a 489px section, and the audit's When, Where, What and To columns were
+ * drawn 46px wide while its stat tiles read "Not s…".
+ */
+export const SECTION_BODY_FLOOR = 720;
+
+/**
+ * The narrowest window Settings' column stands beside its section at; below
+ * it the column folds to the one-row picker the phone draws, and the section
+ * takes the screen's whole width. Every width between the window's edge and
+ * the section, at the normal density (a media query cannot read the
+ * reader's), as [peekColumnMin] counts them: the sidebar, the sheet's inset
+ * and hairlines, the scroller's gutter, the column, and the section's floor.
+ * `styles/frame.css` writes it as a literal, held here by `frame.test.ts`.
+ */
+export const SECTION_COLUMN_MIN = Math.ceil(
+  px(size.shell.rail) +
+    px(size.shell.inset) +
+    SHEET_HAIRLINES +
+    SCROLLBAR_GUTTER +
+    columnWidth("column") +
+    SECTION_BODY_FLOOR,
+);
+
 /** Which frame a screen sits in, for the one term that differs. */
 export interface Frame {
   /**
    * The width of the column drawn inside the screen beside the list —
-   * Settings' sections, Knowledge's tree — or 0 where there is none
+   * Settings' sections, or 0 where there is none
    * ([columnWidth]).
    */
   column: number;

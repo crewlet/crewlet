@@ -116,7 +116,8 @@ func TestAQueuedPushHoldsNoSlotAReadIsAnsweredThrough(t *testing.T) {
 func TestEachLaneIsServedOnItsOwnSubjectWithItsOwnBound(t *testing.T) {
 	t.Parallel()
 	srv := newLaneServer(t, "", nil)
-	stop, err := Serve(t.Context(), srv, "data.a", &fakeNode{name: "data.a"}, ServerSeams{})
+	stop, err := Serve(t.Context(), srv, ServerOptions{Self: "data.a",
+		Local: &fakeNode{name: "data.a"}, Envelopes: fleetEnvelopes})
 	if err != nil {
 		t.Fatalf("serve: %v", err)
 	}
@@ -163,15 +164,8 @@ func TestALaneAnswersOnlyItsOwnOperations(t *testing.T) {
 		{opCodePropose.spec.name, Subject("data-a"), "the proposals lane"},
 		{opTasks.spec.name, ProposalSubject("data-a"), "the shared lane"},
 	} {
-		raw, err := json.Marshal(request{Op: tc.op, Args: json.RawMessage(`{}`), From: "agent-9"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		replies, err := f.start(t).Ask(t.Context(), tc.subject, raw, 1)
-		var rep reply
-		if err != nil || len(replies) != 1 || json.Unmarshal(replies[0], &rep) != nil {
-			t.Fatalf("%s asked on %s: (%d replies, %v), want one", tc.op, tc.subject, len(replies), err)
-		}
+		rep := askSignedOn(t, f.start(t), tc.subject,
+			request{Op: tc.op, Args: json.RawMessage(`{}`), From: "agent-9"})
 		if rep.Unserved != unservedNoBackend || !strings.Contains(rep.Detail, tc.want) {
 			t.Errorf("%s asked on %s answered %+v, want it unserved naming %s", tc.op, tc.subject,
 				rep, tc.want)
@@ -190,8 +184,8 @@ func TestAServeThatCannotRegisterALaneWithdrawsTheOthers(t *testing.T) {
 	t.Parallel()
 	refused := errors.New("this broker registers no answerer there")
 	srv := newLaneServer(t, ProposalSubject("data-a"), refused)
-	if _, err := Serve(t.Context(), srv, "data-a", &fakeNode{name: "data-a"},
-		ServerSeams{}); !errors.Is(err, refused) {
+	if _, err := Serve(t.Context(), srv, ServerOptions{Self: "data-a",
+		Local: &fakeNode{name: "data-a"}, Envelopes: fleetEnvelopes}); !errors.Is(err, refused) {
 		t.Fatalf("serve with a lane the broker refuses = %v, want the refusal", err)
 	}
 	if got := srv.withdrawals(); len(got) != 1 || got[0] != Subject("data-a") {

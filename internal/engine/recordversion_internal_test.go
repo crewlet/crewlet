@@ -18,7 +18,7 @@ import (
 func TestEveryHeartbeatAdvertisesTheRecordsItsBuildReads(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	s.publishPositions(t.Context())
 
 	rows, err := e.backends.Fleet.Positions(t.Context())

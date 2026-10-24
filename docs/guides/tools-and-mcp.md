@@ -10,7 +10,7 @@ The engine registers these into each epoch's tool registry with the origin `buil
 
 | Tool | Description |
 |------|-------------|
-| `lookup_colleague` | Resolve any colleague identifier (handle, role name, a human's contact ID) to one seat, case-insensitively, with partial and fuzzy fallbacks; ambiguous queries return the candidate list so the LLM picks rather than guessing |
+| `lookup_colleague` | Resolve any colleague identifier (handle, role name, a human's contact ID) to one seat, case-insensitively, with partial and fuzzy fallbacks; ambiguous queries return the candidate list so the LLM picks rather than guessing. A person the identity directory withholds shows no accounts, and their ids name nobody |
 | `reflect_and_persist` | Capture a durable fact in the agent's private diary (`kind`: `long` or `short`) |
 | `refresh_memory` | Re-run the personal-memory filter mid-turn after gathering richer context |
 | `query_episodes` | Recall the agent's own past turns: by meaning, by conversation, or most recent first |
@@ -18,7 +18,7 @@ The engine registers these into each epoch's tool registry with the origin `buil
 | `refine_skill` | Replace a synthesized skill's body with a corrected procedure; the previous version is kept |
 | `mark_onboarded` | Stamp the agent's onboarding marker after reading the relevant onboarding pages (offered to the onboarding pass) |
 | `a2a_ask` | Ask one AI colleague one question over the private A2A channel (see [Turn Engine § Colleague-surface tools](../concepts/turn-engine.md#colleague-surface-tools)) |
-| `search_knowledge` | Re-run the shared-knowledge search mid-turn, once the agent knows what the task actually needs. Registered wherever the company has a knowledge backend at all |
+| `search_knowledge` | Re-run the shared-knowledge search mid-turn, once the agent knows what the task actually needs. `mode` picks the ranking — `hybrid` by default, `keyword` or `semantic` (see [Search](search.md#three-modes-and-what-an-answer-says-it-served)) — and an answer ranked other than it was asked says so in a sentence: a `semantic` search with nothing to rank by meaning runs nothing, and says that tells the seat nothing about whether a page exists. Registered wherever the company has a knowledge backend at all |
 | `load_tool_skill` | Load the full body of a [Tool Skill](../concepts/tool-skills.md) by key |
 | `run_sandbox` | Hand a code task to a coding agent in a [sandbox](../concepts/code-sandbox.md) |
 
@@ -44,17 +44,26 @@ eighteen in full.
 | `update_work_item` | Move it — status, assignee (with an optional `reason` the new assignee reads), priority, labels, links, one checklist change — with an optional `if_match` that refuses on a concurrent edit |
 | `comment_on_work_item` | Post to the thread. Mentions wake the seats they name; the turn's own key makes a re-run turn post once. `ask` puts a question to somebody and `decision` structures it as options; `answers` with `choice` answers one |
 | `merge_work_item` | Fold a duplicate into the item that survives — linked, its subtasks re-parented, and closed as `cancelled` |
-| `move_work_item` | Move a top-level item and its subtasks to another project, re-keyed there with the old keys still resolving — the project lead's or a person's own |
-| `search_work_items` | Find an item by what it says, ranked over titles and descriptions |
+| `move_work_item` | Move a top-level item and its subtasks to another project, re-keyed there with the old keys still resolving — the project lead's, as a re-route is |
+| `search_work_items` | Find an item by what it says, ranked over titles and descriptions. `mode` picks the ranking as `search_knowledge`'s does — `hybrid` by default, `keyword` or `semantic` — and the answer names the mode it served, with a `degraded` sentence when that is not the one asked for |
 | `list_project_files` | A project's files — reports, specs, notes — in path order, a page at a time |
 | `read_project_file` | One file's text, a page at a time from an offset; bytes as base64 on request |
 | `write_project_file` | Put a file at a path, creating it or replacing it, with an optional `if_version`. Writing exactly what the file already holds, with the same type, stores nothing and answers `outcome: unchanged` |
-| `remove_project_file` | Take a file out of a project; its content is deleted from storage |
+| `remove_project_file` | Take a file out of a project; its content is deleted from storage — the project lead's, as removing an item is |
 | `list_pages` | Browse the knowledge base by container, parent or title |
 | `get_page` | One page's body, breadcrumb, children and history |
-| `write_page` | Create one. Titles are addresses and are unique per container; a `parent` must be a page in the same container that is not in the trash; a body links another page by id, `[its title](#/knowledge/pages/<page id>)`, which is what "Linked from" reads |
-| `save_page` | Edit one, stating the version you read — there is no per-field merge that makes overwriting prose safe. A `parent` moves it, and may not be the page itself or one beneath it; an empty one moves it to the container's top |
+| `write_page` | Create one. Titles are addresses and are unique per container; a `parent` must be a page in the same container that is not in the trash; a body links another page by id, `[its title](#/knowledge/pages/<page id>)`, which is what "Linked from" reads. `status` is `published` (the default) or `draft`, which is listed in its container and returned by no search until it is published, and any other value is refused; an empty body files a folder, a page that only groups the pages under it |
+| `save_page` | Edit one, stating the version you read: there is no per-field merge that makes overwriting prose safe. A `parent` moves it, and may not be the page itself or one beneath it; an empty one moves it to the container's top. `watch` is `true` to follow the page or `false` to stop, and anything else is refused rather than read as no change |
 | `comment_on_page` | Remark on a page, or replace one of your own with `edit` |
+
+What `get_page`, `get_work_item` and `read_project_file` hand back that
+somebody wrote (a page body and its comments, a description and its thread,
+a file's text) arrives **fenced** and labelled with its writers and how far
+the reader may rely on them, beside a `provenance` envelope that labels the
+whole answer; see
+[text somebody else wrote](../concepts/agent-runtime.md#text-somebody-else-wrote).
+A body sent back to a write still wrapped in the fence it was read in is
+stored without it.
 
 The writes on each side count as a **delivery** for the turn's own
 did-this-reach-anybody gate, and each waits for its own write to reach this
@@ -113,11 +122,33 @@ another node whose ledger reaches back that far.
 
 The same tools are served to **your** AI assistant over
 [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant),
-with the writes attributed to your token rather than to a seat, and eleven more
-beside them that no seat is given: the saved views, the catalogue write, a
-person's own queue and inbox, the trash, and the board drag. That set is built
-once per company as ONE operator catalogue, and every operator transport serves
-it, so what a person can do is the same whichever way they reach the company.
+and eleven more beside them that no seat is given: the saved views, the
+catalogue write, a person's own queue, inbox and pins, the trash, and the board
+drag. Each call is decided by the same authority table a seat's is, and each
+write is attributed to who the request is, never to a name the caller chooses:
+a person writes **as the seat they hold** — every person holds one — and so
+does a token the identity directory binds to a seat, with kind `human`, while a
+credential nobody is bound through writes under its own login (`token:<id>`),
+with kind `operator` — the credential
+itself is recorded beside either as the write's `operator_id`. Five more are a
+person's decisions about the company rather than its work, and are served only
+there too: `pause_seat` and `resume_seat`, and `steer_turn` (a note to a
+running turn, decided once a probe of the fleet names the turn's seat — a
+probe nobody answers is `unavailable`), each for the seat's holder, its lead
+or an administrator; `answer_run`, for the person who asked the parked
+coding run its question or a lead of its seat; and `answer_knowledge`, which
+asks the company's knowledge a question on the auxiliary model of the asker's
+seat, so it needs either app — it searches the pages only for a `knowledge`
+holder and the board only for a `tracker` holder — **and** a credential bound
+to a seat. That set
+is ONE operator catalogue, built for every call from what the node runs now,
+and every operator transport serves it — MCP at `/operator/mcp` and the
+dashboard's [`/operator/act`](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface)
+— so what a person can do is the same whichever way they reach the company.
+The MCP transport is **stateless**: every call is decided by the credential of
+the request carrying it, never by the one that opened a session, so a grant
+withdrawn mid-conversation stops the next call and an `Mcp-Session-Id` is a
+handle rather than a proof.
 
 Over MCP, each tracker write's answer also carries the **`op_id`** of the
 operation the call was, and the write tools take it back as an argument: an
@@ -129,9 +160,11 @@ argument, or to another tool, it is refused before anything is written. A seat
 is never offered the argument — its turn is its identity — and a seat's call
 that sends one is refused. The dashboard's transport,
 [`/operator/act`](../reference/api-endpoints.md#operatoract--the-dashboards-write-surface),
-takes no `op_id` either: the operation is derived from the request's own
-`request_id` (a UUIDv7) and the token that sent it, so the retry of a gesture
-is the same request sent again, and an `op_id` beside it is refused.
+takes the operation in an `Idempotency-Key` header instead, and refuses a
+write without one (`400 op_id_invalid`, naming the header) and an `op_id`
+argument beside it: the key is scoped to the principal that sent it, so a
+retry is the same request sent again with the same key, and a key somebody
+else learned names a different operation for them.
 
 Note the deliberate split between personal and shared writes: `reflect_and_persist` is **personal-only** (it writes to the agent's private `agent_diary`), while team-shared content is a knowledge-base page — `write_page` on the native backend, or the vendor's own MCP tools on Confluence (see [Knowledge System](../concepts/knowledge-system.md)). `use_skill` resolves the agent's own synthesized skills; shared procedures are knowledge-base pages.
 
@@ -140,6 +173,115 @@ Note the deliberate split between personal and shared writes: `reflect_and_persi
 or GitLab issues — an agent works those through the vendor's own MCP tools, so
 the engine mirrors no state it would have to keep in step. See
 [The Tracker](../concepts/task-engine.md).
+
+### Artifacts
+
+Twelve more, registered on every node that takes artifact uploads (one with an
+object store, a coordination store and a data node to reach), whatever tracker
+or knowledge base the company runs: nine for the artifact and four for its
+datastore. Each tool is named for its authority row, and the operator catalogue
+serves the same thirteen, so an operator's own assistant publishes and writes
+rows exactly as a seat does.
+
+| Tool | Description |
+|------|-------------|
+| `list_artifacts` | The artifacts the caller can open, by `scope` (`mine`, `shared`, `company`, `agents`, `all`), `kind` and `query`, a page at a time |
+| `get_artifact` | One artifact: its head, its newest versions, its files and a page of one file's source. The answer says the caller's `role` and whether they may publish (`writer`) |
+| `list_dashboard_sources` | The engine sources a dashboard's `engine` datasets may read: each one's parameters, columns, who may read it and how it refreshes. Holds no row; a source is answered as each board's viewer |
+| `create_artifact` | A new artifact of any kind (`html`, `doc`, `slides`, `dashboard`, `sheet`), from inline `content` and `files`, a project file, or a build in the turn's coding run (`source.sandbox`). When a person asked for it, they are made its editor |
+| `publish_artifact` | A new version on a stated `base_version`: `edits` (exact `old_str` and `new_str` pairs), `content`, `files` (null removes one), a build's whole `source`, or `restore_version` |
+| `update_artifact` | The title, description, icon or one version's label |
+| `share_artifact` / `unshare_artifact` | Grant a seat, a unit (`unit:<key>`) or the company (`company`) one role up to editor, or withdraw it. The owner's |
+| `upload_artifact_asset` | Add an image, data file or font to the asset store of an artifact that declares the `assets` capability; the answer's `reference` is the path the page uses |
+| `read_artifact_data` | An artifact's datastore: with no `collection`, its schema (every collection, its columns and who may read and write it); with one, a page of rows (`since` for what changed after an earlier `through`) or one row by `doc` |
+| `query_artifact_data` | Rows of one collection whose indexed fields match every filter in `where`, ordered by `order_by` and paged |
+| `write_artifact_data` | A batch of 1 to 100 ops (`set`, `merge`, `delete`, `increment`, `append`, `add`, `remove`), all or none, each decided by its collection's rules; `if_version` writes a row only if nobody changed it since, and a conflict hands back the rows as they are now |
+| `set_artifact_schema` | Every collection the datastore keeps after a change, with its columns and rules. An agent may tighten a collection's rules and never loosen them: lowering a role, lifting `humans_only`, an append mode or immutability, removing a condition, pointing an `assigned_to_viewer` column at another assignee, or dropping a protected column or a collection is refused to an agent and left to a person |
+
+**Every verb is decided twice inside a turn somebody woke.** The tool reads the
+stored artifact and asks the authority table for the seat, then for whoever the
+turn is acting for (the **requester ceiling**): an agent never shows an
+artifact to a requester who could not open it, and never writes for one what
+they could not write. The exception is an artifact the agent owns, which
+anybody who can message the agent may ask it to edit, as with all other agent
+work; reading and sharing are never exempt. A turn woken by somebody the
+company does not know opens no artifact at all. A caller with no relation to an
+artifact is told it does not exist, in exactly the words an id nothing holds is
+answered with. An agent is held to `contributor` on artifacts it does not own
+unless `artifacts.agents_manage_others` lifts it.
+
+**The datastore's rows are the ceiling too.** A row is answered only when the
+person the turn is acting for could read it as well, by the collection's own
+read rule over their role and their record, and a datastore write is stamped
+with the lower of the agent's role and theirs, so the applier's column rules
+refuse for them exactly what they could not write themselves (an agent's own
+artifact excepted, as above, for writes; never for reads). What a write hands
+back is a read, and is bounded like one even where the write itself was not: a
+conflict's current rows are only those the requester could read, so an edit to
+the agent's own artifact asked by somebody it is not shared with answers the
+conflict with no rows at all. Every row a data tool answers is fenced as text
+its writers wrote (`artifact_row`, naming the row's creator and last writer), a
+conflict's current rows included. A turn writes at most **1,000** datastore
+ops; a retry of a call it lost the answer to is not counted again.
+
+**An artifact in the trash serves no content.** `get_artifact`,
+`read_artifact_data` and `query_artifact_data` refuse it, naming the trash and
+its owner, and read nothing, exactly as the dashboard's file and data routes
+do; a write to it is refused until a person restores it.
+
+**An administrator's override is recorded before anything is shown.** On the
+operator surface, a person holding `admin` reads any artifact through the admin
+path, and every such read (`get_artifact`, `read_artifact_data`,
+`query_artifact_data`, and the live files a stale publish answers with) writes
+the elevated-read record first, which the artifact's history shows its owner
+and editors. A read whose record cannot be written shows nothing. An
+administrator who holds a share reads and writes as that share.
+
+**An agent working on an artifact is in its room.** A seat that reads an
+artifact or its data (`get_artifact`, `read_artifact_data`,
+`query_artifact_data`) appears in the artifact's room as an agent, viewing, and
+one that writes it (`publish_artifact`, `update_artifact`,
+`upload_artifact_asset`, `write_artifact_data`, `set_artifact_schema`) as
+editing, focused on the version, collection or row the call named, for 45
+seconds after its last call, and only once the call was allowed. The people
+looking at the artifact see which agent is working on which row.
+
+**A publish names its base.** One over a version somebody published since is
+refused `stale_version` and handed the live version, who published it and
+when, the paths that changed since the caller's base and the first page of each
+changed text file, fenced as text that author wrote. The text is a read of the
+live version: where this turn could not read the artifact (a publish to the
+agent's own work asked by somebody it is not shared with, or an
+administrator's read whose record could not be written), the refusal carries
+the numbers, the author and the paths alone, and says so in
+`live_files_withheld`. No tool takes `force`:
+discarding a colleague's newer version is a present person's decision in the
+dashboard. Trash, restore, purge, transfer and pins are not tools either.
+
+**Where the bytes come from.** Inline content is at most 1 MiB decoded per
+call. A coding run's build and a project's file are streamed: their digests
+are declared to an upload the publish pipeline reserves first, each file is put
+through the engine, and the version is decided only after every byte is read
+back verified. A sandbox is never handed an upload URL; the engine lists the
+directory through the box itself, holds every path to the workspace, and
+refuses one file more than a version holds rather than truncating. A box is
+readable after `run_sandbox` returns and until the Execute phase ends.
+
+**Per turn**, an agent makes at most 20 publishes, 10 of them on one artifact,
+and writes at most 128 MiB; past either the call is refused `turn_quota` and
+told to stop and report. File text another principal wrote is
+[fenced](../concepts/agent-runtime.md#text-somebody-else-wrote), and a long one
+is condensed by the seat's auxiliary model unless the call passes `offset`.
+**Publishing delivers nowhere**: no artifact tool counts as a delivery, so a
+seat asked in a chat thread posts the `url` every answer carries with its chat
+tools. The bundled `skill:artifacts` [Tool Skill](../concepts/tool-skills.md)
+teaches the design contract and how to shape and fill a datastore (a schema
+before rows, batched writes, blind cells and guarded long text, `humans_only`
+for approvals), and is enforced on the five tools that write bytes, a schema
+or rows; `skills/crewlet-artifacts/SKILL.md` carries the same contract for your
+own assistant, installed as the
+[`company-architect` skill](../getting-started/ai-authoring.md#the-company-architect-skill)
+is (copy the directory into your assistant's skills folder).
 
 ### Per-Role MCP Servers (GitHub)
 
@@ -154,7 +296,7 @@ schema, same call signature. With nothing recorded, a tool missing because its
 server failed to start reads as a missing builtin, which sends an operator to
 debug the wrong subsystem.
 
-`GET /tools` reports it as each tool's `source`, and the dashboard's **Settings › Tools & MCP** screen
+`GET /tools` reports it as each tool's `source`, and the dashboard's **Settings › MCP Tools** screen
 groups on it:
 
 | `source` | Where the tool came from |
@@ -165,19 +307,23 @@ groups on it:
 Those two are the whole grammar. A server that fails to start is visible as a
 **missing group**, rather than its tools quietly going absent from the builtins —
 and, above the catalogue on the same screen, as a row of its own: every node
-re-publishes what its MCP starts concluded on its presence heartbeat (per
-server, its instances counted), so **MCP servers** shows each server as
-*Running*, *Partly failing*, *Failing*, *Not started* or *Not reported* with one
-cell per live node and the first failure's reason and seat (`GET /mcp-servers`,
-operator-only; the heartbeat carries each reason bounded, and the whole text is
-the node's `mcp_server_failed` log line). Clicking a server opens its own page:
+re-publishes its MCP servers as they are at each beat on its presence heartbeat
+(per server, its instances counted), so **MCP servers** shows each server as
+*Running*, *Partly failing*, *Failing*, *Waiting for credentials*, *Not
+started* or *Not reported* with one cell per live node and the first failure's
+reason and seat, and the first waiting instance's sentence and seat
+(`GET /mcp-servers`, which takes `admin` because it shows each server's
+configured launch, as `/config` does; the heartbeat carries each reason
+bounded, and the whole
+text is the node's `mcp_server_failed` log line, or `server_exited` for one
+that [went down after starting](#a-server-that-dies-or-will-not-start)). Clicking a server opens its own page:
 its state, reach and launch, every node's reason as the node reported it rather
 than clamped to the grid's two lines, and the catalogue narrowed to its tools —
 which, for a server that never started, says it registered none and why.
 
 ### Adding a server from the dashboard
 
-**Add an MCP server** on Settings › Tools & MCP (operator token required) writes
+**Add an MCP server** on Settings › MCP Tools (`admin`) writes
 the same `mcp_servers` entry you would write in YAML: a name, a command and its
 arguments (stdio) or an address (http), `shared` or one per seat, and the
 environment or headers — values as `${NAME}` pointers into the secret store,
@@ -249,8 +395,9 @@ a model acts on:
 | `inbox_full` | A person's inbox list is at its ceiling | Mark older entries read |
 | `not_running` | The run or turn the call addresses is not running, or not waiting for this | Nothing to act on |
 | `steer_unsupported` | The running turn's runtime cannot take a note mid-turn | Wait for the turn to end |
-| `budget_exhausted` | The company's token budget has no room left in one of its windows, so a call that would spend tokens was not made; nothing was spent | Wait for the window the sentence names to reset, or raise its ceiling |
-| `unavailable` | This node cannot serve the call right now, or the company does not run what it needs — a read that failed, a log that refused the append (a maintenance or sealed fleet included), an unconfigured backend. **Never** "it does not exist" | Retry, or use the backend the company does run |
+| `budget_exhausted` | The company's token budget has no room left in one of its windows, so a call that would spend tokens was not made; nothing was spent | Wait for the window the sentence names to turn over, or raise its ceiling |
+| `unavailable` | This node cannot serve the call right now, or the company does not run what it needs — the node is behind its log, the log refused the read or the append (a maintenance or sealed fleet included), the coordination store did not answer, the event broker did not answer or this node's connection to it is reconnecting, this node's store was busy with other writes, the backend is not configured. A **condition**, which waiting clears. **Never** "it does not exist" | Retry, or use the backend the company does run |
+| `internal_error` | This node failed at something of its own — a read of its own store that broke. Nothing about the call was wrong, and waiting does **not** clear it; the sentence is fixed and the error itself is in the node's log, never in the answer | Tell whoever runs the node; a retry fails the same way |
 
 An argument that merely *names* something missing — a `parent`, a `waiting_on`
 item, an `assignee` nobody has — is `invalid`, not `not_found`: the fix is the
@@ -259,9 +406,13 @@ argument, and the call is not about that object.
 **`invalid` is claimed, never assumed.** A write the work tracker refuses on
 what it was asked — a field value it will not round, a tombstoned item, a cap
 the object would pass — is marked as such where the refusal is written. Any
-failure that is *not* marked is read as the node's: a store read or a log call
-that failed mid-write is `unavailable`, so a person is never told to change an
-input that was never wrong.
+failure that is *not* marked is read as the node's, in one of two ways: a
+condition waiting clears — the log refused the append, the coordination store
+or the event broker did not answer, this node's store was busy with other
+writes — is `unavailable`, and a fault of the node's own — a read of
+its own store that broke — is `internal_error`. So a person is never told to
+change an input that was never wrong, and never invited to retry against a
+store that will fail the same way until somebody fixes it.
 
 **A call refused before any tool ran is classed too.** A tool name nothing
 registered is `not_found`; a real tool this phase was not offered, or one a
@@ -269,7 +420,13 @@ skill guard holds back until its skill is loaded, is `forbidden`.
 
 **An MCP server's failure carries no class.** Its prose is the server's, and
 the engine will not guess a class from text it did not write; a reader that
-needs one treats an unclassified failure as the server's own.
+needs one treats an unclassified failure as the server's own. A person's
+surface answers one — and a first-party tool that failed without a class — as
+`internal_error`: neither has a remedy the caller can apply. What the engine
+refuses **about** a server is classed: a call to one that is not running
+(down and being restarted, or stopped), or whose session ended with the call
+in flight, is `unavailable`, in the engine's own words. See
+[A server that dies, or will not start](#a-server-that-dies-or-will-not-start).
 
 ---
 
@@ -316,7 +473,7 @@ Instead of building hardcoded API wrappers for external tools (Jira, Slack, Conf
 ```mermaid
 flowchart TD
     subgraph ENGINE["Crewlet engine"]
-        BRIDGE["<b>Bridge</b><br/>owns every MCP server:<br/>start, stop, restart on apply"]
+        BRIDGE["<b>Bridge</b><br/>owns every MCP server:<br/>start, stop, restart on apply<br/>or when one dies"]
         STDIO["<b>stdio child</b><br/>the engine spawns the server<br/>and speaks JSON-RPC 2.0 over<br/>stdin/stdout"]
         HTTP["<b>HTTP / SSE client</b><br/>connects to an already-running<br/>server by URL"]
         REG[("<b>tool registry</b><br/>each discovered tool registered<br/>as <code>mcp:&lt;server&gt;</code>, globally<br/>or in a per-role map")]
@@ -337,7 +494,7 @@ holding the credentials and the port.
 
 ### Two Transport Modes
 
-1. **Stdio (Crewlet launches the server)** — The engine spawns MCP servers as child processes (e.g., `npx @anthropic/mcp-atlassian`). Crewlet manages the full lifecycle: start on engine boot, stop on shutdown. Communication uses JSON-RPC 2.0 over stdin/stdout.
+1. **Stdio (Crewlet launches the server)** — The engine spawns MCP servers as child processes (e.g., `uvx mcp-atlassian==0.23.1`), each in the directory the engine was started in, so a tool that takes a relative path, or one that confines paths to its working directory, reads from there. Crewlet manages the full lifecycle: a shared server is started by the apply that declares it and a per-role one when its seat is claimed, each is restarted when its resolved spec moves or when it dies (see [A server that dies, or will not start](#a-server-that-dies-or-will-not-start)), and each is stopped when it is no longer declared, when its seat is released, or at shutdown (see [Shared vs per-role servers](#shared-vs-per-role-servers)). Communication uses JSON-RPC 2.0 over stdin/stdout.
 
 2. **HTTP/SSE (externally provided)** — The engine connects to an already-running MCP server via URL. Supports JSON and SSE response modes with automatic session management and reconnection.
 
@@ -346,6 +503,106 @@ holding the credentials and the port.
 On connect the engine (identifying itself as `crewlet` in the handshake) negotiates the newest protocol the server speaks: it probes the modern `server/discover` method first and falls back to the legacy `initialize` handshake automatically. Servers built on older MCP SDKs may log a one-time "unknown method" warning when they see the probe — harmless, and it stays out of your console because of the rule below.
 
 A stdio server's **stderr is never passed through raw**. Every line the child process writes (startup banners, tracebacks, that probe warning) becomes a structured `server_stderr` DEBUG event attributed to the server, instead of foreign log lines interleaving with the engine's own stream. When a server fails to start, the last lines it wrote are surfaced with the failure as a single `server_stderr_tail` ERROR event — that tail usually names the real cause (bad token, missing binary, import error). Run with `-debug` to watch a server's full stderr live.
+
+### A server that dies, or will not start
+
+Every server the engine runs is watched from the moment it starts until it is
+stopped. For a stdio server the engine waits on the process it launched, so a
+child that exits (a crash, an out-of-memory kill, a package runner that quit
+while its real server held the pipes) is noticed when it happens, not when the
+next call fails. For either transport, a session the connection reports ended
+counts too: the server closed its output while its process ran on, or a
+remote server forgot the session.
+
+**Its tools stay listed, and refuse.** A call to one gets a failed result in
+the engine's own words, classed `unavailable` (see
+[When a tool refuses](#when-a-tool-refuses)). It names the server, what took it
+down (for a stdio child, its exit status) and when the next restart is, and it
+never reports a broken pipe. A call that was in flight when the server went
+down is refused the same way, and so is one in flight when the engine stopped
+the server (a revision removed or replaced it, or its seat was let go). Unless
+the tool is annotated read-only, that result is also marked as possibly having
+taken effect, because the call was sent and no answer came back, so the agent
+checks before it repeats a write.
+The tools stay in the catalogue rather than leaving it, so a turn that already
+holds them is told what happened, and the prompt does not change on every
+crash.
+
+**The engine restarts it on its own**, once it has reaped whatever the old
+process left behind. The schedule, which is also the one a start that failed
+is retried on:
+
+- A server's first death is restarted at once, whether it came up on its
+  first start or on a retry of a start that failed, and so is any death after
+  its child had been up for **five minutes or more**. It was healthy, and a
+  turn that needs it is being refused.
+- Every other attempt waits: **15 seconds** after a failed attempt, or after a
+  restarted child that died again within five minutes, then **twice as long**
+  after each attempt that does not bring it back, up to **5 minutes**. Each wait is
+  spread by up to a fifth either way so a fleet does not retry one vendor in
+  lockstep, which makes the longest six minutes. 15 seconds is one seat
+  heartbeat and 5 minutes the interval a seat's persistent failure is repeated
+  at, so a server that never comes back logs its failure about that often.
+
+A restart that lists the same tools changes nothing anywhere: every registry
+keeps the same tools, now answered by the new process. A restart that lists
+**different** tools (a newer package version fetched on relaunch, a server
+whose tool list depends on its vendor) refiles the catalogue it belongs to: a
+shared server's into the company's catalogue and every held seat's surface, a
+per-role child's into its seat's. The next turn sees what the server serves
+now, and a shared server's new catalogue is pushed to every open dashboard's
+**Settings › MCP Tools**.
+
+**A shared server whose start failed is retried on the same schedule**, 15
+seconds after the failed start and doubling from there. A vendor that was down
+at boot, or a DNS blip, costs that server's tools until it answers, not until
+somebody next applies the configuration. When it comes up, its tools reach
+every seat without an apply. A per-role child whose start failed is retried on
+the same schedule by its seat (see
+[Shared vs per-role servers](#shared-vs-per-role-servers)). A spec that can
+never launch (no command, no URL) is not retried, since nothing about it
+changes until a revision does.
+
+**An apply asks every server it finds down to try again at once**, shared or a
+held seat's own, and starts its schedule again. It does not wait for the
+attempt, and it does not restart the server: the spec has not moved, so there
+is nothing to restart it into. Re-activating the revision is therefore the
+gesture for a vendor you know is back. The down server's tools stay where the
+apply files them, in the same order as when it is up, refusing until it is
+back.
+
+**A per-role child is restarted only by the node that holds its seat.** The
+child is the seat's identity at the vendor, so before every restart it makes on
+its own the engine checks that this node can still prove it holds the seat's
+lease, the same check the seat's own reconcile makes before it starts a child.
+When it cannot, the restart is held back and asked again one heartbeat later,
+until the node proves the lease again or lets the seat go. Letting the seat go
+stops the child and every restart it had due. The seat's own reconcile leaves
+a child that died to this watch rather than starting a second copy beside it,
+unless the child's resolved spec has moved (a revision edited it, or a
+credential it resolves was sealed or rotated). Then the reconcile restarts it
+into the new spec, as it does a running child whose spec moved, since a restart
+from the old spec would bring back what the revision replaced. A child whose
+start failed is the reconcile's to retry, as before.
+
+On the [heartbeat](../concepts/coordination.md#what-a-node-says-about-itself),
+and so in **MCP servers** on Settings › MCP Tools (`GET /mcp-servers`), a
+server that is down counts as failed, with what took it down, until it is back.
+
+| Log event | Level | What it means |
+|---|---|---|
+| `server_exited` | error | A server's session ended under the engine: `cause` (for a stdio child, its exit status), `up_seconds`, and the child's last stderr lines in `stderr_tail` |
+| `server_restart_failed` | error | An attempt the engine made on its own failed: `attempt`, `error`, and `retry_in_seconds` until the next |
+| `server_restart_held_back` | warn | A per-role child's restart is waiting for its node to prove it holds the seat |
+| `server_start_retry_scheduled` | info | A shared server's start failed and will be retried |
+| `server_restarted` | info | The server is back: `attempt`, `down_seconds`, and what took it down in `was` |
+| `server_catalogue_changed` | info | It came back with different tools: `added`, `removed` |
+
+A server that keeps logging `server_exited` soon after each `server_restarted`
+is crashing on something it is asked to do or on its own environment, and its
+`stderr_tail` usually says which. A run of `server_restart_failed` is a server
+that cannot start at all, which is the same diagnosis as a failed first start
+(`server_stderr_tail` above).
 
 ---
 
@@ -366,11 +623,12 @@ roles:
         JIRA_API_TOKEN: "${ALICE_JIRA_TOKEN}"
       slack:
         SLACK_MCP_XOXB_TOKEN: "${ALICE_SLACK_BOT}"   # same token, the Slack MCP subprocess
+        SLACK_MCP_CHANNELS_CACHE: "/var/cache/crewlet/slack/alice-channels.json"   # this seat's own
       github:
         Authorization: "Bearer ${ALICE_GH_TOKEN}"
 ```
 
-A Slack-enabled agent names its bot token in **both** `role.integrations.slack.bot_token` and `role.mcp_env.slack.SLACK_MCP_XOXB_TOKEN`: the two are different consumers — the notification transport vs. the Slack MCP subprocess — and both reference the same `${VAR}`, so no secret is duplicated. The Atlassian token (`JIRA_API_TOKEN` / `CONFLUENCE_API_TOKEN`) and the GitHub PAT (`Authorization: Bearer …`) likewise live wherever the consuming MCP server reads them.
+A Slack-enabled agent names its bot token in **both** `role.integrations.slack.bot_token` and `role.mcp_env.slack.SLACK_MCP_XOXB_TOKEN`: the two are different consumers — the notification transport vs. the Slack MCP subprocess — and both reference the same `${VAR}`, so no secret is duplicated. Beside the token, each Slack seat names a channel cache no other seat uses: the Slack server keeps the channels its bot can see in a file named after the workspace alone, so seats that name none share one, and each is shown the private channels and DMs of whichever bot wrote it last ([Slack](../integrations/slack.md#configure-in-yaml) has the detail). The Atlassian token (`JIRA_API_TOKEN` / `CONFLUENCE_API_TOKEN`) and the GitHub PAT (`Authorization: Bearer …`) likewise live wherever the consuming MCP server reads them. `mcp-atlassian` takes an API token only beside the account it belongs to (`JIRA_USERNAME` / `CONFLUENCE_USERNAME`): given a token alone it starts with none of that product's tools, and says why only on its stderr. A Data Center personal access token goes under `JIRA_PERSONAL_TOKEN` / `CONFLUENCE_PERSONAL_TOKEN` instead, on its own.
 
 When the engine launches a per-role MCP server instance, it merges the base server config with the role's `mcp_env` (applied as **env vars** for `stdio` servers, **HTTP headers** for `http` servers).
 
@@ -381,8 +639,9 @@ A unit declares its tracker project and knowledge container *identity* under `pr
 ```yaml
 units:
   - name: Backend
+    id: backend                     # the unit's key; `name` above is display
     type: team
-    lead: Tech Lead
+    lead: tech-lead                 # the lead seat's handle
     project: "BACK"                 # the unit's tracker project (integration identity)
     mcp_env:
       atlassian:
@@ -390,10 +649,10 @@ units:
     roles:
       - name: Tech Lead
         mcp_env:
-          atlassian: { JIRA_API_TOKEN: "${TL_JIRA_TOKEN}" }
+          atlassian: { JIRA_USERNAME: "${TL_JIRA_USER}", JIRA_API_TOKEN: "${TL_JIRA_TOKEN}" }
       - name: Engineer
         mcp_env:
-          atlassian: { JIRA_API_TOKEN: "${ENG_JIRA_TOKEN}" }
+          atlassian: { JIRA_USERNAME: "${ENG_JIRA_USER}", JIRA_API_TOKEN: "${ENG_JIRA_TOKEN}" }
 ```
 
 Inheritance: the unit's `mcp_env` is the base and a seat's own values override it variable by variable, so a seat that sets one variable of a server keeps the unit's other variables for that server. Only the unit's **direct agent** seats inherit it. A child unit inherits nothing (it declares its own block), and a human seat inherits nothing, because a human seat runs no tools and may not carry an `mcp_env`. The unit's `project` / `space` identity is separate from these credentials.
@@ -410,20 +669,99 @@ difference is a lifetime as much as a scope.
 | What it is | One child for the company | A **template**: one child per role that declares credentials for it |
 | Whose identity | Nobody's — it carries no seat's credentials | That seat's, from `role.mcp_env[name]` |
 | Who can call it | Every seat | Only the seat whose child it is |
-| Lifetime | The config **epoch** — started on apply, replaced on the next one | The seat's **lease** — spawned when this node claims the seat, killed when it releases it |
+| Lifetime | The config **epoch** — reconciled on every apply, stopped when a revision drops it | The seat's **lease** — spawned when this node claims the seat, reconciled in place on every apply while it holds it, killed when it releases it |
 | Use it for | A shared knowledge base, a read-only reference server | A tracker, a chat backend, a code host — anywhere the action must be attributable to *this* agent |
 
-**A shared `mcp_servers` edit takes effect on the next turn, not at the next
-restart.** Applying a revision reconciles the shared bridge server by server: an
-entry that did not change is left alone, and one that was added, removed or
-re-pointed starts, stops or restarts **only that child**. A seat mid-turn
-finishes on the tool surface it started with, and its next turn renders the new
-one, the same next-turn promise [tool skills](../concepts/tool-skills.md),
-embeddings and the org chart make. A per-role (`shared: false`) child is **not**
-on the apply path: it belongs to the seat's lease, so an apply rebuilds the
-catalogue each held seat's turns are built against (its builtins and shared
-servers) and leaves the running child alone. A change to a per-role template or
-to a seat's `mcp_env` reaches that child when the seat next changes hands.
+**An `mcp_servers` edit takes effect on the next turn, not at the next
+restart** — and so does a seat's `mcp_env`, and a credential a server
+resolves. Applying a revision reconciles every child this node runs, the
+shared ones and the per-role ones of every seat it holds, against the spec the
+revision produces with each `${VAR}` resolved through the secret snapshot that
+apply just re-read. A child whose resolved spec did not change is left alone,
+and one that was added, removed or re-pointed — or whose credential was sealed
+or rotated since it started — starts, stops or restarts **only that child**, so
+the credential re-handshake a restart would cost is paid only by what actually
+changed. A seat mid-turn finishes on the tool surface it started with, and its
+next turn renders the new one, the same next-turn promise
+[tool skills](../concepts/tool-skills.md), embeddings and the org chart make.
+Re-activating an unchanged revision is therefore how a rotated per-agent
+credential reaches the agent's own server, the same
+[rotation gesture](../concepts/control-plane.md#rotation) every other holder
+answers to.
+
+A per-role child is reconciled just *after* the apply rather than inside it,
+by the node holding its seat, as the `seat_tools` step of
+[the convergence](../concepts/configuration.md#what-follows-a-published-company):
+a server the revision no longer declares for the seat is retired, one it now
+declares is started, and one whose resolved spec moved is restarted, while the
+seat keeps its lease throughout. A seat the revision removes altogether has
+every child retired by the same step, before placement releases the seat, so
+its credentials stop acting at the vendor as soon as the company stops
+declaring the agent. The apply refiles each held seat's catalogue
+against the new revision and returns, and each seat then restarts or starts
+its own children in the background and refiles its catalogue again when it is
+done. A start can take up to twice `startup_timeout_seconds` (two minutes by
+default), once to connect and once to list its tools, when a vendor is down
+or a package fetch hangs, and an apply that waited would hold up everything
+after it with the new revision already
+current, a role it adds among them, whose inbox drops mail until it exists. A
+restart stops the old child before it starts the new one, so a turn that starts
+in between still lists the old child's tools, and a call to one is refused,
+classed `unavailable`, as a server no longer running on this node; the seat's
+next turn has the new child.
+
+**A server is started only with what its configuration references.** Every
+`${VAR}` a server is started with must resolve to a value before it starts —
+its own `env` or `headers`, its `url`, and, for a seat's child of a per-role
+template, the seat's own `mcp_env` block for it, its unit's block included —
+on the engine host, as a shared server or a seat's child, and in a coding
+agent's box alike. An unresolved one is never handed to the server as an empty
+string, which a vendor's server either refuses or, worse, starts with and acts
+as nobody; the one exception is a key the server [declares
+optional](#a-key-that-may-go-without-its-value), which is left out instead.
+What the engine does depends on whether anything will fill the variable:
+
+| The variable | The server | Where it shows |
+|---|---|---|
+| Is one a [provisioning pass](../concepts/integration-reconcile.md) mints for this seat, a GitLab or Datadog account's token, an Atlassian account's token or address, or a Mattermost bot's token where `integrations.mattermost.provisioning` is set, and nothing that pass last reported stops it | **Waiting**, not failed. It starts once the seal reaches the node: the pass that sealed it asks the node it ran on for a pass over its seats at once, and re-activates the revision so every other node's apply does the same | `mcp_server_awaiting_credential` (info), naming the variable and the integration that mints it; on **Settings › MCP Tools** the server's row counts it as *waiting*, the server reads *Waiting for credentials* where nothing else is wrong, and its page lists what each node's instance waits for |
+| Is one such a pass mints, and its last report says it cannot until a person acts — its own credential is missing or refused, an administrator has an app or a setting to switch on, or this seat's account could not be made or was switched off by somebody else — or the integration is being disconnected | **Failed**, with the finding that pass recorded: the same finding the integration's card shows. It is a wait with no end until somebody acts, so it is not reported as one | `mcp_server_credential_missing` (error) when the seat's pass meets it; the server's row counts it as failed from the first heartbeat after the integration reports it, whenever that is, and as waiting again from the first after it clears |
+| Is one nothing this engine runs mints — a secret nobody stored, a reference to a name nobody holds, or a variable set to an empty value; for a shared server, every variable is this | **Failed**, naming the variable and the remedies: seal it (`crewlet secrets set`, or for a seat's credential the integration's own `provision` command where it has one) and `POST /config/reload`, or set it in the engine's own environment and restart the engine — a running engine never reads an `export` made after it started; for one set to an empty value, seal a value and `POST /config/reload`; and, where the server can run without it, list the key holding it under the server's `optional_keys` — offered for the server's own settings, and never for a seat's own credential, which is the identity its child acts as, or for a variable the `url` needs, since a server is dialled at its `url` | `mcp_server_credential_missing` (error); the server's row counts it as failed, with the same sentence |
+
+Which variables a pass mints is read from the plan the pass mints by — each
+provisioning pass's run takes its plan from the one place the engine reads it
+from — so the two cannot disagree. None of these is retried on the restart
+schedule below: nothing about a held-back server changes until the secret
+snapshot does, and every change to the snapshot runs the seat's pass again,
+and reconciles the shared servers — a revision, the reload a `crewlet secrets
+set` is followed by, the re-activation a provisioning pass makes, and (for a
+seat) the pass the sealing node asks for itself, which does not wait on that
+re-activation. A shared server held back is therefore never handed to its
+bridge, whose supervision would retry it, and starts on the apply that follows
+its secret's arrival. What a person does at an integration is the one change
+no pass sees, which is why a held-back child's row is judged again on every
+heartbeat against what the integration last reported. A server already
+running whose credential stops resolving — a sealed token deleted by a
+disconnect that removed the seats' accounts, or by hand — is
+stopped by the same rule (`mcp_server_retired`, naming the variable), rather
+than left acting at the vendor on the value it started with. The seat's mailbox
+does not wait for a held-back child: an identity that does not exist at the
+vendor yet, or waits on a person, is nothing the seat's first turn can be asked
+about there.
+
+**A key that may go without its value is declared, and left out.** A host
+setting passed through by name may legitimately be unset; listed under the
+server's `optional_keys`, its key is left out of what the server is started
+with when its value does not resolve, rather than holding the server back —
+see [A key that may go without its value](#a-key-that-may-go-without-its-value).
+
+**A credential provisioned after the seat was claimed still reaches its
+child.** A seat is claimed as soon as its node can run it, and an integration
+that mints each agent's identity — a Mattermost bot token, an Atlassian API
+token — can seal it a moment later. The child waits for it, as above, and
+starts once the seal reaches the node holding the seat. An apply that lands
+while the seat is still being claimed is folded into the claim rather than
+lost, so the seat's mailbox opens only once its children are started from the
+newest snapshot.
 
 **A per-role child belongs to a seat, not to a node.** In a fleet each node
 claims a slice of the company, and it spawns children only for the seats it
@@ -453,6 +791,30 @@ subsystem, where builtins quietly shrinking would not. It is logged as
 `mcp_server_failed` with the reason. Failing the apply instead would take a
 working company offline because one vendor's binary was absent from an image.
 
+**A seat's child that will not start is retried while the seat is held**: 15
+seconds after the first failed attempt, then twice as long after each attempt
+that fails, up to five minutes. Each wait is spread by up to a fifth either way
+so a fleet's seats do not retry one vendor in lockstep, which makes the longest
+six minutes (`mcp_seat_retry_scheduled` gives each one). The base is one seat
+heartbeat and the ceiling the interval a stuck seat's alarm repeats at, so a
+vendor that recovers is noticed within six minutes, and a server that never
+will repeats its failure about as often as that alarm. An apply retries at
+once and starts the series again. A spec that can never launch — no command, no URL —
+is not retried, since nothing about it changes until a revision does, and
+neither is a server held back for a value that does not resolve (above), since
+nothing about it changes until the secret snapshot does and every change to the
+snapshot runs a pass of its own. It is
+the schedule every server is retried on: a shared server whose start failed,
+and any child that dies after starting, follow it too (see
+[A server that dies, or will not start](#a-server-that-dies-or-will-not-start)).
+
+**No child is started for a seat this node cannot prove it holds.** A pass
+that an apply or a retry runs, rather than the claim, starts nothing unless the
+seat's lease is still live by this node's clock — a peer may own the seat once
+it has lapsed, and the child would be a second copy of that agent. Releasing
+the seat ends a start in flight rather than waiting out its startup timeout,
+and disarms the retry, so nothing is started behind the release.
+
 ---
 
 ## YAML Configuration
@@ -461,23 +823,31 @@ working company offline because one vendor's binary was absent from an image.
 
 ```yaml
 mcp_servers:
-  # stdio, shared by all agents
+  # stdio, shared by all agents; it advertises no annotations, so these say
+  # its tools only read (see Tool annotation overrides below)
   - name: tavily
     command: npm
-    args: ["exec", "--yes", "--", "tavily-mcp@latest"]
+    args: ["exec", "--yes", "--", "tavily-mcp@0.2.22"]
     env: { TAVILY_API_KEY: "${TAVILY_API_KEY}" }
+    tool_annotations:
+      tavily_search:   { read_only: true, open_world: true }
+      tavily_extract:  { read_only: true, open_world: true }
+      tavily_crawl:    { read_only: true, open_world: true }
+      tavily_map:      { read_only: true, open_world: true }
+      tavily_research: { read_only: true, open_world: true }
   # stdio, per-role (Jira + Confluence share one mcp-atlassian)
   - name: atlassian
     shared: false
     command: uvx
-    args: ["mcp-atlassian"]
+    args: ["mcp-atlassian==0.23.1"]
     env: { JIRA_URL: "https://mycompany.atlassian.net" }
-  # stdio, per-role Slack
+  # stdio, per-role Slack; its write tools exist only when switched on
   - name: slack
     shared: false
     command: npm
-    args: ["exec", "--yes", "--", "slack-mcp-server@latest", "--transport", "stdio"]
+    args: ["exec", "--yes", "--", "slack-mcp-server@1.3.0", "--transport", "stdio"]
     tool_prefix: "slack_"
+    env: { SLACK_MCP_ADD_MESSAGE_TOOL: "true", SLACK_MCP_REACTION_TOOL: "true" }
   # http, per-role remote GitHub MCP (token supplied per agent)
   - name: github
     transport: http
@@ -489,28 +859,125 @@ roles:
     integrations:
       slack: { bot_token: "${ALICE_SLACK_BOT}", signing_secret: "${ALICE_SLACK_SIGNING}" }
     mcp_env:
-      atlassian: { JIRA_API_TOKEN: "${ALICE_JIRA_TOKEN}" }
-      slack:     { SLACK_MCP_XOXB_TOKEN: "${ALICE_SLACK_BOT}" }
+      atlassian: { JIRA_USERNAME: "${ALICE_JIRA_USER}", JIRA_API_TOKEN: "${ALICE_JIRA_TOKEN}" }
+      slack:
+        SLACK_MCP_XOXB_TOKEN: "${ALICE_SLACK_BOT}"
+        SLACK_MCP_CHANNELS_CACHE: "/var/cache/crewlet/slack/alice-channels.json"
       github:    { Authorization: "Bearer ${ALICE_GH_TOKEN}" }
 ```
 
-Environment variables and HTTP header values support `${VAR}` references that resolve from the process environment at startup — both whole-value (`"${TOKEN}"`) and embedded (`"Bearer ${TOKEN}"`) — so secrets stay out of config files.
+The Slack entry's two `env` switches are not tuning: `slack-mcp-server` registers no tool that posts until `SLACK_MCP_ADD_MESSAGE_TOOL` is set, so without it a Slack seat reads every message and answers none. They belong in the entry's `env` rather than in an `--enabled-tools` argument: a list given only on the command line registers the tool, but the call reads the environment and refuses every post. The seat's `SLACK_MCP_CHANNELS_CACHE` is its own for the reason the previous section gives ([Slack](../integrations/slack.md#configure-in-yaml) has the detail of both).
 
-### Tool annotation overrides
+Environment variables, HTTP header values and an http server's `url` support `${VAR}` references — both whole-value (`"${TOKEN}"`) and embedded (`"Bearer ${TOKEN}"`) — so secrets stay out of config files. A reference resolves from the [secret store](../concepts/secret-store.md) first and the engine's process environment behind it, when the engine builds the server — so the value is baked into the running child's environment or its connection's headers, and a rotation reaches it only when that server is rebuilt (see [Secret Store § Propagation](../concepts/secret-store.md#propagation) for which gesture rebuilds which child). Every one must resolve before the server is started, except under a key listed in the server's `optional_keys`, which is left out instead ([above](#a-key-that-may-go-without-its-value)). `command` and `args` are passed as written.
 
-The engine derives some behaviour from a tool's [capabilities](../concepts/tool-capabilities.md) — for example, the worker guard denies tools that write to a shared surface, classified from the MCP `readOnlyHint` / `destructiveHint` / `openWorldHint` annotations the server advertises. Most servers advertise these; for one that doesn't, supply them per server via `tool_annotations` (keyed by bare tool name):
+### What a stdio server's environment is
+
+A stdio server is handed an **explicit** environment, never the engine's own. The engine's environment is where Tier A's `${VAR}` references resolve from — the keyring that signs every session cookie and state-log record, every `api.auth.tokens` value, any credential in an external `stream.url` — and where the engine reads its collector credential (`OTEL_EXPORTER_OTLP_HEADERS`), often beside an operator's own provisioning tokens (`GITLAB_ADMIN_TOKEN`, `MATTERMOST_ADMIN_TOKEN`); a tool server pulled off a package registry has no business holding any of it: a server that logs its environment on a crash, forwards it to its own children or reports it in telemetry would carry it off. So a child gets exactly these layers, the last winning:
+
+| Layer | What | Why |
+|---|---|---|
+| The host allowlist | `PATH`, the locale (`LANG`, `LANGUAGE`, `LC_ALL`, `LC_CTYPE`, `LC_NUMERIC`), `TERM`, `TZ`, the TLS trust variables (`SSL_CERT_FILE`, `SSL_CERT_DIR`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`) and the proxy variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`, `http_proxy`, `https_proxy`, `all_proxy`, `no_proxy`) | What a process needs to run at all. It is the same list every child the engine starts is handed — a coding CLI and a local sandbox get it too |
+| The engine user's locations | `HOME`, `USER`, `LOGNAME`, `TMPDIR` and the XDG base directories (`XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR`) | A server launched through `npx` or `uvx` runs as the engine's user and keeps its package cache under that user's `HOME` |
+| A container runtime's own settings — **only** when the server's `command` is `docker` or `podman` | Every `DOCKER_*`, `CONTAINER_*`, `CONTAINERS_*` and `PODMAN_*` variable, `REGISTRY_AUTH_FILE` and `DBUS_SESSION_BUS_ADDRESS` | A server published as an image (`command: docker`, `args: ["run", "-i", "--rm", …]`) *is* the runtime's CLI, and a rootless runtime finds its daemon through `DOCKER_HOST`: without it the CLI dials the system socket and fails at the daemon with a permission error that names nothing you set. It is the same rule the [local sandbox](../concepts/code-sandbox.md) drives the runtime with. What the image itself receives is what `args` passes it — a bare `-e NAME` there copies `NAME` from this environment, so name it in `env:` |
+| What the config declares | The server's `env:`, then the seat's `mcp_env` for it, which wins variable by variable | The server's settings and its identity, resolved as above — a key in `optional_keys` whose value does not resolve is not set at all |
+
+**Anything else a server reads is declared.** A server that reads a variable the table does not carry — a vendor SDK's conventional key, a private registry's `NPM_CONFIG_REGISTRY`, an `LD_LIBRARY_PATH` its runtime needs — gets it by naming it in `env:`, and a `${VAR}` reference there is how the host's own value is passed through. A host setting that may be unset is listed under `optional_keys`, or the server is not started on a host that does not set it ([A key that may go without its value](#a-key-that-may-go-without-its-value)):
 
 ```yaml
 mcp_servers:
-  - name: linear
-    command: uvx
-    args: ["mcp-linear"]
+  - name: tavily
+    command: npx
+    args: ["-y", "tavily-mcp@0.2.22"]
+    env:
+      TAVILY_API_KEY: "${TAVILY_API_KEY}"            # the store, then the host
+      NPM_CONFIG_REGISTRY: "${NPM_CONFIG_REGISTRY}"  # a host setting, passed on by name
+    optional_keys: [NPM_CONFIG_REGISTRY]             # left out where the host sets none
+    # it advertises no annotations, so these say its tools only read
+    # (see Tool annotation overrides below)
     tool_annotations:
-      linear_create_comment: { read_only: false, open_world: true }
-      linear_get_issue:      { read_only: true }
+      tavily_search:   { read_only: true, open_world: true }
+      tavily_extract:  { read_only: true, open_world: true }
+      tavily_crawl:    { read_only: true, open_world: true }
+      tavily_map:      { read_only: true, open_world: true }
+      tavily_research: { read_only: true, open_world: true }
 ```
 
-Keys accept snake_case (`read_only`) or the MCP camelCase (`readOnlyHint`); overrides win over whatever the server advertised. Because every tool server is now an `mcp_servers` entry — including `atlassian`, `slack`, and `github` — `tool_annotations` is declared there for all of them. This is the *only* place tool names appear in config for behaviour purposes — the engine itself never hardcodes them. See [Tool Capabilities](../concepts/tool-capabilities.md) for the full mechanism.
+A server that worked by reading an undeclared variable out of the engine's environment fails to authenticate or to install until that line is added, and its own last words on stderr — surfaced as `server_stderr_tail` — usually name the variable.
+
+**This is not isolation, and it does not claim to be.** The server runs as the engine's user, so it can read whatever that user can: the Tier A file and the engine's own `/proc/<pid>/environ` among it. What the explicit environment removes is the engine *handing* its secrets to code that never asked for them. Keeping a server you do not trust away from them takes a different user or a container around the server itself — and, since declaring a stdio server is running its `command` on every engine host that runs seats, `admin` is a permission to give as you would give shell on those hosts (see [What admin runs](../concepts/identity-and-access.md#what-admin-runs)).
+
+### A key that may go without its value
+
+A host setting passed through by name — a private registry's
+`NPM_CONFIG_REGISTRY` in the example above, unset on most hosts — is a
+reference that may legitimately resolve to nothing, and nothing in a value can
+say so. The server says so instead, by listing the **key** under
+`optional_keys`; every other reference it is started with is required
+([Shared vs per-role servers](#shared-vs-per-role-servers)).
+
+A key listed there whose value does not resolve — any reference in it — is
+**left out, whole**: the child is started without the variable, or the request
+sent without the header, the way Kubernetes starts a container without an
+`optional` secret reference. It is never passed on empty and never as half of
+itself (`"Bearer ${TOKEN}"` with `TOKEN` unset would be `"Bearer "`, a
+credential that looks set).
+
+- **By key, not by variable.** A key is what the server reads: seats point one
+  key at variables of their own (`${ALICE_X}`, `${BOB_X}`), and one variable can
+  sit under a key that may go without it and another that may not.
+- **The list is the server's, and covers every value it is started with** — its
+  own `env` or `headers` and every seat's or unit's `mcp_env` block for it,
+  which land in the same environment or the same headers. A seat's key
+  replaces the server's whole before anything is resolved, so a seat's value
+  that resolves to nothing leaves the key out rather than handing back the
+  server's own value for it — which, for a key carrying an identity, would
+  start the seat's child as whoever the template names.
+- **An http header is one header in any case**, as HTTP has it:
+  `optional_keys: [authorization]` declares the `Authorization` header, and a
+  seat's `authorization` replaces its template's `Authorization` rather than
+  going out beside it. Two spellings of one header where nothing says which is
+  sent — two keys of one map, or a unit's block and one of its members' — are
+  refused when the document is written.
+- **A value a [provisioning pass](../concepts/integration-reconcile.md) mints
+  for the seat is waited for, whatever the declaration**: the declaration is
+  for a value nothing will supply, and that one is coming. Left out instead,
+  the seat's child would start without its identity and act as nobody until
+  the seal.
+- **The `url` is never optional**: a server is dialled at it.
+- **An entry that leaves nothing out is refused** when the document is written:
+  a variable's name where its key belongs, a variable only the `url`
+  references, a key no value the server is started with carries, or a key
+  whose values reference nothing. Unchecked, it would leave the key it was
+  meant for required, and the server not started on every host that does not
+  set its value.
+- **Not the shell's `${VAR:-}`.** The reference grammar deliberately parses no
+  shell expansion, so a sandbox setup step's script survives the engine's
+  resolution untouched; a declaration beside the values says the same thing
+  without reaching into anybody's scripts.
+
+`empty_env_vars`, the warning a stdio child's start logs naming a key whose
+value is empty, is therefore never about a reference: it means a value the
+configuration writes as an empty string.
+
+### Tool annotation overrides
+
+The engine derives some behaviour from a tool's [capabilities](../concepts/tool-capabilities.md) — for example, the worker guard denies tools that write to a shared surface, classified from the MCP `readOnlyHint` / `destructiveHint` / `openWorldHint` annotations the server advertises. Most servers advertise these; for one that doesn't, supply them per server via `tool_annotations` (keyed by bare tool name). `tavily-mcp` 0.2.22 advertises none: its five tools only read the web, and unannotated each counts as a possible delivery, so a turn that only searched can pass the [delivery check](../concepts/tool-capabilities.md#the-delivery-check-did-this-answer-reach-anybody):
+
+```yaml
+mcp_servers:
+  - name: tavily
+    command: npm
+    args: ["exec", "--yes", "--", "tavily-mcp@0.2.22"]
+    env: { TAVILY_API_KEY: "${TAVILY_API_KEY}" }
+    tool_annotations:
+      tavily_search:   { read_only: true, open_world: true }
+      tavily_extract:  { read_only: true, open_world: true }
+      tavily_crawl:    { read_only: true, open_world: true }
+      tavily_map:      { read_only: true, open_world: true }
+      tavily_research: { read_only: true, open_world: true }
+```
+
+Keys accept snake_case (`read_only`) or the MCP camelCase (`readOnlyHint`); overrides win over whatever the server advertised. A key naming no tool the server lists overrides nothing: the server's row on **Settings › MCP Tools** names every key no started instance lists (`unlisted_annotations` in [`GET /mcp-servers`](../reference/api-endpoints.md#get-mcp-servers)), and each instance's `tools_discovered` log line names the keys its own listing does not answer, which a key can do rightly, since a per-role child lists only the tools its seat's credentials reach. Because every tool server is now an `mcp_servers` entry, including `atlassian`, `slack`, and `github`, `tool_annotations` is declared there for all of them. This is the *only* place tool names appear in config for behaviour purposes, the engine itself never hardcodes them. See [Tool Capabilities](../concepts/tool-capabilities.md) for the full mechanism.
 
 ---
 

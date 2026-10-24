@@ -89,8 +89,8 @@ func (heldAppender) LastSeq(context.Context, string) (uint64, bool, error) { ret
 // heldIndex is a read index whose every barrier is held ([heldAppender]).
 func heldIndex(t *testing.T, held heldAppender) *statelog.ReadIndex {
 	t.Helper()
-	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), held, noCeiling(t),
-		probeEncode, func() uint32 { return 1 }, nil)
+	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), held,
+		testSigner(t, probeDomain{}), noCeiling(t), probeEncode, func() uint32 { return 1 }, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestAServedReadsBarrierEndsWhileItsAskerListens(t *testing.T) {
 func TestAServedReadOnAFullLogIsToldTheLogIsFull(t *testing.T) {
 	t.Parallel()
 	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), refusingAppender{},
-		noCeiling(t), probeEncode, func() uint32 { return 1 }, nil)
+		testSigner(t, probeDomain{}), noCeiling(t), probeEncode, func() uint32 { return 1 }, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestAServedWriteAnswersWhileItsAskerListens(t *testing.T) {
 		}},
 		{name: "behind", arrange: func(t *testing.T, h *harness) statelog.Position {
 			peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil,
-				[]byte("peer"))
+				signedByPeer(t, h, []byte("peer")))
 			if err != nil {
 				t.Fatalf("the peer's write: %v", err)
 			}

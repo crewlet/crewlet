@@ -41,7 +41,12 @@ type Reconciler struct {
 	plane   coord.Plane
 	queue   Nudger
 	nodeID  string
-	cipher  secrets.Cipher
+
+	// cipher is the ENGINE's keyring, never one handed in: it opens a
+	// sealed revision and AUTHENTICATES one, because a peer's revision
+	// arrives through the coordination store and anything that reaches
+	// the broker can write a body there. See [Engine.NewReconciler].
+	cipher secrets.Cipher
 
 	// progress is this node's convergence state, published as ONE value.
 	//
@@ -128,11 +133,6 @@ type ReconcilerOptions struct {
 	// dozen nodes should be.
 	NodeID string
 
-	// Cipher opens a sealed revision. Nil reads plaintext payloads and
-	// refuses sealed ones — a deployment that lost its keyring must say so
-	// rather than boot onto an empty company.
-	Cipher secrets.Cipher
-
 	// OnApply observes every outcome.
 	OnApply func(epoch int64, status configplane.ApplyStatus)
 
@@ -179,8 +179,26 @@ var ErrNoPlane = errors.New("engine: reconciler needs a coordination plane")
 // queue, not a database or a coordination store.
 var ErrNoPublisher = errors.New("engine: reconciler needs a publisher")
 
+// ErrNoKeyring reports a reconciler on an engine that holds no keyring, which
+// only an Engine built by hand can be: [New] refuses to start without one.
+var ErrNoKeyring = errors.New("engine: reconciler needs the engine's keyring " +
+	"(secrets.keys): a peer's revision is authenticated by its seal, and a " +
+	"reconciler without one would apply a body anything reaching the " +
+	"coordination store could have written")
+
 // NewReconciler builds the loop.
+//
+// THE KEYRING IS THE ENGINE'S, and there is no option to hand in another or
+// none. It used to be one: a nil read every payload as plaintext, which is
+// exactly the forged document the seal exists to refuse, and a caller that
+// forgot the field got that reconciler without a word — the e2e harness was
+// built that way until it was noticed by hand. The engine already holds the
+// one keyring Tier A names, and it is the one every revision this fleet
+// writes is sealed under.
 func (e *Engine) NewReconciler(opts ReconcilerOptions) (*Reconciler, error) {
+	if e.cipher == nil {
+		return nil, ErrNoKeyring
+	}
 	if opts.Store == nil {
 		return nil, ErrNoStore
 	}
@@ -213,7 +231,7 @@ func (e *Engine) NewReconciler(opts ReconcilerOptions) (*Reconciler, error) {
 		plane:   opts.Fleet,
 		queue:   opts.Queue,
 		nodeID:  opts.NodeID,
-		cipher:  opts.Cipher,
+		cipher:  e.cipher,
 		onApply: opts.OnApply,
 		now:     now,
 	}
@@ -606,11 +624,10 @@ func (r *Reconciler) holdLocalCopy(ctx context.Context, target coord.Activation)
 	}
 	// THE SAME REVISION AT ANOTHER INSTANT IS NOT HELD: re-activating an
 	// unchanged revision is the credential-rotation gesture, and this
-	// node's `activated_at` is the instant it boots its chart with next
-	// time and the one its config history shows. Left at the earlier
-	// activation's, both would describe an activation the fleet has
-	// since superseded — harmless to the projects, whose guard refuses
-	// the older stamp, and wrong everywhere the instant is read.
+	// node's `activated_at` is the instant its config history shows for
+	// it. Left at the earlier activation's, it would describe an
+	// activation the fleet has since superseded, wherever the instant is
+	// read.
 	if found && active.ID == target.RevisionID &&
 		store.EncodeTime(active.ActivatedAt) == store.EncodeTime(target.At) {
 		return
@@ -652,10 +669,9 @@ func (r *Reconciler) holdLocalCopy(ctx context.Context, target coord.Activation)
 // The subsystem list is empty on every exit before [Engine.Apply] is reached:
 // nothing on this node has been mutated yet when the revision cannot be read,
 // opened or parsed, and an empty list says exactly that. It is empty on ONE
-// exit from Apply as well — a revision that breaks a rule needing both tiers
-// ([config.CheckTiers]) is refused before the first stage — so an empty list
-// means "nothing changed here", and the error's own prefix says which of the
-// two it was.
+// exit from Apply as well — a node that is stopping refuses before the first
+// stage — so an empty list means "nothing changed here", and the error's own
+// prefix says which of the two it was.
 func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation) (configplane.ApplyStatus, []string, error) {
 	revision, found, err := r.configs.Get(ctx, target.RevisionID)
 	if err != nil {
@@ -667,7 +683,7 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 		// written to the database of whichever node served the write,
 		// and every other node meets the revision for the first time
 		// here. Fetching it from the coordination store — where
-		// Activate puts it before it moves the pointer — is what makes
+		// Activate writes it inside the pointer's own record — is what makes
 		// a live config change reach a fleet at all. Before this, a
 		// peer read nothing and reported "no such revision" once per
 		// tick for the life of the deployment.
@@ -678,8 +694,7 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 	}
 	document, err := secrets.Open(r.cipher, revision.Payload)
 	if err != nil {
-		return configplane.StatusError, nil, fmt.Errorf("engine: open revision %s: %w",
-			target.RevisionID, err)
+		return configplane.StatusError, nil, openRefusal(target.RevisionID, found, err)
 	}
 	// The STORED-form reader, not the authored one. A revision carries
 	// providers.llm_order — the declaration order of a Go map, which exists
@@ -720,13 +735,14 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 	}
 	status, applied, err := r.engine.Apply(ctx, cfg, target.At)
 	if status == configplane.StatusOK {
-		// ON THE SUCCESS BRANCH ONLY, which is what makes every warning once
-		// per node per applied epoch: Tick never re-applies an epoch this node
-		// has reached, while a refused apply is retried and would repeat the
-		// same lines on every attempt for a revision this node is not even
-		// serving.
+		// ON THE SUCCESS BRANCH ONLY, which is what makes every one of these
+		// once per node per applied epoch: Tick never re-applies an epoch
+		// this node has reached, while a refused apply is retried and would
+		// repeat the same lines on every attempt for a revision this node is
+		// not even serving.
 		r.warnAdmission(ctx, target, cfg)
 		reportDanglingRefs(ctx, r.log, target, cfg)
+		reportCompanyAdvisories(ctx, r.log, target, cfg)
 		warnTiers(ctx, r.log, r.engine.boot, cfg, r.engine.codeCacheBudget(),
 			"revision", target.RevisionID, "epoch", target.Epoch)
 	}
@@ -800,6 +816,16 @@ func violations(warnings []config.Warning) []violation {
 // The local write is best effort for the same reason the apply status is —
 // the revision is applied either way, and a node that could not write its copy
 // re-fetches on its next miss.
+//
+// AUTHENTICATED BEFORE IT IS KEPT. The payload is whatever the coordination
+// bucket holds, and anything that can reach the broker can write it; the seal
+// under the fleet's keyring is what says a node of this fleet wrote it. So it
+// is opened here, at the boundary where a peer's bytes would enter this node's
+// own history, and a body that does not open — unsealed, or sealed under a key
+// this keyring does not hold — is refused before [store.Configs.Adopt] rather
+// than kept as a revision this node's operator surface would then show and
+// offer to revert to. [Reconciler.applyRevision] opens it again to use it,
+// which is one more decrypt of a small document per fetch.
 func (r *Reconciler) fetchRevision(ctx context.Context, target coord.Activation) (store.Revision, error) {
 	payload, found, err := r.plane.Payload(ctx, target.RevisionID)
 	if err != nil {
@@ -814,6 +840,9 @@ func (r *Reconciler) fetchRevision(ctx context.Context, target coord.Activation)
 		return store.Revision{}, fmt.Errorf("engine: %w: %s",
 			store.ErrNoRevision, target.RevisionID)
 	}
+	if _, err = secrets.Open(r.cipher, payload); err != nil {
+		return store.Revision{}, openRefusal(target.RevisionID, false, err)
+	}
 	revision := adopted(target, payload)
 	if err := r.configs.Adopt(ctx, revision); err != nil {
 		r.log.WarnContext(ctx, "revision_not_cached", "revision", target.RevisionID,
@@ -823,15 +852,45 @@ func (r *Reconciler) fetchRevision(ctx context.Context, target coord.Activation)
 	return revision, nil
 }
 
+// openRefusal is why a revision the fleet is on did not open here, and what
+// fixes it.
+//
+// A body stored or published UNSEALED is refused whatever its origin: the seal
+// is what says a node of this fleet wrote it, so a plaintext one could have
+// been authored by anything that reaches the store or the broker. A body
+// sealed under a key this keyring does not hold is a keyring that is missing a
+// key the fleet seals under.
+func openRefusal(revisionID string, local bool, err error) error {
+	switch {
+	case errors.Is(err, secrets.ErrUnsealedWithKey) && local:
+		return fmt.Errorf("engine: this node's own copy of revision %s is stored "+
+			"without a seal, so it is not applied; import the document again "+
+			"(`crewlet config import` or PUT /config), which stores it sealed: %w",
+			revisionID, err)
+	case errors.Is(err, secrets.ErrUnsealedWithKey):
+		return fmt.Errorf("engine: the fleet's revision %s arrived through the "+
+			"coordination store without a seal, so it is neither applied nor "+
+			"kept: every node of this fleet seals what it publishes, so this body "+
+			"could have been forged by anything that reaches the broker: %w",
+			revisionID, err)
+	default:
+		return fmt.Errorf("engine: revision %s does not open under this node's "+
+			"keyring, so it is neither applied nor kept; every node has to hold "+
+			"the key the fleet seals under in secrets.keys: %w", revisionID, err)
+	}
+}
+
 // adopted is the local row for a revision the fleet's pointer names.
 //
 // THE ORIGIN'S RECORD, NOT THIS NODE'S. The pointer carries who wrote the
-// revision, how and when, and a peer that stored `peer` from `fleet` at the
-// activation instant instead gave one revision a different author on every
-// node — so the audit screen's answer depended on which node served it, and
-// no node but the origin could say an operator had written it at all. Every
-// pointer carries a complete origin — the coordination store refuses one that
-// does not ([coord.RevisionOrigin.Check]) — so it maps straight onto the row.
+// revision ([coord.RevisionOrigin]) — the author, what sort of author, the
+// credential it was written through — and how and when, and a peer that stored
+// `peer` from `fleet` at the activation instant instead gave one revision a
+// different author on every node: the audit screen's answer depended on which
+// node served it, and no node but the origin could say who had written it.
+// Every pointer carries a complete origin — the coordination store refuses one
+// that does not ([coord.RevisionOrigin.Check]) — so it maps straight onto the
+// row.
 //
 // It is ACTIVE FROM THE POINTER'S INSTANT, never from its creation: the two
 // differ on every re-activation of an older revision, and activated_at is
@@ -840,8 +899,8 @@ func adopted(target coord.Activation, payload []byte) store.Revision {
 	origin := target.Origin
 	return store.Revision{
 		ID: target.RevisionID, Source: origin.Source, CreatedBy: origin.Author,
-		CreatedByKind: store.AuthorKind(origin.AuthorKind),
-		Summary:       target.Summary, Payload: payload, CreatedAt: origin.CreatedAt,
+		CreatedByKind: origin.AuthorKind, OperatorID: origin.OperatorID,
+		Summary: target.Summary, Payload: payload, CreatedAt: origin.CreatedAt,
 		ActivatedAt: target.At,
 	}
 }

@@ -69,7 +69,7 @@ func TestTwoDifferentWritesInOneTurnAreTwoOperations(t *testing.T) {
 	t.Run("two queues set in one turn", func(t *testing.T) {
 		t.Parallel()
 		person := &personSpy{}
-		reg := personSurface(t, newFakeTracker(), person, nil, nil)
+		reg := personSurface(t, newFakeTracker(), person, nil)
 		var ids []string
 		for _, items := range [][]any{{"ENG-1"}, {"ENG-2", "ENG-1"}} {
 			if got := callWork(t, reg, tracker.SetPrioritiesTool, map[string]any{

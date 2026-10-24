@@ -27,12 +27,14 @@ func s3Bootstrap(t *testing.T, srv *s3fake.Server) *config.Bootstrap {
 	})
 }
 
-// answeredBucketChecks is how many attempts of the bucket's check at open rec
-// holds as answered: `crewlet.objects.s3.attempts{operation=HeadBucket,
-// outcome=answered}`, zero where the series is absent.
-func answeredBucketChecks(rec *metrics.Recorder) uint64 {
+// answeredProbePuts is how many attempts of the put the bucket's probe at open
+// makes through the engine's own path (s3obj's probe.go) rec holds as
+// answered: `crewlet.objects.s3.attempts{operation=PutObject,
+// outcome=answered}`, zero where the series is absent. Nothing else a node
+// does while it opens puts an object, so the probe's is the only one.
+func answeredProbePuts(rec *metrics.Recorder) uint64 {
 	for _, s := range rec.Read() {
-		if s.Name == metrics.ObjectsS3Attempts && s.Attrs["operation"] == "HeadBucket" &&
+		if s.Name == metrics.ObjectsS3Attempts && s.Attrs["operation"] == "PutObject" &&
 			s.Attrs["outcome"] == "answered" {
 			return s.Total
 		}
@@ -43,7 +45,7 @@ func answeredBucketChecks(rec *metrics.Recorder) uint64 {
 // THE NODE'S RECORDER REACHES ITS BUCKET, from the engine's own constructor
 // down: engine.New hands Options.Metrics to OpenBackends, OpenBackends to the
 // broker's opening, and that to the object store's — and an `s3` node's
-// check of its bucket at open is the first attempt it counts. A recorder
+// probe of its bucket at open is the first attempt it counts. A recorder
 // dropped at any hop is a node publishing none of the four S3 series, which
 // reads exactly as a bucket that never throttled or failed anybody; the one
 // test of the last hop alone (TestTheObjectStoresBucketCountsIntoTheNodesRecorder)
@@ -62,8 +64,8 @@ func TestTheNodesRecorderReachesItsBucket(t *testing.T) {
 			t.Fatalf("OpenBackends: %v", err)
 		}
 		t.Cleanup(func() { back.Close(context.Background()) })
-		if n := answeredBucketChecks(rec); n != 1 {
-			t.Fatalf("the recorder OpenBackends was handed holds %d answered checks of the bucket, want "+
+		if n := answeredProbePuts(rec); n != 1 {
+			t.Fatalf("the recorder OpenBackends was handed holds %d answered probe puts, want "+
 				"the 1 the object store's opening made: %v", n, rec.Read())
 		}
 	})
@@ -82,8 +84,8 @@ func TestTheNodesRecorderReachesItsBucket(t *testing.T) {
 			t.Fatalf("engine.New: %v", err)
 		}
 		t.Cleanup(func() { e.Stop(context.Background()) })
-		if n := answeredBucketChecks(rec); n != 1 {
-			t.Fatalf("the engine's recorder holds %d answered checks of the bucket, want the 1 its "+
+		if n := answeredProbePuts(rec); n != 1 {
+			t.Fatalf("the engine's recorder holds %d answered probe puts, want the 1 its "+
 				"object store's opening made: %v", n, rec.Read())
 		}
 	})

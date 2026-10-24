@@ -3,7 +3,9 @@ package pages
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -52,8 +54,8 @@ func (GenerationRecord) GenerationSubject(gen uint32) (statelog.Subject, bool) {
 // second as though it had landed. The transition reads back whose record
 // landed ([statelog.Reanchor]).
 //
-// THE OPERATOR IS THE AUTHOR, recorded the way every operator write here is:
-// the token's own name and author kind `operator`, never a seat.
+// THE OPERATOR IS THE AUTHOR, recorded the way every write here is — see
+// [generationActor].
 func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.GenerationRecord, bool, error) {
 	subject := GenerationSubject(f.Generation)
 	scope := ScopeSet{Subject: true}
@@ -64,7 +66,7 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 	// the record's id carries the instant a retry is judged by, names the
 	// node that writes it, and is the same operation on every re-run there.
 	opID := f.OpID()
-	actor := Actor{Kind: AuthorOperator, OperatorID: f.By}
+	actor := generationActor(f)
 	body, err := json.Marshal(Generation{
 		V:               GateRecordVersion,
 		Generation:      f.Generation,
@@ -80,9 +82,11 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 	// record's own: it opens the generation it names, and the eviction
 	// gate reads the node that wrote it.
 	encoded, err := Encode(MutationRecord{
-		// NEVER [RecordVersion]: see [baseRecordVersion].
+		// NO VERSION: the encoder stamps the base one, and refuses a
+		// generation carrying a versioned field
+		// ([RecordEnvelope.readByEveryBuild]).
 		RecordEnvelope: RecordEnvelope{
-			V: baseRecordVersion, OpID: opID, Subject: subject, Op: OpGeneration,
+			OpID: opID, Subject: subject, Op: OpGeneration,
 			CreatedAt: f.At.UTC(), Gen: f.Generation, Writer: f.Writer,
 			Scope: scope,
 		},
@@ -99,4 +103,55 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 		OpID:    opID,
 		Payload: encoded,
 	}, true, nil
+}
+
+// generationActor is who a generation record names as its author.
+//
+// THE FACTS' THREE COLUMNS, as every other write here records them: the name
+// BARE, the kind in a column of its own and the credential beside them. It
+// took the name alone and rendered it `"operator:" + name` with no credential,
+// so the one record that says who moved this log named a party no other row
+// in the audit feed calls by that name, and never said through what.
+//
+// THE KIND IS READ IN EITHER VOCABULARY, as the tracker's generation record
+// and the identity estate's read it: the one [iam.ActorFor] records a party
+// under, which is this package's own, or the principal's (a seat, a person, a
+// machine). Read in this package's alone, a reanchor the engine named by its
+// principal kind recorded a person as an operator on this log and as a person
+// on the tracker's, which is one party as two in the audit feed the two
+// histories are read side by side in.
+//
+// A KIND THIS DOMAIN HAS NO WORD FOR IS AN OPERATOR — the engine's own, or
+// none stated — because it is a party acting on the company's behalf and
+// neither a seat nor a person. An OPERATOR the facts name with no credential
+// beside them is a credential acting under its own login — the one party whose
+// name [iam.ActorFor] also records as its credential — so the name stands in
+// for it there, and nowhere else: under any other kind it would put a seat's
+// handle or a person's in the credential column, and the engine acts through
+// no credential at all. And NOBODY NAMED IS THE NODE, recorded under its own
+// id rather than as an empty author column.
+func generationActor(f statelog.GenerationFacts) Actor {
+	if strings.TrimSpace(f.By) == "" {
+		return Actor{Handle: f.Writer, Kind: AuthorOperator}
+	}
+	operator := f.OperatorID
+	var kind AuthorKind
+	switch {
+	case iam.Kind(f.ByKind) == iam.KindSeat:
+		kind = AuthorAgent
+	case iam.Kind(f.ByKind) == iam.KindPerson:
+		kind = AuthorHuman
+	case iam.Kind(f.ByKind) == iam.KindEngine,
+		iam.ActorKind(f.ByKind) == iam.ActorSystem:
+		return Actor{Handle: f.By, Kind: AuthorOperator, OperatorID: operator}
+	case AuthorKind(f.ByKind).Valid():
+		kind = AuthorKind(f.ByKind)
+	default:
+		// A MACHINE, or a kind nobody stated.
+		kind = AuthorOperator
+	}
+	if kind == AuthorOperator && operator == "" {
+		operator = f.By
+	}
+	return Actor{Handle: f.By, Kind: kind, OperatorID: operator}
 }

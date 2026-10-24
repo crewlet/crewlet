@@ -82,7 +82,9 @@ type AlreadyAnsweredError struct {
 	Comment string
 
 	// By is who answered — the author of the answering comment — or who
-	// resolved the question without an answer.
+	// resolved the question without an answer: a seat handle exactly as
+	// the rows hold it, which never changes (ADR-0013), so nothing
+	// re-reads it.
 	By string
 	At time.Time
 
@@ -381,6 +383,9 @@ func readAsk(ctx context.Context, tx *sql.Tx, task, comment string) (openAsk, er
 // self is the id of the comment being written: an ask THIS comment already
 // answered is a retried write whose first attempt landed, not a second
 // answer.
+//
+// The rows and the author are seat handles, compared as such, and every
+// refusal NAMES them, because the caller reads the refusal to find the person.
 func (a openAsk) answerableBy(author, self string) error {
 	switch {
 	case a.asked == "":
@@ -390,7 +395,8 @@ func (a openAsk) answerableBy(author, self string) error {
 	case author != "" && a.asked != author:
 		return forbidden("comment %s on task %s asked %s rather than %s, and "+
 			"answering it would close somebody else's question",
-			a.id, a.task, a.asked, author)
+			a.id, a.task, a.asked,
+			author)
 	case a.removed:
 		return invalid("comment %s on task %s was removed",
 			a.id, a.task)
@@ -401,7 +407,8 @@ func (a openAsk) answerableBy(author, self string) error {
 			By: a.answerAuthor, At: a.answeredAt}
 	case a.resolved:
 		return &AlreadyAnsweredError{Task: a.task, Comment: a.id,
-			By: a.resolvedBy, At: a.resolvedAt, Resolved: true}
+			By: a.resolvedBy, At: a.resolvedAt,
+			Resolved: true}
 	}
 	return nil
 }

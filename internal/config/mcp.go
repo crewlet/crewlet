@@ -1,9 +1,9 @@
 package config
 
 import (
+	"net/textproto"
 	"slices"
 	"strings"
-	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -91,6 +91,38 @@ type MCPServer struct {
 	URL     string            `yaml:"url,omitempty" json:"url,omitempty" desc:"Endpoint of the remote server (http)."`
 	Headers map[string]string `secret:"true" yaml:"headers,omitempty" json:"headers,omitempty" desc:"Headers sent with each request (http); ${VAR} supported."`
 
+	// OptionalKeys names the keys whose value may resolve to nothing: of
+	// this server's env or headers, and of a seat's or unit's mcp_env block
+	// for it, which lands in the same environment or the same headers.
+	//
+	// EVERY OTHER REFERENCE MUST RESOLVE before the server is started — on
+	// the engine host or in a coding agent's box — because a credential that
+	// arrives empty either fails the server or lets it act as nobody
+	// (internal/engine, toolcredentials.go). What that rule cannot tell on
+	// its own is a host setting passed through by name, like a private
+	// registry's NPM_CONFIG_REGISTRY, which most hosts never set. Such a key
+	// is listed here, and when any reference in its value resolves to
+	// nothing the key is LEFT OUT, whole: the child is started without the
+	// variable or the request without the header, as Kubernetes starts a
+	// container without an `optional` secret reference. Never half a value
+	// — "Bearer ${TOKEN}" with TOKEN unset would be "Bearer ", a credential
+	// that looks set — and never an empty one.
+	//
+	// BY KEY AND NOT BY VARIABLE, because a key is what the server reads:
+	// seats point one key at variables of their own (${ALICE_X},
+	// ${BOB_X}), and one variable can sit under a key that may go without it
+	// and another that may not. And not as shell syntax (`${VAR:-}`): the
+	// reference grammar deliberately leaves that alone, so a setup step's
+	// script survives resolution untouched (internal/envref).
+	//
+	// A VARIABLE A PROVISIONING PASS MINTS for the seat is waited for
+	// whatever this list says: the declaration is for a value nothing will
+	// supply, and that one is coming. Started without it, the seat's child
+	// would act as nobody until the seal — the failure the rule exists to
+	// stop. The url has no key and is never optional: a server is dialled
+	// at it.
+	OptionalKeys []string `yaml:"optional_keys,omitempty" json:"optional_keys,omitempty" desc:"Keys of env, headers or a seat's mcp_env block for this server whose value may resolve to nothing; such a key is left out rather than holding the server back."`
+
 	// ToolAnnotations corrects behavioural hints per TOOL, keyed by bare
 	// tool name.
 	//
@@ -102,14 +134,15 @@ type MCPServer struct {
 	ToolAnnotations map[string]ToolAnnotations `yaml:"tool_annotations,omitempty" json:"tool_annotations,omitempty" desc:"Per-tool behavioural-hint overrides, keyed by bare tool name."`
 
 	// StartupTimeoutSeconds bounds launching the process (or opening the
-	// session), the handshake, and the first tool listing.
+	// session) and the handshake, and separately the first tool listing, so
+	// a start can take up to twice it before the server is given up on.
 	//
 	// A server that never speaks is the failure this bounds: nothing
 	// raises, so without a deadline the per-server error handling never
 	// runs and one silent server holds up every seat behind it. The
 	// default suits a package manager fetching a server that is not yet
 	// cached, which is the slow case for a HEALTHY server.
-	StartupTimeoutSeconds float64 `yaml:"startup_timeout_seconds,omitempty" json:"startup_timeout_seconds,omitempty" js:"min=0" desc:"Connect, handshake and first tool listing budget."`
+	StartupTimeoutSeconds float64 `yaml:"startup_timeout_seconds,omitempty" json:"startup_timeout_seconds,omitempty" js:"min=0" desc:"Bounds connect and handshake, and separately the first tool listing. 0 is the engine's default."`
 
 	// RequestTimeoutSeconds bounds any one tool call.
 	//
@@ -124,15 +157,6 @@ type MCPServer struct {
 // so its own `env` belongs to it rather than to its slot.
 func (m MCPServer) IdentityKey() string { return m.Name }
 
-// MCP timeout defaults. Startup is generous because a cold package fetch is
-// the slow case for a healthy server; the request default matches the
-// protocol SDK's own read timeout, so a stdio server and an http one have
-// one ceiling rather than one per transport.
-const (
-	defaultMCPStartupSeconds = 60.0
-	defaultMCPRequestSeconds = 300.0
-)
-
 // IsShared reports whether one instance serves the company, applying the
 // true default.
 func (m *MCPServer) IsShared() bool { return m.Shared.Or(true) }
@@ -141,9 +165,10 @@ func (m *MCPServer) IsShared() bool { return m.Shared.Or(true) }
 //
 // A shared server serves every AGENT seat; a per-seat template serves only a
 // seat that declares credentials for it under mcp_env — its own or its unit's,
-// which is why this reads the seat AS THE ENGINE RUNS IT ([Company.SeatsAsRun])
-// rather than the authored role — because a template with nobody's identity
-// in it is a server nobody can act through. A human seat runs no tools at all.
+// which is why this takes the seat AS THE ENGINE RUNS IT ([org.Organization]
+// as the engine built it, where a unit's credentials are already layered under
+// its agent members), rather than the authored role — because a template with nobody's identity in it is a server
+// nobody can act through. A human seat runs no tools at all.
 //
 // THE ONE RULE, read by the engine when it starts a seat's children and by the
 // org projection when it tells a reader which servers a seat can reach, so the
@@ -160,28 +185,40 @@ func (m *MCPServer) Grants(seat *org.Role) bool {
 	return declared
 }
 
+// OptionalKey reports whether key's value may resolve to nothing, the key then
+// being left out rather than holding the server back — see [MCPServer.OptionalKeys].
+// Matched as [MCPServer.ValueKey] tells keys apart, so `authorization` declares
+// an http server's `Authorization` header optional.
+func (m *MCPServer) OptionalKey(key string) bool {
+	return slices.ContainsFunc(m.OptionalKeys, func(listed string) bool {
+		return m.ValueKey(listed) == m.ValueKey(key)
+	})
+}
+
+// ValueKey is the identity of key among the values this server is started
+// with: for an http server, the header's canonical spelling, and for a stdio
+// server the variable's own name.
+//
+// HTTP NAMES A HEADER IN ANY CASE, so `authorization` and `Authorization` are
+// one header, sent once. Compared as written, a seat's `authorization` did not
+// replace its template's `Authorization`: both were kept, the connection set
+// whichever came last out of a map on each request, and the seat's child sent
+// the template's identity on some of them — or, with the seat's key optional
+// and unset, on all of them. An environment does tell `token` from `TOKEN`,
+// so a stdio server's keys stay as written.
+func (m *MCPServer) ValueKey(key string) string {
+	if m.Kind() == TransportHTTP {
+		return textproto.CanonicalMIMEHeaderKey(key)
+	}
+	return key
+}
+
 // Kind is the transport, applying the stdio default.
 func (m *MCPServer) Kind() MCPTransport {
 	if m.Transport == "" {
 		return TransportStdio
 	}
 	return m.Transport
-}
-
-// StartupTimeout is the connect budget, applying the default.
-func (m *MCPServer) StartupTimeout() time.Duration {
-	if m.StartupTimeoutSeconds <= 0 {
-		return time.Duration(defaultMCPStartupSeconds * float64(time.Second))
-	}
-	return time.Duration(m.StartupTimeoutSeconds * float64(time.Second))
-}
-
-// RequestTimeout is the per-call budget, applying the default.
-func (m *MCPServer) RequestTimeout() time.Duration {
-	if m.RequestTimeoutSeconds <= 0 {
-		return time.Duration(defaultMCPRequestSeconds * float64(time.Second))
-	}
-	return time.Duration(m.RequestTimeoutSeconds * float64(time.Second))
 }
 
 func (m *MCPServer) validate(path Path) error {
@@ -232,15 +269,17 @@ func (m *MCPServer) validate(path Path) error {
 		}
 	}
 
+	// NO NUMBER IN EITHER MESSAGE. The defaults are the MCP client's
+	// (mcp.DefaultStartupTimeout, mcp.DefaultRequestTimeout), applied where
+	// a zero reaches it, and this package sits below that one; a copy kept
+	// here to quote had already drifted to half the real startup default.
 	if m.StartupTimeoutSeconds < 0 {
 		p.add(at(path, "startup_timeout_seconds"), ErrOutOfRange,
-			"must be 0 (the %v s default) or positive, got %v",
-			defaultMCPStartupSeconds, m.StartupTimeoutSeconds)
+			"must be 0 (the default) or positive, got %v", m.StartupTimeoutSeconds)
 	}
 	if m.RequestTimeoutSeconds < 0 {
 		p.add(at(path, "request_timeout_seconds"), ErrOutOfRange,
-			"must be 0 (the %v s default) or positive, got %v",
-			defaultMCPRequestSeconds, m.RequestTimeoutSeconds)
+			"must be 0 (the default) or positive, got %v", m.RequestTimeoutSeconds)
 	}
 	return p.err()
 }

@@ -18,7 +18,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { Activity, dayKey } from "./Activity.tsx";
-import { setZone } from "~/lib/prefs.ts";
+import { pinZoneForTest } from "~/lib/prefs.ts";
 import { fmtDate } from "~/lib/format.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -145,7 +145,7 @@ test("a refused first page is not a company that has published nothing", async (
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);
   });
-  expect(screen.getByText(/The engine tried to answer and failed/)).toBeTruthy();
+  expect(screen.getByText(/The engine failed to answer\./)).toBeTruthy();
   expect(screen.queryByText("Nothing has been published yet")).toBeNull();
 });
 
@@ -230,7 +230,7 @@ test("the axis is asked for whole buckets, never for the clock's own millisecond
  * own day says the opposite of both.
  */
 test("a day heading splits on the reader's chosen zone, not the browser's", () => {
-  setZone("Pacific/Kiritimati");
+  pinZoneForTest("Pacific/Kiritimati");
   try {
     const before = dayKey("2026-09-14T09:00:00Z");
     const after = dayKey("2026-09-14T11:00:00Z");
@@ -240,7 +240,7 @@ test("a day heading splits on the reader's chosen zone, not the browser's", () =
     // Two Berlin days, one Kiritimati day: one heading.
     expect(after, "one Kiritimati day was split across two headings").toBe(nextMorning);
   } finally {
-    setZone("");
+    pinZoneForTest("");
   }
 });
 
@@ -251,13 +251,13 @@ test("a day heading splits on the reader's chosen zone, not the browser's", () =
 // this case fail the day somebody changes that default for reasons that have
 // nothing to do with grouping.
 test("the key a heading groups on is the string it draws", () => {
-  setZone("Pacific/Kiritimati");
+  pinZoneForTest("Pacific/Kiritimati");
   try {
     for (const ts of ["2026-09-14T09:00:00Z", "2026-09-14T11:00:00Z", "2026-09-15T05:00:00Z"]) {
       expect(dayKey(ts)).toBe(fmtDate(ts));
     }
   } finally {
-    setZone("");
+    pinZoneForTest("");
   }
 });
 
@@ -277,7 +277,7 @@ test("a seat's log asks for that seat and shows only its live rows", async () =>
       ],
     }),
   );
-  store.applyAgents([
+  store.applySeats([
     { role: "SWE", handle: "swe", agent_id: "a-swe" },
     { role: "CTO", handle: "cto", agent_id: "a-cto" },
   ]);
@@ -329,7 +329,7 @@ test("a seat's log asks for that seat and shows only its live rows", async () =>
   expect(screen.getByText("swe opened a task")).toBeTruthy();
   expect(screen.queryByText("cto opened a task")).toBeNull();
   // THE FILTER SAYS WHOSE LOG THIS IS, by name, and takes itself off.
-  fireEvent.click(screen.getByRole("button", { name: /Only SWE's events/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove filter: only SWE's events" }));
   expect(location.hash).not.toContain("seat=");
   expect(screen.getByText("cto opened a task")).toBeTruthy();
   location.hash = "#/";
@@ -409,7 +409,7 @@ test("a trace and a channel narrow the pages, the axis and the live rows", async
   }
   expect(screen.getByText("in the trace")).toBeTruthy();
   expect(screen.queryByText("another trace")).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: /Only trace tr-1's events/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove filter: only trace tr-1's events" }));
   expect(location.hash).not.toContain("trace=");
   cleanup();
 
@@ -468,6 +468,6 @@ test("a log missing a node names it", async () => {
       : { bucket: "hour", bars: [], total: 0, failed: 0, by_category: {}, coverage },
   );
   expect(screen.getByText("node-b")).toBeTruthy();
-  expect(screen.getByText(/This log is missing one node/)).toBeTruthy();
+  expect(screen.getByText(/This log is missing 1 node\./)).toBeTruthy();
   location.hash = "#/";
 });

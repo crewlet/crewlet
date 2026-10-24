@@ -35,7 +35,10 @@ export function Hero({
   prior: QueryResult<TokenSeries>;
   /** `null` until a node has reported the counters. */
   budget: OrgBudget | null;
-  /** Whether the reader may set a ceiling: `mayChangeConfig`. */
+  /**
+   * Whether the reader may set a ceiling: `mayChangeConfig` — they hold
+   * Admin and, on a managed document, are one of its writers.
+   */
   mayConfigure: boolean;
 }) {
   const total = rollup?.totals.total_tokens;
@@ -48,7 +51,7 @@ export function Hero({
             {fmtCount(total)}
           </span>
         ) : loading ? (
-          <Skeleton width="10rem" height="3.25rem" />
+          <Skeleton width="10rem" height="var(--font-size-4xl)" />
         ) : (
           <span className="spend-hero-number">
             <EmptyValue label="This window has not answered" />
@@ -60,8 +63,7 @@ export function Hero({
           // keeps, and one past it is refused rather than drawn short — so the
           // reader is told where the history ends before they ask past it.
           <span className="spend-caption">
-            History from {companyDateLabel(rollup.horizon.floor)} · {rollup.horizon.days} days, on
-            every node alike
+            History from {companyDateLabel(rollup.horizon.floor)} · {rollup.horizon.days} days
           </span>
         )}
       </div>
@@ -97,7 +99,7 @@ function Comparison({
     // engine refuses it naming why — which is what the reader is told.
     return (
       <span className="spend-hero-change" title={prior.detail}>
-        No comparison — {prior.detail ?? "the window before this one could not be read"}
+        No comparison: {prior.detail ?? "the window before this one could not be read"}
       </span>
     );
   }

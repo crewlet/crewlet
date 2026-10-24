@@ -15,7 +15,7 @@ type FileReader interface {
 }
 
 // workFiles answers a page of one project's files.
-func (s Sources) workFiles(ctx context.Context, n Native, p Params) (any, error) {
+func (s Sources) workFiles(ctx context.Context, p Params) (any, error) {
 	project := strings.TrimSpace(p.String("project"))
 	if project == "" {
 		return nil, badParams("project", "", []string{"<KEY>"})
@@ -24,7 +24,7 @@ func (s Sources) workFiles(ctx context.Context, n Native, p Params) (any, error)
 	if err != nil {
 		return nil, err
 	}
-	listing, err := n.Files.Files(ctx, tracker.FileQuery{
+	listing, err := s.Files.Files(ctx, tracker.FileQuery{
 		Project: project, Folder: p.String("folder"), After: p.String("after"),
 		Limit: p.Int("limit", 0), Removed: p.Bool("removed", false), Freshness: fresh,
 	})

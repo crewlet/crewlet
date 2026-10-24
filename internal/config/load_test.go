@@ -109,18 +109,37 @@ func TestParseCompanyRequiresAName(t *testing.T) {
 	}
 }
 
-// An empty Tier A file is legitimate — every field defaults, and a company
-// runs on the defaults alone.
-func TestEmptyBootstrapIsTheDefaults(t *testing.T) {
+// AN EMPTY TIER A FILE IS REFUSED, NAMING THE ONE THING IT CANNOT DEFAULT.
+//
+// It used to load: every field defaulted, and a company ran on the defaults
+// alone. The keyring has no default — a key the engine invented would be one
+// no other node holds, and every record on every state log is signed under
+// it — so an empty file is a node that cannot start, and saying so here is
+// what `crewlet validate` is for.
+func TestAnEmptyBootstrapIsRefusedForItsKeyring(t *testing.T) {
 	t.Parallel()
-	cfg, err := ParseBootstrap(nil, EnvOnly())
+	_, err := ParseBootstrap(nil, EnvOnly())
+	if !errors.Is(err, ErrMissing) {
+		t.Fatalf("an empty bootstrap: err = %v, want ErrMissing", err)
+	}
+	if !strings.Contains(err.Error(), "secrets.keys") {
+		t.Errorf("the refusal does not name the keyring: %v", err)
+	}
+}
+
+// AND A KEYRING IS ALL A TIER A FILE NEEDS: everything else defaults, and a
+// company runs on the defaults alone.
+func TestAKeyringAloneTakesEveryOtherDefault(t *testing.T) {
+	t.Parallel()
+	cfg, err := ParseRunnableBootstrap(nil, EnvOnly())
 	if err != nil {
-		t.Fatalf("an empty bootstrap should load: %v", err)
+		t.Fatalf("a bootstrap holding only its keyring should load: %v", err)
 	}
 	want := DefaultBootstrap()
 	if cfg.Store.Path != want.Store.Path || cfg.Stream.Type != want.Stream.Type ||
-		cfg.Coordination.Type != want.Coordination.Type || !cfg.API.Auth.AllowAnonymousRead {
-		t.Fatalf("empty bootstrap did not take the defaults: %+v", cfg)
+		cfg.Coordination.Type != want.Coordination.Type ||
+		cfg.API.Host != want.API.Host || cfg.ServesAPI() {
+		t.Fatalf("a keyring-only bootstrap did not take the defaults: %+v", cfg)
 	}
 }
 
@@ -184,7 +203,7 @@ func TestAFractionInAWholeNumberFieldIsRefused(t *testing.T) {
 		path  string
 	}{
 		{"a Tier A port", func() error {
-			_, err := ParseBootstrap([]byte("api:\n  port: 8080.9\n"), NewResolver(MapSource{}))
+			_, err := ParseRunnableBootstrap([]byte("api:\n  port: 8080.9\n"), NewResolver(MapSource{}))
 			return err
 		}, "api.port"},
 		{"a Tier B round cap", func() error {
@@ -209,12 +228,12 @@ func TestAFractionInAWholeNumberFieldIsRefused(t *testing.T) {
 	}
 
 	for _, whole := range []string{"8080.0", "8.08e3"} {
-		cfg, err := ParseBootstrap([]byte("api:\n  port: "+whole+"\n"), NewResolver(MapSource{}))
+		cfg, err := ParseRunnableBootstrap([]byte(Served("api:\n  port: "+whole+"\n")), NewResolver(MapSource{}))
 		if err != nil || cfg.API.Port != 8080 {
 			t.Errorf("api.port: %s = (%v, %v), want 8080 — a whole number in another spelling", whole, cfg, err)
 		}
 	}
-	cfg, err := ParseBootstrap([]byte("coordination:\n  lease_ttl_seconds: 12.5\n"), NewResolver(MapSource{}))
+	cfg, err := ParseRunnableBootstrap([]byte("coordination:\n  lease_ttl_seconds: 12.5\n"), NewResolver(MapSource{}))
 	if err != nil || cfg.Coordination.LeaseTTLSeconds != 12.5 {
 		t.Errorf("a fractional lease TTL = (%v, %v), want 12.5 — that field takes fractions", cfg, err)
 	}

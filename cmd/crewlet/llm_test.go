@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -60,7 +61,7 @@ func TestALoginBundleRoundTripsThroughTheCLI(t *testing.T) {
 
 	target := bundleProvider(t)
 	var out bytes.Buffer
-	if err := importLLM(target, "sub", strings.NewReader(blob+"\n"), &out); err != nil {
+	if err := importLLM(t.Context(), target, "sub", strings.NewReader(blob+"\n"), &out); err != nil {
 		t.Fatalf("importLLM: %v", err)
 	}
 	restored, err := os.ReadFile(
@@ -90,7 +91,7 @@ func TestImportingOverAnExistingLoginIsRefusedLoudly(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	err := importLLM(target, "sub", strings.NewReader("anything"), &out)
+	err := importLLM(t.Context(), target, "sub", strings.NewReader("anything"), &out)
 	if err == nil {
 		t.Fatal("a bundle was restored over a live login")
 	}
@@ -109,7 +110,7 @@ func TestImportingOverAnExistingLoginIsRefusedLoudly(t *testing.T) {
 func TestImportingNothingSaysHowToPipeABundle(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
-	err := importLLM(bundleProvider(t), "sub", strings.NewReader("   \n"), &out)
+	err := importLLM(t.Context(), bundleProvider(t), "sub", strings.NewReader("   \n"), &out)
 	if err == nil {
 		t.Fatal("an empty stdin imported")
 	}
@@ -271,7 +272,7 @@ func TestDoctorExaminesAnAnthropicEntry(t *testing.T) {
 	args := append([]string{"doctor"}, doctorCompany(t,
 		anthropicEntry("claude", "claude-opus-5-5", url)+openAIEntry)...)
 	var out, notes bytes.Buffer
-	if err := runLLM(args, &out, &notes); err != nil {
+	if err := runLLM(noEnviron, args, &out, &notes); err != nil {
 		t.Fatalf("doctor: %v\n%s", err, out.String())
 	}
 	for _, want := range []string{
@@ -300,7 +301,7 @@ func TestDoctorFailsOnAnAnthropicEntryThatDoesNotCall(t *testing.T) {
 	_, url := serveClaude(t, false)
 	args := append([]string{"doctor", "claude"}, doctorCompany(t, anthropicEntry("claude", "claude-opus-5-5", url))...)
 	var out, notes bytes.Buffer
-	err := runLLM(args, &out, &notes)
+	err := runLLM(noEnviron, args, &out, &notes)
 	if err == nil || !strings.Contains(err.Error(), "1 of 1 providers have problems") {
 		t.Fatalf("err = %v\n%s", err, out.String())
 	}
@@ -319,7 +320,7 @@ func TestDoctorReportsAnEntryThatDoesNotBuildBesideTheOthers(t *testing.T) {
 		anthropicEntry("claude", "claude-opus-5-5", url)+
 			anthropicEntry("broken", `"${CREWLET_DOCTOR_TEST_UNSET_MODEL}"`, url))...)
 	var out, notes bytes.Buffer
-	err := runLLM(args, &out, &notes)
+	err := runLLM(noEnviron, args, &out, &notes)
 	if err == nil || !strings.Contains(err.Error(), "1 of 2 providers have problems") {
 		t.Fatalf("err = %v\n%s", err, out.String())
 	}
@@ -340,12 +341,12 @@ func TestDoctorNamesWhatItDoesNotExamine(t *testing.T) {
 	t.Parallel()
 	_, url := serveClaude(t, true)
 	var out, notes bytes.Buffer
-	err := runLLM(append([]string{"doctor", "gpt"},
+	err := runLLM(noEnviron, append([]string{"doctor", "gpt"},
 		doctorCompany(t, anthropicEntry("claude", "claude-opus-5-5", url)+openAIEntry)...), &out, &notes)
 	if err == nil || !strings.Contains(err.Error(), `provider "gpt" is type "openai"`) {
 		t.Errorf("err = %v", err)
 	}
-	err = runLLM(append([]string{"doctor", "nobody"},
+	err = runLLM(noEnviron, append([]string{"doctor", "nobody"},
 		doctorCompany(t, anthropicEntry("claude", "claude-opus-5-5", url))...), &out, &notes)
 	if err == nil || !strings.Contains(err.Error(), `no provider "nobody" (doctor examines claude)`) {
 		t.Errorf("err = %v", err)
@@ -354,7 +355,7 @@ func TestDoctorNamesWhatItDoesNotExamine(t *testing.T) {
 	dir := t.TempDir()
 	company := writeFile(t, dir, "company.yaml", "name: Acme\nproviders:\n  llm:\n"+openAIEntry+
 		"roles:\n  - name: CEO\n    handle: ceo\n    llm: gpt\n")
-	err = runLLM([]string{"doctor", "-company", company, "-config", filepath.Join(dir, "absent.yaml")}, &out, &notes)
+	err = runLLM(noEnviron, []string{"doctor", "-company", company, "-config", filepath.Join(dir, "absent.yaml")}, &out, &notes)
 	if err == nil || !strings.Contains(err.Error(), "declares no cli-agent or anthropic providers") {
 		t.Errorf("err = %v", err)
 	}
@@ -366,9 +367,11 @@ func TestDoctorNamesWhatItDoesNotExamine(t *testing.T) {
 // which the engine now refuses its boot on — read as a working bridge, and a
 // deploy script gating on doctor passed a node the next boot refuses.
 //
-// NOT PARALLEL: the variable is the process's own, the one the doctor reads.
+// The variable travels in the environment the invocation is HANDED, which is
+// where the doctor reads it, as the engine reads its own.
 func TestTheLLMDoctorReportsARefusedBridgeURL(t *testing.T) {
-	t.Setenv(mcpbridge.BaseURLVar, "engine.example.com:8000")
+	t.Parallel()
+	environ := config.MapSource{mcpbridge.BaseURLVar: "engine.example.com:8000"}
 	dir := t.TempDir()
 	// The claude-code profile over a binary no host has, so the report
 	// runs nothing on the machine the suite runs on.
@@ -379,7 +382,7 @@ func TestTheLLMDoctorReportsARefusedBridgeURL(t *testing.T) {
 		"        overrides: {binary: crewlet-no-such-cli-binary}\n"+
 		"roles:\n  - name: CEO\n    handle: ceo\n    llm: sub\n")
 	var out, notes bytes.Buffer
-	err := runLLM([]string{"doctor", "sub", "-no-smoke", "-company", company,
+	err := runLLM(environ, []string{"doctor", "sub", "-no-smoke", "-company", company,
 		"-config", filepath.Join(dir, "absent.yaml")}, &out, &notes)
 	if err == nil || !strings.Contains(err.Error(), "1 of 1 providers have problems") {
 		t.Fatalf("err = %v\n%s", err, out.String())
@@ -405,14 +408,17 @@ func TestTheLLMDoctorReportsARefusedBridgeURL(t *testing.T) {
 // are the NODE's, so the refusal is reported as the node's, ahead of the
 // entries, and never repeats the value.
 //
-// NOT PARALLEL: the variables are the process's own, the ones the doctor reads.
+// The variables travel in the environment the invocation is HANDED, which is
+// where the doctor reads them, as the engine reads its own.
 func TestTheLLMDoctorRefusesABoxURLTheBootRefuses(t *testing.T) {
+	t.Parallel()
 	_, url := serveClaude(t, true)
 	for _, variable := range []string{sandbox.OtelReceiverURLVar, mcpbridge.BaseURLVar} {
 		t.Run(variable, func(t *testing.T) {
-			t.Setenv(variable, "https://ops:hunter2@engine.example.com")
+			t.Parallel()
+			environ := config.MapSource{variable: "https://ops:hunter2@engine.example.com"}
 			var out, notes bytes.Buffer
-			err := runLLM(append([]string{"doctor", "-no-smoke"},
+			err := runLLM(environ, append([]string{"doctor", "-no-smoke"},
 				doctorCompany(t, anthropicEntry("claude", "claude-opus-5-5", url))...), &out, &notes)
 			report := out.String()
 			if err == nil || !strings.Contains(err.Error(), "the engine refuses to boot on 1 of this node's box URLs") {

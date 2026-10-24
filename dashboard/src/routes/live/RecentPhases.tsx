@@ -31,19 +31,29 @@
  */
 
 import { useCallback, useMemo, useState } from "react";
-import { Button, Card, EmptyState, EmptyValue, Skeleton, Tag } from "@crewlethq/ui";
+import {
+  Button,
+  Card,
+  EmptyState,
+  EmptyValue,
+  Skeleton,
+  Tag,
+  TableNumberCell,
+  TableDateCell,
+  TableEntityCell,
+} from "@crewlethq/ui";
 import { BrainGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import type { GridColumn } from "~/app/frame/DataGrid.tsx";
-import { DateCell, NumberCell, SeatLabel, TokenCell } from "~/app/frame/cells.tsx";
+import { plainSeat } from "~/app/frame/cells.tsx";
 import { rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { useClient, useEngineHealth, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { useSettled } from "~/lib/settled.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { eventHistoryLabel, plural } from "~/lib/format.ts";
+import { eventHistoryLabel, plural, fmtCount } from "~/lib/format.ts";
 import {
   decisionLabel,
   decisionTone,
@@ -189,7 +199,11 @@ export function RecentPhases({
         // question here.
         cell: (r) => {
           const name = nameOf(r);
-          return name ? <SeatLabel name={name} kind="agent" /> : <EmptyValue label="No seat" />;
+          return name ? (
+            <TableEntityCell {...plainSeat({ name: name, kind: "agent" })} />
+          ) : (
+            <EmptyValue label="No seat" />
+          );
         },
         sortValue: (r) => nameOf(r),
       },
@@ -241,7 +255,7 @@ export function RecentPhases({
         header: "Rounds",
         align: "right",
         shrink: true,
-        cell: (r) => <NumberCell value={r.roundsUsed} />,
+        cell: (r) => <TableNumberCell value={r.roundsUsed} format={fmtCount} />,
         sortValue: (r) => r.roundsUsed,
       },
       {
@@ -249,14 +263,14 @@ export function RecentPhases({
         header: "Tokens",
         align: "right",
         shrink: true,
-        cell: (r) => <TokenCell value={r.totalTokens} />,
+        cell: (r) => <TableNumberCell value={r.totalTokens} format={fmtCount} />,
         sortValue: (r) => r.totalTokens,
       },
       {
         key: "when",
         header: "When",
         shrink: true,
-        cell: (r) => <DateCell at={r.at} now={now} />,
+        cell: (r) => <TableDateCell value={r.at} now={now} />,
         sortValue: (r) => Date.parse(r.at) || 0,
       },
     ],
@@ -281,22 +295,20 @@ export function RecentPhases({
       />
       {settled.pending > 0 && (
         <button type="button" className="new-rows" onClick={settled.flush}>
-          {plural(settled.pending, "new phase")} finished while you were reading — show
+          {plural(settled.pending, "new phase")}. Show
         </button>
       )}
       {first.loading && !first.data ? (
         <Skeleton variant="text" rows={5} rowHeight={44} label="Loading recent phases" />
       ) : first.error ? (
-        <QueryState error={first.error} loading={false} />
+        <QueryState error={first.error} refusal={first.refusal} loading={false} />
       ) : settled.items.length === 0 ? (
         <EmptyState
           size="compact"
           icon={<BrainGlyph size={32} />}
           title={filtering ? "No phase matches these filters" : "No phase has finished yet"}
           description={
-            filtering
-              ? "Clear the phase and failure filters to see every phase this list holds."
-              : "A phase is recorded when it completes. If every seat is idle and no schedule has fired, there is nothing here yet."
+            filtering ? "Clear the filters to see every phase." : "Finished phases appear here."
           }
         />
       ) : (
@@ -316,9 +328,9 @@ export function RecentPhases({
       )}
       <div className="live-card-foot">
         {pageError ? (
-          <QueryState error={pageError} loading={false} />
+          <QueryState error={pageError} refusal={null} loading={false} />
         ) : exhausted ? (
-          <span className="t-caption">That is the beginning of the retained record.</span>
+          <span className="t-caption">Start of the record.</span>
         ) : (
           <>
             <Button

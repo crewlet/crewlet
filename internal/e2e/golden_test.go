@@ -1,11 +1,9 @@
 package e2e
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -22,13 +20,11 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/period"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -54,11 +50,11 @@ import (
 // one, so a running company showed an empty dashboard for ever. Every
 // component's own tests passed.
 
-// dial opens a socket the way the dashboard's LiveSocket does.
+// dial opens a socket on the path the dashboard's LiveSocket dials.
 func (n *node) dial(t *testing.T) *websocket.Conn {
 	t.Helper()
 	target := "ws" + strings.TrimPrefix(n.server.URL, "http") + "/ws/stream"
-	conn, _, err := websocket.Dial(t.Context(), target, nil)
+	conn, _, err := websocket.Dial(t.Context(), target, socketOptions())
 	if err != nil {
 		t.Fatalf("dial %s: %v", target, err)
 	}
@@ -216,12 +212,13 @@ func (c *capture) turnStages(t *testing.T) []string {
 }
 
 // sawRefusal reports whether a seat's pushed meter carried a refused window:
-// stamped, and judged `refusing` by the engine. By ROLE, which is the key an
-// `agents` push carries its changed rows under.
-func (c *capture) sawRefusal(t *testing.T, role string) bool {
+// stamped, and judged `refusing` by the engine. By the seat's AGENT ID, the
+// one key an `agents` push carries its changed rows under and the client
+// merges them on.
+func (c *capture) sawRefusal(t *testing.T, agentID string) bool {
 	t.Helper()
 	for _, row := range c.agentRows(t) {
-		if row["role"] != role {
+		if row["agent_id"] != agentID {
 			continue
 		}
 		meter, _ := row["budget"].(map[string]any)
@@ -236,18 +233,57 @@ func (c *capture) sawRefusal(t *testing.T, role string) bool {
 	return false
 }
 
-// seatStates reports every activity an `agents` push put a seat in, by role.
+// seatStates reports every activity an `agents` push put a seat in, by the
+// agent id the client merges the row onto its roster by.
 func (c *capture) seatStates(t *testing.T) map[string][]string {
 	t.Helper()
 	out := map[string][]string{}
 	for _, row := range c.agentRows(t) {
-		role, _ := row["role"].(string)
+		id, _ := row["agent_id"].(string)
 		activity, _ := row["activity"].(string)
-		if role != "" && activity != "" {
-			out[role] = append(out[role], activity)
+		if id != "" && activity != "" {
+			out[id] = append(out[id], activity)
 		}
 	}
 	return out
+}
+
+// rosterIDs reports the agent ids the snapshot's roster carries — the rows an
+// `agents` push is merged onto.
+func (c *capture) rosterIDs(t *testing.T) []string {
+	t.Helper()
+	var out []string
+	for _, raw := range c.all() {
+		var env struct {
+			Kind string `json:"kind"`
+			Data struct {
+				Agents []map[string]any `json:"agents"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(raw, &env) != nil || env.Kind != "snapshot" {
+			continue
+		}
+		for _, row := range env.Data.Agents {
+			if id, _ := row["agent_id"].(string); id != "" {
+				out = append(out, id)
+			}
+		}
+	}
+	return out
+}
+
+// seatAgentID is a seat's agent id on the running company.
+func seatAgentID(t *testing.T, n *node, handle string) string {
+	t.Helper()
+	c := n.engine.Company()
+	if c == nil || c.Org == nil {
+		t.Fatalf("the node runs no company, so seat %q has no agent id", handle)
+	}
+	id, ok := c.Org.AgentIDFor(c.Org.AgentSeatByHandle(handle))
+	if !ok {
+		t.Fatalf("seat %q is no agent seat in the running company", handle)
+	}
+	return id.String()
 }
 
 // lastRollup returns the most recent `tokens` frame's payload, or nil.
@@ -391,7 +427,7 @@ func (n *node) publishWakeKeyed(t *testing.T, handle, text, partition, conversat
 	// names no conversation.
 	notify.Stamp(ev, partition, conversation)
 	if err := n.engine.Backends().Queue.Publish(t.Context(),
-		topics.AgentInbox(handle), ev); err != nil {
+		seatInbox(t, n, handle), ev); err != nil {
 		t.Fatalf("wake %s: %v", handle, err)
 	}
 }
@@ -513,9 +549,25 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 	// The point of the gate. Not "an event arrived" but "the seat's row
 	// moved": the projection put CEO into `working` and hung an in-flight
 	// call off it naming the phase and the model.
+	ceo := seatAgentID(t, n, "ceo")
 	states := frames.seatStates(t)
-	if !slices.Contains(states["CEO"], "working") {
-		t.Errorf("the seat never showed as working; states = %v", states["CEO"])
+	if !slices.Contains(states[ceo], "working") {
+		t.Errorf("the seat never showed as working; states = %v", states)
+	}
+	// AND EVERY PUSHED ROW NAMES A SEAT THE ROSTER CARRIES, by the one key
+	// the client merges on. A push keyed by anything the roster row does not
+	// also carry — the role name it used to be — reaches no row: two seats
+	// sharing a name share one, and a renamed seat's in-flight rows reach
+	// none, while every assertion above still passes.
+	roster := frames.rosterIDs(t)
+	if !slices.Contains(roster, ceo) {
+		t.Errorf("the snapshot's roster does not carry the CEO's agent id; roster = %v", roster)
+	}
+	for id := range states {
+		if !slices.Contains(roster, id) {
+			t.Errorf("an agents push moved %q, which no roster row carries — "+
+				"the client has nothing to merge it onto", id)
+		}
 	}
 	calls := frames.liveCalls(t)
 	if len(calls) == 0 {
@@ -774,7 +826,7 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 			"want the records' %v", got, cacheWrite)
 	}
 	stored, err := n.engine.Backends().Store.Events().PhaseTokens(t.Context(),
-		store.PhaseTokenQuery{SinceDays: 1})
+		store.PhaseTokenQuery{SinceDays: 1, At: time.Now()})
 	if err != nil {
 		t.Fatalf("phase tokens: %v", err)
 	}
@@ -806,30 +858,30 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 const (
 	dashboardEnv  = "CREWLET_DASHBOARD_ROOT"
 	replayTimeout = 60 * time.Second
-
-	// replayOperator and replayToken are the founder's credential in the
-	// capture: the token's id is the operator id the founder's seat binds,
-	// which is what admits them to the act transport as a person. The seat
-	// binds it through replayOperatorVar, a reference only the capturing
-	// node's environment resolves.
-	replayOperator    = "founder"
-	replayToken       = "e2e-replay-founder-token-0123456789"
-	replayOperatorVar = "CREWLET_TEST_FOUNDER_OPERATOR_ID"
 )
 
 // actCapture is one `/operator/act` exchange as the replay receives it: the
-// tool and arguments the dashboard would send, the request id it would send
-// them under, and the engine's answer, status and body byte for byte.
+// tool and arguments the dashboard would send, the operation key it would send
+// them under in the `Idempotency-Key` header, and the engine's answer, status
+// and body byte for byte.
 type actCapture struct {
-	Tool      string         `json:"tool"`
-	Args      map[string]any `json:"args"`
-	RequestID string         `json:"request_id"`
-	Status    int            `json:"status"`
-	Body      string         `json:"body"`
+	Tool   string         `json:"tool"`
+	Args   map[string]any `json:"args"`
+	OpID   string         `json:"op_id"`
+	Status int            `json:"status"`
+	Body   string         `json:"body"`
 }
 
-// captureAct makes one real write as the founder, through the route the
-// dashboard writes through, and returns the exchange for the replay.
+// captureAct makes one real write as a person signed in to the identity
+// estate, through the route the dashboard writes through, and returns the
+// exchange for the replay.
+//
+// AS THE PERSON THE SESSION RESOLVES TO, and nothing else: the browser holds
+// the cookie a password sign-in minted, presents the deployment's Origin, and
+// sends its own operation key — exactly what the dashboard's `act` sends. No
+// seat is bound to a credential in the company document; the person is bound
+// to their seat in the identity directory, which is what makes the write
+// theirs.
 //
 // THE SERVER'S HALF OF THE SESSION FLOOR, held here before the client reads
 // it: the answer names a position in the grammar a read accepts back, and a
@@ -841,71 +893,47 @@ type actCapture struct {
 //
 // A PIN, because it wakes nobody: the capture has already ended, and a write
 // that routed a notice would start a turn the test then tears down under.
-func captureAct(t *testing.T, n *node) []byte {
+func captureAct(t *testing.T, n *node, b *browser) []byte {
 	t.Helper()
-	authed := func(method, path string, body []byte) (int, []byte) {
-		t.Helper()
-		req, err := http.NewRequestWithContext(t.Context(), method,
-			n.server.URL+path, bytes.NewReader(body))
-		if err != nil {
-			t.Fatalf("%s %s: %v", method, path, err)
-		}
-		req.Header.Set("Authorization", "Bearer "+replayToken)
-		if body != nil {
-			req.Header.Set("Content-Type", "application/json")
-		}
-		res, err := n.server.Client().Do(req)
-		if err != nil {
-			t.Fatalf("%s %s: %v", method, path, err)
-		}
-		defer res.Body.Close()
-		raw, err := io.ReadAll(res.Body)
-		if err != nil {
-			t.Fatalf("%s %s: reading the answer: %v", method, path, err)
-		}
-		return res.StatusCode, raw
-	}
-
-	// WHO THE TOKEN IS, and that the node offers them the write: the viewer
-	// names the act transport's verbs from the same surface that serves it.
-	status, raw := authed(http.MethodGet, "/viewer", nil)
-	var viewer struct {
-		Handle string   `json:"handle"`
-		Acts   []string `json:"acts"`
-	}
-	if status != http.StatusOK || json.Unmarshal(raw, &viewer) != nil || viewer.Handle == "" {
-		t.Fatalf("the founder's token names no seat: %d %s", status, raw)
+	// WHO THE SESSION IS, and that the node offers them the write: the
+	// viewer names the act transport's verbs from the same surface that
+	// serves it.
+	status, viewer := b.send(n, http.MethodGet, "/viewer", nil)
+	handle, _ := viewer["handle"].(string)
+	acts, _ := viewer["acts"].([]any)
+	if status != http.StatusOK || handle != janeSeat {
+		t.Fatalf("the session reads as %d %v, want %s at seat %s", status, viewer,
+			janeLogin, janeSeat)
 	}
 	exchange := actCapture{
 		Tool: "set_pins",
 		Args: map[string]any{"favorites": map[string]any{
 			"add": []any{map[string]any{"kind": "project", "id": "ENG"}},
 		}},
-		RequestID: uuid.Must(uuid.NewV7()).String(), // the act transport requires a UUIDv7
+		// A UUIDv7, which is what the dashboard's `act` mints: the key
+		// carries the instant its operation began, which is what a node
+		// judges a retry by.
+		OpID: uuid.Must(uuid.NewV7()).String(),
 	}
-	if !slices.Contains(viewer.Acts, exchange.Tool) {
-		t.Fatalf("the viewer does not offer %s to the founder (acts %v)",
-			exchange.Tool, viewer.Acts)
+	if !slices.Contains(acts, any(exchange.Tool)) {
+		t.Fatalf("the viewer does not offer %s to %s (acts %v)", exchange.Tool,
+			janeLogin, acts)
 	}
 
-	body, err := json.Marshal(map[string]any{
-		"request_id": exchange.RequestID, "args": exchange.Args,
-	})
-	if err != nil {
-		t.Fatalf("encoding the act request: %v", err)
-	}
-	exchange.Status, raw = authed(http.MethodPost, "/operator/act/"+exchange.Tool, body)
+	var raw []byte
+	exchange.Status, raw = b.sendRaw(n, http.MethodPost, "/operator/act/"+exchange.Tool,
+		exchange.OpID, map[string]any{"args": exchange.Args})
 	exchange.Body = string(raw)
 	var answer struct {
 		Outcome  string `json:"outcome"`
 		Position string `json:"position"`
 	}
 	if exchange.Status != http.StatusOK || json.Unmarshal(raw, &answer) != nil {
-		t.Fatalf("the founder's %s was not answered: %d %s", exchange.Tool,
+		t.Fatalf("%s's %s was not answered: %d %s", janeLogin, exchange.Tool,
 			exchange.Status, raw)
 	}
 	if answer.Outcome != "applied" && answer.Outcome != "pending" {
-		t.Fatalf("the founder's %s came to %q, want applied or pending: %s",
+		t.Fatalf("%s's %s came to %q, want applied or pending: %s", janeLogin,
 			exchange.Tool, answer.Outcome, raw)
 	}
 	if _, err := statelog.ParsePosition(answer.Position); err != nil {
@@ -914,8 +942,8 @@ func captureAct(t *testing.T, n *node) []byte {
 
 	// THE READ AT THE FLOOR: served at `session`, and holding the write.
 	query := url.Values{"read_level": {"session"}, "min_position": {answer.Position}}
-	status, raw = authed(http.MethodGet,
-		"/work/people/"+url.PathEscape(viewer.Handle)+"?"+query.Encode(), nil)
+	status, raw = b.sendRaw(n, http.MethodGet,
+		"/work/people/"+url.PathEscape(handle)+"?"+query.Encode(), "", nil)
 	var person struct {
 		Level     string             `json:"read_level"`
 		Favorites []tracker.Favorite `json:"favorites"`
@@ -973,37 +1001,34 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	// stamp, which both write. The seat is its own scope, so the company's
 	// turn beside it is charged against nothing it spent.
 	//
-	// AND A PERSON WHO CAN WRITE: the founder's seat binds a bearer token, so
-	// the capture can end with a real `/operator/act` answer — the one the
-	// dashboard's session floor is raised from. BOUND THROUGH A `${VAR}`, as
-	// a deployment binds one, which the node resolves through its own chain
-	// on both surfaces the capture reads it through: the read surface's
-	// (`/viewer`, queries.Sources.Env) and the act transport's. The variable
-	// is handed to this node alone, so a surface that read the process
-	// environment instead names the founder unbound and the capture stops at
-	// its first request.
+	// Both ceilings are written where an operator writes them — the
+	// company's through `/config`, the seat's through its org chart runtime
+	// half — in the `{day: N}` form, before the socket opens. And the
+	// company runs MID-DAY ON ITS OWN CLOCK, so the refusal waited for below
+	// is stamped in the day it is read back in ([middayZone]).
+	//
+	// AND A PERSON WHO CAN WRITE: a password sign-in on this node, bound to
+	// the founder's seat by the invitation that enrolled her, so the capture
+	// can end with a real `/operator/act` answer — the one the dashboard's
+	// session floor is raised from.
 	n := startNode(t, nodeSpec{company: func(doc string) string {
 		doc = strings.Replace(doc, "roles:\n", "roles:\n"+
 			"  - name: CFO\n"+
 			"    handle: cfo\n"+
-			"    llm: scripted\n"+
-			"    token_budget: {day: 100}\n", 1)
-		doc = strings.Replace(doc, "      slack_user_id: U0FOUNDER\n",
-			"      slack_user_id: U0FOUNDER\n"+
-				"      crewlet_operator_id: ${"+replayOperatorVar+"}\n", 1)
-		// MID-DAY ON THE COMPANY'S CLOCK, so the refusal waited for below
-		// is stamped in the day it is read back in ([middayZone]).
-		return doc + "\ntimezone: " + middayZone() + "\ntoken_budget: {day: 100000000}\n"
-	}, boot: func(boot *config.Bootstrap) {
-		boot.API.Auth.Tokens = []config.APIToken{{ID: replayOperator, Token: replayToken}}
-	}, env: map[string]string{replayOperatorVar: replayOperator}})
+			"    llm: scripted\n", 1)
+		return doc + "\ntimezone: " + middayZone() + "\n"
+	}, boot: withSignIn})
+	waitFor(t, "the native backends to hydrate", hydrated(t, n.engine))
+	setCompanyCeilings(t, n, map[period.Period]int{period.Day: 100_000_000})
+	setSeatCeilings(t, n, "cfo", map[period.Period]int{period.Day: 100})
 	zone := companyMidday(t, n.engine)
+	jane := newBrowser(t)
+	signIn(t, n, jane)
 
 	waitFor(t, "the seats to be claimed", func() bool {
 		held := n.engine.Node().Host().Held()
 		return slices.Contains(held, "ceo") && slices.Contains(held, "cfo")
 	})
-	waitFor(t, "the native backends to hydrate", hydrated(t, n.engine))
 	conn := n.dial(t)
 	frames := &capture{}
 	ctx, cancel := context.WithCancel(t.Context())
@@ -1017,10 +1042,9 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	// budget push waited for below is one published after it.
 	n.wake(t, "cfo", "What did we spend this week?")
 	budgets := n.engine.Backends().Fleet
-	company := n.engine.Company()
-	cfoID, _ := company.Org.AgentIDFor(company.Org.AgentSeatByHandle("cfo"))
+	cfoID := seatAgentID(t, n, "cfo")
 	waitFor(t, "the seat's own ceiling to refuse a call", func() bool {
-		got, err := budgets.Used(t.Context(), coord.AgentScope(cfoID.String()),
+		got, err := budgets.Used(t.Context(), coord.AgentScope(cfoID),
 			coord.WindowsAt(time.Now(), zone))
 		return err == nil && !got.In(period.Day).RefusedAt.IsZero()
 	})
@@ -1062,7 +1086,7 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	// The meters are published on engine.BudgetReportInterval, so one
 	// carrying the refusal lands within an interval of it at the latest.
 	waitFor(t, "a budget push carrying the refusal", func() bool {
-		return frames.sawRefusal(t, "CFO")
+		return frames.sawRefusal(t, cfoID)
 	})
 	cancel()
 
@@ -1103,8 +1127,9 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	}
 
 	// THE FLEET AND ITS ALARMS, the server's half of what the replay holds
-	// the health card to: a live node counted, and a standing alarm with its
-	// worst severity — the company has never taken a backup.
+	// the engine panel to: a live node counted, and a standing alarm with the
+	// one that has stood longest named, since the company has never taken a
+	// backup.
 	health := frames.lastHealth(t)
 	if nodes, _ := health["nodes"].(float64); nodes < 1 {
 		t.Errorf("the last health push counts %v live nodes, want at least this one",
@@ -1119,7 +1144,7 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	}
 
 	// --- a write, and the floor it raises ------------------------------- //
-	answer := captureAct(t, n)
+	answer := captureAct(t, n, jane)
 
 	// The RAW bytes, as strings, in arrival order. Not re-encoded: the
 	// client must be fed what the server wrote, or the replay certifies
@@ -1276,17 +1301,24 @@ func TestATightBudgetStopsTheTurnAndCountsTheRoundItRefused(t *testing.T) {
 	// bites partway through the turn rather than before it starts, which is
 	// the case a pre-flight check would miss.
 	//
-	// ALL OF IT IN ONE COMPANY DAY, which is what the arithmetic assumes: the
-	// gate cuts each round's windows when the round is charged, so with the
-	// company's midnight between the onboarding round and the execute round
-	// each lands in a day with room and nothing is ever refused. The company
-	// runs on a zone whose local time is noon as the case starts
+	// THE CEILING IS WRITTEN WHERE AN OPERATOR WRITES IT, through `/config`
+	// once the node is running, and the case waits for the node to apply it
+	// before it wakes the seat: a ceiling seeded from the company file would
+	// prove the boot and nothing about a running gate picking up a cap moved
+	// under it.
+	//
+	// AND ALL OF IT IN ONE COMPANY DAY, which is what the arithmetic assumes:
+	// the gate cuts each round's windows when the round is charged, so with
+	// the company's midnight between the onboarding round and the execute
+	// round each lands in a day with room and nothing is ever refused. The
+	// company runs on a zone whose local time is noon as the case starts
 	// ([middayZone]).
 	aux, round := textReplyUsage.tokens(), toolUseUsage.tokens()
 	limit := aux + round + round/2
 	n := startWith(t, func(doc string) string {
-		return doc + fmt.Sprintf("\ntimezone: %s\ntoken_budget: {day: %d}\n", middayZone(), limit)
+		return doc + "\ntimezone: " + middayZone() + "\n"
 	})
+	setCompanyCeilings(t, n, map[period.Period]int{period.Day: limit})
 	zone := companyMidday(t, n.engine)
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(n.engine.Node().Host().Held(), "ceo")

@@ -25,7 +25,7 @@ A single loop ticks on a short interval (default 10s). Each tick:
 3. Resolves the **runner(s)** for each due fire.
 4. Claims the fire in the fleet's `fires` slot (at-most-once) and
    publishes a `TaskAssigned` to each runner's inbox topic
-   (`crewlet.agent.{handle}.inbox`).
+   (`crewlet.agent.{seat-id}.inbox`).
 
 Because it reuses the existing `TaskAssigned` event, the agent runtime
 path is **unchanged** — a scheduled turn runs executor → reviewer like
@@ -45,7 +45,7 @@ flowchart TD
     LEAD --> C
     C{"Claim the fire in the fleet's fires slot"}
     C -->|"already claimed"| SKIP["Skip"]
-    C -->|"claimed"| P["Publish task_assigned to crewlet.agent.HANDLE.inbox<br/>and scheduled_task_fired"]
+    C -->|"claimed"| P["Publish task_assigned to crewlet.agent.SEAT-ID.inbox<br/>and scheduled_task_fired"]
     P --> TURN["An ordinary executor and reviewer turn<br/>under the schedule's wall-clock cap"]
 ```
 
@@ -73,7 +73,7 @@ schedules:
 | `task` | — (required) | The task prompt handed to the runner agent. |
 | `timezone` | the company's [`timezone`](#which-clock-a-schedule-fires-on) | IANA timezone the cron is evaluated in. |
 | `target` | `each` | **Unit schedules only.** Who runs it (see [Delivery](#delivery-who-runs-it)). Ignored for role schedules. [Human seats](humans-in-the-org.md) never run schedules: `each` fans out to direct agent roles only, an enabled `lead` schedule under a (possibly inherited) human lead is a config error, and human seats cannot define role schedules. |
-| `enabled` | `true` | `false` keeps the schedule in config but never fires it. |
+| `enabled` | `true` | `false` keeps the schedule in config but never fires it. An enabled schedule nothing can run — `each` on a unit with no direct agent member, `lead` under a person, or a schedule on a human seat — is refused in the company document, a member made a person's seat included. A `lead` schedule on a unit nothing leads is admitted and skipped by the scheduler, which logs `schedule_no_runners` whenever it is due. |
 | `timeout_seconds` | `180` | Hard wall-clock cap on the scheduled turn. |
 | `catchup` | `true` | Whether to fire a recent missed tick on (re)start. |
 
@@ -139,8 +139,9 @@ matches.
 ```yaml
 units:
   - name: Backend
+    id: backend                          # the unit's key; `name` above is display
     type: team
-    lead: Backend Lead
+    lead: backend-lead                   # the lead seat's handle
     channel: C_BACKEND
     schedules:
       # target defaults to `each` → every direct member posts their own update
@@ -232,6 +233,14 @@ DST-correct (see [DST & cron edge cases](#dst--cron-edge-cases)). The
 identity is five separate components, and the key they are rendered into
 escapes each one, so a delimiter inside a unit or schedule name cannot
 make two different fires claim one key.
+
+`scope_id` is the scope's **identity**, not the name you wrote: a seat's
+agent id for a role schedule, a unit's key for a unit one. Neither moves
+when somebody relabels a team, so two teams that happen to share a display
+name can no longer share a fire, which while the key was that name meant one
+team's standup claimed the other's minute and the other never ran. Every
+surface that shows a scope shows `scope_name` beside it: the handle, or the
+unit's key, resolved through the company the node is running.
 
 The claim **fails closed**: a coordination store that cannot be read
 yields no dispatch and the tick is retried on the next one. That is the
@@ -383,12 +392,13 @@ holds the `scheduler` fleet duty.
 
 ## Observability
 
-- **Dashboard.** **Agents › Schedules** (`#/agents/schedules`) lists every
-  configured schedule — name, scope (a role's seat by its name, or a unit),
+- **Dashboard.** **Company › Schedules** (`#/company/schedules`) lists every
+  configured schedule — name, scope (a role's seat by its handle, or a unit by
+  its key, each labelled with its name),
   cron with what it means in words, task, whom it wakes, when it next fires
   and how it last went — and the recent dispatch ledger below it, both
   sortable. One schedule's own page
-  (`#/agents/schedules/{scope_type}/{scope_id}/{name}`) adds its whole
+  (`#/company/schedules/{scope_type}/{scope_id}/{name}`) adds its whole
   definition, the fires after the next worked out in the schedule's own zone,
   and every fire this node's ledger still holds for it (the `schedule_runs`
   query), because the company-wide ledger is only its newest fifty. The list is backed by
@@ -397,9 +407,9 @@ holds the `scheduler` fleet duty.
   and `recent_runs` (the 50 most recent `scheduled_runs` rows). The next-fire times tick as you watch: every relative time in the
   product reads one shared clock rather than being baked at render.
 - **`ScheduledTaskFired`** event (`crewlet.events.scheduled_task_fired`) is
-  emitted per dispatch with `scope_type`, `scope_id`, `schedule_name`,
-  `target_handle`, and `scheduled_at` — surfaced in the dashboard / event
-  store.
+  emitted per dispatch with `scope_type`, `scope_id`, `scope_name`,
+  `schedule_name`, `target_handle`, and `scheduled_at` — surfaced in the
+  dashboard / event store.
 - The coordination store's `fires` slot is the at-most-once claim; the
   node's `scheduled_runs` table is its own dispatch history.
 - Structured logs: `scheduler_armed`, `scheduler_disarmed`,

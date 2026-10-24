@@ -13,10 +13,12 @@ import (
 // GitPrefix is where a person's git client reaches the code host, and
 // CodePrefix the code host's REST reads.
 //
-// Both are ALWAYS GUARDED, and [GuardedPrefixes] reads these constants rather
-// than spelling its own, so the guard and the classifier cannot disagree about
-// where git starts. Each ends in a slash, which is what stops it covering a
-// sibling: /github is not a git route, and /codes is not a code read.
+// Both are GUARDED, as every route the exemption list ([Unguarded]) does not
+// name is, and neither is on the public listener ([Public] names neither).
+// Declared once here, so the classifier and every reader of where git starts
+// cannot disagree about it. Each ends in a slash, which is what stops it
+// covering a sibling: /github is not a git route, and /codes is not a code
+// read.
 const (
 	GitPrefix  = "/git/"
 	CodePrefix = "/code/"

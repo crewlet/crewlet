@@ -33,10 +33,32 @@
  * ONE PAGE, and `capped` says so: past [INBOX_PAGE] the engine hands back a
  * cursor, the count is a floor and is written as one ("50+"), never as a total
  * the engine did not compute.
+ *
+ * # Whose, and when it is asked again
+ *
+ * UNDER `owner`, the one name the viewer's own record is kept under — their
+ * seat when bound, their login when not — so an UNBOUND reader's badge counts
+ * the notices their record actually holds rather than nothing: an unbound
+ * principal is an ordinary state (`lib/viewer.ts`), and asking by `handle`
+ * left their badge blank while their assistant wrote notices to their login.
+ *
+ * PUSHED AS WELL AS POLLED. The frame watches the viewer's own record
+ * (`app/Shell.tsx`), the engine sends `inbox_changed` when a committed batch
+ * moves it, and the read asks again within half a second of one
+ * (`refetchOnInboxOf`). The minute's poll stays, because a frame lost to
+ * backpressure or a reconnect is never re-sent and a node that cannot decide
+ * the watch sends none until it can.
+ *
+ * # Only with Tracker
+ *
+ * The inbox is the tracker's, so a reader without Tracker is asked nothing
+ * and has no count: the sidebar draws the Inbox row locked instead of a
+ * figure the engine would refuse.
  */
 
 import { createContext, createElement, useContext, useMemo, type ReactNode } from "react";
 import { useQuery } from "./useQuery.ts";
+import { useServicesAsk } from "./services.ts";
 import { useViewer } from "./viewer.ts";
 
 /** The page the count is taken over — the engine's own bound on the read. */
@@ -44,18 +66,30 @@ export const INBOX_PAGE = 50;
 
 export interface InboxCounts {
   /** Unread primary notices on the first page; null until the read answers
-   *  or where there is nobody to ask for (anonymous, unbound). */
+   *  or where there is nobody to ask for (anonymous). */
   waiting: number | null;
   /** More exist past this page, so `waiting` is a floor. */
   capped: boolean;
 }
 
-/** The one question, for whoever's inbox it is. */
-function useInboxRead(handle: string, enabled: boolean): InboxCounts {
+/**
+ * The one question, for whoever's inbox it is — the record named `owner`.
+ * `watched` is whether this tab's socket watches that record, which only the
+ * viewer's own is: a push for any other never reaches the tab.
+ */
+function useInboxRead(owner: string, enabled: boolean, watched: boolean): InboxCounts {
+  // THE NOTICES ARE CREWLET WORKS': where the company runs another tracker or
+  // none the engine refuses the read, and it was asked on a timer behind every
+  // screen of every tab all the same.
+  const ask = useServicesAsk();
   const inbox = useQuery(
     "work_inbox",
-    handle ? { handle, limit: INBOX_PAGE, unread: true, primary_only: true } : undefined,
-    { enabled: enabled && handle !== "", pollMs: 60_000 },
+    owner ? { handle: owner, limit: INBOX_PAGE, unread: true, primary_only: true } : undefined,
+    {
+      enabled: enabled && ask.tracker && owner !== "",
+      pollMs: 60_000,
+      refetchOnInboxOf: watched ? owner : "",
+    },
   );
   return useMemo(() => {
     const data = inbox.data;
@@ -72,7 +106,8 @@ const Reading = createContext<InboxCounts | null>(null);
  * second standing read of the one fact a tab has about who it is.
  */
 export function InboxCountsProvider({ children }: { children: ReactNode }) {
-  const counts = useInboxRead(useViewer().handle, true);
+  const viewer = useViewer();
+  const counts = useInboxRead(viewer.owner, viewer.tracker, true);
   return createElement(Reading.Provider, { value: counts }, children);
 }
 
@@ -99,18 +134,20 @@ export function useInboxCounts(): InboxCounts {
  *
  * THE VIEWER'S OWN IS THE FRAME'S READING, never a second read of it — so the
  * figure on your own profile and the badge in the sidebar are one answer and
- * cannot name two numbers. Anybody else's (an operator reading a colleague's
- * day) is the same question asked of their inbox, which the engine answers
- * only for an operator; `enabled` is the caller's word that this reader may
- * ask. It used to be the length of the person record's `unread` list, which
+ * cannot name two numbers. Anybody else's (a lead or an admin reading a
+ * colleague's day) is the same question asked of their inbox, which the
+ * engine answers only to them, with Tracker; `enabled` is the caller's word
+ * that this reader may ask. It used to be the length of the person record's `unread` list, which
  * is not a count at all: it holds the EXCEPTIONS below the read mark, notices
  * marked unread again, so a person with fifty waiting read "Unread 0".
  */
 export function useInboxCountsOf(handle: string, enabled: boolean): InboxCounts {
   const viewer = useViewer();
-  const own = handle !== "" && handle === viewer.handle;
+  // THE VIEWER'S OWN RECORD under either name it answers to: a bound person's
+  // record is kept under their seat, and a profile names them by it.
+  const own = handle !== "" && (handle === viewer.owner || handle === viewer.handle);
   const frame = useInboxCounts();
-  const theirs = useInboxRead(handle, enabled && !own);
+  const theirs = useInboxRead(handle, enabled && !own, false);
   return own ? frame : theirs;
 }
 

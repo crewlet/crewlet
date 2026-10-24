@@ -7,12 +7,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // deskFake is the run record and the seat inboxes answer_run reaches.
@@ -36,25 +39,50 @@ func (d *deskFake) Deliver(_ context.Context, given types.SandboxAnswerGiven) er
 	return d.deliverErr
 }
 
-// answerRunTool is the operator catalogue's answer_run over these fakes.
-func answerRunTool(t *testing.T, desk *deskFake) tools.Callable {
+// answerRunTool is the operator catalogue's answer_run over these fakes, called
+// as the deployment's own operator.
+func answerRunTool(t *testing.T, desk *deskFake) runAnswerRig {
 	t.Helper()
+	return newAnswerRunRig(t, desk, operatorCaller, seatLeads)
+}
+
+// runAnswerRig is answer_run called as one principal, decided by the real
+// authority table over a chart. The principal rides the CALL's own context,
+// so a case that cancels its context cancels the call.
+type runAnswerRig struct {
+	tool   tools.Callable
+	caller iam.Principal
+}
+
+func (r runAnswerRig) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
+	return r.tool.Call(iam.WithPrincipal(ctx, r.caller), args)
+}
+
+func newAnswerRunRig(t *testing.T, desk *deskFake, caller iam.Principal,
+	chart authz.Chart) runAnswerRig {
+
+	t.Helper()
+	o := organization(t)
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
-		Runs: builtin.RunDeps{Desk: desk, Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
-			return builtin.Actor{Handle: "founder-token", Kind: tracker.AuthorOperator, Seat: "founder"}, nil
-		}},
+		Org:       func() *org.Organization { return o },
+		Runs:      builtin.RunDeps{Desk: desk, Actor: builtin.PrincipalActor},
+		Authorize: builtin.Decide(chart),
 	}) {
 		if tool.Name() == builtin.AnswerRunTool {
-			return tool
+			return runAnswerRig{tool: tool, caller: caller}
 		}
 	}
 	t.Fatal("the operator catalogue serves no answer_run with a run desk wired")
-	return nil
+	return runAnswerRig{}
 }
 
-func parked(turnID, status string) sandbox.PendingRun {
-	return sandbox.PendingRun{TurnID: turnID, AgentHandle: "swe", Status: status, Question: "which branch?",
-		LaunchID: "launch-" + turnID}
+// parked is a run of the CTO's seat a turn the founder's message woke
+// launched, naming the founder's seat by its handle.
+func parked(t *testing.T, turnID, status string) sandbox.PendingRun {
+	t.Helper()
+	return sandbox.PendingRun{TurnID: turnID, AgentHandle: "agent-cto",
+		AgentID: ctoSeat(t).String(), Requester: "founder", Status: status,
+		Question: "which branch?", LaunchID: "launch-" + turnID}
 }
 
 // AN ANSWER IS PUT ON THE SEAT'S INBOX AS THE PERSON WHO GAVE IT, naming the
@@ -65,16 +93,18 @@ func parked(turnID, status string) sandbox.PendingRun {
 // question.
 func TestAnswerRunDeliversTheAnswerAsThePersonAndAnswersPending(t *testing.T) {
 	t.Parallel()
-	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": parked("t1", sandbox.StatusReseed)}}
+	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": parked(t, "t1", sandbox.StatusReseed)}}
 	result, err := answerRunTool(t, desk).Call(t.Context(),
 		map[string]any{"turn_id": " t1 ", "answer": "  use main  "})
 	if err != nil || result.Failed {
 		t.Fatalf("answer_run = %+v, %v", result, err)
 	}
+	// AS THE PERSON, in iam.ActorFor's three halves, about the run's seat
+	// by its id.
 	want := types.SandboxAnswerGiven{
-		TurnID: "t1", AgentHandle: "swe", Answer: "use main",
-		AnsweredBy: "founder-token", AnsweredBySeat: "founder",
-		LaunchID: "launch-t1",
+		TurnID: "t1", Agent: ctoSeat(t).String(), AgentHandle: "agent-cto",
+		Answer: "use main", AnsweredBy: "ops", AnsweredByKind: "human",
+		OperatorID: "session:ops-1", LaunchID: "launch-t1",
 	}
 	if len(desk.delivered) != 1 || desk.delivered[0] != want {
 		t.Fatalf("delivered %+v, want %+v", desk.delivered, want)
@@ -96,10 +126,10 @@ func TestAnswerRunRefusesARunThatIsNotWaiting(t *testing.T) {
 	for _, status := range []string{sandbox.StatusRunning, sandbox.StatusLaunching, sandbox.StatusResumed} {
 		t.Run(status, func(t *testing.T) {
 			t.Parallel()
-			desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": parked("t1", status)}}
+			desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": parked(t, "t1", status)}}
 			result, _ := answerRunTool(t, desk).Call(t.Context(),
 				map[string]any{"turn_id": "t1", "answer": "use main"})
-			if !result.Failed || result.Refusal != tools.RefusalNotRunning {
+			if !result.Failed || tools.RefusalOf(result) != tools.RefusalNotRunning {
 				t.Fatalf("answer_run on a %s run = %+v, want not_running", status, result)
 			}
 			if len(desk.delivered) != 0 {
@@ -110,7 +140,7 @@ func TestAnswerRunRefusesARunThatIsNotWaiting(t *testing.T) {
 	desk := &deskFake{runs: map[string]sandbox.PendingRun{}}
 	result, _ := answerRunTool(t, desk).Call(t.Context(),
 		map[string]any{"turn_id": "gone", "answer": "use main"})
-	if !result.Failed || result.Refusal != tools.RefusalNotRunning {
+	if !result.Failed || tools.RefusalOf(result) != tools.RefusalNotRunning {
 		t.Fatalf("answer_run on a run with no record = %+v, want not_running", result)
 	}
 }
@@ -120,7 +150,7 @@ func TestAnswerRunRefusesARunThatIsNotWaiting(t *testing.T) {
 func TestAnswerRunThatMayHaveLandedAnswersUnknown(t *testing.T) {
 	t.Parallel()
 	desk := &deskFake{
-		runs:       map[string]sandbox.PendingRun{"t1": parked("t1", sandbox.StatusAwaiting)},
+		runs:       map[string]sandbox.PendingRun{"t1": parked(t, "t1", sandbox.StatusAwaiting)},
 		deliverErr: errors.New("publish ack timed out"),
 	}
 	result, _ := answerRunTool(t, desk).Call(t.Context(),
@@ -134,14 +164,54 @@ func TestAnswerRunThatMayHaveLandedAnswersUnknown(t *testing.T) {
 // run as one tool reply.
 func TestAnswerRunRefusesAnAnswerTooLongToSplice(t *testing.T) {
 	t.Parallel()
-	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": parked("t1", sandbox.StatusAwaiting)}}
+	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": parked(t, "t1", sandbox.StatusAwaiting)}}
 	result, _ := answerRunTool(t, desk).Call(t.Context(), map[string]any{
 		"turn_id": "t1", "answer": strings.Repeat("a", builtin.MaxRunAnswerBytes+1),
 	})
-	if !result.Failed || result.Refusal != tools.RefusalInvalid {
+	if !result.Failed || tools.RefusalOf(result) != tools.RefusalInvalid {
 		t.Fatalf("answer_run with an oversized answer = %+v, want invalid", result)
 	}
 	if len(desk.delivered) != 0 {
 		t.Error("an oversized answer was delivered")
+	}
+}
+
+// A RUN'S QUESTION IS ITS REQUESTER'S TO ANSWER, or its seat's lead's — and
+// nobody else's. The requester leads nobody and is admitted as themselves (the
+// run's row names their seat by its handle); the CTO's
+// lead is admitted as its lead; a colleague who is neither is refused with the
+// authority's own answer, and nothing reaches the seat's inbox.
+func TestARunIsAnsweredByItsRequesterOrItsSeatsLead(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		caller  iam.Principal
+		allowed bool
+	}{
+		{"the person who asked for the work", boundTo("founder"), true},
+		{"the run's seat's lead", boundTo("jane"), true},
+		{"a colleague who is neither", boundTo("sam", iam.Apps...), false},
+		{"a seat, however granted", iam.Principal{ID: uuid.New(), Kind: iam.KindSeat,
+			Login: "agent-ceo", Seat: "agent-ceo", Stage: iam.StageActive,
+			Grants: iam.AllGrants}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			desk := &deskFake{runs: map[string]sandbox.PendingRun{
+				"t1": parked(t, "t1", sandbox.StatusAwaiting)}}
+			result, err := newAnswerRunRig(t, desk, tc.caller, seatLeads).Call(
+				t.Context(), map[string]any{"turn_id": "t1", "answer": "use main"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch {
+			case tc.allowed && (result.Failed || len(desk.delivered) != 1):
+				t.Fatalf("refused %s: %+v", tc.name, result)
+			case !tc.allowed && (!result.Failed || !errors.Is(result.Cause, builtin.ErrRefused)):
+				t.Fatalf("answered %s with %+v, want the authority's refusal", tc.name, result)
+			case !tc.allowed && len(desk.delivered) != 0:
+				t.Errorf("a refused answer was delivered: %+v", desk.delivered)
+			}
+		})
 	}
 }

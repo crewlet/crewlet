@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
@@ -30,20 +31,21 @@ import (
 // the app's own page and sealing them.
 //
 // The webhook URL is not a field for the same reason it is not one anywhere
-// else: it is `<public_base_url>/webhooks/slack/<handle>`, which the surface
-// shows to copy rather than inviting somebody to type a different one.
+// else: it is `<webhook base>/webhooks/slack/<handle>`, built on the Tier A
+// address a vendor reaches this deployment at ([config.API.WebhookBase] —
+// `api.public.external_url` behind a public listener, `api.external_url`
+// otherwise), which the surface shows to copy rather than inviting somebody to
+// type a different one.
 
 // Requirements says what one SEAT still needs for Slack.
 //
 // Per seat, because that is where the credentials live. A caller asks for the
 // seats it wants and submits one at a time, which is also what keeps each
 // write addressed by a handle rather than by a position in a list.
-func Requirements(handle string, seat *config.Role, resolve func(string) (string, bool)) []setup.Requirement {
+func Requirements(handle string, seat *org.Role, resolve func(string) (string, bool)) []setup.Requirement {
 	var botToken, signingSecret string
 	if seat != nil {
-		if block := seat.Integrations.Slack; block != nil {
-			botToken, signingSecret = block.BotToken, block.SigningSecret
-		}
+		botToken, signingSecret = seat.Slack.BotToken, seat.Slack.SigningSecret
 	}
 
 	// TWO BOXES, AND THERE WAS A THIRD. A "Default channel" sat here while

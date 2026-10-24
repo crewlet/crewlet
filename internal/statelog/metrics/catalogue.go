@@ -59,6 +59,7 @@ const (
 const (
 	UnitMilliseconds = "ms"
 	UnitBytes        = "By"
+	UnitBytesPerDay  = "By/d"
 	UnitSeconds      = "s"
 	UnitCount        = "1"
 )
@@ -138,7 +139,9 @@ func Catalogue() []Instrument {
 			Shows: "Writes refused before or instead of an append, by `reason`, and " +
 				"EVERY value it carries is here, each with its remedy. The node: " +
 				"`evicted` (this node is removed from the fleet — run the write " +
-				"on another), `deferred` (it holds a record it cannot decode — a " +
+				"on another), `eviction_unknown` (its own eviction state could " +
+				"not be read — clears when it is read again), `deferred` (it " +
+				"holds a record it cannot decode — a " +
 				"newer build serves it), `behind` (it has not applied a position " +
 				"the write needs — clears on its own), `below_floor` (it is below " +
 				"the log and must adopt a snapshot — another node writes " +
@@ -147,6 +150,10 @@ func Catalogue() []Instrument {
 				"once a floor row that does not read as its floor is removed). " +
 				"The log: " +
 				"`log_full` (at its ceiling — raise it or unblock the trim), " +
+				"`record_too_large` (the record is larger than the broker takes " +
+				"in one message — split the change; the detail names which " +
+				"limit refused it), `broker_refused` (a refusal this build has " +
+				"no remedy for — the detail carries the broker's own words), " +
 				"`skew` (a store and a stream restored out of step — restore " +
 				"both from one backup), `wrong_stream` (not the log this node's " +
 				"rows came from: rebuilt, ending below its checkpoint, holding " +
@@ -225,7 +232,7 @@ func Catalogue() []Instrument {
 			Name: StatelogBarriersApplied, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain", "stream"},
 			Shows: "Barrier records applied from each log — every node's " +
-				"linearizable reads on it, since every node applies every " +
+				"linearizable reads on it, since every data node applies every " +
 				"record. It is the rate `census_drift` holds against the " +
 				"census, per log: a node's own appends are only its share of " +
 				"the fleet's reads, and on a fleet of several serving nodes " +
@@ -333,6 +340,23 @@ func Catalogue() []Instrument {
 				"only place anyone would see that it happened.",
 		},
 		{
+			Name: StatelogRecordsTampered, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"domain"},
+			Shows: "Records whose signature failed under a key this node " +
+				"holds, which means something that is not this fleet wrote " +
+				"to the broker. The applier stops on the first one, so this " +
+				"counts at most one per domain per stop, and any value above " +
+				"zero is an incident rather than a rate.",
+		},
+		{
+			Name: StatelogRecordsUnverifiable, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"domain"},
+			Shows: "Records signed under a key this node does not hold, " +
+				"retained until it does. Expected and transient during a " +
+				"keyring rotation; sustained, it means a key reached one " +
+				"node's secrets.keys and not this one's.",
+		},
+		{
 			Name: StatelogDrainRowsPerSecond, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "The applier's observed drain, which every retry hint " +
@@ -395,6 +419,19 @@ func Catalogue() []Instrument {
 			Shows:      "What the log actually holds, against its ceiling below.",
 		},
 		{
+			Name: StatelogLogBytesPerDay, Kind: KindGauge, Unit: UnitBytesPerDay,
+			Attributes: []string{"domain"},
+			Shows: "What the log took in over the trailing day, measured from " +
+				"its own records at each trim tick. The ceiling has to hold " +
+				"`min_age` of this, because the trim never removes a record " +
+				"younger than that — a log whose ceiling is smaller fills with " +
+				"every trim term satisfied, which is what `log_ceiling_short` " +
+				"fires on. Absent for a compacted log and for one in its first " +
+				"two days, whose trailing day would contain the day it was " +
+				"imported into; a log that could not be read keeps its last " +
+				"measurement, as the report does.",
+		},
+		{
 			Name: StatelogLogMaxBytes, Kind: KindGauge, Unit: UnitBytes,
 			Attributes: []string{"domain"},
 			Shows: "The ceiling, read from the running stream rather than " +
@@ -405,8 +442,9 @@ func Catalogue() []Instrument {
 			Name: StatelogLogHeadroomFraction, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "How much of the ceiling ordinary writes are held to is " +
-				"left — on a log that claims identity, the ceiling less the " +
-				"gate reserve kept above it for evictions. At zero the log " +
+				"left — on every log that claims identity (the tracker, the " +
+				"pages, the identity estate and the code log), the ceiling " +
+				"less the gate reserve kept above it for evictions. At zero the log " +
 				"refuses every write AND every linearizable read, and the " +
 				"remedy is a fleet-wide maintenance cycle, so this is the one " +
 				"number worth alarming on long before it is small.",
@@ -422,7 +460,7 @@ func Catalogue() []Instrument {
 			Name: StatelogAnchorsSwept, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "Arbitration anchors this node's applier removed under the " +
-				"trim's `trimmed` records (ADR-0032), counted once the " +
+				"trim's `trimmed` records (ADR-0046), counted once the " +
 				"transaction that removed them commits. Every node applies " +
 				"every record, so every data node counts the same removals. " +
 				"Flat is the normal reading of a log whose purged objects all " +
@@ -542,7 +580,9 @@ func Catalogue() []Instrument {
 			Attributes: nil,
 			Shows: "The fraction of sources carrying a current vector. It is " +
 				"how a stalled embedding backlog is reported, since it never " +
-				"drops a seat.",
+				"drops a seat. Absent where the company configures no " +
+				"embeddings and while the corpus cannot be measured — an " +
+				"unreadable corpus is neither covered nor uncovered.",
 		},
 
 		// ---- the change feed ------------------------------------------
@@ -580,7 +620,7 @@ func Catalogue() []Instrument {
 				"budget: every second here is a second in which reads are " +
 				"behind and writes are pending on every node.",
 		},
-		// ---- the object store's bucket --------------------------------
+		// ---- the object store's S3 requests ---------------------------
 		{
 			Name: ObjectsS3Attempts, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"operation", "outcome"},
@@ -1180,14 +1220,232 @@ func Catalogue() []Instrument {
 				"the wait adds to a checkout; one nearing 55 s is a node about " +
 				"to answer checkouts 503.",
 		},
+		// ---- authentication -------------------------------------------
+		{
+			Name: AuthAttemptsFailed, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"method", "outcome"},
+			Shows: "Every failed attempt to prove an identity, as it happens: " +
+				"a sign-in, a step-up, an invitation or password reset " +
+				"link that did not prove itself, or a bearer presented " +
+				"to a route that " +
+				"needs one and refused — a credential an unguarded route " +
+				"verifies itself, such as a webhook relay's own JWT, is " +
+				"never counted (`method`), and whether the attempt was " +
+				"verified and wrong or answered 429 by the throttle's " +
+				"curve (`outcome`). It is " +
+				"the ONLY per-attempt record there is, by design: an " +
+				"unauthenticated caller authors this rate, so the event log " +
+				"gets one `iam_login_failures` row per node per minute, " +
+				"counting each source, and the rate itself lives here, where " +
+				"a guessing run costs a counter increment rather than a row " +
+				"in every backup.",
+		},
 		// ---- alarms ---------------------------------------------------
 		{
 			Name: AlarmActive, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"kind"},
-			Shows: "Whether each named alarm is firing right now, 0 or 1. It " +
-				"is the same table the operator record renders and the CLI " +
-				"exits non-zero on, so a collector and a person see one " +
-				"answer.",
+			Shows: "Whether each named alarm is firing right now, 0 or 1 — " +
+				"for one that stands on several logs, whether it stands on " +
+				"any; its `domains` and its log lines say which. It is the same table " +
+				"the operator record renders and the CLI exits non-zero on, " +
+				"so a collector and a person see one answer.",
+		},
+		// ---- the object store's bucket ----------------------------------
+		{
+			Name: ObjectsBucketBytes, Kind: KindGauge, Unit: UnitBytes,
+			Shows: "How many bytes the fleet's own object bucket on the broker " +
+				"holds (OBJ_crewlet_files: the company's files, their " +
+				"metadata and any upload in flight), as the object " +
+				"collector's duty holder read it; only that node reports it, " +
+				"and only on the nats backend. Read against " +
+				"`crewlet.objects.bucket.max_bytes`: a full bucket refuses " +
+				"every upload, and `objects_bucket_near_ceiling` fires at " +
+				"four fifths.",
+		},
+		{
+			Name: ObjectsBucketMaxBytes, Kind: KindGauge, Unit: UnitBytes,
+			Shows: "The byte reservation the broker holds the object bucket " +
+				"to (store.objects.nats_max_bytes, or the share the node " +
+				"that created the bucket derived): the ceiling the bucket " +
+				"keeps for its life, whatever a node's Tier A says later.",
+		},
+		// ---- artifact uploads and the publish pipeline -------------------
+		{
+			Name: ArtifactsUploadBytes, Kind: KindCounter, Unit: UnitBytes,
+			Attributes: []string{"transport"},
+			Shows: "Bytes of artifact files that reached the object store, by " +
+				"how they got there: streamed through this node (`engine`, " +
+				"which counts what the pipeline writes itself: a linted page, " +
+				"an edit's result, a copied CDN file) or put straight to an " +
+				"S3 bucket on a presigned URL and read back here (`direct`). " +
+				"A fleet whose engine share stays high on s3 is streaming " +
+				"uploads its bucket could have taken.",
+		},
+		{
+			Name: ArtifactsUploadReservedBytes, Kind: KindGauge, Unit: UnitBytes,
+			Shows: "Bytes the company's upload reservations hold, as this node " +
+				"last wrote the reservation ledger: bytes in the object store, " +
+				"or on their way to it, that no record names yet. Read against " +
+				"`artifacts.limits.pending_bytes` times four, the company's " +
+				"bound: a value that stays near it is clients abandoning " +
+				"uploads, each held until the object collector could have " +
+				"deleted its bytes.",
+		},
+		{
+			Name: ArtifactsPublishDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"outcome"},
+			Shows: "How long one create, publish or asset finalize took through " +
+				"the pipeline (read back, edits, lint, CDN copies, the " +
+				"domain's decide), by `outcome`: `published`, `refused` (the " +
+				"request was judged and turned down) or `failed` (no outcome " +
+				"could be established, which is a store or a broker not " +
+				"answering). The publish latency objective is read from it.",
+		},
+		{
+			Name: ArtifactsPublishRefusals, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"reason"},
+			Shows: "Uploads and publishes refused, by `reason` from a closed set " +
+				"(internal/artifactupload.Refusals): a client sending the " +
+				"wrong bytes (`upload_mismatch`), a page breaking the policy " +
+				"(`policy_refused`), a company out of quota (`quota_exceeded`) " +
+				"or reservations (`uploads_outstanding`), an agent's turn past " +
+				"its guardrails (`turn_quota`), a moved head (`version_moved`) " +
+				"and the rest. Each reason is a different person to call.",
+		},
+		// ---- the artifact origin ----------------------------------------
+		{
+			Name: ArtifactsServeRequests, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"dest", "status"},
+			Shows: "Every request the artifact origin (the api.artifacts " +
+				"listener) answered, by what it was (`dest`: `document`, a " +
+				"page decided again on every request; `subresource`, a file " +
+				"a page loads; `runtime` and `kit`, the embedded public " +
+				"files) and by status class (`status`: `2xx` to `5xx`). A " +
+				"rise in `document` `5xx` is viewers whose frames this node " +
+				"would not serve: a copy of the artifacts or identity log it " +
+				"could not vouch for, or an object store that did not answer. " +
+				"The artifact id is never an attribute; per-artifact detail " +
+				"is in the log lines.",
+		},
+		{
+			Name: ArtifactsServeDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"dest"},
+			Shows: "How long the artifact origin took to answer, by `dest`, " +
+				"the whole response included. A document's tail is the time " +
+				"to first byte a viewer waits on before a frame can render, " +
+				"which the service objective for viewing reads; a slow " +
+				"subresource tail with fast documents is the object store.",
+		},
+		{
+			Name: ArtifactsServeBytes, Kind: KindCounter, Unit: UnitBytes,
+			Shows: "Body bytes the artifact origin sent, compressed where " +
+				"they were sent compressed: what artifact viewing costs this " +
+				"node in egress, per node and never per artifact.",
+		},
+		{
+			Name: ArtifactsTicketRefusals, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"reason"},
+			Shows: "View tickets the artifact origin refused, by `reason`: " +
+				"`invalid` (forged, malformed, or signed under a key this " +
+				"node does not hold), `expired` (a frame past its hour, " +
+				"which the dashboard re-mints), `host` (a ticket presented " +
+				"on a host other than its artifact's), `navigation` (a " +
+				"ticket URL opened in a tab of its own), `revoked` (the " +
+				"share, the credential, the artifact or the version is " +
+				"gone) and `stale` (this node could not vouch for what it " +
+				"would decide from, and answered 503). `invalid` above zero " +
+				"sustained is somebody presenting tickets this fleet never " +
+				"minted, or a keyring rotated past a key still in use.",
+		},
+		{
+			Name: ArtifactsAuthzPeerChecks, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "Authorizations the artifact origin decided through " +
+				"another data node because its own artifacts copy was out of " +
+				"service or lagging, by `outcome` (`served`, `refused`, " +
+				"`unavailable`). Any at all is a node whose copy is not " +
+				"answering; `unavailable` is a viewer refused because no " +
+				"data node could decide for them.",
+		},
+		// ---- the artifact datastore ---------------------------------------
+		{
+			Name: ArtifactsDataWriteDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"verdict"},
+			Shows: "How long a datastore write takes from the request to its verdict " +
+				"read back from this node's rows, by verdict (applied, conflict, " +
+				"invalid, forbidden, quota, gone, or pending where this node had not " +
+				"applied it yet, rate_limited and refused_early before anything was " +
+				"appended). The datastore op objective is a p95 of 250 ms; a rise in " +
+				"pending reads as this node's applier falling behind.",
+		},
+		{
+			Name: ArtifactsDataWrites, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"verdict"},
+			Shows: "Datastore writes by verdict. A climb in conflict is people editing " +
+				"the same rows over each other; in forbidden, a page or an agent writing " +
+				"what its collection's rules refuse; in rate_limited, one client " +
+				"spending this node's write budget.",
+		},
+		{
+			Name: ArtifactsDataFootprintBytes, Kind: KindGauge, Unit: UnitBytes,
+			Shows: "The company's datastore footprint in real bytes held on every data " +
+				"node (each document row with its index and field-index entries, and hot " +
+				"history, as the applier meters what the rows cost on disk), sampled " +
+				"after each committed batch. Read against `artifacts.limits.data_bytes`: " +
+				"a store or a company at its limit refuses every write that grows it.",
+		},
+		// ---- presence and the artifact rooms' pushes ----------------------
+		{
+			Name: PresenceFrames, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"direction"},
+			Shows: "Presence frames this node handled, by `direction`: `client` (a " +
+				"socket's presence frame taken), `peer` (a sealed frame from another " +
+				"node admitted) and `push` (a room's coalesced fan-out to this node's " +
+				"sockets). Presence is told, never stored, so this is the whole of " +
+				"its cost: a `peer` climb with flat `client` is a busy room held on " +
+				"other nodes, and `push` is bounded at five a second per room.",
+		},
+		{
+			Name: PresenceRooms, Kind: KindGauge, Unit: UnitCount,
+			Shows: "Artifact rooms this node holds a member of, a socket's or an agent's. " +
+				"Each costs a map in memory and, while one of this node's sockets is in " +
+				"it, one listen on the broker.",
+		},
+		{
+			Name: ArtifactsPushLag, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"kind"},
+			Shows: "How long after the broker stored a committed datastore batch's newest " +
+				"record its `artifact_data` push was handed to this node's sockets " +
+				"(`kind` `data`): the applier's lag plus the fan-out. A datastore " +
+				"change is held to reach the socket within a second. An artifacts " +
+				"movement carries no broker instant, so `artifact_changed` is not " +
+				"measured here; its lag is the artifacts applier's own, in the state " +
+				"log's apply instruments.",
+		},
+		// ---- service objectives -------------------------------------------
+		{
+			Name: ArtifactsReadyDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"outcome"},
+			Shows: "How long a frame took from its view ticket being minted to the " +
+				"page's bridge hello, as the viewer's browser reported it through " +
+				"`POST /artifacts/ready`, by `outcome` (`ready`, or `failed` for a frame " +
+				"that never said hello). The only artifacts instrument that sees an " +
+				"outage keeping requests from reaching the engine at all (the artifact " +
+				"domain's DNS or certificate, an edge, a corporate filter): every " +
+				"server-side instrument reads such an outage as a quiet node. The " +
+				"`artifact_ready` objective holds 99.5% of opens within 3 s.",
+		},
+		{
+			Name: ObjectivesEvents, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"objective", "outcome"},
+			Shows: "Every service objective's events, by `objective` (the closed set " +
+				"in docs/reference/service-objectives.md) and `outcome` (`good`: " +
+				"answered without fault on the engine's side within the objective's " +
+				"bound; `bad`: anything else). `bad` over all, per objective, against " +
+				"one minus its target is the error budget's burn rate, which the " +
+				"`objective_burn` alarm judges per node over an hour and five minutes " +
+				"and over six hours and thirty minutes; summed across the fleet it is " +
+				"the company's.",
 		},
 	}
 }

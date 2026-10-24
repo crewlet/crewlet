@@ -16,11 +16,10 @@
  * a draft on an older revision.
  *
  * A VALUE IS SHOWN AS A PERSON READS IT, NEVER AS THE BUILDER HOLDS IT. A
- * conflict about a field carries that field's values; one about a position,
- * a removal or a kind change carries node keys, placements, whole nodes or
- * the stripped fields themselves, which the model tags with their shape. Node
- * keys become names, a whole node becomes the fields that differ, stripped
- * fields are named and never valued, and a credential's mask reads as a
+ * conflict about a field carries that field's values; one about a position or
+ * a removal carries node keys, placements or whole nodes, which the model tags
+ * with their shape. Node keys become names, a whole node becomes the fields
+ * that differ, and a credential's mask reads as a
  * literal that is set, never as the marker, as everywhere else on the page.
  */
 
@@ -28,7 +27,7 @@ import { configValueKind, plural } from "~/lib/format.ts";
 import type { Choice, RebaseEntry } from "./model/history.ts";
 import { isRecord, jsonEqual } from "./model/json.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
-import { fieldName, type Conflict, type Operation } from "./model/operations.ts";
+import { type Conflict, type Operation } from "./model/operations.ts";
 import type { PendingUpdate } from "./model/reducer.ts";
 import { RotateCwGlyph } from "@crewlethq/icons/glyphs";
 import { Button, Modal, SegmentedControl, Table } from "@crewlethq/ui";
@@ -109,32 +108,6 @@ export function conflictCells(conflict: Conflict, nameOf: NameOf): ConflictCells
               .join(", ")
           : "None",
       );
-    case "fields": {
-      // Named, never valued: these are the fields a kind change strips, and
-      // several of them are credentials.
-      const fields = (value: unknown) =>
-        new Map(
-          (Array.isArray(value) ? value : [])
-            .filter(isRecord)
-            .map((f) => [fieldName(Array.isArray(f.path) ? (f.path as string[]) : []), f.before]),
-        );
-      const before = fields(conflict.base);
-      const now = fields(conflict.theirs);
-      const list = (names: string[]) => (names.length === 0 ? "None" : names.join(", "));
-      return {
-        base: list([...before.keys()]),
-        theirs: list(
-          [...now.entries()].map(([field, value]) =>
-            !before.has(field)
-              ? `${field} (added)`
-              : jsonEqual(before.get(field), value)
-                ? field
-                : `${field} (changed)`,
-          ),
-        ),
-        mine: "Removed",
-      };
-    }
     default:
       return each(formatValue);
   }
@@ -194,8 +167,8 @@ export function UpdateDraftDialog({
     >
       <p>
         {update.restoring
-          ? "The configuration changed since this draft was kept. Each change in it is replayed onto the configuration as it is now."
-          : "Another revision was saved since you started editing. Each of your changes is replayed onto it."}
+          ? "The configuration changed. Your changes will be reapplied on top."
+          : "Someone saved a newer revision. Your changes will be reapplied on top."}
       </p>
       <p className="t-caption">
         {applies.length === entries.length

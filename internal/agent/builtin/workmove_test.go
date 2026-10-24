@@ -2,49 +2,95 @@ package builtin_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // A CROSS-PROJECT MOVE CAN BE STARTED — by the lead of the item's project, or
-// by a person.
+// by an admin.
 //
 // The tracker's move carried a subtree, re-keyed it, left its old keys
 // resolving, marked a stopped walk and had a duty to finish one; and no tool,
 // route or command could start it. The docs sent a reader to "move it" to
 // clear a subtask filed in another project than its root.
 
-// moveRegistry is a seat's registry with the move wired, and the lead lookup
-// answering lead.
-func moveRegistry(t *testing.T, trk *fakeTracker, lead bool) *tools.Registry {
+// leadsOneProject is a chart in which the caller leads exactly one project —
+// so a case can tell the project an item is LEAVING from the one it is going
+// to, which is the whole of what the move's authority turns on.
+type leadsOneProject struct{ project string }
+
+func (leadsOneProject) Leads(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+func (c leadsOneProject) LeadsProject(_ context.Context, _, project string) (bool, error) {
+	return project == c.project, nil
+}
+
+func (leadsOneProject) LeadsUnit(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+func (leadsOneProject) LeadsContainer(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+func (leadsOneProject) LeadsAnyone(context.Context, string) (bool, error) {
+	return false, nil
+}
+
+// MemberOf answers that nobody sits in any unit: no case here shares an
+// artifact with a team.
+func (leadsOneProject) MemberOf(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+// moveRegistry is a seat's registry with the move wired, decided by chart.
+func moveRegistry(t *testing.T, trk *fakeTracker, chart authz.Chart) *tools.Registry {
+	t.Helper()
+	return moverRegistry(t, trk, trk.moves, chart)
+}
+
+// moverRegistry is [moveRegistry] over a mover of the case's own.
+func moverRegistry(t *testing.T, trk *fakeTracker,
+	moves func(builtin.Actor) builtin.WorkMover, chart authz.Chart) *tools.Registry {
+
 	t.Helper()
 	reg := tools.NewRegistry()
 	if _, err := builtin.Register(reg, builtin.Deps{
-		Work: builtin.WorkDeps{Reader: trk, Writer: trk.as, Moves: trk.moves},
-		LeadsProject: func(context.Context, string, string) bool {
-			return lead
-		},
+		Work:      builtin.WorkDeps{Reader: trk, Writer: trk.as, Moves: moves},
+		Authorize: builtin.Decide(chart),
 	}); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	return reg
 }
 
-func TestAMoveIsTheItemsProjectLeadsOrAPersons(t *testing.T) {
+// callMove is a move made by a seat holding every app and NOT admin — which
+// every relation class checks before the chart, so a case about who may move
+// made with it would be admitted by any chart.
+func callMove(t *testing.T, reg *tools.Registry, args map[string]any) tools.Result {
+	t.Helper()
+	return callWorkAs(colleagueCaller(), t, reg, tracker.MoveWorkItemTool, args)
+}
+
+func TestAMoveIsTheItemsProjectLeads(t *testing.T) {
 	t.Parallel()
 
 	t.Run("a seat that does not lead the project", func(t *testing.T) {
 		t.Parallel()
 		trk := newFakeTracker()
-		got := callWork(t, moveRegistry(t, trk, false), tracker.MoveWorkItemTool,
+		got := callMove(t, moveRegistry(t, trk, chartRefuses),
 			map[string]any{"item": "ENG-1", "project": "OPS"})
-		if !got.Failed || !strings.Contains(got.Output, "lead of ENG") {
+		if !got.Failed || !errors.Is(got.Cause, builtin.ErrRefused) {
 			t.Errorf("a seat leading nothing moved an item: %s", got.Output)
 		}
 		if len(trk.moved) != 0 {
@@ -52,18 +98,29 @@ func TestAMoveIsTheItemsProjectLeadsOrAPersons(t *testing.T) {
 		}
 	})
 
+	// AND THE LEAD ASKED ABOUT IS THE SOURCE'S: leading the project the
+	// item would move INTO is no authority over the one it is in.
+	t.Run("a seat that leads only the target", func(t *testing.T) {
+		t.Parallel()
+		trk := newFakeTracker()
+		got := callMove(t, moveRegistry(t, trk, leadsOneProject{project: "OPS"}),
+			map[string]any{"item": "ENG-1", "project": "OPS"})
+		if !got.Failed || !errors.Is(got.Cause, builtin.ErrRefused) || len(trk.moved) != 0 {
+			t.Errorf("the target's lead moved an item out of ENG: %s", got.Output)
+		}
+	})
+
 	t.Run("the project's lead", func(t *testing.T) {
 		t.Parallel()
 		trk := newFakeTracker()
-		reg := moveRegistry(t, trk, true)
+		reg := moveRegistry(t, trk, leadsOneProject{project: "ENG"})
 		// A MOVE IS A DELIVERY: a lead woken to triage an item filed in
 		// the wrong project answers by moving it, and without the flag the
 		// gate corrects that turn for having done nothing.
 		if got := reg.Deliveries()[tracker.MoveWorkItemTool]; got != tracker.Source {
 			t.Errorf("move_work_item delivers to %q, want %q", got, tracker.Source)
 		}
-		got := callWork(t, reg, tracker.MoveWorkItemTool,
-			map[string]any{"item": "ENG-1", "project": "ops"})
+		got := callMove(t, reg, map[string]any{"item": "ENG-1", "project": "ops"})
 		if got.Failed {
 			t.Fatalf("the lead's move failed: %s", got.Output)
 		}
@@ -83,18 +140,20 @@ func TestAMoveIsTheItemsProjectLeadsOrAPersons(t *testing.T) {
 		}
 	})
 
-	t.Run("a person", func(t *testing.T) {
+	t.Run("an operator", func(t *testing.T) {
 		t.Parallel()
 		trk := newFakeTracker()
 		reg := tools.NewRegistry()
 		for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
 			Work: builtin.WorkDeps{Reader: trk, Writer: trk.as, Moves: trk.moves,
 				Actor: operatorActor},
+			Authorize: builtin.Decide(chartRefuses),
 		}) {
 			if err := reg.Register(tool, tools.OriginBuiltin); err != nil {
 				t.Fatalf("register %s: %v", tool.Name(), err)
 			}
 		}
+		// ADMIN, leading nothing: callNoTurn carries every permission.
 		got := callNoTurn(t, reg, tracker.MoveWorkItemTool,
 			map[string]any{"item": "ENG-1", "project": "OPS"})
 		if got.Failed {
@@ -112,7 +171,7 @@ func TestAStoppedMoveIsNotReportedAsNotMade(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	trk.writeErr = fmt.Errorf("stopped: %w", tracker.ErrStepUnresolved)
-	got := callWork(t, moveRegistry(t, trk, true), tracker.MoveWorkItemTool,
+	got := callMove(t, moveRegistry(t, trk, chartLeads),
 		map[string]any{"item": "ENG-1", "project": "OPS"})
 	if !got.Failed || strings.Contains(got.Output, "NOT made") ||
 		!strings.Contains(got.Output, "exactly the same arguments") {
@@ -148,7 +207,7 @@ func TestAMoveRefusedOverATagNamesTheWayPastIt(t *testing.T) {
 			t.Parallel()
 			trk := newFakeTracker()
 			trk.writeErr = tc.err
-			got := callWork(t, moveRegistry(t, trk, true), tracker.MoveWorkItemTool,
+			got := callMove(t, moveRegistry(t, trk, chartLeads),
 				map[string]any{"item": "ENG-1", "project": "OPS"})
 			if !got.Failed || strings.Contains(got.Output, "NOT made") {
 				t.Fatalf("the refused move answered %q", got.Output)
@@ -187,9 +246,11 @@ func (m *landingMover) MoveTaskToProject(_ context.Context, opID, _, target stri
 		return m.first(opID)
 	}
 	if opID != m.ops[0] {
-		return tracker.WriteResult{}, fmt.Errorf("tracker: task i1 is already in "+
+		// MARKED, as the tracker marks every refusal it writes about what
+		// was asked: an unmarked error is the node's failure instead.
+		return tracker.WriteResult{}, fmt.Errorf("%w: task i1 is already in "+
 			"%s, and this node's operation ledger holds no record of this move "+
-			"putting it there", target)
+			"putting it there", tracker.ErrInvalid, target)
 	}
 	return tracker.WriteResult{Key: target + "-3", Result: statelog.Result{
 		Outcome: statelog.OutcomeApplied, OpID: opID, Collapsed: true,
@@ -214,34 +275,31 @@ func TestTheRetryOfAMoveThatLandedIsAnsweredByTheMove(t *testing.T) {
 				Outcome: statelog.OutcomeUnknown, OpID: opID,
 			}}, nil
 		},
-		"a walk stopped after the root moved": func(string) (tracker.WriteResult, error) {
-			return tracker.WriteResult{}, fmt.Errorf("tracker: whether task "+
-				"id-9's move into OPS landed is unknown: %w", tracker.ErrStepUnresolved)
+		"a walk stopped after the root moved": func(opID string) (tracker.WriteResult, error) {
+			return tracker.WriteResult{Result: statelog.Result{
+				Outcome: statelog.OutcomeApplied, OpID: opID,
+			}}, &tracker.MoveStopped{Root: "i1", Key: "OPS-3", Target: "OPS",
+				Followed: 1, Of: 2, OpID: opID, Err: fmt.Errorf("tracker: "+
+					"whether task id-9's move into OPS landed is unknown: %w",
+					tracker.ErrStepUnresolved)}
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			trk := newFakeTracker()
 			mover := &landingMover{trk: trk, first: first}
-			reg := tools.NewRegistry()
-			if _, err := builtin.Register(reg, builtin.Deps{
-				Work: builtin.WorkDeps{Reader: trk, Writer: trk.as,
-					Moves: func(builtin.Actor) builtin.WorkMover { return mover }},
-				// THE SEAT LEADS THE SOURCE AND NOT THE TARGET.
-				LeadsProject: func(_ context.Context, _, project string) bool {
-					return project == "ENG"
-				},
-			}); err != nil {
-				t.Fatalf("register: %v", err)
-			}
+			// THE SEAT LEADS THE SOURCE AND NOT THE TARGET.
+			reg := moverRegistry(t, trk,
+				func(builtin.Actor) builtin.WorkMover { return mover },
+				leadsOneProject{project: "ENG"})
 			args := map[string]any{"item": "ENG-1", "project": "OPS"}
 
-			got := callWork(t, reg, tracker.MoveWorkItemTool, args)
-			if !got.Failed || !strings.Contains(got.Output, "exactly the same arguments") {
+			got := callMove(t, reg, args)
+			if !strings.Contains(got.Output, "exactly the same arguments") {
 				t.Fatalf("the first attempt answered %q, want the retry it prescribes",
 					got.Output)
 			}
-			retry := callWork(t, reg, tracker.MoveWorkItemTool, args)
+			retry := callMove(t, reg, args)
 			if retry.Failed {
 				t.Fatalf("the prescribed retry was refused: %s", retry.Output)
 			}
@@ -262,25 +320,122 @@ func TestTheRetryOfAMoveThatLandedIsAnsweredByTheMove(t *testing.T) {
 
 // A MOVE INTO THE PROJECT AN ITEM IS ALREADY IN THAT NO EARLIER ATTEMPT MADE is
 // the tracker's to refuse, and it does — so passing the gate there hands a seat
-// nothing: the answer is the refusal, and says the change was not made.
+// nothing: the answer is the tracker's refusal, in its own words.
 func TestAMoveIntoTheItemsOwnProjectIsTheTrackersToRefuse(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
 	mover := &landingMover{trk: trk}
 	mover.ops = []string{"somebody else's move"}
-	reg := tools.NewRegistry()
-	if _, err := builtin.Register(reg, builtin.Deps{
-		Work: builtin.WorkDeps{Reader: trk, Writer: trk.as,
-			Moves: func(builtin.Actor) builtin.WorkMover { return mover }},
-		LeadsProject: func(context.Context, string, string) bool { return false },
-	}); err != nil {
-		t.Fatalf("register: %v", err)
+	reg := moverRegistry(t, trk,
+		func(builtin.Actor) builtin.WorkMover { return mover }, chartRefuses)
+	got := callMove(t, reg, map[string]any{"item": "ENG-1", "project": "ENG"})
+	if !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid ||
+		!strings.Contains(got.Output, "no record of this move") ||
+		!strings.Contains(got.Output, "refused that") {
+		t.Errorf("a move into the item's own project answered %q (%s), want the "+
+			"tracker's refusal", got.Output, tools.RefusalOf(got))
 	}
-	got := callWork(t, reg, tracker.MoveWorkItemTool,
-		map[string]any{"item": "ENG-1", "project": "ENG"})
-	if !got.Failed || !strings.Contains(got.Output, "no record of this move") ||
-		!strings.Contains(got.Output, "NOT made") {
-		t.Errorf("a move into the item's own project answered %q, want the "+
-			"tracker's refusal", got.Output)
+}
+
+// stoppedMover moves the root and answers the stop its walk met, as the
+// tracker does once the root's own move has landed.
+type stoppedMover struct{ stop *tracker.MoveStopped }
+
+func (m stoppedMover) MoveTaskToProject(_ context.Context, opID, _, _ string,
+	_ *tracker.Notify) (tracker.WriteResult, error) {
+
+	stop := *m.stop
+	stop.OpID = opID
+	return tracker.WriteResult{Result: statelog.Result{
+		Outcome: statelog.OutcomeApplied, OpID: opID,
+		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 71},
+	}}, &stop
+}
+
+// A MOVE WHOSE ROOT LANDED AND WHOSE WALK STOPPED IS NOT "NOT MADE".
+//
+// Every such stop but an unknown step reached the default of writeFailure —
+// "The change was NOT made — do not report it as done" — about an item
+// already re-keyed into the target. A seat told that moved it again, as a new
+// call, which the tracker refuses as somebody else's move. The answer is the
+// root's receipt, the walk's count, and the one thing that finishes it: the
+// same call, a restore first where a task in the trash holds it, and neither
+// where this node cannot vouch for the step it stopped at — the tracker duty
+// finishes it then.
+//
+// Mutation: drop the MoveStopped arm in move_work_item and every case answers
+// "NOT made".
+func TestAMoveStoppedAfterItsRootMovedSaysWhatFinishesIt(t *testing.T) {
+	t.Parallel()
+	refused := &statelog.Unavailable{Reason: statelog.ReasonLogFull,
+		Detail: "the broker refused to store the record"}
+	for name, tc := range map[string]struct {
+		stop      tracker.MoveStopped
+		want      []string
+		notWanted []string
+		waits     string
+		unvouched bool
+	}{
+		"a refused step": {
+			stop: tracker.MoveStopped{Root: "i1", Key: "OPS-3", Target: "OPS",
+				Followed: 2, Of: 5, Err: refused},
+			want: []string{"ENG-1 moved to OPS as OPS-3", "2 of the 5",
+				"exactly the same arguments", "tracker duty"},
+		},
+		"a task in the trash": {
+			stop: tracker.MoveStopped{Root: "i1", Key: "OPS-3", Target: "OPS",
+				Followed: 4, Of: 5, Waiting: "ENG-9", Err: refused},
+			want:  []string{"ENG-9 is in the trash", "restored", "exactly the same arguments"},
+			waits: "ENG-9",
+		},
+		"a step this node cannot vouch for": {
+			stop: tracker.MoveStopped{Root: "i1", Key: "OPS-3", Target: "OPS",
+				Followed: 1, Of: 5, Err: fmt.Errorf("stopped: %w", tracker.ErrStepUnvouched)},
+			want:      []string{"cannot vouch", "tracker duty"},
+			notWanted: []string{"exactly the same arguments"},
+			unvouched: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			trk := newFakeTracker()
+			stop := tc.stop
+			reg := moverRegistry(t, trk, func(builtin.Actor) builtin.WorkMover {
+				return stoppedMover{stop: &stop}
+			}, chartLeads)
+			got := callMove(t, reg, map[string]any{"item": "ENG-1", "project": "OPS"})
+			if got.Failed {
+				t.Fatalf("a move whose root landed answered as a failure: %s", got.Output)
+			}
+			answer := answerOf(t, got)
+			said, _ := answer["move_stopped"].(string)
+			if answer["key"] != "OPS-3" || answer["moved_from"] != "ENG-1" ||
+				answer["project"] != "OPS" || answer["outcome"] != "applied" ||
+				answer["subtree_followed"] != float64(tc.stop.Followed) ||
+				answer["subtree_total"] != float64(tc.stop.Of) || said == "" {
+				t.Fatalf("the answer is %v, want the root's receipt with the walk's "+
+					"count and how to finish it", answer)
+			}
+			if strings.Contains(said, "NOT made") {
+				t.Errorf("the stop says the change was not made: %s", said)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(said, want) {
+					t.Errorf("the stop lacks %q: %s", want, said)
+				}
+			}
+			for _, not := range tc.notWanted {
+				if strings.Contains(said, not) {
+					t.Errorf("the stop says %q, which stops at the same step "+
+						"here: %s", not, said)
+				}
+			}
+			if waits, _ := answer["move_waits_for"].(string); waits != tc.waits {
+				t.Errorf("move_waits_for is %q, want %q", waits, tc.waits)
+			}
+			if unvouched, _ := answer["move_unvouched"].(bool); unvouched != tc.unvouched {
+				t.Errorf("move_unvouched is %v, want %v", unvouched, tc.unvouched)
+			}
+		})
 	}
 }

@@ -1,12 +1,13 @@
 /**
  * The conversation around the open row, read a page at a time from the task's
- * own thread (`work_comments`).
+ * own thread (`work_comments`). The pane names it in the heading over it.
  *
  * WHICH COMMENTS ARE "THE THREAD" depends on what the row is about:
  *
- *  - an ASK: the replies in the ask's own thread — what answered it, or was
+ *  - an ASK: the replies in the ask's own thread, what answered it or was
  *    said back to it (`answers` or `reply_to` naming the ask);
- *  - a notice about a COMMENT: that comment and the replies to it;
+ *  - a notice about a COMMENT: the replies to it, and the comment itself only
+ *    where the pane quotes no more than a preview of it (`whole` false);
  *  - any other notice: the task's latest conversation, since the change it
  *    announces is not a comment and the talk around it is what a reader
  *    opens a notice to catch up on.
@@ -18,20 +19,26 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Button, Skeleton } from "@crewlethq/ui";
+import { Button, Skeleton, Text } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
-import { fmtDateCompact, fmtDateTime, toWall } from "~/lib/format.ts";
+import { fmtDateTime } from "~/lib/format.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
 import type { WorkComment } from "~/protocol/index.ts";
-import { whoOf } from "./NoticeList.tsx";
+import { moment, whoOf } from "./model.ts";
 
 /** What the thread is around. */
 export type ThreadOf =
   | { kind: "ask"; comment: string; options?: readonly { id: string; label: string }[] }
-  | { kind: "comment"; comment: string; options?: readonly { id: string; label: string }[] }
+  | {
+      kind: "comment";
+      comment: string;
+      /** The pane quotes the comment whole, so it is not listed again here. */
+      whole: boolean;
+      options?: readonly { id: string; label: string }[];
+    }
   | { kind: "item" };
 
 /** Whether one comment belongs to the thread. */
@@ -40,7 +47,7 @@ export function inThread(of: ThreadOf, c: WorkComment): boolean {
     case "ask":
       return c.id !== of.comment && (c.answers === of.comment || c.reply_to === of.comment);
     case "comment":
-      return c.id === of.comment || c.reply_to === of.comment;
+      return c.reply_to === of.comment || (!of.whole && c.id === of.comment);
     case "item":
       return true;
   }
@@ -76,13 +83,8 @@ export function Thread({
   const earlier = next[oldest];
   const total = cursors.reduce((n, c) => n + (counts[c] ?? 0), 0);
   const whole = earlier === null;
-  const noun = of.kind === "item" ? "comment" : "reply";
-  const nouns = of.kind === "item" ? "comments" : "replies";
   return (
-    <section className="inbox-thread" aria-label="Thread">
-      <h3 className="inbox-section-label">
-        {`Thread · ${total} ${total === 1 ? noun : nouns}${whole ? "" : " loaded"}`}
-      </h3>
+    <div className="inbox-thread">
       {earlier && (
         <Button
           size="small"
@@ -108,13 +110,11 @@ export function Thread({
         />
       ))}
       {whole && total === 0 && (
-        <p className="t-caption">
-          {of.kind === "item"
-            ? "Nobody has commented on this task yet."
-            : "No replies yet. Anything you send below lands here."}
-        </p>
+        <Text as="p" variant="caption">
+          {of.kind === "item" ? "Nobody has commented on this task yet." : "No replies yet."}
+        </Text>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -155,7 +155,7 @@ function ThreadPage({
   if (read.loading && !read.data)
     return <Skeleton variant="text" rows={2} label="Loading the thread" />;
   return (
-    <QueryState error={read.error} loading={false}>
+    <QueryState error={read.error} refusal={read.refusal} loading={false}>
       <ol className="inbox-thread-list">
         {comments.map((c) => (
           <ThreadEntry
@@ -166,7 +166,6 @@ function ThreadPage({
                 ? (of.options?.find((o) => o.id === c.choice)?.label ?? c.choice)
                 : ""
             }
-            seat={read.data?.comment_seats?.[c.id] ?? ""}
             index={index}
             now={now}
           />
@@ -179,40 +178,36 @@ function ThreadPage({
 function ThreadEntry({
   comment,
   chose,
-  seat,
   index,
   now,
 }: {
   comment: WorkComment;
-  /** The person behind the token that wrote it, or "" where the author is a seat. */
-  seat: string;
   /** The option this answer chose, by its words, or "". */
   chose: string;
   index: OrgIndex;
   now: number;
 }) {
-  // THE PERSON, NEVER THE CREDENTIAL: a token's comment is drawn as the seat
-  // it was bound to, and one bound to nobody as "An operator".
-  const who = whoOf(index, seat || (comment.author_kind === "operator" ? "" : comment.author));
-  // THE READER'S OWN CLOCK, to the minute: a time alone today, the date with
-  // it before.
-  const wall = toWall(Date.parse(comment.created_at));
-  const today = wall.slice(0, 10) === toWall(now).slice(0, 10);
+  // WHOEVER THE RECORD NAMES (`iam.ActorFor`): a person the identity directory
+  // binds to a seat comments AS that seat, and anybody bound to none under
+  // their own login, a name, drawn as one. A comment with no author is the
+  // engine's.
+  const who = whoOf(index, comment.author, comment.author_kind);
   return (
     <li className="inbox-thread-entry">
       <SeatAvatar
         name={who?.name ?? comment.author}
         kind={who?.kind ?? "agent"}
+        avatar={who?.avatar}
         size={26}
         decorative
       />
       <div className="inbox-thread-body">
         <div className="inbox-thread-meta">
-          <strong>{who?.name ?? "An operator"}</strong>
+          <strong>{who?.name ?? "The engine"}</strong>
+          {/* THE READER'S OWN CLOCK, to the minute: a time alone today, the
+              date with it before. */}
           <time dateTime={comment.created_at} title={fmtDateTime(comment.created_at)}>
-            {today
-              ? wall.slice(11)
-              : `${fmtDateCompact(comment.created_at, now)} ${wall.slice(11)}`}
+            {moment(comment.created_at, now)}
           </time>
           {chose && comment.body.trim() && <span className="t-caption">{`chose “${chose}”`}</span>}
         </div>

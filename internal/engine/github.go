@@ -93,9 +93,8 @@ func (g *githubIdentities) register(reg *notify.Registry, c *Company, env *confi
 	// `[bot]`. Nothing relates them, and the registry is a bijection per
 	// namespace, so the bot login goes in the companion namespace that
 	// exists for exactly this — the same shape Slack and Mattermost use.
-	for role := range c.Config.EachRole() {
-		seat := role.Seat()
-		app := role.Integrations.GitHub
+	for seat := range c.Org.AllRoles() {
+		app := seat.GitHub
 		if !seat.IsAgent() || app == nil {
 			continue
 		}
@@ -208,7 +207,9 @@ func (e *Engine) startGitHub(ctx context.Context, c *Company, cfg *config.GitHub
 	}}
 
 	e.notify.github.resolve(ctx, api, web, github.SeatCredentials(c.Org, env.Value))
-	registered := e.notify.github.register(e.Registry(), c, env)
+	registered := e.intoLiveRegistry(func(reg *notify.Registry) int {
+		return e.notify.github.register(reg, c, env)
+	})
 	if registered == 0 {
 		// Enabled with no seat identity is a company mid-setup —
 		// `crewlet github provision` has not run — or a deployment that
@@ -293,21 +294,25 @@ func (e *Engine) githubSeatApps(company *Company, env *config.Resolver) []github
 	if company == nil {
 		return out
 	}
-	for role := range company.Config.EachRole() {
-		seat := role.Seat()
+	for seat := range company.Org.AllRoles() {
 		if !seat.IsAgent() {
 			continue
 		}
-		app := role.Integrations.GitHub
+		app := seat.GitHub
 		if app == nil {
 			continue
 		}
 		// The seat's role.code.access, the one tier every code host reads:
 		// the manifest asked GitHub for its permission set, and every token
 		// is minted with exactly that set, so the two are one reading.
-		tier, _ := github.ParseTier(role.Code.AccessOrDefault())
+		// PARSED FROM THE RAW VALUE, not through an "or default" helper:
+		// [github.ParseTier] already answers the default for an empty
+		// string and for a typo, and it is the package that OWNS the
+		// closed set — so there is one place that decides what an
+		// unrecognised tier runs at.
+		tier, _ := github.ParseTier(seat.CodeAccess)
 		out = append(out, github.SeatApp{
-			Handle: seat.Handle(), Name: role.Name, Tier: tier, Repos: app.Repos,
+			Handle: seat.Handle(), Name: seat.Name, Tier: tier, Repos: app.Repos,
 			AppID: app.AppID, Slug: app.AppSlug,
 			InstallationID: app.InstallationID,
 			Key:            strings.TrimSpace(env.Value(app.PrivateKey)),
@@ -352,9 +357,8 @@ func (g *githubIdentities) unresolved(c *Company, env *config.Resolver) []string
 	known := g.snapshot()
 
 	byApp := map[string]bool{}
-	for role := range c.Config.EachRole() {
-		seat := role.Seat()
-		if app := role.Integrations.GitHub; seat.IsAgent() && app != nil &&
+	for seat := range c.Org.AllRoles() {
+		if app := seat.GitHub; seat.IsAgent() && app != nil &&
 			github.NormalizeLogin(app.AppSlug) != "" {
 			byApp[seat.Handle()] = true
 		}

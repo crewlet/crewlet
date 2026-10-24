@@ -200,7 +200,7 @@ test("the slug is GitHub's", () => {
     "window--one-vocabulary-for-every-time-range",
   );
   expect(slug("⌘K: search, answer, act")).toBe("k-search-answer-act");
-  expect(slug("Spend › Budgets, raised in place")).toBe("spend--budgets-raised-in-place");
+  expect(slug("Company › Budgets, raised in place")).toBe("company--budgets-raised-in-place");
   expect(slug("The `budget_meters` push")).toBe("the-budget_meters-push");
 });
 

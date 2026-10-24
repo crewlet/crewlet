@@ -172,16 +172,23 @@ Most modern MCP servers (the official GitHub server, recent
 `mcp-atlassian`) advertise annotations. For a server that does not, an
 operator can supply them in config — without touching engine code — via
 `tool_annotations` on an `mcp_servers` entry, keyed by **bare tool
-name**:
+name**. `tavily-mcp` 0.2.22 is such a server: its five tools search and
+read the web and advertise no hints at all, so without these keys each
+counts as a possible delivery, and a turn that only searched can pass the
+delivery check as one that reached somebody:
 
 ```yaml
 mcp_servers:
-  - name: linear
-    command: uvx
-    args: ["mcp-linear"]
+  - name: tavily
+    command: npm
+    args: ["exec", "--yes", "--", "tavily-mcp@0.2.22"]
+    env: { TAVILY_API_KEY: "${TAVILY_API_KEY}" }
     tool_annotations:
-      linear_create_comment: { read_only: false, open_world: true }
-      linear_get_issue:      { read_only: true }
+      tavily_search:   { read_only: true, open_world: true }
+      tavily_extract:  { read_only: true, open_world: true }
+      tavily_crawl:    { read_only: true, open_world: true }
+      tavily_map:      { read_only: true, open_world: true }
+      tavily_research: { read_only: true, open_world: true }
 ```
 
 Keys accept snake_case (`read_only`) or the MCP camelCase
@@ -192,7 +199,19 @@ name or the catalogue name with the entry's `tool_prefix` applied (for a
 Slack server with `tool_prefix: slack_`, `conversations_add_message`
 **or** `slack_conversations_add_message`; the raw name wins when both are
 present), so keying by the name you see in the catalogue never silently
-no-ops.
+no-ops. A key that is neither — a tool the server does not list, or one
+it lists under another name — overrides nothing. The server's row on
+**Settings › MCP Tools** names every key no started instance lists
+(`unlisted_annotations` in [`GET /mcp-servers`](../reference/api-endpoints.md#get-mcp-servers)),
+and each instance's `tools_discovered` log line names the keys its own
+listing does not answer (`annotation_keys_unlisted`). Only the first is a
+mistake: one instance's listing is not the server's. A per-role child
+serves what its seat's credentials reach — `mcp-atlassian` lists no
+Confluence tool to a seat holding only a Jira credential — so a
+`confluence_*` key is right for one seat and absent from another's, while
+a key no instance lists is a misspelling or a tool the server no longer
+serves. Take the names from the server's own listing, which its
+`tools_discovered` line carries.
 
 Every tool server — including Jira/Confluence (`atlassian`), Slack, and
 GitHub — is an `mcp_servers` entry, so `tool_annotations` is declared
@@ -203,14 +222,17 @@ mcp_servers:
   - name: atlassian          # shared by Jira + Confluence
     shared: false
     command: uvx
-    args: ["mcp-atlassian"]
+    args: ["mcp-atlassian==0.23.1"]
     tool_annotations:
       jira_add_comment:       { read_only: false, open_world: true }
       confluence_create_page: { read_only: false, open_world: true }
   - name: slack
     shared: false
-    command: npx
-    args: ["slack-mcp-server@latest"]
+    command: npm
+    args: ["exec", "--yes", "--", "slack-mcp-server@1.3.0", "--transport", "stdio"]
+    # without these the server registers no tool that posts or reacts; each
+    # seat's mcp_env.slack adds its token and its own SLACK_MCP_CHANNELS_CACHE
+    env: { SLACK_MCP_ADD_MESSAGE_TOOL: "true", SLACK_MCP_REACTION_TOOL: "true" }
     tool_annotations:
       conversations_add_message: { read_only: false, open_world: true }
   - name: github

@@ -11,9 +11,9 @@ import (
 // the node's first company and on a later one — the node's API and reconcile
 // loop as serveNodeWith wires them, the write through PUT /config, the apply
 // by the running loop. One part of that wiring is replaced: the engine's
-// applied hook, which the API installs only to re-broadcast the dashboard's
-// config-derived surfaces and which nothing /health reports reads, is taken
-// over below as the observer inside each apply.
+// company-published hook, which the API installs only to re-broadcast the
+// dashboard's config-derived surfaces and which nothing /health reports reads,
+// is taken over below as the observer inside each apply.
 //
 // For about a tenth of a second during every apply that then succeeded, the
 // body used to say `posture: isolated` — and `status: isolated`, or
@@ -24,11 +24,11 @@ import (
 //
 // TWO READERS, because one would not be able to fail: a poller samples the
 // whole run as a client does, and could miss a short apply entirely; the
-// engine's applied hook reads /health from INSIDE each apply, after the epoch
-// is swapped and before the outcome is recorded, every time.
+// engine's company-published hook reads /health from INSIDE each apply, after
+// the epoch is swapped and before the outcome is recorded, every time.
 func TestHealthNeverReportsASuccessfulApplyAsADivergence(t *testing.T) {
 	t.Parallel()
-	n := bootUnconfigured(t, "a-test-token")
+	n := bootUnconfigured(t, "a-test-token-long-enough-for-tier-a")
 	if first, err := n.health(t.Context()); err != nil || first.Configured {
 		t.Fatalf("before any write: %+v, %v — want a reachable, unconfigured node", first, err)
 	}
@@ -38,7 +38,7 @@ func TestHealthNeverReportsASuccessfulApplyAsADivergence(t *testing.T) {
 		inside []healthSample
 		failed []error
 	)
-	n.e.SetOnApplied(func(ctx context.Context) {
+	n.e.SetOnCompanyPublished(func(ctx context.Context) {
 		sample, err := n.health(ctx)
 		mu.Lock()
 		defer mu.Unlock()

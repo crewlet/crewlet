@@ -10,7 +10,7 @@ import (
 )
 
 // A PAGE'S BACKLINKS ARE ANSWERED ONLY WHERE BOTH COPIES THEY READ SERVE, on a
-// real node through the reader the engine hands the API (ADR-0031): the links
+// real node through the reader the engine hands the API (ADR-0045): the links
 // come from the pages' and the tasks' bodies and are named from both domains'
 // rows, so a node whose TRACKER copy is wrong answers none of them though its
 // knowledge base serves — and a single node, with no peer to ask, says so,

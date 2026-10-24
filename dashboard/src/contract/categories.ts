@@ -1,7 +1,7 @@
 /**
  * The categories the engine assigns, as a CLOSED set.
  *
- * Mirrors `events.CategoryNames()`, which returns EIGHT, and
+ * Mirrors `events.CategoryNames()`, which returns NINE, and
  * `internal/events`' category gate holds this list against it in both
  * directions. It held ten once: `communication` and `knowledge` are
  * categories no event is registered under, so two of the event log's chips
@@ -12,6 +12,7 @@
  */
 export const CATEGORIES = [
   "a2a",
+  "auth",
   "decision",
   "learning",
   "lifecycle",

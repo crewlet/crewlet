@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -443,6 +445,68 @@ func TestTheEndpointsAskForWhatTheyName(t *testing.T) {
 	}
 }
 
+// THE PEOPLE ARE ASKED ABOUT IN ONE REQUEST, IN THE CASE THE SERVER STORES.
+// It matches the names exactly against the lowercase ones it saved, so a name
+// copied out of a profile ("Jane") or a mention ("@jane") would find nobody;
+// and a name the caller listed twice is asked about once.
+func TestThePeopleAreAskedAboutOnceInTheServersCase(t *testing.T) {
+	s := newServer(t)
+	var body []string
+	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
+		json.NewDecoder(r.Body).Decode(&body)
+		w.Write([]byte(`[{"id":"u-jane","username":"jane"}]`))
+		return true
+	})
+	c := client(t, s)
+
+	got, err := c.UsersByUsernames(t.Context(), []string{" Jane ", "@jane", "Ola.N", ""})
+	if err != nil {
+		t.Fatalf("UsersByUsernames: %v", err)
+	}
+	if calls := s.seen(); !slices.Equal(calls, []string{"POST /api/v4/users/usernames"}) {
+		t.Fatalf("calls = %q", calls)
+	}
+	if !slices.Equal(body, []string{"jane", "ola.n"}) {
+		t.Fatalf("the server was asked about %q", body)
+	}
+	if len(got) != 1 || got[0].ID != "u-jane" {
+		t.Fatalf("answered %+v", got)
+	}
+
+	// NOBODY TO ASK ABOUT IS NO REQUEST, rather than the empty list the
+	// server refuses as an invalid parameter.
+	if got, err := c.UsersByUsernames(t.Context(), []string{" ", "@"}); err != nil || got != nil {
+		t.Fatalf("an empty ask answered %+v, %v", got, err)
+	}
+	if calls := len(s.seen()); calls != 1 {
+		t.Fatalf("an empty ask reached the network: %d calls", calls)
+	}
+}
+
+// IT READS, SO A LOST ANSWER IS ASKED AGAIN. A POST is not retried on a
+// gateway's failure unless the caller vouches that repeating it repeats
+// nothing — and this one, a read spelled as a POST, must be, or one proxy
+// hiccup at connect left every person a stranger until the next refresh.
+func TestThePeopleAskIsRetriedLikeTheRead(t *testing.T) {
+	s := newServer(t)
+	var calls atomic.Int32
+	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			return true
+		}
+		w.Write([]byte(`[]`))
+		return true
+	})
+	c := client(t, s)
+	if _, err := c.UsersByUsernames(t.Context(), []string{"jane"}); err != nil {
+		t.Fatalf("a read lost to a gateway was not asked again: %v", err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("the read was made %d times", calls.Load())
+	}
+}
+
 // An incomplete call is refused before it reaches the network, where it
 // would become a confusing 404 rather than a caller's mistake.
 func TestIncompleteCallsAreRefusedLocally(t *testing.T) {
@@ -598,6 +662,138 @@ func TestOnePostRulesBothWays(t *testing.T) {
 		}
 		if got := mattermost.Text(tc.raw); got != tc.body {
 			t.Errorf("%s: Text = %q, want %q", name, got, tc.body)
+		}
+	}
+}
+
+// servedUnder is a Mattermost served under a Site URL path: a request outside
+// it is redirected into it, with the path put in front of the whole request
+// path, as the server's RootRouter does (server/channels/app/server.go, at
+// v11.11.1), and every request that reaches the API is recorded.
+func servedUnder(t *testing.T, subpath string) (*httptest.Server, func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var reached []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, subpath+"/") {
+			r.URL.Path = path.Join(subpath, r.URL.Path)
+			http.Redirect(w, r, r.URL.String(), http.StatusFound)
+			return
+		}
+		mu.Lock()
+		reached = append(reached, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"id":"bot-1","username":"agent-swe"}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), reached...)
+	}
+}
+
+// A REDIRECT IS REFUSED, AND NAMES THE ADDRESS TO SET. An engine whose url is
+// outside the server's Site URL path used to follow the redirect: its reads
+// worked, so it connected and heard everything, while the agents' MCP server
+// on the same url — which follows no redirect — could answer nothing.
+func TestARedirectIsRefusedAndNamesTheAddress(t *testing.T) {
+	t.Parallel()
+	srv, reached := servedUnder(t, "/chat")
+	for _, tc := range []struct{ url, target string }{
+		// The ordinary case: the in-cluster Service, given no path.
+		{srv.URL, srv.URL + "/chat/api/v4/users/me"},
+		// A url under some other path, which the server prefixes too.
+		{srv.URL + "/other", srv.URL + "/chat/other/api/v4/users/me"},
+	} {
+		c, err := mattermost.NewClient(mattermost.ClientOptions{URL: tc.url, Token: "tok"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = c.Me(t.Context())
+		if mattermost.Status(err) != http.StatusFound {
+			t.Fatalf("url %s: Me = %v, want the redirect refused", tc.url, err)
+		}
+		for _, want := range []string{
+			"redirects it to " + tc.target,
+			"integrations.mattermost.url",
+			"set the url to " + srv.URL + "/chat",
+		} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("url %s: the error does not say %q: %v", tc.url, want, err)
+			}
+		}
+	}
+	if got := reached(); len(got) != 0 {
+		t.Errorf("a redirect was followed: %v", got)
+	}
+}
+
+// A WRITE IS NEVER RESENT AS A READ. Go's client follows a 302 by sending a
+// GET without the body, and Mattermost answers GET /bots/{id} with the bot —
+// so a rename, or the marker a teardown writes before it disables a bot, came
+// back as a success that changed nothing.
+func TestAWriteIsNeverResentAsARead(t *testing.T) {
+	t.Parallel()
+	srv, reached := servedUnder(t, "/chat")
+	c, err := mattermost.NewClient(mattermost.ClientOptions{URL: srv.URL, Token: "tok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.PatchBot(t.Context(), "bot-1", "Software Engineer"); err == nil {
+		t.Fatal("a rename the server redirected was reported done")
+	}
+	if err := c.MarkDisconnected(t.Context(), "bot-1"); err == nil {
+		t.Fatal("a marker the server redirected was reported written")
+	}
+	if got := reached(); len(got) != 0 {
+		t.Errorf("a redirected write reached the server as %v", got)
+	}
+}
+
+// A REDIRECT THAT KEEPS THE PATH — a proxy sending http to https — moves only
+// the scheme and the host, so the address to set keeps the url's own path.
+func TestARedirectThatKeepsThePathKeepsTheURLsPath(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://chat.example.com"+r.URL.RequestURI(), http.StatusMovedPermanently)
+	}))
+	t.Cleanup(srv.Close)
+	c, err := mattermost.NewClient(mattermost.ClientOptions{URL: srv.URL + "/team", Token: "tok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Me(t.Context())
+	if want := "set the url to https://chat.example.com/team"; err == nil ||
+		!strings.Contains(err.Error(), want) {
+		t.Fatalf("Me = %v, want it to say %q", err, want)
+	}
+}
+
+// A WEB PAGE WHERE THE API'S JSON SHOULD BE IS NAMED. Mattermost answers its
+// web app's page, 200 and text/html, at any path it has no route for — which
+// is where a url under another path than the Site URL's lands when the Site
+// URL has none — so a bare decode error would hide the one fact that says
+// what to change.
+func TestAWebPageWhereTheAPIShouldBeIsNamed(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte("<!doctype html><title>Mattermost</title>"))
+	}))
+	t.Cleanup(srv.Close)
+	c, err := mattermost.NewClient(mattermost.ClientOptions{URL: srv.URL + "/chat", Token: "tok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Me(t.Context())
+	if err == nil {
+		t.Fatal("a web page decoded as an account")
+	}
+	for _, want := range []string{"text/html", "integrations.mattermost.url", "Site URL's path"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not say %q: %v", want, err)
 		}
 	}
 }

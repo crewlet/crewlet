@@ -61,7 +61,7 @@ type DutyDeps struct {
 
 // Jobs is the tracker's housekeeping, as the maintenance worker's own shape.
 //
-// SIX JOBS, every one [maintenance.Fleet] and all but one gated. The names
+// SEVEN JOBS, every one [maintenance.Fleet] and all but one gated. The names
 // are the log's, and each is the table or the walk it is about rather than the
 // code that runs it.
 func Jobs(d DutyDeps) []maintenance.Job {
@@ -90,6 +90,12 @@ func Jobs(d DutyDeps) []maintenance.Job {
 			Scope: maintenance.Fleet,
 			Gate:  duty.pendingMoves,
 			Run:   duty.finishMoves,
+		},
+		{
+			Name:  "tracker_move_stragglers",
+			Scope: maintenance.Fleet,
+			Gate:  duty.pendingStragglers,
+			Run:   duty.carryStragglers,
 		},
 		{
 			Name:  "tracker_unblocked",
@@ -305,17 +311,16 @@ func (d *duty) duplicatesIn(ctx context.Context, project string) ([]Placement, e
 
 // pendingMerges reads whether any task is mid-merge.
 //
-// A REMOVED ONE IS NOT PENDING. A tombstoned task is frozen — its close is
-// refused like every other write to it — so nothing can finish its merge
-// until somebody restores it, and a gate that counted it would run this job
-// against a task it cannot touch on every tick until then. The restore brings
-// it back into the selection, and the merge is finished then.
+// A REMOVED ONE COUNTS. A tombstoned task is frozen, so nothing can finish its
+// merge until somebody restores it — but the job is also what NAMES such a
+// merge on every tick ([mergeWaits]), and a gate that skipped it would leave a
+// merge nobody can see waiting on a restore nobody knows is needed. The job
+// recognises it from its own rows before any claim, so it costs one keyed read.
 func (d *duty) pendingMerges(ctx context.Context) (bool, error) {
 	var found int
 	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `
-			SELECT EXISTS (SELECT 1 FROM tracker_tasks
-			               WHERE merging = 1 AND removed_at IS NULL)`).
+		return tx.QueryRowContext(ctx,
+			`SELECT EXISTS (SELECT 1 FROM tracker_tasks WHERE merging = 1)`).
 			Scan(&found)
 	})
 	if err != nil {
@@ -353,29 +358,150 @@ func (d *duty) pendingMerges(ctx context.Context) (bool, error) {
 // takes merge/<task> before the mark and heartbeats it until the close, so a
 // claim this duty can take is one whose holder released it or stopped
 // renewing it for a whole [ClaimTTL]. The duty therefore finishes a merge
-// only UNDER that claim, and a claim somebody holds — or one whose state
-// coordination cannot say — is a walk left alone this tick. Selecting on the
-// marker alone ran the rest of every merge that happened to be mid-walk when a
-// tick fired, beside its live holder: every child it reached re-parented a
-// second time under the duty's operation and the duplicate closed twice — a
-// history row for each that describes nothing, attributed to a repair of a
-// walk that was never abandoned.
+// only UNDER that claim — taken under an owner of its own
+// ([Writer.claimOwner]), so a walk on THIS node is refused exactly as a
+// peer's is — and a claim somebody holds, or one whose state coordination
+// cannot say, is a walk left alone this tick. Selecting on the marker alone
+// ran the rest of every merge that happened to be mid-walk when a tick fired,
+// beside its live holder: every child it reached re-parented a second time
+// under the duty's operation and the duplicate closed twice.
 //
 // Under the claim it reads the task AGAIN, since the holder may have finished
 // between the selection and the claim, and a merge whose marker is down is
 // done.
 //
-// ONE MERGE'S FAILURE IS NOT THE TICK'S, for the reason [duty.repairOneSided]
-// gives about its edges: the merges are independent, and stopping at the
-// first that failed left every merge after it in id order unfinished for as
-// long as that one kept failing.
+// # A merge only a person can unblock WAITS, and is reported rather than run
+//
+// Three states make every attempt a refusal until somebody acts, and none of
+// them is one a pre-flight can prevent, because each arrives AFTER the mark:
+// the survivor went to the trash (it takes no child and no duplicate until it
+// is restored — the rule [Writer.MergeDuplicates] refuses such a merge by
+// before its mark), the duplicate itself did (a task in the trash takes no
+// write, so neither its close nor the clearing of its mark can land), or the
+// survivor has been filed under one of the duplicate's own subtasks (moving
+// that subtask onto it would put it under itself). [mergeWaits] is the list.
+// Run, each was a refusal on every tick — and worse, one the job RETURNED ON:
+// the selection was one batch in id order and the loop stopped at its first
+// error, so one waiting merge held up every abandoned merge whose id sorted
+// after it, for as long as nobody made a change they may never have known
+// was needed. So a waiting merge is recognised from its own rows before any
+// claim is taken, it uses up no place in the tick's budget, and every tick
+// names it with what would release it — which is the "still reporting" half.
+// The next tick after that change finishes it, and removing the duplicate's
+// link to the survivor clears the mark instead.
+//
+// AND ONE MERGE'S FAILURE IS NOT THE TICK'S, for the reason [duty.repairOneSided]
+// gives about its edges: the merges are independent, and stopping at the first
+// that failed left every merge after it in id order unfinished for as long as
+// that one kept failing. Each failure is its own warning and the next tick
+// tries it again; the job fails only when it cannot read which merges there
+// are.
 func (d *duty) finishMerges(ctx context.Context, now, _ time.Time) (int64, error) {
-	var stuck []string
-	if err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `
-			SELECT id FROM tracker_tasks
-			WHERE merging = 1 AND removed_at IS NULL ORDER BY id LIMIT ?`,
-			WalkBatch)
+	var (
+		finished  int64
+		attempted int
+		waiting   = map[mergeWait][]string{}
+		after     string
+	)
+	fail := func(id string, err error) {
+		attempted++
+		d.deps.Logger.WarnContext(ctx, "tracker_merge_completion_failed",
+			"task", id, "error", err)
+	}
+	// THE BUDGET IS [WalkBatch] MERGES ATTEMPTED, and the walk pages on
+	// until it is spent or the marked set is: a waiting merge costs one
+	// keyed read and no claim, so it never stands in for work.
+	for attempted < WalkBatch {
+		ids, err := d.markedAfter(ctx, after)
+		if err != nil {
+			return finished, err
+		}
+		if len(ids) == 0 {
+			break
+		}
+		for _, id := range ids {
+			if attempted == WalkBatch {
+				break
+			}
+			after = id
+			walk, err := d.abandonedMerge(ctx, id)
+			switch {
+			case err != nil:
+				fail(id, err)
+				continue
+			case walk.waiting != waitNothing:
+				waiting[walk.waiting] = append(waiting[walk.waiting], id)
+				continue
+			}
+			done, err := d.finishMerge(ctx, id, now)
+			if err != nil {
+				fail(id, err)
+				continue
+			}
+			attempted++
+			if done {
+				finished++
+			}
+		}
+	}
+	for _, wait := range mergeWaits {
+		if tasks := waiting[wait.why]; len(tasks) > 0 {
+			d.deps.Logger.WarnContext(ctx, wait.event, "tasks", tasks,
+				"detail", wait.detail)
+		}
+	}
+	return finished, nil
+}
+
+// mergeWait is what an abandoned merge is waiting for somebody to change.
+type mergeWait string
+
+const (
+	// waitNothing: nothing is in the way, and the duty finishes it.
+	waitNothing mergeWait = ""
+	// waitSurvivorInTrash: the item it merges into is in the trash.
+	waitSurvivorInTrash mergeWait = "survivor_in_trash"
+	// waitDuplicateInTrash: the duplicate itself is in the trash.
+	waitDuplicateInTrash mergeWait = "duplicate_in_trash"
+	// waitSurvivorUnderDuplicate: the survivor is filed under one of the
+	// subtasks the merge would move onto it.
+	waitSurvivorUnderDuplicate mergeWait = "survivor_under_duplicate"
+)
+
+// mergeWaits is every reason an abandoned merge waits, with the line the duty
+// names it on and what releases it — ONE TABLE, so a reason cannot be
+// recognised without being said, and each is said with its own remedy: one
+// line naming three different fixes sends a reader to the wrong one.
+var mergeWaits = []struct {
+	why           mergeWait
+	event, detail string
+}{
+	{waitSurvivorInTrash, "tracker_merges_waiting_on_the_trash",
+		"each is marked mid-merge into an item that is now in the trash, " +
+			"which takes no subtask and no duplicate; restore that item and " +
+			"the next tick finishes the merge, or remove the duplicate's link " +
+			"to it and the next tick clears the mark"},
+	{waitDuplicateInTrash, "tracker_merges_of_items_in_the_trash",
+		"each is marked mid-merge and is itself in the trash, which takes no " +
+			"write — neither the close that finishes the merge nor the " +
+			"clearing of its mark; restore it and the next tick finishes the " +
+			"merge, or purge it and the merge goes with it"},
+	{waitSurvivorUnderDuplicate, "tracker_merges_waiting_on_a_cycle",
+		"each would move its subtasks onto an item that has since been filed " +
+			"under one of them, which would put that subtask under itself; " +
+			"file the item somewhere else and the next tick finishes the " +
+			"merge, or remove the duplicate's link to it and the next tick " +
+			"clears the mark"},
+}
+
+// markedAfter is one page of the tasks marked mid-merge, in id order, after a
+// cursor — the partial index's own order, so each page is a seek.
+func (d *duty) markedAfter(ctx context.Context, after string) ([]string, error) {
+	var ids []string
+	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx,
+			`SELECT id FROM tracker_tasks WHERE merging = 1 AND id > ?
+			 ORDER BY id LIMIT ?`, after, WalkBatch)
 		if err != nil {
 			return fmt.Errorf("tracker: read the abandoned merges: %w", err)
 		}
@@ -385,32 +511,11 @@ func (d *duty) finishMerges(ctx context.Context, now, _ time.Time) (int64, error
 			if err := rows.Scan(&id); err != nil {
 				return err
 			}
-			stuck = append(stuck, id)
+			ids = append(ids, id)
 		}
 		return rows.Err()
-	}); err != nil {
-		return 0, err
-	}
-
-	var finished int64
-	for _, id := range stuck {
-		claim, err := d.deps.Writer.hold(ctx, mergeClaim(id))
-		if err != nil {
-			d.walkHeld(ctx, "tracker_merge_walk_held", id, err)
-			continue
-		}
-		completed, err := d.finishMerge(ctx, id, now)
-		claim.release(ctx)
-		if err != nil {
-			d.deps.Logger.WarnContext(ctx, "tracker_merge_completion_failed",
-				"task", id, "error", err)
-			continue
-		}
-		if completed {
-			finished++
-		}
-	}
-	return finished, nil
+	})
+	return ids, err
 }
 
 // walkHeld reports a walk the duty left alone because it could not take the
@@ -429,9 +534,23 @@ func (d *duty) walkHeld(ctx context.Context, event, task string, err error) {
 	d.deps.Logger.WarnContext(ctx, event, "task", task, "error", err)
 }
 
-// finishMerge completes one abandoned merge, under its claim, and reports
-// whether there was anything left to complete.
+// finishMerge completes one abandoned merge under its own claim, reporting
+// whether it did — false for a walk that is still running, one whose claim
+// could not be read, one the holder finished between the selection and the
+// claim, or one that began to wait in between.
 func (d *duty) finishMerge(ctx context.Context, id string, now time.Time) (bool, error) {
+	claim, err := d.deps.Writer.hold(ctx, mergeClaim(id))
+	if err != nil {
+		// A HELD CLAIM IS A RUNNING WALK, and one coordination cannot
+		// answer for fails CLOSED, as the walk's own claim does: a walk
+		// that may be running is not one to race.
+		d.walkHeld(ctx, "tracker_merge_walk_held", id, err)
+		return false, nil
+	}
+	defer claim.release(ctx)
+
+	// READ AGAIN UNDER THE CLAIM, because the selection's read was taken
+	// before it: the walk may have finished, or begun to wait, in between.
 	walk, err := d.abandonedMerge(ctx, id)
 	switch {
 	case err != nil:
@@ -440,18 +559,23 @@ func (d *duty) finishMerge(ctx context.Context, id string, now time.Time) (bool,
 		// FINISHED BETWEEN THE SELECTION AND THE CLAIM, by the holder
 		// that released it.
 		return false, nil
+	case walk.waiting != waitNothing:
+		return false, nil
 	}
 	opID := d.opID("merge", id, now)
 	done := false
 	if walk.into == "" {
 		// MID-MERGE WITH NO TARGET is a marker whose relation never
-		// landed. The honest repair is to clear the marker and NOTHING
-		// ELSE: the merge did not happen, so cancelling the task would
-		// close an item nobody merged — and leaving the flag set would
-		// make this tick run for ever against a task nothing is merging.
+		// landed, or whose survivor was PURGED since — and nothing can
+		// be moved onto, or merged into, a task a purge destroyed. The
+		// honest repair is to clear the marker and NOTHING ELSE: the
+		// merge did not happen, so cancelling the task would close an
+		// item nobody merged — and leaving the flag set would make this
+		// tick run for ever against a task nothing is merging.
 		d.deps.Logger.WarnContext(ctx, "tracker_merge_marker_without_target",
-			"task", id, "detail", "the marker is cleared and the task left "+
-				"open; the merge it names never linked anything")
+			"task", id, "purged_target", walk.purged, "detail", "the marker "+
+				"is cleared and the task left open; the merge it names links "+
+				"nothing that is still there")
 		var cleared WriteResult
 		cleared, err = d.deps.Writer.UpdateTask(ctx, opID, walk.task,
 			walk.project, NoIfMatch, TaskPatch{Merging: &done},
@@ -469,11 +593,11 @@ func (d *duty) finishMerge(ctx context.Context, id string, now time.Time) (bool,
 			return false, err
 		}
 	}
-	// THE CLOSE IS THE SAME APPEND THE SEQUENCE WOULD HAVE MADE — the
-	// cancelled status and the marker together, on the duplicate's own
-	// subject. Split in two it would leave a cancelled task still marked
-	// mid-merge, which this job would then pick up again on every tick for
-	// ever.
+	// THE CLOSE IS THE SAME APPEND THE SEQUENCE WOULD HAVE MADE —
+	// the cancelled status and the marker together, on the
+	// duplicate's own subject. Split in two it would leave a
+	// cancelled task still marked mid-merge, which this job would
+	// then pick up again on every tick for ever.
 	cancelled := StatusCancelled
 	closed, err := d.deps.Writer.UpdateTask(ctx, stepID(opID, "close"),
 		walk.task, walk.project, NoIfMatch,
@@ -571,14 +695,155 @@ func (d *duty) finishMoves(ctx context.Context, now, _ time.Time) (int64, error)
 	return finished, nil
 }
 
+// strandedFrom is the predicate the straggler gate and walk share: a live task
+// flagged `inconsistent_project` under a root that is itself live, not mid-move
+// and a real root.
+//
+// THE PARTIAL INDEX'S OWN WHERE, SPELLED OUT, because this engine's planner
+// does not infer it from a query that omits it (replicated migration 0041).
+// The root's three conditions are each a reason there is nothing to do: a root
+// in the TRASH is frozen until its restore; a MARKED root is a walk the
+// abandoned-move job owns, whose pass carries a straggler as well; and a root
+// with a PARENT is no root at all but where a cycle's walk stopped, which is
+// the `cycle` flag's to report and no move's to repair. Selected anyway, each
+// would hold the gate open on every tick for work this job refuses.
+const strandedFrom = `
+	FROM tracker_tasks t JOIN tracker_tasks r ON r.id = t.root_id
+	WHERE t.inconsistent_project = 1 AND t.removed_at IS NULL
+	  AND r.removed_at IS NULL AND r.moving = 0
+	  AND (r.parent_id IS NULL OR r.parent_id = '')`
+
+// pendingStragglers reads whether any live task sits in another project than
+// its root with nothing walking that root — see [duty.carryStragglers]. ONE
+// PROBE on the partial index replicated migration 0041 ships for it.
+func (d *duty) pendingStragglers(ctx context.Context) (bool, error) {
+	var found int
+	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx,
+			`SELECT EXISTS (SELECT 1 `+strandedFrom+`)`).Scan(&found)
+	})
+	if err != nil {
+		return false, fmt.Errorf("tracker: read whether a task was filed "+
+			"behind a move: %w", err)
+	}
+	return found == 1, nil
+}
+
+// carryStragglers carries into its root's project every task a finished move
+// left behind.
+//
+// # The one ordering the move cannot see
+//
+// A move refuses a child filed under a task its walk has not carried — on a
+// node that has applied the root's move — and its last append keeps the mark
+// up over anything under the root still outside its project, running one more
+// pass for it. What neither sees is a create DECIDED on a node that had not
+// applied the root's move yet and ACCEPTED by the broker after the mark came
+// down: the applier files it under its parent, now in the new project, and
+// flags it `inconsistent_project`, and with the mark down the abandoned-move
+// job never looks at that root again. So the task stayed in the old project for
+// good, on neither project's board. The same shape is left by a re-parent a
+// lagging node decided under a descendant of a root that has since moved.
+//
+// # What finishing is
+//
+// The move's own pass ([Writer.followRoot]), under the move's own claim — so a
+// move of the same root that is running now is left alone this tick exactly as
+// the abandoned-move job leaves one, and a gesture that starts while this runs
+// waits for it. A root is read again under the claim, since it may have moved
+// again, gone to the trash or been marked in between; a straggler in the trash
+// is not carried and not waited for, because nothing marks the move as
+// unfinished any more — its restore flags it live again, and the next tick
+// carries it.
+//
+// ONE ROOT'S FAILURE IS NOT THE TICK'S, for [duty.finishMerges]' reason; the
+// budget is [WalkBatch] roots attempted, paged in root order on the partial
+// index.
+func (d *duty) carryStragglers(ctx context.Context, now, _ time.Time) (int64, error) {
+	var (
+		carried   int64
+		attempted int
+		after     string
+	)
+	for attempted < WalkBatch {
+		roots, err := d.strandedAfter(ctx, after)
+		if err != nil {
+			return carried, err
+		}
+		if len(roots) == 0 {
+			break
+		}
+		for _, root := range roots {
+			if attempted == WalkBatch {
+				break
+			}
+			after = root
+			attempted++
+			claim, err := d.deps.Writer.hold(ctx, moveClaim(root))
+			if err != nil {
+				d.walkHeld(ctx, "tracker_move_walk_held", root, err)
+				continue
+			}
+			moved, err := d.deps.Writer.carryStragglers(ctx,
+				d.opID("stragglers", root, now), root)
+			claim.release(ctx)
+			if err != nil {
+				d.deps.Logger.WarnContext(ctx, "tracker_move_stragglers_failed",
+					"task", root, "error", err)
+				continue
+			}
+			if moved > 0 {
+				carried++
+				d.deps.Logger.InfoContext(ctx, "tracker_move_stragglers_carried",
+					"task", root, "tasks", moved)
+			}
+		}
+	}
+	return carried, nil
+}
+
+// strandedAfter is one page of the roots with a straggler under them, in root
+// order, after a cursor — the partial index's own order, so each page is a
+// seek.
+func (d *duty) strandedAfter(ctx context.Context, after string) ([]string, error) {
+	var roots []string
+	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `SELECT DISTINCT t.root_id `+
+			strandedFrom+` AND t.root_id > ? ORDER BY t.root_id LIMIT ?`,
+			after, WalkBatch)
+		if err != nil {
+			return fmt.Errorf("tracker: read the tasks filed behind a move: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var root string
+			if err := rows.Scan(&root); err != nil {
+				return err
+			}
+			roots = append(roots, root)
+		}
+		return rows.Err()
+	})
+	return roots, err
+}
+
 // abandonedMerge is a mid-merge task's own account of the walk that stopped:
 // what it was merging into, and what that walk meant to do with its subtasks.
 type abandonedMerge struct {
 	task, project string
 
 	// into is the canonical task, read off the `duplicates` relation the
-	// mark wrote — empty when the mark's relation never landed.
+	// mark wrote — empty when the mark's relation never landed, or when
+	// the task it names has since been purged.
 	into string
+
+	// purged is the survivor the mark named when a purge has since
+	// destroyed it, for the line that says why a marker was cleared.
+	purged string
+
+	// waiting is what the merge waits for somebody to change, or
+	// [waitNothing] — see [duty.finishMerges].
+	waiting mergeWait
 
 	// reparent is the walk's own intent, carried on the task since the
 	// mark, so a duty finishing a walk whose holder died does what that
@@ -610,6 +875,52 @@ func (d *duty) abandonedMerge(ctx context.Context, id string) (abandonedMerge, e
 				walk.into = relation.Other
 			}
 		}
+		// THE DUPLICATE IN THE TRASH FIRST, whatever became of the
+		// survivor: a tombstone is a freeze, so every write the duty could
+		// make here — the close, and the clearing of a mark with no target
+		// — is refused until it is restored.
+		if current.Removed != nil {
+			walk.waiting = waitDuplicateInTrash
+			return nil
+		}
+		if walk.into == "" {
+			return nil
+		}
+		// THE SURVIVOR'S OWN STATE, three-valued as [missingTask]'s: in
+		// the trash the merge waits, purged it has no target, and absent
+		// with no marker this node has not applied what named it.
+		canonical, held, err := readTask(ctx, tx, walk.into)
+		switch {
+		case err != nil:
+			return err
+		case held && canonical.Removed != nil:
+			walk.waiting = waitSurvivorInTrash
+			return nil
+		case held && walk.reparent:
+			// FILED UNDER THE DUPLICATE SINCE THE MARK, which the mark's
+			// own pre-flight refused and nothing stops afterwards: the
+			// subtask it sits under would move onto it, and
+			// [refuseParent] refuses that as a cycle on every attempt.
+			var under bool
+			if under, err = inSubtree(ctx, tx, walk.task, walk.into); err != nil {
+				return err
+			}
+			if under {
+				walk.waiting = waitSurvivorUnderDuplicate
+			}
+			return nil
+		case held:
+			return nil
+		}
+		missing := missingTask(ctx, tx, walk.into, "nothing can be merged into it")
+		if !errors.Is(missing, ErrNoTask) {
+			// NOT ON THIS NODE YET, or a marker this node could not
+			// read: either way nothing here may decide the merge has
+			// no target.
+			return fmt.Errorf("tracker: task %s is mid-merge into %s: %w",
+				id, walk.into, missing)
+		}
+		walk.purged, walk.into = walk.into, ""
 		return nil
 	})
 	return walk, err

@@ -144,8 +144,13 @@ func NewGates(db store.ReplicatedReader) *Gates { return &Gates{db: db} }
 // `deleted` is the answer that stays true. A record both gates drop is dropped
 // either way, so this order decides only which reason is REPORTED, and
 // [Applier.Gated]'s opposite order only which one a drop is COUNTED under.
+//
+// THE RECORD'S BODY IS NOT READ: both gates are keyed on what the subject and
+// the writer name — a repository subject names its repository, and a name
+// subject's create checks the marker in its own apply ([gatedRepo]) — so the
+// answer is the same whether the publisher hands the body or not.
 func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
-	writer, opID string, p statelog.Position) (statelog.Reason, bool, error) {
+	writer, opID string, p statelog.Position, _ []byte) (statelog.Reason, bool, error) {
 
 	if g == nil || g.db.IsZero() {
 		return "", false, nil

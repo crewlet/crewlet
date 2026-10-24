@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -22,9 +23,15 @@ import (
 type admission struct {
 	// name is the repository's name, the URL's `.git` stripped.
 	name string
-	// operatorID is the credential, seat the human seat it is bound to — ""
-	// for a credential bound to nobody.
-	operatorID, seat string
+	// actor is who the guard resolved, as every record names them
+	// (iam.ActorFor): the author, its kind and the credential — the operator
+	// id, `token:<id>` for a Tier A token or `pat:<id>` for a person's own
+	// machine token. seat is the human seat the principal holds — a person's
+	// own, or the one the identity directory binds a token to — "" for a
+	// credential bound to nobody.
+	actor      iam.Actor
+	operatorID string
+	seat       string
 	// repo is the repository as resolved: stale, or through the barrier
 	// where a stale answer would refuse.
 	repo code.RepoRef
@@ -36,9 +43,15 @@ type admission struct {
 //
 //  1. NAME — the URL's segment with one `.git` stripped, held to the grammar;
 //     a name the grammar refuses is a repository that cannot exist (404).
-//  2. OPERATOR — the guard's; absent, the request reached the host some other
-//     way than through it, and is challenged rather than served.
-//  3. PERSON — the human seat the credential is bound to, if any.
+//  2. PRINCIPAL — the guard's resolution (iam.From). Anonymous — nothing
+//     presented, or a credential refused — is challenged, which is what makes
+//     git ask its credential helper; a resolution this node could not make,
+//     or none at all (the request reached the host past no guard), is 503 and
+//     never a challenge, since a credential git would be asked for again is
+//     not what is missing.
+//  3. PERSON — the human seat the principal holds, if any: the guard's own
+//     answer (the identity directory's binding, resolved against the running
+//     org), never a second lookup here.
 //  4. REPOSITORY — resolved STALE, and again LINEARIZABLE when the stale answer
 //     would refuse: a repository not found, or one whose status refuses op
 //     (deleted or purging for any op, archived for a push). A refusal is never
@@ -53,12 +66,18 @@ func (s *Server) admit(ctx context.Context, w http.ResponseWriter, r *http.Reque
 		auth.GitText(w, http.StatusNotFound, notFoundSentence(raw))
 		return admission{}, false
 	}
-	operatorID, ok := auth.OperatorFrom(ctx)
-	if !ok {
+	p, how := iam.From(ctx)
+	switch how {
+	case iam.Resolved:
+	case iam.Anonymous:
 		auth.GitChallenge(w)
 		return admission{}, false
+	default:
+		s.identityUnknown(w, r, name, iam.Reason(ctx))
+		return admission{}, false
 	}
-	adm := admission{name: name, operatorID: operatorID, seat: s.o.Persons(operatorID)}
+	actor := iam.ActorFor(p)
+	adm := admission{name: name, actor: actor, operatorID: actor.OperatorID, seat: p.Seat}
 	ref, err := s.o.Estate.Resolve(ctx, code.ResolveQuery{Name: name,
 		Fresh: statelog.Freshness{Level: statelog.ReadStale}})
 	if errors.Is(err, code.ErrRepoNotFound) || (err == nil && refuses(ref.Status, op)) {
@@ -86,7 +105,7 @@ func (a admission) principal() code.Principal {
 	return code.Principal{Kind: code.PrincipalOperator, OperatorID: a.operatorID, Seat: a.seat}
 }
 
-// grant is the admitted principal's standing on repo (ADR-0040): a PERSON'S,
+// grant is the admitted principal's standing on repo (ADR-0054): a PERSON'S,
 // so it reads no chart — code.GrantOf consults the roster only for a seat — and
 // a credential bound to a human seat maintains every repository while one
 // bound to nobody reads it.
@@ -96,9 +115,9 @@ func (a admission) grant(repo code.RepoRef) code.Grant {
 
 // grantRefusal is the class a push its principal's grant refuses whole is
 // recorded under: `unbound` for a token bound to nobody — the word the
-// dashboard and crewlet read for it, since the remedy is a line of
-// configuration rather than a grant — and the domain's not_permitted for any
-// other principal.
+// dashboard and crewlet read for it, since the remedy is a binding in the
+// identity directory rather than a grant — and the domain's not_permitted for
+// any other principal.
 func grantRefusal(p code.Principal) AuditRefusal {
 	if p.Kind == code.PrincipalOperator && p.Seat == "" {
 		return RefusalUnbound
@@ -120,6 +139,23 @@ func refuses(status code.RepoStatus, op auth.GitOp) bool {
 // gone reports a deleted or purging repository: one that answers nothing.
 func gone(status code.RepoStatus) bool {
 	return status == code.RepoStatusDeleted || status == code.RepoStatusPurging
+}
+
+// identityUnknown answers a request whose principal this node could not tell —
+// the guard's unknown arm, or a request that reached the host past no guard at
+// all (iam.ErrUnresolved, a wiring fault) — 503 with the identity estate's own
+// Retry-After, logged.
+func (s *Server) identityUnknown(w http.ResponseWriter, r *http.Request, name string, why error) {
+	s.log.Warn("code_git_identity_unknown", "repo", name, "path", r.URL.Path, "reason", why)
+	wait := time.Duration(auth.RetryIdentity(why)) * time.Second
+	if wait > 0 {
+		retry(w, wait)
+	}
+	sentence := "who is asking could not be told here"
+	if wait > 0 {
+		sentence += "; retry in " + seconds(wait)
+	}
+	auth.GitText(w, http.StatusServiceUnavailable, sentence)
 }
 
 // unavailable answers a request the code log could not be read for here — a

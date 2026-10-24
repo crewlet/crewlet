@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -11,10 +10,13 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/signedask"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE FLEET'S BROKER MEMBERSHIP, as an operator reads and changes it.
@@ -41,6 +43,32 @@ import (
 // membership is its operator's, and both gestures say so rather than
 // answering about a broker this fleet does not run.
 //
+// # Every request and every reply is signed
+//
+// A removal on that subject is an INSTRUCTION a member carries out through its
+// own system account — the one action the design keeps off the shared account
+// every anonymous connection is bound to, a leaf's link included — and it
+// changes the quorum every election and every create runs on. The broker
+// authenticates nothing itself, so unsigned, anybody who could reach the
+// cluster or the leaf port could remove a voter, past the grant, the step-up,
+// the confirmation and the live-member refusal the operator's route puts in
+// front of the gesture — all of which run on the ASKING node. So the subject
+// is a channel of internal/signedask's, in domains of its own
+// ([fleetBrokerChannel]): a member carries out only a request the fleet
+// signed, bound to an id it has not taken and a deadline still ahead
+// ([signedask.Channel.Admit]), and the asker believes only a reply the fleet
+// signed for the request it sent. What arrives otherwise runs nothing:
+// a request the fleet did not sign is refused and logged at error; one under
+// a key this member does not hold is answered "did not run", so the asker
+// asks the next member, as it does a member with no metadata group; and the
+// reads go through the same channel, because a forged listing is what an
+// operator removes a voter on.
+//
+// WHO ASKED travels inside the signature as the author, kind and credential
+// [iam.ActorFor] makes of the operator's principal, so the carrying member's
+// `fleet_broker_member_removed` line names the credential the removal was
+// pressed through, and nothing on the broker can choose it.
+//
 // # A voter is its raft peer id
 //
 // The metadata group counts a voter by its peer id, which nats-server derives
@@ -55,6 +83,33 @@ import (
 
 // fleetBrokerSubjectPrefix prefixes every member's broker-membership subject.
 const fleetBrokerSubjectPrefix = "crewlet.fleet.broker"
+
+// fleetBrokerChannel is the broker-membership channel, and so the stem of the
+// two key domains its envelopes are signed under — its own, so no estate
+// envelope, steer note or state-log record verifies as one.
+const fleetBrokerChannel = "fleet.broker"
+
+// brokerWire is the broker-membership channel's envelopes: one per node, both
+// halves, since a member both asks and answers.
+type brokerWire = signedask.Channel[brokerRequest, brokerReply]
+
+// newBrokerWire builds this node's broker-membership envelopes over the fleet
+// keyring every state-log record is signed under. The keyring is required on
+// every node, so this fails only on a bootstrap [config.Bootstrap.Validate]
+// would already have refused.
+func newBrokerWire(ring statelog.Keyring) (*brokerWire, error) {
+	wire, err := signedask.New[brokerRequest, brokerReply](fleetBrokerChannel, ring)
+	if err != nil {
+		return nil, fmt.Errorf("engine: the fleet broker's envelopes: %w", err)
+	}
+	return wire, nil
+}
+
+// errNoBrokerWire is a broker-membership gesture on a node built without its
+// envelopes: it can neither ask a member nor answer one.
+var errNoBrokerWire = errors.New("engine: no envelopes for the fleet broker's " +
+	"membership — every request and reply on its subjects is signed under the fleet " +
+	"keyring (Tier A secrets.keys)")
 
 // fleetBrokerSubject is the one subject a member answers the fleet's broker
 // questions on. THE NODE ID IS ESCAPED as a subject token, for the estate
@@ -197,8 +252,11 @@ type BrokerRemoval struct {
 	// Force removes it although its node holds a live presence lease as a
 	// member.
 	Force bool
-	// By is the operator, for the log.
-	By string
+	// By is who asked, as [iam.ActorFor] writes the operator's principal —
+	// the author, the kind and the credential — for the carrying member's
+	// log. It travels inside the signed request, so the member names the
+	// credential the asking node resolved and nothing a sender chose.
+	By iam.Actor
 }
 
 // target is the voter a removal names, by peer id, and its node id where the
@@ -280,29 +338,52 @@ type FleetBroker struct{ e *Engine }
 // any node answers the read, asking a member where it is not one.
 func (e *Engine) FleetBroker() *FleetBroker { return &FleetBroker{e: e} }
 
-// brokerRequest is one question to a member, as it crosses the wire. A removal
-// names the voter by Peer; Node is the operator's name for it, for the log,
-// and empty where the removal gave none.
+// brokerRequest is one question to a member, as it crosses the wire — signed
+// whole, so every field is one the fleet wrote. A removal names the voter by
+// Peer; Node is the operator's name for it, for the log, and empty where the
+// removal gave none.
 type brokerRequest struct {
+	// ID and Deadline bind the request ([signedask.Request]): minted per
+	// ask, so one gesture asked of two members is two requests.
+	ID       string    `json:"id"`
+	Deadline time.Time `json:"deadline"`
+
 	Op   string `json:"op"`
 	Peer string `json:"peer,omitempty"`
 	Node string `json:"node,omitempty"`
-	By   string `json:"by,omitempty"`
+
+	// By, ByKind and OperatorID are who asked, as [BrokerRemoval.By] — the
+	// author, the kind and the credential — and empty on a read.
+	By         string        `json:"by,omitempty"`
+	ByKind     iam.ActorKind `json:"by_kind,omitempty"`
+	OperatorID string        `json:"operator_id,omitempty"`
+
+	// From is the asking node, for the member's log.
 	From string `json:"from,omitempty"`
 }
+
+// Binding is the request's id and deadline ([signedask.Request]).
+func (r brokerRequest) Binding() (string, time.Time) { return r.ID, r.Deadline }
 
 const (
 	brokerOpGroup  = "group"
 	brokerOpRemove = "remove"
 )
 
-// brokerReply is a member's answer. Code names a refusal a caller branches on.
+// brokerReply is a member's answer — signed whole, like the request. Code
+// names a refusal a caller branches on.
 type brokerReply struct {
-	Node   string               `json:"node"`
-	Group  *jetstream.MetaGroup `json:"group,omitempty"`
-	Code   string               `json:"code,omitempty"`
-	Detail string               `json:"detail,omitempty"`
+	Node string `json:"node"`
+	// Request is the id of the request this answers ([signedask.Reply]),
+	// empty only where the request could not be read at all.
+	Request string               `json:"request,omitempty"`
+	Group   *jetstream.MetaGroup `json:"group,omitempty"`
+	Code    string               `json:"code,omitempty"`
+	Detail  string               `json:"detail,omitempty"`
 }
+
+// Answers is the id of the request this reply answers ([signedask.Reply]).
+func (r brokerReply) Answers() string { return r.Request }
 
 const (
 	brokerCodeNoGroup   = "no_meta_group"
@@ -312,7 +393,20 @@ const (
 	brokerCodeSelf      = "removing_self"
 	brokerCodeFailed    = "failed"
 	brokerCodeUnknownOp = "unknown_op"
+
+	// brokerCodeUnauthenticated is a request the member did not run because
+	// it could not verify it — signed under a key it does not hold, or not
+	// by the fleet at all. Nothing ran, so the asker asks the next member.
+	brokerCodeUnauthenticated = "unauthenticated"
+	// brokerCodeStale is a request the member did not run because it was
+	// not one to take now: past its deadline, unbound, or already taken.
+	brokerCodeStale = "stale"
 )
+
+// errUnverifiedRequest is a member's answer that it ran nothing because it
+// could not verify what it was sent ([brokerCodeUnauthenticated]) or was not to
+// take it now ([brokerCodeStale]): nothing ran, so another member may carry it.
+var errUnverifiedRequest = errors.New("engine: the member ran nothing it was sent")
 
 // errorOf turns a member's refusal back into the sentinel it answered from,
 // so a caller's errors.Is holds across the wire.
@@ -320,6 +414,8 @@ func (r brokerReply) errorOf() error {
 	switch r.Code {
 	case "":
 		return nil
+	case brokerCodeUnauthenticated, brokerCodeStale:
+		return fmt.Errorf("%w (%s)", errUnverifiedRequest, r.Detail)
 	case brokerCodeNoGroup:
 		return fmt.Errorf("%w (%s)", jetstream.ErrNoMetaGroup, r.Detail)
 	case brokerCodeNotPeer:
@@ -358,14 +454,23 @@ func replyFor(node string, err error) brokerReply {
 // own subject. Only a MEMBER serves — a leaf and a client hold no metadata
 // group — and every member does, so a node that is not one always has somebody
 // to ask.
+//
+// A MEMBER WITHOUT ITS ENVELOPES IS REFUSED rather than serving unsigned: the
+// subject carries an instruction, and a member that answered it unsigned is
+// the hole the envelopes close.
 func (e *Engine) serveFleetBroker(ctx context.Context) error {
 	if e.profile.Broker != placement.BrokerMember || e.backends == nil ||
 		e.backends.Queue == nil || e.backends.broker == nil {
 		return nil
 	}
+	if e.brokerWire == nil {
+		return errNoBrokerWire
+	}
+	// THE IDS THIS MEMBER HAS TAKEN, for as long as it serves.
+	taken := signedask.NewGuard()
 	stop, err := e.backends.Queue.Serve(ctx, fleetBrokerSubject(e.id), queue.ConcurrentAnswers,
 		func(ctx context.Context, raw []byte) ([]byte, error) {
-			return json.Marshal(e.answerBroker(ctx, raw))
+			return e.brokerWire.SealReply(e.answerBroker(ctx, raw, taken, time.Now()))
 		})
 	if err != nil {
 		return fmt.Errorf("engine: serve the fleet's broker membership: %w", err)
@@ -388,12 +493,52 @@ func (e *Engine) stopServingFleetBroker(ctx context.Context) {
 // answerBroker runs one request and ALWAYS answers, for the estate server's
 // reason: a member that stayed silent would be indistinguishable from one that
 // is down, and the asker would wait out its budget before asking the next.
-func (e *Engine) answerBroker(ctx context.Context, raw []byte) brokerReply {
-	var req brokerRequest
-	if err := json.Unmarshal(raw, &req); err != nil {
+//
+// IT RUNS ONLY WHAT IT ADMITS ([signedask.Channel.Admit]), judged on now and
+// against the ids taken: every other request is answered with what it is and
+// runs nothing — and a removal above all, which is an instruction to this
+// member's system account.
+func (e *Engine) answerBroker(ctx context.Context, raw []byte, taken *signedask.Guard,
+	now time.Time) brokerReply {
+
+	admitted := e.brokerWire.Admit(raw, taken, now)
+	switch admitted.Disposition {
+	case signedask.Tampered:
+		// NOT THE FLEET'S: nothing in it is believed, not even the id a
+		// reply would name. At ERROR — no member will ever take it, so
+		// whoever sent it reached the broker and is not the fleet.
+		log.ErrorContext(ctx, "fleet_broker_request_refused", "node", e.id,
+			"disposition", string(admitted.Disposition), "detail", admitted.Why+"; nothing in it ran")
+		return brokerReply{Node: e.id, Code: brokerCodeUnauthenticated,
+			Detail: fmt.Sprintf("%s refused a request that is not signed by this fleet", e.id)}
+	case signedask.KeyUnknown:
+		// A FACT ABOUT THIS MEMBER, which an operator changes by adding the
+		// key: "did not run", bound to the id the asker sent, so it asks
+		// the next member.
+		log.WarnContext(ctx, "fleet_broker_request_refused", "node", e.id,
+			"disposition", string(admitted.Disposition), "claimed_from", admitted.Request.From,
+			"detail", admitted.Why+"; nothing in it ran")
+		return brokerReply{Node: e.id, Request: admitted.ID, Code: brokerCodeUnauthenticated,
+			Detail: fmt.Sprintf("%s does not hold the key the request is signed under "+
+				"(it holds %v)", e.id, e.brokerWire.HeldKeys())}
+	case signedask.Undecodable:
 		return brokerReply{Node: e.id, Code: brokerCodeFailed,
-			Detail: fmt.Sprintf("%s could not decode the request: %v", e.id, err)}
+			Detail: fmt.Sprintf("%s could not decode a request the fleet signed: %s", e.id, admitted.Why)}
+	case signedask.Stale:
+		log.WarnContext(ctx, "fleet_broker_request_refused", "node", e.id,
+			"disposition", string(admitted.Disposition), "op", admitted.Request.Op,
+			"from", admitted.Request.From, "detail", admitted.Why)
+		return brokerReply{Node: e.id, Request: admitted.ID, Code: brokerCodeStale,
+			Detail: fmt.Sprintf("%s: %s", e.id, admitted.Why)}
 	}
+	req := admitted.Request
+	out := e.runBroker(ctx, req)
+	out.Request = req.ID
+	return out
+}
+
+// runBroker runs one admitted request.
+func (e *Engine) runBroker(ctx context.Context, req brokerRequest) brokerReply {
 	switch req.Op {
 	case brokerOpGroup:
 		group, err := e.backends.broker.MetaGroup()
@@ -402,7 +547,8 @@ func (e *Engine) answerBroker(ctx context.Context, raw []byte) brokerReply {
 		}
 		return brokerReply{Node: e.id, Group: &group}
 	case brokerOpRemove:
-		return e.removeHere(ctx, req.Peer, req.Node, req.By, req.From)
+		return e.removeHere(ctx, req.Peer, req.Node,
+			iam.Actor{Name: req.By, Kind: req.ByKind, OperatorID: req.OperatorID}, req.From)
 	}
 	// A NEWER PEER'S QUESTION, which this build cannot answer: said so,
 	// so the asker moves on rather than waiting.
@@ -411,21 +557,24 @@ func (e *Engine) answerBroker(ctx context.Context, raw []byte) brokerReply {
 }
 
 // removeHere removes a voter through THIS member's system account. node is
-// the operator's name for it, for the log alone.
+// the operator's name for it, and by who asked — the author, the kind and the
+// credential — each for the log alone.
 //
 // ON ITS OWN BUDGET, detached from the request that asked: once the leader has
 // proposed the change the group commits it whoever is listening, so an asker
 // that gave up changes nothing but who hears the answer.
-func (e *Engine) removeHere(ctx context.Context, peer, node, by, from string) brokerReply {
+func (e *Engine) removeHere(ctx context.Context, peer, node string, by iam.Actor, from string) brokerReply {
 	removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), jsprovision.Budget(true))
 	defer cancel()
 	if err := e.backends.broker.RemovePeer(removeCtx, peer); err != nil {
 		log.WarnContext(ctx, "fleet_broker_remove_refused", "peer", peer, "node", node,
-			"by", by, "asked_by", from, "error", err.Error())
+			"by", by.Name, "by_kind", string(by.Kind), "operator_id", by.OperatorID,
+			"asked_by", from, "error", err.Error())
 		return replyFor(e.id, err)
 	}
 	log.WarnContext(ctx, "fleet_broker_member_removed", "peer", peer, "node", node,
-		"by", by, "asked_by", from, "detail", "the metadata group no longer counts "+
+		"by", by.Name, "by_kind", string(by.Kind), "operator_id", by.OperatorID,
+		"asked_by", from, "detail", "the metadata group no longer counts "+
 			"this voter in its elections or its creates; a member that restarts "+
 			"under its name joins it again as a new voter")
 	out := brokerReply{Node: e.id}
@@ -490,9 +639,25 @@ const (
 	askAnswered
 )
 
-// ask puts one request to one member and reads its answer, within ctx.
+// ask puts one request to one member and reads its answer, within ctx —
+// signed, bound to an id of its own and to ctx's deadline, and believed only
+// where the reply is the fleet's answer to it.
+//
+// A REPLY THAT IS NOT BELIEVED IS NO ANSWER, and it is reported as answered
+// with an error: the member heard the request and may have acted on it, so
+// what it did is not known — which is what a removal reports for it.
 func (f *FleetBroker) ask(ctx context.Context, member string, req brokerRequest) (brokerReply, asked, error) {
-	body, err := json.Marshal(req)
+	wire := f.e.brokerWire
+	if wire == nil {
+		return brokerReply{}, askNotSent, errNoBrokerWire
+	}
+	deadline, bounded := ctx.Deadline()
+	if !bounded {
+		return brokerReply{}, askNotSent, errors.New("engine: a question to a member is " +
+			"asked within a deadline, which is how long the member remembers it")
+	}
+	req.ID, req.Deadline = signedask.NewID(), deadline
+	body, err := wire.SealRequest(req)
 	if err != nil {
 		return brokerReply{}, askNotSent, err
 	}
@@ -503,10 +668,13 @@ func (f *FleetBroker) ask(ctx context.Context, member string, req brokerRequest)
 	if len(replies) == 0 {
 		return brokerReply{}, askSilent, nil
 	}
-	var reply brokerReply
-	if err := json.Unmarshal(replies[0], &reply); err != nil {
+	reply, why, err := wire.OpenReply(replies[0], req.ID)
+	switch {
+	case err != nil:
 		return brokerReply{}, askAnswered, fmt.Errorf("engine: %s answered with "+
 			"something unreadable: %w", member, err)
+	case why != "":
+		return brokerReply{}, askAnswered, fmt.Errorf("engine: %s answered, and %s", member, why)
 	}
 	return reply, askAnswered, nil
 }
@@ -709,10 +877,12 @@ func (f *FleetBroker) Remove(ctx context.Context, req BrokerRemoval) (BrokerRemo
 		return BrokerRemoved{Node: node, Peer: peer, By: reply.Node, Group: reply.Group}
 	}
 	// cannotCarry is an answer that says nothing about the group: this member
-	// holds no metadata group to carry it through, or does not know the
-	// operation. The next member is asked.
+	// holds no metadata group to carry it through, does not know the
+	// operation, or ran nothing it was sent because it could not verify it.
+	// The next member is asked.
 	cannotCarry := func(reply brokerReply, err error) bool {
-		return errors.Is(err, jetstream.ErrNoMetaGroup) || reply.Code == brokerCodeUnknownOp
+		return errors.Is(err, jetstream.ErrNoMetaGroup) || errors.Is(err, errUnverifiedRequest) ||
+			reply.Code == brokerCodeUnknownOp
 	}
 
 	local, remote := f.askOrder(live, peer)
@@ -730,7 +900,8 @@ func (f *FleetBroker) Remove(ctx context.Context, req BrokerRemoval) (BrokerRemo
 	}
 	for _, member := range remote {
 		reply, how, err := f.ask(ctx, member, brokerRequest{
-			Op: brokerOpRemove, Peer: peer, Node: node, By: req.By, From: f.e.id,
+			Op: brokerOpRemove, Peer: peer, Node: node, From: f.e.id,
+			By: req.By.Name, ByKind: req.By.Kind, OperatorID: req.By.OperatorID,
 		})
 		switch {
 		case how == askNotSent:
@@ -742,8 +913,8 @@ func (f *FleetBroker) Remove(ctx context.Context, req BrokerRemoval) (BrokerRemo
 				"(`crewlet fleet broker list`) before asking again",
 				ErrRemovalOutcomeUnknown, member, voterName(peer, node), BrokerRemoveWait())
 		case err != nil:
-			// AN ANSWER NOTHING HERE CAN READ from a member that did
-			// act on the request: what it did is not known either.
+			// AN ANSWER NOTHING HERE CAN READ OR BELIEVE from a member
+			// that heard the request: what it did is not known either.
 			return BrokerRemoved{}, fmt.Errorf("%w: %w", ErrRemovalOutcomeUnknown, err)
 		}
 		if err := reply.errorOf(); err != nil {

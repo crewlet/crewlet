@@ -15,7 +15,7 @@ import (
 
 // A FAULT IN A DOMAIN NO SEAT DEPENDS ON SHEDS NO SEAT AND WITHHOLDS NO CLAIM —
 // even on a node whose view of the fleet cannot name a peer — while a fault in
-// one a seat does still makes the node's seats depend on that view (ADR-0031).
+// one a seat does still makes the node's seats depend on that view (ADR-0045).
 //
 // A wrong vectors copy goes out of service for the vectors alone: the seat copy
 // — the tracker and the knowledge base — is still this node's, so the node
@@ -29,7 +29,7 @@ func TestAFaultInADomainThatGatesNoSeatShedsNone(t *testing.T) {
 	var verdict atomic.Pointer[copyVerdict]
 	set := func(v copyVerdict) { verdict.Store(&v) }
 	set(wrongOn(vectorsName))
-	e := dataNodeOver(t, view, now, func(context.Context, *native) copyVerdict {
+	e := dataNodeOver(t, view, now, func(context.Context, *core) copyVerdict {
 		return *verdict.Load()
 	})
 	e.native.Store(&native{trackerReader: &tracker.Reader{}, pageReader: &pages.Reader{}})
@@ -45,10 +45,10 @@ func TestAFaultInADomainThatGatesNoSeatShedsNone(t *testing.T) {
 	}
 	rejudge()
 
-	if ok, reason := e.serviceable(now()); !ok {
+	if ok, reason := e.serviceable(t.Context(), now()); !ok {
 		t.Fatalf("a wrong vectors copy shed the node's seats over a stale view: %s", reason)
 	}
-	if !e.NativeHydrated(t.Context()) {
+	if !e.StateLogHydrated(t.Context()) {
 		t.Fatal("a wrong vectors copy withheld the node's seat claims over a stale view")
 	}
 	switch {
@@ -64,11 +64,11 @@ func TestAFaultInADomainThatGatesNoSeatShedsNone(t *testing.T) {
 	// view decides — and cannot.
 	set(wrongOn(trackerName))
 	rejudge()
-	if ok, _ := e.serviceable(now()); ok {
+	if ok, _ := e.serviceable(t.Context(), now()); ok {
 		t.Fatal("a node whose tracker copy is wrong and whose view cannot name a data " +
 			"node kept its seats")
 	}
-	if e.NativeHydrated(t.Context()) {
+	if e.StateLogHydrated(t.Context()) {
 		t.Fatal("a node whose tracker copy is wrong and whose view cannot name a data " +
 			"node claimed a seat")
 	}
@@ -90,8 +90,9 @@ func TestAFaultInADomainThatGatesNoSeatShedsNone(t *testing.T) {
 func TestALaggingDomainHoldsBackOnlyItsOwnOperations(t *testing.T) {
 	t.Parallel()
 	e := &Engine{backends: &Backends{}}
+	withCore(e)
 	e.native.Store(&native{trackerReader: &tracker.Reader{}, pageReader: &pages.Reader{}})
-	l := localWith(e, time.Now, func(context.Context, *native) copyVerdict {
+	l := localWith(e, time.Now, func(context.Context, *core) copyVerdict {
 		return laggingOn(pagesName)
 	})
 	work, ok := judged(t.Context(), l, trackerName)
@@ -152,9 +153,10 @@ func TestABlipOnOneDomainKeepsOnlyThatDomainsVerdict(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	verdict := wrongOn(trackerName)
 	e := &Engine{backends: &Backends{}}
+	withCore(e)
 	e.native.Store(&native{trackerReader: &tracker.Reader{}, pageReader: &pages.Reader{}})
 	l := localWith(e, func() time.Time { return now },
-		func(context.Context, *native) copyVerdict { return verdict })
+		func(context.Context, *core) copyVerdict { return verdict })
 	serves := func(domain string) bool {
 		_, ok := judged(t.Context(), l, domain)
 		return ok

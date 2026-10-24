@@ -1,4 +1,4 @@
-# ADR-0018 — The company has one clock
+# ADR-0018: The company has one clock
 
 - **Status:** accepted
 - **Authority:** `internal/config`

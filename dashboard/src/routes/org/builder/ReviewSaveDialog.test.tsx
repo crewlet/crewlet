@@ -8,6 +8,11 @@
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { DRAFT_STORAGE_KEY } from "./model/persistence.ts";
+import { deriveChanges } from "./model/changes.ts";
+import { fromDocument, toDocument } from "./model/document.ts";
+import { apply, record } from "./model/operations.ts";
+import { fixtureCompany, fixtureDerived } from "./model/testkit.ts";
+import { changeSentences } from "./ReviewSaveDialog.tsx";
 import { company, Engine, json, mountBuilder, refusal, type SentRequest } from "./testkit.tsx";
 import { toastHost, toastText } from "~/testing.tsx";
 
@@ -140,9 +145,7 @@ describe("the save", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
     expect(
-      await within(dialog).findByText(
-        "The engine refused the save. The problems it found are marked on the chart; fix them, then save again.",
-      ),
+      await within(dialog).findByText("Save refused. Fix the problems marked on the chart."),
     ).toBeDefined();
     expect(screen.getByTestId("problems Designer").textContent).toBe("1");
     expect(screen.getByText("1 problem")).toBeDefined();
@@ -188,9 +191,7 @@ describe("a save whose answer never arrives", () => {
     const dialog = await reviewEdit(engine);
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     expect(
-      await within(dialog).findByText(
-        "The save did not reach the engine, and nothing was stored. Save again once the engine is reachable.",
-      ),
+      await within(dialog).findByText("The save didn’t reach the engine. Try again."),
     ).toBeDefined();
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(toastText()).toContain("Saved. The engine is applying it."));
@@ -264,9 +265,7 @@ describe("a save whose answer never arrives", () => {
 
       mountBuilder({ engine });
       expect(
-        await screen.findByText(
-          "The last save from this tab was stored. The engine is applying it.",
-        ),
+        await screen.findByText("Your last save was stored and is being applied."),
       ).toBeDefined();
       const checked = engine.checks().length;
       await waitFor(() => expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull());
@@ -310,9 +309,7 @@ describe("a save whose answer never arrives", () => {
       // Stored only now, and answered to the page that has left.
       act(() => answerWrite());
       expect(
-        await screen.findByText(
-          "The last save from this tab was stored. The engine is applying it.",
-        ),
+        await screen.findByText("Your last save was stored and is being applied."),
       ).toBeDefined();
       await waitFor(() => expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull());
       await waitFor(() => expect(screen.getByText("editable")).toBeDefined());
@@ -341,9 +338,7 @@ describe("a save whose answer never arrives", () => {
 
       mountBuilder({ engine });
       expect(
-        await screen.findByText(
-          "The last save from this tab was stored. The engine is applying it.",
-        ),
+        await screen.findByText("Your last save was stored and is being applied."),
       ).toBeDefined();
       await screen.findByText("No problems");
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -416,11 +411,7 @@ describe("a save whose answer never arrives", () => {
         r.path.startsWith("/config/revisions/") ? json({ error: "internal" }, 500) : null;
 
       mountBuilder({ engine });
-      expect(
-        await screen.findByText(
-          "The engine did not confirm whether the last save was stored. Editing is paused until it does.",
-        ),
-      ).toBeDefined();
+      expect(await screen.findByText("Checking whether the last save was stored.")).toBeDefined();
       expect(screen.getByText("read only")).toBeDefined();
       // There is no draft on screen to review, only the save to settle.
       expect(screen.queryByRole("button", { name: "Open the review" })).toBeNull();
@@ -429,9 +420,7 @@ describe("a save whose answer never arrives", () => {
       engine.script = () => null;
       fireEvent.click(screen.getByRole("button", { name: "Check again" }));
       expect(
-        await screen.findByText(
-          "The last save from this tab was stored. The engine is applying it.",
-        ),
+        await screen.findByText("Your last save was stored and is being applied."),
       ).toBeDefined();
       await waitFor(() => expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull());
     });
@@ -452,9 +441,7 @@ describe("a save whose answer never arrives", () => {
     };
     const dialog = await reviewEdit(engine);
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
-    expect(
-      await within(dialog).findByText(/Whether the save was stored could not be confirmed/),
-    ).toBeDefined();
+    expect(await within(dialog).findByText(/Couldn’t confirm the save\./)).toBeDefined();
     // Nothing can be edited while the outcome is unknown.
     expect(screen.getByText("read only")).toBeDefined();
 
@@ -495,7 +482,7 @@ describe("the review", () => {
     // (and with it the mailbox) does not.
     fireEvent.click(
       within(dialog).getByRole("checkbox", {
-        name: "An agent seat's id is derived from the company name and its handle, so renaming the company gives every agent seat a new id: each seat's diary and onboarding progress stay under the old id and are no longer read, and every agent seat onboards again. Handles, mailboxes and episodes are unchanged.",
+        name: "Every agent onboards again and loses its diary. Handles, mailboxes and episodes stay.",
       }),
     );
     expect(save.disabled).toBe(false);
@@ -517,6 +504,34 @@ describe("the review", () => {
         "1 seat onboards again because a unit it belongs to is renamed: Dev.",
       ),
     ).toBeDefined();
+  });
+
+  // A REPLACED SEAT'S MASKED CREDENTIALS are gone once the save lands, and the
+  // review is the last place that says so.
+  test("a replacement names the credentials it does not carry over", () => {
+    const doc = fixtureCompany();
+    doc.units![0]!.roles![1]!.mcp_env = { git: { TOKEN: "__redacted__" } };
+    const base = fromDocument(doc);
+    const recorded = record(base, {
+      type: "replaceSeat",
+      target: "seat:dev",
+      key: "new:d",
+      handle: "developer",
+    });
+    if (!recorded.ok) throw new Error(recorded.message);
+    const applied = apply(base, recorded.op);
+    const changes = deriveChanges({
+      base: { draft: base, derived: fixtureDerived(doc) },
+      next: {
+        draft: applied.draft,
+        derived: fixtureDerived(toDocument(applied.draft).document),
+      },
+      ops: [recorded.op],
+      reports: [applied.report],
+    });
+    expect(changeSentences(changes).consequences).toContain(
+      "Dev starts without @dev's credentials mcp_env.git.TOKEN: the dashboard never holds their values, so they do not carry over.",
+    );
   });
 
   test("an empty audit summary cannot be saved", async () => {

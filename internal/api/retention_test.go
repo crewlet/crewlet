@@ -9,12 +9,16 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -37,9 +41,24 @@ func (f *fakeBackupRegister) PutBackupPoint(_ context.Context, p coord.BackupPoi
 // PER-STREAM GENERATIONS, because that is the estate a reanchor produces: the
 // verb names one stream, so a fleet that has re-anchored its tracker and not
 // its pages log stands at two different generations at once.
+//
+// SAFE FOR CONCURRENT REQUESTS, because every app a fixture builds without one
+// is handed a fresh one of these and a case's parallel subtests share that app:
+// the posture matrix's rows reach the acknowledgement and the reanchor read at
+// once, and each writes what it was asked. A case reads the fields after its
+// own synchronous request has answered.
 type fakeStateLog struct {
+	mu sync.Mutex
+
 	generations map[string]uint32
 	asked       string
+
+	// capacity is the last resize asked for, which is where a case about
+	// who pressed it looks — and abandoned and excluded are who the last
+	// abandon and exclusion were handed.
+	capacity  engine.CapacityRequest
+	abandoned iam.Actor
+	excluded  iam.Actor
 
 	// unreadable is the broker's answer to a LIVE read of a stream's
 	// instant, nil while it answers.
@@ -56,7 +75,9 @@ type fakeStateLog struct {
 func (f *fakeStateLog) ReanchorStatus(_ context.Context, stream string) (
 	engine.ReanchorView, error) {
 
-	generation, err := f.StreamGeneration(stream)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	generation, err := f.generationOf(stream)
 	if err != nil {
 		return engine.ReanchorView{}, err
 	}
@@ -70,6 +91,14 @@ func (f *fakeStateLog) ReanchorStatus(_ context.Context, stream string) (
 }
 
 func (f *fakeStateLog) StreamGeneration(stream string) (uint32, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.generationOf(stream)
+}
+
+// generationOf is StreamGeneration with the lock already held, so the status
+// read — which needs the generation too — takes the lock once.
+func (f *fakeStateLog) generationOf(stream string) (uint32, error) {
 	f.asked = stream
 	generation, runs := f.generations[stream]
 	if !runs {
@@ -81,6 +110,8 @@ func (f *fakeStateLog) StreamGeneration(stream string) (uint32, error) {
 func (f *fakeStateLog) Reanchor(_ context.Context, req engine.ReanchorRequest) (
 	statelog.ReanchorPlan, error) {
 
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.reanchored = req
 	if f.plan.Generation == 0 {
 		return statelog.ReanchorPlan{}, errors.New("not exercised here")
@@ -88,21 +119,30 @@ func (f *fakeStateLog) Reanchor(_ context.Context, req engine.ReanchorRequest) (
 	return f.plan, nil
 }
 
-func (f *fakeStateLog) SetCapacity(context.Context, engine.CapacityRequest) (
+func (f *fakeStateLog) SetCapacity(_ context.Context, req engine.CapacityRequest) (
 	coord.MaintenanceOperation, error) {
 
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.capacity = req
 	return coord.MaintenanceOperation{}, errors.New("not exercised here")
 }
 
-func (f *fakeStateLog) AbandonCapacity(context.Context, string) (
+func (f *fakeStateLog) AbandonCapacity(_ context.Context, _ string, by iam.Actor) (
 	coord.MaintenanceOperation, error) {
 
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.abandoned = by
 	return coord.MaintenanceOperation{}, errors.New("not exercised here")
 }
 
-func (f *fakeStateLog) ExcludeParticipant(context.Context, string, string) (
-	coord.MaintenanceOperation, error) {
+func (f *fakeStateLog) ExcludeParticipant(_ context.Context, _, _ string,
+	by iam.Actor) (coord.MaintenanceOperation, error) {
 
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.excluded = by
 	return coord.MaintenanceOperation{}, errors.New("not exercised here")
 }
 
@@ -131,6 +171,69 @@ func postAck(t *testing.T, a *api.App, path string) (int, map[string]any) {
 	var body map[string]any
 	_ = json.NewDecoder(rec.Result().Body).Decode(&body)
 	return rec.Code, body
+}
+
+// THE FLEET'S CONTROLS RECORD WHO PRESSED THEM: the eviction gate is handed
+// the caller whole, and a resize and a re-anchor name the caller's author and
+// the credential beside it — as do an abandon and an exclusion, which the
+// capacity window records against the gesture.
+//
+// The gate was handed nothing about its caller, so an eviction recorded this
+// node's own writer; a resize recorded one name, the credential's; and an
+// abandon and an exclusion recorded nobody, their caller said only in the
+// serving node's log. Mutation: hand any of them an empty party, or drop the
+// credential from the resize, and the matching half fails.
+func TestTheFleetControlsRecordWhoPressedThem(t *testing.T) {
+	t.Parallel()
+	gate := &fakeNodeGate{}
+	log := &fakeStateLog{}
+	b := closedPosture()
+	a := newApp(t, api.Options{Bootstrap: &b, Retention: &fakeBackupRegister{},
+		Capacity: log, Nodes: gate})
+	want := iam.Actor{Name: "token:founder", Kind: iam.ActorOperator,
+		OperatorID: "token:founder"}
+
+	for _, path := range []string{"/work/retention/evict/n1?confirm=n1",
+		"/work/retention/readmit/n1?confirm=n1"} {
+		if code, body := postAck(t, a, path); code != http.StatusOK {
+			t.Fatalf("%s answered %d: %v", path, code, body)
+		}
+	}
+	if len(gate.asked) != 2 {
+		t.Fatalf("the gate was asked %d times, want an eviction and a readmission",
+			len(gate.asked))
+	}
+	for _, req := range gate.asked {
+		// THE PRINCIPAL WHOLE, from which every log's writer takes the
+		// author, the kind and the credential — and the grants the org
+		// chart's and the identity estate's writers judge the record on.
+		if got := iam.ActorFor(req.By); got != want {
+			t.Errorf("the gate was written as %+v, want %+v", got, want)
+		}
+	}
+
+	postAck(t, a, "/work/retention/capacity?stream=CREWLET_TRACKER_LOG"+
+		"&bytes=1048576&confirm=1048576")
+	if log.capacity.By != want.Name || log.capacity.OperatorID != want.OperatorID {
+		t.Errorf("the resize names %q through %q, want %q through %q",
+			log.capacity.By, log.capacity.OperatorID, want.Name, want.OperatorID)
+	}
+
+	postAck(t, a, "/work/retention/reanchor?stream=CREWLET_TRACKER_LOG"+
+		"&confirm=2031-04-02T03:00:00Z")
+	if log.reanchored.By != want {
+		t.Errorf("the reanchor was handed %+v, want %+v", log.reanchored.By, want)
+	}
+
+	postAck(t, a, "/work/retention/maintenance/abandon?stream=CREWLET_TRACKER_LOG")
+	if log.abandoned != want {
+		t.Errorf("the abandon was handed %+v, want %+v", log.abandoned, want)
+	}
+	postAck(t, a, "/work/retention/maintenance/exclude?stream=CREWLET_TRACKER_LOG"+
+		"&node=n1&confirm=n1")
+	if log.excluded != want {
+		t.Errorf("the exclusion was handed %+v, want %+v", log.excluded, want)
+	}
 }
 
 // AN ACKNOWLEDGEMENT IS STAMPED WITH THE NAMED STREAM'S OWN GENERATION.
@@ -216,8 +319,73 @@ func TestAnAcknowledgementNamingAnUnknownStreamIsRefused(t *testing.T) {
 	}
 }
 
+// THE DEPLOYMENT'S CONTROLS REFUSE IN THE ENVELOPE EVERY OTHER ROUTE USES.
+//
+// A backup, a budget reset, the retention gestures and the capacity window
+// each wrote a bare `{"error": code}` of their own, so the surface an operator
+// reaches for when something is already wrong was the one whose refusals
+// carried no `message` — a screen rendering the envelope had nothing to show
+// for it, and nothing held these codes to the vocabulary at all. Each case is
+// a refusal the handler itself makes, past the grant, so what is asserted is
+// the handler's answer rather than the guard's.
+func TestTheDeploymentControlsRefuseInTheEnvelope(t *testing.T) {
+	t.Parallel()
+	node := &fakeStateLog{generations: map[string]uint32{"CREWLET_TRACKER_LOG": 3}}
+	b := closedPosture()
+	a := newApp(t, api.Options{
+		Bootstrap: &b,
+		Backup:    &fakeBackup{err: errors.New("the disk went away")},
+		Retention: &fakeBackupRegister{},
+		Capacity:  node,
+	})
+
+	cases := []struct {
+		method, path string
+		status       int
+		code         httpjson.Code
+	}{
+		{http.MethodPost, "/backup", http.StatusBadRequest, httpjson.CodeNoDestination},
+		{http.MethodPost, "/backup?dir=/tmp/x", http.StatusInternalServerError, httpjson.CodeBackupFailed},
+		{http.MethodPost, "/work/retention/ack?stream=CREWLET_TRACKER_LOG", http.StatusBadRequest, httpjson.CodePositionRequired},
+		{http.MethodPost, "/work/retention/ack?stream=NOPE&position=9", http.StatusNotFound, httpjson.CodeUnknownStream},
+		{http.MethodPost, "/work/retention/evict/node-2", http.StatusBadRequest, httpjson.CodeConfirmRequired},
+		{http.MethodGet, "/work/retention/reanchor", http.StatusBadRequest, httpjson.CodeStreamRequired},
+		{http.MethodPost, "/work/retention/reanchor?stream=CREWLET_TRACKER_LOG", http.StatusBadRequest, httpjson.CodeConfirmRequired},
+		{http.MethodPost, "/work/retention/capacity?stream=CREWLET_TRACKER_LOG", http.StatusBadRequest, httpjson.CodeTargetRequired},
+		{http.MethodPost, "/work/retention/capacity?stream=CREWLET_TRACKER_LOG&bytes=1024&confirm=1024", http.StatusConflict, httpjson.CodeCapacityRefused},
+		{http.MethodGet, "/work/retention/maintenance?stream=CREWLET_TRACKER_LOG", http.StatusInternalServerError, httpjson.CodeMaintenanceUnreadable},
+	}
+	for _, tc := range cases {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			req.Header.Set("Authorization", "Bearer secret")
+			rec := httptest.NewRecorder()
+			a.ServeHTTP(rec, req)
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("the refusal is not JSON: %v (%s)", err, rec.Body)
+			}
+			if rec.Code != tc.status || body["error"] != string(tc.code) {
+				t.Fatalf("answered %d %v, want %d %s", rec.Code, body["error"],
+					tc.status, tc.code)
+			}
+			if got := rec.Header().Get("Content-Type"); got != "application/json" {
+				t.Errorf("Content-Type = %q", got)
+			}
+			if tc.code.Message() == "" || body["message"] != tc.code.Message() {
+				t.Errorf("message = %v, want the vocabulary's sentence for %s — "+
+					"a refusal a person is shown nothing for", body["message"], tc.code)
+			}
+		})
+	}
+}
+
 // fakeNodeGate answers the two gestures with what it was built with and
 // remembers what it was asked.
+//
+// SAFE FOR CONCURRENT CALLS, because the app every default test builds holds
+// one and the posture matrix drives its routes from parallel subtests: an
+// unguarded append raced there.
 type fakeNodeGate struct {
 	readmit error
 	evict   error
@@ -226,11 +394,14 @@ type fakeNodeGate struct {
 	// log applied.
 	result *engine.GateResult
 
+	mu    sync.Mutex
 	asked []engine.GateRequest
 }
 
 func (f *fakeNodeGate) answer(req engine.GateRequest, refusal error) (engine.GateResult, error) {
+	f.mu.Lock()
 	f.asked = append(f.asked, req)
+	f.mu.Unlock()
 	if refusal != nil {
 		return engine.GateResult{}, refusal
 	}
@@ -275,7 +446,7 @@ func TestAReadmissionBelowTheFloorIsRefusedAsAnAnswer(t *testing.T) {
 			Floor: 9_000, First: 8_800},
 	}
 	gate := &fakeNodeGate{readmit: fmt.Errorf("engine: readmit node node-4: %w", refusal)}
-	a := newApp(t, api.Options{Bootstrap: &b, Native: fixedNative{nodes: gate}})
+	a := newApp(t, api.Options{Bootstrap: &b, Nodes: gate})
 
 	code, body := postAck(t, a, "/work/retention/readmit/node-4?confirm=node-4")
 	if code != http.StatusConflict {
@@ -285,10 +456,10 @@ func TestAReadmissionBelowTheFloorIsRefusedAsAnAnswer(t *testing.T) {
 		t.Errorf("error = %v, want readmission_refused", body["error"])
 	}
 	detail, _ := body["detail"].(string)
-	if detail != refusal.Error() {
+	if detail != httpjson.Sentence(refusal.Error()) {
 		t.Errorf("detail = %q, want the refusal's own sentence %q", detail, refusal.Error())
 	}
-	if hint, _ := body["hint"].(string); hint != refusal.Remedy().Detail {
+	if hint, _ := body["hint"].(string); hint != httpjson.Sentence(refusal.Remedy().Detail) {
 		t.Errorf("hint = %q, want the refusal's remedy", hint)
 	}
 	// WHAT TO DO, AS A VALUE A SURFACE SWITCHES ON: waiting for the node to
@@ -338,13 +509,13 @@ func TestAnEvictionOfALiveNodeIsRefusedAsAnAnswer(t *testing.T) {
 	b := closedPosture()
 	refusal := &statelog.EvictionRefusal{NodeID: "node-4", Detail: "it holds a live presence lease"}
 	gate := &fakeNodeGate{evict: fmt.Errorf("engine: evict node node-4: %w", refusal)}
-	a := newApp(t, api.Options{Bootstrap: &b, Native: fixedNative{nodes: gate}})
+	a := newApp(t, api.Options{Bootstrap: &b, Nodes: gate})
 
 	code, body := postAck(t, a, "/work/retention/evict/node-4?confirm=node-4")
 	if code != http.StatusConflict || body["error"] != "eviction_refused" {
 		t.Fatalf("a refused eviction answered %d %v, want 409 eviction_refused", code, body)
 	}
-	if hint, _ := body["hint"].(string); hint != refusal.Remedy().Detail {
+	if hint, _ := body["hint"].(string); hint != httpjson.Sentence(refusal.Remedy().Detail) {
 		t.Errorf("hint = %q, want the refusal's remedy %q", hint, refusal.Remedy().Detail)
 	}
 	// FORCE IS OFFERED AS AN ACTION, which is what lets a surface with no
@@ -392,7 +563,7 @@ func TestTheGateAnswersPerLogAndCarriesItsOperation(t *testing.T) {
 			Err: fmt.Errorf("pages: %w", &statelog.Unavailable{
 				Reason: statelog.ReasonLogFull, Detail: "the broker refused"})},
 	}}}
-	a := newApp(t, api.Options{Bootstrap: &b, Native: fixedNative{nodes: gate}})
+	a := newApp(t, api.Options{Bootstrap: &b, Nodes: gate})
 	op := statelog.NewOpID(time.Now().Add(-time.Minute), "evict-node-4")
 
 	code, body := postAck(t, a, "/work/retention/evict/node-4?confirm=node-4&op_id="+
@@ -405,9 +576,10 @@ func TestTheGateAnswersPerLogAndCarriesItsOperation(t *testing.T) {
 		t.Fatalf("complete = %v, op_id = %v, want false and the caller's own %s",
 			body["complete"], body["op_id"], op)
 	}
-	if len(gate.asked) != 1 || gate.asked[0].OpID != op || gate.asked[0].By != "founder" {
-		t.Fatalf("the engine was asked %+v, want %s run by the token's operator "+
-			"founder — every log's record names who ran it", gate.asked, op)
+	if len(gate.asked) != 1 || gate.asked[0].OpID != op ||
+		gate.asked[0].By.Login != "token:founder" {
+		t.Fatalf("the engine was asked %+v, want %s run by the token's own "+
+			"principal — every log's record names who ran it", gate.asked, op)
 	}
 	domains, _ := body["domains"].([]any)
 	if len(domains) != 2 {
@@ -468,7 +640,7 @@ func TestAGateTheEngineCouldNotJudgeSaysWhose(t *testing.T) {
 	b := closedPosture()
 	gate := &fakeNodeGate{evict: fmt.Errorf("%w: \"node*\" is not a node id",
 		engine.ErrInvalidGate)}
-	a := newApp(t, api.Options{Bootstrap: &b, Native: fixedNative{nodes: gate}})
+	a := newApp(t, api.Options{Bootstrap: &b, Nodes: gate})
 	if code, body := postAck(t, a, "/work/retention/evict/node*?confirm=node*"); code !=
 		http.StatusBadRequest || body["error"] != "invalid_gate" {
 		t.Fatalf("an invalid gate answered %d %v, want 400 invalid_gate", code, body)
@@ -480,7 +652,7 @@ func TestAGateTheEngineCouldNotJudgeSaysWhose(t *testing.T) {
 	if code != http.StatusServiceUnavailable || body["error"] != "eviction_unjudged" {
 		t.Fatalf("an unjudged eviction answered %d %v, want 503 eviction_unjudged", code, body)
 	}
-	if hint, _ := body["hint"].(string); hint != unjudged.Remedy().Detail {
+	if hint, _ := body["hint"].(string); hint != httpjson.Sentence(unjudged.Remedy().Detail) {
 		t.Errorf("hint = %q, want the remedy %q", hint, unjudged.Remedy().Detail)
 	}
 	got := actionsOf(body)
@@ -500,22 +672,6 @@ func actionsOf(body map[string]any) []string {
 		out = append(out, s)
 	}
 	return out
-}
-
-// A NODE RUNNING NO STATE LOG ANSWERS 503 NAMING THAT, rather than 404 —
-// the route exists on this build, and telling an operator it does not sends
-// them looking for a version mismatch.
-func TestAGateOnANodeWithNoStateLogSaysSo(t *testing.T) {
-	t.Parallel()
-	b := closedPosture()
-	a := newApp(t, api.Options{Bootstrap: &b})
-	for _, verb := range []string{"evict", "readmit"} {
-		code, body := postAck(t, a, "/work/retention/"+verb+"/node-4?confirm=node-4")
-		if code != http.StatusServiceUnavailable || body["error"] != "no_state_log" {
-			t.Errorf("%s on a node with no state log answered %d %v, want 503 "+
-				"no_state_log", verb, code, body)
-		}
-	}
 }
 
 // THE REANCHOR STATUS TELLS A NAME NOBODY RUNS FROM A LOG NOBODY COULD READ.
@@ -639,5 +795,85 @@ func TestARestoredReanchorThatWouldDiscardSaysSoAndDiscardsOnlyOnTheWord(t *test
 	}
 	if discarded, _ := body["discarded"].(map[string]any); discarded["op_id"] != "op-b-1" {
 		t.Fatalf("the answer %v does not name what it discarded", body)
+	}
+}
+
+// AN OPERATION ID THE ENGINE DID NOT MINT IS REFUSED BY THE NODE GATE, not
+// passed on.
+//
+// It carries no instant, so the state log reads it as older than every loss
+// its ledger has had — and on any deployment old enough to have swept its
+// ledger once, that answers the gesture `unknown` without publishing it, on
+// the first attempt as on every retry: a gesture that can never run and never
+// says why.
+func TestAGateRefusesAnOperationIDTheEngineDidNotMint(t *testing.T) {
+	t.Parallel()
+	for _, verb := range []string{"evict", "readmit"} {
+		b := closedPosture()
+		gate := &fakeNodeGate{}
+		code, body := postAck(t, newApp(t, api.Options{Bootstrap: &b, Nodes: gate}),
+			"/work/retention/"+verb+"/node-4?confirm=node-4&op_id=op-abc")
+		if code != http.StatusBadRequest ||
+			body["error"] != string(httpjson.CodeOpIDInvalid) ||
+			body["message"] != httpjson.CodeOpIDInvalid.Message() {
+			t.Fatalf("an invented %s op_id answered %d %v, want 400 op_id_invalid "+
+				"with its sentence", verb, code, body)
+		}
+		if len(gate.asked) != 0 {
+			t.Errorf("the invented %s op_id still reached the gate: %+v", verb,
+				gate.asked)
+		}
+	}
+}
+
+// AN OPERATION ID THE BROKER WOULD CARRY AS ANOTHER IS REFUSED BEFORE ANYTHING
+// IS WRITTEN — minted by the engine or not.
+//
+// Only an id's first thirty-six bytes are the minted uuid; the rest is free
+// text, and the whole id travels as the broker's message-id header, whose
+// writer trims its ends and turns a line break into a space. So an engine id
+// carrying either was deduplicated at the broker as another id than the one
+// every ledger answers for, and the route's own trim answered with an id the
+// caller never sent. The one an answer carried goes through byte for byte.
+func TestAGateRefusesAnOperationIDTheBrokerWouldRewrite(t *testing.T) {
+	t.Parallel()
+	minted := statelog.NewOpID(time.Now().Add(-time.Minute), "evict-node-4")
+	for name, opID := range map[string]string{
+		"a leading space":       " " + minted,
+		"a trailing space":      minted + " ",
+		"an inner space":        minted + ".a b",
+		"a line break":          minted + "\n",
+		"a tab":                 minted + ".\ttab",
+		"a byte past ASCII":     minted + ".é",
+		"one byte over the cap": minted + "." + strings.Repeat("a", 128-len(minted)),
+	} {
+		b := closedPosture()
+		gate := &fakeNodeGate{}
+		code, body := postAck(t, newApp(t, api.Options{Bootstrap: &b, Nodes: gate}),
+			"/work/retention/evict/node-4?confirm=node-4&"+
+				url.Values{"op_id": {opID}}.Encode())
+		if code != http.StatusBadRequest || body["error"] != string(httpjson.CodeOpIDInvalid) {
+			t.Errorf("an eviction under an op_id with %s answered %d %v, want 400 "+
+				"op_id_invalid", name, code, body)
+		}
+		if len(gate.asked) != 0 {
+			t.Errorf("an eviction under an op_id with %s reached the gate", name)
+		}
+	}
+
+	// THE CONTROL: a minted id at the cap, carrying punctuation from across
+	// the visible range, is the caller's and goes through verbatim.
+	good := minted + "." + strings.Repeat("a", 128-len(minted)-1-8) + "-_.:~!@9"
+	if len(good) != 128 {
+		t.Fatalf("the control is %d bytes, want exactly the cap", len(good))
+	}
+	b := closedPosture()
+	gate := &fakeNodeGate{}
+	code, body := postAck(t, newApp(t, api.Options{Bootstrap: &b, Nodes: gate}),
+		"/work/retention/evict/node-4?confirm=node-4&"+
+			url.Values{"op_id": {good}}.Encode())
+	if code != http.StatusOK || len(gate.asked) != 1 || gate.asked[0].OpID != good {
+		t.Fatalf("an eviction under a valid op_id answered %d %v and ran as %+v",
+			code, body, gate.asked)
 	}
 }

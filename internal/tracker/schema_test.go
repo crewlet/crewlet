@@ -207,14 +207,16 @@ func TestTrackerTasksIndexCount(t *testing.T) {
 			count++
 		}
 	}
-	// Eighteen: eleven plain and seven partial, the abandoned move's among
-	// them (replicated migration 0018). EVERY ONE IS REACHED BY A PLAN, which
+	// Nineteen: eleven plain and eight partial, the abandoned move's among
+	// them (replicated migration 0018) and the move stragglers' (0041) —
+	// each partial on a flag a healthy company holds on no row, so neither is
+	// a cost any ordinary commit pays. EVERY ONE IS REACHED BY A PLAN, which
 	// is what TestEveryIndexServesARegisteredQuery establishes and this count
 	// makes visible — an index added without a reader moves this number
-	// before it moves a benchmark, nine that no plan reached were deleted to
-	// reach nineteen, and the embed duty's on `embed_rev` went at 0039: a
+	// before it moves a benchmark, nine that no plan reached were deleted
+	// along the way, and the embed duty's on `embed_rev` went at 0039: a
 	// column nothing wrote, kept by a gate entry for a selection nothing ran.
-	const want = 18
+	const want = 19
 	if count != want {
 		t.Fatalf("tracker_tasks carries %d indexes and the enumeration is %d — "+
 			"every one of them is a write cost on every commit, so the two have "+

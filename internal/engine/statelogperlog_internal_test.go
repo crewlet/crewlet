@@ -10,9 +10,12 @@ import (
 
 	natsjs "github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/artifactdata"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/search"
@@ -37,7 +40,7 @@ import (
 func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 
 	declared := map[string][3]string{
 		tracker.Domain{}.Name(): {topics.TrackerLogStream, topics.TrackerLogPrefix, topics.TrackerLogWildcard},
@@ -45,6 +48,12 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 		pages.Domain{}.Name():   {topics.PagesLogStream, topics.PagesLogPrefix, topics.PagesLogWildcard},
 		usage.Domain{}.Name():   {topics.UsageLogStream, topics.UsageLogPrefix, topics.UsageLogWildcard},
 		code.Domain{}.Name():    {topics.CodeLogStream, topics.CodeLogPrefix, topics.CodeLogWildcard},
+		iamdomain.Domain{}.Name(): {topics.IamLogStream, topics.IamLogPrefix,
+			topics.IamLogWildcard},
+		artifactsdomain.Domain{}.Name(): {topics.ArtifactsLogStream, topics.ArtifactsLogPrefix,
+			topics.ArtifactsLogWildcard},
+		artifactdata.Domain{}.Name(): {topics.ArtifactDataLogStream, topics.ArtifactDataLogPrefix,
+			topics.ArtifactDataLogWildcard},
 	}
 	var registered []string
 	for _, d := range registeredDomains() {

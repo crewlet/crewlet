@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -152,14 +153,14 @@ func TestBasicIsAcceptedOnlyOnGitRoutes(t *testing.T) {
 		{http.MethodPost, "/git/r.git/git-receive-pack", "Bearer secret"},
 	} {
 		res, seen := serve(t, g, tc.method, tc.path, tc.header)
-		if res.StatusCode != http.StatusOK || seen != "founder" {
-			t.Errorf("%s %s with %q = %d as %q, want 200 as founder",
-				tc.method, tc.path, tc.header, res.StatusCode, seen)
+		if res.StatusCode != http.StatusOK || seen != iam.TokenLogin("founder") {
+			t.Errorf("%s %s with %q = %d as %q, want 200 as %s",
+				tc.method, tc.path, tc.header, res.StatusCode, seen, iam.TokenLogin("founder"))
 		}
 	}
 
-	// Everywhere else a Basic credential is no credential: refused where a
-	// token is required, in the API's own JSON …
+	// Everywhere else a Basic credential is no credential: refused on every
+	// guarded route, in the API's own JSON …
 	for _, tc := range []struct{ method, path string }{
 		{http.MethodGet, "/config"},
 		{http.MethodPost, "/backup"},
@@ -179,29 +180,37 @@ func TestBasicIsAcceptedOnlyOnGitRoutes(t *testing.T) {
 				"the credential to every route", tc.method, tc.path, ch)
 		}
 	}
-	// … and attributing nobody where a token is not required.
-	if res, seen := serve(t, g, http.MethodGet, "/events", basic("crewlet", "secret")); res.StatusCode != http.StatusOK || seen != "" {
-		t.Errorf("GET /events with Basic = %d as %q, want 200 as nobody", res.StatusCode, seen)
+	// … and attributing nobody on a route the guard exempts.
+	if res, seen := serve(t, g, http.MethodGet, "/health", basic("crewlet", "secret")); res.StatusCode != http.StatusOK || seen != "" {
+		t.Errorf("GET /health with Basic = %d as %q, want 200 as nobody", res.StatusCode, seen)
 	}
 }
 
-// THE TWO GIT PREFIXES ARE ALWAYS GUARDED, reads included and whatever
-// allow_anonymous_read opens: a repository is the company's source, and the
-// code reads name every repository and the people who pushed to it.
+// THE TWO GIT PREFIXES ARE GUARDED, reads included, as every route the
+// exemption list does not name is: a repository is the company's source, and
+// the code reads name every repository and the people who pushed to it. Asked
+// with no credential, a git route answers git's challenge and a code read the
+// API's JSON; and a slash-ended prefix covers no sibling, so a path that only
+// begins like a git route is challenged as nothing but an API route.
 func TestTheGitPrefixesAreGuardedEvenForReads(t *testing.T) {
 	t.Parallel()
 	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
 	for _, path := range []string{
 		"/git/r.git/info/refs", "/git/r.git/git-upload-pack", "/code/repos", "/code/repos/r/pushes",
 	} {
-		if !g.Requires(path, http.MethodGet) {
-			t.Errorf("GET %s served without a token under anonymous read", path)
+		if auth.Unguarded(path) {
+			t.Errorf("%s is exempt from the guard", path)
+		}
+		res, seen := serve(t, g, http.MethodGet, path, "")
+		if res.StatusCode != http.StatusUnauthorized || seen != "" {
+			t.Errorf("GET %s with no credential = %d as %q, want 401", path, res.StatusCode, seen)
 		}
 	}
-	// A slash-ended prefix covers no sibling.
 	for _, path := range []string{"/github/hook", "/codes", "/gitx"} {
-		if auth.AlwaysGuarded(path) {
-			t.Errorf("%s is always guarded as if it were under a git prefix", path)
+		res, _ := serve(t, g, http.MethodGet, path, "")
+		if ch := res.Header.Get("WWW-Authenticate"); res.StatusCode != http.StatusUnauthorized || ch != "" {
+			t.Errorf("GET %s with no credential = %d challenged %q, want the API's 401 with no "+
+				"challenge", path, res.StatusCode, ch)
 		}
 	}
 }

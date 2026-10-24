@@ -13,7 +13,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
-	apiOperator "github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/code"
@@ -22,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/iam"
 	seatplacement "github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -29,10 +29,11 @@ import (
 // THE ENGINE'S OWN GIT HOST, ON THE API: smart HTTP under /git/ for a person's
 // git client, and the code host's REST reads under /code/.
 //
-// Both prefixes are ALWAYS GUARDED ([auth.GuardedPrefixes]) and neither is ever
-// on api.public ([auth.Public] names neither): a repository is the company's
+// Both prefixes are GUARDED, as every route the exemption list
+// ([auth.Unguarded]) does not name is, and neither is ever on api.public
+// ([auth.Public] names neither): a repository is the company's
 // source, and a person reaches it with their own bound token — the third person
-// transport beside the act route and the operator's MCP (ADR-0037). On a git
+// transport beside the act route and the operator's MCP (ADR-0051). On a git
 // route, and on no other, that token may arrive as a Basic credential's
 // password, because a git client presents one no other way.
 //
@@ -46,10 +47,10 @@ import (
 // its own copy, and any other node through the estate router.
 //
 // Whether a route is SERVED is asked of the engine on every request
-// ([CodeSurface]), for [NativeRoutes]' reason: the code host and its reads are
-// built with the native runtime, at boot or at the first apply whose company
-// sets code.native — on a node that booted with no company, after the app was
-// assembled. A route that finds nothing answers WHY, as the engine decides it
+// ([CodeSurface]), as the native halves are (native.go): the code host and its
+// reads are built with the native runtime, at boot or at the first apply whose
+// company sets code.native — on a node that booted with no company, after the
+// app was assembled. A route that finds nothing answers WHY, as the engine decides it
 // from what the fleet activated ([engine.Engine.CodeUnserved]): a company that
 // hosts no code is a 404, and a node that serves none of it now while the
 // configuration the fleet activated hosts code — or before this node has read
@@ -283,21 +284,19 @@ func (a *App) serveCodeRead(kind code.ReadKind, what string) http.Handler {
 			codeNotServed(w, why)
 			return
 		}
-		asker, ok := a.codeAsker(r)
+		// A CODE READ IS HELD TO WHO ASKS, so one asked for nobody is
+		// refused rather than judged as somebody. The guard answers every
+		// request it admits to this route with a resolved principal, and
+		// [auth.Caller] writes the refusal for anything else in the
+		// engine's three arms: 401 for a caller who presented nothing it
+		// accepts, 503 for a node that could not tell — and a request that
+		// reached the route past no guard at all is that 503 too, logged
+		// as the wiring fault it is, never a read.
+		p, ok := auth.Caller(w, r)
 		if !ok {
-			// THE GUARD STAMPS EVERY CALLER IT ADMITS — a disabled
-			// guard's as the anonymous operator — so this is a request
-			// that reached the route past no guard at all. A code read is
-			// held to who asks, and a read asked for nobody is refused
-			// rather than judged as somebody.
-			writeJSON(w, http.StatusForbidden, map[string]string{
-				"error": "operator_required",
-				"detail": "a code read is answered to the person who asks it, and this request " +
-					"carries no operator identity",
-			})
 			return
 		}
-		q, err := codeReadQuery(kind, asker, r)
+		q, err := codeReadQuery(kind, codeAsker(p), r)
 		if err != nil {
 			writeQueryError(w, what, err)
 			return
@@ -311,21 +310,16 @@ func (a *App) serveCodeRead(kind code.ReadKind, what string) http.Handler {
 	})
 }
 
-// codeAsker is who a REST code read asks as: the operator credential the
-// guard admitted — a disabled guard's every caller is the anonymous operator,
-// whom no seat binds — bound to the human seat the current chart binds it to,
-// or to nobody. Every principal a person presents reads every repository
-// (ADR-0040), so the answer a person gets is the whole listing; what the asker
-// buys here is that the reader judges every read by who asked it, so a seat's
-// read, when one asks, cannot be answered as a person's. False where the
-// request carries no operator at all.
-func (a *App) codeAsker(r *http.Request) (code.Principal, bool) {
-	id, ok := auth.OperatorFrom(r.Context())
-	if !ok || id == "" {
-		return code.Principal{}, false
-	}
-	return code.Principal{Kind: code.PrincipalOperator, OperatorID: id,
-		Seat: apiOperator.BoundSeat(a.chart, a.contacts, id)}, true
+// codeAsker is who a REST code read asks as: the principal the guard resolved
+// for the request, under the credential it came through ([iam.ActorFor]), and
+// the human seat it holds — a person's own, or the one the identity directory
+// binds a token to — or none. Every principal a person presents reads every
+// repository (ADR-0054), so the answer a person gets is the whole listing; what
+// the asker buys here is that the reader judges every read by who asked it, so
+// a seat's read, when one asks, cannot be answered as a person's.
+func codeAsker(p iam.Principal) code.Principal {
+	return code.Principal{Kind: code.PrincipalOperator,
+		OperatorID: iam.ActorFor(p).OperatorID, Seat: p.Seat}
 }
 
 // codeReadQuery is a read's request, asked as asker, refused
@@ -344,7 +338,7 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, r *http.Request) (c
 		}
 		status := code.RepoStatus(v)
 		if !status.Valid() {
-			return code.ReadQuery{}, fmt.Errorf("%w: status: %q is not one of %v", queries.ErrBadParams,
+			return code.ReadQuery{}, fmt.Errorf("%w: the status %q is not one of %v", queries.ErrBadParams,
 				v, code.RepoStatuses())
 		}
 		q.Status = append(q.Status, status)
@@ -356,7 +350,7 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, r *http.Request) (c
 		// and a limit past a page's bound is the reader's to refuse, naming
 		// its bound.
 		if !whole || n < 0 {
-			return code.ReadQuery{}, fmt.Errorf("%w: limit: %q is not a whole number of zero or more "+
+			return code.ReadQuery{}, fmt.Errorf("%w: the limit %q is not a whole number of zero or more "+
 				"(0 is the read's own page size)", queries.ErrBadParams, p.String("limit"))
 		}
 		q.Limit = int(n)
@@ -369,10 +363,10 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, r *http.Request) (c
 // `not_found`, naming it; a repository the asker's grant does not cover is
 // `not_permitted` with the reader's own sentence; a level, a cursor or a
 // parameter the reader refuses is `bad_params` with the reader's own sentence;
-// and anything that clears by waiting — a read refusal that is retryable, no
-// data node serving — is `unavailable` with its own Retry-After, by
-// [queries.ClassifyUnavailable], the registry's own classification rather than
-// a second list here.
+// and a read this node could not serve — a state-log refusal, no data node
+// serving — is `unavailable` with its own Retry-After (none where waiting
+// cannot clear it), by [queries.ClassifyFailure], the registry's own
+// classification rather than a second list here.
 //
 // NOT PERMITTED IS 403 AND NEVER THE 500 everything unnamed falls into: it is
 // a refusal of the CALLER ([code.ErrNotPermitted]) that every node judging the
@@ -396,7 +390,7 @@ func codeRefusal(w http.ResponseWriter, what, repo string, err error) {
 		errors.Is(err, code.ErrInvalid):
 		writeQueryError(w, what, fmt.Errorf("%w: %w", queries.ErrBadParams, err))
 	default:
-		writeQueryError(w, what, queries.ClassifyUnavailable(err))
+		writeQueryError(w, what, queries.ClassifyFailure(err))
 	}
 }
 
@@ -448,7 +442,7 @@ func viewOf(v host.Verification) verificationView {
 	if v.State == host.VerifyFailed {
 		out.Error, out.Detail = stream.CodeQueryFailed, v.Err.Error()
 		if errors.Is(v.Err, host.ErrStopping) || errors.Is(v.Err, gitproc.ErrBusy) ||
-			errors.Is(queries.ClassifyUnavailable(v.Err), queries.ErrUnavailable) {
+			errors.Is(queries.ClassifyFailure(v.Err), queries.ErrUnavailable) {
 			out.Error = stream.CodeUnavailable
 		}
 	}
@@ -564,10 +558,10 @@ func (a *App) serveCodeVerify(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
 			"error": stream.CodeUnavailable, "detail": err.Error(),
 		})
-	case errors.Is(queries.ClassifyUnavailable(err), queries.ErrUnavailable):
+	case errors.Is(queries.ClassifyFailure(err), queries.ErrUnavailable):
 		// What clears by waiting — the code log unreadable here, no data
 		// node serving the resolve — with the refusal's own Retry-After.
-		writeQueryError(w, "code_verify", queries.ClassifyUnavailable(err))
+		writeQueryError(w, "code_verify", queries.ClassifyFailure(err))
 	default:
 		// The sentence too, for viewOf's reason: a node whose memory
 		// cannot hold the check names the node to run it on.

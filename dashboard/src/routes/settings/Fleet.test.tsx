@@ -153,11 +153,11 @@ describe("the fleet, refused before any reading", () => {
         </Router>
       </ClientContext.Provider>,
     );
-    expect(await screen.findByText(/This answer is auth-gated/)).toBeDefined();
+    expect(await screen.findByText("You don’t have access to this.")).toBeDefined();
     expect(document.getElementById(PAGE_ACTIONS_SLOT)?.textContent).toBe("");
     expect(view.container.querySelector(".crewlet-statcard")).toBeNull();
     expect(screen.queryByText("No nodes are reporting")).toBeNull();
-    expect(screen.queryByText(/last reading that succeeded/)).toBeNull();
+    expect(screen.queryByText(/last good reading/)).toBeNull();
   });
 });
 
@@ -357,7 +357,9 @@ describe("the lease tables", () => {
   test("Held by is the same link to the node in both lease tables", async () => {
     const view = mountFleet();
     expect(await screen.findByText("integration-reconciler")).toBeDefined();
-    const held = [...view.container.querySelectorAll(".grid-wrap .held-by")];
+    const held = [...view.container.querySelectorAll(".grid-wrap a")].filter(
+      (a) => a.textContent === "harness-0",
+    );
     expect(held).toHaveLength(2);
     for (const cell of held) {
       expect(cell.tagName).toBe("A");

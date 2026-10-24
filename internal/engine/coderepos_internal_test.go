@@ -94,7 +94,7 @@ func applyReconciled(t *testing.T, e *Engine, doc string) {
 // codeLogEnd is the last sequence e's code log holds.
 func codeLogEnd(t *testing.T, e *Engine) uint64 {
 	t.Helper()
-	end, err := e.native.Load().log.Domain(code.Domain{}.Name()).log.End(t.Context())
+	end, err := e.core.Load().log.Domain(code.Domain{}.Name()).log.End(t.Context())
 	if err != nil {
 		t.Fatalf("read the code log's end: %v", err)
 	}
@@ -106,7 +106,7 @@ func codeLogEnd(t *testing.T, e *Engine) uint64 {
 // readers and the trim append whatever a reconcile does.
 func codeLogWrites(t *testing.T, e *Engine, after uint64) []code.Subject {
 	t.Helper()
-	running := e.native.Load().log.Domain(code.Domain{}.Name())
+	running := e.core.Load().log.Domain(code.Domain{}.Name())
 	end := codeLogEnd(t, e)
 	var out []code.Subject
 	for seq := after + 1; seq <= end; seq++ {
@@ -337,7 +337,8 @@ func TestAPurgedRepositoryIsDeclaredAgainByTheDuty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build the epoch: %v", err)
 	}
-	e.installEpoch(again, time.Now().UTC())
+	stampActivation(again, time.Now())
+	e.installEpoch(t.Context(), again)
 	if err := e.redeclareCode(t.Context(), "web"); err != nil {
 		t.Fatalf("hand the purged name on: %v", err)
 	}
@@ -396,10 +397,12 @@ func TestTheCodeRetentionDutyRunsWhereAPurgeMayBeWritten(t *testing.T) {
 // THE RUNTIME'S APPLIES DO NOT WAIT FOR THE INBOUND EDGE.
 //
 // The chart's projects, the knowledge containers and the repositories are
-// written through the runtime's own writers, and they were applied only after
-// the inbound edge's return — so on a node whose edge was not running, every
-// activation's projects and repositories went unapplied with nothing saying
-// so. The edge is only the parsers'.
+// written through the runtime's own writers, and they were once applied only
+// after the inbound edge's return — so on a node whose edge was not running,
+// every activation's projects and repositories went unapplied with nothing
+// saying so. The edge is only the parsers' ([Engine.reconcileNative]); the
+// three are clauses of [Engine.followCompany], run here in its order on a node
+// whose edge is withheld.
 func TestTheReconcileDoesNotDependOnTheInboundEdge(t *testing.T) {
 	t.Parallel()
 	e := newSandboxNode(t, parseCompany(t, codeReposDoc(webRepo(""), "")))
@@ -421,7 +424,11 @@ func TestTheReconcileDoesNotDependOnTheInboundEdge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build the epoch: %v", err)
 	}
-	e.reconcileNative(t.Context(), next, time.Now().UTC())
+	stampActivation(next, time.Now())
+	e.reconcileNative(t.Context(), next)
+	e.applyChart(t.Context(), next)
+	e.applyContainers(t.Context(), next)
+	e.applyCodeRepos(t.Context(), next, next.ActivatedAt)
 	reconciled(t, e)
 	if api, err := repoNamed(t, e, "api"); err != nil || api.Status != code.RepoStatusActive {
 		t.Errorf("a reconcile on a node with no inbound edge left api %+v (%v), want it created",
@@ -577,13 +584,13 @@ func TestASupersededReconcileSaysOnlyThat(t *testing.T) {
 	t.Parallel()
 	e := newSandboxNode(t, parseCompany(t, codeReposDoc(webRepo(""), "")))
 	reconciled(t, e)
-	n := e.native.Load()
+	n, rt := e.native.Load(), e.core.Load()
 	const inFlight = 8
 	ctx, end := context.WithCancelCause(t.Context())
 	var answered atomic.Int32
 	store, err := code.NewStore(code.StoreOptions{
 		Publisher: losingPublisher{
-			Publisher: n.log.Domain(code.Domain{}.Name()).publisher,
+			Publisher: rt.log.Domain(code.Domain{}.Name()).publisher,
 			lose: func(ctx context.Context) bool {
 				if answered.Add(1) == inFlight {
 					end(fmt.Errorf("%w: a newer activation asked", code.ErrSuperseded))
@@ -596,7 +603,7 @@ func TestASupersededReconcileSaysOnlyThat(t *testing.T) {
 				return true
 			},
 		},
-		DB: n.log.estate().Reader(), NodeID: n.log.nodeID,
+		DB: rt.log.estate().Reader(), NodeID: rt.nodeID,
 	})
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)

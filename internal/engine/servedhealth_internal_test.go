@@ -134,7 +134,7 @@ func TestAReadAsksTheBrokerNothing(t *testing.T) {
 	t.Parallel()
 	e, _, q := bootRejoinNode(t)
 	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
-	s := e.native.Load().log
+	s := e.core.Load().log
 	running := s.Domain(trackerName)
 	read := func() {
 		t.Helper()
@@ -188,7 +188,7 @@ func TestAReadAsksTheBrokerNothing(t *testing.T) {
 func BenchmarkAReadsReadiness(b *testing.B) {
 	e, _, q := bootRejoinNode(b)
 	waitUntil(b, 20*time.Second, "the node to admit seats", hydrated(b, e))
-	s := e.native.Load().log
+	s := e.core.Load().log
 	running := s.Domain(trackerName)
 	ctx := b.Context()
 	query := statelog.Query{Level: statelog.ReadStale}
@@ -227,7 +227,7 @@ func TestABoundedReadIsNeverCheckedAgainstEndsNobodyCouldRefresh(t *testing.T) {
 	t.Parallel()
 	e, _, _ := bootRejoinNode(t)
 	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
-	running := e.native.Load().log.Domain(trackerName)
+	running := e.core.Load().log.Domain(trackerName)
 	bounded := statelog.Query{Level: statelog.ReadStale, MaxLagSeq: 1_000}
 
 	refusal := refusedOverAFailedRefresh(t, running, &running.ends, endsStale, bounded,
@@ -251,7 +251,7 @@ func TestAFloorNobodyCouldRefreshIsRefusedAsUnknownNamingItsAge(t *testing.T) {
 	t.Parallel()
 	e, _, _ := bootRejoinNode(t)
 	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
-	s := e.native.Load().log
+	s := e.core.Load().log
 	running := s.Domain(trackerName)
 
 	refusal := refusedOverAFailedRefresh(t, running, s.floorMemos.of(trackerName), statelog.FloorCacheStale,

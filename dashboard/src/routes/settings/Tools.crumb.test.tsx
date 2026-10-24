@@ -63,7 +63,7 @@ afterEach(() => {
 });
 
 function mount(tool: string) {
-  location.hash = `#/settings/tools/${tool}`;
+  location.hash = `#/settings/mcp-tools/${tool}`;
   const store = new Store();
   store.applyTools(tools);
   store.setConnected(true);
@@ -93,7 +93,7 @@ test("a titled tool is named in the trail by its title, in the body face", async
   mount("search_knowledge");
   await settle();
   expect(here()?.textContent).toBe("Search knowledge");
-  expect(here()?.classList.contains("mono"), "a title drawn as a key").toBe(false);
+  expect(here()?.classList.contains("is-mono"), "a title drawn as a key").toBe(false);
   expect(document.title).toBe("Search knowledge · Crewlet");
 });
 
@@ -101,5 +101,5 @@ test("an untitled tool is named by its name, as its header names it", async () =
   mount("create_issue");
   await settle();
   expect(here()?.textContent).toBe("create_issue");
-  expect(here()?.classList.contains("mono")).toBe(false);
+  expect(here()?.classList.contains("is-mono")).toBe(false);
 });

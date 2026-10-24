@@ -60,6 +60,19 @@ type GateCandidate struct {
 	Purge   func(id, writer, opID string) ([]byte, error)
 	Evict   func(node, writer, opID string) ([]byte, error)
 	Readmit func(node, writer, opID string) ([]byte, error)
+
+	// About is a record ABOUT object id published on a subject that does
+	// NOT name it, for a domain that has such records — the identity
+	// estate's directory records and sessions, which name their person in
+	// the payload while their subject names nobody, or a lineage. Nil for a
+	// domain whose every record names its object in its subject.
+	//
+	// Set, the cases ask the applier about one about a purged object
+	// (which it must drop) and one about a live object, and ask the reader
+	// about each WITH the record's body, as the publisher asks about its own append
+	// ([statelog.Gates.GatedAt]) — and a reader that ignores the body is
+	// one of the bent readers the family must catch.
+	About func(id, writer, opID string) (statelog.Subject, []byte, error)
 }
 
 // GateFactory builds a fresh gate candidate for one case.
@@ -77,7 +90,10 @@ type GateFactory func(t *testing.T) GateCandidate
 // which records about a purged object its marker drops, and holds the reader
 // to the same answer for each — because the marker covers whatever subjects
 // the applier says it does, and the tracker's reader once covered the task's
-// own while its applier dropped the task's turns too.
+// own while its applier dropped the task's turns too. Where the domain has
+// records about an object on a subject that does not name it
+// ([GateCandidate.About]), the reader is asked about those WITH their bodies,
+// as the publisher asks about its own append, after the coverage probe.
 //
 // It then turns the same cases on the candidate's own reader bent each way a
 // reader has been, or could plausibly be, written wrong, and requires every
@@ -118,7 +134,14 @@ func RunGates(t *testing.T, new GateFactory) {
 		}
 	})
 	t.Run("the cases catch a reader that breaks the rule", func(t *testing.T) {
+		keyedOnPayload := new(t).About != nil
 		for name, bend := range gateLiars {
+			if name == ignoresTheBody && !keyedOnPayload {
+				// NOTHING TO CATCH: with no record about an object on
+				// another subject, the body is never what a gate is
+				// keyed on, and a reader that ignores it keeps the rule.
+				continue
+			}
 			t.Run(name, func(t *testing.T) {
 				err := GateAgreement(t, func(t *testing.T) GateCandidate {
 					c := new(t)
@@ -363,7 +386,7 @@ func gateAgreement(t *testing.T, new GateFactory) ([]string, error) {
 			kind = c.Kind
 		}
 		reason, gated, err := gates.GatedAt(t.Context(),
-			statelog.Subject{Kind: kind, ID: q.id}, q.writer, q.opID, at(q.seq))
+			statelog.Subject{Kind: kind, ID: q.id}, q.writer, q.opID, at(q.seq), nil)
 		if err != nil {
 			problems = append(problems, fmt.Sprintf("%s: GatedAt: %v", q.name, err))
 			continue
@@ -380,6 +403,9 @@ func gateAgreement(t *testing.T, new GateFactory) ([]string, error) {
 	}
 	covered, uncovered := gateCoverage(t, c, db, gates, at)
 	problems = append(problems, uncovered...)
+	if c.About != nil {
+		problems = append(problems, gateAbout(t, c, db, gates, at)...)
+	}
 	if len(problems) == 0 {
 		return covered, nil
 	}
@@ -443,7 +469,7 @@ func gateCoverage(t *testing.T, c GateCandidate, db store.ReplicatedHandle, gate
 				covered = append(covered, kind)
 			}
 			reason, reported, err := gates.GatedAt(t.Context(), env.Subject,
-				env.Writer, env.OpID, rec.Position)
+				env.Writer, env.OpID, rec.Position, body)
 			switch {
 			case err != nil:
 				problems = append(problems, fmt.Sprintf("%s: GatedAt: %v", label, err))
@@ -530,6 +556,80 @@ func applyGateHistory(t *testing.T, c GateCandidate, db store.ReplicatedHandle,
 	return problems
 }
 
+// gateAbout asks the applier about a record about the purged obj-3 and one
+// about the live obj-2, each on a subject that does not name its object, and
+// asks the reader about each with its body: the first is the deletion gate's,
+// and the second is nobody's.
+//
+// THE APPLIER FIRST, for [applyGateHistory]'s reason: the reader has to agree
+// with what the applier dropped. AFTER the coverage probe's positions, and
+// asked about rather than applied for [gateCoverage]'s reason.
+func gateAbout(t *testing.T, c GateCandidate, db store.ReplicatedHandle, gates statelog.Gates,
+	at func(uint64) statelog.Position) []string {
+
+	t.Helper()
+	w, err := db.Writer(t.Context())
+	if err != nil {
+		t.Fatalf("pin a writer: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+	stored := time.Unix(1_700_000_000, 0).UTC()
+	first := uint64(len(gateHistory) + 2*len(c.SubjectKinds) + 1)
+	var problems []string
+	for i, q := range []struct {
+		name, id, opID string
+		want           statelog.Reason
+	}{
+		{name: "a record about the purged obj-3 on another subject",
+			id: gateObj3, opID: "gates-about-purged", want: statelog.ReasonDeleted},
+		{name: "a record about obj-2 on another subject",
+			id: gateObj2, opID: "gates-about-live"},
+	} {
+		subj, body, err := c.About(q.id, gateCounted, q.opID)
+		if err != nil {
+			t.Fatalf("encode %s: %v", q.name, err)
+		}
+		p := at(first + uint64(i))
+		env, err := c.Domain.Envelope(body)
+		if err != nil {
+			t.Fatalf("envelope %s: %v", q.name, err)
+		}
+		var reason statelog.Reason
+		var gated bool
+		if txErr := w.Tx(t.Context(), func(tx *sql.Tx) error {
+			var gErr error
+			reason, gated, gErr = c.Applier.Gated(t.Context(), tx, statelog.Record{
+				Envelope: env, Position: p, Payload: body, StoredAt: stored,
+			})
+			return gErr
+		}); txErr != nil {
+			t.Fatalf("gate %s: %v", q.name, txErr)
+		}
+		if gated != (q.want != "") || (gated && reason != q.want) {
+			problems = append(problems, fmt.Sprintf("the applier gates %s as "+
+				"(%q, %v), want %q", q.name, reason, gated, q.want))
+		}
+		got, ok, err := gates.GatedAt(t.Context(), subj, gateCounted,
+			q.opID, p, body)
+		switch {
+		case err != nil:
+			problems = append(problems, fmt.Sprintf("%s: GatedAt: %v", q.name, err))
+		case ok != (got != ""):
+			problems = append(problems, fmt.Sprintf("%s: GatedAt = (%q, %v) — "+
+				"a gate with no reason, or a reason with no gate", q.name, got, ok))
+		case got != q.want:
+			problems = append(problems, fmt.Sprintf("%s: GatedAt reports %q with "+
+				"the record's body, want %q — the applier reads the payload, so "+
+				"the reader must", q.name, got, q.want))
+		}
+	}
+	return problems
+}
+
+// ignoresTheBody names the one bent reader that only a domain keyed on the
+// payload ([GateCandidate.About]) can be caught by.
+const ignoresTheBody = "ignores the record's body"
+
 // gateLiars are the readers the gate cases must catch, each built from an
 // honest one so every domain gets the same controls for free.
 //
@@ -539,67 +639,73 @@ func applyGateHistory(t *testing.T, c GateCandidate, db store.ReplicatedHandle,
 var gateLiars = map[string]func(statelog.Gates) statelog.Gates{
 	"answers the eviction before the deletion": func(g statelog.Gates) statelog.Gates {
 		return liar{g, func(ctx context.Context, subj statelog.Subject, writer, opID string,
-			p statelog.Position) (statelog.Reason, bool, error) {
-			if r, ok, err := evictionOnly(ctx, g, subj, writer, opID, p); err != nil || ok {
+			p statelog.Position, body []byte) (statelog.Reason, bool, error) {
+			if r, ok, err := evictionOnly(ctx, g, subj, writer, opID, p, body); err != nil || ok {
 				return r, ok, err
 			}
-			return g.GatedAt(ctx, subj, writer, opID, p)
+			return g.GatedAt(ctx, subj, writer, opID, p, body)
 		}}
 	},
 	"returns early on the purge's own id": func(g statelog.Gates) statelog.Gates {
 		return liar{g, func(ctx context.Context, subj statelog.Subject, writer, opID string,
-			p statelog.Position) (statelog.Reason, bool, error) {
+			p statelog.Position, body []byte) (statelog.Reason, bool, error) {
 			// With no writer the honest reader answers from the marker
 			// alone, so an op id the marker exempts where another id on
 			// the same object is deleted is the purge's own.
-			_, markerGates, err := g.GatedAt(ctx, subj, "", opID, p)
+			_, markerGates, err := g.GatedAt(ctx, subj, "", opID, p, body)
 			if err != nil {
 				return "", false, err
 			}
-			other, _, err := g.GatedAt(ctx, subj, "", opID+"-not-the-purge", p)
+			other, _, err := g.GatedAt(ctx, subj, "", opID+"-not-the-purge", p, body)
 			if err != nil {
 				return "", false, err
 			}
 			if !markerGates && other == statelog.ReasonDeleted {
 				return "", false, nil // the marker's own record: stop here
 			}
-			return g.GatedAt(ctx, subj, writer, opID, p)
+			return g.GatedAt(ctx, subj, writer, opID, p, body)
 		}}
 	},
 	"never reads the deletion gate": func(g statelog.Gates) statelog.Gates {
 		return liar{g, func(ctx context.Context, subj statelog.Subject, writer, opID string,
-			p statelog.Position) (statelog.Reason, bool, error) {
-			return evictionOnly(ctx, g, subj, writer, opID, p)
+			p statelog.Position, body []byte) (statelog.Reason, bool, error) {
+			return evictionOnly(ctx, g, subj, writer, opID, p, body)
+		}}
+	},
+	ignoresTheBody: func(g statelog.Gates) statelog.Gates {
+		return liar{g, func(ctx context.Context, subj statelog.Subject, writer, opID string,
+			p statelog.Position, _ []byte) (statelog.Reason, bool, error) {
+			return g.GatedAt(ctx, subj, writer, opID, p, nil)
 		}}
 	},
 	"never reads the eviction gate": func(g statelog.Gates) statelog.Gates {
 		return liar{g, func(ctx context.Context, subj statelog.Subject, _, opID string,
-			p statelog.Position) (statelog.Reason, bool, error) {
-			return g.GatedAt(ctx, subj, "", opID, p)
+			p statelog.Position, body []byte) (statelog.Reason, bool, error) {
+			return g.GatedAt(ctx, subj, "", opID, p, body)
 		}}
 	},
 	"opens the window at the eviction's own position": func(g statelog.Gates) statelog.Gates {
 		return liar{g, func(ctx context.Context, subj statelog.Subject, writer, opID string,
-			p statelog.Position) (statelog.Reason, bool, error) {
-			r, ok, err := g.GatedAt(ctx, subj, writer, opID, p)
+			p statelog.Position, body []byte) (statelog.Reason, bool, error) {
+			r, ok, err := g.GatedAt(ctx, subj, writer, opID, p, body)
 			if err != nil || ok {
 				return r, ok, err
 			}
 			next := p
 			next.Seq++
-			return evictionOnly(ctx, g, subj, writer, opID, next)
+			return evictionOnly(ctx, g, subj, writer, opID, next, body)
 		}}
 	},
 	"keeps the window open at the readmission's position": func(g statelog.Gates) statelog.Gates {
 		return liar{g, func(ctx context.Context, subj statelog.Subject, writer, opID string,
-			p statelog.Position) (statelog.Reason, bool, error) {
-			r, ok, err := g.GatedAt(ctx, subj, writer, opID, p)
+			p statelog.Position, body []byte) (statelog.Reason, bool, error) {
+			r, ok, err := g.GatedAt(ctx, subj, writer, opID, p, body)
 			if err != nil || ok || p.Seq == 0 {
 				return r, ok, err
 			}
 			prev := p
 			prev.Seq--
-			return evictionOnly(ctx, g, subj, writer, opID, prev)
+			return evictionOnly(ctx, g, subj, writer, opID, prev, body)
 		}}
 	},
 }
@@ -622,30 +728,30 @@ var kindLiars = map[string]kindLiar{
 	"asks the marker about its object's own kind alone": {needsAnotherKind: true,
 		bend: func(own string, g statelog.Gates) statelog.Gates {
 			return liar{g, func(ctx context.Context, subj statelog.Subject, writer, opID string,
-				p statelog.Position) (statelog.Reason, bool, error) {
+				p statelog.Position, body []byte) (statelog.Reason, bool, error) {
 				if subj.Kind != own {
-					return evictionOnly(ctx, g, subj, writer, opID, p)
+					return evictionOnly(ctx, g, subj, writer, opID, p, body)
 				}
-				return g.GatedAt(ctx, subj, writer, opID, p)
+				return g.GatedAt(ctx, subj, writer, opID, p, body)
 			}}
 		}},
 	"asks the marker about every kind": {
 		bend: func(own string, g statelog.Gates) statelog.Gates {
 			return liar{g, func(ctx context.Context, subj statelog.Subject, writer, opID string,
-				p statelog.Position) (statelog.Reason, bool, error) {
-				r, ok, err := g.GatedAt(ctx, subj, writer, opID, p)
+				p statelog.Position, body []byte) (statelog.Reason, bool, error) {
+				r, ok, err := g.GatedAt(ctx, subj, writer, opID, p, body)
 				if err != nil || ok {
 					return r, ok, err
 				}
-				return g.GatedAt(ctx, statelog.Subject{Kind: own, ID: subj.ID}, writer, opID, p)
+				return g.GatedAt(ctx, statelog.Subject{Kind: own, ID: subj.ID}, writer, opID, p, body)
 			}}
 		}},
 }
 
 // evictionOnly asks the honest reader about the writer's eviction alone.
 func evictionOnly(ctx context.Context, g statelog.Gates, subj statelog.Subject,
-	writer, opID string, p statelog.Position) (statelog.Reason, bool, error) {
-	return g.GatedAt(ctx, statelog.Subject{Kind: ungatedKind, ID: subj.ID}, writer, opID, p)
+	writer, opID string, p statelog.Position, body []byte) (statelog.Reason, bool, error) {
+	return g.GatedAt(ctx, statelog.Subject{Kind: ungatedKind, ID: subj.ID}, writer, opID, p, body)
 }
 
 // applierLiars are the appliers the gate cases must catch, each built from the
@@ -685,10 +791,10 @@ func (l applierLiar) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record)
 type liar struct {
 	statelog.Gates
 	gatedAt func(ctx context.Context, subj statelog.Subject, writer, opID string,
-		p statelog.Position) (statelog.Reason, bool, error)
+		p statelog.Position, body []byte) (statelog.Reason, bool, error)
 }
 
 func (l liar) GatedAt(ctx context.Context, subj statelog.Subject, writer, opID string,
-	p statelog.Position) (statelog.Reason, bool, error) {
-	return l.gatedAt(ctx, subj, writer, opID, p)
+	p statelog.Position, body []byte) (statelog.Reason, bool, error) {
+	return l.gatedAt(ctx, subj, writer, opID, p, body)
 }

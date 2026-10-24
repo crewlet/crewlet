@@ -274,7 +274,8 @@ func (d *codeDesk) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, e
 // serveDesk serves d as data-d, the one data node the fleet's placement names.
 func serveDesk(t *testing.T, f *fleet, d *codeDesk) {
 	t.Helper()
-	stop, err := Serve(t.Context(), f.start(t), "data-d", d, ServerSeams{})
+	stop, err := Serve(t.Context(), f.start(t), ServerOptions{Self: "data-d", Local: d,
+		Envelopes: fleetEnvelopes})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -541,7 +542,8 @@ func TestARoutedPushCanBeDecidedInsideItsAttempt(t *testing.T) {
 		timing := Production()
 		timing.WriteAttempt = write
 		_, err := NewRouter(RouterOptions{Self: "agent-1", Queue: &recordingAsker{},
-			Placement: &fakePlacement{}, Session: NewSession(), Timing: timing})
+			Placement: &fakePlacement{}, Session: NewSession(), Timing: timing,
+			Envelopes: fleetEnvelopes})
 		return err
 	}
 	bound := statelog.ReadBudget + code.CommitBudget + code.ReplyMargin

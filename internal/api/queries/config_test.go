@@ -1,6 +1,7 @@
 package queries_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -8,10 +9,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -22,18 +27,32 @@ func configSurface(t *testing.T, docs ...string) (*configapi.Service, []string) 
 	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "cq.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 
+	// A KEYRING, because the surface refuses to be built without one and
+	// reads only what was sealed under it.
+	key, err := secrets.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cipher, err := secrets.NewCipher(secrets.Keyring{ActiveID: "k1", Keys: map[string][]byte{"k1": key}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	var ids []string
 	for i, doc := range docs {
 		cfg, err := config.ParseCompany([]byte(doc))
 		if err != nil {
 			t.Fatalf("parse: %v", err)
 		}
-		payload, err := json.Marshal(cfg)
+		document, err := json.Marshal(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload, err := secrets.Seal(cipher, document)
 		if err != nil {
 			t.Fatal(err)
 		}
 		id, err := db.Configs().InsertActive(t.Context(), store.Revision{
-			CreatedByKind: store.AuthorOperator,
+			CreatedByKind: iam.ActorOperator,
 			Source:        "test", CreatedBy: "operator", Summary: "revision",
 			Payload: payload, CreatedAt: pinned.Add(time.Duration(i) * time.Minute),
 		})
@@ -43,8 +62,12 @@ func configSurface(t *testing.T, docs ...string) (*configapi.Service, []string) 
 		ids = append(ids, id)
 	}
 	svc, err := configapi.New(configapi.Options{
-		Store: db, Plane: coordmemory.NewFleet(),
-		Bootstrap: &config.Bootstrap{Stream: config.Stream{StoreDir: t.TempDir()}},
+		Store: db, Plane: coordmemory.NewFleet(), Cipher: cipher,
+		Holders: func(context.Context, []string, time.Time) (
+			map[string]configapi.SeatHolder, error) {
+
+			return nil, nil
+		},
 	})
 	if err != nil {
 		t.Fatalf("configapi.New: %v", err)
@@ -52,19 +75,29 @@ func configSurface(t *testing.T, docs ...string) (*configapi.Service, []string) 
 	return svc, ids
 }
 
-func TestTheConfigQueryIsOperatorOnly(t *testing.T) {
+func TestTheConfigQueryIsAdmins(t *testing.T) {
 	t.Parallel()
 	// Reading the document exposes the whole company — its org chart,
 	// which integrations are wired, and every ${VAR} reference by name.
-	// That is what makes /config the one prefix never eligible for
-	// anonymous read, and the socket must not be the way around it.
+	// That is what makes it admin's, and the socket must not be the way
+	// around it: somebody who uses every app of the company and is not an
+	// admin must reach none of these.
 	surface, _ := configSurface(t, companyDoc)
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Config: surface})
 
+	narrow := iam.WithPrincipal(t.Context(), iam.Principal{
+		ID: uuid.New(), Login: "token:reader", Kind: iam.KindMachine,
+		Stage: iam.StageActive, Grants: iam.Apps,
+	})
 	for _, what := range []string{"config", "config_audit", "config_diff", "config_entities"} {
-		if _, err := r.Answer(t.Context(), what, nil, ""); err == nil {
-			t.Errorf("%s answered a caller with no operator", what)
+		if _, err := r.Answer(narrow, what, nil); err == nil {
+			t.Errorf("%s answered somebody holding every app", what)
+		}
+		// The control: the permission it DOES need is declared, or the
+		// assertion above would pass on a question nothing can reach.
+		if got := r.PostureOf(what).Grant(); got != iam.GrantAdmin {
+			t.Errorf("%s requires %q, want %q", what, got, iam.GrantAdmin)
 		}
 	}
 }
@@ -83,20 +116,20 @@ func TestTheEntityQueryAnswersWhatTheConfigRoomAsksFor(t *testing.T) {
 	sources := queries.Sources{Config: surface}
 
 	list := asMap(t, answer(t, sources, "config_entities",
-		map[string]any{"kind": "roles"}))
+		map[string]any{"kind": configapi.EntityLLMProviders}))
 	ids, _ := list["ids"].([]any)
 	if len(ids) == 0 {
-		t.Fatalf("the roles collection came back empty: %v", list)
+		t.Fatalf("the providers collection came back empty: %v", list)
 	}
 
 	one := asMap(t, answer(t, sources, "config_entities",
-		map[string]any{"kind": "roles", "id": ids[0]}))
+		map[string]any{"kind": configapi.EntityLLMProviders, "id": ids[0]}))
 	entity, _ := one["entity"].(map[string]any)
 	if entity == nil {
 		t.Fatalf("opening %v produced no entity: %v", ids[0], one)
 	}
-	if entity["name"] == nil {
-		t.Errorf("the entity carries no name, so the editor renders nothing: %v", entity)
+	if entity["model"] == nil {
+		t.Errorf("the entity carries no model, so the editor renders nothing: %v", entity)
 	}
 }
 
@@ -115,11 +148,12 @@ func TestTheEntityQueryRefusesWhatItCannotAddress(t *testing.T) {
 	}{
 		{"no kind at all", map[string]any{}},
 		{"a kind nothing addresses", map[string]any{"kind": "widgets"}},
-		{"an id nothing carries", map[string]any{"kind": "roles", "id": "nobody"}},
+		{"an id nothing carries", map[string]any{"kind": configapi.EntityLLMProviders, "id": "nobody"}},
+		{"a seat nothing carries", map[string]any{"kind": configapi.EntityRoles, "id": "nobody"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := r.Answer(t.Context(), "config_entities", tc.params, "operator")
+			_, err := r.Answer(everyGrant(t), "config_entities", tc.params)
 			if err == nil {
 				t.Fatal("answered rather than refused")
 			}
@@ -137,7 +171,7 @@ func TestTheEntityQueryOnAnUnconfiguredNodeIsNullNotAnError(t *testing.T) {
 	t.Parallel()
 	surface, _ := configSurface(t)
 	got := answer(t, queries.Sources{Config: surface}, "config_entities",
-		map[string]any{"kind": "roles"})
+		map[string]any{"kind": configapi.EntityLLMProviders})
 	if got != nil {
 		t.Fatalf("an unconfigured node answered %v", got)
 	}
@@ -164,7 +198,7 @@ func TestTheConfigQueryOnAnUnconfiguredNodeIsNullNotAnError(t *testing.T) {
 	surface, _ := configSurface(t)
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Config: surface})
-	data, err := r.Answer(t.Context(), "config", nil, "operator")
+	data, err := r.Answer(everyGrant(t), "config", nil)
 	if err != nil {
 		t.Fatalf("config: %v", err)
 	}
@@ -222,8 +256,8 @@ func TestADiffOfARevisionThatIsGoneIsNullNotAnError(t *testing.T) {
 	surface, _ := configSurface(t, companyDoc)
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Config: surface})
-	data, err := r.Answer(t.Context(), "config_diff",
-		map[string]any{"revision_id": "00000000-0000-0000-0000-000000000000"}, "operator")
+	data, err := r.Answer(everyGrant(t), "config_diff",
+		map[string]any{"revision_id": "00000000-0000-0000-0000-000000000000"})
 	if err != nil {
 		t.Fatalf("config_diff: %v", err)
 	}
@@ -237,7 +271,7 @@ func TestTheDiffQueryNeedsARevision(t *testing.T) {
 	surface, _ := configSurface(t, companyDoc)
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Config: surface})
-	if _, err := r.Answer(t.Context(), "config_diff", nil, "operator"); err == nil {
+	if _, err := r.Answer(everyGrant(t), "config_diff", nil); err == nil {
 		t.Fatal("a diff query with no revision was answered")
 	}
 }

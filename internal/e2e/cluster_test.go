@@ -200,6 +200,11 @@ func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Rela
 	hook []string) (*cluster, error) {
 	t.Helper()
 	c := &cluster{relays: relays, nodes: make([]*node, n)}
+	// ONE KEYRING FOR THE MESH, minted once and handed to every member.
+	// Every record on every state log is signed under it, so members that
+	// did not share one would refuse each other's records — which is a
+	// property these cases exist to exercise rather than to trip over.
+	ringID, ringMaterial := fleetKeyring(t)
 
 	// EVERY MEMBER'S BOOTSTRAP IS ASSEMBLED, AND ITS STORE SEEDED, HERE, on
 	// the test's own goroutine before any member starts: a seed that cannot
@@ -208,7 +213,7 @@ func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Rela
 	// for the moment a member starts.
 	boots := make([]config.Bootstrap, n)
 	for i := range n {
-		boot, err := memberBootstrap(t, relays, i, n)
+		boot, err := memberBootstrap(t, relays, i, n, ringID, ringMaterial)
 		if err != nil {
 			return nil, fmt.Errorf("member %d: %w", i, err)
 		}
@@ -345,13 +350,16 @@ const clusterStartAttempts = jetstreamtest.ClusterStartAttempts
 const clusterHost = "127.0.0.1"
 
 // memberBootstrap is member i's half of Tier A: where it keeps its data, the
-// mesh it routes through, and the fleet-wide settings every member shares.
+// mesh it routes through, and the fleet-wide settings every member shares —
+// the keyring among them, which is the mesh's one ring.
 //
 // EVERY NODE HAS ITS OWN STORE AND ITS OWN STREAM DIRECTORY, because that is
 // what a fleet is: n machines, each with its own disk. Sharing either would
 // make this one node wearing three hats, and every fleet mechanism under it
 // would pass for the wrong reason.
-func memberBootstrap(t *testing.T, relays *jetstreamtest.Relays, i, n int) (config.Bootstrap, error) {
+func memberBootstrap(t *testing.T, relays *jetstreamtest.Relays, i, n int,
+	ringID, ringMaterial string) (config.Bootstrap, error) {
+
 	port, routes, advertise := relays.Member(i)
 	peers, err := otherMembers(routes, port)
 	if err != nil {
@@ -360,6 +368,17 @@ func memberBootstrap(t *testing.T, relays *jetstreamtest.Relays, i, n int) (conf
 	}
 	boot := config.DefaultBootstrap()
 	boot.Node.ID = fmt.Sprintf("node-%d", i)
+	// ONE RING FOR THE WHOLE MESH. A member keyed differently would
+	// refuse every peer's records, which is exactly what these cases
+	// exist to prove cannot happen by accident.
+	boot.Secrets.ActiveKeyID, boot.Secrets.Keys = ringID, []config.SecretKey{
+		{ID: ringID, Material: ringMaterial},
+	}
+	withCredential(t, &boot)
+	// ONE ADDRESS AND ONE SIGN-IN FOR THE WHOLE FLEET, as behind a load
+	// balancer: a browser signs in on whichever member it reaches and
+	// presents that cookie to every other. See [withSignIn].
+	withSignIn(&boot)
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	boot.Stream.Cluster.Name = relays.ClusterName()
@@ -393,16 +412,10 @@ func memberBootstrap(t *testing.T, relays *jetstreamtest.Relays, i, n int) (conf
 	// harness can only stand up a fleet an operator could run — which is
 	// also why [fleetSize] is three.
 	boot.Coordination.Type = config.CoordinationEmbeddedKV
-	// A TOKEN, because a write over HTTP is attributed to the operator it
-	// names and a member with none refuses every one — the file uploads
-	// cross the fleet through the API. AND A PERSON'S: a git push is a
-	// person's own, under the token their human seat names
-	// (contact.crewlet_operator_id), and one bound to nobody fetches only
-	// ([fleetCompanyDoc] binds this one to the developer).
-	boot.API.Auth.Tokens = []config.APIToken{
-		{ID: e2eOperatorID, Token: e2eOperatorToken},
-		{ID: e2eDevID, Token: e2eDevToken},
-	}
+	// AND A PERSON'S TOKEN: a git push is a person's own, under a token the
+	// identity directory binds to their human seat ([bindDev] binds this
+	// one to the developer), and one bound to nobody fetches only.
+	withDevCredential(&boot)
 	return boot, nil
 }
 
@@ -458,10 +471,10 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 	// It cannot close the race — nothing can, short of never letting the
 	// port go — but it shortens the window from however long a broker
 	// takes to get there down to microseconds, and it names the CAUSE. Its
-	// partner is the engine's own post-bind check, which is what catches a
-	// port lost inside that window: together they turn a member that comes
-	// up, serves clients and silently never routes into an immediate,
-	// named retry.
+	// partner is the broker's own refusal of a bind that fails inside that
+	// window — a Fatalf in nats-server, which the start reports at once as
+	// [jetstream.ErrRoutePortTaken] — and together they turn a lost port
+	// into an immediate, named retry.
 	//
 	// THE SAME HOST THE MEMBER BINDS, set by [memberBootstrap] — a probe
 	// against a different address answers about a port the server never
@@ -545,20 +558,30 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 
 	return &node{
 		engine: e, app: app, server: srv, model: model,
-		id:          boot.Node.ID,
+		id:          e.Node().ID(),
 		snapshotDir: boot.Store.SnapshotDirFor(),
 		metrics:     recorder,
 	}, stops, nil
 }
 
-// refusal names what failed to come up, and marks a refused CONFIG as not
-// worth another attempt: it is refused identically on every one — the same
-// file parses the same way — so a fresh mesh would spend the whole start
-// budget re-asking a question already answered, and then report it as a
-// cluster that never came up.
+// refusal names what failed to come up, and marks a refusal that repeats as
+// not worth another attempt: it is refused identically on every one, so a
+// fresh mesh would spend the whole start budget re-asking a question already
+// answered, and then report it as a cluster that never came up.
+//
+// Two refusals repeat. A refused CONFIG — the same file parses the same way.
+// And a broker that declared itself dead ([jetstream.ErrBrokerDied]): what
+// nats-server calls fatal is a fact about the configuration or the host, a
+// store directory it cannot use or an address it cannot read — except a port
+// somebody else took between this mesh reserving it and the member binding
+// it, which the broker reports as [jetstream.ErrRoutePortTaken] or
+// [jetstream.ErrLeafPortTaken] and is the race the attempts are for.
 func refusal(what string, err error) error {
 	var fault *config.Fault
-	if errors.As(err, &fault) {
+	died := errors.Is(err, jetstream.ErrBrokerDied) &&
+		!errors.Is(err, jetstream.ErrRoutePortTaken) &&
+		!errors.Is(err, jetstream.ErrLeafPortTaken)
+	if errors.As(err, &fault) || died {
 		return fmt.Errorf("%w: %s: %w", errNotRetryable, what, err)
 	}
 	return fmt.Errorf("%s: %w", what, err)
@@ -684,7 +707,7 @@ const clusterSettle = 10 * time.Second
 func (c *cluster) whole(t *testing.T, n *node) func() bool {
 	t.Helper()
 	return func() bool {
-		if !n.engine.NativeHydrated(t.Context()) {
+		if !n.engine.StateLogHydrated(t.Context()) {
 			return false
 		}
 		ctx, cancel := context.WithTimeout(t.Context(), engine.ProbeReadBudget)
@@ -935,7 +958,16 @@ func claimAFleetTakesAndOffersSnapshots(t *testing.T, c *cluster) {
 	// that does not name one of its own domains, so a snapshot missing a
 	// domain is one nobody can adopt — and it is indistinguishable from a
 	// healthy one until somebody needs it.
-	for _, want := range []string{"tracker", "vectors", "pages", "usage"} {
+	//
+	// ASKED OF THE ENGINE rather than listed here: a literal list of three
+	// outlived the org chart and the identity directory joining the
+	// register, and certified neither. Every node runs every registered
+	// domain, so the register is exactly what the artefact must name.
+	var runs []string
+	for _, domain := range engine.Domains() {
+		runs = append(runs, domain.Name())
+	}
+	for _, want := range runs {
 		if _, named := manifest.Domains[want]; !named {
 			t.Errorf("the snapshot names %v and not %q — a recipient refuses "+
 				"an artefact that does not name every domain it registers",
@@ -1494,7 +1526,7 @@ func (c *cluster) logEnds(t *testing.T) []statelog.Position {
 		t.Fatalf("a JetStream client on member 0: %v", err)
 	}
 	var out []statelog.Position
-	for _, domain := range n.engine.Domains() {
+	for _, domain := range engine.Domains() {
 		name := domain.Stream().Name
 		stream, err := js.Stream(t.Context(), name)
 		if err != nil {
@@ -1525,11 +1557,11 @@ func (c *cluster) logEnds(t *testing.T) []statelog.Position {
 // table name beside it is what sends somebody to the right applier.
 //
 // The domain list comes from the ENGINE rather than from a copy here, because
-// a second list is how a fourth domain is silently left uncompared.
+// a second list is how a new domain is silently left uncompared.
 func replicatedDigest(t *testing.T, n *node) map[string]string {
 	t.Helper()
 	out := map[string]string{}
-	for _, domain := range n.engine.Domains() {
+	for _, domain := range engine.Domains() {
 		for table, class := range domain.Tables() {
 			if class != statelog.Replicated {
 				continue
@@ -1720,4 +1752,40 @@ func TestAPartitionedMemberIsSilentRatherThanSlow(t *testing.T) {
 		back, _ := scatter(askEach)
 		return len(back) == len(peers)
 	})
+}
+
+// A REFUSAL THAT REPEATS ENDS THE CASE; A LOST PORT IS RETRIED.
+//
+// The mesh retries by default, so what it must not retry is the short list
+// known to repeat: a refused config, and a broker that declared itself dead.
+// Before the broker's Fatalf was carried, a member whose store was refused
+// waited out its readiness budget and was then reported as having lost its
+// route port — so a store no attempt could fix was retried as a port race.
+// A port taken during the start is still a death, and still the race.
+func TestARefusalThatRepeatsIsNotRetried(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		in        error
+		retryable bool
+	}{
+		"a refused config": {&config.Fault{Kind: config.ErrShape, Detail: "not a port"}, false},
+		"a store the broker refused": {
+			fmt.Errorf("embedded nats server could not start: %w", jetstream.ErrBrokerDied), false},
+		"a route port taken during the start": {
+			fmt.Errorf("%w: ...: %w", jetstream.ErrRoutePortTaken, jetstream.ErrBrokerDied), true},
+		"a leaf port taken during the start": {
+			fmt.Errorf("%w: ...: %w", jetstream.ErrLeafPortTaken, jetstream.ErrBrokerDied), true},
+		"a provision that timed out": {context.DeadlineExceeded, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			out := refusal("open backends", tc.in)
+			if !errors.Is(out, tc.in) {
+				t.Errorf("the refusal's own error was dropped: %v", out)
+			}
+			if got := !errors.Is(out, errNotRetryable); got != tc.retryable {
+				t.Errorf("%v: retryable=%v, want %v", tc.in, got, tc.retryable)
+			}
+		})
+	}
 }

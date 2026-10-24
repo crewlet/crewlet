@@ -20,22 +20,19 @@ import (
 // the managing system, and a revision written here would be replaced at its
 // next reconcile exactly as an API edit would.
 //
-// What stays open is what changes no byte of the company: `config seal` and
-// `config rekey` re-encrypt the active document under the keyring, which is
-// Tier A's own business and nothing the managing system can do, and
-// `config activate` of the revision that is already active, which is the
-// offline re-publish a rotated credential needs.
+// What stays open is what changes no byte of the company: `config rekey`
+// re-seals the active revision under the keyring, which is Tier A's own
+// business and nothing the managing system can do, and `config activate` of
+// the revision that is already active, which is the offline re-publish a
+// rotated credential needs.
 
 // managedRefusal is what a host-side write of a managed document is told:
 // who manages it, why the write is refused, and the two ways forward.
 func managedRefusal(boot *config.Bootstrap, gesture string) error {
-	return fmt.Errorf("the company document is managed: api.auth.company_writers "+
-		"names %s as its only writers, and %s presents no credential, so it would "+
-		"write a revision the managing system replaces at its next reconcile.\n"+
-		"Change the company where it is managed. To write it as one of those "+
-		"writers, run `crewlet config import -api <node>` with %s set to that "+
-		"token; to take the document back, remove api.auth.company_writers from "+
-		"every node's Tier A and restart",
+	return fmt.Errorf("the company config is managed by another system "+
+		"(`api.auth.company_writers`: %s), so %s can't change it here.\n"+
+		"Change it there, or run `crewlet config import -api <node>` with %s "+
+		"set to one of those tokens",
 		strings.Join(boot.API.Auth.CompanyWriters, ", "), gesture, apiTokenEnv)
 }
 

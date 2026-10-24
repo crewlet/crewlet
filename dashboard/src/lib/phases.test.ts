@@ -436,10 +436,13 @@ describe("presentation rules", () => {
   test("an engine-written outcome is not dressed up as the model's own word", () => {
     // `incomplete` is the one outcome the executor never says: the engine
     // writes it when nothing was submitted at all. Rendered as a peer of
-    // `delivered`, it would read as a commitment the model never made — and
-    // every rescue path in the turn engine turns on telling those apart.
-    expect(decisionLabel("execute", "incomplete")).toContain("the engine marked it");
-    expect(decisionLabel("execute", "delivered")).not.toContain("engine");
+    // `delivered`, it would read as a commitment the model never made, and
+    // every rescue path in the turn engine turns on telling those apart. So
+    // its label says no report came, which no word the model chooses says.
+    expect(decisionLabel("execute", "incomplete")).toBe("incomplete, no report");
+    for (const word of ["delivered", "no_action", "blocked"]) {
+      expect(decisionLabel("execute", word), word).not.toContain("no report");
+    }
   });
 
   test("a decision this build does not know still renders as itself", () => {
@@ -561,7 +564,7 @@ describe("a round that answered in prose where a call was owed", () => {
     // `self_iterate` is a word a reviewer chooses — and the word the engine
     // writes when the reviewer never submitted. "Sent the turn back" claimed
     // a judgement nobody made.
-    expect(decisionLabel("review", "self_iterate", true)).toContain("never decided");
+    expect(decisionLabel("review", "self_iterate", true)).toBe("undecided, sent back");
     expect(decisionLabel("review", "self_iterate", false)).toBe(
       "sent the turn back for another round",
     );

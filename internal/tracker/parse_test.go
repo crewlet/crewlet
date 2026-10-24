@@ -197,7 +197,7 @@ func registry(t *testing.T, handles ...string) *notify.Registry {
 		})
 	}
 	o.Normalize()
-	return notify.NewRegistry(o)
+	return notify.NewRegistry(o, nil)
 }
 
 // A WOKEN SEAT READS THE WHOLE COMMENT, NOT THE CARD'S EXCERPT. The card is a

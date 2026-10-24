@@ -294,15 +294,14 @@ func (m *floorMemos) of(domain string) *memo[publishedFloors] {
 }
 
 // servedFloor is domain's published floor as a read is served it
-// ([memo.serve]) — a read of that domain's key alone — each refresh noted for
-// the `floor_unknown` alarm as every read of the floors is
-// ([stateLog.noteFloors]).
+// ([memo.serve]) — a read of that domain's key alone. How long a floor has
+// gone unread is the alarm heartbeat's own observation ([floorWatch]), never
+// a tally of these refreshes, whose rate is whatever the read rate is.
 func (s *stateLog) servedFloor(ctx context.Context, domain string) (publishedFloors, error) {
 	return s.floorMemos.of(domain).serve(ctx, statelog.FloorCacheStale,
 		func(publishedFloors) bool { return true },
 		func(ctx context.Context) (publishedFloors, error) {
 			read := readFloorsOf(ctx, s.fleet, []string{domain})
-			s.noteFloors(read)
 			_, _, err := read.row(domain)
 			return read, err
 		})

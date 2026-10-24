@@ -14,9 +14,11 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // Talking to a running node.
@@ -82,18 +84,20 @@ func (c *nodeClient) answerCap() int {
 }
 
 // nodeClientFor is the shared "one config argument, then find the node"
-// preamble the node-facing operator commands share.
-func nodeClientFor(args []string, name string, stderr io.Writer, extra func(*flag.FlagSet)) (*nodeClient, error) {
+// preamble the node-facing operator commands share. env is the invocation's
+// environment ([runIn]), which the credential is read from.
+func nodeClientFor(environ config.Source, args []string, name string, stderr io.Writer,
+	extra func(*flag.FlagSet)) (*nodeClient, error) {
+
 	bootstrapPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	configPath := fs.String("config", defaultBootstrapPath,
-		"Tier A config: where this node binds its API")
+		"node config file: where this node serves its API")
 	addr := fs.String("url", "",
-		"the running node's base URL; empty takes it from the config's api block")
-	token := fs.String("token", "",
-		"bearer token; empty takes "+apiTokenEnv+", then the config's first token")
+		"the running node's base URL (default: from the config's api block). "+
+			"The token comes from "+apiTokenEnv+", never a flag")
 	if extra != nil {
 		extra(fs)
 	}
@@ -109,35 +113,33 @@ func nodeClientFor(args []string, name string, stderr io.Writer, extra func(*fla
 		bootstrapPath = *configPath
 	}
 
-	base, bearer := *addr, *token
-	if bearer == "" {
-		// THE ENVIRONMENT BEFORE THE FILE — the token's first default, and
-		// one that needs no file: read only inside the branch below, an
-		// operator who named the node with -url and exported the token had
-		// supplied both and was still refused for a config this machine
-		// does not hold.
-		bearer = exportedToken()
-	}
-	if base == "" || bearer == "" {
-		// The config is read for the DEFAULTS only, so an operator who
-		// supplied the node and the token can act on a node whose config
-		// file this machine does not have.
+	// THE CREDENTIAL IS THE ENVIRONMENT'S, AND ONLY THE ENVIRONMENT'S.
+	//
+	// There was a `-token` flag here, beside a comment on
+	// [nodeTokenOrEmpty] saying the token was never a flag: a token typed
+	// as an argument is in the shell history, in `ps` and in any CI log
+	// that echoes the command, so the flag was the one way to use this CLI
+	// that leaked the credential it carried — and it made the 401 below
+	// name two sources when an operator has one to check.
+	//
+	// THE LENIENT FORM: an absent token is not refused HERE, because a
+	// development principal resolves an unauthenticated request on a
+	// loopback bind of an unreleased binary, and that is a legitimate way
+	// to reach these routes. The 401 from a node that does not is the
+	// honest answer, and it names the variable.
+	base, bearer := *addr, nodeTokenOrEmpty(environ)
+	if base == "" {
+		// The config is read for the ADDRESS only, so an operator who
+		// named one can act on a node whose config file this machine does
+		// not have.
 		boot, err := config.LoadBootstrap(bootstrapPath, config.EnvOnly())
 		if err != nil {
-			return nil, fmt.Errorf("%w\n\nPass -url, and -token or %s, to reach a node "+
-				"whose config this machine does not hold", err, apiTokenEnv)
+			return nil, fmt.Errorf("%w\n\nPass -url to reach a node whose config "+
+				"this machine does not hold", err)
 		}
-		if base == "" {
-			base, err = nodeBaseURL(boot, "", "this node")
-			if err != nil {
-				return nil, err
-			}
-		}
-		if bearer == "" {
-			// The LENIENT form: these routes are servable with
-			// `api.auth.disabled`, so an absent token is a legitimate
-			// call rather than something to refuse in advance.
-			bearer = nodeTokenOrEmpty(boot)
+		base, err = nodeBaseURL(boot, "", "this node")
+		if err != nil {
+			return nil, err
 		}
 	}
 	return &nodeClient{
@@ -155,6 +157,27 @@ func (c *nodeClient) post(ctx context.Context, path string, into any) error {
 	return c.do(ctx, http.MethodPost, path, into)
 }
 
+// postKeyed is [nodeClient.post] carrying an operation key, which is what
+// makes a retry of the same gesture the same operation on the node's ledger —
+// and, where body is not nil, a JSON body: the act transport's shape, which
+// takes a gesture's arguments as `{"args": …}` and refuses any other
+// Content-Type.
+func (c *nodeClient) postKeyed(ctx context.Context, path, key string, body, into any) error {
+	header := http.Header{}
+	if key = strings.TrimSpace(key); key != "" {
+		header.Set(opkey.Header, key)
+	}
+	var payload []byte
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("encode the request: %w", err)
+		}
+		payload = raw
+	}
+	return c.send(ctx, http.MethodPost, path, header, payload, into)
+}
+
 // maxNodeResponseBytes bounds one answer read back from a node.
 //
 // An error body is a sentence; a proxy's error page is not. The largest
@@ -166,22 +189,14 @@ func (c *nodeClient) post(ctx context.Context, path string, into any) error {
 // make the CLI buffer a website.
 const maxNodeResponseBytes = 4 << 20
 
-// postJSON posts a JSON body — the act transport's shape, which refuses any
-// other Content-Type.
-func (c *nodeClient) postJSON(ctx context.Context, path string, body, into any) error {
-	raw, err := json.Marshal(body)
-	if err != nil {
-		return fmt.Errorf("encode the request: %w", err)
-	}
-	return c.send(ctx, http.MethodPost, path, raw, into)
-}
-
 func (c *nodeClient) do(ctx context.Context, method, path string, into any) error {
-	return c.send(ctx, method, path, nil, into)
+	return c.send(ctx, method, path, nil, nil, into)
 }
 
-func (c *nodeClient) send(ctx context.Context, method, path string, payload []byte, into any) error {
-	_, err := c.exchange(ctx, method, path, payload, into)
+func (c *nodeClient) send(ctx context.Context, method, path string,
+	header http.Header, payload []byte, into any) error {
+
+	_, err := c.exchange(ctx, method, path, header, payload, into)
 	return err
 }
 
@@ -189,8 +204,9 @@ func (c *nodeClient) send(ctx context.Context, method, path string, payload []by
 // command that waits by a time the node states reads that time against —
 // the answer's own Date, which the node's clock wrote — rather than this
 // machine's clock, which may disagree with the node's by more than the wait.
-func (c *nodeClient) exchange(ctx context.Context, method, path string, payload []byte, into any) (
-	http.Header, error) {
+func (c *nodeClient) exchange(ctx context.Context, method, path string,
+	header http.Header, payload []byte, into any) (http.Header, error) {
+
 	var reader io.Reader
 	if payload != nil {
 		reader = bytes.NewReader(payload)
@@ -199,7 +215,14 @@ func (c *nodeClient) exchange(ctx context.Context, method, path string, payload 
 	if err != nil {
 		return nil, fmt.Errorf("build the request: %w", err)
 	}
+	for name, values := range header {
+		for _, v := range values {
+			req.Header.Add(name, v)
+		}
+	}
 	if payload != nil {
+		// THE ONE BODY THIS CLIENT SENDS IS JSON, and the act transport
+		// refuses any other Content-Type rather than guessing.
 		req.Header.Set("Content-Type", "application/json")
 	}
 	if c.token != "" {
@@ -239,11 +262,15 @@ func (c *nodeClient) exchange(ctx context.Context, method, path string, payload 
 				"rather than something in front of it",
 			path, limit)}
 	}
-	// ANY 2xx IS THE NODE'S SUCCESS, not only a 200: a route that begins
-	// work outliving its request — a code verify — answers 202 Accepted with
-	// the operation it began, and read as a failure that answer had no error
-	// code and was reported as something in front of the node.
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+	// ANY 2xx IS AN ANSWER, not only a 200. A write surface says `202` for a
+	// change that is durable and not yet applied on this node, which is a
+	// success to report as such rather than an error — read as one, the CLI
+	// told an operator their purge had failed, and the ordinary next move was
+	// to run it again. And a route that begins work outliving its request — a
+	// code verify — answers 202 Accepted with the operation it began, which
+	// read as a failure had no error code and was reported as something in
+	// front of the node.
+	if resp.StatusCode/100 != 2 {
 		if engineCode(body) == "" {
 			return nil, notTheNode(path, resp.StatusCode, resp.Header.Get("Content-Type"), body)
 		}
@@ -360,19 +387,38 @@ type noAnswer struct{ error }
 
 func (e noAnswer) Unwrap() error { return e.error }
 
-// nodeRefusal is a non-200 the node answered: the status, and the refusal's
+// nodeRefusal is a non-2xx the node answered: the status, and the refusal's
 // own fields beside the message built from them.
 //
-// A TYPE rather than a bare error for the one command that has to act on a
-// field the message does not carry: a gate refusal names what to do as
-// `actions` — a closed set each surface renders in its own words — and
-// `crewlet retention evict` renders them as the flags it has (-force, -op-id),
-// which it can only do if it can read them, and which ones it renders depends
-// on the refusal's code.
+// A TYPE rather than a bare error for the commands that have to act on a field
+// the message does not carry: a gate refusal names what to do as `actions` — a
+// closed set each surface renders in its own words — and `crewlet retention
+// evict` renders them as the flags it has (-force, -op-id), which it can only
+// do if it can read them, and which ones it renders depends on the refusal's
+// code; and a write names the operation it was sent under, which `crewlet work
+// purge` prints as the -op-id a retry must carry.
 type nodeRefusal struct {
 	Status  int
 	Code    string
 	Actions []string
+
+	// OpID is the operation the write was sent under, where the answer
+	// names one — a write's 503 does, and so does a gate refusal carrying
+	// actions. A retry carries it and never a fresh one: if any of the
+	// write landed, the same id is answered from the node's ledger, where a
+	// fresh one is a second write.
+	OpID string
+
+	// Unsettled is a write whose outcome the node could not establish
+	// (`outcome: unknown`) — which may well have landed, and so is not a
+	// refusal at all however its status reads.
+	Unsettled bool
+
+	// Unvouched is an unknown this node cannot settle: its operation ledger
+	// may have lost the row the operation needs, so the same request here
+	// answers the same way until the write reaches it — the retry goes
+	// through another node (-url), under the same id.
+	Unvouched bool
 
 	// Reason is the refusal's `reason`, where a route names one beside its
 	// code — what tells two refusals with one code apart (a code verify's
@@ -419,41 +465,36 @@ func (e *nodeRefusal) asJudgement() *nodeRefusal {
 	return &out
 }
 
-// nodeError turns a non-200 the NODE wrote into something an operator can act
+// nodeError turns a non-2xx the NODE wrote into something an operator can act
 // on. Only an answer carrying an engine error code reaches it: one that
 // carries none is [notTheNode]'s.
 func nodeError(status int, body []byte, sentToken bool) error {
 	var payload struct {
-		Error   string   `json:"error"`
-		Reason  string   `json:"reason"`
-		Detail  string   `json:"detail"`
-		Hint    string   `json:"hint"`
-		Actions []string `json:"actions"`
+		Error     string   `json:"error"`
+		Reason    string   `json:"reason"`
+		Detail    string   `json:"detail"`
+		Hint      string   `json:"hint"`
+		Actions   []string `json:"actions"`
+		OpID      string   `json:"op_id"`
+		Outcome   string   `json:"outcome"`
+		Unvouched bool     `json:"unvouched"`
 	}
 	_ = json.Unmarshal(body, &payload)
+	if msg, ok := credentialRefusal(status, body, sentToken); ok {
+		return errors.New(msg)
+	}
 	refusal := &nodeRefusal{Status: status, Code: payload.Error, Reason: payload.Reason,
-		Actions: payload.Actions, detail: payload.Detail, hint: payload.Hint}
+		Actions: payload.Actions, OpID: payload.OpID, Unvouched: payload.Unvouched,
+		Unsettled: payload.Outcome == string(statelog.OutcomeUnknown),
+		detail:    payload.Detail, hint: payload.Hint}
 	switch {
-	case status == http.StatusForbidden && payload.Error == "unbound":
-		// THE ACT TRANSPORT'S ONE RULE, and not a bad token: the token is
-		// valid and names nobody. The node's detail and hint say which
-		// seat to bind it on, which the credential sentence below would
-		// throw away.
-		refusal.msg = withRefusalDetail("the node accepted the token but it is "+
-			"bound to no person, and this gesture is made by one", payload.Detail, payload.Hint)
-	case status == http.StatusUnauthorized:
-		// THE CREDENTIAL ITSELF, and only a 401 says so: every guard that
-		// refuses a token answers 401 `invalid_token`. A 403 is the node
-		// judging a VALID caller — an act the tool forbids, a gesture that
-		// needs an operator identity — and its detail is the whole answer,
-		// so it falls through to the default below rather than being
-		// reported as a token to check.
-		if !sentToken {
-			return errors.New("the node refused the request and no token was sent: " +
-				"export " + apiTokenEnv + ", or pass -token")
-		}
-		return errors.New("the node refused the token: check it against the " +
-			"api.auth.tokens entry you meant to use")
+	case refusal.Unsettled:
+		// NOT A REFUSAL: a write the node could not account for, which
+		// may well have landed. Worded as one, it read as "nothing
+		// happened", and the ordinary next move was the same gesture
+		// under a fresh operation id.
+		refusal.msg = "the node could not establish whether this landed: " +
+			withRefusalDetail(payload.Error, payload.Detail, payload.Hint)
 	case status == http.StatusServiceUnavailable:
 		// TWO DIFFERENT FACTS on this surface: a node built without the
 		// backend a route needs, and a node DRAINING for a shutdown. The

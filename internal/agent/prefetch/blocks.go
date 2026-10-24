@@ -245,7 +245,7 @@ func (f *Fetcher) counterpartyProfile(ctx context.Context, r Request) string {
 		seen[subject] = true
 		profile, ok, err := f.src.Counterparties.Get(ctx, observer, subject)
 		if err != nil {
-			log.WarnContext(ctx, "counterparty_lookup_failed", "observer", observer,
+			log.WarnContext(ctx, "counterparty_lookup_failed", "observer", r.Seat.Handle(),
 				"error", err.Error())
 			continue
 		}
@@ -390,38 +390,6 @@ func renderSkill(s learning.Skill) string {
 		line += " _(unused lately)_"
 	}
 	return line
-}
-
-// onboardingHint renders the first-turn nudge, for a seat that has not been
-// through it.
-//
-// The MARKER IS READ, not assumed: a seat is onboarded per ORG CHAIN, so a
-// reorganisation legitimately un-onboards a seat whose management line
-// changed, and a hint rendered from a stale answer would either nag a
-// settled agent forever or skip the pass for one that genuinely moved.
-func (f *Fetcher) onboardingHint(ctx context.Context, r Request) string {
-	if f.src.Onboarding == nil || r.Org == nil || r.Seat == nil || r.AgentID == "" {
-		return ""
-	}
-	hint := learning.Hint(r.Org, r.Seat)
-	if hint == "" {
-		return ""
-	}
-	done, err := f.src.Onboarding.Onboarded(ctx, r.AgentID, learning.ChainHash(r.Org, r.Seat))
-	if err != nil {
-		// FAIL CLOSED, which here means rendering nothing. The
-		// alternative nags a seat that finished onboarding months ago on
-		// every turn a database blip lasts, and a missed hint costs one
-		// turn of context while a false one costs a paragraph of every
-		// prompt.
-		log.WarnContext(ctx, "onboarding_marker_unreadable", "agent_id", r.AgentID,
-			"error", err.Error())
-		return ""
-	}
-	if done {
-		return ""
-	}
-	return hint
 }
 
 func firstNonEmpty(values ...string) string {

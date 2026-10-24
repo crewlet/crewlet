@@ -33,70 +33,27 @@ export const BUDGET_WINDOWS = [
 ] as const;
 
 /**
- * The seat fields a human seat may not carry, by authored name (a seat's own
- * integrations dotted: `integrations.slack`) and in the order the engine's
- * refusal lists them — what the org builder strips from a seat it turns
- * human.
+ * One claim on a human seat a `409 seat_held` names (`configapi.SeatHolder`):
+ * the refusal's `held` maps each seat a write would take out of the company to
+ * the ONE thing holding it — a person, a service account, or an open
+ * invitation, never the invitation's address — and a person wins where both
+ * claim one seat.
  *
- * THE ENGINE'S SET, held against its refusals by
- * `internal/config/problems_test.go`'s `TestTheBuilderStripsWhatEachKindRefuses`.
- * A field missing here is kept by the change and refused by the very next
- * check, over a field the change itself made wrong; one spelled differently
- * is a path no seat has, so it strips nothing — a seat's tracker `project`
- * and knowledge `space` are written at the top of the seat, never under
- * `integrations:`.
- *
- * `code` and `integrations.github` come last because a different rule
- * refuses them: what a seat holds on a code host — its code access tier and
- * its own GitHub App — is refused on a human seat by the config layer's
- * admission rule (`config.Company.validateHumanSeatCode`), in that order,
- * since nothing running reads either off a human seat.
+ * HELD BY `internal/api/configapi.TestTheDashboardReadsWhatASeatHeldRefusalSends`.
+ * The refusal was read as a LIST of holders per seat while the engine sent one
+ * object, so every seat it named was "held by somebody" with no remedy at all.
+ * Which remedy is right turns on the kind: a person is moved to another human
+ * seat or removed, a service account unbound, an invitation cancelled.
  */
-export const HUMAN_FORBIDDEN = [
-  "llm",
-  "llm_review",
-  "llm_subagent",
-  "llm_auxiliary",
-  "llm_judge",
-  "llm_sandbox",
-  "sandbox",
-  "token_budget",
-  "workers",
-  "learning_enabled",
-  "schedules",
-  "placement",
-  "integrations.slack",
-  "integrations.mattermost",
-  "project",
-  "space",
-  "mcp_env",
-  "behavioral_guidelines",
-  "code",
-  "integrations.github",
-] as const;
-
-/**
- * The seat fields an agent seat may not carry, in the order the engine's
- * refusal lists them — what the org builder strips from a seat it turns into
- * an agent. Held by the same gate as {@link HUMAN_FORBIDDEN}.
- */
-export const AGENT_FORBIDDEN = ["contact", "availability"] as const;
-
-/**
- * The seat fields whose value holds a credential — every one a config read
- * masks something inside — in the order `config.Role` declares them.
- *
- * A credential a kind change strips was masked in the document the builder
- * holds, so it cannot be re-entered there and is gone for good once the change
- * is saved; the builder calls each one out before it lets that happen. Held
- * against the engine's own redaction predicate by the same gate as
- * {@link HUMAN_FORBIDDEN}, so a seat field that starts carrying a credential
- * is never stripped without the warning.
- */
-export const SEAT_CREDENTIALS = [
-  "mcp_env",
-  "sandbox",
-  "integrations.github",
-  "integrations.slack",
-  "integrations.mattermost",
-] as const;
+export interface SeatHeldHolder {
+  /** The holder's id, when a person or a service account holds the seat. */
+  person?: string;
+  /** `person` or `machine` (`iam.Kind`). */
+  kind?: string;
+  login?: string;
+  stage?: string;
+  /** The open invitation's id, when one holds the seat and nobody else does. */
+  invitation?: string;
+  /** When that invitation lapses and frees the seat on its own. */
+  expires_at?: string;
+}

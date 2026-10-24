@@ -210,7 +210,7 @@ func TestAnEndingDecidedOnAParkedRunIsFinishedByTheNextHolder(t *testing.T) {
 	rig := newCoordRig(t)
 	parkOnAQuestion(t, rig)
 	rig.failPublishes(errors.New("the broker is unreachable"))
-	if err := rig.coordinator.RetireSeat(t.Context(), "swe", "retirement:1", 9); err == nil {
+	if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "retirement:1", 9); err == nil {
 		t.Fatal("a retirement whose announcement was refused reported its runs ended")
 	}
 	if got := rig.get("t1"); got.Status != StatusAwaiting || got.Ending == nil {

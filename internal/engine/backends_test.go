@@ -3,6 +3,7 @@ package engine_test
 import (
 	"context"
 	"net"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	natsserver "github.com/nats-io/nats-server/v2/server"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -19,8 +21,12 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // bootstrap is a node's Tier A for a case, its store in the case's own
@@ -50,10 +56,30 @@ func unseededBootstrap(t *testing.T, mutate func(*config.Bootstrap)) (*config.Bo
 	chosen := filepath.Join(t.TempDir(), "crewlet.db")
 	b.Store.Path = chosen
 	engine.PinGitLanes(&b)
+	// AND A KEYRING, because every record on every state log is signed
+	// under one and a node that has none refuses to start. It is not in
+	// [config.DefaultBootstrap] and must not be: a default key is a key
+	// every deployment in the world shares, which is the opposite of what
+	// signing a record buys.
+	b.Secrets.ActiveKeyID = "test"
+	b.Secrets.Keys = []config.SecretKey{{ID: "test", Material: testKeyMaterial(t)}}
 	if mutate != nil {
 		mutate(&b)
 	}
 	return &b, chosen
+}
+
+// testKeyMaterial mints one THROUGH THE MINTER `crewlet secrets keygen` uses,
+// so the size, the randomness and the encoding are read off the production
+// definition rather than restated here. Per call rather than a constant: two
+// cases running in parallel share no key.
+func testKeyMaterial(t *testing.T) string {
+	t.Helper()
+	key, err := secrets.GenerateKey()
+	if err != nil {
+		t.Fatalf("no randomness for the test keyring: %v", err)
+	}
+	return secrets.EncodeKey(key)
 }
 
 // parsedCompany is the Tier B half OpenBackends needs, for the one field it
@@ -109,12 +135,12 @@ func TestBothSlotsCloseTogether(t *testing.T) {
 	back.Close(t.Context())
 }
 
-func TestAnEmbeddedKVStoreRidesTheStreamsOwnConnection(t *testing.T) {
+func TestAnEmbeddedKVStoreLivesOnTheStreamsOwnBroker(t *testing.T) {
 	t.Parallel()
-	// A second dial would work and would be worse: two connections to one
-	// broker fail independently, so a node could hold live leases over a
-	// connection that still works while the one carrying its inbox has
-	// dropped — alive to its peers, deaf to its work.
+	// A second estate would work and would be worse: two estates fail
+	// independently, so a node could hold live leases on one while the
+	// other has lost its inbox — alive to its peers, deaf to its work
+	// (ADR-0001). The connection it rides is the case below's.
 	//
 	// Observable as: the KV slot builds at all on an embedded stream, which
 	// it can only do by reaching the in-process server.
@@ -145,6 +171,46 @@ func TestAnEmbeddedKVStoreRidesTheStreamsOwnConnection(t *testing.T) {
 		t.Fatalf("second Acquire: %v", err)
 	} else if got != nil {
 		t.Error("two owners held one seat")
+	}
+}
+
+// THE COORDINATION STORE'S CONNECTION IS ONE THE NODE HEARS LOSING.
+//
+// On an embedded broker the store rides a connection of its own beside the
+// queue's, and it holds every lease this node renews — so NATS closing it for
+// good is a node with no leases, and the queue reports it with its own
+// connection's (jetstream.Queue.Lost). That is only true of a connection dialled
+// watched: the client is told to call a closed handler for a close it made, and
+// told not to for the node's own Close at shutdown. A connection dialled the
+// way a donor's is carries neither, and its loss would be heard by nothing.
+//
+// It is the engine's half of the gate ADR-0001 names: the jetstream package
+// holds that a DialWatched connection is watched, and this holds that the
+// coordination store's connection is one.
+//
+// Mutation: open it with DialOwned and both halves go red.
+func TestTheCoordinationConnectionIsWatched(t *testing.T) {
+	t.Parallel()
+	b := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		b.Coordination.Type = config.CoordinationEmbeddedKV
+	})
+	back, err := openBackends(t, b)
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(t.Context()) })
+	conn := back.Conn()
+	if conn == nil {
+		t.Fatal("an embedded topology answered no coordination connection")
+	}
+	if conn.Opts.ClosedCB == nil {
+		t.Error("the coordination store's connection has no closed handler, so " +
+			"NATS closing it for good leaves the node holding leases it cannot renew")
+	}
+	if !conn.Opts.NoCallbacksAfterClientClose {
+		t.Error("the coordination store's connection reports the node's own " +
+			"Close at shutdown as a lost broker")
 	}
 }
 
@@ -599,8 +665,18 @@ func TestTheStoreTakesItsPoolKnobsFromConfig(t *testing.T) {
 	if busyMS != 11_000 {
 		t.Errorf("busy_timeout = %dms, want the configured 11000", busyMS)
 	}
-	if got := back.Store.SQL().Stats().MaxOpenConnections; got != 3 {
-		t.Errorf("max open conns = %d, want the configured 3", got)
+	// THE CONFIGURED READERS, with what the store keeps beside them on top:
+	// `max_open_conns` bounds ORDINARY readers, and the connection a store
+	// reserves for resolving who is acting is added to it rather than taken
+	// from it. Read off a store opened with the same knob, so this holds the
+	// engine to passing the knob through and the store to what it adds.
+	reference := storetest.OpenNode(t, filepath.Join(t.TempDir(), "reference.db"),
+		store.Options{MaxOpenConns: 3})
+	t.Cleanup(func() { _ = reference.Close() })
+	want := reference.SQL().Stats().MaxOpenConnections
+	if got := back.Store.SQL().Stats().MaxOpenConnections; got != want {
+		t.Errorf("max open conns = %d, want the %d a store makes of the configured 3",
+			got, want)
 	}
 }
 
@@ -746,6 +822,80 @@ func TestAnExternalStreamsTLSMaterialReachesTheDial(t *testing.T) {
 	}
 }
 
+// A NODE WILL NOT BOOT AGAINST A NATS SERVER THAT CANNOT CARRY WHAT IT WRITES.
+//
+// deployment.md told an operator to set max_payload to 8 MiB on an external
+// cluster and nothing checked it, and nats-server's own default is 1 MiB. So a
+// node pointed at a server nobody had configured for this engine booted,
+// reported itself healthy and served — and refused its first state-log record
+// or event past the server's limit, `record_too_large`, at the moment nobody
+// is looking at the broker's configuration. It is refused at boot now, by a
+// sentence that names the setting, the value the server announced and the
+// value this build needs; and a server that carries the contract boots, which
+// is the control that keeps the refusal from being a refusal of every
+// external server. The refusal is also the sentence deployment.md prints, so
+// the example an operator greps for cannot drift from what a boot writes.
+//
+// Mutation: drop the check from the jetstream backend's dial and the refusal
+// row goes red; compare with `>` and the control does; edit the guide's
+// example and the refusal row does.
+func TestABootAgainstAServerBelowTheContractIsRefusedByName(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		maxPayload int32
+		announced  int
+		refused    bool
+	}{
+		{"nats-server's own default", 0, natsserver.MAX_PAYLOAD_SIZE, true},
+		{"the contract's own number", queue.MaxPayloadBytes, queue.MaxPayloadBytes, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			url := externaltest.Start(t, tc.maxPayload).URL()
+			b := bootstrap(t, func(b *config.Bootstrap) {
+				b.Stream.Type = config.StreamNATS
+				b.Stream.URL = url
+				b.Coordination.Type = config.CoordinationEmbeddedKV
+			})
+			back, err := openBackends(t, b)
+			if !tc.refused {
+				if err != nil {
+					t.Fatalf("a node refused a server announcing a max_payload of "+
+						"%d: %v", tc.announced, err)
+				}
+				back.Close(t.Context())
+				return
+			}
+			if err == nil {
+				back.Close(t.Context())
+				t.Fatalf("a node booted against a server announcing a max_payload "+
+					"of %d, and would refuse its first record past it only when it "+
+					"was written", tc.announced)
+			}
+			for _, want := range []string{"max_payload", strconv.Itoa(tc.announced),
+				strconv.Itoa(queue.MaxPayloadBytes), "max_payload: 8MB", "stream.url"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal %q does not say %q", err, want)
+				}
+			}
+			// AND IT IS THE SENTENCE THE DEPLOYMENT GUIDE PRINTS, which is
+			// what an operator greps for: the guide's example is a boot
+			// against nats-server's own default, at its own address.
+			guide, rerr := os.ReadFile(filepath.Join(sourcetree.Root(t),
+				"docs", "guides", "deployment.md"))
+			if rerr != nil {
+				t.Fatalf("read the deployment guide: %v", rerr)
+			}
+			printed := strings.ReplaceAll(err.Error(), url, "nats://nats-1.internal:4222")
+			if !strings.Contains(string(guide), "\n"+printed+"\n") {
+				t.Errorf("docs/guides/deployment.md does not print the refusal a "+
+					"boot writes; it should carry, on a line of its own:\n%s", printed)
+			}
+		})
+	}
+}
+
 // THE WIDTH IS LEARNED ONCE AND THEN HELD.
 //
 // The width belongs to the vectors already in the file, not to the current
@@ -847,15 +997,15 @@ roles:
 //
 // # Why this needs a guard of its own
 //
-// Because nats-server does not fail on it. A member whose configured route
-// port is held by something else logs the listener error and carries on
-// serving clients: the node comes up, answers its health check, and simply
-// never forms a route to a peer. What an operator sees a minute later is the
-// readiness wait expiring and naming the CLUSTER — "JetStream has not
-// established contact with a meta leader" — which sends them to debug peers, a
-// firewall and a network path that are all fine.
-//
-// There is no other symptom. The port is the only thing that knows.
+// Because it was once the only symptom there was. nats-server reports a route
+// listener that cannot bind through its fatal log call and carries on, and
+// before the engine acted on that call the member came up, answered its health
+// check and simply never formed a route to a peer — reported a minute later as
+// the readiness wait expiring and naming the CLUSTER, which sent an operator
+// to debug peers, a firewall and a network path that were all fine. The bind
+// failure now refuses the start by itself; this holds the refusal to name the
+// port and the setting, which is the one fact an operator cannot derive from
+// anywhere else.
 func TestANodeRefusesToStartWhenItsRoutePortIsTaken(t *testing.T) {
 	t.Parallel()
 
@@ -885,9 +1035,9 @@ func TestANodeRefusesToStartWhenItsRoutePortIsTaken(t *testing.T) {
 	backends, err := openBackends(t, b)
 	if err == nil {
 		backends.Close(context.Background())
-		t.Fatal("a node whose route port was taken started anyway — it serves " +
-			"clients, answers health checks and never forms a route, which " +
-			"from outside is indistinguishable from a slow cluster")
+		t.Fatal("a node whose route port was taken started anyway — a member " +
+			"that cannot route is, from outside, indistinguishable from a slow " +
+			"cluster")
 	}
 	// THE PORT IS IN THE MESSAGE, because that is the one fact an operator
 	// cannot derive from anywhere else.

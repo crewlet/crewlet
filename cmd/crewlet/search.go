@@ -434,7 +434,7 @@ func printWindowMetrics(w io.Writer, r windowReport) {
 // share is part of whole as a percentage, and a dash for an empty whole.
 func share(part, whole int64) string {
 	if whole <= 0 {
-		return "—"
+		return "–"
 	}
 	return fmt.Sprintf("%.1f%%", 100*float64(part)/float64(whole))
 }

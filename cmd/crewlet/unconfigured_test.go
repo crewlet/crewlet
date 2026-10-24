@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,11 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -51,7 +49,7 @@ type unconfiguredNode struct {
 }
 
 // bootUnconfigured boots and serves a node with no company, its API guarded by
-// one operator token with the id `ops`. The reconcile loop is NOT started:
+// one admin token with the id `ops`. The reconcile loop is NOT started:
 // a case that observes the apply from inside it installs its observer first,
 // then calls [unconfiguredNode.reconcile].
 func bootUnconfigured(t *testing.T, token string) *unconfiguredNode {
@@ -64,9 +62,12 @@ func bootUnconfigured(t *testing.T, token string) *unconfiguredNode {
 // nothing.
 func bootUnconfiguredWith(t *testing.T, token string, amend func(*config.Bootstrap)) *unconfiguredNode {
 	t.Helper()
-	boot := bootstrapFor(t, 0)
-	boot.API.Port = freePort(t)
-	boot.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: token}}
+	// HELD, never found free and let go ([reservePort]), and the one token
+	// an admin, since a credential carries its grants.
+	boot := bootstrapFor(t, reservePort(t))
+	boot.API.Auth.Tokens = []config.APIToken{
+		{ID: "ops", Token: token, Grants: []iam.Grant{iam.GrantAdmin}},
+	}
 	if amend != nil {
 		amend(boot)
 	}
@@ -172,37 +173,6 @@ func (n *unconfiguredNode) settle(epoch int64) error {
 func (n *unconfiguredNode) get(t *testing.T, path string) (int, string) {
 	t.Helper()
 	return n.send(t, http.MethodGet, path)
-}
-
-// act presses one tool on the act transport as the operator — a fresh
-// request id, the arguments as JSON — answering the status and the body.
-func (n *unconfiguredNode) act(t *testing.T, tool string, args map[string]any) (int, string) {
-	t.Helper()
-	id, err := uuid.NewV7()
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload, err := json.Marshal(map[string]any{"request_id": id.String(), "args": args})
-	if err != nil {
-		t.Fatal(err)
-	}
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
-		n.base+"/operator/act/"+tool, bytes.NewReader(payload))
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Authorization", "Bearer "+n.token)
-	req.Header.Set("Content-Type", "application/json")
-	res, err := n.client.Do(req)
-	if err != nil {
-		t.Fatalf("act %s: %v", tool, err)
-	}
-	defer func() { _ = res.Body.Close() }()
-	body, err := io.ReadAll(res.Body)
-	if err != nil {
-		t.Fatalf("act %s: %v", tool, err)
-	}
-	return res.StatusCode, string(body)
 }
 
 // send makes one request with no body to path as the operator, answering the

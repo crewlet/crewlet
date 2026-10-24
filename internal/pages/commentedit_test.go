@@ -24,7 +24,7 @@ func TestAnEditedCommentKeepsWhenItWasWrittenAndIsRecordedAsAnEdit(t *testing.T)
 
 	time.Sleep(20 * time.Millisecond)
 	if _, _, err := r.store.EditComment(t.Context(), author("maya"), page.Page.ID, comment.ID,
-		"is this still true after the migration?", pages.CallKey{}); err != nil {
+		"is this still true after the migration?"); err != nil {
 		t.Fatalf("edit: %v", err)
 	}
 	r.drain()
@@ -34,7 +34,7 @@ func TestAnEditedCommentKeepsWhenItWasWrittenAndIsRecordedAsAnEdit(t *testing.T)
 	// instant as when the comment was written.
 	time.Sleep(20 * time.Millisecond)
 	answered, _, err := r.store.EditComment(t.Context(), author("maya"), page.Page.ID,
-		comment.ID, "is this still true after the second migration?", pages.CallKey{})
+		comment.ID, "is this still true after the second migration?")
 	if err != nil {
 		t.Fatalf("second edit: %v", err)
 	}

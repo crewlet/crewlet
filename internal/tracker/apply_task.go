@@ -139,7 +139,10 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
-	children, err := a.explodeTask(ctx, tx, next, declared, c)
+	// THE KEY DIRECTORY MOVES ONLY WITH THE TASK'S KEYS — on its create,
+	// and on a record that re-keys it — see [Applier.maintainKeys].
+	rekeyed := !held || keysMoved(current, next)
+	children, err := a.explodeTask(ctx, tx, next, declared, rekeyed, c)
 	if err != nil {
 		return 0, err
 	}
@@ -439,7 +442,7 @@ func applyPatch(task Task, patch TaskPatch) Task {
 		// THE MINT IS THE AUTHORITY FOR BOTH, derived rather than
 		// carried, so a record cannot claim a key and a rank that
 		// disagree about which counter value it took.
-		task.Key = fmt.Sprintf("%s-%d", task.Project, patch.Mint.N)
+		task.Key = mintedKey(task.Project, patch.Mint.N)
 		if rank, err := IntegerAt(patch.Mint.N); err == nil {
 			task.Rank = rank
 		}
@@ -617,8 +620,12 @@ func upsertTask(ctx context.Context, tx *sql.Tx, task Task, document []byte,
 // touched collection WHOLE: a delete-then-insert of one task's tags is a
 // handful of rows and is a pure function of the document, where a diff would
 // depend on what this node happened to hold.
+//
+// THE KEY DIRECTORY IS THE EXCEPTION, written only when rekeyed — the record
+// is the task's create, or changes the keys it holds — for the reason
+// [Applier.maintainKeys] gives.
 func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
-	task Task, declared map[string]FieldDef, c applyContext) (int, error) {
+	task Task, declared map[string]FieldDef, rekeyed bool, c applyContext) (int, error) {
 
 	written := 0
 	for _, child := range []struct {
@@ -754,9 +761,11 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 	if err != nil {
 		return 0, err
 	}
-	keys, err := a.maintainKeys(ctx, tx, task, c)
-	if err != nil {
-		return 0, err
+	keys := 0
+	if rekeyed {
+		if keys, err = a.maintainKeys(ctx, tx, task, c); err != nil {
+			return 0, err
+		}
 	}
 	closure, err := a.maintainClosure(ctx, tx, task)
 	if err != nil {
@@ -926,10 +935,46 @@ func (a *Applier) maintainReferences(ctx context.Context, tx *sql.Tx, task Task)
 	return written, nil
 }
 
-// maintainKeys keeps the key directory, current and former.
+// maintainKeys keeps the key directory, current and former: one row per key,
+// naming the task that claimed it.
+//
+// A KEY CHANGES ONLY WHEN A CROSS-PROJECT MOVE RE-KEYS ITS TASK, and the old
+// one stays as a FORMER key, so every link, chat message and comment that
+// named it still opens the right record. A key another task already holds is
+// LEFT AS IT IS, because taking it would silently re-point every reference
+// anybody ever wrote.
+//
+// # Only the records that change a task's keys run it
+//
+// The claim is FIRST-WRITER-WINS, so who holds a key depends on the order the
+// claims were applied in, and records about different tasks are reordered on
+// a node that retained one of them unless their scopes meet. So the directory
+// is written only by the records that name the keys they move ([keyTerm]): a
+// task's create, a record that re-keys it, and a purge's hand-on. An ordinary
+// edit leaves it alone. It used to re-assert every key on every apply, which
+// let an edit claim a former key nobody held — a duplicate's old key, freed
+// when its claimant was purged — on whichever node applied the edit first,
+// under a scope that named no key at all; the duplicate never held that key,
+// which is why its move's alias claim left it alone ([Writer.claimAlias]).
+//
+// # And the task that could not claim it carries `key_collision`
+//
+// Two tasks holding one key is a shape the broker cannot refuse: the counter
+// and the task are different subjects, so a counter restored beside tasks
+// minted after it mints numbers those tasks already hold, and each create
+// arbitrates only against itself. The applier writes what the record says —
+// refusing would stall the log on every node over one duplicate — and the
+// attention set is where somebody finds it. The flag is DERIVED from the
+// directory rather than carried, re-derived by every record that changes the
+// directory or who holds the key, and every one of those is filed under the
+// key — so it is identical on every node because every claimant states its
+// key, and it follows the claim wherever a purge hands it.
 func (a *Applier) maintainKeys(ctx context.Context, tx *sql.Tx, task Task,
 	c applyContext) (int, error) {
 
+	if task.Key == "" {
+		return 0, nil
+	}
 	// THE CURRENT KEY AND THE FORMER ONES ARE ONE COLLECTION, with the
 	// empty ones dropped rather than skipped mid-loop — a row template
 	// repeats for every element it is given, so the filtering happens here
@@ -945,7 +990,7 @@ func (a *Applier) maintainKeys(ctx context.Context, tx *sql.Tx, task Task,
 			entries = append(entries, entry)
 		}
 	}
-	written, err := insertMany(ctx, tx, c.maxVariables,
+	claimed, err := insertMany(ctx, tx, c.maxVariables,
 		`INSERT INTO tracker_task_keys (key, task_id, current) VALUES`,
 		`(?,?,?)`,
 		`ON CONFLICT (key) DO UPDATE SET current = excluded.current
@@ -956,7 +1001,32 @@ func (a *Applier) maintainKeys(ctx context.Context, tx *sql.Tx, task Task,
 	if err != nil {
 		return 0, fmt.Errorf("tracker: claim the keys of %s: %w", task.ID, err)
 	}
-	return written, nil
+	flagged, err := flagKeyCollisions(ctx, tx, task.Key)
+	if err != nil {
+		return 0, err
+	}
+	return claimed + flagged, nil
+}
+
+// flagKeyCollisions re-derives `key_collision` for every task holding a key:
+// set on each one the directory does not name, clear on the one it does.
+//
+// ONLY THE ROWS WHOSE FLAG DISAGREES ARE WRITTEN, so an ordinary apply of a
+// task that holds its key alone touches no row here and reports none.
+func flagKeyCollisions(ctx context.Context, tx *sql.Tx, key string) (int, error) {
+	res, err := tx.ExecContext(ctx, `
+		UPDATE tracker_tasks
+		SET key_collision = NOT EXISTS (
+			SELECT 1 FROM tracker_task_keys k
+			WHERE k.key = tracker_tasks.key AND k.task_id = tracker_tasks.id)
+		WHERE key = ? AND key_collision = EXISTS (
+			SELECT 1 FROM tracker_task_keys k
+			WHERE k.key = tracker_tasks.key AND k.task_id = tracker_tasks.id)`,
+		key)
+	if err != nil {
+		return 0, fmt.Errorf("tracker: flag the holders of key %s: %w", key, err)
+	}
+	return affected(res)
 }
 
 // maintainProjectCounts moves the maintained census.
@@ -980,6 +1050,13 @@ func (a *Applier) maintainProjectCounts(ctx context.Context, tx *sql.Tx,
 	wasActive, isActive := false, activeOf(next)
 	if held {
 		was, wasActive = bucketOf(current), activeOf(current)
+	}
+	// A CROSS-PROJECT MOVE CHANGES THE PROJECT without changing the
+	// bucket or the group, and the counts are per project — so the task
+	// leaves one project's counts and joins the other's. Only a task that
+	// changed none of the three moves nothing.
+	if was == is && wasActive == isActive && current.Project == next.Project {
+		return 0, nil
 	}
 	moved := current.Project != next.Project
 	written := 0
@@ -1078,10 +1155,11 @@ func activeOf(task Task) bool {
 // EVERYWHERE the task is named.
 //
 // Its own rows and its OUTBOUND references go with it; so do the INBOUND ones,
-// with the alias rows that made the key resolvable at all — because a
-// reference to a key nothing resolves is a dangling link a reader cannot tell
-// from a typo. All in one transaction, and the marker it writes is what stops
-// a redelivery months later resurrecting any of it.
+// with the key directory rows — current and former — that made the key
+// resolvable at all, because a reference to a key nothing resolves is a
+// dangling link a reader cannot tell from a typo. All in one transaction, and
+// the marker it writes is what stops a redelivery months later resurrecting
+// any of it.
 //
 // # Its CHILDREN are re-parented, not destroyed and not orphaned
 //
@@ -1219,6 +1297,18 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	if err != nil {
 		return 0, err
 	}
+	// EVERY KEY IT CLAIMED, the former ones included: a task that moved
+	// took its old key along as an alias, and a task minted onto that key
+	// since holds it only as a collision until the claimant is gone. Every
+	// one of them is in the record's scope ([keyTerm]).
+	handed := 0
+	for _, key := range append([]string{task.Key}, task.FormerKeys...) {
+		n, handErr := handOnKey(ctx, tx, key)
+		if handErr != nil {
+			return 0, handErr
+		}
+		handed += n
+	}
 	// A PURGE MOVES NO FIELD — the row is gone, and a delta naming what
 	// it used to hold would be the content the purge exists to destroy.
 	history, err := a.writeHistory(ctx, tx, c,
@@ -1227,11 +1317,48 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		return 0, err
 	}
 	// WHAT ITS OWN RECORDS WROTE — see the doc above.
-	forgotten, err := forgetRecords(ctx, tx, id, historyID(c))
+	forgotten, err := a.forgetRecords(ctx, tx, c, id, historyID(c))
 	if err != nil {
 		return 0, fmt.Errorf("tracker: purge %s at %s: %w", id, c.position, err)
 	}
-	return written + marker + moved + history + forgotten, nil
+	return written + marker + moved + handed + history + forgotten, nil
+}
+
+// handOnKey gives a purged task's key to whoever else holds it.
+//
+// A PURGED CLAIMANT WOULD OTHERWISE LEAVE THE KEY UNCLAIMED and the task that
+// collided with it flagged, although it now holds the key alone — for ever,
+// since only a record that re-keys a task writes the directory
+// ([Applier.maintainKeys]). The lowest id among the tasks holding it as their
+// CURRENT key takes it, because every node has to pick the same one without
+// a clock or an arrival order to consult; a task that only held it as a
+// former key never held it at all — it moved off a key another task had
+// claimed — and is not handed it.
+//
+// THE SAME HOLDERS ON EVERY NODE, because every record that changes who holds
+// a key as its current one — a create, a re-key — names the key, and so does
+// the purge ([keyTerm]): on a node that retained one of them, the purge is
+// retained behind it.
+func handOnKey(ctx context.Context, tx *sql.Tx, key string) (int, error) {
+	if key == "" {
+		return 0, nil
+	}
+	res, err := tx.ExecContext(ctx, `
+		INSERT INTO tracker_task_keys (key, task_id)
+		SELECT key, id FROM tracker_tasks WHERE key = ? ORDER BY id LIMIT 1
+		ON CONFLICT (key) DO NOTHING`, key)
+	if err != nil {
+		return 0, fmt.Errorf("tracker: hand on key %s: %w", key, err)
+	}
+	claimed, err := affected(res)
+	if err != nil {
+		return 0, err
+	}
+	flagged, err := flagKeyCollisions(ctx, tx, key)
+	if err != nil {
+		return 0, err
+	}
+	return claimed + flagged, nil
 }
 
 // purgeStatement is one DELETE a purge issues, with its arguments.
@@ -1308,7 +1435,16 @@ func purgeDeletes(id string) []purgeStatement {
 // AFTER the purge's history row is written, so its effective instant is still
 // the maximum over every row about this subject — the closed form every node
 // computes — rather than over a set this function had already emptied.
-func forgetRecords(ctx context.Context, tx *sql.Tx, id, keep string) (int, error) {
+//
+// AND IT SAYS WHOSE INBOX IT EMPTIED. The applier announces, after a committed
+// batch, whose inbox moved (inboxmove.go), and a notice taken OUT of somebody's
+// inbox moves it as surely as one put in: without the note an open screen went
+// on listing notices no node held any more until its next poll, and opening one
+// answered that the task does not exist. The recipients are read before the
+// rows go, because afterwards there is nothing left to ask.
+func (a *Applier) forgetRecords(ctx context.Context, tx *sql.Tx, c applyContext,
+	id, keep string) (int, error) {
+
 	kind := string(KindTask)
 	written := 0
 	exec := func(query string, args ...any) error {
@@ -1327,7 +1463,17 @@ func forgetRecords(ctx context.Context, tx *sql.Tx, id, keep string) (int, error
 	// notice is keyed on its record, and this is a seek on that key where a
 	// match on its subject would scan every inbox. Every one of them, the
 	// skeleton's included — an excerpt is content.
-	if err := exec(`DELETE FROM tracker_notifications WHERE record_id IN (
+	gone, err := forgottenNotices(ctx, tx, id, keep)
+	if err != nil {
+		return 0, err
+	}
+	for _, notice := range gone {
+		a.noteInbox(inboxNote{
+			record: notice.record, handle: notice.recipient, subject: id,
+			reason: notice.reason, position: c.packed, removed: true,
+		})
+	}
+	if err = exec(`DELETE FROM tracker_notifications WHERE record_id IN (
 		SELECT id FROM tracker_history
 		WHERE subject_id = ? AND subject_kind = ? AND id <> ?)`, id, kind, keep); err != nil {
 		return 0, err
@@ -1352,6 +1498,39 @@ func forgetRecords(ctx context.Context, tx *sql.Tx, id, keep string) (int, error
 		return 0, err
 	}
 	return written, nil
+}
+
+// forgottenNotice is one inbox notice a purge is about to delete: whose it
+// was, under which record, and the reason it reached them.
+type forgottenNotice struct {
+	record, recipient string
+	reason            Reason
+}
+
+// forgottenNotices reads the notices [Applier.forgetRecords] deletes, by the
+// same predicate it deletes them with, ordered so every node notes them alike.
+func forgottenNotices(ctx context.Context, tx *sql.Tx, id, keep string) ([]forgottenNotice, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT record_id, recipient, reason FROM tracker_notifications
+		WHERE record_id IN (
+			SELECT id FROM tracker_history
+			WHERE subject_id = ? AND subject_kind = ? AND id <> ?)
+		ORDER BY record_id, recipient`, id, string(KindTask), keep)
+	if err != nil {
+		return nil, fmt.Errorf("tracker: read whose inbox a purge of %s empties: %w", id, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []forgottenNotice
+	for rows.Next() {
+		var notice forgottenNotice
+		var reason string
+		if err := rows.Scan(&notice.record, &notice.recipient, &reason); err != nil {
+			return nil, err
+		}
+		notice.reason = Reason(reason)
+		out = append(out, notice)
+	}
+	return out, rows.Err()
 }
 
 // censusFields are the deltas a purged task's skeleton keeps: the three the
@@ -2164,17 +2343,16 @@ func writeChecklistItems(ctx context.Context, tx *sql.Tx, task Task,
 	written, err := insertMany(ctx, tx, maxVariables, `
 		INSERT INTO tracker_checklist_items
 			(task_id, checklist_id, item_id, name, done, assignee,
-			 parent_id, ord, promoted_to)
+			 parent_id, ord)
 		VALUES`,
-		`(?,?,?,?,?,?,?,?,?)`,
+		`(?,?,?,?,?,?,?,?)`,
 		`ON CONFLICT (task_id, checklist_id, item_id) DO UPDATE SET
 			name = excluded.name, done = excluded.done,
 			assignee = excluded.assignee, parent_id = excluded.parent_id,
-			ord = excluded.ord, promoted_to = excluded.promoted_to`,
+			ord = excluded.ord`,
 		rows, func(r row) []any {
 			return []any{task.ID, r.list, r.item.ID, r.item.Name,
-				boolInt(r.item.Done), r.item.Assignee, r.item.Parent, r.ord,
-				r.item.PromotedTo}
+				boolInt(r.item.Done), r.item.Assignee, r.item.Parent, r.ord}
 		})
 	if err != nil {
 		return 0, fmt.Errorf("tracker: write the checklists of %s: %w", task.ID, err)

@@ -6,12 +6,12 @@ import "github.com/crewlet/crewlet/internal/engine"
 // code domain's reads, each resolved on EVERY CALL — or nil for a nil engine,
 // which [New] refuses by name.
 //
-// HERE, beside the seam it satisfies, for [EngineNative]'s reason: `crewlet
-// run` and any harness serving an engine's API reach the code host through the
-// same adapter, so a case that clones through the API exercises the wiring a
-// deployment runs.
+// HERE, beside the seam it satisfies, so `crewlet run` and any harness serving
+// an engine's API reach the code host through the same adapter, and a case
+// that clones through the API exercises the wiring a deployment runs.
 //
-// PER CALL, never once, for [NativeRoutes]' reason: the code host is built
+// PER CALL, never once, as the native halves are read (native.go): the code
+// host is built
 // with the native runtime, at boot or at the first apply whose company sets
 // code.native — after the API was assembled on a node that booted with no
 // company. A host captured at assembly served such a node's people no git for
@@ -47,7 +47,7 @@ func (c engineCode) GitRoutes() (GitRoutes, error) {
 }
 
 // CodeReads is the code domain's read through this node's estate router — the
-// copy that serves, wherever it is (ADR-0031) — or why this node's running
+// copy that serves, wherever it is (ADR-0045) — or why this node's running
 // runtime serves none ([engine.OperatorCode], [engine.Engine.CodeUnserved]),
 // asked again after the reason for GitRoutes' reason.
 func (c engineCode) CodeReads() (CodeReads, error) {

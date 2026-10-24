@@ -39,11 +39,15 @@ type WorkSearcher interface {
 // shape rather than a copy this package would have to keep matching, and the
 // shape is built where every node — not only one serving this API — can build
 // it.
+//
+// HANDED A [memread.Seat] WHOLE — its agent id and its handle — resolved by
+// this package from the org its answer is made of, so the node that answers
+// never resolves a handle against an org the asker's may differ from.
 type SeatMemory interface {
-	Memory(ctx context.Context, handle string, limit int) (memread.Memory, error)
-	Episode(ctx context.Context, handle, id string) (memread.EpisodeDetail, error)
-	Threads(ctx context.Context, handle, conversation string, limit int) (memread.Threads, error)
-	Overview(ctx context.Context, handles []string) (memread.Overview, error)
+	Memory(ctx context.Context, seat memread.Seat, limit int) (memread.Memory, error)
+	Episode(ctx context.Context, seat memread.Seat, id string) (memread.EpisodeDetail, error)
+	Threads(ctx context.Context, seat memread.Seat, conversation string, limit int) (memread.Threads, error)
+	Overview(ctx context.Context, seats []memread.Seat) (memread.Overview, error)
 }
 
 // DefaultSearchLimit is what a caller that names none gets.
@@ -71,7 +75,7 @@ const DefaultSearchLimit = 25
 // THE SAME THREE MODES AS `knowledge`, and the same four outcome fields —
 // `served_mode`, `modes`, `coverage`, `degraded` — so one screen control
 // drives both searches and says the same thing about each.
-func (s Sources) workSearch(ctx context.Context, n Native, p Params) (any, error) {
+func (s Sources) workSearch(ctx context.Context, p Params) (any, error) {
 	text := strings.TrimSpace(p.String("q"))
 	if text == "" {
 		return nil, badParams("q", "", nil)
@@ -83,7 +87,7 @@ func (s Sources) workSearch(ctx context.Context, n Native, p Params) (any, error
 	if err = searchTextRefusal(text); err != nil {
 		return nil, err
 	}
-	answer, err := n.WorkSearch.Search(ctx, tracker.SearchQuery{
+	answer, err := s.WorkSearch.Search(ctx, tracker.SearchQuery{
 		Text: text, Limit: p.Int("limit", DefaultSearchLimit), Mode: mode,
 	})
 	switch {
@@ -124,11 +128,14 @@ func (s Sources) workSearch(ctx context.Context, n Native, p Params) (any, error
 // answer to know what to ask for. The page is [memread.ThreadPage]'s, and the
 // listing carries the seat's whole count beside it.
 func (s Sources) conversations(ctx context.Context, p Params) (any, error) {
-	handle, err := s.viewerHandle(ctx, strings.TrimSpace(p.String("handle")))
+	// A SEAT'S TRAIL, and so its lead's or an admin's whoever's seat it is
+	// — see [Sources.trailSeat]. An absent handle is still the caller's own
+	// seat.
+	seat, err := s.trailSeat(ctx, strings.TrimSpace(p.String("handle")))
 	if err != nil {
 		return nil, err
 	}
-	return s.Memory.Threads(ctx, handle, strings.TrimSpace(p.String("conversation")),
+	return s.Memory.Threads(ctx, seat, strings.TrimSpace(p.String("conversation")),
 		p.Int("limit", 0))
 }
 
@@ -141,7 +148,7 @@ func (s Sources) conversations(ctx context.Context, p Params) (any, error) {
 // has written exactly that set since the domain landed and its only trace on
 // any surface was a boolean — `work_activity.notified` — saying that somebody,
 // somewhere, was told.
-func (s Sources) workRouting(ctx context.Context, n Native, p Params) (any, error) {
+func (s Sources) workRouting(ctx context.Context, p Params) (any, error) {
 	record := strings.TrimSpace(p.String("record_id"))
 	if record == "" {
 		return nil, badParams("record_id", "", nil)
@@ -150,7 +157,7 @@ func (s Sources) workRouting(ctx context.Context, n Native, p Params) (any, erro
 	if err != nil {
 		return nil, err
 	}
-	answer, err := n.Work.Routing(ctx, tracker.RoutingQuery{
+	answer, err := s.Work.Routing(ctx, tracker.RoutingQuery{
 		RecordID: record,
 		// THE HORIZON THIS COMPANY IS ACTUALLY RUNNING, read per call
 		// from the current epoch — which is the whole reason the
@@ -162,7 +169,7 @@ func (s Sources) workRouting(ctx context.Context, n Native, p Params) (any, erro
 		MaxLag:      fresh.MaxLag,
 		MaxLagSeq:   fresh.MaxLagSeq,
 		MinPosition: fresh.MinPosition,
-	}, time.Now().UTC())
+	}, s.clock())
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +188,7 @@ func (s Sources) inboxRetention() time.Duration {
 	if s.Company == nil {
 		return 0
 	}
-	company := s.Company()
+	company, _ := s.Company()
 	if company == nil {
 		return 0
 	}

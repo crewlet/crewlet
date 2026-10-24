@@ -104,7 +104,7 @@ func TestACollectedRunIsPublishedOnceWithItsTokens(t *testing.T) {
 	if rec.Response != "fixed the flake" || len(rec.DeliveredRefs) != 1 || rec.Failed {
 		t.Errorf("response %q refs %v failed %v", rec.Response, rec.DeliveredRefs, rec.Failed)
 	}
-	if rec.ConversationKey != "chat:D1" || rec.Agent != "a-1" || rec.RoleName != "SWE" {
+	if rec.ConversationKey != "chat:D1" || rec.Agent != sweID || rec.RoleName != "SWE" {
 		t.Errorf("conversation/agent/role = %q/%q/%q", rec.ConversationKey, rec.Agent, rec.RoleName)
 	}
 }

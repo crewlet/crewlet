@@ -87,9 +87,16 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 	// what tell those apart, and the controls are the strongest: they run
 	// the matcher on strings whose verdict is known, so a matcher that has
 	// gone inert fails here rather than certifying a clean tree.
+	//
+	// THE STATE LOGS ARE IN THIS LIST TOO, and the iam log's is why the list
+	// is worth keeping as the domains multiply: a namespace three tokens
+	// deep is the shape [markersFor]'s original two-segment truncation got
+	// wrong, so each new one is asserted rather than assumed to have been
+	// derived.
 	for _, want := range []string{
 		"crewlet.agent", "crewlet.events", "crewlet.notifications",
-		"crewlet.config", "dlq.", ".inbox", ".control", "agent-",
+		"crewlet.config", "dlq.", ".inbox", ".control", ".reflect", "agent-",
+		"crewlet.tracker.log", "crewlet.pages.log", "crewlet.iam.log",
 	} {
 		if !markers[want] {
 			t.Errorf("marker %q was not derived from topics.go's constants; the "+
@@ -105,6 +112,8 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		"crewlet.tracker.log.task.x", "crewlet.tracker.vectors.>",
 		"crewlet.pages.log.%s.%s", "crewlet.usage.log.day",
 		"crewlet.code.log.repo.x",
+		"crewlet.iam.log.person.0f3c", "crewlet.iam.log.session.0f3c",
+		"crewlet.iam.log.>",
 	} {
 		if _, hit := violation(markers, positive); !hit {
 			t.Errorf("control: %q is a hand-built name and the matcher did not flag it", positive)
@@ -117,6 +126,7 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		topics.TrackerLogSubject("task", "x"),
 		topics.PagesLogSubject("page", "x"),
 		topics.CodeLogSubject("repo", "x"),
+		topics.IamLogSubject("person", "x"),
 		topics.LogSubject(topics.UsageLogPrefix, "day", "x"),
 		topics.TrackerVectorsWildcard,
 	} {
@@ -127,7 +137,7 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 	}
 	for _, negative := range []string{
 		"crewlet.db",
-		"https://docs.crewlet.ai/schema/bootstrap.schema.json",
+		"https://docs.crewlet.ai/engine/latest/schema/bootstrap.schema.json",
 		"agent-only field set on a human seat",
 		"Maximum depth of agent-to-agent delegation chains.",
 		"github.com/crewlet/crewlet/internal/queue/topics",
@@ -138,6 +148,11 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		"crewlet.agent_handle=",
 		"crewlet.agent_handle",
 		"crewlet.events_seen",
+		// The same shape one token deeper, which is what a state log's
+		// namespace looks like: a metric under crewlet.iam.* is not a
+		// subject, and flagging it is how a guard gets switched off.
+		"crewlet.iam.log_lag",
+		"crewlet.iam_people",
 		// Names that begin like a log's subject and are not one: the
 		// engine's own environment variables, and words.
 		"CREWLET_LOG_LEVEL",

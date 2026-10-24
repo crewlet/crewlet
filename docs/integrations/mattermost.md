@@ -25,20 +25,37 @@ own infrastructure.
 
 ## Setting it up from the dashboard
 
-Connect Mattermost in Settings › Integrations with the instance address, the
+Connect Mattermost in Company › Integrations with the instance address, the
 team and a system administrator token. The reconcile loop creates each agent's
 bot account on its next tick, running the same pass
 `crewlet mattermost provision` runs. The administrator token is sealed in the
 fleet's secret store and kept, because disabling those bots again on
 disconnect needs the same authority that created them.
 
+On a first boot the engine claims its seats before that pass has minted their
+tokens, so each agent's `mcp-server-mattermost` is not started yet: it is
+**waiting**, not failing, for a token this integration mints
+(`mcp_server_awaiting_credential` in the log, and *Waiting for credentials* on
+Settings › MCP Tools, both naming it). The pass seals
+the tokens and re-activates the revision, and once the seal reaches a seat's
+node it starts the seat's server with its token, so the agents get the tools
+they answer through without a restart of the engine. That holds only where
+the company provisions its bots (`integrations.mattermost.provisioning`) and
+the pass can make them: where its last pass reports that it cannot until
+somebody acts — no administrator token, bot accounts or tokens switched off
+in the System Console, a bot somebody else deactivated — the server reads as
+failed, with that same finding. A company whose bots were made by hand seals
+each bot token itself, and a server whose token is unset is a failure naming
+the variable. See
+[Tools & MCP](../guides/tools-and-mcp.md#shared-vs-per-role-servers).
+
 Disconnecting with **"also remove the accounts this engine created"** revokes
 each seat's bot token and then disables its bot, in that order. The revoke is
 what makes the disable stand up: a disabled account keeps its username and its
 tokens, so a token left behind starts working again the moment anything
 re-enables the bot, this engine's own reconnect included. Only tokens this
-tool minted are taken (matched on the `crewlet-<handle>` description), so an
-administrator's own token on the same account is left alone. A token that
+tool minted are taken (matched on the `crewlet-<handle>` description),
+so an administrator's own token on the same account is left alone. A token that
 cannot be revoked fails the disconnect with the bot left **enabled**, rather
 than leaving a disabled account quietly holding a live credential; repeating
 the disconnect resumes there. The sealed `${VAR}` is left in the secret store
@@ -118,23 +135,34 @@ One Mattermost setting decides whether the product works for the humans in
 it, and it fails silently in both directions. Get this right first.
 
 `ServiceSettings.SiteURL` must be **the address people type into their
-browser** — scheme, host and port, exactly. Not `localhost` because the
-server runs there; not an internal DNS name because the engine uses it. The
-address in the address bar.
+browser** — scheme, host and port, exactly, and no port the scheme already
+implies (`:443` for https, `:80` for http), since no browser sends one. Not
+`localhost` because the server runs there; not an internal DNS name because
+the engine uses it. The address in the address bar.
 
 Two things read it, and both break when it is wrong:
 
-- **The websocket origin check.** Mattermost accepts a websocket upgrade
-  only from a browser whose `Origin` header matches SiteURL's host *and*
+- **The websocket origin check.** Mattermost accepts a browser's websocket
+  upgrade only when its `Origin` header matches SiteURL's host *and*
   scheme ([`App.OriginChecker`](https://github.com/mattermost/mattermost/blob/master/server/channels/app/server.go)).
   A mismatch is answered `403`, the web app retries and gives up, and it
   falls back to fetching messages when you navigate. Nothing is reported as
-  broken — the symptom is *"I have to refresh to see the reply"*.
+  broken — the symptom is *"I have to refresh to see the reply"*. With
+  `AllowCorsFrom` set, the `Origin` must instead equal SiteURL (path
+  removed) or one of its entries **character for character**, so a SiteURL
+  written with capitals stops matching the lower-case `Origin` every browser
+  sends. With no SiteURL at all, the check compares the `Origin` with the
+  request's `Host` header, which a reverse proxy has to forward as the
+  browser sent it: Mattermost's documented nginx configuration does
+  (`proxy_set_header Host $http_host`), while nginx's own default sends the
+  upstream's name instead.
 - **Every absolute URL the server and its plugins build.** Email links,
   OAuth redirects and the prepackaged plugins all use SiteURL. A browser
   loading `http://203.0.113.7:8065` with SiteURL still on localhost issues
   requests to `http://localhost:8065/plugins/…` — against the *reader's*
-  machine, which refuses them.
+  machine, which refuses them. Unset, Mattermost's own documentation lists
+  the rest: email notifications carry broken links, email batching does not
+  run, and OAuth sign-in fails.
 
 ```mermaid
 flowchart LR
@@ -147,10 +175,57 @@ flowchart LR
 ```
 
 **The engine is exempt.** The origin check passes any client that sends no
-`Origin` header, which every non-browser client does, so Crewlet's per-seat
-sockets keep working while the humans' web app is blind. An agent answers
-your message; you just cannot see it until you reload. That asymmetry is
-what makes this look like an engine bug when it is a server setting.
+`Origin` header, which every non-browser client does — Mattermost's own Go
+client included — so Crewlet's per-seat sockets keep working while the
+humans' web app is blind. An agent answers your message; you just cannot see
+it until you reload. That asymmetry is what makes this look like an engine
+bug when it is a server setting.
+
+### The address the engine dials
+
+`integrations.mattermost.url` is where the **engine** reaches the server,
+and it need not be the Site URL. On Kubernetes the engine naturally dials the
+server's in-cluster Service — `http://mattermost.chat.svc.cluster.local:8065`
+— while people browse `https://chat.example.com`, and that is correct:
+
+- **The origin check never applies to the engine.** Its sockets carry no
+  `Origin`, so neither the Site URL nor `AllowCorsFrom` has to name the
+  address it dials.
+- **Nothing a person opens is built from it.** The engine composes no
+  Mattermost link: a permalink, a notification's link and a plugin's URL all
+  come from the server's own Site URL. So does every link in the web app,
+  which people reach at the Site URL anyway.
+
+Only the **path** has to be the server's. Mattermost serves every route under
+its Site URL's path, whatever host a request arrives on: a Site URL of
+`https://example.com/chat` needs
+`url: http://mattermost.chat.svc.cluster.local:8065/chat`.
+
+**The engine follows no redirect.** Go's HTTP client follows one by
+resending a write as a `GET` without its body — a bot's rename arrives as a
+read of the bot and is answered `200` — and the agents' Mattermost MCP
+server, which the examples give the same address, follows none at all, so
+an engine that followed one would hear every message while its agents could
+answer none. A `url` the server redirects therefore fails every call, with
+an error naming where the server sent it and the `url` to set: one outside
+the Site URL's path, which Mattermost redirects into it, or `http://` behind
+a proxy that sends it to `https://`. A `url` under a path the server has no
+route for at all — any path, on a server whose Site URL has none — is
+answered with the web app's page, and the error says that instead of
+failing to decode it.
+
+The engine reads the server's configuration once when the transport starts,
+and warns about what the server itself cannot use — never about the Site URL
+differing from the address it dials:
+
+| Event | When | What breaks |
+|---|---|---|
+| `mattermost_site_url_unset` | SiteURL is empty | Mattermost's email links, email batching and OAuth sign-in. Browsers keep their live feed wherever what is in front of the server forwards the `Host` they typed |
+| `mattermost_site_url_refuses_browsers` | SiteURL is not an absolute http(s) address — `localhost:8065` and `/mattermost` pass Mattermost's own validation — or spells out a default port | Every person's live feed, and every link the server builds; the agents keep working |
+| `mattermost_instance_unread` | The configuration could not be read through `url`. A redirect, or a web page where the API's JSON should be, is named in its `error` with the `url` to set | When it is the `url`: every call the engine makes, so no seat connects |
+
+Each carries the same sentence [`crewlet mattermost doctor`](#checking-an-install-crewlet-mattermost-doctor)
+prints for it.
 
 ### Getting it right
 
@@ -174,14 +249,21 @@ curl -s "http://203.0.113.7:8065/api/v4/config/client?format=old" \
   | python3 -c 'import sys,json; print(json.load(sys.stdin)["SiteURL"])'
 ```
 
-Or let the engine's own check do it, which also proves a browser-shaped
-upgrade and every seat's socket:
+Or let the engine's own check do it, which also sends a browser's websocket
+upgrade to that address and opens every seat's socket:
 
 ```bash
-crewlet mattermost doctor my_company.yaml
+crewlet mattermost doctor my_company.yaml -browser-url http://203.0.113.7:8065
 ```
 
-Two things that do **not** work, and cost an afternoon each:
+`-browser-url` is the address people type, and only you can give it: the
+server reports where it *believes* it is browsed, and the engine's own `url`
+may be any route to it. Left out, it is read from `MATTERMOST_PUBLIC_URL`,
+which a shell that sourced the compose stack's `.env` already has; with
+neither, the doctor judges the Site URL on its own and says it did not ask
+whether people browse there.
+
+Three things that do **not** work, and cost an afternoon each:
 
 - **Changing it in the System Console.** An `MM_*` environment variable
   outranks the stored config and is re-applied on every write, so the field
@@ -192,6 +274,11 @@ Two things that do **not** work, and cost an afternoon each:
   to the whole REST API from any site a signed-in user visits. It also
   leaves SiteURL wrong, so the links and plugins stay broken. Use it only to
   name additional legitimate origins, explicitly, never `*`.
+- **Listing the engine's address in `AllowCorsFrom`.** The engine needs no
+  entry, because its sockets carry no `Origin`, and any entry at all
+  switches the server to comparing origins character for character (see
+  above) and grants that origin credentialed cross-origin access to the
+  REST API.
 
 ---
 
@@ -225,15 +312,16 @@ mcp_servers:
   - name: mattermost
     shared: false                        # per-agent identity
     command: uvx
-    args: ["mcp-server-mattermost"]
+    args: ["mcp-server-mattermost==0.6.1"]
     env:
       MATTERMOST_URL: "https://chat.nimbus.example"
     tool_prefix: "mattermost_"
 
 units:
   - name: Core
+    id: core                             # the unit's key; `name` above is display
     type: team
-    lead: Engineer
+    lead: engineer                       # the lead seat's handle
     roles:
       - name: Engineer
         integrations:                              # per-agent transport identity
@@ -244,6 +332,18 @@ units:
           mattermost:
             MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_ENGINEER}"   # same token
 ```
+
+**The server is pinned, and two of its tools reach the engine host's disk.**
+The entry names `mcp-server-mattermost==0.6.1` because the bundled tool
+skills trigger on its tool names (`mattermost_post_message` among them), and a
+release that renamed one would disarm them without a sound — see
+[trigger width](../concepts/tool-skills.md#controlling-the-cost--keep-enforced-triggers-narrow-broad-bodies-tiny).
+Two of its tools act on the filesystem of the node the seat runs on, as the
+user the engine runs as: `upload_file` sends Mattermost any file that user can
+read, and `download_file`, new in 0.6.0, saves an attachment into any directory
+that user can write, replacing an existing file when the call asks it to. Every
+seat that runs this server can call both, so run the engine as a user whose
+files you would let an agent post and overwrite.
 
 Write this block **first**, with `${VAR}` placeholders — the provisioner
 reads the placeholder names out of the YAML and mints exactly those
@@ -256,10 +356,10 @@ which is reported and left untouched.
 
 | Field | Meaning |
 |---|---|
-| `url` | Instance base URL. Required when enabled. |
+| `url` | The address the engine reaches the server at. Required when enabled. Any route to the server works, the Site URL or an in-cluster Service alike; only its path has to be the Site URL's (see [The address the engine dials](#the-address-the-engine-dials)). |
 | `team` | Team slug agents belong to. Required — channels are team-scoped. |
 | `typing_status` | `always` (default) / `addressed`. See [Working status](#working-status). |
-| `provisioning.username_prefix` | Prepended to each handle to form the bot username. |
+| `provisioning.username_prefix` | Prepended to each seat's [handle](../concepts/integration-reconcile.md#a-seats-account-is-named-after-its-handle) to form the bot username. |
 | `provisioning.channels` | Channels every agent bot is added to. |
 | `provisioning.display_name_suffix` | Appended to each bot's display name. |
 
@@ -298,7 +398,8 @@ crewlet mattermost provision company.yaml
 For every Mattermost-enabled agent seat the command:
 
 1. **finds or creates the bot account** at a deterministic username
-   (`{username_prefix}{handle}`, or an explicit `username`);
+   (`{username_prefix}{handle}`, or an explicit `username`) — see
+   [A seat's account is named after its handle](../concepts/integration-reconcile.md#a-seats-account-is-named-after-its-handle);
 2. **re-enables it if this engine's own disconnect disabled it**, and only
    then — a disabled bot still owns its username, so creating over it fails
    with a conflict nothing else would explain. The test is the
@@ -334,9 +435,10 @@ finish: a credential that is not a system admin, a team that does not exist,
 `ServiceSettings.EnableBotAccountCreation` or
 `ServiceSettings.EnableUserAccessTokens` switched off (both default to
 **false** on a fresh install, and both fail *late* — every bot created and
-joined, then nothing minted), and a loopback [Site URL](#the-site-url) on a
-server reached at a real address, which would leave every browser without
-live updates. Membership is **read**, never inferred from a status code. The second half
+joined, then nothing minted). The [Site URL](#the-site-url) is not part of it:
+no bot depends on it, and the address the run reaches the server at says
+nothing about the address people browse. Membership is **read**, never
+inferred from a status code. The second half
 of that sentence used to say Mattermost answers an add for an existing
 member with success, so a 4xx there is a real failure — which was never
 true: it answers `400 "This user is already a team member."` and the code
@@ -458,7 +560,8 @@ a command whose whole promise is that it is safe to re-run.
 So a bot is left alone when **both** halves hold: the variable holding its
 token still has a value (answered by the sink the run is writing to, and an
 *unreadable* sink stops the run rather than being read as empty), and the
-account still has a token under this tool's description, `crewlet-<handle>`.
+account still has a token under this tool's description,
+`crewlet-<handle>`.
 Either alone is wrong — a recorded value whose token was revoked leaves a
 bot 401ing for ever, and a live token nobody wrote down cannot be deployed.
 
@@ -499,19 +602,22 @@ limit, that is the number to watch — not the agent count.
 ## Checking an install: `crewlet mattermost doctor`
 
 ```
-crewlet mattermost doctor my_company.yaml
+crewlet mattermost doctor my_company.yaml [-browser-url URL] [-admin-token TOKEN]
 ```
 
 Reads the same company YAML the engine boots from and checks the whole
-inbound path, in the order it breaks:
+inbound path, in the order it breaks. `-browser-url` (or
+`MATTERMOST_PUBLIC_URL`) is the address people type into their browser —
+the one fact about browsers the company's configuration cannot give it,
+because `integrations.mattermost.url` may be any route to the server:
 
 | Check | Why it is here |
 |---|---|
-| `/system/ping`, unauthenticated | Reachability — a bad credential must not make a healthy server look dead |
-| `SiteURL` vs `integrations.mattermost.url` | The [one setting](#the-site-url) whose failure has no error message |
-| A **browser-shaped** websocket upgrade | Sent *with* an `Origin` header, which is the only difference between a browser and the engine — this is the check that predicts what a human sees |
+| `/system/ping`, unauthenticated | Reachability — a bad credential must not make a healthy server look dead — and that `url` is where the server answers its API: a redirect, or a web page in its place, stops the run and names the `url` to set (see [The address the engine dials](#the-address-the-engine-dials)) |
+| `SiteURL` | The [one setting](#the-site-url) whose failure has no error message: unset, not an absolute http(s) address, a default port spelled out, or — given `-browser-url` — not the address people type, scheme and host. A Site URL on another address than `url` is not a finding — see [The address the engine dials](#the-address-the-engine-dials). Without `-browser-url` the line says that question was not asked |
+| A **browser-shaped** websocket upgrade | *With* a browser's `Origin`, which is the only difference between a browser and the engine — what a human's live feed does, `AllowCorsFrom` included, which no unprivileged read can show. Given `-browser-url`, it is a browser there: sent to that address under the Site URL's path, through whatever is in front of the server, so a proxy that drops `Upgrade` fails it too. Without it, it carries the Site URL's own `Origin` and is sent to `url`, so it can only find an `AllowCorsFrom` that refuses the server's own browsers. With no Site URL, it stands in for a browser at `url` itself |
 | The configured team | Channels are team-scoped, so a team that does not resolve is a company where no bot can be placed |
-| Per seat: its own credential, a real socket, its channels | A token can be valid for REST and still not open a socket, and a bot receives nothing from channels it has not joined |
+| Per seat: its own credential, a real socket, its channels | A token can be valid for REST and still not open a socket, and a bot receives nothing from channels it has not joined. The socket is opened exactly as the engine opens it, with no `Origin` |
 
 **No admin credential is needed and nothing is written.** The seat tokens
 already in the config do the work, resolved the way the engine resolves them
@@ -535,10 +641,13 @@ authenticates is worth knowing either way.
 
 ```
 ok    reachable        http://203.0.113.7:8065 answers
-ok    site url         the server agrees it is served at http://203.0.113.7:8065
+ok    site url         people browse the server at http://203.0.113.7:8065, and its Site
+                       URL, http://203.0.113.7:8065, agrees.
 ok    credential       authenticates as agent-pm
 ok    team             team "nimbus" resolves (kx8f...)
-ok    browser socket   a browser-shaped upgrade to ws://203.0.113.7:8065/api/v4/websocket was accepted
+ok    browser socket   an upgrade carrying Origin http://203.0.113.7:8065 — what a browser
+                       at http://203.0.113.7:8065 sends, sent where it sends it — was
+                       accepted at ws://203.0.113.7:8065/api/v4/websocket
 ok    seat pm          agent-pm authenticates, opens a socket, and is in 3 channel(s)
 FAIL  seat swe         agent-swe authenticates and opens a socket but has joined no
                        channel, so it will only ever hear direct messages. Name channels
@@ -558,7 +667,7 @@ FAIL  seat swe         agent-swe authenticates and opens a socket but has joined
 4. the Mattermost transport parses it, applies thread routing and loop
    suppression, and produces a notification.
 5. NotificationService resolves handle → agent and publishes to
-   `crewlet.agent.{handle}.inbox`.
+   `crewlet.agent.{seat-id}.inbox`.
 
 #### Which events wake an agent
 
@@ -678,7 +787,7 @@ nodes that is a small number of idle connections; it is the one cost of a
 seat never going deaf while placement moves it.
 
 **Each delivery is counted once.** The node that wins a post's claim publishes
-an `inbound_delivery` record beside the wake, so Settings › Integrations
+an `inbound_delivery` record beside the wake, so Company › Integrations
 counts Mattermost's deliveries like any other surface's — one post presented
 to one seat, whichever node read it — and its row lists them as
 `socket:posted`, with the post id as the provider's id. The record is
@@ -807,16 +916,127 @@ sends as itself.
 
 Give the human seat a `contact.mattermost_user_id` — the **username**, not
 the 26-character user id, because Mattermost mentions address a person by
-name and the name is what an agent has to write for the mention to render:
+name and the name is what an agent has to write for the mention to render.
+It is lowercased, as Mattermost stores every username, so `Jane` and `jane`
+name one person — and two seats giving either are refused as one account
+claimed twice:
 
 ```yaml
 roles:
   - name: Jane Founder
     kind: human
-    manages: [CEO]
+    manages: [ceo]        # by handle
     contact:
       mattermost_user_id: jane
 ```
+
+### How a person's post is recognised
+
+A post names its author by the **user id**, never by the username — so the
+name in the chart cannot attribute anything on its own. The Mattermost
+transport asks the server which account holds each human seat's name
+(`POST /api/v4/users/usernames`, every name in one request, on a seat's bot
+token) and registers **that account's user id** for the seat. A post from
+it then reaches the agents as the colleague the chart describes —
+`Jane Founder (jane-founder, human colleague)` — in the trigger, in the thread
+a turn reads back and in what the agent remembers about who it spoke with,
+rather than from a stranger with an opaque id.
+
+The name is asked about in lowercase, the only case Mattermost stores a
+username in, so `Jane` and `@jane` both find the account `jane`. It is asked
+again:
+
+| When | Why |
+|---|---|
+| At connect, before any socket is attached | so the first post a socket hears is already attributed |
+| On every apply | an apply is what names a new person or corrects a name. The new party registry is filled from the last answer first, with no request, so nobody recognised a moment ago is a stranger while the server is asked again |
+| Every **minute** (`mattermost.PeopleRefresh`) | the two changes that happen **at the server** — a person joining under the name the chart already gives them, and a rename — reach the engine no other way. One request per node per minute, however many people the company names |
+
+The minute is what a person who has just joined waits to be recognised. A
+rename keeps the account's id, so the person stays recognised until the next
+ask — and that ask is what notices that the chart's name for them is stale.
+Mattermost does broadcast `new_user` and `user_updated` on its websocket, and
+the engine deliberately does not listen for them: every seat's socket would
+hear each one, nothing replays one a socket missed while it was down, and the
+answer they would prompt is the same request.
+
+**A name that holds no person is reported, never guessed at.** Whatever is
+registered for a person is attributed to them with their authority, so
+nothing is registered for the seat when the name holds no account of the
+person's own. The `reason` says which:
+
+| `reason` | The name… |
+|---|---|
+| `no_account` | is one the server answers without: nobody holds it, or nobody the bots may see |
+| `agent_account` | holds the account one of this company's own seats posts as, bot or not — registered, every post that agent made would reach its colleagues as the person's word |
+| `bot_account` | holds another bot's account |
+| `shared_account` | holds the account another human seat's name holds too. The duplicate check compares the contact as written, so two `${VAR}` references that resolve to one name pass it; one account is not two people, so it is registered for neither |
+
+And for each one:
+
+- the engine logs `mattermost_person_unknown` with the seat's handle, the
+  name and the `reason`, once, when it happens — and
+  `mattermost_person_found` when the name holds the person again;
+- the integration's status carries a `contact_unknown`
+  [finding](../concepts/integration-reconcile.md#what-a-pass-reports) about
+  that seat: *degraded*, owed by the **operator**, because the fix is the
+  name in the company document — the one the person's profile shows — or the
+  person joining the server. Reported whether or not the engine provisions
+  the bots.
+
+A request that **fails** changes nothing: `mattermost_people_unread` is
+logged and the last answer stands, because a server mid-restart says nothing
+about who anybody is.
+
+**Whoever holds the name is the person.** That is what the chart says when
+it names a person by username, and it is the rule the rest of the
+integration already follows: an agent mentions and messages whoever holds
+`@jane`, and a person who joins after boot is recognised by it. So anyone
+who can take a name on the server — by signing up under it, or renaming
+themselves to it once it is free — is treated as the seat that names it,
+with that seat's authority. Keep a person's username in the company
+document current, and treat a Mattermost server whose members you would not
+trust with each other's names accordingly.
+
+A name that comes to hold a **different** account — the person renamed
+themselves and somebody else took the name, or the account was deleted and
+made again — moves the seat to that account on every node alike, because
+each one asks the same server: a node that kept the old account would
+attribute a post differently from a node started after the move. The move is
+**said** instead of refused:
+
+- the engine logs `mattermost_person_account_changed` with both ids, when
+  it sees it;
+- the integration's status carries a `contact_moved` finding about that
+  seat, naming the account the name held when the company was last applied
+  and the one it holds now: *degraded*, owed by the **operator**, until the
+  next **apply**. If the account is not the person's, correct the name. If
+  it is, re-apply the company unchanged (`POST /config/reload`) — any apply
+  states the names again and clears it, the re-activation a provisioning
+  pass makes on its own after sealing a credential it minted included, so
+  the log line is the record that outlasts the finding. Only an apply: the
+  registry the identity directory rebuilds when somebody is suspended or
+  reinstated states nobody's name, and leaves the finding where it is. A
+  node started after the move has no earlier account to compare with and
+  reports nothing; every node running when it happened sees it within the
+  minute.
+
+A bot holding the built-in `system_user` role can see every account. If the
+bots' role has had `view_members` taken away, the server answers only for
+the people a bot shares a team or a channel with, and anyone else reads as a
+name nobody holds.
+
+**A person the identity directory withholds gets no account.** Whether the
+person holding a seat may still be reached is the
+[directory's](../concepts/humans-in-the-org.md#a-suspended-holder-is-withdrawn-with-no-configuration-change)
+to say, and a seat whose holder is suspended, retired or removed has every
+contact identity left out of the party registry — the account its name
+resolves to included, so a suspended person's posts reach the agents from a
+stranger, with no configuration change. Such a seat is not reported as
+`contact_unknown` or `contact_moved` either, and contends for no account: an
+account a withheld seat's name shares with another person's is that
+person's. Its name is still asked about, so the registry that reinstates
+the person attributes their next post at once.
 
 ---
 
@@ -921,7 +1141,9 @@ docker compose --profile mattermost up -d --wait
 COMPANY=examples/nimbus-claude-cli.company.yaml scripts/mattermost-dev-bootstrap.sh
 
 # 3. Check the plan before it touches the server again, and prove the
-#    whole path before booting
+#    whole path before booting. .env carries MATTERMOST_PUBLIC_URL, so the
+#    doctor holds the Site URL to the address you browse and sends its
+#    browser probe there
 set -a; . ./.env; set +a
 crewlet mattermost provision examples/nimbus-claude-cli.company.yaml --dry-run --print
 crewlet mattermost doctor examples/nimbus-claude-cli.company.yaml
@@ -962,11 +1184,10 @@ submission whenever the model never manages the envelope.
 
 `-capture-token` — which mints a headless `CLAUDE_CODE_OAUTH_TOKEN` and
 avoids the shared refresh token `-from-host` leaves you with — writes into
-the [encrypted secret store](../concepts/secret-store.md), so it needs a
-Tier A keyring first: `crewlet secrets keygen -key-id 2026-01`, then
-uncomment the `secrets:` block in `examples/nimbus-claude-cli.config.yaml`. Worth doing
-before you run this anywhere but a laptop; without a keyring the command
-stops and says so. See [Subscription LLM
+the [encrypted secret store](../concepts/secret-store.md), sealed under the
+Tier A keyring `examples/nimbus-claude-cli.config.yaml` already declares
+(every node needs one: `crewlet secrets keygen -key-id 2026-01` prints the
+key to export). Worth doing before you run this anywhere but a laptop. See [Subscription LLM
 Backends](../concepts/subscription-llm-backends.md#authentication) for the
 other login shapes (a token on stdin, a username/password where the CLI has
 one, a bundle moved onto another host).
@@ -996,13 +1217,14 @@ before anything happens. That is what it is for.
 If a bot stays silent, check in this order:
 
 0. `crewlet mattermost doctor examples/nimbus-claude-cli.company.yaml` — this is what it
-   is for; checks 1–3 below are what it automates.
+   is for; checks 1 and 2 below are what it automates. It never starts the
+   tool server, so check 3 is yours.
 1. `crewlet mattermost provision examples/nimbus-claude-cli.company.yaml --dry-run` —
    does the seat exist, and is its token minted?
 2. The engine log, for one `mattermost_ws_connected` line per seat. A
    `mattermost_ws_auth_rejected` line instead means that seat's token is
    wrong, revoked, or its bot is disabled — re-run the provisioner.
-3. Whether `uvx mcp-server-mattermost==0.5.1` resolves. A missing MCP server
+3. Whether `uvx mcp-server-mattermost==0.6.1` resolves. A missing MCP server
    is the one failure mode where the agent reasons about a reply and then has
    no tool to send it with, so the logs show a complete turn and the channel
    stays quiet.
@@ -1068,13 +1290,25 @@ to the server than people do — an internal DNS name, say — and never point
 | A plugin bundle requests `http://localhost:8065/plugins/…` and gets `ERR_CONNECTION_REFUSED` | The same wrong SiteURL — plugins build their URLs from it. (`mattermost-ai` is prepackaged and enabled by Mattermost's own defaults, so seeing it is normal.) | Same fix; these errors go away with it |
 | Agents reply, but nobody sees it live | Both of the above at once: the engine's sockets are exempt from the origin check, browsers are not | Same fix |
 | The websocket fails and the Site URL *is* correct | Something in front of Mattermost drops the `Upgrade` header | Forward `Upgrade` / `Connection` in the reverse proxy (`proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";`) |
+| The engine logs `mattermost_site_url_refuses_browsers` | SiteURL is not an absolute http(s) address (`localhost:8065`, `chat.example.com:8065` and `/mattermost` all pass Mattermost's own validation), or spells out its scheme's default port; no browser's `Origin` matches it | Set it to the address in the address bar, scheme included and default port left out |
+| The engine logs `mattermost_site_url_unset` | SiteURL is empty. Live updates still work; Mattermost's email links, email batching and OAuth sign-in do not | Set it, as above |
+| The engine logs `the server redirects it to …` and no seat connects | `integrations.mattermost.url` is not where the server serves its API: outside the Site URL's path, or `http://` where a proxy sends it to `https://`. Neither the engine nor the agents' MCP server follows a redirect | Set `url` — and the MCP server's `MATTERMOST_URL`, the same variable in the examples — to the address the error names; its host may stay whatever reaches the server |
+| The engine logs `answered with text/html rather than the API's JSON` | `url` carries a path the server has no route for, so Mattermost answers its web app's page there | Give `url` the Site URL's path |
 | One bot stays silent while others work | Its token was revoked, or its account disabled | `crewlet mattermost doctor <company.yaml>`, then re-run the provisioner |
-| An agent receives messages but never answers in Mattermost | The `mcp-server-mattermost` MCP server is missing, so the turn completes with no tool to send with | Check `uvx mcp-server-mattermost` resolves |
+| A person's messages reach the agents as a stranger's; the engine logs `mattermost_person_unknown` and the integration reports `contact_unknown` | The human seat's `contact.mattermost_user_id` names no account the bots can see — a typo, a rename, a person who has not joined — or names an agent's or a bot's account, or the account another human seat's name holds too | Write the username their profile shows; see [How a person's post is recognised](#how-a-persons-post-is-recognised) |
+| The engine logs `mattermost_person_account_changed` and the integration reports `contact_moved` | The person's username now holds another account than when the company was last applied: they renamed and somebody took the name, or the account was made again | If the account is theirs, `POST /config/reload`; if not, write the username their profile shows now |
+| An agent receives messages but never answers in Mattermost | The `mcp-server-mattermost` MCP server is missing, so the turn completes with no tool to send with | Check `uvx mcp-server-mattermost==0.6.1` resolves |
+| An agent that answered earlier now has its sends refused, classed `unavailable`, saying the server is not running, and the log has `server_exited` | That seat's `mcp-server-mattermost` child exited; the engine is [restarting it](../guides/tools-and-mcp.md#a-server-that-dies-or-will-not-start) and its tools refuse until it is back | Nothing, if `server_restarted` follows. If `server_exited` keeps recurring, or `server_restart_failed` repeats, fix what the `stderr_tail` names |
 | Every agent is deaf after a restart, and the log has `mattermost_ws_auth_rejected` | Personal access tokens were disabled server-wide, or the tokens were revoked | Re-enable under System Console → Integrations, re-run the provisioner |
 
-`crewlet mattermost doctor <company.yaml>` checks all of the above in one
-pass: reachability, the Site URL against your configured `url`, a
-**browser-shaped** websocket upgrade (with an `Origin` header, which is what
-distinguishes a browser from the engine), and one real authenticated socket
-per seat. It exits non-zero when anything is wrong.
+`crewlet mattermost doctor <company.yaml> -browser-url <address people type>`
+checks all of the above but the tool server in one pass: reachability (and that `url` is answered
+without a redirect), the Site URL against the address people type, a
+**browser-shaped** websocket upgrade sent there (with the `Origin` a browser
+sends, which is what distinguishes a browser from the engine), and one real
+authenticated socket per seat, opened as the engine opens it. It exits
+non-zero when any check fails. Without `-browser-url` or
+`MATTERMOST_PUBLIC_URL` it cannot tell a Site URL from the address people
+type, nor see what stands in front of the server, and its `site url` line
+says so.
 

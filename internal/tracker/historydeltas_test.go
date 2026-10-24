@@ -2,11 +2,9 @@ package tracker_test
 
 import (
 	"encoding/json"
-	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -59,16 +57,15 @@ func TestAProjectReconcileRecordsWhatTheChartMoved(t *testing.T) {
 	t.Parallel()
 	r := newRoundTripWithoutProject(t)
 
-	if _, err := r.writer.ApplyChart(t.Context(), activation(0), []tracker.ChartProject{
+	if _, err := r.writer.ApplyChart(t.Context(), activatedAt(100), []tracker.ChartProject{
 		{Key: "ENG", Name: "Engineering", Purpose: "builds it", Unit: "Engineering"},
 	}); err != nil {
 		t.Fatalf("the first chart apply: %v", err)
 	}
 	r.drain()
 	// A CREATE LISTS WHAT IT SET, because every field moves from empty.
-	first := strconv.FormatInt(configplane.ActivationStamp(activation(0)), 10)
 	if got := r.fieldsFor(tracker.ChangeProjectCreated); got != `{`+
-		`"chart_epoch":{"from":"0","to":"`+first+`"},`+
+		`"chart_epoch":{"from":"0","to":"100"},`+
 		`"name":{"from":"","to":"Engineering"},`+
 		`"purpose":{"from":"","to":"builds it"},`+
 		`"unit":{"from":"","to":"Engineering"}}` {
@@ -77,18 +74,17 @@ func TestAProjectReconcileRecordsWhatTheChartMoved(t *testing.T) {
 	}
 
 	// AND AN EDIT NAMES ONLY WHAT IT MOVED. The epoch travels with it
-	// because a re-declaration at a new revision is a real fact about the
+	// because a re-declaration at a new activation is a real fact about the
 	// row — and because without it the reconcile that changes nothing else
 	// would be the empty row again.
-	if _, err := r.writer.ApplyChart(t.Context(), activation(1), []tracker.ChartProject{
+	if _, err := r.writer.ApplyChart(t.Context(), activatedAt(200), []tracker.ChartProject{
 		{Key: "ENG", Name: "Engineering", Purpose: "ships it", Unit: "Engineering"},
 	}); err != nil {
 		t.Fatalf("the second chart apply: %v", err)
 	}
 	r.drain()
-	second := strconv.FormatInt(configplane.ActivationStamp(activation(1)), 10)
 	if got := r.fieldsFor(tracker.ChangeProjectUpdated); got != `{`+
-		`"chart_epoch":{"from":"`+first+`","to":"`+second+`"},`+
+		`"chart_epoch":{"from":"100","to":"200"},`+
 		`"purpose":{"from":"builds it","to":"ships it"}}` {
 
 		t.Errorf("a project purpose edit recorded %s — the row is supposed to "+
@@ -108,12 +104,12 @@ func TestASavedViewRecordsWhichParametersMoved(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 
-	if _, err := r.writer.WriteView(t.Context(), "op-view", aView("v-1", nil)); err != nil {
+	if _, err := save(t, r.writer, "op-view", aView("v-1", nil)); err != nil {
 		t.Fatalf("save the view: %v", err)
 	}
 	r.drain()
 
-	if _, err := r.writer.WriteView(t.Context(), "op-view-2", aView("v-1", func(v *tracker.View) {
+	if _, err := save(t, r.writer, "op-view-2", aView("v-1", func(v *tracker.View) {
 		v.Params = map[string]string{"assignee": "bo", "status": "todo"}
 	})); err != nil {
 		t.Fatalf("re-save the view: %v", err)
@@ -144,12 +140,12 @@ func TestAPriorityListRecordsTheOrderItMoved(t *testing.T) {
 
 	lead := r.writer.As("bob", tracker.AuthorHuman, tracker.Provenance{})
 	if _, err := lead.WritePriorities(t.Context(), "op-prio", "ana",
-		[]string{"t-1", "t-2"}, nil, tracker.PersonAuthority{Lead: true}); err != nil {
+		[]string{"t-1", "t-2"}, nil, tracker.PersonAuthority{Authorized: true}); err != nil {
 		t.Fatalf("WritePriorities: %v", err)
 	}
 	r.drain()
 	if _, err := lead.WritePriorities(t.Context(), "op-prio-2", "ana",
-		[]string{"t-2", "t-1"}, nil, tracker.PersonAuthority{Lead: true}); err != nil {
+		[]string{"t-2", "t-1"}, nil, tracker.PersonAuthority{Authorized: true}); err != nil {
 		t.Fatalf("WritePriorities again: %v", err)
 	}
 	r.drain()
@@ -301,7 +297,7 @@ func TestTheQuietDocumentsRecordWhatMoved(t *testing.T) {
 	// recorded rather than left as bookkeeping.
 	if _, err := r.writer.WriteTags(t.Context(), "op-rename", "ENG",
 		tracker.TagEdit{Rename: map[string]string{"regression": "Regression"}},
-		tracker.TagAuthority{Lead: true}); err != nil {
+		tracker.TagAuthority{Policy: true}); err != nil {
 		t.Fatalf("rename a tag: %v", err)
 	}
 	r.drain()

@@ -36,8 +36,23 @@ import (
 // every row of a fifty-row page. What a caller needs beyond this is a
 // single-task read, which is flat at any age.
 type TaskRow struct {
-	ID    string `json:"id"`
-	Key   string `json:"key"`
+	ID  string `json:"id"`
+	Key string `json:"key"`
+
+	// KeyCollision marks a task holding a key ANOTHER task claimed first,
+	// and it is on the row because the key is then not this task's
+	// address: every read resolves a key through the directory to the
+	// claimant ([resolveTaskID]), so a reader that opened this row by its
+	// key would land on somebody else's task. [TaskRow.Address] is the
+	// reference that does reach it.
+	//
+	// THE COLUMN, never re-derived here: the applier derives it from the
+	// directory on every apply that moves the directory or who holds the
+	// key ([Applier.maintainKeys]), each of which names the key, so it is
+	// the same on every node and follows the claim wherever a purge hands
+	// it.
+	KeyCollision bool `json:"key_collision,omitempty"`
+
 	Title string `json:"title"`
 
 	// Type is the slug a card is drawn under. On the ROW rather than only
@@ -115,6 +130,49 @@ type RowSpend struct {
 	Workers  int `json:"workers"`
 	SentBack int `json:"sent_back"`
 	Reopens  int `json:"reopens"`
+}
+
+// Address is the reference that opens this row's task. See [ItemAddress].
+func (r TaskRow) Address() string { return ItemAddress(r.ID, r.Key, r.KeyCollision) }
+
+// ItemAddress is the one rule for what a caller hands back to open a task: its
+// key, unless the key is not this task's to answer to, and then its id.
+//
+// THE KEY BY DEFAULT, because it is what a person reads, pastes into chat and
+// types into a tool call, and every read takes either. THE ID WHEN ANOTHER TASK
+// CLAIMED THE KEY FIRST (`key_collision`), because a key resolves through the
+// directory to its claimant: a link, a peek or a composed call built from a
+// flagged task's key opens the claimant, so the flagged task could never be
+// reached by the gesture that names it. And the id when a row carries no key
+// at all, because an empty reference addresses nothing.
+//
+// The dashboard carries the same rule as `itemAddress` — a separate build in a
+// separate language, so a copy — and the two are one sentence: key, unless
+// flagged or absent.
+func ItemAddress(id, key string, collision bool) string {
+	if key == "" || collision {
+		return id
+	}
+	return key
+}
+
+// ItemNamed is how PROSE names a task to somebody who may act on the name: its
+// address ([ItemAddress]), with the key beside an id that stands in for it.
+//
+// THE KEY TOO, because an id alone tells a reader nothing about which task it
+// is, and SAYING WHY, because a reader shown an id where every other task is
+// shown a key reads it as a fault — and goes back to the key, which opens
+// the claimant. A task that answers to its key is named by the key alone, and
+// one with no key by its id: there is nothing to put beside it.
+//
+// A tool's ARGUMENT is never built from this — an argument takes the address
+// and nothing else.
+func ItemNamed(id, key string, collision bool) string {
+	address := ItemAddress(id, key, collision)
+	if key == "" || address == key {
+		return address
+	}
+	return address + " (its key " + key + " opens another task)"
 }
 
 // Blocker is one dependency edge as the task that waits on it sees it.
@@ -362,12 +420,12 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 		if err != nil {
 			return err
 		}
-		// AND THE PRIORITY LIST, inside the same transaction and for the
+		// THE PRIORITY LIST, inside the same transaction and for the
 		// same reason: it lives on another object, so a parser that read
 		// it would be a parser that could fail on a store — and a list
 		// read outside this snapshot could name a task the rows below
 		// were never filtered against.
-		if q.PriorityListOf.Named() {
+		if q.PriorityListOf != "" {
 			q.PriorityList, err = readPriorityList(ctx, tx, q.PriorityListOf)
 			if err != nil {
 				return err
@@ -583,7 +641,7 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 	if len(q.Keys) > 0 {
 		add("t.key IN ("+placeholders(len(q.Keys))+")", anyOf(q.Keys)...)
 	}
-	if q.PriorityListOf.Named() {
+	if q.PriorityListOf != "" {
 		if len(q.PriorityList) == 0 {
 			// AN EMPTY LIST IS AN EMPTY ANSWER, stated rather than
 			// omitted: dropping the clause would answer every task in
@@ -612,19 +670,13 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 	if len(q.Types) > 0 {
 		add("t.type IN ("+placeholders(len(q.Types))+")", anyOf(q.Types)...)
 	}
-	// BOTH UNIT FILTERS MATCH EVERY SPELLING THEIR UNIT ANSWERS TO — see
-	// [unitSpellings]. `filed_unit` is a record of what was true and is
-	// never rewritten, so a company that gives a unit an id holds both
-	// spellings across its own history for ever: the filter resolves
-	// through the chart and matches the set rather than the one string
-	// somebody typed.
-	if spellings := unitSpellings(q.Units, q.Unit); len(spellings) > 0 {
-		add("t.filed_unit IN ("+placeholders(len(spellings))+")",
-			anyOf(spellings)...)
+	// BOTH UNIT FILTERS RESOLVE THROUGH THE CHART to the key the rows
+	// hold — see [unitKeys].
+	if units := unitKeys(q.Units, q.Unit); len(units) > 0 {
+		add("t.filed_unit IN ("+placeholders(len(units))+")", anyOf(units)...)
 	}
-	if spellings := unitSpellings(q.Units, q.RoutingUnit); len(spellings) > 0 {
-		add("t.routing_unit IN ("+placeholders(len(spellings))+")",
-			anyOf(spellings)...)
+	if units := unitKeys(q.Units, q.RoutingUnit); len(units) > 0 {
+		add("t.routing_unit IN ("+placeholders(len(units))+")", anyOf(units)...)
 	}
 	if handles := q.Assignee; len(handles) > 0 {
 		// `none` is a VALUE rather than a missing filter: "unassigned"
@@ -717,12 +769,10 @@ func compileWhere(q Query, now time.Time, fields map[string]resolvedField,
 			"AND m.ask = ? AND m.resolved = 0 AND m.answered_by IS NULL "+
 			"AND m.removed = 0)", q.AskedOf)
 	}
-	if q.AskedBy.Named() {
-		// EVERY NAME THE ASKER WRITES UNDER — see [Query.AskedBy].
+	if q.AskedBy != "" {
 		add("EXISTS (SELECT 1 FROM tracker_comments m WHERE m.task_id = t.id "+
-			"AND m.ask <> '' AND m.author IN ("+
-			placeholders(len(q.AskedBy.Handles()))+") AND m.resolved = 0 "+
-			"AND m.answered_by IS NULL AND m.removed = 0)", q.AskedBy.args()...)
+			"AND m.ask <> '' AND m.author = ? AND m.resolved = 0 "+
+			"AND m.answered_by IS NULL AND m.removed = 0)", q.AskedBy)
 	}
 	// BLOCKING IS THE OTHER END OF BLOCKED, not its negation: "this task
 	// is holding something up" reads the dependency table by BLOCKER_ID
@@ -1617,7 +1667,7 @@ func readTasksJoined(ctx context.Context, tx *sql.Tx, extraJoin string,
 	// statement order.
 	joins = extraJoin + joins
 	joinArgs = append(append([]any{}, extraArgs...), joinArgs...)
-	query := `SELECT t.id, t.key, t.title, t.type, t.status, t.status_group, t.priority,
+	query := `SELECT t.id, t.key, t.key_collision, t.title, t.type, t.status, t.status_group, t.priority,
 	                 t.assignee, t.project_key, t.parent_id,
 	                 t.depth, t.start_at, t.due_at, t.estimate_min, t.points,
 	                 t.archived, t.rank, t.updated_at, t.version,
@@ -1649,11 +1699,11 @@ func readTasksJoined(ctx context.Context, tx *sql.Tx, extraJoin string,
 		var row TaskRow
 		var parent, start, due sql.NullInt64
 		var parentID sql.NullString
-		var archived, blocked int
+		var archived, blocked, collision int
 		var updated int64
 		var version int64
 		sortValues := make([]any, len(terms))
-		targets := []any{&row.ID, &row.Key, &row.Title, &row.Type, &row.Status,
+		targets := []any{&row.ID, &row.Key, &collision, &row.Title, &row.Type, &row.Status,
 			&row.StatusGroup, &row.Priority, &row.Assignee, &row.Project,
 			&parentID, &row.Depth, &start, &due, &row.EstimateMinutes,
 			&row.Points, &archived, &row.Rank, &updated, &version, &blocked}
@@ -1678,6 +1728,7 @@ func readTasksJoined(ctx context.Context, tx *sql.Tx, extraJoin string,
 		}
 		row.Archived = archived == 1
 		row.Blocked = blocked == 1
+		row.KeyCollision = collision == 1
 		row.Updated = store.DecodeTime(updated)
 		row.Version = uint64(version)
 		out = append(out, row)
@@ -1823,33 +1874,26 @@ func capHint(counted int) (int, bool) {
 	return counted, false
 }
 
-// readCheckpoint reads this node's own position and applied prefix.
+// readCheckpoint reads this node's own position and applied prefix, both
+// packed, inside the caller's snapshot.
+//
+// TWO NUMBERS, because a node applying nothing while its position advances
+// looks identical to one that is caught up: the checkpoint moves past a
+// record this node RETAINS, and only the applied prefix stops below it.
+//
+// THE FRAMEWORK'S RULE ([statelog.PrefixIn]), never a copy of it. This read
+// kept its own — the cursor row, then the lowest retained position minus
+// one — which answered a record retained above the checkpoint with a prefix
+// past the checkpoint, a position no record reached, while the knowledge
+// base's feed, asked the same question through the framework, answered the
+// checkpoint. The audit says both feeds' shortfalls in one set of words, so
+// the two numbers have to mean one thing.
 func readCheckpoint(ctx context.Context, tx *sql.Tx) (position, applied uint64, err error) {
-	var generation, seq int64
-	err = tx.QueryRowContext(ctx,
-		`SELECT generation, seq FROM statelog_cursor WHERE stream = ?`,
-		trackerStream).Scan(&generation, &seq)
-	switch {
-	case err == sql.ErrNoRows:
-		return 0, 0, nil
-	case err != nil:
+	prefix, err := statelog.PrefixIn(ctx, tx, Domain{})
+	if err != nil {
 		return 0, 0, fmt.Errorf("tracker: read the checkpoint: %w", err)
 	}
-	packed := uint64(generation)*uint64(statelog.GenerationStride) + uint64(seq)
-
-	// APPLIED THROUGH is the lowest deferred position minus one, or the
-	// checkpoint when this node holds none. Two numbers, because a node
-	// applying nothing while its position advances looks identical to one
-	// that is caught up.
-	var lowest sql.NullInt64
-	if err := tx.QueryRowContext(ctx,
-		`SELECT MIN(position) FROM tracker_log_deferred`).Scan(&lowest); err != nil {
-		return 0, 0, fmt.Errorf("tracker: read the deferred floor: %w", err)
-	}
-	if lowest.Valid && uint64(lowest.Int64) > 0 {
-		return packed, uint64(lowest.Int64) - 1, nil
-	}
-	return packed, packed, nil
+	return uint64(prefix.Settled.Packed()), uint64(prefix.Applied().Packed()), nil
 }
 
 // coverageOf probes whether this node holds a record it cannot decode whose
@@ -1897,11 +1941,7 @@ func coverageOf(ctx context.Context, tx *sql.Tx, scope statelog.ScopeSet) (*Inco
 	}
 	return &Incomplete{
 		Records: count,
-		From: statelog.Position{
-			Stream:     trackerStream,
-			Generation: uint32(lowest.Int64 / statelog.GenerationStride),
-			Seq:        uint64(lowest.Int64 % statelog.GenerationStride),
-		},
+		From:    statelog.Unpack(trackerStream, lowest.Int64),
 		Scope:   scope.Paths,
 		Version: int(version.Int64),
 	}, nil
@@ -1948,14 +1988,8 @@ func joinAnd(clauses []string) string {
 // row, so "no row" is the ordinary state of every human on their first day and
 // every seat for ever — and refusing would make a turn-start read fail on a
 // seat that had simply never been given a priority.
-//
-// THROUGH [readPartyRecord] LIKE EVERY OTHER PERSONAL READ. It read the handle
-// alone, so `preset=priorities` and `my_work` answered from DIFFERENT records
-// for the one person who can have two — a founder whose list was written
-// before their token was keyed on their seat saw it on My work's own block and
-// an empty board on the tab beside it.
-func readPriorityList(ctx context.Context, tx *sql.Tx, who Party) ([]string, error) {
-	person, held, err := readPartyRecord(ctx, tx, who)
+func readPriorityList(ctx context.Context, tx *sql.Tx, handle string) ([]string, error) {
+	person, held, err := readPerson(ctx, tx, handle)
 	if err != nil {
 		return nil, err
 	}
@@ -1977,7 +2011,7 @@ func readPriorityList(ctx context.Context, tx *sql.Tx, who Party) ([]string, err
 // A ROW THE LIST DOES NOT NAME KEEPS ITS PLACE at the end, because a caller
 // that combined `priorities=` with another filter still asked for those rows.
 func orderByList(rows []TaskRow, q Query) []TaskRow {
-	if !q.PriorityListOf.Named() || len(q.PriorityList) == 0 || len(rows) == 0 {
+	if q.PriorityListOf == "" || len(q.PriorityList) == 0 || len(rows) == 0 {
 		return rows
 	}
 	at := make(map[string]int, len(q.PriorityList))

@@ -87,7 +87,7 @@
  */
 
 import { useMemo } from "react";
-import { EmptyValue, Tag } from "@crewlethq/ui";
+import { EmptyValue, Tag, TableKeyCell, TableDateCell, TableEntityCell } from "@crewlethq/ui";
 
 import {
   columnChoicesOf,
@@ -96,15 +96,15 @@ import {
   type GridBand,
   type GridColumn,
 } from "~/app/frame/DataGrid.tsx";
-import { DateCell, KeyCell, SeatCell } from "~/app/frame/cells.tsx";
+import { linkedSeat } from "~/app/frame/cells.tsx";
 import { peekRow } from "~/app/frame/DetailRail.tsx";
 import { Assignee, DueMark, TypeIcon, blockedBy, type RowChrome } from "~/components/work.tsx";
 import { GroupMark, headingOf } from "./group.tsx";
-import { type Shape } from "~/lib/work.ts";
+import { type Shape, itemAddress } from "~/lib/work.ts";
 import { COLUMN_SORT_KEYS } from "~/contract/work.ts";
 import { fmtDuration } from "~/lib/format.ts";
 import { RestoreButton } from "~/components/writes.tsx";
-import { AssigneeCell, InlineEdits, PriorityCell, StatusCell } from "./cells.tsx";
+import { AssigneeCell, InlineEdits, PriorityCell, WorkStatusCell } from "./cells.tsx";
 import type {
   WorkActivityRecord,
   WorkGroup,
@@ -236,7 +236,7 @@ function listColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
       // NOT SORTABLE. A key is `PROJ-<n>` and the engine has no ordering
       // over it; the nearest thing is `created`, which is a different
       // claim and is not on the row at all.
-      cell: (row) => <KeyCell value={row.key} />,
+      cell: (row) => <TableKeyCell value={row.key} />,
     },
     {
       key: "status",
@@ -245,7 +245,7 @@ function listColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
       // NOT SORTABLE, for the reason the table's own status column gives:
       // there is no ordering over a company's own status words, and
       // `group_by=status` is what a reader asking this actually wants.
-      cell: (row) => <StatusCell row={row} defs={detail?.statuses} />,
+      cell: (row) => <WorkStatusCell row={row} defs={detail?.statuses} />,
     },
     sorted("title", {
       header: "Title",
@@ -314,7 +314,12 @@ function listColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
           chrome={chrome}
           seats={ctx.seats ?? []}
           readOnly={
-            <Assignee handle={row.assignee} seatName={chrome.seatName} seatKind={chrome.seatKind} />
+            <Assignee
+              handle={row.assignee}
+              seatName={chrome.seatName}
+              seatKind={chrome.seatKind}
+              seatAvatar={chrome.seatAvatar}
+            />
           }
         />
       ),
@@ -340,7 +345,7 @@ function tableColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
       key: "key",
       header: "Key",
       shrink: true,
-      cell: (row) => <KeyCell value={row.key} />,
+      cell: (row) => <TableKeyCell value={row.key} />,
     },
     {
       key: "type",
@@ -365,7 +370,7 @@ function tableColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
       // and alphabetical order over them means nothing. `group_by=status`
       // is what a reader asking this actually wants, and the filter bar
       // already offers it.
-      cell: (row) => <StatusCell row={row} defs={detail?.statuses} />,
+      cell: (row) => <WorkStatusCell row={row} defs={detail?.statuses} />,
     },
     sorted("priority", {
       header: "Priority",
@@ -385,10 +390,13 @@ function tableColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
           named
           readOnly={
             row.assignee ? (
-              <SeatCell
-                handle={row.assignee}
-                name={chrome.seatName?.(row.assignee)}
-                kind={chrome.seatKind?.(row.assignee)}
+              <TableEntityCell
+                {...linkedSeat({
+                  handle: row.assignee,
+                  name: chrome.seatName?.(row.assignee),
+                  kind: chrome.seatKind?.(row.assignee),
+                  avatar: chrome.seatAvatar?.(row.assignee),
+                })}
               />
             ) : (
               <EmptyValue label="Nobody holds this" />
@@ -455,7 +463,7 @@ function startColumn(now: number): GridColumn<WorkSummary> {
     optional: true,
     sortValue: (row) => row.start ?? "",
     cell: (row) =>
-      row.start ? <DateCell at={row.start} now={now} /> : <EmptyValue label="No date" />,
+      row.start ? <TableDateCell value={row.start} now={now} /> : <EmptyValue label="No date" />,
   });
 }
 
@@ -491,7 +499,7 @@ function estimateColumn(): GridColumn<WorkSummary> {
   });
 }
 
-// RELATIVE, WITH THE INSTANT ON THE TITLE — [DateCell]'s own rendering, which
+// RELATIVE, WITH THE INSTANT ON THE TITLE: [TableDateCell]'s own rendering, which
 // is what the compact row spelled by hand. One value, one drawing, wherever it
 // appears: that is the rule `app/frame/cells.tsx` exists for.
 function updatedColumn(now: number): GridColumn<WorkSummary> {
@@ -503,7 +511,7 @@ function updatedColumn(now: number): GridColumn<WorkSummary> {
     // wrapped onto a third line of its own.
     phoneOmit: true,
     sortValue: (row) => row.updated ?? "",
-    cell: (row) => <DateCell at={row.updated} now={now} />,
+    cell: (row) => <TableDateCell value={row.updated} now={now} />,
   });
 }
 
@@ -737,7 +745,7 @@ export function WorkGrid({
       rows={bands ? undefined : rows}
       bands={bands}
       columns={columns}
-      rowKey={(row) => row.key}
+      rowKey={(row) => row.id}
       rowHref={hrefOf}
       // THROUGH `peekRow`, which is the one thing that calls `preventDefault`.
       // A bare handler beside a `rowHref` opened the peek and then let the
@@ -748,7 +756,7 @@ export function WorkGrid({
       // card, the embedded compact row and the Projects directory all go
       // through it; the collapsed grid was the one that did not.
       onRowActivate={peekRow<WorkSummary>((row) => onOpen(row))}
-      isSelected={(row) => row.key === selected}
+      isSelected={(row) => itemAddress(row) === selected}
       // THE ORDER IS THE QUERY'S. See the header: the grid writes `sort=`,
       // the screen sends it, and the engine orders the whole set.
       serverSorted
@@ -764,12 +772,12 @@ export function WorkGrid({
         removals
           ? {
               title: "The trash is empty",
-              hint: "Nothing in this container has been removed. A removal is reversible at any age, so what lands here stays until somebody restores or purges it.",
+              hint: "Removed items appear here until restored or purged.",
               icon: "trash",
             }
           : {
               title: "Nothing matches",
-              hint: "No item on this node's copy of the tracker matches these filters.",
+              hint: "Remove a filter, or clear them all.",
             }
       }
       footer={foot}
@@ -808,9 +816,9 @@ function bandFoot({
   // count.
   if (group.subgroups?.length) {
     if (!group.subgroups_dropped) return undefined;
-    return `${group.subgroups_dropped} more band${
+    return `${group.subgroups_dropped} more group${
       group.subgroups_dropped === 1 ? "" : "s"
-    } did not fit. Narrow the list to bring them into range.`;
+    } hidden. Narrow the list to see them.`;
   }
   if (group.count <= group.rows.length) return undefined;
   return (
@@ -847,7 +855,7 @@ function trashColumns(
         // loaded has no record here, and the honest cell says which fact is
         // missing rather than drawing an empty one that reads as "just now".
         if (!record) return <EmptyValue label="Its removal is older than the loaded history" />;
-        return <DateCell at={record.at} now={now} />;
+        return <TableDateCell value={record.at} now={now} />;
       },
     }),
     {
@@ -858,12 +866,20 @@ function trashColumns(
         const record = removals.get(row.id);
         if (!record?.actor)
           return <EmptyValue label="Its removal is older than the loaded history" />;
-        // THE PERSON, NOT THE TOKEN — `actor_seat` where an operator token
-        // bound to a seat removed it, as the change log names the same row.
-        const who = record.actor_seat || record.actor;
+        // THE PERSON: a person the directory binds to a seat writes AS that
+        // seat (`iam.ActorFor`), so the author is who removed it, named as the
+        // change log names the same row.
+        const who = record.actor;
         return (
           <span className="row gap-1">
-            <SeatCell handle={who} name={chrome.seatName?.(who)} kind={chrome.seatKind?.(who)} />
+            <TableEntityCell
+              {...linkedSeat({
+                handle: who,
+                name: chrome.seatName?.(who),
+                kind: chrome.seatKind?.(who),
+                avatar: chrome.seatAvatar?.(who),
+              })}
+            />
             {/* WHICH KIND OF WRITER, because that is the question a trash
                 screen exists to answer: an assistant removing a subtree and
                 a person removing one task look identical without it.
@@ -886,9 +902,9 @@ function trashColumns(
     {
       key: "restore",
       header: "",
-      label: "Restore",
+      action: true,
       shrink: true,
-      cell: (row) => <RestoreButton item={row.key} />,
+      cell: (row) => <RestoreButton item={itemAddress(row)} label={row.key} />,
     },
   ];
 }

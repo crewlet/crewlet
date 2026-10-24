@@ -70,7 +70,16 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Callout, CodeBlock, cx, Disclosure, EmptyValue, Tag } from "@crewlethq/ui";
+import {
+  ArtifactKindGlyph,
+  Callout,
+  CodeBlock,
+  cx,
+  Disclosure,
+  EmptyValue,
+  Link,
+  Tag,
+} from "@crewlethq/ui";
 import {
   ChevronRightGlyph,
   ChevronDownGlyph,
@@ -105,11 +114,15 @@ import {
 } from "~/lib/phases.ts";
 import { indentJSON } from "~/lib/jsontext.ts";
 import { MODEL_WORDS, renderMarkdown } from "~/lib/markdown.ts";
-import { staleness } from "~/lib/seats.ts";
+import { indexOrg, seatPath, staleness } from "~/lib/seats.ts";
+import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useNow } from "~/lib/clock.ts";
 import { href, useIsCurrent } from "~/app/router.tsx";
 import { pathOf } from "~/app/frame/objects.ts";
 import { PromptRecord } from "~/components/PromptDoc.tsx";
+import { WITHHELD_WHY, WITHHELD_WORDS } from "~/lib/access.ts";
+import { artifactPath } from "~/app/routes.ts";
+import { writtenArtifact, type WrittenArtifact } from "~/lib/artifacts/transcript.ts";
 
 /**
  * A call's two records, formatted.
@@ -178,12 +191,12 @@ function ToolRecords({
           taller than the box that scrolls it is the transcript's own trap one
           level down — the wheel inside the record while its bottom is below
           the box's. */}
-      <CodeBlock plain selectable label={`${name} — arguments`} code={prettyArgs || "{}"} />
+      <CodeBlock plain selectable label={`${name} · arguments`} code={prettyArgs || "{}"} />
       <div className="t-label">{failed ? "Error" : "Result"}</div>
       <CodeBlock
         plain
         selectable
-        label={`${name} — ${failed ? "error" : "result"}`}
+        label={`${name} · ${failed ? "error" : "result"}`}
         code={prettyResult || "(empty)"}
       />
     </div>
@@ -232,7 +245,30 @@ function ToolRow({
       >
         <ToolRecords name={name} args={args} result={result} failed={failed} />
       </Disclosure>
+      <WrittenArtifactLink artifact={writtenArtifact(name, args, result, failed)} />
     </div>
+  );
+}
+
+/**
+ * The artifact a call wrote, as a link beside the call: a version that landed
+ * is the outcome a reader came to the transcript for, and an id inside a
+ * folded result is not a way to reach it. Outside the disclosure, so a closed
+ * row still says where its work went.
+ */
+function WrittenArtifactLink({ artifact }: { artifact: WrittenArtifact | null }) {
+  if (!artifact) return null;
+  const named = artifact.title ? `“${artifact.title}”` : "the artifact";
+  return (
+    <Link
+      className="tool-row-artifact"
+      variant="quiet"
+      size="caption"
+      href={href(artifactPath(artifact.id))}
+    >
+      {artifact.kind && <ArtifactKindGlyph kind={artifact.kind} size="xs" />}
+      {`Open ${named}, version ${artifact.version}`}
+    </Link>
   );
 }
 
@@ -331,28 +367,18 @@ type Declined = "asked" | "spent" | "open";
 function DeclinedNote({ fate, rescued }: { fate: Declined; rescued: boolean }) {
   const said = "It answered in prose and called no tool";
   if (fate === "asked") {
-    return (
-      <p className="round-note">
-        {said}. This phase finishes only by calling a tool — its submission — so the engine asked it
-        again; the next round is the answer to that.
-      </p>
-    );
+    return <p className="round-note">{said}. It didn’t submit, so it was asked again.</p>;
   }
   if (fate === "open") {
-    return (
-      <p className="round-note">
-        {said}. This phase finishes only by calling a tool — its submission.
-      </p>
-    );
+    return <p className="round-note">{said}. It didn’t submit.</p>;
   }
   // CAUTION, NOT CRITICAL: the turn goes on — a rescued executor is still
   // judged by the reviewer, a rescued reviewer sends the turn round again. The
   // glyph carries the hue's meaning to a reader who cannot see the hue.
   return (
     <p className="round-note caution">
-      <TriangleAlertGlyph size="xs" /> {said}, and this was its last round: the phase ended without
-      its submission
-      {rescued ? ", so the engine wrote its outcome in its place (“rescued”, above)." : "."}
+      <TriangleAlertGlyph size="xs" /> {said}. Last round
+      {rescued ? ", so the engine filled in the outcome." : "."}
     </p>
   );
 }
@@ -381,8 +407,7 @@ function Words({ text, muted, streaming }: { text: string; muted?: boolean; stre
 /**
  * What a refused phase's body says in place of its error: that the model
  * DECLINED, under which policy category, in the vendor's own words where it
- * gave any — and what the engine did about it, which is the half a reader
- * would otherwise go looking for (no rescue, no second ask, no redelivery).
+ * gave any, and that the phase ended there.
  */
 function RefusalNote({ refusal }: { refusal: Refusal }) {
   return (
@@ -394,8 +419,7 @@ function RefusalNote({ refusal }: { refusal: Refusal }) {
           (<span className="mono">{refusal.category}</span>)
         </>
       )}
-      {refusal.explanation ? `: ${refusal.explanation}` : "."} The phase ended here; the engine does
-      not ask it again, and the turn&apos;s trigger is recorded rather than redelivered.
+      {refusal.explanation ? `: ${refusal.explanation}` : "."} The phase ended here.
     </span>
   );
 }
@@ -508,6 +532,28 @@ function RoundBlock({
         )}
       </div>
     </li>
+  );
+}
+
+/**
+ * Why a phase's body is hidden, naming who can read it: the seat's lead, by
+ * name and with a link, so the reader knows whom to ask. The seat is found by
+ * its agent id, never its role name, which two seats may share; where the
+ * chart names no lead for it, the general sentence stands.
+ */
+function WithheldNote({ agentId }: { agentId: string }) {
+  const agents = useAgents();
+  const org = useOrg();
+  const lead = useMemo(() => {
+    const handle = agentId ? agents.find((a) => a.agent_id === agentId)?.handle : undefined;
+    return handle ? (indexOrg(org).byHandle.get(handle)?.manager ?? null) : null;
+  }, [agentId, agents, org]);
+  if (!lead) return <Callout variant="neutral">{`${WITHHELD_WORDS}. ${WITHHELD_WHY}`}</Callout>;
+  return (
+    <Callout variant="neutral">
+      Only <Link href={href(seatPath(lead))}>{lead.name}</Link> (this seat’s lead) and admins can
+      see what it says.
+    </Callout>
   );
 }
 
@@ -639,10 +685,7 @@ export function PhaseCard({
           </Tag>
         )}
         {record.emptyAnswerRounds > 0 && (
-          <Tag
-            variant="warning"
-            title="the model answered with nothing — no response and no tool call — and was re-asked"
-          >
+          <Tag variant="warning" title="Empty answers, asked again">
             {record.emptyAnswerRounds} empty
           </Tag>
         )}
@@ -653,13 +696,7 @@ export function PhaseCard({
             are rounds that ended without the call the phase needed, one with
             words and one without. */}
         {declined > 0 && (
-          <Tag
-            variant="warning"
-            title={
-              "rounds where the model wrote its answer as text and called no tool, in a phase " +
-              "that finishes only by a tool call — each says below its words what happened next"
-            }
-          >
+          <Tag variant="warning" title="Answered in text instead of submitting">
             {declined} answered in prose
           </Tag>
         )}
@@ -670,13 +707,7 @@ export function PhaseCard({
             the decision itself, which is what the decision chip beside this
             one is reporting. */}
         {record.rescueFired && (
-          <Tag
-            variant="warning"
-            title={
-              "the phase ended without its submission, so the engine wrote its decision in its " +
-              "place — incomplete for an executor, another round for a reviewer"
-            }
-          >
+          <Tag variant="warning" title="No submission, so the engine filled in the outcome">
             rescued
           </Tag>
         )}
@@ -690,14 +721,7 @@ export function PhaseCard({
             not the error kind's `refusal`, which reads as the engine refusing.
             Still danger: the phase, and its turn, ended there. */}
         {record.failed && record.refusal ? (
-          <Tag
-            variant="danger"
-            title={
-              "the model declined this request" +
-              (record.refusal.category ? ` (${record.refusal.category})` : "") +
-              " — the phase ended there, without a rescue, and the turn is not run again"
-            }
-          >
+          <Tag variant="danger" title="The phase ended here and won’t be retried">
             declined by model
           </Tag>
         ) : (
@@ -727,12 +751,12 @@ export function PhaseCard({
             ON `roundsUsed`, which is the engine's own count on a live phase as
             well as a settled one. This tested `roundNum === 0`, a field that was
             zero-based while live and so held `-1` at the opening frame: the
-            phase whose first round had not come back — precisely the case this
-            dash is for — fell through and rendered "0r". And the count below it
+            phase whose first round had not come back, precisely the case this
+            mark is for, fell through and rendered "0r". And the count below it
             was one short on a live phase whose rounds narrated nothing. */}
         {record.live && !ledger.length && record.roundsUsed === 0 ? (
           <span className="phase-meta" title="this phase has not finished a round yet">
-            —
+            …
           </span>
         ) : (
           <span className="phase-meta t-num" title="tool rounds used">
@@ -746,11 +770,11 @@ export function PhaseCard({
             back — rendered as "not recorded" on the card an operator opens to
             find out which phase was expensive. `TurnCard` states the rule for
             the turn header above it: absent and zero are different facts and a
-            dash claims the first about the second. The dash stays for the one
+            dash claims the first about the second. An ellipsis marks the one
             case where the zero really is an absence. */}
         {record.live && record.totalTokens === 0 ? (
           <span className="phase-meta" title="this phase has not reported its usage yet">
-            —
+            …
           </span>
         ) : (
           <span className="phase-meta t-num" title="total tokens">
@@ -792,6 +816,12 @@ export function PhaseCard({
             record.failed && record.error && <Callout variant="danger">{record.error}</Callout>
           )}
           {record.notes && <Callout variant="neutral">{record.notes}</Callout>}
+
+          {/* A WITHHELD BODY IS SAID, never drawn as a phase that was told
+              nothing and answered nothing: the engine sent this reader the
+              phase's status alone (`bodyWithheld`), and every section below
+              that is body is absent for that reason, not empty. */}
+          {record.bodyWithheld && <WithheldNote agentId={record.agentId} />}
 
           {(record.systemPrompt || record.userPrompt) && (
             // A REAL SECTION OF THIS CARD, so it keeps uilet's default heading
@@ -869,13 +899,7 @@ export function PhaseCard({
               insertion can move, which is the whole point. */}
           {ledger.length > 0 && (
             <section className="col gap-1">
-              <div className="t-label">
-                Rounds
-                <span className="muted">
-                  {" · "}
-                  what the model thought, said and called, in order
-                </span>
-              </div>
+              <div className="t-label">Rounds</div>
               <div ref={tailRef} className={cx("tail-scroll", record.live && "tailing")}>
                 <ol className="round-ledger">
                   {ledger.map((r, i) => (
@@ -919,9 +943,7 @@ export function PhaseCard({
           {record.live && !ledger.length && (
             <div className="row gap-2">
               <span className="waiting-dot" aria-hidden="true" />
-              <span className="t-caption">
-                The model is composing its first round. Nothing is published until it answers.
-              </span>
+              <span className="t-caption">Waiting for the first round…</span>
             </div>
           )}
 

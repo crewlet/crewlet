@@ -26,6 +26,17 @@
 // yields no id, no kind and no subject to file it under. A rolling upgrade
 // puts exactly that record on the wire.
 //
+// # What the applier says after a commit
+//
+// Beside the rows, the applier reports WHOSE INBOX each committed batch moved
+// ([InboxMovement], inboxmove.go) — the one fact a person's dashboard needs to
+// learn about their work without polling, and one only the apply sees on every
+// node. It is announced after the commit and never inside the transaction,
+// whose body can re-run, and it carries identifiers and a count rather than
+// the notice, which is read through the question that decides who may read it.
+// A purge that deletes somebody's notices moves their inbox too, and names
+// them with nothing unread added.
+//
 // # What a purge writes beside its own task
 //
 // A record's scope is the COMPLETE set of objects its apply may write, stated
@@ -46,11 +57,19 @@
 //     task writes it back — the one effect with no document half);
 //   - its SUBTREE: each direct child is re-parented onto the purged task's own
 //     parent, document and pointer, and every descendant's ancestry is
-//     rebuilt.
+//     rebuilt;
+//   - its KEYS, current and former: its claim on each is released and handed
+//     on to the lowest id among the tasks still holding that key as their
+//     current one, and every holder's `key_collision` is re-derived — the one
+//     effect named by KEY rather than by task, because which task a key opens
+//     is decided by the records filed under that key, and every create,
+//     re-key and purge that claims, frees or hands one on names it there
+//     ([keyTerm]). So no co-holder of a key appears in the reach.
 //
 // The writer names all of them, each at its own project's path — a descendant
-// may be filed in another project than the purged task ([purgeReach]) — and the
-// decide refuses a purge whose scope comes up short of the rows it decides on.
+// may be filed in another project than the purged task ([purgeReach]), and a
+// former key sits under the project that minted it — and the decide refuses a
+// purge whose scope comes up short of the rows it decides on.
 //
 // WHAT NO SCOPE CAN NAME is a task that comes to name the purged one AFTER the
 // purge was decided and before it lands — a relation, a dependency or a child
@@ -80,7 +99,8 @@
 // defers or retains what it cannot read and none of them survives that: an
 // apply gate at [GateRecordVersion], and the read index's barrier and a
 // reanchor's generation at the base version. The encoder refuses any of them
-// carrying a versioned field at all.
+// carrying a versioned field at all, save the one a gate's own changed apply
+// takes ([statelog.VersionedField.Gate]), at which an older node halts.
 //
 // A change to how the applier treats a field it ALREADY copies is the same
 // hazard with no new field to carry it, and takes the same gate: a marker the
@@ -256,7 +276,7 @@ const (
 
 	// KindTrimmed is the trim's record that removes the arbitration
 	// anchors below what the log no longer holds — [statelog.TrimmedKind],
-	// ADR-0032 — on one subject per floor, which the subject's id names.
+	// ADR-0046 — on one subject per floor, which the subject's id names.
 	//
 	// THE FRAMEWORK REMOVES THE ANCHORS, in the transaction that applies
 	// the record; this domain writes nothing for it, and has the case
@@ -358,14 +378,9 @@ func TagsSubject(key string) Subject { return Subject{Kind: KindTags, ID: key} }
 func ViewSubject(id string) Subject { return Subject{Kind: KindView, ID: id} }
 
 // PersonSubject names one person's inbox, priorities and pins — keyed on the
-// HANDLE rather than on a uuid, because the handle is the identity every
-// caller that reaches this record already holds.
-//
-// WHICH HANDLE is the writer's own, so a person acting through their api.auth
-// token writes a record under the TOKEN's name. That follows from the
-// attribution rule and it is why the READ side takes a [Party] rather than a
-// handle — see [readPartyRecord], which is what makes the two records one
-// person's again.
+// seat's handle (ADR-0013) rather than on a uuid: every caller that reaches
+// this record holds that handle. A name no seat answers to — a person's login —
+// is its own key.
 func PersonSubject(handle string) Subject {
 	return Subject{Kind: KindPerson, ID: handle}
 }

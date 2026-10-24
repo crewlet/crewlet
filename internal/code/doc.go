@@ -1,5 +1,5 @@
 // Package code is THE CODE DOMAIN: the company's git repositories as records on
-// one ordered log, CREWLET_CODE_LOG — the state log's fifth domain, strict and
+// one ordered log, CREWLET_CODE_LOG — the state log's eighth domain, strict and
 // identity-claiming.
 //
 // # A repository is rows
@@ -16,13 +16,13 @@
 // its pack BUNDLE, the pack and the two indexes the receiving node's
 // receive-pack wrote for it, back to back (bundle.go) — and a code_packs row
 // names it. That table is declared [objstore.Required] ([PackReferences],
-// ADR-0026 and ADR-0033), so the collector keeps every object a live row names,
+// ADR-0026 and ADR-0047), so the collector keeps every object a live row names,
 // the audit checks each one and a backup carries them. A git node's bare
 // repository is never the record: it is a cache derived from these rows,
 // disposable, rebuilt from them whenever it is lost or wrong — which holds
 // only because a repository's refs and packs move by records on its own
 // subject and by nothing else, receive-pack never runs in a cache, and git is
-// told `ok` only from a push's applied row (ADR-0036).
+// told `ok` only from a push's applied row (ADR-0050).
 //
 // # The bundle is the permanent format, and no stored pack reaches 2 GiB
 //
@@ -237,7 +237,7 @@
 // # Who may read and push
 //
 // A principal's standing on a repository is DERIVED from the chart and never
-// stored (ADR-0040): there is no table of who may push where, because such a
+// stored (ADR-0054): there is no table of who may push where, because such a
 // table is a second chart, and it drifts from the first the day a seat moves
 // units. [GrantOf] computes it, every time it is asked, from the repository's
 // row and a [Roster] — the chart of the node that answers or decides, which
@@ -388,7 +388,7 @@
 // record no committer of this build forms, whose cost the applier bounds all
 // the same.
 //
-// THE LIVE REFS' INDEX (code_refs_live_idx, replicated 0045, which the push
+// THE LIVE REFS' INDEX (code_refs_live_idx, replicated 0052, which the push
 // decide's [RefusalRefConflict] probe reads — the decide below) is an entry
 // more for every live ref a record writes, and one moved for every ref it
 // deletes or creates again. Measured interleaved with the build before it,
@@ -467,7 +467,7 @@
 // A batch that creates refs pays the round two reads more, for
 // [RefusalRefConflict] — a primary-key seek for every directory its creates
 // would make (and the upper bound of a create under another), and a seek of
-// the LIVE refs' index ([liveRefsKey], replicated 0045) for every gap: the
+// the LIVE refs' index ([liveRefsKey], replicated 0052) for every gap: the
 // creates' ranges cut at their bounds and at every name with a live row, each
 // gap asked once whichever creates hold it. Measured both ways on four vCPUs
 // of a 2.8 GHz Xeon under other builds' load (a load average of 15–18, which

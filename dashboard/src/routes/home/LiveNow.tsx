@@ -51,7 +51,6 @@ export function LiveNow({ agents, now }: { agents: readonly AgentRow[]; now: num
       {working.length === 0 ? (
         <div className="home-quiet">
           <strong className="t-cell">No agent is working right now</strong>
-          <span className="t-caption">A seat appears here the moment a turn starts.</span>
         </div>
       ) : shown.length === 0 ? (
         // WORKING, AND NOT YET ON A TURN THIS VIEW CAN NAME: a coding run is
@@ -61,7 +60,6 @@ export function LiveNow({ agents, now }: { agents: readonly AgentRow[]; now: num
           <strong className="t-cell">
             {plural(working.length, "seat")} working, on turns not named yet
           </strong>
-          <span className="t-caption">The live view lists each one.</span>
         </div>
       ) : (
         <ul className="live-list">

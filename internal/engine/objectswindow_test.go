@@ -46,6 +46,9 @@ func TestANodesUploadsShareTheWindowItsBrokerKindCallsFor(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 		defer cancel()
+		// ANY RESERVATION: the window is no function of it, and the node
+		// opened after it keeps the ceiling the bucket was created at.
+		cfg.MaxBytes = 64 << 20
 		b, err := natsobj.Open(ctx, js, cfg)
 		if err != nil {
 			t.Fatalf("open the bucket with %+v: %v", cfg, err)

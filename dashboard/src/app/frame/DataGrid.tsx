@@ -37,14 +37,13 @@ import {
 } from "react";
 import { useParam } from "../router.tsx";
 import { peekHref, usePeek } from "./DetailRail.tsx";
-import { Button, EmptyState, cx } from "@crewlethq/ui";
+import { Button, EmptyState, cx, useMediaMatch } from "@crewlethq/ui";
 import { ChevronDownGlyph, ChevronUpGlyph } from "@crewlethq/icons/glyphs";
 // A GRID'S EMPTY MARK IS NAME-KEYED, because `empty.icon` is part of the prop
 // every screen fills in — so the name→drawing lookup stays in `~/ui/Icon.tsx`.
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { Mark } from "~/ui/glyph.tsx";
 import { useKeymap } from "../keymap.ts";
-import { useMediaQuery } from "~/lib/media.ts";
 import { PHONE_BREAKPOINT } from "../layout.ts";
 
 export interface GridColumn<T> {
@@ -60,6 +59,19 @@ export interface GridColumn<T> {
    * draws its own name beside it; ignored everywhere `header` is drawn.
    */
   label?: string;
+  /**
+   * A column of ROW ACTIONS: every cell is a control that names itself — a
+   * "Revoke" button, an icon button with its own label — or a mark standing in
+   * for one ("This browser"). On the phone's card layout such a cell draws
+   * NO NAME beside it: the button is its own name, and the label the column
+   * once had to carry printed the word twice, `SIGN OUT  Sign out` on every
+   * session row. So it is declared IN PLACE OF [label] — `app/source.test.ts`
+   * accepts it where it asks an empty head for one — and a `label` beside it
+   * is only ever a chooser's or the "Hidden to fit" note's word, never drawn
+   * on the card. Its head stays empty, since a word over a column of buttons
+   * says nothing the buttons do not.
+   */
+  action?: boolean;
   /** Shrink to content and never wrap. */
   shrink?: boolean;
   /**
@@ -613,7 +625,7 @@ export function DataGrid<T>({
   // STATE, NOT A REF: a grid showing its empty state renders no wrap to
   // measure, and the observer below has to attach when the rows arrive.
   const [wrap, setWrap] = useState<HTMLDivElement | null>(null);
-  const phone = useMediaQuery(`(width < ${PHONE_BREAKPOINT}px)`);
+  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
 
   // THE ROW THE RAIL IS OPEN ON IS MARKED, in every grid, by comparing
   // ADDRESSES: a row's link is its object's page, and the peek names an object
@@ -798,7 +810,9 @@ export function DataGrid<T>({
   // draw at all, which with bands means no band either.
   if (flat.length === 0 && !bands?.length && empty) {
     return (
-      <div className="grid-wrap">
+      // FLUSH WHEN EMPTY TOO: the card is still the frame, and an empty state
+      // drawn in a bordered wrap was a box inside the card's own border.
+      <div className="grid-wrap" data-flush={flush || undefined}>
         {/* `compact` IS OUR `inline`: an empty state inside a panel rather
             than across a screen. The mark is left to theirs when a screen
             names none — their default is the same inbox drawing ours was. */}
@@ -848,6 +862,9 @@ export function DataGrid<T>({
     // rule is that a cell with no value has no child nodes — which is what
     // `DataGrid.test.tsx` holds, since a mark wrapped in an always-rendered
     // span would defeat it silently.
+    //
+    // AND AN ACTION COLUMN'S CELL NAMES ITSELF ([GridColumn.action]): a
+    // button's own word is the line, so the card draws no name before it.
     const inner = visibleColumns.map((column) => (
       <span
         key={column.key}
@@ -855,8 +872,10 @@ export function DataGrid<T>({
         data-lead={column.phoneLead || undefined}
         data-phone-omit={column.phoneOmit || undefined}
         data-label={
-          (typeof column.header === "string" && column.header ? column.header : column.label) ||
-          undefined
+          column.action
+            ? undefined
+            : (typeof column.header === "string" && column.header ? column.header : column.label) ||
+              undefined
         }
       >
         {column.cell(row)}
@@ -872,7 +891,7 @@ export function DataGrid<T>({
     // THE ROW'S OWN LINK IS AN OVERLAY, NOT THE ROW.
     //
     // The row used to BE an `<a>` when `rowHref` was given, and a cell that
-    // links — `SeatCell`, `SeatChip`, `KeyCell` — then put an anchor inside an
+    // links (`linkedSeat`, `SeatChip`, `TableKeyCell`) then put an anchor inside an
     // anchor. That is not merely invalid: the HTML parser CLOSES the outer one
     // at the inner one, so the row link covered only the cells before the
     // first seat chip and the rest of the row silently stopped being

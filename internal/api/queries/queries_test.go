@@ -8,7 +8,11 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 func answersWith(v any) queries.Answer {
@@ -20,9 +24,9 @@ func answersWith(v any) queries.Answer {
 func TestARegisteredQuestionIsAnswered(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
-	r.Register("events", answersWith("rows"))
+	r.Register("events", queries.Requires(iam.GrantAdmin), answersWith("rows"))
 
-	got, err := r.Answer(t.Context(), "events", nil, "")
+	got, err := r.Answer(everyGrant(t), "events", nil)
 	if err != nil {
 		t.Fatalf("Answer: %v", err)
 	}
@@ -34,67 +38,393 @@ func TestARegisteredQuestionIsAnswered(t *testing.T) {
 func TestAnUnregisteredQuestionIsUnknown(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
-	_, err := r.Answer(t.Context(), "nope", nil, "")
+	_, err := r.Answer(everyGrant(t), "nope", nil)
 	if !errors.Is(err, queries.ErrUnknown) {
 		t.Errorf("err = %v, want ErrUnknown", err)
 	}
-	// And it names the question: a client switching on the code still
-	// needs a log line saying which name nothing answered.
-	if err == nil || !slices.Contains([]string{"nope"}, "nope") {
-		t.Error("unreachable")
-	}
 }
 
-func TestAnOperatorQuestionRefusesAnAnonymousCaller(t *testing.T) {
+// A QUESTION IS ANSWERED TO THE POSTURE IT DECLARES, and to nothing narrower.
+//
+// This used to be a bool — is there a credential, yes or no — and under that a
+// token that could read the board could also read the company document and
+// every ${VAR} reference in it by name. Now a question is the overview's
+// (everybody), one app's, or admin's, and the declaration is what the registry
+// enforces: an app's question is answered to its holder and to an admin, whose
+// permission includes every app, and refused with the other app and with none.
+func TestAQuestionIsAnsweredOnlyToThePostureItDeclares(t *testing.T) {
 	t.Parallel()
-	// The config surface is all of them: reading it exposes the whole
-	// company document, including every ${VAR} reference by name.
 	r := queries.NewRegistry()
-	r.RegisterOperator("config", answersWith("the company"))
+	r.Register("config", queries.Requires(iam.GrantAdmin), answersWith("the company"))
+	r.Register("work_items", queries.Requires(iam.GrantTracker), answersWith("the board"))
+	r.Register("pages", queries.Requires(iam.GrantKnowledge), answersWith("the pages"))
+	r.Register("budgets", queries.Everybody(), answersWith("the caps"))
 
-	if _, err := r.Answer(t.Context(), "config", nil, ""); !errors.Is(err, queries.ErrUnauthorized) {
-		t.Errorf("err = %v, want ErrUnauthorized", err)
-	}
-	got, err := r.Answer(t.Context(), "config", nil, "founder")
-	if err != nil {
-		t.Fatalf("an operator was refused: %v", err)
-	}
-	if got != "the company" {
-		t.Errorf("answer = %v", got)
-	}
-}
-
-func TestAPublicQuestionServesAnAnonymousCaller(t *testing.T) {
-	t.Parallel()
-	// The counterfactual: requiring an operator everywhere would satisfy
-	// the case above and close the dashboard to the read posture that is
-	// the default.
-	r := queries.NewRegistry()
-	r.Register("events", answersWith("rows"))
-	if _, err := r.Answer(t.Context(), "events", nil, ""); err != nil {
-		t.Errorf("a public question refused an anonymous caller: %v", err)
-	}
-}
-
-func TestRequiresOperatorMatchesWhatAnswerEnforces(t *testing.T) {
-	t.Parallel()
-	// A REST route makes the same decision before it calls the answer, so
-	// the two must not be able to disagree.
-	r := queries.NewRegistry()
-	r.Register("events", answersWith(nil))
-	r.RegisterOperator("config", answersWith(nil))
-
-	for what, want := range map[string]bool{"events": false, "config": true, "nope": false} {
-		if got := r.RequiresOperator(what); got != want {
-			t.Errorf("%s: requires operator = %v, want %v", what, got, want)
+	for _, tc := range []struct {
+		what    string
+		holding []iam.Grant
+		admits  bool
+	}{
+		{"config", []iam.Grant{iam.GrantAdmin}, true},
+		{"config", slices.Clone(iam.Apps), false},
+		{"config", nil, false},
+		{"work_items", []iam.Grant{iam.GrantTracker}, true},
+		{"work_items", []iam.Grant{iam.GrantAdmin}, true},
+		{"work_items", []iam.Grant{iam.GrantKnowledge}, false},
+		{"work_items", nil, false},
+		{"pages", []iam.Grant{iam.GrantKnowledge}, true},
+		{"pages", []iam.Grant{iam.GrantAdmin}, true},
+		{"pages", []iam.Grant{iam.GrantTracker}, false},
+		{"budgets", nil, true},
+	} {
+		_, err := r.Answer(asking(t, tc.holding...), tc.what, nil)
+		switch {
+		case tc.admits && err != nil:
+			t.Errorf("%s holding %v was refused: %v", tc.what, tc.holding, err)
+		case !tc.admits && !errors.Is(err, queries.ErrUnauthorized):
+			t.Errorf("%s holding %v answered %v, want an authorization refusal",
+				tc.what, tc.holding, err)
 		}
-		if !want {
+	}
+}
+
+// A REFUSAL OF A QUESTION'S PERMISSION NAMES THE ONE PERMISSION THAT WOULD
+// ADMIT, never admin beside an app: admin admits through the app it includes,
+// and a screen telling a person who only uses the board to ask for host access
+// sends them to ask for the wrong thing.
+func TestARefusalNamesThePermissionTheQuestionDeclares(t *testing.T) {
+	t.Parallel()
+	r := queries.NewRegistry()
+	r.Register("work_items", queries.Requires(iam.GrantTracker), answersWith(nil))
+	_, err := r.Answer(asking(t, iam.GrantKnowledge), "work_items", nil)
+	var refusal *queries.Refusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("err = %v, want a *queries.Refusal", err)
+	}
+	if !slices.Equal(refusal.Grants, []iam.Grant{iam.GrantTracker}) {
+		t.Errorf("the refusal names %v, want exactly [tracker]", refusal.Grants)
+	}
+}
+
+// A STAGE THAT MAY NOT ACT IS REFUSED BEFORE ANY POSTURE, an everybody question
+// included: the overview decides nothing else, so without it a suspended
+// person's live session would go on reading the company every other gesture of
+// theirs is refused.
+func TestAStageThatMayNotActIsRefusedEveryQuestion(t *testing.T) {
+	t.Parallel()
+	r := queries.NewRegistry()
+	r.Register("budgets", queries.Everybody(), answersWith("the caps"))
+	r.Register("turns", queries.DecidedBy(authz.ActionSeatTrailRead), answersWith("turns"))
+	for _, stage := range []iam.Stage{iam.StageSuspended, iam.StageRetired} {
+		ctx := iam.WithPrincipal(t.Context(), iam.Principal{
+			ID: uuid.New(), Login: "ana.lee", Kind: iam.KindPerson, Seat: "ana",
+			Stage: stage, Grants: []iam.Grant{iam.GrantAdmin},
+		})
+		for _, what := range []string{"budgets", "turns"} {
+			_, err := r.Answer(ctx, what, nil)
+			var refusal *queries.Refusal
+			if !errors.As(err, &refusal) || refusal.Reason != authz.ReasonStage {
+				t.Errorf("%s asked by a %s admin answered %v, want a stage refusal",
+					what, stage, err)
+			}
+		}
+	}
+}
+
+// A CALLER WITH NO PRINCIPAL AT ALL IS REFUSED, which is the direction
+// [iam.From] takes everywhere: silence is not permission. There is no question
+// left that answers to nobody — the read posture that made one possible is
+// gone.
+//
+// AND IT IS REFUSED AS A FAULT RATHER THAN AS AN AUTHORIZATION FAILURE. A
+// context no resolver ever touched is a route nobody wired through the guard,
+// which is a bug in this build and not a caller presenting the wrong thing.
+// Answered `unauthorized`, the one symptom of that bug is a client being told
+// its credential is bad — so the operator goes and rotates a perfectly good
+// token, and the routing hole stays open.
+func TestAQuestionIsRefusedToACallerNobodyResolved(t *testing.T) {
+	t.Parallel()
+	r := queries.NewRegistry()
+	r.Register("budgets", queries.Everybody(), answersWith("the caps"))
+	// DELIBERATELY t.Context(): a context no resolver ever touched, which
+	// is what a handler nobody wired through the guard hands down.
+	data, err := r.Answer(t.Context(), "budgets", nil)
+	if err == nil {
+		t.Fatalf("a context nobody resolved was answered: %v", data)
+	}
+	if errors.Is(err, queries.ErrUnauthorized) {
+		t.Errorf("a wiring bug was reported as the caller's credential: %v", err)
+	}
+	// NOR AS A RETRY, which is the other half: this never clears by
+	// waiting, and a Retry-After sends a client round a loop that can only
+	// end when somebody edits the routing.
+	if errors.Is(err, queries.ErrUnavailable) {
+		t.Errorf("a wiring bug was reported as unavailable: %v", err)
+	}
+	// And it says which of the two it is, or the log carries a refusal
+	// nobody can act on.
+	if !errors.Is(err, iam.ErrUnresolved) {
+		t.Errorf("the refusal does not carry iam.ErrUnresolved: %v", err)
+	}
+}
+
+// NOBODY ASKING AND SOMEBODY LACKING THE PERMISSION ARE TWO REFUSALS.
+//
+// They ask a client for opposite things — "present a credential" and "the one
+// you presented does not carry this" — and a narrow reader meets the second
+// the moment they open a screen outside their access, which is the ordinary
+// case rather than the exceptional one. Folded together, the surface tells
+// that reader to go and get a new credential, which is how a company learns to
+// rotate working tokens over a permissions message.
+//
+// NEITHER IS REACHABLE THROUGH THE WIRED GUARD, which answers an anonymous
+// request a layer up, and every socket authenticates at its handshake. That is
+// exactly why it is asserted here: this package is reached by two transports
+// and the middleware in front of one of them is not this package's to keep, so
+// a refusal that is correct only because something upstream answers first is
+// one edit from being wrong.
+func TestNobodyAskingIsADifferentRefusalFromLackingThePermission(t *testing.T) {
+	t.Parallel()
+	r := queries.NewRegistry()
+	r.Register("events", queries.Requires(iam.GrantAdmin), answersWith("rows"))
+	r.Register("budgets", queries.Everybody(), answersWith("the caps"))
+
+	for _, what := range []string{"events", "budgets"} {
+		_, anonymous := r.Answer(iam.WithAnonymous(t.Context()), what, nil)
+		if !errors.Is(anonymous, queries.ErrUnauthenticated) {
+			t.Errorf("%s: a caller presenting nothing is not ErrUnauthenticated: %v",
+				what, anonymous)
+		}
+		if errors.Is(anonymous, queries.ErrUnauthorized) {
+			t.Errorf("%s: a caller presenting nothing was refused as one whose "+
+				"access falls short: %v", what, anonymous)
+		}
+	}
+
+	_, narrow := r.Answer(asking(t, iam.GrantTracker), "events", nil)
+	if !errors.Is(narrow, queries.ErrUnauthorized) {
+		t.Errorf("a principal lacking the permission is not ErrUnauthorized: %v", narrow)
+	}
+	if errors.Is(narrow, queries.ErrUnauthenticated) {
+		t.Errorf("a principal who presented a perfectly good credential was told "+
+			"to present one: %v", narrow)
+	}
+}
+
+// BUT AN IDENTITY ESTATE THIS NODE CANNOT READ IS A RETRY, not a refusal about
+// the caller — and this is the arm the walk in internal/api/auth exists for.
+//
+// The principal is the same zero value both times, so a registry that dropped
+// [iam.From]'s resolution would answer `unauthorized` here: every credential in
+// the company reported invalid, at once, for as long as the estate is
+// unreachable. That is the failure that teaches a company to reset working
+// passwords during an outage.
+func TestAQuestionIsRetriedRatherThanRefusedWhenIdentityIsUnreadable(t *testing.T) {
+	t.Parallel()
+	r := queries.NewRegistry()
+	r.Register("budgets", queries.Everybody(), answersWith("the caps"))
+
+	down := errors.New("the identity estate is behind")
+	ctx := iam.WithUnresolved(t.Context(), down)
+	data, err := r.Answer(ctx, "budgets", nil)
+	if err == nil {
+		t.Fatalf("a question was answered while identity was unreadable: %v", data)
+	}
+	if !errors.Is(err, queries.ErrUnavailable) {
+		t.Errorf("an unreadable identity estate is not reported as unavailable: %v", err)
+	}
+	if errors.Is(err, queries.ErrUnauthorized) {
+		t.Errorf("an outage was reported as the caller's credential: %v", err)
+	}
+	// THE REASON SURVIVES, because "the store timed out" and "this session
+	// decodes to nothing" send an operator to opposite places, and the
+	// registry is not what chooses between them.
+	if !errors.Is(err, down) {
+		t.Errorf("the resolver's own reason was dropped: %v", err)
+	}
+}
+
+// EVERY QUESTION DECLARES A POSTURE, it is the one ADR-0033 decided, and it is
+// what Answer enforces.
+//
+// THE TABLE IS STATED HERE IN FULL, in both directions: a question this build
+// answers that it does not name fails, and so does a name it holds that this
+// build does not answer — so a question whose posture is changed, or one added
+// without a decision, is a reviewed edit of this table rather than a quiet
+// change to who reads what. Then, for every one, the declaration is held to
+// what the registry does: an app's question ADMITS its app and admin, whose
+// permission includes every app, and REFUSES the other app and nothing; an
+// admin's admits admin alone; and everybody's, or one its answer decides,
+// admits a caller holding nothing.
+//
+// ADMISSION IS ASKED OF A REGISTRY CARRYING THE SAME POSTURES over answers
+// that do nothing, because an admitted question runs its answer and the
+// fixture's seams are empty values; a REFUSAL is asked of the production
+// registry itself, since the registry refuses before any answer runs.
+func TestEveryQuestionDeclaresAPosture(t *testing.T) {
+	t.Parallel()
+	want := map[string]string{
+		"agent": "everybody", "live_call": "everybody", "tokens": "everybody",
+		"token_series": "everybody", "seat_activity": "everybody",
+		"viewer": "everybody", "schedule_runs": "everybody",
+		"budgets": "everybody", "schedules": "everybody",
+		"knowledge": "everybody", "colleague": "everybody",
+		"sandbox_runs": "everybody", "company_feed": "everybody",
+		"decisions": "everybody",
+
+		"events": "admin", "event_series": "admin", "event": "admin",
+		"trace": "admin", "turn": "admin", "fleet": "admin",
+		"mcp_servers_status": "admin", "backups": "admin",
+		"credential_pool": "admin", "fleet_broker": "admin",
+		"integrations": "admin", "retention": "admin", "a2a_channels": "admin",
+		"config": "admin", "config_audit": "admin", "config_diff": "admin",
+		"config_entities": "admin", "limits": "admin", "sign_in_policy": "admin",
+
+		"work_items": "tracker", "work_comments": "tracker",
+		"work_item_turns": "tracker", "work_views": "tracker",
+		"work_saved_views": "tracker", "work_projects": "tracker",
+		"work_project": "tracker", "work_workload": "tracker",
+		"work_activity": "tracker", "work_my_work": "tracker",
+		"work_inbox": "tracker", "work_routing": "tracker",
+		"work_catalogue": "tracker", "work_person": "tracker",
+		"work_flow": "tracker", "work_files": "tracker", "work_search": "tracker",
+
+		"pages": "knowledge", "page": "knowledge", "containers": "knowledge",
+		"page_activity": "knowledge", "page_revision": "knowledge",
+		"page_reads": "knowledge",
+
+		"work_item":       "decided_by:" + string(authz.ActionWorkRead),
+		"turns":           "decided_by:" + string(authz.ActionSeatTrailRead),
+		"phases":          "decided_by:" + string(authz.ActionSeatTrailRead),
+		"sandbox_tail":    "decided_by:" + string(authz.ActionSeatTrailRead),
+		"agent_memory":    "decided_by:" + string(authz.ActionSeatTrailRead),
+		"agent_episode":   "decided_by:" + string(authz.ActionSeatTrailRead),
+		"memory_overview": "decided_by:" + string(authz.ActionSeatTrailRead),
+		"conversations":   "decided_by:" + string(authz.ActionSeatTrailRead),
+
+		// THE ARTIFACTS: the listing is everybody's and filtered row by row;
+		// every other question is decided per artifact by the artifacts' one
+		// admission, the usage against the plan is the deployment's, and the
+		// company trail of every artifact is the company-wide trail's.
+		"artifacts":             "everybody",
+		"artifact":              "decided_by:" + string(authz.ActionArtifactRead),
+		"artifact_versions":     "decided_by:" + string(authz.ActionArtifactRead),
+		"artifact_version":      "decided_by:" + string(authz.ActionArtifactRead),
+		"artifact_history":      "decided_by:" + string(authz.ActionArtifactRead),
+		"artifact_assets":       "decided_by:" + string(authz.ActionArtifactRead),
+		"artifact_seen_by":      "decided_by:" + string(authz.ActionArtifactRead),
+		"artifact_access":       "decided_by:" + string(authz.ActionArtifactRead),
+		"artifact_usage":        "decided_by:" + string(authz.ActionArtifactUsage),
+		"artifact_trail":        "decided_by:" + string(authz.ActionAuditRead),
+		"artifact_data":         "decided_by:" + string(authz.ActionArtifactDataRead),
+		"artifact_data_doc":     "decided_by:" + string(authz.ActionArtifactDataRead),
+		"artifact_data_query":   "decided_by:" + string(authz.ActionArtifactDataQuery),
+		"artifact_data_history": "decided_by:" + string(authz.ActionArtifactDataRead),
+		"artifact_data_schema":  "decided_by:" + string(authz.ActionArtifactDataRead),
+		"artifact_data_state":   "decided_by:" + string(authz.ActionArtifactDataRead),
+		"artifact_data_usage":   "decided_by:" + string(authz.ActionArtifactUsage),
+	}
+	r := queries.NewRegistry()
+	queries.Register(r, everySeam(t))
+	if got := r.PostureOf("nope"); got.Valid() {
+		t.Errorf("an unregistered question has the posture %s", got)
+	}
+	names := r.Names()
+	for what := range want {
+		if !slices.Contains(names, what) {
+			t.Errorf("%s is in the table and this build does not answer it", what)
+		}
+	}
+	mirror := queries.NewRegistry()
+	for _, what := range names {
+		posture := r.PostureOf(what)
+		if !posture.Valid() {
+			t.Errorf("%s is registered with no valid posture", what)
 			continue
 		}
-		if _, err := r.Answer(t.Context(), what, nil, ""); !errors.Is(err, queries.ErrUnauthorized) {
-			t.Errorf("%s: RequiresOperator says yes but Answer let it through", what)
+		if got, ok := want[what]; !ok {
+			t.Errorf("%s is answered with the posture %s and the table does not "+
+				"name it — decide who reads it, and say so here", what, posture)
+		} else if posture.String() != got {
+			t.Errorf("%s is %s, want %s", what, posture, got)
+		}
+		mirror.Register(what, posture, answersWith("answered"))
+
+		g := posture.Grant()
+		admitted := [][]iam.Grant{nil}
+		var refusedWith [][]iam.Grant
+		switch g {
+		case "":
+		case iam.GrantAdmin:
+			admitted = [][]iam.Grant{{iam.GrantAdmin}}
+			refusedWith = [][]iam.Grant{nil, slices.Clone(iam.Apps)}
+		default:
+			admitted = [][]iam.Grant{{g}, {iam.GrantAdmin}}
+			refusedWith = [][]iam.Grant{nil, slices.DeleteFunc(slices.Clone(iam.Apps),
+				func(app iam.Grant) bool { return app == g })}
+		}
+		for _, holding := range admitted {
+			if _, err := mirror.Answer(asking(t, holding...), what, nil); err != nil {
+				t.Errorf("%s is %s and refused a caller holding %v: %v",
+					what, posture, holding, err)
+			}
+		}
+		for _, holding := range refusedWith {
+			_, err := r.Answer(asking(t, holding...), what, nil)
+			var refusal *queries.Refusal
+			if !errors.As(err, &refusal) || refusal.Reason != authz.ReasonNoGrant ||
+				!slices.Equal(refusal.Grants, []iam.Grant{g}) {
+				t.Errorf("%s is %s and answered a caller holding %v with %v, "+
+					"want a refusal naming [%s]", what, posture, holding, err, g)
+			}
 		}
 	}
+}
+
+// A QUESTION REGISTERED WITH NO POSTURE PANICS, at wiring time, on every
+// build — and so does one naming a permission that is not admin or an app, or
+// a verb the authority table has no row for.
+//
+// Any of them would answer to any credential at all — the exact shape of an
+// ungated surface that looks deliberate — and a company finding that out on
+// the first request has already served it.
+func TestAZeroPostureAndAnUnknownVerbPanicAtRegistration(t *testing.T) {
+	t.Parallel()
+	for name, posture := range map[string]queries.Posture{
+		"the zero posture":                          {},
+		"a permission this build does not know":     queries.Requires("secrets:exfiltrate"),
+		"no permission at all":                      queries.Requires(""),
+		"a verb the authority table has no row for": queries.DecidedBy("audit.everything"),
+		"no verb at all":                            queries.DecidedBy(""),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			defer func() {
+				if recover() == nil {
+					t.Errorf("a question was registered with %s", name)
+				}
+			}()
+			queries.NewRegistry().Register("events", posture, answersWith(nil))
+		})
+	}
+	// THE COUNTERFACTUAL: every legal posture registers, or the cases above
+	// would pass on a registry that panicked on everything.
+	r := queries.NewRegistry()
+	r.Register("a", queries.Everybody(), answersWith(nil))
+	r.Register("b", queries.Requires(iam.GrantAdmin), answersWith(nil))
+	for _, app := range iam.Apps {
+		r.Register("c"+string(app), queries.Requires(app), answersWith(nil))
+	}
+	r.Register("d", queries.DecidedBy(authz.ActionSeatTrailRead), answersWith(nil))
+}
+
+// asking is a context carrying a principal with the given grants.
+func asking(t *testing.T, grants ...iam.Grant) context.Context {
+	t.Helper()
+	return iam.WithPrincipal(t.Context(), iam.Principal{
+		ID: uuid.New(), Login: "token:test", Kind: iam.KindMachine,
+		Stage: iam.StageActive, Grants: grants,
+	})
 }
 
 func TestRegisteringAQuestionTwicePanics(t *testing.T) {
@@ -108,8 +438,8 @@ func TestRegisteringAQuestionTwicePanics(t *testing.T) {
 		}
 	}()
 	r := queries.NewRegistry()
-	r.Register("events", answersWith(nil))
-	r.Register("events", answersWith(nil))
+	r.Register("events", queries.Requires(iam.GrantAdmin), answersWith(nil))
+	r.Register("events", queries.Requires(iam.GrantAdmin), answersWith(nil))
 }
 
 func TestRegisteringNothingUsefulPanics(t *testing.T) {
@@ -119,8 +449,12 @@ func TestRegisteringNothingUsefulPanics(t *testing.T) {
 		run    func(*queries.Registry)
 		reason string
 	}{
-		{"no name", func(r *queries.Registry) { r.Register("", answersWith(nil)) }, "an unnamed question"},
-		{"no answer", func(r *queries.Registry) { r.Register("events", nil) }, "a question with no answer"},
+		{"no name", func(r *queries.Registry) {
+			r.Register("", queries.Everybody(), answersWith(nil))
+		}, "an unnamed question"},
+		{"no answer", func(r *queries.Registry) {
+			r.Register("events", queries.Everybody(), nil)
+		}, "a question with no answer"},
 	} {
 		func() {
 			defer func() {
@@ -136,9 +470,9 @@ func TestRegisteringNothingUsefulPanics(t *testing.T) {
 func TestTheRegistryListsWhatItAnswers(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
-	r.Register("events", answersWith(nil))
-	r.RegisterOperator("config", answersWith(nil))
-	r.Register("agent", answersWith(nil))
+	r.Register("events", queries.Requires(iam.GrantAdmin), answersWith(nil))
+	r.Register("config", queries.Requires(iam.GrantAdmin), answersWith(nil))
+	r.Register("agent", queries.Everybody(), answersWith(nil))
 
 	if got := r.Names(); !slices.Equal(got, []string{"agent", "config", "events"}) {
 		t.Errorf("names = %v, want them sorted", got)
@@ -149,10 +483,10 @@ func TestAFailingAnswerReachesTheCaller(t *testing.T) {
 	t.Parallel()
 	sentinel := errors.New("the store fell over")
 	r := queries.NewRegistry()
-	r.Register("events", func(context.Context, queries.Params) (any, error) {
+	r.Register("events", queries.Everybody(), func(context.Context, queries.Params) (any, error) {
 		return nil, sentinel
 	})
-	if _, err := r.Answer(t.Context(), "events", nil, ""); !errors.Is(err, sentinel) {
+	if _, err := r.Answer(asking(t), "events", nil); !errors.Is(err, sentinel) {
 		t.Errorf("err = %v, want the answer's own", err)
 	}
 }
@@ -319,5 +653,25 @@ func TestARefusalsDetailIsTheAuthorsSentence(t *testing.T) {
 		if got := queries.RefusalDetail(tc.err); got != tc.want {
 			t.Errorf("%s: RefusalDetail = %q, want %q", tc.name, got, tc.want)
 		}
+	}
+}
+
+// requiresExactly asserts a question is registered as requiring grant, and
+// that a caller holding every OTHER permission but admin is refused it on
+// authority — the posture stated once, with the two halves a gate has to
+// check: what the registry declares, and that the declaration is what decides.
+// Admin is left out of "every other" because it includes every app: a caller
+// holding it is admitted to every app's question by design.
+func requiresExactly(t *testing.T, r *queries.Registry, what string, grant iam.Grant) {
+	t.Helper()
+	if got := r.PostureOf(what).Grant(); got != grant {
+		t.Fatalf("%s requires %q, want %q", what, got, grant)
+	}
+	everythingElse := slices.DeleteFunc(slices.Clone(iam.AllGrants),
+		func(g iam.Grant) bool { return g == grant || g == iam.GrantAdmin })
+	if _, err := r.Answer(asking(t, everythingElse...), what, nil); !errors.Is(err,
+		queries.ErrUnauthorized) {
+		t.Errorf("%s without %s answered %v, want an authorization refusal",
+			what, grant, err)
 	}
 }

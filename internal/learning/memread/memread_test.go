@@ -11,6 +11,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/compact"
@@ -44,11 +46,30 @@ func newNode(t *testing.T, owner string) *node {
 		Profiles:      learning.NewCounterparties(db),
 		Onboarding:    learning.NewOnboarding(db),
 		Conversations: ledgerstore.NewConversations(db),
-		// The derivation is the org's; any stable function of the handle
-		// is one for a test.
-		AgentID: func(handle string) string { return "agent-" + handle },
-		Now:     func() time.Time { return pinned.Add(time.Hour) },
+		Now:           func() time.Time { return pinned.Add(time.Hour) },
 	}}
+}
+
+// seatOf is the seat a case calls handle, as the asker resolves it: a stable
+// id derived from the handle, and the handle.
+func seatOf(handle string) memread.Seat {
+	return memread.Seat{ID: seatID(handle), Handle: handle}
+}
+
+// seatID is a stable id for a fixture seat. The engine's is a UUIDv5 over the
+// company and the handle; any stable function of the handle is one for a
+// test.
+func seatID(handle string) uuid.UUID {
+	return uuid.NewSHA1(uuid.MustParse("3c0a5d2e-7b1f-4e8a-9c6d-1f2e3a4b5c6d"), []byte(handle))
+}
+
+// seatsOf is [seatOf] over several handles, in order.
+func seatsOf(handles ...string) []memread.Seat {
+	out := make([]memread.Seat, 0, len(handles))
+	for _, h := range handles {
+		out = append(out, seatOf(h))
+	}
+	return out
 }
 
 // remember writes n diary entries and n episodes for handle, their content
@@ -58,7 +79,7 @@ func (n *node) remember(t *testing.T, handle, whose string, count int) {
 	for i := range count {
 		at := pinned.Add(time.Duration(i) * time.Second)
 		if err := n.stores.Diary.Write(t.Context(), learning.DiaryEntry{
-			ID: whose + "-d-" + strconv.Itoa(i), AgentID: "agent-" + handle,
+			ID: whose + "-d-" + strconv.Itoa(i), AgentID: seatID(handle).String(),
 			Kind: learning.DiaryLong, Content: whose + " note " + strconv.Itoa(i),
 			Source: learning.PersistSource, CreatedAt: at,
 		}); err != nil {
@@ -86,7 +107,7 @@ func newFleet() *fleet {
 // hold gives handle's lease to owner.
 func (f *fleet) hold(t *testing.T, handle, owner string) {
 	t.Helper()
-	lease, _, err := f.leases.TryAcquire(t.Context(), coord.SeatResource(handle),
+	lease, _, err := f.leases.TryAcquire(t.Context(), coord.SeatResource(seatID(handle)),
 		coord.AcquireOptions{Owner: owner, TTL: time.Minute})
 	if err != nil || lease == nil {
 		t.Fatalf("acquire %s for %s: %v", handle, owner, err)
@@ -101,7 +122,11 @@ func (f *fleet) reader(t *testing.T, n *node, attached ...string) *memread.Reade
 	if err := q.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	seats := func() []string { return attached }
+	ids := make([]uuid.UUID, 0, len(attached))
+	for _, h := range attached {
+		ids = append(ids, seatID(h))
+	}
+	seats := func() []uuid.UUID { return ids }
 	stop, err := memread.Serve(t.Context(), q, n.owner, seats, n.stores)
 	if err != nil {
 		t.Fatalf("Serve: %v", err)
@@ -143,7 +168,7 @@ func TestANonHolderReadsTheHoldersMemory(t *testing.T) {
 	f.reader(t, a, "swe")
 	readB := f.reader(t, b)
 
-	got, err := readB.Memory(t.Context(), "swe", 0)
+	got, err := readB.Memory(t.Context(), seatOf("swe"), 0)
 	if err != nil {
 		t.Fatalf("Memory: %v", err)
 	}
@@ -173,7 +198,7 @@ func TestASeatNobodyHoldsIsAnsweredEmptyAndSaysSo(t *testing.T) {
 	b.remember(t, "swe", "stale", 3)
 	read := f.reader(t, b)
 
-	got, err := read.Memory(t.Context(), "swe", 0)
+	got, err := read.Memory(t.Context(), seatOf("swe"), 0)
 	if err != nil {
 		t.Fatalf("Memory: %v", err)
 	}
@@ -187,7 +212,7 @@ func TestASeatNobodyHoldsIsAnsweredEmptyAndSaysSo(t *testing.T) {
 	if got.Diary == nil || got.Episodes == nil || got.Skills == nil || got.Counterparties == nil {
 		t.Error("an empty answer omits a list rather than sending it empty")
 	}
-	threads, err := read.Threads(t.Context(), "swe", "", 0)
+	threads, err := read.Threads(t.Context(), seatOf("swe"), "", 0)
 	if err != nil {
 		t.Fatalf("Threads: %v", err)
 	}
@@ -209,7 +234,7 @@ func TestASilentHolderIsUnavailableNotEmpty(t *testing.T) {
 	f.hold(t, "swe", "node-c:9")
 	read := f.reader(t, b)
 
-	_, err := read.Memory(t.Context(), "swe", 0)
+	_, err := read.Memory(t.Context(), seatOf("swe"), 0)
 	if !errors.Is(err, memread.ErrUnavailable) {
 		t.Fatalf("err = %v, want ErrUnavailable", err)
 	}
@@ -233,7 +258,7 @@ func TestAHolderStillTakingTheSeatRefuses(t *testing.T) {
 	readB := f.reader(t, b)
 
 	for name, read := range map[string]*memread.Reader{"itself": readA, "a peer": readB} {
-		if _, err := read.Memory(t.Context(), "swe", 0); !errors.Is(err, memread.ErrUnavailable) {
+		if _, err := read.Memory(t.Context(), seatOf("swe"), 0); !errors.Is(err, memread.ErrUnavailable) {
 			t.Errorf("asked by %s: err = %v, want ErrUnavailable", name, err)
 		}
 	}
@@ -255,7 +280,7 @@ func TestOnlyTheIncarnationTheLeaseNamesAnswers(t *testing.T) {
 	f.reader(t, fresh, "swe")
 	read := f.reader(t, asker)
 
-	got, err := read.Memory(t.Context(), "swe", 0)
+	got, err := read.Memory(t.Context(), seatOf("swe"), 0)
 	if err != nil {
 		t.Fatalf("Memory: %v", err)
 	}
@@ -270,7 +295,7 @@ func TestANodeWithNoBrokerAnswersItself(t *testing.T) {
 	n := newNode(t, "solo:1")
 	n.remember(t, "swe", "only", 2)
 	read := &memread.Reader{Owner: n.owner, Local: n.stores}
-	got, err := read.Memory(t.Context(), "swe", 0)
+	got, err := read.Memory(t.Context(), seatOf("swe"), 0)
 	if err != nil {
 		t.Fatalf("Memory: %v", err)
 	}
@@ -307,7 +332,7 @@ func TestEveryCollectionCarriesItsTotalBesideItsPage(t *testing.T) {
 	}
 	read := &memread.Reader{Owner: n.owner, Local: n.stores}
 
-	page, err := read.Memory(t.Context(), "swe", 0)
+	page, err := read.Memory(t.Context(), seatOf("swe"), 0)
 	if err != nil {
 		t.Fatalf("Memory: %v", err)
 	}
@@ -323,7 +348,7 @@ func TestEveryCollectionCarriesItsTotalBesideItsPage(t *testing.T) {
 		}
 	}
 
-	one, err := read.Memory(t.Context(), "swe", 1)
+	one, err := read.Memory(t.Context(), seatOf("swe"), 1)
 	if err != nil {
 		t.Fatalf("Memory: %v", err)
 	}
@@ -345,10 +370,10 @@ func TestOnboardedAtIsSetOnlyOnceAPassFinished(t *testing.T) {
 	t.Parallel()
 	n := newNode(t, "solo:1")
 	read := &memread.Reader{Owner: n.owner, Local: n.stores}
-	if _, err := n.stores.Onboarding.Claim(t.Context(), "agent-swe", pinned, time.Minute); err != nil {
+	if _, err := n.stores.Onboarding.Claim(t.Context(), seatID("swe").String(), pinned, time.Minute); err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
-	claimed, err := read.Memory(t.Context(), "swe", 0)
+	claimed, err := read.Memory(t.Context(), seatOf("swe"), 0)
 	if err != nil {
 		t.Fatalf("Memory: %v", err)
 	}
@@ -356,11 +381,11 @@ func TestOnboardedAtIsSetOnlyOnceAPassFinished(t *testing.T) {
 		t.Errorf("onboarded_at = %q for a pass claimed and never finished", claimed.OnboardedAt)
 	}
 	if err := n.stores.Onboarding.Mark(t.Context(), learning.Marker{
-		AgentID: "agent-swe", ChainHash: "chain-1", Handle: "swe",
+		AgentID: seatID("swe").String(), ChainHash: "chain-1", Handle: "swe",
 	}, pinned.Add(time.Minute)); err != nil {
 		t.Fatalf("Mark: %v", err)
 	}
-	marked, err := read.Memory(t.Context(), "swe", 0)
+	marked, err := read.Memory(t.Context(), seatOf("swe"), 0)
 	if err != nil {
 		t.Fatalf("Memory: %v", err)
 	}
@@ -385,7 +410,7 @@ func TestThreadsCarryTheirTotalAndTheNamedThread(t *testing.T) {
 		}
 	}
 	read := &memread.Reader{Owner: n.owner, Local: n.stores}
-	got, err := read.Threads(t.Context(), "swe", "slack:C2", 2)
+	got, err := read.Threads(t.Context(), seatOf("swe"), "slack:C2", 2)
 	if err != nil {
 		t.Fatalf("Threads: %v", err)
 	}
@@ -408,7 +433,7 @@ func TestAnEmptyMemoryCarriesEveryKey(t *testing.T) {
 	t.Parallel()
 	n := newNode(t, "solo:1")
 	read := &memread.Reader{Owner: n.owner, Local: n.stores}
-	got, err := read.Memory(t.Context(), "nobody", 0)
+	got, err := read.Memory(t.Context(), seatOf("nobody"), 0)
 	if err != nil {
 		t.Fatalf("Memory: %v", err)
 	}
@@ -444,7 +469,7 @@ func TestTheProfilesAreAskedForThePageAndNoMore(t *testing.T) {
 	asked := &askedProfiles{}
 	local := &memread.Stores{Profiles: asked}
 	for _, c := range []struct{ page, want int }{{1, 1}, {0, memread.PageLimit}, {500, memread.PageLimit}} {
-		if _, err := local.Memory(t.Context(), "swe", c.page); err != nil {
+		if _, err := local.Memory(t.Context(), seatOf("swe"), c.page); err != nil {
 			t.Fatalf("Memory: %v", err)
 		}
 		if asked.limit != c.want {
@@ -496,7 +521,7 @@ func TestAProfileCarriesBothInstantsAndOneIdentity(t *testing.T) {
 		},
 	}}
 	read := &memread.Reader{Owner: n.owner, Local: n.stores}
-	got, err := read.Memory(t.Context(), "swe", 0)
+	got, err := read.Memory(t.Context(), seatOf("swe"), 0)
 	if err != nil {
 		t.Fatalf("Memory: %v", err)
 	}
@@ -529,7 +554,7 @@ func TestAFailedProfileReadIsNotAnEmptyList(t *testing.T) {
 	sentinel := errors.New("the store could not be reached")
 	n.stores.Profiles = stubProfiles{err: sentinel}
 	read := &memread.Reader{Owner: n.owner, Local: n.stores}
-	if _, err := read.Memory(t.Context(), "swe", 0); !errors.Is(err, sentinel) {
+	if _, err := read.Memory(t.Context(), seatOf("swe"), 0); !errors.Is(err, sentinel) {
 		t.Errorf("a failed profile read answered %v, want the failure", err)
 	}
 }
@@ -622,7 +647,7 @@ func TestAnEpisodeRowSaysWhatItIs(t *testing.T) {
 			t.Fatalf("episode %s: %v", ep.ID, err)
 		}
 	}
-	got, err := (&memread.Reader{Owner: n.owner, Local: n.stores}).Memory(t.Context(), "swe", 0)
+	got, err := (&memread.Reader{Owner: n.owner, Local: n.stores}).Memory(t.Context(), seatOf("swe"), 0)
 	if err != nil {
 		t.Fatalf("Memory: %v", err)
 	}
@@ -667,7 +692,7 @@ func TestAListedEpisodeCarriesItsOpeningsAndOneReadHasItWhole(t *testing.T) {
 		}
 	}
 	reader := &memread.Reader{Owner: n.owner, Local: n.stores}
-	got, err := reader.Memory(t.Context(), "swe", 0)
+	got, err := reader.Memory(t.Context(), seatOf("swe"), 0)
 	if err != nil || len(got.Episodes) != 1 {
 		t.Fatalf("Memory = %d episodes, %v", len(got.Episodes), err)
 	}
@@ -684,7 +709,7 @@ func TestAListedEpisodeCarriesItsOpeningsAndOneReadHasItWhole(t *testing.T) {
 			"whole size", len(row.PlanSummary), len(account), row.PlanSummaryBytes)
 	}
 
-	whole, err := reader.Episode(t.Context(), "swe", "long")
+	whole, err := reader.Episode(t.Context(), seatOf("swe"), "long")
 	if err != nil || whole.Episode == nil {
 		t.Fatalf("Episode = %+v, %v", whole, err)
 	}
@@ -694,7 +719,7 @@ func TestAListedEpisodeCarriesItsOpeningsAndOneReadHasItWhole(t *testing.T) {
 			"by %q), want both whole", len(e.Ask), len(e.PlanSummary), whole.HeldBy)
 	}
 	for _, id := range []string{"gone", "theirs"} {
-		if absent, err := reader.Episode(t.Context(), "swe", id); err != nil || absent.Episode != nil {
+		if absent, err := reader.Episode(t.Context(), seatOf("swe"), id); err != nil || absent.Episode != nil {
 			t.Errorf("reading %q of swe = %+v, %v; want no episode and no failure", id, absent, err)
 		}
 	}
@@ -729,7 +754,7 @@ func TestWhatASeatIsShownWholeIsListedWhole(t *testing.T) {
 		t.Fatalf("the prompt showed a %d-byte ask as %q, want it whole", at, prompt[0].Ask)
 	}
 	reader := &memread.Reader{Owner: n.owner, Local: n.stores}
-	got, err := reader.Memory(t.Context(), "swe", 0)
+	got, err := reader.Memory(t.Context(), seatOf("swe"), 0)
 	if err != nil || len(got.Episodes) != 2 {
 		t.Fatalf("Memory = %d episodes, %v", len(got.Episodes), err)
 	}
@@ -769,7 +794,15 @@ func TestAPageOfLongAsksIsAnsweredByItsHolder(t *testing.T) {
 	f.hold(t, "swe", a.owner)
 	f.reader(t, a, "swe")
 	readB := f.reader(t, b)
-	got, err := readB.Memory(t.Context(), "swe", 0)
+	// Judged by the budget a screen's read is given, not the fixture's
+	// shorter one. The fixture's 500ms is sized for a holder answering from a
+	// handful of short rows; this holder reads fifty asks of 160 KB out of its
+	// store and cuts each to its opening, under the race detector, and on a
+	// loaded runner that alone took longer than 500ms. What this case claims
+	// is that the page fits the transport, and a read that timed out says
+	// nothing about that either way.
+	readB.Budget = memread.DefaultBudget
+	got, err := readB.Memory(t.Context(), seatOf("swe"), 0)
 	if err != nil {
 		t.Fatalf("a page of %d asks of %d bytes each was refused: %v", memread.PageLimit,
 			len(ask), err)

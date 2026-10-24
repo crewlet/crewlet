@@ -116,9 +116,10 @@ const org = {
 };
 
 const OPERATOR = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+  login: "U0FOUNDER",
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
+  owner: "jane",
   name: "Jane",
   kind: "human",
 };
@@ -140,7 +141,9 @@ function mount(id?: string, { refuse = false, answer = pool() } = {}) {
   const query = vi.fn((what: string) => {
     if (what === "viewer") return Promise.resolve(OPERATOR);
     if (what === "credential_pool") {
-      return refuse ? Promise.reject(new QueryError("unauthorized")) : Promise.resolve(answer);
+      return refuse
+        ? Promise.reject(new QueryError("unauthorized", { reason: "operator", grants: ["admin"] }))
+        : Promise.resolve(answer);
     }
     return new Promise(() => {});
   });
@@ -265,7 +268,7 @@ test("a model no seat names says so in the same words on the list and on its pag
   cleanup();
   mount("spare", { answer });
   await settle();
-  const fact = screen.getByText("Runs").closest(".fact") as HTMLElement;
+  const fact = screen.getByText("Runs").closest(".crewlet-fact-line__fact") as HTMLElement;
   expect(within(fact).getByText("No seat names it")).toBeDefined();
   expect(within(fact).queryByText(/0 seats/)).toBeNull();
 });
@@ -279,7 +282,9 @@ test("a model's page keeps its vendor id whole on one line, all of it on the tit
   mount("fast", { answer });
   await settle();
   const value = screen.getByText(long);
-  expect(value.closest(".fact")!.classList.contains("is-token")).toBe(true);
+  expect(
+    value.closest(".crewlet-fact-line__fact")!.classList.contains("crewlet-fact-line__fact--token"),
+  ).toBe(true);
   expect(value.getAttribute("title")).toBe(long);
 });
 
@@ -288,7 +293,9 @@ test("a node that could not read the fleet's ledger says its cooldowns are its o
     answer: { ...pool(), fleet: false, fleet_error: "the coordination store did not answer" },
   });
   await settle();
-  expect(screen.getByText(/own cooldowns only/)).toBeDefined();
+  expect(screen.getByText(/cooldowns only/).textContent).toBe(
+    "Showing node-a’s cooldowns only. Other nodes’ may differ.",
+  );
   expect(screen.getByText("the coordination store did not answer")).toBeDefined();
 });
 
@@ -317,9 +324,12 @@ test("a key the engine does not know is said, not drawn as an empty model", asyn
 test("a refused reader sees the refusal alone — no tiles, no empty list", async () => {
   const { view } = mount(undefined, { refuse: true });
   await settle();
-  expect(await screen.findByText(/This answer is auth-gated/)).toBeDefined();
+  // THE ENGINE'S REFUSAL, naming the grant that would have admitted the reader.
+  expect(
+    await screen.findByText(/This answer needs Admin access\. An admin can give it to you\./),
+  ).toBeDefined();
   expect(view.container.querySelector(".crewlet-statcard")).toBeNull();
-  expect(screen.queryByText(/configures no model/)).toBeNull();
+  expect(screen.queryByText(/No model configured/)).toBeNull();
 });
 
 // --- editing one ------------------------------------------------------------ //
@@ -386,9 +396,7 @@ test("an edit sends back the entity it read, with only what was edited replaced"
   });
   const dialog = await openEdit();
   // THE INLINE KEY IS LOCKED, and the mask is never drawn.
-  expect(
-    within(dialog).getByText(/Key 2 is written inline — its value is never sent here/),
-  ).toBeDefined();
+  expect(within(dialog).getByText("Key 2 is inline.")).toBeDefined();
   expect(dialog.innerHTML).not.toContain("__redacted__");
 
   fireEvent.change(within(dialog).getByLabelText(/^Model/), { target: { value: "claude-opus-5" } });
@@ -450,7 +458,9 @@ test("an inline key keeps its place: no gesture moves it, and it is replaced whe
     el.getAttribute("aria-disabled") === "true" || el.hasAttribute("disabled");
   const add = () => within(dialog).getByRole("button", { name: "Add key" });
   expect(unavailable(add())).toBe(true);
-  expect(add().getAttribute("title")).toMatch(/Key 2 is written inline/);
+  expect(add().getAttribute("title")).toMatch(
+    /Key 2 is inline\. Replace it with a secret before adding or removing keys\./,
+  );
   // Removing key 1 would move the inline key to index 0: unavailable.
   expect(unavailable(within(dialog).getByRole("button", { name: "Remove key 1" }))).toBe(true);
   // Removing the inline key itself leaves no mask to restore: available.
@@ -487,4 +497,78 @@ test("the edit opens with the model field focused", async () => {
   stubConfig((call) => (call.method === "GET" ? json(entity, 200, { ETag: '"r1"' }) : valid()));
   const dialog = await openEdit();
   expect(document.activeElement).toBe(within(dialog).getByLabelText(/^Model/));
+});
+
+/** A cli-agent entry as the engine serves it. */
+const cliEntity = (auth?: Record<string, unknown>, keys?: string[]) => ({
+  type: "cli-agent",
+  model: "sonnet",
+  ...(keys ? { api_keys: keys } : {}),
+  cli: { agent: "claude-code", ...(auth ? { auth } : {}) },
+});
+
+async function openCLIEdit() {
+  mount("subscription");
+  await settle();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  });
+  await settle();
+  return screen.getByRole("dialog");
+}
+
+// A CLI-AGENT ENTRY IS NOT A KEY POOL, and the editor stops drawing it as one.
+// It labelled the list "Tokens" and offered any number of rows, though the
+// engine reads api_keys there only under cli.auth.mode api-key, and only one:
+// every row it invited was refused on Save.
+test("a subscription cli-agent entry offers no key, and says how it signs in", async () => {
+  stubConfig((call) =>
+    call.method === "GET" ? json(cliEntity(), 200, { ETag: '"r1"' }) : valid(),
+  );
+  const dialog = await openCLIEdit();
+  expect(within(dialog).queryByText("Tokens")).toBeNull();
+  expect(within(dialog).getByText(/None\. Signs in through its CLI\./)).toBeDefined();
+  expect(within(dialog).queryByRole("button", { name: "Add key" })).toBeNull();
+});
+
+test("an api-key cli-agent entry holds exactly one key", async () => {
+  stubConfig((call) =>
+    call.method === "GET"
+      ? json(cliEntity({ mode: "api-key" }, ["${ANTHROPIC_API_KEY}"]), 200, { ETag: '"r1"' })
+      : valid(),
+  );
+  const dialog = await openCLIEdit();
+  expect(within(dialog).getByText("API key")).toBeDefined();
+  const add = within(dialog).getByRole("button", { name: "Add key" });
+  expect(add.getAttribute("aria-disabled") === "true" || add.hasAttribute("disabled")).toBe(true);
+  expect(add.getAttribute("title")).toMatch(/Holds one key\. Add more as separate entries\./);
+});
+
+test("a key on a cli-agent entry that reads none is a fault to remove before saving", async () => {
+  const calls = stubConfig((call) =>
+    call.method === "GET"
+      ? json(cliEntity(undefined, ["${ANTHROPIC_API_KEY}"]), 200, { ETag: '"r1"' })
+      : valid(),
+  );
+  const dialog = await openCLIEdit();
+  fireEvent.change(within(dialog).getByLabelText(/^Model/), { target: { value: "opus" } });
+  await act(async () => {
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+  });
+  await settle();
+  expect(within(dialog).getByText(/Keys only work in api-key mode\. Remove it\./)).toBeDefined();
+  expect(calls.filter((c) => c.method === "PUT")).toEqual([]);
+
+  await act(async () => {
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove key 1" }));
+  });
+  await act(async () => {
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+  });
+  await settle();
+  // The first check is of the company as stored, which is what an edit's
+  // warnings are compared against; every request carrying the edit has no key.
+  const edited = calls.filter((c) => c.method === "PUT" && c.body?.model === "opus");
+  expect(edited.length).toBe(2);
+  expect(edited.every((c) => !("api_keys" in (c.body ?? {})))).toBe(true);
 });

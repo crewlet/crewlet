@@ -13,6 +13,7 @@ package eventfantest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -196,6 +197,37 @@ func Run(t *testing.T, factory Factory) {
 		}
 	})
 
+	// ONE SEAT'S SPEND IS ITS OWN ON EVERY NODE: the narrowing travels to
+	// the peers rather than being applied to the asker's share alone, which
+	// would merge every other seat's records from the peers in as though they
+	// matched. Two seats, each with records on every node.
+	t.Run("one_seats_spend_window_is_narrowed_on_every_node", func(t *testing.T) {
+		t.Parallel()
+		nodes := fleet(t, factory)
+		at := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+		for i, n := range nodes {
+			for _, seat := range []string{"seat-a", "seat-b"} {
+				rec := phase(fmt.Sprintf("%s-%d", seat, i), fmt.Sprintf("t-%s-%d", seat, i),
+					at.Add(time.Duration(i)*time.Minute), 10, "m")
+				rec.Tags["agent_id"] = seat
+				write(t, n, rec)
+			}
+		}
+		records, coverage, err := asker(nodes).PhaseTokens(t.Context(),
+			store.PhaseTokenQuery{Since: at.Add(-time.Minute), AgentID: "seat-b"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		complete(t, coverage)
+		var got []string
+		for _, r := range records {
+			got = append(got, r.EventID)
+		}
+		if !slices.Equal(got, []string{"seat-b-2", "seat-b-1", "seat-b-0"}) {
+			t.Fatalf("seat-b's spend is %v, want its own record from each of the three nodes", got)
+		}
+	})
+
 	t.Run("the_outcome_counts_are_every_nodes_summed", func(t *testing.T) {
 		t.Parallel()
 		nodes := fleet(t, factory)
@@ -360,7 +392,41 @@ func fleet(t *testing.T, factory Factory) []*member {
 		t.Cleanup(func() { _ = stop(context.WithoutCancel(t.Context())) })
 		out = append(out, m)
 	}
+	reachable(t, out)
 	return out
+}
+
+// reachable waits until a scatter from the asker reaches every member.
+//
+// SERVE RETURNS ONCE ITS OWN SERVER HOLDS THE SUBSCRIPTION ([queue.EventQueue]),
+// and on a cluster the other servers learn of it over their routes a moment
+// later. A case that asked at once could publish on the asker's server before
+// a peer's interest had arrived there, and would read a running node as one
+// that did not answer — which is what a fleet read reports, honestly, about a
+// node that has only just started, and is not what any case here is about.
+// Measured: "an event is found on whichever node holds it" failed exactly that
+// way under the full suite's load, with the third member named unanswered.
+//
+// THE PROBE IS A LOOKUP NO NODE CAN ANSWER POSITIVELY, so it writes nothing,
+// finds nothing, and still scatters to every member and says who answered.
+func reachable(t *testing.T, nodes []*member) {
+	t.Helper()
+	fan := asker(nodes)
+	fan.Budget = time.Second
+	deadline := time.Now().Add(Budget)
+	for {
+		_, coverage, err := fan.ByID(t.Context(), "eventfantest-reachability-probe")
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("probe the fleet's reach: %v", err)
+		}
+		if coverage.Complete && len(coverage.Missing()) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("a scatter from %s still reaches only part of the fleet after %v: %+v",
+				nodes[0].id, Budget, coverage)
+		}
+	}
 }
 
 // asker is the fleet as the first member sees it.

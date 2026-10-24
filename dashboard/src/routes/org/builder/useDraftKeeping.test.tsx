@@ -6,15 +6,22 @@
 
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { storeToken } from "~/protocol/index.ts";
+
 import { fromDocument } from "./model/document.ts";
 import { EMPTY_DRAFT } from "./model/draft.ts";
 import { OPERATIONS_VERSION, record, type Intent, type Operation } from "./model/operations.ts";
 import { DRAFT_STORAGE_KEY, type DraftStorage, type KeptDraft } from "./model/persistence.ts";
 import { templateIntent } from "./model/templates.ts";
-import { countingKeys, fixtureDerived } from "./model/testkit.ts";
-import { company, Engine, json, mountBuilder } from "./testkit.tsx";
+import { countingKeys } from "./model/testkit.ts";
+import { company, EDITOR, Engine, json, mountBuilder } from "./testkit.tsx";
 import { withDerived } from "~/test/org.ts";
+
+/** Somebody else signs in, and the socket comes back — when the frame asks who. */
+function signInAs(store: { setConnected: (up: boolean) => void }, set: () => void) {
+  set();
+  act(() => store.setConnected(false));
+  act(() => store.setConnected(true));
+}
 
 beforeEach(() => {
   localStorage.clear();
@@ -32,7 +39,7 @@ afterEach(() => {
 /** An operation recorded against the fixture company, as a kept draft holds it. */
 function recorded(intent: Intent): Operation {
   const doc = company();
-  const result = record(fromDocument(doc, fixtureDerived(doc)), intent);
+  const result = record(fromDocument(doc), intent);
   if (!result.ok) throw new Error(result.message);
   return result.op;
 }
@@ -171,36 +178,37 @@ test("a draft kept for creating a company is discarded, with a word, when a comp
   const engine = new Engine(company());
   mountBuilder({ engine });
   expect(
-    await screen.findByText(
-      "A draft for creating a company was discarded, because this engine now has a company.",
-    ),
+    await screen.findByText("Your new-company draft was discarded: a company now exists."),
   ).toBeDefined();
   expect(kept()).toBeNull();
 });
 
-test("a token change forgets the kept draft and keeps the one on screen", async () => {
+// THE TAB MAY HAVE CHANGED HANDS: somebody else signing in is a new reader,
+// and a draft kept for the last one is not theirs to be offered.
+test("somebody else signing in forgets the kept draft and keeps the one on screen", async () => {
+  let who: unknown = EDITOR;
   const engine = new Engine(company());
-  mountBuilder({ engine });
+  const { store } = mountBuilder({ engine, viewer: () => who });
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
   await waitFor(() => expect(kept()).not.toBeNull());
-  act(() => {
-    storeToken("someone-else");
+  const checks = engine.checks().length;
+  signInAs(store, () => {
+    who = { ...EDITOR, login: "someone-else", owner: "someone-else" };
   });
   await waitFor(() => expect(kept()).toBeNull());
-  await waitFor(() =>
-    expect(engine.checks().at(-1)!.headers.Authorization).toBe("Bearer someone-else"),
-  );
+  await waitFor(() => expect(engine.checks().length).toBeGreaterThan(checks));
   expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more");
 });
 
-test("a token change while a kept draft is offered withdraws the offer", async () => {
+test("somebody else signing in while a kept draft is offered withdraws the offer", async () => {
   keep({});
+  let who: unknown = EDITOR;
   const engine = new Engine(company());
-  mountBuilder({ engine });
+  const { store } = mountBuilder({ engine, viewer: () => who });
   await screen.findByText(/This tab kept a draft with 1 change/);
-  act(() => {
-    storeToken("someone-else");
+  signInAs(store, () => {
+    who = { ...EDITOR, login: "someone-else", owner: "someone-else" };
   });
   await waitFor(() => expect(screen.queryByText(/This tab kept a draft/)).toBeNull());
   expect(kept()).toBeNull();
@@ -211,8 +219,8 @@ test("a refused read forgets a kept draft rather than offering it to the next re
   keep({});
   const engine = new Engine(company());
   engine.script = () => json({ error: "unauthorized" }, 401);
-  mountBuilder({ engine });
-  await screen.findByText("Editing the organization needs an operator token.");
+  mountBuilder({ engine, viewer: () => ({ login: "", owner: "", grants: [] }) });
+  await screen.findByText("Editing the organization needs you to sign in.");
   // WAITED FOR, NOT READ ON THE SPOT. The refusal is rendered from state and
   // the draft is dropped by the EFFECT that state schedules, so the message
   // is in the DOM one commit before the storage is cleared. Reading it in the
@@ -235,9 +243,7 @@ test("storage that refuses says the draft will not survive a reload", async () =
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
   expect(
-    await screen.findByText(
-      "This browser refuses to keep a draft, so unsaved changes will not survive a reload or leaving the builder.",
-    ),
+    await screen.findByText("This browser can’t keep drafts. Unsaved changes are lost on reload."),
   ).toBeDefined();
   // The work goes on.
   await waitFor(() =>
@@ -256,9 +262,7 @@ test("no storage at all says the draft will not survive a reload", async () => {
     expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more"),
   );
   expect(
-    screen.getByText(
-      "This browser refuses to keep a draft, so unsaved changes will not survive a reload or leaving the builder.",
-    ),
+    screen.getByText("This browser can’t keep drafts. Unsaved changes are lost on reload."),
   ).toBeDefined();
 });
 
@@ -291,33 +295,33 @@ test("a draft this browser cannot keep asks before the builder is left, not befo
   mountBuilder({ engine: new Engine(company()), storage: refusing });
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
-  await screen.findByText(/This browser refuses to keep a draft/);
+  await screen.findByText(/This browser can’t keep drafts/);
   const start = location.hash;
 
   act(() => {
-    location.hash = "#/agents/edit?view=table";
+    location.hash = "#/company/org/edit?view=table";
   });
-  await waitFor(() => expect(location.hash).toBe("#/agents/edit?view=table"));
+  await waitFor(() => expect(location.hash).toBe("#/company/org/edit?view=table"));
   expect(screen.queryByRole("dialog", { name: "Leave the builder?" })).toBeNull();
 
   act(() => {
-    location.hash = "#/agents/roster";
+    location.hash = "#/company/org/roster";
   });
   const asked = await screen.findByRole("dialog", { name: "Leave the builder?" });
-  await waitFor(() => expect(location.hash).toBe("#/agents/edit?view=table"));
+  await waitFor(() => expect(location.hash).toBe("#/company/org/edit?view=table"));
   fireEvent.click(within(asked).getByRole("button", { name: "Stay" }));
   expect(screen.queryByRole("dialog", { name: "Leave the builder?" })).toBeNull();
 
   act(() => {
-    location.hash = "#/agents/roster";
+    location.hash = "#/company/org/roster";
   });
   fireEvent.click(
     within(await screen.findByRole("dialog", { name: "Leave the builder?" })).getByRole("button", {
       name: "Leave without the draft",
     }),
   );
-  await waitFor(() => expect(location.hash).toBe("#/agents/roster"));
-  expect(start.startsWith("#/agents/edit")).toBe(true);
+  await waitFor(() => expect(location.hash).toBe("#/company/org/roster"));
+  expect(start.startsWith("#/company/org/edit")).toBe(true);
 });
 
 test("coming back to the builder restores this page's own draft without asking", async () => {

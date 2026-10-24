@@ -197,7 +197,7 @@ const DefaultCodeBranch = "main"
 
 // CodeVisibility is who among the SEATS may read a repository. A person — a
 // bound or unbound API token — reads every repository whatever it says
-// (ADR-0040): visibility narrows the seats an AI company runs, never the
+// (ADR-0054): visibility narrows the seats an AI company runs, never the
 // people who run it.
 type CodeVisibility string
 
@@ -571,8 +571,8 @@ func newCodeOwners(o *org.Organization) *codeOwners {
 	x := o.Index()
 	return &codeOwners{
 		index: x,
-		units: sync.OnceValue(func() string { return listOrNone(x.UnitKeys()) }),
-		seats: sync.OnceValue(func() string { return listOrNone(x.Handles()) }),
+		units: sync.OnceValue(func() string { return listOrNone(x.UnitKeys(), "none") }),
+		seats: sync.OnceValue(func() string { return listOrNone(x.Handles(), "none") }),
 	}
 }
 
@@ -596,14 +596,6 @@ func (w CodeOwner) validate(p *problems, path Path, owners *codeOwners) {
 			"%q is no seat's handle in this company; the seats are: %s",
 			seat, owners.seats())
 	}
-}
-
-// listOrNone is names joined for a message, or "none" where there are none.
-func listOrNone(names []string) string {
-	if len(names) == 0 {
-		return "none"
-	}
-	return strings.Join(names, ", ")
 }
 
 // validate holds one protection rule at path into p, and reports whether it
@@ -645,7 +637,7 @@ func (rule CodeProtection) validate(p *problems, path Path) bool {
 }
 
 // codeWarnings is what is valid about the company's code and still worth
-// knowing, against its chart o: every seat's code access tier that grants
+// knowing, against its own chart: every seat's code access tier that grants
 // nothing ([Company.roleCodeWarnings]), and, where the engine hosts code,
 // every declared repository that
 //
@@ -663,11 +655,16 @@ func (rule CodeProtection) validate(p *problems, path Path) bool {
 // saying so would be false. Unarchiving one that still has no rule brings the
 // warning back with the revision that does it. Its visibility still warns:
 // an archived repository is still read.
-func (c *Company) codeWarnings(o *org.Organization) []Warning {
+//
+// THE CHART IS BUILT HERE, and only for a company that hosts code: no other
+// advisory reads one, and a company with no repositories would otherwise pay
+// a normalised chart at every validate and every apply for nothing.
+func (c *Company) codeWarnings() []Warning {
 	out := c.roleCodeWarnings()
 	if !c.Code.Native {
 		return out
 	}
+	o, _ := c.organization()
 	units := o.Index()
 	for i, r := range c.Code.Repos {
 		if w, ok := unitWithNoLead(units, i, r); ok {

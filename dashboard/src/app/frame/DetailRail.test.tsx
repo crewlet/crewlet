@@ -14,17 +14,17 @@
  * the panel unable to disagree is that neither of them owns the value.
  */
 
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
-import { DetailRail, peekRow } from "./DetailRail.tsx";
+import { DetailRail, peekHref, peekRow } from "./DetailRail.tsx";
 import { PeekRestingWidth, PeekWidthRequest, usePeekWidth } from "./peekWidth.ts";
 import { Router } from "~/app/router.tsx";
 import { CANVAS_PEEK_WIDTH } from "~/app/layout.ts";
 
 beforeEach(() => {
   localStorage.clear();
-  location.hash = "#/agents/roster?peek=seat:ceo";
+  location.hash = "#/company/org/roster?peek=seat:ceo";
 });
 
 afterEach(() => {
@@ -170,5 +170,45 @@ describe("peekRow", () => {
     } as unknown as React.MouseEvent);
     expect(seen).toEqual([]);
     expect(prevented).toBe(false);
+  });
+});
+
+// A KIND WHOSE PEEK IS ITS PAGE (`KindSpec.peekIsPage`) — a person, whose
+// directory row is read beside People and nowhere else. A new tab
+// opened on its "page" was the bare list, which forgot who it was about, and
+// an `Open` over that list could only close the peek. The CONTROL is a seat,
+// whose page is its own. Mutation: build its address from the path alone, or
+// draw Open whatever the page, and a line here goes red.
+describe("a kind whose peek is its page", () => {
+  const person = { kind: "person" as const, id: "p-1" };
+
+  test("its address is the list it is read beside, with its peek open", () => {
+    expect(peekHref(person)).toBe("#/settings/people?peek=person%3Ap-1");
+    expect(peekHref({ kind: "seat", id: "ceo" })).toBe("#/company/org/seats/ceo");
+  });
+
+  test("over that list the rail draws no Open; opened anywhere else, Open leads there", () => {
+    location.hash = "#/settings/people?peek=person:p-1";
+    const { unmount } = render(
+      <Router>
+        <DetailRail ref={person}>
+          <p>a person</p>
+        </DetailRail>
+      </Router>,
+    );
+    expect(screen.queryByRole("link", { name: /^Open/ })).toBeNull();
+    unmount();
+
+    location.hash = "#/company/org?peek=person:p-1";
+    render(
+      <Router>
+        <DetailRail ref={person}>
+          <p>a person</p>
+        </DetailRail>
+      </Router>,
+    );
+    expect(screen.getByRole("link", { name: /^Open/ }).getAttribute("href")).toBe(
+      "#/settings/people?peek=person%3Ap-1",
+    );
   });
 });

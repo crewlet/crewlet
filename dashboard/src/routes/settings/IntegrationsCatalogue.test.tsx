@@ -6,7 +6,7 @@
  * two meet on screen the way they are meant to: every tile carries exactly
  * ONE control, Manage and Learn more are real links, Rotate token opens the
  * settings form saying why, the filter narrows what is shown, and a reader
- * with no operator token sees every form action disabled with its reason
+ * the engine refuses `/setup` sees every form action disabled with its reason
  * rather than removed.
  */
 
@@ -107,7 +107,7 @@ const listing: SetupListing = {
     tool("datadog", { configured: true, enabled: true, satisfied: true, form_complete: true }),
     ...["slack", "mattermost", "atlassian", "jira", "confluence", "github"].map((k) => tool(k)),
   ],
-  public_base_url: { present: true, resolved: true, value: "https://engine.example.com" },
+  external_url: { value: "https://engine.example.com", config_path: "api.external_url" },
 } as unknown as SetupListing;
 
 function stubFetch(setup: { status: number; body: unknown }) {
@@ -125,16 +125,21 @@ function stubFetch(setup: { status: number; body: unknown }) {
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
-  localStorage.setItem("crewlet_api_token", "t");
 });
+
+/** Somebody who may read and connect an integration. */
+const OPERATOR = {
+  login: "ops",
+  owner: "ops",
+  grants: ["admin"],
+};
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
-  localStorage.clear();
 });
 
-function mount(viewer: unknown = []) {
+function mount(viewer: unknown = OPERATOR, kind?: string) {
   const store = new Store();
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
@@ -143,7 +148,7 @@ function mount(viewer: unknown = []) {
     <ClientContext.Provider value={{ store, socket }}>
       <ViewerProvider>
         <Router>
-          <Integrations />
+          <Integrations kind={kind} />
         </Router>
       </ViewerProvider>
     </ClientContext.Provider>,
@@ -180,7 +185,7 @@ test("every tile carries exactly one action, and which one follows the engine", 
   const datadog = await tile("Datadog");
   const manage = controls(datadog);
   expect(manage.map((c) => c.textContent)).toEqual(["Manage"]);
-  expect(manage[0]?.getAttribute("href")).toBe("#/settings/integrations/datadog");
+  expect(manage[0]?.getAttribute("href")).toBe("#/company/integrations/datadog");
   expect(within(datadog).queryByRole("button", { name: /Disconnect/ })).toBeNull();
 
   // AND A TOOL NOBODY CONNECTED is Connect, under the engine's own word.
@@ -217,26 +222,39 @@ test("the filter shows what the company has, or what it could have", async () =>
   mount();
   await tile("GitLab");
   fireEvent.click(screen.getByRole("radio", { name: /Connected/ }));
-  expect(screen.getAllByRole("heading").map((h) => h.textContent)).toEqual(["Datadog", "GitLab"]);
+  // THE CATALOGUE'S TILES: the services built into Crewlet above it are not
+  // third-party tools, and the filter is about those.
+  const catalogue = () =>
+    screen
+      .getAllByRole("heading")
+      .map((h) => h.textContent)
+      .filter((name) => !name?.startsWith("Crewlet "));
+  expect(catalogue()).toEqual(["Datadog", "GitLab"]);
   fireEvent.click(screen.getByRole("radio", { name: /Available/ }));
   await waitFor(() => expect(screen.queryByRole("heading", { name: "GitLab" })).toBeNull());
   expect(screen.getByRole("heading", { name: "Slack" })).toBeTruthy();
 });
 
 // A WRITE CONTROL IS NEVER HIDDEN. `/setup` is guarded in full, so a reader
-// with no operator token has no form to open — and every form action says so
-// on the control itself, while Manage (which writes nothing) still works.
-test("without an operator token every form action is disabled with its reason", async () => {
-  stubFetch({ status: 401, body: { error: "unauthorized" } });
-  mount();
+// the engine refuses has no form to open — and every form action says which
+// grants it takes on the control itself, while Manage (which writes nothing)
+// still works.
+test("a reader refused /setup sees every form action disabled with the grants it takes", async () => {
+  stubFetch({
+    status: 403,
+    body: { error: "unauthorized", reason: "config", grants: ["admin"] },
+  });
+  mount({ login: "dee", owner: "dee", grants: [] });
   const connect = await screen.findByRole("button", { name: "Connect Slack" });
   expect(connect.getAttribute("aria-disabled")).toBe("true");
   expect(connect.getAttribute("aria-describedby")).toBeTruthy();
-  expect(document.body.textContent).toContain("Setting an integration up needs an operator token.");
+  expect(document.body.textContent).toContain(
+    "Setting up integrations needs Admin access. An admin can give it to you.",
+  );
   fireEvent.click(connect);
   expect(screen.queryByRole("dialog")).toBeNull();
   const datadog = await tile("Datadog");
-  expect(controls(datadog)[0]?.getAttribute("href")).toBe("#/settings/integrations/datadog");
+  expect(controls(datadog)[0]?.getAttribute("href")).toBe("#/company/integrations/datadog");
 });
 
 // A MANAGED DOCUMENT HOLDS WHAT WRITES IT (ADR-0030). Connect would add a
@@ -246,15 +264,10 @@ test("without an operator token every form action is disabled with its reason", 
 // keeps when a key leaks.
 test("a managed document holds Connect and keeps Rotate token", async () => {
   stubFetch({ status: 200, body: listing });
-  mount({
-    operator_id: "jane",
-    operator: true,
-    config_writer: false,
-    config_managed_by: ["gitops"],
-  });
+  mount({ ...OPERATOR, config_writer: false, config_managed_by: ["gitops"] });
   // THE PAGE SAYS IT ONCE, and each held control carries the same sentence.
   expect(
-    (await screen.findAllByText(/configuration is managed by gitops — change it there/)).some(
+    (await screen.findAllByText(/Managed by gitops\. Change it there\./)).some(
       (el) => el.closest(".crewlet-callout") !== null,
     ),
   ).toBe(true);
@@ -265,4 +278,19 @@ test("a managed document holds Connect and keeps Rotate token", async () => {
 
   fireEvent.click(await screen.findByRole("button", { name: "Rotate token for GitLab" }));
   expect(await screen.findByRole("dialog", { name: "Rotate the GitLab token" })).toBeTruthy();
+});
+
+// ONE TOOL'S PAGE DRAWS ITS CARD ONCE. Its card and its pass history were
+// siblings sharing the tool's key, and React reconciles two such children as
+// one: every poll appended another copy of the card. The duplicate-key
+// warning is the cause, so it is held beside the count.
+test("one tool's page draws its card once, its siblings keyed apart", async () => {
+  const warned = vi.spyOn(console, "error").mockImplementation(() => {});
+  stubFetch({ status: 200, body: listing });
+  mount(OPERATOR, "datadog");
+  await screen.findByRole("button", { name: /^Disconnect/ });
+  await new Promise((r) => setTimeout(r, 50));
+  expect(screen.getAllByRole("button", { name: /^Disconnect/ }).length).toBe(1);
+  expect(warned.mock.calls.some((c) => String(c[0]).includes("same key"))).toBe(false);
+  warned.mockRestore();
 });

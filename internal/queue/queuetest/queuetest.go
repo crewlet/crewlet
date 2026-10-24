@@ -141,13 +141,17 @@
 //     WHOLE matrix rather than probing the verb you suspect — the suspected one
 //     is chosen from inside the blind spot.
 //
-// One lifecycle this suite does not visit at all: the BACKEND'S REACHABILITY.
-// Every case here runs against a healthy broker, so nothing certifies what a
-// verb answers when the store is unreachable — and "nil, false, or an empty
-// slice with no error" all read as facts about a subscription that a call which
-// never reached the broker does not have. Closing it needs fault injection the
-// contract has no hook for, so it is named as a known gap rather than left as
-// an assumption.
+// One lifecycle this suite visits only through a capability: the BACKEND'S
+// REACHABILITY. Every other case runs against a healthy broker, and what a verb
+// answers when the broker is unreachable is a contract clause of its own —
+// "nil, false, or an empty slice with no error" all read as facts about a
+// subscription that a call which never reached the broker does not have, and
+// an error with no mark read above the queue as this node's own fault. The
+// contract has no hook to inject that fault, so [Capabilities.BrokerDown] is
+// one, and runReachability holds every verb to queue.ErrUnavailable through it.
+// What it still cannot visit is a broker that comes BACK: the real backend's
+// harness can only take its server away, so recovery is a known gap rather
+// than an assumption.
 //
 // One limit, and it binds the two entries above that recommend a guard rather
 // than excusing them: a guard that names its own assumption DIAGNOSES a race,
@@ -236,7 +240,8 @@ type Capabilities struct {
 	// correct baseline, the operation writes, the second read has not caught up,
 	// before equals after, and the case passes. Verified by running a lagging
 	// view together with a real corruption — EnsureSubscription wiping the mail
-	// it must keep — and ensure_subscription_on_an_existing_one_keeps_its_mail
+	// it must keep — and
+	// ensure_subscription_on_an_existing_one_keeps_its_mail_and_proposes_nothing
 	// reported PASS with the wipe in place.
 	//
 	// So the hazard is worse than "the group goes quiet". The group gets LOUD
@@ -323,6 +328,50 @@ type Capabilities struct {
 	// what let one sit unnoticed long enough to strand a seat.
 	Quiescing func(q queue.EventQueue, topic, group string) bool
 
+	// ConsumerProposals reports how many consumer creates THIS client has
+	// asked the broker for since it was built — the cost side of
+	// EnsureSubscription, which the contract deliberately says nothing
+	// about.
+	//
+	// It exists because "ensure" has two halves and only one of them is
+	// observable through the contract. The contract's half is that
+	// re-ensuring keeps the mail. The other half is that re-ensuring must
+	// not ASK: on the broker this engine ships a consumer create is a
+	// proposal through the metadata Raft group whether or not it turns
+	// out to be a no-op, so a node ensuring a company's mailboxes at
+	// every boot and every config apply replicated one write per seat to
+	// be told what it had just read. Nothing in the contract can see that,
+	// and a backend that quietly went back to proposing would pass every
+	// other case here.
+	//
+	// SCOPED TO THE CLIENT UNDER TEST, never to an inspection client: the
+	// number describes who did the asking, and a capability that read it
+	// off an admin connection would report zero for ever.
+	//
+	// Deliberately NOT part of [subscriptionState]: that struct is the
+	// state of one (topic, group) pair and this is a client-wide counter,
+	// so an assertUntouched over it would be comparing a number to itself
+	// on a case that never touched a consumer. The requirement written
+	// there — that a new observable of a SUBSCRIPTION is added to it —
+	// still stands and this is not one.
+	ConsumerProposals func(q queue.EventQueue) int
+
+	// BrokerDown takes away the broker q is a client of, for the rest of the
+	// case, as a broker whose server stopped is taken away: q is NOT
+	// stopped, and as far as it knows it is still live. It returns once q
+	// has noticed, so the next verb sent meets the outage rather than racing
+	// it.
+	//
+	// THE ONLY FAULT INJECTION IN THE SUITE, and it exists for
+	// runReachability: whether a verb that could not reach its broker says
+	// so with queue.ErrUnavailable — a condition every caller retries —
+	// rather than with an unmarked error a caller above the queue reads as
+	// this node's own fault, or with queue.ErrNotLive, which a seat release
+	// reads as proof the mailbox is torn down. One-way, because the
+	// shipped backend's harness can only stop a server; see the package
+	// doc.
+	BrokerDown func(t *testing.T, q queue.EventQueue)
+
 	// History reports every event published through this backend, for the
 	// one assertion that has to distinguish "not delivered" from "not
 	// accepted".
@@ -349,7 +398,7 @@ type Capabilities struct {
 	// streams, so Start is a no-op — but the CONSISTENCY is not optional.
 	// Whichever way this flag points,
 	// an_unstarted_queue_answers_the_same_way_for_every_verb sends all
-	// fourteen and refuses a backend that answers some one way and some the
+	// sixteen and refuses a backend that answers some one way and some the
 	// other. After Stop there is no choice — see
 	// a_stopped_queue_refuses_every_verb.
 	//
@@ -425,6 +474,9 @@ func RunWith(t *testing.T, newQueue Factory, caps Capabilities) {
 	// The ephemeral pair, and the only verbs here that must leave
 	// nothing behind. See runScatter.
 	group("Scatter", s.runScatter)
+	// The ephemeral fan-out presence travels on, which must leave nothing
+	// behind either. See runBroadcast.
+	group("Broadcast", s.runBroadcast)
 	group("Batch", s.runBatch)
 	// Not a feature — the reason the engine carries no re-entrancy
 	// guard. See runReentrancy.
@@ -436,6 +488,8 @@ func RunWith(t *testing.T, newQueue Factory, caps Capabilities) {
 	// A "no" has two halves: the answer and the write that must not
 	// happen. See runNegativePaths.
 	group("NegativePaths", s.runNegativePaths)
+	// What a verb answers when its broker is gone. See runReachability.
+	group("Reachability", s.runReachability)
 	// Named for what it is: shared contract functions, not backend
 	// behaviour. See runContractPolicy for the scope this group does and
 	// does not cover.
@@ -771,6 +825,10 @@ const (
 	// verdictUnknown — something arrived under an opaque condition, so
 	// whether more was still in flight cannot be determined.
 	verdictUnknown
+	// verdictUnmet — a wait that records no deliveries (on backend state,
+	// on a signal) and whose condition never held, so it concludes nothing
+	// about them.
+	verdictUnmet
 )
 
 // timedOut ends a case that overran the settle budget, naming only what the
@@ -814,6 +872,11 @@ func timedOut(t *testing.T, what string, v deliveryVerdict, observed any) {
 			"helper cannot decompose\n"+
 			"\tWhether more was still in flight is unknown, so treat timing and behaviour "+
 			"as both live. %s", settleFor, what, observed, budgetNote)
+	case verdictUnmet:
+		t.Fatalf("timed out after %s waiting for %s; the condition never held\n"+
+			"\tThis wait records no deliveries, so it has none to report and cannot tell "+
+			"a backend slower than this budget from a wrong one: treat timing and "+
+			"behaviour as both live. %s", settleFor, what, budgetNote)
 	default:
 		seen := deliveriesObserved.Load()
 		evidence := fmt.Sprintf("This backend delivered %d events elsewhere in this run "+
@@ -974,7 +1037,9 @@ func awaitSignal(t *testing.T, ch <-chan struct{}, what string, rescue func()) {
 	case <-ch:
 	case <-time.After(settleFor):
 		rescue()
-		timedOut(t, what, verdictNothing, nil)
+		// The case closes some of these channels itself, so a signal that
+		// never came says nothing about what was delivered.
+		timedOut(t, what, verdictUnmet, nil)
 	}
 }
 
@@ -993,8 +1058,12 @@ func awaitState(t *testing.T, what string, cond func() bool) {
 		if time.Now().After(deadline) {
 			// State the suite polls has no "saw something" half — the
 			// condition is simply still false — so this always reports the
-			// ambiguous case, which it genuinely is.
-			timedOut(t, what, verdictNothing, nil)
+			// ambiguous case, which it genuinely is. Not verdictNothing,
+			// whose "NOTHING was delivered" this poll cannot know: most
+			// cases wait here on state their handlers were already handed
+			// events to move, and that sentence sent the reader to the
+			// case's subject and setup.
+			timedOut(t, what, verdictUnmet, nil)
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
@@ -1208,6 +1277,21 @@ func (s *suite) optionalBacklog(t *testing.T) func(q queue.EventQueue, topic, gr
 	return func(q queue.EventQueue, topic, group string) []*events.Event {
 		return s.caps.Backlog(t, q, topic, group)
 	}
+}
+
+// optionalProposals is the consumer-proposal counter, or nil when the backend
+// does not keep one.
+//
+// OPTIONAL rather than a skip, deliberately: the case that reads it also
+// certifies that re-ensuring a mailbox keeps the mail, which is the contract
+// itself and must not be skipped over a missing observable. A backend that
+// cannot count proposals still has to answer the half that is written down.
+func (s *suite) optionalProposals(t *testing.T) func(q queue.EventQueue) int {
+	t.Helper()
+	if s.caps.ConsumerProposals == nil {
+		return nil
+	}
+	return s.caps.ConsumerProposals
 }
 
 func (s *suite) needDeadLetters(t *testing.T) func(q queue.EventQueue, topic, group string) []*events.Event {

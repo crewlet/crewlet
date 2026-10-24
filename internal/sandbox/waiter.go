@@ -149,9 +149,9 @@ type WaiterOptions struct {
 //
 // THIS POLL IS THE COMPLETION SIGNAL. A periodic tick reconnects to each still-
 // running box by id and asks the runner whether its background command has
-// finished — covering a clean finish, a finished-but-never-exited agent, a
-// crashed process, and a box that vanished, so a detached run never hangs
-// forever. There is deliberately no push callback from inside the box: only the
+// finished — covering a clean finish (its done marker), a job whose process
+// group died before it could write one, and a box that vanished, so a
+// detached run never hangs forever. There is deliberately no push callback from inside the box: only the
 // poll can see a job that died before reaching its last step, and the tick
 // doubles as the box keepalive, so it must run at this cadence regardless. A
 // push signal could only shave less than one interval off jobs that run for
@@ -941,11 +941,12 @@ func (w *Waiter) publishCompletion(ctx context.Context, run PendingRun) error {
 	if err := w.queue.Publish(ctx, topics.Event(completion.EventType()), announcement); err != nil {
 		return err
 	}
-	control := topics.AgentControl(run.AgentHandle)
+	control := controlSubject(run.AgentID)
 	if control == "" {
-		// No handle means no routable seat. The announcement still went out,
-		// so the failure is visible rather than silent.
-		log.WarnContext(ctx, "sandbox_completion_unroutable", "turn_id", run.TurnID)
+		// No seat id means no routable seat. The announcement still went
+		// out, so the failure is visible rather than silent.
+		log.WarnContext(ctx, "sandbox_completion_unroutable", "turn_id", run.TurnID,
+			"agent", run.AgentHandle)
 		return nil
 	}
 	return w.queue.Publish(ctx, control, announcement)

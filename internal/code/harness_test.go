@@ -31,17 +31,48 @@ var harnessAt = time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)
 
 // asker is who every read a case makes asks as, where the case is not about
 // who asks: a person, bound to their human seat, whom no chart and no
-// visibility narrows (ADR-0040) — so no case's own check of the rows is
+// visibility narrows (ADR-0054) — so no case's own check of the rows is
 // filtered by the grant it is not about.
 var asker = code.Principal{Kind: code.PrincipalOperator, OperatorID: "founder-token", Seat: "founder"}
+
+// testRing is the one keyring every node these cases build signs its records
+// and opens its peers' under: one fleet, one keyring, as every state log's
+// records are signed (ADR-0031). The key is a fixture — what the cases are
+// about is what the domain writes, and the signature's own rules are
+// certified in internal/statelog.
+var testRing = statelog.OneKey("k1", "the code cases' fleet key material")
+
+// testSigner is the code log's signer under [testRing].
+func testSigner(t testing.TB) *statelog.Signer {
+	t.Helper()
+	signer, err := statelog.NewSigner(code.Domain{}.Name(), testRing)
+	if err != nil {
+		t.Fatalf("build the record signer: %v", err)
+	}
+	return signer
+}
+
+// testVerifier opens what [testSigner] sealed.
+func testVerifier(t testing.TB) *statelog.Verifier {
+	t.Helper()
+	verifier, err := statelog.NewVerifier(code.Domain{}.Name(), testRing)
+	if err != nil {
+		t.Fatalf("build the record verifier: %v", err)
+	}
+	return verifier
+}
 
 // node is one data node on the code log: its own estate, applier, publisher,
 // lifecycle store and reader.
 type node struct {
-	t       testing.TB
-	id      string
-	db      store.ReplicatedHandle
-	log     *js.DomainLog
+	t   testing.TB
+	id  string
+	db  store.ReplicatedHandle
+	log *js.DomainLog
+	// records is the log read back as BODIES, each signed frame opened under
+	// [testRing] — what the framework's loop decodes, and what a case that
+	// reads a record off the log decodes too: the raw log answers frames.
+	records statelog.VerifiedLog
 	applier *code.Applier
 	pub     *statelog.Publisher
 	store   *code.Store
@@ -87,7 +118,7 @@ func openLog(t testing.TB) *js.DomainLog {
 	// reserve the shipped one.
 	if err := q.EnsureDomainStream(t.Context(), js.DomainStream{
 		Name: spec.Name, Subjects: spec.Subjects, MaxBytes: 64 << 20,
-		Duplicates: spec.Duplicates,
+		MaxMessageBytes: spec.MaxAppendBytes(), Duplicates: spec.Duplicates,
 	}); err != nil {
 		t.Fatalf("provision the log: %v", err)
 	}
@@ -136,7 +167,7 @@ func nodeOn(t testing.TB, log *js.DomainLog, id string) *node {
 		return statelog.LogEnds{First: first, Last: last}, err
 	}
 	fence.Committed = waiter.Committed
-	reserve, err := statelog.NewReserve(code.Domain{}.Stream().Name,
+	reserve, err := statelog.NewReserve(code.Domain{}.Stream(),
 		func(ctx context.Context) (statelog.Usage, error) {
 			stats, err := log.Stats(ctx)
 			return statelog.Usage{Bytes: stats.Bytes, MaxBytes: stats.MaxBytes}, err
@@ -144,8 +175,10 @@ func nodeOn(t testing.TB, log *js.DomainLog, id string) *node {
 	if err != nil {
 		t.Fatalf("build the gate reserve: %v", err)
 	}
+	records := statelog.VerifiedLog{Log: log, Verifier: testVerifier(t)}
 	pub, err := statelog.NewPublisher(statelog.Deps{
-		Domain: code.Domain{}, Spec: code.Domain{}.Stream(), Log: log, Records: log,
+		Domain: code.Domain{}, Spec: code.Domain{}.Stream(), Log: log,
+		Signer: testSigner(t), Records: records,
 		Rows: rows, Fence: fence, Gates: code.NewGates(db.Reader()),
 		Waiter: waiter, Voids: waiter, Identity: waiter, NodeID: id,
 		Admission: reserve, Generation: func() uint32 { return 0 },
@@ -168,7 +201,7 @@ func nodeOn(t testing.TB, log *js.DomainLog, id string) *node {
 		t.Fatalf("build the read authority: %v", err)
 	}
 	n := &node{
-		t: t, id: id, db: db, log: log, applier: code.NewApplier(), pub: pub,
+		t: t, id: id, db: db, log: log, records: records, applier: code.NewApplier(), pub: pub,
 		store: lifecycle, waiter: waiter,
 	}
 	reader, err := code.NewReader(code.ReaderOptions{Log: authority,
@@ -213,7 +246,7 @@ func (n *node) drain() {
 	}
 	spec := code.Domain{}.Stream()
 	for seq := n.consumed + 1; seq <= last; seq++ {
-		_, payload, storedAt, ok, err := n.log.At(ctx, seq)
+		_, payload, storedAt, ok, err := n.records.At(ctx, seq)
 		if err != nil {
 			n.t.Errorf("read record %d: %v", seq, err)
 			return

@@ -38,6 +38,9 @@ func TestTheCodeDomainsDeclaration(t *testing.T) {
 		t.Errorf("the stream declares %d bytes and a %v window, and the domain's constants "+
 			"are %d and %v", spec.MaxBytes, spec.Duplicates, code.CodeLogMaxBytes,
 			code.CodeLogDuplicates)
+	case spec.MaxRecordBytes != code.CodeLogMaxRecordBytes:
+		t.Errorf("the stream declares a largest record of %d bytes, and the domain's "+
+			"constant is %d", spec.MaxRecordBytes, code.CodeLogMaxRecordBytes)
 	case d.RecordVersion() != code.RecordVersion:
 		t.Errorf("the domain reads version %d and the record format is %d",
 			d.RecordVersion(), code.RecordVersion)
@@ -50,6 +53,22 @@ func TestTheCodeDomainsDeclaration(t *testing.T) {
 	case d.FeedGroup() != "":
 		t.Errorf("the code log declares the feed group %q, which no consumer reads in "+
 			"this build — the trim would wait on it for ever", d.FeedGroup())
+	}
+	// EIGHT MAXIMAL RECORDS ARE OUT AT ONCE ON ONE NODE: the log's reserve
+	// admits one append of its declared largest record in flight
+	// (statelog.StreamSpec.MaxAppendBytes), counting each append at its payload
+	// and what a stored record carries beside it — so the committer's own
+	// bound is an eighth of that, less the overhead, or a committer serving
+	// many repositories waits behind another's large record.
+	overhead := spec.MaxAppendBytes() - spec.MaxRecordBytes
+	if inFlight := 8 * (code.MaxRecordBytes + overhead); inFlight > spec.MaxAppendBytes() {
+		t.Errorf("eight records of MaxRecordBytes (%d) count %d bytes against the node's "+
+			"appends in flight on the code log, which admit %d", code.MaxRecordBytes,
+			inFlight, spec.MaxAppendBytes())
+	}
+	if code.MaxRecordBytes > spec.MaxRecordBytes {
+		t.Errorf("the committer forms records of up to %d bytes, past the %d the log declares",
+			code.MaxRecordBytes, spec.MaxRecordBytes)
 	}
 	want := []string{string(code.KindName), string(code.KindRepo), string(code.KindEviction),
 		string(code.KindGeneration), string(code.KindCompany)}

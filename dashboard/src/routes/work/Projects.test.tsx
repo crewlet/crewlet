@@ -25,6 +25,7 @@ import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import type { QueryName, WorkProjectRow } from "~/protocol/index.ts";
 import { targetLabel } from "~/lib/work.ts";
 import { withDerived } from "~/test/org.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
@@ -48,7 +49,7 @@ function serving(
     return answers[what as QueryName] ?? {};
   });
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue(
     withDerived({
       name: "Acme",
@@ -74,7 +75,9 @@ const zero = { active: 0, archived: 0 };
 const mount = () =>
   render(
     <Router>
-      <Projects />
+      <ViewerProvider>
+        <Projects />
+      </ViewerProvider>
     </Router>,
   );
 
@@ -135,7 +138,7 @@ test("the project count is the answer's total, and a short page says so", async 
   await waitFor(() => expect(screen.getByText(/2 of 340 projects/)).toBeTruthy());
   // AND WHAT THE OTHER NUMBERS COVER, which the count no longer implies: the
   // sums are over the rows that arrived.
-  expect(screen.getByText(/in the order asked for/)).toBeTruthy();
+  expect(screen.getByText("Counts cover the 2 listed of 340.")).toBeTruthy();
   cleanup();
 
   // A PAGE HOLDING EVERYTHING SAYS NOTHING EXTRA: "2 of 2" is one number
@@ -149,7 +152,7 @@ test("the project count is the answer's total, and a short page says so", async 
   });
   mount();
   await waitFor(() => expect(screen.getByText(/2 projects/)).toBeTruthy());
-  expect(screen.queryByText(/in the order asked for/)).toBeNull();
+  expect(screen.queryByText(/Counts cover the/)).toBeNull();
 });
 
 // A ROW OPENS THE PEEK, which is the question a directory is read with — "is
@@ -157,7 +160,7 @@ test("the project count is the answer's total, and a short page says so", async 
 // the row's own anchor straight afterwards: the rail was opened and destroyed
 // by one click and the reader landed on the project's page every time.
 test("a plain click peeks beside the list rather than leaving it", async () => {
-  location.hash = "#/work/projects";
+  location.hash = "#/work";
   serving({ work_projects: { projects: [project()], total: 1, complete: true } });
   const { container } = mount();
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
@@ -172,7 +175,7 @@ test("a plain click peeks beside the list rather than leaving it", async () => {
   link?.dispatchEvent(plain);
   expect(plain.defaultPrevented).toBe(true);
   expect(peeked()).toBe("project:ENG");
-  expect(location.hash.split("?")[0]).toBe("#/work/projects");
+  expect(location.hash.split("?")[0]).toBe("#/work");
 
   // AND A MODIFIED CLICK FALLS THROUGH to the browser, or the anchor is a lie:
   // ⌘-click, middle-click and "copy link address" are what it is there for.
@@ -273,7 +276,7 @@ test("the unit column is off until cols asks for it", async () => {
   // `cols=` CARRIES THE ORDER AS WELL AS THE SELECTION, so an address that
   // wants Unit names the whole set it wants.
   location.hash =
-    "#/work/projects?cols=key,name,lead,unit,todo,active,done,closed,progress,last_change,target";
+    "#/work?cols=key,name,lead,unit,todo,active,done,closed,progress,last_change,target";
   serving({ work_projects: { projects: [project()], total: 1, complete: true } });
   const withUnit = mount();
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
@@ -363,7 +366,7 @@ test("a unit the chart no longer has is marked rather than printed plainly", asy
   // what the CELL claims, and the company that turns the column on is exactly
   // the one whose units and project names can disagree.
   location.hash =
-    "#/work/projects?cols=key,name,lead,unit,todo,active,done,closed,progress,last_change,target";
+    "#/work?cols=key,name,lead,unit,todo,active,done,closed,progress,last_change,target";
   serving({
     work_projects: {
       projects: [project({ unit: { key: "gone", resolved: false } })],
@@ -522,10 +525,10 @@ test("the progress column carries one legend, naming the three parts", async () 
 // retired dozens.
 test("each segment asks the engine for its own archival set", async () => {
   for (const [hash, want] of [
-    ["#/work/projects", "false"],
-    ["#/work/projects?shown=active", "false"],
-    ["#/work/projects?shown=archived", "only"],
-    ["#/work/projects?shown=all", "true"],
+    ["#/work", "false"],
+    ["#/work?shown=active", "false"],
+    ["#/work?shown=archived", "only"],
+    ["#/work?shown=all", "true"],
   ] as const) {
     location.hash = hash;
     const query = serving({
@@ -543,7 +546,7 @@ test("each segment asks the engine for its own archival set", async () => {
 // selected would be a second, invisible narrowing, and on the Archived segment
 // it was the one that emptied the screen.
 test("the archived segment draws every row the engine answered with", async () => {
-  location.hash = "#/work/projects?shown=archived";
+  location.hash = "#/work?shown=archived";
   serving({
     work_projects: {
       projects: [
@@ -570,7 +573,7 @@ test("the archived segment draws every row the engine answered with", async () =
 // orders the rows that survived the key order, so `-todo` would mean "the most
 // waiting work among the projects whose keys sort first".
 test("the ordering is sent to the engine and not applied to the page", async () => {
-  location.hash = "#/work/projects";
+  location.hash = "#/work";
   const query = serving({
     work_projects: { projects: [project()], total: 1, complete: true },
   });
@@ -580,7 +583,7 @@ test("the ordering is sent to the engine and not applied to the page", async () 
   expect(asked(query).sort).toBe("-todo");
   cleanup();
 
-  location.hash = "#/work/projects?sort=last_change";
+  location.hash = "#/work?sort=last_change";
   const asc = serving({
     work_projects: { projects: [project()], total: 1, complete: true },
   });
@@ -593,7 +596,7 @@ test("the ordering is sent to the engine and not applied to the page", async () 
   // URL outlives a build and is hand-editable; sent, it would meet a
   // `bad_params` refusal, which the frame draws as the screen being at fault
   // and offers no retry for — a whole directory lost to one stale query key.
-  location.hash = "#/work/projects?sort=-lead";
+  location.hash = "#/work?sort=-lead";
   const stale = serving({
     work_projects: { projects: [project()], total: 1, complete: true },
   });
@@ -607,7 +610,7 @@ test("the ordering is sent to the engine and not applied to the page", async () 
 // column — which on a truncated answer is the same page-ordering bug one layer
 // down.
 test("the grid draws the engine's order rather than re-sorting it", async () => {
-  location.hash = "#/work/projects?sort=-todo";
+  location.hash = "#/work?sort=-todo";
   serving({
     work_projects: {
       // THE ENGINE'S ORDER, deliberately NOT what `-todo` would produce
@@ -650,7 +653,7 @@ test("the sortable heads are exactly the orderings the engine takes", async () =
   // an ordering nobody can reach — which is the opposite of true, since the
   // address that turns the column on is the address that sorts by it.
   location.hash =
-    "#/work/projects?cols=key,name,lead,unit,todo,active,done,closed,progress,last_change,target";
+    "#/work?cols=key,name,lead,unit,todo,active,done,closed,progress,last_change,target";
   serving({ work_projects: { projects: [project()], total: 1, complete: true } });
   const { container } = mount();
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
@@ -684,7 +687,9 @@ test("the sortable heads are exactly the orderings the engine takes", async () =
 test("a refused listing is said to be a refusal", async () => {
   serving({}, { work_projects: "unavailable" });
   mount();
-  await waitFor(() => expect(screen.getByText(/This is not an empty company/)).toBeTruthy());
+  await waitFor(() =>
+    expect(screen.getByText(/Still catching up\. This screen retries on its own\./)).toBeTruthy(),
+  );
   expect(screen.queryByText("No work has been filed yet")).toBeNull();
 });
 
@@ -705,37 +710,40 @@ test("a refused listing is said to be a refusal", async () => {
 // is the COMPANY having nothing, where an empty answer is only ever the
 // SEGMENT having nothing. Gated on All, this greeted a brand-new company with
 // a grid's empty state on the one segment it actually opens on.
-test("a company with no projects is told what a project is and where one comes from", async () => {
+test("a company with no projects is told where one comes from", async () => {
   for (const hash of [
-    "#/work/projects",
-    "#/work/projects?shown=active",
-    "#/work/projects?shown=archived",
-    "#/work/projects?shown=all",
+    "#/work",
+    "#/work?shown=active",
+    "#/work?shown=archived",
+    "#/work?shown=all",
   ]) {
     location.hash = hash;
     serving({
       work_projects: { projects: [], total: 0, census: zero, complete: true },
     });
     mount();
-    await waitFor(() => expect(screen.getByText("No project has been created yet")).toBeTruthy());
-    expect(screen.getByText(/declares its `project` key/)).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("No projects yet")).toBeTruthy());
+    expect(screen.getByText("Create one with New project.")).toBeTruthy();
     expect(screen.queryByText("No work has been filed yet")).toBeNull();
     // AND IT IS SAID ONCE: the lede above the grid is what the page IS, not
     // a second copy of where a project comes from.
-    expect(screen.getAllByText(/declares its `project` key/)).toHaveLength(1);
+    expect(screen.getAllByText(/Create one with New project/)).toHaveLength(1);
+    // NEW PROJECT IS ITS FIRST ACTION, as it ends the page's bar.
+    expect(screen.getAllByRole("button", { name: "New project" })).toHaveLength(2);
     cleanup();
   }
 });
 
 // AN EMPTY ACTIVE SEGMENT ON A COMPANY THAT HAS ARCHIVED EVERYTHING SAYS SO,
-// WITH THE COUNT AND A WAY THERE.
+// WITH THE COUNT AND A WAY THERE. The count is on the Archived option the
+// link goes to, so the sentence does not repeat it.
 //
 // This is what the census bought. The page could not tell "no projects" from
 // "every project archived", so it hedged — one sentence naming both, sending
 // the reader to go and look. A hedge is what a screen writes when it is
 // missing a number; it has the number now.
 test("an empty active segment says how many are archived and links to them", async () => {
-  location.hash = "#/work/projects?shown=active&sort=name";
+  location.hash = "#/work?shown=active&sort=name";
   serving({
     work_projects: {
       projects: [],
@@ -747,44 +755,44 @@ test("an empty active segment says how many are archived and links to them", asy
   mount();
   await waitFor(() => expect(screen.getByText("No project is active")).toBeTruthy());
   // NOT the company-has-nothing page: this company has four.
-  expect(screen.queryByText("No project has been created yet")).toBeNull();
-  expect(screen.getByText(/All 4 of the company’s projects have been archived/)).toBeTruthy();
+  expect(screen.queryByText("No projects yet")).toBeNull();
+  expect(screen.getByRole("radio", { name: /Archived\s*4/ })).toBeTruthy();
 
   // A REAL LINK, so it is middle-clickable and copyable like every other way
   // into a segment — and THE REST OF THE QUERY SURVIVES, so a reader who
   // sorted does not lose it to a sentence that was only ever about the set.
-  const link = screen.getByText("see them under Archived") as HTMLAnchorElement;
+  const link = screen.getByText("See them under Archived") as HTMLAnchorElement;
   expect(link.tagName).toBe("A");
   const query = new URLSearchParams(link.getAttribute("href")!.split("?")[1]);
   expect(query.get("shown")).toBe("archived");
   expect(query.get("sort")).toBe("name");
 });
 
-// AND ONE ARCHIVED PROJECT IS NOT "ALL 1", because a count in a sentence is
-// prose and prose has a singular.
+// AND ONE ARCHIVED PROJECT IS NOT "ALL 1". The count is the option's figure
+// rather than prose, so the sentence has no number to get wrong.
 test("a company with one archived project is not told about all 1 of them", async () => {
-  location.hash = "#/work/projects?shown=active";
+  location.hash = "#/work?shown=active";
   serving({
     work_projects: { projects: [], total: 0, census: { active: 0, archived: 1 }, complete: true },
   });
   mount();
-  await waitFor(() =>
-    expect(screen.getByText(/The company’s one project has been archived/)).toBeTruthy(),
-  );
+  await waitFor(() => expect(screen.getByText("No project is active")).toBeTruthy());
+  expect(screen.getByRole("radio", { name: /Archived\s*1/ })).toBeTruthy();
+  expect(screen.queryByText(/All 1/)).toBeNull();
 });
 
 // AND AN EMPTY ARCHIVED SEGMENT IS ITS OWN SENTENCE, which is only reachable
 // now that the engine answers the archived set rather than the page this
 // client filtered.
 test("an empty archived segment says nothing is archived", async () => {
-  location.hash = "#/work/projects?shown=archived";
+  location.hash = "#/work?shown=archived";
   serving({
     work_projects: { projects: [], total: 0, census: { active: 3, archived: 0 }, complete: true },
   });
   mount();
   await waitFor(() => expect(screen.getByText("No project is archived")).toBeTruthy());
   // NOT the company-has-nothing page: three are active.
-  expect(screen.queryByText("No project has been created yet")).toBeNull();
+  expect(screen.queryByText("No projects yet")).toBeNull();
 });
 
 // THE SEGMENTS CARRY THE CENSUS, so the switch says what is behind each option
@@ -798,16 +806,18 @@ test("the segments carry the census counts", async () => {
       complete: true,
     },
   });
-  const { container } = mount();
+  mount();
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
-  const options = [...container.querySelectorAll(".segmented button")];
+  const options = within(screen.getByRole("radiogroup", { name: "Which projects" })).getAllByRole(
+    "radio",
+  );
   expect(options.map((o) => o.textContent)).toEqual(["Active1", "Archived12", "All"]);
   // THE COUNT IS INSIDE THE RADIO, so the option announces "Archived 12"
   // rather than leaving the figure as loose text beside a control.
-  expect(options[1]?.querySelector(".count-chip")?.textContent).toBe("12");
+  expect(options[1]?.querySelector(".crewlet-count")?.textContent).toBe("12");
   // AND `All` CARRIES NONE: its count is the two beside it added up, which is
   // arithmetic on screen rather than a fact.
-  expect(options[2]?.querySelector(".count-chip")).toBeNull();
+  expect(options[2]?.querySelector(".crewlet-count")).toBeNull();
 });
 
 // AND NO COUNTS BEFORE THE ENGINE HAS ANSWERED. Three zeroes on a control
@@ -817,7 +827,7 @@ test("the segments carry no counts until the census arrives", async () => {
   serving({ work_projects: { projects: [project()], total: 1, complete: true } });
   const { container } = mount();
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
-  expect(container.querySelectorAll(".segmented .count-chip")).toHaveLength(0);
+  expect(container.querySelectorAll('[role="radiogroup"] .crewlet-count')).toHaveLength(0);
 });
 
 // THE LEAD'S TARGET IS A DAY, drawn as that day — and a project with none says

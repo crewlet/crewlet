@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
 // answer is one request's status and its JSON error code, retried while the
@@ -67,8 +69,8 @@ func TestANodeWithAPublicListenerBindsTwoSockets(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	e := testEngine(t)
-	boot := bootstrapFor(t, freePort(t))
-	boot.API.Public = config.APIPublic{Host: "127.0.0.1", Port: freePort(t)}
+	boot := bootstrapFor(t, reservePort(t))
+	boot.API.Public = config.APIPublic{Host: "127.0.0.1", Port: reservePort(t)}
 	surface, err := serveNodeLogged(t, boot, e, log)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
@@ -107,9 +109,129 @@ func TestANodeWithAPublicListenerBindsTwoSockets(t *testing.T) {
 	}
 }
 
+// AN ARTIFACT LISTENER IS A THIRD SOCKET, serving the artifact origin and
+// nothing the API serves: a probe there is an empty 404, not the API's JSON
+// one, and its stop closes it with the others. The routes themselves are
+// internal/artifactserve's to hold; what this holds is that a running node
+// binds the origin's handler at all, on the address the file names, and says
+// where and in which mode.
+func TestANodeWithAnArtifactListenerBindsAThirdSocket(t *testing.T) {
+	t.Parallel()
+	var logged bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	e := testEngine(t)
+	boot := bootstrapFor(t, reservePort(t))
+	port := reservePort(t)
+	boot.API.Artifacts = config.APIArtifacts{Host: "127.0.0.1", Port: port,
+		ExternalURL: "http://127.0.0.1:" + strconv.Itoa(port)}
+	surface, err := serveNodeLogged(t, boot, e, log)
+	if err != nil {
+		t.Fatalf("serveAPI: %v", err)
+	}
+	if surface.artifacts == nil {
+		surface.stop(context.Background(), logging.Get("test"))
+		t.Fatal("api.artifacts is set and the node bound no artifact listener")
+	}
+	origin := "http://127.0.0.1:" + strconv.Itoa(port)
+	if status, code := answer(t, http.MethodGet, origin+"/health"); status != http.StatusNotFound || code != "" {
+		t.Errorf("GET /health on the artifact listener = %d %q, want an empty 404", status, code)
+	}
+	if status, _ := answer(t, http.MethodGet, "http://127.0.0.1:"+strconv.Itoa(boot.API.Port)+"/health"); status != http.StatusOK {
+		t.Errorf("GET /health on api.port = %d, want 200", status)
+	}
+	if !strings.Contains(logged.String(), "msg=api_artifacts_listening addr=127.0.0.1:"+strconv.Itoa(port)) ||
+		!strings.Contains(logged.String(), "mode=shared") {
+		t.Errorf("the node did not say where and how it serves artifacts:\n%s", logged.String())
+	}
+	surface.stop(context.Background(), logging.Get("test"))
+	if bound(port) {
+		t.Error("api.artifacts.port is still listening after the node stopped")
+	}
+}
+
+// AN ARTIFACT BIND THAT FAILS TAKES THE NODE DOWN, for the public listener's
+// reason: a dashboard whose every artifact frame finds nothing listening would
+// look healthy to every probe.
+func TestAnUnbindableArtifactPortFailsTheNode(t *testing.T) {
+	t.Parallel()
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = taken.Close() })
+	e := testEngine(t)
+	boot := bootstrapFor(t, reservePort(t))
+	port := taken.Addr().(*net.TCPAddr).Port
+	boot.API.Artifacts = config.APIArtifacts{Host: "127.0.0.1", Port: port,
+		ExternalURL: "http://127.0.0.1:" + strconv.Itoa(port)}
+	surface, err := serveNode(t, boot, e)
+	if err == nil {
+		surface.stop(context.Background(), logging.Get("test"))
+		t.Fatal("binding an artifact port already in use reported success")
+	}
+	if bound(boot.API.Port) {
+		t.Error("api.port is still listening although the node failed to start")
+	}
+}
+
+// THE ARTIFACT ORIGIN IS BOUND BEFORE THE BOOT, with api.port, by the rule the
+// origin is later served by ([api.ArtifactsListener]): an ingress node binds it
+// and answers it as a starting origin answers (an empty 503 for a route it will
+// serve, never the boot surface's JSON) and says where in `api_bound`; a node
+// without ingress binds nothing there, whatever its file sets.
+func TestTheArtifactListenerIsBoundBeforeTheBoot(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		roles []string
+		want  bool
+	}{
+		{"an ingress node", nil, true},
+		{"a node without ingress", []string{"data", "seats", "workers"}, false},
+	} {
+		var logged bytes.Buffer
+		log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
+		boot := bootstrapFor(t, reservePort(t))
+		boot.Node.Roles = tc.roles
+		port := reservePort(t)
+		addr := "127.0.0.1:" + strconv.Itoa(port)
+		boot.API.Artifacts = config.APIArtifacts{Host: "127.0.0.1", Port: port, ExternalURL: "http://" + addr}
+		var asked []string
+		bind := func(ctx context.Context, a string) (net.Listener, error) {
+			asked = append(asked, a)
+			return bindReserved(ctx, a)
+		}
+		listeners, err := bindListeners(t.Context(), boot, "node-0", false, bind, log)
+		if err != nil {
+			t.Fatalf("%s: bindListeners: %v", tc.name, err)
+		}
+		if got := listeners.artifacts != nil; got != tc.want || slices.Contains(asked, addr) != tc.want {
+			listeners.close(context.Background(), log)
+			t.Fatalf("%s: bound the artifact listener: %t (binds asked %v), want %t",
+				tc.name, got, asked, tc.want)
+		}
+		if tc.want {
+			if status, code := answer(t, http.MethodGet, "http://"+addr+"/t/ticket/index.html"); status != http.StatusServiceUnavailable || code != "" {
+				t.Errorf("%s: a frame while the node starts = %d %q, want the origin's empty 503",
+					tc.name, status, code)
+			}
+			if !strings.Contains(logged.String(), "artifacts_addr="+addr) {
+				t.Errorf("%s: api_bound did not say where the artifact origin is bound:\n%s",
+					tc.name, logged.String())
+			}
+		}
+		listeners.close(context.Background(), log)
+		if tc.want && bound(port) {
+			t.Errorf("%s: api.artifacts.port is still listening after a failed boot closed it", tc.name)
+		}
+	}
+}
+
 // A PUBLIC BIND THAT FAILS TAKES THE NODE'S LISTENER DOWN WITH IT. A node that
 // served its dashboard while every webhook found nothing listening would look
-// healthy to every probe and be deaf to every integration.
+// healthy to every probe and be deaf to every integration. Both are bound
+// before the boot, so the failure is found before anything slow has run.
 func TestAnUnbindablePublicPortFailsTheNode(t *testing.T) {
 	t.Parallel()
 	taken, err := net.Listen("tcp", "127.0.0.1:0")
@@ -119,7 +241,7 @@ func TestAnUnbindablePublicPortFailsTheNode(t *testing.T) {
 	t.Cleanup(func() { _ = taken.Close() })
 
 	e := testEngine(t)
-	boot := bootstrapFor(t, freePort(t))
+	boot := bootstrapFor(t, reservePort(t))
 	boot.API.Public = config.APIPublic{Host: "127.0.0.1", Port: taken.Addr().(*net.TCPAddr).Port}
 	surface, err := serveNode(t, boot, e)
 	if err == nil {
@@ -134,6 +256,57 @@ func TestAnUnbindablePublicPortFailsTheNode(t *testing.T) {
 	}
 }
 
+// A STOP THAT RUNS BEFORE THE LISTENER IS SERVED STILL LEAVES NOTHING BOUND,
+// AND STILL WAITS FOR THE SERVE IT WAS STARTED WITH. listenAPI serves from a
+// goroutine, and Shutdown closes only the listeners Serve has registered, so a
+// stop the scheduler ran first — a failed public bind's, a moment after
+// api.port was bound — returned with the socket still accepting connections.
+// This holds that window open: a socket nothing has served yet, stopped, and
+// the Serve that starts after the stop. The socket is closed while that Serve
+// has still not run, and the stop returns only once it has, since the
+// goroutine serving a listener is its stop's to end.
+func TestAListenerStoppedBeforeItIsServedIsClosed(t *testing.T) {
+	t.Parallel()
+	socket, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := socket.Addr().(*net.TCPAddr).Port
+	served := make(chan struct{})
+	l := &apiListener{server: &http.Server{ReadHeaderTimeout: apiReadHeaderTimeout},
+		socket: socket, served: served}
+
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		shutdownListener(context.Background(), l, "api", logging.Get("test"))
+	}()
+	for deadline := time.Now().Add(10 * time.Second); bound(port); {
+		if time.Now().After(deadline) {
+			t.Fatal("the socket is still listening while its stop waits for Serve")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	select {
+	case <-stopped:
+		t.Fatal("the stop returned before the goroutine serving its socket had run")
+	default:
+	}
+	serveErr := l.server.Serve(socket)
+	close(served)
+	if !errors.Is(serveErr, http.ErrServerClosed) {
+		t.Errorf("a Serve that started after the stop = %v, want %v", serveErr, http.ErrServerClosed)
+	}
+	select {
+	case <-stopped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the stop never returned once the Serve it waited for had")
+	}
+	if bound(port) {
+		t.Error("the socket is still listening after its stop returned")
+	}
+}
+
 // THE BRIDGE IS A PUBLIC ROUTE ON EVERY NODE. A seats node without ingress
 // serves its probes on api.port and its tool bridge beside them, so with
 // api.public set it binds that address for the bridge alone and api.port
@@ -144,12 +317,13 @@ func TestASeatsNodeServesItsBridgeOnThePublicListener(t *testing.T) {
 	var logged bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	publicPort := freePort(t)
-	bridge := mcpbridge.New(mcpbridge.Options{
-		Key: []byte("test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(publicPort),
+	publicPort := reservePort(t)
+	bridge := bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"),
+		BaseURL:  "http://127.0.0.1:" + strconv.Itoa(publicPort),
 	})
 	e := testEngineWithBridge(t, bridge)
-	boot := bootstrapFor(t, freePort(t))
+	boot := bootstrapFor(t, reservePort(t))
 	boot.API.Public = config.APIPublic{Host: "127.0.0.1", Port: publicPort}
 	boot.Node.Roles = []string{"seats"}
 
@@ -191,25 +365,32 @@ func TestASeatsNodeServesItsBridgeOnThePublicListener(t *testing.T) {
 // a second process on the host keeps that port for the ingress node.
 func TestASeatsNodeWithNoAPIPortBindsNothing(t *testing.T) {
 	t.Parallel()
-	publicPort := freePort(t)
-	bridge := mcpbridge.New(mcpbridge.Options{
-		Key: []byte("test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(publicPort),
+	publicPort := reservePort(t)
+	bridge := bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"),
+		BaseURL:  "http://127.0.0.1:" + strconv.Itoa(publicPort),
 	})
 	e := testEngineWithBridge(t, bridge)
 	boot := bootstrapFor(t, 0)
 	boot.API.Public = config.APIPublic{Host: "127.0.0.1", Port: publicPort}
 	boot.Node.Roles = []string{"data", "seats", "workers"}
 
-	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, logging.Get("test"))
+	// NOTHING BOUND AT ALL, asked of the one path every listener is opened
+	// through rather than of the public port after the fact — which this
+	// case holds itself, so nothing else can be listening there either.
+	listeners, err := bindListeners(t.Context(), boot, e.Node().ID(), true, bindNothing(t),
+		logging.Get("test"))
+	if err != nil || listeners != nil {
+		listeners.close(context.Background(), logging.Get("test"))
+		t.Fatalf("bindListeners on api.port 0 = %v, %v; want nothing bound", listeners, err)
+	}
+	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, nil, listeners, logging.Get("test"))
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
 	if surface != nil {
 		surface.stop(context.Background(), logging.Get("test"))
-		t.Fatal("a node with api.port 0 bound a listener")
-	}
-	if bound(publicPort) {
-		t.Error("api.public.port is bound on a node whose api.port is 0")
+		t.Fatal("a node with api.port 0 built an HTTP surface")
 	}
 }
 
@@ -225,7 +406,7 @@ func TestTheProbesOutliveThePublicListener(t *testing.T) {
 
 	held := make(chan struct{})
 	release := make(chan struct{})
-	publicListener, err := listenAPI(ctx, "127.0.0.1:0", http.HandlerFunc(
+	publicListener, publicAddr, err := listenAPI(ctx, bindTCP, "127.0.0.1:0", http.HandlerFunc(
 		func(w http.ResponseWriter, _ *http.Request) {
 			close(held)
 			<-release
@@ -234,12 +415,11 @@ func TestTheProbesOutliveThePublicListener(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	adminListener, err := listenAPI(ctx, "127.0.0.1:0", http.HandlerFunc(
+	adminListener, adminAddr, err := listenAPI(ctx, bindTCP, "127.0.0.1:0", http.HandlerFunc(
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), log)
 	if err != nil {
 		t.Fatal(err)
 	}
-	publicAddr, adminAddr := publicListener.addr, adminListener.addr
 	surface := &httpSurface{server: adminListener, public: publicListener}
 
 	// A request the public listener is still serving, like a bridge
@@ -294,12 +474,11 @@ func TestTheShutdownFinishesGitBeforeTheListenerCloses(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	log := logging.Get("test")
-	admin, err := listenAPI(ctx, "127.0.0.1:0", http.HandlerFunc(
+	admin, addr, err := listenAPI(ctx, bindTCP, "127.0.0.1:0", http.HandlerFunc(
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), log)
 	if err != nil {
 		t.Fatal(err)
 	}
-	addr := admin.addr
 
 	var mu sync.Mutex
 	var steps []string
@@ -388,21 +567,21 @@ func TestAStoppedListenerAcceptsNothing(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelWarn}))
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	for round := range 500 {
-		listener, err := listenAPI(t.Context(), "127.0.0.1:0", ok, log)
+		listener, addr, err := listenAPI(t.Context(), bindTCP, "127.0.0.1:0", ok, log)
 		if err != nil {
 			t.Fatal(err)
 		}
-		listener.stop(context.Background(), "api", log)
+		shutdownListener(context.Background(), listener, "api", log)
 		select {
 		case <-listener.served:
 		default:
 			t.Fatalf("round %d: the stop of %s returned while the goroutine serving it was still running",
-				round, listener.addr)
+				round, addr)
 		}
-		conn, err := net.DialTimeout("tcp", listener.addr, time.Second)
+		conn, err := net.DialTimeout("tcp", addr, time.Second)
 		if err == nil {
 			_ = conn.Close()
-			t.Fatalf("round %d: %s accepted a connection after its listener stopped", round, listener.addr)
+			t.Fatalf("round %d: %s accepted a connection after its listener stopped", round, addr)
 		}
 	}
 	if logged.String() != "" {

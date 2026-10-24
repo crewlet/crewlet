@@ -3,13 +3,19 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // bootstrapWithKeys writes a Tier A naming a store and a keyring.
@@ -20,8 +26,8 @@ import (
 func bootstrapWithKeys(t *testing.T, dir string, keys ...string) string {
 	t.Helper()
 	var b strings.Builder
-	fmt.Fprintf(&b, "node:\n  id: cli-test\nstore:\n  path: %s\n",
-		filepath.Join(dir, "index.db"))
+	fmt.Fprintf(&b, "node:\n  id: cli-test\nstore:\n  path: %s\n%s",
+		filepath.Join(dir, "index.db"), fixtureStream(dir))
 	if len(keys) > 0 {
 		fmt.Fprintf(&b, "secrets:\n  active_key_id: %s\n  keys:\n", keys[0])
 		for _, id := range keys {
@@ -65,6 +71,12 @@ func TestConfigRekeyMovesTheDocumentOntoTheActiveKey(t *testing.T) {
 	}
 	if !strings.Contains(out, "k2") || !strings.Contains(out, "k1") {
 		t.Errorf("the output does not say what moved where: %q", out)
+	}
+	// AND WHAT RE-SEALS A RUNNING FLEET: a reload stores the active document
+	// again under the node's active key. PUT /config, which this used to
+	// name, stores whatever document it is sent.
+	if !strings.Contains(out, "POST /config/reload") || strings.Contains(out, "PUT /config") {
+		t.Errorf("the output does not name the running fleet's re-seal: %q", out)
 	}
 	if got, _ := activeKeyOf(t, rotated); got != "k2" {
 		t.Fatalf("after the rekey the document is under %q, want k2", got)
@@ -130,100 +142,110 @@ func TestConfigRekeyDryRunWritesNothing(t *testing.T) {
 	}
 }
 
-// A PLAINTEXT DOCUMENT IS NOT SILENTLY SEALED BY A REKEY.
+// plantPlaintextRevision stores the fixture company's settings as an UNSEALED
+// active revision, directly in the store dir holds.
 //
-// "Rotate the key this is under" and "start encrypting this at all" are
-// different decisions, and an operator running a rotation script has not
-// asked for the second.
-func TestConfigRekeyRefusesAPlaintextRevisionAndNamesTheFix(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	plain := bootstrapWithKeys(t, dir)
-	if _, errs, err := configCmd(t, plain, "import",
-		companyFile(t, dir, "company.yaml", nil)); err != nil {
-		t.Fatalf("import: %v (%s)", err, errs)
+// No command writes one — every node holds a keyring and every write path
+// seals — so a plaintext revision is one something else wrote into the store,
+// and a test reaches that state the same way: by a write that did not seal.
+func plantPlaintextRevision(t *testing.T, dir string) string {
+	t.Helper()
+	company, err := config.LoadCompany(companyFile(t, dir, "company.yaml", nil))
+	if err != nil {
+		t.Fatalf("load the fixture company: %v", err)
 	}
-	keyed := bootstrapWithKeys(t, dir, "k1")
-
-	_, _, err := configCmd(t, keyed, "rekey")
-	if err == nil {
-		t.Fatal("a plaintext revision was silently sealed by a rekey")
+	document, err := json.Marshal(company)
+	if err != nil {
+		t.Fatalf("encode the fixture company: %v", err)
 	}
-	if !strings.Contains(err.Error(), "config seal") {
-		t.Errorf("the refusal does not name the command that does it: %v", err)
-	}
+	return plantPlaintext(t, dir, document)
 }
 
-// SEAL IS THE ONE-TIME MIGRATION off plaintext-at-rest: a deployment that ran
-// before a keyring existed has a plaintext revision, and `import` only seals
-// what it imports.
-func TestConfigSealEncryptsAPlaintextRevision(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	plain := bootstrapWithKeys(t, dir)
-	if _, errs, err := configCmd(t, plain, "import",
-		companyFile(t, dir, "company.yaml", nil)); err != nil {
-		t.Fatalf("import: %v (%s)", err, errs)
+// plantPlaintext stores document UNSEALED as the active revision of the store
+// dir holds, and returns its id. See [plantPlaintextRevision] for why a test
+// has to plant one.
+func plantPlaintext(t *testing.T, dir string, document []byte) string {
+	t.Helper()
+	if secrets.Sealed(document) {
+		t.Fatal("the planted revision is sealed, so no case using it is about plaintext")
 	}
-	if _, sealed := activeKeyOf(t, plain); sealed {
-		t.Fatal("a keyring-less import produced a sealed revision")
+	// THE NODE'S OWN FILE: revisions are the node estate's, so nothing a
+	// state log applies is opened beside it.
+	db := storetest.OpenNode(t, filepath.Join(dir, "index.db"), store.Options{})
+	defer func() { _ = db.Close() }()
+	id, err := db.Configs().InsertActive(t.Context(), store.Revision{
+		Source: "file", CreatedBy: "not-a-node", CreatedByKind: iam.ActorSystem,
+		Summary: "written without a seal", Payload: document,
+	})
+	if err != nil {
+		t.Fatalf("plant the plaintext revision: %v", err)
 	}
-	keyed := bootstrapWithKeys(t, dir, "k1")
-
-	if _, errs, err := configCmd(t, keyed, "seal"); err != nil {
-		t.Fatalf("seal: %v (%s)", err, errs)
-	}
-	got, sealed := activeKeyOf(t, keyed)
-	if !sealed || got != "k1" {
-		t.Fatalf("after seal the revision is under %q (sealed=%t), want k1", got, sealed)
-	}
-	// AND IT STILL READS.
-	if _, errs, err := configCmd(t, keyed, "show"); err != nil {
-		t.Fatalf("the sealed revision no longer reads: %v (%s)", err, errs)
-	}
+	return id
 }
 
-// SEALING TWICE IS A NO-OP rather than an envelope inside an envelope.
-func TestConfigSealIsIdempotent(t *testing.T) {
+// A PLAINTEXT REVISION IS REFUSED BY EVERY READER, a rekey included, and the
+// refusal names the import that brings its document back sealed: nothing
+// vouches for who wrote a plaintext payload.
+//
+// AND THE IMPORT IT NAMES WORKS. The import opened the active revision to ask
+// whether the file already matched it, and met the same refusal — naming
+// itself — so the remedy every reader gave was a loop. The document imported
+// here is byte for byte the planted one, so an import that compared against
+// the plaintext rather than replacing it would write nothing either.
+func TestAPlaintextRevisionIsRefusedNamingTheImport(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
+	plantPlaintextRevision(t, dir)
 	keyed := bootstrapWithKeys(t, dir, "k1")
+
+	for _, command := range []string{"rekey", "show"} {
+		_, _, err := configCmd(t, keyed, command)
+		if !errors.Is(err, secrets.ErrUnsealedWithKey) {
+			t.Fatalf("%s of a plaintext revision = %v, want ErrUnsealedWithKey", command, err)
+		}
+		if !strings.Contains(err.Error(), "crewlet config import") {
+			t.Errorf("%s's refusal does not name the command that fixes it: %v", command, err)
+		}
+	}
+
 	if _, errs, err := configCmd(t, keyed, "import",
 		companyFile(t, dir, "company.yaml", nil)); err != nil {
-		t.Fatalf("import: %v (%s)", err, errs)
+		t.Fatalf("the import every refusal names was refused: %v (%s)", err, errs)
 	}
-	before := revisionCount(t, keyed)
-
-	out, errs, err := configCmd(t, keyed, "seal")
-	if err != nil {
-		t.Fatalf("seal: %v (%s)", err, errs)
+	if got, sealed := activeKeyOf(t, keyed); !sealed || got != "k1" {
+		t.Errorf("the imported revision is sealed under %q (sealed %v), want k1", got, sealed)
 	}
-	if !strings.Contains(out, "already sealed") {
-		t.Errorf("output = %q", out)
-	}
-	if after := revisionCount(t, keyed); after != before {
-		t.Error("a no-op seal wrote a revision")
+	for _, command := range []string{"show", "rekey"} {
+		if _, errs, err := configCmd(t, keyed, command); err != nil {
+			t.Errorf("%s after the import: %v (%s)", command, err, errs)
+		}
 	}
 }
 
-// WITHOUT A KEYRING BOTH SAY HOW TO GET ONE, rather than failing on a nil
-// cipher somewhere further in.
-func TestSealAndRekeyWithoutAKeyringNameTheRemedy(t *testing.T) {
+// WITHOUT A KEYRING EVERY CONFIG COMMAND SAYS HOW TO GET ONE, rather than
+// failing on a nil cipher somewhere further in — `import` included, which
+// used to store a plaintext revision on a node with no keyring and is now
+// refused like the rest, because every node holds one.
+func TestEveryConfigCommandWithoutAKeyringNamesTheRemedy(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	plain := bootstrapWithKeys(t, dir)
-	if _, errs, err := configCmd(t, plain, "import",
-		companyFile(t, dir, "company.yaml", nil)); err != nil {
-		t.Fatalf("import: %v (%s)", err, errs)
-	}
-	for _, sub := range []string{"seal", "rekey"} {
-		_, _, err := configCmd(t, plain, sub)
+	for _, args := range [][]string{
+		{"import", companyFile(t, dir, "company.yaml", nil)},
+		{"show"}, {"rekey"},
+	} {
+		_, _, err := configCmd(t, plain, args...)
 		if err == nil {
-			t.Fatalf("%s ran with no keyring", sub)
+			t.Fatalf("%s ran with no keyring", args[0])
 		}
-		if !strings.Contains(err.Error(), "keygen") {
-			t.Errorf("%s: the refusal does not say how to get a keyring: %v", sub, err)
+		for _, says := range []string{"secrets.keys", "keygen"} {
+			if !strings.Contains(err.Error(), says) {
+				t.Errorf("%s: the refusal does not say %q: %v", args[0], says, err)
+			}
 		}
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "index.db")); statErr == nil {
+		t.Error("a command refused for its keyring still created the store")
 	}
 }
 
@@ -233,7 +255,7 @@ func TestSealAndRekeyWithoutAKeyringNameTheRemedy(t *testing.T) {
 func activeKeyOf(t *testing.T, cfg string) (string, bool) {
 	t.Helper()
 	ctx := t.Context()
-	cs, closeStore, err := openConfigStore(ctx, cfg)
+	cs, closeStore, err := openConfigStore(ctx, cfg, "")
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}

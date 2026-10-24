@@ -36,6 +36,7 @@ export type ObjectKind =
   | "integration"
   | "credential"
   | "revision"
+  | "person"
   | "notice";
 
 export interface ObjectRef {
@@ -69,10 +70,19 @@ export function parseRef(token: string | null | undefined): ObjectRef | null {
 export interface KindSpec {
   /** What this kind is called in a header eyebrow and a palette row. */
   label: string;
-  /** The object's own page. */
+  /** The object's own page — or, for a kind whose peek IS its page ([peekIsPage]), the list it is read beside. */
   pathOf: (id: string) => string[];
   /** Ids that carry their own separators, split for the route. */
   mono?: boolean;
+  /**
+   * THE PEEK IS THE OBJECT'S PAGE: there is no screen of its own to open, so
+   * its address — what a modifier-click opens in a new tab and a copied link
+   * holds — is the list `pathOf` names WITH ITS PEEK OPEN, and the rail draws
+   * no `Open` over that list, which could only close it. A person is the case:
+   * their directory row is the whole of what the dashboard holds about them,
+   * read beside People, and the route table gives that screen no tail.
+   */
+  peekIsPage?: boolean;
 }
 
 /**
@@ -86,8 +96,8 @@ export interface KindSpec {
 export const KINDS: Record<ObjectKind, KindSpec> = {
   item: { label: "Item", pathOf: (id) => ["work", id], mono: true },
   project: { label: "Project", pathOf: (id) => ["work", id], mono: true },
-  seat: { label: "Seat", pathOf: (id) => ["agents", "seats", id], mono: true },
-  unit: { label: "Unit", pathOf: (id) => ["agents", "teams", id] },
+  seat: { label: "Seat", pathOf: (id) => ["company", "org", "seats", id], mono: true },
+  unit: { label: "Unit", pathOf: (id) => ["company", "org", "teams", id] },
   page: {
     // ONE ADDRESS, THE PAGE'S ID. It was `CONTAINER/Title`, and a title
     // changes on rename: every copied link died the day somebody fixed a
@@ -105,17 +115,21 @@ export const KINDS: Record<ObjectKind, KindSpec> = {
     // `role/ceo/standup` — three segments, and the name may contain none of
     // them because the engine slugs it.
     label: "Schedule",
-    pathOf: (id) => ["agents", "schedules", ...id.split("/")],
+    pathOf: (id) => ["company", "schedules", ...id.split("/")],
   },
   channel: { label: "Channel", pathOf: (id) => ["live", "a2a", id], mono: true },
-  tool: { label: "Tool", pathOf: (id) => ["settings", "tools", id], mono: true },
-  integration: { label: "Integration", pathOf: (id) => ["settings", "integrations", id] },
+  tool: { label: "Tool", pathOf: (id) => ["settings", "mcp-tools", id], mono: true },
+  integration: { label: "Integration", pathOf: (id) => ["company", "integrations", id] },
   credential: { label: "Credential", pathOf: (id) => ["settings", "secrets", id], mono: true },
   revision: {
     label: "Revision",
     pathOf: (id) => ["settings", "config", "revisions", id],
     mono: true,
   },
+  // A PERSON — or a service account — BY THE ID THE DIRECTORY KEYS THEM ON,
+  // never a login, which a rename moves to somebody else. Read in its peek
+  // beside People, which is the only page a directory row has.
+  person: { label: "Person", pathOf: () => ["settings", "people"], peekIsPage: true },
   // A NOTICE HAS NO PAGE OF ITS OWN, AND NO PEEK EITHER. It is a row in
   // somebody's inbox naming a change to something else, so its "page" is the
   // inbox that holds it — and that is where it is read in place and marked,

@@ -73,7 +73,7 @@ func TestToolCallReportsFailureToTheModelNotToTheCaller(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listTools: %v", err)
 	}
-	tool := newTool(c, defs[0], Spec{Name: "denier"})
+	tool := toolOn(c, defs[0], Spec{Name: "denier"})
 
 	res, err := tool.Call(t.Context(), map[string]any{"q": "x"})
 	if err != nil {
@@ -108,7 +108,7 @@ func TestToolCallReturnsAnErrorWhenTheCallerIsGone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listTools: %v", err)
 	}
-	tool := newTool(c, defs[0], Spec{Name: "slow-tool"})
+	tool := toolOn(c, defs[0], Spec{Name: "slow-tool"})
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -131,7 +131,7 @@ func TestToolCallOnAStoppedServerIsAnOrdinaryFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listTools: %v", err)
 	}
-	tool := newTool(c, defs[0], Spec{Name: "gone"})
+	tool := toolOn(c, defs[0], Spec{Name: "gone"})
 	if err := c.stop(t.Context()); err != nil {
 		t.Fatalf("stop: %v", err)
 	}

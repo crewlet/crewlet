@@ -22,16 +22,23 @@
  * STATES. `checking` while an answer for the current generation is due;
  * `clean` and `problems` for a validated draft; `conflict` when the engine
  * holds a newer revision than the draft's base (a 409, a 412, or a dry run
- * reporting a different base); `guarded` when it refused the token (401 or
- * 403); `unreachable` when the request was never answered or the engine
- * failed (status 0, or a 5xx). A draining node's `503 draining` is one of
- * those, deliberately: the drain ends, so the retry reaches a peer behind a
- * load balancer, or this node once it has restarted.
+ * reporting a different base); `guarded` when it refused this browser on
+ * authority (401 or 403, carrying the refusal's code); `unreachable` when the
+ * request was never answered or the engine failed (status 0, or a 5xx). A
+ * draining node's `503 draining` is one of those, deliberately: the drain
+ * ends, so the retry reaches a peer behind a load balancer, or this node once
+ * it has restarted. So is a starting node's `503 starting`, for the same
+ * reason the other way round: the node is about to serve, and the retry
+ * reaches it once it does.
  *
- * TWO OF THEM HALT. `conflict` and `guarded` do not change by asking again:
- * the answer to the next check is the same refusal. So a change to the draft
- * in one of them sends nothing, and checking resumes only on a reset (a load,
- * an updated draft, a token change).
+ * TWO OF THEM HALT. `conflict` and `guarded` do not change by asking again
+ * on their own: the answer to the next check is the same refusal. So a change
+ * to the draft in one of them sends nothing, and checking resumes only on a
+ * reset (a load, an updated draft, a change of reader, or the person asking).
+ * A step-up the person declined ([STEP_UP_REQUIRED]) is the one refusal they
+ * lift on the spot: the transport asks them to confirm again whenever the
+ * check is sent again, which is theirs to ask for, never a timer's — a
+ * dialog that reopened at every keystroke would be one they could not leave.
  *
  * `unreachable` BACKS OFF. Asking again at every keystroke would hammer an
  * engine that is restarting, or a network that is down, with requests that
@@ -121,10 +128,18 @@ export type CheckOutcome =
       readonly reason: ConflictReason;
       readonly currentRevisionId: string | null;
     }
-  | { readonly status: "guarded" }
-  /** Another system manages the document, and this token is not it (ADR-0030). */
+  | { readonly status: "guarded"; readonly code: string }
+  /** Another system manages the document, and this credential is not it (ADR-0030). */
   | { readonly status: "managed"; readonly managedBy: readonly string[] }
   | { readonly status: "unreachable"; readonly detail: string };
+
+/**
+ * The code of a `guarded` refusal that is a step-up the person declined: the
+ * transport (`protocol/rest.ts`) asked them to confirm who they are and they
+ * did not. Not a grant they lack and not the tab changing hands, so it is
+ * worded, offered and kept as neither.
+ */
+export const STEP_UP_REQUIRED = "step_up_required";
 
 const text = (value: unknown): string => (typeof value === "string" ? value : "");
 const list = <T>(value: unknown): readonly T[] => (Array.isArray(value) ? (value as T[]) : []);
@@ -132,7 +147,8 @@ const derivedOf = (value: unknown): Derived | null =>
   isRecord(value) ? (value as unknown as Derived) : null;
 
 /**
- * What an answer to a check means for a draft built on `baseRevision`.
+ * What an answer to a check means for a draft built on `baseRevision`, of the
+ * unit a lead's draft is about (`scope`) or of the whole company (`null`).
  *
  * Also used for a save's refusal: a write answers with the same codes, and a
  * 201 is classified by `writes.ts`, which is the only place a success differs.
@@ -141,6 +157,7 @@ export function classifyCheck(
   answer: HttpAnswer,
   mode: BuilderMode,
   baseRevision: string | null,
+  scope: string | null,
 ): CheckOutcome {
   if (answer.status >= 200 && answer.status < 300) {
     const body = isRecord(answer.body) ? answer.body : {};
@@ -161,14 +178,34 @@ export function classifyCheck(
       derived: derivedOf(result.derived),
     };
   }
+  // A PART REFUSED IS A PROBLEM WITH A LEAD'S DRAFT, NEVER THE COMPANY'S.
+  // Whoever drafts the whole company holds Admin as the node answering
+  // `viewer` serves it — a reader holding no Admin and leading no unit is
+  // refused the company's read before any check is sent. An admin's write is
+  // never refused part by part where admin is served; it is where a check
+  // lands on a node whose `api.auth.admin` is `refuse`, which a fleet
+  // mid-rollout legally holds beside one serving it: that node's route admits
+  // anybody bound to a seat until it has read what a write changes, so it
+  // names each part, starting with an unchanged draft's `document`. That is a
+  // grant the reader lacks there, which pauses editing, and not a problem with
+  // each edit. A declined step-up is a 403 of this arm too, and keeps its code.
+  //
   // EVERY REFUSAL IS READ THE WAY EVERY OTHER /config WRITER READS IT
   // (`protocol/configAnswer.ts`). A check has no stored revision to settle,
   // so a drain and an unanswered request are the same thing to it: the
   // engine could not be asked, and the scheduler asks again.
+  //
+  // A MANAGED DOCUMENT IS NEVER THE GRANT MISSING, whoever drafts: it is a
+  // 403 too (ADR-0030), and read as a whole-company draft's missing grant it
+  // sent somebody who holds every grant to an administrator who cannot help
+  // them.
   const refusal = classifyConfigRefusal(answer);
+  if (answer.status === 403 && scope === null && refusal.kind !== "managed") {
+    return { status: "guarded", code: text(isRecord(answer.body) ? answer.body.error : "") };
+  }
   switch (refusal.kind) {
     case "guarded":
-      return { status: "guarded" };
+      return { status: "guarded", code: refusal.code };
     case "managed":
       return { status: "managed", managedBy: refusal.managedBy };
     case "conflict":
@@ -178,6 +215,7 @@ export function classifyCheck(
         currentRevisionId: refusal.currentRevisionId,
       };
     case "draining":
+    case "starting":
     case "unreachable":
       return { status: "unreachable", detail: refusal.detail };
     case "problems":
@@ -409,15 +447,17 @@ export function saveRules(status: CheckStatus, hasChanges: boolean): SaveRules {
         review: false,
         save: false,
         waiting: false,
-        reason: "Saving needs an operator token the engine accepts.",
+        // THE BANNER SAYS WHICH GRANT, from the refusal itself; this is the
+        // disabled button's reason, and it used to name "an operator token",
+        // which a signed-in reader holding the wrong grants has no use for.
+        reason: "The engine refused this browser's credential to check or save the configuration.",
       };
     case "managed":
       return {
         review: false,
         save: false,
         waiting: false,
-        reason:
-          "Another system manages this company's configuration, so it is not saved from here.",
+        reason: "Managed by another system.",
       };
     case "problems":
       return { review: true, save: false, waiting: false, reason: "Fix the problems above first." };
@@ -439,6 +479,8 @@ export interface PreparedCheck {
   readonly sent: IndexedDocument;
   readonly mode: BuilderMode;
   readonly baseRevision: string | null;
+  /** The unit a lead's draft is about; `null` for the whole company. */
+  readonly scope: string | null;
 }
 
 /** One answered check, for the reducer. */
@@ -561,7 +603,8 @@ export class CheckRunner {
       }
     };
     this.options.transport.send(prepared.request, controller.signal).then(
-      (answer) => settle(classifyCheck(answer, prepared.mode, prepared.baseRevision)),
+      (answer) =>
+        settle(classifyCheck(answer, prepared.mode, prepared.baseRevision, prepared.scope)),
       // An aborted check is superseded, not unreachable, and `settle` drops
       // it. A transport that rejects for any other reason broke its contract,
       // and the check is reported as unanswered rather than left in flight for

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -135,23 +136,43 @@ func (l boxLayout) pidFile() string { return filepath.Join(l.records(), "box.pid
 // once per poll for exactly the box it is keeping alive.
 func (l boxLayout) aliveFile() string { return filepath.Join(l.records(), "alive") }
 
-// credentialsFile records the credential map this box was seeded with, so a
-// reconnect knows which files to sync back. Without it a reconnected box
-// closes with an empty map and the login the coding agent refreshed mid-run is
-// discarded — and every production teardown goes through Connect or Kill,
-// never the object Create returned, so that would be every run.
+// credentialsFile records the logins this box was seeded with
+// ([seededCredential]), so a reconnect knows which files to write back and
+// against what. Without it a reconnected box closes with an empty map and the
+// login the coding agent refreshed mid-run is discarded — and every production
+// teardown goes through Connect or Kill, never the object Create returned, so
+// that would be every run.
 func (l boxLayout) credentialsFile() string { return filepath.Join(l.records(), "credentials.json") }
 
 // envFile is the container runtime's --env-file. See containerBox.envArgs.
 func (l boxLayout) envFile() string { return filepath.Join(l.records(), "env") }
 
+// seededCredential is one login file a box was seeded with, as the box's
+// RECORD keeps it: where on the engine host it came from, and the SHA-256 of
+// the very bytes the box was given.
+//
+// THE SEED IS WHAT A WRITE-BACK IS JUDGED AGAINST. A box's teardown compared
+// its copy with the shared login as it was AT TEARDOWN, and an idle box's copy
+// differs from that the moment anybody else writes: a run that never refreshed
+// put its stale seed back over a login the host had refreshed while it ran —
+// OpenCode's export reproduces its import byte for byte, so every box seeded
+// with its document did — and the vendor had already rotated that seed's
+// refresh token away, logging every seat out at the next expiry.
+type seededCredential struct {
+	Source string `json:"source"`
+	Seed   string `json:"seed"`
+}
+
 // seedCredentials copies the CLI login into the box before the coding agent
-// runs.
+// runs, and reports what it seeded the box with: every file it copied, by its
+// path relative to the box's home. A file the shared directory does not hold
+// is not seeded and not reported, so nothing is ever written back over it.
 //
 // The keys are relative paths from an operator-overridable profile, so they go
 // through hostbox.SafeJoin: an entry like "../../etc/cron.d/x" would otherwise
 // write a host file every time a box was created.
-func seedCredentials(l boxLayout, files map[string]string) {
+func seedCredentials(l boxLayout, files map[string]string) map[string]seededCredential {
+	seeded := map[string]seededCredential{}
 	for relative, source := range files {
 		dst, err := hostbox.SafeJoin(l.home(), relative)
 		if err != nil {
@@ -159,44 +180,110 @@ func seedCredentials(l boxLayout, files map[string]string) {
 				"sandbox_id", l.id, "path", relative, "error", err.Error())
 			continue
 		}
-		if _, err := hostbox.CopyFileAtomic(source, dst); err != nil {
+		// THE SEED'S DIGEST IS OF THE BYTES THE BOX WAS GIVEN, taken as they
+		// are copied: read separately it could describe a newer file than
+		// the box's, and the teardown would then excuse a write it should
+		// have refused.
+		digest, copied, err := hostbox.CopyFileAtomicDigest(source, dst)
+		if err != nil {
 			localLog.Warn("local_sandbox_credential_seed_failed",
 				"sandbox_id", l.id, "path", relative, "error", err.Error())
+			continue
+		}
+		if copied {
+			seeded[relative] = seededCredential{Source: source, Seed: digest}
 		}
 	}
+	return seeded
 }
 
-// collectCredentials writes a credential the run refreshed back to the shared
-// login.
+// collectCredentials writes a login the run refreshed back to the shared
+// directory — a COMPARE-AND-SWAP against what the box was seeded with
+// ([writeBackCredential]).
 //
 // OAuth access tokens expire in hours and most vendors rotate the refresh
 // token alongside them, so a box that quietly discards the rewritten file logs
-// the whole fleet out at the next expiry. Only writes back over a file that
-// already exists in the shared store, so a torn-down box can never CREATE a
-// login the operator has since removed.
+// the whole fleet out at the next expiry — and one that writes back a login it
+// did not refresh over one the host did logs the fleet out just the same.
 //
 // Read through SafeJoin for the same reason the seed is written through it: a
 // "../../" key would otherwise copy an arbitrary host file out of the box's
 // directory and over the credential store. The map itself is the box's RECORD
 // — written by the engine at Create, out of the box's reach — so where a login
 // is written back to is the operator's profile and never the box's say.
-func collectCredentials(l boxLayout, files map[string]string) {
-	for relative, source := range files {
+//
+// A TEARDOWN, so it takes [context.WithoutCancel] of its caller's context: the
+// teardown is often the cancellation's own consequence, and the only wait in
+// it — another writer's lock — has its own bound ([hostbox.CredentialLockWait]).
+func collectCredentials(ctx context.Context, l boxLayout, seeded map[string]seededCredential) {
+	ctx = context.WithoutCancel(ctx)
+	for relative, rec := range seeded {
 		src, err := hostbox.SafeJoin(l.home(), relative)
 		if err != nil {
 			continue
 		}
-		if ran, err := writeBackCredential(src, source); err != nil {
+		got, err := writeBackCredential(ctx, src, rec)
+		switch {
+		case err != nil:
 			localLog.Warn("local_sandbox_credential_writeback_failed",
 				"sandbox_id", l.id, "file", relative, "error", err.Error())
-		} else if ran {
+		case got == writeBackWritten:
 			localLog.Info("local_sandbox_credential_refreshed", "sandbox_id", l.id, "file", relative)
+		case got == writeBackChanged || got == writeBackRemoved:
+			// WARN, because it is the one trace that a refresh the run made
+			// went nowhere; two in a row on one login are worth somebody
+			// looking at. It names the file, never what either copy holds.
+			localLog.Warn("local_sandbox_credential_superseded",
+				"sandbox_id", l.id, "file", relative, "path", rec.Source, "shared", string(got),
+				"detail", supersededDetail[got])
 		}
 	}
 }
 
-// writeBackCredential copies the box's src over the shared login dst when it
-// differs, and reports whether it did.
+// writeBack is what a teardown did with one login file.
+type writeBack string
+
+// supersededDetail is what local_sandbox_credential_superseded says of each
+// outcome in which a login the run refreshed was not written back: one
+// sentence apiece, because the two leave different things behind — a newer
+// login kept, and no login at all.
+var supersededDetail = map[writeBack]string{
+	writeBackChanged: "the run refreshed this login, but the shared one changed after the box " +
+		"was seeded — another seat's refresh, or a new crewlet llm login — so the shared one " +
+		"was kept, being the newer",
+	writeBackRemoved: "the run refreshed this login, but the shared one was removed after the " +
+		"box was seeded — crewlet llm logout — and a box never creates one, so none was written",
+}
+
+const (
+	// writeBackIdle: the box holds what it was seeded with, or nothing —
+	// the run refreshed nothing, so there is nothing to write.
+	writeBackIdle writeBack = "idle"
+	// writeBackWritten: the box's refreshed login replaced the shared one.
+	writeBackWritten writeBack = "written"
+	// writeBackHeld: the shared login already holds what the box does.
+	writeBackHeld writeBack = "held"
+	// writeBackChanged: the shared login moved past the seed while the box
+	// ran — another seat's refresh, a new `crewlet llm login` — so it is
+	// newer than anything the box has to say, and was kept.
+	writeBackChanged writeBack = "changed"
+	// writeBackRemoved: the shared login was removed while the box ran —
+	// `crewlet llm logout` — and a box never creates one.
+	writeBackRemoved writeBack = "removed"
+)
+
+// writeBackCredential writes the box's src over the shared login rec names,
+// but only where the run CHANGED it and the shared login is STILL what the box
+// was seeded with.
+//
+// TWO CONDITIONS, and each is a different lost login. A box whose copy still
+// holds its seed refreshed nothing, and writing it back would revert whatever
+// the host wrote meanwhile. A shared login that no longer holds the seed was
+// rewritten by somebody else — a refresh of its own, which rotated the refresh
+// token the box's copy descends from, or a new login an operator made — and
+// the box's copy is the older of the two. So the comparison and the write are
+// one step, under the shared directory's lock ([hostbox.LockCredentials]),
+// which every writer of it takes.
 //
 // OPENED ONCE, as a box's files are read ([openHostRegular]), and the digest
 // and the copy both read that one descriptor: a file checked by its path and
@@ -205,47 +292,60 @@ func collectCredentials(l boxLayout, files map[string]string) {
 // at once as what it is rather than blocking a teardown, a link is refused
 // rather than followed, and what is written back is the file that was
 // compared.
-func writeBackCredential(src, dst string) (bool, error) {
-	if info, err := os.Stat(dst); err != nil || !info.Mode().IsRegular() {
-		return false, nil
-	}
+func writeBackCredential(ctx context.Context, src string, rec seededCredential) (writeBack, error) {
 	in, err := openHostRegular(src)
 	switch {
 	case absent(err):
-		return false, nil
+		return writeBackIdle, nil
 	case err != nil:
-		return false, err
+		return "", err
 	}
 	defer func() { _ = in.Close() }()
 	digest, err := hostbox.Digest(in)
 	if err != nil {
-		return false, fmt.Errorf("reading %s: %w", src, err)
+		return "", fmt.Errorf("reading %s: %w", src, err)
 	}
-	if digest == hostbox.FileDigest(dst) {
-		return false, nil
+	if digest == rec.Seed {
+		return writeBackIdle, nil
+	}
+	unlock, err := hostbox.LockCredentials(ctx, filepath.Dir(rec.Source))
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	current, present, err := hostbox.FileDigest(rec.Source)
+	switch {
+	case err != nil:
+		return "", fmt.Errorf("reading the shared login: %w", err)
+	case !present:
+		return writeBackRemoved, nil
+	case current == digest:
+		return writeBackHeld, nil
+	case current != rec.Seed:
+		return writeBackChanged, nil
 	}
 	if _, err := in.Seek(0, io.SeekStart); err != nil {
-		return false, fmt.Errorf("rereading %s: %w", src, err)
+		return "", fmt.Errorf("rereading %s: %w", src, err)
 	}
-	if err := hostbox.ReplaceFile(dst, in); err != nil {
-		return false, err
+	if err := hostbox.ReplaceFile(rec.Source, in); err != nil {
+		return "", err
 	}
-	return true, nil
+	return writeBackWritten, nil
 }
 
-// recordCredentialMap persists the box's credential map so Connect can sync it
-// back.
+// recordCredentialMap persists what the box was seeded with so Connect can
+// write a refreshed login back.
 //
 // It RETURNS its failure rather than logging it, even though the caller only
 // logs: the previous shape wrote the WriteFile error into an `if err :=`
 // binding that shadowed the one being checked, so the warning this function
 // exists to emit could never fire and no test could have caught it. A
 // returned error is the shape a test can assert on.
-func recordCredentialMap(l boxLayout, files map[string]string) error {
-	if len(files) == 0 {
+func recordCredentialMap(l boxLayout, seeded map[string]seededCredential) error {
+	if len(seeded) == 0 {
 		return nil
 	}
-	blob, err := json.Marshal(files)
+	blob, err := json.Marshal(seeded)
 	if err != nil {
 		return fmt.Errorf("encoding the credential map: %w", err)
 	}
@@ -258,22 +358,23 @@ func recordCredentialMap(l boxLayout, files map[string]string) error {
 	return nil
 }
 
-// readCredentialMap is the map recorded at Create: nil when none was.
+// readCredentialMap is what the box was seeded with, as recorded at Create:
+// nil when nothing was.
 //
 // A RECORD THAT CANNOT BE USED IS SAID, and read as no map: every reconnect
 // reads it before it answers — the poll's, the collection's, the pause
 // reaper's and the orphan reaper's — and none of them may fail over a list of
 // logins to write back, so what is lost is the write-back of a refreshed
 // login, which the warning names.
-func readCredentialMap(l boxLayout) map[string]string {
+func readCredentialMap(l boxLayout) map[string]seededCredential {
 	blob, err := readRecord(l.credentialsFile())
 	if absent(err) {
 		return nil
 	}
 	if err == nil {
-		var files map[string]string
-		if err = json.Unmarshal(blob, &files); err == nil {
-			return files
+		var seeded map[string]seededCredential
+		if err = json.Unmarshal(blob, &seeded); err == nil {
+			return seeded
 		}
 	}
 	localLog.Warn("local_sandbox_credential_map_unreadable", "sandbox_id", l.id,
@@ -285,10 +386,10 @@ func readCredentialMap(l boxLayout) map[string]string {
 
 // maxRecordBytes bounds one read of a box's record. The largest the engine
 // writes is the credential map — a CLI profile's few credential files, each a
-// relative path and a host path — which is a few hundred bytes; a mebibyte is
-// a hundred and twenty-eight entries at the longest paths a filesystem takes,
-// so a record past it is not one this engine wrote and is not read whole into
-// memory to find that out.
+// relative path, a host path and a 64-character digest — which is a few
+// hundred bytes; a mebibyte is over a hundred and twenty entries at the
+// longest paths a filesystem takes, so a record past it is not one this
+// engine wrote and is not read whole into memory to find that out.
 const maxRecordBytes = 1 << 20
 
 // readRecord is one of the engine's records about a box, read the way every
@@ -447,6 +548,14 @@ type LocalOptions struct {
 
 	// RunArgs are extra arguments spliced into the container run.
 	RunArgs []string
+
+	// RuntimeEnv is what the operator DECLARED for the container runtime's
+	// own CLI, its references already resolved — laid over the fixed rule
+	// every runtime call carries ([hostbox.ContainerRuntime]), for what that
+	// rule cannot know a runtime's helpers read: the cloud role, profile or
+	// key file a registry credential helper pulls the image with.
+	// It never reaches a box: that is `role.sandbox.env`.
+	RuntimeEnv map[string]string
 }
 
 // Local mints sandboxes on the engine host, directly or in a container.
@@ -456,9 +565,9 @@ type LocalOptions struct {
 // token minting. The run reads the same credential directory `crewlet llm
 // login` wrote.
 type Local struct {
-	opts    LocalOptions
-	root    string
-	runtime string // resolved container binary; "" in direct mode
+	opts LocalOptions
+	root string
+	cli  containerCLI // the resolved runtime; its path is "" in direct mode
 }
 
 var _ Provider = (*Local)(nil)
@@ -495,9 +604,13 @@ func NewLocal(opts LocalOptions) (*Local, error) {
 				"that has the coding-agent CLI installed — there is no sensible default, and a "+
 				"box without the CLI fails only once an agent tries to use it", Container)
 		}
-		if local.runtime, err = ResolveContainerRuntime(opts.Runtime); err != nil {
+		var path string
+		if path, err = ResolveContainerRuntime(opts.Runtime); err != nil {
 			return nil, err
 		}
+		// CLONED, so the options map a caller built — and may reuse for the
+		// next apply — is never the one every runtime call reads.
+		local.cli = containerCLI{path: path, declared: maps.Clone(opts.RuntimeEnv)}
 	}
 	return local, nil
 }
@@ -556,27 +669,25 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	}
 
 	l.reapOrphans(ctx, time.Duration(spec.TimeoutSec)*time.Second)
-	seedCredentials(layout, spec.CredentialFiles)
+	seeded := seedCredentials(layout, spec.CredentialFiles)
 	// The box records what it was seeded with and stamps itself alive before
 	// anyone can reap it.
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
-	if err := recordCredentialMap(layout, spec.CredentialFiles); err != nil {
-		// The map names paths, not secrets, but losing it means a
-		// refreshed login is never written back to the shared directory
-		// — worth saying out loud, and not worth failing the box for.
+	if err := recordCredentialMap(layout, seeded); err != nil {
+		// The map names paths and digests, not secrets, but losing it means
+		// a refreshed login is never written back to the shared directory —
+		// worth saying out loud, and not worth failing the box for.
 		localLog.Warn("local_sandbox_credential_map_unwritable", "sandbox_id", layout.id, "error", err.Error())
 	}
 	touchAlive(layout)
 
 	if l.opts.Placement == Direct {
 		localLog.Info("local_sandbox_created", "sandbox_id", id, "placement", string(Direct), "home", layout.home())
-		return &directBox{layout: layout, env: spec.Env, credentials: spec.CredentialFiles}, nil
+		return &directBox{layout: layout, env: spec.Env, credentials: seeded}, nil
 	}
 
 	name := l.containerName(id)
-	argv := l.runArgv(ctx, layout, name)
-
-	result, err := runHost(ctx, hostCommand{argv: argv})
+	result, err := runHost(ctx, l.cli.command(0, l.runArgv(ctx, layout, name)...))
 	if err != nil || result.ExitCode != 0 {
 		_ = os.RemoveAll(layout.root)
 		detail := strings.TrimSpace(result.Stderr)
@@ -595,16 +706,14 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 			l.opts.Image, detail)
 	}
 	box := &containerBox{
-		layout: layout, runtime: l.runtime, container: name,
-		env: spec.Env, credentials: spec.CredentialFiles,
+		layout: layout, cli: l.cli, container: name,
+		env: spec.Env, credentials: seeded,
 	}
 	// PROVEN BEFORE THE BOX IS HANDED OUT. Both properties this mode rests
 	// on fail silently and only much later — see verifyMount — so the box is
 	// torn down here rather than returned to do half its job.
 	if err := verifyMount(ctx, box, layout); err != nil {
-		_, _ = runHost(context.WithoutCancel(ctx), hostCommand{
-			argv: []string{l.runtime, "rm", "-f", name},
-		})
+		_, _ = runHost(context.WithoutCancel(ctx), l.cli.command(0, "rm", "-f", name))
 		_ = os.RemoveAll(layout.root)
 		return nil, err
 	}
@@ -613,14 +722,14 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	return box, nil
 }
 
-// runArgv is the container-run command line for one box.
+// runArgv is the container-run command line for one box, after the binary.
 //
 // Separated from Create so the argument order is assertable without a running
 // daemon: what an operator's own run_args may override is a function of where
 // they are spliced, and nothing else says it.
 func (l *Local) runArgv(ctx context.Context, layout boxLayout, name string) []string {
 	argv := []string{
-		l.runtime, "run", "-d",
+		"run", "-d",
 		"--name", name,
 		"-v", layout.home() + ":" + DefaultHome,
 		"-w", DefaultHome + "/" + WorkspaceSubdir,
@@ -631,7 +740,7 @@ func (l *Local) runArgv(ctx context.Context, layout boxLayout, name string) []st
 		// completion check on a job that already died.
 		"--init",
 	}
-	argv = append(argv, containerUserArgs(ctx, l.runtime)...)
+	argv = append(argv, containerUserArgs(ctx, l.cli)...)
 	if l.opts.Network != "" {
 		argv = append(argv, "--network", l.opts.Network)
 	}
@@ -715,7 +824,7 @@ func (l *Local) reattach(sandboxID string) (Sandbox, error) {
 		return &directBox{layout: layout, credentials: credentials}, nil
 	}
 	return &containerBox{
-		layout: layout, runtime: l.runtime,
+		layout: layout, cli: l.cli,
 		container: l.containerName(sandboxID), credentials: credentials,
 	}, nil
 }
@@ -734,7 +843,7 @@ func (l *Local) Kill(ctx context.Context, sandboxID string) error {
 		return nil
 	}
 	if l.opts.Placement == Container {
-		_, _ = runHost(ctx, hostCommand{argv: []string{l.runtime, "rm", "-f", l.containerName(sandboxID)}})
+		_, _ = runHost(ctx, l.cli.command(0, "rm", "-f", l.containerName(sandboxID)))
 	} else if signalJob(layout, "kill", procgroup.Kill) {
 		// SIGKILL alone, with NO SIGCONT first. A stopped process is killed
 		// by SIGKILL directly — the signal cannot be caught, blocked or
@@ -755,10 +864,15 @@ func (l *Local) Kill(ctx context.Context, sandboxID string) error {
 		awaitJobExit(ctx, layout)
 	}
 	// Kill is a teardown like any other, and the box on disk may hold a login
-	// the run refreshed before it was reclaimed. The files are already there
-	// — collecting them needs no resume, which is the one thing this method
-	// must not do.
-	collectCredentials(layout, readCredentialMap(layout))
+	// the run refreshed before it was reclaimed — collecting it needs no
+	// resume, which is the one thing this method must not do. What is on disk
+	// is all there is: nothing in the box runs again after a SIGKILL or a
+	// `docker rm -f`. A CLI that keeps its login in a file has rewritten that
+	// file itself; one that keeps it in a database of its own has it on disk
+	// only as far as its runner exported it, which is why such a runner
+	// exports while the run works rather than only at its end (see
+	// codingagent's OpenCode).
+	collectCredentials(ctx, layout, readCredentialMap(layout))
 	removeBox(layout)
 	localLog.Debug("local_sandbox_killed", "sandbox_id", sandboxID)
 	return nil
@@ -869,7 +983,7 @@ func (l *Local) reapOrphans(ctx context.Context, olderThan time.Duration) {
 		if l.boxIsAlive(layout, live) {
 			continue
 		}
-		collectCredentials(layout, readCredentialMap(layout))
+		collectCredentials(ctx, layout, readCredentialMap(layout))
 		removeBox(layout)
 		localLog.Info("local_sandbox_orphan_reaped", "sandbox_id", layout.id)
 	}
@@ -911,9 +1025,8 @@ func (l *Local) boxIsAlive(layout boxLayout, live map[string]bool) bool {
 // One listing per reap, rather than an inspect per box: the reap runs on the
 // Create path, which an agent is waiting on.
 func (l *Local) liveContainers(ctx context.Context) (map[string]bool, error) {
-	result, err := runHost(ctx, hostCommand{argv: []string{
-		l.runtime, "ps", "-a", "--filter", "name=" + ContainerPrefix, "--format", "{{.Names}}",
-	}})
+	result, err := runHost(ctx, l.cli.command(0,
+		"ps", "-a", "--filter", "name="+ContainerPrefix, "--format", "{{.Names}}"))
 	if err != nil || result.ExitCode != 0 {
 		detail := strings.TrimSpace(result.Stderr)
 		if err != nil {

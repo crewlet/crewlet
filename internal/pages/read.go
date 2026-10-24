@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -42,11 +44,6 @@ import (
 type Reader struct {
 	db  store.ReplicatedReader
 	log *statelog.Reader
-
-	// committed is this node's own applied position on the pages log, or
-	// nil on a build that runs no applier. It is what a read's own answer
-	// is stamped with.
-	committed func() statelog.Position
 }
 
 // ReaderOptions configure a reader.
@@ -57,11 +54,6 @@ type ReaderOptions struct {
 	// level is a label rather than a guarantee, which is silent at every
 	// surface that renders one.
 	Log *statelog.Reader
-
-	// Committed is this node's applied position. Nil answers the zero
-	// position, which is what a test with no runner has and what a read
-	// then honestly reports.
-	Committed func() statelog.Position
 }
 
 // NewReader builds the knowledge base's read side.
@@ -75,16 +67,8 @@ func NewReader(opts ReaderOptions) (*Reader, error) {
 			"a guarantee, and a degradation invisible in the answer is worse " +
 			"than a refusal")
 	}
-	r := &Reader{db: opts.DB, log: opts.Log, committed: opts.Committed}
-	if r.committed == nil {
-		r.committed = func() statelog.Position { return statelog.Position{} }
-	}
-	return r, nil
+	return &Reader{db: opts.DB, log: opts.Log}, nil
 }
-
-// At is the position this node's rows were derived through, which every answer
-// here is true as of.
-func (r *Reader) At() statelog.Position { return r.committed() }
 
 // Filter narrows a page listing.
 type Filter struct {
@@ -150,7 +134,40 @@ type Summary struct {
 	// nothing else. A tree draws an expander off it, and a count that included
 	// a trashed child would draw one that opens onto nothing.
 	Children int `json:"children,omitempty"`
+
+	// Folder marks a page with nothing written in it: its body is EMPTY. A
+	// folder is not a kind of page the engine stores. It is what a page that
+	// only groups pages IS, so the mark cannot disagree with the page: write a
+	// paragraph into one and it is a page with children, empty one and it is
+	// a folder again.
+	Folder bool `json:"folder,omitempty"`
+
+	// SavedBy and SavedAt are the last change to what the page SAYS: its
+	// create, a save or a rename, each of which writes a revision.
+	// [Summary.Updated] moves with every change, a label, a watch and a move
+	// included, which is the wrong instant for "last saved". SavedBy is the
+	// writer under the one name every row of theirs carries ([Actor.Name]): a
+	// seat's handle, which is a person's seat too, or the login of a credential
+	// nobody is bound through.
+	SavedBy string    `json:"saved_by,omitempty"`
+	SavedAt time.Time `json:"saved_at"`
+
+	// savedID is the history row the two fields above are read from.
+	savedID string
 }
+
+// savedKinds are the changes that write a revision: what "last saved" means.
+const savedKinds = `'created', 'saved', 'renamed'`
+
+// summarySaved is the read-time column every listing row carries beyond its
+// head: the history row of its last save, which [Reader.attachSaves] reads in
+// one statement for the whole page of rows. FROM THE HISTORY because the head
+// keeps who CREATED the page and when anything last moved it, and neither is
+// who last changed what it says.
+const summarySaved = `
+		       (SELECT h.id FROM pages_history h
+		         WHERE h.page_id = p.id AND h.kind IN (` + savedKinds + `)
+		         ORDER BY h.created_at DESC, h.id DESC LIMIT 1)`
 
 // Listing is a page listing and what it is true as of.
 //
@@ -160,9 +177,9 @@ type Summary struct {
 // that drew one said "50" about both.
 //
 // THE POSITION AND THE COVERAGE TRAVEL WITH THE ROWS, because a caller cannot
-// reconstruct either afterwards: [Reader.At] answers about NOW rather than
-// about the transaction this listing was read in, and a set read that could
-// not account for everything is indistinguishable from a short one.
+// reconstruct either afterwards: a position read after the answer is about NOW
+// rather than about the transaction this listing was read in, and a set read
+// that could not account for everything is indistinguishable from a short one.
 type Listing struct {
 	Pages []Summary `json:"pages"`
 
@@ -209,7 +226,7 @@ func (r *Reader) List(ctx context.Context, f Filter, fresh statelog.Freshness) (
 	var args []any
 	if f.Container != "" {
 		where = append(where, "p.container = ?")
-		args = append(args, strings.ToUpper(f.Container))
+		args = append(args, ContainerKey(f.Container))
 	}
 	if f.ParentID != "" {
 		where = append(where, "p.parent_id = ?")
@@ -387,7 +404,8 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, spec, child listSpec,
 		       p.updated_at, MAX(p.version, p.scoped_through),
 		       (SELECT COUNT(*) FROM pages_heads c
 		          LEFT JOIN pages_skills ck ON ck.page_id = c.id
-		         WHERE `+strings.Join(child.where, " AND ")+`)
+		         WHERE `+strings.Join(child.where, " AND ")+`),
+		       p.body = '',`+summarySaved+`
 		  FROM pages_heads p
 		  LEFT JOIN pages_skills k ON k.page_id = p.id
 		 WHERE `+where+`
@@ -401,16 +419,18 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, spec, child listSpec,
 	var out []Summary
 	for rows.Next() {
 		var (
-			s                 Summary
-			skill, onboarding int
-			updated, revision int64
+			s                         Summary
+			skill, onboarding, folder int
+			updated, revision         int64
+			savedID                   sql.NullString
 		)
 		if err := rows.Scan(&s.ID, &s.Container, &s.ParentID, &s.Title, &s.Status,
 			&s.Author, &s.Version, &skill, &onboarding, &updated, &revision,
-			&s.Children); err != nil {
+			&s.Children, &folder, &savedID); err != nil {
 			return listPage{}, fmt.Errorf("pages: scan page: %w", err)
 		}
-		s.Skill, s.Onboarding = skill != 0, onboarding != 0
+		s.Skill, s.Onboarding, s.Folder = skill != 0, onboarding != 0, folder != 0
+		s.savedID = savedID.String
 		s.Updated = store.DecodeTime(updated)
 		s.Revision = uint64(revision)
 		out = append(out, s)
@@ -424,7 +444,46 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, spec, child listSpec,
 		page.after = listCursor{Container: last.Container, Title: last.Title, ID: last.ID}.String()
 	}
 	page.rows = out
-	return page, r.attachLabels(ctx, tx, out)
+	if err := r.attachLabels(ctx, tx, out); err != nil {
+		return listPage{}, err
+	}
+	return page, r.attachSaves(ctx, tx, out)
+}
+
+// attachSaves fills each row's last save from the history row the listing
+// named for it, in one statement for the whole page of rows.
+func (r *Reader) attachSaves(ctx context.Context, tx *sql.Tx, items []Summary) error {
+	ids := make([]any, 0, len(items))
+	at := make(map[string]int, len(items))
+	for i, item := range items {
+		if item.savedID == "" {
+			continue
+		}
+		ids = append(ids, item.savedID)
+		at[item.savedID] = i
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id, actor, created_at FROM pages_history WHERE id IN (`+
+			placeholders(len(ids))+`)`, ids...)
+	if err != nil {
+		return fmt.Errorf("pages: read who last saved: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, actor string
+		var when int64
+		if err := rows.Scan(&id, &actor, &when); err != nil {
+			return fmt.Errorf("pages: scan who last saved: %w", err)
+		}
+		if i, ok := at[id]; ok {
+			items[i].SavedBy = actor
+			items[i].SavedAt = store.DecodeTime(when)
+		}
+	}
+	return rows.Err()
 }
 
 func (r *Reader) attachLabels(ctx context.Context, tx *sql.Tx, items []Summary) error {
@@ -471,6 +530,10 @@ type Detail struct {
 	// opened did not.
 	Skill      bool `json:"skill"`
 	Onboarding bool `json:"onboarding"`
+
+	// Folder is [Summary.Folder]: the page's body is empty, so it is a page
+	// that only groups pages.
+	Folder bool `json:"folder"`
 
 	Comments []Comment         `json:"comments,omitempty"`
 	History  []RevisionSummary `json:"history,omitempty"`
@@ -553,6 +616,7 @@ func (r *Reader) Get(ctx context.Context, ref string, fresh statelog.Freshness) 
 			return fmt.Errorf("pages: read what %s was derived as: %w", id, serr)
 		}
 		detail.Skill, detail.Onboarding = skill != 0, onboarding != 0
+		detail.Folder = page.Body == ""
 		if detail.Comments, err = r.comments(ctx, tx, id); err != nil {
 			return err
 		}
@@ -579,23 +643,26 @@ func (r *Reader) Get(ctx context.Context, ref string, fresh statelog.Freshness) 
 }
 
 // pageReadScope is what a point read of one page is about, resolved from the
-// reference the caller named.
+// reference the caller named — inside the answer's own transaction, where the
+// framework probes it ([statelog.Query.Resolve]).
 //
 // THE PAGE'S OWN PATH, under the space it is filed in. An address adds its
 // title term as well, because a create or a rename arbitrates on the title and
 // is filed under it — a deferred rename that took this address is about this
-// read even while the page it resolved to still holds the name.
+// read even while the page it resolved to still holds the name. The address's
+// container is canonical ([ContainerKey]), as every scope a record is filed
+// under is.
 //
 // A REFERENCE THAT RESOLVES TO NOTHING STILL BOUNDS A SCOPE, because "no such
 // page" is a claim about rows a deferred create has not written: an address is
-// exactly the term such a create is filed under, and an id names nothing
-// narrower than the domain.
+// exactly the term such a create is filed under, and an id is decided by
+// [absentPageScope].
 func pageReadScope(ctx context.Context, tx *sql.Tx, ref string) (statelog.ScopeSet, error) {
 	query := `SELECT id, container FROM pages_heads WHERE id = ?`
 	args := []any{ref}
 	var address *ScopeTerm
 	if container, title, ok := strings.Cut(ref, "/"); ok {
-		container = strings.ToUpper(strings.TrimSpace(container))
+		container = ContainerKey(container)
 		address = &ScopeTerm{Kind: TermTitle, Container: container, ID: TitleToken(title)}
 		query = `SELECT id, container FROM pages_heads WHERE container = ? AND title_norm = ?`
 		args = []any{container, NormalizeTitle(title)}
@@ -605,7 +672,7 @@ func pageReadScope(ctx context.Context, tx *sql.Tx, ref string) (statelog.ScopeS
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		if address == nil {
-			return statelog.ScopeSet{Paths: []string{ScopeTerm{Kind: TermDomain}.Path()}}, nil
+			return absentPageScope(ctx, tx, ref)
 		}
 		return statelog.ScopeSet{Paths: []string{address.Path()}}, nil
 	case err != nil:
@@ -616,6 +683,102 @@ func pageReadScope(ctx context.Context, tx *sql.Tx, ref string) (statelog.ScopeS
 		paths = append(paths, address.Path())
 	}
 	return statelog.ScopeSet{Paths: paths}.Normalised(), nil
+}
+
+// absentPageScope is [pageReadScope] for an ID no row holds.
+//
+// A MINTED ID NAMES NO SPACE: the object path a create files it under names a
+// container the absent row cannot supply. So the page is about its object path
+// UNDER EVERY CONTAINER, and every term that contains such a path — the
+// domain, the containers' root, and ANY container's own term, since a scope is
+// the complete set of objects its apply may write and a container term covers
+// every page that may come to be in it. That is not a finite list of paths, so
+// it is answered as the retained records' own paths that fall inside it
+// ([mayHoldPage]) beside the id's object path in the containerless space,
+// whose every ancestor falls inside it too: the framework's probe then matches
+// exactly the records that may create the page. The domain term, the obvious
+// answer, refused an absent id under ANY retained record — one about another
+// page in another space included — and an object path in one space alone
+// served "no such page" past a record about a whole space that may be the one
+// creating it.
+//
+// ANYTHING ELSE names no page a record could create, because every page id is
+// minted: it is the containerless object path alone, which only a record about
+// the whole domain covers.
+//
+// THE CONTAINER IS MATCHED IN GO, segment by segment, rather than by a LIKE
+// pattern: `%` spans the separator, so a pattern for "any container's own
+// term" also matches every page path under every container, and LIKE folds
+// case where a path does not. The retained set it walks is this node's
+// undecodable records, which a node holds few of and a node holding many has
+// a louder problem than this read.
+func absentPageScope(ctx context.Context, tx *sql.Tx, ref string) (statelog.ScopeSet, error) {
+	id, minted := mintedID(ref)
+	if !minted {
+		return statelog.ScopeSet{Paths: []string{
+			ScopeTerm{Kind: TermObject, ID: ref}.Path(),
+		}}, nil
+	}
+	paths := []string{ScopeTerm{Kind: TermObject, ID: id.String()}.Path()}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT DISTINCT s.path
+		  FROM pages_log_deferred_scope s
+		  JOIN pages_log_deferred d ON d.position = s.position`)
+	if err != nil {
+		return statelog.ScopeSet{}, fmt.Errorf("pages: ask whether a retained "+
+			"record creates page %s: %w", id, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return statelog.ScopeSet{}, fmt.Errorf("pages: read a retained "+
+				"record's scope: %w", err)
+		}
+		if mayHoldPage(path, id.String()) {
+			paths = append(paths, path)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return statelog.ScopeSet{}, fmt.Errorf("pages: read the retained "+
+			"records' scopes: %w", err)
+	}
+	return statelog.ScopeSet{Paths: paths}.Normalised(), nil
+}
+
+// mayHoldPage reports whether a retained record's scope path covers page id
+// in SOME container: whether path is the page's object path, or any term
+// above it, with the container segment matching whatever it names — see
+// [absentPageScope].
+func mayHoldPage(path, id string) bool {
+	within := strings.Split(ScopeTerm{Kind: TermObject, Container: anyContainer,
+		ID: id}.Path(), statelog.ScopeSeparator)
+	held := strings.Split(strings.Trim(strings.TrimSpace(path),
+		statelog.ScopeSeparator), statelog.ScopeSeparator)
+	if len(held) > len(within) {
+		return false
+	}
+	for i, segment := range held {
+		if within[i] != anyContainer && segment != within[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// anyContainer stands in the container segment of the path [mayHoldPage]
+// compares against. A space key is upper-case and slug-shaped, so no real
+// container is spelled with a byte a path never carries.
+const anyContainer = "\x00"
+
+// mintedID is ref as the uuid an id this engine mints is, and whether it is
+// one — an address, or any other text, names no page a record could create.
+func mintedID(ref string) (uuid.UUID, bool) {
+	if strings.Contains(ref, "/") {
+		return uuid.UUID{}, false
+	}
+	id, err := uuid.Parse(ref)
+	return id, err == nil
 }
 
 // locate resolves a reference to a page row.
@@ -636,7 +799,7 @@ func (r *Reader) locate(ctx context.Context, tx *sql.Tx, ref string) (document s
 		// so every address lookup scanned the container.
 		query = `SELECT id, document, ` + HeadRevision + ` FROM pages_heads
 		          WHERE container = ? AND title_norm = ?`
-		args = []any{strings.ToUpper(strings.TrimSpace(container)), NormalizeTitle(title)}
+		args = []any{ContainerKey(container), NormalizeTitle(title)}
 	}
 	err = tx.QueryRowContext(ctx, query, args...).Scan(&id, &document, &rev)
 	switch {
@@ -865,7 +1028,7 @@ func (r *Reader) SkillPages(ctx context.Context, container string,
 	if fresh.Level == "" {
 		return nil, errors.New("pages: this read names no level")
 	}
-	container = strings.ToUpper(strings.TrimSpace(container))
+	container = ContainerKey(container)
 	if container == "" {
 		return nil, nil
 	}

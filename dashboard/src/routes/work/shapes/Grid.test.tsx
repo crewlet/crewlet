@@ -27,9 +27,13 @@ import type { WorkActivityRecord, WorkSummary } from "~/protocol/index.ts";
 // about the column's other cells, so it reads as an anonymous, connected tab.
 vi.mock("~/lib/viewer.ts", () => ({
   useViewer: () => ({
-    operatorID: "",
-    operator: false,
+    login: "",
+    grants: [],
+    admin: false,
+    tracker: false,
+    knowledge: false,
     handle: "",
+    owner: "",
     name: "",
     acts: [],
     kind: "",
@@ -44,7 +48,12 @@ vi.mock("~/lib/viewer.ts", () => ({
 vi.mock("~/lib/store-hooks.ts", async () => {
   const actual =
     await vi.importActual<typeof import("~/lib/store-hooks.ts")>("~/lib/store-hooks.ts");
-  return { ...actual, useConnection: () => ({ connected: true }) };
+  // NO ORG: which services the company runs is not known, so none is hidden.
+  return {
+    ...actual,
+    useConnection: () => ({ connected: true, accessRefused: null }),
+    useOrg: () => null,
+  };
 });
 
 afterEach(() => {
@@ -115,7 +124,7 @@ const removal = (over: Partial<WorkActivityRecord> = {}): WorkActivityRecord => 
 
 /** The `removed_by` cell: the seat link's own container, and nothing else. */
 function whoCell(): HTMLElement {
-  const link = screen.getByTitle("@ada").closest(".cell-seat");
+  const link = screen.getByTitle("@ada").closest(".crewlet-table-cell__entity");
   const cell = link?.parentElement;
   if (!cell) throw new Error("the removed_by cell drew no seat");
   return cell;
@@ -155,7 +164,7 @@ test("the table's assignee is the resolved name, linking to the seat", () => {
   mount("table", [row({ assignee: "ada" })]);
   const link = screen.getByText("Ada Okonkwo").closest("a") as HTMLAnchorElement;
   expect(link).toBeTruthy();
-  expect(link.getAttribute("href")).toBe("#/agents/seats/ada");
+  expect(link.getAttribute("href")).toBe("#/company/org/seats/ada");
   // THE HANDLE IS STILL REACHABLE, on the hover title — it is what an operator
   // types into a filter, so resolving the name must not destroy it.
   expect(link.getAttribute("title")).toBe("@ada");
@@ -218,22 +227,21 @@ test("an operator's removal is marked as one, beside the name", () => {
   expect(screen.getByText("operator")).toBeTruthy();
 });
 
-// AND A TOKEN BOUND TO A SEAT NAMES THE PERSON, as the change log names the
-// same removal: the token is the audit trail (`actor`), the person is who the
-// row is about (`actor_seat`). The trash drew "founder" beside a log saying
-// Jane Founder.
-test("a removal made through a bound token names the person, not the token", () => {
+// AND A PERSON BOUND TO A SEAT IS NAMED AS THE SEAT, as the change log names
+// the same removal: they write AS the seat (`iam.ActorFor`), and the
+// credential they wrote through is the audit trail's half, never their name.
+test("a removal a bound person made names the seat they write as, not the credential", () => {
   const removals = new Map([
-    ["t-1", removal({ actor: "founder", actor_kind: "operator", actor_seat: "ada" })],
+    ["t-1", removal({ actor: "ada", actor_kind: "human", operator_id: "pat:t-1" })],
   ]);
   mount("table", [row({})], removals);
   expect(screen.getByText("Ada Okonkwo")).toBeTruthy();
-  expect(screen.queryByText("founder")).toBeNull();
+  expect(screen.queryByText("pat:t-1")).toBeNull();
 });
 
 // ONE SEAT LOOKS LIKE ONE SEAT ON BOTH COLUMN SETS. The outline is the only
 // variant an identity badge has and it is STRUCTURAL — who holds the seat — so
-// it cannot depend on which set is drawing. It did: `SeatCell` took a kind and
+// it cannot depend on which set is drawing. It did: `linkedSeat` took a kind and
 // the compact `Assignee` had no way to be handed one, so the same person was
 // drawn two ways on one grid.
 test("a human seat is drawn as a person on both column sets", () => {

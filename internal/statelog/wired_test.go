@@ -128,8 +128,18 @@ func newWiredNode(tb testing.TB, q *js.Queue, nodeID string) *wiredNode {
 	}); err != nil {
 		tb.Fatalf("create the probe domain's tables: %v", err)
 	}
+	// SIGNED AND VERIFIED under the keyring every case in this package
+	// shares, as every data node's records are.
+	signer, err := statelog.NewSigner(probeDomain{}.Name(), testRing())
+	if err != nil {
+		tb.Fatalf("NewSigner: %v", err)
+	}
+	verifier, err := statelog.NewVerifier(probeDomain{}.Name(), testRing())
+	if err != nil {
+		tb.Fatalf("NewVerifier: %v", err)
+	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: probeDomain{}, Spec: spec,
+		Domain: probeDomain{}, Spec: spec, Verifier: verifier,
 		Applier: newProbeApplier(), Fetch: consumer,
 		Log: log, Node: db, DB: estate,
 		Checkpoint:      statelog.Position{Stream: spec.Name, Generation: 1},
@@ -152,18 +162,19 @@ func newWiredNode(tb testing.TB, q *js.Queue, nodeID string) *wiredNode {
 		},
 		Committed: runner.Committed,
 	}
-	reserve := reserveOn(tb, log)
+	reserve := reserveOn(tb, spec, log)
 	gen := func() uint32 { return runner.Committed().Generation }
 	pub, err := statelog.NewPublisher(statelog.Deps{
 		Domain: probeDomain{}, Spec: spec,
-		Log: log, Records: log, Rows: rows, Fence: fence, Gates: &fakeGates{},
-		Waiter: runner, Voids: runner, Identity: runner,
+		Log: log, Signer: signer, Rows: rows, Fence: fence, Gates: &fakeGates{},
+		Records: statelog.VerifiedLog{Log: log, Verifier: verifier},
+		Waiter:  runner, Voids: runner, Identity: runner,
 		Admission: reserve, NodeID: nodeID, Generation: gen,
 	})
 	if err != nil {
 		tb.Fatalf("NewPublisher: %v", err)
 	}
-	index, err := statelog.NewReadIndex(probeDomain{}, spec, log, reserve, probeEncode, gen, nil)
+	index, err := statelog.NewReadIndex(probeDomain{}, spec, log, signer, reserve, probeEncode, gen, nil)
 	if err != nil {
 		tb.Fatalf("NewReadIndex: %v", err)
 	}

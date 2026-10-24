@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 type probeApplier struct {
 	mu      sync.Mutex
 	applied []statelog.Position
+	epochs  []map[string]any
 	commits int
 	gate    statelog.Reason
 	gated   map[uint64]bool
@@ -40,9 +42,19 @@ type probeApplier struct {
 
 	// lockedAt is a sequence whose FIRST apply fails the way a write that
 	// lost the file's lock does, which the store answers by running the
-	// transaction's whole body again; zero fails nothing.
+	// transaction's whole body again; zero fails nothing. It is how a case
+	// stages the re-run no healthy store produces.
 	lockedAt uint64
+
+	// hooks is every post-commit call the framework made, in order: a
+	// "retained N" for each [statelog.RetentionHook] call and a
+	// "committed" for each [statelog.Applier.Committed].
+	hooks []string
 }
+
+// THE PROBE TAKES THE OPTIONAL HOOK, as every applier that implements it must
+// assert: the framework finds it by a type assertion.
+var _ statelog.RetentionHook = (*probeApplier)(nil)
 
 func newProbeApplier() *probeApplier {
 	return &probeApplier{gated: map[uint64]bool{}, asked: map[uint64]int{}, rowsPer: 1}
@@ -71,6 +83,7 @@ func (a *probeApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Recor
 	}
 	a.mu.Lock()
 	a.applied = append(a.applied, rec.Position)
+	a.epochs = append(a.epochs, opts.Epoch)
 	a.mu.Unlock()
 	return per, nil
 }
@@ -86,12 +99,33 @@ func (a *probeApplier) Committed(context.Context) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.commits++
+	a.hooks = append(a.hooks, "committed")
+}
+
+func (a *probeApplier) Retained(_ context.Context, records int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.hooks = append(a.hooks, fmt.Sprintf("retained %d", records))
+}
+
+// hooksSeen is every post-commit call so far, in order.
+func (a *probeApplier) hooksSeen() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]string(nil), a.hooks...)
 }
 
 func (a *probeApplier) seen() []statelog.Position {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return append([]statelog.Position(nil), a.applied...)
+}
+
+// epochsSeen is the epoch each applied record was handed, in apply order.
+func (a *probeApplier) epochsSeen() []map[string]any {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]map[string]any(nil), a.epochs...)
 }
 
 // probeFetch hands the loop whatever the test queued, and records what was
@@ -150,7 +184,10 @@ func probeStoredAt(seq uint64) time.Time {
 	return time.Unix(1_700_000_000, 0).UTC().Add(time.Duration(seq) * time.Second)
 }
 
-// offer queues one record at seq, encoded as the probe domain's envelope.
+// offer queues one record at seq, encoded as the probe domain's envelope and
+// SIGNED, because what a broker hands an applier is what a publisher wrote and
+// the framework signs every one of those. A fixture that offered an unsigned
+// record would be testing the refusal rather than the path.
 func (f *probeFetch) offer(seq uint64, env statelog.Envelope) {
 	f.offerStored(seq, probeStoredAt(seq), env)
 }
@@ -163,6 +200,7 @@ func (f *probeFetch) offerStored(seq uint64, storedAt time.Time, env statelog.En
 	if err != nil {
 		panic(err)
 	}
+	body = probeSeal(body)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	m := statelog.Message{
@@ -303,6 +341,10 @@ type applyHarness struct {
 	applier *probeApplier
 	fetch   *probeFetch
 	metrics *metrics.Recorder
+
+	// epoch is the source [applyHarness.rebuild] hands the runner, nil for
+	// none — as a caller that declares no epoch builds one.
+	epoch func() map[string]any
 }
 
 func newApplyHarness(t *testing.T, domain statelog.Domain) *applyHarness {
@@ -342,6 +384,7 @@ func newApplyHarnessWith(t *testing.T, domain statelog.Domain,
 	}
 	deps := statelog.RunnerDeps{
 		Domain: domain, Spec: specOf(domain),
+		Verifier:   testVerifier(t, domain),
 		Applier:    applier,
 		Fetch:      fetch,
 		Log:        fetch,
@@ -375,7 +418,20 @@ func (h *applyHarness) upgrade(domain statelog.Domain) {
 // its checkpoint was committed under.
 func (h *applyHarness) rebuild(domain statelog.Domain, created time.Time) {
 	h.t.Helper()
-	h.applier = newProbeApplier()
+	probe := newProbeApplier()
+	h.rebuildWith(domain, created, probe, probe)
+}
+
+// rebuildWith is [applyHarness.rebuild] on a build whose applier is applier —
+// a probe applier, or one wrapping probe with rules of its own ([Deriver]) —
+// and it is the ONE place a restarting node's runner is built, so a case that
+// varies the applier inherits everything a restart is held to (the keyring
+// included) rather than a second copy of the deps that drifts from it.
+func (h *applyHarness) rebuildWith(domain statelog.Domain, created time.Time,
+	applier statelog.Applier, probe *probeApplier) {
+
+	h.t.Helper()
+	h.applier = probe
 	h.fetch = newProbeFetch()
 	recorder, err := metrics.New()
 	if err != nil {
@@ -394,7 +450,8 @@ func (h *applyHarness) rebuild(domain statelog.Domain, created time.Time) {
 	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain: domain, Spec: specOf(domain),
-		Applier:            h.applier,
+		Verifier:           testVerifier(h.t, domain),
+		Applier:            applier,
 		Fetch:              h.fetch,
 		Log:                h.fetch,
 		Node:               h.db,
@@ -402,6 +459,7 @@ func (h *applyHarness) rebuild(domain statelog.Domain, created time.Time) {
 		Checkpoint:         checkpoint.At,
 		CheckpointStoredAt: checkpoint.StoredAt,
 		StreamCreatedAt:    created,
+		Epoch:              h.epoch,
 		Metrics:            recorder,
 	})
 	if err != nil {
@@ -434,45 +492,62 @@ func (h *applyHarness) retainedCount() int64 {
 	return count
 }
 
-// boot runs the loop with nothing queued until it has STARTED — it has asked
-// the log for records, which it does only once its cursor is loaded, its
-// checkpoint verified and what an earlier build retained reprocessed, the
-// applier's Committed hook included — and the retained table holds want
-// records, or fails. It is how a reprocess is observed: the checkpoint does
-// not move, so [applyHarness.run] has nothing to wait on. A loop that ENDS
-// before it asks — a startup that stops — returns what ended it.
+// boot runs the loop with nothing queued until its STARTUP IS OVER with the
+// retained table holding want records, or fails. It is how a reprocess is
+// observed: the checkpoint does not move, so [applyHarness.run] has nothing to
+// wait on.
 //
-// THE FIRST FETCH, NEVER THE COUNT ALONE. A case whose table already holds
-// want records before the loop runs — a boot that must not stop, one whose
-// cursor the case reads next, one that must stop — was satisfied by the count
-// before the loop had run a line, and a fixed settle then cancelled whatever
-// the loop had reached: on a loaded machine that was nothing, so the stop it
-// was about to make read as never made, and a check that it made none passed
-// without the loop having looked.
+// # Over is the loop's first fetch, never the count alone
+//
+// The count says none of what a startup does. On a runner retaining nothing it
+// is already want before the loop has run a line, so a case that then asked the
+// reanchor's void rules found the checkpoint they ride on unread and voiding
+// nothing. And on a runner releasing records it moves when the LAST released
+// record's transaction commits, while that record's gate counter and Committed
+// hook, the deferral refresh and the pass's own `reprocessed`/`gated` tally all
+// follow it. It waited for the count and then slept twenty milliseconds, so on
+// a loaded runner the cancel landed inside the pass, its next read failed on
+// the cancelled context, and the case read a tally the pass never reached — a
+// counter at zero reported as the applier forgetting a gated record. The loop
+// fetches only once [statelog.Runner.Run]'s startup has returned (the
+// checkpoint loaded with the reanchor's rules on it, the retained records
+// reprocessed, the Committed hook run for them), so its first fetch is the one
+// instant every effect of the startup is visible; a run that RETURNED instead
+// has finished its startup too.
 func (h *applyHarness) boot(want int64) error {
 	h.t.Helper()
 	ctx, cancel := context.WithTimeout(h.t.Context(), 20*time.Second)
 	defer cancel()
-	asked := h.fetch.fetchCount()
+	// THIS RUN'S fetches, told apart from an earlier run's on the same
+	// broker: a case may boot a runner it already ran.
+	fetched := h.fetch.fetchCount()
 	errs := make(chan error, 1)
 	go func() { errs <- h.runner.Run(ctx) }()
+	booted := func() bool { return h.fetch.fetchCount() > fetched }
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if h.fetch.fetchCount() > asked && h.retainedCount() == want {
+		if booted() && h.retainedCount() == want {
 			cancel()
 			<-errs
 			return nil
 		}
 		select {
 		case err := <-errs:
+			// A STOP AT STARTUP is the runner's answer, which a case
+			// reads through [statelog.Runner.Stopped]; it is this
+			// harness's failure only where it left the retained table
+			// short of what the case expects.
+			if h.retainedCount() == want {
+				return nil
+			}
 			return err
 		case <-time.After(2 * time.Millisecond):
 		}
 	}
 	cancel()
 	<-errs
-	if h.fetch.fetchCount() == asked {
-		return errors.New("the loop never finished starting: it asked the log for nothing")
+	if !booted() {
+		return fmt.Errorf("the loop never finished its startup: it made no fetch in 10s")
 	}
 	return fmt.Errorf("%d record(s) are still retained, want %d", h.retainedCount(), want)
 }
@@ -735,6 +810,63 @@ func TestARecordOverAStaleScopeIsRetainedRatherThanApplied(t *testing.T) {
 	if deferred != 2 {
 		t.Fatalf("%d record(s) retained, want 2 — the second is the one whose "+
 			"rows the first made stale", deferred)
+	}
+}
+
+// AN APPLIER IS TOLD WHAT A COMMITTED BATCH RETAINED, before it is told the
+// batch committed — and is told nothing of the kind about a batch that
+// retained nothing.
+//
+// A retained record never reaches Apply, so an applier that says after a batch
+// what the batch moved says nothing about it — while every read its scope
+// covers became unknown at that commit. The identity estate is why this
+// exists: a session a newer peer's record revoked is refused by every REST
+// route on a node that retained the record, and a dashboard socket held open
+// on that session heard nothing until its applier was told. Both retain arms
+// count — a record this build cannot read, and a readable one whose scope that
+// record covers — and the hook comes BEFORE Committed, because an applier
+// folds it into what Committed hands over.
+//
+// Mutation: drop the hook call from the runner and the second batch reports
+// no retention.
+func TestAnApplierIsToldWhatABatchRetained(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+	h.fetch.offer(2, env(2, "edit", "b", "op-2", 1))
+	if err := h.run(2); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	for _, hook := range h.applier.hooksSeen() {
+		if hook != "committed" {
+			t.Fatalf("a batch that retained nothing called %q", hook)
+		}
+	}
+
+	// A record above this build, and a readable one inside its scope.
+	h.fetch.offer(3, env(3, "edit", "c", "op-3", 9, "project/ENG"))
+	h.fetch.offer(4, env(4, "edit", "d", "op-4", 1, "project/ENG/object/d"))
+	h.fetch.offer(5, env(5, "edit", "e", "op-5", 1, "project/OPS/object/e"))
+	if err := h.run(5); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	hooks := h.applier.hooksSeen()
+	retained := 0
+	for i, hook := range hooks {
+		var n int
+		if _, err := fmt.Sscanf(hook, "retained %d", &n); err != nil {
+			continue
+		}
+		retained += n
+		if i+1 >= len(hooks) || hooks[i+1] != "committed" {
+			t.Errorf("the hook calls ran %v — Retained must come immediately "+
+				"before the Committed of its own batch", hooks)
+		}
+	}
+	if retained != 2 {
+		t.Fatalf("the applier was told of %d retained record(s) across %v, want "+
+			"2 — the record this build cannot read and the one its scope "+
+			"covers", retained, hooks)
 	}
 }
 
@@ -1346,6 +1478,71 @@ func TestApplyIsStrictlyBySequenceAcrossTransactionBoundaries(t *testing.T) {
 	}
 }
 
+// AN EPOCH THAT MOVES REACHES THE APPLIER AT ITS NEXT BATCH, WITH NO RESTART.
+//
+// The runner is built once, at boot, and the epoch moves with every
+// activation. It was handed the epoch as a VALUE, so every batch for the life
+// of the process applied under the boot company's — a node that booted with no
+// company under none at all — and a revision that moved a key an applier reads
+// (the tracker's inbox retention) reached the applier at the next restart,
+// while two nodes that had restarted at different times applied one record
+// under two epochs for as long as both ran.
+//
+// ONE RUN spans both records, because a restart between them is exactly what
+// the case must not need. Mutation: read the source once, in NewRunner, and
+// the second record is handed the first epoch.
+func TestAChangedEpochReachesTheApplierWithNoRestart(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	var current atomic.Pointer[map[string]any]
+	first := map[string]any{"probe.retention_days": 30}
+	current.Store(&first)
+	h.epoch = func() map[string]any { return *current.Load() }
+	h.rebuild(probeDomain{}, time.Time{})
+
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	errs := make(chan error, 1)
+	go func() { errs <- h.runner.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-errs
+	}()
+	committed := func(want uint64) {
+		t.Helper()
+		deadline := time.Now().Add(15 * time.Second)
+		for h.runner.Committed().Seq < want {
+			if err := h.runner.Stopped(); err != nil {
+				t.Fatalf("the runner stopped: %v", err)
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("the runner committed %v, want sequence %d",
+					h.runner.Committed(), want)
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
+
+	h.fetch.offer(1, env(1, "edit", "o1", "op-1", 1))
+	committed(1)
+	second := map[string]any{"probe.retention_days": 7}
+	current.Store(&second)
+	h.fetch.offer(2, env(2, "edit", "o2", "op-2", 1))
+	committed(2)
+
+	seen := h.applier.epochsSeen()
+	if len(seen) != 2 {
+		t.Fatalf("the applier was handed %d epoch(s), want one per record", len(seen))
+	}
+	if seen[0]["probe.retention_days"] != 30 {
+		t.Errorf("the first record was applied under %v, want the epoch in force "+
+			"when it arrived", seen[0])
+	}
+	if seen[1]["probe.retention_days"] != 7 {
+		t.Errorf("the second record was applied under %v after the epoch moved "+
+			"to %v — a revision reaches this runner only at a restart", seen[1], second)
+	}
+}
+
 // THE OPERATION LEDGER IS SWEPT, and nothing swept it.
 //
 // Every `<domain>_ops` migration says the table is swept and ships
@@ -1492,6 +1689,49 @@ func TestApplyTxAbortsAreCounted(t *testing.T) {
 	if got := h.counter(metrics.StatelogApplyRecords); got == 0 {
 		t.Error("the applier recorded no records at all, so this recorder is " +
 			"not connected and the assertion above proves nothing")
+	}
+}
+
+// A RE-RUN APPLY TRANSACTION SAYS WHAT IT SAW ONCE.
+//
+// The store runs an apply's body again when an attempt fails transiently, and
+// the rows it wrote roll back with it — but a counter bumped and a line logged
+// from inside the body do not. So a record retained as unverifiable, or
+// dropped by a gate, on the attempt that was abandoned and again on the one
+// that committed was counted twice, and `records.unverifiable` and
+// `records.gated` are what the alarm table reads. This stages the re-run the
+// healthy store never produces: the LAST record of the run fails its first
+// apply the way a lost lock does, so the whole body — the unverifiable record
+// and the gated one included — runs twice.
+func TestARerunApplySaysWhatItSawOnce(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	h.applier.gate = statelog.ReasonEvicted
+	h.applier.gated[2] = true
+	h.applier.lockedAt = 3
+	h.fetch.offerFramed(1, sealedUnder(t, "k9", env(1, "edit", "a", "op-1", 1)))
+	h.fetch.offer(2, env(2, "edit", "b", "op-2", 1))
+	h.fetch.offer(3, env(3, "edit", "c", "op-3", 1))
+	if err := h.run(3); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// THE CONTROL: the body did run twice, or nothing below is about a
+	// re-run at all.
+	if got := h.counter(metrics.StatelogApplyTxAborts); got != 1 {
+		t.Fatalf("the store re-ran the apply body %d time(s), want exactly 1 "+
+			"— without the re-run this case asserts nothing", got)
+	}
+	if got := h.retainedCount(); got != 1 {
+		t.Fatalf("retained %d, want the one record this node cannot "+
+			"authenticate", got)
+	}
+	if got := h.counter(metrics.StatelogRecordsUnverifiable); got != 1 {
+		t.Errorf("one unverifiable record was counted %d times — the count "+
+			"is taken inside a body the store ran twice", got)
+	}
+	if got := h.counter(metrics.StatelogRecordsGated); got != 1 {
+		t.Errorf("one gated record was counted %d times — the count is "+
+			"taken inside a body the store ran twice", got)
 	}
 }
 
@@ -2034,11 +2274,12 @@ func TestALiveReadingOfARebuiltLogIsTheRunnersVerdict(t *testing.T) {
 	// names the instant the runner was built with, so the boot comparison
 	// passes — and a loop that resumed would apply the rebuilt stream's
 	// records into rows keyed to the one before it. It stops instead, on
-	// the verdict it already holds, exactly as a boot on that stream does:
-	// the run ENDS on that stop, before it asks the log for anything.
-	err := h.boot(0)
-	if !errors.Is(err, statelog.ErrStopped) || !errors.Is(err, statelog.ErrStreamRecreated) {
-		t.Fatalf("a re-run over an established rebuild ended with %v, want the "+
+	// the verdict it already holds, exactly as a boot on that stream does.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if err := h.runner.Run(ctx); !errors.Is(err, statelog.ErrStopped) ||
+		!errors.Is(err, statelog.ErrStreamRecreated) {
+		t.Fatalf("a re-run over an established rebuild returned %v, want the "+
 			"recreation stop", err)
 	}
 	if !errors.Is(h.runner.StreamIdentity(), statelog.ErrStreamRecreated) {
@@ -2392,6 +2633,7 @@ func TestAStoreThatRefusesAtStartupIsRetried(t *testing.T) {
 	flaky := &flakyEstate{inner: h.estate, refusals: 3}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain: probeDomain{}, Spec: specOf(probeDomain{}),
+		Verifier:   testVerifier(t, probeDomain{}),
 		Applier:    h.applier,
 		Fetch:      h.fetch,
 		Log:        h.fetch,
@@ -2432,6 +2674,321 @@ func TestAStoreThatRefusesAtStartupIsRetried(t *testing.T) {
 	}
 	if err := runner.Stopped(); err != nil {
 		t.Errorf("the applier reports itself stopped after recovering: %v", err)
+	}
+}
+
+// probeSeal signs a fixture's record under the same keyring the harness
+// verifies with. It panics rather than returning an error: a fixture that
+// cannot sign is a broken test file, not a case.
+func probeSeal(body []byte) []byte {
+	signer, err := statelog.NewSigner(probeDomain{}.Name(), testRing())
+	if err != nil {
+		panic(err)
+	}
+	return signer.Seal(body)
+}
+
+// THE ARBITRATION ANCHORS ARE SWEPT, and nothing swept them.
+//
+// `0001_the_state_log_lands.sql` creates `statelog_anchor_swept_idx` and says
+// in so many words that the SWEEP needs it, because without the index a range
+// delete scans every subject in the company. Then nothing anywhere in the tree
+// ever wrote that delete: one row per arbitrated subject, kept for the life of
+// the deployment, in the replicated estate and therefore in every snapshot
+// artefact and every backup.
+//
+// THE CUTOFF IS THE PUBLISHED TRIM FLOOR, never a clock. An anchor answers
+// "what does this subject's last record expect", so a row above the floor has
+// to stay however old it is — read as absent, it hands the next writer an
+// expectation of "this subject holds nothing", which the broker refuses for
+// ever against a subject that does. Below the floor there is no record left to
+// replay, so there is nothing for the anchor to be the anchor of.
+func TestTheArbitrationAnchorsAreSwept(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	for seq := uint64(1); seq <= 6; seq++ {
+		h.fetch.offer(seq, env(seq, "edit", fmt.Sprintf("o%d", seq),
+			fmt.Sprintf("op-%d", seq), 1))
+	}
+	if err := h.run(6); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	floorAt := func(seq uint64) statelog.Position {
+		return statelog.Position{Stream: probeStream, Generation: 1, Seq: seq}
+	}
+
+	// A FLOOR OF ZERO SWEEPS NOTHING, which is what a log that has never
+	// trimmed publishes: a statement per tick that deletes nothing is
+	// still a statement per tick.
+	if swept, err := h.runner.PurgeAnchors(t.Context(), floorAt(0)); err != nil || swept != 0 {
+		t.Fatalf("a floor of zero swept %d anchor(s) (%v), want none", swept, err)
+	}
+
+	// A FLOOR PART WAY UP removes only what is below it. This is the
+	// control that matters: a sweep that took everything would delete the
+	// anchors the next writer's expectation is formed from.
+	swept, err := h.runner.PurgeAnchors(t.Context(), floorAt(4))
+	if err != nil {
+		t.Fatalf("PurgeAnchors: %v", err)
+	}
+	if swept != 3 {
+		t.Errorf("a floor at 4 swept %d anchor(s), want the 3 below it — a sweep that "+
+			"took more would remove what the next writer's expectation is formed "+
+			"from", swept)
+	}
+
+	// AND THE SURVIVORS ARE STILL THE ANCHORS. Reading one back as absent
+	// is the failure this bounds, so it is asserted rather than assumed.
+	if _, held, err := h.runner.Op(t.Context(), "op-5"); err != nil || !held {
+		t.Errorf("op-5's ledger row went with the anchors (held=%v, %v)", held, err)
+	}
+
+	// A SECOND SWEEP AT THE SAME FLOOR IS A NO-OP, so a tick on a log that
+	// has not trimmed costs one empty statement rather than repeating work.
+	if swept, err := h.runner.PurgeAnchors(t.Context(), floorAt(4)); err != nil || swept != 0 {
+		t.Errorf("a repeated sweep at the same floor took %d more (%v), want none",
+			swept, err)
+	}
+}
+
+// THE ANCHOR SWEEP DRAINS A BACKLOG IN BATCHES, EACH ITS OWN TRANSACTION.
+//
+// Anchors are one row per arbitrated subject, so the first sweep after a trim
+// moves the floor past a busy month has the whole month's subjects to shed —
+// and the applier's connection is pinned to the same file, so one unbounded
+// DELETE holds the writer it is queued behind for as long as that takes. The
+// sweep is batched for that reason, and both ways of getting the loop wrong
+// look like a working sweep on a small table: an unbounded statement deletes
+// the right rows in one transaction, and a loop that stops after its first
+// batch leaves everything past [statelog.OpsPurgeBatch] behind. So the backlog
+// here is wider than one batch, the rows above the floor and another log's
+// rows below it must survive, and the transactions are COUNTED.
+func TestTheAnchorSweepIsBatched(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	below := statelog.OpsPurgeBatch + 7
+	at := func(stream string, seq uint64) int64 {
+		return statelog.Position{Stream: stream, Generation: 1, Seq: seq}.Packed()
+	}
+	floor := statelog.Position{Stream: probeStream, Generation: 1, Seq: uint64(below) + 1}
+	const above, elsewhere = 5, 3
+	// Written directly: publishing enough records to cross a batch is a
+	// minute of broker round trips to test one loop.
+	if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
+		insert := func(stream, subject string, anchor int64) error {
+			_, err := tx.ExecContext(t.Context(), `
+				INSERT INTO statelog_anchor (stream, subject, anchor)
+				VALUES (?, ?, ?)`, stream, subject, anchor)
+			return err
+		}
+		for i := range below {
+			if err := insert(probeStream, fmt.Sprintf("%s.object.b%d", probePrefix, i),
+				at(probeStream, uint64(i)+1)); err != nil {
+				return err
+			}
+		}
+		for i := range above {
+			if err := insert(probeStream, fmt.Sprintf("%s.object.a%d", probePrefix, i),
+				at(probeStream, floor.Seq+uint64(i))); err != nil {
+				return err
+			}
+		}
+		// ANOTHER LOG'S ANCHORS, below this floor's sequence: a floor is a
+		// position in ONE log, and a sweep that forgot the stream would
+		// take them with it.
+		for i := range elsewhere {
+			if err := insert("CREWLET_OTHER_LOG", fmt.Sprintf("other.object.%d", i),
+				at("CREWLET_OTHER_LOG", 1)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed the anchors: %v", err)
+	}
+
+	estate := &countingEstate{Estate: h.estate}
+	fetch := newProbeFetch()
+	runner, err := statelog.NewRunner(statelog.RunnerDeps{
+		Domain: probeDomain{}, Spec: specOf(probeDomain{}),
+		Verifier:   testVerifier(t, probeDomain{}),
+		Applier:    newProbeApplier(),
+		Fetch:      fetch,
+		Log:        fetch,
+		Node:       h.db,
+		DB:         estate,
+		Checkpoint: statelog.Position{Generation: 1},
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	estate.reset()
+
+	swept, err := runner.PurgeAnchors(t.Context(), floor)
+	if err != nil {
+		t.Fatalf("PurgeAnchors: %v", err)
+	}
+	if swept != int64(below) {
+		t.Errorf("the sweep took %d of the %d anchors below the floor — a loop "+
+			"that stops at its first batch leaves the backlog behind", swept, below)
+	}
+	// TWO BATCHES, each its own transaction and neither past the batch:
+	// one full and one short, and the short one ends the loop. A transaction
+	// that removed more is a statement over the whole backlog, holding the
+	// applier's writer for all of it.
+	removed := estate.removed()
+	if want := below/statelog.OpsPurgeBatch + 1; len(removed) != want {
+		t.Errorf("the sweep of %d anchors ran %d write transaction(s) %v, want %d",
+			below, len(removed), removed, want)
+	}
+	for i, n := range removed {
+		if n > statelog.OpsPurgeBatch {
+			t.Errorf("write transaction %d removed %d anchors, past the batch of %d "+
+				"— one statement over the backlog holds the writer the applier is "+
+				"queued behind", i, n, statelog.OpsPurgeBatch)
+		}
+	}
+
+	counts := map[string]int{}
+	if err := h.estate.Read(t.Context(), func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(t.Context(),
+			`SELECT stream, COUNT(*) FROM statelog_anchor GROUP BY stream`)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		for rows.Next() {
+			var stream string
+			var n int
+			if err := rows.Scan(&stream, &n); err != nil {
+				return err
+			}
+			counts[stream] = n
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatalf("count what is left: %v", err)
+	}
+	if counts[probeStream] != above {
+		t.Errorf("%d of this log's anchors survive, want the %d at or above the "+
+			"floor — they are what the next writer's expectation is formed from",
+			counts[probeStream], above)
+	}
+	if counts["CREWLET_OTHER_LOG"] != elsewhere {
+		t.Errorf("%d of another log's %d anchors survive a sweep of this one",
+			counts["CREWLET_OTHER_LOG"], elsewhere)
+	}
+}
+
+// countingEstate records how many anchors each write transaction run through
+// it removed, which is the one thing that tells a batched sweep from a single
+// statement deleting the same rows. The count is read around the transaction
+// rather than inside it, so what it measures is what committed.
+type countingEstate struct {
+	statelog.Estate
+	mu    sync.Mutex
+	after []int
+}
+
+func (e *countingEstate) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
+	before, err := e.anchors(ctx)
+	if err != nil {
+		return err
+	}
+	if err := e.Estate.Tx(ctx, fn); err != nil {
+		return err
+	}
+	after, err := e.anchors(ctx)
+	if err != nil {
+		return err
+	}
+	e.mu.Lock()
+	e.after = append(e.after, before-after)
+	e.mu.Unlock()
+	return nil
+}
+
+func (e *countingEstate) anchors(ctx context.Context) (int, error) {
+	var n int
+	err := e.Estate.Read(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM statelog_anchor`).Scan(&n)
+	})
+	return n, err
+}
+
+func (e *countingEstate) reset() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.after = nil
+}
+
+// removed is how many anchors each write transaction removed, in order.
+func (e *countingEstate) removed() []int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]int(nil), e.after...)
+}
+
+// ONE SUBJECT KIND'S LEDGER ROWS CAN BE SWEPT ON THEIR OWN HORIZON — and only
+// that kind's.
+//
+// A domain whose kind no slow client re-asks declares a shorter horizon for it
+// (the identity estate's sessions: an hour against the month), and that sweep
+// is a RANGE over the stored subject. A range is where the ways to be wrong
+// live, so each row below is one of them: the kind's own old rows go, its row
+// with no id goes, its recent row stays, and a kind whose name merely BEGINS
+// with this one's — the byte after the name is what a naive prefix test gets
+// wrong — stays, as does every other kind.
+func TestOneSubjectKindsLedgerRowsAreSweptOnTheirOwn(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	now := time.Now()
+	old, recent := now.Add(-2*time.Hour), now
+	rows := []struct {
+		op, subject string
+		at          time.Time
+		swept       bool
+	}{
+		{"session-old", probePrefix + ".session.l1", old, true},
+		{"session-bare", probePrefix + ".session", old, true},
+		{"session-recent", probePrefix + ".session.l2", recent, false},
+		{"lookalike-old", probePrefix + ".sessions.l3", old, false},
+		{"other-old", probePrefix + ".object.o1", old, false},
+	}
+	if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
+		for _, r := range rows {
+			if _, err := tx.ExecContext(t.Context(), `
+				INSERT INTO probe_ops (op_id, subject, position, applied_at)
+				VALUES (?, ?, 1, ?)`, r.op, r.subject, store.EncodeTime(r.at)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed the ledger: %v", err)
+	}
+
+	swept, err := h.runner.PurgeOpsOfKind(t.Context(), "session", now.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("PurgeOpsOfKind: %v", err)
+	}
+	want := 0
+	for _, r := range rows {
+		_, held, err := h.runner.Op(t.Context(), r.op)
+		if err != nil {
+			t.Fatalf("Op(%s): %v", r.op, err)
+		}
+		if held == r.swept {
+			t.Errorf("%s (%s): held=%v after the session sweep, want swept=%v",
+				r.op, r.subject, held, r.swept)
+		}
+		if r.swept {
+			want++
+		}
+	}
+	if swept != int64(want) {
+		t.Errorf("the sweep reported %d row(s) and deleted %d", swept, want)
 	}
 }
 
@@ -2680,7 +3237,7 @@ func TestTheOperationSweepRecordsWhatItForgot(t *testing.T) {
 	}
 	swept := func() (time.Time, bool) {
 		t.Helper()
-		before, ok, err := rows.LostBefore(t.Context())
+		before, ok, err := rows.LostBefore(t.Context(), "")
 		if err != nil {
 			t.Fatalf("read the sweep record: %v", err)
 		}

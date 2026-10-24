@@ -16,10 +16,21 @@
  */
 
 import { useState, type CSSProperties } from "react";
-import { Button, Card, EmptyState, EmptyValue, Modal, Tag } from "@crewlethq/ui";
+import {
+  Button,
+  Card,
+  EmptyState,
+  EmptyValue,
+  Modal,
+  Tag,
+  TableKeyCell,
+  TableNumberCell,
+  TableDateCell,
+  TableTextCell,
+} from "@crewlethq/ui";
 import { BookOpenGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, DurationCell, KeyCell, TextCell } from "~/app/frame/cells.tsx";
+
 import { QueryState } from "~/components/common.tsx";
 import {
   conversationLabel,
@@ -28,6 +39,7 @@ import {
   plural,
   tsKey,
   utf8Bytes,
+  fmtDuration,
 } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { decisionLabel, decisionTone } from "~/lib/phases.ts";
@@ -46,16 +58,14 @@ export function pageWords(shown: number, total: number): string | null {
 
 /** A card's subtitle: the cut, where there is one, then what the list is. */
 export function cutThen(cut: string | null, what: string): string {
-  return cut ? `${cut} — ${what}` : what;
+  return cut ? `${cut} · ${what}` : what;
 }
 
 /** Who answered, as the sentence under a memory screen's head. */
 export function heldWords(heldBy: string | undefined): string {
   if (!heldBy) return "";
-  if (heldBy === "none") {
-    return "No node holds this seat, so no copy of its memory is current and nothing is shown.";
-  }
-  return `Read from ${heldBy}, the node holding this seat — the copy kept current.`;
+  if (heldBy === "none") return "No node is running this seat, so its memory can’t be shown.";
+  return `From ${heldBy}.`;
 }
 
 /** The heading level a card's title takes on the screen drawing it. */
@@ -98,7 +108,7 @@ export function DiaryCard({ memory, heading = "h3" }: { memory: AgentMemory; hea
           size="compact"
           icon={<BookOpenGlyph size={32} />}
           title="Nothing written yet"
-          description="A seat keeps a note by calling reflect_and_persist during a turn, and the learning loop keeps what it judges worth remembering."
+          description="Notes the agent keeps appear here."
         />
       )}
     </Card>
@@ -177,7 +187,12 @@ function WholeEpisode({
         </Button>
       }
     >
-      <QueryState error={whole.error} detail={whole.detail} loading={whole.loading}>
+      <QueryState
+        error={whole.error}
+        refusal={whole.refusal}
+        detail={whole.detail}
+        loading={whole.loading}
+      >
         {whole.data &&
           (e ? (
             <div className="col gap-3">
@@ -197,7 +212,7 @@ function WholeEpisode({
           ) : (
             <EmptyState
               title="No longer in this seat's memory"
-              description="The episode was dropped or folded into a compacted row since the list was read."
+              description="It was removed since the list loaded."
             />
           ))}
       </QueryState>
@@ -217,7 +232,7 @@ function WholeEpisode({
  */
 function EpisodeWokenCell({ seat, episode: e }: { seat: string; episode: EpisodeRow }) {
   if (e.compacted) {
-    return <TextCell>{plural(Math.max(e.count, 1), "turn")} like this</TextCell>;
+    return <TableTextCell>{plural(Math.max(e.count, 1), "turn")} like this</TableTextCell>;
   }
   if (!e.task_summary && !e.ask) return <EmptyValue label="Not recorded" />;
   const opening = isOpening(e.ask, e.ask_bytes);
@@ -275,7 +290,7 @@ export function EpisodesCard({
         count={memory.episodes_total}
         subtitle={cutThen(
           pageWords(memory.episodes.length, memory.episodes_total),
-          "one per completed turn, recalled by similarity at turn start",
+          "one per finished turn",
         )}
       >
         <Card.Title as={heading}>Episodes</Card.Title>
@@ -287,7 +302,7 @@ export function EpisodesCard({
         defaultSort="-at"
         empty={{
           title: "No episodes recorded",
-          hint: "An episode is written when a turn completes.",
+          hint: "Episodes appear as turns finish.",
         }}
         columns={[
           {
@@ -298,7 +313,7 @@ export function EpisodesCard({
             // trims trailing zeros, so a raw compare puts `:07Z`
             // before `:07.42Z`.
             sortValue: (e) => tsKey(e.created_at),
-            cell: (e) => <DateCell at={e.created_at} now={now} />,
+            cell: (e) => <TableDateCell value={e.created_at} now={now} />,
           },
           {
             key: "woke",
@@ -345,7 +360,13 @@ export function EpisodesCard({
             align: "right",
             shrink: true,
             sortValue: (e) => e.duration_ms ?? null,
-            cell: (e) => <DurationCell ms={e.duration_ms} />,
+            cell: (e) => (
+              <TableNumberCell
+                value={e.duration_ms}
+                format={fmtDuration}
+                emptyLabel="Not measured"
+              />
+            ),
           },
           {
             key: "conv",
@@ -357,7 +378,10 @@ export function EpisodesCard({
             shrink: true,
             cell: (e) =>
               e.conversation_key ? (
-                <KeyCell value={e.conversation_key} text={conversationLabel(e.conversation_key)} />
+                <TableKeyCell
+                  value={e.conversation_key}
+                  text={conversationLabel(e.conversation_key)}
+                />
               ) : (
                 <EmptyValue label="Not part of a conversation" />
               ),

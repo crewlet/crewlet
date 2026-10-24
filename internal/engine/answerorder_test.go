@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/phase"
@@ -18,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/memory"
@@ -125,13 +128,34 @@ func (r *answerResumer) resumedWith() []string {
 type inboxHold struct{ q queue.EventQueue }
 
 func (h inboxHold) Hold(ctx context.Context, handle string) error {
-	return h.q.PauseTopic(ctx, topics.AgentInbox(handle), topics.AgentInboxGroup(handle),
+	return h.q.PauseTopic(ctx, fixtureInbox(handle), fixtureInboxGroup(handle),
 		string(inbox.HoldSandbox))
 }
 
 func (h inboxHold) Release(ctx context.Context, handle string) error {
-	return h.q.ResumeTopic(ctx, topics.AgentInbox(handle), topics.AgentInboxGroup(handle),
+	return h.q.ResumeTopic(ctx, fixtureInbox(handle), fixtureInboxGroup(handle),
 		string(inbox.HoldSandbox))
+}
+
+// fixtureOrg is the company the hand-built rigs in these cases stand in for.
+const fixtureOrg = "Acme"
+
+// fixtureSeat is the id a handle derives in [fixtureOrg]: what a seat's
+// mailbox is named by, what a run's row carries as its AgentID, and what the
+// coordinator hands a reply back to. No engine runs a company in these rigs,
+// so nothing else would name it — and a mailbox spelled from the handle is one
+// the coordinator never publishes to, so every assertion over it would pass by
+// being empty.
+func fixtureSeat(handle string) uuid.UUID {
+	id, _ := org.DeriveAgentID(fixtureOrg, handle)
+	return id
+}
+
+// fixtureInbox and fixtureInboxGroup are a seat's mailbox in [fixtureOrg].
+func fixtureInbox(handle string) string { return topics.AgentInbox(fixtureSeat(handle)) }
+
+func fixtureInboxGroup(handle string) string {
+	return topics.AgentInboxGroup(fixtureSeat(handle))
 }
 
 // handCranked is time.AfterFunc driven by the test.
@@ -259,7 +283,7 @@ func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 
 	// THE PARKED RUN: launched from the thread, its question asked now.
 	run := sandbox.PendingRun{
-		TurnID: "t1", AgentHandle: "swe", AgentID: "a-1", Role: "SWE", CodingAgent: "claude-code",
+		TurnID: "t1", AgentHandle: "swe", AgentID: fixtureSeat("swe").String(), Role: "SWE", CodingAgent: "claude-code",
 		ConversationKey: "slack:C1:1.0", PartitionKey: "slack:C1:1.0",
 	}
 	if _, err := store.BeginLaunch(ctx, run, sandbox.Fence{}); err != nil {
@@ -291,7 +315,7 @@ func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 		},
 		Park: func(ctx context.Context, handle string, evs []*events.Event) error {
 			for _, ev := range evs {
-				if err := q.Publish(ctx, topics.AgentInbox(handle), ev); err != nil {
+				if err := q.Publish(ctx, fixtureInbox(handle), ev); err != nil {
 					return err
 				}
 			}
@@ -299,13 +323,13 @@ func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 		},
 		NoteDeferred: func(string) {},
 	}
-	if err := q.Subscribe(ctx, topics.AgentInbox("swe"), topics.AgentInboxGroup("swe"),
+	if err := q.Subscribe(ctx, fixtureInbox("swe"), fixtureInboxGroup("swe"),
 		func(ctx context.Context, ev *events.Event) queue.Result {
 			return d.Dispatch(ctx, "swe", []*events.Event{ev})
 		}); err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
-	inboxOf := topics.AgentInbox("swe")
+	inboxOf := fixtureInbox("swe")
 	get := func() sandbox.PendingRun {
 		got, _, err := store.Get(ctx, "t1")
 		if err != nil {

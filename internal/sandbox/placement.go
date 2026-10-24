@@ -38,10 +38,17 @@ const (
 	Direct Placement = "direct"
 
 	// Container runs a long-lived Docker or Podman container per box, with
-	// the box's home bind-mounted at DefaultHome — the same home a remote
-	// backend uses, so setup steps that provision system paths work exactly
-	// as they do remotely. Real host isolation, at the cost of an image with
-	// the coding CLI already installed.
+	// the box's home bind-mounted at DefaultHome — the home a remote box's
+	// account has, so a path under it reads the same in both cells. Real
+	// host isolation, at the cost of an image with the coding CLI already
+	// installed.
+	//
+	// IT DOES NOT TAKE A SYSTEM PATH, though this once said it did: a setup
+	// file is written from the host side of the one mount, so one outside
+	// the home is refused here exactly as in Direct ([hostbox.InHome]), and
+	// a setup command runs as the engine's own uid on a rootful runtime,
+	// which an image's system directories usually refuse. What the image
+	// lacks is provisioned in the image.
 	Container Placement = "container"
 
 	// E2B runs the work in a remote box: a fresh machine per run that is

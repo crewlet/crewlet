@@ -18,9 +18,9 @@
  */
 
 import { useCallback, useMemo } from "react";
+import { Mark } from "~/ui/glyph.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import {
-  Button,
   ButtonLink,
   Callout,
   Card,
@@ -29,7 +29,11 @@ import {
   EmptyState,
   EmptyValue,
   InlineCode,
+  SegmentedControl,
   Skeleton,
+  TableDateCell,
+  TableKeyCell,
+  TableTextCell,
   Tag,
 } from "@crewlethq/ui";
 import {
@@ -41,16 +45,8 @@ import {
   SlidersVerticalGlyph,
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
-// OURS, DELIBERATELY. uilet's `SegmentedControl` has no manual-activation
-// mode: with `semantics="radio"` its arrow keys COMMIT the option they land
-// on, and every group on this screen drives a `useParam` — the lens pushes a
-// history entry and re-runs the screen's query, and the collection picker
-// re-runs `config_entities`. Arrowing across four lenses under that control
-// is four queries nobody asked for and four Back presses to undo. See the
-// note on `useRovingGroup`; this is the trade the pattern itself names.
-import { Segmented } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, KeyCell, TextCell } from "~/app/frame/cells.tsx";
+
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
@@ -59,10 +55,10 @@ import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
+import { authorLabel, throughOf } from "~/lib/attribution.ts";
 import type { ConfigChange, FleetNode, RevisionMeta } from "~/protocol/index.ts";
 import { reveal } from "~/lib/scroller.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { ENTITY_KINDS } from "~/contract/config.ts";
 
@@ -104,13 +100,11 @@ const FLEET_POLL_MS = 15_000;
 const NO_REVISION = {
   title: "No company configuration is active",
   // A COMMAND IS CODE, in a sentence as anywhere: the info card on this
-  // screen sets `PUT /config` and `crewlet config import` as code, and the
-  // same two in prose here read as words rather than as something to type.
+  // screen sets `crewlet config import` as code, and the same command in
+  // prose here would read as words rather than as something to type.
   hint: (
     <>
-      The engine is running with nothing to run: no seats are spawned, and every inbound webhook is
-      refused with a 503 its sender will retry. Import one with{" "}
-      <InlineCode>crewlet config import</InlineCode>, or <InlineCode>PUT /config</InlineCode>.
+      Import one with <InlineCode>crewlet config import</InlineCode>.
     </>
   ),
 };
@@ -120,10 +114,17 @@ const NO_REVISION = {
  * names.
  *
  * THE KIND IS THE REVISION'S OWN WORD, never inferred from the label: the name
- * spaces overlap (an operator token may be called `node`), and a label alone
- * drew a node's boot seed and the reconcile loop's reloads as a person's
- * writes. Every revision carries its kind; the label may be empty (a write
- * made with no operator identity), which is said as such.
+ * spaces overlap (a seat's handle and a person's login can read alike), and a
+ * label alone drew a node's boot seed and the reconcile loop's reloads as a
+ * person's writes. The kinds are the engine's author kinds — `agent`, `human`
+ * (a person writing as the seat the directory binds them to), `operator`
+ * (anybody bound to none, under their whole login) and `system` (the engine
+ * itself). Every revision carries its kind; the label may be empty, which is
+ * said as such.
+ *
+ * AND THE CREDENTIAL BESIDE THE NAME ([authorLabel]), where it is not the name
+ * itself: a machine token acting as its owner writes under the owner's login,
+ * and which of their credentials wrote a revision is what an incident asks.
  */
 export function RevisionAuthor({ revision }: { revision: RevisionMeta }) {
   const name = revision.created_by;
@@ -134,8 +135,15 @@ export function RevisionAuthor({ revision }: { revision: RevisionMeta }) {
     // reader can least do without. In a revisions table (`.grid-cell >
     // .revision-author`) the chip wraps onto a line the cell does not draw
     // before the name gives up a character; the title keeps both.
-    <span className="row gap-1 revision-author" title={name ? `${name} · ${kind}` : undefined}>
-      {name ? <TextCell>{name}</TextCell> : <EmptyValue label="No name recorded" />}
+    <span
+      className="row gap-1 revision-author"
+      title={name ? `${authorLabel(name, revision.operator_id)} · ${kind}` : undefined}
+    >
+      {name ? (
+        <TableTextCell>{authorLabel(name, revision.operator_id)}</TableTextCell>
+      ) : (
+        <EmptyValue label="No name recorded" />
+      )}
       <Tag appearance="outline">{kind}</Tag>
     </span>
   );
@@ -263,13 +271,9 @@ function AppliedAcross({
     loading && !answered ? (
       <Skeleton variant="text" rows={2} label="Loading" />
     ) : !answered ? (
-      <p className="t-body muted">
-        The lease table did not answer, so which nodes are on this revision is not known.
-      </p>
+      <p className="t-body muted">Couldn’t tell which nodes run this revision.</p>
     ) : nodes.length === 0 ? (
-      <p className="t-body">
-        No node holds a live lease. Nothing is running this configuration, or any other.
-      </p>
+      <p className="t-body">No node is running right now.</p>
     ) : (
       <div className="col gap-2">
         <p className="t-body">
@@ -286,12 +290,6 @@ function AppliedAcross({
             <NodeLine key={node.id} node={node} state="silent" />
           ))}
         </div>
-        {silent.length > 0 && (
-          <p className="t-caption">
-            A node that published no apply record has said nothing about which revision it holds —
-            which is not the same as not holding this one.
-          </p>
-        )}
       </div>
     );
 
@@ -373,11 +371,17 @@ function RevisionBody({
             },
             { label: "Source", value: revision.source },
             { label: "Created by", value: <RevisionAuthor revision={revision} /> },
+            {
+              label: "Through",
+              value: throughOf(revision.created_by, revision.operator_id) ? (
+                <span className="mono">{throughOf(revision.created_by, revision.operator_id)}</span>
+              ) : undefined,
+              title: "the credential the revision was written through",
+            },
             { label: "Created", value: fmtDateTime(revision.created_at) },
             {
               label: "Activated",
               value: revision.activated_at ? fmtDateTime(revision.activated_at) : undefined,
-              title: "a revision can be stored and never activated; activation is its own gesture",
             },
           ],
         },
@@ -439,7 +443,7 @@ export function RevisionPeek({ id }: { id: string }) {
   return (
     <>
       {audit.loading && !audit.data && <Skeleton variant="text" rows={6} label="Loading" />}
-      <QueryState error={audit.error} loading={audit.loading}>
+      <QueryState error={audit.error} refusal={audit.refusal} loading={audit.loading}>
         {/* NOT AN EMPTY RAIL. A `peek=revision:` arrives from a pasted URL as
             often as from a row, and naming the id that resolved to nothing —
             and the window it was looked for in — is more use than a header
@@ -449,7 +453,7 @@ export function RevisionPeek({ id }: { id: string }) {
             size="compact"
             icon={<ClockGlyph size="xl" />}
             title="No such revision in the recent history"
-            description={`The last ${HISTORY_LIMIT} revisions were read and none of them is this one. It may be older than that window, or the id may be wrong.`}
+            description={`It may be older than the last ${HISTORY_LIMIT}, or the id is wrong.`}
           />
         )}
         {revision && (
@@ -642,23 +646,21 @@ export function ConfigScreen({
     <>
       {!onRevision && (
         <PageActions>
-          <Segmented<Lens>
-            ariaLabel="Configuration view"
+          <SegmentedControl<Lens>
+            semantics="radio"
+            activate="manual"
+            label="Configuration view"
             value={lens}
-            onChange={setLens}
+            onValueChange={setLens}
             options={[
-              { value: "active", label: "Active", icon: "file-text" },
-              { value: "entities", label: "Entities", icon: "layers" },
-              { value: "audit", label: "History", icon: "clock" },
-              { value: "diff", label: "Diff", icon: "split" },
+              { value: "active", label: "Active", icon: <Mark name="file-text" size="xs" /> },
+              { value: "entities", label: "Entities", icon: <Mark name="layers" size="xs" /> },
+              { value: "audit", label: "History", icon: <Mark name="clock" size="xs" /> },
+              { value: "diff", label: "Diff", icon: <Mark name="split" size="xs" /> },
             ]}
           />
         </PageActions>
       )}
-      <PageNote>
-        The founder-owned company document, versioned in the store and applied live. Secrets are
-        redacted by the engine before it leaves the process.
-      </PageNote>
 
       {/* THE REVISION THIS PATH NAMES, above the lens rather than below it:
           the reader followed a link to one revision, so what it is has to be
@@ -667,12 +669,12 @@ export function ConfigScreen({
       {revisionPath !== undefined && (
         <>
           {audit.loading && !audit.data && <Skeleton variant="text" rows={4} label="Loading" />}
-          <QueryState error={audit.error} loading={audit.loading}>
+          <QueryState error={audit.error} refusal={audit.refusal} loading={audit.loading}>
             {audit.data && !addressed && (
               <EmptyState
                 icon={<ClockGlyph size="xl" />}
                 title="No such revision in the recent history"
-                description={`The last ${HISTORY_LIMIT} revisions were read and none of them is this one. It may be older than that window, or the id may be wrong.`}
+                description={`It may be older than the last ${HISTORY_LIMIT}, or the id is wrong.`}
               />
             )}
             {addressed && (
@@ -720,7 +722,7 @@ export function ConfigScreen({
       {!onRevision && lens === "active" && (
         <>
           {active.loading && <Skeleton variant="text" rows={6} label="Loading" />}
-          <QueryState error={active.error} loading={active.loading}>
+          <QueryState error={active.error} refusal={active.refusal} loading={active.loading}>
             {active.data ? (
               <Card>
                 <Card.Header
@@ -730,26 +732,18 @@ export function ConfigScreen({
                 >
                   Active revision
                 </Card.Header>
-                {/* THE CAPTION'S STEP IS THE ONE EVERY NOTE UNDER A BLOCK TAKES
-                    (`gap-2`): at `gap-1` it sat almost flush on the code
-                    block's edge and read as part of the record. */}
-                <div className="col gap-2">
-                  {/* BOUNDED, like every other record block, by the ceiling the
-                      shell declares once (`--record-ceiling`, frame.css). A
-                      whole company configuration runs to hundreds of lines,
-                      and it is one of the records that ceiling is written
-                      down for by name — unbounded, it pushes the caption
-                      under it and the entity lens below that off the screen. */}
-                  <CodeBlock
-                    plain
-                    selectable
-                    label="The active company configuration, as JSON"
-                    code={pretty}
-                  />
-                  <span className="t-caption">
-                    Click into the revision, and ⌘A / Ctrl+A selects it alone rather than the page.
-                  </span>
-                </div>
+                {/* BOUNDED, like every other record block, by the ceiling the
+                    shell declares once (`--record-ceiling`, frame.css). A
+                    whole company configuration runs to hundreds of lines, and
+                    it is one of the records that ceiling is written down for
+                    by name. Unbounded, it pushes the entity lens below it off
+                    the screen. */}
+                <CodeBlock
+                  plain
+                  selectable
+                  label="The active company configuration, as JSON"
+                  code={pretty}
+                />
               </Card>
             ) : (
               <EmptyState
@@ -764,10 +758,12 @@ export function ConfigScreen({
 
       {!onRevision && lens === "entities" && (
         <>
-          <Segmented<string>
-            ariaLabel="Which collection"
+          <SegmentedControl<string>
+            semantics="radio"
+            activate="manual"
+            label="Which collection"
             value={kind}
-            onChange={(next) => {
+            onValueChange={(next) => {
               setKind(next);
               // AN ID BELONGS TO ONE COLLECTION. Carrying it across would ask
               // for a seat's handle out of the MCP servers and render the
@@ -779,6 +775,7 @@ export function ConfigScreen({
           {ids.loading && !ids.data && <Skeleton variant="text" rows={4} label="Loading" />}
           <QueryState
             error={ids.error}
+            refusal={ids.refusal}
             loading={ids.loading}
             empty={
               noRevision
@@ -846,12 +843,12 @@ export function ConfigScreen({
                     size="compact"
                     icon={<LayersGlyph size="xl" />}
                     title="Pick one from the list"
-                    description="Its own slice of the active document is shown here, rather than the whole thing."
+                    description="Its part of the configuration appears here."
                   />
                 ) : one.loading && !one.data ? (
                   <Skeleton variant="text" rows={6} label="Loading" />
                 ) : (
-                  <QueryState error={one.error} loading={one.loading}>
+                  <QueryState error={one.error} refusal={one.refusal} loading={one.loading}>
                     {one.data ? (
                       <CodeBlock
                         plain
@@ -869,7 +866,7 @@ export function ConfigScreen({
                         size="compact"
                         icon={<SlidersVerticalGlyph size="xl" />}
                         title={NO_REVISION.title}
-                        description="There is no active revision for this entity to be declared in."
+                        description="Import a company to see it."
                       />
                     )}
                   </QueryState>
@@ -900,20 +897,21 @@ export function ConfigScreen({
               size="compact"
               icon={<SplitGlyph size="xl" />}
               title="Pick a revision below"
-              description="Its differences against the currently active document are shown here."
+              description="Its changes against the active one appear here."
             />
           ) : diff.loading ? (
             <Skeleton variant="text" rows={4} label="Loading" />
           ) : (
             <QueryState
               error={diff.error}
+              refusal={diff.refusal}
               loading={diff.loading}
               empty={
                 diff.data?.changes?.length
                   ? undefined
                   : {
                       title: "No differences",
-                      hint: "This revision is byte-identical to the active one. Re-activating an unchanged revision is the credential-rotation gesture.",
+                      hint: "Identical to the active revision.",
                     }
               }
             >
@@ -932,8 +930,8 @@ export function ConfigScreen({
                   // pathless CHANGE, which this screen drew as a blank
                   // path turning undefined into a sentence.
                   <div className="t-caption">
-                    {diff.data?.changes.length} of {diff.data?.changes_total} shown —{" "}
-                    <InlineCode>crewlet config diff</InlineCode> prints them all
+                    {diff.data?.changes.length} of {diff.data?.changes_total} shown.{" "}
+                    <InlineCode>crewlet config diff</InlineCode> shows all.
                   </div>
                 )}
               </div>
@@ -947,6 +945,7 @@ export function ConfigScreen({
           {audit.loading && <Skeleton variant="text" rows={5} label="Loading" />}
           <QueryState
             error={audit.error}
+            refusal={audit.refusal}
             loading={audit.loading}
             empty={
               rows.length
@@ -984,7 +983,7 @@ export function ConfigScreen({
                     // held the rest.
                     drop: 1,
                     sortValue: (r) => tsKey(r.created_at),
-                    cell: (r) => <DateCell at={r.created_at} now={now} />,
+                    cell: (r) => <TableDateCell value={r.created_at} now={now} />,
                   },
                   {
                     key: "id",
@@ -997,7 +996,7 @@ export function ConfigScreen({
                     width: "max-content",
                     cell: (r) => (
                       <span className="row gap-1">
-                        <KeyCell value={r.revision_id.slice(0, 10)} />
+                        <TableKeyCell value={r.revision_id.slice(0, 10)} />
                         {r.is_active && <Tag variant="success">active</Tag>}
                       </span>
                     ),
@@ -1019,7 +1018,7 @@ export function ConfigScreen({
                     // than standing in for an empty string.
                     cell: (r) =>
                       r.summary ? (
-                        <TextCell>{r.summary}</TextCell>
+                        <TableTextCell>{r.summary}</TableTextCell>
                       ) : (
                         <EmptyValue label="No summary was written" />
                       ),
@@ -1039,17 +1038,7 @@ export function ConfigScreen({
       )}
 
       <Callout variant="neutral">
-        <span className="col" style={{ gap: 4 }}>
-          <span>
-            This screen reads. Writing a revision is <InlineCode>PUT /config</InlineCode> or{" "}
-            <InlineCode>crewlet config import</InlineCode>, which validate against the generated
-            schema before anything is stored.
-          </span>
-          <span className="t-caption">
-            An activation is a compare-and-set on a shared pointer, so two operators cannot
-            overwrite each other; each node then reconciles onto the new epoch on its own tick.
-          </span>
-        </span>
+        Read-only here. Change it with <InlineCode>crewlet config import</InlineCode>.
       </Callout>
     </>
   );

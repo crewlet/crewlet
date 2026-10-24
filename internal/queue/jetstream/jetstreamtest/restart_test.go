@@ -1,9 +1,14 @@
 package jetstreamtest
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
+	"net"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,8 +55,12 @@ func TestARestartedMemberRejoinsAsItself(t *testing.T) {
 	appendN(5, 10)
 	back := c.RestartMember(t, member)
 
-	if got, want := c.Servers[member].ClusterPort(), c.Configs[member].ClusterPort; got != want {
-		t.Errorf("the restarted member listens for routes on %d, its peers dial %d", got, want)
+	// ITS OWN ROUTE PORT, asked as a peer asks it: what answers on the port its
+	// peers dial must be this member, or no peer would ever route to it.
+	if got, want := routeListener(t, c.Configs[member].ClusterHost, c.Configs[member].ClusterPort),
+		c.Configs[member].ServerName; got != want {
+		t.Errorf("the route port its peers dial, %d, is answered by %q, not the restarted member %q",
+			c.Configs[member].ClusterPort, got, want)
 	}
 	others := []string{c.Configs[0].ServerName, c.Configs[1].ServerName}
 	deadline := time.Now().Add(30 * time.Second)
@@ -85,6 +94,42 @@ func TestARestartedMemberRejoinsAsItself(t *testing.T) {
 				err, want)
 		}
 	}
+}
+
+// routeListener dials a member's route port as a peer does and answers the
+// server name in the INFO a route listener opens every connection with.
+//
+// THE PEER'S VIEW, never the member's own report of what it bound: a peer
+// knows a member only by the port it dials, so that is the fact a member
+// brought back has to hold.
+func routeListener(t *testing.T, host string, port int) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	if err != nil {
+		t.Fatalf("dial the route port %d: %v", port, err)
+	}
+	defer conn.Close()
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetReadDeadline(deadline)
+	}
+	line, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		t.Fatalf("read the INFO the route port %d opens with: %v", port, err)
+	}
+	payload, ok := strings.CutPrefix(strings.TrimSpace(line), "INFO ")
+	if !ok {
+		t.Fatalf("the route port %d opened with %q, not an INFO", port, line)
+	}
+	var info struct {
+		Name string `json:"server_name"`
+	}
+	if err := json.Unmarshal([]byte(payload), &info); err != nil {
+		t.Fatalf("decode the INFO the route port %d opened with: %v", port, err)
+	}
+	return info.Name
 }
 
 // routesTo reports whether peers names every one of want.

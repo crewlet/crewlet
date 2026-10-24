@@ -1,22 +1,28 @@
 package coord
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // The FLEET-SHARED state, beyond ownership.
 //
-// A lease answers "who runs this seat". These eight answer the other questions
-// a fleet has to agree on, and they are here — beside [Backend], certified by
-// the same suite — for one reason: THEY WERE ON THE NODE'S OWN DATABASE, and
-// internal/store is documented "one file, one process". Every one of them was
-// therefore per-node while its own comments described a fleet:
+// A lease answers "who runs this seat". The contracts below answer the other
+// questions a fleet has to agree on, and MOST of them are here — beside
+// [Backend], certified by the same suite — for one reason: THEY WERE ON THE
+// NODE'S OWN DATABASE, and internal/store is documented "one file, one
+// process". Each of the seven was therefore per-node while its own comments
+// described a fleet:
 //
 //   - The notification valve called itself "the shared fixed-window counter",
 //     so a company on four nodes ran four valves and a seat could emit four
@@ -46,6 +52,26 @@ import (
 // counters, claims and records, and the coordination store is simply where a
 // fleet keeps what a fleet has to share.
 //
+// The rest never lived on a node's own database and are here because the
+// question they answer is a company's from the start: the company's sealed
+// [Secrets], the [Follows] a chat thread is routed by, the [Mailboxes] a seat
+// may still have, the [SeatPauses] a person set, the windowed token [Budgets]
+// every node charges (budget.go), the [PositionRegister] and its neighbours
+// the state log trims against, the [Rebases] a retried unit of work inherits
+// its instant from, the [ObjectStores] backend the fleet's files are in, the
+// [TrashReaps] account of the trash reaper's last pass, the
+// [Custody] of a stateless node's event batches, the [UploadReservations]
+// that hold the company's bytes before an artifact's upload moves them, and
+// the [Markers] sweep that
+// keeps every removal from being read again for ever. The list above is the
+// migration, not the estate.
+//
+// The sign-in throttle is deliberately NOT here. Its curve was once shared
+// through a bucket of its own, so a guessing run a load balancer rotated
+// across nodes met one curve; it is each node's own now, because that sharing
+// put a coordination round trip on the sign-in path to buy back a factor of N
+// on a rate the curve already bounds — see internal/iam/credential.
+//
 // # Every contract here fails in a stated direction
 //
 // A coordination store that cannot be reached must not be able to invent a
@@ -60,6 +86,9 @@ import (
 // KV backend can actually enforce — see internal/coord/kv's package doc for
 // the measurement — so each is fixed when the bucket is created and a caller
 // asking for something longer has to be refused rather than quietly clamped.
+// The two exceptions are the claim TTLs, [ClaimTTL] and [SetupOnceRetention]:
+// what a caller hands [Claims.Claim], carried as a deadline in the claim's own
+// record and bounded by the claims bucket's age, [MaxClaimTTL].
 //
 // They live here, beside the contract, so there is ONE place to read what a
 // fleet retains. Each is sized from the cadence of the subsystem that reads
@@ -100,6 +129,30 @@ const (
 	// tests hold the two together. Longer costs only records nobody reads
 	// again: every claim key names one delivery.
 	MaxClaimTTL = 30 * time.Minute
+
+	// SetupOnceRetention is how long a spent setup-callback state is
+	// remembered — the TTL a setup flow takes its [Claims] claim with — and
+	// therefore how long the state a setup flow mints may be valid for: the
+	// record is what stops a second presentation of the same state, so a
+	// token that outlived it would be replayable while its signature still
+	// validates. internal/api/setupapi's manifestTTL IS this constant for
+	// that reason.
+	//
+	// Fifteen minutes is the span of the task it covers — a browser round
+	// trip to GitHub and two clicks — and it is bounded from above by a
+	// fact at the vendor rather than by anything here: GitHub expires the
+	// one-time code a manifest conversion returns at an hour, so a longer
+	// window would let somebody complete a flow whose code is already
+	// dead, and the failure they would see names the code rather than the
+	// wait.
+	//
+	// An ordinary claim at its own TTL rather than a bucket of its own: a
+	// claim carries its deadline in its record, so a horizon three times
+	// [ClaimTTL]'s shares the claims bucket with it, and [MaxClaimTTL] is
+	// the only bound it has to stay under — coordtest's retention guard
+	// holds it there, because a claim asking for more is an error, and the
+	// setup flow fails closed on every error.
+	SetupOnceRetention = 15 * time.Minute
 
 	// LedgerRetention is how long a turn completion is remembered. It has
 	// to outlast both the queue's redelivery horizon and the scheduler's
@@ -178,6 +231,24 @@ const (
 	// import the store, so coordtest's retention guard holds the two
 	// together.
 	CustodyRetention = 32 * 24 * time.Hour
+
+	// UploadRetention is how long an upload reservation's records outlive
+	// their last write (see [UploadReservations]), and so the uploads
+	// bucket's age.
+	//
+	// THIRTY HOURS: the longest a reservation must still be readable after
+	// its last write is the hold it keeps on bytes nothing names yet, which
+	// lasts until the object collector could have deleted them: the
+	// collector's grace (a day, objstore/collect.PendingGrace), two of its
+	// passes, and the transfer window an upload is given (an hour at most,
+	// objstore.MaxPresignTerm) with the pace of its largest file. That is
+	// twenty-seven hours and a few minutes; the rest is margin, so a record
+	// the bucket ages out is one whose hold has already lapsed. Shorter would
+	// forget a hold on bytes still in the store, which the ledger would then
+	// stop counting; longer keeps records nobody reads. This package cannot
+	// import the object store, so internal/artifactupload's tests hold the
+	// two together.
+	UploadRetention = 30 * time.Hour
 
 	// SandboxRunRetention is absent for the same reason as the channel
 	// bucket's, one step sharper: a detached coding run can sit parked on
@@ -265,15 +336,48 @@ type Counter interface {
 	// Allow increments the bucket's count for the window containing now
 	// and reports whether it stayed within limit.
 	//
-	// FAILS CLOSED: an error means "not allowed", because the valve exists
-	// to stop a loop and a store outage is exactly when a loop is most
-	// likely to be what is wrong. The caller logs and drops the
-	// notification; nothing here retries.
+	// THREE ANSWERS: within the limit, over it, and — as an error — the
+	// store could not say, whatever the bool beside it. CONTENTION IS
+	// NEVER THE THIRD: every race a caller loses is another caller's
+	// increment, so however many callers share a bucket each is answered
+	// with room or with a full window. What the third answer means is the
+	// caller's, and the notification path FAILS OPEN on it (notify.Valve):
+	// a refused notification is dropped, not delayed, so a valve that shut
+	// whenever its store could not be read dropped every seat's
+	// notifications for as long as the store was away.
 	Allow(ctx context.Context, bucket string, limit int, window time.Duration, now time.Time) (bool, error)
 }
 
-// Claims is the fleet's first-claim-wins registry with a TTL, behind webhook
-// deduplication.
+// Claims is the fleet's first-claim-wins registry with a TTL: behind webhook
+// deduplication, the change feed's wake dedupe, the chat socket's delivery
+// claim and a setup flow's one-shot callback state.
+//
+// # A claim carries its own deadline
+//
+// A claim lapses at the deadline its RECORD carries — the `now` its writer
+// passed plus the `ttl` it asked for — judged against the `now` the NEXT
+// caller passes, so a lapsed claim is taken over by whoever asks next and no
+// node compares its own clock to the store's reaping. It cannot be a per-key
+// TTL in the store: a KV's is create-only and an update clears it (see
+// internal/coord/kv's package doc for the measurement), which is why a ttl
+// argument this once took was validated and then ignored by the backend a
+// fleet runs on, and a fifteen-minute claim taken against a five-minute bucket
+// lapsed ten minutes before its caller thought it did. The suite could not see
+// that, because no case ever travelled past a deadline; its claim cases travel
+// the clock now. The bucket's age is the CEILING, [MaxClaimTTL], and a claim
+// asking for longer is an error rather than a record the store reaps early.
+//
+// The POLARITY belongs to the caller rather than to this store: webhook
+// dedupe fails open because a suppressed push is a wake nobody notices, while
+// a setup flow's callback state is an AUTHORIZATION check and its caller fails
+// closed — a registry that could not answer has not said the state is
+// unspent, and the cost of refusing is one more click.
+//
+// The `now` a claim takes is the instant its record is MADE AT, and the
+// instant an earlier record's deadline is judged against — never a deadline
+// itself. A store's own reaping at [MaxClaimTTL] only ever removes a record
+// whose deadline has already passed, so no caller may infer from a travelled
+// clock that a record has gone, only that it no longer holds anybody off.
 type Claims interface {
 	// Claim records key and reports whether THIS caller was first.
 	//
@@ -287,6 +391,10 @@ type Claims interface {
 	// whatever else the store keeps. A ttl beyond [MaxClaimTTL] — or beyond
 	// a backend's own ceiling where that is shorter — is an error wrapping
 	// [ErrTTLTooLong], never a silent clamp.
+	//
+	// An empty key is an ERROR rather than (false, nil): a caller that
+	// named nothing has not lost a race to anybody, and answering "somebody
+	// else took it" would drop the delivery.
 	Claim(ctx context.Context, key string, ttl time.Duration, now time.Time) (bool, error)
 
 	// Release drops a claim, so a deliberate replay of the same delivery
@@ -362,22 +470,40 @@ type Activation struct {
 //
 // REQUIRED: every writer knows who it is, how it made the revision and when,
 // and [RevisionOrigin.Check] is what both backends hold an activation to, so
-// no pointer reaches a peer naming nobody. The fields are plain strings rather
-// than the store's kind type for the reason [NodeApply.Status] gives: this
-// package is where the engine's layers meet, and a backend should not import
-// the store to carry a word.
+// no pointer reaches a peer naming nobody and no adopting node has an author
+// to invent or a "not recorded" to render.
+//
+// The kind is internal/iam's [iam.ActorKind] — the one vocabulary every
+// durable author column in the engine writes, the engine's own writes
+// included ([iam.ActorSystem]) — and an unknown kind off the wire stays the
+// value it is ([iam.ActorKind.Valid] false) rather than being mapped onto a
+// kind that exists. Importing iam costs this package nothing: it is a leaf
+// holding values only, so a backend carrying the word pulls in no store, no
+// hasher and no client, where the store's own kind type would have made every
+// backend import the store to carry a word.
 //
 // The PARENT is deliberately not here. It names a revision the adopting node
 // may never have held — a node that joined after it was superseded — and the
 // table's parent column is a foreign key into this node's own rows.
 type RevisionOrigin struct {
-	// Author is the label the writer was recorded under.
+	// Author is the name the writer was recorded under: internal/iam's
+	// [iam.Actor.Name] for whoever made the revision.
 	Author string
-	// AuthorKind is what Author names — `operator` or `node` in this
-	// build (store.AuthorKind).
-	AuthorKind string
+
+	// AuthorKind is what sort of author Author names.
+	AuthorKind iam.ActorKind
+
+	// OperatorID is the CREDENTIAL the revision was written through —
+	// [iam.Actor.OperatorID]: a machine token's `pat:<id>`, a session's
+	// lineage, or a login. Beside the author rather than instead of it,
+	// because a person writing through their own machine token and the
+	// same person signed in are one author and two credentials, and the
+	// history an operator audits has to say which.
+	OperatorID string
+
 	// Source is how the revision was made: `api`, `file`, `rekey`.
 	Source string
+
 	// CreatedAt is when it was written, which a re-activation of an old
 	// revision makes very different from [Activation.At].
 	CreatedAt time.Time
@@ -385,8 +511,8 @@ type RevisionOrigin struct {
 
 // ErrIncompleteOrigin reports an activation whose origin leaves out what a
 // peer adopting the revision records: the author's kind, the source or the
-// creation instant. The author's label may be empty — a write made with no
-// operator identity still says it was an operator's — but nothing else may.
+// creation instant. The author's NAME may be empty — its kind still says what
+// sort of party wrote it — but nothing else may.
 var ErrIncompleteOrigin = errors.New("coord: an activation needs its revision's origin")
 
 // Check reports whether the origin carries everything a peer records, as an
@@ -432,17 +558,28 @@ const MaxApplyErrorLength = 2000
 //
 // # Why the pointer forces its instants forward
 //
-// The instant is what every row derived from a configuration is stamped with
-// (configplane.ActivationStamp), and a row refuses a stamp older than its own,
-// so that a node applying an older configuration late cannot walk a newer
-// one's values back. That guard is only right if a LATER activation always
-// carries a LATER instant — and the instant is the activating node's own
-// clock. An operator whose node runs a few seconds behind the one that
-// activated last, a node republishing its locally-active revision with the
-// `activated_at` it holds, two activations inside one millisecond: each put an
-// instant on the pointer no later than the stamps already on the projects and
-// the knowledge containers, and the new configuration was applied to neither,
-// silently, until some later activation happened to carry a later clock.
+// Because two readers decide WHICH OF TWO ACTIVATIONS IS NEWER by this instant,
+// and that answer has to follow the order the pointer took them in rather than
+// the clocks of the nodes that asked. The instant is the activating node's own
+// clock, so an operator whose node runs a few seconds behind the one that
+// activated last, a node republishing the `activated_at` it holds, and two
+// activations inside one millisecond each put an instant on the pointer no
+// later than the one it replaced. Each reader then got it wrong its own way:
+//
+//   - EVERY ROW DERIVED FROM A CONFIGURATION is stamped with it
+//     (configplane.ActivationStamp) — the tracker's projects and the
+//     knowledge base's containers — and a row refuses a stamp older than its
+//     own, so that a node applying an older configuration late cannot walk a
+//     newer one's values back. An activation whose instant was no later than
+//     the stamps already on those rows was applied to neither, silently,
+//     until some later activation happened to carry a later clock.
+//   - THE CONTROL PLANE'S OWN BOOKKEEPING: a booting node republishes its
+//     locally active revision only when that revision's `activated_at` is
+//     LATER than the pointer's, and the reconciler holds a node's own copy to
+//     the pointer by revision and instant together (re-activating an
+//     unchanged revision is the credential-rotation gesture). A node holding
+//     the replaced revision read its own copy as the newer and published it
+//     back over the fleet's.
 //
 // Decided INSIDE the compare-and-set that replaces the pointer, against the
 // pointer it replaces, so two activations racing each other cannot both be
@@ -451,9 +588,15 @@ const MaxApplyErrorLength = 2000
 // # At the stamp's resolution
 //
 // Compared in Unix MILLISECONDS, the resolution configplane.ActivationStamp
-// stamps at, because an instant later by a few microseconds is the same
-// stamp and every guard lets an equal stamp through. The zero instant — no
-// previous activation — leaves the request as it is.
+// stamps at, because an instant later by a few microseconds is the SAME stamp
+// and every guard lets an equal stamp through — a finer forward step here
+// would still hand those rows an activation they refuse to tell apart from the
+// last. It is also coarser than every place the instant is kept — the
+// pointer's nanoseconds and the node store's microseconds — so a later
+// activation is still later once a node has stored its copy and read it back.
+// configplane.TestTheActivationPointersForwardRuleIsLaterInStamps holds the two
+// resolutions together. The zero instant — no previous activation — leaves the
+// request as it is.
 func ActivationAt(requested, previous time.Time) time.Time {
 	if previous.IsZero() || requested.UnixMilli() > previous.UnixMilli() {
 		return requested.UTC()
@@ -505,9 +648,14 @@ type ActivationRequest struct {
 
 	Summary string
 
-	// Payload is the SEALED body, travelling with the pointer so a peer
-	// can apply the revision it names.
-	Payload []byte
+	// Payload is the SEALED body, travelling IN the pointer's own write so
+	// a peer can apply the revision it names. Required, and a JSON object —
+	// a company document, which the caller has sealed into an envelope
+	// that is one ([CanonicalPayload]). It is carried as JSON rather than
+	// as bytes because it IS JSON: as bytes, the record encoded it as
+	// base64, and the envelope's ciphertext was base64 already, so every
+	// body went on the wire encoded twice and a third larger for nothing.
+	Payload json.RawMessage
 
 	// At is the instant the caller activated the revision at. The pointer
 	// may carry a LATER one — see [ActivationAt] — and the [Activation]
@@ -515,9 +663,12 @@ type ActivationRequest struct {
 	// instant keeps the pointer's.
 	At time.Time
 
-	// Origin is the revision's own record, so a peer that adopts it keeps
-	// its author. Every writer has one, and an activation whose origin
-	// fails [RevisionOrigin.Check] is refused.
+	// Origin is the revision's own record — its author, the author's kind,
+	// the credential it was written through, its source and when it was
+	// made — carried with the pointer for the reason Summary is: every node
+	// that adopts the revision keeps its own copy of it, and that copy has
+	// to say who wrote it. Every writer has one, and an activation whose
+	// origin fails [RevisionOrigin.Check] is refused.
 	Origin RevisionOrigin
 
 	// Expect is the revision the caller read before building this one.
@@ -560,6 +711,35 @@ type ActivationRequest struct {
 	ExpectAbsent bool
 }
 
+// ErrPayloadNotDocument reports an activation whose payload is not a JSON
+// object. Both backends refuse it with this, before anything is written,
+// because a pointer whose body no node can decode is a fleet that converges on
+// nothing — and the body is a company document, sealed or not, so anything
+// else is a caller's mistake rather than a shape to store.
+var ErrPayloadNotDocument = errors.New("coord: an activation's payload must be a JSON object")
+
+// CanonicalPayload is the form a backend stores and serves a payload in: the
+// document COMPACTED, and otherwise byte for byte what the caller handed in —
+// no HTML escaping, no re-ordering.
+//
+// ONE FORM FOR BOTH BACKENDS, because the real one encodes the payload inside
+// a JSON record, and encoding/json compacts whatever it embeds: a twin that
+// kept the caller's whitespace would hand back bytes the broker never would,
+// and a case certified on the twin would be certifying a different store. A
+// sealed envelope is compact already, so for the one producer in production
+// this is the identity.
+func CanonicalPayload(payload json.RawMessage) (json.RawMessage, error) {
+	trimmed := bytes.TrimSpace(payload)
+	if len(trimmed) == 0 || trimmed[0] != '{' || !json.Valid(trimmed) {
+		return nil, fmt.Errorf("%w (got %d bytes)", ErrPayloadNotDocument, len(payload))
+	}
+	var out bytes.Buffer
+	if err := json.Compact(&out, trimmed); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrPayloadNotDocument, err)
+	}
+	return out.Bytes(), nil
+}
+
 // ErrActivationRaced reports an activation whose Expect no longer matches.
 //
 // Its own sentinel because the caller's answer is specific: re-read the
@@ -570,8 +750,9 @@ var ErrActivationRaced = errors.New("coord: the activation moved under this writ
 
 // Plane is the fleet's config activation pointer and per-node apply status.
 type Plane interface {
-	// Activate publishes a revision's PAYLOAD and then points the fleet at
-	// it, returning the activation with the epoch the store assigned.
+	// Activate points the fleet at a revision and publishes its PAYLOAD in
+	// the same write, returning the activation with the epoch the store
+	// assigned.
 	//
 	// THE PAYLOAD TRAVELS WITH THE POINTER, and it has to: a peer applies
 	// the revision the pointer names by reading it, and while the payload
@@ -581,21 +762,32 @@ type Plane interface {
 	// life of the deployment, reporting the failure as "no such revision"
 	// once per reconcile tick.
 	//
-	// TWO WRITES, in this order, and the order is the invariant: the
-	// payload first, then the pointer. A crash between them leaves a
-	// payload nothing points at, which the next activation replaces. The
-	// other order points the fleet at bytes no node can read — the exact
-	// thing the seeding path's own comment says must never happen.
+	// ONE WRITE, pointer and payload together, and that is the invariant.
+	// They were two keys written in two steps — the payload, then the
+	// pointer — and the order was argued as the safe one, since a crash
+	// between them left a body nothing pointed at. What the order could
+	// not stop was a SECOND writer: two nodes activating at once each
+	// wrote a body to the one payload key, the flip that landed first was
+	// then pointed at a body the other had overwritten, and every peer
+	// read "no such revision" for the epoch the fleet was on until
+	// somebody activated again. Two booting nodes publishing what they
+	// hold do exactly that, and so did an edit that LOST its
+	// compare-and-set, whose body had landed before its flip was refused.
+	// One record cannot come apart. The pointer key's new revision IS the
+	// epoch, so there is also no window in which a node can read an epoch
+	// whose pointer has not been published, and no way for two concurrent
+	// activations to be handed the same number.
 	//
-	// The flip itself is still ONE write: the pointer key's new revision
-	// IS the epoch, so there is no window in which a node can read an
-	// epoch whose pointer has not been published, and no way for two
-	// concurrent activations to be handed the same number.
+	// What that costs is the payload's bytes on every read of the pointer,
+	// which a reconcile tick makes. A company document is kilobytes, and a
+	// pointer that cannot name a body its fleet can read is the one
+	// failure this store exists to prevent.
 	//
 	// The payload is whatever the caller sealed. This store never opens it
 	// — a node reads it with the Tier A keyring it was deployed with, and
 	// the coordination store holds ciphertext exactly as the node's own
-	// database does.
+	// database does. It checks only that it IS a document, and refuses
+	// anything else with [ErrPayloadNotDocument] before writing.
 	//
 	// # COMPARE-AND-SET, when the caller says what it was editing
 	//
@@ -615,17 +807,19 @@ type Plane interface {
 	// Payload returns the sealed payload of the revision the fleet is
 	// pointed at, and false when the store holds a DIFFERENT revision's.
 	//
-	// Only the current one is kept. A node that has fallen behind needs
-	// exactly the revision the pointer names — never an older one — so a
-	// per-revision history here would be unbounded growth in a bucket with
-	// no retention, for rows nothing would ever read. Each node's own
-	// company_config table is still where its history and its diffs live.
+	// Only the current one is kept: it is the pointer's own. A node that
+	// has fallen behind needs exactly the revision the pointer names —
+	// never an older one — so a per-revision history here would be
+	// unbounded growth in a bucket with no retention, for rows nothing
+	// would ever read. Each node's own company_config table is still where
+	// its history and its diffs live. What comes back is
+	// [CanonicalPayload]'s form of what was activated.
 	//
 	// RAISES rather than answering false on an unreachable store, for the
 	// same reason [Plane.Target] does: "the fleet has a revision I cannot
 	// build" and "I cannot reach the store" send a node down opposite
 	// paths.
-	Payload(ctx context.Context, revisionID string) ([]byte, bool, error)
+	Payload(ctx context.Context, revisionID string) (json.RawMessage, bool, error)
 
 	// Target reads the pointer, reporting whether one has ever been set.
 	//
@@ -905,13 +1099,29 @@ type SandboxRuns interface {
 // fleet's shared store carry credentials at all. KeyID rides denormalised
 // beside it so a rotation sweep can find rows sealed under a retired key
 // without opening any of them.
+//
+// PROVENANCE IS FOUR FIELDS — who wrote it, what sort of author, the
+// credential they acted through, and the write path it arrived by — because a
+// record that named only the credential lost its author the week the
+// credential's own row was swept. See internal/secrets' Author, and its Source
+// for the fourth: held here as the plain string a store of bytes keeps, and
+// stamped and checked by the write path rather than by anything here.
 type SecretRecord struct {
-	Name      string
-	Value     string
-	KeyID     string
-	UpdatedAt time.Time
-	UpdatedBy string
-	Source    string
+	Name          string
+	Value         string
+	KeyID         string
+	UpdatedAt     time.Time
+	UpdatedBy     string
+	UpdatedByKind string
+	OperatorID    string
+	Source        string
+
+	// Version is the store's own revision of the row, set on every read
+	// and ignored on every write: what [Secrets.UpdateSecret] is
+	// conditioned on. Store-wide rather than
+	// per row, as a KV revision is, so a row deleted and written again
+	// never hands back a version an older incarnation of it already used.
+	Version uint64
 }
 
 // Secrets is the fleet's encrypted credential store.
@@ -964,6 +1174,24 @@ type Secrets interface {
 
 	// DeleteSecret removes a value, reporting whether it was there.
 	DeleteSecret(ctx context.Context, name string) (bool, error)
+
+	// CreateSecret writes a sealed value only where no value is stored
+	// under its name, reporting whether it wrote. False is somebody else's
+	// row, not a failure.
+	//
+	// THE ENGINE'S OWN KEY MATERIAL NEEDS THE SANDBOX RUNS' DISCIPLINE, and
+	// last-write-wins is exactly wrong for it: a company key two nodes
+	// minted at once is one whose loser derived values under a key the
+	// store no longer holds. So beside the operator's plain put, two
+	// conditional writes: a create for a key's mint, and an update at the
+	// version read for a rekey.
+	CreateSecret(ctx context.Context, rec SecretRecord) (bool, error)
+
+	// UpdateSecret replaces a sealed value only while the row is still at
+	// version, reporting whether it wrote. False is a LOST RACE — the row
+	// moved or went away since the caller read it — and the caller
+	// re-reads and re-decides rather than writing over what it never saw.
+	UpdateSecret(ctx context.Context, rec SecretRecord, version uint64) (bool, error)
 }
 
 // Integrations is the fleet's record of where each external surface got to.
@@ -1070,10 +1298,29 @@ type Integrations interface {
 // constants. This package keeps two instants and a version, and certifies only
 // that they round-trip and that every write is conditional.
 type MailboxRecord struct {
-	// Handle is the seat's handle, and the record's key.
+	// Seat is the seat's durable id, and the record's KEY.
+	//
+	// THE ID RATHER THAN THE HANDLE, because the mailbox this record is
+	// about is named by the id: a registry keyed on a handle could not
+	// build the subject it is registering, and the same handle under a
+	// renamed organisation is another seat with another mailbox
+	// (ADR-0013), which a handle-keyed registry would fold into one record.
+	Seat uuid.UUID
+
+	// Handle is what the seat answers to, and it is a LABEL rather than an
+	// identity: it is what a person reading the registry, or a retirement
+	// log line, needs in order to know whose mailbox is being retired.
+	// NOTHING RESOLVES BY IT — the runs a retirement ends, the lease it
+	// claims and the subscriptions it deletes are all found by Seat —
+	// because it can be EMPTY: a record a sweep registered from the
+	// broker's listing alone, for a seat neither the roster nor the
+	// registry still names, has no handle anybody can supply. The first
+	// registration or sweep that finds the seat in the roster again writes
+	// it, and the handle a seat's id is derived from never changes, so a
+	// written label never goes stale.
 	Handle string
 
-	// AbsentSince is when a sweep first found the handle missing from the
+	// AbsentSince is when a sweep first found the seat missing from the
 	// active revision. Zero while the seat is in it.
 	AbsentSince time.Time
 
@@ -1121,17 +1368,17 @@ func (r MailboxRecord) Retiring() bool { return !r.RetiringSince.IsZero() }
 // The bucket has no age, for the channel bucket's reason: a record's age cannot
 // tell a seat that is present from one that left, so removing a record is the
 // sweep's decision rather than a broker's clock. The set is bounded by the
-// handles a company has ever used rather than by anything that grows per event.
+// seats a company has ever had rather than by anything that grows per event.
 type Mailboxes interface {
-	// Mailbox reads one record.
-	Mailbox(ctx context.Context, handle string) (MailboxRecord, bool, error)
+	// Mailbox reads one record, by the seat's id.
+	Mailbox(ctx context.Context, seat uuid.UUID) (MailboxRecord, bool, error)
 
-	// Mailboxes returns every record, ordered by handle, so two backends
+	// Mailboxes returns every record, ordered by seat id, so two backends
 	// answer a sweep in the same order.
 	Mailboxes(ctx context.Context) ([]MailboxRecord, error)
 
 	// CreateMailbox writes a new record and returns it as stored, with the
-	// version its next write must carry. A handle that already has a record
+	// version its next write must carry. A seat that already has a record
 	// is left alone and reports false: the existing record may be mid-way
 	// through a retirement, and only a conditional update may change it.
 	CreateMailbox(ctx context.Context, rec MailboxRecord) (MailboxRecord, bool, error)
@@ -1143,7 +1390,7 @@ type Mailboxes interface {
 
 	// DeleteMailbox removes a record at a version, reporting whether that
 	// version still held. A record deleted this way can be created again.
-	DeleteMailbox(ctx context.Context, handle string, version uint64) (bool, error)
+	DeleteMailbox(ctx context.Context, seat uuid.UUID, version uint64) (bool, error)
 }
 
 // Markers is the one piece of housekeeping the shared state asks of its
@@ -1197,6 +1444,7 @@ type Fleet interface {
 	Integrations
 	Mailboxes
 	ObjectStores
+	TrashReaps
 	SeatPauses
 	PositionRegister
 	HoldRegister
@@ -1205,7 +1453,14 @@ type Fleet interface {
 	MaintenanceRegister
 	Markers
 	Custody
+	UploadReservations
 }
+
+// ErrObjectBackendMoved is a move of the fleet's object backend from a store
+// that is not the recorded one: another migration moved it, or the caller
+// read a record that changed. The answer is to read the record again, never
+// to retry the write.
+var ErrObjectBackendMoved = errors.New("coord: the fleet's object backend is not the one the move names")
 
 // ObjectStores is what the whole fleet has to agree on about the object store
 // (ADR-0026): which backend its files are in, and what its collector last
@@ -1234,6 +1489,15 @@ type ObjectStores interface {
 	// caller must not open a backend it could not check.
 	AgreeObjectBackend(ctx context.Context, identity string) (string, error)
 
+	// MoveObjectBackend replaces the recorded backend `from` with `to`,
+	// conditional on `from` being what is recorded: the one write that
+	// moves the fleet's files to another store, made by `crewlet objects
+	// migrate --to s3` once every object is copied, inside a maintenance
+	// window. It answers [ErrObjectBackendMoved] where another backend is
+	// recorded, and nil where `to` already is (the move was made, and a
+	// retry of it is the same move). An error is UNKNOWN.
+	MoveObjectBackend(ctx context.Context, from, to string) error
+
 	// RecordObjectCollection stores what the collector last found, an
 	// opaque value its owner (internal/engine) encodes, replacing the last
 	// one: the duty moves between nodes, and every node's status surface
@@ -1243,6 +1507,34 @@ type ObjectStores interface {
 	// ObjectCollection reads the last report, false when none was ever
 	// written.
 	ObjectCollection(ctx context.Context) ([]byte, bool, error)
+}
+
+// TrashReaps is where the trash reaper's last report is kept (internal/
+// trashreap): which node ran the latest pass, against which cutoff, what each
+// domain's trash gave up, and when the next pass is due.
+//
+// # Why the fleet keeps it, and not the node that ran it
+//
+// The reaper is a fleet duty, so it moves: the node that ran the last pass is
+// rarely the one asked about it, and a node that takes the duty over reads
+// when the next pass is due from here rather than reaping again at once. The
+// report is a whole account rather than a delta, so the last write is the
+// answer, whoever wrote it.
+//
+// # Nothing else, and no lock
+//
+// A purge is decided by its domain against that domain's own trash, in a
+// snapshot the broker arbitrates, so two reapers that overlap while the duty
+// moves purge nothing twice. The record is an account of what happened and
+// never a claim anybody reads to decide a purge.
+type TrashReaps interface {
+	// RecordTrashReap stores the reaper's last report, an opaque value its
+	// owner (internal/trashreap) encodes, replacing the one before.
+	RecordTrashReap(ctx context.Context, value []byte) error
+
+	// TrashReap reads the last report, false when none was ever written.
+	// An error is UNKNOWN: the caller must not read it as "never ran".
+	TrashReap(ctx context.Context) ([]byte, bool, error)
 }
 
 // Follows is which chat threads each seat is following.
@@ -1262,6 +1554,12 @@ type ObjectStores interface {
 // migration 0012 moved `a2a_channels` out for and the one node migration 0010
 // moved four tables out for before that. See ADR-0003.
 //
+// # The seat is named by its handle
+//
+// Every method's seat is the seat's handle, which is immutable (ADR-0013) —
+// what internal/notify's FollowStore hands in. This store resolves nothing; it
+// keys on the name it is given.
+//
 // # Three methods, and no purge
 //
 // Retention here is the BUCKET's age, like every other aged slot: every
@@ -1276,7 +1574,7 @@ type Follows interface {
 	// following for the stronger reason, and an operator asking why it
 	// answered should see the mention rather than the shout that happened
 	// to come first.
-	Follow(ctx context.Context, backend, handle, channel, thread, reason string, at time.Time) error
+	Follow(ctx context.Context, backend, seat, channel, thread, reason string, at time.Time) error
 
 	// Following reports why a seat follows a thread, and whether it does.
 	//
@@ -1286,7 +1584,7 @@ type Follows interface {
 	// the third — internal/notify fails closed, because a missed thread
 	// reply is quiet and self-healing where a spurious wake is a burst of
 	// turns that cannot be taken back.
-	Following(ctx context.Context, backend, handle, channel, thread string) (string, bool, error)
+	Following(ctx context.Context, backend, seat, channel, thread string) (string, bool, error)
 
 	// Unfollow drops a follow, reporting whether one was there.
 	//
@@ -1301,5 +1599,5 @@ type Follows interface {
 	// unfollow is in flight is therefore removed, exactly as it is when the
 	// re-assert loses by a nanosecond — and the next mention re-follows
 	// through the ordinary path.
-	Unfollow(ctx context.Context, backend, handle, channel, thread string) (bool, error)
+	Unfollow(ctx context.Context, backend, seat, channel, thread string) (bool, error)
 }

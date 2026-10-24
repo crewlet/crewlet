@@ -19,6 +19,7 @@
 import { useState } from "react";
 import { Button, Callout, Checkbox, InlineCode, Modal } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import type { AgentAvatar } from "~/lib/avatar.ts";
 import { PlugGlyph, ExternalLinkGlyph, ClockGlyph } from "@crewlethq/icons/glyphs";
 import { marked } from "~/ui/Problems.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
@@ -84,11 +85,14 @@ export function DisconnectDialog({
   stuck,
   apps,
   appPath,
+  avatarOf,
   onClose,
   onDone,
 }: {
   /** The tool's name, as the catalogue writes it. */
   name: string;
+  /** How each agent whose app is removed is drawn, by handle, off the chart. */
+  avatarOf?: (handle: string) => AgentAvatar | null | undefined;
   /** The wire key of the surface being disconnected. */
   /**
    * Every surface this card covers, in the order they are taken away.
@@ -241,8 +245,7 @@ export function DisconnectDialog({
         }
       >
         <p className="t-body secondary" style={{ margin: 0 }}>
-          These credentials are still in your secret store. They are named rather than deleted: one
-          you share with another deployment is not something this button decides about.
+          These credentials stay in your secret store.
         </p>
         <ul className="col gap-1" style={{ margin: 0, paddingLeft: "1.1rem" }}>
           {orphans.map((name) => (
@@ -260,10 +263,8 @@ export function DisconnectDialog({
             order that works. */}
         {owed ? (
           <p className="t-body secondary" style={{ margin: 0 }}>
-            <strong>Wait until the card stops reporting Disconnecting.</strong> The engine is still
-            removing what {name} holds at the app, and it signs in with these credentials to do it.
-            Once it has finished, revoke each one at the app and remove it with{" "}
-            <InlineCode>crewlet secrets unset &lt;name&gt;</InlineCode>.
+            <strong>Wait until the card stops showing Disconnecting</strong>, then revoke each one
+            and remove it with <InlineCode>crewlet secrets unset &lt;name&gt;</InlineCode>.
           </p>
         ) : (
           <p className="t-body secondary" style={{ margin: 0 }}>
@@ -300,8 +301,7 @@ export function DisconnectDialog({
       }
     >
       <p className="t-body secondary" style={{ margin: 0 }}>
-        Agents stop working in {name}. The engine removes the webhooks it registered, then drops the
-        integration from your company configuration.
+        Agents stop working in {name}, and its webhooks are removed.
       </p>
 
       {/* THE DESIGN SYSTEM'S, and it fixes two things this row had of its own.
@@ -323,7 +323,7 @@ export function DisconnectDialog({
         disabled={busy}
         onCheckedChange={setRemoveSeats}
         label="Also remove the accounts Crewlet created"
-        description="Each agent's account at the vendor is deleted. What those accounts wrote stays, but they can do nothing more. Leave this off to keep them."
+        description="Deletes each agent’s account. What they wrote stays."
       />
 
       {/* WHO IS LEFT, and where. The engine uninstalls each agent's app,
@@ -339,8 +339,8 @@ export function DisconnectDialog({
       {removeSeats && apps && apps.length > 0 && (
         <div className="col gap-2">
           <span className="t-caption">
-            Each agent&apos;s app is uninstalled, which stops it acting immediately. Deleting the
-            app itself is yours to do{appPath ? <>: {marked(appPath)}</> : null}.
+            Each agent’s app is uninstalled. Delete the apps yourself
+            {appPath ? <> at {marked(appPath)}</> : null}.
           </span>
           <ul className="int-rows">
             {apps.map((app) => (
@@ -348,7 +348,13 @@ export function DisconnectDialog({
                 {/* DECORATIVE: the row states the agent's name in the line
                       beside it, and an avatar that announced it too would say
                       one thing twice. */}
-                <SeatAvatar name={app.name || app.handle} kind="agent" size="sm" decorative />
+                <SeatAvatar
+                  name={app.name || app.handle}
+                  kind="agent"
+                  avatar={avatarOf?.(app.handle)}
+                  size="sm"
+                  decorative
+                />
                 <div className="int-row-identity">
                   <span className="int-row-name">{app.name || app.handle}</span>
                 </div>
@@ -378,29 +384,21 @@ export function DisconnectDialog({
         // is simply held by something else and the next attempt is already
         // scheduled.
         <Callout variant="neutral" icon={<ClockGlyph size="md" />}>
-          <span>
-            {name} is being provisioned right now, so {waitingOn} has to wait its turn. Still
-            trying.
-          </span>
+          <span>Waiting for {name} to finish provisioning.</span>
         </Callout>
       )}
 
       {error && (
         <Callout variant="danger" role="alert">
           <span className="col" style={{ gap: 4 }}>
-            {stuck && (
-              <span>
-                This disconnect was already asked for and {name} has not let the engine finish it.
-              </span>
-            )}
+            {stuck && <span>{name} hasn’t let the disconnect finish.</span>}
             <span>{error}</span>
             {/* THE WAY OUT of a teardown that can never succeed: a
                   revoked credential, an instance that is gone. Offered
                   only after one has actually failed, because it leaves
                   the vendor holding things nobody will remove. */}
             <span className="t-caption">
-              Forcing drops the integration without waiting for {name}. Whatever it still holds
-              becomes yours to remove there.
+              Forcing it leaves anything still there for you to remove.
             </span>
             <span>
               <Button

@@ -30,6 +30,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
+import { uiletTone } from "~/ui/primitives.tsx";
 import { useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import {
@@ -44,10 +45,15 @@ import {
   StatCard,
   StatGroup,
   Tag,
+  InlineCode,
+  TableDateCell,
+  TableEntityCell,
+  TableStatusCell,
+  TableTextCell,
 } from "@crewlethq/ui";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, SeatLabel, StatusCell, TextCell } from "~/app/frame/cells.tsx";
+import { plainSeat } from "~/app/frame/cells.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
@@ -59,7 +65,9 @@ import {
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
+import { WITHHELD_WHY, WITHHELD_WORDS, questionWithheld } from "~/lib/access.ts";
 import { useOrg, useSandboxes } from "~/lib/store-hooks.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { indexOrg, nameOfIn, useSeatBadgeOf, type NameOf } from "~/lib/seats.ts";
 import { RUNS_POLL_MS } from "~/lib/runs.ts";
 import { deliveredLine, fromPhaseEvent, type PhaseRecord } from "~/lib/phases.ts";
@@ -85,7 +93,6 @@ import type {
   SandboxStatus,
 } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 
 /**
  * THE ENGINE'S OWN SEVEN WORDS, and only those.
@@ -132,8 +139,12 @@ function fromLiveBox(box: SandboxEntry): SandboxRun {
     status: box.status as SandboxStatus,
     coding_agent: box.coding_agent,
     placement: "",
-    task_description: box.task,
-    question: box.question ?? "",
+    // THE BODY AS THE PROJECTION SENT IT: absent where the engine withheld it
+    // from this reader, who is told so (`body_withheld`) rather than shown a
+    // run with no task.
+    ...(box.task !== undefined ? { task_description: box.task } : {}),
+    ...(box.question !== undefined ? { question: box.question } : {}),
+    ...(box.body_withheld ? { body_withheld: true } : {}),
     audience: box.audience ?? "",
     // THE PROJECTION HOLDS NO RESOLUTION: who the question is put to is on
     // the durable row alone, which replaces this entry once it is read.
@@ -179,13 +190,16 @@ export function mergeRuns(durable: SandboxRun[], live: SandboxEntry[]): SandboxR
 
 /**
  * What to call one coding run in a header, which always needs a word in the
- * slot — the page's and the peek's alike, so the two cannot drift.
+ * slot — the page's, the peek's and Live now's alike, so they cannot drift. A
+ * task the engine withheld from this reader says so: "no task was recorded"
+ * about a run whose task the reader may not read is a claim about the run.
  *
  * The placeholder is deliberately NOT what this screen publishes as the run's
  * label: see the `usePageLabels` call below.
  */
-function runTitle(run: SandboxRun): string {
-  return run.task_description || "No task was recorded";
+export function runTitle(run: SandboxRun): string {
+  if (run.task_description) return run.task_description;
+  return run.body_withheld ? `Task ${WITHHELD_WORDS.toLowerCase()}` : "No task was recorded";
 }
 
 /**
@@ -207,11 +221,11 @@ function runFacts(run: SandboxRun, nameOf: NameOf): Fact[] {
       // it three times over. An agent seat by construction: the engine never
       // runs a human seat, so a coding run is always an agent's.
       value: nameOf(run.agent_handle) || run.role,
-      path: run.agent_handle ? ["agents", "seats", run.agent_handle] : undefined,
+      path: run.agent_handle ? ["company", "org", "seats", run.agent_handle] : undefined,
     },
     { label: "Runs in", value: run.placement },
     { label: "Coding agent", value: run.coding_agent },
-    { label: "Branch", value: run.branch ? <code className="inline">{run.branch}</code> : "" },
+    { label: "Branch", value: run.branch ? <InlineCode>{run.branch}</InlineCode> : "" },
     // NOT "up / reclaimed" as a plain word pair: whether the box still exists
     // is the difference between a run somebody can answer and a run whose work
     // is gone, and `FactLine` drops a fact whose value is empty — so this one
@@ -282,29 +296,32 @@ export function AwaitingBanner({
   return (
     <Callout variant="warning" icon={<CircleQuestionMarkGlyph size="md" />}>
       <span className="col gap-2 run-awaiting">
-        <strong>{run.question || "The run asked a question."}</strong>
+        <strong>
+          {run.question ||
+            (questionWithheld(run)
+              ? "Waiting on a question you can’t see."
+              : "The run asked a question.")}
+        </strong>
         <span className="t-caption">
           {/* WHO IT IS PUT TO, as the engine resolved it when the run parked
               — never re-derived here from the coding agent's own label. */}
           {audience.length > 0
-            ? `Put to ${listWords(audience)}${run.audience_fallback ? `, ${seat}'s lead chain — "${run.audience}" named nobody on the chart` : ""}.`
-            : "Nothing recorded whom this question is put to — anybody who can act may answer it."}
-          {run.answerable_in_chat
-            ? " A reply on the conversation this turn served is taken as the answer too."
-            : ""}
+            ? `Put to ${listWords(audience)}${run.audience_fallback ? `, ${seat}’s lead chain: “${run.audience}” isn’t in the chart` : ""}.`
+            : "Anyone can answer."}
+          {run.answerable_in_chat ? " A reply in the conversation also counts." : ""}
           {deadline && !expired
-            ? ` The box is held for ${fmtDuration(run.pause_ttl_seconds * 1000)} from ${fmtDateTime(run.paused_at)} — ${inTime(deadline, now)}.`
+            ? ` Box held for ${fmtDuration(run.pause_ttl_seconds * 1000)} from ${fmtDateTime(run.paused_at)}, ${inTime(deadline, now)}.`
             : ""}
           {/* THE HOLD IS THE DEADLINE, and a passed one is the fact that
               explains the rest of the screen: the box is reaped, the work in
               it is gone, and answering now re-seeds the run from the question
               alone. A deadline rendered as "in -3m" would bury that. */}
           {expired
-            ? ` The hold expired at ${fmtDateTime(deadline)}: the box is reclaimed, so an answer now re-seeds the run rather than resuming it.`
+            ? ` The hold expired at ${fmtDateTime(deadline)}. Answering now restarts the run.`
             : ""}
         </span>
         <span className="row gap-2">
-          <AnswerRunButton turnId={run.turn_id} seat={seat} question={run.question} />
+          <AnswerRunButton turnId={run.turn_id} seat={seat} question={run.question ?? ""} />
         </span>
       </span>
     </Callout>
@@ -321,15 +338,15 @@ function listWords(names: string[]): string {
 function doingLine(run: SandboxRun): string {
   switch (run.status) {
     case "launching":
-      return "The box is being provisioned. Nothing has run in it yet.";
+      return "Setting up the box.";
     case "running":
-      return "A box is up and the coding agent is working in it.";
+      return "The coding agent is working.";
     case "answered":
-      return "A person answered its question. The answer is recorded on the run and the engine is resuming it.";
+      return "Answered. Resuming.";
     case "resumed":
-      return "An answer came back and the suspended Execute phase is running again.";
+      return "Resuming after an answer.";
     default:
-      return "The run is waiting on a person — see above.";
+      return "Waiting on a person.";
   }
 }
 
@@ -357,7 +374,7 @@ function BridgeSummary({ run }: { run: SandboxRun }) {
       </div>
       {last && (
         <span className="t-caption">
-          Last: <code className="inline">{last.name}</code> · {fmtTime(last.at)}
+          Last: <InlineCode>{last.name}</InlineCode> · {fmtTime(last.at)}
         </span>
       )}
     </section>
@@ -385,7 +402,7 @@ export function RunPeek({ turnId }: { turnId: string }) {
   const now = useNow();
   const live = useSandboxes();
   const nameOf = useNameOf();
-  const { data, loading, error } = useQuery("sandbox_runs", undefined, {
+  const { data, loading, error, refusal } = useQuery("sandbox_runs", undefined, {
     enabled: turnId !== "",
     pollMs: RUNS_POLL_MS,
   });
@@ -398,7 +415,7 @@ export function RunPeek({ turnId }: { turnId: string }) {
   return (
     <>
       {loading && !data && <Skeleton variant="text" rows={6} label="Loading the run" />}
-      <QueryState error={error} loading={loading}>
+      <QueryState error={error} refusal={refusal} loading={loading}>
         {/* NOT AN EMPTY RAIL. A turn id that matches no run is a hand-edited
             URL or a run swept past the retention horizon, and naming which
             turn resolved to nothing is more use than a header over no run. */}
@@ -407,7 +424,7 @@ export function RunPeek({ turnId }: { turnId: string }) {
             size="compact"
             icon={<SquareTerminalGlyph size={32} />}
             title="No coding run in flight for this turn"
-            description="A run's record is deleted once it settles, and what it did is then on its turn — open the run's page for its collected output. Otherwise the id may be wrong."
+            description="It may have finished. Its output is on the turn."
           />
         )}
         {run && (
@@ -449,11 +466,11 @@ export function RunPeek({ turnId }: { turnId: string }) {
                         {
                           label: "Ran for",
                           value: fmtDuration(elapsedMs(run.started_at, run.updated_at)),
-                          title: "between the first report and the last, not wall-clock since",
+                          title: "From first to last report",
                         },
                         {
                           label: "Turn",
-                          value: <code className="inline">{run.turn_id}</code>,
+                          value: <InlineCode>{run.turn_id}</InlineCode>,
                           path: ["live", "turns", run.turn_id],
                         },
                       ],
@@ -477,7 +494,9 @@ export function Runs() {
   const now = useNow();
   // Durable runs have no push behind them, so this is the one place a poll is
   // correct — and it is slow, because a run's lifetime is minutes.
-  const { data, loading, error } = useQuery("sandbox_runs", undefined, { pollMs: RUNS_POLL_MS });
+  const { data, loading, error, refusal } = useQuery("sandbox_runs", undefined, {
+    pollMs: RUNS_POLL_MS,
+  });
 
   const rows = useMemo(() => mergeRuns(data?.runs ?? [], live), [data, live]);
 
@@ -527,10 +546,6 @@ export function Runs() {
           </>
         }
       </PageActions>
-      <PageNote>
-        Each one is an Execute phase that suspended. It resumes when the sandbox reports back, after
-        a restart or on another node.
-      </PageNote>
 
       {/* The flush Panel is gone: StatGroup draws that surface itself. */}
       <StatGroup columns={3}>
@@ -564,13 +579,14 @@ export function Runs() {
       {loading && !rows.length && <Skeleton variant="text" rows={4} label="Loading runs" />}
       <QueryState
         error={error}
+        refusal={refusal}
         loading={loading}
         empty={
           rows.length
             ? undefined
             : {
                 title: "No coding run is in flight",
-                hint: "A run is listed while it runs or waits on a person; a finished run's record is its turn's trace. A run starts when a seat calls the sandbox tool, and providers.sandbox gives it a place to run.",
+                hint: "Finished runs are on their turn’s trace.",
               }
         }
       >
@@ -587,7 +603,7 @@ export function Runs() {
                 header: "Status",
                 shrink: true,
                 sortValue: (r) => r.status,
-                // A BADGE, NOT `StatusCell`: the engine's seven words are a
+                // A BADGE, NOT `TableStatusCell`: the engine's seven words are a
                 // vocabulary rather than two lifecycle states, and this is the
                 // pill the Inbox and Live now draw for the same run — a third
                 // rendering of one status is a third thing to keep in step.
@@ -602,13 +618,13 @@ export function Runs() {
                 // drawn one letter wide.
                 floor: "9rem",
                 sortValue: (r) => r.role || r.agent_handle,
-                // NOT `SeatCell` or `SeatChip`: both are anchors and every row
+                // NOT `linkedSeat` or `SeatChip`: both are anchors and every row
                 // here is one, and an anchor inside an anchor is markup no
                 // browser agrees about. The seat is one ⌘-click away from the
                 // run's own page, where it is a link again.
                 cell: (r) =>
                   r.role || r.agent_handle ? (
-                    <SeatLabel {...seatBadge(r.role || r.agent_handle)} />
+                    <TableEntityCell {...plainSeat({ ...seatBadge(r.role || r.agent_handle) })} />
                   ) : (
                     <EmptyValue label="No seat" />
                   ),
@@ -619,9 +635,9 @@ export function Runs() {
                 floor: "10rem",
                 cell: (r) =>
                   r.task_description ? (
-                    <TextCell>{r.task_description}</TextCell>
+                    <TableTextCell>{r.task_description}</TableTextCell>
                   ) : (
-                    <EmptyValue label="No task recorded" />
+                    <EmptyValue label={r.body_withheld ? WITHHELD_WORDS : "No task recorded"} />
                   ),
               },
               {
@@ -655,7 +671,7 @@ export function Runs() {
                     // placement, so this is genuinely "the store has not
                     // written this run yet" rather than a run with nowhere to
                     // run, and the dash says the first on hover.
-                    <EmptyValue label="The durable row has not been written yet" />
+                    <EmptyValue label="Not recorded yet" />
                   ),
               },
               {
@@ -665,15 +681,11 @@ export function Runs() {
                 drop: 3,
                 sortValue: (r) => (r.box_exists ? 1 : 0),
                 cell: (r) => (
-                  <StatusCell
+                  <TableStatusCell
                     glyph={r.box_exists ? "●" : "○"}
                     label={r.box_exists ? "up" : "reclaimed"}
-                    tone={r.box_exists ? "info" : "neutral"}
-                    title={
-                      r.box_exists
-                        ? "the sandbox is still there"
-                        : "the sandbox has been reclaimed; the run's record remains"
-                    }
+                    title={r.box_exists ? "the sandbox is still there" : "Sandbox reclaimed"}
+                    tone={uiletTone(r.box_exists ? "info" : "neutral")}
                   />
                 ),
               },
@@ -682,7 +694,7 @@ export function Runs() {
                 header: "Updated",
                 shrink: true,
                 sortValue: (r) => tsKey(r.updated_at || r.started_at),
-                cell: (r) => <DateCell at={r.updated_at || r.started_at} now={now} />,
+                cell: (r) => <TableDateCell value={r.updated_at || r.started_at} now={now} />,
               },
             ]}
           />
@@ -737,8 +749,12 @@ export function RunScreen({ turnId }: { turnId: string }) {
   const now = useNow();
   const live = useSandboxes();
   const nameOf = useNameOf();
+  const viewer = useViewer();
   const board = useQuery("sandbox_runs", undefined, { pollMs: RUNS_POLL_MS });
-  const turn = useQuery("turn", { turn_id: turnId });
+  // THE TURN IS THE COMPANY-WIDE TRAIL, an admin's question: everybody else
+  // reads the run's own row, and nothing is asked that would be refused.
+  const asksTurn = viewer.admin;
+  const turn = useQuery("turn", { turn_id: turnId }, { enabled: asksTurn });
 
   const run = useMemo(
     () => mergeRuns(board.data?.runs ?? [], live).find((r) => r.turn_id === turnId) ?? null,
@@ -763,7 +779,12 @@ export function RunScreen({ turnId }: { turnId: string }) {
   const task = run?.task_description || launchedTask(turn.data?.events);
   usePageLabels(task ? { [turnId]: task } : {});
 
-  const loading = (board.loading && !board.data) || (turn.loading && !turn.data);
+  // WHO IS READING IS PART OF WHAT THE PAGE WAITS FOR: drawn before the
+  // viewer answered, the page mounted the run's live output, went back to its
+  // skeleton once an admin's turn read began, and asked the output again for
+  // a job the first read had moved off.
+  const loading =
+    (board.loading && !board.data) || viewer.loading || (asksTurn && turn.loading && !turn.data);
   const settled = !run && collected.length > 0;
   const last = collected[collected.length - 1];
   // TWO READS, AND "NONE" NEEDS BOTH. The page is drawn from the run record
@@ -772,7 +793,8 @@ export function RunScreen({ turnId }: { turnId: string }) {
   // holds a coding run" whenever one of them failed, which is a claim about a
   // record the page never read — "could not read" and "none" are opposite
   // answers, so a single failure is named rather than folded into either.
-  const answered = !board.error && !turn.error && Boolean(board.data) && Boolean(turn.data);
+  const answered =
+    !board.error && Boolean(board.data) && (!asksTurn || (!turn.error && Boolean(turn.data)));
   const absent = !loading && !run && collected.length === 0;
   const unread =
     board.error && turn.error ? null : board.error ? "board" : turn.error ? "turn" : null;
@@ -843,19 +865,23 @@ export function RunScreen({ turnId }: { turnId: string }) {
         }
       />
       {loading && <Skeleton variant="text" rows={6} label="Loading the run" />}
-      <QueryState error={board.error && turn.error ? board.error : null} loading={loading}>
+      <QueryState
+        error={board.error && turn.error ? board.error : null}
+        refusal={board.refusal}
+        loading={loading}
+      >
         {unread && (
           <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
             {unread === "board"
-              ? "The run record could not be read, so whether this run is in flight is unknown; what is below is what the turn holds."
-              : "The turn could not be read, so what a collected run did is unknown; what is below is what the run record holds."}
+              ? "Couldn’t read the run record. Showing what the turn holds."
+              : "Couldn’t read the turn. Showing the run record."}
           </Callout>
         )}
         {absent && answered && (
           <EmptyState
             icon={<SquareTerminalGlyph size={32} />}
             title="No coding run for this turn"
-            description="Neither the run record nor the turn holds a coding run under this id. A turn's record is kept for the store's retention window; the id may be wrong, or the turn may be older than that."
+            description="The id may be wrong, or the turn is too old."
           />
         )}
         {run && AWAITING.includes(run.status) && (
@@ -868,7 +894,14 @@ export function RunScreen({ turnId }: { turnId: string }) {
             <Card.Header icon={<SquareTerminalGlyph size="sm" />}>
               <Card.Title>Doing now</Card.Title>
             </Card.Header>
-            {RUNNING.includes(run.status) && run.launch_id ? (
+            {run.body_withheld ? (
+              // ITS OUTPUT IS THE SEAT'S TRAIL, asked only by a reader the
+              // engine sends the run's body to (`sandbox_tail` is decided as
+              // the seat's trail is): everybody else is told what it is doing.
+              <p className="t-body">
+                {doingLine(run)} {WITHHELD_WHY}
+              </p>
+            ) : RUNNING.includes(run.status) && run.launch_id ? (
               // KEYED BY THE JOB: the row's launch moves to a later job on the
               // same run, and that job's view starts empty rather than with
               // the last job's output above it. A `replaced` answer reads the
@@ -882,10 +915,7 @@ export function RunScreen({ turnId }: { turnId: string }) {
                 onReplaced={board.refetch}
               />
             ) : RUNNING.includes(run.status) ? (
-              <span className="t-caption">
-                The run&rsquo;s durable record has not been written yet; its live output can be
-                asked for once it has.
-              </span>
+              <span className="t-caption">Live output appears once the run is recorded.</span>
             ) : (
               <p className="t-body">{doingLine(run)}</p>
             )}
@@ -913,11 +943,11 @@ export function RunScreen({ turnId }: { turnId: string }) {
                     {
                       label: "Ran for",
                       value: fmtDuration(elapsedMs(run.started_at, run.updated_at)),
-                      title: "between the first report and the last, not wall-clock since",
+                      title: "From first to last report",
                     },
                     {
                       label: "Turn",
-                      value: <code className="inline">{run.turn_id}</code>,
+                      value: <InlineCode>{run.turn_id}</InlineCode>,
                       path: ["live", "turns", run.turn_id],
                     },
                   ],
@@ -975,7 +1005,7 @@ function CollectedRun({
                 { label: "Coding agent", value: record.codingAgent },
                 {
                   label: "Box",
-                  value: record.sandboxId ? <code className="inline">{record.sandboxId}</code> : "",
+                  value: record.sandboxId ? <InlineCode>{record.sandboxId}</InlineCode> : "",
                 },
                 {
                   label: "Delivered",
@@ -1053,8 +1083,7 @@ export function BridgeLog({ run }: { run: SandboxRun }) {
           // ended are what explain it — and a log that silently skips is a
           // log that lies about what the run did.
           <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
-            {plural(elided, "call")} from the middle of this log were dropped — the engine keeps the
-            first and last hundred, so the run did more than is shown here.
+            {plural(elided, "call")} from the middle {elided === 1 ? "isn’t" : "aren’t"} shown.
           </Callout>
         )}
         <div className="list">
@@ -1141,7 +1170,7 @@ function BridgeCallRow({ call }: { call: BridgeCall }) {
     <Disclosure
       title={
         <span className="row gap-2 baseline">
-          <code className="inline">{call.name}</code>
+          <InlineCode>{call.name}</InlineCode>
           {call.failed && <Tag variant="danger">failed</Tag>}
           <span className="spacer" />
           <span className="t-caption">{fmtTime(call.at)}</span>

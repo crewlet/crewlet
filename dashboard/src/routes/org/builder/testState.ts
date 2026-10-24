@@ -62,6 +62,24 @@ export function keyedState(doc: CompanyDocument, overrides: DerivedOverrides = {
   );
 }
 
+/**
+ * A lead's draft of the unit `key` of `doc` (`model/scope.ts`): that unit as a
+ * document of its own, keyed by a check of it.
+ */
+export function scopedState(doc: CompanyDocument, key: string): BuilderState {
+  const unit = (doc.units ?? []).find((u) => u.id === key);
+  if (!unit) throw new Error(`no top-level unit ${key}`);
+  return recheck(
+    run(INITIAL_BUILDER, {
+      type: "load",
+      mode: "edit",
+      document: { name: doc.name, units: [unit] },
+      revision: "rev-1",
+      scope: key,
+    }),
+  );
+}
+
 /** The fixture company's root seat Designer, placed in Platform by its unit reference. */
 export const PLACED: DerivedOverrides = {
   seats: { "roles[1]": { placed_by_ref: true, unit_path: "units[0].children[0]" } },

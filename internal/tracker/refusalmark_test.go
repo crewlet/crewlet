@@ -36,7 +36,6 @@ var unmarkedByDesign = map[string]string{
 	"tracker: this writer has no store":                    "construction wiring",
 	"tracker: this writer has no replicated ":              "construction wiring",
 	"tracker: this writer has no coordination":             "construction wiring",
-	"tracker: key %s belongs ":                             "a replicated alias row disagrees with the move that wrote it",
 	"tracker: a scope carries the exactly-the-subject ":    "a scope is the writer's own, never the caller's",
 	"tracker: container %q contains %q, which is ":         "a scope is the writer's own, never the caller's",
 	"tracker: container %q is blank, and a blank ":         "a scope is the writer's own, never the caller's",
@@ -63,8 +62,8 @@ var unmarkedByDesign = map[string]string{
 // refuses a value with fmt.Errorf compiles, reads fine to a model — and
 // reaches a person's write surface as the node's failure, because what is
 // unmarked is read as the node's (see [ErrInvalid]). So every sentence either
-// carries a sentinel through %w, is built with [invalid] or [forbidden], or is
-// named here as the node's own fault with a reason.
+// carries a sentinel through %w, is built with [invalid], [forbidden] or
+// [forbiddenAs], or is named here as the node's own fault with a reason.
 func TestEveryWriteRefusalIsMarked(t *testing.T) {
 	t.Parallel()
 	fset := token.NewFileSet()
@@ -80,13 +79,15 @@ func TestEveryWriteRefusalIsMarked(t *testing.T) {
 			if !ok || len(call.Args) == 0 {
 				return true
 			}
+			if _, isRefusal := refusalSentence(call); isRefusal {
+				marked++
+				return true
+			}
 			format, ok := literal(call.Args[0])
 			if !ok {
 				return true
 			}
 			switch {
-			case isIdent(call.Fun, "invalid") || isIdent(call.Fun, "forbidden"):
-				marked++
 			case isSelector(call.Fun, "fmt", "Errorf") && !strings.Contains(format, "%w"):
 				for prefix := range unmarkedByDesign {
 					if strings.HasPrefix(format, prefix) {
@@ -140,11 +141,14 @@ func TestNoRefusalSpellsThePackagePrefix(t *testing.T) {
 		}
 		ast.Inspect(file, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
-			if !ok || len(call.Args) == 0 ||
-				(!isIdent(call.Fun, "invalid") && !isIdent(call.Fun, "forbidden")) {
+			if !ok {
 				return true
 			}
-			format, ok := literal(call.Args[0])
+			sentence, isRefusal := refusalSentence(call)
+			if !isRefusal {
+				return true
+			}
+			format, ok := literal(sentence)
 			if !ok {
 				t.Errorf("%s: a refusal's sentence is not a literal, so nothing can "+
 					"check it", fset.Position(call.Pos()))
@@ -165,8 +169,8 @@ func TestNoRefusalSpellsThePackagePrefix(t *testing.T) {
 	}
 }
 
-// TestAMarkedRefusalKeepsItsSentenceAndItsChain pins the halves of [invalid]
-// and [forbidden]: the Go error reads as every error here does, prefix and
+// TestAMarkedRefusalKeepsItsSentenceAndItsChain pins the halves of [invalid],
+// [forbidden] and [forbiddenAs]: the Go error reads as every error here does, prefix and
 // all, which is the text a model was tuned against; a sentinel the sentence
 // wraps is still reachable beside the mark; and [Sentence] is the words alone,
 // which is what a person is shown.
@@ -197,6 +201,23 @@ func TestAMarkedRefusalKeepsItsSentenceAndItsChain(t *testing.T) {
 	if !errors.Is(denied, ErrForbidden) || errors.Is(denied, ErrInvalid) {
 		t.Errorf("forbidden is classed wrong: forbidden %v, invalid %v",
 			errors.Is(denied, ErrForbidden), errors.Is(denied, ErrInvalid))
+	}
+
+	// FORBIDDEN-AS CARRIES ITS OWN SENTINEL BESIDE THE CLASS, and says it
+	// once: the class is what every surface maps to a status, the sentinel
+	// is what the one caller that acts on this refusal tests for, and
+	// neither's words are appended to the sentence.
+	sentinel := errors.New("tracker: restores others")
+	alone := forbiddenAs(sentinel, "%d other tasks went with %s", 2, "t-1")
+	if got, want := alone.Error(), "tracker: 2 other tasks went with t-1"; got != want {
+		t.Errorf("the error is %q, want %q", got, want)
+	}
+	if got, want := Sentence(alone), "2 other tasks went with t-1"; got != want {
+		t.Errorf("the sentence is %q, want %q", got, want)
+	}
+	if !errors.Is(alone, ErrForbidden) || !errors.Is(alone, sentinel) || errors.Is(alone, ErrInvalid) {
+		t.Errorf("forbiddenAs is classed wrong: forbidden %v, its sentinel %v, invalid %v",
+			errors.Is(alone, ErrForbidden), errors.Is(alone, sentinel), errors.Is(alone, ErrInvalid))
 	}
 
 	// CONTEXT IS NEVER DROPPED TO TIDY A PREFIX: a refusal a caller wrapped
@@ -232,6 +253,21 @@ func literal(expr ast.Expr) (string, bool) {
 		return left + right, ok
 	}
 	return "", false
+}
+
+// refusalSentence is the sentence argument of a call to one of the package's
+// marked constructors, and whether call is one: [invalid] and [forbidden] take
+// it first, [forbiddenAs] after the sentinel it carries. ONE reading for both
+// walks, because a constructor one walk recognised and the other did not is a
+// refusal the second walk passes by checking nothing.
+func refusalSentence(call *ast.CallExpr) (ast.Expr, bool) {
+	switch {
+	case (isIdent(call.Fun, "invalid") || isIdent(call.Fun, "forbidden")) && len(call.Args) > 0:
+		return call.Args[0], true
+	case isIdent(call.Fun, "forbiddenAs") && len(call.Args) > 1:
+		return call.Args[1], true
+	}
+	return nil, false
 }
 
 func isIdent(expr ast.Expr, name string) bool {

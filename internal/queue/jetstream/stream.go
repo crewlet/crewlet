@@ -7,6 +7,17 @@
 // the whole company with no services and a fleet run the same binary against
 // a cluster.
 //
+// The one thing an external server must promise that the embedded one is
+// built with is the contract's message size
+// ([github.com/crewlet/crewlet/internal/queue.MaxPayloadBytes]): the
+// client refuses a message past what its server announces, so a server left
+// at nats-server's 1 MiB default takes every small write and refuses the
+// first large one. Every connection a queue opens is held to the contract on
+// the limit its server announces once it has authenticated — its own
+// max_payload, or its account's where that is lower — and one that falls
+// short is a refused boot naming the setting rather than a node that serves
+// and then cannot write — see carriesTheContract.
+//
 // # Why JetStream fits
 //
 // Crewlet's subject grammar IS NATS grammar: dot-separated segments with `*`
@@ -40,6 +51,22 @@
 // returned publish therefore reads the STREAM's own state, never a consumer's
 // count; see Backlog, which is where the tempting one-round-trip form was and
 // what it did.
+//
+// # What a broker that does not answer looks like from above
+//
+// The client reports a broker it cannot reach in a dozen words of its own — a
+// timeout, no responders, a stream with no leader, a connection reconnecting
+// or disconnected, a reconnect buffer that filled — and what the waiting call
+// ends on is often only a deadline. Every verb that calls the broker therefore
+// marks its failure with the contract's word for it before returning
+// ([Queue.brokerFailed]): queue.ErrUnavailable for silence, a condition the
+// layers above answer with "try again"; [ErrConnectionLost], which is
+// queue.ErrNotLive, for a connection the client closed for good. Unmarked,
+// every one of them read above the queue as this node's own fault. The
+// domain-log seam (DomainLog, DomainConsumer) is deliberately not marked:
+// internal/statelog classifies its own appends and reads into outcomes and
+// refusals, and a second classification beneath it would be a second answer
+// to one question.
 //
 // # A pull allocates for what it receives, never for what it may
 //
@@ -181,6 +208,16 @@ type streamSpec struct {
 	// it would take a fleet down for a number nobody is losing data to.
 	maxBytes int64
 
+	// maxMsgSize is the largest message the stream stores — headers and
+	// body, never the subject. Zero means unlimited, the server's own -1.
+	//
+	// CAPACITY, for maxBytes' reason: a stream created by a build that
+	// declared none, or a different one, loses no record over it — a
+	// record past it is REFUSED, loudly, as too large — so a boot that
+	// refused to run over the difference would take a fleet down for a
+	// number nobody is losing data to.
+	maxMsgSize int32
+
 	// discard decides what a full stream does. DiscardNew REFUSES the
 	// append; DiscardOld drops the oldest message to make room.
 	//
@@ -277,6 +314,7 @@ func classifyStreamSpec() map[string]specFieldClass {
 		"mirrorDirect":  classSafety,
 
 		"maxBytes":   classCapacity,
+		"maxMsgSize": classCapacity,
 		"duplicates": classCapacity,
 	}
 }
@@ -520,6 +558,14 @@ type DomainStream struct {
 	// wants: a log with no ceiling fills the volume instead of refusing.
 	MaxBytes int64
 
+	// MaxMessageBytes is the largest message the stream stores, its
+	// headers included — a domain's largest record plus what a stored
+	// record carries beside it. Zero is unlimited, which no shipped domain
+	// wants: the broker's refusal is what holds a PEER to the declaration,
+	// since this build's publisher refuses a larger record before it is
+	// sent and a peer on another build may not.
+	MaxMessageBytes int64
+
 	// Duplicates is the window a repeated Nats-Msg-Id is collapsed in. It
 	// has to outlast a publisher's whole retry budget, or a retry that
 	// takes longer than the window appends the record twice.
@@ -566,6 +612,10 @@ func (d DomainStream) spec() streamSpec {
 		subjects:  d.Subjects,
 		retention: jetstream.LimitsPolicy,
 		maxBytes:  d.MaxBytes,
+
+		// CHECKED AT THE DOOR ([Queue.EnsureDomainStream]), which is
+		// the only caller, so this conversion never wraps.
+		maxMsgSize: int32(d.MaxMessageBytes),
 
 		// REFUSE THE APPEND rather than drop the oldest record. The
 		// records here are the company's own state, so a full log is an

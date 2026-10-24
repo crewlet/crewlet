@@ -32,11 +32,29 @@ func TestContractThroughALeaf(t *testing.T) {
 // AND THE FLEET'S SHARED STATE: the counters, the ledgers, the claims and the
 // secrets, whose every write is a compare-and-set a leaf's request has to
 // reach a member's stream leader to win or lose.
+//
+// EVERY NODE A LEAF OF ITS OWN, joined to one member, which is where the
+// counter failed: a round trip through a leaf is longer than one on a member,
+// so the fixed 32 ms backoff ceiling that spread a member's writers no longer
+// spread these, and the org's counter lost every one of its sixteen attempts
+// to the contract's thirty-two concurrent charges under the solo half's load.
+// The contention cases put [coordtest.ContendedCharges] charges through each of
+// [coordtest.ContendingNodes] leaves at once, so they meet that topology.
 func TestFleetContractThroughALeaf(t *testing.T) {
 	t.Parallel()
-	client := leafClient(t)
-	coordtest.RunFleet(t, func(t *testing.T) coord.Fleet {
-		return openFleetVia(t, client, fmt.Sprintf("f%d", bucketSeq.Add(1)))
+	port := leafMember(t)
+	clients := make([]jetstream.JetStream, coordtest.ContendingNodes)
+	for i := range clients {
+		clients[i] = leafClientOf(t, port, fmt.Sprintf("leaf-%d", i))
+	}
+	coordtest.RunFleet(t, func(t *testing.T) func() coord.Fleet {
+		prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
+		opened := 0
+		return func() coord.Fleet {
+			client := clients[opened%len(clients)]
+			opened++
+			return openFleetVia(t, client, prefix)
+		}
 	})
 }
 

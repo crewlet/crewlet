@@ -8,23 +8,23 @@
 
 import { useCallback, useMemo, useRef, type CSSProperties } from "react";
 import { useSearchTarget } from "~/app/searchTarget.ts";
-import { plural } from "~/lib/format.ts";
+import { plural, fmtCount } from "~/lib/format.ts";
 import { useNavigator, useParam, useRoute } from "~/app/router.tsx";
 import {
   Button,
-  Callout,
   Card,
   CodeBlock,
   Disclosure,
   EmptyState,
   FilterChip,
   FilterChipGroup,
-  InlineCode,
   Input,
   Skeleton,
   StatCard,
   StatGroup,
   Tag,
+  TableKeyCell,
+  TableNumberCell,
 } from "@crewlethq/ui";
 import {
   WrenchGlyph,
@@ -34,10 +34,10 @@ import {
   SearchGlyph,
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Section, SeatChip } from "~/components/common.tsx";
+import { SeatChip } from "~/components/common.tsx";
 import { uiletTone } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { NumberCell, KeyCell } from "~/app/frame/cells.tsx";
+
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
@@ -66,7 +66,6 @@ import {
 import type { ToolAnnotations, ToolHint, ToolRow } from "~/protocol/index.ts";
 import type { McpServerStatus } from "~/contract/mcp.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 
 /**
@@ -134,7 +133,10 @@ function toolFacts(tool: ToolRow): Fact[] {
       // fact the registry recorded, not a value somebody forgot to set.
       value: tool.delivers || "nobody",
     },
-    { label: "Arguments", value: <NumberCell value={argumentCount(tool)} /> },
+    {
+      label: "Arguments",
+      value: <TableNumberCell value={argumentCount(tool)} format={fmtCount} />,
+    },
     { label: "Advertised", value: `${hintsAdvertised(tool.annotations)} of 4 hints` },
   ];
 }
@@ -197,17 +199,14 @@ function holdersOf(tool: ToolRow, seats: Seat[]): Holders {
     return {
       seats: agents,
       everyone: true,
-      why:
-        tool.source === "a2a"
-          ? "An A2A tool is the seat's own way to reach a colleague, so every agent seat carries one."
-          : "The engine registers its builtins on every agent seat it spawns.",
+      why: tool.source === "a2a" ? "Every agent seat has one." : "Every agent seat has these.",
     };
   }
   const granted = grantedSeats(seats, server);
   return {
     seats: granted,
     everyone: agents.length > 0 && granted.length === agents.length,
-    why: `The engine grants ${server} to every agent seat when it is shared, and otherwise only to a seat that declares credentials for it under mcp_env.`,
+    why: "Shared servers reach every agent; others reach seats with credentials for them.",
   };
 }
 
@@ -251,7 +250,7 @@ function useTool(name: string): {
 /**
  * What a tool IS, under whichever header named it.
  *
- * ONE BODY FOR THE PAGE AND THE RAIL. `#/settings/tools/{name}` is a tool's
+ * ONE BODY FOR THE PAGE AND THE RAIL. `#/settings/mcp-tools/{name}` is a tool's
  * address in `objects.ts` and therefore where the rail's `Open ↗` goes — the
  * screen accepted the segment and rendered the unfiltered catalogue, so that
  * link led nowhere in particular and a reader who followed it lost the tool
@@ -277,7 +276,7 @@ function ToolBody({ name }: { name: string }) {
         size="compact"
         icon={<WrenchGlyph size="xl" />}
         title={`No tool called “${name}”`}
-        description="Builtins register at boot and MCP tools are discovered from the servers in mcp_servers. A tool whose server failed to start, or whose name has changed, is not in this node's registry."
+        description="Its server may have failed to start, or the tool was renamed."
       />
     );
   }
@@ -292,9 +291,7 @@ function ToolBody({ name }: { name: string }) {
         {tool.description ? (
           <p className="t-body">{tool.description}</p>
         ) : (
-          <p className="t-body muted">
-            The server advertised no description, so a model is offered this tool by name alone.
-          </p>
+          <p className="t-body muted">No description from the server.</p>
         )}
         {matches.length > 1 && (
           // TWO REGISTRATIONS, ONE NAME. `mcp_servers.tool_prefix` exists
@@ -316,10 +313,7 @@ function ToolBody({ name }: { name: string }) {
       <section className="col gap-2">
         <div className="t-label">Arguments</div>
         {!tool.input_schema ? (
-          <p className="t-body muted">
-            This build sent no schema for this tool, which is not the same as a tool that takes no
-            arguments.
-          </p>
+          <p className="t-body muted">No schema available.</p>
         ) : fields.length === 0 ? (
           <p className="t-body">It takes no arguments.</p>
         ) : (
@@ -362,9 +356,7 @@ function ToolBody({ name }: { name: string }) {
         <div className="t-label">Which seats hold it</div>
         {holders.everyone ? (
           <>
-            <p className="t-body">
-              Every agent seat — {plural(holders.seats.length, "seat")} in this company.
-            </p>
+            <p className="t-body">Every agent seat ({holders.seats.length}).</p>
             <p className="t-caption">{holders.why}</p>
           </>
         ) : holders.seats.length > 0 ? (
@@ -376,6 +368,7 @@ function ToolBody({ name }: { name: string }) {
                   name={seat.name}
                   handle={seat.handle}
                   kind={seat.kind}
+                  avatar={seat.avatar}
                 />
               ))}
             </div>
@@ -387,8 +380,7 @@ function ToolBody({ name }: { name: string }) {
           // finding rather than an empty list, so it is said outright.
           <>
             <p className="t-body">
-              No seat can call this: no seat is granted <span className="mono">{server}</span>, so
-              it launches for nobody.
+              No seat is granted <span className="mono">{server}</span>.
             </p>
             <p className="t-caption">{holders.why}</p>
           </>
@@ -488,26 +480,26 @@ export function emptyOriginReason(
   if (!row) {
     return servers
       ? `No configuration or live node carries a server called ${server}.`
-      : "A server's tools are listed once an instance of it starts on a node.";
+      : "Tools appear once the server starts.";
   }
   const failed = row.nodes.find((n) => n.error);
   switch (row.state) {
     case "failing":
       return failed
-        ? `Every instance a node launched failed to start. On ${failed.node}, ${failureLine(failed)}`
-        : "Every instance a node launched failed to start.";
+        ? `Failed to start. On ${failed.node}: ${failureLine(failed)}`
+        : "Failed to start.";
     case "partial":
       return failed
-        ? `It started somewhere, but not on the node serving this page. On ${failed.node}, ${failureLine(failed)}`
-        : "It started somewhere, but not on the node serving this page.";
+        ? `Not running on this node. On ${failed.node}: ${failureLine(failed)}`
+        : "Running elsewhere, not on this node.";
     case "not_started":
       return row.shared
-        ? "No node has started it yet: a change no node has applied."
-        : "No node started it: no seat on a live node declares credentials for it under mcp_env.";
+        ? "Not started yet; the change is still rolling out."
+        : "Not started: no seat has credentials for it.";
     case "unreported":
-      return "No live node reports its MCP servers, so whether it started is unknown.";
+      return "Status unknown.";
     default:
-      return "It is running, and the node serving this page has not listed its tools yet.";
+      return "Running. Tools not listed yet.";
   }
 }
 
@@ -532,7 +524,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
   const seats = useMemo(() => indexOrg(org).seats, [org]);
   const [q, setQ] = useParam("q", "");
   const [chosen, setChosen] = useParam("origin", "");
-  // THE ADD FORM IS AN ADDRESS (`?add=server`), so Settings › Integrations'
+  // THE ADD FORM IS AN ADDRESS (`?add=server`), so Company › Integrations'
   // "Add an MCP server" tile can open it and a reload keeps it open.
   const [adding, setAdding] = useParam("add", "");
   const status = useQuery("mcp_servers_status", undefined, { pollMs: SERVERS_POLL_MS });
@@ -544,7 +536,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
   const taken = useMemo(() => takenNames(status.data?.servers), [status.data]);
   const nodeOnly = useMemo(() => nodeOnlyNames(status.data?.servers), [status.data]);
 
-  // `#/settings/tools/servers/{name}` IS A FILTER ON THE ORIGIN, and this screen
+  // `#/settings/mcp-tools/servers/{name}` IS A FILTER ON THE ORIGIN, and this screen
   // accepted the segment and dropped it: the crumb trail said "Servers /
   // github" over the whole unfiltered catalogue, and `Open ↗` from a tool's
   // rail landed on the same place. The path wins where it names one, and the
@@ -566,7 +558,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
         const query = new URLSearchParams(route.query);
         if (next) query.set("origin", next);
         else query.delete("origin");
-        nav.replace(["settings", "tools"], query);
+        nav.replace(["settings", "mcp-tools"], query);
         return;
       }
       setChosen(next);
@@ -666,10 +658,6 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
           }}
         />
       )}
-      <PageNote>
-        What the models can actually call. An executor is shown the built-in tools and each MCP
-        server by name; a server's own tools are discovered and activated during a turn.
-      </PageNote>
 
       {/* THE TOOL THIS PATH NAMES, ABOVE the catalogue rather than under it.
           `Secrets` puts its addressed row below, and the reason it can is that
@@ -742,17 +730,13 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
         </StatGroup>
       </Card>
 
-      <Section
-        title="MCP servers"
-        hint="What each server is launched as, which seats it reaches, and what every live node did with it."
-      >
-        <McpServers
-          data={status.data}
-          loading={status.loading}
-          error={status.error}
-          seats={seats}
-        />
-      </Section>
+      <McpServers
+        data={status.data}
+        loading={status.loading}
+        error={status.error}
+        refusal={status.refusal}
+        seats={seats}
+      />
 
       <div className="toolbar">
         {/* A BASIS, NOT ZERO: at `flex: 1` the field's basis was 0, so on a
@@ -822,7 +806,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
         <EmptyState
           icon={<WrenchGlyph size="xl" />}
           title="No tools are registered"
-          description="Builtins register at boot; MCP tools are discovered from the servers in mcp_servers. An engine with no active configuration has neither."
+          description="Tools appear once a company is active."
         />
       ) : (
         <Card padding="none">
@@ -846,7 +830,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
                 // identifier a reader is matching against a config file, so
                 // a break in the middle of one is worse than a narrower
                 // description beside it. A shrunk cell never wraps, which is
-                // what `KeyCell` inherits here rather than restating.
+                // what `TableKeyCell` inherits here rather than restating.
                 shrink: true,
                 // TWICE A SHRINK COLUMN'S SHARE. The name is the identifier the
                 // list is scanned by, and at a shrink column's fifth of the grid
@@ -856,7 +840,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
                 // columns a tool's own page answers.
                 width: "fit-content(40%)",
                 sortValue: (t) => t.name,
-                cell: (t) => <KeyCell value={t.name} />,
+                cell: (t) => <TableKeyCell value={t.name} />,
               },
               {
                 key: "origin",
@@ -911,7 +895,10 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
                 cell: (t) => {
                   const c = capabilityOf(t.annotations);
                   return (
-                    <span className="row gap-1">
+                    // THE TAGS WRAP rather than clip: two side by side in a
+                    // capped column cut the second mid-word ("out", a lone
+                    // "‹") at 1024.
+                    <span className="row wrap gap-1">
                       <Tag variant={capabilityVariant(c)}>{c}</Tag>
                       {t.annotations?.open_world === "yes" && (
                         <Tag appearance="outline">outside</Tag>
@@ -948,7 +935,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
                   const required = fields.filter((f) => f.required).length;
                   return (
                     <span className="row gap-1">
-                      <NumberCell
+                      <TableNumberCell
                         value={argumentCount(t)}
                         title={
                           fields.length
@@ -960,6 +947,7 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
                                 .join("\n")
                             : undefined
                         }
+                        format={fmtCount}
                       />
                       {required > 0 && <span className="t-caption">{required} required</span>}
                     </span>
@@ -970,23 +958,6 @@ export function Tools({ server, tool }: { server?: string; tool?: string }) {
           />
         </Card>
       )}
-
-      <Section title="How a model reaches these">
-        <Callout variant="neutral">
-          <span className="col" style={{ gap: 4 }}>
-            <span>
-              An executor prompt lists <strong>server names</strong>, not tool names — a role with
-              50–150 MCP tools would push 15–25 KB of catalogue into every call.
-            </span>
-            <span className="t-caption">
-              The model calls <InlineCode>list_mcp_server_tools(server)</InlineCode> to see what a
-              server offers, then <InlineCode>activate_tool(name)</InlineCode> to promote one into
-              the schemas it can actually invoke. It activates what it needs the moment it needs it:
-              there is no separate planning pass to name a tool in advance.
-            </span>
-          </span>
-        </Callout>
-      </Section>
     </>
   );
 }

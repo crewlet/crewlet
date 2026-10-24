@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"maps"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -27,9 +28,9 @@ import (
 // Two observations, both taken the instant [New] returns and neither of them a
 // wait, because both halves of the unwind are synchronous:
 //
-//   - the slice answerer is WITHDRAWN, which is the first step of
-//     [native.shutdown] and therefore says the native runtime was stopped
-//     rather than abandoned;
+//   - every answerer the native start registered — the search slice — is
+//     WITHDRAWN, which is the first step of [native.shutdown] and therefore
+//     says the native half was stopped rather than abandoned;
 //   - this node's ADMISSION is gone, which says the unwind is the whole
 //     teardown rather than the native part alone. An admission left behind
 //     tells a coordinator this process may be publishing — and it is the
@@ -68,7 +69,7 @@ roles:
 `
 
 // servedQueue is the real broker, counting the answerer registrations it hands
-// out and the withdrawals that follow.
+// out and the withdrawals that follow, per subject.
 //
 // THE REGISTRATION IS THE OBSERVATION, and it is a better one than a goroutine
 // count or a connection: startNative registers this node as an answerer for
@@ -78,9 +79,10 @@ roles:
 // returning a sixty-fourth of the corpus as a complete answer.
 //
 // PER SUBJECT, because a node registers more than one answerer — the search
-// fan-out's and the fleet history's (internal/eventfan) — and each is a claim
-// a peer relies on: a history answerer left behind by a failed boot answers
-// peers from a store its caller is free to close.
+// fan-out's, the fleet history's (internal/eventfan), the steer desk's — and
+// each is a claim a peer relies on: a history answerer left behind by a failed
+// boot answers peers from a store its caller is free to close. One total would
+// read a second answerer as a boot that started twice.
 type servedQueue struct {
 	*jetstream.Queue
 
@@ -100,30 +102,30 @@ func (q *servedQueue) Serve(ctx context.Context, subject string, answers int,
 	if err != nil {
 		return nil, err
 	}
-	q.mu.Lock()
-	if q.served == nil {
-		q.served, q.withdrawn = map[string]int{}, map[string]int{}
-	}
-	q.served[subject]++
-	q.mu.Unlock()
+	q.count(q.served, subject)
 	return func(ctx context.Context) error {
-		q.mu.Lock()
-		q.withdrawn[subject]++
-		q.mu.Unlock()
+		q.count(q.withdrawn, subject)
 		return stop(ctx)
 	}, nil
 }
 
-// counts is how many answerers were registered and withdrawn on one subject.
-func (q *servedQueue) counts(subject string) (served, withdrawn int) {
+// count adds one to a subject's tally.
+func (q *servedQueue) count(tally map[string]int, subject string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return q.served[subject], q.withdrawn[subject]
+	tally[subject]++
+}
+
+// tallies copies both tallies.
+func (q *servedQueue) tallies() (served, withdrawn map[string]int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return maps.Clone(q.served), maps.Clone(q.withdrawn)
 }
 
 func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	SeedStore(t, &b)
@@ -141,7 +143,8 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 		t.Fatalf("the stream is %T, not the JetStream backend this case needs",
 			back.Queue)
 	}
-	watched := &servedQueue{Queue: real, served: map[string]int{}, withdrawn: map[string]int{}}
+	watched := &servedQueue{Queue: real, served: map[string]int{},
+		withdrawn: map[string]int{}}
 	// BORROWED backends, so the failure path leaves them open for the
 	// assertions — and so this case sees what an embedded caller sees,
 	// which is the deployment where nothing at all was closed and the
@@ -157,22 +160,16 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 			"native start, so move it to whatever step now does")
 	}
 
-	served, withdrawn := watched.counts(search.SliceSubject)
-	if served != 1 {
+	served, withdrawn := watched.tallies()
+	if got := served[search.SliceSubject]; got != 1 {
 		t.Fatalf("this node registered %d search answerers, want 1 — the boot "+
-			"failed before the native runtime was up, so this case is no "+
-			"longer testing what it says", served)
-	}
-	if withdrawn != 1 {
-		t.Errorf("the boot failed and its search answerer was withdrawn %d "+
-			"times, want 1: this node is still claiming bucket ranges its "+
-			"peers count as answered, and the runtime behind them — the apply "+
-			"loops, the position heartbeat, the donor, the indexer — is still "+
-			"running against a store the caller is free to close", withdrawn)
+			"failed before the native half was up, so this case is no "+
+			"longer testing what it says", got)
 	}
 	// AND THE ESTATE SERVER, registered before the native start: a data
 	// node whose boot failed must not stay on the fleet's stateless nodes'
 	// list of who to ask, answering from a runtime that is being torn down.
+	// Asserted registered, so the withdrawal loop below has it to judge.
 	nodeID, err := config.ResolveNodeID(&b, nil)
 	if err != nil {
 		t.Fatalf("resolve the node id: %v", err)
@@ -180,22 +177,28 @@ func TestAFailedBootStopsEverythingItAlreadyStarted(t *testing.T) {
 	// BOTH OF ITS LANES: a node left answering proposals for repositories
 	// it commits for would decide pushes from a runtime being torn down.
 	for _, subject := range []string{estate.Subject(nodeID), estate.ProposalSubject(nodeID)} {
-		served, withdrawn = watched.counts(subject)
-		if served != 1 || withdrawn != 1 {
-			t.Errorf("the estate server's %s was registered %d time(s) and withdrawn %d, "+
-				"want once each", subject, served, withdrawn)
+		if got := served[subject]; got != 1 {
+			t.Fatalf("this node registered the estate server's %s %d time(s), "+
+				"want 1 — a data node registers both of its lanes before the "+
+				"native start, so this case expects exactly one each", subject, got)
 		}
 	}
-	served, withdrawn = watched.counts(topics.ObserveRead)
-	if served != 1 {
+	// THE HISTORY ANSWERER TOO, which is armed before the native start on
+	// every node: a case that saw only the search answerer could pass with
+	// the history one never registered at all.
+	if got := served[topics.ObserveRead]; got != 1 {
 		t.Fatalf("this node registered %d history answerers, want 1 — the "+
 			"history answerer is armed before the native start, so this case "+
-			"expects exactly one", served)
+			"expects exactly one", got)
 	}
-	if withdrawn != 1 {
-		t.Errorf("the boot failed and its history answerer was withdrawn %d "+
-			"times, want 1: peers still ask this node for its turns and it "+
-			"answers them from a store the caller is free to close", withdrawn)
+	for subject, n := range served {
+		if withdrawn[subject] != n {
+			t.Errorf("the boot failed and its %s answerer was registered %d "+
+				"time(s) and withdrawn %d: this node is still answering its "+
+				"peers for a runtime — the apply loops, the position heartbeat, "+
+				"the donor, the indexer — still running against a store the "+
+				"caller is free to close", subject, n, withdrawn[subject])
+		}
 	}
 
 	admissions, err := back.Fleet.Admissions(context.Background())

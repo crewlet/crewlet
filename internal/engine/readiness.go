@@ -18,8 +18,8 @@ package engine
 // ASKED OF THE QUEUE'S OWN CLIENT, which is what every seat's mailbox, every
 // publish and (on an embedded fleet) the coordination store ride. A queue with
 // no link to lose — the in-memory twin, a broker and its clients in one
-// process — answers nil, the way [brokerJetStream] answers no JetStream for
-// it.
+// process — answers nil, the way [Backends.CoordinationJetStream] answers no
+// JetStream where there is no broker at all.
 func (e *Engine) BrokerLink() error {
 	linked, ok := e.backends.Queue.(interface{ Link() error })
 	if !ok {

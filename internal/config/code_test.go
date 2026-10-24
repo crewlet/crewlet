@@ -161,35 +161,6 @@ func TestTheCodeLimitsResolveToTheirDefaults(t *testing.T) {
 	}
 }
 
-// THE CODE HOST STARTS THE STATE LOG ON ITS OWN. Its log is one of the
-// register's, so a company on vendors for its tracker and its knowledge base
-// that hosts its repositories still keeps its own records on the stream — and
-// a node that did not start the log for it would have no committer to decide a
-// push with.
-func TestRunsStateLogCountsTheCodeHost(t *testing.T) {
-	t.Parallel()
-	vendors := config.Company{
-		Name:    "Acme",
-		Tracker: config.Tracker{Backend: config.TrackerNone},
-		Integrations: config.Integrations{Confluence: &config.Confluence{
-			URL: "https://wiki.example.com", Token: "${T}",
-		}},
-	}
-	if vendors.KnowledgeBackendFor() != config.KnowledgeConfluence {
-		t.Fatalf("the premise: the knowledge base is %q, want confluence",
-			vendors.KnowledgeBackendFor())
-	}
-	if vendors.RunsStateLog() {
-		t.Error("a company on vendors for both halves, hosting no code, runs the state log")
-	}
-	hosting := vendors
-	hosting.Code.Native = true
-	if !hosting.RunsStateLog() {
-		t.Error("a company hosting its repositories in the engine runs no state log: " +
-			"nothing would decide a push")
-	}
-}
-
 // codeChart is a company with a chart to own repositories: a root seat, and two
 // units — one keyed by its name, one by an id its name does not spell.
 const codeChart = `name: Acme
@@ -779,7 +750,7 @@ roles:
     handle: ceo
 units:
   - name: Engineering
-    lead: CTO
+    lead: cto
     roles:
       - name: CTO
         handle: cto

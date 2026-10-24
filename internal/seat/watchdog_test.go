@@ -2,6 +2,9 @@ package seat
 
 import (
 	"context"
+	"errors"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -427,6 +430,121 @@ func TestAWedgedHeartbeatPassIsWhatTheWatchdogSees(t *testing.T) {
 	}
 }
 
+// A HEALTHY DUTY IS NOT BEHIND, and its lag is not reported.
+//
+// The time since a turning duty's last beat is never zero, only shorter than
+// a beat, so Lag reported it whole: every healthy node's /health carried a
+// stall_lag_seconds under a second, the field documented as present only
+// while the duty is behind, and a reader alerting on its presence fired on
+// all of them. Behind is a missed beat: a last beat older than the beat
+// interval the watchdog's own rule gives this threshold.
+func TestADutyOnItsBeatReportsNoLag(t *testing.T) {
+	t.Parallel()
+	clock := newClock()
+	_, onStall := caught()
+	w := newWatchdog(SeatLeaseTTL, clock.Now, onStall)
+	duty := &fakePulse{}
+	w.Watch("seat-heartbeat", duty)
+
+	beat := beatCeiling(SeatLeaseTTL)
+	for _, since := range []time.Duration{0, beat / 2, beat - time.Millisecond, beat} {
+		duty.set(clock.Now().Add(-since), true)
+		if lag := w.Lag(); lag != 0 {
+			t.Errorf("a duty that beat %s ago, inside its %s beat, reports %s behind: "+
+				"a healthy node's health would carry the field", since, beat, lag)
+		}
+	}
+	if !w.Beating() {
+		t.Fatal("a live duty that has beaten is not counted as beating, so the " +
+			"watchdog reads as guarding nothing")
+	}
+}
+
+// A STALLED DUTY IS BEHIND, by the whole time since its last beat: the
+// figure that climbs towards the threshold at which the watchdog ends the
+// process, and the one a screen says before it does.
+func TestAStalledDutyReportsTheTimeSinceItsLastBeat(t *testing.T) {
+	t.Parallel()
+	clock := newClock()
+	fired, onStall := caught()
+	w := newWatchdog(SeatLeaseTTL, clock.Now, onStall)
+	duty := &fakePulse{}
+	w.Watch("seat-heartbeat", duty)
+
+	beat := beatCeiling(SeatLeaseTTL)
+	duty.set(clock.Now(), true)
+	clock.Advance(beat + time.Millisecond)
+	if lag := w.Lag(); lag != beat+time.Millisecond {
+		t.Fatalf("lag one beat and a millisecond after the last = %s, want %s: the "+
+			"duty missed its beat", lag, beat+time.Millisecond)
+	}
+	clock.Advance(30 * time.Second)
+	if lag, want := w.Lag(), beat+time.Millisecond+30*time.Second; lag != want {
+		t.Fatalf("lag = %s, want %s, the whole time since the last beat", lag, want)
+	}
+	// Reporting it changes nothing about when the watchdog fires.
+	if !w.check() {
+		t.Fatal("the watchdog fired on a duty still inside its threshold")
+	}
+	select {
+	case stall := <-fired:
+		t.Fatalf("fired %+v inside the threshold", stall)
+	default:
+	}
+}
+
+// BEHIND IS MEASURED AGAINST THE BEAT THE HOST KEEPS, never a number of its
+// own: the host beats at the same ceiling the watchdog reads a missed beat
+// against, or faster where its pass is faster, so a host on its beat is never
+// read as behind, at the shipped lease and at the tight ones somebody lowers
+// it to.
+func TestBehindIsMeasuredAgainstTheBeatTheHostKeeps(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	for _, tc := range []struct {
+		ttl       time.Duration
+		heartbeat time.Duration
+	}{
+		{SeatLeaseTTL, HeartbeatInterval},
+		{3 * time.Second, time.Second},
+		{500 * time.Millisecond, 200 * time.Millisecond},
+		{50 * time.Millisecond, 10 * time.Millisecond},
+	} {
+		h := f.newHost("node-a", Config{TTL: tc.ttl, HeartbeatInterval: tc.heartbeat})
+		w := newWatchdog(h.TTL(), nil, func(Stall) {})
+		if beat := h.beatInterval(); beat > w.beat {
+			t.Errorf("ttl %s: the host beats every %s and the watchdog reads a missed "+
+				"beat past %s, so a host on its beat reads as behind", tc.ttl, beat, w.beat)
+		}
+	}
+	// At the shipped lease the two are one number.
+	if got := newWatchdog(SeatLeaseTTL, nil, func(Stall) {}).beat; got != WatchdogBeatInterval {
+		t.Fatalf("beat at the shipped lease = %s, want %s", got, WatchdogBeatInterval)
+	}
+}
+
+func TestBeatingIsALiveDutyThatHasBeaten(t *testing.T) {
+	t.Parallel()
+	w := newWatchdog(SeatLeaseTTL, nil, func(Stall) {})
+	if w.Beating() {
+		t.Fatal("a watchdog watching nothing reads as beating")
+	}
+	duty := &fakePulse{}
+	w.Watch("seat-heartbeat", duty)
+	duty.set(time.Time{}, true)
+	if w.Beating() {
+		t.Fatal("a duty that has not beaten yet reads as beating")
+	}
+	duty.set(time.Now(), false)
+	if w.Beating() {
+		t.Fatal("a duty that stopped reads as beating")
+	}
+	duty.set(time.Now(), true)
+	if !w.Beating() {
+		t.Fatal("a live duty that has beaten does not read as beating")
+	}
+}
+
 func TestLagReportsHowFarBehindTheWorstDutyIs(t *testing.T) {
 	t.Parallel()
 	clock := newClock()
@@ -450,5 +568,99 @@ func TestLagReportsHowFarBehindTheWorstDutyIs(t *testing.T) {
 	slow.set(clock.Now().Add(-time.Hour), false)
 	if lag := w.Lag(); lag != 0 {
 		t.Fatalf("lag = %s, want 0 once the stale duty stopped", lag)
+	}
+}
+
+// --- a duty that DECLARES it cannot go on -----------------------------------
+
+// A DECLARED DEATH ENDS THE PROCESS AT ONCE, armed or not.
+//
+// The embedded broker's Fatalf is the caller: every step a drain would take
+// rides that broker, so there is nothing a stand-down would protect, and a
+// lease TTL of waiting would only be a node answering /health as alive on a
+// broker that has already said it is dead. So Fail fires on a watchdog that
+// was never started, one that is running, and one a drain has stopped — and
+// only once, for the first reason, whatever arrives after it.
+func TestADeclaredDeathEndsTheProcessWhateverTheWatchdogIsDoing(t *testing.T) {
+	t.Parallel()
+	cause := errors.New("nats-server: Can't start JetStream: storage directory is not writable")
+	for name, arm := range map[string]func(*Watchdog){
+		"never started": func(*Watchdog) {},
+		"running": func(w *Watchdog) {
+			w.Watch("seat-heartbeat", &fakePulse{last: time.Now(), live: true})
+			w.Start(context.Background())
+		},
+		"stopped for a drain": func(w *Watchdog) {
+			w.Watch("seat-heartbeat", &fakePulse{last: time.Now(), live: true})
+			w.Start(context.Background())
+			w.Stop()
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			fired, onStall := caught()
+			w := newWatchdog(time.Minute, nil, onStall)
+			arm(w)
+			defer w.Stop()
+
+			w.Fail("embedded broker", cause)
+			w.Fail("embedded broker", errors.New("a second declaration"))
+
+			select {
+			case got := <-fired:
+				if got.Duty != "embedded broker" || !errors.Is(got.Cause, cause) {
+					t.Fatalf("fired for %q because %v, want the broker's own "+
+						"declaration", got.Duty, got.Cause)
+				}
+			default:
+				t.Fatal("a duty that declared it cannot go on did not end the process")
+			}
+			if len(fired) != 0 {
+				t.Errorf("the process was ended %d more times — a node ends once, "+
+					"for the first reason that reached it", len(fired))
+			}
+		})
+	}
+}
+
+// THE EXIT SAYS WHICH OF THE TWO IT WAS, in its code and in its notice. The
+// code is what an orchestrator's restart log keeps, often alone — a deployment
+// that discards stderr keeps nothing else — so a wedge and a broker that
+// declared itself dead must not share one. The notice has to carry the
+// broker's own reason, the one fact nothing else in the process outlives,
+// and name the code it ends with.
+func TestTheExitNoticeTellsAStallFromADeclaredDeath(t *testing.T) {
+	t.Parallel()
+	stall := exitNotice(Stall{Duty: "seat-host", Lag: 50 * time.Second, Threshold: time.Minute})
+	if !strings.Contains(stall, "stalled 50.0s") {
+		t.Errorf("a stall's notice does not say how far it stalled: %q", stall)
+	}
+	reason := "nats-server: Error listening on router port: 6222 - address already in use"
+	death := exitNotice(Stall{Duty: "embedded broker", Cause: errors.New(reason)})
+	if !strings.Contains(death, reason) {
+		t.Errorf("a declared death's notice drops the broker's reason: %q", death)
+	}
+	if strings.Contains(death, "stalled") {
+		t.Errorf("a declared death is reported as a stall: %q", death)
+	}
+	if WatchdogExitCode == FailExitCode {
+		t.Fatalf("a wedge and a declared death both exit %d, so a restart log "+
+			"cannot tell them apart", WatchdogExitCode)
+	}
+	for _, c := range []struct {
+		line string
+		s    Stall
+		want int
+	}{
+		{stall, Stall{Duty: "seat-host", Lag: time.Minute}, WatchdogExitCode},
+		{death, Stall{Duty: "embedded broker", Cause: errors.New(reason)}, FailExitCode},
+	} {
+		if got := c.s.exitCode(); got != c.want {
+			t.Errorf("%q exits %d, want %d", c.line, got, c.want)
+		}
+		if !strings.Contains(c.line, "(code "+strconv.Itoa(c.want)+")") {
+			t.Errorf("the notice does not name the exit code an orchestrator "+
+				"records, %d: %q", c.want, c.line)
+		}
 	}
 }

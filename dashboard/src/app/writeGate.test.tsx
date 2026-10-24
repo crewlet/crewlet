@@ -10,11 +10,11 @@
  *    fixture — so a new write surface cannot land without being rendered
  *    below, and a screen cannot reach `act` around the gating;
  *  - THE RENDER: every control of every such module, for an anonymous
- *    reader, an unbound token, a bound person the engine makes the change
- *    for, and one it does not. The control is PRESENT in all four — a write
- *    control is never hidden — enabled only for the bound person the engine
- *    serves, and otherwise disabled with the sentence that says what would
- *    change that.
+ *    reader, a person bound to no seat, a bound person the engine makes the
+ *    change for, and one it does not. The control is PRESENT in all four — a
+ *    write control is never hidden — enabled for whoever the engine serves,
+ *    bound to a seat or not, and otherwise disabled with the sentence that
+ *    says what would change that.
  */
 
 import { cleanup, render, screen } from "@testing-library/react";
@@ -57,20 +57,22 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
     why: "the Inbox's Mark all read, which reads through the newest notice loaded",
     suite: "routes/inbox/Inbox.test.tsx",
   },
-  "routes/inbox/SnoozeMenu.tsx": {
+  "routes/inbox/NoticeActions.tsx": {
     why:
-      "the open row's Snooze, Done and Mark unread — a kit Menu where the reader can act, " +
-      "and the same control disabled with its reason where they cannot",
+      "an update's Mark as read, Mark as unread, Snooze and Unsnooze, a kit Menu where the " +
+      "reader can act, and the same control disabled with its reason where they cannot",
     suite: "routes/inbox/Inbox.test.tsx",
   },
-  "routes/inbox/DecisionPane.tsx": {
-    why: "a decision's option cards and a parked run's answer, made in the pane",
+  "routes/inbox/InboxPane.tsx": {
+    why:
+      "a parked run's answer, made in the pane, and the read that marks an answered " +
+      "question's notices (an ask is answered through components/writes.tsx)",
     suite: "routes/inbox/Inbox.test.tsx",
   },
   "components/Composer.tsx": {
     why:
-      "the Inbox pane's reply or answer and the task page's comment or ask, and the " +
-      "task link and page either can attach",
+      "the Inbox pane's reply and the task page's comment or ask, and the task link and " +
+      "page either can attach",
     suite: "routes/inbox/Inbox.test.tsx",
   },
   "routes/work/item/edit.tsx": {
@@ -96,13 +98,31 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "way on top of somebody else's save",
     suite: "routes/knowledge/page/PageView.test.tsx",
   },
-  "routes/knowledge/page/Comments.tsx": {
+  "routes/knowledge/page/CommentThread.tsx": {
     why: "a page's Comment and Reply (comment_on_page)",
     suite: "routes/knowledge/page/PageView.test.tsx",
   },
-  "routes/knowledge/NewPage.tsx": {
-    why: "the New page sheet's Write the page, filed in a space or under a page (write_page)",
+  "routes/knowledge/Composer.tsx": {
+    why:
+      "the composer's Publish and Save as draft, one write_page with its status, filed " +
+      "in a space or under a page",
     suite: "routes/knowledge/page/PageView.test.tsx",
+  },
+  "routes/knowledge/Pages.tsx": {
+    why:
+      "a space's Create at the end of an open level: a folder named in place is a " +
+      "write_page with an empty body, and a document opens the composer",
+    suite: "routes/knowledge/Pages.test.tsx",
+  },
+  "routes/knowledge/page/Watch.tsx": {
+    why: "a page's eye, a save_page carrying only the person's own watch",
+    suite: "routes/knowledge/page/PageView.test.tsx",
+  },
+  "routes/artifacts/new/fileTask.ts": {
+    why:
+      "a create page's ask an agent: one create_work_item filed to the chosen seat, " +
+      "whose reason the page draws on its action for a reader who cannot file",
+    suite: "routes/artifacts/new/fileTask.test.tsx",
   },
   "routes/work/NewTask.tsx": {
     why:
@@ -137,22 +157,22 @@ const FIXTURES: Readonly<Record<keyof typeof writes, { props: object; name: RegE
   RestoreButton: { props: { item: "ENG-1" }, name: /^Restore ENG-1$/ },
   EditProjectButton: { props: { project: "ENG", target: "2026-12-18" }, name: /^Edit project$/ },
   PinButton: { props: { view: "v1", name: "Triage", pinned: false }, name: /^Pin$/ },
-  AnswerAskButtons: {
+  AnswerAsk: {
     props: {
       item: "LEAD-12",
       comment: "c-1",
+      asker: "CEO",
       options: [{ id: "hold", label: "Hold release" }],
       recommended: "hold",
+      open: false,
+      onOpenChange: () => {},
+      onAnswered: () => {},
     },
-    name: /^Hold release$/,
+    name: /^Accept$/,
   },
   AnswerRunButton: {
     props: { turnId: "run-1", seat: "Frontend SWE", question: "Drop the fallback?" },
     name: /^Answer$/,
-  },
-  ReplyAskButton: {
-    props: { item: "LEAD-12", comment: "c-2", asker: "CEO", question: "Which vendor?" },
-    name: /^Reply$/,
   },
   SaveViewButton: {
     props: { container: "project:ENG", type: "board", params: { priority: "high,urgent" } },
@@ -176,9 +196,8 @@ const TOOLS: Readonly<Record<keyof typeof writes, string>> = {
   RestoreButton: "restore_work_item",
   EditProjectButton: "write_project",
   PinButton: "set_pins",
-  AnswerAskButtons: "comment_on_work_item",
+  AnswerAsk: "comment_on_work_item",
   AnswerRunButton: "answer_run",
-  ReplyAskButton: "comment_on_work_item",
   SaveViewButton: "save_work_view",
   MessageSeatButton: "create_work_item",
   AssignToSeatButton: "update_work_item",
@@ -189,9 +208,13 @@ const TOOLS: Readonly<Record<keyof typeof writes, string>> = {
 const EVERY_TOOL = Object.values(TOOLS);
 
 const NOBODY: ViewerState = {
-  operatorID: "",
-  operator: false,
+  login: "",
+  grants: [],
+  admin: false,
+  tracker: false,
+  knowledge: false,
   handle: "",
+  owner: "",
   name: "",
   acts: [],
   project: "",
@@ -211,24 +234,32 @@ const READERS: readonly {
 }[] = [
   { who: "an anonymous reader", viewer: () => NOBODY, reason: WRITE_REASONS.anonymous },
   {
-    who: "an unbound token",
+    // AN UNBOUND PRINCIPAL ACTS, under its own login (ADR-0024): a binding
+    // adds the seat a person acts as, never the right to act.
+    who: "a person bound to no seat the engine makes it for",
     viewer: () => ({
       ...NOBODY,
       anonymous: false,
-      operatorID: "ci",
-      operator: true,
+      login: "ops.lead",
+      owner: "ops.lead",
+      grants: ["tracker", "knowledge"],
       unbound: true,
+      acts: EVERY_TOOL,
     }),
-    reason: WRITE_REASONS.unbound,
+    reason: null,
   },
   {
     who: "a bound person the engine makes it for",
     viewer: () => ({
       ...NOBODY,
       anonymous: false,
-      operatorID: "founder",
-      operator: true,
+      login: "founder",
+      grants: ["admin", "tracker", "knowledge"],
+      admin: true,
+      tracker: true,
+      knowledge: true,
       handle: "jane",
+      owner: "jane",
       name: "Jane Founder",
       kind: "human",
       acts: EVERY_TOOL,
@@ -240,9 +271,13 @@ const READERS: readonly {
     viewer: (tool) => ({
       ...NOBODY,
       anonymous: false,
-      operatorID: "founder",
-      operator: true,
+      login: "founder",
+      grants: ["admin", "tracker", "knowledge"],
+      admin: true,
+      tracker: true,
+      knowledge: true,
       handle: "jane",
+      owner: "jane",
       name: "Jane Founder",
       kind: "human",
       acts: EVERY_TOOL.filter((t) => t !== tool),
@@ -252,7 +287,7 @@ const READERS: readonly {
 ];
 
 beforeEach(() => {
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue(null as never);
 });
 
@@ -314,7 +349,7 @@ describe("the source", () => {
       const file = join(SRC, suite);
       expect(existsSync(file), `${path} names ${suite}, which does not exist`).toBe(true);
       const text = readFileSync(file, "utf8");
-      for (const block of ["anonymous", "unbound", "not_served"]) {
+      for (const block of ["anonymous", "not_served"]) {
         expect(text, `${suite} never draws ${path} for a reader who is ${block}`).toContain(
           `WRITE_REASONS.${block}`,
         );

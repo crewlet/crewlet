@@ -58,8 +58,8 @@ func (s *LiveState) Seed(h History) Change {
 	var change Change
 	change.Events = s.seedFeed(h.Events)
 	change.Tokens = s.seedSpend(h.Spend)
-	for _, role := range s.seedTurns(h.Turns) {
-		change.agentMoved(role)
+	for _, id := range s.seedTurns(h.Turns) {
+		change.agentMoved(id)
 	}
 	coverage := h.Coverage
 	coverage.Nodes = slices.Clone(coverage.Nodes)
@@ -82,25 +82,29 @@ func (s *LiveState) SeededFrom() (eventfan.Coverage, bool) {
 }
 
 // seedTurns sets each seat's last turn and parked turn from its stored turns,
-// returning the roles it moved.
+// returning the agent ids of the seats it moved.
+//
+// BY THE TURN'S AGENT ID, the row's only seat identity: its role is the name
+// the seat had when the turn ran, which two seats may share, and grouped by it
+// one seat's newest turn would be filed as its namesake's last turn as well.
 //
 // Through the same guards the stream moves them under: a last turn replaces
 // only an older one, and a parked turn lands only on a seat the stream has not
 // already put on a turn, and never for a turn the stream has already seen end.
 func (s *LiveState) seedTurns(turns []store.Turn) []string {
-	byRole := map[string][]store.Turn{}
+	bySeat := map[string][]store.Turn{}
 	for _, t := range turns {
-		if t.AgentRole != "" && t.TurnID != "" {
-			byRole[t.AgentRole] = append(byRole[t.AgentRole], t)
+		if t.AgentID != "" && t.TurnID != "" {
+			bySeat[t.AgentID] = append(bySeat[t.AgentID], t)
 		}
 	}
 	var moved []string
-	for _, role := range slices.Sorted(maps.Keys(byRole)) {
-		list := byRole[role]
+	for _, id := range slices.Sorted(maps.Keys(bySeat)) {
+		list := bySeat[id]
 		slices.SortFunc(list, func(a, b store.Turn) int {
 			return cmp.Or(b.StartedAt.Compare(a.StartedAt), cmp.Compare(b.TurnID, a.TurnID))
 		})
-		agent := s.ensureAgent(role)
+		agent := s.ensureAgent(id)
 		before := agent.overlay()
 		for _, t := range list {
 			if !t.Complete {
@@ -131,7 +135,7 @@ func (s *LiveState) seedTurns(turns []store.Turn) []string {
 			}
 		}
 		if !sameTurnOverlay(before, agent.overlay()) {
-			moved = append(moved, role)
+			moved = append(moved, id)
 		}
 	}
 	return moved

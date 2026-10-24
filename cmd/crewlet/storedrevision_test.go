@@ -15,38 +15,88 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
 // storedRevisionDoc is what a store can hold and this build could not have
-// written: a field only a newer build knows, and a seat naming a model
-// provider the company does not configure, which this build's validator
+// written: a field only a newer build knows, and a delegate template naming a
+// model provider the company does not configure, which this build's validator
 // refuses.
 const storedRevisionDoc = `{"name":"Nimbus",` +
 	`"a_setting_from_a_newer_build":{"depth":3},` +
 	`"providers":{"llm":{"main":{"type":"anthropic","model":"claude-sonnet-5",` +
 	`"api_keys":["${ANTHROPIC_API_KEY}"]}}},` +
-	`"roles":[{"name":"CEO","handle":"ceo","llm":"nonexistent"}]}`
+	`"workers":{"researcher":{"description":"reads sources and reports findings",` +
+	`"system_prompt":"You research.","model":"nonexistent"}}}`
 
 // activateStored marks raw bytes active in the node's store, the way a peer's
 // revision lands there, and returns its id.
 func activateStored(t *testing.T, cfg, payload string) string {
 	t.Helper()
-	cs, closeStore, err := openConfigStore(t.Context(), cfg)
+	cs, closeStore, err := openConfigStore(t.Context(), cfg, "")
 	if err != nil {
 		t.Fatalf("open the store: %v", err)
 	}
 	defer closeStore()
+	// SEALED, as every revision a node holding a keyring keeps is: the node
+	// this stands in for fetched it from its peers, and a plaintext one would
+	// have been refused before it was ever adopted.
+	sealed, err := secrets.Seal(cs.cipher, []byte(payload))
+	if err != nil {
+		t.Fatalf("seal the revision: %v", err)
+	}
 	id, err := cs.configs.InsertActive(t.Context(), store.Revision{
-		CreatedByKind: store.AuthorOperator,
-		Source:        "fleet", CreatedBy: "peer", Summary: "from a peer",
-		Payload: []byte(payload), CreatedAt: time.Now().UTC(),
+		Source: "fleet", CreatedBy: "peer", CreatedByKind: iam.ActorOperator,
+		Summary: "from a peer", Payload: sealed, CreatedAt: time.Now().UTC(),
 	})
 	if err != nil {
 		t.Fatalf("store the revision: %v", err)
 	}
 	return id
+}
+
+// runnableRevisionDoc is a company document this build runs.
+const runnableRevisionDoc = `{"name":"Nimbus",` +
+	`"providers":{"llm":{"main":{"type":"anthropic","model":"claude-sonnet-5",` +
+	`"api_keys":["${ANTHROPIC_API_KEY}"]}}}}`
+
+// activateStoredAt is [activateStored] at an activation instant the case
+// chooses, which the store records as the revision's activation.
+func activateStoredAt(t *testing.T, cfg, payload string, activated time.Time) {
+	t.Helper()
+	cs, closeStore, err := openConfigStore(t.Context(), cfg, "")
+	if err != nil {
+		t.Fatalf("open the store: %v", err)
+	}
+	defer closeStore()
+	sealed, err := secrets.Seal(cs.cipher, []byte(payload))
+	if err != nil {
+		t.Fatalf("seal the revision: %v", err)
+	}
+	if _, err := cs.configs.InsertActive(t.Context(), store.Revision{
+		Source: "fleet", CreatedBy: "peer", CreatedByKind: iam.ActorSystem,
+		Summary: "from a peer", Payload: sealed, CreatedAt: activated,
+	}); err != nil {
+		t.Fatalf("store the revision: %v", err)
+	}
+}
+
+// activeActivation is the instant the store recorded with its active copy.
+func activeActivation(t *testing.T, cfg string) time.Time {
+	t.Helper()
+	cs, closeStore, err := openConfigStore(t.Context(), cfg, "")
+	if err != nil {
+		t.Fatalf("open the store: %v", err)
+	}
+	defer closeStore()
+	active, found, err := cs.configs.Active(t.Context())
+	if err != nil || !found {
+		t.Fatalf("read the active revision: found=%v err=%v", found, err)
+	}
+	return active.ActivatedAt
 }
 
 // A BOOT FROM THE STORE CARRIES THE INSTANT ITS REVISION WAS ACTIVATED, which
@@ -63,18 +113,7 @@ func TestABootFromTheStoreCarriesItsRevisionsActivation(t *testing.T) {
 	}
 
 	activated := time.Date(2026, 4, 1, 9, 30, 0, 123_456_000, time.UTC)
-	cs, closeStore, err := openConfigStore(t.Context(), cfg)
-	if err != nil {
-		t.Fatalf("open the store: %v", err)
-	}
-	if _, err := cs.configs.InsertActive(t.Context(), store.Revision{
-		Source: "fleet", CreatedBy: "peer", CreatedByKind: store.AuthorNode,
-		Summary: "from a peer", Payload: []byte(duplicateNamesRevision), CreatedAt: activated,
-	}); err != nil {
-		closeStore()
-		t.Fatalf("store the revision: %v", err)
-	}
-	closeStore()
+	activateStoredAt(t, cfg, duplicateKeysRevision, activated)
 
 	company, at, err := companyFromStore(t.Context(), cfg)
 	if err != nil || company == nil {
@@ -85,25 +124,42 @@ func TestABootFromTheStoreCarriesItsRevisionsActivation(t *testing.T) {
 	}
 }
 
-// `crewlet run` HANDS THE ENGINE THE INSTANT ITS STORED COMPANY WAS ACTIVATED.
+// `crewlet run` BOOTS ON THE COMPANY IT WAS GIVEN: its store's when it was
+// given no file, and the file's when it was — without reading the store.
 //
-// The engine stamps the chart and the knowledge spaces with it at boot and
-// writes neither without one, so a run that read the instant and did not pass
-// it on booted a node on its store's company with no projects until the next
-// apply. A Tier B file's company has no activation yet, and carries none —
-// and the engine boots on a file only where the seed is about to make it the
-// active revision: an `-import-company` override, or a `-company` seed into a
-// store that holds nothing.
-func TestRunBootsTheEngineWithItsStoredCompanysActivation(t *testing.T) {
+// An empty store with no file is the UNCONFIGURED state, a company-less boot
+// rather than a failure: the documented bootstrap is to start a node and push
+// the first revision into it. An empty store with a bootstrap seed boots on the
+// seed that is about to fill it, and a store that holds a company boots on that
+// company, the seed being about to be ignored. And an OVERRIDE wins without
+// the store being read, which is what keeps `-import-company` a repair: a node
+// whose stored revision this build refuses to run still starts on the file
+// that replaces it, where reading the store first would refuse the boot the
+// repair needs.
+//
+// AND THE ENGINE IS HANDED THE INSTANT ITS STORED COMPANY WAS ACTIVATED. The
+// engine stamps the chart and the knowledge spaces with it at boot and writes
+// neither without one, so a run that read the instant and did not pass it on
+// booted a node on its store's company with no projects until the next apply.
+// A Tier B file's company has no activation yet, and carries none.
+func TestRunBootsTheEngineOnTheCompanyItWasGiven(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
 	boot := &config.Bootstrap{}
 	file := &config.Company{Name: "From a file"}
 
+	opts, _, err := bootOptions(t.Context(), cfg, boot, tierBSeed{Path: "company.yaml"}, quiet())
+	if err != nil || opts.Company != nil {
+		t.Fatalf("an empty store with no file booted (%v, %v), want the "+
+			"unconfigured state: no company and no error", companyName(opts.Company), err)
+	}
+	if opts.Bootstrap != boot {
+		t.Error("the engine is not handed the Tier A the run loaded")
+	}
+
 	// AN EMPTY STORE boots on the bootstrap seed that is about to fill it.
-	opts, _, err := bootOptions(t.Context(), cfg, boot, seedOf(file), quiet())
-	if err != nil {
+	if opts, _, err = bootOptions(t.Context(), cfg, boot, seedOf(file), quiet()); err != nil {
 		t.Fatalf("the options over an empty store: %v", err)
 	}
 	if opts.Company != file || !opts.ActivatedAt.IsZero() {
@@ -111,20 +167,8 @@ func TestRunBootsTheEngineWithItsStoredCompanysActivation(t *testing.T) {
 			"with no activation", companyName(opts.Company), opts.ActivatedAt)
 	}
 
-	activated := time.Date(2026, 4, 1, 9, 30, 0, 123_456_000, time.UTC)
-	cs, closeStore, err := openConfigStore(t.Context(), cfg)
-	if err != nil {
-		t.Fatalf("open the store: %v", err)
-	}
-	if _, err := cs.configs.InsertActive(t.Context(), store.Revision{
-		Source: "fleet", CreatedBy: "peer", CreatedByKind: store.AuthorNode,
-		Summary: "from a peer", Payload: []byte(duplicateNamesRevision), CreatedAt: activated,
-	}); err != nil {
-		closeStore()
-		t.Fatalf("store the revision: %v", err)
-	}
-	closeStore()
-
+	activateStored(t, cfg, runnableRevisionDoc)
+	activated := activeActivation(t, cfg)
 	for _, tc := range []struct {
 		name string
 		seed tierBSeed
@@ -139,7 +183,7 @@ func TestRunBootsTheEngineWithItsStoredCompanysActivation(t *testing.T) {
 			t.Fatalf("%s: the options from the store = (%v, %v), want its company",
 				tc.name, companyName(opts.Company), err)
 		}
-		if !opts.ActivatedAt.Equal(activated) {
+		if opts.ActivatedAt.IsZero() || !opts.ActivatedAt.Equal(activated) {
 			t.Errorf("%s: the engine is handed activation %s, want the stored "+
 				"revision's %s", tc.name, opts.ActivatedAt, activated)
 		}
@@ -148,9 +192,22 @@ func TestRunBootsTheEngineWithItsStoredCompanysActivation(t *testing.T) {
 		}
 	}
 
-	// AN OVERRIDE is about to replace the stored revision, so it is the file.
+	// A STORED REVISION THIS BUILD CANNOT RUN refuses every boot that reads
+	// it — a bootstrap seed's included, which is about to be ignored over it.
+	id := activateStored(t, cfg, storedRevisionDoc)
+	for _, seed := range []tierBSeed{{Path: "company.yaml"}, seedOf(file)} {
+		if _, _, err = bootOptions(t.Context(), cfg, boot, seed, quiet()); err == nil ||
+			!strings.Contains(err.Error(), id) {
+			t.Errorf("a store holding a revision this build cannot run booted "+
+				"(%v), want a refusal naming %s", err, id)
+		}
+	}
+
+	// AN OVERRIDE is about to replace the stored revision, so it is the file,
+	// read without the store.
 	if opts, _, err = bootOptions(t.Context(), cfg, boot, overrideOf(file), quiet()); err != nil {
-		t.Fatalf("the options from an override: %v", err)
+		t.Fatalf("the options from an override over a stored revision this build "+
+			"cannot run: %v — -import-company is how that revision is replaced", err)
 	}
 	if opts.Company != file || !opts.ActivatedAt.IsZero() {
 		t.Errorf("an override boots as (%v, %s), want the file's with no "+
@@ -211,9 +268,10 @@ func TestABootstrapSeedBootsTheEngineOnTheStoresCompany(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "crewlet.yaml")
+	// THE FIXTURE KEYRING, which every node requires before it opens anything.
 	tierA := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\nstream:\n"+
 		"  store_dir: %s\napi:\n  port: 0\n",
-		filepath.Join(dir, "crewlet.db"), filepath.Join(dir, "stream"))
+		filepath.Join(dir, "crewlet.db"), filepath.Join(dir, "stream")) + fixtureKeyring
 	if err := os.WriteFile(cfg, []byte(tierA), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -299,11 +357,12 @@ func TestARevisionThisBuildRefusesIsStillShownExportedAndDiffed(t *testing.T) {
 	}
 }
 
-// duplicateNamesRevision breaks both admission rules and no runnable one: two
-// units called "Platform", each with a seat called "Engineer" on its own
-// handle. A successor that relaxes those hygiene rules may store it, and this
-// build must still run it.
-const duplicateNamesRevision = `{"name":"Nimbus",` +
+// duplicateKeysRevision breaks an admission rule and no runnable one: two
+// units called "Platform" declaring no id, so both are keyed `platform` — each
+// with a seat called "Engineer" on its own handle, which breaks nothing, a
+// name being prose. A peer whose build admits under rules this one does not
+// share may store it, and this build must still run it.
+const duplicateKeysRevision = `{"name":"Nimbus",` +
 	`"providers":{"llm":{"main":{"type":"anthropic","model":"claude-sonnet-5",` +
 	`"api_keys":["${ANTHROPIC_API_KEY}"]}}},` +
 	`"units":[` +
@@ -312,8 +371,8 @@ const duplicateNamesRevision = `{"name":"Nimbus",` +
 	`{"name":"Product","children":[{"name":"Platform",` +
 	`"roles":[{"name":"Engineer","handle":"product-engineer","llm":"main"}]}]}]}`
 
-// duplicateNamesYAML is the same company as a person would write it.
-const duplicateNamesYAML = `
+// duplicateKeysYAML is the same company as a person would write it.
+const duplicateKeysYAML = `
 name: Nimbus
 providers:
   llm:
@@ -329,42 +388,45 @@ units:
         roles: [{name: Engineer, handle: product-engineer, llm: main}]
 `
 
-// A STORED COMPANY WITH DUPLICATE NAMES BOOTS AND EXPORTS, AND A FILE WITH
-// THEM IS NEITHER IMPORTED NOR VALIDATED.
+// A STORED COMPANY WITH A DUPLICATE UNIT KEY BOOTS AND EXPORTS, AND A FILE
+// WITH ONE IS NEITHER IMPORTED NOR VALIDATED.
 //
 // The two doors meet the same document differently on purpose: the store
 // holds what a build admitted under its own rules — a newer peer's may differ
-// from this one's — and a file is somebody's new submission.
-func TestDuplicateNamesBootFromTheStoreAndAreRefusedFromAFile(t *testing.T) {
+// from this one's — and a file is somebody's new submission, held to every
+// admission rule. The rule is an admission rule and not a runnable one, so a
+// node whose fleet is already on such a revision boots on it rather than
+// refusing the company it was running yesterday.
+func TestADuplicateUnitKeyBootsFromTheStoreAndIsRefusedFromAFile(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
-	activateStored(t, cfg, duplicateNamesRevision)
+	activateStored(t, cfg, duplicateKeysRevision)
 
 	company, _, err := companyFromStore(t.Context(), cfg)
 	if err != nil {
-		t.Fatalf("a node refused to boot on a stored company with duplicate names: %v", err)
+		t.Fatalf("a node refused to boot on a stored company with a duplicate unit key: %v", err)
 	}
 	if company == nil || len(company.Units) != 2 {
 		t.Fatalf("the booted company is not the stored one: %+v", company)
 	}
 	if out, errs, err := configCmd(t, cfg, "export"); err != nil {
-		t.Errorf("export refused a stored company with duplicate names: %v (%s)", err, errs)
+		t.Errorf("export refused a stored company with a duplicate unit key: %v (%s)", err, errs)
 	} else if !strings.Contains(out, "product-engineer") {
 		t.Errorf("export did not print the stored company:\n%s", out)
 	}
 
 	file := filepath.Join(dir, "duplicates.yaml")
-	if err := os.WriteFile(file, []byte(duplicateNamesYAML), 0o600); err != nil {
+	if err := os.WriteFile(file, []byte(duplicateKeysYAML), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := configCmd(t, cfg, "import", file); err == nil ||
-		!strings.Contains(err.Error(), "duplicate unit name") {
-		t.Errorf("import of a file with duplicate names = %v, want a refusal naming the rule", err)
+		!strings.Contains(err.Error(), "duplicate unit key") {
+		t.Errorf("import of a file with a duplicate unit key = %v, want a refusal naming the rule", err)
 	}
 	var out, errOut bytes.Buffer
 	if err := run([]string{"validate", "-config", cfg, "-company", file}, &out, &errOut); err == nil {
-		t.Errorf("validate accepted a file with duplicate names:\n%s%s", out.String(), errOut.String())
+		t.Errorf("validate accepted a file with a duplicate unit key:\n%s%s", out.String(), errOut.String())
 	}
 }
 
@@ -379,26 +441,17 @@ func TestAStoredCompanyBootsWithTheInstantItWasActivated(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	cfg := bootstrapForStore(t, dir)
-	activateStored(t, cfg, duplicateNamesRevision)
-
-	cs, closeStore, err := openConfigStore(t.Context(), cfg)
-	if err != nil {
-		t.Fatalf("open the store: %v", err)
-	}
-	active, found, err := cs.configs.Active(t.Context())
-	closeStore()
-	if err != nil || !found {
-		t.Fatalf("read the active revision: found=%v err=%v", found, err)
-	}
+	activateStored(t, cfg, duplicateKeysRevision)
+	stored := activeActivation(t, cfg)
 
 	_, activatedAt, err := companyFromStore(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("companyFromStore: %v", err)
 	}
-	if activatedAt.IsZero() || !activatedAt.Equal(active.ActivatedAt) {
+	if activatedAt.IsZero() || !activatedAt.Equal(stored) {
 		t.Errorf("the node boots with activation %v; the store recorded %v — a "+
 			"restart would stamp the chart with something other than the "+
-			"activation it is re-applying", activatedAt, active.ActivatedAt)
+			"activation it is re-applying", activatedAt, stored)
 	}
 }
 
@@ -424,21 +477,21 @@ func TestBootingOnARevisionThisBuildCannotRunNamesTheRevision(t *testing.T) {
 	}
 }
 
-// A COMPANY FILE WITH DUPLICATE NAMES STARTS THE NODE THAT RUNS IT, AND IS
-// REFUSED ONLY WHERE IT WOULD BE WRITTEN.
+// A COMPANY FILE WITH A DUPLICATE UNIT KEY STARTS THE NODE THAT RUNS IT, AND
+// IS REFUSED ONLY WHERE IT WOULD BE WRITTEN.
 //
 // `crewlet run -company company.yaml` is the documented way to run a node, and
 // most boots write nothing from that file: it is byte for byte the active
 // revision, or a bootstrap seed the store's own company outranks. When the
 // seed was loaded against every rule, a file that ran yesterday and carries a
-// duplicate name stopped the node from starting after the upgrade that added
+// duplicate unit key stopped the node from starting after the upgrade that added
 // the rule. The rule still holds where the file becomes a new revision: an
 // empty store, or -import-company over a different company.
-func TestACompanyFileWithDuplicateNamesRunsAndIsRefusedOnlyOnImport(t *testing.T) {
+func TestACompanyFileWithADuplicateUnitKeyRunsAndIsRefusedOnlyOnImport(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	file := filepath.Join(dir, "company.yaml")
-	if err := os.WriteFile(file, []byte(duplicateNamesYAML), 0o600); err != nil {
+	if err := os.WriteFile(file, []byte(duplicateKeysYAML), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -462,8 +515,8 @@ func TestACompanyFileWithDuplicateNamesRunsAndIsRefusedOnlyOnImport(t *testing.T
 	t.Run("an empty store refuses to import it", func(t *testing.T) {
 		db := seedStore(t)
 		fleet := coordmemory.NewFleet()
-		err := seedCompany(t.Context(), db, fleet, nil, seed, nil, testNode, quiet())
-		if err == nil || !strings.Contains(err.Error(), "duplicate unit name") ||
+		err := seedCompany(t.Context(), db, fleet, nil, seed, fixtureCipher, testNode, quiet())
+		if err == nil || !strings.Contains(err.Error(), "duplicate unit key") ||
 			!strings.Contains(err.Error(), file) {
 			t.Fatalf("seed into an empty store = %v, want a refusal naming the file and the rule", err)
 		}
@@ -477,14 +530,17 @@ func TestACompanyFileWithDuplicateNamesRunsAndIsRefusedOnlyOnImport(t *testing.T
 
 	t.Run("a store already holding it boots on it", func(t *testing.T) {
 		db := seedStore(t)
+		sealed, err := secrets.Seal(fixtureCipher, document)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if _, err := db.Configs().InsertActive(t.Context(), store.Revision{
-			CreatedByKind: store.AuthorOperator,
-			Source:        "file", CreatedBy: "node", Summary: "admitted under other rules",
-			Payload: document, CreatedAt: time.Now().UTC(),
+			Source: "file", CreatedBy: testNode, CreatedByKind: iam.ActorSystem,
+			Summary: "admitted under other rules", Payload: sealed, CreatedAt: time.Now().UTC(),
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seed, nil, testNode, quiet()); err != nil {
+		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seed, fixtureCipher, testNode, quiet()); err != nil {
 			t.Fatalf("a node whose store holds this very file refused to boot: %v", err)
 		}
 	})
@@ -492,17 +548,17 @@ func TestACompanyFileWithDuplicateNamesRunsAndIsRefusedOnlyOnImport(t *testing.T
 	t.Run("a store holding another company ignores it as a bootstrap and refuses it as an import", func(t *testing.T) {
 		db := seedStore(t)
 		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil,
-			seedOf(parse(t, companyYAML)), nil, testNode, quiet()); err != nil {
+			seedOf(parse(t, companyYAML)), fixtureCipher, testNode, quiet()); err != nil {
 			t.Fatal(err)
 		}
-		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seed, nil, testNode, quiet()); err != nil {
+		if err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, seed, fixtureCipher, testNode, quiet()); err != nil {
 			t.Errorf("a bootstrap seed the store outranks refused to boot: %v", err)
 		}
 		override := seed
 		override.Override = true
-		err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, override, nil, testNode, quiet())
-		if err == nil || !strings.Contains(err.Error(), "duplicate seat name") {
-			t.Errorf("-import-company of a file with duplicate names = %v, want a refusal", err)
+		err := seedCompany(t.Context(), db, coordmemory.NewFleet(), nil, override, fixtureCipher, testNode, quiet())
+		if err == nil || !strings.Contains(err.Error(), "duplicate unit key") {
+			t.Errorf("-import-company of a file with a duplicate unit key = %v, want a refusal", err)
 		}
 		revisions, err := db.Configs().List(t.Context(), 0, 0)
 		if err != nil {
@@ -514,7 +570,7 @@ func TestACompanyFileWithDuplicateNamesRunsAndIsRefusedOnlyOnImport(t *testing.T
 	})
 }
 
-// THE VENDOR COMMANDS ACT ON A COMPANY FILE WITH DUPLICATE NAMES.
+// THE VENDOR COMMANDS ACT ON A COMPANY FILE WITH A DUPLICATE UNIT KEY.
 //
 // They read the company a node runs and write none of it as a revision, so the
 // admission rules are not theirs to enforce: running a company depends on none
@@ -522,11 +578,11 @@ func TestACompanyFileWithDuplicateNamesRunsAndIsRefusedOnlyOnImport(t *testing.T
 // provisionable. Each command is expected to get PAST the load and
 // stop on its own business (this company enables no integration), which is
 // what the absence of the loader's "company config" prefix shows.
-func TestVendorCommandsReadACompanyFileWithDuplicateNames(t *testing.T) {
+func TestVendorCommandsReadACompanyFileWithADuplicateUnitKey(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	file := filepath.Join(dir, "company.yaml")
-	if err := os.WriteFile(file, []byte(duplicateNamesYAML), 0o600); err != nil {
+	if err := os.WriteFile(file, []byte(duplicateKeysYAML), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	noBootstrap := filepath.Join(dir, "absent.yaml")

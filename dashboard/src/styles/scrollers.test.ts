@@ -129,9 +129,12 @@ const KEEPS_THE_WHEEL: Record<string, string> = {
 
 /**
  * The scrollers whose bound is a literal, each with why that cannot hide
- * anything below the fold. Two reasons hold, and only two: the box is not in
- * the page's flow at all (an overlay or a dialog, which the page's wheel and
- * fold do not reach), or it is shorter than any view it can sit in.
+ * anything below the fold. Three reasons hold, and only three: the box is not
+ * in the page's flow at all (an overlay or a dialog, which the page's wheel and
+ * fold do not reach), it is shorter than any view it can sit in, or it IS the
+ * page — a screen drawn outside the frame, where no `main` is a size container
+ * to measure `100cqb` against and `100dvh` is the viewport it scrolls rather
+ * than a guess at a box inside one.
  */
 const LITERAL_BOUND: Record<string, string> = {
   "components.css .input-suggest-list":
@@ -142,6 +145,8 @@ const LITERAL_BOUND: Record<string, string> = {
     "a pick list inside the composer's Modal, which is portaled outside the page",
   "screens.css .int-manifest-text":
     "the manifest inside the integration setup Modal, which is portaled outside the page",
+  "screens.css .design-opened--actual":
+    "a board at its own size inside the opened-board Modal, which is portaled outside the page",
   "screens.css .int-subjects":
     "9rem of chips on a finding — shorter than any view it can sit in, so once scrolled to it is wholly on screen",
 };

@@ -36,7 +36,7 @@ const suiteOtherStream = "CREWLET_SUITE_OTHER_LOG"
 const suiteTrimWriter = "suite-trim"
 
 // TrimmedAnchorsGoAndAZeroWriteIsFenced certifies the trim's trimmed record
-// (ADR-0032) end to end over the candidate's own applier, encoder and read
+// (ADR-0046) end to end over the candidate's own applier, encoder and read
 // seam: a domain whose log writes anchors supplies the record and the
 // framework can use it, its applier takes it — through the framework's own
 // runner — removing exactly this log's anchors below the floor and writing
@@ -104,8 +104,20 @@ func TrimmedAnchorsGoAndAZeroWriteIsFenced(t *testing.T, new Factory) error {
 
 	node, db := openNodeEstate(t, c)
 	log := newSuiteLog()
+	// SIGNED AND VERIFIED UNDER THE SUITE'S KEYRING, as every record a
+	// running node applies is: the runner opens each frame before the
+	// candidate's applier reads a byte, so the case drives the path a
+	// trimmed record takes on a node.
+	signer, err := statelog.NewSigner(name, suiteRing())
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := statelog.NewVerifier(name, suiteRing())
+	if err != nil {
+		t.Fatal(err)
+	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: c.Domain, Spec: spec, Applier: c.Applier,
+		Domain: c.Domain, Spec: spec, Applier: c.Applier, Verifier: verifier,
 		Fetch: log, Log: log, Node: node, DB: db,
 		Checkpoint: statelog.Position{Stream: spec.Name, Generation: gen},
 	})
@@ -116,7 +128,7 @@ func TrimmedAnchorsGoAndAZeroWriteIsFenced(t *testing.T, new Factory) error {
 	defer loop.stop()
 
 	// ANCHORS THE LOG ITS OWN RECORDS WROTE, one subject per record.
-	written := appendRecords(t, c, spec, log, records)
+	written := appendRecords(t, c, spec, log, signer, records)
 	if err = loop.waitPast(log.last()); err != nil {
 		return fmt.Errorf("%s's applier did not apply its own records: %w", name, err)
 	}
@@ -142,9 +154,11 @@ func TrimmedAnchorsGoAndAZeroWriteIsFenced(t *testing.T, new Factory) error {
 	// THE TRIM: purge below the floor, then count and sweep through the
 	// production entry points.
 	log.purge(floor.Seq)
-	before := countRows(t, db, c.Domain.Tables())
+	// THE DOMAIN'S TABLES WHOLE, compared by content: a count would pass
+	// an applier that rewrote a row for the record without adding one.
+	before := tableContents(t, db, c.Domain.Tables())
 	deps := statelog.SweepDeps{
-		Domain: c.Domain, Spec: spec, Log: log, Ends: log.Ends, Runner: runner,
+		Domain: c.Domain, Spec: spec, Log: log, Signer: signer, Ends: log.Ends, Runner: runner,
 		Admission: admissionFor(t, c),
 		Encode:    c.EncodeTrimmed, DB: db.Reader(), Writer: suiteTrimWriter,
 	}
@@ -195,12 +209,11 @@ func TrimmedAnchorsGoAndAZeroWriteIsFenced(t *testing.T, new Factory) error {
 		return fmt.Errorf("another log's anchors are %v after %s's trimmed record — "+
 			"a trimmed record is about its own log alone", anchors[suiteOtherStream], name)
 	}
-	if after := countRows(t, db, c.Domain.Tables()); !maps.Equal(before, after) {
-		return fmt.Errorf("%s's applier wrote rows of its own for a trimmed record:\n"+
-			"  before: %v\n  after:  %v\n"+
+	if after := tableContents(t, db, c.Domain.Tables()); !maps.Equal(before, after) {
+		return fmt.Errorf("%s's applier wrote rows of its own for a trimmed record:\n%s\n"+
 			"the framework removes the anchors and the domain writes nothing — a "+
 			"row here is one every node writes for a record that is about no object",
-			name, before, after)
+			name, diffTables(before, after))
 	}
 	again, err := suiteSweep(t.Context(), deps, floor)
 	if err != nil || again.Records != 0 {
@@ -225,9 +238,10 @@ func TrimmedAnchorsGoAndAZeroWriteIsFenced(t *testing.T, new Factory) error {
 	fence.zero.Floor = func(context.Context, uint32) (uint64, error) { return published.Load(), nil }
 	pub, err := statelog.NewPublisher(statelog.Deps{
 		Domain: c.Domain, Spec: spec,
-		Log: log, Records: log, Rows: rows,
+		Log: log, Signer: signer, Rows: rows,
 		Fence: fence, Gates: openGates{},
-		Waiter: suiteWaiter{at: committed}, Voids: suiteWaiter{at: committed},
+		Records: statelog.VerifiedLog{Log: log, Verifier: verifier},
+		Waiter:  suiteWaiter{at: committed}, Voids: suiteWaiter{at: committed},
 		Identity:   suiteWaiter{at: committed},
 		NodeID:     writer,
 		Generation: func() uint32 { return gen },
@@ -318,11 +332,11 @@ type suiteApplied struct {
 	seq uint64
 }
 
-// appendRecords appends records to log in the candidate's own encoding, and
-// answers the ones on a subject the log arbitrates — the ones that write an
-// anchor — in order.
+// appendRecords appends records to log in the candidate's own encoding,
+// signed by signer as a publisher would have signed them, and answers the ones
+// on a subject the log arbitrates — the ones that write an anchor — in order.
 func appendRecords(t *testing.T, c Candidate, spec statelog.StreamSpec, log *suiteLog,
-	records []suiteRecord) []suiteApplied {
+	signer *statelog.Signer, records []suiteRecord) []suiteApplied {
 
 	t.Helper()
 	var out []suiteApplied
@@ -335,7 +349,7 @@ func appendRecords(t *testing.T, c Candidate, spec statelog.StreamSpec, log *sui
 		if err != nil {
 			t.Fatalf("envelope %s/%s: %v", r.kind, r.id, err)
 		}
-		seq, _, err := log.Append(t.Context(), subjectOf(spec, env.Subject), r.op, nil, body)
+		seq, _, err := log.Append(t.Context(), subjectOf(spec, env.Subject), r.op, nil, signer.Seal(body))
 		if err != nil {
 			t.Fatalf("append %s/%s: %v", r.kind, r.id, err)
 		}

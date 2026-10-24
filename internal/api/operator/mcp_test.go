@@ -3,58 +3,157 @@ package operator_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
-	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// A COMPANY ON JIRA GETS NO SURFACE AT ALL. An endpoint that exists and lists
-// no tools reads to an operator as broken; one that is not there matches what
-// their config says.
-func TestNoNativeBackendServesNothing(t *testing.T) {
+// A SURFACE MISSING WHAT IT CANNOT SERVE WITHOUT IS NOT BUILT, and each
+// refusal names the field. A surface with nothing to read its catalogue from,
+// one wired with no authority decision, and one that would write to the
+// company and record nothing about who called it are each a wiring mistake
+// that would otherwise look exactly like a surface that worked.
+func TestNewRefusesASurfaceMissingARequirement(t *testing.T) {
 	t.Parallel()
-	// NO AUDIT EITHER, and that is not refused: there is nothing to audit.
-	s, err := operator.New(operator.Options{})
-	if err != nil {
-		t.Fatalf("a surface with nothing to serve was refused: %v", err)
-	}
-	if s != nil {
-		t.Errorf("a company with no native backend got a surface serving %v", s.Tools())
+	halves := fixed(operator.Halves{})
+	decide := builtin.Decide(authz.NoChart{})
+	audit := &auditLog{}
+	for name, tc := range map[string]struct {
+		opts operator.Options
+		want error
+	}{
+		"no halves":   {operator.Options{Authorize: decide, Audit: audit}, operator.ErrNoHalves},
+		"no decision": {operator.Options{Halves: halves, Audit: audit}, operator.ErrNoAuthorize},
+		"no audit":    {operator.Options{Halves: halves, Authorize: decide}, operator.ErrNoAudit},
+	} {
+		s, err := operator.New(tc.opts)
+		if !errors.Is(err, tc.want) || s != nil {
+			t.Errorf("%s: answered (%v, %v), want %v", name, s, err, tc.want)
+		}
 	}
 }
 
-// THE TRACKER AND THE KNOWLEDGE BASE ARE SEPARATE GRANTS. A company can run
+// A COMPANY THAT KEEPS NEITHER HALF HERE IS ANSWERED AS THE ROUTE'S ABSENCE.
+// An endpoint that exists and lists no tools reads to an operator as broken;
+// one that is not there matches what their config says.
+func TestAnEmptyCatalogueAnswersAsTheRoutesAbsence(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, operator.Options{Halves: fixed(operator.Halves{})})
+	if got := s.Tools(); len(got) != 0 {
+		t.Fatalf("a company with no native backend is served %v", got)
+	}
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, operator.MCPPath, strings.NewReader(`{}`))
+	r = r.WithContext(iam.WithPrincipal(r.Context(), machine("token:ops", iam.GrantTracker)))
+	s.MCPHandler().ServeHTTP(rec, r)
+	if code := errorCode(t, rec); rec.Code != http.StatusNotFound ||
+		code != string(httpjson.CodeNoRoute) {
+
+		t.Errorf("an empty catalogue answered %d %q, want the mux's own 404 no_route",
+			rec.Code, code)
+	}
+}
+
+// THE CATALOGUE IS READ FOR EVERY CALL, never captured when the surface was
+// built.
+//
+// A node's tracker and knowledge base come up with its FIRST company, which a
+// node that booted with none meets at an apply long after its API started
+// serving. Built once, the surface served the halves the node had at wiring —
+// none — for the life of the process: the node a company was bootstrapped on
+// never served its own operator surface until it restarted. Until the company
+// arrives, every transport answers `503 no_active_revision`, which is what
+// tells "not up yet" from "not this company's".
+func TestTheCatalogueIsReadForEveryCall(t *testing.T) {
+	t.Parallel()
+	var up atomic.Bool
+	s := newSurface(t, operator.Options{
+		Halves: func() (operator.Halves, bool) {
+			if !up.Load() {
+				return operator.Halves{}, false
+			}
+			return operator.Halves{Work: builtin.WorkDeps{
+				Reader: stubWorkReader{}, Writer: stubWorkWriter,
+			}}, true
+		},
+	})
+	founder := machine("token:founder", iam.GrantTracker)
+	serve := func(h http.Handler, path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Accept", "application/json, text/event-stream")
+		r.Header.Set("Idempotency-Key", statelog.NewOpID(time.Now(), ""))
+		r.SetPathValue("tool", tracker.CreateWorkItemTool)
+		r = r.WithContext(iam.WithPrincipal(r.Context(), founder))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec
+	}
+	act := operator.ActPathPrefix + tracker.CreateWorkItemTool
+	create := `{"args":{"title":"x","project":"ENG"}}`
+
+	if got := s.Tools(); got != nil {
+		t.Errorf("a node with no company lists %v", got)
+	}
+	acts, err := s.Acts(t.Context(), founder)
+	if err != nil || len(acts) != 0 || acts == nil {
+		t.Errorf("a node with no company offers %v (%v), want an empty list", acts, err)
+	}
+	for name, rec := range map[string]*httptest.ResponseRecorder{
+		"mcp": serve(s.MCPHandler(), operator.MCPPath, `{}`),
+		"act": serve(s.ActHandler(), act, create),
+	} {
+		if code := errorCode(t, rec); rec.Code != http.StatusServiceUnavailable ||
+			code != string(httpjson.CodeNoActiveRevision) {
+
+			t.Errorf("%s before the company answered %d %q, want 503 "+
+				"no_active_revision", name, rec.Code, code)
+		}
+	}
+
+	up.Store(true)
+	if !slices.Contains(s.Tools(), tracker.CreateWorkItemTool) {
+		t.Fatalf("the company arrived and the surface still lists %v", s.Tools())
+	}
+	if rec := serve(s.ActHandler(), act, create); rec.Code != http.StatusOK {
+		t.Errorf("the company arrived and the act answered %d %s", rec.Code, rec.Body)
+	}
+}
+
+// THE TRACKER AND THE KNOWLEDGE BASE ARE SEPARATE HALVES. A company can run
 // the native tracker on Confluence, or the native wiki on Jira, and a surface
 // that offered both halves whenever it had one would hand an assistant tools
 // that fail at the call.
 func TestEachHalfIsOfferedOnItsOwn(t *testing.T) {
 	t.Parallel()
-	only := newSurface(t, operator.Options{
+	only := newSurface(t, operator.Options{Halves: fixed(operator.Halves{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Merges: stubWorkMerger, Moves: stubWorkMover, Actor: operator.WorkActor(nil, nil),
+			Merges: stubWorkMerger, Moves: stubWorkMover,
 		},
-	})
-	if only == nil {
-		t.Fatal("a company with only the native tracker got no surface")
-	}
+	})})
 	names := only.Tools()
-	if !slices.Contains(names, "create_work_item") {
+	if !slices.Contains(names, tracker.CreateWorkItemTool) {
 		t.Errorf("the tracker half serves %v, without create_work_item", names)
 	}
 	for _, name := range names {
@@ -64,283 +163,164 @@ func TestEachHalfIsOfferedOnItsOwn(t *testing.T) {
 	}
 }
 
-// A WRITE IS ATTRIBUTED TO THE CREDENTIAL, never to a seat and never to a
-// name the caller chose.
+// A WRITE IS ATTRIBUTED TO THE REQUEST'S PRINCIPAL, never to a name the caller
+// chose — and the tracker and the knowledge base record one principal the same
+// way.
 //
 // The alternative — letting the caller name a seat to act as — was rejected
-// because it lets anybody holding the token write as anybody, and a tracker
+// because it lets anybody holding a credential write as anybody, and a tracker
 // whose author field is chosen by the writer is not an audit trail.
-func TestAnOperatorWriteCarriesTheTokensOwnLabel(t *testing.T) {
+func TestAnOperatorWriteIsAttributedToItsPrincipal(t *testing.T) {
 	t.Parallel()
-	ctx := auth.WithOperator(t.Context(), "ops-bot")
-
-	actor, err := operator.WorkActor(nil, nil)(ctx, nil)
-	if err != nil {
-		t.Fatalf("WorkActor: %v", err)
-	}
-	if actor.Kind != tracker.AuthorOperator {
-		t.Errorf("an operator write is attributed as %q", actor.Kind)
-	}
-	if actor.OperatorID != "ops-bot" {
-		t.Errorf("the record names the operator %q", actor.OperatorID)
-	}
-	// THE AUTHOR IS THE TOKEN'S OWN NAME, and the KIND is what says it is
-	// not a seat. An empty author is the one thing this surface must never
-	// record — a history row nobody can attribute — so the discriminator
-	// is the kind, which every renderer and every recipient rule already
-	// reads, rather than the emptiness of a string.
-	if actor.Handle != "ops-bot" {
-		t.Errorf("an operator write is authored by %q, want the token's name",
-			actor.Handle)
-	}
-
-	// AND THE KNOWLEDGE BASE RECORDS THE SAME OPERATOR THE SAME WAY, which
-	// is the claim rather than the coincidence: the two histories are read
-	// TOGETHER on the audit screen, and one person under two names there is
-	// two people to whoever is reading it.
-	//
-	// It was not. The handle was left empty here, and `pages.Actor.Name`
-	// falls back to `"operator:" + OperatorID` for an actor without one — so
-	// a founder's work commit said `founder` and their page commit said
-	// `operator:founder`, three rows apart in one feed, and a reader
-	// filtering on a name matched half of what they did. The kind is already
-	// its own column on both rows, so the prefix was a second encoding of a
-	// fact the row carries.
-	page, err := operator.PageActor(ctx, nil)
-	if err != nil {
-		t.Fatalf("PageActor: %v", err)
-	}
-	if page.Kind != pages.AuthorOperator || page.OperatorID != "ops-bot" {
-		t.Errorf("a page write is attributed as %+v", page)
-	}
-	if page.Handle != actor.Handle {
-		t.Errorf("one operator is recorded as %q by the tracker and %q by the "+
-			"knowledge base", actor.Handle, page.Handle)
-	}
-	// THROUGH `Name`, which is what actually lands in the history row: the
-	// field agreeing is the mechanism, and the rendered name is the property.
-	if got := page.Name(); got != actor.Handle {
-		t.Errorf("a page history row records the author as %q where the tracker "+
-			"records %q — the audit feed reads both and shows one person twice",
-			got, actor.Handle)
-	}
-}
-
-// AND A BOUND TOKEN ALSO SAYS WHO IT IS, which is a different field from who
-// it is attributed as.
-//
-// `contact.crewlet_operator_id` binds a Tier A token to a human seat, and that
-// binding answers the question the attribution rule above deliberately does
-// not: whose inbox, whose pins, whose queue. Left unresolved, a founder's own
-// assistant marked a person record named after their credential and their own
-// screen — which asks under their seat — showed an inbox where nothing had
-// ever been read.
-//
-// THE AUTHOR IS ASSERTED IN THE SAME CASE, because the one wrong fix here is
-// to let the seat take the author field over: that is a write attributed to a
-// person the caller named, and a tracker whose author field is chosen by the
-// writer is not an audit trail.
-func TestABoundTokenCarriesTheSeatItNames(t *testing.T) {
-	t.Parallel()
-	chart := func() *org.Organization {
-		o := &org.Organization{
-			Name: "Nimbus",
-			Roles: []*org.Role{
-				{Name: "Jane Founder", Kind: org.KindHuman,
-					Contact: &org.HumanContact{CrewletOperatorID: "founder"}},
-				{Name: "CTO"},
+	for name, tc := range map[string]struct {
+		principal iam.Principal
+		author    string
+		kind      tracker.AuthorKind
+		operator  string
+	}{
+		// A TIER A TOKEN, composed as the guard composes one: its whole
+		// login, colon and all — the colon is what keeps the name out of
+		// the seat namespace — and the KIND says it is not a seat.
+		"an unbound token": {
+			principal: iam.Principal{
+				ID:    uuid.NewSHA1(auth.TokenNamespace, []byte("ops-bot")),
+				Login: iam.TokenLogin("ops-bot"), Kind: iam.KindMachine,
+				Stage: iam.StageActive,
 			},
-		}
-		o.Normalize()
-		return o
-	}
-
-	bound, err := operator.WorkActor(chart, nil)(auth.WithOperator(t.Context(), "founder"), nil)
-	if err != nil {
-		t.Fatalf("WorkActor: %v", err)
-	}
-	if bound.Seat != "jane-founder" {
-		t.Errorf("a bound token resolved to seat %q, want jane-founder — the "+
-			"person tools key their record on this", bound.Seat)
-	}
-	if bound.Record() != "jane-founder" {
-		t.Errorf("the record this token writes is %q, want the person's",
-			bound.Record())
-	}
-	// THE ATTRIBUTION IS UNTOUCHED.
-	if bound.Handle != "founder" || bound.Kind != tracker.AuthorOperator ||
-		bound.OperatorID != "founder" {
-
-		t.Errorf("a bound token is attributed as %+v — the author is the "+
-			"credential and the kind says it is not a seat", bound)
-	}
-	// AND THE READ ASKS ABOUT BOTH NAMES, because the rows this person
-	// left behind before the binding carry the credential's.
-	if got := bound.Party().Handles(); len(got) != 2 ||
-		got[0] != "jane-founder" || got[1] != "founder" {
-
-		t.Errorf("the party is %v, want the seat first and the credential "+
-			"behind it", got)
-	}
-	// AND THE KIND IS A PERSON'S, which is the OTHER thing an authority
-	// gate asks: a lead relation is between two people in the chart, so
-	// every gate resolves it for [builtin.Actor.Record] and then falls
-	// back to [tracker.AuthorKind.Person] — the arm that carries a
-	// re-route, a project's policy and somebody's queue when the walk
-	// finds nothing. Kept `operator` rather than folded into `human`,
-	// which is what keeps the author field honest, so the predicate is
-	// what the gates have to turn on.
-	if !bound.Kind.Person() {
-		t.Errorf("a bound token's kind %q is not a person's, so every "+
-			"authority gate refuses the person holding it", bound.Kind)
-	}
-
-	// AN UNBOUND TOKEN IS AN ORDINARY STATE — an operator outside the org
-	// chart — and it writes under its own id exactly as before.
-	unbound, err := operator.WorkActor(chart, nil)(auth.WithOperator(t.Context(), "ci"), nil)
-	if err != nil {
-		t.Fatalf("WorkActor for an unbound token: %v", err)
-	}
-	if unbound.Seat != "" {
-		t.Errorf("an unbound token resolved to seat %q", unbound.Seat)
-	}
-	if unbound.Record() != "ci" {
-		t.Errorf("an unbound token writes %q's record, want its own", unbound.Record())
-	}
-	// AND IT IS A PERSON'S CREDENTIAL TOO, which is the only authority it
-	// can ever hold: no ancestor walk reaches a name the chart does not
-	// have, so without this arm an unbound token could not re-route an
-	// item, declare a field or order a queue at all.
-	if !unbound.Kind.Person() {
-		t.Errorf("an unbound token's kind %q is not a person's", unbound.Kind)
-	}
-
-	// AND A BUILD WITH NO CHART LOADED IS THE SAME ORDINARY STATE rather
-	// than a refusal: the surface is up before a company config is, and a
-	// write with no writer is the only thing this surface may not record.
-	for name, none := range map[string]func() *org.Organization{
-		"no chart seam":   nil,
-		"no chart loaded": func() *org.Organization { return nil },
+			author: "token:ops-bot", kind: tracker.AuthorOperator, operator: "token:ops-bot",
+		},
+		// A PERSON THE DIRECTORY BINDS TO A SEAT writes as that seat, with
+		// kind human — what lets the tracker leave them out of the wake
+		// their own change sends — and the credential beside it.
+		"a bound person": {
+			principal: person("jane.founder", "jane-founder", iam.GrantTracker),
+			author:    "jane-founder", kind: tracker.AuthorHuman, operator: "jane.founder",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got, err := operator.WorkActor(none, nil)(
-				auth.WithOperator(t.Context(), "founder"), nil)
+			t.Parallel()
+			ctx := iam.WithPrincipal(t.Context(), tc.principal)
+			actor, err := operator.WorkActor(ctx, nil)
 			if err != nil {
 				t.Fatalf("WorkActor: %v", err)
 			}
-			if got.Seat != "" || got.Record() != "founder" {
-				t.Errorf("with %s the actor is %+v", name, got)
+			if actor.Handle != tc.author || actor.Kind != tc.kind ||
+				actor.OperatorID != tc.operator {
+
+				t.Errorf("a write is attributed as %+v, want %s (%s) through %s",
+					actor, tc.author, tc.kind, tc.operator)
+			}
+			// AND THE KNOWLEDGE BASE RECORDS THE SAME AUTHOR THE SAME WAY:
+			// the two histories are read TOGETHER on the audit screen, and
+			// one person under two names there is two people to whoever
+			// reads it. Through `Name`, which is what lands in the row.
+			page, err := operator.PageActor(ctx, nil)
+			if err != nil {
+				t.Fatalf("PageActor: %v", err)
+			}
+			if string(page.Kind) != string(actor.Kind) || page.OperatorID != tc.operator {
+				t.Errorf("a page write is attributed as %+v", page)
+			}
+			if got := page.Name(); got != actor.Handle {
+				t.Errorf("a page history row records %q where the tracker records %q",
+					got, actor.Handle)
 			}
 		})
 	}
 }
 
-// A BINDING WRITTEN AS A REFERENCE RESOLVES THROUGH THE LOOKUP THE SURFACE IS
-// HANDED ([operator.Options.Env]) — the serving node's own chain, where the
-// dashboard's reads and a seat's tools resolve the same field — and never the
-// process environment behind it. The variable is set in no process, so the
-// same chart with no lookup binds nobody, and both directions agree: the
-// credential names the seat, and the seat's party names the credential.
-func TestABindingResolvesThroughTheLookupTheSurfaceIsHanded(t *testing.T) {
-	t.Parallel()
-	const variable = "CREWLET_OPERATOR_TEST_HANDED_BINDING"
-	if _, set := os.LookupEnv(variable); set {
-		t.Fatalf("the premise: %s is set in no process", variable)
-	}
-	chart := func() *org.Organization {
-		o := &org.Organization{Name: "Nimbus", Roles: []*org.Role{
-			{Name: "Jane Founder", Kind: org.KindHuman,
-				Contact: &org.HumanContact{CrewletOperatorID: "${" + variable + "}"}},
-		}}
-		o.Normalize()
-		return o
-	}
-	handed := func(name string) (string, bool) {
-		if name == variable {
-			return "founder", true
-		}
-		return "", false
-	}
-	ctx := auth.WithOperator(t.Context(), "founder")
-
-	bound, err := operator.WorkActor(chart, handed)(ctx, nil)
-	if err != nil {
-		t.Fatalf("WorkActor: %v", err)
-	}
-	if bound.Seat != "jane-founder" {
-		t.Errorf("a binding the handed lookup resolves to the caller left seat %q", bound.Seat)
-	}
-	if got := builtin.Parties(chart, handed)("jane-founder"); got.OperatorID != "founder" {
-		t.Errorf("the seat's party carries credential %q, want the one that binds it", got.OperatorID)
-	}
-	// THE CONTROL: the process environment holds no such variable.
-	if plain, err := operator.WorkActor(chart, nil)(ctx, nil); err != nil || plain.Seat != "" {
-		t.Errorf("with no lookup handed the actor is %+v (%v), want no seat", plain, err)
-	}
-}
-
-// A REQUEST WITH NO OPERATOR IS REFUSED, not written as nobody. This surface
+// A REQUEST WITH NO PRINCIPAL IS REFUSED, not written as nobody. This surface
 // writes to the company, and a write with no writer is the one thing it must
 // never record — so the failure is at the actor rather than deeper, where it
 // would already have landed.
-func TestAWriteWithNoOperatorIsRefused(t *testing.T) {
+func TestAWriteWithNoPrincipalIsRefused(t *testing.T) {
 	t.Parallel()
 	for name, ctx := range map[string]context.Context{
-		"no operator on the context": context.Background(),
-		"an empty operator id":       auth.WithOperator(context.Background(), ""),
+		"no principal on the context":  context.Background(),
+		"a resolver that found nobody": iam.WithAnonymous(context.Background()),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := operator.WorkActor(nil, nil)(ctx, nil); err == nil {
-				t.Error("a write with no operator was attributed rather than refused")
+			if _, err := operator.WorkActor(ctx, nil); err == nil {
+				t.Error("a write with no principal was attributed rather than refused")
 			}
 			if _, err := operator.PageActor(ctx, nil); err == nil {
-				t.Error("a page write with no operator was attributed rather than refused")
+				t.Error("a page write with no principal was attributed rather than refused")
 			}
 		})
 	}
 }
 
-// THE SURFACE IS ALWAYS GUARDED, and it is the auth package that says so.
+// THE SURFACE IS NEVER ANONYMOUS, and it is the auth package that says so.
 // Mounting it under /mcp/ — which is exempt wholesale so a sandbox box with
 // no API token can reach its seat's tools — would have put a writable company
 // surface behind no credential at all.
+//
+// ASKED AS "IS IT EXEMPT" rather than "is it on the guarded list", because
+// guarded is what a route IS: the only way this surface opens again is by
+// landing on the exemption.
 func TestTheOperatorSurfaceIsNeverAnonymous(t *testing.T) {
 	t.Parallel()
-	if !auth.AlwaysGuarded(operator.MCPPath) {
-		t.Fatalf("%s is not on the always-guarded list, so allow_anonymous_read "+
-			"opens a surface that files work", operator.MCPPath)
-	}
-	if strings.HasPrefix(operator.MCPPath, "/mcp/") {
-		t.Fatalf("%s is under the sandbox bridge's exempt prefix", operator.MCPPath)
+	for _, path := range []string{
+		operator.MCPPath, operator.MCPPath + "/", operator.MCPPath + "/tools",
+		operator.ActPathPrefix + tracker.CreateWorkItemTool,
+	} {
+		if auth.Unguarded(path) {
+			t.Errorf("%s is exempt from the guard, so a surface that files "+
+				"work is reachable with no credential", path)
+		}
+		if strings.HasPrefix(path, "/mcp/") {
+			t.Errorf("%s is under the sandbox bridge's exempt prefix", path)
+		}
 	}
 }
 
-// A REQUEST THE GUARD NEVER SAW IS REFUSED IN THE ENGINE'S OWN WORDS: JSON
-// with the guard's `invalid_token`, not net/http's text/plain. Unreachable
-// behind the app's guard — which is exactly why its shape went unchecked — and
-// a client reads a 401 carrying no code as something in front of the node.
-func TestAnUnguardedMCPRequestIsRefusedAsJSON(t *testing.T) {
+// A REQUEST THE GUARD DID NOT ADMIT IS REFUSED IN THE ENGINE'S OWN WORDS, on
+// both of this surface's HTTP transports: JSON with the guard's own code, never
+// net/http's text/plain, and never served.
+//
+// TWO ANSWERS, because they send a caller opposite ways: nobody presented a
+// credential this node accepts is `401 invalid_token`, and a request no
+// resolver answered — a route mounted around the guard, or an identity this
+// node could not read — is `503 identity_unavailable`, which must never send
+// somebody to reset a working credential.
+func TestARequestTheGuardDidNotAdmitIsRefusedAsJSON(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, operator.Options{
-		Work: builtin.WorkDeps{
-			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Actor: operator.WorkActor(nil, nil),
-		},
-	})
-	rec := httptest.NewRecorder()
-	s.MCPHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost,
-		operator.MCPPath, strings.NewReader(`{}`)))
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("a request with no operator answered %d, want 401", rec.Code)
-	}
-	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
-		t.Errorf("the refusal is %q, want application/json", ct)
-	}
-	var body map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil ||
-		body["error"] != string(httpjson.CodeInvalidToken) {
-		t.Errorf("the refusal is %q, want JSON with the code %s", rec.Body.String(),
-			httpjson.CodeInvalidToken)
+	s := newSurface(t, operator.Options{Halves: fixed(operator.Halves{
+		Work: builtin.WorkDeps{Reader: stubWorkReader{}, Writer: stubWorkWriter},
+	})})
+	for transport, h := range map[string]struct {
+		handler http.Handler
+		path    string
+	}{
+		"mcp": {s.MCPHandler(), operator.MCPPath},
+		"act": {s.ActHandler(), operator.ActPathPrefix + tracker.CreateWorkItemTool},
+	} {
+		for name, tc := range map[string]struct {
+			ctx    func(context.Context) context.Context
+			status int
+			code   httpjson.Code
+		}{
+			"nobody":     {iam.WithAnonymous, http.StatusUnauthorized, httpjson.CodeInvalidToken},
+			"unresolved": {func(c context.Context) context.Context { return c }, http.StatusServiceUnavailable, httpjson.CodeIdentityUnavailable},
+		} {
+			r := httptest.NewRequest(http.MethodPost, h.path, strings.NewReader(`{}`))
+			r.Header.Set("Content-Type", "application/json")
+			r.SetPathValue("tool", tracker.CreateWorkItemTool)
+			r = r.WithContext(tc.ctx(r.Context()))
+			rec := httptest.NewRecorder()
+			h.handler.ServeHTTP(rec, r)
+			if rec.Code != tc.status {
+				t.Errorf("%s, %s: answered %d, want %d", transport, name, rec.Code, tc.status)
+			}
+			if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+				t.Errorf("%s, %s: the refusal is %q, want application/json",
+					transport, name, ct)
+			}
+			if code := errorCode(t, rec); code != string(tc.code) {
+				t.Errorf("%s, %s: the refusal is %q, want the code %s",
+					transport, name, rec.Body.String(), tc.code)
+			}
+		}
 	}
 }
 
@@ -363,16 +343,13 @@ func TestTheLargestPageFitsOneMCPRequest(t *testing.T) {
 // implementation, which is what this whole seam exists to avoid.
 func TestTheOperatorCatalogueIsDrawnFromTheSeatOne(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, operator.Options{
+	s := newSurface(t, operator.Options{Halves: fixed(operator.Halves{
 		Work: builtin.WorkDeps{
 			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Merges: stubWorkMerger, Moves: stubWorkMover, Actor: operator.WorkActor(nil, nil),
+			Merges: stubWorkMerger, Moves: stubWorkMover,
 		},
-		Pages: builtin.PageDeps{Reader: stubPageReader{}, Writer: stubPageWriter{}, Actor: operator.PageActor},
-	})
-	if s == nil {
-		t.Fatal("a company on both native backends got no surface")
-	}
+		Pages: builtin.PageDeps{Reader: stubPageReader{}, Writer: stubPageWriter{}},
+	})})
 	seat := append(builtin.WorkWrites(), builtin.PageWrites()...)
 	for _, name := range seat {
 		if !slices.Contains(s.Tools(), name) {
@@ -387,6 +364,60 @@ func TestTheOperatorCatalogueIsDrawnFromTheSeatOne(t *testing.T) {
 			t.Errorf("the operator surface offers %q, which only means something inside a turn", name)
 		}
 	}
+}
+
+// TestEveryToolAnOperatorIsOfferedCarriesItsHints is the finding. This surface
+// published a name, a description and a schema and NOTHING else, so an
+// operator's own AI assistant — the premise of the whole endpoint — saw
+// `search_work_items` and `remove_work_item` as identically unannotated. A
+// client that asks before a destructive call had nothing to ask on, and a
+// client that skips the prompt for a read prompted on every one.
+func TestEveryToolAnOperatorIsOfferedCarriesItsHints(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, operator.Options{Halves: fixed(operator.Halves{
+		Work: builtin.WorkDeps{
+			Reader: stubWorkReader{}, Writer: stubWorkWriter,
+			Merges: stubWorkMerger, Moves: stubWorkMover,
+		},
+		Pages: builtin.PageDeps{Reader: stubPageReader{}, Writer: stubPageWriter{}},
+	})})
+	for _, name := range s.Tools() {
+		if got := s.Annotations(name); got == (tools.Annotations{}) {
+			t.Errorf("%q is advertised with no hints at all — a client "+
+				"cannot tell it from an irreversible write", name)
+		}
+	}
+
+	// AND THE TWO ENDS OF THE RANGE ARE WHAT THEY CLAIM, or the check
+	// above would pass on a surface that annotated everything the same.
+	if got := s.Annotations(tracker.ListWorkItemsTool); !crewletmcp.ReadOnlyProven(got) {
+		t.Errorf("the board read advertises %+v, which is not a proven read", got)
+	}
+	// AND A VERB THIS COMPANY IS NOT SERVED ADVERTISES NOTHING: answering
+	// the hints for any name at all reported a verb that is not listed as
+	// annotated, so a check for what is advertised passed on what is not.
+	if slices.Contains(s.Tools(), tracker.SearchWorkItemsTool) {
+		t.Fatalf("the ranked search is served with no search backend wired")
+	}
+	if got := s.Annotations(tracker.SearchWorkItemsTool); got != (tools.Annotations{}) {
+		t.Errorf("a verb this surface does not serve is reported with hints %+v", got)
+	}
+	if got := s.Annotations(tracker.MergeWorkItemTool); got.Destructive != crewletmcp.Yes {
+		t.Errorf("a fold advertises %+v — it closes somebody's item on every "+
+			"board and moves its subtasks, which is what the flag asks", got)
+	}
+}
+
+// errorCode is the `error` of a JSON refusal, failing on a body that is not
+// JSON.
+func errorCode(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("answered %d with a body that is not JSON: %q", rec.Code, rec.Body)
+	}
+	code, _ := body["error"].(string)
+	return code
 }
 
 // The tracker halves this surface needs to EXIST. What is under test here is
@@ -492,7 +523,7 @@ func (stubPageWriter) SavePage(context.Context, pages.Actor, string, pages.Save)
 	return pages.Written{}, nil
 }
 
-func (stubPageWriter) Rename(context.Context, pages.Actor, string, string, bool, pages.CallKey) (pages.Written, error) {
+func (stubPageWriter) Rename(context.Context, pages.Actor, string, string, bool) (pages.Written, error) {
 	return pages.Written{}, nil
 }
 
@@ -500,58 +531,7 @@ func (stubPageWriter) Comment(context.Context, pages.Actor, string, pages.NewCom
 	return pages.Comment{}, pages.Written{}, nil
 }
 
-func (stubPageWriter) EditComment(context.Context, pages.Actor, string, string, string,
-	pages.CallKey) (pages.Comment, pages.Written, error) {
+func (stubPageWriter) EditComment(context.Context, pages.Actor, string, string,
+	string) (pages.Comment, pages.Written, error) {
 	return pages.Comment{}, pages.Written{}, nil
-}
-
-// TestEveryToolAnOperatorIsOfferedCarriesItsHints is the finding. This surface
-// published a name, a description and a schema and NOTHING else, so an
-// operator's own AI assistant — the premise of the whole endpoint — saw
-// `search_work_items` and `remove_work_item` as identically unannotated. A
-// client that asks before a destructive call had nothing to ask on, and a
-// client that skips the prompt for a read prompted on every one.
-func TestEveryToolAnOperatorIsOfferedCarriesItsHints(t *testing.T) {
-	t.Parallel()
-	s := newSurface(t, operator.Options{
-		Work: builtin.WorkDeps{
-			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Merges: stubWorkMerger, Moves: stubWorkMover, Actor: operator.WorkActor(nil, nil),
-		},
-		Pages: builtin.PageDeps{
-			Reader: stubPageReader{}, Writer: stubPageWriter{},
-			Actor: operator.PageActor,
-		},
-	})
-	if s == nil {
-		t.Fatal("a company on both native backends got no surface")
-	}
-	for _, name := range s.Tools() {
-		if got := s.Annotations(name); got == (tools.Annotations{}) {
-			t.Errorf("%q is advertised with no hints at all — a client "+
-				"cannot tell it from an irreversible write", name)
-		}
-	}
-
-	// AND THE TWO ENDS OF THE RANGE ARE WHAT THEY CLAIM, or the check
-	// above would pass on a surface that annotated everything the same.
-	if got := s.Annotations(tracker.ListWorkItemsTool); !crewletmcp.ReadOnlyProven(got) {
-		t.Errorf("the board read advertises %+v, which is not a proven "+
-			"read", got)
-	}
-	// AND A VERB THIS COMPANY IS NOT SERVED ADVERTISES NOTHING. This case
-	// once asserted the ranked search here, on a surface wired with no
-	// search backend — and passed, because the hints were answered for any
-	// name at all rather than for what the surface actually lists.
-	if slices.Contains(s.Tools(), tracker.SearchWorkItemsTool) {
-		t.Fatalf("the ranked search is served with no search backend wired")
-	}
-	if got := s.Annotations(tracker.SearchWorkItemsTool); got != (tools.Annotations{}) {
-		t.Errorf("a verb this surface does not serve is reported with hints "+
-			"%+v — a check for what is advertised passes on what is not", got)
-	}
-	if got := s.Annotations(tracker.MergeWorkItemTool); got.Destructive != crewletmcp.Yes {
-		t.Errorf("a fold advertises %+v — it closes somebody's item on every "+
-			"board and moves its subtasks, which is what the flag asks", got)
-	}
 }

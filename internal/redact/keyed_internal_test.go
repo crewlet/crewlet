@@ -13,12 +13,15 @@ import (
 // through every byte, which is exact only if no match can begin anywhere else
 // and the scan reads a word as (?i) does. Fed every way a word's spellings, its
 // case folds, its fragments, the separators and the bytes around them can
-// follow one another, the scan's matches, its replacement, its answer to "is
-// there one" and where its first match begins are the pattern's own — for both
-// patterns the password rule is built from, and for a list whose words open
-// with runes that fold outside ASCII (k to the Kelvin sign, s to ſ), so the
-// scan is certified for whatever word [passwordKeys] gains rather than for the
-// three it holds today.
+// follow one another — escaped line breaks among the separators, since the
+// password rule's runs across them — the scan's matches, its replacement, its
+// answer to "is there one" and where its first match begins are the pattern's
+// own — for the patterns the password rule is built from, and for a list
+// whose words open with runes that fold outside ASCII (k to the Kelvin sign, s
+// to ſ), so the scan is certified for whatever word [passwordKeys] gains rather
+// than for the three it holds today. For the two held to the text's end, the
+// scan tried near the end alone ([keyed.indexAtEnd]) begins where the
+// pattern's first match does too.
 //
 // The texts are built from the list itself, so a word added to it is in them.
 // Seeded, so a failure names a text that fails every time.
@@ -27,18 +30,24 @@ import (
 // Kelvin spellings are missed; leave the last word out of what [keyed.begins]
 // tries and every pwd is missed; resume after a match from its start rather
 // than its end and the scan's replacements overlap where the pattern's never
-// do.
+// do; measure the widest word in the bytes it is written with, not the most
+// any of its spellings takes, and a prompt spelt with ſ is missed at the end.
 func TestAKeyedScanFindsWhatItsPatternFinds(t *testing.T) {
 	t.Parallel()
 	for name, k := range map[string]*keyed{
 		"the password rule":           passwordRule,
-		"the pending password key":    pendingPassword,
+		"the pending password key":    pendingKey,
+		"a password's prompt":         passwordPrompt,
 		"words folding outside ASCII": keyedOn([]string{"key", "ſecret", "sk"}, `\s*=\S+`),
 	} {
+		atEnd := k == pendingKey || k == passwordPrompt
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			pieces := []string{
-				":", "=", " ", "\t", "\n", "\r\n", "x", "日", "\xff", "hunter2", Marker + "password]",
+				":", "=", " ", "\t", "\n", "\r\n", `\n`, `\r`, `\`, "x", "日", "\xff", "hunter2", Marker + "password]",
+				// What closes a key and what its separator is written with,
+				// and the names and the words a quote can close it after.
+				`"`, "'", "`", "*", "_", ">", "-", "/", "db",
 			}
 			for _, word := range k.words {
 				pieces = append(pieces, spellings(word)...)
@@ -56,7 +65,7 @@ func TestAKeyedScanFindsWhatItsPatternFinds(t *testing.T) {
 				}
 				text := b.String()
 
-				want := k.pattern.FindAllStringIndex(text, -1)
+				want := found(k, text)
 				var got [][]int
 				for start, end, found := k.next(text, 0); found; start, end, found = k.next(text, end) {
 					got = append(got, []int{start, end})
@@ -72,15 +81,52 @@ func TestAKeyedScanFindsWhatItsPatternFinds(t *testing.T) {
 					t.Fatalf("trial %d, %q: the scan's first match begins at %d, the pattern's at %d",
 						trial, text, got, wantIndex)
 				}
-				if got, want := r.apply(text), k.pattern.ReplaceAllLiteralString(text, r.with); got != want {
+				if got := k.indexAtEnd(text); atEnd && got != wantIndex {
+					t.Fatalf("trial %d, %q: the scan at the end finds a match at %d, the pattern at %d",
+						trial, text, got, wantIndex)
+				}
+				if got, want := r.apply(text), replaced(text, want, r.with); got != want {
 					t.Fatalf("trial %d, %q: the scan replaced to %q, the pattern to %q", trial, text, got, want)
 				}
-				if got, want := r.in(text), k.pattern.MatchString(text); got != want {
+				if got, want := r.in(text), len(want) > 0; got != want {
 					t.Fatalf("trial %d, %q: the scan says a match is there %v, the pattern %v", trial, text, got, want)
 				}
 			}
 		})
 	}
+}
+
+// found is every match k's pattern finds in text, leftmost first and taken one
+// after another from each one's end: the pattern's own scan, or, where k
+// refuses some ([keyed.refuses]), the pattern held to begin at every place in
+// turn, a refused match no match.
+func found(k *keyed, text string) [][]int {
+	if k.refuses == nil {
+		return k.pattern.FindAllStringIndex(text, -1)
+	}
+	var matches [][]int
+	for i := 0; i < len(text); {
+		if loc := k.anchored.FindStringIndex(text[i:]); loc != nil && !k.refuses(text, i) {
+			matches = append(matches, []int{i, i + loc[1]})
+			i += loc[1]
+			continue
+		}
+		i = beyond(text, i)
+	}
+	return matches
+}
+
+// replaced is text with each of matches replaced by with.
+func replaced(text string, matches [][]int, with string) string {
+	var b strings.Builder
+	at := 0
+	for _, m := range matches {
+		b.WriteString(text[at:m[0]])
+		b.WriteString(with)
+		at = m[1]
+	}
+	b.WriteString(text[at:])
+	return b.String()
 }
 
 // spellings is word as (?i) reads it in several hands: as written, in capitals,

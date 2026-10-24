@@ -12,7 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
-// EVERY DOMAIN'S COPY IS JUDGED, whatever it declares about seats — ADR-0031.
+// EVERY DOMAIN'S COPY IS JUDGED, whatever it declares about seats — ADR-0045.
 //
 // The verdict the router serves by holds an entry for every registered domain,
 // read from that domain's own health, and carries the domain's own
@@ -24,7 +24,7 @@ func TestEveryDomainsCopyIsJudged(t *testing.T) {
 	t.Parallel()
 	e, _, _ := bootRejoinNode(t)
 	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
-	s := e.native.Load().log
+	s := e.core.Load().log
 	v := s.judgeCopy(t.Context())
 	if v.shut {
 		t.Fatal("the premise: a running node's copy is open")
@@ -62,7 +62,7 @@ func TestEveryDomainsCopyIsJudged(t *testing.T) {
 func wrongCopyOf(t *testing.T, e *Engine, name string) {
 	t.Helper()
 	e.stopRetention()
-	s := e.native.Load().log
+	s := e.core.Load().log
 	var rejoins atomic.Int64
 	s.rejoinMu.Lock()
 	s.rejoin = func(context.Context) error { rejoins.Add(1); return nil }
@@ -178,7 +178,7 @@ func TestOneLogsSilenceLeavesNoOtherDomainUnread(t *testing.T) {
 // of service; the tracker's and the knowledge base's keep answering, the seat
 // copy is still this node's, its seats stay and its claims go on — and a
 // single node's own tracker read is still answered from its own copy. Before
-// ADR-0031 the vectors copy was never judged, so it stayed in service with its
+// ADR-0045 the vectors copy was never judged, so it stayed in service with its
 // hole.
 func TestAWrongCopyOfOneDomainLeavesTheOthersInService(t *testing.T) {
 	t.Parallel()
@@ -193,7 +193,7 @@ func TestAWrongCopyOfOneDomainLeavesTheOthersInService(t *testing.T) {
 	// in flight on its log — a barrier a linearizable read appends — at the
 	// instant the verdict is judged afresh below, whatever the vectors copy
 	// does; under load that instant was caught one run in fifty.
-	s := e.native.Load().log
+	s := e.core.Load().log
 	for _, name := range []string{trackerName, pagesName} {
 		running := s.Domain(name)
 		if running == nil {
@@ -212,10 +212,10 @@ func TestAWrongCopyOfOneDomainLeavesTheOthersInService(t *testing.T) {
 			t.Fatalf("a vectors copy below its log stopped the %s copy answering", name)
 		}
 	}
-	if ok, reason := e.SeatsServiceable(); !ok {
+	if ok, reason := e.SeatsServiceable(t.Context()); !ok {
 		t.Fatalf("a vectors copy below its log shed the node's seats: %s", reason)
 	}
-	if !e.NativeHydrated(t.Context()) {
+	if !e.StateLogHydrated(t.Context()) {
 		t.Fatal("a vectors copy below its log withheld the node's seat claims")
 	}
 	if _, err := e.router.Work().Tasks(t.Context(), tracker.Query{Level: statelog.ReadLinearizable}, time.Now()); err != nil {

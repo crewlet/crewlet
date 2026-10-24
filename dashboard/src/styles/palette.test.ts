@@ -37,6 +37,7 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { describe, expect, test } from "vitest";
+import { DEFAULT_THEME_ID, themeRegistry } from "@crewlethq/tokens";
 import { describeFailure, runPalette, tightest } from "@crewlethq/tokens/test/palette";
 
 const require_ = createRequire(import.meta.url);
@@ -47,6 +48,42 @@ function sources() {
     readFileSync(require_.resolve(`@crewlethq/tokens/css${name}`), "utf8");
   return { tokens: at(""), themes: at("/themes") };
 }
+
+/**
+ * A named theme's sheets: the default palettes with the theme's own over them,
+ * as `main.tsx` imports them, measured under the profile its registry entry
+ * declares (a tint for its grounds, the high-contrast floors).
+ */
+function themeSources(theme: (typeof themeRegistry)[number]) {
+  const base = sources();
+  const own = readFileSync(require_.resolve(`@crewlethq/tokens/css/themes/${theme.id}`), "utf8");
+  return {
+    ...base,
+    themes: `${base.themes}\n${own}`,
+    palette: theme.id,
+    tint: theme.tint,
+    contrast: theme.contrast,
+  };
+}
+
+describe("every named theme this dashboard offers", () => {
+  const named = themeRegistry.filter((theme) => theme.id !== DEFAULT_THEME_ID);
+
+  test("the registry offers the default and named themes, so the loop below measures something", () => {
+    expect(themeRegistry[0]?.id).toBe(DEFAULT_THEME_ID);
+    expect(named.length).toBeGreaterThan(0);
+  });
+
+  for (const theme of named) {
+    test(`${theme.name} clears every floor in every state, under its own profile`, () => {
+      const { checks, failures } = runPalette(themeSources(theme));
+      expect(failures.map(describeFailure)).toEqual([]);
+      // A VACUITY FLOOR, as for the default: a sheet that did not resolve, or
+      // a theme painted under no attribute, would measure nothing and pass.
+      expect(checks.length).toBeGreaterThan(400);
+    });
+  }
+});
 
 describe("the design system's palette", () => {
   test("clears every contrast floor, in every state of the cascade", () => {

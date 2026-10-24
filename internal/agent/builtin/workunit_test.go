@@ -18,8 +18,8 @@ import (
 // whatever case — and `filed_unit` is written once and never rewritten. So a
 // tool that stored the argument verbatim left one team's work under as many
 // spellings as its colleagues have ways of writing it, each of them a filter
-// the others miss, and the id a founder added to survive a rename went
-// unwritten by the surface that files most of the company's work.
+// the others miss, and the id a founder added to survive a corrected name
+// went unwritten by the surface that files most of the company's work.
 func TestACreateStoresTheUnitsOwnKey(t *testing.T) {
 	t.Parallel()
 	for _, typed := range []string{"platform", "Platform", "PLAT", "plat"} {
@@ -67,8 +67,8 @@ func TestACreateRefusesAUnitTheChartDoesNotHave(t *testing.T) {
 }
 
 // A RE-ROUTE STORES THE KEY FOR THE SAME REASON: the wake resolves the stored
-// value back to a lead, and a spelling the chart did not choose is one a
-// rename walks away from.
+// value back to a lead, and a spelling the document did not choose is one a
+// corrected name walks away from.
 func TestARerouteStoresTheUnitsOwnKey(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -77,7 +77,7 @@ func TestARerouteStoresTheUnitsOwnKey(t *testing.T) {
 		Work: builtin.WorkDeps{
 			Reader: trk, Writer: trk.as, Units: stubUnits{},
 		},
-		LeadsProject: leadAlways,
+		Authorize: builtin.Decide(chartLeads),
 	}); err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -134,6 +134,7 @@ func viewRegistry(t *testing.T, trk *fakeTracker, views builtin.ViewWriter) *too
 				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
 			},
 		},
+		Authorize: builtin.Decide(chartLeads),
 	}) {
 		if err := reg.Register(tool, tools.OriginBuiltin); err != nil {
 			t.Fatalf("register %s: %v", tool.Name(), err)
@@ -148,12 +149,18 @@ type viewSpy struct {
 	ops   []string
 }
 
-func (s *viewSpy) WriteView(_ context.Context, opID string, view tracker.View) (
-	tracker.WriteResult, error) {
+func (s *viewSpy) WriteView(_ context.Context, opID string, view tracker.View,
+	_ tracker.ViewPrior) (tracker.WriteResult, error) {
 
 	s.saved = append(s.saved, view)
 	s.ops = append(s.ops, opID)
 	return tracker.WriteResult{Outcome: statelog.OutcomeApplied}, nil
+}
+
+// ViewPrior answers that no view is stored under the id, which is what every
+// case using this spy saves: a new view, or the same one again.
+func (s *viewSpy) ViewPrior(context.Context, string) (tracker.ViewPrior, error) {
+	return tracker.ViewPrior{}, nil
 }
 
 // A VIEW'S UNIT CONTAINER IS STORED UNDER THE TEAM'S KEY.

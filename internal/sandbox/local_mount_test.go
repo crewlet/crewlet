@@ -125,8 +125,8 @@ func TestTheContainerRunsAsWhoeverCanManageTheMount(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			l := &Local{
-				opts:    LocalOptions{Placement: Container, Image: "img"},
-				runtime: fakeRuntime(t, tc.runtime, tc.format, tc.info, tc.exit),
+				opts: LocalOptions{Placement: Container, Image: "img"},
+				cli:  containerCLI{path: fakeRuntime(t, tc.runtime, tc.format, tc.info, tc.exit)},
 			}
 			argv := l.runArgv(t.Context(), boxLayout{id: "b", root: t.TempDir()}, "crewlet-sbx-b")
 			at := slices.Index(argv, "--user")
@@ -154,7 +154,7 @@ func TestRunArgsComeAfterEverythingTheBackendChose(t *testing.T) {
 			Placement: Container, Image: "img",
 			Network: "none", RunArgs: []string{"--user", "0:0", "--cap-add", "SYS_PTRACE"},
 		},
-		runtime: fakeRuntime(t, "docker", dockerRootlessFormat, `[name=seccomp]`, 0),
+		cli: containerCLI{path: fakeRuntime(t, "docker", dockerRootlessFormat, `[name=seccomp]`, 0)},
 	}
 	argv := l.runArgv(t.Context(), boxLayout{id: "b", root: t.TempDir()}, "crewlet-sbx-b")
 
@@ -324,9 +324,9 @@ func TestCreateRefusesABoxWhoseMountIsNotShared(t *testing.T) {
 	t.Parallel()
 	state := t.TempDir()
 	l := &Local{
-		opts:    LocalOptions{Placement: Container, Image: "img"},
-		root:    state,
-		runtime: stubRuntime(t, state, false),
+		opts: LocalOptions{Placement: Container, Image: "img"},
+		root: state,
+		cli:  containerCLI{path: stubRuntime(t, state, false)},
 	}
 	box, err := l.Create(t.Context(), Spec{})
 	if err == nil {
@@ -349,9 +349,9 @@ func TestCreateAcceptsABoxWhoseMountIsShared(t *testing.T) {
 	t.Parallel()
 	state := t.TempDir()
 	l := &Local{
-		opts:    LocalOptions{Placement: Container, Image: "img"},
-		root:    state,
-		runtime: stubRuntime(t, state, true),
+		opts: LocalOptions{Placement: Container, Image: "img"},
+		root: state,
+		cli:  containerCLI{path: stubRuntime(t, state, true)},
 	}
 	box, err := l.Create(t.Context(), Spec{})
 	if err != nil {
@@ -413,7 +413,7 @@ func TestARuntimeStubIsExecutableWhenItIsHandedOver(t *testing.T) {
 			t.Run(fmt.Sprintf("probe-%d", probe), func(t *testing.T) {
 				runtime := fakeRuntime(t, "docker", dockerRootlessFormat,
 					`[name=rootless name=seccomp,profile=builtin]`, 0)
-				if !runtimeIsRootless(t.Context(), runtime) {
+				if !runtimeIsRootless(t.Context(), containerCLI{path: runtime}) {
 					failures <- runtime
 				}
 			})

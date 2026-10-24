@@ -33,7 +33,7 @@ func TestAPageWriteProbesTheSpaceThePageIsIn(t *testing.T) {
 		}},
 		{"retitle", func(r *roundTrip, page pages.Page, _ string) error {
 			_, err := r.store.Rename(r.t.Context(), author("jane"), page.ID,
-				"DEPLOY RUNBOOK", false, pages.CallKey{})
+				"DEPLOY RUNBOOK", false)
 			return err
 		}},
 		{"trash", func(r *roundTrip, page pages.Page, _ string) error {
@@ -51,11 +51,12 @@ func TestAPageWriteProbesTheSpaceThePageIsIn(t *testing.T) {
 		}},
 		{"edit a comment", func(r *roundTrip, page pages.Page, comment string) error {
 			_, _, err := r.store.EditComment(r.t.Context(), author("jane"), page.ID,
-				comment, "a better remark", pages.CallKey{})
+				comment, "a better remark")
 			return err
 		}},
 		{"remove a comment", func(r *roundTrip, page pages.Page, comment string) error {
-			_, err := r.store.RemoveComment(r.t.Context(), author("jane"), page.ID, comment)
+			_, err := r.store.RemoveComment(r.t.Context(), author("jane"), page.ID,
+				comment, pages.CommentAuthority{})
 			return err
 		}},
 	} {

@@ -71,7 +71,7 @@ func (f *spendFixture) sources() queries.Sources {
 		// beside spendNow left it long ago.
 		State:   livestate.New(livestate.WithClock(func() time.Time { return spendNow })),
 		Usage:   usage.Reader{Estate: f.db.Replicated()},
-		Company: func() *config.Company { return f.company },
+		Company: companySource(f.t, f.company),
 		Now:     func() time.Time { return spendNow },
 	}
 }
@@ -207,7 +207,7 @@ func TestThePreviousWindowIsServedAtSevenThirtyAndNinetyDays(t *testing.T) {
 		{"days": 0},
 		{"days": "a week"},
 	} {
-		_, err := r.Answer(t.Context(), "tokens", params, "")
+		_, err := r.Answer(everyGrant(t), "tokens", params)
 		if !errors.Is(err, queries.ErrBadParams) || !errors.Is(err, tokens.ErrWindowLength) ||
 			!strings.Contains(queries.RefusalDetail(err), "days is") {
 			t.Errorf("%v: err = %v, want a refusal naming days", params, err)
@@ -222,16 +222,14 @@ func TestAWindowBeforeTheHorizonIsRefused(t *testing.T) {
 	t.Parallel()
 	f := newSpendFixture(t)
 	r := registryOver(t, f.sources())
-	_, err := r.Answer(t.Context(), "token_series",
-		map[string]any{"since": "2026-03-01", "until": "2026-03-10"}, "")
+	_, err := r.Answer(everyGrant(t), "token_series", map[string]any{"since": "2026-03-01", "until": "2026-03-10"})
 	if !errors.Is(err, tokens.ErrOutOfRange) || errors.Is(err, tokens.ErrWindowLength) ||
 		!strings.Contains(queries.RefusalDetail(err), "starts 2026-03-01") ||
 		!strings.Contains(queries.RefusalDetail(err), "move since") {
 		t.Errorf("err = %v, want the horizon refusal naming since", err)
 	}
 	// And a custom window's previous half past the floor names days.
-	_, err = r.Answer(t.Context(), "tokens",
-		map[string]any{"since": "2026-03-29", "until": "2026-04-27", "previous": true}, "")
+	_, err = r.Answer(everyGrant(t), "tokens", map[string]any{"since": "2026-03-29", "until": "2026-04-27", "previous": true})
 	if !errors.Is(err, tokens.ErrOutOfRange) || !strings.Contains(err.Error(), "fewer days") {
 		t.Errorf("err = %v, want the previous window refused", err)
 	}
@@ -247,8 +245,7 @@ func TestAWindowBeforeTheHorizonIsRefused(t *testing.T) {
 func TestALongWindowInsideTheHistoryIsRefusedForItsLength(t *testing.T) {
 	t.Parallel()
 	r := registryOver(t, newSpendFixture(t).sources())
-	_, err := r.Answer(t.Context(), "tokens",
-		map[string]any{"since": "2026-04-26", "until": "2026-09-24"}, "")
+	_, err := r.Answer(everyGrant(t), "tokens", map[string]any{"since": "2026-04-26", "until": "2026-09-24"})
 	if !errors.Is(err, queries.ErrBadParams) || !errors.Is(err, tokens.ErrWindowLength) {
 		t.Fatalf("err = %v, want a window-length refusal", err)
 	}
@@ -279,7 +276,7 @@ func TestASpendWindowItCannotReadIsRefusedNamingTheParameter(t *testing.T) {
 		{"token_series", map[string]any{"days": 1, "bucket": "hour"}, "bucket"},
 		{"token_series", map[string]any{"days": 1, "group": "turn"}, "group"},
 	} {
-		_, err := r.Answer(t.Context(), tc.what, tc.params, "")
+		_, err := r.Answer(everyGrant(t), tc.what, tc.params)
 		if !errors.Is(err, queries.ErrBadParams) || !strings.Contains(err.Error(), tc.names) {
 			t.Errorf("%s %v: err = %v, want a refusal mentioning %q", tc.what, tc.params, err, tc.names)
 		}
@@ -354,15 +351,61 @@ func TestAUnitSeatHasAHandleInTheRollup(t *testing.T) {
 		ID: "p1", Type: "agent_phase_completed",
 		Timestamp: spendNow.Add(-time.Minute).Format(time.RFC3339Nano),
 		Category:  "agent", Payload: map[string]any{
-			"role": "Site Reliability", "phase": "execute", "total_tokens": 9,
+			"agent_id": f.agentID("sre"), "role": "Site Reliability",
+			"phase": "execute", "total_tokens": 9,
 		},
 	})
 	got := rollupOf(t, registryOver(t, sources), nil)
 	if len(got.ByAgent) != 1 || got.ByAgent[0].Handle != "sre" {
 		t.Errorf("by_agent = %+v, want the unit seat under its handle sre", got.ByAgent)
 	}
-	if handles := sources.RoleHandles(); handles["Site Reliability"] != "sre" || handles["Lead"] != "lead" {
-		t.Errorf("handles = %v, want every seat in the chart", handles)
+	seats := sources.Seats()
+	if seats[f.agentID("sre")].Handle != "sre" || seats[f.agentID("lead")].Handle != "lead" {
+		t.Errorf("seats = %v, want every seat in the chart by its agent id", seats)
+	}
+	if unit := seats[f.agentID("sre")]; unit.UnitName != "Engineering" || unit.UnitKey == "" {
+		t.Errorf("sre's unit = %+v, want the unit it sits in directly", unit)
+	}
+}
+
+// A SEAT IS ASKED FOR BY ITS HANDLE, and answered from the days filed under the
+// agent id derived from it (ADR-0013).
+func TestASeatIsAskedByItsHandle(t *testing.T) {
+	t.Parallel()
+	f := newSpendFixture(t)
+	f.day("node-a", "2026-09-25", "ceo", 1, 0, spent("execute", "sonnet", 40))
+	sources := f.sources()
+	roster := &org.Organization{Name: "Acme", Roles: []*org.Role{
+		{Name: "Chief", DeclaredHandle: "ceo"},
+	}}
+	sources.Company = func() (*config.Company, *org.Organization) {
+		return &config.Company{Name: "Acme"}, roster
+	}
+	got := rollupOf(t, registryOver(t, sources), map[string]any{"days": 7, "seat": "ceo"})
+	if got.AgentID != f.agentID("ceo") || got.Totals.TotalTokens != 40 {
+		t.Errorf("seat=ceo answered agent %q and %d tokens, want ceo's id and its 40",
+			got.AgentID, got.Totals.TotalTokens)
+	}
+	if got.Seat != "ceo" {
+		t.Errorf("the rollup names the seat %q, want its handle", got.Seat)
+	}
+	// A PERSON'S SEAT NARROWS TO THE PERSON'S SPEND, never to every agent
+	// seat's: a person takes no turn, but what was spent for them is filed
+	// under their human seat's handle — and an empty agent id asks for
+	// every seat, so a person's window read through it held the company's.
+	people := f.sources()
+	cfg, err := config.ParseCompany([]byte(viewerCompany))
+	if err != nil {
+		t.Fatal(err)
+	}
+	people.Company = companySource(t, cfg)
+	f.person("node-a", "2026-09-25", "ana", usage.Tokens{Phase: "auxiliary",
+		Worker: "answer_knowledge", Model: "haiku", Input: 5, Output: 2, Total: 7, Calls: 1})
+	hers := rollupOf(t, registryOver(t, people), map[string]any{"days": 7, "seat": "ana"})
+	if hers.Totals.TotalTokens != 7 || len(hers.ByAgent) != 1 || !hers.ByAgent[0].Person ||
+		hers.AgentID != "" || hers.Seat != "ana" {
+		t.Errorf("seat=ana, a person, answered %+v; want her 7 tokens alone, named by "+
+			"her seat and by no agent id", hers)
 	}
 }
 
@@ -389,9 +432,14 @@ units:
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	got := queries.Sources{Company: func() *config.Company { return cfg }}.SeatUnits()
+	got := map[string]string{}
+	for _, seat := range (queries.Sources{Company: companySource(t, cfg)}).Seats() {
+		if seat.UnitName != "" {
+			got[seat.Handle] = seat.UnitName
+		}
+	}
 	if want := map[string]string{"vp": "Engineering", "dev": "Platform"}; !maps.Equal(got, want) {
-		t.Errorf("SeatUnits() = %v, want %v: each seat by the unit holding it, the root seat by none", got, want)
+		t.Errorf("Seats() bands %v, want %v: each seat by the unit holding it, the root seat by none", got, want)
 	}
 }
 

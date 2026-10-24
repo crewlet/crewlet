@@ -20,7 +20,7 @@ import (
 // fields misses.
 func TestTierAIsTrimmedBeforeAnyRuleReadsIt(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := config.RunnableBootstrap()
 	b.Node.ID = " node-a\n"
 	b.Node.Labels = map[string]string{" zone\t": " eu \n"}
 	b.Store.Path = " /var/lib/crewlet/node.db\n"
@@ -30,7 +30,7 @@ func TestTierAIsTrimmedBeforeAnyRuleReadsIt(t *testing.T) {
 	b.API.Auth.AllowedOrigins = []string{" https://ops.example.com \n"}
 	b.Secrets = config.Secrets{
 		ActiveKeyID: " k1 \n",
-		Keys:        []config.SecretKey{{ID: " k1 \n", Material: " bWF0ZXJpYWw= \n"}},
+		Keys:        []config.SecretKey{{ID: " k1 \n", Material: " " + config.TestKeyMaterial + " \n"}},
 	}
 
 	_ = b.Validate() // the trim is what is under test, not the verdict
@@ -154,7 +154,7 @@ func TestATrimCollisionIsRefusedRatherThanDecidedByMapOrder(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			b := config.DefaultBootstrap()
+			b := config.RunnableBootstrap()
 			b.Node.Labels = maps.Clone(labels)
 
 			err := b.Validate()
@@ -186,7 +186,6 @@ func TestTheReferenceIndexDoesNotRewriteWhatItWalks(t *testing.T) {
 	c := &config.Company{Name: "  Nimbus  "}
 
 	config.References(c)
-	config.ReferencedNames(c)
 
 	if got, want := c.Name, "  Nimbus  "; got != want {
 		t.Errorf("name = %q after a read-only walk, want %q unchanged", got, want)
@@ -243,7 +242,7 @@ const pad = " \t"
 // than only plain fields.
 func populatedBootstrap(t *testing.T) config.Bootstrap {
 	t.Helper()
-	b := config.DefaultBootstrap()
+	b := config.RunnableBootstrap()
 	b.Node.ID = "node-a"
 	b.Node.Roles = []string{"data", "seats"}
 	b.Node.Labels = map[string]string{"zone": "eu"}
@@ -263,7 +262,7 @@ func populatedBootstrap(t *testing.T) config.Bootstrap {
 	b.API.Auth.AllowedOrigins = []string{"https://ops.example.com"}
 	b.Secrets = config.Secrets{
 		ActiveKeyID: "k1",
-		Keys:        []config.SecretKey{{ID: "k1", Material: "bWF0ZXJpYWw="}},
+		Keys:        []config.SecretKey{{ID: "k1", Material: config.TestKeyMaterial}},
 	}
 	return b
 }

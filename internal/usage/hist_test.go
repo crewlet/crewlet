@@ -122,3 +122,70 @@ func TestAHistogramRoundTripsAndRefusesWhatNoBuildWrote(t *testing.T) {
 		}
 	}
 }
+
+// histOf is a histogram of the durations given.
+func histOf(ds ...time.Duration) usage.Hist {
+	var h usage.Hist
+	for _, d := range ds {
+		h.Add(d)
+	}
+	return h
+}
+
+// histBytes is a histogram as it is written, for comparing two.
+func histBytes(t *testing.T, h usage.Hist) string {
+	t.Helper()
+	b, err := json.Marshal(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// A HISTOGRAM JOINS ON WHAT IS AT OR ABOVE EVERY BIN, never bin by bin.
+//
+// A turn whose end states no tally is measured over the segments its node
+// holds, so a later segment moves it UP a bin and the bin it left loses a
+// count: the earlier histogram is not below the later one bin by bin, though
+// it is an earlier measurement of the same turns. Joined bin by bin, the turn
+// would be counted twice — once where it was and once where it is — and the
+// day would grow a turn nobody ran. What only grows is the count at or above
+// every bin, so that is what the join keeps; where the fleet's histogram holds
+// MORE there, the join holds that much.
+//
+// Mutation: join bin by bin (the larger count at every bin), and the turn that
+// moved is counted twice; or take the larger total alone, and the fleet's long
+// turn is lost.
+func TestAHistogramJoinsOnWhatIsAtOrAboveEveryBin(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name          string
+		derived, held usage.Hist
+		want          usage.Hist
+	}{
+		{"an earlier measurement of a turn that moved up a bin is the derivation",
+			histOf(time.Minute, 2*time.Hour), histOf(time.Minute, 10*time.Minute),
+			histOf(time.Minute, 2*time.Hour)},
+		{"a turn the fleet holds that the derivation lost is kept",
+			histOf(time.Minute), histOf(time.Minute, 2*time.Hour),
+			histOf(time.Minute, 2*time.Hour)},
+		{"a long turn the fleet holds raises the tail, and the derivation's new short " +
+			"turns keep their own bins",
+			histOf(time.Second, time.Second, time.Minute), histOf(time.Minute, 2*time.Hour),
+			histOf(time.Second, time.Minute, 2*time.Hour)},
+		{"nothing held is the derivation", histOf(time.Minute), usage.Hist{}, histOf(time.Minute)},
+		{"nothing derived is the fleet's", usage.Hist{}, histOf(time.Hour), histOf(time.Hour)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			got := c.derived.Join(c.held)
+			if histBytes(t, got) != histBytes(t, c.want) {
+				t.Errorf("the join is %s, want %s", histBytes(t, got), histBytes(t, c.want))
+			}
+			if got.Count() != max(c.derived.Count(), c.held.Count()) {
+				t.Errorf("the join counts %d turns, want the larger of %d and %d",
+					got.Count(), c.derived.Count(), c.held.Count())
+			}
+		})
+	}
+}

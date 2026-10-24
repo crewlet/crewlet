@@ -819,7 +819,7 @@ func TestTheBitmapAlarmSaysWhatLeavesItsBudgetNothing(t *testing.T) {
 		fmt.Sprintf("%s for each core its memory backs at %s a core", serving, core),
 		fmt.Sprintf("no more than one for every %s, and leaves the background work %s for each backed core",
 			amount(t, gitproc.TransferShare), amount(t, cache.MaintenanceMemoryPerCore)),
-		fmt.Sprintf("once its transfers' %s each reach the memory less the cores' %s each — at as little as "+
+		fmt.Sprintf("once its transfers' %s each reach the memory less the cores' %s each: at as little as "+
 			"%d%% of the transfers the memory holds at %s each, where the node has a core for every %s of it "+
 			"or more", transfer, serving, percent, transfer, core),
 		"clears when git.max_transfers is lowered or unset, or when the node is given memory past what it " +

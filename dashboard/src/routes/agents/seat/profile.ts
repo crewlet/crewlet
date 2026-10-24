@@ -4,11 +4,21 @@
  * render that happens to exercise it.
  */
 
+import type { ServicesRun } from "~/lib/services.ts";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { PERIOD_WORDS } from "~/lib/budget.ts";
 import { fmtCount, tsKey } from "~/lib/format.ts";
 import { callWords } from "~/lib/turnsteps.ts";
-import { activityOf, roundOf, type OrgIndex, type Seat, type SeatState } from "~/lib/seats.ts";
+import {
+  activityOf,
+  isOwnSeat,
+  leadsInLine,
+  roundOf,
+  type OrgIndex,
+  type Seat,
+  type SeatState,
+} from "~/lib/seats.ts";
+import type { ViewerState } from "~/lib/viewer.ts";
 import type {
   AgentRow,
   BudgetWindow,
@@ -40,6 +50,16 @@ import type {
 export const AGENT_TABS = ["overview", "work", "turns", "memory", "schedules", "settings"] as const;
 export const HUMAN_TABS = ["overview", "work", "settings"] as const;
 export type SeatTab = (typeof AGENT_TABS)[number];
+
+/**
+ * The tabs a seat's page draws for a company running `runs`: its kind's,
+ * without Work where the company runs no Crewlet Works, since every task on it
+ * is that tracker's.
+ */
+export function seatTabs(human: boolean, runs: ServicesRun): readonly SeatTab[] {
+  const tabs: readonly SeatTab[] = human ? HUMAN_TABS : AGENT_TABS;
+  return runs.tracker ? tabs : tabs.filter((t) => t !== "work");
+}
 
 /** Each tab's word, in the order the strip draws them. */
 export const TAB_LABELS: Readonly<Record<SeatTab, string>> = {
@@ -74,27 +94,66 @@ export function findSeat(index: OrgIndex, handle: string): Seat | null {
 }
 
 /**
- * The live row for a seat, matched every way the roster and the overlay agree.
+ * Whether this page asks for a person's own record — their inbox, the order
+ * they mean to work in, the claims on their plate — which the engine answers
+ * to a TRACKER holder who owns it, leads them or is an admin.
  *
- * BY IDENTITY FIRST, THE ROLE NAME ONLY AFTER. The handle — the one the URL
- * carried, or the resolved seat's own, since a link minted from a config field
- * addresses a seat by name — and the row's id name exactly one seat; a role
- * name is what two unit seats stamped from one template share. One predicate
- * over all three took the FIRST row that matched any of them, so a sibling
- * listed earlier under the same role name was this seat's row while its own,
- * matched by handle, sat later in the roster unread.
+ * THE APP FIRST: every one of those questions is the tracker's, so a reader
+ * without Tracker is asked nothing, whoever they lead. THEN THE LEAD, on the
+ * chart's own reading of who is in their line, the rule My work reads a
+ * report's day by. Asked only on Admin and the owner, a lead opening a
+ * report's page was told the record needs Admin "or leading them" about
+ * somebody they lead, and their day was never drawn.
+ */
+export function mayReadRecord(
+  viewer: Pick<ViewerState, "admin" | "tracker" | "handle">,
+  index: OrgIndex,
+  handle: string,
+): boolean {
+  if (!viewer.tracker) return false;
+  if (viewer.admin) return true;
+  if (isOwnSeat(viewer, handle)) return true;
+  return leadsInLine(index, viewer.handle, handle);
+}
+
+/**
+ * Whether this page asks for an agent seat's TRAIL — its turns, its phases,
+ * its memory, the body of a call it is making — which the engine answers to
+ * an admin and to whoever leads the seat (`audit.seat.read`), and to nobody
+ * else: everybody reads a seat's STATUS, never its transcript.
+ *
+ * Decided on the chart's reading of the line, as [mayReadRecord]'s lead is,
+ * so the page asks only what it will be answered and draws the rest locked,
+ * saying so ([TRAIL_WORDS]), rather than as a refusal.
+ */
+export function mayReadTrail(
+  viewer: Pick<ViewerState, "admin" | "handle">,
+  index: OrgIndex,
+  handle: string,
+): boolean {
+  if (viewer.admin) return true;
+  if (isOwnSeat(viewer, handle)) return true;
+  return leadsInLine(index, viewer.handle, handle);
+}
+
+/**
+ * The other way to a seat's trail, said after the access that opens it
+ * (`GrantRequired`'s `also`): leading the seat.
+ */
+export const TRAIL_WORDS = "This seat’s lead can see it too.";
+
+/**
+ * The live row for a seat: the roster row whose `id` — the seat's handle — is
+ * the one the route named, or the resolved seat's own handle. Never by NAME,
+ * which two seats may share.
  */
 export function liveRow(
   agents: readonly AgentRow[],
   handle: string,
   seat: Seat | null,
 ): AgentRow | undefined {
-  const own = seat?.handle ?? "";
-  return (
-    agents.find(
-      (a) => a.handle === handle || a.id === handle || (own !== "" && a.handle === own),
-    ) ?? (seat?.name ? agents.find((a) => a.role === seat.name) : undefined)
-  );
+  const wanted = seat?.handle || handle;
+  return agents.find((a) => a.id === wanted);
 }
 
 /**
@@ -413,7 +472,7 @@ export function seatSchedules(rows: readonly ScheduleRow[], handle: string): Sch
   return rows
     .filter(
       (row) =>
-        (row.scope_type === "role" && row.scope_id === handle) || row.runners.includes(handle),
+        (row.scope_type === "role" && row.scope_name === handle) || row.runners.includes(handle),
     )
     .sort((a, b) => {
       const at = tsKey(a.next_run) || Infinity;

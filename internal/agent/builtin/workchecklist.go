@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -96,7 +97,9 @@ func checklistSchema() map[string]any {
 // a retried request carries the same operation, so it names the same list
 // rather than adding a second one, and two different gestures in one turn are
 // two operations with ids of their own.
-func (d WorkDeps) checklistIntent(args map[string]any, opID string) (*tracker.ChecklistIntent, string) {
+func (d WorkDeps) checklistIntent(ctx context.Context, args map[string]any,
+	opID string) (*tracker.ChecklistIntent, string) {
+
 	raw, held := args["checklist"]
 	if !held || raw == nil {
 		return nil, ""
@@ -136,7 +139,7 @@ func (d WorkDeps) checklistIntent(args map[string]any, opID string) (*tracker.Ch
 	}
 	if _, named := spec["assignee"]; named &&
 		(op == tracker.ChecklistAddItem || op == tracker.ChecklistAssignItem) {
-		handle, refusal := d.resolveHandle(UpdateWorkItemTool,
+		handle, refusal := d.resolveHandle(ctx, UpdateWorkItemTool,
 			"`checklist.assignee`", argString(spec, "assignee"))
 		if refusal != "" {
 			return nil, refusal

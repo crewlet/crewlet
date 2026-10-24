@@ -23,7 +23,7 @@
  * What the dashboard reaches is read from the SOURCE, parsed rather than
  * matched as text, everywhere a URL is handed to the browser:
  *
- *  - the REST transport: `rest.get/post/put/patch/del/putText(path, …)` and
+ *  - the REST transport: `rest.get/post/put/patch/del/putText/putBytes(path, …)` and
  *    `rest.request(method, path, …)`, where `rest` is the one imported from
  *    this tree under whatever local name — so a module built on it, a screen
  *    or another piece of the protocol layer, is read at its own call;
@@ -65,7 +65,16 @@ import {
 } from "../test/source.ts";
 
 /** The `rest` methods that take the path first. */
-const REST_PATH_FIRST = new Set(["get", "post", "put", "patch", "del", "putText", "blob"]);
+const REST_PATH_FIRST = new Set([
+  "get",
+  "post",
+  "put",
+  "patch",
+  "del",
+  "putText",
+  "putBytes",
+  "blob",
+]);
 /** Constructors whose first argument is the URL they dial. */
 const DIALS = new Set(["WebSocket", "EventSource"]);
 /** The objects `fetch` can be called off as a property. */
@@ -82,6 +91,16 @@ const FORWARDS: readonly { path: string; call: string; why: string }[] = [
     path: "protocol/rest.ts",
     call: "fetch",
     why: "the REST transport's one request: every path it sends is a caller's, read at that caller",
+  },
+  {
+    path: "lib/keyedWrite.ts",
+    call: "rest.request",
+    why: "the keyed write every REST gesture is answered through: its path is the request's, the identity directory's a literal under `/iam` at the dialog that sends it and an artifact's built in `lib/artifacts/api.ts` under `/artifacts`, each under its own entry",
+  },
+  {
+    path: "protocol/configWrite.ts",
+    call: "rest.request",
+    why: "the configuration transport's send: its path is the request's, `/config` or a lead's unit at `/config/units/{key}` (`routes/org/builder/model/transport.ts`), both under the `/config` entry",
   },
 ];
 

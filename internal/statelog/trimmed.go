@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// THE TRIMMED RECORD — ADR-0032.
+// THE TRIMMED RECORD — ADR-0046.
 //
 // Every arbitrated record a node consumes raises its subject's anchor
 // ([tables.advanceAnchor]), and the anchor is what a write's expectation is
@@ -284,6 +284,12 @@ type SweepDeps struct {
 	// Log is the live log the records are appended to.
 	Log Appender
 
+	// Signer signs every trimmed record the sweep appends. REQUIRED, for the
+	// reason [Deps.Signer] is: every applier opens a record's frame before
+	// it reads one, so an unsigned trimmed record is refused on every node
+	// and the anchors it was appended to remove are never removed.
+	Signer *Signer
+
 	// Ends is the log's two ends, read live — what the sweep reads to learn
 	// how far this node's copy must have applied before it is counted
 	// from.
@@ -295,7 +301,7 @@ type SweepDeps struct {
 	Runner Committer
 
 	// Admission is the log's gate reserve — required exactly when the
-	// domain keeps one ([KeepsGateReserve]), for [NewReadIndex]'s reason:
+	// domain keeps one ([ReservationOf]), for [NewReadIndex]'s reason:
 	// the records go on for as long as the trim does, and allowed into the
 	// reserve they would spend the room an eviction is kept.
 	Admission Admission
@@ -395,9 +401,16 @@ func PlanSweep(ctx context.Context, d SweepDeps, below Position) (SweepPlan, err
 	if err := d.check(below); err != nil {
 		return SweepPlan{}, err
 	}
+	// THE PLAN APPENDS THROUGH A SIGNING LOG, so no path of the sweep can
+	// put an unsigned record on it.
+	signed, err := signing(d.Log, d.Signer, d.Domain.Name())
+	if err != nil {
+		return SweepPlan{}, err
+	}
+	d.Log = signed
 	if d.Evicted != nil {
-		evicted, err := d.Evicted(ctx)
-		if err != nil {
+		var evicted bool
+		if evicted, err = d.Evicted(ctx); err != nil {
 			return SweepPlan{}, fmt.Errorf("statelog: read this node's eviction on %s "+
 				"before sweeping its anchors: %w", d.Spec.Name, err)
 		}
@@ -582,10 +595,10 @@ func (d SweepDeps) check(below Position) error {
 	case below.Stream != d.Spec.Name:
 		return fmt.Errorf("%w: the anchor sweep of %s on %s was handed a floor on %s",
 			ErrWrongStream, d.Domain.Name(), d.Spec.Name, below.Stream)
-	case KeepsGateReserve(d.Domain) && d.Admission == nil:
+	case ReservationOf(d.Domain).Kept && d.Admission == nil:
 		return fmt.Errorf("statelog: the anchor sweep of %s has no admission, so "+
 			"its records would fill the gate reserve an eviction needs", d.Domain.Name())
-	case !KeepsGateReserve(d.Domain) && d.Admission != nil:
+	case !ReservationOf(d.Domain).Kept && d.Admission != nil:
 		return fmt.Errorf("statelog: the anchor sweep of %s was given an "+
 			"admission, and its log keeps no gate reserve", d.Domain.Name())
 	}

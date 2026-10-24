@@ -103,15 +103,19 @@ func beginCall(env Envelope, payload map[string]any) *LiveCall {
 const openingRound = -1
 
 // applyProgress folds one progress round into the in-flight call, returning the
-// role whose call moved or "" when the round was stale.
+// agent id of the seat whose call moved, or "" when the round was stale or
+// named no seat.
 func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
-	role := str(payload, "role", "agent_role")
-	if role == "" {
+	id := str(payload, "agent_id")
+	if id == "" {
 		return ""
 	}
-	agent := s.ensureAgent(role)
-	if id := str(payload, "agent_id"); id != "" {
-		agent.runtimeID = id
+	// LOOKED UP, not created: a round the guards below discard moves nothing,
+	// and an entry made for it would claim the projection knows the seat.
+	agent := s.agents[id]
+	var cur *LiveCall
+	if agent != nil {
+		cur = agent.liveCall
 	}
 
 	turnID := str(payload, "turn_id")
@@ -134,7 +138,6 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		}
 	}
 
-	cur := agent.liveCall
 	switch {
 	case cur.sameCall(turnID, phase, iteration):
 		// THE OPENING FRAME IS THE ONLY CARRIER OF THE PROMPT, and it
@@ -152,9 +155,10 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 			if len(cur.PromptMessages) == 0 {
 				cur.PromptMessages = list(payload, "prompt_messages")
 			}
+			// cur is the held call, so agent is the entry holding it.
 			cur.Versions = s.restamp(&was, cur)
 			agent.liveCallSeq = s.versions
-			return role
+			return id
 		}
 		// A stale earlier round of the SAME call is ignored.
 		if roundNum < cur.RoundNum {
@@ -172,6 +176,7 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 	// corrected it: the seat sat rendering as working, with no live call to
 	// show, until the next real round. A round this function is about to
 	// discard must not move the seat either.
+	agent = s.ensureAgent(id)
 	agent.working()
 	s.touchTurn(agent, env, payload, StagePhase)
 	if phase != "" {
@@ -215,15 +220,9 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		startedAt = cur.StartedAt
 	}
 
-	// The work key, the item and the node are read off the frame alone:
-	// every frame of one call, opening and round alike, names all three.
-	workKey := str(payload, "work_key")
-	workItem := workItemOf(payload)
-	node := str(payload, "node")
-
 	agent.liveCall = &LiveCall{
 		TurnID:         turnID,
-		WorkKey:        workKey,
+		WorkKey:        str(payload, "work_key"),
 		Phase:          phase,
 		Iteration:      iteration,
 		Trigger:        trigger,
@@ -254,11 +253,13 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 		Steers:           list(payload, "steers"),
 		CacheReadTokens:  num(payload, "cache_read_tokens"),
 		CacheWriteTokens: num(payload, "cache_write_tokens"),
-		WorkItem:         workItem,
-		Node:             node,
-		InProgress:       true,
-		StartedAt:        startedAt,
-		UpdatedAt:        env.Timestamp,
+		// NOT carried, for Rounds' reason: every frame states the item the
+		// turn is on now, and the queue stamps every frame's node.
+		WorkItem:   workItemOf(payload),
+		Node:       str(payload, "node"),
+		InProgress: true,
+		StartedAt:  startedAt,
+		UpdatedAt:  env.Timestamp,
 	}
 	// The versions this round's fields are at: the held call's where a
 	// field is what it held, the projection's next where it moved — and
@@ -269,7 +270,7 @@ func (s *LiveState) applyProgress(env Envelope, payload map[string]any) string {
 	}
 	agent.liveCall.Versions = s.restamp(held, agent.liveCall)
 	agent.liveCallSeq = s.versions
-	return role
+	return id
 }
 
 // recordPhaseFailure remembers a failed phase and FREEZES its call rather than

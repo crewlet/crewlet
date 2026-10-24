@@ -1,7 +1,7 @@
 /**
  * What a ranked hit says it IS.
  *
- * The Item column drew `<TextCell icon="check">` — one hardcoded mark on every
+ * The Item column drew `<TableTextCell icon="check">`: one hardcoded mark on every
  * row, whatever the item was — and that is wrong twice over. A bug, an epic and
  * a spike are three drawings on the board, the list, the table, the timeline and
  * the item's own header, and one here. And a TICK is this product's completion
@@ -20,6 +20,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vi
 import { WorkSearch } from "./WorkSearch.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { BugGlyph } from "@crewlethq/icons/glyphs";
 import { SEARCH_QUERY_MAX } from "~/contract/wire.ts";
@@ -73,7 +74,11 @@ function mount(
   const socket = new LiveSocket(store);
   (
     socket as unknown as { query: (w: string, p: Record<string, unknown>) => Promise<unknown> }
-  ).query = (_what, params) => {
+  ).query = (what, params) => {
+    // THE READER HOLDS TRACKER, which the task search is asked under.
+    if (what === "viewer") {
+      return Promise.resolve({ login: "jane", owner: "jane", grants: ["tracker"] });
+    }
     asked.push(params);
     const mode = params.mode ?? "hybrid";
     // THE WIRE SHAPE: every search answer carries its whole outcome.
@@ -90,9 +95,11 @@ function mount(
   };
   return render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <WorkSearch />
-      </Router>
+      <ViewerProvider>
+        <Router>
+          <WorkSearch />
+        </Router>
+      </ViewerProvider>
     </ClientContext.Provider>,
   );
 }
@@ -146,7 +153,7 @@ test("a phrase past the search bound is not asked, and the screen says why", asy
   mount([hit({})], {}, asked);
   expect(
     await screen.findByText(
-      `This is ${SEARCH_QUERY_MAX + 1} bytes, and a search takes at most ${SEARCH_QUERY_MAX} — search on a few keywords or a phrase, not a pasted passage.`,
+      `This is ${SEARCH_QUERY_MAX + 1} bytes, and a search takes at most ${SEARCH_QUERY_MAX}. Search on a few keywords or a phrase, not a pasted passage.`,
     ),
   ).toBeTruthy();
   expect(asked).toEqual([]);

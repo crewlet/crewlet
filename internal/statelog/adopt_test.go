@@ -741,7 +741,7 @@ func (h *joinHarness) joinerLostBefore(t *testing.T) (time.Time, bool) {
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
-	before, lost, err := rows.LostBefore(t.Context())
+	before, lost, err := rows.LostBefore(t.Context(), "")
 	if err != nil {
 		t.Fatalf("read the ledger's watermark: %v", err)
 	}

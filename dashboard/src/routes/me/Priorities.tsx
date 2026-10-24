@@ -14,7 +14,7 @@
  *
  * Dropping a row somewhere else — or `Alt` with Up or Down on a focused row,
  * because a pointer-only reorder is a write a keyboard reader cannot make —
- * sends `set_priorities` as the person the token is bound to (ADR-0024). Three
+ * sends `set_priorities` as the person signed in (ADR-0024). Three
  * rules make it honest:
  *
  *  - THE WHOLE STORED LIST, NOT THE ROWS. The rows are the open entries and at
@@ -118,8 +118,8 @@ export function PriorityQueue({
         title={`Nothing is at the top of ${they === "you" ? "your" : "their"} list`}
         description={
           they === "you"
-            ? "Your priorities are the tasks you mean to do first, in order. Your assistant puts them in place with set_priorities, and so can somebody you report to — once they are, this is where you reorder them."
-            : "Their priorities are the tasks they mean to do first, in order — set by them, or by somebody in their line. Nothing is on the list yet."
+            ? "Tasks you mark to do first appear here, in order."
+            : "Tasks they mark to do first appear here."
         }
       />
     );
@@ -214,15 +214,13 @@ export function PriorityQueue({
       {/* WHY THE ROWS DO NOT MOVE, said once above them — a drag is a write
           with no button to disable, and rows that will not lift read as a
           list that is broken. Nothing where they do. */}
-      {blocked && <p className="t-caption work-write-note">{`Reordering is off. ${blocked}`}</p>}
+      {blocked && <p className="t-caption work-write-note">{blocked}</p>}
       {/* AND WHAT A LEAD'S REORDER DOES, said before it is made: the engine
           stamps the queue with who ordered it and wakes the person to take it
           up, so a reorder of somebody else's list is an instruction to them
           rather than a private arrangement. */}
       {!blocked && theirs && (
-        <p className="t-caption work-write-note">
-          {`A reorder here is stamped on ${theirs}’s queue with your name, and ${theirs} is told what is now first.`}
-        </p>
+        <p className="t-caption work-write-note">{`${theirs} is told when you reorder.`}</p>
       )}
       <RefusalNote write={write} />
       <div className="work-list">
@@ -271,11 +269,7 @@ export function PriorityQueue({
       {/* A PAGE IS A PAGE: the rows are the open entries up to the engine's
           block bound, and the rest of the list keeps its places around any row
           moved here — `reorder.ts`. */}
-      {hidden > 0 && (
-        <p className="t-caption">
-          {`The first ${plural(rows.length, "open entry", "open entries")} of ${total}. The other ${hidden} keep their places when one of these moves.`}
-        </p>
-      )}
+      {hidden > 0 && <p className="t-caption">{`Showing ${rows.length} of ${total}.`}</p>}
     </div>
   );
 }
@@ -316,7 +310,7 @@ export function listLine({
   const held = rows.filter((r) => r.assignee === whose).length;
   const paged = rows.length < all;
   if (held === rows.length && !paged) {
-    return `${head} — ${all === 1 ? "it is" : "all"} assigned to ${they}.`;
+    return `${head}. ${all === 1 ? "It is" : "All are"} assigned to ${they}.`;
   }
   const split = paged
     ? `${held} of the ${rows.length} shown ${held === 1 ? "is" : "are"} assigned to ${they}`
@@ -324,7 +318,7 @@ export function listLine({
       ? `none assigned to ${they}`
       : `${held} of them assigned to ${they}`;
   const queue = held === rows.length ? "" : ` The Queue counts only the work assigned to ${they}.`;
-  return paged ? `${head}. ${capitalize(split)}.${queue}` : `${head} — ${split}.${queue}`;
+  return `${head}. ${capitalize(split)}.${queue}`;
 }
 
 function capitalize(s: string): string {
@@ -332,7 +326,8 @@ function capitalize(s: string): string {
 }
 
 /**
- * Why a reorder cannot be made here, or "" where it can.
+ * The note above the rows when a reorder cannot be made here, or "" where it
+ * can.
  *
  * THE WRITE'S OWN ACCESS FIRST — offline, nobody signed in, a token bound to
  * nobody, somebody else's queue — because that is the sentence every other
@@ -345,8 +340,8 @@ export function holdOf(
   stored: StoredOrder | undefined,
   count: number,
 ): string {
-  if (!access.can) return access.reason;
-  if (!stored) return "Reading the order as it is stored before it can be changed.";
-  if (count < 2) return "One task has no order to change.";
+  if (!access.can) return `Reordering is off. ${access.reason}`;
+  if (!stored) return "Loading the order.";
+  if (count < 2) return "Reordering is off. One task has no order to change.";
   return "";
 }

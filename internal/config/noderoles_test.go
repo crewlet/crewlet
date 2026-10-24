@@ -26,7 +26,7 @@ func TestBothSidesOfTheLeafLinkLoad(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := ParseBootstrap([]byte(doc), EnvOnly()); err != nil {
+			if _, err := ParseRunnableBootstrap([]byte(doc), EnvOnly()); err != nil {
 				t.Fatalf("refused: %v", err)
 			}
 		})
@@ -133,7 +133,7 @@ func TestAStatelessNodeNamesTheObjectBackend(t *testing.T) {
 		"  objects:\n    backend: s3\n    s3:\n      bucket: files\n      region: us-east-1\n" +
 		"stream:\n  leaf:\n    urls: [\"nats-leaf://a.example.com:7422\"]\n" +
 		"coordination:\n  type: embedded-kv\n"
-	b, err := ParseBootstrap([]byte(doc), EnvOnly())
+	b, err := ParseRunnableBootstrap([]byte(doc), EnvOnly())
 	if err != nil {
 		t.Fatalf("a stateless node naming the backend was refused: %v", err)
 	}

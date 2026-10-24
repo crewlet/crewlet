@@ -5,11 +5,12 @@
  */
 
 import { useMemo } from "react";
-import { Card, EmptyState, EmptyValue, Tag } from "@crewlethq/ui";
+import { Mark } from "~/ui/glyph.tsx";
+import { Card, EmptyState, EmptyValue, Tag, InlineCode, TableTextCell } from "@crewlethq/ui";
 import { CalendarGlyph } from "@crewlethq/icons/glyphs";
 import { peekHref } from "~/app/frame/DetailRail.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { TextCell } from "~/app/frame/cells.tsx";
+
 import { describe as describeCron } from "~/lib/cron.ts";
 import { fmtDateTime, inTime, tsKey } from "~/lib/format.ts";
 import { useSchedules } from "~/lib/store-hooks.ts";
@@ -25,7 +26,7 @@ export function Schedules({ seat, now }: { seat: Seat; now: number }) {
         size="compact"
         icon={<CalendarGlyph size={28} />}
         title="Nothing recurring reaches them"
-        description="A schedule wakes a seat on a cron, scoped to a role or to a unit. This seat declares none and is named by none."
+        description="No schedule includes this seat."
       />
     );
   }
@@ -34,7 +35,7 @@ export function Schedules({ seat, now }: { seat: Seat; now: number }) {
       <Card.Header
         icon={<CalendarGlyph size="sm" />}
         count={rows.length}
-        subtitle="Their own, and every unit schedule a fire actually reaches them through."
+        subtitle="Their own and their team’s"
       >
         <Card.Title as="h3">Recurring work</Card.Title>
       </Card.Header>
@@ -49,7 +50,9 @@ export function Schedules({ seat, now }: { seat: Seat; now: number }) {
           {
             key: "name",
             header: "Name",
-            cell: (row) => <TextCell icon="calendar">{row.name}</TextCell>,
+            cell: (row) => (
+              <TableTextCell icon={<Mark name={"calendar"} size="xs" />}>{row.name}</TableTextCell>
+            ),
             sortValue: (row) => row.name,
           },
           {
@@ -59,7 +62,7 @@ export function Schedules({ seat, now }: { seat: Seat; now: number }) {
             header: "When",
             cell: (row) => (
               <span className="row gap-1">
-                <code className="inline nowrap">{row.cron}</code>
+                <InlineCode whole>{row.cron}</InlineCode>
                 {describeCron(row.cron) && (
                   <span className="muted truncate">{describeCron(row.cron)}</span>
                 )}
@@ -76,9 +79,11 @@ export function Schedules({ seat, now }: { seat: Seat; now: number }) {
               row.scope_type === "role" ? (
                 <span className="muted">theirs</span>
               ) : (
-                <TextCell icon="building-complex">{row.scope_id}</TextCell>
+                <TableTextCell icon={<Mark name={"building-complex"} size="xs" />}>
+                  {row.scope_name}
+                </TableTextCell>
               ),
-            sortValue: (row) => `${row.scope_type}/${row.scope_id}`,
+            sortValue: (row) => `${row.scope_type}/${row.scope_name}`,
           },
           {
             // THE ENGINE'S OWN ANSWER, and the REASON where it has none: a
@@ -96,7 +101,7 @@ export function Schedules({ seat, now }: { seat: Seat; now: number }) {
               ) : !row.enabled ? (
                 <Tag appearance="outline">disabled</Tag>
               ) : row.next_run ? (
-                // FORWARD, not `DateCell`: `relTime` spells a future instant
+                // FORWARD, not `TableDateCell`: `relTime` spells a future instant
                 // as an elapsed one.
                 <span className="t-caption" title={fmtDateTime(row.next_run)}>
                   {inTime(row.next_run, now)}
@@ -108,7 +113,7 @@ export function Schedules({ seat, now }: { seat: Seat; now: number }) {
           {
             key: "task",
             header: "Task",
-            cell: (row) => <TextCell>{row.task}</TextCell>,
+            cell: (row) => <TableTextCell>{row.task}</TableTextCell>,
           },
         ]}
       />

@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -26,13 +27,11 @@ import (
 // A turn that detaches a coding run completes more than once under one run id:
 // the dispatch segment parks, and each collected run resumes a segment of its
 // own — minutes later, often on another node. Each segment charges what IT
-// spent, under an operation id naming the segment:
-//
-//	turn/<run id>/dispatch
-//	turn/<run id>/resume/<launch id>
-//
-// so a segment re-run after a failed resume, or a record delivered twice,
-// lands on one turn row and is counted once. ONLY THE DISPATCH SEGMENT COUNTS
+// spent, under an operation id DERIVED from the segment ([segmentOpID]): the
+// run, which segment it is (`dispatch`, or `resume` and the launch it resumed
+// from), minted at the instant the RUN began — so a segment re-run after a
+// failed resume, or a record delivered twice, lands on one turn row and is
+// counted once. ONLY THE DISPATCH SEGMENT COUNTS
 // A TURN (`turns=1`): a resumed segment is more of the same turn, and counting
 // it again would put three turns on a task one turn worked on.
 //
@@ -86,6 +85,12 @@ type segmentCharge struct {
 	// carry is what a parked segment charged to nothing hands on to the
 	// segment that finishes the turn; nil otherwise.
 	carry *execstate.Uncharged
+	// soFar is what a parked segment hands on of the turn's own
+	// measurement, charged or not ([turnTelemetry.measured]); nil on a
+	// segment that did not park, and on one of a turn whose earlier
+	// segments a build before the measurement parked
+	// ([turnTelemetry.measuredWhole]).
+	soFar *execstate.TurnSoFar
 	// aux is the segment's attribution for the auxiliary calls its charge
 	// makes — the card's rewrite — with no tally: [Engine.withCards] gives
 	// the card one of its own, since the segment's was summed already.
@@ -104,11 +109,38 @@ func (c segmentCharge) native() bool {
 }
 
 // segmentOpID is the operation id of one segment of a run.
-func segmentOpID(runID, launch string, resumed bool) string {
-	if !resumed {
-		return "turn/" + runID + "/dispatch"
+//
+// IN THE OPERATION-ID GRAMMAR, through [statelog.DeriveOpID], because the
+// tracker's ledger is what collapses a segment charged twice and it reads the
+// instant an id was minted: an id outside the grammar carries none, so on a
+// node whose ledger has ever lost a row it is answered `unknown` and never
+// published — the segment's spend silently lost. The ids this replaced
+// (`turn/<run>/dispatch`) were exactly that.
+//
+// MINTED AT THE RUN'S OWN START, which its id carries (run ids are time-ordered
+// for this reader — [statelog.OpMintedAt]): never the segment's, which a re-run
+// moves, and never the call's. A resumed segment is the same run minutes or
+// days later, so every segment of it shares the instant and differs only in
+// the identity: which segment, and for a resume the launch it resumed from.
+//
+// UNLESS THE ATTEMPT WAS REBASED (ADR-0029): a segment that comes longer after
+// its work began than the operation ledger remembers — a backlog a seat was
+// handed a month late, a resume a month after the launch — mints at the
+// instant [rebaseFor] chose for the attempt, its rebasedTo. Minted at the start
+// instead, its charge would be answered `unknown` on every node and the
+// segment's spend lost; and the rebase is recorded before the attempt writes
+// anything, so a retry of the same segment reads it back and derives the same
+// id, which is what collapses a charge landed twice.
+func segmentOpID(runID, launch string, resumed bool, rebasedTo time.Time) string {
+	at := rebasedTo
+	if at.IsZero() {
+		at, _ = statelog.OpMintedAt(runID)
 	}
-	return "turn/" + runID + "/resume/" + launch
+	segment := "dispatch"
+	if resumed {
+		segment = "resume"
+	}
+	return statelog.DeriveOpID(at, "turn-spend", runID, segment, launch)
 }
 
 // chargeFor decides what this segment charges: its item from the turn's rules,
@@ -147,8 +179,16 @@ func (t turnTelemetry) chargeFor(spend runner.Spend, res turn.Result, err error,
 	// the seat's counters like any call the meter does not carry.
 	cardUse := t.aux()
 	cardUse.Tally, cardUse.Budget = nil, nil
-	charge := segmentCharge{item: item, opID: segmentOpID(t.runID, t.launchID, t.resumed),
+	charge := segmentCharge{item: item, opID: segmentOpID(t.runID, t.launchID, t.resumed, t.rebasedTo),
 		aux: cardUse, ended: ended}
+	if res.Suspended && t.measuredWhole() {
+		// WHAT THE TURN HAS MEASURED OF ITSELF, handed on — but only by a
+		// turn that knows its whole past: a measurement of a turn whose
+		// first segment nobody measured would be read by the segment that
+		// ends it as the whole turn ([turnTelemetry.measuredWhole]).
+		soFar := t.measured(spend, ended)
+		charge.soFar = &soFar
+	}
 	if item == nil {
 		if res.Suspended {
 			charge.carry = unchargedOf(total)

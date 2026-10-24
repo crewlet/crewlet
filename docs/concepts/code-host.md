@@ -16,7 +16,7 @@ company may host some repositories natively and keep others on a vendor.
 ## What it is
 
 A repository is **rows on the code log** (`CREWLET_CODE_LOG`), the state
-log's fifth domain (see [Replication](../guides/replication.md)): every change
+log's eighth domain (see [Replication](../guides/replication.md)): every change
 to a repository is one record on that ordered log, arbitrated at the broker,
 and every data node applies it into its own identical copy of the rows. There
 is no primary repository anywhere — no node's disk holds "the" repository and
@@ -926,32 +926,36 @@ repository whose bitmap the node's memory cannot hold
 
 A person reaches a repository with git's own smart HTTP at
 `https://<the API's address>/git/<name>.git`, on the node's `api.port`, and
-with the credential they already have: their own Tier A API token, given to
-git as the **password** (git asks for it, or a credential helper answers —
+with a token the engine already knows: their own machine token (minted with
+[`crewlet iam token -login`](../reference/cli.md#crewlet-iam) or from the
+dashboard's Account page, and acting as them), or a Tier A token the identity
+directory binds to their seat, given to git as the **password** (git asks for
+it, or a credential helper answers —
 [`crewlet code credential`](../reference/cli.md#crewlet-code-credential) is the
 engine's own, reading the token from the environment; the user name is
 ignored). There is no second credential for git — no SSH key and
 no deploy token — because the token is already how the engine knows who a
 person is, and a second identity system would be one more thing to revoke and
-audit ([ADR-0037](https://github.com/crewlet/crewlet/blob/main/adr/0037-a-person-reaches-git-with-their-own-bound-token.md)).
+audit ([ADR-0051](https://github.com/crewlet/crewlet/blob/main/adr/0051-a-person-reaches-git-with-their-own-bound-token.md)).
 
-- **A token bound to a human seat pushes as that person** — the seat whose
-  `contact.crewlet_operator_id` names the token. That is the same binding the
-  dashboard's writes and an assistant's operator tools go by, and git is the
-  third way a person acts beside them.
-- **A token bound to nobody fetches only**, and so does every caller of a
-  disabled `api.auth` guard: a push is refused at its first request, before
-  anything is sent, saying the token is not bound to a person.
+- **A credential acting as a human seat pushes as that person** — every
+  person holds one ([humans in the org](humans-in-the-org.md)), so a person's
+  own machine token pushes as them, and so does a Tier A token the identity
+  directory binds to their seat. That is the same principal the dashboard's
+  writes and an assistant's operator tools act as, and git is the third way a
+  person acts beside them.
+- **A credential bound to no seat fetches only** — a Tier A token or a service
+  account the directory binds to none: a push is refused at its first request,
+  before anything is sent, saying the token is not bound to a person.
 - **Every push is recorded** as one `operator_acted` event with transport
-  `git`: the token as the actor, the person beside it, the repository and
-  what became of the push — refused ones included. A fetch is a read and is
-  not.
-- **`/git/` and `/code/` are always guarded**, reads included, whatever
-  `api.auth.allow_anonymous_read` opens: a repository is the company's source.
-  The token may arrive as git's Basic password on `/git/` and on no other
-  route. Neither prefix is ever on the [public
-  listener](../reference/api-endpoints.md#which-listener-serves-what) — it
-  serves outside parties, who hold no operator token.
+  `git`, naming the caller exactly as every write does — the seat, its kind
+  and the credential the push came through — with the repository and what
+  became of the push, refused ones included. A fetch is a read and is not.
+- **`/git/` and `/code/` are guarded like every route**, reads included: a
+  repository is the company's source. The token may arrive as git's Basic
+  password on `/git/` and on no other route. Neither prefix is ever on the
+  [public listener](../reference/api-endpoints.md#which-listener-serves-what) —
+  it serves outside parties, who hold no token of the company's.
 
 git is served by every node whose `node.roles` name `git` (an undeclared node
 has every role), once the company sets `code.native`: the node builds the code
@@ -973,12 +977,12 @@ no list of who may push to which repository, because such a list is a second
 org chart, and it drifts from the first the day a seat moves units. It is
 computed every time it is asked, from the repository's row and the chart the
 deciding node runs, by one rule
-([ADR-0040](https://github.com/crewlet/crewlet/blob/main/adr/0040-a-repository-grant-is-derived-from-the-chart.md)).
+([ADR-0054](https://github.com/crewlet/crewlet/blob/main/adr/0054-a-repository-grant-is-derived-from-the-chart.md)).
 
 | Who | What they may do |
 |---|---|
-| A person — a token bound to a human seat | **maintain** every repository: create, update, force and delete any branch, create and delete tags |
-| A token bound to nobody | **read** every repository: fetch and clone, never push |
+| A person — a credential acting as their human seat | **maintain** every repository: create, update, force and delete any branch, create and delete tags |
+| A credential bound to no seat — a Tier A token or a service account | **read** every repository: fetch and clone, never push |
 | A seat | the **lesser** of its tier and its relation to the repository, below |
 
 A seat's **tier** is its `role.code.access` and caps what it may do anywhere:
@@ -1037,7 +1041,7 @@ seat the chart relates to the repository in no other way — and nothing else:
   "not found" — and what it holds is.
 
 **Visibility narrows seats only.** A person reads every repository whatever it
-says, through a bound token or an unbound one: the people who run the company
+says, and so does a credential bound to no seat: the people who run the company
 are never shut out of its code by a setting that exists to keep one team's
 seats out of another's. A seat's own branches are only on the repositories it
 may read, so a `full_access` seat outside the unit has none on a `unit`
@@ -1119,7 +1123,7 @@ in a node's cache would leave a refused push's objects there — fetchable by id
 from that one node, and a base a later push could build on that no other node
 holds. So a push is received in a throwaway **scratch** repository whose one
 alternate is the cache, and its pack enters the cache only once its row has
-applied ([ADR-0036](https://github.com/crewlet/crewlet/blob/main/adr/0036-a-repositorys-refs-move-only-by-records-and-a-cache-is-derived.md)).
+applied ([ADR-0050](https://github.com/crewlet/crewlet/blob/main/adr/0050-a-repositorys-refs-move-only-by-records-and-a-cache-is-derived.md)).
 The scratch is removed when the request ends, and a node that crashed with one
 open sweeps it at its next boot.
 
@@ -1135,8 +1139,8 @@ also stores a bundle and waits for its record. What the engine's own packages
 do at initialisation is held small by a test of their init trace, so a table a
 package could build at first use is not built on every push.
 
-**Checked before it is stored.** A push naming more than 1 000 refs, a token
-bound to nobody, an archived or deleted repository, a deletion or a direct
+**Checked before it is stored.** A push naming more than 1 000 refs, a credential
+bound to no seat, an archived or deleted repository, a deletion or a direct
 push a protection refuses — each is refused before receive-pack runs, and
 nothing is stored. A forced update of a ref a protection keeps from forcing,
 and a blob larger than `code.limits.max_blob_bytes`, are known only once the
@@ -1329,7 +1333,7 @@ words, since git does not read the header.
 
 | What happened | What git prints | What to do |
 |---|---|---|
-| No credential, or a wrong one | git asks for one (a 401 challenge) | Give your API token as the password. |
+| No credential, or a wrong one | git asks for one (a 401 challenge) | Give your token as the password. |
 | The company hosts no code | `this company does not host code (code.native is not set)` (404) | Turn the code host on ([`code.native`](../guides/code.md#turn-it-on)). |
 | The node is applying the configuration the fleet activated | `this node is applying the configuration the fleet activated and answers once that apply ends: retry in 5 seconds, or against another node (applying)` (503) | Retry. |
 | The node could not apply the configuration the fleet activated | `this node could not apply the configuration the fleet activated, which hosts code (config_apply_failed: GET /fleet and this node's log say why): …`, or `this node could not read the configuration the fleet activated, so it cannot say whether this company hosts code (config_apply_failed: …): ask another node …` (503) | Ask another node. An operator reads why in `GET /fleet` and the node's log, and activates a corrected configuration. |
@@ -1339,7 +1343,7 @@ words, since git does not read the header.
 | The repository is deleted | `fatal: remote error: repository <name> is deleted; declaring it again in code.repos restores it …` | Declare it again before its purge to restore it as it was. |
 | The repository is being purged | `fatal: remote error: repository <name> is being purged, which cannot be undone; once the purge completes, declaring its name in code.repos creates a new, empty repository`, or `(repo_deleted: repository <name> was purged and holds nothing; …)` on a push the purge overtook | Nothing brings it back. Once its purge completes, declaring the name again creates a new, empty repository. |
 | The repository is archived (a push) | `fatal: remote error: …archived…`, or `(repo_archived: …)` per ref | Fetch only; unarchive it in `code.repos` to push. |
-| A token bound to nobody (a push) | `fatal: remote error: this token is not bound to a person: …`, or `(not_permitted: this token is not bound to a person: …)` on every ref of a push sent without its advertisement | Push with your own token — the one your human seat's `contact.crewlet_operator_id` names. |
+| A token bound to nobody (a push) | `fatal: remote error: this token is not bound to a person: …`, or `(not_permitted: this token is not bound to a person: …)` on every ref of a push sent without its advertisement | Push with a token that acts as your human seat — your own machine token (`crewlet iam token -login`). |
 | A command the pusher's grant does not cover ([who may read and push](#who-may-read-and-push)) | `(not_permitted: …)`, saying what the pusher holds, what the command needs and what would admit it | Ask for what the sentence names, or push where it says. |
 | More than 1 000 refs in one push | `(this push names more than 1000 refs; push them in parts …)` | Push the refs in groups. |
 | More ref updates than one push's record holds — some six hundred of the longest refs whose characters the code log spells long (`&`, `<`, `>`) | `(this push's ref updates take up to <size> of its record, past the 1023.5 KiB one push may; push them in parts …)` | Push the refs in groups. Nothing of the push was run or stored. |

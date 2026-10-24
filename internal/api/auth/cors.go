@@ -52,11 +52,21 @@ type CORS struct{ allowed []string }
 
 // NewCORS reads the posture out of Tier A. A nil bootstrap is same-origin
 // only, which is the same answer a config that names no origin gives.
+//
+// Each entry is kept in the browser's spelling ([Origin]), and a request's
+// `Origin` is compared in it too, so an entry written `https://Ops.Example.com`
+// permits the `https://ops.example.com` every browser sends.
 func NewCORS(b *config.Bootstrap) *CORS {
 	if b == nil {
 		return &CORS{}
 	}
-	return &CORS{allowed: slices.Clone(b.API.Auth.AllowedOrigins)}
+	allowed := make([]string, 0, len(b.API.Auth.AllowedOrigins))
+	for _, entry := range b.API.Auth.AllowedOrigins {
+		if origin := Origin(entry); origin != "" && !slices.Contains(allowed, origin) {
+			allowed = append(allowed, origin)
+		}
+	}
+	return &CORS{allowed: allowed}
 }
 
 // Origins reports how many origins are permitted, for the startup line that
@@ -108,7 +118,9 @@ func (c *CORS) Middleware(next http.Handler) http.Handler {
 		// that did not include the origin would serve one site's
 		// permission to every other.
 		w.Header().Add("Vary", "Origin")
-		if slices.Contains(c.allowed, origin) {
+		// The header echoes the Origin as the browser sent it, which is
+		// the one value it matches the response against.
+		if canonical := Origin(origin); canonical != "" && slices.Contains(c.allowed, canonical) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			if preflight {
 				w.Header().Set("Access-Control-Allow-Methods",

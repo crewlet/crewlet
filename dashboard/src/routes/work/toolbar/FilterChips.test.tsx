@@ -226,7 +226,7 @@ function serving(answers: Partial<Record<QueryName, unknown>>) {
     async (what: string, _params?: Record<string, unknown>) => answers[what as QueryName] ?? {},
   );
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue(
     withDerived({
       name: "Acme",
@@ -284,11 +284,11 @@ test("the locked assignee draws no chip, and an assignee key on the address draw
   }
 });
 
-// A LIST HELD TO WHAT SOMEBODY ASKED IS HELD TO THE PERSON, NOT TO A HANDLE.
-// `viewer` is what gives the asker their second name — the questions put
-// through their own credential — so the lock carries both, whatever the
-// address says; and it leaves the ASSIGNEE the reader's to narrow by, since
-// who holds the work a question waits on is an ordinary thing to ask.
+// A LIST HELD TO WHAT SOMEBODY ASKED IS HELD TO THE PERSON, by the ONE name
+// their questions are recorded under (`iam.ActorFor`) — whatever the address
+// says — with no `viewer=` beside it, which the engine refuses on every
+// question; and it leaves the ASSIGNEE the reader's to narrow by, since who
+// holds the work a question waits on is an ordinary thing to ask.
 test("an asked-by lock reaches the wire as the person, and keeps the assignee a filter", async () => {
   location.hash = "#/me/asked-by-me?assignee=ada&asked_by=bo";
   const query = serving({ work_items: answered });
@@ -299,7 +299,7 @@ test("an asked-by lock reaches the wire as the person, and keeps the assignee a 
   for (const call of items) {
     const params = call[1] as Record<string, unknown>;
     expect(params.asked_by).toBe("rui");
-    expect(params.viewer).toBe("rui");
+    expect(params).not.toHaveProperty("viewer");
     expect(params.assignee).toBe("ada");
   }
   // THE ASSIGNEE IS A CHIP HERE, because it is the reader's own narrowing.

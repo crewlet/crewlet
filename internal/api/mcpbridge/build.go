@@ -1,6 +1,8 @@
 package mcpbridge
 
 import (
+	"strings"
+
 	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
@@ -29,12 +31,15 @@ const BaseURLVar = "CREWLET_MCP_BRIDGE_URL"
 //
 // The engine OPENS a run's session and mints its endpoint, and the same process
 // serves it: a session is a live tool surface, so no other process can (see
-// [Bridge.session]). The token is still signed from the fleet's key material
-// rather than a per-process key, and the reason is diagnosis rather than
-// verification: a peer that a misrouted call reaches (a load balancer in front
-// of several nodes) can then tell a token the fleet signed from a forged one,
-// and log that the bridge URL addresses the wrong node rather than that the
-// route is under attack. See [runtoken.KeyFrom] and [Bridge.resolve].
+// [Bridge.session]). The token is still signed from the fleet's key material,
+// and the reason is diagnosis rather than verification: a peer that a
+// misrouted call reaches (a load balancer in front of several nodes) can then
+// tell a token the fleet signed from a forged one, and log that the bridge URL
+// addresses the wrong node rather than that the route is under attack. See
+// [runtoken.Material] and [Bridge.resolve]. A keyring that cannot sign for the
+// fleet is refused ([runtoken.ErrNoKeyring]) rather than given a per-process
+// key: there is no node without one, so reaching here with one is a mistake to
+// name, not a posture to degrade into.
 //
 // base is [BaseURLVar] as the caller PARSED it — an absolute http or https URL
 // with a host, its trailing '/' trimmed — never the raw variable. Every
@@ -50,22 +55,22 @@ const BaseURLVar = "CREWLET_MCP_BRIDGE_URL"
 // than an error: most deployments run no agent mode. The route is then absent,
 // and a seat that asks for agent mode is refused with the variable named —
 // which is a better failure than a run that starts and cannot call a tool.
-func Build(base string, keyMaterial []string) *Bridge {
+func Build(base string, material runtoken.Material) (*Bridge, error) {
 	if base == "" {
-		return nil
+		return nil, nil
 	}
-	key := runtoken.KeyFrom(KeyDomain, keyMaterial)
-	if len(key) == 0 {
-		// INFO, NOT A WARNING: a per-process key serves every session this
-		// node opens, on one node or a fleet, because only the opening node
-		// ever verifies a token. What it loses is the peer's diagnosis
-		// above, which is worth a line an operator can find and not an
-		// alarm on a configuration that works.
-		log.Info("mcp_bridge_signing_key_ephemeral",
-			"detail", "no Tier A secrets.keys, so bridge tokens are signed with "+
-				"a per-process key: a peer that a misrouted bridge call reaches "+
-				"cannot tell it from a forged token. `crewlet secrets keygen` "+
-				"gives every node the same key")
-	}
-	return New(Options{Key: key, BaseURL: base})
+	return New(Options{Material: material, BaseURL: base})
+}
+
+// Configured reports whether env names a bridge base URL: whether the engine
+// parses one and [Build] builds a bridge at all.
+//
+// ITS OWN FUNCTION because a node asks it before there is an engine to build
+// one: `crewlet run` binds the listener a seats node serves its bridge on the
+// moment the process can, which is long before the engine reads the variable,
+// and a second spelling of "is it set" there would be a node binding a
+// listener for a bridge its engine never builds, or building one with no
+// listener bound for it.
+func Configured(env func(string) string) bool {
+	return env != nil && strings.TrimSpace(env(BaseURLVar)) != ""
 }

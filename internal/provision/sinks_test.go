@@ -15,6 +15,46 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
+// runFor is the party a run is for: a person through their own machine token,
+// so each part of what a sealed row records is distinct.
+var runFor = secrets.Author{Name: "jane.doe", Kind: "operator",
+	OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a"}
+
+// A MINTED CREDENTIAL RECORDS THE PARTY THE RUN WAS FOR, whole, and says it
+// was minted: an operator listing their secrets months later reads who
+// connected the integration and through what. Mutation: record the name
+// alone and the credential half fails.
+func TestAMintedCredentialRecordsWhoTheRunWasFor(t *testing.T) {
+	t.Parallel()
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "s.db"), store.Options{})
+	t.Cleanup(func() { _ = db.Close() })
+	key, err := secrets.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	cipher, err := secrets.NewCipher(secrets.Keyring{
+		ActiveID: "k1", Keys: map[string][]byte{"k1": key},
+	})
+	if err != nil {
+		t.Fatalf("NewCipher: %v", err)
+	}
+	values := db.SecretValues(cipher)
+	if err := provision.NewSecretStoreSink(values, runFor).Record(t.Context(),
+		"GL_BOT_TOKEN", "glpat-minted"); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	rows, err := values.List(t.Context())
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows = %+v (%v)", rows, err)
+	}
+	got := secrets.Author{Name: rows[0].UpdatedBy, Kind: rows[0].UpdatedByKind,
+		OperatorID: rows[0].OperatorID}
+	if got != runFor || rows[0].Source != secrets.SourceProvision {
+		t.Errorf("the row records %+v from %q, want %+v from %q", got,
+			rows[0].Source, runFor, secrets.SourceProvision)
+	}
+}
+
 // ONE SUITE OVER ALL THREE SINKS, because the contract is what the
 // provisioning CLIs depend on and a sink that honours it differently is a
 // run whose safety depends on which flag the operator passed.
@@ -43,7 +83,7 @@ func sinkCases() []sinkCase {
 					t.Fatalf("NewCipher: %v", err)
 				}
 				values := db.SecretValues(cipher)
-				return provision.NewSecretStoreSink(values, "operator"),
+				return provision.NewSecretStoreSink(values, runFor),
 					func(t *testing.T) map[string]string {
 						got, err := values.All(context.Background())
 						if err != nil {
@@ -466,7 +506,7 @@ func (refusingValues) Unset(context.Context, string) (bool, error) {
 // and the retry that would have caught it never runs.
 func TestForgettingReportsWhatItCouldNotDelete(t *testing.T) {
 	t.Parallel()
-	sink := provision.NewSecretStoreSink(refusingValues{}, "operator")
+	sink := provision.NewSecretStoreSink(refusingValues{}, runFor)
 
 	err := sink.Forget(t.Context(), "SRE_ATLASSIAN_TOKEN", "SRE_ATLASSIAN_EMAIL")
 
@@ -480,5 +520,20 @@ func TestForgettingReportsWhatItCouldNotDelete(t *testing.T) {
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("Forget = %v, which does not name %s", err, name)
 		}
+	}
+}
+
+// THE SECRET STORE'S NEXT STEP IS ONE A RUNNING ENGINE TAKES.
+//
+// A value sealed here reaches a running engine at its next apply, and the
+// gesture is a re-activation — through the running node, since that is the
+// engine there is to rebuild. `crewlet config activate` opens the node's own
+// store, which a running engine holds, so naming it sent an operator to a
+// command refused for exactly the case the step is about.
+func TestTheSecretStoresNextStepIsTakenThroughTheRunningNode(t *testing.T) {
+	t.Parallel()
+	step := provision.NewSecretStoreSink(refusingValues{}, runFor).NextStep()
+	if !strings.Contains(step, "POST /config/reload") || strings.Contains(step, "config activate") {
+		t.Errorf("NextStep = %q, want the running node's reload", step)
 	}
 }

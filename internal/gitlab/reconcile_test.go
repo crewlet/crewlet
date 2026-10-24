@@ -1613,46 +1613,6 @@ func TestAReconcileNeedsAClientAndASink(t *testing.T) {
 	}
 }
 
-// A NODE WITH NO KEYRING READS AND REPORTS RATHER THAN FAULTING.
-//
-// A nil sink is still refused above — that is the CLI's case, where a run
-// that minted live credentials and printed none of them is the worst outcome
-// available. What the reconcile loop hands such a node is
-// provision.ReadOnly, and the difference matters: ErrNoSink from the entry
-// point is a FAULT, which integration.Observe reports as "the last pass could
-// not read this integration" and retries on the waiting backoff for ever. An
-// ordinary deployment that keeps its ${VAR}s in the environment has no
-// secrets.keys at all, so that was every tick, permanently, on a node doing
-// exactly what it was configured to do.
-func TestASinklessPassReportsRatherThanFailing(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	res, err := reconcileAgainst(t, f, provision.ReadOnly(), map[string]string{
-		"swe": "GITLAB_TOKEN_SWE",
-	})
-	if err != nil {
-		t.Fatalf("a node with no keyring failed the whole pass: %v", err)
-	}
-	if res == nil {
-		t.Fatal("a sinkless pass returned no result to report from")
-	}
-	findings := res.Findings()
-	if len(findings) != 1 || findings[0].Kind != integration.FindingCredentialMissing {
-		t.Fatalf("findings = %+v, want the missing keyring reported", findings)
-	}
-	if findings[0].Subject != "secrets.keys" {
-		t.Errorf("the finding names %q rather than the setting to add",
-			findings[0].Subject)
-	}
-	// AND NOTHING WAS CREATED AT THE INSTANCE. This pass makes an ACCOUNT
-	// before it mints a token and the rollback can only revoke the token,
-	// so reaching the first Record on a sink that cannot record leaves an
-	// identity nobody asked for and nothing recorded.
-	if len(res.Created) != 0 {
-		t.Errorf("a node that cannot seal a credential created %v", res.Created)
-	}
-}
-
 // A CANCELLED RUN STILL REVOKES. Ctrl+C during provisioning is exactly when
 // leaving credentials live is worst: the operator believes nothing happened.
 // A rollback that inherited the cancelled context would do nothing at all.
@@ -2087,7 +2047,7 @@ func TestDecommissionRemovesManagedAccountsWithNoSeat(t *testing.T) {
 
 // A COMPANY WITH NO PUBLIC BASE URL IS DEGRADED, NOT READY.
 //
-// integrations.public_base_url is optional, the reconcile loop feeds it into
+// api.external_url is optional, the reconcile loop feeds it into
 // every pass verbatim, and with nothing in it this pass registers no webhook
 // at all: no merge request, pipeline, issue or comment ever reaches a seat.
 // The pass said so in a NOTE — which only whoever runs the CLI ever sees —
@@ -2114,7 +2074,7 @@ func TestNoPublicBaseURLIsReportedRatherThanNoted(t *testing.T) {
 	if len(findings) != 1 || findings[0].Kind != integration.FindingIngressBlocked {
 		t.Fatalf("findings = %+v, want the delivery path reported as blocked", findings)
 	}
-	if findings[0].Subject != "integrations.public_base_url" {
+	if findings[0].Subject != "api.external_url" {
 		t.Errorf("the finding names %q rather than the setting to fill in",
 			findings[0].Subject)
 	}
@@ -2127,6 +2087,27 @@ func TestNoPublicBaseURLIsReportedRatherThanNoted(t *testing.T) {
 	if len(res.Created) != 1 || sink.value("GITLAB_TOKEN_SWE") == "" {
 		t.Errorf("the seat half did not run: created %v, sink %v",
 			res.Created, sink.recorded())
+	}
+}
+
+// BEHIND A PUBLIC LISTENER THE FINDING NAMES THE PUBLIC LISTENER'S KEY, and
+// so does the note the CLI prints: `api.external_url` there is the person's
+// address, set, and answering 404 for the route a GitLab hook would target.
+func TestBehindAPublicListenerTheMissingAddressNamesItsKey(t *testing.T) {
+	t.Parallel()
+	const key = "api.public.external_url"
+	res, err := reconcileWith(t, newAdminInstance(), newRecordingSink(),
+		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
+		func(o *gitlab.Options) { o.WebhookBase, o.WebhookBaseKey = "", key })
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	findings := res.Findings()
+	if len(findings) != 1 || findings[0].Subject != key {
+		t.Fatalf("findings = %+v, want one naming %s", findings, key)
+	}
+	if !strings.Contains(findings[0].Detail, "set "+key+" to") {
+		t.Errorf("the sentence names another setting: %q", findings[0].Detail)
 	}
 }
 
@@ -3265,8 +3246,10 @@ func TestAChangedAccessLevelReachesAnExistingMembership(t *testing.T) {
 	}
 }
 
-// AND A PER-HANDLE OVERRIDE DOES TOO, which is the same drift reached from
-// the other config field.
+// AND A PER-SEAT OVERRIDE DOES TOO, which is the same drift reached from the
+// other config field. The plan carries it, resolved against the chart by
+// [gitlab.PlanFor], so the pass reads the seat's entry and nothing keyed on a
+// handle — a key in the config the plan did not resolve changes nothing.
 func TestAPerHandleAccessOverrideReachesAnExistingMembership(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
@@ -3276,8 +3259,10 @@ func TestAPerHandleAccessOverrideReachesAnExistingMembership(t *testing.T) {
 		t.Fatalf("first run: %v", err)
 	}
 	if _, err := reconcileWith(t, f, sink, seats, func(o *gitlab.Options) {
-		o.Config.Provisioning.AccessLevels = map[string]config.GitLabAccessLevel{
-			"cto": config.GitLabMaintainer,
+		for i := range o.Plan.Seats {
+			if o.Plan.Seats[i].Handle == "cto" {
+				o.Plan.Seats[i].AccessLevel = string(config.GitLabMaintainer)
+			}
 		}
 	}); err != nil {
 		t.Fatalf("second run: %v", err)

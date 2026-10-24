@@ -24,13 +24,18 @@ import (
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // Credentials are a topology's people: a token for every human seat and one
 // bound to nobody, the Tier A guard every git node's server admits them by,
-// and the seat each credential is bound to.
+// and the seat each credential is bound to — answered as the engine's guard
+// reads a Tier A token's binding (auth.SeatBindings): the identity directory's
+// row under the token's login, resolved against a running org that holds
+// every person's seat as a human one.
 type Credentials struct {
 	tokens map[string]string // person → token; "" bound to nobody
 }
@@ -74,13 +79,42 @@ func (c *Credentials) Guard() *config.Bootstrap {
 	return b
 }
 
-// Person is the human seat a credential is bound to (host.Options.Persons):
-// every person's own, and none for ci's.
-func (c *Credentials) Person(operatorID string) string {
-	if _, ok := c.tokens[operatorID]; ok && operatorID != "" && operatorID != "ci" {
-		return operatorID
+// OperatorID is the credential person's token pushes through, as every record
+// names it (iam.ActorFor): the Tier A token's login, `token:<id>` — ci's for
+// the token bound to nobody.
+func (c *Credentials) OperatorID(person string) string {
+	if person == "" {
+		return iam.TokenLogin("ci")
 	}
-	return ""
+	return iam.TokenLogin(person)
+}
+
+// guard is the API's guard over [Credentials.Guard], each person's token bound
+// to their own seat and ci's to none, as the engine binds a Tier A token
+// through the identity directory.
+func (c *Credentials) guard() *auth.Guard {
+	return auth.New(c.Guard()).BindSeats(auth.SeatBindings{Directory: c, Chart: c})
+}
+
+// BoundSeat is the identity directory's row under a token's login
+// (auth.BindingDirectory): every person's token bound to their own seat, and
+// none for ci's — a credential nobody binds.
+func (c *Credentials) BoundSeat(_ context.Context, login string) (session.PersonRow, error) {
+	for person := range c.tokens {
+		if person != "" && login == iam.TokenLogin(person) {
+			return session.PersonRow{Found: true, Stage: iam.StageActive, Login: login, Seat: person}, nil
+		}
+	}
+	return session.PersonRow{}, nil
+}
+
+// Seat is the running org a binding is resolved in (session.Chart): every
+// person's seat, as a human one.
+func (c *Credentials) Seat(_ context.Context, handle string) (session.Seat, bool, error) {
+	if _, ok := c.tokens[handle]; !ok || handle == "" {
+		return session.Seat{}, false, nil
+	}
+	return session.Seat{Handle: handle, Kind: session.SeatKindHuman}, true, nil
 }
 
 // defaultCacheMaxBytes is a git node's cache budget unless a topology sets
@@ -240,7 +274,7 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 	}
 	if n.host, err = host.New(host.Options{
 		Cache: n.cache, Git: n.pool, Estate: g.o.Estate, Objects: objects,
-		Persons: g.o.Credentials.Person, Audit: audit, Limits: limits,
+		Audit: audit, Limits: limits,
 		DeletedRetention: func() time.Duration { return deletedRetention },
 		NodeID:           n.id, Timing: g.o.Timing, Faults: g.o.Faults, Metrics: n.metrics, Logger: g.o.Logger,
 	}); err != nil {
@@ -253,7 +287,7 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 	mux.Handle(host.PatternInfoRefs, n.host.InfoRefs())
 	mux.Handle(host.PatternUploadPack, n.host.UploadPack())
 	mux.Handle(host.PatternReceivePack, n.host.ReceivePack())
-	n.srv = httptest.NewUnstartedServer(auth.New(g.o.Credentials.Guard()).Middleware(mux))
+	n.srv = httptest.NewUnstartedServer(g.o.Credentials.guard().Middleware(mux))
 	n.srv.Config.ErrorLog = log.New(serverLog{t: g.life}, "", 0)
 	n.srv.Start()
 	return n

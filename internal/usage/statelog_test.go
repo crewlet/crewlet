@@ -2,6 +2,7 @@ package usage_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -28,10 +29,12 @@ func TestTheUsageDomainIsACertifiedDomain(t *testing.T) {
 			Encode: encodeSuiteRecord,
 			// THE VERSIONED-FIELD TABLE. It is empty — every kind this
 			// domain writes, a person's day included, is in the base
-			// format — so there is no record to carry; a kind this
-			// build's successor adds brings a Carrying case, which the
-			// suite refuses to run without.
-			Fields: usage.VersionedFields(),
+			// format — and the record carrying each field fails on the
+			// first row somebody adds without a case; a kind this build's
+			// successor adds is a row keyed on the kind's value, and brings
+			// its record the same way.
+			Fields:   usage.VersionedFields(),
+			Carrying: carryingSuiteField,
 			Kinds: []string{string(usage.KindSeat), string(usage.KindSchedule),
 				string(usage.KindPerson)},
 			Rows:  usage.NewRows,
@@ -40,15 +43,29 @@ func TestTheUsageDomainIsACertifiedDomain(t *testing.T) {
 	})
 }
 
+// carryingSuiteField builds a valid record carrying exactly one versioned
+// field, with its version left for the encoder to stamp.
+//
+// THE TABLE IS EMPTY, so nothing reaches this today. A row added to it without
+// a case here fails the suite rather than passing unexamined: a record that did
+// not carry the field would be stamped at 1 and reported as the path being
+// wrong, which is a fixture fault dressed as a domain one.
+func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
+	return nil, fmt.Errorf("no suite record carries %s — add a case that sets it "+
+		"and nothing else versioned", field.Name)
+}
+
 // suiteWrite is one flush of the domain's own [usage.Publisher] — the only
 // writer this domain has — over a node whose store holds one seat's day, run
 // as the suite's own node so the subject's node and the stamp's writer agree
 // as they do in production.
-func suiteWrite(ctx context.Context, pub *statelog.Publisher, _ store.ReplicatedReader) error {
+func suiteWrite(ctx context.Context, pub *statelog.Publisher, estate store.ReplicatedReader) error {
 	p, err := usage.NewPublisher(usage.PublisherDeps{
-		Store: oneSeatDay{}, Log: pub, NodeID: statelogtest.SuiteWriter,
-		Zone: func() *time.Location { return time.UTC },
-		Now:  func() time.Time { return time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC) },
+		Store: oneSeatDay{}, Log: pub, Estate: estate, NodeID: statelogtest.SuiteWriter,
+		Caught:      caught,
+		Zone:        func() *time.Location { return time.UTC },
+		Now:         func() time.Time { return time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC) },
+		FireHistory: fireHistory,
 	})
 	if err != nil {
 		return err
@@ -64,6 +81,35 @@ func (oneSeatDay) UsageMark(context.Context, store.UsageWindow) (store.UsageMark
 	return store.UsageMark{Events: 1, LastEvent: 1}, nil
 }
 
+// UsageRederive answers that no settle has changed an older day, and
+// UsageWatermark that the node owes nothing older than the two days a tick
+// fingerprints: the suite's write is one tick of those two days.
+func (oneSeatDay) UsageRederive(context.Context) (store.UsageRederive, bool, error) {
+	return store.UsageRederive{}, false, nil
+}
+
+func (oneSeatDay) ClearUsageRederive(context.Context, int64) (bool, error) { return false, nil }
+
+func (oneSeatDay) UsageWatermark(context.Context) (time.Time, bool, error) {
+	return time.Time{}, false, nil
+}
+
+func (oneSeatDay) SetUsageWatermark(context.Context, time.Time) error { return nil }
+
+// UsageDayWindow, UsageDayContaining and PinUsageDay record no cut: every day
+// is the company clock's own, which never moves here.
+func (oneSeatDay) UsageDayWindow(context.Context, string) (store.UsageWindow, bool, error) {
+	return store.UsageWindow{}, false, nil
+}
+
+func (oneSeatDay) UsageDayContaining(context.Context, time.Time) (string, store.UsageWindow, bool, error) {
+	return "", store.UsageWindow{}, false, nil
+}
+
+func (oneSeatDay) PinUsageDay(_ context.Context, _ string, w store.UsageWindow) (store.UsageWindow, error) {
+	return w, nil
+}
+
 func (oneSeatDay) UsageForDay(context.Context, store.UsageWindow) (store.UsageDay, error) {
 	return store.UsageDay{Seats: []store.UsageSeat{{
 		AgentID: "suite-seat", Handle: "dev", Role: "Dev",
@@ -75,7 +121,8 @@ func (oneSeatDay) UsageForDay(context.Context, store.UsageWindow) (store.UsageDa
 
 // encodeSuiteRecord builds one valid record for an object of either kind, at
 // any version — including one above this build's, which is what a newer peer
-// publishes and this build has to retain.
+// publishes and this build has to retain — and, at version zero, at whatever
+// the domain's own encoder stamps, which is the writer's path.
 func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 	subject := usage.Subject{Kind: usage.Kind(kind), Node: "suite-node", Day: "2026-09-23"}
 	rec := usage.Record{

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // THE SECRET STORE STANDS IN FRONT OF THE ENVIRONMENT THE ENGINE WAS HANDED.
@@ -22,7 +23,7 @@ func TestTheSecretStoreFrontsTheHandedEnvironment(t *testing.T) {
 		"SOME_TOKEN": "the-stale-one-from-dot-env",
 	}
 	if err := sv.Set(t.Context(), "SOME_TOKEN", "the-rotated-one",
-		"operator", "cli", time.Now().UTC()); err != nil {
+		testAuthor, secrets.SourceCLI, time.Now().UTC()); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	if !e.refreshSecrets(t.Context()) {

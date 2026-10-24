@@ -1,15 +1,14 @@
 /**
  * What an operation will do before a dialog confirms it.
  *
- * A DIALOG PREVIEWS THE OPERATION ITSELF. The Move, Delete and Change kind
- * dialogs record the operation they are about to dispatch through the
- * reducer's own door (`recordIntent`) and apply it to a copy of the draft, so
- * the references it clears, the fields it strips and the seats it removes are
- * the ones the model will clear, strip and remove, not a second account of
- * the rules written for a dialog.
+ * A DIALOG PREVIEWS THE OPERATION ITSELF. The Move and Delete dialogs record
+ * the operation they are about to dispatch through the reducer's own door
+ * (`recordIntent`) and apply it to a copy of the draft, so the references it
+ * clears and the seats it removes are the ones the model will clear and
+ * remove, not a second account of the rules written for a dialog.
  *
- * SCHEDULE RUNNERS ARE THE ONE RULE RESTATED, and only as a warning. A move,
- * a removal or a kind change can leave a schedule nothing could ever run, and
+ * SCHEDULE RUNNERS ARE THE ONE RULE RESTATED, and only as a warning. A move
+ * or a removal can leave a schedule nothing could ever run, and
  * the engine refuses the whole company for it (`ErrUnrunnableSchedule`), often
  * on a unit the operator never touched. The builder authors no schedules, so
  * the refusal would arrive with no way out in view. The two rules are
@@ -24,7 +23,15 @@
 
 import type { ScheduleSpec } from "~/protocol/index.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
-import { allSeats, allUnits, type Draft, type DraftSeat, type DraftUnit } from "./model/draft.ts";
+import {
+  allSeats,
+  allUnits,
+  seatWithHandle,
+  unitIdOf,
+  type Draft,
+  type DraftSeat,
+  type DraftUnit,
+} from "./model/draft.ts";
 import { isRecord } from "./model/json.ts";
 import {
   apply,
@@ -70,27 +77,18 @@ export interface StrandedSchedule {
 /** Every enabled unit schedule in the draft that nothing could run, in the document's order. */
 export function strandedSchedules(draft: Draft): StrandedSchedule[] {
   const units = [...allUnits(draft)];
-  const firstUnitNamed = (name: string) => units.find(({ unit }) => unit.data.name === name)?.unit;
+  const unitKeyed = (key: string) => units.find(({ unit }) => unitIdOf(unit) === key)?.unit;
 
   // Root seats the engine places in a unit by their `unit:` reference are
   // that unit's direct members (`attachRootSeats`), and leave the root.
   const attached = new Map<NodeKey, DraftSeat[]>();
-  const placed = new Set<NodeKey>();
   for (const seat of draft.roles) {
     const ref = seat.data.unit;
-    const target = typeof ref === "string" && ref !== "" ? firstUnitNamed(ref) : undefined;
+    const target = typeof ref === "string" && ref !== "" ? unitKeyed(ref) : undefined;
     if (!target) continue;
     attached.set(target.key, [...(attached.get(target.key) ?? []), seat]);
-    placed.add(seat.key);
   }
   const membersOf = (unit: DraftUnit) => [...unit.roles, ...(attached.get(unit.key) ?? [])];
-
-  // A lead names a seat by its name, the first seat of that name in the
-  // engine's order: root seats that stayed at the root, then each unit's
-  // members depth-first.
-  const seatNamed = (name: string): DraftSeat | undefined =>
-    draft.roles.find((s) => !placed.has(s.key) && s.data.name === name) ??
-    units.flatMap(({ unit }) => membersOf(unit)).find((s) => s.data.name === name);
 
   const parentOf = new Map(units.map(({ unit, parent }) => [unit.key, parent]));
   const byKey = new Map(units.map(({ unit }) => [unit.key, unit]));
@@ -112,8 +110,7 @@ export function strandedSchedules(draft: Draft): StrandedSchedule[] {
       const stranded = (reason: StrandedSchedule["reason"]) =>
         out.push({ unit: unit.key, unitName: unit.data.name, schedule: schedule.name, reason });
       if (schedule.target === "lead") {
-        const leadName = effectiveLead(unit);
-        const lead = leadName === "" ? undefined : seatNamed(leadName);
+        const lead = seatWithHandle(draft, effectiveLead(unit));
         if (lead && kindOf(lead.data) === "human") stranded("lead");
       } else if (!membersOf(unit).some((seat) => kindOf(seat.data) === "agent")) {
         stranded("members");
@@ -136,11 +133,7 @@ export function newlyStranded(before: Draft, after: Draft): StrandedSchedule[] {
 
 /** The sentence a dialog shows for a stranded schedule. */
 export function strandedSentence(s: StrandedSchedule): string {
-  const why =
-    s.reason === "lead"
-      ? "it runs as the unit's lead, and the lead would be a human seat"
-      : "it runs on the unit's direct agent members, and the unit would have none";
-  return `Schedule ${s.schedule} on ${s.unitName} would have no runner: ${why}. The engine refuses the save until it is disabled or has a runner.`;
+  return `Schedule ${s.schedule} on ${s.unitName} would have nobody to run it. Disable it or give it a runner.`;
 }
 
 // ---------------------------------------------------------------------------

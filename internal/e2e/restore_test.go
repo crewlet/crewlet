@@ -71,18 +71,23 @@ func s3Objects(endpoint string) config.StoreObjects {
 // bucket at endpoint: coordination on the broker, as every fleet runs it, so
 // the backup carries the coordination buckets — the activation pointer, the
 // sealed secrets, the object store's record — and the restore has to put them
-// back; and the founder's and the developer's tokens.
-func restoreBoot(endpoint, dir string) func(*config.Bootstrap) {
+// back; the developer's token beside the fixture's; and ring, the backed-up
+// node's keyring.
+//
+// THE SAME RING BEFORE AND AFTER, because the runbook restores a node onto the
+// keyring it was backed up under: every record on the restored logs is signed
+// under it and the sealed secrets are sealed with it, so a node booted onto a
+// ring of its own — which [withServingTierA] mints afresh for every node —
+// refuses what it restored. Held after the harness's own, so it wins.
+func restoreBoot(endpoint, dir string, ring keyring) func(*config.Bootstrap) {
 	return func(b *config.Bootstrap) {
 		b.Node.ID = restoreNodeID
 		b.Coordination.Type = config.CoordinationEmbeddedKV
 		b.Store.Path = filepath.Join(dir, "crewlet.db")
 		b.Stream.StoreDir = filepath.Join(dir, "stream")
 		b.Store.Objects = s3Objects(endpoint)
-		b.API.Auth.Tokens = []config.APIToken{
-			{ID: e2eOperatorID, Token: e2eOperatorToken},
-			{ID: e2eDevID, Token: e2eDevToken},
-		}
+		ring.hold(b)
+		withDevCredential(b)
 	}
 }
 
@@ -95,8 +100,7 @@ func takeBackup(t *testing.T, n *node, dir string) backup.Manifest {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set("Authorization", "Bearer "+e2eOperatorToken)
-	resp, err := n.server.Client().Do(req)
+	resp, err := n.server.Client().Do(present(req))
 	if err != nil {
 		t.Fatalf("POST /backup: %v", err)
 	}
@@ -233,14 +237,19 @@ func TestARestoredNodeServesEveryRefWhole(t *testing.T) {
 	gittest.RequireNode(t)
 	const repo = "restored"
 
+	ring := fleetRing(t)
 	fakeA := s3fake.Start(t, restoreBucket)
-	a := startNode(t, nodeSpec{company: withCode(repo), boot: restoreBoot(fakeA.URL, t.TempDir())})
+	a := startNode(t, nodeSpec{company: withCode(repo), boot: restoreBoot(fakeA.URL, t.TempDir(), ring)})
 	awaitRepo(t, repo, code.RepoStatusActive, a)
 
 	// FOUR PUSHES, SO FOUR PACKS — one object each: three commits on main,
 	// one carrying an incompressible blob so one pack is not trivially
 	// small, then a branch with a commit of its own and an annotated tag
 	// pushed together.
+	// BOUND BEFORE THE PUSHES, because a push is a person's own and a token
+	// bound to nobody fetches only. The restored node is only read from below,
+	// which needs no binding.
+	bindDev(t, a)
 	dev := codetest.PersonWithToken(t, e2eDevToken)
 	work := dev.Init()
 	push := func(refspecs ...string) {
@@ -295,7 +304,7 @@ func TestARestoredNodeServesEveryRefWhole(t *testing.T) {
 		t.Fatalf("the backup's objects directory holds %d objects and its manifest says %d",
 			put, manifest.Objects.Objects)
 	}
-	b := startNode(t, nodeSpec{company: withCode(repo), boot: restoreBoot(fakeB.URL, restored)})
+	b := startNode(t, nodeSpec{company: withCode(repo), boot: restoreBoot(fakeB.URL, restored, ring)})
 
 	for _, v := range []int{0, 2} {
 		if got := dev.LsRemote(gitURL(b, repo), v); !maps.Equal(got, want[v]) {
@@ -339,7 +348,7 @@ func TestARestoredNodeServesEveryRefWhole(t *testing.T) {
 			t.Fatalf("company config: %v", err)
 		}
 		boot := config.DefaultBootstrap()
-		restoreBoot(fakeC.URL, kept)(&boot)
+		restoreBoot(fakeC.URL, kept, ring)(&boot)
 		e, err := engine.New(t.Context(), engine.Options{
 			Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
 			Environment: nodeEnvironment(nil), GitHook: codetest.HookCommand(t),

@@ -294,10 +294,11 @@ func acknowledges(p placement.NodeProfile) bool {
 // never opens keeps it that way, while the presence the same host renews goes
 // on saying the process is running.
 //
-// Otherwise it is hydration ([Engine.NativeHydrated]): a node whose copy of the
-// company's records is behind claims nothing new until it has caught up.
+// Otherwise it is hydration ([Engine.StateLogHydrated]), the one admission
+// gate: a node whose copy of the company's records is behind claims nothing
+// new until it has caught up.
 func (e *Engine) seatsAdmitted(ctx context.Context) bool {
-	return e.mode.Publishes() && e.NativeHydrated(ctx)
+	return e.mode.Publishes() && e.StateLogHydrated(ctx)
 }
 
 // writeSet is this node's own write side, as [Engine.writeSide] hands it out:

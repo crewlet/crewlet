@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
@@ -566,6 +567,8 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 			"are attributed to, and APIToken.Token is tagged",
 		"Stream.Credentials": "a PATH to a NATS credentials file, not the " +
 			"material at it",
+		"APIAuth.MinPasswordLength": "the floor a person's password is held " +
+			"to, a number of characters, never a password",
 	}
 	usedFields := map[string]bool{}
 
@@ -609,7 +612,7 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 				continue
 			}
 			name := strings.ToLower(field.Name)
-			tagged := isSecret(field)
+			tagged := secrets.Field(field)
 			if stringMap(field.Type) && credentialMaps[field.Name] && !tagged {
 				if _, ok := exemptMaps[rt.Name()+"."+field.Name]; !ok {
 					t.Errorf("%s.%s is a map[string]string named %s and is not "+
@@ -859,14 +862,15 @@ func seatTokens(c *Company) map[string]string {
 	return out
 }
 
-// unitTokens reads each unit's tracker token by name, wherever it sits.
+// unitTokens reads each unit's tracker token by KEY, wherever it sits —
+// the identity a restore matches it by.
 func unitTokens(c *Company) map[string]string {
 	out := map[string]string{}
 	var walk func(units []Unit)
 	walk = func(units []Unit) {
 		for i := range units {
 			if token, ok := units[i].MCPEnv["tracker"]["TOKEN"]; ok {
-				out[units[i].Name] = token
+				out[units[i].IdentityKey()] = token
 			}
 			walk(units[i].Children)
 		}
@@ -952,12 +956,13 @@ func TestACredentialFollowsItsMemberAcrossAMove(t *testing.T) {
 	}
 }
 
-// A RENAME IS A NEW IDENTITY, AND ITS MASKS ARE REFUSED RATHER THAN GUESSED.
+// A NEW IDENTITY'S MASKS ARE REFUSED RATHER THAN GUESSED — AND A DISPLAY
+// RENAME IS NOT A NEW IDENTITY.
 //
-// A seat's identity is its handle, so a new display name over a declared
-// handle keeps its credentials, while a new handle has no prior value of its
-// own. A renamed unit loses its own credentials the same way, and the seats
-// inside it, whose identities did not change, keep theirs.
+// A seat's identity is its handle and a unit's is its key, so a new display
+// name over either keeps its credentials, while a new handle or a new id has
+// no prior value of its own. The seats inside a renamed unit, whose
+// identities did not change, keep theirs either way.
 func TestARenameIsRefusedAndOnlyTheRenamedMemberLosesItsMask(t *testing.T) {
 	t.Parallel()
 	original, err := ParseCompany([]byte(movingDoc))
@@ -967,20 +972,60 @@ func TestARenameIsRefusedAndOnlyTheRenamedMemberLosesItsMask(t *testing.T) {
 	edited := original.Redact()
 	edited.Units[0].Roles[0].Name = "Chief Technology Officer" // handle cto is declared, so kept
 	edited.Units[1].Roles[0].Handle = "product-manager"        // a new identity
-	edited.Units[0].Name = "Eng"                               // a new unit identity
+	edited.Units[0].Name = "Eng"                               // display only: the key is unchanged
+	edited.Units[0].Children[0].ID = "plat"                    // a new unit identity
 	edited.RestoreRedacted(original)
 
 	tokens := seatTokens(edited)
 	if tokens["cto"] != "cto-literal" || tokens["sre"] != "sre-literal" {
 		t.Errorf("seats whose identity did not change lost their credentials: %v", tokens)
 	}
+	if got := unitTokens(edited)["engineering"]; got != "engineering-literal" {
+		t.Errorf("a unit renamed for display lost its credential: %q", got)
+	}
 	assertUnresolved(t, edited,
-		"units[0].mcp_env.tracker.TOKEN",
+		"units[0].children[0].mcp_env.tracker.TOKEN",
 		"units[1].roles[0].mcp_env.tracker.TOKEN")
 	err = edited.Validate()
 	if err == nil || !strings.Contains(err.Error(), "units[1].roles[0].mcp_env.tracker.TOKEN") {
 		t.Errorf("validation does not name the renamed seat's credential: %v", err)
 	}
+}
+
+// TestRestoreByIdentityFollowsTheKey is the other half, and the one a name
+// match passes by accident: two units SWAP their display names while keeping
+// their ids. Matched by key each keeps its own credential; matched by name
+// each is handed the other unit's — a restore that is not refused, not
+// reported, and wrong.
+func TestRestoreByIdentityFollowsTheKey(t *testing.T) {
+	t.Parallel()
+	const doc = `
+name: Acme
+mcp_servers:
+  - {name: tracker, command: tracker-mcp, shared: false}
+units:
+  - name: Platform Team
+    id: core
+    mcp_env: {tracker: {TOKEN: core-literal}}
+  - name: Core Team
+    id: plat
+    mcp_env: {tracker: {TOKEN: plat-literal}}
+`
+	original, err := ParseCompany([]byte(doc))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	edited := original.Redact()
+	edited.Units[0].Name, edited.Units[1].Name = "Core Team", "Platform Team"
+	edited.RestoreRedacted(original)
+
+	if got := unitTokens(edited); !maps.Equal(got, map[string]string{
+		"core": "core-literal", "plat": "plat-literal",
+	}) {
+		t.Errorf("after the two units swapped display names their credentials = %v; "+
+			"a restore keyed on the name hands each unit the other's", got)
+	}
+	assertUnresolved(t, edited)
 }
 
 // AN EMPTY IDENTITY MATCHES NOTHING.
@@ -1140,7 +1185,7 @@ func holdsCredential(t reflect.Type, seen map[reflect.Type]bool) bool {
 			if !field.IsExported() {
 				continue
 			}
-			if isSecret(field) || holdsCredential(field.Type, seen) {
+			if secrets.Field(field) || holdsCredential(field.Type, seen) {
 				return true
 			}
 		}

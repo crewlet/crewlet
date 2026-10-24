@@ -25,9 +25,13 @@ vi.mock("~/lib/store-hooks.ts", () => ({
 vi.mock("~/lib/viewer.ts", () => ({ useViewer: vi.fn() }));
 
 const JANE: ViewerState = {
-  operatorID: "founder",
-  operator: true,
+  login: "founder",
+  grants: ["admin", "tracker", "knowledge"],
+  admin: true,
+  tracker: true,
+  knowledge: true,
   handle: "jane",
+  owner: "jane",
   name: "Jane Founder",
   kind: "human",
   acts: ["steer_turn"],
@@ -41,7 +45,7 @@ const JANE: ViewerState = {
 };
 
 beforeEach(() => {
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue(null as never);
   vi.mocked(useViewer).mockReturnValue(JANE);
 });
@@ -76,7 +80,9 @@ describe("SteerTurnButton", () => {
     expect(steer.hasAttribute("disabled") || steer.getAttribute("aria-disabled") === "true").toBe(
       true,
     );
-    expect(heldBecause(steer)).toMatch(/coding agent's own loop/);
+    expect(heldBecause(steer)).toMatch(
+      /A coding run is working\. Answer it, or comment on the task\./,
+    );
     fireEvent.click(steer);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
@@ -84,6 +90,6 @@ describe("SteerTurnButton", () => {
   test("is held on a turn that has ended", () => {
     render(<SteerTurnButton turnId="t-1" seat="CEO" running={false} parked={false} />);
     const steer = screen.getByRole("button", { name: /Steer/ });
-    expect(heldBecause(steer)).toMatch(/a note reaches only a turn that is running/);
+    expect(heldBecause(steer)).toMatch(/The turn has ended\./);
   });
 });

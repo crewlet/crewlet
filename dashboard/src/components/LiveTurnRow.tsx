@@ -23,17 +23,27 @@
  * calls and output are readable — whenever the engine has named the turn. A
  * seat whose turn has not published an id yet draws the same row, unlinked,
  * rather than a link to nothing.
+ *
+ * # Status for everybody, the trail for an admin
+ *
+ * The row is STATUS — who, which step, which round, the tool running now —
+ * and every signed-in reader is sent it. What the seat was woken by and what
+ * it passed to its tools are its trail, which the engine withholds from a
+ * reader who may not read that seat's (`body_withheld`): the row then names
+ * the tool and nothing it was handed ([lastCallLine]). The turn's page is the
+ * company-wide trail and an admin's, so only an admin's row is a link to it;
+ * anybody else's would open on a lock.
  */
 
-import { StatusDot, Stepper, Tag } from "@crewlethq/ui";
+import { StatusDot, Stepper, Tag, useMediaMatch } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { href } from "~/app/router.tsx";
 import { pathOf } from "~/app/frame/objects.ts";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { fmtElapsed } from "~/lib/format.ts";
-import { useMediaQuery } from "~/lib/media.ts";
 import { staleness, stateLine, turnItemKey, type OrgIndex, type Seat } from "~/lib/seats.ts";
 import { turnIdOf } from "~/lib/turns.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { lastCallLine, turnSteps } from "~/lib/turnsteps.ts";
 import type { AgentRow } from "~/protocol/index.ts";
 
@@ -92,15 +102,17 @@ export function LiveTurnRow({ row, index, now }: { row: AgentRow; index: OrgInde
   // profile's Current turn does: "Execute · round 1 of 24" left a 358px row no
   // room for Review, which wrapped onto a line of its own behind a dangling
   // connector.
-  const phone = useMediaQuery(`(width < ${PHONE_BREAKPOINT}px)`);
+  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
   const { steps, current, detail } = turnSteps(row, { inLabel: !phone });
   const callLine = lastCallLine(row);
   const last = phone && detail ? [detail, callLine].filter(Boolean).join(" · ") : callLine;
   const quiet = quietMark(row, now);
   const doing = liveDoing(row, now, seat);
+  const { admin } = useViewer();
+  const linked = turnId !== "" && admin;
   const body = (
     <>
-      <SeatAvatar name={name} kind="agent" ring="info" size="sm" />
+      <SeatAvatar name={name} kind="agent" avatar={seat?.avatar} status="working" size="sm" />
       <span className="live-body">
         <span className="live-head">
           <span className="live-name">{name}</span>
@@ -123,7 +135,7 @@ export function LiveTurnRow({ row, index, now }: { row: AgentRow; index: OrgInde
   );
   return (
     <li>
-      {turnId ? (
+      {linked ? (
         <a className="live-row" href={href(pathOf({ kind: "turn", id: turnId }))}>
           {body}
         </a>

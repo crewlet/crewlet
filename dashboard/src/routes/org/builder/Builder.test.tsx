@@ -1,13 +1,15 @@
 /**
  * The builder decides its posture from what the engine answers, checks
  * every draft with a dry run of exactly the write a save would send, and
- * keeps the operator's work through a change of token.
+ * keeps the operator's work through a change of reader.
  */
 
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { clearToken, storeToken, type OrgProjection } from "~/protocol/index.ts";
+import { setStepUpConfirmer, type OrgProjection } from "~/protocol/index.ts";
+import { ACT_ERRORS } from "~/contract/errors.ts";
+import { DRAFT_STORAGE_KEY } from "./model/persistence.ts";
 import { useBuilder, type BuilderViewHandle } from "./BuilderContext.tsx";
 import { menuEntryLabel } from "~/testing.tsx";
 import { href } from "~/app/router.tsx";
@@ -16,6 +18,7 @@ import { FillRequest } from "~/app/fill.tsx";
 import {
   company,
   Engine,
+  EDITOR,
   fakeSurfaces,
   FakeView,
   json,
@@ -23,6 +26,46 @@ import {
   refusal,
 } from "./testkit.tsx";
 import { withDerived } from "~/test/org.ts";
+
+/** Nobody signed in, as the `viewer` question answers it. */
+const NOBODY = { login: "", owner: "", grants: [] };
+
+/** Somebody signed in who holds no Admin. */
+const READER = { login: "reader", owner: "reader", grants: [] };
+
+/**
+ * Somebody bound to a seat whom the `viewer` question answers as holding
+ * Admin — on a node that serves it.
+ */
+const BOUND_ADMIN = { ...EDITOR, handle: "ops" };
+
+/**
+ * What a node whose `api.auth.admin` is `refuse` answers [BOUND_ADMIN]'s check
+ * of the whole company. The posture is each node's, applied per request, so a
+ * fleet mid-rollout legally disagrees about it, and a reader the `viewer`
+ * answer called an admin can have a check land where admin is clamped away:
+ * the route admits anybody bound to a seat until it has read what the write
+ * changes, and the admission then refuses every part of it, starting with the
+ * unchanged document, naming Admin. It is the one refusal for want of Admin a
+ * whole-company draft meets, since a reader holding no Admin and leading no
+ * unit is refused the configuration's read before any check is sent.
+ */
+const refusedByANodeRefusingAdmin = () =>
+  json(
+    {
+      error: "unauthorized",
+      reason: "no_grant",
+      grants: ["admin"],
+      refused: [{ kind: "document", id: "", place: "", why: "unchanged", reason: "no_grant" }],
+    },
+    403,
+  );
+
+/** The socket comes back, which is when the frame asks who is reading again. */
+function reconnect(store: { setConnected: (up: boolean) => void }) {
+  act(() => store.setConnected(false));
+  act(() => store.setConnected(true));
+}
 
 beforeEach(() => {
   localStorage.clear();
@@ -74,60 +117,55 @@ describe("the posture table", () => {
   test("no active revision while the org names a company is a node that has not caught up", async () => {
     const engine = new Engine(null);
     mountBuilder({ engine, org: named });
-    expect(
-      await screen.findByText("This node has not caught up with the fleet's configuration yet."),
-    ).toBeDefined();
+    expect(await screen.findByText("This node is still catching up")).toBeDefined();
     expect(screen.getByRole("button", { name: "Retry" })).toBeDefined();
     // Never create mode: nothing is checked, let alone written.
     await new Promise((r) => setTimeout(r, 50));
     expect(engine.checks()).toHaveLength(0);
   });
 
-  test("create mode waits for the org snapshot before deciding", async () => {
+  // THE SOCKET OPENING IS NOT THE SNAPSHOT: an answer that beats it would
+  // offer create mode on a node the fleet runs a company without.
+  test("create mode waits for the org snapshot, not the socket opening, before deciding", async () => {
     const engine = new Engine(null);
-    const { store } = mountBuilder({ engine, connected: false });
+    const { store } = mountBuilder({ engine, org: null });
     await new Promise((r) => setTimeout(r, 50));
     expect(engine.checks()).toHaveLength(0);
     act(() => store.applyOrg(named));
-    expect(
-      await screen.findByText("This node has not caught up with the fleet's configuration yet."),
-    ).toBeDefined();
+    expect(await screen.findByText("This node is still catching up")).toBeDefined();
   });
 
-  test("a refusal with no stored token asks for one", async () => {
+  test("a refusal for nobody signed in asks them to sign in", async () => {
     const engine = new Engine(company());
     engine.script = () => json({ error: "unauthorized" }, 401);
-    mountBuilder({ engine });
-    expect(
-      await screen.findByText("Editing the organization needs an operator token."),
-    ).toBeDefined();
-    expect(screen.getByRole("button", { name: "Set token" })).toBeDefined();
+    mountBuilder({ engine, viewer: () => NOBODY });
+    expect(await screen.findByText("Editing the organization needs you to sign in.")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
   });
 
-  // SETTING A TOKEN IS ALL IT TAKES. The posture is read again on the change,
-  // so an operator who was asked for a token edits without reloading the page.
-  test("setting a token the engine accepts opens edit mode without a reload", async () => {
+  // SIGNED IN AND REFUSED IS A GRANT, NOT A SESSION: telling this reader to
+  // sign in would send them looking for a session they already hold.
+  test("a refusal of somebody signed in names the grant they lack", async () => {
     const engine = new Engine(company());
-    engine.script = (r) =>
-      r.headers.Authorization === "Bearer good" ? null : json({ error: "unauthorized" }, 401);
-    mountBuilder({ engine });
-    expect(
-      await screen.findByText("Editing the organization needs an operator token."),
-    ).toBeDefined();
-    act(() => {
-      storeToken("good");
-    });
+    engine.script = () => json({ error: "unauthorized" }, 403);
+    mountBuilder({ engine, viewer: () => READER });
+    expect(await screen.findByText("Reading the configuration needs Admin access.")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Sign in as somebody else" })).toBeDefined();
+  });
+
+  // SIGNING IN IS ALL IT TAKES. The posture is read again once the frame
+  // learns who is reading, so a person who was asked to sign in edits
+  // without reloading the page.
+  test("a sign-in that brings the grant opens edit mode without a reload", async () => {
+    let who: unknown = NOBODY;
+    const engine = new Engine(company());
+    engine.script = () => (who === NOBODY ? json({ error: "unauthorized" }, 401) : null);
+    const { store } = mountBuilder({ engine, viewer: () => who });
+    expect(await screen.findByText("Editing the organization needs you to sign in.")).toBeDefined();
+    who = EDITOR;
+    reconnect(store);
     expect(await screen.findByText("No problems")).toBeDefined();
     expect(screen.getByText("editable")).toBeDefined();
-    expect(engine.checks().at(-1)!.headers.Authorization).toBe("Bearer good");
-  });
-
-  test("a refusal of a stored token says the token was refused", async () => {
-    localStorage.setItem("crewlet_api_token", "stale");
-    const engine = new Engine(company());
-    engine.script = () => json({ error: "unauthorized" }, 401);
-    mountBuilder({ engine });
-    expect(await screen.findByText("The engine refused this browser's token.")).toBeDefined();
   });
 
   test("a plain 404 is a process that does not serve the configuration", async () => {
@@ -156,22 +194,22 @@ describe("the posture table", () => {
   // unavailable.
   //
   // Driven through `guarded`, which is now the halting check state this is
-  // about. `readonly` was the other one, and it went with the 503
+  // about, as a whole-company draft meets it: a check landing on a node that
+  // refuses admin. `readonly` was the other one, and it went with the 503
   // `no_control_plane` that was its only producer: no process serves the API
   // without the coordination store that refusal described.
   test("a halted builder marks the toolbar's add entries unavailable", async () => {
-    storeToken("reader");
     const engine = new Engine(company());
     engine.script = (r) =>
-      r.query.get("dry_run") === "true" ? json({ error: "forbidden" }, 403) : null;
-    mountBuilder({ engine });
-    expect(await screen.findByText("The engine refused the token")).toBeDefined();
+      r.query.get("dry_run") === "true" ? refusedByANodeRefusingAdmin() : null;
+    mountBuilder({ engine, viewer: () => BOUND_ADMIN });
+    expect(await screen.findByText("Needs Admin access")).toBeDefined();
 
     // An edit is refused before it reaches the log, and says why.
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() => expect(liveRegion().textContent).toContain("Editing is paused"));
 
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add to the organization" }));
     const menu = await screen.findByRole("menu", { name: "Add to the organization" });
     for (const name of ["Add unit", "Add agent seat", "Add human seat"]) {
       expect(within(menu).getByRole("menuitem", { name }).getAttribute("aria-disabled")).toBe(
@@ -249,7 +287,7 @@ describe("the views the builder hosts", () => {
   test("an add is handed to the structure chart rather than opened over it", async () => {
     mountBuilder({ engine: new Engine(company()) });
     await screen.findByText("Drawing the structure chart");
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add to the organization" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
     expect(await screen.findByText("Adding agent to the company")).toBeDefined();
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -266,9 +304,9 @@ describe("the views the builder hosts", () => {
    * second, quieter add.
    */
   test("an add asked from the table or the reporting chart is a dialog", async () => {
-    mountBuilder({ engine: new Engine(company()), hash: "#/agents/edit?view=table" });
+    mountBuilder({ engine: new Engine(company()), hash: "#/company/org/edit?view=table" });
     await screen.findByText("No problems");
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add to the organization" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
     expect(await screen.findByRole("dialog", { name: "Add to Acme" })).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -278,7 +316,7 @@ describe("the views the builder hosts", () => {
     await screen.findByText("Drawing the structure chart");
     fireEvent.click(screen.getByRole("tab", { name: "Reporting" }));
     await screen.findByText("Drawing the reporting chart");
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add to the organization" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
     expect(await screen.findByRole("dialog", { name: "Add to Acme" })).toBeDefined();
   });
@@ -291,7 +329,7 @@ describe("the views the builder hosts", () => {
   test("an add open in the chart becomes a dialog when the reader leaves the chart", async () => {
     mountBuilder({ engine: new Engine(company()) });
     await screen.findByText("Drawing the structure chart");
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add to the organization" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Add unit" }));
     await screen.findByText("Adding unit to the company");
     fireEvent.click(screen.getByRole("tab", { name: "Table" }));
@@ -367,7 +405,7 @@ describe("the views the builder hosts", () => {
     await screen.findByText("No problems");
     expect(screen.queryByText(/^About /)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Select CEO" }));
-    fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Actions for CEO, selected" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Edit reports" }));
     expect(await screen.findByText("About seat:ceo")).toBeDefined();
   });
@@ -450,7 +488,7 @@ describe("checking the draft", () => {
 describe("what an org push re-checks", () => {
   test("the snapshot's first org is not an apply, and the draft is checked once", async () => {
     const engine = new Engine(company());
-    const { store } = mountBuilder({ engine });
+    const { store } = mountBuilder({ engine, org: null });
     await screen.findByText("No problems");
     expect(engine.checks()).toHaveLength(1);
     act(() => store.applySnapshot({ org: named }));
@@ -481,29 +519,72 @@ test("a company with no model provider is told so, and one with a provider is no
   const engine = new Engine(without);
   mountBuilder({ engine });
   // The engine applies the company and holds its agents' work, so the
-  // caution says what waits rather than claiming nothing is applied.
+  // caution says the agents cannot work rather than claiming nothing is applied.
   expect(
-    await screen.findByText(/no agent seat takes a turn: work sent to a seat waits on its inbox/),
+    await screen.findByText(/No model provider is set, so agents can’t work\. Add one with/),
   ).toBeDefined();
   cleanup();
 
   const engineWith = new Engine(company());
   mountBuilder({ engine: engineWith });
   await screen.findByText("No problems");
-  expect(screen.queryByText(/No model provider is configured/)).toBeNull();
+  expect(screen.queryByText(/No model provider is set/)).toBeNull();
 });
 
 describe("the selection in the URL", () => {
-  test("a selected unit is named in the URL, and a rename rewrites it", async () => {
+  // A LINK NAMES THE UNIT BY ITS KEY, which is its identity: a rename moves
+  // nothing a link was made from, so a link shared before it opens the same
+  // unit after.
+  test("a selected unit is named in the URL by its key, which a rename leaves alone", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Select Engineering" }));
-    await waitFor(() => expect(location.hash).toContain("unit=Engineering"));
+    await waitFor(() => expect(location.hash).toContain("unit=engineering"));
 
     fireEvent.click(screen.getByRole("button", { name: "Rename Engineering" }));
-    // The key is the unit's identity, so the name in the URL follows the draft.
-    await waitFor(() => expect(location.hash).toContain("unit=Engineering+Two"));
+    await screen.findByRole("button", { name: "Select Engineering Two" });
+    expect(location.hash).toContain("unit=engineering");
+    expect(location.hash).not.toContain("Engineering");
+  });
+
+  // A CLICK ON NOTHING LETS THE SELECTION GO, and only a click on nothing: a
+  // control acts and keeps it, and nothing under an open dialog is the space
+  // beside the views. A selection used to stay put wherever the reader
+  // clicked next.
+  test("a click on nothing clears the selection, and a click on a control keeps it", async () => {
+    const engine = new Engine(company());
+    mountBuilder({ engine });
+    await screen.findByText("No problems");
+    fireEvent.click(screen.getByRole("button", { name: "Select Engineering" }));
+    await waitFor(() => expect(location.hash).toContain("unit=engineering"));
+
+    // The toolbar's own actions for the selection are a control.
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Actions for Engineering, selected" }),
+    );
+    const menu = await screen.findByRole("menu", { name: "Actions for Engineering, selected" });
+    fireEvent.keyDown(menu, { key: "Escape" });
+    expect(location.hash).toContain("unit=engineering");
+
+    // Words on the page are nothing to select.
+    fireEvent.click(screen.getByText("editable"));
+    await waitFor(() => expect(location.hash).not.toContain("unit="));
+    expect(screen.queryByRole("button", { name: "Actions for Engineering, selected" })).toBeNull();
+  });
+
+  test("a click under an open dialog keeps the selection the dialog is about", async () => {
+    const engine = new Engine(company());
+    mountBuilder({ engine });
+    await screen.findByText("No problems");
+    fireEvent.click(screen.getByRole("button", { name: "Select CEO" }));
+    await waitFor(() => expect(location.hash).toContain("seat=ceo"));
+    fireEvent.click(await screen.findByRole("button", { name: "Actions for CEO, selected" }));
+    const menu = await screen.findByRole("menu", { name: "Actions for CEO, selected" });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: /^Edit\b/ }));
+    await screen.findByRole("dialog", { name: "Edit CEO" });
+    fireEvent.click(screen.getByText("editable"));
+    expect(location.hash).toContain("seat=ceo");
   });
 
   // THE COMPANY IS A NODE TOO, and the only one the draft's tree cannot
@@ -515,9 +596,9 @@ describe("the selection in the URL", () => {
     mountBuilder({ engine });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Select the company" }));
-    const actions = await screen.findByRole("button", { name: "Acme" });
+    const actions = await screen.findByRole("button", { name: "Actions for Acme, selected" });
     fireEvent.click(actions);
-    const menu = await screen.findByRole("menu", { name: "Actions for Acme" });
+    const menu = await screen.findByRole("menu", { name: "Actions for Acme, selected" });
     // Nothing moves or deletes the document the company IS.
     expect(labels(menu)).toEqual(["Add unit", "Add agent seat", "Add human seat", "Edit"]);
     fireEvent.keyDown(menu, { key: "Escape" });
@@ -527,12 +608,12 @@ describe("the selection in the URL", () => {
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
     await screen.findByText("No problems");
-    expect(screen.getByRole("button", { name: "Acme" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Actions for Acme, selected" })).toBeDefined();
   });
 
   test("a link naming a seat selects it and opens its editor, and the toolbar offers that seat's actions", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine, hash: "#/agents/edit?view=visualization&seat=ceo" });
+    mountBuilder({ engine, hash: "#/company/org/edit?view=visualization&seat=ceo" });
     await screen.findByText("No problems");
     // The link was a request to edit the seat, so its form is what opens
     // (`editWiring.test.tsx` holds when, and that it happens once); closed,
@@ -540,19 +621,12 @@ describe("the selection in the URL", () => {
     const editor = await screen.findByRole("dialog", { name: "Edit CEO" });
     fireEvent.keyDown(editor, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    const actions = await screen.findByRole("button", { name: "CEO" });
+    const actions = await screen.findByRole("button", { name: "Actions for CEO, selected" });
     expect(actions.getAttribute("aria-haspopup")).toBe("menu");
     fireEvent.click(actions);
-    const menu = await screen.findByRole("menu", { name: "Actions for CEO" });
+    const menu = await screen.findByRole("menu", { name: "Actions for CEO, selected" });
     // The same actions, in the same order, as the seat's own card offers.
-    expect(labels(menu)).toEqual([
-      "Edit",
-      "Open seat",
-      "Edit reports",
-      "Change to human seat",
-      "Move to",
-      "Delete",
-    ]);
+    expect(labels(menu)).toEqual(["Edit", "Open seat", "Edit reports", "Move to", "Delete"]);
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Open seat" }));
     // THE SEAT'S OWN PAGE, asked for the way every other link in this tree
     // asks: `seatPath` is the ONE place that knows where a seat lives, so
@@ -566,8 +640,8 @@ describe("the selection in the URL", () => {
 
   // A SEAT ADDED IN THIS DRAFT HAS NO SCREEN YET. A check derives its handle
   // at once, and a link built from that handle opened a seat the engine does
-  // not have; its kind, like any seat's, can still be changed.
-  test("a seat added in the draft is offered no screen, and can change kind", async () => {
+  // not have; its reports, like any seat's, can still be edited.
+  test("a seat added in the draft is offered no screen, and its reports can be edited", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine });
     await screen.findByText("No problems");
@@ -577,23 +651,23 @@ describe("the selection in the URL", () => {
     await screen.findByText("Could not reach the engine to check");
     fireEvent.click(screen.getByRole("button", { name: "Select Analyst" }));
     const actionsFor = async () => {
-      fireEvent.click(await screen.findByRole("button", { name: "Analyst" }));
-      return screen.findByRole("menu", { name: "Actions for Analyst" });
+      fireEvent.click(await screen.findByRole("button", { name: "Actions for Analyst, selected" }));
+      return screen.findByRole("menu", { name: "Actions for Analyst, selected" });
     };
     let menu = await actionsFor();
     expect(within(menu).queryByRole("menuitem", { name: "Open seat" })).toBeNull();
-    const kind = within(menu).getByRole("menuitem", { name: "Change to human seat" });
-    expect(kind.getAttribute("aria-disabled")).not.toBe("true");
+    const reports = within(menu).getByRole("menuitem", { name: "Edit reports" });
+    expect(reports.getAttribute("aria-disabled")).not.toBe("true");
     fireEvent.keyDown(menu, { key: "Escape" });
 
     // Then once a check has derived its handle: the URL names it, and there
     // is still no screen to open.
     engine.script = () => null;
-    expect(await screen.findByText("No problems", {}, { timeout: 4000 })).toBeDefined();
+    expect(await screen.findByText("No problems")).toBeDefined();
     await waitFor(() => expect(location.hash).toContain("seat=analyst"));
     menu = await actionsFor();
     expect(within(menu).queryByRole("menuitem", { name: "Open seat" })).toBeNull();
-    expect(within(menu).getByRole("menuitem", { name: "Change to human seat" })).toBeDefined();
+    expect(within(menu).getByRole("menuitem", { name: "Edit reports" })).toBeDefined();
   });
 });
 
@@ -612,12 +686,12 @@ test("a selection made before the engine described the company follows the seat"
   mountBuilder({ engine });
   await waitFor(() => expect(engine.checks()).toHaveLength(1));
   fireEvent.click(await screen.findByRole("button", { name: "Select CEO" }));
-  expect(await screen.findByRole("button", { name: "CEO" })).toBeDefined();
+  expect(await screen.findByRole("button", { name: "Actions for CEO, selected" })).toBeDefined();
   engine.script = () => null;
   act(() => answer());
   await screen.findByText("No problems");
   await waitFor(() => expect(location.hash).toContain("seat=ceo"));
-  expect(screen.getByRole("button", { name: "CEO" })).toBeDefined();
+  expect(screen.getByRole("button", { name: "Actions for CEO, selected" })).toBeDefined();
 });
 
 describe("a revision saved by somebody else", () => {
@@ -658,76 +732,140 @@ describe("a revision saved by somebody else", () => {
   });
 });
 
-describe("a token change mid-edit", () => {
-  test("keeps the draft, reads the configuration again and checks under the new token", async () => {
-    storeToken("first");
+describe("somebody else signing in mid-edit", () => {
+  test("keeps the draft, reads the configuration again and checks for the new reader", async () => {
+    let who: unknown = EDITOR;
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { store } = mountBuilder({ engine, viewer: () => who });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
     const reads = engine.sent("GET").length;
 
-    act(() => {
-      storeToken("second");
-    });
+    who = { ...EDITOR, login: "second", owner: "second" };
+    reconnect(store);
     await waitFor(() => expect(engine.sent("GET").length).toBe(reads + 1));
     await waitFor(() => expect(engine.checks()).toHaveLength(3));
-    const recheck = engine.checks()[2]!;
-    expect(recheck.headers.Authorization).toBe("Bearer second");
     // The edit is still in the draft that was checked.
-    expect(JSON.stringify(recheck.body)).toContain("Lead and more");
+    expect(JSON.stringify(engine.checks()[2]!.body)).toContain("Lead and more");
   });
 
-  test("a dry run refused for the new token pauses editing while the configuration still reads", async () => {
-    storeToken("first");
+  test("a dry run refused for the new reader pauses editing while the configuration still reads", async () => {
+    let who: unknown = EDITOR;
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { store } = mountBuilder({ engine, viewer: () => who });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
 
-    // Reads are served, writes and dry runs are refused: the token lacks the
-    // right to write, which only the check can find out.
+    // The new reader holds Admin as the node answering `viewer` and the read
+    // serves it, while their checks land on a node that refuses admin — a
+    // fleet mid-rollout, which legally disagrees about the posture — so only
+    // the check finds out, and the configuration still reads.
+    const second = { ...BOUND_ADMIN, login: "second", owner: "second", handle: "second" };
     engine.script = (r) =>
-      r.query.get("dry_run") === "true" && r.headers.Authorization === "Bearer reader"
-        ? json({ error: "forbidden" }, 403)
-        : null;
-    act(() => {
-      storeToken("reader");
-    });
-    expect(await screen.findByText("The engine refused the token")).toBeDefined();
+      r.query.get("dry_run") === "true" && who === second ? refusedByANodeRefusingAdmin() : null;
+    who = second;
+    reconnect(store);
+    expect(await screen.findByText("Needs Admin access")).toBeDefined();
     expect(screen.getByText("read only")).toBeDefined();
     expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more");
   });
 
-  test("a token the engine refuses pauses editing without discarding the draft", async () => {
-    storeToken("first");
+  test("nobody signed in pauses editing without discarding the draft", async () => {
+    let who: unknown = EDITOR;
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { store } = mountBuilder({ engine, viewer: () => who });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
 
-    engine.script = (r) => (r.headers.Authorization === "Bearer first" ? null : json({}, 401));
-    act(() => {
-      clearToken();
-    });
+    engine.script = () => (who === EDITOR ? null : json({}, 401));
+    who = NOBODY;
+    reconnect(store);
     expect(
       await screen.findByText(
-        "Editing the organization needs an operator token. Your draft is kept on this page.",
+        "Sign in to edit. Your draft is kept, and leaving to sign in asks first.",
       ),
     ).toBeDefined();
     expect(screen.getByText("read only")).toBeDefined();
-    // The status names what is missing: no token was refused, none is set.
-    expect(await screen.findByText("Needs an operator token")).toBeDefined();
-    expect(screen.queryByText("The engine refused the token")).toBeNull();
+    // The status names what is missing: nobody is signed in, not a grant.
+    expect(await screen.findByText("Needs sign-in")).toBeDefined();
+    expect(screen.queryByText("Needs Admin access")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() =>
-      expect(liveRegion().textContent).toBe("Editing is paused because no operator token is set."),
+      expect(liveRegion().textContent).toBe("Editing is paused. Nobody is signed in."),
     );
     // The seats are still drawn from the draft, not replaced by a refusal.
     expect(within(screen.getByRole("list", { name: "Seats" })).getByText("CEO")).toBeDefined();
+  });
+});
+
+// A DECLINED STEP-UP IS NOT A MISSING GRANT. A configuration write asks for a
+// recent proof, so a dry run sent an hour into a session is refused
+// `403 step_up_required` once the person declines to confirm. They hold the
+// grant and are signed in: the builder says what is asked of them, offers to
+// check again — which asks them again — and keeps their draft, rather than
+// sending them to an administrator and dropping the draft as a tab that
+// changed hands.
+describe("a step-up the person declined", () => {
+  let uninstall: (() => void) | undefined;
+  afterEach(() => {
+    uninstall?.();
+    uninstall = undefined;
+  });
+
+  test("is worded as a confirmation, keeps the draft, and checks again on asking", async () => {
+    const engine = new Engine(company());
+    mountBuilder({ engine, viewer: () => EDITOR });
+    await screen.findByText("No problems");
+
+    let confirmed = false;
+    engine.script = (r) =>
+      r.query.get("dry_run") === "true" && !confirmed
+        ? json({ error: "step_up_required", reason: "step_up" }, 403)
+        : null;
+    // No confirmer is installed, so the transport's question is declined.
+    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+
+    expect(await screen.findByText("Needs confirmation")).toBeDefined();
+    expect(screen.queryByText("Needs Admin access")).toBeNull();
+    expect(screen.getByText(`${ACT_ERRORS.step_up_required} Your draft is kept.`)).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Sign in as somebody else" })).toBeNull();
+    // The same person declining is not the tab changing hands.
+    expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toContain("Lead and more");
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await waitFor(() =>
+      expect(liveRegion().textContent).toBe(`Editing is paused. ${ACT_ERRORS.step_up_required}`),
+    );
+
+    // Asked again, the person confirms, and the replayed check answers.
+    uninstall = setStepUpConfirmer(async () => {
+      confirmed = true;
+      return true;
+    });
+    const sent = engine.checks().length;
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    expect(await screen.findByText("No problems")).toBeDefined();
+    expect(engine.checks()).toHaveLength(sent + 2);
+    expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more");
+    expect(screen.getByText("editable")).toBeDefined();
+  });
+
+  // THE CONTROL: a refusal of the grant itself still names it — a check
+  // landing on a node that refuses admin, which the engine words part by part
+  // for a reader bound to a seat.
+  test("a refusal of the grant still names Admin", async () => {
+    const engine = new Engine(company());
+    engine.script = (r) =>
+      r.query.get("dry_run") === "true" ? refusedByANodeRefusingAdmin() : null;
+    mountBuilder({ engine, viewer: () => BOUND_ADMIN });
+    expect(await screen.findByText("Needs Admin access")).toBeDefined();
+    expect(screen.queryByText("1 problem")).toBeNull();
+    expect(screen.getByText("read only")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Sign in as somebody else" })).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
   });
 });
 
@@ -756,7 +894,7 @@ describe("the builder that fills the window", () => {
   }
 
   test("the chart view asks the frame for the window's height", async () => {
-    const calls = asked("#/agents/edit?view=visualization");
+    const calls = asked("#/company/org/edit?view=visualization");
     // Not before the engine has answered: until then the builder draws a posture
     // screen, which is an ordinary column and scrolls like one.
     expect(calls).not.toContain(true);
@@ -764,7 +902,7 @@ describe("the builder that fills the window", () => {
   });
 
   test("the table view asks for nothing and leaves the scroller alone", async () => {
-    const calls = asked("#/agents/edit?view=table");
+    const calls = asked("#/company/org/edit?view=table");
     // The toolbar is what both views draw once the engine has answered, so
     // waiting for it is waiting for the same moment the case above measures.
     await screen.findByRole("toolbar", { name: "Organization builder" });
@@ -774,41 +912,24 @@ describe("the builder that fills the window", () => {
 
 // A MANAGED DOCUMENT IS WRITTEN SOMEWHERE ELSE (ADR-0030). The builder stays a
 // reader of it: the chart is drawn, every edit is paused with who manages it,
-// and the sentence says where the change is made instead.
+// and the sentence says where the change is made instead — for whoever reads,
+// since where the company is written is no question of who may write it.
 describe("a document another system manages", () => {
-  const managedViewer = (what: string) =>
-    what === "viewer"
-      ? {
-          operator_id: "jane",
-          operator: true,
-          handle: "",
-          name: "",
-          kind: "",
-          acts: [],
-          project: "",
-          config_writer: false,
-          config_managed_by: ["gitops"],
-        }
-      : null;
+  const MANAGED = { ...EDITOR, config_writer: false, config_managed_by: ["gitops"] };
 
   test("the viewer's answer pauses every edit, naming who manages it", async () => {
-    storeToken("jane");
     const engine = new Engine(company());
-    mountBuilder({ engine, query: managedViewer });
+    mountBuilder({ engine, viewer: () => MANAGED });
     expect(await screen.findByText("CEO")).toBeDefined();
-    expect(
-      await screen.findByText(
-        /This company's configuration is managed by gitops — change it there/,
-      ),
-    ).toBeDefined();
+    expect(await screen.findByText(/Managed by gitops\. Change it there\./)).toBeDefined();
 
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() =>
-      expect(liveRegion().textContent).toContain(
-        "Editing is paused because this company's configuration is managed by gitops",
+      expect(liveRegion().textContent).toBe(
+        "Editing is paused. This company's configuration is managed by gitops.",
       ),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add to the organization" }));
     const menu = await screen.findByRole("menu", { name: "Add to the organization" });
     expect(
       within(menu).getByRole("menuitem", { name: "Add unit" }).getAttribute("aria-disabled"),
@@ -817,9 +938,9 @@ describe("a document another system manages", () => {
 
   // AND THE ENGINE'S OWN REFUSAL DECIDES THE SAME WAY, when a check is
   // answered `config_managed` before the viewer has said anything: it halts,
-  // and it is not mistaken for a refused token.
-  test("a check answered config_managed halts as managed, not as a refused token", async () => {
-    storeToken("jane");
+  // and it is not mistaken for a grant the reader lacks — whose banner would
+  // send somebody holding Admin to an administrator for nothing.
+  test("a check answered config_managed halts as managed, not as a missing grant", async () => {
     const engine = new Engine(company());
     engine.script = (r) =>
       r.query.get("dry_run") === "true"
@@ -830,8 +951,9 @@ describe("a document another system manages", () => {
         : null;
     mountBuilder({ engine });
     expect(await screen.findByText("Managed by another system")).toBeDefined();
-    expect(screen.queryByText("The engine refused the token")).toBeNull();
-    expect(screen.getByText(/managed by gitops — change it there/)).toBeDefined();
+    expect(screen.queryByText("Needs Admin access")).toBeNull();
+    expect(screen.queryByText("Refused")).toBeNull();
+    expect(screen.getByText(/Managed by gitops\. Change it there\./)).toBeDefined();
     const checks = engine.checks().length;
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() => expect(liveRegion().textContent).toContain("Editing is paused"));
@@ -839,21 +961,49 @@ describe("a document another system manages", () => {
   });
 
   test("a writer the viewer names edits as before", async () => {
-    storeToken("gitops");
     const engine = new Engine(company());
     mountBuilder({
       engine,
-      query: (what) =>
-        what === "viewer"
-          ? {
-              operator_id: "gitops",
-              operator: true,
-              config_writer: true,
-              config_managed_by: ["gitops"],
-            }
-          : null,
+      viewer: () => ({ ...EDITOR, config_writer: true, config_managed_by: ["gitops"] }),
     });
     expect(await screen.findByText("No problems")).toBeDefined();
-    expect(screen.queryByText(/managed by gitops/)).toBeNull();
+    expect(screen.queryByText(/managed by gitops/i)).toBeNull();
   });
+});
+
+// WORK'S NEW PROJECT ARRIVES HERE, naming the unit by its key: the node's
+// editor opens on its Project field holding the key, as a change still to
+// apply, and the address lets go of the key so a reload asks nothing twice.
+test("a link naming a unit and a project opens its editor on the Project field holding the key", async () => {
+  const engine = new Engine(company());
+  mountBuilder({
+    engine,
+    hash: "#/company/org/edit?view=visualization&unit=engineering&project=ENG",
+  });
+  await screen.findByText("No problems");
+  const editor = await screen.findByRole("dialog", { name: "Edit Engineering" });
+  const field = within(editor).getByRole("combobox", { name: /Tracker project/ });
+  expect((field as HTMLInputElement).value).toBe("ENG");
+  await waitFor(() => expect(document.activeElement).toBe(field));
+  // A CHANGE STILL TO APPLY: the editor marks the part holding it as changed.
+  expect(within(editor).getByRole("tab", { name: /^Work/ }).textContent).toContain("Changed");
+  await waitFor(() => expect(location.hash).not.toContain("project="));
+  expect(location.hash).toContain("unit=engineering");
+});
+
+// A NODE THAT ALREADY OWNS A PROJECT KEEPS IT: the key is offered only where
+// there is none.
+test("a project link to a node that owns one leaves its project as it is", async () => {
+  const doc = company();
+  doc.units![0]!.project = "CORE";
+  const engine = new Engine(doc);
+  mountBuilder({
+    engine,
+    hash: "#/company/org/edit?view=visualization&unit=engineering&project=ENG",
+  });
+  await screen.findByText("No problems");
+  const editor = await screen.findByRole("dialog", { name: "Edit Engineering" });
+  expect(
+    (within(editor).getByRole("combobox", { name: /Tracker project/ }) as HTMLInputElement).value,
+  ).toBe("CORE");
 });

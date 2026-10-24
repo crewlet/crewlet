@@ -69,7 +69,7 @@
 // Which objects SHOULD exist is not a list this package keeps: every row that
 // refers to an object names it, and the declared tables
 // (internal/objstore/references) are the whole inventory. Each declared table
-// is Required or Retired (ADR-0033): both keep the objects their rows name
+// is Required or Retired (ADR-0047): both keep the objects their rows name
 // from collection, and only a Required table's are audited, and copied,
 // counted or asked after by a backup — a retired object's bytes ride a `nats`
 // backup's stream snapshot uncounted, like anything else the bucket holds. The
@@ -84,7 +84,7 @@
 // objects ([ReferenceTable.Records], the domain's own decoder): a backup
 // restores a copy of the rows and replays the log from the copy's position, so
 // what it owes is what the copy names AND what every record it replays names
-// (ADR-0034). The collector reads rows alone and never the log.
+// (ADR-0048). The collector reads rows alone and never the log.
 package objstore
 
 import (
@@ -205,16 +205,21 @@ func ParseKey(s string) (Key, error) {
 // String is the key's canonical spelling.
 func (k Key) String() string { return uuid.UUID(k).String() }
 
-// Compare orders two keys as their canonical spellings sort as bytes — which
-// is how a backend lists the names they are stored under, and how a table's
-// key column sorts them — answering -1, 0 or +1. It compares the bytes
-// themselves: lowercase hex digits sort as the nibbles they spell, and the
-// hyphens sit at the same places in every key.
-func (k Key) Compare(o Key) int { return bytes.Compare(k[:], o[:]) }
-
 // IsZero reports whether k is no key — what a row that names no object
 // carries.
 func (k Key) IsZero() bool { return k == Key{} }
+
+// Compare orders two keys as their canonical spellings sort: -1, 0 or +1.
+//
+// THE SPELLING'S ORDER AND THE BYTES' ORDER ARE ONE ORDER, because the
+// canonical form is lowercase hex with its dashes at fixed places and every
+// hex digit sorts below every letter in it, so each digit sorts as the nibble
+// it spells. That one order is how a backend that lists in order lists the
+// names keys are stored under ([Ranged]), how a table's key column sorts them
+// — a keyset page of it, which SQL orders by the spelling, walks keys in
+// exactly this order — and so a range of keys a pass holds in memory can be
+// matched against either.
+func (k Key) Compare(o Key) int { return bytes.Compare(k[:], o[:]) }
 
 // Minted is the instant the key was minted at, to the millisecond, in UTC.
 func (k Key) Minted() time.Time {
@@ -371,13 +376,13 @@ type ReferenceTable struct {
 	// domain's applier keeps the records of it this node could not apply
 	// yet (statelog's DeferredTable).
 	//
-	// WHAT A BACKUP READS PAST ITS STORE COPY (internal/backup, ADR-0034): a
+	// WHAT A BACKUP READS PAST ITS STORE COPY (internal/backup, ADR-0048): a
 	// restore brings the copy back and replays that log from the copy's
 	// position — and a build that can read a deferred record applies it —
 	// so the objects the restored rows name include every object a record
 	// of either names. A Required table states both
 	// ([ReferenceTable.ValidateLog]); a retired one may leave them empty,
-	// since no backup carries a retired reference (ADR-0033).
+	// since no backup carries a retired reference (ADR-0047).
 	Log      string
 	Deferred string
 
@@ -434,7 +439,7 @@ var ErrRecordUnreadable = errors.New("objstore: a log record this build cannot r
 func JoinOwner(owner ...string) string { return strings.Join(owner, "/") }
 
 // Standing is what a declared table's rows are to the company: references it
-// is owed, or retired ones that keep their objects only for a grace — ADR-0033,
+// is owed, or retired ones that keep their objects only for a grace — ADR-0047,
 // whose rationale is internal/objstore/references' package doc.
 //
 // A NAMED TYPE WITH NO DEFAULT. Its zero value is refused

@@ -584,7 +584,10 @@ func (f *FleetStore) eachPositionKey(ctx context.Context, class, what string,
 // lostUpdateRace reports whether a conditional write lost its race.
 //
 // A deleted key lands here too: the record it was conditioned on is gone,
-// which is the same answer for the caller — re-read and re-decide.
+// which is the same answer for the caller — re-read and re-decide. The
+// leader's in-flight answer never does: every bucket handle is [settled], so
+// by the time a refusal reaches here it is one the leader DECIDED, and
+// [isWrongLastSequence] matches that one alone.
 func lostUpdateRace(err error) bool {
 	return errors.Is(err, jetstream.ErrKeyRevisionMismatch) ||
 		errors.Is(err, jetstream.ErrKeyNotFound) ||

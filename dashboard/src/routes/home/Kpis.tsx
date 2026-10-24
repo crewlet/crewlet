@@ -8,6 +8,7 @@
  * that looks like a measured nothing is the one thing a tile must not draw.
  */
 
+import type { Service, ServicesRun } from "~/app/nav.ts";
 import { Fragment } from "react";
 import {
   ButtonLink,
@@ -24,6 +25,7 @@ import { decisionsHref } from "~/components/DecisionRow.tsx";
 import { fmtCount } from "~/lib/format.ts";
 import { useOrgBudget, useOrg } from "~/lib/store-hooks.ts";
 import { mayChangeConfig } from "~/lib/useWriteAccess.ts";
+import { TRACKER, accessNames } from "~/lib/access.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
@@ -42,11 +44,49 @@ import {
   type Waiting,
 } from "./model.ts";
 
+/**
+ * The five figures, in the order the row draws them by default. A board's
+ * Figure widget names one of them by this id, so an id is never renamed.
+ */
+export const KPI_IDS = ["agents", "waiting", "progress", "completed", "tokens"] as const;
+export type KpiId = (typeof KPI_IDS)[number];
+
+/**
+ * The figures a service built into Crewlet answers, and which: tasks in
+ * progress and tasks completed are Crewlet Works' flow (`work_flow`). Where
+ * the company does not run it they are not drawn, and the rest fill the row.
+ * What waits on the reader's decision is not among them: the seats stopped on
+ * a spent budget and the coding runs parked on a question arrive whatever
+ * runs the tracker.
+ */
+export const KPI_SERVICES: Readonly<Partial<Record<KpiId, Service>>> = {
+  progress: "tracker",
+  completed: "tracker",
+};
+
+/** The figures a company running `runs` is shown, in the row's order. */
+export function kpisShown(figures: readonly KpiId[], runs: ServicesRun): KpiId[] {
+  return figures.filter((id) => {
+    const service = KPI_SERVICES[id];
+    return service === undefined || runs[service];
+  });
+}
+
+/** What each figure is called where it is offered on its own. */
+export const KPI_LABELS: Record<KpiId, string> = {
+  agents: "Agents working now",
+  waiting: "Waiting on your decision",
+  progress: "Tasks in progress",
+  completed: "Completed",
+  tokens: "Tokens",
+};
+
 /** How many days of the series the in-progress sparkline draws, and how far
  *  back its delta compares: a week. */
 const WEEK = 7;
 
 export function Kpis({
+  figures = KPI_IDS,
   range,
   crew,
   viewer,
@@ -56,6 +96,8 @@ export function Kpis({
   spend,
   now,
 }: {
+  /** The figures to draw, in this order: all five unless a widget names fewer. */
+  figures?: readonly KpiId[];
   range: HomeRange;
   crew: Crew;
   viewer: ViewerState;
@@ -65,13 +107,34 @@ export function Kpis({
   spend: QueryResult<TokenSeries>;
   now: number;
 }) {
+  const tile = (id: KpiId) => {
+    switch (id) {
+      case "agents":
+        return <AgentsTile crew={crew} />;
+      case "waiting":
+        return <WaitingTile viewer={viewer} waiting={waiting} error={waitingError} now={now} />;
+      case "progress":
+        return <InProgressTile flow={flow} locked={trackerLocked(viewer)} />;
+      case "completed":
+        return <CompletedTile flow={flow} range={range} locked={trackerLocked(viewer)} />;
+      case "tokens":
+        // WHO MAY SET A BUDGET is whoever may write the company's configuration
+        // (Admin, the access a ceiling is written under, and on a managed
+        // document one of its writers), never a kind of credential.
+        return <TokensTile spend={spend} range={range} mayConfigure={mayChangeConfig(viewer)} />;
+    }
+  };
+  // THE ROW'S COLUMNS ARE ITS FIGURES', so one figure on its own fills its
+  // cell rather than a fifth of it (`data-count`, `screens.css`).
   return (
-    <section className="home-kpis" aria-label="The company at a glance">
-      <AgentsTile crew={crew} />
-      <WaitingTile viewer={viewer} waiting={waiting} error={waitingError} now={now} />
-      <InProgressTile flow={flow} />
-      <CompletedTile flow={flow} range={range} />
-      <TokensTile spend={spend} range={range} mayConfigure={mayChangeConfig(viewer)} />
+    <section
+      className="home-kpis"
+      data-count={figures.length}
+      aria-label={figures.length === 1 ? KPI_LABELS[figures[0]!] : "The company at a glance"}
+    >
+      {figures.map((id) => (
+        <Fragment key={id}>{tile(id)}</Fragment>
+      ))}
     </section>
   );
 }
@@ -114,7 +177,10 @@ function WaitingTile({
   error: QueryErrorCode | null;
   now: number;
 }) {
-  const review = (
+  // THE INBOX IS THE TRACKER'S, so the way there is offered only to a reader
+  // who can open it; an asked person without Tracker answers on Home and on
+  // the task itself.
+  const review = viewer.tracker ? (
     <ButtonLink
       size="small"
       variant="secondary"
@@ -123,16 +189,18 @@ function WaitingTile({
     >
       Review
     </ButtonLink>
-  );
-  // NOBODY TO WAIT ON: an anonymous reader or a token bound to no seat has no
-  // decisions, and saying 0 would be a claim about a person nobody named.
-  if (!viewer.handle) {
+  ) : undefined;
+  // NOBODY TO WAIT ON: an anonymous reader has no record and no decisions,
+  // and saying 0 would be a claim about a person nobody named. An UNBOUND
+  // reader is somebody — their record is their login, and what they asked or
+  // were asked reaches it — so they are counted like anybody.
+  if (!viewer.owner) {
     return (
       <StatCard
         label="Waiting on your decision"
         value={EMPTY_VALUE}
         loading={viewer.loading}
-        sub={viewer.loading ? undefined : "Not bound to a person"}
+        sub={viewer.loading ? undefined : "Nobody is signed in"}
       />
     );
   }
@@ -164,9 +232,18 @@ function WaitingTile({
   );
 }
 
+/**
+ * Whether the tracker's tiles are closed to this reader: once the viewer has
+ * said they hold no Tracker, never on a guess while it has not.
+ */
+function trackerLocked(viewer: ViewerState): boolean {
+  return !viewer.loading && !viewer.tracker;
+}
+
 /** Open work somebody has started, its change over a week, and what is stuck. */
-function InProgressTile({ flow }: { flow: QueryResult<WorkFlowAnswer> }) {
+function InProgressTile({ flow, locked }: { flow: QueryResult<WorkFlowAnswer>; locked: boolean }) {
   const data = flow.data;
+  if (locked) return <LockedTile label="Tasks in progress" />;
   if (flow.error) return <RefusedTile label="Tasks in progress" />;
   if (!data?.now) return <StatCard label="Tasks in progress" value={EMPTY_VALUE} loading />;
   const points = data.points ?? [];
@@ -186,9 +263,18 @@ function InProgressTile({ flow }: { flow: QueryResult<WorkFlowAnswer> }) {
 }
 
 /** Work delivered in the window, against the window before it. */
-function CompletedTile({ flow, range }: { flow: QueryResult<WorkFlowAnswer>; range: HomeRange }) {
+function CompletedTile({
+  flow,
+  range,
+  locked,
+}: {
+  flow: QueryResult<WorkFlowAnswer>;
+  range: HomeRange;
+  locked: boolean;
+}) {
   const label = `Completed · ${range.words}`;
   const data = flow.data;
+  if (locked) return <LockedTile label={label} />;
   if (flow.error) return <RefusedTile label={label} />;
   if (!data?.points) return <StatCard label={label} value={EMPTY_VALUE} loading />;
   const { current, previous } = completedIn(data.points, range.days);
@@ -221,10 +307,11 @@ function CompletedTile({ flow, range }: { flow: QueryResult<WorkFlowAnswer>; ran
  * budget. The window-on-window change is Spend's, where it has its own axis.
  *
  * THE WAY TO SET A BUDGET IS OFFERED TO WHOEVER CAN SET ONE: a reader who may
- * change the company's configuration (`mayChangeConfig` — an operator, and on
- * a managed document one of its writers) gets "No weekly budget" as the link
- * into Spend › Budgets; anybody else gets the fact, since the screen behind
- * the link would only refuse them.
+ * change the company's configuration (`mayChangeConfig` — an admin, and on a
+ * managed document one of its writers) gets "No
+ * weekly budget" as the link into Company › Budgets; anybody else gets the fact,
+ * since the screen behind the link would only refuse them. The weekly budget
+ * is the COMPANY's ceiling, so no lead path reaches it.
  *
  * AND ONLY ONCE IT IS A FACT. Before the engine's first `budget` report the
  * slice is `null` — nobody has read the counter — and the line says that
@@ -238,7 +325,10 @@ function TokensTile({
 }: {
   spend: QueryResult<TokenSeries>;
   range: HomeRange;
-  /** Whether the reader may set a ceiling: `mayChangeConfig`. */
+  /**
+   * Whether the reader may set a ceiling: `mayChangeConfig` — they hold
+   * Admin and, on a managed document, are one of its writers.
+   */
   mayConfigure: boolean;
 }) {
   const label = `Tokens · ${range.words}`;
@@ -270,7 +360,7 @@ function TokensTile({
         ) : budget === null ? (
           "Weekly budget not reported yet"
         ) : mayConfigure ? (
-          <a className="t-link" href={href(["spend", "budgets"])}>
+          <a className="t-link" href={href(["company", "budgets"])}>
             No weekly budget
           </a>
         ) : (
@@ -307,4 +397,15 @@ function Parts({ parts }: { parts: readonly string[] }) {
 /** A tile whose answer the engine refused: it says so rather than a number. */
 function RefusedTile({ label }: { label: string }) {
   return <StatCard label={label} value={EMPTY_VALUE} sub="Could not be read" subTone="danger" />;
+}
+
+/**
+ * A tile whose figure is the tracker's, for a reader without Tracker: the
+ * question is never asked, and the tile says what would open it rather than
+ * waiting for an answer that will never come.
+ */
+function LockedTile({ label }: { label: string }) {
+  return (
+    <StatCard label={label} value={EMPTY_VALUE} sub={`Needs ${accessNames([TRACKER])} access`} />
+  );
 }

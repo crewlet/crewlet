@@ -19,7 +19,8 @@
 // constant rather than the component keeps this module free of React, which is
 // what lets it stay a leaf every screen and every test can reach.
 import { EMPTY_VALUE } from "@crewlethq/ui";
-import { dates, zone } from "./prefs.ts";
+import { zone } from "./prefs.ts";
+import { isWholeReference } from "./references.ts";
 
 /** Parse an ISO timestamp, tolerating a naive one (the engine emits both). */
 
@@ -70,37 +71,16 @@ export function oldestFirst(
 // ---------------------------------------------------------------------------
 
 /**
- * The zone and the date shape every formatter below renders in.
+ * The zone every formatter below renders in, and the date's shape: the
+ * browser's own zone and its locale's own spelling of a date.
  *
- * READ FROM THE MODULE rather than taken as an argument, which is the one
- * place this file departs from its own "pass what you need" rule. A zone is a
- * preference held by one browser and read by three hundred call sites; passing
- * it would mean threading it through every component that renders a timestamp,
- * and the ones that forgot would silently render in a different zone from the
- * ones beside them — the exact inconsistency the preference exists to end.
- *
- * `lib/prefs.ts` announces a change, so a component that must re-render on one
- * subscribes with `useViewerPrefs()`. The formatters themselves stay pure
- * functions of (timestamp, preference): same inputs, same output.
+ * THE ZONE IS READ FROM THE MODULE rather than taken as an argument, which is
+ * the one place this file departs from its own "pass what you need" rule: a
+ * suite pins it (`pinZoneForTest`) to reach a date-line edge, and threading it
+ * through three hundred call sites would let the ones that forgot render in a
+ * different zone from the ones beside them.
  */
-function dateParts(): Intl.DateTimeFormatOptions {
-  switch (dates()) {
-    case "iso":
-      // 2026-06-15. `en-CA` is the locale whose numeric date IS ISO order,
-      // which is how this is spelled without hand-assembling the string and
-      // losing the runtime's own calendar handling.
-      return { year: "numeric", month: "2-digit", day: "2-digit" };
-    case "long":
-      return { year: "numeric", month: "long", day: "numeric" };
-    default:
-      return { year: "numeric", month: "short", day: "2-digit" };
-  }
-}
-
-/** The locale each date shape is written in. */
-function dateLocale(): string | undefined {
-  return dates() === "iso" ? "en-CA" : undefined;
-}
+const DATE_PARTS: Intl.DateTimeFormatOptions = { year: "numeric", month: "short", day: "2-digit" };
 
 export function fmtTime(ts: string | null | undefined): string {
   const d = parseUTC(ts);
@@ -117,8 +97,8 @@ export function fmtTime(ts: string | null | undefined): string {
 export function fmtDateTime(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return EMPTY_VALUE;
-  return d.toLocaleString(dateLocale(), {
-    ...dateParts(),
+  return d.toLocaleString(undefined, {
+    ...DATE_PARTS,
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
@@ -130,7 +110,7 @@ export function fmtDateTime(ts: string | null | undefined): string {
 export function fmtDate(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return EMPTY_VALUE;
-  return d.toLocaleDateString(dateLocale(), { ...dateParts(), timeZone: zone() });
+  return d.toLocaleDateString(undefined, { ...DATE_PARTS, timeZone: zone() });
 }
 
 /**
@@ -145,8 +125,8 @@ export function fmtDate(ts: string | null | undefined): string {
 export function fmtMinute(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return EMPTY_VALUE;
-  return d.toLocaleString(dateLocale(), {
-    ...dateParts(),
+  return d.toLocaleString(undefined, {
+    ...DATE_PARTS,
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
@@ -169,11 +149,12 @@ export function fmtMinute(ts: string | null | undefined): string {
 export function fmtDateCompact(ts: string | null | undefined, now: number): string {
   const d = parseUTC(ts);
   if (!d) return EMPTY_VALUE;
-  // BOTH YEARS READ IN THE VIEWER'S ZONE, and the date rendered in it. This
-  // read the browser's calendar on both counts while every other formatter in
-  // this file rendered in the chosen one, so a reader in `Pacific/Auckland`
-  // whose browser sat in `UTC` saw a due date one day earlier here than in the
-  // tooltip beside it — and, for thirteen hours a year, a year earlier.
+  // BOTH YEARS READ IN [zone], and the date rendered in it. This read the
+  // machine's calendar on both counts while every other formatter in this file
+  // rendered through [zone], so wherever the two differ (a suite pinning a
+  // zone, a zone the preference once set) a due date drew one day earlier here
+  // than in the tooltip beside it — and, for thirteen hours a year, a year
+  // earlier.
   const thisYear = calendarYear(new Date(now));
   return d.toLocaleDateString(undefined, {
     month: "short",
@@ -237,7 +218,8 @@ export function relTime(ts: string | null | undefined, now: number): string {
 }
 
 /**
- * "in 4m" — the same rules as [relTime], forward, INCLUDING ITS TERMINUS.
+ * "in 4m" — the same steps as [relTime], forward, to the nearest unit rather
+ * than below it, INCLUDING ITS TERMINUS.
  *
  * That last clause is what this did not have, while the comment above it claimed
  * it did. Backwards, a relative reading stops counting days at thirty and prints
@@ -257,11 +239,15 @@ export function inTime(ts: string | null | undefined, now: number): string {
   const secs = Math.round((at - now) / 1000);
   if (secs <= 0) return "due";
   if (secs < 60) return `in ${secs}s`;
-  const mins = Math.floor(secs / 60);
+  // TO THE NEAREST UNIT, where [relTime] floors. Floored, a reading forward
+  // drops whatever is left of its last unit: an invitation good for seven days
+  // read "in 6d" the second it was issued. Backward, "3h ago" for three and a
+  // half hours says no more than is so.
+  const mins = Math.round(secs / 60);
   if (mins < 60) return `in ${mins}m`;
-  const hours = Math.floor(mins / 60);
+  const hours = Math.round(secs / 3600);
   if (hours < 24) return `in ${hours}h`;
-  const days = Math.floor(hours / 24);
+  const days = Math.round(secs / 86_400);
   if (days < 30) return `in ${days}d`;
   return fmtDate(ts);
 }
@@ -325,6 +311,20 @@ export function fmtDuration(ms: number | null | undefined): string {
 }
 
 /**
+ * A SETTING's duration, written in whole seconds, as a person would write it:
+ * in the largest whole unit that divides it ("7 days", "12 hours", "5
+ * minutes"), else as [fmtDuration] measures it. A session that lives 604800
+ * seconds is "7 days", never "168h", which is a reading nobody configured.
+ */
+export function fmtSetting(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return EMPTY_VALUE;
+  if (seconds > 0 && seconds % 86_400 === 0) return plural(seconds / 86_400, "day");
+  if (seconds > 0 && seconds % 3_600 === 0) return plural(seconds / 3_600, "hour");
+  if (seconds > 0 && seconds % 60 === 0) return plural(seconds / 60, "minute");
+  return fmtDuration(seconds * 1000);
+}
+
+/**
  * How long something has been running, for a clock that reruns every second.
  *
  * Distinct from [fmtDuration], which measures a FINISHED span and is free to
@@ -343,6 +343,25 @@ export function fmtElapsed(ms: number | null | undefined): string {
   if (m < 60) return `${m}m ${s % 60}s`;
   const h = Math.floor(m / 60);
   return `${h}h ${m % 60}m`;
+}
+
+/**
+ * How long a process has been up, said coarsely: seconds under a minute,
+ * minutes under an hour, hours and minutes under a day, and whole days after
+ * that ("2 days"). A panel that reads it reruns every second, and past the
+ * first minute a second ticking by is motion with nothing to say. Never below
+ * zero, for [fmtElapsed]'s reason: a start a moment in the future is two
+ * clocks disagreeing.
+ */
+export function fmtUptime(ms: number | null | undefined): string {
+  if (ms == null || !Number.isFinite(ms)) return EMPTY_VALUE;
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return m % 60 === 0 ? `${h}h` : `${h}h ${m % 60}m`;
+  return plural(Math.floor(h / 24), "day");
 }
 
 /** Elapsed between two ISO stamps, or null when either is missing. */
@@ -368,11 +387,11 @@ export function elapsedMs(from?: string | null, to?: string | null): number | nu
  * notices the day one of them changes. A bar and a calendar cell disagreeing
  * about which day a task is due is a silent wrong answer, not a broken screen.
  *
- * THE SAME ZONE EVERY TIMESTAMP IS DRAWN IN. It used to be the browser's own
+ * THE SAME ZONE EVERY TIMESTAMP IS DRAWN IN. It used to be the machine's own
  * calendar (`getFullYear`/`getDate`) while every spelling went through
- * [zone], which was harmless only while nothing could set a zone: once the
- * preference had a control, a reader in Berlin who chose `Asia/Tokyo` saw a
- * task stamped "Sep 23" filed in the cell for the 22nd.
+ * [zone], which held only while the two could not differ: when a zone
+ * preference existed, a reader in Berlin who chose `Asia/Tokyo` saw a task
+ * stamped "Sep 23" filed in the cell for the 22nd.
  */
 export function readerDay(at: Date | number): string {
   const p = wallParts(typeof at === "number" ? at : at.getTime(), zone());
@@ -464,7 +483,7 @@ export interface TextBudget {
   limit: number;
   /** Past the cap: the engine would refuse it. */
   over: boolean;
-  /** The line under the field — a count near the cap, the refusal past it. */
+  /** The line under the field: a count near the cap, the refusal past it. */
   line: string | undefined;
 }
 
@@ -488,7 +507,7 @@ export function textBudget(
   const bytes = utf8Bytes(value.trim());
   const over = bytes > limit;
   const line = over
-    ? `${bytes} bytes — ${what} holds at most ${limit}. ${remedy}`
+    ? `${bytes} bytes, but ${what} holds at most ${limit}. ${remedy}`
     : bytes >= limit * COUNT_FROM
       ? `${bytes} of ${limit} bytes`
       : undefined;
@@ -510,6 +529,40 @@ export function fmtBytes(n: number | null | undefined): string {
 // ---------------------------------------------------------------------------
 // Text
 // ---------------------------------------------------------------------------
+
+/**
+ * A first word that is a LITERAL rather than prose: an address
+ * (`http://localhost:5199`, `example.com`), a path, a handle, a login
+ * (`token:review`), an identifier (`api.external_url`, `backup_age`) or
+ * anything quoted as code. Capitalised, it is a different value: the sign-in
+ * screen read "Http://localhost:5199 isn't an address for this deployment."
+ */
+const LITERAL_WORD = /^[`'"@/~$#<]|:\/\/|[:/_@\\]|\.[\p{L}\d]/u;
+
+/**
+ * The engine's own words, opened as a sentence: the first letter capitalised,
+ * unless the first word is a literal ([LITERAL_WORD]), which is written as the
+ * engine wrote it. No full stop is added; see [asSentence] for that.
+ */
+export function openSentence(text: string): string {
+  const s = text.trim();
+  if (s === "") return s;
+  const first = s.split(/\s/, 1)[0]!.replace(/[,;:.!?)]+$/, "");
+  if (LITERAL_WORD.test(first)) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/**
+ * A clause as a sentence: its first letter capitalised ([openSentence]) and a
+ * full stop after it. The engine writes a measurement as a clause, so its log
+ * line can carry it after a colon ("backup_age: no verified backup has been
+ * recorded"); a screen that prints it on its own line prints it as a sentence.
+ */
+export function asSentence(clause: string): string {
+  const head = openSentence(clause);
+  if (head === "") return head;
+  return /[.!?]$/.test(head) ? head : `${head}.`;
+}
 
 /** A human label from a snake_case or dotted engine identifier. */
 export function humanize(key: string | null | undefined): string {
@@ -590,12 +643,12 @@ export function plural(n: number, one: string, many?: string): string {
 /**
  * An instant as `<input type="datetime-local">` carries it, and back.
  *
- * THE INPUT IS ALWAYS IN THE BROWSER'S ZONE and the dashboard renders in the
- * VIEWER'S CHOSEN one, so the naive `new Date(value)` / `toISOString().slice()`
- * pair is wrong for every reader who set the preference: a reader in `UTC`
- * whose company runs in `Asia/Tokyo` typed 09:00, meant 09:00 Tokyo, and got a
- * window starting nine hours late. These two convert through the chosen zone,
- * so what a reader types is what the heading above the rows says.
+ * THROUGH [zone], NOT THE NAIVE PAIR. The naive `new Date(value)` /
+ * `toISOString().slice()` pair reads a wall time as the machine's and writes
+ * one back in UTC, so it is wrong wherever [zone] and UTC differ — which is
+ * every reader outside UTC: one in `Asia/Tokyo` who typed 09:00 got a window
+ * starting nine hours late. These two convert through the zone every timestamp
+ * is drawn in, so what a reader types is what the heading above the rows says.
  */
 
 /** The wall-clock reading of an instant, `YYYY-MM-DDTHH:mm`. */
@@ -787,7 +840,7 @@ export function configValueKind(
   if (value === REDACTED) return "hidden";
   // The grammar and the trim are `envref.Whole`'s, so what this calls a
   // reference is exactly what the engine resolves as one.
-  if (/^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(value.trim())) return "reference";
+  if (isWholeReference(value)) return "reference";
   return secret ? "hidden" : "literal";
 }
 

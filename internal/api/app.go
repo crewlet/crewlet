@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"net/http"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -20,20 +19,33 @@ import (
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/static"
 )
 
 // App is the HTTP surface: the dashboard, the live socket and the REST routes.
 type App struct {
-	guard  *auth.Guard
-	cors   *auth.CORS
+	guard *auth.Guard
+	cors  *auth.CORS
+
+	// csrf refuses a state change a cross-site page could have caused.
+	// Separate from cors because the two answer different questions: CORS
+	// decides whether an attacker's page may READ the answer, and on a
+	// write that is the part they do not need.
+	csrf *auth.CSRF
+
 	state  *livestate.LiveState
 	stream *stream.Service
+
+	// stopRooms unregisters the socket's rooms from the appliers they hear,
+	// before the service stops.
+	stopRooms []func()
 
 	// runtime is the engine this process runs beside. See NodeRuntime.
 	runtime NodeRuntime
@@ -51,15 +63,13 @@ type App struct {
 	// window and a health tick cannot disagree about what time it is.
 	now func() time.Time
 
-	// pace is the clock a file transfer's pace is measured on and its
-	// deadlines set from. See [Options.PaceClock].
-	pace func() time.Time
-
 	// queries is the read surface both transports answer from.
 	queries *queries.Registry
 
 	// backup takes a copy of this node's durable state.
 	backup backupTaker
+	// objects moves the company's files to an S3 bucket (see objectsmigrate.go).
+	objects objectsMigrator
 
 	// audit publishes the runtime audit record every backup leaves; see
 	// [operator.Audit].
@@ -70,10 +80,11 @@ type App struct {
 	// acknowledgement.
 	retention retentionWriter
 
-	// native is the engine's native runtime as the file bytes, the purge
-	// and the eviction gate reach it, ASKED ON EVERY REQUEST — see
-	// [NativeRoutes].
-	native NativeRoutes
+	// nodes installs and lifts the eviction gate. A RECORD on every
+	// identity-claiming log rather than a coordination write, which is why
+	// it is a different seam from the one above. Never nil: see
+	// [Options.Nodes].
+	nodes NodeGate
 
 	// code is the engine's git host and its reads, ASKED ON EVERY REQUEST —
 	// see [CodeSurface] — and servesGit whether this node's Tier A roles
@@ -81,6 +92,11 @@ type App struct {
 	// are mounted at all (code.go).
 	code      CodeSurface
 	servesGit bool
+
+	// listens tells every MCP client listening on the operator surface that
+	// its tools changed ([OperatorListens]); nil where the app serves no
+	// operator surface.
+	listens *OperatorListens
 
 	// capacity drives a stream's byte ceiling through the maintenance
 	// window. On a node that is publishing the verb refuses rather than
@@ -94,10 +110,21 @@ type App struct {
 
 	// company reads the engine's CURRENT epoch, which is what
 	// [App.Configured] asks.
-	company func() *config.Company
+	company func() (*config.Company, *org.Organization)
 
-	// contacts resolves a `${VAR}` binding in the chart ([queries.Sources.Env]).
-	contacts org.EnvLookup
+	// estateFloor answers whether the replicated estate can be read at the
+	// log's floor, for /ready. See [EstateFloor].
+	//
+	// Named for its type and never `estate`: internal/store's applier
+	// gate matches a call by METHOD NAME across the tree (it parses, it
+	// does not type-check), and `estate()` is the engine's accessor for
+	// the replicated estate's write handle — so a call through a field of
+	// that name reads to the gate as a write to the estate.
+	estateFloor EstateFloor
+
+	// identity answers whether anybody is enrolled, for /health. See
+	// [Identity].
+	identity Identity
 
 	handler http.Handler
 
@@ -118,6 +145,10 @@ type App struct {
 // meant to be, and one an outside party calls mounted outside them is
 // unreachable the day a deployment sets api.public. Only the table can be
 // walked to catch either, and [net/http.ServeMux] does not list its own.
+//
+// EVERY MOUNT SIGNATURE IS ITS: [authz.Mux], which a guarded surface states
+// each route's policy through, [auth.Mux], which /auth registers on, and
+// [httpjson.Router] — so a route mounted through any of them is in the table.
 type routeTable struct {
 	mux      *http.ServeMux
 	patterns []string
@@ -132,91 +163,122 @@ func (t *routeTable) HandleFunc(pattern string, handler func(http.ResponseWriter
 	t.Handle(pattern, http.HandlerFunc(handler))
 }
 
-// routeMounter is what the API needs of a surface it mounts and never calls
-// otherwise: its routes.
+// EstateFloor reports whether this node can answer from the company's
+// replicated estate at all, and names the term that says it cannot.
+//
+// # Why /ready turns on it
+//
+// A node's SQL copy is derived from an ordered log, and the log is trimmed. A
+// consumer whose position falls below the stream's first sequence is clamped
+// UPWARD with no error at all and then reports itself caught up over a hole —
+// so a copy below the floor answers every question confidently, out of rows
+// with records missing from them for good. "There is no such work item" is how
+// a duplicate gets filed.
+//
+// WHICH IS WHY SUCH A COPY ANSWERS NOTHING, and why the node holding it is
+// still sent traffic: a copy that is wrong — below the log, its applier
+// halted, its node evicted — goes OUT OF SERVICE, and every read and write the
+// node takes for the tracker and the knowledge base is routed to a data node
+// whose copy is sound. What no copy of its own makes up for is a node that can
+// no longer say WHERE to route: its own copy out of service and its view of
+// the fleet too stale to name another. That is the question the engine asks
+// before letting the seats a node holds STAY (`engine.Engine.SeatsServiceable`)
+// — and `crewlet run` hands this seam exactly that, so the node that gives its
+// seats back is the node that stops being sent work, and the two never
+// disagree about one copy.
+//
+// A CONTEXT, because the answer is read live: the terms it rests on — the
+// published floor, the stream's own first and last sequence — move while the
+// process runs, and a cached answer is a node that reports ready through the
+// whole window in which it stopped being so.
+//
+// THE REFUSAL IS NAMED, not merely counted: "below the floor" and "the broker
+// could not be reached" call for opposite responses, and a bare false is the
+// three-valued answer collapsed into a bool that this codebase refuses
+// everywhere else.
+type EstateFloor func(ctx context.Context) (ok bool, refusal string)
+
+// Identity reports whether anybody is enrolled in this company's identity
+// directory yet — what /health says as `identity`.
+//
+// # Why /health carries it
+//
+// A fresh install has nobody in it, and the way the first person gets in is
+// onto a human seat the company declares — every person holds one for as long
+// as they exist (ADR-0032): an invitation into it, or a person an
+// administrator creates on it, either issued under a Tier A token
+// (`crewlet iam invite -seat`, `crewlet iam create -seat`, or the seat's
+// Invite and Create in the org chart). An operator who has just started a
+// node, and a dashboard whose sign-in form nobody can use yet, both need to
+// know that this is the state they are in rather than a sign-in that is
+// failing — and /health is the one surface an install with nobody in it can
+// reach: it is a probe, exempt from the guard, and before the first person
+// there is no credential but the deployment's own to present anywhere else. It
+// is one EXISTS over the node's own rows, and one read of the identity log's
+// end beside it, neither of which a probe notices.
+//
+// SOMEBODY EXISTS, NOT SOMEBODY CAN SIGN IN: a person an administrator created
+// is a row the moment the create lands, before they have spent the first
+// password link it handed back, so `identity: ready` there says the company
+// has its first person, who may not have chosen a password yet.
+//
+// A CONTEXT and a live read, for [EstateFloor]'s reason: the answer changes
+// the moment the first person lands, and a cached one would go on telling an
+// operator to invite somebody who has already signed in.
+//
+// THREE-VALUED: an error is this node unable to read its identity estate, or
+// holding rows that have not applied the whole identity log — every node that
+// serves this API holds the estate and applies the identity log from boot
+// (ingress requires the `data` role, ADR-0025), so a node that has just joined
+// a fleet holds none for a moment — which is `unknown` and never `unclaimed`:
+// told there is nobody, a dashboard would offer an empty company's guidance to
+// one that has started.
+type Identity func(ctx context.Context) (enrolled bool, err error)
+
+// authMounter is the /auth surface's own mount, over a mux it can NAME.
+//
+// The API's [routeTable] satisfies it, as [http.ServeMux] does. The narrower
+// type exists so internal/api/authapi's own gate can walk what the surface
+// registered and hold it against internal/api/auth's exemption list — the
+// standard mux reports nothing about what was mounted on it, and the failure
+// when those two drift is a credential surface behind no credential.
+type authMounter interface {
+	Routes(mux auth.Mux)
+}
+
+// guardedMounter is what the API needs of a surface it mounts and never calls
+// otherwise: its routes, each mounted through [authz.Router] with the verb it
+// is decided by — and an error where one is not.
+//
+// EVERY SURFACE THE API MOUNTS IS ONE, /auth aside. /config, /secrets and
+// /setup were a plain `Routes(*http.ServeMux)` and decided no grant at all:
+// the guard in front of them answers only whether somebody resolved, which
+// meant "the operator" while an operator token was the only credential and
+// meant "anybody" the day a person could sign in at all. A
+// surface that cannot state its policy where it mounts has no type to be
+// mounted as here.
+//
+// The error is real rather than stylistic: a route mounted with no policy —
+// or naming a verb the authority table has no rule for — is a hole that ships
+// looking correct. Refusing at mount is what turns it into a boot failure, and
+// the boot is the one moment every mistake can be named at once.
 //
 // Declared here, by the consumer, so a test can mount an inert one without
 // standing up the store, the plane or the keyring the real surface is built
 // from.
-type routeMounter interface {
-	Routes(mux httpjson.Router)
-}
-
-// NativeRoutes is the engine's native runtime as the routes that need it reach
-// it — a project's file bytes, the purge and the eviction gate — ASKED ON EVERY
-// REQUEST, each answering false where this node has none NOW.
-//
-// PER REQUEST, never once, for [queries.Sources.Native]'s reason: the native
-// runtime is built at boot OR at the first apply whose company runs a state
-// log, and on a node that booted with no company that apply runs after [New].
-// A seam read at assembly described such a node as one with no tracker and no
-// state log for the life of the process — the byte routes and the purge never
-// mounted, the gate answering `no_state_log` — so the quickstart's live
-// bootstrap could not upload a file, purge a task or evict a node until a
-// restart.
-//
-// So the routes are MOUNTED from the one fact known at assembly — an engine is
-// beside this API — and each handler asks here before anything else. A request
-// that finds nothing answers exactly what the route answered when it was left
-// unmounted or handed nothing: the mux's own 404 for the byte routes and the
-// purge (a route this node does not serve is absent rather than refused), and
-// `503 no_state_log` for the gate (the routes exist on every build, and saying
-// otherwise sends an operator looking for a version mismatch).
-//
-// AN INTERFACE ANSWERING PAIRS rather than nil-able fields, for the conversion
-// [EngineReads] states: a typed nil inside an interface passes a nil check and
-// panics on the first call, and a pair cannot hold one by mistake.
-type NativeRoutes interface {
-	// FileReads is what a project file's download reads — its row and its
-	// bytes — or false where this node runs no native tracker or no object
-	// store.
-	FileReads() (FileReads, bool)
-
-	// FileWrites is what an upload and a removal write, or false where
-	// this node also hands out no tracker writer — in a maintenance mode,
-	// which serves its reads and hands no writer to any surface.
-	FileWrites() (FileWrites, bool)
-
-	// Purger destroys a task as the operator who asked, or false where this
-	// node hands out no tracker writer.
-	Purger() (TaskPurger, bool)
-
-	// Nodes installs and lifts the eviction gate, or false where this node
-	// runs no state log.
-	Nodes() (NodeGate, bool)
-}
-
-// OperatorSurface is the operator catalogue — the one tool set both of its
-// transports serve, MCP for an operator's own assistant and the act transport
-// for a person at the dashboard — ASKED ON EVERY REQUEST, for [NativeRoutes]'
-// reason: the catalogue is built from the native tracker and knowledge base
-// this node runs and from whether the company has a knowledge backend, and on
-// a node that booted with no company the first of those arrives with its first
-// apply, after the app was assembled. A catalogue captured at assembly offered
-// such a node's people the fleet's own gestures (answering a parked run,
-// pausing a seat, steering a turn) and nothing of the tracker or the knowledge
-// base for the life of the process, so the person a live bootstrap binds could
-// not file a task from the dashboard until somebody restarted the node.
-//
-// Both transports' routes are mounted on every app, and each request serves
-// the server this answers at that moment, whole: a request is served by one
-// catalogue, never by half of two. False — nothing to serve — answers the
-// mux's own 404, as a route this node does not serve answers. With an engine
-// beside the app it is never false, since the fleet's own gestures are served
-// whatever the company runs.
-type OperatorSurface interface {
-	Operator() (*operator.Server, bool)
+type guardedMounter interface {
+	Routes(mux authz.Mux) error
 }
 
 // Options configure the app.
 //
 // # What is required, and why a nil is refused rather than served around
 //
-// Runtime, Sources.Company, Sources.Events, Sources.NodeID, Sources.Coord,
-// Sources.Native, Sources.Retention, the Inbound edge's Publisher, Claims,
-// Secrets and AppFlow, Config, Secrets, Setup, Operator, Retention, Native,
-// Code, Capacity, FleetBroker, Backup and Audit are REQUIRED, and [New]
-// refuses a missing one by name.
+// Runtime, Inbox, Credentials, Sources.Company, Sources.Chart, Sources.Holders,
+// Sources.WithheldContacts, Sources.Events, Sources.NodeID, Sources.Coord, the
+// Inbound edge's Publisher, Claims, Secrets and AppFlow, Config, Secrets,
+// Setup, Retention, Code, Capacity, FleetBroker, Backup, Nodes, AuthEvents and
+// Audit are REQUIRED, and [New] refuses a missing one by name.
 //
 // Every one of them is something the engine beside the API holds: `crewlet
 // run` is the only thing that builds an App, it builds one over an engine that
@@ -225,21 +287,73 @@ type OperatorSurface interface {
 // (a health body missing the engine's fields, a 503, an unregistered /config)
 // would hide that mistake behind something an operator reads as deliberate.
 //
-// That holds for the native tracker and knowledge base too, for the state
-// log's retention answer, the routes over them, the operator catalogue and
-// the code host: what a real node can lack there is the BACKEND (a company on
-// Jira, one that hosts no code, a node whose first company has not been
-// applied yet), which [queries.Sources.Native], [queries.Sources.Retention],
-// [NativeRoutes], [OperatorSurface] and [CodeSurface] answer per request —
-// never the seam that asks. Left nil,
-// every native question answered `unknown_query` and every native route and
-// operator transport was absent for the life of the process, the very symptom
-// of a runtime read once at assembly, and nothing said it was the wiring.
+// That holds for the code host too: what a real node can lack there is the
+// BACKEND (a company that hosts no code, a node whose first company has not
+// been applied yet), which [CodeSurface] answers per request — never the seam
+// that asks.
 //
-// What stays optional is what a real node can lack outright: a telemetry
-// receiver or a tool bridge (an unset environment variable), and the defaults
-// a test injects.
+// What stays optional is what a real node can lack: a native tracker (a company
+// on Jira), an operator MCP surface, a telemetry receiver or a tool bridge (an
+// unset environment variable), and the defaults a test injects.
 type Options struct {
+	// SeatBindings is where a Tier A token's seat binding is read — the
+	// identity directory's row for its login — and resolved, through the
+	// SAME chart seam a signed-in person's binding is. See
+	// [auth.SeatBindings].
+	//
+	// THE COMPANY'S HALF OF A PRINCIPAL: it is what makes somebody acting
+	// through a token act as THEMSELVES rather than as the credential —
+	// without it every authority rule asking "do you lead this" falls
+	// through to the admin grant. The binding used to be a field on a
+	// seat's contact block naming the token id; it is a directory row now,
+	// bound by one record on the directory subject so two holders cannot
+	// hold one seat.
+	//
+	// THE ZERO VALUE BINDS NOTHING, which is what an API stood up in a
+	// suite has: every credential then acts as itself. `crewlet run`
+	// always wires both halves over its engine.
+	SeatBindings auth.SeatBindings
+
+	// Sessions turns a browser's cookie into the person holding it.
+	//
+	// OPTIONAL, and nil is what a suite about something else has: Tier A
+	// tokens are then the whole of authentication. `crewlet run` always
+	// wires it, beside [Options.Auth], on every node serving the API —
+	// each holds the estate, since ingress requires the `data` role
+	// (ADR-0025), and the identity estate is the core every data node
+	// starts at boot, company or none — so a node with no company serves
+	// the session a Tier A token exchanges for, which is how its company
+	// is created, and signs its people in once that company has any.
+	Sessions *auth.Sessions
+
+	// Tokens turns a machine token — a person's own access token or a
+	// service account's, minted at `/iam/credentials` — into its owner.
+	// See [auth.Tokens].
+	//
+	// NIL IS AN API THAT RESOLVES NO MACHINE TOKEN, which is what a suite
+	// has. `crewlet run` ALWAYS builds one over its engine's directory,
+	// which every node serving the API holds from boot — ingress requires
+	// the `data` role (ADR-0025).
+	Tokens *auth.Tokens
+
+	// AuthEvents is where the guard counts a refused credential.
+	// REQUIRED: the engine
+	// running beside this API holds the node's audit trail, and a guard
+	// built without it would refuse a spray of wrong tokens and leave no
+	// count of it anywhere.
+	AuthEvents auth.Audit
+
+	// DevPrincipal is the identity an unauthenticated request resolves to
+	// on a development run, or nil.
+	//
+	// BUILT BY THE CALLER, not from the bootstrap here, because it is a
+	// FLAG rather than a config field and its refusals are boot-time: a
+	// released binary and a bind other machines can reach are both refused
+	// by [auth.NewDevPrincipal], which `crewlet run` calls before it ever
+	// builds this. A field would be copied into an image, which is exactly
+	// how `api.auth.disabled` reached production.
+	DevPrincipal *auth.DevPrincipal
+
 	// Bootstrap supplies the auth posture, and whether the public routes
 	// have a listener of their own (api.public — see [App.Public]). Nil is
 	// permitted and is not the same as absent config: the guard then
@@ -255,6 +369,29 @@ type Options struct {
 	// Runtime is the engine this process runs beside.
 	Runtime NodeRuntime
 
+	// Inbox is where this node hears whose inbox a committed tracker
+	// batch moved, which [New] turns into `inbox_changed` frames for the
+	// sockets watching each seat — see [InboxFeed].
+	//
+	// REQUIRED, like Runtime: every node that serves the API applies the
+	// tracker's log — and relays a peer's movements while its own copy is
+	// out of service — so a node that heard nothing would be a wiring
+	// mistake rather than a narrower node, and the dashboard would go back
+	// to learning about somebody's work a poll interval late.
+	Inbox InboxFeed
+
+	// Credentials is where this node hears whose credentials a committed
+	// identity batch moved, which [New] turns into a fresh decision of
+	// every open socket opened with one — see [CredentialFeed].
+	//
+	// REQUIRED, for Inbox's reason: every node that serves the API holds
+	// the estate and applies the identity log, and a socket authenticated
+	// at its handshake is
+	// ended by the record that ends its credential — a node that heard
+	// nothing would leave every revoked session's open tab receiving the
+	// company's state until it closed on its own.
+	Credentials CredentialFeed
+
 	// State is the projection to serve. Nil builds an empty one on
 	// [Options.Now].
 	//
@@ -266,36 +403,34 @@ type Options struct {
 	State *livestate.LiveState
 
 	// Sources are what the read surface answers from. Company, Events,
-	// NodeID, Coord, Native and Retention are required; see above. NodeID is
-	// the node's RESOLVED id, and it names this node on the health body as
-	// well as in the fleet answer, so the two cannot disagree about who
-	// answered. Any other source left nil makes its questions UNREGISTERED
-	// rather than failing, which is the honest answer for a node that does
-	// not have that surface at all (no memory reader, no sandbox tail) and
-	// distinct from an empty one.
+	// NodeID, Chart, Holders, WithheldContacts and Coord are required; see
+	// above. NodeID is the node's RESOLVED id, and it names this node on the
+	// health body as well as in the fleet answer, so the two cannot disagree
+	// about who answered. Chart is who leads whom, which every personal
+	// question a lead asks about a report is decided by — left nil it
+	// answered UNKNOWN to every one of them for the life of the process,
+	// which is a 503 that never clears rather than a narrower node. Holders
+	// is whose record somebody else's login names, which every personal
+	// question naming one resolves through — left nil, every such question
+	// is the same 503 for ever, and read literally, as it was, a bound
+	// person's login named a record nothing of theirs is kept under.
+	// WithheldContacts is whose contact identities the identity directory
+	// withholds from what a lead and `colleague` are shown — left nil, a
+	// suspended person's chat ids stayed readable. Coord is the fleet's
+	// lease table, which the placement push and the fleet answer read. Any
+	// other source left
+	// nil makes its questions UNREGISTERED rather than failing, which is the
+	// honest answer for a node that does not have that surface at all (no
+	// knowledge backend, no native tracker) and distinct from an empty one.
 	Sources queries.Sources
 
 	// QueueBackend names the broker, for the health body.
 	QueueBackend string
 
-	// Now is injectable so a test can pin the timestamps. It is also the
-	// clock of the projection a nil [Options.State] builds.
+	// Now is injectable so a test can pin the timestamps. It is the
+	// questions' clock too unless [queries.Sources.Now] pins one of its own,
+	// and the clock of the projection a nil [Options.State] builds.
 	Now func() time.Time
-
-	// PaceClock is the clock a file upload's and download's pace — a
-	// mebibyte every paced.Pace — is measured on, and every read and write
-	// deadline it sets is taken from. Nil takes time.Now.
-	//
-	// NOT [Options.Now], which stamps answers and which a test pins to one
-	// instant: the pace is a DURATION, the time spent inside an upload's
-	// reads and a download's writes, and a clock that never moves would
-	// measure every one as taking none — the pace charged nothing, whatever
-	// it was meant to charge. Injectable so a suite can move it by exactly
-	// the time a fake client or store took, rather than sleep that long. And
-	// time.Now itself rather than one converted to UTC, since a converted
-	// time drops the monotonic reading, and a pace on the wall reading alone
-	// moves with every step the system clock takes.
-	PaceClock func() time.Time
 
 	// HealthInterval overrides the shared tick's cadence.
 	HealthInterval time.Duration
@@ -304,16 +439,96 @@ type Options struct {
 	Inbound Inbound
 
 	// Config serves /config, normally a configapi.Service.
-	Config routeMounter
+	Config guardedMounter
 
 	// Setup serves /setup, normally a setupapi.Service: collecting what
 	// an integration still needs and writing it, half into the sealed store
 	// and half into the company document.
-	Setup routeMounter
+	Setup guardedMounter
+
+	// Auth serves /auth, normally an authapi.Service: how a person
+	// BECOMES a principal. It is the one surface here whose routes are
+	// not all guarded — the ones somebody obtains a credential through
+	// cannot require one, or it is a deployment nobody can enter — and
+	// which are which is named in internal/api/auth's exemption list,
+	// held against the registration by a gate in authapi.
+	//
+	// ITS OWN MOUNTER TYPE, which takes a mux it can NAME rather than
+	// *http.ServeMux: the standard mux does not report what was
+	// registered on it, so the gate holding the exemption list against
+	// the registration could not read one half of what it is about.
+	//
+	// OPTIONAL, unlike the four above, for a suite about something else:
+	// `crewlet run` mounts one on every node serving the API, since each
+	// holds the identity directory from boot, company or none — ingress
+	// requires the `data` role (ADR-0025) — and it used to be absent on a
+	// node that had met no company, which was the node its first person
+	// had to sign in on. An API with none serves no /auth at all
+	// rather than one that answers 503 to every attempt. ABSENT MEANS A
+	// NIL INTERFACE, never a nil *authapi.Service inside one, which [New]
+	// cannot tell from a surface that is there — [HumanSurfaces.Mount] is
+	// the one place the conversion happens.
+	Auth authMounter
+
+	// IAM serves /iam, normally an iamapi.Service: the company's identity
+	// directory.
+	//
+	// OPTIONAL, and nil — the routes ABSENT — is what a suite about
+	// something else has. `crewlet run` always mounts it: every node
+	// serving the API holds the directory from boot (ingress requires the
+	// `data` role, ADR-0025), and a node with nobody in its company is
+	// exactly where the first person is invited.
+	IAM guardedMounter
+
+	// Work serves the human write surface over the company's own tracker
+	// and knowledge base, normally a workapi.Service: the same tools a seat
+	// and the operator's assistant hold, as routes a person reaches from a
+	// browser or a script.
+	//
+	// OPTIONAL, and nil — the routes ABSENT — is what a suite about
+	// something else has. `crewlet run` always mounts it, and the surface
+	// reads the halves it serves PER REQUEST: a node's tracker and
+	// knowledge base come up with its first company, which it may meet
+	// long after this API started serving, and a route of a half the
+	// company does not run answers as its absence would. It is also where
+	// the one operation nothing undoes, destroying a work item, lives: it
+	// had a route of its own beside the retention gestures, with an
+	// operator check written there, and that check was the second answer
+	// to a question the authority table already answers.
+	Work guardedMounter
+
+	// Artifacts serves /artifacts on this listener, normally an
+	// artifactsapi.Service: uploads, publishes, shares, trash and purge,
+	// view tickets and the raw bytes of a version's files, each route
+	// stating its authority where it is mounted. Nil serves none, which is
+	// what a node built without the artifacts domain has. The artifact
+	// BYTES are never rendered here: they are served by the separate
+	// api.artifacts listener, inside a sandboxed frame.
+	Artifacts guardedMounter
+
+	// ArtifactData serves an artifact's datastore under
+	// /artifacts/{id}/data, normally an artifactdataapi.Service. Nil serves
+	// none.
+	ArtifactData guardedMounter
+
+	// Datasets is what a dashboard artifact's datasets are read from: the
+	// artifacts surface's board reads and the datastore. The surface itself
+	// (internal/api/datasetsapi) is built here, because an engine dataset
+	// is answered by THIS app's question registry and its agents overview,
+	// on the viewer's own request (adr/0043). Nil serves none.
+	Datasets *DatasetsSource
+
+	// Rooms decides and feeds the socket's artifact rooms: who may join one
+	// (the datastore's own admission, asked with the read verb), where an
+	// artifact's datastore stands, this node's presence hub, and what its
+	// appliers commit. Nil serves no room, which is what a node built
+	// without the artifacts domain has and what a suite about something
+	// else leaves out; `crewlet run` always wires it.
+	Rooms *Rooms
 
 	// Secrets serves /secrets, normally a secretsapi.Service: the fleet's
 	// credential store.
-	Secrets routeMounter
+	Secrets guardedMounter
 
 	// OtelReceiver serves the sandbox telemetry edge. Nil serves none, and
 	// the route is then ABSENT rather than refusing — an endpoint that
@@ -339,29 +554,51 @@ type Options struct {
 
 	// Operator is the company's own tracker and knowledge base as ONE tool
 	// catalogue, served to the people who run it — over MCP for an
-	// operator's own AI assistant, and over the act transport for a person
-	// at the dashboard, who must hold a token bound to their seat
-	// (ADR-0024) — asked of the engine on every request: see
-	// [OperatorSurface].
+	// operator's own AI assistant, and over the act route for a person at
+	// the dashboard (ADR-0024) — and the one dispatch the human write
+	// surface's tool-backed routes call. Nil serves none and both routes are
+	// ABSENT, which is what a suite about something else has.
 	//
-	// ALWAYS GUARDED — see [auth.GuardedPrefixes]. It writes to the
-	// company, and the credential's own name is what lands on each record
-	// as the author.
-	Operator OperatorSurface
+	// ONE SERVER, BUILT ONCE, WHOSE CATALOGUE IS READ PER CALL: the
+	// catalogue is the native halves', which a node meets at its first
+	// company. A request before that answers `503 no_active_revision`, and
+	// one to a node whose catalogue is empty answers as the route's absence
+	// would. [HumanSurfaces.Mount] is what hands it over.
+	//
+	// GUARDED, like every route the exemption list does not name. It
+	// writes to the company, and the request's principal is what lands on
+	// each record as the author — so a request with no principal has
+	// nobody to attribute the write to.
+	Operator *operator.Server
+
+	// OperatorListens tells every MCP client listening on Operator's
+	// transport that its tools changed ([OperatorListens]): it joins the
+	// fleet's announcements at [App.Start], is told of this node's moves
+	// through [App.OperatorToolsMoved], ends every stream at
+	// [App.EndListens] and leaves the fleet at [App.Stop].
+	// [HumanSurfaces.Mount] is what hands it over, beside Operator. Nil
+	// tells nobody, which is what a suite about something else has.
+	OperatorListens *OperatorListens
 
 	// Retention is the fleet's record of what the log may delete, for the
 	// operator's backup acknowledgement.
 	Retention retentionWriter
 
-	// Native serves a project's file bytes, the purge and the eviction
-	// gate, asked of the engine on every request — see [NativeRoutes]. The
-	// file listing is a question, [queries.Native.Files].
-	Native NativeRoutes
+	// Nodes installs and lifts the eviction gate.
+	//
+	// REQUIRED. It was optional, and nil answered `503 no_state_log`, for
+	// a node that had met no company and so ran no state log. There is no
+	// such node here: the state log is the engine's core, started at boot
+	// on every node that holds the estate, company or none, and the API is
+	// served only on such a node — ingress requires the `data` role
+	// (ADR-0025) — so every engine this API runs beside holds a gate, and a
+	// nil is a wiring mistake, not a narrower node.
+	Nodes NodeGate
 
 	// Code is the engine's own git host — smart HTTP under /git/ on a node
 	// whose roles name git — and the code domain's reads under /code/ on
 	// every node, asked of the engine on every request: see [CodeSurface].
-	// ALWAYS GUARDED, and never on api.public (ADR-0037).
+	// Never on api.public (ADR-0051). REQUIRED, for [Options]' reason.
 	Code CodeSurface
 
 	// Capacity drives a stream's byte ceiling.
@@ -375,10 +612,39 @@ type Options struct {
 	// names.
 	Backup backupTaker
 
+	// Objects moves the company's files from the fleet's object store to
+	// an S3 bucket (`crewlet objects migrate --to s3`).
+	Objects objectsMigrator
+
+	// Identity says whether anybody is enrolled, for /health. See
+	// [Identity].
+	//
+	// Optional, and nil is what a suite about something else has: with
+	// nothing to ask about who is in the company, the health body leaves
+	// the field out rather than calling the company unclaimed. `crewlet
+	// run` always wires it, over the identity estate every data node runs
+	// from boot — and only a data node serves the API (ingress requires
+	// `data`, ADR-0025).
+	Identity Identity
+
+	// Estate answers whether this node can answer from the replicated
+	// estate at all, for /ready. See [EstateFloor].
+	//
+	// Optional, and nil is what a suite about something else has: an API
+	// with no estate to judge is ready on its other terms. `crewlet run`
+	// always wires it ([engine.Engine.SeatsServiceable]), which itself
+	// answers ready for a company whose tracker and knowledge base are
+	// both a vendor's — there is nothing of theirs to route. What nil must
+	// NOT be read as is "assume the worst": a node with nothing to judge
+	// would then never be ready.
+	Estate EstateFloor
+
 	// Audit is where a backup publishes its runtime audit record — this
 	// node's own queue, whose publish listener writes the event store. The
 	// operator surface is handed the same one by whoever builds it
-	// ([operator.Options.Audit]).
+	// ([operator.Options.Audit]). REQUIRED: copying every credential the
+	// company holds to a directory somebody named is the one call an audit
+	// is most often opened to find.
 	Audit operator.AuditPublisher
 
 	// Assets overrides the embedded dashboard tree. Nil serves the one
@@ -402,10 +668,6 @@ func New(opts Options) (*App, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	pace := opts.PaceClock
-	if pace == nil {
-		pace = time.Now
-	}
 	state := opts.State
 	if state == nil {
 		// ON THE APP'S CLOCK: the live spend window is labelled by the
@@ -415,32 +677,40 @@ func New(opts Options) (*App, error) {
 	}
 
 	a := &App{
-		guard:        auth.New(opts.Bootstrap),
+		guard: auth.New(opts.Bootstrap).BindSeats(opts.SeatBindings).
+			WithDevPrincipal(opts.DevPrincipal).WithSessions(opts.Sessions).
+			WithTokens(opts.Tokens).
+			WithAudit(opts.AuthEvents),
+		csrf:         auth.NewCSRF(opts.Bootstrap),
 		state:        state,
 		runtime:      opts.Runtime,
 		gitGap:       gitExchangeGap,
 		nodeID:       opts.Sources.NodeID,
 		queueBackend: opts.QueueBackend,
 		now:          now,
-		pace:         pace,
 		// DERIVED FROM THE SOURCE THAT ALREADY EXISTS, rather than a
 		// second field an embedder could set inconsistently with it:
 		// Sources.Company reads the CURRENT epoch, and "is there one" is
 		// the whole question [App.Configured] asks.
-		company: opts.Sources.Company,
-		// And the lookup its bindings resolve through, from the same place.
-		contacts: opts.Sources.Env,
+		company:     opts.Sources.Company,
+		estateFloor: opts.Estate,
+		identity:    opts.Identity,
 	}
 	var err error
 	a.stream, err = stream.NewService(state, stream.Options{
 		Health: a.streamHealth,
+		// The SAME set /ready refuses on, read from the one place it is
+		// declared — see [framePosture].
+		Posture: framePosture,
 		// Read through the SOURCES rather than captured, for the same
 		// reason every other read here is: a config apply replaces the
-		// company, and a map captured at boot would keep cross-linking a
-		// renamed seat to the handle it used to have.
-		Handles: opts.Sources.RoleHandles,
+		// company, and a directory captured at boot would keep linking a
+		// removed seat and miss every seat added since.
+		Seats: opts.Sources.Seats,
 		// The three config-derived surfaces, read live for the same
-		// reason Handles is: an apply replaces the company.
+		// reason Seats is: an apply replaces the company. The roster is
+		// the CONFIGURATION alone: what each seat is doing comes from the
+		// live projection over the placement below.
 		Roster: func() []map[string]any { return roster(opts.Sources.Company) },
 		Org:    func() any { return orgProjection(opts.Sources.Company) },
 		Tools:  func() []map[string]any { return toolRows(opts.Runtime) },
@@ -454,18 +724,57 @@ func New(opts Options) (*App, error) {
 			return placementTick(opts.Sources.Company, opts.Sources.Coord, opts.Runtime)
 		},
 
+		// WHO LEADS WHOM, which a `watch` frame is decided by — the SAME
+		// seam the `work_inbox` question about the same seat asks.
+		Chart: opts.Sources.Chart,
+		// AND WHOSE RECORD A LOGIN NAMES, which a `watch` frame naming
+		// one is resolved through — the SAME seam that question resolves
+		// the same name through, so a watch is installed on the record
+		// the frames are pushed to.
+		Holders: opts.Sources.Holders,
+		// AND WHAT THE PUBLISHED COMPANY SAYS ABOUT A SEAT, which an open
+		// socket acting as one is decided by when a company is published.
+		SeatOf: func(name string) (stream.SeatState, bool) {
+			return seatOf(opts.Sources.Company, name)
+		},
+
+		// THE ARTIFACT ROOMS, every half or none ([Rooms]).
+		Rooms:   opts.Rooms.streamRooms(),
+		Metrics: opts.Rooms.metrics(),
+
 		Now:            now,
 		HealthInterval: opts.HealthInterval,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("api: %w", err)
 	}
+	// AND WHAT EACH ARTIFACT'S APPLIERS COMMITTED, pushed to the sockets in
+	// its room, with every room told to re-read whenever this node's copies
+	// leave or return to service.
+	if r := opts.Rooms; r != nil && r.Feed != nil {
+		a.stopRooms = append(a.stopRooms,
+			r.Feed.OnArtifactsMoved(a.stream.ArtifactsMoved),
+			r.Feed.OnArtifactDataMoved(a.stream.ArtifactDataMoved))
+		r.Feed.SetOnArtifactsServing(a.stream.ArtifactsCopy)
+	}
+	// AND WHOSE INBOX MOVED, pushed to the sockets watching each seat —
+	// and when what this node hears has a gap, every watched inbox read
+	// again.
+	opts.Inbox.SetOnInboxMoved(a.pushInboxMoved)
+	opts.Inbox.SetOnInboxGap(a.pushInboxGap)
+	// AND WHOSE CREDENTIALS MOVED, deciding the sockets opened with them
+	// again.
+	opts.Credentials.SetOnIdentityMoved(a.pushIdentityMoved)
 
 	tree := opts.Assets
 	if tree == nil {
 		tree = static.FS()
 	}
-	files := newAssets(tree)
+	policy, err := dashboardPolicy(opts.Bootstrap)
+	if err != nil {
+		return nil, err
+	}
+	files := newAssets(tree, policy)
 
 	// ONE registry, and both transports go through it. Two surfaces
 	// answering one question from two implementations is how they end up
@@ -479,13 +788,17 @@ func New(opts Options) (*App, error) {
 	if sources.FleetBroker == nil {
 		sources.FleetBroker = opts.FleetBroker
 	}
-	// ONE CLOCK for the surface. The app's own was pinned by a test and the
-	// answers' was the wall clock, so a question stamping "now" on its answer
-	// answered a REST call and a socket call a second apart with two
-	// different instants, and nothing but the call's timing said which. (The
-	// live spend window, where that showed, is labelled by the projection
-	// now, on the clock it was aged on — which a nil State builds on this
-	// one: see [Options.State].)
+	// ONE CLOCK PER APP. The questions read [queries.Sources.Now] while the
+	// stream service and the webhook edge read [Options.Now], so a caller
+	// that pinned the app's clock and not the sources' had its pushes and
+	// deliveries at the pinned instant and its answers on the wall clock — a
+	// question stamping "now" on its answer answered a REST call and a socket
+	// call a second apart with two different instants, and a test that pinned
+	// the app to compare one question across both transports compared two
+	// wall-clock readings instead. A caller that pinned the sources' own clock
+	// keeps it. (The live spend window is labelled by the projection, on the
+	// clock it was aged on — which a nil State builds on this one: see
+	// [Options.State].)
 	if sources.Now == nil {
 		sources.Now = now
 	}
@@ -498,30 +811,38 @@ func New(opts Options) (*App, error) {
 	sources.Verifiable = func(ctx context.Context) []string {
 		return opts.Runtime.Snapshot(ctx).VerifiableSources
 	}
-	// WHO MAY REACH THE COMPANY, read off the guard just mounted rather than
-	// off Tier A: the guard is what decides, and a disabled one accepts no
-	// listed token (see [queries.AccessPosture]).
-	sources.Access = &queries.AccessPosture{
-		TokenIDs:      a.guard.TokenIDs(),
-		Disabled:      a.guard.Disabled(),
-		AnonymousRead: a.guard.AnonymousRead(),
+	// WHAT THIS PRINCIPAL MAY DO, from the SAME catalogue the act route
+	// serves and the same authority every one of its tools is decided by:
+	// a list computed anywhere else would be a second opinion about which
+	// buttons work. A caller that supplied its own keeps it.
+	if sources.Acts == nil && opts.Operator != nil {
+		sources.Acts = opts.Operator.Acts
 	}
-	if opts.Bootstrap != nil {
-		sources.Access.AllowedOrigins = slices.Clone(opts.Bootstrap.API.Auth.AllowedOrigins)
-		// THE SAME LIST the config surface enforces, from the same Tier A,
-		// so the viewer offers exactly the edits that surface admits.
-		sources.Access.CompanyWriters = slices.Clone(opts.Bootstrap.API.Auth.CompanyWriters)
+	// WHO MAY CHANGE THE COMPANY DOCUMENT, from the same Tier A the config
+	// surface enforces it from, so the viewer offers exactly the edits that
+	// surface admits (ADR-0030). A caller that supplied its own keeps it.
+	if sources.CompanyWriters == nil && opts.Bootstrap != nil {
+		sources.CompanyWriters = slices.Clone(opts.Bootstrap.API.Auth.CompanyWriters)
+	}
+	// HOW A PERSON SIGNS IN HERE, from this node's own Tier A, through the
+	// accessors the sign-in path enforces it by. A caller that supplied its
+	// own keeps it.
+	if sources.SignIn == nil && opts.Bootstrap != nil {
+		policy := queries.SignInPolicyOf(opts.Bootstrap.API.Auth)
+		sources.SignIn = &policy
 	}
 	a.queries = queries.NewRegistry()
 	queries.Register(a.queries, sources)
 	a.backup, a.audit = opts.Backup, opts.Audit
-	a.retention, a.native = opts.Retention, opts.Native
+	a.objects = opts.Objects
+	a.retention, a.nodes = opts.Retention, opts.Nodes
 	// WHETHER THIS NODE SERVES GIT is its Tier A roles' answer, never the
 	// company's: a node that lists its roles serves git only if it names
 	// it, and an undeclared node has every role. Which company it serves is
 	// asked per request (code.go).
 	a.code = opts.Code
 	a.servesGit = servesGit(opts.Bootstrap)
+	a.listens = opts.OperatorListens
 	a.capacity = opts.Capacity
 	a.fleetBroker = opts.FleetBroker
 
@@ -533,41 +854,29 @@ func New(opts Options) (*App, error) {
 	// The NAMED read routes — the public REST API. Adapters over the same
 	// registry the generic form above reaches; see rest.go.
 	a.mountReads(mux)
-	// A POST, so the anonymous-read posture never opens it: copying every
-	// credential and every seat's memory to a path the caller names is not
-	// a read, whatever a laptop deployment allows.
-	mux.Handle("POST /backup", http.HandlerFunc(a.serveBackup))
-	// The three retention gestures that write. POSTs for the same reason:
-	// moving the floor the trim deletes against, stopping a machine
-	// writing and letting it write again are not reads, whatever the
-	// anonymous-read posture allows. See retention.go.
-	a.mountRetention(mux)
-	a.mountFiles(mux)
+	// THE DEPLOYMENT'S OWN CONTROLS — the backup, the retention gestures,
+	// the capacity window and the fleet broker's membership — each mounted
+	// with the grant it takes, and failing the boot where a policy is
+	// missing.
+	if err := a.mountDeployment(mux); err != nil {
+		return nil, fmt.Errorf("api: mount the deployment's controls: %w", err)
+	}
 	// The engine's own git host and its reads: git on a node with the git
 	// role, the reads on every node. See code.go.
 	a.mountCode(mux)
-	// The capacity window's own control surface. It is the one thing a
-	// maintenance-mode node serves that a publishing one does not need,
-	// and it is why the verb can run at all on a topology whose broker
-	// binds no socket. See retention.go.
-	a.mountCapacity(mux)
-	// The fleet broker's membership: what every node advertises against
-	// what the metadata group counts, and the removal of a member that is
-	// gone for good. See fleetbroker.go.
-	a.mountFleetBroker(mux)
-	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.stream, a.answer))
+	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.csrf, a.stream, a.answer))
 	// The OPERATOR surface: the same tracker and knowledge tools a seat
 	// holds, offered to a person's own assistant over MCP and to the person
-	// themself over the act transport. Under its own
-	// always-guarded prefix rather than under /mcp/, which is exempt
+	// themself over the act route. Under its own
+	// prefix rather than under /mcp/, which is exempt from the guard
 	// wholesale for the sandbox bridge — see operator.MCPPath.
 	a.mountOperator(mux, opts.Operator)
 	// The dashboard shell and its assets. All four paths are exempt from
 	// the guard: the page that prompts for a token cannot itself require
 	// one, and it ships no data — every byte it renders comes from an
 	// authenticated fetch.
-	mux.Handle("GET /{$}", http.RedirectHandler("/dashboard", http.StatusFound))
-	mux.Handle("GET /dashboard", http.HandlerFunc(files.serveIndex))
+	mux.Handle("GET /{$}", http.RedirectHandler(auth.PathDashboard, http.StatusFound))
+	mux.Handle("GET "+auth.PathDashboard, http.HandlerFunc(files.serveIndex))
 	mux.Handle("GET /favicon.ico", http.HandlerFunc(files.serveFavicon))
 	mux.Handle("GET /static/", http.HandlerFunc(files.serveStatic))
 	// The inbound edge. Exempt from the guard by prefix (see the auth
@@ -582,21 +891,70 @@ func New(opts Options) (*App, error) {
 	// whole company. Its per-run token is in the path instead.
 	a.mountOTLP(mux, opts.OtelReceiver)
 	mountBridge(mux, opts.Bridge)
-	// The config surface. GUARDED in full, reads included: the auth
-	// package makes /config one of the two prefixes never eligible for
-	// allow_anonymous_read, because reading it exposes the whole company
-	// document and writing it changes the company.
-	opts.Config.Routes(mux)
-	// The other one. /secrets is how a rotation reaches a fleet at all —
-	// the coordination broker is inside the engine's process on the
-	// default topology, so no second process can write the store — and its
-	// listing alone says which credentials a company holds.
-	opts.Secrets.Routes(mux)
-	// The third, and the newest: connecting an integration without a
-	// shell. Guarded by the same prefix rule for the same reason, and
-	// reads included — the list of which credentials a company has NOT
-	// configured is worth as much to an attacker as the ones it has.
-	opts.Setup.Routes(mux)
+	// The config surface, every route on a grant, reads included:
+	// reading it exposes the whole company document and writing it
+	// changes the company.
+	//
+	// These three, like the chart below, fail the boot on a route mounted
+	// with no policy — see [guardedMounter] for what they decided before.
+	for _, surface := range []struct {
+		name string
+		m    guardedMounter
+	}{
+		{"config", opts.Config},
+		// /secrets is how a rotation reaches a fleet at all — the
+		// coordination broker is inside the engine's process on the
+		// default topology, so no second process can write the store —
+		// and its listing alone says which credentials a company holds.
+		{"secrets", opts.Secrets},
+		// Connecting an integration without a shell, reads included —
+		// the list of which credentials a company has NOT configured is
+		// worth as much to an attacker as the ones it has.
+		{"setup", opts.Setup},
+	} {
+		if err := surface.m.Routes(mux); err != nil {
+			return nil, fmt.Errorf("api: mount the %s surface: %w", surface.name, err)
+		}
+	}
+	// AND THE WAY IN. Mounted after the guarded surfaces and before the
+	// chart's, which is a matter of reading order rather than routing:
+	// Go's mux prefers the more specific pattern whichever way round they
+	// are declared.
+	if opts.Auth != nil {
+		opts.Auth.Routes(mux)
+	}
+	// THE IDENTITY DIRECTORY, a mount that can fail: its routes carry their
+	// authority with their registration, so a policy that is missing or
+	// names a verb the table has no rule for is refused now rather than
+	// serving an ungated route for the life of the process.
+	if opts.IAM != nil {
+		if err := opts.IAM.Routes(mux); err != nil {
+			return nil, fmt.Errorf("api: mount the identity surface: %w", err)
+		}
+	}
+	// AND THE HUMAN WRITE SURFACE, which fails the same way for the same
+	// reason: every route states its authority where it is mounted.
+	if opts.Work != nil {
+		if err := opts.Work.Routes(mux); err != nil {
+			return nil, fmt.Errorf("api: mount the work surface: %w", err)
+		}
+	}
+	// AND THE ARTIFACTS SURFACES, for the same reason.
+	if opts.Artifacts != nil {
+		if err := opts.Artifacts.Routes(mux); err != nil {
+			return nil, fmt.Errorf("api: mount the artifacts surface: %w", err)
+		}
+	}
+	if opts.ArtifactData != nil {
+		if err := opts.ArtifactData.Routes(mux); err != nil {
+			return nil, fmt.Errorf("api: mount the artifact datastore surface: %w", err)
+		}
+	}
+	if opts.Datasets != nil {
+		if err := a.mountDatasets(mux, opts.Datasets, opts.Sources.Chart); err != nil {
+			return nil, fmt.Errorf("api: mount the dashboard datasets surface: %w", err)
+		}
+	}
 	// THE BROWSER POSTURE WRAPS THE CREDENTIAL ONE, because a preflight
 	// carries no credential: the browser sends it itself, before it will
 	// attach an Authorization header to anything. Inside the guard every
@@ -607,16 +965,29 @@ func New(opts Options) (*App, error) {
 	// carry them as well as an answer does, and before routing, so the
 	// responses no handler writes deliberately (the mux's own 404 and 405,
 	// which [httpjson.Mux] answers, and the redirect from `/`, which has an
-	// HTML body) are covered without each needing to remember. A handler serving a page replaces the
-	// policy with its own.
+	// HTML body) are covered without each needing to remember. A handler
+	// serving a page replaces the policy with its own.
 	//
 	// And the drain gate sits inside all three, next to the routes it
 	// refuses: see [App.drainGate].
-	//
-	// THE MUX'S OWN 404 AND 405 ARE JSON, like every other answer this
-	// surface writes ([httpjson.Mux]): a client reads a refusal with no
-	// code as something in front of the node, so a route this node simply
-	// does not serve — the purge on a company with no native tracker, any
+	a.cors = auth.NewCORS(opts.Bootstrap)
+	// THE ORDER IS THE ARGUMENT. Outermost is the page policy, so a
+	// response no handler thought about still carries its headers. Then
+	// the CANONICAL-PATH refusal, before anything reads the path: the
+	// partition and the guard both decide from `r.URL.Path` — which
+	// listener serves a route, and which routes are exempt — and a path
+	// like `/webhooks/../config` reads to them as a public, exempt prefix
+	// and to ServeMux as another route entirely. Then the PARTITION, before
+	// the guard (see [partition]). Then CORS, which must answer a preflight
+	// before the guard sees it — a browser attaches no credential to one.
+	// Then the guard, which resolves the principal. Then the CSRF check,
+	// INSIDE the guard because the credential's SHAPE is what decides
+	// whether a missing Origin is a refusal, and nothing before the guard
+	// knows which shape arrived. Innermost, the mux's OWN 404 and 405 are
+	// answered in the engine's envelope ([httpjson.Mux]), like every other
+	// answer this surface writes: a client reads a refusal with no code as
+	// something in front of the node, so a route this node simply does not
+	// serve — a work purge on a node serving no human write surface, any
 	// route a newer client asks an older node for — read as a write whose
 	// outcome was unknown.
 	//
@@ -626,16 +997,35 @@ func New(opts Options) (*App, error) {
 	// routes, this one everything else — so a route is mounted, guarded and
 	// drained exactly once, and which socket answers it is decided by one
 	// predicate rather than by which of two muxes somebody registered it on.
-	a.cors = auth.NewCORS(opts.Bootstrap)
 	a.routes = mux.patterns
-	chain := a.cors.Middleware(a.guard.Middleware(a.drainGate(httpjson.Mux(mux.mux))))
+	chain := a.cors.Middleware(a.guard.Middleware(a.csrf.Middleware(
+		a.drainGate(httpjson.Mux(mux.mux)))))
+	// EACH SOCKET SAYS WHETHER IT IS HTTPS BY ITS OWN ADDRESS
+	// ([servedOverHTTPS]). The two are published apart — an admin side on a
+	// private http address beside a public one behind TLS is the natural
+	// shape of the split — and the public side serves pages a browser
+	// renders (the GitHub App return, the Slack OAuth landing), so judged by
+	// the admin side's scheme those went out with no Strict-Transport-Security
+	// exactly where the deployment had published them over https.
 	if opts.Bootstrap == nil || !opts.Bootstrap.API.Public.Enabled() {
-		a.handler = pagepolicy.Apply(chain)
+		a.handler = servedOn(opts.Bootstrap, false, chain)
 		return a, nil
 	}
-	a.handler = pagepolicy.Apply(partition(false, chain))
-	a.public = pagepolicy.Apply(partition(true, chain))
+	a.handler = servedOn(opts.Bootstrap, false, partition(false, chain))
+	a.public = servedOn(opts.Bootstrap, true, partition(true, chain))
 	return a, nil
+}
+
+// servedOn is the outermost wrapping of everything one of a node's sockets
+// serves: the security headers, judged by that socket's own scheme
+// ([servedOverHTTPS]), and the canonical-path refusal before anything reads the
+// path. See [New] for why each sits where it does.
+//
+// ONE WRAPPING for the full surface and the boot surface api.port and
+// api.public serve before it ([Boot]), so a request a node refuses while it
+// starts carries the headers the same request carries once it serves.
+func servedOn(bootstrap *config.Bootstrap, public bool, h http.Handler) http.Handler {
+	return pagepolicy.Apply(authz.CanonicalPath(h), servedOverHTTPS(bootstrap, public))
 }
 
 // partition serves the requests on one side of [auth.Public] and answers every
@@ -667,15 +1057,27 @@ func partition(public bool, next http.Handler) http.Handler {
 		case public:
 			httpjson.NoRoute(w, r)
 		default:
-			httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoRoute, map[string]string{
-				"detail": fmt.Sprintf("this listener serves nothing at %s %s",
-					r.Method, r.URL.Path),
-				"hint": "This node has a public listener (api.public): the " +
-					"webhooks, the vendor app landings and the sandbox " +
-					"endpoints are served there and only there. Point the " +
-					"sender at that address.",
-			})
+			servedOnThePublicListener(w, r)
 		}
+	})
+}
+
+// servedOnThePublicListener is api.port's answer for a route outside parties
+// call, on a node whose public listener serves it: the 404 that names the right
+// listener, for the reason [partition] gives.
+//
+// ITS OWN FUNCTION because two surfaces answer it: the partition, and the boot
+// surface api.port serves before the node hands it this one ([Boot]) — so a
+// vendor configured with the wrong port learns it from its first delivery
+// whichever of the two that delivery meets.
+func servedOnThePublicListener(w http.ResponseWriter, r *http.Request) {
+	httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoRoute, map[string]string{
+		"detail": fmt.Sprintf("this listener serves nothing at %s %s",
+			r.Method, r.URL.Path),
+		"hint": "This node has a public listener (api.public): the " +
+			"webhooks, the vendor app landings and the sandbox " +
+			"endpoints are served there and only there. Point the " +
+			"sender at that address.",
 	})
 }
 
@@ -688,12 +1090,15 @@ func (o Options) missing() error {
 		absent bool
 	}{
 		{"Runtime", o.Runtime == nil},
+		{"Inbox", o.Inbox == nil},
+		{"Credentials", o.Credentials == nil},
 		{"Sources.Company", o.Sources.Company == nil},
 		{"Sources.Events", o.Sources.Events == nil},
 		{"Sources.NodeID", strings.TrimSpace(o.Sources.NodeID) == ""},
+		{"Sources.Chart", o.Sources.Chart == nil},
+		{"Sources.Holders", o.Sources.Holders == nil},
+		{"Sources.WithheldContacts", o.Sources.WithheldContacts == nil},
 		{"Sources.Coord", o.Sources.Coord == nil},
-		{"Sources.Native", o.Sources.Native == nil},
-		{"Sources.Retention", o.Sources.Retention == nil},
 		{"Inbound.Publisher", o.Inbound.Publisher == nil},
 		{"Inbound.Claims", o.Inbound.Claims == nil},
 		{"Inbound.Secrets", o.Inbound.Secrets == nil},
@@ -701,13 +1106,14 @@ func (o Options) missing() error {
 		{"Config", o.Config == nil},
 		{"Secrets", o.Secrets == nil},
 		{"Setup", o.Setup == nil},
-		{"Operator", o.Operator == nil},
 		{"Retention", o.Retention == nil},
-		{"Native", o.Native == nil},
 		{"Code", o.Code == nil},
 		{"Capacity", o.Capacity == nil},
 		{"FleetBroker", o.FleetBroker == nil},
 		{"Backup", o.Backup == nil},
+		{"Objects", o.Objects == nil},
+		{"Nodes", o.Nodes == nil},
+		{"AuthEvents", o.AuthEvents == nil},
 		{"Audit", o.Audit == nil},
 	} {
 		if field.absent {
@@ -720,6 +1126,91 @@ func (o Options) missing() error {
 	return fmt.Errorf("api: %s required: every process that serves the API "+
 		"runs the engine that supplies them, so a missing one is a wiring "+
 		"mistake rather than a narrower node", strings.Join(names, ", "))
+}
+
+// mountDeployment registers the routes that operate the DEPLOYMENT rather
+// than the company: the backup, the retention gestures, the capacity window
+// and the fleet broker's membership. Every one is admin's ([iam.GrantAdmin]),
+// through the authority table's [authz.ActionFleetOperate] for a write and
+// [authz.ActionFleetRead] for a read, stated where it is mounted.
+//
+// # They decided nothing, and the guard in front of them decides nothing either
+//
+// Each handler resolved its CALLER — for the audit line — and asked no grant,
+// because each was written while the only credential this engine had was an
+// operator token and "somebody resolved" meant "the operator". The guard in
+// front of every route answers the same question and no other: is there a
+// principal. So once a person could sign in holding nothing but the company's
+// overview, or a pipeline hold the tracker alone, every one of them could
+// clear a spend ceiling, copy the node's whole durable state to a directory of
+// their choosing, move the floor the trim deletes against, and evict a machine
+// from the fleet. Through [authz.Router] each route is refused `403` naming
+// admin, and a route mounted without a policy is a boot failure rather than an
+// open door.
+//
+// THE READS TOO — the maintenance status and the reanchor confirmation value
+// — because `/work/retention*` is the deployment's surface whole, which is
+// what the `retention` question already declares: a map of which machine
+// holds what, and the value a reanchor must echo, are not the company's
+// working state.
+//
+// # A write asks for a recent proof of identity, and a read does not
+//
+// The two verbs ask the same permission and differ in the step-up alone: every
+// write here changes what the deployment does for everybody on it, so it asks
+// for a proof inside `api.auth.session.step_up`, while the two reads — the
+// maintenance window's status and the value a reanchor must echo — change
+// nothing, and a status an operator cannot see without re-proving who they
+// are is one they stop checking. The METHOD picks the verb, because that is
+// the one fact about a route this surface already treats as its read/write
+// line (the session table's columns are keyed on it too), and a second list
+// of which patterns read would be the thing that drifts.
+func (a *App) mountDeployment(mux authz.Mux) error {
+	router := authz.NewRouter(mux, authz.ContextGuard(authz.NoChart{}))
+	var failures []error
+	a.deploymentRoutes(func(pattern string, h http.HandlerFunc) {
+		if err := router.Handle(pattern, deploymentPolicy(pattern), h); err != nil {
+			failures = append(failures, err)
+		}
+	})
+	return errors.Join(failures...)
+}
+
+// deploymentRoutes names every route [App.mountDeployment] mounts, through the
+// mount it is handed: separate from the router, so a walk can read the whole
+// list without standing the deployment up.
+func (a *App) deploymentRoutes(mount func(string, http.HandlerFunc)) {
+	// A POST, and a read posture of any kind never opens it: copying every
+	// credential and every seat's memory to a path the caller names is not
+	// a read. There is no budget reset beside it — a window's turnover IS
+	// the reset (ADR-0019), and a raw reset would re-arm a company mid-window.
+	mount("POST /backup", a.serveBackup)
+	// The move of the company's files to an S3 bucket: a copy every
+	// object passes through, and on the final pass the fleet's record of
+	// where its files are. See objectsmigrate.go.
+	mount("POST /objects/migrate", a.serveMigrateObjects)
+	// The three retention gestures that write. See retention.go.
+	a.mountRetention(mount)
+	// The capacity window's own control surface. It is the one thing a
+	// maintenance-mode node serves that a publishing one does not need,
+	// and it is why the verb can run at all on a topology whose broker
+	// binds no socket. See retention.go.
+	a.mountCapacity(mount)
+	// The removal of a member the fleet broker's metadata group still
+	// counts after it is gone for good — a change to the quorum every
+	// election runs on. The listing beside it is the `fleet_broker`
+	// question, a named read. See fleetbroker.go.
+	a.mountFleetBroker(mount)
+}
+
+// deploymentPolicy is the verb one deployment route is decided under: a read
+// is [authz.ActionFleetRead] and everything else [authz.ActionFleetOperate].
+// See [App.mountDeployment] for why the method is what picks it.
+func deploymentPolicy(pattern string) authz.Policy {
+	if strings.HasPrefix(pattern, http.MethodGet+" ") {
+		return authz.Policy{Action: authz.ActionFleetRead}
+	}
+	return authz.Policy{Action: authz.ActionFleetOperate}
 }
 
 // Inbound is what the webhook edge needs that only the surrounding process
@@ -786,6 +1277,44 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) { a.handler.Serv
 // else. Nil when the node has none, and every route is then [App.ServeHTTP]'s.
 func (a *App) Public() http.Handler { return a.public }
 
+// InboxFeed is where this node hears whose inbox moved: the engine, whose
+// tracker applier says so after every committed batch — and, while this
+// node's own copy is out of service, a sound peer's applier relayed.
+//
+// CONSUMER-DEFINED and two methods wide: the movements, and the GAPS between
+// them — the engine switching where its movements come from, after which what
+// moved in between is not replayed. The engine satisfies it with
+// [engine.Engine.SetOnInboxMoved] and [engine.Engine.SetOnInboxGap]; a test
+// hands in a feed it fires by hand.
+type InboxFeed interface {
+	SetOnInboxMoved(func([]tracker.InboxMovement))
+	SetOnInboxGap(func())
+}
+
+// pushInboxMoved turns one committed batch's inbox movements into
+// `inbox_changed` frames, each reaching only the sockets watching that seat.
+//
+// FROM ONE SOURCE AT A TIME, which the engine chooses: every node that serves
+// this API holds the estate — ingress requires the `data` role (ADR-0025) —
+// and applies every tracker record, so while its copy serves it hears every
+// movement from its own applier. A copy out of service keeps the node in
+// rotation and its applier announces nothing it can trust, so for as long as
+// it is out the engine relays a sound peer's movements instead, and says when
+// it switched ([App.pushInboxGap]).
+func (a *App) pushInboxMoved(moved []tracker.InboxMovement) {
+	for _, m := range moved {
+		a.stream.InboxChanged(stream.InboxChange{
+			Handle: m.Handle, UnreadDelta: m.UnreadDelta,
+			Subject: m.Subject, Reason: string(m.Reason),
+		})
+	}
+}
+
+// pushInboxGap tells every watched inbox to read itself again: the engine
+// switched where this node's movements come from, and what moved in the gap is
+// not replayed — see [stream.Service.InboxReread].
+func (a *App) pushInboxGap() { a.stream.InboxReread() }
+
 // Stream exposes the live channel, for the engine to feed.
 func (a *App) Stream() *stream.Service { return a.stream }
 
@@ -807,7 +1336,10 @@ func (a *App) CORS() *auth.CORS { return a.cors }
 // shipped binary. Load-bearing on readiness: an unconfigured node cannot
 // verify a webhook signature, so it must leave rotation rather than answer
 // deliveries it would only reject.
-func (a *App) Configured() bool { return a.company() != nil }
+func (a *App) Configured() bool {
+	settings, _ := a.company()
+	return settings != nil
+}
 
 // Start brings up the shared health tick.
 //
@@ -816,12 +1348,46 @@ func (a *App) Configured() bool { return a.company() != nil }
 // broadcast subscription is attached, or an event published between the read
 // and the subscribe falls into the gap. This runs before it, so the seed is
 // the caller's (see observe.Seed, wired in cmd/crewlet).
+//
+// IT ALSO JOINS THE FLEET'S ANNOUNCEMENTS of operator tool changes
+// ([OperatorListens.Join]), and takes the first reading of the tools a call is
+// served, so the first move this node is told of is compared with what it
+// served before it.
 func (a *App) Start(ctx context.Context) {
 	a.stream.StartHealthTicks(ctx)
+	a.listens.Join(ctx)
 }
 
-// Stop ends the tick and disconnects every client.
-func (a *App) Stop() { a.stream.Stop() }
+// Stop ends the tick, disconnects every client and leaves the fleet's
+// announcements of operator tool changes, waiting for this node's own nudges
+// still in flight — before the engine closes the queue they ride — for at most
+// [fleetTellBudget] and never past ctx, the caller's shutdown grace.
+func (a *App) Stop(ctx context.Context) {
+	for _, stop := range a.stopRooms {
+		stop()
+	}
+	a.stream.Stop()
+	ctx, cancel := context.WithTimeout(ctx, fleetTellBudget)
+	defer cancel()
+	a.listens.Close(ctx)
+}
+
+// OperatorToolsMoved tells every MCP client listening on this node's operator
+// surface, and every other node, that its tools changed — where they did
+// ([OperatorListens.Moved]). The node runs it after every company it publishes
+// and every catalogue change a shared tool server makes, which is where each
+// fact the catalogue is built from moves. Nil-safe: an app serving no operator
+// surface tells nobody.
+func (a *App) OperatorToolsMoved(ctx context.Context) { a.listens.Moved(ctx) }
+
+// EndListens ends every stream an MCP client listens on at this node's
+// operator surface ([OperatorListens.End]). The node registers it on api.port's
+// listener, to run as its graceful shutdown begins: a stream is one request
+// held open, and the shutdown would otherwise wait for every listening
+// assistant until its grace ran out and then cut them, logging
+// api_shutdown_failed — a warning meant for a request that was stuck. Only
+// api.port: the operator routes are never public.
+func (a *App) EndListens() { a.listens.End() }
 
 func (a *App) serveHealth(w http.ResponseWriter, r *http.Request) {
 	// ALWAYS 200 while the process is alive, INCLUDING through a drain: an
@@ -831,9 +1397,83 @@ func (a *App) serveHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, a.health(r.Context()))
 }
 
+// ReasonEstateBehind is what a refused /ready names when the estate seam
+// refused it ([EstateFloor]) — on a running node, that this node can no longer
+// route the estate's reads and writes to a sound copy.
+//
+// One code rather than the term that decided it, for the same reason
+// [Readiness.Reason] carries a code at all: it is recorded by a load balancer
+// on every failed probe, and a reason that changes as a node catches up
+// (below_floor, then behind, then ready) makes one outage look like three.
+// The term is logged — see [App.serveReady]. It belongs with [ReasonDraining]
+// and [ReasonUnconfigured] in health.go and sits here only because the estate
+// seam does.
+const ReasonEstateBehind = "estate_behind"
+
+// framePosture maps this node's own posture onto the one its sockets are
+// served in.
+//
+// THREE DIFFERENT THINGS ARE CALLED A POSTURE and this function is the
+// boundary between two of them: [Health.Status] carries the NODE posture — the
+// config plane's conclusion about this node's config lag — and
+// [stream.FramePosture] is how ONE SOCKET is being served. The third, a
+// principal's enrolment stage, belongs to the identity work and never reaches
+// here; see stream.FramePosture's own doc for why that type is not called
+// `Posture`.
+//
+// The set is [divergedPostures], read rather than restated, because it is the
+// same set /ready refuses on: a node whose copy of the company is wrong takes
+// itself out of rotation AND stops pushing that copy at the tabs still
+// watching. Written twice, a node could leave rotation while its dashboards
+// carried on rendering what it held — which is the exact pair of facts an
+// operator is trying to reconcile when they look.
+//
+// `isolated` and `wait` stay LIVE, for the reason /ready stays ready on them:
+// wait is ordinary propagation during a rollout, and isolated means NO node
+// applied the revision — degrading the socket there would blind every operator
+// at the moment the fleet most needs watching.
+func framePosture(h stream.Health) stream.FramePosture {
+	if _, diverged := divergedPostures[h.NodeStatus()]; diverged {
+		return stream.FrameDegraded
+	}
+	return stream.FrameLive
+}
+
 func (a *App) serveReady(w http.ResponseWriter, r *http.Request) {
 	body, status := a.readiness(r.Context())
+	// THE ESTATE TERM, AFTER the ones readiness already decided, because
+	// it is the narrowest: a draining or unconfigured node is out of
+	// rotation for a reason an operator can act on directly, and reporting
+	// the estate instead would name a consequence over a cause.
+	if status == http.StatusOK {
+		if ok, refusal := a.estateReady(r.Context()); !ok {
+			body.Ready = false
+			body.Reason = ReasonEstateBehind
+			status = http.StatusServiceUnavailable
+			// THE REFUSAL REACHES THE LOG, NOT THE BODY. /ready is
+			// polled by an orchestrator every few seconds, so its
+			// body is a stable code a load balancer records, and the
+			// term that decided it — below the floor, behind, the
+			// broker unreachable — is what somebody reading the node
+			// wants. DEBUG, because a node catching up at boot would
+			// otherwise write a line per probe for the whole of a
+			// legitimate hydration.
+			log.DebugContext(r.Context(), "ready_withheld_for_the_estate",
+				"node", a.nodeID, "refusal", refusal)
+		}
+	}
 	writeJSON(w, status, body)
+}
+
+// estateReady reports whether this node can answer from the replicated estate,
+// and names the term that says it cannot.
+//
+// A node with no seam declared has nothing to judge — see [Options.Estate].
+func (a *App) estateReady(ctx context.Context) (bool, string) {
+	if a.estateFloor == nil {
+		return true, ""
+	}
+	return a.estateFloor(ctx)
 }
 
 // writeJSON is [httpjson.Write] under this package's own name, kept so the
@@ -854,14 +1494,33 @@ func (a *App) Queries() *queries.Registry { return a.queries }
 // wire codes would be a domain package encoding a transport's vocabulary, and
 // a transport that classified errors itself would be a second place for the
 // two to disagree about what "unauthorized" means.
-func (a *App) answer(ctx context.Context, what string, params map[string]any, operatorID string) (any, error) {
-	data, err := a.queries.Answer(ctx, what, params, operatorID)
+func (a *App) answer(ctx context.Context, what string, params map[string]any) (any, error) {
+	data, err := a.queries.Answer(ctx, what, params)
 	switch {
 	case err == nil:
 		return data, nil
 	case errors.Is(err, queries.ErrUnknown):
 		return nil, fmt.Errorf("%w: %s", stream.ErrUnknownQuery, what)
-	case errors.Is(err, queries.ErrUnauthorized):
+	case errors.Is(err, queries.ErrUnauthenticated),
+		errors.Is(err, queries.ErrUnauthorized):
+		// BOTH ONTO ONE SOCKET CODE, deliberately. The vocabulary here is
+		// shared with the dashboard, and the distinction the REST mapping
+		// draws — present something, versus the thing you presented does
+		// not carry this — has no consumer over a socket: every one
+		// authenticates at its handshake, so the unauthenticated arm is
+		// unreachable and a second code would be a wire change with
+		// nothing to read it.
+		//
+		// AND A REFUSAL ON AUTHORITY SAYS WHY, as it does over REST: the
+		// rule's reason and the grants that would have admitted the
+		// caller travel on the frame. It was reduced to the question's
+		// name here, so the one channel the dashboard reads was the one
+		// on which "you may not" could not say what would change that.
+		var refusal *queries.Refusal
+		if errors.As(err, &refusal) {
+			return nil, &stream.RefusedError{What: what,
+				Refused: *stream.NewRefused(refusal.Reason, refusal.Grants)}
+		}
 		return nil, fmt.Errorf("%w: %s", stream.ErrUnauthorized, what)
 	case errors.Is(err, queries.ErrNotFound):
 		return nil, fmt.Errorf("%w: %s", stream.ErrNotFound, what)
@@ -880,12 +1539,15 @@ func (a *App) answer(ctx context.Context, what string, params map[string]any, op
 		// and the frame carries it as `detail`. The others are
 		// deliberately reduced to the query name — a failure's own text
 		// can carry a database path, and none of them has a reader.
-		return nil, &stream.RefusedError{What: what, Detail: queries.RefusalDetail(err)}
+		return nil, &stream.BadParamsError{What: what, Detail: queries.RefusalDetail(err)}
 	case errors.Is(err, queries.ErrUnavailable):
-		// WITH THE REFUSAL'S OWN HINT, which the frame's
-		// `retry_after_seconds` is computed from exactly as the REST
-		// header is (see [stream.RetryAfterSeconds]).
-		return nil, &stream.UnavailableError{What: what, Hint: queries.RetryAfter(err)}
+		// THE CAUSE IS KEPT, and only its STRUCTURE reaches the frame:
+		// [stream.UnavailableOf] reads the state log's refusal and its
+		// hint off it and never renders the error's text. Reduced to the
+		// question's name, a node that will refuse this read until an
+		// operator acts and one catching up were the same `unavailable`,
+		// and the dashboard polled both.
+		return nil, fmt.Errorf("%w: %s: %w", stream.ErrUnavailable, what, err)
 	default:
 		return nil, err
 	}
@@ -898,13 +1560,11 @@ func (a *App) answer(ctx context.Context, what string, params map[string]any, op
 // one implementation, not two that agree today.
 func (a *App) serveQuery(w http.ResponseWriter, r *http.Request) {
 	what := r.PathValue("what")
-	operatorID, _ := auth.OperatorFrom(r.Context())
-
 	// Params come from the query string, read through the same accessors a
 	// socket frame's JSON object goes through — which is what stops a
 	// filter being honoured on one transport and ignored on the other.
 	data, err := a.queries.AnswerWith(r.Context(), what,
-		queries.FromQuery(r.URL.Query()), operatorID)
+		queries.FromQuery(r.URL.Query()))
 	if err != nil {
 		writeQueryError(w, what, err)
 		return
@@ -917,43 +1577,133 @@ func (a *App) serveQuery(w http.ResponseWriter, r *http.Request) {
 // SHARED by the generic /query/{what} form and every named route, because a
 // caller must not learn that a seat does not exist from one path and that the
 // server broke from the other.
+//
+// EVERY ARM IS THE ENVELOPE — `error`, and the `message` a person reads — as
+// every other refusal on this API is. They were bare `{"error": code}`
+// objects, so the one family of routes a dashboard reads most often was the
+// one whose refusals carried no sentence, and the code a client branched on
+// was the only thing it had to show.
 func writeQueryError(w http.ResponseWriter, what string, err error) {
 	switch {
 	case errors.Is(err, queries.ErrUnknown):
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": stream.CodeUnknownQuery})
+		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeUnknownQuery)
+	case errors.Is(err, queries.ErrUnauthenticated):
+		// 401: nobody is asking, so the remedy IS to present something —
+		// and the code is the one the guard gives the same caller, so a
+		// client never sees one absence of a credential two ways.
+		// Unreachable through the wired guard, which answers this a layer
+		// up — stated because the mapping is this function's to get right
+		// whatever happens to run in front of it.
+		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 	case errors.Is(err, queries.ErrUnauthorized):
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": stream.CodeUnauthorized})
+		// 403 AND NOT 401, because the caller has already been
+		// identified. This refusal is a GRANT one — the guard in front
+		// of this resolved somebody, and the question needs authority
+		// they do not carry — and 401 means "authenticate", which sends
+		// a reader holding a perfectly good credential to go and get a
+		// new one. It was 401 while authority here was "is there an
+		// operator", where the two answers genuinely coincided; with ten
+		// grants they do not, and a narrow reader asking a question
+		// outside their grants is the ordinary case rather than the
+		// exceptional one.
+		//
+		// The refusal a 401 is right for still happens, one layer up:
+		// the guard answers it for a credential that is absent or
+		// refused, before this function is reached at all.
+		//
+		// AND IT SAYS WHY: the rule's reason and the grants that would
+		// have admitted the caller, carried on the registry's refusal
+		// rather than rewritten here — the same two fields every other
+		// refusal on authority answers with.
+		var refusal *queries.Refusal
+		if !errors.As(err, &refusal) {
+			httpjson.Fail(w, http.StatusForbidden, httpjson.CodeUnauthorized)
+			return
+		}
+		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
+			authz.RefusalDetail(refusal.Reason, refusal.Grants))
 	case errors.Is(err, queries.ErrBadParams):
 		// 400 AND ITS OWN CODE. The status was already right; the code
 		// said `query_failed`, which names a fault of this node for a
 		// request the caller has to change. AND ITS SENTENCE, as the
 		// socket's frame carries it: the refusal names the parameter to
-		// change, which is the whole of the fix.
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": stream.CodeBadParams, "detail": queries.RefusalDetail(err),
-		})
+		// change, which is the whole of the fix, and the envelope's
+		// `message` cannot say which one.
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeBadParams,
+			httpjson.Detail{"detail": queries.RefusalDetail(err)})
 	case errors.Is(err, queries.ErrNotFound):
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": stream.CodeNotFound})
-	case errors.Is(err, queries.ErrUnavailable):
-		// 503 AND RETRY-AFTER, because this is the one failure here that
-		// is expected to pass: this node is behind the log and is
-		// draining, or its coordination store was briefly unreachable. A
-		// 500 would tell a client to give up on a screen that will work in
-		// a few seconds, and an empty 200 would tell a person the company
-		// has no work.
+		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
+	case errors.Is(err, stream.ErrNoCompany):
+		// A NATIVE QUESTION ON A NODE WITH NO COMPANY YET, answered as
+		// every surface answers that node — the webhook edge, the human
+		// write surface, the operator's assistant — with the reconcile
+		// poll as the wait, rather than as the state log's `unavailable`,
+		// whose hint is the scale of a node catching up. See native.go.
 		//
-		// THE HINT IS THE REFUSAL'S OWN where it has one, through the one
-		// helper the socket's error frame is computed by too.
-		after := stream.RetryAfterSeconds(queries.RetryAfter(err))
-		w.Header().Set("Retry-After", strconv.Itoa(after))
-		writeJSON(w, http.StatusServiceUnavailable,
-			map[string]string{"error": stream.CodeUnavailable})
+		// THE HINT AND THE WORDS ARE [stream.UnavailableOf]'s, the one
+		// reading the socket's frame is built from too: decided here
+		// alone, the REST route said fifteen seconds and why while the
+		// socket said five and nothing.
+		u := stream.UnavailableOf(err)
+		httpjson.UnavailableWith(w, httpjson.CodeNoActiveRevision, u.RetryAfter,
+			httpjson.Detail{"detail": u.Detail})
+	case errors.Is(err, queries.ErrUnavailable):
+		// 503, because this node could not serve the question and nothing
+		// about the request was wrong: it is behind the log and draining,
+		// its coordination store was briefly unreachable, or its state log
+		// refused the read. A 500 would tell a client the server broke —
+		// which is what a refusal waiting cannot clear used to be answered
+		// with, its remedy sent only to the log — and an empty 200 would
+		// tell a person the company has no work.
+		//
+		// THE HINT IS THE REFUSAL'S OWN where it has one — derived from
+		// how far behind this node is over how fast it is actually
+		// draining — ZERO, and so no Retry-After, for a refusal waiting
+		// cannot clear (a full log, a record this node cannot decode, a
+		// refusal the broker named), and five seconds otherwise, by
+		// [statelog.RetryAfter]'s rule, which every surface answering a
+		// refusal reads. A flat hint is wrong in both directions on one
+		// fleet. The fallback is what an unreachable coordination store
+		// gets, since there is no drain to derive from, and it is the
+		// shared health tick's own cadence ([stream.HealthInterval]): a
+		// client that waits it out asks again having seen at most one
+		// newer health frame, which is the soonest it could learn the
+		// store is back.
+		//
+		// AND THE REFUSAL SAYS WHAT IT IS — its code and its words, the
+		// remedy — through [stream.UnavailableOf], the same reading the
+		// socket's error frame is built from.
+		u := stream.UnavailableOf(err)
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, u.RetryAfter, u.Fields())
 	default:
 		// The reason reaches the LOG, not the caller: it can carry a
-		// database path or a driver's own message, and these routes are
-		// reachable under the anonymous read posture.
+		// database path or a driver's own message, and nothing about
+		// holding a grant makes a caller somebody that path is for.
 		log.Warn("api_query_failed", "what", what, "error", err)
-		writeJSON(w, http.StatusInternalServerError,
-			map[string]string{"error": stream.CodeQueryFailed})
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeQueryFailed)
+	}
+}
+
+// servedOverHTTPS reports whether a browser reaches one of this node's
+// listeners over TLS, which is what turns on `Strict-Transport-Security`
+// ([pagepolicy.Apply]): the public listener's when public is true, and
+// api.port's otherwise.
+//
+// THE ADDRESS THAT LISTENER IS PUBLISHED AT AND NOTHING ELSE. The bind address
+// and `r.TLS` both describe the hop between the proxy and this process, which
+// on a hardened node is plain http over loopback — so either would withhold
+// the header from exactly the deployments that need it. api.port is published
+// at `api.external_url`; the public listener at `api.public.external_url`
+// ([config.API.WebhookBase], which is that address whenever the listener is
+// set) — two sockets, two addresses, and possibly two schemes, so one answer
+// for both sent the header on neither or on the wrong one.
+func servedOverHTTPS(b *config.Bootstrap, public bool) bool {
+	switch {
+	case b == nil:
+		return false
+	case public:
+		return strings.HasPrefix(b.API.WebhookBase(), "https://")
+	default:
+		return strings.HasPrefix(b.API.ExternalBase(), "https://")
 	}
 }

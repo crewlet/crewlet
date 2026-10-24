@@ -21,7 +21,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, expect, test, vi } from "vitest";
 
 import { DisplayMenu, type DisplayMenuProps } from "./DisplayMenu.tsx";
-import { ArrangeControls, ShapeTabs, defaultOrderLabel } from "./WorkBar.tsx";
+import { ArrangeControls, ShapeSwitch, defaultOrderLabel } from "./WorkBar.tsx";
 import { ItemsView } from "../ItemsView.tsx";
 import { columnChoices } from "../shapes/Grid.tsx";
 import { CARD_FACTS } from "~/components/work.tsx";
@@ -128,7 +128,7 @@ const columnBoxes = (): string[] =>
 // The shapes, and the button
 // ---------------------------------------------------------------------------
 
-// THE FIVE SHAPES ARE THE FIRST ROW'S OWN BUTTONS, in the approved board's
+// THE FIVE SHAPES ARE THE FIRST ROW'S OWN SWITCH, in the approved board's
 // order, and not the view strip: a shape is a way of drawing any query, and
 // mixed in with the queries somebody saved the two read as the same kind of
 // thing. They were inside the Display menu for a while, which put the board —
@@ -142,23 +142,45 @@ test("each of the five shapes writes its own value, and the one that is on says 
     { label: "Table", value: "table" },
   ];
   const onShape = vi.fn();
-  render(<ShapeTabs shape="board" onShape={onShape} />);
-  const row = screen.getByRole("group", { name: "Draw as" });
+  render(<ShapeSwitch shape="board" onShape={onShape} />);
+  const row = screen.getByRole("radiogroup", { name: "Draw as" });
+  // EACH SHAPE IS ITS GLYPH, so its name is the accessible name rather than
+  // drawn text, and the title says the same to a pointer.
   expect(
     within(row)
-      .getAllByRole("button")
-      .map((el) => el.textContent),
-  ).toEqual(shapes.map((s) => s.label));
+      .getAllByRole("radio")
+      .map((el) => [el.getAttribute("aria-label"), el.getAttribute("title")]),
+  ).toEqual(shapes.map((s) => [s.label, s.label]));
   for (const { label, value } of shapes) {
-    fireEvent.click(within(row).getByRole("button", { name: label }));
+    fireEvent.click(within(row).getByRole("radio", { name: label }));
     expect(onShape).toHaveBeenLastCalledWith(value);
   }
-  expect(within(row).getByRole("button", { name: "Board" }).getAttribute("aria-pressed")).toBe(
-    "true",
-  );
-  expect(within(row).getByRole("button", { name: "List" }).getAttribute("aria-pressed")).toBe(
-    "false",
-  );
+  expect(within(row).getByRole("radio", { name: "Board", checked: true })).toBeTruthy();
+  expect(within(row).getByRole("radio", { name: "List", checked: false })).toBeTruthy();
+});
+
+// THE SHAPE IS A SECTION IN THE URL, so walking the row with the arrows must
+// not choose as it goes: every choice pushes a history entry and redraws the
+// list. The arrows move focus, and a press (Enter or Space on the focused
+// button, which the browser turns into its click) chooses.
+test("the arrows walk the shapes without choosing one, and a press chooses", () => {
+  const onShape = vi.fn();
+  render(<ShapeSwitch shape="list" onShape={onShape} />);
+  const row = screen.getByRole("radiogroup", { name: "Draw as" });
+  const list = within(row).getByRole("radio", { name: "List" });
+  // ONE TAB STOP for the row, on the shape that is on.
+  expect(
+    within(row)
+      .getAllByRole("radio")
+      .map((el) => el.tabIndex),
+  ).toEqual([0, -1, -1, -1, -1]);
+  list.focus();
+  fireEvent.keyDown(list, { key: "ArrowRight" });
+  const board = within(row).getByRole("radio", { name: "Board" });
+  expect(document.activeElement).toBe(board);
+  expect(onShape).not.toHaveBeenCalled();
+  fireEvent.click(board);
+  expect(onShape).toHaveBeenLastCalledWith("board");
 });
 
 // THE MENU IS "DISPLAY" AND HOLDS WHAT A READER SETS ONCE. What it used to say
@@ -269,7 +291,7 @@ test("the calendar offers neither a grouping nor an order, because it spends bot
   // opening on an empty panel.
   openDisplay({ shape: "calendar" });
   expect(screen.queryByText("Columns")).toBeNull();
-  expect(screen.getByText(/Nothing more to arrange on this shape/)).toBeTruthy();
+  expect(screen.getByText("Grouping and order are in the bar.")).toBeTruthy();
 });
 
 // ---------------------------------------------------------------------------
@@ -345,7 +367,7 @@ test("the lanes put away are named, and each comes back on its own or all at onc
 // hands back the set with that one fact moved.
 test("the board offers what its cards show, and a tick moves exactly that fact", () => {
   const { onCardHidden } = openDisplay({ shape: "board", cardHidden: new Set(["labels"]) });
-  expect(screen.queryByText(/Nothing more to arrange/)).toBeNull();
+  expect(screen.queryByText(/Grouping and order are in the bar/)).toBeNull();
   const boxes = [...document.querySelectorAll("[data-card-facts] .grid-cols-choice")];
   expect(boxes.map((b) => b.textContent)).toEqual(CARD_FACTS.map((f) => f.label));
   expect((screen.getByLabelText("Labels") as HTMLInputElement).checked).toBe(false);
@@ -446,7 +468,7 @@ test("unticking a column writes the rest of the set", () => {
 function serving(answers: Partial<Record<QueryName, unknown>>) {
   const query = vi.fn(async (what: string) => answers[what as QueryName] ?? {});
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue(withDerived({ name: "Acme", roles: [] }) as never);
   return query;
 }
@@ -528,8 +550,8 @@ test("switching the shape keeps the order and the view the reader is on", async 
     work_items: { items: [task], groups: [], total_hint: 1, complete: true },
   });
   mountList();
-  const shapes = await screen.findByRole("group", { name: "Draw as" });
-  fireEvent.click(within(shapes).getByRole("button", { name: "Board" }));
+  const shapes = await screen.findByRole("radiogroup", { name: "Draw as" });
+  fireEvent.click(within(shapes).getByRole("radio", { name: "Board" }));
   await waitFor(() => expect(location.hash).toContain("shape=board"));
   expect(location.hash).toContain("sort=-updated");
   expect(location.hash).toContain("view=arranged");
@@ -556,7 +578,7 @@ test("moving to another saved view keeps the arrangement", async () => {
     work_items: { items: [task], groups: [], total_hint: 1, complete: true },
   });
   mountList();
-  fireEvent.click(await screen.findByRole("button", { name: "Two" }));
+  fireEvent.click(await screen.findByRole("radio", { name: "Two" }));
   await waitFor(() => expect(location.hash).toContain("view=two"));
   expect(location.hash).toContain("sort=-updated");
   expect(location.hash).toContain("shape=table");

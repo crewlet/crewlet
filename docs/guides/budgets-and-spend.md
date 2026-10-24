@@ -2,8 +2,8 @@
 
 Two different numbers describe what a company's models have consumed, and most
 confusion about spend comes from reading one as the other. This guide says what
-each one is, where it comes from, how far back it reaches, and how the Spend
-screen draws it.
+each one is, where it comes from, how far back it reaches, and how Settings ›
+Spend draws it.
 
 | | The **budget counter** | The **spend rollup** |
 |---|---|---|
@@ -11,7 +11,7 @@ screen draws it.
 | Its window | One calendar window — the day, the ISO week or the month — on the company's clock | The live 24 hours, or any run of 1 to 90 company days |
 | Where it lives | The coordination store (`budgets`), one record per scope | The live projection for the last 24 hours; the replicated `usage` domain for every named window |
 | What it is for | Stopping a turn whose round did not fit a ceiling, and every round after it | Understanding where the tokens went |
-| Read by | `GET /budgets`, the `budget` push, the meters on the Spend and seat screens | `GET /tokens/breakdown`, `GET /tokens/series`, the Spend screen's figures and chart |
+| Read by | `GET /budgets`, the `budget` push, the meters on the Spend, Budgets and seat screens | `GET /tokens/breakdown`, `GET /tokens/series`, the figures and chart on Settings › Token spend |
 
 They are never comparable. The counter is the one figure a ceiling can be divided
 into; the rollup is the one that can say *why*. Both count the same calls —
@@ -21,7 +21,7 @@ they part, [the reasons are listed](#why-the-counter-and-the-rollup-still-differ
 ## Budget windows
 
 A `token_budget` is a set of ceilings per calendar window — `day`, `week` and
-`month`, each optional — on the company, on a role, or on both:
+`month`, each optional — on the company, on an agent seat, or on both:
 
 ```yaml
 timezone: Europe/Berlin
@@ -39,7 +39,7 @@ A round's size is known only from its reply, so by the time it is judged the
 vendor has billed it, and **a refused round is counted like any other**. The
 window that refused it therefore reads **over its ceiling** by that round — a
 day at 98 000 of 100 000 whose next 4 000-token round is refused reads 102 000
-of 100 000 on `GET /budgets`, the meters on the Spend and seat screens and
+of 100 000 on `GET /budgets`, the meters on the Spend, Budgets and seat screens and
 `crewlet budgets show`, and that is the figure the budget park judges — and
 every later round is refused against it until the window turns over or the
 ceiling is raised. The figure is what the company was billed; a counter that
@@ -51,7 +51,7 @@ later model call of the turn before it is sent**: the next phase, the round-cap
 judge, the seat's other workers and an agent-mode coding run are refused without
 being made, rather than each billed and then refused — and a call stopped that
 way is the gate's refusal like any other, recorded as the window's `refused_at`
-(the "last refused" on the Spend screens and in `crewlet budgets show`) the
+(the "last refused" on Company › Budgets and in `crewlet budgets show`) the
 first time a turn holds one there. The refused round itself
 is the one a turn pays for past its ceiling — and a turn running alongside it,
 on the same company, can still pay for one round of its own before the counter
@@ -76,28 +76,16 @@ the company's before the seat's — so a window that a coding run, a background
 pass or a person's answers filled says when it last turned work away rather
 than reading as one that has refused nothing.
 
-A window's allowance comes back when the window turns over, rolled inside the
-first charge after the boundary — nothing has to run at midnight. There is no
-reset: to make room before a window turns over, raise its ceiling. The engine
-judges each window's `state` — `ok`, `near` at 90% of the ceiling, or `refusing`
-— and every screen draws the engine's word rather than dividing for itself. See
-[Deployment § Token budgets](deployment.md#token-budgets) for the park a seat out
-of room waits in, and [Coordination § Token budgets are windows](../concepts/coordination.md#token-budgets-are-windows)
-for how the counter is kept.
-
-### Raising a ceiling from the dashboard
-
-**Spend › Budgets** (`#/spend/budgets`) draws every scope's day, week and month
-with what it has spent and its ceiling, and an operator raises a ceiling there
-in place: the pencil beside it takes `50M`, `2.5M` or the digits, and an empty
-field removes the ceiling. Every save is checked against the whole company
-first, so a ceiling that could never refuse a turn — a seat's at or above the
-company's — is shown as a warning before it is stored. Home and the Inbox offer
-the same change as **Raise budget** on a seat the engine stopped, opened on the
-scope that is actually refusing it. It is an ordinary configuration revision,
-recorded with a summary such as "Raise Agent PM's daily token ceiling from 2M
-to 5M", and each node enforces it once it has applied that epoch. See
-[Dashboard design § Spend › Budgets](../reference/dashboard-design.md#spend--budgets-raised-in-place).
+Both ceilings are part of the company document. The **company's**
+`token_budget` and a **seat's** are written through
+[`/config`](configure-via-api.md) (`admin`) — a seat's on its own with
+`PUT /config/roles/{handle}` — and every node enforces them once it has applied
+that epoch. The write is a revision recorded with a summary such as "Raise the
+company's daily token ceiling from 2M to 5M". A seat ceiling the company's own
+ceiling makes unable to refuse a turn — a seat's day at or above the company's
+day, say — is reported as a warning at the seat's ceiling by `crewlet validate` and on
+every `/config` write's answer. See
+[Dashboard design § Company › Budgets](../reference/dashboard-design.md#company--budgets-raised-in-place).
 
 ## The spend rollup, and why it has two sources
 
@@ -110,8 +98,9 @@ happens; no screen of the bundled dashboard draws it.
 
 **Every named window** — 7, 30 or 90 days, or two dates you name — is read from
 the replicated [`usage` domain](replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day).
-Every node derives its own seats' day from its own event log and publishes it
-whole; every node applies every node's days. So a named window is:
+Every data node derives its own day from its own event log — its own seats',
+and those of the nodes without `data` whose events it keeps through custody —
+and publishes it whole; every data node applies every node's days. So a named window is:
 
 - **the company's**, whichever node answers — a three-node fleet no longer shows
   a third of its spend on the node the dashboard happened to reach;
@@ -124,7 +113,7 @@ no list of turns and a chart has no hourly column. The costliest turns over a
 window are the turn list sorted by tokens (`GET /turns?sort=-tokens`), which
 reads the fleet's own event logs and so reaches back as far as those do.
 
-The dashboard's Spend screen reads named windows only — 7, 30 or 90 company
+The dashboard's Settings › Token spend reads named windows only, 7, 30 or 90 company
 days (it opens on 30), or two dates you name on the company's clock — so every
 figure on it is the company's and every card says which window it is of. A
 window the engine refuses is shown once, in the engine's own sentence, with no

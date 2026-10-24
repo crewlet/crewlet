@@ -18,7 +18,7 @@
 
 import { RANGE_MS, daysLabel, isRange, companyDays, type Offer, type Window } from "~/lib/range.ts";
 import { plural } from "~/lib/format.ts";
-import { toCsv } from "~/lib/csv.ts";
+import { toCsv } from "@crewlethq/ui";
 import type {
   AgentSpendRow,
   Bucket,
@@ -138,10 +138,16 @@ export interface AgentLine {
  * its own (ADR-0019), and the live meter reports the CURRENT one; the column
  * says so in its heading rather than dividing a thirty-day spend into one
  * day's allowance.
+ *
+ * PAIRED BY AGENT ID, never by handle: the usage domain records a seat under
+ * its agent id, which the engine derives from the seat's handle, and carries
+ * the handle only as a label for a seat the company no longer holds. The
+ * agent id is the one key a spend row and a live row are both certain to
+ * carry.
  */
 export function agentLines(
   rollup: Rollup | null | undefined,
-  dayOf: (handle: string) => BudgetWindow | undefined,
+  dayOf: (agentID: string) => BudgetWindow | undefined,
 ): AgentLine[] {
   const total = rollup?.totals.total_tokens ?? 0;
   return (rollup?.by_agent ?? [])
@@ -150,7 +156,7 @@ export function agentLines(
       row,
       share: total > 0 ? row.total_tokens / total : 0,
       perTurn: row.turns && row.turns > 0 ? Math.round(row.total_tokens / row.turns) : null,
-      day: row.handle ? dayOf(row.handle) : undefined,
+      day: row.agent_id ? dayOf(row.agent_id) : undefined,
     }))
     .sort(
       (a, b) => b.row.total_tokens - a.row.total_tokens || a.row.role.localeCompare(b.row.role),

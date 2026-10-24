@@ -57,7 +57,7 @@ describe("a seat", () => {
     expect(view.state().log.ops[0]).toMatchObject({
       type: "move",
       target: "seat:dev",
-      to: { parent: "unit:Sales", after: "seat:account-executive" },
+      to: { parent: "unit:sales", after: "seat:account-executive" },
       clearLeads: [],
     });
     expect(view.onClose).toHaveBeenCalledTimes(1);
@@ -76,11 +76,7 @@ describe("a seat", () => {
       "seat:dev",
     );
     choose("Sales");
-    expect(
-      screen.getByText(
-        "Today Dev reports to VP Engineering as the lead of Engineering, which ends with the move.",
-      ),
-    ).toBeDefined();
+    expect(screen.getByText("Dev stops reporting to VP Engineering.")).toBeDefined();
   });
 
   // The credentials a move gives or takes are named by their SERVER, which is
@@ -105,7 +101,7 @@ describe("a seat", () => {
     choose("Engineering");
     expect(
       screen.getByText(
-        "In Engineering, VP Engineering leads the unit and manages its direct members unless another member manages SRE.",
+        "In Engineering, SRE reports to VP Engineering unless someone else manages them.",
       ),
     ).toBeDefined();
   });
@@ -116,8 +112,8 @@ describe("a seat", () => {
     choose("Sales");
     fireEvent.click(screen.getByRole("checkbox", { name: "Clear lead" }));
     fireEvent.click(moveButton());
-    expect(view.state().log.ops[0]).toMatchObject({ clearLeads: [{ unit: "unit:Engineering" }] });
-    const engineering = locate(view.state().draft, "unit:Engineering");
+    expect(view.state().log.ops[0]).toMatchObject({ clearLeads: [{ unit: "unit:engineering" }] });
+    const engineering = locate(view.state().draft, "unit:engineering");
     expect(engineering?.kind === "unit" && engineering.node.data.lead).toBeUndefined();
   });
 
@@ -132,7 +128,7 @@ describe("a seat", () => {
     open(withManager(), "seat:designer");
     expect(
       screen.getByText(
-        "Designer is placed in Platform by its unit reference. Moving it writes it into the destination and removes the reference.",
+        "Designer is placed in Platform by reference. Moving it removes the reference.",
       ),
     ).toBeDefined();
   });
@@ -149,26 +145,26 @@ describe("a seat", () => {
         { name: "Other" },
       ],
     };
-    const agents: AgentRow[] = [{ id: "1", role: "Runner", handle: "runner", activity: "working" }];
+    const agents: AgentRow[] = [
+      { id: "1", agent_id: "1", role: "Runner", handle: "runner", activity: "working" },
+    ];
     open(keyedState(doc), "seat:runner", { agents });
     choose("Other");
-    expect(screen.getByText(/Schedule sweep on Ops would have no runner/)).toBeDefined();
+    expect(screen.getByText(/Schedule sweep on Ops would have nobody to run it/)).toBeDefined();
     expect(
-      screen.getByText(
-        "Runner is working now. Its current turn continues on the previous configuration until the engine applies this change.",
-      ),
+      screen.getByText("Runner is working now. The change applies to its next turn."),
     ).toBeDefined();
   });
 });
 
 describe("a unit", () => {
   test("a unit that moves with a seat working inside it names that seat", () => {
-    const agents: AgentRow[] = [{ id: "1", role: "SRE", handle: "sre", activity: "working" }];
-    open(keyedState(fixtureCompany()), "unit:Platform", { agents });
+    const agents: AgentRow[] = [
+      { id: "1", agent_id: "1", role: "SRE", handle: "sre", activity: "working" },
+    ];
+    open(keyedState(fixtureCompany()), "unit:platform", { agents });
     expect(
-      screen.getByText(
-        "SRE is working now. Its current turn continues on the previous configuration until the engine applies this change.",
-      ),
+      screen.getByText("SRE is working now. The change applies to its next turn."),
     ).toBeDefined();
   });
 
@@ -185,14 +181,14 @@ describe("a unit", () => {
         },
       },
     });
-    open(state, "unit:Engineering");
+    open(state, "unit:engineering");
     const labels = destinations();
     expect(labels).not.toContain("Engineering");
     expect(labels).not.toContain("Engineering / Platform");
     expect(labels).toContain("Sales");
     cleanup();
 
-    const view = open(state, "unit:Platform");
+    const view = open(state, "unit:platform");
     choose("The company (top level)");
     expect(
       screen.getByText("Platform would inherit no lead instead of VP Engineering."),
@@ -201,8 +197,8 @@ describe("a unit", () => {
     fireEvent.click(moveButton());
     expect(view.state().log.ops[0]).toMatchObject({
       type: "move",
-      target: "unit:Platform",
-      to: { parent: "company", after: "unit:Sales" },
+      target: "unit:platform",
+      to: { parent: "company", after: "unit:sales" },
     });
   });
 });
@@ -212,9 +208,5 @@ describe("a unit", () => {
 test("a read-only builder moves nothing, and says why the button is unavailable", () => {
   open(keyedState(fixtureCompany()), "seat:dev", { readOnly: true });
   expect(moveButton().disabled).toBe(true);
-  expect(
-    screen.getByText(
-      "The organization cannot be changed right now, so this change cannot be applied.",
-    ),
-  ).toBeDefined();
+  expect(screen.getByText("The org can’t be changed right now.")).toBeDefined();
 });

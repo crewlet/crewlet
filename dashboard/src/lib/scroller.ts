@@ -50,6 +50,24 @@ export function screenScroller(): HTMLElement | null {
 }
 
 /**
+ * The element that scrolls `el` past the reader: its nearest ancestor whose
+ * overflow scrolls vertically, else the shell's scroller.
+ *
+ * FOR A QUESTION ABOUT ONE ELEMENT'S POSITION, such as which heading is being
+ * read. The shell's scroller is the page on most screens, and not on one that
+ * scrolls a body of its own: an artifact's workspace scrolls its body inside
+ * the shell, which holds still, so a reader measured against the shell's
+ * scroller never moved and a doc's outline stayed on its first heading.
+ */
+export function scrollerOf(el: Element | null): HTMLElement | null {
+  for (let at = el?.parentElement ?? null; at; at = at.parentElement) {
+    const { overflowY } = getComputedStyle(at);
+    if (overflowY === "auto" || overflowY === "scroll") return at;
+  }
+  return screenScroller();
+}
+
+/**
  * Bring `el` on screen when it is not — and, when asked, put focus on it.
  *
  * ON SCREEN MEANS INSIDE THE SHELL'S SCROLLER, not the window: the page bar

@@ -66,10 +66,10 @@ import (
 // every people field it holds would fail writes for a reason unrelated to what
 // the caller asked for.
 type FieldWorld interface {
-	// ResolveSeat turns what somebody typed into exactly one handle. The
-	// second return is false for no match AND for an ambiguous one: both
-	// mean "this does not name one person", which is the only answer a
-	// stored value can be written from.
+	// ResolveSeat turns what somebody typed into exactly one handle, which
+	// is what the value is stored as. The second return is false for no
+	// match AND for an ambiguous one: both mean "this does not name one
+	// person", which is the only answer a stored value can be written from.
 	ResolveSeat(ref string) (string, bool)
 }
 

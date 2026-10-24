@@ -6,10 +6,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -27,18 +31,25 @@ func answeredMap(t *testing.T, s queries.Sources, what string,
 	return answerMap(t, got, err)
 }
 
+// answeredTranscripts is [answeredMap] for the questions that serve what a
+// turn SAID, which carry their own grant.
+func answeredTranscripts(t *testing.T, s queries.Sources, what string,
+	params map[string]any) map[string]any {
+
+	t.Helper()
+	got, err := askTranscripts(t, s, what, params)
+	return answerMap(t, got, err)
+}
+
 // ---- work_search --------------------------------------------------------- //
 
 // SEARCH IS GATED ON ITS OWN INDEX, not on the tracker. A node holding the
 // whole board and no lexical index is a real state — it joined recently — and
-// gating the two together would leave the board unanswerable on a node that
-// can answer every question on it. Both are REGISTERED here, as every native
-// question is wherever an engine is beside the API: the search is answered
-// `unknown_query` on this request because the view holds no index, which is
-// the query layer's answer and not an absent registration.
-func TestSearchIsUnknownWithoutAnIndexAndTheBoardIsNot(t *testing.T) {
+// registering the two together would leave the board unanswerable on a node
+// that can answer every question on it.
+func TestSearchIsUnregisteredWithoutAnIndexAndTheBoardIsNot(t *testing.T) {
 	t.Parallel()
-	s := nativeSources(queries.Native{Work: &stubWork{}})
+	s := queries.Sources{Work: &stubWork{}}
 	if _, err := askNative(t, s, "work_search", map[string]any{"q": "billing"}); !errors.Is(
 		err, queries.ErrUnknown) {
 
@@ -55,7 +66,7 @@ func TestSearchIsUnknownWithoutAnIndexAndTheBoardIsNot(t *testing.T) {
 func TestAnIndexStillBuildingIsReportedRatherThanReturnedAsAFailure(t *testing.T) {
 	t.Parallel()
 	w := &stubWork{err: tracker.ErrIndexBuilding}
-	got := answeredMap(t, nativeSources(queries.Native{Work: &stubWork{}, WorkSearch: w}),
+	got := answeredMap(t, queries.Sources{Work: &stubWork{}, WorkSearch: w},
 		"work_search", map[string]any{"q": "billing"})
 	switch {
 	case got["available"] != false:
@@ -80,7 +91,7 @@ func TestASearchThatFailedIsNotReportedAsBuilding(t *testing.T) {
 	t.Parallel()
 	sentinel := errors.New("the store could not be reached")
 	w := &stubWork{err: sentinel}
-	_, err := askNative(t, nativeSources(queries.Native{Work: &stubWork{}, WorkSearch: w}),
+	_, err := askNative(t, queries.Sources{Work: &stubWork{}, WorkSearch: w},
 		"work_search", map[string]any{"q": "billing"})
 	if !errors.Is(err, sentinel) {
 		t.Errorf("a failed search answered %v, want the failure", err)
@@ -92,7 +103,7 @@ func TestASearchThatFailedIsNotReportedAsBuilding(t *testing.T) {
 func TestSearchDefaultsToTheScreensPageRatherThanTheTools(t *testing.T) {
 	t.Parallel()
 	w := &stubWork{}
-	if _, err := askNative(t, nativeSources(queries.Native{Work: &stubWork{}, WorkSearch: w}),
+	if _, err := askNative(t, queries.Sources{Work: &stubWork{}, WorkSearch: w},
 		"work_search", map[string]any{"q": "  billing  "}); err != nil {
 
 		t.Fatalf("search: %v", err)
@@ -109,7 +120,7 @@ func TestSearchDefaultsToTheScreensPageRatherThanTheTools(t *testing.T) {
 
 func TestASearchWithNoPhraseIsRefusedNamingTheParameter(t *testing.T) {
 	t.Parallel()
-	_, err := askNative(t, nativeSources(queries.Native{Work: &stubWork{}, WorkSearch: &stubWork{}}),
+	_, err := askNative(t, queries.Sources{Work: &stubWork{}, WorkSearch: &stubWork{}},
 		"work_search", map[string]any{"q": "   "})
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("a search with no phrase answered %v, want bad params", err)
@@ -149,7 +160,7 @@ func TestWorkSearchHonoursTheModeAndSaysWhatItServed(t *testing.T) {
 		if tc.asked != "" {
 			params["mode"] = tc.asked
 		}
-		got := answeredMap(t, nativeSources(queries.Native{Work: &stubWork{}, WorkSearch: w}),
+		got := answeredMap(t, queries.Sources{Work: &stubWork{}, WorkSearch: w},
 			"work_search", params)
 		if w.searchMode != tc.want {
 			t.Errorf("mode %q reached the searcher as %q, want %q",
@@ -167,7 +178,7 @@ func TestWorkSearchHonoursTheModeAndSaysWhatItServed(t *testing.T) {
 			t.Errorf("modes = %#v", got["modes"])
 		}
 	}
-	_, err := askNative(t, nativeSources(queries.Native{Work: &stubWork{}, WorkSearch: &stubWork{}}),
+	_, err := askNative(t, queries.Sources{Work: &stubWork{}, WorkSearch: &stubWork{}},
 		"work_search", map[string]any{"q": "billing", "mode": "meaning"})
 	if !errors.Is(err, queries.ErrBadParams) || !strings.Contains(err.Error(), "semantic") {
 		t.Errorf("an unknown mode answered %v, want a refusal naming the modes", err)
@@ -204,7 +215,7 @@ func TestTheRoutingReadCarriesTheCompanysOwnInboxHorizon(t *testing.T) {
 func TestWithNoCompanyTheRoutingReadStatesNoHorizon(t *testing.T) {
 	t.Parallel()
 	w := &stubWork{}
-	if _, err := askNative(t, nativeSources(queries.Native{Work: w}), "work_routing",
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_routing",
 		map[string]any{"record_id": "r-1"}); err != nil {
 
 		t.Fatalf("routing: %v", err)
@@ -217,7 +228,7 @@ func TestWithNoCompanyTheRoutingReadStatesNoHorizon(t *testing.T) {
 
 func TestARoutingReadWithNoRecordIsRefusedNamingTheParameter(t *testing.T) {
 	t.Parallel()
-	_, err := askNative(t, nativeSources(queries.Native{Work: &stubWork{}}), "work_routing",
+	_, err := askNative(t, queries.Sources{Work: &stubWork{}}, "work_routing",
 		map[string]any{"record_id": "  "})
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("a routing read with no record answered %v, want bad params", err)
@@ -234,56 +245,150 @@ type stubMemory struct {
 	threads memread.Threads
 	err     error
 
-	handle, conversation, episode string
-	limit                         int
-	handles                       []string
+	seat         memread.Seat
+	conversation string
+	episode      string
+	limit        int
+	seats        []memread.Seat
 }
 
-func (s *stubMemory) Memory(_ context.Context, handle string, limit int) (memread.Memory, error) {
-	s.handle, s.limit = handle, limit
+func (s *stubMemory) Memory(_ context.Context, seat memread.Seat, limit int) (memread.Memory, error) {
+	s.seat, s.limit = seat, limit
 	return s.memory, s.err
 }
 
-func (s *stubMemory) Episode(_ context.Context, handle, id string) (memread.EpisodeDetail, error) {
-	s.handle, s.episode = handle, id
-	return memread.EpisodeDetail{Handle: handle}, s.err
+func (s *stubMemory) Episode(_ context.Context, seat memread.Seat, id string) (memread.EpisodeDetail, error) {
+	s.seat, s.episode = seat, id
+	return memread.EpisodeDetail{Handle: seat.Handle}, s.err
 }
 
-func (s *stubMemory) Threads(_ context.Context, handle, conversation string, limit int) (
+func (s *stubMemory) Threads(_ context.Context, seat memread.Seat, conversation string, limit int) (
 	memread.Threads, error) {
 
-	s.handle, s.conversation, s.limit = handle, conversation, limit
+	s.seat, s.conversation, s.limit = seat, conversation, limit
 	return s.threads, s.err
 }
 
-func (s *stubMemory) Overview(_ context.Context, handles []string) (memread.Overview, error) {
-	s.handles = handles
+func (s *stubMemory) Overview(_ context.Context, seats []memread.Seat) (memread.Overview, error) {
+	s.seats = seats
 	return memread.Overview{}, s.err
 }
 
-// SCOPED LIKE EVERY OTHER PER-SEAT QUESTION. A caller reads the seat their own
-// token is bound to; naming somebody else's needs an operator credential.
-func TestTheThreadLedgerIsScopedToTheCallersOwnSeat(t *testing.T) {
+// trailCompany holds three AGENT seats, since a seat's trail is an agent's —
+// a person keeps no memory and says nothing on a surface through the engine —
+// and three so a lead of one has a seat beside it they do not lead.
+const trailCompany = `
+name: Acme
+providers:
+  llm:
+    p: {type: anthropic, model: m, api_keys: ["${K}"]}
+roles:
+  - name: Ana Diaz
+    handle: ana
+    llm: p
+  - name: Bo Lang
+    handle: bo
+    llm: p
+  - name: Cy Park
+    handle: cy
+    llm: p
+`
+
+// trailSources is [viewerSources] over [trailCompany].
+func trailSources(t *testing.T, memory *stubMemory) queries.Sources {
+	t.Helper()
+	cfg, err := config.ParseCompany([]byte(trailCompany))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	return queries.Sources{Company: companySource(t, cfg), Memory: memory, Chart: flatChart{}}
+}
+
+// A LEAD READS THEIR OWN SEATS' TRAIL, AND NO ONE ELSE'S (ADR-0033).
+//
+// What a seat remembered and said is its trail, read under one verb
+// ([authz.ActionSeatTrailRead]) by the seat itself, whoever leads it, and an
+// admin — and by nobody else, whatever apps they hold: a lead steers, pauses
+// and answers for their agents and could do none of it well blind, while
+// somebody who merely shares the company does not read every prompt an agent
+// was given. Its rows, over both halves of the trail:
+//
+//   - no handle is the caller's own seat, as on every personal question;
+//   - an admin with no relation to the seat reads it;
+//   - a lead holding NO permission reads the seat they lead, since a seat's
+//     trail belongs to no app;
+//   - and that lead is refused the seat beside it they do not lead, as is a
+//     caller holding every app — each told admin would have admitted them.
+//
+// Mutation: make `audit.seat.read` admin-only (the company-wide trail's rule)
+// and the lead's row goes red; drop the lead arm's chart check and the
+// refused rows do.
+func TestALeadReadsTheirSeatsTrailAndNoOneElses(t *testing.T) {
 	t.Parallel()
-	memory := &stubMemory{}
-	s := viewerSources(t, &stubWork{})
-	s.Memory = memory
+	own := &stubMemory{}
+	if _, err := askAsSeat(t, trailSources(t, own), "ana", "conversations", nil); err != nil {
+		t.Fatalf("a seat's own threads: %v", err)
+	}
+	if own.seat.Handle != "ana" {
+		t.Errorf("no handle asked the holder about %q, want the caller's own seat",
+			own.seat.Handle)
+	}
+	for _, question := range []struct{ what, param string }{
+		{"conversations", "handle"}, {"agent_memory", "id"},
+	} {
+		admin := &stubMemory{}
+		if _, err := askHolding(t, trailSources(t, admin), "pat", question.what,
+			map[string]any{question.param: "bo"}, iam.GrantAdmin); err != nil {
+			t.Fatalf("%s: an admin with no relation to bo was refused: %v", question.what, err)
+		}
+		if admin.seat.Handle != "bo" {
+			t.Errorf("%s: the holder was asked about %q, want the seat the admin named",
+				question.what, admin.seat.Handle)
+		}
 
-	// The operator's own seat, with no handle named.
-	if _, err := askAsOperator(t, s, "conversations", nil); err != nil {
-		t.Fatalf("conversations: %v", err)
-	}
-	if memory.handle != "ana" {
-		t.Errorf("the ledger was asked about %q, want the seat bound to the token", memory.handle)
-	}
+		led := &stubMemory{}
+		s := trailSources(t, led)
+		s.Chart = leadsChart{lead: "ana", report: "bo"}
+		if _, err := askHolding(t, s, "ana", question.what,
+			map[string]any{question.param: "bo"}); err != nil {
+			t.Fatalf("%s: bo's lead, holding no permission, was refused bo's trail: %v",
+				question.what, err)
+		}
+		if led.seat.Handle != "bo" {
+			t.Errorf("%s: the holder was asked about %q, want bo", question.what,
+				led.seat.Handle)
+		}
 
-	// Somebody else's, with no credential at all.
-	memory.handle = ""
-	if _, err := askNative(t, s, "conversations", map[string]any{"handle": "bo"}); err == nil {
-		t.Error("an anonymous caller read another seat's threads")
-	}
-	if memory.handle != "" {
-		t.Errorf("a refused read still asked the ledger about %q", memory.handle)
+		for _, c := range []struct {
+			name   string
+			chart  authz.Chart
+			asked  string
+			grants []iam.Grant
+		}{
+			{"a lead asking for a seat they do not lead",
+				leadsChart{lead: "ana", report: "bo"}, "cy", nil},
+			{"a caller holding every app and leading nobody", flatChart{}, "bo",
+				slices.Clone(iam.Apps)},
+		} {
+			refusedStub := &stubMemory{}
+			s := trailSources(t, refusedStub)
+			s.Chart = c.chart
+			_, err := askHolding(t, s, "ana", question.what,
+				map[string]any{question.param: c.asked}, c.grants...)
+			var refusal *queries.Refusal
+			if !errors.As(err, &refusal) || !errors.Is(err, queries.ErrUnauthorized) {
+				t.Errorf("%s: %s read %s's trail: %v", question.what, c.name, c.asked, err)
+				continue
+			}
+			if !slices.Equal(refusal.Grants, []iam.Grant{iam.GrantAdmin}) {
+				t.Errorf("%s: %s was refused naming %v, want admin, which would "+
+					"have admitted them", question.what, c.name, refusal.Grants)
+			}
+			if refusedStub.seat.Handle != "" {
+				t.Errorf("%s: %s: the holder was asked about %q anyway", question.what,
+					c.name, refusedStub.seat.Handle)
+			}
+		}
 	}
 }
 
@@ -294,9 +399,8 @@ func TestTheThreadLedgerIsScopedToTheCallersOwnSeat(t *testing.T) {
 func TestTheNamedThreadAndThePageReachTheHolder(t *testing.T) {
 	t.Parallel()
 	memory := &stubMemory{}
-	s := viewerSources(t, &stubWork{})
-	s.Memory = memory
-	if _, err := askAsOperator(t, s, "conversations",
+	s := trailSources(t, memory)
+	if _, err := askAsSeat(t, s, "ana", "conversations",
 		map[string]any{"conversation": " slack:C1 ", "limit": 7}); err != nil {
 		t.Fatalf("conversations: %v", err)
 	}
@@ -311,11 +415,10 @@ func TestTheNamedThreadAndThePageReachTheHolder(t *testing.T) {
 // by waiting.
 func TestAMemoryReadTheHolderCouldNotAnswerIsUnavailable(t *testing.T) {
 	t.Parallel()
-	s := viewerSources(t, &stubWork{})
-	s.Memory = &stubMemory{err: fmt.Errorf("%w: node-b holds ana and did not answer",
-		memread.ErrUnavailable)}
+	s := trailSources(t, &stubMemory{err: fmt.Errorf("%w: node-b holds ana and did not answer",
+		memread.ErrUnavailable)})
 	for _, what := range []string{"agent_memory", "conversations"} {
-		_, err := askAsOperator(t, s, what, map[string]any{"id": "ana"})
+		_, err := askAsSeat(t, s, "ana", what, map[string]any{"id": "ana"})
 		if !errors.Is(err, queries.ErrUnavailable) {
 			t.Errorf("%s answered %v, want ErrUnavailable", what, err)
 		}

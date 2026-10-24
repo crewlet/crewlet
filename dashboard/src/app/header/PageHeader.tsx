@@ -16,17 +16,25 @@
  * way back out, and a strip of tabs over a task page would say the task is a
  * fourth kind of list.
  *
+ * WORK DRAWS NO SECOND ROW. Its sections are the lenses of the scope its
+ * trail names (`renderer: "lenses"` in `nav.ts`), drawn as chips beside the
+ * trail's switcher ([AllProjectsLenses]) the way a project draws its own, so
+ * the bar reads one way in either scope. The frame's star is not drawn there:
+ * the scope is switched in the trail, and a shortcut to one of its lenses is
+ * a second way to the same place.
+ *
  * Settings draws its sections as a COLUMN instead (`SectionColumn`), because
- * its own row in WORKSPACES holds more sections, in three groups, than a tab
- * strip can — a row nobody reads to the end of.
+ * its own row in WORKSPACES holds more sections, in four groups, than a tab
+ * strip can: a row nobody reads to the end of.
  *
  * # A section is a path
  *
  * Every tab is a link to its own address, never a `tab=` on this one: a
  * section is a place, and a place has a URL a reader can paste. What travels
- * between sections is the workspace's own query (`WorkspaceRow.keep` — whose
- * day My work is reading, the window Spend is reading over), and nothing
- * else: a filter on the Turns list is not a filter on the Event log.
+ * between sections is the workspace's own query (`WorkspaceRow.keep`: whose
+ * day My work is reading, the window Settings' Spend is reading over), in the
+ * tabs and the column alike ([keptQuery]), and nothing else: a filter on the
+ * Turns list is not a filter on the Event log.
  *
  * # A figure on a tab is the screen's
  *
@@ -36,48 +44,57 @@
  * nothing for a section the screen did not count.
  */
 
-import {
-  useCallback,
-  useId,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-  type ReactNode,
-  type RefObject,
-} from "react";
+import { useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   AppShell,
   AvatarStack,
+  Breadcrumb,
   Button,
   Menu,
   SidebarNav,
-  cx,
+  Tabs,
+  Tag,
   useToast,
+  type BreadcrumbCrumb,
   type MenuEntry,
+  useMediaMatch,
 } from "@crewlethq/ui";
-import {
-  ArrowUpRightGlyph,
-  ChevronDownGlyph,
-  ChevronRightGlyph,
-  CopyGlyph,
-  EllipsisGlyph,
-  KeyGlyph,
-  StarGlyph,
-} from "@crewlethq/icons/glyphs";
+import { ChevronDownGlyph, EllipsisGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
+import { LockMark } from "../frame/LockMark.tsx";
 import { href, samePath, useNavigator, useRoute } from "../router.tsx";
 import type { Crumb } from "../crumbs.ts";
 import { resolves } from "../routes.ts";
-import { sectionOf, type Section, type WorkspaceRow } from "../nav.ts";
+import { accessNames } from "~/lib/access.ts";
+import {
+  grantsMissing,
+  isSidebarRow,
+  sectionOf,
+  serviceShown,
+  type Section,
+  type WorkspaceRow,
+} from "../nav.ts";
+import type { ServicesRun } from "~/lib/services.ts";
+import {
+  ALL_PROJECTS_LENSES,
+  LENS_LABELS,
+  allProjectsPath,
+  scopeAt,
+  type AllProjectsLens,
+} from "../scope.ts";
+import { preload } from "../lazyScreen.ts";
 import type { SectionFigure } from "../sidebar/settingsFigures.tsx";
-import { PAGE_ACTIONS_SLOT, PAGE_LENSES_SLOT } from "../frame/PageActions.tsx";
+import { PAGE_ACTIONS_SLOT, PAGE_LENSES_SLOT, lensLabel } from "../frame/PageActions.tsx";
+import { ScopeSwitcher, useScopeFigures } from "./ProjectSwitcher.tsx";
 import { glyphFor } from "~/ui/glyph.tsx";
 import { SeatAvatar, seatBadge } from "~/ui/SeatAvatar.tsx";
+import { useReader } from "~/lib/reader.ts";
 import { MaxStars, starredIn, useStarred, useToggleStar, type Star } from "~/lib/starred.ts";
 import { useAgents } from "~/lib/store-hooks.ts";
+import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { plural } from "~/lib/format.ts";
 import { useScrollEdges } from "~/lib/useScrollEdges.ts";
 import { foldTabs } from "../frame/tabFit.ts";
+import { PHONE_BREAKPOINT } from "../layout.ts";
 
 /** How many working seats the header draws before "+n". */
 const WORKING_FACES = 4;
@@ -102,6 +119,9 @@ export function PageHeader({
   workspace,
   working = false,
   menu = [],
+  star = true,
+  runs,
+  grants,
   children,
 }: {
   crumbs: Crumb[];
@@ -116,20 +136,37 @@ export function PageHeader({
   working?: boolean;
   /** The screen's secondary actions, folded into "More" on a phone. */
   menu?: readonly PageMenuEntry[];
+  /** The frame draws the star; false where the screen's own menu carries it. */
+  star?: boolean;
+  /** Which services the company runs: a tab reading one it does not is not drawn. */
+  runs: ServicesRun;
+  /** What the reader holds, or null before the frame has read it, for the tabs' locks. */
+  grants: readonly string[] | null;
   /** What sits under the rows: the state bar. */
   children?: ReactNode;
 }) {
   const route = useRoute();
   const controls = useRef<HTMLDivElement>(null);
   const edges = useScrollEdges(controls);
+  // WORK'S SCOPE PAGES: All projects' lenses, or a project's.
+  const at = scopeAt(route.path, route.query);
+  // THE FRAME'S STAR: not on Work's scope pages (see the module doc), not
+  // where the screen's own menu carries it, and not in a workspace that draws
+  // none (`WorkspaceRow.starless`).
+  const framesStar = star && !at && !row?.starless;
   return (
     <div className="page-head">
       <AppShell.Topbar className="page-bar">
-        <Breadcrumb crumbs={crumbs} />
-        {/* AN OBJECT'S LENSES, beside the name they are lenses on — see
-            `PageLenses`. Empty on every other page, where it takes no room
+        <Trail crumbs={crumbs} />
+        {/* A SCOPE'S LENSES, beside the name they are lenses on: All
+            projects' drawn here, a project's portalled in by its page (see
+            `PageLenses`). Empty on every other page, where it takes no room
             (`.page-lenses:empty`). */}
-        <div className="page-lenses" id={PAGE_LENSES_SLOT} />
+        <div className="page-lenses" id={PAGE_LENSES_SLOT}>
+          {row?.renderer === "lenses" && at?.scope.kind === "all" ? (
+            <AllProjectsLenses lens={at.lens as AllProjectsLens} />
+          ) : null}
+        </div>
         <div className="page-controls" ref={controls} {...edges}>
           {/* THE SLOT IS ALWAYS RENDERED, whether or not a screen has
               controls: a portal needs a node to land in, and one that appears
@@ -137,22 +174,36 @@ export function PageHeader({
               be found by the screen that has them. The gap is the bar's own,
               so a screen's controls sit as far apart as the frame's. */}
           {working && <WorkingNow />}
-          {/* THE FRAME'S OWN QUIET PAIR, drawn inline on a wide bar and folded
+          {/* THE FRAME'S OWN STAR, drawn inline on a wide bar and folded
               into "More" on a phone (see `PageMore`), where the bar keeps one
-              action in view. */}
-          <span className="page-frame-actions">
-            <StarPage path={route.path} label={title} workspace={workspace} />
-            <CopyLink />
-          </span>
+              action in view, wherever `framesStar` says the frame draws one. */}
+          {framesStar && (
+            <span className="page-frame-actions">
+              <StarPage path={route.path} label={title} workspace={workspace} />
+            </span>
+          )}
           {/* BEFORE THE SLOT IN THE DOCUMENT, so the screen's controls stay the
               bar's last element on a wide bar (where this is not drawn); on a
               phone the slot leads the line (`order: -1`) and this ends it. */}
-          <PageMore path={route.path} label={title} workspace={workspace} entries={menu} />
+          <PageMore
+            path={route.path}
+            label={title}
+            workspace={workspace}
+            entries={menu}
+            star={framesStar}
+          />
           <div className="row gap-2 wrap page-actions" id={PAGE_ACTIONS_SLOT} />
         </div>
       </AppShell.Topbar>
       {row && row.renderer === "tabs" && (
-        <SectionTabs row={row} path={route.path} query={route.query} counts={counts} />
+        <SectionTabs
+          row={row}
+          path={route.path}
+          query={route.query}
+          counts={counts}
+          runs={runs}
+          grants={grants}
+        />
       )}
       {children}
     </div>
@@ -171,6 +222,7 @@ export function PageHeader({
  */
 export function WorkingNow() {
   const agents = useAgents();
+  const badgeOf = useSeatBadgeOf();
   const working = agents.filter((a) => a.activity === "working");
   if (working.length === 0) return null;
   return (
@@ -180,12 +232,14 @@ export function WorkingNow() {
         max={WORKING_FACES}
         decorative
         // THE SEAT'S OWN BADGE, the initials its crumb and its profile draw
-        // (`seatBadge`): handed the role as written, "Agent SWE" was `AS`
-        // here beside `SW` everywhere else the seat is drawn.
+        // (`seatBadge`, whose initials the kit takes past an agent's leading
+        // "agent" word): "Agent SWE" was `AS` here beside `SW` everywhere else
+        // the seat is drawn.
         members={working.map((a) => ({
           id: a.id,
-          ...seatBadge(a.role, "agent"),
-          ring: "info" as const,
+          // NO STATUS ON A MEMBER: each overlaps the one before it, and
+          // the sentence beside the stack already says they are working.
+          ...seatBadge(a.role, "agent", badgeOf(a.handle || a.role).avatar),
         }))}
       />
       <span>{plural(working.length, "agent")} working</span>
@@ -202,6 +256,12 @@ export function WorkingNow() {
  * which a set of addresses cannot keep. Drawn only on a section's own page and
  * only for a workspace with more than one section, because a strip of one tab
  * is a heading wearing a control's clothes.
+ *
+ * THE KIT'S ROW, in router mode: `Tabs` with the underline chrome, whose root
+ * is that `nav` and whose items are these links, so a workspace's sections and
+ * an object's own tabs (`ObjectTabs`) are one control. "More" and the reading
+ * note are its `trailing` node, inside the landmark with the links they
+ * continue.
  *
  * # What does not fit goes into "More"
  *
@@ -226,14 +286,24 @@ export function SectionTabs({
   path,
   query,
   counts,
+  runs,
+  grants,
 }: {
   row: WorkspaceRow;
   path: string[];
   query: URLSearchParams;
   counts: Record<string, string>;
+  /** Which services the company runs: a tab reading one it does not is not drawn. */
+  runs: ServicesRun;
+  /**
+   * What the reader holds, or null before the frame has read it: a tab the
+   * reader cannot open is locked like the sidebar's rows and the Settings
+   * column's (`grantsMissing`), never drawn as open to then refuse.
+   */
+  grants: readonly string[] | null;
 }) {
   const nav = useNavigator();
-  const tabs = row.sections.filter((s) => s.tab !== false && !s.elsewhere);
+  const tabs = row.sections.filter((s) => s.tab !== false && serviceShown(s, runs));
   const current = tabs.find((s) => samePath(s.path, path));
   const strip = useRef<HTMLElement>(null);
   const fit = useTabFit(
@@ -243,82 +313,98 @@ export function SectionTabs({
   );
   const folded = fit.folded;
   if (tabs.length < 2 || !current) return null;
-  const kept: Record<string, string> = {};
-  for (const key of row.keep ?? []) {
-    const value = query.get(key);
-    if (value) kept[key] = value;
-  }
+  const kept = keptQuery(row, query);
   const out = tabs.filter((s) => folded.includes(s.key));
+  const paths = new Map(tabs.map((s) => [s.key, s.path]));
   return (
-    <nav ref={strip} className="section-tabs" aria-label={`${row.label} sections`}>
-      {tabs.map((s) => {
+    <Tabs
+      ref={strip}
+      ariaLabel={`${row.label} sections`}
+      variant="underline"
+      className="section-tabs"
+      value={current.key}
+      items={tabs.map((s) => {
         const Glyph = glyphFor(s.icon);
-        const figure = counts[s.key];
-        const off = folded.includes(s.key);
-        return (
-          <a
-            key={s.key}
-            className="section-tab"
-            data-section={s.key}
-            href={href(s.path, kept)}
-            aria-current={s === current ? "page" : undefined}
-            // FOLDED INTO "MORE": still here to be measured, and out of reach
-            // of the pointer, the keyboard and a screen reader, which meet it
-            // in the menu instead.
-            {...(off ? { "data-folded": "", "aria-hidden": true, inert: true } : {})}
-          >
-            <Glyph size="sm" aria-hidden="true" />
-            <span>{s.label}</span>
-            {/* A PLAIN FIGURE in the tab's own quiet ink, as every approved
-                artboard draws it: a pill here was a second control-shaped
-                thing inside each tab. */}
-            {figure ? <span className="section-tab-count t-num">{figure}</span> : null}
-          </a>
-        );
+        const needs = grants === null ? [] : grantsMissing(s, grants);
+        return {
+          value: s.key,
+          label:
+            needs.length > 0 ? (
+              <span className="side-locked" title={`Needs ${accessNames(needs)} access`}>
+                {s.label}
+                <LockMark needs={needs} />
+              </span>
+            ) : (
+              s.label
+            ),
+          icon: <Glyph size="sm" />,
+          count: counts[s.key],
+        };
       })}
-      {/* ALWAYS IN THE DOCUMENT, so its width is known before it is needed;
-          folded itself while every tab fits. */}
-      <span
-        className="section-tabs-more"
-        data-section-more=""
-        {...(out.length === 0 ? { "data-folded": "", "aria-hidden": true, inert: true } : {})}
-      >
-        <Menu
-          label={`More sections of ${row.label}`}
-          // THE CHEVRON SAYS IT OPENS, as a select's does: a bare "More" at
-          // the end of a row of links read as one more link.
-          trigger={
-            <span className="row gap-1">
-              More
-              <ChevronDownGlyph size="xs" aria-hidden="true" />
-            </span>
-          }
-          triggerVariant="ghost"
-          align="end"
-          // NO GLYPHS: a section's glyph at the head of a menu row sits where
-          // a menu draws its check, and Checklist's IS a check — the row read
-          // as a chosen answer. The name and its figure are the row.
-          items={out.map((s) => ({
-            key: s.key,
-            label: s.label,
-            hint: counts[s.key] || undefined,
-            onSelect: () => nav.to(s.path, kept),
-          }))}
-        />
-      </span>
-      {/* THE WORKSPACE'S READING NOTE comes after the tabs and gives way to
-          them: it is folded (out of the flow, still measured) whenever the
-          strip has no room for it beside every tab — see [noteFits]. */}
-      {row.note && (
-        <span
-          className="section-tabs-note"
-          data-section-note=""
-          {...(fit.note ? {} : { "data-folded": "", "aria-hidden": true })}
+      renderItem={({ item, className, isActive, children }) => (
+        <a
+          className={className}
+          data-section={item.value}
+          href={href(paths.get(item.value) ?? row.path, kept)}
+          aria-current={isActive ? "page" : undefined}
+          // FOLDED INTO "MORE": still here to be measured, and out of reach
+          // of the pointer, the keyboard and a screen reader, which meet it
+          // in the menu instead.
+          {...(folded.includes(item.value)
+            ? { "data-folded": "", "aria-hidden": true, inert: true }
+            : {})}
         >
-          {row.note}
-        </span>
+          {children}
+        </a>
       )}
-    </nav>
+      trailing={
+        <>
+          {/* ALWAYS IN THE DOCUMENT, so its width is known before it is
+              needed; folded itself while every tab fits. */}
+          <span
+            className="section-tabs-more"
+            data-section-more=""
+            {...(out.length === 0 ? { "data-folded": "", "aria-hidden": true, inert: true } : {})}
+          >
+            <Menu
+              label={`More sections of ${row.label}`}
+              // THE CHEVRON SAYS IT OPENS, as a select's does: a bare "More"
+              // at the end of a row of links read as one more link.
+              trigger={
+                <span className="row gap-1">
+                  More
+                  <ChevronDownGlyph size="xs" aria-hidden="true" />
+                </span>
+              }
+              triggerVariant="ghost"
+              align="end"
+              // NO GLYPHS: a section's glyph at the head of a menu row sits
+              // where a menu draws its check, and Checklist's IS a check (the
+              // row read as a chosen answer). The name and its figure are the
+              // row.
+              items={out.map((s) => ({
+                key: s.key,
+                label: s.label,
+                hint: counts[s.key] || undefined,
+                onSelect: () => nav.to(s.path, kept),
+              }))}
+            />
+          </span>
+          {/* THE WORKSPACE'S READING NOTE comes after the tabs and gives way
+              to them: it is folded (out of the flow, still measured) whenever
+              the strip has no room for it beside every tab, see [noteFits]. */}
+          {row.note && (
+            <span
+              className="section-tabs-note"
+              data-section-note=""
+              {...(fit.note ? {} : { "data-folded": "", "aria-hidden": true })}
+            >
+              {row.note}
+            </span>
+          )}
+        </>
+      }
+    />
   );
 }
 
@@ -408,25 +494,51 @@ function useTabFit(
 }
 
 /**
+ * The workspace's own query on the address the reader is on
+ * ([WorkspaceRow.keep]), for a link to another of its sections to carry.
+ */
+export function keptQuery(row: WorkspaceRow, query: URLSearchParams): Record<string, string> {
+  const kept: Record<string, string> = {};
+  for (const key of row.keep ?? []) {
+    const value = query.get(key);
+    if (value) kept[key] = value;
+  }
+  return kept;
+}
+
+/**
  * Settings' sections, as a column of groups beside the screen.
  *
- * A GUARDED SECTION DRAWS ITS LOCK AND STAYS, for the reason the sidebar's
- * Settings row does: a section that vanished for a reader without an operator
- * credential is one they cannot know exists. A CROSS-LINK (Budgets, which
- * lives once, under Spend) draws an arrow, because pressing it leaves
- * Settings. A figure beside a section is handed in whole, in the column's own
- * two shapes (`settingsFigures.tsx` decides them and asks for what they need),
- * so the column itself asks nothing.
+ * A SECTION CLOSED TO THE READER DRAWS ITS LOCK AND STAYS, for the reason no
+ * sidebar row is ever hidden: a section that vanished for a reader without its
+ * access is one they cannot know exists. Closed is `nav.ts`'s `sectionOpen`,
+ * the one rule every lock is drawn by — the reader's own sections (their
+ * Account, Appearance) and General never, every other without Admin. The lock
+ * names what is missing, because that is what the reader would ask an admin
+ * for, and it is drawn only once somebody has said what the reader holds,
+ * since a lock on every section while the first read is out claims a refusal
+ * nobody has made. Each row's title is its hint. A section reading a service
+ * the company does not run is not drawn (`serviceShown`): Expensive tasks,
+ * where it runs no Crewlet Works. A figure beside a section is handed in
+ * whole, in the column's own two shapes (`settingsFigures.tsx` decides them
+ * and asks for what they need), so the column itself asks nothing.
  */
 export function SectionColumn({
   row,
   path,
-  operator,
+  query,
+  grants,
   figures,
+  runs,
 }: {
   row: WorkspaceRow;
   path: string[];
-  operator: boolean;
+  /** The address's query, for the workspace's own keys a row carries ([keptQuery]). */
+  query: URLSearchParams;
+  /** Which services the company runs: a section reading one it does not is not drawn. */
+  runs: ServicesRun;
+  /** What the viewer holds, or null while nobody has said. */
+  grants: readonly string[] | null;
   figures: Record<string, SectionFigure>;
 }) {
   // AN ADDRESS THAT NAMES NO SCREEN IS IN NO SECTION. The landing's path is
@@ -434,8 +546,9 @@ export function SectionColumn({
   // a mistyped `#/settings/general` drew "Not found" under a column (and a
   // phone picker) saying the reader was on General.
   const current = resolves(path) ? sectionOf(path) : undefined;
+  const kept = keptQuery(row, query);
   const groups: { name: string; sections: Section[] }[] = [];
-  for (const s of row.sections) {
+  for (const s of row.sections.filter((section) => serviceShown(section, runs))) {
     const name = s.group ?? "";
     const last = groups[groups.length - 1];
     if (last && last.name === name) last.sections.push(s);
@@ -444,15 +557,35 @@ export function SectionColumn({
   // ON A PHONE THE COLUMN IS A PICKER NAMING THE SECTION. Stacked whole above
   // the section it took about 520px, so on Nodes and Secrets the section's own
   // content began below the fold on every visit. Below the phone breakpoint
-  // the list is folded behind one row saying where the reader is, and it folds
-  // again once they pick a section (the path moves); at every other width the
-  // toggle is not drawn and the list always is (frame.css).
-  const [open, setOpen] = useState(false);
-  const [openedAt, setOpenedAt] = useState(path.join("/"));
-  if (openedAt !== path.join("/")) {
-    setOpenedAt(path.join("/"));
-    setOpen(false);
+  // the list is folded behind one row saying where the reader is; at every
+  // other width the toggle is not drawn and the list always is (frame.css).
+  //
+  // FOLDED WHERE THE READER CHOSE A SECTION, OPEN WHERE THEY HAVE NOT. A deep
+  // link (`#/settings/people`) arrives folded, which is the reason the picker
+  // folds at all: the section the link named starts right under it. But the
+  // workspace's own address names no section anybody picked (it is where the
+  // sidebar's Settings row lands), so arriving there opens the list: folded,
+  // a phone reader saw one row naming the first section and never the groups
+  // under it. Every pick folds it again, the section the reader is already
+  // on included, which moves no path.
+  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
+  const at = path.join("/");
+  const atRoot = samePath(path, row.path);
+  const [open, setOpen] = useState(phone && atRoot);
+  const [openedAt, setOpenedAt] = useState(at);
+  // THE ADDRESS A PICK IN THIS LIST IS ON ITS WAY TO, so the arrival it causes
+  // is told from one the reader did not make here — the Settings row, Back.
+  const [picked, setPicked] = useState<string | null>(null);
+  if (openedAt !== at) {
+    setOpenedAt(at);
+    setOpen(picked !== at && phone && atRoot);
+    setPicked(null);
   }
+  const pick = (s: Section) => () => {
+    setOpen(false);
+    const to = s.path.join("/");
+    if (to !== at) setPicked(to);
+  };
   const listID = useId();
   const CurrentGlyph = current ? glyphFor(current.icon) : undefined;
   // THE KIT'S OWN NAVIGATION LIST, which is what this column is: labelled
@@ -472,7 +605,14 @@ export function SectionColumn({
         <span className="section-picker-name">
           {current ? (
             <>
-              <span className="sr-only">{row.label} section: </span>
+              {/* SAID, NOT ONLY SPOKEN: the row read "General" and nothing
+                  else, which a reader takes for the section's title rather
+                  than for a list of the others. */}
+              <span className="section-picker-prefix">
+                <span className="sr-only">{row.label} </span>Section
+                <span aria-hidden="true"> · </span>
+                <span className="sr-only">: </span>
+              </span>
               {current.label}
             </>
           ) : (
@@ -487,37 +627,31 @@ export function SectionColumn({
             <SidebarNav.Group key={g.name} label={g.name}>
               {g.sections.map((s) => {
                 const Glyph = glyphFor(s.icon);
-                const locked = s.guarded && !operator;
+                // BY THE ONE RULE every lock the navigation draws is decided
+                // by (`nav.ts`'s `sectionOpen`): the reader's own sections
+                // need nothing, and every other names its own access.
+                const needs = grants === null ? [] : grantsMissing(s, grants);
                 const figure = figures[s.key];
                 return (
                   <SidebarNav.Item
                     key={s.key}
-                    href={href(s.path)}
-                    current={!s.elsewhere && current?.key === s.key}
+                    href={href(s.path, kept)}
+                    current={current?.key === s.key}
                     icon={<Glyph size="sm" />}
+                    onClick={pick(s)}
+                    // THE ROW'S HINT AS ITS TITLE, the words the palette shows
+                    // under it.
+                    renderLink={({ className, ...link }) => (
+                      <a className={className} {...link} title={s.hint} />
+                    )}
                     label={
                       <span className="section-column-label">
                         {s.label}
-                        {locked && (
-                          <>
-                            <KeyGlyph size="xs" aria-hidden="true" />
-                            <span className="sr-only">, needs an operator credential</span>
-                          </>
-                        )}
-                        {s.elsewhere && (
-                          <>
-                            <ArrowUpRightGlyph size="xs" aria-hidden="true" />
-                            <span className="sr-only">, under {s.path[0]}</span>
-                          </>
-                        )}
+                        <LockMark needs={needs} />
                       </span>
                     }
-                    badge={figure?.badge ?? figure?.attention}
+                    badge={figure?.badge}
                     count={figure?.count}
-                    // A STATE WAITING ON THE READER is the kit's pill — its
-                    // size, its place and its spoken figure — repainted in
-                    // the warning tone (see `SectionFigure.attention`).
-                    className={figure?.attention ? "section-row-attention" : undefined}
                   />
                 );
               })}
@@ -530,213 +664,113 @@ export function SectionColumn({
 }
 
 /**
- * The trail, and it is a SCROLLPORT — so while it overflows it is a tab stop.
+ * The trail, as the kit's `Breadcrumb` draws it, from the route table's
+ * crumbs (`crumbs.ts`). Its floor, its tab stop while it overflows and the
+ * page's `h1` are the kit's; what is here is how a crumb of this product
+ * becomes one of the kit's.
  *
- * `.crumbs` scrolls sideways past its floor rather than clipping the ancestry
- * as a box (see frame.css), and its scrollbar is not drawn, because on a bar
- * this short it would sit on the baseline the trail is written on. Both of
- * those together are what make the tab stop load-bearing: a pointer can drag
- * a hidden scrollport and a trackpad can swipe it, but a keyboard reaches a
- * scroll container's arrow keys only once it can be FOCUSED, and there is no
- * other route to the overflowed crumbs — the links inside it are focusable
- * and scroll into view, but the deepest trail this route table builds
- * overflows on its ancestor SPANS, which are not links and take no focus of
- * their own.
- *
- * ONLY WHILE IT OVERFLOWS. A trail that fits — nearly every trail, at any
- * width the frame draws a sidebar beside — has nowhere for the arrow keys to
- * go, and a stop on it was a Tab press on every page that did nothing. So the
- * stop is measured (`scrollWidth > clientWidth`), again whenever the trail's
- * box or its crumbs change, and the `aria-label` is what makes it announce
- * itself as the breadcrumb rather than as a bare group when it is there.
- *
- * EACH LABEL IS ITS OWN BOX (`.crumb-text`). The part that takes the cut is a
- * flex container, and text directly inside one is an anonymous flex item that
- * `text-overflow` does not reach: the last crumb was clipped mid-word at the
- * edge with no ellipsis at all. A span is a real flex item, blockified, which
- * is the box an ellipsis applies to.
- *
- * ITS FLOOR IS THE WAY BACK OUT (`--crumb-floor`, [useCrumbFloor]): the
- * ancestors at their width and the last crumb at its stub. The bar breaks a
- * line when the trail's floor cannot sit beside the controls, and a floor of
- * 20ch alone let a seat's trail share a phone's line with its one button at
- * two hundred pixels — "Agents › Engineering · Co" cut mid-letter under
- * Message, the seat's own crumb scrolled out of sight. Measured, the floor is
- * what the trail must show, so a trail that cannot show it beside the
- * controls takes a line of its own, and it scrolls only when its ancestry
- * alone is wider than the whole bar.
+ * WORK'S LAST CRUMB NAMES A SCOPE THE READER CAN SWITCH ([Crumb.switch]), and
+ * is drawn as the switcher's button ([ScopeSwitcher]): the heading is the
+ * control, so the name a reader lands on by heading is the one they change.
  */
-export function Breadcrumb({ crumbs }: { crumbs: Crumb[] }) {
-  const trail = useRef<HTMLElement>(null);
-  const overflows = useOverflows(trail, crumbs);
-  const floor = useCrumbFloor(trail, crumbs);
+export function Trail({ crumbs }: { crumbs: Crumb[] }) {
+  const last = crumbs[crumbs.length - 1];
   return (
-    <nav
-      ref={trail}
-      className="crumbs"
-      aria-label="Breadcrumb"
-      tabIndex={overflows ? 0 : undefined}
-      style={floor > 0 ? ({ "--crumb-floor": `${floor}px` } as CSSProperties) : undefined}
-    >
-      {crumbs.map((crumb, i) => {
-        const last = i === crumbs.length - 1;
-        const Glyph = crumb.icon ? glyphFor(crumb.icon) : undefined;
-        const face = cx(crumb.mono && "mono");
-        const words = (
-          <>
-            {Glyph && <Glyph size="sm" className="crumb-glyph" aria-hidden="true" />}
-            {crumb.tag && <span className="project-key mono crumb-tag">{crumb.tag}</span>}
-            {crumb.seat && (
-              <SeatAvatar
-                name={crumb.seat.name}
-                kind={crumb.seat.kind}
-                size="xs"
-                decorative
-                className="crumb-seat"
-              />
-            )}
-            <span className="crumb-text">{crumb.label}</span>
-          </>
-        );
-        return (
-          <span key={`${crumb.label}-${i}`} className="crumb-part">
-            {i > 0 && <ChevronRightGlyph size="xs" className="crumb-sep" aria-hidden="true" />}
-            {crumb.path && !last ? (
-              <a className={cx("crumb-link", face)} href={href(crumb.path, crumb.query)}>
-                {words}
-              </a>
-            ) : last ? (
-              // THE OBJECT IS THE PAGE'S HEADING. The bar is the page's banner
-              // and outside `main`, and the name of the place the reader is at
-              // is what a reader navigating by heading lands on first — so the
-              // last crumb is the `h1`, and every screen's own headings start
-              // at level 2 under it.
-              <h1 className={cx("crumb-here", face)} aria-current="page">
-                {words}
-              </h1>
-            ) : (
-              <span className={cx("crumb-here", face)}>{words}</span>
-            )}
-          </span>
-        );
-      })}
-    </nav>
+    <Breadcrumb
+      className="page-trail"
+      crumbs={crumbs.map(kitCrumb)}
+      current={
+        last?.switch ? (
+          <ScopeSwitcher
+            trigger={{
+              label: last.label,
+              ...(last.tag ? { keyChip: last.tag } : {}),
+              ...(last.mono ? { mono: true } : {}),
+              ...(last.archived
+                ? {
+                    tag: (
+                      <Tag size="xs" appearance="outline">
+                        Archived
+                      </Tag>
+                    ),
+                  }
+                : {}),
+            }}
+          />
+        ) : undefined
+      }
+    />
   );
 }
 
-/**
- * The narrowest the trail can be and still show the way back out: where the
- * last crumb's name starts, measured from the trail's own start, plus the stub
- * that part keeps (its `min-width`) — or 0 before anything is laid out.
- *
- * NEVER MORE THAN THE ROOM BESIDE WHAT LEADS THE BAR. Below the shell
- * breakpoint the kit's drawer toggle opens the bar's first line, and a floor
- * wider than what the toggle leaves pushed the trail under it — a line holding
- * the toggle alone, then the trail, then the controls. Capped at that room, a
- * trail whose ancestry is wider still scrolls beside the toggle, as it always
- * has past its floor.
- *
- * STABLE UNDER ITS OWN EFFECT. The ancestors never shrink (`frame.css`), so
- * where the last part starts does not depend on how wide the trail is drawn,
- * and neither the bar's width nor the toggle's does either — so the floor it
- * sets cannot move what it was measured from. Measured again whenever a crumb
- * or the bar changes size: a screen publishing its object's name, a font
- * finishing loading, the window.
- */
-function useCrumbFloor(el: RefObject<HTMLElement | null>, content: unknown): number {
-  const [floor, setFloor] = useState(0);
-  useLayoutEffect(() => {
-    const node = el.current;
-    if (!node) return;
-    const bar = node.parentElement;
-    const measure = () => {
-      const last = node.querySelector(
-        ".crumb-part:last-child > .crumb-here, .crumb-part:last-child > .crumb-link",
-      );
-      if (!last) return setFloor(0);
-      const start = node.getBoundingClientRect().left - node.scrollLeft;
-      const offset = last.getBoundingClientRect().left - start;
-      const stub = parseFloat(getComputedStyle(last).minWidth) || 0;
-      const wanted = Math.max(0, Math.ceil(offset + stub));
-      setFloor(bar ? Math.min(wanted, roomBeside(bar, node)) : wanted);
-    };
-    measure();
-    const watch = new ResizeObserver(measure);
-    for (const part of node.querySelectorAll(".crumb-part")) watch.observe(part);
-    if (bar) watch.observe(bar);
-    return () => watch.disconnect();
-  }, [el, content]);
-  return floor;
+/** One crumb of this product as the kit draws it. */
+function kitCrumb(crumb: Crumb): BreadcrumbCrumb {
+  const Glyph = crumb.icon ? glyphFor(crumb.icon) : undefined;
+  return {
+    label: crumb.label,
+    ...(crumb.path ? { href: href(crumb.path, crumb.query) } : {}),
+    ...(Glyph ? { icon: <Glyph size="sm" /> } : {}),
+    ...(crumb.tag ? { keyChip: crumb.tag } : {}),
+    ...(crumb.seat
+      ? {
+          badge: (
+            <SeatAvatar
+              name={crumb.seat.name}
+              kind={crumb.seat.kind}
+              avatar={crumb.seat.avatar}
+              size="xs"
+              decorative
+            />
+          ),
+        }
+      : {}),
+    ...(crumb.mono ? { mono: true } : {}),
+  };
 }
 
 /**
- * How wide `item` can be on its bar's first line: the bar's content box less
- * everything drawn before it (the drawer toggle, below the shell breakpoint)
- * and the gap after each. A bar not laid out yet has no room to report, and
- * caps nothing.
- */
-function roomBeside(bar: HTMLElement, item: HTMLElement): number {
-  const style = getComputedStyle(bar);
-  const content =
-    bar.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
-  if (content <= 0) return Infinity;
-  const gap = parseFloat(style.columnGap) || 0;
-  let before = 0;
-  for (let sib = item.previousElementSibling; sib; sib = sib.previousElementSibling) {
-    const width = sib.getBoundingClientRect().width;
-    if (width > 0) before += width + gap;
-  }
-  return Math.max(0, Math.floor(content - before));
-}
-
-/**
- * Whether `el` is wider inside than it is drawn: a scrollport with somewhere
- * to scroll. Measured after layout, and again whenever the box is resized or
- * `content` (what it holds) changes — a trail grows when a screen publishes a
- * name for its object, which resizes nothing.
- */
-function useOverflows(el: RefObject<HTMLElement | null>, content: unknown): boolean {
-  const [overflows, setOverflows] = useState(false);
-  useLayoutEffect(() => {
-    const node = el.current;
-    if (!node) return;
-    const measure = () => setOverflows(node.scrollWidth > node.clientWidth);
-    measure();
-    const watch = new ResizeObserver(measure);
-    watch.observe(node);
-    return () => watch.disconnect();
-  }, [el, content]);
-  return overflows;
-}
-
-/**
- * Copy this page's own address.
+ * All projects' lenses: Work's own sections, drawn as the chips a project's
+ * lenses are, beside the scope's name in the trail.
  *
- * THE WHOLE URL, not the hash: what a reader pastes into chat has to open on
- * somebody else's machine, and a bare `#/work/ENG-42` opens nothing.
+ * LINKS, each to its section's address: the kit's router mode, a `nav` with
+ * `aria-current` on the lens the reader is on, because each of these lenses
+ * is a page with its own URL rather than a panel of this one. Hovering or
+ * focusing one starts fetching where it leads, as the sidebar's rows do.
+ *
+ * THE FIGURES ARE THE LISTING'S ([useScopeFigures]): how many projects are
+ * active, and how much work is open across them, the same open figure the
+ * switcher's All projects row carries.
  */
-export function CopyLink({ label = "Copy link" }: { label?: string }) {
-  const [said, setSaid] = useState("");
-  const copy = useCallback(() => {
-    void copyPageLink().then((word) => {
-      setSaid(word);
-      window.setTimeout(() => setSaid(""), 1_600);
-    });
-  }, []);
-  // NOT `Copyable`, which is the right part for an identifier: it DRAWS the
-  // value it copies, and what this copies is the page's whole URL. A page bar
-  // that rendered `http://host:8000/#/work/ENG-42?peek=seat:ada` where "Copy
-  // link" is would push the breadcrumb off the bar.
+function AllProjectsLenses({ lens }: { lens: AllProjectsLens }) {
+  const figures = useScopeFigures();
+  const figure = (key: AllProjectsLens) =>
+    key === "projects"
+      ? lensLabel(LENS_LABELS[key], figures.projects, "active")
+      : key === "tasks"
+        ? lensLabel(LENS_LABELS[key], figures.open, "open")
+        : LENS_LABELS[key];
   return (
-    <Button
-      size="small"
-      variant="ghost"
-      leadingIcon={<CopyGlyph size="sm" />}
-      onClick={copy}
-      title={label}
-    >
-      {said || label}
-    </Button>
+    <Tabs
+      variant="chip"
+      ariaLabel="Lens"
+      value={lens}
+      items={ALL_PROJECTS_LENSES.map((key) => ({ value: key, label: figure(key) }))}
+      renderItem={({ item, className, isActive, children }) => {
+        const path = allProjectsPath(item.value as AllProjectsLens);
+        const warm = () => preload(path);
+        return (
+          <a
+            className={className}
+            href={href(path)}
+            aria-current={isActive ? "page" : undefined}
+            onPointerEnter={warm}
+            onFocus={warm}
+          >
+            {children}
+          </a>
+        );
+      }}
+    />
   );
 }
 
@@ -755,8 +789,13 @@ export function CopyLink({ label = "Copy link" }: { label?: string }) {
 export function StarPage({ path, label, workspace }: Omit<Star, "at">) {
   const stars = useStarred();
   const toggle = useToggleStar();
+  const reader = useReader();
   const [said, setSaid] = useState("");
   const kept = starredIn(stars, path);
+  // NOR BY NOBODY: stars are kept per reader (`lib/starred.ts`), so a tab
+  // that has not learned who reads it has no list to keep one in — and one
+  // kept in a list nobody owns would be offered to whoever signs in next.
+  if (reader === null) return null;
   // A PAGE THAT IS NOT ONE CANNOT BE KEPT: on Not Found the star was offered
   // and pressed filled, and the store — which drops a kept path that no longer
   // resolves — then took it back on the next read, so the reader's star
@@ -767,8 +806,9 @@ export function StarPage({ path, label, workspace }: Omit<Star, "at">) {
   // and saying why, rather than left out: it was drawn on every section of a
   // workspace but its first, so moving between two tabs of one workspace moved
   // the header's controls, and the reader had no way to learn why the star was
-  // sometimes missing.
-  if (path.length < 2) {
+  // sometimes missing. WHETHER IT IS ONE is `isSidebarRow`'s, never the
+  // path's length: the reader's Account is one segment long and has no row.
+  if (isSidebarRow(path)) {
     return (
       <Button
         size="small"
@@ -810,39 +850,17 @@ export function StarPage({ path, label, workspace }: Omit<Star, "at">) {
 }
 
 /**
- * Copy this page's whole address, and say what the browser did with it.
- *
- * The clipboard is refused outright on an insecure origin and by permission
- * policy, and a control that silently did nothing would read as a broken
- * button rather than as a browser that said no. BOTH REFUSALS ARE SAID:
- * permission policy rejects the write, but an insecure origin — this engine
- * serves plain HTTP on `api.port` unless something terminates TLS in front of
- * it — has no `navigator.clipboard` at all, and an optional call on it skipped
- * the whole chain, so the ordinary deployment was exactly the one where the
- * button did nothing and said nothing.
- */
-export async function copyPageLink(): Promise<"Copied" | "Blocked"> {
-  if (!navigator.clipboard) return "Blocked";
-  try {
-    await navigator.clipboard.writeText(location.href);
-    return "Copied";
-  } catch {
-    return "Blocked";
-  }
-}
-
-/**
  * "More": the page bar's secondary actions, in one menu, on a phone.
  *
  * DRAWN ONLY UNDER THE PHONE'S WIDTH (`.page-more`), where the frame's star
- * and Copy link — and whatever a screen folds with [usePageMenu] — leave the
+ * and whatever a screen folds with [usePageMenu] leave the
  * bar for this one control, so the screen's primary action stays in view
  * beside it and an object's lenses and its actions share a line. On a wider
  * bar every one of them is drawn inline and this is not drawn at all, so no
  * action is ever in two places a reader can see at once.
  *
  * What a press did is said in a toast, because the menu closes on it: the
- * inline controls say "Copied" or "50 is the limit" on themselves, and a menu
+ * inline star says "50 is the limit" on itself, and a menu
  * item has no self left to say it on.
  */
 export function PageMore({
@@ -850,10 +868,19 @@ export function PageMore({
   label,
   workspace,
   entries,
-}: Omit<Star, "at"> & { entries: readonly PageMenuEntry[] }) {
+  star = true,
+}: Omit<Star, "at"> & {
+  entries: readonly PageMenuEntry[];
+  /**
+   * Whether the frame's star is offered here: not on Work's scope pages, nor
+   * where the screen's own menu carries it.
+   */
+  star?: boolean;
+}) {
   const stars = useStarred();
   const toggle = useToggleStar();
   const toast = useToast();
+  const reader = useReader();
   const kept = starredIn(stars, path);
   const items: MenuEntry[] = entries.map((e) => ({
     key: e.key,
@@ -863,12 +890,15 @@ export function PageMore({
     disabled: e.disabled,
     description: e.description,
   }));
-  if (items.length > 0) items.push({ kind: "separator", key: "frame" });
   // THE STAR AS THE INLINE ONE DRAWS IT: absent on a page that is not one,
-  // unavailable and saying why on a workspace's own page.
-  if (resolves(path)) {
+  // whose own entries carry it, or for a tab that has not learned who reads
+  // it, and unavailable and saying why on a sidebar row's own page — by the
+  // one rule the inline star asks (`isSidebarRow`).
+  const frameStar = star && reader !== null && resolves(path);
+  if (items.length > 0 && frameStar) items.push({ kind: "separator", key: "frame" });
+  if (frameStar) {
     items.push(
-      path.length < 2
+      isSidebarRow(path)
         ? {
             key: "star",
             label: "Keep in Starred",
@@ -888,22 +918,9 @@ export function PageMore({
           },
     );
   }
-  items.push({
-    key: "copy-link",
-    label: "Copy link",
-    icon: <CopyGlyph size="sm" />,
-    onSelect: () => {
-      void copyPageLink().then((word) =>
-        word === "Copied"
-          ? toast.ok("Copied the link to this page")
-          : toast.show({
-              variant: "warning",
-              title: "The browser refused the clipboard",
-              message: "Copy the address from the address bar instead.",
-            }),
-      );
-    },
-  });
+  // NOTHING TO OFFER IS NO MENU: a screen whose entries carry the star has
+  // none until its page has answered.
+  if (items.length === 0) return null;
   return (
     <span className="page-more">
       <Menu

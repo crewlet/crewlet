@@ -403,7 +403,7 @@ func TestAnUnreadableSettingIsRefusedByName(t *testing.T) {
 func TestAProjectDeclaresFieldsInTheSameGrammar(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
-	reg := projectRegistry(t, trk, leadAlways)
+	reg := projectRegistry(t, trk, chartLeads)
 	got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{
 		"project": "ENG",
 		"fields": []any{map[string]any{
@@ -444,7 +444,7 @@ func TestTheDeclarationSchemaNamesEverySetting(t *testing.T) {
 	catalogue := fieldItems(t, catalogueTool(t, newFakeTracker()).Parameters(),
 		tracker.WriteWorkCatalogueTool, "fields")
 	project := fieldItems(t, seatTool(t,
-		projectRegistry(t, newFakeTracker(), leadAlways),
+		projectRegistry(t, newFakeTracker(), chartLeads),
 		tracker.WriteProjectTool).Parameters(), tracker.WriteProjectTool, "fields")
 
 	for _, key := range []string{
@@ -489,9 +489,14 @@ var errTrackerRefusedTheField = &refusal{
 		"read is one stored, replicated and applied by nothing",
 }
 
+// refusal is a refusal the tracker wrote, as it writes one: its own sentence,
+// MARKED [tracker.ErrInvalid] — an unmarked error is the node's failure, which
+// is never told in the domain's words.
 type refusal struct{ text string }
 
 func (r *refusal) Error() string { return r.text }
+
+func (r *refusal) Unwrap() error { return tracker.ErrInvalid }
 
 // catalogueTool is `write_work_catalogue` as an OPERATOR holds it, which is
 // the only registry it is in: a declaration is the company's vocabulary, and a
@@ -509,6 +514,7 @@ func catalogueTool(t *testing.T, trk *fakeTracker) tools.Callable {
 				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
 			},
 		},
+		Authorize: builtin.Decide(chartLeads),
 	}) {
 		if tool.Name() == tracker.WriteWorkCatalogueTool {
 			return tool
@@ -520,7 +526,7 @@ func catalogueTool(t *testing.T, trk *fakeTracker) tools.Callable {
 
 func callCatalogue(t *testing.T, trk *fakeTracker, args map[string]any) tools.Result {
 	t.Helper()
-	got, err := catalogueTool(t, trk).Call(t.Context(), args)
+	got, err := catalogueTool(t, trk).Call(everyGrant(), args)
 	if err != nil {
 		t.Fatalf("%s: %v", tracker.WriteWorkCatalogueTool, err)
 	}

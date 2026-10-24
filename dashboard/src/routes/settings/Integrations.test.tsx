@@ -9,6 +9,8 @@
  * answer is worth pinning.
  */
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import {
@@ -19,6 +21,7 @@ import {
   Reconcile,
   byConfiguredThenName,
   disconnectOrder,
+  docHref,
   entryState,
   phaseTone,
 } from "./Integrations.tsx";
@@ -28,6 +31,7 @@ import {
   type IntegrationTool,
   type IntegrationToolState,
 } from "~/contract/integrations.ts";
+import { repoRoot } from "~/test/engineFiles.ts";
 
 afterEach(cleanup);
 
@@ -351,6 +355,20 @@ test("every card is one engine tool with its surfaces", () => {
   }
 });
 
+// LEARN MORE OPENS A PAGE THE SITE BUILDS. The address is composed from the
+// entry's `doc`, so no grep for a URL can see it: a tool whose page is named
+// wrongly, or a page renamed under the catalogue, is a 404 the reader meets
+// and nothing else would. The site publishes `docs/<path>.md` at
+// `/engine/<version>/<path>/`, every page a directory, so the slashless
+// spelling is a redirect on every click.
+test("every Learn more names an engine page, spelled as the site serves it", () => {
+  for (const entry of CATALOG) {
+    const page = join(repoRoot(), "docs", "integrations", `${entry.doc}.md`);
+    expect(existsSync(page), `${entry.key}: ${page}`).toBe(true);
+    expect(docHref(entry)).toBe(`https://docs.crewlet.ai/engine/latest/integrations/${entry.doc}/`);
+  }
+});
+
 // A CARD'S BODY IS ITS AGENTS, not a restatement of its header.
 //
 // It opened with a row per surface — "Jira, /webhooks/jira, Connected" —
@@ -657,13 +675,15 @@ test("one unfinished surface makes the whole tool unfinished", () => {
 // Where this build answers no setup state for a tool and nothing refused the
 // read, there is no form a Connect could open, and the page that says how is
 // its documentation. Where the read was REFUSED, the form exists and the
-// reader lacks the token — so the action stays Connect, disabled with the
-// sentence that says why (a write control is never hidden).
+// reader lacks the grants — so the action stays Connect, disabled with the
+// sentence that names them (a write control is never hidden).
 test("a tool with no form behind it is learned about, not connected", () => {
   const nothing = entryState(slack, rowsOf(), rolled("slack", "not_in_use", "Not in use"));
   expect(kindOf(nothing, [], false, [], false)).toBe("learn");
   expect(kindOf(nothing, [], false, [], true)).toBe("connect");
-  expect(formBlocked([], true)).toMatch(/operator token/);
+  expect(formBlocked([], true)).toBe(
+    "Setting up integrations needs Admin access. An admin can give it to you.",
+  );
   expect(formBlocked([], false)).toMatch(/no form to open/);
   expect(formBlocked([{}], true)).toBeUndefined();
 });
@@ -1193,6 +1213,7 @@ test("a dropped delivery is stated, not counted", () => {
   );
   expect(screen.getByRole("button", { name: /Hide GitHub details/ })).toBeTruthy();
   expect(screen.getByText(/3 deliveries were verified and dropped/)).toBeTruthy();
+  expect(screen.getByText("They reached no seat.")).toBeTruthy();
 });
 
 // And a surface dropping nothing says nothing, which is the whole reason the
@@ -1239,7 +1260,7 @@ test("a connected tool offers a disconnect", () => {
 // recorded on its seat, is held the same way before the host makes one.
 test("a managed document holds the disconnect and an agent's app", () => {
   const asked: string[] = [];
-  const managed = "This company's configuration is managed by gitops — change it there.";
+  const managed = "Managed by gitops. Change it there.";
   render(
     <>
       <EntryRow
@@ -1262,7 +1283,7 @@ test("a managed document holds the disconnect and an agent's app", () => {
   expect(asked).toEqual([]);
   const create = screen.getByRole("button", { name: "Create app on GitHub" });
   expect(create.getAttribute("aria-disabled")).toBe("true");
-  expect(document.body.textContent).toContain("managed by gitops");
+  expect(document.body.textContent).toContain("Managed by gitops");
 });
 
 // ALPHABETICAL, and it replaced a connected-first sort deliberately.
@@ -1364,7 +1385,7 @@ test("a stale setup listing never contradicts the tag", () => {
 // --- an agent's own app, in the two acts a person performs ---------------- //
 
 import { waitFor } from "@testing-library/react";
-import { beforeEach, vi } from "vitest";
+import { vi } from "vitest";
 import type { SetupSeatState } from "~/protocol/types.ts";
 
 const github = CATALOG.find((e) => e.key === "github")!;
@@ -1422,7 +1443,6 @@ function fieldsOf(form: HTMLFormElement): Record<string, string> {
   return Object.fromEntries([...form.querySelectorAll("input")].map((i) => [i.name, i.value]));
 }
 
-beforeEach(() => localStorage.setItem("crewlet_api_token", "t"));
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -1609,11 +1629,11 @@ test("a step this build cannot perform draws no control", () => {
 // a button that quietly did nothing would leave them pressing it again.
 test("the engine's refusal is reported beside the agent it was refused for", async () => {
   const sent: Sent[] = [];
-  stubFetch(sent, { error: "no_public_url", hint: "set integrations.public_base_url first" }, 409);
+  stubFetch(sent, { error: "no_external_url", hint: "set api.external_url first" }, 409);
   roster(seatOf({ step: "create_app" }));
 
   fireEvent.click(screen.getByRole("button", { name: "Create app on GitHub" }));
-  expect(await screen.findByText("set integrations.public_base_url first")).toBeTruthy();
+  expect(await screen.findByText("set api.external_url first")).toBeTruthy();
 });
 
 // --- the listing, and when it is worth reading again ---------------------- //
@@ -1947,7 +1967,7 @@ test("a finding of a kind and phase this build does not know still un-readies th
 //
 // Measured on a live card, as one unbroken line: "1 agent(s) have no GitHub
 // App of their own, so nothing they do on GitHub is theirs: sre-lead. Create
-// one per agent from Settings › Integrations — GitHub offers no API for it,
+// one per agent from Company › Integrations, GitHub offers no API for it,
 // so it is a click there and nothing else can do it.all 1 agents without an
 // app". A problem, a name, an instruction and a disclosure summary, at one
 // weight, with the last running into the sentence before it.

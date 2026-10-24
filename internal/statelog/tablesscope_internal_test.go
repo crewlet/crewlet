@@ -99,15 +99,7 @@ func TestTheDeferredScopeIsTheSameRowsAtEveryChunkWidth(t *testing.T) {
 // reads its scope index back in path order.
 func scopeRowsAt(ctx context.Context, t *testing.T, rec Record, limit int) []string {
 	t.Helper()
-	db, err := store.OpenNode(ctx, filepath.Join(t.TempDir(), "scope.db"), store.Options{})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	if _, err := db.OpenReplicated(ctx, 1); err != nil {
-		t.Fatalf("open the replicated estate: %v", err)
-	}
-	rep := db.Replicated()
+	rep := openProbeEstate(ctx, t)
 
 	tbl := tables{stream: "TEST", deferred: "probe_deferred", scope: "probe_scope"}
 	if err := rep.Tx(ctx, func(tx *sql.Tx) error {
@@ -156,4 +148,168 @@ func scopeRowsAt(ctx context.Context, t *testing.T, rec Record, limit int) []str
 		t.Fatalf("read the scope index back: %v", err)
 	}
 	return out
+}
+
+// A SCOPE WITH HUNDREDS OF ROOTS IS PROBED, NOT REFUSED.
+//
+// # The refusal this replaced
+//
+// The probe used to state each root as two chained terms —
+// `... OR s.path = ? OR s.path LIKE ? ...` — and a chained `OR` parses
+// LEFT-DEEP, so the expression tree's depth grew with the list. Turso refuses
+// one past a hundred with `Parse error: Expression tree is too large (maximum
+// depth 100)`.
+//
+// A scope's roots are one per OBJECT an operation writes, so an import carries
+// as many as its batch has members. That put the ceiling at about fifty
+// objects — measured as a sixty-object batch failing its own apply, the whole
+// batch lost. It is the worst shape a limit can have: invisible on every
+// fixture small enough to write by hand, and reached by the first real
+// company.
+//
+// # What this asserts
+//
+// Five hundred roots and a thousand, each far past the fifty a chained `OR`
+// held. Both have to return
+// an ANSWER rather than an error — the answer itself is what the cases above
+// are about.
+func TestAScopeWithHundredsOfRootsIsProbedRatherThanRefused(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+
+	rep := openProbeEstate(ctx, t)
+	tbl := tables{stream: "TEST", deferred: "probe_deferred", scope: "probe_scope"}
+	if err := rep.Tx(ctx, func(tx *sql.Tx) error {
+		for _, stmt := range []string{
+			`CREATE TABLE probe_deferred (
+				position INTEGER NOT NULL PRIMARY KEY,
+				subject TEXT NOT NULL, subject_kind TEXT NOT NULL,
+				subject_id TEXT NOT NULL, version INTEGER NOT NULL,
+				payload BLOB NOT NULL, stored_at INTEGER NOT NULL)`,
+			`CREATE TABLE probe_scope (
+				position INTEGER NOT NULL, path TEXT NOT NULL,
+				PRIMARY KEY (position, path))`,
+		} {
+			if _, err := tx.ExecContext(ctx, stmt); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("create the probe tables: %v", err)
+	}
+
+	for _, roots := range []int{500, 1000} {
+		scope := ScopeSet{}
+		for i := range roots {
+			scope.Paths = append(scope.Paths, fmt.Sprintf("g/u/team/s/%04d", i))
+		}
+		if err := rep.Read(ctx, func(tx *sql.Tx) error {
+			_, _, err := tbl.deferredIn(ctx, tx, scope)
+			return err
+		}); err != nil {
+			t.Errorf("a scope of %d roots was refused rather than probed: %v — "+
+				"an import of that many objects cannot be published at all",
+				roots, err)
+		}
+	}
+}
+
+// THE COVERAGE PROBE ANSWERS IN BOTH DIRECTIONS, EXACTLY.
+//
+// A retained record is about an object; a probe asks about another. They
+// intersect when one CONTAINS the other, whichever way round — a record
+// deferred on a task beneath the project a write is rewriting, and a record
+// deferred on the project above the task a write is editing — and only then.
+//
+// The statement binds its prefixes in a CTE that comes FIRST in its text, and
+// the values were appended after the exact paths, so every `?` was off by the
+// number of roots: the CTE's LIKE patterns were the first exact paths and the
+// real prefixes sat in the IN list as literals. The descendant direction —
+// the one the package calls silent data loss when it is missing — never
+// matched anything, and the paths that did reach a LIKE matched case-blind and
+// read an `_` as a wildcard. Each probe below was wrong under that binding.
+func TestTheCoverageProbeFindsBothDirectionsAndNothingElse(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	rep := openProbeEstate(ctx, t)
+	tbl := tables{stream: "TEST", deferred: "probe_deferred", scope: "probe_scope"}
+	if err := rep.Tx(ctx, func(tx *sql.Tx) error {
+		for _, stmt := range []string{
+			`CREATE TABLE probe_deferred (
+				position INTEGER NOT NULL PRIMARY KEY,
+				subject TEXT NOT NULL, subject_kind TEXT NOT NULL,
+				subject_id TEXT NOT NULL, version INTEGER NOT NULL,
+				payload BLOB NOT NULL, stored_at INTEGER NOT NULL)`,
+			`CREATE TABLE probe_scope (
+				position INTEGER NOT NULL, path TEXT NOT NULL,
+				PRIMARY KEY (position, path))`,
+			`INSERT INTO probe_deferred VALUES (7, 's', 'task', 'T-1', 9, x'00', 0)`,
+			`INSERT INTO probe_scope VALUES (7, 'project/ENG_OPS/task/1')`,
+			`INSERT INTO probe_deferred VALUES (8, 's', 'team', 'teamxa', 9, x'00', 0)`,
+			`INSERT INTO probe_scope VALUES (8, 'teamxa')`,
+		} {
+			if _, err := tx.ExecContext(ctx, stmt); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("create the probe tables: %v", err)
+	}
+
+	// at is the position the probe must find, and zero is a probe that must
+	// find nothing.
+	for _, tc := range []struct {
+		name  string
+		probe string
+		at    uint64
+	}{
+		{"the object itself", "project/ENG_OPS/task/1", 7},
+		{"the container above it", "project/ENG_OPS", 7},
+		{"the root above that", "project", 7},
+		{"something inside it", "project/ENG_OPS/task/1/comment/3", 7},
+		{"the other record, below its own root", "teamxa/member/1", 8},
+		{"a neighbour", "project/ENG_OPS/task/2", 0},
+		{"another container", "project/OPS", 0},
+		{"an underscore in a stored path is a character", "project/ENGXOPS", 0},
+		{"a path is case-sensitive", "PROJECT/ENG_OPS/task/1", 0},
+		{"a prefix is a whole segment", "project/ENG_OP", 0},
+		{"an underscore in the probe is not a wildcard", "team_a/member/1", 0},
+		{"a probe's case is its own", "TEAMXA/member/1", 0},
+	} {
+		if err := rep.Read(ctx, func(tx *sql.Tx) error {
+			d, hit, err := tbl.deferredIn(ctx, tx, ScopeSet{Paths: []string{tc.probe}})
+			if err != nil {
+				return err
+			}
+			var got uint64
+			if hit {
+				got = d.Position.Seq
+			}
+			if got != tc.at {
+				t.Errorf("%s: a probe over %q found the record at %d (hit %v), "+
+					"want %d", tc.name, tc.probe, got, hit, tc.at)
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("%s: probe: %v", tc.name, err)
+		}
+	}
+}
+
+// openProbeEstate is a fresh node with its replicated estate open, which is
+// where a domain's deferral tables live — the probe tables these cases create
+// are made there for that reason.
+func openProbeEstate(ctx context.Context, t *testing.T) store.ReplicatedHandle {
+	t.Helper()
+	db, err := store.OpenNode(ctx, filepath.Join(t.TempDir(), "probe.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.OpenReplicated(ctx, 1); err != nil {
+		t.Fatalf("open the replicated estate: %v", err)
+	}
+	return db.Replicated()
 }

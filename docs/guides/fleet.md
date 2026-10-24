@@ -41,12 +41,14 @@ clustered or external stream by name, because this is the one
 misconfiguration that would otherwise silently give two processes the
 same agents.
 
-There is nothing else to deploy for it: the KV rides the **stream's own
-NATS connection**, on every topology. A second connection to the same
-broker would fail independently of the first, which is the worst shape this
-could take — a node renewing leases happily over a connection that works
-while the one carrying its inbox has dropped, alive to its peers and deaf to
-its work.
+There is nothing else to deploy for it: the KV lives on the **stream's own
+NATS broker**, on every topology — over the queue's own connection on an
+external cluster, and over a second connection to the same server on an
+embedded one. Two connections fail independently, and the worst shape that
+could take is a node renewing leases happily over one that works while the
+one carrying its inbox has gone, alive to its peers and deaf to its work. So
+both are watched: the NATS client closing either one for good, rather than
+reconnecting, stops the node for its supervisor to restart.
 
 **One stream every node can reach.** The default embedded server binds no
 socket at all, so two nodes started side by side are not a fleet — they are
@@ -104,12 +106,32 @@ provisioner follows the same rule, and both take `-api URL` to name the node
 to write through. The process environment remains the fallback every node
 resolves from, so a platform secret projected as env still works unchanged.
 
+**One keyring and one `api.external_url` on every node that serves the API.**
+A browser behind a load balancer signs in on whichever node it reaches and
+presents that cookie to every other. Each node verifies it under the fleet
+keyring and resolves it against its own copy of the identity directory — a
+node serving the API holds `data`, so it has one — which reaches it only
+through the identity log — so a node that has not yet applied
+a sign-in serves that cookie's reads and holds its first write for up to five
+seconds while it catches up, and never answers `401` in between, which a
+browser would read as "signed out" and throw a good cookie away (the whole
+table is in [Identity and Access](../concepts/identity-and-access.md#validation-is-three-valued-twice)).
+A sign-out everywhere made on one node is refused on every other from the
+moment each applies it. `api.external_url` is the address the load balancer
+answers on, the same on every node: it names the cookie, and it is the only
+`Origin` a write or a live-socket handshake carrying that cookie is accepted
+from. All of this is exercised on a clustered fleet by the end-to-end suite on
+every pull request: a cookie minted on one member reads, writes as its person
+and opens the live socket on another, the same handshake from another site's
+origin is refused, and a sign-out everywhere on the second member is refused
+on the first.
+
 **One node or three, never two.** Two embedded-KV members have no quorum
 without each other, so the fleet stops serving the moment either
 restarts — and a rolling upgrade restarts them one at a time, which makes
 the outage certain rather than unlucky. Tier A refuses a two-member
-config by name, counting the **stream's** members: the KV rides the
-stream's connection, so the coordination quorum *is* the stream cluster's.
+config by name, counting the **stream's** members: the KV lives on the
+stream's broker, so the coordination quorum *is* the stream cluster's.
 
 **`stream.cluster.peers` lists the *other* members**, because it is what
 that rule — and the one that allows at most one copy per member — counts:
@@ -168,7 +190,8 @@ the engine's own tracker at scale. No stream keeps more than five copies
 (`stream.replicas` stops at five, JetStream's own ceiling), so a sixth member
 holds no copy anybody asked for and only adds a voter every election and
 every create waits on — `crewlet validate` warns about a peer list naming more
-than four other members. **Beyond five, a fleet grows by adding leaves, not
+than four other members, and so does every start of such a member, as
+`config_advisory`. **Beyond five, a fleet grows by adding leaves, not
 members.**
 
 **A member of a fleet persists.** A member that names a cluster, lists peers or
@@ -263,7 +286,19 @@ node:
 | `git` | Serves the company's git repositories, where the company sets [`code.native`](../concepts/code-host.md): a disposable [cache](../concepts/code-host.md#the-cache-on-a-git-node) of them on this node's disk, sized by its Tier A [`git` block](../concepts/configuration.md#git), and git itself run for their clones, fetches and pushes. Needs `ingress`, whose listener its routes are served on — and so, in this release, `data` too. Does nothing for a company that hosts no code |
 | `ingress` | Serves the HTTP API: webhooks from every integration, the dashboard, the REST endpoints. A node without it serves only its [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on `api.port` |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns. Serves its own seats' `/mcp/{token}` tool bridge when `CREWLET_MCP_BRIDGE_URL` is set, because a bridged session lives in the process that opened it |
-| `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the state-log trim, the embedding duty, the object store's collector, the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
+| `workers` | The company-wide [singleton duties](../concepts/seat-ownership.md#singleton-duties): the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the state-log trim, the embedding duty, the object store's collector, the identity sweep, the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
+
+Roles decide what a node serves and which duties it holds, and of them only
+`data` decides **which state logs it applies**: a data node applies all five —
+the tracker, the vectors, the knowledge base, the identity directory and the
+usage history — whatever its other roles and whether or not a company has been
+published yet, and a node without `data` applies none. So every data node
+holds a copy of your people, the verifiers of their credentials and their
+sessions, which is what lets the node a browser reaches decide a sign-in from
+its own rows with nothing cached; a seats-only satellite holds none of it and
+reads who holds each seat from a data node. See
+[what a satellite holds](satellite-nodes.md#what-a-satellite-holds) for what
+that means for the host you put one on.
 
 A role is subtracted from **this node, not from the company**. That means
 a fleet can be assembled, node by node, into a shape where a whole job is
@@ -315,10 +350,17 @@ node's seats do, and each of those tools asks a data node over the broker:
 
 - **Reads and writes** go to a data node — any data node, since every one
   holds the whole estate — picked by the asking node, and move to the next if it does not answer or ran nothing — except a
-  knowledge-base write, which has no operation id a repeat could be collapsed
-  on and is reported as unknown rather than sent twice. A data node's own seats
+  knowledge-base write its caller named no operation for, which a repeat
+  could not be collapsed on and is reported as unknown rather than sent twice.
+  A data node's own seats
   go through the same router and are answered from its own copy
   ([how a request reaches the estate](../concepts/scaling.md#how-a-request-reaches-the-estate)).
+- **Who holds each seat is read from a data node too.** Which person the
+  identity directory binds to each human seat — what an inbound chat message
+  is attributed by, and what a lead's tool resolves a colleague's login to —
+  is an estate read like any other, floored on the identity log and read
+  again every thirty seconds. Until the node has read it once, its human
+  seats are withheld from routing rather than routed by the org chart alone.
 - **Its own writes are visible to its next read** on whichever data node
   answers it: every request carries the furthest position the node has been
   told landed, and a data node that has not applied that far says so rather
@@ -552,8 +594,8 @@ finish, releases each seat as it goes idle, gives back every fleet duty it
 holds once its duty loops have finished their last tick, and exits. Peers
 pick the seats and the duties up. A node that is killed instead releases
 nothing: its seats move after the lease TTL, and its duties after their own
-TTL, which for the retention sweep is 45 minutes and for the learning
-passes three hours. Point load-balancer readiness at `/ready` (`503` while
+TTL, which for the retention sweep is 45 minutes and for the learning passes
+three hours. Point load-balancer readiness at `/ready` (`503` while
 draining) and liveness at `/health` (stays `200` through a drain), and
 give the orchestrator a termination grace period longer than your longest
 turn. A node without `ingress` answers both on `api.port` too, and its
@@ -562,6 +604,14 @@ it turns `200` only once the node has linked to the broker, holds its
 presence lease and — running seats — has been admitted to claim (see
 [Probes on a node without ingress](../reference/api-endpoints.md#probes-on-a-node-without-ingress)). The engine does not impose its own cutoff, because that would be a
 guess at yours.
+
+A node coming up answers both from its first seconds, before it serves:
+`/ready` is `503 starting` until it does, which is what holds the rollout, and
+`/health` is `503` only while the node recovers what it holds — the startup
+probe's window, sized by the store ([Sizing the startup probe](deployment.md#sizing-the-startup-probe))
+— and `200` while its company's tools come up, so a slow tool server never
+gets a starting node restarted (see
+[While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting)).
 
 The node keeps its listener for the whole drain, so both probes answer
 until the last turn has finished, and closes it only then. A request that
@@ -591,7 +641,10 @@ included — on the members that remain, where there are enough of them. On `s3`
 
 **Upgrade one node at a time, and let each one finish.** Leases
 carry a protocol version, and a node refuses to claim seats while any
-live presence or seat lease is held at a lower one. The rule is asymmetric on purpose:
+live presence or seat lease is held at a lower one. The current version is
+**1**: no build before it was released, so the version restarted there, and
+the next release that changes what holding a lease means is the first bump.
+The rule is asymmetric on purpose:
 lower-protocol nodes keep working, higher ones wait — visibly, with
 `seat_claims_blocked_by_older_protocol` — until the last lower lease lapses
 or is released. A rolling deploy converges because that is what a rolling
@@ -621,6 +674,28 @@ The consequences worth stating plainly:
   protocol.** The history scatter carries a version, and a node on a build
   that reshaped it answers with its own version and nothing else, which
   the answer's `coverage` names rather than merging rows it cannot read.
+
+**Adding a state-log domain is a coordinated upgrade**, and it sits beside the
+seat-protocol rule for the same reason: the fleet is briefly running two
+builds that disagree about what a node must hold.
+
+A snapshot artefact's manifest names a position per domain, and a joiner
+refuses one that names no position for a domain **it runs** — a checkpoint for
+a domain the file has no rows for is worse than no artefact at all. So on the
+day a domain is added, every artefact already on disk was taken by the build
+before it and is unadoptable by the new build.
+
+The engine handles that rather than waiting it out. A node whose newest
+artefact is short of a domain it runs takes a complete one immediately instead
+of resting on the interval (`statelog_snapshot_recent_but_short`), and until it
+has one it reports itself as holding **no** snapshot at all — not even for the
+domains the old artefact does cover — so the trim stops counting it as a donor
+and keeps the records a joiner would still need.
+
+What that means for an operator: **upgrade every node before letting any node
+fall below the trim floor.** In practice this is the ordinary rolling deploy
+plus one check — watch **Settings › Nodes** until every node reports a snapshot
+again before you start restoring, rebuilding or adding nodes.
 
 ## Watching a fleet
 
@@ -654,11 +729,12 @@ posture change.
 
 ## How a node that fell behind catches up
 
-The work tracker and the knowledge embeddings are derived on every node from
-an ordered log the fleet shares. A node replays that log from wherever its own
+The work tracker, the knowledge base's pages and embeddings, the identity
+directory and the usage history are each derived on every data node from an
+ordered log the fleet shares. A node replays each log from wherever its own
 rows say it stopped — which works only while the log still **holds** those
-records. It does not hold them for ever: once every node has applied past a
-record, a backup covers it and it is at least a week old, it is trimmed.
+records. It does not hold them for ever: once every data node has applied past
+a record, a backup covers it and it is at least a week old, it is trimmed.
 
 So a node that was down long enough, or that has never run at all, can wake up
 below what the log still holds. There is nothing left for it to replay, and no
@@ -668,21 +744,45 @@ against its own requirements and a checksum, and install it wholesale before
 anything reads from it. That happens automatically, at boot, before the node
 serves anything.
 
-Three things make that work, and all three are per node:
+Three things make that work, and all three are per data node — a node
+without `data` holds no copy to fall behind with:
 
-- **Every node publishes its own position**, every ten seconds and at once
+- **Every data node publishes its own position**, every ten seconds and at once
   when it takes a snapshot. This is what the trim reads to decide what the
   fleet has finished with — a node that publishes nothing is a node the trim
   cannot see, and the log is then trimmed past records that node still needs.
-- **Every node takes snapshots**, into `store.snapshot_dir` (by default
+- **Every data node takes snapshots**, into `store.snapshot_dir` (by default
   `snapshots/` beside the store file), no more often than
   `stream.tracker_retention.snapshot_interval` (default 24h). A node declines
   to take one while it is still catching up, while it holds a record it
   cannot decode, while the disk is short, or while the fleet counts no other
   data node — and retries shortly rather than waiting out the
   interval.
-- **Every node serves them.** There is no designated donor: a fleet whose
-  only donor was down would have nothing to give.
+- **Every data node serves them.** There is no designated donor: a fleet
+  whose only donor was down would have nothing to give.
+
+### Who can donate to whom
+
+**Any data node to any other.** Every data node runs every state-log domain
+whatever its other roles, so every artefact covers everything a recipient
+applies, and a node holding `data` alone is as good a donor as one running
+every role. A node without `data` neither donates nor adopts: it holds no copy
+to give and none to replace.
+
+The one refusal is a **donor that runs fewer domains than the recipient** —
+which, with every data node running all of them, is a donor on an older build
+during a rolling upgrade. It is refused from its manifest alone, before a
+single byte is transferred: an artefact that names no position for a domain
+the recipient runs is one the recipient would come up believing it was caught
+up on, with a checkpoint and no rows behind it. The joiner moves on to the
+next offer, logging `statelog_adoption_refused` naming the donor, and only if
+**every** offer was unusable does it say so, with
+`statelog_no_snapshot_offered`.
+
+A node that found no usable offer does not stop — it comes up on the history
+it has, its reads report the coverage they could not account for, the domains
+that gate seat admission keep it from claiming work it cannot answer for, and
+it asks again on a widening interval.
 
 **A fleet with no successful backups eventually stops trimming**, which is
 deliberate — see [Backup and restore](backup.md). Until it trims, nothing can

@@ -1,10 +1,10 @@
 package tracker
 
 import (
-	"cmp"
 	"context"
 	"database/sql"
 	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -14,13 +14,21 @@ import (
 // the project it is filed in on this node — empty for one this node holds no
 // row of.
 //
-// THE SAME SET THE APPLY WRITES, read from the same rows ([Applier.purgeTask]):
-// the tasks whose dependency edge names the purged task as the blocker, the
-// blockers whose mirror lists it, the tasks with a relation to it, the tasks
-// whose body references it, and its descendants, whose ancestry is rebuilt —
-// the direct children among them re-parented. Each is a write to a row keyed on
-// that task, so a record deferred under it on some node must hold the purge
-// back there, and it can only if the purge's scope names it.
+// THE SAME TASKS THE APPLY WRITES, read from the same rows
+// ([Applier.purgeTask]): the tasks whose dependency edge names the purged task
+// as the blocker, the blockers whose mirror lists it, the tasks with a
+// relation to it, the tasks whose body references it, and its descendants,
+// whose ancestry is rebuilt — the direct children among them re-parented.
+// Each is a write to a row keyed on that task, so a record deferred under it
+// on some node must hold the purge back there, and it can only if the purge's
+// scope names it.
+//
+// THE KEYS ARE NOT IN IT. The apply also releases every key the purged task
+// held and hands each on ([handOnKey]), re-deriving its holders'
+// `key_collision`; those writes are decided by the key directory, and every
+// record that writes the directory is filed under the KEY ([keyTerm]), so the
+// purge names its keys rather than the tasks holding them — [purgeScope]'s
+// keys argument.
 type purgeReach map[string]string
 
 // readPurgeReach reads a purge's reach inside tx.
@@ -58,89 +66,72 @@ func readPurgeReach(ctx context.Context, tx *sql.Tx, id string) (purgeReach, err
 	return reach, nil
 }
 
-// scopeForPurge states every task a purge of id writes, read before the
-// request for the reason [Writer.scopeForDependents] gives: the publisher
-// probes the deferral index with the REQUEST's scope and the applier files a
-// deferral under the ENVELOPE's, so the two have to be one set and the
-// request's is fixed before the decide runs. The decide checks it again
-// ([ScopeSet.coversReach]) against the rows it decides on.
+// scopeForPurge states every task a purge of id writes and every key it hands
+// on, read before the request for the reason [Writer.scopeForDependents]
+// gives: the publisher probes the deferral index with the REQUEST's scope and
+// the applier files a deferral under the ENVELOPE's, so the two have to be one
+// set and the request's is fixed before the decide runs. The decide checks
+// both again ([ScopeSet.coversReach], [ScopeSet.coversKeys]) against the rows
+// it decides on.
 //
-// A WRITER WITH NO REPLICATED ESTATE states the task alone, as
-// [Writer.scopeForDependents] does, and the decide refuses it wherever the
-// purge reaches further — naming the task it is short by.
+// THE REACH AND THE KEYS ARE ONE READ, so they describe one snapshot of the
+// task.
+//
+// A WRITER WITH NO REPLICATED ESTATE states the DOMAIN: it can read neither
+// what the purge reaches nor which keys the task holds, and every task holds
+// one, so any narrower scope would be one the decide refuses on every attempt.
+// The domain is the one scope that certainly covers both, and what it costs —
+// a deferral anywhere in the tracker holds the purge — is the safe direction.
 func (w *Writer) scopeForPurge(ctx context.Context, id, project string) (ScopeSet, error) {
 	if w.db.IsZero() {
-		return purgeScope(id, project, nil), nil
+		return ScopeSet{Terms: []ScopeTerm{{Kind: TermDomain}}}, nil
 	}
-	var reach purgeReach
+	var (
+		reach purgeReach
+		keys  []string
+	)
 	if err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		var err error
-		reach, err = readPurgeReach(ctx, tx, id)
-		return err
+		if reach, err = readPurgeReach(ctx, tx, id); err != nil {
+			return err
+		}
+		current, held, err := readTask(ctx, tx, id)
+		if err != nil || !held {
+			// NOT HELD IS NOT AN ERROR HERE: the decide refuses a task
+			// this node does not have, naming its purge if there was one.
+			return err
+		}
+		keys = keysOf(current)
+		return nil
 	}); err != nil {
 		return ScopeSet{}, err
 	}
-	return purgeScope(id, project, reach), nil
+	return purgeScope(id, project, reach, keys), nil
 }
 
-// purgeScope is the scope naming a purge of id, filed in project, and every
-// task in reach.
+// purgeScope is the scope naming a purge of id, filed in project, every task
+// in reach and every key the purged task holds.
 //
-// ONE OBJECT TERM A TASK while they fit under [MaxScopeTerms]; past that, the
-// largest projects are named by their CONTAINER term instead — the smallest
-// covering term, which is the cap's own rule — until they fit, and a reach
-// spread over more projects than that is the domain. A task this node holds
-// no row of has no path this build can form, so it is claimed by the DOMAIN,
-// as [ScopeSet.withObjects] claims one: the safe direction.
-func purgeScope(id, project string, reach purgeReach) ScopeSet {
-	if len(reach) == 0 {
+// ONE TERM A TASK OR A KEY while they fit under [MaxScopeTerms]; past that the
+// cap's own rule folds the largest projects into their CONTAINER term
+// ([ScopeSet.capped]) — a key is filed under its own project, so a former key
+// minted in another project counts there. A task this node holds no row of
+// has no path this build can form, so it is claimed by the DOMAIN, as
+// [ScopeSet.withObjects] claims one: the safe direction.
+func purgeScope(id, project string, reach purgeReach, keys []string) ScopeSet {
+	if len(reach) == 0 && len(keys) == 0 {
 		return ScopeSet{Subject: true, Container: project}
 	}
-	byProject := map[string][]string{project: {id}}
-	for other, filed := range reach {
+	terms := make([]ScopeTerm, 0, 1+len(reach)+len(keys))
+	terms = append(terms, ScopeTerm{Kind: TermObject, Container: project, ID: id})
+	for _, other := range slices.Sorted(maps.Keys(reach)) {
+		filed := reach[other]
 		if filed == "" {
 			return ScopeSet{Terms: []ScopeTerm{{Kind: TermDomain}}}
 		}
-		byProject[filed] = append(byProject[filed], other)
+		terms = append(terms, ScopeTerm{Kind: TermObject, Container: filed, ID: other})
 	}
-	projects := make([]string, 0, len(byProject))
-	count := 0
-	for p, ids := range byProject {
-		projects = append(projects, p)
-		slices.Sort(ids)
-		count += len(ids)
-	}
-	if len(projects) > MaxScopeTerms {
-		return ScopeSet{Terms: []ScopeTerm{{Kind: TermDomain}}}
-	}
-	// Largest first, the name breaking a tie, so the same reach always
-	// states the same scope.
-	slices.SortFunc(projects, func(a, b string) int {
-		if c := cmp.Compare(len(byProject[b]), len(byProject[a])); c != 0 {
-			return c
-		}
-		return cmp.Compare(a, b)
-	})
-	covered := map[string]bool{}
-	for _, p := range projects {
-		if count <= MaxScopeTerms {
-			break
-		}
-		covered[p] = true
-		count -= len(byProject[p]) - 1
-	}
-	terms := make([]ScopeTerm, 0, count)
-	slices.Sort(projects)
-	for _, p := range projects {
-		if covered[p] {
-			terms = append(terms, ScopeTerm{Kind: TermContainer, ID: p})
-			continue
-		}
-		for _, other := range byProject[p] {
-			terms = append(terms, ScopeTerm{Kind: TermObject, Container: p, ID: other})
-		}
-	}
-	return ScopeSet{Terms: terms}
+	return ScopeSet{Terms: terms}.withKeys(id, keys).capped()
 }
 
 // coversReach reports whether this scope names every task in reach where the
@@ -156,7 +147,7 @@ func (s ScopeSet) coversReach(reach purgeReach) error {
 			case TermDomain:
 				return true
 			case TermContainer:
-				return filed != "" && t.ID == filed
+				return filed != "" && t.named() == filed
 			case TermObject:
 				return filed != "" && t.ID == other && t.Container == filed
 			}

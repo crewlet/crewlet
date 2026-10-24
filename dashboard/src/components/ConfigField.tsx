@@ -50,11 +50,20 @@
  * carry a second line under an option, which is where a choice's hint belongs.
  */
 
-import { useId, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useId, useRef, useState, type ReactNode } from "react";
 
+import { isWholeReference } from "~/lib/references.ts";
 import { withProblems } from "~/ui/Problems.tsx";
 import { complete, rank, referenceAt, type Typing } from "~/ui/secretref.ts";
 import { Combobox, FormField, InputAffix, Select, Textarea } from "@crewlethq/ui";
+
+/**
+ * Whether a field's help line is drawn only while it has focus. A dense form
+ * (the org builder's node editor) provides `true`, so it reads as labels and
+ * values at rest and each sentence appears under the field the reader is in;
+ * every other form draws its help as it always has.
+ */
+export const HelperOnFocus = createContext(false);
 
 export type FieldKind =
   "text" | "multiline" | "secret" | "url" | "id" | "choice" | "handle" | "email";
@@ -68,6 +77,7 @@ export interface FieldChoice {
 
 export function ConfigField({
   label,
+  mark,
   kind = "text",
   value,
   onChange,
@@ -84,6 +94,8 @@ export function ConfigField({
   rows = 3,
 }: {
   label: string;
+  /** A mark drawn before the label, such as a third-party app's own mark. */
+  mark?: ReactNode;
   kind?: FieldKind;
   value: string;
   onChange: (v: string) => void;
@@ -136,7 +148,11 @@ export function ConfigField({
   // a thing the config accepts, and an affix that silently rewrote it to
   // https would point the engine at a port nothing answers on.
   // MASKED UNLESS IT IS A REFERENCE. See the note above.
-  const reference = isReference(value);
+  // WHETHER TO MASK, and nothing else: the engine decides what a reference
+  // is and only ever sends a secret's value when it is a whole reference
+  // already, so this fails in the safe direction — too strict masks a
+  // reference; too loose would need a credential literally spelled `${WORD}`.
+  const reference = isWholeReference(value);
   const masked = kind === "secret" && !reference;
   // A SINGLE TOKEN TAKES NO WHITESPACE, ever, including from a paste. An
   // address, an identifier and an email each name one thing, and a space
@@ -241,6 +257,7 @@ export function ConfigField({
   // nobody. It is also carried under each option in the list, which is what
   // the listbox can do and a native dropdown cannot: one says what you are
   // about to pick, the other what you have picked.
+  const helperOnFocus = useContext(HelperOnFocus);
   const chosen = picker ? (choices ?? []).find((choice) => choice.value === value) : undefined;
   const helper: ReactNode =
     chosen?.hint && help ? (
@@ -254,7 +271,16 @@ export function ConfigField({
   return (
     <FormField
       htmlFor={id}
-      label={label}
+      label={
+        mark ? (
+          <span className="field-mark">
+            {mark}
+            {label}
+          </span>
+        ) : (
+          label
+        )
+      }
       // REQUIRED IS THE UNMARKED DEFAULT on this form, and the exception is
       // marked: most fields are required, so marking them all is noise that
       // teaches a reader to skip the note. A field that just APPEARED because
@@ -263,6 +289,7 @@ export function ConfigField({
       optional={required === false}
       requiredNews={required === true && markRequired === true}
       helper={helper}
+      helperOnFocus={helperOnFocus}
       error={withProblems(error)}
       describedBy={affix ? affixID : undefined}
     >
@@ -407,18 +434,4 @@ function schemeOf(value: string): string {
   if (lower.startsWith("https://")) return "https://";
   if (lower.startsWith("http://")) return "http://";
   return "";
-}
-
-/**
- * Whether a value is wholly a `${NAME}` reference.
- *
- * The same grammar as the engine's `internal/envref`, and PRESENTATION ONLY:
- * the engine decides what a reference is, refuses what is not one, and only
- * ever sends a secret's value when it is a whole reference already. This
- * decides one thing, whether to mask, and it fails in the safe direction. Too
- * strict masks a reference, which is what this field did before; too loose
- * would need a credential that is literally spelled `${WORD}`.
- */
-function isReference(value: string): boolean {
-  return /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(value.trim());
 }

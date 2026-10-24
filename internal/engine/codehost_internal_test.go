@@ -174,7 +174,7 @@ func TestTheCodeLogsCensusCountsItsGitClients(t *testing.T) {
 	t.Run("through the report, at the ceiling the stream holds", func(t *testing.T) {
 		t.Parallel()
 		e, _ := aRunningNodeOf(t, codeHostCompany)
-		s := e.native.Load().log
+		s := e.core.Load().log
 		running := s.Domain(code.Domain{}.Name())
 		// THE LOG IS RESIZED UNDER THE RUNNING NODE, as `crewlet retention
 		// set-capacity` resizes it: the stream now holds half of what this
@@ -200,14 +200,9 @@ func TestTheCodeLogsCensusCountsItsGitClients(t *testing.T) {
 			metrics: recorder, state: s, fleet: e.backends.Fleet, nodeID: e.id,
 			seats: func() int { return seats }, background: e.backgroundBarriers,
 		}
-		want := fmt.Sprintf("%d linearizable reads a day on %s against the %d ",
-			barriers, code.Domain{}.Name(), census(holds))
-		var detail string
-		for _, alarm := range r.Report(t.Context()).Alarms {
-			if alarm.Kind == statelog.KindCensusDrift {
-				detail = alarm.Detail
-			}
-		}
+		want := fmt.Sprintf("%d linearizable reads a day against the %d ",
+			barriers, census(holds))
+		detail, _ := codeLogDrift(r.Report(t.Context()).Alarms)
 		if !strings.Contains(detail, want) {
 			t.Errorf("census_drift said %q, want it to hold %d barriers a day against the "+
 				"%d a stream holding %d bytes was sized for (%q) — the spec's %d bytes are "+
@@ -235,7 +230,7 @@ func TestTheCodeLogsCensusCountsItsGitClients(t *testing.T) {
 		if r == nil {
 			t.Fatal("a node running the state log started no trim")
 		}
-		running := n.log.Domain(code.Domain{}.Name())
+		running := e.core.Load().log.Domain(code.Domain{}.Name())
 		// AT A CEILING THE TEST KNOWS, so the census it expects is a figure
 		// rather than whatever this machine's free disk derived.
 		const holds = 1 << 30
@@ -247,12 +242,7 @@ func TestTheCodeLogsCensusCountsItsGitClients(t *testing.T) {
 		sized := bare
 		sized.Clients = code.GitReadsPerDay(holds, r.cfg.MinAge())
 		censusDrift := func() (string, bool) {
-			for _, alarm := range r.Report(t.Context()).Alarms {
-				if alarm.Kind == statelog.KindCensusDrift {
-					return alarm.Detail, true
-				}
-			}
-			return "", false
+			return codeLogDrift(r.Report(t.Context()).Alarms)
 		}
 		barriers := func(count int) {
 			recorder.Add(metrics.StatelogBarriersApplied, uint64(count),
@@ -275,24 +265,23 @@ func TestTheCodeLogsCensusCountsItsGitClients(t *testing.T) {
 		// naming that census — so the quiet above is the code log judged with
 		// its git term, never the code log left out.
 		barriers(2*sized.Expected() + 1 - gitReads)
-		want := fmt.Sprintf(" on %s against the %d ", name, sized.Expected())
+		want := fmt.Sprintf(" against the %d ", sized.Expected())
 		if detail, _ := censusDrift(); !strings.Contains(detail, want) {
 			t.Errorf("past twice its census the code log's alarm said %q, want it to "+
 				"name the %d its ceiling was sized for (%q)", detail, sized.Expected(), want)
 		}
 	})
 	for name, tc := range map[string]struct {
-		ceilings map[string]int64
-		log      string
+		holds    uint64
+		read     bool
 		expected int
-		fires    bool
+		sized    bool
 	}{
 		"the ceiling the code log's stream holds": {
-			ceilings: map[string]int64{code.Domain{}.Name(): ceiling},
-			log:      code.Domain{}.Name(), expected: census(ceiling), fires: false,
+			holds: ceiling, read: true, expected: census(ceiling), sized: true,
 		},
 		"a pass that could not read the code log's ceiling": {
-			ceilings: nil, log: "", expected: 0, fires: false,
+			holds: 0, read: false, expected: 0, sized: false,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -308,24 +297,38 @@ func TestTheCodeLogsCensusCountsItsGitClients(t *testing.T) {
 			recorder.Add(metrics.StatelogBarriersApplied, 20_000,
 				metrics.Attrs{"domain": code.Domain{}.Name(), "stream": spec.Name})
 			e := &Engine{objects: &objectStore{}}
+			running := &runningLog{domain: code.Domain{}, spec: spec}
 			r := &retention{
 				metrics: recorder,
-				state:   runsLogs(&stateLog{}, &runningLog{domain: code.Domain{}, spec: spec}),
+				state:   runsLogs(&stateLog{}, running),
 				seats:   func() int { return seats }, background: e.backgroundBarriers,
 			}
-			var reading statelog.Reading
-			r.observed(&reading, tc.ceilings)
-			if reading.CensusLog != tc.log || reading.LinearizableReadsExpected != tc.expected {
-				t.Errorf("the census names %q expecting %d a day, want %q expecting %d",
-					reading.CensusLog, reading.LinearizableReadsExpected, tc.log, tc.expected)
+			c, counted := r.census([]*runningLog{running})[code.Domain{}.Name()]
+			if !counted {
+				t.Fatal("the code log has no census half: a log a read appends to is counted")
+			}
+			expected, sized := c.expectedAt(tc.holds, tc.read, week)
+			if sized != tc.sized || expected != tc.expected {
+				t.Errorf("the census is sized %v expecting %d a day, want sized %v expecting %d",
+					sized, expected, tc.sized, tc.expected)
+			}
+			if c.reads != 20_000 {
+				t.Errorf("the census counted %d barriers on the code log's stream, want 20000",
+					c.reads)
+			}
+			// AND THE LOG'S OWN READING, as the report hands it on: a census
+			// the pass could not size is left out, never judged by its seats.
+			reading := statelog.Reading{}
+			if sized {
+				reading.LinearizableReads, reading.LinearizableReadsExpected = c.reads, expected
 			}
 			fired := false
 			for _, alarm := range statelog.Evaluate(reading) {
 				fired = fired || alarm.Kind == statelog.KindCensusDrift
 			}
-			if fired != tc.fires {
-				t.Errorf("census_drift fired %v at 20 000 git reads a day against %d, want %v",
-					fired, reading.LinearizableReadsExpected, tc.fires)
+			if fired {
+				t.Errorf("census_drift fired at 20 000 git reads a day against %d, want quiet",
+					expected)
 			}
 		})
 	}
@@ -338,6 +341,24 @@ func TestTheCodeLogsCensusCountsItsGitClients(t *testing.T) {
 				"log alone", d.Name(), declares)
 		}
 	}
+}
+
+// codeLogDrift is the code log's own entry under a report's census_drift
+// alarm: its detail, and whether the alarm lists the code log at all. The
+// alarm is PER LOG ([statelog.AlarmDomain]), so the alarm's own detail is
+// whichever log is furthest past its census and names no log.
+func codeLogDrift(alarms []statelog.Alarm) (string, bool) {
+	for _, alarm := range alarms {
+		if alarm.Kind != statelog.KindCensusDrift {
+			continue
+		}
+		for _, d := range alarm.Domains {
+			if d.Domain == (code.Domain{}).Name() {
+				return d.Detail, true
+			}
+		}
+	}
+	return "", false
 }
 
 // codeHostLimited is [codeHostCompany] with every code.limits field set, and a

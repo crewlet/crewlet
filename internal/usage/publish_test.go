@@ -1,14 +1,20 @@
 package usage_test
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/usage"
 )
@@ -29,9 +35,10 @@ func newPublisher(t *testing.T, node string, own, into *store.DB, now time.Time)
 	t.Helper()
 	log := &loopback{t: t, into: into, node: node}
 	p, err := usage.NewPublisher(usage.PublisherDeps{
-		Store: own, Log: log, NodeID: node,
-		Zone: func() *time.Location { return santiago },
-		Now:  func() time.Time { return now },
+		Store: own, Log: log, Estate: into.Replicated(), NodeID: node, Caught: caught,
+		Zone:        func() *time.Location { return santiago },
+		Now:         func() time.Time { return now },
+		FireHistory: fireHistory,
 	})
 	if err != nil {
 		t.Fatalf("build the publisher: %v", err)
@@ -57,11 +64,11 @@ func TestANodesDayIsDerivedFromItsOwnRecords(t *testing.T) {
 	ev.phase(local(9, 1), "seat-1", "t1", "review", "self_iterate", 300, 50)
 	ev.phase(local(9, 2), "seat-1", "t1", "execute", "", 800, 100)
 	ev.phase(local(9, 3), "seat-1", "t1", "review", "done", 200, 40)
-	ev.turn(local(9, 4), "seat-1", "dev", "t1", false, 4*time.Minute)
+	ev.turn(local(9, 4), "seat-1", "dev", "t1", false, 4*time.Minute, "self_iterate", "done")
 	// Turn t2: accepted by its first review — a first pass.
 	ev.phase(local(10, 0), "seat-1", "t2", "execute", "", 500, 50)
 	ev.phase(local(10, 1), "seat-1", "t2", "review", "done", 100, 20)
-	ev.turn(local(10, 2), "seat-1", "dev", "t2", false, 2*time.Minute)
+	ev.turn(local(10, 2), "seat-1", "dev", "t2", false, 2*time.Minute, "done")
 	// Turn t3: failed, never reviewed.
 	ev.phase(local(11, 0), "seat-1", "t3", "execute", "", 50, 0)
 	ev.turn(local(11, 1), "seat-1", "dev", "t3", true, 30*time.Second)
@@ -145,6 +152,82 @@ func TestANodesDayIsDerivedFromItsOwnRecords(t *testing.T) {
 
 func contains(s, sub string) bool { return strings.Contains(s, sub) }
 
+// A SEAT THE CHART NO LONGER HOLDS KEEPS ITS NAME WHEN ITS DAY IS DERIVED AGAIN.
+//
+// A seat's handle is the chart's while the chart holds it and otherwise the
+// day's own rows' — and spend rows carry none, so a seat removed since whose
+// day on this node is spend alone derives no name. Published while it was in
+// the chart, its day named it; derived again once it left — a row added, a
+// mark, a restart's watermark — the join took the derivation's EMPTY handle as
+// the newer label, and every node's history of the day lost the name a reader
+// falls back on for a seat it can no longer resolve. A handle never changes, so
+// the fleet's is kept; and a carried label is no figure the derivation is
+// short of, so it is not said short.
+//
+// Mutation: take an empty handle as the derivation's in the join, and the day
+// names nobody; or decide shortness against the derivation as derived, and the
+// re-derivation is logged as `usage_rederive_short`.
+func TestARemovedSeatKeepsItsNameWhenItsDayIsDerivedAgain(t *testing.T) {
+	t.Parallel()
+	own := openStore(t)
+	noon := time.Date(2026, 9, 23, 12, 0, 0, 0, santiago)
+	ev := &events{t: t, db: own}
+	// Spend alone: no ended turn and no read, so no row of the day names
+	// the seat.
+	ev.phase(noon.Add(-2*time.Hour), "seat-1", "t-a", "execute", "", 100, 1)
+	var charted atomic.Bool
+	charted.Store(true)
+	p, lines := publisherWith(t, own, nil, &clock{t: noon},
+		&loopback{t: t, into: own, node: "node-a"}, publisherOptions{
+			handle: func(agentID string) (string, bool) {
+				if agentID == "seat-1" && charted.Load() {
+					return "alice", true
+				}
+				return "", false
+			},
+		})
+	subject := usage.Subject{Kind: usage.KindSeat, Node: "node-a", Day: "2026-09-23", Seat: "seat-1"}
+	named := func(when string) usage.Record {
+		t.Helper()
+		rec, ok, err := usage.Applied(t.Context(), own.Replicated(), subject)
+		if err != nil || !ok {
+			t.Fatalf("%s: read the seat's day: ok=%v err=%v", when, ok, err)
+		}
+		return rec
+	}
+	if err := p.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if rec := named("in the chart"); rec.Handle != "alice" || rec.Role != "Dev" {
+		t.Fatalf("the premise: the day was published naming %q/%q", rec.Handle, rec.Role)
+	}
+
+	// THE SEAT LEAVES THE CHART, and its day grows: derived again, it names
+	// nobody.
+	charted.Store(false)
+	ev.phase(noon.Add(-time.Hour), "seat-1", "t-b", "execute", "", 50, 1)
+	if err := p.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	rec := named("out of the chart")
+	if rec.Handle != "alice" || rec.Role != "Dev" {
+		t.Errorf("the day derived again after the seat left the chart names %q/%q, want "+
+			"alice/Dev — the derivation states no name, and a handle never changes",
+			rec.Handle, rec.Role)
+	}
+	var input int64
+	for _, c := range rec.Tokens {
+		input += c.Input
+	}
+	if input != 150 {
+		t.Errorf("the day holds %d input tokens, want 150 — the new row published", input)
+	}
+	if got := lines.said("usage_rederive_short"); got != 0 {
+		t.Errorf("a name carried from the fleet's record was said short %d time(s), "+
+			"want never — no row of this node's was lost", got)
+	}
+}
+
 // A REPUBLISHED DAY WRITES BYTE-IDENTICAL ROWS, AND AN UNCHANGED ONE PUBLISHES
 // NOTHING.
 //
@@ -160,7 +243,7 @@ func TestARepublishedDayWritesByteIdenticalRows(t *testing.T) {
 	ev := &events{t: t, db: own}
 	ev.phase(at.Add(-2*time.Hour), "seat-1", "t1", "execute", "", 400, 40)
 	ev.phase(at.Add(-2*time.Hour+time.Minute), "seat-1", "t1", "review", "done", 100, 10)
-	ev.turn(at.Add(-2*time.Hour+2*time.Minute), "seat-1", "dev", "t1", false, 3*time.Minute)
+	ev.turn(at.Add(-2*time.Hour+2*time.Minute), "seat-1", "dev", "t1", false, 3*time.Minute, "done")
 	ev.read(at.Add(-time.Hour), "seat-1", "t1", "prefetch", "q", "p-1", "p-2")
 
 	first, log := newPublisher(t, "node-a", own, peer, at)
@@ -304,5 +387,162 @@ func TestTheReadsCapCountsWhatItDropped(t *testing.T) {
 		return contains(r, "page_id=p-0000 ") && contains(r, "reads=4")
 	}) {
 		t.Fatal("the most-read page did not survive the cap")
+	}
+}
+
+// refusalLines counts a publisher's `usage_publish_refused` lines.
+type refusalLines struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (r *refusalLines) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.buf.Write(p)
+}
+
+func (r *refusalLines) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return strings.Count(r.buf.String(), "msg=usage_publish_refused")
+}
+
+// newLoggedPublisher is [newPublisher] with its log lines kept for counting.
+func newLoggedPublisher(t *testing.T, node string, own, into *store.DB, now time.Time) (
+	*usage.Publisher, *loopback, *refusalLines) {
+
+	t.Helper()
+	lines := &refusalLines{}
+	log := &loopback{t: t, into: into, node: node}
+	p, err := usage.NewPublisher(usage.PublisherDeps{
+		Store: own, Log: log, Estate: into.Replicated(), NodeID: node, Caught: caught,
+		Zone:        func() *time.Location { return santiago },
+		Now:         func() time.Time { return now },
+		Logger:      slog.New(slog.NewTextHandler(lines, nil)),
+		FireHistory: fireHistory,
+	})
+	if err != nil {
+		t.Fatalf("build the publisher: %v", err)
+	}
+	return p, log, lines
+}
+
+// A REFUSAL NO RETRY CHANGES IS SAID ONCE, AND THE OBJECT WAITS FOR NEW CONTENT.
+//
+// A record larger than the log takes is the same record on every tick that
+// re-derives the same day, so sending it again every fifteen seconds puts the
+// same refused append and the same warning on the log for as long as the day
+// lasts. Skipped until its content changes, the object is sent again exactly
+// when there is a different record to try — and the flush that met the refusal
+// still answers it, so a caller is not told the day landed.
+func TestARefusalNoRetryChangesIsSaidOnce(t *testing.T) {
+	t.Parallel()
+	own := openStore(t)
+	at := time.Date(2026, 9, 23, 12, 0, 0, 0, santiago)
+	ev := &events{t: t, db: own}
+	ev.phase(at.Add(-time.Hour), "seat-1", "t1", "execute", "", 10, 1)
+
+	p, log, lines := newLoggedPublisher(t, "node-a", own, own, at)
+	log.refuse = func(bool) error {
+		return &statelog.Unavailable{Reason: statelog.ReasonRecordTooLarge}
+	}
+	err := p.Flush(t.Context())
+	var refused *statelog.Unavailable
+	if !errors.As(err, &refused) || refused.Reason != statelog.ReasonRecordTooLarge {
+		t.Fatalf("the flush that met the refusal answered %v, want the %s refusal",
+			err, statelog.ReasonRecordTooLarge)
+	}
+	if log.sent() != 1 || lines.count() != 1 {
+		t.Fatalf("the first flush sent %d record(s) and logged %d refusal(s), want 1 and 1",
+			log.sent(), lines.count())
+	}
+
+	// THE SAME DAY, UNCHANGED: nothing is sent and nothing is said.
+	for range 3 {
+		if err := p.Flush(t.Context()); err != nil {
+			t.Fatalf("a flush over an unchanged, refused day answered %v", err)
+		}
+	}
+	if log.sent() != 1 || lines.count() != 1 {
+		t.Fatalf("three quiet ticks after the refusal sent %d record(s) and logged %d "+
+			"refusal(s) in all, want 1 and 1 — a refusal no retry changes was retried",
+			log.sent(), lines.count())
+	}
+
+	// NEW CONTENT IS A NEW RECORD, and that one is tried.
+	ev.phase(at.Add(-time.Minute), "seat-1", "t2", "execute", "", 20, 2)
+	_ = p.Flush(t.Context())
+	if log.sent() != 2 || lines.count() != 2 {
+		t.Fatalf("a change to the refused object sent %d record(s) and logged %d "+
+			"refusal(s) in all, want 2 and 2", log.sent(), lines.count())
+	}
+}
+
+// A FULL LOG'S SKIPS GO BACK IN LINE ONLY WHEN A NEW SUBJECT LANDS.
+//
+// A full compacted log still takes a record that REPLACES its subject's last
+// one, so a busy seat's next change lands while a seat new to the day is
+// refused — and reopening the skips on that would retry every refused object on
+// every tick of a log that is still full. What proves room is a subject the log
+// did not hold landing; then the day is derived again, and the object nothing
+// will ever change again — yesterday's last value, say — reaches the fleet
+// without waiting for a restart.
+func TestAFullLogsSkipsReopenOnlyWhenANewSubjectLands(t *testing.T) {
+	t.Parallel()
+	own := openStore(t)
+	at := time.Date(2026, 9, 23, 12, 0, 0, 0, santiago)
+	ev := &events{t: t, db: own}
+	ev.phase(at.Add(-3*time.Hour), "seat-1", "t1", "execute", "", 10, 1)
+
+	p, log, lines := newLoggedPublisher(t, "node-a", own, own, at)
+	if err := p.Flush(t.Context()); err != nil {
+		t.Fatalf("flush seat-1 onto a log with room: %v", err)
+	}
+
+	// THE LOG FILLS: a new subject is refused, a replacement still lands.
+	full := true
+	log.refuse = func(fresh bool) error {
+		if full && fresh {
+			return &statelog.Unavailable{Reason: statelog.ReasonLogFull}
+		}
+		return nil
+	}
+	ev.phase(at.Add(-2*time.Hour), "seat-2", "t2", "execute", "", 20, 2)
+	if err := p.Flush(t.Context()); err == nil {
+		t.Fatal("a flush whose new seat met a full log answered no refusal")
+	}
+	sent := log.sent()
+	ev.phase(at.Add(-time.Hour), "seat-1", "t3", "execute", "", 30, 3)
+	if err := p.Flush(t.Context()); err != nil {
+		t.Fatalf("a flush whose one change replaced its subject answered %v", err)
+	}
+	if got := log.sent() - sent; got != 1 || lines.count() != 1 {
+		t.Fatalf("a replacement landing on a full log sent %d record(s) and the "+
+			"refusals logged are %d — it is not proof of room, so the refused seat "+
+			"must not be tried again (want 1 and 1)", got, lines.count())
+	}
+
+	// ROOM AGAIN: a seat new to the log lands, and the next tick derives the
+	// day again and sends the seat that was skipped for the full log.
+	full = false
+	ev.phase(at.Add(-30*time.Minute), "seat-3", "t4", "execute", "", 40, 4)
+	if err := p.Flush(t.Context()); err != nil {
+		t.Fatalf("flush seat-3 onto a log with room again: %v", err)
+	}
+	if err := p.Flush(t.Context()); err != nil {
+		t.Fatalf("the tick after a new subject landed answered %v", err)
+	}
+	rows, err := usage.Spend(t.Context(), own.Replicated(), usage.SpendQuery{From: "2026-09-23", To: "2026-09-23"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seats := map[string]bool{}
+	for _, r := range rows {
+		seats[r.AgentID] = true
+	}
+	if !seats["seat-2"] {
+		t.Fatalf("after the log had room again the day holds %v — the seat skipped "+
+			"for the full log, whose content never changed, never reached the fleet", rows)
 	}
 }

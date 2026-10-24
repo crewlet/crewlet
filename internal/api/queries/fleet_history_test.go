@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
@@ -145,7 +144,7 @@ func TestIntegrationCountsAreTheFleets(t *testing.T) {
 	}
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg }, Events: fleet,
+		Company: companySource(t, cfg), Events: fleet,
 	}, "integrations", nil))
 	gitlab := surfacesOf(t, body)["gitlab"]
 	if gitlab["inbound"] != float64(1) || gitlab["skipped"] != float64(1) {
@@ -204,7 +203,7 @@ func TestAFullPageFromTwoNodesIsTheWholeHistory(t *testing.T) {
 	}
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
-		Company: func() *config.Company { return cfg }, Events: fleet,
+		Company: companySource(t, cfg), Events: fleet,
 	}, "integrations", nil))
 	if got, want := body["traffic_since"], at.Add(-store.EventHistory).Format(time.RFC3339Nano); got != want {
 		t.Errorf("traffic_since = %v, want the history floor, %s — the page held every delivery", got, want)
@@ -257,11 +256,11 @@ func TestTurnsRefusesAnUnknownSortAndACursorOnARanking(t *testing.T) {
 		{"sort": "-tokens", "before": base64.RawURLEncoding.EncodeToString(
 			[]byte("2026-09-01T00:00:00Z t-1"))},
 	} {
-		if _, err := r.Answer(t.Context(), "turns", params, ""); !errors.Is(err, queries.ErrBadParams) {
+		if _, err := r.Answer(everyGrant(t), "turns", params); !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("turns %v answered %v, want %v", params, err, queries.ErrBadParams)
 		}
 	}
-	if _, err := r.Answer(t.Context(), "turns", map[string]any{"sort": "-tokens"}, ""); err != nil {
+	if _, err := r.Answer(everyGrant(t), "turns", map[string]any{"sort": "-tokens"}); err != nil {
 		t.Errorf("a ranked page was refused: %v", err)
 	}
 }
@@ -285,9 +284,9 @@ func TestTurnsAnswersAWindowInThePast(t *testing.T) {
 		}
 	}
 	r := registryOver(t, queries.Sources{Events: fleetOf(log)})
-	got, err := r.Answer(t.Context(), "turns", map[string]any{
+	got, err := r.Answer(everyGrant(t), "turns", map[string]any{
 		"since": bar.Format(time.RFC3339), "until": bar.Add(time.Hour).Format(time.RFC3339),
-	}, "")
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +299,7 @@ func TestTurnsAnswersAWindowInThePast(t *testing.T) {
 		{"since": bar.Format(time.RFC3339), "until": bar.Format(time.RFC3339)},
 		{"until": "yesterday"},
 	} {
-		if _, err := r.Answer(t.Context(), "turns", params, ""); !errors.Is(err, queries.ErrBadParams) {
+		if _, err := r.Answer(everyGrant(t), "turns", params); !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("turns %v answered %v, want %v", params, err, queries.ErrBadParams)
 		}
 	}

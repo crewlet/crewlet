@@ -23,7 +23,7 @@ import type { AgentRow, SandboxEntry } from "~/protocol/index.ts";
 import type { BuilderApi } from "./BuilderContext.tsx";
 import type { SeatView } from "./chartModel.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
-import { LiveState, seatKindLabel, unitTypeLabel } from "./nodeMarks.tsx";
+import { LiveState } from "./nodeMarks.tsx";
 
 afterEach(cleanup);
 
@@ -34,6 +34,7 @@ function seat(over: Partial<SeatView> = {}): SeatView {
     key: "seat:dev" as NodeKey,
     name: "Dev",
     kind: "agent",
+    avatar: null,
     handle: "dev",
     saved: { handle: "dev", name: "Dev" },
     running: true,
@@ -52,8 +53,16 @@ function api(agents: AgentRow[], sandboxes: SandboxEntry[] = []): BuilderApi {
   return { agents, sandboxes } as unknown as BuilderApi;
 }
 
+/** A roster row: its `id` is the handle the seat runs under. */
 const agent = (over: Partial<AgentRow> = {}): AgentRow =>
-  ({ id: "a1", role: "Dev", handle: "dev", activity: "idle", ...over }) as AgentRow;
+  ({
+    id: "dev",
+    agent_id: "id-dev",
+    role: "Dev",
+    handle: "dev",
+    activity: "idle",
+    ...over,
+  }) as AgentRow;
 
 describe("a seat's live state", () => {
   /*
@@ -73,17 +82,19 @@ describe("a seat's live state", () => {
   });
 
   /*
-   * AND BY THE SAVED NAME when no handle was ever reported, which is what a
-   * company written without handles gives every seat.
+   * AND NEVER BY A NAME. Every seat the chart serves carries its handle, and a
+   * name is prose two seats may share: a live row matched by name would show
+   * one seat's state on another that happens to be called the same.
    */
-  test("falls back to the saved name when the seat runs under no handle", () => {
+  test("a live row under another handle is not this seat's, whatever it is called", () => {
     render(
       <LiveState
-        api={api([agent({ handle: undefined, role: "Dev", activity: "stopped" })])}
-        view={seat({ saved: { handle: undefined, name: "Dev" }, handle: undefined })}
+        api={api([agent({ id: "dev-2", handle: "dev-2", role: "Dev", activity: "working" })])}
+        view={seat()}
       />,
     );
-    expect(screen.getByText("stopped")).toBeDefined();
+    expect(screen.queryByText("working")).toBeNull();
+    expect(screen.getByText("offline")).toBeDefined();
   });
 
   /*
@@ -160,24 +171,5 @@ describe("a seat's live state", () => {
     const slot = container.querySelector(".bnode-state");
     expect(slot).not.toBeNull();
     expect(slot!.textContent).toBe("working");
-  });
-});
-
-describe("what a node is called", () => {
-  test("a seat says which of the two kinds it is", () => {
-    expect(seatKindLabel({ kind: "agent" })).toBe("Agent seat");
-    expect(seatKindLabel({ kind: "human" })).toBe("Human seat");
-  });
-
-  /*
-   * A UNIT'S TYPE IS THE FOUNDER'S OWN WORD, capitalised in ONE place: written
-   * out on both surfaces it drifted, and one draft read "Team" on the card and
-   * "team" on the row beside it.
-   */
-  test("a unit's type is the founder's word, capitalised, or Unit for none", () => {
-    expect(unitTypeLabel({ unitType: "team" })).toBe("Team");
-    expect(unitTypeLabel({ unitType: "Guild" })).toBe("Guild");
-    expect(unitTypeLabel({ unitType: "  " })).toBe("Unit");
-    expect(unitTypeLabel({ unitType: "" })).toBe("Unit");
   });
 });

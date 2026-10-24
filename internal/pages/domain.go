@@ -52,6 +52,16 @@ func (Domain) Name() string { return "pages" }
 // to the tracker's on every volume.
 const PagesLogMaxBytes = 4 << 30
 
+// PagesMaxRecordBytes is the largest record this domain publishes
+// ([statelog.StreamSpec.MaxRecordBytes]).
+//
+// THE LARGEST THE TRANSPORT CARRIES ([statelog.MaxTransportRecordBytes]), for
+// the tracker's reason: at this log's gibibyte floor a sixteenth of the
+// ceiling is already the larger term of the gate reserve, so a smaller
+// declaration would change no reserve — and a page's body is the largest value
+// any domain carries, bounded by its own cap.
+const PagesMaxRecordBytes = statelog.MaxTransportRecordBytes
+
 // PagesLogDuplicates is the window the broker collapses a repeated operation
 // id in.
 //
@@ -65,18 +75,19 @@ const PagesLogDuplicates = 2 * time.Minute
 // Stream is the knowledge base's log, at the domain's whole budget.
 func (Domain) Stream() statelog.StreamSpec {
 	return statelog.StreamSpec{
-		Name:          topics.PagesLogStream,
-		Subjects:      []string{topics.PagesLogWildcard},
-		SubjectPrefix: topics.PagesLogPrefix,
-		MaxBytes:      PagesLogMaxBytes,
-		Duplicates:    PagesLogDuplicates,
-		Replay:        statelog.ReplayStrict,
+		Name:           topics.PagesLogStream,
+		Subjects:       []string{topics.PagesLogWildcard},
+		SubjectPrefix:  topics.PagesLogPrefix,
+		MaxBytes:       PagesLogMaxBytes,
+		MaxRecordBytes: PagesMaxRecordBytes,
+		Duplicates:     PagesLogDuplicates,
+		Replay:         statelog.ReplayStrict,
 		// FIVE OF THE SEVEN KINDS. A barrier shares one subject across
 		// the whole domain, so an expectation there would serialise
 		// every linearizable read behind every other one and write an
 		// anchor row per read into the transaction holding this store's
 		// only writer; and the trim's trimmed record removes anchors, so
-		// arbitrated it would write one of its own (ADR-0032).
+		// arbitrated it would write one of its own (ADR-0046).
 		ArbitratedKinds: arbitratedKinds(),
 	}
 }
@@ -172,13 +183,14 @@ func (Domain) Evicts(payload []byte) (bool, error) {
 // silently short rather than one error. It is built from the exported
 // inventories rather than typed a third time.
 //
-// ALL FOUR CLASSES ARE PRESENT, and the Divergent one is `pages_skills`: the
-// tool-skill flag is THIS BUILD'S parser answering about this build's rules,
-// recomputed on every apply, so two nodes on different builds legitimately
-// disagree about it — it travels inside a snapshot, because a joining node
-// wants the answer rather than a rebuild, and it is excluded from the identity
-// claim, because a rolling upgrade would otherwise report a fleet-wide
-// divergence for a difference that resolves itself.
+// ALL FOUR CLASSES ARE PRESENT, and two tables are Divergent. `pages_skills`
+// is one: the tool-skill flag is THIS BUILD'S parser answering about this
+// build's rules, recomputed on every apply, so two nodes on different builds
+// legitimately disagree about it — it travels inside a snapshot, because a
+// joining node wants the answer rather than a rebuild, and it is excluded from
+// the identity claim, because a rolling upgrade would otherwise report a
+// fleet-wide divergence for a difference that resolves itself. The operation
+// ledger is the other, for the reason its own line below gives.
 func (Domain) Tables() map[string]statelog.TableClass {
 	out := make(map[string]statelog.TableClass,
 		len(ReproducibleTables)+len(MachineryTables)+1)
@@ -212,7 +224,7 @@ func (Domain) OpsTable() string { return "pages_ops" }
 // older paragraph presented as the current one — where a node behind on a
 // compacted domain serves an answer that is merely less complete and says so.
 // Its copy is judged like every domain's, and a wrong one goes out of service
-// for the knowledge base's operations alone — ADR-0031.
+// for the knowledge base's operations alone — ADR-0045.
 func (Domain) GatesSeatAdmission() bool { return true }
 
 // ClaimsIdentity reports that every node's Replicated tables must be

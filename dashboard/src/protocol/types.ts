@@ -32,10 +32,12 @@ import type { OBJECT_FINDINGS, OBJECTS_STATES } from "../contract/fleet.ts";
 import type { BudgetState, GROUPS } from "../contract/spend.ts";
 import type { SANDBOX_TAIL_OUTCOMES } from "../contract/sandbox.ts";
 import type { LIVE_CALL_DETAIL } from "../contract/wire.ts";
-import type { AccessAnswer } from "../contract/access.ts";
 import type { McpServersStatusAnswer } from "../contract/mcp.ts";
 import type { CredentialPoolAnswer } from "../contract/credentials.ts";
 import type { Coverage } from "../contract/coverage.ts";
+import type { OrgServices } from "../contract/services.ts";
+import type { LimitsAnswer } from "../contract/limits.ts";
+import type { SignInPolicyAnswer } from "../contract/signin.ts";
 import type { EngineHealth } from "../contract/health.ts";
 import type { StopReason } from "../contract/stops.ts";
 import type {
@@ -52,10 +54,37 @@ import type {
   SkillLoad,
 } from "../contract/pages.ts";
 import type { PushKind, SeatActivity, StoppedReason } from "../contract/wire.ts";
+import type {
+  ARTIFACT_CAPABILITIES,
+  ARTIFACT_HISTORY_OPS,
+  ARTIFACT_KINDS,
+  ARTIFACT_LIST_SCOPES,
+  ARTIFACT_LIST_SORTS,
+  ARTIFACT_ROLES,
+  AUDIENCE_KINDS,
+  COLLECTION_PRESETS,
+  COLUMN_TYPES,
+  DASHBOARD_AGGS,
+  DASHBOARD_COLUMN_TYPES,
+  DASHBOARD_COLUMN_WORDS,
+  DASHBOARD_DATASET_STATUSES,
+  DASHBOARD_NUMBER_FORMATS,
+  DASHBOARD_REFRESH_MODES,
+  DASHBOARD_SOURCE_KINDS,
+  DASHBOARD_WIDGET_TYPES,
+  DATA_OP_KINDS,
+  DATA_VERDICTS,
+  FIELD_CONDITIONS,
+  ORIGIN_MODES,
+  PRESENCE_ACTIVITIES,
+  READ_RULES,
+  SHAREABLE_ROLES,
+} from "../contract/artifacts.ts";
 import type { WorkViewShape } from "../contract/work.ts";
 import type {
   RetentionGenerationState,
   RetentionIdentityCause,
+  RetentionTermName,
   RetentionTrimFloorState,
 } from "../contract/retention.ts";
 
@@ -92,7 +121,9 @@ export interface FeedRow {
    * on a row read from history (`events`), absent on a live one. A listing
    * never carries the payload, so this is where a history row says what only
    * its payload holds: the node that published it (`node`), and the runtime
-   * audit's person, tool and directory (`actor_seat`, `tool`, `dir`).
+   * audit's tool and direction (`tool`, `dir`) and its author's kind and the
+   * credential it acted through (`actor_kind`, `operator_id`) — the author
+   * itself is the row's own `actor`.
    */
   tags?: Record<string, string>;
 }
@@ -288,7 +319,10 @@ export interface PhaseRound {
 export interface RunningCall {
   round: number;
   name: string;
-  arguments: string;
+  /** What the call was handed — part of the seat's BODY, so absent on a call
+   *  whose body is withheld from this reader ([LiveCall.body_withheld]); its
+   *  name and timing are status and always sent. */
+  arguments?: string;
   started_at: string;
 }
 
@@ -325,8 +359,15 @@ export interface LiveTurn {
  *  seat's state, not the state: the engine says whether a paused seat reads as
  *  stopped. */
 export interface Paused {
-  /** The person — the seat their token is bound to — or the token itself. */
+  /** The seat a bound person or token writes as, or the credential's own login. */
   by: string;
+  /** What `by` names, in `iam.ActorKind`'s vocabulary (`agent`, `human`,
+   *  `operator`, `system`) — a string, so a kind a newer engine adds arrives
+   *  as itself. */
+  by_kind: string;
+  /** The credential the pause was taken through (`pat:<id>`,
+   *  `session:<lineage>`, a token's login); absent when none made it. */
+  operator_id?: string;
   at: string;
   reason?: string;
   /** Whether the pause also ended the turn the seat was on. */
@@ -359,19 +400,29 @@ export interface LiveCall {
   phase: string;
   iteration: number;
   model: string;
-  trigger: Record<string, unknown> | null;
-  prompt: string;
+  /**
+   * THE BODY — `trigger`, `prompt`, `prompt_messages`, `response`,
+   * `tool_executions`, `round_narration`, `partial_round` and a running
+   * call's `arguments` — is the seat's TRAIL, and the engine sends it only to
+   * a reader who may read that seat's trail: an admin, or the seat's lead.
+   * Everybody else is sent the call's STATUS with every one of these keys
+   * absent, every body version zero and [body_withheld] set — so each is
+   * optional here, and a screen draws a withheld one as "not shown to you",
+   * never as an empty prompt.
+   */
+  trigger?: Record<string, unknown> | null;
+  prompt?: string;
   /**
    * The conversation as the phase was given it: the system and user
    * messages only. Typed rather than `unknown[]` — it was untyped, so the
    * live view could not read the system prompt off it and hardcoded "".
    */
-  prompt_messages: PromptMessage[] | null;
-  response: string;
+  prompt_messages?: PromptMessage[] | null;
+  response?: string;
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
-  tool_executions: ToolExecution[] | null;
+  tool_executions?: ToolExecution[] | null;
   /**
    * Per-round model turns — `{round, reasoning, content}` — where `round`
    * matches `tool_executions[].round`, which is what lets the two lists
@@ -429,17 +480,29 @@ export interface LiveCall {
    * The version of the copy this call holds of each heavy field
    * (`LIVE_CALL_DETAIL`). A push names every one and carries a field only
    * when its version moved; the store fills in the rest from what it holds.
-   * Always present, on every surface that carries a call.
+   * Always present, on every surface that carries a call. A call whose body
+   * is withheld from this reader names every body version ZERO, so the store
+   * never asks for a body it will not be sent (`mergeLiveCall`).
    */
   versions: CallVersions;
+  /**
+   * The engine withheld this call's BODY from this reader — see [prompt].
+   * Absent (or false) on a call sent whole.
+   */
+  body_withheld?: boolean;
 }
 
 /** A live call's heavy-field versions, keyed as `LIVE_CALL_DETAIL` is. */
 export type CallVersions = Record<keyof typeof LIVE_CALL_DETAIL, number>;
 
-/** The `live_call{role}` answer: one seat's call in flight, whole, or null. */
+/** The `live_call{agent_id}` answer: one seat's call in flight, whole, or
+ *  null — asked and answered by the seat's AGENT ID, the key every overlay is
+ *  merged by, never by its name, which two seats may share. */
 export interface LiveCallAnswer {
-  role: string;
+  agent_id: string;
+  /** The handle the seat answers to — a label, never what the answer is
+   *  paired by. */
+  handle: string;
   live_call: LiveCall | null;
   /** The overlay sequence this call is at — see `Overlay.live_call_seq`, and
    *  present beside a null call too. The answer can reach the tab after a push
@@ -495,7 +558,6 @@ export interface Overlay {
   /** Why a `stopped` seat cannot take work; null on a seat that is not
    *  stopped. Always present, so a seat that started again sheds its reason. */
   stopped_reason?: StoppedReason | null;
-  runtime_id?: string;
   current_phase?: string | null;
   current_iteration?: number;
   live_call?: LiveCall | null;
@@ -522,29 +584,57 @@ export interface Overlay {
   paused?: Paused | null;
 }
 
+/**
+ * One row of an `agents` push: a seat's overlay, and the AGENT ID that names
+ * the roster row it is merged onto — nothing else that names the seat, since
+ * the roster carries its name and handle as they are now and an event carries
+ * them as they were.
+ */
+export interface OverlayRow extends Overlay {
+  agent_id: string;
+}
+
 /** A seat row: static config identity, plus whatever overlay has been merged. */
 export interface AgentRow extends Overlay {
+  /** The seat's HANDLE — what every screen addresses it by. */
   id: string;
-  agent_id?: string;
+  /**
+   * The seat's AGENT ID, which the engine derives from its handle (ADR-0013):
+   * a handle never changes, so neither does this, and no two seats share it.
+   * THE key a live overlay, a sandbox run, a spend row and a phase record
+   * carry and pair with this row by — never `role`, which is prose two seats
+   * may share.
+   */
+  agent_id: string;
+  /** The seat's name. Display only: nothing pairs a row by it. */
   role: string;
   handle?: string;
-  /** Set by `applyAgents` when an overlay names a role the roster lacks. */
   [key: string]: unknown;
 }
 
 /** One in-flight detached coding run. */
 export interface SandboxEntry {
   turn_id: string;
+  /** What the seat was called when the run started — display only; the run
+   *  pairs with its seat's row by `agent_id`. */
   role: string;
   agent_handle: string;
   agent_id: string;
   coding_agent: string;
   sandbox_id: string;
-  task: string;
+  /**
+   * What the run was asked to do — the seat's TRAIL, sent only to an admin
+   * and the seat's lead ([body_withheld] says when it was withheld).
+   */
+  task?: string;
   /** The run record's own word: `launching`, `running`,
    *  `awaiting_clarification`, `reseed` or `answered`. */
   status: string;
   started_at: string;
+  /**
+   * The question a parked run asks — sent to whoever may read the seat's
+   * trail AND to the people it is put to, who answer it.
+   */
   question?: string;
   audience?: string;
   /** The item the launching turn is charged to, when it is on one. */
@@ -553,6 +643,8 @@ export interface SandboxEntry {
   owner?: string;
   /** When the run's box began being held paused while it waits on a person. */
   paused_at?: string;
+  /** The engine withheld the run's body (`task`) from this reader. */
+  body_withheld?: boolean;
 }
 
 /**
@@ -586,8 +678,16 @@ export interface SandboxRun {
   coding_agent: string;
   /** Which configured cell the run's box is in: direct, container or e2b. */
   placement: string;
-  task_description: string;
-  question: string;
+  /**
+   * THE RUN'S BODY — `task_description`, `question`, `reply` and
+   * `bridge_calls` — is the launching seat's trail: sent to an admin and the
+   * seat's lead, and the `question` also to the people it is put to. Absent
+   * for everybody else, who are told so by [body_withheld].
+   */
+  task_description?: string;
+  question?: string;
+  /** What reached the waiting party, where something did — body. */
+  reply?: string;
   audience: string;
   /** Who the question is put to, resolved against the org chart when the run
    *  parked. Empty on a run that is not parked. */
@@ -627,6 +727,8 @@ export interface SandboxRun {
    * what the run did.
    */
   bridge_calls_elided?: number;
+  /** The engine withheld this run's body from this reader — see [task_description]. */
+  body_withheld?: boolean;
 }
 
 /** One call a bridged run made. */
@@ -682,6 +784,8 @@ export interface ModelRow extends Bucket {
 export interface WorkerRow extends Bucket {
   worker: string;
 }
+/** One SEAT's spend: one row per agent id, so two seats sharing a name are two
+ *  rows. `role` and `handle` are what the chart calls the seat now. */
 export interface AgentSpendRow extends Bucket {
   role: string;
   handle: string;
@@ -739,7 +843,13 @@ export interface Rollup {
   from?: string;
   to?: string;
   days?: number;
-  /** The handle this answer was narrowed to. */
+  /** The one seat this answer was narrowed to, by agent id — the identity
+   *  the usage domain records a seat under, and so the one it was filtered
+   *  by. Absent for the whole company. */
+  agent_id?: string;
+  /** That seat's handle NOW, read off the chart for a link to it — never the
+   *  handle the request typed. Absent for the whole company and for a seat
+   *  the chart no longer holds. */
   seat?: string;
   /** How far back a named window can reach. Absent on the live window. */
   horizon?: SpendHorizon;
@@ -767,14 +877,34 @@ export interface Rollup {
  * would be correct for a day and absent for every other range.
  */
 export interface SeriesBand extends Bucket {
-  /** The band's key in each point's `groups`. Empty on, and only on, `other`. */
+  /**
+   * The band's key in each point's `groups`. Empty on, and only on, `other`.
+   * By seat it is the seat's agent id and by unit the unit's key — an
+   * IDENTITY, since two seats or two units may share a name — which is why
+   * `label` exists.
+   */
   group: string;
+  /** What a seat or unit band is called. Absent where `group` is already the
+   *  words: a phase, a model, a worker, a turn id. */
+  label?: string;
   handle?: string;
   /** How many seats spent in a UNIT band over the window. */
   seats?: number;
+  /**
+   * A UNIT band split by the seats that spent in it, biggest first, summing to
+   * the band. Absent on every other grouping and on the residual row.
+   */
+  parts?: SeriesPart[];
   /** The residual: every group past the chart's cap, and how many it stands for. */
   other: boolean;
   folded: number;
+}
+
+/** One seat's share of a unit band (`tokens.GroupPart`). */
+export interface SeriesPart extends Bucket {
+  /** The seat as `group: seat` keys its band: its handle, else its role. */
+  group: string;
+  handle?: string;
 }
 
 export interface SeriesPoint extends Bucket {
@@ -904,7 +1034,7 @@ export interface BudgetsAnswer {
  * anonymous, so it carries a charter, a tree, the budgets and each seat's
  * RESOLVED chain and tool sources ([OrgProjection]); a seat's email, authored
  * `llm` fields, contact identities, tool credentials, integration blocks and
- * schedules live here instead, behind the operator token.
+ * schedules live here instead, behind Admin.
  *
  * A SUPERSET, deliberately open. Only the fields a screen reads are named, and
  * the index signature keeps every other key the engine writes — including the
@@ -962,6 +1092,12 @@ export interface ConfigRole {
   /** A human seat's identities: one per surface, keyed by [HumanContactKey]. */
   contact?: Record<string, string>;
   availability?: string;
+  /**
+   * How an agent seat is drawn: a Crewlet character and a colour, each
+   * optional, an absent one the first of its list in `contract/avatar.ts`.
+   * Agent seats only; the engine refuses it on a human seat.
+   */
+  avatar?: { character?: string; color?: string; [key: string]: unknown };
   /** Server name to variable name to a `${VAR}` reference or the mask. */
   mcp_env?: Record<string, Record<string, string>>;
   sandbox?: Record<string, unknown>;
@@ -975,9 +1111,13 @@ export interface ConfigRole {
   /**
    * The tracker project a root-level seat owns. Vendor-neutral, so on the seat
    * itself and never under `integrations:`; a unit member takes its unit's.
+   * Guarded.
    */
   project?: string;
-  /** The knowledge container a root-level seat writes in, beside `project`. */
+  /**
+   * The knowledge container a root-level seat writes in, beside `project`.
+   * Guarded.
+   */
   space?: string;
   schedules?: ScheduleSpec[];
   [key: string]: unknown;
@@ -1021,10 +1161,10 @@ export interface ConfigUnit {
   name: string;
   type?: string;
   /**
-   * The unit's STABLE IDENTITY, which a name is not — a rename moves
-   * everything keyed on the name and nothing keyed on this. Absent means the
-   * name IS the key, which is what `org.Unit.Key` falls back to. Guarded, so
-   * it is here rather than on [OrgUnit].
+   * The unit's KEY and STABLE IDENTITY, which a name is not — a rename moves
+   * nothing keyed on this. The engine mints it from the name on every write
+   * that stores a unit without one, so every stored unit carries it; [OrgUnit]
+   * carries the same value as `id`.
    */
   id?: string;
   purpose?: string;
@@ -1079,7 +1219,7 @@ export interface ConfigProblem {
   kind: ConfigProblemKind;
   /** The full line, exactly as the refusal's `detail` carries it. */
   message: string;
-  /** The engine-derived handle of the seat it is about. */
+  /** The handle of the seat it is about. */
   seat?: string;
   unit?: string;
   /** 1-based line in the submitted text, for parse failures only. */
@@ -1159,8 +1299,8 @@ export type PhaseLLM =
  * reached anonymous readers the day it landed: contact identities, per-seat
  * credentials, placement labels and sandbox setup commands among them. What
  * is NOT here — `email`, `contact`, the authored `llm_*` fields,
- * `schedules`, `integrations`, `mcp_env` — is read through the operator-gated
- * `config` query instead, as [CompanyDocument].
+ * `schedules`, `integrations`, `mcp_env` — is read through the `config`
+ * query instead, as [CompanyDocument], which takes Admin.
  *
  * `llm` and `tool_sources` are RESOLVED by the engine, never the authored
  * fields of the same name: a client re-running the precedence between a flat
@@ -1168,9 +1308,10 @@ export type PhaseLLM =
  * the grant rule between a shared server, a template and a unit's `mcp_env` —
  * would be a second implementation of a rule the engine already applies.
  *
- * `handle` is what the DOCUMENT declares, and empty where the engine derives
- * one from the name. The handle a seat actually runs under is
- * [DerivedSeat.handle]; this client never derives one of its own.
+ * `handle` is what the DOCUMENT declares — the engine mints one from the name
+ * on every write that stores a seat without one, and never moves it after. The
+ * handle a seat actually runs under is [DerivedSeat.handle]; this client never
+ * derives one of its own.
  */
 export interface OrgSeat {
   name: string;
@@ -1188,32 +1329,48 @@ export interface OrgSeat {
    * Every phase's provider chain as a turn resolves it, keyed by phase wire
    * name (`execute`, `review`, …): the first key is the model the phase runs
    * on, every later one a fallback in the order tried. Provider KEYS only.
-   * Absent on a human seat and on a company configuring no provider.
+   * Absent on a human seat, on a company configuring no provider, and for
+   * every reader but an admin — so an absent one says the seat has none only
+   * to an admin (`lib/seats.ts`'s `resolvedAbsence`).
    */
   llm?: Record<string, string[]>;
   /**
    * Where this seat's tools come from, in the registry's origin grammar:
    * `builtin`, then `mcp:<server>` per server it is GRANTED, in declaration
    * order. The grant, not what is running — the node heartbeat's MCP report
-   * says whether a server started. Absent on a human seat.
+   * says whether a server started. Absent on a human seat and for every
+   * reader but an admin.
    */
   tool_sources?: string[];
+  /**
+   * The Crewlet character and the colour this agent seat is drawn as, as
+   * the engine resolved them: its defaults are already filled in. Absent on
+   * a human seat, which is drawn as the person it is.
+   */
+  avatar?: { character: string; color: string };
 }
 
 /**
- * One unit on the anonymous org projection, as `internal/api`'s `OrgUnit`
- * writes it.
+ * One unit on the org projection, as `internal/api`'s `OrgUnit` writes it.
  *
- * `id`, `project`, `space`, `mcp_env` and `schedules` are GUARDED and are not
- * here: `internal/api/orgprojection_test.go` classifies every field of
- * `config.Unit` and fails the build over an unclassified one. A screen that
- * needs one of them reads the company document through the `config` query.
+ * `project`, `space`, `mcp_env` and `schedules` are GUARDED and are not here:
+ * `internal/api/orgprojection_test.go` classifies every field of `config.Unit`
+ * and fails the build over an unclassified one. A screen that needs one of
+ * them reads the company document through the `config` query.
  */
 export interface OrgUnit {
+  /**
+   * The unit's KEY — its declared `id`, which the engine mints from the name
+   * where the document declares none — which is what a `manages:` entry and a
+   * seat's `unit:` resolve, what `/config/units/{id}` addresses, and what every
+   * route to a unit carries. `name` is prose and two units may share one, so
+   * nothing addresses a unit by it.
+   */
+  id: string;
   name: string;
   type?: string;
   purpose?: string;
-  /** The seat NAME the document declares as lead. Empty when it inherits one. */
+  /** The seat HANDLE the document declares as lead. Empty when it inherits one. */
   lead?: string;
   goals?: string[];
   channel?: string;
@@ -1224,7 +1381,7 @@ export interface OrgUnit {
 }
 
 /**
- * The company as the anonymous projection carries it: its charter, its seats
+ * The company as the overview's projection carries it: its charter, its seats
  * and units in the positions the document wrote them, and the hierarchy the
  * ENGINE derived from that document.
  *
@@ -1249,6 +1406,13 @@ export interface OrgProjection {
   timezone?: string;
   /** The company's own ceilings per window, as written; absent = uncapped. */
   token_budget?: TokenBudget;
+  /**
+   * Which tracker and knowledge base the company runs, as the engine
+   * resolved them (see `contract/services.ts`). Every reader is handed it.
+   * Absent only on `{}`, a node running no company: not known yet, never
+   * "none".
+   */
+  services?: OrgServices;
   roles?: OrgSeat[];
   units?: OrgUnit[];
   derived?: Derived;
@@ -1275,7 +1439,7 @@ export interface Derived {
 export interface DerivedSeat {
   /**
    * The seat's authored path in the document (`units[0].roles[1]`). Carried by
-   * the GUARDED config answers and omitted from the anonymous projection,
+   * the GUARDED config answers and omitted from the overview's projection,
    * which hands a reader no document to point into.
    */
   path?: string;
@@ -1284,12 +1448,18 @@ export interface DerivedSeat {
   kind: string;
   /**
    * The authored path of the seat's effective home unit, "" at the root.
-   * Omitted from the anonymous projection with `path`: there, membership is
+   * Omitted from the overview's projection with `path`: there, membership is
    * [DerivedUnit.seats].
    */
   unit_path?: string;
-  /** A root seat the engine moved into a unit because of its `unit:` reference. */
-  placed_by_ref: boolean;
+  /**
+   * A root seat the engine moved into a unit because of its `unit:` reference.
+   *
+   * Absent wherever `path` is — the projection hands a reader no document to
+   * have been moved in, so "not moved" would be an answer rather than an
+   * absence. Read it as false.
+   */
+  placed_by_ref?: boolean;
   /** Handle of the primary manager, by the engine's own rule. "" when none. */
   manager: string;
   /** Handles of every seat that manages this one, in engine order. */
@@ -1303,8 +1473,14 @@ export interface DerivedSeat {
 }
 
 export interface DerivedUnit {
-  /** Authored path; omitted from the anonymous projection, as on a seat. */
+  /** Authored path; omitted from the overview's projection, as on a seat. */
   path?: string;
+  /**
+   * The unit's KEY — what a `manages:` entry and a seat's placement resolve.
+   * `name` is prose and two units may share one, so a derived unit is matched
+   * to its authored unit by this.
+   */
+  id: string;
   name: string;
   /** The EFFECTIVE type, after the engine's default. */
   type: string;
@@ -1385,15 +1561,22 @@ export interface ToolRow {
 
 /** One declared schedule, as `schedule.Row` serialises it.
  *
- *  THE NAMES ARE THE SERVER'S. This type used to declare `scope`, `scope_name`,
- *  `last_run` and `last_outcome`; the server sends `scope_type` and `scope_id`
- *  and has no last-run field at all — the ledger is a separate answer — so
- *  four of its nine fields rendered as `undefined` on every row. */
+ *  THE NAMES ARE THE SERVER'S. This type used to declare `scope`,
+ *  `last_run` and `last_outcome`; the server sends `scope_type`, `scope_id`
+ *  and `scope_name` and has no last-run field at all — the ledger is a
+ *  separate answer — so three of its fields rendered as `undefined` on every
+ *  row. */
 export interface ScheduleRow {
   /** `role` or `unit`. */
   scope_type: string;
-  /** The seat handle or the unit name this schedule is scoped to. */
+  /** The scope's IDENTITY, which is what the at-most-once ledger keys a fire
+   *  on: a seat's agent id, or a unit's key. Opaque; read `scope_name` to
+   *  show or link it. */
   scope_id: string;
+  /** The same scope as a person reads it: the seat's handle, or the unit's
+   *  key. Display and links only; nothing is filed under it. A seat the
+   *  company no longer holds has no handle, and the engine sends its id. */
+  scope_name: string;
   name: string;
   cron: string;
   /** The zone this schedule FIRES in, resolved by the engine: its own
@@ -1428,7 +1611,11 @@ export interface ScheduleRow {
  *  can say a turn failed; the turn says that. */
 export interface ScheduleRunRow {
   scope_type: string;
+  /** See `ScheduleRow.scope_id`: the identity this fire is keyed on. */
   scope_id: string;
+  /** See `ScheduleRow.scope_name`, resolved at read time from the company the
+   *  node is running. */
+  scope_name: string;
   schedule_name: string;
   /** The tick this fire stands for, as the ledger's own at-most-once key. */
   fire_label: string;
@@ -1451,6 +1638,7 @@ export interface SchedulesAnswer {
 export interface ScheduleRunsAnswer {
   scope_type: string;
   scope_id: string;
+  scope_name: string;
   schedule_name: string;
   runs: ScheduleRunRow[];
   /** The page filled, so older fires are past it. */
@@ -1701,6 +1889,12 @@ export interface RetentionDomain {
    *  `reserve_bytes`. ABSENT when the broker could not be asked — which is not
    *  zero headroom. */
   headroom_fraction?: number;
+  /** What the log took in over the trailing day — the rate `log_ceiling_short`
+   *  holds the ceiling against `min_age` of. ABSENT where nothing was measured
+   *  (a compacted log, one in its first two days, a node whose trim has not
+   *  ticked), and `0` only for a log that took in nothing: the two are
+   *  opposite facts and must never share a rendering. */
+  bytes_per_day?: number;
   /** Everything below it may already be gone; it never moves down within a
    *  generation. Meaningful only where `trim_floor_state` is `published`. */
   trim_floor: number;
@@ -1716,7 +1910,7 @@ export interface RetentionDomain {
   trim_floor_state: RetentionTrimFloorState;
   /** An EMPTY LIST where nothing is concluded — never null. */
   terms: RetentionTerm[];
-  blocked_by?: string;
+  blocked_by?: RetentionTermName;
   blocked_since?: string;
   /** Why the answering node refuses every read of this domain right now, and
    *  which finding is behind a `wrong_stream`. ABSENT while it serves them. */
@@ -1764,13 +1958,13 @@ export interface RetentionRefusal {
 export type RetentionTermState = "ok" | "unknown" | "n/a" | "unbounded";
 
 export interface RetentionTerm {
-  name: string;
+  name: RetentionTermName;
   state: RetentionTermState;
   /** Meaningless unless `state` is "ok", and zero in every other state. */
   seq?: number;
   detail?: string;
-  /** On EVERY term rather than the blocking one: an operator watching a term
-   *  approach is the case this surface exists for. */
+  /** On every term. The screens print it for the term holding the trim, or
+   *  setting its floor, which is the one an operator acts on. */
   remedy: string;
 }
 
@@ -1836,10 +2030,32 @@ export interface RetentionReplica {
   rejoin_window_seconds: number;
 }
 
+/**
+ * One standing alarm: `statelog.Alarm`. ONE PER KIND, whatever number of logs
+ * it stands on, which is why its length is the health envelope's count.
+ */
 export interface RetentionAlarm {
   kind: string;
+  /** The measurement, or the most pressing log's where it stands on several. */
   detail: string;
   remedy: string;
+  /**
+   * Every log the alarm stands on, each with its own measurement. Under
+   * `backup_age` these are the logs the missing or stale backup has held past
+   * their replay window, which raise no `trim_blocked` of their own; a younger
+   * hold is listed nowhere. Absent for a node-wide condition.
+   */
+  domains?: RetentionAlarmDomain[];
+}
+
+/** One log an alarm stands on: `statelog.AlarmDomain`. */
+export interface RetentionAlarmDomain {
+  domain: string;
+  detail: string;
+  /** The trim term holding this log, where the alarm is about its trim. */
+  term?: RetentionTermName;
+  /** When this log's trim stopped advancing. */
+  since?: string;
 }
 
 /**
@@ -2029,6 +2245,11 @@ export type KnowledgeReason =
    *  the whole first index build, and rendering it as "nothing found" tells a
    *  reader the company has written nothing down. */
   | "building"
+  /** The caller holds Tracker and not Knowledge: the knowledge base is not
+   *  theirs to search, so nothing was searched — never "nothing matched". The
+   *  dashboard asks the question only with Knowledge (`lib/useSearchQuery.ts`),
+   *  and draws this for an answer that raced an access change. */
+  | "no_access"
   | (string & {});
 
 /**
@@ -2131,6 +2352,10 @@ export type ReadLevel = "linearizable" | "session" | "stale" | "consistent_prefi
 export interface WorkSummary {
   id: string;
   key: string;
+  /** The key is one ANOTHER task claimed first, so it opens that task and this
+   *  one is reached by its id. Never open a row by `key` directly: hand it to
+   *  `itemAddress`, which is the one place that rule is written. */
+  key_collision?: boolean;
   project: string;
   title: string;
   /** The slug a card is drawn under. On the ROW rather than only on the
@@ -2198,8 +2423,11 @@ export interface WorkRowSpend {
 
 /** Where `around=` placed one task in an answer's DRAWING order — the list's
  *  own sort, or a board read column by column and lane by lane — over the
- *  whole answer rather than the page. `prev`/`next` are keys, null at the
- *  ends; `position` is null past the count's ceiling. On a label board the
+ *  whole answer rather than the page. `prev`/`next` are ADDRESSES
+ *  (`tracker.ItemAddress`), null at the ends: a neighbour's key, or its id
+ *  where another task claimed that key first — stepping to the key would open
+ *  the claimant, which is not on this board. `position` is null past the
+ *  count's ceiling. On a label board the
  *  order counts cards, so `total_hint` here is the number drawn. */
 export interface WorkAround {
   position: number | null;
@@ -2744,9 +2972,6 @@ export interface WorkCommentsAnswer {
   title: string;
   comments: WorkComment[];
   next_cursor?: string;
-  /** The PERSON behind each comment an operator token wrote, by comment id:
-   *  `author` is the credential, which is the audit trail and not a name. */
-  comment_seats?: Record<string, string>;
   read_level?: ReadLevel;
   log_seq?: number;
   applied_through?: number;
@@ -2758,6 +2983,9 @@ export interface WorkCommentsAnswer {
 export interface WorkTaskRef {
   id: string;
   key: string;
+  /** The key is one another task claimed first, so it opens THAT task and
+   *  this one is reached by its id (`itemAddress`). */
+  key_collision?: boolean;
   title: string;
   status: WorkStatus;
 }
@@ -2811,6 +3039,10 @@ export interface WorkItemTurn {
 export interface WorkItemTurnsAnswer {
   item: string;
   key: string;
+  /** The key is one ANOTHER task claimed first, so it opens that task and this
+   *  one is reached by `item`. Never open the task by `key` directly: hand it
+   *  to `itemAddress`, which is the one place that rule is written. */
+  key_collision?: boolean;
   turns: WorkItemTurn[];
   next_cursor?: string;
   read_level?: ReadLevel;
@@ -2826,9 +3058,6 @@ export interface WorkChange {
   actor?: string;
   actor_kind?: string;
   operator_id?: string;
-  /** The person an operator token was bound to when it wrote this — who a
-   *  row DRAWS; `actor` stays the token, which is the audit trail. */
-  actor_seat?: string;
   comment_id?: string;
   excerpt?: string;
   turn_id?: string;
@@ -2853,6 +3082,9 @@ export interface WorkLink {
   kind: string;
   other: string;
   key?: string;
+  /** The other end's `key_collision`: its key opens another task, so this end
+   *  is reached by `other`. See `linkedItem`. */
+  key_collision?: boolean;
   title?: string;
   status?: WorkStatus;
   note?: string;
@@ -2965,9 +3197,6 @@ export interface WorkChecklistItem {
   assignee?: string;
   parent?: string;
   order?: number;
-  /** The subtask this item BECAME, which renders it struck through with the
-   *  new key rather than deleted. */
-  promoted_to?: string;
 }
 
 export interface WorkChecklist {
@@ -3057,18 +3286,17 @@ export interface WorkItemDetail {
   units?: WorkItemUnits;
   /** Pages the thread backwards, and is empty when this page is all of it. */
   comments_cursor?: string;
-  /** The person behind each comment an operator token wrote, by comment id. */
-  comment_seats?: Record<string, string>;
-  /** The PERSON behind the token that filed this task, off the create's own
-   *  history row: `task.reporter` is the credential, which is the audit trail
-   *  and not a name. Absent for a task a seat filed. */
-  reporter_seat?: string;
   /** The SAME predicate WorkSummary.blocked carries — an open dependency edge
    *  — computed by the server in the same transaction as the task, so the
    *  badge here and the badge on the board row cannot disagree. It is on the
    *  ANSWER rather than on the task because it is derived rather than stored:
    *  `links` say what the relations are, not whether any blocker is open. */
   blocked?: boolean;
+  /** The task's `key_collision`, on the ANSWER for `blocked`'s reason: it is
+   *  derived rather than stored. The task's key opens the task that claimed
+   *  it first, so everything this screen hands onward — the board link, a
+   *  peek, a call to copy — goes by `detailItem`'s address. */
+  key_collision?: boolean;
   /** Where the due date stands against the COMPANY's today, computed where
    *  a row's `overdue` is: whole calendar days to the due day (negative once
    *  it has passed) and whether it is overdue (open work only). Absent for a
@@ -3108,6 +3336,16 @@ export interface PageSummary {
    *  show (its status and skill narrowing applied), so a tree draws an
    *  expander only where one opens onto something. Absent means none. */
   children?: number;
+  /** A page with nothing written in it: its body is empty. Derived by the
+   *  engine on every read and never stored, so it cannot disagree with the
+   *  page. */
+  folder?: boolean;
+  /** The last change to what the page SAYS (its create, a save or a rename),
+   *  which `updated_at` is not: a label, a watch or a move moves that. Who
+   *  made it is named as `author` is: a seat's handle for a person or an
+   *  agent, a credential's login for one bound to no seat. */
+  saved_by?: string;
+  saved_at?: string;
 }
 
 export interface PagesAnswer {
@@ -3171,7 +3409,12 @@ export interface PageRevision {
 export interface Page extends PageSummary {
   body?: string;
   watchers?: string[];
+  /** Who stopped following the page. A watch is a seat in `watchers` that is
+   *  not here: an unwatch keeps the seat in `watchers` and mutes it, so a
+   *  later mention does not re-subscribe them silently. */
+  muted?: string[];
   created_at?: string;
+  trashed_at?: string;
 }
 
 /** One change to a page, from the wiki's own history table. */
@@ -3203,6 +3446,12 @@ export interface PageActivityAnswer {
   changes: PageChange[];
   next_cursor?: string;
   read_level?: ReadLevel;
+  /** This node's checkpoint on the pages log and the prefix of it whose
+   *  records it applied — a tracker answer's two numbers, for the same
+   *  reason: a node holding a record it cannot decode moves its checkpoint
+   *  past it, and only the applied prefix stopping short says it is behind. */
+  log_seq?: number;
+  applied_through?: number;
   complete?: boolean;
 }
 
@@ -3226,6 +3475,8 @@ export interface PageDetail {
    *  wrote. */
   skill: boolean;
   onboarding: boolean;
+  /** The page's body is empty: a folder, a page that only groups pages. */
+  folder?: boolean;
   /** For a tool-skill page: the seats it reached as a skill over thirty
    *  company days, most recent first. Absent on any other page. */
   skill_loaded_by?: SkillLoad[];
@@ -3362,10 +3613,23 @@ export interface SandboxTailAnswer {
 }
 
 /** A seat's phase history, newest first, with a cursor. */
+/** One seat's live state and finished calls, asked by its handle and answered
+ *  by the agent id that handle resolves to. */
 export interface AgentAnswer {
+  /** The handle the seat answers to NOW — a retired one asked for resolves. */
+  handle: string;
+  agent_id: string;
   role: string;
+  /** The live overlay, its call masked as every live call is ([LiveCall.body_withheld]). */
   live: Overlay | null;
+  /**
+   * The seat's finished phases. Each record's `payload` — the prompt and the
+   * answer — is its trail, and absent for a reader the engine withholds the
+   * trail from ([body_withheld]); the record's own columns are its status.
+   */
   llm_history: EventRecord[];
+  /** The engine withheld this seat's trail from this reader. */
+  body_withheld?: boolean;
   /** Pass back as `before` to page further into the record. */
   next: string;
   /** Which nodes the history came from — a seat's history is on every node
@@ -3391,15 +3655,23 @@ export interface RevisionMeta {
   parent_revision_id?: string;
   summary: string;
   source: string;
+  /** The revision's AUTHOR — a seat's handle for a person bound to one, a
+   *  login otherwise, `token:<id>` for a Tier A token, the engine's own name
+   *  for a write a timer made. */
   created_by: string;
   /**
-   * WHAT `created_by` names: `operator` for a person's credential (an API
-   * token, or the login running the CLI), `node` for the engine's own write
-   * (a boot seed, the reconcile loop). Always present. A kind a newer engine
-   * adds arrives as itself, so this is a string rather than a closed union a
-   * newer value would silently fall outside of.
+   * WHAT `created_by` names, in the engine's one vocabulary of authors
+   * (`iam.ActorKind`): `agent`, `human`, `operator` or `system` — the last for
+   * the engine's own write (a boot seed, the reconcile loop). Always present:
+   * the engine refuses to store a revision that does not say who wrote it. A
+   * kind a newer engine adds arrives as itself, so this is a string rather
+   * than a closed union a newer value would silently fall outside of.
    */
   created_by_kind: string;
+  /** The credential the revision was written through — a machine token's
+   *  `pat:<id>`, a browser session's `session:<lineage>` — and empty for a
+   *  write no credential made. */
+  operator_id: string;
   created_at: string;
   activated_at?: string;
   is_active?: boolean;
@@ -3725,24 +3997,27 @@ export interface SetupRun {
 
 export interface SetupListing {
   tools: SetupToolState[];
-  public_base_url: {
-    /** The RESOLVED address, empty when the reference resolves to nothing. */
+  /**
+   * Where a THIRD-PARTY APP reaches this deployment: the address every
+   * webhook, Slack request URL and GitHub App manifest on this screen is
+   * built on. The public listener's `api.public.external_url` where
+   * `api.public` is configured, and `api.external_url` otherwise —
+   * `config_path` names which key it was read from, since there are two once
+   * a public listener is set (the engine's `config.API.WebhookBase` and
+   * `WebhookBaseKey`). NEVER the address a person or a cookie uses: that is
+   * always `api.external_url`, which a vendor's address may not be.
+   *
+   * ONE FIELD WHERE THERE WERE FOUR. While this was a key in the company
+   * document — a Tier B pointer a node resolved per epoch — the screen also
+   * needed `present`, `resolved` and the variable's `reference`, because
+   * "configured and resolving to nothing" was a state a banner had to name.
+   * Both keys are Tier A, required on a node serving this screen and resolved
+   * before the file is decoded, so a node answering at all has an address and
+   * those three fields described a state that can no longer occur.
+   */
+  external_url: {
     value: string;
-    present: boolean;
-    /**
-     * Whether the configured value resolves to something. THREE-VALUED:
-     * `null` means this node cannot say, which is not the same as `false`.
-     * `present` alone is what a banner read once, so a `${VAR}` nobody
-     * exported rendered as "reach this engine at" and then nothing.
-     */
-    resolved?: boolean | null;
     config_path: string;
-    /**
-     * The variable the setting points at, empty for a literal. What makes
-     * an unresolved address actionable: "set it" is advice, "export
-     * PUBLIC_BASE_URL" is an instruction.
-     */
-    reference?: string;
   };
 }
 
@@ -3750,7 +4025,17 @@ export interface SecretRow {
   name: string;
   key_id: string;
   updated_at: string;
+  /** Who last stored the value, and — beside them — what sort of author and
+   *  the credential they stored it through, as a revision records the same
+   *  three. The credential is empty on a row no credential wrote: the
+   *  engine's own, and one set on a stopped node and moved onto the fleet
+   *  at its next start. */
   updated_by: string;
+  updated_by_kind?: string;
+  operator_id?: string;
+  /** Which write path last stored it, in that path's own word — `api`,
+   *  `setup`, `provision` or `migrated` — never a word the writer chose.
+   *  What each means is `provenance` in routes/settings/Secrets.tsx. */
   source: string;
 }
 
@@ -3791,19 +4076,103 @@ export interface Frame {
   id?: number;
   what?: string;
   error?: string;
+  ts?: string;
+  /** The seat an `inbox_changed` frame is about. Only a socket WATCHING that
+   *  seat is sent one, so a frame here is already this tab's own. */
+  seat?: string;
+  /** On an `unauthorized` error frame: the rule that refused — see
+   *  {@link QueryRefusal}. Absent on every other frame. */
+  reason?: string;
+  /** On an `unauthorized` error frame: the grants any one of which would have
+   *  admitted the caller. An EMPTY list is an answer — no grant would. */
+  grants?: string[];
+  /** On a QUERY's `unavailable` error frame: the state log's own refusal
+   *  code, when one is behind the answer, or `no_active_revision` for a work,
+   *  page or search question on a node that has no company yet — see
+   *  {@link LogRefusal}. Never on a watch's, whose words stay in the node's
+   *  log because what the directory says about a login names its seat. */
+  refusal?: string;
   /**
-   * How long to wait before asking again, on an `unavailable` error frame and
-   * nowhere else — the socket's `Retry-After`, computed by the same engine
-   * helper as the REST 503's header.
-   */
-  retry_after_seconds?: number;
-  /**
-   * The refusal's own sentence, on a `bad_params` error frame and nowhere
-   * else: that refusal is written for the caller — it names the parameter to
-   * change — and every other failure's text stays in the node's log.
+   * The refusal's own words, on two error frames and nowhere else: a query's
+   * `unavailable` (what the state log's refusal is about and what changes it)
+   * and a `bad_params` (the parameter to change and what it accepts). Both are
+   * written FOR the caller; every other failure's text stays in the node's
+   * log, so this is never a path or a driver's message.
    */
   detail?: string;
-  ts?: string;
+  /** On an `unavailable` error frame, a query's or a watch's: seconds before
+   *  asking this node again, and ZERO when waiting will not change the
+   *  answer. Never omitted there — and waited out, through
+   *  `unavailableRetryMs`, by everything that asks again. */
+  retry_after?: number;
+  /** On an `artifact_join` error frame: the artifact whose room was refused
+   *  (with the join's `id`) or withdrawn (with no `id`, because the reader's
+   *  access narrowed while they were in it). Absent on every other frame: a
+   *  room's pushes name their artifact in their own payload. */
+  artifact?: string;
+}
+
+/**
+ * Why the engine refused a question on AUTHORITY — the machine-readable half of
+ * an `unauthorized` answer, which the socket's error frame carries under the
+ * same keys the REST envelope does.
+ *
+ * `grants` are the capabilities any ONE of which would have admitted the
+ * caller; an empty list means no capability would, and what is missing is a
+ * relation the org chart does not hold (leading the person, owning the record).
+ * `reason` is the deciding rule's own word (`not_self`, `no_grant`, …).
+ */
+export interface QueryRefusal {
+  reason: string;
+  grants: string[];
+}
+
+/**
+ * What an `unavailable` answer says beyond its code — the machine-readable half
+ * the socket's error frame carries under the keys a REST 503 does
+ * (`refusal`, `detail`, and the `Retry-After` header as `retry_after`).
+ *
+ * `unavailable` covers two opposite facts. A node that is catching up, or whose
+ * coordination store blinked, answers the same question a few seconds later;
+ * a node whose state log is full, that holds a record it cannot decode or whose
+ * broker refused the read's barrier answers it the same however often it is
+ * asked. `retryAfter` is what tells them apart, and its ZERO is the answer:
+ * asking this node again changes nothing, so a screen stops asking on a timer
+ * and says what would.
+ */
+export interface LogRefusal {
+  /** The state log's own code (`behind`, `log_full`, `deferred`, …), or
+   *  `no_active_revision` where the node has not been handed a company yet
+   *  and the question is over its tracker or knowledge base — the code a REST
+   *  503 carries for it — or null where neither is behind the answer. */
+  code: string | null;
+  /** The refusal's own words: what it is about and what changes it. */
+  detail: string | null;
+  /** Seconds before asking THIS node again; zero when waiting will not
+   *  change the answer, and then nothing re-asks on a timer. Read through
+   *  `retryAfterMs`, which bounds it at `RETRY_AFTER_MAX_MS`. */
+  retryAfter: number;
+}
+
+/**
+ * An `inbox_changed` frame's data: one committed tracker batch moved this
+ * seat's inbox.
+ *
+ * IDENTIFIERS AND A COUNT, NEVER CONTENT. The frame says only that the inbox
+ * should be asked again; what is in it is read through `work_inbox`, the
+ * question that decides who may read it. `unread_delta` is a HINT — it counts
+ * the notices the batch wrote, and a redelivery the engine has already
+ * collapsed may count one twice — so no screen adds it to a badge.
+ */
+export interface InboxChange {
+  handle: string;
+  unread_delta: number;
+  /** The id of the object the newest of those notices was written on: the
+   *  task for a task commit, the PERSON for a `prioritised` notice — whose
+   *  task `work_inbox` names as `task`. */
+  subject: string;
+  /** The reason that notice was routed under — one of `work_inbox`'s. */
+  reason: string;
 }
 
 /** The named answers the socket's request/response channel serves. */
@@ -3836,12 +4205,12 @@ export interface WorkActivityRecord {
   actor?: string;
   actor_kind?: string;
   operator_id?: string;
-  /** The person an operator token was bound to when it made this change —
-   *  who a row DRAWS; `actor` stays the token, which is the audit trail. */
-  actor_seat?: string;
   subject_kind: string;
   subject_id: string;
   subject_key?: string;
+  /** `subject_key` opens ANOTHER task — one that claimed it first — so the
+   *  subject is reached by `subject_id`. See `subjectItem`. */
+  subject_key_collision?: boolean;
   project?: string;
   excerpt?: string;
   fields?: Record<string, WorkDelta>;
@@ -3853,6 +4222,10 @@ export interface WorkActivityRecord {
   /** How a reader tells "nothing was announced" from "nothing happened" —
    *  which is the whole reason a quiet commit still writes a row. */
   notified: boolean;
+  /** An announcement a repair duty issued rather than the write it is about
+   *  — the mirror of a one-sided dependency, or the "ready" an unblocked
+   *  task's assignee never got — so a card read late says why it came then.
+   *  It says nothing about when the broker accepted the commit. */
   late?: boolean;
 }
 
@@ -3919,10 +4292,6 @@ export interface WorkDecisionEvidence {
 export interface WorkAskRow extends WorkSummary {
   comment: string;
   asked_by: string;
-  /** The person behind an operator token that asked — the seat it was bound
-   *  to — and absent where the asker already is a seat. Who a row draws;
-   *  `asked_by` stays the author. */
-  asked_by_seat?: string;
   asked_at: string;
   body: string;
   /** Present when the ask asks somebody to choose. */
@@ -3940,6 +4309,9 @@ export interface WorkAskRow extends WorkSummary {
 export interface WorkChecklistRow {
   task: string;
   task_key: string;
+  /** `task_key` opens another task, so the task is reached by `task`. See
+   *  `checklistTask`. */
+  task_key_collision?: boolean;
   task_title: string;
   checklist: string;
   item: string;
@@ -4019,12 +4391,18 @@ export interface WorkInboxNotice {
   /** The human-readable key, resolved by the applier so the read is an index
    *  range rather than a join. */
   subject_key?: string;
+  /** The id of the TASK this notice is about, absent when it names none: the
+   *  subject for a task commit, and the task a lead put at the top of the list
+   *  for a `prioritised` notice — whose subject is the PERSON while
+   *  `subject_key` is the task's. See `noticeItem`. */
+  task?: string;
+  /** The key STORED here now opens a task other than `task`, so the notice is
+   *  reached by `task` — asked of this key rather than read off the task,
+   *  because a task moved since answers to a new one. See `noticeItem`. */
+  subject_key_collision?: boolean;
   excerpt?: string;
   actor?: string;
   actor_kind?: string;
-  /** The person an operator token was bound to when it made this change —
-   *  what a row draws in place of the token's id. */
-  actor_seat?: string;
   /** The comment this change wrote and the agent turn that made it. */
   comment_id?: string;
   turn_id?: string;
@@ -4080,6 +4458,8 @@ export interface WorkInboxAnswer {
 export interface WorkRanked {
   id: string;
   key: string;
+  /** As `WorkSummary.key_collision`: the key opens another task. */
+  key_collision?: boolean;
   title: string;
   project: string;
   type: string;
@@ -4253,34 +4633,169 @@ export interface TurnsAnswer {
   coverage?: Coverage;
 }
 
-/** Who the presented credential belongs to — see `lib/viewer.ts`. */
+/** Who the engine resolved this caller to — see `lib/viewer.ts`. */
 export interface Viewer {
-  /** The operator id the token resolves to, or "" for an anonymous caller. */
-  operator_id: string;
-  /** Whether this caller may ask the operator-gated questions. */
-  operator: boolean;
-  /** The seat whose `contact.crewlet_operator_id` names that id, or "".
+  /** The principal's login: a person's dotted name, or a machine's `class:id`. */
+  login: string;
+  /** The capabilities this caller carries, after the node's ceiling. */
+  grants: string[];
+  /** The seat the identity directory binds this caller to, or "".
    *  UNBOUND IS AN ORDINARY STATE, not a misconfiguration. */
   handle: string;
+  /** That seat's display name, or "". */
   name: string;
+  /** That seat's kind — `human` or `agent` — or "" for no seat. */
   kind: string;
-  /** The tools `POST /operator/act/{tool}` serves this caller: every write
-   *  the operator catalogue holds for a token bound to a seat, and EMPTY for
-   *  an anonymous or unbound caller, who may not act (ADR-0024). */
+  /**
+   * The name this caller's OWN record is kept under — their inbox, pins,
+   * priorities and personal views: the seat for a bound person, the login for
+   * everybody the directory binds to none. Every tool writes their record under
+   * it, so every personal read asks by it. "" for a caller with no record.
+   */
+  owner: string;
+  /** The tools `POST /operator/act/{tool}` would serve this caller: the
+   *  catalogue's writes the authority table can admit them to before any
+   *  object is named, so a screen enables exactly the controls a press of
+   *  could be served. NOBODY IS REFUSED FOR BEING UNBOUND (ADR-0024): an
+   *  unbound credential acts under its own login. Empty on a node that has
+   *  not been handed a company — every press would be refused there. */
   acts: string[];
   /** The project this person's create lands in when it names none — the
    *  engine's own default for their seat, which `create_work_item` applies.
-   *  "" when their team and every team above it owns none. */
+   *  "" for a caller bound to no seat, and when their team and every team
+   *  above it owns none. */
   project: string;
-  /** Whether this caller's credential may CHANGE the company document.
-   *  False for an anonymous caller, and for every credential a managed
-   *  document's `api.auth.company_writers` does not list (ADR-0030). */
+  /** Whether this caller's credential may CHANGE the company document —
+   *  the engine's own `config.APIAuth.MayWriteCompany`, the rule its config
+   *  surface refuses a write with. False for an anonymous caller, and for
+   *  every credential a managed document's `api.auth.company_writers` does
+   *  not list (ADR-0030): a person's session, a machine token and a lead
+   *  among them. It says nothing about authority — Admin, or a lead's
+   *  subtree, still decides whether this caller may write at all. */
   config_writer: boolean;
-  /** The token ids that alone may change a managed company document — who
-   *  manages it — and EMPTY when it is not managed. Named to an operator
-   *  only; an anonymous caller is told none. */
+  /** The Tier A token ids that alone may change a managed company document —
+   *  who manages it — and EMPTY when it is not managed. An anonymous caller
+   *  is told none. */
   config_managed_by: string[];
 }
+
+// ---------------------------------------------------------------------------
+// The sign-in surface — `/auth`, read by `protocol/auth.ts`
+// ---------------------------------------------------------------------------
+
+/**
+ * What a session opened by a sign-in may do: everything its grants allow, or
+ * — on a deployment that requires a second factor the person does not hold —
+ * nothing but enrol one. The second is the code the engine refuses every
+ * other route with, so one string names it wherever it is met.
+ */
+export type SessionStatus = "signed_in" | "second_factor_enrolment_required";
+
+/**
+ * What every completed sign-in answers — a password, a redemption, a token
+ * exchange, a step-up, an enrolment's replacement session.
+ *
+ * NO BEARER IN IT. The cookie the response set is the credential, and a body
+ * carrying it too would put the one value most worth stealing where a script
+ * can read it.
+ */
+export interface SignedIn {
+  person: string;
+  /** The login as the estate holds it, which is how a screen names them. */
+  login: string;
+  seat?: string;
+  /** The absolute deadline, which no re-issue moves. */
+  expires_at: string;
+  position: string;
+  status: SessionStatus;
+}
+
+/** What an invitation's screen renders from, before anything is spent. */
+export interface InvitationView {
+  /** The address it is for, opened for this one answer. */
+  email: string;
+  /** Who sent it, or absent. */
+  invited_by?: string;
+  /** The login this form PROPOSES from the address, or absent when nothing in
+   *  it fits the grammar and the person must type one. */
+  login?: string;
+  /** The floor every password is held to. */
+  min_password_length: number;
+  /** The seat redeeming it binds the person to, as the chart calls it now —
+   *  with no handle where the chart no longer holds it. Every invitation
+   *  names one, because every person holds a human seat; one that names none
+   *  (absent, or empty) is one whose redemption the engine refuses, and the
+   *  screen says so before anybody types a password. */
+  seat?: { handle?: string; name?: string };
+  /** The login this BROWSER is signed in as, or absent for nobody: redeeming
+   *  ends that session, so the form says so first. */
+  signed_in_as?: string;
+}
+
+/** A password set from a reset link — and no session: the person signs in next. */
+export interface PasswordSet {
+  status: "password_set";
+  login: string;
+}
+
+/**
+ * A second factor's seed: the first leg of an enrolment, which stores nothing.
+ * The second leg sends `secret` back with a code derived from it.
+ */
+export interface SecondFactorSeed {
+  /** The seed in base32, for an app that is typed into. */
+  secret: string;
+  /** The `otpauth://` form an authenticator app opens, and scans as the setup's QR code. */
+  uri: string;
+}
+
+/** A completed enrolment. */
+export interface SecondFactorEnrolled {
+  status: "enrolled";
+  /** The whole session that replaced an enrolment-only one, or absent. */
+  session?: SignedIn;
+}
+
+/** The one and only time a set of recovery codes is readable. */
+export interface RecoveryCodes {
+  codes: string[];
+}
+
+/** Who a session is, as `GET /auth/session` answers — the part a screen reads. */
+export interface SessionAnswer {
+  person: string;
+  /** Their own name as their directory row holds it, or absent — what a screen
+   *  calls a person no seat names. */
+  name?: string;
+  login: string;
+  seat?: string;
+  /** `person` or `machine`: a machine holds no second factor to manage. */
+  kind: string;
+  /** What this node lets the caller do: their grants, cut to its ceiling. */
+  grants?: string[] | null;
+  /** The absolute deadline of the session the request carried, or absent for
+   *  a credential that is not a session. */
+  expires_at?: string;
+  /** The session the request carried, by the id a listing of the person's
+   *  sessions names it by — absent exactly where `expires_at` is. */
+  lineage?: string;
+  status: SessionStatus;
+}
+
+/** What a client reads before anybody signs in (`GET /auth/config`). */
+export interface AuthConfig {
+  /** The floor every password is held to, in characters. */
+  min_password_length: number;
+  /** Whether a person signing in with a password must hold a second factor. */
+  second_factor: "required" | "optional";
+}
+
+/**
+ * What changing your own password answers: the new session that keeps this
+ * browser signed in, or — where this node has not applied the change yet — the
+ * plain fact that every session ended, this browser's with them.
+ */
+export type PasswordChanged = SignedIn | { status: "password_changed"; detail: string };
 
 /** One seat a name could mean, and why. */
 export interface ColleagueCandidate {
@@ -4342,10 +4857,11 @@ export interface FeedWorkRow {
   cursor: string;
   actor?: string;
   actor_kind?: string;
-  /** The person a bound token's commit was made for. */
-  actor_seat?: string;
   task: string;
   key?: string;
+  /** The key is one another task claimed first, so a link built from it
+   *  opens THAT task and this row's is reached by its id (`itemAddress`). */
+  key_collision?: boolean;
   title?: string;
   project?: string;
   /** On a completion: the task's running totals, tokens only. */
@@ -4495,6 +5011,1105 @@ export interface SeatActivityAnswer {
   quantile_resolution: number;
 }
 
+// ---- artifacts ---------------------------------------------------------- //
+//
+// The artifacts' answers and pushes, as `internal/artifactsdomain`,
+// `internal/artifactdata`, `internal/api/artifactsapi`,
+// `internal/api/artifactdataapi` and `internal/api/stream` send them. The
+// closed sets they are made of are the contract's (`contract/artifacts.ts`),
+// held there against the engine; these are composed from them.
+
+/** What an artifact is (`artifacts.Kind`). */
+export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
+/** A runtime capability a version declares (`artifacts.Capability`). */
+export type ArtifactCapability = (typeof ARTIFACT_CAPABILITIES)[number];
+/** A principal's relation to one artifact (`artifacts.Role`). */
+export type ArtifactRole = (typeof ARTIFACT_ROLES)[number];
+/** A role a share may grant. */
+export type ShareableRole = (typeof SHAREABLE_ROLES)[number];
+/** Who a share names. */
+export type AudienceKind = (typeof AUDIENCE_KINDS)[number];
+/** How the artifact origin isolates a page. */
+export type OriginMode = (typeof ORIGIN_MODES)[number];
+/** What a present member is doing. */
+export type PresenceActivity = (typeof PRESENCE_ACTIVITIES)[number];
+/** What a listing is about. */
+export type ArtifactListScope = (typeof ARTIFACT_LIST_SCOPES)[number];
+/** How a listing is ordered. */
+export type ArtifactListSort = (typeof ARTIFACT_LIST_SORTS)[number];
+/** What an artifact's history row is filed under (`artifactsdomain.HistoryOps`). */
+export type ArtifactHistoryOp = (typeof ARTIFACT_HISTORY_OPS)[number];
+/** How one datastore field is stored and drawn. */
+export type ColumnType = (typeof COLUMN_TYPES)[number];
+/** Who reads a collection's rows. */
+export type ReadRule = (typeof READ_RULES)[number];
+/** A collection policy picked by intent. */
+export type CollectionPreset = (typeof COLLECTION_PRESETS)[number];
+/** What narrows a column's write rule. */
+export type FieldCondition = (typeof FIELD_CONDITIONS)[number];
+/** What one datastore op does. */
+export type DataOpKind = (typeof DATA_OP_KINDS)[number];
+/** What the applier decided about one write. */
+export type DataVerdict = (typeof DATA_VERDICTS)[number];
+
+/**
+ * Who did something (`iam.Actor`). `kind` is `agent`, `human`, `operator` or
+ * `system`; `operator_id` is the credential the author acted through, absent
+ * where the row records none.
+ */
+export interface ArtifactActor {
+  name: string;
+  kind: string;
+  operator_id?: string;
+}
+
+/** A state-log position (`statelog.Position`). */
+export interface LogPosition {
+  stream: string;
+  generation: number;
+  seq: number;
+}
+
+/** The principal set one share names (`artifacts.Audience`). `id` is empty for the company. */
+export interface ArtifactAudience {
+  kind: AudienceKind;
+  id?: string;
+}
+
+/** One audience's role on one artifact (`artifacts.Share`). */
+export interface ArtifactShare {
+  audience: ArtifactAudience;
+  role: ArtifactRole;
+  granted_by: ArtifactActor;
+  granted_at: string;
+}
+
+/** An artifact's status (`artifactsdomain.Status`). */
+export type ArtifactStatus = "live" | "trashed";
+
+/** One artifact's head (`artifactsdomain.Head`). */
+export interface ArtifactHead {
+  id: string;
+  /** The DNS host label: the id in lowercase Crockford base32. */
+  label: string;
+  kind: ArtifactKind;
+  title: string;
+  description?: string;
+  icon?: string;
+  owner: string;
+  owner_kind: string;
+  source_key?: string;
+  head_number: number;
+  contract?: string;
+  /** What the head version declares; empty, never absent, for none. */
+  capabilities: ArtifactCapability[];
+  status: ArtifactStatus;
+  trashed_by: ArtifactActor;
+  trashed_at: string;
+  /** When its purge began, the zero time for one no purge has begun on: such an artifact is in the trash and is never restored. */
+  purge_begun_at: string;
+  access_epoch: number;
+  bytes_held: number;
+  /** The audience, to the owner and editors only; absent below. */
+  shares?: ArtifactShare[];
+  created_by: ArtifactActor;
+  updated_by: ArtifactActor;
+  created_at: string;
+  updated_at: string;
+  /** The packed position of the last write to the artifact's row. */
+  version: number;
+}
+
+/** A head as a reader is shown it (`artifactsapi.Artifact`). */
+export interface ArtifactRow extends ArtifactHead {
+  /** The reader's own role. */
+  role: ArtifactRole;
+  /** How many shares it carries, which a reader below editor is shown in place of the list. */
+  share_count: number;
+  /** Only the admin path admitted this read, and the engine recorded it. */
+  elevated?: boolean;
+}
+
+/** `artifact{id}`: one artifact as its page reads it (`artifactsapi.Detail`). */
+export interface ArtifactDetail extends ArtifactRow {
+  /** The reader may publish a new version: the artifacts app beside the role. */
+  writer: boolean;
+}
+
+/** One row of a listing (`artifactsapi.ListItem`). */
+export interface ArtifactListItem extends ArtifactRow {
+  pinned?: boolean;
+  /** When this reader last opened it; the zero instant for never. */
+  opened_at: string;
+}
+
+/** `artifacts{scope, kind, q, sort, status, pinned, work_item, cursor, limit}`. */
+export interface ArtifactListAnswer {
+  items: ArtifactListItem[];
+  /** How many matched the estate's own filter; a row the authority table withheld is counted and not listed. */
+  total: number;
+  after?: string;
+  read_level: string;
+  position: LogPosition;
+  complete: boolean;
+}
+
+/** The stored bytes behind one file (`objstore.Object`). */
+export interface ArtifactObject {
+  key?: string;
+  hash: string;
+  size: number;
+}
+
+/** What the linter derived for one HTML file (`artifacts.ScriptPolicy`). */
+export interface ArtifactScriptPolicy {
+  nonced: boolean;
+  handler_hashes?: string[];
+  unsafe_eval?: boolean;
+  wasm_eval?: boolean;
+}
+
+/** One published file of a version (`artifacts.Entry`). */
+export interface ArtifactEntry {
+  path: string;
+  content_type: string;
+  object: ArtifactObject;
+  carried?: boolean;
+  script?: ArtifactScriptPolicy;
+}
+
+/** Every file of one version (`artifacts.Manifest`). */
+export interface ArtifactManifest {
+  /** The path served at the version's root; empty for a native sheet. */
+  entry: string;
+  files: ArtifactEntry[];
+}
+
+/** One retained version without its manifest (`artifactsdomain.VersionSummary`). */
+export interface ArtifactVersionSummary {
+  artifact: string;
+  number: number;
+  version_id: string;
+  base: number;
+  restored_from?: number;
+  forced?: boolean;
+  label?: string;
+  entry?: string;
+  contract?: string;
+  /** What the version declares; empty, never absent, for none. */
+  capabilities: ArtifactCapability[];
+  files: number;
+  bytes: number;
+  author: ArtifactActor;
+  created_at: string;
+  position: number;
+}
+
+/** `artifact_version{id, n}`: one version with its manifest. */
+export interface ArtifactVersion extends ArtifactVersionSummary {
+  manifest: ArtifactManifest;
+}
+
+/** `artifact_versions{id, cursor, limit}`: newest first. */
+export interface ArtifactVersionsAnswer {
+  versions: ArtifactVersionSummary[];
+  after?: string;
+}
+
+/** One live file of an artifact's asset store (`artifactsdomain.Asset`). */
+export interface ArtifactAsset {
+  artifact: string;
+  id: string;
+  name: string;
+  content_type: string;
+  object: ArtifactObject;
+  added_by: ArtifactActor;
+  added_at: string;
+  version: number;
+}
+
+/** `artifact_assets{id}`. */
+export interface ArtifactAssetsAnswer {
+  assets: ArtifactAsset[];
+}
+
+/** What one history row says beyond its op (`artifactsdomain.HistorySummary`). */
+export interface ArtifactHistorySummary {
+  files?: number;
+  bytes?: number;
+  pruned?: number[];
+  forced?: boolean;
+  restored_from?: number;
+  label?: string;
+  fields?: string[];
+  audience?: string;
+  role?: string;
+  from?: string;
+  to?: string;
+  asset?: string;
+  name?: string;
+  paths?: string[];
+  head?: number;
+  limit?: number;
+  usage?: number;
+  key?: string;
+}
+
+/** One row of an artifact's change record (`artifactsdomain.HistoryEntry`). */
+export interface ArtifactHistoryEntry {
+  position: number;
+  op_id: string;
+  /**
+   * An [ArtifactHistoryOp]. Typed as text, because a newer engine may file a
+   * row under an op this build has not met, which is still said in its own
+   * words.
+   */
+  op: string;
+  outcome: "applied" | "refused";
+  reason?: string;
+  number?: number;
+  actor: ArtifactActor;
+  elevated?: boolean;
+  origin?: string;
+  work_item?: string;
+  at: string;
+  summary: ArtifactHistorySummary;
+}
+
+/** `artifact_history{id, cursor, limit}`: newest first, shaped by the reader's role. */
+export interface ArtifactHistoryAnswer {
+  entries: ArtifactHistoryEntry[];
+  after?: string;
+}
+
+/**
+ * One row of the company trail (`artifactsdomain.TrailEntry`): a history row
+ * of any artifact, with the artifact it is about and its title and owner now.
+ */
+export interface ArtifactTrailEntry extends ArtifactHistoryEntry {
+  artifact: string;
+  title: string;
+  owner: string;
+}
+
+/**
+ * `artifact_trail{op, cursor, limit}`: every artifact's history across the
+ * company, newest first in the log's order; an administrator's question
+ * (`audit.read`).
+ */
+export interface ArtifactTrailAnswer {
+  entries: ArtifactTrailEntry[];
+  after?: string;
+  position: LogPosition;
+  complete: boolean;
+}
+
+/** `artifact_seen_by{id}`: who has opened it, or `shown: false` where the company withholds it. */
+export interface ArtifactSeenByAnswer {
+  shown: boolean;
+  reads: { seat: string; opened_at: string }[];
+}
+
+/** One share and the seats a unit share reaches today (`artifactsapi.ShareAccess`). */
+export interface ArtifactShareAccess extends ArtifactShare {
+  members?: string[];
+  /**
+   * The share reaches nobody: a login named as a seat, which a build before the
+   * grant rule wrote. Listed so its owner removes it; never offered a role.
+   */
+  invalid?: boolean;
+}
+
+/** `artifact_access{id}`: the share dialog's list (`artifactsapi.Access`). */
+export interface ArtifactAccessAnswer {
+  owner: string;
+  owner_kind: string;
+  role: ArtifactRole;
+  /** To the owner and editors; absent below. */
+  shares?: ArtifactShareAccess[];
+  /** The seats that lead an agent owner, each holding owner on its artifacts. */
+  leads?: string[];
+  share_count: number;
+}
+
+/** The plan quotas in force (`artifacts.Limits`). */
+export interface ArtifactLimits {
+  company_bytes: number;
+  artifacts: number;
+  data_bytes: number;
+  data_store_bytes: number;
+  pending_bytes: number;
+}
+
+/** `artifact_usage`: the company's artifacts against its quota. */
+export interface ArtifactUsageAnswer {
+  usage: {
+    artifacts: number;
+    bytes: number;
+    versions: number;
+    assets: number;
+    position: LogPosition;
+    complete: boolean;
+  };
+  limits: ArtifactLimits;
+}
+
+/** `POST /artifacts/{id}/tickets`: what the viewer embeds (`artifacts.Frame`). */
+export interface ArtifactFrame {
+  frame_url: string;
+  origin: string;
+  version: number;
+  expires_at: string;
+  sandbox: string;
+  allow: string;
+  mode: OriginMode;
+  nonce: string;
+  /** The page the frame opens: the entry of a page, one artboard of a design. */
+  document: string;
+  /**
+   * What the frame's ticket grants, in the canonical order, `[]` for none:
+   * what the page's runtime is told as it loads, and so the one list its host
+   * may tell it at the handshake.
+   */
+  capabilities: ArtifactCapability[];
+}
+
+/** How one declared file's bytes reach the store (`artifacts.Transfer`). */
+export interface ArtifactTransfer {
+  path: string;
+  method: string;
+  url: string;
+  headers?: Record<string, string>;
+  /** Straight to the bucket; false for a put through the engine, the dashboard's only kind. */
+  direct: boolean;
+}
+
+/** `POST /artifacts/{id}/uploads` (`artifacts.UploadIntent`). */
+export interface ArtifactUploadIntent {
+  upload: string;
+  expires_at: string;
+  carried?: string[];
+  transfers?: ArtifactTransfer[];
+}
+
+/**
+ * One thing the publish linter found in a page (`lint.Finding`): a refusal
+ * that refuses the publish, or a warning it lands with. `line` is 0 where the
+ * finding is about the version rather than one line of it.
+ */
+export interface ArtifactLintFinding {
+  path: string;
+  line?: number;
+  code: string;
+  message: string;
+}
+
+/** `POST /artifacts/checks` (`artifactupload.CheckReport`): what a publish of the files would say. */
+export interface ArtifactCheckAnswer {
+  refusals: ArtifactLintFinding[];
+  warnings: ArtifactLintFinding[];
+}
+
+/** One tab of a doc, with its Markdown (`docindex.Tab`). */
+export interface DocTab {
+  path: string;
+  title: string;
+  text: string;
+}
+
+/** A version's doc, tab by tab (`docindex.Doc`). */
+export interface ArtifactDoc {
+  /** Whether the version opens on a `doc.json` index rather than one Markdown file. */
+  indexed: boolean;
+  tabs: DocTab[];
+}
+
+/** `GET /artifacts/{id}/versions/{n}/doc` (`artifactsapi.DocAnswer`). */
+export interface ArtifactDocAnswer {
+  artifact: string;
+  version: number;
+  doc: ArtifactDoc;
+}
+
+/** `GET /artifacts/{id}/versions/{n}/source`: a version's entry as text (`artifactsapi.Source`). */
+export interface ArtifactSource {
+  artifact: string;
+  kind: ArtifactKind;
+  version: number;
+  path: string;
+  content_type: string;
+  size: number;
+  text: string;
+}
+
+/** One declaration of a slide's canonical style (`slideformat.Decl`). */
+export interface SlideDecl {
+  p: string;
+  v: string;
+}
+
+/** One element, or one run of text, of a slide (`slideformat.Node`): an element has a tag, a run of text has text alone. */
+export interface SlideNode {
+  tag?: string;
+  text?: string;
+  attrs?: Record<string, string>;
+  style?: SlideDecl[];
+  children?: SlideNode[];
+}
+
+/** One slide of a deck, read (`slideformat.Slide`). */
+export interface DeckSlide {
+  id: string;
+  path: string;
+  title: string;
+  hidden?: boolean;
+  transition?: string;
+  notes?: string;
+  /** The `<section>`, its notes taken out. */
+  root: SlideNode;
+}
+
+/** One run of a deck's outline (`slideformat.Section`). */
+export interface DeckSection {
+  description: string;
+  start: string;
+}
+
+/** One typeface a deck loads from a font file of its version (`slideformat.Face`). */
+export interface DeckFace {
+  family: string;
+  src: string;
+}
+
+/** A version's deck as the dashboard draws it (`slideformat.Deck`). */
+export interface ArtifactDeck {
+  title: string;
+  /** The theme the deck began in (`deck.json`'s `theme`), absent for a deck that names none. */
+  theme?: string;
+  cover: string;
+  sections: DeckSection[] | null;
+  faces: DeckFace[] | null;
+  slides: DeckSlide[] | null;
+}
+
+/** One slide a starter deck opens with: a layout and its title (`slideformat.PlanSlide`). */
+export interface DeckPlanSlide {
+  layout: string;
+  /** Absent is the layout's own heading; a cover's is the deck's title. */
+  title?: string;
+}
+
+/** What a starter deck is composed from (`slideformat.Plan`), sent as a create's `deck`. */
+export interface DeckPlan {
+  theme?: string;
+  slides?: DeckPlanSlide[];
+}
+
+/** One layout a starter deck can hold (`slideformat.Layout`). */
+export interface DeckLayout {
+  id: string;
+  name: string;
+  description: string;
+  /** The title a slide of this layout opens with when its plan names none. */
+  heading: string;
+}
+
+/** One theme a deck can begin in, drawn as a deck of every layout once (`artifactsapi.SlidesStarterTheme`). */
+export interface DeckTheme {
+  id: string;
+  name: string;
+  tag: string;
+  sample: ArtifactDeck;
+}
+
+/** `GET /artifacts/starters/slides` (`artifactsapi.SlidesStartersAnswer`). */
+export interface SlidesStartersAnswer {
+  themes: DeckTheme[];
+  layouts: DeckLayout[];
+  default: DeckPlan;
+}
+
+/** `GET /artifacts/{id}/versions/{n}/deck` (`artifactsapi.DeckAnswer`). */
+export interface ArtifactDeckAnswer {
+  artifact: string;
+  version: number;
+  deck: ArtifactDeck;
+}
+
+/** One slide of a deck's outline (`slideformat.OutlineSlide`). */
+export interface DeckOutlineSlide {
+  id: string;
+  path: string;
+  title: string;
+  hidden?: boolean;
+  notes?: boolean;
+}
+
+/** `GET /artifacts/{id}/versions/{n}/outline` (`artifactsapi.OutlineAnswer`). */
+export interface ArtifactOutline {
+  artifact: string;
+  kind: ArtifactKind;
+  version: number;
+  slides?: {
+    title: string;
+    count: number;
+    cover: string;
+    sections: DeckSection[] | null;
+    slides: DeckOutlineSlide[] | null;
+    cover_slide: DeckSlide;
+  };
+  /** A doc's tabs and the first tab's opening (`docindex.Outline`). */
+  doc?: {
+    tabs: { path: string; title: string; bytes: number }[];
+    cover: { tab: string; markdown: string };
+  };
+  design?: DesignOutline;
+  /** A board's outline: its widgets and its first stats, never a value (D64). */
+  dashboard?: DashboardOutline;
+}
+
+// ---- dashboards (`internal/artifacts/dashspec`, `internal/api/datasetsapi`) ----
+
+export type DashboardWidgetType = (typeof DASHBOARD_WIDGET_TYPES)[number];
+export type DashboardSourceKind = (typeof DASHBOARD_SOURCE_KINDS)[number];
+export type DashboardRefreshMode = (typeof DASHBOARD_REFRESH_MODES)[number];
+export type DashboardDatasetStatus = (typeof DASHBOARD_DATASET_STATUSES)[number];
+export type DashboardAgg = (typeof DASHBOARD_AGGS)[number];
+export type DashboardNumberFormat = (typeof DASHBOARD_NUMBER_FORMATS)[number];
+export type DashboardColumnType = (typeof DASHBOARD_COLUMN_TYPES)[number];
+export type DashboardColumnWords = (typeof DASHBOARD_COLUMN_WORDS)[number];
+
+/** One column of a dataset (`dashspec.Column`). */
+export interface DashboardColumn {
+  key: string;
+  type: DashboardColumnType;
+  label?: string;
+  /** The vocabulary the column's ids are drawn in, if any. */
+  words?: DashboardColumnWords;
+}
+
+/** A value of a row: text, a number, a boolean, a date as its canonical text, or none. */
+export type DashboardValue = string | number | boolean | null;
+
+/** One row of a dataset, keyed by column. */
+export type DashboardRow = Record<string, DashboardValue>;
+
+/** A dataset's rows as one viewer may read them (`dashspec.Table`). */
+export interface DashboardTable {
+  columns: DashboardColumn[];
+  key?: string;
+  rows: DashboardRow[];
+  truncated?: boolean;
+}
+
+/** A filter the board offers (`dashspec.Param`). */
+export interface DashboardParam {
+  key: string;
+  label: string;
+  options: { value: string; label: string }[];
+  default: string;
+}
+
+/** An engine argument: a literal in its text form, or a filter it is bound to. */
+export type DashboardArg = string | number | boolean | { param: string };
+
+/** One calculation step (`dashspec.Step`), flat as written. */
+export interface DashboardStep {
+  op: "filter" | "group" | "compute" | "join" | "sort" | "limit" | "select";
+  where?: { column: string; cmp: string; value?: DashboardArg }[];
+  by?: string[];
+  aggregates?: { column: string; agg: DashboardAgg; of?: string }[];
+  column?: string;
+  fn?: string;
+  left?: string | number;
+  right?: string | number;
+  with?: string;
+  on?: string;
+  columns?: string[];
+  order?: { column: string; desc?: boolean }[];
+  count?: number;
+}
+
+/** One dataset of a board as the spec declares it (`dashspec.Dataset`). */
+export interface DashboardDataset {
+  id: string;
+  title: string;
+  source: DashboardSourceKind;
+  store?: { collection: string };
+  file?: { path: string };
+  engine?: { name: string; params?: Record<string, DashboardArg> };
+  calc?: { from: string; steps: DashboardStep[] };
+  columns?: DashboardColumn[];
+  key?: string;
+  refresh?: { every_seconds: number };
+}
+
+/** One widget of a board (`dashspec.Widget`), flat as written. */
+export interface DashboardWidget {
+  id: string;
+  type: DashboardWidgetType;
+  title?: string;
+  dataset?: string;
+  w: number;
+  h?: number;
+  value?: string;
+  agg?: DashboardAgg;
+  format?: DashboardNumberFormat;
+  unit?: string;
+  max?: number;
+  max_field?: string;
+  x?: string;
+  y?: string[];
+  by?: string;
+  label?: string;
+  limit?: number;
+  columns?: string[];
+  text?: string;
+  tone?: string;
+  children?: DashboardWidget[];
+}
+
+/** A board's spec (`dashspec.Spec`). */
+export interface DashboardSpec {
+  v: number;
+  title?: string;
+  params?: DashboardParam[];
+  datasets: DashboardDataset[];
+  widgets: DashboardWidget[];
+}
+
+/** How a dataset is kept current (`dashspec.Freshness`). */
+export interface DashboardFreshness {
+  mode: DashboardRefreshMode;
+  collection?: string;
+  signal?: "agents" | "tokens";
+  every_seconds?: number;
+  inputs?: string[];
+}
+
+/** One parameter of an engine source (`dashspec.SourceParam`). */
+export interface DashboardSourceParam {
+  key: string;
+  type: "text" | "number" | "enum";
+  summary: string;
+  enum?: string[];
+  min?: number;
+  max?: number;
+  max_bytes?: number;
+  default?: string;
+}
+
+/** One entry of the engine source catalogue (`dashspec.EngineSource`). */
+export interface DashboardEngineSource {
+  name: string;
+  domain: string;
+  summary: string;
+  access: string;
+  params: DashboardSourceParam[];
+  columns: DashboardColumn[];
+  key: string;
+  signal?: "agents" | "tokens";
+  /** The source reads a span of time (spend over company days). */
+  windowed?: boolean;
+  max_rows: number;
+}
+
+/** One dataset as the Sources rail describes it (`artifactsapi.BoardDataset`). */
+export interface DashboardBoardDataset {
+  id: string;
+  title: string;
+  source: DashboardSourceKind;
+  shape: { columns: DashboardColumn[]; key?: string };
+  freshness: DashboardFreshness;
+  engine?: DashboardEngineSource;
+}
+
+/** A board's outline (`dashspec.Outline`). */
+export interface DashboardOutline {
+  title?: string;
+  widgets: {
+    id: string;
+    type: DashboardWidgetType;
+    title?: string;
+    w: number;
+    dataset?: string;
+    group?: string;
+  }[];
+  stats: { widget: string; label: string; dataset: string; dataset_title: string }[];
+  datasets: { id: string; title: string; source: DashboardSourceKind }[];
+}
+
+/** A version's board (`GET …/versions/{n}/dashboard`, `artifactsapi.BoardAnswer`). */
+export interface DashboardBoardAnswer {
+  artifact: string;
+  version: number;
+  board: DashboardSpec;
+  datasets: DashboardBoardDataset[];
+  outline: DashboardOutline;
+}
+
+/** What one read of a dataset or a source answered (`datasetsapi.Reading`). */
+export interface DashboardReading {
+  status: DashboardDatasetStatus;
+  as_of?: string;
+  table?: DashboardTable;
+  refusal?: { dataset: string; reason: string; grants?: string[] };
+  detail?: string;
+}
+
+/** One dataset as its viewer may read it (`GET …/sources/{dataset}`, `datasetsapi.Answer`). */
+export interface DashboardDatasetAnswer extends DashboardReading {
+  artifact: string;
+  version: number;
+  dataset: string;
+}
+
+/** One engine source read directly, before any board exists (`GET /artifacts/sources/preview/{name}`, `datasetsapi.Preview`). */
+export interface DashboardSourcePreview extends DashboardReading {
+  source: string;
+}
+
+/** The engine source catalogue (`GET /artifacts/sources`). */
+export interface DashboardCatalogueAnswer {
+  sources: DashboardEngineSource[];
+}
+
+/** A rectangle of a design's canvas, in canvas pixels (`canvasformat.Rect`). */
+export interface DesignRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** One board of a design's outline (`canvasformat.OutlineBoard`). */
+export interface DesignOutlineBoard extends DesignRect {
+  path: string;
+  title?: string;
+}
+
+/** A design's outline (`canvasformat.Outline`): its boards' frames, for a cover. */
+export interface DesignOutline {
+  title?: string;
+  count: number;
+  cover: string;
+  bounds: DesignRect;
+  boards: DesignOutlineBoard[];
+  notes: number;
+}
+
+/** One finding of the publish linter (`lint.Finding`). */
+export interface ArtifactLintFinding {
+  path: string;
+  line?: number;
+  code: string;
+  message: string;
+}
+
+/** A create's or a publish's answer (`artifactsapi.publishedAnswer`). */
+export interface ArtifactPublished {
+  artifact: string;
+  label: string;
+  number: number;
+  version_id: string;
+  warnings?: ArtifactLintFinding[];
+  /** The version's files by where their bytes came from (`artifactupload.FileCounts`). */
+  files?: { stored: number; carried: number };
+  op_id: string;
+  outcome: "applied" | "pending" | "unknown";
+  position: LogPosition;
+}
+
+/** One choice of a select, multiselect or status column (`artifacts.Option`). */
+export interface DataOption {
+  id: string;
+  label: string;
+  color?: string;
+  category?: string;
+  archived?: boolean;
+}
+
+/** One declared field of a collection (`artifacts.Column`). */
+export interface DataColumn {
+  key: string;
+  type: ColumnType;
+  label?: string;
+  required?: boolean;
+  primary?: boolean;
+  hidden?: boolean;
+  min?: number;
+  max?: number;
+  max_length?: number;
+  max_items?: number;
+  options?: DataOption[];
+  default?: unknown;
+  write?: ArtifactRole;
+  when?: FieldCondition;
+  assigned_field?: string;
+  mode?: "append";
+  immutable?: boolean;
+  humans_only?: boolean;
+}
+
+/** One named set of documents with its rules (`artifacts.Collection`). */
+export interface DataCollection {
+  name: string;
+  title?: string;
+  preset?: CollectionPreset;
+  read: ReadRule;
+  create: ArtifactRole;
+  delete: ArtifactRole;
+  max_rows?: number;
+  max_rows_per_principal?: number;
+  once_per_principal?: boolean;
+  /** Absent for a schemaless collection under the closed default. */
+  columns?: DataColumn[];
+  indexed?: string[];
+}
+
+/** A store's catalogue row (`artifactdata.StoreInfo`). */
+export interface DataStoreInfo {
+  artifact: string;
+  docs: number;
+  /** `doc_bytes` plus `history_bytes`: what the store's rows cost on every data node. */
+  footprint: number;
+  doc_bytes: number;
+  history_bytes: number;
+  body_bytes: number;
+  field_entries: number;
+  writes: number;
+  digest: string;
+  history_floor: number;
+  tombstones_floor: number;
+  version: number;
+}
+
+/** `artifact_data_schema{id}`: the collections the reader may see, the store, and the reader's role. */
+export interface DataSchemaAnswer {
+  collections: DataCollection[];
+  store: DataStoreInfo;
+  role: ArtifactRole;
+}
+
+/** One document (`artifactdata.Doc`). */
+export interface DataDoc {
+  collection: string;
+  id: string;
+  /** Canonical JSON of the fields, a column's default filled where absent; absent on a tombstone. */
+  fields?: Record<string, unknown>;
+  deleted?: boolean;
+  /** The document's version: the `if_version` a guarded write names. */
+  version: number;
+  created_by: ArtifactActor;
+  created_at: string;
+  updated_by: ArtifactActor;
+  updated_at: string;
+  defaulted?: string[];
+  /** Stored fields the schema no longer admits, shown as a warning. */
+  invalid?: string[];
+}
+
+/** `artifact_data{id, collection, since, cursor, limit}` and `artifact_data_query`: a page of documents. */
+export interface DataDocPage {
+  docs: DataDoc[];
+  after?: string;
+  /** The `since` asked is below what the store still accounts for: read the collection whole. */
+  resync?: boolean;
+  /**
+   * The next catch-up's `since`, adopted once the read's LAST page is in: a
+   * whole read's pages answer the version its first page saw, and a catch-up's
+   * the version every change at or below which it has returned.
+   */
+  through: number;
+  position: LogPosition;
+  complete: boolean;
+}
+
+/** One field's change in a history row (`artifactdata.FieldChange`). */
+export interface DataFieldChange {
+  f: string;
+  b?: unknown;
+  a?: unknown;
+  bh?: string;
+  ah?: string;
+}
+
+/** One document's change in a history row (`artifactdata.Change`). */
+export interface DataChange {
+  c: string;
+  d?: string;
+  /** `create`, `update`, `delete`, `migrate`, `conflict` or `schema`. */
+  op: string;
+  /** The row's creator at this change: a row deleted and created again by somebody else changes hands. */
+  cb?: string;
+  bv?: number;
+  av?: number;
+  f?: DataFieldChange[];
+}
+
+/** One row of a store's history (`artifactdata.HistoryEntry`). */
+export interface DataHistoryEntry {
+  seq: number;
+  op_id: string;
+  /** `write`, `undo`, `configure` or `purge`. */
+  op: string;
+  verdict: DataVerdict;
+  reason?: string;
+  actor: ArtifactActor;
+  origin?: string;
+  work_item?: string;
+  elevated?: boolean;
+  client_id?: string;
+  at: string;
+  changes: DataChange[];
+  undoable?: boolean;
+  undoes?: number;
+  digest: string;
+}
+
+/** `artifact_data_history{id, collection, doc, field, actor, cursor, limit}`. */
+export interface DataHistoryAnswer {
+  entries: DataHistoryEntry[];
+  after?: string;
+  /** The oldest position the hot history still holds. */
+  floor: number;
+  position: LogPosition;
+  complete: boolean;
+}
+
+/** One of the reader's per-viewer state keys (`artifactdata.StateEntry`). */
+export interface DataStateEntry {
+  key: string;
+  value: unknown;
+  version: number;
+}
+
+/** `artifact_data_state{id}`. */
+export interface DataStateAnswer {
+  state: DataStateEntry[];
+}
+
+/** `artifact_data_usage`: the company's datastore footprint against its quota. */
+export interface DataUsageAnswer {
+  usage: {
+    stores: number;
+    docs: number;
+    footprint: number;
+    position: LogPosition;
+    complete: boolean;
+  };
+  data_bytes: number;
+  data_store_bytes: number;
+}
+
+/** One op of a datastore write (`artifacts.DataOp`). */
+export interface DataOp {
+  op: DataOpKind;
+  collection: string;
+  doc: string;
+  if_version?: number;
+  fields?: Record<string, unknown>;
+  field?: string;
+  value?: unknown;
+}
+
+/** A datastore write's answer, success or the applier's refusal (`artifactdataapi.answer`). */
+export interface DataWriteAnswer {
+  op_id: string;
+  position?: LogPosition;
+  /** How the write ended: the applier's verdict, or `pending` while the node that took it has not applied it. */
+  verdict: DataVerdict | "pending";
+  /** The write's place in the store's history: what an undo names. */
+  seq?: number;
+  detail?: string;
+  /** The current documents, on a `conflict`. */
+  conflict?: DataDoc[];
+}
+
+/** Where in an artifact a member is looking (`artifacts.Focus`). */
+export interface PresenceFocus {
+  version?: number;
+  region?: string;
+  collection?: string;
+  doc?: string;
+  field?: string;
+}
+
+/** One open viewer of one artifact (`artifacts.PresenceMember`). */
+export interface ArtifactPresenceMember {
+  session: string;
+  /** The seat handle, which the dashboard resolves to a name, or the login of one acting under no seat. */
+  seat: string;
+  kind: string;
+  activity: PresenceActivity;
+  focus: PresenceFocus;
+  at: string;
+  /** For an agent, the run of the turn whose tool call last put it in the room. */
+  turn?: string;
+}
+
+/** Who is in one artifact's room (`artifacts.PresenceRoster`). */
+export interface ArtifactPresenceRoster {
+  artifact: string;
+  members: ArtifactPresenceMember[] | null;
+  counts?: { human: number; agent: number };
+  truncated?: boolean;
+}
+
+/** An `artifact_join`'s answer (`stream.ArtifactJoined`). */
+export interface ArtifactJoined {
+  artifact: string;
+  session: string;
+  role: ArtifactRole;
+  roster: ArtifactPresenceRoster;
+  through: number;
+  resync: boolean;
+}
+
+/** An `artifact_changed` push (`stream.ArtifactChange`): a hint, never content. */
+export interface ArtifactChangedPush {
+  artifact: string;
+  /** `version`, `meta`, `share`, `asset`, `trash`, `restore`, `purge`, `transfer` or `reset`. */
+  what: string;
+  head?: number;
+  position: LogPosition;
+}
+
+/** One changed document, inline in an `artifact_data` push (`artifactdata.DocDelta`). */
+export interface DataDocDelta {
+  collection: string;
+  doc: string;
+  version: number;
+  deleted?: boolean;
+  body?: Record<string, unknown>;
+  read: ReadRule;
+  created_by: string;
+  updated_by: ArtifactActor;
+  updated_at: string;
+}
+
+/** An `artifact_data` push, as this reader may see it (`stream.ArtifactData`). */
+export interface ArtifactDataPush {
+  artifact: string;
+  deltas?: DataDocDelta[];
+  /** The changed documents named and not carried, with `reread`. */
+  keys?: { collection: string; doc: string; version: number; deleted?: boolean }[];
+  reread?: boolean;
+  schema?: boolean;
+  resync?: boolean;
+  gone?: boolean;
+  through?: number;
+}
+
+/** An `artifact_presence` push (`presence.Change`). */
+export interface ArtifactPresencePush {
+  artifact: string;
+  upsert: ArtifactPresenceMember[] | null;
+  leave: string[] | null;
+  counts?: { human: number; agent: number };
+  truncated: boolean;
+}
+
 export interface QueryMap {
   viewer: Viewer;
   work_inbox: WorkInboxAnswer;
@@ -4515,7 +6130,6 @@ export interface QueryMap {
   seat_activity: SeatActivityAnswer;
   fleet: FleetAnswer;
   fleet_broker: FleetBrokerAnswer;
-  access: AccessAnswer;
   mcp_servers_status: McpServersStatusAnswer;
   credential_pool: CredentialPoolAnswer;
   backups: BackupsAnswer;
@@ -4526,6 +6140,8 @@ export interface QueryMap {
   sandbox_runs: { runs: SandboxRun[] };
   sandbox_tail: SandboxTailAnswer;
   retention: RetentionReport;
+  sign_in_policy: SignInPolicyAnswer;
+  limits: LimitsAnswer;
   work_items: WorkItemsAnswer;
   work_item: WorkItemDetail;
   work_comments: WorkCommentsAnswer;
@@ -4560,6 +6176,23 @@ export interface QueryMap {
   config_audit: RevisionMeta[];
   config_diff: ConfigDiff;
   config_entities: { kind: string; ids?: string[]; id?: string; entity?: unknown };
+  artifacts: ArtifactListAnswer;
+  artifact: ArtifactDetail;
+  artifact_versions: ArtifactVersionsAnswer;
+  artifact_version: ArtifactVersion;
+  artifact_history: ArtifactHistoryAnswer;
+  artifact_assets: ArtifactAssetsAnswer;
+  artifact_seen_by: ArtifactSeenByAnswer;
+  artifact_access: ArtifactAccessAnswer;
+  artifact_usage: ArtifactUsageAnswer;
+  artifact_trail: ArtifactTrailAnswer;
+  artifact_data: DataDocPage;
+  artifact_data_doc: DataDoc;
+  artifact_data_query: DataDocPage;
+  artifact_data_history: DataHistoryAnswer;
+  artifact_data_schema: DataSchemaAnswer;
+  artifact_data_state: DataStateAnswer;
+  artifact_data_usage: DataUsageAnswer;
 }
 
 export type QueryName = keyof QueryMap;

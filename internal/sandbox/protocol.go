@@ -58,6 +58,23 @@
 // claim stamps the CLAIMANT's lease on the row ([PendingStore.ClaimForResume])
 // and every launch the lease that launched it ([CoordinatorOptions.Lease]).
 //
+// EVERY SUBJECT A RUN IS REACHED ON IS NAMED BY THE ROW'S SEAT ID — its
+// completion and start on the seat's control subject, an answer by turn and a
+// reply handed back on its inbox — through one parse of the id the row carries
+// as text ([controlSubject], [inboxSubject]), because a seat's mailbox is named
+// by its id, derived from its immutable handle (ADR-0013). The handle the row
+// carries beside it is a label and this node's bookkeeping key, never an
+// address: the coordinator's per-seat counts, holds and retries are keyed by it,
+// and whatever maps one of them onto a lease or a mailbox maps the handle to
+// the id first. An answer by turn is stamped with that same id
+// ([AnswerDesk.Deliver]) and dropped by any seat whose run does not carry it
+// ([Coordinator.AnswerByTurn]).
+//
+// WHO ANSWERED is recorded as iam.ActorFor makes it of a principal — the
+// author, its kind and the credential it came through ([RecordedAnswer.By]) —
+// on the row and on every announcement of what became of the answer, never as a
+// seat beside an actor.
+//
 // See docs/concepts/code-sandbox.md.
 package sandbox
 
@@ -69,6 +86,7 @@ import (
 	"io"
 	"strconv"
 
+	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -91,7 +109,13 @@ var log = logging.Get("sandbox")
 // than a constant, which it was for as long as a remote VM was the only
 // backend: many local boxes share one filesystem, and a shared home would have
 // every run reading its neighbour's done marker.
-const DefaultHome = "/home/user"
+//
+// It is [hostbox.ContainerHome], declared there beside [hostbox.InHome],
+// which judges a container box's paths against it — for both local boxes and
+// for config validation, all of which already import that leaf package: the
+// remote templates' one account has it as its home, and a container box
+// mounts its own there so a path reads the same in both.
+const DefaultHome = hostbox.ContainerHome
 
 // ExecResult is one shell command's outcome inside a box.
 type ExecResult struct {
@@ -176,8 +200,10 @@ type Spec struct {
 	// box home mapped to an absolute path on the ENGINE HOST.
 	//
 	// Each provider decides what to do with it, and they decide differently
-	// on purpose. A local box seeds the files in and writes a refreshed one
-	// back; a REMOTE one ignores them, because they carry a refresh token
+	// on purpose. A local box seeds the files in and writes one its run
+	// refreshed back — only over the very login it was seeded from, so an
+	// idle box or a stale refresh never reverts a newer one; a REMOTE one
+	// ignores them, because they carry a refresh token
 	// whose rotation is shared fleet state, and pushing that onto somebody
 	// else's VM is a materially larger trust step than the scoped headless
 	// token the run env already exports.
@@ -194,21 +220,38 @@ type Spec struct {
 // bypassing both. An agent that reads its credentials from the environment
 // ignores it.
 //
+// TWO KINDS OF ENTRY, and they name a model in different grammars. An API
+// entry's Model is a vendor's model id and ProviderType names that vendor's
+// wire, so a runner may address it in its own grammar. A cli-agent entry's
+// Model is written in the grammar of the CLI that entry drives — OpenCode
+// reads `<provider>/<model>`, Claude Code an alias or an id — and CLI names
+// that CLI: such a model reaches a runner VERBATIM, and only a runner driving
+// that same CLI can read it, which is why the engine refuses a run pairing a
+// cli-agent entry with another CLI's runner rather than letting a runner
+// rebuild an id it cannot know.
+//
 // THE API KEY IS NOT HERE. It rides the run env, and a written config
 // references it by variable name, so the secret is never duplicated into a
 // config file inside the box.
 type AgentLLM struct {
+	// Model is the model the run works under: an API entry's resolved model
+	// id, or a cli-agent entry's model exactly as its text calls hand it to
+	// its CLI.
 	Model string
 
-	// ProviderType is the model FAMILY to address. For an API entry that is
-	// the providers.llm type, which already names the family; for a
-	// subscription entry every provider shares one type, so it carries the
-	// CLI profile's VENDOR instead — otherwise a Claude subscription's
-	// "sonnet" would be addressed as "openai/sonnet".
+	// CLI is the cli-agent profile a cli-agent entry drives (claude-code,
+	// opencode, …), and empty for an API entry.
+	CLI string
+
+	// ProviderType is an API entry's providers.llm type (anthropic,
+	// openai, openai-compatible): the wire its model is served on. Empty
+	// for a cli-agent entry, whose provider is named by its Model in its
+	// CLI's own grammar rather than by a family the engine could know.
 	ProviderType string
 
 	// BaseURL is the endpoint. Empty means the vendor default, and so no
-	// custom provider declaration at all.
+	// custom provider declaration at all. Always empty for a cli-agent
+	// entry, which talks to its vendor.
 	BaseURL string
 }
 
@@ -387,8 +430,8 @@ type Sandbox interface {
 	OpenFile(ctx context.Context, path string) (io.ReadCloser, error)
 
 	// ReadTail reads at most n bytes from the END of a file, with the
-	// file's whole size — for a question about a stream's end: has the job
-	// printed its terminal event, what is it doing now, what did it say last
+	// file's whole size — for a question about a stream's end: what is the
+	// job doing now, how far has its stream grown, what did it say last
 	// before it failed. A whole read answers each of those at the cost of
 	// the whole stream, every poll, for as long as the run lasts. Empty on
 	// missing, as the others are.

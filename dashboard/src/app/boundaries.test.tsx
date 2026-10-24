@@ -98,7 +98,7 @@ afterEach(async () => {
 describe("a screen that throws", () => {
   test("leaves the sidebar and ⌘K working", async () => {
     breakExport("spend", "Spend", Throws);
-    location.hash = "#/spend";
+    location.hash = "#/settings/spend";
     await mount();
     const alert = await screen.findByText("This screen could not be drawn");
     expect(alert).toBeDefined();
@@ -113,19 +113,19 @@ describe("a screen that throws", () => {
 
   test("is drawn afresh when the reader goes somewhere else", async () => {
     breakExport("spend", "Spend", Throws);
-    location.hash = "#/spend";
+    location.hash = "#/settings/spend";
     await mount();
     await screen.findByText("This screen could not be drawn");
-    await go("#/spend/budgets");
+    await go("#/company/budgets");
     await waitFor(() => expect(screen.queryByText("This screen could not be drawn")).toBeNull());
   });
 
   test("but not by a query string alone, which is the same screen", async () => {
     breakExport("spend", "Spend", Throws);
-    location.hash = "#/spend";
+    location.hash = "#/settings/spend";
     await mount();
     await screen.findByText("This screen could not be drawn");
-    await go("#/spend?range=7d");
+    await go("#/settings/spend?range=7d");
     expect(screen.getByText("This screen could not be drawn")).toBeDefined();
   });
 });
@@ -139,12 +139,14 @@ describe("a chunk that never arrives", () => {
         return { ...(await import("~/routes/spend/index.ts")), Spend: () => <p>spend, loaded</p> };
       }),
     );
-    location.hash = "#/spend";
+    location.hash = "#/settings/spend";
     await mount();
-    expect(await screen.findByText("The Spend screens could not be loaded")).toBeDefined();
+    expect(
+      await screen.findByText("The Spend and Budgets screens could not be loaded"),
+    ).toBeDefined();
     // NOT the render failure's sentence: a reload fixes this, a report does not.
     expect(screen.queryByText("This screen could not be drawn")).toBeNull();
-    expect(screen.getByText(/from another engine version/)).toBeDefined();
+    expect(screen.getByText(/The engine was updated/)).toBeDefined();
     expect(screen.getByRole("button", { name: "Reload" })).toBeDefined();
     fail = false;
     await act(async () => {
@@ -157,7 +159,7 @@ describe("a chunk that never arrives", () => {
 describe("a peek that throws", () => {
   test("takes its body down and leaves the rail's close and the screen behind", async () => {
     breakExport("work", "ItemPeek", Throws);
-    location.hash = `#/spend?peek=${refToken({ kind: "item", id: "ENG-42" })}`;
+    location.hash = `#/settings/spend?peek=${refToken({ kind: "item", id: "ENG-42" })}`;
     await mount();
     expect(await screen.findByText("This preview could not be drawn")).toBeDefined();
     // The rail around the body stands, with its way out…
@@ -171,27 +173,41 @@ describe("a peek that throws", () => {
 });
 
 describe("a sidebar section that throws", () => {
-  // A project whose name arrived as an object is a React child React refuses —
-  // the same shape of failure as the per-phase model mapping.
+  // A pinned view whose name arrived as an object is a React child React
+  // refuses: the same shape of failure as the per-phase model mapping.
   test("costs its own list and never the navigation above it", async () => {
-    // ON A SCREEN THAT DOES NOT READ THE PROJECTS ITSELF: Home draws a
-    // projects card from the same answer, and its own boundary is the
-    // screen's, which is the case below this one.
     location.hash = "#/live";
     await mount({
-      work_projects: {
-        projects: [
+      // A READER WITH A RECORD AND TRACKER: the pinned views are theirs, read
+      // under the owner their record is kept by, and the tracker's question.
+      viewer: {
+        login: "ada",
+        grants: ["tracker"],
+        handle: "ada",
+        owner: "ada",
+        name: "Ada",
+        kind: "human",
+        acts: [],
+        config_writer: false,
+        config_managed_by: [],
+      },
+      work_saved_views: {
+        complete: true,
+        views: [
           {
-            key: "ENG",
-            name: { en: "Engineering" },
-            task_counts: { todo: 1, active: 0, done: 0, closed: 0 },
+            id: "v-1",
+            key: "blocked",
+            name: { en: "Blocked" },
+            type: "list",
+            container: { kind: "workspace", id: "" },
+            builtin: false,
+            pinned: true,
           },
         ],
-        complete: true,
       },
     });
     const failed = await screen.findByText("Could not be drawn.");
-    expect(failed.closest('[role="group"]')?.textContent).toContain("Projects");
+    expect(failed.closest('[role="group"]')?.textContent).toContain("Pinned");
     const nav = screen.getByRole("navigation", { name: "Navigation" });
     expect(nav.querySelector('a[href="#/inbox"]')).not.toBeNull();
     // And the screen is untouched.
@@ -226,7 +242,7 @@ describe("a layer's boundary", () => {
       </LayerBoundary>,
     );
     const dialog = screen.getByRole("dialog", { name: "New task could not be drawn" });
-    expect(dialog.textContent).toContain("reload it to get the current one");
+    expect(dialog.textContent).toContain("Reload to continue");
     expect(screen.getByRole("button", { name: "Reload" })).toBeTruthy();
   });
 });

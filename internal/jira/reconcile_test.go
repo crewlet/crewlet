@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/atlassianhost"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
@@ -333,7 +334,7 @@ func company() *org.Organization {
 func run(t *testing.T, inst *instance, mutate func(*jira.Options)) (*jira.Result, error) {
 	t.Helper()
 	client, err := jira.NewClient(jira.ClientOptions{
-		URL: inst.URL, Token: "org-token", Deployment: jira.DataCenter,
+		URL: inst.URL, Token: "org-token", Declared: atlassianhost.DataCenter,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -780,7 +781,7 @@ func TestCloudRegistersItsOwnWebhook(t *testing.T) {
 	inst.accounts["Bearer org-token"] = "acct-org"
 
 	client, err := jira.NewClient(jira.ClientOptions{
-		URL: inst.URL, Token: "org-token", Deployment: jira.Cloud,
+		URL: inst.URL, Token: "org-token", Declared: atlassianhost.Cloud,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1094,7 +1095,7 @@ func TestFindingsReportAProjectTheInstanceDoesNotHave(t *testing.T) {
 		// defines it as an access tier the company names and the vendor
 		// does not have, and whose fallback sentence says exactly that —
 		// on a finding about a project key.
-		if f.Kind == integration.FindingIngressBlocked && f.Subject != "integrations.public_base_url" {
+		if f.Kind == integration.FindingIngressBlocked && f.Subject != "api.external_url" {
 			found = true
 			if f.Subject == "" {
 				t.Errorf("a missing project finding names no project: %+v", f)
@@ -1171,7 +1172,7 @@ func TestAProjectReadThatBrokeIsNotACredentialRefusal(t *testing.T) {
 // The pass registers no hook, which used to be silence — on the reasoning
 // that the public base "is not on the integrations block" and ingress belonged
 // to the subcommand that had it. It IS on the block, as
-// integrations.public_base_url, and the reconcile loop feeds it into every
+// api.external_url, and the reconcile loop feeds it into every
 // pass, so the silence meant a company that never set it saw Jira reported
 // Ready while the instance had no address to send anything to.
 func TestADataCenterInstanceWithNoPublicBaseReportsIngressBlocked(t *testing.T) {
@@ -1195,7 +1196,7 @@ func TestADataCenterInstanceWithNoPublicBaseReportsIngressBlocked(t *testing.T) 
 	for _, f := range res.Findings() {
 		if f.Kind == integration.FindingIngressBlocked {
 			found = true
-			if f.Subject != "integrations.public_base_url" {
+			if f.Subject != "api.external_url" {
 				t.Errorf("the finding names %q rather than the field to set",
 					f.Subject)
 			}
@@ -1204,6 +1205,42 @@ func TestADataCenterInstanceWithNoPublicBaseReportsIngressBlocked(t *testing.T) 
 	if !found {
 		t.Fatalf("an instance with no address to deliver to reported no ingress "+
 			"problem: %+v", res.Findings())
+	}
+}
+
+// BEHIND A PUBLIC LISTENER THE FINDING NAMES THE PUBLIC LISTENER'S KEY, and
+// so does its sentence: `api.external_url` there is the person's address, set,
+// and answering 404 for the webhook route a Jira hook would be pointed at.
+func TestBehindAPublicListenerTheMissingAddressNamesItsKey(t *testing.T) {
+	t.Parallel()
+	inst := newInstance(t)
+	inst.accounts["Bearer org-token"] = "acct-org"
+	inst.accounts["Bearer lead-token"] = acctLead
+	inst.accounts["Bearer swe-token"] = "acct-swe"
+	inst.accounts["Bearer qa-token"] = "acct-qa"
+	inst.projects["ENG"] = "Engineering"
+	inst.projects["QA"] = "Quality"
+
+	const key = "api.public.external_url"
+	res, err := run(t, inst, func(o *jira.Options) { o.WebhookBaseKey = key })
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, f := range res.Findings() {
+		if f.Kind != integration.FindingIngressBlocked {
+			continue
+		}
+		found = true
+		if f.Subject != key {
+			t.Errorf("the finding names %q, want %q", f.Subject, key)
+		}
+		if !strings.HasPrefix(f.Detail, key+" is unset") {
+			t.Errorf("the sentence names another setting: %q", f.Detail)
+		}
+	}
+	if !found {
+		t.Fatalf("no ingress finding: %+v", res.Findings())
 	}
 }
 
@@ -1224,7 +1261,7 @@ func TestACloudCompanySaysNothingAboutIngress(t *testing.T) {
 
 	res, err := run(t, inst, func(o *jira.Options) {
 		client, err := jira.NewClient(jira.ClientOptions{
-			URL: inst.URL, Token: "org-token", Deployment: jira.Cloud,
+			URL: inst.URL, Token: "org-token", Declared: atlassianhost.Cloud,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -1424,11 +1461,11 @@ func TestASeatRefusedOutsideTheGrantWindowIsStillAFailure(t *testing.T) {
 // as a wait nobody should act on, which is the state this whole distinction
 // exists to leave.
 //
-// BOTH SHAPES OF "CANNOT SAY", because they arrive by different routes and
-// only one of them is a node with no keyring: a seat this engine does not
-// provision — its credential was pasted in by a person — has no grant of ours
-// to be waiting on, and the seam answers false for it while answering for
-// every other seat.
+// BOTH SHAPES OF "CANNOT SAY", because they arrive by different routes:
+// nothing wired to answer at all, and a seat this engine does not provision —
+// its credential was pasted in by a person — which has no grant of ours to be
+// waiting on, so the seam answers false for it while answering for every
+// other seat.
 func TestASeatRefusedWithNoSealTimeIsStillAFailure(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

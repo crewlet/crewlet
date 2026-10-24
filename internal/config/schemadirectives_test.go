@@ -35,6 +35,12 @@ func TestEveryDirectiveMeansWhatItSays(t *testing.T) {
 	if problems := directiveProblems("pattern=^[a-z]+$;pointer"); len(problems) != 0 {
 		t.Fatalf("control: a pointer beside a pattern was refused: %v", problems)
 	}
+	if problems := directiveProblems("pattern=^[a-z]+$;maxlen=58"); len(problems) != 0 {
+		t.Fatalf("control: a length bound beside a pattern was refused: %v", problems)
+	}
+	if problems := directiveProblems("maxlen=fifty"); len(problems) == 0 {
+		t.Fatal("control: a length bound that is not a number was accepted")
+	}
 
 	seen := map[reflect.Type]bool{}
 	var walk func(reflect.Type, string)
@@ -141,6 +147,12 @@ func directiveProblems(tag string) []string {
 		case "min", "max":
 			if _, err := strconv.ParseFloat(value, 64); err != nil {
 				out = append(out, key+" is not a number: "+strconv.Quote(value))
+			}
+		case "maxlen":
+			// A LENGTH, so a whole number and a positive one: a bound the
+			// generator cannot read as one is dropped from the artifact.
+			if n, err := strconv.Atoi(value); err != nil || n < 1 {
+				out = append(out, "maxlen is not a positive whole number: "+strconv.Quote(value))
 			}
 		case "enum":
 			if value == "" || strings.Contains(value, ",") {

@@ -105,8 +105,9 @@ type FeedQuery struct {
 	// Kinds narrows to these; empty is all three.
 	Kinds []FeedKind
 
-	// Actor narrows to one writer: the handle a commit was made under, or
-	// the person a bound token's commit was made for.
+	// Actor narrows to one writer: the name a commit was made under — a
+	// seat (a person bound to one writes AS it, see iam.ActorFor), or the
+	// login of somebody bound to none.
 	Actor string
 
 	// Before resumes a scroll; nil is the newest page.
@@ -138,12 +139,15 @@ type FeedRow struct {
 	Actor  string     `json:"actor,omitempty"`
 	ActorK AuthorKind `json:"actor_kind,omitempty"`
 
-	// ActorSeat is the person a bound token's commit was made for — see
-	// [ActivityRecord.ActorSeat].
-	ActorSeat string `json:"actor_seat,omitempty"`
+	Task string `json:"task"`
+	Key  string `json:"key,omitempty"`
 
-	Task    string `json:"task"`
-	Key     string `json:"key,omitempty"`
+	// KeyCollision says [FeedRow.Key] does not open [FeedRow.Task]: the key
+	// directory names another task for it, so a link built from the key
+	// reaches THAT task and this row's is reached by its id. See
+	// [ItemAddress].
+	KeyCollision bool `json:"key_collision,omitempty"`
+
 	Title   string `json:"title,omitempty"`
 	Project string `json:"project,omitempty"`
 
@@ -264,16 +268,19 @@ func readCompanyFeed(ctx context.Context, tx *sql.Tx, q FeedQuery,
 			reassignments           sql.NullInt64
 			document                []byte
 			tokens, turns, sentBack sql.NullInt64
+			collision               int
 		)
 		if err = rows.Scan(&row.ID, &row.Task, &kind, &fields, &effective, &seq,
-			&row.Actor, &actorKind, &row.ActorSeat, &reassignments, &document,
-			&row.Key, &row.Title, &row.Project, &tokens, &turns, &sentBack); err != nil {
+			&row.Actor, &actorKind, &reassignments, &document,
+			&row.Key, &collision, &row.Title, &row.Project, &tokens,
+			&turns, &sentBack); err != nil {
 			return fmt.Errorf("tracker: scan a company-feed row: %w", err)
 		}
 		row.ActorK = AuthorKind(actorKind)
+		row.KeyCollision = collision == 1
 		row.At = store.DecodeTime(effective)
 		row.Cursor = FeedCursor{At: row.At, Seq: seq}.String()
-		moved := deltasOf(fields)
+		moved := historyDeltas(fields)
 		row.Kind = classifyFeedRow(ChangeKind(kind), moved, kinds)
 		switch row.Kind {
 		case FeedCreated:
@@ -322,14 +329,17 @@ func companyFeedStatement(q FeedQuery, kinds []FeedKind) (string, []any) {
 		args = append(args, at, at, q.Before.Seq)
 	}
 	if actor := strings.TrimSpace(q.Actor); actor != "" {
-		where += " AND (h.actor = ? OR h.actor_seat = ?)"
-		args = append(args, actor, actor)
+		where += " AND h.actor = ?"
+		args = append(args, actor)
 	}
 	args = append(args, q.Limit+1)
 	return `
 		SELECT h.id, h.subject_id, h.kind, h.fields_json, h.effective_at, h.log_seq,
-		       h.actor, h.actor_kind, h.actor_seat, h.reassignments, h.document,
-		       COALESCE(t.key, d.task_key, ''), COALESCE(t.title, ''),
+		       h.actor, h.actor_kind, h.reassignments, h.document,
+		       COALESCE(t.key, d.task_key, ''),
+		       COALESCE(t.key_collision,
+		                ` + keyOpensAnother("d.task_key", "h.subject_id") + `, 0),
+		       COALESCE(t.title, ''),
 		       COALESCE(t.project_key, d.project_key, h.project_key),
 		       t.spend_tokens, t.spend_turns, t.spend_sent_back
 		FROM tracker_history h

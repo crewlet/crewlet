@@ -61,17 +61,22 @@ type State struct {
 	// Messages is the conversation as it stood, ending with the assistant
 	// turn whose run_sandbox tool call is still unanswered.
 	//
-	// An assistant turn carries the vendor's own content blocks and the
-	// backend that wrote them ([llm.Message.Raw], [llm.Message.Origin]),
-	// which the resumed loop replays unchanged: a model that preserves its
-	// thinking refuses a conversation whose earlier turns come back
-	// different. A turn with none — one another backend wrote — is rebuilt
-	// from the neutral view without its thinking.
+	// An assistant turn carries what the response held in the vendor's own
+	// shape and the backend that wrote it ([llm.Message.Raw],
+	// [llm.Message.Origin]), which the resumed loop hands back unchanged:
+	// Anthropic's content blocks, which a model that preserves its thinking
+	// refuses to see come back different, and an OpenAI-wire host's own
+	// reasoning fields, which Kimi K3 is trained to read on every earlier
+	// turn and DeepSeek and Gemini 3 refuse a tool loop without. A turn
+	// with none — one another backend wrote — is rebuilt from the neutral
+	// view without its reasoning.
 	//
-	// Each such turn also carries what its request's thinking was bound to
-	// ([llm.Message.Binding]), because a resume renders the tools again
-	// from the registry it wakes up against and the backend sheds the
-	// reasoning written under any other set.
+	// Each such turn also carries what its reasoning is bound to
+	// ([llm.Message.Binding]): for Anthropic the tools its request carried,
+	// because a resume renders them again from the registry it wakes up
+	// against and the backend sheds the reasoning written under any other
+	// set; for the OpenAI wire format the endpoint that wrote it, because a
+	// resume may reach another host through a configuration that moved.
 	Messages []llm.Message `json:"messages"`
 
 	// PendingCallID and PendingCallName identify the dangling call the
@@ -163,6 +168,26 @@ type State struct {
 	// Nil when nothing is owed: the half before the park was charged to the
 	// item its dispatch named.
 	Uncharged *Uncharged `json:"uncharged,omitempty"`
+
+	// SoFar is what the turn's segments before this one MEASURED — their
+	// spans and their reviews — for the record that ENDS the turn to state
+	// the whole of it ([types.TurnCompleted.Turn]).
+	//
+	// HERE for the reason Written is: the segment that ends a turn is often
+	// in another process, and the turn's earlier records are in the event
+	// log of whichever node the earlier segments ran on — or of whichever
+	// data node kept their custody batch. Summed from those records, every
+	// node counted the turn from the part it held. Carried on every park,
+	// charged or not, since it is a measurement rather than a charge — a
+	// zero one as `{}`, never omitted.
+	//
+	// NIL ON A RESUMED TURN MEANS ITS PAST IS UNMEASURED: the park was made
+	// by a build before this field, so what the segments before it ran is
+	// unknown rather than zero. The resumed turn then hands none on at a
+	// park of its own and its ending record states no tally
+	// ([types.TurnCompleted.Turn]), which the usage reader sums from the
+	// turn's records instead.
+	SoFar *TurnSoFar `json:"so_far,omitempty"`
 
 	// ElapsedMS is how long this phase had already been running when it
 	// suspended, so the resumed half reports the WHOLE phase rather than the
@@ -261,6 +286,21 @@ type Uncharged struct {
 	WallMs     int `json:"wall_ms,omitempty"`
 	Workers    int `json:"workers,omitempty"`
 	SentBack   int `json:"sent_back,omitempty"`
+}
+
+// TurnSoFar is a turn's own measurement carried across a park, in the terms
+// the record that ends it states (types.TurnTally, which it mirrors but for
+// whether the turn failed — a parked turn has not ended either way).
+type TurnSoFar struct {
+	// DurationMS is the earlier segments' spans summed, each from its start
+	// to its end.
+	DurationMS int `json:"duration_ms,omitempty"`
+	// Reviews, SentBack and Unaccepted are the review phases the earlier
+	// segments completed, those that sent the work back, and those that
+	// decided anything but done.
+	Reviews    int `json:"reviews,omitempty"`
+	SentBack   int `json:"sent_back,omitempty"`
+	Unaccepted int `json:"unaccepted,omitempty"`
 }
 
 // ErrUnknownVersion reports a state this build cannot read.

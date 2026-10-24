@@ -84,14 +84,23 @@ func (e *Engine) workerDuty(name string, ttl time.Duration) schedule.DutyFunc {
 // while a hold wraps one piece of work and is released when that work ends —
 // keeping it afterwards is indistinguishable from an outage to every other
 // caller. See [schedule.HoldNamedDuty].
+//
+// UNDER THIS PROCESS'S INCARNATION rather than the node's lease owner, because
+// a hold may be taken before the node exists: the identity estate runs from
+// boot, company or none, and mints the company's blind-index key on its first
+// use there, and a hold that needed the node answered nil — the single-node
+// answer — on every member of a fleet booting at once, which is precisely when
+// two of them mint.
 func (e *Engine) workerHold(name string, ttl time.Duration) schedule.HoldFunc {
 	// No lease store is [schedule.HoldNamedDuty]'s own nil branch, asked
-	// here because the store it is handed below is never nil.
-	if e.backends == nil || e.backends.Coord == nil || e.node == nil {
+	// here because the store it is handed below is never nil. The node is
+	// not asked for: a hold taken before it exists is the case above, and
+	// [Engine.stepOnceTornDown] needs nothing the node would have built.
+	if e.backends == nil || e.backends.Coord == nil {
 		return nil
 	}
 	return schedule.HoldNamedDuty(holdLeases{Backend: e.backends.Coord, engine: e}, name,
-		e.node.Owner(), e.node.ID(), ttl)
+		e.incarnation, e.id, ttl)
 }
 
 // holdLeases is the lease store this node's holds are taken through: its own,

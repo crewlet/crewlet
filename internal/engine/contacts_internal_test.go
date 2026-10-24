@@ -37,8 +37,9 @@ name: Acme
 roles:
   - name: CEO
     handle: ceo
-    manages: [Founder]
+    manages: [founder]
   - name: Founder
+    handle: founder
     kind: human
     contact:
       slack_user_id: ${` + variable + `}
@@ -123,19 +124,17 @@ func (s *promptRecorder) first() string {
 }
 
 // THE ENGINE'S OWN CHART SEAMS FIND A PERSON THROUGH THIS NODE'S CHAIN. A
-// person's contact ids and their binding may each be a `${VAR}`, and the two
-// here are set in no process — only in the environment the engine was handed
-// — so a seam that read the process environment instead finds nobody, while
-// notification routing, which resolves through the chain, goes on mentioning
-// the person it could not find. One engine, because what each subtest holds is
-// a different seam over the same chart.
+// person's contact ids may each be a `${VAR}`, and the one here is set in no
+// process — only in the environment the engine was handed — so a seam that
+// read the process environment instead finds nobody, while notification
+// routing, which resolves through the chain, goes on mentioning the person it
+// could not find. One engine, because what each subtest holds is a different
+// seam over the same chart.
 func TestTheEnginesChartSeamsResolveThroughItsOwnChain(t *testing.T) {
 	t.Parallel()
-	const bound, slack = "CREWLET_ENGINE_TEST_BOUND_FOUNDER", "CREWLET_ENGINE_TEST_FOUNDER_SLACK"
-	for _, variable := range []string{bound, slack} {
-		if _, set := os.LookupEnv(variable); set {
-			t.Fatalf("the premise: %s is set in no process", variable)
-		}
+	const slack = "CREWLET_ENGINE_TEST_FOUNDER_SLACK"
+	if _, set := os.LookupEnv(slack); set {
+		t.Fatalf("the premise: %s is set in no process", slack)
 	}
 	cfg, err := config.ParseCompany([]byte(`
 name: Acme
@@ -150,45 +149,25 @@ roles:
     handle: ceo
     llm: zulu
   - name: Founder
+    handle: founder
     kind: human
     contact:
-      crewlet_operator_id: ${` + bound + `}
       slack_user_id: ${` + slack + `}
 `))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	SeedStore(t, &b)
 	e, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg,
-		Environment: config.MapSource{bound: "founder-token", slack: "U0HANDED"}})
+		Environment: config.MapSource{slack: "U0HANDED"}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { e.Stop(context.Background()) })
 	deps := e.workDeps(e.Company())
-
-	// A SEAT READING A PERSON READS THEM UNDER BOTH OF THEIR NAMES. A change
-	// filed by somebody through the dashboard concerns them under the
-	// credential their seat binds, and the applier writes that person's notice
-	// under it — so a seat's get_person or work_inbox about them, the handle
-	// alone, never saw it. The seat surface answers the party as the operator
-	// surface does.
-	t.Run("a_seat_reads_a_person_under_both_of_their_names", func(t *testing.T) {
-		t.Parallel()
-		if deps.Reader == nil {
-			t.Fatal("the node has no native tracker, so this case shows nothing")
-		}
-		if deps.Party == nil {
-			t.Fatal("a seat's work tools read a person under their handle alone")
-		}
-		if got := deps.Party("founder"); got.Handle != "founder" || got.OperatorID != "founder-token" {
-			t.Errorf("the founder's party is %+v, want the seat and the credential the "+
-				"handed environment binds to it", got)
-		}
-	})
 
 	// THE WORK TOOLS' ROSTER, which a handle a seat typed is checked against,
 	// holds the person by the id the handed environment gives them.

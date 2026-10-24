@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -23,8 +25,11 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// Errors this backend reports. Callers branch on these; everything else is
-// wrapped transport failure.
+// Errors this backend reports. Callers branch on these, or on the contract's
+// sentinels they wrap. A transport failure the broker's silence or a dropped
+// connection caused is wrapped in queue.ErrUnavailable and one NATS closed
+// for good in [ErrConnectionLost] — see [Queue.brokerFailed]; every other is
+// the client's error, wrapped and unmarked.
 var (
 	// ErrSubject means a subject belongs to no stream — a publish that
 	// would land where nobody consumes.
@@ -243,6 +248,11 @@ type Config struct {
 	// trust for the server's certificate, and which certificate to
 	// present when the server requires one. See [TLS].
 	TLS TLS
+
+	// start is how long an embedded server's start may spend on its
+	// listeners and how often it reports a long one; zero is production.
+	// Set by this package's own tests and nothing else — see [startTiming].
+	start startTiming
 }
 
 // TLS is the transport material for an external NATS server.
@@ -291,6 +301,11 @@ type Queue struct {
 	nc         *nats.Conn
 	js         jetstream.JetStream
 
+	// lost is where this queue's own connection, and every second one
+	// dialled through [Queue.DialWatched], records being closed for good.
+	// See [Queue.Lost], and [Queue.AcksLost] for the queue's own alone.
+	lost *connectionLoss
+
 	// attachments holds one entry per (topic, group) this process
 	// consumes, keyed by the PAIR. Keying by topic alone breaks twice
 	// over: a pause hold outlives its attachment so a re-attaching node
@@ -307,6 +322,15 @@ type Queue struct {
 	// inFlight counts handler invocations, which is the number an
 	// operator watches converge to zero during a drain.
 	inFlight queue.Inflight
+
+	// consumerProposals counts the consumer CREATES and UPDATES this
+	// client has asked the broker for. See [Queue.ConsumerProposals].
+	//
+	// Atomic rather than under mu, because it is written from inside the
+	// retry closures the provisioning helpers drive — which run on the
+	// caller's goroutine but under a context the caller may cancel, and
+	// which must never take the lock the attach path holds.
+	consumerProposals atomic.Int64
 
 	// timing is every duration this client's provisioning calls wait on,
 	// and the ZERO VALUE IS PRODUCTION: [Queue.provisioning] answers
@@ -369,20 +393,30 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 		attachments: map[attachKey][]*attachment{},
 		holds:       map[attachKey]map[string]struct{}{},
 		streams:     map[string]struct{}{},
+		lost:        newConnectionLoss(),
 	}
 
+	// HELD TO THE CONTRACT BEFORE ANYTHING IS PROVISIONED: both dials
+	// refuse a server that holds the connection to less than the largest
+	// message this build sends, so that is a boot refused by name rather
+	// than a node that serves and fails its first large write. See
+	// carriesTheContract.
+	//
+	// THE ONE CONNECTION THAT SETTLES: every consumer this queue attaches
+	// fetches and acknowledges over it, so its close for good is the one
+	// [Queue.AcksLost] reports.
 	var err error
+	own := watched{loss: q.lost, settles: true}
 	if embedded != nil {
-		q.nc, err = embedded.connect()
+		q.nc, err = embedded.connect(own)
 	} else {
-		q.nc, err = dial(cfg)
+		q.nc, err = dial(cfg, own)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("connect nats: %w", err)
 	}
 	if q.js, err = cfg.API().Client(q.nc); err != nil {
-		q.nc.Close()
-		return nil, fmt.Errorf("open jetstream: %w", err)
+		return nil, q.abandonOpen(fmt.Errorf("open jetstream: %w", err))
 	}
 	// A LEAF'S JETSTREAM IS ACROSS ITS LINK, which comes up after the
 	// server reports ready and can take a round of retries against a
@@ -390,8 +424,7 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 	// go waits out its whole budget and then names the stream rather than
 	// the link.
 	if err := embedded.awaitLeafReady(ctx, q.js); err != nil {
-		q.nc.Close()
-		return nil, err
+		return nil, q.abandonOpen(err)
 	}
 	// A clustered member accepts connections long before its metadata
 	// group has a leader, and creating a replicated stream against a
@@ -401,14 +434,26 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 	// the first member of a fresh cluster wait for a quorum that cannot
 	// exist until the peers it is blocking have started.
 	if err := embedded.awaitClusterReady(ctx, q.js, q.cfg.Replicas); err != nil {
-		q.nc.Close()
-		return nil, err
+		return nil, q.abandonOpen(err)
 	}
 	if err := q.ensureStreams(ctx); err != nil {
-		q.nc.Close()
-		return nil, err
+		return nil, q.abandonOpen(err)
 	}
 	return q, nil
+}
+
+// abandonOpen closes the connection of a queue whose open failed after the
+// dial, and answers err as that open says it: carrying the cause where NATS had
+// closed the connection for good under it ([connectionLoss.during]). The one
+// way out once a connection exists, so no step can fail as a bare "connection
+// closed" while the sentence naming why sits on a queue nobody will hold.
+//
+// The cause is read BEFORE the close, for [connectionLoss.settle]'s reason:
+// after it the connection reads as closed whoever closed it.
+func (q *Queue) abandonOpen(err error) error {
+	err = q.lost.during(err)
+	q.nc.Close()
+	return err
 }
 
 // ensureStreams provisions the engine's own streams, under ONE ceiling for
@@ -561,6 +606,7 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 		MaxAge:            spec.maxAge,
 		MaxMsgsPerSubject: int64(spec.maxPerSubject),
 		MaxBytes:          spec.maxBytes,
+		MaxMsgSize:        spec.maxMsgSize,
 		Discard:           spec.discard,
 		Duplicates:        spec.duplicates,
 		DenyDelete:        spec.denyDelete,
@@ -583,6 +629,9 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 	}
 	if spec.maxBytes == 0 {
 		config.MaxBytes = -1
+	}
+	if spec.maxMsgSize == 0 {
+		config.MaxMsgSize = -1
 	}
 	// CREATE IF ABSENT, OBSERVE IF PRESENT.
 	//
@@ -877,6 +926,10 @@ func capacityDifferences(want, got jetstream.StreamConfig) []string {
 		out = append(out, fmt.Sprintf("max_bytes: running %d, this node %d",
 			got.MaxBytes, want.MaxBytes))
 	}
+	if got.MaxMsgSize != want.MaxMsgSize {
+		out = append(out, fmt.Sprintf("max_msg_size: running %d, this node %d",
+			got.MaxMsgSize, want.MaxMsgSize))
+	}
 	if got.Duplicates != want.Duplicates {
 		out = append(out, fmt.Sprintf("duplicates: running %v, this node %v",
 			got.Duplicates, want.Duplicates))
@@ -891,6 +944,14 @@ func capacityDifferences(want, got jetstream.StreamConfig) []string {
 // stays the list of streams the engine itself defines. It is also what lets a
 // test stand up a throwaway log stream without touching that table.
 func (q *Queue) EnsureDomainStream(ctx context.Context, spec DomainStream) error {
+	// THE BROKER'S FIELD IS 32 BITS, and a negative is how it spells
+	// unlimited — so a value past it would be sent as the one setting it
+	// was never meant to be, the way a ceiling past int64 would.
+	if spec.MaxMessageBytes < 0 || spec.MaxMessageBytes > math.MaxInt32 {
+		return fmt.Errorf("jetstream: stream %s declares a largest message of %d "+
+			"bytes, outside the 0..%d the broker's max_msg_size can carry",
+			spec.Name, spec.MaxMessageBytes, math.MaxInt32)
+	}
 	return q.ensureStream(ctx, spec.spec())
 }
 
@@ -917,8 +978,12 @@ func (q *Queue) streamFor(ctx context.Context, subject string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// MARKED HERE TOO, at the same door: a stream this process has not
+	// provisioned yet costs a round trip before the verb's own, and a
+	// broker that did not answer it is the same condition whichever of the
+	// two it failed to answer.
 	if err := q.ensureStream(ctx, spec); err != nil {
-		return "", err
+		return "", q.brokerFailed(ctx, err)
 	}
 	return spec.name, nil
 }
@@ -931,9 +996,27 @@ func (q *Queue) ackWait() time.Duration {
 	return ackWait
 }
 
+// tooLarge names a message the connection refused as larger than the server
+// takes, and the limit it came from.
+//
+// THE CONNECTION'S OWN max_payload, read off the server's INFO, and never the
+// contract's [queue.MaxPayloadBytes]. The two agree on every connection this
+// backend OPENS — the embedded broker is configured at exactly the contract's
+// number and a connection held to less is refused ([carriesTheContract]) — but
+// not after a reconnect to a server that says less, a cluster member
+// configured apart or a server restarted with a smaller limit, and the client
+// refuses against what the server it reached said. A refusal naming the
+// contract there names a limit the payload is inside of, and sends whoever
+// reads it looking for the wrong knob.
+func tooLarge(nc *nats.Conn, verb, subject string, size int) string {
+	return fmt.Sprintf("%s %s: %d bytes exceeds the %d-byte limit (the server's "+
+		"max_payload)", verb, subject, size, nc.MaxPayload())
+}
+
 // Conn exposes this client's NATS connection, for subsystems that ride the
 // same broker outside the queue contract (the KV coordination backend).
-// The queue keeps ownership: closing it is Stop's job, not the caller's.
+// The queue keeps ownership: closing it is Stop's job, not the caller's — and
+// NATS closing it for good is [Queue.Lost]'s to report.
 func (q *Queue) Conn() *nats.Conn { return q.nc }
 
 // JetStream exposes this client's JetStream API, for subsystems that ride
@@ -964,16 +1047,108 @@ func (q *Queue) JetStream() jetstream.JetStream { return q.js }
 // So the ownership is in the name. Callers that ride the shared connection
 // take [Queue.Conn] and must not close it; callers with their own lifetime
 // take this and must.
+//
+// # And so is the LOSS
+//
+// NATS can close this connection for good under its owner, as it can every
+// connection — see [connectionLoss] — and here that is the OWNER's to notice,
+// never this node's to stop for: [Queue.Lost] does not report it. Its caller is
+// a subsystem with a lifetime of its own, the donor, which serves PEERS — a node
+// whose donor is down still serves its own company, as a donor that cannot be
+// armed at all does not gate the boot — so a donor's connection closing must
+// cost the fleet one donor until it dials again (the engine's donor loop), and
+// never this node its seats. A connection whose loss IS the node's is
+// [Queue.DialWatched]'s.
 func (q *Queue) DialOwned() (*nats.Conn, error) {
+	return q.dialSecond(watched{})
+}
+
+// DialWatched opens a second connection to the same broker, which the caller
+// owns and closes like [Queue.DialOwned]'s — and whose close for good this queue
+// reports as its OWN loss ([Queue.Lost]).
+//
+// For a subsystem the node cannot run without that has a connection of its own
+// rather than [Queue.Conn]: the coordination store on an embedded broker, which
+// holds every lease this node renews. Dialled unwatched, NATS closing it left a
+// node consuming work over the queue's connection while every renewal failed —
+// the "alive to its peers, deaf to its work" split from the other side, and
+// reported by nothing.
+//
+// It does NOT close [Queue.AcksLost]: no delivery this queue made is settled
+// over it, so a node that lost only this one still acknowledges every turn it
+// finishes. And a failed start's owner closes it only AFTER asking
+// [Queue.LostDuring], which reads a closed watched connection as one whose
+// handler is still to run.
+func (q *Queue) DialWatched() (*nats.Conn, error) {
+	return q.dialSecond(watched{loss: q.lost})
+}
+
+// dialSecond is the one dial both of those take, apart only in whether a close
+// for good is recorded.
+func (q *Queue) dialSecond(at watched) (*nats.Conn, error) {
 	if q.embedded != nil {
-		return q.embedded.connect()
+		return q.embedded.connect(at)
 	}
 	if q.cfg.URL == "" {
 		return nil, fmt.Errorf("jetstream: this queue has no embedded server " +
 			"and no URL, so a second connection cannot be opened")
 	}
-	return dial(q.cfg)
+	return dial(q.cfg, at)
 }
+
+// Lost is closed once NATS has closed, FOR GOOD, this queue's own connection or
+// a second one dialled through [Queue.DialWatched] — and [Queue.LostCause] then
+// says which, why, and what to change.
+//
+// Never closed by this queue's own [Queue.Stop], nor by an owner closing what
+// [Queue.DialWatched] gave it: see [connectionLoss] for why only a close the
+// client made itself counts, and which closes those are.
+//
+// ON THIS BACKEND AND NOT THE CONTRACT. The memory twin holds no connection to
+// lose, so [queue.EventQueue] has nothing to promise here; the engine asks
+// whichever queue it runs on whether it has this method, as it asks for
+// [Queue.Conn].
+func (q *Queue) Lost() <-chan struct{} { return q.lost.done }
+
+// LostCause is the sentence a node stops with once [Queue.Lost] is closed, and
+// nil before.
+func (q *Queue) LostCause() error { return q.lost.lostCause() }
+
+// LostDuring is err, from a start that failed over this queue, carrying the
+// [Queue.LostCause] beside it — and err unchanged where nothing was lost.
+//
+// For the step that fails BECAUSE a connection was closed for good: in its own
+// words it says the connection is closed and nothing an operator can act on,
+// while the sentence naming why and what to change is recorded here. It waits
+// for that record where the client has already closed a connection and its
+// handler has not yet run ([connectionLoss.settle]), so ask it BEFORE the
+// start's own cleanup closes this queue or a connection [Queue.DialWatched]
+// handed out: one its owner closed reads as closed too, and no handler is
+// coming for it.
+//
+// A STOPPED queue closed its own connection, so it is answered from what is
+// recorded and never waited on.
+func (q *Queue) LostDuring(err error) error {
+	if q.isClosed() {
+		return q.lost.recorded(err)
+	}
+	return q.lost.during(err)
+}
+
+// AcksLost is closed once NATS has closed THIS QUEUE'S OWN connection for good:
+// the one every delivery it made is acknowledged, nacked and deferred over.
+//
+// From then on no handler still running can have its outcome recorded, so the
+// broker hands what it is running to a successor once the ack window elapses,
+// and whatever the handler does from here on is done twice. That is what a
+// drain asks this for: a turn it would otherwise wait for is now only work to
+// be duplicated, so it is cancelled rather than waited for.
+//
+// [Queue.Lost] is the wider fact and closes first or together with this one: a
+// second connection [Queue.DialWatched] opened closing for good closes Lost and
+// NOT this, because deliveries never settle over it. On this backend and not
+// the contract, for [Queue.Lost]'s reason.
+func (q *Queue) AcksLost() <-chan struct{} { return q.lost.acks }
 
 // Link reports whether this client reaches the fleet's broker right now: nil
 // while it does, and an error naming what is down while it does not.
@@ -1063,10 +1238,15 @@ func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) err
 		// contract forbids. Wrapped rather than replaced so the original
 		// still reads in a log.
 		if errors.Is(err, nats.ErrMaxPayload) {
-			return fmt.Errorf("publish %s: %d bytes exceeds the %d-byte limit: %w: %w",
-				topic, len(data), queue.MaxPayloadBytes, queue.ErrTooLarge, err)
+			return fmt.Errorf("%s: %w: %w", tooLarge(q.nc, "publish", topic, len(data)),
+				queue.ErrTooLarge, err)
 		}
-		return fmt.Errorf("publish %s: %w", topic, err)
+		// MARKED, for the contract's reason: a broker that did not
+		// acknowledge — a connection reconnecting, a stream whose
+		// leader did not answer — is a condition a caller retries,
+		// and an unmarked one reads above this package as the node's
+		// own fault. See [Queue.brokerFailed].
+		return fmt.Errorf("publish %s: %w", topic, q.brokerFailed(ctx, err))
 	}
 
 	// Listeners run inline, and must: the event store's writer is one of
@@ -1107,6 +1287,13 @@ func (q *Queue) AddPublishListener(l queue.PublishListener) {
 // publishes to the subject: the agent and notification streams use interest
 // retention, so a message published to a subject no consumer covers is
 // dropped, which is the contract's stated behaviour rather than a surprise.
+//
+// A MAILBOX THAT EXISTS COSTS A LOOKUP AND NOTHING ELSE. The create is a
+// proposal through the metadata Raft group whatever it would find there, so a
+// caller ensuring N seats whose mailboxes are all already there used to spend
+// N replicated writes to learn nothing — every boot, and every config apply.
+// It now spends N lookups, which are reads. Counted by
+// [Queue.ConsumerProposals].
 func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bool, error) {
 	if group == "" {
 		return false, fmt.Errorf("%w: empty group", ErrSubject)
@@ -1118,7 +1305,9 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 	name := consumerName(topic, group)
 
 	// Reporting whether THIS call created it is part of the contract, so
-	// look first rather than inferring from an upsert.
+	// look first rather than inferring from an upsert. The lookup also
+	// DECIDES the call: a consumer the broker says it holds is returned
+	// from here, unproposed. See the switch below.
 	//
 	// ITS OWN DEADLINE, and it is a LOOKUP's rather than a create's — see
 	// [jsprovision.LookupBudget]. With no deadline of its own (an engine
@@ -1152,14 +1341,30 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 			return q.js.Consumer(ctx, stream, name)
 		}, nil)
 	stopLookup()
-	// EXISTED MEANS THIS NODE WAS TOLD IT WAS THERE, never merely "the
-	// lookup did not fail". An unanswered probe leaves it false and the
-	// create below decides: the returned bool is `!existed && won`, and
-	// won is the authority on which node's create actually made it.
-	existed := getErr == nil
+	// THE THREE ANSWERS, and only the FIRST of them ends the call here.
+	//
+	// A create is a PROPOSAL through the metadata Raft group, whatever it
+	// finds when it gets there — so issuing one for a mailbox the broker
+	// has just said it holds spends a replicated write per seat, on every
+	// boot and on every config apply, for a company whose mailboxes all
+	// already exist. That is the whole cost this early return removes; see
+	// docs/concepts/scaling.md for the measured numbers.
+	//
+	// WHY ONLY THE POSITIVE ARM. "Told it is not there" and "did not
+	// answer" are different facts, and a return on the second would be the
+	// single most expensive bug this file can carry: a durable subscription
+	// IS a seat's mailbox, so a node that skipped the create because it
+	// could not tell would leave that seat's mail being dropped silently,
+	// with no error anywhere. Both of those arms fall through to the create
+	// below, exactly as before.
 	switch {
-	case getErr == nil, errors.Is(getErr, jetstream.ErrConsumerNotFound):
-		// Told, either way.
+	case getErr == nil:
+		// TOLD IT IS THERE. Nothing to create, nothing to report: the
+		// bool means "this call found it absent AND then provisioned
+		// it", which this call did not.
+		return false, nil
+	case errors.Is(getErr, jetstream.ErrConsumerNotFound):
+		// Told it is NOT there. The create below makes it.
 	case jsprovision.Unanswered(ctx, getErr):
 		q.log.WarnContext(ctx, "jetstream_consumer_lookup_unanswered",
 			"stream", stream, "consumer", name, "error", getErr.Error(),
@@ -1167,7 +1372,7 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 				"the create below decides it rather than the boot failing on "+
 				"a question nobody answered")
 	default:
-		return false, fmt.Errorf("inspect consumer %s: %w", name, getErr)
+		return false, fmt.Errorf("inspect consumer %s: %w", name, q.brokerFailed(ctx, getErr))
 	}
 
 	_, won, err := q.ensureDurableConsumer(ctx, stream, jetstream.ConsumerConfig{
@@ -1175,7 +1380,7 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 		FilterSubject: topic,
 		// The pair, verbatim. The durable name cannot carry it (it is a
 		// lossy rewrite plus a digest), and ListSubscriptions has to hand
-		// back exactly what the caller created.
+		// back exactly what the caller created. Carried on the CREATE.
 		Metadata:  subscriptionMetadata(topic, group),
 		AckPolicy: jetstream.AckExplicitPolicy,
 		// Earliest, always. A consumer created at "latest" exists and
@@ -1186,21 +1391,24 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 		MaxDeliver:    budgetFor(q.cfg),
 	})
 	if err != nil {
-		return false, fmt.Errorf("ensure consumer %s: %w", name, err)
+		return false, fmt.Errorf("ensure consumer %s: %w", name, q.brokerFailed(ctx, err))
 	}
-	// BOTH HALVES, because either alone misreports. The lookup says this
-	// node did not already see it; won says this node's own create is what
-	// put it there. Without won, a consumer recovered by the read-back —
-	// a peer's, or this node's from an earlier boot — was reported as
-	// created by THIS call, so on a fleet booting together every member
-	// claimed to have made every mailbox.
+	// WON IS THE WHOLE ANSWER, because the lookup half is already spent:
+	// the only way to reach here is a lookup that said "not there" or said
+	// nothing at all, so "this node did not already see it" is true by
+	// construction and `!existed` was a constant. What is left is the
+	// question only the create can answer — whether THIS node's create is
+	// what put the consumer there. Without it, a consumer recovered by the
+	// read-back (a peer's, or this node's from an earlier boot) was
+	// reported as created by this call, so on a fleet booting together
+	// every member claimed to have made every mailbox.
 	//
 	// One ambiguity is the broker's and cannot be closed here: a create
 	// whose configuration exactly matches an existing consumer returns
 	// that consumer with no error, and is indistinguishable from having
 	// made it. It costs a log line rather than a decision — nothing in the
 	// engine branches on this bool.
-	return !existed && won, nil
+	return won, nil
 }
 
 // ensureDurableConsumer creates a durable consumer, tolerating a PEER having
@@ -1264,6 +1472,7 @@ func (q *Queue) ensureDurableConsumer(ctx context.Context, stream string,
 	// bought this call nothing, because the one condition it exists to
 	// wait out was the one condition this create did not wait on.
 	createErr := q.provisioning().Place(createCtx, func(ctx context.Context) error {
+		q.noteConsumerProposal()
 		var e error
 		cons, e = q.js.CreateConsumer(ctx, stream, cfg)
 		return e
@@ -1334,7 +1543,8 @@ func (q *Queue) DeleteSubscription(ctx context.Context, topic, group string) (bo
 		// caller's intent is "this must not exist", and it does not.
 		return false, nil
 	default:
-		return false, fmt.Errorf("delete consumer for %s/%s: %w", topic, group, err)
+		return false, fmt.Errorf("delete consumer for %s/%s: %w", topic, group,
+			q.brokerFailed(ctx, err))
 	}
 }
 
@@ -1392,9 +1602,9 @@ func carriesSubscriptions(stream string) bool {
 //
 // An ephemeral consumer (a stream subscription, a peek, a memory replay) is not
 // a subscription and is skipped. A durable consumer is listed under the pair
-// its metadata records when that pair derives its name (see pairOf); one whose
-// metadata carries no such pair (something rewrote it) is logged and left out
-// rather than listed under a guessed pair.
+// its metadata records when that pair derives its name; one whose metadata
+// carries no such pair (something other than this backend made or rewrote it)
+// is logged and left out rather than listed under a guessed pair (see pairOf).
 func (q *Queue) ListSubscriptions(ctx context.Context, topicPattern string) ([]queue.Subscription, error) {
 	if q.isClosed() {
 		return nil, ErrClosed
@@ -1415,7 +1625,7 @@ func (q *Queue) ListSubscriptions(ctx context.Context, topicPattern string) ([]q
 		}
 	}
 	if err := names.Err(); err != nil {
-		return nil, fmt.Errorf("list streams: %w", err)
+		return nil, fmt.Errorf("list streams: %w", q.brokerFailed(ctx, err))
 	}
 
 	var out []queue.Subscription
@@ -1426,7 +1636,7 @@ func (q *Queue) ListSubscriptions(ctx context.Context, topicPattern string) ([]q
 			continue
 		}
 		if err != nil {
-			return nil, fmt.Errorf("open stream %s: %w", name, err)
+			return nil, fmt.Errorf("open stream %s: %w", name, q.brokerFailed(ctx, err))
 		}
 		consumers := stream.ListConsumers(ctx)
 		for info := range consumers.Info() {
@@ -1436,7 +1646,8 @@ func (q *Queue) ListSubscriptions(ctx context.Context, topicPattern string) ([]q
 			}
 		}
 		if err := consumers.Err(); err != nil {
-			return nil, fmt.Errorf("list consumers of stream %s: %w", name, err)
+			return nil, fmt.Errorf("list consumers of stream %s: %w", name,
+				q.brokerFailed(ctx, err))
 		}
 	}
 	slices.SortFunc(out, func(a, b queue.Subscription) int {
@@ -1497,6 +1708,30 @@ func pairOf(info *jetstream.ConsumerInfo) (queue.Subscription, pairVerdict) {
 	}
 	return queue.Subscription{}, pairUnprovable
 }
+
+// noteConsumerProposal records one consumer create or update about to be
+// sent. Counted BEFORE the call and per ATTEMPT, because a proposal the
+// metadata group refuses, or never answers, cost the group exactly as much as
+// one it committed — and a retry loop that sent five is what this number
+// exists to make visible.
+func (q *Queue) noteConsumerProposal() { q.consumerProposals.Add(1) }
+
+// ConsumerProposals reports how many consumer creates and updates THIS client
+// has asked the broker for since it was opened.
+//
+// Every one of them goes through the metadata Raft group, which is what makes
+// the number worth having: a consumer create is not a local write, and a node
+// that issues one per seat on every apply is replicating a decision the
+// cluster already took. It counts attempts rather than commits, and it counts
+// creates that turned out to be no-ops, because both are proposals the group
+// had to order.
+//
+// DIAGNOSTIC, and deliberately not on [queue.EventQueue]: nothing in the
+// engine branches on it, it means nothing on a backend with no consensus
+// layer, and the contract has no business promising a number that is an
+// artefact of how one broker replicates. The conformance suite reads it
+// through a capability, which is where a backend-specific observable belongs.
+func (q *Queue) ConsumerProposals() int { return int(q.consumerProposals.Load()) }
 
 // InFlightCount reports handler invocations currently mid-flight.
 func (q *Queue) InFlightCount() int { return q.inFlight.Count() }

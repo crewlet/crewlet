@@ -64,8 +64,9 @@ func decisionSchema() map[string]any {
 			},
 			"ref": map[string]any{
 				"type": "string",
-				"description": "A work item's key or id, a page's id or " +
-					"CONTAINER/Title, a turn or run id, or an https:// URL.",
+				"description": "A work item, a page's id or CONTAINER/Title, " +
+					"a turn or run id, or an https:// URL. For a work item: " +
+					itemRef,
 			},
 			"label": map[string]any{
 				"type":        "string",
@@ -169,10 +170,10 @@ func (d WorkDeps) readDecision(ctx context.Context, tool string, actor Actor,
 	})
 	switch {
 	case errors.Is(err, tracker.ErrInvalid):
-		return nil, refusalOf(failed(fmt.Sprintf("%s was refused: %s. Nothing "+
-			"was posted.", tool, tracker.Sentence(err))))
+		return nil, refusalOf(refusedBy(tools.RefusalInvalid, err, fmt.Sprintf(
+			"%s was refused: %s. Nothing was posted.", tool, tracker.Sentence(err))))
 	case err != nil:
-		return nil, refusalOf(readFailure(tool, err))
+		return nil, refusalOf(readFailure(ctx, tool, err))
 	}
 	if checked.Inform != nil {
 		inform, refusal := d.checkInform(tool, actor, *checked.Inform)

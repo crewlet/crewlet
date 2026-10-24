@@ -16,7 +16,7 @@
  * state is the ENGINE's roll-up of its surfaces (`integration.Rollup`, sent as
  * the answer's `tools`), and its sentence names the surface that is not
  * ready. The counts, the inbound paths, the reconcile findings and every
- * agent's own step are on the tool's own page (`#/settings/integrations/{kind}`,
+ * agent's own step are on the tool's own page (`#/company/integrations/{kind}`,
  * [EntryRow]), so an operator who needs to know why can open it without the
  * catalogue leading with it.
  *
@@ -26,6 +26,7 @@
  * claim that the tool is fine.
  */
 
+import { BuiltIn } from "./BuiltIn.tsx";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Button,
@@ -34,8 +35,16 @@ import {
   Card,
   EmptyState,
   EmptyValue,
+  Eyebrow,
   InlineCode,
+  SegmentedControl,
   Skeleton,
+  TableDateCell,
+  TableEntityCell,
+  TableKeyCell,
+  TableNumberCell,
+  TableStatusCell,
+  TableTextCell,
   Tag,
   type Tone,
 } from "@crewlethq/ui";
@@ -54,42 +63,45 @@ import {
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 import { VendorMark, type Vendor } from "@crewlethq/icons";
+import { TOOL_TONE } from "~/lib/toolState.ts";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
-import {
-  DateCell,
-  DurationCell,
-  KeyCell,
-  NumberCell,
-  SeatCell,
-  StatusCell,
-  TextCell,
-} from "~/app/frame/cells.tsx";
+import { linkedSeat } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { fmtDate, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
+import {
+  fmtDate,
+  fmtDateTime,
+  plural,
+  relTime,
+  tsKey,
+  fmtCount,
+  fmtDuration,
+} from "~/lib/format.ts";
 import { useRecheck } from "./recheck.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useManagedConfig } from "~/lib/useWriteAccess.ts";
-import { indexOrg, seatLookup } from "~/lib/seats.ts";
+import type { AgentAvatar } from "~/lib/avatar.ts";
+import { indexOrg, seatLookup, useSeatBadgeOf } from "~/lib/seats.ts";
 import { SetupDialog } from "./SetupDialog.tsx";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
-import { requestToken, rest, RestError } from "~/protocol/index.ts";
+import { rest, RestError } from "~/protocol/index.ts";
+import { goSignIn } from "~/lib/session.ts";
+import { ADMIN, needsWords } from "~/lib/access.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { useRest } from "~/lib/useRest.ts";
 import type { EventRecord, SetupRun } from "~/protocol/types.ts";
 import {
   INTEGRATION_TOOLS,
   type IntegrationRow,
   type IntegrationTool,
-  type IntegrationToolState,
   type ReconcileFinding,
   type ReconcileStatus,
 } from "~/contract/integrations.ts";
 import type { SetupListing, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
-import { Segmented } from "~/ui/primitives.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
 // THE TONE VOCABULARY IS uilet's NOW. This screen used to declare its own
@@ -123,18 +135,29 @@ export interface Entry {
   /** The API rows that together are this tool. Most tools have one. */
   surfaces: Surface[];
   /**
-   * This tool's page on docs.crewlet.ai, under `integrations/`, for the one
-   * tile that has nothing a person can do from here: Learn more.
+   * This tool's page on docs.crewlet.ai, `docs/integrations/<doc>.md` in the
+   * engine's tree, for the one tile that has nothing a person can do from
+   * here: Learn more.
    */
   doc: string;
 }
 
-/** Where the product documentation is published. See `docs/index.md`. */
-const DOCS_BASE = "https://docs.crewlet.ai/";
+/**
+ * Where the engine's documentation is published: the newest release's copy
+ * (`/engine/latest/`; main is `/engine/next/`, an older line `/engine/vX.Y/`).
+ * See `docs/index.md`.
+ */
+const DOCS_BASE = "https://docs.crewlet.ai/engine/latest/";
 
-/** The published address of an integration's own page. */
+/**
+ * The published address of an integration's own page.
+ *
+ * WITH ITS TRAILING SLASH, because every page on the site is a directory: the
+ * slashless spelling answers a redirect to this one, a round trip on every
+ * click before the page loads.
+ */
 export function docHref(entry: Entry): string {
-  return `${DOCS_BASE}integrations/${entry.doc}`;
+  return `${DOCS_BASE}integrations/${entry.doc}/`;
 }
 
 /**
@@ -172,7 +195,7 @@ export const CATALOG: Entry[] = [
   {
     key: "slack",
     name: "Slack",
-    description: "Every agent posts as its own bot. Mentions and threads wake the right seat.",
+    description: "Each agent posts as its own bot.",
     vendor: "slack",
     surfaces: surfacesOf("slack"),
     doc: "slack",
@@ -180,7 +203,7 @@ export const CATALOG: Entry[] = [
   {
     key: "mattermost",
     name: "Mattermost",
-    description: "Self-hosted chat. Every agent posts as its own bot over an outbound socket.",
+    description: "Self-hosted chat. Each agent posts as its own bot.",
     vendor: "mattermost",
     surfaces: surfacesOf("mattermost"),
     doc: "mattermost",
@@ -188,7 +211,7 @@ export const CATALOG: Entry[] = [
   {
     key: "atlassian",
     name: "Atlassian",
-    description: "Jira and Confluence. Each agent works issues and pages with its own account.",
+    description: "Jira and Confluence, an account per agent.",
     vendor: "atlassian",
     surfaces: surfacesOf("atlassian"),
     doc: "jira",
@@ -196,7 +219,7 @@ export const CATALOG: Entry[] = [
   {
     key: "github",
     name: "GitHub",
-    description: "Agents read issues and review pull requests, each through its own GitHub App.",
+    description: "Issues and pull requests, an app per agent.",
     vendor: "github",
     surfaces: surfacesOf("github"),
     doc: "github",
@@ -204,7 +227,7 @@ export const CATALOG: Entry[] = [
   {
     key: "gitlab",
     name: "GitLab",
-    description: "Agents branch, push and review merge requests with their own tokens.",
+    description: "Merge requests and code, a token per agent.",
     vendor: "gitlab",
     surfaces: surfacesOf("gitlab"),
     doc: "gitlab",
@@ -212,7 +235,7 @@ export const CATALOG: Entry[] = [
   {
     key: "datadog",
     name: "Datadog",
-    description: "Monitors route to a seat by their tags; anything untagged goes to a fallback.",
+    description: "Alerts reach seats by tag.",
     vendor: "datadog",
     surfaces: surfacesOf("datadog"),
     doc: "datadog",
@@ -374,22 +397,6 @@ export function entryState(
   };
 }
 
-/**
- * The tone each state is drawn in.
- *
- * CONNECTED IS ONLY EVER GREEN, and nothing else is: the engine never sends
- * `connected` over a surface nothing can reach. `not_connected` is AMBER for the
- * reason every in-progress phase is — an integration that does not work yet,
- * which is not the neutral this screen keeps for a state nobody needs to come
- * back to. `not_in_use` is that neutral.
- */
-const TOOL_TONE: Record<IntegrationToolState, Tone> = {
-  attention: "warning",
-  not_connected: "warning",
-  connected: "success",
-  not_in_use: "neutral",
-};
-
 // ---------------------------------------------------------------------------
 // What an integration IS, in facts
 // ---------------------------------------------------------------------------
@@ -401,7 +408,7 @@ const TOOL_TONE: Record<IntegrationToolState, Tone> = {
  * is a FLOOR: `null` is this process reporting that it could not read its own
  * event log, and folding that in as 0 would turn "nobody looked" into "nothing
  * arrived there". Where no surface can say at all the answer stays null, which
- * is the em dash [NumberCell] draws and the one this screen means by it.
+ * is the absence [TableNumberCell] draws and the one this screen means by it.
  */
 function total(
   present: Present[],
@@ -489,9 +496,10 @@ export function integrationFacts(
     {
       label: "Delivered",
       value: (
-        <NumberCell
+        <TableNumberCell
           value={counted((r) => r.inbound)}
-          title="deliveries that reached a seat here: verified webhooks, and chat posts read off a socket — each counted once, where it arrived"
+          title="Deliveries that reached a seat"
+          format={fmtCount}
         />
       ),
       note: covered,
@@ -505,18 +513,20 @@ export function integrationFacts(
       // read together and the first one states what they all cover.
       label: "Dropped",
       value: (
-        <NumberCell
+        <TableNumberCell
           value={counted((r) => r.skipped)}
           title="verified, and turned into work for nobody"
+          format={fmtCount}
         />
       ),
     },
     {
       label: "Coalesced",
       value: (
-        <NumberCell
+        <TableNumberCell
           value={counted((r) => r.coalesced)}
-          title="folded into a wake the seat already had"
+          title="Merged into a pending wake"
+          format={fmtCount}
         />
       ),
     },
@@ -526,11 +536,15 @@ export function integrationFacts(
       // surface checked a moment ago and one nothing has looked at in an hour
       // read identically.
       label: "Last pass",
-      value: <DateCell at={latestOf(present, (r) => r.reconcile?.last_attempt_at)} now={now} />,
+      value: (
+        <TableDateCell value={latestOf(present, (r) => r.reconcile?.last_attempt_at)} now={now} />
+      ),
     },
     {
       label: "Next pass",
-      value: <DateCell at={soonestOf(present, (r) => r.reconcile?.next_attempt_at)} now={now} />,
+      value: (
+        <TableDateCell value={soonestOf(present, (r) => r.reconcile?.next_attempt_at)} now={now} />
+      ),
     },
   ];
 }
@@ -819,7 +833,7 @@ export function disconnectOrder(
   //
   // The button is rendered from the ROWS (`!absent && onDisconnect`), and
   // `sections` comes from `GET /setup/integrations`, which is a separate
-  // request that can 401 for want of an operator token or fail transiently.
+  // request that can be refused for want of a grant or fail transiently.
   // With the key set taken from `sections` alone, that window rendered a
   // Disconnect button whose dialog computed an EMPTY list, issued no DELETE
   // at all, and then ran onDone() and closed exactly as it does after a real
@@ -858,17 +872,13 @@ function SurfaceBadges({ row }: { row: IntegrationRow }) {
         <Tag
           variant="warning"
           appearance="outline"
-          title="the config names a secret whose ${VAR} resolved to nothing, so every delivery is refused"
+          title="A secret it needs isn’t set, so deliveries are refused"
         >
           secret unresolved
         </Tag>
       )}
       {row.routes === false && (
-        <Tag
-          variant="warning"
-          appearance="outline"
-          title="deliveries are verified and stored, and no parser turns them into work for a seat"
-        >
+        <Tag variant="warning" appearance="outline" title="Deliveries arrive but reach no seat">
           routes nowhere
         </Tag>
       )}
@@ -876,7 +886,7 @@ function SurfaceBadges({ row }: { row: IntegrationRow }) {
         <Tag
           variant="warning"
           appearance="outline"
-          title="this surface is registered at an address that is no longer this deployment's, so its deliveries go nowhere"
+          title="Registered at an old address, so deliveries are lost"
         >
           address moved
         </Tag>
@@ -950,9 +960,8 @@ function SurfaceRow({
         <div className="int-row-note">
           <span className="int-row-note-text">
             <span>
-              The event subscription was registered with <InlineCode>{row.endpoint}</InlineCode>,
-              but this engine now listens on <InlineCode>{base ?? "no public address"}</InlineCode>.
-              Update the address in {surface.name} to keep receiving events.
+              Registered at <InlineCode>{row.endpoint}</InlineCode>, now{" "}
+              <InlineCode>{base ?? "no public address"}</InlineCode>. Update it in {surface.name}.
             </span>
           </span>
         </div>
@@ -970,8 +979,7 @@ function SurfaceRow({
                 : `${(row.skipped ?? 0).toLocaleString()} deliveries were verified and dropped`}
             </span>
             <span className="int-row-note-when">
-              A drop is a delivery this surface accepted and no parser turned into work, so whatever
-              sent it is reaching the engine and reaching nobody.
+              {row.skipped === 1 ? "It reached no seat." : "They reached no seat."}
             </span>
           </span>
         </div>
@@ -1321,15 +1329,18 @@ function rosterOf(tools: SetupToolState[]): SetupToolState | undefined {
  * Why an action that opens the settings form cannot be pressed, or undefined.
  *
  * A WRITE CONTROL IS NEVER HIDDEN (dashboard rule 4): it is disabled with the
- * one sentence that says why. `/setup` is guarded in full, so a reader with no
- * operator token has no form to open, and a listing that answered nothing for
- * this tool has none either — which is a different sentence, because the
- * token would not help.
+ * one sentence that says why. `/setup` is guarded in full, so a reader the
+ * engine refused has no form to open, and a listing that answered nothing for
+ * this tool has none either — which is a different sentence, because no
+ * access would help.
+ *
+ * THE ACCESS, NAMED: reading what a tool needs and connecting it are both
+ * Admin's.
  */
 export function formBlocked(sections: unknown[], guarded: boolean): string | undefined {
   if (sections.length > 0) return undefined;
   return guarded
-    ? "Setting an integration up needs an operator token."
+    ? needsWords("Setting up integrations", [ADMIN])
     : "The engine did not say what this integration needs, so there is no form to open.";
 }
 
@@ -1377,7 +1388,7 @@ export function ActionButton({
         <ButtonLink
           size="small"
           variant="secondary"
-          href={href(["settings", "integrations", entry.key])}
+          href={href(["company", "integrations", entry.key])}
           aria-label={`Manage ${entry.name}`}
         >
           Manage
@@ -1559,11 +1570,14 @@ export function EntryRow({
   publicBase,
   guarded = false,
   managed = null,
+  avatarOf,
   onOpen,
   onDisconnect,
 }: {
   entry: Entry;
   rows: Map<string, IntegrationRow>;
+  /** How an agent on the tool's roster is drawn, by handle, off the chart. */
+  avatarOf?: (handle: string) => AgentAvatar | null | undefined;
   /** The answer's `tools`: the engine's roll-up of every tool. */
   rollups?: IntegrationTool[];
   /**
@@ -1752,10 +1766,7 @@ export function EntryRow({
                 empty box under a chevron that promised something. */}
             {seats.length === 0 && !present.some((p) => surfaceFaulted(p.row)) && (
               <li className="int-row">
-                <span className="int-row-detail">
-                  Nothing to report: no surface of {entry.name} has a fault, and it keeps no roster
-                  of agents.
-                </span>
+                <span className="int-row-detail">Nothing to report.</span>
               </li>
             )}
             {seats.map((seat) => (
@@ -1766,7 +1777,13 @@ export function EntryRow({
                     the console does on its roster: a row of bare names reads
                     as configuration, and a row with the agent's mark reads
                     as the person it stands for. */}
-                <SeatAvatar name={seat.name || seat.handle} kind="agent" size="sm" decorative />
+                <SeatAvatar
+                  name={seat.name || seat.handle}
+                  kind="agent"
+                  avatar={avatarOf?.(seat.handle)}
+                  size="sm"
+                  decorative
+                />
                 <div className="int-row-identity">
                   <span className="int-row-name">
                     {seat.name || seat.handle}
@@ -1934,8 +1951,10 @@ function SeatBadge({ satisfied, finding }: { satisfied: boolean; finding?: Recon
  */
 export function useSetup(): {
   byKey: Map<string, SetupToolState>;
-  base: SetupListing["public_base_url"] | null;
+  base: SetupListing["external_url"] | null;
   guarded: boolean;
+  /** The access the refusal named, when [guarded] — see `lib/access.ts`'s `needsWords`. */
+  needs: string[];
   /**
    * True until this read has answered ONCE, however it answered.
    *
@@ -1959,7 +1978,7 @@ export function useSetup(): {
   reload: () => void;
 } {
   // THE ONE REST LOADER, which supersedes a read that is still in flight: four
-  // things start one here — mount, a token change, the tab becoming visible
+  // things start one here — mount, a sign-in, the tab becoming visible
   // and useRecheck, which fires the same read twice 700 ms apart — and before
   // it every answer was written into state unconditionally, so whichever
   // landed last was what the screen held.
@@ -1984,8 +2003,9 @@ export function useSetup(): {
   const { reload } = setup;
   return {
     byKey: new Map((listing?.tools ?? []).map((t) => [t.key, t])),
-    base: listing?.public_base_url ?? null,
+    base: listing?.external_url ?? null,
     guarded: setup.error?.unauthorized ?? false,
+    needs: setup.error?.grants ?? [],
     // ANSWERED, not answered WELL. A refusal is a state the screen can render
     // honestly, with the banner and no buttons; waiting is not.
     loading: setup.loading,
@@ -2060,12 +2080,13 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
       </Card.Header>
       <QueryState
         error={deliveries.error}
+        refusal={deliveries.refusal}
         loading={deliveries.loading}
         empty={
           deliveries.data && rows.length === 0
             ? {
                 title: `Nothing has arrived on ${name}`,
-                hint: "A verified delivery writes a row here. Nothing at all means either the provider is not sending, or it is being refused before it is recorded — the engine's own log is where a refusal appears.",
+                hint: `Check that ${name} is sending. Refusals are in the engine log.`,
               }
             : undefined
         }
@@ -2101,7 +2122,7 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
                 header: "Arrived",
                 shrink: true,
                 sortValue: (e) => tsKey(e.timestamp),
-                cell: (e) => <DateCell at={e.timestamp} now={now} />,
+                cell: (e) => <TableDateCell value={e.timestamp} now={now} />,
               },
               {
                 key: "event",
@@ -2112,12 +2133,12 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
                 // filing prefixes — which edge a delivery came in on — and
                 // the provider's event name is what an operator is matching
                 // against their own console.
-                cell: (e) => <code className="inline nowrap">{deliveryEvent(e.type)}</code>,
+                cell: (e) => <InlineCode whole>{deliveryEvent(e.type)}</InlineCode>,
               },
               {
                 key: "summary",
                 header: "What it said",
-                cell: (e) => <TextCell>{e.summary}</TextCell>,
+                cell: (e) => <TableTextCell>{e.summary}</TableTextCell>,
               },
               {
                 key: "for",
@@ -2130,7 +2151,9 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
                     // name, linking to the seat. A delivery is addressed to a
                     // colleague, and a colleague should not be a chip on this
                     // grid and an avatar on the next.
-                    <SeatCell handle={e.tags.recipient} {...who(e.tags.recipient)} />
+                    <TableEntityCell
+                      {...linkedSeat({ handle: e.tags.recipient, ...who(e.tags.recipient) })}
+                    />
                   ) : (
                     // NOT THE CELL'S OWN "nobody" DASH: a company-wide
                     // delivery is routed by the notification spine rather than
@@ -2146,7 +2169,7 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
                 sortValue: (e) => e.tags?.delivery_key ?? "",
                 cell: (e) =>
                   e.tags?.delivery_key ? (
-                    <KeyCell value={e.tags.delivery_key} />
+                    <TableKeyCell value={e.tags.delivery_key} />
                   ) : (
                     // A DASH THAT SAYS WHICH ABSENCE THIS IS. Not every
                     // provider sends an id of its own, and a blank cell and an
@@ -2164,11 +2187,11 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
         // — a rule, a quiet register and the card's own horizontal padding.
         <Card.Footer variant="meta">
           <span className="t-caption">
-            The newest {DELIVERY_PAGE}. Older deliveries are in the{" "}
+            Newest {DELIVERY_PAGE}. Older ones are in the{" "}
             <a className="prose-link" href={href(["live", "events"], { category: "webhook" })}>
               event log
             </a>
-            , which pages.
+            .
           </span>
         </Card.Footer>
       )}
@@ -2250,13 +2273,14 @@ const PASS_IDLE_POLL_MS = 60_000;
  *
  * REST, LIKE [useSetup], AND FOR THE SAME REASONS: no query in the socket's
  * registry answers anything about a pass, and `/setup` is guarded in full —
- * so a reader with no operator token is REFUSED here rather than shown an
+ * so a reader without Admin is REFUSED here rather than shown an
  * empty history, and `guarded` is what tells those two apart.
  */
 function useSetupRuns(kinds: string[]): {
   runs: SetupRun[];
   scope: string;
   guarded: boolean;
+  needs: string[];
   loading: boolean;
 } {
   // THE KEY IS THE DEPENDENCY, not the array. A caller derives its kinds from
@@ -2304,6 +2328,7 @@ function useSetupRuns(kinds: string[]): {
     runs,
     scope: answer.data?.scope ?? "",
     guarded: answer.error?.unauthorized ?? false,
+    needs: answer.error?.grants ?? [],
     loading: answer.loading,
   };
 }
@@ -2329,7 +2354,13 @@ const EMPTY_RUNS: SetupRun[] = [];
 function useSetupRun(
   kind: string,
   id: string,
-): { run: SetupRun | null; missing: boolean; guarded: boolean; loading: boolean } {
+): {
+  run: SetupRun | null;
+  missing: boolean;
+  guarded: boolean;
+  needs: string[];
+  loading: boolean;
+} {
   // FOLLOWED TO ITS END, and only while it is going: the row that opened this
   // may have been a pass that was running when the list answered.
   const [running, setRunning] = useState(false);
@@ -2350,31 +2381,9 @@ function useSetupRun(
     run,
     missing: answer.error?.status === 404,
     guarded: answer.error?.unauthorized ?? false,
+    needs: answer.error?.grants ?? [],
     loading: answer.loading,
   };
-}
-
-/**
- * A uilet variant, said in the tone names `app/frame/cells.tsx` still takes.
- *
- * The inverse of `app/frame/tone.ts`, and it exists for exactly as long as
- * that file does: one cell in this screen is a frame component this port may
- * not edit. `brand` and `info` have no status-cell spelling of their own and
- * take neutral, which is what the cell drew for them before.
- */
-function cellTone(variant: Tone): "positive" | "caution" | "critical" | "info" | "neutral" {
-  switch (variant) {
-    case "success":
-      return "positive";
-    case "warning":
-      return "caution";
-    case "danger":
-      return "critical";
-    case "info":
-      return "info";
-    default:
-      return "neutral";
-  }
 }
 
 /**
@@ -2398,16 +2407,14 @@ function passState(run: SetupRun): { glyph: string; label: string; tone: Tone; t
         glyph: "◐",
         label: "running",
         tone: "info",
-        title: "this pass is still going; the engine holds the surface's lease until it ends",
+        title: "Still running",
       };
     case "failed":
       return {
         glyph: "✕",
         label: "failed",
         tone: "danger",
-        title:
-          run.error ||
-          "the third-party app refused this pass; nothing it had already done is undone",
+        title: run.error || "The app refused this pass",
       };
     case "done": {
       const phase = run.report?.phase ?? "";
@@ -2428,7 +2435,7 @@ function passState(run: SetupRun): { glyph: string; label: string; tone: Tone; t
         glyph: "○",
         label: run.state || "unknown",
         tone: "neutral",
-        title: "a state this build does not know; a newer node wrote it",
+        title: "Unknown state from a newer version",
       };
   }
 }
@@ -2438,7 +2445,7 @@ function passState(run: SetupRun): { glyph: string; label: string; tone: Tone; t
  *
  * NULL RATHER THAN "now minus started", which is the obvious alternative and
  * is a different measurement: a run whose node died mid-pass would report a
- * duration that grows for ever. [DurationCell] draws "not measured" for this,
+ * duration that grows for ever. [TableNumberCell] draws "not measured" for this,
  * which is exactly what it is until the run ends.
  */
 function passMs(run: SetupRun): number | null {
@@ -2474,7 +2481,7 @@ function concludedLine(run: SetupRun): string {
  */
 function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
   const now = useNow();
-  const { runs, scope, guarded, loading } = useSetupRuns(kinds);
+  const { runs, scope, guarded, needs, loading } = useSetupRuns(kinds);
   // WHICH PASS IS OPEN, as the surface AND the id rather than the id alone:
   // the detail route is keyed on both, and a tool has several kinds — an id on
   // its own could not say which surface's pass it was once the listing that
@@ -2488,14 +2495,11 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
   if (guarded) {
     // NOT AN EMPTY HISTORY. `/setup` is guarded in full, reads included, so
     // this reader is being refused rather than told nothing has run — and the
-    // banner at the top of the screen is where the token is supplied.
+    // refusal names the grant that would have admitted them.
     return (
       <Card>
         <Card.Header icon={<RotateCwGlyph size="sm" />}>Provisioning passes</Card.Header>
-        <span className="t-caption">
-          Reading what a pass found needs an operator token, so this is what the engine will not say
-          without one.
-        </span>
+        <span className="t-caption">{needsWords("Seeing passes", needs)}</span>
       </Card>
     );
   }
@@ -2506,7 +2510,7 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
       header: "Ran",
       shrink: true,
       sortValue: (run) => tsKey(run.started_at),
-      cell: (run) => <DateCell at={run.started_at} now={now} />,
+      cell: (run) => <TableDateCell value={run.started_at} now={now} />,
     },
     // THE SURFACE ONLY WHERE THERE IS MORE THAN ONE. A column whose every
     // value is the tool's own name is a column that says nothing.
@@ -2517,7 +2521,7 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
             header: "Surface",
             shrink: true,
             sortValue: (run: SetupRun) => named.get(run.key) ?? run.key,
-            cell: (run: SetupRun) => <TextCell>{named.get(run.key) ?? run.key}</TextCell>,
+            cell: (run: SetupRun) => <TableTextCell>{named.get(run.key) ?? run.key}</TableTextCell>,
           },
         ]
       : []),
@@ -2529,17 +2533,11 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
       cell: (run) => {
         const state = passState(run);
         return (
-          <StatusCell
+          <TableStatusCell
             glyph={state.glyph}
             label={state.label}
-            // `app/frame/cells.tsx` still speaks OUR tone names, and it is
-            // another port's file, so the spelling is turned back at this one
-            // seam rather than this screen keeping a second vocabulary for
-            // the one cell that needs it. It goes when that file takes
-            // uilet's `Tone` — see `app/frame/tone.ts`, which is this same
-            // translation in the other direction.
-            tone={cellTone(state.tone)}
             title={state.title}
+            tone={state.tone}
           />
         );
       },
@@ -2553,7 +2551,9 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
       // yet, and a column sorted by "shortest" that put every live pass at
       // the top would be ordering on a measurement nobody made.
       sortValue: (run) => passMs(run) ?? -1,
-      cell: (run) => <DurationCell ms={passMs(run)} />,
+      cell: (run) => (
+        <TableNumberCell value={passMs(run)} format={fmtDuration} emptyLabel="Not measured" />
+      ),
     },
     {
       key: "findings",
@@ -2565,18 +2565,19 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
       // converged third-party app reports an EMPTY slice rather than saying it
       // is fine (`integration.Classify`), so "found nothing" and "nothing
       // recorded" must not draw the same mark. That is the whole of
-      // [NumberCell].
+      // [TableNumberCell].
       cell: (run) => (
-        <NumberCell
+        <TableNumberCell
           value={run.findings?.length ?? 0}
           title="what this pass observed that was not fine"
+          format={fmtCount}
         />
       ),
     },
     {
       key: "detail",
       header: "What it concluded",
-      cell: (run) => <TextCell>{concludedLine(run)}</TextCell>,
+      cell: (run) => <TableTextCell>{concludedLine(run)}</TableTextCell>,
     },
   ];
 
@@ -2585,7 +2586,7 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
       <Card.Header
         icon={<RotateCwGlyph size="sm" />}
         count={runs.length}
-        subtitle={`what ${scope || "this node"} has run — a pass another node ran is remembered there`}
+        subtitle={`on ${scope || "this node"}`}
       >
         Provisioning passes
       </Card.Header>
@@ -2613,7 +2614,7 @@ function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
             : {
                 title: "No pass has run on this node",
                 icon: "rotate-cw",
-                hint: "The loop runs one per surface on its own cadence, and connecting an integration runs one at once. A pass another node ran is remembered on that node.",
+                hint: "Passes run on a schedule and when you connect.",
               }
         }
         columns={columns}
@@ -2656,19 +2657,15 @@ function PassDetail({
   name: string;
   now: number;
 }) {
-  const { run, missing, guarded, loading } = useSetupRun(kind, id);
+  const { run, missing, guarded, needs, loading } = useSetupRun(kind, id);
 
   if (loading && !run) return <Skeleton variant="text" rows={4} label="Loading" />;
   if (missing) {
     return (
       <div className="int-row-note">
         <span className="int-row-note-text">
-          <span className="int-note-problem">This pass is no longer remembered.</span>
-          <span className="int-row-note-when">
-            A run is kept by the node that executed it, and only for its last few passes. What it
-            concluded is folded into the surface&rsquo;s own state either way, which is what the
-            card above reports.
-          </span>
+          <span className="int-note-problem">This pass is no longer kept.</span>
+          <span className="int-row-note-when">Its result is in the card above.</span>
         </span>
       </div>
     );
@@ -2677,7 +2674,7 @@ function PassDetail({
     return (
       <div className="int-row-note">
         <span className="int-row-note-text">
-          <span className="int-row-note-when">Reading one pass needs an operator token.</span>
+          <span className="int-row-note-when">{needsWords("Reading one pass", needs)}</span>
         </span>
       </div>
     );
@@ -2715,7 +2712,7 @@ function PassDetail({
         ) : (
           <span className="int-row-note-when">
             {run.state === "running"
-              ? "Nothing outstanding so far — a pass records what it observes as it goes."
+              ? "Nothing outstanding so far."
               : "This pass found nothing outstanding."}
           </span>
         )}
@@ -2788,7 +2785,7 @@ function LastDelivery({ surface, name, now }: { surface: string; name: string; n
         </span>
       </div>
       {row ? (
-        <DateCell at={row.timestamp} now={now} />
+        <TableDateCell value={row.timestamp} now={now} />
       ) : (
         <EmptyValue label="No delivery is recorded for this surface" />
       )}
@@ -2816,7 +2813,7 @@ function LastDelivery({ surface, name, now }: { surface: string; name: string; n
  */
 export function IntegrationPeek({ kind }: { kind: string }) {
   const now = useNow();
-  const { data, loading, error } = useQuery("integrations", undefined, {
+  const { data, loading, error, refusal } = useQuery("integrations", undefined, {
     enabled: kind !== "",
     // The same slow cadence the screen uses at rest: traffic counters move
     // slowly, and a peek is read for seconds rather than watched.
@@ -2835,7 +2832,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
         size="compact"
         icon={<PlugGlyph size="xl" />}
         title={`This build serves no integration called “${kind}”`}
-        description="The link that opened this names a surface this engine does not have. Every integration it does serve is in Settings › Integrations."
+        description="See Company › Integrations for the ones available."
       />
     );
   }
@@ -2874,13 +2871,13 @@ export function IntegrationPeek({ kind }: { kind: string }) {
       />
       <div className="col gap-3">
         {loading && !data && <Skeleton variant="text" rows={6} label="Loading" />}
-        <QueryState error={error} loading={loading}>
+        <QueryState error={error} refusal={refusal} loading={loading}>
           {data && present.length === 0 && (
             <EmptyState
               size="compact"
               icon={<PlugGlyph size="xl" />}
               title={`${entry.name} is not connected`}
-              description={`${entry.description}. Nothing in this company is configured for it, so no delivery reaches a seat and no pass runs against it.`}
+              description={`${entry.description} Connect it to start.`}
             />
           )}
           {present.length > 0 && (
@@ -2971,7 +2968,7 @@ export function IntegrationPeek({ kind }: { kind: string }) {
                         only one of them is good news. */}
                     {present.some((p) => p.row.reconcile)
                       ? "The last pass found nothing outstanding."
-                      : "Nothing has reported on this integration yet, which is not the same as nothing being wrong."}
+                      : "No status reported yet."}
                   </span>
                 )}
               </Card>
@@ -3008,9 +3005,15 @@ export function IntegrationPeek({ kind }: { kind: string }) {
 type Show = "all" | "connected" | "available";
 
 export function Integrations({ kind }: { kind?: string }) {
+  const viewer = useViewer();
   // A MANAGED DOCUMENT (ADR-0030): what writes it is held on every card, with
   // who manages it; a credential's rotation stays open.
   const managed = useManagedConfig();
+  // HOW EACH AGENT IS DRAWN on a tool's roster and in its disconnect dialog,
+  // off the chart: both are handed the resolver rather than reaching for the
+  // store, so they draw in a test with no provider above them.
+  const badgeOf = useSeatBadgeOf();
+  const avatarOf = useCallback((handle: string) => badgeOf(handle).avatar, [badgeOf]);
   // Traffic counters are not pushed, and they move slowly; a minute is the
   // right cadence for "is anything arriving at all".
   //
@@ -3038,6 +3041,7 @@ export function Integrations({ kind }: { kind?: string }) {
     data,
     loading,
     error,
+    refusal,
     refetch: reread,
   } = useQuery("integrations", undefined, {
     pollMs: settling ? 4_000 : 60_000,
@@ -3094,7 +3098,7 @@ export function Integrations({ kind }: { kind?: string }) {
       rotate: action?.kind === "rotate" ? reason : undefined,
     });
   // THE SEGMENT IS A DESTINATION, not decoration. `kind` was accepted and
-  // never read, so `#/settings/integrations/github` rendered the whole catalogue
+  // never read, so `#/company/integrations/github` rendered the whole catalogue
   // — every link into one integration landed on the list it came from. It
   // matches an entry by its own key OR by any surface it covers, because a
   // finding and a webhook route both name the SURFACE (`jira`), while the
@@ -3106,7 +3110,7 @@ export function Integrations({ kind }: { kind?: string }) {
   // a card disagreeing about a tool would be two answers to one question on
   // one screen.
   const focusState = focus ? entryState(focus, rows, data?.tools) : undefined;
-  // THE CRUMB NAMES THE TOOL, not the segment: `#/settings/integrations/jira`
+  // THE CRUMB NAMES THE TOOL, not the segment: `#/company/integrations/jira`
   // is the Atlassian page, and a trail reading "jira" over a header reading
   // Atlassian is two names for one object.
   usePageLabels(useMemo(() => (kind && focus ? { [kind]: focus.name } : {}), [kind, focus]));
@@ -3135,203 +3139,45 @@ export function Integrations({ kind }: { kind?: string }) {
     .sort(byConfiguredThenName(rows))
     .filter((e) => show === "all" || (show === "connected") === configured.includes(e));
 
-  return (
+  // THE ADDRESS EVERY INBOUND INTEGRATION IS BUILT ON, said once: over the
+  // catalogue it describes, or at the head of one tool's page. It is one
+  // setting, and a screen that asked for it per integration would ask the
+  // operator to keep seven copies consistent. ALWAYS SET: the address vendors
+  // deliver to is Tier A (the public listener's `api.public.external_url`
+  // where one is configured, and `api.external_url` otherwise, `config_path`
+  // naming which), required on every node serving this screen and resolved
+  // before the file is decoded, so a node that answers at all has an address.
+  const baseAddress = setup.base && (
+    <Callout variant="neutral" icon={<LinkGlyph size="md" />}>
+      <span>
+        Third-party apps reach this engine at <InlineCode>{setup.base.value}</InlineCode>
+      </span>
+    </Callout>
+  );
+
+  // THE TILES, OR ONE TOOL'S PAGE, drawn once: on the catalogue they sit
+  // under the third-party heading, and on a tool's page on their own.
+  const catalogue = (
     <>
-      {/* WHAT THE SCREEN IS, AND WHICH HALF OF IT. The lede and the filter
-          share a row, as on every catalogue in this product: the counts are
-          what a reader asks first ("how many do we have?"), and a figure in
-          the page bar said it a second time. The counts are a READING, so
-          the filter waits for one: "Connected 0" before the rows answer is a
-          claim that the company was counted. */}
-      {!focus && (
-        <div className="int-bar">
-          <PageNote>
-            Connect the tools the company already uses. Each agent gets its own identity in every
-            tool it is allowed to use, and acts there with its own credentials.
-          </PageNote>
-          {data && (
-            <Segmented<Show>
-              ariaLabel="Which integrations to show"
-              size="sm"
-              value={show}
-              onChange={setShow}
-              options={[
-                { value: "all", label: "All" },
-                { value: "connected", label: "Connected", count: configured.length },
-                {
-                  value: "available",
-                  label: "Available",
-                  count: CATALOG.length - configured.length,
-                },
-              ]}
-            />
-          )}
-        </div>
-      )}
-
-      {/* THE ADDRESS EVERY INBOUND INTEGRATION IS BUILT ON, rendered once. It
-          is one setting, and a screen that asked for it per integration would
-          ask the operator to keep seven copies consistent. */}
-      {setup.base && !setup.base.present && (
-        <Callout variant="warning">
-          <span className="col" style={{ gap: 4 }}>
-            <span>No public address is set, so no third-party app can deliver to this engine.</span>
-            <span className="t-caption">
-              Set <InlineCode>{setup.base.config_path}</InlineCode> to the HTTPS address third-party
-              apps reach this deployment on. Chat over an outbound socket, Mattermost, is
-              unaffected.
-            </span>
-          </span>
-        </Callout>
-      )}
-      {/* SET AND SET TO SOMETHING ARE DIFFERENT FACTS, which is why the
-          engine answers `resolved` beside `present` as a three-valued field.
-          The banner read `present` alone, so a `${VAR}` pointing at an
-          environment variable nobody exported rendered as "Third-party apps
-          reach this engine at" followed by an empty code span — the one
-          screen that exists to say where deliveries land, saying nothing, on
-          exactly the misconfiguration it should name. */}
-      {setup.base?.present && setup.base.resolved !== false && (
-        <Callout variant="neutral" icon={<LinkGlyph size="md" />}>
-          <span>
-            Third-party apps reach this engine at <InlineCode>{setup.base.value}</InlineCode>
-          </span>
-        </Callout>
-      )}
-      {setup.base?.present && setup.base.resolved === false && (
-        <Callout variant="warning">
-          <span className="col" style={{ gap: 4 }}>
-            <span>
-              The public address is configured as a reference that resolves to nothing, so no
-              third-party app can deliver to this engine.
-            </span>
-            <span className="t-caption">
-              <InlineCode>{setup.base.config_path}</InlineCode> is set to{" "}
-              <InlineCode>
-                {setup.base.reference ? `\${${setup.base.reference}}` : "a reference"}
-              </InlineCode>
-              , which resolves to nothing. Export it, or seal it as a secret, and re-activate the
-              revision — a reference is resolved from the snapshot taken when the revision is
-              applied.
-            </span>
-          </span>
-        </Callout>
-      )}
-      {managed !== null && (
-        <Callout variant="neutral" icon={<ShieldGlyph size="md" />}>
-          {managed}
-        </Callout>
-      )}
-      {setup.guarded && (
-        <Callout variant="neutral" icon={<KeyGlyph size="md" />}>
-          <span>
-            Setting an integration up needs an operator token. This screen is showing what it can
-            read without one.
-          </span>
-          <span className="spacer" />
-          {/* The same door QueryState opens, for the same reason: with
-              anonymous reads allowed the socket is never refused, so a banner
-              that only NAMES the missing credential leaves the reader with
-              nothing on the page that can supply it. */}
-          <Button size="small" leadingIcon={<KeyGlyph size="sm" />} onClick={requestToken}>
-            Set token
-          </Button>
-        </Callout>
-      )}
-
-      {/* ONE OBJECT, ONE HEADER. `#/settings/integrations/{kind}` is a page about
-          a single tool, and it opened with the catalogue's chrome and a card:
-          the tool's name lived inside the card's disclosure BUTTON, which is a
-          control rather than a title, so nothing on the screen named what it
-          was about until the reader's eye reached the row.
-          The card stays — it carries the actions, the surfaces and the roster
-          — and this is the title and the facts re-homed above it. They are the
-          peek's facts, from one function, so the two frames cannot drift; see
-          [integrationFacts]. */}
-      {focus && focusState && (
-        <ObjectHeader
-          kind="Integration"
-          icon="plug"
-          identifier={focus.key}
-          title={focus.name}
-          status={
-            focusState.tag === "" ? undefined : (
-              <Tag variant={focusState.tone} appearance={focusState.outline ? "outline" : "soft"}>
-                {focusState.tag}
-              </Tag>
-            )
-          }
-          facts={
-            presentSurfaces(focus, rows).length > 0
-              ? integrationFacts(focus, rows, now, {
-                  known: data?.traffic_known ?? false,
-                  since: data?.traffic_since,
-                })
-              : undefined
-          }
-        />
-      )}
-
-      {dropping && (
-        <DisconnectDialog
-          name={dropping.name}
-          kinds={dropping.kinds}
-          stuck={dropping.stuck || undefined}
-          apps={dropping.apps}
-          appPath={dropping.appPath}
-          onClose={() => setDropping(null)}
-          // The row does not vanish here: the engine keeps the block until
-          // the third-party app teardown succeeds, so what a re-read shows
-          // is the surface moving to Disconnecting.
-          onDone={() => {
-            // BOTH HALVES, AND KEEP LOOKING AT BOTH. A disconnect leaves
-            // the listing calling the surface configured while the rows
-            // already say it is gone, which is the same race as a connect
-            // in the other direction. See [useRecheck].
-            watch();
-          }}
-        />
-      )}
-
-      {dialog && (
-        <SetupDialog
-          sections={dialog.sections}
-          title={dialog.title}
-          rotate={dialog.rotate}
-          onClose={() => setDialog(null)}
-          // BOTH HALVES. The requirements half says what the form should now
-          // show; the status half is what reports whether the connect took,
-          // and it is the one an operator is looking at when the dialog
-          // closes.
-          onDone={() => {
-            // READ, AND KEEP LOOKING: the first read can land before the
-            // engine has applied the revision it just stored. See [useRecheck].
-            watch();
-          }}
-        />
-      )}
-
       {/* BOTH HALVES, because a card drawn from one of them is a card with
           no buttons. See [useSetup]'s `loading`. */}
       {((loading && !data) || setup.loading) && (
         <Skeleton variant="text" rows={6} label="Loading" />
       )}
-      <QueryState error={error} loading={loading} empty={undefined}>
+      <QueryState error={error} refusal={refusal} loading={loading} empty={undefined}>
         {/* NOTHING CONNECTED IS A FACT ABOUT THE LIST, SAID ABOVE IT. A page
-            holding a tile for every tool is not empty, and what the sentence adds —
-            that only a schedule can wake a seat until then — is worth reading
-            before the list, not after it. */}
+            holding a tile for every tool is not empty, and the sentence is
+            worth reading before the list, not after it. */}
         {data && !kind && configured.length === 0 && (
           <Callout variant="neutral" icon={<PlugGlyph size="md" />}>
-            No integration is connected yet. Until one is, the only thing that can wake a seat is a
-            schedule — connect a chat surface, a tracker or a code host below.
+            No integration connected yet. Connect one below.
           </Callout>
         )}
         {kind && !focus && (
           <EmptyState
             icon={<PlugGlyph size="xl" />}
             title={`This build serves no integration called “${kind}”`}
-            description="The link that brought you here names a surface this engine does not have. Every integration it does serve is in Settings › Integrations."
+            description="See Company › Integrations for the ones available."
           />
         )}
         {/* THE CATALOGUE: WHAT THIS COMPANY HAS, THEN WHAT IT COULD HAVE, each
@@ -3368,20 +3214,18 @@ export function Integrations({ kind }: { kind?: string }) {
                 at the six vendors this build ships would read as the whole of
                 what an agent can reach. A link rather than a tile with an
                 action: it opens the add form where the servers are listed and
-                checked — Tools & MCP, with `?add=server` — so a server added
+                checked, MCP Tools, with `?add=server`, so a server added
                 from here lands beside the others it is compared with. */}
             {show !== "connected" && (
               <a
                 className="int-tile int-tile-more"
-                href={href(["settings", "tools"], { add: "server" })}
+                href={href(["settings", "mcp-tools"], { add: "server" })}
               >
                 <span className="int-brand int-brand-more" aria-hidden>
                   <PlusGlyph size="sm" />
                 </span>
                 <span className="int-name">Add an MCP server</span>
-                <span className="int-tile-text">
-                  Give agents any tool that speaks MCP — per role, with per-seat credentials.
-                </span>
+                <span className="int-tile-text">Give agents any MCP tool.</span>
               </a>
             )}
           </div>
@@ -3392,7 +3236,10 @@ export function Integrations({ kind }: { kind?: string }) {
             state above already says the link is dead. */}
         {!setup.loading && focus && (
           <EntryRow
-            key={focus.key}
+            // EACH SIBLING ITS OWN KEY: the tool's history below is keyed on
+            // the tool too, and two children of one parent sharing a key are
+            // reconciled as one, so every poll appended another card.
+            key={`entry:${focus.key}`}
             entry={focus}
             rows={rows}
             rollups={data?.tools}
@@ -3400,6 +3247,7 @@ export function Integrations({ kind }: { kind?: string }) {
             publicBase={setup.base?.value}
             guarded={setup.guarded}
             managed={managed}
+            avatarOf={avatarOf}
             onOpen={(action, reason) => openForm(focus, action, reason)}
             onDisconnect={() =>
               setDropping({
@@ -3449,7 +3297,7 @@ export function Integrations({ kind }: { kind?: string }) {
           // another's does not carry the open pass across: the detail route is
           // keyed on (kind, id), and a pass opened on GitHub would be asked
           // for under Slack and answer 404.
-          <SetupPasses key={focus.key} entry={focus} kinds={focusKinds} />
+          <SetupPasses key={`passes:${focus.key}`} entry={focus} kinds={focusKinds} />
         )}
 
         {/* WHAT ACTUALLY ARRIVED, one panel per surface the tool covers.
@@ -3469,6 +3317,156 @@ export function Integrations({ kind }: { kind?: string }) {
               <SurfaceDeliveries key={surface.key} surface={surface.key} name={surface.name} />
             ))}
       </QueryState>
+    </>
+  );
+
+  return (
+    <>
+      {kind && baseAddress}
+      {managed !== null && (
+        <Callout variant="neutral" icon={<ShieldGlyph size="md" />}>
+          {managed}
+        </Callout>
+      )}
+      {setup.guarded && (
+        <Callout variant="neutral" icon={<KeyGlyph size="md" />}>
+          <span>{needsWords("Reading the integrations' setup state", setup.needs)}</span>
+          <span className="spacer" />
+          {/* THE DOOR, FOR A READER WHO IS NOBODY: a banner that only NAMES
+              the missing credential leaves them nothing on the page that can
+              supply it. A signed-in reader lacks a GRANT, which signing in
+              again as themselves would not change, so they get the sentence
+              alone. */}
+          {viewer.anonymous && (
+            <Button size="small" leadingIcon={<KeyGlyph size="sm" />} onClick={goSignIn}>
+              Sign in
+            </Button>
+          )}
+        </Callout>
+      )}
+
+      {/* ONE OBJECT, ONE HEADER. `#/company/integrations/{kind}` is a page about
+          a single tool, and it opened with the catalogue's chrome and a card:
+          the tool's name lived inside the card's disclosure BUTTON, which is a
+          control rather than a title, so nothing on the screen named what it
+          was about until the reader's eye reached the row.
+          The card stays (it carries the actions, the surfaces and the roster),
+          and this is the title and the facts re-homed above it. They are the
+          peek's facts, from one function, so the two frames cannot drift; see
+          [integrationFacts]. */}
+      {focus && focusState && (
+        <ObjectHeader
+          kind="Integration"
+          icon="plug"
+          identifier={focus.key}
+          title={focus.name}
+          status={
+            focusState.tag === "" ? undefined : (
+              <Tag variant={focusState.tone} appearance={focusState.outline ? "outline" : "soft"}>
+                {focusState.tag}
+              </Tag>
+            )
+          }
+          facts={
+            presentSurfaces(focus, rows).length > 0
+              ? integrationFacts(focus, rows, now, {
+                  known: data?.traffic_known ?? false,
+                  since: data?.traffic_since,
+                })
+              : undefined
+          }
+        />
+      )}
+
+      {dropping && (
+        <DisconnectDialog
+          name={dropping.name}
+          kinds={dropping.kinds}
+          stuck={dropping.stuck || undefined}
+          apps={dropping.apps}
+          appPath={dropping.appPath}
+          avatarOf={avatarOf}
+          onClose={() => setDropping(null)}
+          // The row does not vanish here: the engine keeps the block until
+          // the third-party app teardown succeeds, so what a re-read shows
+          // is the surface moving to Disconnecting.
+          onDone={() => {
+            // BOTH HALVES, AND KEEP LOOKING AT BOTH. A disconnect leaves
+            // the listing calling the surface configured while the rows
+            // already say it is gone, which is the same race as a connect
+            // in the other direction. See [useRecheck].
+            watch();
+          }}
+        />
+      )}
+
+      {dialog && (
+        <SetupDialog
+          sections={dialog.sections}
+          title={dialog.title}
+          rotate={dialog.rotate}
+          onClose={() => setDialog(null)}
+          // BOTH HALVES. The requirements half says what the form should now
+          // show; the status half is what reports whether the connect took,
+          // and it is the one an operator is looking at when the dialog
+          // closes.
+          onDone={() => {
+            // READ, AND KEEP LOOKING: the first read can land before the
+            // engine has applied the revision it just stored. See [useRecheck].
+            watch();
+          }}
+        />
+      )}
+
+      {/* CREWLET'S OWN SERVICES FIRST, on the catalogue's page and never on
+          one tool's: what the company already has, before what it could
+          connect. */}
+      {!kind && <BuiltIn />}
+
+      {kind ? (
+        catalogue
+      ) : (
+        <section className="col gap-3" aria-labelledby="catalogue-heading">
+          {/* THE THIRD-PARTY CATALOGUE, under its own heading: the filter, the
+              address vendors deliver to and the note that nothing is connected
+              are all about these tiles, and drawn above Crewlet's own services
+              they read as governing those too. */}
+          <Eyebrow as="p" id="catalogue-heading">
+            Third-party apps
+          </Eyebrow>
+          {/* WHAT THE SCREEN IS, AND WHICH HALF OF IT. The lede and the filter
+              share a row, as on every catalogue in this product: the counts are
+              what a reader asks first ("how many do we have?"), and a figure in
+              the page bar said it a second time. The counts are a READING, so
+              the filter waits for one: "Connected 0" before the rows answer is a
+              claim that the company was counted. */}
+          <div className="int-bar">
+            <PageNote>Connect the tools the company already uses.</PageNote>
+            {data && (
+              <SegmentedControl<Show>
+                semantics="radio"
+                activate="manual"
+                label="Which integrations to show"
+                size="sm"
+                value={show}
+                onValueChange={setShow}
+                options={[
+                  { value: "all", label: "All" },
+                  { value: "connected", label: "Connected", count: configured.length },
+                  {
+                    value: "available",
+                    label: "Available",
+                    count: CATALOG.length - configured.length,
+                  },
+                ]}
+              />
+            )}
+          </div>
+
+          {baseAddress}
+          {catalogue}
+        </section>
+      )}
     </>
   );
 }

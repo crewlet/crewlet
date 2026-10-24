@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -38,7 +39,8 @@ func runStamp(t *testing.T, new Factory) {
 
 // Stamped runs the candidate's own write path once, over a publisher this
 // suite builds, and reports a record that does not carry the framework's
-// [statelog.Stamp].
+// [statelog.Stamp] — or that installs a gate at any version but the one its
+// own changed apply needs ([gateStamp]).
 //
 // # Why the write path and not the encoder
 //
@@ -80,13 +82,26 @@ func Stamped(t *testing.T, new Factory) error {
 		t.Fatalf("build %s's read seam: %v", name, err)
 	}
 	log := newSuiteLog()
+	// SIGNED, as every publisher's records are: the framework refuses a
+	// publisher with no signer, and what the broker holds is the frame.
+	signer, err := statelog.NewSigner(name, suiteRing())
+	if err != nil {
+		t.Fatalf("build a signer for %s: %v", name, err)
+	}
+	verifier, err := statelog.NewVerifier(name, suiteRing())
+	if err != nil {
+		t.Fatalf("build a verifier for %s: %v", name, err)
+	}
 	deps := statelog.Deps{
 		Domain: c.Domain, Spec: c.spec(),
-		Log: log, Records: log, Rows: rows,
+		Log: log, Signer: signer, Rows: rows,
 		Fence: openFence{}, Gates: openGates{},
 		Waiter: suiteWaiter{at: at}, Voids: suiteWaiter{at: at}, Identity: suiteWaiter{at: at},
 		NodeID:     SuiteWriter,
 		Generation: func() uint32 { return SuiteGeneration },
+		// THE SAME LOG READ BACK THROUGH THE VERIFIER, because what it
+		// holds is the signed frame and a resolution decodes the body.
+		Records: statelog.VerifiedLog{Log: log, Verifier: verifier},
 		// A RESERVE OVER A LOG WITH NO CEILING where the domain keeps
 		// one: what is under test is what the decision writes, not the
 		// log's room.
@@ -107,7 +122,12 @@ func Stamped(t *testing.T, new Factory) error {
 		return fmt.Errorf("%s's write path appended nothing, so it certifies "+
 			"nothing — the write it supplies has to publish a record", name)
 	}
-	for _, payload := range records {
+	for _, framed := range records {
+		payload, verdict := verifier.Open(framed)
+		if verdict != statelog.Verified {
+			return fmt.Errorf("%s's record does not open under the key it was "+
+				"signed with (%s)", name, verdict)
+		}
 		env, err := c.Domain.Envelope(payload)
 		if err != nil {
 			return fmt.Errorf("%s published a record its own envelope reader "+
@@ -120,6 +140,56 @@ func Stamped(t *testing.T, new Factory) error {
 				"writer, and a record naming nobody is one no eviction can drop",
 				name, env.Kind, env.Writer, env.Gen, SuiteWriter, SuiteGeneration)
 		}
+		if err := gateStamp(c, name, env, payload); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// gateStamp holds a record that INSTALLS A GATE to the one version a gate may
+// carry: exactly what its own changed apply needs, and nothing above it.
+//
+// # Why a gate is the exception to "the lowest version that reads it"
+//
+// Every other record a build cannot read is RETAINED, and applied after its
+// upgrade. A gate is not: an older build that cannot read one HALTS at it and
+// takes its copy of the estate out of service, because a deferred gate would
+// license every record above it — an evicted writer's records applied there, a
+// removed object written back. So a gate stays at the base version unless its
+// APPLY changed, which no older build can honour either way, and the table says
+// which fields are such a change ([statelog.VersionedField.Gate]). A gate
+// carrying an ordinary versioned field above those halts every older node for
+// a field rather than for a rule — what each domain's encoder refuses
+// ([statelog.RecordFields.Ungated]) and what is checked here again on the bytes
+// the write path actually published, since the encoder is the code under test.
+//
+// It was a flat "a gate is at version 1", which the first gate whose apply
+// changes — stamped above the base exactly as the framework intends — would
+// have failed for the wrong reason, with a sentence claiming an older build
+// defers what the applier stops on.
+func gateStamp(c Candidate, name string, env statelog.Envelope, payload []byte) error {
+	if !c.Domain.InstallsGate(env) {
+		return nil
+	}
+	want, err := c.Fields.Minimum(env.Op, payload)
+	if err != nil {
+		return fmt.Errorf("%s: read a %s gate record against its own field "+
+			"table: %w", name, env.Kind, err)
+	}
+	if ungated := c.Fields.Ungated(env.Op, payload); len(ungated) > 0 {
+		return fmt.Errorf("%s published a %s record that installs a gate and "+
+			"carries %s above its own changed apply — every older build halts "+
+			"at a gate it cannot read, so this one would take them out of "+
+			"service for a field rather than for a rule they cannot honour",
+			name, env.Kind, strings.Join(ungated, ", "))
+	}
+	if env.V != want {
+		return fmt.Errorf("%s published a %s record that installs a gate at "+
+			"record version %d, want %d — every build that cannot read a gate "+
+			"halts at it, so a gate is raised above the base only by a field "+
+			"its table marks VersionedField.Gate, and to exactly that field's "+
+			"version", name, env.Kind, env.V, want)
 	}
 	return nil
 }
@@ -139,14 +209,14 @@ func seedCheckpoint(ctx context.Context, db store.ReplicatedHandle, at statelog.
 }
 
 // admissionFor is a reserve over a log with no ceiling where the candidate's
-// domain keeps one, and none where it keeps none — [statelog.KeepsGateReserve]'s
+// domain keeps one, and none where it keeps none — [statelog.ReservationOf]'s
 // rule, which every publisher, read index and sweep is held to.
 func admissionFor(t *testing.T, c Candidate) statelog.Admission {
 	t.Helper()
-	if !statelog.KeepsGateReserve(c.Domain) {
+	if !statelog.ReservationOf(c.Domain).Kept {
 		return nil
 	}
-	reserve, err := statelog.NewReserve(c.spec().Name,
+	reserve, err := statelog.NewReserve(c.spec(),
 		func(context.Context) (statelog.Usage, error) { return statelog.Usage{}, nil })
 	if err != nil {
 		t.Fatalf("build a reserve over %s: %v", c.Domain.Name(), err)
@@ -165,7 +235,7 @@ func (openFence) ClearForZero(context.Context, statelog.Position) error { return
 type openGates struct{}
 
 func (openGates) GatedAt(context.Context, statelog.Subject, string, string,
-	statelog.Position) (statelog.Reason, bool, error) {
+	statelog.Position, []byte) (statelog.Reason, bool, error) {
 	return "", false, nil
 }
 
@@ -188,3 +258,6 @@ func (suiteWaiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "", f
 func (suiteWaiter) WaitApplied(context.Context, statelog.ScopeSet, statelog.Position) error {
 	return errNoApplier
 }
+
+// suiteRing is the keyring every record the suite publishes is signed under.
+func suiteRing() statelog.Keyring { return statelog.OneKey("suite", "statelogtest-material") }

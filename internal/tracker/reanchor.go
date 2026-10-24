@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -80,6 +81,49 @@ func generationReason(f statelog.GenerationFacts) string {
 	return "the stream was recreated and its sequences restarted"
 }
 
+// generationActor is the author, the author kind and the credential a
+// generation record carries — the three columns every other record here does.
+//
+// THE FACTS' OWN KIND AND CREDENTIAL, never the author's name standing in for
+// both. It used to record every operator as kind `operator` with their NAME as
+// the credential, so a reanchor run by a person through their machine token
+// read as an API token named after them, and the credential that actually ran
+// it — the one a revocation would be about — was on no record. The kind is
+// read in either vocabulary, as the identity estate reads it: the one
+// [iam.ActorFor] records a party under, which is this package's own, or the
+// principal's, and a kind in neither is an operator, which is what a reanchor
+// was always recorded as. An OPERATOR the facts name with no credential beside
+// them is a credential acting under its own login — the one party whose name
+// [iam.ActorFor] also records as its credential — so the name stands in for
+// it there and nowhere else: under any other kind it would put a seat's handle
+// or a person's in the credential column.
+//
+// NOBODY NAMED IS THE NODE, recorded as the node's own writer records itself.
+func generationActor(f statelog.GenerationFacts) (author string, kind AuthorKind, operator string) {
+	if f.By == "" {
+		return f.Writer, AuthorSystem, ""
+	}
+	kind = AuthorKind(f.ByKind)
+	switch iam.Kind(f.ByKind) {
+	case iam.KindSeat:
+		kind = AuthorAgent
+	case iam.KindPerson:
+		kind = AuthorHuman
+	case iam.KindMachine:
+		kind = AuthorOperator
+	case iam.KindEngine:
+		kind = AuthorSystem
+	}
+	if !kind.Valid() {
+		kind = AuthorOperator
+	}
+	operator = f.OperatorID
+	if operator == "" && kind == AuthorOperator {
+		operator = f.By
+	}
+	return f.By, kind, operator
+}
+
 // GenerationSubject is the subject generation gen's record is published on —
 // what a reader of the log asks to learn who opened a generation
 // ([statelog.GenerationOpeners]).
@@ -104,7 +148,8 @@ func (GenerationRecord) GenerationSubject(gen uint32) (statelog.Subject, bool) {
 // THE OPERATOR IS THE AUTHOR. The record went out through the node's own
 // writer once, which is the SYSTEM actor, so the audit row said the engine had
 // reanchored itself; who ran the verb is the one fact a later reader of
-// `tracker_log_generations` is asking.
+// `tracker_log_generations` is asking. See [generationActor] for the three
+// columns it fills.
 func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.GenerationRecord, bool, error) {
 	subject := GenerationSubject(f.Generation)
 	scope := ScopeSet{Subject: true}
@@ -112,10 +157,7 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 	// the record's id carries the instant a retry is judged by, names the
 	// node that writes it, and is the same operation on every re-run there.
 	opID := f.OpID()
-	author, kind, operator := f.By, AuthorOperator, f.By
-	if author == "" {
-		author, kind, operator = f.Writer, AuthorSystem, ""
-	}
+	author, kind, operator := generationActor(f)
 	body, err := json.Marshal(Generation{
 		V:                   GateRecordVersion,
 		Gen:                 f.Generation,

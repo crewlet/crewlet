@@ -11,9 +11,9 @@ import {
   LIST_FLOOR,
   PEEK_WIDTH,
   PHONE_BREAKPOINT,
+  SECTION_COLUMN_MIN,
   SCROLLBAR_GUTTER,
   SHELL_BREAKPOINT,
-  TREE_COLUMN,
   columnWidth,
   densityScale,
   listReserve,
@@ -124,6 +124,8 @@ function atRuleBody(css: string, prelude: string): string {
 
 /** The phone breakpoint's query, as every sheet writes it. */
 const PHONE = `@media (width < ${PHONE_BREAKPOINT}px)`;
+/** Where Settings' column folds to its picker (`app/layout.ts`'s SECTION_COLUMN_MIN). */
+const FOLD = `@media (width < ${SECTION_COLUMN_MIN}px)`;
 
 /** The body of the first rule whose selector is exactly `selector`. */
 function block(css: string, selector: string): string {
@@ -203,6 +205,16 @@ describe("the frame's layout", () => {
   // Asserted in the SHEET because it cannot be asserted anywhere else: jsdom
   // computes no layout, so the suites that render a grid stay green through
   // every value of this, and a screenshot is the only other witness.
+  // THE LIST TABLE'S HEAD IS 11/500 UPPERCASE, as the kit's DataTable draws
+  // every other list table: the gallery's and Audit's heads were the one
+  // pair at 400, lighter than the cells under them.
+  test("a grid's column heads are the list table's head: the 2xs step, medium, uppercase", () => {
+    const head = block(sheet("frame.css"), ".grid-th");
+    expect(head).toMatch(/font-size:\s*var\(--font-size-2xs\)/);
+    expect(head).toMatch(/font-weight:\s*var\(--font-weight-medium\)/);
+    expect(head).toMatch(/text-transform:\s*uppercase/);
+  });
+
   test("one grid owns the columns and every row adopts them", () => {
     // THE WIDE LAYOUT ALONE. Below the phone breakpoint a row is deliberately
     // NOT a row — the heads go and each cell draws its own label — so the
@@ -324,15 +336,14 @@ describe("the frame's layout", () => {
       /grid-template-columns:\s*var\(--section-column\) minmax\(0, 1fr\)/,
     );
     expect(columnWidth("column")).toBe(Number.parseFloat(size.shell.rail));
-    expect(columnWidth("tree")).toBe(TREE_COLUMN);
     expect(columnWidth("tabs")).toBe(0);
+    expect(columnWidth("none")).toBe(0);
 
     // THE NUMBERS, at the normal density: 236 + 8 + 2 + 420 + 10 + 40 + 444,
-    // 236 more beside Settings' column and 256 beside Knowledge's tree.
+    // and 236 more beside Settings' column.
     const normal = densityScale("normal");
     expect(peekColumnMin({ column: 0, scale: normal })).toBe(1160);
     expect(peekColumnMin({ column: columnWidth("column"), scale: normal })).toBe(1396);
-    expect(peekColumnMin({ column: columnWidth("tree"), scale: normal })).toBe(1416);
 
     // AND AT EVERY DENSITY, the list the column leaves at the threshold —
     // walked term by term here rather than through `listReserve`, so a term
@@ -340,7 +351,7 @@ describe("the frame's layout", () => {
     // least the floor, and one pixel narrower it would not be.
     for (const choice of Object.keys(density) as (keyof typeof density)[]) {
       const scale = densityScale(choice);
-      for (const column of [0, columnWidth("column"), columnWidth("tree")]) {
+      for (const column of [0, columnWidth("column")]) {
         const at = peekColumnMin({ column, scale });
         const list = (window: number) =>
           window -
@@ -373,7 +384,7 @@ describe("the frame's layout", () => {
   // builder's buttons swapped for its menu at 860 in the sheet and at 640 in
   // the script.
   test("every media query's width is a breakpoint app/layout.ts declares", () => {
-    const allowed = new Set([PHONE_BREAKPOINT, SHELL_BREAKPOINT]);
+    const allowed = new Set([PHONE_BREAKPOINT, SHELL_BREAKPOINT, SECTION_COLUMN_MIN]);
     const stray: string[] = [];
     for (const name of readdirSync(STYLES).filter((f) => f.endsWith(".css"))) {
       const css = sheet(name);
@@ -451,20 +462,51 @@ describe("the frame's layout", () => {
   // scroller its content box is the viewport, the `max-content` columns alone
   // exceed it, and every `1fr` resolves to ZERO — the title column vanishing
   // to make room for a due date.
-  // THE SETTINGS COLUMN IS ONE ROW ON A PHONE. Stacked whole above the section
-  // it took about 520px, and Nodes' and Secrets' own content began below the
-  // fold. Below the breakpoint the list folds behind the toggle naming the
-  // section; at every other width the toggle is not drawn at all, so the
-  // column beside a section is never a second, collapsed copy of itself.
-  test("the Settings column folds to a picker below the phone breakpoint, and only there", () => {
+  // THE SETTINGS COLUMN IS ONE ROW WHERE THE SECTION WOULD BE TOO NARROW.
+  // Stacked whole above the section on a phone it took about 520px; beside
+  // the section at 1024 it left a 489px section whose tables and stat tiles
+  // cut their values. Below SECTION_COLUMN_MIN the list folds behind the
+  // toggle naming the section; at every other width the toggle is not drawn
+  // at all, so the column beside a section is never a second, collapsed copy
+  // of itself.
+  test("the Settings column folds to a picker below SECTION_COLUMN_MIN, and only there", () => {
     const css = sheet("frame.css");
-    const wide = css.split(PHONE)[0]!;
-    const narrow = css.slice(css.indexOf(PHONE));
+    const wide = css.split(FOLD)[0]!;
+    const narrow = atRuleBody(css, FOLD);
+    expect(SECTION_COLUMN_MIN).toBe(1212);
     expect(block(wide, ".section-picker-toggle")).toMatch(/display:\s*none/);
     expect(wide).not.toMatch(/\.section-picker:not\(\[data-open\]\)/);
     expect(block(narrow, ".section-picker-toggle")).toMatch(/display:\s*flex/);
     expect(block(narrow, ".section-picker:not([data-open]) .section-picker-list")).toMatch(
       /display:\s*none/,
+    );
+    expect(block(narrow, ".section-frame")).toMatch(/grid-template-columns:\s*minmax\(0, 1fr\)/);
+  });
+
+  // THE BAR'S INLINE INSET IS THE KIT'S (`AppShell` measures the scroller's
+  // gutter into it): an inset of our own put every page's actions 15px past
+  // the cards under them with classic scrollbars.
+  test("the page bar leaves its inline inset to the kit", () => {
+    const css = sheet("frame.css");
+    for (const m of css.matchAll(/\.app \.page-bar\s*\{([^}]*)\}/g)) {
+      expect(m[1]).not.toMatch(/padding(-inline)?:/);
+    }
+  });
+
+  // THE PICKER'S TOGGLE STANDS OVER THE LIST IT UNFOLDS, on the section's
+  // gutter: the list's glyphs sat 11px right of the toggle's, and the toggle
+  // 4px left of the section's content. The toggle takes the rows' inset less
+  // its border, and the list no gutter of its own inside the picker.
+  test("the folded picker's toggle lines up with its rows and the section", () => {
+    const narrow = atRuleBody(sheet("frame.css"), FOLD);
+    expect(block(narrow, ".section-picker-toggle")).toMatch(
+      /padding:\s*0 calc\(var\(--size-nav-row-pad\) - 1px\)/,
+    );
+    expect(block(narrow, ".section-picker-list > .crewlet-sidebar-nav")).toMatch(
+      /padding-inline:\s*0/,
+    );
+    expect(block(narrow, ".section-picker")).toMatch(
+      /padding:\s*var\(--spacing-2\) var\(--spacing-5\)/,
     );
   });
 
@@ -476,7 +518,7 @@ describe("the frame's layout", () => {
   // the scroller's view, which only a size container can hand a descendant.
   test("the Settings column is the scroller's height, so it stays put while the section scrolls", () => {
     const css = sheet("frame.css");
-    const wide = css.split(PHONE)[0]!;
+    const wide = css.split(FOLD)[0]!;
     const column = block(wide, ".section-column");
     expect(column).toMatch(/position:\s*sticky/);
     expect(column).toMatch(/height:\s*100cqb/);
@@ -497,84 +539,33 @@ describe("the frame's layout", () => {
       /\.crewlet-app-shell__main:has\([^)]*section-frame[^)]*\)\s*\{[^}]*container:/,
     );
 
-    // ON A PHONE the column is back in the flow, and the frame's spare height
+    // FOLDED, the column is back in the flow, and the frame's spare height
     // goes to the section: two `auto` rows split it and opened a band of
     // nothing between the folded picker and the section it names.
-    const narrow = css.slice(css.indexOf(PHONE));
+    const narrow = atRuleBody(css, FOLD);
     expect(block(narrow, ".section-frame")).toMatch(/grid-template-rows:\s*auto 1fr/);
     const stacked = block(narrow, ".section-column");
     expect(stacked).toMatch(/position:\s*static/);
     expect(stacked).toMatch(/height:\s*auto/);
   });
 
-  // A HEAD WITH ACTIONS PUTS ITS SUBTITLE ON A LINE OF ITS OWN on a narrow
-  // screen. Beside actions the kit's shrink is proportional, so a phone gave a
-  // plain title a fraction of a pixel and it broke over two lines ("Active"
-  // over "revision") while the subtitle was cut beside the Copy button. The
-  // rule is the head's SHAPE, not one screen's — the agent profile had
-  // written it for its own card alone.
-  test("a card head holding a subtitle and actions stacks the subtitle on a narrow screen", () => {
+  // A NARROW CARD PUTS ITS SUBTITLE ON A LINE OF ITS OWN, and the kit does it
+  // (@crewlethq/ui 0.38.0, by the card's own width): beside actions the
+  // subtitle was cut ("as the engine resolv…") and a title broke over two
+  // lines. The dashboard's page-width copy of the rule is gone, and no screen
+  // keeps a private one.
+  test("a narrow card's subtitle takes its own line by the kit's rule, not ours", () => {
+    expect(kitSheet()).toMatch(/@container crewlet-card \(width < 480px\)/);
     const css = sheet("screens.css");
-    const narrow = [...css.matchAll(/@container page \(width < 640px\)\s*\{/g)].map((m) =>
-      atRuleBody(css.slice(m.index), "@container page (width < 640px)"),
-    );
-    const head = narrow.find((b) =>
-      b.includes(
-        ".crewlet-card__header:has(> .crewlet-card__subtitle):has(> .crewlet-card__header-actions)",
-      ),
-    );
-    expect(head, "the narrow-screen card head rule is declared").toBeDefined();
-    expect(
-      block(
-        head!,
-        ".crewlet-card__header:has(> .crewlet-card__subtitle):has(> .crewlet-card__header-actions)",
-      ),
-    ).toMatch(/flex-wrap:\s*wrap/);
-    const subtitle = block(
-      head!,
-      ".crewlet-card__header:has(> .crewlet-card__header-actions) > .crewlet-card__subtitle",
-    );
-    expect(subtitle).toMatch(/order:\s*9/);
-    expect(subtitle).toMatch(/flex:\s*1 1 100%/);
-    // AND NO SCREEN KEEPS A PRIVATE COPY of the one rule.
+    expect(css).not.toMatch(/\.crewlet-card__header:has\(> \.crewlet-card__subtitle\)/);
     expect(css).not.toMatch(/\.prof-turn \.crewlet-card__subtitle/);
   });
 
-  // AN ODD LAST TILE TAKES THE WHOLE ROW once the kit folds a stat row into two
-  // columns: three tiles stood 2 + 1 on a phone — Secrets' among them — the
-  // last beside an empty half-row, its top hairline stopping mid-panel, which
-  // reads as a tile that failed to load. The fold is the kit's `width <
-  // 1024px` step, so the rule has to sit at exactly that width to meet it.
-  test("a stat row's odd last tile spans the row wherever the kit folds it to two", () => {
-    const at = (css: string, needle: string) =>
-      mediaBodies(css).filter(
-        (m) => m.prelude.includes("(width < 1024px)") && m.body.includes(needle),
-      );
-    const folds = at(kitSheet(), ".crewlet-stat-group");
-    expect(folds.map((m) => m.body).join("\n")).toMatch(
-      /\.crewlet-stat-group\s*\{[^}]*grid-template-columns:\s*repeat\(2,/,
-    );
-    const ours = at(sheet("screens.css"), ":last-child:nth-child(odd)");
-    expect(ours, "the odd-tile rule sits at the kit's fold").toHaveLength(1);
-    expect(block(ours[0]!.body, ".crewlet-stat-group > :last-child:nth-child(odd)")).toMatch(
-      /grid-column:\s*1 \/ -1/,
-    );
-  });
-
-  // A SEGMENTED CONTROL HUGS ITS OPTIONS. As a flex column's or a grid's child
-  // an `auto` width is stretched, and Configuration's collection picker drew
-  // as a full-width band with its options at the left, beside a lens control
-  // that hugged its own. A width that is not `auto` is never stretched.
-  test("a segmented control is its options' width wherever it sits", () => {
-    const own = block(sheet("components.css"), ".segmented");
-    expect(own).toMatch(/(^|[\s;])width:\s*fit-content/);
-    // And nothing sets it back to the container's width.
-    for (const name of ["base.css", "frame.css", "screens.css"]) {
-      if (!sheet(name).includes(".segmented")) continue;
-      for (const { sel, body } of mentioning(sheet(name), ".segmented")) {
-        expect(body, `${sel} stretches the control`).not.toMatch(/(^|[\s;])width:\s*100%/);
-      }
-    }
+  // THE KIT FOLDS A STAT ROW BY ITS OWN WIDTH (@crewlethq/ui 0.38.0), so the
+  // dashboard restates no viewport step for it: a row is as wide as its
+  // column leaves it, and the 1024px step cut a 489px row's figures.
+  test("no stat row fold is restated at a viewport width", () => {
+    expect(sheet("screens.css")).not.toMatch(/\.crewlet-stat-group > :last-child:nth-child\(odd\)/);
   });
 
   // NO WORD ALONE ON A NOTE'S LAST LINE. At the measure, Secrets' note broke
@@ -589,19 +580,6 @@ describe("the frame's layout", () => {
     for (const { sel, body } of elsewhere) {
       expect(body, `${sel} takes the note's wrap back`).not.toMatch(/text-wrap/);
     }
-  });
-
-  // A STATE WAITING ON THE READER IS THE WARNING PILL, as the approved
-  // Settings artboard draws Integrations' figure; the kit fills its one badge
-  // with the accent because its badge is an unread count, and a state in that
-  // fill read as a second inbox. The repaint has to reach the kit's own pill.
-  test("the Settings column's attention figure is the kit's pill in the warning pair", () => {
-    expect(kitSheet()).toMatch(
-      /\.crewlet-nav-item__badge\s*\{[^}]*background:\s*var\(--color-brand-accent\)/,
-    );
-    const pill = block(sheet("frame.css"), ".section-row-attention .crewlet-nav-item__badge");
-    expect(pill).toMatch(/background:\s*var\(--color-feedback-warning-soft\)/);
-    expect(pill).toMatch(/(^|[\s;])color:\s*var\(--color-feedback-warning-ink\)/);
   });
 
   test("a grid becomes labelled cards below the phone breakpoint", () => {
@@ -1152,46 +1130,6 @@ describe("the frame's layout", () => {
     expect(block(narrow, ".table tr + tr")).toMatch(/border-top:/);
   });
 
-  // A FACT LINE IS A ROW OF FACTS, so it has to have a pitch. This one is a
-  // flex row of column boxes, which means each fact is as wide as its widest
-  // CHILD — and a note is prose where the value above it is a word.
-  test("a footnote cannot set its fact's column or its row", () => {
-    const css = sheet("frame.css");
-    const line = block(css, ".fact-line");
-    // A GRID WITH A REGULAR TRACK, not a flex row that sizes to content.
-    // Measured before: `v1` under a 146px "set by Agent CEO · 2m ago" beside
-    // three note-less facts at 66 to 75px, so the gaps between five labels ran
-    // 85, 162, 90, 169 — five columns placed at random rather than one row.
-    expect(line).toMatch(/display:\s*grid/);
-    expect(line).toMatch(/grid-template-columns:\s*repeat\(/);
-    // AND A TURN'S SEVEN FACTS FIT ONE LINE AT 1280, where the fact line is
-    // 984px wide (measured): at an 8rem floor "Wall clock" took a row alone.
-    const floor = Number(/minmax\((?:min\()?([\d.]+)rem/.exec(line)?.[1]) * 16;
-    const gap = /column-gap:\s*var\(--spacing-4\)/.test(line) ? 16 : NaN;
-    expect(7 * floor + 6 * gap).toBeLessThanOrEqual(984);
-
-    // AND EVERY FACT SITS ON THE SAME TWO BANDS. Subgrid is what keeps the
-    // labels on one line and the values on the next across the whole row: as
-    // independent boxes, one three-line note pushed its own value up and left
-    // the rest of the row hanging. TWO, not four: with a band per footnote a
-    // neighbour's value wrapping to a second line pushed every note in the
-    // row away from the value it qualifies — "37%", a blank line, then "of
-    // 46.0k input read from cache" — so a note is its value's, in one cell.
-    const fact = block(css, ".fact");
-    expect(fact).toMatch(/grid-template-rows:\s*subgrid/);
-    expect(fact).toMatch(/grid-row:\s*span 2/);
-    expect(block(css, ".fact-body")).toMatch(/flex-direction:\s*column/);
-
-    // AND THE CAP THAT USED TO STAND IN FOR ALL OF IT IS GONE. `max-width:
-    // 16ch` could only narrow the problem — sixteen characters at `--font-size-2xs`
-    // is still wider than most values — and left with the track doing the
-    // bounding it would cut a note the column had room for.
-    expect(
-      rules(css, ".fact-note").join(" "),
-      "the track bounds a note now; a cap on top of it only cuts one early",
-    ).not.toMatch(/max-width:/);
-  });
-
   test("the page bar wraps by what it holds, a phone's included, and folds there into More", () => {
     const css = sheet("frame.css");
     // THE BREAK'S OWN BODY, braces balanced — not everything after it. Sliced
@@ -1215,35 +1153,13 @@ describe("the frame's layout", () => {
       "a fixed height clips the second line the bar creates",
     ).not.toMatch(/(^|[;\s])height:\s*var\(--page-bar-h\)/);
 
-    // IT WRAPS BY WHAT IT HOLDS. A flex container assigns items to lines by
-    // their UNSHRUNK size, so a trail at its content width broke the line as
-    // soon as a long title and the controls exceeded the bar, with free space
-    // left on the first line — and a width threshold measured on the busiest
-    // bar forced the controls down on every screen under it, a sparse one
-    // included. A basis of 0 is what makes the break depend on the trail's
-    // FLOOR beside the controls; the grow factor hands the trail the rest.
-    const crumbs = block(base, ".crumbs");
-    expect(crumbs).toMatch(/flex:\s*1 100 0(?![.\d])/);
-    // AND IT STOPS BEFORE THE WAY BACK OUT IS GONE: at the MEASURED floor
-    // (`--crumb-floor`, the ancestors and the last crumb's stub, written by
-    // `Breadcrumb`), never under 20ch — what the narrowest line can give,
-    // measured at 178.8px on a 310px viewport — and never past the whole bar,
-    // where a trail whose ancestry alone is wider has to scroll. A fixed 20ch
-    // let a seat's trail share a phone's line with its button and cut its
-    // unit crumb mid-letter.
-    expect(crumbs).toMatch(
-      /min-width:\s*min\(100%,\s*max\(20ch,\s*var\(--crumb-floor,\s*0px\)\)\)/,
-    );
-    // PAST ITS FLOOR IT SCROLLS rather than clipping as a box, on the inline
-    // axis only — `overflow-x: auto` alone computes the block axis to `auto`
-    // too, which puts a vertical scrollport on a one-line box.
-    expect(crumbs, "the trail clips its overflow again").not.toMatch(/(^|[;\s])overflow:\s*hidden/);
-    expect(crumbs).toMatch(/overflow-x:\s*auto/);
-    expect(crumbs).toMatch(/overflow-y:\s*hidden/);
-    expect(crumbs).toMatch(/overscroll-behavior-x:\s*contain/);
-    expect(crumbs).toMatch(/scrollbar-width:\s*none/);
-    expect(base, "the trail's scrollbar is hidden in one engine and drawn in the other").toMatch(
-      /\.crumbs::-webkit-scrollbar\s*\{[^}]*display:\s*none/,
+    // IT WRAPS BY WHAT IT HOLDS, and the trail is what makes it: the kit's
+    // `Breadcrumb`, whose own stylesheet holds its basis of 0, its measured
+    // floor and its scroll past it (held by the kit's Breadcrumb suite). The
+    // frame names it `.page-trail` only to cap it beside the lenses, and draws
+    // no trail rules of its own that would fight the kit's.
+    expect(base, "the frame restyles the trail the kit draws").not.toMatch(
+      /\.(crumbs|crumb-[a-z]+)\b/,
     );
 
     // THE CONTROL GROUP DOES NOT SHRINK BY SO MUCH AS A FRACTION: it wraps, so
@@ -1281,10 +1197,17 @@ describe("the frame's layout", () => {
     expect(Number(order![1]), "order 0 is where document order already put them").toBeGreaterThan(
       0,
     );
+    // THE ONE OTHER ORDER IS THE LENSES', and it is past the controls': on a
+    // phone they take a row of their own under the line the controls share.
     const others = [...atBreak.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(
-      (m) => /(^|[\s;])order\s*:/.test(m[2]!) && !/\.page-controls/.test(m[1]!),
+      (m) =>
+        /(^|[\s;])order\s*:/.test(m[2]!) &&
+        !/\.page-controls/.test(m[1]!) &&
+        m[1]!.trim() !== ".page-lenses:not(:empty)",
     );
     expect(others.map((m) => m[1]!.trim())).toEqual([]);
+    const lensOrder = /order:\s*(-?\d+)/.exec(block(atBreak, ".page-lenses:not(:empty)"));
+    expect(Number(lensOrder?.[1])).toBeGreaterThan(Number(order![1]));
     // AND A LINE OF CONTROLS WIDER THAN A PHONE SCROLLS rather than stacking
     // rows that push the screen a third of the way down.
     expect(broken).toMatch(/overflow-x:\s*auto/);
@@ -1444,44 +1367,6 @@ test("a grid row with more than one content-sized track declares a gap", () => {
   ).toEqual([]);
 });
 
-// ONE GAP BETWEEN EVERY CRUMB. The 5ch floor that keeps the object's own
-// crumb an ellipsised stub rather than nothing was on `.crumb-here`, which
-// also draws an ancestor with no page of its own — "Item", "seats" — and a
-// floor on a part that never shrinks only pads a short word: "Work / Item   /
-// items". Scoped to the last part, which is the only one that gives way.
-// THE ELLIPSIS NEEDS A BOX OF ITS OWN. `.crumb-link` and `.crumb-here` are flex
-// containers, and text directly inside one is an anonymous flex item that
-// `text-overflow` never reaches: the page's h1 was cut mid-word at the bar's
-// edge. `PageHeader.test.tsx` holds that every label is inside `.crumb-text`;
-// this holds that `.crumb-text` is the box that cuts with an ellipsis.
-test("a crumb's words are the box that ellipsises", () => {
-  const css = sheet("frame.css");
-  const text = block(css, ".crumb-text");
-  expect(text).toMatch(/min-width:\s*0\b/);
-  expect(text).toMatch(/overflow:\s*hidden/);
-  expect(text).toMatch(/white-space:\s*nowrap/);
-  expect(text).toMatch(/text-overflow:\s*ellipsis/);
-  expect(text, "a flex or grid box here would be the anonymous item again").not.toMatch(
-    /display:\s*(inline-)?(flex|grid)/,
-  );
-});
-
-// A LINK INSIDE A CLAMPED FACT WRAPS. `.t-link` is `nowrap`, and inside the
-// fact's two-line clamp a linked unit chain was one line cut at the track's
-// edge with no ellipsis.
-test("a linked fact wraps with its clamp", () => {
-  const css = sheet("frame.css");
-  expect(block(css, ".fact-value .t-link")).toMatch(/white-space:\s*normal/);
-});
-
-test("the crumb floor is the last part's alone", () => {
-  const css = sheet("frame.css");
-  // `min-width: 0` is not a floor — it is what lets the ellipsis happen — so
-  // the rule forbids any OTHER value.
-  expect(block(css, ".crumb-here")).not.toMatch(/min-width:\s*(?!0\b)[^;\s]/);
-  expect(block(css, ".crumb-part:last-child > .crumb-here")).toMatch(/min-width:\s*5ch/);
-});
-
 // A HISTOGRAM BAR IS A BAR TOO, AND IT IS DATA. The activity log's time axis
 // filled its whole slot, so a week holding one busy day drew a block a seventh
 // of the card wide, and it painted that block in the accent the kit reserves
@@ -1512,15 +1397,6 @@ test("an org unit's head wraps rather than shrinking its name", () => {
   expect(name).toMatch(/flex:\s*0 0 auto/);
   expect(name).toMatch(/max-width:\s*100%/);
   expect(block(css, ".org-unit-count")).toMatch(/white-space:\s*nowrap/);
-});
-
-// A SEGMENTED GROUP WIDER THAN ITS CONTAINER WRAPS. Its options never shrink,
-// so on one unbroken row a phone clipped the spend chart's "Split by" at
-// "Worke", with the rest of the choice unreachable.
-test("a segmented control wraps within its container rather than overflowing it", () => {
-  const b = block(sheet("components.css"), ".segmented");
-  expect(b).toMatch(/flex-wrap:\s*wrap/);
-  expect(b).toMatch(/max-width:\s*100%/);
 });
 
 // A STAT'S SECOND LINE KEEPS ITS ENDING. The kit's sub is one `nowrap` line
@@ -1568,10 +1444,26 @@ test("the work search form wraps before its phrase field goes under a readable w
 test("the lens slot vanishes when empty and takes the slack beside the trail when not", () => {
   const css = sheet("frame.css");
   expect(block(css, ".page-lenses:empty")).toMatch(/display:\s*none/);
+  // AND SO DOES THE ACTIONS SLOT: empty, it took the row's gap and stood the
+  // star 8px short of the gutter.
+  expect(block(css, ".page-actions:empty")).toMatch(/display:\s*none/);
   expect(block(css, ".page-lenses")).toMatch(/flex:\s*1 0 auto/);
-  const trail = block(css, ".page-bar:has(> .page-lenses:not(:empty)) > .crumbs");
+  const trail = block(css, ".page-bar:has(> .page-lenses:not(:empty)) > .page-trail");
   expect(trail).toMatch(/flex:\s*0 100 auto/);
-  expect(trail).toMatch(/max-width:\s*60%/);
+  expect(trail).toMatch(/max-width:\s*62%/);
+});
+
+// ON A PHONE THE LENSES TAKE A ROW OF THEIR OWN, under the line the drawer
+// toggle, the trail and the one action share, and scroll sideways if they
+// must: four chips beside a scope's name cut it to a stub.
+test("on a phone's width the lenses are a row of their own that scrolls", () => {
+  const phone = atRuleBody(sheet("frame.css"), `@container page (width < ${PHONE_BREAKPOINT}px)`);
+  const row = block(phone, ".page-lenses:not(:empty)");
+  expect(row).toMatch(/flex:\s*1 0 100%/);
+  expect(row).toMatch(/overflow-x:\s*auto/);
+  expect(block(phone, ".page-bar:has(> .page-lenses:not(:empty)) > .page-trail")).toMatch(
+    /max-width:\s*none/,
+  );
 });
 
 // AN OBJECT'S TAB STRIP IS AS WIDE AS WHAT HOLDS IT. `ObjectTabs` folds the
@@ -1665,12 +1557,20 @@ test("the span detail sits beside the waterfall at a laptop's page width", () =>
 // default wrap's border stood a pixel inside the card's, a table inset in the
 // frame the card already is; `flush` takes the border, the radius and the
 // ground away and keeps one rule above the head.
-test("a flush grid draws no frame inside its card", () => {
-  const body = block(sheet("frame.css"), ".grid-wrap[data-flush]");
+test("a flush grid draws no frame inside its card, and every grid in a card is flush", () => {
+  const body = block(sheet("frame.css"), ".grid-wrap[data-flush],\n.crewlet-card .grid-wrap");
   expect(body).toMatch(/border:\s*0/);
   expect(body).toMatch(/border-top:\s*1px solid/);
   expect(body).toMatch(/border-radius:\s*0/);
   expect(body).toMatch(/background:\s*transparent/);
+});
+
+// UNDER A CARD HEADER THE GRID DRAWS NO RULE OF ITS OWN: the kit's header
+// rules itself off, and the flush grid's rule under it made two lines.
+test("a flush grid under a card's header leaves the rule to the header", () => {
+  expect(block(sheet("frame.css"), ".crewlet-card__header + .grid-wrap")).toMatch(
+    /border-top:\s*0/,
+  );
 });
 
 // THE SPEND CHART'S SUBTITLE TAKES NO WIDTH FROM ITS LEGEND. Both sit in the
@@ -1680,6 +1580,194 @@ test("the spend chart's subtitle asks for no width of its own", () => {
   expect(block(sheet("screens.css"), ".spend-chart-head .spend-caption")).toMatch(
     /contain:\s*inline-size/,
   );
+});
+
+// THE PREFERENCES POPOVER IS AS WIDE AS ITS ROWS. The preferences' label and
+// control columns are what set the panel's width, and its body declares none:
+// a `width: max-content` body, or an 18rem block once drawn above it, left the
+// rows in a column narrower than the panel. The session's gestures are the
+// reader's menu now, so nothing else shares the popover or styles for it.
+test("the preferences popover is as wide as its rows, and holds nothing else", () => {
+  const css = sheet("frame.css");
+  const sized = (selector: string) =>
+    mentioning(css, selector)
+      .filter(({ body }) => /(?<![-\w])width\s*:/.test(body))
+      .map(({ sel }) => sel);
+  expect(sized(".preferences")).toEqual([]);
+  expect(css).not.toContain(".preferences-account");
+});
+
+// SPEND READS AS ROWS. Its cards started at their own heights, so a table of
+// two seats ended two hundred pixels above the lists beside it and the row
+// under it began below the lists: a hole the width of the table at every
+// desktop width. Each row stretches its cards to the tallest, the narrow
+// track's last list takes what its stack leaves, and a stretched card keeps
+// its foot on the floor.
+describe("the Spend overview's rows", () => {
+  const css = sheet("screens.css");
+
+  test("every row stretches its cards to one height", () => {
+    const rows = block(css, ".spend-top,\n.spend-pair");
+    expect(rows).toMatch(/display:\s*grid/);
+    expect(rows).toMatch(/align-items:\s*stretch/);
+  });
+
+  test("the stacked lists end level with the table beside them", () => {
+    const side = block(css, ".spend-side");
+    expect(side).toMatch(/display:\s*flex/);
+    expect(side).toMatch(/flex-direction:\s*column/);
+    expect(block(css, ".spend-side > :last-child")).toMatch(/flex-grow:\s*1/);
+  });
+
+  test("a stretched card keeps its foot on the floor", () => {
+    expect(block(css, ".spend-card-foot")).toMatch(/margin-top:\s*auto/);
+  });
+
+  test("the ranked lists in the narrow track share one label width", () => {
+    expect(block(css, ".spend-list .spend-bars")).toMatch(/--crewlet-bar-list-label-width:\s*50%/);
+  });
+
+  // THE TOP ROW ENDS ON ONE LINE. The hero stacked its parts from the top and
+  // ended 14 to 53px short of the chart beside it, a strip of nothing under
+  // its tiles; where the hero is the taller, the chart's split control stood
+  // above a strip of its own.
+  test("the hero's facts and the chart's split control stand on their cards' floors", () => {
+    expect(block(css, ".spend-hero > .spend-budget")).toMatch(/margin-top:\s*auto/);
+    expect(block(css, ".spend-chart-foot")).toMatch(/margin-top:\s*auto/);
+  });
+
+  // AND THE PLOT TAKES THE SPARE HEIGHT, NOT A BAND UNDER THE DATES. Where the
+  // hero was the taller, the split control stood 34 to 68px under the dates,
+  // because the plot was a fixed length. The chart fills its card now, which
+  // takes two rules in two sheets: the card is a column, and the kit's fill
+  // figure flexes in it.
+  test("the daily chart's card is a column its kit figure grows in", () => {
+    const chart = block(css, ".spend-chart");
+    expect(chart).toMatch(/display:\s*flex/);
+    expect(chart).toMatch(/flex-direction:\s*column/);
+    expect(block(kitSheet(), ".crewlet-stacked-columns--fill")).toMatch(/flex:\s*1 1 auto/);
+  });
+
+  // ON A PHONE THE LEGEND TAKES A ROW OF ITS OWN under the chart's title. The
+  // kit's head held the two on one line, so the legend stood beside the title
+  // as a column of one band a line, four rows tall at 390px.
+  test("the daily chart's legend wraps under its title where the two do not fit", () => {
+    const head = block(kitSheet(), ".crewlet-stacked-columns__head");
+    expect(head).toMatch(/flex-wrap:\s*wrap/);
+    expect(block(kitSheet(), ".crewlet-stacked-columns__legend--head")).toMatch(
+      /margin-inline-start:\s*auto/,
+    );
+  });
+
+  // A LONE TILE TAKES THE ROW. A tile with nothing to say is not drawn, and
+  // the one left in a two-column row stood beside half a row of nothing.
+  test("the hero's tiles take one column each, and with none the row is not drawn", () => {
+    const tiles = block(css, ".spend-tiles");
+    expect(tiles).toMatch(/grid-auto-flow:\s*column/);
+    expect(tiles).toMatch(/grid-auto-columns:\s*minmax\(0, 1fr\)/);
+    expect(tiles).not.toMatch(/grid-template-columns/);
+    expect(block(css, ".spend-tiles:empty")).toMatch(/display:\s*none/);
+  });
+
+  // LIVE'S TWO ROWS ARE ONE GRID: the second row was split evenly, its gutter
+  // 133px off the first's.
+  test("Live's rows share one track split", () => {
+    expect(css).not.toMatch(/\.live-row-even\b/);
+    expect(block(css, ".live-row-pair")).toMatch(
+      /grid-template-columns:\s*minmax\(0, 1\.62fr\) minmax\(0, 1fr\)/,
+    );
+  });
+
+  // THE INBOX IS ON THE PAGE'S GUTTER: its callout and rows began 4px left of
+  // the header's title.
+  test("the Inbox's callout and rows start at the page's gutter", () => {
+    expect(block(css, ".inbox-callout")).toMatch(
+      /margin:\s*var\(--spacing-3\) var\(--spacing-5\) 0/,
+    );
+    expect(block(css, ".inbox-list")).toMatch(/padding:\s*var\(--spacing-2\) var\(--spacing-3\)/);
+  });
+
+  // A LONE CARD TAKES ITS ROW: without Crewlet Works a seat's Assigned work
+  // draws nothing, and Turns per day sat beside a 334px hole.
+  test("a seat's pair gives a lone card the whole row", () => {
+    expect(block(css, ".prof-pair > :only-child")).toMatch(/grid-column:\s*1 \/ -1/);
+  });
+
+  // THE SEAT PAGE IS ON THE SHELL'S GUTTER, the one the page bar's trail
+  // starts at: at 28px its head and body stood 8px right of the crumb.
+  test("a seat's head and body start where the page bar's trail does", () => {
+    expect(block(css, ".prof-head")).toMatch(/padding:\s*var\(--spacing-5\) var\(--spacing-5\) 0/);
+    expect(block(css, ".prof-body")).toMatch(/padding:\s*var\(--spacing-5\) var\(--spacing-5\)/);
+  });
+
+  // THE COMPANY'S BUDGET TILES KEEP THE CARD'S INSET ON EVERY SIDE: with none
+  // on top they sat flush against the header's rule.
+  test("the company's budget tiles are inset on every side", () => {
+    expect(block(css, ".budget-tiles")).toMatch(/padding:\s*var\(--spacing-4\);/);
+  });
+
+  // ONE CARD HEADER IN SETTINGS: Spend's cards drew a bespoke head (a 16px
+  // title, no icon, the caption at its end) beside every other card's kit
+  // header. They head with `Card.Header` now, and the bespoke rule is gone.
+  test("Spend's cards keep no head of their own", () => {
+    expect(css).not.toMatch(/\.spend-card-head\b/);
+  });
+
+  // A SEAT IS TWO LINES ON A PHONE, at every density. With today's bar on its
+  // second line a capped seat's figures did not fit, and it stood three tall.
+  test("a seat's compact phone row draws no day bar", () => {
+    const phone = mediaBodies(css)
+      .filter((m) => m.prelude === PHONE)
+      .map((m) => m.body)
+      .join("\n");
+    expect(
+      block(phone, '.spend-agents .grid-wrap[data-phone-rows="compact"] .spend-day-meter'),
+    ).toMatch(/display:\s*none/);
+  });
+
+  // ON THE TOKEN SCALE. The workspace's rules spelled their own steps, a 52px
+  // figure and gaps of 2, 4, 6 and 10px, beside a scale of 4, 8, 12 and 16
+  // that also follows the density. A step the scale has is its token; a
+  // spacing in ems follows the text it spaces, and only those two are named.
+  test("the Spend workspace spaces and sets its type on the token scale", () => {
+    const EM_SPACING = new Set([".spend-used gap", ".ceiling-warnings padding-left"]);
+    const STEP =
+      /^(gap|row-gap|column-gap|padding(-[a-z-]+)?|margin(-[a-z-]+)?|font-size|letter-spacing|line-height|border-radius)$/;
+    const off: string[] = [];
+    let scanned = 0;
+    for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      const selector = m[1]!.trim().replace(/\s+/g, " ");
+      if (!/(^|[\s,>+~(])\.(spend-|budget|ceiling)/.test(selector)) continue;
+      scanned++;
+      for (const declaration of m[2]!.split(";")) {
+        const [property = "", ...rest] = declaration.split(":");
+        const prop = property.trim();
+        const value = rest.join(":").trim();
+        if (!STEP.test(prop) || !/\d(px|rem|em)\b/.test(value)) continue;
+        if (/^[\d.]+em$/.test(value) && EM_SPACING.has(`${selector} ${prop}`)) continue;
+        off.push(`${selector} { ${prop}: ${value} }`);
+      }
+    }
+    expect(scanned, "the scan read no Spend rules").toBeGreaterThan(40);
+    expect(off).toEqual([]);
+  });
+
+  test("a card without its partner takes the whole row", () => {
+    expect(block(css, ".spend-pair > :only-child")).toMatch(/grid-column:\s*1 \/ -1/);
+  });
+
+  // ONE FOLD FOR THE PAGE. The hero stacked over the chart at 760 while the
+  // pairs stacked at 900, so between the two the chart stood 450px wide
+  // beside the hero with its title broken over two lines.
+  test("every row folds to one column at the same page width", () => {
+    const folds = [...css.matchAll(/@container page \(width < (\d+)px\)\s*\{/g)].filter((m) =>
+      /\.spend-(top|pair)\b/.test(atRuleBody(css.slice(m.index), m[0].slice(0, -1).trim())),
+    );
+    expect(folds.map((m) => Number(m[1]))).toEqual([900]);
+    expect(atRuleBody(css, "@container page (width < 900px)")).toMatch(
+      /\.spend-top,\s*\.spend-pair\s*\{\s*grid-template-columns:\s*minmax\(0, 1fr\);/,
+    );
+  });
 });
 
 /**
@@ -1704,4 +1792,47 @@ test("every auto-fit and auto-fill track floor is clamped to its container", () 
   }
   expect(found.length).toBeGreaterThan(0);
   expect(bare).toEqual([]);
+});
+
+/**
+ * THE SIDEBAR'S FOOT WEARS A CONTROL'S MARKS ONLY ON A CONTROL.
+ *
+ * The engine's row is the kit's `AppShell.RailRow`, and its statement form
+ * (a refusal of somebody the engine knows) is a `div` the kit draws with no
+ * pointer, no chevron and no place in the tab order (`EnginePanel.test.tsx`
+ * holds that it is drawn so). A rule of ours giving the kit's row a pointer or a hover of
+ * its own would put a control's marks back on a row that does nothing, which is
+ * what the health card it replaced did until it was fixed. The user block is
+ * the other way round: it IS a control, the way to the reader's Account, and
+ * drew no mark until hovered, so it wears the rail's chevron at rest, and it
+ * is the Account's row, marked current on `#/account` with the kit's own
+ * current-row lift: the raised surface and a hairline OUTLINE (an outline,
+ * since forced-colours mode drops a shadow and a background).
+ */
+test("the engine's row takes its control marks from the kit alone, and the user block always wears one", () => {
+  // THE KIT'S ROW IS THE KIT'S: no sheet of ours styles it, so whether it
+  // wears a pointer is decided by whether the kit drew a control.
+  for (const name of ["base.css", "components.css", "frame.css", "screens.css"]) {
+    expect(sheet(name), name).not.toMatch(/\.crewlet-app-shell__rail-row/);
+  }
+
+  // THE USER BLOCK IS THE KIT'S AccountRow, whose chevron and current-row
+  // lift are asserted in uilet; no sheet of ours draws a second copy.
+  for (const name of ["base.css", "components.css", "frame.css", "screens.css"]) {
+    expect(sheet(name), name).not.toMatch(/\.user-block/);
+  }
+});
+
+// THE KIT'S CONTENT PADDING IS ONE STEP WIDE AND ANOTHER NARROW, so a screen
+// that cancels it with a negative margin of the wide step overshoots under a
+// laptop's width: the artifact page did, and on a phone its body ran 8px past
+// both edges of the window and 4px under its bar. A screen that draws to the
+// sheet's edges takes the padding back on the column (`:has`), as the org
+// chart and the artifact page do.
+test("no screen cancels the content column's padding with a negative margin", () => {
+  for (const name of ["frame.css", "screens.css"]) {
+    expect(sheet(name), name).not.toMatch(
+      /margin[^;:]*:\s*calc\(\s*-1\s*\*\s*var\(--spacing-5\)\s*\)/,
+    );
+  }
 });

@@ -145,7 +145,7 @@ func (f File) Content() (objstore.Object, bool) {
 // replays the tracker's log from the copy's position — and a build that can
 // read a record this node deferred applies it — so every file a record of
 // either writes is a file the restored rows name, and its object is one the
-// backup owes (ADR-0034).
+// backup owes (ADR-0048).
 var FileObjectReferences = objstore.ReferenceTable{
 	Domain: Domain{}.Name(), Table: "tracker_files",
 	Key: "object", Hash: "hash", Size: "size",
@@ -420,7 +420,7 @@ func (w *Writer) PutFile(ctx context.Context, opID string, put FilePut) (WriteRe
 				// writer re-attribute a file somebody else made.
 				post.CreatedBy, post.CreatedAt = current.CreatedBy, current.CreatedAt
 			}
-			return w.decide(stamp, subject, OpPatch, ChangeFileWritten, scope, opID,
+			return w.decide(ctx, tx, stamp, subject, OpPatch, ChangeFileWritten, scope, opID,
 				post, nil, at)
 		},
 	})
@@ -468,7 +468,7 @@ func (w *Writer) RemoveFile(ctx context.Context, opID, project, path string,
 			post.Hash, post.Size, post.Object = "", 0, objstore.Key{}
 			post.UpdatedBy, post.UpdatedAt = w.Actor, at
 			post.RemovedAt, post.RemovedBy = &at, w.Actor
-			return w.decide(stamp, subject, OpPatch, ChangeFileRemoved, scope, opID,
+			return w.decide(ctx, tx, stamp, subject, OpPatch, ChangeFileRemoved, scope, opID,
 				post, nil, at)
 		},
 	})

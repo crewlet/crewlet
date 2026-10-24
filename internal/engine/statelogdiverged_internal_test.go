@@ -56,7 +56,7 @@ func stageDivergedBroker(t *testing.T) divergedBroker {
 func stageRestoredBroker(t *testing.T) divergedBroker {
 	t.Helper()
 	base := t.TempDir()
-	d := divergedBroker{a: config.DefaultBootstrap()}
+	d := divergedBroker{a: testBootstrap(t)}
 	d.a.Node.ID = "node-a"
 	d.a.Store.Path = filepath.Join(base, "a", "crewlet.db")
 	d.a.Stream.StoreDir = filepath.Join(base, "stream")
@@ -223,7 +223,7 @@ func (d *divergedBroker) writePast(t *testing.T) {
 	t.Helper()
 	eb, backB := bootNode(t, &d.b, d.cfg)
 	waitUntil(t, 20*time.Second, "node B to admit seats", hydrated(t, eb))
-	running := eb.native.Load().log.Domain(tracker.Domain{}.Name())
+	running := eb.core.Load().log.Domain(tracker.Domain{}.Name())
 	for {
 		stats, err := running.log.Stats(t.Context())
 		if err != nil {
@@ -244,7 +244,7 @@ func (d *divergedBroker) writePast(t *testing.T) {
 	waitUntil(t, 10*time.Second, "node B to apply its own writes", func() bool {
 		return running.runner.Committed().Seq >= d.end
 	})
-	eb.native.Load().log.publishPositions(t.Context())
+	eb.core.Load().log.publishPositions(t.Context())
 	rows, err := eb.backends.Fleet.Positions(t.Context())
 	if err != nil {
 		t.Fatalf("read the register: %v", err)
@@ -277,7 +277,7 @@ func TestANodeWhoseRestoredLogWasWrittenPastItRefusesAndAppliesNothing(t *testin
 	d := stageDivergedBroker(t)
 
 	e, _ := bootNode(t, &d.a, d.cfg)
-	running := e.native.Load().log.Domain(tracker.Domain{}.Name())
+	running := e.core.Load().log.Domain(tracker.Domain{}.Name())
 	if err := running.runner.StreamIdentity(); !errors.Is(err, statelog.ErrLogDiverged) {
 		t.Fatalf("at boot the tracker's identity is %v, want the divergence — the "+
 			"log's record at the checkpoint is B's", err)
@@ -306,7 +306,7 @@ func TestANodeWhoseRestoredLogWasWrittenPastItRefusesAndAppliesNothing(t *testin
 	}
 
 	// THE HEALTH AND THE STATUS SAY SO.
-	s := e.native.Load().log
+	s := e.core.Load().log
 	health, err := s.health(t.Context(), running, s.readFloors(t.Context()))
 	if err != nil {
 		t.Fatalf("read the tracker's health: %v", err)
@@ -315,7 +315,7 @@ func TestANodeWhoseRestoredLogWasWrittenPastItRefusesAndAppliesNothing(t *testin
 		t.Fatalf("the health is diverged=%v refusing %q, want the divergence "+
 			"refusing wrong_stream", health.LogDiverged, health.Refusal(time.Now()))
 	}
-	for _, row := range e.native.Load().log.Status(t.Context()) {
+	for _, row := range e.core.Load().log.Status(t.Context()) {
 		if row.Name == (tracker.Domain{}).Name() && (row.Ready ||
 			!errors.Is(running.runner.StreamIdentity(), statelog.ErrLogDiverged)) {
 			t.Fatalf("the replication status reads %+v for the diverged tracker", row)
@@ -323,7 +323,7 @@ func TestANodeWhoseRestoredLogWasWrittenPastItRefusesAndAppliesNothing(t *testin
 	}
 
 	// THE FLEET IS TOLD, on this node's own row.
-	e.native.Load().log.publishPositions(t.Context())
+	e.core.Load().log.publishPositions(t.Context())
 	rows, err := e.backends.Fleet.Positions(t.Context())
 	if err != nil {
 		t.Fatalf("read the register: %v", err)
@@ -366,7 +366,7 @@ func TestADivergedNodeKeepsItsVerdictAfterTheRecordItWasFoundByIsGone(t *testing
 
 	// A MEETS THE DIVERGENCE AT BOOT, and records it.
 	e, back := bootNode(t, &d.a, d.cfg)
-	running := e.native.Load().log.Domain(tracker.Domain{}.Name())
+	running := e.core.Load().log.Domain(tracker.Domain{}.Name())
 	if err := running.runner.StreamIdentity(); !errors.Is(err, statelog.ErrLogDiverged) {
 		t.Fatalf("at boot the tracker's identity is %v, want the divergence", err)
 	}
@@ -377,7 +377,7 @@ func TestADivergedNodeKeepsItsVerdictAfterTheRecordItWasFoundByIsGone(t *testing
 	// broker both share.
 	eb, backB := bootNode(t, &d.b, d.cfg)
 	waitUntil(t, 20*time.Second, "node B to admit seats", hydrated(t, eb))
-	logB := eb.native.Load().log.Domain(tracker.Domain{}.Name()).log
+	logB := eb.core.Load().log.Domain(tracker.Domain{}.Name()).log
 	if err := logB.Purge(t.Context(), d.checkpoint.at.Seq+1); err != nil {
 		t.Fatalf("purge the log past A's checkpoint: %v", err)
 	}
@@ -392,7 +392,7 @@ func TestADivergedNodeKeepsItsVerdictAfterTheRecordItWasFoundByIsGone(t *testing
 	// A AGAIN: the log holds nothing at its checkpoint to compare, and it
 	// still refuses.
 	e2, _ := bootNode(t, &d.a, d.cfg)
-	running2 := e2.native.Load().log.Domain(tracker.Domain{}.Name())
+	running2 := e2.core.Load().log.Domain(tracker.Domain{}.Name())
 	if err := running2.runner.StreamIdentity(); !errors.Is(err, statelog.ErrLogDiverged) {
 		t.Fatalf("after the restart the tracker's identity is %v, want the recorded "+
 			"divergence — the rows are still the ones the log does not continue", err)
@@ -410,7 +410,7 @@ func TestADivergedNodeKeepsItsVerdictAfterTheRecordItWasFoundByIsGone(t *testing
 	if !errors.Is(err, statelog.ErrLogDiverged) {
 		t.Fatalf("a write on the restarted node returned %v, want the divergence", err)
 	}
-	e2.native.Load().log.publishPositions(t.Context())
+	e2.core.Load().log.publishPositions(t.Context())
 	rows, err := e2.backends.Fleet.Positions(t.Context())
 	if err != nil {
 		t.Fatalf("read the register: %v", err)

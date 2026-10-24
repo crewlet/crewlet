@@ -2,6 +2,7 @@ package operator_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -15,9 +16,10 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
+	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -26,8 +28,8 @@ import (
 
 // EVERY TRANSPORT SERVES THE ONE CATALOGUE, and this holds the two sides a
 // transport has against each other: what it LISTS to a client over the wire,
-// and what the catalogue's own dispatch — the path every transport takes into
-// a tool — actually runs.
+// and what the dispatch — the path every transport takes into a tool —
+// actually runs.
 //
 // The failure it guards is the one the package doc names: a transport that
 // assembled its own tool set would have a second chance to wire it
@@ -38,22 +40,16 @@ import (
 // THROUGH A REAL MCP CLIENT, because the listing a client receives is the SDK's
 // serialisation of what was registered — the property is what arrives, not
 // what this package believes it registered.
-func TestBothTransportsServeTheSameCatalogue(t *testing.T) {
+func TestEveryTransportServesTheSameCatalogue(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, operator.Options{
+	s := newSurface(t, operator.Options{Halves: fixed(operator.Halves{
 		Work: builtin.WorkDeps{
-			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Merges: stubWorkMerger, Actor: operator.WorkActor(nil, nil),
+			Reader: stubWorkReader{}, Writer: stubWorkWriter, Merges: stubWorkMerger,
 		},
-		Pages: builtin.PageDeps{
-			Reader: stubPageReader{}, Writer: stubPageWriter{},
-			Actor: operator.PageActor,
-		},
-	})
-	if s == nil {
-		t.Fatal("a company on both native backends got no surface")
-	}
-	sess := dialOperator(t, s, "ops-bot")
+		Pages: builtin.PageDeps{Reader: stubPageReader{}, Writer: stubPageWriter{}},
+	})})
+	ops := machine("token:ops-bot", iam.Apps...)
+	sess := dialOperator(t, s, ops)
 
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
@@ -84,11 +80,12 @@ func TestBothTransportsServeTheSameCatalogue(t *testing.T) {
 	// AND EVERY LISTED VERB IS ONE THE DISPATCH RUNS, with the same answer:
 	// a listing and a dispatch that disagreed would be a verb a client sees
 	// and cannot call, or one it can call and never sees.
+	asOps := iam.WithPrincipal(t.Context(), ops)
 	for _, name := range names {
-		if _, served, _ := s.Dispatch(auth.WithOperator(t.Context(), "ops-bot"),
-			name, nil); !served {
-
-			t.Errorf("the MCP transport lists %q and the catalogue does not serve it", name)
+		if _, err := s.Dispatch(asOps, operator.Call{
+			Transport: types.TransportMCP, Tool: name,
+		}); errors.Is(err, operator.ErrNotServed) {
+			t.Errorf("the MCP transport lists %q and the dispatch does not serve it", name)
 		}
 	}
 	args := map[string]any{"item": "ENG-1"}
@@ -98,10 +95,11 @@ func TestBothTransportsServeTheSameCatalogue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("call over MCP: %v", err)
 	}
-	direct, served, err := s.Dispatch(auth.WithOperator(t.Context(), "ops-bot"),
-		tracker.GetWorkItemTool, args)
-	if err != nil || !served {
-		t.Fatalf("dispatch: served=%v err=%v", served, err)
+	direct, err := s.Dispatch(asOps, operator.Call{
+		Transport: types.TransportMCP, Tool: tracker.GetWorkItemTool, Args: args,
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
 	}
 	if got := textOf(res); got != direct.Output || res.IsError != direct.Failed {
 		t.Errorf("one call answered %q (failed=%v) over MCP and %q (failed=%v) "+
@@ -110,117 +108,102 @@ func TestBothTransportsServeTheSameCatalogue(t *testing.T) {
 
 	// AND A NAME THE CATALOGUE DOES NOT HOLD IS NOT SERVED, rather than
 	// resolved to something near it.
-	if _, served, _ := s.Dispatch(t.Context(), "run_sandbox", nil); served {
-		t.Error("the dispatch served a tool that is in no operator's catalogue")
+	if _, err := s.Dispatch(asOps, operator.Call{Tool: "run_sandbox"}); !errors.Is(err, operator.ErrNotServed) {
+		t.Errorf("the dispatch answered %v for a tool that is in no operator's catalogue", err)
 	}
 }
 
-// A PERSON'S RETRIED COMMENT IS ONE COMMENT, and the page half of the call's
-// operation is wired by the surface itself rather than by whoever builds its
-// deps.
+// A PERSON'S RETRIED COMMENT IS ONE COMMENT: the operation a call's transport
+// names reaches the knowledge base's write as that write's own key, so the
+// ledger collapses the retry.
 //
-// The work tools carry the operation on their actor; the page tools read it
-// through [builtin.PageDeps.Operation], which [operator.New] sets because this
-// package is the one that puts the operation on the context. Left to the
-// caller, one side is wired and the other is not, and a comment posted twice
-// by a retry is two comments on somebody's page.
+// And a call naming NONE — an assistant's, over MCP — carries none: a stable
+// key there would collapse an assistant's second comment into its first.
 func TestARetriedPageCommentCarriesItsOperation(t *testing.T) {
 	t.Parallel()
 	kb := &recordingPages{}
-	s := newSurface(t, operator.Options{
-		Pages: builtin.PageDeps{Reader: kb, Writer: kb, Actor: operator.PageActor},
-	})
-	if s == nil {
-		t.Fatal("a company on the native knowledge base got no surface")
-	}
+	s := newSurface(t, operator.Options{Halves: fixed(operator.Halves{
+		Pages: builtin.PageDeps{Reader: kb, Writer: kb},
+	})})
+	ctx := iam.WithPrincipal(t.Context(),
+		person("jane.founder", "jane-founder", iam.GrantKnowledge))
 	args := map[string]any{"page": "Runbook", "body": "the step is wrong"}
-	op, err := builtin.RequestOperation("founder", requestA, builtin.CommentOnPageTool, args)
-	if err != nil {
-		t.Fatalf("RequestOperation: %v", err)
-	}
-	comment := func(op string) {
-		ctx := auth.WithOperator(t.Context(), "founder")
-		if op != "" {
-			ctx = operator.WithOperation(ctx, op)
-		}
-		got, served, err := s.Dispatch(ctx, builtin.CommentOnPageTool, args)
-		if err != nil || !served || got.Failed {
-			t.Fatalf("comment: served=%v err=%v result=%+v", served, err, got)
+	key := statelog.NewOpID(time.Now(), "")
+	comment := func(key string) {
+		t.Helper()
+		got, err := s.Dispatch(ctx, operator.Call{
+			Transport: types.TransportAct, Key: key,
+			Tool: builtin.CommentOnPageTool, Args: args,
+		})
+		if err != nil || got.Failed {
+			t.Fatalf("comment: err=%v result=%+v", err, got)
 		}
 	}
-	comment(op)
-	comment(op)
-	comment("")
+	comment(key)
+	comment(key)
 	comment("")
 
 	keys := kb.keys()
-	if len(keys) != 4 {
-		t.Fatalf("four comments wrote %d", len(keys))
+	if len(keys) != 3 {
+		t.Fatalf("three comments wrote %d", len(keys))
 	}
-	if keys[0].Seed == "" || keys[0] != keys[1] {
-		t.Errorf("a retried request commented under %+v and then %+v — the "+
+	if keys[0] != key || keys[1] != key {
+		t.Errorf("a retried request commented under %q and then %q, want %q — the "+
 			"ledger cannot collapse the retry, so it is a second comment",
-			keys[0], keys[1])
+			keys[0], keys[1], key)
 	}
-	// AND AT THE REQUEST'S OWN INSTANT, which is what the node's operation
-	// ledger judges the retry by: a key with none reads as minted before
-	// every row the ledger ever lost, and is answered `unknown` unmade.
-	if want, _ := statelog.OpMintedAt(op); !keys[0].Since.Equal(want) || want.IsZero() {
-		t.Errorf("the comment's key carries the instant %v, want the request's %v",
-			keys[0].Since, want)
-	}
-	if keys[2].Seed != "" || keys[3].Seed != "" {
-		t.Errorf("a call naming no request carried the keys %+v and %+v — a "+
-			"stable key collapses an assistant's second comment into its first",
-			keys[2], keys[3])
+	if keys[2] != "" {
+		t.Errorf("a call naming no operation carried the key %q", keys[2])
 	}
 }
 
-// AND THE WORK ACTOR CARRIES THE OPERATION, and carries nothing where none was
-// set — an MCP call's operation is named later, by the tool, from what it was
-// asked ([builtin.OperatorTools]).
+// THE WORK ACTOR CARRIES THE OPERATION AT ITS OWN INSTANT, and carries nothing
+// where none was named — an MCP call's operation is named later, by the tool,
+// from what it was asked ([builtin.OperatorTools]).
+//
+// THE INSTANT IS THE KEY'S, because it is what the node's operation ledger
+// judges a retry by: a key read as minted at the call's clock is one a retry
+// after a ledger loss decides a second time.
 func TestTheWorkActorCarriesTheOperation(t *testing.T) {
 	t.Parallel()
-	ctx := auth.WithOperator(t.Context(), "founder")
-	op, err := builtin.RequestOperation("founder", requestA, builtin.CreateWorkItemTool,
-		map[string]any{"title": "x"})
-	if err != nil {
-		t.Fatalf("RequestOperation: %v", err)
-	}
-	named, err := operator.WorkActor(nil, nil)(operator.WithOperation(ctx, op), nil)
+	ctx := iam.WithPrincipal(t.Context(), machine("token:founder", iam.GrantTracker))
+	key := statelog.NewOpID(time.Now().Add(-time.Hour), "")
+	named, err := operator.WorkActor(operator.WithKey(ctx, key), nil)
 	if err != nil {
 		t.Fatalf("WorkActor: %v", err)
 	}
-	if named.Operation != op || named.OperationSeed() != "" {
-		t.Errorf("a call under %s resolved to %+v (seed %q) — a person's call is "+
-			"its operation, never a turn's seed", op, named, named.OperationSeed())
+	at, _ := statelog.OpMintedAt(key)
+	if named.WorkKey != key || !named.WorkSince.Equal(at) || named.Operation != "" {
+		t.Errorf("a call under %s resolved to %+v — its operation is the request's "+
+			"key at the key's own instant %v", key, named, at)
 	}
-	plain, err := operator.WorkActor(nil, nil)(ctx, nil)
+	if named.OperationSeed() != key || !named.OperationSince().Equal(at) {
+		t.Errorf("the writes derive from seed %q at %v, want %q at %v",
+			named.OperationSeed(), named.OperationSince(), key, at)
+	}
+	plain, err := operator.WorkActor(ctx, nil)
 	if err != nil {
 		t.Fatalf("WorkActor: %v", err)
 	}
-	if plain.Operation != "" || plain.OperationSeed() != "" {
+	if plain.WorkKey != "" || plain.OperationSeed() != "" {
 		t.Errorf("a call naming no operation resolved to %+v", plain)
 	}
 }
 
 // ANY SERVER OF THE CATALOGUE ANSWERS ANY REQUEST: a client's requests spread
-// over two servers built from the same deps — two ingress nodes behind a load
-// balancer with no affinity, or a catalogue a node built again between two
-// requests — are each answered, and no answer names a session for the client
-// to come back to. The transport kept sessions once, each held by the one
-// handler that opened it: of two nodes, every request reaching the other was
-// refused 404 "session not found", which the MCP client this repository ships
-// reads as the end of its connection.
+// over two servers built from the same options — two ingress nodes behind a
+// load balancer with no affinity — are each answered, and no answer names a
+// session for the client to come back to. The transport kept sessions once,
+// each held by the one handler that opened it: of two nodes, every request
+// reaching the other was refused 404 "session not found", which the MCP client
+// this repository ships reads as the end of its connection.
 func TestAnyServerOfTheCatalogueAnswersAnyRequest(t *testing.T) {
 	t.Parallel()
-	opts := operator.Options{
-		Work: builtin.WorkDeps{
-			Reader: stubWorkReader{}, Writer: stubWorkWriter,
-			Actor: operator.WorkActor(nil, nil),
-		},
-	}
+	opts := operator.Options{Halves: fixed(operator.Halves{
+		Work: builtin.WorkDeps{Reader: stubWorkReader{}, Writer: stubWorkWriter},
+	})}
 	nodes := []*operator.Server{newSurface(t, opts), newSurface(t, opts)}
+	ops := machine("token:ops-bot", iam.Apps...)
 	var (
 		mu       sync.Mutex
 		served   [2]int
@@ -231,8 +214,7 @@ func TestAnyServerOfTheCatalogueAnswersAnyRequest(t *testing.T) {
 		node := (served[0] + served[1]) % len(nodes)
 		served[node]++
 		mu.Unlock()
-		nodes[node].MCPHandler().ServeHTTP(w,
-			r.WithContext(auth.WithOperator(r.Context(), "ops-bot")))
+		nodes[node].MCPHandler().ServeHTTP(w, r.WithContext(iam.WithPrincipal(r.Context(), ops)))
 		if id := w.Header().Get("Mcp-Session-Id"); id != "" {
 			mu.Lock()
 			sessions = append(sessions, id)
@@ -271,83 +253,33 @@ func TestAnyServerOfTheCatalogueAnswersAnyRequest(t *testing.T) {
 	}
 }
 
-// A CATALOGUE SWAPPED MID-CONVERSATION KEEPS ITS CLIENT. The app asks its
-// operator surface for the catalogue on every request, and a node builds it
-// again when what it serves changes — its first apply, a knowledge backend
-// added or removed, a rename. A client connected before the swap goes on
-// calling through it, and its next listing is the new catalogue's; with
-// sessions, every connection opened on the replaced catalogue ended at its next
-// request.
-func TestACatalogueSwappedMidConversationKeepsItsClient(t *testing.T) {
-	t.Parallel()
-	work := builtin.WorkDeps{Reader: stubWorkReader{}, Actor: operator.WorkActor(nil, nil)}
-	reads := newSurface(t, operator.Options{Work: work})
-	steers := newSurface(t, operator.Options{
-		Work:  work,
-		Steer: builtin.SteerDeps{Asker: struct{ builtin.FleetAsker }{}, Actor: operator.WorkActor(nil, nil)},
-	})
-	var current atomic.Pointer[operator.Server]
-	current.Store(reads)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		current.Load().MCPHandler().ServeHTTP(w,
-			r.WithContext(auth.WithOperator(r.Context(), "ops-bot")))
-	}))
-	t.Cleanup(srv.Close)
-	sess := connectOperator(t, srv.URL)
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-	listed, err := sess.ListTools(ctx, nil)
-	if err != nil {
-		t.Fatalf("before the swap: %v", err)
-	}
-	if hasTool(listed, builtin.SteerTurnTool) {
-		t.Fatalf("the catalogue of reads lists %s", builtin.SteerTurnTool)
-	}
-
-	current.Store(steers)
-	listed, err = sess.ListTools(ctx, nil)
-	if err != nil {
-		t.Fatalf("the first request after the swap: %v", err)
-	}
-	if !hasTool(listed, builtin.SteerTurnTool) {
-		t.Errorf("after the swap the client was listed the old catalogue, without %s",
-			builtin.SteerTurnTool)
-	}
-	// A CALL AFTER IT, served whatever the tool answers.
-	if _, err := sess.CallTool(ctx, &mcp.CallToolParams{
-		Name: tracker.GetWorkItemTool, Arguments: map[string]any{"item": "ENG-1"},
-	}); err != nil {
-		t.Fatalf("a call after the swap: %v", err)
-	}
-}
-
-// A LISTENER IS TOLD ITS TOOLS CHANGED, WHICHEVER CATALOGUE ITS STREAM IS ON.
-// The server advertises `tools.listChanged`, and with no session kept the one
-// way to reach a connected client between its requests is the stream a client
-// of the 2026-07-28 protocol holds open — `subscriptions/listen`, on the
-// catalogue that answered it. Every catalogue a node builds keeps its streams
-// in the node's one registry, so an announcement after a swap reaches a stream
-// parked on the catalogue the swap replaced, and the client's next listing is
-// the catalogue serving now. Nothing announced it once, and a client kept
-// offering the replaced catalogue's tools until it was reconnected.
+// A LISTENER IS TOLD ITS TOOLS CHANGED, ON WHATEVER CATALOGUE ITS STREAM IS.
+// With no session kept, the one way to reach a connected client between its
+// requests is the stream a client of the 2026-07-28 protocol holds open —
+// `subscriptions/listen`, on the catalogue its listen request was answered
+// from, which no later call reads. The server keeps every such stream in the
+// node's one registry, so an announcement after what the node serves has
+// moved reaches the stream, and the client's next listing is the catalogue a
+// call reads now. Nothing announced it once, and a client kept offering the
+// tools it connected to until it was reconnected.
 //
 // And the registry counts the stream while it is open and forgets it once it
 // ends, so a node holds nothing for a client that has gone.
 func TestAListenerIsToldWhicheverCatalogueItIsOn(t *testing.T) {
 	t.Parallel()
 	listeners := operator.NewListeners()
-	work := builtin.WorkDeps{Reader: stubWorkReader{}, Actor: operator.WorkActor(nil, nil)}
-	reads := newSurface(t, operator.Options{Work: work, Listeners: listeners})
-	steers := newSurface(t, operator.Options{
-		Work:      work,
-		Steer:     builtin.SteerDeps{Asker: struct{ builtin.FleetAsker }{}, Actor: operator.WorkActor(nil, nil)},
+	work := operator.Halves{Work: builtin.WorkDeps{Reader: stubWorkReader{}}}
+	withPages := work
+	withPages.Pages = builtin.PageDeps{Reader: stubPageReader{}}
+	var current atomic.Pointer[operator.Halves]
+	current.Store(&work)
+	s := newSurface(t, operator.Options{
+		Halves:    func() (operator.Halves, bool) { return *current.Load(), true },
 		Listeners: listeners,
 	})
-	var current atomic.Pointer[operator.Server]
-	current.Store(reads)
+	ops := machine("token:ops-bot", iam.Apps...)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		current.Load().MCPHandler().ServeHTTP(w,
-			r.WithContext(auth.WithOperator(r.Context(), "ops-bot")))
+		s.MCPHandler().ServeHTTP(w, r.WithContext(iam.WithPrincipal(r.Context(), ops)))
 	}))
 	t.Cleanup(srv.Close)
 	if n := listeners.Listening(); n != 0 {
@@ -361,25 +293,25 @@ func TestAListenerIsToldWhicheverCatalogueItIsOn(t *testing.T) {
 	defer cancel()
 	listed, err := sess.ListTools(ctx, nil)
 	if err != nil {
-		t.Fatalf("before the swap: %v", err)
+		t.Fatalf("before the halves moved: %v", err)
 	}
-	if hasTool(listed, builtin.SteerTurnTool) {
-		t.Fatalf("the catalogue of reads lists %s", builtin.SteerTurnTool)
+	if hasTool(listed, builtin.GetPageTool) {
+		t.Fatalf("a catalogue with no knowledge base lists %s", builtin.GetPageTool)
 	}
 
-	current.Store(steers)
+	current.Store(&withPages)
 	listeners.Announce(t.Context())
 	select {
 	case <-changed:
 	case <-ctx.Done():
-		t.Fatal("the listener on the replaced catalogue was never told the tools changed")
+		t.Fatal("the listener was never told the tools changed")
 	}
 	if listed, err = sess.ListTools(ctx, nil); err != nil {
 		t.Fatalf("the listing after the announcement: %v", err)
 	}
-	if !hasTool(listed, builtin.SteerTurnTool) {
-		t.Errorf("after the announcement the listener was listed the replaced catalogue, "+
-			"without %s", builtin.SteerTurnTool)
+	if !hasTool(listed, builtin.GetPageTool) {
+		t.Errorf("after the announcement the listener was listed the catalogue it "+
+			"connected to, without %s", builtin.GetPageTool)
 	}
 
 	_ = sess.Close()
@@ -449,16 +381,16 @@ func connectOperator(t *testing.T, base string) *mcp.ClientSession {
 	return sess
 }
 
-// dialOperator connects an MCP client to the surface as one token.
+// dialOperator connects an MCP client to the surface as one principal.
 //
-// THE GUARD IS STOOD IN FOR by stamping the operator on the context, which is
+// THE GUARD IS STOOD IN FOR by stamping the principal on the context, which is
 // all the app's own guard does for a request it admits: this case is about
 // what the transport serves, and the guard has cases of its own.
-func dialOperator(t *testing.T, s *operator.Server, token string) *mcp.ClientSession {
+func dialOperator(t *testing.T, s *operator.Server, p iam.Principal) *mcp.ClientSession {
 	t.Helper()
 	inner := s.MCPHandler()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		inner.ServeHTTP(w, r.WithContext(auth.WithOperator(r.Context(), token)))
+		inner.ServeHTTP(w, r.WithContext(iam.WithPrincipal(r.Context(), p)))
 	}))
 	t.Cleanup(srv.Close)
 	return connectOperator(t, srv.URL)
@@ -474,12 +406,12 @@ func textOf(res *mcp.CallToolResult) string {
 	return b.String()
 }
 
-// recordingPages is a knowledge base holding one page, recording the call key
-// every comment arrives with.
+// recordingPages is a knowledge base holding one page, recording the operation
+// key every comment's actor arrives with.
 type recordingPages struct {
 	stubPageWriter
-	mu       sync.Mutex
-	callKeys []pages.CallKey
+	mu     sync.Mutex
+	opKeys []string
 }
 
 func (*recordingPages) List(context.Context, pages.Filter,
@@ -489,20 +421,20 @@ func (*recordingPages) List(context.Context, pages.Filter,
 
 func (*recordingPages) Get(context.Context, string,
 	statelog.Freshness) (pages.Detail, error) {
-	return pages.Detail{Page: pages.Page{ID: "p-1", Title: "Runbook"}}, nil
+	return pages.Detail{Page: pages.Page{ID: "p-1", Container: "ENG", Title: "Runbook"}}, nil
 }
 
-func (p *recordingPages) Comment(_ context.Context, _ pages.Actor, _ string,
-	in pages.NewComment) (pages.Comment, pages.Written, error) {
+func (p *recordingPages) Comment(_ context.Context, actor pages.Actor, _ string,
+	_ pages.NewComment) (pages.Comment, pages.Written, error) {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.callKeys = append(p.callKeys, in.CallKey)
+	p.opKeys = append(p.opKeys, actor.OpKey)
 	return pages.Comment{ID: "c-1"}, pages.Written{}, nil
 }
 
-func (p *recordingPages) keys() []pages.CallKey {
+func (p *recordingPages) keys() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return append([]pages.CallKey(nil), p.callKeys...)
+	return append([]string(nil), p.opKeys...)
 }

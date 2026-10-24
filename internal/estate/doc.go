@@ -9,9 +9,10 @@
 //
 // A node WITHOUT the `data` role keeps nothing that has to outlive it: its
 // store is scratch, its broker is a leaf with JetStream off, and it holds no
-// copy of the tracker's or the knowledge base's rows. Its seats still read and
-// write both, constantly — every board, every task, every page a tool touches
-// — so something has to answer them. EVERY DATA NODE HOLDS THE WHOLE ESTATE
+// copy of the tracker's, the knowledge base's or the identity directory's rows.
+// Its seats still read and write the first two, constantly — every board, every
+// task, every page a tool touches — and ask the third whose record a login names
+// and who holds each human seat, so something has to answer them. EVERY DATA NODE HOLDS THE WHOLE ESTATE
 // and SERVES it over the broker ([Serve]), and every node's tools are handed
 // facades of one [Router], which answers in-process where this node's copy
 // serves and asks another data node otherwise. So are the operator's surfaces
@@ -44,14 +45,17 @@
 // unanswered is asked again of the next data node, which is exactly the
 // lost-acknowledgement case that id exists for; and so is one a node answered
 // UNVOUCHED, whose ledger cannot say whether it landed while another node's
-// may. A PAGE write has no id a caller holds: the store mints one per call, so
-// a repeat is a second write (a second comment) or a refusal of its own first
-// copy (a create whose title is now taken). An unanswered page write is
-// therefore NEVER repeated, and is reported as [ErrOutcomeUnknown] — which is
-// the honest answer, and the one a tool turns into "read the page before
-// writing again". A PUSH carries its push id, a UUIDv7 the receiving node
-// minted once, which the committer's decide collapses onto the push's row — so
-// it moves on as a tracker write does.
+// may. A PAGE write is the same operation on a repeat only where the CALLER
+// brought a key — its actor's operation key ([pages.Actor.OpKey]), or for a
+// remark made from a turn the turn's own ([pages.NewComment.TurnKey]) — from
+// which the store derives the operation id, bound to what the write says. With
+// none the store mints an id per call, so a repeat is a second write (a second
+// comment) or a refusal of its own first copy (a create whose title is now
+// taken): an unanswered unkeyed page write is NEVER repeated, and is reported
+// as [ErrOutcomeUnknown] — the honest answer, and the one a tool turns into
+// "read the page before writing again". A PUSH carries its push id, a UUIDv7
+// the receiving node minted once, which the committer's decide collapses onto
+// the push's row — so it moves on as a tracker write does.
 //
 // # A push is asked of its repository's committer
 //
@@ -108,17 +112,20 @@
 //
 // A node that answers "I did not run it" — its copy of the operation's domain
 // is out of service, it runs no native backend, that copy lags its log, the
-// node is behind the company's configuration, or it could not reach the
-// caller's floor in time — did not execute anything, so every class moves on
-// from it. So does a READ a copy refuses for a reason about ITSELF
-// ([statelog.ReadRefusal.Elsewhere]): its applier did not reach the barrier a
-// linearizable read appended (`behind`), it stalled, it cannot decode a record,
-// it is evicted or below the floor, it lost its broker or its quorum — another
+// node is behind the company's configuration, it could not reach the caller's
+// floor in time, or it could not verify the request — did not execute
+// anything, so every class moves on from it. So does a READ a copy refuses for
+// a reason about ITSELF ([statelog.ReadRefusal.Elsewhere]): its applier did
+// not reach the barrier a linearizable read appended (`behind`), it stalled,
+// it cannot decode a record, it is evicted or below the floor, it lost its
+// broker or its quorum — another
 // node's copy may serve the read at once, so the next one is asked and the
 // refusal is the answer only where nobody does better. Returned as the answer,
 // a git fetch through a data node whose applier fell a second behind was told
-// 503 while two peers could serve it. `log_full` and `maintenance` hold for
-// every node alike, and are answered from the first node that gives them.
+// 503 while two peers could serve it. `log_full`, `broker_refused` and
+// `maintenance` hold for every node alike — every node appends its barrier to
+// the one stream, and every node of a fleet in a capacity window is in one — and
+// are answered from the first node that gives them.
 //
 // A WALK PAYS FOR A READ ONCE, whatever its length: a refusal says what the
 // read had paid for ([statelog.Refused.Spent]) — the read index its barrier
@@ -152,7 +159,7 @@
 // from the copy of its own domain, and a participant whose VECTORS copy is
 // out of service asks that verdict itself, in the scanner, and answers
 // without the half, saying so ([search.Copies]). And the seats were never the
-// problem, the copy was, so the node keeps them. This is ADR-0031, which
+// problem, the copy was, so the node keeps them. This is ADR-0045, which
 // refines ADR-0025's amendment to one domain at a time; the copy a SEAT is
 // served by — what admission asks of — is every domain that gates seat
 // admission at once ([SeatCopy]).
@@ -266,6 +273,25 @@
 // name the domain whose rows that index is over, so a node whose copy of it is
 // out of service runs none of them.
 //
+// # Every envelope is signed, and bound to its question
+//
+// A data node runs a tracker write AS THE ACTOR ITS REQUEST NAMES, so an
+// unsigned request was ADR-0031's unsigned record one hop earlier: anyone who
+// could reach the broker could write as any seat, and the log would carry it
+// signed by the data node that obeyed. So every request and every reply is
+// framed and signed under the fleet keyring, by the state log's own
+// [statelog.Signer] under domains of the estate's own, and read with its
+// verdicts ([Envelopes]) — the rule internal/signedask keeps for every channel
+// a node carries a request out on, this one, the fleet broker's membership and
+// a note to a running turn alike: a request that does not verify is never
+// dispatched, the actor a write runs as is the one inside the signed body, and
+// a key a node does not hold is "did not run" — the router moves on to a node
+// that holds it. A request carries an id and a deadline under the signature, so a
+// data node refuses a replay of one; a reply names the request it answers, so
+// an asker believes no answer to somebody else's question. A reply it cannot
+// believe is no answer — never "did not run" — so a once-write met with one is
+// [ErrOutcomeUnknown].
+//
 // # What does not cross the wire, and who supplies it
 //
 // Everything that is in-process by nature — the chart seams a query carries
@@ -279,6 +305,14 @@
 // an operation carries and fails on any field that would silently not arrive,
 // unless it is named, with its reason, in [carriedByServer].
 //
+// THE IDENTITY DIRECTORY IS THE OPPOSITE CASE, and for the same reason. What a
+// data node answers about a login or a seat is FACTS — the row and how far it
+// could vouch for it ([IdentityReader]) — and the verdict is the asking node's:
+// the chart a binding is resolved against and the Tier A tokens it declares
+// are its own, because its request path is where a person verb is decided. And
+// a binding crosses NARROWED ([Binding]): the row's credential verifiers and
+// grants never reach the broker, since the asker decides nothing on either.
+//
 // # Errors keep their identity
 //
 // A tool decides what to tell a model by asking errors.Is and errors.As — "no
@@ -287,7 +321,8 @@
 // registered sentinel it matches and every registered type it carries (see
 // errors.go), and the far side rebuilds an error that answers the same
 // questions. A sentinel or an error type added to the packages whose errors
-// cross — this one's included — is a build failure until it is registered or
-// exempted by name. An operation answered in-process returns its own error,
+// cross — this one's, the tracker's, the knowledge base's, the state log's and
+// the identity estate's with the vocabulary its answers are judged in — is a
+// build failure until it is registered. An operation answered in-process returns its own error,
 // which answers every question without the wire's help.
 package estate

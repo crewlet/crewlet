@@ -145,13 +145,21 @@ func TestEveryAttemptIsCountedByOperationAndOutcome(t *testing.T) {
 		map[string][2]float64{"answered": {4, 7}}; !mapsEqual(got, want) {
 		t.Fatalf("the heads' requests (count, attempts) = %v, want %v", got, want)
 	}
-	if got, want := countsOf(rec, metrics.ObjectsS3Attempts, "HeadBucket"),
+	// THE PROBE AT OPEN (probe.go) is counted like any request through the
+	// client: its object stored and deleted through the engine's own path,
+	// and deleted again however the probe ends. Its presigned puts are its
+	// own HTTP, past the SDK, which no attempt here counts.
+	if got, want := countsOf(rec, metrics.ObjectsS3Attempts, "PutObject"),
 		map[string]uint64{"answered": 1}; !mapsEqual(got, want) {
-		t.Fatalf("the check at open's attempts = %v, want %v", got, want)
+		t.Fatalf("the probe's put's attempts = %v, want %v", got, want)
 	}
-	if got, want := observedOf(rec, metrics.ObjectsS3RequestAttempts, "HeadBucket"),
+	if got, want := observedOf(rec, metrics.ObjectsS3RequestAttempts, "PutObject"),
 		map[string][2]float64{"answered": {1, 1}}; !mapsEqual(got, want) {
-		t.Fatalf("the check at open's requests = %v, want %v", got, want)
+		t.Fatalf("the probe's put's requests = %v, want %v", got, want)
+	}
+	if got, want := countsOf(rec, metrics.ObjectsS3Attempts, "DeleteObject"),
+		map[string]uint64{"answered": 2}; !mapsEqual(got, want) {
+		t.Fatalf("the probe's deletes' attempts = %v, want %v", got, want)
 	}
 
 	// A HEAD THAT NEVER GETS ITS TURN: every place the gate — engaged by the

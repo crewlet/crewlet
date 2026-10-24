@@ -2,12 +2,14 @@ package webhooks
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/whsec"
@@ -78,6 +80,17 @@ func verifySlack(body []byte, secret, signature, timestamp string, now time.Time
 	signed := append([]byte("v0:"+timestamp+":"), body...)
 	return equalHex(digest, mac(secret, signed))
 }
+
+// slackDecoy is the key a delivery to a seat with no Slack app is checked
+// against, so the refusal costs what a wrong signature on a real seat costs.
+//
+// RANDOM PER PROCESS, and never a constant in the source, although the answer
+// it produces is discarded either way: this repository is public, and a
+// published key that a refactor one day stopped discarding would be a key
+// anybody could sign an accepted delivery with.
+//
+//nolint:gochecknoglobals // a value computed once, not state
+var slackDecoy = sync.OnceValue(rand.Text)
 
 // verifyGitLab checks a GitLab 19.1+ Standard-Webhooks signature.
 //

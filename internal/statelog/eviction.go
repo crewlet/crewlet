@@ -89,6 +89,11 @@ type EvictionRow struct {
 // Presence is a node the fleet says is there, whether or not it has reported a
 // position yet: a data node holding a live presence lease, which the eviction
 // gate refuses to evict and every log's counted set counts.
+//
+// A LIVE DATA NODE COUNTS FOR EVERY LOG. Every data node runs every domain,
+// the identity estate included, whatever its other roles, so a live data node
+// that has published no position for a log is one between boot and its first
+// heartbeat — never one that declined the log and will never report.
 type Presence struct {
 	NodeID string
 }
@@ -115,7 +120,9 @@ type Presence struct {
 // The tombstones are what let an operator advance a floor an absent node is
 // pinning, and they take effect only after the window — because a node that
 // has not yet noticed is a node still writing.
-func CountedSet(now time.Time, reported []NodePosition, live []Presence, tombs []Tombstone) []NodePosition {
+func CountedSet(now time.Time, reported []NodePosition,
+	live []Presence, tombs []Tombstone) []NodePosition {
+
 	byID := make(map[string]NodePosition, len(reported)+len(live))
 	for _, n := range reported {
 		byID[n.NodeID] = n

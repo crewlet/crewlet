@@ -55,9 +55,10 @@ type Around struct {
 	// task page polls.
 	Position *int `json:"position"`
 
-	// Prev and Next are the KEYS of the neighbours, null at either end.
-	// Keys rather than ids because a key is what a task page's address
-	// carries.
+	// Prev and Next are the ADDRESSES of the neighbours ([ItemAddress]),
+	// null at either end: the key a task page's address carries, or the id
+	// of a neighbour whose key another task claimed first — stepping to
+	// that key would open the claimant, which is not on this board.
 	Prev *string `json:"prev"`
 	Next *string `json:"next"`
 
@@ -202,10 +203,12 @@ func aroundListed(rows []TaskRow, id string) *Around {
 		position := i + 1
 		out := &Around{Position: &position, TotalHint: len(rows)}
 		if i > 0 {
-			out.Prev = &rows[i-1].Key
+			prev := rows[i-1].Address()
+			out.Prev = &prev
 		}
 		if i+1 < len(rows) {
-			out.Next = &rows[i+1].Key
+			next := rows[i+1].Address()
+			out.Next = &next
 		}
 		return out
 	}
@@ -322,16 +325,18 @@ func segmentCount(ctx context.Context, tx *sql.Tx, seg segment,
 	return n, nil
 }
 
-// segmentFirst is the key of the first row of one run in an order, narrowed by
-// a clause, or nil when there is none.
+// segmentFirst is the address ([ItemAddress]) of the first row of one run in
+// an order, narrowed by a clause, or nil when there is none.
 func segmentFirst(ctx context.Context, tx *sql.Tx, seg segment,
 	terms []sortTerm, where string, args []any, extra string, extraArgs []any,
 	order string) (*string, error) {
 
 	from, bound := segmentFrom(seg, terms, where, args, extra, extraArgs)
-	var key string
+	var id, key string
+	var collision int
 	err := tx.QueryRowContext(ctx,
-		"SELECT t.key"+from+" ORDER BY "+order+" LIMIT 1", bound...).Scan(&key)
+		"SELECT t.id, t.key, t.key_collision"+from+" ORDER BY "+order+" LIMIT 1",
+		bound...).Scan(&id, &key, &collision)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, nil
@@ -339,7 +344,8 @@ func segmentFirst(ctx context.Context, tx *sql.Tx, seg segment,
 		return nil, fmt.Errorf("tracker: read a neighbour of the around "+
 			"task: %w", err)
 	}
-	return &key, nil
+	address := ItemAddress(id, key, collision == 1)
+	return &address, nil
 }
 
 // sortValuesOf reads one task's value for every column an order sorts by,

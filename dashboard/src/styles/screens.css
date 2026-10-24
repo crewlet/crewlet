@@ -644,11 +644,9 @@
    top (`--sticky-top`), less the phase body's own inset below it
    (`--spacing-3`), so the box's bottom border clears the view's edge by the
    same margin the card gives it. THE BOX ALONE: its caption above it
-   ("Rounds · what the model thought, said and called, in order") is not
-   counted, because it is an uppercase label in a column a sidebar and a peek
-   narrow, and it wraps — a bound that subtracted one line of it promised a
-   fit that held only while the caption did. Scrolled until the box's top
-   meets the band, the box fits whatever the caption does. The FLOOR is for a
+   ("Rounds") is not counted, because the caption is no part of the box.
+   Scrolled until the box's top meets the band, the box fits whatever the
+   caption does. The FLOOR is for a
    window too short for that to leave a transcript at all: four rows
    (`--size-row-md` each) — a round's line of speech and three tool rows — is
    the least that reads as a transcript rather than as a slot; below it the
@@ -710,6 +708,24 @@
 .tool-row.failed {
   border-color: color-mix(in srgb, var(--color-feedback-danger) 40%, transparent);
 }
+/* A task's artifacts, the design system's compact cards stacked in the rail.
+   ONE TRACK AS WIDE AS THE RAIL: an `auto` track grows to a card's widest
+   content, and a long title cut on one line is as wide as its whole text. */
+.task-rail-artifacts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--spacing-1);
+  margin: 0 0 var(--spacing-1);
+  padding: 0;
+  list-style: none;
+}
+/* The artifact a publishing call wrote, under the call's own row. */
+.tool-row-artifact {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  padding: 0 var(--spacing-3) var(--spacing-2);
+}
 
 /* ---- Attention ---------------------------------------------------------- */
 
@@ -760,14 +776,13 @@
 .live-filters {
   flex-wrap: wrap;
 }
+/* ONE TRACK SPLIT FOR BOTH ROWS, so the cards form one two-column grid: the
+   second row was split evenly, and its gutter stood 133px off the first's. */
 .live-row-pair {
   display: grid;
   grid-template-columns: minmax(0, 1.62fr) minmax(0, 1fr);
   gap: var(--spacing-4);
   align-items: stretch;
-}
-.live-row-even {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .live-card {
   min-width: 0;
@@ -775,8 +790,7 @@
 /* 928px IS HOME'S OWN FOLD, for the same reason: the waiting card's Answer
    and the run rows need the width the running column would leave them. */
 @container page (width < 928px) {
-  .live-row-pair,
-  .live-row-even {
+  .live-row-pair {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -812,6 +826,44 @@
   padding-inline-start: var(--spacing-5);
 }
 
+/* ---- Backups & retention ------------------------------------------------ */
+
+/* An alarm's measurement, the logs it stands on and its remedy, spaced by the
+   column's gap rather than by margins of their own. */
+.alarm-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+.alarm-body > p {
+  margin: 0;
+}
+.alarm-logs {
+  margin: 0;
+  padding-inline-start: var(--spacing-5);
+}
+
+/* A log per row, flush to the card's edges like a list's rows: each on the
+   card's own inset and ruled from the one above, its refusals above its
+   disclosure. */
+.log-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-3);
+}
+.log-row + .log-row {
+  border-top: 1px solid var(--color-border-default);
+}
+
+/* A check's words over its term's own name: side by side, "Slowest node
+   applied" read as a phrase. Neither wraps, since the name is an identifier. */
+.check-name {
+  display: flex;
+  flex-direction: column;
+  white-space: nowrap;
+}
+
 /* ---- Seat cards --------------------------------------------------------- */
 
 .seat-grid {
@@ -833,18 +885,6 @@
 }
 .seat-card:hover {
   border-color: var(--color-border-strong);
-}
-/* The tone is what the seat is DOING, never who it is — `lib/seats.ts`'s
-   `ringOf`, so the card's edge and the badge's ring are one reading. An idle
-   seat takes no tint at all: a glowing tile read as activity. */
-.seat-card[data-tone="info"] {
-  box-shadow: inset 2px 0 0 var(--color-feedback-info);
-}
-.seat-card[data-tone="warning"] {
-  box-shadow: inset 2px 0 0 var(--color-feedback-warning);
-}
-.seat-card[data-tone="danger"] {
-  box-shadow: inset 2px 0 0 var(--color-feedback-danger);
 }
 .seat-line {
   font-size: var(--font-size-xs);
@@ -890,45 +930,17 @@
 .oc-canvas {
   flex: 1;
   min-height: 0;
-  /* THE APPROVED CARD, 184px (11.5rem): three lines at the approved density.
-     The name has the first line to itself (the kind pill leads the second),
-     so "Agent Frontend SWE" is read whole; a name longer than the card is cut
-     with an ellipsis and read whole from its title and the peek's heading.
-     208px was tried to keep that word beside the pill; it did not — the card
-     read "Agent Front…" — and the 24px on each of four cards in a row was
-     zoom the whole chart lost beside the peek. */
-  --crewlet-tree-canvas-card-width: 11.5rem;
 }
-/* THE FIELD IS DOTTED, as the approved chart draws it: a surface that pans
-   says so before anybody drags it. The dot is the strong hairline's ink in
-   both themes, and it stays where it is while the cards move over it. Two
-   classes, so it outranks the kit's own ground whichever order the two
-   stylesheets are bundled in; a longhand, so the kit's ground colour stays. */
+/* NO FRAME OF ITS OWN: the field runs to the sheet's edges (see `.oc`). Its
+   dots are the design system's (`ground="dotted"` on the chart). Two classes,
+   so it outranks the kit's own frame whichever order the two stylesheets are
+   bundled in. */
 .oc-canvas .crewlet-canvas {
-  background-image: radial-gradient(var(--color-border-strong) 1px, transparent 1.2px);
-  background-size: var(--spacing-5) var(--spacing-5);
-  /* No frame of its own: the field runs to the sheet's edges (see `.oc`). */
   border: 0;
   border-radius: 0;
 }
-/* THE ZOOM BAR AT THE BOTTOM LEFT, THE LEGEND AT THE BOTTOM RIGHT, as the
-   approved chart has them: the kit offers the right-hand corners only, and the
-   legend is the chart's own overlay. */
-.oc-canvas .crewlet-canvas__controls {
-  left: var(--spacing-3);
-  right: auto;
-}
-
-/* ONE CARD: the kit draws its frame; this is what it says. */
-.oc-card {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  min-width: 0;
-  padding: var(--spacing-3);
-  cursor: pointer;
-  outline: none;
-}
+/* WHAT AN OUTLINE ROW SAYS, on a phone (`OrgOutline`). The canvas draws the
+   kit's own nodes and needs none of these. */
 .oc-head {
   display: flex;
   align-items: center;
@@ -957,32 +969,10 @@
   align-items: center;
   gap: var(--spacing-2);
 }
-/* THE KIND LEADS THE PLACE LINE and never gives way; the unit does. */
-.oc-card .oc-place {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-1);
-}
-.oc-kind {
-  display: inline-flex;
-  flex: none;
-}
-.oc-place-text,
 .oc-line {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-/* THE STATE LINE IN THE STATE'S INK — the one hue a card carries. Idle and a
-   person stay in the tertiary ink: an idle seat is not a state to notice. */
-.oc-card[data-state="working"] .oc-state {
-  color: var(--color-feedback-info-ink);
-}
-.oc-card[data-state="needs"] .oc-state {
-  color: var(--color-feedback-warning-ink);
-}
-.oc-card[data-state="stopped"] .oc-state {
-  color: var(--color-feedback-danger-ink);
 }
 /* A UNIT'S PROJECT KEY, as the sidebar's project rows draw one. */
 .oc-key {
@@ -1273,11 +1263,14 @@ a.oc-key:hover {
    width: pushed down by the free space when the seat says little, and held at
    the bottom of the view while a long goal scrolls under it, so Open profile
    and Message are always where the eye ends. The rail body's side and bottom
-   padding is taken back so the rule spans it. */
+   padding is taken back so the rule spans it. A vacant human seat adds Invite
+   and Create for an admin, which the canvas-width rail cannot
+   hold on one line, so the foot WRAPS rather than squeezing Open profile. */
 .seat-peek-foot {
   position: sticky;
   bottom: calc(-1 * var(--spacing-6));
   display: flex;
+  flex-wrap: wrap;
   gap: var(--spacing-2);
   margin: auto calc(-1 * var(--spacing-4)) calc(-1 * var(--spacing-6));
   padding: var(--spacing-3) var(--spacing-4);
@@ -1293,8 +1286,10 @@ a.oc-key:hover {
 /* THE APPROVED AGENT ARTBOARD: a head flush with the sheet — the badge, the
    name, the kind and state, the line that places the seat, and the tab strip
    sitting on the head's own rule — and the tab's panel under it at the
-   artboard's 28px inset. The sheet's own padding is taken back, the same way
-   the task page and the Inbox take it, so the rule runs edge to edge. */
+   shell's gutter, the screen padding every page bar's trail starts at: at
+   the artboard's 28px the head, tabs and body stood 8px right of the crumb
+   above them. The sheet's own padding is taken back, the same way the task
+   page and the Inbox take it, so the rule runs edge to edge. */
 .app .crewlet-app-shell__content:has(> .prof-frame) {
   padding: 0;
   gap: 0;
@@ -1308,7 +1303,7 @@ a.oc-key:hover {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-4);
-  padding: 22px 28px 0;
+  padding: var(--spacing-5) var(--spacing-5) 0;
   border-bottom: 1px solid var(--color-border-default);
 }
 .prof-id {
@@ -1360,7 +1355,7 @@ a.oc-key:hover {
   flex-direction: column;
   gap: var(--spacing-4);
   min-width: 0;
-  padding: 20px 28px 32px;
+  padding: var(--spacing-5) var(--spacing-5) var(--spacing-8);
 }
 .prof-notices {
   display: flex;
@@ -1391,6 +1386,12 @@ a.oc-key:hover {
 }
 .prof-pair > * {
   min-width: 0;
+}
+/* A PAIR WITH ONE CARD LEFT GIVES IT THE ROW: where the company runs no
+   Crewlet Works the seat's Assigned work draws nothing, and Turns per day sat
+   in the left track beside a 334px hole. */
+.prof-pair > :only-child {
+  grid-column: 1 / -1;
 }
 .prof-card,
 .prof-turn {
@@ -1665,10 +1666,10 @@ a.prof-row:hover {
 .prof-chain-model {
   text-decoration: none;
 }
-.prof-chain-model code.inline {
+.prof-chain-model .crewlet-inline-code {
   color: var(--color-brand-accent-ink);
 }
-.prof-chain-model:hover code.inline {
+.prof-chain-model:hover .crewlet-inline-code {
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -2003,6 +2004,15 @@ a.prof-row:hover {
   flex-wrap: wrap;
   min-width: 0;
 }
+/* THE CHECK, DISCARD AND REVIEW AND SAVE ARE ONE GROUP at the row's end, and
+   wrap together: the toolbar's last line holds all three or none. */
+.org-builder-save {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  flex: none;
+  margin-left: auto;
+}
 
 /* Undo, Redo, Discard, Expand all and Collapse all move into the More menu at
    the phone breakpoint — the same one `Builder.tsx`'s NARROW_QUERY reads off
@@ -2145,10 +2155,10 @@ a.prof-row:hover {
 }
 
 /* ---- Org builder: the node editor and its dialogs ------------------------
-   `routes/org/builder/NodeEditor.tsx` and the Add, Move, Delete and Change
-   kind dialogs. A drawer's body is a column of fields; a section separates a
-   group of them (reports, a tool, what the document configures) with a rule
-   and a heading, so a long seat form reads as parts rather than one list. */
+   `routes/org/builder/NodeEditor.tsx` and the Add, Move and Delete dialogs. A
+   dialog's body is a column of fields; a section separates a group of them
+   with a rule and a heading. The node editor is a sheet of TABS instead, and
+   its sections are the quieter kind described under "The node editor" below. */
 
 /* KEYED ON THE SECTION'S OWN DEPTH, which it already knows: it reads the depth
    to pick its heading level, so it says it. A section inside a section (one
@@ -2168,9 +2178,21 @@ a.prof-row:hover {
   color: var(--color-text-secondary);
 }
 .builder-section p,
-.builder-fact p,
 .builder-note {
   margin: 0;
+}
+/* A section's heading and the one link beside it (Open Schedules, Open the
+   document) share a line, the link at its inline end. */
+.builder-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+.builder-section-aside {
+  flex: none;
+  font-size: var(--font-size-xs);
 }
 .builder-list {
   margin: 0;
@@ -2187,12 +2209,140 @@ a.prof-row:hover {
    carry. It used to be a flex row that sized its children through `> .field`,
    the class the engine's own field component drew; the design system draws the
    field now, and that selector went with it, leaving the two questions to size
-   themselves and the pair to read as one wide and one narrow. */
+   themselves and the pair to read as one wide and one narrow. On a phone the
+   pair stacks: two 30px controls side by side at phone width truncate both. */
 .builder-pair {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--spacing-3) var(--spacing-4);
+  min-width: 0;
+}
+@media (width < 640px) {
+  .builder-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---- The node editor -------------------------------------------------------
+   A sheet with a 72px head (the node's mark and name, Cancel and Apply), a
+   band of underline tabs that stays put while the panel scrolls, and the
+   active tab's panel. The sizes are the approved spec's: a 20px panel inset
+   with 32px below the last field, 24px between groups, and section titles as
+   11px uppercase labels with no rule, because the tab already says which part
+   of the node this is and a rule above every group read as a second border. */
+.node-editor {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.node-editor-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0 var(--spacing-3);
+  background: var(--color-surface-subtle);
+  border-bottom: 1px solid var(--color-border-default);
+}
+.node-editor-panel {
+  display: grid;
+  align-content: start;
+  gap: var(--spacing-6);
+  padding: var(--spacing-5) var(--spacing-4) var(--spacing-7);
+  min-width: 0;
+}
+.node-editor .builder-section[data-depth="0"] {
+  padding-top: 0;
+  border-top: 0;
+}
+.node-editor .builder-section {
+  gap: var(--spacing-4);
+}
+.node-editor
+  .builder-section[data-depth="0"]
+  > div
+  > .builder-section-head
+  > .builder-section-title {
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--font-letter-spacing-wide);
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+}
+/* Three token ceilings share one row; on a phone they stack like a pair. */
+.node-editor-trio {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--spacing-3);
   min-width: 0;
+}
+@media (width < 640px) {
+  .node-editor-trio {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+/* The chosen profile icon, with its character and colour named beside it. */
+.node-editor-icon {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+/* A connected tool: its real mark, its name and its status in the head, and
+   the seat's own settings for it below. One bordered box per tool, so tools
+   never run together. */
+.node-editor-card {
+  display: grid;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-elevated);
+  min-width: 0;
+}
+.node-editor-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-height: var(--spacing-6);
+}
+.node-editor-card-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+/* Every tool the company does not use, as one dashed line rather than a box
+   each: muted marks, their names and the way to connect them. */
+.node-editor-unused {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: var(--spacing-2) var(--spacing-3);
+  border: 1px dashed var(--color-border-default);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+.node-editor-unused-marks {
+  display: inline-flex;
+  gap: var(--spacing-1);
+}
+/* Delete: what it does on the left, the danger button on the right. */
+.node-editor-delete {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+}
+
+/* A field label that carries its surface's mark (a contact's Slack or GitHub). */
+.field-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
 }
 
 /* ---- Feed --------------------------------------------------------------- */
@@ -2537,898 +2687,844 @@ a.prof-row:hover {
   font-variant-numeric: tabular-nums;
 }
 
-/* ---- Knowledge ---------------------------------------------------------- */
+/* ---- Knowledge ----------------------------------------------------------
 
-/* A LIST THAT IS A LIST FOR A SCREEN READER and draws none of its own marks:
-   the Knowledge home's spaces (on the shared `.grid-auto` recipe) and a
-   search's ranked hits, whose rank is their order. */
-.k-list {
+   THE APPROVED KNOWLEDGE HOME (routes/knowledge/): the spaces in one row at
+   the top of every Knowledge screen, the search in the page bar, and the
+   screen's own content at the full width of the sheet, with no column of
+   navigation beside it. Every size here is a token; the widths a layout
+   needs and no token states are rem, named where they are declared. */
+
+/* THE SEARCH IN THE PAGE BAR: the field, and the ranking mode beside it. */
+.knowledge-search {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+.knowledge-search > form {
+  min-width: 0;
+  width: 14rem;
+}
+@container page (width < 640px) {
+  .knowledge-search > form {
+    flex: 1 1 auto;
+    width: auto;
+  }
+}
+
+/* A screen's column: the landing, a space, the results. */
+.knowledge-home {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-6);
+  width: 100%;
+  max-width: var(--size-content-max);
+  min-width: 0;
+}
+
+/* THE SPACES ROW: its label, then each space as a link with its key. */
+.knowledge-spaces {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+  min-width: 0;
+}
+.knowledge-spaces-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/* THE LANDING: tiles sized by what each is worth, on one screen. The newest
+   change takes the big tile, Recently written runs down the right, and the
+   four small tiles share the rest, each one line when it has nothing to list.
+   Every tile is placed by a named area, so the markup keeps the reading order
+   at every width: below 928px the feed moves under the newest change and the
+   small tiles pair up, and below 640px everything is one column. */
+.knowledge-tiles {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.1fr);
+  grid-template-areas:
+    "latest latest written"
+    "reading pinned written"
+    "watching agents written";
+  gap: var(--spacing-4);
+  align-items: stretch;
+}
+@container page (width < 928px) {
+  .knowledge-tiles {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      "latest latest"
+      "written written"
+      "reading pinned"
+      "watching agents";
+  }
+}
+@container page (width < 640px) {
+  .knowledge-tiles {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "latest" "written" "reading" "pinned" "watching" "agents";
+  }
+}
+/* WITH NOTHING WRITTEN there is no Recently written tile, and no column for
+   it: the newest change's tile says so, and the small tiles share the row. */
+.knowledge-tiles[data-written="none"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-areas:
+    "latest latest"
+    "reading pinned"
+    "watching agents";
+}
+@container page (width < 640px) {
+  .knowledge-tiles[data-written="none"] {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "latest" "reading" "pinned" "watching" "agents";
+  }
+}
+.knowledge-written {
+  grid-area: written;
+}
+.knowledge-reading {
+  grid-area: reading;
+}
+.knowledge-pinned {
+  grid-area: pinned;
+}
+.knowledge-watching {
+  grid-area: watching;
+}
+.knowledge-agents {
+  grid-area: agents;
+}
+
+/* A SMALL TILE'S ROWS, set in by the one step that puts each row's glyph
+   under the tile's own: the head is inset by --spacing-4, a row by
+   --spacing-3. */
+.knowledge-tile-rows {
+  padding: 0 var(--spacing-1) var(--spacing-2);
+}
+/* Anything else a tile holds (the line an empty one says, a reading, a
+   refusal), at the tile's own inset under its head. */
+.knowledge-tile-body {
+  padding: 0 var(--spacing-4) var(--spacing-3);
+}
+/* A ROW'S WORDS: the page, then one quiet line about it. */
+.knowledge-tile-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.knowledge-tile-meta {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+/* THE NEWEST CHANGE: the page's head and title, who changed it and when, what
+   each save said, the lines it changed, and the page's opening under a rule. */
+.knowledge-latest {
+  grid-area: latest;
+  gap: var(--spacing-3);
+}
+.knowledge-latest-who {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin: 0;
+  min-width: 0;
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
+}
+.knowledge-latest-who b {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+.knowledge-latest-who > time {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+.knowledge-latest-notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
   margin: 0;
   padding: 0;
   list-style: none;
 }
-
-.k-space {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  height: 100%;
-  padding: var(--spacing-3);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface-subtle);
-  color: var(--color-text-primary);
-  text-decoration: none;
-}
-
-.k-space:hover {
-  border-color: var(--color-border-hover);
-}
-
-.k-space:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 2px;
-}
-
-/* THE TREE COLUMN (routes/knowledge/KnowledgeTree.tsx), the approved
-   artboard's: the search and its mode on top, then every space's pages, each
-   level one 14px step in. It is `.section-column`'s frame — sticky, full
-   height, hairline — and scrolls on its own when a space runs longer than the
-   window, so the pane beside it never moves with it. */
-.ktree {
-  display: flex;
-  flex-direction: column;
+.knowledge-latest-note {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
   gap: var(--spacing-3);
-  padding: var(--spacing-4) var(--spacing-2) var(--spacing-5);
-  overflow-y: auto;
-  scrollbar-gutter: stable;
+  font-size: var(--font-size-compact);
+  color: var(--color-text-primary);
 }
-
-.ktree-search {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--spacing-2);
-  padding: 0 var(--spacing-1);
-}
-
-.ktree-search > form {
-  align-self: stretch;
-}
-
-.ktree-reason,
-.ktree-note {
-  margin: 0;
+.knowledge-latest-note > time {
   font-size: var(--font-size-xs);
-  line-height: var(--font-line-height-normal);
   color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
 }
-
-.ktree-note {
-  padding: var(--spacing-1) var(--spacing-2) var(--spacing-1)
-    calc(
-      var(--spacing-1) + var(--ktree-depth, 0) * 14px + var(--size-target-min) + var(--spacing-1)
-    );
-}
-
-.ktree-spaces {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  padding-top: var(--spacing-2);
+.knowledge-latest-opening {
+  padding-top: var(--spacing-3);
   border-top: 1px solid var(--color-border-default);
 }
 
-.ktree-heading {
+.knowledge-section-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-2);
   margin: 0;
-  padding: var(--spacing-1) var(--spacing-2);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+.knowledge-section-title > svg {
+  align-self: center;
+  color: var(--color-text-tertiary);
+}
+.knowledge-count {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-tertiary);
+}
+/* A QUIET LINE: what a list is for when it is empty, a note under a list. */
+.knowledge-note {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+/* RECENTLY WRITTEN: the company's day, then the rows under it. A row's note
+   is prose, so it is cut at a line rather than a pixel. */
+.knowledge-day {
+  margin: 0;
+  padding: var(--spacing-2) var(--spacing-4) var(--spacing-1);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--font-letter-spacing-wide);
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+}
+.knowledge-written-note {
+  --clamp-lines: 2;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+/* ---- A space ------------------------------------------------------------ */
+
+.knowledge-space-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+.knowledge-space-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1) var(--spacing-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--font-size-compact);
+  color: var(--color-text-tertiary);
+}
+.knowledge-space-facts b {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+.knowledge-space-facts li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+/* THE OUTLINE: the kit's tree grid, three columns that say what they are.
+   No minimum width to scroll for: the title takes the room and cuts, and the
+   face and the date keep a width every row shares. */
+.knowledge-outline {
+  --crewlet-tree-grid-min-width: 0;
+  /* The date column: "Sep 18" or "2h ago" at the compact size, with room. */
+  --knowledge-outline-when: 5.5rem;
+}
+.knowledge-outline-title {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+.knowledge-outline-title > svg {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+.knowledge-outline-title:hover > .truncate {
+  text-decoration: underline;
+}
+.knowledge-outline-count {
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-regular);
   color: var(--color-text-tertiary);
 }
-
-/* THE PHONE'S DISCLOSURE (the spaces folded under the search): the heading's
-   own register, at the target floor, spanning the column so the whole row is
-   the control. */
-.ktree-fold {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  width: 100%;
-  min-height: var(--size-target-min);
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-
-.ktree-fold:hover {
-  color: var(--color-text-primary);
-}
-
-.ktree-fold:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: var(--size-focus-ring-inset-offset);
-}
-
-.ktree-fold-count {
-  margin-left: auto;
-  font-variant-numeric: tabular-nums;
-}
-
-.ktree-list {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-/* ONE ROW: the expander (or its room), the link, and a space's key. The
-   indent is the row's own padding, so the current row's lift spans the whole
-   width at every depth, as the artboard draws it. */
-.ktree-row {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  min-height: var(--size-nav-row);
-  padding: 0 var(--spacing-2) 0 calc(var(--spacing-1) + var(--ktree-depth, 0) * 14px);
-  border-radius: var(--radius-sm);
-  color: var(--color-text-secondary);
-}
-
-.ktree-row:hover {
-  background: var(--color-surface-hover);
-  color: var(--color-text-primary);
-}
-
-/* WHERE THE READER IS: the rail's own mark — raised, a hairline drawn as an
-   outline so forced-colours mode keeps it, the primary ink. */
-.ktree-row.is-current {
-  background: var(--color-surface-elevated);
-  outline: 1px solid var(--color-border-default);
-  outline-offset: -1px;
-  color: var(--color-text-primary);
-}
-
-.ktree-expander {
-  display: inline-grid;
-  place-items: center;
-  flex: none;
-  /* THE TARGET FLOOR, though the chevron in it is 12px: a smaller box is a
-     control a pointer reaches by missing it. */
-  width: var(--size-target-min);
-  height: var(--size-target-min);
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-xs);
-  background: transparent;
-  color: var(--color-text-tertiary);
-  cursor: pointer;
-}
-
-.ktree-expander:hover {
-  color: var(--color-text-primary);
-}
-
-.ktree-expander:focus-visible,
-.ktree-link:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: var(--size-focus-ring-inset-offset);
-}
-
-.ktree-spacer {
-  flex: none;
-  width: var(--size-target-min);
-}
-
-.ktree-link {
-  display: flex;
-  flex: 1 1 auto;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  min-height: var(--size-target-min);
-  border-radius: var(--radius-sm);
-  color: inherit;
-  font-size: var(--font-size-compact);
-  font-weight: var(--font-weight-medium);
-  text-decoration: none;
-}
-
-.ktree-mark {
-  flex: none;
-  color: var(--color-text-tertiary);
-}
-
-.ktree-title {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ktree-draft {
-  flex: none;
-  font-size: var(--font-size-2xs);
-  color: var(--color-text-tertiary);
-}
-
-/* A SPACE'S KEY, the artboard's small mono chip at the row's end. */
-.ktree-key {
-  flex: none;
-  padding: 1px 5px;
-  border: 1px solid var(--color-border-default);
-  border-radius: 5px;
-  background: var(--color-surface-elevated);
-  font-size: var(--font-size-2xs);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-secondary);
-}
-
-/* THE TRACKER PROJECT a space's units work in, where the key does not already
-   name it: the same chip with a dashed edge, so it reads as a second, related
-   key rather than as the space's own. */
-.ktree-proj {
-  border-style: dashed;
-  background: transparent;
-}
-
-.ktree-more {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-2);
-  padding: var(--spacing-1) var(--spacing-2) var(--spacing-1)
-    calc(
-      var(--spacing-1) + var(--ktree-depth, 0) * 14px + var(--size-target-min) + var(--spacing-1)
-    );
-}
-
-/* THE TREE'S SECTIONS under the spaces (Agent skills), a hairline above them
-   as the artboard draws, and the section's count at the row's end. */
-.ktree-sections {
-  padding-top: var(--spacing-2);
-  border-top: 1px solid var(--color-border-default);
-}
-
-.ktree-count {
-  flex: none;
-  margin-left: auto;
-  font-size: var(--font-size-2xs);
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-tertiary);
-}
-
-/* ---- A knowledge page (routes/knowledge/page/) -----------------------------
-
-   THE APPROVED KNOWLEDGE ARTBOARD: the document in a reading column, and a
-   280px rail beside it, each its own scroller, flush with the sheet — the
-   frame the task page takes, for its reason: the rail is read while the
-   document is scrolled. The section frame's padding is handed back to the two
-   columns, and the frame takes the window's height the screen asked for. */
-.section-frame:has(.kpage) {
-  height: 100%;
-}
-.section-body:has(> .kpage) {
-  min-height: 0;
-  padding: 0;
-  gap: 0;
-}
-/* THE CONTAINER AND THE GRID ARE TWO ELEMENTS, because a container query
-   styles what is INSIDE its container and never the container itself — one
-   element that was both kept its two columns at 390px. */
-.kpage {
-  container: kpage / inline-size;
-  display: flex;
-  flex: 1 1 auto;
-  min-height: 0;
-  height: 100%;
-}
-.kpage-grid {
-  display: grid;
-  flex: 1 1 auto;
-  grid-template-columns: minmax(0, 1fr) 280px;
-  min-width: 0;
-  min-height: 0;
-}
-.kpage-main {
-  display: flex;
-  flex-direction: column;
-  gap: 36px;
-  min-width: 0;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 40px 56px 48px;
-}
-/* THE READING MEASURE, 700px — the artboard's, which keeps a paragraph of
-   14.5px prose near seventy characters a line. */
-.kpage-doc,
-.kpage-section {
-  width: 100%;
-  max-width: 700px;
-  min-width: 0;
-}
-.kpage-head {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin-bottom: 18px;
-}
-.kpage-title {
-  margin: 0;
-  font-size: 32px;
-  font-weight: var(--font-weight-semibold);
-  letter-spacing: -0.025em;
-  line-height: 1.15;
-  overflow-wrap: anywhere;
-}
-.kpage-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 10px;
-  font-size: var(--font-size-compact);
-  color: var(--color-text-tertiary);
-}
-.kpage-meta b {
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-}
-.kpage-prose {
-  font-size: 14.5px;
-  line-height: 1.7;
-  color: var(--color-text-secondary);
-}
-/* THE DOCUMENT'S OWN RHYTHM over the shared markdown one (`.prose.md`), at
-   that rule's weight plus this class so the two cannot tie. The renderer
-   draws a body's `#` as an h2 and its `##` — the level a page's sections are
-   written at — as an h3, so both are section headings here. */
-.prose.md.kpage-prose > * + * {
-  margin-top: 14px;
-}
-.prose.md.kpage-prose h2 {
-  font-size: 20px;
-  letter-spacing: -0.01em;
-}
-.prose.md.kpage-prose h3 {
-  font-size: 18px;
-  letter-spacing: -0.01em;
-}
-.prose.md.kpage-prose h4 {
-  font-size: 15px;
-  color: var(--color-text-primary);
-}
-.prose.md.kpage-prose > * + :is(h2, h3, h4, h5, h6) {
-  margin-top: 26px;
-}
-/* A HEADING THE OUTLINE SCROLLED TO takes focus so a keyboard continues from
-   it. A pointer press draws no ring (`:focus-visible` does not match one); a
-   keyboard's is drawn off the text, since the heading is not a control. */
-.kpage-prose :is(h2, h3, h4, h5, h6):focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 4px;
-  border-radius: var(--radius-xs);
-}
-.kpage-readonly {
-  margin-top: var(--spacing-3);
-}
-
-/* The page bar's "read by n agents today". */
-.kpage-today {
+.knowledge-outline-face {
   display: inline-flex;
   align-items: center;
-  gap: var(--spacing-2);
-  margin-right: 6px;
+}
+.knowledge-outline-when {
+  margin-inline-start: auto;
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   white-space: nowrap;
 }
+.knowledge-outline-more,
+.knowledge-folder-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.knowledge-folder-field > svg {
+  color: var(--color-text-tertiary);
+}
 
-/* The thread and the activity under the document. */
-.kpage-section {
+/* ---- The results -------------------------------------------------------- */
+
+.knowledge-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  width: 100%;
+  min-width: 0;
+}
+/* THE LIST AND ITS PREVIEW SIDE BY SIDE, one column when the screen is
+   narrow (`@container page`, the screen's width rather than the window's). */
+.knowledge-results-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: var(--spacing-5);
+  align-items: start;
+}
+@container page (width < 760px) {
+  .knowledge-results-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.knowledge-results-list,
+.knowledge-results-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+.knowledge-results-head,
+.knowledge-results-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.knowledge-results-for {
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
+}
+.knowledge-results-space {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin: 0;
+  font-size: var(--font-size-compact);
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-tertiary);
+}
+.knowledge-results-space b {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+.knowledge-results-foot {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.knowledge-results-preview {
+  position: sticky;
+  top: var(--sticky-top);
+  min-width: 0;
+}
+/* A VENDOR HIT is the wiki's own link, drawn as the row it is. */
+.knowledge-hit-link {
+  display: flex;
+  min-width: 0;
+  color: inherit;
+}
+.knowledge-hit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+.knowledge-hit-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.knowledge-hit-rank {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.knowledge-hit-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+.knowledge-hit-when,
+.knowledge-hit-path {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+.knowledge-hit-snippet {
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
+}
+.knowledge-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+.knowledge-preview-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+  color: var(--color-text-tertiary);
+}
+.knowledge-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--spacing-3) var(--spacing-5);
+  margin: 0;
+}
+.knowledge-facts dt {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.knowledge-facts dd {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin: 0;
+  font-size: var(--font-size-compact);
+  color: var(--color-text-primary);
+}
+
+/* ---- A page ------------------------------------------------------------- */
+
+/* THE OUTLINE TO THE LEFT AND THE PAGE BESIDE IT: the outline stays in view
+   while the page scrolls, so where a reader is in a long page is always on
+   screen. On a phone the page is one column and the outline is not drawn.
+   A doc's tab reads the same way (`DocView`), so the two share these rules
+   rather than keeping two copies that drift. */
+.knowledge-read,
+.doc-read {
+  display: grid;
+  grid-template-columns: var(--size-shell-rail) minmax(0, var(--size-content-max));
+  gap: var(--spacing-6);
+  align-items: start;
+  min-width: 0;
+}
+/* THE WHOLE COLUMN FITS IN THE VIEW: the scroller's own height (`100cqb`)
+   less the band above it and the screen's padding below, so a long outline
+   scrolls inside it rather than past the fold. */
+.knowledge-read-side,
+.doc-read-side {
+  position: sticky;
+  top: var(--sticky-top);
+  max-height: calc(100cqb - var(--sticky-top) - 2 * var(--spacing-5));
+  overflow-y: auto;
+  min-width: 0;
+}
+@container page (width < 760px) {
+  .knowledge-read,
+  .doc-read {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .knowledge-read-side,
+  .doc-read-side {
+    display: none;
+  }
+}
+.knowledge-read-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+  min-width: 0;
+  max-width: var(--size-measure);
+}
+/* THE PROPERTIES ARE A SHORT LIST, kept to the narrow measure so a value
+   stays beside its term rather than across the page. */
+.knowledge-props {
+  max-width: var(--size-measure-narrow);
+}
+.knowledge-props-place,
+.knowledge-props-step,
+.knowledge-props-person {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+  min-width: 0;
+}
+.knowledge-props-link {
+  color: var(--color-text-primary);
+}
+.knowledge-props-link:hover {
+  text-decoration: underline;
+}
+.knowledge-folder {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+.knowledge-revisions {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.knowledge-side-title {
+  margin: 0 0 var(--spacing-2);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--font-letter-spacing-wide);
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+}
+
+/* THE WATCH: the eye and the count that opens who is told. */
+.knowledge-watch {
+  display: inline-flex;
+  align-items: center;
+}
+.knowledge-watchers {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 15rem;
+  padding: var(--spacing-2);
+}
+.knowledge-watchers-head {
+  margin: 0;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--font-letter-spacing-wide);
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+}
+.knowledge-watchers-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.knowledge-watchers-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-primary);
+}
+
+/* The page's sections under its body: the comment thread (uilet's
+   CommentThread, given this class for its rule and spacing), its changes and
+   its connections. */
+.knowledge-comments,
+.knowledge-changes,
+.knowledge-connections {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-3);
   padding-top: var(--spacing-5);
   border-top: 1px solid var(--color-border-default);
 }
-.kpage-section-title {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  margin: 0;
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-primary);
-}
-.kpage-count {
-  font-weight: var(--font-weight-regular);
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-tertiary);
-}
-.kpage-comments,
-.kpage-changes {
+.knowledge-change-list {
   display: flex;
   flex-direction: column;
   margin: 0;
   padding: 0;
   list-style: none;
 }
-.kpage-comment,
-.kpage-change {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  padding: var(--spacing-3) 0;
+
+/* THE PAGE'S CHANGES, in History. */
+.knowledge-change {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: var(--spacing-3);
+  align-items: start;
+  padding: var(--spacing-2) 0;
   border-bottom: 1px solid var(--color-border-default);
 }
-.kpage-comment:last-child,
-.kpage-change:last-child {
-  border-bottom: none;
-}
-.kpage-compose {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-}
-.kpage-replying {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-
-/* Editing. */
-.kpage-editor {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-}
-.kpage-editor-bar,
-.kpage-editor-foot {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-2);
-}
-/* MARKDOWN IS EDITED AS MARKDOWN: the source face, so a table's pipes and a
-   list's indent line up the way the renderer reads them. */
-.kpage-editor-body textarea,
-textarea.kpage-editor-body {
-  min-height: 420px;
-  font-family: var(--font-family-mono);
+.knowledge-change-what {
   font-size: var(--font-size-compact);
-  line-height: 1.6;
+  color: var(--color-text-secondary);
 }
-.kpage-preview {
-  min-height: 200px;
-  padding: var(--spacing-4);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
+.knowledge-change-what b {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
 }
-/* THE CALLOUT'S ACTIONS UNDER ITS SENTENCE, not at its trailing edge: two
-   buttons there took ~290px of a 580px document and folded the explanation
-   into a five-line column ending under them. */
-.kpage-callout-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-2);
-  margin-top: var(--spacing-2);
+.knowledge-change-note {
+  display: block;
+  margin-top: var(--spacing-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
 }
-.kpage-merged {
-  margin: 0;
-}
-.kpage-resolve {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-  padding: var(--spacing-3);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-subtle);
-}
-.kpage-resolve-title {
-  margin: 0;
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
-}
-.kpage-resolve-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-4);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.kpage-resolve-item {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-}
-.kpage-resolve-sides {
+
+/* CONNECTIONS: three cards side by side where there is room. */
+.knowledge-connections-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
-  gap: var(--spacing-2);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--spacing-3);
 }
-.kpage-resolve-side {
-  margin: 0;
+@container page (width < 760px) {
+  .knowledge-connections-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.knowledge-connection {
   min-width: 0;
+}
+.knowledge-links,
+.knowledge-readers,
+.knowledge-revision-list {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-1);
-}
-.kpage-resolve-side figcaption {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-.kpage-resolve-side pre {
-  margin: 0;
-  padding: var(--spacing-2);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface-inset);
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.kpage-theirs {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-}
-.kpage-picker {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  padding: var(--spacing-3);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-subtle);
-}
-.kpage-picker-hits {
-  display: flex;
-  flex-direction: column;
   margin: 0;
   padding: 0;
   list-style: none;
 }
-.kpage-picker-hit {
+.knowledge-link {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-2);
-  width: 100%;
-  min-height: var(--size-target-min);
-  padding: 0 var(--spacing-2);
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--color-text-primary);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.kpage-picker-hit:hover {
-  background: var(--color-surface-hover);
-}
-.kpage-picker-hit:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: var(--size-focus-ring-inset-offset);
-}
-
-/* One revision, read in the document's place. */
-.kpage-version {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-}
-.kpage-version-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-2);
-}
-.kpage-version-title {
-  margin: 0;
-  font-size: var(--font-size-md);
-  font-weight: var(--font-weight-semibold);
-}
-.kpage-version-by {
-  font-weight: var(--font-weight-regular);
-  color: var(--color-text-tertiary);
-}
-.kpage-version-message {
-  margin: 0;
-  color: var(--color-text-secondary);
-}
-
-/* THE RAIL: small labels over short lists, the artboard's 22px between. */
-.kpage-rail {
-  display: flex;
-  flex-direction: column;
-  gap: 22px;
-  min-width: 0;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 24px 20px 32px;
-  border-left: 1px solid var(--color-border-default);
-}
-.kpage-rail-section {
-  display: flex;
-  flex-direction: column;
   gap: var(--spacing-2);
   min-width: 0;
-}
-.kpage-rail-label {
-  margin: 0;
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-regular);
-  color: var(--color-text-tertiary);
-}
-.kpage-rail-note {
-  margin: 0;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-.kpage-rail-window {
-  color: var(--color-text-tertiary);
-}
-/* FLUSH WITH THE LIST it grows: the small ghost button's padding and border
-   (8px + 1px) set its label nine pixels right of the avatar column above. The
-   hover fill still extends left of the column, as the rail's links do. */
-.kpage-rail-more {
-  align-self: flex-start;
-  margin-inline-start: calc(-1 * var(--spacing-2) - 1px);
-}
-.kpage-toc,
-.kpage-readers,
-.kpage-links,
-.kpage-revisions,
-.kpage-watchers {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.kpage-toc-link {
-  display: block;
-  width: 100%;
-  min-height: var(--size-target-min);
-  padding: 2px 0;
-  border: none;
-  background: transparent;
-  color: var(--color-text-secondary);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.kpage-toc-link.is-nested {
-  padding-left: var(--spacing-3);
-}
-.kpage-toc-link:hover,
-.kpage-toc-link[aria-current] {
+  padding: var(--spacing-1) 0;
+  font-size: var(--font-size-compact);
   color: var(--color-text-primary);
 }
-.kpage-toc-link[aria-current] {
-  font-weight: var(--font-weight-medium);
-}
-.kpage-toc-link:focus-visible,
-.kpage-revision:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: var(--size-focus-ring-inset-offset);
-  border-radius: var(--radius-xs);
-}
-.kpage-readers {
-  gap: var(--spacing-3);
-}
-.kpage-reader {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  min-width: 0;
-}
-.kpage-reader-text {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-.kpage-reader-head {
-  display: flex;
-  align-items: baseline;
-  gap: var(--spacing-2);
-  min-width: 0;
-}
-.kpage-reader-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-  text-decoration: none;
-}
-.kpage-reader-count {
-  flex: none;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-  font-variant-numeric: tabular-nums;
-}
-.kpage-reader-via {
-  display: flex;
-  min-width: 0;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-}
-.kpage-reader-how {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-/* THE WAY IT WAS READ IS A MUTED LINE, as the artboard draws it — a turn's
-   link underlines only under the pointer or the keyboard, like the name. */
-.kpage-reader-via-link {
-  color: inherit;
-  text-decoration: none;
-}
-.kpage-reader-when {
-  flex: none;
-  white-space: pre;
-}
-.kpage-reader-name:hover,
-.kpage-reader-name:focus-visible,
-.kpage-reader-via-link:hover,
-.kpage-reader-via-link:focus-visible {
+.knowledge-link:hover .knowledge-link-title {
   text-decoration: underline;
 }
-.kpage-link {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  min-height: 28px;
-  margin: 0 -6px;
-  padding: 0 6px;
-  border-radius: var(--radius-sm);
-  color: var(--color-text-secondary);
-  text-decoration: none;
-}
-.kpage-link:hover {
-  background: var(--color-surface-hover);
-  color: var(--color-text-primary);
-}
-.kpage-link > svg {
+.knowledge-link > svg {
   flex: none;
   color: var(--color-text-tertiary);
 }
-.kpage-link-key {
-  flex: none;
+.knowledge-link-key {
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-2xs);
+  font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
 }
-.kpage-link-title {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.kpage-revision {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  width: 100%;
-  min-height: var(--size-target-min);
-  margin: 0 -6px;
-  padding: 0 6px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--color-text-primary);
-  font: inherit;
-  font-size: var(--font-size-compact);
-  text-align: left;
-  cursor: pointer;
-  box-sizing: content-box;
-}
-.kpage-revision:hover {
-  background: var(--color-surface-hover);
-}
-.kpage-revision[aria-pressed="true"] {
-  background: var(--color-surface-elevated);
-  outline: 1px solid var(--color-border-default);
-  outline-offset: -1px;
-}
-.kpage-revision-what {
+.knowledge-link-title {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.kpage-revision-when {
-  flex: none;
-  color: var(--color-text-tertiary);
+.knowledge-reader {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--spacing-2);
+  align-items: start;
+  padding: var(--spacing-1) 0;
 }
-/* A revision the engine wrote has no seat to draw — the badge's room, empty,
-   so the column of names stays aligned. */
-.kpage-revision-engine {
-  flex: none;
-  width: 18px;
-}
-
-/* BELOW 760px OF ITS OWN WIDTH THE RAIL FOLLOWS THE DOCUMENT in one scroller
-   — a document narrower than its measure beside a 280px rail reads as two
-   cramped columns rather than one page. Between that and 980 the insets
-   tighten to 32px, where the artboard's 56 starts costing the measure. */
-@container kpage (max-width: 980px) {
-  .kpage-main {
-    padding: 32px 32px 40px;
-  }
-}
-@container kpage (max-width: 760px) {
-  .kpage-grid {
-    display: block;
-    overflow-y: auto;
-  }
-  .kpage-main,
-  .kpage-rail {
-    overflow: visible;
-  }
-  .kpage-main {
-    padding: var(--spacing-5) var(--spacing-4);
-  }
-  .kpage-rail {
-    padding: var(--spacing-5) var(--spacing-4) var(--spacing-8);
-    border-top: 1px solid var(--color-border-default);
-    border-left: none;
-  }
-  .kpage-title {
-    font-size: 26px;
-  }
-}
-/* A PHONE SCROLLS THE PAGE, as any other: the fill is withdrawn there. */
-@media (width < 640px) {
-  .section-frame:has(.kpage) {
-    height: auto;
-  }
-  .kpage {
-    height: auto;
-  }
-  .kpage-grid {
-    overflow: visible;
-  }
-}
-
-.hit {
+.knowledge-reader-text {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-1);
-  padding: var(--spacing-3);
-  border-bottom: 1px solid var(--color-border-default);
   min-width: 0;
 }
-.hit:last-child {
-  border-bottom: none;
+.knowledge-reader-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-2);
+  min-width: 0;
 }
-.hit-title {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-brand-accent-ink);
-}
-.hit-snippet {
+.knowledge-reader-name {
   font-size: var(--font-size-compact);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+.knowledge-reader-count {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+/* THE WAY IT WAS READ IS CUT with an ellipsis and whole in its title, so the
+   age at its end never wraps onto a line of its own. */
+.knowledge-reader-via {
+  display: flex;
+  min-width: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.knowledge-reader-how {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: inherit;
+}
+.knowledge-reader-when {
+  flex: none;
+  white-space: pre;
+}
+.knowledge-reader-name:hover,
+a.knowledge-reader-how:hover {
+  text-decoration: underline;
+}
+
+/* THE REVISIONS, in History's left column: a press reads that one. */
+.knowledge-revision {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--spacing-2);
+  align-items: center;
+  width: 100%;
+  padding: var(--spacing-1) var(--spacing-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: none;
+  font: inherit;
+  font-size: var(--font-size-compact);
+  text-align: start;
   color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.knowledge-revision:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
+.knowledge-revision[aria-pressed="true"] {
+  border-color: var(--color-border-strong);
+  color: var(--color-text-primary);
+}
+.knowledge-revision:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
+}
+.knowledge-revision-when {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+/* A revision the engine wrote has no seat to draw: the face's room, empty. */
+.knowledge-revision-engine {
+  display: inline-block;
+  width: var(--size-control-sm);
+}
+
+/* ---- Editing ------------------------------------------------------------ */
+
+.knowledge-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+.knowledge-editor-foot,
+.knowledge-callout-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+/* THE NOTE KEPT WITH A SAVE, under the page rather than in the bar: a line a
+   writer adds once they are done, beside the count and what Save will do. */
+.knowledge-editor-foot,
+.doc-editor-foot {
+  justify-content: space-between;
+  gap: var(--spacing-2) var(--spacing-4);
+  padding-top: var(--spacing-3);
+  border-top: 1px solid var(--color-border-default);
+}
+.knowledge-editor-note,
+.doc-editor-label {
+  flex: 1 1 16rem;
+  max-width: 28rem;
+}
+/* THE CALLOUT'S ACTIONS UNDER ITS SENTENCE, not at its trailing edge. */
+.knowledge-callout-actions {
+  margin-top: var(--spacing-2);
+}
+.knowledge-theirs {
+  min-width: 0;
+}
+.knowledge-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  width: 100%;
+}
+
+/* ---- The composer ------------------------------------------------------- */
+
+.knowledge-composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 16rem;
+  gap: var(--spacing-6);
+  align-items: start;
+  width: 100%;
+  max-width: var(--size-content-max);
+}
+@container page (width < 760px) {
+  .knowledge-composer {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.knowledge-composer-main,
+.knowledge-composer-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+.knowledge-composer-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+.knowledge-composer-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.knowledge-composer-label {
+  min-width: 5rem;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.knowledge-composer-count {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+  width: 100%;
+  margin: 0;
+  padding-top: var(--spacing-3);
+  border-top: 1px solid var(--color-border-default);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.knowledge-composer-count.is-over {
+  color: var(--color-feedback-danger-ink);
 }
 
 /* ---- Config ------------------------------------------------------------- */
@@ -3438,11 +3534,11 @@ textarea.kpage-editor-body {
    list, so the values start at one edge all the way down rather than wherever
    each row's own path happened to end.
 
-   ITS OWN CLASS NAMES. The knowledge page's line diff is `.diff-line`, later
-   in this sheet, and while this list spelled the same class that rule won the
-   cascade and laid every change out in its line-number tracks (`3.5ch 3.5ch
-   2ch`): at 1440 a 92px path got 23px and a 931px value 13px, and each change
-   read "− mc… {…". Two components never share a class here.
+   ITS OWN CLASS NAMES. The knowledge page's line diff is uilet's `DiffView`
+   now, but while this list once spelled the same class as the local line
+   diff, that rule won the cascade and laid every change out in its
+   line-number tracks: at 1440 a 92px path got 23px and a 931px value 13px.
+   Two components never share a class here.
 
    NOTHING IS CUT. The path is what a reader looks for in their YAML and the
    value is the change itself, so both wrap — a path breaks anywhere rather
@@ -3653,27 +3749,6 @@ textarea.kpage-editor-body {
   max-width: 100%;
 }
 
-/* ON A NARROW SCREEN A HEAD WITH ACTIONS PUTS ITS SUBTITLE ON A LINE OF ITS
-   OWN, under the title and the actions. Beside actions the kit's shrink is
-   proportional (above), so a phone's head gave a title a fraction of a pixel
-   and a plain title broke over two lines — "Active" over "revision" — while
-   its subtitle was cut beside the Copy button to "as the engine resolv…".
-   On its own line the subtitle has the head's whole width and the title and
-   its actions have the first. One rule for every head of that shape: a
-   seat's Current turn card had it written for itself alone, after the same
-   squeeze cut its title to "Current tu…". */
-@container page (width < 640px) {
-  .crewlet-card__header:has(> .crewlet-card__subtitle):has(> .crewlet-card__header-actions) {
-    flex-wrap: wrap;
-    row-gap: var(--spacing-1);
-  }
-  .crewlet-card__header:has(> .crewlet-card__header-actions) > .crewlet-card__subtitle {
-    order: 9;
-    flex: 1 1 100%;
-    min-width: 0;
-  }
-}
-
 /* A STAT'S SECOND LINE WRAPS RATHER THAN ENDING IN AN ELLIPSIS. uilet sets it
    `nowrap` and reserves exactly one line, so that a row of tiles where only
    some carry one still stands at one height — but inside a StatGroup the grid
@@ -3712,16 +3787,6 @@ textarea.kpage-editor-body {
    of the tile's three lines. */
 .crewlet-stat-group > .crewlet-statcard > :first-child {
   align-self: end;
-}
-
-/* AN ODD LAST TILE TAKES THE WHOLE ROW once the kit folds a stat row into two
-   columns (its `width < 1024px` step): three tiles on a phone stood 2 + 1,
-   the last beside an empty half-row that read as a tile failing to load. The
-   step is the kit's own, restated because a media query cannot be borrowed. */
-@media (width < 1024px) {
-  .crewlet-stat-group > :last-child:nth-child(odd) {
-    grid-column: 1 / -1;
-  }
 }
 
 /* ONE STEP WIDER THAN THE PACKAGE'S OWN, and only inside a tool row. uilet's
@@ -3845,7 +3910,6 @@ textarea.kpage-editor-body {
   justify-content: space-between;
   gap: var(--spacing-3) var(--spacing-6);
   flex-wrap: wrap;
-  margin-bottom: var(--spacing-4);
 }
 .int-bar > .page-note {
   margin: 0;
@@ -3856,6 +3920,18 @@ textarea.kpage-editor-body {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(16.5rem, 100%), 1fr));
   gap: var(--spacing-3);
+}
+
+/* CREWLET'S OWN SERVICES: three tiles, so three tracks, never the
+   catalogue's four-up grid with a quarter of its row empty, and never two
+   up with Chat alone on a second row. One track on a phone. */
+.int-grid-builtin {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+@media (width < 640px) {
+  .int-grid-builtin {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .int-tile {
@@ -4280,8 +4356,8 @@ textarea.kpage-editor-body {
    fold is present that rule already ends the form, and a second one would
    box the note in. */
 /* SMALL, because it is an aside. The sentence that says what to do is one
-   line and the reasoning is behind the icon, so it sits under the form
-   without competing with the fields for the same attention. */
+   line, so it sits under the form without competing with the fields for the
+   same attention. */
 .int-form-note {
   margin: 0;
   display: flex;
@@ -4308,14 +4384,6 @@ textarea.kpage-editor-body {
 .int-form-note a:hover {
   color: var(--color-text-primary);
 }
-/* The icon is the handle for the tooltip, so it takes a cursor that says
-   there is something to hover and does not shrink out of reach. */
-.int-form-why {
-  display: inline-flex;
-  flex: 0 0 auto;
-  cursor: help;
-}
-
 .int-form-more {
   /* IT CLOSES THE FORM, so it takes the rule and the space above it rather
      than sitting in the field flow with a hairline through the middle. The
@@ -4683,14 +4751,16 @@ details > summary.int-summary::-webkit-details-marker {
 
 /* ---- The first row: shapes, views, search and Display ------------------- */
 
-/* WHAT IS DRAWN, as one row of underlined tabs — the approved board's second
-   band. It is the top edge of this screen's content on every company, one day
-   old or a thousand, so it is drawn whether or not anybody has saved a view.
+/* WHAT IS DRAWN, as one row: the shapes and the saved views, each a kit
+   segmented well, then the tools. It is the top edge of this screen's content
+   on every company, one day old or a thousand, so it is drawn whether or not
+   anybody has saved a view.
 
    IT WRAPS RATHER THAN SCROLLS. A company's pinned views are a handful, and a
-   row that scrolled would hide the search box and the Display menu at its end —
-   the controls a reader reaches for most — behind a scroll nobody sees. At a
-   phone's width the tabs take one line and the rest wraps under them. */
+   row that scrolled would hide the search box and the Display menu at its end,
+   the controls a reader reaches for most, behind a scroll nobody sees. At a
+   phone's width the shapes and the views share a line and the tools wrap
+   under them. */
 .work-tabs {
   display: flex;
   align-items: center;
@@ -4702,49 +4772,14 @@ details > summary.int-summary::-webkit-details-marker {
   border-bottom: 1px solid var(--color-border-default);
   min-width: 0;
 }
-.work-tabs-group {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--spacing-4);
-  min-width: 0;
+/* A view's name is the reader's own words, so a long one is cut at a width
+   the strip can hold rather than taking the row; its title carries the rest. */
+.work-view-name {
+  display: block;
+  max-width: 200px;
 }
-/* A TAB IS ITS WORD AND ITS UNDERLINE: the pressed one is the ink step up and
-   the rule under it in the primary text colour — where the reader IS, drawn in
-   ink rather than in the accent, which the primary action at the head of the
-   page already spends. */
-.work-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 32px;
-  max-width: 220px;
-  padding: 0 2px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: none;
-  color: var(--color-text-tertiary);
-  font: inherit;
-  font-size: var(--font-size-compact);
-  font-weight: var(--font-weight-medium);
-  cursor: pointer;
-  min-width: 0;
-}
-.work-tab:hover {
-  color: var(--color-text-primary);
-}
-.work-tab[aria-pressed="true"] {
-  color: var(--color-text-primary);
-  border-bottom-color: var(--color-text-primary);
-}
-.work-tabs-sep {
-  width: 1px;
-  height: 18px;
-  background: var(--color-border-strong);
-  flex: none;
-}
-/* The inventory, as the strip's last glyph: a square target at the tabs'
-   height, in the tabs' own quiet ink, lifted on hover as a tab is. */
+/* The inventory, as the strip's last glyph: a square target in the strip's
+   own quiet ink, lifted on hover as an option is. */
 .work-strip-more {
   flex: none;
   display: inline-flex;
@@ -4789,29 +4824,6 @@ details > summary.int-summary::-webkit-details-marker {
   flex: 0 1 220px;
   min-width: 140px;
 }
-/* ON A PHONE THE SHAPES ARE ONE LINE THAT SCROLLS, never four and a stray: a
-   wrapped row of five left Table alone under the other four, with the divider
-   hanging at the start of the next line. The row scrolls inside itself, so the
-   page never does; the divider goes, because the views start a line of their
-   own there. */
-@container page (width < 640px) {
-  .work-tabs > .work-tabs-group:first-child {
-    flex-wrap: nowrap;
-    max-width: 100%;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-  .work-tabs > .work-tabs-group:first-child::-webkit-scrollbar {
-    display: none;
-  }
-  .work-tabs-sep {
-    display: none;
-  }
-  .work-tab {
-    flex: none;
-  }
-}
-
 /* ---- The arrangement at the bar's end ------------------------------------ */
 
 .work-arrange {
@@ -4878,6 +4890,15 @@ details > summary.int-summary::-webkit-details-marker {
 @container page (width < 640px) {
   .work-bar {
     flex-wrap: nowrap;
+  }
+  /* THE SEARCH ROW STARTS AT THE GUTTER: right-aligned at its own width it
+     stood 62px in from the page's left edge, the box taking what it left. */
+  .work-tabs-tools {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+  }
+  .work-tabs-tools .work-bar-find {
+    flex: 1 1 auto;
   }
   /* THE RUN SCROLLS, NOT THE BAND: the band is the opaque sticky strip rows
      scroll under, and the fade on the edge with more past it has to fade the
@@ -5055,6 +5076,24 @@ details > summary.int-summary::-webkit-details-marker {
   gap: var(--spacing-3);
   padding: var(--spacing-3);
   min-width: 300px;
+}
+/* WHICH WORK, GROUP BY AND SORT, folded in from the bar on a phone: one row
+   each, labels to the start and the choices to the end, as the panel's own
+   rows are, and parted from them by the panel's rule. */
+.work-display-arrange {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding-bottom: var(--spacing-3);
+  border-bottom: 1px solid var(--color-border-default);
+}
+.work-display-arrange .work-arrange {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--spacing-2);
+}
+.work-display-arrange .work-arrange-row {
+  justify-content: space-between;
 }
 /* THE LANES PUT AWAY, each a chip that brings it back — named, because a
    hidden lane is otherwise work nobody can tell is missing. */
@@ -7215,88 +7254,30 @@ a.work-cal-chip {
 }
 
 /* A TABLE SCROLLS RATHER THAN OVERFLOWING ITS PANEL. A page's own table is
-   written for a document and can be wider than the column it lands in here. */
-.md-table {
+   written for a document and can be wider than the column it lands in here.
+   SCOPED TO `.prose.md` like every rule above: the same renderer draws a doc
+   and a Knowledge page into uilet's `Document`, and the rich editor names its
+   tables `md-table` too, so an unscoped rule here outranked the design
+   system's table there (a 12px table in a 14px body, its header in the
+   secondary ink). */
+.prose.md .md-table {
   overflow-x: auto;
 }
-.md-table table {
+.prose.md .md-table table {
   border-collapse: collapse;
   width: 100%;
   font-size: var(--font-size-xs);
 }
-.md-table th,
-.md-table td {
+.prose.md .md-table th,
+.prose.md .md-table td {
   padding: var(--spacing-1) var(--spacing-2);
   border-bottom: 1px solid var(--color-border-default);
   vertical-align: top;
 }
-.md-table th {
+.prose.md .md-table th {
   font-weight: 600;
   color: var(--color-text-secondary);
   white-space: nowrap;
-}
-
-/* A LINE DIFF. Monospace and line-numbered on both sides, because the two
-   numbers are what a reader uses to find the paragraph in the version beside
-   it. Marked with a glyph as well as a tint: colour alone is not a signal, and
-   a printed or forced-colours render loses the tint entirely. */
-.diff {
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  line-height: var(--font-line-height-normal);
-}
-.diff-section + .diff-section,
-.diff-skip + .diff-line {
-  border-top: 1px solid var(--color-border-default);
-}
-/* A GAP SAYS WHAT IT STANDS FOR. Silently closed, a document edited at both
-   ends looks like one rewritten in the middle. */
-.diff-skip {
-  padding: var(--spacing-1) var(--spacing-3);
-  background: var(--color-surface-elevated);
-  color: var(--color-text-tertiary);
-  font-family: var(--font-family-sans);
-  font-size: var(--font-size-xs);
-}
-.diff-line {
-  display: grid;
-  grid-template-columns: 3.5ch 3.5ch 2ch minmax(0, 1fr);
-  gap: var(--spacing-2);
-  padding: 1px var(--spacing-3) 1px var(--spacing-2);
-}
-.diff-no {
-  color: var(--color-text-tertiary);
-  text-align: right;
-  user-select: none;
-}
-.diff-mark {
-  user-select: none;
-  text-align: center;
-}
-.diff-text {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.diff-line.is-add {
-  background: var(--color-feedback-success-soft);
-}
-.diff-line.is-add .diff-mark {
-  color: var(--color-feedback-success-ink);
-}
-.diff-line.is-remove {
-  background: var(--color-feedback-danger-soft);
-}
-.diff-line.is-remove .diff-mark {
-  color: var(--color-feedback-danger-ink);
-}
-.diff-add-ink {
-  color: var(--color-feedback-success-ink);
-}
-.diff-del-ink {
-  color: var(--color-feedback-danger-ink);
 }
 
 /* A schedule's expression over what it means — in a grid cell, on a phone's
@@ -7657,8 +7638,7 @@ a.work-cal-chip {
    name is a link". At rest the name is `--color-text-primary` and `a:hover` moves it to
    `--color-text-primary`, which is no move at all; the step here is the other direction,
    onto the accent's one text rung, which is the same ink every other link in
-   the product wears. Same decision as `.cell-seat` in frame.css, which is the
-   same object — a person's name inside a table row. */
+   the product wears. */
 .wl-who:hover {
   color: var(--color-brand-accent-ink);
 }
@@ -7757,10 +7737,9 @@ a.work-cal-chip {
 
 /* ---- Home --------------------------------------------------------------- */
 
-/* THE LANDING SCREEN, the design's Main board: a head, five figures, the
-   decisions beside who is working, three cards of how the work is going, and
-   the feed. Rows are grids so each card keeps its column at every width, and
-   each collapses on its own breakpoint rather than the page reflowing as one. */
+/* THE LANDING SCREEN: a head, and under it the reader's board, which until
+   they arrange it is the design's Main board (five figures, the decisions
+   beside who is working, three cards of how the work is going, and the feed). */
 .home {
   display: flex;
   flex-direction: column;
@@ -7784,10 +7763,6 @@ a.work-cal-chip {
   flex-direction: column;
   gap: 6px;
   min-width: 0;
-}
-.home-date {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
 }
 .home-greeting {
   margin: 0;
@@ -7816,45 +7791,54 @@ a.work-cal-chip {
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: var(--spacing-3);
 }
+/* FEWER FIGURES, FEWER COLUMNS: a board's Figure widget draws one or a few of
+   the five, and each takes its share of the cell rather than a fifth of it. */
+.home-kpis[data-count="1"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+.home-kpis[data-count="2"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.home-kpis[data-count="3"] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.home-kpis[data-count="4"] {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
 
-/* A second line's facts stay whole — see `Parts` in Kpis.tsx. */
+/* A second line's facts stay whole: see `Parts` in Kpis.tsx. */
 .home-kpi-part {
   white-space: nowrap;
 }
 
-.home-row {
-  display: grid;
-  gap: var(--spacing-4);
-  align-items: start;
-}
-/* The decisions are the wider of the pair: the design's 1.62 : 1. */
-.home-row-main {
-  grid-template-columns: minmax(0, 1.62fr) minmax(0, 1fr);
-}
-.home-row-three {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-.home-row > .home-card {
-  height: 100%;
-}
-
 /* 928px IS FIVE TILES' FLOOR: a tile's value line holds the figure and the
    kit's 96px trend slot inside 16px of padding each side, 176px, and five of
-   them take four 12px gaps. Below it the figures fold to three a row and the
-   paired cards stack, since the decisions card's buttons need the width the
-   live column would take. */
+   them take four 12px gaps. Below it the figures fold into rows that FILL:
+   four are two by two, and five are three over two on a six-track grid (the
+   first three spanning two tracks, the last two spanning three), since three
+   a row left a third-width hole beside the last two. The board's blocks stack
+   too (`STACKS_BELOW` in `routes/home/Home.tsx`), since the decisions card's
+   buttons need the width the live column would take. */
 @container page (width < 928px) {
-  .home-kpis {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+  .home-kpis[data-count="4"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .home-row-main,
-  .home-row-three {
-    grid-template-columns: minmax(0, 1fr);
+  .home-kpis[data-count="5"] {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+  .home-kpis[data-count="5"] > * {
+    grid-column: span 2;
+  }
+  .home-kpis[data-count="5"] > :nth-child(n + 4) {
+    grid-column: span 3;
   }
 }
 @container page (width < 640px) {
-  .home-kpis {
+  .home-kpis[data-count] {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .home-kpis[data-count] > * {
+    grid-column: auto;
   }
 }
 
@@ -7880,20 +7864,6 @@ a.work-cal-chip {
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
-.home-card-foot {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--spacing-2);
-  margin: 0;
-  padding: var(--spacing-3) var(--spacing-4);
-  border-top: 1px solid var(--color-border-default);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-.home-card-foot > svg {
-  flex: none;
-  margin-top: 1px;
-}
 .home-card-more {
   display: block;
   padding: var(--spacing-2) var(--spacing-4) var(--spacing-3);
@@ -7909,6 +7879,417 @@ a.work-cal-chip {
   flex-direction: column;
   gap: var(--spacing-1);
   padding: var(--spacing-3) var(--spacing-4);
+  border-top: 1px solid var(--color-border-default);
+}
+
+/* ---- Home's board ------------------------------------------------------ */
+
+/* A BOARD'S PAGE GRID is the design system's ArrangeGrid: blocks on twelve
+   columns, each spanning its own width (`grid-column: span N`, which
+   ArrangeFrame sets), on the page as in a group, whose body is the same grid.
+   ONE GRID FOR EVERY BOARD, Home's and a dashboard's, so a widget is laid out
+   at one width wherever it stands; the rows open a step while the board is
+   arranged, for each block's toolbar. The chrome of a block being arranged
+   (its ring, toolbar, resize handles and the column lanes) is the design
+   system's ArrangeFrame and ArrangeBoard. */
+.home-board-cell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.home-board-cell > .home-card {
+  flex: 1 1 auto;
+}
+
+.home-pinned-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(17rem, 100%), 1fr));
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: var(--spacing-3) var(--spacing-4) var(--spacing-4);
+  list-style: none;
+}
+.home-pinned-grid > li {
+  display: flex;
+  min-width: 0;
+}
+.home-pinned-grid > li > * {
+  flex: 1 1 auto;
+}
+.home-pinned-empty {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+  padding: var(--spacing-3) var(--spacing-4) var(--spacing-4);
+  border-top: 1px solid var(--color-border-default);
+}
+.home-pinned-empty-text {
+  flex: 1 1 22rem;
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.home-pinned-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+}
+
+/* The edit bar. */
+
+.home-editbar {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+.home-editbar-done {
+  margin-inline-start: var(--spacing-1);
+}
+/* How much is unsaved: a live dot and a few words. */
+.home-editbar-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding-inline: var(--spacing-2);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.home-editbar-sep {
+  flex: 0 0 auto;
+  width: 1px;
+  height: var(--spacing-5);
+  background: var(--color-border-default);
+}
+
+/* Widgets. */
+
+.home-board-cell--bare {
+  justify-content: center;
+}
+
+/* Words with no card of their own start where a card's words do: a card's
+   padding in from the column's edge, past its 1px border. The divider's rule
+   keeps the same inset at both ends, so it reads as part of that column. */
+.home-block-heading,
+.home-block-divider {
+  padding-inline: calc(var(--spacing-4) + 1px);
+}
+
+.home-block-note {
+  height: 100%;
+}
+
+.home-block-heading {
+  margin: 0;
+  padding-block: var(--spacing-1);
+  color: var(--color-text-primary);
+  text-wrap: balance;
+}
+.home-block-heading--center {
+  text-align: center;
+}
+
+.home-block-divider {
+  min-height: var(--size-row-lg);
+}
+
+.home-block-links-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: var(--spacing-2) var(--spacing-4) var(--spacing-4);
+  list-style: none;
+}
+.home-block-link {
+  font-size: var(--font-size-sm);
+}
+
+/* The tray. */
+
+/* The sheet's body is a column that scrolls; nothing in it may shrink. */
+.home-tray-tabs,
+.home-tray {
+  flex-shrink: 0;
+}
+.home-tray {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+}
+.home-tray-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+.home-tray-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.home-tray-title {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--font-letter-spacing-wide);
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+}
+.home-tray-hint {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+.home-tray-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(13rem, 100%), 1fr));
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.home-tray-grid > li {
+  display: flex;
+}
+.home-tray-grid .home-tray-tile {
+  flex: 1 1 auto;
+  width: 100%;
+  font: inherit;
+  color: inherit;
+}
+.home-tray-grid .home-tray-tile.is-placed {
+  cursor: default;
+  opacity: 0.55;
+}
+/* The tile's own row: the icon beside the words, both from the top. */
+.home-tray-tile-inner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-3);
+  width: 100%;
+  text-align: start;
+}
+.home-tray-tile-text,
+.home-tray-template-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  text-align: start;
+}
+.home-tray-tile-name {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+.home-tray-tile-desc {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+.home-tray-tile-state {
+  margin-top: var(--spacing-1);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-tertiary);
+}
+
+.home-tray-templates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.home-tray-template {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+}
+.home-tray-template-text {
+  align-items: flex-start;
+  gap: var(--spacing-1);
+}
+
+/* Settings. */
+
+.home-settings-shape {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-4);
+}
+.home-settings-links {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+.home-settings-link-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto;
+  align-items: end;
+  gap: var(--spacing-2);
+}
+
+/* Contributed widgets (board/kit.tsx). */
+
+/* The card a section's widget is drawn in fills its cell, so a widget whose
+   height the reader set scrolls inside its own card. */
+.home-widget {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.home-widget-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+/* Content that is not a list of rows takes the card's own inset. */
+.home-widget-pad {
+  padding: var(--spacing-3) var(--spacing-4) var(--spacing-4);
+}
+.home-widget-open {
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+
+/* A page shortcut: the page's mark, its name and the sidebar's sentence. */
+/* A Card is a column; the shortcut is a row, its mark beside its words. */
+.home-shortcut {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--spacing-3);
+  height: 100%;
+  color: inherit;
+  text-decoration: none;
+}
+.home-shortcut-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.home-shortcut-name {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+.home-shortcut-hint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+/* The widget being added, as it will draw, under its choices. */
+.home-settings-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin-top: var(--spacing-2);
+}
+
+/* The tracker's widgets (Work, My work, Inbox): a task or a notice as one
+   line of the design system's list, inside the widget's card. */
+/* The rows sit on the card's own inset, under a hairline from its header. */
+.home-tasks {
+  border-top: 1px solid var(--color-border-default);
+}
+
+/* A task: its key in the mono face, then its name, cut to the line it has. */
+.home-tasks-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-2);
+  min-width: 0;
+  font-size: var(--font-size-compact);
+}
+.home-tasks-key {
+  flex: none;
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+}
+.home-tasks-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A notice or an ask: what it says, and under it where and from whom. */
+.home-tasks-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: var(--font-size-compact);
+}
+.home-tasks-meta {
+  overflow: hidden;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.home-tasks-when {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+/* A project's meter with its percentage at the end of the same line. */
+.home-tasks-project {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+.home-tasks-meter {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+.home-tasks-meter > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.home-tasks-pct {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
+/* What the project holds, when it is due and when it last moved, in one line. */
+.home-tasks-census {
+  margin: 0;
+  white-space: normal;
+}
+
+/* A list row's title over the caption that says whose it is and when. */
+.home-widget-line {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+}
+/* A seat's own card is the widget, so it fills the cell it is placed in. */
+.home-agents-seat {
+  display: flex;
+  height: 100%;
+}
+.home-agents-seat > .seat-card {
+  flex: 1 1 auto;
+}
+/* A flush row of figures sits on the widget's card, with one hairline under
+   it where a list follows. */
+.home-admin-stats + .home-admin-list {
   border-top: 1px solid var(--color-border-default);
 }
 
@@ -7952,6 +8333,17 @@ a.work-cal-chip {
   font-weight: var(--font-weight-medium);
   color: var(--color-text-secondary);
 }
+/* The row's state in words, in its own ink: the word the glyph on the
+   badge beside it draws as a shape. */
+.decision-state {
+  font-weight: var(--font-weight-medium);
+}
+.decision-state[data-state="needs"] {
+  color: var(--color-feedback-warning-ink);
+}
+.decision-state[data-state="stopped"] {
+  color: var(--color-feedback-danger-ink);
+}
 .decision-key,
 .home-feed-key {
   font-size: var(--font-size-2xs);
@@ -7970,6 +8362,88 @@ a.work-cal-chip {
   gap: 6px;
   max-width: 50%;
 }
+/* THE ASKS ONE PERSON PUT, under one head: their badge, their name, and what
+   every ask shares (the item, the role, how long ago). The questions sit under
+   it, indented to the name, each with its answer in place. */
+.decision-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding: var(--spacing-3) var(--spacing-4) var(--spacing-2);
+  border-top: 1px solid var(--color-border-default);
+}
+.decision-group-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-3);
+  min-width: 0;
+}
+.decision-group-who {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+.decision-questions {
+  margin: 0;
+  padding: 0 0 0 calc(32px + var(--spacing-3));
+  list-style: none;
+}
+.decision-question {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-3) 0;
+}
+.decision-question + .decision-question {
+  border-top: 1px solid var(--color-border-default);
+}
+/* AT REST, ONE LINE: the recommendation, then Accept and Change at its end. */
+.decision-answer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-4);
+}
+.decision-answer.is-open {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+.decision-rec {
+  flex: 1 1 12rem;
+  min-width: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.decision-rec strong {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+.decision-answer-actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+.decision-answered {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-feedback-success-ink);
+  overflow-wrap: anywhere;
+}
+.decision-answered > svg {
+  flex: none;
+}
+.decision-answered strong {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+.decision-answered-rec {
+  color: var(--color-text-tertiary);
+}
+
 /* A PARKED RUN'S BANNER (routes/live/Runs.tsx): the question, who it is put
    to and how long its box is held, then the Answer. The sentences are held to
    a reading measure — on a wide page the banner spans the column, and one
@@ -8014,6 +8488,9 @@ a.work-cal-chip {
     max-width: none;
     justify-content: flex-start;
     padding-inline-start: calc(32px + var(--spacing-3));
+  }
+  .decision-questions {
+    padding-inline-start: 0;
   }
 }
 
@@ -8252,7 +8729,7 @@ a.live-row:focus-visible {
 /* ON A PHONE A ROW IS A GRID, never a wrapping flex line: time and mark keep
    their columns and the sentence wraps inside its own, with the aside under
    it. A wrapping flex line dropped a long sentence to the row's left edge,
-   under the time, while a short one stayed inline — two layouts alternating
+   under the time, while a short one stayed inline: two layouts alternating
    down one list. The time and the sentence start a few pixels down, so their
    first line sits on the mark's centre whether or not the sentence wraps. */
 @container page (width < 640px) {
@@ -8300,7 +8777,8 @@ a.live-row:focus-visible {
 /* FLUSH WITH THE SHEET: the list is a column with its own hairline and the
    pane beside it runs to the sheet's edges, as the Settings column does. The
    kit's content padding is taken back for this one screen, and each column
-   pads itself. */
+   pads itself. Every visual part of both columns is the kit's (`InboxList`,
+   `ReadingPane`); what is here is only where they sit. */
 .app .crewlet-app-shell__content:has(> .inbox-frame) {
   padding: 0;
   gap: 0;
@@ -8312,443 +8790,50 @@ a.live-row:focus-visible {
   min-height: 0;
   height: 100%;
 }
+/* THE PAGE'S GUTTER, as every other page's content keeps it: the frame takes
+   the sheet's padding back, and at 16px the callout and the list's rows began
+   4px left of the header's title. A row draws its own 8px inside the list, so
+   the list keeps 12px of its own. */
 .inbox-callout {
-  margin: var(--spacing-3) var(--spacing-4) 0;
-}
-.inbox-nobody {
-  padding: var(--spacing-2) var(--spacing-4) var(--spacing-4);
+  margin: var(--spacing-3) var(--spacing-5) 0;
 }
 
-/* TWO COLUMNS, EACH ITS OWN SCROLLER. The list is the approved 420px, allowed
-   down to 340 so the pane keeps a reading measure at 1280 beside the sidebar;
-   the pane takes the rest. Both columns are present from the first paint, so
-   opening a row never reflows the list under the pointer. */
+/* TWO COLUMNS, EACH ITS OWN SCROLLER. The list is 260 to 340px, as the
+   approved Focus split draws it, so the pane keeps a reading measure beside
+   the sidebar; the pane takes the rest. Both columns are present from the
+   first paint, so opening a row never reflows the list under the pointer. */
 .inbox-panes {
   display: grid;
   flex: 1 1 auto;
-  grid-template-columns: minmax(340px, 420px) minmax(0, 1fr);
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
   min-height: 0;
 }
 .inbox-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  min-width: 0;
   min-height: 0;
-  padding-top: var(--spacing-3);
+  padding: var(--spacing-2) var(--spacing-3) var(--spacing-4);
+  overflow-x: hidden;
   overflow-y: auto;
   border-right: 1px solid var(--color-border-default);
 }
-.inbox-list-head {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  padding: 0 var(--spacing-4) var(--spacing-1);
+.inbox-note {
+  padding: var(--spacing-2) var(--spacing-2) 0;
 }
-.inbox-chips {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-2);
-  padding: 6px var(--spacing-4);
+/* The engine's mark for a condition, at the size of the badges beside it. */
+.inbox-badge {
+  width: 24px;
+  height: 24px;
 }
-.inbox-rows {
-  display: flex;
-  flex-direction: column;
-  padding: 0 var(--spacing-2) var(--spacing-4);
-}
-.inbox-group {
-  display: flex;
-  flex-direction: column;
-}
-.inbox-group-label {
-  margin: 0;
-  padding: var(--spacing-3) 14px 6px;
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-regular);
-  color: var(--color-text-tertiary);
-}
-.inbox-group-rows {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-/* A BAND WITH NOTHING IN IT STILL SAYS WHAT IT IS, as a quiet block rather
-   than an empty state, which is a whole screen's worth of furniture. */
-.inbox-quiet {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: var(--spacing-2) 6px;
-  padding: var(--spacing-3);
-  background: var(--color-surface-subtle);
-  border: 1px dashed var(--color-border-default);
-  border-radius: var(--radius-md);
-}
-.inbox-more {
-  padding: var(--spacing-3) 14px 0;
-}
-
-.inbox-row {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--spacing-3);
-  width: 100%;
-  padding: var(--spacing-3) 14px;
-  background: none;
-  border: none;
-  border-radius: 10px;
-  text-align: left;
-  cursor: pointer;
-  color: inherit;
-  font: inherit;
-  transition: background var(--motion-duration-fast) var(--motion-easing-default);
-}
-.inbox-row:hover {
-  background: var(--color-surface-hover);
-}
-.inbox-row:focus-visible {
-  /* A TRANSPARENT OUTLINE, not none: forced-colors mode drops the shadow and
-     paints this outline in the system colour. */
-  outline: 2px solid transparent;
-  box-shadow: var(--shadow-focus);
-}
-/* THE OPEN ROW stands on the raised rung with its hairline, the way the
-   approved inbox draws it. The hairline is inset, so opening a row does not
-   move its text by a pixel. */
-.inbox-row[aria-current] {
-  background: var(--color-surface-elevated);
-  box-shadow: inset 0 0 0 1px var(--color-border-strong);
-}
-.inbox-row-mark {
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
-}
-.inbox-row-nobody {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  background: var(--color-surface-elevated);
-  border: 1px solid var(--color-border-strong);
-  color: var(--color-text-tertiary);
-}
-.inbox-row-main {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-.inbox-row-head {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  min-width: 0;
-}
-.inbox-row-who {
-  flex: none;
-  max-width: 60%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: var(--font-weight-medium);
-}
-/* UNREAD IS HEAVIER, never hidden when read: an inbox you have read is still
-   the record of what reached you. */
-.inbox-row[data-unread] .inbox-row-who {
-  font-weight: var(--font-weight-semibold);
-}
-.inbox-row-where,
-.inbox-row-age {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-.inbox-row-where {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.inbox-row-age {
-  flex: none;
-}
-.inbox-row-line {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--color-text-secondary);
-}
-.inbox-row-foot {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 3px;
-}
-/* A FIXED CELL, filled or not. Rendered only when unread it was a dot that
-   came and went as a poll landed, and every row's text stepped sideways. */
-.inbox-unread {
-  flex: none;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: none;
-}
-.inbox-unread[data-on] {
-  background: var(--color-brand-accent);
-}
-
-/* ---- The Inbox's pane ---- */
-
 .inbox-pane {
-  display: flex;
-  flex-direction: column;
   min-width: 0;
-  min-height: 0;
-}
-.inbox-pane-empty {
-  justify-content: center;
-}
-.inbox-pane-bar {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: var(--spacing-2);
-  min-height: 52px;
-  padding: 0 var(--spacing-5) 0 var(--spacing-7);
-  border-bottom: 1px solid var(--color-border-default);
-}
-.inbox-pane-key {
-  flex: none;
-  font-size: var(--font-size-2xs);
-  color: var(--color-text-tertiary);
-  text-decoration: none;
-}
-.inbox-pane-key:hover {
-  text-decoration: underline;
-}
-.inbox-pane-title {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--color-text-tertiary);
-}
-.inbox-pane-actions {
-  display: flex;
-  flex: none;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--spacing-1);
-}
-.inbox-pane-scroll {
-  flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
 }
-/* A READING MEASURE: the approved pane stops at 820px on a wide window, so a
-   decision reads as a page rather than as a line across the monitor. */
-.inbox-pane-body {
-  display: flex;
-  flex-direction: column;
-  gap: 22px;
-  max-width: 820px;
-  padding: 28px var(--spacing-8);
-}
-.inbox-pane-head {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.inbox-pane-question {
-  margin: 0;
-  font-size: var(--font-size-xl);
-  font-weight: var(--font-weight-semibold);
-  letter-spacing: -0.018em;
-  line-height: 1.25;
-  overflow-wrap: anywhere;
-}
-.inbox-pane-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-2);
-  margin: 0;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-.inbox-pane-meta strong {
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-}
-.inbox-pane-role {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-.inbox-pane-role strong {
-  color: var(--color-text-secondary);
-}
-.inbox-pane-card {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding: 18px var(--spacing-5);
-  background: var(--color-surface-subtle);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-lg);
-}
-.inbox-pane-card p {
-  margin: 0;
-}
-.inbox-pane-context {
-  font-size: var(--font-size-sm);
-  line-height: 1.6;
-  color: var(--color-text-secondary);
-  white-space: pre-line;
-}
-.inbox-pane-context.md {
-  white-space: normal;
-}
-.inbox-recommends {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  padding: 14px var(--spacing-4);
-  background: var(--color-surface-elevated);
-  border-radius: 10px;
-}
-.inbox-recommends-who {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-.inbox-recommends p {
-  font-size: var(--font-size-sm);
-}
-.inbox-recommends p strong {
-  font-weight: var(--font-weight-semibold);
-}
-.inbox-recommends p span {
-  color: var(--color-text-secondary);
+.inbox-pane-empty {
+  display: grid;
+  place-content: center;
 }
 .inbox-evidence {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-2);
-}
-.inbox-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  max-width: 100%;
-  height: 22px;
-  padding: 0 var(--spacing-2);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-pill);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
-  text-decoration: none;
-  white-space: nowrap;
-}
-.inbox-chip:hover {
-  border-color: var(--color-border-strong);
-  color: var(--color-text-primary);
-}
-.inbox-section-label {
-  margin: 0;
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-regular);
-  color: var(--color-text-tertiary);
-}
-.inbox-decide {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.inbox-decide-line {
-  margin: 0;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-
-/* THE OPTIONS ARE CARDS, three to a row where they fit and fewer on a
-   narrow pane. The recommended one carries the accent fill, the kit's
-   primary; every other is the card rung with its hairline. */
-.inbox-options {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(11rem, 100%), 1fr));
-  gap: 10px;
-}
-.inbox-options > .write-button {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  min-width: 0;
-}
-.inbox-option {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: flex-start;
-  width: 100%;
-  height: auto;
-  min-height: 72px;
-  padding: 14px var(--spacing-4);
-  border-radius: var(--radius-lg);
-  text-align: left;
-  white-space: normal;
-}
-.inbox-option-reply {
-  gap: var(--spacing-1);
-  background: var(--color-surface-subtle);
-  border: 1px solid var(--color-border-default);
-  color: var(--color-text-primary);
-  font: inherit;
-  cursor: pointer;
-}
-.inbox-option-reply:hover {
-  background: var(--color-surface-hover);
-}
-.inbox-option-reply:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 2px;
-}
-.inbox-option-reply[aria-pressed="true"] {
-  border-color: var(--color-brand-accent);
-  box-shadow: inset 0 0 0 1px var(--color-brand-accent);
-}
-.inbox-option-body {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--spacing-1);
-}
-.inbox-option-label {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--spacing-2);
-  font-weight: var(--font-weight-semibold);
-  font-size: var(--font-size-compact);
-}
-.inbox-option-detail {
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-regular);
-  color: var(--color-text-tertiary);
-}
-.inbox-option[data-recommended] .inbox-option-detail {
-  color: inherit;
-  opacity: 0.85;
+  margin-top: var(--spacing-1);
 }
 
 /* THE THREAD */
@@ -8798,12 +8883,6 @@ a.live-row:focus-visible {
   overflow-wrap: anywhere;
 }
 
-/* THE COMPOSER, pinned under the scroller at the pane's measure. */
-.inbox-pane-compose {
-  flex: none;
-  max-width: 820px;
-  padding: 0 var(--spacing-8) var(--spacing-6);
-}
 .composer {
   display: flex;
   flex-direction: column;
@@ -8815,16 +8894,6 @@ a.live-row:focus-visible {
 }
 .composer:focus-within {
   border-color: var(--color-border-strong);
-}
-.composer[data-mode="answer"] {
-  border-color: var(--color-brand-accent);
-}
-.composer-mode {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  font-size: var(--font-size-xs);
-  color: var(--color-brand-accent-ink);
 }
 .composer-field {
   position: relative;
@@ -8929,19 +8998,17 @@ a.live-row:focus-visible {
   .inbox-panes {
     grid-template-columns: minmax(0, 1fr);
   }
+  /* AND THE PHONE'S 16px GUTTER: a row's own 8px inside 8px of list. */
+  .inbox-callout {
+    margin-inline: var(--spacing-4);
+  }
   .inbox-list {
+    padding-inline: var(--spacing-2);
+  }
+  .inbox-list,
+  .inbox-pane {
     overflow: visible;
     border-right: none;
-  }
-  .inbox-pane-bar {
-    flex-wrap: wrap;
-    padding: var(--spacing-2) var(--spacing-3);
-  }
-  .inbox-pane-body {
-    padding: var(--spacing-5) var(--spacing-4);
-  }
-  .inbox-pane-compose {
-    padding: 0 var(--spacing-4) var(--spacing-4);
   }
 }
 
@@ -9001,8 +9068,9 @@ a.live-row:focus-visible {
   text-wrap: pretty;
 }
 
-/* A PROJECT'S ITEMS LENS, with its open count: the kit's Count, carrying "open"
-   for a screen reader, set beside the word the way the tab's own count is. */
+/* A LENS WITH ITS FIGURE (`lensLabel` in PageActions.tsx): the kit's Count,
+   carrying its noun for a screen reader, set beside the word the way a tab's
+   own count is. */
 .lens-count {
   display: inline-flex;
   align-items: center;
@@ -9399,9 +9467,10 @@ a.live-row:focus-visible {
 }
 
 /* ---- Spend ---------------------------------------------------------------
-   The design's Spend artboard: the hero beside the daily chart, then the
-   by-agent table beside a column of ranked lists, then the teams and the
-   background workers. Every row is MEASURED FROM THE PAGE COLUMN
+   The design's Spend artboard, in three rows: the hero beside the daily
+   chart; the by-agent table beside the two ranked lists that break the same
+   tokens down by model and by team; then the most expensive tasks beside the
+   auxiliary model's purposes. Every row is MEASURED FROM THE PAGE COLUMN
    (`@container page`), not the window, because the sidebar and the peek take
    their share first. */
 .spend {
@@ -9409,46 +9478,56 @@ a.live-row:focus-visible {
   flex-direction: column;
   gap: var(--spacing-4);
 }
+/* EVERY ROW IS ONE HEIGHT. Its cards stretch to the tallest, so a row's edges
+   line up and the page reads as rows: started at their own heights, a table of
+   two seats ended two hundred pixels above the lists beside it, and the row
+   under it began below the lists, leaving a hole the width of the table. */
+.spend-top,
+.spend-pair {
+  display: grid;
+  gap: var(--spacing-4);
+  align-items: stretch;
+}
 /* THE HERO'S 340px IS THE ARTBOARD'S: the figure at display size and two
    tiles side by side under it, which is the narrowest that holds "of input
    served from prompt cache" on two lines. */
 .spend-top {
-  display: grid;
   grid-template-columns: 340px minmax(0, 1fr);
-  gap: var(--spacing-4);
-  align-items: stretch;
 }
-/* The table is the wider of the pair: the design's 1.7 : 1. */
-.spend-mid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
-  gap: var(--spacing-4);
-  align-items: start;
-}
-.spend-side,
-.spend-pair {
-  display: grid;
-  gap: var(--spacing-4);
-  align-items: start;
-}
-/* THE SAME TRACKS AS THE ROW ABOVE, so the gutter between By team and
-   Background workers is the gutter between By agent and By model: two rows
-   split 1.7 : 1 and 1 : 1 drew two gutters 150px apart down one page. */
+/* THE DESIGN'S 1.7 : 1, the same tracks in both rows under the hero, so the
+   gutter runs down the page as one line. The wide track holds what is read
+   along a row (the seats' table, the tasks' titles), the narrow one the ranked
+   lists: a team's bar across the wide track ran a thousand pixels from its
+   name to its figure. */
 .spend-pair {
   grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
 }
-/* 900px IS THE TABLE'S FLOOR beside a list column of 300: below it the pairs
-   stack, the table first, since it is what the screen is read for. The hero
-   stacks over the chart below 760, where the chart would be narrower than
-   thirty columns can be read in. */
+/* A CARD WITHOUT ITS PARTNER TAKES THE ROW: on a tracker that is not the
+   engine's there is no task spend to rank, and the auxiliary card alone in
+   the wide track left the narrow one empty beside it. */
+.spend-pair > :only-child {
+  grid-column: 1 / -1;
+}
+/* The two lists stacked in the narrow track. The last takes whatever the row
+   has left, so the stack ends level with the table beside it. */
+.spend-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+.spend-side > :last-child {
+  flex-grow: 1;
+}
+/* 900px IS THE PAGE'S ONE FOLD, for every row at once. It is the table's
+   floor beside a list column of 330, and the chart's beside the hero: at an
+   800px column the chart was 450 wide, its title broke over two lines, the
+   sentence under it stood four words wide, and the hero beside it had a
+   hundred pixels to spare. Stacked, the table comes first, since it is what
+   the screen is read for. */
 @container page (width < 900px) {
-  .spend-mid,
+  .spend-top,
   .spend-pair {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-@container page (width < 760px) {
-  .spend-top {
     grid-template-columns: minmax(0, 1fr);
   }
 }
@@ -9456,25 +9535,19 @@ a.live-row:focus-visible {
 .spend-card {
   min-width: 0;
 }
-.spend-card-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--spacing-3);
-  padding: var(--spacing-4) var(--spacing-4) var(--spacing-3);
-}
-/* A padded card (a list) draws its head flush with its own padding. */
-.spend-list .spend-card-head {
-  padding: 0 0 var(--spacing-3);
-}
+/* EVERY SPEND CARD HEADS WITH THE KIT'S `Card.Header`, as every other card
+   in Settings does: an icon, the title, the window as its subtitle. A body
+   line under it keeps the card's inset on every side. */
 .spend-card-body {
   margin: 0;
-  padding: 0 var(--spacing-4) var(--spacing-4);
+  padding: var(--spacing-4);
 }
+/* THE CHART'S TITLE, which shares its row with the chart's legend in the
+   kit's StackedColumns head, at the card title's size and weight. */
 .spend-title {
   flex: none;
   margin: 0;
-  font-size: var(--font-size-md);
+  font-size: var(--font-size-sm);
   font-weight: var(--font-weight-semibold);
   color: var(--color-text-primary);
 }
@@ -9496,16 +9569,25 @@ a.live-row:focus-visible {
   flex-direction: column;
   gap: var(--spacing-4);
 }
+/* THE FACTS STAND ON THE CARD'S FLOOR. The hero is stretched to the chart's
+   height wherever it sits beside it, and stacked from the top its parts ended
+   14 to 53px short of the chart's own (most at compact, where the chart's
+   plot does not shrink with the density). The budget and the tiles sit at the
+   bottom, level with the chart's split control, and the spare height opens
+   between them and the figure. */
+.spend-hero > .spend-budget {
+  margin-top: auto;
+}
 .spend-hero-figure {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--spacing-2);
   min-width: 0;
 }
 .spend-hero-number {
-  font-size: 3.25rem;
+  font-size: var(--font-size-4xl);
   font-weight: var(--font-weight-semibold);
-  letter-spacing: -0.035em;
+  letter-spacing: var(--font-letter-spacing-tight);
   line-height: 1;
   font-variant-numeric: tabular-nums;
   color: var(--color-text-primary);
@@ -9528,17 +9610,25 @@ a.live-row:focus-visible {
 .spend-refusing {
   color: var(--color-feedback-danger-ink);
 }
-/* THE TWO FIGURES INSIDE THE HERO are a block inside a card — the elevated
-   rung, which is exactly what `--color-surface-elevated` is for. */
+/* THE FIGURES INSIDE THE HERO are blocks inside a card, on the elevated rung,
+   which is exactly what `--color-surface-elevated` is for. AS MANY COLUMNS AS
+   THERE ARE TILES: each is absent when it has nothing to say (no cache
+   reported, a tracker that is not the engine's), and a lone tile in a
+   two-column row left half the row empty. With neither, the row is not drawn,
+   so it adds no gap under the budget. */
 .spend-tiles {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: var(--spacing-3);
+}
+.spend-tiles:empty {
+  display: none;
 }
 .spend-tile {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--spacing-1);
   min-width: 0;
   padding: var(--spacing-3);
   border-radius: var(--radius-md);
@@ -9558,7 +9648,9 @@ a.live-row:focus-visible {
 
 /* The chart. The group control and the gap sentence sit UNDER the plot: six
    dimensions do not fit beside a title and a four-band legend at a laptop
-   width, and the kit's head row is where the design draws the legend. */
+   width, and the kit's head row is where the design draws the legend. The
+   card is a column, which is what lets the kit's figure flex into the height
+   the row gives it. */
 .spend-chart {
   display: flex;
   flex-direction: column;
@@ -9567,7 +9659,7 @@ a.live-row:focus-visible {
 .spend-chart-head {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--spacing-1);
   min-width: 0;
 }
 /* THE SENTENCE UNDER THE TITLE ASKS FOR NO WIDTH OF ITS OWN. The kit's head
@@ -9575,16 +9667,24 @@ a.live-row:focus-visible {
    width — so a one-line sentence as wide as the card squeezed the legend into
    two ragged rows at 1280 (and with four seat names at 1440). With no
    intrinsic width the block's basis is the title's, the legend keeps its one
-   row, and the sentence wraps in the room the block then grows into.
-   ONLY BESIDE THE HERO: stacked on a narrow page the legend is most of the
-   head's width, and a sentence with no width of its own was left a column
-   four words wide under a title wrapped onto two lines. */
+   row, and the sentence wraps in the room the block then grows into. That
+   holds stacked under the hero too, down to 760.
+   NOT ON A NARROWER PAGE: there the legend is most of the head's width, and a
+   sentence with no width of its own was left a column four words wide under a
+   title wrapped onto two lines. */
 @container page (width >= 760px) {
   .spend-chart-head .spend-caption {
     contain: inline-size;
   }
 }
+/* THE SPLIT CONTROL STANDS ON THE CARD'S FLOOR, level with the hero's tiles,
+   where the hero is the taller of the two (a refusal or a long comparison
+   under its figure). With the chart drawn, its plot takes that spare height
+   (`height="fill"`), so the control stands right under the dates; the margin
+   keeps it on the floor while there is no chart to grow (loading, an empty
+   window, a refusal). */
 .spend-chart-foot {
+  margin-top: auto;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -9618,7 +9718,9 @@ a.live-row:focus-visible {
   /* THE NAME TAKES THE FIRST LINE'S ROOM, the tokens and share sit at its end
      at their own width — the compact row gives EVERY lead cell the rest of
      the line, which is right for a key-and-title row and wrong for figures. */
-  .spend-agents .grid-wrap[data-phone-rows="compact"] .grid-cell[data-lead]:not(:has(.cell-seat)) {
+  .spend-agents
+    .grid-wrap[data-phone-rows="compact"]
+    .grid-cell[data-lead]:not(:has(.crewlet-table-cell__entity)) {
     flex: none;
     font-weight: inherit;
   }
@@ -9632,7 +9734,7 @@ a.live-row:focus-visible {
      sized to its own width, ENG-4 and LEAD-6 put the titles beside them at
      two different indents. Seven characters of the key's own monospace fit a
      project key and a two-digit number; a longer key grows its own row. */
-  .spend-tasks .grid-wrap[data-phone-rows="compact"] .key-cell {
+  .spend-tasks .grid-wrap[data-phone-rows="compact"] .crewlet-table-cell__key {
     display: inline-block;
     min-width: 7ch;
   }
@@ -9651,15 +9753,15 @@ a.live-row:focus-visible {
   .spend-tasks .grid-wrap[data-phone-rows="compact"] .spend-task-spend > :last-child {
     flex: none;
   }
-  /* THE CAPTION GOES UNDER THE TITLE on a phone: beside it, a sentence
-     wrapped into four lines in the width the title left. */
-  .spend-tasks .spend-card-head {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: var(--spacing-1);
-  }
   .spend-agents .spend-share-track {
     flex: 0 0 3rem;
+  }
+  /* TODAY'S BAR IS FOR SCANNING ITS COLUMN, as a task's is, and a compact row
+     has none: the percentage and its unit say the same. With the bar, a capped
+     seat's second line did not fit and the seat stood three lines tall at
+     every density. */
+  .spend-agents .grid-wrap[data-phone-rows="compact"] .spend-day-meter {
+    display: none;
   }
   /* ONE LINE FOR A NAME on the compact row: the card layout wraps a value
      because it has a line of its own, and here a wrapped name stood a seat
@@ -9675,7 +9777,7 @@ a.live-row:focus-visible {
 .spend-share-bar {
   display: block;
   height: 10px;
-  border-radius: 0 4px 4px 0;
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
   background: var(--color-data-1);
 }
 .spend-share-pct,
@@ -9698,7 +9800,11 @@ a.live-row:focus-visible {
   font-weight: var(--font-weight-medium);
   color: var(--color-feedback-danger-ink);
 }
+/* THE FOOT STANDS ON THE CARD'S FLOOR: a card stretched to its row keeps its
+   link at the bottom edge, level with the lists beside it, rather than under
+   the last row with the spare height below it. */
 .spend-card-foot {
+  margin-top: auto;
   padding: var(--spacing-3) var(--spacing-4);
   border-top: 1px solid var(--color-border-default);
   font-size: var(--font-size-xs);
@@ -9749,7 +9855,7 @@ a.live-row:focus-visible {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--spacing-1);
   min-width: 0;
 }
 .spend-task-title {
@@ -9773,12 +9879,16 @@ a.live-row:focus-visible {
   font-variant-numeric: tabular-nums;
   color: var(--color-text-primary);
 }
-/* BY MODEL'S WORDS TAKE HALF THE ROW, not the kit's 128px Home column: under
-   each entry's key is who used it, and at 128px "Agent PM, Agent SWE, Agent AI
-   Systems Engineer" was cut to its first name. The bar is a share of the
-   card's one total, and half a card still draws it. Two classes, so this wins
-   over the kit's own declaration on the same element whatever the load order. */
-.spend-list .spend-models {
+/* EVERY RANKED LIST'S WORDS TAKE HALF THE ROW, not the kit's 128px Home
+   column: under each model entry's key is who used it, and at 128px "Agent PM,
+   Agent SWE, Agent AI Systems Engineer" was cut to its first name, as
+   "Product and Engineering" was cut to "Product and Engine". ONE WIDTH FOR
+   THE THREE, which stand in one track, so their bars start at one x down the
+   page: By model's half beside the others' 128px put two bar columns 37px
+   apart at 1280 and 115px apart at 1920. A bar is a share of its card's one
+   total, and half a card still draws it. Two classes, so this wins over the
+   kit's own declaration on the same element whatever the load order. */
+.spend-list .spend-bars {
   --crewlet-bar-list-label-width: 50%;
 }
 /* "Used by" on one line: the names give way, the count never does. */
@@ -9808,15 +9918,17 @@ a.live-row:focus-visible {
   margin: 0 0 var(--spacing-3);
   color: var(--color-text-tertiary);
 }
-/* THE COMPANY'S THREE WINDOWS side by side — the same elevated rung as the
-   Spend overview's tiles, so a window reads as the same object on both
-   screens — stacking below the width where a tile's figure, bar and ceiling
-   editor no longer fit a third of the card. */
+/* THE COMPANY'S THREE WINDOWS side by side, on the same elevated rung and at
+   the same gap as the Spend overview's tiles, so a window reads as the same
+   object on both screens. They stack below the width where a tile's figure,
+   bar and ceiling editor no longer fit a third of the card. THE CARD'S
+   INSET ON EVERY SIDE: with none on top the tiles sat flush against the
+   header's rule while keeping 16px on the other three. */
 .budget-tiles {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  padding: 0 var(--spacing-4) var(--spacing-4);
+  gap: var(--spacing-3);
+  padding: var(--spacing-4);
 }
 @container page (width < 760px) {
   .budget-tiles {
@@ -9859,7 +9971,7 @@ a.live-row:focus-visible {
 .budget-figure {
   font-size: var(--font-size-xl);
   font-weight: var(--font-weight-semibold);
-  letter-spacing: -0.02em;
+  letter-spacing: var(--font-letter-spacing-tight);
   color: var(--color-text-primary);
 }
 /* THE TRACK A BAR WOULD HAVE, drawn as a hairline: a window with no ceiling
@@ -9882,7 +9994,7 @@ a.live-row:focus-visible {
 .budget-cell {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--spacing-1);
   min-width: 0;
   width: 100%;
 }
@@ -9901,7 +10013,7 @@ a.live-row:focus-visible {
 .ceiling {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--spacing-1);
   min-width: 0;
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
@@ -10056,6 +10168,11 @@ a.live-row:focus-visible {
 .mcp-add-pair-remove {
   margin-bottom: var(--spacing-1);
 }
+/* Whether the row may be unset: under the row, across it, since it is about
+   the pair rather than either box. */
+.mcp-add-pair-optional {
+  grid-column: 1 / -1;
+}
 .mcp-add-pairs-error {
   color: var(--color-feedback-danger-ink);
 }
@@ -10071,8 +10188,11 @@ a.live-row:focus-visible {
 
 /* A NODE'S FAILURE under its chip: secondary prose, clamped by `.clamp` to two
    lines. The chip above it carries the danger tone; the reason in danger ink
-   too was the same alarm twice, in running text. Whole on the server's page. */
-.mcp-failure {
+   too was the same alarm twice, in running text. Whole on the server's page.
+   What a waiting instance waits for sits there the same way, and is no alarm
+   at all. */
+.mcp-failure,
+.mcp-wait {
   color: var(--color-text-secondary);
   max-width: 32rem;
 }
@@ -10086,6 +10206,17 @@ a.live-row:focus-visible {
   margin: 0;
   padding: 0;
   list-style: none;
+}
+/* THE KEYS WHOLE, one per line: each is a name somebody matches against the
+   configuration, so a long one wraps rather than being cut. */
+.mcp-unlisted {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-wrap: anywhere;
 }
 .mcp-launch-whole,
 .mcp-failure-whole {
@@ -10183,4 +10314,1452 @@ a.live-row:focus-visible {
 }
 .model-part {
   white-space: nowrap;
+}
+
+/* ---- Signing in ----------------------------------------------------------
+   The screens a browser is on BEFORE it holds a session the frame can use
+   (`#/login`, `#/invite/…`, `#/enrol`), drawn outside the frame on
+   `@crewlethq/ui`'s `AuthLayout`, which is its own scroller at the viewport's
+   height and holds one column at a reading width. What is here is the forms'
+   own rhythm inside its card. */
+.signin-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+/* A SUBMIT DOES NOT STRETCH. Every button on these forms states one gesture,
+   and a full-width bar reads as the page's own edge rather than a control. */
+.signin-form > button {
+  align-self: flex-start;
+}
+
+/* A key and its copy control, or a set of codes and its two controls: one
+   line that wraps rather than overflowing a phone. */
+.signin-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.signin-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  margin: 0;
+  padding-inline-start: var(--spacing-5);
+}
+
+/* One step that holds more than a sentence — the QR code, the way round it
+   and the key — as a column of its own. INSIDE the list item rather than on
+   it: a flex item is no longer a list item, and the step would lose its
+   number. */
+.signin-step {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-3);
+}
+
+.signin-codes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+
+/* TWO COLUMNS OF CODES, because ten single-word lines are a list a person
+   copies by eye and loses their place in; two of five are a card. */
+.signin-code-list {
+  display: grid;
+  grid-template-columns: repeat(2, max-content);
+  gap: var(--spacing-2) var(--spacing-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* ---- Artifacts ------------------------------------------------------- */
+
+/* THE GALLERY'S FIELD is a search box in the page bar, as Agents' finder. */
+.artifacts-find {
+  width: 14rem;
+}
+@container page (width < 640px) {
+  .artifacts-find {
+    width: 100%;
+  }
+}
+
+/* START A NEW ARTIFACT: a quiet heading over the kinds' tray, which lays
+   itself out by its own width (`ArtifactMakeRow`): every kind in view at
+   once, none hidden past an edge a reader has to discover by swiping. */
+.artifacts-make {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+.artifacts-make-title,
+.artifacts-group-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.4;
+}
+
+/* THE TOOLBAR'S END: the trash and the shape, kept together at the far end
+   of whichever line they land on. */
+.artifacts-bar-end {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-inline-start: auto;
+}
+
+.artifacts-trash-note {
+  margin: calc(-1 * var(--spacing-3)) 0 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+/* THE LIST, the grid's second shape: each row the kind's mark and two lines
+   of name (`ArtifactNameCell`), so a row stands a little taller than a
+   ledger's and every row of it stands at one height. The facts after the
+   name are the quieter steps: who can open it and the owner in the
+   secondary, when and the reader's role in the tertiary. */
+.artifacts-list .grid-row {
+  min-height: calc(var(--size-row-md) + var(--spacing-4));
+}
+.artifacts-list .grid-cell {
+  color: var(--color-text-secondary);
+}
+.artifacts-when,
+.artifacts-role {
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+/* A TITLED GROUP of cards or rows: Pinned, then Recent under it. */
+.artifacts-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+.artifacts-group + .artifacts-group,
+.artifacts-group + * > .artifacts-group {
+  margin-top: var(--spacing-5);
+}
+.artifacts-group-title > svg {
+  color: var(--color-text-tertiary);
+}
+
+/* THE GRID: four cards across a laptop's page, three on a narrower one (a
+   1024 window, or a tablet whose sidebar is a drawer), two on a small tablet
+   and one on a phone, five only on a screen wide enough that four would be
+   posters. A column count by the page's width rather than auto-fill, so a
+   card's size moves in steps a reader recognises rather than with every
+   pixel. */
+.artifacts-cards {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--spacing-6) var(--spacing-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+@container page (width >= 1500px) {
+  .artifacts-cards {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+@container page (width < 1000px) {
+  .artifacts-cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--spacing-5) var(--spacing-4);
+  }
+}
+@container page (width < 640px) {
+  .artifacts-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@container page (width < 440px) {
+  .artifacts-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.artifacts-more {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  margin-top: var(--spacing-6);
+}
+.artifacts-more-note {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+/* A CARD'S LIVE PREVIEW, each kind on the ground its own page draws it on:
+   a doc's page and a sheet's grid on the sheet, a board inside the board's
+   own margin, a page's frame edge to edge. */
+.artifacts-preview-doc,
+.artifacts-preview-sheet,
+.artifacts-preview-board {
+  box-sizing: border-box;
+  min-height: 100%;
+  background: var(--color-surface-background);
+}
+.artifacts-preview-doc {
+  padding: var(--spacing-8) var(--spacing-8) 0;
+}
+.artifacts-preview-board {
+  padding: var(--spacing-6);
+}
+.artifacts-preview-slide {
+  position: absolute;
+  inset: 0;
+  display: flex;
+}
+.artifacts-preview-frame {
+  position: absolute;
+  inset: 0;
+}
+
+/* COMPANY STORAGE, an administrator's line at the foot of All: three quotas
+   in a row, each a figure over a thin bar, under a hairline that says the
+   gallery has ended. */
+.artifacts-storage {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  margin-top: var(--spacing-8);
+  padding-top: var(--spacing-6);
+  border-top: 1px solid var(--color-border-default);
+}
+.artifacts-storage-title {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+.artifacts-storage-quotas {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 14rem));
+  gap: var(--spacing-3) var(--spacing-8);
+  margin: 0;
+}
+@container page (width < 640px) {
+  .artifacts-storage-quotas {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.artifacts-storage-quota {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+.artifacts-storage-quota > dt {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+.artifacts-storage-quota > dd {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+}
+.artifacts-storage-figure {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-variant-numeric: tabular-nums;
+}
+.artifacts-storage-note {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+/* AN ARTIFACT THE READER CANNOT OPEN, refused or in the trash: one
+   composition, the kit's empty state on the page, at the same place. */
+.artifacts-denied {
+  display: flex;
+  justify-content: center;
+}
+
+/* AN ARTIFACT'S PAGE is the artifact, under one slim bar the page draws in
+   the frame's place (`OwnPageHeader`, the kit's `ArtifactBar`). It asks the
+   frame for the window's height (`useFillScreen`) and takes the content
+   column edge to edge, so the workspace (the body and the one panel beside
+   it) runs from the bar to the sheet's bottom edge: the body scrolls inside
+   itself, and a panel beside it stays in view however far it is read.
+   THE KIT'S CONTENT PADDING IS TAKEN BACK for this one screen, as the org
+   chart and the task page take it, rather than cancelled by a margin of the
+   wide padding: under a laptop's width the kit pads less, and that margin
+   pushed the body past the window's edges and under the bar. */
+.app .crewlet-app-shell__content:has(> .artifact-page) {
+  padding: 0;
+  gap: 0;
+}
+.artifact-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+/* A KIND'S CREATE PAGE stands in the same frame (`routes/artifacts/new/
+   CreateShell.tsx`) and takes the kit's content padding back, as an
+   artifact's page does. Its other rules are in create.css, which arrives with
+   the create pages' chunk; this one stays here because it selects the kit's
+   content column, and a sheet that arrives with a lazy chunk selects no kit
+   class. */
+.app .crewlet-app-shell__content:has(> .artifact-create) {
+  padding: 0;
+  gap: 0;
+}
+.artifact-loading,
+.artifact-trashed {
+  min-width: 0;
+}
+.artifact-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+/* What a trashed artifact's bar says in its version's place. */
+.artifact-trashed-chip {
+  display: inline-flex;
+  align-items: center;
+  height: var(--size-target-min);
+  padding: 0 var(--spacing-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-feedback-danger-soft);
+  color: var(--color-feedback-danger-ink);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+}
+/* THE PAGE'S NOTICES are banners across the top of the workspace, each one
+   line with its one action, and none of them a box that pushes the artifact
+   down by a card's height. */
+.artifact-notices,
+.artifact-follow {
+  flex: none;
+}
+.artifact-workspace {
+  flex: 1 1 auto;
+  /* THE BODY'S INSET, the shell's own step: the wide one, and on a phone the
+     16px every artifact surface and the shell keep there (below). */
+  --artifact-inset: var(--spacing-5);
+}
+/* THE BODY IS THE SCROLLER, and so it is the size container its views
+   measure the view by (`100cqb`), as the frame's own scroller is. A page's
+   frame takes the body edge to edge; every native kind keeps the screen's
+   padding around it. */
+.artifact-body {
+  container: scroller / size;
+  --sticky-top: 0px;
+  /* THE VIEW A KIND DRAWS IN: the body's height inside its padding. A view
+     that fills the screen subtracts only its own bar from it, since nothing
+     of the page's stands above it any more. The unit is read where the
+     property is used, against this body as the nearest size container, and
+     a container unit measures the content box, so the padding is already
+     out of it: subtracting it here took it off twice. */
+  --artifact-view: 100cqb;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  padding: var(--artifact-inset);
+  scrollbar-gutter: stable;
+}
+/*
+ * ON A PHONE the body stands 16px in from both edges, as the shell does: it
+ * folded to 12px. Its scrollbar gutter is reserved on BOTH edges there, so the
+ * two sides match whatever scrollbar the device draws: an overlay scrollbar
+ * (a phone's) reserves nothing on either side, and a classic one (a narrow
+ * desktop window) the same on each, where `stable` alone reserved it at the
+ * end edge only and stood the content 11px further from the right than the
+ * left.
+ */
+@container crewlet-artifact-workspace (width < 640px) {
+  .artifact-body {
+    --artifact-inset: var(--spacing-4);
+    scrollbar-gutter: stable both-edges;
+  }
+}
+/* A PAGE'S FRAME MEETS THE BAR AND THE SHEET SQUARE: a page that paints its
+   own background would otherwise show the body through rounded corners. */
+.artifact-body--html {
+  padding: 0;
+  gap: 0;
+  /* THE FRAME SCROLLS ITSELF and the body never does, so a reserved gutter
+     was a dead strip down the frame's end edge. */
+  scrollbar-gutter: auto;
+}
+.artifact-body--html > .artifact-frame-box {
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 0;
+}
+.artifact-body--html .artifact-frame {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 20rem;
+  border-radius: 0;
+}
+/* The note under an older version is the frame's footer: one line on a
+   hairline, so it reads as part of the page's chrome, not of the page. */
+.artifact-body--html .artifact-frame-box > .artifact-note {
+  flex: none;
+  padding: var(--spacing-2) var(--spacing-4);
+  border-top: 1px solid var(--color-border-default);
+}
+/* A PANEL'S BODY is the screen's measuring stick for what it holds, as the
+   content column is for a screen: History's list, the data's grid and the
+   settings' forms were written to `@container page` and fold to one column
+   in the panel's width. */
+.artifact-panel-body {
+  container: page / inline-size;
+  min-width: 0;
+  /* ONE RHYTHM BETWEEN A PANEL'S SECTIONS, in every panel: they ran 16 in
+     Details, 20 in History, 12 in Data, and nothing at all between a sheet's
+     note and its Changes. */
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+.artifact-panel-body > .artifact-data {
+  gap: var(--spacing-4);
+}
+/* The details: the artifact's own sentence, then its facts and the link. */
+.artifact-details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+/* THE LINK UNDER THE FACTS, at their start edge: it is the panel's one action
+   and reads with the facts above it, not as a form's submit at the end. */
+.artifact-details-actions {
+  display: flex;
+}
+.artifact-details-description {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-compact);
+  line-height: var(--font-line-height-normal);
+}
+.artifact-note {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+.artifact-refusal {
+  margin: 0;
+  color: var(--color-feedback-danger-ink);
+  font-size: var(--font-size-compact);
+}
+
+/* THE FRAME FILLS THE VIEW below the band and the tabs, and never less than
+   a page needs to be usable. */
+.artifact-frame-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.artifact-frame {
+  height: max(28rem, calc(100cqb - var(--sticky-top) - 14rem));
+  min-width: 0;
+}
+
+/* A DOC: its tabs in one bar, then the outline beside the tab on show, laid
+   out by the Knowledge page's own rules (`.doc-read`, under "A page"); one
+   column on a narrow page. */
+.doc-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+.doc-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-4);
+  min-width: 0;
+}
+.doc-bar > [role="tablist"] {
+  flex: 1 1 20rem;
+  min-width: 0;
+}
+/* A tab with no outline to draw takes the row on its own; an empty one
+   takes the whole view, so its empty state stands in the middle of it as
+   every other kind's does, rather than in the middle of a prose column. */
+.doc-read--bare {
+  grid-template-columns: minmax(0, var(--size-content-max));
+}
+.doc-read--blank {
+  grid-template-columns: minmax(0, 1fr);
+}
+.doc-read--blank > .doc-read-page {
+  max-width: none;
+}
+/* THE OUTLINE FITS THE ARTIFACT'S VIEW: the body is the size container, and
+   `--artifact-view` (its `100cqb`) is already the height inside its inset, so
+   nothing of the inset is taken off again. The page's own rule above takes
+   the screen's padding off a different container. */
+.doc-read-side {
+  max-height: calc(var(--artifact-view) - var(--sticky-top));
+}
+.doc-read-page {
+  min-width: 0;
+  max-width: var(--size-measure);
+}
+.doc-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+.doc-conflicts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+.doc-editor-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+}
+/* WHILE EDITING, THE TABS STAY REACHABLE ON A PHONE: they are what a writer
+   renames, reorders, adds and removes, so they stack above the text, on the
+   text's own measure so the two share a right edge. */
+@container page (width < 760px) {
+  .doc-read--editing .doc-read-side {
+    display: block;
+    position: static;
+    max-width: var(--size-measure);
+    max-height: none;
+  }
+}
+.doc-note {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+/* A doc prints its tabs in order, each from a new page under its title. */
+.doc-print-tab + .doc-print-tab {
+  break-before: page;
+}
+.doc-print-title {
+  margin: 0 0 var(--spacing-4);
+  font-size: var(--font-size-2xl);
+}
+
+.artifact-sheet,
+.artifact-data {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+/* THE SHEET TAKES THE ROOM IT IS GIVEN: the view is a column item of the
+   artifact body, and the Data panel's rows one of the panel body (uilet's
+   ArtifactPanel), so each may shrink and its grid gives way (uilet's
+   fit="content") until Add row sits on the edge. The other Data views are
+   forms and lists that keep their height and scroll the panel. */
+.artifact-sheet {
+  min-height: 0;
+}
+.artifact-data--rows,
+.artifact-panel-body:has(> .artifact-data--rows) {
+  min-height: 0;
+}
+.artifact-sheet-bar,
+.artifact-data-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+}
+/* Export closes the data bar, on the bar's own line. */
+.artifact-data-bar-end {
+  margin-inline-start: auto;
+}
+/* A GRID IS AS TALL AS ITS ROWS (fit="content") up to the room its column
+   leaves it (above), so twelve rows draw no empty slab under them and Add row
+   sits on the view's edge under two thousand. Never shorter than 16rem of
+   rows, where it has that many: a short window scrolls the view instead. */
+.artifact-grid {
+  --crewlet-sheet-max-height: none;
+  --crewlet-sheet-min-height: 16rem;
+}
+
+/* A HISTORY IS ONE LINE PER CHANGE: who, what, when, and its one action. */
+.artifact-history {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.artifact-history-row {
+  display: grid;
+  grid-template-columns: minmax(6rem, 10rem) minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: var(--spacing-3);
+  padding-block: var(--spacing-2);
+  border-bottom: 1px solid var(--color-border-default);
+  font-size: var(--font-size-compact);
+}
+/* Rules run BETWEEN changes: the last one closes on the list's own edge (a
+   dialog's foot, a section's end) rather than drawing a second line there. */
+.artifact-history-row:last-child {
+  border-bottom: 0;
+}
+.artifact-history-who {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifact-history-what {
+  color: var(--color-text-secondary);
+  min-width: 0;
+}
+.artifact-history-when {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+/* A ROW WITH AN ACTION reserves its track whether or not this row has one,
+   so the time column holds one edge down the list and every row keeps the
+   button's height. A list without actions draws three tracks, so no empty
+   fourth track and its gap pull the times short of the list's edge. */
+.artifact-history-row--action {
+  grid-template-columns: minmax(6rem, 10rem) minmax(0, 1fr) auto 4.5rem;
+  align-items: center;
+  min-height: var(--size-control-sm);
+}
+.artifact-history-action {
+  display: flex;
+  justify-content: flex-end;
+}
+.artifact-history-reason {
+  color: var(--color-text-tertiary);
+}
+/* NARROW (a phone, a side panel), WHO AND WHEN SHARE THE FIRST LINE and what
+   they did runs the width under it. Placed by line, not left to the flow: the
+   sentence spanning the row pushed the time onto a third line of its own. */
+@container page (width < 640px) {
+  .artifact-history-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    row-gap: var(--spacing-1);
+  }
+  .artifact-history-row--action {
+    grid-template-columns: minmax(0, 1fr) auto 4.5rem;
+  }
+  .artifact-history-who,
+  .artifact-history-when,
+  .artifact-history-action {
+    grid-row: 1;
+  }
+  .artifact-history-what {
+    grid-row: 2;
+    grid-column: 1 / -1;
+  }
+}
+
+.artifact-history-tab {
+  display: grid;
+  grid-template-columns: minmax(16rem, 22rem) minmax(0, 1fr);
+  gap: var(--spacing-4);
+  align-items: start;
+}
+/* TWO COLUMNS DOWN TO A SMALL LAPTOP: one column below 720 px, where a
+   version item would otherwise run 700 px wide at 1024. */
+@container page (width < 720px) {
+  .artifact-history-tab {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.artifact-versions {
+  min-width: 0;
+}
+.artifact-version-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+.artifact-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--spacing-1) var(--spacing-4);
+  margin: 0;
+  font-size: var(--font-size-compact);
+}
+.artifact-facts dt {
+  color: var(--color-text-tertiary);
+}
+.artifact-facts dd {
+  margin: 0;
+  color: var(--color-text-primary);
+}
+.artifact-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.artifact-files {
+  display: flex;
+  flex-direction: column;
+  margin: var(--spacing-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.artifact-file {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--spacing-3);
+  padding-block: var(--spacing-1);
+  border-bottom: 1px solid var(--color-border-default);
+  font-size: var(--font-size-compact);
+  min-width: 0;
+}
+.artifact-file-meta {
+  flex: none;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+/* FORMS ON AN ARTIFACT'S TABS: a column of fields at the reading measure,
+   its actions at the end. */
+.artifact-settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  max-width: var(--size-measure);
+}
+.artifact-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  max-width: var(--size-measure);
+}
+.artifact-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.artifact-inline {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+/* THE SCHEMA EDITOR: the collections beside the one being edited. */
+.artifact-schema {
+  display: grid;
+  grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr);
+  gap: var(--spacing-5);
+  align-items: start;
+}
+.artifact-schema > .artifact-form-actions {
+  grid-column: 1 / -1;
+}
+/* THE FOOT STICKS TO THE VIEW. A sheet with choice columns runs the form to
+   many screens, and Save waited at the end of it; here it stays in reach,
+   with how many changes it will apply at the start of the band. */
+.artifact-schema-foot {
+  position: sticky;
+  /* A sticky edge stops at the panel body's padding, which left a band under
+     the foot that the form scrolled through; it sits on the panel's own
+     bottom edge instead, padded by that inset above and below its buttons. */
+  bottom: calc(-1 * var(--crewlet-artifact-panel-inset, 0px));
+  z-index: var(--z-index-sticky);
+  padding-block: var(--crewlet-artifact-panel-inset, var(--spacing-3));
+  margin-block-end: calc(-1 * var(--crewlet-artifact-panel-inset, 0px));
+  border-top: 1px solid var(--color-border-default);
+  background: var(--color-surface-background);
+}
+.artifact-schema-pending {
+  margin-inline-end: auto;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-compact);
+}
+@container page (width < 860px) {
+  .artifact-schema {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.artifact-schema-collections,
+.artifact-schema-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+.artifact-schema-form {
+  container: artifact-schema-form / inline-size;
+}
+.artifact-columns {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.artifact-column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding-block: var(--spacing-3);
+  border-bottom: 1px solid var(--color-border-default);
+}
+/* EVERY COLUMN ROW ON THE SAME TRACKS: name, key, type, who writes it, the
+   two flags and the remove slot. On a wrapping row the type select moved with
+   the width of the key before it, so no two rows lined up. The tracks are
+   bounded rather than sized by content, so each row resolves them the same. */
+.artifact-column-head {
+  display: grid;
+  grid-template-columns:
+    minmax(7rem, 1fr) minmax(3rem, 6rem) 8rem minmax(9rem, 12rem)
+    auto auto var(--size-row-sm);
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+}
+.artifact-column-key {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+.artifact-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding-inline-start: var(--spacing-4);
+}
+.artifact-option {
+  display: grid;
+  grid-template-columns: minmax(7rem, 14rem) auto auto auto;
+  justify-content: start;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+}
+/* A NARROW FORM (a phone, the panel beside the sheet) keeps each column on
+   tracks too, rather than stacking seven full-width controls: the name with
+   its remove slot, the key under it, the type beside who writes it, and the
+   two flags on one line under those. */
+@container artifact-schema-form (width < 44rem) {
+  .artifact-column-head {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--size-row-sm);
+    grid-template-areas:
+      "name name remove"
+      "key key key"
+      "type write write"
+      "required hidden hidden";
+    row-gap: var(--spacing-2);
+  }
+  .artifact-column-name {
+    grid-area: name;
+  }
+  .artifact-column-key {
+    grid-area: key;
+    margin-block-start: calc(-1 * var(--spacing-1));
+  }
+  .artifact-column-type {
+    grid-area: type;
+  }
+  .artifact-column-write {
+    grid-area: write;
+  }
+  .artifact-column-required {
+    grid-area: required;
+  }
+  .artifact-column-hidden {
+    grid-area: hidden;
+  }
+  .artifact-column-remove {
+    grid-area: remove;
+  }
+  .artifact-option {
+    display: flex;
+    flex-wrap: wrap;
+  }
+}
+
+/* The History tab's comparison of two versions (uilet's VersionCompare, which
+   lays the two sides out itself), across both columns, and the files lens
+   inside it. */
+.artifact-compare-row {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.artifact-compare {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+/* The list of a text file's changed lines: a heading over its content. */
+.artifact-compare-lines {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+.artifact-compare-heading {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+.artifact-compare-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
+
+/* ---- a slide deck (routes/artifacts/SlidesView.tsx) ---------------------- */
+
+.slides-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+/* THE EDITOR: the filmstrip beside the stage, under it on a phone. */
+.slides-edit {
+  display: grid;
+  grid-template-columns: 11rem minmax(0, 1fr);
+  align-items: start;
+  gap: var(--spacing-4);
+}
+.slides-edit > .slides-conflicts,
+.slides-edit > .slides-merged {
+  grid-column: 1 / -1;
+}
+/* The strip scrolls itself (uilet's own), bounded here: as tall as the view
+   beside the stage, and a row as wide as the column under it on a phone. */
+.slides-strip {
+  max-height: max(24rem, var(--artifact-view, 100cqb));
+}
+.slides-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+/* UNDER THE STAGE: where the reader is in the deck, and whether the slide on
+   the stage is one Present skips. */
+.slides-stage-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-3);
+  margin: calc(var(--spacing-1) * -1) 0 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+.slides-stage-position {
+  font-variant-numeric: tabular-nums;
+}
+.slides-stage-hidden {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  color: var(--color-text-secondary);
+}
+.slides-panel {
+  display: grid;
+  gap: var(--spacing-3);
+  max-width: var(--size-measure);
+}
+.slides-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.slides-notes {
+  display: grid;
+  gap: var(--spacing-2);
+  max-width: var(--size-measure);
+}
+.slides-notes > p {
+  margin: 0;
+}
+.slides-notes-body {
+  padding: var(--spacing-3);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
+  white-space: pre-wrap;
+}
+.slides-conflicts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+@media (width < 640px) {
+  .slides-edit {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .slides-strip {
+    max-height: none;
+  }
+}
+
+/* PRESENT: the slide as large as fits; full screen on the reader's press. */
+/* THE SHOW IS SEEN WHOLE: its stage (`SlideStage fit="view"`) is as tall as
+   the room between the show's top and the foot of the view allows, less the
+   bar, so the slide's foot and the count under it are never below the fold.
+   The show's height follows its content, and its scroll margins are what that
+   room keeps clear. */
+.slides-show {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  scroll-margin-top: var(--sticky-top);
+  scroll-margin-bottom: var(--spacing-4);
+}
+/* THE SHOW TAKES THE KEYS, and says so: a ring a little outside its edge,
+   in the page's padding, so a keyboard reader sees the arrows will move the
+   slides and the ring never draws over the slide itself. Full screen is the
+   room's screen, where the show is all there is: the ring is transparent
+   there, and forced colors still paints it. */
+.slides-show:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--spacing-1);
+}
+.slides-show:fullscreen:focus-visible {
+  outline-color: transparent;
+}
+/* FULL SCREEN IS A PROJECTOR: the slide fills the screen on black, and its
+   controls float over its foot, put away with the cursor while the pointer
+   rests. */
+.slides-show:fullscreen {
+  height: 100%;
+  background: var(--color-projection-letterbox);
+}
+.slides-show:fullscreen .slides-show-bar {
+  position: absolute;
+  inset-inline: 0;
+  bottom: var(--spacing-5);
+  pointer-events: none;
+  transition: opacity var(--motion-duration-moderate) var(--motion-easing-out);
+}
+.slides-show:fullscreen .slides-show-bar > * {
+  pointer-events: auto;
+}
+.slides-show[data-idle] {
+  cursor: none;
+}
+.slides-show[data-idle] .slides-show-bar {
+  opacity: 0;
+}
+.slides-show[data-idle] .slides-show-bar > * {
+  pointer-events: none;
+}
+.slides-show-slide[data-transition="fade"] {
+  animation: slides-fade var(--motion-duration-moderate) var(--motion-easing-out);
+}
+.slides-show-slide[data-transition="push"] {
+  animation: slides-push var(--motion-duration-moderate) var(--motion-easing-out);
+}
+@keyframes slides-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes slides-push {
+  from {
+    transform: translateX(8%);
+    opacity: 0;
+  }
+}
+.slides-show-bar {
+  display: flex;
+  justify-content: center;
+  padding-top: var(--spacing-2);
+}
+.slides-presenter {
+  height: max(30rem, var(--artifact-view, 100cqb));
+}
+
+/* A SLIDE IS AUTHORED CONTENT, laid out exactly as the slide format says
+   (Claude's: format.md and styles.md) and the same in every theme: its own
+   colour scheme is light, so a slide that names no colour reads in the
+   system's ink on the system's paper whatever the dashboard's theme is. Every
+   rule here is a default an inline declaration of the slide overrides. */
+.slide-canvas {
+  position: relative;
+  box-sizing: border-box;
+  overflow: hidden;
+  color-scheme: light;
+  background: Canvas;
+  color: CanvasText;
+  font-family: sans-serif;
+  font-size: 32px;
+  font-weight: 400;
+  line-height: 1.4;
+  text-align: left;
+}
+.slide-canvas * {
+  box-sizing: border-box;
+  margin: 0;
+}
+/* NO DISPLAY IS A COLUMN: a section or a div that names none lays its
+   children out top to bottom; one that names `display:flex` is a row, as in
+   any stylesheet. */
+.slide-canvas:not([data-display]),
+.slide-div:not([data-display]) {
+  display: flex;
+  flex-direction: column;
+}
+/* THE DOCUMENT'S OWN ELEMENT RULES (base.css and the kit's baseline give
+   headings the display face, the product's ink and tight tracking, links the
+   accent, tables the full width) are the dashboard's, not the slide's: each
+   is put back to what the slide format says here. */
+.slide-h1,
+.slide-h2,
+.slide-h3 {
+  font-family: inherit;
+  color: inherit;
+  letter-spacing: normal;
+}
+.slide-h1 {
+  font-size: 96px;
+  font-weight: 600;
+  line-height: 1.1;
+}
+.slide-h2 {
+  font-size: 64px;
+  font-weight: 600;
+  line-height: 1.15;
+}
+.slide-h3 {
+  font-size: 44px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.slide-ul,
+.slide-ol {
+  padding-inline-start: 1.2em;
+}
+.slide-text-box > .slide-ul,
+.slide-text-box > .slide-ol {
+  padding-inline-start: var(--slide-indent, 1.2em);
+}
+.slide-a,
+.slide-a:hover {
+  color: inherit;
+  text-decoration: underline;
+}
+.slide-table {
+  width: auto;
+  border-collapse: collapse;
+}
+.slide-th,
+.slide-td {
+  padding: 0.35em 0.6em;
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  text-align: left;
+  vertical-align: top;
+}
+.slide-th {
+  font-weight: 600;
+}
+.slide-hr {
+  align-self: stretch;
+  height: 0;
+  border: 0;
+  border-top: 2px solid currentColor;
+}
+.slide-img,
+.slide-svg {
+  display: block;
+  max-width: none;
+}
+.slide-img-pending {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+.slide-shape {
+  display: block;
+  background: currentColor;
+}
+.slide-shape-rounded {
+  border-radius: 24px;
+}
+.slide-shape-ellipse {
+  border-radius: 50%;
+}
+.slide-shape-line {
+  height: 0;
+  background: transparent;
+  border-top: 2px solid currentColor;
+}
+.slide-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+}
+/* A RUN OF TEXT EDITED IN PLACE is outlined where the pointer or the caret
+   is, in the dashboard's focus colour, which is chrome rather than slide. */
+.slide-run:hover {
+  outline: 2px dashed var(--color-focus);
+  outline-offset: 2px;
+}
+.slide-run:focus {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* PRINT: what a `PrintOnly` holds, and nothing else of the dashboard. Drawn
+   always and shown only in print, and only while a deck or a doc is open. */
+.print-only {
+  display: none;
+}
+@media print {
+  body:has(> .print-only) > :not(.print-only) {
+    display: none;
+  }
+  .print-only {
+    display: block;
+  }
+}
+
+/* A deck prints one slide to a 16:9 page. */
+@page deck {
+  size: 1920px 1080px;
+  margin: 0;
+}
+@media print {
+  .slides-print-page {
+    page: deck;
+    break-after: page;
+  }
+}
+
+/* A DESIGN: the canvas fills the view beside its list of boards. The view is
+   the body's whole height, so the canvas takes what its bar and any notice
+   leave of it, down to the body's own padding. */
+.design-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+  height: max(28rem, var(--artifact-view, 100cqb));
+}
+.design-bar {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.design-bar-count {
+  margin-right: auto;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-compact);
+}
+/* The board list (the design system's LayersList) is as wide as its longest
+   name, and no wider than 12rem, so the canvas keeps the room at a laptop's
+   width; it scrolls on its own when a design has more boards than the canvas
+   is tall. */
+.design-body {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: fit-content(12rem) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: var(--spacing-3);
+  min-width: 0;
+  min-height: 0;
+}
+.design-canvas {
+  min-width: 0;
+  min-height: 0;
+}
+.design-skeleton {
+  height: max(28rem, var(--artifact-view, 100cqb));
+  min-width: 0;
+}
+@media (width < 640px) {
+  .design-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .design-boards {
+    display: none;
+  }
+}
+
+/* An artboard's frame fills its board exactly; the board says its own state. */
+.design-board-frame,
+.design-opened-frame,
+.design-print-frame {
+  gap: 0;
+  height: 100%;
+}
+:is(.design-board-frame, .design-opened-frame, .design-print-frame) .artifact-frame {
+  height: 100%;
+}
+:is(.design-board-frame, .design-opened-frame, .design-print-frame) .artifact-note {
+  display: none;
+}
+/* An opened board: fitted into the dialog by its stage, or at its own size
+   with scroll both ways. The dialog is portaled outside the page, so the
+   bound is the window's, never the page scroller's. */
+.design-opened {
+  min-width: 0;
+}
+.design-opened--fit {
+  display: grid;
+  width: 100%;
+  max-height: 70vh;
+}
+.design-opened--actual {
+  height: 70vh;
+  overflow: auto;
+}
+.design-opened--actual:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: var(--size-focus-ring-inset-offset);
+}
+
+/* PRINT: one board over the whole window, at its corner and its own size,
+   and in print nothing else of the dashboard. On screen too, since a
+   cross-origin frame prints as it is drawn. */
+.design-print-view {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-index-layer-max);
+  overflow: hidden;
+  background: var(--color-surface-background);
+}
+@media print {
+  body:has(> .design-print-view) > :not(.design-print-view) {
+    visibility: hidden;
+  }
+}
+
+/* A DASHBOARD: its filters, its board of widgets and the Sources rail beside
+   it. The board is the Home board's grid; the rail folds under the board on a
+   narrow page, so every figure keeps the width it was laid out at. */
+.dashboard-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+.dashboard-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--spacing-2) var(--spacing-3);
+}
+.dashboard-filter {
+  min-width: 12rem;
+}
+/* ON A PHONE EACH FILTER TAKES THE ROW, and Refresh the row under them: at
+   their least width two filters left one alone on a row and the next beside
+   Refresh, a ragged pair of rows that read as two groups. */
+@container (max-width: 30rem) {
+  .dashboard-filter {
+    flex: 1 1 100%;
+  }
+}
+.dashboard-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(16rem, 20rem);
+  align-items: start;
+  gap: var(--spacing-4);
+}
+@container (max-width: 60rem) {
+  .dashboard-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.dashboard-board {
+  min-width: 0;
+}
+.dashboard-cell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+/* A FIGURE FILLS ITS FRAME'S BODY, so a chart with nothing to draw says so
+   in the middle of the area its plot would have filled.
+
+   A STAT OR A METER STANDS AT THE HEAD OF ITS BODY, under a title held at two
+   lines in a row (WidgetFrame's holdTitle), so every number of a row shares
+   one baseline: a meter's maximum and bar hang under its number where a
+   stat has the air before its citation. Stood on the foot of the frame, a
+   meter's number rode its bar a line above the stats beside it. */
+.dashboard-figure {
+  min-width: 0;
+  height: 100%;
+}
+/* A DATASET'S ROWS ARE A LIST TABLE: 32px rows over the 13px cells, the
+   rhythm every table of an artifact keeps (a sheet's row), set through the
+   compact table's own hooks: the inset is what the row leaves around a line
+   of text and its 1px rule, so the row is the token's height and no more
+   (the header takes the same inset). At the list row's 36px a widget's table
+   was the one table of the artifacts screens that stood taller. Our sheets
+   load after the design system's, so this binding outranks the table's own
+   at equal weight. */
+.dashboard-rows {
+  --crewlet-data-table-row-height: var(--size-sheet-row);
+  --crewlet-data-table-cell-pad-y: calc((var(--size-sheet-row) - 1lh - 1px) / 2);
+}
+/* A meter: the number as a stat draws it, and the bar a step under it. */
+.dashboard-meter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+/* A share: the bar, and under it the legend naming each part and its value. */
+.dashboard-share {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+}
+/* The rail is one card; its entries are rows on the card's inset, each
+   entry's own 12px plus this 4px putting its words under the card's title. */
+.dashboard-sources {
+  min-width: 0;
+}
+.dashboard-sources-list {
+  padding: var(--spacing-2) var(--spacing-1);
+}
+/* A note fills its cell, as a figure's frame does, so a row of blocks ends
+   on one line. */
+.dashboard-note {
+  height: 100%;
+}
+
+/* ---- A Settings page of term lists that read as one table ----------------
+   Limits and Sign-in policy stack several cards of terms and values, and each
+   list sized its term column to its own longest term, so the values started
+   at a different x in every card. The kit's term track is an inherited custom
+   property (`--crewlet-description-list-term`), set here once for the page;
+   below the kit's narrow step a term stands over its value as before. */
+.settings-terms {
+  --crewlet-description-list-term: 18rem;
 }

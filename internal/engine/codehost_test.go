@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
@@ -24,12 +26,15 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
 // gitCompany is a company hosting one repository, `web`, owned by its founder,
-// whose operator token `ops` is bound to the founder's seat.
+// whose human seat the operator token `ops` is bound to in the identity
+// directory ([bindOps]).
 const gitCompany = `
 name: Nimbus
 tracker:
@@ -47,8 +52,6 @@ roles:
   - name: Founder
     handle: founder
     kind: human
-    contact:
-      crewlet_operator_id: ops
 `
 
 // noCodeCompany is the same company hosting no code.
@@ -65,6 +68,34 @@ roles:
 
 // opsToken is the founder's operator token: long enough for the guard.
 const opsToken = "ops-token-0123456789abcdefghijklmnopqrstuv"
+
+// bindOps binds the `ops` Tier A token to the founder's human seat through e's
+// identity directory — the row `crewlet iam create -kind machine -login
+// token:ops -seat founder` writes — and waits until e reports the binding:
+// the guard resolves a token's seat from this node's own copy of the
+// directory, so a push before the row applied would be a push by a token
+// bound to nobody, which fetches only.
+func bindOps(t *testing.T, e *engine.Engine) {
+	t.Helper()
+	key := uuid.Must(uuid.NewV7()).String()
+	id, err := iamdomain.CreatedPersonID(key)
+	if err != nil {
+		t.Fatalf("derive the machine's id: %v", err)
+	}
+	login := iam.TokenLogin("ops")
+	if _, err := e.IAMWriter().Create(t.Context(), iamdomain.Creation{
+		PersonID: id, Kind: iam.KindMachine, Stage: iam.StageActive,
+		Login: login, Seat: "founder",
+		OpID:   statelog.NewOpID(time.Now(), "create"),
+		Reason: "the founder's git credential",
+	}); err != nil {
+		t.Fatalf("bind %s to the founder: %v", login, err)
+	}
+	waitFor(t, "the ops token's binding to the founder", func() bool {
+		row, err := e.BoundSeat(t.Context(), login)
+		return err == nil && row.Found && row.Seat == "founder"
+	})
+}
 
 // gitNodeBootstrap is a data node's Tier A with a persisted stream, its roles
 // mutated by roles (nil leaves them undeclared: every role), and the founder's
@@ -237,8 +268,9 @@ func TestAGitNodeBootsOnlyAtItsFloor(t *testing.T) {
 // A PERSON PUSHES THROUGH THE ENGINE'S OWN HOST: the founder clones the empty
 // repository the company declares, commits and pushes with their own operator
 // token as the Basic password, the branch lands, and this node's event store
-// holds the push audited as the founder, by repository — which is the host
-// built over the engine's own Persons, Audit, Estate and Objects.
+// holds the push audited as the founder, by repository, through the token it
+// came through — which is the host built over the engine's own guard, Audit,
+// Estate and Objects.
 func TestAPersonPushesThroughTheEnginesHost(t *testing.T) {
 	t.Parallel()
 	b := gitNodeBootstrap(t, nil)
@@ -276,8 +308,9 @@ func TestAPersonPushesThroughTheEnginesHost(t *testing.T) {
 		return json.Unmarshal(row.Payload, &acted) == nil
 	})
 	if acted.Transport != types.TransportGit || acted.Tool != "git_push" ||
-		acted.ActorSeat != "founder" || acted.Outcome != types.AuditApplied ||
-		acted.Repo != "web" || acted.OperatorID != "ops" {
+		acted.ActorName != "founder" || acted.ActorKind != string(iam.ActorHuman) ||
+		acted.Outcome != types.AuditApplied || acted.Repo != "web" ||
+		acted.OperatorID != iam.TokenLogin("ops") {
 		t.Fatalf("the push was audited as %+v, want the founder's applied git_push to web", acted)
 	}
 }
@@ -347,7 +380,7 @@ func TestTheGitCachesMaintenanceAlarmFiresOnItsNode(t *testing.T) {
 	// A MAINTAINER PASS AND AN EVALUATION: the cache judges what it holds on
 	// its maintainer's tick, and the node evaluates its table on its own.
 	// The minute is room for a loaded machine, never the expected wait.
-	deadline := time.Now().Add(cache.MidxDebounce + engine.AlarmInterval + time.Minute)
+	deadline := time.Now().Add(cache.MidxDebounce + statelog.AlarmInterval + time.Minute)
 	for {
 		kinds, _ := e.Alarms()
 		if slices.Contains(kinds, statelog.KindCodeMaintenanceRefused) {
@@ -375,8 +408,9 @@ func TestTheGitCachesMaintenanceAlarmFiresOnItsNode(t *testing.T) {
 	}
 }
 
-// serveWeb waits for gitCompany's declared repository to exist on e, and
-// serves e's own code host behind b's guard, as the API mounts it: the URL a
+// serveWeb waits for gitCompany's declared repository to exist on e, binds the
+// `ops` token to the founder ([bindOps]), and serves e's own code host behind
+// b's guard over e's identity directory, as the API mounts it: the URL a
 // person's git clones and pushes `web` at.
 func serveWeb(t *testing.T, b *config.Bootstrap, e *engine.Engine) string {
 	t.Helper()
@@ -402,11 +436,16 @@ func serveWeb(t *testing.T, b *config.Bootstrap, e *engine.Engine) string {
 		return false
 	})
 
+	bindOps(t, e)
+
 	mux := http.NewServeMux()
 	mux.Handle(host.PatternInfoRefs, h.InfoRefs())
 	mux.Handle(host.PatternUploadPack, h.UploadPack())
 	mux.Handle(host.PatternReceivePack, h.ReceivePack())
-	srv := httptest.NewServer(auth.New(b).Middleware(mux))
+	// THE GUARD `crewlet run` BUILDS, over the engine's own directory and
+	// seat view, so a token acts as the seat the directory binds it to.
+	guard := auth.New(b).BindSeats(auth.SeatBindings{Directory: e, Chart: engine.SeatViewOf(e)})
+	srv := httptest.NewServer(guard.Middleware(mux))
 	t.Cleanup(srv.Close)
 	return srv.URL + "/git/web.git"
 }

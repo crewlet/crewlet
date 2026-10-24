@@ -55,6 +55,16 @@ type Turn struct {
 	Trace events.TraceContext
 }
 
+// Seat is what every row this turn writes names its seat by: the seat's
+// handle, which is immutable (ADR-0013). Empty for a turn with no role, which
+// no worker writes for.
+func (t Turn) Seat() string {
+	if t.Role == nil {
+		return ""
+	}
+	return t.Role.Handle()
+}
+
 // WorkKey is the unit of work this turn did, or "" when it did none that can
 // be collapsed on.
 //
@@ -511,12 +521,19 @@ func (r *Reflector) Reflect(ctx context.Context, tc types.TurnCompleted, tr even
 	// Reconfigure refuse a nil org, and the only epoch without one is the
 	// zero value epoch() falls back to — which has no workers either, so
 	// it has already returned above.
-	role := live.org.Role(tc.RoleName)
+	// THE HANDLE, which is what addresses a seat. The turn's `role` is the
+	// seat's DISPLAY NAME and nothing resolves a seat by it — so looking a
+	// seat up by it found nobody, every completed turn was skipped as
+	// SkipNoRole, and the company silently stopped learning: no episode,
+	// no diary row, no counterparty profile, on a path whose every failure
+	// is best effort and therefore says nothing.
+	role := live.org.Role(tc.AgentHandle)
 	if role == nil {
 		// A turn from a seat this epoch no longer has. Learning about a
-		// role that has been renamed or removed would write memory under
-		// an identity nothing can read back.
-		log.DebugContext(ctx, "reflection_skipped_no_role", "turn_id", tc.TurnID, "role", tc.RoleName)
+		// seat that has been removed would write memory under an identity
+		// nothing can read back.
+		log.DebugContext(ctx, "reflection_skipped_no_role",
+			"turn_id", tc.TurnID, "agent_handle", tc.AgentHandle, "role", tc.RoleName)
 		return Reflection{Skip: SkipNoRole}
 	}
 

@@ -14,15 +14,10 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/jsprovision"
-	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
-	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
-	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // THE STATE LOGS' STREAM CEILINGS: what each log's stream is created with, and
@@ -70,6 +65,22 @@ type domainCeiling struct {
 	// emergency grant had just raised. A refused boot naming the field is
 	// the honest answer there.
 	Explicit bool
+
+	// Floor is the smallest value Field accepts, which is how far "set it
+	// to a smaller ceiling" can reach. Declared by the register entry
+	// beside Field, because the floor is the FIELD's (Tier A validates
+	// it) and not the budget's: [MinDomainCeiling] is where scaling stops,
+	// and the identity log's and the usage log's fields go well below it.
+	// A refusal that offered a smaller ceiling only above that gibibyte
+	// never offered one for a 512 MiB ask whose field takes 64 MiB.
+	Floor int64
+
+	// FollowsVolume reports that an UNSET Field is derived from the stream
+	// volume's free space — an empty volume and an enormous one size it
+	// differently — rather than being the log's own fixed default. Not
+	// declared but MEASURED, by [followsVolume], so it cannot disagree
+	// with the arithmetic it describes.
+	FollowsVolume bool
 }
 
 // StreamBudgetShare is how much of what the broker can grant the state logs
@@ -86,18 +97,25 @@ const StreamBudgetShare = 0.5
 
 // MinDomainCeiling is the floor a scaled-down ceiling never goes below.
 //
-// A gibibyte, which is the same floor Tier A's own validation enforces on an
-// explicit value: below it a log is not a log, it is a window that refuses
-// appends within a week of a company starting work.
+// A gibibyte, which is the floor Tier A's own validation enforces on the
+// CORPUS-SIZED logs' fields — the tracker's, the vector changelog's and the
+// knowledge base's — because below it a log that grows with a corpus is not a
+// log, it is a window that refuses appends within a week of a company starting
+// work. It is where SCALING stops and it is nobody's floor but theirs: the
+// identity estate's and the usage log's fields go down to 64 MiB,
+// a log that asks for less than this keeps what it asked for because scaling
+// never raises, and the capacity verb holds a target to the floor of the log's
+// own field ([capacityBounds]), never to this.
 const MinDomainCeiling int64 = 1 << 30
 
 // tierACeiling is where Tier A puts one domain's ceiling on a volume with free
 // bytes of headroom.
 //
-// A SWITCH RATHER THAN A METHOD on the domain, for [stateLog.applierFor]'s
-// reason: the Tier A field is the engine's vocabulary rather than the domain's,
-// and what this costs is that a new domain fails here, at boot, naming itself,
-// rather than reserving a default outside the budget.
+// A REGISTER FIELD RATHER THAN A METHOD on the domain, for
+// [stateLog.applierFor]'s reason: the Tier A field is the engine's vocabulary
+// rather than the domain's, and what this costs is that a new domain fails
+// here, at boot, naming itself, rather than reserving a default outside the
+// budget.
 //
 // # Why each is DERIVED, and from what
 //
@@ -130,29 +148,28 @@ const MinDomainCeiling int64 = 1 << 30
 // are the object store's, so nothing a repository grows to reaches this
 // ceiling.
 func tierACeiling(stream config.Stream, domain statelog.Domain, free int64) (domainCeiling, error) {
-	switch domain.Name() {
-	case tracker.Domain{}.Name():
-		bytes, derived := stream.LogMaxBytes(free)
-		return domainCeiling{Bytes: bytes, Field: "stream.tracker_log_max_bytes", Explicit: !derived}, nil
-	case search.Domain{}.Name():
-		bytes, derived := stream.VectorsMaxBytes(free)
-		return domainCeiling{Bytes: bytes, Field: "stream.tracker_vectors_max_bytes", Explicit: !derived}, nil
-	case pages.Domain{}.Name():
-		bytes, derived := stream.PagesMaxBytes(free)
-		return domainCeiling{Bytes: bytes, Field: "stream.pages_log_max_bytes", Explicit: !derived}, nil
-	case usage.Domain{}.Name():
-		// A CENSUS, NOT A SHARE OF THE DISK: one message per node-day
-		// object for the domain's history, so the default is fixed — and it
-		// is already the floor a scaled ceiling is held at.
-		bytes, explicit := stream.UsageMaxBytes()
-		return domainCeiling{Bytes: bytes, Field: "stream.usage_log_max_bytes", Explicit: explicit}, nil
-	case code.Domain{}.Name():
-		bytes, derived := stream.CodeMaxBytes(free)
-		return domainCeiling{Bytes: bytes, Field: "stream.code_log_max_bytes", Explicit: !derived}, nil
+	entry, found := registrationFor(domain.Name())
+	if !found || entry.Ceiling == nil {
+		return domainCeiling{}, fmt.Errorf("engine: domain %q is registered and Tier A "+
+			"declares no ceiling for its stream, so it would reserve its own default "+
+			"outside the budget every other state log is sized into", domain.Name())
 	}
-	return domainCeiling{}, fmt.Errorf("engine: domain %q is registered and Tier A "+
-		"declares no ceiling for its stream, so it would reserve its own default "+
-		"outside the budget every other state log is sized into", domain.Name())
+	ceiling := entry.Ceiling(stream, free)
+	ceiling.FollowsVolume = followsVolume(entry, stream)
+	return ceiling, nil
+}
+
+// followsVolume reports whether entry's ceiling, left unset, is derived from
+// the stream volume's free space.
+//
+// ASKED OF THE ENTRY'S OWN CEILING rather than declared beside it: a ceiling
+// depends on the disk exactly when an empty volume and an enormous one give it
+// different sizes. A flag written by hand would be a second statement of the
+// arithmetic, and the one nobody updates when a default stops following the
+// volume. An explicit ceiling follows nothing, whatever the default would do.
+func followsVolume(entry registration, stream config.Stream) bool {
+	empty, vast := entry.Ceiling(stream, 0), entry.Ceiling(stream, 1<<50)
+	return !empty.Explicit && empty.Bytes != vast.Bytes
 }
 
 // ceilingsFor sizes every registered domain's byte budget from Tier A and the
@@ -170,12 +187,40 @@ func ceilingsFor(ctx context.Context, host domainHost, boot *config.Bootstrap) (
 		// this engine runs on.
 		log.WarnContext(ctx, "statelog_free_space_unmeasured",
 			"path", volume, "error", err.Error(),
-			"detail", "every derived state-log ceiling falls back to its floor; "+
-				"set stream.tracker_log_max_bytes, stream.tracker_vectors_max_bytes, "+
-				"stream.pages_log_max_bytes, stream.usage_log_max_bytes and "+
-				"stream.code_log_max_bytes to choose them")
+			"detail", unmeasuredDetail(diskDerivedFields(boot.Stream)))
 	}
 	return sizeCeilings(ctx, host, boot.Stream, free, volume)
+}
+
+// diskDerivedFields is the Tier A field of every state log whose ceiling is
+// unset AND derived from the stream volume's free space — the ones a volume
+// this node cannot measure sizes at their smallest.
+//
+// ASKED OF THE REGISTER'S OWN CEILINGS rather than listed: a ceiling depends
+// on the disk exactly when an empty volume and an enormous one give it
+// different sizes. A list written beside the warning named three fields while
+// five logs were registered, and went on naming a field an operator had
+// already set.
+func diskDerivedFields(stream config.Stream) []string {
+	var fields []string
+	for _, entry := range register() {
+		if followsVolume(entry, stream) {
+			fields = append(fields, entry.Ceiling(stream, 0).Field)
+		}
+	}
+	return fields
+}
+
+// unmeasuredDetail is what a node that could not measure its stream volume
+// says it did about the ceilings that volume decides.
+func unmeasuredDetail(fields []string) string {
+	if len(fields) == 0 {
+		return "every state log's ceiling is set in Tier A or fixed, so none " +
+			"depends on the free space this node could not measure"
+	}
+	return "the ceilings derived from the volume's free space are sized as " +
+		"though it had none, which is each one's smallest; set " +
+		strings.Join(fields, ", ") + " to choose them"
 }
 
 // sizeCeilings is [ceilingsFor] on a volume already measured.
@@ -193,18 +238,22 @@ func ceilingsFor(ctx context.Context, host domainHost, boot *config.Bootstrap) (
 // UNSTATED IS NOT UNBOUNDED. An external broker whose account states no limit
 // still refuses a reservation its servers cannot back, and a client cannot
 // read their caps; the volume this node measured is the one figure it has, so
-// the same share of that bounds it.
+// it stands in for the limit, under the same rule ([logsGrantable]).
 //
-// # Why the held ceilings are added back to the one figure and not the other
+// # What each figure is, and what is taken off it
 //
 // The broker's figure is what it has LEFT, and a reservation spends it: once
 // the logs exist their ceilings are gone from it, so adding them back is what
 // hands a restart the number the creating boot had. Free space is spent by
 // bytes written and never by a reservation, so it still contains every ceiling
-// the logs hold. Adding them to it as well counted each one twice — a restart
-// sizing from its own disk divided a pool larger than its first boot's by half
-// of what the logs hold, and a log created beside them was handed that half on
-// top of the share.
+// the broker has granted, the logs' and every other stream's. Adding the logs'
+// ceilings to it as well counted each one twice: a restart sizing from its own
+// disk divided a pool larger than its first boot's by half of what the logs
+// hold. And taking nothing off it counted the OTHER reservations as room: the
+// object bucket is reserved before the logs are sized ([objectsReservation]),
+// a quarter of the same free space, and a pool of half of it on top reached
+// three quarters of the volume, the whole of an operator's server's default
+// cap, so that server refused the last log created.
 func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 	free int64, volume string) (map[string]domainCeiling, error) {
 
@@ -237,12 +286,12 @@ func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 			//
 			// But every log this boot DOES create is sized without
 			// knowing what that one holds: the division counts it at
-			// its ask rather than at its ceiling, and where the pool is
-			// the broker's figure its reservation is not added back to
-			// it either. Either can move a created log's ceiling up or
-			// down, and a created ceiling is kept for good — so the
-			// line says so, because the boot that follows succeeds and
-			// nothing else will.
+			// its ask rather than at its ceiling, and its reservation,
+			// which the broker reports among the ones it has granted,
+			// is not added back to the pool either. Either can move a
+			// created log's ceiling up or down, and a created ceiling is
+			// kept for good, so the line says so, because the boot that
+			// follows succeeds and nothing else will.
 			log.WarnContext(ctx, "statelog_ceiling_unread",
 				"domain", read.domain.Name(), "stream", read.domain.Stream().Name,
 				"error", read.err.Error(),
@@ -265,10 +314,7 @@ func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 			"detail", "the state logs' ceilings are sized from this node's free "+
 				"space instead, and the broker still refuses one it cannot reserve")
 	}
-	grantable := free
-	if available := budget.Available(); err == nil && available >= 0 {
-		grantable = available + holding
-	}
+	grantable := logsGrantable(budget, err, free, holding)
 	// A LIMIT OF ZERO FROM AN ACCOUNT THAT DECLARES NONE FOR THIS NODE IS
 	// SAID OUT LOUD, because the boot that follows does not say it.
 	//
@@ -326,6 +372,28 @@ func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 	return sized, nil
 }
 
+// logsGrantable is what the broker can grant the state logs if they held
+// nothing: the figure [StreamBudgetShare] is taken of.
+//
+// ONE RULE FOR EVERY BROKER: the limit, less every reservation the broker has
+// granted to a stream that is not a state log. Where the broker states its
+// limit, that is what it has left with the logs' own ceilings (holding) added
+// back. Where it states none this node can read, the stream volume's free
+// space stands in for the limit, and what the broker reports reserved beyond
+// the logs' own (the object bucket's, say) comes off it: free space already
+// contains the logs' ceilings, because a reservation never spends it, but no
+// byte of it can be granted twice. A budget that could not be read reports no
+// reservation, so free space is all this node has.
+func logsGrantable(budget jetstream.StorageBudget, readErr error, free, holding int64) int64 {
+	if readErr != nil {
+		return free
+	}
+	if available := budget.Available(); available >= 0 {
+		return available + holding
+	}
+	return max(free-max(budget.Committed-holding, 0), 0)
+}
+
 // heldCeiling is one log's answer to [domainHost.DomainStreamCeiling]: the
 // ceiling its stream already holds, whether it exists, or why the broker did
 // not say.
@@ -342,13 +410,13 @@ type heldCeiling struct {
 // # AT ONCE, because each read can take a whole lookup ceiling
 //
 // A read nobody answers is asked again for up to [jsprovision.LookupBudget]
-// ([jetstream.Queue.DomainStreamCeiling]), and asked one after another the four
-// reads cost the boot the PRODUCT, which nothing declared: against a broker
-// that answered none of them, two minutes went here, measured over sixty
-// requests on either topology, before the provision that follows began
-// spending its own [jsprovision.SequenceBudget]. Asked together, the pass costs
-// what its slowest read costs — one lookup ceiling, measured at thirty seconds
-// over the same sixty requests.
+// ([jetstream.Queue.DomainStreamCeiling]), and asked one after another — one
+// per registered log — the reads cost the boot the PRODUCT, which nothing
+// declared: against a broker that answered none of them, two minutes went
+// here, measured over sixty requests on either topology, before the provision
+// that follows began spending its own [jsprovision.SequenceBudget]. Asked
+// together, the pass costs what its slowest read costs — one lookup ceiling,
+// measured at thirty seconds over the same sixty requests.
 //
 // Rather than one ceiling SHARED by a sequence, because that bounds the pass
 // at the same thirty seconds while starving whichever read comes last: it
@@ -618,7 +686,26 @@ func (s *stateLog) specOf(domain statelog.Domain) (statelog.StreamSpec, domainCe
 // state logs are up. Every mode starts them, maintenance and seal included, so
 // a node refused here cannot run it: offering it sent the operator to a verb
 // that fails the same way. What is left is more room for the broker, or a
-// smaller ceiling for the log it refused, which the floor bounds.
+// smaller ceiling for the log it refused, which the FIELD's own floor bounds.
+//
+// # And how much room is enough
+//
+// "More room" alone sent an operator to add a little and be refused again by
+// the next log. So wherever a limit is in play the refusal quotes the least a
+// fresh node of this configuration reserves ([BrokerFloor]), split into the
+// logs at their floors and the nats object bucket, with the setting that
+// moves the bucket.
+//
+// # Where the ceiling came from, in one of three words
+//
+// SET, DERIVED or FIXED, because each says something different about what a
+// smaller one costs. A set ceiling is the operator's. A derived one followed
+// the volume's free space and was scaled into the logs' share of the broker,
+// and scaling stops at [MinDomainCeiling]. A fixed one is the log's own
+// default — the identity estate's and the usage log's, which do not follow the
+// volume and whose fields go below the gibibyte. Reading every unset ceiling as
+// derived told an operator refused a 512 MiB identity log that it went no
+// lower than a gibibyte, and withheld the smaller ceiling its field accepts.
 //
 // The budget is read AGAIN, at the refusal, rather than carried from sizing:
 // the logs created before this one have reserved since, and the number that
@@ -628,18 +715,30 @@ func (s *stateLog) storageRefused(ctx context.Context, host domainHost,
 
 	budget, err := host.StreamBudget(ctx)
 	had := roomLeft(budget, err, s.volume)
-	from := fmt.Sprintf("%s is unset, so the ceiling was derived and scaled into "+
-		"what the state logs that already exist leave of their share of the "+
-		"broker, and it goes no lower than %d bytes", ceiling.Field, MinDomainCeiling)
-	if ceiling.Explicit {
+	var from string
+	switch {
+	case ceiling.Explicit:
 		from = fmt.Sprintf("%s sets the ceiling", ceiling.Field)
-		if fits := budget.Available(); err == nil && fits >= MinDomainCeiling {
+		if fits := budget.Available(); err == nil && fits >= ceiling.Floor {
 			from += fmt.Sprintf(", and at most %d bytes fits", fits)
 		}
+	case ceiling.FollowsVolume:
+		from = fmt.Sprintf("%s is unset, so the ceiling was derived from the "+
+			"stream volume's free space and scaled into the state logs' share of "+
+			"the broker, and scaling takes it no lower than %d bytes",
+			ceiling.Field, MinDomainCeiling)
+	default:
+		from = fmt.Sprintf("%s is unset, so the ceiling is the log's own fixed "+
+			"default rather than a share of the stream volume's free space",
+			ceiling.Field)
 	}
 	remedy := "Give the broker more room"
-	if ceiling.Bytes > MinDomainCeiling {
-		remedy += fmt.Sprintf(", or set %s to a smaller ceiling", ceiling.Field)
+	if ceiling.Bytes > ceiling.Floor {
+		remedy += fmt.Sprintf(", or set %s to a smaller ceiling, no lower than "+
+			"its %d-byte floor", ceiling.Field, ceiling.Floor)
+	}
+	if s.floor.Limit > 0 && (err != nil || !noApplicableLimit(budget.Source)) {
+		remedy += "; " + s.floor.Sentence()
 	}
 	return fmt.Errorf("engine: the broker refused to reserve the %s log's "+
 		"ceiling: %s needed %d bytes and %s. %s. %s; the state logs that already "+

@@ -1,10 +1,11 @@
 /**
  * Editing one model from Settings › Models & keys: its model id, the keys it
- * rotates through, its endpoint and its bench times.
+ * rotates through, its endpoint and its bench times. A cli-agent entry holds
+ * at most one key, and only under `cli.auth.mode: api-key` (see [keySlots]).
  *
  * A NEW CONFIGURATION REVISION, not an act: a model is a `providers.llm`
  * entry, so the write is the entity PUT at `/config/llm-providers/{id}`
- * through `protocol/configWrite.ts`, guarded by the operator credential
+ * through `protocol/configWrite.ts`, guarded by Admin
  * (`useConfigWriteAccess`). It states the revision it was read from, so a
  * colleague's save in between is a conflict to re-read rather than an
  * overwrite.
@@ -40,17 +41,20 @@ import {
   formOf,
   inlinePlaceWords,
   keysKeepInlinePlaces,
+  keySlots,
   MAX_BENCH_SECONDS,
   MIN_BENCH_SECONDS,
   modelEntity,
   newKeyField,
   problemsByField,
   type KeyField,
+  type KeySlots,
   type ModelField,
   type ModelForm,
 } from "~/lib/models.ts";
 import { useSecretNames } from "~/lib/useSecretNames.ts";
-import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
+import { configGuardedReason, useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
+import { useWaiting } from "~/lib/waiting.ts";
 import {
   introducedWarnings,
   managedSentence,
@@ -84,7 +88,7 @@ type SaveState =
 function refusalWords(refusal: ConfigRefusal, id: string): string {
   switch (refusal.kind) {
     case "guarded":
-      return "The engine did not take this token as an operator's, so nothing was changed.";
+      return configGuardedReason(refusal.code);
     case "managed":
       return managedSentence(refusal.managedBy);
     case "conflict":
@@ -93,6 +97,8 @@ function refusalWords(refusal: ConfigRefusal, id: string): string {
         : `The configuration changed since ${id} was opened, so nothing was stored. Close this and edit it again from what is there now.`;
     case "draining":
       return `This node is draining and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`;
+    case "starting":
+      return `This node is still starting and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`;
     case "unreachable":
       return "The engine did not answer, so the change may or may not have been stored. Reopen the model before trying again.";
     case "problems":
@@ -110,6 +116,7 @@ export function EditModelDialog({
   onSaved: () => void;
 }) {
   const toast = useToast();
+  const waiting = useWaiting();
   const access = useConfigWriteAccess();
   const { names: secrets, refresh } = useSecretNames();
   const [loaded, setLoaded] = useState<Loaded>({ kind: "loading" });
@@ -152,7 +159,10 @@ export function EditModelDialog({
   useEffect(() => () => inflight.current?.abort(), []);
 
   const local = useMemo(
-    () => (form && loaded.kind === "entity" ? formErrors(form, loaded.read) : {}),
+    () =>
+      form && loaded.kind === "entity"
+        ? formErrors(form, loaded.read, keySlots(loaded.entity))
+        : {},
     [form, loaded],
   );
   const engine = state.kind === "refused" ? state.fields : {};
@@ -189,7 +199,6 @@ export function EditModelDialog({
       toast.show({
         variant: "success",
         title: `Saved ${id}`,
-        message: "Each node rebuilds its pools once it has applied the new configuration.",
       });
       onSaved();
       return;
@@ -257,7 +266,7 @@ export function EditModelDialog({
     : loaded.kind !== "entity"
       ? "The model has not been read."
       : busy
-        ? "Waiting for the engine to answer."
+        ? waiting.reason
         : unchanged
           ? "Nothing has changed."
           : undefined;
@@ -274,7 +283,6 @@ export function EditModelDialog({
       open
       size="md"
       title={`Edit ${id}`}
-      subtitle="Which model this entry serves, the keys it rotates through, and how long a refused key is benched."
       icon={<CpuGlyph />}
       onClose={onClose}
       onSubmit={press}
@@ -307,7 +315,7 @@ export function EditModelDialog({
             onChange={(model) => edit({ model })}
             disabled={busy}
             error={errorOf("model")}
-            help="The vendor's model id. A ${NAME} is resolved when the model is built."
+            help="The vendor’s model id."
             // FOCUS STARTS ON THE FIRST FIELD. The body is a skeleton when
             // the dialog opens, so the frame's own first-control rule found
             // only the footer and put the reader on Cancel.
@@ -321,7 +329,7 @@ export function EditModelDialog({
             onSecretsNeeded={refresh}
             disabled={busy}
             error={errorOf("keys")}
-            cli={cli}
+            slots={keySlots(loaded.entity)}
           />
           {!cli && (
             <ConfigField
@@ -347,7 +355,7 @@ export function EditModelDialog({
                 placeholder="3600"
                 disabled={busy}
                 error={errorOf("rateLimit")}
-                help={`Seconds a key the vendor answered 429 is left out, ${MIN_BENCH_SECONDS}–${MAX_BENCH_SECONDS}; empty is an hour. A Retry-After the vendor sends wins.`}
+                help={`Seconds, ${MIN_BENCH_SECONDS} to ${MAX_BENCH_SECONDS}. Empty is one hour.`}
               />
               <ConfigField
                 label="After an auth failure"
@@ -358,7 +366,7 @@ export function EditModelDialog({
                 placeholder="300"
                 disabled={busy}
                 error={errorOf("auth")}
-                help={`Seconds a key answered 401 or 403 is left out, doubling on each repeat, ${MIN_BENCH_SECONDS}–${MAX_BENCH_SECONDS}; empty is five minutes.`}
+                help={`Seconds, doubling each time, ${MIN_BENCH_SECONDS} to ${MAX_BENCH_SECONDS}. Empty is five minutes.`}
               />
             </div>
           </Disclosure>
@@ -383,7 +391,7 @@ function KeysEditor({
   onSecretsNeeded,
   disabled,
   error,
-  cli,
+  slots,
 }: {
   keys: ModelForm["keys"];
   /** The keys as read, whose inline places every gesture must keep. */
@@ -393,7 +401,7 @@ function KeysEditor({
   onSecretsNeeded: () => void;
   disabled: boolean;
   error: string | undefined;
-  cli: boolean;
+  slots: KeySlots;
 }) {
   const set = (i: number, value: string) =>
     onChange(keys.map((k, j) => (j === i ? { ...k, value } : k)));
@@ -402,16 +410,14 @@ function KeysEditor({
   const added = [...keys, newKeyField()];
   const held = inlinePlaceWords(keys);
   const lastLocked = keys.map((k) => k.value).lastIndexOf(REDACTED);
+  // AT ITS LIMIT, Add says why rather than offering a row the engine refuses:
+  // a cli-agent entry holds one key under api-key and none in any other mode.
+  const atLimit = keys.length >= slots.max;
+  const addReason = atLimit ? slots.full : kept(added) ? undefined : held;
   return (
     <fieldset className="mcp-add-pairs">
-      <legend className="t-label">{cli ? "Tokens" : "Keys"}</legend>
-      {keys.length === 0 && (
-        <p className="t-caption">
-          {cli
-            ? "None: the CLI uses the login in its state directory."
-            : "None: the model reads its vendor's own variable (ANTHROPIC_API_KEY or OPENAI_API_KEY). Add one as ${NAME} — typing $ offers the company's sealed secrets."}
-        </p>
-      )}
+      <legend className="t-label">{slots.legend}</legend>
+      {keys.length === 0 && <p className="t-caption">{slots.empty}</p>}
       {keys.map((k, i) => {
         const removable = kept(without(i));
         return (
@@ -420,9 +426,7 @@ function KeysEditor({
               {k.value === REDACTED ? (
                 <span className="model-key-locked">
                   <KeyGlyph size="sm" />
-                  <span className="model-key-locked-text">
-                    Key {i + 1} is written inline — its value is never sent here.
-                  </span>
+                  <span className="model-key-locked-text">Key {i + 1} is inline.</span>
                   <Button
                     variant="ghost"
                     size="small"
@@ -461,11 +465,7 @@ function KeysEditor({
             {/* SAID UNDER THE ROW IT IS ABOUT, once, after the last locked
                 row — under Add key it read as a rule about the new key. */}
             {i === lastLocked && (
-              <p className="t-caption">
-                Kept by its place in the list, so the list cannot grow or shrink while it is here.
-                Replace it with a <span className="mono">{"${NAME}"}</span> stored under Secrets to
-                add or remove keys.
-              </p>
+              <p className="t-caption">Replace it with a secret to add or remove keys.</p>
             )}
           </div>
         );
@@ -475,19 +475,21 @@ function KeysEditor({
           {error}
         </p>
       )}
-      <div>
-        <Button
-          variant="secondary"
-          size="small"
-          leadingIcon={<PlusGlyph size="sm" />}
-          disabled={disabled}
-          disabledReason={kept(added) ? undefined : held}
-          title={kept(added) ? undefined : held}
-          onClick={() => onChange(added)}
-        >
-          Add key
-        </Button>
-      </div>
+      {slots.max > 0 && (
+        <div>
+          <Button
+            variant="secondary"
+            size="small"
+            leadingIcon={<PlusGlyph size="sm" />}
+            disabled={disabled}
+            disabledReason={addReason}
+            title={addReason}
+            onClick={() => onChange(added)}
+          >
+            Add key
+          </Button>
+        </div>
+      )}
     </fieldset>
   );
 }

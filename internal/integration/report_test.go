@@ -11,8 +11,8 @@ import "testing"
 // formatting rule: a later edit that made `activating` read "connected", or
 // that split "setting up" back into two, would change what the screen claims.
 func TestEveryPhaseHasAConciseLabel(t *testing.T) {
-	// The control plane's own words (backlet's ReconcilePhase, rendered by
-	// the console), so one company reads the same status in either product.
+	// The words every screen renders, so one company reads the same status
+	// wherever it is shown.
 	want := map[Phase]string{
 		PhaseDisconnecting: "Disconnecting",
 		PhaseUnconfigured:  "Failed",

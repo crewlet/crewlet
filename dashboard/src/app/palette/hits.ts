@@ -11,24 +11,43 @@
  */
 
 import type { GlyphName } from "@crewlethq/icons/glyphs";
-import { DESTINATIONS } from "../nav.ts";
+import {
+  DESTINATIONS,
+  SIDEBAR_GROUPS,
+  WORKSPACES,
+  landingPath,
+  pathShown,
+  serviceShown,
+  workspaceRow,
+  type ServicesRun,
+  type SidebarPlace,
+  type WorkspaceRow,
+} from "../nav.ts";
+import { accessNames, holdsAny, type Grant } from "~/lib/access.ts";
 import type { Navigator } from "../router.tsx";
-import { resolve } from "../routes.ts";
+import { artifactPath, resolve } from "../routes.ts";
 import type { Recent } from "~/lib/recents.ts";
-import { DATE_FORMATS, DENSITIES, THEMES, type DateFormat, type ViewerPrefs } from "~/lib/prefs.ts";
+import { DENSITIES, THEMES, type ViewerPrefs } from "~/lib/prefs.ts";
 import type { OrgIndex, Seat, Unit } from "~/lib/seats.ts";
 import { COLLEAGUE_QUERY_MAX } from "~/contract/wire.ts";
+import { sequenceWords } from "../keymap.ts";
 import { utf8Bytes } from "~/lib/format.ts";
+import { KIND_WORDS } from "~/lib/artifacts/words.ts";
+import type { ArtifactKind, ArtifactListItem } from "~/protocol/index.ts";
 
 /**
  * The scopes, in the order the tab row draws them and Tab walks them.
  *
- * FIVE, because five questions do not fit one ranked list: the company's WORK
- * and its PAGES are server searches ranked by the engine and cannot be ranked
- * against a list of screens; finding a PERSON wants the roster and the
- * engine's own name tiers and nothing else, so a colleague is not buried
- * under four tools whose names happen to match; and running a COMMAND has no
- * name to search for at all. ALL is the launcher over the lot.
+ * SIX, because six questions do not fit one ranked list: the company's WORK,
+ * its PAGES and its ARTIFACTS are server searches ranked by the engine and
+ * cannot be ranked against a list of screens; finding a PERSON wants the
+ * roster and the engine's own name tiers and nothing else, so a colleague is
+ * not buried under four tools whose names happen to match; and running a
+ * COMMAND has no name to search for at all. ALL is the launcher over the lot.
+ *
+ * ARTIFACTS ARE ASKED IN THEIR OWN SCOPE ONLY. All already asks three server
+ * questions, and a fourth would take the slot the screen under the palette
+ * keeps; All offers a row that carries the term there instead.
  *
  * A SIGIL still opens three of them, typed in the same box in the same
  * keystroke as the query: `#` tasks, `@` agents, `>` actions. The sigil
@@ -37,8 +56,9 @@ import { utf8Bytes } from "~/lib/format.ts";
  */
 export const SCOPES = [
   { id: "all", label: "All" },
-  { id: "tasks", label: "Tasks", sigil: "#" },
-  { id: "pages", label: "Pages" },
+  { id: "tasks", label: "Tasks", sigil: "#", service: "tracker" },
+  { id: "pages", label: "Pages", service: "knowledge" },
+  { id: "artifacts", label: "Artifacts" },
   { id: "agents", label: "Agents", sigil: "@" },
   { id: "actions", label: "Actions", sigil: ">" },
 ] as const;
@@ -74,6 +94,9 @@ export const SEARCH_MIN = 2;
  * approved palette draws two or three of each.
  */
 export const TASK_HITS = 8;
+
+/** How many artifacts the Artifacts scope lists: a ranked answer is opened, not scrolled. */
+export const ARTIFACT_HITS = 8;
 export const ALL_ROWS = 3;
 
 /**
@@ -143,13 +166,45 @@ export function score(text: string, query: string): number {
   return (i === 0 ? 0 : 100 + i) + t.length / 100;
 }
 
+/**
+ * How well a field matches a query WORD BY WORD, lower is better, or -1: the
+ * whole query as [score] reads it, or else every word of it the start of some
+ * word of the field — so "two step" finds "two-step verification" and "my
+ * account" finds "my account" typed with a space too many. Ranked after every
+ * whole match, which is the reader's own spelling of the field.
+ */
+export function wordScore(text: string, query: string): number {
+  const whole = score(text, query);
+  if (whole >= 0) return whole;
+  const wanted = wordsOf(query);
+  if (wanted.length < 2) return -1;
+  const own = wordsOf(text);
+  return wanted.every((w) => own.some((o) => o.startsWith(w))) ? 1000 + text.length / 100 : -1;
+}
+
+/** A field's words, lowercase, split at anything that is not a letter or a digit. */
+function wordsOf(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean);
+}
+
 /** One row the palette offers, before it is drawn. */
 export interface Hit {
   id: string;
   icon: GlyphName;
+  /** An artifact's kind, drawn with the kind's own glyph in place of `icon`, as the gallery and the sidebar draw it. */
+  kind?: ArtifactKind;
   label: string;
   hint: string;
-  go: () => void;
+  /** A short fact at the row's end, never cut with the label as `hint` is. */
+  meta?: string;
+  /**
+   * Taking the row. The palette closes after it unless it returns `false`,
+   * which a row that leads into a step of the palette (Change theme) does.
+   */
+  go: () => boolean | void;
 }
 
 /** The ranked matches of a list, best first, capped. */
@@ -178,28 +233,172 @@ function ranked<T>(
 }
 
 /**
- * Where the reader just was, most recent first — what an empty palette should
- * offer, because the likeliest place to go is the one they just left.
+ * The ranked matches of a list whose fields come in TIERS, best first, capped:
+ * an item matched in an earlier tier outranks every item matched only in a
+ * later one, whatever the scores, and within a tier [wordScore] orders them.
  */
-export function recentHits(recents: readonly Recent[], nav: Navigator): Hit[] {
-  return recents.map((r) => ({
-    id: `recent-${r.path.join("/")}`,
-    icon: "clock",
-    label: r.label,
-    hint: r.workspace || r.path.join(" / "),
-    go: () => nav.to(r.path),
-  }));
+function rankedInTiers<T>(
+  items: readonly T[],
+  query: string,
+  tiers: (item: T) => readonly (readonly string[])[],
+  cap: number,
+): T[] {
+  const scored: { item: T; tier: number; s: number }[] = [];
+  for (const item of items) {
+    if (!query) {
+      scored.push({ item, tier: 0, s: 0 });
+      continue;
+    }
+    const fields = tiers(item);
+    for (let tier = 0; tier < fields.length; tier++) {
+      const s = Math.min(
+        ...(fields[tier] ?? []).map((f) => {
+          const v = wordScore(f, query);
+          return v < 0 ? Infinity : v;
+        }),
+      );
+      if (Number.isFinite(s)) {
+        scored.push({ item, tier, s });
+        break;
+      }
+    }
+  }
+  return scored
+    .sort((a, b) => a.tier - b.tier || a.s - b.s)
+    .slice(0, cap)
+    .map((x) => x.item);
 }
 
-/** The screens, matched by name. */
-export function destinationHits(query: string, nav: Navigator, cap: number): Hit[] {
-  return ranked(DESTINATIONS, query, (d) => [d.label], cap).map((d) => ({
-    id: `nav-${d.key}`,
-    icon: d.icon,
-    label: d.label,
-    hint: d.guarded ? `${d.hint} · needs a token` : d.hint,
-    go: () => nav.to(d.path),
-  }));
+/**
+ * Where the reader just was, most recent first: what an empty palette should
+ * offer, because the likeliest place to go is the one they just left. Not a
+ * place the company no longer runs the service for, whose page is a card on
+ * Integrations now.
+ */
+export function recentHits(recents: readonly Recent[], nav: Navigator, runs: ServicesRun): Hit[] {
+  return recents
+    .filter((r) => pathShown(r.path, runs))
+    .map((r) => ({
+      id: `recent-${r.path.join("/")}`,
+      icon: "clock",
+      label: r.label,
+      // THE WORKSPACE BY ITS NAME, as the sidebar says it: the stored value is
+      // its key, and "Q4 roadmap artifacts" read as one phrase.
+      hint:
+        WORKSPACES.find((w) => w.key === r.workspace)?.label ?? (r.workspace || r.path.join(" / ")),
+      go: () => nav.to(r.path),
+    }));
+}
+
+/**
+ * Who a destination's lock is read for: nobody signed in, the access of
+ * somebody who is, or `null` while the viewer has not said — when nothing is
+ * claimed either way, since a lock claimed on a guess is a refusal nobody made.
+ */
+export type Standing = { anonymous: true } | { anonymous: false; grants: readonly string[] } | null;
+
+/**
+ * The screens, matched by name — and then by the words a reader looks for one
+ * by ([Destination.keywords]), so "password" or "2fa" finds Account. A label
+ * match always ranks first, so a screen called what was typed is never pushed
+ * under one that merely holds it; the hint's prose is never searched.
+ *
+ * A SCREEN THE READER HOLDS NONE OF THE ACCESS FOR SAYS WHAT WOULD OPEN IT,
+ * and only then: "needs a token" named a credential a person signing in has no
+ * use for, and was drawn beside every guarded row for a reader who already
+ * held the access. To a reader NOBODY SIGNED IN it says "needs sign-in", the
+ * step before any access — naming one would tell them to hold something before
+ * they are anybody. To a reader who is, it names the access ("needs Tracker
+ * access").
+ */
+export function destinationHits(
+  query: string,
+  nav: Navigator,
+  cap: number,
+  standing: Standing,
+  runs: ServicesRun,
+): Hit[] {
+  // A PLACE READING A SERVICE THE COMPANY DOES NOT RUN IS NO DESTINATION, as
+  // it is no row (`nav.ts`'s `serviceShown`).
+  const offered = DESTINATIONS.filter((d) => serviceShown(d, runs));
+  const held = standing === null || standing.anonymous ? null : standing.grants;
+  return rankedInTiers(offered, query, (d) => [[d.label], d.keywords ?? []], cap).map((d) => {
+    // A WORKSPACE'S OWN ENTRY OPENS WHERE ITS ROW DOES ([landingPath]), and
+    // is locked as its row is (`workspaceMissing`): Settings is no lock to a
+    // reader holding Tracker, whose Token spend it opens on.
+    const row = d.key === d.workspace ? workspaceRow(d.workspace) : undefined;
+    const path = row ? landingPath(row, held, runs) : d.path;
+    const needs = row ? workspaceNeeds(row) : d.grants;
+    return {
+      id: `nav-${d.key}`,
+      icon: d.icon,
+      label: d.label,
+      hint: lockedHint(d.hint, needs, standing),
+      go: () => nav.to(path),
+    };
+  });
+}
+
+/** One heading of the empty palette's destinations. */
+export interface DestinationGroup {
+  /** The sidebar place it holds: `you`, `company`, `workspace`, `foot`, `menu`. */
+  place: SidebarPlace;
+  label: string;
+  hits: Hit[];
+}
+
+/**
+ * Every destination, under the sidebar's own headings, for the palette before
+ * anything is typed: the reader's own places as "Go to", then Company,
+ * Workspace, Settings and Account, each in the sidebar's order. One flat list
+ * of every place hid the tree the sidebar draws, and set look-alikes side by
+ * side with nothing to tell them apart (Token spend in Settings, Budgets in
+ * Company). A place no group names is headed by its first row's own name.
+ */
+export function destinationGroups(
+  nav: Navigator,
+  standing: Standing,
+  runs: ServicesRun,
+): DestinationGroup[] {
+  const hits = new Map(destinationHits("", nav, Infinity, standing, runs).map((h) => [h.id, h]));
+  const groups: DestinationGroup[] = [];
+  for (const d of DESTINATIONS) {
+    const hit = hits.get(`nav-${d.key}`);
+    const place = workspaceRow(d.workspace)?.place;
+    if (!hit || !place) continue;
+    let group = groups.find((g) => g.place === place);
+    if (!group) {
+      const named = SIDEBAR_GROUPS.find((g) => g.place === place)?.label;
+      const label = named || (place === "you" ? "Go to" : (workspaceRow(d.workspace)?.label ?? ""));
+      group = { place, label, hits: [] };
+      groups.push(group);
+    }
+    group.hits.push(hit);
+  }
+  return groups;
+}
+
+/**
+ * What opens some part of a workspace, as its sidebar row is locked
+ * (`workspaceOpen`): the workspace's own grants, else nothing where any
+ * section is open to every reader, else any grant that opens one section.
+ */
+function workspaceNeeds(row: WorkspaceRow): readonly Grant[] | undefined {
+  if (row.grants && row.grants.length > 0) return row.grants;
+  if (row.personal || row.sections.length === 0) return undefined;
+  if (row.sections.some((s) => s.personal || !s.grants || s.grants.length === 0)) return undefined;
+  return [...new Set(row.sections.flatMap((s) => s.grants ?? []))];
+}
+
+/** A destination's hint, and what it needs where the reader lacks it. */
+function lockedHint(
+  hint: string,
+  grants: readonly Grant[] | undefined,
+  standing: Standing,
+): string {
+  if (standing === null || !grants || grants.length === 0) return hint;
+  if (standing.anonymous) return `${hint} · needs sign-in`;
+  return holdsAny(standing.grants, grants) ? hint : `${hint} · needs ${accessNames(grants)} access`;
 }
 
 /**
@@ -222,7 +421,7 @@ export function idHits(term: string, nav: Navigator): Hit[] {
       id: `trace-${id}`,
       icon: "split",
       label: id,
-      hint: "as a trace — every event that carries it",
+      hint: "as a trace",
       // THE TRACE PAGE, which is the only screen that assembles one. This
       // pointed at the event log with `?trace=` once, a parameter that screen
       // did not read, and the reader landed on the whole log.
@@ -257,7 +456,19 @@ export function matchingUnits(index: OrgIndex, query: string, cap: number): Unit
   return ranked(index.units, query, (u) => [u.name], cap);
 }
 
-/** The tools matching a query; nothing on an empty one, since a tool is found by name. */
+/** The source the engine names its own agent tools by. */
+export const BUILTIN_TOOL_SOURCE = "builtin";
+
+/**
+ * The tools matching a query; nothing on an empty one, since a tool is found by
+ * name.
+ *
+ * THE ENGINE'S OWN AGENT TOOLS ARE LEFT OUT. They are how an agent works, not a
+ * place a reader goes, and "artif" listed `get_artifact` and
+ * `set_artifact_schema` above the artifacts a reader was looking for. They stay
+ * listed in Settings, under MCP Tools; what is offered here is a tool the
+ * company connected.
+ */
 export function toolHits(
   tools: readonly { name: string; source: string }[],
   query: string,
@@ -265,19 +476,51 @@ export function toolHits(
   cap: number,
 ): Hit[] {
   if (!query) return [];
-  return ranked(tools, query, (t) => [t.name], cap).map((tool) => ({
+  const connected = tools.filter((t) => t.source !== BUILTIN_TOOL_SOURCE);
+  return ranked(connected, query, (t) => [t.name], cap).map((tool) => ({
     id: `tool-${tool.name}`,
     icon: "wrench",
     label: tool.name,
     hint: tool.source,
-    go: () => nav.to(["settings", "tools"], { q: tool.name }),
+    go: () => nav.to(["settings", "mcp-tools"], { q: tool.name }),
   }));
 }
 
-/** The searches a term can be handed to whole, as the screens that run them. */
-export function searchHits(term: string, nav: Navigator): Hit[] {
+/** The artifacts a listing answered, as rows that open them. */
+export function artifactHits(items: readonly ArtifactListItem[], nav: Navigator): Hit[] {
+  return items.map((item) => ({
+    id: `artifact-${item.id}`,
+    icon: "layers",
+    kind: item.kind,
+    label: item.title,
+    // THE KIND AT THE ROW'S END, as a page's space is: a hint is cut with the
+    // label, and a long title took the kind with it.
+    hint: "",
+    meta: KIND_WORDS[item.kind],
+    go: () => nav.to(artifactPath(item.id)),
+  }));
+}
+
+/**
+ * The searches a term can be handed to whole, as the screens that run them:
+ * only those the company runs the service for.
+ */
+export function searchHits(term: string, nav: Navigator, runs: ServicesRun): Hit[] {
   if (!term) return [];
   return [
+    // THE COMPANY'S WORK FIRST, ranked as an agent ranks it: the full search
+    // with its modes, which the Tasks scope's own rows are the top of.
+    ...(runs.tracker
+      ? [
+          {
+            id: "search-work",
+            icon: "search",
+            label: `Search all work for “${term}”`,
+            hint: "ranked as an agent ranks it",
+            go: () => nav.to(["work", "search"], { q: term }),
+          } satisfies Hit,
+        ]
+      : []),
     {
       id: "search-events",
       icon: "chart-no-axes-gantt",
@@ -285,21 +528,19 @@ export function searchHits(term: string, nav: Navigator): Hit[] {
       hint: "the event log, filtered",
       go: () => nav.to(["live", "events"], { q: term }),
     },
-    {
-      id: "search-knowledge",
-      icon: "book-open",
-      label: `Knowledge search for “${term}”`,
-      hint: "every mode, every container",
-      go: () => nav.to(["knowledge"], { q: term }),
-    },
+    ...(runs.knowledge
+      ? [
+          {
+            id: "search-knowledge",
+            icon: "book-open",
+            label: `Knowledge search for “${term}”`,
+            hint: "every mode, every container",
+            go: () => nav.to(["knowledge"], { q: term }),
+          } satisfies Hit,
+        ]
+      : []),
   ];
 }
-
-const DATE_WORDS: Record<DateFormat, string> = {
-  auto: "this browser's own",
-  iso: "2026-09-22",
-  long: "September 22, 2026",
-};
 
 /**
  * The per-browser commands.
@@ -315,19 +556,38 @@ export function commandHits(
   query: string,
   actions: {
     copyLink: () => void;
-    setToken: () => void;
+    signIn: () => void;
     clearRecents: () => void;
     showKeys: () => void;
+    /** Step into the list of themes; the palette stays open. */
+    changeTheme: () => void;
+    /** The name of the theme in effect, for the row's hint. */
+    themeName: string;
+    /** Open the project switcher; null where the engine serves no company to switch in. */
+    switchProject: (() => void) | null;
     hash: string;
   },
 ): Hit[] {
-  const out: Hit[] = [];
+  const out: Hit[] = [
+    {
+      id: "cmd-theme",
+      icon: "palette",
+      label: "Change theme…",
+      hint: `${actions.themeName} is on`,
+      go: () => {
+        actions.changeTheme();
+        return false;
+      },
+    },
+  ];
+  // THE MODE IS ITS OWN CHOICE, named as the interface names it: light, dark
+  // or the machine's, whatever the theme.
   for (const choice of THEMES) {
     if (choice === prefs.theme) continue;
     out.push({
       id: `cmd-theme-${choice}`,
       icon: choice === "dark" ? "moon" : choice === "light" ? "sun" : "monitor",
-      label: `Theme: ${choice === "system" ? "match system" : choice}`,
+      label: `Mode: ${choice === "system" ? "match system" : choice}`,
       hint: choice === "system" ? "follow this machine's setting" : `always ${choice}`,
       go: () => prefs.setTheme(choice),
     });
@@ -342,28 +602,6 @@ export function commandHits(
       go: () => prefs.setDensity(choice),
     });
   }
-  for (const choice of DATE_FORMATS) {
-    if (choice === prefs.dateFormat) continue;
-    out.push({
-      id: `cmd-dates-${choice}`,
-      icon: "calendar",
-      label: `Dates: ${DATE_WORDS[choice]}`,
-      hint: "how every date is written, in this browser",
-      go: () => prefs.setDateFormat(choice),
-    });
-  }
-  // THE ZONE HAS FOUR HUNDRED VALUES, so the palette offers only the one
-  // choice that is a command rather than a search: going back to following
-  // the browser. Picking a zone is the preferences panel's searchable list.
-  if (prefs.timezoneChosen) {
-    out.push({
-      id: "cmd-zone-browser",
-      icon: "globe",
-      label: "Time zone: this browser's",
-      hint: `instead of ${prefs.timezone.replace(/_/g, " ")}`,
-      go: () => prefs.setTimezone(""),
-    });
-  }
   out.push(
     {
       id: "cmd-copy-link",
@@ -372,18 +610,21 @@ export function commandHits(
       hint: actions.hash,
       go: actions.copyLink,
     },
+    // WHO THIS BROWSER ACTS AS is a sign-in, never a token typed into a page
+    // any script could read back: the session cookie is the only credential
+    // the dashboard holds, and a Tier A token is exchanged for one there.
     {
-      id: "cmd-token",
+      id: "cmd-sign-in",
       icon: "key",
-      label: "Set the API token",
-      hint: "who this browser acts as",
-      go: actions.setToken,
+      label: "Sign in as somebody else",
+      hint: "or with an API token",
+      go: actions.signIn,
     },
     {
       id: "cmd-clear-recents",
       icon: "clock",
       label: "Clear recents",
-      hint: "this browser only",
+      hint: "yours, in this browser",
       go: actions.clearRecents,
     },
     // THE LEGEND HAS A ROW, because `?` is a key and the reader looking for
@@ -395,8 +636,23 @@ export function commandHits(
       hint: "every key, and where it works",
       go: actions.showKeys,
     },
+    ...(actions.switchProject ? [switchProjectHit(actions.switchProject)] : []),
   );
   return query ? ranked(out, query, (h) => [h.label], out.length) : out;
+}
+
+/**
+ * The switcher, as a row: it opens the panel Work's trail opens, from
+ * wherever the palette was, rather than going anywhere itself.
+ */
+export function switchProjectHit(open: () => void): Hit {
+  return {
+    id: "cmd-switch-project",
+    icon: "columns-3",
+    label: "Switch project…",
+    hint: `or ${sequenceWords("project")}, from anywhere`,
+    go: open,
+  };
 }
 
 /**

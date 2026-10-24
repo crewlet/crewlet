@@ -1,11 +1,17 @@
 // Package mcp connects the engine to Model Context Protocol servers and hands
 // their tools to a phase surface.
 //
-// It owns three things a caller must not have to reimplement:
+// It owns four things a caller must not have to reimplement:
 //
 //   - THE CHILD. A stdio server is a subprocess the engine forked. Its
 //     environment, its stderr, its death, and the tree it may have spawned
 //     underneath it are this package's problem, not the caller's.
+//   - ITS LIVENESS. A server's session can end at any moment after it
+//     started — a child crashes, a remote server forgets the session — and
+//     a start can fail for a reason that passes. Every server a bridge runs
+//     is supervised until it is stopped: the end is seen at the transport,
+//     the server restarted on a schedule, and its tools refuse honestly
+//     while it is down. See supervise.go.
 //   - THE DEADLINES. An MCP server's characteristic failure is not an error,
 //     it is a SILENCE. A server that launches and never completes the
 //     handshake, or answers tools/list and then never returns from a call,
@@ -18,13 +24,44 @@
 //     which names must come back out of the shared registry when that server
 //     stops, restarts thinner, or fails to come back at all.
 //
-// Four decisions here are load-bearing, and each replaced a real incident:
+// Six decisions here are load-bearing, and each replaced a real incident:
 //
+//   - A STDIO CHILD GETS AN ALLOWLIST, NEVER THE ENGINE'S ENVIRONMENT. Its
+//     environment is [hostbox]'s allowlist, the engine user's HOME, TMPDIR
+//     and XDG directories ([hostbox.HostUserEnv], because a server started
+//     through `npx` or `uvx` keeps its package cache there), and what its
+//     `env:` and the seat's `mcp_env` declare, the declaration winning — and,
+//     for a server whose command is `docker` or `podman`, the runtime's own
+//     settings besides ([hostbox.ContainerRuntime]), because that server IS
+//     the runtime's CLI. It is never os.Environ(). That was the obvious shape and it
+//     was this package's for a long time, on the reasoning that servers read
+//     undeclared conventional variables and narrowing the set would break
+//     them — and it handed every tool server the company declared the
+//     engine's keyring (which signs every session cookie and state-log
+//     record) and every Tier A token value: to a process pulled off a
+//     package registry that logs its
+//     environment on a crash, forwards it to its own children and reports
+//     it in telemetry. A server that needs anything else says so in `env:`,
+//     where a `${VAR}` passes the host's value on by name. IT IS NOT
+//     ISOLATION, and nothing here claims it is: the child runs as the
+//     engine's user and can read what that user can, the Tier A file and the
+//     engine's own /proc/<pid>/environ among it. What the allowlist removes
+//     is the engine HANDING its secrets to code that never asked for them;
+//     keeping a hostile server away from them takes a different user or a
+//     container. See mergedEnv.
 //   - REGISTRATION HAPPENS ONLY ON SUCCESS. A server recorded before its tools
 //     were discovered, whose discovery then failed, is a live subprocess with
 //     no tools that answers "yes" to Has: a live config edit reads it as
 //     healthy, the engine's own retry never fires, and the process sits there
-//     until shutdown.
+//     until shutdown. A bridge that retries failed starts keeps the SPEC of
+//     one, never a process or a tool, and Has still says no.
+//   - THE ENGINE WAITS FOR ITS OWN CHILD. The SDK's command transport waits
+//     for a child only inside its shutdown, so a server that died on its own
+//     was neither reaped nor noticed: its tools stayed in every catalogue and
+//     every call failed on a broken pipe until something restarted it — for
+//     a shared server the next config apply, which on a quiet company is
+//     never. The stdio transport is this package's own so that the one Wait
+//     is made from the start, and a death is an event (stdio.go).
 //   - THE DOOMED NAMES ARE CAPTURED BEFORE THE STOP. Stopping drops the
 //     bridge's own index, so anything asking afterwards "what did that server
 //     contribute?" gets an empty answer — and the names stay in the shared

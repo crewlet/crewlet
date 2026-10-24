@@ -11,15 +11,22 @@ import (
 )
 
 // botSuffix names the companion namespace an agent's own bot identity lives
-// in, alongside the namespace humans and tools address the same seat by.
+// in, beside the transport's own namespace.
 //
-// THE SPLIT IS REAL AND PER-BACKEND. The two halves of a chat integration
-// see different identifiers for one seat: an inbound payload names a poster
-// by bot/user id, while a human typing a mention and an MCP tool addressing
-// a colleague both use the member id or username. Registering under one
-// namespace only means a fellow agent's message resolves to nobody, and gets
-// annotated as a stranger while a human's identical message is annotated as
-// a colleague.
+// BOTH HOLD THE IDS AN EVENT NAMES ITS SENDER BY, and [Registry.ByExternalID]
+// consults both, so a fellow agent's message is annotated exactly as a
+// person's is. The companion holds what a surface gives an agent as a BOT —
+// a chat bot's user id, a GitHub App's bot login — and the transport's own
+// namespace everything else: the people's ids (a Slack member id, the user id
+// a Mattermost username resolves to), and an agent's own account where the
+// surface gives it no bot (a GitLab username, a Jira account id). Neither
+// holds an address a message is written with: a Mattermost username is
+// resolved to the id its posts carry before it is registered.
+//
+// Kept apart rather than in one map because the two are written by
+// different owners on different schedules — the human reconcile and the
+// people's transport, an integration's agents at connect or on an apply —
+// and each withdraws only what it wrote.
 //
 // DERIVED rather than a per-backend table. A table's failure mode is stated
 // plainly: it silently stops covering the third backend nobody remembered to
@@ -35,14 +42,15 @@ func BotNamespace(transport string) string { return transport + botSuffix }
 //
 // # It is BIDIRECTIONAL, and that is the whole point
 //
-// A seat's external id is not fixed for the life of a process: a config
-// apply can change a bot's username, and a transport routinely overwrites
-// its configured guess with the name the SERVER reports at connect. Writing
-// only the handle -> id direction would leave the OLD id still resolving to
-// this seat — a stale alias that outlives the seat's own decommission
-// (which removes only the current id) and then silently swallows a later
-// seat legitimately provisioned under the freed name. So a re-registration
-// withdraws the id this handle previously held in the same namespace.
+// A seat's external id is not fixed for the life of a process: an apply can
+// correct a person's member id, and a Mattermost person's username can come
+// to name another account, which the transport then registers in its
+// place. Writing only the handle -> id direction would leave the OLD id
+// still resolving to this seat — a stale alias that outlives the seat's own
+// decommission (which removes only the current id) and then silently
+// swallows a later seat legitimately registered under the freed id. So a
+// re-registration withdraws the id this handle previously held in the same
+// namespace.
 //
 // # A cross-seat steal is an ERROR, not a silent overwrite
 //
@@ -150,9 +158,11 @@ func (r *Registry) ByExternalID(transport, externalID string) (Party, bool) {
 	return r.ByHandle(handle)
 }
 
-// ExternalID is the id a seat is known by on a transport, for OUTBOUND
-// addressing: which bot to post as, which member to mention. Empty when the
-// seat has no identity there.
+// ExternalID is the id a seat is known by in a namespace: the reverse of
+// [Registry.ByExternalID], which is what a writer reads to withdraw the id it
+// registered for a seat. Empty when the seat has none there. It is the id an
+// event names the sender by, never an address: a Mattermost person's is a
+// 26-character user id, which no message can mention.
 func (r *Registry) ExternalID(namespace, handle string) string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -219,7 +229,35 @@ type Reconciliation struct {
 	// before the next pass — but a person who mysteriously never gets
 	// mentioned is otherwise invisible, so the count gives it a number.
 	Unresolved int
-	Conflicts  []Conflict
+	// Withheld counts declared identities left out because the identity
+	// directory says the seat's holder may not be reached — see
+	// [Standing]. Counted apart from Unresolved because the remedies are
+	// opposite: one is an environment variable, the other a person's
+	// standing that an administrator set on purpose.
+	Withheld  int
+	Conflicts []Conflict
+	// Shared is every id two or more human seats resolve to, registered for
+	// none of them.
+	Shared []SharedIdentity
+}
+
+// SharedIdentity is one id several human seats declared, which a reconcile
+// registers for none of them.
+//
+// VALIDATION CANNOT SEE ONE: it compares contacts as the chart writes them,
+// so two ${VAR} references that resolve to one value pass it. And one account
+// is not two people, so keeping either seat would be a guess — the reconcile
+// used to keep whichever it reached last, silently, and the other person's
+// mail and attribution went to them.
+//
+// Only the seats whose identities are registered contend: a seat the
+// directory withholds declares nothing this registry holds, so it shares
+// nothing with anybody.
+type SharedIdentity struct {
+	Namespace  string
+	ExternalID string
+	// Handles are the seats that declared it, in chart order.
+	Handles []string
 }
 
 // ReconcileHumanContacts brings the registry in line with the human seats'
@@ -237,20 +275,46 @@ type Reconciliation struct {
 // that happens to collide is left exactly where it is: a human must never
 // silently take over an agent's mapping, or the reverse.
 //
-// # Human ids need no integration
+// And an id two human seats both declare is registered for NEITHER, and
+// reported ([SharedIdentity]): whichever the walk reached last used to keep
+// it, which is a guess about which person an account is, made silently.
+//
+// # Human ids need no integration — except a NAME
 //
 // Unlike agent identities, which each transport resolves against the
 // third-party app at connect, a human's ids are declared in config.
 // Registration is therefore synchronous and runs at boot and on every org
 // swap, with no network and nothing to await.
 //
+// The exception is a contact the chart declares as the name a person is
+// addressed by on a surface whose events carry an account id instead
+// ([org.Transport.AddressedByName] — Mattermost's username). That name is
+// skipped here, because registered as written it is a key no event looks up:
+// every post its owner wrote reached the agents from a stranger. The
+// surface's transport resolves it against its server and registers the id it
+// is answered with, into this same registry.
+//
 // lookup resolves ${VAR} references; nil reads the process environment. An
 // identity whose reference does not resolve is skipped and counted, never
 // registered as its literal text — a raw ${VAR} matches no payload any
 // third-party app will ever send.
-func (r *Registry) ReconcileHumanContacts(o *org.Organization, lookup org.EnvLookup) Reconciliation {
+//
+// # And the directory decides who may still be reached
+//
+// standing is one reading of the identity directory ([Standing]): a seat whose
+// holder is suspended, retired or removed has its declared identities left out
+// — so on this registry an inbound message from them resolves to an outside
+// party, and nothing attributes their word to the seat. The reading is applied
+// to o through [Standing.Seats]. The zero Standing is chart-only and withholds nothing. The
+// registry remembers which reading it was built from ([Registry.Standing]),
+// because that reading is half of what it answers for.
+func (r *Registry) ReconcileHumanContacts(o *org.Organization, lookup org.EnvLookup,
+	standing Standing) Reconciliation {
+
 	var rec Reconciliation
-	desired := make(map[identityKey]string)
+	declared := make(map[identityKey][]string)
+	withheld := make(map[string]Withholding)
+	seats := standing.Seats(o)
 	if o != nil {
 		for role := range o.AllRoles() {
 			if !role.IsHuman() || role.Contact == nil {
@@ -260,13 +324,39 @@ func (r *Registry) ReconcileHumanContacts(o *org.Organization, lookup org.EnvLoo
 			if handle == "" {
 				continue
 			}
-			declared := len(role.Contact.Identities())
 			resolved := role.Contact.ResolvedIdentities(lookup)
-			rec.Unresolved += declared - len(resolved)
+			rec.Unresolved += len(role.Contact.Identities()) - len(resolved)
+			if why, ok := seats[handle]; ok {
+				// NOT REGISTERED, which is the whole of a withdrawal:
+				// a pair the previous pass registered is withdrawn
+				// below exactly as an edited contact is, and a fresh
+				// registry simply never holds it.
+				withheld[handle] = why
+				rec.Withheld += len(resolved)
+				continue
+			}
 			for _, id := range resolved {
-				desired[identityKey{string(id.Transport), id.ExternalID}] = handle
+				if id.Transport.AddressedByName() {
+					// The transport's to register: see "except a
+					// NAME" above. Still counted as declared and
+					// resolved, because an unset ${VAR} behind it
+					// is this function's to report either way.
+					continue
+				}
+				key := identityKey{string(id.Transport), id.ExternalID}
+				declared[key] = append(declared[key], handle)
 			}
 		}
+	}
+	desired := make(map[identityKey]string, len(declared))
+	for _, key := range slices.SortedFunc(maps.Keys(declared), compareIdentityKey) {
+		if handles := declared[key]; len(handles) > 1 {
+			rec.Shared = append(rec.Shared, SharedIdentity{
+				Namespace: key.namespace, ExternalID: key.externalID, Handles: handles,
+			})
+			continue
+		}
+		desired[key] = declared[key][0]
 	}
 
 	// Withdraw ours that are no longer wanted, BEFORE registering — an id
@@ -312,15 +402,24 @@ func (r *Registry) ReconcileHumanContacts(o *org.Organization, lookup org.EnvLoo
 
 	r.mu.Lock()
 	r.owned = owned
+	r.standing, r.withheld = standing, withheld
 	r.mu.Unlock()
-	if rec.Registered > 0 || rec.Withdrawn > 0 || len(rec.Conflicts) > 0 {
+	if rec.Registered > 0 || rec.Withdrawn > 0 || rec.Withheld > 0 ||
+		len(rec.Conflicts) > 0 || len(rec.Shared) > 0 {
 		log.Info("human_contacts_reconciled",
 			"registered", rec.Registered, "withdrawn", rec.Withdrawn,
-			"unresolved", rec.Unresolved, "conflicts", len(rec.Conflicts))
+			"withheld", rec.Withheld, "unresolved", rec.Unresolved,
+			"conflicts", len(rec.Conflicts), "shared", len(rec.Shared))
 	}
 	for _, c := range rec.Conflicts {
 		log.Warn("human_contact_id_conflict", "transport", c.Namespace,
 			"handle", c.Wanted, "already_held_by", c.HeldBy)
+	}
+	for _, shared := range rec.Shared {
+		log.Warn("human_contact_id_shared", "transport", shared.Namespace,
+			"handles", shared.Handles,
+			"detail", "these seats' contacts resolve to one account, which is "+
+				"registered for none of them: give each seat its own")
 	}
 	return rec
 }

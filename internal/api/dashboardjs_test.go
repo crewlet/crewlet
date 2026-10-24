@@ -195,9 +195,10 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 	}
 
 	// THE NOTICES TRAVEL WITH WHAT THEY COVER. The bundle redistributes React,
-	// the design system's three packages, the Geist faces and the Lucide
-	// drawings, all under licenses that require their text alongside, and the
-	// release archives and image copy this file from here. Written by the build
+	// the design system's three packages, the QR encoder the authenticator
+	// setup draws with, the Geist faces and the Lucide drawings, all under
+	// licenses that require their text alongside, and the release archives
+	// and image copy this file from here. Written by the build
 	// (vite.config.ts), so a build that lost `build.license` or the step
 	// appending the fonts and the glyphs leaves a tree that serves perfectly
 	// and owes notices it no longer carries.
@@ -217,6 +218,7 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 		"## @crewlethq/ui",              // the design system's components
 		"## @crewlethq/tokens",          // its palette, type and faces
 		"## @crewlethq/icons",           // its glyphs and marks
+		"## uqr - ",                     // the QR encoder (MIT, Project Nayuki's code)
 		"SIL OPEN FONT LICENSE",         // the font license, appended by sourceNotices
 		"The Geist Project Authors",     // naming the faces
 		"ISC License",                   // the Lucide drawings, appended too
@@ -501,8 +503,10 @@ func TestTheDesignSystemCascadesInOrder(t *testing.T) {
 		// and the `:focus-visible` copy that answered it drew a second ring
 		// on the field inside every kit Input and a clipped one on the command
 		// palette's field, which the kit draws with none.
-		for _, late := range bareFocus.FindAllIndex(sheet[first[0]:], -1) {
-			at := first[0] + late[0]
+		for _, at := range bareFocusRules(sheet) {
+			if at < first[0] {
+				continue
+			}
 			t.Errorf("%s declares a bare focus rule at %d, after the first component "+
 				"rule (%d): %q. It wins every one-class tie against a component's "+
 				"own focus treatment; leave the ring to @crewlethq/tokens/css/base, "+
@@ -564,13 +568,99 @@ var (
 	// baselineFocus matches the baseline's own focus rule: `:focus-visible` as
 	// a complete selector, which is how it is told from a component's.
 	baselineFocus = regexp.MustCompile(`(?:^|[{}])\s*:focus-visible\s*\{`)
-	// bareFocus matches any focus rule with no subject of its own — `:focus`
-	// or `:focus-visible` as a complete selector, alone or in a list, which
-	// is the one-class shape that ties with a component.
-	bareFocus = regexp.MustCompile(`(?:^|[{},])\s*:focus(?:-visible)?\s*[{,]`)
 	// componentRule matches the first rule of any design system component.
 	componentRule = regexp.MustCompile(`\.crewlet-[a-z]`)
 )
+
+// bareFocusRules returns where each focus rule with no subject of its own
+// starts: `:focus` or `:focus-visible` as a complete selector, alone or in a
+// list, which is the one-class shape that ties with a component.
+//
+// READ FROM THE SELECTOR LIST, NOT FROM A PATTERN OVER THE TEXT. A comma inside
+// a functional pseudo-class separates that function's arguments, not the
+// rule's selectors: `.crewlet-arrange-frame:is(:hover,:focus-visible)` has
+// one subject, the frame, and a pattern that took the comma for a selector
+// boundary read its `:focus-visible` as a bare rule. So a prelude is split at
+// the commas outside every parenthesis, and an at-rule's prelude (`@media`)
+// is never a selector list at all.
+func bareFocusRules(sheet []byte) []int {
+	var found []int
+	start, depth := 0, 0
+	var quote byte
+	for i := 0; i < len(sheet); i++ {
+		c := sheet[i]
+		switch {
+		case quote != 0:
+			switch c {
+			case '\\':
+				i++
+			case quote:
+				quote = 0
+			}
+		case c == '/' && i+1 < len(sheet) && sheet[i+1] == '*':
+			end := bytes.Index(sheet[i+2:], []byte("*/"))
+			if end < 0 {
+				return found
+			}
+			i += end + 3
+		case c == '"' || c == '\'':
+			quote = c
+		case c == '(':
+			depth++
+		case c == ')':
+			depth--
+		case depth > 0:
+		case c == '{':
+			if prelude := sheet[start:i]; !bytes.HasPrefix(bytes.TrimSpace(prelude), []byte("@")) {
+				part := start
+				for j := start; j <= i; j++ {
+					if j < i && sheet[j] == '(' {
+						depth++
+					} else if j < i && sheet[j] == ')' {
+						depth--
+					}
+					if j == i || (depth == 0 && sheet[j] == ',') {
+						if sel := strings.TrimSpace(string(sheet[part:j])); sel == ":focus" || sel == ":focus-visible" {
+							found = append(found, part+strings.Index(string(sheet[part:j]), ":"))
+						}
+						part = j + 1
+					}
+				}
+				depth = 0
+			}
+			start = i + 1
+		case c == '}' || c == ';':
+			start = i + 1
+		}
+	}
+	return found
+}
+
+// TestBareFocusRulesReadTheSelectorList holds the reading the cascade check
+// depends on: a bare rule is found alone, in a list and inside an at-rule,
+// and a component's own focus treatment is never one, whatever its
+// functional pseudo-classes hold.
+func TestBareFocusRulesReadTheSelectorList(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		css  string
+		want int
+	}{
+		{":focus-visible{outline:2px solid}", 1},
+		{"a,:focus{outline:none}", 1},
+		{":focus , :focus-visible{outline:none}", 2},
+		{"@media (min-width:1px){:focus-visible{outline:0}}", 1},
+		{".crewlet-arrange-frame.is-editing:is(:hover,:focus-visible,:has(:focus-visible)):after{outline:0}", 0},
+		{".crewlet-btn:focus-visible{outline:0}", 0},
+		{".x:not(:focus),.y{color:red}", 0},
+		{".x{content:\":focus-visible{\"}", 0},
+		{"/* :focus{ */.x{color:red}", 0},
+	} {
+		if got := len(bareFocusRules([]byte(tc.css))); got != tc.want {
+			t.Errorf("bareFocusRules(%q) found %d, want %d", tc.css, got, tc.want)
+		}
+	}
+}
 
 // protocolModule is the second build target: the socket client alone, which
 // internal/e2e replays captured frames through. No page imports it, so the
@@ -621,6 +711,36 @@ var priceForms = []priceForm{
 		"[\\[,]\\s*[\"'`][^\"'`\\n]*\\$\\s*[\"'`]\\s*,\\s*[^\"'`\\s\\]]")},
 }
 
+// priceExemptions is every span the bundle scan admits although a price form
+// matches inside it. Each is the design system's sheet model
+// (@crewlethq/ui SheetModel) handling an artifact sheet's own cells, which are
+// the author's data drawn in the format the author declared for the column,
+// never a figure the engine recorded: the carve-out rule 19 of
+// docs/reference/dashboard-design.md makes for a sheet's cells, as it does for
+// a record shown verbatim.
+//
+// EACH IS WRITTEN AS THE WHOLE CONSTRUCT, not as a word inside it, so a
+// currency format or a sign anywhere else is still refused, and a rewrite of
+// the sheet model that changes the construct's shape turns the gate red for a
+// reader to look at again rather than passing it.
+var priceExemptions = []*regexp.Regexp{
+	// A number column formatted in the currency its schema declares: the code
+	// is the column's own `currency`, chosen by its `numberStyle`.
+	regexp.MustCompile(`\w+\.numberStyle===` + quoted("currency") + `&&\w+\.currency\?` +
+		`new Intl\.NumberFormat\(\w+,\{style:` + quoted("currency") + `,currency:\w+\.currency[,}]`),
+	// A currency sign stripped from typed or pasted input before it is parsed
+	// as a number: a character class of a regular expression literal that
+	// holds currency signs and nothing else, which matches what a person
+	// typed and never draws anything.
+	regexp.MustCompile(`/(?:\^?\[[$€£¥]+\]\$?\|)*\^?\[[$€£¥]+\]\$?/[dgimsuvy]*`),
+}
+
+// quoted is a regular expression for word as a string literal in any of the
+// three quotes the minifier writes.
+func quoted(word string) string {
+	return "[\"'`]" + regexp.QuoteMeta(word) + "[\"'`]"
+}
+
 // A priceFound is one place a module holds a price, with the text around it,
 // since a byte offset into a minified megabyte tells a reader nothing.
 type priceFound struct {
@@ -641,14 +761,27 @@ var priceFormNeeds = func() []sourcetree.Prefilter {
 	return out
 }()
 
-// pricesInModule is every place a built module holds a price.
+// pricesInModule is every place a built module holds a price, outside the
+// spans priceExemptions admits.
 func pricesInModule(module []byte) []priceFound {
+	var admitted [][]int
+	for _, re := range priceExemptions {
+		admitted = append(admitted, re.FindAllIndex(module, -1)...)
+	}
+	inAdmitted := func(at []int) bool {
+		return slices.ContainsFunc(admitted, func(span []int) bool {
+			return span[0] <= at[0] && at[1] <= span[1]
+		})
+	}
 	var out []priceFound
 	for i, form := range priceForms {
 		if !priceFormNeeds[i].Admits(module) {
 			continue
 		}
 		for _, at := range form.re.FindAllIndex(module, -1) {
+			if inAdmitted(at) {
+				continue
+			}
 			from, to := max(0, at[0]-60), min(len(module), at[1]+40)
 			out = append(out, priceFound{form.what, string(module[from:to])})
 		}
@@ -730,6 +863,17 @@ func TestThePriceScanReadsWhatTheMinifierWrites(t *testing.T) {
 		{"a dollar in JSX", "(0,m.jsxs)(`b`,{children:[`$`,e]})", "writes a dollar sign before a rendered value"},
 		{"a spaced dollar in JSX", `(0,m.jsxs)("b",{children:["US$ ",t.amount]})`,
 			"writes a dollar sign before a rendered value"},
+		// The sheet model's admitted spans admit only themselves.
+		{"a currency format beside a sheet column's",
+			"e.numberStyle===`currency`&&e.currency?new Intl.NumberFormat(t,{style:`currency`,currency:e.currency,...r}):0;" +
+				"var c=new Intl.NumberFormat(t,{style:`currency`,currency:n})",
+			"asks Intl for its currency style"},
+		{"a currency format with a fixed code in the sheet's shape",
+			"e.numberStyle===`currency`&&e.currency?new Intl.NumberFormat(t,{style:`currency`,currency:`EUR`})",
+			"asks Intl for its currency style"},
+		{"a sign written back after a stripped one", "r=r.replace(/^[$€£¥]/g,``)+`€`",
+			"carries a currency sign"},
+		{"a sign class that holds more than signs", "r=r.replace(/[€a]/g,``)", "carries a currency sign"},
 	} {
 		t.Run("finds "+tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -749,6 +893,12 @@ func TestThePriceScanReadsWhatTheMinifierWrites(t *testing.T) {
 		{"a reference's opening sign", "w=C===``&&n.trimStart().startsWith(`$`)"},
 		{"an escaped reference", "var r=`\\${${e}}`;"},
 		{"a word that holds a code", "var e={focusUSDC:1};"},
+		// The design system's sheet model, as the build writes it today: a
+		// number column in the currency its schema declares, and the signs it
+		// strips from typed input before parsing a number.
+		{"a sheet column's declared currency", "return e.numberStyle===`percent`?new Intl.NumberFormat(t,{style:`percent`,...r}):" +
+			"e.numberStyle===`currency`&&e.currency?new Intl.NumberFormat(t,{style:`currency`,currency:e.currency,...r}):new Intl.NumberFormat(t,r)}"},
+		{"the signs a sheet strips from input", "if(i&&(r=r.slice(0,-1)),r=r.replace(/^[$€£¥]|[$€£¥]$/g,``),/^-?\\d{1,3}(,\\d{3})+$/.test(r))"},
 	} {
 		t.Run("leaves "+tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -884,8 +1034,19 @@ const (
 	// single-bundle build this replaced sent 403 KB here, the org builder —
 	// about 43% of the source — among it; the frame alone (the sidebar, the
 	// header, the palette, the socket client, React and the design system's
-	// sheet) measured about 230 KB when this budget was set.
-	initialBudget = 300 << 10
+	// sheet) measured about 230 KB when this budget was set. It had grown to
+	// 297 KiB by the time the rich editor came, which adds about 4 KiB here
+	// although its code is fetched only to edit: the shell sends every design
+	// system stylesheet in its one sheet, by rule (see
+	// TestNoLazyStylesheetCarriesTheDesignSystem), so the editor's 1.8 KiB of
+	// rules ride the first paint, and the Markdown grammar the reader's
+	// renderer and the editor share became a chunk of its own. It moved to
+	// 310 KiB then, still under two seconds on that link. The create pages
+	// took the load to 314.5 KiB, and it came back without a change here:
+	// their rules (3.1 KiB) arrive with them in create.css, and the command
+	// palette (about 10 KiB), mounted only while open, became a chunk of its
+	// own, which left it at 300.2 KiB.
+	initialBudget = 310 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -900,9 +1061,18 @@ const (
 	fontBudget = 90_000
 	// treeBudget is the whole of static/dashboard, raw, which is what every
 	// engine binary and image carries whether or not anybody opens the page.
-	// It measured about 2.3 MB when this was set; 3 MiB leaves room for the
-	// screens still to come and refuses a bundle that doubled.
-	treeBudget = 3 << 20
+	// It measured about 2.3 MB when first set at 3 MiB. The artifacts
+	// workspace (the gallery, the viewer, the native sheet, presence and
+	// version compare) took it from about 2.85 MiB to about 3.05 MiB, the
+	// screen that room was left for, and it moved to 3.5 MiB then: room for
+	// the screens still to come, while a bundle that doubled from the 2.3 MB
+	// baseline is still refused. The rich editor that Knowledge pages and doc
+	// tabs are edited in took it from about 3.23 MiB to about 3.53 MiB: its
+	// chunk is about 270 KB raw, ProseMirror being 228 KB of it, and the
+	// notices of the ten packages it brings add 15 KB. That chunk is fetched
+	// only when somebody edits, so no reader's first paint pays for it, and it
+	// moved to 4 MiB then, which still refuses a doubled baseline.
+	treeBudget = 4 << 20
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

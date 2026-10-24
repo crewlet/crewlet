@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/colleague"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // ColleagueQueryMax bounds the text `colleague` resolves, in bytes.
@@ -54,13 +55,20 @@ type colleagueAnswer struct {
 // colleague on the strength of a suggestion was guessed at, and the engine
 // does not guess (`agent/colleague`'s rule).
 //
-// THE CHAT-ID TIER NEEDS A CREDENTIAL. A seat's contact identities are read
-// only through the operator-gated configuration (organization-model.md, "What
-// anyone can read about a seat"), and an exact-id tier answered to an
-// anonymous caller would be an oracle for them: paste an id, learn whose it
-// is. So an anonymous caller resolves over handles and names alone — the
-// public projection's own fields — and a caller holding a token over
-// everything the agent's lookup reads.
+// THE CHAT-ID TIER IS AN ADMIN'S. A seat's contact identities are read only
+// by whoever reads the company document — an admin (organization-model.md,
+// "What a signed-in reader can see about a seat") — and an exact-id tier
+// answered to everybody the overview is would be an oracle for them: paste an
+// id, learn whose it is. So a caller who is not an admin resolves over handles
+// and names alone, and an admin over everything the agent's lookup reads. An
+// AGENT's own `lookup_colleague` keeps every tier, because a seat mentions a
+// person by the id the chat surface knows them by and could not otherwise.
+//
+// AND A WITHHELD PERSON IS WITHHELD HERE TOO: the corpus is built with the
+// identity directory's withholding ([Sources.WithheldContacts]), exactly as a
+// seat's own lookup is, so a person the directory has suspended is not offered
+// as somebody to hand work to from a screen while every agent is told they
+// cannot be reached.
 func (s Sources) colleague(ctx context.Context, p Params) (any, error) {
 	text := strings.TrimSpace(p.String("q"))
 	if text == "" {
@@ -71,8 +79,20 @@ func (s Sources) colleague(ctx context.Context, p Params) (any, error) {
 			"most %d — send the name, not the sentence around it",
 			ErrBadParams, len(text), ColleagueQueryMax)
 	}
-	corpus := builtin.Corpus(s.organization(), s.Env)
-	if operatorFrom(ctx) == "" {
+	principal, how := iam.From(ctx)
+	if how == iam.Unknown {
+		return nil, unresolved(ctx, "colleague")
+	}
+	var withheld func(handle string) bool
+	if s.WithheldContacts != nil {
+		withheld = s.WithheldContacts()
+	}
+	// THE CONTACT IDS THROUGH THE NODE'S OWN CHAIN ([Sources.Env]), which
+	// is where a seat's own lookup resolves the same fields: an id sealed in
+	// the secret store, read here from the process environment, was a person
+	// the exact-id tier could not find.
+	corpus := builtin.Corpus(s.organization(), s.Env, withheld)
+	if !principal.Can(iam.GrantAdmin) {
 		for i := range corpus {
 			corpus[i].External = nil
 		}

@@ -37,41 +37,9 @@ import { StateBadge } from "~/components/common.tsx";
 import { plural } from "~/lib/format.ts";
 import type { BuilderApi } from "./BuilderContext.tsx";
 import type { NodeView, ReportingItem, SeatView, UnitView } from "./chartModel.ts";
-import { CrewletIcon } from "@crewlethq/icons";
-import {
-  NetworkGlyph,
-  BuildingComplexGlyph,
-  Repeat2Glyph,
-  LinkGlyph,
-  BellGlyph,
-  UserGlyph,
-  TriangleAlertGlyph,
-  cssLength,
-  type GlyphSize,
-} from "@crewlethq/icons/glyphs";
-
-/** "Agent seat" or "Human seat". */
-export function seatKindLabel(view: Pick<SeatView, "kind">): string {
-  return view.kind === "human" ? "Human seat" : "Agent seat";
-}
-
-/**
- * A unit's own type, capitalised: the word a chart node and a table row write
- * under the unit's name.
- *
- * CAPITALISED, and in ONE place. The type is the founder's own word from the
- * document, so the first letter is the only thing touched; written out on both
- * surfaces it drifted, and one draft read "Team" on the card and "team" on the
- * row beside it.
- */
-export function unitTypeLabel(view: Pick<UnitView, "unitType">): string {
-  const type = view.unitType.trim();
-  if (type === "") return "Unit";
-  return type.charAt(0).toUpperCase() + type.slice(1);
-}
-
-/** Which of the four things a node is, for the mark that stands for it. */
-export type NodeGlyphKind = "company" | "unit" | "agent" | "human";
+import type { TreeCardTone } from "@crewlethq/ui";
+import { seatTone, type NodeGlyphKind } from "~/ui/orgNodes.tsx";
+import { Repeat2Glyph, LinkGlyph, BellGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
 
 /** The kind of mark a node view wears. */
 export function nodeGlyphKind(view: NodeView): NodeGlyphKind {
@@ -80,40 +48,14 @@ export function nodeGlyphKind(view: NodeView): NodeGlyphKind {
   return view.kind === "human" ? "human" : "agent";
 }
 
-/**
- * A node's mark: a building for the company, a tree for a unit, a person for a
- * human seat and the Crewlet figure for an agent seat.
- *
- * ONE MAPPING FOR EVERY SURFACE, because a node marked three ways is a node a
- * reader has to learn three times. The chart's cards, the table's rows and the
- * head of the editor over either of them all draw this: the editor's own head
- * used to draw a pencil on all four, which said the panel edits rather than
- * what it is editing, and the table and the chart each held a copy of the
- * mapping beside it.
- *
- * SIZE IS THE CALLER'S, and its absence means the mark takes the font size of
- * the zone it is in, which is how the chart gives an agent seat three quarters
- * of its icon zone and a unit half of it. Every drawing here answers `1em` by
- * default, the Crewlet figure included.
- *
- * A HUMAN'S FIGURE IS THE EXCEPTION, because it is the one mark drawn INSIDE
- * something: the dashed boundary that says this seat is a person outside the
- * system, held at the 24px target floor. At the zone's own step the figure
- * measured 20px inside that 24px ring and touched it on every side; the small
- * step leaves the air the boundary needs to read as a boundary. A caller that
- * says a size still gets it.
- */
-export function NodeGlyph({ kind, size }: { kind: NodeGlyphKind; size?: GlyphSize }) {
-  if (kind === "company") return <BuildingComplexGlyph size={size} />;
-  if (kind === "unit") return <NetworkGlyph size={size} />;
-  if (kind === "human") return <UserGlyph size={size ?? "sm"} />;
-  const side = cssLength(size);
-  return <CrewletIcon width={side} height={side} />;
+/** The hue a node is drawn in: an agent seat's own colour, or none. */
+export function nodeTone(view: NodeView | undefined): TreeCardTone | undefined {
+  return view?.type === "seat" ? seatTone(view.kind, view.avatar) : undefined;
 }
 
 /** A seat's handle as written beside its name, or what stands in for one not reported yet. */
-export function handleLabel(handle: string | undefined): string {
-  return handle ? `@${handle}` : "Handle after the check";
+export function handleLabel(handle: string): string {
+  return `@${handle}`;
 }
 
 /** A seat's primary manager, "No manager", or what stands in while no check of this draft has said. */
@@ -123,16 +65,15 @@ export function managerLabel(manager: string | null | undefined): string {
 }
 
 /**
- * The live state of a saved agent seat. Looked up by the handle and name the
- * SAVED company gives it, because that is what the running seat is called
- * until this draft is saved and applied.
+ * The live state of a saved agent seat. Looked up by the handle the SAVED
+ * company gives it — the roster row's `id` — because that is what the running
+ * seat answers to until this draft is saved and applied; never by its name,
+ * which two seats may share.
  */
 export function LiveState({ api, view }: { api: BuilderApi; view: SeatView }) {
   if (!view.running || !view.saved) return null;
-  const { handle, name } = view.saved;
-  const agent =
-    (handle ? api.agents.find((a) => a.handle === handle) : undefined) ??
-    api.agents.find((a) => a.role === name);
+  const { handle } = view.saved;
+  const agent = handle ? api.agents.find((a) => a.id === handle) : undefined;
   return (
     <span className="bnode-state">
       <StateBadge agent={agent} />

@@ -22,34 +22,60 @@
  *
  * # What storage is for in this product
  *
- * Per-browser conveniences and nothing else: a token, a theme, the stars and
+ * Per-browser conveniences and nothing else: a mode and a theme, the stars and
  * recents a reader keeps, the width they dragged a panel to, an org draft not
- * yet saved. Nothing the COMPANY agrees on lives here — that is the engine's —
- * and every reader wraps each access in a try/catch, because a private window
- * throws on the accessor and a cleared profile answers nothing.
+ * yet saved, and which person a tab was last read by. Nothing the COMPANY
+ * agrees on lives here (that is the engine's), and every reader wraps each
+ * access in a try/catch, because a private window throws on the accessor and a
+ * cleared profile answers nothing.
+ *
+ * AND NEVER A CREDENTIAL. The session is a cookie no script can read, and a
+ * bearer kept here is one any script injected into the page reads too.
+ *
+ * A KEY MAY BE A PREFIX, for a list kept PER READER (`lib/recents.ts`,
+ * `lib/starred.ts`): the reader's id follows it, so one browser shared by two
+ * people holds two lists, and the sign-in that hands the browser on deletes
+ * every one but the signing-in person's (`lib/reader.ts`).
  */
 
 export const STORAGE_KEYS = {
-  /** The API token this browser presents (`protocol/authToken.ts`). */
-  apiToken: "crewlet_api_token",
-  /** Light, dark or the system's (`lib/prefs.ts`). */
+  /** The mode: light, dark or the system's (`lib/prefs.ts`). */
   theme: "crewlet_theme",
+  /**
+   * The theme, one of `themeRegistry`'s ids (`lib/prefs.ts`); anything else
+   * reads as no choice, which is the default theme.
+   */
+  palette: "crewlet_palette",
   /** Compact, normal or comfortable (`lib/prefs.ts`). */
   density: "crewlet_density",
-  /** The zone timestamps are drawn in; empty is the browser's (`lib/prefs.ts`). */
-  timezone: "crewlet_timezone",
-  /** How a date is written (`lib/prefs.ts`). */
-  dateFormat: "crewlet_date_format",
-  /** Objects this reader opened, for the palette (`lib/recents.ts`). */
-  recents: "crewlet_recents",
-  /** Pages this reader starred, for the sidebar (`lib/starred.ts`). */
-  starred: "crewlet_starred",
+  /**
+   * The PREFIX of each reader's list of objects they opened, for the palette
+   * (`lib/recents.ts`): the reader's id follows it.
+   */
+  recents: "crewlet_recents/",
+  /**
+   * The PREFIX of each reader's starred pages, for the sidebar
+   * (`lib/starred.ts`): the reader's id follows it.
+   */
+  starred: "crewlet_starred/",
+  /**
+   * The PREFIX of each reader's Home board, the widgets they placed and how
+   * they arranged them (`routes/home/board/model.ts`): the reader's id
+   * follows it.
+   */
+  homeBoard: "crewlet_home_board/",
+  /**
+   * Which principal this TAB was last read by, in `sessionStorage` rather
+   * than `localStorage` — it describes one tab, and goes with everything else
+   * the tab holds (`lib/reader.ts`).
+   */
+  reader: "crewlet_reader",
   /** The width the reader dragged the detail rail to (`app/frame/DetailRail.tsx`). */
   peekWidth: "crewlet.peek.width",
   /** An org draft not yet saved (`routes/org/builder/model/persistence.ts`). */
   orgDraft: "crewlet_org_draft",
-  /** The folders open in the Knowledge tree, for this tab (`routes/knowledge/KnowledgeTree.tsx`). */
-  knowledgeOpen: "crewlet.knowledge.open",
+  /** How the Artifacts gallery is drawn, `grid` or `list` (`routes/artifacts/Gallery.tsx`). */
+  artifactsShape: "crewlet.artifacts.shape",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

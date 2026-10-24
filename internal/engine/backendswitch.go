@@ -11,16 +11,16 @@ import (
 //
 // # Why a switch is not live
 //
-// A node's native runtime — the state log, the tracker's and the knowledge
-// base's read and write sides, the code host's committer, the index, the
-// feeds — is built ONCE per process ([Engine.startNative], or
+// A node's native runtime — the tracker's and the knowledge base's read and
+// write sides over the core's logs, the code host's committer and git surface,
+// the index, the feeds — is built ONCE per process ([Engine.startNative], or
 // [Engine.startRemote] on a node without `data`), from whichever company
-// started it, and it follows the fleet's logs rather than a revision.
-// Tearing a half down or bringing one up beside a running register at an
-// apply would restart every applier and re-run every boot reconcile on a
-// configuration edit; so a revision that turns a native half on or off
-// activates normally, reports `ok`, and changes nothing here until the
-// process restarts.
+// started it, and it follows the fleet's logs rather than a revision. The
+// logs themselves are the core's and run from boot whatever the company says
+// (core.go). Tearing a half down or bringing one up at an apply would rebuild
+// the index and the feeds and re-run every boot reconcile on a configuration
+// edit; so a revision that turns a native half on or off activates normally,
+// reports `ok`, and changes nothing here until the process restarts.
 //
 // # Why it is said, once per activation
 //
@@ -158,9 +158,10 @@ func (e *Engine) runtimeBuilt() (builtWith, bool) {
 //
 // Only ever said over a runtime that EXISTS: its caller returns first on a
 // node running none. Nor could such a node have anything to say — an apply
-// whose company names a native backend starts the runtime from that very
-// company at its `native` stage ([Engine.startNativeFor]), before the stage
-// that says this, so the first runtime an apply meets always agrees with it.
+// starts the runtime from its own company at its `native` stage
+// ([Engine.startNativeFor]), whatever backends that company names, before the
+// stage that says this, so the first runtime an apply meets always agrees with
+// it.
 func (e *Engine) sayBackendSwitches(ctx context.Context, built builtWith, c *Company) {
 	for _, s := range backendSwitches(built, c.Config) {
 		log.WarnContext(ctx, "native_backend_needs_restart", "field", s.Field,

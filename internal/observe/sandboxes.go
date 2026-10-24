@@ -2,6 +2,7 @@ package observe
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 
@@ -77,8 +78,9 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context) error {
 }
 
 // Start runs the reconcile every interval until Stop, the first one interval
-// from now — the boot's own reconcile is the caller's, made before the listener
-// binds so the first snapshot a socket gets already holds the fleet's runs.
+// from now — the boot's own reconcile is the caller's, made before the node
+// hands its listener the API surface (`crewlet run`'s serveAPI), so the first
+// snapshot a socket gets already holds the fleet's runs.
 func (r *SandboxReconciler) Start(ctx context.Context) {
 	if r == nil {
 		return
@@ -155,8 +157,13 @@ func SandboxRecords(runs []sandbox.PendingRun) []livestate.SandboxRecord {
 			Status:    status,
 			StartedAt: isoOrEmpty(started),
 			Question:  run.Question, Audience: run.Audience,
-			WorkItem: run.WorkItem,
-			Owner:    run.Owner,
+			// WHO THE QUESTION IS PUT TO, which only the record knows: a
+			// reader whose own record is among them is shown the
+			// question whatever their reach to the seat that asked —
+			// see [livestate.SandboxEntry.For].
+			AudienceHandles: slices.Clone(run.AudienceHandles),
+			WorkItem:        run.WorkItem,
+			Owner:           run.Owner,
 		}
 		// HELD, NOT STAMPED — the reading the pause reaper acts on and the
 		// `sandbox_runs` board draws, so a parked run whose pause instant

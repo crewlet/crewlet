@@ -10,9 +10,11 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -22,8 +24,8 @@ func bootstrapWithKeyring(t *testing.T, keys ...string) string {
 	t.Helper()
 	dir := t.TempDir()
 	var b strings.Builder
-	fmt.Fprintf(&b, "node:\n  id: cli-test\nstore:\n  path: %s\n",
-		filepath.Join(dir, "index.db"))
+	fmt.Fprintf(&b, "node:\n  id: cli-test\nstore:\n  path: %s\n%s",
+		filepath.Join(dir, "index.db"), fixtureStream(dir))
 	fmt.Fprintf(&b, "secrets:\n  active_key_id: %s\n  keys:\n", keys[0])
 	for i, id := range keys {
 		key := make([]byte, 32)
@@ -138,7 +140,7 @@ func TestWithoutAKeyringTheCommandSaysHowToGetOne(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	body := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n",
-		filepath.Join(dir, "index.db"))
+		filepath.Join(dir, "index.db")) + fixtureStream(dir)
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write bootstrap: %v", err)
 	}
@@ -234,7 +236,8 @@ func rekeyedConfig(t *testing.T, from, active string, others ...string) string {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "node:\n  id: cli-test\nstore:\n  path: %s\n", storePath)
+	fmt.Fprintf(&b, "node:\n  id: cli-test\nstore:\n  path: %s\n%s", storePath,
+		fixtureStream(filepath.Dir(storePath)))
 	fmt.Fprintf(&b, "secrets:\n  active_key_id: %s\n  keys:\n", active)
 	// k1 keeps the material bootstrapWithKeyring gave it (index 0), so what
 	// it sealed still opens; the new key is fresh.
@@ -374,20 +377,36 @@ func TestARekeyDryRunReportsWithoutWriting(t *testing.T) {
 }
 
 // PROVENANCE IS RECORDED, so "where did this credential come from" has an
-// answer months later.
+// answer months later — and it is the command's own, never a word its caller
+// picked. `-source` once stamped whatever it was given, so a row could claim
+// any path; the flag is gone, and a stopped node's table records `cli`.
+// Mutation: stamp another word in setSecret and the row's source fails.
 func TestTheProvenanceOfAWriteIsRecorded(t *testing.T) {
 	cfg := bootstrapWithKeyring(t, "k1")
 	t.Setenv("CREWLET_OPERATOR", "sam")
-	if _, errs, err := secretsCmd(t, cfg, "set", "TOKEN",
-		"-value", "v", "-source", "gitlab-provision"); err != nil {
+	if _, _, err := secretsCmd(t, cfg, "set", "TOKEN",
+		"-value", "v", "-source", "gitlab-provision"); err == nil ||
+		!strings.Contains(err.Error(), "-source") {
+		t.Fatalf("set -source answered %v, want the flag refused as one the "+
+			"command does not take", err)
+	}
+	if _, errs, err := secretsCmd(t, cfg, "set", "TOKEN", "-value", "v"); err != nil {
 		t.Fatalf("set: %v (%s)", err, errs)
 	}
 	list, _, err := secretsCmd(t, cfg, "list")
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if !strings.Contains(list, "sam") || !strings.Contains(list, "gitlab-provision") {
-		t.Fatalf("listing = %q, want the operator and the source", list)
+	var row []string
+	for _, line := range strings.Split(list, "\n") {
+		if fields := strings.Fields(line); len(fields) > 0 && fields[0] == "TOKEN" {
+			row = fields
+		}
+	}
+	if len(row) == 0 || !slices.Contains(row, "sam") ||
+		row[len(row)-1] != string(secrets.SourceCLI) {
+		t.Fatalf("listing = %q, want TOKEN's row to name sam and end in the "+
+			"source %q", list, secrets.SourceCLI)
 	}
 }
 
@@ -400,11 +419,15 @@ func TestTheProvenanceOfAWriteIsRecorded(t *testing.T) {
 // route that puts a value on every node.
 func TestALockedStoreIsRoutedThroughTheRunningNode(t *testing.T) {
 	t.Parallel()
-	boot := bootWithAPI(t, "127.0.0.1", 8080, "ops-token")
+	// THE CREDENTIAL IS THE OPERATOR'S OWN, which is what routing through
+	// a node now needs: the command no longer helps itself to the first
+	// entry of the Tier A list it just parsed.
+	operator := tokenEnviron("ops-token")
+	boot := bootWithAPI(t, "127.0.0.1", 8000, "ops-token")
 	locked := fmt.Errorf("open store: %w: /var/lib/crewlet/index.db is held by "+
 		"pid 41 on host-a since 2026-01-01T00:00:00Z", store.ErrLocked)
 
-	target, err := throughTheRunningNode(boot, "crewlet.yaml", locked)
+	target, err := throughTheRunningNode(operator, boot, "crewlet.yaml", locked)
 	if err != nil {
 		t.Fatalf("a locked store was refused instead of routed: %v", err)
 	}
@@ -412,7 +435,7 @@ func TestALockedStoreIsRoutedThroughTheRunningNode(t *testing.T) {
 		t.Fatal("the target is not marked fleet-wide, so `secrets set` would " +
 			"tell an operator their rotation reached one node")
 	}
-	if !strings.Contains(target.where, "127.0.0.1:8080") {
+	if !strings.Contains(target.where, "127.0.0.1:8000") {
 		t.Errorf("where = %q, want the node it writes through", target.where)
 	}
 }
@@ -430,7 +453,7 @@ func TestARoutedStoreThatCannotReachTheNodeSaysBothWhy(t *testing.T) {
 	boot := bootWithAPI(t, "127.0.0.1", 0, "ops-token")
 	locked := fmt.Errorf("%w: held by pid 41", store.ErrLocked)
 
-	_, err := throughTheRunningNode(boot, "crewlet.yaml", locked)
+	_, err := throughTheRunningNode(noEnviron, boot, "crewlet.yaml", locked)
 	if err == nil {
 		t.Fatal("a node with no HTTP surface was accepted as a write target")
 	}
@@ -457,10 +480,10 @@ func TestARoutedStoreThatCannotReachTheNodeSaysBothWhy(t *testing.T) {
 // unreadable path replaces an accurate message with a connection refused.
 func TestOnlyALockedStoreIsRoutedThroughTheAPI(t *testing.T) {
 	t.Parallel()
-	boot := bootWithAPI(t, "127.0.0.1", 8080, "ops-token")
+	boot := bootWithAPI(t, "127.0.0.1", 8000, "ops-token")
 	other := errors.New("the keyring cannot open this store")
 
-	target, err := throughTheRunningNode(boot, "crewlet.yaml", other)
+	target, err := throughTheRunningNode(noEnviron, boot, "crewlet.yaml", other)
 	if target != nil {
 		t.Fatal("an unrelated failure was answered with an API client, so a " +
 			"broken node would report a connection error instead of its fault")

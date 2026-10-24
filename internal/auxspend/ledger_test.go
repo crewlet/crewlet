@@ -360,7 +360,9 @@ func TestAStopFlushesWhatTheTimerHasNot(t *testing.T) {
 }
 
 // A PERSON'S SPEND IS FILED UNDER THE PERSON, never as an agent seat: a person
-// is no agent role, and the live projection keys a seat's state on `role`.
+// is no agent seat and has no agent id, so their spend is named by
+// `actor_seat`/`actor_role`, never by `agent_id`/`role` — the second of which
+// fills the store's `agent_role` column, read as an agent seat's name.
 func TestAPersonsSpendNamesThePerson(t *testing.T) {
 	t.Parallel()
 	pub := &recorder{}

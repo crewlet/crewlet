@@ -2,12 +2,13 @@
  * What is on a seat's plate — an agent's or a person's.
  *
  * TWO HALVES, AND THEY ARE NOT THE SAME READ. The list is `work_items
- * {assignee}`, which is ungated: every reader of this page gets it, and it is
- * the floor. The blocks under it are `work_my_work`, which the engine scopes
- * to the caller's own seat, so they arrive for a person reading their own
- * page and for an operator and for nobody else. One tab, because the
- * question a reader has is "what is this seat doing", and the answer is
- * simply fuller when they are entitled to more of it.
+ * {assignee}`, which every Tracker holder gets — the tab is drawn only for
+ * one (`Seat.tsx`) — and it is the floor. The blocks under it are
+ * `work_my_work`, which the engine answers to the record's owner, to whoever
+ * leads them and to an admin, so they are asked for those readers
+ * ([mayReadRecord]). One tab, because the question a
+ * reader has is "what is this seat doing", and the answer is simply fuller
+ * when they are entitled to more of it.
  *
  * THE TRACKER'S OWN ROW AND THE PERSON'S OWN BLOCKS, imported rather than
  * redrawn: `components/work.tsx` states the rule — one renderer, screens pick
@@ -30,25 +31,32 @@ import {
 import { HoldWrites } from "~/lib/useWriteAccess.ts";
 import { useQuery, type QueryResult } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import type { Seat } from "~/lib/seats.ts";
+import { isOwnSeat, type OrgIndex, type Seat } from "~/lib/seats.ts";
+import { mayReadRecord } from "./profile.ts";
 import type { WorkItemsAnswer } from "~/protocol/index.ts";
+import { itemPath } from "~/lib/work.ts";
 
 export function Work({
   seat,
+  index,
   work,
   chrome,
   now,
 }: {
   seat: Seat;
+  index: OrgIndex;
   work: QueryResult<WorkItemsAnswer>;
   chrome: RowChrome;
   now: number;
 }) {
   const handle = seat.handle;
   const viewer = useViewer();
-  // THE SEVEN CLAIMS, and only where the reader may have them — the same
-  // rule the person record follows.
-  const mayRead = viewer.operator || (viewer.handle !== "" && viewer.handle === handle);
+  // THE SEVEN CLAIMS, and only where the reader may have them — the rule the
+  // person record follows: its owner, whoever leads them, and an admin, the
+  // admin path of the owner-or-lead rule.
+  const mayRead = mayReadRecord(viewer, index, handle);
+  // ON THE READER'S OWN SEAT THE TAB SPEAKS TO THEM, as the Overview does.
+  const self = isOwnSeat(viewer, handle);
   const mine = useQuery(
     "work_my_work",
     { handle },
@@ -63,12 +71,13 @@ export function Work({
       )}
       <QueryState
         error={work.error}
+        refusal={work.refusal}
         loading={work.loading}
         empty={
           work.data && rows.length === 0
             ? {
-                title: "Nothing open is assigned to them",
-                hint: "Work reaches a seat by assignment, and closed work is not counted here.",
+                title: `Nothing open is assigned to ${self ? "you" : "them"}`,
+                hint: "Closed work isn’t counted.",
               }
             : undefined
         }
@@ -82,19 +91,14 @@ export function Work({
               work.data ? `${work.data.total_hint}${work.data.total_capped ? "+" : ""}` : undefined
             }
             actions={
-              <a className="t-link" href={href(["work"], { assignee: handle })}>
+              <a className="t-link" href={href(["work", "tasks"], { assignee: handle })}>
                 Open in Work
               </a>
             }
           >
             <Card.Title as="h3">Assigned and open</Card.Title>
           </Card.Header>
-          <RowList
-            rows={rows}
-            now={now}
-            chrome={chrome}
-            hrefOf={(row) => href(["work", row.key])}
-          />
+          <RowList rows={rows} now={now} chrome={chrome} hrefOf={(row) => href(itemPath(row))} />
         </Card>
       </QueryState>
 
@@ -110,18 +114,12 @@ export function Work({
           {(mine.data?.asked_of_me.length ?? 0) > 0 && (
             <Card padding="none">
               <Card.Header count={mine.data?.totals.asked_of_me.total}>
-                <Card.Title as="h3">Waiting on their answer</Card.Title>
+                <Card.Title as="h3">Waiting on {self ? "your" : "their"} answer</Card.Title>
               </Card.Header>
-              <HoldWrites
-                reason={
-                  viewer.handle === handle
-                    ? null
-                    : `Asked of ${seat.name} — only they can answer it.`
-                }
-              >
+              <HoldWrites reason={self ? null : `Only ${seat.name} can answer.`}>
                 <AskList
                   rows={mine.data?.asked_of_me ?? []}
-                  decider={{ handle, name: viewer.handle === handle ? undefined : seat.name }}
+                  decider={{ handle, name: self ? undefined : seat.name }}
                   now={now}
                 />
               </HoldWrites>
@@ -131,34 +129,34 @@ export function Work({
               block is a page of at most twenty rows, and its own length
               would say twenty of a queue of forty. */}
           <TaskBlock
-            title="What they mean to do first"
-            hint="Their own order, as they set it."
+            title={self ? "What you mean to do first" : "What they mean to do first"}
+            hint={self ? "Your own order, as you set it." : "Their own order, as they set it."}
             total={mine.data?.totals.priorities}
             rows={mine.data?.priorities ?? []}
             now={now}
             chrome={chrome}
-            hrefOf={(row) => href(["work", row.key])}
+            hrefOf={(row) => href(itemPath(row))}
           />
           <TaskBlock
             title="Collaborating"
-            hint="Tasks they are named on without owning."
+            hint={
+              self
+                ? "Tasks you are named on without owning."
+                : "Tasks they are named on without owning."
+            }
             total={mine.data?.totals.collaborating}
             rows={mine.data?.collaborating ?? []}
             now={now}
             chrome={chrome}
-            hrefOf={(row) => href(["work", row.key])}
+            hrefOf={(row) => href(itemPath(row))}
           />
           <ChecklistClaims
             rows={mine.data?.checklist_items ?? []}
-            hrefOf={(key) => href(["work", key])}
+            hrefOf={(address) => href(["work", address])}
           />
         </>
       ) : (
-        <p className="t-caption">
-          Their own queue — what they mean to do first, the questions put to them and their
-          checklist items on other seats&apos; tasks — is theirs to read. An operator credential, or
-          their own, shows it here.
-        </p>
+        <p className="t-caption">Their queue is theirs: their lead and an admin read it too.</p>
       )}
     </div>
   );

@@ -186,11 +186,19 @@ type AuxiliarySpend struct {
 	RoleName    string `json:"role,omitempty"`
 
 	// ActorSeat and ActorRole are the PERSON the calls were made for,
-	// set instead of the three above: on [AuxStageOperator], the seat
-	// handle a person's credential is bound to; on [AuxStageBackground],
-	// the human seat leading a unit whose pass ran on its chain. Each with
-	// its role. NOT `role`: a person is not an agent seat, and the live
-	// projection keys a seat's state on `role`.
+	// set instead of the three above: on [AuxStageOperator], the handle of
+	// the human seat the asking principal acts as (iam.RecordOwner — the
+	// seat a person holds, or the one the directory binds a token to; a
+	// principal bound to none charges the company and names nobody here);
+	// on [AuxStageBackground], the human seat leading a unit whose pass ran
+	// on its chain. Each with its role. A SEAT HANDLE, never an identity
+	// estate person id. NOT `agent_id` and `role`: a person is no agent
+	// seat and has no agent id, and `role` is the label the store's
+	// `agent_role` column is filled from, which every per-seat read prints
+	// as an AGENT seat's name. A person's spend is filed under the person
+	// instead — the live projection (which keys seats by `agent_id` alone)
+	// and the store's spend read both take ActorSeat as the person and
+	// ActorRole as the name.
 	ActorSeat string `json:"actor_seat,omitempty"`
 	ActorRole string `json:"actor_role,omitempty"`
 

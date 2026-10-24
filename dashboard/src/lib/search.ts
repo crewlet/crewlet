@@ -29,7 +29,7 @@ import { utf8Bytes } from "./format.ts";
 export function searchTooLong(phrase: string): string | null {
   const bytes = utf8Bytes(phrase.trim());
   if (bytes <= SEARCH_QUERY_MAX) return null;
-  return `This is ${bytes} bytes, and a search takes at most ${SEARCH_QUERY_MAX} — search on a few keywords or a phrase, not a pasted passage.`;
+  return `This is ${bytes} bytes, and a search takes at most ${SEARCH_QUERY_MAX}. Search on a few keywords or a phrase, not a pasted passage.`;
 }
 
 /**
@@ -42,7 +42,7 @@ export const SEARCH_MODES: readonly { value: SearchMode; label: string; hint: st
   {
     value: "hybrid",
     label: "Hybrid",
-    hint: "Matches the words and what they mean, combined — the default",
+    hint: "Matches the words and what they mean, combined. The default.",
   },
   {
     value: "keyword",
@@ -117,12 +117,12 @@ export function servedNote(answer: SearchOutcome | null | undefined): string | n
   const asked = modeLabel(answer.mode);
   const why = degradedWhy(degraded);
   if (served === "" && degraded) {
-    return `${asked} search could not run here — ${why}. Nothing was ranked by it, so nothing is listed rather than a different ranking passed off as this one.`;
+    return `${asked} search could not run here: ${why}. Nothing was ranked by it, so nothing is listed rather than a different ranking passed off as this one.`;
   }
   if (served && served !== answer.mode) {
-    return `Asked for ${asked}, served ${modeLabel(served)}${why ? ` — ${why}` : ""}.`;
+    return `Asked for ${asked}, served ${modeLabel(served)}${why ? `: ${why}` : ""}.`;
   }
-  if (degraded) return `${asked} search ran in part — ${why}.`;
+  if (degraded) return `${asked} search ran in part: ${why}.`;
   return null;
 }
 
@@ -187,7 +187,7 @@ export function searchCoverageNote(
     // not answer — a vendor site that failed, or this node's own scan.
     return {
       sentence:
-        "The search did not complete — the backend did not answer — so an empty list here is not proof that nothing matches.",
+        "The search did not complete because the backend did not answer, so an empty list here is not proof that nothing matches.",
       nodes,
     };
   }

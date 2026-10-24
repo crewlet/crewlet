@@ -43,8 +43,10 @@ func ParseBootstrap(data []byte, r *Resolver) (*Bootstrap, error) {
 		return nil, syntaxFault(err)
 	}
 	if empty(&doc) {
-		// An empty Tier A file is legitimate: every field defaults, and a
-		// company can run on nothing but the defaults.
+		// An empty Tier A file takes every default — and the keyring has
+		// none, deliberately, since a default key would be one every
+		// deployment shares. So it decodes, and Validate refuses it
+		// naming secrets.keys, as it refuses any file without one.
 		cfg := DefaultBootstrap()
 		return &cfg, cfg.Validate()
 	}
@@ -211,6 +213,16 @@ func ParseCompanyNode(doc *yaml.Node) (*Company, error) {
 	if err := decodeDocument(doc, &cfg); err != nil {
 		return nil, err
 	}
+	// EVERY UNIT GETS A KEY AND EVERY SEAT ITS HANDLE, written into the
+	// document where it declares none. A unit is referenced by its key and
+	// a seat by its handle — a `manages:` entry, a unit's `lead:`, a seat's
+	// `unit:` — and a seat's agent id, mailbox and memory derive from its
+	// handle, so one left to be derived from the display name moves the day
+	// somebody corrects a typo in that name: a removal and a creation nobody
+	// asked for. Written down here, every revision a file or a whole-document
+	// write stores carries both, and the config surface mints the same way
+	// on the two writes that read the stored form instead ([MintIdentities]).
+	MintIdentities(&cfg)
 	// The declaration order of providers.llm exists only in the document —
 	// a Go map has none — and per-phase resolution's last resort is "the
 	// first provider configured". Read here, against the whole document,

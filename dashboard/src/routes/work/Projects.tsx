@@ -4,11 +4,12 @@
  * # Where the overview went
  *
  * The four workspace totals and the ranked bar chart of open work used to sit
- * above every board and every list on `#/work`, on every visit. They are an
- * OVERVIEW — a question about the containers rather than about the work — so
- * they are a page, and the totals are one sentence in this page's own bar
- * rather than four tiles, because they are context for the rows rather than
- * the point of the screen.
+ * above every board and every list on the company's task list, on every
+ * visit. They are an OVERVIEW, a question about the containers rather than
+ * about the work, so they are a page, and the totals are one sentence in this
+ * page's own bar rather than four tiles, because they are context for the
+ * rows rather than the point of the screen. It is Work's landing (`#/work`),
+ * All projects' first lens, and its bar ends with New project.
  *
  * # A row is a project, and a meter is how far along it is
  *
@@ -47,9 +48,8 @@
  */
 
 import { useMemo } from "react";
-import { usePanelAlign } from "~/lib/media.ts";
+import { fmtCount } from "~/lib/format.ts";
 import { buildHash, useParam, useRoute } from "~/app/router.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import {
   ColumnChooser,
@@ -57,17 +57,28 @@ import {
   columnChoicesOf,
   type GridColumn,
 } from "~/app/frame/DataGrid.tsx";
-import { DateCell, NumberCell, SeatCell } from "~/app/frame/cells.tsx";
+import { linkedSeat } from "~/app/frame/cells.tsx";
 import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Button, EmptyState, EmptyValue, Popover, Tag } from "@crewlethq/ui";
+import { NewProjectButton } from "~/components/NewProjectButton.tsx";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import {
+  Button,
+  EmptyState,
+  EmptyValue,
+  Popover,
+  SegmentedControl,
+  TableDateCell,
+  TableEntityCell,
+  TableNumberCell,
+  Tag,
+} from "@crewlethq/ui";
 import { LayoutDashboardGlyph, Columns3Glyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
-import { Segmented } from "~/ui/primitives.tsx";
 import { ProjectProgress, ProjectProgressLegend } from "./census.tsx";
 import type { WorkProjectRow } from "~/protocol/index.ts";
 import { PROJECT_SORT_KEYS } from "~/contract/work.ts";
@@ -117,8 +128,9 @@ const DEFAULT_SORT = "-todo";
  * with no projects or a company that has archived every one of them, and the
  * page used to be unable to tell — so it hedged, naming both ways it happens
  * in one sentence and sending the reader to look. A hedge is what a screen
- * writes when it is missing a number; this one now has the number, so it says
- * how many are archived and offers the segment that holds them.
+ * writes when it is missing a number; this one now has the number, so it knows
+ * the projects were archived and offers the segment that holds them, whose
+ * option carries the count.
  *
  * `all` is absent because it is unreachable: an empty answer on ANY segment
  * with a zero census is a company with no projects, which [NoProjectsYet]
@@ -128,7 +140,7 @@ const EMPTY = {
   archived: {
     icon: "columns-3" as const,
     title: "No project is archived",
-    hint: "An archived project keeps its work and stops taking new items.",
+    hint: "Archived projects appear here.",
   },
 };
 
@@ -136,10 +148,10 @@ const EMPTY = {
  * The Active segment's empty state, which needs the census to write.
  *
  * A FUNCTION RATHER THAN A CONSTANT because the sentence turns on a number the
- * engine sent. With archived work to point at it points at it, by count and
- * with a link; with none, the company has projects that are neither active nor
- * archived, which cannot happen — so the only remaining case is the one the
- * grid is not drawing, and the honest line is the plain one.
+ * engine sent. With archived work to point at it points at it, with a link;
+ * with none, the company has projects that are neither active nor archived,
+ * which cannot happen, so the only remaining case is the one the grid is not
+ * drawing, and the honest line is the plain one.
  */
 function activeEmpty(archived: number, href: string) {
   if (archived > 0) {
@@ -148,17 +160,10 @@ function activeEmpty(archived: number, href: string) {
       title: "No project is active",
       hint: (
         <>
-          {/* THE TYPOGRAPHIC APOSTROPHE, which is what every other sentence
-              in this product uses — the JSX ones spell it `&rsquo;` and a
-              string has to carry the character itself. */}
-          {archived === 1
-            ? "The company’s one project has been archived"
-            : `All ${archived} of the company’s projects have been archived`}
-          {" — "}
           <a className="t-link" href={href}>
-            see them under Archived
+            See them under Archived
           </a>
-          , where each keeps its work.
+          .
         </>
       ),
     };
@@ -166,14 +171,11 @@ function activeEmpty(archived: number, href: string) {
   return {
     icon: "columns-3" as const,
     title: "No project is active",
-    hint: "A project appears the moment a unit in the company configuration declares its `project` key.",
+    hint: "Create one with New project.",
   };
 }
 
 export function Projects() {
-  // See [usePanelAlign]: the Columns panel is end-aligned under the bar's
-  // right edge, and start-aligned on a phone.
-  const columnsAlign = usePanelAlign("end");
   const org = useOrg();
   // THE CHART'S TWO ANSWERS ABOUT A HANDLE, from one lookup: the lead's badge
   // draws the dashed ring off the KIND, and the last change prints the NAME.
@@ -335,7 +337,9 @@ export function Projects() {
         // doing, wearing one column.
         cell: (row) =>
           row.lead?.handle ? (
-            <SeatCell handle={row.lead.handle} {...who(row.lead.handle)} />
+            <TableEntityCell
+              {...linkedSeat({ handle: row.lead.handle, ...who(row.lead.handle) })}
+            />
           ) : (
             // A PROJECT WITH NO LEAD ROUTES ITS UNASSIGNED WORK TO NOBODY,
             // which is a finding rather than a blank cell.
@@ -387,7 +391,7 @@ export function Projects() {
         align: "right",
         shrink: true,
         sortValue: (row) => row.task_counts.todo,
-        cell: (row) => <NumberCell value={row.task_counts.todo} />,
+        cell: (row) => <TableNumberCell value={row.task_counts.todo} format={fmtCount} />,
       },
       {
         key: "active",
@@ -395,7 +399,7 @@ export function Projects() {
         align: "right",
         shrink: true,
         sortValue: (row) => row.task_counts.active,
-        cell: (row) => <NumberCell value={row.task_counts.active} />,
+        cell: (row) => <TableNumberCell value={row.task_counts.active} format={fmtCount} />,
       },
       {
         key: "done",
@@ -403,7 +407,7 @@ export function Projects() {
         align: "right",
         shrink: true,
         sortValue: (row) => row.task_counts.done,
-        cell: (row) => <NumberCell value={row.task_counts.done} />,
+        cell: (row) => <TableNumberCell value={row.task_counts.done} format={fmtCount} />,
       },
       {
         key: "closed",
@@ -418,7 +422,7 @@ export function Projects() {
         // right-aligned integer is also nowhere near the width `optional`
         // exists to ration (`SHRINK_CAP` in `DataGrid`).
         sortValue: (row) => row.task_counts.closed,
-        cell: (row) => <NumberCell value={row.task_counts.closed} />,
+        cell: (row) => <TableNumberCell value={row.task_counts.closed} format={fmtCount} />,
       },
       {
         key: "progress",
@@ -476,6 +480,10 @@ export function Projects() {
 
   return (
     <>
+      {/* THE LENS'S OWN ACTION ENDS THE BAR, as New task ends the Tasks lens. */}
+      <PageActions>
+        <NewProjectButton />
+      </PageActions>
       {/* NO INTRODUCTION: the table's own headings say what a row is, and a
           sentence above them spent a line on every visit saying it again.
           Where a project COMES FROM is the sentence somebody needs when there
@@ -491,8 +499,7 @@ export function Projects() {
         </span>
         {short && (
           <span className="t-caption">
-            The engine answered {listed} of {answerTotal}, in the order asked for, so these counts
-            cover only the projects listed.
+            Counts cover the {listed} listed of {answerTotal}.
           </span>
         )}
         <span className="spacer" />
@@ -505,10 +512,12 @@ export function Projects() {
             ALL CARRIES NONE. Its count is the sum of the two beside it, and a
             third figure that is the other two added up is arithmetic on
             screen rather than a fact. */}
-        <Segmented
+        <SegmentedControl
+          semantics="radio"
+          activate="manual"
           value={shown}
-          onChange={(value) => setShown(value)}
-          ariaLabel="Which projects"
+          onValueChange={(value) => setShown(value)}
+          label="Which projects"
           options={[
             { value: "active", label: "Active", count: census?.active },
             { value: "archived", label: "Archived", count: census?.archived },
@@ -529,7 +538,7 @@ export function Projects() {
         <Popover
           role="dialog"
           label="Columns"
-          align={columnsAlign}
+          align="end"
           trigger={(open, toggle) => (
             <Button
               size="small"
@@ -556,7 +565,7 @@ export function Projects() {
         </Popover>
       </div>
 
-      <QueryState error={state.error} loading={state.loading}>
+      <QueryState error={state.error} refusal={state.refusal} loading={state.loading}>
         {/* A COMPANY WITH NO PROJECTS, SAID ON WHATEVER SEGMENT THE READER IS
             ON — and they land on Active. The census is what makes it sayable
             from anywhere: `active + archived === 0` is the company having
@@ -635,7 +644,7 @@ function LastChange({
     // are single values, so the rhythm a reader scans down was set by the one
     // column they scan last.
     <span className="work-lastchange">
-      <DateCell at={change.at} now={now} />
+      <TableDateCell value={change.at} now={now} />
       {/* A COMMIT CAN NAME NOBODY, and the wire says so by leaving the actor
           out — the engine did it. A handle is resolved through the chart like
           everywhere else, so this column says what the Lead column one cell
@@ -664,8 +673,9 @@ function NoProjectsYet() {
   return (
     <EmptyState
       icon={<LayoutDashboardGlyph size={32} />}
-      title="No project has been created yet"
-      description="A project is where the company files its work: a key, a lead and its own statuses, types and labels. One appears here the moment a unit in the company configuration declares its `project` key — the engine mints it, so there is nothing to create by hand."
+      title="No projects yet"
+      description="Create one with New project."
+      action={<NewProjectButton />}
     />
   );
 }

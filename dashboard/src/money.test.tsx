@@ -37,6 +37,7 @@ import { Home } from "~/routes/home/Home.tsx";
 import { WorkItem } from "~/routes/work/WorkItem.tsx";
 import { type Lang, type Node, childrenOf, isNode, lineOf, modules, parse } from "~/test/source.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
+import { SessionReading } from "~/lib/frameSession.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 
@@ -461,6 +462,25 @@ afterEach(() => {
 });
 
 /**
+ * What the frame itself asks, answered as the engine answers an admin with
+ * nothing waiting — unless a case names its own: who is reading, and the
+ * inbox and queue counts a reader holding Tracker is asked for.
+ */
+const FRAME_ANSWERS: Record<string, unknown> = {
+  viewer: {
+    login: "founder",
+    grants: ["admin", "tracker", "knowledge"],
+    handle: "ceo",
+    owner: "ceo",
+    name: "Chief",
+    kind: "human",
+    acts: [],
+  },
+  work_inbox: { notices: [] },
+  work_items: { items: [] },
+};
+
+/**
  * Mount one screen at one address, over a store holding the priced rollup and
  * a socket answering every question from `answers`.
  *
@@ -476,13 +496,17 @@ function mount(hash: string, view: ReactElement, answers: Record<string, unknown
   store.applyOrg(withDerived({ roles: [{ name: "CEO", handle: "ceo" }] }));
   store.applyTokens(rollup());
   const socket = new LiveSocket(store);
+  // AN ADMIN READS EVERY SCREEN WHOLE — a seat's turns included — so no
+  // price can hide behind a lock this suite never opened.
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
-    Promise.resolve(answers[what] ?? {});
+    Promise.resolve(answers[what] ?? FRAME_ANSWERS[what] ?? {});
   return render(
     <ClientContext.Provider value={{ store, socket }}>
-      <FrameReadings>
-        <Router>{view}</Router>
-      </FrameReadings>
+      <SessionReading>
+        <FrameReadings>
+          <Router>{view}</Router>
+        </FrameReadings>
+      </SessionReading>
     </ClientContext.Provider>,
   );
 }
@@ -517,7 +541,7 @@ describe("the screens", () => {
   // read the answer draws no price either, and that pass would prove nothing.
   test.each([
     ["the landing screen", "#/home", <Home />, { token_series: series() }],
-    ["spend", "#/spend", <Spend />, { token_series: series(), tokens: rollup() }],
+    ["spend", "#/settings/spend", <Spend />, { token_series: series(), tokens: rollup() }],
     [
       "the task page",
       "#/work/ENG-42",
@@ -542,14 +566,14 @@ describe("the screens", () => {
     [
       // WHERE ITS TOKENS GO: the week's rollup, by phase and by model.
       "the profile's turns",
-      "#/agents/seats/ceo?tab=turns",
+      "#/company/org/seats/ceo?tab=turns",
       <SeatScreen handle="ceo" />,
       { tokens: rollup(), turns: { turns: [], next: null } },
     ],
     [
       // THE WEEK'S TILE, from the usage domain's own row.
       "the profile",
-      "#/agents/seats/ceo",
+      "#/company/org/seats/ceo",
       <SeatScreen handle="ceo" />,
       {
         seat_activity: {
@@ -603,7 +627,8 @@ describe("the screens", () => {
             pricedPhase("2026-09-13T10:01:30Z"),
             // THE TURN'S OWN RECORD CARRIES NO PRICE, because the engine
             // puts none there: this screen shows it verbatim, and a verbatim
-            // record is the one place rule 19 does not reach (see its text).
+            // record is one of the two places rule 19 does not reach (see
+            // its text; the other is an artifact sheet's own cells).
             {
               ...pricedPhase("2026-09-13T10:02:00Z"),
               id: "done",

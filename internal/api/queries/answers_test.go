@@ -2,6 +2,7 @@ package queries_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -82,7 +84,7 @@ func registryOver(t *testing.T, s queries.Sources) *queries.Registry {
 // a typed value rather than a map.
 func askRaw(t *testing.T, r *queries.Registry, what string, params map[string]any) any {
 	t.Helper()
-	got, err := r.Answer(t.Context(), what, params, "")
+	got, err := r.Answer(everyGrant(t), what, params)
 	if err != nil {
 		t.Fatalf("%s: %v", what, err)
 	}
@@ -91,7 +93,7 @@ func askRaw(t *testing.T, r *queries.Registry, what string, params map[string]an
 
 func ask(t *testing.T, r *queries.Registry, what string, params map[string]any) map[string]any {
 	t.Helper()
-	got, err := r.Answer(t.Context(), what, params, "")
+	got, err := r.Answer(everyGrant(t), what, params)
 	if err != nil {
 		t.Fatalf("%s: %v", what, err)
 	}
@@ -120,7 +122,7 @@ func TestAQuestionWithNoSourceIsNotRegistered(t *testing.T) {
 	if got := r.Names(); !slices.Equal(got, []string{"viewer"}) {
 		t.Errorf("names = %v, want only the caller's own questions", got)
 	}
-	if _, err := r.Answer(t.Context(), "events", nil, ""); !errors.Is(err, queries.ErrUnknown) {
+	if _, err := r.Answer(everyGrant(t), "events", nil); !errors.Is(err, queries.ErrUnknown) {
 		t.Errorf("err = %v, want ErrUnknown", err)
 	}
 }
@@ -167,13 +169,16 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 		// breakdown has no dimension for — folded from the usage domain's
 		// company days, a source of its own rather than the fleet's turn
 		// detail; `seat_activity` is every seat's turns over those same
-		// days, summed across nodes.
+		// days, summed across nodes. `company_feed` because the schedules'
+		// runs are one of the halves it merges, and a feed of only those
+		// is still the feed: it is registered wherever any half is.
 		{"the usage domain alone", queries.Sources{Usage: usage.Reader{Estate: db.Replicated()}},
-			[]string{"page_reads", "seat_activity", "token_series", "viewer"}},
+			[]string{"company_feed", "page_reads", "seat_activity", "token_series", "viewer"}},
 		{"all of them", queries.Sources{
 			State: state, Events: fleetOf(db.Events()), Usage: usage.Reader{Estate: db.Replicated()},
-		}, []string{"agent", "event", "event_series", "events", "live_call", "page_reads",
-			"phases", "seat_activity", "token_series", "tokens", "trace", "turn", "turns", "viewer"}},
+		}, []string{"agent", "company_feed", "event", "event_series", "events", "live_call",
+			"page_reads", "phases", "seat_activity", "token_series", "tokens", "trace", "turn",
+			"turns", "viewer"}},
 	} {
 		if got := registryOver(t, c.sources).Names(); !slices.Equal(got, c.names) {
 			t.Errorf("%s answers\n  %v\nwant\n  %v", c.what, got, c.names)
@@ -183,34 +188,69 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 
 // --- the projection questions -------------------------------------------- //
 
-// A SEAT'S CALL IN FLIGHT IS ANSWERED WHOLE, by role or handle: every heavy
+// namesakes is a company whose two agent seats share the NAME "Engineer" —
+// legal, since a name is prose — and the agent id each one's events carry.
+func namesakes(t *testing.T) (*config.Company, map[string]string) {
+	t.Helper()
+	cfg := parsed(t, `
+name: Acme
+providers:
+  llm:
+    p: {type: anthropic, model: m, api_keys: ["${K}"]}
+roles:
+  - name: Engineer
+    handle: ada
+    llm: p
+  - name: Engineer
+    handle: bob
+    llm: p
+`)
+	organization, err := cfg.Organization()
+	if err != nil {
+		t.Fatalf("organization: %v", err)
+	}
+	ids := map[string]string{}
+	for _, handle := range []string{"ada", "bob"} {
+		id, ok := organization.AgentIDFor(organization.AgentSeatByHandle(handle))
+		if !ok {
+			t.Fatalf("%s is no agent seat in this fixture", handle)
+		}
+		ids[handle] = id.String()
+	}
+	return cfg, ids
+}
+
+// A SEAT'S CALL IN FLIGHT IS ANSWERED WHOLE, by its agent id: every heavy
 // field an `agents` push may leave out, and the versions they are at — what a
 // tab that missed a push asks for. A seat with nothing in flight is null, not
-// an error.
+// an error, and its namesake's call is never its own: the two seats share a
+// NAME, which is what the projection was keyed by when bob's tab was answered
+// ada's call.
 func TestLiveCallAnswersOneSeatsCallWhole(t *testing.T) {
 	t.Parallel()
+	cfg, ids := namesakes(t)
 	state := livestate.New()
 	state.Apply(&livestate.Envelope{
 		ID: "e1", Type: "agent_turn_progress", Timestamp: "2026-06-14T12:00:00Z", Category: "task",
 		Payload: map[string]any{
-			"role": "Lead", "turn_id": "tn-1", "phase": "execute", "iteration": float64(0),
-			"round_num": float64(-1), "prompt": "fix the build",
+			"agent_id": ids["ada"], "role": "Engineer", "turn_id": "tn-1", "phase": "execute",
+			"iteration": float64(0), "round_num": float64(-1), "prompt": "fix the build",
 			"prompt_messages": []any{map[string]any{"role": "system", "content": "you are the lead"}},
 		},
 	})
-	r := registryOver(t, queries.Sources{State: state})
+	r := registryOver(t, queries.Sources{State: state, Company: companySource(t, cfg)})
 
-	got := ask(t, r, "live_call", map[string]any{"role": "Lead"})
+	got := ask(t, r, "live_call", map[string]any{"agent_id": ids["ada"]})
 	call, _ := got["live_call"].(*livestate.LiveCall)
-	if got["role"] != "Lead" || call == nil || call.Prompt != "fix the build" ||
-		len(call.PromptMessages) != 1 || call.Versions.Prompt != 1 {
-		t.Fatalf("answer = %+v; want the call whole, its prompt at version 1", got)
+	if got["agent_id"] != ids["ada"] || got["handle"] != "ada" || call == nil ||
+		call.Prompt != "fix the build" || len(call.PromptMessages) != 1 || call.Versions.Prompt != 1 {
+		t.Fatalf("answer = %+v; want ada's call whole, its prompt at version 1", got)
 	}
-	idle := ask(t, r, "live_call", map[string]any{"role": "Reviewer"})
-	if idle["live_call"] != nil {
-		t.Errorf("a seat with nothing in flight = %+v; want null", idle)
+	namesake := ask(t, r, "live_call", map[string]any{"agent_id": ids["bob"]})
+	if namesake["live_call"] != nil || namesake["handle"] != "bob" {
+		t.Errorf("bob's answer = %+v; want his own seat, with nothing in flight", namesake)
 	}
-	if _, err := r.Answer(t.Context(), "live_call", map[string]any{}, "operator"); !errors.Is(err, queries.ErrBadParams) {
+	if _, err := r.Answer(everyGrant(t), "live_call", map[string]any{}); !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("live_call with no seat = %v; want a bad-params refusal", err)
 	}
 }
@@ -227,14 +267,14 @@ func TestLiveCallAnswersOneSeatsCallWhole(t *testing.T) {
 func TestLiveCallAnswersAtTheSeatsCallSequence(t *testing.T) {
 	t.Parallel()
 	state := livestate.New()
-	call := map[string]any{"role": "Lead", "turn_id": "tn-1", "phase": "execute", "iteration": float64(0)}
+	call := map[string]any{"agent_id": "a-lead", "turn_id": "tn-1", "phase": "execute", "iteration": float64(0)}
 	state.Apply(&livestate.Envelope{
 		ID: "e1", Type: "agent_phase_started", Timestamp: "2026-06-14T12:00:00Z", Category: "task", Payload: call,
 	})
 	r := registryOver(t, queries.Sources{State: state})
 
-	running := ask(t, r, "live_call", map[string]any{"role": "Lead"})
-	seq := state.AgentOverlay("Lead").LiveCallSeq
+	running := ask(t, r, "live_call", map[string]any{"agent_id": "a-lead"})
+	seq := state.AgentOverlay("a-lead").LiveCallSeq
 	if running["live_call"] == nil || seq == 0 || running["live_call_seq"] != seq {
 		t.Fatalf("answer = %+v; want the running call at the overlay's sequence %d", running, seq)
 	}
@@ -242,44 +282,75 @@ func TestLiveCallAnswersAtTheSeatsCallSequence(t *testing.T) {
 	state.Apply(&livestate.Envelope{
 		ID: "e2", Type: "agent_phase_completed", Timestamp: "2026-06-14T12:00:05Z", Category: "task", Payload: call,
 	})
-	cleared := ask(t, r, "live_call", map[string]any{"role": "Lead"})
-	after := state.AgentOverlay("Lead").LiveCallSeq
+	cleared := ask(t, r, "live_call", map[string]any{"agent_id": "a-lead"})
+	after := state.AgentOverlay("a-lead").LiveCallSeq
 	if cleared["live_call"] != nil || after <= seq || cleared["live_call_seq"] != after {
 		t.Errorf("answer = %+v; want a null call at the clear's sequence %d, past %d", cleared, after, seq)
 	}
 }
 
+// ONE SEAT'S LIVE STATE, and never its namesake's. The answer is asked by
+// handle and read from the projection by agent id; it used to be read by the
+// role name, so bob's page showed ada's turn.
 func TestAgentAnswersOneSeatsLiveState(t *testing.T) {
 	t.Parallel()
+	cfg, ids := namesakes(t)
 	state := livestate.New()
 	state.Apply(&livestate.Envelope{
 		ID: "e1", Type: "agent_phase_started", Timestamp: "2026-06-14T12:00:00Z",
-		Category: "task", Payload: map[string]any{"role": "Lead", "turn_id": "tn-1"},
+		Category: "task", Payload: map[string]any{
+			"agent_id": ids["ada"], "role": "Engineer", "turn_id": "tn-1",
+		},
 	})
-	r := registryOver(t, queries.Sources{State: state})
+	r := registryOver(t, queries.Sources{State: state, Company: companySource(t, cfg)})
 
-	got := ask(t, r, "agent", map[string]any{"role": "Lead"})
-	live, _ := got["live"].(*livestate.Overlay)
-	if live == nil || live.Activity != livestate.ActivityWorking {
+	got := ask(t, r, "agent", map[string]any{"id": "ada"})
+	// READ AS A CLIENT READS IT: the overlay reaches a reader through the
+	// mask that shapes it for them (livestate's mask.go), so its Go type is
+	// the mask's and only its wire shape is the answer.
+	if got["live"] == nil || asMap(t, got["live"])["activity"] != string(livestate.ActivityWorking) {
 		t.Fatalf("answer = %+v", got)
+	}
+	if got["agent_id"] != ids["ada"] || got["handle"] != "ada" || got["role"] != "Engineer" {
+		t.Errorf("answer names %v / %v / %v, want the seat asked about",
+			got["agent_id"], got["handle"], got["role"])
+	}
+	if other := ask(t, r, "agent", map[string]any{"id": "bob"}); other["live"] != nil {
+		t.Errorf("bob's answer carries %+v, which is ada's turn", other["live"])
 	}
 }
 
 func TestAgentAnswersASeatItHasNeverSeen(t *testing.T) {
 	t.Parallel()
-	// A role configured and never spawned is exactly this, and a 404 there
+	// A seat configured and never spawned is exactly this, and a 404 there
 	// would make a healthy new company look broken.
-	r := registryOver(t, queries.Sources{State: livestate.New()})
-	got := ask(t, r, "agent", map[string]any{"role": "Nobody"})
-	if got["role"] != "Nobody" || got["live"] != nil {
+	cfg, _ := namesakes(t)
+	r := registryOver(t, queries.Sources{State: livestate.New(), Company: companySource(t, cfg)})
+	got := ask(t, r, "agent", map[string]any{"id": "bob"})
+	if got["role"] != "Engineer" || got["live"] != nil {
 		t.Errorf("answer = %+v", got)
 	}
 }
 
-func TestAgentNeedsARole(t *testing.T) {
+func TestAgentRefusesAHandleNoSeatAnswersTo(t *testing.T) {
+	t.Parallel()
+	// A dead link, which the client shows as one — not an empty seat
+	// wearing whatever name was typed, which is what reading the id as a
+	// role name answered.
+	cfg, _ := namesakes(t)
+	r := registryOver(t, queries.Sources{State: livestate.New(), Company: companySource(t, cfg)})
+	for _, id := range []string{"nobody", "Engineer"} {
+		_, err := r.Answer(everyGrant(t), "agent", map[string]any{"id": id})
+		if !errors.Is(err, queries.ErrNotFound) {
+			t.Errorf("agent %q: err = %v, want ErrNotFound", id, err)
+		}
+	}
+}
+
+func TestAgentNeedsAHandle(t *testing.T) {
 	t.Parallel()
 	r := registryOver(t, queries.Sources{State: livestate.New()})
-	if _, err := r.Answer(t.Context(), "agent", nil, ""); !errors.Is(err, queries.ErrBadParams) {
+	if _, err := r.Answer(everyGrant(t), "agent", nil); !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("err = %v, want ErrBadParams", err)
 	}
 }
@@ -342,7 +413,7 @@ func TestTheEnginesHealthIsAPushAndNeverAQuery(t *testing.T) {
 	// EVERY SEAM, so the sweep covers every registration this build has.
 	r := registryOver(t, everySeam(t))
 	for _, name := range []string{"stream", "health"} {
-		if _, err := r.Answer(t.Context(), name, nil, ""); !errors.Is(err, queries.ErrUnknown) {
+		if _, err := r.Answer(everyGrant(t), name, nil); !errors.Is(err, queries.ErrUnknown) {
 			t.Errorf("%q is answerable as a query (%v): read the health push", name, err)
 		}
 	}
@@ -405,7 +476,7 @@ func TestACursorWithoutItsTimestampIsRefused(t *testing.T) {
 	// or repeat whatever collided with it, silently.
 	db := openStore(t)
 	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
-	_, err := r.Answer(t.Context(), "events", map[string]any{"before_id": "e1"}, "")
+	_, err := r.Answer(everyGrant(t), "events", map[string]any{"before_id": "e1"})
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("err = %v, want ErrBadParams", err)
 	}
@@ -435,6 +506,10 @@ func TestTheStoresOwnFiltersArePassedThrough(t *testing.T) {
 	// A listing this surface filtered itself would page differently from
 	// one the store filtered, and the difference shows up as rows that
 	// vanish when a reader scrolls.
+	//
+	// ONE SEAT is narrowed by `seat=<handle>`, resolved through the chart —
+	// see TestOneSeatByHandleNarrowsEventsTheAxisAndTurns, which needs a
+	// company to resolve against.
 	db := openStore(t)
 	seedEvents(t, db.Events(), 6, func(i int, rec *store.EventRecord) {
 		if i%2 == 0 {
@@ -494,7 +569,7 @@ func TestEventAnswersOneRowWithItsPayload(t *testing.T) {
 	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 
 	rows := ask(t, r, "events", nil)["events"].([]store.EventRecord)
-	got, err := r.Answer(t.Context(), "event", map[string]any{"id": rows[0].ID}, "")
+	got, err := r.Answer(everyGrant(t), "event", map[string]any{"id": rows[0].ID})
 	if err != nil {
 		t.Fatalf("event: %v", err)
 	}
@@ -510,7 +585,7 @@ func TestEventAndTraceNeedTheirIdentifiers(t *testing.T) {
 	db := openStore(t)
 	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 	for _, what := range []string{"event", "trace"} {
-		if _, err := r.Answer(t.Context(), what, nil, ""); !errors.Is(err, queries.ErrBadParams) {
+		if _, err := r.Answer(everyGrant(t), what, nil); !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("%s: err = %v, want ErrBadParams", what, err)
 		}
 	}
@@ -702,7 +777,7 @@ token_budget: {week: 10000, month: 40000}
 
 	r := registryOver(t, queries.Sources{
 		State:   livestate.New(),
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		Budget:  budgets,
 		Now:     func() time.Time { return budgetsAt },
 	})
@@ -783,7 +858,7 @@ token_budget: {day: 1000}
 		budgets := coordmemory.NewFleet()
 		chargeAt(t, budgets, coord.AgentScope(id.String()), tc.spent, coord.Caps{period.Day: 1000}, nil)
 		r := registryOver(t, queries.Sources{
-			State: livestate.New(), Company: func() *config.Company { return cfg },
+			State: livestate.New(), Company: companySource(t, cfg),
 			Budget: budgets, Now: func() time.Time { return budgetsAt },
 		})
 		got, _ := askBudgets(t, r)
@@ -832,7 +907,7 @@ token_budget: {day: 1000}
 	orgDay := func(at time.Time) types.BudgetWindow {
 		t.Helper()
 		r := registryOver(t, queries.Sources{
-			State: livestate.New(), Company: func() *config.Company { return cfg },
+			State: livestate.New(), Company: companySource(t, cfg),
 			Budget: budgets, Now: func() time.Time { return at },
 		})
 		got, _ := askBudgets(t, r)
@@ -864,7 +939,7 @@ roles:
 token_budget: {month: 10000}
 `)
 	r := registryOver(t, queries.Sources{
-		State: livestate.New(), Company: func() *config.Company { return cfg },
+		State: livestate.New(), Company: companySource(t, cfg),
 	})
 	got, raw := askBudgets(t, r)
 	if got.Durable {
@@ -914,7 +989,7 @@ token_budget: {day: 10000}
 
 	r := registryOver(t, queries.Sources{
 		State:   livestate.New(),
-		Company: func() *config.Company { return cfg },
+		Company: companySource(t, cfg),
 		Budget:  budgets,
 		Now:     func() time.Time { return budgetsAt },
 	})
@@ -962,12 +1037,15 @@ func parsed(t *testing.T, doc string) *config.Company {
 // anything.
 func TestAnAgentAnswerCarriesItsFinishedCalls(t *testing.T) {
 	t.Parallel()
+	cfg, ids := namesakes(t)
 	db := openStore(t)
 	log := db.Events()
-	seedPhases(t, log, "Lead", "agent-lead")
+	seedPhases(t, log, ids["ada"], ids["bob"])
 
-	r := registryOver(t, queries.Sources{State: livestate.New(), Events: fleetOf(log)})
-	got := ask(t, r, "agent", map[string]any{"role": "Lead"})
+	r := registryOver(t, queries.Sources{
+		State: livestate.New(), Events: fleetOf(log), Company: companySource(t, cfg),
+	})
+	got := ask(t, r, "agent", map[string]any{"id": "ada"})
 
 	history, _ := got["llm_history"].([]store.EventRecord)
 	if len(history) != 2 {
@@ -1004,18 +1082,30 @@ func TestAnAgentAnswerCarriesItsFinishedCalls(t *testing.T) {
 	}
 }
 
-// A SEAT ADDRESSED BY HANDLE FINDS THE SAME HISTORY. The dashboard holds the
-// handle; the store rows are keyed by the derived agent id and the role.
+// A SEAT ADDRESSED BY HANDLE FINDS ITS OWN HISTORY AND NOT ITS NAMESAKE'S. The
+// dashboard holds the handle; the store rows are matched on the derived agent
+// id, and the namesake's row beside them carries the same role name.
 func TestAgentHistoryResolvesFromTheHandle(t *testing.T) {
 	t.Parallel()
+	cfg, ids := namesakes(t)
 	db := openStore(t)
 	log := db.Events()
-	seedPhases(t, log, "Lead", "agent-lead")
+	seedPhases(t, log, ids["ada"], ids["bob"])
 
-	r := registryOver(t, queries.Sources{State: livestate.New(), Events: fleetOf(log)})
-	got := ask(t, r, "agent", map[string]any{"role": "Lead"})
-	if history, _ := got["llm_history"].([]store.EventRecord); len(history) != 2 {
-		t.Fatalf("asking by role found %v", got["llm_history"])
+	r := registryOver(t, queries.Sources{
+		State: livestate.New(), Events: fleetOf(log), Company: companySource(t, cfg),
+	})
+	history, _ := ask(t, r, "agent", map[string]any{"id": "ada"})["llm_history"].([]store.EventRecord)
+	if len(history) != 2 {
+		t.Fatalf("ada's history = %v, want her two phases", history)
+	}
+	for _, row := range history {
+		if row.ID == "p3" {
+			t.Error("ada's history carries bob's phase, which shares her role name")
+		}
+	}
+	if theirs, _ := ask(t, r, "agent", map[string]any{"id": "bob"})["llm_history"].([]store.EventRecord); len(theirs) != 1 {
+		t.Errorf("bob's history = %v, want his one phase", theirs)
 	}
 }
 
@@ -1024,10 +1114,11 @@ func TestAgentHistoryResolvesFromTheHandle(t *testing.T) {
 // because the event log is missing would turn a degraded panel into no screen.
 func TestAnAgentAnswerSurvivesWithNoEventLog(t *testing.T) {
 	t.Parallel()
-	r := registryOver(t, queries.Sources{State: livestate.New()})
-	got := ask(t, r, "agent", map[string]any{"role": "Lead"})
+	cfg, _ := namesakes(t)
+	r := registryOver(t, queries.Sources{State: livestate.New(), Company: companySource(t, cfg)})
+	got := ask(t, r, "agent", map[string]any{"id": "ada"})
 
-	if got["role"] != "Lead" {
+	if got["role"] != "Engineer" {
 		t.Fatalf("answer = %v", got)
 	}
 	history, ok := got["llm_history"].([]store.EventRecord)
@@ -1037,18 +1128,19 @@ func TestAnAgentAnswerSurvivesWithNoEventLog(t *testing.T) {
 	}
 }
 
-// seedPhases writes two finished phases for one seat, plus one for another so
-// the filter has something to exclude.
-func seedPhases(t *testing.T, log *store.EventLog, role, agentID string) {
+// seedPhases writes two finished phases for one seat, plus one for its
+// namesake — another seat with the SAME role name — so the filter has
+// something to exclude that a match on the name would not.
+func seedPhases(t *testing.T, log *store.EventLog, agentID, namesakeID string) {
 	t.Helper()
 	base := time.Now().UTC().Add(-time.Hour)
 	rows := []struct {
-		id, phase, role, agent string
-		at                     time.Time
+		id, phase, agent string
+		at               time.Time
 	}{
-		{"p1", "plan", role, agentID, base},
-		{"p2", "execute", role, agentID, base.Add(time.Second)},
-		{"p3", "plan", "Someone Else", "agent-other", base.Add(2 * time.Second)},
+		{"p1", "plan", agentID, base},
+		{"p2", "execute", agentID, base.Add(time.Second)},
+		{"p3", "plan", namesakeID, base.Add(2 * time.Second)},
 	}
 	for _, row := range rows {
 		payload := `{"turn_id":"t-1","phase":"` + row.phase + `","iteration":1,` +
@@ -1058,8 +1150,8 @@ func seedPhases(t *testing.T, log *store.EventLog, role, agentID string) {
 			Type:    "agent_phase_completed",
 			Source:  "engine",
 			Time:    row.at,
-			Actor:   row.role,
-			Tags:    map[string]string{"agent_role": row.role, "agent_id": row.agent},
+			Actor:   "Engineer",
+			Tags:    map[string]string{"agent_role": "Engineer", "agent_id": row.agent},
 			Payload: json.RawMessage(payload),
 		}); err != nil {
 			t.Fatalf("append %s: %v", row.id, err)
@@ -1081,7 +1173,7 @@ func TestAMissingEventIsNotFoundRatherThanAFailure(t *testing.T) {
 	seedEvents(t, db.Events(), 1, nil)
 	r := registryOver(t, queries.Sources{Events: fleetOf(db.Events())})
 
-	_, err := r.Answer(t.Context(), "event", map[string]any{"id": "ev-nobody-published"}, "")
+	_, err := r.Answer(everyGrant(t), "event", map[string]any{"id": "ev-nobody-published"})
 	if !errors.Is(err, queries.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
@@ -1140,15 +1232,18 @@ func TestASeatWithNoFinishedPhasesAnswersRatherThanPanics(t *testing.T) {
 	// Seeded, so the log is readable and non-empty — the empty result has to
 	// come from this seat having no phases, not from an empty table.
 	seedEvents(t, db.Events(), 3, nil)
-	r := registryOver(t, queries.Sources{State: livestate.New(), Events: fleetOf(db.Events())})
+	cfg, _ := namesakes(t)
+	r := registryOver(t, queries.Sources{
+		State: livestate.New(), Events: fleetOf(db.Events()), Company: companySource(t, cfg),
+	})
 
-	got := ask(t, r, "agent", map[string]any{"role": "NobodyHasThisRole"})
+	got := ask(t, r, "agent", map[string]any{"id": "bob"})
 	rows, ok := got["llm_history"].([]store.EventRecord)
 	if !ok {
 		t.Fatalf("llm_history = %#v, want a slice", got["llm_history"])
 	}
 	if len(rows) != 0 {
-		t.Errorf("llm_history = %d rows, want none for a role nothing published under", len(rows))
+		t.Errorf("llm_history = %d rows, want none for a seat nothing published under", len(rows))
 	}
 	// And the cursor is withheld rather than pointing at a row that is not
 	// there, which is what makes a client stop paging.
@@ -1169,4 +1264,109 @@ func windowWidth(t *testing.T, got tokens.Rollup) time.Duration {
 		t.Fatalf("until = %q: %v", got.Until, err)
 	}
 	return until.Sub(since)
+}
+
+// A SEAT'S STATUS IS EVERYBODY'S AND ITS TRANSCRIPT IS ITS TRAIL'S (ADR-0033).
+//
+// The `agent` answer and the `live_call` answer are the overview's — anybody
+// may ask them — and what a seat is SAYING reaches only an admin and whoever
+// leads it: the live call's trigger, the payload of every finished call. To
+// anybody else the call comes back as its status with `body_withheld` set, and
+// each finished call as its columns without its payload. The work item a phase
+// was charged to is the tracker's, withheld from a reader without it whatever
+// else they read — the lead holding nothing included.
+//
+// Mutation: answer the overlay or the history unmasked, or decide the body by
+// the reader's apps rather than by the seat's trail, and the stranger's rows
+// go red; drop the tracker rule and the lead's do.
+func TestAnAgentAnswerCarriesNoTranscriptToAStatusReader(t *testing.T) {
+	t.Parallel()
+	cfg, ids := namesakes(t)
+	state := livestate.New()
+	state.Apply(&livestate.Envelope{
+		ID: "e1", Type: "agent_phase_started", Timestamp: "2026-06-14T12:00:00Z",
+		Category: "task", Payload: map[string]any{
+			"agent_id": ids["ada"], "role": "Engineer", "turn_id": "tn-1",
+			"phase": "execute", "iteration": float64(0),
+			"trigger": map[string]any{"type": "external_notification", "text": "ship it"},
+		},
+	})
+	log := openStore(t).Events()
+	if err := log.Append(t.Context(), store.EventRecord{
+		ID: "p-1", Type: "agent_phase_completed", Source: "engine",
+		Time: time.Now().UTC().Add(-time.Minute), Actor: "Engineer",
+		Tags: map[string]string{"agent_role": "Engineer", "agent_id": ids["ada"],
+			"work_item": "native:task-1", "task_id": "worker-7"},
+		Payload: json.RawMessage(`{"turn_id":"tn-0","phase":"execute","response":"the secret plan"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name    string
+		ctx     context.Context
+		body    bool
+		tracker bool
+	}{
+		{"an admin", asGrants(t, "", iam.GrantAdmin), true, true},
+		{"the seat's lead, holding no permission", asSeat(t, "lead"), true, false},
+		{"a stranger holding every app", asSeat(t, "pat", iam.Apps...), false, true},
+		{"a stranger holding nothing", asSeat(t, "pat"), false, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := registryOver(t, queries.Sources{
+				State: state, Events: fleetOf(log), Company: companySource(t, cfg),
+				Chart: leadsChart{lead: "lead", report: "ada"},
+			})
+			got, err := r.Answer(c.ctx, "agent", map[string]any{"id": "ada"})
+			if err != nil {
+				t.Fatalf("agent: %v", err)
+			}
+			wire := asMap(t, got)
+			if wire["body_withheld"] != !c.body {
+				t.Errorf("body_withheld = %v, want %v", wire["body_withheld"], !c.body)
+			}
+			live, _ := wire["live"].(map[string]any)
+			call, _ := live["live_call"].(map[string]any)
+			if call == nil || call["phase"] != "execute" {
+				t.Fatalf("the live call's status was not answered: %v", wire["live"])
+			}
+			if _, shown := call["trigger"]; shown != c.body {
+				t.Errorf("the live call's trigger is shown: %v, want %v", shown, c.body)
+			}
+			history, _ := wire["llm_history"].([]any)
+			if len(history) != 1 {
+				t.Fatalf("llm_history = %v, want the one finished call", wire["llm_history"])
+			}
+			row := history[0].(map[string]any)
+			if row["id"] != "p-1" || row["type"] != "agent_phase_completed" {
+				t.Errorf("the finished call's columns were not answered: %v", row)
+			}
+			if _, shown := row["payload"]; shown != c.body {
+				t.Errorf("the finished call's payload is shown: %v, want %v", shown, c.body)
+			}
+			tags, _ := row["tags"].(map[string]any)
+			for _, tag := range []string{"work_item", "task_id"} {
+				if _, shown := tags[tag]; shown != c.tracker {
+					t.Errorf("the %s tag is shown: %v, want %v", tag, shown, c.tracker)
+				}
+			}
+
+			// AND THE REPAIR QUESTION IS MASKED AS THE PUSH IS.
+			got, err = r.Answer(c.ctx, "live_call", map[string]any{"agent_id": ids["ada"]})
+			if err != nil {
+				t.Fatalf("live_call: %v", err)
+			}
+			repaired, _ := asMap(t, got)["live_call"].(map[string]any)
+			if repaired == nil {
+				t.Fatal("live_call answered no call")
+			}
+			if _, shown := repaired["trigger"]; shown != c.body {
+				t.Errorf("live_call's trigger is shown: %v, want %v", shown, c.body)
+			}
+			if withheld, _ := repaired["body_withheld"].(bool); withheld == c.body {
+				t.Errorf("live_call body_withheld = %v, want %v", withheld, !c.body)
+			}
+		})
+	}
 }

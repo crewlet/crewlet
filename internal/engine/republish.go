@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // Coalescing the re-activations a provisioning pass asks for.
@@ -61,10 +63,10 @@ type republisher struct {
 	last time.Time
 
 	// pending is armed while a request is owed inside the window. Its
-	// operator is the LATEST one asked for: a burst is one apply, and the
+	// party is the LATEST one asked for: a burst is one apply, and the
 	// revision it writes is credited to whoever most recently caused it.
-	pending  *time.Timer
-	operator string
+	pending *time.Timer
+	by      iam.Actor
 
 	// inflight is the immediate run's timer, armed at zero delay so the
 	// caller does not block on it. Separate from pending because both are
@@ -150,12 +152,12 @@ func (r *republisher) every() time.Duration {
 	return republishWindow
 }
 
-// request asks for a re-activation, crediting it to operator.
+// request asks for a re-activation, crediting it to by.
 //
 // run is passed rather than captured so this type knows nothing about the
 // engine — which is what lets the cases drive it with a recorder and assert
 // the coalescing itself rather than its effects.
-func (r *republisher) request(operator string, run func(context.Context, string)) {
+func (r *republisher) request(by iam.Actor, run func(context.Context, iam.Actor)) {
 	r.mu.Lock()
 	if r.stopped {
 		r.mu.Unlock()
@@ -195,12 +197,12 @@ func (r *republisher) request(operator string, run func(context.Context, string)
 		// bounds itself ([Engine.rebuildForSealedSecrets]). A person who pressed
 		// Connect waits no longer than before — the reload starts now; what
 		// stops waiting for it is the pass.
-		r.startNow(run, operator)
+		r.startNow(run, by)
 		return
 	}
 	// INSIDE THE WINDOW. The request is not dropped — it is what the run
 	// at the end of the window will carry.
-	r.operator = operator
+	r.by = by
 	if r.pending != nil {
 		r.mu.Unlock()
 		return
@@ -211,11 +213,11 @@ func (r *republisher) request(operator string, run func(context.Context, string)
 }
 
 // startNow performs one run off the caller's goroutine, crediting it to the
-// operator who asked at that moment.
+// party who asked at that moment.
 //
 // Its own timer rather than [republisher.pending], which the trailing run
 // needs: a burst arms that one while this is still in flight.
-func (r *republisher) startNow(run func(context.Context, string), operator string) {
+func (r *republisher) startNow(run func(context.Context, iam.Actor), by iam.Actor) {
 	r.mu.Lock()
 	if r.stopped {
 		r.mu.Unlock()
@@ -234,13 +236,13 @@ func (r *republisher) startNow(run func(context.Context, string), operator strin
 		// caller's context here at all, and [Engine.rebuildForSealedSecrets]
 		// gives it the deadline. Not detached from SHUTDOWN, which is a
 		// different question and the one this context answers.
-		run(ctx, operator)
+		run(ctx, by)
 	})
 	r.mu.Unlock()
 }
 
 // fire performs the run one or more requests inside the window asked for.
-func (r *republisher) fire(run func(context.Context, string)) {
+func (r *republisher) fire(run func(context.Context, iam.Actor)) {
 	r.mu.Lock()
 	if r.stopped {
 		r.mu.Unlock()
@@ -248,8 +250,8 @@ func (r *republisher) fire(run func(context.Context, string)) {
 	}
 	r.pending = nil
 	r.last = r.clock()
-	operator := r.operator
-	r.operator = ""
+	by := r.by
+	r.by = iam.Actor{}
 	ctx, ok := r.begin()
 	r.mu.Unlock()
 	if !ok {
@@ -258,7 +260,7 @@ func (r *republisher) fire(run func(context.Context, string)) {
 	defer r.runs.Done()
 	// DETACHED FROM THE CALLER, like the inline path, and bound to shutdown
 	// by the context begin hands over.
-	run(ctx, operator)
+	run(ctx, by)
 }
 
 // stop ends every re-activation this type owns and returns once none is

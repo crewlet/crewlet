@@ -33,7 +33,7 @@ import { Router } from "~/app/router.tsx";
 import { usePageCoverage, useSectionCounts } from "~/app/Shell.tsx";
 import type { MeSection } from "~/app/routes.ts";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
-import type { QueryName, WorkSummary } from "~/protocol/index.ts";
+import { Store, type QueryName, type WorkSummary } from "~/protocol/index.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { QueueCountProvider, queueCountParams } from "~/lib/useQueueCount.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
@@ -110,8 +110,8 @@ function serving(answers: Partial<Record<QueryName, Answer>>, org: unknown = fla
     const answer = answers[what as QueryName];
     return typeof answer === "function" ? answer(params ?? {}) : (answer ?? {});
   });
-  vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useClient).mockReturnValue({ store: new Store(), socket: { query } } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue(org as never);
   return query;
 }
@@ -193,12 +193,26 @@ const emptyDay = {
 const noWork = { items: [], groups: [], total_hint: 0, complete: true };
 
 const ada = {
-  operator_id: "ops-1",
-  operator: true,
+  login: "ops-1",
+  grants: ["admin", "tracker", "knowledge"],
   handle: "ada",
+  owner: "ada",
   name: "Ada Okonkwo",
   kind: "human",
 };
+
+/** A principal the directory binds to no seat: their record is their login. */
+const unbound = {
+  login: "token:ops-7",
+  grants: ["tracker", "knowledge", "admin"],
+  handle: "",
+  owner: "token:ops-7",
+  name: "",
+  kind: "",
+};
+
+/** Nobody signed in. */
+const anonymous = { login: "", grants: [], handle: "", owner: "", name: "", kind: "" };
 
 /** One task with the fields a row and a band are decided from. */
 function task(over: Partial<WorkSummary> = {}): WorkSummary {
@@ -276,24 +290,83 @@ test("an explicit handle names whose day it is, in the third person", async () =
   expect(screen.queryByText("yours")).toBeNull();
 });
 
-// AND THE THREE VIEWER STATES TAKE THREE SENTENCES. Only one of them is
-// anybody's fault, and the other two have different remedies: a credential,
-// and a line of company configuration.
-test("an unbound token says what to bind, not that something is broken", async () => {
-  serving({
-    viewer: { operator_id: "ops-7", operator: true, handle: "", name: "", kind: "" },
+// AN UNBOUND READER HAS A DAY OF THEIR OWN, kept under their login — the name
+// their assistant writes their priorities and marks under. Asked for by the
+// SEAT, an unbound reader was shown nothing but a sentence about binding while
+// the record sat under a name the screen never asked for. It shows the day
+// now, and says what binding would add above it.
+test("an unbound reader's own day is the one kept under their login", async () => {
+  const query = serving({
+    viewer: unbound,
+    work_my_work: { ...emptyDay, handle: "token:ops-7" },
+    work_items: noWork,
   });
   mount();
-  await waitFor(() => expect(screen.getByText(/not bound to a person/)).toBeTruthy());
-  // The id is NAMED, because it is the value that goes in the config.
-  expect(screen.getByText(/ops-7/)).toBeTruthy();
+  await waitFor(() => expect(screen.getByText("yours")).toBeTruthy());
+  await waitFor(() => expect(screen.getByText("Nothing is assigned to you")).toBeTruthy());
+  expect(query).toHaveBeenCalledWith("work_my_work", { handle: "token:ops-7" });
+  // AND WHAT BINDING WOULD ADD, with the command that binds it, rather than
+  // reporting a fault, which is a person's (`Inbox.test.tsx`).
+  expect(screen.getByText(/bind this account to an open seat/)).toBeTruthy();
+  expect(screen.getByText("crewlet iam bind ID SEAT")).toBeTruthy();
+  expect(screen.queryByText(/Every person holds a human seat/)).toBeNull();
+  expect(screen.getAllByText(/token:ops-7/).length).toBeGreaterThan(0);
+  // A LOGIN IS NOT A SEAT, so the banner names it without a chip linking to a
+  // seat page that would answer "no such seat".
+  expect(screen.queryByRole("link", { name: /token:ops-7/ })).toBeNull();
 });
 
-test("no credential at all is a different sentence from an unbound one", async () => {
-  serving({ viewer: { operator_id: "", operator: false, handle: "", name: "", kind: "" } });
+// AND THE THREE VIEWER STATES TAKE THREE SENTENCES: nobody signed in is not an
+// unbound reader, whose day is theirs, and neither is a reader who has not
+// chosen somebody.
+test("nobody signed in is a different sentence from an unbound reader", async () => {
+  serving({ viewer: anonymous });
   mount();
-  await waitFor(() => expect(screen.getByText(/No credential is presented/)).toBeTruthy());
-  expect(screen.queryByText(/not bound to a person/)).toBeNull();
+  await waitFor(() => expect(screen.getByText(/Nobody is signed in/)).toBeTruthy());
+  expect(screen.queryByText(/not bound to a seat/)).toBeNull();
+});
+
+// THE DAY MOVES WITH THE READER'S INBOX. The record that hands somebody work,
+// asks them something or reorders their queue is the record that writes them a
+// notice, so the frame that moves their inbox is what asks the day again —
+// every read the strip and the banner are drawn from, not only one of them,
+// since a tab count that moved while the banner did not is two answers about
+// one change.
+test("the reader's own day is asked again when their inbox moves", async () => {
+  const store = new Store();
+  const answers: Partial<Record<QueryName, unknown>> = {
+    viewer: ada,
+    work_my_work: emptyDay,
+    work_items: noWork,
+    work_person: { handle: "ada", version: 1, held: true, complete: true },
+  };
+  const query = vi.fn(
+    async (what: string, _params?: Record<string, unknown>) => answers[what as QueryName] ?? {},
+  );
+  vi.mocked(useClient).mockReturnValue({ store, socket: { query } } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
+  vi.mocked(useOrg).mockReturnValue(flatOrg as never);
+  mount();
+  await counts();
+  // THE SECTION COUNTS, not the list under them: the list carries an
+  // arrangement, and it is the list's own question rather than the day's.
+  const asked = (what: string) =>
+    query.mock.calls.filter(
+      (c) => c[0] === what && (c[1] as Record<string, unknown> | undefined)?.group_by === undefined,
+    ).length;
+  await waitFor(() => expect(asked("work_person")).toBeGreaterThan(0));
+  const before = {
+    day: asked("work_my_work"),
+    person: asked("work_person"),
+    count: asked("work_items"),
+  };
+
+  act(() => {
+    store.applyInboxChanged({ handle: "ada", unread_delta: 1, subject: "t-1", reason: "assignee" });
+  });
+  await waitFor(() => expect(asked("work_my_work")).toBeGreaterThan(before.day));
+  await waitFor(() => expect(asked("work_person")).toBeGreaterThan(before.person));
+  await waitFor(() => expect(asked("work_items")).toBeGreaterThan(before.count));
 });
 
 /** The banner's whose-day pill, as it is drawn for one reader. */
@@ -338,7 +411,7 @@ test("the banner names whose day it is and links to their seat", async () => {
   });
   mount();
   const chip = await screen.findByRole("link", { name: /Rui Santos/ });
-  expect(chip.getAttribute("href")).toBe("#/agents/seats/rui");
+  expect(chip.getAttribute("href")).toBe("#/company/org/seats/rui");
   expect(screen.getByText("rui")).toBeTruthy();
   expect(screen.getByText("their day")).toBeTruthy();
 });
@@ -510,8 +583,8 @@ test("the queue claims no count until the tracker answers", async () => {
           ? emptyDay
           : {},
   );
-  vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useClient).mockReturnValue({ store: new Store(), socket: { query } } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue(
     withDerived({
       name: "Acme",
@@ -643,7 +716,7 @@ test("an empty claim says what would be in it", async () => {
   serving({ viewer: ada, work_my_work: emptyDay, work_items: noWork });
   mount("unblocked");
   await waitFor(() => expect(screen.getByText("Nothing here")).toBeTruthy());
-  expect(screen.getByText(/has become workable for you/)).toBeTruthy();
+  expect(screen.getByText("Nothing newly unblocked.")).toBeTruthy();
 });
 
 // THE QUESTIONS PUT TO SOMEBODY ELSE ARE NOT WRITTEN AS THE READER'S. This is
@@ -666,8 +739,9 @@ function askRow(over: Record<string, unknown> = {}) {
   return {
     ...task({ key: "ENG-9", title: "Which reader?" }),
     comment: "c1",
-    asked_by: "ops-rui",
-    asked_by_seat: "rui",
+    // THE ASKER'S RECORD NAME (`iam.ActorFor`): a person the directory binds
+    // to a seat asks AS that seat, so the row names the person by it.
+    asked_by: "rui",
     asked_at: "2031-04-16T09:00:00Z",
     body: "parent or replies?",
     open: true,
@@ -691,8 +765,8 @@ const adaActs = {
   acts: ["comment_on_work_item", "set_priorities", "update_work_item", "place_work_item"],
 };
 
-// THE QUESTIONS PUT TO THIS PERSON ARE ANSWERED WHERE THEY STAND — the row Home
-// draws, with the options as the answer. The literal tool call this section
+// THE QUESTIONS PUT TO THIS PERSON ARE ANSWERED WHERE THEY STAND: the list
+// Home draws, grouped under who asked, with Accept and Change as the answer. The literal tool call this section
 // once printed was the gesture a person's assistant makes; the dashboard makes
 // it itself now, as the person (ADR-0024).
 test("an ask on your own day is answered in place with the option chosen", async () => {
@@ -704,10 +778,15 @@ test("an ask on your own day is answered in place with the option chosen", async
   });
   mount("asked-of-me");
   // THE PERSON WHO ASKED, never the credential that wrote it.
-  await waitFor(() => expect(screen.getByText(/Rui Santos asks: Read the parent/)).toBeTruthy());
+  await waitFor(() =>
+    expect(document.querySelector(".decision-group-who")?.textContent).toBe("Rui Santos"),
+  );
+  expect(screen.getByText("Read the parent or the replies?")).toBeTruthy();
   expect(screen.getByText(/you are the approver/)).toBeTruthy();
   expect(screen.queryByText(/comment_on_work_item\(/)).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "The replies" }));
+  fireEvent.click(screen.getByRole("button", { name: "Change" }));
+  fireEvent.click(screen.getByRole("radio", { name: /The replies/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Submit" }));
   await waitFor(() => expect(posted.length).toBe(1));
   expect(posted[0]).toEqual({
     tool: "comment_on_work_item",
@@ -728,7 +807,7 @@ test("an ask on somebody else's day is written about them and cannot be answered
     work_my_work: {
       ...emptyDay,
       handle: "rui",
-      asked_of_me: [askRow({ asked_by: "bo", asked_by_seat: undefined })],
+      asked_of_me: [askRow({ asked_by: "bo" })],
     },
   });
   mount("asked-of-me");
@@ -736,11 +815,12 @@ test("an ask on somebody else's day is written about them and cannot be answered
   expect(screen.queryByText(/you are the approver/)).toBeNull();
   // SAID ONCE ON THE PAGE, not only on a hover: a row of dimmed options with
   // nothing said reads as a broken screen.
-  expect(screen.getByText(/^Answering is off\. This is Rui Santos’s day/)).toBeTruthy();
-  const option = screen.getByRole("button", { name: "The parent" });
-  expect(option.getAttribute("aria-disabled")).toBe("true");
-  expect(option.getAttribute("title")).toContain("This is Rui Santos’s day");
-  fireEvent.click(option);
+  expect(screen.getByText("Answering is off. Viewing Rui Santos’s day. Read-only.")).toBeTruthy();
+  const accept = screen.getByRole("button", { name: "Accept" });
+  expect(accept.getAttribute("aria-disabled")).toBe("true");
+  expect(accept.getAttribute("title")).toContain("Viewing Rui Santos’s day. Read-only.");
+  expect(screen.getByRole("button", { name: "Change" }).getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(accept);
   await new Promise((r) => setTimeout(r, 20));
   expect(posted).toEqual([]);
 });
@@ -767,29 +847,26 @@ test("a page of asks under a larger total says which ones it holds", async () =>
 // Asked by me
 // ---------------------------------------------------------------------------
 
-// WHAT THIS PERSON IS WAITING ON is the work list held to the ASKER — and held
-// to the person rather than one of their names: a question put through their
-// own credential is authored by the TOKEN, and the engine counts it as theirs
-// only for the viewer it knows both names of. So the section and its count ask
-// with the person as the viewer, on anybody's day.
-test("asked by me asks for the person's questions under both of their names", async () => {
+// WHAT THIS PERSON IS WAITING ON is the work list held to the ASKER, by the
+// one name the engine records them under (`iam.ActorFor`): a person bound to a
+// seat asks AS the seat whichever credential they asked through, so there is
+// no second name to ask under and no `viewer` to send beside it.
+test("asked by me asks for the person's questions by the one name they are recorded under", async () => {
   location.hash = "#/me/asked-by-me?handle=rui";
-  // THE ENGINE ANSWERS A TASK ONLY THE TOKEN ASKED ON — the Party expansion
-  // is the engine's, so here it answers exactly what it would.
   const query = serving({
     viewer: ada,
     work_my_work: { ...emptyDay, handle: "rui" },
     work_items: (p: Record<string, unknown>) =>
-      p.asked_by === "rui" && p.viewer === "rui"
+      p.asked_by === "rui" && !("viewer" in p)
         ? {
             ...noWork,
-            items: [task({ key: "ENG-77", title: "Asked through the token" })],
+            items: [task({ key: "ENG-77", title: "Asked through their assistant" })],
             total_hint: 1,
           }
         : noWork,
   });
   mount("asked-by-me");
-  await waitFor(() => expect(screen.getByText("Asked through the token")).toBeTruthy());
+  await waitFor(() => expect(screen.getByText("Asked through their assistant")).toBeTruthy());
   const asked = query.mock.calls
     .filter((c) => c[0] === "work_items" && (c[1] as Record<string, unknown>).asked_by)
     .map((c) => c[1] as Record<string, unknown>);
@@ -798,7 +875,7 @@ test("asked by me asks for the person's questions under both of their names", as
   expect(asked.some((p) => p.limit !== 1)).toBe(true);
   for (const params of asked) {
     expect(params.asked_by).toBe("rui");
-    expect(params.viewer).toBe("rui");
+    expect(params).not.toHaveProperty("viewer");
   }
   expect((await counts())["asked-by-me"]).toBe("1");
   // NOT A CHIP AND NOT A KEY: the asker is what the section IS.
@@ -854,7 +931,7 @@ const orderedByRui = {
 test("a queue a lead ordered is announced on the reading nobody opened", async () => {
   serving(orderedByRui);
   mount();
-  await waitFor(() => expect(screen.getByText(/put this order in place/)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/Order set by/)).toBeTruthy());
   expect(screen.getByText(/Rui Santos/)).toBeTruthy();
   // The queue opens ordered by due date, so the banner is what carried it.
   expect(screen.getByRole("radio", { name: /Due/ }).getAttribute("aria-checked")).toBe("true");
@@ -891,7 +968,7 @@ test("a queue nobody else ordered carries neither banner nor mark", async () => 
   });
   mount();
   await counts();
-  expect(screen.queryByText(/put this order in place/)).toBeNull();
+  expect(screen.queryByText(/Order set by/)).toBeNull();
   expect(prioritiesOption().getAttribute("title")).toBeNull();
 });
 
@@ -902,7 +979,7 @@ test("the banner offers no way to the reading that is already open", async () =>
   location.hash = "#/me?order=priorities";
   serving(orderedByRui);
   mount();
-  await waitFor(() => expect(screen.getByText(/put this order in place/)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/Order set by/)).toBeTruthy());
   expect(screen.queryByRole("button", { name: "Priorities →" })).toBeNull();
 });
 
@@ -1104,12 +1181,12 @@ test("a bound reader is offered no row that returns them where they are", async 
 // a refusal — and the screen's own sentence named that pick as the remedy.
 test("an anonymous reader gets the credential sentence, not a menu of refusals", async () => {
   const query = serving({
-    viewer: { operator_id: "", operator: false, handle: "", name: "", kind: "" },
+    viewer: { login: "", grants: [], handle: "", owner: "", name: "", kind: "" },
   });
   mount();
-  await waitFor(() => expect(screen.getByText(/No credential is presented/)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/Nobody is signed in/)).toBeTruthy());
   expect(screen.queryByRole("combobox", { name: "Whose day" })).toBeNull();
-  expect(screen.queryByText(/pick somebody above/)).toBeNull();
+  expect(screen.queryByText(/pick someone above/)).toBeNull();
   // AND THE LOAD STOPS BEING ASKED FOR. It is the picker's own question, and
   // once the viewer answers there is no control for it to fill — the FIRST
   // read is unavoidable, because until then this reader is indistinguishable
@@ -1173,7 +1250,7 @@ test("the priorities say how many they hold and how many are the person's own", 
   mount();
   expect(
     await screen.findByText(
-      "5 open tasks on your list, in the order to work them — 2 of them assigned to you. The Queue counts only the work assigned to you.",
+      "5 open tasks on your list, in the order to work them. 2 of them assigned to you. The Queue counts only the work assigned to you.",
     ),
   ).toBeTruthy();
 });
@@ -1363,9 +1440,9 @@ describe("somebody else's day", () => {
     serving(day("rui"), ledOrg);
     mount();
     await waitFor(() => expect(rowOf("ENG-5").getAttribute("draggable")).toBe("true"));
-    // AND WHAT IT DOES IS SAID BEFORE IT IS DONE: an instruction to them,
-    // stamped with the reader's name — not a private arrangement.
-    expect(screen.getByText(/stamped on Rui Santos’s queue with your name/)).toBeTruthy();
+    // AND WHAT IT DOES IS SAID BEFORE IT IS DONE: the report is told, so it is
+    // an instruction to them rather than a private arrangement.
+    expect(screen.getByText("Rui Santos is told when you reorder.")).toBeTruthy();
     fireEvent.keyDown(rowOf("ENG-5"), { key: "ArrowDown", altKey: true });
     await waitFor(() => expect(posted.length).toBe(1));
     expect(posted[0]!.args).toEqual({
@@ -1379,8 +1456,8 @@ describe("somebody else's day", () => {
     location.hash = "#/me/asked-of-me?handle=rui";
     serving(day("rui"), ledOrg);
     mount("asked-of-me");
-    const option = await screen.findByRole("button", { name: "The parent" });
-    expect(option.getAttribute("aria-disabled")).toBe("true");
+    const accept = await screen.findByRole("button", { name: "Accept" });
+    expect(accept.getAttribute("aria-disabled")).toBe("true");
   });
 
   test("a reader who does not lead them cannot reorder it, and is told who can", async () => {
@@ -1405,13 +1482,8 @@ describe("somebody else's day", () => {
 test.each([
   [
     "an anonymous reader",
-    { operator_id: "", operator: false, handle: "", name: "", kind: "" },
+    { login: "", grants: [], handle: "", owner: "", name: "", kind: "" },
     WRITE_REASONS.anonymous,
-  ],
-  [
-    "an unbound token",
-    { operator_id: "ops-7", operator: true, handle: "", name: "", kind: "" },
-    WRITE_REASONS.unbound,
   ],
   ["a person the engine does not reorder for", { ...ada, acts: [] }, WRITE_REASONS.not_served],
 ])("%s sees the rows and the reason they do not move", async (_who, viewer, reason) => {
@@ -1427,8 +1499,7 @@ test.each([
   expect(rowOf("ENG-5").getAttribute("draggable")).toBeNull();
 });
 
-// A PAGE OF PRIORITIES SAYS IT IS ONE, and what becomes of the rest: the
-// entries past the page keep their places when one of these moves.
+// A PAGE OF PRIORITIES SAYS IT IS ONE, and how much of the list it holds.
 test("the entries past the page are named, not dropped", async () => {
   location.hash = "#/me?order=priorities";
   serving({
@@ -1442,11 +1513,7 @@ test("the entries past the page are named, not dropped", async () => {
     work_person: storedOf("ada"),
   });
   mount();
-  await waitFor(() =>
-    expect(
-      screen.getByText(/The first 3 open entries of 5\. The other 2 keep their places/),
-    ).toBeTruthy(),
-  );
+  await waitFor(() => expect(screen.getByText("Showing 3 of 5.")).toBeTruthy());
 });
 
 // THE INBOX IS NOT ONE OF THE CLAIMS. What REACHED somebody is a different

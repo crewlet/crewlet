@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/procgroup"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 )
@@ -196,16 +197,67 @@ func TestDirectModeRefusesToWriteOutsideTheBox(t *testing.T) {
 	}
 }
 
-func TestDirectModeNamesTheContainerAlternativeWhenItRefuses(t *testing.T) {
+// A TILDE IS THE BOX'S HOME, in a direct box as in a remote one, whose own
+// agent expands it when it writes a setup file: "~/.npmrc" used to be written
+// to a directory named "~" inside the home here, so one step put its file in
+// two places depending on the cell. Another account's home is refused, as the
+// remote agent refuses it.
+func TestADirectBoxWritesATildePathInItsHome(t *testing.T) {
 	t.Parallel()
-	local := newDirect(t)
-	box := mustCreate(t, local, Spec{})
-	err := box.WriteFile(t.Context(), "/usr/local/bin/tool", []byte("x"))
-	if err == nil {
-		t.Fatal("expected a refusal")
+	box := mustCreate(t, newDirect(t), Spec{})
+	if err := box.WriteFile(t.Context(), "~/.npmrc", []byte("registry=x\n")); err != nil {
+		t.Fatalf("WriteFile(~/.npmrc): %v", err)
 	}
-	if !strings.Contains(err.Error(), string(Container)) {
-		t.Fatalf("the refusal does not tell the operator what to do instead: %v", err)
+	got, err := os.ReadFile(filepath.Join(box.Home(), ".npmrc"))
+	if err != nil || string(got) != "registry=x\n" {
+		t.Fatalf("the home's .npmrc reads %q, %v; want the file written as ~/.npmrc", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(box.Home(), "~")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a directory named ~ was made in the home: %v", err)
+	}
+	for _, path := range []string{"~", "~bob/.npmrc"} {
+		if err := box.WriteFile(t.Context(), path, []byte("x")); err == nil {
+			t.Errorf("WriteFile(%q) succeeded; it names the home itself or another account's", path)
+		}
+	}
+}
+
+// A LOCAL BOX'S REFUSAL NAMES A REMEDY THAT WORKS IN EVERY LOCAL CELL.
+//
+// The direct box's used to end "or use run_in container", and a container box
+// refuses the same path: it writes a file only under its one mount, the home.
+// So an operator who followed it moved the seat and met the same refusal in
+// other words. What works in both is the box's home: a file named relative to
+// it, which a file entry can always write (a direct box's home is minted per
+// box, so no absolute path names it), or a setup command writing under
+// "$HOME".
+func TestALocalBoxsRefusalNamesARemedyThatWorks(t *testing.T) {
+	t.Parallel()
+	const system = "/usr/local/bin/tool"
+	boxes := map[Placement]Sandbox{
+		Direct:    mustCreate(t, newDirect(t), Spec{}),
+		Container: &containerBox{layout: boxLayout{id: "box", root: t.TempDir()}, cli: containerCLI{path: "d"}, container: "c"},
+	}
+	for cell, box := range boxes {
+		err := box.WriteFile(t.Context(), system, []byte("x"))
+		if err == nil {
+			t.Fatalf("a %s box wrote %s, outside its home", cell, system)
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "relative to the home") {
+			t.Errorf("the %s box's refusal does not say to name the file relative to its "+
+				"home: %v", cell, err)
+		}
+		if !strings.Contains(msg, `"$HOME"`) || !strings.Contains(msg, "command") {
+			t.Errorf("the %s box's refusal does not say to have a setup command write the "+
+				"file under its home: %v", cell, err)
+		}
+		for other := range boxes {
+			if other != cell && strings.Contains(msg, string(other)) {
+				t.Errorf("the %s box's refusal sends the operator to %s, which refuses the "+
+					"same path: %v", cell, other, err)
+			}
+		}
 	}
 }
 
@@ -428,7 +480,7 @@ func TestAttachingToAPausedContainerRefusesItAndLeavesItPaused(t *testing.T) {
 	runtime := filepath.Join(dir, "runtime")
 	writeRuntime(t, runtime, "echo \"$@\" >> "+calls+"\n"+
 		"if [ \"$1\" = inspect ]; then read s < "+state+"; echo \"$s\"; fi\n")
-	local := &Local{opts: LocalOptions{Placement: Container}, root: filepath.Join(dir, "boxes"), runtime: runtime}
+	local := &Local{opts: LocalOptions{Placement: Container}, root: filepath.Join(dir, "boxes"), cli: containerCLI{path: runtime}}
 	layout, err := local.layout("box1")
 	if err != nil {
 		t.Fatal(err)
@@ -632,14 +684,13 @@ func TestAReconnectedBoxStillWritesARefreshedLoginBack(t *testing.T) {
 	}
 }
 
-// A torn-down box must never CREATE a login the operator has since removed.
+// A torn-down box must never CREATE a login the operator has since removed —
+// not even one its run refreshed.
 func TestARemovedLoginIsNotRecreatedByATeardown(t *testing.T) {
 	t.Parallel()
 	store := t.TempDir()
 	shared := filepath.Join(store, "credentials.json")
-	if err := os.WriteFile(shared, []byte(`{"token":"first"}`), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
+	writeFile(t, shared, `{"token":"first"}`)
 	local := newDirect(t)
 	box, err := local.Create(t.Context(), Spec{
 		CredentialFiles: map[string]string{".claude/.credentials.json": shared},
@@ -647,6 +698,7 @@ func TestARemovedLoginIsNotRecreatedByATeardown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	writeFile(t, filepath.Join(box.Home(), ".claude", ".credentials.json"), `{"token":"rotated"}`)
 	if err := os.Remove(shared); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
@@ -655,6 +707,210 @@ func TestARemovedLoginIsNotRecreatedByATeardown(t *testing.T) {
 	}
 	if _, err := os.Stat(shared); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("teardown recreated a login the operator had removed")
+	}
+}
+
+// Nor one the shared directory did not hold when the box was seeded: a login
+// that appeared since is somebody else's, and whatever the box holds at that
+// path is no refresh of it.
+func TestALoginTheBoxWasNotSeededWithIsNeverWrittenBack(t *testing.T) {
+	t.Parallel()
+	shared := filepath.Join(t.TempDir(), "credentials.json")
+	local := newDirect(t)
+	box, err := local.Create(t.Context(), Spec{
+		CredentialFiles: map[string]string{".claude/.credentials.json": shared},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	writeFile(t, shared, `{"token":"an operator's new login"}`)
+	writeFile(t, filepath.Join(box.Home(), ".claude", ".credentials.json"), `{"token":"the box's own"}`)
+	if err := box.Close(t.Context()); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := readFile(t, shared); got != `{"token":"an operator's new login"}` {
+		t.Fatalf("shared login = %q; a box wrote over a login it was never given", got)
+	}
+}
+
+// AN IDLE BOX NEVER WRITES ITS SEED BACK. A run that refreshed nothing holds
+// exactly what it was seeded with — an OpenCode box always does, its export
+// reproducing its import byte for byte — while the host may have refreshed
+// the shared login meanwhile, rotating the seed's refresh token away. Written
+// back, that seed logs every seat out at the next expiry. Every teardown path
+// is held to it: the box Create returned, a kill by id and the orphan reaper,
+// which read the seed from the box's record.
+//
+// Mutation: compare the box's copy with the shared login as it is now, and
+// the host's refresh is reverted.
+func TestAnIdleBoxNeverWritesItsSeedBackOverALoginTheHostRefreshed(t *testing.T) {
+	t.Parallel()
+	for path, teardown := range map[string]func(t *testing.T, local *Local, box Sandbox){
+		"Close": func(t *testing.T, _ *Local, box Sandbox) {
+			if err := box.Close(t.Context()); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+		},
+		"Kill": func(t *testing.T, local *Local, box Sandbox) {
+			if err := local.Kill(t.Context(), box.ID()); err != nil {
+				t.Fatalf("Kill: %v", err)
+			}
+		},
+		"the orphan reaper": func(t *testing.T, local *Local, box Sandbox) {
+			ageBox(t, box, 2*time.Hour)
+			local.reapOrphans(t.Context(), time.Minute)
+		},
+	} {
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+			shared := filepath.Join(t.TempDir(), "credentials.json")
+			writeFile(t, shared, `{"refresh":"v1"}`)
+			local := newDirect(t)
+			box, err := local.Create(t.Context(), Spec{
+				CredentialFiles: map[string]string{".claude/.credentials.json": shared},
+			})
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			// The host refreshes while the box runs; the box does not.
+			writeFile(t, shared, `{"refresh":"v2"}`)
+			teardown(t, local, box)
+			if got := readFile(t, shared); got != `{"refresh":"v2"}` {
+				t.Fatalf("shared login = %q; an idle box put its seed back over the host's refresh", got)
+			}
+		})
+	}
+}
+
+// A REFRESH IS WRITTEN BACK ONLY OVER THE LOGIN IT DESCENDS FROM. A run that
+// refreshed while the host also did holds the older of the two — the host's
+// refresh rotated the token the box's copy came from — so the shared login is
+// kept, and the dropped refresh is said, by file and path and never by value.
+// And a run that refreshed a login the operator removed meanwhile writes none,
+// which is said in its own words: there is no shared login to have kept.
+//
+// Not parallel: it captures the process-wide logger ([captureLogs]).
+//
+// Mutations: write back whenever the box's copy changed, and the host's
+// refresh is replaced; say both outcomes in one sentence, and the removed
+// login's warning claims a login was kept.
+func TestARefreshIsDroppedWhereTheSharedLoginMovedPastItsSeed(t *testing.T) {
+	logs := captureLogs(t)
+	shared := filepath.Join(t.TempDir(), "credentials.json")
+	writeFile(t, shared, `{"refresh":"v1"}`)
+	local := newDirect(t)
+
+	// An idle box drops nothing, so says nothing: it refreshed no login, and
+	// a warning for it would bury the one that matters.
+	idle, err := local.Create(t.Context(), Spec{
+		CredentialFiles: map[string]string{".claude/.credentials.json": shared},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	writeFile(t, shared, `{"refresh":"v1-host"}`)
+	if err := local.Kill(t.Context(), idle.ID()); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	if out := logs.String(); strings.Contains(out, "local_sandbox_credential_superseded") {
+		t.Errorf("an idle box reported a refresh it never made:\n%s", out)
+	}
+
+	writeFile(t, shared, `{"refresh":"v1"}`)
+	box, err := local.Create(t.Context(), Spec{
+		CredentialFiles: map[string]string{".claude/.credentials.json": shared},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	writeFile(t, filepath.Join(box.Home(), ".claude", ".credentials.json"), `{"refresh":"box-refreshed"}`)
+	writeFile(t, shared, `{"refresh":"host-refreshed"}`)
+	if err := local.Kill(t.Context(), box.ID()); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	if got := readFile(t, shared); got != `{"refresh":"host-refreshed"}` {
+		t.Fatalf("shared login = %q; want the host's refresh kept", got)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "local_sandbox_credential_superseded") ||
+		!strings.Contains(out, shared) || !strings.Contains(out, "shared=changed") ||
+		!strings.Contains(out, "the shared one changed after the box was seeded") ||
+		!strings.Contains(out, "the shared one was kept") {
+		t.Errorf("the dropped refresh was not said, naming the path and the newer login kept:\n%s", out)
+	}
+	if strings.Contains(out, "refreshed\"}") || strings.Contains(out, "box-refreshed") {
+		t.Errorf("the log carries a login's value:\n%s", out)
+	}
+
+	// The operator removes the login while a box refreshes it.
+	writeFile(t, shared, `{"refresh":"v1"}`)
+	box, err = local.Create(t.Context(), Spec{
+		CredentialFiles: map[string]string{".claude/.credentials.json": shared},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	writeFile(t, filepath.Join(box.Home(), ".claude", ".credentials.json"), `{"refresh":"box-refreshed"}`)
+	if err := os.Remove(shared); err != nil {
+		t.Fatal(err)
+	}
+	before := len(logs.String())
+	if err := local.Kill(t.Context(), box.ID()); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	if _, err := os.Stat(shared); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("a teardown recreated a login the operator removed")
+	}
+	removed := logs.String()[before:]
+	if !strings.Contains(removed, "local_sandbox_credential_superseded") ||
+		!strings.Contains(removed, "shared=removed") ||
+		!strings.Contains(removed, "the shared one was removed after the box was seeded") ||
+		!strings.Contains(removed, "a box never creates one") {
+		t.Errorf("the refresh dropped over a removed login was not said in its own words:\n%s", removed)
+	}
+	if strings.Contains(removed, "was kept") {
+		t.Errorf("the removed login's warning claims a login was kept:\n%s", removed)
+	}
+}
+
+// THE COMPARISON AND THE WRITE ARE ONE STEP against every other writer of the
+// shared directory: a write-back takes the directory's lock, which the CLI
+// backend's seats and `crewlet llm` commands take for theirs, so it waits for
+// a writer that holds it rather than comparing against a login being replaced.
+//
+// Mutation: compare and write without the lock, and the write lands while
+// another writer holds it.
+func TestAWriteBackWaitsForTheSharedLoginsLock(t *testing.T) {
+	t.Parallel()
+	store := t.TempDir()
+	shared := filepath.Join(store, "credentials.json")
+	writeFile(t, shared, `{"token":"first"}`)
+	local := newDirect(t)
+	box, err := local.Create(t.Context(), Spec{
+		CredentialFiles: map[string]string{".claude/.credentials.json": shared},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	writeFile(t, filepath.Join(box.Home(), ".claude", ".credentials.json"), `{"token":"rotated"}`)
+
+	release, err := hostbox.LockCredentials(t.Context(), store)
+	if err != nil {
+		t.Fatalf("taking the shared login's lock: %v", err)
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- box.Close(t.Context()) }()
+	time.Sleep(200 * time.Millisecond)
+	if got := readFile(t, shared); got != `{"token":"first"}` {
+		release()
+		t.Fatalf("shared login = %q while another writer held its lock", got)
+	}
+	release()
+	if err := <-closed; err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := readFile(t, shared); got != `{"token":"rotated"}` {
+		t.Fatalf("shared login = %q; want the refresh written once the lock was free", got)
 	}
 }
 
@@ -1044,7 +1300,7 @@ func TestTheContainerEnvGoesInAFileNeverOnTheCommandLine(t *testing.T) {
 	root := t.TempDir()
 	box := &containerBox{
 		layout:    boxLayout{id: "box", root: root},
-		runtime:   "/usr/bin/docker",
+		cli:       containerCLI{path: "/usr/bin/docker"},
 		container: "crewlet-sbx-box",
 		env:       map[string]string{"ANTHROPIC_API_KEY": "sk-ant-secret"},
 	}
@@ -1084,8 +1340,8 @@ func TestAnUnrepresentableEnvValueIsDroppedRatherThanForgingAVariable(t *testing
 	t.Parallel()
 	root := t.TempDir()
 	box := &containerBox{
-		layout:  boxLayout{id: "box", root: root},
-		runtime: "/usr/bin/docker", container: "c",
+		layout: boxLayout{id: "box", root: root},
+		cli:    containerCLI{path: "/usr/bin/docker"}, container: "c",
 		env: map[string]string{
 			"SAFE":     "fine",
 			"INJECTED": "value\nADMIN_TOKEN=forged",
@@ -1111,8 +1367,8 @@ func TestTheEnvFileIsRewrittenPerCall(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	box := &containerBox{
-		layout:  boxLayout{id: "box", root: root},
-		runtime: "/usr/bin/docker", container: "c",
+		layout: boxLayout{id: "box", root: root},
+		cli:    containerCLI{path: "/usr/bin/docker"}, container: "c",
 		env: map[string]string{"PHASE": "run"},
 	}
 	if _, err := box.envArgs(map[string]string{"SETUP_ONLY": "yes"}); err != nil {
@@ -1130,22 +1386,36 @@ func TestTheEnvFileIsRewrittenPerCall(t *testing.T) {
 func TestTheContainerMapsInBoxPathsOntoItsSideOfTheMount(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	box := &containerBox{layout: boxLayout{id: "box", root: root}, runtime: "d", container: "c"}
+	box := &containerBox{layout: boxLayout{id: "box", root: root}, cli: containerCLI{path: "d"}, container: "c"}
 	// The box's side of its directory, never the directory itself: that
 	// also holds the engine's records about the box.
 	home := box.layout.home()
 
+	want := filepath.Join(home, "workspace", "notes.md")
+	resolved, _ := filepath.EvalSymlinks(root)
+	notes := func(got string) bool {
+		return got == want || got == filepath.Join(resolved, "home", "workspace", "notes.md")
+	}
 	got, err := box.hostPath(DefaultHome + "/workspace/notes.md")
 	if err != nil {
 		t.Fatalf("hostPath: %v", err)
 	}
-	if want := filepath.Join(home, "workspace", "notes.md"); got != want {
-		if resolved, _ := filepath.EvalSymlinks(root); got != filepath.Join(resolved, "home", "workspace", "notes.md") {
-			t.Fatalf("hostPath = %q, want %q", got, want)
+	if !notes(got) {
+		t.Fatalf("hostPath = %q, want %q", got, want)
+	}
+	// The mount compared as a path rather than as a prefix of one: a doubled
+	// separator and a climb that comes back are both still under it, and so is
+	// a tilde, which is the home in every cell.
+	for _, path := range []string{DefaultHome + "//workspace/notes.md", DefaultHome + "/../user/workspace/notes.md",
+		"~/workspace/notes.md"} {
+		if got, err := box.hostPath(path); err != nil || !notes(got) {
+			t.Errorf("hostPath(%q) = %q, %v; want %q", path, got, err, want)
 		}
 	}
-	if got, err := box.hostPath(DefaultHome); err != nil || got != home {
-		t.Fatalf("hostPath(home) = %q, %v; want %q", got, err, home)
+	// The home itself is no file in the box, which is how a direct box has
+	// always read it ([hostbox.SafeJoin] refuses a root).
+	if got, err := box.hostPath(DefaultHome); err == nil {
+		t.Fatalf("hostPath(home) = %q; want a refusal: the home is no file in the box", got)
 	}
 }
 
@@ -1153,7 +1423,7 @@ func TestTheContainerMapsInBoxPathsOntoItsSideOfTheMount(t *testing.T) {
 // still resolves outside it, and setup-step file paths are operator config.
 func TestTheContainerRefusesAPathThatResolvesOffTheMount(t *testing.T) {
 	t.Parallel()
-	box := &containerBox{layout: boxLayout{id: "box", root: t.TempDir()}, runtime: "d", container: "c"}
+	box := &containerBox{layout: boxLayout{id: "box", root: t.TempDir()}, cli: containerCLI{path: "d"}, container: "c"}
 	for _, path := range []string{
 		DefaultHome + "/../../etc/cron.d/x",
 		"/etc/passwd",
@@ -1199,6 +1469,7 @@ func TestAControlCommandThatHangsIsAbandonedWithATimeoutCode(t *testing.T) {
 	t.Parallel()
 	result, err := runHost(t.Context(), hostCommand{
 		argv:    []string{"/bin/sh", "-c", "sleep 30"},
+		env:     map[string]string{"PATH": os.Getenv("PATH")},
 		timeout: 200 * time.Millisecond,
 	})
 	if err != nil {
@@ -1320,16 +1591,138 @@ func TestASingleWritePastTheLimitIsMarkedOnALine(t *testing.T) {
 	}
 }
 
+// A HOST COMMAND WITH NO ENVIRONMENT IS NOT STARTED.
+//
 // os/exec reads a nil Env as "inherit the parent's", which is exactly what the
-// allowlist exists to prevent — so no caller may reach that path by accident.
-func TestFlattenEnvIsSortedAndNilOnlyWhenEmpty(t *testing.T) {
+// allowlist exists to prevent — and every container-runtime call in this file
+// reached the child that way, handing the runtime's CLI the engine's keyring
+// and Tier A tokens. The refusal has to come before the fork, so the proof is
+// that the child never ran.
+func TestAHostCommandWithNoEnvironmentIsNotStarted(t *testing.T) {
 	t.Parallel()
-	if got := flattenEnv(nil); got != nil {
-		t.Fatalf("flattenEnv(nil) = %v", got)
+	marker := filepath.Join(t.TempDir(), "ran")
+	_, err := runHost(t.Context(), hostCommand{
+		argv: []string{"/bin/sh", "-c", `: > "$0"`, marker},
+	})
+	if err == nil {
+		t.Fatal("a host command with no environment of its own was run")
 	}
-	got := flattenEnv(map[string]string{"B": "2", "A": "1"})
-	if len(got) != 2 || got[0] != "A=1" || got[1] != "B=2" {
-		t.Fatalf("flattenEnv = %v, want it sorted", got)
+	if _, statErr := os.Stat(marker); statErr == nil {
+		t.Fatal("the child ran before the refusal, holding the engine's environment")
+	}
+}
+
+// THE CONTAINER RUNTIME'S CLI SEES NONE OF THE ENGINE'S SECRETS, and every
+// setting of its own.
+//
+// Every `docker run`, `exec`, `pause`, `rm`, `ps` and `info` was started with
+// no environment, which os/exec fills with the engine's — so the runtime and
+// every plugin and credential helper it runs held the keyring every session
+// cookie is signed under. What the runtime cannot run correctly without — its
+// own DOCKER_HOST (a rootless daemon's socket), and the engine user's HOME
+// where its config lives — still arrives.
+func TestTheContainerRuntimeSeesNoneOfTheEnginesSecrets(t *testing.T) {
+	// Not parallel: it sets process-wide environment variables, which is the
+	// only way to prove what a real child INHERITS.
+	for name, value := range map[string]string{
+		"CREWLET_SECRET_KEY_2026_01": "keyring-material-not-for-the-runtime",
+		"CREWLET_OPS_TOKEN":          "tier-a-token-not-for-the-runtime",
+		"OTEL_EXPORTER_OTLP_HEADERS": "authorization=Bearer%20otlp-not-for-the-runtime",
+		"ANTHROPIC_API_KEY":          "sk-ant-not-for-the-runtime",
+	} {
+		t.Setenv(name, value)
+	}
+	t.Setenv("DOCKER_HOST", "unix:///run/user/1000/docker.sock")
+	t.Setenv("HOME", t.TempDir())
+
+	dir := t.TempDir()
+	dump := filepath.Join(dir, "env")
+	// THE DUMP PATH IS IN THE SCRIPT, not the environment: the environment
+	// is what is under test, so nothing the case needs can travel in it.
+	runtime := filepath.Join(dir, "docker")
+	writeRuntime(t, runtime, fmt.Sprintf("/usr/bin/env > '%s'\n", dump))
+	// The rootless probe is one of the runtime calls, and it is the one every
+	// container box makes first.
+	runtimeIsRootless(t.Context(), containerCLI{path: runtime})
+
+	raw, err := os.ReadFile(dump)
+	if err != nil {
+		t.Fatalf("the runtime never ran: %v", err)
+	}
+	got := string(raw)
+	for _, secret := range []string{
+		"keyring-material-not-for-the-runtime", "tier-a-token-not-for-the-runtime",
+		"client-secret-not-for-the-runtime", "otlp-not-for-the-runtime",
+		"sk-ant-not-for-the-runtime",
+	} {
+		if strings.Contains(got, secret) {
+			t.Errorf("the container runtime was handed the engine's %q:\n%s", secret, got)
+		}
+	}
+	for _, want := range []string{
+		"DOCKER_HOST=unix:///run/user/1000/docker.sock", "HOME=" + os.Getenv("HOME"), "PATH=",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the runtime's environment lacks %q, which it needs to reach "+
+				"the daemon the operator configured:\n%s", want, got)
+		}
+	}
+}
+
+// WHAT AN OPERATOR DECLARES FOR THE RUNTIME REACHES IT, OVER THE HOST'S.
+//
+// The fixed rule cannot know what a runtime's helpers read — the credential
+// helper that pulls a private image wants its cloud's role and profile — and
+// with no channel to add one, a runtime that needed it
+// was simply broken. `providers.sandbox.local.runtime_env` is that channel, so
+// what it declares arrives on every runtime call the backend makes, a declared
+// value beats the host's for the same name, and the map the caller handed in
+// is not the one the backend reads.
+func TestTheRuntimeGetsWhatItsRuntimeEnvDeclares(t *testing.T) {
+	// Not parallel: PATH is how the backend finds its runtime, and the
+	// host's DOCKER_CONFIG is what the declared one must beat.
+	dir := t.TempDir()
+	dump := filepath.Join(dir, "env")
+	runtime := filepath.Join(dir, "docker")
+	writeRuntime(t, runtime, fmt.Sprintf("/usr/bin/env > '%s'\n", dump))
+	t.Setenv("PATH", dir)
+	t.Setenv("DOCKER_CONFIG", "/home/engine/.docker")
+	t.Setenv("SSH_AUTH_SOCK", "/tmp/the-engines-own-agent.sock")
+
+	declared := map[string]string{
+		"SSH_AUTH_SOCK": "/run/user/1000/ssh-agent.sock",
+		"AWS_PROFILE":   "registry-pull",
+		"DOCKER_CONFIG": "/etc/crewlet/docker",
+	}
+	l, err := NewLocal(LocalOptions{
+		Placement: Container, Image: "img", Runtime: "docker",
+		StateDir: t.TempDir(), RuntimeEnv: declared,
+	})
+	if err != nil {
+		t.Fatalf("NewLocal: %v", err)
+	}
+	declared["AWS_PROFILE"] = "changed-after-construction"
+
+	// Any runtime call carries it; the listing is one every Create makes.
+	if _, err := l.liveContainers(t.Context()); err != nil {
+		t.Fatalf("liveContainers: %v", err)
+	}
+	raw, err := os.ReadFile(dump)
+	if err != nil {
+		t.Fatalf("the runtime never ran: %v", err)
+	}
+	got := string(raw)
+	for _, want := range []string{
+		"SSH_AUTH_SOCK=/run/user/1000/ssh-agent.sock",
+		"AWS_PROFILE=registry-pull",
+		"DOCKER_CONFIG=/etc/crewlet/docker",
+	} {
+		if !strings.Contains(got, want+"\n") {
+			t.Errorf("the runtime's environment lacks the declared %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "the-engines-own-agent") {
+		t.Errorf("the host's own SSH_AUTH_SOCK reached the runtime:\n%s", got)
 	}
 }
 
@@ -1470,7 +1863,9 @@ func TestAnUnwritableCredentialMapIsReported(t *testing.T) {
 	if err := os.WriteFile(layout.records(), []byte("in the way"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err := recordCredentialMap(layout, map[string]string{".claude/.credentials.json": "/host/creds"})
+	err := recordCredentialMap(layout, map[string]seededCredential{
+		".claude/.credentials.json": {Source: "/host/creds", Seed: "0a1b"},
+	})
 	if err == nil {
 		t.Fatal("an unwritable credential map was reported as recorded")
 	}
@@ -1483,13 +1878,12 @@ func TestAnUnwritableCredentialMapIsReported(t *testing.T) {
 func TestTheCredentialMapRoundTrips(t *testing.T) {
 	t.Parallel()
 	layout := boxLayout{id: "box-2", root: t.TempDir()}
-	files := map[string]string{".claude/.credentials.json": "/host/creds.json"}
-	if err := recordCredentialMap(layout, files); err != nil {
+	want := seededCredential{Source: "/host/creds.json", Seed: "0a1b"}
+	if err := recordCredentialMap(layout, map[string]seededCredential{".claude/.credentials.json": want}); err != nil {
 		t.Fatalf("recordCredentialMap: %v", err)
 	}
-	got := readCredentialMap(layout)
-	if got[".claude/.credentials.json"] != "/host/creds.json" {
-		t.Errorf("the map did not round-trip: %v", got)
+	if got := readCredentialMap(layout); got[".claude/.credentials.json"] != want {
+		t.Errorf("the map did not round-trip, with the seed a write-back is judged against: %v", got)
 	}
 }
 

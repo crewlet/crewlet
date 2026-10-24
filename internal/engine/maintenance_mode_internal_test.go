@@ -36,7 +36,7 @@ func TestANodeInACapacityWindowAppendsNothingToItsLogs(t *testing.T) {
 		t.Run(string(mode), func(t *testing.T) {
 			t.Parallel()
 			e, js := aNodeInMode(t, mode)
-			s := e.native.Load().log
+			s := e.core.Load().log
 			if s == nil {
 				t.Fatalf("the %s-mode node runs no state log, so this case "+
 					"would be about nothing", mode)
@@ -81,7 +81,7 @@ func TestANodeInACapacityWindowAppendsNothingToItsLogs(t *testing.T) {
 			if gate == nil {
 				t.Fatal("the node has no gate to ask")
 			}
-			req := GateRequest{Node: "node-gone", By: "ops", Force: true,
+			req := GateRequest{Node: "node-gone", By: gateOperator, Force: true,
 				OpID: statelog.NewOpID(time.Now(), "evict-node-gone")}
 			if _, err := gate.Evict(t.Context(), req); !errors.Is(err, ErrNotPublishing) {
 				t.Errorf("an eviction answered %v, want %v", err, ErrNotPublishing)
@@ -92,7 +92,7 @@ func TestANodeInACapacityWindowAppendsNothingToItsLogs(t *testing.T) {
 			}
 			tracker := s.Domain("tracker")
 			if _, err := e.Reanchor(t.Context(), ReanchorRequest{
-				Stream: tracker.spec.Name, Confirm: "confirm", By: "ops",
+				Stream: tracker.spec.Name, Confirm: "confirm", By: reanchorOperator,
 			}); !errors.Is(err, ErrNotPublishing) {
 				t.Errorf("a reanchor answered %v, want %v", err, ErrNotPublishing)
 			}
@@ -117,7 +117,7 @@ func aNodeInMode(t *testing.T, mode statelog.MaintenanceMode) (*Engine, natsjs.J
 // aNodeInModeOf is [aNodeInMode] over the company doc.
 func aNodeInModeOf(t *testing.T, mode statelog.MaintenanceMode, doc string) (*Engine, natsjs.JetStream) {
 	t.Helper()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	PinGitLanes(&b)

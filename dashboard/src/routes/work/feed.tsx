@@ -62,7 +62,7 @@ export function PurgeBand({
         icon={<TrashGlyph size="sm" />}
         count={pageCount(records.length, more)}
         subtitle={
-          "A purge destroys the rows. These cannot be restored — what survives is that it happened, to which key, by whom, and the reason the operator gave." +
+          "Purged items can’t be restored." +
           (more ? " Older purges exist beyond this page of the history." : "")
         }
       >

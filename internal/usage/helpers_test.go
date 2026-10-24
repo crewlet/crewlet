@@ -12,11 +12,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/usage"
 )
+
+// fireHistory is how long a node's dispatch ledger keeps a fire, as the engine
+// hands it to every publisher.
+const fireHistory = maintenance.ScheduledRunRetention
+
+// caught is a node whose usage applier has reached the end of the log — the
+// loopback below applies every record as it is published, so its rows are
+// always the whole log.
+func caught() bool { return true }
 
 // openStore is a fresh node with both estates migrated.
 func openStore(t testing.TB) *store.DB {
@@ -53,6 +63,16 @@ type loopback struct {
 	// unresolved answers OutcomeUnknown to this many publishes, WITHOUT
 	// applying them — the case where the broker never said.
 	unresolved int
+
+	// refuse, when set, answers a publish with the refusal it returns
+	// instead of applying it — handed whether the record's subject is one
+	// the log does not hold yet, which is the one thing a compacted log at
+	// its ceiling tells apart: it still takes a record that replaces its
+	// subject's last one.
+	refuse func(fresh bool) error
+
+	// held is every subject the log holds a record on.
+	held map[string]bool
 }
 
 func (l *loopback) Publish(ctx context.Context, req statelog.Request) (statelog.Result, error) {
@@ -78,6 +98,11 @@ func (l *loopback) Publish(ctx context.Context, req statelog.Request) (statelog.
 	}
 	l.requests = append(l.requests, req)
 	l.payloads = append(l.payloads, decision.Payload)
+	if l.refuse != nil {
+		if err := l.refuse(!l.held[env.Subject.String()]); err != nil {
+			return statelog.Result{}, err
+		}
+	}
 	if l.unresolved > 0 {
 		l.unresolved--
 		return statelog.Result{Outcome: statelog.OutcomeUnknown, OpID: req.OpID}, nil
@@ -92,6 +117,10 @@ func (l *loopback) Publish(ctx context.Context, req statelog.Request) (statelog.
 	if err := applyRecord(ctx, l.into, rec); err != nil {
 		return statelog.Result{}, err
 	}
+	if l.held == nil {
+		l.held = map[string]bool{}
+	}
+	l.held[env.Subject.String()] = true
 	return statelog.Result{Outcome: statelog.OutcomeApplied, OpID: req.OpID}, nil
 }
 
@@ -225,14 +254,30 @@ func (e *events) phase(at time.Time, agent, turn, ph, decision string, input, ou
 	})
 }
 
-// turn records a turn's two completion records.
-func (e *events) turn(at time.Time, agent, handle, turn string, failed bool, duration time.Duration) {
+// turn records a turn's two completion records, the second stating the whole
+// turn as the record that ends one does (types.TurnTally): its span, whether
+// it failed, and what each of its reviews decided.
+func (e *events) turn(at time.Time, agent, handle, turn string, failed bool,
+	duration time.Duration, reviews ...string) {
+
+	whole := map[string]any{"duration_ms": duration.Milliseconds(), "failed": failed,
+		"reviews": len(reviews)}
+	sentBack, unaccepted := 0, 0
+	for _, decision := range reviews {
+		if decision == "self_iterate" {
+			sentBack++
+		}
+		if decision != "done" {
+			unaccepted++
+		}
+	}
+	whole["sent_back"], whole["unaccepted"] = sentBack, unaccepted
 	e.add("agent_turn_completed", at, agent, "Dev", map[string]any{
 		"agent_id": agent, "role": "Dev", "turn_id": turn, "failed": failed,
 	})
 	e.add("turn_completed", at, agent, "Dev", map[string]any{
 		"agent_id": agent, "agent_handle": handle, "role": "Dev", "turn_id": turn,
-		"duration_ms": duration.Milliseconds(),
+		"duration_ms": duration.Milliseconds(), "turn": whole,
 	})
 }
 

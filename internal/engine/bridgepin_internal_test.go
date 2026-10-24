@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -60,7 +61,9 @@ func launchBridged(t *testing.T, turnID string, offered ...tools.Callable) bridg
 	t.Helper()
 	server := httptest.NewServer(http.NotFoundHandler())
 	t.Cleanup(server.Close)
-	bridge := mcpbridge.New(mcpbridge.Options{Key: []byte("test-key"), BaseURL: server.URL})
+	bridge := bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: server.URL,
+	})
 	mux := http.NewServeMux()
 	mux.Handle(mcpbridge.PathPrefix+"{token}", bridge.Handler())
 	server.Config.Handler = mux
@@ -81,7 +84,10 @@ func launchBridged(t *testing.T, turnID string, offered ...tools.Callable) bridg
 	}
 	if err := launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
 		Brief: "fix the failing test", Round: 1,
-		Surface: tools.NewSurface("execute", reg.Snapshot(), names),
+		// BOUND TO THE LAUNCHER'S OWN TURN, as the runner binds every
+		// phase surface: the bridge acts as that turn's seat on every call
+		// and refuses a surface that names none.
+		Surface: tools.NewSurface("execute", reg.Snapshot(), names).ForTurn(launcher.turn),
 	}); err != nil {
 		t.Fatalf("LaunchExecutor: %v", err)
 	}

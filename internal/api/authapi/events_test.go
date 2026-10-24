@@ -1,0 +1,608 @@
+package authapi_test
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/api/authapi"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/authevents"
+	"github.com/crewlet/crewlet/internal/iam/credential"
+	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/statelog"
+)
+
+// recordingAudit keeps what the surface announced and what it only counted.
+type recordingAudit struct {
+	mu       sync.Mutex
+	emitted  []events.Payload
+	failures []authevents.Failure
+}
+
+func (a *recordingAudit) Emit(_ context.Context, payload events.Payload) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.emitted = append(a.emitted, payload)
+}
+
+func (a *recordingAudit) Failed(_ context.Context, f authevents.Failure) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.failures = append(a.failures, f)
+}
+
+func (a *recordingAudit) snapshot() ([]events.Payload, []authevents.Failure) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return slices.Clone(a.emitted), slices.Clone(a.failures)
+}
+
+// cheap is an argon2id cost a test can afford: the shipped one is asserted in
+// internal/iam/credential, and nothing here is about it.
+var cheap = credential.Params{Memory: 64, Time: 1, Threads: 1, KeyLen: 32}
+
+// estate is one person's identity rows, read by the surface as its directory
+// and written by it as its writer — so a credential the surface spends is gone
+// the next time the surface looks, the way a real node's own rows are.
+type estate struct {
+	stubDirectory
+	stubWriter
+
+	mu     sync.Mutex
+	person iamdomain.Sighting
+
+	// before runs against the credential set a SetCredentials decide
+	// reads, ahead of the surface's own Apply — the other writer that
+	// landed first in a race.
+	before func([]iamdomain.Credential) []iamdomain.Credential
+
+	// counters are the revocation epoch and session generation a session
+	// is opened at, which the writer reads in its own snapshot.
+	counters iamdomain.SessionOpened
+
+	// starts are the sessions this estate was asked to open, in order.
+	starts []iamdomain.SessionStart
+
+	// closes records every session ended, and closeErr is what ending
+	// one answers.
+	closes   []closedSession
+	closeErr error
+
+	// revokes records every revocation asked for.
+	revokes []string
+
+	// owner is who this estate says holds any lineage it is asked about,
+	// and over whether its rows say that session is already over.
+	owner string
+	over  bool
+
+	// unresolved names the writes whose outcome nothing can establish:
+	// each answers `unknown` under its own op id instead of landing — and
+	// unvouched makes each of those one this node's ledger cannot vouch
+	// for.
+	unresolved map[string]bool
+	unvouched  bool
+
+	// collapsed names the writes the framework answers with a copy of the
+	// operation this call cannot prove is its own: landed, with nothing
+	// this call's decide computed — a credential set's Apply never runs,
+	// and a session's start answers [iamdomain.ErrCollapsed], as the
+	// domain's own writer does.
+	collapsed map[string]bool
+
+	// refuse names the writes the domain refuses, with the refusal.
+	refuse map[string]error
+
+	// revokeOps are the operation ids every Revoke was asked under.
+	revokeOps []string
+
+	// credentialOps are the operation ids every SetCredentials was asked
+	// under, in order.
+	credentialOps []string
+
+	// unapplied is a node that has applied none of the sessions this
+	// estate opened: its position is below every bearer's start, and it
+	// holds no session row — see [estate.Resolve].
+	unapplied bool
+
+	// passwordSets are every SetPassword asked of this estate, and pending
+	// the writes that land durable and not yet applied here.
+	passwordSets []iamdomain.PasswordSet
+	pending      map[string]bool
+
+	// passwordOps are the operations a SetPassword landed under, which the
+	// framework's ledger answers a later call under the same id from
+	// before its decide runs — applied, collapsed, its Check never asked.
+	passwordOps map[string]bool
+
+	// behindResets, when a case sets it, is the credential set a node
+	// that has not applied this estate's writes reads a reset link from.
+	behindResets []iamdomain.Credential
+
+	// linksUnvouched is a node whose rows cannot vouch for the reset links
+	// they answer ([iamdomain.ResetRow.Vouched]).
+	linksUnvouched bool
+
+	// nameSealed is the person's sealed name, or empty for a row that holds
+	// none.
+	nameSealed string
+}
+
+// Person answers the person's directory row, their sealed name on it.
+func (e *estate) Person(_ context.Context, id string) (iamdomain.PersonRow, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if id != e.person.ID {
+		return iamdomain.PersonRow{}, iamdomain.ErrNotFound
+	}
+	return iamdomain.PersonRow{ID: id, Kind: e.person.Kind, Login: e.person.Login,
+		NameSealed: []byte(e.nameSealed)}, nil
+}
+
+// outcome is what one of this estate's writes answers: applied at a position,
+// or — where the case made it so — unknown, under the write's own op id.
+func (e *estate) outcome(write, opID string, seq uint64) statelog.Result {
+	if e.unresolved[write] {
+		return statelog.Result{Outcome: statelog.OutcomeUnknown, OpID: opID,
+			Unvouched: e.unvouched}
+	}
+	result := applied(statelog.Position{Stream: "CREWLET_IAM_LOG", Seq: seq})
+	result.OpID = opID
+	result.Collapsed = e.collapsed[write]
+	return result
+}
+
+func (e *estate) Revoke(_ context.Context, person, opID, _ string) (statelog.Result, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.revokes = append(e.revokes, person)
+	e.revokeOps = append(e.revokeOps, opID)
+	if err := e.refuse["Revoke"]; err != nil {
+		return statelog.Result{}, err
+	}
+	return e.outcome("Revoke", opID, 11), nil
+}
+
+func (e *estate) SessionStanding(context.Context, string, time.Time) (string, bool, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.owner, e.owner != "" && !e.over, nil
+}
+
+// closedSession is one CloseSession call.
+type closedSession struct{ lineage, person, reason, opID string }
+
+func (e *estate) CloseSession(_ context.Context, lineage, person, reason,
+	opID string) (statelog.Result, error) {
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closeErr != nil {
+		return statelog.Result{}, e.closeErr
+	}
+	e.closes = append(e.closes, closedSession{lineage, person, reason, opID})
+	if err := e.refuse["CloseSession"]; err != nil {
+		return statelog.Result{}, err
+	}
+	return e.outcome("CloseSession", opID, 8), nil
+}
+
+func (e *estate) PersonByLogin(_ context.Context, login string) (iamdomain.Sighting, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if login != e.person.Login {
+		return iamdomain.Sighting{}, nil
+	}
+	held := e.person
+	held.Credentials = slices.Clone(e.person.Credentials)
+	return held, nil
+}
+
+func (e *estate) OpenSession(_ context.Context, in iamdomain.SessionStart) (iamdomain.SessionOpened, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.starts = append(e.starts, in)
+	if err := e.refuse["OpenSession"]; err != nil {
+		return iamdomain.SessionOpened{}, err
+	}
+	opened := e.counters
+	opened.Result = e.outcome("OpenSession", in.OpID, 9)
+	if opened.Result.Collapsed {
+		// THE DOMAIN'S OWN ANSWER to a collapsed start: the counters are
+		// the decide's, and it hands none back.
+		return iamdomain.SessionOpened{Result: opened.Result}, iamdomain.ErrCollapsed
+	}
+	return opened, nil
+}
+
+func (e *estate) SetCredentials(ctx context.Context, in iamdomain.CredentialSet) (
+	statelog.Result, error) {
+
+	// A WRITE ON A CONTEXT THAT HAS ENDED LANDS NOTHING, as the domain's
+	// publisher refuses one — or a write handed no time at all would read
+	// here as one that landed.
+	if err := ctx.Err(); err != nil {
+		return statelog.Result{}, err
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.credentialOps = append(e.credentialOps, in.OpID)
+	if err := e.refuse["SetCredentials"]; err != nil {
+		return statelog.Result{}, err
+	}
+	if e.collapsed["SetCredentials"] {
+		// ANSWERED FROM THE LEDGER BEFORE ANY DECIDE: the Apply this call
+		// formed never runs, and the set the estate holds is a copy's.
+		return e.outcome("SetCredentials", in.OpID, 10), nil
+	}
+	held := slices.Clone(e.person.Credentials)
+	if e.before != nil {
+		held = e.before(held)
+	}
+	formed, err := in.Apply(held)
+	if err != nil {
+		// A REFUSAL IN THE SNAPSHOT publishes nothing, as the domain's
+		// decide does.
+		return statelog.Result{}, err
+	}
+	result := e.outcome("SetCredentials", in.OpID, 10)
+	if result.Outcome == statelog.OutcomeUnknown {
+		// WHETHER IT LANDED IS WHAT NOBODY CAN SAY; the estate here
+		// keeps the set it had, which is the harder of the two for the
+		// surface — a spend it cannot confirm and a code still usable.
+		return result, nil
+	}
+	e.person.Credentials = formed
+	return result, nil
+}
+
+// SetPassword runs the caller's Check against the person this estate holds,
+// as the domain's decide does in its snapshot, and lands what the domain's
+// record would: the new password in place of the old, every reset link
+// revoked, the revocation epoch moved.
+func (e *estate) SetPassword(_ context.Context, in iamdomain.PasswordSet) (
+	statelog.Result, error) {
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.passwordSets = append(e.passwordSets, in)
+	if err := e.refuse["SetPassword"]; err != nil {
+		return statelog.Result{}, err
+	}
+	if e.passwordOps[in.OpID] {
+		// THE LEDGER ANSWERS FIRST, as the framework's does: an operation
+		// that already landed is this call's retry, whatever it presents.
+		result := applied(statelog.Position{Stream: "CREWLET_IAM_LOG", Seq: 12})
+		result.OpID, result.Collapsed = in.OpID, true
+		return result, nil
+	}
+	if in.Check != nil {
+		if err := in.Check(iamdomain.Person{Kind: e.person.Kind,
+			Stage: e.person.Stage, Credentials: slices.Clone(e.person.Credentials)},
+			iamdomain.Counters{}); err != nil {
+			return statelog.Result{}, err
+		}
+	}
+	result := e.outcome("SetPassword", in.OpID, 12)
+	if e.pending["SetPassword"] {
+		result.Outcome = statelog.OutcomePending
+	}
+	if result.Outcome == statelog.OutcomeUnknown {
+		return result, nil
+	}
+	kept := make([]iamdomain.Credential, 0, len(e.person.Credentials)+1)
+	for _, c := range e.person.Credentials {
+		switch {
+		case c.Method == iamdomain.MethodPassword:
+			continue
+		case c.Method == iamdomain.MethodReset && c.RevokedAt.IsZero():
+			c.RevokedAt = clock
+		}
+		kept = append(kept, c)
+	}
+	e.person.Credentials = append(kept, iamdomain.Credential{
+		ID: "pw-new", Method: iamdomain.MethodPassword, Verifier: in.Verifier})
+	e.counters.Epoch++
+	if e.passwordOps == nil {
+		e.passwordOps = map[string]bool{}
+	}
+	e.passwordOps[in.OpID] = true
+	return result, nil
+}
+
+// ResetByID answers a reset link this estate's person holds, as the reader
+// joins it to its person.
+func (e *estate) ResetByID(_ context.Context, id string) (iamdomain.ResetRow, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	held := e.person.Credentials
+	if e.behindResets != nil {
+		held = e.behindResets
+	}
+	row := iamdomain.ResetOf(iamdomain.Person{Kind: e.person.Kind,
+		Stage: e.person.Stage, Credentials: held}, id, iamdomain.Counters{})
+	if row.ID != "" {
+		row.PersonID, row.Login = e.person.ID, e.person.Login
+	}
+	row.Vouched = !e.linksUnvouched
+	return row, nil
+}
+
+const (
+	password = "a-long-enough-passphrase"
+	totpSeed = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
+)
+
+// signInRig is the surface over one person who holds a password, an
+// authenticator app and a set of recovery codes.
+type signInRig struct {
+	svc      *authapi.Service
+	estate   *estate
+	audit    *recordingAudit
+	recovery []string
+}
+
+func newSignInRig(t *testing.T) *signInRig {
+	t.Helper()
+	return newSignInRigWith(t, nil)
+}
+
+// newSignInRigWith is [newSignInRig] with further fakes replaced.
+func newSignInRigWith(t *testing.T, replace func(*authapi.Options)) *signInRig {
+	t.Helper()
+	hasher := credential.NewHasher(cheap, 1)
+	verifier, err := hasher.Hash(t.Context(), password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	codes, verifiers, err := credential.NewRecoveryCodes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stepRaw, _ := json.Marshal(int64(0))
+	verifiersRaw, _ := json.Marshal(verifiers)
+	const person = "0192f00d-0000-7000-8000-00000000000a"
+	e := &estate{person: iamdomain.Sighting{
+		ID: person, Kind: iam.KindPerson,
+		Stage: iam.StageActive, Login: "jane.doe",
+		Credentials: []iamdomain.Credential{
+			{ID: "pw", Method: iamdomain.MethodPassword, Verifier: verifier},
+			// THE SEED SEALED, as enrolment stores it.
+			{ID: "app", Method: iamdomain.MethodTOTP,
+				Verifier: sealedSeed(t, person, "app", totpSeed),
+				Extra:    map[string]json.RawMessage{"last_step": stepRaw}},
+			{ID: "codes", Method: iamdomain.MethodRecovery,
+				Extra: map[string]json.RawMessage{"verifiers": verifiersRaw}},
+		},
+	}}
+	audit := &recordingAudit{}
+	b := bootstrapFor(t)
+	svc := buildWith(t, b, func(o *authapi.Options) {
+		o.Directory, o.Writer, o.Hasher, o.Audit = e, e, hasher, audit
+		if replace != nil {
+			replace(o)
+		}
+	})
+	return &signInRig{svc: svc, estate: e, audit: audit, recovery: codes}
+}
+
+// login posts one sign-in and answers the status.
+func (r *signInRig) login(t *testing.T, login, pass, code string) int {
+	t.Helper()
+	return r.signIn(t, login, pass, code).Code
+}
+
+// signIn posts one sign-in and answers the whole response.
+//
+// ON A CONTEXT THAT ENDS WHEN THE HANDLER RETURNS, as net/http's server ends
+// every request's. A sign-in leaves work running once it has answered — the
+// rewrite of a stale verifier — and work that inherited the request's context
+// dies with it in production; served on httptest's background context it lived
+// on here, and a rewrite that rode the request's context passed.
+func (r *signInRig) signIn(t *testing.T, login, pass, code string) *httptest.ResponseRecorder {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{
+		"login": login, "password": pass, "code": code,
+	})
+	ctx, answered := context.WithCancel(t.Context())
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/auth/login",
+		strings.NewReader(string(body)))
+	req.RemoteAddr = "203.0.113.9:4711"
+	rec := httptest.NewRecorder()
+	mux := http.NewServeMux()
+	r.svc.Routes(mux)
+	mux.ServeHTTP(rec, req)
+	answered()
+	return rec
+}
+
+func appCode(t *testing.T, at time.Time) string {
+	t.Helper()
+	code, err := credential.TOTPCode(totpSeed, credential.TOTPStep(at))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return code
+}
+
+// A FAILED SIGN-IN IS COUNTED AGAINST ITS SOURCE, AND NEVER ANNOUNCED.
+//
+// The trail counts it per source, on the door it pushed on — and is handed
+// nothing about who, neither what was typed nor whom it resolved to, which a
+// [authevents.Failure] has no field for. Nothing is emitted: a failed attempt
+// is authored by whoever can reach the listener.
+//
+// Mutation: announce the refusal as an event and the emitted count is not
+// zero; count it against anything but the request's own source and the
+// source is wrong.
+func TestAFailedSignInIsCountedAndNeverAnnounced(t *testing.T) {
+	t.Parallel()
+	r := newSignInRig(t)
+	if got := r.login(t, "nobody.here", password, ""); got != http.StatusUnauthorized {
+		t.Fatalf("an unknown login answered %d", got)
+	}
+	if got := r.login(t, "jane.doe", "the-wrong-passphrase", ""); got != http.StatusUnauthorized {
+		t.Fatalf("a wrong password answered %d", got)
+	}
+	emitted, failures := r.audit.snapshot()
+	if len(emitted) != 0 {
+		t.Errorf("failed sign-ins announced %v", emitted)
+	}
+	if len(failures) != 2 {
+		t.Fatalf("counted %d failures, want 2", len(failures))
+	}
+	for _, f := range failures {
+		if f.Method != types.FailPassword || f.Source != "203.0.113.9" || f.Throttled {
+			t.Errorf("a refused sign-in counted as %+v, want a password failure "+
+				"from the request's own source", f)
+		}
+	}
+	if failures[0] != failures[1] {
+		t.Errorf("an unknown login counted as %+v and a wrong password as %+v: "+
+			"two failures a reader of the trail can tell apart", failures[0],
+			failures[1])
+	}
+}
+
+// A SIGN-IN ANNOUNCES ITS METHOD AND ITS SECOND FACTOR, and the app code it
+// used is SPENT.
+//
+// A code used once and not recorded works for the whole drift window —
+// ninety seconds in which a code read off somebody's screen signs its reader
+// in. Mutation: skip the spend and the replay signs in.
+func TestAnAppCodeSignsInOnceAndTheSignInSaysSo(t *testing.T) {
+	t.Parallel()
+	r := newSignInRig(t)
+	code := appCode(t, clock)
+	if got := r.login(t, "jane.doe", password, code); got != http.StatusOK {
+		t.Fatalf("a correct password and code answered %d", got)
+	}
+	emitted, _ := r.audit.snapshot()
+	if len(emitted) != 1 {
+		t.Fatalf("announced %d events, want the one sign-in", len(emitted))
+	}
+	started, ok := emitted[0].(types.IAMSessionStarted)
+	if !ok || started.Method != types.SignInPassword || started.SecondFactor != types.FactorTOTP ||
+		started.Person != r.estate.person.ID || started.Lineage == "" ||
+		started.Remote != "203.0.113.9" {
+		t.Errorf("sign-in event = %#v", emitted[0])
+	}
+	if got := r.login(t, "jane.doe", password, code); got != http.StatusUnauthorized {
+		t.Errorf("the same app code signed in twice (answered %d)", got)
+	}
+}
+
+// A RECOVERY CODE WORKS BESIDE AN APP, IS SPENT, AND SAYS HOW MANY ARE LEFT.
+//
+// It used to be checked against the app's six digits whenever the person held
+// an app — so the codes that exist for the day the app is lost worked for
+// nobody who had one — and, where it was reached, never removed. Mutation:
+// check only the first factor held and the first sign-in fails; skip the spend
+// and the replay signs in.
+func TestARecoveryCodeSignsInOnceAndSaysHowManyAreLeft(t *testing.T) {
+	t.Parallel()
+	r := newSignInRig(t)
+	if got := r.login(t, "jane.doe", password, r.recovery[3]); got != http.StatusOK {
+		t.Fatalf("a correct password and recovery code answered %d", got)
+	}
+	emitted, _ := r.audit.snapshot()
+	var used *types.IAMRecoveryCodeUsed
+	var started *types.IAMSessionStarted
+	for _, e := range emitted {
+		switch v := e.(type) {
+		case types.IAMRecoveryCodeUsed:
+			used = &v
+		case types.IAMSessionStarted:
+			started = &v
+		}
+	}
+	if used == nil || used.Remaining != credential.RecoveryCodeCount-1 ||
+		used.Person != r.estate.person.ID {
+		t.Errorf("recovery event = %+v, want %d remaining", used, credential.RecoveryCodeCount-1)
+	}
+	if started == nil || started.SecondFactor != types.FactorRecovery {
+		t.Errorf("sign-in event = %+v, want the recovery factor named", started)
+	}
+	if got := r.login(t, "jane.doe", password, r.recovery[3]); got != http.StatusUnauthorized {
+		t.Errorf("the same recovery code signed in twice (answered %d)", got)
+	}
+	if got := r.login(t, "jane.doe", password, r.recovery[4]); got != http.StatusOK {
+		t.Errorf("an unspent recovery code was refused (answered %d)", got)
+	}
+}
+
+// A CODE SPENT BY SOMEBODY ELSE BETWEEN THE CHECK AND THE WRITE IS REFUSED.
+//
+// Two sign-ins presenting one code at the same moment both pass the check
+// against the rows they read; the write is where they meet, and the one whose
+// decide finds the step already recorded has lost. Mutation: decide the spend
+// from the credential the check read rather than the one the write's own
+// snapshot holds, and both sign in.
+func TestACodeSpentConcurrentlyIsRefusedToTheLoser(t *testing.T) {
+	t.Parallel()
+	r := newSignInRig(t)
+	step := credential.TOTPStep(clock)
+	r.estate.before = func(held []iamdomain.Credential) []iamdomain.Credential {
+		out := slices.Clone(held)
+		for i, c := range out {
+			if c.ID == "app" {
+				raw, _ := json.Marshal(step)
+				extra := map[string]json.RawMessage{"last_step": raw}
+				out[i].Extra = extra
+			}
+		}
+		return out
+	}
+	if got := r.login(t, "jane.doe", password, appCode(t, clock)); got != http.StatusUnauthorized {
+		t.Errorf("the second of two concurrent uses of one code signed in (answered %d)", got)
+	}
+	emitted, failures := r.audit.snapshot()
+	if len(emitted) != 0 {
+		t.Errorf("the losing sign-in announced %v", emitted)
+	}
+	if len(failures) != 1 || failures[0].Method != types.FailSecondFactor {
+		t.Errorf("failures = %+v, want one second-factor failure", failures)
+	}
+}
+
+// A THROTTLED ATTEMPT IS COUNTED AS ONE THE CURVE TURNED AWAY, AND SAYS WHEN
+// TO COME BACK.
+//
+// The curve on one login from one address: a wait served inside the request
+// after the first failure and the second, and the fourth attempt — owing seven
+// seconds, past what a request is held open for — answered 429 with those
+// seconds in `Retry-After`. It used to be answered with no header at all, so a
+// client retried at once and was refused again. Mutation: write the 429
+// without the header and the wait is unreadable.
+func TestAThrottledAttemptIsCountedAsThrottled(t *testing.T) {
+	t.Parallel()
+	r := newSignInRig(t)
+	for i := range 3 {
+		if got := r.login(t, "nobody.here", password, ""); got != http.StatusUnauthorized {
+			t.Fatalf("attempt %d answered %d, want the ordinary refusal after "+
+				"a wait served in the request", i+1, got)
+		}
+	}
+	rec := r.signIn(t, "nobody.here", password, "")
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("the fourth attempt answered %d, want 429", rec.Code)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "7" {
+		t.Errorf("Retry-After %q, want the 7 seconds the curve owes", got)
+	}
+	_, failures := r.audit.snapshot()
+	last := failures[len(failures)-1]
+	if !last.Throttled || last.Method != types.FailPassword || last.Source != "203.0.113.9" {
+		t.Errorf("throttled failure = %+v: want it marked throttled, on the "+
+			"route's method, from the request's source", last)
+	}
+}

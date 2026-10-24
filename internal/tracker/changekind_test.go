@@ -38,7 +38,7 @@ func TestAQuietChangeStillNamesWhatItWas(t *testing.T) {
 		t.Fatalf("WriteTypes: %v", err)
 	}
 	r.drain()
-	if _, err := r.writer.WriteView(t.Context(), "op-view", aView("v-1", nil)); err != nil {
+	if _, err := save(t, r.writer, "op-view", aView("v-1", nil)); err != nil {
 		t.Fatalf("WriteView: %v", err)
 	}
 	r.drain()
@@ -92,7 +92,7 @@ func TestEveryHistoryRowNamesAKindThisBuildKnows(t *testing.T) {
 	}
 	r.drain()
 	if _, err := r.writer.RestoreTask(t.Context(), "op-restore", "t-1", "ENG",
-		nil); err != nil {
+		false, nil); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
 	r.drain()

@@ -25,6 +25,18 @@ type desk struct {
 	opIDs  []string
 	actors []Actor
 	units  tracker.Units
+
+	// paged is every page write the desk took, with the actor it was made as.
+	paged      []string
+	pageActors []pages.Actor
+}
+
+func (d *desk) page(op string, a pages.Actor) pages.Written {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.paged = append(d.paged, op)
+	d.pageActors = append(d.pageActors, a)
+	return pages.Written{Outcome: statelog.Result{Outcome: statelog.OutcomeApplied, OpID: a.OpKey}}
 }
 
 func (d *desk) note(op, opID string, a Actor) tracker.WriteResult {
@@ -38,7 +50,7 @@ func (d *desk) note(op, opID string, a Actor) tracker.WriteResult {
 
 func (d *desk) For(context.Context, string) (Backend, bool) {
 	return Backend{
-		Tracker: deskBoard{d: d}, Pages: deskPages{},
+		Tracker: deskBoard{d: d}, Pages: deskPages{}, PageWriter: deskPageWriter{d: d},
 		Writer: func(a Actor) TrackerWriter { return deskWriter{d: d, a: a} },
 	}, true
 }
@@ -65,7 +77,7 @@ func (b deskBoard) EveryView(_ context.Context, q tracker.EveryViewQuery) (track
 	if q.Units != b.d.units {
 		return tracker.ViewListing{}, errors.New("the serving node's chart was not attached")
 	}
-	return tracker.ViewListing{Views: []tracker.ViewRow{{ID: "v-" + q.Viewer.Handle}}}, nil
+	return tracker.ViewListing{Views: []tracker.ViewRow{{ID: "v-" + q.Viewer}}}, nil
 }
 
 func (deskBoard) Flow(_ context.Context, q tracker.FlowQuery, _ time.Time,
@@ -85,7 +97,7 @@ func (deskBoard) Decisions(_ context.Context, q tracker.DecisionsQuery, _ time.T
 	if loc == nil || loc.String() != "Europe/Berlin" {
 		return tracker.DecisionsAnswer{}, fmt.Errorf("the asker's zone did not cross: %v", loc)
 	}
-	return tracker.DecisionsAnswer{Asks: []tracker.AskRow{}, Complete: q.Who.Handle == "founder"}, nil
+	return tracker.DecisionsAnswer{Asks: []tracker.AskRow{}, Complete: q.Handle == "founder"}, nil
 }
 
 func (deskBoard) TurnsOf(_ context.Context, ref, cursor string, limit int,
@@ -131,7 +143,16 @@ type deskWriter struct {
 	a Actor
 }
 
-func (w deskWriter) WriteView(_ context.Context, opID string, _ tracker.View) (tracker.WriteResult, error) {
+// ViewPrior answers a view the founder owns, which a save must hand back.
+func (w deskWriter) ViewPrior(_ context.Context, id string) (tracker.ViewPrior, error) {
+	return tracker.ViewPrior{Held: id == "v-1", Owner: "founder"}, nil
+}
+
+func (w deskWriter) WriteView(_ context.Context, opID string, _ tracker.View,
+	prior tracker.ViewPrior) (tracker.WriteResult, error) {
+	if !prior.Held || prior.Owner != "founder" {
+		return tracker.WriteResult{}, fmt.Errorf("the prior did not cross: %+v", prior)
+	}
 	return w.d.note("write_view", opID, w.a), nil
 }
 
@@ -144,17 +165,23 @@ func (w deskWriter) WriteFields(_ context.Context, opID string, _ []tracker.Fiel
 }
 
 func (w deskWriter) MarkInbox(_ context.Context, opID, _ string,
-	g tracker.InboxGesture) (tracker.WriteResult, error) {
+	g tracker.InboxGesture, authority tracker.PersonAuthority) (tracker.WriteResult, error) {
 	if !slices.Equal(g.Read, []string{"rec-1"}) {
 		return tracker.WriteResult{}, fmt.Errorf("the gesture did not cross: %+v", g)
+	}
+	if !authority.Authorized {
+		return tracker.WriteResult{}, fmt.Errorf("the authority did not cross: %+v", authority)
 	}
 	return w.d.note("mark_inbox", opID, w.a), nil
 }
 
 func (w deskWriter) WritePins(_ context.Context, opID, _ string,
-	g tracker.PinGesture) (tracker.WriteResult, error) {
+	g tracker.PinGesture, authority tracker.PersonAuthority) (tracker.WriteResult, error) {
 	if !slices.Equal(g.Views.Add, []string{"v-1"}) {
 		return tracker.WriteResult{}, fmt.Errorf("the gesture did not cross: %+v", g)
+	}
+	if !authority.Authorized {
+		return tracker.WriteResult{}, fmt.Errorf("the authority did not cross: %+v", authority)
 	}
 	return w.d.note("write_pins", opID, w.a), nil
 }
@@ -182,13 +209,50 @@ func (w deskWriter) RemoveTask(_ context.Context, opID, _, _ string, _ bool,
 	return w.d.note("remove_task", opID, w.a), nil
 }
 
-func (w deskWriter) RestoreTask(_ context.Context, opID, _, _ string,
+func (w deskWriter) RestoreTask(_ context.Context, opID, _, _ string, _ bool,
 	_ *tracker.Notify) (tracker.WriteResult, error) {
 	return w.d.note("restore_task", opID, w.a), nil
 }
 
 func (w deskWriter) PurgeTask(_ context.Context, opID, _, _, _ string) (tracker.WriteResult, error) {
 	return w.d.note("purge_task", opID, w.a), nil
+}
+
+func (w deskWriter) EditComment(_ context.Context, opID, _, _, commentID, body string,
+	_ *tracker.Notify) (tracker.WriteResult, error) {
+	if commentID != "c-1" || body != "reworded" {
+		return tracker.WriteResult{}, fmt.Errorf("the edit did not cross: %q %q", commentID, body)
+	}
+	return w.d.note("edit_comment", opID, w.a), nil
+}
+
+// deskPageWriter is the knowledge base's operator writes on the desk.
+type deskPageWriter struct {
+	PageWriter
+	d *desk
+}
+
+func (w deskPageWriter) Trash(_ context.Context, a pages.Actor, _ string) (pages.Written, error) {
+	return w.d.page("trash", a), nil
+}
+
+func (w deskPageWriter) Restore(_ context.Context, a pages.Actor, _ string) (pages.Written, error) {
+	return w.d.page("restore", a), nil
+}
+
+func (w deskPageWriter) Purge(_ context.Context, a pages.Actor, _, reason string) (pages.Written, error) {
+	if reason != "spam" {
+		return pages.Written{}, fmt.Errorf("the reason did not cross: %q", reason)
+	}
+	return w.d.page("purge", a), nil
+}
+
+func (w deskPageWriter) RemoveComment(_ context.Context, a pages.Actor, _, _ string,
+	authority pages.CommentAuthority) (pages.Written, error) {
+	if !authority.Moderate {
+		return pages.Written{}, fmt.Errorf("the authority did not cross: %+v", authority)
+	}
+	return w.d.page("remove_comment", a), nil
 }
 
 // EVERY OPERATOR OPERATION CROSSES WHOLE: the reads the dashboard, the REST
@@ -202,7 +266,9 @@ func TestEveryOperatorOperationCrossesWhole(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	d := &desk{units: chartOf("data-d")}
-	stop, err := Serve(t.Context(), f.start(t), "data-d", d, ServerSeams{Units: d.units})
+	stop, err := Serve(t.Context(), f.start(t), ServerOptions{
+		Self: "data-d", Local: d, Seams: ServerSeams{Units: d.units}, Envelopes: fleetEnvelopes,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +286,7 @@ func TestEveryOperatorOperationCrossesWhole(t *testing.T) {
 		t.Errorf("workload = (%+v, %v), want the serving node's answer for unit eng", load, err)
 	}
 	if views, err := work.EveryView(ctx, tracker.EveryViewQuery{
-		Viewer: tracker.Party{Handle: "founder"}, Units: chartOf("asker")}); err != nil ||
+		Viewer: "founder", Units: chartOf("asker")}); err != nil ||
 		len(views.Views) != 1 || views.Views[0].ID != "v-founder" {
 		t.Errorf("every view = (%+v, %v), want the founder's, on the serving chart", views, err)
 	}
@@ -231,7 +297,7 @@ func TestEveryOperatorOperationCrossesWhole(t *testing.T) {
 	if feed, err := work.CompanyFeed(ctx, tracker.FeedQuery{Limit: 7}); err != nil || !feed.More {
 		t.Errorf("feed = (%+v, %v), want the query's limit answered", feed, err)
 	}
-	if asks, err := work.Decisions(ctx, tracker.DecisionsQuery{Who: tracker.Party{Handle: "founder"}},
+	if asks, err := work.Decisions(ctx, tracker.DecisionsQuery{Handle: "founder"},
 		now, berlin); err != nil || !asks.Complete {
 		t.Errorf("decisions = (%+v, %v), want the founder's on the asker's clock", asks, err)
 	}
@@ -271,27 +337,38 @@ func TestEveryOperatorOperationCrossesWhole(t *testing.T) {
 	operator := Actor{Handle: "founder", Kind: tracker.AuthorOperator,
 		Provenance: tracker.Provenance{OperatorID: "founder"}}
 	w := f.client.WriterAs(operator)
+	authorized := tracker.PersonAuthority{Authorized: true}
+	prior, err := w.ViewPrior(ctx, "v-1")
+	if err != nil || !prior.Held || prior.Owner != "founder" {
+		t.Fatalf("view prior = (%+v, %v), want the founder's stored view", prior, err)
+	}
 	writes := []struct {
 		op    string
 		write func() (tracker.WriteResult, error)
 	}{
-		{"write_view", func() (tracker.WriteResult, error) { return w.WriteView(ctx, "op-1", tracker.View{}) }},
+		{"write_view", func() (tracker.WriteResult, error) {
+			return w.WriteView(ctx, "op-1", tracker.View{ID: "v-1"}, prior)
+		}},
 		{"write_types", func() (tracker.WriteResult, error) { return w.WriteTypes(ctx, "op-2", nil) }},
 		{"write_fields", func() (tracker.WriteResult, error) { return w.WriteFields(ctx, "op-3", nil) }},
 		{"mark_inbox", func() (tracker.WriteResult, error) {
-			return w.MarkInbox(ctx, "op-4", "founder", tracker.InboxGesture{Read: []string{"rec-1"}})
+			return w.MarkInbox(ctx, "op-4", "founder", tracker.InboxGesture{Read: []string{"rec-1"}},
+				authorized)
 		}},
 		{"write_pins", func() (tracker.WriteResult, error) {
 			return w.WritePins(ctx, "op-5", "founder", tracker.PinGesture{
-				Views: tracker.SetChange[string]{Add: []string{"v-1"}}})
+				Views: tracker.SetChange[string]{Add: []string{"v-1"}}}, authorized)
 		}},
 		{"write_priorities", func() (tracker.WriteResult, error) {
 			match := uint64(9)
 			return w.WritePriorities(ctx, "op-6", "founder", nil, &match, tracker.PersonAuthority{})
 		}},
 		{"remove_task", func() (tracker.WriteResult, error) { return w.RemoveTask(ctx, "op-7", "t-1", "ENG", false, nil) }},
-		{"restore_task", func() (tracker.WriteResult, error) { return w.RestoreTask(ctx, "op-8", "t-1", "ENG", nil) }},
+		{"restore_task", func() (tracker.WriteResult, error) { return w.RestoreTask(ctx, "op-8", "t-1", "ENG", true, nil) }},
 		{"purge_task", func() (tracker.WriteResult, error) { return w.PurgeTask(ctx, "op-9", "t-1", "ENG", "spam") }},
+		{"edit_comment", func() (tracker.WriteResult, error) {
+			return w.EditComment(ctx, "op-10", "t-1", "ENG", "c-1", "reworded", nil)
+		}},
 	}
 	writes = append(writes, struct {
 		op    string
@@ -300,7 +377,7 @@ func TestEveryOperatorOperationCrossesWhole(t *testing.T) {
 		// A DROP WHOSE PLACE WAS REFUSED crosses with the refusal's
 		// identity, which the tool classifies — an error is an interface
 		// no encoder writes — beside the lane it did change.
-		placed, err := w.PlaceTask(ctx, "op-10", tracker.Place{Task: "t-1", Project: "ENG",
+		placed, err := w.PlaceTask(ctx, "op-11", tracker.Place{Task: "t-1", Project: "ENG",
 			After: "t-2"}, nil)
 		if !errors.Is(placed.Unplaced, tracker.ErrStaleVersion) || placed.Version != 12 {
 			t.Errorf("place = (%+v, %v), want the lane changed and a stale-version refusal "+
@@ -313,8 +390,37 @@ func TestEveryOperatorOperationCrossesWhole(t *testing.T) {
 			t.Errorf("%s = (%+v, %v), want applied", write.op, res, err)
 		}
 	}
+	// AND THE KNOWLEDGE BASE'S, each made as the operator who made it and
+	// under the key they brought.
+	editor := pages.Actor{Handle: "founder", Kind: pages.AuthorOperator,
+		OperatorID: "founder", OpKey: statelog.NewOpID(now, "page")}
+	kb2 := f.client.Pages()
+	for _, write := range []struct {
+		op    string
+		write func() (pages.Written, error)
+	}{
+		{"trash", func() (pages.Written, error) { return kb2.Trash(ctx, editor, "p-7") }},
+		{"restore", func() (pages.Written, error) { return kb2.Restore(ctx, editor, "p-7") }},
+		{"purge", func() (pages.Written, error) { return kb2.Purge(ctx, editor, "p-7", "spam") }},
+		{"remove_comment", func() (pages.Written, error) {
+			return kb2.RemoveComment(ctx, editor, "p-7", "c-1", pages.CommentAuthority{Moderate: true})
+		}},
+	} {
+		if written, err := write.write(); err != nil || written.Outcome.Outcome != statelog.OutcomeApplied {
+			t.Errorf("%s = (%+v, %v), want applied", write.op, written.Outcome, err)
+		}
+	}
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if want := []string{"trash", "restore", "purge", "remove_comment"}; !slices.Equal(d.paged, want) {
+		t.Errorf("the data node's knowledge base took %v, want %v", d.paged, want)
+	}
+	for i, a := range d.pageActors {
+		if !reflect.DeepEqual(a, editor) {
+			t.Errorf("page %s was written as %+v, want the operator and their key", d.paged[i], a)
+		}
+	}
 	var want, wantIDs []string
 	for i, write := range writes {
 		want = append(want, write.op)

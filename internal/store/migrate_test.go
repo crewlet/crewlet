@@ -206,8 +206,11 @@ func TestOpenPreparedAppliesThePoolBounds(t *testing.T) {
 		t.Fatalf("openPrepared: %v", err)
 	}
 	defer func() { _ = pool.Close() }()
-	if got := pool.Stats().MaxOpenConnections; got != 3 {
-		t.Errorf("max open conns = %d, want the requested 3", got)
+	// A CONFIGURED BOUND IS THE READERS', and the connection kept for
+	// identity work is added beside them rather than taken out of them.
+	if got, want := pool.Stats().MaxOpenConnections, 3+identityReserve; got != want {
+		t.Errorf("max open conns = %d, want the requested 3 readers and the "+
+			"identity reserve, %d", got, want)
 	}
 
 	unset, err := openPrepared(t.Context(), filepath.Join(t.TempDir(), "d.db"), Options{})
@@ -215,10 +218,14 @@ func TestOpenPreparedAppliesThePoolBounds(t *testing.T) {
 		t.Fatalf("openPrepared: %v", err)
 	}
 	defer func() { _ = unset.Close() }()
-	if got := unset.Stats().MaxOpenConnections; got != defaultReaderConns {
+	// The derived default: the readers' budget PLUS the connection kept
+	// for identity work. Both terms, because a pool sized for the readers
+	// alone is a pool whose reserve is the first thing a read burst takes.
+	wantUnset := defaultReaderConns() + identityReserve
+	if got := unset.Stats().MaxOpenConnections; got != wantUnset {
 		t.Errorf("max open conns = %d, want the store default %d — an unset "+
 			"bound must reach the pool as \"you choose\", not as unbounded",
-			got, defaultReaderConns)
+			got, wantUnset)
 	}
 
 	// AND THE REPLICATED ESTATE'S PINS WIDEN THE FILE THAT HOLDS THEM,
@@ -240,24 +247,25 @@ func TestOpenPreparedAppliesThePoolBounds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open the replicated estate: %v", err)
 	}
-	if got, want := replicated.sql.Stats().MaxOpenConnections, defaultReaderConns+3; got != want {
+	if got, want := replicated.sql.Stats().MaxOpenConnections, wantUnset+3; got != want {
 		t.Errorf("max open conns with 3 pinned writers = %d, want %d: a pin "+
 			"has to be ADDED to the readers' bound, not carved out of it",
 			got, want)
 	}
-	if got := node.sql.Stats().MaxOpenConnections; got != defaultReaderConns {
+	if got := node.sql.Stats().MaxOpenConnections; got != wantUnset {
 		t.Errorf("the node estate widened to %d for pins it never holds, want %d",
-			got, defaultReaderConns)
+			got, wantUnset)
 	}
 
-	// A CONFIGURED BOUND IS THE READERS' TOO, with the pins added on top
-	// and never fewer than two readers. Bounded at the configured figure
-	// itself, a pool of three with three loops pinned would leave no
-	// reader at all — and one at or below the pin count leaves the last
-	// loop waiting for a connection none of the others gives back.
+	// A CONFIGURED BOUND IS THE READERS' TOO, with the reserve and the
+	// pins added on top and never fewer than two readers. Bounded at the
+	// configured figure itself, a pool of three with three loops pinned
+	// would leave no reader at all — and one at or below the pin count
+	// leaves the last loop waiting for a connection none of the others
+	// gives back.
 	for _, c := range []struct{ conns, want int }{
-		{conns: 3, want: 3 + 3},
-		{conns: 1, want: replicatedReadFloor + 3},
+		{conns: 3, want: 3 + identityReserve + 3},
+		{conns: 1, want: replicatedReadFloor + identityReserve + 3},
 	} {
 		configured, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "c.db"),
 			Options{MaxOpenConns: c.conns})
@@ -273,8 +281,10 @@ func TestOpenPreparedAppliesThePoolBounds(t *testing.T) {
 			t.Errorf("a node bounded at %d opened its replicated estate with %d "+
 				"connections for 3 pinned writers, want %d", c.conns, got, c.want)
 		}
-		if got := configured.sql.Stats().MaxOpenConnections; got != c.conns {
-			t.Errorf("a node bounded at %d opened its own file with %d", c.conns, got)
+		if got, want := configured.sql.Stats().MaxOpenConnections,
+			c.conns+identityReserve; got != want {
+			t.Errorf("a node bounded at %d opened its own file with %d, want %d",
+				c.conns, got, want)
 		}
 	}
 	var busyMS int

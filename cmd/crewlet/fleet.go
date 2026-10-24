@@ -12,6 +12,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 )
 
@@ -35,16 +36,16 @@ import (
 // in words what disagrees and what to do about it.
 
 // fleetBrokerUsage is the group's usage line.
-const fleetBrokerUsage = "usage: crewlet fleet broker list|remove [<config.yaml>] [-url] [-token]\n" +
+const fleetBrokerUsage = "usage: crewlet fleet broker list|remove [<config.yaml>] [-url]\n" +
 	"       crewlet fleet broker remove <node-id> -confirm <node-id> [-force]\n" +
 	"       crewlet fleet broker remove -peer <peer-id> -confirm <peer-id> [-force]"
 
 // runFleet dispatches `crewlet fleet`.
-func runFleet(args []string, stdout, stderr io.Writer) error {
+func runFleet(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	switch sub {
 	case "broker":
-		return runFleetBroker(rest, stdout, stderr)
+		return runFleetBroker(environ, rest, stdout, stderr)
 	case "", "help":
 		fmt.Fprintln(stderr, fleetBrokerUsage)
 		return flag.ErrHelp
@@ -54,13 +55,13 @@ func runFleet(args []string, stdout, stderr io.Writer) error {
 }
 
 // runFleetBroker dispatches `crewlet fleet broker`.
-func runFleetBroker(args []string, stdout, stderr io.Writer) error {
+func runFleetBroker(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	switch sub {
 	case "list":
-		return fleetBrokerList(rest, stdout, stderr)
+		return fleetBrokerList(environ, rest, stdout, stderr)
 	case "remove":
-		return fleetBrokerRemove(rest, stdout, stderr)
+		return fleetBrokerRemove(environ, rest, stdout, stderr)
 	case "", "help":
 		fmt.Fprintln(stderr, fleetBrokerUsage)
 		return flag.ErrHelp
@@ -115,9 +116,9 @@ type brokerGroupView struct {
 }
 
 // fleetBrokerList is `crewlet fleet broker list`.
-func fleetBrokerList(args []string, stdout, stderr io.Writer) error {
+func fleetBrokerList(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	var asJSON *bool
-	client, err := nodeClientFor(args, "fleet broker list", stderr, func(fs *flag.FlagSet) {
+	client, err := nodeClientFor(environ, args, "fleet broker list", stderr, func(fs *flag.FlagSet) {
 		asJSON = fs.Bool("json", false, "print the node's answer as it came, for a script")
 	})
 	if err != nil {
@@ -302,11 +303,11 @@ func fleetBrokerRemoveWait() time.Duration { return engine.BrokerRemoveWait() + 
 
 // fleetBrokerRemove is `crewlet fleet broker remove`: a voter named by node id,
 // or by `-peer` for one the listing shows with no name.
-func fleetBrokerRemove(args []string, stdout, stderr io.Writer) error {
+func fleetBrokerRemove(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	node, rest := splitSubject(args)
 	var confirm, peer *string
 	var force *bool
-	client, err := nodeClientFor(rest, "fleet broker remove", stderr, func(fs *flag.FlagSet) {
+	client, err := nodeClientFor(environ, rest, "fleet broker remove", stderr, func(fs *flag.FlagSet) {
 		confirm = fs.String("confirm", "",
 			"repeat the node id (or the peer id) — a removed member no longer counts "+
 				"in any election")

@@ -3,9 +3,11 @@ package engine
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -34,7 +36,7 @@ import (
 func TestANodeAPeerReanchoredPastIsSentToAdopt(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-1", "node-x"); err != nil ||
 		res.Outcome != statelog.OutcomeApplied {
 		t.Fatalf("a write: %+v, %v", res, err)
@@ -128,7 +130,7 @@ func TestANodeAPeerReanchoredPastIsSentToAdopt(t *testing.T) {
 	waitUntil(t, 5*time.Second, "the heartbeat to request a rejoin", func() bool {
 		return rejoins.Load() > 0
 	})
-	if _, code := e.native.Load().log.Established(t.Context(), true); code != statelog.RefuseWrongStream {
+	if _, code := e.core.Load().log.Established(t.Context(), true); code != statelog.RefuseWrongStream {
 		t.Fatalf("a strict read on the tracker is answered %q, want %q",
 			code, statelog.RefuseWrongStream)
 	}
@@ -152,7 +154,7 @@ func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 	// the collector's landing on the rebuilt log ahead of the peer's record
 	// would be the record the donor's checkpoint sits on.
 	quietTheCollector(t, e)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
 		res.Outcome != statelog.OutcomeApplied {
@@ -197,7 +199,7 @@ func TestANodeLeftOnARebuiltLogAdoptsTheReanchoredGeneration(t *testing.T) {
 	// THE GUARD NAMES THE PEER, and adopting its snapshot is what it means.
 	if _, err := e.Reanchor(t.Context(), ReanchorRequest{
 		Stream: running.spec.Name, Confirm: statelog.ConfirmationOf(live),
-		By: "ops-1",
+		By: reanchorOperator,
 	}); !errors.Is(err, statelog.ErrReanchorRefused) {
 		t.Fatalf("a reanchor with a re-anchored peer = %v, want a refusal", err)
 	}
@@ -251,7 +253,7 @@ func TestANodeARestoredReanchorLeftBehindStopsOnItsRecordAndAdopts(t *testing.T)
 	// the case is a log whose end is the copy's checkpoint with the peer's
 	// generation record right after it.
 	quietTheCollector(t, e)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x")
 	if err != nil || res.Outcome != statelog.OutcomeApplied {
@@ -293,7 +295,8 @@ func TestANodeARestoredReanchorLeftBehindStopsOnItsRecordAndAdopts(t *testing.T)
 	zero := uint64(0)
 	spec := running.spec
 	genSeq, _, err := running.log.Append(t.Context(),
-		spec.SubjectPrefix+"."+record.Subject.String(), record.OpID, &zero, record.Payload)
+		spec.SubjectPrefix+"."+record.Subject.String(), record.OpID, &zero,
+		running.signer.Seal(record.Payload))
 	if err != nil {
 		t.Fatalf("append the peer's generation record: %v", err)
 	}
@@ -375,6 +378,9 @@ func copiedCheckpoint(t *testing.T, rows, stream string) statelog.Position {
 // AS A LIVE DATA NODE OF e's FLEET, which is what every donor is: a join waits
 // for the live data nodes to answer and no longer, so a donor nobody's
 // presence names is one a join may stop before hearing ([presentAsDataNode]).
+//
+// IT RETURNS ONCE THE DONOR ANSWERS AN ASK, and not merely once it has been
+// started: see [awaitDonor].
 func standUpDonor(t *testing.T, e *Engine, q *jetstream.Queue, rows string,
 	at statelog.Position, created time.Time) {
 
@@ -383,20 +389,11 @@ func standUpDonor(t *testing.T, e *Engine, q *jetstream.Queue, rows string,
 	if err != nil {
 		t.Fatalf("open the copy: %v", err)
 	}
-	if err := copyDB.Tx(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), `
-			INSERT INTO statelog_cursor
-				(stream, generation, seq, stream_created_at, updated_at, applied_version)
-			VALUES (?, ?, ?, ?, ?, 0)
-			ON CONFLICT (stream) DO UPDATE SET
-				generation = excluded.generation, seq = excluded.seq,
-				stream_created_at = excluded.stream_created_at`,
-			at.Stream, int64(at.Generation), int64(at.Seq),
-			store.EncodeTime(created), store.EncodeTime(time.Now().UTC()))
-		return err
-	}); err != nil {
-		t.Fatalf("move the copy's checkpoint: %v", err)
+	log, err := q.DomainLog(t.Context(), at.Stream)
+	if err != nil {
+		t.Fatalf("open the log: %v", err)
 	}
+	moveCheckpoint(t, log, copyDB, at, created)
 	if err := copyDB.Close(); err != nil {
 		t.Fatalf("close the copy: %v", err)
 	}
@@ -428,19 +425,182 @@ func standUpDonor(t *testing.T, e *Engine, q *jetstream.Queue, rows string,
 	if err != nil {
 		t.Fatalf("Take: %v", err)
 	}
-	donor, err := statelog.NewDonor(statelog.DonorDeps{
+	serveDonor(t, e, q.Conn(), statelog.DonorDeps{
 		NodeID: "donor",
 		Dial:   func(context.Context) (*nats.Conn, error) { return q.DialOwned() },
 		Newest: func() (statelog.Manifest, bool) { return manifest, true },
 		Path:   func(m statelog.Manifest) string { return filepath.Join(snapDir, m.Artifact) },
 	})
+}
+
+// serveDonor serves deps as a donor until the test ends, and returns once it
+// answers an offer request on nc's broker: see [awaitDonor]. Presented as a
+// live data node of e's fleet first ([presentAsDataNode]), where there is an
+// engine to join from; nil stands a donor up on the broker alone.
+func serveDonor(t *testing.T, e *Engine, nc *nats.Conn, deps statelog.DonorDeps) {
+	t.Helper()
+	// up is closed once the donor's own connection is open, which is where
+	// awaitDonor's clock starts. Once, because how often Serve dials is that
+	// package's business and a second close would panic.
+	up := make(chan struct{})
+	opened := sync.OnceFunc(func() { close(up) })
+	if dial := deps.Dial; dial != nil {
+		deps.Dial = func(ctx context.Context) (*nats.Conn, error) {
+			conn, err := dial(ctx)
+			if err == nil {
+				opened()
+			}
+			return conn, err
+		}
+	}
+	donor, err := statelog.NewDonor(deps)
 	if err != nil {
 		t.Fatalf("NewDonor: %v", err)
 	}
-	presentAsDataNode(t, e, "donor")
+	if e != nil {
+		presentAsDataNode(t, e, deps.NodeID)
+	}
 	ctx, stop := context.WithCancel(t.Context())
-	t.Cleanup(stop)
-	go func() { _ = donor.Serve(ctx) }()
+	// CLOSED after the send, so the cleanup's receive returns even when
+	// awaitDonor has already taken the error.
+	served := make(chan error, 1)
+	go func() { served <- donor.Serve(ctx); close(served) }()
+	t.Cleanup(func() { stop(); <-served })
+	awaitDonor(t, nc, deps.NodeID, up, served)
+}
+
+// A DONOR IS AWAITED ON ITS DIAL'S OWN BUDGET, and only its answer on the offer
+// window.
+//
+// [awaitDonor] once bounded its whole wait by one [statelog.OfferWindow] from
+// the moment Serve was started, so a donor whose handshake ran longer than that
+// — which the embedded broker's listener budget exists to allow on a loaded host
+// — failed every case standing it up, as a donor no join would hear, while
+// every join asked once its connection was open would have been answered. This
+// donor's dial takes a second longer than the window and has to be awaited.
+func TestADonorWithASlowDialIsAwaitedOnItsDialsOwnBudget(t *testing.T) {
+	t.Parallel()
+	q, err := jetstream.Open(t.Context(), jetstream.Config{StoreDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open the broker: %v", err)
+	}
+	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
+	slow := statelog.OfferWindow + time.Second
+	serveDonor(t, nil, q.Conn(), statelog.DonorDeps{
+		NodeID: "slow",
+		Dial: func(ctx context.Context) (*nats.Conn, error) {
+			select {
+			case <-time.After(slow):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			return q.DialOwned()
+		},
+		Newest: func() (statelog.Manifest, bool) { return statelog.Manifest{NodeID: "slow"}, true },
+		Path:   func(statelog.Manifest) string { return "" },
+	})
+}
+
+// awaitDonor returns once the donor named node answers an offer request on
+// nc's broker — the condition every caller of [standUpDonor] depends on.
+//
+// # Why started is not serving
+//
+// [statelog.Donor.Serve] dials its own connection and subscribes from its own
+// goroutine, and a joiner asks ONCE: [statelog.CollectOffers] publishes one
+// request and collects for a window, so a donor whose subscription the broker
+// registers after that publish never hears it, however long the window runs.
+// A case that stood a donor up and then called [Engine.rejoin] directly ran
+// exactly that race. Measured, the donor dials within milliseconds of being
+// started and the rejoin asks fifty milliseconds to a second after, so the
+// case passed whenever the donor won; one that loses it fails the case as `no
+// peer could donate a usable snapshot`, which a donor dialling four hundred
+// milliseconds late reproduces exactly. The heartbeat-driven callers asked
+// again a heartbeat later and only ran slow.
+//
+// # Why this is the condition
+//
+// A donor's own answer is the only thing that proves the broker holds its
+// subscription: an answer to an ask published on the same subject means every
+// later ask reaches it too. Asking the subject rather than any responder,
+// because this node's own donor listens on it as well and answers first. The
+// ask is REPEATED, since one published before the subscription landed is lost
+// rather than delivered late, and every answer is read from one inbox, so an
+// answer arriving after the next ask went out still counts.
+//
+// # The bounds, one per half
+//
+// THE CONNECTION is waited for on the dial's own budget, and on no clock of
+// this function's: up is closed once the donor's dial hands back a connection
+// ([serveDonor]), and a dial that fails or runs out its handshake timeout ends
+// Serve, which served reports by name. For [jetstream.Queue.DialOwned], which
+// every donor here dials through, that timeout is the embedded broker's accept
+// budget — thirty seconds, because nats's own two seconds failed boots on a
+// loaded host against a server that was up — so a clock here would be a
+// second, shorter opinion about the same handshake. It was one: the whole wait
+// was once bounded by a single offer window, and a donor whose dial took six
+// seconds, well inside the budget it is actually given, failed this helper
+// while every join asked after it would have been answered.
+//
+// THE ANSWER is waited for one [statelog.OfferWindow] from the moment the
+// connection is open: subscribing and answering is the same local work a
+// connected donor does for a joiner's ask, and that window is what the
+// framework gives a donor to do it. One that cannot fails the case here,
+// naming the donor, rather than in the adoption with an error that names
+// nothing.
+func awaitDonor(t *testing.T, nc *nats.Conn, node string, up <-chan struct{},
+	served <-chan error) {
+
+	t.Helper()
+	select {
+	case <-up:
+	case err := <-served:
+		t.Fatalf("donor %q stopped before its connection was open: %v", node, err)
+	}
+	inbox := nats.NewInbox()
+	answers, err := nc.SubscribeSync(inbox)
+	if err != nil {
+		t.Fatalf("open the probe's inbox: %v", err)
+	}
+	defer func() { _ = answers.Unsubscribe() }()
+	ask, err := json.Marshal(statelog.OfferRequest{NodeID: "probe"})
+	if err != nil {
+		t.Fatalf("encode the probe's ask: %v", err)
+	}
+	const between = 20 * time.Millisecond
+	deadline := time.Now().Add(statelog.OfferWindow)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-served:
+			t.Fatalf("donor %q stopped serving before it answered: %v", node, err)
+		default:
+		}
+		if err := nc.PublishRequest(statelog.SubjectOffer, inbox, ask); err != nil {
+			t.Fatalf("ask donor %q: %v", node, err)
+		}
+		for {
+			msg, err := answers.NextMsg(between)
+			if errors.Is(err, nats.ErrTimeout) {
+				break
+			}
+			// NOBODY SUBSCRIBES AT ALL, which the broker says at once:
+			// wait out the interval rather than asking at its reply rate.
+			if errors.Is(err, nats.ErrNoResponders) {
+				time.Sleep(between)
+				break
+			}
+			if err != nil {
+				t.Fatalf("read donor %q's answer: %v", node, err)
+			}
+			var offer statelog.Offer
+			if json.Unmarshal(msg.Data, &offer) == nil && offer.Manifest.NodeID == node {
+				return
+			}
+		}
+	}
+	t.Fatalf("donor %q did not answer an offer request within %s of its "+
+		"connection opening, which is the window a join would have given it",
+		node, statelog.OfferWindow)
 }
 
 // presentAsDataNode claims a presence lease for id as a data node on e's

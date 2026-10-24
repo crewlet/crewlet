@@ -45,16 +45,23 @@ func TestPendingStoreContract(t *testing.T) {
 // and a wake that could not name one carries none either — so two absences
 // comparing equal would make every such delivery the answer to every such run,
 // and the first thing a person said to a seat would splice into somebody
-// else's coding job. [sandbox.CoordStore.FindAwaitingByConversation] refuses an
-// empty reference before it reads the bucket at all, which is why this case
-// cannot be reached through the store and is asserted here instead: the rule
-// has to hold for the next caller too.
+// else's coding job. A store only hands over a seat's parked runs as
+// candidates and the value decides which of them a delivery answers
+// ([sandbox.ConversationRef.Best]), so the rule is asserted here, on the value,
+// where every caller that matches a delivery to a run inherits it.
+//
+// A ROW NAMING ONLY A PARTITION IS ANSWERED BY NOTHING, a reply in the very
+// thread it was launched from included: the identity is what admits a
+// delivery, and the partition only picks between rows the identity admitted.
 func TestNoConversationAnswersNoParkedRun(t *testing.T) {
 	t.Parallel()
 	keyless := sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe"}
 	dm := sandbox.PendingRun{
 		TurnID: "t2", AgentHandle: "swe",
 		PartitionKey: "chat:D1:root-1", ConversationKey: "chat:D1",
+	}
+	partitionOnly := sandbox.PendingRun{
+		TurnID: "t3", AgentHandle: "swe", PartitionKey: "chat:D1:root-1",
 	}
 	cases := []struct {
 		name string
@@ -65,6 +72,11 @@ func TestNoConversationAnswersNoParkedRun(t *testing.T) {
 			sandbox.ConversationRef{}, keyless},
 		{"a delivery naming no conversation, a run parked on a DM",
 			sandbox.ConversationRef{}, dm},
+		{"a delivery naming no conversation, a run naming only a partition",
+			sandbox.ConversationRef{}, partitionOnly},
+		{"a reply in the run's own thread, a run naming only a partition",
+			sandbox.ConversationRef{Identity: "chat:D1", Partition: "chat:D1:root-1"},
+			partitionOnly},
 		{"a reply on a DM line, a run parked with no conversation",
 			sandbox.ConversationRef{Identity: "chat:D1", Partition: "chat:D1:root-1"},
 			keyless},

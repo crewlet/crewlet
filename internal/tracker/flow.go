@@ -417,7 +417,7 @@ func readFlowRows(ctx context.Context, tx *sql.Tx, from time.Time) ([]flowRow, e
 		}
 		row.kind = ChangeKind(kind)
 		row.effective = store.DecodeTime(at)
-		row.fields = deltasOf(fields)
+		row.fields = historyDeltas(fields)
 		out = append(out, row)
 	}
 	if err = rows.Err(); err != nil {
@@ -426,12 +426,12 @@ func readFlowRows(ctx context.Context, tx *sql.Tx, from time.Time) ([]flowRow, e
 	return out, nil
 }
 
-// deltasOf decodes a history row's `fields_json`.
+// historyDeltas decodes a history row's `fields_json`.
 //
 // A COLUMN THAT DOES NOT DECODE MOVED NOTHING this walk can undo, rather than
 // failing the read: the column is the applier's own JSON, and one malformed row
 // must not take a company's chart down with it.
-func deltasOf(fields string) map[string]Delta {
+func historyDeltas(fields string) map[string]Delta {
 	var out map[string]Delta
 	if err := json.Unmarshal([]byte(fields), &out); err != nil {
 		return nil
@@ -480,7 +480,7 @@ func stateBeforePurge(ctx context.Context, tx *sql.Tx, id string) (flowState, er
 		if ChangeKind(kind) == ChangePurged {
 			break
 		}
-		moved := deltasOf(fields)
+		moved := historyDeltas(fields)
 		if d, ok := moved["status"]; ok {
 			s.status = Status(d.To)
 		}

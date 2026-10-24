@@ -50,7 +50,7 @@ function serving(
     return answers[what as QueryName] ?? {};
   });
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue(
     withDerived({
       name: "Acme",
@@ -128,7 +128,7 @@ test("the purpose is the sentence under the name, above the census", async () =>
   await waitFor(() => expect(screen.getByText("Build and ship the product")).toBeTruthy());
   const note = container.querySelector(".page-note");
   expect(note?.textContent).toBe("Build and ship the product");
-  expect(precedes(container.querySelector(".object-head"), note)).toBe(true);
+  expect(precedes(container.querySelector(".crewlet-object-header"), note)).toBe(true);
   expect(precedes(note, container.querySelector(".work-census"))).toBe(true);
 });
 
@@ -149,7 +149,7 @@ test("a project with no purpose says whose it is, and whether anything is in it"
   const { container } = mount();
   await waitFor(() => expect(container.querySelector(".page-note")).toBeTruthy());
   expect(container.querySelector(".page-note")?.textContent).toBe(
-    "ENG is Platform's project. Nothing has been filed in it yet.",
+    "ENG is Platform’s project. Nothing has been filed in it yet.",
   );
   cleanup();
 
@@ -162,9 +162,7 @@ test("a project with no purpose says whose it is, and whether anything is in it"
   const filled = mount();
   await waitFor(() => expect(filled.container.querySelector(".page-note")).toBeTruthy());
   const lede = filled.container.querySelector(".page-note")?.textContent ?? "";
-  expect(lede).toBe(
-    "ENG is Platform's project. No purpose is set for it — add one to Platform in the company configuration and this line will say it.",
-  );
+  expect(lede).toBe("ENG is Platform’s project. Add a purpose in Edit org.");
   // A SENTENCE, not a configuration key in backticks.
   expect(lede).not.toContain("`");
 });
@@ -182,7 +180,7 @@ test("an empty project says so instead of running the list", async () => {
   await waitFor(() =>
     expect(screen.getByText("No work has been filed in Engineering yet")).toBeTruthy(),
   );
-  expect(screen.getByText(/create_work_item/)).toBeTruthy();
+  expect(screen.getByText("File the first task with New task.")).toBeTruthy();
   // AND THE WAY IN, in the state itself rather than only in the page bar: a
   // reader looking at an empty project is looking for how to file into it.
   const state = screen
@@ -214,10 +212,10 @@ test("a project whose work was all removed still opens its trash", async () => {
 // holds — waiting and started together, 9 + 3. About is a description
 // rather than a collection and History and Files are paged, so none of them
 // takes one — a count of a loaded page would read as a count of the lens.
-test("the Items lens carries the unfinished count, and the other three carry none", async () => {
+test("the Tasks lens carries the unfinished count, and the other three carry none", async () => {
   serving({ work_project: detail(), work_items: { items: [], groups: [], complete: true } });
   mount();
-  // THE LENS ROW BY NAME. The Items lens draws the list's own view strip
+  // THE LENS ROW BY NAME. The Tasks lens draws the list's own view strip
   // whether or not anybody has saved a view, so "every tab on the screen" is
   // more than these four and is not what this case is about.
   await waitFor(() => expect(screen.getByRole("tablist", { name: "Lens" })).toBeTruthy());
@@ -225,7 +223,7 @@ test("the Items lens carries the unfinished count, and the other three carry non
   expect(tabs.length).toBe(4);
   // SAID AS WHAT IT COUNTS — open tasks — to a pointer and a screen reader,
   // because the bar a row below counts its own scope ("… in Recent").
-  expect(tabs[0]?.textContent).toMatch(/^Items12/);
+  expect(tabs[0]?.textContent).toMatch(/^Tasks12/);
   expect(tabs[0]?.textContent).toContain("12 open");
   expect(within(tabs[0]!).getByTitle("12 open")).toBeTruthy();
   expect(tabs[1]?.textContent).toBe("About");
@@ -259,13 +257,13 @@ test("the census is the split of the work, and only where there is work", async 
 });
 
 // THE WORK IS THE FIRST SCREENFUL, as the approved Board draws a project: the
-// Items lens is the list straight under the lens strip, with no header about
+// Tasks lens is the list straight under the lens strip, with no header about
 // the container above it — that header is the About lens.
-test("the Items lens draws no container header above the work", async () => {
+test("the Tasks lens draws no container header above the work", async () => {
   serving({ work_project: detail(), work_items: { items: [], groups: [], complete: true } });
   const { container } = mount();
   await waitFor(() => expect(screen.getByRole("tablist", { name: "Lens" })).toBeTruthy());
-  expect(container.querySelector(".object-head")).toBeNull();
+  expect(container.querySelector(".crewlet-object-header")).toBeNull();
   expect(screen.queryByText("Build and ship the product")).toBeNull();
 });
 
@@ -279,7 +277,7 @@ test("the work is the lens a project opens on, scoped to this project", async ()
   });
   mount();
   await waitFor(() => expect(asked(query).container).toBe("project:ENG"));
-  // THE LENS ROW BY NAME, because the Items lens brings a row of its own:
+  // THE LENS ROW BY NAME, because the Tasks lens brings a row of its own:
   // the list's view strip is drawn whether or not anybody has saved a view, and
   // its first button is this container's own list, pressed while no saved view
   // runs. Read as "every tab on the screen" this case would fail the day either
@@ -289,8 +287,8 @@ test("the work is the lens a project opens on, scoped to this project", async ()
     within(lenses)
       .getAllByRole("tab")
       .map((el) => el.textContent),
-  ).toEqual(["Items1212 open", "About", "History", "Files"]);
-  expect(screen.getByRole("button", { name: "All in this project", pressed: true })).toBeTruthy();
+  ).toEqual(["Tasks1212 open", "About", "History", "Files"]);
+  expect(screen.getByRole("radio", { name: "All tasks", checked: true })).toBeTruthy();
 });
 
 // A LENS IS A SECTION, so it is in the URL: a reader who walked to
@@ -353,7 +351,7 @@ test("a project naming a unit the chart lost says what that costs", async () => 
     work_items: { items: [], groups: [], complete: true },
   });
   mount();
-  await waitFor(() => expect(screen.getByText(/routes to nobody/)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/New work here reaches nobody/)).toBeTruthy());
 });
 
 // NOT THE GENERIC "there is no such record". A project key reaches this from a
@@ -386,9 +384,9 @@ test("the rail draws the page's own facts, in the page's own order", async () =>
   );
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
   expect(screen.getByText("Ada Okonkwo")).toBeTruthy();
-  const head = container.querySelector(".object-head");
+  const head = container.querySelector(".crewlet-object-header");
   const note = container.querySelector(".page-note");
-  const banner = screen.getByText(/routes to nobody/).closest(".crewlet-callout");
+  const banner = screen.getByText(/New work here reaches nobody/).closest(".crewlet-callout");
   expect(precedes(head, note)).toBe(true);
   expect(precedes(note, banner)).toBe(true);
   expect(precedes(banner, container.querySelector(".work-census"))).toBe(true);
@@ -428,7 +426,7 @@ test("the rail says an empty project is empty, where the page's list does", asyn
 // because the alternative spelling is one line away and fails SILENTLY: a
 // setter that built a fresh `URLSearchParams` would drop every filter, and
 // each lens would still render perfectly on its own.
-test("a filter set on the Items lens survives a walk to History and back", async () => {
+test("a filter set on the Tasks lens survives a walk to History and back", async () => {
   location.hash = "#/work/ENG?priority=urgent&assignee=ada";
   const query = serving({
     work_project: detail(),
@@ -448,13 +446,13 @@ test("a filter set on the Items lens survives a walk to History and back", async
     );
   });
   // THE NARROWING IS STILL ON THE ADDRESS while another lens is drawn. It has
-  // to be: the Items lens is unmounted, so the URL is the only thing holding
+  // to be: the Tasks lens is unmounted, so the URL is the only thing holding
   // what the reader asked for.
   expect(location.hash).toContain("priority=urgent");
   expect(location.hash).toContain("assignee=ada");
 
   query.mockClear();
-  fireEvent.click(within(lenses()).getByRole("tab", { name: /^Items/ }));
+  fireEvent.click(within(lenses()).getByRole("tab", { name: /^Tasks/ }));
   await waitFor(() => expect(listRan(query)).toBe(true));
   expect(asked(query).priority).toBe("urgent");
   expect(asked(query).assignee).toBe("ada");
@@ -484,7 +482,7 @@ test("switching lens drops neither the shape, its columns nor the order", async 
   expect(location.hash).toContain("sort=-due");
 
   query.mockClear();
-  fireEvent.click(within(lenses()).getByRole("tab", { name: /^Items/ }));
+  fireEvent.click(within(lenses()).getByRole("tab", { name: /^Tasks/ }));
   await waitFor(() => expect(listRan(query)).toBe(true));
   expect(asked(query).sort).toBe("-due");
   // AND THE KEY IS STILL ON THE ADDRESS, which is the half a re-asked query

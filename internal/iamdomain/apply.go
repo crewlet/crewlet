@@ -1,0 +1,492 @@
+package iamdomain
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/statelog"
+)
+
+// applyLog is the applier's own voice, apart from the read side's: what it says
+// is about a record applied here, and an operator grepping for that should not
+// have to know it was filed under reads.
+var applyLog = logging.Get("iam.apply")
+
+// The applier, and the four rules that make it a PURE FUNCTION of the log.
+//
+// N nodes derive one SQL state from one ordered stream, and this domain CLAIMS
+// IDENTITY: the claim that their tables are byte-identical is checkable, by a
+// comparison of the replicated rows themselves. It survives exactly as long as
+// these four hold, and they are every sibling domain's four because they are
+// properties of the framework rather than of any one domain:
+//
+//  1. IT READS NO CONFIG AND NO CLOCK. Everything it would otherwise read
+//     arrives in [statelog.ApplyOptions]: the batch's instant, the broker's own
+//     timestamp, and the epoch values the domain declared it reads.
+//  2. IT WRITES ONLY WHAT THE RECORD SAYS. No lookup against a live counter, no
+//     "current" anything — the record carries its complete new values, which is
+//     what makes a replay from zero produce the rows the original apply did.
+//  3. EVERY DERIVED INSTANT IS A MAX OVER A SET, never a fold over an arrival
+//     order. Two nodes at one checkpoint have seen the same set in a different
+//     order, so a fold gives them different answers.
+//  4. EVERY UPSERT CARRIES ITS VERSION GUARD, and the guard is a SKIP rather
+//     than an error: a redelivered record is ordinary traffic, and a constraint
+//     violation inside this transaction would abort it identically on every
+//     node and stall the whole fleet's log.
+//
+// # The one rule this applier has that no sibling needs
+//
+// IT NEVER DECRYPTS. Every sealed value the record carries is written through
+// as bytes, and a removal ERASES the values it reaches by their shape without
+// opening one ([eraseSealed]). That is what keeps rule 1 true in a domain whose
+// values are encrypted: an applier that opened a value would be one whose rows
+// depended on which keyring keys this node holds — and two nodes a rotation
+// has not yet reached would write different rows from one record.
+//
+// WHAT A BATCH MOVED IS SAID POST-COMMIT, because it is a consequence of a
+// record here that is not a row. A suspension withdraws the seat's contact
+// identities from this node's notify registry with no configuration change at
+// all, and closes every dashboard socket the person holds open; the apply is
+// the only thing that sees either happen on EVERY node — the change feed
+// relays a record to one. So a committed batch hands the engine a [Moved]
+// saying whose standing it moved, and each listener re-reads the rows it
+// needs.
+
+// Applier writes this node's copy of the identity estate.
+type Applier struct {
+	// NodeID is this node's own id, which the eviction gate compares a
+	// record's writer against.
+	NodeID string
+
+	// committed is told, after a committed batch, what it moved — see
+	// [Moved]. Nil is legal and means nobody is listening.
+	committed func(Moved)
+
+	// moved is filled inside Apply as each record writes a row somebody's
+	// standing is read from, and drained by Committed. NOT guarded by a
+	// mutex, and the framework's contract is why: an applier is ONE writer,
+	// and Apply and Committed are called from the same goroutine with the
+	// commit in between. A body the store re-runs fills it twice, which
+	// costs a listener a re-read and nothing else — see [Moved] on why
+	// over-reporting is the safe direction.
+	moved Moved
+}
+
+// NewApplier builds the identity estate's applier for one node.
+//
+// committed is called after a committed batch that moved anything — see
+// [Moved]. AFTER the commit and never inside the transaction, because the
+// store re-runs the body of an attempt that failed transiently, and a listener
+// told about rows that then rolled back would re-decide from rows no node
+// holds.
+func NewApplier(nodeID string, committed func(Moved)) *Applier {
+	return &Applier{NodeID: nodeID, committed: committed}
+}
+
+// Committed is the post-commit half: the consequences of a record here that
+// are not rows — this node's contact routing hearing that a seat's standing
+// may have moved, and its open connections that a credential they were opened
+// with may have.
+//
+// IT MUST NOT BLOCK, and neither may the listener: it runs on the apply loop's
+// own goroutine with the next batch waiting behind it.
+func (a *Applier) Committed(context.Context) {
+	if a.moved.Empty() {
+		return
+	}
+	// RESET BEFORE THE CALL, so a move the listener raises while it runs
+	// is one the next batch delivers rather than one this reset erases.
+	moved := a.moved
+	a.moved = Moved{}
+	if a.committed != nil {
+		a.committed(moved)
+	}
+}
+
+// movedPerson records that the row of person id moved, under the login the row
+// holds — see [heldLogin].
+func (a *Applier) movedPerson(ctx context.Context, tx *sql.Tx, id string) error {
+	login, err := heldLogin(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	a.moved.person(id, login)
+	return nil
+}
+
+// heldLogin is the login person id's row holds, read in the apply's own
+// transaction, or "" for a row that holds none or does not exist. A move names
+// it beside the person so a credential bound through that login — a Tier A
+// token's `token:<id>` row — is named too ([Moved.Logins]).
+func heldLogin(ctx context.Context, tx *sql.Tx, id string) (string, error) {
+	var login string
+	err := tx.QueryRowContext(ctx,
+		`SELECT login FROM iam_people WHERE id = ?`, id).Scan(&login)
+	if err != nil && !errorsIsNoRows(err) {
+		return "", fmt.Errorf("iamdomain: read the login of person %s, whose "+
+			"row this record moved: %w", id, err)
+	}
+	return login, nil
+}
+
+// THE APPLIER HEARS WHAT A BATCH RETAINED: see [Applier.Retained].
+var _ statelog.RetentionHook = (*Applier)(nil)
+
+// Retained is told, after a committed batch and before [Applier.Committed],
+// that the batch RETAINED records this node did not apply — one a newer build
+// wrote, one signed under a keyring key this node was not restarted with, or
+// one a retained record's scope covers.
+//
+// IT MOVES EVERYONE ([Moved.Everyone]). Whose record it is sits inside a
+// payload this node could not read, and its scope is a BUCKET of the person
+// id rather than the person, so no list here can name whom it is about. What
+// the commit did change is what this node can vouch for: every read of a
+// person in that bucket answers unknown from now on (the deferral the
+// framework just recorded), and the guard refuses their REST requests 503. A
+// connection held open on a decision made before the commit — a revocation or
+// a suspension this node cannot read is exactly what such a record may be — is
+// one only the move naming everyone reaches. NOT [Moved.Seats]: the contact
+// routing is rebuilt from rows, and a retained record wrote none.
+func (a *Applier) Retained(context.Context, int) {
+	a.moved.Everyone = true
+}
+
+// THE APPLIER MAINTAINS ONE DERIVED COLUMN: see [Applier.Rederive].
+var _ statelog.Deriver = (*Applier)(nil)
+
+// DerivationVersion is the rule set this build derives its columns at.
+//
+// 1 is an invitation's `seat_id` (replicated migration 0042): written by the
+// apply from the record, and recomputed by [Applier.Rederive] from the row's
+// own document whenever the checkpoint's rule set differs from this build's —
+// a checkpoint a reanchor created (derivation 0), or rows adopted from a build
+// whose rules differ ([statelog.Deriver]). On rows this build applied it
+// writes nothing. Bumped by any change to what a derived column holds, so a
+// node holding rows derived under another rule set converges on this one.
+const DerivationVersion = 1
+
+// DerivationVersion implements [statelog.Deriver].
+func (a *Applier) DerivationVersion() int { return DerivationVersion }
+
+// Rederive implements [statelog.Deriver]: every invitation's `seat_id`
+// recomputed from the document its row holds.
+//
+// THE SAME DECODE THE APPLY WRITES IT FROM ([DecodeInvitation], in
+// [Applier.writeInvitation]'s arm), never a second reading of the document in
+// SQL: a `json_extract` backfill would be another implementation of what an
+// invitation's seat is, and the two would answer differently the day either is
+// edited. Only rows that differ are written, so a node whose rows this build
+// maintained repairs none, and a row re-derived here equals the row a node
+// replaying the log writes — the column, and nothing else; the version stays
+// the record's.
+//
+// READ WHOLE BEFORE ANY ROW IS WRITTEN, because an UPDATE of the table a
+// cursor is still walking is a write the cursor may or may not see again.
+func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx,
+	_ statelog.ApplyOptions) (int, error) {
+
+	type stale struct{ id, seat string }
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id, seat_id, document FROM iam_invites ORDER BY id`)
+	if err != nil {
+		return 0, fmt.Errorf("iamdomain: read the invitations to re-derive "+
+			"their seats: %w", err)
+	}
+	var repair []stale
+	for rows.Next() {
+		var (
+			id, held string
+			document []byte
+		)
+		if err = rows.Scan(&id, &held, &document); err != nil {
+			_ = rows.Close()
+			return 0, fmt.Errorf("iamdomain: read an invitation to re-derive "+
+				"its seat: %w", err)
+		}
+		invitation, decodeErr := DecodeInvitation(document)
+		if decodeErr != nil {
+			_ = rows.Close()
+			return 0, fmt.Errorf("iamdomain: open invitation %s to re-derive "+
+				"its seat: %w", id, decodeErr)
+		}
+		if invitation.Seat != held {
+			repair = append(repair, stale{id: id, seat: invitation.Seat})
+		}
+	}
+	if err = rows.Close(); err != nil {
+		return 0, fmt.Errorf("iamdomain: read the invitations to re-derive "+
+			"their seats: %w", err)
+	}
+	if err = rows.Err(); err != nil {
+		return 0, fmt.Errorf("iamdomain: read the invitations to re-derive "+
+			"their seats: %w", err)
+	}
+	for _, r := range repair {
+		if _, err = tx.ExecContext(ctx,
+			`UPDATE iam_invites SET seat_id = ? WHERE id = ?`,
+			r.seat, r.id); err != nil {
+			return 0, fmt.Errorf("iamdomain: re-derive invitation %s's "+
+				"seat: %w", r.id, err)
+		}
+	}
+	return len(repair), nil
+}
+
+// Gated reports a record that must produce no rows at all.
+//
+// TWO GATES, READ FROM THIS SAME TRANSACTION, because the answer has to come
+// from the state the record would have applied against rather than from a
+// cache that may be a heartbeat old:
+//
+//  1. THE EVICTION GATE. A record written by a node the fleet evicted before
+//     the record's own position is dropped everywhere. It depends on nothing
+//     but the log's own order, which is what makes it the fence that holds
+//     when coordination cannot be reached at all.
+//  2. THE REMOVAL GATE. A record about a person a removal destroyed applies
+//     nowhere, for ever. Without it a redelivery months later would write back
+//     somebody the company off-boarded — on one node only, in a table that
+//     claims identity, and in this domain that is somebody who can sign in.
+func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (
+	statelog.Reason, bool, error) {
+
+	if rec.Writer != "" {
+		var from, readmitted sql.NullInt64
+		err := tx.QueryRowContext(ctx, `
+			SELECT from_position, readmitted_position
+			FROM iam_evictions WHERE node_id = ?`, rec.Writer).
+			Scan(&from, &readmitted)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+		case err != nil:
+			return "", false, fmt.Errorf("iamdomain: read the eviction gate "+
+				"for node %s: %w", rec.Writer, err)
+		default:
+			at := rec.Position.Packed()
+			// THE WINDOW IS HALF-OPEN AT BOTH ENDS, and both ends
+			// matter: a record at or below the eviction's own position
+			// was written while the node was still counted, and one at
+			// or above a readmission is written by a node the fleet
+			// has taken back.
+			evicted := from.Valid && at > from.Int64
+			back := readmitted.Valid && at >= readmitted.Int64
+			if evicted && !back {
+				return statelog.ReasonEvicted, true, nil
+			}
+		}
+	}
+
+	// THE REMOVAL GATE IS ANSWERED FROM THE PERSON, and the person is on
+	// the MutationRecord rather than on the envelope — see the field's own
+	// doc for why an id is not an envelope field. A record this build
+	// cannot decode therefore reaches here with no person, and is NOT
+	// gated: that is correct and deliberate, because such a record is
+	// DEFERRED rather than applied, and the deferral is reprocessed by a
+	// build that can read it, at which point this gate runs properly.
+	person, ok := markedPerson(rec.Subject, rec.Payload)
+	if !ok {
+		return "", false, nil
+	}
+	var author sql.NullString
+	err := tx.QueryRowContext(ctx, `
+		SELECT record_id FROM iam_removed WHERE person_id = ?`,
+		person).Scan(&author)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", false, nil
+	case err != nil:
+		return "", false, fmt.Errorf("iamdomain: read the removal gate for "+
+			"person %s: %w", person, err)
+	}
+	// THE ONE EXCEPTION IS THE RECORD THAT WROTE THE TOMBSTONE, by its own
+	// op id — not by its op kind. "Any removal" would let a SECOND removal
+	// of one person through, and by the committed position would fail for a
+	// republished copy, leaving a node holding only that copy unable to
+	// write its own tombstone at all.
+	if author.Valid && author.String == rec.OpID {
+		return "", false, nil
+	}
+	return statelog.ReasonDeleted, true, nil
+}
+
+// markedPerson is the person whose tombstone gates a record on subj with the
+// body given, and false for a record no tombstone covers.
+//
+// # Which records, decided by the kind
+//
+// Only a kind [ObjectKind.GatedByRemoval] names can be about a person. On the
+// person's own subject the subject names them; on the directory and a session
+// the subject names nobody and a lineage, so this DECODES THE PAYLOAD, which
+// no sibling's gate does — a gate that read only the subject would drop the
+// records on the person's own subject and let every directory record through,
+// writing a removed person back onto a row nothing will ever correct. Every
+// other kind is about nobody, whatever its body carries.
+//
+// # One function, asked by both sides of the gate
+//
+// [Applier.Gated] drops what this covers and [Gates.GatedAt] reports why, and
+// [statelog.Gates] holds the two to one answer — so the rule is stated once.
+// It was two functions that looked alike, one per side, and nothing but their
+// resemblance kept them agreeing about which kinds a tombstone reaches. The
+// publisher hands the body of the record it appended
+// ([statelog.Gates.GatedAt]), so a removal landing between a write's decide and
+// its apply is named on that side as the gate that dropped it — without the
+// body, the publisher read its own acknowledged append as a ledger contract
+// violation.
+//
+// A RECORD IT CANNOT DECODE IS NOT GATED, and that is safe rather than a hole:
+// on the applier's side such a record is DEFERRED rather than applied, and the
+// deferral is reprocessed by a build that can read it, at which point this
+// runs properly. With NO BODY — a record the publisher merely found above its
+// anchor, whose it is being the open question — a record on the directory or
+// a session is answered "not gated", and the re-decide that answer leads to
+// meets the tombstone in its own snapshot ([Writer.request] refuses a write
+// about a removed person before it publishes).
+func markedPerson(subj statelog.Subject, body []byte) (string, bool) {
+	kind := ObjectKind(subj.Kind)
+	if !kind.GatedByRemoval() {
+		return "", false
+	}
+	if kind == KindPerson && subj.ID != "" {
+		return subj.ID, true
+	}
+	if body == nil {
+		return "", false
+	}
+	record, err := Decode(body)
+	if err != nil || record.Person == "" {
+		return "", false
+	}
+	return record.Person, true
+}
+
+// Apply writes one record's rows.
+//
+// The dispatch is on the SUBJECT KIND, and every kind has a case — including
+// the one that writes nothing, which is a case rather than a default so that a
+// kind added later without one is a compile-time hole rather than a silently
+// ignored record.
+func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
+	opts statelog.ApplyOptions) (int, error) {
+
+	record, err := Decode(rec.Payload)
+	if err != nil {
+		return 0, fmt.Errorf("iamdomain: decode the record at %s: %w",
+			rec.Position, err)
+	}
+	at := applyContext{
+		record:       record,
+		position:     rec.Position,
+		packed:       rec.Position.Packed(),
+		brokerAt:     opts.StoredAt,
+		maxVariables: opts.MaxVariables,
+	}
+
+	var rows int
+	switch ObjectKind(rec.Subject.Kind) {
+	case KindBarrier:
+		// THE READ INDEX'S OWN APPEND. It writes no row on any node, and
+		// that is its entire content: it exists so a linearizable read
+		// has a quorum-committed position to wait through. It writes no
+		// history row either, which is why it is absent from the class
+		// table rather than classified.
+		return 0, nil
+	case KindDirectory:
+		rows, err = a.applyDirectory(ctx, tx, &at)
+	case KindPerson:
+		rows, err = a.applyPerson(ctx, tx, at)
+	case KindSession:
+		rows, err = a.applySession(ctx, tx, at)
+	case KindInvalidation:
+		rows, err = a.applyInvalidation(ctx, tx, at)
+	case KindSweep:
+		rows, err = a.applySweep(ctx, tx, at)
+	case KindEviction:
+		rows, err = a.applyEviction(ctx, tx, at)
+	case KindGeneration:
+		rows, err = a.applyGeneration(ctx, tx, at)
+	default:
+		// A KIND THIS BUILD DOES NOT KNOW REACHES HERE ONLY AT A VERSION
+		// IT CAN DECODE, which is a record a peer wrote against a
+		// grammar this build shares and a kind it does not — the one
+		// combination the two-pass decode cannot file for later. It
+		// writes nothing and says so, rather than being counted as
+		// applied.
+		return 0, fmt.Errorf("iamdomain: the record at %s is on subject kind "+
+			"%q, which this build has no case for — it decoded, so it cannot "+
+			"be deferred, and applying nothing silently would make this node's "+
+			"rows differ from a peer that knows the kind",
+			rec.Position, rec.Subject.Kind)
+	}
+	if err != nil {
+		return rows, err
+	}
+
+	// AND THE AUTHENTICATION TRAIL, derived from the op rather than
+	// carried on the record — a writer that stated its own class could
+	// file a suspension in the short horizon, and the row would simply be
+	// gone when somebody went looking.
+	written, err := a.writeHistory(ctx, tx, at)
+	return rows + written, err
+}
+
+// applyContext is everything one record's apply reads, gathered once.
+//
+// A VALUE RATHER THAN FIVE ARGUMENTS, because every arm needs all of it and a
+// signature that grew one per arm is how one of them comes to be passed the
+// batch's instant where the broker's belongs.
+type applyContext struct {
+	record   MutationRecord
+	position statelog.Position
+
+	// aboutKind and aboutID are the object the trail row is filed under,
+	// where the record's own subject names nobody — a directory record's
+	// person, or the address an invitation was issued to — and empty
+	// otherwise, which files it under its subject. Set by
+	// [Applier.applyDirectory] from the payload it decodes.
+	aboutKind, aboutID string
+
+	// blind is the address an invitation was issued to, which buckets a
+	// record about nobody. Set the same way.
+	blind string
+
+	// packed is the composed (generation << 40) | sequence this record
+	// sits at, which is every row's `version` and the whole of what a
+	// monotone guard compares.
+	packed int64
+
+	// brokerAt is the BROKER's own instant for this record, which is what
+	// makes a derived timestamp byte-identical on every node rather than a
+	// clock each one read for itself.
+	brokerAt time.Time
+
+	maxVariables int
+}
+
+// unix is the broker instant as this estate stores it.
+func (a applyContext) unix() int64 { return a.brokerAt.UnixMilli() }
+
+// bucket is the partition every row this record writes belongs to.
+//
+// FROM THE PERSON, not from the scope: the scope is what a DEFERRAL is filed
+// under and may legitimately be wider than one person, while a row belongs to
+// exactly one bucket.
+//
+// A RECORD ABOUT NOBODY takes its ADDRESS's where it has one — an invitation's
+// issue, whose trail row lands beside the invitation itself, in the bucket its
+// scope names — and otherwise its SUBJECT's: an invalidation, with no id, in
+// the bucket of its kind.
+func (a applyContext) bucket() int64 {
+	switch {
+	case a.record.Person != "":
+		return int64(BucketOf(a.record.Person))
+	case a.blind != "":
+		return int64(BucketOf(a.blind))
+	case a.record.Subject.ID != "":
+		return int64(BucketOf(a.record.Subject.ID))
+	}
+	return int64(BucketOf(string(a.record.Subject.Kind)))
+}

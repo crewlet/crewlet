@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/provision"
+	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/whsec"
 
 	"github.com/crewlet/crewlet/internal/integration"
@@ -80,16 +81,23 @@ type Result struct {
 	// reason [jira.Result.NoIngress] is one: an empty Hooked is also what a
 	// perfectly healthy run looks like from the outside, and
 	// [integration.Classify] over no findings is READY. So a company that
-	// never set integrations.public_base_url — which the reconcile loop
-	// feeds into every pass — had GitLab reported ready while the instance
-	// had nowhere to deliver to and not one merge request, pipeline or
-	// comment ever reached a seat. The note below said so to whoever ran
+	// never set its webhook address — Tier A's `api.public.external_url`
+	// behind a public listener, `api.external_url` otherwise, which the
+	// reconcile loop feeds into every pass — had GitLab reported ready
+	// while the instance had nowhere to deliver to and not one merge
+	// request, pipeline or comment ever reached a seat. The note below said so to whoever ran
 	// the CLI; the dashboard, which is where a running company is watched,
 	// was told nothing.
 	//
 	// The zero value is "nothing to report", deliberately: a Result built
 	// anywhere but [Reconcile] must not invent an ingress problem.
 	NoIngress string
+
+	// NoIngressKey is the Tier A key this deployment's webhook address is
+	// read from, which NoIngress names as the setting an operator fills in
+	// to give the instance an address — as [Options] handed it over. Empty
+	// is [setup.BaseKey]'s.
+	NoIngressKey string
 
 	// CredentialExpires is when the credential this run authenticated with
 	// stops working, set ONLY when that is inside
@@ -103,15 +111,6 @@ type Result struct {
 	// card goes from Connected to Failed with no warning at all. GitLab
 	// publishes the date, so the warning is a read away.
 	CredentialExpires time.Time
-
-	// NoKeyring is a pass this node could not run at all because it has
-	// nowhere to seal what provisioning creates.
-	//
-	// A STATE, not an error, and the distinction is what an operator is
-	// told: a fault reports the engine working on it and is retried for
-	// ever, where this never resolves until somebody sets secrets.keys.
-	// See [provision.CanMint].
-	NoKeyring bool
 
 	// Unusable names the seats whose ACCOUNT GitLab will not let
 	// authenticate — a token minted seconds earlier was refused.
@@ -201,13 +200,19 @@ type Options struct {
 	// Sink records what is minted.
 	Sink provision.TokenSink
 
-	// WebhookBase is this deployment's public base URL, or empty to skip
-	// webhook registration.
+	// WebhookBase is where the instance reaches this deployment
+	// ([config.API.WebhookBase]: the public listener's address where
+	// `api.public` is set), or empty to skip webhook registration.
 	//
 	// SKIPPED RATHER THAN GUESSED. A hook pointing at the wrong host is
 	// worse than no hook: the instance reports a healthy integration, and
 	// the deliveries go somewhere nobody is looking.
 	WebhookBase string
+
+	// WebhookBaseKey is the Tier A key WebhookBase is read from
+	// ([config.API.WebhookBaseKey]), which a run with no address names as
+	// the setting to fill in. Empty is [setup.BaseKey]'s.
+	WebhookBaseKey string
 
 	// SigningSecret is the value the hook is registered with, resolved.
 	//
@@ -284,20 +289,6 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		// nowhere to put what it mints would create live credentials and
 		// print none of them, which is the worst outcome available.
 		return nil, provision.ErrNoSink
-	}
-	if !provision.CanMint(opts.Sink) {
-		// A NODE THAT CANNOT SEAL DOES NOT CREATE. This pass makes an
-		// ACCOUNT before it mints a token, and the rollback can only
-		// revoke the token — so reaching the first Record on a sink that
-		// cannot record leaves an identity at the third-party app that
-		// nobody asked for and nothing recorded.
-		//
-		// REPORTED, NOT RAISED. An error is a fault the loop retries
-		// while telling an operator the engine is working on it, which is
-		// the one thing that is certainly not happening: no pass will
-		// ever succeed until somebody sets secrets.keys. See
-		// [Result.Findings].
-		return &Result{Notes: notesOf(opts.Plan), NoKeyring: true}, nil
 	}
 	if opts.Plan == nil || opts.Plan.Empty() {
 		return &Result{Notes: notesOf(opts.Plan)}, nil
@@ -405,7 +396,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			})
 			continue
 		}
-		level := accessLevel(p, seat.Handle)
+		level := accessLevel(p, seat)
 		if err = have.ensureGroup(ctx, opts.Client, group.ID, user.ID, level); err != nil {
 			return nil, rollback(ctx, opts, minted,
 				fmt.Errorf("gitlab: %s: group membership: %w", seat.Handle, err))
@@ -593,8 +584,10 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		// [Result.NoIngress].
 		res.NoIngress = "no webhook is registered on this GitLab, so merge " +
 			"requests, pipelines, issues and comments reach no seat: set " +
-			"integrations.public_base_url to this deployment's public address " +
-			"and the next pass registers one, or register it by hand"
+			setup.BaseKey(opts.WebhookBaseKey) + " to the address this " +
+			"instance reaches this deployment at and the next pass " +
+			"registers one, or register it by hand"
+		res.NoIngressKey = opts.WebhookBaseKey
 		res.Notes = append(res.Notes, res.NoIngress)
 	}
 
@@ -1096,7 +1089,8 @@ func decommission(ctx context.Context, opts Options, groupID int, members []Memb
 // GitLab never says WHICH key a hook holds, so the run's own record is the
 // only thing that can.
 func signingSecret(ctx context.Context, opts Options) (secret, note string, fresh bool, err error) {
-	plan := PlanSigningSecret(opts.SigningSecret, opts.SigningSecretVar, opts.Rotate, true)
+	plan := PlanSigningSecret(opts.SigningSecret, opts.SigningSecretVar, opts.Rotate,
+		true, opts.WebhookBaseKey)
 	switch plan.Action {
 	case SigningReuse:
 		return strings.TrimSpace(opts.SigningSecret), plan.Note, false, nil
@@ -1117,16 +1111,6 @@ func signingSecret(ctx context.Context, opts Options) (secret, note string, fres
 		ctx, opts.Sink, plan.Var, plan.Action == SigningRotate, whsec.Mint)
 	if err != nil {
 		return "", "", false, fmt.Errorf("gitlab: %w", err)
-	}
-	if minted.NoKeyring {
-		// UNREACHABLE, and an error rather than an empty secret if it
-		// ever is not. [Reconcile] reports the keyring and returns long
-		// before this, because a pass here creates an ACCOUNT before it
-		// mints anything; what must never happen is falling through with
-		// no value and registering a hook nothing can sign.
-		return "", "", false, errors.New(
-			"gitlab: this node has no keyring, so no signing secret could be " +
-				"sealed — set secrets.keys in the bootstrap configuration")
 	}
 	if !minted.Minted {
 		// ALREADY SEALED, by a pass whose value the resolver has not
@@ -1176,9 +1160,11 @@ type SigningPlan struct {
 // PlanSigningSecret decides what a run will do about the signing secret.
 //
 // secret is the RESOLVED value of integrations.gitlab.signing_secret, varName
-// the whole ${VAR} it references (empty when it is a literal), and
-// registeringHooks whether this run has a public URL to point a hook at.
-func PlanSigningSecret(secret, varName string, rotate, registeringHooks bool) SigningPlan {
+// the whole ${VAR} it references (empty when it is a literal),
+// registeringHooks whether this run has a public URL to point a hook at, and
+// baseKey the Tier A key that URL is read from ([Options.WebhookBaseKey]),
+// which a refusal names as the setting to clear for a hook registered by hand.
+func PlanSigningSecret(secret, varName string, rotate, registeringHooks bool, baseKey string) SigningPlan {
 	if !registeringHooks {
 		return SigningPlan{Action: SigningUntouched}
 	}
@@ -1214,8 +1200,7 @@ func PlanSigningSecret(secret, varName string, rotate, registeringHooks bool) Si
 			"signing_secret resolved to nothing and is not a whole ${VAR} " +
 			"reference, so there is nowhere to record a minted one. Point it at " +
 			"a variable, export a whsec_ value yourself, or clear both -public-url " +
-			"and integrations.public_base_url and " +
-			"register the hook by hand"}
+			"and " + setup.BaseKey(baseKey) + " and register the hook by hand"}
 	}
 	action, what := SigningMint, "minted"
 	if rotating {
@@ -1229,7 +1214,8 @@ func PlanSigningSecret(secret, varName string, rotate, registeringHooks bool) Si
 func (p SigningPlan) Describe() string {
 	switch p.Action {
 	case SigningUntouched:
-		return "webhook signing secret: untouched (no -public-url, so no hook is registered)"
+		return "webhook signing secret: untouched (no webhook address — no " +
+			"-public-url and none in Tier A — so no hook is registered)"
 	case SigningReuse:
 		return "webhook signing secret: reused — the configured one already resolves"
 	case SigningMint:
@@ -1848,11 +1834,15 @@ func webhookTarget(base string) string {
 	return base + "/webhooks/gitlab"
 }
 
-// accessLevel is a seat's membership level, as GitLab's numbers.
-func accessLevel(p *config.GitLabProvisioning, handle string) int {
+// accessLevel is a seat's membership level, as GitLab's numbers: the override
+// its plan entry carries, or the company's default.
+//
+// RESOLVED BY [PlanFor], which holds the company's settings, so the plan
+// carries the answer and this reads no configuration of its own.
+func accessLevel(p *config.GitLabProvisioning, seat provision.Seat) int {
 	level := p.AccessLevel
-	if override, ok := p.AccessLevels[handle]; ok {
-		level = override
+	if seat.AccessLevel != "" {
+		level = config.GitLabAccessLevel(seat.AccessLevel)
 	}
 	if level == config.GitLabMaintainer {
 		return gitlabMaintainer

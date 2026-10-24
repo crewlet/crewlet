@@ -14,6 +14,7 @@
 
 import type { McpServerState, McpServerStatus } from "~/contract/mcp.ts";
 import type { ConfigProblem } from "~/protocol/types.ts";
+import { carriesReference } from "./references.ts";
 import type { Seat } from "./seats.ts";
 
 /**
@@ -29,27 +30,32 @@ export const SERVER_STATE_WORDS: Record<
   running: {
     label: "Running",
     tone: "success",
-    hint: "Every instance a node launched started and listed its tools.",
+    hint: "All instances started",
   },
   partial: {
     label: "Partly failing",
     tone: "warning",
-    hint: "Some instances started and some did not — look at the node or the seat named beside the failure rather than at the server.",
+    hint: "Some instances failed. See the node or seat named beside it.",
   },
   failing: {
     label: "Failing",
     tone: "danger",
-    hint: "Every instance a node launched failed to start: the command, the address or the credentials every seat shares.",
+    hint: "Every instance failed. Check the command, address or credentials.",
+  },
+  waiting: {
+    label: "Waiting for credentials",
+    tone: "neutral",
+    hint: "An integration is minting a seat's credential. The server starts once it is sealed.",
   },
   not_started: {
     label: "Not started",
     tone: "neutral",
-    hint: "No node started it: a per-seat server no seat on a live node declares credentials for, or a change no node has applied yet.",
+    hint: "No node has started it yet.",
   },
   unreported: {
     label: "Not reported",
     tone: "neutral",
-    hint: "No live node's latest heartbeat carried its MCP report, so whether it started is unknown.",
+    hint: "No node has reported its status.",
   },
 };
 
@@ -148,11 +154,16 @@ export function nameExample(taken: ReadonlySet<string>): string {
  * row's position is not one: removing a middle row shifts every later index,
  * so a list keyed on it hands one row's field state — a secret's reveal
  * toggle, an open `$` completion — to its neighbour.
+ *
+ * `optional` is the row's place in the server's `optional_keys`: a value
+ * whose `${NAME}` resolves to nothing is then left out of what the server is
+ * started with, where any other such value holds the server back unstarted.
  */
 export interface Pair {
   id: string;
   key: string;
   value: string;
+  optional: boolean;
 }
 
 let pairSeq = 0;
@@ -160,7 +171,7 @@ let pairSeq = 0;
 /** A new, empty row with an identity no other row in this page holds. */
 export function newPair(): Pair {
   pairSeq += 1;
-  return { id: `pair-${pairSeq}`, key: "", value: "" };
+  return { id: `pair-${pairSeq}`, key: "", value: "", optional: false };
 }
 
 /** What the add form holds, as typed. */
@@ -207,9 +218,12 @@ export function argsOf(text: string): string[] {
  * What stops the form being sent, field by field.
  *
  * ONLY WHAT THE ENGINE WOULD REFUSE ANYWAY, said before the round trip: a
- * missing name, command or address, a name another server already has, and a
- * pair whose key is missing or repeated (a map cannot hold two). Everything
- * else is the engine's to judge — the check runs before any save.
+ * missing name, command or address, a name another server already has, a
+ * pair whose key is missing or repeated (a map cannot hold two, and the
+ * engine holds a header written twice in two cases to be one), and a pair
+ * that may be unset while its value names nothing that could be (an
+ * `optional_keys` entry leaving nothing out). Everything else is the
+ * engine's to judge — the check runs before any save.
  */
 export function formErrors(
   form: ServerForm,
@@ -222,26 +236,55 @@ export function formErrors(
   else if (taken.has(name)) out.name = `A server called ${name} already exists.`;
   if (form.transport === "stdio") {
     if (form.command.trim() === "") out.command = "Give the command that launches it.";
-    const env = pairsError(form.env, "variable");
+    const env = pairsError(form.env, "variable", (key) => key);
     if (env) out.env = env;
   } else {
     if (form.url.trim() === "") out.url = "Give the address it answers on.";
-    const headers = pairsError(form.headers, "header");
+    // HTTP NAMES A HEADER IN ANY CASE, and the engine refuses one header
+    // written twice in one map however it is spelled.
+    const headers = pairsError(form.headers, "header", (key) => key.toLowerCase());
     if (headers) out.headers = headers;
   }
   return out;
 }
 
-function pairsError(pairs: readonly Pair[], noun: string): string | undefined {
-  const seen = new Set<string>();
-  for (const { key, value } of pairs) {
+/**
+ * What stops one transport's rows being sent. `identity` is how two keys name
+ * one: as written for a variable, in any case for a header.
+ *
+ * A row may be unset only where its value carries a reference ANYWHERE in it
+ * — the only kind of value that can resolve to nothing — since `Bearer
+ * ${TOKEN}` is held back, or left out, for its token exactly as `${TOKEN}`
+ * is.
+ */
+function pairsError(
+  pairs: readonly Pair[],
+  noun: string,
+  identity: (key: string) => string,
+): string | undefined {
+  const seen = new Map<string, string>();
+  for (const { key, value, optional } of pairs) {
     const k = key.trim();
     if (k === "" && value.trim() === "") continue;
     if (k === "") return `Name every ${noun} that has a value.`;
-    if (seen.has(k)) return `${k} is listed twice.`;
-    seen.add(k);
+    const was = seen.get(identity(k));
+    if (was === k) return `${k} is listed twice.`;
+    if (was !== undefined) return `${was} and ${k} are one ${noun}: write it once.`;
+    if (optional && !carriesReference(value)) {
+      return `${k} names no secret, so it can’t be unset. Untick its “may be unset” box.`;
+    }
+    seen.set(identity(k), k);
   }
   return undefined;
+}
+
+/**
+ * The keys of the rows that may be unset, as the server's `optional_keys`.
+ * A row with no name is no key, and is sent nowhere.
+ */
+function optionalOf(pairs: readonly Pair[]): string[] | undefined {
+  const out = pairs.filter((p) => p.optional && p.key.trim() !== "").map((p) => p.key.trim());
+  return out.length > 0 ? out : undefined;
 }
 
 function pairsOf(pairs: readonly Pair[]): Record<string, string> | undefined {
@@ -266,6 +309,7 @@ function pairsOf(pairs: readonly Pair[]): Record<string, string> | undefined {
 export function serverEntity(form: ServerForm): Record<string, unknown> {
   const out: Record<string, unknown> = { name: form.name.trim(), transport: form.transport };
   if (form.sharing === "per_seat") out.shared = false;
+  const pairs = form.transport === "stdio" ? form.env : form.headers;
   if (form.transport === "stdio") {
     out.command = form.command.trim();
     const args = argsOf(form.args);
@@ -277,6 +321,11 @@ export function serverEntity(form: ServerForm): Record<string, unknown> {
     const headers = pairsOf(form.headers);
     if (headers) out.headers = headers;
   }
+  // THE CHOSEN TRANSPORT'S ROWS ONLY, for the reason its fields are: a key
+  // the other transport's rows hold is a key of nothing this entry carries,
+  // which the engine refuses rather than ignores.
+  const optional = optionalOf(pairs);
+  if (optional) out.optional_keys = optional;
   if (form.toolPrefix.trim() !== "") out.tool_prefix = form.toolPrefix.trim();
   return out;
 }
@@ -291,11 +340,17 @@ export function addSummary(form: ServerForm): string {
  * The engine's problems placed beside the field each is about.
  *
  * BY THE PROBLEM'S OWN SEGMENTS, never its message: `["mcp_servers", 3,
- * "command"]` is the command, whatever the sentence says. A problem about the
- * rest of the company — the add is validated whole — is `rest`, said above the
- * form rather than dropped, because it is still why nothing was saved.
+ * "command"]` is the command, whatever the sentence says. An `optional_keys`
+ * entry is drawn beside the rows it was sent from, which are the transport's:
+ * the environment's for a command, the headers' for an address. A problem
+ * about the rest of the company — the add is validated whole — is `rest`,
+ * said above the form rather than dropped, because it is still why nothing was
+ * saved.
  */
-export function problemsByField(problems: readonly ConfigProblem[]): {
+export function problemsByField(
+  problems: readonly ConfigProblem[],
+  transport: ServerForm["transport"],
+): {
   fields: Partial<Record<ServerField, string>>;
   rest: string[];
 } {
@@ -303,14 +358,15 @@ export function problemsByField(problems: readonly ConfigProblem[]): {
   const rest: string[] = [];
   for (const p of problems) {
     const seg = p.segments ?? [];
-    const key = seg[0] === "mcp_servers" && typeof seg[2] === "string" ? fieldOf(seg[2]) : null;
+    const key =
+      seg[0] === "mcp_servers" && typeof seg[2] === "string" ? fieldOf(seg[2], transport) : null;
     if (key && !fields[key]) fields[key] = p.message;
     else rest.push(p.message);
   }
   return { fields, rest };
 }
 
-function fieldOf(key: string): ServerField | null {
+function fieldOf(key: string, transport: ServerForm["transport"]): ServerField | null {
   switch (key) {
     case "name":
       return "name";
@@ -326,6 +382,8 @@ function fieldOf(key: string): ServerField | null {
       return "headers";
     case "tool_prefix":
       return "toolPrefix";
+    case "optional_keys":
+      return transport === "stdio" ? "env" : "headers";
     default:
       return null;
   }

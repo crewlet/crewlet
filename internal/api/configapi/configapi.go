@@ -1,12 +1,25 @@
 // Package configapi serves /config: the versioned company document, its
 // history, and the write path that activates a new revision.
 //
-// EVERY ROUTE HERE IS GUARDED, reads included, and that is not the usual
-// posture on this API. Reading this surface exposes the whole company
-// document — its org chart, its integrations, and the shape of every
-// credential it holds — and writing it changes the company. The auth package
-// makes /config the one prefix that is never eligible for
-// allow_anonymous_read.
+// EVERY ROUTE HERE IS ADMIN'S, reads included — `config.read` for every read
+// and `config.write` for every write, both decided on admin (ADR-0033) —
+// mounted through [authz.Router] so a route with no policy fails the boot.
+// Reading this surface exposes the whole company document — its org chart,
+// integrations and the name of every credential it holds — and writing it
+// changes the company.
+//
+// THE ORG CHART IS ALSO ITS LEADS'. The routes that can change a seat or a
+// unit — the whole-document writes, a revert and the seat and unit entity
+// routes — are `config.org.write`, and the two entity reads
+// `config.org.read`: admin as before, or a lead inside the units they lead.
+// What a lead's write changes is decided place by place (admission.go), and a
+// setting, a credential or a `${VAR}` is never theirs.
+//
+// THE ROUTES USED TO DECIDE NOTHING, which was sound while the only credential
+// was an operator token and stopped being sound the day a person could sign in
+// holding a read-only permission alone: every one of them could rewrite the
+// company document, revert it to any revision, and read every `${VAR}` it
+// names.
 //
 // A WRITE HERE DOES NOT APPLY ANYTHING. It stores a revision and moves the
 // activation pointer; every node, including this one, applies it on its own
@@ -34,10 +47,12 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -50,9 +65,10 @@ var log = logging.Get("api.config")
 
 // MaxBodyBytes bounds a config upload.
 //
-// The document is an org chart and its settings: the largest real one in this
-// repository is tens of kilobytes, so 4 MiB is three orders of magnitude of
-// headroom and still finite. The route is guarded, so this is a bound on a
+// The document is the whole company — its org chart, providers, integrations,
+// MCP servers and worker templates: the largest real one in this repository is
+// tens of kilobytes, so 4 MiB is two orders of magnitude of headroom and still
+// finite. The route is guarded, so this is a bound on a
 // mistake rather than on an attacker.
 const MaxBodyBytes = 4 << 20
 
@@ -78,8 +94,15 @@ type Service struct {
 	plane   coord.Plane
 	queue   queue.Publisher
 	cipher  secrets.Cipher
-	boot    *config.Bootstrap
-	now     func() time.Time
+	holders Holders
+	// writers is the deployment's managed-document policy: the one field
+	// of Tier A's `api.auth` this surface reads, through
+	// [config.APIAuth.MayWriteCompany], the one reading of it.
+	writers config.APIAuth
+	// tierWarnings is what a company does beside this node's Tier A
+	// ([Options.TierWarnings]); nil answers none.
+	tierWarnings func(*config.Company) []config.Warning
+	now          func() time.Time
 }
 
 // Options wire the service.
@@ -94,17 +117,43 @@ type Options struct {
 	// the fleet store is opened on every topology.
 	Plane coord.Plane
 
-	// Cipher opens and seals a stored revision. Nil reads plaintext and
-	// writes plaintext, which is the documented opt-out.
+	// Cipher seals every revision this surface writes and opens every one
+	// it reads, under the keyring every node holds — the engine's own,
+	// which the reconciler authenticates a peer's revision under.
+	// Required: [New] refuses to build without it.
 	Cipher secrets.Cipher
 
-	// Bootstrap is this node's Tier A, which a company document is judged
-	// against as well as on its own ([config.CheckTiers]). Required: the
-	// apply refuses a document the deployment cannot run — native backends
-	// on an in-memory stream — so a write that skipped the check was
-	// accepted, activated, and then refused by every node, leaving the
-	// fleet on the old epoch and the operator with a 201.
-	Bootstrap *config.Bootstrap
+	// Holders reads what holds a human seat — whoever the identity
+	// directory binds to it, or an open invitation onto it — so a write
+	// that takes a human seat away while it is held is refused naming the
+	// holder (seatheld.go). Required: every node serving this surface holds
+	// the estate and runs the identity domain from boot, and a surface that
+	// skipped the check would remove a
+	// colleague's seat from under them, or an invitee's from under their
+	// link, with nothing said.
+	Holders Holders
+
+	// CompanyWriters is Tier A's `api.auth.company_writers`: the ids of the
+	// Tier A tokens that alone may change the company document (managed.go,
+	// ADR-0030). Empty leaves every write to the authority table.
+	//
+	// THE ONE FIELD, never the whole Tier A document: nothing else of the
+	// deployment's is this surface's to read, and a surface handed all of
+	// it has a way to start deciding on any of it.
+	CompanyWriters []string
+
+	// TierWarnings is what a company does beside THIS NODE'S Tier A —
+	// [config.TierWarnings] over the deployment's own document, which
+	// `crewlet run` closes over — carried in a write's answer beside the
+	// company's own warnings, so a person turning code.native on reads the
+	// cross-tier consequence where they made the change rather than in a
+	// node's log.
+	//
+	// A FUNCTION, never the Tier A document, for [Options.CompanyWriters]'
+	// reason: what this surface reads of the deployment is the warnings and
+	// nothing else of it. Nil answers none, which is what a suite about
+	// something else has; it refuses nothing, since a warning never does.
+	TierWarnings func(*config.Company) []config.Warning
 
 	// Queue publishes the activation NUDGE, so an operator's change lands
 	// on every node in milliseconds instead of at the next reconcile poll.
@@ -119,10 +168,16 @@ type Options struct {
 
 // New builds the service.
 //
-// A MISSING STORE OR PLANE IS REFUSED rather than served as a narrower surface.
-// `crewlet run` builds this beside an engine that holds both, so a nil here is a
-// wiring mistake, and a surface that quietly shrank around it (an unregistered
-// /config, a write answering 503) would hide exactly that.
+// A MISSING STORE, PLANE OR KEYRING IS REFUSED rather than served as a narrower
+// surface. `crewlet run` builds this beside an engine that holds all three, so a
+// nil here is a wiring mistake, and a surface that quietly shrank around it (an
+// unregistered /config, a write answering 503) would hide exactly that.
+//
+// The keyring most of all, because the surface built without one did not
+// shrink, it changed meaning: it stored every revision in plaintext, which
+// every node holding a keyring — every node — refuses to apply, so the fleet
+// converged on nothing while this surface answered 201. The e2e harness was
+// wired that way until it was noticed by hand.
 func New(opts Options) (*Service, error) {
 	switch {
 	case opts.Store == nil:
@@ -131,10 +186,15 @@ func New(opts Options) (*Service, error) {
 	case opts.Plane == nil:
 		return nil, errors.New("configapi: Options.Plane is required: a revision " +
 			"takes effect only once the fleet's activation pointer names it")
-	case opts.Bootstrap == nil:
-		return nil, errors.New("configapi: Options.Bootstrap is required: a " +
-			"company document is valid only against the deployment it runs on, " +
-			"and every node's apply judges it against its own")
+	case opts.Cipher == nil:
+		return nil, errors.New("configapi: Options.Cipher is required: every " +
+			"revision is sealed under the keyring (secrets.keys) every node holds, " +
+			"and one written without it is a revision no node applies")
+	case opts.Holders == nil:
+		return nil, errors.New("configapi: Options.Holders is required: a write " +
+			"that removes a human seat is refused while the identity directory " +
+			"binds somebody to it or an open invitation holds it, and that " +
+			"needs the directory")
 	}
 	now := opts.Now
 	if now == nil {
@@ -142,43 +202,75 @@ func New(opts Options) (*Service, error) {
 	}
 	return &Service{
 		configs: opts.Store.Configs(), plane: opts.Plane,
-		cipher: opts.Cipher, queue: opts.Queue, boot: opts.Bootstrap, now: now,
+		cipher: opts.Cipher, holders: opts.Holders, queue: opts.Queue, now: now,
+		writers:      config.APIAuth{CompanyWriters: slices.Clone(opts.CompanyWriters)},
+		tierWarnings: opts.TierWarnings,
 	}, nil
 }
 
-// Routes registers the surface on the API's mux.
-func (s *Service) Routes(mux httpjson.Router) {
+// Routes registers the surface on the API's mux, every route through
+// [authz.Router] with the verb it is decided by. A route mounted without one
+// is refused here and fails the boot — see [authz.Router.Handle].
+func (s *Service) Routes(mux authz.Mux) error {
 	// ONE SUB-MUX BEHIND ONE WRAPPER, so no response under /config can be
 	// written without the Cache-Control below: not a route added later, not
-	// an error path, not the 404 or 405 this mux answers for a path or a
-	// method it does not serve.
+	// an error path, not a refusal, and not the 404 or 405 this mux answers
+	// for a path or a method it does not serve.
 	routes := http.NewServeMux()
-	routes.HandleFunc("GET /config", s.getActive)
-	routes.HandleFunc("PUT /config", s.put)
+	router := authz.NewRouter(routes, authz.ContextGuard(authz.NoChart{}))
+	var failures []error
+	mount := func(pattern string, a authz.Action, h http.HandlerFunc) {
+		if err := router.Handle(pattern, authz.Policy{Action: a}, h); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	read := func(pattern string, h http.HandlerFunc) {
+		mount(pattern, authz.ActionConfigRead, h)
+	}
+	write := func(pattern string, h http.HandlerFunc) {
+		mount(pattern, authz.ActionConfigWrite, h)
+	}
+	// THE ORG CHART'S ROUTES ARE ITS LEADS' TOO. The route admits whoever
+	// could lead some unit — admin, or anybody bound to a
+	// seat — before the body is read, and what the write changes is then
+	// decided place by place against the two documents (admission.go), a
+	// read against where the seat or unit sits.
+	org := func(pattern string, a authz.Action, h http.HandlerFunc) {
+		policy := authz.Policy{Action: a, Object: func(*http.Request) authz.Object {
+			return authz.Object{Kind: authz.KindUnit, Unresolved: true}
+		}}
+		if err := router.Handle(pattern, policy, h); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	read("GET /config", s.getActive)
+	org("PUT /config", authz.ActionOrgWrite, s.put)
 	// WHAT THIS RESOURCE TAKES, asked rather than guessed. RFC 5789 §3.1:
 	// a patch format is negotiated, not assumed, and Accept-Patch is where
 	// a server says which ones it speaks.
-	routes.HandleFunc("OPTIONS /config", s.optionsDocument)
+	read("OPTIONS /config", s.optionsDocument)
 	// THE NARROWER WRITE. See merge.go for why one patch route covers
 	// every section rather than one route per section.
-	routes.HandleFunc("PATCH /config", s.patch)
+	org("PATCH /config", authz.ActionOrgWrite, s.patch)
 	// RE-PUBLISH THE ACTIVE DOCUMENT UNCHANGED, which is the gesture a
 	// rotated SECRET needs and the one thing no other route on this
 	// surface performs: the pointer in the config is already correct, so
 	// there is no patch to make, and with no activation there is no apply
 	// and no refreshed secret snapshot. See [Service.Reload].
-	routes.HandleFunc("POST /config/reload", s.reload)
+	write("POST /config/reload", s.reload)
 	// WHICH FIELDS NAME A ${VAR}, which is what an operator needs before
 	// they remove a credential. See [Service.References].
-	routes.HandleFunc("GET /config/references", s.references)
-	routes.HandleFunc("GET /config/revisions", s.listRevisions)
-	routes.HandleFunc("GET /config/revisions/{id}", s.getRevision)
-	routes.HandleFunc("GET /config/revisions/{id}/diff", s.diff)
-	routes.HandleFunc("POST /config/revisions/{id}/revert", s.revert)
-	// THE ENTITY ROUTES, one per addressable collection rather than a
+	read("GET /config/references", s.references)
+	read("GET /config/revisions", s.listRevisions)
+	read("GET /config/revisions/{id}", s.getRevision)
+	read("GET /config/revisions/{id}/diff", s.diff)
+	// A REVERT IS JUDGED ON ITS WHOLE DIFF, from the active revision to the
+	// one reverted to, like any other write.
+	org("POST /config/revisions/{id}/revert", authz.ActionOrgWrite, s.revert)
+	// THE ENTITY ROUTES, one pair per addressable collection rather than a
 	// single {kind} wildcard: a wildcard would also match
 	// /config/revisions/{id}, and a route that answers for a path it was
-	// never meant to serve is worse than four explicit lines. See
+	// never meant to serve is worse than a line per collection. See
 	// entities.go for what a write does.
 	for _, kind := range EntityKinds() {
 		// THE READ AND THE WRITE ON ONE URI. The entity was addressable
@@ -187,20 +279,26 @@ func (s *Service) Routes(mux httpjson.Router) {
 		// space, answering a {kind, id, entity} envelope that PUT does
 		// not accept. GET here answers the entity itself, so `GET | PUT`
 		// round-trips with nothing in between.
-		routes.HandleFunc("GET /config/"+kind+"/{id}", s.getEntity(kind))
-		routes.HandleFunc("PUT /config/"+kind+"/{id}", s.putEntity(kind))
+		if inOrgChart(kind) {
+			org("GET /config/"+kind+"/{id}", authz.ActionOrgRead, s.getEntity(kind))
+			org("PUT /config/"+kind+"/{id}", authz.ActionOrgWrite, s.putEntity(kind))
+			continue
+		}
+		read("GET /config/"+kind+"/{id}", s.getEntity(kind))
+		write("PUT /config/"+kind+"/{id}", s.putEntity(kind))
 	}
 	// AND THOSE TWO ARE JSON, like every other answer here: see
 	// [httpjson.Mux].
 	surface := noStore(httpjson.Mux(routes))
 	mux.Handle("/config", surface)
 	mux.Handle("/config/", surface)
+	return errors.Join(failures...)
 }
 
 // noStore marks every response it wraps as never to be stored.
 //
-// EVERY ONE, reads, refusals and 304s alike. A /config body is the whole company
-// document: its org chart, its contact identities, the ${VAR} name behind every
+// EVERY ONE, reads, refusals and 304s alike. A /config body is the company's
+// settings: which integrations are wired and where, the ${VAR} name behind every
 // credential and the shape of the rest. Answered with an ETag and no
 // Cache-Control, a browser keeps it in its HTTP disk cache, where it outlives
 // the tab, the session and the operator token that was needed to read it. An
@@ -229,7 +327,7 @@ func (s *Service) getActive(w http.ResponseWriter, r *http.Request) {
 	company, revision, err := s.documentOf(r.Context())
 	switch {
 	case errors.Is(err, ErrNoActiveRevision):
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no_active_revision"})
+		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNoActiveRevision)
 	case err != nil:
 		s.fail(w, "read the active revision", err)
 	default:
@@ -249,7 +347,7 @@ func (s *Service) references(w http.ResponseWriter, r *http.Request) {
 	refs, revision, err := s.References(r.Context())
 	switch {
 	case errors.Is(err, ErrNoActiveRevision):
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no_active_revision"})
+		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNoActiveRevision)
 	case err != nil:
 		s.fail(w, "read the active revision", err)
 	default:
@@ -383,14 +481,17 @@ func (s *Service) checkPatchMediaType(w http.ResponseWriter, r *http.Request) bo
 	// 415 WITH Accept-Patch, which is the pair RFC 5789 §2.2 names: the
 	// refusal has to say what would have worked.
 	w.Header().Set("Accept-Patch", acceptPatch)
-	writeJSON(w, http.StatusUnsupportedMediaType, map[string]any{
-		"error": "unsupported_patch_media_type", "accept_patch": acceptPatch,
-		"you_sent": media,
-		"hint": "PATCH /config takes a JSON Merge Patch (RFC 7396): an object " +
-			"shaped like the document. A JSON Patch (RFC 6902) list of " +
-			"operations is a different format this surface does not serve; " +
-			"editing one seat is PUT /config/roles/{handle}",
-	})
+	httpjson.FailWithFields(w, http.StatusUnsupportedMediaType,
+		httpjson.CodeUnsupportedPatchMediaType, httpjson.Detail{
+			"accept_patch": acceptPatch,
+			"you_sent":     media,
+			"hint": "PATCH /config takes a JSON Merge Patch (RFC 7396): an object " +
+				"shaped like the document. A JSON Patch (RFC 6902) list of " +
+				"operations is a different format this surface does not serve. " +
+				"Editing one list member is its own route: editing one seat is " +
+				"PUT /config/roles/{handle}, and PUT /config/{kind}/{id} " +
+				"edits one member of " + strings.Join(EntityKinds(), " or "),
+		})
 	return false
 }
 
@@ -415,7 +516,7 @@ func (s *Service) listRevisions(w http.ResponseWriter, r *http.Request) {
 // getRevision serves GET /config/revisions/{id} — one revision with its
 // redacted payload.
 func (s *Service) getRevision(w http.ResponseWriter, r *http.Request) {
-	revision, ok := s.lookup(w, r, r.PathValue("id"), "not_found")
+	revision, ok := s.lookup(w, r, r.PathValue("id"), httpjson.CodeNotFound)
 	if !ok {
 		return
 	}
@@ -440,11 +541,11 @@ func (s *Service) diff(w http.ResponseWriter, r *http.Request) {
 	case err == nil:
 		writeJSON(w, http.StatusOK, body)
 	case errors.Is(err, ErrNoActiveRevision):
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no_active_revision"})
+		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNoActiveRevision)
 	case errors.Is(err, store.ErrNoRevision):
 		// WHICH side is missing, read off the error rather than guessed
 		// from the request — see [missingRevision].
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": missingSide(err)})
+		httpjson.Fail(w, http.StatusNotFound, missingSide(err))
 	default:
 		s.fail(w, "diff revisions", err)
 	}
@@ -461,7 +562,7 @@ func (s *Service) diff(w http.ResponseWriter, r *http.Request) {
 // A revision error from anywhere else is reported as the target's, which is
 // the honest default: every other producer of store.ErrNoRevision on this
 // path is looking up the id in the URL.
-func missingSide(err error) string {
+func missingSide(err error) httpjson.Code {
 	var missing *missingRevision
 	if errors.As(err, &missing) {
 		return missing.side
@@ -470,12 +571,6 @@ func missingSide(err error) string {
 }
 
 // --- writes ----------------------------------------------------------------
-
-// The machine-readable codes a refused document is answered with.
-const (
-	codeValidationError = httpjson.Code("validation_error")
-	codeInvalidPatch    = httpjson.Code("invalid_patch")
-)
 
 // dryRunOf reads `dry_run` from a write's query, answering the refusal itself.
 // ok is false when the request has been answered.
@@ -533,10 +628,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		refuseBody(w, err)
 		return
 	}
-	summary, sent, ok := takeSummary(w, r, body, !dryRun,
-		"PUT /config needs an audit summary: the X-Summary header, "+
-			"or a top-level _summary key in the body. The revision history "+
-			"is the record of who changed what and why")
+	summary, sent, ok := takeSummary(w, r, body)
 	if !ok {
 		return
 	}
@@ -560,13 +652,22 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	if found {
 		built = active.ID
 	}
-	prepared, err := s.prepare(r.Context(), replaceDraft(incoming, built, authorOf(r)))
+	d := replaceDraft(incoming, built, attributionOf(r))
+	if d.principal, ok = principalOf(w, r); !ok {
+		return
+	}
+	prepared, err := s.prepare(r.Context(), d)
 	if err != nil {
 		s.refuseWrite(w, err, createOnly)
 		return
 	}
 	if dryRun {
 		writeChecked(w, prepared)
+		return
+	}
+	if !requireSummary(w, summary, "PUT /config needs an audit summary: the "+
+		"X-Summary header, or a top-level _summary key in the body. The "+
+		"revision history is the record of who changed what and why") {
 		return
 	}
 	applied, err := s.commit(r.Context(), prepared, summary)
@@ -612,11 +713,7 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 		refuseBody(w, err)
 		return
 	}
-	summary, sent, ok := takeSummary(w, r, body, !dryRun,
-		"PATCH /config needs an audit summary: the X-Summary "+
-			"header, or a top-level _summary key in the body. A patch is "+
-			"the change least visible in a diff, so the sentence saying "+
-			"what it was for matters most here")
+	summary, sent, ok := takeSummary(w, r, body)
 	if !ok {
 		return
 	}
@@ -627,26 +724,36 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !found {
-		writeJSON(w, http.StatusConflict, map[string]string{
-			"error": "no_active_revision",
-			"hint": "there is nothing to patch; import a company first, or " +
-				"use PUT /config to send a whole document",
-		})
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision,
+			map[string]string{
+				"hint": "there is nothing to patch; import a company first, or " +
+					"use PUT /config to send a whole document",
+			})
 		return
 	}
-	if _, ok := s.checkPrecondition(w, r, active, found); !ok {
+	if _, ok = s.checkPrecondition(w, r, active, found); !ok {
 		return
 	}
 
-	prepared, err := s.prepare(r.Context(), patchDraft(ApplyRequest{
-		Patch: sent.text, Summary: summary, Author: authorOf(r), Expect: active.ID,
-	}, sent.doc))
+	d := patchDraft(ApplyRequest{
+		Patch: sent.text, Summary: summary, By: attributionOf(r), Expect: active.ID,
+	}, sent.doc)
+	if d.principal, ok = principalOf(w, r); !ok {
+		return
+	}
+	prepared, err := s.prepare(r.Context(), d)
 	if err != nil {
 		s.refuseApply(w, err)
 		return
 	}
 	if dryRun {
 		writeChecked(w, prepared)
+		return
+	}
+	if !requireSummary(w, summary, "PATCH /config needs an audit summary: the "+
+		"X-Summary header, or a top-level _summary key in the body. A patch "+
+		"is the change least visible in a diff, so the sentence saying what "+
+		"it was for matters most here") {
 		return
 	}
 	applied, err := s.commit(r.Context(), prepared, summary)
@@ -688,8 +795,7 @@ func writeApplied(w http.ResponseWriter, applied Applied) {
 func (s *Service) refuseWrite(w http.ResponseWriter, err error, createOnly bool) {
 	var raced *RacedError
 	if createOnly && errors.As(err, &raced) {
-		body := map[string]any{
-			"error": "already_configured",
+		body := httpjson.Detail{
 			"hint": "If-None-Match asked for this write to land only on a " +
 				"config that is not there; one was activated first",
 		}
@@ -704,7 +810,8 @@ func (s *Service) refuseWrite(w http.ResponseWriter, err error, createOnly bool)
 		if raced.Stored != "" {
 			body["stored_revision_id"] = raced.Stored
 		}
-		writeJSON(w, http.StatusPreconditionFailed, body)
+		httpjson.FailWithFields(w, http.StatusPreconditionFailed,
+			httpjson.CodeAlreadyConfigured, body)
 		return
 	}
 	s.refuseApply(w, err)
@@ -718,19 +825,26 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 	var raced *RacedError
 	var patchErr *PatchError
 	var invalid *ValidationError
+	var held *SeatHeldError
+	var unknown *HoldersUnavailableError
+	var refused *AdmissionError
 	var managed *ManagedError
 	switch {
+	// THE CREDENTIAL'S REFUSAL FIRST, as [Service.prepare] decides it: a
+	// managed document refuses whoever is asking before anything they sent
+	// is judged, so no other refusal can be answered in its place.
 	case errors.As(err, &managed):
 		RefuseManaged(w, managed)
+	case errors.As(err, &refused):
+		refuseAdmission(w, refused)
 	case errors.Is(err, ErrNoActiveRevision):
-		writeJSON(w, http.StatusConflict, map[string]string{
-			"error": "no_active_revision",
-			"hint": "there is nothing to patch; import a company first, or " +
-				"use PUT /config to send a whole document",
-		})
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision,
+			map[string]string{
+				"hint": "there is nothing to patch; import a company first, or " +
+					"use PUT /config to send a whole document",
+			})
 	case errors.As(err, &raced):
-		body := map[string]any{
-			"error": "revision_advanced",
+		body := httpjson.Detail{
 			"hint": "another write activated first; re-read /config and send " +
 				"the edit again",
 		}
@@ -745,16 +859,42 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 		if raced.Current != "" {
 			body["current_revision_id"] = raced.Current
 		}
-		writeJSON(w, http.StatusConflict, body)
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeRevisionAdvanced, body)
 	case errors.As(err, &patchErr):
-		refuseDocument(w, codeInvalidPatch, patchErr.Err.Error(),
+		refuseDocument(w, httpjson.CodeInvalidPatch, patchErr.Err.Error(),
 			"the patched document was refused; an unknown key in a "+
 				"patch is refused here rather than ignored", err)
 	case errors.As(err, &invalid):
-		refuseDocument(w, codeValidationError, invalid.Err.Error(),
+		refuseDocument(w, httpjson.CodeValidationError, invalid.Err.Error(),
 			"the WHOLE document a write produces is validated, not only "+
 				"the part it changed, so a section that is fine on its own is "+
 				"still refused when the company it leaves is invalid", err)
+	case errors.As(err, &held):
+		// A REMEDY PER KIND OF HOLDER, because a person is never unbound —
+		// they hold a human seat for as long as they exist (ADR-0032) — so
+		// the one remedy this used to name, unbinding them, was refused by
+		// the very directory it sent an administrator to. Each `held` entry
+		// says which kind holds its seat.
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeSeatHeld,
+			httpjson.Detail{
+				"detail": held.Error(),
+				"held":   held.Held,
+				"hint": "move each person to another human seat (PATCH " +
+					"/iam/people/{person} with seat) or remove them, unbind a " +
+					"service account (PATCH /iam/people/{person} with no seat), " +
+					"cancel an open invitation (DELETE /iam/invitations/{id}) — " +
+					"each an admin's gesture — then send the write again",
+			})
+	case errors.As(err, &unknown):
+		log.Warn("config_seat_holders_unreadable",
+			"seats", unknown.Seats, "error", unknown.Err)
+		httpjson.UnavailableWith(w, httpjson.CodeIdentityUnavailable,
+			auth.RetryIdentity(unknown.Err), httpjson.Detail{
+				"seats": unknown.Seats,
+				"hint": "this write removes a human seat, and this node could not " +
+					"read the identity directory to see whether anybody holds it; " +
+					"nothing was written",
+			})
 	default:
 		s.fail(w, "apply the config", err)
 	}
@@ -781,7 +921,7 @@ func (s *Service) reload(w http.ResponseWriter, r *http.Request) {
 	// HEADER ONLY, like revert: this route reads no body, and it already
 	// knows what it did, so an unset summary defaults rather than
 	// answering 400.
-	applied, err := s.Reload(r.Context(), strings.TrimSpace(r.Header.Get("X-Summary")), authorOf(r))
+	applied, err := s.Reload(r.Context(), strings.TrimSpace(r.Header.Get("X-Summary")), attributionOf(r))
 	if err != nil {
 		s.refuseApply(w, err)
 		return
@@ -799,24 +939,27 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	if s.refusedManaged(w, r) {
 		return
 	}
-	target, ok := s.lookup(w, r, r.PathValue("id"), "not_found")
+	target, ok := s.lookup(w, r, r.PathValue("id"), httpjson.CodeNotFound)
 	if !ok {
 		return
 	}
-	// OPENED, not copied. A revision sealed under a key no longer in the
-	// keyring cannot be reverted to, and finding that out now beats
-	// activating a document every node will fail to read.
+	// OPENED, not copied. A revision this node cannot open cannot be
+	// reverted to, and finding that out now beats activating a document
+	// every node will fail to read. The refusal is the one every reader of
+	// a revision answers ([refuseUnreadable]).
 	document, company, err := s.openDocument(target)
 	if err != nil {
-		writeJSON(w, http.StatusConflict, map[string]string{
-			"error": "unreadable_revision", "detail": err.Error(),
-			"hint": "the target revision is sealed under a key that is no longer " +
-				"in the keyring; restore it to the node's secrets.keys first",
-		})
+		if !refuseUnreadable(w, err) {
+			s.fail(w, "open the revision to revert to", err)
+		}
+		return
+	}
+	principal, ok := principalOf(w, r)
+	if !ok {
 		return
 	}
 	prepared, err := s.prepare(r.Context(), draft{
-		author: authorOf(r),
+		by: attributionOf(r),
 		// VALIDATED SEPARATELY from the open, so each refusal says what is
 		// true. Opening holds a stored revision to no rule, and a revert is
 		// an apply: an old revision this build can no longer run is refused
@@ -837,11 +980,12 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 		build: func(base) (*config.Company, []byte, error) {
 			return company, document, nil
 		},
+		principal: principal,
 	})
 	var invalid *ValidationError
 	switch {
 	case errors.As(err, &invalid):
-		refuseDocument(w, codeValidationError, invalid.Err.Error(),
+		refuseDocument(w, httpjson.CodeValidationError, invalid.Err.Error(),
 			"revision "+target.ID+" does not pass this build's "+
 				"validation, so it cannot be re-activated as it stands; send a "+
 				"corrected document with PUT /config instead", err)
@@ -866,15 +1010,16 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	writeApplied(w, applied)
 }
 
-// authorOf is the operator the guard authenticated on this request, as the
-// author of the revision it writes.
+// attributionOf is who a write on this request is attributed to: the author,
+// its kind and the credential beside it.
 //
-// AN OPERATOR, ALWAYS: every write on this surface is made with a credential
-// a person holds — /config is always guarded — and the engine's own writes
-// reach [Service.Apply] directly, stating themselves as the node.
-func authorOf(r *http.Request) store.Author {
-	operator, _ := auth.OperatorFrom(r.Context())
-	return store.Author{Name: operator, Kind: store.AuthorOperator}
+// TOTAL, never empty: every route on this surface is always guarded, so a
+// request reaching here carries a resolved principal — and the case that is
+// left, a handler somebody mounted outside the guard, records the name config
+// refuses to every real credential rather than an empty `created_by` that
+// reads as a revision nobody wrote.
+func attributionOf(r *http.Request) iam.Actor {
+	return auth.AttributionOf(r.Context())
 }
 
 // revisionSource is the source every revision this surface writes records.
@@ -887,16 +1032,16 @@ const revisionSource = "api"
 // is what makes losing one cost a poll interval rather than a revision, and
 // what makes an ephemeral broadcast the right delivery: every node has to
 // hear it, and none of them has to.
-func (s *Service) nudge(ctx context.Context, revisionID, summary string, author store.Author) {
+func (s *Service) nudge(ctx context.Context, revisionID, summary string, by iam.Actor) {
 	if s.queue == nil {
 		return
 	}
 	ev := events.New(types.ConfigRevisionActivated{
-		RevisionID: revisionID, RevisionSummary: summary,
-		CreatedBy: author.Name, CreatedByKind: string(author.Kind),
+		RevisionID: revisionID, RevisionSummary: summary, CreatedBy: by.Name,
+		CreatedByKind: string(by.Kind), OperatorID: by.OperatorID,
 	}, tracing.TraceOf(ctx))
 	ev.Timestamp = s.now()
-	ev.Source = author.Name
+	ev.Source = by.Name
 	if err := s.queue.Publish(ctx, topics.ConfigRevisionActivated, ev); err != nil {
 		log.WarnContext(ctx, "activation_nudge_not_published", "revision", revisionID,
 			"error", err, "detail", "peers converge on their reconcile interval instead")
@@ -933,11 +1078,12 @@ func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, acti
 			return createOnly, !createOnly || s.checkFleetAbsent(w, r)
 		}
 		if matchesTag(none, etagOf(active)) {
-			writeJSON(w, http.StatusPreconditionFailed, map[string]any{
-				"error": "already_configured", "current_revision_id": active.ID,
-				"hint": "If-None-Match asked for this write to land only on a " +
-					"config that is not there; one is active",
-			})
+			httpjson.FailWithFields(w, http.StatusPreconditionFailed,
+				httpjson.CodeAlreadyConfigured, httpjson.Detail{
+					"current_revision_id": active.ID,
+					"hint": "If-None-Match asked for this write to land only on a " +
+						"config that is not there; one is active",
+				})
 			return createOnly, false
 		}
 		return createOnly, true
@@ -951,17 +1097,15 @@ func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, acti
 		// no race to lose.
 		return false, true
 	case !found:
-		writeJSON(w, http.StatusPreconditionFailed, map[string]string{
-			"error": "no_active_revision",
-			"hint": "there is no revision to match against; retry without " +
-				"If-Match, or send If-None-Match: * to require that",
-		})
+		httpjson.FailWith(w, http.StatusPreconditionFailed, httpjson.CodeNoActiveRevision,
+			map[string]string{
+				"hint": "there is no revision to match against; retry without " +
+					"If-Match, or send If-None-Match: * to require that",
+			})
 		return false, false
 	case !matchesTag(expected, etagOf(active)):
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error": "revision_advanced", "current_revision_id": active.ID,
-			"your_base": expected,
-		})
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeRevisionAdvanced,
+			httpjson.Detail{"current_revision_id": active.ID, "your_base": expected})
 		return false, false
 	default:
 		return false, true
@@ -989,8 +1133,8 @@ func (s *Service) checkFleetAbsent(w http.ResponseWriter, r *http.Request) bool 
 	case !found:
 		return true
 	}
-	writeJSON(w, http.StatusPreconditionFailed, map[string]any{
-		"error": "already_configured", "current_revision_id": target.RevisionID,
+	httpjson.FailWithFields(w, http.StatusPreconditionFailed, httpjson.CodeAlreadyConfigured, httpjson.Detail{
+		"current_revision_id": target.RevisionID,
 		"hint": "If-None-Match asked for this write to land only on a config " +
 			"that is not there; the fleet is running revision " + target.RevisionID +
 			", which this node has not caught up with yet. Read /config again " +
@@ -1016,10 +1160,12 @@ func (s *Service) open(revision store.Revision) (*config.Company, error) {
 
 // openDocument is [Service.open] plus the unsealed bytes it decoded, which is
 // what a write that must keep fields this build cannot represent works from.
+//
+// A revision the keyring does not open is an [UnreadableRevisionError].
 func (s *Service) openDocument(revision store.Revision) ([]byte, *config.Company, error) {
 	document, err := secrets.Open(s.cipher, revision.Payload)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, &UnreadableRevisionError{ID: revision.ID, Err: err}
 	}
 	company, err := config.DecodeCompany(document)
 	if err != nil {
@@ -1029,9 +1175,11 @@ func (s *Service) openDocument(revision store.Revision) ([]byte, *config.Company
 }
 
 // lookup fetches a revision by id, answering the refusal itself.
-func (s *Service) lookup(w http.ResponseWriter, r *http.Request, id, missing string) (store.Revision, bool) {
+func (s *Service) lookup(w http.ResponseWriter, r *http.Request, id string,
+	missing httpjson.Code) (store.Revision, bool) {
+
 	if id == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_revision_id"})
+		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeInvalidRevisionID)
 		return store.Revision{}, false
 	}
 	revision, found, err := s.configs.Get(r.Context(), id)
@@ -1040,7 +1188,7 @@ func (s *Service) lookup(w http.ResponseWriter, r *http.Request, id, missing str
 		return store.Revision{}, false
 	}
 	if !found {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": missing})
+		httpjson.Fail(w, http.StatusNotFound, missing)
 		return store.Revision{}, false
 	}
 	return revision, true
@@ -1052,10 +1200,12 @@ func meta(revision store.Revision) map[string]any {
 		"revision_id": revision.ID,
 		"created_at":  revision.CreatedAt.Format(time.RFC3339Nano),
 		"created_by":  revision.CreatedBy,
-		// WHAT created_by names, which the label alone cannot say: every
-		// writer of a revision records whether it was a person or the
-		// engine.
-		"created_by_kind": string(revision.CreatedByKind),
+		// THE KIND AND THE CREDENTIAL BESIDE THE AUTHOR, as every other
+		// trail answers them. The kind is always one of iam's (the store
+		// refuses a revision without one); the credential is empty on a
+		// revision no credential made, such as the engine's own boot seed.
+		"created_by_kind": revision.CreatedByKind,
+		"operator_id":     revision.OperatorID,
 		"source":          revision.Source,
 		"summary":         revision.Summary,
 		"is_active":       revision.Active,
@@ -1093,9 +1243,11 @@ func intParam(w http.ResponseWriter, r *http.Request, name string, fallback int)
 	}
 	value, err := strconv.Atoi(raw)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "invalid_pagination", "detail": name + " must be a number",
-		})
+		// THE QUERY VOCABULARY'S OWN CODE: this was `invalid_pagination`,
+		// a spelling of "a query parameter is not a value this route
+		// accepts" nothing else answered with.
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidQuery,
+			map[string]string{"detail": name + " must be a number"})
 		return 0, false
 	}
 	return value, true
@@ -1107,8 +1259,73 @@ func intParam(w http.ResponseWriter, r *http.Request, name string, fallback int)
 // database path or a driver's own message, and this surface is the one an
 // operator reaches from a browser.
 func (s *Service) fail(w http.ResponseWriter, what string, err error) {
+	// A REVISION THIS NODE CANNOT OPEN IS NOT A FAULT, and every route that
+	// reads one reaches here: GET /config, a revision read, a diff, the
+	// references, an entity, and a write whose prior is the active
+	// revision. It was a 500 on all of them, which said nothing about a
+	// state an operator can fix and whose fix depends on the revision.
+	if refuseUnreadable(w, err) {
+		return
+	}
 	log.Error("config_request_failed", "what", what, "error", err)
-	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal_error"})
+	httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+}
+
+// UnreadableRevisionError is a stored revision this node's keyring does not
+// open: stored without a seal, or sealed under a key the keyring does not hold.
+type UnreadableRevisionError struct {
+	ID  string
+	Err error
+}
+
+func (e *UnreadableRevisionError) Error() string {
+	return "configapi: revision " + e.ID + " does not open under this node's " +
+		"keyring (" + e.Err.Error() + "): " + e.Remedy()
+}
+
+func (e *UnreadableRevisionError) Unwrap() error { return e.Err }
+
+// Unsealed reports whether the revision was stored without a seal, rather
+// than sealed under a key this keyring does not hold.
+func (e *UnreadableRevisionError) Unsealed() bool {
+	return errors.Is(e.Err, secrets.ErrUnsealedWithKey)
+}
+
+// Remedy is what brings the revision's document back.
+func (e *UnreadableRevisionError) Remedy() string {
+	if !e.Unsealed() {
+		return "it is sealed under a key that is no longer in the keyring; " +
+			"restore that key to the node's secrets.keys first"
+	}
+	return "it is stored without a seal, so nothing vouches for who wrote it " +
+		"and it is neither shown nor reverted to; to have its document again, " +
+		"import it from your own copy with PUT /config or `crewlet config " +
+		"import`, which stores it sealed"
+}
+
+// refuseUnreadable answers a revision this node cannot open, and reports
+// whether err was one.
+//
+// 409 with the code the cause names — [httpjson.CodeUnsealedRevision] or
+// [httpjson.CodeUnreadableRevision] — and the remedy as the hint. Two codes
+// and not one with two hints, because an envelope's message is the table's
+// sentence and always wins: under one code, an unsealed revision was answered
+// with a message telling the caller to put a key back that was never involved.
+func refuseUnreadable(w http.ResponseWriter, err error) bool {
+	var unreadable *UnreadableRevisionError
+	if !errors.As(err, &unreadable) {
+		return false
+	}
+	code := httpjson.CodeUnreadableRevision
+	if unreadable.Unsealed() {
+		code = httpjson.CodeUnsealedRevision
+	}
+	httpjson.FailWith(w, http.StatusConflict, code, map[string]string{
+		"revision_id": unreadable.ID,
+		"detail":      unreadable.Err.Error(),
+		"hint":        unreadable.Remedy(),
+	})
+	return true
 }
 
 func readBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {

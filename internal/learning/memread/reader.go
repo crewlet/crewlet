@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -67,6 +69,18 @@ func (q Question) Valid() bool {
 		q == QuestionEpisode
 }
 
+// Seat is one seat a read is about, resolved by the asker from the company it
+// serves — memread never resolves a handle itself.
+//
+// TWO NAMES, because a seat's memory is keyed two ways: ID is its derived
+// agent id (ADR-0013), which its lease and its diary and onboarding marker are
+// keyed by; Handle is its handle, which its episodes, skills, profiles and
+// conversation ledger are keyed by.
+type Seat struct {
+	ID     uuid.UUID `json:"id"`
+	Handle string    `json:"handle"`
+}
+
 // Leases reads which incarnation holds a seat — one seat's lease for a read of
 // its memory, every seat's for the overview — the half of [coord.Backend] a
 // read needs.
@@ -103,9 +117,9 @@ type Reader struct {
 	Leases Leases
 
 	// Attached is the seats this node has taken ALL the way — hydrated and
-	// consuming — which is when its copy of a seat's memory is current.
-	// Required with Queue.
-	Attached func() []string
+	// consuming — by id, which is when its copy of a seat's memory is
+	// current. Required with Queue.
+	Attached func() []uuid.UUID
 
 	// Budget bounds a peer's answer; zero is [DefaultBudget].
 	Budget time.Duration
@@ -129,17 +143,17 @@ func (r *Reader) budget() time.Duration {
 }
 
 // Memory is one seat's memory, answered by its holder.
-func (r *Reader) Memory(ctx context.Context, handle string, limit int) (Memory, error) {
-	req := request{Version: WireVersion, Question: QuestionMemory, Handle: handle, Limit: limit}
+func (r *Reader) Memory(ctx context.Context, seat Seat, limit int) (Memory, error) {
+	req := request{Version: WireVersion, Question: QuestionMemory, Seat: seat, Limit: limit}
 	var out Memory
 	holder, err := r.read(ctx, req, &out, func(ctx context.Context) (any, error) {
-		return r.Local.Memory(ctx, handle, limit)
+		return r.Local.Memory(ctx, seat, limit)
 	})
 	if err != nil {
 		return Memory{}, err
 	}
 	if holder == "" {
-		return emptyMemory(handle, HolderNone), nil
+		return emptyMemory(seat.Handle, HolderNone), nil
 	}
 	out.HeldBy = holder
 	return out, nil
@@ -147,37 +161,37 @@ func (r *Reader) Memory(ctx context.Context, handle string, limit int) (Memory, 
 
 // Episode is one of a seat's episodes whole, answered by its holder: what a
 // listed row carries the openings of ([EpisodeRow]).
-func (r *Reader) Episode(ctx context.Context, handle, id string) (EpisodeDetail, error) {
-	req := request{Version: WireVersion, Question: QuestionEpisode, Handle: handle, Episode: id}
+func (r *Reader) Episode(ctx context.Context, seat Seat, id string) (EpisodeDetail, error) {
+	req := request{Version: WireVersion, Question: QuestionEpisode, Seat: seat, Episode: id}
 	var out EpisodeDetail
 	holder, err := r.read(ctx, req, &out, func(ctx context.Context) (any, error) {
-		return r.Local.Episode(ctx, handle, id)
+		return r.Local.Episode(ctx, seat, id)
 	})
 	if err != nil {
 		return EpisodeDetail{}, err
 	}
 	if holder == "" {
-		return EpisodeDetail{Handle: handle, HeldBy: HolderNone}, nil
+		return EpisodeDetail{Handle: seat.Handle, HeldBy: HolderNone}, nil
 	}
 	out.HeldBy = holder
 	return out, nil
 }
 
 // Threads is one seat's conversation ledger, answered by its holder.
-func (r *Reader) Threads(ctx context.Context, handle, conversation string, limit int) (Threads, error) {
+func (r *Reader) Threads(ctx context.Context, seat Seat, conversation string, limit int) (Threads, error) {
 	req := request{
-		Version: WireVersion, Question: QuestionThreads, Handle: handle, Limit: limit,
+		Version: WireVersion, Question: QuestionThreads, Seat: seat, Limit: limit,
 		Conversation: conversation,
 	}
 	var out Threads
 	holder, err := r.read(ctx, req, &out, func(ctx context.Context) (any, error) {
-		return r.Local.Threads(ctx, handle, conversation, limit)
+		return r.Local.Threads(ctx, seat, conversation, limit)
 	})
 	if err != nil {
 		return Threads{}, err
 	}
 	if holder == "" {
-		return emptyThreads(handle, HolderNone), nil
+		return emptyThreads(seat.Handle, HolderNone), nil
 	}
 	out.HeldBy = holder
 	return out, nil
@@ -208,20 +222,20 @@ func (r *Reader) read(ctx context.Context, req request, out any,
 	if r.Queue == nil {
 		return answerHere()
 	}
-	lease, err := r.Leases.Get(ctx, coord.SeatResource(req.Handle))
+	lease, err := r.Leases.Get(ctx, coord.SeatResource(req.Seat.ID))
 	if err != nil {
 		// UNKNOWN, never "held by nobody": an unreadable lease table says
 		// nothing about where the seat is.
 		return "", fmt.Errorf("%w: which node holds %s could not be read: %w",
-			ErrUnavailable, req.Handle, err)
+			ErrUnavailable, req.Seat.Handle, err)
 	}
 	if lease == nil || !lease.Live(r.now()) {
 		return "", nil
 	}
 	if lease.Owner == r.Owner {
-		if !slices.Contains(r.Attached(), req.Handle) {
+		if !slices.Contains(r.Attached(), req.Seat.ID) {
 			return "", fmt.Errorf("%w: this node is taking %s and its memory is still "+
-				"arriving — ask again in a moment", ErrUnavailable, req.Handle)
+				"arriving — ask again in a moment", ErrUnavailable, req.Seat.Handle)
 		}
 		return answerHere()
 	}
@@ -253,16 +267,16 @@ func (r *Reader) ask(ctx context.Context, req request, owner string, out any) (s
 		}
 		if rep.Error != "" {
 			return "", fmt.Errorf("%w: %s holds %s and answered: %s",
-				ErrUnavailable, node, req.Handle, rep.Error)
+				ErrUnavailable, node, req.Seat.Handle, rep.Error)
 		}
 		if err := json.Unmarshal(rep.Answer, out); err != nil {
 			return "", fmt.Errorf("memread: %s's answer about %s could not be read: %w",
-				node, req.Handle, err)
+				node, req.Seat.Handle, err)
 		}
 		return node, nil
 	}
 	return "", fmt.Errorf("%w: %s holds %s and did not answer within %s",
-		ErrUnavailable, node, req.Handle, r.budget())
+		ErrUnavailable, node, req.Seat.Handle, r.budget())
 }
 
 // NodeOf is the node an incarnation belongs to: the stable id before the
@@ -276,16 +290,20 @@ func NodeOf(owner string) string {
 // request is one read, addressed to the incarnation the asker's lease read
 // named — or, for an overview, to every incarnation `Seats` names, each asked
 // about the seats listed under it.
+//
+// THE SEAT TRAVELS WHOLE, as the asker resolved it: the holder answers from
+// its store by the seat's id and handle and never re-resolves a handle against
+// a chart of its own, which may be a different reading from the asker's.
 type request struct {
 	Version      int      `json:"v"`
 	Question     Question `json:"q"`
-	Handle       string   `json:"handle,omitempty"`
+	Seat         Seat     `json:"seat,omitzero"`
 	Owner        string   `json:"owner,omitempty"`
 	Limit        int      `json:"limit,omitempty"`
 	Conversation string   `json:"conversation,omitempty"`
 	// Episode names the one episode a [QuestionEpisode] read is about.
-	Episode string              `json:"episode,omitempty"`
-	Seats   map[string][]string `json:"seats,omitempty"`
+	Episode string            `json:"episode,omitempty"`
+	Seats   map[string][]Seat `json:"seats,omitempty"`
 }
 
 // reply is the addressed incarnation's answer, or why it could not give one.
@@ -306,7 +324,7 @@ var errNotAddressed = errors.New("memread: the read is addressed to another inca
 // EVERY NODE SERVES and only the addressed incarnation answers. One that is
 // addressed and has not attached the seat says so rather than answering from a
 // copy that is still arriving — or that is left over from a tenure that ended.
-func Serve(ctx context.Context, q Server, owner string, attached func() []string,
+func Serve(ctx context.Context, q Server, owner string, attached func() []uuid.UUID,
 	local *Stores,
 ) (queue.Unsubscribe, error) {
 	return q.Serve(ctx, topics.HeldRead, queue.ConcurrentAnswers, func(ctx context.Context, raw []byte) ([]byte, error) {
@@ -330,8 +348,8 @@ func Serve(ctx context.Context, q Server, owner string, attached func() []string
 		if !req.Question.Valid() {
 			return refuse(fmt.Sprintf("this node's build cannot answer a %q read", req.Question))
 		}
-		if !slices.Contains(attached(), req.Handle) {
-			return refuse("this node does not have " + req.Handle + " attached — it is " +
+		if !slices.Contains(attached(), req.Seat.ID) {
+			return refuse("this node does not have " + req.Seat.Handle + " attached — it is " +
 				"taking the seat or letting it go")
 		}
 		var (
@@ -340,15 +358,15 @@ func Serve(ctx context.Context, q Server, owner string, attached func() []string
 		)
 		switch req.Question {
 		case QuestionMemory:
-			answer, err = local.Memory(ctx, req.Handle, req.Limit)
+			answer, err = local.Memory(ctx, req.Seat, req.Limit)
 		case QuestionThreads:
-			answer, err = local.Threads(ctx, req.Handle, req.Conversation, req.Limit)
+			answer, err = local.Threads(ctx, req.Seat, req.Conversation, req.Limit)
 		case QuestionEpisode:
-			answer, err = local.Episode(ctx, req.Handle, req.Episode)
+			answer, err = local.Episode(ctx, req.Seat, req.Episode)
 		}
 		if err != nil {
 			log.WarnContext(ctx, "held_read_failed", "question", string(req.Question),
-				"seat", req.Handle, "error", err)
+				"seat", req.Seat.Handle, "agent_id", req.Seat.ID.String(), "error", err)
 			return refuse("its store could not be read: " + err.Error())
 		}
 		return answerWith(owner, answer, refuse)
@@ -358,16 +376,16 @@ func Serve(ctx context.Context, q Server, owner string, attached func() []string
 // serveOverview answers an overview for the seats this incarnation was asked
 // about. A seat it holds and has not attached — taking it, or letting it go —
 // is sent with that reason rather than counted from a copy still arriving.
-func serveOverview(ctx context.Context, owner string, seats, attached []string, local *Stores,
-	refuse func(string) ([]byte, error),
+func serveOverview(ctx context.Context, owner string, seats []Seat, attached []uuid.UUID,
+	local *Stores, refuse func(string) ([]byte, error),
 ) ([]byte, error) {
-	var ready []string
-	arriving := map[string]bool{}
-	for _, h := range seats {
-		if slices.Contains(attached, h) {
-			ready = append(ready, h)
+	var ready []Seat
+	arriving := map[uuid.UUID]bool{}
+	for _, seat := range seats {
+		if slices.Contains(attached, seat.ID) {
+			ready = append(ready, seat)
 		} else {
-			arriving[h] = true
+			arriving[seat.ID] = true
 		}
 	}
 	rows, err := local.Overview(ctx, ready)
@@ -376,10 +394,12 @@ func serveOverview(ctx context.Context, owner string, seats, attached []string, 
 			"seats", len(ready), "error", err)
 		return refuse("its store could not be read: " + err.Error())
 	}
-	for _, h := range seats {
-		if arriving[h] {
-			rows = append(rows, OverviewSeat{Handle: h, Unavailable: "the node holding it " +
-				"does not have it attached — it is taking the seat or letting it go"})
+	for _, seat := range seats {
+		if arriving[seat.ID] {
+			rows = append(rows, OverviewSeat{
+				ID: seat.ID.String(), Handle: seat.Handle, Unavailable: "the node holding it " +
+					"does not have it attached — it is taking the seat or letting it go",
+			})
 		}
 	}
 	return answerWith(owner, rows, refuse)

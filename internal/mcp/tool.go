@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"reflect"
 )
 
 // Result is what one tool call produced.
@@ -23,26 +24,31 @@ type Result struct {
 	// refused.
 	Failed bool
 
-	// Refusal classifies a failure for a reader that is not a model, and
-	// only a FIRST-PARTY tool sets it — see [Refusal] for why an MCP
-	// server's failure is left unclassified. Set implies Failed; empty on
-	// a Failed result means "unclassified", never "fine".
-	Refusal Refusal
-
-	// Unknown marks a failed result whose WRITE MAY HAVE LANDED: the tool
-	// made a write and nobody can vouch for its outcome (the append's
-	// acknowledgement was lost, or the node answered before it applied).
-	// Set only by a first-party tool, and only beside [RefusalUnavailable].
+	// Cause is WHY a failed call failed, as a value a caller can branch on:
+	// an authority refusal, a stale version, a node that could not decide.
+	// Nil on a success, and nil on a failure nothing in this engine
+	// classified — an MCP server's own, which reports prose and no class.
+	// A call the engine refuses ABOUT a server — one that is not running,
+	// or whose session ended under the call — is the engine's, and carries
+	// [RefusalUnavailable] (supervise.go).
 	//
-	// A FLAG BESIDE THE CLASS rather than a class of its own, because the
-	// class answers "can this node serve the call now" — and the answer is
-	// still no — while this answers a different question: whether the
-	// caller has to find out what happened before doing anything else. A
-	// person's surface that read the class alone would tell somebody
-	// "nothing happened" about a write that may have landed, and they would
-	// make it a second time. A model reads [Result.Output], which says all
-	// of this in words.
-	Unknown bool
+	// IT IS ALSO WHERE A FIRST-PARTY REFUSAL'S CLASS RIDES. A [Refusal] is
+	// an error, so a tool states its class as the cause itself — or beneath
+	// the error that caused it, through [Classify] — and [RefusalOf] and
+	// [UnknownOf] read it back out. ONE VALUE, never a class field beside
+	// it: two classifiers of one failure drift apart, and a stored "not
+	// unknown" beside a cause that says the write may have landed would
+	// have a person's screen report that nothing happened.
+	//
+	// NEVER RENDERED, and that is the one rule this field carries. Output is
+	// still the whole of what anybody reads — the incident this struct's doc
+	// describes was a reason living in a second field while the first was
+	// shown — so Cause adds nothing a model sees. It exists for the caller
+	// that answers in a protocol with STATUS CODES, where "you may not",
+	// "somebody edited it first" and "this node could not tell" are 403,
+	// 409 and 503, and reading those back out of a sentence would make the
+	// wording of a refusal an API.
+	Cause error
 }
 
 // Callable is the least a phase surface needs to offer something to a model
@@ -60,18 +66,70 @@ type Callable interface {
 }
 
 // Tool is one MCP server tool, wrapped for the engine.
+//
+// It reaches its server through the SERVER, never through one session: a
+// server the bridge restarts gets a new session, and a Tool held to the old
+// one would dispatch into a process that is gone for the rest of the
+// catalogue's life. Held to the server, the same Tool serves through each
+// session in turn and refuses honestly between them — so a restart that lists
+// the same tools changes no registry anywhere.
 type Tool struct {
 	name        string // the catalogue name: prefix applied
 	raw         string // the name the server knows it by
 	description string
 	parameters  map[string]any
 	annotations Annotations
-	client      *client
+	srv         *server
 }
 
 var _ Callable = (*Tool)(nil)
 
-func newTool(c *client, def toolDef, spec Spec) *Tool {
+// toolsFor builds the server's contribution from a fresh listing, keeping the
+// Tool it already had for every entry the listing still describes exactly.
+//
+// KEPT rather than rebuilt, because a Tool's identity is what every registry
+// holding it compares: a restart that rebuilt them all would report every
+// name as changed, and each held seat's surface would be refiled for a server
+// that came back exactly as it went down. A tool whose description, schema
+// or hints moved IS rebuilt, so a registry is told to take the new one.
+//
+// The caller holds the bridge's lock.
+func (s *server) toolsFor(defs []toolDef) []*Tool {
+	kept := make(map[string]*Tool, len(s.tools))
+	for _, t := range s.tools {
+		kept[t.raw] = t
+	}
+	excluded := make(map[string]struct{}, len(s.spec.ExcludeTools))
+	for _, name := range s.spec.ExcludeTools {
+		excluded[name] = struct{}{}
+	}
+	out := make([]*Tool, 0, len(defs))
+	for _, def := range defs {
+		// Excludes match the SERVER's name, before the prefix: an operator
+		// writing them has the server's listing in front of them.
+		if _, skip := excluded[def.Name]; skip {
+			continue
+		}
+		fresh := newTool(s, def, s.spec)
+		if old, ok := kept[def.Name]; ok && old.sameAs(fresh) {
+			out = append(out, old)
+			continue
+		}
+		out = append(out, fresh)
+	}
+	return out
+}
+
+// sameAs reports whether two tools would put the same thing in front of a
+// model: name, description, schema and hints.
+func (t *Tool) sameAs(other *Tool) bool {
+	return t.name == other.name && t.raw == other.raw &&
+		t.description == other.description &&
+		t.annotations == other.annotations &&
+		reflect.DeepEqual(t.parameters, other.parameters)
+}
+
+func newTool(s *server, def toolDef, spec Spec) *Tool {
 	name := spec.ToolPrefix + def.Name
 
 	// An override may be keyed by EITHER name. The raw one is what the server
@@ -94,7 +152,7 @@ func newTool(c *client, def toolDef, spec Spec) *Tool {
 			// offered a repaired schema for a tool whose server describes
 			// its arguments wrongly will call it wrongly, and nothing
 			// else would ever name the server responsible.
-			c.log.Warn("mcp_tool_schema_not_an_object",
+			s.b.log.Warn("mcp_tool_schema_not_an_object",
 				"server", spec.Name, "tool", def.Name, "type", kind,
 				"hint", "the MCP spec requires inputSchema.type == \"object\"; "+
 					"the engine offers a repaired schema, so the model is not "+
@@ -107,7 +165,7 @@ func newTool(c *client, def toolDef, spec Spec) *Tool {
 		description: def.Description,
 		parameters:  maps.Clone(def.InputSchema),
 		annotations: ann,
-		client:      c,
+		srv:         s,
 	}
 }
 
@@ -129,12 +187,12 @@ func (t *Tool) Annotations() Annotations { return t.annotations }
 
 // Instance is the full instance name of the server serving this tool —
 // "github::Engineer" for a per-role child. It identifies the PROCESS.
-func (t *Tool) Instance() string { return t.client.name }
+func (t *Tool) Instance() string { return t.srv.spec.Name }
 
 // Server is the bare server name, which is what the model is shown and what it
 // types into list_mcp_server_tools. Two seats' children of one template are
 // the same server to a reader.
-func (t *Tool) Server() string { return ServerName(t.client.name) }
+func (t *Tool) Server() string { return ServerName(t.srv.spec.Name) }
 
 // Origin is this tool's entry in the tool-origin grammar, ready for whatever
 // registry the caller keeps. See origin.go.
@@ -148,14 +206,29 @@ func (t *Tool) Origin() string { return Origin(t.Server()) }
 // that is being torn down has nobody left to show a tool message to — and
 // because reporting a cancellation as a tool failure would teach the model
 // that the tool is broken.
+//
+// A server that is NOT RUNNING — down and being restarted, or stopped by its
+// owner — is refused by the engine in its own words rather than by whatever
+// error a dead pipe produces, and so is a call whose session ended under it.
+// See server.refusal.
 func (t *Tool) Call(ctx context.Context, args map[string]any) (Result, error) {
-	blocks, err := t.client.callTool(ctx, t.raw, args)
+	c := t.srv.live()
+	if c == nil || c.gone() {
+		return t.srv.refusal(t, c, false), nil
+	}
+	blocks, err := c.callTool(ctx, t.raw, args)
 	if err != nil {
 		if ctx.Err() != nil {
 			return Result{}, err
 		}
+		// The session's end is recorded before the error that ends the call
+		// reaches it (client.end), so this is an exact question rather than a
+		// guess from the error's text.
+		if c.gone() {
+			return t.srv.refusal(t, c, true), nil
+		}
 		return Result{
-			Output: fmt.Sprintf("MCP tool error (%s/%s): %v", t.client.name, t.raw, err),
+			Output: fmt.Sprintf("MCP tool error (%s/%s): %v", t.srv.spec.Name, t.raw, err),
 			Failed: true,
 		}, nil
 	}

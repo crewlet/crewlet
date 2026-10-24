@@ -7,9 +7,12 @@
 // backend that the suite has not certified does not exist as far as the
 // engine is concerned, and nothing above this package may branch on which
 // backend is running. One broker carries both this stream and the fleet's
-// coordination store, on one connection — ADR-0001, and the reason a broker
-// without compare-and-set cannot be a backend here however good its
-// messaging is.
+// coordination store, and a node runs on it only while every connection it
+// cannot run without is open: the queue's own, and on an embedded broker the
+// coordination store's second one, both watched so that either closing for
+// good stops the node (a snapshot donor's connection is not one of them) —
+// ADR-0001, and the reason a broker without compare-and-set cannot be a
+// backend here however good its messaging is.
 //
 // The rationale a reader should not have to re-derive:
 //
@@ -37,14 +40,24 @@
 //     (ListSubscriptions). A mailbox outlives everything that knew its name,
 //     a removed seat's handle included, so the broker has to be able to say
 //     which mailboxes exist or a leaked one can never be found again.
+//   - A failed verb is MARKED with one of three sentinels when the failure is
+//     one a caller acts on, and nothing else about it may be branched on:
+//     ErrTooLarge (the event can never fit — permanent), ErrNotLive (this
+//     queue consumes and answers nothing until it is started again) and
+//     ErrUnavailable (the broker did not answer — a CONDITION, which the
+//     same call made again in a moment may clear). An unmarked failure is
+//     none of those: the caller's own mistake, or a broker answer that
+//     waiting does not change.
 package queue
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"runtime/debug"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,15 +69,16 @@ var log = logging.Get("queue.contract")
 
 // ErrTooLarge reports that an event does not fit on the wire.
 //
-// THE SECOND SENTINEL THE LAYERS ABOVE MAY BRANCH ON, and for the same reason
-// as ErrNotLive: they must not branch on which backend is running, so each one
-// translates its own refusal into this and callers ask one question
-// everywhere.
+// ONE OF THE THREE SENTINELS THE LAYERS ABOVE MAY BRANCH ON — ErrNotLive and
+// ErrUnavailable are the others — and for the same reason as both: they must
+// not branch on which backend is running, so each one translates its own
+// refusal into this and callers ask one question everywhere.
 //
 // It exists because "too large" is the one publish failure that is PERMANENT.
-// Every other reason a publish fails — a broker restarting, a connection
-// dropping, a quorum briefly unavailable — is answered by trying again, so a
-// producer that cannot tell them apart has to treat all of them as transient.
+// The reasons a publish fails that trying again does answer — a broker
+// restarting, a connection dropping, a quorum briefly unavailable — are
+// ErrUnavailable, and a producer that could not tell this from them had to
+// treat every failure as transient.
 // The webhook edge did exactly that and asked the provider to retry a delivery
 // whose size guaranteed it would fail identically forever, releasing and
 // re-taking its claim on every attempt.
@@ -82,8 +96,10 @@ var ErrTooLarge = errors.New("queue: event too large for the transport")
 //
 // It is a CONTRACT number rather than a backend's own, because every backend
 // has to agree on it: the embedded broker is configured to accept exactly this
-// (see internal/queue/jetstream) and the in-memory twin enforces the same
-// ceiling, so a payload that a test accepts is one production accepts.
+// (see internal/queue/jetstream), an external NATS server announcing less is
+// refused when the backend opens rather than at the first message past it,
+// and the in-memory twin enforces the same ceiling, so a payload that a test
+// accepts is one production accepts.
 //
 // Written down because there was no number at all, and the failure had no
 // floor: the webhook edge accepted a 25 MiB delivery, verified its signature,
@@ -251,13 +267,14 @@ type Handler func(ctx context.Context, ev *events.Event) Result
 type BatchHandler func(ctx context.Context, evs []*events.Event) Result
 
 // ErrNotLive reports that a verb reached a queue that is not live — never
-// started, or stopped.
+// started, stopped, or holding a connection its broker client has closed for
+// good, which no later call reopens and which stops the node.
 //
-// ONE OF THE TWO SENTINELS THE LAYERS ABOVE MAY BRANCH ON — see ErrTooLarge
-// for the other — because they must not branch on which backend is running:
-// each backend keeps its own error (jetstream.ErrClosed,
-// memory.ErrNotStarted) and wraps this, so errors.Is(err, queue.ErrNotLive)
-// is the same question everywhere.
+// ONE OF THE THREE SENTINELS THE LAYERS ABOVE MAY BRANCH ON — see ErrTooLarge
+// and ErrUnavailable for the others — because they must not branch on which
+// backend is running: each backend keeps its own error (jetstream.ErrClosed,
+// jetstream.ErrConnectionLost, memory.ErrNotStarted) and wraps this, so
+// errors.Is(err, queue.ErrNotLive) is the same question everywhere.
 //
 // It exists because "the queue is down" is not a failure for every caller. A
 // seat release detaches the mailbox and the seat host KEEPS THE LEASE if that
@@ -267,6 +284,49 @@ type BatchHandler func(ctx context.Context, evs []*events.Event) Result
 // reading it as a failure would strand the seat for a full TTL on the one
 // path where the node is trying to hand it back.
 var ErrNotLive = errors.New("queue: not live")
+
+// ErrUnavailable reports that a verb did not reach the broker, or reached it
+// and was not answered: this node's connection to it is down and its client is
+// reconnecting, or the broker — or the stream or the consumer the verb
+// addressed, a leader mid-election among them — did not reply within the
+// client's own time.
+//
+// A CONDITION, and the only one of the three sentinels that is: the same call
+// made again once the connection is back may succeed, so a caller answers it
+// as it answers any wait that clears — later, or with "try again shortly" —
+// and never as a fault of this node, which it is not. Each backend wraps its
+// transport's own words in it rather than replacing them (on JetStream a
+// timeout, no responders, a reconnecting or disconnected connection, a
+// reconnect buffer that filled), so a log still reads the client's message
+// and errors.Is on the client's own sentinel still answers.
+//
+// IT IS NOT ErrNotLive, and the difference is what a caller may conclude. A
+// queue that is not live consumes nothing, which a seat release reads as
+// proof of teardown. A broker that did not answer proves nothing of the kind:
+// this queue's consumers stay attached and resume when the connection does,
+// so reading this as teardown would hand a seat to a peer while this node may
+// still be consuming it.
+//
+// THE VERBS ABOUT THIS NODE'S OWN ATTACHMENTS NEVER ANSWER IT — Quiesce,
+// Unquiesce, Detach, PauseTopic and ResumeTopic touch no broker, and must not
+// need one: a node that can no longer prove it owns a seat quiesces that
+// seat's mailbox on exactly the outage that cost it the proof, when the
+// coordination store rides the same broker. Every other verb has to reach the
+// broker and may.
+//
+// IT IS NOT A STATEMENT THAT NOTHING HAPPENED, exactly as no failed publish
+// ever was: a publish whose acknowledgement did not arrive may still have
+// been stored, so a producer that retries must tolerate a second copy.
+// "Published means durable" is a claim a success makes and a failure does not
+// unmake. Ask is the verb that refuses before anything is sent — see its
+// contract.
+//
+// A CALLER'S OWN DEADLINE OR CANCELLATION, ending a wait on a broker this
+// node is connected to, stays the context's error alone and is not marked:
+// the caller decided it, and the context says whose decision it was. One that
+// ends while the connection is down is marked, because the connection is why
+// nothing answered.
+var ErrUnavailable = errors.New("queue: broker unavailable")
 
 // StreamHandler receives broadcast events. Stream delivery is best-effort:
 // there is no ack, and a handler's failure is logged, never redelivered.
@@ -284,6 +344,44 @@ type StreamHandler func(ctx context.Context, topic string, ev *events.Event)
 // The context is the ANSWERER's, cancelled when its registration ends. The
 // asker's deadline is enforced by the asker, because only the asker knows it.
 type AnswerFunc func(ctx context.Context, request []byte) ([]byte, error)
+
+// ListenFunc handles one broadcast message: the literal subject it was
+// published on and its bytes, exactly as sent.
+//
+// NO CONTEXT AND NO RESULT, because there is nobody to answer: the publisher
+// has moved on, and a broadcast is never redelivered. A handler that cannot use
+// a message drops it, which is what at most once already means.
+type ListenFunc func(subject string, payload []byte)
+
+// LiteralSubject reports why subject cannot be broadcast on, or nil when it can:
+// a non-empty dotted name whose every token is non-empty and none is a pattern
+// token (`*` or `>`).
+//
+// THE CONTRACT'S RULE, SHARED BY BOTH BACKENDS: the broker refuses a publish to
+// a pattern with a protocol error the client reports on its own goroutine, long
+// after the call returned success, so a backend that passed one through would
+// answer "sent" for a message nobody could ever hear, and the twin would match
+// it against every listener's pattern instead. Both refuse it here, before
+// anything is sent.
+func LiteralSubject(subject string) error {
+	if subject == "" {
+		return errors.New("queue: an empty subject names nobody to broadcast to")
+	}
+	for token := range strings.SplitSeq(subject, ".") {
+		switch token {
+		case "":
+			return fmt.Errorf("queue: subject %q has an empty token", subject)
+		case "*", ">":
+			return fmt.Errorf("queue: subject %q is a pattern; a broadcast names one "+
+				"literal subject and a listener names the pattern", subject)
+		}
+		if strings.ContainsAny(token, " \t\r\n") {
+			return fmt.Errorf("queue: subject %q holds whitespace, which ends a "+
+				"subject on the wire", subject)
+		}
+	}
+	return nil
+}
 
 // Unsubscribe cancels a stream subscription and releases backend resources.
 type Unsubscribe func(ctx context.Context) error
@@ -444,6 +542,14 @@ type EventQueue interface {
 	// DeleteSubscription destroys the subscription and its retained
 	// mail. Must not require a local consumer: decommissioning a role
 	// cannot depend on which node happened to run the seat.
+	//
+	// It DETACHES THIS CLIENT FIRST, and a delete the broker does not
+	// hear — ErrUnavailable — has still done that: the detach is this
+	// node's own state and reaches no broker. What it leaves is the
+	// mailbox standing with nothing of this node's attached, the state
+	// every mailbox is in while no node holds its seat, which the retry
+	// finishes; never this node still consuming a mailbox its caller
+	// asked to destroy.
 	DeleteSubscription(ctx context.Context, topic, group string) (bool, error)
 
 	// ListSubscriptions reports every durable subscription whose topic
@@ -499,11 +605,37 @@ type EventQueue interface {
 	// force every caller to unwrap one to find out how many it got. An
 	// error means the ask could not be made at all.
 	//
+	// A BROKER THIS NODE CANNOT REACH IS REFUSED BEFORE ANYTHING IS SENT,
+	// with ErrUnavailable — never written into a client's reconnect buffer
+	// to go out once the connection is back. A buffered request is a
+	// RETAINED one, which is the one thing this verb promises never to
+	// be, and it would reach its servers after its asker had been told
+	// the ask failed: a steer note delivered to a turn its sender was
+	// told nothing reached. What stays possible is the instant between
+	// that check and the send, in which a connection that drops can still
+	// carry the request out later — so a request must be safe to receive
+	// once its asker has gone, as every reply to a vanished mailbox
+	// already is.
+	//
 	// THE REPLIES ARE UNORDERED and carry no sender. What a reply means
 	// is inside its own bytes, because the transport cannot say: a
 	// scatter has no roster, so "who did not answer" is a question only
 	// the payload can answer.
 	Ask(ctx context.Context, subject string, request []byte, want int) ([][]byte, error)
+
+	// AskEach is [EventQueue.Ask] with each reply handed to each AS IT
+	// ARRIVES rather than collected for the end, until ctx is done or
+	// each answers false. Everything Ask promises holds: nothing is
+	// retained, fewer replies than hoped for is not an error, a broker
+	// this node cannot reach is refused before anything is sent, and the
+	// replies are unordered and carry no sender.
+	//
+	// IT EXISTS FOR A CALLER THAT ACTS ON EACH ANSWER: one that waits for
+	// none in particular (a scatter with no roster) would otherwise wait
+	// out its whole budget before it could act on the fastest reply. each
+	// runs on the asker's goroutine, one reply at a time, and an ask lasts
+	// no longer than each lets it.
+	AskEach(ctx context.Context, subject string, request []byte, each func(reply []byte) bool) error
 
 	// Serve makes this process one of subject's answerers.
 	//
@@ -539,7 +671,62 @@ type EventQueue interface {
 	// WAITS for the answers in flight, bounded by the context it is given
 	// — so a caller that withdraws and then closes what the answerer
 	// reads never closes it under an answer still reading.
+	//
+	// RETURNING MEANS THIS PROCESS'S OWN SERVER HOLDS THE REGISTRATION,
+	// and on a clustered broker no more than that: the other servers learn
+	// of it over their routes a moment later, so an asker on another server
+	// that scatters in that moment does not reach this answerer and counts
+	// it as one that did not answer — the same honest fact a scatter reports
+	// about a node that has not started. Nothing that needs every answerer
+	// may assume it from Serve's return; it asks, and reads who answered.
 	Serve(ctx context.Context, subject string, answers int, h AnswerFunc) (Unsubscribe, error)
+
+	// Broadcast hands payload to every process listening on a pattern
+	// that matches subject, and returns.
+	//
+	// EPHEMERAL, the fan-out counterpart of Ask: no stream, no consumer,
+	// no ack, no retention, no publish listener, no event-store row. A
+	// message nobody is listening for never existed, and a listener that
+	// starts a moment later never hears it. It exists for what is worth
+	// nothing once superseded, presence above all: a cursor or a
+	// heartbeat on a durable verb would be a replicated write per
+	// movement, kept for a retention window nobody reads back.
+	//
+	// AT MOST ONCE AND UNORDERED ACROSS PUBLISHERS. A listener that falls
+	// behind loses messages rather than holding the publisher, and two
+	// processes broadcasting on one subject are heard in whatever order
+	// the broker delivered them. What a message means, and whether a later
+	// one supersedes it, is inside its own bytes.
+	//
+	// A BROKER THIS NODE CANNOT REACH IS REFUSED BEFORE ANYTHING IS SENT,
+	// with ErrUnavailable, for Ask's reason: a message written into a
+	// reconnect buffer is a retained one, delivered after its moment. The
+	// subject is a LITERAL (see [LiteralSubject]): a pattern is what a
+	// listener names, and a broker refuses a publish to one.
+	Broadcast(ctx context.Context, subject string, payload []byte) error
+
+	// Listen makes this process a listener on pattern (`*` one token,
+	// `>` the trailing tokens) until the returned Unsubscribe runs.
+	//
+	// EVERY LISTENER HEARS EVERY MATCHING MESSAGE, Serve's rule rather
+	// than Subscribe's: a broadcast is addressed to whoever is present, so
+	// a group that handed each message to one member would show each room
+	// to a fraction of the fleet.
+	//
+	// ONE MESSAGE AT A TIME PER LISTENER, in the order this process
+	// received them, on a goroutine of the backend's own: a handler never
+	// races itself, and never runs on the publisher's goroutine. A handler
+	// that panics loses that message and keeps its registration.
+	//
+	// The returned Unsubscribe stops delivery and then WAITS for a handler
+	// already running, bounded by the context it is given, so a caller
+	// that withdraws and then tears down what the handler reads never
+	// tears it down under a message still being handled. A handler must
+	// therefore never withdraw its own registration.
+	//
+	// RETURNING MEANS THIS PROCESS'S OWN SERVER HOLDS THE REGISTRATION,
+	// and no more, exactly as for Serve.
+	Listen(ctx context.Context, pattern string, h ListenFunc) (Unsubscribe, error)
 
 	// Start connects the backend and begins consuming.
 	//
@@ -550,13 +737,14 @@ type EventQueue interface {
 	// client live.
 	//
 	// What a backend may NOT do is answer DIFFERENTLY PER VERB. Before
-	// Start, all twelve of the publish, subscription and attachment verbs
-	// must give the same answer — Publish, Subscribe, SubscribeBatch,
-	// Quiesce, Unquiesce, Detach, EnsureSubscription, DeleteSubscription,
-	// ListSubscriptions, SubscribeStream, PauseTopic and ResumeTopic.
-	// Either they all refuse, or none of them require it.
-	// Capabilities.RequiresStart says which, and queuetest sends all
-	// twelve to hold a backend to one answer.
+	// Start, all sixteen of the publish, subscription, attachment and
+	// ephemeral verbs must give the same answer: Publish, Subscribe,
+	// SubscribeBatch, Quiesce, Unquiesce, Detach, EnsureSubscription,
+	// DeleteSubscription, ListSubscriptions, SubscribeStream, PauseTopic,
+	// ResumeTopic, Serve, Ask, Broadcast and Listen. Either they all
+	// refuse, or none of them require it. Capabilities.RequiresStart says
+	// which, and queuetest sends all sixteen to hold a backend to one
+	// answer.
 	//
 	// A caller cannot reason about a lifecycle whose rules change per
 	// method, and this is not hypothetical: a twin that refused Publish
@@ -612,7 +800,7 @@ type EventQueue interface {
 
 	// Stop closes the connection.
 	//
-	// AFTERWARDS EVERY ONE OF THE TWELVE VERBS REFUSES. A requirement
+	// AFTERWARDS EVERY ONE OF THE SIXTEEN VERBS REFUSES. A requirement
 	// rather than a capability, and the asymmetry with the pre-Start rule
 	// is the point: "not connected yet" is a state a backend may
 	// legitimately not have — JetStream's Open connects, so there is

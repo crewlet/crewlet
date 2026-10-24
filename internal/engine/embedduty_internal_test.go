@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -66,7 +67,7 @@ func TestTheEmbeddingTickIsBoundedByItsProgress(t *testing.T) {
 
 	const sources = 3 // three requests of one
 	seedTasks(t, e, sources)
-	duty := e.newEmbedDuty(e.native.Load().log)
+	duty := e.newEmbedDuty(e.core.Load().log)
 	if duty == nil {
 		t.Fatal("a node with the vector log and a corpus built no duty")
 	}
@@ -158,7 +159,7 @@ func TestTheDutysRefusalsFollowTheProvidersConfiguration(t *testing.T) {
 	var held embeddings.Embedder = refusing
 	e.embeddings.Store(&held)
 	seedTasks(t, e, 3)
-	duty := e.newEmbedDuty(e.native.Load().log)
+	duty := e.newEmbedDuty(e.core.Load().log)
 	if duty == nil {
 		t.Fatal("a node with the vector log and a corpus built no duty")
 	}
@@ -171,7 +172,7 @@ func TestTheDutysRefusalsFollowTheProvidersConfiguration(t *testing.T) {
 	if first == nil || first.Len() != 1 {
 		t.Fatalf("the duty holds %v after one input was refused alone", first)
 	}
-	waitApplied(t, e.native.Load().log.Domain(search.Domain{}.Name()))
+	waitApplied(t, e.core.Load().log.Domain(search.Domain{}.Name()))
 	if duty.tick(t.Context()); duty.refusals != first || first.Len() != 1 {
 		t.Fatalf("the next tick with the same provider kept %p (%d), want %p still "+
 			"holding the refusal", duty.refusals, duty.refusals.Len(), first)
@@ -223,7 +224,7 @@ func TestAnEmbeddingTickStopsWhenARenewalSaysAnotherNodeHoldsTheDuty(t *testing.
 	var held embeddings.Embedder = provider
 	e.embeddings.Store(&held)
 	seedTasks(t, e, 1)
-	duty := e.newEmbedDuty(e.native.Load().log)
+	duty := e.newEmbedDuty(e.core.Load().log)
 	if duty == nil {
 		t.Fatal("a node with the vector log and a corpus built no duty")
 	}
@@ -315,13 +316,19 @@ func (p *pacedEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]flo
 	return p.Fake.EmbedBatch(ctx, texts)
 }
 
+// seededProjects numbers the projects seedTasks files, so every call names a
+// new one. The key was read off the clock once, and a clock that counts in
+// microseconds (macOS) left it a hundred values: a test seeding twice reused
+// its own key about once in a hundred runs, and the second create was refused.
+var seededProjects atomic.Int64
+
 // seedTasks files n tasks in a project of their own through the node's writer,
 // and waits for the node to apply them.
 func seedTasks(t *testing.T, e *Engine, n int) {
 	t.Helper()
 	writer := e.native.Load().writer
 	at := time.Now().UTC()
-	key := fmt.Sprintf("P%d", at.UnixNano()%100_000)
+	key := fmt.Sprintf("P%05d", seededProjects.Add(1))
 	mustApply(t, "the project", func() (tracker.WriteResult, error) {
 		return writer.WriteDocument(t.Context(), statelog.NewOpID(at, "project"),
 			tracker.ProjectSubject(key), "", tracker.Project{
@@ -340,6 +347,6 @@ func seedTasks(t *testing.T, e *Engine, n int) {
 			}, nil)
 		})
 	}
-	running := e.native.Load().log.Domain(tracker.Domain{}.Name())
+	running := e.core.Load().log.Domain(tracker.Domain{}.Name())
 	waitApplied(t, running)
 }

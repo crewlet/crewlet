@@ -1264,7 +1264,7 @@ type dueQuery struct {
 // A STALE READ of this node's rows, in one transaction, of the three columns
 // the pass uses: every step decides again in its own snapshot, so a
 // repository that moved on since the listing is answered there. Each phase
-// is ONE statement over its own partial index (replicated 0043), so a page
+// is ONE statement over its own partial index (replicated 0050), so a page
 // reads the rows it lists — never the repositories deleted inside the
 // retention, nor a repository's settings and rules the pass has no use for:
 // read whole, a listing of ten thousand due repositories was two statements

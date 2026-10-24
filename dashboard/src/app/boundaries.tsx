@@ -125,29 +125,6 @@ export function ScreenBoundary({ resetKey, children }: { resetKey: string; child
 }
 
 /**
- * A column a workspace draws beside its screens from its own chunk — the
- * Knowledge tree. Reset by the WORKSPACE rather than the path: the column
- * outlives every navigation inside it (that is what keeps its expanded
- * folders), so a navigation is not a reason to redraw one that threw, and
- * leaving the workspace unmounts it anyway.
- */
-export function ColumnBoundary({
-  what,
-  resetKey,
-  children,
-}: {
-  what: string;
-  resetKey: string;
-  children: ReactNode;
-}) {
-  return (
-    <Guarded what={what} loading={`Loading ${what.toLowerCase()}`} rows={8} resetKey={resetKey}>
-      {children}
-    </Guarded>
-  );
-}
-
-/**
  * The peek's body, reset by the object it shows, so `[` and `]` step off a
  * peek that threw onto one that may not.
  */
@@ -166,7 +143,8 @@ export function PeekBoundary({ resetKey, children }: { resetKey: string; childre
  * sight, with the layer's own focus trap gone. The dialog closes the way the
  * layer does, and the next press opens a fresh one.
  *
- * A LAYER'S CODE CAN ARRIVE IN A CHUNK (the sheet is the Work workspace's), so
+ * A LAYER'S CODE CAN ARRIVE IN A CHUNK (the sheet is the Work workspace's, the
+ * palette a chunk of its own), so
  * a load in flight draws nothing — the layer is not on screen until it is —
  * and a chunk that never came is this dialog, carrying the chunk's own
  * sentence about reloading.

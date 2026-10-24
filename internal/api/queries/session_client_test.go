@@ -101,7 +101,7 @@ func askFloorless(t *testing.T, kind string) (any, error) {
 	if i < 0 {
 		// Reported by the listing check; asked with no arguments so an
 		// unknown kind still gives an answer to report.
-		return askNative(t, nativeSources(queries.Native{Work: &stubWork{}, Pages: &stubPages{}}), kind,
+		return askNative(t, queries.Sources{Work: &stubWork{}, Pages: &stubPages{}}, kind,
 			map[string]any{"read_level": "session"})
 	}
 	q := sessionQuestions[i]
@@ -117,5 +117,5 @@ func askFloorless(t *testing.T, kind string) (any, error) {
 	if personalQuestions[kind] {
 		ask = askAsOperator
 	}
-	return ask(t, nativeSources(queries.Native{Work: work, Pages: pages}), kind, params)
+	return ask(t, queries.Sources{Work: work, Pages: pages}, kind, params)
 }

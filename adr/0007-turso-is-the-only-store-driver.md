@@ -1,4 +1,4 @@
-# ADR-0007 — Turso is the only store driver, and it bounds the release matrix
+# ADR-0007: Turso is the only store driver, and it bounds the release matrix
 
 - **Status:** accepted
 - **Authority:** `internal/store`

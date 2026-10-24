@@ -1,11 +1,12 @@
 package engine
 
 import (
-	"slices"
+	"reflect"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/pages"
 )
 
 // A PERSON'S CREATE LANDS WHERE THEIR SEAT'S WORK DOES, on the chart CURRENT
@@ -40,32 +41,33 @@ func TestAPersonsDefaultProjectIsReadFromTheCurrentChart(t *testing.T) {
 	}
 }
 
-// THE CONTAINERS NO OPERATOR WRITE MAY TARGET ARE THE CURRENT COMPANY'S. Both
-// are Tier B and the operator's surface is not rebuilt for a new company
-// document, so they are read at each write: before any epoch nothing is
-// reserved, and an apply that moves the skills container moves what is refused
-// with it. The API used to evaluate its own copy of this rule once, when it
-// built its catalogue.
+// THE CONTAINERS A SEAT'S WRITE IS HELD BACK FROM ARE THE CURRENT COMPANY'S.
+// Both are Tier B and the knowledge base's store is built once per node, so it
+// reads them at each write through exactly this expression (the store's
+// [pages.Options.Reserved]): before any epoch nothing is reserved, and an
+// apply that moves the skills container moves what is held back with it. The
+// API used to evaluate its own copy of this rule once, when it built its
+// catalogue.
 func TestTheReservedContainersAreTheCurrentCompanys(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
-	reserved := LiveReserved(e)
-	if got := reserved(); len(got) != 0 {
-		t.Errorf("before any epoch: %v, want nothing reserved", got)
+	reserved := func() pages.Reserved { return reservedContainers(e.Company()) }
+	if got := reserved(); !reflect.DeepEqual(got, pages.Reserved{}) {
+		t.Errorf("before any epoch: %+v, want nothing reserved", got)
 	}
 
 	skills := "SKILLS"
 	e.epoch.current.Store(&Company{Config: &config.Company{Name: "Acme"}})
-	if got := reserved(); !slices.Equal(got, []string{config.DefaultSkillsContainer,
-		config.DefaultRootSpace}) {
-		t.Errorf("on the defaults: %v, want %s and %s", got,
+	if got := reserved(); got.Skills != config.DefaultSkillsContainer ||
+		got.Root != config.DefaultRootSpace {
+		t.Errorf("on the defaults: %+v, want %s and %s", got,
 			config.DefaultSkillsContainer, config.DefaultRootSpace)
 	}
 	e.epoch.current.Store(&Company{Config: &config.Company{
 		Name: "Acme", Knowledge: config.Knowledge{SkillsContainer: &skills},
 	}})
-	if got := reserved(); !slices.Equal(got, []string{"SKILLS", config.DefaultRootSpace}) {
-		t.Errorf("after an apply moved the skills container: %v, want SKILLS and %s, "+
+	if got := reserved(); got.Skills != "SKILLS" || got.Root != config.DefaultRootSpace {
+		t.Errorf("after an apply moved the skills container: %+v, want SKILLS and %s, "+
 			"the company now current", got, config.DefaultRootSpace)
 	}
 }

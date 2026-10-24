@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
@@ -36,8 +37,8 @@ import (
 // time, instead.
 func TestTheCollectorReadsEveryDeclaredTable(t *testing.T) {
 	t.Parallel()
-	n := objectsRuntime()
-	if _, err := collect.Sources(references.All, n.objectEstates()...); err != nil {
+	estates := objectEstatesFor(objectsRuntime(), &artifactsdomain.Reader{})
+	if _, err := collect.Sources(references.All, estates...); err != nil {
 		t.Fatalf("the collector cannot be built from the declared tables: %v", err)
 	}
 }
@@ -51,7 +52,7 @@ func objectsRuntime() *native {
 	return &native{trackerObjects: &tracker.Reader{}, codeReader: &code.Reader{}}
 }
 
-// EVERY REQUIRED TABLE NAMES ITS OWN DOMAIN'S LOG (ADR-0034). A backup reads
+// EVERY REQUIRED TABLE NAMES ITS OWN DOMAIN'S LOG (ADR-0048). A backup reads
 // the log a declaration names past its store copy, and the deferred records of
 // the table it names, to carry the objects a restore's replay names — so a
 // declaration naming another domain's stream or table would have the backup
@@ -180,7 +181,7 @@ func TestEveryDeclaredDomainHasAnObjectEstate(t *testing.T) {
 			t.Parallel()
 			e := newSandboxNode(t, parseCompany(t, arm.doc))
 			n := e.native.Load()
-			if n == nil || n.log == nil {
+			if n == nil || e.core.Load() == nil {
 				t.Fatal("the premise: the company runs a state log, and this node runs none")
 			}
 			if (n.trackerReader != nil) != arm.toolReader {
@@ -1211,5 +1212,46 @@ func TestACollectorPassSurvivesARenewalTheStoreDidNotAnswer(t *testing.T) {
 				t.Fatalf("the pass recorded %+v (found %v), want this node's completed collection", r, found)
 			}
 		})
+	}
+}
+
+// reservedBackend is a store that holds a byte reservation, as the broker's
+// own bucket does.
+type reservedBackend struct {
+	*memobj.Backend
+	usage objstore.Usage
+}
+
+func (b *reservedBackend) Usage(context.Context) (objstore.Usage, error) { return b.usage, nil }
+
+// THE BUCKET'S USAGE IS THE DUTY HOLDER'S TO REPORT, like the missing count:
+// the holder's reading of the one bucket is the fleet's, and a node that gave
+// the duty up reports nothing that could raise the alarm a second time.
+func TestTheBucketUsageIsReportedOnlyByTheDutyHolder(t *testing.T) {
+	t.Parallel()
+	e, duty, _ := collectorNode(t, &namedNothing{})
+	backend := &reservedBackend{Backend: memobj.New(), usage: objstore.Usage{Bytes: 9 << 30, MaxBytes: 10 << 30}}
+	store, err := objstore.NewStore(backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.objects.store = store
+	e.collectorTurn(t.Context(), nil, duty)
+	var r statelog.Reading
+	e.objectsReading(time.Now(), &r)
+	if r.ObjectsBucketBytes != 9<<30 || r.ObjectsBucketMaxBytes != 10<<30 {
+		t.Fatalf("the holder reads %d of %d, want the bucket's 9 GiB of 10 GiB",
+			r.ObjectsBucketBytes, r.ObjectsBucketMaxBytes)
+	}
+	if !slices.ContainsFunc(statelog.Evaluate(r), func(a statelog.Alarm) bool {
+		return a.Kind == statelog.KindObjectsBucketNearCeiling
+	}) {
+		t.Fatal("a bucket at nine tenths of its reservation raised no alarm")
+	}
+	e.collectorTurn(t.Context(), func(context.Context) (bool, error) { return false, nil }, duty)
+	r = statelog.Reading{}
+	e.objectsReading(time.Now(), &r)
+	if r.ObjectsBucketMaxBytes != 0 {
+		t.Errorf("a node that gave the duty up still reports a reservation of %d", r.ObjectsBucketMaxBytes)
 	}
 }

@@ -84,20 +84,32 @@ const (
 	// uses, because it must outlast a publisher's whole retry budget and
 	// no longer.
 	VectorLogDuplicates = 2 * time.Minute
+
+	// VectorMaxRecordBytes is the largest record this domain publishes
+	// ([statelog.StreamSpec.MaxRecordBytes]).
+	//
+	// THE LARGEST THE TRANSPORT CARRIES
+	// ([statelog.MaxTransportRecordBytes]), because here it sizes nothing:
+	// this log claims no identity and keeps no gate reserve, so the
+	// declaration only sets where the publisher and the broker refuse, and
+	// an embed is bounded far below it by the widest vector a provider may
+	// configure.
+	VectorMaxRecordBytes = statelog.MaxTransportRecordBytes
 )
 
 // Stream is the vector domain's compacted changelog, at the domain's whole
 // budget.
 func (Domain) Stream() statelog.StreamSpec {
 	return statelog.StreamSpec{
-		Name:          topics.TrackerVectorsStream,
-		Subjects:      []string{topics.TrackerVectorsWildcard},
-		SubjectPrefix: topics.TrackerVectorsPrefix,
-		MaxBytes:      VectorLogMaxBytes,
-		MaxPerSubject: 1,
-		MaxAge:        VectorLogMaxAge,
-		Duplicates:    VectorLogDuplicates,
-		Replay:        statelog.ReplayCompacted,
+		Name:           topics.TrackerVectorsStream,
+		Subjects:       []string{topics.TrackerVectorsWildcard},
+		SubjectPrefix:  topics.TrackerVectorsPrefix,
+		MaxBytes:       VectorLogMaxBytes,
+		MaxRecordBytes: VectorMaxRecordBytes,
+		MaxPerSubject:  1,
+		MaxAge:         VectorLogMaxAge,
+		Duplicates:     VectorLogDuplicates,
+		Replay:         statelog.ReplayCompacted,
 		// NO ARBITRATED KIND. Exactly one writer publishes on a
 		// subject — the fleet's embedding duty, which is a singleton —
 		// so there is no expectation to form, and an anchor row here
@@ -205,7 +217,7 @@ func (Domain) OpsTable() string { return "" }
 // company's seats for that is the outage the coverage number exists to avoid —
 // and it would be withheld for the one subsystem every design note calls best
 // effort. Its copy is still judged, and a wrong one — not one that is behind —
-// goes out of service on its own, its seats untouched — ADR-0031.
+// goes out of service on its own, its seats untouched — ADR-0045.
 func (Domain) GatesSeatAdmission() bool { return false }
 
 // ClaimsIdentity reports that two nodes at one checkpoint are NOT asserted to
@@ -291,6 +303,6 @@ type Gates struct{}
 func NewGates() Gates { return Gates{} }
 
 // GatedAt implements [statelog.Gates].
-func (Gates) GatedAt(context.Context, statelog.Subject, string, string, statelog.Position) (statelog.Reason, bool, error) {
+func (Gates) GatedAt(context.Context, statelog.Subject, string, string, statelog.Position, []byte) (statelog.Reason, bool, error) {
 	return "", false, nil
 }

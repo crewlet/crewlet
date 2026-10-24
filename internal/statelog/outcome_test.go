@@ -42,6 +42,27 @@ func TestTheLaterPositionIsGenerationFirst(t *testing.T) {
 	}
 }
 
+// A POSITION ON ANOTHER LOG IS NEVER LATER, however large its number.
+//
+// A packed position is a coordinate in one log's number space, and two logs'
+// spaces are unrelated: compared bare, the knowledge base's sequence 90 would
+// "follow" the tracker's sequence 4 for no reason but the sizes of two
+// counters, and a caller would barrier on a log it never reads. The first log
+// keeps the answer, in either argument order.
+//
+// Mutation: compare packed values in Later, and this fails.
+func TestAPositionOnAnotherLogIsNeverLater(t *testing.T) {
+	t.Parallel()
+	tracker := statelog.Position{Stream: "TRACKER", Generation: 1, Seq: 4}
+	pages := statelog.Position{Stream: "PAGES", Generation: 3, Seq: 90}
+	if got := statelog.Later(tracker, pages); got != tracker {
+		t.Errorf("Later(%s, %s) = %s, want the first log's position kept", tracker, pages, got)
+	}
+	if got := statelog.Later(pages, tracker); got != pages {
+		t.Errorf("Later(%s, %s) = %s, want the first log's position kept", pages, tracker, got)
+	}
+}
+
 // AN UNKNOWN WRITE SPEAKS FOR A RECORD although it names no position, and a
 // write that decided it had nothing to append speaks for none.
 func TestAnUnknownWriteStillWrote(t *testing.T) {

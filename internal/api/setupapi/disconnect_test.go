@@ -5,10 +5,18 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // A DISCONNECT NAMES WHAT IT LEAVES BEHIND, ON THE PATH THE DASHBOARD USES.
@@ -27,11 +35,7 @@ import (
 func TestAnOrdinaryDisconnectNamesTheCredentialsItLeaves(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", identityDoc,
-		map[string]string{"X-Summary": "a provisioned company"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, identityDoc)
 
 	// WITH A STATUS STORE, because the ordinary path records the intent on
 	// the fleet row and refuses without one.
@@ -84,11 +88,7 @@ func TestAnOrdinaryDisconnectNamesTheCredentialsItLeaves(t *testing.T) {
 func TestASingleAtlassianProductLeavesTheSharedCredentialUnnamed(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", identityDoc,
-		map[string]string{"X-Summary": "a provisioned company"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, identityDoc)
 	// CONFLUENCE STAYS, reading the same shared credential Jira does.
 	patch := s.do(t, http.MethodPatch, "/config",
 		`{"integrations":{"confluence":{"url":"https://acme.atlassian.net/wiki","token":"${OPS_TOKEN}"}}}`,
@@ -128,11 +128,7 @@ func TestASingleAtlassianProductLeavesTheSharedCredentialUnnamed(t *testing.T) {
 func TestADisconnectNamesNoCredentialNobodySet(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", identityDoc,
-		map[string]string{"X-Summary": "a provisioned company"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, identityDoc)
 
 	s.withPass(t, &recordingPass{kind: integration.KindGitLab})
 	out := s.do(t, http.MethodDelete, "/setup/integrations/gitlab", `{}`, nil)
@@ -166,17 +162,13 @@ func TestADisconnectNamesNoCredentialNobodySet(t *testing.T) {
 func TestASeatWhoseCredentialWentWithItsAccountIsNotSatisfied(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", identityDoc,
-		map[string]string{"X-Summary": "a provisioned company"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, identityDoc)
 	// A provisioned seat: the pass sealed both slots.
 	for name, value := range map[string]string{
 		"SRE_ATLASSIAN": "atlassian-token",
 		"SRE_EMAIL":     "crewlet-sre-lead@acme.invalid",
 	} {
-		if err := s.vault.Set(t.Context(), name, value, "op", "test", pinned); err != nil {
+		if err := s.vault.Set(t.Context(), name, value, testAuthor, secrets.SourceAPI, pinned); err != nil {
 			t.Fatalf("seal %s: %v", name, err)
 		}
 	}
@@ -226,16 +218,12 @@ func seatRow(t *testing.T, s *surface, kind, handle string) map[string]any {
 func TestASeatIsNotSatisfiedOnASurfaceTheCompanyDoesNotDeclare(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", identityDoc,
-		map[string]string{"X-Summary": "a provisioned company"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, identityDoc)
 	for name, value := range map[string]string{
 		"SRE_ATLASSIAN": "atlassian-token",
 		"SRE_EMAIL":     "crewlet-sre-lead@acme.invalid",
 	} {
-		if err := s.vault.Set(t.Context(), name, value, "op", "test", pinned); err != nil {
+		if err := s.vault.Set(t.Context(), name, value, testAuthor, secrets.SourceAPI, pinned); err != nil {
 			t.Fatalf("seal %s: %v", name, err)
 		}
 	}
@@ -277,16 +265,12 @@ func TestASeatTheLoopFoundBrokenIsNotSatisfied(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
 	status, _ := s.withPass(t, &recordingPass{})
-	res := s.do(t, http.MethodPut, "/config", identityDoc,
-		map[string]string{"X-Summary": "a provisioned company"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, identityDoc)
 	for name, value := range map[string]string{
 		"SRE_ATLASSIAN": "atlassian-token",
 		"SRE_EMAIL":     "crewlet-sre-lead@acme.invalid",
 	} {
-		if err := s.vault.Set(t.Context(), name, value, "op", "test", pinned); err != nil {
+		if err := s.vault.Set(t.Context(), name, value, testAuthor, secrets.SourceAPI, pinned); err != nil {
 			t.Fatalf("seal %s: %v", name, err)
 		}
 	}
@@ -322,16 +306,12 @@ func TestAnAdvisoryFindingLeavesASeatSatisfied(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
 	status, _ := s.withPass(t, &recordingPass{})
-	res := s.do(t, http.MethodPut, "/config", identityDoc,
-		map[string]string{"X-Summary": "a provisioned company"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, identityDoc)
 	for name, value := range map[string]string{
 		"SRE_ATLASSIAN": "atlassian-token",
 		"SRE_EMAIL":     "crewlet-sre-lead@acme.invalid",
 	} {
-		if err := s.vault.Set(t.Context(), name, value, "op", "test", pinned); err != nil {
+		if err := s.vault.Set(t.Context(), name, value, testAuthor, secrets.SourceAPI, pinned); err != nil {
 			t.Fatalf("seal %s: %v", name, err)
 		}
 	}
@@ -415,11 +395,7 @@ func TestAGitHubDisconnectNamesEachAgentsAppCredentials(t *testing.T) {
 func TestADisconnectRefusedByAConcurrentPassSaysItIsRetryable(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", identityDoc,
-		map[string]string{"X-Summary": "a provisioned company"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, identityDoc)
 	_, runner := s.withPass(t, &recordingPass{kind: integration.KindGitLab})
 
 	// SOMETHING ELSE IS WRITING AT IT, held for the whole request.
@@ -443,21 +419,27 @@ func TestADisconnectRefusedByAConcurrentPassSaysItIsRetryable(t *testing.T) {
 		t.Errorf("detail = %q, which does not say the request is worth "+
 			"repeating", detail)
 	}
+	// AND WHEN: three seconds, the span this request already waited before
+	// answering busy. The dashboard's dialog waits exactly this header and
+	// has no cadence of its own, so the header is the whole of how often a
+	// busy surface is asked again.
+	if got := out.Header().Get("Retry-After"); got != "3" {
+		t.Errorf("Retry-After = %q, want 3", got)
+	}
 }
 
-// AND ONE REFUSED FOR ANY OTHER REASON DOES NOT.
+// AND ONE REFUSED FOR ANY OTHER REASON IS NOT A BUSY SURFACE.
 //
 // A status row the node cannot read is not a race another writer is about to
-// finish, and telling a caller to sit it out and retry sends them round a loop
-// the fault does not end. Both answers are 503; only one of them is a race.
-func TestADisconnectRefusedPermanentlyIsNotMarkedRetryable(t *testing.T) {
+// finish, and the dialog sits `surface_busy` out on its own — so reporting
+// this as busy sends a caller round a loop the fault may not end. Both
+// answers are 503 and both carry a Retry-After, because both may clear (a
+// coordination store that could not be reached usually comes back within
+// seconds); only one of them is a race worth retrying without being asked.
+func TestADisconnectRefusedForAnyOtherReasonIsNotABusySurface(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
-	res := s.do(t, http.MethodPut, "/config", identityDoc,
-		map[string]string{"X-Summary": "a provisioned company"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("import = %d: %s", res.Code, res.Body)
-	}
+	s.seedDocument(t, identityDoc)
 	s.status.mu.Lock()
 	s.status.loadErr = errors.New("the coordination store could not be reached")
 	s.status.mu.Unlock()
@@ -466,8 +448,49 @@ func TestADisconnectRefusedPermanentlyIsNotMarkedRetryable(t *testing.T) {
 	if out.Code != http.StatusServiceUnavailable {
 		t.Fatalf("disconnect = %d: %s", out.Code, out.Body)
 	}
-	if got := decode(t, out)["error"]; got == "surface_busy" {
-		t.Error("a status row that could not be read was reported as busy, so a " +
-			"caller retries a refusal no amount of waiting ends")
+	body := decode(t, out)
+	if got := body["error"]; got != string(httpjson.CodeUnavailable) {
+		t.Errorf("error = %v, want unavailable: it was internal_error, which a "+
+			"caller reads as terminal, and surface_busy would be a race", got)
+	}
+	if body["message"] != httpjson.CodeUnavailable.Message() {
+		t.Errorf("message = %v, want the code's own sentence", body["message"])
+	}
+	if got := out.Header().Get("Retry-After"); got != strconv.Itoa(authz.RetryUndecidedSeconds) {
+		t.Errorf("Retry-After = %q, want the undecidable scale", got)
+	}
+}
+
+// A DISCONNECT RECORDS WHO ASKED FOR IT, ON THE ROW THE LOOP ACTS ON.
+//
+// The ordinary path only records an intent: the loop carries the teardown out
+// minutes later on whichever node holds its duty, and drops the block then —
+// so the row is the one place that can say whose gesture that revision
+// finishes. The forced path drops it inside this request and records the
+// caller directly; this one used to leave the revision to be recorded as the
+// loop's. Mutation: record the intent without the caller and the row names
+// nobody.
+func TestADisconnectRecordsWhoAskedOnTheRow(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seedDocument(t, identityDoc)
+	s.withPass(t, &recordingPass{kind: integration.KindJira})
+	const via = "pat:0192f00d-0000-7000-8000-00000000000a"
+	s.caller = &iam.Principal{
+		ID: uuid.New(), Login: "ana.admin", Kind: iam.KindPerson,
+		Stage: iam.StageActive, Grants: iam.AllGrants, Via: via,
+		ReauthAt: time.Now().Add(time.Hour),
+	}
+
+	out := s.do(t, http.MethodDelete, "/setup/integrations/jira", `{}`, nil)
+	if out.Code != http.StatusAccepted {
+		t.Fatalf("disconnect = %d: %s", out.Code, out.Body)
+	}
+	s.status.mu.Lock()
+	row := s.status.states[integration.KindJira]
+	s.status.mu.Unlock()
+	want := iam.Actor{Name: "ana.admin", Kind: iam.ActorOperator, OperatorID: via}
+	if by, named := row.RequestedBy.Actor(); !named || by != want {
+		t.Errorf("the row names %+v (%v) as having asked, want %+v", by, named, want)
 	}
 }

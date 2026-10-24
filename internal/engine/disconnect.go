@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -18,8 +19,8 @@ import (
 // compare-and-set) rather than a second path onto the document.
 type ConfigWriter interface {
 	// Apply merges patch into the active revision and activates the
-	// result.
-	Apply(ctx context.Context, patch []byte, summary, operator string) error
+	// result, recording by as its author.
+	Apply(ctx context.Context, patch []byte, summary string, by iam.Actor) error
 
 	// Seat reads one seat's whole entity as JSON, and SetSeat writes it
 	// back under the same handle.
@@ -33,7 +34,8 @@ type ConfigWriter interface {
 	// a browser, which tells the engine nothing, so the loop discovers the
 	// installation and records it against that one seat.
 	Seat(ctx context.Context, handle string) ([]byte, error)
-	SetSeat(ctx context.Context, handle string, body []byte, summary, operator string) error
+	SetSeat(ctx context.Context, handle string, body []byte, summary string,
+		by iam.Actor) error
 
 	// Reload re-activates the CURRENT document unchanged, which advances the
 	// epoch and makes every node apply again.
@@ -43,7 +45,7 @@ type ConfigWriter interface {
 	// revision id: a pointer that deduplicated would rebuild nothing on
 	// precisely this operation. See [Engine.rebuildForSealedSecrets] for why
 	// a provisioning pass needs it.
-	Reload(ctx context.Context, summary, operator string) error
+	Reload(ctx context.Context, summary string, by iam.Actor) error
 }
 
 // UseConfigWriter installs the surface a disconnect removes a block through.
@@ -92,10 +94,15 @@ type teardown interface {
 }
 
 func (d vendorDisconnect) Disconnect(
-	ctx context.Context, removeSeats bool,
+	ctx context.Context, req integration.TeardownRequest,
 ) (provision.Removed, error) {
+	// WHOEVER ASKED, which every write below is recorded under: the loop
+	// only carries the disconnect out. Always somebody — the one writer of
+	// the intent records who asked beside it ([integration.AskTeardown]) —
+	// so there is no name of the loop's own to fall back to.
+	by := req.By
 	var removed provision.Removed
-	err := d.engine.dropBlock(ctx, d.kind, func(ctx context.Context) error {
+	err := d.engine.dropBlock(ctx, d.kind, by, func(ctx context.Context) error {
 		if d.pass == nil {
 			// NOTHING TO REMOVE ANYWHERE, which no surface in this
 			// build is: every kind has a step, seven at a vendor and
@@ -112,13 +119,15 @@ func (d vendorDisconnect) Disconnect(
 			return nil
 		}
 		var err error
-		removed, err = d.pass.Teardown(ctx, setup.TeardownInput{RemoveSeats: removeSeats})
+		removed, err = d.pass.Teardown(ctx, setup.TeardownInput{
+			RemoveSeats: req.RemoveSeats, By: by,
+		})
 		if err != nil {
 			return err
 		}
 		// THE CREDENTIALS THOSE ACCOUNTS HELD, deleted here and in no
 		// vendor package. See [Engine.forgetRemoved].
-		return d.engine.forgetRemoved(ctx, d.kind, removed)
+		return d.engine.forgetRemoved(ctx, d.kind, removed, by)
 	})
 	return removed, err
 }
@@ -149,22 +158,21 @@ func (d vendorDisconnect) Disconnect(
 // error rather than logging one — a swallowed failure drops the block with the
 // credentials still sealed, and the retry that would have caught it never runs.
 //
-// A NODE WITH NO KEYRING CANNOT DELETE A SEALED ROW. It says so, naming the
-// values, rather than reporting a completeness it did not achieve.
+// A SINK THAT CANNOT BE BUILT FAILS THE TEARDOWN like any other failure here:
+// every node holds the keyring the rows were sealed under, so it is an engine
+// wired without its secret store, and dropping the block over it would leave
+// the dead values sealed with nothing left to retry.
 func (e *Engine) forgetRemoved(
 	ctx context.Context, kind integration.Kind, removed provision.Removed,
+	by iam.Actor,
 ) error {
 	names := removed.Secrets()
 	if len(names) == 0 {
 		return nil
 	}
-	sink, err := e.SetupSink(reconcileOperator)
+	sink, err := e.SetupSink(by)
 	if err != nil {
-		log.WarnContext(ctx, "removed_credentials_not_deleted",
-			"integration", kind.String(), "error", err, "secrets", names,
-			"detail", "the accounts are gone and these values are dead; this "+
-				"node has no keyring, so remove them with `crewlet secrets unset`")
-		return nil
+		return fmt.Errorf("engine: %s teardown: %w", kind, err)
 	}
 	if err := sink.Forget(ctx, names...); err != nil {
 		return fmt.Errorf("engine: %s teardown: %w", kind, err)
@@ -174,9 +182,11 @@ func (e *Engine) forgetRemoved(
 	return nil
 }
 
-// dropBlock runs the third-party app step and then removes the block, in that order.
+// dropBlock runs the third-party app step and then removes the block, in that
+// order, recording the removal as by's.
 func (e *Engine) dropBlock(
-	ctx context.Context, kind integration.Kind, vendor func(context.Context) error,
+	ctx context.Context, kind integration.Kind, by iam.Actor,
+	vendor func(context.Context) error,
 ) error {
 	// BOTH PRECONDITIONS BEFORE THE VENDOR IS TOUCHED. Each is a thing
 	// THIS NODE lacks rather than anything wrong with the surface, so each
@@ -233,7 +243,7 @@ func (e *Engine) dropBlock(
 		return fmt.Errorf("engine: %s teardown: %w", kind, err)
 	}
 	patch := []byte(`{"integrations":{"` + string(kind) + `":null}}`)
-	if err := writer.Apply(ctx, patch, "disconnect "+string(kind), "reconcile loop"); err != nil {
+	if err := writer.Apply(ctx, patch, "disconnect "+string(kind), by); err != nil {
 		// The third-party app work IS done and is durable, so a retry re-runs a
 		// teardown with nothing left to remove and then tries the block
 		// again. That is why every teardown is safe to repeat.
@@ -373,5 +383,5 @@ func (e *Engine) editGitHubSeat(
 	if err != nil {
 		return fmt.Errorf("engine: encode the seat %s: %w", handle, err)
 	}
-	return (*writer).SetSeat(ctx, handle, updated, summary, "reconcile loop")
+	return (*writer).SetSeat(ctx, handle, updated, summary, loopActor())
 }

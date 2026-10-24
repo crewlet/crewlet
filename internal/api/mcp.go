@@ -76,52 +76,51 @@ func BridgeOnly(bootstrap *config.Bootstrap, bridge *mcpbridge.Bridge) http.Hand
 	}
 	mux := http.NewServeMux()
 	mountBridge(mux, bridge)
-	return pagepolicy.Apply(auth.New(bootstrap).Middleware(httpjson.Mux(mux)))
+	// NO CSRF GATE HERE, and it is not an omission: this listener serves
+	// one route, the tool bridge, whose credential is a signed token in
+	// its own path rather than anything a browser attaches — so there is
+	// no cross-site request for a check to refuse. A box running generated
+	// code is not a browser and has no origin to send.
+	//
+	// THE PUBLIC LISTENER'S SCHEME, since that is the socket this binds on
+	// ([servedOverHTTPS]) — never api.port's, which is another address.
+	return pagepolicy.Apply(auth.New(bootstrap).Middleware(httpjson.Mux(mux)),
+		servedOverHTTPS(bootstrap, true))
 }
 
-// mountOperator registers the operator surface's two transports, each serving
-// the catalogue the surface answers at the request — see [OperatorSurface].
+// mountOperator registers the operator surface's two transports — MCP for an
+// operator's own assistant and the act route for a person at the dashboard —
+// over the one dispatch.
 //
-// MOUNTED ON EVERY APP, from the one fact known at assembly — an engine is
-// beside it — rather than from a catalogue built then: the tools a node serves
-// appear with its native runtime, which can be built after this runs. The
-// lines logged here therefore name the paths and no tool; the catalogue logs
-// its tools where it is built (`operator_surface_built`).
-func (a *App) mountOperator(mux httpjson.Router, surface OperatorSurface) {
+// A nil server is a surface this API serves none of — a suite about something
+// else — and both routes are then ABSENT. Otherwise each is mounted ONCE and
+// every request reads the catalogue this node serves at that moment: a node
+// that has not met its company answers `503 no_active_revision`, and one whose
+// catalogue is empty answers as the route's absence would — an endpoint that
+// exists and lists no tools reads to an operator as broken. The lines logged
+// here therefore name the paths and no tool.
+func (a *App) mountOperator(mux httpjson.Router, server *operator.Server) {
+	if server == nil {
+		return
+	}
 	// POST ONLY, unlike the bridge, which takes every verb: this transport
 	// keeps no session, so it offers no server-to-client stream for a GET to
 	// open and no session for a DELETE to end, and the mux's own 405 naming
-	// POST is how streamable HTTP says so — see operator.MCPPattern.
-	mux.Handle(operator.MCPPattern, operatorRoute(surface, (*operator.Server).MCPHandler))
+	// POST is how streamable HTTP says so — see operator.MCPPattern. A
+	// listening client's stream is a POST of its own.
+	mux.Handle(operator.MCPPattern, server.MCPHandler())
 	log.Info("operator_mcp_mounted", "path", operator.MCPPath,
 		"detail", "an operator's own AI assistant can read and write the "+
 			"company's tracker and knowledge base here, authenticated with "+
-			"an api.auth.tokens entry")
-	// AND THE PERSON'S OWN TRANSPORT over the same catalogue: POST only,
-	// one tool per request, admitting a token bound to a seat and nobody
-	// else (ADR-0024). Under the same always-guarded prefix, so the guard in
-	// front of it is the one in front of /operator/mcp.
-	mux.Handle(operator.ActPattern, operatorRoute(surface, (*operator.Server).ActHandler))
+			"an api.auth.tokens entry or a person's own credential; the tools "+
+			"it lists are the ones this node serves when it asks")
+	// AND THE PERSON'S OWN TRANSPORT over the same catalogue: POST only, one
+	// tool per request, as the principal the request resolved to
+	// (ADR-0024). Guarded like every route the exemption list does not
+	// name, and refused by the drain gate like every other write.
+	mux.Handle(operator.ActPattern, server.ActHandler())
 	log.Info("operator_act_mounted", "path", operator.ActPathPrefix+"{tool}",
-		"detail", "the dashboard writes here as the person the presented "+
-			"token is bound to by contact.crewlet_operator_id")
-}
-
-// operatorRoute serves one transport of the catalogue surface answers at this
-// request, or the mux's own 404 where it answers none.
-//
-// ONE RESOLUTION, AT THE TOP, so the request is served by one catalogue from
-// its first byte to its last whatever the surface answers meanwhile; and the
-// 404 is byte for byte the one a route this node does not serve answers
-// ([httpjson.NoRoute]), since to the caller it is the same fact.
-func operatorRoute(surface OperatorSurface,
-	transport func(*operator.Server) http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		server, ok := surface.Operator()
-		if !ok {
-			httpjson.NoRoute(w, r)
-			return
-		}
-		transport(server).ServeHTTP(w, r)
-	})
+		"detail", "the dashboard writes here as the principal its session "+
+			"or token resolves to, one catalogue tool per request, under the "+
+			"Idempotency-Key it names")
 }

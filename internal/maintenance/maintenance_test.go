@@ -799,7 +799,14 @@ func (l *opsLedger) PurgeOps(context.Context, time.Time) (int64, error) {
 	return l.rows, l.err
 }
 
-// THE OPERATION-LEDGER SWEEP IS ONE NODE-LOCAL JOB PER LEDGER.
+func (l *opsLedger) PurgeOpsOfKind(context.Context, string, time.Time) (int64, error) {
+	return 0, nil
+}
+
+func (l *opsLedger) PurgeAnchors(context.Context) (int64, error) { return 0, nil }
+
+// THE OPERATION-LEDGER SWEEP IS ONE NODE-LOCAL JOB PER LEDGER, beside its
+// anchor sweep.
 //
 // Each node owns its own copy of every ledger, so a job swept under the fleet
 // singleton would tidy one node's and let the rest grow for ever. Each job is
@@ -810,29 +817,35 @@ func TestTheOpsSweepIsOneNodeLocalJobPerLedger(t *testing.T) {
 	t.Parallel()
 	tracker := &opsLedger{rows: 2}
 	pages := &opsLedger{rows: 5, err: errors.New("the file is gone")}
-	horizon := maintenance.Fixed(30 * 24 * time.Hour)
-	jobs := maintenance.StatelogJobs(map[string]maintenance.OpsLedger{
-		"tracker": tracker, "pages": pages,
-	}, horizon)
+	const retention = 30 * 24 * time.Hour
+	jobs := maintenance.StatelogJobs(map[string]maintenance.OpsHorizon{
+		"tracker": {Ledger: tracker, Retention: retention},
+		"pages":   {Ledger: pages, Retention: retention},
+	})
 
 	var names []string
+	ops := map[string]maintenance.Job{}
 	for _, j := range jobs {
 		names = append(names, j.Name)
 		if j.Scope != maintenance.NodeLocal {
 			t.Errorf("%s has scope %q; each node owns its own ledgers", j.Name, j.Scope)
 		}
-		if j.Horizon == nil || j.Horizon() != horizon() {
+		if !strings.HasSuffix(j.Name, "_ops") {
+			continue
+		}
+		ops[j.Name] = j
+		if j.Horizon == nil || j.Horizon() != retention {
 			t.Errorf("%s keeps rows for %v, want the ledgers' retention %v",
-				j.Name, j.Horizon, horizon())
+				j.Name, j.Horizon, retention)
 		}
 	}
-	if !slices.Equal(names, []string{"pages_ops", "tracker_ops"}) {
-		t.Fatalf("the sweep's jobs are %v, want one per ledger in name order", names)
+	if !slices.Equal(names, []string{"pages_ops", "pages_anchors", "tracker_ops", "tracker_anchors"}) {
+		t.Fatalf("the sweep's jobs are %v, want each ledger's pair in name order", names)
 	}
-	if n, err := jobs[1].Run(t.Context(), base, base); err != nil || n != 2 {
+	if n, err := ops["tracker_ops"].Run(t.Context(), base, base); err != nil || n != 2 {
 		t.Errorf("the tracker sweep swept %d (%v), want its ledger's 2", n, err)
 	}
-	if n, err := jobs[0].Run(t.Context(), base, base); n != 5 ||
+	if n, err := ops["pages_ops"].Run(t.Context(), base, base); n != 5 ||
 		err == nil || !strings.Contains(err.Error(), "the file is gone") {
 		t.Errorf("the pages sweep swept %d (%v), want its ledger's 5 and its failure", n, err)
 	}

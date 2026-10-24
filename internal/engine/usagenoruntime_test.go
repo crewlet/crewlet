@@ -4,7 +4,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
@@ -54,6 +57,13 @@ func TestADataNodeWithNoRuntimeAnswersItsUsageReads(t *testing.T) {
 
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Usage: u})
+	// ASKED AS A CREDENTIAL THAT MAY ASK BOTH, so a refusal here can only be
+	// the one this case is about — the estate answering unserved — and never
+	// the caller's authority.
+	asker := iam.WithPrincipal(ctx, iam.Principal{
+		ID: uuid.New(), Login: iam.TokenLogin("test"), Kind: iam.KindMachine,
+		Stage: iam.StageActive, Grants: iam.AllGrants,
+	})
 	for _, q := range []struct {
 		what   string
 		params map[string]any
@@ -61,7 +71,7 @@ func TestADataNodeWithNoRuntimeAnswersItsUsageReads(t *testing.T) {
 		{"token_series", map[string]any{"days": 7}},
 		{"page_reads", map[string]any{"page": "p-1"}},
 	} {
-		if _, err := r.Answer(ctx, q.what, q.params, ""); err != nil {
+		if _, err := r.Answer(asker, q.what, q.params); err != nil {
 			t.Errorf("%s on a data node with no runtime: %v — want an answer, not a refusal",
 				q.what, err)
 		}

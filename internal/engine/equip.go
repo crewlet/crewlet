@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"github.com/google/uuid"
+
 	"context"
 	"fmt"
 
@@ -25,7 +27,9 @@ import (
 // published, never mutated, so each new one gets a new
 // registry — and a node that equipped only its first epoch would serve a
 // company whose agents lost every builtin at the first config change, with
-// nothing failing.
+// nothing failing. (The registry's shared MCP tools are the one part refiled
+// after it is published, by the shared bridge's own supervision; the builtins
+// never are. See mcpsupervise.go.)
 
 // equip registers the node-backed builtins into an epoch.
 //
@@ -86,13 +90,23 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	if e.skills != nil {
 		deps.ToolSkills = e.skills
 	}
+	// THE AUTHORITY DECISION, over the chart READ PER CALL for the reason
+	// the lead seam below is: a seat's tools are cloned into its lease and
+	// an apply does not rebuild the clone, so a decision holding this
+	// epoch's chart would refuse a seat its own work the moment somebody
+	// reorganised. [ChartAuthorityOf] holds the engine and asks it each
+	// time, three-valued.
+	deps.Authorize = builtin.Decide(ChartAuthorityOf(e))
 	deps.Work = e.workDeps(c)
-	// THE PROJECT-LEAD SEAM, read PER CALL against the epoch current when
-	// the tool runs rather than against this one: a seat's tools are
-	// cloned into its lease, an apply does not rebuild the clone, and a
-	// captured chart would grant or refuse against an org that has moved.
-	deps.LeadsProject = LeadsProjectOf(e)
 	deps.Pages = e.pageDeps(c)
+	// THE ARTIFACTS TOOLS, over the same deps the operator catalogue is
+	// handed: every data node runs the artifacts domain, so these depend on
+	// the node taking uploads rather than on the company's native halves.
+	deps.Artifacts = ArtifactToolDeps(e)
+	// AND THE DATASTORE'S, beside them: the data tools act through the
+	// artifacts half and add only the datastore, the turn guardrail and
+	// the presence hub.
+	deps.ArtifactData = ArtifactDataToolDeps(e)
 	if _, err := builtin.Register(c.Tools, deps); err != nil {
 		return err
 	}
@@ -100,7 +114,8 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// the builtins, because this is the surface every seat's is cloned
 	// from. Per-role children are NOT here: they belong to a seat's lease
 	// rather than to the epoch, and this node holds only some of the
-	// company's seats — see mcp.go.
+	// company's seats, so they are reconciled seat by seat once this epoch
+	// is current — see seatservers.go.
 	//
 	// A server that will not start does not fail the apply. It costs that
 	// server's tools; refusing the epoch over it would take a working
@@ -203,11 +218,15 @@ func (e *Engine) a2aService(c *Company) *a2a.Service {
 //
 // AGENT seats only, which is the whole question it exists to answer: a human
 // seat is addressable and never spawned, so a channel opened to one is a
-// channel no turn will ever answer.
+// channel no turn will ever answer. The id it returns is the one derived from
+// the seat's handle (ADR-0013), resolved through the org's own lookup.
 type agentSeats struct{ org *org.Organization }
 
-func (d agentSeats) IsAgentSeat(handle string) bool {
-	return d.org != nil && d.org.AgentSeatByHandle(handle) != nil
+func (d agentSeats) SeatInbox(handle string) (uuid.UUID, bool) {
+	if d.org == nil {
+		return uuid.Nil, false
+	}
+	return d.org.AgentIDFor(d.org.AgentSeatByHandle(handle))
 }
 
 // markers is the onboarding marker store, or nil on a node with none.

@@ -56,6 +56,19 @@ type client struct {
 	mu      sync.RWMutex
 	session *sdk.ClientSession
 	running bool
+
+	// end is closed the first time anything shows that the session can carry
+	// no more calls — its read side failed, a write to a stdio child failed,
+	// or the child exited — and endCause says which. Written once, before
+	// the close, so a reader that saw end closed reads the cause unlocked.
+	//
+	// SEEN AT THE TRANSPORT, not inferred from a failed call: a call can fail
+	// for a hundred reasons a live server gives, and the one question the
+	// bridge's supervisor and a refused call both need answered — is this
+	// session over? — has an exact answer only down there. See supervise.go.
+	end      chan struct{}
+	endOnce  sync.Once
+	endCause string
 }
 
 // connect starts (or reaches) a server and completes the MCP handshake.
@@ -74,7 +87,7 @@ func connect(ctx context.Context, spec Spec, log *slog.Logger) (*client, error) 
 		log = logging.Get("mcp.client")
 	}
 
-	c := &client{name: spec.Name, spec: spec, log: log, hints: newHintTable()}
+	c := &client{name: spec.Name, spec: spec, log: log, hints: newHintTable(), end: make(chan struct{})}
 
 	var (
 		transport sdk.Transport
@@ -90,6 +103,7 @@ func connect(ctx context.Context, spec Spec, log *slog.Logger) (*client, error) 
 		if err != nil {
 			return nil, err
 		}
+		c.child.ended, c.child.over = c.markEnded, c.gone
 		log.InfoContext(ctx, "server_starting", "server", spec.Name,
 			"command", spec.Command, "args", spec.Args)
 	}
@@ -98,7 +112,7 @@ func connect(ctx context.Context, spec Spec, log *slog.Logger) (*client, error) 
 	// server serialized it. Without it two of the four behavioural hints
 	// arrive flattened and every unannotated tool reads as a shared-surface
 	// write. See probe.go.
-	probed := &probeTransport{inner: transport, hints: c.hints, log: log}
+	probed := &probeTransport{inner: transport, hints: c.hints, log: log, ended: c.markEnded}
 
 	sdkClient := sdk.NewClient(
 		&sdk.Implementation{Name: "crewlet", Version: version.String()},
@@ -113,7 +127,7 @@ func connect(ctx context.Context, spec Spec, log *slog.Logger) (*client, error) 
 		c.reportStartFailure(err)
 		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 			return nil, fmt.Errorf(
-				"mcp: server %q did not connect within %s: %w. Raise startup_timeout on the server if it legitimately takes longer to start",
+				"mcp: server %q did not connect within %s: %w. Raise startup_timeout_seconds on the server if it legitimately takes longer to start",
 				spec.Name, spec.startupTimeout(), err)
 		}
 		return nil, fmt.Errorf("mcp: server %q failed to connect: %w", spec.Name, err)
@@ -190,6 +204,48 @@ func (c *client) isRunning() bool {
 	return c.running
 }
 
+// markEnded records that the session can carry no more calls, and why. The
+// first cause is kept: it is the one closest to what happened.
+func (c *client) markEnded(cause string) {
+	c.endOnce.Do(func() {
+		c.endCause = cause
+		close(c.end)
+	})
+}
+
+// ended is closed once the session can carry no more calls.
+func (c *client) ended() <-chan struct{} { return c.end }
+
+// gone reports whether the session has ended.
+func (c *client) gone() bool {
+	select {
+	case <-c.end:
+		return true
+	default:
+		return false
+	}
+}
+
+// deathStory says how the session ended, for a log line, a refusal and the
+// heartbeat: the child's exit status once it has been reaped — the most
+// useful thing an operator can be told — and otherwise the first sign the
+// transport saw. Empty while the session is live.
+//
+// ONLY AN EXIT OF THE CHILD'S OWN is its story. A child that hung up its
+// output and went on running is ended by the engine's cleanup closing its
+// stdin, and the status that exit leaves — usually a clean 0 — is the
+// engine's doing; told as the story, it would send an operator looking for
+// why a server quit when what it did was stop answering.
+func (c *client) deathStory() string {
+	if !c.gone() {
+		return ""
+	}
+	if c.child != nil && c.child.hasExited() && c.child.ownExit {
+		return "its process exited (" + exitStory(c.child.waitErr) + ")"
+	}
+	return c.endCause
+}
+
 // listTools walks the whole listing, following pagination.
 //
 // It answers to the STARTUP budget rather than the per-call one: discovery is
@@ -213,7 +269,8 @@ func (c *client) listTools(ctx context.Context) ([]toolDef, error) {
 		res, err := session.ListTools(listCtx, params)
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-				return nil, fmt.Errorf("mcp: server %q did not answer tool discovery within %s: %w",
+				return nil, fmt.Errorf("mcp: server %q did not answer tool discovery within %s: %w. "+
+					"Raise startup_timeout_seconds on the server if it legitimately takes longer to list its tools",
 					c.name, c.spec.startupTimeout(), err)
 			}
 			return nil, fmt.Errorf("mcp: server %q tool discovery: %w", c.name, err)
@@ -304,6 +361,35 @@ func (c *client) callTool(ctx context.Context, name string, args map[string]any)
 //
 // Idempotent, and safe to call on a client that never started.
 func (c *client) stop(ctx context.Context) error {
+	wasRunning, closeErr := c.close(ctx)
+	if wasRunning {
+		c.log.Info("server_stopped", "server", c.name)
+	}
+
+	// A child that exited non-zero, or that had to be signalled because it
+	// ignored SIGTERM, is a COMPLETED shutdown with a story — the ladder did
+	// its job and the process is gone. Reporting it as an error would make
+	// every drain of such a server look like a failure an operator must act
+	// on, and the one thing a caller actually branches on here is "is it still
+	// running", which it is not.
+	var exitErr *exec.ExitError
+	if closeErr != nil && errors.As(closeErr, &exitErr) {
+		c.log.Info("server_stopped_with_exit_status",
+			"server", c.name, "reason", closeErr.Error())
+		return nil //nolint:nilerr // a signalled child IS a completed shutdown
+	}
+	if closeErr != nil {
+		return fmt.Errorf("mcp: server %q close: %w", c.name, closeErr)
+	}
+	return nil
+}
+
+// close is stop without its log lines, for the supervisor clearing away a
+// session that already died — which it reports in one line of its own, with
+// the exit status and the child's last words, rather than as a stop nobody
+// asked for. It reports whether the session was running and what closing it
+// returned.
+func (c *client) close(ctx context.Context) (bool, error) {
 	c.mu.Lock()
 	session, wasRunning := c.session, c.running
 	c.session, c.running = nil, false
@@ -332,27 +418,7 @@ func (c *client) stop(ctx context.Context) error {
 		}
 	}
 	c.reapChild(cleanClose)
-
-	if wasRunning {
-		c.log.Info("server_stopped", "server", c.name)
-	}
-
-	// A child that exited non-zero, or that had to be signalled because it
-	// ignored SIGTERM, is a COMPLETED shutdown with a story — the ladder did
-	// its job and the process is gone. Reporting it as an error would make
-	// every drain of such a server look like a failure an operator must act
-	// on, and the one thing a caller actually branches on here is "is it still
-	// running", which it is not.
-	var exitErr *exec.ExitError
-	if closeErr != nil && errors.As(closeErr, &exitErr) {
-		c.log.Info("server_stopped_with_exit_status",
-			"server", c.name, "reason", closeErr.Error())
-		return nil //nolint:nilerr // a signalled child IS a completed shutdown
-	}
-	if closeErr != nil {
-		return fmt.Errorf("mcp: server %q close: %w", c.name, closeErr)
-	}
-	return nil
+	return wasRunning, closeErr
 }
 
 // reapChild ends the process TREE, not just the process.

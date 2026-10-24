@@ -1,13 +1,16 @@
 package statelog
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"os"
+	"slices"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -232,15 +235,43 @@ type DonorDeps struct {
 	// Path answers where an artefact's bytes are, given its manifest.
 	Path func(Manifest) string
 
+	// MaxTransfers bounds how many fetches this node streams at once.
+	// Zero takes [DefaultMaxTransfers].
+	//
+	// A BOUND RATHER THAN A QUEUE. Each transfer is a goroutine holding an
+	// open file and a credit window of chunks in flight, and the fetch
+	// subject is a fan-in every joiner in the fleet can reach at once — so
+	// with no bound, a fleet that restarts together spawns one goroutine
+	// per joiner on whichever node answered first. What is over the bound
+	// is TERMINATED with a reason rather than queued, because a joiner
+	// that is told no immediately asks the next donor, and one left
+	// waiting on a queue it cannot see spends its whole window on a node
+	// that was never going to answer.
+	MaxTransfers int
+
 	// Logger is where this writes. Nil is the package's own component
 	// logger, never silence: see loggerOr for what silence cost.
 	Logger *slog.Logger
 }
 
+// DefaultMaxTransfers is how many artefacts one node streams at once.
+//
+// FOUR, which is a disk rather than a network number: a transfer is a
+// sequential read of one large file, and a node serving four is already
+// seeking between four. It is deliberately not derived from GOMAXPROCS — the
+// cost being bounded here is the donor's disk and the joiners' patience, and
+// neither scales with this node's cores.
+const DefaultMaxTransfers = 4
+
 // Donor answers offer requests and streams its artefact.
 type Donor struct {
 	deps DonorDeps
 	log  *slog.Logger
+
+	// transfers admits at most [DonorDeps.MaxTransfers] concurrent
+	// streams. Buffered, and a send that cannot proceed is refused rather
+	// than waited on — see [DonorDeps.MaxTransfers].
+	transfers chan struct{}
 
 	// serving is whether the server has confirmed [Donor.Serve] is
 	// listening — see [Donor.Serving].
@@ -258,19 +289,80 @@ func NewDonor(d DonorDeps) (*Donor, error) {
 		return nil, fmt.Errorf("statelog: a donor has nothing to offer")
 	}
 	logger := loggerOr(d.Logger)
-	return &Donor{deps: d, log: logger}, nil
+	limit := d.MaxTransfers
+	if limit <= 0 {
+		limit = DefaultMaxTransfers
+	}
+	return &Donor{deps: d, log: logger, transfers: make(chan struct{}, limit)}, nil
+}
+
+// admissionRefused tells a joiner this donor is full, so it asks the next one.
+func (d *Donor) admissionRefused(nc *nats.Conn, msg *nats.Msg) {
+	deliver := string(msg.Data)
+	if deliver == "" {
+		// Nowhere to answer, as [Donor.stream] has nowhere either.
+		return
+	}
+	d.log.Info("statelog_donation_refused",
+		"node", d.deps.NodeID, "limit", cap(d.transfers),
+		"detail", "this node is already streaming as many artefacts as it will "+
+			"at once; the joiner was told so rather than queued, so it can ask "+
+			"another donor inside its own collection window")
+	// 429 AND NOT 503. A 503 status header is what the broker itself sends
+	// for "no responders", and the client turns one into [nats.ErrNoResponders]
+	// before a subscriber ever sees the description — so a donor refusing
+	// with 503 would reach the joiner as "nobody is listening", which is a
+	// different fact with a different remedy.
+	d.terminate(nc, deliver, 429,
+		fmt.Sprintf("this donor is streaming %d artefact(s) already, which is its "+
+			"limit; ask another node", cap(d.transfers)))
 }
 
 // FetchSubject is where this donor streams from.
 func (d *Donor) FetchSubject() string { return SubjectFetchPrefix + d.deps.NodeID }
 
-// Serve answers offer requests and fetches until the context ends.
+// ErrDonorConnectionClosed is what [Donor.Serve] returns when the connection it
+// was serving over was closed under it, which NATS does for good — no further
+// reconnect — on an error it does not retry. The donor had subscribed, whether
+// or not the server had confirmed it yet ([Donor.Serving]), so the caller's
+// answer is to dial again rather than to wait out a failure.
+var ErrDonorConnectionClosed = errors.New("statelog: the donor's connection was closed")
+
+// Serve answers offer requests and fetches until the context ends, or until
+// the connection it dialled is closed under it ([ErrDonorConnectionClosed]).
+//
+// # Why it returns rather than waiting on the context alone
+//
+// It used to block on the context and nothing else, so a connection the NATS
+// client closed for good — a server that refused a chunk past a max_payload
+// lowered under it, credentials it stopped accepting — left this donor
+// subscribed to nothing for the rest of the node's life while it went on
+// advertising an artefact through the snapshot register. The node ran on, as
+// it should: a donor serves peers, and its loss is not the node's
+// (see the engine's donor loop, which dials again). What has to happen is that
+// someone notices, and only the connection's owner can.
 func (d *Donor) Serve(ctx context.Context) error {
 	nc, err := d.deps.Dial(ctx)
 	if err != nil {
 		return fmt.Errorf("statelog: open the donor's connection: %w", err)
 	}
 	defer nc.Close()
+	// BEFORE THE SUBSCRIPTIONS, so no close goes unheard: a status
+	// listener hears only the changes after it, and a connection closed
+	// before it is one the client refuses to subscribe on
+	// ([nats.ErrConnectionClosed]), which ends Serve below as a setup that
+	// failed.
+	//
+	// AND THAT IS THE ONLY WAY a connection that arrived closed is told,
+	// never as [ErrDonorConnectionClosed]: that error says the donor HAD
+	// subscribed, which the engine's loop answers as a new outage — a
+	// redial from its base a second later, logged every time — so a
+	// connection that arrived closed on every redial, called a close, would
+	// be redialled once a second with a line each time for as long as it
+	// went on. Arriving closed is a dial that gave the donor nothing, and
+	// it is redialled as a refused dial is, on the doubling wait.
+	closed := nc.StatusChanged(nats.CLOSED)
+	defer nc.RemoveStatusListener(closed)
 
 	offers, err := nc.Subscribe(SubjectOffer, func(msg *nats.Msg) {
 		d.answerOffer(ctx, msg)
@@ -281,7 +373,19 @@ func (d *Donor) Serve(ctx context.Context) error {
 	defer func() { _ = offers.Unsubscribe() }()
 
 	fetches, err := nc.Subscribe(d.FetchSubject(), func(msg *nats.Msg) {
-		go d.stream(ctx, nc, msg)
+		select {
+		case d.transfers <- struct{}{}:
+			go func() {
+				defer func() { <-d.transfers }()
+				d.stream(ctx, nc, msg)
+			}()
+		default:
+			// REFUSED NOW, NAMING THE REASON. A joiner told no asks
+			// the next donor; one left on a queue it cannot see
+			// spends its whole collection window on a node that was
+			// never going to answer it.
+			d.admissionRefused(nc, msg)
+		}
 	})
 	if err != nil {
 		return fmt.Errorf("statelog: listen for fetches: %w", err)
@@ -299,8 +403,21 @@ func (d *Donor) Serve(ctx context.Context) error {
 		return err
 	}
 	d.serving.Store(true)
-	<-ctx.Done()
-	return ctx.Err()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-closed:
+		return donorConnectionClosed(nc)
+	}
+}
+
+// donorConnectionClosed is [ErrDonorConnectionClosed] carrying what the client
+// last saw on the connection, which is why the server closed it.
+func donorConnectionClosed(nc *nats.Conn) error {
+	if last := nc.LastError(); last != nil {
+		return fmt.Errorf("%w: %w", ErrDonorConnectionClosed, last)
+	}
+	return ErrDonorConnectionClosed
 }
 
 // confirmListening returns once the server has acknowledged everything nc has
@@ -336,8 +453,13 @@ func (d *Donor) confirmListening(ctx context.Context, nc *nats.Conn) error {
 		case ctx.Err() != nil:
 			return ctx.Err()
 		case nc.IsClosed():
-			return fmt.Errorf("statelog: the donor's connection closed before the "+
-				"server confirmed its subscriptions: %w", err)
+			// CLOSED UNDER A DONOR THAT HAD SUBSCRIBED, and so
+			// [ErrDonorConnectionClosed] — a new outage its loop redials
+			// promptly — never the dial that gave it nothing, which a
+			// connection that arrived closed is: that one is refused
+			// at Subscribe, before anything here runs.
+			return fmt.Errorf("statelog: the server had not confirmed the "+
+				"donor's subscriptions (%v): %w", err, donorConnectionClosed(nc))
 		}
 		// SAID ONCE, not at every attempt: a broker that does not answer
 		// for minutes is reported by everything else that talks to it.
@@ -525,6 +647,16 @@ func (d *Donor) terminate(nc *nats.Conn, deliver string, status int, detail stri
 // first reply is the fastest peer rather than the best artefact — and newer is
 // strictly better, since the only thing an older one buys is a longer replay.
 //
+// # Spread across equally good donors
+//
+// Ordering by the artefact alone makes every joiner in a fleet rank the same
+// offers the same way, so a fleet that restarts together sends every one of
+// them at the same node — which then refuses all but a few
+// ([DonorDeps.MaxTransfers]), and the rest spend a round asking again. Offers
+// that are equally good are shuffled among themselves first ([rankOffers]), so
+// the ordering is still "best artefact first" and the choice among the best is
+// this joiner's own.
+//
 // # Unless every donor it expects has answered
 //
 // expect names every donor that can answer — the engine names the live data
@@ -710,16 +842,13 @@ func collectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window 
 		}
 		take(msg)
 	}
-	// NEWEST FIRST, so a caller's own refusals run against the best
-	// artefact before the worse ones.
-	for i := range out {
-		for j := i + 1; j < len(out); j++ {
-			if out[j].Newest() > out[i].Newest() {
-				out[i], out[j] = out[j], out[i]
-			}
-		}
+	// THE WINDOW CLOSING IS HOW A COLLECTION ENDS; the caller's own
+	// cancellation is not, and it is answered as itself rather than with
+	// whatever arrived before it.
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("statelog: collect offers: %w", err)
 	}
-	return out, nil
+	return rankOffers(out, rand.Uint64()), nil
 }
 
 // FetchArtefact streams an offer's bytes to dest and returns what it wrote.
@@ -910,4 +1039,23 @@ func transferVerdict(msg *nats.Msg) error {
 	}
 	return fmt.Errorf("statelog: the donor abandoned the transfer (%s): %s",
 		status, detail)
+}
+
+// rankOffers puts the best artefact first and spreads the choice among equals
+// — see [CollectOffers].
+//
+// THE SEED IS A PARAMETER so a case can assert the spread rather than observe
+// it: a shuffle nobody can reproduce is a shuffle nobody can test. The
+// collection hands it a fresh one per join.
+//
+// The shuffle runs BEFORE the sort and the sort is stable, so the order among
+// offers at one position is this joiner's own while the order between
+// positions is exact. Sorting first and shuffling after would undo the sort.
+func rankOffers(offers []Offer, seed uint64) []Offer {
+	spread := rand.New(rand.NewPCG(seed, 0))
+	spread.Shuffle(len(offers), func(i, j int) { offers[i], offers[j] = offers[j], offers[i] })
+	slices.SortStableFunc(offers, func(a, b Offer) int {
+		return cmp.Compare(b.Newest(), a.Newest())
+	})
+	return offers
 }

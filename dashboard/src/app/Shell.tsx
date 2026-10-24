@@ -14,8 +14,12 @@
  * `routes.ts`, what the trail says is `crumbs.ts`, which workspaces and
  * sections exist is `nav.ts`, and what the sidebar shows is `sidebar/`. This
  * file wires them together and owns exactly the things nothing else can: the
- * palette, the token dialog, the page context a screen describes itself
- * through, and the peek column.
+ * palette, the watch on the viewer's own inbox, the strip that reports a
+ * degraded connection, the page context a screen describes itself through,
+ * and the peek column. Who is signed in is the sidebar's user block
+ * (`sidebar/UserBlock.tsx`), and signing in is a screen outside the frame
+ * (`App.tsx`): the frame holds no credential and asks for none, because the
+ * browser's only credential is the session cookie the engine set.
  *
  * # The peek is a column of the sheet
  *
@@ -45,32 +49,47 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { AppShell } from "@crewlethq/ui";
-import { DESTINATIONS, WORKSPACES, workspaceOf, workspaceRow } from "./nav.ts";
+import { Announcer, AppShell, useMediaMatch } from "@crewlethq/ui";
+import {
+  DESTINATIONS,
+  WORKSPACES,
+  landingPath,
+  serviceShown,
+  workspaceOf,
+  workspaceRow,
+} from "./nav.ts";
+import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
 import { samePath, useNavigator, useRoute } from "./router.tsx";
 import { crumbsFor, titleOf, type Labels } from "./crumbs.ts";
 import { remember } from "~/lib/recents.ts";
 import { SCREEN_SCROLL_ID } from "~/lib/scroller.ts";
-import { CommandPalette } from "./palette/Palette.tsx";
-import { ColumnBoundary, LayerBoundary } from "./boundaries.tsx";
+import { LayerBoundary } from "./boundaries.tsx";
 import { NewTaskOpener, type NewTaskPreset } from "./newTask.ts";
 import { lazyScreen } from "./lazyScreen.ts";
-import { TokenDialog } from "./TokenDialog.tsx";
 import { Sidebar } from "./sidebar/Sidebar.tsx";
 import { useSettingsSidebar } from "./sidebar/settingsFigures.tsx";
 import { PageHeader, SectionColumn, type PageMenuEntry } from "./header/PageHeader.tsx";
+import { ProjectSwitcherProvider } from "./header/ProjectSwitcher.tsx";
+import { scopeAt } from "./scope.ts";
 import { PeekHost, PeekNeighbours } from "./frame/PeekHost.tsx";
 import { usePeek } from "./frame/DetailRail.tsx";
 import { peekable } from "./frame/peeks.tsx";
 import { StateBar, degradationOf } from "./frame/StateBar.tsx";
 import { useClient, useConnection, useEngineHealth } from "~/lib/store-hooks.ts";
-import { ViewerProvider, useViewer } from "~/lib/viewer.ts";
+import { ViewerProvider, useHeldGrants, useViewer } from "~/lib/viewer.ts";
+import { SessionReading, useFrameSession } from "~/lib/frameSession.ts";
 import { InboxCountsProvider } from "~/lib/useInboxCounts.ts";
 import { QueueCountProvider } from "~/lib/useQueueCount.ts";
 import { useViewerPrefs } from "~/lib/prefs.ts";
-import { useMediaQuery } from "~/lib/media.ts";
-import { PEEK_WIDTH, columnWidth, densityScale, listReserve, peekColumnMin } from "./layout.ts";
-import { onTokenRequested } from "~/protocol/index.ts";
+import {
+  PEEK_WIDTH,
+  SECTION_COLUMN_MIN,
+  columnWidth,
+  densityScale,
+  listReserve,
+  peekColumnMin,
+} from "./layout.ts";
+import { goSignIn } from "~/lib/session.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
 import type { FleetAnswer } from "~/protocol/index.ts";
 import { useKeymap } from "./keymap.ts";
@@ -78,6 +97,7 @@ import { runningTarget } from "~/lib/turns.ts";
 import { focusSearchTarget } from "./searchTarget.ts";
 import { KeyLegend } from "./KeyLegend.tsx";
 import { FillRequest } from "./fill.tsx";
+import { OwnHeaderRequest, OwnHeaderSlot } from "./frame/OwnHeader.tsx";
 import { PeekRestingWidth, PeekWidthRequest } from "./frame/peekWidth.ts";
 
 /**
@@ -101,6 +121,8 @@ export interface PageContext {
   setShowWorking: (show: boolean) => void;
   setMenu: (entries: PageMenuEntry[]) => void;
   setFleet: (fleet: PublishedFleet | null) => void;
+  /** The screen's design keeps the star in its own menu, not the bar ([useOwnStar]). */
+  setOwnStar: (own: boolean) => void;
 }
 
 /**
@@ -121,6 +143,7 @@ const noop: PageContext = {
   setShowWorking: () => {},
   setMenu: () => {},
   setFleet: () => {},
+  setOwnStar: () => {},
 };
 
 const PageContextValue = createContext<PageContext>(noop);
@@ -288,6 +311,23 @@ export function usePageMenu(entries: readonly PageMenuEntry[]): void {
 }
 
 /**
+ * Say that this screen's own menu carries the page's star, so the frame draws
+ * none: one control per action on screen, and a screen whose design keeps the
+ * star with its other page actions (Knowledge's page) would otherwise show it
+ * twice. Knowledge's landing says the same, because its design keeps the star
+ * in each page's own menu and none in its bar, where the frame's would offer
+ * the workspace the sidebar already lists. Cleared when the screen goes, for
+ * the reason [usePageLabels] gives.
+ */
+export function useOwnStar(): void {
+  const { setOwnStar } = usePageContext();
+  useEffect(() => {
+    setOwnStar(true);
+    return () => setOwnStar(false);
+  }, [setOwnStar]);
+}
+
+/**
  * What the frame reads ONCE for every surface in it: who this browser is,
  * how much is waiting on them, and how much open work is on them.
  *
@@ -312,11 +352,35 @@ export function FrameReadings({ children }: { children: ReactNode }) {
   );
 }
 
+/**
+ * The frame, and the one thing only the frame does: DIAL THE SOCKET.
+ *
+ * The socket is made at boot and lives for the tab (`main.tsx`), and it is
+ * dialled here because the frame is the one part of this dashboard that needs
+ * a session. Dialled at boot, every signed-out page — the sign-in, an
+ * invitation's, a reset link's — dialled `/ws/stream` once and read its
+ * refusal and the degraded-mode snapshot: three `401`s in the console of a page
+ * that needs nobody. A sign-in does not dial either: it lands here, and the
+ * frame dials for the session it reads.
+ *
+ * AND ONLY FOR SOMEBODY. The frame asks `GET /auth/session` first
+ * (`lib/frameSession.ts`): a `401` is nobody, which `rest.ts` turns into the
+ * sign-in the app follows, and nothing is dialled; any session is dialled,
+ * whatever access it holds, because the socket serves everybody the overview
+ * and decides each push by the reader's access; any other failure says
+ * nothing about a session, and the dial's own handshake decides.
+ */
 export function Shell({ children }: { children: ReactNode }) {
   return (
-    <FrameReadings>
-      <Frame>{children}</Frame>
-    </FrameReadings>
+    <SessionReading>
+      <FrameReadings>
+        {/* WORK'S SCOPE SWITCHER: the panel the trail's last crumb opens on
+            Work's pages, and the same panel centred for G then P anywhere. */}
+        <ProjectSwitcherProvider>
+          <Frame>{children}</Frame>
+        </ProjectSwitcherProvider>
+      </FrameReadings>
+    </SessionReading>
   );
 }
 
@@ -325,9 +389,33 @@ function Frame({ children }: { children: ReactNode }) {
   const peek = usePeek();
   const nav = useNavigator();
   const { socket, store } = useClient();
-  const { connected, authRejected } = useConnection();
+  const { connected, authRejected, accessRefused } = useConnection();
   const viewer = useViewer();
   const engine = useEngineHealth();
+  const session = useFrameSession();
+  // WHAT THE READER HOLDS — the frame's one reading (`useHeldGrants`), which
+  // Settings' column locks its sections by, as the sidebar locks its rows.
+  // Read off the viewer alone, the column drew no lock at all until the
+  // socket answered.
+  const held = useHeldGrants();
+
+  // DIAL FOR SOMEBODY — see [Shell] — when the session is first read. A read
+  // that failed on anything but a `401` says nothing about the session, and
+  // the handshake decides.
+  const serves = session.answer !== null;
+  const undecided =
+    session.answer === null && session.error !== null && session.error.status !== 401;
+  useEffect(() => {
+    if (serves || undecided) socket.start();
+  }, [serves, undecided, socket]);
+  // A REFUSAL THE SOCKET MET IS ASKED ABOUT AGAIN: a seat taken out of the
+  // chart closes an open socket, and the session read before it still names
+  // the seat — so the panel would say who the reader is from a reading the
+  // refusal has just made stale.
+  const { reload: readSessionAgain } = session;
+  useEffect(() => {
+    if (accessRefused !== null) void readSessionAgain();
+  }, [accessRefused, readSessionAgain]);
   // A ZONE OR A DATE FORMAT CHANGED IN THE PREFERENCES REPAINTS EVERY
   // TIMESTAMP. The formatters read the preference when they are called, so
   // the frame subscribes and re-renders; the screen is a child of this render
@@ -344,12 +432,11 @@ function Frame({ children }: { children: ReactNode }) {
   // AND ONE THAT ASKED FOR A NARROWER PEEK — a canvas, which the rail shrinks
   // rather than narrows. See `app/frame/peekWidth.ts`.
   const [restingPeek, setRestingPeek] = useState<number | null>(null);
-  const [tokenOpen, setTokenOpen] = useState(false);
   // THE NEW TASK SHEET, and what the door it was opened from knows. The frame
-  // holds it for the reason it holds the palette: four doors — the sidebar's
-  // head, the Projects group, a screen's page bar, a board lane — open ONE
-  // sheet, and a route change does not close it (the reader may have followed
-  // a link to check a name while filing).
+  // holds it for the reason it holds the palette: every door (a screen's page
+  // bar, a board lane, a seat's Message) opens ONE sheet, and a route change
+  // does not close it (the reader may have followed a link to check a name
+  // while filing).
   const [newTask, setNewTask] = useState<NewTaskPreset | null>(null);
   const openNewTask = useCallback((preset: NewTaskPreset = {}) => setNewTask(preset), []);
 
@@ -359,16 +446,30 @@ function Frame({ children }: { children: ReactNode }) {
   const [showWorking, setShowWorking] = useState(false);
   const [menu, setMenu] = useState<PageMenuEntry[]>([]);
   const [publishedFleet, setFleet] = useState<PublishedFleet | null>(null);
+  const [ownStar, setOwnStar] = useState(false);
+  // A SCREEN THAT DRAWS ITS OWN HEAD (an open artifact): the frame draws the
+  // slot it lands in instead of its bar. See `frame/OwnHeader.tsx`.
+  const [ownHeader, setOwnHeader] = useState(false);
+  const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
 
-  // The socket asks ONCE per refusal — a reconnect backoff must not reopen a
-  // dialog forever. Everything after that is the state bar.
+  // WATCH THE VIEWER'S OWN RECORD, which is what asks the engine for its
+  // `inbox_changed` frames. The shell owns it because the shell outlives every
+  // screen: a watch taken by the Inbox screen would end the moment the reader
+  // navigated away, and the sidebar's badge (`lib/useInboxCounts.ts`) is what
+  // has to stay current. UNDER `owner` — the seat when bound, the login when
+  // not — because that is the record the engine pushes about. The socket
+  // re-sends it on every reconnect. ONLY WITH TRACKER: `inbox_changed` is the
+  // tracker's push, and a watch from anybody else is a refusal on every
+  // reconnect.
+  // AND ONLY OF A COMPANY RUNNING CREWLET WORKS, whose push it is.
+  const runs = useServicesRun();
+  const ask = useServicesAsk();
+  const watchesInbox = viewer.owner !== "" && viewer.tracker && ask.tracker;
   useEffect(() => {
-    socket.onAuthRejected(() => setTokenOpen(true));
-  }, [socket]);
-
-  // And from anywhere else that discovers it needs a credential — an
-  // auth-gated answer on a screen the socket was never refused for.
-  useEffect(() => onTokenRequested(() => setTokenOpen(true)), []);
+    if (!watchesInbox) return;
+    socket.watch(viewer.owner);
+    return () => socket.watch("");
+  }, [socket, viewer.owner, watchesInbox]);
 
   // THE FRAME'S KEYS, by row — `keymap.ts` says which key each one is.
   const [legendOpen, setLegendOpen] = useState(false);
@@ -385,7 +486,14 @@ function Frame({ children }: { children: ReactNode }) {
       if (!focusSearchTarget()) setPaletteOpen(true);
     },
     keys: () => setLegendOpen(true),
-    ...Object.fromEntries(WORKSPACES.map((ws) => [`go.${ws.key}`, () => nav.to(ws.path)])),
+    // A JUMP TO A PLACE THE COMPANY DOES NOT RUN is bound to nothing, as its
+    // row is drawn nowhere (`nav.ts`'s `serviceShown`).
+    ...Object.fromEntries(
+      WORKSPACES.map((ws) => [
+        `go.${ws.key}`,
+        { run: () => nav.to(landingPath(ws, held, runs)), when: serviceShown(ws, runs) },
+      ]),
+    ),
     // READ AT THE PRESS, off the store, rather than through `useAgents`: the
     // agents push lands twice per tool-loop round, and a subscription here
     // would re-render the whole frame on every one of them for a key pressed
@@ -400,10 +508,7 @@ function Frame({ children }: { children: ReactNode }) {
   // the way out, and this covers every OTHER way — Back and Forward, a
   // phone's back gesture, a restored history entry — where a palette left
   // open would go on offering what it ranked for the screen just left. The
-  // drawer is the kit's, and `navigationKey` closes it the same way. NOT THE
-  // TOKEN DIALOG: a credential prompt is about the reader's access rather
-  // than where they are, and dismissing it on a navigation would lose the one
-  // thing the socket asked for.
+  // drawer is the kit's, and `navigationKey` closes it the same way.
   useEffect(() => {
     setPaletteOpen(false);
   }, [route.hash]);
@@ -414,18 +519,24 @@ function Frame({ children }: { children: ReactNode }) {
   // WHICH SHAPE THE PEEK TAKES — see the file's doc. The frame is described
   // by what stands in front of the list, and the width asked is the one at
   // which this frame, at this density, still leaves the list its floor.
-  const column = columnWidth(row?.renderer);
+  // THE COLUMN STANDS BESIDE THE SECTION only where the window holds both
+  // ([SECTION_COLUMN_MIN]); below that it folds to its one-row picker over
+  // the section, and the peek arithmetic counts no column.
+  const sectionColumn = columnWidth(row?.renderer);
+  const sideBySide = useMediaMatch(`(width >= ${SECTION_COLUMN_MIN}px)`);
+  const column = sideBySide ? sectionColumn : 0;
   const frame = { column, scale: densityScale(prefs.density) };
-  const roomy = useMediaQuery(`(width >= ${peekColumnMin(frame)}px)`);
+  const roomy = useMediaMatch(`(width >= ${peekColumnMin(frame)}px)`);
   const peekShape = peekable(peek) ? (roomy ? "column" : "drawer") : undefined;
   const crumbs = useMemo(() => crumbsFor(route.path, labels), [route.path, labels]);
 
   // THE TAB SAYS WHERE YOU ARE, so a reader with four tabs open can tell
-  // them apart.
+  // them apart: on Work's scope pages, the lens and then the scope.
   const where = titleOf(crumbs);
+  const tab = titleOf(crumbs, scopeAt(route.path, route.query));
   useEffect(() => {
-    document.title = where === "Crewlet" ? "Crewlet" : `${where} · Crewlet`;
-  }, [where]);
+    document.title = tab === "Crewlet" ? "Crewlet" : `${tab} · Crewlet`;
+  }, [tab]);
 
   // AND THE PALETTE REMEMBERS THE OBJECTS, so an empty palette has something
   // to offer before the reader types. OBJECTS ONLY — a fixed destination is in
@@ -445,25 +556,25 @@ function Frame({ children }: { children: ReactNode }) {
   }, [path, where, named, workspace]);
 
   const page: PageContext = useMemo(
-    () => ({ setLabels, setCoverage, setCounts, setShowWorking, setMenu, setFleet }),
+    () => ({ setLabels, setCoverage, setCounts, setShowWorking, setMenu, setFleet, setOwnStar }),
     [],
   );
 
-  const openToken = useCallback(() => setTokenOpen(true), []);
   const degraded = degradationOf({
     authRejected,
+    accessRefused,
     connected,
     configured: engine?.configured,
-    onSetToken: openToken,
+    onSignIn: goSignIn,
     onConfig: () => nav.to(["settings", "config"]),
   });
 
   // THE SETTINGS COLUMN'S FIGURES — the health push the frame already holds,
-  // and three operator answers asked only while the column is on screen. See
-  // `sidebar/settingsFigures.tsx`.
+  // and three guarded answers asked only while the column is on screen and
+  // only of a reader whose grants reach them. See `sidebar/settingsFigures.tsx`.
   const figures = useSettingsSidebar({
     here: row?.renderer === "column",
-    operator: viewer.operator,
+    grants: held ?? [],
     health: engine,
     published: publishedFleet,
   });
@@ -471,7 +582,11 @@ function Frame({ children }: { children: ReactNode }) {
   const screen = (
     <FillRequest.Provider value={setFilling}>
       <PeekWidthRequest.Provider value={setRestingPeek}>
-        <PageContextValue.Provider value={page}>{children}</PageContextValue.Provider>
+        <OwnHeaderRequest.Provider value={setOwnHeader}>
+          <OwnHeaderSlot.Provider value={ownHeader ? headerSlot : null}>
+            <PageContextValue.Provider value={page}>{children}</PageContextValue.Provider>
+          </OwnHeaderSlot.Provider>
+        </OwnHeaderRequest.Provider>
       </PeekWidthRequest.Provider>
     </FillRequest.Provider>
   );
@@ -498,19 +613,29 @@ function Frame({ children }: { children: ReactNode }) {
           fill={filling}
           navigationKey={route.hash}
           toggleLabel="Navigation"
-          sidebar={<Sidebar onSearch={() => setPaletteOpen(true)} onSetToken={openToken} />}
+          sidebar={<Sidebar onSearch={() => setPaletteOpen(true)} />}
           topbar={
-            <PageHeader
-              crumbs={crumbs}
-              row={row}
-              counts={counts}
-              title={where}
-              workspace={workspace}
-              working={showWorking}
-              menu={menu}
-            >
-              <StateBar degraded={degraded} coverage={coverage} />
-            </PageHeader>
+            ownHeader ? (
+              <div className="page-head">
+                <div ref={setHeaderSlot} />
+                <StateBar degraded={degraded} coverage={coverage} />
+              </div>
+            ) : (
+              <PageHeader
+                crumbs={crumbs}
+                row={row}
+                counts={counts}
+                title={where}
+                workspace={workspace}
+                working={showWorking}
+                menu={menu}
+                star={!ownStar}
+                runs={runs}
+                grants={held}
+              >
+                <StateBar degraded={degraded} coverage={coverage} />
+              </PageHeader>
+            )
           }
           footer={
             <PeekRestingWidth.Provider value={restingPeek ?? PEEK_WIDTH}>
@@ -518,26 +643,22 @@ function Frame({ children }: { children: ReactNode }) {
             </PeekRestingWidth.Provider>
           }
         >
-          {row && column > 0 ? (
+          {row && sectionColumn > 0 ? (
             // THE COLUMN'S WIDTH IS THE ONE THE PEEK ARITHMETIC COUNTED
             // ([columnWidth]), handed to the grid rather than written again
             // in the stylesheet, so the two cannot drift.
             <div
               className="section-frame"
-              style={{ "--section-column": `${column}px` } as CSSProperties}
+              style={{ "--section-column": `${sectionColumn}px` } as CSSProperties}
             >
-              {row.renderer === "tree" ? (
-                <ColumnBoundary what="The knowledge tree" resetKey={row.key}>
-                  <KnowledgeTree />
-                </ColumnBoundary>
-              ) : (
-                <SectionColumn
-                  row={row}
-                  path={route.path}
-                  operator={viewer.operator}
-                  figures={figures}
-                />
-              )}
+              <SectionColumn
+                row={row}
+                path={route.path}
+                query={route.query}
+                grants={held}
+                figures={figures}
+                runs={runs}
+              />
               <div className="section-body">{screen}</div>
             </div>
           ) : (
@@ -547,7 +668,8 @@ function Frame({ children }: { children: ReactNode }) {
 
         {/* THE PALETTE HAS A BOUNDARY OF ITS OWN, and it is mounted only while
           open, so a palette that threw is a dialog saying so — closed the
-          way the palette closes — and the next ⌘K is a fresh palette. */}
+          way the palette closes — and the next ⌘K is a fresh palette. Its
+          code is a chunk of its own, the first the idle prefetch fetches. */}
         {paletteOpen && (
           <LayerBoundary title="Search" onClose={() => setPaletteOpen(false)}>
             <CommandPalette
@@ -564,27 +686,17 @@ function Frame({ children }: { children: ReactNode }) {
             <NewTaskSheet preset={newTask} onClose={() => setNewTask(null)} />
           </LayerBoundary>
         )}
-        {legendOpen && <KeyLegend onClose={() => setLegendOpen(false)} />}
-        {tokenOpen && (
-          <TokenDialog
-            onClose={() => setTokenOpen(false)}
-            onSaved={(token) => {
-              socket.setToken(token);
-              socket.reconnect();
-            }}
-          />
-        )}
+        {legendOpen && <KeyLegend runs={runs} onClose={() => setLegendOpen(false)} />}
+        {/* THE KIT'S ONE POLITE REGION, mounted once: what a control says
+            without moving focus (the switcher's "3 projects"). */}
+        <Announcer />
       </PeekNeighbours>
     </NewTaskOpener.Provider>
   );
 }
 
-/**
- * Knowledge's tree, out of the Knowledge chunk: the one `tree` renderer, and
- * it is the workspace's own code — it reads spaces and pages — so the frame
- * loads it the way it loads a screen rather than carrying it in the entry.
- */
-const KnowledgeTree = lazyScreen("knowledge", (module) => module.KnowledgeTree);
-
 /** The New task sheet, out of the Work chunk. See [LayerBoundary]. */
 const NewTaskSheet = lazyScreen("work", (module) => module.NewTaskSheet);
+
+/** The command palette, out of a chunk of its own (`lazyScreen.ts`). See [LayerBoundary]. */
+const CommandPalette = lazyScreen("palette", (module) => module.CommandPalette);

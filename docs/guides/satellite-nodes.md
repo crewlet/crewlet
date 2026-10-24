@@ -56,7 +56,7 @@ not a request handler you can route, it is a place where things run:
 | Moves to the satellite | Stays on the core |
 |---|---|
 | The agent instance, its state and its turns | The HTTP API, the dashboard, every integration's webhooks |
-| **Its per-role MCP servers**, spawned as child processes of the node that claimed the seat | The scheduler tick, the retention sweep, the sandbox waiter, skill clustering and curation |
+| **Its per-role MCP servers**, spawned as child processes of the node that claimed the seat | Every [singleton duty](../concepts/seat-ownership.md#singleton-duties): the scheduler tick, the sweeps, the trim, the sandbox waiter, the learning passes |
 | Its LLM calls, its knowledge searches, its tool calls | Every other seat's agents and MCP servers |
 | Its sandbox launches, if the role is sandboxed | The company config, the leases and the ledgers — all shared, in the coordination slot |
 
@@ -71,6 +71,15 @@ Work still reaches it normally. A trigger is published to the seat's
 inbox topic, and the node holding that seat's lease is the one consuming
 it — so nothing that publishes has to know where the agent is, and a
 Slack message routed to that agent works exactly as before.
+
+Whether a satellite is also a **replica** is the `data` role's answer and
+nothing else's. A satellite that holds data applies every one of the
+company's shared state logs — the work tracker, the knowledge base, the
+search vectors, the identity directory and every node's usage history —
+into its own database, exactly as a core node does. A stateless one applies
+none of them and asks a data node instead. See
+[what a satellite holds](#what-a-satellite-holds) before you choose a host
+for either.
 
 ```mermaid
 flowchart LR
@@ -134,13 +143,20 @@ stream:
 coordination:
   type: embedded-kv               # the fleet's replicated KV, reached over
                                   #   the same link
+
+secrets:                          # REQUIRED on every node, this one too
+  active_key_id: k1
+  keys:
+    - {id: k1, material: "${CREWLET_SECRET_KEY_K1}"}   # the SAME keys
+                                  #   every other node of the fleet holds
 ```
 
 There is no `stream.store_dir` here, and there must not be: a leaf runs no
 JetStream, so it has no stream store to keep, and Tier A refuses one beside
 `stream.leaf.urls`. Every stream the satellite's seats use lives on the
-members, in theirs — which is also why `crewlet validate` raises no in-memory
-stream warning for this file.
+members, in theirs — so the durability rule is theirs too: `crewlet validate`
+refuses a member with no `stream.store_dir`, and asks nothing of a leaf's
+stream.
 
 The members open that listener with `stream.leaf.port`, and a member that
 opens one must persist (`stream.store_dir`), as every member of a fleet must:
@@ -176,6 +192,16 @@ and `stream.store_dir` instead of `stream.leaf` — see
 [Running a Fleet](fleet.md). It joins the broker as a voter: mind the
 [five-member ceiling](fleet.md#the-broker-members-and-leaves) before adding
 one to a fleet that already has five.
+
+The `secrets:` block is not optional on a satellite either, although it holds
+no estate, serves no API and signs no session cookie. The company document it
+fetches from its peers is sealed under the fleet keyring and authenticated by
+that seal; every request it sends a data node's estate service is signed
+under it, because the data node runs a write as the actor the request names
+and the broker authenticates nothing; and a seat in agent mode is handed a
+per-run token signed under it. `crewlet validate` refuses a Tier A file
+without it, naming `secrets.keys`; generate a key once with `crewlet secrets
+keygen` and give every node the same material.
 
 `${VAR}` references are resolved in `node.labels` and `node.id` like
 anywhere else, so an orchestrator injects both from the environment
@@ -284,7 +310,15 @@ curl -s http://sat-eu-1.internal:8000/ready
 alive — through a drain, and through a broker link that is down — with the
 node's half of the [health envelope](../reference/api-endpoints.md#probes-on-a-node-without-ingress):
 its id, its roles, its posture and applied epoch, the seats it holds, and
-`shutting_down`.
+`shutting_down`. Before that, while it boots, it answers as every starting node
+does ([While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting)):
+`503` with `"phase": "recovering"` until it has linked to a member of the
+fleet and provisioned what it uses on it — a satellite holds no store, so that
+is the whole of its recovery. The engine bounds every step of it: a minute for
+the link, and five minutes for each of the bring-ups that provision what it
+uses — the event streams, the coordination buckets and the object store's
+bucket, each a sequence of its own — past any of which it exits. Then it
+answers `200` with `"phase": "preparing"` while its company's tools come up.
 
 `/ready` answers whether the node is **doing its work**, because a
 satellite takes no traffic for a probe to steer. It is `503` until all of
@@ -292,6 +326,7 @@ these hold, naming the first that does not in `reason`:
 
 | `reason` | What it means here |
 |---|---|
+| `starting` | The node has not started yet: its listener is bound and answers the boot's answers. |
 | `draining` | The node is stopping: its turns finish and it claims nothing new. |
 | `broker_unlinked` | Its leaf link to every member is down (or, on an external cluster, its connection is reconnecting); `detail` says which. Its seats can neither receive nor publish anything. |
 | `unconfigured` | No company revision has reached it yet. |
@@ -311,6 +346,75 @@ Two failures to know by sight:
 - **The label change did not take.** Labels are advertised on the node's
   presence lease, so a change takes effect one heartbeat after the
   **restart** that made it — editing the file is not enough.
+
+---
+
+## What a satellite holds
+
+The work tracker, the knowledge base, the search vectors, the identity
+directory and every node's usage history are [replicated state
+machines](replication.md).
+Each is one ordered log the whole fleet shares, and every **data** node
+applies every log into its own copy of the rows — so it answers questions
+about each one locally, and so it can donate a snapshot of all of them to a
+data node that fell behind. There is no key that narrows it: a data node
+applies every log, whatever its other roles.
+
+**A stateless satellite holds none of it.** Its store is scratch, and every
+question its seats ask about the estate is a request to a data node — the
+identity directory's included. A satellite consumes inbound deliveries and
+runs seats, so whose Slack member or Jira account counts as a colleague
+depends on who holds each human seat and whether they are suspended; it asks
+a data node that, floored on the identity log, and reads it again every
+thirty seconds. Until it has read the directory once it withholds its human
+seats from routing rather than route by the org chart alone, because the
+chart alone would attribute a suspended person's word to their seat.
+
+**A satellite that holds data holds all of it**, the identity directory
+included: the people in your company, the addresses and logins they are
+known by, the verifiers of their passwords, recovery codes and machine
+tokens, their seat bindings, their grants, the invitations that enrolled
+them and the sessions they are signed in with. Be clear about what that puts
+on the host, and why it is not a new exposure:
+
+- **Names and addresses are sealed** under the fleet keyring, and a
+  password, a recovery code or a machine token is stored only as a
+  verifier. Logins, grants, seat bindings and session rows are in the
+  clear.
+- **The host already holds the fleet keyring**, which no node runs
+  without — a stateless one included. The same keyring opens the company
+  document, the company's [secret store](../concepts/secret-store.md),
+  every vendor credential in it, and every person's sealed name and address.
+  A satellite's host could decrypt every company secret whether or not it
+  held a copy of the directory, and keeping the directory off it never took
+  the directory out of that host's reach.
+
+So choose a satellite's host as you would any node's: somewhere you would
+trust with the company's secrets. If a seat needs to run somewhere you
+would not, a satellite is not the mechanism — the host is a full member
+of the fleet, whatever roles you give it.
+
+Two rules follow for a satellite that holds data, and both are worth knowing
+before you need them:
+
+- **Every domain, or none.** A data node that could not start one of the
+  domains refuses to start at all. It does not come up serving the ones
+  that did start: a node applying half the logs serves rows derived from
+  one while another's records pile up unapplied, and nothing above it can
+  tell that apart from a node that is merely behind.
+- **Every live data node counts for every log's trim.** A data node that
+  has published no position for a log yet is between boot and its first
+  heartbeat, so it is counted at position zero and holds that log's floor
+  for that one heartbeat. A stateless satellite is never counted. (See the
+  counted set in [Retention](retention.md#the-six-terms).)
+
+At boot every data node logs the logs it started, whether or not it serves
+HTTP — which on a `roles: [data, seats]` satellite is the one place to look,
+because such a node serves no API on its port:
+
+```
+statelog_started  node=sat-eu-1 domains="[tracker vectors pages iam usage]"
+```
 
 ---
 
@@ -340,10 +444,11 @@ the dependency surface before choosing a host for it:
   or an on-premises OpenAI-compatible endpoint.
 - **The MCP servers its role declares, installed on that host** — the
   whole reason the seat is there.
-- **The same keyring**, if company-config encryption is on. The
-  satellite decrypts the company document and the
-  [secret store](../concepts/secret-store.md) itself; without the
-  keyring it cannot read the config at all.
+- **The same keyring** every other node holds. The satellite opens the
+  company document and the [secret store](../concepts/secret-store.md) with
+  it and signs every request it sends the estate service; without it the
+  node refuses to start — see [what a satellite holds](#what-a-satellite-holds)
+  for what that means for the host.
 - **Nothing inbound from the fleet or the outside world.** No ingress
   rule, no public URL: the satellite dials out to the broker and
   coordination slot and is never dialled back. That is what makes this

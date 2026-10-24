@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -317,6 +319,71 @@ func TestAnExcludedParticipantIsTheOnlyThingThatWaivesAnAcknowledgement(t *testi
 	}
 }
 
+// WHO EXCLUDED A NODE AND WHO ABANDONED THE WINDOW ARE ON THE WINDOW.
+//
+// An exclusion is the one fact the seal takes on somebody's word, and an
+// abandonment the decision the fleet goes on carrying out until the seal
+// restart; both used to be said only in the serving node's log, while the
+// window named the person who OPENED it — so the one record every node reads
+// showed its opener as the author of whatever it had become. Mutation: record
+// either gesture without its party and its half goes red.
+func TestWhoExcludedANodeAndWhoAbandonedTheWindowAreOnTheWindow(t *testing.T) {
+	ctx := context.Background()
+	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
+	if _, _, err := fleet.OpenMaintenance(ctx, coord.MaintenanceOperation{
+		Stream: "CREWLET_TRACKER_LOG", OperationID: "op-1",
+		TargetMaxBytes: 1 << 33, OriginalMaxBytes: 1 << 32,
+		Phase: coord.PhaseApplied, Attempt: 1,
+		Participants: []string{"node-1", "node-2"}, EnteredAt: time.Now().UTC(),
+		By: "ops-3",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sre := iam.Actor{Name: "dana.sre", Kind: iam.ActorOperator,
+		OperatorID: "session:0192f00d-0000-7000-8000-0000000000dd"}
+	lead := iam.Actor{Name: "ana.admin", Kind: iam.ActorOperator,
+		OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a"}
+
+	op, err := e.ExcludeParticipant(ctx, "CREWLET_TRACKER_LOG", "node-2", sre)
+	if err != nil {
+		t.Fatalf("exclude: %v", err)
+	}
+	want := coord.MaintenanceParty{By: sre.Name, OperatorID: sre.OperatorID}
+	if got := op.ExcludedBy["node-2"]; got != want {
+		t.Errorf("node-2's exclusion is recorded as %+v, want %+v", got, want)
+	}
+
+	op, err = e.AbandonCapacity(ctx, "CREWLET_TRACKER_LOG", lead)
+	if err != nil {
+		t.Fatalf("abandon: %v", err)
+	}
+	if op.Phase != coord.PhaseSealing {
+		t.Fatalf("an applied window abandoned into %s, want sealing — the "+
+			"record would not be there to carry who abandoned it", op.Phase)
+	}
+	if want := (coord.MaintenanceParty{By: lead.Name, OperatorID: lead.OperatorID}); op.AbandonedBy != want {
+		t.Errorf("the abandonment is recorded as %+v, want %+v", op.AbandonedBy, want)
+	}
+	// AND THE EXCLUSION SURVIVES IT: a later gesture on the window keeps
+	// whose word waived node-2's acknowledgement.
+	if got := op.ExcludedBy["node-2"]; got.By != sre.Name {
+		t.Errorf("the abandon lost the exclusion's author: %+v", op.ExcludedBy)
+	}
+
+	// AND THE RETENTION REPORT SAYS IT, which is the banner `crewlet
+	// retention status` leads with while the window holds the fleet.
+	r := &retention{fleet: fleet, state: runsLogs(&stateLog{},
+		&runningLog{domain: tracker.Domain{}, spec: tracker.Domain{}.Stream()})}
+	row := r.openMaintenance(ctx)
+	if row == nil {
+		t.Fatal("the report shows no window while one is open")
+	}
+	if row.AbandonedBy != op.AbandonedBy {
+		t.Errorf("the report names %+v as having abandoned the window, want %+v",
+			row.AbandonedBy, op.AbandonedBy)
+	}
+}
+
 // TestABaselineOfNothingIsRefusedRatherThanRecorded.
 //
 // An empty baseline compares unequal to every later acknowledgement, so a
@@ -506,6 +573,7 @@ func TestATargetTheLogAlreadyExceedsIsRefused(t *testing.T) {
 	// that reclaims a reservation.
 	op, err := e.openCapacity(ctx, CapacityRequest{
 		Stream: "CREWLET_PAGES_LOG", TargetMaxBytes: 6 << 30, By: "ops-3",
+		OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a",
 	}, current, unstatedRoom)
 	if err != nil {
 		t.Fatalf("a target above the usage and under the ceiling was refused: %v", err)
@@ -513,6 +581,13 @@ func TestATargetTheLogAlreadyExceedsIsRefused(t *testing.T) {
 	if op.OriginalMaxBytes != current.MaxBytes {
 		t.Errorf("the window recorded an original ceiling of %d, want %d",
 			op.OriginalMaxBytes, current.MaxBytes)
+	}
+	// WHO OPENED IT, and through what: the operation is the one record of
+	// who is restarting the fleet three times, and one that named only
+	// the author could not tell their own gesture from their token's.
+	if op.By != "ops-3" || op.OperatorID != "pat:0192f00d-0000-7000-8000-00000000000a" {
+		t.Errorf("the window records %q through %q, want ops-3 through the "+
+			"token it was opened with", op.By, op.OperatorID)
 	}
 }
 
@@ -540,14 +615,15 @@ func TestATargetOnlyTheGateReserveClearsIsRefused(t *testing.T) {
 	}
 	for _, domain := range []statelog.Domain{tracker.Domain{}, pages.Domain{}} {
 		stream := domain.Stream().Name
+		reservation, field, _ := capacityBounds(stream)
 		err := open(stream, target)
 		if err == nil {
 			t.Fatalf("a %d-byte target on %s, holding %d bytes, was accepted — "+
 				"its ordinary writes are held to %d and would all be refused",
 				uint64(target), stream, current.Bytes,
-				statelog.OrdinaryCeiling(target, true))
+				reservation.Ordinary(target))
 		}
-		least := smallestTargetAbove(current.Bytes, true)
+		least := smallestTargetAbove(current.Bytes, reservation, uint64(field.Floor))
 		for _, want := range []string{
 			"holds 16106127360 bytes", "ordinary writes are held to 16106127360",
 			fmt.Sprintf("at least %d bytes", least),
@@ -572,39 +648,84 @@ func TestATargetOnlyTheGateReserveClearsIsRefused(t *testing.T) {
 	}
 }
 
-// A TARGET UNDER THE FLOOR IS REFUSED ON EVERY LOG, whatever it holds.
+// A TARGET UNDER A LOG'S FLOOR IS REFUSED, AND ITS FLOOR IS ITS FIELD'S.
 //
-// Tier A refuses an explicit ceiling below a gibibyte and the division of the
-// broker's budget never scales one below it; the capacity verb was the one way
-// round both. And on a log that claims identity the floor is what the gate
-// reserve is sized against, so a smaller ceiling keeps too small a reserve for
-// the appends in flight it has to absorb.
+// Tier A refuses an explicit ceiling below its field's floor; the capacity
+// verb was the one way round it. And the floor differs by log: the verb held
+// every log to a gibibyte, calling it the floor Tier A enforces, while Tier A
+// takes the identity estate's and the usage log's down to 64 MiB — so a
+// target Tier A would accept on either was refused with a reason that was not
+// true of it. The floor each case expects is read from Tier A's own
+// validation of the field, not from the register the verb reads, so the two
+// cannot agree by sharing a mistake.
 func TestATargetUnderTheFloorIsRefused(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	current := jetstream.LogStats{Bytes: 1 << 20, MaxBytes: 4 << 30}
+	keys := streamKeys(t)
 	for _, domain := range registeredDomains() {
 		stream := domain.Stream().Name
+		_, field, known := capacityBounds(stream)
+		if !known {
+			t.Fatalf("%s is registered and the capacity verb reads no bounds for it", stream)
+		}
+		floor := tierAFloor(t, keys, field.Field, field.Bytes)
 		e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
 		_, err := e.openCapacity(ctx, CapacityRequest{
-			Stream: stream, TargetMaxBytes: uint64(MinDomainCeiling) - 1, By: "ops-3",
+			Stream: stream, TargetMaxBytes: uint64(floor) - 1, By: "ops-3",
 		}, current, unstatedRoom)
 		if err == nil {
 			t.Fatalf("a target a byte under the floor was accepted on %s", stream)
 		}
-		if !strings.Contains(err.Error(), fmt.Sprintf("at least %d bytes", MinDomainCeiling)) {
-			t.Errorf("the refusal on %s does not name the floor: %v", stream, err)
+		for _, want := range []string{fmt.Sprintf("at least %d bytes", floor), field.Field} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the refusal on %s does not say %q: %v", stream, want, err)
+			}
 		}
 		if op, found, _ := fleet.Maintenance(ctx, stream); found {
 			t.Fatalf("a window was opened anyway on %s: %+v", stream, op)
 		}
 		e, _ = capacityFixture(t, "node-1", statelog.ModeMaintenance)
 		if _, err := e.openCapacity(ctx, CapacityRequest{
-			Stream: stream, TargetMaxBytes: uint64(MinDomainCeiling), By: "ops-3",
+			Stream: stream, TargetMaxBytes: uint64(floor), By: "ops-3",
 		}, current, unstatedRoom); err != nil {
-			t.Errorf("a target at the floor was refused on %s: %v", stream, err)
+			t.Errorf("a target at %s's floor of %d was refused: %v", stream, floor, err)
 		}
 	}
+}
+
+// tierAFloor is the smallest value Tier A's own validation accepts for the
+// stream field named field — found by asking it, not by reading a constant —
+// bisected below accepted, a value it takes (the one an unset field derives,
+// which [TestEveryRegisteredDomainIsSizedFromTierA] holds it to taking).
+func tierAFloor(t *testing.T, keys map[string][]int, field string, accepted int64) int64 {
+	t.Helper()
+	index, found := keys[strings.TrimPrefix(field, "stream.")]
+	if !found {
+		t.Fatalf("%s is not a Tier A stream key", field)
+	}
+	accepts := func(v int64) bool {
+		boot := testBootstrap(t)
+		boot.Stream.StoreDir = t.TempDir()
+		reflect.ValueOf(&boot.Stream).Elem().FieldByIndex(index).SetInt(v)
+		return boot.Validate() == nil
+	}
+	// BISECTED between a byte, which no field accepts, and a value this
+	// one does.
+	low, high := int64(1), accepted
+	if accepts(low) || !accepts(high) {
+		t.Fatalf("%s accepts %v at 1 byte and %v at %d, so it has no floor "+
+			"between them", field, accepts(low), accepts(high), high)
+	}
+	for high-low > 1 {
+		mid := low + (high-low)/2
+		if accepts(mid) {
+			high = mid
+		} else {
+			low = mid
+		}
+	}
+	return high
 }
 
 // unstatedRoom is a broker that states no limit this node can read, which
@@ -903,7 +1024,7 @@ func capacityNode(t *testing.T, host budgetHost) (*Engine, *coordmem.Fleet, stri
 	e.backends.Queue = host
 	s := &stateLog{volume: t.TempDir()}
 	runsLogs(s, &runningLog{domain: domain, spec: domain.Stream()})
-	e.native.Store(&native{log: s})
+	e.core.Store(&core{log: s})
 	return e, fleet, domain.Stream().Name
 }
 

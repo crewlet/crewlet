@@ -28,7 +28,7 @@ import { OrgNodeLabel } from "@crewlethq/ui";
 import { COMPANY_KEY, seatKey, unitKey, type NodeKey } from "./model/keys.ts";
 import type { BuilderState } from "./model/reducer.ts";
 import { fixtureCompany, fixtureDerived } from "./model/testkit.ts";
-import { answered, checkedEdit, PLACED, record } from "./testState.ts";
+import { answered, checkedEdit, PLACED, record, scopedState } from "./testState.ts";
 import {
   BuilderHarness,
   LayoutObserver,
@@ -182,11 +182,11 @@ const markSentences = (el: HTMLElement) => markNames(el).map(([tooltip]) => tool
 describe("which chart", () => {
   test("the chart the builder hands in is the one drawn, whatever the URL says", () => {
     // The Builder owns the `chart` param; a second reading here could disagree.
-    location.hash = "#/agents/edit?view=visualization&chart=reporting";
+    location.hash = "#/company/org/edit?view=visualization&chart=reporting";
     mount();
     expect(screen.getByRole("tree", { name: "Structure chart" })).toBeDefined();
     cleanup();
-    location.hash = "#/agents/edit?view=visualization&chart=structure";
+    location.hash = "#/company/org/edit?view=visualization&chart=structure";
     mount(undefined, { chart: "reporting" });
     expect(screen.getByRole("tree", { name: "Reporting chart" })).toBeDefined();
   });
@@ -208,13 +208,13 @@ describe("the tree", () => {
     expect(shape).toEqual([
       [COMPANY_KEY, "1", "1", "1", "true"],
       [seatKey("ceo"), "2", "1", "3", null],
-      [unitKey("Engineering"), "2", "2", "3", "true"],
+      [unitKey("engineering"), "2", "2", "3", "true"],
       [seatKey("vp-engineering"), "3", "1", "3", null],
       [seatKey("dev"), "3", "2", "3", null],
-      [unitKey("Platform"), "3", "3", "3", "true"],
+      [unitKey("platform"), "3", "3", "3", "true"],
       [seatKey("sre"), "4", "1", "2", null],
       [seatKey("designer"), "4", "2", "2", null],
-      [unitKey("Sales"), "2", "3", "3", "true"],
+      [unitKey("sales"), "2", "3", "3", "true"],
       [seatKey("account-executive"), "3", "1", "1", null],
     ]);
   });
@@ -250,29 +250,53 @@ describe("the tree", () => {
 
     // The lead chip is drawn in the same hidden strip. It says the word
     // itself, as the chart this is drawn from does: see `leadChipLabel`.
-    pointerPress("Lead: VP Engineering");
+    pointerPress("Lead: VP Engineering for Engineering");
     press("Escape");
     expect(document.activeElement).toBe(item("Engineering"));
   });
 
-  test("a human seat is drawn with a person's badge, by kind rather than by colour", () => {
+  // A LEAD'S OWN UNIT KEEPS ITS LEAD (`model/scope.ts`): its chip says the
+  // lead and offers no change, while a unit inside it offers one.
+  test("in a lead's draft the unit's own lead chip offers no change", () => {
+    mount(scopedState(fixtureCompany(), "engineering"));
+    expect(
+      screen.queryByRole("button", { name: "Lead: VP Engineering for Engineering", hidden: true }),
+    ).toBeNull();
+    expect(screen.getByText("Lead: VP Engineering")).toBeDefined();
+    // Platform's chip, inside the unit, still offers its lead.
+    expect(
+      screen.getAllByRole("button", { name: /^Lead\b/, hidden: true }).map((b) => b.textContent),
+    ).toEqual(["Lead"]);
+    // Where it sits decides who leads it too, so it does not move.
+    pointerPress("Actions for Engineering");
+    const menu = screen.getByRole("menu", { name: "Actions for Engineering" });
+    expect(
+      within(menu)
+        .getByRole("menuitem", { name: /^Move to/ })
+        .getAttribute("aria-disabled"),
+    ).toBe("true");
+  });
+
+  test("a human seat is drawn as a person in a dashed ring, an agent seat as the Crewlet figure", () => {
     const doc = fixtureCompany();
     doc.roles![0] = { name: "CEO", kind: "human", contact: { slack: "U0CEO" } };
     mount(checkedEdit(doc));
-    // THE BADGE'S OUTLINE IS THE ONE CUE: a person's circle, an agent's
-    // squircle, on the same solid card. The kit names the two outlines by the
-    // kind they draw, which is the claim — a card-level mark is gone, because
-    // two cues for one fact are two things to keep agreeing.
-    expect(item("CEO").querySelector(".crewlet-avatar--human")).not.toBeNull();
-    expect(item("CEO").querySelector(".crewlet-avatar--agent")).toBeNull();
-    // EVERY SEAT IS A NODE OF ITS OWN, so an agent seat inside a unit wears an
-    // agent's badge rather than a row that is merely not marked.
-    expect(item("Dev").querySelector(".crewlet-avatar--agent")).not.toBeNull();
+    // THE CONSOLE CHART'S MARKS: a person's glyph inside a dashed ring, and
+    // the Crewlet figure at the larger step for an agent. No monogram badge:
+    // the mark says what holds the seat and the name beside it says who.
+    const ring = "crewlet-org-label__icon--ring";
+    expect(item("CEO").querySelector(`.${ring}`)).not.toBeNull();
+    expect(item("CEO").querySelector(".crewlet-avatar")).toBeNull();
+    // EVERY SEAT IS A NODE OF ITS OWN, so an agent seat inside a unit wears
+    // the agent's mark rather than a row that is merely not marked.
+    expect(item("Dev").querySelector(`.${ring}`)).toBeNull();
+    expect(item("Dev").querySelector(`.${largeStep()}`)).not.toBeNull();
+    expect(item("Dev").querySelector(".crewlet-avatar")).toBeNull();
     expect(within(item("CEO")).getByText("Human seat")).toBeDefined();
-    // And neither card is tinted: the outline is the whole of the difference
-    // (see "colour is not identity" below).
+    // And the agent's card is toned where the person's is not (see "an agent
+    // seat is toned" below).
     expect(chartCard(item("CEO")).getAttribute("data-tone")).toBeNull();
-    expect(chartCard(item("Dev")).getAttribute("data-tone")).toBeNull();
+    expect(chartCard(item("Dev")).getAttribute("data-tone")).toBe("purple");
   });
 
   test("a root seat placed by reference is a row of its unit, and a dangling reference is marked at the root", () => {
@@ -330,26 +354,25 @@ describe("the tree", () => {
   });
 
   /*
-   * A SEAT LEADS WITH ITS BADGE AND A CONTAINER WITH ITS GLYPH, because the
+   * A SEAT LEADS WITH ITS MARK AND A CONTAINER WITH ITS GLYPH, because the
    * chart this is drawn from sizes a mark by what it stands for: the seats
-   * are what the chart is ABOUT, so each is its own person or agent, and a
-   * unit or the company is a glyph at half its zone. The badge's outline is
-   * who holds the seat — an agent's squircle, a person's circle — which is the
-   * one cue: the dashed ring round a person's figure is gone with the kit's
-   * second cue for the same fact.
+   * are what the chart is ABOUT. An agent's figure takes the large step, and a
+   * person's glyph sits in a ring the size of that step; a unit or the company
+   * is a plain glyph at half its zone.
    */
-  test("a seat leads with its badge and a container with its glyph", () => {
+  test("a seat leads with its mark and a container with its glyph", () => {
     const doc = fixtureCompany();
     doc.roles![0] = { name: "CEO", kind: "human", contact: { slack: "U0CEO" } };
     mount(checkedEdit(doc));
-    expect(item("Dev").querySelector(".crewlet-avatar--agent")).not.toBeNull();
-    expect(item("CEO").querySelector(".crewlet-avatar--human")).not.toBeNull();
     const large = largeStep();
+    expect(item("Dev").querySelector(`.${large}`)).not.toBeNull();
+    expect(item("CEO").querySelector(".crewlet-org-label__icon--ring")).not.toBeNull();
     for (const container of ["Engineering", "Acme"]) {
       expect(item(container).querySelector(".crewlet-avatar"), container).toBeNull();
       const zone = item(container).querySelector("[aria-hidden='true']")!;
       expect(zone.querySelector("svg"), container).not.toBeNull();
       expect(zone.className, container).not.toContain(large);
+      expect(zone.className, container).not.toContain("crewlet-org-label__icon--ring");
     }
   });
 
@@ -464,19 +487,19 @@ describe("keys", () => {
     press("ArrowDown");
     expect(focused()).toBe(seatKey("ceo"));
     press("ArrowDown");
-    expect(focused()).toBe(unitKey("Engineering"));
+    expect(focused()).toBe(unitKey("engineering"));
     press("ArrowLeft");
     expect(item("Engineering").getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryAllByText("Dev")).toHaveLength(0);
     press("ArrowDown");
-    expect(focused()).toBe(unitKey("Sales"));
+    expect(focused()).toBe(unitKey("sales"));
     press("ArrowUp");
     press("ArrowRight");
     expect(item("Engineering").getAttribute("aria-expanded")).toBe("true");
     press("ArrowRight");
     expect(focused()).toBe(seatKey("vp-engineering"));
     press("ArrowLeft");
-    expect(focused()).toBe(unitKey("Engineering"));
+    expect(focused()).toBe(unitKey("engineering"));
     press("End");
     expect(focused()).toBe(seatKey("account-executive"));
     press("Home");
@@ -492,9 +515,9 @@ describe("keys", () => {
     mount();
     item("Acme").focus();
     press("p");
-    expect(focused()).toBe(unitKey("Platform"));
+    expect(focused()).toBe(unitKey("platform"));
     press("0");
-    expect(focused()).toBe(unitKey("Platform"));
+    expect(focused()).toBe(unitKey("platform"));
   });
 
   test("Enter edits, Delete and Backspace delete, and the company is never deleted", () => {
@@ -554,7 +577,6 @@ describe("keys", () => {
     expect(within(menu).getAllByRole("menuitem").map(label)).toEqual([
       "Open seat",
       "Edit reports",
-      "Change to human seat",
       "Move to",
       "Move up",
       "Move down",
@@ -654,15 +676,15 @@ describe("what a node offers a pointer", () => {
       // The lead along the bottom edge, which stays drawn: it is a fact about
       // the organization rather than a tool for changing it. The X inside it
       // is the tool, and it is quiet with the rest of them.
-      "Lead: VP Engineering",
+      "Lead: VP Engineering for Engineering",
       "Clear the lead of Engineering",
       // And the branch below is the Add, alone.
       "Add to Engineering",
     ]);
     pointerPress("Edit Engineering");
-    expect(spies.openEditor).toHaveBeenCalledWith(unitKey("Engineering"));
+    expect(spies.openEditor).toHaveBeenCalledWith(unitKey("engineering"));
     pointerPress("Delete Engineering");
-    expect(spies.openDelete).toHaveBeenCalledWith(unitKey("Engineering"));
+    expect(spies.openDelete).toHaveBeenCalledWith(unitKey("engineering"));
   });
 
   /* The company cannot be deleted, so it is not offered and does not refuse. */
@@ -717,40 +739,51 @@ describe("what a node offers a pointer", () => {
 });
 
 /*
- * EVERY NODE IS THE CHART'S NEUTRAL SURFACE. Colour on this dashboard says
- * what a seat is DOING, never who it is, and a draft is doing nothing: an
- * agent seat used to carry one of six hues hashed from its key, on its card
- * and on the branch arriving at it, which the live chart a reader had just
- * left never drew. What tells a person's seat from an agent's is the badge's
- * outline, a shape. So no card and no connector on either chart asks the
- * design system for a tone — the mutation that re-adds `cardTone` turns this
- * red on the first seat it tints.
+ * AN AGENT SEAT IS TONED, AND NOTHING ELSE IS. The console org chart this is
+ * drawn from paints an agent seat in its purple, on its card and on the
+ * branch arriving at it, and keeps every unit, the company and a person's
+ * seat on the chart's neutral surface. ONE HUE FOR ONE KIND, never a hash of
+ * a key: an agent seat used to carry one of six hues hashed from its key, a
+ * legend a reader could never decode and a renamed seat changed. The mutation
+ * that drops `cardTone` turns this red on the first agent seat it leaves
+ * neutral, and one that tones anything else on the first card it tints.
  */
-describe("colour is not identity", () => {
-  const toned = (container: HTMLElement) => [
-    ...chartCards(container)
-      .filter((card) => card.hasAttribute("data-tone"))
-      .map((card) => `card ${card.textContent}`),
-    ...[...chartLinks(container).querySelectorAll("path")]
-      .filter((path) => path.hasAttribute("data-tone"))
-      .map((path) => `branch ${path.getAttribute("d")}`),
-  ];
+describe("an agent seat is toned, and nothing else is", () => {
+  const byKind = (container: HTMLElement) => {
+    const cards = chartCards(container);
+    const agent = (card: HTMLElement) => (card.textContent ?? "").includes("Agent seat");
+    return { agents: cards.filter(agent), others: cards.filter((card) => !agent(card)) };
+  };
 
-  test("no node or branch of the structure chart is tinted, an agent seat's included", () => {
+  test("on the structure chart every agent seat, and only an agent seat, is purple", () => {
     const doc = fixtureCompany();
     doc.roles![0] = { name: "CEO", kind: "human", contact: { slack_user_id: "U0CEO" } };
     const { container } = mount(checkedEdit(doc));
-    // The chart really drew agent seats and branches, so an empty list below
-    // is a statement about them rather than about a chart that drew nothing.
-    expect(chartCard(item("Dev"))).toBeDefined();
-    expect(chartLinks(container).querySelectorAll("path").length).toBeGreaterThan(0);
-    expect(toned(container)).toEqual([]);
+    const { agents, others } = byKind(container);
+    // The chart really drew both kinds, so each loop below is a statement
+    // about cards rather than about a chart that drew none.
+    expect(agents.length).toBeGreaterThan(0);
+    expect(others.length).toBeGreaterThan(0);
+    for (const card of agents)
+      expect(card.getAttribute("data-tone"), card.textContent ?? "").toBe("purple");
+    for (const card of others)
+      expect(card.getAttribute("data-tone"), card.textContent ?? "").toBeNull();
+    // The branch into an agent seat carries its tone, and the rest are neutral.
+    const branches = [...chartLinks(container).querySelectorAll("path")];
+    const toned = branches.filter((path) => path.hasAttribute("data-tone"));
+    expect(toned.length).toBeGreaterThan(0);
+    expect(toned.length).toBeLessThan(branches.length);
+    for (const path of toned) expect(path.getAttribute("data-tone")).toBe("purple");
   });
 
-  test("no node or branch of the reporting chart is tinted either", () => {
+  test("on the reporting chart the same rule holds", () => {
     const { container } = mount(checkedEdit(fixtureCompany()), { chart: "reporting" });
-    expect(chartCards(container).length).toBeGreaterThan(0);
-    expect(toned(container)).toEqual([]);
+    const { agents, others } = byKind(container);
+    expect(agents.length).toBeGreaterThan(0);
+    for (const card of agents)
+      expect(card.getAttribute("data-tone"), card.textContent ?? "").toBe("purple");
+    for (const card of others)
+      expect(card.getAttribute("data-tone"), card.textContent ?? "").toBeNull();
   });
 
   /*
@@ -889,7 +922,7 @@ describe("menus", () => {
       ),
     ).toBe(true);
     press("Add human seat to Platform");
-    expect(spies.openAdd).toHaveBeenLastCalledWith(unitKey("Platform"), "human");
+    expect(spies.openAdd).toHaveBeenLastCalledWith(unitKey("platform"), "human");
     press("Add to Acme");
     press("Add unit to Acme");
     expect(spies.openAdd).toHaveBeenLastCalledWith(null, "unit");
@@ -911,15 +944,15 @@ describe("menus", () => {
       "Add human seat",
     ]);
     fireEvent.click(screen.getByRole("menuitem", { name: "Add human seat" }));
-    expect(spies.openAdd).toHaveBeenLastCalledWith(unitKey("Platform"), "human");
+    expect(spies.openAdd).toHaveBeenLastCalledWith(unitKey("platform"), "human");
   });
 
   test("a seat this draft created has no screen to open, and read-only disables every change", () => {
     const added = record(checkedEdit(fixtureCompany()), {
       type: "addSeat",
       key: "new:s1",
-      placement: { parent: unitKey("Sales"), after: null },
-      data: { name: "Closer" },
+      placement: { parent: unitKey("sales"), after: null },
+      data: { name: "Closer", handle: "closer" },
     });
     mount(added, { readOnly: true });
     item("Closer").focus();
@@ -938,7 +971,6 @@ describe("menus", () => {
      */
     expect(names).toEqual([
       ["Edit reports", false],
-      ["Change to human seat", true],
       ["Move to", true],
       ["Move up", true],
       ["Move down", true],
@@ -953,7 +985,7 @@ describe("menus", () => {
       }),
     );
     const chip = screen.getByRole("button", {
-      name: /^Lead: VP Engineering \(inherited\)$/,
+      name: /^Lead: VP Engineering \(inherited\) for /,
       hidden: true,
     });
     fireEvent.click(chip);
@@ -965,12 +997,12 @@ describe("menus", () => {
     ]);
     fireEvent.click(screen.getByRole("menuitemradio", { name: "SRE" }));
     const platform = probe.state.draft.units[0]!.children[0]!;
-    expect(platform.data.lead).toBe("SRE");
+    expect(platform.data.lead).toBe("sre");
     expect(within(item("Platform")).getByText("Lead: SRE.")).toBeDefined();
     // Engineering's own lead is unchanged, and so is what the check said of it.
     expect(within(item("Engineering")).getByText("Lead: VP Engineering.")).toBeDefined();
     // Now declared, the choice says so, and No lead offers the parent's lead.
-    fireEvent.click(screen.getByRole("button", { name: "Lead: SRE", hidden: true }));
+    fireEvent.click(screen.getByRole("button", { name: /^Lead: SRE for /, hidden: true }));
     expect(
       screen
         .getAllByRole("menuitemradio")
@@ -987,12 +1019,12 @@ describe("menus", () => {
     act(() =>
       probe.dispatch({
         type: "record",
-        intent: { type: "setLead", target: unitKey("Engineering") },
+        intent: { type: "setLead", target: unitKey("engineering") },
       }),
     );
     expect(within(item("Engineering")).getByText("Lead after the check.")).toBeDefined();
     expect(
-      screen.getByRole("button", { name: "Lead after the check", hidden: true }),
+      screen.getByRole("button", { name: /^Lead after the check for /, hidden: true }),
     ).toBeDefined();
   });
 
@@ -1011,7 +1043,7 @@ describe("menus", () => {
     expect(spies.dispatched).toEqual([
       {
         type: "record",
-        intent: { type: "setLead", target: unitKey("Engineering"), lead: undefined },
+        intent: { type: "setLead", target: unitKey("engineering"), lead: undefined },
       },
     ]);
   });
@@ -1043,7 +1075,7 @@ describe("menus", () => {
     doc.units![1]!.lead = "CEO";
     const { spies } = mount(checkedEdit(doc));
     const sales = within(chartCard(item("Sales")));
-    fireEvent.click(sales.getByRole("button", { name: "Lead: CEO", hidden: true }));
+    fireEvent.click(sales.getByRole("button", { name: /^Lead: CEO for /, hidden: true }));
     expect(
       screen
         .getAllByRole("menuitemradio")
@@ -1055,18 +1087,20 @@ describe("menus", () => {
     ]);
     fireEvent.click(screen.getByRole("menuitem", { name: /Choose another seat/ }));
     // At the unit's Leadership, where a lead outside the unit is chosen.
-    expect(spies.openEditor).toHaveBeenCalledWith(unitKey("Sales"), "leadership");
+    expect(spies.openEditor).toHaveBeenCalledWith(unitKey("sales"), "leadership");
   });
 
   test("choosing the answer already chosen records nothing and is refused nowhere", () => {
     const { probe, spies } = mount();
     // Engineering declares VP Engineering; Sales declares no lead.
-    fireEvent.click(screen.getByRole("button", { name: "Lead: VP Engineering", hidden: true }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Lead: VP Engineering for Engineering", hidden: true }),
+    );
     fireEvent.click(screen.getByRole("menuitemradio", { name: "VP Engineering" }));
     expect(screen.queryByRole("menu")).toBeNull();
     const sales = within(chartCard(item("Sales")));
     // An empty pill still says the word: "Lead", as that chart writes it.
-    fireEvent.click(sales.getByRole("button", { name: "Lead", hidden: true }));
+    fireEvent.click(sales.getByRole("button", { name: "Lead for Sales", hidden: true }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "No lead" }));
     expect(spies.dispatched).toEqual([]);
     expect(probe.state.refusal).toBeNull();
@@ -1174,7 +1208,7 @@ describe("the reporting chart", () => {
 
   test("says its lines are the last check's once the draft has moved past it", () => {
     const { probe, container } = mount(checkedEdit(loop, derivedLoop), { chart: "reporting" });
-    const note = () => screen.queryByText(/These reporting lines are from the last check/);
+    const note = () => screen.queryByText("From the last check.");
     expect(note()).toBeNull();
     act(() =>
       probe.dispatch({
@@ -1287,8 +1321,8 @@ describe("focus", () => {
         intent: {
           type: "addSeat",
           key: "new:s1",
-          placement: { parent: unitKey("Sales"), after: seatKey("account-executive") },
-          data: { name: "Closer" },
+          placement: { parent: unitKey("sales"), after: seatKey("account-executive") },
+          data: { name: "Closer", handle: "closer" },
         },
       }),
     );
@@ -1308,7 +1342,7 @@ describe("focus", () => {
         intent: {
           type: "move",
           target: seatKey("sre"),
-          to: { parent: unitKey("Sales"), after: null },
+          to: { parent: unitKey("sales"), after: null },
         },
       }),
     );
@@ -1354,7 +1388,7 @@ describe("focus", () => {
           type: "addSeat",
           key: "new:s9",
           placement: { parent: COMPANY_KEY, after: null },
-          data: { name: "Advisor" },
+          data: { name: "Advisor", handle: "advisor" },
         },
       }),
     );
@@ -1393,7 +1427,7 @@ describe("live state", () => {
     });
     const before = layout();
     rerender({
-      agents: [{ id: "a1", role: "Dev", handle: "dev", activity: "working" }],
+      agents: [{ id: "a1", agent_id: "a1", role: "Dev", handle: "dev", activity: "working" }],
     });
     expect(layout()).toEqual(before);
   });
@@ -1534,7 +1568,7 @@ describe("a surface opened about one node", () => {
   test("the chart is pushed back while it is open and drawn plainly when it is not", () => {
     const { show } = mountAbout(null);
     expect(canvas().getAttribute("data-dimmed")).toBe("false");
-    show(unitKey("Engineering"));
+    show(unitKey("engineering"));
     expect(canvas().getAttribute("data-dimmed")).toBe("true");
     show(null);
     expect(canvas().getAttribute("data-dimmed")).toBe("false");
@@ -1544,7 +1578,7 @@ describe("a surface opened about one node", () => {
     const { container, show } = mountAbout(null);
     const view = () => canvasWorld(container).style.transform;
     const before = view();
-    show(unitKey("Engineering"));
+    show(unitKey("engineering"));
     expect(view()).toBe(before);
     show(null);
     expect(view()).toBe(before);
@@ -1589,7 +1623,7 @@ describe("adding a node in the chart", () => {
     const view = mount();
     const branches = () => chartLinks(view.container).querySelectorAll("path").length;
     const before = branches();
-    view.rerender({ adding: adding(unitKey("Engineering")).request });
+    view.rerender({ adding: adding(unitKey("engineering")).request });
     const form = ghost("Add to Engineering");
     // No dialog: the chart itself is where the question is asked, so the
     // picture behind it is neither covered nor pushed back.
@@ -1618,13 +1652,13 @@ describe("adding a node in the chart", () => {
         );
     const view = mount();
     const before = shape();
-    view.rerender({ adding: adding(unitKey("Engineering")).request });
+    view.rerender({ adding: adding(unitKey("engineering")).request });
     expect(ghost("Add to Engineering")).toBeDefined();
     expect(shape()).toEqual(before);
   });
 
   test("no key of the chart lands on the ghost", () => {
-    mount(undefined, { adding: adding(unitKey("Engineering")).request });
+    mount(undefined, { adding: adding(unitKey("engineering")).request });
     item("Engineering").focus();
     press("ArrowDown");
     const reached: (string | null | undefined)[] = [];
@@ -1645,7 +1679,7 @@ describe("adding a node in the chart", () => {
   test("focus goes into the form and back to the node it was added to", () => {
     const view = mount();
     item("Engineering").focus();
-    view.rerender({ adding: adding(unitKey("Engineering")).request });
+    view.rerender({ adding: adding(unitKey("engineering")).request });
     /*
      * ON THE KIND, which is the question the add is asking. Everything else in
      * the form follows from the answer: the name is pre-filled with one free
@@ -1663,11 +1697,11 @@ describe("adding a node in the chart", () => {
       within(ghost("Add to Engineering")).getByRole("radio", { name: "Agent seat" }),
     );
     view.rerender({ adding: null });
-    expect(focused()).toBe(unitKey("Engineering"));
+    expect(focused()).toBe(unitKey("engineering"));
   });
 
   test("Escape in the form closes the add", () => {
-    const { request, closed } = adding(unitKey("Engineering"));
+    const { request, closed } = adding(unitKey("engineering"));
     mount(undefined, { adding: request });
     fireEvent.keyDown(within(ghost("Add to Engineering")).getByLabelText("Name"), {
       key: "Escape",
@@ -1679,7 +1713,7 @@ describe("adding a node in the chart", () => {
     const view = mount();
     const world = () => canvasWorld(view.container).style.transform;
     const before = world();
-    view.rerender({ adding: adding(unitKey("Engineering")).request });
+    view.rerender({ adding: adding(unitKey("engineering")).request });
     expect(world()).not.toBe(before);
     view.rerender({ adding: null });
     expect(world()).toBe(before);
@@ -1692,7 +1726,7 @@ describe("adding a node in the chart", () => {
    * exactly what this arrangement must not become.
    */
   test("the form records the add and closes", () => {
-    const { request, closed } = adding(unitKey("Engineering"), "unit");
+    const { request, closed } = adding(unitKey("engineering"), "unit");
     const view = mount(undefined, { adding: request });
     const form = ghost("Add to Engineering");
     fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Tooling" } });
@@ -1701,27 +1735,32 @@ describe("adding a node in the chart", () => {
     const recorded = view.spies.dispatched.at(-1);
     expect(recorded).toMatchObject({
       type: "record",
-      intent: { type: "addUnit", placement: { parent: unitKey("Engineering") } },
+      intent: { type: "addUnit", placement: { parent: unitKey("engineering") } },
     });
   });
 
   /*
-   * EVERY REFUSAL THE DIALOG COULD SHOW IS STILL SHOWN. The collision
-   * suggestion is the one a reader meets most, and it is a CONTROL rather than
-   * a sentence: it has to be in the ghost or the way out of a name clash is
-   * gone from the chart's add.
+   * EVERY REFUSAL THE DIALOG COULD SHOW IS STILL SHOWN. A name may be shared,
+   * and the handle offered from it is free of every one the company holds; a
+   * handle typed over it that some seat already answers to is refused in the
+   * ghost, or the chart's add would record what the dialog refuses.
    */
-  test("a name already taken offers the next free one, in the ghost", () => {
-    mount(undefined, { adding: adding(unitKey("Engineering")).request });
+  test("a shared name offers a free handle, and a held handle is refused, in the ghost", () => {
+    mount(undefined, { adding: adding(unitKey("engineering")).request });
     const form = ghost("Add to Engineering");
     fireEvent.change(within(form).getByLabelText("Name"), { target: { value: "Dev" } });
-    expect(within(form).getByText(/A seat named Dev already exists/)).toBeDefined();
-    fireEvent.click(within(form).getByRole("button", { name: "Use Dev 2" }));
-    expect((within(form).getByLabelText("Name") as HTMLInputElement).value).toBe("Dev 2");
+    const handle = within(form).getByLabelText("Handle") as HTMLInputElement;
+    expect(handle.value).toBe("dev-2");
+    fireEvent.change(handle, { target: { value: "dev" } });
+    expect(within(form).getByText("dev already names a seat or a unit.")).toBeDefined();
+    expect(within(form).getByRole("button", { name: "Add agent seat" })).toHaveProperty(
+      "disabled",
+      true,
+    );
   });
 
   test("a read-only draft says so in the ghost and records nothing", () => {
-    const { request } = adding(unitKey("Engineering"));
+    const { request } = adding(unitKey("engineering"));
     const view = mount(undefined, { adding: request, readOnly: true });
     const form = ghost("Add to Engineering");
     expect(within(form).getByRole("button", { name: "Add agent seat" })).toHaveProperty(
@@ -1740,7 +1779,7 @@ describe("adding a node in the chart", () => {
   test("no ghost where the parent has left the draft", () => {
     const view = mount();
     const cards = chartCards(view.container).length;
-    view.rerender({ adding: adding(unitKey("Gone")).request });
+    view.rerender({ adding: adding(unitKey("gone")).request });
     /*
      * NOT ONE MORE CARD ON THE CHART, which is the only honest way to ask
      * this. A ghost whose parent is no card of the chart hangs off nothing, so
@@ -1762,7 +1801,7 @@ describe("adding a node in the chart", () => {
   /*
    * AND THE FORM SAYS WHERE, ON SCREEN. The canvas eases onto the ghost, and
    * at the company's root the ghost is a card wide of the parent at the end
-   * of a long branch: arriving from Agents › Add seat, the root and the
+   * of a long branch: arriving from Org chart › Add seat, the root and the
    * siblings the node joins were off the canvas and nothing drawn said where
    * it would land. Said once to a screen reader, which the region's own name
    * already tells on the way in.
@@ -1771,7 +1810,7 @@ describe("adding a node in the chart", () => {
     const view = mount(undefined, { adding: adding(null).request });
     const said = within(ghost("Add to Acme")).getByText("Add to Acme");
     expect(said.getAttribute("aria-hidden")).toBe("true");
-    view.rerender({ adding: adding(unitKey("Engineering")).request });
+    view.rerender({ adding: adding(unitKey("engineering")).request });
     expect(within(ghost("Add to Engineering")).getByText("Add to Engineering")).toBeDefined();
   });
 });

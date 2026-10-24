@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding"
 	"encoding/json"
+	"errors"
 	"maps"
 	"reflect"
 	"slices"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -34,7 +36,6 @@ var carriedByServer = map[string]string{
 	"tracker.TaskPatch.Watch":     "carried beside the patch, in updateTaskArgs",
 	"tracker.TaskPatch.Relate":    "carried beside the patch, in updateTaskArgs",
 	"tracker.TaskPatch.Depend":    "carried beside the patch, in updateTaskArgs",
-	"tracker.TaskPatch.Promote":   "carried beside the patch, in updateTaskArgs",
 	"tracker.TaskPatch.Checklist": "carried beside the patch, in updateTaskArgs",
 
 	"tracker.DayClock.Zone":       "carried beside the wants by name, in taskArgs",
@@ -59,6 +60,9 @@ var carriedByServer = map[string]string{
 
 	"usage.measured.encoded": "a usage page's rows as Fill measured them: the serving node " +
 		"writes them AS the page's Rows (usage.Page.AppendJSON), and the asker decodes Rows",
+
+	"pages.Summary.savedID": "named by the listing and spent by the same read (attachSaves); " +
+		"an answer carries its result as SavedBy and SavedAt",
 }
 
 // extraField is the one field name every record type keeps a newer build's
@@ -203,17 +207,20 @@ var floorless = map[string]string{
 // EVERY OPERATION SAYS WHICH LOG ITS FLOORS ARE ON: an operation that carries a
 // floor names its domain, the domain is one whose log a floor can be on, and
 // the stream it waits on is that domain's own log — the tracker's
-// CREWLET_TRACKER_LOG, the knowledge base's CREWLET_PAGES_LOG or the code
-// host's CREWLET_CODE_LOG, each named as its domain declares it. One that
-// waited on none would carry no floor at all, and
-// one that named another domain's would wait on an applier it does not depend
-// on ([ready]).
+// CREWLET_TRACKER_LOG, the knowledge base's CREWLET_PAGES_LOG, the code host's
+// CREWLET_CODE_LOG, the identity directory's CREWLET_IAM_LOG or the artifacts
+// estate's and its datastore's, each named as its domain declares it. One
+// that waited on none would carry no floor at all, and one that named another
+// domain's would wait on an applier it does not depend on ([ready]).
 func TestEveryOperationSaysWhichLogItsFloorsAreOn(t *testing.T) {
 	t.Parallel()
 	logs := map[string]string{
-		trackerDomain: "CREWLET_TRACKER_LOG",
-		pagesDomain:   "CREWLET_PAGES_LOG",
-		codeDomain:    "CREWLET_CODE_LOG",
+		trackerDomain:      "CREWLET_TRACKER_LOG",
+		pagesDomain:        "CREWLET_PAGES_LOG",
+		codeDomain:         "CREWLET_CODE_LOG",
+		identityDomain:     "CREWLET_IAM_LOG",
+		artifactsDomain:    "CREWLET_ARTIFACTS_LOG",
+		artifactDataDomain: "CREWLET_ARTIFACT_DATA_LOG",
 	}
 	for _, name := range slices.Sorted(maps.Keys(registry)) {
 		spec := registry[name]
@@ -254,12 +261,13 @@ var seatCopyOps = map[string]string{
 // EVERY OPERATION NAMES THE COPY IT READS, because that is the verdict the
 // router and the server ask before running it here: a domain's copy that is
 // wrong runs none of that domain's operations and every other domain's
-// (ADR-0031). An operation naming no domain — the search ops once did, since
+// (ADR-0045). An operation naming no domain — the search ops once did, since
 // they carry no floor — would be asked of no domain's verdict at all: run from
 // a copy out of service, or held to one it does not read.
 func TestEveryOperationNamesTheCopyItReads(t *testing.T) {
 	t.Parallel()
-	domains := []string{trackerDomain, pagesDomain, usageDomain, codeDomain}
+	domains := []string{trackerDomain, pagesDomain, usageDomain, codeDomain,
+		identityDomain, artifactsDomain, artifactDataDomain}
 	for _, name := range slices.Sorted(maps.Keys(registry)) {
 		spec := registry[name]
 		_, seat := seatCopyOps[name]
@@ -297,7 +305,7 @@ var readsSeveral = map[string][]string{
 
 // AN OPERATION THAT READS SEVERAL DOMAINS DECLARES EACH ONE, and is routed by
 // all of them: a node whose copy of any is out of service runs none of it
-// (ADR-0031), and the router's memory of where it stays is kept for that set
+// (ADR-0045), and the router's memory of where it stays is kept for that set
 // of copies rather than for one domain's.
 func TestAnOperationThatReadsSeveralDomainsDeclaresThem(t *testing.T) {
 	t.Parallel()
@@ -327,53 +335,57 @@ func TestAnOperationThatReadsSeveralDomainsDeclaresThem(t *testing.T) {
 // after a node refused it, a reply that answers it, admission's ping and a
 // copy out of service. A field added to the
 // envelope, renamed or made to send its zero value changes what every node of
-// a fleet mid-upgrade reads of every other, and this is where that shows —
-// rather than in a router that silently reads a field its peer stopped
-// sending.
+// a fleet reads of every other, and this is where that shows — rather than in
+// a router that silently reads a field its peer stopped sending. What is pinned
+// is the BODY a signature covers ([Envelopes]); the frame around it is the
+// state log's own, pinned there.
 func TestTheEnvelopeIsWhatThisBuildSends(t *testing.T) {
 	t.Parallel()
-	at := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
 	for name, tc := range map[string]struct {
 		value any
 		want  string
 	}{
 		"a read request": {
-			value: request{Op: opTasks.spec.name, Args: json.RawMessage(`{"Query":{}}`),
+			value: request{ID: "r-1", Op: opTasks.spec.name, Args: json.RawMessage(`{"Query":{}}`),
 				Floors:   []statelog.Position{{Stream: trackerStream, Generation: 1, Seq: 7}},
-				Deadline: at, From: "agent-1"},
-			want: `{"op":"tracker.tasks","args":{"Query":{}},` +
+				Deadline: envelopeInstant, From: "agent-1"},
+			want: `{"id":"r-1","op":"tracker.tasks","args":{"Query":{}},` +
 				`"floors":[{"stream":"CREWLET_TRACKER_LOG","generation":1,"seq":7}],` +
 				`"deadline":"2026-10-04T12:00:00Z","from":"agent-1"}`,
 		},
 		"a read asked after a node refused it": {
-			value: request{Op: opTasks.spec.name, Args: json.RawMessage(`{"Query":{}}`),
+			value: request{ID: "r-4", Op: opTasks.spec.name, Args: json.RawMessage(`{"Query":{}}`),
+				Deadline: envelopeInstant,
 				Spent: &statelog.Spent{
 					Index:    []statelog.Position{{Stream: trackerStream, Generation: 1, Seq: 9}},
 					Waited:   []statelog.Position{{Stream: trackerStream, Generation: 1, Seq: 9}},
 					NoQuorum: []string{pagesStream},
 				}},
-			want: `{"op":"tracker.tasks","args":{"Query":{}},"spent":{` +
+			want: `{"id":"r-4","op":"tracker.tasks","args":{"Query":{}},` +
+				`"deadline":"2026-10-04T12:00:00Z","spent":{` +
 				`"index":[{"stream":"CREWLET_TRACKER_LOG","generation":1,"seq":9}],` +
 				`"waited":[{"stream":"CREWLET_TRACKER_LOG","generation":1,"seq":9}],` +
 				`"no_quorum":["CREWLET_PAGES_LOG"]}}`,
 		},
 		"a write's last resort": {
-			value: request{Op: opCreateTask.spec.name, Actor: &swe, AcceptLagging: true},
-			want: `{"op":"tracker.create_task","actor":{"handle":"swe","kind":"agent",` +
-				`"provenance":{"OperatorID":"","Seat":"","TurnID":"","Chain":null,` +
-				`"Origin":null}},"accept_lagging":true}`,
+			value: request{ID: "r-2", Op: opCreateTask.spec.name, Actor: &swe,
+				Deadline: envelopeInstant, AcceptLagging: true},
+			want: `{"id":"r-2","op":"tracker.create_task","actor":{"handle":"swe","kind":"agent",` +
+				`"provenance":{"OperatorID":"","TurnID":"","Chain":null,"Origin":null}},` +
+				`"deadline":"2026-10-04T12:00:00Z","accept_lagging":true}`,
 		},
 		"admission's ping": {
-			value: request{Op: opPing.spec.name, Args: json.RawMessage(`{}`), From: "agent-1"},
-			want:  `{"op":"estate.ping","args":{},"from":"agent-1"}`,
+			value: pingEnvelope,
+			want: `{"id":"r-3","op":"estate.ping","args":{},` +
+				`"deadline":"2026-10-04T12:00:00Z","from":"agent-1"}`,
 		},
 		"an answer": {
-			value: reply{Node: "data-a", Result: json.RawMessage(`{"TotalHint":7}`)},
-			want:  `{"node":"data-a","result":{"TotalHint":7}}`,
+			value: reply{Node: "data-a", Request: "r-1", Result: json.RawMessage(`{"TotalHint":7}`)},
+			want:  `{"node":"data-a","request":"r-1","result":{"TotalHint":7}}`,
 		},
 		"a copy out of service": {
-			value: reply{Node: "data-a", Unserved: unservedOutOfService, Detail: "wrong"},
-			want:  `{"node":"data-a","unserved":"out_of_service","detail":"wrong"}`,
+			value: reply{Node: "data-a", Request: "r-1", Unserved: unservedOutOfService, Detail: "wrong"},
+			want:  `{"node":"data-a","request":"r-1","unserved":"out_of_service","detail":"wrong"}`,
 		},
 	} {
 		raw, err := json.Marshal(tc.value)
@@ -386,17 +398,25 @@ func TestTheEnvelopeIsWhatThisBuildSends(t *testing.T) {
 	}
 }
 
+// envelopeInstant is the deadline the pinned envelopes carry.
+var envelopeInstant = time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+
+// pingEnvelope is admission's ping as the envelope golden pins it.
+var pingEnvelope = request{ID: "r-3", Op: opPing.spec.name, Args: json.RawMessage(`{}`),
+	Deadline: envelopeInstant, From: "agent-1"}
+
 // WHAT THE ROUTER ACTUALLY SENDS FOR ADMISSION'S PING is the golden above, read
 // off the wire rather than built by hand: the envelope test pins a request a
 // test spelled, and only this one fails when [Router.Serves] starts sending
-// arguments a data node of the previous build would read differently — a
-// partition, a layout, anything at all beyond the empty object.
+// arguments a data node would read differently — a partition, a layout,
+// anything at all beyond the empty object.
 func TestAdmissionsPingIsTheOneTheEnvelopePins(t *testing.T) {
 	t.Parallel()
-	asker := &recordingAsker{answer: []byte(`{"node":"data-a","result":{"Tracker":true,"Pages":true}}`)}
+	asker := &recordingAsker{answer: reply{Node: "data-a",
+		Result: json.RawMessage(`{"Tracker":true,"Pages":true}`)}}
 	r, err := NewRouter(RouterOptions{
 		Self: "agent-1", Queue: asker, Placement: &fakePlacement{nodes: []string{"data-a"}},
-		Session: NewSession(), Timing: Production(),
+		Session: NewSession(), Timing: Production(), Envelopes: fleetEnvelopes,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -413,30 +433,40 @@ func TestAdmissionsPingIsTheOneTheEnvelopePins(t *testing.T) {
 		t.Errorf("admission asked %q, want the data node's own subject %q",
 			sent[0].subject, Subject("data-a"))
 	}
-	var req request
-	if err := json.Unmarshal(sent[0].payload, &req); err != nil {
-		t.Fatalf("the ping does not decode as a request: %v\n%s", err, sent[0].payload)
+	admitted := fleetEnvelopes.admit(sent[0].payload, signedask.NewGuard(), time.Now())
+	if admitted.Disposition != signedask.Admitted {
+		t.Fatalf("the ping does not open as a request the fleet signed: %s (%s)",
+			admitted.Disposition, admitted.Why)
 	}
-	// THE DEADLINE IS THE ATTEMPT'S, which moves with the clock: everything
-	// else is compared byte for byte against the golden.
+	req := admitted.Request
+	// THE ID AND THE DEADLINE ARE THE ATTEMPT'S, which move with every ask
+	// and the clock: each must be there, and everything else is compared
+	// byte for byte against the golden.
+	if req.ID == "" {
+		t.Error("the ping carries no id, so its reply could be anybody's")
+	}
 	if req.Deadline.IsZero() {
 		t.Error("the ping carries no deadline, so a data node keeps working on an " +
 			"answer nobody is waiting for")
 	}
-	req.Deadline = time.Time{}
+	req.ID, req.Deadline = pingEnvelope.ID, pingEnvelope.Deadline
 	raw, err := json.Marshal(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `{"op":"estate.ping","args":{},"from":"agent-1"}`; string(raw) != want {
+	want, err := json.Marshal(pingEnvelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != string(want) {
 		t.Errorf("the router's ping encodes as\n%s\nwant the envelope's\n%s", raw, want)
 	}
 }
 
-// recordingAsker answers every request with one reply and keeps what it was
-// sent, and where.
+// recordingAsker answers every request with one reply — signed by the fleet
+// and bound to the request it answers — and keeps what it was sent, and where.
 type recordingAsker struct {
-	answer []byte
+	answer reply
 
 	mu   sync.Mutex
 	sent []sentRequest
@@ -452,7 +482,13 @@ func (a *recordingAsker) Ask(_ context.Context, subject string, payload []byte, 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.sent = append(a.sent, sentRequest{subject: subject, payload: slices.Clone(payload)})
-	return [][]byte{a.answer}, nil
+	req := opened(payload)
+	if req.ID == "" {
+		return nil, errors.New("a request that does not open as the fleet's")
+	}
+	answer := a.answer
+	answer.Request = req.ID
+	return [][]byte{fleetEnvelopes.sealReply(answer)}, nil
 }
 
 func (a *recordingAsker) requests() []sentRequest {

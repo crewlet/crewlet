@@ -38,9 +38,12 @@ import {
   relTime,
 } from "~/lib/format.ts";
 import { shortAge } from "~/lib/seats.ts";
+import { GENERATION_STRIDE } from "~/contract/positions.ts";
 // TYPE ONLY: these pieces render with no provider above them, so the chart
 // reaches them as resolvers on the chrome and never as a module they import.
-import type { CardLive, SeatKind, SeatRing } from "~/lib/seats.ts";
+import type { AgentAvatar } from "~/lib/avatar.ts";
+import type { AvatarStatus } from "@crewlethq/ui";
+import type { CardLive, SeatKind } from "~/lib/seats.ts";
 import {
   DEFAULT_TYPE,
   fmtMinutes,
@@ -49,6 +52,8 @@ import {
   STATUS_TONE,
   typeIcon,
   typeName,
+  itemAddress,
+  checklistTask,
 } from "~/lib/work.ts";
 import type {
   WorkChecklistRow,
@@ -78,6 +83,12 @@ export interface RowChrome {
    * [seatResolvers], so a builder cannot thread the name and drop this.
    */
   seatKind?: (handle: string) => SeatKind | undefined;
+  /**
+   * How an agent is drawn: its character and colour, the chart's third
+   * answer, and from [seatResolvers] with the other two for the same reason.
+   * `undefined` for a seat the chart does not hold, which keeps its initials.
+   */
+  seatAvatar?: (handle: string) => AgentAvatar | null | undefined;
   types?: WorkTypeDef[];
   statuses?: WorkStatusDef[];
 }
@@ -233,21 +244,23 @@ export function Assignee({
   handle,
   seatName,
   seatKind,
+  seatAvatar,
   size = "sm",
   name: showName,
-  ring,
+  status,
 }: {
   handle?: string;
   seatName?: (handle: string) => string;
   seatKind?: (handle: string) => SeatKind | undefined;
+  seatAvatar?: (handle: string) => AgentAvatar | null | undefined;
   size?: "sm" | "md";
   name?: boolean;
   /**
-   * The holder's STATE, as the ring round their badge — the one place a
-   * seat's state has a hue (`lib/seats.ts` `ringOf`). Never the only carrier:
-   * the caller says the state in words beside it, and so does the title.
+   * The holder's STATE, as the glyph on their badge's corner (`lib/seats.ts`
+   * `statusOf`). Never the only carrier: the badge says it in its name where
+   * it names itself, and the caller says it in words beside it.
    */
-  ring?: SeatRing;
+  status?: AvatarStatus | undefined;
 }) {
   if (!handle) {
     // THE SQUARE IS A FIXED 20px BOX, so the word goes BESIDE it, never in
@@ -277,7 +290,7 @@ export function Assignee({
           a screen reader is free to ignore — so the four columns that draw the
           badge alone announced the assignee as nothing at all.
 
-          AND THE OUTLINE IS THE ONE VARIANT A BADGE HAS: `SeatCell` drew it
+          AND THE OUTLINE IS THE ONE VARIANT A BADGE HAS: `linkedSeat` drew it
           from the kind it was handed and this cell could not be handed one,
           so the same human seat was drawn two ways on the two column sets of
           ONE grid. A kind the chart does not hold takes the kit's default,
@@ -286,8 +299,9 @@ export function Assignee({
         name={label}
         size={size}
         kind={seatKind?.(handle) === "human" ? "human" : "agent"}
+        avatar={seatAvatar?.(handle)}
         decorative={showName}
-        ring={ring}
+        status={status}
       />
       {showName && <span className="truncate">{label}</span>}
     </span>
@@ -311,7 +325,7 @@ export function DueMark({ due, overdue, now }: { due?: string; overdue?: boolean
     <span className={cx("work-due", overdue && "overdue")} title={fmtDateTime(due)}>
       <CalendarGlyph size="xs" />
       {fmtDateCompact(due, now)}
-      {overdue && <span className="sr-only">— overdue</span>}
+      {overdue && <span className="sr-only">, overdue</span>}
     </span>
   );
 }
@@ -346,11 +360,7 @@ export function AsksTag({ count }: { count?: number }) {
   return (
     <Tag
       variant="warning"
-      title={
-        many
-          ? "asked something, rather than merely informed"
-          : "this asks something of its recipient, rather than informing them"
-      }
+      title={many ? "asked something, rather than merely informed" : "Asks for an answer"}
     >
       {/* ONE TEXT NODE, so a DOM query can match the pill's own label rather
           than a fragment of it. */}
@@ -596,7 +606,7 @@ export function WorkCard({
   chrome = {},
   live,
   waiting,
-  ring,
+  status,
   pending,
   tagName,
   drag,
@@ -614,8 +624,8 @@ export function WorkCard({
   live?: CardLive | null;
   /** A coding run on this task parked waiting on the reader. */
   waiting?: CardWaiting | null;
-  /** The holder's state ring, where the engine reports one. */
-  ring?: SeatRing;
+  /** The holder's state, as the glyph on their badge, where the engine reports one. */
+  status?: AvatarStatus | undefined;
   /** A move of this card is in flight and the engine has not answered. */
   pending?: boolean;
   /** A tag slug in the project's own words. */
@@ -650,7 +660,8 @@ export function WorkCard({
           handle={row.assignee}
           seatName={chrome.seatName}
           seatKind={chrome.seatKind}
-          ring={ring}
+          seatAvatar={chrome.seatAvatar}
+          status={status}
         />
       </div>
       <div className="work-card-title clamp">{row.title}</div>
@@ -776,7 +787,12 @@ export function WorkRow({
         <TypeIcon type={row.type} types={chrome.types} />
       </span>
       <span className="work-cell work-cell-who">
-        <Assignee handle={row.assignee} seatName={chrome.seatName} seatKind={chrome.seatKind} />
+        <Assignee
+          handle={row.assignee}
+          seatName={chrome.seatName}
+          seatKind={chrome.seatKind}
+          seatAvatar={chrome.seatAvatar}
+        />
       </span>
       <span className="work-row-when" title={fmtDateTime(row.updated)}>
         {relTime(row.updated, now)}
@@ -859,7 +875,7 @@ export function RowList({
           now={now}
           chrome={chrome}
           href={hrefOf(row)}
-          selected={selected === row.key}
+          selected={selected === itemAddress(row)}
           onOpen={onOpen ? () => onOpen(row) : undefined}
           keyOf={(id) => keys.get(id)}
           ordinal={ordinals ? at + 1 : undefined}
@@ -879,6 +895,14 @@ export interface CoverageFacts {
 }
 
 /**
+ * What an answer whose `complete` is false says, wherever it is drawn: the
+ * state bar's banner and a panel's own callout are one sentence, so they
+ * cannot drift apart.
+ */
+export const INCOMPLETE_NOTE =
+  "Some records need a newer engine version to read, so this may be incomplete.";
+
+/**
  * How stale an answer may be, and what it could not account for.
  *
  * # Two different facts, and a screen that shows only one lies
@@ -891,36 +915,18 @@ export interface CoverageFacts {
  * A screen that renders the freshness badge and swallows the coverage flag is
  * worse than a stale tile, because a person reads "a moment ago" and concludes
  * the board is right. So the incomplete line is a BANNER above the rows rather
- * than a badge beside them, it names the count and the scope, and it says the
- * remedy — which is a build that can read the records, not a refresh.
+ * than a badge beside them, and it names the remedy: a newer engine that can
+ * read the records, not a refresh.
  */
 export function Coverage({ answer }: { answer?: CoverageFacts | null }) {
   if (!answer) return null;
   return (
     <>
       {answer.complete === false && (
-        // `title` IS the bold lead-in this banner hand-rolled with a `strong`,
-        // and the `flex: 1` span goes with it: a Callout's content column
-        // already owns that. The severity stays a WARNING rather than a
-        // danger — the answer is usable, it just cannot account for
-        // everything, which is precisely what the sentence says.
-        <Callout
-          variant="warning"
-          title={`This answer is incomplete${
-            answer.incomplete
-              ? ` — ${answer.incomplete.records} record(s) this build cannot read`
-              : ""
-          }`}
-        >
-          Rows may be missing, rows that should have gone may still be here, and the counts were
-          computed over what is shown.
-          {answer.incomplete?.scope?.length
-            ? ` Affected: ${answer.incomplete.scope.join(", ")}.`
-            : ""}
-          {answer.incomplete
-            ? ` Record version ${answer.incomplete.version}, from sequence ${answer.incomplete.from.seq} — a build that can read it is what resolves this, not a refresh.`
-            : ""}
-        </Callout>
+        // The severity stays a WARNING rather than a danger: the answer is
+        // usable, it just cannot account for everything, which is precisely
+        // what the sentence says.
+        <Callout variant="warning">{INCOMPLETE_NOTE}</Callout>
       )}
       <CoverageTags answer={answer} />
     </>
@@ -967,13 +973,10 @@ export function oddLevel(level: string | undefined): boolean {
  */
 export function CoverageTags({ answer }: { answer?: CoverageFacts | null }) {
   if (!answer) return null;
-  const behind =
-    answer.applied_through !== undefined &&
-    answer.log_seq !== undefined &&
-    answer.applied_through < answer.log_seq;
+  const behind = appliedThrough(answer);
   const level = answer.read_level ?? "";
   const odd = oddLevel(level);
-  if (!odd && !behind) return null;
+  if (!odd && behind === null) return null;
   return (
     <span className="work-coverage">
       {odd && (
@@ -981,7 +984,7 @@ export function CoverageTags({ answer }: { answer?: CoverageFacts | null }) {
           variant="warning"
           appearance="outline"
           size="xs"
-          title={`This node could not measure its own distance from the log, so this answer is a coherent point in its order with no statement about age (read level ${level})`}
+          title="How current this is can’t be measured right now."
         >
           age unknown
         </Tag>
@@ -990,13 +993,40 @@ export function CoverageTags({ answer }: { answer?: CoverageFacts | null }) {
           apply is visible as its own state rather than as lag. NEUTRAL: a
           read level and an apply position are facts about the answer, not
           states of it, and lag alone is never an alarm. */}
-      {behind && (
+      {behind !== null && (
         <Tag appearance="outline" size="xs" title="This node holds records it has not applied yet">
-          applied through {answer.applied_through} of {answer.log_seq}
+          {behind}
         </Tag>
       )}
     </span>
   );
+}
+
+/**
+ * A packed log position as a person reads it: the sequence alone in the first
+ * generation, where every log starts and almost all stay, and `generation:seq`
+ * past it, so a re-anchored log says which generation it is in.
+ *
+ * `applied_through` and `log_seq` are packed — (generation × 2^40) + seq, by
+ * the engine's own stride ([GENERATION_STRIDE]) — so they ORDER correctly with
+ * a plain `<` across a re-anchor, and that comparison stays on the packed
+ * values. What a person reads is not packed: printed raw, every position after
+ * a log's first re-anchor was a thirteen-digit number ("applied through
+ * 1099511627817 of 1099511627832") that names neither the generation nor how
+ * far behind the node is.
+ */
+export function positionWords(packed: number): string {
+  const generation = Math.floor(packed / GENERATION_STRIDE);
+  const seq = packed - generation * GENERATION_STRIDE;
+  return generation === 0 ? `${seq}` : `${generation}:${seq}`;
+}
+
+/** "applied through 41 of 88" for an answer whose node is behind its log, or null. */
+export function appliedThrough(facts: CoverageFacts | null | undefined): string | null {
+  if (facts?.applied_through === undefined || facts.log_seq === undefined) return null;
+  return facts.applied_through < facts.log_seq
+    ? `applied through ${positionWords(facts.applied_through)} of ${positionWords(facts.log_seq)}`
+    : null;
 }
 
 /**
@@ -1069,15 +1099,18 @@ export function ChecklistClaims({
   hrefOf,
 }: {
   rows: readonly WorkChecklistRow[];
-  /** Where a task key goes. The screen owns the address. */
-  hrefOf: (key: string) => string;
+  /**
+   * Where a task goes, by its ADDRESS (`itemAddress`) — the key, unless
+   * another task claimed that key first. The screen owns the route.
+   */
+  hrefOf: (address: string) => string;
 }) {
   if (rows.length === 0) return null;
   return (
     <div className="col">
       {rows.map((item) => (
         <div key={`${item.task}:${item.item}`} className={cx("work-check", item.done && "done")}>
-          <a className="mono t-link" href={hrefOf(item.task_key)}>
+          <a className="mono t-link" href={hrefOf(itemAddress(checklistTask(item)))}>
             {item.task_key}
           </a>
           <span className="work-check-name">{item.name}</span>

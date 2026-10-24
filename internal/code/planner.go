@@ -48,7 +48,7 @@ const (
 	// refsKey is code_refs' PRIMARY KEY index, (repo_id, ref).
 	refsKey = "sqlite_autoindex_code_refs_1"
 	// liveRefsKey is code_refs_live_idx, (repo_id, ref) WHERE target != ''
-	// (replicated migration 0045): the live refs alone, in key order.
+	// (replicated migration 0052): the live refs alone, in key order.
 	liveRefsKey = "code_refs_live_idx"
 	// packsKey is code_packs' PRIMARY KEY index, (repo_id, pack_id, part).
 	packsKey = "sqlite_autoindex_code_packs_1"

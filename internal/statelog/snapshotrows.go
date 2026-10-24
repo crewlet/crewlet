@@ -192,16 +192,16 @@ func (r *SnapshotRows) Op(ctx context.Context, opID string) (OpEntry, bool, erro
 	return entry, held, nil
 }
 
-// LostBefore answers how far back the domain's ledger may have lost rows — see
-// [Rows.LostBefore].
-func (r *SnapshotRows) LostBefore(ctx context.Context) (time.Time, bool, error) {
+// LostBefore answers how far back the domain's ledger may have lost rows of an
+// operation on a subject of this kind — see [Rows.LostBefore].
+func (r *SnapshotRows) LostBefore(ctx context.Context, kind string) (time.Time, bool, error) {
 	var (
 		before time.Time
 		ok     bool
 	)
 	err := r.db.Read(ctx, func(tx *sql.Tx) error {
 		var err error
-		before, ok, err = r.tables.lostBefore(ctx, tx)
+		before, ok, err = r.tables.lostBefore(ctx, tx, kind)
 		return err
 	})
 	return before, ok, err

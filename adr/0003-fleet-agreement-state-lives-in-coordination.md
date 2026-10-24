@@ -1,4 +1,4 @@
-# ADR-0003 — Fleet-agreement state lives in coordination, never a node's own file
+# ADR-0003: Fleet-agreement state lives in coordination, never a node's own file
 
 - **Status:** accepted
 - **Authority:** `internal/coord`
@@ -12,7 +12,7 @@
 The node's store is **one file, one process, exclusively owned**. A fact the
 whole company has to agree on therefore cannot live in it, because every node
 would read its own copy and draw a fleet of one. Such a fact goes in the
-coordination KV, which rides the stream's own connection and is a
+coordination KV, which lives on the stream's own broker and is a
 compare-and-set store the broker already provides.
 
 The test is a single question, asked of every new table: **who has to agree on

@@ -1679,7 +1679,7 @@ func TestARecordStaysUnderTheRowBudget(t *testing.T) {
 		t.Fatalf("%d records, want 3: the lead, three maximal pushes, then the fourth", got)
 	}
 	for seq := before + 2; seq <= last; seq++ {
-		_, payload, _, _, err := n.log.At(t.Context(), seq)
+		_, payload, _, _, err := n.records.At(t.Context(), seq)
 		if err != nil {
 			t.Fatal(err)
 		}

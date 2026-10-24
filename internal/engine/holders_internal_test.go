@@ -22,7 +22,7 @@ import (
 func TestEveryLogCountsTheLiveDataNodes(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	e.stopRetention()
 	s.publishPositions(t.Context())
 	r := &retention{fleet: e.backends.Fleet, state: s, nodeID: e.id,

@@ -76,12 +76,7 @@ type PersonState struct {
 
 // PersonQuery asks for one.
 type PersonQuery struct {
-	// Who this record belongs to. A [Party] rather than a handle for the
-	// reason [MyWorkQuery.Who] is one — a person bound to an operator
-	// token answers to two names — and what it selects here is WHICH
-	// record, through [readPartyRecord]: the seat's if they have one, the
-	// credential's if that is the only one anything has written.
-	Who Party
+	Handle string
 
 	Level       statelog.ReadLevel
 	Session     statelog.Position
@@ -102,12 +97,12 @@ func (r *Reader) Person(ctx context.Context, q PersonQuery, now time.Time) (Pers
 		return PersonState{}, fmt.Errorf("tracker: this person read names no " +
 			"level — a surface resolves an absent read_level to its own " +
 			"default before it reads")
-	case !q.Who.Named():
+	case q.Handle == "":
 		return PersonState{}, fmt.Errorf("tracker: a person read names nobody")
 	}
 
 	out := PersonState{
-		Handle:         q.Who.Handle,
+		Handle:         q.Handle,
 		MaxSnoozeAhead: int64(MaxSnoozeAhead / time.Second),
 	}
 	served, err := r.log.Read(ctx, statelog.Query{
@@ -119,7 +114,7 @@ func (r *Reader) Person(ctx context.Context, q PersonQuery, now time.Time) (Pers
 		MaxLagSeq:   q.MaxLagSeq,
 		Set:         true,
 	}, func(tx *sql.Tx) error {
-		person, held, err := readPartyRecord(ctx, tx, q.Who)
+		person, held, err := readPerson(ctx, tx, q.Handle)
 		if err != nil {
 			return err
 		}

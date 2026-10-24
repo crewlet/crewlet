@@ -29,13 +29,22 @@
  */
 
 import { useMemo, type ReactNode } from "react";
-import { Callout, Card, EmptyState, EmptyValue } from "@crewlethq/ui";
+import {
+  Callout,
+  Card,
+  EmptyState,
+  EmptyValue,
+  InlineCode,
+  TableNumberCell,
+  TableDateCell,
+  TableEntityCell,
+} from "@crewlethq/ui";
 import { BrainGlyph, CircleAlertGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { seatKindKey } from "~/app/crumbs.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, NumberCell, SeatLabel } from "~/app/frame/cells.tsx";
+import { plainSeat } from "~/app/frame/cells.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
@@ -44,7 +53,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { handleLabel, indexOrg, type OrgIndex } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
-import { plural, relTime, tsKey } from "~/lib/format.ts";
+import { plural, relTime, tsKey, fmtCount } from "~/lib/format.ts";
 import type { MemoryOverviewSeat } from "~/contract/memory.ts";
 
 /**
@@ -56,8 +65,7 @@ const DIARY_POLL_MS = 60_000;
 
 /** Why a row carries no count: nobody holds the seat, or its holder did not say. */
 export function uncounted(row: MemoryOverviewSeat): string | null {
-  if (row.held_by === "none")
-    return "No node holds this agent, so no copy of its memory is current";
+  if (row.held_by === "none") return "Not running on any node";
   if (row.unavailable) return `Not answered: ${row.unavailable}`;
   return null;
 }
@@ -75,28 +83,29 @@ export function Diaries() {
 
   const count = (row: MemoryOverviewSeat, value: number) => {
     const why = uncounted(row);
-    return why ? <EmptyValue label={why} /> : <NumberCell value={value} />;
+    return why ? <EmptyValue label={why} /> : <TableNumberCell value={value} format={fmtCount} />;
   };
 
   return (
     <>
-      <PageNote>
-        What each agent chose to remember, counted by the node holding the agent — the one copy of
-        its memory kept current.
-      </PageNote>
+      <PageNote>What each agent chose to remember.</PageNote>
       <CoverageNote
         coverage={[overview.data?.coverage]}
-        what="this list"
-        lost="the agents each of them holds are listed without their counts"
+        what="Diaries"
+        lost={{
+          one: "Its agents are listed without counts",
+          many: "Their agents are listed without counts",
+        }}
       />
       <QueryState
         error={overview.error}
+        refusal={overview.refusal}
         loading={overview.loading && !overview.data}
         empty={
           overview.data && rows.length === 0
             ? {
                 title: "No agents",
-                hint: "A diary belongs to an agent seat, and this company's chart has none yet.",
+                hint: "Add an agent in Edit org.",
               }
             : undefined
         }
@@ -112,7 +121,7 @@ export function Diaries() {
           <DataGrid<MemoryOverviewSeat>
             name="diaries"
             rows={rows}
-            rowKey={(r) => r.handle}
+            rowKey={(r) => r.agent_id}
             defaultSort="agent"
             rowHref={(r) => href(["knowledge", "diaries", r.handle])}
             columns={[
@@ -123,9 +132,11 @@ export function Diaries() {
                 phoneLead: true,
                 sortValue: (r) => nameOf(index, r.handle).toLowerCase(),
                 cell: (r) => (
-                  <SeatLabel
-                    name={nameOf(index, r.handle)}
-                    kind={index.byHandle.get(r.handle)?.kind}
+                  <TableEntityCell
+                    {...plainSeat({
+                      name: nameOf(index, r.handle),
+                      kind: index.byHandle.get(r.handle)?.kind,
+                    })}
                   />
                 ),
               },
@@ -146,7 +157,7 @@ export function Diaries() {
                   uncounted(r) ? (
                     <EmptyValue label={uncounted(r)!} />
                   ) : (
-                    <DateCell at={r.last_reflection_at} now={now} />
+                    <TableDateCell value={r.last_reflection_at} now={now} />
                   ),
               },
               {
@@ -229,7 +240,7 @@ export function Diary({ handle }: { handle: string }) {
       <EmptyState
         icon={<BrainGlyph size="xl" />}
         title={`${name} is a person`}
-        description="A diary is what an agent keeps; a person's memory is their own."
+        description="Only agents keep diaries."
       />
     );
   }
@@ -245,11 +256,11 @@ export function Diary({ handle }: { handle: string }) {
       )}
       {!seat && org && (
         <Callout variant="info" icon={<CircleAlertGlyph size="md" />}>
-          No agent in the chart is called <code className="inline">{handleLabel(handle)}</code> —
-          this is whatever memory the fleet still holds under that handle.
+          No agent is called <InlineCode>{handleLabel(handle)}</InlineCode>. Showing memory left
+          under that handle.
         </Callout>
       )}
-      <QueryState error={memory.error} loading={memory.loading && !data}>
+      <QueryState error={memory.error} refusal={memory.refusal} loading={memory.loading && !data}>
         {data?.held_by === "none" ? (
           <EmptyState
             icon={<BrainGlyph size="xl" />}
@@ -262,13 +273,12 @@ export function Diary({ handle }: { handle: string }) {
               <DiaryCard memory={data} heading="h2" />
               <EpisodesCard memory={data} now={now} heading="h2" />
               <p className="t-caption">
-                {plural(data.skills_total, "learned skill")} and{" "}
-                {plural(data.counterparties_total, "colleague")} remembered —{" "}
                 <a
                   className="t-link prose-link"
-                  href={href(["agents", "seats", handle], { tab: "memory" })}
+                  href={href(["company", "org", "seats", handle], { tab: "memory" })}
                 >
-                  {name}&rsquo;s whole memory
+                  {plural(data.skills_total, "learned skill")} and{" "}
+                  {plural(data.counterparties_total, "colleague")} remembered
                 </a>
               </p>
             </>

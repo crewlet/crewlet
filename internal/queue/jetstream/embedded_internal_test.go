@@ -3,12 +3,13 @@ package jetstream
 import (
 	"context"
 	"net"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsapi"
@@ -75,71 +76,166 @@ func TestAPortProbeSaysWhetherItCouldAnswerAtAll(t *testing.T) {
 	}
 }
 
-// A READINESS FAILURE NAMES THE ROUTE LISTENER OR THE PEERS, NEVER BOTH AND
-// NEVER THE WRONG ONE.
+// A CONNECTION TO THIS PROCESS'S OWN BROKER HANDSHAKES WITHIN THE LISTENER
+// BUDGET, never nats's two-second default for a remote dial.
 //
-// # Why this branch is worth a case of its own
+// The server a connection is opened to has already answered
+// ReadyForConnections, so a slow handshake measures only host load — and on a
+// loaded host the default failed the queue's own connection with `read pipe:
+// i/o timeout` against a broker that was up. The budget has to be the one a
+// started server is given to take a connection ([listenTimeout]), or the two
+// drift.
 //
-// Because it was wrong in the direction that is invisible. The read of "did
-// the route listener bind" used to happen AFTER the server was shut down, and
-// shutting a server down closes that listener and clears the address — so the
-// answer was nil on every clustered member, and a member whose peers were
-// simply unreachable was told its port had been taken. That sends an operator
-// to hunt for a process holding a port nobody is holding, while the peer they
-// needed to look at goes unmentioned.
+// HELD ON THE CONNECTION [embeddedServer.connect] OPENS, over both of its
+// dials — the in-memory pipe and the loopback port — rather than on an option
+// list read beside them: a list a test reads certifies nothing about a dial
+// that stopped passing it. Asked of a clustered member's flag as well as a
+// solo server's, because the two budgets this replaced were picked by that
+// flag, and a member given its own number again would be the drift.
 //
-// Nothing caught it: the pre-bind probe covers the ordinary taken-port case
-// and returns long before here, so this branch had no test at all and the
-// message it produces is the only thing that distinguishes the two failures.
-func TestAReadinessFailureBlamesTheRouteListenerOnlyWhenItNeverBound(t *testing.T) {
+// AND ITS RECONNECTS SPAN THAT SAME BUDGET, since running them out is how a
+// node whose own broker has stopped stops itself ([embeddedReconnects]) — and
+// they are made to THIS server alone, ignoring the peers a cluster member
+// advertises, or a reconnect lands on a peer and never runs out. That half is
+// asserted on the option here, on both dials, and as behaviour against a real
+// cluster in jetstreamtest, which is where a cluster may be formed.
+//
+// Mutation: drop the budget from either dial in connect and its rows go red;
+// drop the reconnect options and every row does (nats's own sixty attempts two
+// seconds apart span two minutes); drop IgnoreDiscoveredServers and every row
+// does.
+func TestAConnectionToItsOwnBrokerHandshakesWithinTheListenerBudget(t *testing.T) {
 	t.Parallel()
+	inProcess, err := startEmbedded(t.Context(), Config{})
+	if err != nil {
+		t.Fatalf("start an in-process broker: %v", err)
+	}
+	t.Cleanup(inProcess.shutdown)
+	if !inProcess.inProcess {
+		t.Fatal("a solo broker listens on a socket, so the in-memory dial goes unexercised")
+	}
+	loopback := listeningBroker(t)
 
-	const (
-		budget = 90 * time.Second
-		port   = 6222
-		host   = "127.0.0.1"
-	)
+	for _, c := range []struct {
+		name   string
+		server *embeddedServer
+	}{
+		{"through the in-memory pipe", inProcess},
+		{"over the loopback port", loopback},
+	} {
+		for _, clustered := range []bool{false, true} {
+			e := *c.server
+			e.clustered = clustered
+			nc, err := e.connect(watched{})
+			if err != nil {
+				t.Fatalf("%s: connect: %v", c.name, err)
+			}
+			got := nc.Opts.Timeout
+			reconnects, wait := nc.Opts.MaxReconnect, nc.Opts.ReconnectWait
+			ownOnly := nc.Opts.IgnoreDiscoveredServers
+			nc.Close()
+			if !ownOnly {
+				t.Errorf("%s, clustered=%v: the connection takes the peers a "+
+					"member advertises into its reconnect pool, so a reconnect "+
+					"lands on a peer and a node whose own member stopped runs on "+
+					"without it", c.name, clustered)
+			}
+			if want := listenTimeout; got != want {
+				t.Errorf("%s, clustered=%v: the handshake budget is %v, want "+
+					"the listener budget %v — nats's own default is %v, a figure "+
+					"for a remote server rather than one in this process",
+					c.name, clustered, got, want, nats.DefaultTimeout)
+			}
+			// AND THE RECONNECTS SPAN THE SAME BUDGET, one wait at a time:
+			// running them out is how a node whose own broker stopped
+			// stops itself, and nats's own sixty attempts two seconds
+			// apart were two minutes dark whatever the topology.
+			if span := time.Duration(reconnects) * wait; reconnects <= 0 ||
+				span != listenTimeout {
+				t.Errorf("%s, clustered=%v: %d reconnects %v apart span %v, want "+
+					"the listener budget %v", c.name, clustered, reconnects, wait,
+					span, listenTimeout)
+			}
+		}
+	}
+}
 
-	// THE ROUTE LISTENER NEVER BOUND: the port is the finding, because it
-	// is the one fact an operator cannot derive from anywhere else.
-	lost := notReadyError(budget, true, port, host, false)
-	if !strings.Contains(lost.Error(), "no route listener") {
-		t.Errorf("a member that never bound its route listener is not told so: %v", lost)
+// listeningBroker is a solo broker that DOES listen, on a loopback client
+// port — the dial a clustered member's connections take — so
+// [embeddedServer.connect]'s socket branch is exercised without forming a
+// cluster in this package.
+func listeningBroker(t *testing.T) *embeddedServer {
+	t.Helper()
+	opts, scratch, err := embeddedOptions(Config{}, systemUser{})
+	if err != nil {
+		t.Fatalf("broker options: %v", err)
 	}
-	if !strings.Contains(lost.Error(), strconv.Itoa(port)) {
-		t.Errorf("the failure does not name the port that was taken: %v", lost)
+	opts.DontListen, opts.Host = false, "127.0.0.1"
+	ns, err := server.NewServer(opts)
+	if err != nil {
+		removeScratch(scratch)
+		t.Fatalf("configure a listening broker: %v", err)
 	}
+	started := startJoined(ns)
+	t.Cleanup(func() { shutdownAndClean(ns, started, scratch) })
+	if !ns.ReadyForConnections(listenTimeout) {
+		t.Fatalf("a listening broker was not ready within %v", listenTimeout)
+	}
+	return &embeddedServer{ns: ns, started: started, scratch: scratch}
+}
 
-	// THE LISTENER BOUND: the routes and the metadata group are what is
-	// left, and naming the port here is the wrong lead.
-	peers := notReadyError(budget, true, port, host, true)
-	// THE FIELD IS stream.cluster.peers, which is the one an operator can
-	// grep their Tier A for. It read `stream.cluster.routes` — a key this
-	// config has never had, so the remedy sent them looking for something
-	// that does not exist.
-	if !strings.Contains(peers.Error(), "stream.cluster.peers") {
-		t.Errorf("a clustered member waiting on peers is not pointed at them: %v", peers)
-	}
-	if strings.Contains(peers.Error(), "no route listener") {
-		t.Errorf("a member whose route listener DID bind is blamed for it: %v", peers)
-	}
+// startJoined starts ns the way [startEmbedded] does — on a goroutine whose
+// end the returned channel reports — so a cleanup through [shutdownAndClean]
+// waits for the Start it may overlap rather than racing it.
+func startJoined(ns *server.Server) <-chan struct{} {
+	started := make(chan struct{})
+	go func() {
+		defer close(started)
+		ns.Start()
+	}()
+	return started
+}
 
-	// A SOLO MEMBER HAS NO ROUTE LISTENER TO BLAME, whatever it answers
-	// about one: it configures no route port, so the question does not
-	// arise and the port branch must not fire on it.
-	solo := notReadyError(budget, false, 0, "", false)
-	if strings.Contains(solo.Error(), "no route listener") {
-		t.Errorf("a solo member is blamed for a route listener it never wanted: %v", solo)
+// AN EXTERNAL SERVER'S HANDSHAKE IS NOT GIVEN THE EMBEDDED MEMBER'S BUDGET.
+//
+// A connection to this process's own member takes the listener budget because
+// that server has already answered; a remote one has not, and the reconnect
+// loop waits this long on every silent member of its pool before asking the
+// next, which is time a node spends not renewing its seats' leases. The two
+// option lists sit a screen apart, so this holds the one a shared list would
+// break. Mutation: dial with listenTimeout and it goes red.
+func TestAnExternalDialKeepsItsOwnHandshakeBudget(t *testing.T) {
+	t.Parallel()
+	opts, err := dialOptions(Config{})
+	if err != nil {
+		t.Fatalf("dialOptions: %v", err)
 	}
-	if !strings.Contains(solo.Error(), "clustered: false") {
-		t.Errorf("the failure does not say this member had no peers to wait for: %v", solo)
+	applied := nats.GetDefaultOptions()
+	for _, opt := range opts {
+		if err := opt(&applied); err != nil {
+			t.Fatalf("applying an option: %v", err)
+		}
+	}
+	if applied.Timeout != externalHandshake {
+		t.Errorf("an external dial's handshake budget is %v, want %v — the "+
+			"embedded member's listener budget (%v) would hold a reconnect on a "+
+			"partitioned member for that long",
+			applied.Timeout, externalHandshake, listenTimeout)
 	}
 }
 
 // droppingInfoJS drops the account report it is asked for — returning only
 // when the request's own term ends, as a request a metadata group with no
 // leader never replies to does — until it has dropped `drop` of them, and
-// then answers it.
+// then answers at once.
+//
+// THE ANSWER IS ITS OWN, never the real server's. The wait gives every ask
+// the same term, and the cases shorten it to 20 ms so three dropped asks cost
+// little; a real round trip under a loaded race build ran past that term, the
+// wait rightly asked a fifth time, and the case reported the count it exists
+// to pin as a defect (1 run in 900 beside three busy CPUs, and once in 20 runs
+// of this package). How often the wait asks is the assertion, so the latency
+// of an answer must not decide it.
 type droppingInfoJS struct {
 	jetstream.JetStream
 	drop  int32
@@ -151,7 +247,7 @@ func (f *droppingInfoJS) AccountInfo(ctx context.Context) (*jetstream.AccountInf
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
-	return f.JetStream.AccountInfo(ctx)
+	return &jetstream.AccountInfo{}, nil
 }
 
 // A CLUSTERED MEMBER IS READY ONLY ONCE THE METADATA LEADER ANSWERS IT, not
@@ -175,7 +271,7 @@ func TestAClusteredMemberIsReadyOnlyOnceTheLeaderAnswers(t *testing.T) {
 		t.Fatalf("start the member: %v", err)
 	}
 	t.Cleanup(e.shutdown)
-	nc, err := e.connect()
+	nc, err := e.connect(watched{})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

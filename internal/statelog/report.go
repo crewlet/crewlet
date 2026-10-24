@@ -136,9 +136,11 @@ type MaintenanceReport struct {
 
 	// Since is when the exclusion was taken and By which operator ran the
 	// verb — the two things somebody finding this at an inconvenient hour
-	// needs before anything else.
-	Since time.Time `json:"since"`
-	By    string    `json:"by,omitempty"`
+	// needs before anything else — with OperatorID the credential they ran
+	// it through, which tells their own gesture from their token's.
+	Since      time.Time `json:"since"`
+	By         string    `json:"by,omitempty"`
+	OperatorID string    `json:"operator_id,omitempty"`
 
 	// ParticipantsMissing names the nodes whose acknowledgement the seal
 	// is still waiting for. EMPTY IS NOT THE SAME AS UNKNOWN: an
@@ -149,6 +151,11 @@ type MaintenanceReport struct {
 	// Blocked names why the operation cannot proceed without a person,
 	// empty while it can.
 	Blocked string `json:"blocked,omitempty"`
+
+	// AbandonedBy is who abandoned the operation, once somebody has: a
+	// window blocked because it was abandoned is still carrying out that
+	// person's decision, and the block alone named nobody.
+	AbandonedBy coord.MaintenanceParty `json:"abandoned_by,omitzero"`
 }
 
 // DomainReport is one registered domain's row.
@@ -166,7 +173,7 @@ type DomainReport struct {
 	//
 	// ReserveBytes is the top of MaxBytes kept for gate records — an
 	// eviction, a readmission — on a log that keeps a reserve
-	// ([GateReserve]), and HeadroomFraction is what is left of the rest:
+	// ([Reservation.Bytes]), and HeadroomFraction is what is left of the rest:
 	// the ceiling ordinary writes are refused `log_full` at.
 	FirstSeq         uint64   `json:"first_seq"`
 	LastSeq          uint64   `json:"last_seq"`
@@ -174,6 +181,18 @@ type DomainReport struct {
 	MaxBytes         uint64   `json:"max_bytes,omitempty"`
 	ReserveBytes     uint64   `json:"reserve_bytes,omitempty"`
 	HeadroomFraction *float64 `json:"headroom_fraction,omitempty"`
+
+	// BytesPerDay is what the log took in over the trailing day, as this
+	// node last measured it — the rate `log_ceiling_short` holds the
+	// ceiling against.
+	//
+	// ABSENT RATHER THAN ZERO when nothing was measured, which is every
+	// compacted log, every log in its first two days — whose trailing day
+	// would contain the day it was imported into — and every node before
+	// its first trim tick: zero is a log that took in nothing, and
+	// rendering "not measured" as that would show an idle log where nobody
+	// knows.
+	BytesPerDay *uint64 `json:"bytes_per_day,omitempty"`
 
 	// TrimFloor is the floor the fleet has published — everything below it
 	// may already have been removed, by the last tick or any earlier one
@@ -396,7 +415,7 @@ func (h Health) NotReady(now time.Time, stream string, identity error) *DomainRe
 		}
 	case RefuseBehind:
 		out.Detail = fmt.Sprintf("it is replaying up to the published trim floor "+
-			"from its checkpoint %d — the log still holds what it lacks, and this "+
+			"from its checkpoint %d. The log still holds what it lacks, and this "+
 			"clears on its own", h.Position.Seq)
 	}
 	return out
@@ -516,8 +535,8 @@ type NodeDomainReport struct {
 	// are keyed to, and CheckpointStoredAt the broker's instant for the
 	// record its checkpoint stands on — what a reanchor weighs to tell a
 	// peer on the lost stream from one on the live one, and a peer whose
-	// history is the log's from one holding history the log lost. ABSENT
-	// where the node did not publish them.
+	// history is the log's from one holding history the log lost.
+	// CheckpointStoredAt is ABSENT where the checkpoint names no record.
 	StreamCreatedAt    time.Time `json:"stream_created_at,omitzero"`
 	CheckpointStoredAt time.Time `json:"checkpoint_stored_at,omitzero"`
 }
@@ -631,9 +650,14 @@ type DomainInputs struct {
 	FirstSeq, LastSeq, Bytes, MaxBytes uint64
 	StreamReadable                     bool
 
-	// Reserved says the log keeps a gate reserve under MaxBytes
-	// ([KeepsGateReserve]), which is what its headroom is measured against.
-	Reserved bool
+	// BytesPerDay is the log's measured daily intake, nil where nothing
+	// was measured. See [DomainReport.BytesPerDay].
+	BytesPerDay *uint64
+
+	// Reservation is how the log divides MaxBytes between ordinary writes
+	// and gate records ([ReservationOf]), which is what its headroom is
+	// measured against. Its zero value keeps no reserve.
+	Reservation Reservation
 
 	// TrimFloor is the published floor, and Decision is what this tick
 	// concluded from the six terms — both meaningful only where FloorState
@@ -659,6 +683,30 @@ type DomainInputs struct {
 	// none, empty when it is taking them.
 	SnapshotSkip SkipReason
 
+	// DeferredAge and DeferredRecord are the oldest record this node holds
+	// on this log and cannot decode, exactly as [Reading] defines them, and
+	// zero while it holds none.
+	//
+	// HERE RATHER THAN ON THE NODE'S READING, because what the grace does
+	// is the log's: every log's copy is judged on its own (ADR-0045), so a
+	// record held past it takes this node's copy of THAT log out of service
+	// and no other's. Folded into one node-wide alarm naming the oldest, an
+	// identity record two hours old was the only one named while a tracker
+	// record forty minutes old had taken the tracker's copy out as well.
+	DeferredAge    time.Duration
+	DeferredRecord string
+
+	// FloorUnknownFor and FloorUnknownCause are how long this node has been
+	// unable to read this log's trim floor and what the latest read said,
+	// as [Reading] defines them — zero while it can.
+	FloorUnknownFor   time.Duration
+	FloorUnknownCause string
+
+	// LinearizableReads and LinearizableReadsExpected are this log's
+	// observed daily read rate and its census, as [Reading] defines them —
+	// evaluated per log, because each log was sized for its own census.
+	LinearizableReads, LinearizableReadsExpected int
+
 	// Tombstones is this log's own evictions: with the register's rows
 	// naming the log and the live data nodes ([ReportInputs.Live]), the
 	// three inputs the trim counts the log's nodes from, which the node
@@ -677,11 +725,21 @@ type ReportInputs struct {
 	At          time.Time
 	BackupOwner string
 
-	// Reading is this node's alarm reading, MINUS the two conditions that
-	// are per domain: log headroom and a blocked trim are evaluated per
-	// domain here, from the domain rows, so a two-domain fleet reports
-	// which domain is full rather than that something is.
+	// Reading is this node's alarm reading, MINUS the conditions that are
+	// per domain: a log's headroom, its ceiling against its window, a
+	// blocked trim, a record held past the deferral grace, an unreadable
+	// floor and a read rate past the census are evaluated per domain here,
+	// from the domain rows and [DomainInputs], so a two-domain fleet
+	// reports which log is full, blocked, holding, refusing or read past
+	// its sizing rather than that something is.
 	Reading Reading
+
+	// ReplayWindow is `stream.tracker_retention.min_age`: how much of its
+	// own history every log keeps, because the trim never removes a record
+	// younger than it. One value for every domain, since one age term
+	// governs every domain's trim — and it is what `log_ceiling_short`
+	// asks each log's ceiling to hold at that log's measured rate.
+	ReplayWindow time.Duration
 
 	Domains []DomainInputs
 
@@ -794,6 +852,7 @@ func (in ReportInputs) domain(d DomainInputs) DomainReport {
 		FirstSeq:            d.FirstSeq,
 		LastSeq:             d.LastSeq,
 		Bytes:               d.Bytes,
+		BytesPerDay:         d.BytesPerDay,
 		TrimFloor:           d.TrimFloor,
 		TrimTo:              d.Decision.To,
 		TrimFloorState:      d.FloorState,
@@ -815,12 +874,10 @@ func (in ReportInputs) domain(d DomainInputs) DomainReport {
 	}
 	if d.StreamReadable && d.MaxBytes > 0 {
 		out.MaxBytes = d.MaxBytes
-		if d.Reserved {
-			out.ReserveBytes = GateReserve(d.MaxBytes)
-		}
+		out.ReserveBytes = d.Reservation.Bytes(d.MaxBytes)
 		// OF THE CEILING ORDINARY WRITES ARE HELD TO, because that is
-		// where they start being refused — see [Headroom].
-		out.HeadroomFraction = Headroom(d.Bytes, d.MaxBytes, d.Reserved)
+		// where they start being refused — see [Reservation.Headroom].
+		out.HeadroomFraction = d.Reservation.Headroom(d.Bytes, d.MaxBytes)
 	}
 	for _, t := range d.Decision.Terms {
 		state := termState(t)
@@ -910,7 +967,7 @@ func (in ReportInputs) remedy(name TermName) string {
 		}
 		return "No complete backup inside `backup_max_age`. Run `crewlet backup`, " +
 			"or set `backup_floor: operator` and run `crewlet retention ack`. No " +
-			"backup owner is configured — set `retention.backup_owner` so the " +
+			"backup owner is configured: set `retention.backup_owner` so the " +
 			"next person reading this knows whose job it is."
 	case TermSnapshotFloor:
 		return fmt.Sprintf("Fewer than %d nodes hold a verified snapshot. The "+
@@ -1086,28 +1143,189 @@ func (in ReportInputs) snapshots() []SnapshotReport {
 //
 // # Why the per-domain half is evaluated separately
 //
-// [Reading] describes ONE node, and two of its conditions — the log's
-// headroom and a blocked trim — are properties of a DOMAIN. Evaluating the
-// node-wide reading once and each domain's own fields once per domain is what
-// lets a two-domain fleet say WHICH log is filling. Folding them into one
-// reading would report the worst of the two with no name on it, which is the
-// number an operator then has to go and find by hand.
+// [Reading] describes ONE node, and six of its conditions (the log's headroom,
+// a ceiling too small for the log's own replay window, a blocked trim, a
+// record held past the deferral grace, a floor this node cannot read and a
+// read rate past the log's census) are properties of a DOMAIN ([PerLogKinds]).
+// Evaluating the node-wide reading once and each domain's own fields once per
+// domain is what lets a two-domain fleet say WHICH log is filling. Folding them
+// into one reading would report the worst of the two with no name on it, which
+// is the number an operator then has to go and find by hand, and for the
+// deferral and the floor it would say the WRONG thing about the others, since
+// what the grace does and which re-anchor a floor needs differ from one log to
+// the next.
+//
+// The domain rows are [ReportInputs.domain]'s, one per [ReportInputs.Domains]
+// entry and in the same order, so a row and the inputs it was built from share
+// an index.
+//
+// # And why each kind is still ONE alarm
+//
+// The kind is an alarm's identity on the count, the gauge and every screen:
+// the gauge has one series per kind, and the health envelope counts what an
+// operator has to look at. So a kind raised on several logs is one alarm
+// listing them ([Alarm.Domains]), each with its own measurement and the most
+// pressing log's as its detail, rather than one alarm per log that the health
+// count would add up and the gauge would not. The log lines are the one
+// surface that stays per log, and the [Tracker] forms them from this list.
+//
+// # A trim the backup policy holds is the backup alarm's
+//
+// While [KindBackupAge] fires, a log held by the backup term whose own
+// [KindTrimBlocked] fires is not a second problem: the backup is the remedy,
+// and the backup alarm already says that the trim waits for one. Its log is
+// listed under that alarm instead, so a company with no backup reads as the
+// one problem it has rather than as one per log. A hold that has not yet
+// lasted past the replay window and a tick, or that keeps nothing past the
+// window, raises nothing and is listed under neither — exactly as a hold by
+// any other term. A log the backup term holds while that alarm is quiet (a
+// backup taken on an earlier generation of the log) stays under
+// [KindTrimBlocked], because nothing else names it.
 func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 	out := Evaluate(in.Reading)
-	for _, d := range domains {
+	backup := slices.IndexFunc(out, func(a Alarm) bool { return a.Kind == KindBackupAge })
+	// Where each per-domain kind sits in out, and the reading its detail is
+	// from.
+	at := make(map[Kind]int)
+	lead := make(map[Kind]Reading)
+	for i, d := range domains {
+		held := in.Domains[i]
 		perDomain := Reading{
 			HeadroomFraction: d.HeadroomFraction,
 			TrimBlockedBy:    string(d.BlockedBy),
+			TrimPastWindow:   pastWindow(d),
+			// THE CEILING THE DOMAIN ROW CARRIES, which is set only
+			// where the stream answered and declares one: an unknown
+			// ceiling is not a small one, so the rule is silent
+			// rather than comparing a rate against zero.
+			LogBytesPerDay: d.BytesPerDay,
+			LogMaxBytes:    d.MaxBytes,
+			ReplayWindow:   in.ReplayWindow,
+			// WHAT THIS NODE HOLDS AND CANNOT READ on this log, as the
+			// caller measured it from its own applier and its own
+			// observations of the floor.
+			DeferredAge:       held.DeferredAge,
+			DeferredRecord:    held.DeferredRecord,
+			FloorUnknownFor:   held.FloorUnknownFor,
+			FloorUnknownCause: held.FloorUnknownCause,
+			// AND HOW FAR PAST ITS OWN CENSUS this log's reads run.
+			LinearizableReads:         held.LinearizableReads,
+			LinearizableReadsExpected: held.LinearizableReadsExpected,
 		}
 		if d.BlockedBy != "" && !d.BlockedSince.IsZero() {
 			perDomain.TrimBlockedFor = in.At.Sub(d.BlockedSince)
 		}
 		for _, a := range Evaluate(perDomain) {
-			a.Detail = d.Domain + ": " + a.Detail
-			out = append(out, a)
+			entry := AlarmDomain{Domain: d.Domain, Detail: a.Detail}
+			if a.Kind == KindTrimBlocked {
+				entry.Term, entry.Since = d.BlockedBy, d.BlockedSince
+				if d.BlockedBy == TermBackupFloor && backup >= 0 {
+					out[backup].Domains = append(out[backup].Domains, entry)
+					continue
+				}
+			}
+			slot, seen := at[a.Kind]
+			if !seen {
+				slot = len(out)
+				at[a.Kind] = slot
+				out = append(out, Alarm{Kind: a.Kind, Remedy: a.Remedy})
+			}
+			out[slot].Domains = append(out[slot].Domains, entry)
+			if current, has := lead[a.Kind]; !has || morePressing(a.Kind, perDomain, current) {
+				lead[a.Kind] = perDomain
+				out[slot].Detail = a.Detail
+			}
 		}
 	}
+	// THE TABLE'S OWN ORDER, which is the order every other surface reads in:
+	// the per-domain kinds were appended after the node-wide ones.
+	slices.SortStableFunc(out, func(a, b Alarm) int {
+		return tableIndex(a.Kind) - tableIndex(b.Kind)
+	})
 	return out
+}
+
+// pastWindow is how many records a domain's log holds that are older than the
+// replay window — the ones the age term alone would release.
+//
+// THE AGE TERM'S OWN SEQUENCE against the log's first, both as the report has
+// them: the term is the published tick's search for the first record young
+// enough to keep, so everything below it that the log still holds is past the
+// window. The term is a tick old and the log's bounds are this instant's, and
+// that is the conservative pairing — the trim is what removes records, and a
+// blocked one has removed none since, so the count is at worst an
+// underestimate by the records that aged past the window during the tick.
+//
+// A COUNT OF SEQUENCES, not of records: a compacted log's span has holes where
+// superseded records were removed, so there it is an upper bound on what the
+// block keeps, and zero is still exactly "nothing" — a span below the age term
+// that is not empty starts at the log's first record, which is present.
+//
+// ZERO WHERE NOTHING IS KNOWN: a stream this node could not read carries no
+// bounds, an empty log holds nothing, and a domain with no published floor has
+// no age term to compare.
+func pastWindow(d DomainReport) uint64 {
+	if d.LastSeq == 0 || d.LastSeq < d.FirstSeq {
+		return 0
+	}
+	for _, t := range d.Terms {
+		if t.Name != TermAgeFloor || t.State != TermKnown {
+			continue
+		}
+		keep := min(t.Seq, d.LastSeq+1)
+		if keep <= d.FirstSeq {
+			return 0
+		}
+		return keep - d.FirstSeq
+	}
+	return 0
+}
+
+// morePressing reports whether one log's reading of a per-domain alarm is more
+// urgent than current's, which decides whose measurement the alarm leads with:
+// the log with the least headroom left, the ceiling that holds the least of its
+// window, the trim held longest, the record held longest, the floor unreadable
+// longest and the read rate furthest past its census. A tie keeps the log the
+// report reached first, which is the report's own order.
+func morePressing(kind Kind, r, current Reading) bool {
+	switch kind {
+	case KindLogHeadroom:
+		return r.HeadroomFraction != nil && current.HeadroomFraction != nil &&
+			*r.HeadroomFraction < *current.HeadroomFraction
+	case KindLogCeilingShort:
+		// The ceiling that holds the fewest days at its log's own rate. Both
+		// rates are measured and non-zero, or the rule would not have fired.
+		if r.LogBytesPerDay == nil || current.LogBytesPerDay == nil ||
+			*r.LogBytesPerDay == 0 || *current.LogBytesPerDay == 0 {
+			return false
+		}
+		return float64(r.LogMaxBytes)/float64(*r.LogBytesPerDay) <
+			float64(current.LogMaxBytes)/float64(*current.LogBytesPerDay)
+	case KindTrimBlocked:
+		return r.TrimBlockedFor > current.TrimBlockedFor
+	case KindDeferredOld:
+		return r.DeferredAge > current.DeferredAge
+	case KindFloorUnknown:
+		return r.FloorUnknownFor > current.FloorUnknownFor
+	case KindCensusDrift:
+		if r.LinearizableReadsExpected <= 0 || current.LinearizableReadsExpected <= 0 {
+			return false
+		}
+		return float64(r.LinearizableReads)/float64(r.LinearizableReadsExpected) >
+			float64(current.LinearizableReads)/float64(current.LinearizableReadsExpected)
+	}
+	return false
+}
+
+// tableIndex is a kind's position in [table], which is the order alarms are
+// reported in. A kind the table does not hold sorts last.
+func tableIndex(kind Kind) int {
+	for i, rule := range table {
+		if rule.kind == kind {
+			return i
+		}
+	}
+	return len(table)
 }
 
 // JoinSecondsPerGB and JoinFixedSeconds project how long a peer needs to

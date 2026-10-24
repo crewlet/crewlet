@@ -37,7 +37,9 @@ describe("an untouched form", () => {
     const company = fixtureCompany();
     expect(companyParts(companyForm(company), companyForm(company))).toEqual([]);
     const unit = company.units![0]!;
-    expect(unitParts("unit:Engineering", unitForm(unit), unitForm(unit))).toEqual([]);
+    expect(
+      unitParts("unit:engineering", unitForm(unit), unitForm(unit), { editableKey: false }),
+    ).toEqual([]);
     const form = seatForm(dev(), "developer");
     expect(seatParts("seat:dev", dev(), form, form, { editableHandle: false })).toEqual([]);
   });
@@ -65,7 +67,14 @@ describe("an untouched form", () => {
 
     const unit = { name: " Engineering " };
     const unitInitial = unitForm(unit);
-    expect(unitParts("unit:e", unitInitial, { ...unitInitial, purpose: "Build" })).toEqual([
+    expect(
+      unitParts(
+        "unit:e",
+        unitInitial,
+        { ...unitInitial, purpose: "Build" },
+        { editableKey: false },
+      ),
+    ).toEqual([
       { type: "updateUnit", target: "unit:e", set: [{ path: ["purpose"], value: "Build" }] },
     ]);
     // And a box that gained nothing but a space is no rename either: the model
@@ -94,11 +103,11 @@ describe("an untouched form", () => {
       name: "Dev",
       email: "dev@example.com ",
       contact: { github_login: " dev" },
+      project: "OPS ",
+      space: " ENG",
       integrations: {
         mattermost: { channel: " eng", username: "dev-bot " },
       },
-      project: "OPS ",
-      space: " ENG",
     };
     const initial = seatForm(padded, "");
     expect(
@@ -136,8 +145,15 @@ describe("an untouched form", () => {
       project: " OPS",
     };
     const unitInitial = unitForm(unit);
-    expect(unitParts("unit:Ops", unitInitial, { ...unitInitial, purpose: "Run it" })).toEqual([
-      { type: "updateUnit", target: "unit:Ops", set: [{ path: ["purpose"], value: "Run it" }] },
+    expect(
+      unitParts(
+        "unit:ops",
+        unitInitial,
+        { ...unitInitial, purpose: "Run it" },
+        { editableKey: false },
+      ),
+    ).toEqual([
+      { type: "updateUnit", target: "unit:ops", set: [{ path: ["purpose"], value: "Run it" }] },
     ]);
   });
 });
@@ -294,12 +310,17 @@ describe("a seat", () => {
     expect(seatParts("seat:a", mapped, form, form, { editableHandle: false })).toEqual([]);
   });
 
-  test("the integration fields write inside the seat's own blocks", () => {
+  // THE PROJECT IS THE DOCUMENT'S OWN FIELD. No seat and no unit carries a
+  // vendor's block for it: the engine refuses `integrations.jira` as an
+  // unknown key, so a form that wrote one was refused on every check.
+  test("the integration fields write inside the seat's own blocks, and what it owns beside them", () => {
     const initial = seatForm(dev(), "");
     const form = {
       ...initial,
       codeAccess: "review",
       githubRepos: ["acme/api"],
+      project: " OPS ",
+      space: "ENG",
     };
     expect(seatParts("seat:dev", dev(), initial, form, { editableHandle: false })).toEqual([
       {
@@ -308,6 +329,8 @@ describe("a seat", () => {
         set: [
           { path: ["code", "access"], value: "review" },
           { path: ["integrations", "github", "repos"], value: ["acme/api"] },
+          { path: ["project"], value: "OPS" },
+          { path: ["space"], value: "ENG" },
         ],
       },
     ]);
@@ -333,16 +356,60 @@ describe("a seat", () => {
     ]);
 
     // A unit's are the same two keys, at the top of the unit.
-    const unit = { name: "Ops", project: "OPS", space: "RUN" };
+    const unit = { name: "Ops", id: "ops", project: "OPS", space: "RUN" };
     const unitInitial = unitForm(unit);
     expect([unitInitial.project, unitInitial.space]).toEqual(["OPS", "RUN"]);
-    expect(unitParts("unit:Ops", unitInitial, { ...unitInitial, space: "OPS" })).toEqual([
-      { type: "updateUnit", target: "unit:Ops", set: [{ path: ["space"], value: "OPS" }] },
+    expect(
+      unitParts("unit:ops", unitInitial, { ...unitInitial, space: "OPS" }, { editableKey: false }),
+    ).toEqual([
+      { type: "updateUnit", target: "unit:ops", set: [{ path: ["space"], value: "OPS" }] },
     ]);
+  });
+
+  // HOW AN AGENT IS DRAWN is written a half at a time, so a change of colour
+  // leaves the character to whatever the document says, its default included.
+  test("an agent's profile icon writes only the half that changed; a person has none", () => {
+    const initial = seatForm(dev(), "");
+    expect(initial.avatar).toEqual({ character: "crewlet", color: "purple" });
+    const recoloured = { ...initial, avatar: { character: "crewlet", color: "amber" } as const };
+    expect(seatParts("seat:dev", dev(), initial, recoloured, { editableHandle: false })).toEqual([
+      {
+        type: "updateSeat",
+        target: "seat:dev",
+        set: [{ path: ["avatar", "color"], value: "amber" }],
+      },
+    ]);
+    const redrawn = { ...initial, avatar: { character: "octlet", color: "blue" } as const };
+    expect(seatParts("seat:dev", dev(), initial, redrawn, { editableHandle: false })).toEqual([
+      {
+        type: "updateSeat",
+        target: "seat:dev",
+        set: [
+          { path: ["avatar", "character"], value: "octlet" },
+          { path: ["avatar", "color"], value: "blue" },
+        ],
+      },
+    ]);
+
+    const person: ConfigRole = { name: "Dev", kind: "human", contact: { github_login: "dev" } };
+    expect(seatForm(person, "").avatar).toBeNull();
   });
 });
 
 describe("a unit and the company", () => {
+  // A UNIT'S KEY IS ITS IDENTITY: a unit the company holds keeps the one it
+  // has, so its form never writes one, while a unit this draft created is
+  // given its key until the save.
+  test("a key is written only for a unit this draft created", () => {
+    const initial = unitForm({ name: "Ops", id: "ops" });
+    expect(initial.id).toBe("ops");
+    const typed = { ...initial, id: "operations" };
+    expect(unitParts("unit:ops", initial, typed, { editableKey: false })).toEqual([]);
+    expect(unitParts("new:u1", initial, typed, { editableKey: true })).toEqual([
+      { type: "updateUnit", target: "new:u1", set: [{ path: ["id"], value: "operations" }] },
+    ]);
+  });
+
   test("a unit's rename, fields, lead and schedule toggle are its parts; clearing the lead names none", () => {
     const unit = fixtureCompany().units![0]!;
     const initial = unitForm(unit);
@@ -352,19 +419,23 @@ describe("a unit and the company", () => {
       name: "Product Engineering",
       purpose: "Build it",
       lead: "",
+      space: "ENG",
       schedules: { standup: false },
     };
-    expect(unitParts("unit:Engineering", initial, form)).toEqual([
-      { type: "renameUnit", target: "unit:Engineering", name: "Product Engineering" },
+    expect(unitParts("unit:engineering", initial, form, { editableKey: false })).toEqual([
+      { type: "renameUnit", target: "unit:engineering", name: "Product Engineering" },
       {
         type: "updateUnit",
-        target: "unit:Engineering",
-        set: [{ path: ["purpose"], value: "Build it" }],
+        target: "unit:engineering",
+        set: [
+          { path: ["purpose"], value: "Build it" },
+          { path: ["space"], value: "ENG" },
+        ],
       },
-      { type: "setLead", target: "unit:Engineering" },
+      { type: "setLead", target: "unit:engineering" },
       {
         type: "setScheduleEnabled",
-        target: "unit:Engineering",
+        target: "unit:engineering",
         schedule: "standup",
         enabled: false,
       },

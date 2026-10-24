@@ -49,6 +49,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/cron"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -182,9 +184,12 @@ type Options struct {
 	// [DutyFunc] and [ClaimDuty].
 	Duty DutyFunc
 
-	// Paused reports whether a person has paused a runner seat, so its fire
-	// is recorded [OutcomeSkippedPaused] instead of dispatched. Nil pauses
-	// nothing.
+	// Paused reports whether a person has paused a runner seat, named by
+	// its derived agent id, so its fire is recorded [OutcomeSkippedPaused]
+	// instead of dispatched. Nil pauses nothing.
+	//
+	// BY THE SEAT'S ID, because a pause is kept on the agent id derived from
+	// the seat's handle (ADR-0013).
 	//
 	// SKIPPED, not dispatched into the held inbox, because a fire parked
 	// behind a pause is a standup that runs whenever somebody resumes the
@@ -195,7 +200,7 @@ type Options struct {
 	// the node that runs it, so a fire that reaches a paused seat waits
 	// there rather than running, while a fire skipped on a read that
 	// failed is a standup lost for a seat nobody paused.
-	Paused func(handle string) (bool, error)
+	Paused func(seat uuid.UUID) (bool, error)
 
 	// Trace mints the trace context each fire runs under; nil uses a
 	// built-in W3C-shaped random minter.
@@ -220,7 +225,7 @@ type Scheduler struct {
 
 	admits func() bool
 	duty   DutyFunc
-	paused func(handle string) (bool, error)
+	paused func(seat uuid.UUID) (bool, error)
 	trace  func(context.Context) events.TraceContext
 
 	// mu serialises ticks and guards lastTick.
@@ -391,13 +396,13 @@ func (s *Scheduler) evaluate(ctx context.Context, company *org.Organization, clo
 	loc, err := ZoneOf(sch, clock)
 	if err != nil {
 		log.ErrorContext(ctx, "schedule_parse_failed", "schedule", sch.Name, "scope_type", e.Scope,
-			"scope_id", e.ScopeID, "timezone", sch.Timezone, "error", err)
+			"scope", e.ScopeName, "scope_id", e.ScopeID, "timezone", sch.Timezone, "error", err)
 		return 0
 	}
 	expr, err := cron.Parse(sch.Cron)
 	if err != nil {
 		log.ErrorContext(ctx, "schedule_parse_failed", "schedule", sch.Name, "scope_type", e.Scope,
-			"scope_id", e.ScopeID, "cron", sch.Cron, "error", err)
+			"scope", e.ScopeName, "scope_id", e.ScopeID, "cron", sch.Cron, "error", err)
 		return 0
 	}
 
@@ -412,7 +417,7 @@ func (s *Scheduler) evaluate(ctx context.Context, company *org.Organization, clo
 	runners := e.Runners(company)
 	if len(runners) == 0 {
 		log.WarnContext(ctx, "schedule_no_runners", "schedule", sch.Name, "scope_type", e.Scope,
-			"scope_id", e.ScopeID, "target", sch.Target)
+			"scope", e.ScopeName, "scope_id", e.ScopeID, "target", sch.Target)
 		return 0
 	}
 
@@ -438,6 +443,9 @@ func (s *Scheduler) evaluate(ctx context.Context, company *org.Organization, clo
 // canonical, unshifted fire time is what forms the identity, so dedupe is
 // unaffected and two nodes with the same config compute the same offset.
 func (s *Scheduler) due(expr cron.Expr, loc *time.Location, e Entry, at, windowStart time.Time, first bool) (toFire, toSkip []time.Time) {
+	// ON THE IDENTITY: the whole point of spreading fires deterministically
+	// is that one schedule lands at the same offset on every node and every
+	// tick.
 	jitter := s.jitterFor(e.ScopeID, e.Schedule.Name)
 	effNow := at.Add(-jitter)
 
@@ -513,19 +521,19 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 		// this call. Do NOT claim — a later tick against a corrected org
 		// should still be able to fire.
 		log.WarnContext(ctx, "schedule_runner_not_found", "handle", handle,
-			"schedule", e.Schedule.Name, "scope_id", e.ScopeID)
+			"schedule", e.Schedule.Name, "scope", e.ScopeName, "scope_id", e.ScopeID)
 		return false
 	}
 	agentID, ok := company.AgentIDFor(seat)
 	if !ok {
 		log.WarnContext(ctx, "schedule_runner_not_found", "handle", handle,
-			"schedule", e.Schedule.Name, "scope_id", e.ScopeID,
+			"schedule", e.Schedule.Name, "scope", e.ScopeName, "scope_id", e.ScopeID,
 			"reason", "the seat has no derivable agent id")
 		return false
 	}
 
 	label := FireLabel(fireUTC, loc)
-	if s.pausedSeat(ctx, handle, e) {
+	if s.pausedSeat(ctx, agentID, handle, e) {
 		s.recordPaused(ctx, e, handle, fireUTC, label)
 		return false
 	}
@@ -574,7 +582,7 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 	}, trace)
 	task.Source = "scheduler"
 
-	if err := s.pub.Publish(ctx, topics.AgentInbox(handle), task); err != nil {
+	if err := s.pub.Publish(ctx, topics.AgentInbox(agentID), task); err != nil {
 		// The claim is already spent, and that is the at-most-once side of
 		// the trade rather than an oversight: a publish failure is
 		// AMBIGUOUS — the broker may have persisted the event and lost the
@@ -588,7 +596,7 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 	}
 
 	log.InfoContext(ctx, "schedule_fired", "schedule", e.Schedule.Name, "scope_type", e.Scope,
-		"scope_id", e.ScopeID, "handle", handle,
+		"scope", e.ScopeName, "scope_id", e.ScopeID, "handle", handle,
 		"scheduled_at", fireUTC.Format(time.RFC3339), "trace_id", trace.TraceID)
 
 	// Observability only, and best-effort: the seat has already been woken,
@@ -596,6 +604,7 @@ func (s *Scheduler) fire(ctx context.Context, company *org.Organization, e Entry
 	fired := events.New(types.ScheduledTaskFired{
 		ScopeType:    e.Scope,
 		ScopeID:      e.ScopeID,
+		ScopeName:    e.ScopeName,
 		ScheduleName: e.Schedule.Name,
 		TargetHandle: handle,
 		ScheduledAt:  fireUTC.Format(time.RFC3339),
@@ -627,19 +636,20 @@ func (s *Scheduler) recordSkip(ctx context.Context, e Entry, fireUTC time.Time, 
 		log.ErrorContext(ctx, "schedule_skip_record_failed", "schedule", e.Schedule.Name, "error", err)
 	}
 	log.InfoContext(ctx, "schedule_catchup_skipped", "schedule", e.Schedule.Name, "scope_type", e.Scope,
-		"scope_id", e.ScopeID, "scheduled_at", fireUTC.Format(time.RFC3339))
+		"scope", e.ScopeName, "scope_id", e.ScopeID, "scheduled_at", fireUTC.Format(time.RFC3339))
 }
 
-// pausedSeat reports whether a person has handle's seat paused, dispatching on
-// an unknown — see [Options.Paused] for why that is the safe direction here.
-func (s *Scheduler) pausedSeat(ctx context.Context, handle string, e Entry) bool {
+// pausedSeat reports whether a person has the runner seat paused, asked by its
+// agent id and dispatching on an unknown — see [Options.Paused] for why that
+// is the safe direction here. The handle is for the log line only.
+func (s *Scheduler) pausedSeat(ctx context.Context, seat uuid.UUID, handle string, e Entry) bool {
 	if s.paused == nil {
 		return false
 	}
-	paused, err := s.paused(handle)
+	paused, err := s.paused(seat)
 	if err != nil {
 		log.WarnContext(ctx, "schedule_pause_unknown", "schedule", e.Schedule.Name,
-			"handle", handle, "error", err,
+			"handle", handle, "agent_id", seat.String(), "error", err,
 			"detail", "whether the seat is paused could not be read, so the fire is "+
 				"dispatched; a paused seat's inbox holds it rather than running it")
 		return false
@@ -699,7 +709,10 @@ func (s *Scheduler) holdsDuty(ctx context.Context) bool {
 // never gates a dispatch. That is exactly why the ledger does NOT key on a
 // string like this one.
 func runID(e Entry, label, runner string) string {
-	return fmt.Sprintf("%s:%s:%s:%s:%s", e.Scope, e.ScopeID, e.Schedule.Name, label, runner)
+	// THE READABLE NAME, because this is what a person reads off a task
+	// card. The ledger's own identity is the struct, and the id is beside
+	// it in every log line this run writes.
+	return fmt.Sprintf("%s:%s:%s:%s:%s", e.Scope, e.ScopeName, e.Schedule.Name, label, runner)
 }
 
 // newTrace opens the span one fire belongs to and returns its ids.

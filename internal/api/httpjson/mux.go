@@ -94,37 +94,42 @@ func (m *muxRefusal) WriteHeader(status int) {
 	}
 }
 
+// NoRoute writes the answer for a route this node does not serve: `404
+// no_route`, naming the method and the path.
+//
+// THE MUX'S OWN ANSWER, and exported for the two other answers that must be
+// INDISTINGUISHABLE from it. A route that IS registered but that this node
+// does not serve NOW — a half this company does not run (the work surface on
+// a company whose tracker is a vendor's, the operator's MCP surface with no
+// native backend), or a route over the engine's native runtime this node's
+// configuration or the mode it started in does not enable, asked at every
+// request — answers in exactly the bytes the route's absence would have: a
+// handler that wrote its own "not served here" would be the one refusal a
+// client told apart from a missing route, and a route that is absent by
+// configuration and one that is absent by build must read the same. And the
+// public listener's refusal of a route that exists on api.port is this answer
+// byte for byte, because a different wording there would tell anybody on the
+// internet that a private admin port exists and which paths it serves.
+//
+// THE HINT NAMES BOTH KINDS OF ABSENCE, because only the first is the path's
+// fault. A node whose configuration or mode does not enable a route has the
+// route and is asked at the right path; sending its operator to check only the
+// path sends them to the one place nothing is wrong.
+func NoRoute(w http.ResponseWriter, r *http.Request) {
+	FailWith(w, http.StatusNotFound, CodeNoRoute, map[string]string{
+		"detail": fmt.Sprintf("this node serves nothing at %s %s",
+			r.Method, r.URL.Path),
+		"hint": "Check the path. A route this node's build does not have is " +
+			"absent rather than refused, and so is one this node does not " +
+			"serve now: its configuration or the mode it started in does not " +
+			"enable it.",
+	})
+}
+
 func (m *muxRefusal) Write(p []byte) (int, error) {
 	if m.refused {
 		// The mux's own text, which the JSON above replaced.
 		return len(p), nil
 	}
 	return m.ResponseWriter.Write(p)
-}
-
-// NoRoute answers r with the mux's own 404: the path is served by nothing here
-// now.
-//
-// Exported for the two other answers that must be INDISTINGUISHABLE from it.
-// The public listener's refusal of a route that exists on api.port: a
-// different wording there would tell anybody on the internet that a private
-// admin port exists and which paths it serves, so that refusal is this one,
-// byte for byte. And a route mounted on every API that this node does not
-// serve NOW — a route over the engine's native runtime (internal/api's
-// NativeRoutes), asked at every request — which answers exactly as it did when
-// a node that did not serve it left it unmounted: absent rather than refused.
-//
-// THE HINT NAMES BOTH KINDS OF ABSENCE, because only the first is the path's
-// fault. A node that has not applied its first company yet, or that started in
-// a maintenance mode, has the route and is asked at the right path; sending its
-// operator to check the path, or the company's configuration, sends them to the
-// one place nothing is wrong.
-func NoRoute(w http.ResponseWriter, r *http.Request) {
-	FailWith(w, http.StatusNotFound, CodeNoRoute, map[string]string{
-		"detail": fmt.Sprintf("this node serves nothing at %s %s", r.Method, r.URL.Path),
-		"hint": "Check the path. A route this node's build does not have is " +
-			"absent rather than refused, and so is one this node does not " +
-			"serve now: its configuration or the mode it started in does not " +
-			"enable it, or no company has been applied to it yet.",
-	})
 }

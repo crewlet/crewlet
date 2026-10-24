@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/config"
@@ -31,7 +31,7 @@ import (
 // `unknown_query` until somebody restarted the node.
 func TestNativeSurfacesServeACompanyAppliedAfterBoot(t *testing.T) {
 	t.Parallel()
-	n := bootUnconfigured(t, "a-test-token")
+	n := bootUnconfigured(t, "a-test-token-long-enough-for-tier-a")
 	n.reconcile()
 	if err := n.settle(n.put(companyYAML + `  - name: Founder
     kind: human
@@ -114,10 +114,10 @@ func TestNativeSurfacesServeACompanyAppliedAfterBoot(t *testing.T) {
 	}
 	_ = json.Unmarshal([]byte(body), &act)
 	if status != http.StatusUnsupportedMediaType ||
-		act.Error != string(operator.CodeUnsupportedMediaType) {
+		act.Error != string(httpjson.CodeUnsupportedMediaType) {
 		t.Errorf("POST /operator/act/%s = %d %s, want %d %s from the tool's own "+
 			"transport for the company applied after boot", builtin.CreateWorkItemTool,
-			status, body, http.StatusUnsupportedMediaType, operator.CodeUnsupportedMediaType)
+			status, body, http.StatusUnsupportedMediaType, httpjson.CodeUnsupportedMediaType)
 	}
 }
 
@@ -138,7 +138,7 @@ func TestNativeSurfacesServeACompanyAppliedAfterBoot(t *testing.T) {
 func TestCodeRoutesServeACompanyAppliedAfterBoot(t *testing.T) {
 	t.Parallel()
 	gittest.RequireNode(t)
-	const token = "a-test-token"
+	const token = "a-test-token-long-enough-for-tier-a"
 	n := bootUnconfiguredWith(t, token, func(b *config.Bootstrap) {
 		// THE CASE'S OWN, never the machine's: an explicit cache budget and
 		// a pinned transfer lane, so the room this node's disk has and the
@@ -246,7 +246,7 @@ code:
 func TestANodeWhoseCodeHostCannotStartSaysSo(t *testing.T) {
 	t.Parallel()
 	gittest.RequireNode(t)
-	const token = "a-test-token"
+	const token = "a-test-token-long-enough-for-tier-a"
 	occupied := t.TempDir()
 	if err := os.WriteFile(filepath.Join(occupied, "somebody-elses.txt"), []byte("mine\n"), 0o600); err != nil {
 		t.Fatal(err)

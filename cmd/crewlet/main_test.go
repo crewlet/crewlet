@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -18,20 +19,23 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
-	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/observe"
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -53,6 +57,16 @@ roles:
     llm: primary
 `
 
+// peopleCompanyYAML is [companyYAML] with a human seat, `founder`, for the
+// cases that invite or create a person: a person holds a human seat for as
+// long as they are here, so a company with none has nowhere to put anybody.
+// Extended rather than edited, because every agent-only case shares
+// companyYAML.
+const peopleCompanyYAML = companyYAML + `  - name: Founder
+    handle: founder
+    kind: human
+`
+
 // configPair writes both tiers into a temp directory and returns the flags
 // that point at them.
 func configPair(t *testing.T, bootstrapYAML, company string) []string {
@@ -62,7 +76,7 @@ func configPair(t *testing.T, bootstrapYAML, company string) []string {
 	comp := filepath.Join(dir, "company.yaml")
 	if bootstrapYAML == "" {
 		bootstrapYAML = "store:\n  path: " + filepath.Join(dir, "crewlet.db") + "\n" +
-			"stream:\n  store_dir: " + filepath.Join(dir, "stream") + "\n"
+			"stream:\n  store_dir: " + filepath.Join(dir, "stream") + "\n" + fixtureKeyring
 	}
 	if err := os.WriteFile(boot, []byte(bootstrapYAML), 0o600); err != nil {
 		t.Fatal(err)
@@ -85,7 +99,9 @@ func TestValidateReportsWhatTheConfigDescribes(t *testing.T) {
 		t.Fatalf("validate: %v (stderr %s)", err, errOut.String())
 	}
 	got := out.String()
-	for _, want := range []string{"Acme", "2 agent seats", "1 LLM providers", "embedded", "local"} {
+	for _, want := range []string{
+		"Acme", "2 agent seats", "1 LLM providers", "embedded", "local",
+	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("summary %q does not mention %q", got, want)
 		}
@@ -246,6 +262,11 @@ func TestRunRefusesABadConfigBeforeStartingAnything(t *testing.T) {
 }
 
 // bootstrapFor writes a Tier A pointing at a temp directory.
+//
+// WITH A KEYRING, because every record on every state log is signed under one
+// and a node that has none refuses to start. It is not in
+// [config.DefaultBootstrap]: a default key would be a key every deployment in
+// the world shares, which is the opposite of what signing a record buys.
 func bootstrapFor(t *testing.T, port int) *config.Bootstrap {
 	t.Helper()
 	dir := t.TempDir()
@@ -254,7 +275,36 @@ func bootstrapFor(t *testing.T, port int) *config.Bootstrap {
 	b.Stream.StoreDir = filepath.Join(dir, "stream")
 	b.API.Host = "127.0.0.1"
 	b.API.Port = port
+	// A COMPLETE SERVING POSTURE. Once a port is set, Tier A must carry an
+	// external URL, an admin posture and a credential of its own, and every
+	// guarded route needs that credential presented — so a fixture short
+	// of any of them fails on its own configuration rather than on its
+	// subject. [getJSON] is what presents it, carrying admin and with it
+	// every app.
+	if port != 0 {
+		b.API.ExternalURL = "http://127.0.0.1:" + strconv.Itoa(port)
+	}
+	b.API.Auth.Admin = iam.AdminServe
+	b.API.Auth.Tokens = []config.APIToken{
+		{ID: "fixture", Token: cliFixtureToken, Grants: []iam.Grant{iam.GrantAdmin}},
+	}
+	b.Secrets.ActiveKeyID = "test"
+	b.Secrets.Keys = []config.SecretKey{{ID: "test", Material: testKeyMaterial(t)}}
 	return &b
+}
+
+// testKeyMaterial mints one THROUGH THE MINTER `crewlet secrets keygen` uses,
+// so the size, the randomness and the encoding are read off the production
+// definition rather than restated here. Per call rather than a constant: two
+// cases running in parallel share no key, and neither does a case that goes on
+// to write one down.
+func testKeyMaterial(t *testing.T) string {
+	t.Helper()
+	key, err := secrets.GenerateKey()
+	if err != nil {
+		t.Fatalf("no randomness for the test keyring: %v", err)
+	}
+	return secrets.EncodeKey(key)
 }
 
 func TestAWorkerOnlyNodeServesNoHTTPAndSaysSo(t *testing.T) {
@@ -271,18 +321,57 @@ func TestAWorkerOnlyNodeServesNoHTTPAndSaysSo(t *testing.T) {
 	// package: the CLI dispatch reconfigures it to WARN-on-stderr for
 	// every non-`run` command, so whichever ran last decided where this
 	// assertion's record went.
-	var logged bytes.Buffer
-	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	//
+	// AT WARN ONLY WHERE NOTHING ELSE WARNED. A node whose DECLARED roles
+	// name ingress has been told at WARN already, by the `api.port`
+	// advisory its start logs, which leaves an undeclared node.roles out —
+	// so that node is the one this line warns, and every other is told at
+	// info. Mutation: warn on every ingress node and the declared-ingress
+	// row goes red; warn on none and the undeclared row does.
+	for _, tc := range []struct {
+		name  string
+		roles []string
+		want  slog.Level
+	}{
+		{"undeclared roles, which are every role", nil, slog.LevelWarn},
+		{"declared roles naming ingress", []string{"data", "ingress", "seats", "workers"}, slog.LevelInfo},
+		{"declared roles without ingress", []string{"data", "seats", "workers"}, slog.LevelInfo},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var logged bytes.Buffer
+			log := slog.New(slog.NewJSONHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
+			boot := bootstrapFor(t, 0)
+			boot.Node.Roles = tc.roles
 
-	surface, err := serveAPI(t.Context(), bootstrapFor(t, 0), nil, nil, nil, nil, log)
-	if err != nil {
-		t.Fatalf("serveAPI: %v", err)
-	}
-	if surface != nil {
-		t.Error("a node with api.port 0 built an HTTP surface")
-	}
-	if !strings.Contains(logged.String(), "api_disabled") {
-		t.Errorf("the node did not say it serves no HTTP:\n%s", logged.String())
+			// NOTHING BOUND before the boot, asked of the one path every
+			// listener is opened through.
+			listeners, err := bindListeners(t.Context(), boot, "node-0", false, bindNothing(t), log)
+			if err != nil || listeners != nil {
+				t.Fatalf("bindListeners on api.port 0 = %v, %v; want nothing bound", listeners, err)
+			}
+			surface, err := serveAPI(t.Context(), boot, nil, nil, nil, nil, nil, listeners, log)
+			if err != nil {
+				t.Fatalf("serveAPI: %v", err)
+			}
+			if surface != nil {
+				t.Error("a node with api.port 0 built an HTTP surface")
+			}
+			var record struct {
+				Msg   string `json:"msg"`
+				Level string `json:"level"`
+				Hint  string `json:"hint"`
+			}
+			if err = json.Unmarshal(logged.Bytes(), &record); err != nil || record.Msg != "api_disabled" {
+				t.Fatalf("the node did not say it serves no HTTP, in one line:\n%s", logged.String())
+			}
+			if record.Level != tc.want.String() {
+				t.Errorf("api_disabled at %s, want %s", record.Level, tc.want)
+			}
+			if record.Hint == "" {
+				t.Error("api_disabled does not say what the node gave up")
+			}
+		})
 	}
 }
 
@@ -300,7 +389,7 @@ func TestANodeWithoutTheIngressRoleServesOnlyItsProbes(t *testing.T) {
 	e := testEngine(t)
 	boot := bootstrapFor(t, 0)
 	boot.API.Host = "127.0.0.1"
-	boot.API.Port = freePort(t)
+	boot.API.Port = reservePort(t)
 	boot.Node.Roles = []string{"data", "seats", "workers"}
 
 	surface, err := serveNodeLogged(t, boot, e, log)
@@ -377,9 +466,9 @@ func TestASeatsNodeWithoutIngressServesItsProbesAndToolBridge(t *testing.T) {
 	var logged bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	port := freePort(t)
-	bridge := mcpbridge.New(mcpbridge.Options{
-		Key: []byte("test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
+	port := reservePort(t)
+	bridge := bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
 	})
 	e := testEngineWithBridge(t, bridge)
 	boot := bootstrapFor(t, port)
@@ -411,10 +500,19 @@ func TestASeatsNodeWithoutIngressServesItsProbesAndToolBridge(t *testing.T) {
 	if got := statusOf(t, http.MethodGet, base+"/health"); got != http.StatusOK {
 		t.Errorf("GET /health = %d, want the liveness probe's 200", got)
 	}
-	for _, path := range []string{"/dashboard", "/agents"} {
+	// AN EXEMPT PATH THIS LISTENER DOES NOT MOUNT 404s: the guard lets it
+	// through to a mux that has nothing there.
+	for _, path := range []string{"/dashboard"} {
 		if got := statusOf(t, http.MethodGet, base+path); got != http.StatusNotFound {
 			t.Errorf("GET %s = %d on a probe listener, want 404", path, got)
 		}
+	}
+	// AND A GUARDED ONE IS REFUSED RATHER THAN 404, which is exactly what
+	// the full surface answers now that every guarded route needs a
+	// credential: the guard runs before routing, so it cannot know the
+	// route is absent, and a 404 here would have disclosed that.
+	if got := statusOf(t, http.MethodGet, base+"/agents"); got != http.StatusUnauthorized {
+		t.Errorf("GET /agents = %d on a probe listener, want the guard's 401", got)
 	}
 }
 
@@ -426,9 +524,9 @@ func TestANodeRunningNoSeatsServesNoBridge(t *testing.T) {
 	var logged bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	port := freePort(t)
-	bridge := mcpbridge.New(mcpbridge.Options{
-		Key: []byte("test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
+	port := reservePort(t)
+	bridge := bridgeFor(t, mcpbridge.Options{
+		Material: runtoken.OneKey("k", "test-key"), BaseURL: "http://127.0.0.1:" + strconv.Itoa(port),
 	})
 	e := testEngineWithBridge(t, bridge)
 	boot := bootstrapFor(t, port)
@@ -516,7 +614,7 @@ func TestANodeServesItsOwnHealth(t *testing.T) {
 	// would hold seats and hear nothing.
 	e := testEngine(t)
 	boot := bootstrapFor(t, 0)
-	boot.API.Port = freePort(t)
+	boot.API.Port = reservePort(t)
 
 	surface, err := serveNode(t, boot, e)
 	if err != nil {
@@ -524,7 +622,7 @@ func TestANodeServesItsOwnHealth(t *testing.T) {
 	}
 	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
 
-	body := getJSON(t, "http://"+surface.server.addr+"/health")
+	body := getJSON(t, "http://"+surface.server.socket.Addr().String()+"/health")
 
 	// The engine's own answers, which only the process running it has.
 	if _, present := body["in_flight"]; !present {
@@ -550,8 +648,7 @@ func TestANodeServesItsOwnHealth(t *testing.T) {
 func TestAnIngressNodesShutdownFinishesItsGitRequests(t *testing.T) {
 	t.Parallel()
 	e := testEngine(t)
-	boot := bootstrapFor(t, 0)
-	boot.API.Port = freePort(t)
+	boot := bootstrapFor(t, reservePort(t))
 	surface, err := serveNode(t, boot, e)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
@@ -594,7 +691,7 @@ func TestAMergedNodeSeedsItsDashboardFromItsStore(t *testing.T) {
 	}
 
 	boot := bootstrapFor(t, 0)
-	boot.API.Port = freePort(t)
+	boot.API.Port = reservePort(t)
 	surface, err := serveNode(t, boot, e)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
@@ -631,10 +728,17 @@ func TestAMergedNodeSeedsItsDashboardFromItsStore(t *testing.T) {
 func TestANodeNamedByTheEnvironmentAnswersAsItself(t *testing.T) {
 	const name = "node-from-env"
 	t.Setenv(config.NodeIDEnvVar, name)
+	// THE BACKUP'S REASON IS THE LOG'S ALONE (the body says backup_failed),
+	// so a red run prints it rather than discarding it.
+	keepProcessLog(t)
 	e := testEngine(t)
 	boot := bootstrapFor(t, 0)
-	boot.API.Port = freePort(t)
-	boot.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: "a-test-token"}}
+	boot.API.Port = reservePort(t)
+	// THE PERMISSION A BACKUP TAKES. The token carried none and took a
+	// backup all the same, because the route asked only whether somebody
+	// resolved; it takes `admin` now.
+	boot.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: "a-test-token",
+		Grants: []iam.Grant{iam.GrantAdmin}}}
 	if boot.Node.ID != "" {
 		t.Fatalf("the bootstrap names node %q itself, so this case proves nothing",
 			boot.Node.ID)
@@ -703,15 +807,11 @@ func serveNodeWith(t *testing.T, boot *config.Bootstrap, e *engine.Engine,
 	log *slog.Logger,
 ) (*httpSurface, *engine.Reconciler, error) {
 	t.Helper()
-	cipher, err := boot.Secrets.Cipher()
-	if err != nil {
-		t.Fatalf("keyring: %v", err)
-	}
-	configSurface, err := configapi.New(configapi.Options{
-		Store: e.Backends().Store, Cipher: cipher,
-		Plane: e.Backends().Fleet, Queue: e.Backends().Queue,
-		Bootstrap: boot,
-	})
+	cipher := e.Cipher()
+	// THROUGH runEngine's OWN CONSTRUCTOR, so a node this builds holds the
+	// config surface exactly where a running one would — and none on a node
+	// holding no estate.
+	configSurface, err := companySurface(e, boot, cipher)
 	if err != nil {
 		t.Fatalf("config surface: %v", err)
 	}
@@ -721,12 +821,27 @@ func serveNodeWith(t *testing.T, boot *config.Bootstrap, e *engine.Engine,
 	}
 	reconciler, err := e.NewReconciler(engine.ReconcilerOptions{
 		Store: e.Backends().Store, Fleet: e.Backends().Fleet,
-		Queue: e.Backends().Queue, NodeID: nodeID, Cipher: cipher,
+		Queue: e.Backends().Queue, NodeID: nodeID,
 	})
 	if err != nil {
 		t.Fatalf("reconciler: %v", err)
 	}
-	surface, err := serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface, log)
+	// BOUND AS runEngine BINDS, on the socket the case reserved for each port
+	// it configured rather than a second bind of a port it let go (see
+	// [reservePort]) — and here after the engine has booted, which is the
+	// one difference from a running node: the boot surface's own answers are
+	// [TestAStartingNodeAnswersItsProbesBeforeItServes]'s. The bridge is the
+	// engine's own, since a case hands it one rather than the environment.
+	listeners, err := bindListeners(t.Context(), boot, e.Node().ID(), e.Bridge() != nil,
+		bindReserved, log)
+	if err != nil {
+		return nil, reconciler, err
+	}
+	surface, err := serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface, nil, listeners, log)
+	if err != nil {
+		// THE CALLER'S TO CLOSE until the handover, as in runEngine.
+		listeners.close(context.Background(), log)
+	}
 	return surface, reconciler, err
 }
 
@@ -783,15 +898,100 @@ func seedEngineStore(t *testing.T, boot *config.Bootstrap) {
 	}
 }
 
-func freePort(t *testing.T) int {
+// reserved is every listening socket a case of this package holds for a port
+// it is about to configure a node with, by address. An address names at most
+// one socket — holding it is what makes it unique — so cases running in
+// parallel share the map and never an entry.
+var reserved = struct {
+	sync.Mutex
+	held map[string]net.Listener
+}{held: map[string]net.Listener{}}
+
+// reservePort is a loopback port this case HOLDS until a node it serves binds
+// that address, which [bindReserved] hands the very socket; one no node binds
+// is closed when the case ends.
+//
+// HELD RATHER THAN FOUND FREE. A port found free and let go is one anything
+// else on the machine can take before the node binds it, and the rest of the
+// suite opens sockets by the thousand while a node's bind waits behind its
+// dashboard's projection seed, which under the race detector takes seconds.
+// That is how TestReadmittingANodeBelowTheFloorIsRefused failed on main:
+// `bind 127.0.0.1:35497: … address already in use`, on a port another process
+// took in that gap.
+func reservePort(t *testing.T) int {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("reserve a port: %v", err)
 	}
-	port := l.Addr().(*net.TCPAddr).Port
-	_ = l.Close()
-	return port
+	addr := l.Addr().String()
+	reserved.Lock()
+	reserved.held[addr] = l
+	reserved.Unlock()
+	t.Cleanup(func() {
+		if l := takeReserved(addr); l != nil {
+			_ = l.Close()
+		}
+	})
+	//nolint:errcheck // Listen on a TCP address always yields *TCPAddr.
+	return l.Addr().(*net.TCPAddr).Port
+}
+
+// takeReserved removes and returns the socket reserved for addr, or nil.
+func takeReserved(addr string) net.Listener {
+	reserved.Lock()
+	defer reserved.Unlock()
+	l := reserved.held[addr]
+	delete(reserved.held, addr)
+	return l
+}
+
+// bindReserved is the [bindFunc] every node this package serves binds
+// through: an address [reservePort] holds is handed that socket, once, and
+// any other is bound as the binary binds it — so a case holding a port of its
+// own, to see a bind refused, meets the real refusal.
+func bindReserved(ctx context.Context, addr string) (net.Listener, error) {
+	if l := takeReserved(addr); l != nil {
+		return l, nil
+	}
+	return bindTCP(ctx, addr)
+}
+
+// bindNothing is the [bindFunc] for a node that must open no listener at all:
+// a bind it asks for fails the case, naming the address. Every listener a
+// node opens is opened through its bindFunc, so this sees each one, which a
+// probe of one port after the fact could not.
+func bindNothing(t *testing.T) bindFunc {
+	return func(_ context.Context, addr string) (net.Listener, error) {
+		t.Errorf("the node bound %s, and should bind nothing", addr)
+		return nil, fmt.Errorf("bind %s: this node binds nothing", addr)
+	}
+}
+
+// A RESERVED PORT IS NOBODY ELSE'S UNTIL ITS NODE SERVES ON IT. Between the
+// reservation and the bind, any other socket asking for the port is refused,
+// and the node then answers on it; the found-free port this replaced was
+// free in exactly that gap, which is what [reservePort] says it cost.
+func TestAReservedPortIsHeldUntilItsNodeServesOnIt(t *testing.T) {
+	t.Parallel()
+	e := testEngine(t)
+	boot := bootstrapFor(t, reservePort(t))
+	if l, err := net.Listen("tcp", boot.API.Addr()); err == nil {
+		_ = l.Close()
+		t.Fatalf("%s was free between its reservation and the node's bind, so "+
+			"anything else on the machine could have taken it", boot.API.Addr())
+	}
+	surface, err := serveNode(t, boot, e)
+	if err != nil {
+		t.Fatalf("serveAPI on a reserved port: %v", err)
+	}
+	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
+	if got := surface.server.socket.Addr().String(); got != boot.API.Addr() {
+		t.Errorf("the node serves on %s, want the reserved %s", got, boot.API.Addr())
+	}
+	if status, _ := answer(t, http.MethodGet, "http://"+boot.API.Addr()+"/health"); status != http.StatusOK {
+		t.Errorf("GET /health on the reserved port = %d, want 200", status)
+	}
 }
 
 func getJSON(t *testing.T, url string) map[string]any {
@@ -800,7 +1000,16 @@ func getJSON(t *testing.T, url string) map[string]any {
 	probe := httpxtest.Pool(t)
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		res, err := probe.Get(url) //nolint:noctx // a test against its own listener
+		// THE FIXTURE'S CREDENTIAL ON EVERY CALL, exempt paths
+		// included: presenting one where none is needed changes
+		// nothing, and leaving it off a guarded one answers 401 with
+		// an empty body, which decodes as a snapshot with no rows.
+		req, reqErr := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
+		if reqErr != nil {
+			t.Fatalf("request %s: %v", url, reqErr)
+		}
+		req.Header.Set("Authorization", "Bearer "+cliFixtureToken)
+		res, err := probe.Do(req)
 		if err != nil {
 			time.Sleep(20 * time.Millisecond)
 			continue
@@ -1058,7 +1267,7 @@ func parseOverrides(t *testing.T, args []string) (*flag.FlagSet, string, string,
 
 // EVERY COMMAND THE BINARY DISPATCHES IS ADVERTISED BY ITS USAGE.
 //
-// Nothing connects the switch in run() to the text in usage(), so a command
+// Nothing connects the switch in runIn() to the text in usage(), so a command
 // added to one and not the other works perfectly and is discoverable only by
 // reading the source. A vendor CLI shipped that way for the whole of the
 // rewrite: provisioning, import and resync all worked, and the only list of
@@ -1088,37 +1297,117 @@ func TestUsageAdvertisesEveryDispatchedCommand(t *testing.T) {
 				"can only be found by reading the source:\n%s", cmd, help)
 		}
 	}
+
+	// AND THE OTHER DIRECTION, which is the half this walk did not have:
+	// a usage line for a command the switch does not dispatch sends an
+	// operator to `unknown command`, with the binary's own help behind it.
+	// That is how a command REMOVED from the switch goes on being
+	// advertised, and a removal is exactly when nobody re-reads the help.
+	dispatched := map[string]bool{}
+	for _, cmd := range dispatchedCommands(t) {
+		dispatched[cmd] = true
+	}
+	for _, advertised := range advertisedCommands(t, help) {
+		if !dispatched[advertised] {
+			t.Errorf("usage names `crewlet %s` and run() dispatches no such "+
+				"command, so it answers `unknown command`", advertised)
+		}
+	}
 }
 
-// dispatchedCommands returns the case values of the command switch in run().
+// advertisedCommands returns the command word of every `crewlet <word>` line
+// in the usage text.
+func advertisedCommands(t *testing.T, help string) []string {
+	t.Helper()
+	// THE USAGE BLOCK ONLY, which is what `Usage:` opens: the first line
+	// is `crewlet <version> — …`, and the config section below names
+	// flags rather than commands.
+	return advertisedWords(t, help, "crewlet ", "\nConfig:")
+}
+
+// advertisedWords returns the word after prefix on every line of a usage
+// text's `Usage:` block that begins with prefix — the block ending at end.
+//
+// THE FIRST WORD ONLY, because a usage line names the command and then its
+// shape — `crewlet budgets <cmd>`, `crewlet backup -dir PATH` — and the
+// switch dispatches on the word.
+func advertisedWords(t *testing.T, help, prefix, end string) []string {
+	t.Helper()
+	var out []string
+	_, block, found := strings.Cut(help, "Usage:\n")
+	if !found {
+		t.Fatal("the help text has no usage block, so this half proves nothing")
+	}
+	block, _, _ = strings.Cut(block, end)
+	for _, line := range strings.Split(block, "\n") {
+		line = strings.TrimSpace(line)
+		rest, found := strings.CutPrefix(line, prefix)
+		if !found {
+			continue
+		}
+		word, _, _ := strings.Cut(rest, " ")
+		// The flag spellings and the usage header's own first line.
+		if word == "" || strings.HasPrefix(word, "-") || strings.HasPrefix(word, "<") {
+			continue
+		}
+		if !slices.Contains(out, word) {
+			out = append(out, word)
+		}
+	}
+	if len(out) == 0 {
+		t.Fatal("the usage text names no commands, so this half proves nothing")
+	}
+	return out
+}
+
+// dispatchedCommands returns the case values of the command switch in runIn(),
+// which [run] wraps.
 func dispatchedCommands(t *testing.T) []string {
 	t.Helper()
-	file, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	return switchCases(t, "main.go", "runIn", "cmd")
+}
+
+// switchCases returns the string case values of the switch on the variable
+// tag inside the function fn of file — a dispatch its usage text has to agree
+// with.
+//
+// THE SWITCH ON THAT VARIABLE ONLY, never every case in the function: a
+// dispatcher's arms may hold switches of their own, and a string case of one
+// of those is not a command.
+func switchCases(t *testing.T, file, fn, tag string) []string {
+	t.Helper()
+	parsed, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
 	if err != nil {
-		t.Fatalf("parsing main.go: %v", err)
+		t.Fatalf("parsing %s: %v", file, err)
 	}
 
 	var commands []string
-	ast.Inspect(file, func(n ast.Node) bool {
-		fn, ok := n.(*ast.FuncDecl)
-		if !ok || fn.Name.Name != "run" {
+	ast.Inspect(parsed, func(n ast.Node) bool {
+		decl, ok := n.(*ast.FuncDecl)
+		if !ok || decl.Name.Name != fn {
 			return true
 		}
-		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			clause, ok := n.(*ast.CaseClause)
+		ast.Inspect(decl.Body, func(n ast.Node) bool {
+			dispatch, ok := n.(*ast.SwitchStmt)
 			if !ok {
 				return true
 			}
-			for _, expr := range clause.List {
-				lit, ok := expr.(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					continue
+			if on, ok := dispatch.Tag.(*ast.Ident); !ok || on.Name != tag {
+				return true
+			}
+			for _, stmt := range dispatch.Body.List {
+				clause := stmt.(*ast.CaseClause)
+				for _, expr := range clause.List {
+					lit, ok := expr.(*ast.BasicLit)
+					if !ok || lit.Kind != token.STRING {
+						continue
+					}
+					value, err := strconv.Unquote(lit.Value)
+					if err != nil {
+						t.Fatalf("unquoting %s: %v", lit.Value, err)
+					}
+					commands = append(commands, value)
 				}
-				value, err := strconv.Unquote(lit.Value)
-				if err != nil {
-					t.Fatalf("unquoting %s: %v", lit.Value, err)
-				}
-				commands = append(commands, value)
 			}
 			return true
 		})
@@ -1126,7 +1415,8 @@ func dispatchedCommands(t *testing.T) []string {
 	})
 
 	if len(commands) == 0 {
-		t.Fatal("found no command cases in run(), so this test proves nothing")
+		t.Fatalf("found no cases of the switch on %s in %s(), so this test "+
+			"proves nothing", tag, fn)
 	}
 	return commands
 }
@@ -1161,6 +1451,33 @@ func TestValidateReadsTheFileItWasGiven(t *testing.T) {
 	}
 }
 
+// A TIER A DOCUMENT WHOSE BROKER CANNOT HOLD A FRESH NODE IS SAID AT VALIDATE,
+// through the same list a node logs at every start ([engine.BootstrapWarnings]):
+// stream.store_max_bytes accepts a value the boot then refuses.
+func TestValidateWarnsOfABrokerLimitBelowTheFloor(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := writeYAML(t, "crewlet.yaml", "store:\n  path: "+filepath.Join(dir, "c.db")+"\n"+
+		"stream:\n  store_dir: "+filepath.Join(dir, "s")+"\n  store_max_bytes: 6442450944\n"+
+		fixtureKeyring)
+	var out, errOut bytes.Buffer
+	if err := run([]string{"validate", path, "-json"}, &out, &errOut); err != nil {
+		t.Fatalf("validate: %v (%s)", err, out.String())
+	}
+	var got struct {
+		Warnings []config.Warning `json:"warnings"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("the -json output is not JSON: %v\n%s", err, out.String())
+	}
+	for _, w := range got.Warnings {
+		if w.Path == "stream.store_max_bytes" && strings.Contains(w.Message, "refuses to boot") {
+			return
+		}
+	}
+	t.Errorf("no advisory names stream.store_max_bytes below the floor: %+v", got.Warnings)
+}
+
 // AND A LEFTOVER IS REFUSED rather than ignored, which is the only way an
 // operator finds out they typed something the command cannot honour.
 func TestValidateRefusesMoreThanOneDocument(t *testing.T) {
@@ -1189,7 +1506,8 @@ func TestValidateDetectsWhichTierADocumentIs(t *testing.T) {
 		{"a company under any name", companyYAML, "company"},
 		{"a bootstrap under any name",
 			"store:\n  path: " + filepath.Join(dir, "c.db") + "\n" +
-				"stream:\n  store_dir: " + filepath.Join(dir, "s") + "\n", "bootstrap"},
+				"stream:\n  store_dir: " + filepath.Join(dir, "s") + "\n" + fixtureKeyring,
+			"bootstrap"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1326,44 +1644,44 @@ func TestTheJSONOutputCarriesAPathPerProblem(t *testing.T) {
 }
 
 // A RULE THE ORG MODEL CHECKS IS LOCATED TOO, by the seat it is about rather
-// than by its name: two seats of one name are one line of text and one
-// problem beside each seat, at the name each one wrote.
+// than by its name: two seats declaring one handle are one line of text and
+// one problem beside each seat, at the handle each one wrote.
 func TestTheJSONOutputLocatesAnOrgRuleAtEachSeat(t *testing.T) {
 	t.Parallel()
-	doc := strings.Replace(companyYAML, "  - name: CTO\n", "  - name: CEO\n", 1)
+	doc := strings.Replace(companyYAML, "    handle: cto\n", "    handle: ceo\n", 1)
 	got, raw, _ := validateJSON(t, doc)
 	var paths []string
 	for _, p := range got.Problems {
-		if strings.Contains(p.Message, "duplicate seat name") {
+		if strings.Contains(p.Message, "duplicate handle") {
 			paths = append(paths, p.Path+"@"+p.Seat)
 			if p.Kind != "conflict" {
 				t.Errorf("kind = %q, want conflict", p.Kind)
 			}
 		}
 	}
-	if want := []string{"roles[0].name@ceo", "roles[1].name@cto"}; !slices.Equal(paths, want) {
+	if want := []string{"roles[0].handle@ceo", "roles[1].handle@ceo"}; !slices.Equal(paths, want) {
 		t.Errorf("duplicate problems at %v, want %v\n%s", paths, want, raw)
 	}
 }
 
 // THE PROSE SAYS EACH THING ONCE, AND WHERE. A rule the org model reports
 // names its seat in words, so the path leads the line; two seats sharing a
-// name are one message, printed once and led by both paths rather than
+// handle are one message, printed once and led by both paths rather than
 // repeated for the second seat. A warning is printed too, and fails nothing.
 func TestTheProseOutputLeadsEachMessageWithItsPaths(t *testing.T) {
 	t.Parallel()
-	doc := strings.Replace(companyYAML, "  - name: CTO\n", "  - name: CEO\n", 1) +
-		"units:\n  - name: Platform\n    lead: Ghost\n"
+	doc := strings.Replace(companyYAML, "    handle: cto\n", "    handle: ceo\n", 1) +
+		"units:\n  - name: Platform\n    lead: ghost\n"
 	path := writeYAML(t, "company.yaml", doc)
 	var out, errOut bytes.Buffer
 	err := run([]string{"validate", path}, &out, &errOut)
 	if err == nil {
-		t.Fatalf("a document with a duplicate seat name validated: %s", out.String())
+		t.Fatalf("a document with a duplicate handle validated: %s", out.String())
 	}
-	if n := strings.Count(err.Error(), "duplicate seat name"); n != 1 {
+	if n := strings.Count(err.Error(), "duplicate handle"); n != 1 {
 		t.Errorf("the duplicate is printed %d times, want once:\n%v", n, err)
 	}
-	if !strings.Contains(err.Error(), "roles[0].name, roles[1].name: duplicate seat name") {
+	if !strings.Contains(err.Error(), "roles[0].handle, roles[1].handle: duplicate handle") {
 		t.Errorf("the duplicate is not led by both paths:\n%v", err)
 	}
 	if !strings.Contains(out.String(), "warning (dangling reference): units[0].lead: ") {
@@ -1376,14 +1694,19 @@ func TestTheProseOutputLeadsEachMessageWithItsPaths(t *testing.T) {
 // written, and it fails nothing: the engine runs a company assembled in
 // pieces, and a gate refusing one would refuse every intermediate state.
 //
-// AN ADVISORY RIDES THE SAME LIST (a unit written with no id is valid and
-// still worth knowing before it is applied), and the two are told apart by
-// Kind, so a consumer branches on the field rather than on the prose. They
-// arrive in [config.Company.Warnings]' own order: what is broken first, what
-// could be better after it.
+// EACH CARRIES ITS Kind, so a consumer branches on the field rather than on
+// the prose, and they arrive in [config.Company.Warnings]' own order: what is
+// broken first, what could be better after it.
+//
+// THE LEAD IS A HANDLE, which is what makes `ghost` a misspelling rather than
+// a name somebody wrote: nothing resolves a seat by its display name.
+//
+// AND A COMPANY OF AGENTS ALONE IS SAID TO BE ONE, after it: it declares no
+// human seat, so nobody can be invited into it or created in it — which is
+// right for a company its agents run alone and worth knowing for any other.
 func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 	t.Parallel()
-	doc := companyYAML + "units:\n  - name: Platform\n    lead: Ghost\n"
+	doc := companyYAML + "units:\n  - name: Platform\n    lead: ghost\n"
 	got, raw, _ := validateJSON(t, doc)
 	if !got.Valid {
 		t.Fatalf("a dangling lead failed validation: %s", raw)
@@ -1391,11 +1714,10 @@ func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 	want := []config.Warning{{
 		Kind: config.WarningDanglingReference, Ref: "lead",
 		Path: "units[0].lead", Segments: config.Path{"units", 0, "lead"},
-		Unit: "Platform", From: "Platform", To: "Ghost",
+		Unit: "Platform", From: "Platform", To: "ghost",
 	}, {
-		Kind: config.WarningAdvisory,
-		Path: "units[0].id", Segments: config.Path{"units", 0, "id"},
-		Unit: "Platform",
+		Kind: config.WarningAdvisory, Path: "roles",
+		Segments: config.Path{"roles"},
 	}}
 	if len(got.Warnings) != len(want) {
 		t.Fatalf("warnings = %+v, want %d: %s", got.Warnings, len(want), raw)
@@ -1428,7 +1750,7 @@ func TestTheJSONOutputCarriesWarnings(t *testing.T) {
 // edit.
 func TestTheTwoFileFormCarriesWarnings(t *testing.T) {
 	t.Parallel()
-	doc := companyYAML + "units:\n  - name: Platform\n    lead: Ghost\n"
+	doc := companyYAML + "units:\n  - name: Platform\n    lead: ghost\n"
 	var out, errOut bytes.Buffer
 	args := append([]string{"validate", "-json"}, configPair(t, "", doc)...)
 	if err := run(args, &out, &errOut); err != nil {
@@ -1457,7 +1779,8 @@ func TestTheTwoFileFormCarriesWarnings(t *testing.T) {
 	want := []string{
 		config.WarningAdvisory + " retention.backup_owner",
 		config.WarningDanglingReference + " units[0].lead",
-		config.WarningAdvisory + " units[0].id",
+		// A COMPANY OF AGENTS ALONE: no human seat to invite anybody onto.
+		config.WarningAdvisory + " roles",
 	}
 	if !slices.Equal(located, want) {
 		t.Errorf("warnings = %v, want %v\n%s", located, want, out.String())
@@ -1477,7 +1800,7 @@ func TestValidatingBothFilesPrintsTheCrossTierWarnings(t *testing.T) {
 		"store:\n  path: " + filepath.Join(dir, "crewlet.db") + "\n" +
 		"stream:\n  store_dir: " + filepath.Join(dir, "stream") + "\n  replicas: 3\n" +
 		"  cluster:\n    name: acme\n    peers: [nats://b.example.com:6222, nats://c.example.com:6222]\n" +
-		"coordination:\n  type: embedded-kv\n"
+		"coordination:\n  type: embedded-kv\n" + fixtureKeyring
 	var out, errOut bytes.Buffer
 	args := append([]string{"validate", "-json"},
 		configPair(t, fleet, companyYAML+"code:\n  native: true\n")...)
@@ -1500,15 +1823,15 @@ func TestValidatingBothFilesPrintsTheCrossTierWarnings(t *testing.T) {
 	}
 }
 
-// AN OPERATOR CAN TELL THE TWO APART IN PROSE. Both tiers' advisories share
-// the warning list with the references now, and under one undifferentiated
+// AN OPERATOR CAN TELL THE KINDS APART IN PROSE. Both tiers' advisories
+// share the warning list with the references, and under one undifferentiated
 // `warning:` line a dangling lead, which is broken and has to be corrected,
-// reads exactly like a unit with no id, which is a choice with a consequence.
+// reads exactly like a declined fsync, which is a choice with a consequence.
 // The kind leads the line, so the list can be skimmed by a person and grepped
 // by a CI step.
 func TestTheProseOutputNamesEachWarningsKind(t *testing.T) {
 	t.Parallel()
-	doc := companyYAML + "units:\n  - name: Platform\n    lead: Ghost\n"
+	doc := companyYAML + "units:\n  - name: Platform\n    lead: ghost\n"
 	var out, errOut bytes.Buffer
 	args := append([]string{"validate"}, configPair(t, "", doc)...)
 	if err := run(args, &out, &errOut); err != nil {
@@ -1517,7 +1840,6 @@ func TestTheProseOutputNamesEachWarningsKind(t *testing.T) {
 	for _, want := range []string{
 		"warning (advisory): retention.backup_owner: ",
 		"warning (dangling reference): units[0].lead: ",
-		"warning (advisory): units[0].id: ",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the output does not carry %q:\n%s", want, out.String())
@@ -1542,8 +1864,8 @@ func TestAWarningLineCarriesItsKind(t *testing.T) {
 	}, {
 		name: "an admission rule",
 		w: config.Warning{Kind: config.WarningAdmission,
-			Path: "roles[0].name", Message: "duplicate seat name"},
-		want: "warning (admission): roles[0].name: duplicate seat name",
+			Path: "units[0].id", Message: "duplicate unit key"},
+		want: "warning (admission): units[0].id: duplicate unit key",
 	}, {
 		name: "an advisory",
 		w: config.Warning{Kind: config.WarningAdvisory,
@@ -1702,6 +2024,51 @@ func TestUsageNamesBothTierBFlags(t *testing.T) {
 	}
 }
 
+// A COMMAND THAT TALKS TO A NODE AUTHENTICATES WITH CREWLET_API_TOKEN AND
+// NOTHING ELSE — and the help, the flag set and the 401 all say so.
+//
+// The node commands registered a `-token` flag, documented, beside a comment
+// saying the token was never a flag: a token typed as an argument is in the
+// shell history, in `ps` and in any CI log that echoes the command. So the
+// flag was the one way to use this CLI that leaked the credential it carried,
+// and a 401 had two sources to send an operator to. The flag is refused as
+// unknown now, the variable is the token whatever else is on the line, and
+// the help names the variable because nothing else does.
+//
+// NOT PARALLEL, and handed the PROCESS's environment: that is its subject, and
+// it is what every run of the binary reads ([run]).
+func TestTheNodeCredentialIsTheEnvironmentAndNeverAFlag(t *testing.T) {
+	t.Setenv(apiTokenEnv, "from-the-environment")
+
+	var help bytes.Buffer
+	usage(&help)
+	if !strings.Contains(help.String(), apiTokenEnv) {
+		t.Errorf("usage never names %s, the one credential a node command "+
+			"sends:\n%s", apiTokenEnv, help.String())
+	}
+
+	var stderr bytes.Buffer
+	if _, err := nodeClientFor(config.EnvSource{}, []string{"-url", "http://127.0.0.1:1", "-token", "typed"},
+		"budgets show", &stderr, nil); err == nil {
+		t.Error("-token was accepted: a credential typed on the command line " +
+			"is in the shell history and in ps")
+	}
+	client, err := nodeClientFor(config.EnvSource{}, []string{"-url", "http://127.0.0.1:1"},
+		"budgets show", &stderr, nil)
+	if err != nil {
+		t.Fatalf("nodeClientFor: %v", err)
+	}
+	if client.token != "from-the-environment" {
+		t.Errorf("token = %q, want %s's value", client.token, apiTokenEnv)
+	}
+
+	// AND THE 401 NAMES ONE SOURCE, because there is one.
+	msg, ok := credentialRefusal(http.StatusUnauthorized, nil, false)
+	if !ok || !strings.Contains(msg, apiTokenEnv) || strings.Contains(msg, "-token") {
+		t.Errorf("the no-token refusal says %q: want %s named and no flag", msg, apiTokenEnv)
+	}
+}
+
 // A WORKER-ONLY NODE STILL HAS A CONFIG WRITER.
 //
 // The writer was installed inside serveAPI, after its early return for
@@ -1752,5 +2119,230 @@ func TestTheConfigWriterIsInstalledOutsideTheHTTPSurface(t *testing.T) {
 		t.Error("the config writer is installed inside serveAPI, which returns " +
 			"early for api.port 0 — a worker-only node would run the reconcile " +
 			"loop with no way to write the company document")
+	}
+}
+
+// TestEveryNilMeansTrustOptionIsWiredAtTheOneAPICall.
+//
+// [api.Options] has a class of field whose nil is a REAL configuration rather
+// than a missing wire: the API treats it as "this node has nothing to gate on"
+// and serves. `Estate` is the one shipped today — nil is honest for a company
+// on Jira and Confluence, which runs no state-log domain at all — and that is
+// exactly what makes it dangerous here. An option the binary forgets to pass
+// compiles, boots, serves every route, and reports a healthy node whose
+// replicated rows have a hole nothing will fill. There is no runtime symptom
+// to watch for, because the absence IS the permissive answer.
+//
+// A SOURCE ASSERTION for the same reason
+// [TestTheConfigWriterIsInstalledOutsideTheHTTPSurface] is one: the bug is a
+// field that is not in a composite literal, and nothing about the running
+// process distinguishes "deliberately nil" from "nobody wired it". The list
+// is a declaration — a new option of this class is added here in the same
+// change that adds it to the API, or the next one inherits the gap.
+func TestEveryNilMeansTrustOptionIsWiredAtTheOneAPICall(t *testing.T) {
+	t.Parallel()
+	fset := token.NewFileSet()
+	parsed, err := parser.ParseFile(fset, "main.go", nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	passed := map[string]bool{}
+	calls := 0
+	ast.Inspect(parsed, func(n ast.Node) bool {
+		lit, isLit := n.(*ast.CompositeLit)
+		if !isLit {
+			return true
+		}
+		sel, isSel := lit.Type.(*ast.SelectorExpr)
+		if !isSel || sel.Sel.Name != "Options" {
+			return true
+		}
+		pkg, isIdent := sel.X.(*ast.Ident)
+		if !isIdent || pkg.Name != "api" {
+			return true
+		}
+		calls++
+		for _, elt := range lit.Elts {
+			kv, isKV := elt.(*ast.KeyValueExpr)
+			if !isKV {
+				continue
+			}
+			if key, ok := kv.Key.(*ast.Ident); ok {
+				passed[key.Name] = true
+			}
+		}
+		return true
+	})
+
+	if calls != 1 {
+		t.Fatalf("main.go builds api.Options %d times; this gate reads the one "+
+			"the binary serves from, and several would let a second call skip "+
+			"what the first passes", calls)
+	}
+	for _, field := range []string{"Estate"} {
+		if !passed[field] {
+			t.Errorf("api.Options.%s is not passed at main.go's api.New call. "+
+				"Its nil means \"nothing to gate on\", so an unwired one serves "+
+				"confidently out of whatever state this node happens to hold — "+
+				"there is no symptom to notice and nothing else checks it",
+				field)
+		}
+	}
+}
+
+// EVERY FLAG `run` REGISTERS APPEARS IN ITS OWN USAGE SYNOPSIS.
+//
+// That synopsis is the only help an operator sees at the moment they got the
+// arguments wrong, and a flag missing from it is one they do not reach for.
+// Its own comment records that it has been short THREE times — first the three
+// logging flags, which are exactly what somebody diagnosing this reaches for,
+// then -import-company, then -log-file — which is three silent regressions in
+// one string with nothing watching it. This is what watches it.
+//
+// A SOURCE ASSERTION because there is nothing at runtime to catch: a missing
+// flag parses, runs and works, and the only symptom is somebody not knowing it
+// exists.
+//
+// -config is the one exclusion, and the synopsis says why: its value is the
+// leading positional, and naming it a second time is the error being reported.
+func TestRunsUsageSynopsisNamesEveryFlagItRegisters(t *testing.T) {
+	t.Parallel()
+	fset := token.NewFileSet()
+	parsed, err := parser.ParseFile(fset, "main.go", nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var registered []string
+	var synopsis string
+	for _, decl := range parsed.Decls {
+		fn, isFunc := decl.(*ast.FuncDecl)
+		if !isFunc || fn.Name.Name != "runEngine" || fn.Body == nil {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, isCall := n.(*ast.CallExpr)
+			if !isCall || len(call.Args) == 0 {
+				return true
+			}
+			sel, isSel := call.Fun.(*ast.SelectorExpr)
+			if !isSel {
+				return true
+			}
+			switch sel.Sel.Name {
+			case "String", "Bool", "Int", "Duration", "Float64":
+				if name, ok := stringLiteral(call.Args[0]); ok {
+					registered = append(registered, name)
+				}
+			}
+			// The synopsis is the concatenated literal handed to the
+			// Fprintln that starts "usage: crewlet run".
+			if sel.Sel.Name == "Fprintln" && len(call.Args) == 2 {
+				if text, ok := concatLiterals(call.Args[1]); ok &&
+					strings.HasPrefix(text, "usage: crewlet run") {
+					synopsis = text
+				}
+			}
+			return true
+		})
+	}
+
+	// THE CONTROLS. A walk that found no flags, or no synopsis, passes
+	// every assertion below and protects nothing.
+	if len(registered) < 8 {
+		t.Fatalf("found %d flags on run's set (%v); the walk is not reading it",
+			len(registered), registered)
+	}
+	if synopsis == "" {
+		t.Fatal("run's usage synopsis was not found; this case is reading the " +
+			"wrong function or the string was reshaped")
+	}
+
+	for _, name := range registered {
+		if name == "config" {
+			continue
+		}
+		if !strings.Contains(synopsis, "-"+name) {
+			t.Errorf("-%s is registered by `run` and missing from its usage "+
+				"synopsis, so an operator who needs it is never told it "+
+				"exists:\n%s", name, synopsis)
+		}
+	}
+}
+
+// stringLiteral is an unquoted string literal, or false for anything else.
+func stringLiteral(e ast.Expr) (string, bool) {
+	lit, ok := e.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return "", false
+	}
+	v, err := strconv.Unquote(lit.Value)
+	return v, err == nil
+}
+
+// concatLiterals flattens a `"a" + "b" + "c"` chain, which is how a long
+// message is written in this tree. Anything else in the chain gives up rather
+// than guessing.
+func concatLiterals(e ast.Expr) (string, bool) {
+	switch v := e.(type) {
+	case *ast.BasicLit:
+		return stringLiteral(v)
+	case *ast.BinaryExpr:
+		if v.Op != token.ADD {
+			return "", false
+		}
+		left, okL := concatLiterals(v.X)
+		right, okR := concatLiterals(v.Y)
+		return left + right, okL && okR
+	}
+	return "", false
+}
+
+// bridgeFor is [mcpbridge.New] for a keyring a case expects to be usable.
+func bridgeFor(t *testing.T, opts mcpbridge.Options) *mcpbridge.Bridge {
+	t.Helper()
+	bridge, err := mcpbridge.New(opts)
+	if err != nil {
+		t.Fatalf("mcpbridge.New: %v", err)
+	}
+	return bridge
+}
+
+// A CLI-AGENT ENTRY'S PROFILE IS JUDGED BY THE VALIDATOR, NOT ONLY BY THE
+// EPOCH BUILD — so the refusal is located at the field to change. Built-only,
+// an unloadable profile came back with an empty path and an `engine:` prefix,
+// and a key with no variable to go in validated clean.
+func TestValidateLocatesACLIAgentProfileRefusal(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, entry, path string }{
+		{"an unloadable profile", "      cli: {agent: custom}\n", "providers.llm.sub.cli.overrides"},
+		{"an api key with nowhere to go",
+			"      api_keys: [\"${OPENROUTER_API_KEY}\"]\n      cli: {agent: hermes, auth: {mode: api-key}}\n",
+			"providers.llm.sub.cli.auth.mode"},
+		{"a profile with no model flag",
+			"      cli: {agent: codex, overrides: {model_args: []}}\n",
+			"providers.llm.sub.cli.overrides.model_args"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			doc := "name: Acme\nproviders:\n  llm:\n    sub:\n      type: cli-agent\n      model: m\n" + tc.entry
+			path := writeYAML(t, "company.yaml", doc)
+			var out, errOut bytes.Buffer
+			if err := run([]string{"validate", path, "-tier", "company", "-json"}, &out, &errOut); err == nil {
+				t.Fatalf("the entry validated: %s", out.String())
+			}
+			var report struct {
+				Problems []struct {
+					Path string `json:"path"`
+				} `json:"problems"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+				t.Fatalf("decode: %v (%s)", err, out.String())
+			}
+			if len(report.Problems) == 0 || report.Problems[0].Path != tc.path {
+				t.Errorf("problems = %+v, want one at %s", report.Problems, tc.path)
+			}
+		})
 	}
 }

@@ -1,10 +1,20 @@
 /**
- * What jsdom does not provide, and the component suites need.
+ * What jsdom does not provide, and the component suites need — and how long
+ * a wait in one may take before it is called hung.
  *
  * Kept to the genuine gaps. A polyfill that changes behaviour rather than
  * supplying a missing API would make the suite agree with a browser nobody
  * runs.
  */
+
+import { configure } from "@testing-library/react";
+import { WAIT_BOUND_MS } from "./bounds.ts";
+
+// Every `findBy…` and `waitFor` in the suite, rather than a figure per call:
+// the one-second default is a wall-clock budget on rendering work, and the
+// cases that had already outgrown it each carried an override of their own.
+// `bounds.ts` says what the figure is anchored to.
+configure({ asyncUtilTimeout: WAIT_BOUND_MS });
 
 // jsdom implements neither. Both are read at module scope by layout-aware
 // components, so their absence is a throw rather than a wrong answer.
@@ -61,7 +71,7 @@ if (!("scrollTo" in globalThis)) {
 // Web Storage is the third gap, and the one that only shows up on somebody
 // else's machine. jsdom exposes it from the document's ORIGIN, so whether it
 // is there depends on how the environment was constructed rather than on the
-// version: two suites that store an operator token passed every local run and
+// version: two suites that stored a value there passed every local run and
 // failed in CI with `localStorage is undefined`, which is a property of the
 // runner, not of the code under test.
 //
@@ -73,7 +83,7 @@ if (!("scrollTo" in globalThis)) {
 // holds undefined, so an `in` check — which is what the two guards above can
 // safely use — skipped this polyfill entirely and the suites failed exactly
 // as they had before it existed. Reading it can also throw, which is the same
-// reason apiToken() wraps its own read.
+// reason every production read of it is wrapped in try/catch.
 //
 // sessionStorage has exactly the same origin dependence, and it is filled by
 // the same factory rather than a second copy, so the two areas cannot come to
@@ -108,4 +118,21 @@ for (const area of ["localStorage", "sessionStorage"] as const) {
   if (storageMissing(area)) {
     Object.defineProperty(globalThis, area, { writable: true, value: memoryStorage() });
   }
+}
+
+// A RANGE HAS NO LAYOUT EITHER, and the rich editor measures one to keep the
+// caret in view and to place what floats beside it. An empty rectangle is
+// what a browser answers for a collapsed range in a hidden element, so it is
+// a value rather than a pretence; a suite in the node environment has no DOM.
+if (typeof Range !== "undefined") {
+  const empty = () => new DOMRect(0, 0, 0, 0);
+  if (typeof Range.prototype.getBoundingClientRect !== "function") {
+    Range.prototype.getBoundingClientRect = empty;
+  }
+  if (typeof Range.prototype.getClientRects !== "function") {
+    Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
+  }
+}
+if (typeof document !== "undefined" && typeof document.elementFromPoint !== "function") {
+  document.elementFromPoint = () => null;
 }

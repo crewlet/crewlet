@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
@@ -77,7 +78,7 @@ func schema(t *testing.T) (columns map[string][]string, leading map[string][]str
 
 // faults is everything the gate finds wrong with one declaration against the
 // schema, as messages naming it: one that does not validate — a missing or
-// unknown standing among the reasons (ADR-0033) — a table the schema lacks, a
+// unknown standing among the reasons (ADR-0047) — a table the schema lacks, a
 // key column not called [references.ObjectColumn], a declared column the table
 // does not have, and no index leading with the key.
 //
@@ -110,7 +111,7 @@ func faults(ref objstore.ReferenceTable, columns, leading map[string][]string) [
 }
 
 // EVERY TABLE THAT NAMES AN OBJECT IS DECLARED, AND EVERY DECLARATION IS A
-// TABLE THAT DOES — ADR-0026's enforcement, and ADR-0033's: every declaration
+// TABLE THAT DOES — ADR-0026's enforcement, and ADR-0047's: every declaration
 // states its standing.
 //
 // The failure it exists for is silent and destroys data: a table naming
@@ -172,7 +173,7 @@ func TestEveryTableThatNamesAnObjectIsDeclared(t *testing.T) {
 	}
 }
 
-// EVERY REQUIRED TABLE SAYS HOW ITS LOG NAMES OBJECTS (ADR-0034). A backup
+// EVERY REQUIRED TABLE SAYS HOW ITS LOG NAMES OBJECTS (ADR-0048). A backup
 // restores its store copy and replays the declaring domain's log from the
 // copy's position — and a newer build applies what the copy's applier deferred
 // — so it owes every object a record of either names, and it learns how a
@@ -240,8 +241,9 @@ const assumedClockSkew = time.Hour
 // a write could name a key a collection had just read as nobody's. And the
 // bound itself has to outlast the slowest upload the engine accepts — the
 // largest object any declaring domain stores (a file of tracker.MaxFileBytes,
-// a pack bundle of code.MaxPackBytes) at the objstore.MiBPace floor — or a
-// legal upload would finish only to be refused.
+// a pack bundle of code.MaxPackBytes, an artifact's file or asset of
+// artifacts.MaxTextFileBytes) at the objstore.MiBPace floor — or a legal
+// upload would finish only to be refused.
 func TestTheGraceOutlastsTheLongestUnrecordedUpload(t *testing.T) {
 	t.Parallel()
 	if objstore.RecordWithin+assumedClockSkew >= collect.PendingGrace {
@@ -255,6 +257,7 @@ func TestTheGraceOutlastsTheLongestUnrecordedUpload(t *testing.T) {
 	}{
 		{"tracker.MaxFileBytes", tracker.MaxFileBytes},
 		{"code.MaxPackBytes", code.MaxPackBytes},
+		{"artifacts.MaxTextFileBytes", artifacts.MaxTextFileBytes},
 	} {
 		slowest := objstore.PaceFor(largest.bytes)
 		if slowest >= objstore.RecordWithin {
@@ -268,7 +271,7 @@ func TestTheGraceOutlastsTheLongestUnrecordedUpload(t *testing.T) {
 	}
 }
 
-// retirement is what a RETIRED declaration owes (ADR-0033), reviewed here,
+// retirement is what a RETIRED declaration owes (ADR-0047), reviewed here,
 // beside the gate that holds it: a retired table nobody sweeps keeps its
 // objects for ever, and one whose grace is shorter than the longest read of
 // what its rows name deletes the object under that read. Each field is the
@@ -315,7 +318,7 @@ func retirementFaults(declared []objstore.ReferenceTable, reviewed map[string]re
 		r, ok := reviewed[ref.Table]
 		if !ok {
 			out = append(out, fmt.Sprintf("%s is declared objstore.Retired and has no entry in "+
-				"retirements (internal/objstore/references/references_test.go) — ADR-0033 holds "+
+				"retirements (internal/objstore/references/references_test.go) — ADR-0047 holds "+
 				"a retired table to a sweep that deletes its rows and a grace that outlasts the "+
 				"longest read of what they name: add its domain's grace, the largest object a "+
 				"row names and the job that sweeps the rows, and list that job in "+
@@ -324,18 +327,18 @@ func retirementFaults(declared []objstore.ReferenceTable, reviewed map[string]re
 		}
 		if strings.TrimSpace(r.sweep) == "" {
 			out = append(out, fmt.Sprintf("%s is retired and names no job that sweeps its rows — "+
-				"a retired row nobody deletes keeps its object for ever (ADR-0033)", ref.Table))
+				"a retired row nobody deletes keeps its object for ever (ADR-0047)", ref.Table))
 		}
 		if r.largest <= 0 {
 			out = append(out, fmt.Sprintf("%s is retired and states no largest object (%d bytes), "+
-				"so nothing bounds the read its grace must outlast (ADR-0033)", ref.Table, r.largest))
+				"so nothing bounds the read its grace must outlast (ADR-0047)", ref.Table, r.largest))
 			continue
 		}
 		if longest := objstore.ReadBudget(r.largest); r.grace <= longest+assumedClockSkew {
 			out = append(out, fmt.Sprintf("%s keeps a retired row for %v, and a read of its "+
 				"largest object (%d bytes) may take objstore.ReadBudget = %v, plus an assumed "+
 				"clock skew of %v between the node stamping the row and the node sweeping it — "+
-				"the object can be deleted under a read still fetching it (ADR-0033)",
+				"the object can be deleted under a read still fetching it (ADR-0047)",
 				ref.Table, r.grace, r.largest, longest, assumedClockSkew))
 		}
 	}
@@ -350,7 +353,7 @@ func retirementFaults(declared []objstore.ReferenceTable, reviewed map[string]re
 }
 
 // A RETIRED TABLE IS SWEPT, AND OUTLIVES ITS LONGEST READ — the two
-// obligations ADR-0033 places on a retired declaration, which no other gate
+// obligations ADR-0047 places on a retired declaration, which no other gate
 // can see: the collector deletes an object the moment nothing names it, so a
 // retired row nobody deletes keeps its object for ever, and one deleted before
 // the longest read of its object ends deletes the object under that read.

@@ -418,13 +418,21 @@ func (s ScopeSet) withObjects(subject string, ids []string, filed map[string]str
 }
 
 // namesFiled reports whether terms already claim id where filed says it is:
-// its object term under its own project, or the domain.
+// its object term under its own project, its project's container, or the
+// domain.
+//
+// THE CONTAINER COUNTS, because an enumeration past [MaxScopeTerms] folds its
+// largest project into one ([ScopeSet.capped]): a check that read only object
+// terms would refuse the very scope the cap made of a blocker's sixty-four
+// dependents.
 func (ScopeSet) namesFiled(terms []ScopeTerm, id string, filed map[string]string) bool {
 	project, held := filed[id]
 	return slices.ContainsFunc(terms, func(t ScopeTerm) bool {
 		switch t.Kind {
 		case TermDomain:
 			return true
+		case TermContainer:
+			return held && t.named() == project
 		case TermObject:
 			return held && t.ID == id && t.Container == project
 		}

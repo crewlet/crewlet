@@ -15,10 +15,12 @@
 // that walks a YAML document reporting the path of every reference it could
 // not answer. None of that is expressible from behind a bare Lookup.
 //
-// This package shipped a second, unreferenced chain of its own for a while —
-// Source, Chain, MapSource, Snapshot — a complete parallel implementation
-// with no caller, kept alive by its own tests. It is gone; `config.Resolver`
-// is the one answer.
+// This package shipped a second, unreferenced resolution chain of its own
+// for a while — a lookup source type, Chain, MapSource and Snapshot — a
+// complete parallel implementation with no caller, kept alive by its own
+// tests. It is gone; `config.Resolver` is the one answer. The [Source] this
+// package declares now is unrelated to resolving anything: it is the write
+// path a stored secret arrived by.
 //
 // # The envelope
 //
@@ -240,15 +242,62 @@ func GenerateKey() ([]byte, error) {
 
 // EncodeKey renders a key in the form the config's `material` field takes.
 //
-// Base64 of the raw bytes, which is what the loader decodes — so `crewlet
+// Base64 of the raw bytes, which is what [DecodeKey] reads — so `crewlet
 // secrets keygen` emits something pasteable rather than something to
 // convert, and there is one definition of the encoding rather than one here
 // and one in the loader.
 func EncodeKey(key []byte) string { return base64.StdEncoding.EncodeToString(key) }
 
+// ErrKeyMaterial reports key material that is not a key: not base64, or not
+// the size of an AES-256 key once decoded.
+var ErrKeyMaterial = errors.New("key material must be the base64 of a 32-byte key")
+
+// DecodeKey reads key material in the form [EncodeKey] writes it.
+//
+// THE ONE DECODER, because two places ask the question and they must never
+// disagree: the Tier A loader building the cipher a node boots with, and the
+// validation `crewlet validate` runs, which promises the loader will succeed.
+// The validation used to check only that the material was present, so a
+// file whose key was not base64, or was base64 of three bytes, validated
+// clean and was refused at boot.
+//
+// Surrounding whitespace is ignored, since a key pasted into YAML or an
+// environment variable routinely carries a newline. The error never carries
+// the material.
+func DecodeKey(material string) ([]byte, error) {
+	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(material))
+	if err != nil {
+		return nil, fmt.Errorf("%w: it is not base64", ErrKeyMaterial)
+	}
+	if len(key) != keyBytes {
+		return nil, fmt.Errorf("%w: it decodes to %d bytes", ErrKeyMaterial, len(key))
+	}
+	return key, nil
+}
+
 // AADForVar is the associated data binding a secret-store value to its
 // variable name, so a ciphertext moved between rows fails to authenticate.
 func AADForVar(name string) string { return "secret_values/" + name }
+
+// AADForCredential binds a sealed credential value to the CREDENTIAL it
+// belongs to and to which field of it, so a ciphertext moved between rows
+// fails to authenticate.
+//
+// THE CREDENTIAL AND NOT THE PERSON, which is the one decision here and it is
+// not the obvious one: a person holds several credentials at once — a
+// password, a second factor, a machine token or two — and
+// binding to the person alone would let a second factor's sealed secret be
+// pasted over a first one's on the same row and still open. The field is the
+// second term for the same reason one level down: two values under one
+// credential must not be interchangeable either.
+//
+// It is here rather than in internal/iam/credential because the two callers
+// that must agree about it are the sealer and the reader, and a rule written
+// at each of them is the shape every other duplicated grammar in this tree
+// started as.
+func AADForCredential(credentialID, field string) string {
+	return "iam_credential/" + credentialID + "/" + field
+}
 
 // AADForDocument is the associated data for a whole-config document.
 const AADForDocument = "company_config/document"

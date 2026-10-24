@@ -11,7 +11,7 @@ import (
 )
 
 // PackReferences declares code_packs: every pack bundle a push stored is named
-// by a row here. REQUIRED (ADR-0033): a repository's bytes are the company's,
+// by a row here. REQUIRED (ADR-0047): a repository's bytes are the company's,
 // audited daily and carried by every backup — and declared in
 // internal/objstore/references, or the collector would delete every pack a day
 // after it was written.

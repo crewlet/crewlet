@@ -1,10 +1,12 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -181,10 +183,9 @@ func fleetFloors(ctx context.Context, fleet coord.Fleet) ([]coord.TrimFloor, err
 // `blocked_since` is published rather than held in memory.
 //
 // The trim is a fleet singleton on a lease. A value the holder kept would
-// reset on every handover, so the twenty-four-hour backup condition — the one
-// that turns "this company never backs up and therefore never trims" into
-// something that reaches a person — would never be reached on a fleet whose
-// lease flapped even once a day.
+// reset on every handover, so `trim_blocked` — the alarm that turns a trim
+// blocked past its `min_age` window into something that reaches a person —
+// would never be reached on a fleet whose lease flapped even once a week.
 func TestABlockedTrimsClockSurvivesTheDutyMovingBetweenNodes(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -224,10 +225,115 @@ func TestABlockedTrimsClockSurvivesTheDutyMovingBetweenNodes(t *testing.T) {
 	if !published[0].BlockedSince.Equal(first) {
 		t.Fatalf("blocked_since = %s after the duty moved, want the original %s "+
 			"— a clock that restarts on a handover never reaches the "+
-			"twenty-four-hour condition", published[0].BlockedSince, first)
+			"window trim_blocked fires at", published[0].BlockedSince, first)
 	}
 	if published[0].By != "node-b" {
 		t.Fatalf("the floor names %q as its writer, want node-b", published[0].By)
+	}
+}
+
+// A BLOCKED TRIM IS SAID WHEN IT STARTS, WHEN ITS TERM CHANGES AND WHEN IT
+// ENDS — and not on the ticks between, nor again by a holder that took the duty
+// over mid-block.
+//
+// It was a WARN on every tick of every blocked domain, and a block is a state a
+// healthy fleet lives in for weeks: a fresh deployment waiting on its first
+// backup, and a log nobody writes to for the life of the deployment. That was
+// four lines an hour per such log, for ever. Every line is a WARN, so a filter
+// that shows a block's start shows its end — including a block that started on
+// a term nobody could read and ended on one that permitted nothing yet.
+func TestABlockedTrimIsSaidWhenItStartsChangesAndEnds(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	r := floorFleet(t)
+	r.logger = logger
+	lines := func() []map[string]any {
+		var out []map[string]any
+		for _, raw := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+			var line map[string]any
+			if json.Unmarshal([]byte(raw), &line) == nil &&
+				strings.HasPrefix(line["msg"].(string), "retention_trim_") {
+				out = append(out, line)
+			}
+		}
+		return out
+	}
+	tick := func(r *retention, at time.Time, decision statelog.TrimDecision) {
+		t.Helper()
+		published, err := fleetFloors(ctx, r.fleet)
+		if err != nil {
+			t.Fatalf("floors: %v", err)
+		}
+		previous := map[string]coord.TrimFloor{}
+		for _, f := range published {
+			previous[f.Domain] = f
+		}
+		if err := r.publish(ctx, "tracker", 1, decision, 1, fleetInputs{
+			at: at, previous: previous}); err != nil {
+			t.Fatalf("publish: %v", err)
+		}
+	}
+	noBackup := statelog.TrimDecision{BlockedBy: statelog.TermBackupFloor,
+		Detail: "no backup has been recorded",
+		Terms:  []statelog.Term{{Name: statelog.TermBackupFloor}}}
+	joining := statelog.TrimDecision{BlockedBy: statelog.TermApplied,
+		Detail: "this term permits removing nothing yet",
+		Terms: []statelog.Term{{Name: statelog.TermBackupFloor, Seq: 900, Known: true},
+			{Name: statelog.TermApplied, Known: true}}}
+	advancing := statelog.TrimDecision{To: 900,
+		Terms: []statelog.Term{{Name: statelog.TermApplied, Seq: 900, Known: true}}}
+	t0 := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
+
+	// THE BLOCK STARTS, on a term nobody could read: one WARN.
+	tick(r, t0, noBackup)
+	// FOUR MORE TICKS OF IT say nothing.
+	for i := 1; i <= 4; i++ {
+		tick(r, t0.Add(time.Duration(i)*statelog.TrimInterval), noBackup)
+	}
+	// AND NEITHER DOES A HOLDER THAT TOOK THE DUTY OVER MID-BLOCK.
+	peer := &retention{fleet: r.fleet, nodeID: "node-b", logger: logger}
+	tick(peer, t0.Add(5*statelog.TrimInterval), noBackup)
+	got := lines()
+	if len(got) != 1 || got[0]["msg"] != "retention_trim_blocked" ||
+		got[0]["level"] != "WARN" || got[0]["term"] != string(statelog.TermBackupFloor) {
+		t.Fatalf("six ticks of one block, across a handover, wrote %v; want the "+
+			"one WARN that started it", got)
+	}
+
+	// THE TERM CHANGES — a backup landed, and a node joining at position zero
+	// holds it now: said once, naming the term before, with the clock that
+	// never restarted.
+	tick(peer, t0.Add(6*statelog.TrimInterval), joining)
+	tick(peer, t0.Add(7*statelog.TrimInterval), joining)
+	got = lines()
+	if len(got) != 2 {
+		t.Fatalf("a change of term wrote %d line(s) in all, want two: %v", len(got), got)
+	}
+	changed := got[1]
+	if changed["msg"] != "retention_trim_blocked" || changed["level"] != "WARN" ||
+		changed["term"] != string(statelog.TermApplied) ||
+		changed["was"] != string(statelog.TermBackupFloor) ||
+		changed["blocked_since"] != t0.Format(time.RFC3339) {
+		t.Errorf("the change of term reads %v; want a WARN naming both terms and "+
+			"the block's first instant", changed)
+	}
+
+	// IT ENDS: once, at the level it started at although the term that
+	// ended it was one that permitted nothing yet, with how long it lasted.
+	tick(peer, t0.Add(8*statelog.TrimInterval), advancing)
+	tick(peer, t0.Add(9*statelog.TrimInterval), advancing)
+	got = lines()
+	if len(got) != 3 {
+		t.Fatalf("the end of the block wrote %d line(s) in all, want three: %v", len(got), got)
+	}
+	ended := got[2]
+	if ended["msg"] != "retention_trim_unblocked" || ended["level"] != "WARN" ||
+		ended["was"] != string(statelog.TermApplied) ||
+		ended["for"] != (8*statelog.TrimInterval).String() {
+		t.Errorf("the end of the block reads %v; want a WARN naming the last term "+
+			"and its two hours", ended)
 	}
 }
 
@@ -394,7 +500,7 @@ func TestABlockedTickPublishesTheFloorAnEarlierTickLicensed(t *testing.T) {
 		BlockedBy: statelog.TermApplied,
 		Terms:     []statelog.Term{{Name: statelog.TermApplied, Known: true}},
 	}, 1, fleetInputs{
-		at: now.Add(RetentionInterval), previous: map[string]coord.TrimFloor{"tracker": advanced[0]},
+		at: now.Add(statelog.TrimInterval), previous: map[string]coord.TrimFloor{"tracker": advanced[0]},
 	}); err != nil {
 		t.Fatalf("publish the block: %v", err)
 	}
@@ -447,7 +553,7 @@ func (f *orderFleet) PutFloor(ctx context.Context, row coord.TrimFloor) error {
 // floor a case sees is the case's own, and a purge has something to remove.
 func trimmedTracker(t *testing.T) (*Engine, *Backends, *runningLog) {
 	t.Helper()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	SeedStore(t, &b)
@@ -469,7 +575,7 @@ func trimmedTracker(t *testing.T) (*Engine, *Backends, *runningLog) {
 	// THE NODE'S OWN TRIM IS THE OTHER WRITER of both the floor and the
 	// log's first sequence; stopped, it waits out an in-flight tick.
 	e.stopRetention()
-	running := e.native.Load().log.Domain(tracker.Domain{}.Name())
+	running := e.core.Load().log.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
 	}
@@ -502,8 +608,12 @@ func barrierOn(t *testing.T, running *runningLog) uint64 {
 	if err != nil {
 		t.Fatalf("encode a barrier: %v", err)
 	}
+	// SIGNED, as every record on the log is: an applier refuses a frame
+	// this keyring does not open, so an unsigned barrier would stop the log
+	// this case means to move.
 	seq, _, err := running.log.Append(t.Context(),
-		running.spec.SubjectPrefix+"."+statelog.BarrierKind, "", nil, body)
+		running.spec.SubjectPrefix+"."+statelog.BarrierKind, "", nil,
+		running.signer.Seal(body))
 	if err != nil {
 		t.Fatalf("append a barrier: %v", err)
 	}
@@ -613,10 +723,10 @@ func TestEachLogsTrimWaitsOnItsOwnWakeFeed(t *testing.T) {
 	// written and the tick is decided by the other five. Set on the loop
 	// rather than through validated config: the 24-hour floor exists for
 	// an operator, and this case is about a different term.
-	r := &retention{fleet: back.Fleet, state: e.native.Load().log, nodeID: "node-a",
+	r := &retention{fleet: back.Fleet, state: e.core.Load().log, nodeID: "node-a",
 		cfg: config.TrackerRetention{MinAgeRaw: "1ns"}}
-	for _, name := range e.native.Load().log.held().order {
-		running := e.native.Load().log.Domain(name)
+	for _, name := range e.core.Load().log.held().order {
+		running := e.core.Load().log.Domain(name)
 		t.Run(name, func(t *testing.T) {
 			group := running.domain.FeedGroup()
 			if group == "" {
@@ -809,7 +919,7 @@ func TestTheSearchAlarmsReadWhatTheAnswersActuallyCovered(t *testing.T) {
 
 	r := &retention{metrics: recorder}
 	var reading statelog.Reading
-	r.observed(&reading, nil)
+	r.observed(&reading)
 
 	if got := reading.SearchScopedFraction; got != 0.25 {
 		t.Errorf("one of four answers was over part of the corpus and the "+
@@ -879,7 +989,7 @@ func TestASlowTurnStartAndASlowSearchAreTwoAlarms(t *testing.T) {
 				e.reportSearch(search.FanQuery{}, answer, tc.deliberate)
 			}
 			var reading statelog.Reading
-			(&retention{metrics: recorder}).observed(&reading, nil)
+			(&retention{metrics: recorder}).observed(&reading)
 			if reading.PrefetchP95 < tc.prefetch/2 || reading.SearchP95 < tc.deliberate/2 ||
 				reading.PrefetchP95 > 2*tc.prefetch || reading.SearchP95 > 2*tc.deliberate {
 				t.Fatalf("prefetch p95 %v and search p95 %v, want about %v and %v: each read off its "+
@@ -946,7 +1056,7 @@ func TestAPercentileInsideItsBudgetFiresNothing(t *testing.T) {
 					tc.record(e, recorder, arm.took)
 				}
 				var reading statelog.Reading
-				(&retention{metrics: recorder}).observed(&reading, nil)
+				(&retention{metrics: recorder}).observed(&reading)
 				if fired := firedKind(statelog.Evaluate(reading), tc.kind); fired != arm.fires {
 					t.Errorf("every observation at %v against a %v budget: %s fired = %v, want %v — the "+
 						"percentiles read as barrier %v, prefetch %v, search %v, pool wait %v", arm.took,
@@ -1016,7 +1126,7 @@ func TestASearchWithNoSemanticHalfAskedForIsNotDegraded(t *testing.T) {
 		e.reportSearch(search.FanQuery{}, search.Answer{BucketsAnswered: 64}, time.Millisecond)
 	}
 	var reading statelog.Reading
-	(&retention{metrics: recorder}).observed(&reading, nil)
+	(&retention{metrics: recorder}).observed(&reading)
 	if reading.SearchDegradedFraction != 0 {
 		t.Fatalf("a company running lexical search by choice reports %.2f of "+
 			"its answers degraded", reading.SearchDegradedFraction)
@@ -1153,7 +1263,7 @@ func TestAnAlarmClearsOnceItsHourRollsOutOfTheWindow(t *testing.T) {
 	}
 
 	var lit statelog.Reading
-	r.observed(&lit, nil)
+	r.observed(&lit)
 	if lit.SearchDegradedFraction <= 0 {
 		t.Fatal("a degraded search left the fraction at zero, so this case " +
 			"proves nothing about clearing")
@@ -1165,7 +1275,7 @@ func TestAnAlarmClearsOnceItsHourRollsOutOfTheWindow(t *testing.T) {
 	// A DAY LATER WITH NOTHING SINCE. The hour that held it has rolled out.
 	at = at.Add(metrics.Buckets*time.Hour + time.Hour)
 	var cleared statelog.Reading
-	r.observed(&cleared, nil)
+	r.observed(&cleared)
 	if cleared.SearchDegradedFraction != 0 {
 		t.Errorf("SearchDegradedFraction = %.3f a day after the last degraded "+
 			"search, so the alarm is reading a cumulative counter and can "+
@@ -1205,7 +1315,7 @@ func TestANodeWithNoBackupReportsTheAbsenceRatherThanAnAge(t *testing.T) {
 	r := &retention{state: &stateLog{}, fleet: coordmem.NewFleet(), nodeID: "node-a"}
 	now := time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC)
 
-	none := r.reading(t.Context(), now, coord.BackupPoint{}, false, nil, nil)
+	none := r.reading(t.Context(), now, coord.BackupPoint{}, false, nil)
 	if none.BackupAge != nil {
 		t.Errorf("a fleet with no backup reported an age of %v", *none.BackupAge)
 	}
@@ -1229,7 +1339,7 @@ func TestANodeWithNoBackupReportsTheAbsenceRatherThanAnAge(t *testing.T) {
 	// AND A REAL BACKUP IS STILL MEASURED against the same clock, so the
 	// nil above is the absence rather than a field nothing fills.
 	taken := r.reading(t.Context(), now,
-		coord.BackupPoint{At: now.Add(-2 * time.Hour)}, true, nil, nil)
+		coord.BackupPoint{At: now.Add(-2 * time.Hour)}, true, nil)
 	if taken.BackupAge == nil || *taken.BackupAge != 2*time.Hour {
 		t.Fatalf("a two-hour-old backup reported %v", taken.BackupAge)
 	}
@@ -1289,7 +1399,7 @@ func TestTheBackupAlarmAgesThePointThePolicyCounts(t *testing.T) {
 func TestTheRetentionReportShowsOnlyAFloorAtTheDomainsGeneration(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	// THE ENGINE'S OWN TRIM DUTY IS ENDED FIRST. It ticks the moment it
 	// starts, and on a loaded runner that first tick can land after the
 	// reanchor below — publishing a floor at the pages log's NEW generation,
@@ -1325,7 +1435,7 @@ func TestTheRetentionReportShowsOnlyAFloorAtTheDomainsGeneration(t *testing.T) {
 	}
 	live := view.CreatedAt
 	if _, err := e.Reanchor(t.Context(), ReanchorRequest{
-		Stream: stream, Confirm: statelog.ConfirmationOf(live), By: "ops-1",
+		Stream: stream, Confirm: statelog.ConfirmationOf(live), By: reanchorOperator,
 	}); err != nil {
 		t.Fatalf("Reanchor: %v", err)
 	}
@@ -1383,7 +1493,7 @@ func TestTheRetentionReportShowsOnlyAFloorAtTheDomainsGeneration(t *testing.T) {
 func TestTheRetentionReportSaysWhichLogsEvictionsItCouldNotRead(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	closed := storetest.OpenNode(t, filepath.Join(t.TempDir(), "closed.db"), store.Options{})
 	t.Cleanup(func() { _ = closed.Close() })
 	if err := closed.CloseReplicated(); err != nil {
@@ -1438,7 +1548,7 @@ func TestTheRetentionReportSaysWhichLogsEvictionsItCouldNotRead(t *testing.T) {
 func TestTheRetentionReportNamesARecreatedLog(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	e.stopRetention()
 	r := &retention{fleet: e.backends.Fleet, state: s, nodeID: "node-a"}
 	pagesName := pages.Domain{}.Name()
@@ -1491,7 +1601,7 @@ func (c *countingLister) ListLive(ctx context.Context, class coord.Class) ([]coo
 func TestTheReportListsPresenceOnce(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	e.stopRetention()
 	lister := &countingLister{Backend: e.backends.Coord}
 	if _, _, err := lister.TryAcquire(t.Context(), coord.NodeResource("node-joiner"), coord.AcquireOptions{
@@ -1526,12 +1636,12 @@ func TestOneDomainsUnreadableFloorStopsThatDomainsTrimAlone(t *testing.T) {
 	e, back, _ := trimmedTracker(t)
 	unread := pages.Domain{}.Name()
 	fleet := &oneFloorUnread{fleetRegister: back.Fleet, domain: unread}
-	r := &retention{fleet: fleet, state: e.native.Load().log, nodeID: "node-a",
+	r := &retention{fleet: fleet, state: e.core.Load().log, nodeID: "node-a",
 		cfg: config.TrackerRetention{MinAgeRaw: "1ns"}}
 	before := time.Now().UTC().Add(-time.Second)
 	r.tick(t.Context())
 
-	for _, running := range e.native.Load().log.running() {
+	for _, running := range e.core.Load().log.running() {
 		name := running.domain.Name()
 		if name == unread {
 			continue

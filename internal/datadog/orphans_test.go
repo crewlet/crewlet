@@ -29,10 +29,11 @@ func orphansFinding(t *testing.T, res *datadog.Result) (integration.Finding, boo
 
 // ACCOUNTS THIS ENGINE MADE AND NO LONGER MANAGES ARE REPORTED.
 //
-// A live organization accumulates them: a seat renamed, a handle changed, an
-// account made by hand at this engine's `.invalid` domain. They are absent
-// from the plan by construction, so no seat's result mentioned them and the
-// card read Ready over an organization full of them.
+// A live organization accumulates them: a seat removed or given another handle
+// (a different handle is a different seat, ADR-0013), or an account made by
+// hand at this engine's `.invalid` domain. They are absent from the plan by
+// construction, so no seat's result mentioned them and the card read Ready
+// over an organization full of them.
 //
 // REPORTED, NEVER TOUCHED. An account is a colleague at Datadog with history
 // attached, so removing one because a handle changed is not a decision a timer

@@ -10,12 +10,19 @@
  *
  * The first crumb is the WORKSPACE, with its glyph — the one mark of where
  * the reader is that survives a sidebar folded into a drawer. A SECTION
- * follows it unless the section IS the workspace's landing page ("Agents"
- * alone on the chart, "Agents › Roster" on the roster): the tab under the bar
+ * follows it unless the section IS the workspace's landing page ("Org chart"
+ * alone on the chart, "Org chart › Roster" on the roster), and always in
+ * Settings, whose column lists its landing like any other section: the tab
+ * under the bar
  * says the same, but the trail is what titles the browser tab and what is
  * left on a phone where the tabs have scrolled away. The last crumb is the
  * OBJECT and carries no link: a trail whose final crumb links to the page you
  * are already on teaches a reader that the control does nothing.
+ *
+ * WORK'S PAGES END IN THEIR SCOPE, All projects or one project, and that crumb
+ * SWITCHES it ([Crumb.switch]): Work › All projects on its lenses, Work ›
+ * FAIR Product and Engineering on a project's. On Work's landing the workspace
+ * is plain words, because a link there would lead to the page it is on.
  *
  * `labels` is what a screen knows and the route does not — a project's name
  * for its key, a seat's display name for its handle, a page's title for its
@@ -24,9 +31,12 @@
  * the chrome, and it is drawn in the mono face so it reads as one.
  */
 
+import { avatarOf, type AgentAvatar } from "~/lib/avatar.ts";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
-import { workspaceRow, type Section, type WorkspaceRow } from "./nav.ts";
-import { ITEM_KEY_SHAPE, resolve } from "./routes.ts";
+import { unitRoute } from "~/lib/seats.ts";
+import { SIDEBAR_GROUPS, workspaceRow, type Section, type WorkspaceRow } from "./nav.ts";
+import { ITEM_KEY_SHAPE, resolve, type SignInScreen } from "./routes.ts";
+import { ALL_PROJECTS, LENS_LABELS, type ScopeAt } from "./scope.ts";
 
 export type Labels = Record<string, string>;
 
@@ -50,13 +60,23 @@ export interface Crumb {
    * A seat's badge before its name, the way every row and card draws a seat —
    * the kind is its outline. Only on the seat's own crumb.
    */
-  seat?: { name: string; kind: "agent" | "human" };
+  seat?: { name: string; kind: "agent" | "human"; avatar?: AgentAvatar | null };
+  /**
+   * The crumb names a scope the reader can switch, and is drawn as the
+   * switcher's button (`header/ProjectSwitcher.tsx`). Only Work's last crumb
+   * carries it, and a project is the one kind of scope there is.
+   */
+  switch?: "project";
+  /** The project is archived: the switcher's button carries a tag saying so. */
+  archived?: boolean;
 }
 
 /**
  * The label keys a seat's page publishes besides its name: the unit the seat
- * sits in — its NAME, which is the Teams address, and its path as a reader
- * names it ("Engineering · Core") — and whether it is an agent or a person.
+ * sits in — its KEY, which is the Teams address (`lib/seats.ts`'s
+ * `unitRoute`), and its path as a reader names it ("Engineering · Core") — and
+ * whether it is an agent or a person. The KEY and never the name: two units
+ * may share a name, and a crumb addressed by one led to whichever came first.
  *
  * NO ROUTE SEGMENT CAN SPELL THEM: each starts with a NUL, which a path
  * segment never carries once decoded, so a seat's unit can never title a
@@ -65,6 +85,22 @@ export interface Crumb {
 export const seatUnitKey = (handle: string) => `\u0000unit:${handle}`;
 export const seatPlaceKey = (handle: string) => `\u0000place:${handle}`;
 export const seatKindKey = (handle: string) => `\u0000kind:${handle}`;
+/**
+ * How an agent seat is drawn, as its page publishes it for the crumb's badge:
+ * the character and the colour as one label ([avatarLabel]), read back with
+ * [avatarOfLabel]. A label is a string, and the badge needs both parts.
+ */
+export const seatAvatarKey = (handle: string) => `\u0000avatar:${handle}`;
+
+/** An agent's avatar as the one label [seatAvatarKey] carries. */
+export const avatarLabel = (avatar: AgentAvatar): string => `${avatar.character} ${avatar.color}`;
+
+/** The avatar a [seatAvatarKey] label names, or nothing where no page published one. */
+function avatarOfLabel(label: string | undefined): AgentAvatar | undefined {
+  if (!label) return undefined;
+  const [character, color] = label.split(" ");
+  return avatarOf({ character, color });
+}
 
 /**
  * The label keys a turn's page publishes besides its own name: the seat that
@@ -84,10 +120,17 @@ export const pageUpKey = (id: string, depth: number) => `\u0000page-up:${id}:${d
 export const turnSeatKey = (turnId: string) => `\u0000turn-seat:${turnId}`;
 export const turnHandleKey = (turnId: string) => `\u0000turn-handle:${turnId}`;
 
-/** A title for the browser tab, derived from the same trail. */
-export function titleOf(crumbs: Crumb[]): string {
+/**
+ * A title for the browser tab, derived from the same trail.
+ *
+ * ON WORK'S SCOPE PAGES THE LENS COMES FIRST, given where the reader is
+ * ([ScopeAt]): "Tasks · All projects", "About · Product and Engineering", so
+ * two tabs open on one project's board and its history read apart.
+ */
+export function titleOf(crumbs: Crumb[], at?: ScopeAt | null): string {
   const last = crumbs[crumbs.length - 1];
-  return last ? last.label : "Crewlet";
+  if (!last) return "Crewlet";
+  return at && last.switch ? `${LENS_LABELS[at.lens]} · ${last.label}` : last.label;
 }
 
 /** The label a screen supplied, or the raw segment drawn as an identifier. */
@@ -97,7 +140,7 @@ function named(labels: Labels, key: string): Crumb {
 }
 
 /**
- * A segment that IS the object's name — a unit, a node, a secret, a server, a
+ * A segment that IS the object's name — a node, a secret, a server, a
  * model's config key, a backup domain — drawn as a name, never as an
  * identifier awaiting one.
  *
@@ -111,11 +154,26 @@ function ownName(labels: Labels, key: string): Crumb {
   return { label: labels[key] ?? key };
 }
 
+/**
+ * The label key a project's page publishes when the project is archived, so
+ * its crumb can say so. NUL-prefixed for the reason the seat keys are.
+ */
+export const projectArchivedKey = (key: string) => `\u0000archived:${key}`;
+
 /** A project: its name with its key as a chip, or the key alone until the name arrives. */
 function projectCrumb(labels: Labels, key: string): Crumb {
   const crumb = named(labels, key);
-  return crumb.mono ? crumb : { ...crumb, tag: key };
+  const archived = labels[projectArchivedKey(key)] ? { archived: true } : {};
+  return crumb.mono ? { ...crumb, ...archived } : { ...crumb, tag: key, ...archived };
 }
+
+/** What each screen outside the frame is called. */
+const SIGN_IN_TITLES: Record<SignInScreen["screen"], string> = {
+  login: "Sign in",
+  enrol: "Two-step verification",
+  invite: "Invitation",
+  reset: "Password reset",
+};
 
 export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
   const where = resolve(path);
@@ -123,52 +181,62 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
   if (!where.resolved) {
     return row ? [root(row, true), { label: "Not found" }] : [{ label: "Not found" }];
   }
+  // A SIGN-IN SCREEN IS DRAWN OUTSIDE THE FRAME, so nothing draws its trail;
+  // what it has is the one crumb a tab's title is taken from.
+  if (where.workspace === "") return [{ label: SIGN_IN_TITLES[where.screen] }];
   if (!row) return [{ label: "Not found" }];
 
   // A SECTION'S OWN PAGE: the workspace, then the section unless it IS the
-  // workspace's landing page — Agents › Roster, but Agents alone for the chart.
+  // workspace's landing page (Org chart › Roster, but Org chart alone for the
+  // chart). SETTINGS NAMES ITS LANDING TOO: the column beside it lists Models
+  // & keys as a row like any other, and "Settings" alone over the models
+  // said nothing but the selected row did about which section it was.
+  const listed = row.renderer === "column";
   const section = (key: string): Section | undefined => row.sections.find((s) => s.key === key);
+  const landing = (s: Section) => !listed && s.path.length === row.path.length;
   const sectionPage = (key: string): Crumb[] => {
     const s = section(key);
-    if (!s || s.path.length === row.path.length) return [root(row, false)];
+    if (!s || landing(s)) return [root(row, false)];
     return [root(row, true), { label: s.label }];
   };
   // AN OBJECT INSIDE A SECTION: the workspace, the section as a way back to its
   // list, and the object.
   const inside = (key: string, object: Crumb): Crumb[] => {
     const s = section(key);
-    if (!s || s.path.length === row.path.length) return [root(row, true), object];
+    if (!s || landing(s)) return [root(row, true), object];
     return [root(row, true), { label: s.label, path: s.path }, object];
   };
 
   switch (where.screen) {
+    case "overview":
+      // THE GROUP, THEN THE PAGE: the row reads "Overview" under the Company
+      // heading, and the trail says both. The group is not a link: it would
+      // lead to the page it is on.
+      return [{ label: rootLabel(row), icon: row.icon }, { label: row.label }];
     case "home":
     case "inbox":
-    case "work":
+    case "policies":
     case "org-chart":
+    case "budgets":
     case "live":
     case "knowledge":
-    case "spend":
+    case "account":
       return [root(row, false)];
-    case "general":
-      // SETTINGS' LANDING IS ONE OF ITS SECTIONS, unlike every other
-      // workspace's: the column beside it lists General as a row like any
-      // other, so the trail names it. "Settings" alone was the page's `h1`
-      // over the company's charter, and nothing on screen but the selected
-      // row said which section it was.
-      return [root(row, true), { label: section("general")?.label ?? "General" }];
     case "me":
       return sectionPage(where.section);
     case "work-projects":
-      return sectionPage("projects");
+      // WORK'S LANDING: All projects' first lens, where a link back to Work
+      // would lead to the page it is on.
+      return [root(row, false), allProjects()];
+    case "work-tasks":
     case "work-history":
-      return sectionPage("history");
+      return [root(row, true), allProjects()];
     case "work-search":
       return sectionPage("search");
     case "work-views":
       return where.id ? inside("views", named(labels, where.id)) : sectionPage("views");
     case "project":
-      return [root(row, true), projectCrumb(labels, where.key)];
+      return [root(row, true), { ...projectCrumb(labels, where.key), switch: "project" }];
     case "item": {
       // AN ITEM KEY NAMES ITS PROJECT, so the trail carries the way to it
       // with no lookup. An id names nothing, and the trail is Work › item.
@@ -181,8 +249,10 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
     case "roster":
       return sectionPage("roster");
     case "teams":
-      // A UNIT'S SEGMENT IS ITS NAME, so there is no identifier to mark.
-      return where.unit ? inside("teams", ownName(labels, where.unit)) : sectionPage("teams");
+      // A UNIT'S SEGMENT IS ITS KEY (`UnitScreen` resolves it with
+      // `unitByKey`), which is an address and not the name the screen
+      // publishes once it has found the unit — so it follows the seat's rule.
+      return where.unit ? inside("teams", named(labels, where.unit)) : sectionPage("teams");
     case "schedules": {
       if (where.scope.length === 0) return sectionPage("schedules");
       // A SCHEDULE IS THREE SEGMENTS, joined rather than crumbed: `role / ceo
@@ -193,19 +263,26 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
     case "org-edit":
       return [root(row, true), { label: section("edit")?.label ?? "Edit org" }];
     case "seat": {
-      // WHERE THE SEAT SITS, as a way to its unit — "Agents › Engineering ·
-      // Core › SWE" — once the page has said; a seat above every unit, or one
+      // WHERE THE SEAT SITS, as a way to its unit ("Org chart › Engineering ·
+      // Core › SWE") once the page has said; a seat above every unit, or one
       // the page has not resolved yet, goes straight from the workspace.
       const unit = labels[seatUnitKey(where.handle)];
       const place = labels[seatPlaceKey(where.handle)];
       const kind = labels[seatKindKey(where.handle)];
+      const avatar = avatarOfLabel(labels[seatAvatarKey(where.handle)]);
       const seat = named(labels, where.handle);
       const object: Crumb =
         !seat.mono && (kind === "agent" || kind === "human")
-          ? { ...seat, seat: { name: seat.label, kind: kind as "agent" | "human" } }
+          ? { ...seat, seat: { name: seat.label, kind: kind as "agent" | "human", avatar } }
           : seat;
       return unit
-        ? [root(row, true), { label: place || unit, path: ["agents", "teams", unit] }, object]
+        ? [
+            root(row, true),
+            place
+              ? { label: place, path: unitRoute({ id: unit }) }
+              : { label: unit, path: unitRoute({ id: unit }), mono: true },
+            object,
+          ]
         : [root(row, true), object];
     }
     case "turns":
@@ -224,7 +301,11 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
           label: seat,
           path: ["live"],
           ...(handle ? { query: { seat: handle } } : {}),
-          seat: { name: seat, kind: "agent" },
+          seat: {
+            name: seat,
+            kind: "agent",
+            avatar: handle ? avatarOfLabel(labels[seatAvatarKey(handle)]) : undefined,
+          },
         },
         named(labels, where.id),
       ];
@@ -262,32 +343,60 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
         named(labels, where.id),
       ];
     }
+    case "new-page":
+      // WHERE THE PAGE WILL BE FILED is the composer's own first row, where
+      // the writer can change it, so the trail names only what this is.
+      return [root(row, true), { label: "New page" }];
     case "skills":
       return sectionPage("skills");
     case "diaries":
       return sectionPage("diaries");
     case "diary":
       return inside("diaries", named(labels, where.handle));
-    case "budgets":
-      return sectionPage("budgets");
-    case "spend-tasks":
-      return sectionPage("tasks");
-    case "people":
-      return sectionPage("people");
+    case "artifacts":
+      return sectionPage(where.section);
+    case "artifact":
+      // WHAT AN ARTIFACT IS CALLED is its own answer, published by its page.
+      // Until then, and for one the reader may not open, the trail says
+      // "Artifact" rather than its uuid: a 36-character id is nothing a
+      // person reads, and the address bar already carries it.
+      return [root(row, true), { label: labels[where.id] || "Artifact" }];
+    case "new-artifact":
+      // THE TRAIL NAMES THE KIND being made ("Artifacts › New doc"): each is
+      // its own page, and "New artifact" said nothing the reader did not pick.
+      return [
+        root(row, true),
+        {
+          label: where.kind
+            ? (section(`new-${where.kind}`)?.label ?? "New artifact")
+            : "New artifact",
+        },
+      ];
     case "integrations":
       return where.kind
-        ? inside("integrations", { label: labels[where.kind] ?? where.kind })
-        : sectionPage("integrations");
-    case "tools":
+        ? [root(row, true), { label: labels[where.kind] ?? where.kind }]
+        : [root(row, false)];
+    case "spend":
+    case "spend-tasks":
+    case "limits":
+    case "people":
+    case "service-accounts":
+    case "tokens":
+    case "sign-in":
+    case "storage":
+      return sectionPage(where.screen);
+    case "mcp-tools": {
+      const tools = section("mcp-tools");
       if (where.server) {
         return [
           root(row, true),
-          { label: section("tools")?.label ?? "Tools & MCP", path: ["settings", "tools"] },
+          { label: tools?.label ?? "MCP Tools", path: tools?.path ?? row.path },
           { label: "Servers" },
           ownName(labels, where.server),
         ];
       }
-      return where.tool ? inside("tools", named(labels, where.tool)) : sectionPage("tools");
+      return where.tool ? inside("mcp-tools", named(labels, where.tool)) : sectionPage("mcp-tools");
+    }
     case "models":
       // THE ENTRY'S CONFIG KEY IS ITS NAME: the model's page is titled by it,
       // in the body face, and so is its crumb — the key a seat's `llm:` writes
@@ -323,8 +432,24 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
   }
 }
 
+/** All projects, as the scope Work's lenses end in. */
+function allProjects(): Crumb {
+  return { label: ALL_PROJECTS, switch: "project" };
+}
+
 function root(row: WorkspaceRow, link: boolean): Crumb {
   return link
-    ? { label: row.label, path: row.path, icon: row.icon }
-    : { label: row.label, icon: row.icon };
+    ? { label: rootLabel(row), path: row.path, icon: row.icon }
+    : { label: rootLabel(row), icon: row.icon };
+}
+
+/**
+ * What the trail calls a workspace: its own name, or, for the row that IS a
+ * sidebar group's landing (its path the group's own segment, Company's
+ * Overview at `#/company`), the group's, so a mistyped `#/company/…` reads
+ * "Company › Not found" rather than "Overview › Not found".
+ */
+function rootLabel(row: WorkspaceRow): string {
+  const group = SIDEBAR_GROUPS.find((g) => g.place === row.place && g.label !== "");
+  return group && row.path.length === 1 && row.path[0] === row.place ? group.label : row.label;
 }

@@ -61,8 +61,6 @@ export function reasonAbout(reason: string): string {
 
 /** A sentence for the detail pane: why this reached this person. */
 export function reasonWhy(reason: string): string {
-  if (reason === "") {
-    return "this notice carries no reason, and the engine writes one on every notice";
-  }
+  if (reason === "") return "no reason recorded";
   return PHRASES[reason]?.why ?? `the engine recorded the reason “${reason}”`;
 }

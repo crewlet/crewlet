@@ -29,12 +29,17 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 	r.at = wednesday
 	routeTo(t, r, "t-2", "ENG-2", "bob")
 
-	before := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob")})
+	before := r.inbox(tracker.InboxQuery{Handle: "bob"})
 	if len(before.Notices) != 2 {
 		t.Fatalf("bob's inbox holds %d notices, want 2", len(before.Notices))
 	}
 
-	jobs := tracker.InboxJobs(r.db, maintenance.Fixed(365*24*time.Hour))
+	// THE HORIZON IS ASKED AT EVERY TICK, because the applier reads it off
+	// the epoch at every batch and the two must agree: a first tick under
+	// a longer horizon keeps the year-old notice, and the next, after the
+	// company shortened it, deletes it — the same job, rebuilt by nothing.
+	horizon := 500 * 24 * time.Hour
+	jobs := tracker.InboxJobs(r.db, func() time.Duration { return horizon })
 	if len(jobs) != 1 {
 		t.Fatalf("InboxJobs returned %d jobs, want 1", len(jobs))
 	}
@@ -46,7 +51,13 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 		t.Fatalf("the inbox sweep has scope %q, so it tidies one node's "+
 			"rows and lets every peer's grow for ever", jobs[0].Scope)
 	}
-	if got := jobs[0].Horizon(); got != 365*24*time.Hour {
+	// THE JOB'S HORIZON IS THE SOURCE, asked rather than copied: a value
+	// taken once is the one that stayed at the boot company's.
+	if jobs[0].Horizon == nil {
+		t.Fatal("the job declares no horizon, so the worker would hand it " +
+			"the sweep's own instant as its cutoff and every notice would go")
+	}
+	if got := jobs[0].Horizon(); got != horizon {
 		t.Fatalf("the job's horizon is %s, want the retention it was given", got)
 	}
 
@@ -54,8 +65,21 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 	// for the life of the process: a sweep that asked for one of its own
 	// was refused on every tick of a running node.
 	holdTheAppliersPin(t, r)
-	swept, err := jobs[0].Run(t.Context(), wednesday,
-		wednesday.Add(-365*24*time.Hour))
+	// THE CUTOFF IS THE WORKER'S, derived from the job's horizon asked at
+	// this sweep, so each tick here derives it exactly as the worker does.
+	sweep := func() (int64, error) {
+		return jobs[0].Run(t.Context(), wednesday, wednesday.Add(-jobs[0].Horizon()))
+	}
+	swept, err := sweep()
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if swept != 0 {
+		t.Fatalf("the sweep deleted %d rows under a 500-day horizon, want "+
+			"none — the oldest notice is 400 days old", swept)
+	}
+	horizon = 365 * 24 * time.Hour
+	swept, err = sweep()
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -64,7 +88,7 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 			swept)
 	}
 
-	after := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob")})
+	after := r.inbox(tracker.InboxQuery{Handle: "bob"})
 	if len(after.Notices) != 1 {
 		t.Fatalf("bob's inbox holds %d notices after the sweep, want 1",
 			len(after.Notices))
@@ -85,8 +109,7 @@ func TestTheInboxSweepDeletesWhatAgedOutAndNothingElse(t *testing.T) {
 
 	// A SECOND SWEEP IS A NO-OP, so a tick with nothing to do costs one
 	// range delete and reports zero rather than re-reporting the first.
-	again, err := jobs[0].Run(t.Context(), wednesday,
-		wednesday.Add(-365*24*time.Hour))
+	again, err := sweep()
 	if err != nil {
 		t.Fatalf("second sweep: %v", err)
 	}

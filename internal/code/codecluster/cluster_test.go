@@ -61,9 +61,27 @@ var clusterTiming = estate.Timing{
 	AdmissionAsk: 2 * time.Second,
 }
 
+// clusterEnvelopes are every member's estate envelopes ([estate.Envelopes]):
+// one fleet, so one keyring, under which each member signs what it asks and
+// what it answers.
+var clusterEnvelopes = func() *estate.Envelopes {
+	env, err := estate.NewEnvelopes(statelog.OneKey("k1", "the code cluster's fleet key material"))
+	if err != nil {
+		panic(err)
+	}
+	return env
+}()
+
 // codeLogBytes is the code log's ceiling: room for every case's records on one
 // cluster, F19's and F21's included, where each record is small.
 const codeLogBytes = 256 << 20
+
+// bucketBytes is the broker bucket's byte reservation, which every bucket
+// must hold (natsobj.Config.MaxBytes): a gibibyte, the least
+// store.objects.nats_max_bytes takes and far past every pack bundle one
+// cluster's cases push, each a few kilobytes, so a push is never refused as
+// the bucket filling.
+const bucketBytes = 1 << 30
 
 // transfers is each git node's transfer lane: F19's sixteen pushes through
 // one member each hold a slot until they are answered, so a narrower lane
@@ -208,7 +226,7 @@ func (c *cluster) objectsOver(t testing.TB, q *js.Queue) objstore.Backend {
 	if c.shared != nil {
 		return c.shared
 	}
-	b, err := natsobj.Open(t.Context(), q.JetStream(), natsobj.Config{Replicas: members, Clustered: true})
+	b, err := natsobj.Open(t.Context(), q.JetStream(), natsobj.Config{MaxBytes: bucketBytes, Replicas: members, Clustered: true})
 	if err != nil {
 		t.Fatalf("codecluster: open the broker's bucket: %v", err)
 	}
@@ -230,14 +248,16 @@ func (c *cluster) record(_ context.Context, e types.OperatorActed) {
 func (m *member) route(t testing.TB) {
 	t.Helper()
 	r, err := estate.NewRouter(estate.RouterOptions{Self: m.id, Queue: m.q, Placement: m.c.placement,
-		Local: memberCopy{m}, Session: estate.NewSession(), Timing: clusterTiming, Now: m.c.now})
+		Local: memberCopy{m}, Session: estate.NewSession(), Timing: clusterTiming,
+		Envelopes: clusterEnvelopes, Now: m.c.now})
 	if err != nil {
 		t.Fatalf("codecluster: %s's router: %v", m.id, err)
 	}
 	m.router.Store(r)
 	// ON THE CLUSTER'S CONTEXT: the registration outlives the case that
 	// restarted the member.
-	withdraw, err := estate.Serve(m.c.life.Context(), m.q, m.id, memberCopy{m}, estate.ServerSeams{})
+	withdraw, err := estate.Serve(m.c.life.Context(), m.q, estate.ServerOptions{
+		Self: m.id, Local: memberCopy{m}, Envelopes: clusterEnvelopes})
 	if err != nil {
 		t.Fatalf("codecluster: %s serves the estate: %v", m.id, err)
 	}

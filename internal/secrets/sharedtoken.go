@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"unicode"
@@ -85,6 +86,42 @@ func CheckSharedToken(token string) error {
 				"a seat with content somebody else chose. The dashboard mints "+
 				"one of exactly %d",
 			MinSharedTokenChars, MinSharedTokenChars)
+	}
+	return nil
+}
+
+// CheckOperatorToken reports why a Tier A `api.auth.tokens` value cannot be a
+// credential, or nil.
+//
+// # One floor, two sentences, and why neither is the other's
+//
+// The arithmetic is [CheckSharedToken]'s — the same whitespace rule and the
+// same [MinSharedTokenChars] — because the property being checked is the same
+// one: there is no shape to verify, only enough of it to be worth guessing. A
+// second number here would be a second answer to "how long is long enough",
+// and the two would drift the way every other duplicated rule in this tree
+// has.
+//
+// What differs is who reads the refusal and what it opens. A shared token
+// authenticates one webhook ROUTE, whose worst outcome is a seat woken with
+// content somebody else chose; this one authenticates the OPERATOR, and what
+// it opens is the config document, the secret store and the fleet. Handed
+// CheckSharedToken's sentence, an operator reads that their API credential is
+// refused "because the provider signs nothing" — a provider that does not
+// exist, about a route they are not configuring.
+func CheckOperatorToken(token string) error {
+	if strings.ContainsFunc(token, unicode.IsSpace) {
+		return errors.New("an `api.auth.tokens` token can't contain spaces")
+	}
+	// THE FLOOR IS NAMED AND THE LENGTH GIVEN IS NOT, for the reason
+	// CheckSharedToken states: this message reaches a config refusal, a
+	// /config response and a log line, and a value's length narrows a
+	// guess at exactly the credential this rule calls too short.
+	if len([]rune(token)) < MinSharedTokenChars {
+		return fmt.Errorf(
+			"an `api.auth.tokens` token must be at least %d characters. "+
+				"Generate one with `crewlet secrets keygen`",
+			MinSharedTokenChars)
 	}
 	return nil
 }

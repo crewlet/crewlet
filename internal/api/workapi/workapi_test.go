@@ -1,0 +1,898 @@
+package workapi_test
+
+import (
+	"errors"
+	"fmt"
+	"net/http"
+	"slices"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/opkey"
+	"github.com/crewlet/crewlet/internal/api/workapi"
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tracker"
+)
+
+// EVERY ANSWER THIS SURFACE GIVES IS ITS OWN STATUS, because each sends a
+// caller somewhere different: present a credential, ask for authority, wait,
+// look for something else, read it again, fix the request.
+func TestEachOutcomeIsItsOwnStatus(t *testing.T) {
+	t.Parallel()
+	create := map[string]any{"title": "rotate the key", "project": "ENG"}
+	for _, c := range []struct {
+		name   string
+		chart  authz.Chart
+		who    caller
+		method string
+		target string
+		body   any
+		setup  func(*rig)
+		want   int
+	}{
+		{"nobody presented a credential", chart{}, anonymous,
+			http.MethodPost, "/work/items", create, nil, http.StatusUnauthorized},
+		{"the node could not tell who is asking", chart{}, unknown,
+			http.MethodPost, "/work/items", create, nil, http.StatusServiceUnavailable},
+		{"the table refused at the route", chart{},
+			as(person("ana", iam.GrantKnowledge)), http.MethodPost, "/work/items",
+			create, nil, http.StatusForbidden},
+		// A ROW-DECIDED VERB on a chart that could not answer: the route
+		// admitted a reader and the tool's own ask could not decide.
+		{"the chart could not answer", chart{err: errors.New("this node runs no company yet")},
+			as(colleague("ana")), http.MethodDelete, "/work/items/ENG-1", nil, nil,
+			http.StatusServiceUnavailable},
+		{"the item does not exist", chart{}, as(admin("ana")),
+			http.MethodPatch, "/work/items/ENG-404",
+			map[string]any{"status": "done"}, nil, http.StatusNotFound},
+		{"somebody moved it first", chart{}, as(admin("ana")),
+			http.MethodPatch, "/work/items/ENG-1", map[string]any{"status": "done"},
+			func(r *rig) { r.writes.err = tracker.ErrStaleVersion }, http.StatusConflict},
+		{"the domain refused the request", chart{}, as(admin("ana")),
+			http.MethodPost, "/work/items", map[string]any{"project": "ENG"}, nil,
+			http.StatusUnprocessableEntity},
+		{"applied", chart{}, as(admin("ana")), http.MethodPost, "/work/items",
+			create, nil, http.StatusOK},
+		{"pending", chart{}, as(admin("ana")), http.MethodPost, "/work/items",
+			create, func(r *rig) {
+				r.writes.result = statelog.Result{Outcome: statelog.OutcomePending,
+					Position: statelog.Position{Stream: "S", Generation: 1, Seq: 9}}
+			}, http.StatusAccepted},
+		{"unknown", chart{}, as(admin("ana")), http.MethodPost, "/work/items",
+			create, func(r *rig) {
+				r.writes.result = statelog.Result{Outcome: statelog.OutcomeUnknown}
+			}, http.StatusServiceUnavailable},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t, c.chart)
+			if c.setup != nil {
+				c.setup(r)
+			}
+			got := r.do(c.who, c.method, c.target, c.body)
+			if got.status != c.want {
+				t.Errorf("answered %d, want %d: %v", got.status, c.want, got.body)
+			}
+			if got.status == http.StatusServiceUnavailable &&
+				got.header.Get("Retry-After") == "" {
+				t.Error("a 503 carried no Retry-After, which reads as a node " +
+					"that is down for good")
+			}
+		})
+	}
+}
+
+// A REFUSAL WAITING CANNOT CLEAR SAYS NOTHING ABOUT COMING BACK, and one that
+// can says when.
+//
+// Every statelog refusal went out as `Retry-After: 2`: a write refused by an
+// evicted node, a read refused by a node holding a record it cannot decode —
+// both answer the same however often they are asked, and a client told to come
+// back in two seconds polls them until somebody readmits or upgrades the node.
+func TestARefusalWaitingCannotClearSaysNothingAboutComingBack(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name       string
+		setup      func(*rig)
+		method     string
+		target     string
+		body       any
+		retryAfter string
+	}{
+		{"a write refused by an evicted node",
+			func(r *rig) {
+				r.writes.err = &statelog.Unavailable{Reason: statelog.ReasonEvicted}
+			}, http.MethodPost, "/work/items",
+			map[string]any{"title": "rotate the key", "project": "ENG"}, ""},
+		{"a write refused because this node is behind",
+			func(r *rig) {
+				r.writes.err = &statelog.Unavailable{Reason: statelog.ReasonBehind}
+			}, http.MethodPost, "/work/items",
+			map[string]any{"title": "rotate the key", "project": "ENG"},
+			strconv.Itoa(authz.RetryUndecidedSeconds)},
+		{"a read refused by a node holding a record it cannot decode",
+			func(r *rig) {
+				r.reader.err = &statelog.Refused{Code: statelog.RefuseDeferred,
+					Level: statelog.ReadSession}
+			}, http.MethodPost, "/work/items/ENG-1/rank",
+			map[string]any{"after": "ENG-2", "if_match": 3}, ""},
+		{"a read refused by a node behind its log, from its own backlog",
+			func(r *rig) {
+				r.reader.err = &statelog.Refused{Code: statelog.RefuseBehind,
+					Level: statelog.ReadSession, RetryAfter: 9 * time.Second}
+			}, http.MethodPost, "/work/items/ENG-1/rank",
+			map[string]any{"after": "ENG-2", "if_match": 3}, "9"},
+		// AN ESTATE NO DATA NODE SERVED clears when one serves again, so it
+		// is this node's undecided hint — never the `500` it answered while
+		// the router's refusal wrapped nothing the tools' rule knew. On a
+		// read this surface takes, a read a tool takes, a write a tool
+		// makes and a write this surface makes without one.
+		{"a read this surface takes that no data node served",
+			func(r *rig) { r.reader.err = &estate.ErrUnserved{Detail: "data-b: no answer"} },
+			http.MethodPost, "/work/items/ENG-1/purge?confirm=ENG-1&reason=why", nil,
+			strconv.Itoa(authz.RetryUndecidedSeconds)},
+		{"a read a tool takes that no data node served",
+			func(r *rig) { r.reader.err = &estate.ErrUnserved{Detail: "data-b: no answer"} },
+			http.MethodPost, "/work/items/ENG-1/rank",
+			map[string]any{"after": "ENG-2", "if_match": 3},
+			strconv.Itoa(authz.RetryUndecidedSeconds)},
+		{"a write a tool makes that no data node served",
+			func(r *rig) { r.writes.err = &estate.ErrUnserved{Detail: "data-b: no answer"} },
+			http.MethodPost, "/work/items",
+			map[string]any{"title": "rotate the key", "project": "ENG"},
+			strconv.Itoa(authz.RetryUndecidedSeconds)},
+		{"a write this surface makes that no data node served",
+			func(r *rig) { r.writes.err = &estate.ErrUnserved{Detail: "data-b: no answer"} },
+			http.MethodPost, "/work/items/ENG-1/purge?confirm=ENG-1&reason=why", nil,
+			strconv.Itoa(authz.RetryUndecidedSeconds)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t, chart{})
+			c.setup(r)
+			got := r.do(as(admin("ana")), c.method, c.target, c.body)
+			if got.status != http.StatusServiceUnavailable {
+				t.Fatalf("answered %d, want 503: %v", got.status, got.body)
+			}
+			if after := got.header.Get("Retry-After"); after != c.retryAfter {
+				t.Errorf("Retry-After = %q, want %q", after, c.retryAfter)
+			}
+		})
+	}
+}
+
+// A READ BEFORE A DECISION THAT FAULTED IS A FAULT, NOT A REFUSAL.
+//
+// It was one `503` for everything but a missing row, carrying the error's
+// text: a store this node could not read told the client to come back in two
+// seconds, and handed it a database path while it waited. A fault is `500
+// internal_error` with its words in the log; the refusals above keep their
+// `503` — the control.
+//
+// And the same holds wherever the fault is met: a read a TOOL takes before it
+// decides (the rank route reads through `place_work_item`), a write a tool
+// makes, and a write this surface makes without one (the purge) — the last
+// of which handed the writer's error to the client as its `detail`.
+func TestAReadBeforeADecisionThatFaultedIsAFault(t *testing.T) {
+	t.Parallel()
+	disk := errors.New("open /var/lib/crewlet/replicated.db: disk I/O error")
+	for _, c := range []struct {
+		name   string
+		setup  func(*rig)
+		method string
+		target string
+		body   any
+	}{
+		{"a read this surface takes before it decides",
+			func(r *rig) { r.reader.err = disk }, http.MethodPost,
+			"/work/items/ENG-1/purge?confirm=ENG-1&reason=why", nil},
+		{"a read a tool takes before it decides",
+			func(r *rig) { r.reader.err = disk }, http.MethodPost,
+			"/work/items/ENG-1/rank", map[string]any{"after": "ENG-2", "if_match": 3}},
+		{"a write a tool makes",
+			func(r *rig) { r.writes.err = disk }, http.MethodPost, "/work/items",
+			map[string]any{"title": "rotate the key", "project": "ENG"}},
+		{"a write this surface makes without a tool",
+			func(r *rig) { r.writes.err = disk }, http.MethodPost,
+			"/work/items/ENG-1/purge?confirm=ENG-1&reason=why", nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t, chart{})
+			c.setup(r)
+			got := r.do(as(admin("ana")), c.method, c.target, c.body)
+			if got.status != http.StatusInternalServerError ||
+				got.body["error"] != string(httpjson.CodeInternalError) {
+				t.Fatalf("answered %d, want 500 internal_error: %v", got.status, got.body)
+			}
+			if after := got.header.Get("Retry-After"); after != "" {
+				t.Errorf("a fault told the client to come back in %s seconds", after)
+			}
+			for k, v := range got.body {
+				if text, _ := v.(string); strings.Contains(text, "/var/lib") {
+					t.Errorf("the fault's own words reached the caller as %q: %v",
+						k, got.body)
+				}
+			}
+		})
+	}
+}
+
+// AN ARGUMENT THE TOOL DOES NOT READ IS REFUSED BY NAME, NEVER DROPPED.
+//
+// `save_work_view` lost its free `owner` when a personal view became the
+// caller's own (`personal: true`), and the route forwarded the whole body to
+// a tool that reads only what it declares — so a client still sending the old
+// shape had its PERSONAL view saved as a SHARED tab on the project, visible to
+// everybody on it, under a 200. Every tool-backed route is held to the tool's
+// own schema, and the facet routes' narrower lists stay narrower.
+func TestAnArgumentTheToolDoesNotReadIsRefusedByName(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name   string
+		method string
+		target string
+		body   map[string]any
+		named  string
+	}{
+		{"the old personal-view shape", http.MethodPost, "/work/views",
+			map[string]any{"owner": "ana", "container": "project:ENG",
+				"name": "Mine", "type": "list"}, `"owner"`},
+		{"a stray field on a create", http.MethodPost, "/work/items",
+			map[string]any{"title": "rotate the key", "project": "ENG",
+				"assigne": "ana"}, `"assigne"`},
+		{"a stray field on an edit", http.MethodPatch, "/work/items/ENG-1",
+			map[string]any{"status": "done", "stauts": "done"}, `"stauts"`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t, chart{})
+			got := r.do(as(admin("ana")), c.method, c.target, c.body)
+			if got.status != http.StatusBadRequest {
+				t.Fatalf("answered %d, want 400: %v", got.status, got.body)
+			}
+			if !strings.Contains(got.detail(), c.named) {
+				t.Errorf("the refusal does not name %s: %s", c.named, got.detail())
+			}
+			if len(r.writes.views)+len(r.writes.created)+len(r.writes.updates) != 0 {
+				t.Error("a request carrying an argument nothing reads was written")
+			}
+		})
+	}
+	// THE CONTROL: the declared shape is saved, and saved PERSONAL.
+	r := newRig(t, chart{})
+	got := r.do(as(admin("ana")), http.MethodPost, "/work/views",
+		map[string]any{"personal": true, "container": "project:ENG",
+			"name": "Mine", "type": "list"})
+	if got.status != http.StatusOK || len(r.writes.views) != 1 {
+		t.Fatalf("the declared shape answered %d: %v", got.status, got.body)
+	}
+	if owner := r.writes.views[0].Owner; owner != "ana" {
+		t.Errorf("the personal view is %q's, want the caller's own", owner)
+	}
+}
+
+// A WRITE THIS NODE CANNOT ACCOUNT FOR HANDS BACK THE KEY THAT MAKES A RETRY
+// SAFE, and the retry under it IS the same operation.
+//
+// The ledger recognises a second arrival by its operation id, and every write
+// a request makes derives its id from the request's key. So the key the 503
+// hands back, sent again as Idempotency-Key, must produce the same operation
+// — and a request without one must not, or two presses of one button would
+// collapse into one item.
+func TestARetryUnderTheSameKeyIsTheSameOperation(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, chart{})
+	r.writes.result = statelog.Result{Outcome: statelog.OutcomeUnknown}
+	first := r.do(as(admin("ana")), http.MethodPost, "/work/items",
+		map[string]any{"title": "rotate the key", "project": "ENG"})
+	key, _ := first.body["op_id"].(string)
+	if first.status != http.StatusServiceUnavailable || key == "" {
+		t.Fatalf("an unknown write answered %d with op_id %q", first.status, key)
+	}
+	retry := r.do(as(admin("ana")), http.MethodPost, "/work/items",
+		map[string]any{"title": "rotate the key", "project": "ENG"},
+		opkey.Header, key)
+	if got, _ := retry.body["op_id"].(string); got != key {
+		t.Errorf("the retry answered op_id %q, want the key it was sent %q", got, key)
+	}
+	if len(r.writes.opIDs) != 2 || r.writes.opIDs[0] != r.writes.opIDs[1] {
+		t.Errorf("the retry was a different operation: %v", r.writes.opIDs)
+	}
+	if r.writes.created[0].ID != r.writes.created[1].ID {
+		t.Errorf("the retry filed a different item: %s and %s",
+			r.writes.created[0].ID, r.writes.created[1].ID)
+	}
+	// THE CONTROL: two requests with no key are two operations.
+	r.do(as(admin("ana")), http.MethodPost, "/work/items",
+		map[string]any{"title": "rotate the key", "project": "ENG"})
+	if r.writes.opIDs[2] == r.writes.opIDs[0] {
+		t.Error("a request with no key reused another's operation")
+	}
+}
+
+// A PERSON'S WRITE IS RECORDED AS THEIR SEAT, as a human.
+//
+// Which is what lets the tracker leave them out of the wake their own change
+// sends — see TestAPersonsWriteSuppressesTheirOwnWake in internal/agent/builtin
+// for the routing half.
+func TestAWriteIsAuthoredByThePrincipal(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, chart{})
+	r.do(as(admin("ana")), http.MethodPatch, "/work/items/ENG-1",
+		map[string]any{"status": "in_progress"})
+	if len(r.writes.actors) == 0 {
+		t.Fatal("nothing was written")
+	}
+	actor := r.writes.actors[len(r.writes.actors)-1]
+	if actor.Handle != "ana" || actor.Kind != tracker.AuthorHuman {
+		t.Errorf("the write is authored as %q (%s), want the seat as a human",
+			actor.Handle, actor.Kind)
+	}
+}
+
+// THE PATH NAMES THE OBJECT, and a body naming a different one is refused.
+func TestABodyContradictingThePathIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, chart{})
+	got := r.do(as(admin("ana")), http.MethodPatch, "/work/items/ENG-1",
+		map[string]any{"item": "ENG-2", "status": "done"})
+	if got.status != http.StatusBadRequest || len(r.writes.opIDs) != 0 {
+		t.Errorf("a body naming another item answered %d and wrote %v",
+			got.status, r.writes.opIDs)
+	}
+	// AND A FACET ROUTE TAKES ONLY ITS FACET.
+	got = r.do(as(admin("ana")), http.MethodPost, "/work/items/ENG-1/depend",
+		map[string]any{"status": "done"})
+	if got.status != http.StatusBadRequest {
+		t.Errorf("the depend route took a status: %d", got.status)
+	}
+}
+
+// A BODY NOTHING HERE COULD ACCEPT IS NOT READ INTO MEMORY.
+func TestAnOversizedBodyIsRefusedBeforeItIsRead(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, chart{})
+	huge := `{"title":"` + strings.Repeat("x", workapi.MaxBodyBytes) + `"}`
+	if got := r.do(as(admin("ana")), http.MethodPost, "/work/items", huge); got.status != http.StatusRequestEntityTooLarge {
+		t.Errorf("an oversized body answered %d", got.status)
+	}
+}
+
+// ---- the person routes -------------------------------------------------- //
+
+// YOUR OWN INBOX GOES THROUGH THE TOOL, SOMEBODY ELSE'S THROUGH THE SAME
+// WRITER, AND ONLY AN ADMINISTRATOR REACHES THE SECOND.
+//
+// mark_inbox and set_pins take no handle — a model that could name whose
+// inbox to mark could mark anybody's — so the tools are not widened. What the
+// route adds is the administrator's path onto a departed person's record,
+// decided on the record the path names.
+//
+// AND A PERSON NAMING THEMSELVES BY THEIR LOGIN IS NAMING THEIR OWN RECORD,
+// which is kept under their seat: sent down the administrator's path, a bound
+// person's login wrote a second record under that login — decided as theirs,
+// and read back by nothing they look at.
+func TestSomebodyElsesInboxIsTheAdministratorsAlone(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name    string
+		who     iam.Principal
+		handle  string
+		want    int
+		agent   bool
+		written string
+	}{
+		{"your own", colleague("ana"), "ana", http.StatusOK, false, "ana"},
+		{"your own, by your login", colleague("ana"), "ana.person",
+			http.StatusOK, false, "ana"},
+		{"a colleague's", colleague("ana"), "bo", http.StatusForbidden, false, ""},
+		{"an administrator on somebody's", admin("ana"), "bo", http.StatusOK, false, "bo"},
+		// A LOGIN IS ITS HOLDER'S RECORD: `bo.person` holds the seat
+		// `bo`, and a write decided and made under the login landed where
+		// no screen of bo's reads it.
+		{"an administrator naming a bound person's login", admin("ana"),
+			"bo.person", http.StatusOK, false, "bo"},
+		{"an administrator naming an unbound person's login", admin("ana"),
+			"jane.doe", http.StatusOK, false, "jane.doe"},
+		// AND ONE NOBODY HOLDS IS NOT A ROSTER: refused on authority to a
+		// caller who may not write it anyway, and "not found" only to one
+		// who may.
+		{"a colleague naming a login nobody holds", colleague("ana"),
+			"ghost.person", http.StatusForbidden, false, ""},
+		{"an administrator naming a login nobody holds", admin("ana"),
+			"ghost.person", http.StatusNotFound, false, ""},
+	} {
+		for _, route := range []string{"inbox", "pins"} {
+			t.Run(c.name+"/"+route, func(t *testing.T) {
+				t.Parallel()
+				r := newRig(t, chart{})
+				// A GESTURE EACH WRITE TAKES: an inbox mark names what it
+				// marks, and an empty pin set is a set.
+				body := map[string]any{}
+				if route == "inbox" {
+					body["read"] = []any{"rec-1"}
+				}
+				got := r.do(as(c.who), http.MethodPut,
+					"/work/people/"+c.handle+"/"+route, body)
+				if got.status != c.want {
+					t.Fatalf("answered %d, want %d: %v", got.status, c.want, got.body)
+				}
+				if c.want != http.StatusOK {
+					return
+				}
+				written := r.writes.inbox
+				if route == "pins" {
+					written = r.writes.pins
+				}
+				if len(written) != 1 || written[0] != c.written {
+					t.Errorf("wrote the record of %v, want %q", written, c.written)
+				}
+				if a := r.writes.authz[0]; !a.Authorized || a.Agent != c.agent {
+					t.Errorf("the writer was handed %+v", a)
+				}
+			})
+		}
+	}
+}
+
+// A LOGIN IS NEVER A SEAT, on the one person route that resolves words.
+//
+// `PUT /work/people/jane.doe/priorities` by an administrator was admitted on
+// the login and then sent through the colleague resolver, which matched the
+// seat whose display name the login resembled and replaced THAT seat's queue.
+// A login is the identity directory's to resolve, so the queue set is the
+// login's holder's — and a directory this node cannot read is a 503 rather
+// than a guess about whose queue to replace.
+func TestAPriorityRouteNeverTurnsALoginIntoASeat(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name    string
+		who     iam.Principal
+		dir     directory
+		handle  string
+		want    int
+		written string
+	}{
+		{"an unbound person's login", admin("ana"), directory{}, "jane.doe",
+			http.StatusOK, "jane.doe"},
+		{"a bound person's login", admin("ana"), directory{}, "bo.person",
+			http.StatusOK, "bo"},
+		// A MISTYPED TOKEN LOGIN IS NOBODY'S: no Tier A entry declares
+		// `token:opps`, so no credential acts as it and no queue is kept
+		// under it — the engine answers it as held by nobody, and the
+		// route writes nothing rather than a queue for a phantom.
+		{"a token login no entry declares", admin("ana"), directory{},
+			"token:opps", http.StatusNotFound, ""},
+		// THE LEAD RELATION IS A FACT ABOUT A SEAT: `cto` leads `bo`, and
+		// decided at the route on the login, the lead was refused as
+		// leading nobody called `bo.person`.
+		{"a lead naming their report by login", colleague("cto"), directory{},
+			"bo.person", http.StatusOK, "bo"},
+		{"a colleague naming somebody they do not lead", colleague("ana"),
+			directory{}, "bo.person", http.StatusForbidden, ""},
+		{"a directory this node cannot read", admin("ana"),
+			directory{err: errors.New("the identity applier is behind")},
+			"bo.person", http.StatusServiceUnavailable, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRigWith(t, chart{}, c.dir)
+			got := r.do(as(c.who), http.MethodPut,
+				"/work/people/"+c.handle+"/priorities",
+				map[string]any{"items": []any{"ENG-1"}})
+			if got.status != c.want {
+				t.Fatalf("answered %d, want %d: %v", got.status, c.want, got.body)
+			}
+			if c.written == "" {
+				if len(r.writes.prios) != 0 {
+					t.Errorf("a queue was written: %v", r.writes.prios)
+				}
+				return
+			}
+			if len(r.writes.prios) != 1 || r.writes.prios[0] != c.written {
+				t.Errorf("replaced the queue of %v, want %q's", r.writes.prios,
+					c.written)
+			}
+		})
+	}
+}
+
+// A CARD IS PLACED BESIDE THE NEIGHBOUR NAMED, THROUGH THE BOARD DRAG'S OWN
+// TOOL: the route resolves nothing and mints nothing — `place_work_item`
+// resolves the neighbour to its id and the tracker mints the place between
+// the neighbours as the board stands when the write lands. The version the
+// board read rides the `If-Match` header into the tool's `if_match`.
+func TestARankMovePlacesAnItemBesideItsNeighbour(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, chart{})
+	got := r.do(as(colleague("ana")), http.MethodPost, "/work/items/ENG-1/rank",
+		map[string]any{"after": "ENG-2"}, "If-Match", "3")
+	if got.status != http.StatusOK || len(r.writes.placed) != 1 {
+		t.Fatalf("answered %d %v and placed %v", got.status, got.body, r.writes.placed)
+	}
+	if p := r.writes.placed[0]; p.Task != "t-1" || p.Project != "ENG" ||
+		p.After != "t-2" || p.Before != "" || p.IfMatch != 3 {
+		t.Errorf("the tracker was asked to place %+v, want ENG-1 after ENG-2 at "+
+			"version 3", p)
+	}
+	// A DROP WITH NO VERSION IS REFUSED, so a card somebody changed since
+	// the board was read is never placed as though it had not moved.
+	if got := r.do(as(colleague("ana")), http.MethodPost, "/work/items/ENG-1/rank",
+		map[string]any{"after": "ENG-2"}); got.status != http.StatusUnprocessableEntity {
+		t.Errorf("a drop naming no version answered %d %v", got.status, got.body)
+	}
+	// THE TRACKER'S OWN REFUSAL — a neighbour on another project's board —
+	// reaches the caller as the domain's.
+	r.writes.err = fmt.Errorf("%w: OPS-1 is on another board", tracker.ErrInvalid)
+	if got := r.do(as(colleague("ana")), http.MethodPost, "/work/items/ENG-1/rank",
+		map[string]any{"before": "OPS-1"}, "If-Match", "3"); got.status != http.StatusUnprocessableEntity {
+		t.Errorf("a card placed on another project's board answered %d", got.status)
+	}
+	if got := r.do(as(person("ana", iam.GrantKnowledge)), http.MethodPost,
+		"/work/items/ENG-1/rank", map[string]any{"after": "ENG-2"}, "If-Match", "3"); got.status != http.StatusForbidden {
+		t.Errorf("somebody without the tracker moved a card: %d", got.status)
+	}
+}
+
+// ---- the gestures no tool makes ---------------------------------------- //
+
+// A REMARK ON A WORK ITEM IS REWRITTEN BY ITS AUTHOR.
+//
+// Two questions, two answers: the table admits the author and an
+// administrator, and the writer — which the fake stands in for — refuses
+// everybody but the author. What this surface must do is ask the first with
+// the STORED author, so a colleague who did not write it never reaches the
+// writer at all.
+func TestAWorkCommentIsEditedByItsAuthor(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, chart{})
+	r.reader.addComment("t-1", tracker.Comment{ID: "c-1", Task: "t-1",
+		Author: "ana", AuthorKind: tracker.AuthorHuman, Body: "first"})
+	if got := r.do(as(colleague("bo")), http.MethodPatch,
+		"/work/items/ENG-1/comments/c-1", map[string]any{"body": "second"}); got.status != http.StatusForbidden || len(r.writes.edited) != 0 {
+		t.Fatalf("somebody else's edit answered %d and wrote %v",
+			got.status, r.writes.edited)
+	}
+	if got := r.do(as(colleague("ana")), http.MethodPatch,
+		"/work/items/ENG-1/comments/c-1", map[string]any{"body": "second"}); got.status != http.StatusOK {
+		t.Fatalf("the author's edit answered %d: %v", got.status, got.body)
+	}
+	if len(r.writes.edited) != 1 || r.writes.edited[0] != "c-1|second" {
+		t.Errorf("the writer was asked %v", r.writes.edited)
+	}
+	// AND THE WRITER'S OWN REFUSAL IS AN AUTHORITY ANSWER, not a domain one.
+	r.writes.err = tracker.ErrNotAuthor
+	if got := r.do(as(admin("root")), http.MethodPatch,
+		"/work/items/ENG-1/comments/c-1", map[string]any{"body": "third"}); got.status != http.StatusForbidden {
+		t.Errorf("an administrator rewriting a remark answered %d", got.status)
+	}
+}
+
+// A PURGE IS CONFIRMED BY THE ITEM'S KEY, CHECKED, AND FILED UNDER ITS OWN
+// PROJECT — and it is a person's gesture.
+//
+// The route this replaced echoed the confirmation back unread and took the
+// project as a parameter: a confirmation naming another item confirmed
+// nothing, and a purge filed under the wrong project blocked writes to a
+// project it was not about.
+func TestAPurgeIsConfirmedAgainstTheItemItNames(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, chart{})
+	operator := admin("root")
+	for _, c := range []struct {
+		name   string
+		target string
+		want   int
+	}{
+		{"no confirmation", "/work/items/t-1/purge?reason=why", http.StatusBadRequest},
+		{"no reason", "/work/items/t-1/purge?confirm=ENG-1", http.StatusBadRequest},
+		{"another item's key", "/work/items/t-1/purge?confirm=ENG-2&reason=why",
+			http.StatusUnprocessableEntity},
+	} {
+		if got := r.do(as(operator), http.MethodPost, c.target, nil); got.status != c.want {
+			t.Errorf("%s: answered %d, want %d", c.name, got.status, c.want)
+		}
+	}
+	if len(r.writes.purged) != 0 {
+		t.Fatalf("a refused purge destroyed %v", r.writes.purged)
+	}
+	key := statelog.NewOpID(time.Now(), "")
+	got := r.do(as(operator), http.MethodPost,
+		"/work/items/t-1/purge?confirm=eng-1&reason=an+erasure+request", nil,
+		opkey.Header, key)
+	if got.status != http.StatusOK {
+		t.Fatalf("the purge answered %d: %v", got.status, got.body)
+	}
+	if len(r.writes.purged) != 1 || r.writes.purged[0] != "t-1|ENG|an erasure request" {
+		t.Errorf("the writer was asked %v", r.writes.purged)
+	}
+	// THE CALLER'S KEY IS WHAT A RETRY REUSES: the same key is the same
+	// operation, which carries the key's own instant.
+	again := r.do(as(operator), http.MethodPost,
+		"/work/items/t-1/purge?confirm=eng-1&reason=an+erasure+request", nil,
+		opkey.Header, key)
+	if again.status != http.StatusOK || r.writes.opIDs[1] != r.writes.opIDs[0] {
+		t.Errorf("the retry under the same key was published as %q after %q",
+			r.writes.opIDs[1], r.writes.opIDs[0])
+	}
+	assertMintedWith(t, r.writes.opIDs[0], key)
+	// AND AN AGENT MAY NOT, whatever it holds.
+	agent := admin("sre")
+	agent.Kind = iam.KindSeat
+	if got := r.do(as(agent), http.MethodPost,
+		"/work/items/t-1/purge?confirm=ENG-1&reason=why", nil); got.status != http.StatusForbidden {
+		t.Errorf("a seat purged an item: %d", got.status)
+	}
+}
+
+// THE FOUR DESTRUCTIVE PAGE VERBS ARE THE CONTAINER LEAD'S, decided on the
+// page's own container.
+func TestThePageTrashIsTheContainersLeads(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		method, target string
+		did            string
+	}{
+		{http.MethodDelete, "/pages/p-1", "trash p-1"},
+		{http.MethodPost, "/pages/p-1/restore", "restore p-1"},
+	} {
+		r := newRig(t, chart{})
+		if got := r.do(as(colleague("ana")), c.method, c.target, nil); got.status != http.StatusForbidden {
+			t.Errorf("%s %s by a colleague answered %d", c.method, c.target, got.status)
+		}
+		if got := r.do(as(colleague("cto")), c.method, c.target, nil); got.status != http.StatusOK {
+			t.Errorf("%s %s by the container's lead answered %d: %v",
+				c.method, c.target, got.status, got.body)
+		}
+		if !slices.Equal(r.kb.did, []string{c.did}) {
+			t.Errorf("%s %s did %v", c.method, c.target, r.kb.did)
+		}
+	}
+	// A RENAME IS THE LEAD'S TOO.
+	r := newRig(t, chart{})
+	if got := r.do(as(colleague("ana")), http.MethodPost, "/pages/p-1/rename",
+		map[string]any{"title": "Runbook v2"}); got.status != http.StatusForbidden {
+		t.Errorf("a colleague renamed a page: %d", got.status)
+	}
+	// AND A PURGE IS THE FLEET'S, confirmed by the page's title.
+	if got := r.do(as(admin("root")), http.MethodPost,
+		"/pages/p-1/purge?confirm=runbook&reason=why", nil); got.status != http.StatusOK ||
+		!slices.Contains(r.kb.did, "purge p-1 why") {
+		t.Errorf("the purge answered %d and did %v", got.status, r.kb.did)
+	}
+}
+
+// A TOOL SKILL'S PAGE TAKES ADMIN ON EVERY ROUTE THAT CHANGES IT.
+//
+// The skills container's pages are injected into every seat's turn, so taking
+// one out of circulation, putting it back, renaming it or destroying it
+// changes the prompt the company runs under exactly as editing its body does.
+// `save_page` asks for it through the tool; these four reach the store without
+// one, so without asking here a caller refused a skill's body could still
+// delete the skill. Asked on top of each verb's own rule: `root` CREATED the
+// page and leads its space — so every tidy verb's own rule admits them — and
+// is refused until they hold admin.
+func TestEveryRouteThatChangesAToolSkillNeedsAdmin(t *testing.T) {
+	t.Parallel()
+	operator := person("root", iam.GrantKnowledge)
+	operator.ReauthAt = time.Now().Add(time.Hour)
+	for _, c := range []struct {
+		method, target string
+		body           any
+		did            string
+	}{
+		{http.MethodDelete, "/pages/p-1", nil, "trash p-1"},
+		{http.MethodPost, "/pages/p-1/restore", nil, "restore p-1"},
+		{http.MethodPost, "/pages/p-1/rename", map[string]any{"title": "Runbook v2"},
+			"rename p-1 Runbook v2"},
+		{http.MethodPost, "/pages/p-1/purge?confirm=runbook&reason=why", nil,
+			"purge p-1 why"},
+		{http.MethodPut, "/pages/p-1", map[string]any{"body": "new steps"}, "save p-1"},
+	} {
+		t.Run(c.method+" "+c.target, func(t *testing.T) {
+			t.Parallel()
+			r := &rig{t: t, mux: http.NewServeMux(), reader: newReader(),
+				writes: &writes{}, kb: newKB(), audit: &auditLog{}}
+			r.kb.page.Page.Container = "TS"
+			r.kb.page.Page.Author = "root"
+			halves := r.halves()
+			halves.Pages.SkillsContainer = func() string { return "ts" }
+			svc, err := workapi.New(workapi.Options{
+				Halves: serving(halves), Chart: chart{},
+				Operator: r.operator(chart{}, serving(halves)), Audit: r.audit})
+			if err != nil || svc == nil {
+				t.Fatalf("New: %v (%v)", err, svc)
+			}
+			if err := svc.Routes(r.mux); err != nil {
+				t.Fatalf("Routes: %v", err)
+			}
+			headers := []string{"If-Match", "2"}
+
+			got := r.do(as(operator), c.method, c.target, c.body, headers...)
+			if got.status != http.StatusForbidden {
+				t.Errorf("without admin it answered %d: %v", got.status, got.body)
+			}
+			if len(r.kb.did) != 0 {
+				t.Fatalf("a refused caller reached the store: %v", r.kb.did)
+			}
+
+			withAdmin := operator
+			withAdmin.Grants = []iam.Grant{iam.GrantAdmin}
+			got = r.do(as(withAdmin), c.method, c.target, c.body, headers...)
+			if got.status != http.StatusOK {
+				t.Errorf("with admin it answered %d: %v", got.status, got.body)
+			}
+			if !slices.Equal(r.kb.did, []string{c.did}) {
+				t.Errorf("the store did %v, want %q", r.kb.did, c.did)
+			}
+		})
+	}
+}
+
+// A REMARK IS TAKEN DOWN BY ITS AUTHOR, OR BY A MODERATOR — and the store is
+// told which.
+func TestARemarkIsTakenDownByItsAuthorOrAModerator(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name     string
+		who      iam.Principal
+		want     int
+		moderate bool
+	}{
+		{"its author", colleague("ana"), http.StatusOK, false},
+		{"a colleague", colleague("bo"), http.StatusForbidden, false},
+		{"a moderator", admin("root"), http.StatusOK, true},
+	} {
+		r := newRig(t, chart{})
+		got := r.do(as(c.who), http.MethodDelete, "/pages/p-1/comments/c-1", nil)
+		if got.status != c.want {
+			t.Errorf("%s: answered %d, want %d", c.name, got.status, c.want)
+			continue
+		}
+		if c.want == http.StatusOK && !slices.Equal(r.kb.moderat, []bool{c.moderate}) {
+			t.Errorf("%s: the store was told moderate=%v", c.name, r.kb.moderat)
+		}
+	}
+}
+
+// ---- the surface as mounted --------------------------------------------- //
+
+// EVERY ROUTE THIS SURFACE MOUNTS IS GUARDED, and it mounts exactly these —
+// the one read among them, a project file's download, included, since it
+// streams what the tracker discloses to whoever uses it.
+//
+// Guarded is what a route IS on this engine; the exemption list is the whole
+// of what is not. A write surface landing on it would file work with no
+// author — and the list below is the one docs/reference/api-endpoints.md
+// documents, so a route added without it fails here first.
+func TestEveryWriteRouteIsGuardedAndDocumented(t *testing.T) {
+	t.Parallel()
+	seen := &patternMux{}
+	svc, err := workapi.New(newRig(t, chart{}).options(chart{}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := svc.Routes(seen); err != nil {
+		t.Fatalf("Routes: %v", err)
+	}
+	want := []string{
+		"DELETE /pages/{id}",
+		"DELETE /pages/{id}/comments/{cid}",
+		"DELETE /work/files/{project}/{path...}",
+		"DELETE /work/items/{key}",
+		"GET /work/files/{project}/{path...}",
+		"PATCH /pages/{id}/comments/{cid}",
+		"PATCH /work/items/{key}",
+		"PATCH /work/items/{key}/comments/{cid}",
+		"POST /pages",
+		"POST /pages/{id}/comments",
+		"POST /pages/{id}/purge",
+		"POST /pages/{id}/rename",
+		"POST /pages/{id}/restore",
+		"POST /work/items",
+		"POST /work/items/{key}/comments",
+		"POST /work/items/{key}/depend",
+		"POST /work/items/{key}/move",
+		"POST /work/items/{key}/purge",
+		"POST /work/items/{key}/rank",
+		"POST /work/items/{key}/relate",
+		"POST /work/items/{key}/restore",
+		"POST /work/projects/{key}/tags",
+		"POST /work/views",
+		"PUT /pages/{id}",
+		"PUT /work/catalogue",
+		"PUT /work/files/{project}/{path...}",
+		"PUT /work/people/{handle}/inbox",
+		"PUT /work/people/{handle}/pins",
+		"PUT /work/people/{handle}/priorities",
+		"PUT /work/projects/{key}",
+	}
+	got := slices.Sorted(slices.Values(seen.patterns))
+	if !slices.Equal(got, want) {
+		t.Errorf("the surface mounts\n%v\nwant\n%v", got, want)
+	}
+	for _, pattern := range got {
+		_, path, _ := strings.Cut(pattern, " ")
+		path = strings.NewReplacer("{key}", "ENG-1", "{id}", "p-1",
+			"{cid}", "c-1", "{handle}", "ana", "{project}", "ENG",
+			"{path...}", "reports/q3.csv").Replace(path)
+		if auth.Unguarded(path) {
+			t.Errorf("%s is exempt from the guard, so a write surface is "+
+				"reachable with no credential", pattern)
+		}
+	}
+}
+
+// patternMux records what was mounted on it and serves nothing.
+type patternMux struct{ patterns []string }
+
+func (m *patternMux) Handle(pattern string, _ http.Handler) {
+	m.patterns = append(m.patterns, pattern)
+}
+
+// ---- the runtime audit -------------------------------------------------- //
+
+// EVERY WRITE THIS SURFACE SERVES IS AUDITED, a tool's and a verb with no tool
+// alike, and a refusal the route took itself too — under the transport `work`,
+// the principal that made it and the operation the request was made under.
+//
+// A tool-backed route is audited by the operator dispatch it calls, so a
+// person's script, their assistant and their press are recorded the same way;
+// a purge, a rename or a take-down makes its write without a tool and records
+// the same event through the same constructor. Before it, those verbs were
+// the one place a person could change the company with no runtime record of
+// the call at all.
+//
+// Mutation: drop the AuditGesture after the purge, or the AuditRefusal in the
+// router's refusal, and its row goes missing.
+func TestEveryWriteThisSurfaceServesIsAudited(t *testing.T) {
+	t.Parallel()
+	r := newRig(t, chart{})
+	ana := admin("ana")
+	created := r.do(as(ana), http.MethodPost, "/work/items",
+		map[string]any{"title": "rotate the key", "project": "ENG"})
+	purged := r.do(as(ana), http.MethodPost,
+		"/work/items/ENG-1/purge?confirm=ENG-1&reason=why", nil)
+	refused := r.do(as(colleague("bo")), http.MethodPost,
+		"/work/items/ENG-1/purge?confirm=ENG-1&reason=why", nil)
+	if created.status != http.StatusOK || purged.status != http.StatusOK ||
+		refused.status != http.StatusForbidden {
+		t.Fatalf("answered %d, %d and %d", created.status, purged.status,
+			refused.status)
+	}
+	acted := r.audit.acted()
+	if len(acted) != 3 {
+		t.Fatalf("three writes left %d audit records: %+v", len(acted), acted)
+	}
+	want := []struct {
+		tool    string
+		outcome types.AuditOutcome
+		op      any
+		actor   string
+	}{
+		{tracker.CreateWorkItemTool, types.AuditApplied, created.body["op_id"], "ana"},
+		{string(authz.ActionWorkPurge), types.AuditApplied, purged.body["op_id"], "ana"},
+		{string(authz.ActionWorkPurge), types.AuditRefused, nil, "bo"},
+	}
+	for i, w := range want {
+		got := acted[i]
+		if got.Transport != types.TransportWork || got.Tool != w.tool ||
+			got.Outcome != w.outcome || got.ActorName != w.actor {
+			t.Errorf("record %d is %+v, want %s %s by %s over %s", i, got, w.tool,
+				w.outcome, w.actor, types.TransportWork)
+		}
+		if w.op != nil && got.RequestID != w.op {
+			t.Errorf("record %d names request %q, the answer named %v", i,
+				got.RequestID, w.op)
+		}
+	}
+}

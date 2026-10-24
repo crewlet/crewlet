@@ -36,7 +36,7 @@ func TestAnEvictionIsWrittenToThisLogAndReadBackFromIt(t *testing.T) {
 	onLog := func(want bool) {
 		t.Helper()
 		evicted, found, err := statelog.EvictedOnLog(t.Context(), code.Domain{},
-			code.Domain{}.Stream(), n.log, "node-b")
+			code.Domain{}.Stream(), statelog.StandingOf(n.log, testVerifier(t)), "node-b")
 		if err != nil || !found || evicted != want {
 			t.Fatalf("node-b's standing read off the log = evicted %v, found %v (%v), "+
 				"want evicted %v", evicted, found, err, want)

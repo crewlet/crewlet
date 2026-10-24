@@ -41,7 +41,9 @@ import (
 const fleetWriters = 128
 
 // fleetCASAttempts bounds the compare-and-swap attempts one write is carried
-// in: twice [fleetWriters], the margin [casAttempts] gives its own head count.
+// in: twice [fleetWriters], the margin [casAttempts] gives its own head count —
+// unless the write states an exact bound of its own ([writeLines.writeWithin]),
+// as the rate valve does, whose every lost attempt is another node's increment.
 //
 // The cost of setting it too high is nil — a retry follows only a write that
 // landed, so it runs only while the store is answering and someone is
@@ -359,8 +361,10 @@ type lineWrite[T any] struct {
 	resource string
 	change   func(stored T, found bool) (T, bool)
 
-	// attempts is how many attempts have carried the write.
+	// attempts is how many attempts have carried the write, and bound how
+	// many may: [fleetCASAttempts] unless the caller stated its own.
 	attempts int
+	bound    int
 
 	result   T
 	err      error
@@ -371,7 +375,7 @@ type lineWrite[T any] struct {
 }
 
 // write is one read-modify-write of key, coalesced with every other write in
-// flight on it on this node.
+// flight on it on this node, carried in at most [fleetCASAttempts] attempts.
 //
 // change is handed the stored value — the zero T and false where the key
 // holds none — as the writes before it in its batch left it, and answers the
@@ -382,9 +386,21 @@ type lineWrite[T any] struct {
 func (l *writeLines[T]) write(ctx context.Context, kv jetstream.KeyValue, js jetstream.JetStream,
 	key, resource, verb string, change func(stored T, found bool) (T, bool)) (T, error) {
 
+	return l.writeWithin(ctx, kv, js, key, resource, verb, fleetCASAttempts, change)
+}
+
+// writeWithin is [writeLines.write] carried in at most bound attempts, for a
+// record whose every lost attempt proves something a count can be exact about
+// — the rate valve's, where each is an increment and a write that has lost
+// limit of them reads the window full ([FleetStore.Allow]). A bound below
+// [fleetCASAttempts] is raised to it: nothing is ever carried in fewer.
+func (l *writeLines[T]) writeWithin(ctx context.Context, kv jetstream.KeyValue, js jetstream.JetStream,
+	key, resource, verb string, bound int, change func(stored T, found bool) (T, bool)) (T, error) {
+
 	w := &lineWrite[T]{
 		ctx: ctx, verb: verb, resource: resource, change: change,
-		done: make(chan struct{}), lead: make(chan struct{}),
+		bound: max(bound, fleetCASAttempts),
+		done:  make(chan struct{}), lead: make(chan struct{}),
 	}
 	rtt := l.trips.estimate()
 	now := l.clock()
@@ -560,7 +576,7 @@ func (l *writeLines[T]) lead(ctx context.Context, kv jetstream.KeyValue, js jets
 					// The attempt wrote nothing: withdrawn now rather than
 					// when the next one forms.
 					x.settle(*new(T), unavailable(x.verb, x.ctx.Err()))
-				case x.attempts >= fleetCASAttempts:
+				case x.attempts >= x.bound:
 					spent = append(spent, x)
 				default:
 					kept = append(kept, x)

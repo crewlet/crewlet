@@ -78,7 +78,7 @@ p {
    is the shape a default takes when it is wrong: the exceptions outnumber it.
 
    So the frame's own hover vocabulary carries it instead. The sidebar's rows,
-   `.section-tab` and `.crumb-link` already answer a pointer by moving to
+   the section tabs and the trail's crumbs already answer a pointer by moving to
    `--color-text-primary`, and a link does the same: in dark the accent ink
    (#a9b0ff) brightens toward near-white, in light the violet (#4f51bd) darkens
    toward near-black, so in BOTH themes hovering makes a link MORE prominent
@@ -119,8 +119,8 @@ a:hover {
    forced colours is the one mode where that currency does not exist: the UA
    forces `color` to LinkText in BOTH states, so the step is unobservable, and
    it composites the 4–5% row wash onto its own Canvas as nothing. Measured in
-   Chromium with `forced-colors: active`: after the reset, `.crumb-link`,
-   `.t-link`, `.cell-seat`, `.work-col-foot a` and every prose register render
+   Chromium with `forced-colors: active`: after the reset, a crumb,
+   `.t-link`, `.work-col-foot a` and every prose register render
    pixel-identical hovered and unhovered. Only a row that paints a wash on
    hover still answers, and only because its wash happens to survive.
 
@@ -204,22 +204,6 @@ samp,
 .item-key {
   flex: none;
   white-space: nowrap;
-}
-
-/* AN IDENTIFIER IN A CELL IS ONE LINE (`KeyCell`), cut with its value on the
-   title rather than broken at whichever character the column ran out on. */
-.key-cell {
-  display: block;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-/* WHERE A LEASE IS, beside what it is for (`HeldBy`): the body's weight, so it
-   never outweighs the seat or the duty the row is about. Two classes, because
-   `.t-link` below sets the medium weight every other card link carries. */
-.t-link.held-by {
-  font-weight: var(--font-weight-regular);
 }
 
 /* A TURN'S "WHAT IT DID" (`TurnWhatCell`): the summary keeps the width and the
@@ -372,10 +356,6 @@ img {
 
    `prefers-reduced-motion` above zeroes every duration in the document, this
    one included, so there is nothing to opt out of here. */
-.crumb-link,
-.section-tab,
-.health-card,
-.user-block-who,
 .working-now,
 .peek-grip,
 .grid-row,
@@ -628,9 +608,6 @@ button.t-link {
 .grid {
   display: grid;
   gap: var(--spacing-4);
-}
-.grid-auto {
-  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
 }
 /* THE FLOOR IS A FOUR-COLUMN LEASE TABLE'S (Settings › Nodes: seat, held by,
    since, lease), and it is set so the panels STACK rather than cut the seat.

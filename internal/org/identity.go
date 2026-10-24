@@ -8,14 +8,21 @@
 //
 // # Seat identity is DERIVED, never looked up
 //
-// That is ADR-0013, and the paragraph below is why rather than a restatement
-// of it. An agent seat's runtime id is a UUIDv5 over (org name, handle), so every
-// node computes the same id for the same seat with no database and no
-// running instance. That is what lets a node route an event to a seat it is
-// not itself running — which matters because each engine event topic has one
-// fleet-wide consumer group, so the node that wins a delivery is rarely the
-// node running the recipient. A pool miss means "not on this node", never
-// "does not exist".
+// That is ADR-0013, and the paragraphs below are why rather than a
+// restatement of it. An agent seat's runtime id is a UUIDv5 over (org name,
+// handle), so every node computes the same id for the same seat with no
+// database and no running instance beyond the company document it is already
+// holding. That is what lets a node route an event to a seat it is not itself
+// running — which matters because each engine event topic has one fleet-wide
+// consumer group, so the node that wins a delivery is rarely the node running
+// the recipient. A pool miss means "not on this node", never "does not exist".
+//
+// A HANDLE IS IMMUTABLE, and so is a unit's key: every stored seat carries its
+// handle, and a document that changes one has removed a seat and created
+// another. There is no rename, and so no alias, no retired address and no
+// identity beside the handle — a seat's mailbox, lease, memory and schedule
+// ledger are keyed on the id this derives from the handle, or on the handle
+// itself.
 package org
 
 import (

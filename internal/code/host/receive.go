@@ -151,7 +151,7 @@ func (s *Server) receivePack(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	// THE GRANT (ADR-0040), before the repository's status: a principal that
+	// THE GRANT (ADR-0054), before the repository's status: a principal that
 	// may push nothing here — a token bound to nobody — is refused whole, as
 	// its advertisement refused it, every command with the sentence its grant
 	// gives. One that may push some commands has the rest refused beside the

@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -205,6 +206,9 @@ func TestARestartOnOneActivationWritesNothing(t *testing.T) {
 // THE RECONCILER HANDS THE ENGINE THE POINTER'S OWN INSTANT, which is the one
 // every node reads identically — not its own clock, which is this node's
 // alone and later on every node that applies later.
+//
+// Mutation: hand the apply the reconciler's clock and the epoch reads an hour
+// late.
 func TestTheReconcilerAppliesTheChartAtThePointersInstant(t *testing.T) {
 	t.Parallel()
 	p := planeFor(t, newEngine(t, engine.Options{
@@ -213,11 +217,10 @@ func TestTheReconcilerAppliesTheChartAtThePointersInstant(t *testing.T) {
 	// AN HOUR BEFORE THE RECONCILER'S OWN CLOCK, so the two cannot be
 	// mistaken for each other.
 	activated := pinnedNow.Add(-time.Hour)
-	document := yamlToJSON(t, chartCompany("ships it"))
+	document := p.seal(t, yamlToJSON(t, chartCompany("ships it")))
 	id, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
-		Source: "test", CreatedBy: "operator", CreatedByKind: store.AuthorOperator,
-		Summary: "revision",
-		Payload: document, CreatedAt: activated,
+		Source: "test", CreatedBy: "operator", CreatedByKind: iam.ActorOperator,
+		Summary: "revision", Payload: document, CreatedAt: activated,
 	})
 	if err != nil {
 		t.Fatalf("store the revision: %v", err)
@@ -231,10 +234,21 @@ func TestTheReconcilerAppliesTheChartAtThePointersInstant(t *testing.T) {
 	if err := p.recon.Tick(t.Context()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
-	purpose, epoch := eventuallyProject(t, p.engine, "ENG")
-	if purpose != "ships it" || epoch != configplane.ActivationStamp(activated) {
-		t.Errorf("the project is (%q, %d), want (\"ships it\", %d) — the "+
-			"activation's own instant", purpose, epoch, configplane.ActivationStamp(activated))
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		purpose, epoch := eventuallyProject(t, p.engine, "ENG")
+		if purpose == "ships it" {
+			if want := configplane.ActivationStamp(activated); epoch != want {
+				t.Errorf("the project is stamped %d, want %d — the activation's "+
+					"own instant", epoch, want)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the project still reads %q: the reconciler's apply never "+
+				"reached it", purpose)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 

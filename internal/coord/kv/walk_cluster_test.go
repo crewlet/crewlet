@@ -60,7 +60,7 @@ func TestACertifyingReadIsNeverAnsweredByAReplicaThatIsBehind(t *testing.T) {
 		return client
 	}
 	const bucket = "walk_leader_reads"
-	if _, err := openBucket(ctx, client(0), true, jetstream.KeyValueConfig{
+	if _, _, err := openBucket(ctx, client(0), true, jetstream.KeyValueConfig{
 		Bucket: bucket, Replicas: 3,
 	}); err != nil {
 		t.Fatalf("open a three-replica bucket: %v", err)
@@ -227,7 +227,7 @@ func TestATombstoneAReplicaServedIsReadFromTheLeaderOnACluster(t *testing.T) {
 		return client
 	}
 	const bucket = "walk_replayed_tombstone"
-	if _, err := openBucket(ctx, client(0), true, jetstream.KeyValueConfig{
+	if _, _, err := openBucket(ctx, client(0), true, jetstream.KeyValueConfig{
 		Bucket: bucket, Replicas: 3,
 	}); err != nil {
 		t.Fatalf("open a three-replica bucket: %v", err)

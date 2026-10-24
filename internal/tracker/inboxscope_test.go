@@ -37,7 +37,7 @@ func crowdedInbox(t *testing.T, r *roundTrip, n int) []string {
 	cursor := ""
 	for {
 		page := r.inbox(tracker.InboxQuery{
-			Who: tracker.PartyOf("bob"), Snoozed: tracker.SnoozeInclude,
+			Handle: "bob", Snoozed: tracker.SnoozeInclude,
 			Cursor: cursor,
 		})
 		for _, notice := range page.Notices {
@@ -62,7 +62,7 @@ func snoozeAll(t *testing.T, r *roundTrip, ids []string, until time.Time) {
 		gesture.Snooze = append(gesture.Snooze, tracker.Snooze{RecordID: id, Until: until})
 	}
 	if _, err := asBob(r).MarkInbox(t.Context(), "op-snooze-"+itoa(len(ids)),
-		"bob", gesture); err != nil {
+		"bob", gesture, tracker.PersonAuthority{}); err != nil {
 
 		t.Fatalf("snooze %d notices: %v", len(ids), err)
 	}
@@ -92,7 +92,7 @@ func TestTheSnoozedScopeReturnsOnlySnoozedNoticesAndAFullPage(t *testing.T) {
 	snoozeAll(t, r, asleep, wednesday.Add(48*time.Hour))
 
 	first := r.inbox(tracker.InboxQuery{
-		Who: tracker.PartyOf("bob"), Snoozed: tracker.SnoozeOnly, Limit: 5,
+		Handle: "bob", Snoozed: tracker.SnoozeOnly, Limit: 5,
 	})
 	if len(first.Notices) != 5 {
 		t.Fatalf("the snoozed scope's first page holds %d notices, want a full "+
@@ -109,7 +109,7 @@ func TestTheSnoozedScopeReturnsOnlySnoozedNoticesAndAFullPage(t *testing.T) {
 		}
 	}
 	second := r.inbox(tracker.InboxQuery{
-		Who: tracker.PartyOf("bob"), Snoozed: tracker.SnoozeOnly, Limit: 5,
+		Handle: "bob", Snoozed: tracker.SnoozeOnly, Limit: 5,
 		Cursor: first.NextCursor,
 	})
 	if len(second.Notices) != 1 || second.NextCursor != "" {
@@ -136,7 +136,7 @@ func TestTheDefaultScopeFillsItsPageDespiteSnoozes(t *testing.T) {
 	snoozeAll(t, r, ids[:6], wednesday.Add(48*time.Hour))
 
 	got := r.inbox(tracker.InboxQuery{
-		Who: tracker.PartyOf("bob"), Snoozed: tracker.SnoozeExclude, Limit: 5,
+		Handle: "bob", Snoozed: tracker.SnoozeExclude, Limit: 5,
 	})
 	if len(got.Notices) != 5 {
 		t.Fatalf("the default scope's page holds %d notices, want a full page "+
@@ -161,14 +161,14 @@ func TestTheUnreadFilterFillsItsPage(t *testing.T) {
 	r := newRoundTrip(t)
 	ids := crowdedInbox(t, r, 12)
 	if _, err := asBob(r).MarkInbox(t.Context(), "op-read", "bob",
-		tracker.InboxGesture{Read: ids[:6]}); err != nil {
+		tracker.InboxGesture{Read: ids[:6]}, tracker.PersonAuthority{}); err != nil {
 
 		t.Fatalf("mark read: %v", err)
 	}
 	r.drain()
 
 	got := r.inbox(tracker.InboxQuery{
-		Who: tracker.PartyOf("bob"), Unread: true, Limit: 5,
+		Handle: "bob", Unread: true, Limit: 5,
 	})
 	if len(got.Notices) != 5 || got.NextCursor == "" {
 		t.Fatalf("the unread page holds %d notices with cursor %q, want a full "+
@@ -188,18 +188,18 @@ func TestTheUnreadFilterFillsItsPage(t *testing.T) {
 	// in the marks.
 	through := positionOf(noticeOf(t, r, ids[9]))
 	if _, err := asBob(r).MarkInbox(t.Context(), "op-through", "bob",
-		tracker.InboxGesture{ReadThrough: through}); err != nil {
+		tracker.InboxGesture{ReadThrough: through}, tracker.PersonAuthority{}); err != nil {
 
 		t.Fatalf("read through: %v", err)
 	}
 	r.drain()
 	if _, err := asBob(r).MarkInbox(t.Context(), "op-unread", "bob",
-		tracker.InboxGesture{Unread: []string{ids[10]}}); err != nil {
+		tracker.InboxGesture{Unread: []string{ids[10]}}, tracker.PersonAuthority{}); err != nil {
 
 		t.Fatalf("mark unread: %v", err)
 	}
 	r.drain()
-	all := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob"), Unread: true})
+	all := r.inbox(tracker.InboxQuery{Handle: "bob", Unread: true})
 	if !slices.Equal(recordIDs(all.Notices), append(slices.Clone(ids[6:9]), ids[10])) {
 		t.Errorf("unread after a read-through is %d notices, want the three "+
 			"above the position and the one marked unread below it",
@@ -216,7 +216,7 @@ func TestADueSnoozeIsNotSnoozed(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	routeTo(t, r, "t-1", "ENG-1", "bob")
-	notice := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("bob")}).Notices[0]
+	notice := r.inbox(tracker.InboxQuery{Handle: "bob"}).Notices[0]
 	until := wednesday.Add(time.Hour)
 	snoozeAll(t, r, []string{notice.RecordID}, until)
 
@@ -225,7 +225,7 @@ func TestADueSnoozeIsNotSnoozed(t *testing.T) {
 		tracker.SnoozeOnly: 0, tracker.SnoozeExclude: 1, tracker.SnoozeInclude: 1,
 	} {
 		got, err := r.reader.Inbox(t.Context(), tracker.InboxQuery{
-			Who: tracker.PartyOf("bob"), Level: statelog.ReadStale, Snoozed: scope,
+			Handle: "bob", Level: statelog.ReadStale, Snoozed: scope,
 		}, later)
 		if err != nil {
 			t.Fatalf("Inbox(%s): %v", scope, err)
@@ -242,14 +242,16 @@ func TestADueSnoozeIsNotSnoozed(t *testing.T) {
 	}
 }
 
-// A NOTICE CARRIES ITS COMMENT, ITS TURN, THE PERSON BEHIND A TOKEN, AND THE
-// ASK IT IS ABOUT.
+// A NOTICE CARRIES ITS COMMENT, ITS TURN, THE PERSON WHO MADE IT, AND THE ASK
+// IT IS ABOUT.
 //
-// Without them a card could not open the thread or the trace, could not say
-// whether the question it announces is still open, and drew an operator's
-// change as the token's id — `founder` — where the person belonged. The ask is
-// read NOW: the `asked` notice ana received reads closed once she answered.
-func TestANoticeCarriesItsCommentTurnSeatAndAsk(t *testing.T) {
+// Without them a card could not open the thread or the trace, and could not
+// say whether the question it announces is still open. A person answering
+// through their own token is drawn as THEMSELVES: bound to a seat they write
+// AS it (iam.ActorFor), the credential riding beside the actor rather than
+// standing in for it. The ask is read NOW: the `asked` notice ana received
+// reads closed once she answered.
+func TestANoticeCarriesItsCommentTurnAuthorAndAsk(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	assign(t, r, "decide", "ana")
@@ -269,7 +271,7 @@ func TestANoticeCarriesItsCommentTurnSeatAndAsk(t *testing.T) {
 	}
 	r.drain()
 
-	asked := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("ana")}).Notices
+	asked := r.inbox(tracker.InboxQuery{Handle: "ana"}).Notices
 	if len(asked) == 0 || asked[0].Reason != tracker.ReasonAsked {
 		t.Fatalf("ana's inbox is %+v, want the ask first", asked)
 	}
@@ -283,17 +285,18 @@ func TestANoticeCarriesItsCommentTurnSeatAndAsk(t *testing.T) {
 			"its decision", got.Ask)
 	}
 
-	// ANA ANSWERS THROUGH HER OWN TOKEN, which is bound to her seat.
-	founder := r.writer.As("founder", tracker.AuthorOperator, tracker.Provenance{
-		OperatorID: "founder", Seat: "ana",
+	// ANA ANSWERS THROUGH HER OWN TOKEN, which is bound to her seat — so
+	// she writes AS the seat, and the token is the operator id beside it.
+	viaToken := r.writer.As("ana", tracker.AuthorHuman, tracker.Provenance{
+		OperatorID: "pat:ana-laptop",
 	})
 	askID := "c-ask"
 	answer := tracker.Comment{
-		ID: "c-answer", Task: "decide", Author: "founder",
-		AuthorKind: tracker.AuthorOperator, Body: "hold it", Answers: &askID,
+		ID: "c-answer", Task: "decide", Author: "ana",
+		AuthorKind: tracker.AuthorHuman, Body: "hold it", Answers: &askID,
 		Choice: "hold", CreatedAt: wednesday.Add(time.Hour),
 	}
-	if _, err := founder.UpdateTask(t.Context(), "op-answer", "decide", "ENG",
+	if _, err := viaToken.UpdateTask(t.Context(), "op-answer", "decide", "ENG",
 		tracker.NoIfMatch, tracker.TaskPatch{Comment: &answer}, tracker.ChangeComment,
 		tracker.Wake{Kind: tracker.ChangeComment, Before: task, After: task,
 			Comment: &answer, Thread: tracker.ThreadParties{AnsweredAuthor: "dev"}}.Notify(nil),
@@ -302,23 +305,23 @@ func TestANoticeCarriesItsCommentTurnSeatAndAsk(t *testing.T) {
 	}
 	r.drain()
 
-	answered := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("dev")}).Notices
+	answered := r.inbox(tracker.InboxQuery{Handle: "dev"}).Notices
 	if len(answered) == 0 || answered[0].Reason != tracker.ReasonAnswered {
 		t.Fatalf("dev's inbox is %+v, want the answer first", answered)
 	}
 	switch got := answered[0]; {
-	case got.Actor != "founder" || got.ActorSeat != "ana":
-		t.Errorf("the answer is drawn as %q behind seat %q — the author stays "+
-			"the token and the person behind it is ana", got.Actor, got.ActorSeat)
+	case got.Actor != "ana" || got.ActorKind != tracker.AuthorHuman:
+		t.Errorf("the answer is drawn as %q (%s) — the author is ana herself, "+
+			"whatever credential she answered through", got.Actor, got.ActorKind)
 	case got.CommentID != "c-answer":
 		t.Errorf("the answer's notice names comment %q", got.CommentID)
 	case got.Ask == nil || got.Ask.Comment != "c-ask" || got.Ask.Open ||
-		got.Ask.AnsweredBy != "founder" || got.Ask.Choice != "hold" ||
+		got.Ask.AnsweredBy != "ana" || got.Ask.Choice != "hold" ||
 		got.Ask.AnsweredAt == nil:
-		t.Errorf("the answer's ask is %+v, want c-ask closed by founder "+
+		t.Errorf("the answer's ask is %+v, want c-ask closed by ana "+
 			"choosing hold", got.Ask)
 	}
-	again := r.inbox(tracker.InboxQuery{Who: tracker.PartyOf("ana")}).Notices
+	again := r.inbox(tracker.InboxQuery{Handle: "ana"}).Notices
 	if again[0].Ask == nil || again[0].Ask.Open {
 		t.Errorf("ana's `asked` notice still reads open after she answered: %+v",
 			again[0].Ask)
@@ -335,9 +338,11 @@ func TestANoticeCarriesItsCommentTurnSeatAndAsk(t *testing.T) {
 		t.Fatal("the feed is empty")
 	}
 	head := feed.Records[0]
-	if head.ActorSeat != "ana" || head.Ask == nil || head.Ask.Choice != "hold" {
-		t.Errorf("the feed's newest row is seat %q with ask %+v, want ana and "+
-			"the choice", head.ActorSeat, head.Ask)
+	if head.Actor != "ana" || head.OperatorID != "pat:ana-laptop" ||
+		head.Ask == nil || head.Ask.Choice != "hold" {
+		t.Errorf("the feed's newest row is %q via %q with ask %+v, want ana "+
+			"through her token and the choice", head.Actor, head.OperatorID,
+			head.Ask)
 	}
 }
 
@@ -347,7 +352,7 @@ func TestThePersonAnswerServesTheSnoozeBound(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	got, err := r.reader.Person(t.Context(), tracker.PersonQuery{
-		Who: tracker.PartyOf("bob"), Level: statelog.ReadStale,
+		Handle: "bob", Level: statelog.ReadStale,
 	}, wednesday)
 	if err != nil {
 		t.Fatalf("Person: %v", err)
@@ -371,7 +376,7 @@ func noticeOf(t *testing.T, r *roundTrip, id string) tracker.InboxNotice {
 	cursor := ""
 	for {
 		page := r.inbox(tracker.InboxQuery{
-			Who: tracker.PartyOf("bob"), Snoozed: tracker.SnoozeInclude, Cursor: cursor,
+			Handle: "bob", Snoozed: tracker.SnoozeInclude, Cursor: cursor,
 		})
 		for _, n := range page.Notices {
 			if n.RecordID == id {

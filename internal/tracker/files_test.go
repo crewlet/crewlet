@@ -56,8 +56,10 @@ func (r *roundTrip) named(t *testing.T, k objstore.Key) int {
 func (r *roundTrip) referenced(t *testing.T, among ...objstore.Key) map[objstore.Key]bool {
 	t.Helper()
 	// THROUGH THE DECLARED LIST, exactly as the engine builds the
-	// collector's sources, so this reads the statement the collector runs.
-	sources, err := collect.Sources(trackerTables(), tracker.ObjectEstate{Reader: r.reader})
+	// collector's sources, so this reads the statement the collector runs:
+	// the tracker's own declarations in it, since this harness runs no other
+	// domain's estate.
+	sources, err := collect.Sources(trackerReferences(), tracker.ObjectEstate{Reader: r.reader})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,18 +77,18 @@ func (r *roundTrip) referenced(t *testing.T, among ...objstore.Key) map[objstore
 	return out
 }
 
-// trackerTables is the declared tables the tracker writes — the declarations
-// the collector reads THROUGH THIS DOMAIN'S ESTATE, out of the one list every
-// domain declares into, so a table another domain declares is read through
-// that domain's estate and never asked of this one.
-func trackerTables() []objstore.ReferenceTable {
-	var own []objstore.ReferenceTable
-	for _, ref := range references.All {
-		if ref.Domain == (tracker.Domain{}).Name() {
-			own = append(own, ref)
+// trackerReferences is the declared list's tables of the tracker's own
+// domain — the declarations the collector reads THROUGH THIS DOMAIN'S ESTATE,
+// out of the one list every domain declares into, so a table another domain
+// declares is read through that domain's estate and never asked of this one.
+func trackerReferences() []objstore.ReferenceTable {
+	var out []objstore.ReferenceTable
+	for _, table := range references.All {
+		if table.Domain == (tracker.Domain{}).Name() {
+			out = append(out, table)
 		}
 	}
-	return own
+	return out
 }
 
 // readWatch is this domain as the collector reads it, and whether one of its
@@ -110,7 +112,7 @@ func (w *readWatch) Read(ctx context.Context, at statelog.Position, fn func(*sql
 func (r *roundTrip) every(t *testing.T) map[objstore.Key][]objstore.Reference {
 	t.Helper()
 	watch := &readWatch{ObjectEstate: tracker.ObjectEstate{Reader: r.reader}}
-	sources, err := collect.Sources(trackerTables(), watch)
+	sources, err := collect.Sources(trackerReferences(), watch)
 	if err != nil {
 		t.Fatal(err)
 	}

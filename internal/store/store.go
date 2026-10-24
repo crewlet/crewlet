@@ -98,6 +98,13 @@
 // rather than by how its polls line up, which is what lets every domain's
 // applier share the replicated estate and each still drain.
 //
+// A writer whose line never reached the front — the holders ahead of it kept
+// the lock through every attempt its budget allows — gives up with [ErrBusy],
+// the one failure here a caller clears by trying again a moment later, and
+// the reason it is marked rather than left as the driver's words: unmarked, a
+// tool read lock contention as a fault of the node and told its caller that
+// trying again would not help.
+//
 // # One driver
 //
 // Turso (turso.tech/database/tursogo) is the database, and it is the only
@@ -125,6 +132,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -146,26 +154,52 @@ import (
 // has. ADR-0007 is the decision.
 const driverName = "turso"
 
-// Defaults for Options. Both are anchored to the dashboard, which is the only
-// component that reads this store concurrently with the engine writing it.
+// Defaults for Options.
 const (
-	// The dashboard's query channel admits 4 concurrent queries per socket
-	// (`stream.MaxInFlightQueries`, which is sized to THIS number), so 4
-	// connections is what keeps a read burst off the write path. More would
-	// not help: under WAL, readers never block the writer, but writers
-	// serialise on the file lock regardless, so connections past the read
-	// concurrency only deepen a queue.
+	// minReaderConns is the floor under the derived reader budget, and it
+	// is anchored to the ONE component that reads this store concurrently
+	// with the engine writing it.
 	//
-	// READERS ONLY. Every pinned writer ([DB.Writer]) holds a connection of
-	// its own for its lifetime and counts against the same bound, so the
-	// replicated estate's pool is its readers plus the logs it was opened
-	// for ([DB.OpenReplicated]) rather than a constant. A constant here was
-	// outgrown the moment a second long-lived writer existed: its pin came
-	// out of the readers' four and nothing said so.
+	// EIGHT, which is two full dashboards: the socket's query channel
+	// admits four concurrent queries per SOCKET
+	// (internal/api/stream.MaxInFlightQueries), and a company is routinely
+	// watched from more than one tab. The two numbers are one decision
+	// stated twice, so a change to either is a change to both.
 	//
-	// It is the read concurrency of BOTH files: the dashboard's queries
-	// read the replicated estate too.
-	defaultReaderConns = 4
+	// More tabs than that offer more queries than the floor holds, and the
+	// surplus waits in this pool's own queue — which is safe because the
+	// one read that must never wait behind it, resolving who is acting,
+	// runs on the connection [identityReserve] keeps for it.
+	// The floor exists for the small host, where GOMAXPROCS is 1 or 2 and
+	// the derivation below would otherwise size the pool for the CPU and
+	// leave a single dashboard queueing against itself.
+	minReaderConns = 8
+
+	// identityReserve is how many of this pool's connections ordinary work
+	// may NEVER occupy, kept for identity work: resolving who is acting
+	// before a route, a query or a tool call can decide anything.
+	//
+	// ONE. It is a reservation rather than extra headroom because headroom
+	// is exactly what a burst consumes: database/sql hands connections out
+	// first-come-first-served, so a socket storm — N tabs × four
+	// in-flight queries each, every one of them a scan — takes every
+	// connection and the identity read queues behind all of them. That
+	// inverts the dependency: the reads that are waiting are the ones
+	// identity has to clear, so the queue feeds itself, exactly as the
+	// reader/writer loop [Writer] exists to break does. One connection is
+	// enough because an identity read is a keyed lookup rather than a scan,
+	// and it is the most that can be reserved without taking a meaningful
+	// share from the readers on a small host.
+	//
+	// ON BOTH FILES, and ADDED to the readers rather than taken out of
+	// them, exactly as a pin is: identity work is a read, and which file it
+	// reads from is not this package's decision to prejudge — the identity
+	// estate is replicated today — so a file sized without it would leave a
+	// reserve nothing defends the day identity storage lands there.
+	//
+	// HELD, not merely counted: see [DB.reserve]. An extra connection
+	// nobody holds is taken by the first burst that wants it.
+	identityReserve = 1
 
 	// Half the dashboard's 10 s query timeout. A busy wait longer than the
 	// timeout above it turns lock contention into a request that fails with
@@ -190,6 +224,46 @@ const (
 	nodeCacheKiB = 32 << 10
 )
 
+// defaultReaderConns is how many connections ORDINARY readers get when
+// [Options.MaxOpenConns] says nothing.
+//
+// # Why it is derived, and what the constant it replaced cost
+//
+// It was the literal 4, chosen as "the dashboard admits four concurrent
+// queries". That number described ONE socket, on a host of any size: a company
+// watched from three tabs offered twelve concurrent scans to a pool of four,
+// and the engine's own reads — a seat's tool lookups, the coverage probes, the
+// health body — queued behind whichever eight of them arrived first. (Three
+// tabs still offer twelve, and the surplus over the pool still queues — but
+// no longer in front of the identity reads, which run on the connection
+// [identityReserve] keeps.) Worse, it did not move with the machine: a 16-core
+// node ran the same four connections as a laptop, so the one knob that would
+// have fixed it (`store.max_open_conns`) had to be set by hand on every
+// deployment that outgrew one tab, and nothing said it was the reason the
+// dashboard felt slow.
+//
+// So: max(8, GOMAXPROCS). GOMAXPROCS because a read on this store is CPU-bound
+// work inside this process — the driver's engine is embedded, a query is not a
+// round trip to a server, and a connection that cannot get a core buys queue
+// depth rather than concurrency; sizing to the cores the runtime will actually
+// give it is the honest ceiling. Eight because two dashboards is the ordinary
+// case and the floor must cover it even on a one-core host. Both bounds are
+// what they are because a reader never blocks the writer under WAL while
+// writers serialise on the file lock regardless — so connections past the read
+// concurrency only deepen a queue.
+//
+// It is the read concurrency of BOTH files: the dashboard's queries read the
+// replicated estate too.
+//
+// READERS ONLY, and it is the budget for ORDINARY work. The pool built from it
+// is this plus [identityReserve], plus one pinned writer per log on the
+// replicated estate ([DB.OpenReplicated]) — each of those holds a connection
+// nothing else may take, so each is ADDED rather than taken out. See
+// [Options.poolSize] for the arithmetic.
+func defaultReaderConns() int {
+	return max(minReaderConns, runtime.GOMAXPROCS(0))
+}
+
 // Options configures [OpenNode]. The zero value is valid.
 type Options struct {
 	// WrapDriver wraps the driver before any connection is opened. It
@@ -208,15 +282,18 @@ type Options struct {
 	// with the same wrapper as the node.
 	WrapDriver func(driver.Driver) driver.Driver
 
-	// MaxOpenConns bounds the node's own file's pool, and is the read
-	// concurrency of its replicated estate's; 0 means defaultReaderConns
-	// for both.
+	// MaxOpenConns is the ORDINARY READERS of the node's own file's pool and
+	// of its replicated estate's — never fewer than two there; 0 means
+	// [defaultReaderConns] for both.
 	//
-	// The replicated estate's pinned writers are never taken out of it: its
-	// pool is these readers — never fewer than two — PLUS one connection per
-	// log it carries ([DB.OpenReplicated]), because a writer that took a
+	// What ordinary work may not occupy is ADDED to it, never taken out of
+	// it, configured or not: [identityReserve] on both files, and one
+	// pinned writer per log the replicated estate carries
+	// ([DB.OpenReplicated]). A writer or the identity read that took a
 	// reader's connection would leave a read burst queueing with nothing
-	// naming the loss.
+	// naming the loss — and a figure at or below what is held would leave
+	// the readers nothing at all. So a handle opened at 1 is one reader,
+	// with the reserve kept beside it.
 	MaxOpenConns int
 
 	// ReplicatedPath is where the replicated estate lives. Empty derives it
@@ -268,15 +345,64 @@ type Options struct {
 	pins int
 }
 
-// poolSize is the pool bound with the default applied. A method rather than a
-// branch at each call site: [OpenNode] and [Pending] both build a pool, and the
-// second one skipping a bound the first applies is exactly the drift that
-// made Pending a different database connection from the engine's.
-func (o Options) poolSize() int {
+// readers is how many connections ORDINARY work may draw: [Options.MaxOpenConns]
+// when it is set, [defaultReaderConns] when it is not.
+func (o Options) readers() int {
 	if o.MaxOpenConns <= 0 {
-		return defaultReaderConns
+		return defaultReaderConns()
 	}
 	return o.MaxOpenConns
+}
+
+// poolSize is a handle's whole bound:
+//
+//	pool = readers + identityReserve + pins
+//
+// with the pins held by their writers ([DB.Writer]), [identityReserve] held by
+// the handle itself ([DB.reserve]), and the readers what is left. EVERY TERM
+// IS ADDED, configured or not, because each of the last two is a connection
+// ordinary work may not take, and one taken out of the readers is a read
+// burst queueing behind it with nothing naming the loss.
+//
+// A method rather than a branch at each call site: [OpenNode] and [Pending]
+// both build a pool, and the second one skipping a bound the first applies is
+// exactly the drift that made Pending a different database connection from the
+// engine's.
+func (o Options) poolSize() int {
+	return o.readers() + identityReserve + o.pins
+}
+
+// identityKey marks a context as identity work. Its own unexported type, as
+// the context package requires, so no other package's key can collide with it.
+type identityKey struct{}
+
+// Identity marks ctx as IDENTITY WORK: resolving who is acting, before a
+// route, a query or a tool call can decide anything.
+//
+// A READ on such a context runs on the connection [DB.reserve] holds back,
+// instead of drawing one from the pool with everybody else. That is the whole
+// of the reservation: without a way to spend it, the held connection is a
+// connection nobody ever uses.
+//
+// A WRITE is deliberately not covered. Every write transaction on this file
+// takes the same place in the same queue whatever connection it began on (see
+// writequeue.go), so a reserved connection would buy a writer nothing; what
+// bounds a write here is the file lock, not the pool.
+//
+// IT IS NOT A PRIORITY FLAG, and marking ordinary work with it makes that work
+// SLOWER rather than faster: every identity read shares one connection and is
+// serialised against every other, which is what "one connection's worth"
+// means. It also removes the guarantee the reserve exists to give, and the
+// symptom — a login that hangs under load — appears nowhere near the call that
+// took the connection. Only the lookups that answer "who is this" belong here.
+func Identity(ctx context.Context) context.Context {
+	return context.WithValue(ctx, identityKey{}, true)
+}
+
+// isIdentity reports whether ctx was marked by [Identity].
+func isIdentity(ctx context.Context) bool {
+	marked, _ := ctx.Value(identityKey{}).(bool)
+	return marked
 }
 
 // busyTimeout is the lock wait with the default applied. See poolSize.
@@ -324,6 +450,12 @@ type DB struct {
 	// that handle still had it open.
 	closed atomic.Bool
 
+	// eventSeats resolves a handle an event names to the AGENT id the party
+	// index is keyed on — see [DB.SetEventSeats]. ATOMIC for dim's reason:
+	// the engine installs it while a publish listener may already be
+	// appending on another goroutine.
+	eventSeats atomic.Pointer[SeatResolver]
+
 	// dim is [Options.EmbeddingDim], re-stated by every config apply. ATOMIC
 	// because the applying goroutine writes it while turns are reading it to
 	// validate their vectors — a plain int here is a data race the detector
@@ -336,6 +468,13 @@ type DB struct {
 	// applied to, or an operator lowering it leaves a pause sized for a
 	// timeout that no longer exists.
 	busy time.Duration
+
+	// pool is this handle's connection bound — [Options.poolSize], the
+	// readers, the identity reserve and the pins together — kept for the
+	// same reason busy is: [dirtyAttempts] is a function of it, and a
+	// retry budget sized for a pool other than the one the handle opened
+	// is a number nobody can re-derive.
+	pool int
 
 	// lock is this process's exclusive claim on path, held for the life of
 	// the handle and released by Close — or by the kernel, if this process
@@ -367,6 +506,40 @@ type DB struct {
 		declared int
 		held     int
 	}
+
+	// reserve is [identityReserve]'s connection: one drawn at open and HELD
+	// for the life of the handle, so ordinary work never gets the chance to
+	// take it. [Identity] is what spends it.
+	//
+	// HELD RATHER THAN COUNTED, for the reason a pin is (see [Writer]):
+	// database/sql hands connections out first-come-first-served, so a
+	// spare one nobody holds is taken by the first read burst that wants
+	// it and the reservation is worth nothing.
+	//
+	// HELD RATHER THAN GATED, which is the other design and the one that
+	// breaks something: an admission semaphore in front of the pool would
+	// bound ordinary work below [Options.poolSize], so database/sql would
+	// never reach its own limit, `sql.DBStats.WaitCount` would stop
+	// counting, and the `pool_starved` alarm — whose whole input is that
+	// counter — would go quiet for good. Holding a connection moves no
+	// queue: ordinary work still waits exactly where it waited before, in
+	// the pool, and the alarm still sees it.
+	//
+	// conn is nil while a replacement is being drawn, after a draw that
+	// failed, and after Close. The mutex is what makes one connection safe
+	// for concurrent identity readers: it serialises them, which is
+	// precisely what "one connection's worth" means.
+	//
+	// held is true from the open until Close: the reserve is this handle's
+	// to hold, so a re-draw — after a retired connection, or after a draw
+	// at the open that failed — is allowed while it is set, and nothing is
+	// drawn from a pool that Close is taking down once it is not.
+	reserve struct {
+		mu     sync.Mutex
+		held   bool
+		conn   *sql.Conn
+		retire func()
+	}
 }
 
 var log = logging.Get("store")
@@ -391,6 +564,28 @@ var ErrOneFile = errors.New("store: the node's own estate and the replicated est
 // every other late read in the same shutdown logged "sql: database is closed"
 // and moved on.
 var ErrNoEstate = errors.New("store: this estate is not open")
+
+// ErrBusy is a write transaction that gave up because this node's store never
+// granted it the file's write lock: the other writers queued ahead of it held
+// the lock through every attempt [lockAttempts] allows — two busy timeouts,
+// ten seconds at the default.
+//
+// A CONDITION, NOT A FAULT, and that is the whole reason it is a sentinel: the
+// lock is released when the writers ahead of it commit, so the same write made
+// again a moment later lands, and a caller answers it as it answers any wait
+// that clears. Unmarked, the driver's "database is locked" reached a tool as a
+// fault of the node — `internal_error`, "trying again does not fix it" — on
+// the one failure here that trying again exists for.
+//
+// ONLY THE LOCK THAT WAS NEVER TAKEN. Nothing the attempt wrote survives it:
+// the lock is taken at BEGIN ([beginModeDriver]), so a transaction that never
+// held it never ran its body. A statement that failed with the lock held — a
+// constraint, a malformed query, a disk that refused a write — is not busy and
+// is never marked, however its message reads, because no wait changes it.
+//
+// Wrapped beside the driver's own error ("%w: %w"), so a log still reads what
+// the driver said.
+var ErrBusy = errors.New("store: this node's store could not take its write lock in time")
 
 // OpenNode opens (creating if absent) a node's OWN database, applies any
 // pending schema to it, and reads its capabilities: the driver's, which the
@@ -502,7 +697,7 @@ func openEstate(ctx context.Context, estate Estate, path string, opts Options) (
 	}()
 
 	db := &DB{path: path, lock: lock, estate: estate,
-		busy: opts.busyTimeout(), writes: lock.queue()}
+		busy: opts.busyTimeout(), pool: opts.poolSize(), writes: lock.queue()}
 	// DECLARED, and only the replicated estate's handle declares any: a
 	// pinned connection is an apply loop's, and every apply loop writes the
 	// replicated estate, so the node's own file keeps its readers and
@@ -521,6 +716,11 @@ func openEstate(ctx context.Context, estate Estate, path string, opts Options) (
 		_ = db.sql.Close()
 		return nil, err
 	}
+	// THE IDENTITY RESERVE, drawn AFTER the migrator: a migration runs a
+	// sequence of transactions on this same pool, and holding a connection
+	// back across it would be a connection the bring-up could not use for
+	// the one thing that has to finish before anything else runs.
+	db.holdIdentityReserve(ctx)
 	var unanswered error
 	db.caps, unanswered = measuredDriver.capabilities(ctx, db.sql, opts.WrapDriver != nil)
 	// The driver's answers carry over; the PAGE CACHE does not. It is read
@@ -672,6 +872,11 @@ func (d *DB) close() error {
 			}
 		}
 	}
+	// THE RESERVE BEFORE THE POOL. database/sql will not finish closing
+	// while a connection is still checked out, so a held reserve would
+	// turn every Close into a wait for a connection nobody is going to
+	// hand back.
+	d.releaseIdentityReserve()
 	errs = append(errs, d.sql.Close())
 	d.lock.release()
 	return errors.Join(errs...)
@@ -935,13 +1140,14 @@ func (d *DB) Tx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 	// dirty. internal/learning carried a private copy of this loop for one
 	// of its twelve callers; the other eleven had none.
 	// THE NIL GUARD IS HERE AND NOT ONLY IN [DB.txOpts], which is where it
-	// was and where it could never run: `budget(d.busy)` is an ARGUMENT,
-	// evaluated before the call it guards, so a nil handle dereferenced on the
-	// way in and the guard three frames down never saw it. See [ErrNoEstate].
+	// was and where it could never run: `budget(d.busy, d.pool)` is an
+	// ARGUMENT, evaluated before the call it guards, so a nil handle
+	// dereferenced on the way in and the guard three frames down never saw
+	// it. See [ErrNoEstate].
 	if !d.isOpen() {
 		return ErrNoEstate
 	}
-	return retryTransient(ctx, budget(d.busy), func() error { return d.tx(ctx, fn) })
+	return retryTransient(ctx, budget(d.busy, d.pool), func() error { return d.tx(ctx, fn) })
 }
 
 // txBudget is how many attempts each cause gets, and how long to wait between
@@ -958,11 +1164,20 @@ type txBudget struct {
 // [DB.Read] and [Writer.Tx] all need it, and a second copy is how one of them
 // comes to classify an error the other retries — which is exactly what the
 // eleven callers without internal/learning's private copy paid for.
+//
+// A LOCK IT NEVER TOOK IS ANSWERED AS [ErrBusy] once its budget is spent,
+// because that is the one cause whose exhaustion is still a wait that clears.
+// The other two are not: a dirty connection that survived every attempt is a
+// pool that cannot hand out a clean one, and a stale snapshot is never retried
+// at all — both stay the driver's error.
 func retryTransient(ctx context.Context, b txBudget, once func() error) error {
 	for attempt := 0; ; attempt++ {
 		err := once()
 		cause := classify(err)
 		if err == nil || cause == causeFatal || attempt+1 >= b.attempts(cause) {
+			if cause == causeLockTimeout {
+				return fmt.Errorf("%w: %w", ErrBusy, err)
+			}
 			return err
 		}
 		log.WarnContext(ctx, "store_tx_retry", "attempt", attempt+1,
@@ -994,12 +1209,12 @@ func causeName(c txCause) string {
 // fresh one in its place (see [Writer.replace]) — so the next attempt draws a
 // different connection on both paths and a second budget would be a policy
 // with nothing left to justify it.
-func budget(busy time.Duration) txBudget {
+func budget(busy time.Duration, pool int) txBudget {
 	return txBudget{
 		attempts: func(c txCause) int {
 			switch c {
 			case causeDirtyConn:
-				return txAttempts
+				return dirtyAttempts(pool)
 			case causeLockTimeout:
 				return lockAttempts
 			default:
@@ -1032,7 +1247,8 @@ func budget(busy time.Duration) txBudget {
 // released in ten seconds is not "another writer holds it and will not for
 // long", it is a stuck batch, and the honest answer is the error.
 //
-// It was [txAttempts] — eight — until the begin mode moved contention from
+// It was eight — what the dirty-connection budget then was — until the begin
+// mode moved contention from
 // the first write to the BEGIN and made this cause common. Eight attempts of
 // a five-second wait is forty seconds of stall with eight full replays of a
 // four-thousand-row apply, which is the fleet-wide stall the applier's
@@ -1054,30 +1270,43 @@ func lockRetryBeat(busy time.Duration) time.Duration {
 	return time.Duration(rand.N(int64(busy / 10)))
 }
 
-// txAttempts is how many times a transaction that drew a dirty connection is
-// retried.
+// dirtyAttempts is how many times a transaction that drew a dirty connection
+// is tried, on a handle whose pool holds pool connections.
 //
-// Eight, and the anchor moved with the reason. It was measured against four
-// goroutines each incrementing one row twelve times — the sharpest contention
-// this store sees — which still lost an update at three attempts even with a
-// jittered pause. That race cannot happen now: a write transaction takes the
-// lock at BEGIN and queues for it, so the four serialise and each body runs
-// once (TestWriterAndTxShareOneWritePath asserts exactly that), and a number
-// justified by a measurement of something that no longer occurs is a number
-// nobody can re-derive.
+// THE BOUND IS THE POOL, and so it is DERIVED from the pool rather than
+// written down. What it governs is [causeDirtyConn], and each attempt RETIRES
+// the connection it drew, so the worst case is drawing every dirty connection
+// the pool can be holding before reaching a clean one: one attempt per
+// connection the handle may hold, and one more for the fresh connection the
+// pool opens once every held one has been retired.
 //
-// What it governs is [causeDirtyConn], and the bound is the POOL'S READERS:
-// each attempt RETIRES the connection it drew, so the worst case is drawing
-// every dirty connection the pool can be holding idle before a fresh one is
-// opened. A pinned writer's connection is never among them — it is held for
-// the life of its apply loop and never handed back to the pool, and a writer
-// that loses it draws its replacement from the same readers — so that is
-// [defaultReaderConns], four, plus the fresh draw after them, on either file;
-// and eight leaves room for a pool an operator configured somewhat wider
-// before the budget is the binding term. Every attempt of it costs a
-// reconnect and no wait, so the budget is spent in milliseconds rather than
-// in seconds; it is [lockAttempts] that bounds the seconds.
-const txAttempts = 8
+// It was the literal eight, justified as "[defaultReaderConns] plus the pins
+// a node declares — four plus three state-log domains today". Both terms had
+// moved under it: the reader budget is max(8, GOMAXPROCS) now, the identity
+// reserve sits beside it, and five domains each pin a writer, so a replicated
+// estate on an ordinary host holds fourteen connections and more on a large one
+// — and a constant justified by a count is wrong the day the count changes,
+// with nothing to say so. (An earlier anchor was a measurement of four
+// goroutines racing one row, which the begin mode made impossible: a write
+// transaction takes the lock at BEGIN and queues for it, so the four
+// serialise and each body runs once — TestWriterAndTxShareOneWritePath
+// asserts exactly that.)
+//
+// pool is the handle's whole bound — readers, [identityReserve] and pins
+// ([Options.poolSize]) — although a pinned writer's connection and the held
+// reserve are never handed back to sit idle in the pool: a writer or the
+// reserve that loses its connection draws a replacement from the readers'
+// share, so the count of connections a draw can meet dirty is the bound, and
+// over-counting the ones that never wait idle costs an attempt rather than a
+// write.
+//
+// Every attempt of it costs a reconnect and a pause from [txRetryBeat], which
+// stops widening at 33 ms, so even a large pool's budget is spent in well
+// under a second rather than in seconds; it is [lockAttempts] that bounds the
+// seconds.
+func dirtyAttempts(pool int) int {
+	return max(pool, 1) + 1
+}
 
 // txRetryBeat is the jittered, WIDENING pause between attempts.
 //
@@ -1229,6 +1458,77 @@ func (d *DB) tx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 	defer func() { giveBack(conn, retire, fit) }()
 	fit, err = d.writeOn(ctx, conn, fn)
 	return err
+}
+
+// holdIdentityReserve draws the connection [identityReserve] keeps back.
+//
+// EVERY HANDLE HOLDS ONE, because the reserve is added to the pool rather
+// than taken out of it ([Options.poolSize]): no bound a caller sets is too
+// small to keep it beside the readers.
+//
+// A DRAW THAT FAILS IS NOT AN OPEN THAT FAILS. The reserve is a guarantee
+// about behaviour under load, not a precondition for serving: until it is
+// drawn, this handle's identity reads queue with everybody else, which is
+// exactly where they were before it existed — and the first identity read
+// draws it again ([DB.identityConn]). It is logged rather than returned,
+// because failing the store open over it would take a node down for the one
+// reason that costs nobody an answer.
+func (d *DB) holdIdentityReserve(ctx context.Context) {
+	// UNDER THE LOCK although nothing else can reach this handle yet: the
+	// field is read under it everywhere else, and a write outside it is
+	// the kind of "safe because nobody is looking" the race detector
+	// cannot check and a later caller cannot rely on.
+	d.reserve.mu.Lock()
+	defer d.reserve.mu.Unlock()
+	d.reserve.held = true
+	conn, err := d.sql.Conn(ctx)
+	if err != nil {
+		log.WarnContext(ctx, "store_identity_reserve_unheld",
+			"estate", string(d.estate), "error", err,
+			"hint", "identity reads will queue with every other reader on "+
+				"this node until the reserved connection can be drawn")
+		return
+	}
+	d.reserve.conn, d.reserve.retire = conn, retireSwitch(conn)
+}
+
+// identityConn is the reserved connection, drawn afresh if the last was
+// retired or the draw at the open failed, or nil when no draw succeeds or
+// Close has released the reserve.
+//
+// Caller holds d.reserve.mu.
+func (d *DB) identityConn(ctx context.Context) *sql.Conn {
+	if d.reserve.conn != nil {
+		return d.reserve.conn
+	}
+	if !d.reserve.held || d.closed.Load() {
+		return nil
+	}
+	// BOUNDED BY THE BUSY TIMEOUT and stripped of the caller's
+	// cancellation, exactly as [Writer.replace] is and for the same
+	// reason: re-drawing is cleanup after a failure that is often the
+	// cancellation itself, and a context with the cancellation taken off
+	// has no deadline either.
+	bounded, stop := context.WithTimeout(context.WithoutCancel(ctx), d.busy)
+	defer stop()
+	conn, err := d.sql.Conn(bounded)
+	if err != nil {
+		return nil
+	}
+	d.reserve.conn, d.reserve.retire = conn, retireSwitch(conn)
+	return conn
+}
+
+// releaseIdentityReserve closes the held connection, for [DB.Close].
+func (d *DB) releaseIdentityReserve() {
+	d.reserve.mu.Lock()
+	defer d.reserve.mu.Unlock()
+	d.reserve.held = false
+	if d.reserve.conn == nil {
+		return
+	}
+	_ = d.reserve.conn.Close()
+	d.reserve.conn, d.reserve.retire = nil, nil
 }
 
 // writeOn is one write attempt on conn: its place in this file's queue, then

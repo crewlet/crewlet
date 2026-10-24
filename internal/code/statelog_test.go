@@ -15,8 +15,8 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE CODE DOMAIN IS CERTIFIED BY THE FRAMEWORK'S OWN SUITE — the fifth domain
-// to run it, and the third that claims identity: every promise the framework
+// THE CODE DOMAIN IS CERTIFIED BY THE FRAMEWORK'S OWN SUITE — the eighth domain
+// to run it, and the sixth that claims identity: every promise the framework
 // makes about a strict log (stamping, deferral, the gates, the eviction
 // census, the trimmed record) is held here by the cases that hold it for the
 // tracker and the knowledge base, never by a copy of them.

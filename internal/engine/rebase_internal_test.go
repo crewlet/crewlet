@@ -41,7 +41,7 @@ func mustDescribeResume(t *testing.T, e *Engine, company *Company, in resumeInpu
 // actually read — into the actor every derived id is built from.
 func toolsMint(t *testing.T, company *Company, tel turnTelemetry) time.Time {
 	t.Helper()
-	tc := tel.runnerTurn(company, 0, nil, "the task", turn.ToolReply("")).Context
+	tc := tel.runnerTurn(company, 0, nil, "the task", turn.ToolReply(""), nil).Context
 	if tc == nil {
 		t.Fatal("the runner was handed no turn")
 	}

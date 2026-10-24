@@ -14,9 +14,11 @@
  *    (`SEARCH_QUERY_MAX`) — the question IS the search text, and one past it
  *    is refused, so the palette says why instead of asking;
  *  - typing has paused for [ANSWER_IDLE_MS];
- *  - this browser may make the call (`useWriteAccess`): a person, bound, on
- *    an engine that answers. An anonymous or unbound reader is told what
- *    would let them ask, and nothing is sent;
+ *  - this browser may make the call (`useWriteAccess`) and is BOUND to a seat:
+ *    the answer is written by the seat's own model, so the engine refuses a
+ *    principal no seat binds rather than spending the company's default model
+ *    on them. An anonymous or unbound reader is told what would let them ask,
+ *    and nothing is sent;
  *  - it has not been answered already this session — answers are kept per
  *    normalised question for as long as the page is open, so going back to a
  *    term, or reopening the palette on it, spends nothing.
@@ -36,6 +38,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useAct } from "~/lib/useAct.ts";
 import type { WriteAccess } from "~/lib/useWriteAccess.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { searchTooLong } from "~/lib/search.ts";
 import { ANSWER_IDLE_MS, answerable, normalizeQuestion } from "./hits.ts";
 
@@ -92,15 +95,25 @@ export function forgetAnswersForTest(): void {
   answered.clear();
 }
 
-/** Whether a reader blocked for this reason is told how to ask, or told nothing. */
-function explains(access: WriteAccess): string | null {
-  if (access.can) return null;
-  // THE TWO READERS WHO COULD ASK once they did something about it: no token,
-  // or a token that is not a person. Offline and "still checking" pass by
-  // themselves, and an engine that does not answer questions at all has
-  // nothing for them to do — a line about it on every question is noise.
-  if (access.block === "anonymous" || access.block === "unbound") {
-    return "Set a token bound to your seat to get an answer from your company’s knowledge.";
+/**
+ * Whether a reader who may not ask is told how they could, or told nothing.
+ *
+ * THE TWO READERS WHO COULD ASK once they did something about it: nobody
+ * signed in, and a principal no seat binds — `answer_knowledge` runs on the
+ * seat's own model and the engine refuses it to anybody without one, so it is
+ * the one change an unbound principal may not make. Offline and "still
+ * checking" pass by themselves, and an engine that does not answer questions
+ * at all has nothing for them to do — a line about it on every question is
+ * noise.
+ */
+function explains(access: WriteAccess, unbound: boolean): string | null {
+  if (access.can) {
+    return unbound
+      ? "Asking needs a seat. Ask whoever manages people here to bind your login to one."
+      : null;
+  }
+  if (access.block === "anonymous") {
+    return "Sign in to ask.";
   }
   return null;
 }
@@ -111,9 +124,10 @@ function explains(access: WriteAccess): string | null {
  */
 export function useKnowledgeAnswer(term: string, wanted: boolean): AnswerState {
   const write = useAct("answer_knowledge");
+  const { unbound } = useViewer();
   const key = normalizeQuestion(term);
   const question = wanted && answerable(term) && searchTooLong(term) === null;
-  const eligible = question && write.access.can;
+  const eligible = question && write.access.can && !unbound;
   const [settled, setSettled] = useState<{ key: string; state: AnswerState } | null>(null);
   const [sent, setSent] = useState("");
   // THE PRESS, held rather than depended on: `run` is stable per hook, and an
@@ -168,7 +182,7 @@ export function useKnowledgeAnswer(term: string, wanted: boolean): AnswerState {
   }, [key, eligible]);
 
   if (!question) return { kind: "none" };
-  const blocked = explains(write.access);
+  const blocked = explains(write.access, unbound);
   if (blocked) return { kind: "blocked", reason: blocked };
   if (!write.access.can) return { kind: "none" };
   const held = answered.get(key);

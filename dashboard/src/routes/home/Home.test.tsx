@@ -8,19 +8,21 @@
  * reader nobody bound shown an empty list that claims to have looked.
  */
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { EMPTY_VALUE, LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import type { ReactNode } from "react";
-import { Home, greeting } from "./Home.tsx";
+import { Home } from "./Home.tsx";
+import { greeting } from "./model.ts";
 import { Inbox } from "~/routes/inbox/Inbox.tsx";
 import { NOBODY_SENTENCE } from "./Decisions.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { reloadForTest, setZone } from "~/lib/prefs.ts";
+import { reloadForTest, pinZoneForTest } from "~/lib/prefs.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
+import { SessionReading } from "~/lib/frameSession.ts";
 import { healthFrame } from "~/test/health.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 
@@ -34,9 +36,10 @@ class InertWebSocket {
 }
 
 const JANE = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+  login: "U0FOUNDER",
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
+  owner: "jane",
   name: "Jane Founder",
   kind: "human",
   acts: ["comment_on_work_item", "answer_run", "update_work_item", "create_work_item"],
@@ -200,7 +203,7 @@ function mount({
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 3 }));
   store.applyOrg(ORG as never);
-  store.applyAgents(agents as never);
+  store.applySeats(agents as never);
   if (budget) store.applyBudget(budget as never);
   const socket = new LiveSocket(store);
   socket.query = ((what: string, params?: Record<string, unknown>) => {
@@ -218,9 +221,11 @@ function mount({
     <ToastProvider>
       <LayerHost>
         <ClientContext.Provider value={{ store, socket }}>
-          <FrameReadings>
-            <Router>{page}</Router>
-          </FrameReadings>
+          <SessionReading>
+            <FrameReadings>
+              <Router>{page}</Router>
+            </FrameReadings>
+          </SessionReading>
         </ClientContext.Provider>
       </LayerHost>
     </ToastProvider>,
@@ -313,16 +318,16 @@ describe("the figures", () => {
     await settle();
     const card = tile(/^Tokens · /);
     const link = within(card).getByRole("link", { name: "No weekly budget" });
-    expect(link.getAttribute("href")).toBe("#/spend/budgets");
+    expect(link.getAttribute("href")).toBe("#/company/budgets");
     // NO BARE DELTA before the budget's line: the tile's second line is the
     // budget's, and "−88% No weekly budget" read as a claim about it.
     expect(card.textContent).not.toMatch(/[+−±]\d/);
   });
 
-  // THE WAY IN IS OFFERED TO WHOEVER CAN SET ONE: a reader who is not an
-  // operator gets the fact, not a link to a screen that would refuse them.
+  // THE WAY IN IS OFFERED TO WHOEVER CAN SET ONE: a reader without
+  // Admin gets the fact, not a link to a screen that would refuse them.
   test("a reader who cannot set a budget is told there is none, with no way in", async () => {
-    mount({ viewer: { ...JANE, operator: false }, budget: UNCAPPED });
+    mount({ viewer: { ...JANE, grants: ["tracker"] }, budget: UNCAPPED });
     await settle();
     const card = tile(/^Tokens · /);
     expect(card.textContent).toContain("No weekly budget");
@@ -362,9 +367,9 @@ describe("the figures", () => {
   test("the crew is the engine's word for every seat", async () => {
     mount({
       agents: [
-        { role: "CTO", handle: "cto", activity: "working" },
-        { role: "SWE", handle: "swe", activity: "needs" },
-        { role: "DevRel", handle: "devrel", activity: "idle" },
+        { id: "cto", agent_id: "cto", role: "CTO", handle: "cto", activity: "working" },
+        { id: "swe", agent_id: "swe", role: "SWE", handle: "swe", activity: "needs" },
+        { id: "devrel", agent_id: "devrel", role: "DevRel", handle: "devrel", activity: "idle" },
       ],
     });
     await settle();
@@ -376,7 +381,9 @@ describe("the figures", () => {
 });
 
 describe("the decisions", () => {
-  test("an option is answered in place, as the choice", async () => {
+  // GROUPED BY WHO IS ASKING: the asker, the item and the role are said once
+  // on the head, and each question carries its answer in place.
+  test("an ask is answered by accepting its recommendation, and says so", async () => {
     mount({
       answers: {
         decisions: {
@@ -390,25 +397,99 @@ describe("the decisions", () => {
     });
     await settle();
     const card = screen.getByText("Needs your decision").closest(".crewlet-card") as HTMLElement;
-    expect(card.textContent).toContain(
-      "CTO asks: Hold the 2.4 release until the scheduler migration lands?",
+    const group = card.querySelector(".decision-group") as HTMLElement;
+    expect(group.querySelector(".decision-group-who")?.textContent).toBe("CTO");
+    expect(group.querySelector(".decision-group-head")?.textContent).toContain(
+      "on LEAD-12 · you are the approver",
     );
-    expect(card.textContent).toContain("you are the approver");
-    expect(card.textContent).toContain("CTO reports to you");
-    expect(card.textContent).toContain("recommends Hold release");
+    // THE STATE ON THE ASKER'S BADGE: a question glyph, never a ring round it.
+    expect(group.querySelector(".crewlet-avatar__status--needs")).not.toBeNull();
+    expect(group.innerHTML).not.toContain("ring-");
+    expect(card.textContent).toContain("Hold the 2.4 release until the scheduler migration lands?");
+    expect(card.querySelector(".decision-rec")?.textContent).toBe("Recommended: Hold release");
     await act(async () => {
-      fireEvent.click(within(card).getByRole("button", { name: "Hold release" }));
+      fireEvent.click(within(card).getByRole("button", { name: "Accept" }));
     });
     await settle();
     expect(posted).toEqual([
       { tool: "comment_on_work_item", args: { item: "LEAD-12", answers: "c-12", choice: "hold" } },
     ]);
+    expect(card.querySelector(".decision-answered")?.textContent).toBe(
+      "Answered Hold release (Recommended)",
+    );
   });
 
-  // AN ASK TAKES ONE ANSWER: while one choice is in flight, the ask's other
-  // options refuse a press — with a write per button, "Ship anyway" stayed
-  // pressable and sent a second, different choice to the same ask.
-  test("while one choice is being sent, the ask's other options cannot send another", async () => {
+  test("Change opens every option, hides the recommendation line, and sends the one chosen", async () => {
+    mount({ answers: { decisions: { handle: "jane", items: [ask()], total: 1, capped: false } } });
+    await settle();
+    const card = screen.getByText("Needs your decision").closest(".crewlet-card") as HTMLElement;
+    fireEvent.click(within(card).getByRole("button", { name: "Change" }));
+    expect(card.querySelector(".decision-rec")).toBeNull();
+    const radios = within(card).getAllByRole("radio") as HTMLInputElement[];
+    expect(radios.map((r) => r.checked)).toEqual([true, false, false]);
+    expect(within(card).getByRole("radio", { name: /Something else/ })).toBeTruthy();
+    fireEvent.click(within(card).getByRole("radio", { name: /Ship anyway/ }));
+    await act(async () => {
+      fireEvent.click(within(card).getByRole("button", { name: "Submit" }));
+    });
+    await settle();
+    expect(posted).toEqual([
+      { tool: "comment_on_work_item", args: { item: "LEAD-12", answers: "c-12", choice: "ship" } },
+    ]);
+    expect(card.querySelector(".decision-answered")?.textContent).toBe("Answered Ship anyway");
+  });
+
+  test("Something else sends a reply as the answer, and quotes it", async () => {
+    mount({ answers: { decisions: { handle: "jane", items: [ask()], total: 1, capped: false } } });
+    await settle();
+    const card = screen.getByText("Needs your decision").closest(".crewlet-card") as HTMLElement;
+    fireEvent.click(within(card).getByRole("button", { name: "Change" }));
+    fireEvent.click(within(card).getByRole("radio", { name: /Something else/ }));
+    const submit = within(card).getByRole("button", { name: "Submit" });
+    expect(submit.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.change(within(card).getByRole("textbox", { name: "Something else" }), {
+      target: { value: "Hold, and ship the hotfix alone." },
+    });
+    await act(async () => {
+      fireEvent.click(within(card).getByRole("button", { name: "Submit" }));
+    });
+    await settle();
+    expect(posted).toEqual([
+      {
+        tool: "comment_on_work_item",
+        args: { item: "LEAD-12", answers: "c-12", body: "Hold, and ship the hotfix alone." },
+      },
+    ]);
+    expect(card.querySelector(".decision-answered")?.textContent).toBe(
+      "Answered “Hold, and ship the hotfix alone.”",
+    );
+  });
+
+  test("one ask's options are open at a time", async () => {
+    mount({
+      answers: {
+        decisions: {
+          handle: "jane",
+          items: [ask(), ask({ comment: "c-13", decision: { ...DECISION, question: "Second?" } })],
+          total: 2,
+          capped: false,
+        },
+      },
+    });
+    await settle();
+    const card = screen.getByText("Needs your decision").closest(".crewlet-card") as HTMLElement;
+    // ONE HEAD FOR BOTH: the same asker, the same item.
+    expect(card.querySelectorAll(".decision-group")).toHaveLength(1);
+    const [first, second] = within(card).getAllByRole("button", { name: "Change" });
+    fireEvent.click(first!);
+    expect(within(card).getAllByRole("radiogroup")).toHaveLength(1);
+    fireEvent.click(second!);
+    expect(within(card).getAllByRole("radiogroup")).toHaveLength(1);
+    expect(within(card).getAllByRole("button", { name: "Change" })).toHaveLength(1);
+  });
+
+  // AN ASK TAKES ONE ANSWER: while it is in flight nothing else can send one.
+  test("while the answer is being sent, the ask cannot send another", async () => {
     let release: (r: Response) => void = () => {};
     vi.stubGlobal(
       "fetch",
@@ -422,12 +503,12 @@ describe("the decisions", () => {
     await settle();
     const card = screen.getByText("Needs your decision").closest(".crewlet-card") as HTMLElement;
     await act(async () => {
-      fireEvent.click(within(card).getByRole("button", { name: "Hold release" }));
+      fireEvent.click(within(card).getByRole("button", { name: "Accept" }));
     });
-    const other = within(card).getByRole("button", { name: /Ship anyway/ });
-    expect(other.getAttribute("aria-disabled")).toBe("true");
+    const change = within(card).getByRole("button", { name: "Change" });
+    expect(change.getAttribute("aria-disabled")).toBe("true");
     await act(async () => {
-      fireEvent.click(other);
+      fireEvent.click(within(card).getByRole("button", { name: "Accept" }));
     });
     expect(posted.map((p) => p.args.choice)).toEqual(["hold"]);
     await act(async () => {
@@ -444,8 +525,7 @@ describe("the decisions", () => {
   test("the inform line appears only where the ask promised a channel", async () => {
     mount({ answers: { decisions: { handle: "jane", items: [ask()], total: 1, capped: false } } });
     await settle();
-    expect(screen.getByText("CTO continues from your answer")).toBeTruthy();
-    expect(screen.queryByText(/posts it to #/)).toBeNull();
+    expect(screen.queryByText(/answer posted to #/)).toBeNull();
     cleanup();
     mount({
       answers: {
@@ -460,24 +540,92 @@ describe("the decisions", () => {
       },
     });
     await settle();
-    expect(
-      screen.getByText("CTO is woken with your answer and posts it to #releases"),
-    ).toBeTruthy();
+    expect(screen.getByText("answer posted to #releases")).toBeTruthy();
   });
 
-  test("a reader nobody bound is told why there is nothing to decide, and asked nothing", async () => {
-    mount({ viewer: { ...JANE, handle: "", name: "", acts: [] } });
+  test("a reader nobody signed in is told why there is nothing to decide, and asked nothing", async () => {
+    mount({
+      viewer: { login: "", grants: [], handle: "", owner: "", name: "", kind: "", acts: [] },
+    });
     await settle();
-    expect(screen.getByText(NOBODY_SENTENCE.unbound)).toBeTruthy();
-    expect(tile("Waiting on your decision").textContent).toContain("Not bound to a person");
+    expect(screen.getByText(NOBODY_SENTENCE)).toBeTruthy();
+    expect(tile("Waiting on your decision").textContent).toContain("Nobody is signed in");
     expect(tile("Waiting on your decision").textContent).toContain(EMPTY_VALUE);
     expect(asked.some((a) => a.kind === "decisions")).toBe(false);
+  });
+
+  // AN UNBOUND READER IS SOMEBODY: their record is their login, and a question
+  // put to them or a run waiting on them reaches it — so their decisions are
+  // asked for and counted like anybody's, never drawn as nobody's.
+  test("a reader the directory binds to no seat is asked what waits on them", async () => {
+    mount({
+      viewer: {
+        login: "ci.release",
+        grants: [],
+        handle: "",
+        owner: "ci.release",
+        name: "",
+        kind: "",
+        acts: [],
+      },
+      answers: {
+        decisions: { handle: "ci.release", items: [ask()], total: 1, capped: false },
+      },
+    });
+    await settle();
+    expect(asked.some((a) => a.kind === "decisions")).toBe(true);
+    expect(screen.queryByText(NOBODY_SENTENCE)).toBeNull();
+    expect(tile("Waiting on your decision").textContent).toContain("1");
+  });
+
+  // THE READER IS GREETED BY THEIR OWN NAME, which their row holds and the
+  // frame's `GET /auth/session` answered — bound or not — and NEVER BY THE
+  // SEAT'S: a person with no name of their own was greeted "Good afternoon,
+  // Founder", a role. ONE READ, the frame's: Home asked again for itself. The
+  // CONTROL is a bound reader whose row holds no name, greeted bare beside a
+  // seat named "Jane". Mutation: greet by the viewer's (the seat's) name and
+  // the control is greeted "Jane"; read the session in Home and it is asked
+  // twice.
+  test("a reader is greeted by their own name, never their seat's", async () => {
+    let name: string | undefined = "Bob Smith";
+    const sessions = vi.fn(
+      async (_input: RequestInfo | URL) =>
+        new Response(
+          JSON.stringify({ person: "p-bob", name, login: "bob.smith", kind: "person" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", sessions);
+    mount({
+      viewer: {
+        login: "bob.smith",
+        grants: [],
+        handle: "",
+        owner: "bob.smith",
+        name: "",
+        kind: "",
+        acts: [],
+      },
+    });
+    expect(await screen.findByRole("heading", { name: /^Good \w+, Bob$/ })).toBeTruthy();
+    const reads = () =>
+      sessions.mock.calls.filter(([url]) => String(url).endsWith("/auth/session"));
+    expect(reads()).toHaveLength(1);
+    cleanup();
+    sessions.mockClear();
+    name = undefined;
+    mount();
+    await waitFor(() => expect(reads()).toHaveLength(1));
+    expect(await screen.findByRole("heading", { name: /^Good \w+$/ })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: /Jane/ })).toBeNull();
   });
 
   test("a seat stopped on its budget is a decision with both ways out", async () => {
     mount({
       agents: [
         {
+          id: "devrel",
+          agent_id: "devrel",
           role: "DevRel",
           handle: "devrel",
           activity: "stopped",
@@ -500,7 +648,12 @@ describe("the decisions", () => {
       ],
     });
     await settle();
-    expect(screen.getByText("DevRel stopped — daily token budget exhausted")).toBeTruthy();
+    expect(screen.getByText("DevRel stopped: daily token budget exhausted")).toBeTruthy();
+    const row = screen
+      .getByText("DevRel stopped: daily token budget exhausted")
+      .closest(".decision-row") as HTMLElement;
+    expect(row.querySelector(".crewlet-avatar__status--stopped")).not.toBeNull();
+    expect(row.querySelector(".decision-state")?.textContent).toBe("Stopped");
     expect(tile("Waiting on your decision").textContent).toContain("1");
     // RAISED IN PLACE: the button opens the seat's own ceilings — its day is
     // the window refusing — rather than sending the reader to find it.
@@ -516,8 +669,17 @@ describe("the decisions", () => {
   // on them.
   test("a stopped seat the reader cannot act on is a condition, not their decision", async () => {
     mount({
-      viewer: { ...JANE, operator: false, acts: ["comment_on_work_item"] },
-      agents: [{ role: "DevRel", handle: "devrel", activity: "stopped", stopped_reason: "budget" }],
+      viewer: { ...JANE, grants: ["tracker"], acts: ["comment_on_work_item"] },
+      agents: [
+        {
+          id: "devrel",
+          agent_id: "devrel",
+          role: "DevRel",
+          handle: "devrel",
+          activity: "stopped",
+          stopped_reason: "budget",
+        },
+      ],
     });
     await settle();
     expect(screen.queryByText(/DevRel stopped/)).toBeNull();
@@ -542,9 +704,8 @@ describe("the decisions", () => {
     expect(link?.textContent).toMatch(/1 condition needs a look/);
   });
 
-  // AN ASK WITH NO OPTIONS IS ANSWERED IN WORDS, ON ITS ROW. The row linked
-  // to the Inbox by the ask's comment id, which is not the id the Inbox opens
-  // a row by — and the pane it would have opened has nowhere to write.
+  // AN ASK WITH NO OPTIONS IS ANSWERED IN WORDS, IN PLACE: Reply opens the
+  // field under the question, and Submit sends it as the answer to that ask.
   test("an ask with no options is replied to in place, as an answer to that ask", async () => {
     mount({
       answers: {
@@ -559,15 +720,12 @@ describe("the decisions", () => {
     await settle();
     const card = screen.getByText("Needs your decision").closest(".crewlet-card") as HTMLElement;
     expect(within(card).queryByRole("link", { name: "Reply" })).toBeNull();
-    await act(async () => {
-      fireEvent.click(within(card).getByRole("button", { name: "Reply" }));
-    });
-    const dialog = screen.getByRole("dialog");
-    fireEvent.change(within(dialog).getByLabelText(/Your reply/), {
+    fireEvent.click(within(card).getByRole("button", { name: "Reply" }));
+    fireEvent.change(within(card).getByRole("textbox", { name: "Reply to CTO" }), {
       target: { value: "Use the one we already pay for." },
     });
     await act(async () => {
-      fireEvent.click(within(dialog).getByRole("button", { name: "Send reply" }));
+      fireEvent.click(within(card).getByRole("button", { name: "Submit" }));
     });
     await settle();
     expect(posted).toEqual([
@@ -580,7 +738,8 @@ describe("the decisions", () => {
 
   // "REVIEW" LANDS ON WHAT IT COUNTED. It pointed at the Inbox filtered on a
   // notice reason no notice carries: Home said a decision was waiting, and
-  // the page it sent the reader to drew "decisions 0" and no ask at all.
+  // the page it sent the reader to drew "decisions 0" and no ask at all. The
+  // Inbox has no filter now, and its list opens with Needs you.
   test("Review and Open inbox land on an Inbox that draws the waiting decision", async () => {
     const waiting = { handle: "jane", items: [ask()], total: 1, capped: false };
     mount({ answers: { decisions: waiting } });
@@ -593,18 +752,17 @@ describe("the decisions", () => {
     location.hash = review;
     mount({ answers: { decisions: waiting }, page: <Inbox /> });
     await settle();
-    // THE DECISIONS CHIP, PRESSED, over the one decision — opened in the
-    // pane with its options to answer — and no notice group beside it.
-    expect(screen.getByRole("radio", { name: /Decisions/ }).getAttribute("aria-checked")).toBe(
-      "true",
-    );
+    // NEEDS YOU, over the one decision, opened in the pane with its options
+    // to answer, and no updates group beside it.
+    expect(review).toBe("#/inbox");
+    expect(screen.getByRole("region", { name: "Needs you" })).toBeTruthy();
     expect(
       screen.getByRole("heading", {
         name: "Hold the 2.4 release until the scheduler migration lands?",
       }),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: /Hold release/ })).toBeTruthy();
-    expect(screen.queryByText("Today")).toBeNull();
+    expect(screen.queryByRole("region", { name: "Updates" })).toBeNull();
   });
 });
 
@@ -613,6 +771,8 @@ describe("live now", () => {
     mount({
       agents: [
         {
+          id: "swe",
+          agent_id: "swe",
           role: "SWE",
           handle: "swe",
           activity: "working",
@@ -766,13 +926,13 @@ describe("the feed", () => {
 });
 
 describe("the head", () => {
-  test("the greeting is in the zone the reader chose", () => {
+  test("the greeting is in the zone timestamps are drawn in", () => {
     const at = Date.parse("2026-09-22T20:00:00Z");
-    setZone("Asia/Tokyo");
+    pinZoneForTest("Asia/Tokyo");
     reloadForTest();
     // 05:00 in Tokyo; 22:00 in the browser's own Berlin.
     expect(greeting(at, "Ada Lovelace")).toBe("Good morning, Ada");
-    setZone("");
+    pinZoneForTest("");
     reloadForTest();
     expect(greeting(at, "Ada Lovelace")).toBe("Good evening, Ada");
     expect(greeting(at, "")).toBe("Good evening");
@@ -780,7 +940,16 @@ describe("the head", () => {
 
   test("a condition that needs a look links to where it is listed", async () => {
     mount({
-      agents: [{ role: "DevRel", handle: "devrel", activity: "stopped", stopped_reason: "paused" }],
+      agents: [
+        {
+          id: "devrel",
+          agent_id: "devrel",
+          role: "DevRel",
+          handle: "devrel",
+          activity: "stopped",
+          stopped_reason: "paused",
+        },
+      ],
     });
     await settle();
     const link = document.querySelector<HTMLAnchorElement>(".home-status a");

@@ -391,57 +391,6 @@ func TestAPassCancelledPartWayThroughRaisesRatherThanReportingBrokenSeats(t *tes
 	}
 }
 
-// A NODE WITH NO KEYRING CREATES NOTHING, AND SAYS SO AS THE OPERATOR'S WORK.
-//
-// The reconcile loop hands a node that cannot seal a credential
-// [provision.ReadOnly], which is NOT NIL — and on the nil check this pass used
-// to make, such a node created a service account at Atlassian, granted it
-// product access, and only then discovered at the first Record that it had
-// nowhere to put the token. Every seat was reported as a failure over a
-// perfectly converged company, once per tick for ever, and each pass left
-// behind one more identity nobody had asked for and nothing had a credential
-// for.
-//
-// Reported rather than raised, because no retry can fix it: it resolves when
-// somebody sets secrets.keys and never before.
-func TestANodeWithNoKeyringCreatesNoAccountAndNamesTheSetting(t *testing.T) {
-	t.Parallel()
-	o := &stubOrg{empty: true}
-
-	res, err := reconcile(context.Background(), t, o, provision.ReadOnly())
-	if err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	if o.created != 0 || o.granted != 0 || o.minted != 0 {
-		t.Errorf("a node that cannot seal anything created %d account(s), granted "+
-			"%d and minted %d", o.created, o.granted, o.minted)
-	}
-	var named bool
-	for _, f := range res.Findings() {
-		if f.Kind == integration.FindingCredentialMissing && f.Subject == "secrets.keys" {
-			named = true
-		}
-		if f.Kind == integration.FindingIdentityFailed {
-			t.Errorf("reported the seat as failed over a company that is fine: %+v", f)
-		}
-	}
-	if !named {
-		t.Errorf("nothing in %+v tells the operator to set secrets.keys", res.Findings())
-	}
-
-	// AND THE CONTROL: the same organization, with somewhere to seal. Without
-	// this the assertions above would hold just as well over a pass that had
-	// stopped creating accounts entirely.
-	sealing := &stubOrg{empty: true}
-	if _, err := reconcile(context.Background(), t, sealing, &sink{}); err != nil {
-		t.Fatalf("Reconcile with a sink that can seal: %v", err)
-	}
-	if sealing.created != 1 || sealing.granted != 1 || sealing.minted != 1 {
-		t.Errorf("a node that CAN seal created %d account(s), granted %d and minted "+
-			"%d, want one of each", sealing.created, sealing.granted, sealing.minted)
-	}
-}
-
 // ---- the run's completion --------------------------------------------- //
 
 // A PASS THAT SEALS A CREDENTIAL COMPLETES THE RUN THAT SEALED IT.
@@ -575,8 +524,8 @@ func TestAFailedCompletionIsJoinedWithThePassesOwnErrorRatherThanReplacingIt(t *
 
 // AND A CHECK WITH NOWHERE TO SEAL HAS NOTHING TO COMPLETE.
 //
-// A nil sink is the command line's check — distinct from [provision.ReadOnly],
-// which is a sink that refuses — and completing one would dereference nothing.
+// A nil sink is a check — the command line's, or the dashboard's read-only
+// pass — and completing one would dereference nothing.
 // Asserted because the guard that says so is one line and its absence is a
 // panic in a pass an operator runs by hand.
 func TestACheckWithNoSinkHasNothingToComplete(t *testing.T) {

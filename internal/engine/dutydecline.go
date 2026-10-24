@@ -15,7 +15,7 @@ import (
 )
 
 // A FLEET DUTY DECLINED BY A NODE WHOSE COPY IT DECIDES FROM IS OUT OF SERVICE
-// — ADR-0031.
+// — ADR-0045.
 //
 // A fleet-singleton duty that decides from a domain's rows decides for the
 // whole fleet. The embedding duty publishes the vectors every node applies,

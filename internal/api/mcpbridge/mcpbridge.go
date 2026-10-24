@@ -33,6 +33,10 @@
 //     when it ends, and a token for a closed run resolves to nothing. Without
 //     that, a box that outlived its run keeps a working key to a live seat's
 //     tools.
+//   - AN IDENTITY. The per-run token is this route's credential, so once it
+//     has verified, every call is the run's SEAT acting — attached here, per
+//     call, over whatever the request's own context says. See
+//     [Session.actingAs] for why the guard's answer cannot be the one.
 package mcpbridge
 
 import (
@@ -40,6 +44,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -49,8 +54,10 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -94,6 +101,10 @@ type Session struct {
 	// Surface is the seat's live tool surface for this run — the SAME
 	// object a native loop would execute against. See the package doc for
 	// why nothing here reimplements what it does.
+	//
+	// It must be bound to the run's TURN ([tools.Surface.ForTurn]): the
+	// turn's seat is who every bridged call acts as, and [Bridge.Open]
+	// refuses a surface that names none.
 	Surface *tools.Surface
 
 	// Ledger receives every call as it completes, so a resume after a
@@ -159,9 +170,11 @@ type Bridge struct {
 
 // Options configure [New].
 type Options struct {
-	// Key signs the per-run tokens and must be the same in every process
-	// that mints or verifies one. See [runtoken.Options].
-	Key []byte
+	// Material is the fleet's keyring. The per-run tokens are signed under
+	// its active key and name it, so a rotation leaves a live run's token
+	// valid. One that cannot sign for the fleet is refused. See
+	// [runtoken.Options].
+	Material runtoken.Material
 
 	// Now is the clock, for the token expiry. Nil takes wall-clock time.
 	Now func() time.Time
@@ -188,18 +201,25 @@ type Options struct {
 // LEAKED token could match a still-running session.
 const DefaultTTL = 4 * time.Hour
 
-// New builds a bridge.
-func New(opts Options) *Bridge {
+// New builds a bridge, or refuses a keyring that cannot sign for the fleet
+// ([runtoken.ErrNoKeyring]).
+func New(opts Options) (*Bridge, error) {
 	ttl := opts.TTL
 	if ttl <= 0 {
 		ttl = DefaultTTL
 	}
+	signer, err := runtoken.New(runtoken.Options{
+		Domain: KeyDomain, Material: opts.Material, Now: opts.Now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("mcpbridge: %w", err)
+	}
 	return &Bridge{
-		signer:   runtoken.New(runtoken.Options{Key: opts.Key, Now: opts.Now}),
+		signer:   signer,
 		base:     strings.TrimSuffix(opts.BaseURL, "/"),
 		ttl:      ttl,
 		sessions: map[string]*Session{},
-	}
+	}, nil
 }
 
 // Open registers a run's session and returns the URL its box should dial.
@@ -225,9 +245,16 @@ func (b *Bridge) Open(s *Session) string {
 	// a fleet node's crash. Refused, the caller gets an empty endpoint and
 	// declines agent mode for that seat, which is the same shape as a
 	// deployment with no bridge URL.
-	if s.RunID == "" || s.Surface == nil {
+	//
+	// A SURFACE WITH NO SEAT IS THE SAME MISTAKE. Every call is decided as
+	// the turn's seat (see [Session.actingAs]), so a session whose surface
+	// was never bound to a turn would answer the box's handshake and then
+	// refuse every gated builtin as undecidable — a run that burns its
+	// budget finding out that nothing it holds can be called.
+	if s.RunID == "" || s.Surface == nil || s.Surface.Turn().Handle() == "" {
 		log.Error("mcp_bridge_session_incomplete",
-			"run_id", s.RunID, "seat", s.Handle, "has_surface", s.Surface != nil)
+			"run_id", s.RunID, "seat", s.Handle, "has_surface", s.Surface != nil,
+			"has_seat", s.Surface != nil && s.Surface.Turn().Handle() != "")
 		return ""
 	}
 	if b.base == "" {
@@ -636,7 +663,8 @@ func (s *Session) handler(name string) mcp.ToolHandler {
 			return failure(err.Error()), nil
 		}
 
-		res, err := s.Surface.Execute(ctx, llm.ToolCall{Name: name, Arguments: args})
+		res, err := s.Surface.Execute(s.actingAs(ctx),
+			llm.ToolCall{Name: name, Arguments: args})
 		if err != nil {
 			// The surface returns an error only for something that
 			// genuinely could not run — a torn-down turn. That IS a
@@ -661,7 +689,7 @@ func (s *Session) handler(name string) mcp.ToolHandler {
 				"it suspends the caller's own loop."), nil
 		}
 
-		s.appendCall(ctx, name, args, res.Output, res.Failed, res.Refusal)
+		s.appendCall(ctx, name, args, res.Output, res.Failed, res.Cause)
 		// THE CALL MAY HAVE BEEN AN ACTIVATION. See [Session.sync].
 		s.sync()
 		return &mcp.CallToolResult{
@@ -670,6 +698,52 @@ func (s *Session) handler(name string) mcp.ToolHandler {
 		}, nil
 	}
 }
+
+// actingAs is the context one bridged call runs under: the run's own SEAT,
+// replacing whatever identity the request arrived with.
+//
+// # The token is the credential, so the seat is the caller
+//
+// This handler runs only for a request whose per-run token verified and named
+// this live session — that is the whole of this route's authentication, and
+// what it establishes is that the caller is the box the run was started in,
+// acting for the seat the run belongs to. So "who is calling" has exactly one
+// answer here, and it is the turn's seat, as [turnctx.Principal] states it for
+// a native loop.
+//
+// # And the request's own context cannot say so
+//
+// The route is exempt from the credential guard, because the box holds no API
+// token — but the guard still RESOLVES every request, exempt or not, so a box
+// presenting nothing arrives here carrying [iam.Anonymous] (and, on a
+// development build started with -dev-principal, the development principal).
+// The MCP SDK then keeps the context of the request that OPENED the session
+// for the session's whole life. [turnctx.WithPrincipal] deliberately lets an
+// answer already on the context win — correct for a surface reached through
+// somebody's own credential — so the anonymous answer reached every gated
+// builtin, and each one refused the seat's own call as needing a credential.
+//
+// REPLACED HERE, per call, and nowhere else. Teaching WithPrincipal to prefer
+// the turn would let the turn a person's request happens to carry overwrite
+// that person; this is the one surface where the credential that admitted the
+// call IS the run, so it is the one place that may set the answer outright —
+// and setting it outright is also what keeps a development principal from
+// ever riding a seat's bridged call.
+func (s *Session) actingAs(ctx context.Context) context.Context {
+	seat := turnctx.Principal(s.Surface.Turn())
+	if seat.Seat == "" {
+		// UNREACHABLE past [Bridge.Open], which refuses a surface with no
+		// seat. Answered as unknown rather than left alone, so a surface
+		// that somehow lost its turn is never decided as whoever the
+		// request's own context happened to name.
+		return iam.WithUnresolved(ctx, errNoSeat)
+	}
+	return iam.WithPrincipal(ctx, seat)
+}
+
+// errNoSeat is why a bridged call with no seat to act as cannot be decided.
+var errNoSeat = errors.New("mcpbridge: this run's tool surface is bound to no " +
+	"seat, so a bridged call has nobody to act as")
 
 // appendCall records one finished call in the durable ledger.
 //
@@ -680,11 +754,15 @@ func (s *Session) handler(name string) mcp.ToolHandler {
 // reviewer one line of evidence after a restart; a duplicated side effect
 // costs somebody two identical messages.
 func (s *Session) appendCall(ctx context.Context, name string, args map[string]any,
-	out string, failed bool, refusal tools.Refusal) {
+	out string, failed bool, cause error) {
 	if s.Ledger == nil {
 		return
 	}
-	call := tools.Call{Name: name, Args: args, Output: out, Failed: failed, Refusal: refusal}
+	// THE CAUSE, which the call's class and whether its write may have
+	// landed are both read out of ([tools.Call.Refusal],
+	// [tools.Call.Unknown]): a class stored beside it would be a second
+	// answer to one question.
+	call := tools.Call{Name: name, Args: args, Output: out, Failed: failed, Cause: cause}
 	if err := s.Ledger.Append(ctx, s.RunID, call); err != nil {
 		log.WarnContext(ctx, "mcp_bridge_ledger_append_failed",
 			"run_id", s.RunID, "seat", s.Handle, "tool", name, "error", err)

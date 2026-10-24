@@ -14,6 +14,8 @@ import { describe, expect, test } from "vitest";
 // unnoticed: it goes green on whatever is written, not on what is correct.
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
+  fmtSetting,
+  asSentence,
   configValueKind,
   elapsedMs,
   eventHistoryLabel,
@@ -37,6 +39,8 @@ import {
   conversationLabel,
   tsKey,
   fmtElapsed,
+  fmtUptime,
+  openSentence,
 } from "./format.ts";
 
 describe("timestamps", () => {
@@ -127,15 +131,26 @@ describe("relative time", () => {
     // — a forward clock and a backward one changing shape at different points
     // would be two clocks on one screen.
     expect(inTime("2026-01-20T12:00:00Z", now)).toBe("in 19d");
-    expect(inTime("2026-01-31T11:00:00Z", now)).toBe("in 29d");
+    expect(inTime("2026-01-30T12:00:00Z", now)).toBe("in 29d");
     expect(inTime("2026-01-31T12:00:00Z", now)).toBe(fmtDate("2026-01-31T12:00:00Z"));
   });
 
+  // A FORWARD READING ROUNDS TO THE NEAREST UNIT. Floored, it dropped what was
+  // left of its last unit: an invitation good for seven days read "in 6d" the
+  // second it was issued. Mutation: floor again and the first two read a day
+  // and an hour short.
+  test("a forward reading is the nearest unit, not the one below it", () => {
+    expect(inTime("2026-01-08T11:59:59Z", now)).toBe("in 7d");
+    expect(inTime("2026-01-01T13:59:00Z", now)).toBe("in 2h");
+    expect(inTime("2026-01-04T00:00:00Z", now)).toBe("in 3d");
+    expect(inTime("2026-01-01T12:04:20Z", now)).toBe("in 4m");
+  });
+
   // A SERIES IS READ ROW AGAINST ROW. Rounded to one unit, a schedule every
-  // twenty minutes listed the fires at 13:20 and 13:40 both as "in 1h" — the
-  // one list whose point is the spacing between its rows.
+  // ten minutes lists the fires at 13:10 and 13:20 both as "in 1h" — the one
+  // list whose point is the spacing between its rows.
   test("an exact forward reading tells apart two instants twenty minutes apart", () => {
-    expect(inTime("2026-01-01T13:20:00Z", now)).toBe(inTime("2026-01-01T13:40:00Z", now));
+    expect(inTime("2026-01-01T13:10:00Z", now)).toBe(inTime("2026-01-01T13:20:00Z", now));
     expect(inTimeExact("2026-01-01T13:20:00Z", now)).toBe("in 1h 20m");
     expect(inTimeExact("2026-01-01T13:40:00Z", now)).toBe("in 1h 40m");
     // A whole hour says no minutes, and under an hour it is `inTime`'s own.
@@ -265,6 +280,27 @@ describe("counts and their nouns", () => {
   });
 });
 
+describe("an uptime is said coarsely", () => {
+  test("seconds, then minutes, then hours and minutes, then days", () => {
+    expect(fmtUptime(12_000)).toBe("12s");
+    expect(fmtUptime(59_999)).toBe("59s");
+    // A panel open past the first minute stops ticking through seconds.
+    expect(fmtUptime(61_000)).toBe("1m");
+    expect(fmtUptime(3_599_000)).toBe("59m");
+    expect(fmtUptime(3_600_000)).toBe("1h");
+    expect(fmtUptime(3_780_000)).toBe("1h 3m");
+    expect(fmtUptime(86_399_000)).toBe("23h 59m");
+    expect(fmtUptime(86_400_000)).toBe("1 day");
+    expect(fmtUptime(2 * 86_400_000 + 3_600_000)).toBe("2 days");
+  });
+
+  test("a start in the future is a clock skew, and nothing is not a zero", () => {
+    expect(fmtUptime(-800)).toBe("0s");
+    expect(fmtUptime(Number.NaN)).toBe(fmtUptime(null));
+    expect(fmtUptime(null)).not.toBe("0s");
+  });
+});
+
 describe("a live counter reads as a clock, not as a glitch", () => {
   test("whole seconds — never milliseconds or tenths", () => {
     // The live row churned through "0 ms", "1.4 s", "1.9 s" once a second.
@@ -387,4 +423,50 @@ describe("how far back the log goes", () => {
       expect(eventHistoryLabel(absent)).toBe("how far back the log goes is not known yet");
     }
   });
+});
+
+describe("the engine's words as a sentence", () => {
+  test("a clause is opened and closed", () => {
+    expect(asSentence("no verified backup has been recorded")).toBe(
+      "No verified backup has been recorded.",
+    );
+    expect(asSentence("  already closed!  ")).toBe("Already closed!");
+    expect(asSentence("   ")).toBe("");
+    expect(openSentence("the code does not match")).toBe("The code does not match");
+  });
+
+  // A LITERAL FIRST WORD IS A VALUE, and a capital letter makes it another
+  // one: the sign-in screen read "Http://localhost:5199 isn't an address".
+  test("a first word that is a literal is written as the engine wrote it", () => {
+    expect(asSentence("http://localhost:5199 isn't an address for this deployment.")).toBe(
+      "http://localhost:5199 isn't an address for this deployment.",
+    );
+    for (const literal of [
+      "example.com answered 502",
+      "token:review holds no seat",
+      "api.external_url is unset",
+      "backup_age: no verified backup",
+      "@maya is not a seat",
+      "/var/lib/crewlet is not writable",
+      "`crewlet iam` refused the login",
+    ]) {
+      expect(openSentence(literal)).toBe(literal);
+    }
+  });
+
+  test("prose that only looks punctuated is still opened", () => {
+    expect(openSentence("isn't an address")).toBe("Isn't an address");
+    expect(openSentence("done, then saved")).toBe("Done, then saved");
+  });
+});
+
+// A SETTING READS AS IT WAS WRITTEN: whole days, hours or minutes where the
+// seconds divide, and the measured reading only where they do not.
+test("a configured duration reads in the largest unit that divides it", () => {
+  expect(fmtSetting(604_800)).toBe("7 days");
+  expect(fmtSetting(43_200)).toBe("12 hours");
+  expect(fmtSetting(3_600)).toBe("1 hour");
+  expect(fmtSetting(300)).toBe("5 minutes");
+  expect(fmtSetting(90)).toBe("1m 30s");
+  expect(fmtSetting(0)).toBe("0ms");
 });

@@ -8,18 +8,21 @@
  * sees, and it is the one least likely to be exercised by hand.
  */
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { App } from "./App.tsx";
 import { Router } from "./router.tsx";
 import { screenScroller } from "~/lib/scroller.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
-import { DESTINATIONS, WORKSPACES } from "./nav.ts";
+import { LiveSocket, QueryError, Store, sessionRestored } from "~/protocol/index.ts";
+import { DESTINATIONS, WORKSPACES, closedBy } from "./nav.ts";
+import { accessNames } from "~/lib/access.ts";
 import { PAGE_ACTIONS_SLOT } from "./frame/PageActions.tsx";
 import { buildHash } from "./router.tsx";
+import { noteReader } from "~/lib/reader.ts";
 import { resetForTest as resetStarsForTest } from "~/lib/starred.ts";
 import { CHUNKS, loadChunk } from "./lazyScreen.ts";
+import { TOUCH_MEDIA } from "./layout.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
@@ -33,9 +36,29 @@ class InertWebSocket {
   close(): void {}
 }
 
-function mount() {
+/** An admin's `viewer` answer: every screen is theirs to read. */
+const ADMIN_VIEWER = {
+  login: "founder",
+  owner: "jane",
+  handle: "jane",
+  grants: ["admin", "tracker", "knowledge"],
+};
+
+/**
+ * The app over a socket that never connects — and, where a case reads a
+ * screen only an admin reads, one whose `viewer` question answers `viewer`.
+ */
+function mount(viewer: unknown = null) {
   const store = new Store();
   const socket = new LiveSocket(store);
+  if (viewer !== null) {
+    const real = socket.query.bind(socket);
+    (socket as unknown as { query: (what: string, ...rest: unknown[]) => Promise<unknown> }).query =
+      (what, ...rest) =>
+        what === "viewer"
+          ? Promise.resolve(viewer)
+          : (real as (w: string, ...r: unknown[]) => Promise<unknown>)(what, ...rest);
+  }
   const view = render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
@@ -49,6 +72,9 @@ function mount() {
 /** The frame, over a socket that answers the viewer and refuses the rest. */
 function mountAs(viewer: Promise<unknown>) {
   const store = new Store();
+  // THE SOCKET'S FIRST FRAME CARRIES THE ORG, as a served frame's always
+  // does: what the company runs is known before a read is asked.
+  store.applyOrg(withDerived({ name: "Acme", roles: [] }));
   store.applyHealth(healthFrame({ nodes: 1, applied_epoch: 2 }));
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
@@ -84,50 +110,161 @@ afterEach(() => {
   // without this every render stacks up in one document and a getByText that
   // should find one node finds five.
   cleanup();
+  sessionStorage.clear();
+  // A SESSION NEED IS A STATE THE TRANSPORTS KEEP FOR THE TAB
+  // (`protocol/signin.ts`), so a case whose engine answered `401` would send
+  // every later case to the sign-in.
+  sessionRestored();
+  vi.unstubAllGlobals();
   location.hash = "#/";
 });
 
 describe("the shell", () => {
   test("mounts against an engine that has answered nothing", () => {
     mount();
-    // The chrome is present and honest: not connected, and saying so — in the
-    // sidebar's health card and in the landing screen's own sentence.
-    expect(screen.getAllByText("Reconnecting").length).toBeGreaterThan(0);
+    // The chrome is present and honest: not connected yet, and saying so, in
+    // the sidebar's engine row and in the landing screen's own sentence. A tab
+    // still dialling has lost nothing, so the row says it is connecting.
+    expect(screen.getAllByText("Connecting").length).toBeGreaterThan(0);
     // AND THE LANDING SCREEN IS HOME, whose one sentence an engine condition
     // takes over rather than sitting beside a claim that all is well.
-    expect(screen.getByText(/Not connected to the engine/)).toBeDefined();
+    expect(screen.getByText(/Not connected\. Showing the last state received/)).toBeDefined();
   });
 
   test("a disconnected engine is itself the first thing needing a person", () => {
     // It is not a footnote in a popover: the page cannot tell the truth about
     // anything else while the socket is down, so it leads.
     mount();
-    expect(
-      screen.getByText("Not connected to the engine. What is shown is the last state it sent."),
-    ).toBeDefined();
+    expect(screen.getByText("Not connected. Showing the last state received.")).toBeDefined();
   });
 
-  test("every workspace is in the sidebar, Settings included", () => {
-    // A SECTION THAT VANISHES without a credential is indistinguishable from
-    // one that does not exist, so Settings is always a row and carries a lock.
-    mount();
+  test("every workspace is in the sidebar, Settings included", async () => {
+    // A SECTION THAT VANISHES without its grant is indistinguishable from one
+    // that does not exist, so Settings is always a row.
+    mountAs(Promise.resolve({ login: "jane.doe", owner: "jane.doe", grants: [] }));
     const nav = screen.getByRole("navigation", { name: "Navigation" });
     for (const label of [
       "Home",
       "Inbox",
       "My work",
+      "Overview",
+      "Policies",
+      "Org chart",
+      "Schedules",
+      "Integrations",
+      "Budgets",
       "Work",
-      "Agents",
-      "Live",
       "Knowledge",
-      "Spend",
+      "Artifacts",
+      "Live",
     ]) {
       expect(nav.textContent, label).toContain(label);
     }
     const foot = screen.getByRole("navigation", { name: "Settings" });
     expect(foot.textContent).toContain("Settings");
-    // THE LOCK IS SAID, not only drawn: this reader holds no credential.
-    expect(foot.textContent).toContain("most sections need an operator credential");
+  });
+
+  // A LOCK GOES WHERE THE CLOSED THING IS. This reader holds none of the
+  // grants most Settings sections need, and the row said so with a key — so a
+  // person looking for their own Account, the first row of its You group,
+  // read Settings as closed to them. Settings is open (its You group needs
+  // nothing), and its column locks each section that is not.
+  test("Settings is not locked as a whole; its column locks what is closed", async () => {
+    location.hash = "#/settings";
+    mountAs(Promise.resolve({ login: "jane.doe", owner: "jane.doe", grants: [] }));
+    const column = await screen.findByRole("navigation", { name: "Settings sections" });
+    await waitFor(() =>
+      expect(within(column).getByRole("link", { name: /^Nodes/ }).textContent).toMatch(
+        /needs Admin/,
+      ),
+    );
+    const foot = screen.getByRole("navigation", { name: "Settings" });
+    expect(foot.querySelector(".side-locked")).toBeNull();
+    expect(foot.textContent).not.toMatch(/need a grant/);
+  });
+});
+
+// ONE STACKING CONTEXT FOR THE WHOLE LAYER BAND. Every overlay is portalled to
+// `document.body`, where its z-index is its depth on the kit's one layer stack.
+// The narrow layout's drawer is on that stack too, but it is the sidebar itself
+// and is painted in place, in the root context — so an application-wide
+// `LayerHost` (a stacking context at the bottom of the band) drew every overlay
+// opened from the drawer UNDER it: on a phone the Account popover's sign-outs
+// and the palette's results could not be tapped. What paints above what is the
+// browser's to measure; what this holds is the one structural fact it needs.
+describe("the overlays the frame opens", () => {
+  const person = {
+    login: "jane.doe",
+    owner: "jane",
+    handle: "jane",
+    name: "Jane",
+    grants: [],
+  };
+
+  test("the reader's menu and the preferences are portalled to the body, under no layer host", async () => {
+    mountAs(Promise.resolve(person));
+    fireEvent.click(await screen.findByRole("button", { name: /your menu/ }));
+    const menu = await screen.findByRole("menu", { name: "Your account" });
+    expect(menu.parentElement).toBe(document.body);
+    expect(menu.closest(".crewlet-layer-host")).toBeNull();
+    fireEvent.keyDown(menu, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Preferences" }));
+    const popover = await screen.findByRole("dialog", { name: "Preferences" });
+    expect(popover.parentElement).toBe(document.body);
+    expect(popover.closest(".crewlet-layer-host")).toBeNull();
+    expect(document.querySelectorAll(".crewlet-layer-host")).toHaveLength(0);
+  });
+
+  test("the palette opened from the sidebar's search is portalled to the body too", async () => {
+    mountAs(Promise.resolve(person));
+    fireEvent.click(await screen.findByRole("button", { name: /Ask or jump to/ }));
+    const palette = await screen.findByRole("dialog", { name: "Search" });
+    expect(palette.closest(".crewlet-layer-host")).toBeNull();
+    expect(palette.closest(".crewlet-modal-overlay")?.parentElement).toBe(document.body);
+  });
+});
+
+// A KEYCAP IS A HINT FOR A KEYBOARD. On a phone the drawer's search drew
+// "Ctrl + K", a key nobody there has, and the keycap cut the trigger's own
+// label to "Ask or jump t…". Where the reader's primary input is touch
+// (`TOUCH_MEDIA`) the frame draws none; everywhere else it does. Mutation:
+// draw the keycap whatever the input and the touch case goes red.
+describe("the drawer's search", () => {
+  const touch = (on: boolean) => {
+    const had = Object.getOwnPropertyDescriptor(globalThis, "matchMedia");
+    Object.defineProperty(globalThis, "matchMedia", {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        matches: on && query === TOUCH_MEDIA,
+        media: query,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      }),
+    });
+    return () => {
+      if (had) Object.defineProperty(globalThis, "matchMedia", had);
+    };
+  };
+
+  test.each([
+    [true, 0],
+    [false, 1],
+  ])("on a touch device (%s) draws %d keycap", (on, caps) => {
+    const restore = touch(on);
+    try {
+      mount();
+      const search = document.querySelector(".side-search")!;
+      expect(search.textContent).toContain("Ask or jump to…");
+      expect(search.querySelectorAll(".crewlet-kbd-combo")).toHaveLength(caps);
+    } finally {
+      restore();
+    }
   });
 });
 
@@ -140,26 +277,31 @@ describe("routing", () => {
   // Live row carries the count everywhere else. Drawn in every bar it sat
   // between a task's trail and its actions, and pushed a profile's controls
   // past a phone's edge.
-  test("the working chip is in Home's page bar and in no other", () => {
+  test("the working chip is in Home's page bar and in no other", async () => {
     for (const [hash, drawn] of [
       ["#/", true],
       ["#/work", false],
-      ["#/agents", false],
+      ["#/company/org", false],
       ["#/work/ENG", false],
-      ["#/agents/seats/agent-swe", false],
+      ["#/company/org/seats/agent-swe", false],
     ] as const) {
       location.hash = hash;
       const { store, view } = mount();
-      act(() => {
-        store.applyAgents([{ id: "a1", role: "Agent SWE", activity: "working" }] as never);
+      // AWAITED: a screen reads its chunk through `use`, and a synchronous
+      // act stops flushing at the first render that used a promise, settled
+      // or not, so the re-render this push causes would be left unflushed.
+      await act(async () => {
+        store.applySeats([
+          { agent_id: "a1", id: "a1", role: "Agent SWE", activity: "working" },
+        ] as never);
       });
       const chip = view.container.querySelector(".page-bar .working-now");
       expect(chip !== null, hash).toBe(drawn);
       view.unmount();
     }
-  }, 30_000);
+  });
 
-  test("every destination renders a screen rather than a blank", () => {
+  test("every destination renders a screen rather than a blank", async () => {
     const visited = DESTINATIONS.map((item) => buildHash(item.path));
     // The two-level routes are the reason the list is derived: a hand-written
     // one would not have them.
@@ -168,6 +310,9 @@ describe("routing", () => {
     for (const hash of visited) {
       location.hash = hash;
       const { view } = mount();
+      // AWAITED, for the reason the working chip's case gives: what a screen
+      // renders after its first pass is flushed only by an awaited act.
+      await act(async () => {});
       expect(
         view.container.querySelector(".crewlet-app-shell__content")?.children.length,
         hash,
@@ -179,11 +324,7 @@ describe("routing", () => {
       expect(view.container.textContent, hash).not.toMatch(/could not be (drawn|loaded)/);
       view.unmount();
     }
-    // A MOUNT OF THE WHOLE APPLICATION PER DESTINATION, some forty of them in
-    // one case: about 1.5 s alone and past vitest's 5 s default when the full
-    // suite shares the machine, which failed it on load rather than on a
-    // blank screen. The budget is the case's own, sized to its loop.
-  }, 30_000);
+  });
 
   // THE OTHER HALF OF `source.test.ts`'s link gate. That one proves every
   // link names a segment a workspace OWNS; this one proves the object routes
@@ -198,13 +339,13 @@ describe("routing", () => {
       ["live", "runs", "33333333-3333-4333-8333-333333333333"],
       ["live", "events", "44444444-4444-4444-8444-444444444444"],
       ["live", "a2a", "55555555-5555-4555-8555-555555555555"],
-      ["agents", "schedules", "role", "ceo", "standup"],
-      ["agents", "seats", "ada"],
-      ["agents", "teams", "platform"],
+      ["company", "schedules", "role", "ceo", "standup"],
+      ["company", "org", "seats", "ada"],
+      ["company", "org", "teams", "platform"],
       ["work", "ENG-42"],
       ["knowledge", "pages", "66666666-6666-4666-8666-666666666666"],
       ["settings", "nodes", "node-a"],
-      ["settings", "integrations", "slack"],
+      ["company", "integrations", "slack"],
       ["settings", "secrets", "SLACK_SIGNING_SECRET"],
       ["settings", "config", "revisions", "77777777-7777-4777-8777-777777777777"],
     ];
@@ -233,16 +374,16 @@ describe("routing", () => {
   // naming something else: the address, the trail and the screen each naming
   // a different page.
   test("a tail under Spend that names no screen says so", () => {
-    location.hash = "#/spend/budget";
+    location.hash = "#/settings/spend/budget";
     mount();
     expect(screen.getByText(/there is no such screen/)).toBeDefined();
     // …and the two addresses that DO exist are untouched.
     cleanup();
-    location.hash = "#/spend";
+    location.hash = "#/settings/spend";
     mount();
     expect(screen.queryByText(/there is no such screen/)).toBeNull();
     cleanup();
-    location.hash = "#/spend/budgets";
+    location.hash = "#/company/budgets";
     mount();
     expect(screen.queryByText(/there is no such screen/)).toBeNull();
   });
@@ -259,8 +400,8 @@ describe("routing", () => {
   /**
    * A TOOL NAME IS A THIRD PARTY'S STRING, and `servers` is a legal one.
    *
-   * `#/settings/tools/servers/{name}` filters the catalogue by origin and
-   * `#/settings/tools/{name}` is one tool's page — the address `objects.ts`
+   * `#/settings/mcp-tools/servers/{name}` filters the catalogue by origin and
+   * `#/settings/mcp-tools/{name}` is one tool's page, the address `objects.ts`
    * builds and where a tool row's `Open ↗` goes. Discriminating on the WORD
    * took the page away from a tool actually called `servers` and dropped the
    * reader on the unfiltered catalogue, which is the regression the switch's
@@ -268,7 +409,7 @@ describe("routing", () => {
    * the router encodes each segment whole, so a tool page is always exactly
    * one tail segment and the filter always two.
    */
-  test("a tool named `servers` keeps its page, and the origin filter keeps its", () => {
+  test("a tool named `servers` keeps its page, and the origin filter keeps its", async () => {
     const annotations = {
       read_only: "yes",
       destructive: "no",
@@ -280,26 +421,29 @@ describe("routing", () => {
       { name: "create_issue", description: "", source: "mcp:github", annotations, delivers: "" },
     ];
 
-    location.hash = "#/settings/tools/servers";
-    const one = mount();
+    location.hash = "#/settings/mcp-tools/servers";
+    const one = mount(ADMIN_VIEWER);
     one.store.applyTools(catalogue);
     one.view.rerender(
-      <ClientContext.Provider value={{ store: one.store, socket: new LiveSocket(one.store) }}>
+      <ClientContext.Provider value={{ store: one.store, socket: one.socket }}>
         <Router>
           <App />
         </Router>
       </ClientContext.Provider>,
     );
-    // The addressed tool is drawn above the catalogue in its own header.
-    expect(one.view.container.querySelector(".object-head")).not.toBeNull();
+    // The addressed tool is drawn above the catalogue in its own header —
+    // once the viewer has said this reader is an admin, whose screen it is.
+    await waitFor(() =>
+      expect(one.view.container.querySelector(".crewlet-object-header")).not.toBeNull(),
+    );
     one.view.unmount();
     cleanup();
 
-    location.hash = "#/settings/tools/servers/github";
-    const two = mount();
+    location.hash = "#/settings/mcp-tools/servers/github";
+    const two = mount(ADMIN_VIEWER);
     two.store.applyTools(catalogue);
     two.view.rerender(
-      <ClientContext.Provider value={{ store: two.store, socket: new LiveSocket(two.store) }}>
+      <ClientContext.Provider value={{ store: two.store, socket: two.socket }}>
         <Router>
           <App />
         </Router>
@@ -307,48 +451,83 @@ describe("routing", () => {
     );
     // Two segments is the FILTER, so no tool is addressed and the catalogue
     // stands alone.
+    await waitFor(() => expect(screen.queryByText("Checking your access to MCP Tools")).toBeNull());
     expect(two.view.container.querySelector(".prof-head")).toBeNull();
   });
 
   test("a seat that does not exist explains itself", () => {
-    location.hash = "#/agents/seats/ghost";
+    location.hash = "#/company/org/seats/ghost";
     mount();
     expect(screen.getByText(/No seat called/)).toBeDefined();
   });
 });
 
-// A GUARDED SECTION FOR A READER THE ENGINE SAYS HOLDS NO CREDENTIAL IS ITS
-// REFUSAL AND NOTHING ELSE. Each guarded screen used to mount, ask, be refused
-// and draw the refusal as data: Nodes read "0 nodes", four tiles of 0 and "No
-// nodes are reporting", under a banner calling the refusal the last reading
-// that succeeded. Derived from the table, so a section marked guarded later is
-// held to this without anybody remembering to add it here.
-describe("a guarded section, for a reader without an operator credential", () => {
+// A SECTION FOR A READER WHO HOLDS NONE OF ITS GRANTS IS ITS REFUSAL AND
+// NOTHING ELSE. Each guarded screen used to mount, ask, be refused and draw the
+// refusal as data: Nodes read "0 nodes", four tiles of 0 and "No nodes are
+// reporting", under a banner calling the refusal the last reading that
+// succeeded. Derived from the table, so a section given a grant later is held
+// to this without anybody remembering to add it here.
+describe("a section, for a reader holding none of its grants", () => {
   const settings = WORKSPACES.find((row) => row.key === "settings")!;
-  const guarded = settings.sections.filter((s) => s.guarded && !s.answersRefusal);
+  const guarded = settings.sections.filter((s) => s.grants);
+  // EVERY WORKSPACE'S, for the refusal itself: the screen is not mounted, so
+  // what it would have drawn is nobody's question.
+  const everywhere = WORKSPACES.flatMap((row) => row.sections).filter((s) => s.grants);
 
-  const anonymous = { operator_id: "", operator: false };
+  /** Signed in, and holding nothing. */
+  const reader = { login: "reader", owner: "reader", grants: [] };
 
-  test("the table still guards the sections it did", () => {
+  test("the table still names a grant for the sections it guarded", () => {
     expect(guarded.map((s) => s.key)).toEqual(
-      expect.arrayContaining(["integrations", "secrets", "nodes", "config", "backups", "audit"]),
+      expect.arrayContaining([
+        "people",
+        "service-accounts",
+        "tokens",
+        "mcp-tools",
+        "limits",
+        "storage",
+        "models",
+        "secrets",
+        "nodes",
+        "config",
+        "backups",
+        "audit",
+      ]),
+    );
+    // AND THE AUDIT TRAIL'S READS ARE ADMIN'S, wherever they sit.
+    expect(everywhere.map((s) => s.key)).toEqual(
+      expect.arrayContaining(["turns", "a2a", "events", "diaries"]),
     );
   });
 
-  test("every guarded section draws the one refusal, and not a figure", async () => {
+  test("every such section draws the one refusal naming its grant, and not a figure", async () => {
+    // `403`, NEVER `401`: this reader is signed in and holds too little, and a
+    // `401` says nobody is — which sends the tab to the sign-in instead.
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 })),
+      vi.fn(async () => new Response(JSON.stringify({ error: "unauthorized" }), { status: 403 })),
     );
-    for (const section of guarded) {
+    for (const section of everywhere) {
       location.hash = buildHash(section.path);
-      const { view } = mountAs(Promise.resolve(anonymous));
+      // HOLDING NO ACCESS AT ALL, which the socket serves the overview: what
+      // such a reader lacks is the section's own access, which is what its
+      // lock names (`sectionOpen`).
+      const { view } = mountAs(Promise.resolve({ ...reader, grants: [] }));
       const content = () => view.container.querySelector(".crewlet-app-shell__content")!;
+      // THE CLOSED THING IS NAMED: the section, or — for a section in a
+      // workspace the reader cannot open at all — the workspace.
+      const closed = closedBy(section.path, [])!;
+      expect(closed, section.key).not.toBeNull();
       expect(
-        await screen.findByText(`${section.label} needs an operator credential`),
+        await screen.findByText(`You need ${accessNames(closed.needs)} access`),
         section.key,
       ).toBeDefined();
-      expect(screen.getByRole("button", { name: "Set token" })).toBeDefined();
+      // THE COMMON WAY OUT IS HOME, and switching account the other, never a
+      // token; the reader is named, from the reading the refusal was decided on.
+      expect(screen.getByRole("link", { name: "Go to Home" })).toBeDefined();
+      expect(screen.getByRole("button", { name: "Switch account" })).toBeDefined();
+      expect(content().textContent, section.key).toMatch(/Signed in as reader/);
       // NOTHING THE SCREEN WOULD HAVE COUNTED: no tile, no chip in the header
       // slot, no empty state claiming the section holds nothing.
       expect(content().querySelector(".crewlet-statcard"), section.key).toBeNull();
@@ -391,9 +570,11 @@ describe("a guarded section, for a reader without an operator credential", () =>
   // to say. They say it without a figure: a refused read is not "0 nodes",
   // "0 credentials held" or "0 of 6 configured".
   test("a viewer read that failed mounts the screen, which counts nothing it was refused", async () => {
+    // `403`: a `401` says nobody is signed in, which sends the tab to the
+    // sign-in rather than leaving the screen to say what it was refused.
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 })),
+      vi.fn(async () => new Response(JSON.stringify({ error: "unauthorized" }), { status: 403 })),
     );
     for (const section of guarded) {
       location.hash = buildHash(section.path);
@@ -402,7 +583,7 @@ describe("a guarded section, for a reader without an operator credential", () =>
       for (let i = 0; i < 8; i++) await Promise.resolve();
       await new Promise((r) => setTimeout(r, 0));
       expect(
-        screen.queryByText(`${section.label} needs an operator credential`),
+        screen.queryByText(`You need ${accessNames(section.grants!)} access`),
         section.key,
       ).toBeNull();
       expect(
@@ -411,37 +592,87 @@ describe("a guarded section, for a reader without an operator credential", () =>
       ).toBeNull();
       // A COUNT IN THE HEADER IS A TAG ("0 nodes", "0 credentials held",
       // "0 of 6 configured"); a time-range control there is not a figure.
-      expect(
-        document.getElementById(PAGE_ACTIONS_SLOT)?.querySelector(".crewlet-tag"),
-        section.key,
-      ).toBeNull();
-      expect(content().querySelector(".crewlet-statcard"), section.key).toBeNull();
+      // Tools' figures are the registry the socket pushes every reader — no
+      // read was refused for them — so they are the figures kept.
+      if (section.key !== "mcp-tools") {
+        expect(
+          document.getElementById(PAGE_ACTIONS_SLOT)?.querySelector(".crewlet-tag"),
+          section.key,
+        ).toBeNull();
+        expect(content().querySelector(".crewlet-statcard"), section.key).toBeNull();
+      }
       view.unmount();
       cleanup();
     }
     vi.unstubAllGlobals();
   });
 
-  test("an operator is given the screen", async () => {
-    location.hash = "#/settings/nodes";
-    mountAs(Promise.resolve({ operator_id: "ops", operator: true }));
-    expect(await screen.findByText(/Seat ownership is a lease/)).toBeDefined();
-    expect(screen.queryByText("Nodes needs an operator credential")).toBeNull();
+  // SETTINGS LISTS ONLY WHAT LIVES IN IT, in its four groups, and for a reader
+  // holding no permission it is not nothing but locks: Spend's readings are
+  // every reader's. Each row's title is its hint, the words the palette shows.
+  test("the Settings column lists only what lives in Settings, Spend open to every reader", async () => {
+    location.hash = "#/settings/models";
+    mountAs(Promise.resolve({ ...reader, grants: [] }));
+    const column = await screen.findByRole("navigation", { name: "Settings sections" });
+    const rows = within(column).getAllByRole("link");
+    expect(rows[0]?.getAttribute("href")).toBe("#/settings/models");
+    for (const row of rows) expect(row.getAttribute("href")).toMatch(/^#\/settings\//);
+    for (const group of ["Runtime", "Spend", "Access", "Engine"]) {
+      expect(column.querySelector(`.crewlet-nav-group__label`)).not.toBeNull();
+      expect(within(column).getAllByText(group).length).toBeGreaterThan(0);
+    }
+    const row = (href: string) => rows.find((a) => a.getAttribute("href") === href);
+    await waitFor(() => expect(row("#/settings/people")?.textContent).toMatch(/needs Admin/));
+    expect(row("#/settings/spend")?.textContent).toBe("Token spend");
+    expect(row("#/settings/people")?.getAttribute("title")).toBe(
+      settings.sections.find((s) => s.key === "people")!.hint,
+    );
   });
 
-  // THE CHARTER IS PUBLIC, and so is the tool registry: neither is guarded.
-  test("General and Tools are open to anybody", async () => {
-    for (const path of [["settings"], ["settings", "tools"]]) {
-      location.hash = buildHash(path);
-      const { view } = mountAs(Promise.resolve(anonymous));
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(view.container.textContent, path.join("/")).not.toMatch(
-        /(General|Tools) needs an operator credential/,
-      );
-      view.unmount();
-      cleanup();
-    }
+  // EVERY SETTINGS SECTION BUT SPEND'S READINGS IS ADMIN'S, and Expensive
+  // tasks names the tracker's tasks: a reader holding nothing is told so on
+  // each row, and the readings carry no lock.
+  test("for a reader holding nothing, only the sections that need a grant are locked", async () => {
+    location.hash = "#/settings/models";
+    mountAs(Promise.resolve(reader));
+    const column = await screen.findByRole("navigation", { name: "Settings sections" });
+    const row = (href: string) =>
+      within(column)
+        .getAllByRole("link")
+        .find((a) => a.getAttribute("href") === href);
+    await waitFor(() => expect(row("#/settings/people")?.textContent).toMatch(/needs Admin/));
+    expect(row("#/settings/mcp-tools")?.textContent).toMatch(/needs Admin access/);
+    expect(row("#/settings/limits")?.textContent).toMatch(/needs Admin access/);
+    expect(row("#/settings/spend/tasks")?.textContent).toMatch(/needs Tracker access/);
+    expect(row("#/settings/spend")?.textContent).toBe("Token spend");
+  });
+
+  test("an operator is given the screen", async () => {
+    location.hash = "#/settings/nodes";
+    mountAs(
+      Promise.resolve({
+        login: "ops",
+        owner: "ops",
+        grants: ["admin", "tracker", "knowledge"],
+      }),
+    );
+    expect(await screen.findByText(/Log positions are under/)).toBeDefined();
+    expect(screen.queryByText("Nodes needs Admin")).toBeNull();
+  });
+
+  // THE CHARTER IS PUBLIC; the tool registry is Admin's, since what each
+  // seat may call is how the company is run.
+  test("the company's Overview is open to anybody, and MCP Tools is Admin's", async () => {
+    location.hash = buildHash(["company"]);
+    const overview = mountAs(Promise.resolve({ login: "", owner: "", grants: [] }));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(overview.view.container.textContent).not.toMatch(/Company needs /);
+    overview.view.unmount();
+    cleanup();
+    location.hash = buildHash(["settings", "mcp-tools"]);
+    mountAs(Promise.resolve({ login: "reader", owner: "reader", grants: ["tracker"] }));
+    expect(await screen.findByText("You need Admin access")).toBeDefined();
   });
 });
 
@@ -451,7 +682,7 @@ describe("live state reaches the screen", () => {
     // and then listens for `hashchange`, which jsdom dispatches
     // asynchronously — so assigning it after mounting and re-rendering
     // synchronously renders the screen the reader was on before.
-    location.hash = "#/agents/roster";
+    location.hash = "#/company/org/roster";
     const { store, view } = mount();
     store.applyOrg(
       withDerived({
@@ -459,7 +690,9 @@ describe("live state reaches the screen", () => {
         roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
       }),
     );
-    store.applyAgents([{ role: "CEO", activity: "working" }]);
+    store.applySeats([
+      { id: "ceo", agent_id: "a-ceo", handle: "ceo", role: "CEO", activity: "working" },
+    ]);
     view.rerender(
       <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
         <Router>
@@ -474,8 +707,11 @@ describe("live state reaches the screen", () => {
   // sidebar's Starred section — drawn only when there is one — reads it back.
   test("keeping a page puts it in the sidebar's Starred", async () => {
     localStorage.clear();
+    // A STAR IS KEPT FOR THE TAB'S READER (`lib/starred.ts`), whom the frame
+    // learns from the session read this suite does not answer.
+    noteReader("p-1");
     resetStarsForTest();
-    location.hash = "#/agents/seats/ceo";
+    location.hash = "#/company/org/seats/ceo";
     const { store, view } = mount();
     store.applyOrg(
       withDerived({
@@ -505,7 +741,7 @@ describe("live state reaches the screen", () => {
   // failure this guards is a screen rather than a route — the roster drawn
   // under a trail naming a person, or a person's page that never opens.
   test("a seat whose handle is a reserved word opens its own page", () => {
-    location.hash = "#/agents/seats/roster";
+    location.hash = "#/company/org/seats/roster";
     const { store, view } = mount();
     store.applyOrg(
       withDerived({
@@ -539,7 +775,7 @@ describe("live state reaches the screen", () => {
     // set belongs to the seat's kind, so `?tab=zzz` — a bookmark, a typed
     // URL, a link made before the kind changed — used to select no tab and
     // match no branch: the header and the strip, and then nothing.
-    location.hash = "#/agents/seats/ceo?tab=zzz";
+    location.hash = "#/company/org/seats/ceo?tab=zzz";
     const { store, view } = mount();
     store.applyOrg(
       withDerived({
@@ -547,7 +783,9 @@ describe("live state reaches the screen", () => {
         roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
       }),
     );
-    store.applyAgents([{ role: "CEO", activity: "working" }]);
+    store.applySeats([
+      { id: "ceo", agent_id: "a-ceo", handle: "ceo", role: "CEO", activity: "working" },
+    ]);
     view.rerender(
       <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
         <Router>
@@ -601,38 +839,44 @@ describe("a turn watched to its end", () => {
       phase,
       iteration: phase === "onboarding" ? 0 : 1,
       role: "CEO",
-      // THE SEAT'S OWN ID, which a streamed phase is matched to its seat on.
+      // THE SEAT'S OWN ID, which a streamed phase is matched to its seat on —
+      // never the role name two seats may share.
       agent_id: "a-ceo",
       model: "claude-sonnet-5",
       total_tokens: 100,
     },
   });
 
-  function seatView() {
-    location.hash = "#/agents/seats/ceo?tab=turns";
-    const { store, view } = mount();
+  // A SEAT'S TURNS ARE ITS TRAIL, read here by an admin — once the viewer
+  // has said so, which the tab waits for.
+  async function seatView() {
+    location.hash = "#/company/org/seats/ceo?tab=turns";
+    const { store, view, socket } = mount(ADMIN_VIEWER);
     store.applyOrg(withDerived(seat));
     const redraw = () =>
       view.rerender(
-        <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
+        <ClientContext.Provider value={{ store, socket }}>
           <Router>
             <App />
           </Router>
         </ClientContext.Provider>,
       );
+    await waitFor(() => expect(screen.queryByLabelText("Checking your access")).toBeNull());
     return { store, view, redraw };
   }
 
-  test("the turn is still there once its review completes", () => {
-    const { store, redraw } = seatView();
+  test("the turn is still there once its review completes", async () => {
+    const { store, redraw } = await seatView();
 
     // Onboarding and execute have landed; the review is live.
     store.applyEvent(phaseEnvelope("p1", "onboarding", "2026-01-01T00:00:01Z") as never);
     store.applyEvent(phaseEnvelope("p2", "execute", "2026-01-01T00:00:05Z") as never);
-    store.applyAgents([
+    store.applySeats([
       {
-        role: "CEO",
+        id: "ceo",
         agent_id: "a-ceo",
+        handle: "ceo",
+        role: "CEO",
         activity: "working",
         live_call: {
           versions: ZERO_VERSIONS,
@@ -655,7 +899,16 @@ describe("a turn watched to its end", () => {
     // The review lands. The event goes out first, then the overlay that clears
     // the live call — the order internal/api/stream.Ingest publishes them in.
     store.applyEvent(phaseEnvelope("p3", "review", "2026-01-01T00:00:09Z") as never);
-    store.applyAgents([{ role: "CEO", activity: "idle", live_call: null }] as never);
+    store.applySeats([
+      {
+        id: "ceo",
+        agent_id: "a-ceo",
+        handle: "ceo",
+        role: "CEO",
+        activity: "idle",
+        live_call: null,
+      },
+    ] as never);
     redraw();
 
     // STILL THERE, all three phases of it, and no longer running.
@@ -667,19 +920,21 @@ describe("a turn watched to its end", () => {
     expect(screen.queryByText("No phases in the record for this seat")).toBeNull();
   });
 
-  test("it is not held behind a 'new turns' button either", () => {
+  test("it is not held behind a 'new turns' button either", async () => {
     // The reader was watching it: it is not a new row, whichever list it is in.
     // SCROLLED DOWN, which is the whole condition — at the top of the scroller
     // the settled list admits everything anyway, so an assertion taken there
     // passes whether the rule holds or not.
-    const { store, redraw } = seatView();
+    const { store, redraw } = await seatView();
     const scroller = screenScroller();
     if (!scroller) throw new Error("no scroller to scroll: the shell's layout moved");
     Object.defineProperty(scroller, "scrollTop", { value: 400, configurable: true });
-    store.applyAgents([
+    store.applySeats([
       {
-        role: "CEO",
+        id: "ceo",
         agent_id: "a-ceo",
+        handle: "ceo",
+        role: "CEO",
         activity: "working",
         live_call: {
           versions: ZERO_VERSIONS,
@@ -697,9 +952,18 @@ describe("a turn watched to its end", () => {
     ] as never);
     redraw();
     store.applyEvent(phaseEnvelope("p1", "execute", "2026-01-01T00:00:05Z") as never);
-    store.applyAgents([{ role: "CEO", activity: "idle", live_call: null }] as never);
+    store.applySeats([
+      {
+        id: "ceo",
+        agent_id: "a-ceo",
+        handle: "ceo",
+        role: "CEO",
+        activity: "idle",
+        live_call: null,
+      },
+    ] as never);
     redraw();
-    expect(screen.queryByText(/finished while you were reading/)).toBeNull();
+    expect(screen.queryByText(/new turns?\. Show/)).toBeNull();
     expect(screen.getAllByText("execute").length).toBeGreaterThan(0);
     // And the transcript the reader had open is still open: the card is
     // remounted when it crosses lists, so its latched state does not travel.
@@ -722,7 +986,14 @@ describe("a turn watched to its end", () => {
 // AS AN OPERATOR: both are guarded sections, and the frame draws a guarded
 // section only once it knows the reader may read it.
 test("a node named `backups` keeps its page, and a domain keeps its own", async () => {
-  const operator = () => mountAs(Promise.resolve({ operator_id: "ops", operator: true }));
+  const operator = () =>
+    mountAs(
+      Promise.resolve({
+        login: "ops",
+        owner: "ops",
+        grants: ["admin", "tracker", "knowledge"],
+      }),
+    );
   const settle = async () => {
     for (let i = 0; i < 6; i++) await act(async () => Promise.resolve());
   };
@@ -752,15 +1023,20 @@ test("a node named `backups` keeps its page, and a domain keeps its own", async 
 });
 
 // ON A PHONE THE BAR KEEPS ONE ACTION IN VIEW, and "More" holds the rest: the
-// frame's star and Copy link, and what the screen folds — a project's Edit
-// project, which opens the same dialog its inline button does. Laid out inline
-// at 390px a project's bar stood three rows tall. (What is SHOWN at which
+// frame's star where the page has one, and what the screen folds, such as a
+// project's Edit project, which opens the same dialog its inline button does.
+// Laid out inline at 390px a project's bar stood three rows tall. A project is
+// one of Work's scopes, whose bar carries no star. (What is SHOWN at which
 // width is the stylesheet's container query, which this DOM does not
 // evaluate; what the menu HOLDS, and that its entries act, is asserted here.)
-test("the page bar's More holds the star, the link and what the screen folded", async () => {
+test("the page bar's More holds the star and what the screen folded, and no Copy link", async () => {
+  // A STAR IS KEPT FOR THE TAB'S READER (`lib/starred.ts`).
+  noteReader("p-1");
+  resetStarsForTest();
   location.hash = "#/work/ENG";
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 1, applied_epoch: 2 }));
+  store.applyOrg(withDerived({ name: "Acme", roles: [] }));
   const socket = new LiveSocket(store);
   const project = {
     key: "ENG",
@@ -778,9 +1054,10 @@ test("the page bar's More holds the star, the link and what the screen folded", 
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
     if (what === "viewer") {
       return Promise.resolve({
-        operator_id: "U0FOUNDER",
-        operator: true,
+        login: "U0FOUNDER",
+        grants: ["admin", "tracker", "knowledge"],
         handle: "jane",
+        owner: "jane",
         name: "Jane Founder",
         kind: "human",
         acts: ["write_project", "create_work_item"],
@@ -799,7 +1076,7 @@ test("the page bar's More holds the star, the link and what the screen folded", 
   for (let i = 0; i < 8; i++) await act(async () => Promise.resolve());
   fireEvent.click(screen.getByRole("button", { name: "More on this page" }));
   const names = screen.getAllByRole("menuitem").map((el) => el.textContent);
-  expect(names).toEqual(["Edit project", "Keep in Starred", "Copy link"]);
+  expect(names).toEqual(["Edit project"]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Edit project" }));
   expect(await screen.findByRole("dialog", { name: "Edit Core platform" })).toBeTruthy();
   cleanup();
@@ -813,7 +1090,12 @@ test("the page bar's More holds the star, the link and what the screen folded", 
     complete: true,
   };
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
-    if (what === "viewer") return Promise.resolve({ operator_id: "U0FOUNDER", operator: true });
+    if (what === "viewer")
+      return Promise.resolve({
+        login: "U0FOUNDER",
+        owner: "U0FOUNDER",
+        grants: ["admin", "tracker", "knowledge"],
+      });
     if (what === "work_item") return Promise.resolve(task);
     if (what === "work_project") return Promise.resolve(project);
     return Promise.reject(new QueryError("unauthorized"));
@@ -830,9 +1112,41 @@ test("the page bar's More holds the star, the link and what the screen folded", 
   expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual([
     "Open on the board",
     "Keep in Starred",
-    "Copy link",
   ]);
   fireEvent.click(screen.getByRole("menuitem", { name: "Open on the board" }));
   expect(location.hash).toContain("#/work/ENG");
   expect(location.hash).toContain("peek=");
+});
+
+// A COLD LOAD OF A SERVICE'S PAGE WAITS FOR THE PROJECTION: mounted on the
+// guess, Knowledge asked its spaces, its pages and its activity on a company
+// running none, was refused all three, then gave way to the notice. It waits,
+// asks nothing, and says what the company runs once it knows. Mutation: mount
+// the screen before the org and `containers` is asked.
+test("a cold load of a service's page asks nothing until the company says what it runs", async () => {
+  location.hash = "#/knowledge";
+  const asked: string[] = [];
+  const reader = { login: "ana", owner: "ana", handle: "ana", grants: ["admin"], acts: [] };
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
+    asked.push(what);
+    return what === "viewer" ? Promise.resolve(reader) : new Promise(() => {});
+  };
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <App />
+      </Router>
+    </ClientContext.Provider>,
+  );
+  expect(await screen.findByText("Checking what the company runs")).toBeTruthy();
+  expect(asked.filter((w) => w === "containers" || w === "pages")).toEqual([]);
+  act(() =>
+    store.applyOrg(
+      withDerived({ name: "Acme", roles: [], services: { tracker: "native", knowledge: "none" } }),
+    ),
+  );
+  expect(await screen.findByText("This company runs no knowledge base")).toBeTruthy();
+  expect(asked.filter((w) => w === "containers" || w === "pages")).toEqual([]);
 });

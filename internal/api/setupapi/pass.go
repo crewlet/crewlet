@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -30,16 +32,15 @@ import (
 // writes, through the same fold, so Settings › Integrations updates with no
 // extra plumbing and a pass run by hand can never disagree with a tick that
 // runs a minute later.
-
-// The refusals these routes add.
-const (
-	codePassInFlight      = httpjson.Code("pass_in_flight")
-	codeNotProvisionable  = httpjson.Code("not_provisionable")
-	codeNoPublicBaseURL   = httpjson.Code("no_public_base_url")
-	codeRequirementsShort = httpjson.Code("requirements_outstanding")
-	codeRunNotFound       = httpjson.Code("run_not_found")
-	codeVendorRefused     = httpjson.Code("vendor_refused")
-)
+//
+// # The refusals are the engine's, not this file's
+//
+// These routes had six route-local codes, which is how a vocabulary drifts: a
+// code only one file can see is a code the next route spells its own way, and
+// nothing holds the sentence a person is shown for it. They are entries on the
+// one refusal table now — [httpjson.CodePassInFlight] and its five siblings —
+// each with its own copy, and each answered in the envelope every other
+// surface answers with.
 
 // Status is where a pass records what it found.
 //
@@ -70,7 +71,14 @@ type provisionRequest struct {
 }
 
 // provision serves POST /setup/integrations/{kind}/provision.
+//
+// `secrets.write` ON TOP OF THE ROUTE'S VERB, asked before the body is read:
+// a writing pass is handed a sink that mints and seals credentials, so it is a
+// credential write whether or not this particular pass ends up minting one.
 func (s *Service) provision(w http.ResponseWriter, r *http.Request) {
+	if !s.mayWriteCredentials(w, r) {
+		return
+	}
 	s.runPass(w, r, false)
 }
 
@@ -84,23 +92,23 @@ func (s *Service) check(w http.ResponseWriter, r *http.Request) {
 func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool) {
 	kind := integration.Kind(r.PathValue("kind"))
 	if !s.passes.Serves(kind) {
-		httpjson.FailWith(w, http.StatusConflict, codeNotProvisionable, map[string]string{
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNotProvisionable, map[string]string{
 			"detail": "this build runs no provisioning pass for " + string(kind),
 			"hint": "its setup is the values on this surface; anything at the " +
 				"third-party app is done there or with the crewlet command line",
 		})
 		return
 	}
-	company := s.company()
+	company, roster := s.company()
 	if company == nil {
-		httpjson.FailWith(w, http.StatusConflict, codeNoActiveRevision, map[string]string{
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
 			"hint": "no company configuration is active",
 		})
 		return
 	}
-	state, ok := s.state(company, kind)
+	state, ok := s.state(company, roster, kind)
 	if !ok {
-		httpjson.FailWith(w, http.StatusNotFound, codeUnknownKind, map[string]string{
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownKind, map[string]string{
 			"hint": "one of " + kindList(),
 		})
 		return
@@ -129,11 +137,15 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 			for _, m := range missing {
 				names = append(names, m.Field)
 			}
-			httpjson.Write(w, http.StatusConflict, map[string]any{
-				"error": string(codeRequirementsShort), "fields": names,
-				"hint": "supply these first; a pass writes at the third-party app and " +
-					"must not run against a half-configured integration",
-			})
+			httpjson.FailWithFields(w, http.StatusConflict,
+				httpjson.CodeRequirementsOutstanding, httpjson.Detail{
+					// THE FIELD NAMES, AS A LIST. A client puts each
+					// one beside the input it belongs to, which is
+					// what a sentence naming them cannot be used for.
+					"fields": names,
+					"hint": "supply these first; a pass writes at the third-party app and " +
+						"must not run against a half-configured integration",
+				})
 			return
 		}
 	}
@@ -147,8 +159,8 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 		// below that supplying the base IS the permission to register. That
 		// reasoning is right about the PERMISSION and wrong about the FACT:
 		// a vendor reads an empty base as "this deployment has no public
-		// base URL" and reports ingress_blocked against
-		// integrations.public_base_url, owed by an admin — and `check`
+		// base URL" and reports ingress_blocked against the
+		// address's Tier A key, owed by an admin — and `check`
 		// persists its findings through the same fold the loop uses. So
 		// pressing Check on a perfectly healthy company wrote "every
 		// monitor that fires reaches nobody" into the live status row and
@@ -162,26 +174,35 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 		// read-only run holding the address still writes nothing at the
 		// third-party app. What it gains is the ability to say what is
 		// TRUE: the webhook points somewhere else, or there is no address
-		// at all.
-		WebhookBase: company.Integrations.WebhookBase(s.resolve),
+		// at all — and, for the second, which Tier A key to set.
+		WebhookBase:    s.webhookBase,
+		WebhookBaseKey: s.webhookBaseKey,
 	}
 	if !readOnly {
 		if in.WebhookBase == "" {
 			// A WRITING PASS WITH NO ADDRESS IS REFUSED BY NAME, rather
 			// than run to register nothing and report success.
-			httpjson.FailWith(w, http.StatusConflict, codeNoPublicBaseURL, map[string]string{
-				"config_path": "integrations.public_base_url",
-				"hint": "set the HTTPS address third-party apps reach this deployment on; " +
-					"without it the pass can register no webhook",
+			httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoExternalURL, map[string]string{
+				"config_path": s.webhookBaseKey,
+				"hint": "set `" + s.webhookBaseKey + "` in this node's Tier A " +
+					"file to the HTTPS address a vendor reaches this " +
+					"deployment on, and restart it; without one the pass can " +
+					"register no webhook",
 			})
 			return
 		}
-		sink, err := s.sink(operatorOf(r))
+		sink, err := s.sink(attributionOf(r))
 		if err != nil {
-			httpjson.FailWith(w, http.StatusServiceUnavailable, codeNoKeyring, map[string]string{
-				"detail": "this node has no secrets.keys, so a minted credential cannot be sealed",
-				"hint":   "run `crewlet secrets keygen` and install one",
-			})
+			// A FAULT IN THIS NODE'S WIRING, never a deployment's posture:
+			// every node holds the keyring a sink seals under, so a sink
+			// that cannot be built is a process assembled without its
+			// secret store, which no wait and no setting clears. The
+			// detail goes to the log; the caller learns only that it
+			// failed.
+			log.ErrorContext(r.Context(), "setup_pass_not_started",
+				"integration", kind, "error", err.Error(),
+				"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
+			httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 			return
 		}
 		in.Sink = sink
@@ -216,15 +237,20 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 		// three-valued and is NOT evidence that somebody else is minting.
 		// There is nothing to record, because nothing was observed.
 		log.ErrorContext(r.Context(), "setup_pass_not_started",
-			"integration", kind, "error", err.Error(), "operator", operatorOf(r))
-		httpjson.FailWith(w, http.StatusServiceUnavailable, httpjson.CodeInternalError,
-			map[string]string{
+			"integration", kind, "error", err.Error(),
+			"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
+		// UNAVAILABLE AND NOT internal_error: the store could not say, which
+		// is transient, and a client told "internal error" treats it as
+		// terminal. Retried on the undecidable scale — a coordination blip
+		// is seconds, not an outage.
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, authz.RetryUndecidedSeconds,
+			httpjson.Detail{
 				"hint": "the coordination store could not say whether another node " +
 					"is already provisioning this integration; try again",
 			})
 		return
 	case !held:
-		httpjson.FailWith(w, http.StatusConflict, codePassInFlight, map[string]string{
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodePassInFlight, map[string]string{
 			"hint": "another pass for this integration is running; wait for it " +
 				"rather than minting twice",
 		})
@@ -239,7 +265,7 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 	in.Operator = ""
 	req.OperatorCredential = ""
 	if errors.Is(err, setup.ErrNoPass) {
-		httpjson.Fail(w, http.StatusConflict, codeNotProvisionable)
+		httpjson.Fail(w, http.StatusConflict, httpjson.CodeNotProvisionable)
 		return
 	}
 
@@ -262,20 +288,26 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 	if err != nil {
 		log.ErrorContext(r.Context(), "setup_pass_failed",
 			"integration", kind, "run", run.ID, "error", err.Error(),
-			"operator", operatorOf(r))
-		httpjson.Write(w, http.StatusBadGateway, map[string]any{
-			"error": string(codeVendorRefused), "run": run,
-			// The run carries the third-party app's own sentence, which is what an
-			// operator needs. It is safe here because the one refusal that
-			// could quote a config value no longer does.
-			"hint": "the third-party app refused this pass; nothing it had already done " +
-				"is undone, and re-running is safe",
-		})
+			"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
+		httpjson.FailWithFields(w, http.StatusBadGateway,
+			httpjson.CodeVendorRefused, httpjson.Detail{
+				// THE WHOLE RUN, with its findings and attempts — a
+				// refusal detail is typed JSON rather than text, so
+				// the Findings tab renders the same record it would
+				// have read from the runs route.
+				"run": run,
+				// The run carries the third-party app's own sentence, which is what an
+				// operator needs. It is safe here because the one refusal that
+				// could quote a config value no longer does.
+				"hint": "the third-party app refused this pass; nothing it had already done " +
+					"is undone, and re-running is safe",
+			})
 		return
 	}
 	log.InfoContext(r.Context(), "setup_pass_ran",
 		"integration", kind, "run", run.ID, "read_only", readOnly,
-		"findings", len(run.Findings), "operator", operatorOf(r))
+		"findings", len(run.Findings),
+		"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
 	httpjson.Write(w, http.StatusOK, run)
 }
 
@@ -343,7 +375,7 @@ const MaxRunsListed = 10
 func (s *Service) runs(w http.ResponseWriter, r *http.Request) {
 	kind := integration.Kind(r.PathValue("kind"))
 	if !kind.Valid() {
-		httpjson.FailWith(w, http.StatusNotFound, codeRunNotFound, map[string]string{
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeRunNotFound, map[string]string{
 			"hint": "this build knows no integration by that name",
 		})
 		return
@@ -367,7 +399,7 @@ func (s *Service) runs(w http.ResponseWriter, r *http.Request) {
 func (s *Service) runByID(w http.ResponseWriter, r *http.Request) {
 	run, ok := s.passes.Get(r.PathValue("id"))
 	if !ok || run.Kind != integration.Kind(r.PathValue("kind")) {
-		httpjson.FailWith(w, http.StatusNotFound, codeRunNotFound, map[string]string{
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeRunNotFound, map[string]string{
 			"hint": "a run is remembered by the node that executed it, and only " +
 				"for the last few passes",
 		})
@@ -433,9 +465,7 @@ func (s *Service) record(ctx context.Context, kind integration.Kind, run *setup.
 	// keeps that address current — the same three-way rule the loop applies,
 	// through the same helper, so a row cannot mean one thing when a tick
 	// wrote it and another when a button did.
-	if company := s.company(); company != nil {
-		integration.StampEndpoint(&next, kind, company.Integrations.WebhookBase(s.resolve))
-	}
+	integration.StampEndpoint(&next, kind, s.webhookBase)
 	if forget {
 		if err := s.status.ForgetIntegration(ctx, kind); err != nil {
 			log.WarnContext(ctx, "setup_status_not_forgotten",
@@ -463,8 +493,9 @@ func (s *Service) now() time.Time {
 	return time.Now().UTC()
 }
 
-// sinkFactory is how the service obtains a recorder for a pass.
-type sinkFactory func(operator string) (provision.TokenSink, error)
+// sinkFactory is how the service obtains a recorder for a pass, recording
+// what it seals under the party the pass runs for.
+type sinkFactory func(by iam.Actor) (provision.TokenSink, error)
 
 // errorOrBusy names why a status write did not happen: the store's own failure
 // when there was one, or the peer that holds the surface when there was not.

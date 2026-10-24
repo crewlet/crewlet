@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,13 +15,15 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
-	"github.com/crewlet/crewlet/internal/api/httpjson"
-	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/authevents"
+	"github.com/crewlet/crewlet/internal/org"
 	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -66,7 +69,7 @@ func runSuite(m *testing.M) int {
 		fmt.Fprintln(os.Stderr, "api test: api.New over the embedded dashboard:", err)
 		return 2
 	}
-	defer dashboard.Stop()
+	defer dashboard.Stop(context.Background())
 	embeddedDashboard = embedded{app: dashboard, crawl: crawl(dashboard)}
 	return m.Run()
 }
@@ -114,29 +117,20 @@ func (f *fakeRuntime) Fleet(ctx context.Context) api.FleetState {
 func (f *fakeRuntime) ShuttingDown() bool { return f.state.ShuttingDown }
 
 // noRoutes is a surface that mounts nothing, for the cases that are not about
-// /config, /secrets or /setup.
+// /config, /secrets or /setup. Its Routes RETURNS AN ERROR because the
+// real ones refuse at mount: a route carries its authority with its
+// registration, and one mounted with none is a hole that ships looking
+// correct.
 type noRoutes struct{}
 
-func (noRoutes) Routes(httpjson.Router) {}
+func (noRoutes) Routes(authz.Mux) error { return nil }
 
-// fixedNative is the native routes a case names, each served exactly where it
-// is set — so the zero value is an engine running no native backend, which
-// serves none of them.
-type fixedNative struct {
-	reads  api.FileReads
-	writes api.FileWrites
-	purger api.TaskPurger
-	nodes  api.NodeGate
+// nobodyHolds is an identity directory in which nobody holds any login.
+type nobodyHolds struct{}
+
+func (nobodyHolds) HolderRecord(_ context.Context, login string) (string, error) {
+	return "", fmt.Errorf("%w: %s", iam.ErrNoHolder, login)
 }
-
-func (f fixedNative) FileReads() (api.FileReads, bool)   { return f.reads, f.reads != nil }
-func (f fixedNative) FileWrites() (api.FileWrites, bool) { return f.writes, f.writes != nil }
-func (f fixedNative) Purger() (api.TaskPurger, bool)     { return f.purger, f.purger != nil }
-func (f fixedNative) Nodes() (api.NodeGate, bool)        { return f.nodes, f.nodes != nil }
-
-// filesNative is a node serving fake's files whole: their reads and their
-// writes.
-func filesNative(fake *fakeFiles) fixedNative { return fixedNative{reads: fake, writes: fake} }
 
 // noAppFlow is a GitHub App completer that completes nothing.
 type noAppFlow struct{}
@@ -146,9 +140,9 @@ func (noAppFlow) InstallURL(string) string                                 { ret
 
 // active is a company revision that is active, for the cases about a
 // configured node.
-func active() func() *config.Company {
-	company := &config.Company{Name: "Acme"}
-	return func() *config.Company { return company }
+func active(t *testing.T) func() (*config.Company, *org.Organization) {
+	t.Helper()
+	return companySource(t, &config.Company{Name: "Acme"})
 }
 
 // newApp builds the app over whatever a case names, filling each required
@@ -161,16 +155,29 @@ func newApp(t *testing.T, opts api.Options) *api.App {
 	if err != nil {
 		t.Fatalf("api.New: %v", err)
 	}
-	t.Cleanup(a.Stop)
+	t.Cleanup(func() { a.Stop(context.Background()) })
 	return a
 }
+
+// fixtureToken is the credential every fixture carries and [get] presents.
+//
+// EVERY FIXTURE IS CREDENTIALLED, because every guarded route now needs one:
+// `allow_anonymous_read` is gone, so a case that issued a bare GET would be
+// asserting the 401 rather than its own subject. Cases about the guard itself
+// build their own bootstrap and say what they present.
+const fixtureToken = "fixture-token-long-enough-to-pass"
 
 // withRequired is opts with every required dependency it leaves unset filled
 // with an inert one — newApp's half that needs no test, so TestMain can build
 // the app the suite's dashboard cases share.
 func withRequired(opts api.Options) api.Options {
 	if opts.Bootstrap == nil {
+		// ONLY THE BOOTSTRAP THIS HELPER CREATED gets the fixture
+		// credential. A case that supplies its own is saying what its
+		// posture is — including a Tier A carrying no token at all,
+		// which is the shape the guard-is-always-mounted case needs.
 		b := config.DefaultBootstrap()
+		authorize(&b, config.APIToken{ID: "fixture", Token: fixtureToken})
 		opts.Bootstrap = &b
 	}
 	if opts.Now == nil {
@@ -180,7 +187,21 @@ func withRequired(opts api.Options) api.Options {
 		opts.Runtime = &fakeRuntime{state: api.RuntimeState{Posture: "serve"}}
 	}
 	if opts.Sources.Company == nil {
-		opts.Sources.Company = func() *config.Company { return nil }
+		// NO ACTIVE REVISION, which needs no test to build: there is no
+		// document whose org could fail.
+		opts.Sources.Company = func() (*config.Company, *org.Organization) { return nil, nil }
+	}
+	if opts.Sources.Chart == nil {
+		// A CHART THAT CAN ANSWER NOTHING, and says so. A fixture that
+		// needs a lead relation states its own; the default must not
+		// quietly answer "leads nobody", which is a policy rather than
+		// an absence.
+		opts.Sources.Chart = authz.NoChart{}
+	}
+	if opts.Sources.Holders == nil {
+		// A DIRECTORY THAT HOLDS NOBODY, and says so: a case about whose
+		// record a login names states its own.
+		opts.Sources.Holders = nobodyHolds{}
 	}
 	if opts.Sources.Events == nil {
 		opts.Sources.Events = eventfan.Solo(config.DefaultNodeID, sharedEvents)
@@ -188,15 +209,16 @@ func withRequired(opts api.Options) api.Options {
 	if opts.Sources.NodeID == "" {
 		opts.Sources.NodeID = config.DefaultNodeID
 	}
+	if opts.Sources.WithheldContacts == nil {
+		// A DIRECTORY THAT WITHHOLDS NOBODY'S CONTACTS: a case about a
+		// suspended person's chat ids states its own.
+		opts.Sources.WithheldContacts = func() func(string) bool {
+			return func(string) bool { return false }
+		}
+	}
 	fleet := coordmemory.NewFleet()
 	if opts.Sources.Coord == nil {
 		opts.Sources.Coord = coordmemory.New()
-	}
-	if opts.Sources.Native == nil {
-		opts.Sources.Native = func() queries.Native { return queries.Native{} }
-	}
-	if opts.Sources.Retention == nil {
-		opts.Sources.Retention = func(context.Context) (any, bool) { return nil, false }
 	}
 	if opts.Inbound.Publisher == nil {
 		opts.Inbound.Publisher = queuememory.New()
@@ -219,14 +241,8 @@ func withRequired(opts api.Options) api.Options {
 	if opts.Setup == nil {
 		opts.Setup = noRoutes{}
 	}
-	if opts.Operator == nil {
-		opts.Operator = fixedOperator{}
-	}
 	if opts.Retention == nil {
 		opts.Retention = fleet
-	}
-	if opts.Native == nil {
-		opts.Native = fixedNative{}
 	}
 	if opts.Capacity == nil {
 		opts.Capacity = &fakeStateLog{}
@@ -237,6 +253,21 @@ func withRequired(opts api.Options) api.Options {
 	if opts.Backup == nil {
 		opts.Backup = &fakeBackup{}
 	}
+	if opts.Objects == nil {
+		opts.Objects = &fakeMigrator{}
+	}
+	if opts.Nodes == nil {
+		opts.Nodes = &fakeNodeGate{}
+	}
+	if opts.AuthEvents == nil {
+		opts.AuthEvents = silentAudit{}
+	}
+	if opts.Inbox == nil {
+		opts.Inbox = &fakeInbox{}
+	}
+	if opts.Credentials == nil {
+		opts.Credentials = &fakeCredentials{}
+	}
 	if opts.Audit == nil {
 		opts.Audit = queuememory.New()
 	}
@@ -246,25 +277,12 @@ func withRequired(opts api.Options) api.Options {
 	return opts
 }
 
-// operatorSurface builds an operator surface over what a case names, auditing
-// onto a queue nobody reads, and fails the test on a refusal.
-func operatorSurface(t *testing.T, opts operator.Options) fixedOperator {
-	t.Helper()
-	if opts.Audit == nil {
-		opts.Audit = queuememory.New()
-	}
-	s, err := operator.New(opts)
-	if err != nil {
-		t.Fatalf("operator.New: %v", err)
-	}
-	return fixedOperator{server: s}
-}
+// silentAudit is an audit trail that records nothing, for the cases here that
+// are about something else; the guard's own reporting has its suite in
+// internal/api/auth, over the real trail.
+type silentAudit struct{}
 
-// fixedOperator is an operator surface answering one catalogue for good — the
-// zero value none, which is an app serving no operator tool at all.
-type fixedOperator struct{ server *operator.Server }
-
-func (f fixedOperator) Operator() (*operator.Server, bool) { return f.server, f.server != nil }
+func (silentAudit) Failed(context.Context, authevents.Failure) {}
 
 // EVERY DEPENDENCY THE ENGINE SUPPLIES IS REQUIRED, and a missing one is
 // refused by name.
@@ -281,10 +299,10 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 	}
 	for _, field := range []string{
 		"Runtime", "Sources.Company", "Sources.Events", "Sources.NodeID",
-		"Sources.Coord", "Sources.Native", "Sources.Retention",
+		"Sources.Chart", "Sources.Holders", "Sources.WithheldContacts", "Sources.Coord",
 		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
-		"Config", "Secrets", "Setup", "Operator", "Retention", "Native", "Code", "Capacity",
-		"FleetBroker", "Backup", "Audit",
+		"Config", "Secrets", "Setup", "Retention", "Capacity", "FleetBroker", "Backup",
+		"AuthEvents", "Inbox", "Credentials", "Nodes", "Code", "Audit",
 	} {
 		if !strings.Contains(err.Error(), "Options."+field) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)
@@ -296,14 +314,28 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a complete set was refused: %v", err)
 	}
-	a.Stop()
+	a.Stop(t.Context())
 }
 
-// get runs one request and returns the status and decoded body.
+// authed presents the fixture's credential on a request built inline.
+//
+// A HELPER RATHER THAN A HEADER AT EACH SITE, because there are two dozen of
+// them and the point of every one is the ROUTE rather than the credential:
+// spelled out each time, the next person to read the suite would think the
+// header was part of what each case asserts.
+func authed(r *http.Request) *http.Request {
+	r.Header.Set("Authorization", "Bearer "+fixtureToken)
+	return r
+}
+
+// get runs one request as the fixture's credential and returns the status and
+// decoded body.
 func get(t *testing.T, a *api.App, path string) (int, map[string]any) {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("Authorization", "Bearer "+fixtureToken)
+	a.ServeHTTP(rec, req)
 	res := rec.Result()
 	var body map[string]any
 	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
@@ -354,7 +386,7 @@ func TestHealthCarriesTheEventPagingFloor(t *testing.T) {
 
 func TestAConfiguredNodeSaysSo(t *testing.T) {
 	t.Parallel()
-	a := newApp(t, api.Options{Sources: queries.Sources{Company: active()}})
+	a := newApp(t, api.Options{Sources: queries.Sources{Company: active(t)}})
 	_, body := get(t, a, "/health")
 	if body["status"] != api.StatusOK || body["configured"] != true {
 		t.Errorf("body = %v, want ok and configured", body)
@@ -368,7 +400,7 @@ func TestConfiguredFollowsTheLiveEpoch(t *testing.T) {
 	t.Parallel()
 	var current *config.Company
 	a := newApp(t, api.Options{Sources: queries.Sources{
-		Company: func() *config.Company { return current },
+		Company: liveCompanySource(t, func() *config.Company { return current }),
 	}})
 	if a.Configured() {
 		t.Fatal("a node with no active revision reported configured")
@@ -410,7 +442,7 @@ func TestAnIdleNodeReportsItsZerosRatherThanOmittingThem(t *testing.T) {
 func TestANodeReportsWhatOnlyTheEngineCanKnow(t *testing.T) {
 	t.Parallel()
 	a := newApp(t, api.Options{
-		Sources: queries.Sources{Company: active()},
+		Sources: queries.Sources{Company: active(t)},
 		Runtime: &fakeRuntime{state: api.RuntimeState{
 			InFlight: 3, Posture: "serve", AppliedEpoch: 41,
 			StartedAt: "2026-06-14T11:00:00Z", Seats: []string{"ceo", "cto"},
@@ -444,7 +476,7 @@ func TestAStrandedSeatIsReportedWithHowLongItHasBeenStranded(t *testing.T) {
 			Posture: "serve", Seats: []string{"ceo"},
 			Unproven: map[string]time.Duration{"ceo": 90 * time.Second},
 		}},
-		Sources: queries.Sources{Company: active()},
+		Sources: queries.Sources{Company: active(t)},
 	})
 	_, body := get(t, a, "/health")
 
@@ -465,11 +497,47 @@ func TestAHealthyNodeReportsNoStrandedSeats(t *testing.T) {
 		Runtime: &fakeRuntime{state: api.RuntimeState{
 			Posture: "serve", Seats: []string{"ceo"},
 		}},
-		Sources: queries.Sources{Company: active()},
+		Sources: queries.Sources{Company: active(t)},
 	})
 	_, body := get(t, a, "/health")
 	if _, present := body["unproven_seconds"]; present {
 		t.Errorf("unproven_seconds = %v on a node with nothing stranded", body["unproven_seconds"])
+	}
+}
+
+// A DUTY BEHIND ITS BEAT IS ON THE HEALTH BODY, with how far behind it is:
+// the time since its last beat, which climbs towards the lease TTL at which
+// the watchdog ends the process.
+func TestAStalledDutyIsReportedWithHowFarBehindItIs(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{
+		Runtime: &fakeRuntime{state: api.RuntimeState{
+			Posture: "serve", Seats: []string{"ceo"}, StallLag: 31 * time.Second,
+		}},
+		Sources: queries.Sources{Company: active(t)},
+	})
+	_, body := get(t, a, "/health")
+	if body["stall_lag_seconds"] != float64(31) {
+		t.Errorf("stall_lag_seconds = %v, want 31", body["stall_lag_seconds"])
+	}
+}
+
+// And absent on a node whose duty is on its beat, so a reader alerting on its
+// presence fires on a node falling behind and on no other. The watchdog reads
+// a duty on its beat as zero ([seat.Watchdog.Lag]); this is the half that
+// leaves zero out.
+func TestAHealthyNodeReportsNoStallLag(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{
+		Runtime: &fakeRuntime{state: api.RuntimeState{
+			Posture: "serve", Seats: []string{"ceo"},
+		}},
+		Sources: queries.Sources{Company: active(t)},
+	})
+	_, body := get(t, a, "/health")
+	if _, present := body["stall_lag_seconds"]; present {
+		t.Errorf("stall_lag_seconds = %v on a node whose duty is on its beat",
+			body["stall_lag_seconds"])
 	}
 }
 
@@ -478,7 +546,7 @@ func TestHealthStaysOKThroughADrain(t *testing.T) {
 	// An orchestrator watching liveness must not SIGKILL a node that is
 	// finishing its in-flight turns.
 	a := newApp(t, api.Options{
-		Sources: queries.Sources{Company: active()},
+		Sources: queries.Sources{Company: active(t)},
 		Runtime: &fakeRuntime{state: api.RuntimeState{
 			InFlight: 2, ShuttingDown: true, Posture: "serve",
 		}},
@@ -528,7 +596,7 @@ func TestADivergedPostureBecomesTheStatus(t *testing.T) {
 	// and "cannot apply epoch 41" call for opposite responses.
 	for _, posture := range []string{"shed", "stuck", "isolated"} {
 		a := newApp(t, api.Options{
-			Sources: queries.Sources{Company: active()},
+			Sources: queries.Sources{Company: active(t)},
 			Runtime: &fakeRuntime{state: api.RuntimeState{Posture: posture}},
 		})
 		if _, body := get(t, a, "/health"); body["status"] != posture {
@@ -538,7 +606,7 @@ func TestADivergedPostureBecomesTheStatus(t *testing.T) {
 	// And the two that are ordinary do NOT become a status.
 	for _, posture := range []string{"serve", "wait"} {
 		a := newApp(t, api.Options{
-			Sources: queries.Sources{Company: active()},
+			Sources: queries.Sources{Company: active(t)},
 			Runtime: &fakeRuntime{state: api.RuntimeState{Posture: posture}},
 		})
 		if _, body := get(t, a, "/health"); body["status"] != api.StatusOK {
@@ -578,7 +646,7 @@ func TestReadinessNeedsAConfiguredNode(t *testing.T) {
 	// would only reject the delivery.
 	var current *config.Company
 	a := newApp(t, api.Options{Sources: queries.Sources{
-		Company: func() *config.Company { return current },
+		Company: liveCompanySource(t, func() *config.Company { return current }),
 	}})
 	if status, body := get(t, a, "/ready"); status != http.StatusServiceUnavailable || body["ready"] != false {
 		t.Errorf("status = %d body = %v, want 503", status, body)
@@ -595,7 +663,7 @@ func TestADrainLeavesRotationImmediately(t *testing.T) {
 	// a drain starts while still reporting itself alive for the minutes
 	// its turns need to finish.
 	a := newApp(t, api.Options{
-		Sources: queries.Sources{Company: active()},
+		Sources: queries.Sources{Company: active(t)},
 		Runtime: &fakeRuntime{state: api.RuntimeState{ShuttingDown: true, Posture: "serve"}},
 	})
 	status, body := get(t, a, "/ready")
@@ -632,9 +700,9 @@ func TestARefusedReadinessNamesItsReason(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			sources := queries.Sources{Company: func() *config.Company { return nil }}
+			sources := queries.Sources{Company: companySource(t, nil)}
 			if tc.configured {
-				sources.Company = active()
+				sources.Company = active(t)
 			}
 			a := newApp(t, api.Options{
 				Runtime: &fakeRuntime{state: tc.state}, Sources: sources,
@@ -666,7 +734,7 @@ func TestOnlyShedAndStuckTakeANodeOutOfRotation(t *testing.T) {
 		"shed": false, "stuck": false,
 	} {
 		a := newApp(t, api.Options{
-			Sources: queries.Sources{Company: active()},
+			Sources: queries.Sources{Company: active(t)},
 			Runtime: &fakeRuntime{state: api.RuntimeState{Posture: posture}},
 		})
 		status, body := get(t, a, "/ready")
@@ -689,14 +757,12 @@ func TestTheProbesAreReachableWithoutAToken(t *testing.T) {
 	t.Parallel()
 	// An orchestrator has no token, and a liveness check that 401s is a
 	// liveness check that fails.
-	b := config.DefaultBootstrap()
-	b.API.Auth.AllowAnonymousRead = false
-	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
-	a := newApp(t, api.Options{Bootstrap: &b, Sources: queries.Sources{Company: active()}})
+	b := closedPosture()
+	a := newApp(t, api.Options{Bootstrap: &b, Sources: queries.Sources{Company: active(t)}})
 
 	for _, path := range []string{"/health", "/ready"} {
 		rec := httptest.NewRecorder()
-		a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, path, nil)))
 		if rec.Code == http.StatusUnauthorized {
 			t.Errorf("%s was guarded", path)
 		}
@@ -706,9 +772,14 @@ func TestTheProbesAreReachableWithoutAToken(t *testing.T) {
 func TestTheGuardIsMountedEvenWithNoTierA(t *testing.T) {
 	t.Parallel()
 	// Tier A supplies the posture, never the existence of a check.
-	a := newApp(t, api.Options{Bootstrap: nil})
+	// A TIER A THAT NAMES NO CREDENTIAL, which is what config refuses once
+	// the API is served and what an embedder building this struct directly
+	// can still produce. Tier A supplies the posture, never the existence
+	// of a check.
+	b := config.DefaultBootstrap()
+	a := newApp(t, api.Options{Bootstrap: &b})
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/config/revisions", nil))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodPost, "/config/revisions", nil)))
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d with no Tier A, want 401", rec.Code)
 	}
@@ -721,9 +792,11 @@ func TestAnUnknownRouteIsNotFound(t *testing.T) {
 	t.Parallel()
 	a := newApp(t, api.Options{})
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/nope", nil))
-	// 404 rather than 401: an anonymous read posture lets the request
-	// through the guard, and the mux then has nothing for it.
+	req := httptest.NewRequest(http.MethodGet, "/nope", nil)
+	req.Header.Set("Authorization", "Bearer "+fixtureToken)
+	a.ServeHTTP(rec, req)
+	// 404 rather than 401: the credential is accepted, so the request
+	// reaches the mux, which then has nothing for it.
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", rec.Code)
 	}
@@ -769,13 +842,41 @@ func TestTheNodeIDNamesTheProcessThatAnswered(t *testing.T) {
 	}
 }
 
-// closedPosture is Tier A with reads guarded, for the cases that check what
-// stays reachable anyway.
+// closedPosture is Tier A carrying one credential, for the cases that check
+// what stays reachable anyway.
+//
+// It used to also turn `allow_anonymous_read` off, which is what made it
+// "closed". Every posture is that posture now: a guarded route needs a
+// credential whatever the method, so the only thing this still has to say is
+// which credential exists.
 func closedPosture() config.Bootstrap {
 	b := config.DefaultBootstrap()
-	b.API.Auth.AllowAnonymousRead = false
-	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
+	authorize(&b, config.APIToken{ID: "founder", Token: "secret"})
 	return b
+}
+
+// authorize gives a bootstrap its credentials AND the authority behind them.
+//
+// BOTH HALVES, because a principal's grants are what its token declares as
+// the node's admin posture lets it carry, and a fixture that set only one
+// carries none: an `api.auth.admin` left unset is no posture at all, which
+// confers nothing whatever a token asks for, and a token declaring nothing
+// carries nothing however the node is postured. Either way every question
+// past the overview refuses for want of a grant, and a case about the drain,
+// the socket or a route's shape fails on an authority it never meant to be
+// about.
+//
+// The default is `admin` on a node that serves it, which carries every app
+// with it. A token passed with grants of its own keeps them — that is how a
+// case narrows itself to the authority it IS about.
+func authorize(b *config.Bootstrap, tokens ...config.APIToken) {
+	b.API.Auth.Admin = iam.AdminServe
+	for i := range tokens {
+		if tokens[i].Grants == nil {
+			tokens[i].Grants = []iam.Grant{iam.GrantAdmin}
+		}
+	}
+	b.API.Auth.Tokens = tokens
 }
 
 // THE APP ANSWERS A PREFLIGHT WITHOUT A CREDENTIAL.
@@ -791,12 +892,11 @@ func TestAPreflightToAGuardedRouteIsAnswered(t *testing.T) {
 	t.Parallel()
 	b := config.DefaultBootstrap()
 	b.API.Auth.AllowedOrigins = []string{"https://ops.example.com"}
-	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "s3cret"}}
+	authorize(&b, config.APIToken{ID: "founder", Token: "s3cret"})
 	a := newApp(t, api.Options{Bootstrap: &b})
 
-	// `/config` is one of the two prefixes never eligible for
-	// allow_anonymous_read, so it is exactly the route whose preflight the
-	// guard would answer 401.
+	// `/config` is guarded on every method, so it is exactly the route
+	// whose preflight the guard would answer 401.
 	r := httptest.NewRequest(http.MethodOptions, "/config", nil)
 	r.Header.Set("Origin", "https://ops.example.com")
 	r.Header.Set("Access-Control-Request-Method", "PATCH")
@@ -814,5 +914,106 @@ func TestAPreflightToAGuardedRouteIsAnswered(t *testing.T) {
 	}
 	if n := a.CORS().Origins(); n != 1 {
 		t.Errorf("the app reports %d permitted origin(s), want 1", n)
+	}
+}
+
+// HEALTH NAMES THE IDENTITY DUTIES THIS NODE ARMED, and at which interval.
+//
+// A duty that was never armed — a node with no workers, no secret store, no
+// provider — looks from every other vantage point exactly like one quietly
+// finding nothing to do: no record, no log line, no deleted key. This is the
+// one place an operator can read off which of them this node will run and how
+// often, and a node that armed none says so with `{}` rather than a null a
+// client would read as "cannot say".
+func TestHealthNamesTheIdentityDutiesThisNodeArmed(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		armed map[string]time.Duration
+		want  map[string]any
+	}{
+		{"a worker node", map[string]time.Duration{
+			"iam_sweep": time.Hour,
+		}, map[string]any{"iam_sweep": 3600.0}},
+		{"a node that armed none", nil, map[string]any{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			a := newApp(t, api.Options{
+				Runtime: &fakeRuntime{state: api.RuntimeState{
+					Posture: "serve", IdentityDuties: tc.armed,
+				}},
+				Sources: queries.Sources{Company: active(t)},
+			})
+			_, body := get(t, a, "/health")
+			got, ok := body["identity_duty_seconds"].(map[string]any)
+			if !ok {
+				t.Fatalf("identity_duty_seconds = %#v, want an object",
+					body["identity_duty_seconds"])
+			}
+			if !maps.Equal(got, tc.want) {
+				t.Errorf("identity_duty_seconds = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// /HEALTH SAYS WHETHER THE COMPANY HAS ITS FIRST PERSON — TO ANYBODY.
+//
+// A fresh install has nobody in it, and its first person is invited under a
+// Tier A token; an operator who has just started a node, and a dashboard whose
+// sign-in form nobody can use yet, both need to be told that is where they
+// are. /health is the probe every visitor reaches, and before the first person
+// there is no credential but the deployment's own to present anywhere else.
+// `unknown` is its own answer, never `unclaimed`: told nobody is in, a
+// dashboard would give an empty company's guidance to one that may have
+// started. A node with no identity rows says nothing at all, and none of it
+// moves the status.
+//
+// Mutations: fold the seam's error into `unclaimed` and the unknown row goes
+// red; answer the field on a node with no seam and the first row does.
+func TestHealthSaysWhetherTheCompanyHasItsFirstPerson(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		seam     api.Identity
+		identity any
+	}{
+		{"a node that holds no identity rows", nil, nil},
+		{"a node that cannot read its identity estate",
+			func(context.Context) (bool, error) {
+				return false, fmt.Errorf("the identity log is behind")
+			}, api.IdentityUnknown},
+		{"a company that has started",
+			func(context.Context) (bool, error) { return true, nil },
+			api.IdentityReady},
+		{"a company nobody is enrolled in yet",
+			func(context.Context) (bool, error) { return false, nil },
+			api.IdentityUnclaimed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			a := newApp(t, api.Options{
+				Runtime:  &fakeRuntime{state: api.RuntimeState{Posture: "serve"}},
+				Sources:  queries.Sources{Company: active(t)},
+				Identity: tc.seam,
+			})
+			// NO CREDENTIAL: an unclaimed company has nobody to present one.
+			rec := httptest.NewRecorder()
+			a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+			var body map[string]any
+			if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if rec.Code != http.StatusOK || body["status"] != api.StatusOK {
+				t.Errorf("an anonymous /health answered %d, status %v", rec.Code,
+					body["status"])
+			}
+			if got, present := body["identity"]; got != tc.identity ||
+				present != (tc.identity != nil) {
+				t.Errorf("identity = %v (present %v), want %v", got, present,
+					tc.identity)
+			}
+		})
 	}
 }

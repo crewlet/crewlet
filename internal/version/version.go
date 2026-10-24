@@ -1,7 +1,12 @@
 // Package version is the one place the engine's version lives.
 //
 // The value is stamped at build time by the release tooling
-// (-ldflags "-X github.com/crewlet/crewlet/internal/version.value=v1.2.3").
+// (-ldflags "-X github.com/crewlet/crewlet/internal/version.value=v1.2.3"):
+// the release's tag itself, `v` included, so it reads exactly as the Go module
+// version of that tag does, and as the image tag the release publishes. The
+// image of main (ghcr.io/crewlet/crewlet:main) is stamped the same way with
+// `main-` and the first twelve hex digits of its commit, which no release
+// version can be mistaken for.
 // A build with no stamp reports the module's own build info, so a
 // `go install`ed binary still names itself honestly instead of claiming to be
 // a release it is not.
@@ -51,6 +56,44 @@ func moduleVersion() string {
 
 // String returns the engine version.
 func String() string { return resolved() }
+
+// developmentSpellings are the versions that mean "this binary was not
+// produced by the release pipeline and was not installed at a released
+// version".
+//
+// TWO, and they come from the two ways a version is absent: `dev` is what
+// [resolve] writes when there is no build info at all, and `(devel)` is what
+// the toolchain records for a build from a source tree that is not at a tagged
+// module version. Everything else — a stamped `v1.2.3`, the image of main's
+// `main-<commit>`, a `go install @v0.1.0`, a pinned pseudo-version — is
+// something somebody could be running.
+var developmentSpellings = map[string]struct{}{
+	"dev": {}, "(devel)": {},
+}
+
+// IsDevelopment reports whether this binary is a development build.
+//
+// AN ALLOWLIST RATHER THAN A DENYLIST OF RELEASE SHAPES, and the direction is
+// the whole of it. Its caller is a bypass that must never run on something an
+// operator deployed — internal/api/auth's development principal, which
+// authenticates every request with no credential — so the question has to be
+// "do I positively know this is a development build", not "does this fail to
+// look like a release". A toolchain that spells the unversioned case some
+// third way then refuses the bypass, which costs a developer one build flag;
+// under the other direction it would silently enable it on whatever that
+// spelling turned out to be.
+func IsDevelopment() bool { return IsDevelopmentFor(resolved()) }
+
+// IsDevelopmentFor is the rule over a version handed to it, split out from the
+// process's own for [resolve]'s reason: [resolved] is a [sync.OnceValue] over
+// link-time state, so no test can put a release version in front of the
+// predicate that decides whether a bypass is available. Taking the version as
+// an argument makes the rule exercisable; the accessor above has nothing left
+// to decide.
+func IsDevelopmentFor(v string) bool {
+	_, ok := developmentSpellings[v]
+	return ok
+}
 
 // Revision returns the VCS commit the binary was built from, when the
 // toolchain recorded one. Empty otherwise — never a guess.

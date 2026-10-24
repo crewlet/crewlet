@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/anthropic"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // `crewlet llm` — the operator's window onto the subscription CLI backends.
@@ -67,7 +68,7 @@ const llmUsage = `crewlet llm — subscription CLI backends: logins, health and 
 and the health of the anthropic entries beside them
 
 Usage:
-  crewlet llm list                        Providers, agent, model and login state
+  crewlet llm list                        Providers, agent, model and how each is signed in
   crewlet llm doctor [KEY]                Verify cli-agent and anthropic entries end to end
                                           (-no-smoke skips the real calls)
   crewlet llm login KEY                   Broker the vendor's own interactive login
@@ -92,7 +93,7 @@ Flags:
   -print-token   Write a captured token to stdout instead of the store (login only)
 `
 
-func runLLM(args []string, stdout, stderr io.Writer) error {
+func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	if sub == "" || sub == "help" {
 		fmt.Fprintf(stdout, llmUsage, defaultCompanyPath, defaultBootstrapPath)
@@ -145,8 +146,14 @@ func runLLM(args []string, stdout, stderr io.Writer) error {
 	if sub == "doctor" {
 		// THE NODE'S BOX URLS, read once and exactly as `crewlet run`
 		// reads them at boot (engine.ReadBoxURLs), so the doctor and the
-		// boot never disagree about a value.
-		boxURLs := engine.ReadBoxURLs(os.Getenv)
+		// boot never disagree about a value — and from the environment
+		// this invocation was HANDED ([runIn]), which is the process's own
+		// for every run of the binary, as the engine reads its own from
+		// [engine.Options.Environment].
+		boxURLs := engine.ReadBoxURLs(func(name string) string {
+			value, _ := environ.Lookup(name)
+			return value
+		})
 		entries, buildErr := doctorEntries(company, resolver, *companyPath, boxURLs.Bridge)
 		if buildErr != nil {
 			return buildErr
@@ -160,9 +167,9 @@ func runLLM(args []string, stdout, stderr io.Writer) error {
 
 	switch sub {
 	case "list":
-		return listLLMProviders(providers, stdout)
+		return listLLMProviders(ctx, providers, stdout, stderr)
 	case "login":
-		return loginLLM(ctx, loginRequest{
+		return loginLLM(ctx, environ, loginRequest{
 			providers: providers, key: key, home: *home,
 			fromHost: *fromHost, captureToken: *captureToken,
 			tokenStdin: *tokenStdin, username: *username, passwordStdin: *passwordStdin,
@@ -173,21 +180,33 @@ func runLLM(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
+		restoreConfiguredBundle(ctx, p, stderr)
 		return p.Status(ctx, stdout, stderr)
 	case "logout":
 		p, err := oneProvider(providers, key)
 		if err != nil {
 			return err
 		}
-		if err := p.Logout(ctx, stdout, stderr); err != nil {
-			return err
+		logoutErr := p.Logout(ctx, stdout, stderr)
+		if logoutErr == nil {
+			fmt.Fprintf(stdout, "Logged %s out and removed its credentials.\n", p.Key())
 		}
-		fmt.Fprintf(stdout, "Logged %s out and removed its credentials.\n", key)
-		return nil
+		// WHETHER OR NOT THE LOGOUT AS A WHOLE SUCCEEDED: a vendor logout that
+		// failed after the login was removed fails this command with the
+		// logout recorded all the same, and that record is what keeps the
+		// configured bundle out — which the operator revoking a compromised
+		// login most needs to hear. See [cliagent.Provider.LogoutNotice].
+		switch notice, err := p.LogoutNotice(); {
+		case err != nil:
+			fmt.Fprintf(stderr, "crewlet: %s: %v\n", p.Key(), err)
+		case notice != "":
+			fmt.Fprintln(stdout, notice)
+		}
+		return logoutErr
 	case "export":
-		return exportLLM(ctx, providers, key, *secretStore, *bootstrapPath, stdout)
+		return exportLLM(ctx, environ, providers, key, *secretStore, *bootstrapPath, stdout)
 	case "import":
-		return importLLM(providers, key, os.Stdin, stdout)
+		return importLLM(ctx, providers, key, os.Stdin, stdout)
 	default:
 		fmt.Fprintf(stderr, llmUsage, defaultCompanyPath, defaultBootstrapPath)
 		return fmt.Errorf("unknown llm command %q", sub)
@@ -214,7 +233,7 @@ func loadLLMConfig(ctx context.Context, companyPath, bootstrapPath string, notes
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	resolver, closeResolver, err := companyResolver(ctx, bootstrapPath, notes)
+	resolver, _, closeResolver, err := companyResolver(ctx, bootstrapPath, notes)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -262,6 +281,25 @@ func oneProvider(providers []cliAgentProvider, key string) (*cliagent.Provider, 
 		key, strings.Join(providerKeys(providers), ", "))
 }
 
+// restoreConfiguredBundle makes the restore the engine makes before it runs an
+// entry ([cliagent.Provider.RestoreConfiguredBundle]), for a command that
+// answers about the login the engine would run with, and says on stderr why
+// it restored nothing where it did not: the engine warns and runs the entry
+// signed out, and the command then reports a login that is not there, which
+// this line explains — a bundle that failed, or a logout that keeps it out
+// until a login is written again.
+func restoreConfiguredBundle(ctx context.Context, p *cliagent.Provider, stderr io.Writer) {
+	err := p.RestoreConfiguredBundle(ctx)
+	switch {
+	case err == nil:
+	case errors.Is(err, cliagent.ErrLoggedOut):
+		fmt.Fprintf(stderr, "crewlet: %s: %v\n", p.Key(), err)
+	default:
+		fmt.Fprintf(stderr, "crewlet: %s: the entry's configured credential bundle did not restore: %v\n",
+			p.Key(), err)
+	}
+}
+
 func providerKeys(providers []cliAgentProvider) []string {
 	keys := make([]string, 0, len(providers))
 	for _, p := range providers {
@@ -271,9 +309,20 @@ func providerKeys(providers []cliAgentProvider) []string {
 	return keys
 }
 
-func listLLMProviders(providers []cliAgentProvider, stdout io.Writer) error {
+// listLLMProviders is `crewlet llm list`: each entry's CLI, model, state
+// directory and how it is signed in.
+//
+// Each entry's configured bundle is RESTORED FIRST, as `doctor` restores it
+// before it diagnoses: the SIGN-IN column is the first route doctor names, and
+// read before the restore it said `none` for a fresh container that doctor —
+// and the engine — would sign in from its bundle. A restore that fails, or a
+// logout that keeps the bundle out, is said on stderr, as `status` says it.
+func listLLMProviders(ctx context.Context, providers []cliAgentProvider, stdout, stderr io.Writer) error {
+	for _, p := range providers {
+		restoreConfiguredBundle(ctx, p.provider, stderr)
+	}
 	w := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "PROVIDER\tAGENT\tMODEL\tLOGIN\tSTATE DIR")
+	fmt.Fprintln(w, "PROVIDER\tAGENT\tMODEL\tSIGN-IN\tSTATE DIR")
 	for _, p := range providers {
 		model := p.provider.Model()
 		if model == "" {
@@ -281,7 +330,7 @@ func listLLMProviders(providers []cliAgentProvider, stdout io.Writer) error {
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 			p.key, p.provider.Agent(), model,
-			p.provider.LoginState(), p.provider.Workspace().Root())
+			p.provider.SignInState(), p.provider.Workspace().Root())
 	}
 	return w.Flush()
 }
@@ -330,6 +379,13 @@ func doctorEntries(company *config.Company, resolver *config.Resolver, companyPa
 				break
 			}
 			entry.diagnose = func(ctx context.Context, smoke bool) diagnosis {
+				// A logout that keeps the bundle out is no failure of the
+				// bundle: the diagnosis names it beside the missing sign-in,
+				// as it would for the entry the engine runs.
+				if err := built.RestoreConfiguredBundle(ctx); err != nil &&
+					!errors.Is(err, cliagent.ErrLoggedOut) {
+					return bundleFailure{key: key, err: err}
+				}
 				opts := cliagent.DiagnoseOptions{
 					Smoke: smoke,
 					// THE ENGINE'S OWN ANSWERS, not the provider's guess at
@@ -375,6 +431,23 @@ func (e doctorEntry) examined() bool { return e.diagnose != nil }
 type buildFailure struct {
 	key string
 	err error
+}
+
+// bundleFailure is a cli-agent entry whose configured credential bundle did not
+// restore: the engine warns and runs it signed out, so there is no login to
+// diagnose, and the bundle is what to fix.
+type bundleFailure struct {
+	key string
+	err error
+}
+
+func (b bundleFailure) Healthy() bool { return false }
+
+func (b bundleFailure) Render(w io.Writer) {
+	fmt.Fprintf(w, "%-14s: %s\n", "provider", b.key)
+	fmt.Fprintln(w, "problems:")
+	fmt.Fprintf(w, "  - its configured credential bundle did not restore, so the engine would run it "+
+		"signed out — export the bundle again (`crewlet llm export`): %v\n", b.err)
 }
 
 func unbuilt(key string, err error) func(context.Context, bool) diagnosis {
@@ -484,7 +557,7 @@ type loginRequest struct {
 	printToken    bool
 }
 
-func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) error {
+func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdout, stderr io.Writer) error {
 	p, err := oneProvider(req.providers, req.key)
 	if err != nil {
 		return err
@@ -510,7 +583,7 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 	switch {
 	case req.fromHost:
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		taken, err := p.AdoptHostLogin(req.home)
+		taken, err := p.AdoptHostLogin(ctx, req.home)
 		if err != nil {
 			return err
 		}
@@ -577,7 +650,7 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 					"Reference it as ${%s}.\n", tokenVar)
 			return nil
 		}
-		if err := storeLLMSecret(ctx, req.bootstrapPath, tokenVar, token); err != nil {
+		if err := storeLLMSecret(ctx, environ, req.bootstrapPath, tokenVar, token); err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout,
@@ -616,13 +689,19 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 	}
 }
 
-func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, toStore bool, bootstrapPath string, stdout io.Writer) error {
+func exportLLM(ctx context.Context, environ config.Source, providers []cliAgentProvider, key string, toStore bool, bootstrapPath string, stdout io.Writer) error {
 	p, err := oneProvider(providers, key)
 	if err != nil {
 		return err
 	}
 	if key == "" {
 		key = providers[0].key
+	}
+	if err = p.RestoreConfiguredBundle(ctx); errors.Is(err, cliagent.ErrLoggedOut) {
+		return fmt.Errorf("%s has no login to export: %w", key, err)
+	} else if err != nil {
+		return fmt.Errorf("the entry's configured credential bundle did not restore, so there is "+
+			"no login the engine would run with to export: %w", err)
 	}
 	bundle, err := p.ExportBundle()
 	if err != nil {
@@ -636,7 +715,7 @@ func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, to
 		return nil
 	}
 	name := cliagent.BundleVarName(key)
-	if err := storeLLMSecret(ctx, bootstrapPath, name, bundle); err != nil {
+	if err := storeLLMSecret(ctx, environ, bootstrapPath, name, bundle); err != nil {
 		return err
 	}
 	// NOT "any engine sharing that database". The store is one file, one
@@ -653,14 +732,17 @@ func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, to
 	return nil
 }
 
-// storeLLMSecret writes one value into the encrypted secret store.
-func storeLLMSecret(ctx context.Context, bootstrapPath, name, value string) error {
-	sv, closeStore, err := openSecretStore(ctx, bootstrapPath, "")
+// storeLLMSecret writes one value into the encrypted secret store, as
+// [secrets.SourceLLMLogin] where the store keeps the word — a stopped node's
+// own table — and as the running node's route records it otherwise.
+func storeLLMSecret(ctx context.Context, environ config.Source, bootstrapPath, name, value string) error {
+	sv, closeStore, err := openSecretStore(ctx, environ, bootstrapPath, "")
 	if err != nil {
 		return fmt.Errorf("cannot reach the secret store to save %s: %w", name, err)
 	}
 	defer closeStore()
-	if err := sv.Set(ctx, name, value, currentOperator(), "llm-login", time.Now().UTC()); err != nil {
+	if _, err := sv.Set(ctx, name, value, hostAuthor(), secrets.SourceLLMLogin,
+		time.Now().UTC()); err != nil {
 		return fmt.Errorf("writing %s: %w", name, err)
 	}
 	return nil
@@ -684,8 +766,11 @@ func storeLLMSecret(ctx context.Context, bootstrapPath, name, value string) erro
 // own rule: a host that has been running holds the fresher refresh token, and
 // restoring a blob over it is how a fleet logs itself out. That is reported
 // here rather than swallowed, because "nothing happened" and "restored" look
-// identical from the outside and only one of them means the host is ready.
-func importLLM(providers []cliAgentProvider, key string, stdin io.Reader, stdout io.Writer) error {
+// identical from the outside and only one of them means the host is ready —
+// asked before stdin is read, so a refusal costs nothing, and answered again by
+// [cliagent.Provider.ImportBundle] under the lock its write takes, because a
+// login landing between the two was otherwise reported as a bundle restored.
+func importLLM(ctx context.Context, providers []cliAgentProvider, key string, stdin io.Reader, stdout io.Writer) error {
 	p, err := oneProvider(providers, key)
 	if err != nil {
 		return err
@@ -693,12 +778,15 @@ func importLLM(providers []cliAgentProvider, key string, stdin io.Reader, stdout
 	if key == "" {
 		key = providers[0].key
 	}
-	if p.Workspace().HasLogin() {
+	present := func() error {
 		return fmt.Errorf(
 			"%s already has a login in %s, and restoring over it would replace "+
 				"a fresher refresh token with an older one — log it out first "+
 				"(`crewlet llm logout %s`) if you mean to replace it",
 			key, p.Workspace().CredentialsDir(), key)
+	}
+	if p.Workspace().HasLogin() {
+		return present()
 	}
 	// +1 SO THE OVERRUN IS VISIBLE. io.LimitReader stops at the cap and
 	// reports a clean EOF, so reading exactly maxBundleBytes cannot be told
@@ -723,7 +811,9 @@ func importLLM(providers []cliAgentProvider, key string, stdin io.Reader, stdout
 			"stdin held no bundle: pipe one in, e.g. " +
 				"`crewlet llm export " + key + " | ssh host crewlet llm import " + key + "`")
 	}
-	if err := p.RestoreBundle(blob); err != nil {
+	if err := p.ImportBundle(ctx, blob); errors.Is(err, cliagent.ErrLoginPresent) {
+		return present()
+	} else if err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "Restored %s into %s.\nVerify it with `crewlet llm doctor %s`.\n",

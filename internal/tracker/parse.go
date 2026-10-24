@@ -18,16 +18,21 @@ import (
 // and a typo in either is a field that silently renders empty — which looks
 // exactly like a change that had nothing to say.
 const (
-	MetaTaskKey    = "item_key"
-	MetaTaskID     = "item_id"
-	MetaProject    = "project"
-	MetaStatus     = "status"
-	MetaAssignee   = "assignee"
-	MetaRecordID   = "change_id"
-	MetaChangeKind = "change_kind"
-	MetaTitle      = "title"
-	MetaExcerpt    = "excerpt"
-	MetaLate       = "late"
+	MetaTaskKey = "item_key"
+	MetaTaskID  = "item_id"
+
+	// MetaKeyCollision is "true" when [MetaTaskKey] opens ANOTHER task —
+	// one that claimed the key first — so the task is reached by
+	// [MetaTaskID] alone. Absent otherwise. Read through [metaAddress].
+	MetaKeyCollision = "item_key_collision"
+	MetaProject      = "project"
+	MetaStatus       = "status"
+	MetaAssignee     = "assignee"
+	MetaRecordID     = "change_id"
+	MetaChangeKind   = "change_kind"
+	MetaTitle        = "title"
+	MetaExcerpt      = "excerpt"
+	MetaLate         = "late"
 
 	// MetaDeltas is WHAT MOVED, already rendered — one `field: from → to`
 	// line per value delta and one `field: added …; removed …` line per set
@@ -145,10 +150,11 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	// that nothing ever assigned, so the two surfaces agreed only by the
 	// accident that no writer sets a batch id yet.
 	candidates := Candidates(record.Notify, record.Batched())
-	// BOTH OF THE WRITER'S NAMES, because a bound operator writes as a
-	// token and their own gestures land on their seat — see
-	// [MutationRecord.ActorParty].
-	routed := Route(candidates, registryHas(reg), record.ActorParty())
+	// THE AUTHOR IS THE ONE NAME TO LEAVE OUT: a person bound to a seat
+	// writes AS that seat (iam.ActorFor), so the handle their own gestures
+	// land on — the watch a create leaves, the watch a comment leaves — is
+	// the author the record already carries.
+	routed := Route(candidates, registryHas(reg), record.Actor)
 	if len(routed) == 0 {
 		p.logger.DebugContext(ctx, "tracker_change_reaches_nobody",
 			"task", record.Notify.Snapshot.Key, "kind", string(record.Notify.Kind))
@@ -182,11 +188,11 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 
 // registryHas narrows the party registry to the one question routing asks.
 //
-// A HANDLE THAT IS NO LONGER A SEAT is somebody who left, or a watcher
-// recorded before a rename. It is dropped rather than routed, because a
-// notification addressed to nobody is one nothing reports. A nil registry
-// admits everybody, which is the honest answer for a deployment with no
-// organization loaded yet.
+// A HANDLE THAT IS NO LONGER A SEAT is somebody who left — a changed handle
+// included, which is a removed seat (ADR-0013). It is dropped rather than
+// routed, because a notification addressed to nobody is one nothing reports.
+// A nil registry admits everybody, which is the honest answer for a deployment
+// with no organization loaded yet.
 func registryHas(reg *notify.Registry) func(string) bool {
 	if reg == nil {
 		return nil
@@ -259,6 +265,14 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 		// about something that happened hours ago: it is a repair, not
 		// the change itself.
 		metadata[MetaLate] = "true"
+	}
+	if snapshot.KeyCollision && metadata[MetaTaskID] != "" {
+		// THE KEY IS NOT THIS TASK'S ADDRESS: it opens the task that
+		// claimed it first, and the prompt has to send the seat to the id
+		// instead. Only beside an id, which is the address it stands in
+		// for — a flag with no id to go to would leave the prompt nothing
+		// to name.
+		metadata[MetaKeyCollision] = "true"
 	}
 	return notify.Inbound{
 		Source:    Source,
@@ -357,8 +371,13 @@ func jsonText(value any) string {
 // priority list would be the first false sentence a recipient reads — and the
 // subject is also what a digest coalesces on, so a wrong noun there is wrong
 // in every summary too.
+//
+// AND IT NAMES THE TASK BY ITS ADDRESS ([Snapshot.Address]) — the id where
+// another task claimed its key first — because it is the first reference the
+// seat is shown, under **Task:**, and a key there is one a seat types into
+// get_work_item and lands on the claimant with.
 func subjectLine(snapshot Snapshot, subject Subject, kind ChangeKind) string {
-	key := snapshot.Key
+	key := snapshot.Address(subject)
 	if key == "" {
 		key = objectLabel(subject)
 	}

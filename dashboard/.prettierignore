@@ -6,3 +6,9 @@ node_modules
 # ordered list — each of which is a case the renderer is tested on. A fixture a
 # formatter has rewritten tests the formatter, not the renderer.
 src/test/markdown/
+
+# NEW DASHBOARD'S CONTRACT FIXTURES ARE WRITTEN BY THEIR SUITES, and compared
+# byte for byte: the engine writes the catalogue (`-update-catalogue`) and
+# vitest writes the composed boards (`-u`), so a formatter's rewrite would be a
+# fixture neither suite wrote.
+src/routes/artifacts/new/dashboard/testdata/

@@ -7,7 +7,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -15,19 +17,20 @@ import (
 
 // The native tracker and knowledge base, read for a screen.
 //
-// # These read A COPY OF THE ESTATE, and that is the whole reason they are cheap
+// # These read THIS NODE'S OWN COPY, and that is the whole reason they are cheap
 //
 // Every other way to answer "what is on the board" is a listing over the
 // fleet's own record — O(keys) message deliveries, on a request path, for a
-// page a dashboard refreshes. A data node's SQL copy is what makes it a query
-// instead, reached through this node's estate router exactly as a seat's own
-// tools reach it — this node's copy while it serves, another data node's while
-// it does not (ADR-0025) — so an operator and an agent looking at one task see
-// one task.
+// page a dashboard refreshes. This node's copy is what makes it a SQL query
+// instead, and it is the same copy a seat's own tools read, so an operator and
+// an agent looking at one task see one task.
 //
-// Both halves are state-log domains, so their rows are derived by an applier
-// from an ordered log and every answer carries the level it was served at and
-// what it could not account for.
+// The two halves reach that copy differently, and the difference is visible in
+// the answers rather than hidden here: the tracker's rows are derived by an
+// applier from an ordered log, so every answer carries the level it was served
+// at and what it could not account for; the wiki's are maintained by a
+// projector following a bucket's change feed, which could only say hydrated or
+// not.
 //
 // # A COPY THAT HAS NOT CAUGHT UP SAYS SO rather than answering empty
 //
@@ -133,6 +136,56 @@ type WorkReader interface {
 		loc *time.Location) (tracker.DecisionsAnswer, error)
 	TurnPlaces(ctx context.Context, runs []string,
 		fresh statelog.Freshness) (map[string]tracker.TurnPlace, error)
+	// Thread is the read a comment's write makes to find the question it
+	// answers — here so `work_item` can ask [tracker.AskedOn] whether an
+	// open ask on the item names the caller, through the SAME read the
+	// answer they would post is resolved by (see [Sources.workItem]).
+	Thread(ctx context.Context, q tracker.ThreadQuery,
+		fresh statelog.Freshness) (tracker.ResolvedThread, error)
+}
+
+// Keeper is a native source that can say, before anything is read from it,
+// whether its half is served on this node: nil when it is, an error wrapping
+// [ErrUnknown] when the company does not keep that half in the engine, and
+// any other error (a node that has not met its company yet answers
+// [ErrUnavailable]) when this node cannot tell yet.
+//
+// FOR THE QUESTIONS THAT MERGE SEVERAL HALVES, `company_feed` and
+// `decisions`. A question about one half is simply unanswerable where the half
+// is absent, and its own read says so. A merged answer is not: the half it
+// cannot read is a part to leave out, and the rest is still the answer.
+// Without a way to ask, each of them read the absent half, met its refusal and
+// refused WHOLE, so a company on Jira saw no coding run parked on a question
+// to a person and no schedule run in its feed.
+//
+// OPTIONAL, read by [keptHere]: a source that does not implement it is one
+// whose half is here whenever the source is present at all, which is every
+// source but the engine's live ones (internal/api's `NativeSources`), whose
+// half can be absent by configuration while the source is wired.
+type Keeper interface {
+	Kept() error
+}
+
+// keptHere reports whether src's half is served on this node. A nil source is
+// not; a source that is not a [Keeper] is; and a [Keeper] answers for itself,
+// its [ErrUnknown] read as "not kept here" and any other error returned as
+// the reason this node cannot say yet.
+func keptHere(src any) (bool, error) {
+	if src == nil {
+		return false, nil
+	}
+	k, ok := src.(Keeper)
+	if !ok {
+		return true, nil
+	}
+	switch err := k.Kept(); {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, ErrUnknown):
+		return false, nil
+	default:
+		return false, err
+	}
 }
 
 // PageReader is the knowledge read side this surface calls.
@@ -145,158 +198,33 @@ type PageReader interface {
 		fresh statelog.Freshness) (pages.Revision, bool, error)
 }
 
-// Native is one question's view of the company's own tracker and knowledge
-// base: each field nil where this node has no such backend NOW. See
-// [Sources.Native] for why it is asked per question.
-type Native struct {
-	// Work and Pages are the company's own tracker and knowledge base,
-	// through this node's estate router. Nil is the honest answer for a
-	// company on Jira and Confluence: there is no native record for any
-	// node to have a copy of.
-	//
-	// Consumer-defined interfaces rather than the concrete readers, like
-	// every other seam here — and the READ side only. Nothing on this
-	// surface writes: a board's edit goes through a seat's tools or the
-	// operator MCP, both of which are attributed to somebody.
-	Work  WorkReader
-	Pages PageReader
-
-	// Files is a project's files — the rows, never the bytes, which the
-	// download route streams. SEPARATE from [Native.Work] for the reason
-	// [Native.WorkSearch] is: a node can answer one and not the other, and
-	// a screen needs to know which. Nil answers `work_files` as unknown.
-	Files FileReader
-	// Backlinks is which pages and tasks link to a page — this node's
-	// lexical index, which derives the links from the bodies it reads
-	// ([search.Backlinks]). Nil leaves the `page` answer without
-	// `linked_from`, which is absent rather than empty: "nothing links
-	// here" is a claim only a node holding the index can make.
-	Backlinks PageBacklinks
-
-	// WorkSearch is the ranked item search, and it is SEPARATE from
-	// [Native.Work] because it needs more than the rows: the rows are the
-	// fleet's and the lexical index is this node's own. Nil — a runtime
-	// with no item searcher, or a company whose tracker is a vendor's, whose
-	// index holds pages and no task — answers `work_search` as unknown,
-	// which is what a screen needs in order to offer the board's filters
-	// instead of an empty ranking. An index still BUILDING is not nil: it
-	// answers, saying so.
-	WorkSearch WorkSearcher
-}
-
-// native is this question's view of the native backends, resolved ONCE per
-// answer, at its top — so one answer never mixes a runtime that appeared half
-// way through it with one that had not, and an answer that reads two of them
-// reads two halves of one moment.
-func (s Sources) native() Native {
-	if s.Native == nil {
-		return Native{}
-	}
-	return s.Native()
-}
-
-// errNoNative is the answer to a native question on a node that runs no such
-// backend now: the same `unknown_query` an unregistered question gives,
-// because to the caller it is the same fact — the subsystem behind the answer
-// is not running here — and "not here" must stay distinguishable from "empty".
-func errNoNative(what string) error {
-	return fmt.Errorf("%w: this node runs no native %s", ErrUnknown, what)
-}
-
-// nativeBackend is the one native backend a question is ABOUT — the one whose
-// absence makes the question unknown rather than answered. Every other
-// backend an answer reads is a SUPPLEMENT, whose absence changes what the
-// answer carries and never whether it is given (the company feed's page kinds,
-// a page's backlinks).
-type nativeBackend struct {
-	// what names it in the refusal, through [errNoNative].
-	what string
-	// held reports whether a view holds it.
-	held func(Native) bool
-}
-
-var (
-	onTracker = nativeBackend{what: "tracker",
-		held: func(n Native) bool { return n.Work != nil }}
-	onKnowledge = nativeBackend{what: "knowledge base",
-		held: func(n Native) bool { return n.Pages != nil }}
-	onFiles = nativeBackend{what: "tracker files",
-		held: func(n Native) bool { return n.Files != nil }}
-	// The INDEX rather than the tracker, which is absent independently of
-	// the rows: see [Native.WorkSearch].
-	onWorkSearch = nativeBackend{what: "work item search",
-		held: func(n Native) bool { return n.WorkSearch != nil }}
-)
-
-// nativeQuestion is an answer about one native backend, handed the view that
-// backend was found in — never a view without it.
-type nativeQuestion func(ctx context.Context, n Native, p Params) (any, error)
-
-// registerNative registers a question ABOUT one native backend: each call
-// resolves this node's view once ([Sources.native]), answers [errNoNative]
-// where the view lacks the backend the question is about, and only then runs
-// the answer, with that view.
-//
-// THE GUARD IS THE REGISTRATION, not a line at the top of each answer. The
-// questions are registered wherever an engine is beside this surface and the
-// backend behind them may not exist yet (see [Sources.Native]), so an answer
-// that ran without it would call a method on a nil interface — and the socket
-// runs every query on a goroutine of its own, where that panic ends the
-// process. Twenty-five hand-written `if n.Work == nil` checks held that only
-// by convention: one forgotten in a new question compiled, passed every case
-// that did not name it, and stopped the engine the first time a dashboard on a
-// vendor-tracker company asked it. Here an answer cannot be reached without its
-// backend, and the case that sweeps the native questions derives them from
-// what this registers rather than from a list beside it.
-func (s Sources) registerNative(r *Registry, name string, about nativeBackend,
-	answer nativeQuestion) {
-
-	r.Register(name, func(ctx context.Context, p Params) (any, error) {
-		n := s.native()
-		if !about.held(n) {
-			return nil, errNoNative(about.what)
-		}
-		return answer(ctx, n, p)
-	})
-}
-
 // ---- work -------------------------------------------------------------- //
 
-func (s Sources) workItems(ctx context.Context, n Native, p Params) (any, error) {
+func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 	now := s.clock()
 	// THROUGH THE EXPANSION, so a `view=` or a `preset=` is the set of
-	// defaults it stands for rather than a key nothing reads. The viewer
-	// is a parameter here for the reason it is on the view strip: this
-	// surface is guarded, so the caller already holds the company's own
-	// credential, and what it selects is whose queue to render.
+	// defaults it stands for rather than a key nothing reads.
+	//
+	// THE VIEWER IS THE CALLER and is not a parameter at all. It was one,
+	// read out of the bag and deleted from it again — so a screen selected
+	// WHOSE queue to render by typing a handle, on a surface where
+	// `preset=my_queue`, `preset=priorities` and every personal expansion
+	// resolve against it. Whose record that is has an answer now: the
+	// principal the guard resolved, under the name every tool writes their
+	// record with — [iam.RecordOwner] — so `preset=priorities` reads back
+	// the list `set_priorities` wrote for an unbound caller too.
+	//
 	// THE VIEWER'S OWN PROJECT comes from the chart, because
 	// `preset=my_queue` asks what is unclaimed in THEIR container and an
 	// unscoped second arm offers every unassigned task in the company.
-	//
-	// AND IT IS TAKEN OUT OF THE BAG, which is the whole of why it is read
-	// into a variable first. `viewer` is a property of the SURFACE — its
-	// credential, its turn's seat — and not of the grammar: it is absent
-	// from [tracker.QueryKeys], and `checkKeys` refuses a key nothing
-	// parses rather than ignoring it. Handed on inside the map it made
-	// every call that named a viewer a `bad_params` refusal, and took
-	// `preset=my_queue` with it — the preset expands from `viewer.Handle`,
-	// so it is answerable only on a surface that HAS a viewer, and this is
-	// that surface. The comment above described the behaviour this call did
-	// not have.
-	values := p.Values()
-	viewer := strings.TrimSpace(p.String("viewer"))
-	delete(values, "viewer")
-	// AND BOTH OF THE VIEWER'S NAMES, for the one key in this grammar
-	// that names a PERSON rather than filtering rows: `priorities=` reads
-	// somebody's own record, and a record written before their credential
-	// was keyed on their seat is filed under the credential. Without the
-	// alias, `preset=priorities` was the one tab of My work's seven that
-	// stayed empty for exactly the person the preset is for.
-	party := s.partyOf(viewer)
-	q, err := n.Work.ExpandedQuery(ctx, values, tracker.Viewer{
-		Handle:     party.Handle,
-		OperatorID: party.OperatorID,
-		Project:    s.projectOf(viewer),
+	principal, how := iam.From(ctx)
+	if how == iam.Unknown {
+		return nil, unresolved(ctx, "work_items")
+	}
+	viewer := iam.RecordOwner(principal)
+	q, err := s.Work.ExpandedQuery(ctx, p.Values(), tracker.Viewer{
+		Handle:  viewer,
+		Project: s.projectOf(viewer),
 		// THE COMPANY'S OWN CLOCK (ADR-0018), which every relative date
 		// in the grammar and the due bands and overdue marks on every row
 		// are cut on. This was UTC, so for the hours between the
@@ -304,7 +232,7 @@ func (s Sources) workItems(ctx context.Context, n Native, p Params) (any, error)
 		// day from the one a seat's own `list_work_items` resolved.
 	}, now, s.zone())
 	switch {
-	case transient(err):
+	case unavailableHere(err):
 		// NOT A REFUSAL OF THE REQUEST: the expansion is read through
 		// the estate router, and no copy could answer it yet.
 		return nil, err
@@ -324,10 +252,10 @@ func (s Sources) workItems(ctx context.Context, n Native, p Params) (any, error)
 	q.Level = statelog.LevelFor(statelog.SurfaceDashboard, q.Level)
 	// AND THE CHART THE UNIT FILTERS RESOLVE THROUGH, set here for the
 	// reason the level is: it is a property of this SURFACE rather than of
-	// the grammar, so `unit=` takes a team's id or its name and finds the
-	// work filed under either — see [tracker.Units].
+	// the grammar, so `unit=` takes either spelling of a team — its key or
+	// its name — and finds the work filed under each — see [tracker.Units].
 	q.Units = s.chartUnits()
-	answer, err := n.Work.Tasks(ctx, q, now)
+	answer, err := s.Work.Tasks(ctx, q, now)
 	switch {
 	case errors.Is(err, tracker.ErrTooBroad):
 		// A REFUSAL ABOUT THE REQUEST, so it is [ErrBadParams] and not
@@ -403,7 +331,7 @@ func (s Sources) workItems(ctx context.Context, n Native, p Params) (any, error)
 	return out, nil
 }
 
-func (s Sources) workItem(ctx context.Context, n Native, p Params) (any, error) {
+func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 	ref := strings.TrimSpace(p.String("id"))
 	if ref == "" {
 		return nil, badParams("id", "", nil)
@@ -432,18 +360,90 @@ func (s Sources) workItem(ctx context.Context, n Native, p Params) (any, error) 
 	// AND THE COMPANY'S CLOCK, so the rail's due date says how it stands on
 	// the calendar the board's overdue mark was cut on — see
 	// [tracker.DueStanding].
-	detail, err := n.Work.Task(ctx, ref, tracker.DetailWants{
+	//
+	// DECIDED BEFORE IT IS ANSWERED, and twice for somebody without the
+	// tracker — see [Sources.mayReadItem].
+	principal, how := iam.From(ctx)
+	if how == iam.Unknown {
+		return nil, unresolved(ctx, "work_item")
+	}
+	unread, err := s.mayReadItem(ctx, principal, authz.Object{
+		Kind: authz.KindTask, ID: ref, Unresolved: true})
+	if err != nil {
+		return nil, err
+	}
+	detail, err := s.Work.Task(ctx, ref, tracker.DetailWants{
 		Comments: true, History: true, Links: true, Fields: true,
 		Units: s.chartUnits(),
 		Clock: &tracker.DayClock{Now: s.clock(), Zone: s.zone()},
 	}, fresh)
 	switch {
+	case unread && errors.Is(err, tracker.ErrNoTask):
+		// A MISSING ITEM IS THE REFUSAL A CALLER NOT ASKED ON IT GETS, to
+		// somebody the item would have been decided for: "no such item"
+		// before "you may not" would tell a person without the tracker
+		// which keys exist.
+		if _, refusal := s.mayReadItem(ctx, principal,
+			authz.Object{Kind: authz.KindTask, ID: ref}); refusal != nil {
+			return nil, refusal
+		}
+		return nil, ErrNotFound
 	case errors.Is(err, tracker.ErrNoTask):
 		return nil, ErrNotFound
 	case err != nil:
 		return nil, err
 	}
+	if unread {
+		asked, err := tracker.AskedOn(ctx, s.Work, detail.Task.ID,
+			iam.RecordOwner(principal), fresh)
+		if err != nil {
+			// THE PROBE COULD NOT READ THE THREAD, which says nothing
+			// about whether this caller was asked: unknown, never a
+			// refusal a person would take as "you were not asked".
+			return nil, fmt.Errorf("%w: this node cannot yet say whether an "+
+				"open ask on %s names you: %w", ErrUnavailable, ref, err)
+		}
+		object := authz.Object{Kind: authz.KindTask, ID: detail.Task.ID,
+			Container: detail.Task.Project}
+		if asked {
+			object.Asked = iam.RecordOwner(principal)
+		}
+		if _, err := s.mayReadItem(ctx, principal, object); err != nil {
+			return nil, err
+		}
+	}
 	return detail, nil
+}
+
+// mayReadItem decides `get_work_item` ([authz.ActionWorkRead]) on object for
+// principal, and renders the decision as the error this surface refuses with.
+//
+// # Read the item, then decide again — only for somebody without the tracker
+//
+// A tracker holder reads any item, which the table answers before anything is
+// read. Somebody WITHOUT it reads one item: the one an open ask on it names
+// them on (ADR-0033's asked arm), so they can read what they were asked and
+// answer it. Only the item says whether an ask names them, so the table
+// answers that caller [authz.ErrUnresolved] — read it, resolve its asks, and
+// ask again — and this reports it as unread=true with no error. The second
+// decision, on the object the read resolved, is the answer.
+//
+// AN UNDECIDABLE DECISION IS [ErrUnavailable] and never a refusal, for
+// [Sources.mayRead]'s reason.
+func (s Sources) mayReadItem(ctx context.Context, principal iam.Principal,
+	object authz.Object) (unread bool, err error) {
+
+	d := authz.Decide(ctx, principal, authz.ActionWorkRead, object, s.Chart, s.clock())
+	switch {
+	case object.Unresolved && errors.Is(d.Err, authz.ErrUnresolved):
+		return true, nil
+	case d.Unknown():
+		return false, fmt.Errorf("%w: this node cannot decide %s on %s yet: %w",
+			ErrUnavailable, authz.ActionWorkRead, object.ID, d.Err)
+	case !d.Allowed:
+		return false, refused("work_item", d)
+	}
+	return false, nil
 }
 
 // workComments answers one page of a task's thread, walking back from the
@@ -461,7 +461,7 @@ func (s Sources) workItem(ctx context.Context, n Native, p Params) (any, error) 
 // coverage it reports describe one instant, and a cursor from `work_item`'s
 // own `comments_cursor` continues exactly where that page stopped. `limit`
 // is held to [tracker.MaxCommentPage].
-func (s Sources) workComments(ctx context.Context, n Native, p Params) (any, error) {
+func (s Sources) workComments(ctx context.Context, p Params) (any, error) {
 	ref := strings.TrimSpace(p.String("item"))
 	if ref == "" {
 		return nil, badParams("item", "", nil)
@@ -470,7 +470,7 @@ func (s Sources) workComments(ctx context.Context, n Native, p Params) (any, err
 	if err != nil {
 		return nil, err
 	}
-	detail, err := n.Work.Task(ctx, ref, tracker.DetailWants{
+	detail, err := s.Work.Task(ctx, ref, tracker.DetailWants{
 		Comments:      true,
 		CommentCursor: strings.TrimSpace(p.String("cursor")),
 		CommentLimit:  Clamp(p.Int("limit", 0), tracker.DetailComments, tracker.MaxCommentPage),
@@ -501,13 +501,14 @@ func (s Sources) workComments(ctx context.Context, n Native, p Params) (any, err
 		"applied_through": detail.AppliedThrough,
 		"complete":        detail.Complete,
 	}
+	if detail.KeyCollision {
+		// THE KEY IS NOT THIS TASK'S ADDRESS when another task claimed it
+		// first, so the pane that links back to the task links by its id —
+		// see [tracker.ItemAddress].
+		out["key_collision"] = true
+	}
 	if detail.CommentsCursor != "" {
 		out["next_cursor"] = detail.CommentsCursor
-	}
-	if len(detail.CommentSeats) > 0 {
-		// WHO A TOKEN'S COMMENT IS FROM, as a person — see
-		// [tracker.TaskDetail.CommentSeats].
-		out["comment_seats"] = detail.CommentSeats
 	}
 	if detail.Incomplete != nil {
 		out["incomplete"] = detail.Incomplete
@@ -527,7 +528,7 @@ func (s Sources) workComments(ctx context.Context, n Native, p Params) (any, err
 // days and is scattered across the fleet; this is the task's own durable
 // account — the same rows its `spend` sums — so a turn listed here is a turn
 // the cost panel counted, on any node, at any age.
-func (s Sources) workItemTurns(ctx context.Context, n Native, p Params) (any, error) {
+func (s Sources) workItemTurns(ctx context.Context, p Params) (any, error) {
 	ref := strings.TrimSpace(p.String("id"))
 	if ref == "" {
 		return nil, badParams("id", "", nil)
@@ -536,7 +537,7 @@ func (s Sources) workItemTurns(ctx context.Context, n Native, p Params) (any, er
 	if err != nil {
 		return nil, err
 	}
-	page, err := n.Work.TurnsOf(ctx, ref, strings.TrimSpace(p.String("cursor")),
+	page, err := s.Work.TurnsOf(ctx, ref, strings.TrimSpace(p.String("cursor")),
 		Clamp(p.Int("limit", 0), tracker.DefaultTaskTurns, tracker.MaxTaskTurns), fresh)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
@@ -551,32 +552,26 @@ func (s Sources) workItemTurns(ctx context.Context, n Native, p Params) (any, er
 
 // workViews answers one container's view strip.
 //
-// # Why `viewer` is a parameter, and why naming somebody else needs a
-// credential
+// # Why the viewer is the CALLER and not a parameter
 //
 // A personal view is private to its OWNER, and the reader enforces that in
-// SQL. What `viewer=` selects is WHOSE strip to render — their personal views
-// and their pins — so it has to be a parameter: a screen reaches this before
-// it knows who is looking, and `work_views` is asked for a container rather
-// than for a person.
+// SQL. What the viewer selects is WHOSE strip to render — their personal views
+// and their pins — and it used to be a `viewer=` parameter on the reasoning
+// that a screen reaches this before it knows who is looking.
 //
-// It used to be unchecked, on the reasoning that the whole surface is guarded
-// so the caller already holds the company's own credential and can read every
-// task, comment and page in it anyway. That reasoning has the same hole
-// [Sources.workPerson] records: `api.allow_anonymous_read` opens this surface,
-// and then `viewer=` is a free choice of whose record to read. Anybody could
-// walk the org chart — which `org` answers — and page through every seat's
-// pinned views by handle. So the parameter now takes the scope rule the other
-// personal questions take, through [Sources.viewerPins]: your own, or an
-// operator credential for anybody else's.
+// A screen knows now. The principal the guard resolved names whose record it
+// is, so the parameter had exactly one honest value and any other was a free
+// choice of whose record to read: anybody could walk the org chart — which
+// `org` answers — and page through every seat's pinned views by handle.
 //
-// Absent is still the SHARED strip: no pins and no personal views but the
-// shared ones, which is what a screen draws before it knows who is looking,
-// and what the sidebar and the board ask for on every poll. That is why the
-// rule is [Sources.viewerPins] rather than [Sources.viewerParty] — the
-// refusal an absent handle earns on a question ABOUT somebody would refuse a
-// strip that has a perfectly good answer.
-func (s Sources) workViews(ctx context.Context, n Native, p Params) (any, error) {
+// THE VIEWER IS [iam.RecordOwner]'s, the name `set_pins` and `save_work_view`
+// write under. It was the principal's SEAT, which is nothing for an unbound
+// person or a token — so their assistant pinned views and saved personal ones
+// under their login, and their strip, read under no name, showed the shared
+// views alone. A caller the engine can name nothing for still gets the shared
+// strip, which is the documented meaning of an empty
+// [tracker.ViewQuery.Viewer].
+func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 	container, err := viewContainer(p)
 	if err != nil {
 		return nil, err
@@ -585,26 +580,29 @@ func (s Sources) workViews(ctx context.Context, n Native, p Params) (any, error)
 	if err != nil {
 		return nil, err
 	}
-	viewer, err := s.viewerPins(ctx, strings.TrimSpace(p.String("viewer")))
-	if err != nil {
-		return nil, err
+	// THE CALLER'S OWN STRIP, never a handle they typed. See
+	// [Sources.workItems] for why the parameter is gone.
+	principal, how := iam.From(ctx)
+	if how == iam.Unknown {
+		return nil, unresolved(ctx, "work_views")
 	}
-	// COUNTS ARE A VIEWER'S, because only a viewer has pins: `counts=true`
-	// on the shared strip is refused by name rather than answered with no
-	// counts, which would read as a person with nothing pinned.
+	viewer := iam.RecordOwner(principal)
+	// COUNTS ARE THE CALLER'S, because only a record has pins: `counts=true`
+	// asked by a credential the engine can name no record for is refused by
+	// name rather than answered with no counts, which would read as a
+	// person with nothing pinned.
 	counts := p.Bool("counts", false)
-	if counts && !viewer.Named() {
-		return nil, fmt.Errorf("%w: counts=true needs viewer= — the counts "+
-			"are of the views PINNED for somebody, and the shared strip "+
-			"has no pins", ErrBadParams)
+	if counts && viewer == "" {
+		return nil, errNoPins
 	}
-	listing, err := n.Work.Views(ctx, tracker.ViewQuery{
+	listing, err := s.Work.Views(ctx, tracker.ViewQuery{
 		Container: container,
 		Viewer:    viewer,
 		// THE CHART, so `container=unit:engineering` and
 		// `container=unit:eng` reach one strip — the same rule that
-		// upper-cases a project key, for the container kind that has
-		// two spellings. See [tracker.Units].
+		// upper-cases a project key, for the container kind a person
+		// can spell more than one way: by key or by name. See
+		// [tracker.Units].
 		Units: s.chartUnits(),
 		// THE CALLER'S OWN, resolved to this surface's default when they
 		// said nothing — which is `stale`, like every other dashboard
@@ -633,32 +631,40 @@ func (s Sources) workViews(ctx context.Context, n Native, p Params) (any, error)
 	return out, nil
 }
 
-// workSavedViews answers every saved view a viewer can see, in EVERY
+// errNoPins is `counts=true` asked by a credential the engine can name no
+// record for: the counts are of the views PINNED on the caller's own record,
+// and a caller with none has nothing pinned to count — which an answer with no
+// counts would state as a fact rather than as the refusal it is.
+var errNoPins = fmt.Errorf("%w: counts=true counts the views pinned on your "+
+	"own record, and this credential names nobody whose own record there is",
+	ErrBadParams)
+
+// workSavedViews answers every saved view the CALLER can see, in EVERY
 // container, each row carrying the container it lives in.
 //
 // A SIBLING OF [Sources.workViews] rather than a `container=` it accepts: a
 // strip is one container's tabs and this is one PERSON's views — the
 // inventory of what somebody saved and the sidebar's pinned group. Both used
 // to ask the workspace strip, so a view saved on a project board appeared in
-// neither and could be pinned from nowhere. `viewer=` and `counts=true` take
-// [Sources.workViews]' rules, for its reasons: whose pins is a personal
-// question, and only a viewer has pins to count.
-func (s Sources) workSavedViews(ctx context.Context, n Native, p Params) (any, error) {
+// neither and could be pinned from nowhere. Whose views and `counts=true` take
+// [Sources.workViews]' rules, for its reasons: the viewer is the caller's own
+// record ([iam.RecordOwner]) and never a name they typed, and only a record
+// has pins to count.
+func (s Sources) workSavedViews(ctx context.Context, p Params) (any, error) {
 	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
-	viewer, err := s.viewerPins(ctx, strings.TrimSpace(p.String("viewer")))
-	if err != nil {
-		return nil, err
+	principal, how := iam.From(ctx)
+	if how == iam.Unknown {
+		return nil, unresolved(ctx, "work_saved_views")
 	}
+	viewer := iam.RecordOwner(principal)
 	counts := p.Bool("counts", false)
-	if counts && !viewer.Named() {
-		return nil, fmt.Errorf("%w: counts=true needs viewer= — the counts "+
-			"are of the views PINNED for somebody, and nobody named has none",
-			ErrBadParams)
+	if counts && viewer == "" {
+		return nil, errNoPins
 	}
-	listing, err := n.Work.EveryView(ctx, tracker.EveryViewQuery{
+	listing, err := s.Work.EveryView(ctx, tracker.EveryViewQuery{
 		Viewer: viewer,
 		Units:  s.chartUnits(),
 		Level:  fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
@@ -705,8 +711,10 @@ func viewContainer(p Params) (tracker.Container, error) {
 		// A PROJECT KEY IS UPPER-CASE wherever it is minted, and the
 		// tracker's own scope parser upper-cases it for the same reason:
 		// a strip asked for as `project:eng` must be the strip a task
-		// query scoped to `project:ENG` belongs to.
-		id = strings.ToUpper(id)
+		// query scoped to `project:ENG` belongs to. THROUGH
+		// [tracker.ProjectKey], the tracker's one spelling of that rule,
+		// rather than a copy of it here that could drift from the rest.
+		id = tracker.ProjectKey(id)
 	}
 	return tracker.Container{Kind: kind, ID: id}, nil
 }
@@ -717,12 +725,12 @@ func viewContainer(p Params) (tracker.Container, error) {
 // draws types and fields together, and a model told which types exist and not
 // which fields are required would file work that is refused on the next
 // breath.
-func (s Sources) workCatalogue(ctx context.Context, n Native, p Params) (any, error) {
+func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
 	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
-	answer, err := n.Work.Catalogue(ctx, tracker.CatalogueQuery{
+	answer, err := s.Work.Catalogue(ctx, tracker.CatalogueQuery{
 		Archived:    p.Bool("archived", false),
 		Level:       fresh.Level,
 		MaxLag:      fresh.MaxLag,
@@ -738,19 +746,22 @@ func (s Sources) workCatalogue(ctx context.Context, n Native, p Params) (any, er
 // workPerson answers one human's own state — their inbox, their queue and
 // their pins.
 //
-// SCOPED BY [Sources.viewerParty], the same rule `work_my_work` and
-// `work_inbox` take: an absent handle is the caller's own seat, and naming
-// anybody else's needs an operator credential.
+// SCOPED BY [Sources.recordHandle], the same rule `work_my_work` and
+// `work_inbox` take: an absent handle is the caller's own record, and naming
+// anybody else's is [authz.ActionPersonRead] — theirs, whoever leads them, or
+// an admin, each with the tracker.
 //
 // It DEMANDED a handle and checked nothing, on the reasoning that the whole
 // surface is guarded so the caller already holds the company's credential.
-// That reasoning has a hole in it that the other two do not: `api.allow_
-// anonymous_read` opens this surface, and this answer carries the richest
-// personal record the engine keeps — somebody's unread notices, what they mean
-// to work on next, and who set that order. The parameter selected whose. A
-// scope rule two of the three personal questions follow is not a rule.
-func (s Sources) workPerson(ctx context.Context, n Native, p Params) (any, error) {
-	who, err := s.viewerParty(ctx, strings.TrimSpace(p.String("handle")))
+// That reasoning stopped holding once a guarded surface meant "somebody
+// signed in" rather than "the operator": every person holding the tracker
+// reaches this question, and its answer carries the richest personal record
+// the engine keeps — somebody's unread notices, what they mean to work on
+// next, and who set that order. The parameter selected whose. A scope rule
+// two of the three personal questions follow is not a rule.
+func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
+	handle, err := s.recordHandle(ctx, authz.ActionPersonRead,
+		strings.TrimSpace(p.String("handle")))
 	if err != nil {
 		return nil, err
 	}
@@ -758,17 +769,13 @@ func (s Sources) workPerson(ctx context.Context, n Native, p Params) (any, error
 	if err != nil {
 		return nil, err
 	}
-	state, err := n.Work.Person(ctx, tracker.PersonQuery{
-		// BOTH OF THIS PERSON'S NAMES — see [Sources.viewerParty]. The
-		// record a person's own assistant has been writing is filed
-		// under the credential it wrote with, so a read of the seat
-		// alone reports an inbox nothing has ever been read in.
-		Who:         who,
+	state, err := s.Work.Person(ctx, tracker.PersonQuery{
+		Handle:      handle,
 		Level:       fresh.Level,
 		MaxLag:      fresh.MaxLag,
 		MaxLagSeq:   fresh.MaxLagSeq,
 		MinPosition: fresh.MinPosition,
-	}, time.Now().UTC())
+	}, s.clock())
 	if err != nil {
 		return nil, err
 	}
@@ -777,9 +784,15 @@ func (s Sources) workPerson(ctx context.Context, n Native, p Params) (any, error
 
 // ---- pages ------------------------------------------------------------- //
 
-func (s Sources) pageList(ctx context.Context, n Native, p Params) (any, error) {
+func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 	f := pages.Filter{
-		Container: strings.ToUpper(strings.TrimSpace(p.String("container"))),
+		// THE KNOWLEDGE BASE'S OWN CANONICAL FORM ([pages.ContainerKey]),
+		// never a copy of it: eleven copies of this rule had drifted and
+		// six did not trim. And canonical HERE, before the read, because
+		// the read's deferral scope is composed from the value as handed
+		// in — a `container=eng` would ask whether a record held against
+		// `eng` is pending, which no writer ever files one under.
+		Container: pages.ContainerKey(p.String("container")),
 		ParentID:  strings.TrimSpace(p.String("parent")),
 		Label:     strings.TrimSpace(p.String("label")),
 		Watcher:   strings.TrimSpace(p.String("watcher")),
@@ -824,7 +837,7 @@ func (s Sources) pageList(ctx context.Context, n Native, p Params) (any, error) 
 	if err != nil {
 		return nil, err
 	}
-	list, err := n.Pages.List(ctx, f, fresh)
+	list, err := s.Pages.List(ctx, f, fresh)
 	if errors.Is(err, pages.ErrBadCursor) {
 		return nil, badParams("after", f.After, []string{"the after of a previous answer"})
 	}
@@ -855,12 +868,12 @@ func (s Sources) pageList(ctx context.Context, n Native, p Params) (any, error) 
 	return out, nil
 }
 
-func (s Sources) containers(ctx context.Context, n Native, p Params) (any, error) {
+func (s Sources) containers(ctx context.Context, p Params) (any, error) {
 	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
-	list, err := n.Pages.Containers(ctx, fresh)
+	list, err := s.Pages.Containers(ctx, fresh)
 	if err != nil {
 		return nil, err
 	}
@@ -911,25 +924,10 @@ func badParams(field, got string, allowed []string) error {
 		ErrBadParams, field, got, strings.Join(allowed, ", "))
 }
 
-// RetryAfter is how long a caller should wait before asking again, or zero
-// when nothing here can say.
-//
-// DERIVED FROM THE REFUSAL rather than a constant, because the refusal derives
-// it from the observed drain: a flat hint sends a caller back too early on a
-// node grinding through a bulk apply and holds one waiting on a node that
-// caught up in milliseconds.
-func RetryAfter(err error) time.Duration {
-	var refused *statelog.Refused
-	if errors.As(err, &refused) {
-		return refused.RetryAfter
-	}
-	return 0
-}
-
 // ---- projects ----------------------------------------------------------- //
 
 // workProjects answers the company's projects with their maintained counts.
-func (s Sources) workProjects(ctx context.Context, n Native, p Params) (any, error) {
+func (s Sources) workProjects(ctx context.Context, p Params) (any, error) {
 	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
@@ -947,7 +945,7 @@ func (s Sources) workProjects(ctx context.Context, n Native, p Params) (any, err
 	// THE CALLER'S OWN — see [Freshness].
 	q.Level, q.MaxLag, q.MaxLagSeq = fresh.Level, fresh.MaxLag, fresh.MaxLagSeq
 	q.MinPosition = fresh.MinPosition
-	listing, err := n.Work.Projects(ctx, q)
+	listing, err := s.Work.Projects(ctx, q)
 	if err != nil {
 		return nil, err
 	}
@@ -956,7 +954,7 @@ func (s Sources) workProjects(ctx context.Context, n Native, p Params) (any, err
 
 // workProject answers one project in full — the Overview tab, and the answer a
 // seat learns a project's vocabulary from.
-func (s Sources) workProject(ctx context.Context, n Native, p Params) (any, error) {
+func (s Sources) workProject(ctx context.Context, p Params) (any, error) {
 	key := strings.TrimSpace(p.String("key"))
 	if key == "" {
 		key = strings.TrimSpace(p.String("project"))
@@ -968,7 +966,7 @@ func (s Sources) workProject(ctx context.Context, n Native, p Params) (any, erro
 	if err != nil {
 		return nil, err
 	}
-	detail, err := n.Work.Project(ctx, tracker.ProjectDetailQuery{
+	detail, err := s.Work.Project(ctx, tracker.ProjectDetailQuery{
 		Project:     key,
 		ForType:     strings.TrimSpace(p.String("for_type")),
 		Units:       s.chartUnits(),
@@ -999,17 +997,16 @@ func (s Sources) workProject(ctx context.Context, n Native, p Params) (any, erro
 // person and resolves the viewer from the caller's own credential; this one is
 // about everybody at once, which is the whole question — "who is carrying the
 // most" has no answer that names a person in advance.
-func (s Sources) workWorkload(ctx context.Context, n Native, p Params) (any, error) {
+func (s Sources) workWorkload(ctx context.Context, p Params) (any, error) {
 	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
-	out, err := n.Work.Workload(ctx, tracker.WorkloadQuery{
+	out, err := s.Work.Workload(ctx, tracker.WorkloadQuery{
 		Unit: strings.TrimSpace(p.String("unit")),
-		// THROUGH THE CHART, so `?unit=` takes the unit's id or its
-		// name — see [tracker.Units]. A screen sends whichever of the
-		// two it was handed, and the rows hold whichever was current
-		// when each was written.
+		// THROUGH THE CHART, so `?unit=` takes the unit's key or its
+		// name — see [tracker.Units]. A screen sends whichever it was
+		// handed, and each row holds the unit's key.
 		Units: s.chartUnits(),
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
 		MinPosition: fresh.MinPosition,
@@ -1040,7 +1037,7 @@ func (s Sources) chartUnits() tracker.Units {
 // ---- the activity feed and one person's day ----------------------------- //
 
 // workActivity answers a slice of the company's own history.
-func (s Sources) workActivity(ctx context.Context, n Native, p Params) (any, error) {
+func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 	q := tracker.ActivityQuery{
 		Task:     strings.TrimSpace(p.String("task")),
 		Actor:    strings.TrimSpace(p.String("actor")),
@@ -1072,10 +1069,20 @@ func (s Sources) workActivity(ctx context.Context, n Native, p Params) (any, err
 				[]string{"workspace", "project:<KEY>"})
 		}
 	}
-	for _, kind := range strings.Split(p.String("kinds"), ",") {
-		if kind = strings.TrimSpace(kind); kind != "" {
-			q.Kinds = append(q.Kinds, tracker.ChangeKind(kind))
+	// A KIND THIS BUILD DOES NOT HAVE IS REFUSED NAMING THE SET, for the
+	// reason `actor_kinds` below is: it reached the reader as it came and
+	// matched no row, so a mistyped filter answered an empty feed that
+	// looks exactly like a quiet company.
+	for _, name := range strings.Split(p.String("kinds"), ",") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
 		}
+		kind := tracker.ChangeKind(name)
+		if !kind.Valid() {
+			return nil, badParams("kinds", name, names(tracker.ChangeKinds))
+		}
+		q.Kinds = append(q.Kinds, kind)
 	}
 	// WHO WAS WRITING, which is the audit screen's whole question: every
 	// commit a token or a person made, across the company, rather than one
@@ -1124,29 +1131,34 @@ func (s Sources) workActivity(ctx context.Context, n Native, p Params) (any, err
 		notified := p.Bool("notified", true)
 		q.Notified = &notified
 	}
-	answer, err := n.Work.Activity(ctx, q, time.Now().UTC())
-	if err != nil {
-		switch {
-		case errors.Is(err, tracker.ErrNoTask):
-			return nil, ErrNotFound
-		case errors.Is(err, statelog.ErrUnavailable), transient(err):
-			return nil, err
-		}
+	answer, err := s.Work.Activity(ctx, q, s.clock())
+	switch {
+	case errors.Is(err, tracker.ErrNoTask):
+		return nil, ErrNotFound
+	case errors.Is(err, tracker.ErrBadQuery):
 		// A GATE REFUSAL IS A BAD REQUEST, not a failure: the caller
-		// asked a question this surface will not run, and the message
-		// names the keys that make it runnable.
+		// asked a question this surface will not run — a text search
+		// wider than the feed can scan, a cursor or a `since` from
+		// another log — and the message names what makes it runnable.
+		//
+		// BY ITS SENTINEL and nothing wider. Every failure that was not
+		// the state log's used to take this arm, so a store this node
+		// could not read was answered 400 as the caller's mistake.
 		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+	case err != nil:
+		return nil, err
 	}
 	return answer, nil
 }
 
 // workMyWork answers everything one person is expected to look at.
-func (s Sources) workMyWork(ctx context.Context, n Native, p Params) (any, error) {
-	// THE SAME SCOPE RULE AS THE INBOX — see [Sources.viewerParty]. This
+func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
+	// THE SAME SCOPE RULE AS THE INBOX — see [Sources.recordHandle]. This
 	// was registered operator-only and demanded a handle, which is why
 	// routes/MyWork.tsx picked the alphabetically first seat: there was no
 	// way for the screen to know whose day it was drawing.
-	who, err := s.viewerParty(ctx, strings.TrimSpace(p.String("handle")))
+	handle, err := s.recordHandle(ctx, authz.ActionMyWork,
+		strings.TrimSpace(p.String("handle")))
 	if err != nil {
 		return nil, err
 	}
@@ -1154,13 +1166,8 @@ func (s Sources) workMyWork(ctx context.Context, n Native, p Params) (any, error
 	if err != nil {
 		return nil, err
 	}
-	out, err := n.Work.MyWork(ctx, tracker.MyWorkQuery{
-		// BOTH OF THIS PERSON'S NAMES — see [Sources.viewerParty].
-		// Every block here matches rows by handle, and the rows a
-		// person's own credential wrote carry the TOKEN's name: the
-		// seven tabs a founder opened on their own day were empty
-		// while they were reporter and watcher on eleven items.
-		Who: who,
+	out, err := s.Work.MyWork(ctx, tracker.MyWorkQuery{
+		Handle: handle,
 		// THE CALLER'S OWN, defaulting to `stale`: this is a POLL of
 		// somebody's day, not a read-back of a write they just made —
 		// see [Freshness] and [Sources.workItems].

@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/subagent"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -34,13 +35,15 @@ func (o offeringTool) Call(context.Context, map[string]any) (tools.Result, error
 	return tools.Result{Output: "peeked"}, nil
 }
 
+// founderNote is a note a bound person sent through their session: By is the
+// seat they act as, as iam.ActorFor names them, and OperatorID the credential.
 var founderNote = steer.Note{ID: "req-1", Text: "post to #staging, not #general",
-	By: "ops-token", BySeat: "founder"}
+	By: "founder", ByKind: iam.ActorHuman, OperatorID: "session:founder-1"}
 
 // holds reports whether a request's conversation carries the note as the one
 // user message the model reads it as.
 func holds(req llm.Request) bool {
-	want := prompts.SteerMessage(founderNote.Sender(), founderNote.Text)
+	want := prompts.SteerMessage(founderNote.By, founderNote.Text)
 	return slices.ContainsFunc(req.Messages, func(m llm.Message) bool {
 		return m.Role == llm.RoleUser && m.Content == want
 	})
@@ -109,7 +112,9 @@ func TestTheReviewerSeesANoteTheExecutorWasSteeredWith(t *testing.T) {
 		t.Fatalf("published %d agent_turn_steered, want 1: %+v", len(got), got)
 	}
 	if got[0].Outcome != types.SteerDelivered || got[0].Phase != types.Phase(phase.Execute) ||
-		got[0].Round != 2 || got[0].NoteID != "req-1" || got[0].SteeredBySeat != "founder" ||
+		got[0].Round != 2 || got[0].NoteID != "req-1" || got[0].SteeredBy != "founder" ||
+		got[0].SteeredByKind != string(iam.ActorHuman) ||
+		got[0].OperatorID != "session:founder-1" ||
 		got[0].Note != founderNote.Text || got[0].TurnID != "t-1" || got[0].AgentHandle != "cto" {
 		t.Errorf("the delivery record is %+v", got[0])
 	}

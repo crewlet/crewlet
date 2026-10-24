@@ -1,17 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
+import { parseMarkdown, safeHref } from "@crewlethq/ui";
 import {
   MODEL_WORDS,
   type RenderOptions,
   nestSections,
   outline,
-  parseBlocks,
   plainText,
   renderInline,
   renderMarkdown,
-  safeHref,
   splitSections,
   UnbrokenCode,
+  imageSources,
+  shownImage,
 } from "./markdown.ts";
 // THE FIXTURES ARE REAL FILES, imported verbatim rather than inlined as
 // template literals: a document written in a `.md` file is a document
@@ -27,7 +28,9 @@ function draw(source: string): HTMLElement {
 
 describe("a href", () => {
   it("allows the schemes a page legitimately links with", () => {
-    expect(safeHref("https://docs.crewlet.ai/x")).toBe("https://docs.crewlet.ai/x");
+    expect(safeHref("https://docs.crewlet.ai/engine/latest/")).toBe(
+      "https://docs.crewlet.ai/engine/latest/",
+    );
     expect(safeHref("http://example.com")).toBe("http://example.com");
     expect(safeHref("mailto:ops@example.com")).toBe("mailto:ops@example.com");
     expect(safeHref("#/work/ENG-1")).toBe("#/work/ENG-1");
@@ -70,10 +73,10 @@ describe("a href", () => {
     // form can reach different destinations, so a function that checked one
     // and handed back the other would be vouching for a string nobody
     // navigates to.
-    const noisy = "https://docs.crewlet.ai/\u0009guide";
+    const noisy = "https://docs.crewlet.ai/engine/latest/\u0009guides/deployment/";
     const got = safeHref(noisy);
     expect(got).not.toBe(noisy);
-    expect(got).toBe("https://docs.crewlet.ai/guide");
+    expect(got).toBe("https://docs.crewlet.ai/engine/latest/guides/deployment/");
     // And whatever comes back passes the check a second time, unchanged.
     expect(safeHref(got ?? "")).toBe(got);
   });
@@ -143,7 +146,7 @@ describe("a company page", () => {
     expect(el.querySelector("strong")?.textContent).toBe("one NATS cluster");
     expect(el.querySelector("em")?.textContent).toBe("second");
     expect(el.querySelector("ol")?.querySelectorAll("li")).toHaveLength(3);
-    expect(el.querySelector("code.inline")?.textContent).toBe("stream.type: pulsar");
+    expect(el.querySelector("code.crewlet-inline-code")?.textContent).toBe("stream.type: pulsar");
     expect(el.querySelector("pre code")?.textContent).toContain("topics.NotificationsInbound");
     expect(el.querySelector("blockquote")?.textContent).toContain("compare-and-set");
     expect(el.querySelector("hr")).not.toBeNull();
@@ -235,7 +238,7 @@ describe("a company page", () => {
 describe("the block parser", () => {
   it("does not read a line of pipes as a table without its delimiter", () => {
     // A shell pipeline in a paragraph is not a one-column table.
-    const blocks = parseBlocks("run `cat x | grep y` and see");
+    const blocks = parseMarkdown("run `cat x | grep y` and see");
     expect(blocks).toHaveLength(1);
     expect(blocks[0]?.kind).toBe("paragraph");
   });
@@ -251,8 +254,10 @@ describe("the block parser", () => {
     // sample is CONTENT. Read as a close it ended the block on its first line
     // and the whole sample was thrown away — an empty code block where a page
     // was teaching somebody how to write one.
-    const blocks = parseBlocks("```sh\n```ts\n# install deps\n```");
-    expect(blocks).toEqual([{ kind: "code", lang: "sh", text: "```ts\n# install deps" }]);
+    const blocks = parseMarkdown("```sh\n```ts\n# install deps\n```");
+    expect(blocks).toEqual([
+      { kind: "code", lang: "sh", text: "```ts\n# install deps", fence: "```" },
+    ]);
   });
 
   it("renders an unterminated fence rather than dropping the rest", () => {
@@ -267,12 +272,12 @@ describe("the block parser", () => {
   });
 
   it("treats a bulleted run after a numbered one as its own list", () => {
-    const blocks = parseBlocks("1. one\n2. two\n- a\n- b");
+    const blocks = parseMarkdown("1. one\n2. two\n- a\n- b");
     expect(blocks.map((b) => b.kind)).toEqual(["list", "list"]);
   });
 
   it("answers an empty document with nothing rather than throwing", () => {
-    expect(parseBlocks("")).toEqual([]);
+    expect(parseMarkdown("")).toEqual([]);
     expect(renderMarkdown("")).toEqual([]);
   });
 });
@@ -285,6 +290,35 @@ describe("the block parser", () => {
  * differently — so the property that matters is not what a section LOOKS like
  * but that the split loses nothing and invents nothing.
  */
+describe("what the shared grammar adds", () => {
+  it("draws an escaped character as itself", () => {
+    const el = draw("a \\*literal\\* star and a \\# hash");
+    expect(el.textContent).toBe("a *literal* star and a # hash");
+    expect(el.querySelector("em")).toBeNull();
+  });
+
+  it("draws a callout as a note with its tone named", () => {
+    const el = draw("> [!WARNING]\n> A restart drops every session.");
+    const note = el.querySelector('[role="note"]');
+    expect(note?.getAttribute("data-callout")).toBe("warning");
+    expect(note?.querySelector("[data-callout-label]")?.textContent).toBe("Warning");
+    expect(note?.querySelector("[data-callout-body] p")?.textContent).toBe(
+      "A restart drops every session.",
+    );
+    expect(plainText("> [!NOTE]\n> Read me")).toBe("Read me");
+  });
+
+  it("keeps an escaped pipe inside its table cell", () => {
+    const el = draw("| a | b |\n|---|---|\n| x \\| y | z |");
+    expect([...el.querySelectorAll("td")].map((td) => td.textContent)).toEqual(["x | y", "z"]);
+  });
+
+  it("reads a link whose label holds an escaped bracket", () => {
+    const el = draw("[a \\] b](#/knowledge/pages/7)");
+    expect(el.querySelector("a")?.textContent).toBe("a ] b");
+  });
+});
+
 describe("sectioning", () => {
   it("splits on ATX headings and keeps the run before the first one", () => {
     const sections = splitSections("lead line\n\n# One\nunder one\n\n## Two\nunder two");
@@ -458,8 +492,12 @@ describe("plain text", () => {
     expect(plainText("- [ ] ship it\n- [x] merged")).toBe("[ ] ship it [x] merged");
     expect(plainText("use `**not bold**` here")).toBe("use **not bold** here");
     expect(plainText("![a diagram](x.png)")).toBe("a diagram");
-    expect(plainText("read [the guide](https://docs.crewlet.ai/x)")).toBe("read the guide");
-    expect(plainText("<https://docs.crewlet.ai/x>")).toBe("https://docs.crewlet.ai/x");
+    expect(plainText("read [the guide](https://docs.crewlet.ai/engine/latest/)")).toBe(
+      "read the guide",
+    );
+    expect(plainText("<https://docs.crewlet.ai/engine/latest/>")).toBe(
+      "https://docs.crewlet.ai/engine/latest/",
+    );
     expect(plainText("a\n\n---\n\nb")).toBe("a b");
     expect(plainText("| h |\n| --- |\n| c |")).toBe("h c");
   });
@@ -512,9 +550,9 @@ describe("inline code", () => {
   // or it would overflow a phone's column.
   it("keeps a short span whole and lets a long one wrap", () => {
     const el = draw("Wait (`nimbus jobs wait --node <n>`) or read `" + "x".repeat(40) + "`.");
-    const [short, long] = Array.from(el.querySelectorAll("code.inline"));
-    expect(short?.classList.contains("is-whole")).toBe(true);
-    expect(long?.classList.contains("is-whole")).toBe(false);
+    const [short, long] = Array.from(el.querySelectorAll("code.crewlet-inline-code"));
+    expect(short?.classList.contains("crewlet-inline-code--whole")).toBe(true);
+    expect(long?.classList.contains("crewlet-inline-code--whole")).toBe(false);
     expect("nimbus jobs wait --node <n>".length).toBeLessThanOrEqual(UnbrokenCode);
   });
 });
@@ -680,6 +718,21 @@ describe("emphasis", () => {
     });
   }
 
+  it("draws every link of a document as its words where the document sits inside a link", () => {
+    // A GALLERY CARD'S DOC COVER is drawn inside the card's own link, and an
+    // `<a>` may hold no other: a paragraph's link and a list item's alike.
+    const { container } = render(
+      <div>
+        {renderMarkdown("A [guide](https://example.com).\n\n- see <https://example.com/x>", {
+          links: "text",
+        })}
+      </div>,
+    );
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.textContent).toContain("A guide.");
+    expect(container.textContent).toContain("see https://example.com/x");
+  });
+
   it("draws a link as its words where the run sits inside a control", () => {
     // `links: "text"` is for an outline row or a picker's option: a link
     // inside one is unreachable as itself and steals the row's click.
@@ -704,5 +757,125 @@ describe("emphasis", () => {
       "call submit_work with result_summary",
     );
     expect(plainText("_a_b_ and **c**")).toBe("a_b and c");
+  });
+});
+
+describe("a search's words, marked", () => {
+  it("marks the words a search matched in prose, and never inside code", () => {
+    const { container } = render(
+      <div>
+        {renderMarkdown("Drain the node, then run `drain-all`.", { highlight: ["drain"] })}
+      </div>,
+    );
+    // THE PROSE ONLY: the code span keeps its own text unmarked.
+    expect([...container.querySelectorAll("mark")].map((m) => m.textContent)).toEqual(["Drain"]);
+    expect(container.querySelector("code mark")).toBeNull();
+    // AND NOTHING IS MARKED WHERE NOTHING WAS SEARCHED.
+    expect(draw("Drain the node.").querySelector("mark")).toBeNull();
+  });
+});
+
+describe("a wide table", () => {
+  it("scrolls in a region a keyboard can reach, named by its columns", () => {
+    const root = draw("| Step | Owner |\n|---|---|\n| Drain | SRE |");
+    const region = root.querySelector(".md-table");
+    expect(region?.getAttribute("role")).toBe("region");
+    expect(region?.getAttribute("tabindex")).toBe("0");
+    expect(region?.getAttribute("aria-label")).toBe("Table: Step, Owner");
+  });
+});
+
+describe("pictures a host resolves", () => {
+  const source = [
+    "# ![Logo](img/logo.png) Plan",
+    "",
+    "A [linked ![chart](img/chart.png)](https://example.com) and `![not](code.png)`.",
+    "",
+    "- ![In a list](img/list.png)",
+    "",
+    "| a |",
+    "| - |",
+    "| ![cell](img/cell.png) |",
+    "",
+    "```",
+    "![fenced](fenced.png)",
+    "```",
+  ].join("\n");
+
+  it("lists exactly the sources the renderer asks for, once each, and none it renders as text", () => {
+    const asked: string[] = [];
+    render(
+      <div>
+        {renderMarkdown(source, {
+          image: (src) => {
+            asked.push(src);
+            return null;
+          },
+        })}
+      </div>,
+    );
+    expect(imageSources(source)).toEqual([...new Set(asked)]);
+    // The picture inside a link's label is a picture too, as a badge that
+    // links somewhere is: the grammar reads it whole before the label ends.
+    expect(imageSources(source)).toEqual([
+      "img/logo.png",
+      "img/chart.png",
+      "img/list.png",
+      "img/cell.png",
+    ]);
+  });
+
+  it("shows an image through the resolver, and its alt text where the resolver has none", () => {
+    const { container } = render(
+      <div>
+        {renderMarkdown("![Team](img/team.png) ![Far](https://example.com/a.png)", {
+          image: (src) => (src === "img/team.png" ? "blob:team" : null),
+        })}
+      </div>,
+    );
+    const imgs = container.querySelectorAll("img");
+    expect(imgs).toHaveLength(1);
+    expect(imgs[0]!.getAttribute("src")).toBe("blob:team");
+    expect(container.textContent).toContain("Far");
+  });
+});
+
+describe("a picture with no resolver", () => {
+  // THE DASHBOARD LOADS PICTURES FROM ITS OWN ORIGIN ONLY (`img-src 'self'
+  // data: blob:`), so an `img` naming another origin is a picture the browser
+  // refuses: a Knowledge page's remote picture drew as a broken image.
+  it("links to a picture on another origin rather than drawing one the policy refuses", () => {
+    const el = draw("![The rota](https://example.com/rota.png)");
+    expect(el.querySelector("img")).toBeNull();
+    const link = el.querySelector("a")!;
+    expect(link.getAttribute("href")).toBe("https://example.com/rota.png");
+    expect(link.textContent).toBe("The rota");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+  });
+
+  it("names a link to a picture with no alt text by its address", () => {
+    const el = draw("![](https://example.com/rota.png)");
+    expect(el.querySelector("a")?.textContent).toBe("https://example.com/rota.png");
+  });
+
+  it("shows a picture on the dashboard's own origin", () => {
+    const own = `${window.location.origin}/static/rota.png`;
+    const el = draw(`![The rota](${own})`);
+    expect(el.querySelector("img")?.getAttribute("src")).toBe(own);
+    expect(shownImage(own)).toBe(own);
+    expect(shownImage("https://example.com/rota.png")).toBeNull();
+    expect(shownImage("#/knowledge")).toBeNull();
+  });
+});
+
+describe("a link's label", () => {
+  // A LINK INSIDE A LINK IS NO LINK: a browser splits the outer anchor around
+  // the inner one, so an address in a label is the label's text.
+  it("keeps an address inside a link's label as text, never a link in a link", () => {
+    const el = draw("[see <https://example.com/a>](https://example.com/oncall)");
+    const links = el.querySelectorAll("a");
+    expect(links).toHaveLength(1);
+    expect(links[0]!.getAttribute("href")).toBe("https://example.com/oncall");
+    expect(links[0]!.textContent).toBe("see https://example.com/a");
   });
 });

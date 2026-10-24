@@ -20,19 +20,15 @@
  * by rank, with the residual in the residual's own neutral.
  */
 
-import { Card, StackedColumns } from "@crewlethq/ui";
+import { Card, SegmentedControl, StackedColumns } from "@crewlethq/ui";
 import { QueryState } from "~/components/common.tsx";
 import { GROUPS } from "~/contract/spend.ts";
 import { bandsOf, unbandedTokens } from "~/lib/spend.ts";
 import { companyDateLabel, fmtCount, fmtExact } from "~/lib/format.ts";
 import { dayLabelIn } from "~/lib/range.ts";
-import { useSeatBadgeOf } from "~/lib/seats.ts";
+
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type { TokenSeries } from "~/protocol/types.ts";
-// OURS, AND DELIBERATELY: the kit's `SegmentedControl` commits the option the
-// arrows land on, and every commit here re-asks `token_series` — six queries
-// and six history entries for one sweep across the dimensions.
-import { Segmented } from "~/ui/primitives.tsx";
 
 /** What each split is called in the card's title: "Daily tokens by phase". */
 const GROUP_NOUN: Record<string, string> = {
@@ -60,8 +56,10 @@ export function PhaseChart({
   // split is in flight the old answer is still on screen, and its legend must
   // name its own bands.
   const drawn = data?.group ?? group;
-  const badgeOf = useSeatBadgeOf();
-  const bands = bandsOf(data, drawn, (handle) => badgeOf(handle).name);
+  // THE ENGINE'S LABEL FOR EVERY BAND (`bandsOf`): a seat band is keyed by
+  // its agent id and labelled by the engine with its current name, so there
+  // is no chart lookup to make here.
+  const bands = bandsOf(data, drawn);
   const today = dayLabelIn(Date.now(), zone);
   const labels = new Map(
     (data?.series ?? []).map((p) => [
@@ -83,13 +81,14 @@ export function PhaseChart({
     <Card className="spend-card spend-chart">
       <QueryState
         error={series.error}
+        refusal={series.refusal}
         detail={series.detail}
         loading={series.loading && !data}
         empty={
           data && data.totals.calls === 0
             ? {
                 title: "No model calls in this window",
-                hint: "Nothing ran, or nothing that ran reports tokens. Widen the window, or check that the seats you expect are running.",
+                hint: "Widen the window.",
               }
             : undefined
         }
@@ -101,13 +100,13 @@ export function PhaseChart({
             head={
               <div className="spend-chart-head">
                 <h2 className="spend-title">Daily tokens by {noun}</h2>
-                <span className="spend-caption">
-                  {drawn === "phase"
-                    ? "Execute does the work; review, workers and auxiliary calls are the overhead"
-                    : drawn === "worker"
-                      ? "Background duties only — every other call is outside these bands"
+                {drawn !== "phase" && (
+                  <span className="spend-caption">
+                    {drawn === "worker"
+                      ? "Background work only"
                       : "The four biggest, and everything else as one band"}
-                </span>
+                  </span>
+                )}
               </div>
             }
             // EVERY BAND THE ENGINE NAMED, in its order: a band's colour is
@@ -118,18 +117,25 @@ export function PhaseChart({
             // nothing. Any other split lists only what spent.
             series={bands.map((b) => ({ id: b.key, name: b.label, color: b.color }))}
             buckets={buckets}
-            height="12rem"
+            // THE PLOT TAKES THE ROW'S HEIGHT. Drawn at a fixed 12rem beside a
+            // taller hero, it stopped short and the split control stood up to
+            // 68px under the dates; filling, the figure flexes in this card and
+            // the plot grows into the spare height, never under that 12rem.
+            height="fill"
+            minHeight="12rem"
             format={(v) => fmtCount(v)}
             formatTime={(at) => labels.get(at) ?? ""}
           />
         )}
       </QueryState>
       <div className="spend-chart-foot">
-        <Segmented
-          ariaLabel="Split by"
+        <SegmentedControl
+          semantics="radio"
+          activate="manual"
+          label="Split by"
           size="sm"
           value={group}
-          onChange={onGroup}
+          onValueChange={onGroup}
           options={GROUPS.map((g) => ({ value: g.value, label: g.label }))}
         />
         {unbanded > 0 && data && (

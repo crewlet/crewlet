@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/config"
 )
 
@@ -96,37 +95,44 @@ func TestAnOrgRuleIsLocatedWhereItWasWritten(t *testing.T) {
 		},
 		{
 			// ONE LINE, ONE PROBLEM PER SEAT, each at the name that seat
-			// wrote. Identical names are the case a name-based lookup
-			// cannot tell apart at all.
-			name: "two seats of one name",
-			doc: "name: Acme\nroles:\n  - name: Software Engineer\n    handle: swe-root\n" +
-				"units:\n  - name: Eng\n    roles:\n      - name: Software Engineer\n        handle: swe-eng\n",
-			messageHas: "duplicate seat name",
+			// wrote: two seats of one name that declare no handle derive
+			// one, and it is the HANDLE they collide on — a name alone is
+			// prose and collides with nothing.
+			// AT THE HANDLE, which is the seat's identity and the field
+			// to change — here written in from a name both seats carry,
+			// since neither declares one.
+			name: "two seats of one name deriving one handle",
+			doc: "name: Acme\nroles:\n  - name: Software Engineer\n" +
+				"units:\n  - name: Eng\n    roles:\n      - name: Software Engineer\n",
+			messageHas: "duplicate handle",
 			want: []located{
-				{"roles[0].name", "conflict", "swe-root", ""},
-				{"units[0].roles[0].name", "conflict", "swe-eng", ""},
+				{"roles[0].handle", "conflict", "software-engineer", ""},
+				{"units[0].roles[0].handle", "conflict", "software-engineer", ""},
 			},
 		},
 		{
-			// A written handle is the line to change; a derived one is
-			// changed by renaming the seat.
+			// A written handle and one written in from a name collide the
+			// same way, at the handle.
 			name: "two seats on one handle",
 			doc: "name: Acme\nroles:\n  - name: Dev\n" +
 				"units:\n  - name: Eng\n    roles:\n      - name: Developer\n        handle: dev\n",
 			messageHas: "duplicate handle",
 			want: []located{
-				{"roles[0].name", "conflict", "dev", ""},
+				{"roles[0].handle", "conflict", "dev", ""},
 				{"units[0].roles[0].handle", "conflict", "dev", ""},
 			},
 		},
 		{
-			name: "two units of one name",
+			// AT THE ID, which is the unit's key and the field to change —
+			// here minted from a name both units carry, since neither
+			// declares one.
+			name: "two units on one key",
 			doc: "name: Acme\nunits:\n  - name: Eng\n    children:\n      - name: Platform\n" +
 				"  - name: Product\n    children:\n      - name: Platform\n",
-			messageHas: "duplicate unit name",
+			messageHas: "duplicate unit key",
 			want: []located{
-				{"units[0].children[0].name", "conflict", "", "Platform"},
-				{"units[1].children[0].name", "conflict", "", "Platform"},
+				{"units[0].children[0].id", "conflict", "", "Platform"},
+				{"units[1].children[0].id", "conflict", "", "Platform"},
 			},
 		},
 		{
@@ -151,21 +157,21 @@ func TestAnOrgRuleIsLocatedWhereItWasWritten(t *testing.T) {
 	}
 }
 
-// The rules that refuse a key on a human seat, by their messages: the org
+// The four rules that refuse a key on a human seat, by their messages: the org
 // model's, over every field a running seat alone reads, and the config
-// layer's two admission rules over what a seat holds on a code host — its
-// code access tier and its own GitHub App — which nothing running reads off a
-// human seat.
+// layer's three admission rules — over what a seat holds on a code host, its
+// code access tier and its own GitHub App, which nothing running reads off a
+// human seat, and over its avatar, which the org model carries no field for.
 const (
 	agentOnlyOnHuman  = "agent-only field set on a human seat"
 	codeAccessOnHuman = "a human seat has no code access tier"
 	githubAppOnHuman  = "a human seat has no GitHub App"
+	avatarOnHuman     = "a human seat is drawn as the person it is"
 )
 
-// humanSeatRules is every rule that refuses a key on a human seat, in the
-// order the dashboard's builder strips them: the org model's, then the code
-// host's two.
-var humanSeatRules = []string{agentOnlyOnHuman, codeAccessOnHuman, githubAppOnHuman}
+// humanSeatRules is every rule that refuses a key on a human seat: the org
+// model's, then the config layer's three.
+var humanSeatRules = []string{agentOnlyOnHuman, codeAccessOnHuman, githubAppOnHuman, avatarOnHuman}
 
 // humanSeatKey is one key a seat is authored with, as a human seat would
 // carry it.
@@ -211,6 +217,7 @@ var humanSeatKeys = []humanSeatKey{
 	{"behavioral_guidelines", "[Reply fast]", agentOnlyOnHuman},
 	{"code", "{access: review}", codeAccessOnHuman},
 	{"integrations.github", "{repos: [acme/api]}", githubAppOnHuman},
+	{"avatar", "{character: hexlet, color: cyan}", avatarOnHuman},
 }
 
 // humanSeatWith is a company whose first seat is a human one carrying keys,
@@ -323,6 +330,10 @@ func TestEveryAgentOnlyKeyIsRefusedOnAHumanSeatWhereItWasWritten(t *testing.T) {
 		if got := locatedOf(problems, githubAppOnHuman); !reflect.DeepEqual(got, want) {
 			t.Errorf("GitHub App refusals = %+v, want %+v", got, want)
 		}
+		want = []located{{"roles[0].avatar", "conflict", "sarah", ""}}
+		if got := locatedOf(problems, avatarOnHuman); !reflect.DeepEqual(got, want) {
+			t.Errorf("avatar refusals = %+v, want %+v", got, want)
+		}
 	})
 }
 
@@ -355,101 +366,6 @@ func authoredSeatFields(t *testing.T) []seatField {
 		}
 	}
 	return out
-}
-
-// holdsSecret reports whether a value of type t can carry a credential: a
-// field somewhere inside it that a config read masks.
-func holdsSecret(t reflect.Type, seen map[reflect.Type]bool) bool {
-	switch t.Kind() {
-	case reflect.Pointer, reflect.Slice, reflect.Array, reflect.Map:
-		return holdsSecret(t.Elem(), seen)
-	case reflect.Struct:
-		if seen[t] {
-			return false
-		}
-		seen[t] = true
-		for i := range t.NumField() {
-			if config.IsSecret(t.Field(i)) || holdsSecret(t.Field(i).Type, seen) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// THE ORG BUILDER STRIPS WHAT EACH KIND REFUSES, and calls out every credential
-// it strips. A kind change in the dashboard removes the fields the new kind may
-// not carry before it records the change, from lists it keeps itself
-// (`dashboard/src/contract/config.ts`) because it cannot import these rules. A
-// field a list misses is kept, and the next validation refuses the change over
-// a field the change itself made wrong; a field it spells differently is a
-// path no seat has — which is how a seat's `project` and `space` survived every
-// change to human while the list named `integrations.jira` and
-// `integrations.confluence`. And a credential it does not call out is lost
-// without the warning, because the builder holds it masked and nobody can type
-// it back in.
-func TestTheBuilderStripsWhatEachKindRefuses(t *testing.T) {
-	t.Parallel()
-	tree := clientsource.Tree(t)
-	declared := func(name string) []string {
-		t.Helper()
-		body, err := clientsource.Literal(tree, name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		out := clientsource.Strings(body)
-		if len(out) == 0 {
-			t.Fatalf("the dashboard's %s names nothing, so this gate certifies nothing", name)
-		}
-		return out
-	}
-
-	// A HUMAN SEAT: the org model's refusals in its order — which the table is
-	// held to above — and then the two admission rules'.
-	var human []string
-	for _, rule := range humanSeatRules {
-		for _, k := range humanSeatKeys {
-			if k.refusal == rule {
-				human = append(human, k.key)
-			}
-		}
-	}
-	if got := declared("HUMAN_FORBIDDEN"); !slices.Equal(got, human) {
-		t.Errorf("the builder strips %v from a seat becoming human, want what the engine "+
-			"refuses on one, in its order: %v", got, human)
-	}
-
-	// AN AGENT SEAT, read off the engine's own refusal of a seat carrying every
-	// key there is: what that one message lists is everything an agent seat may
-	// not carry, in the order the engine lists it.
-	agent := declared("AGENT_FORBIDDEN")
-	const humanOnly = "human-only field set on an agent seat"
-	problems := config.Problems(parsed(t,
-		seatWith("    contact: {slack_user_id: U0SARAH}\n", humanSeatKeys...)).Validate())
-	want := []located{{"roles[0]", "conflict", "sarah", ""}}
-	if got := locatedOf(problems, humanOnly); !reflect.DeepEqual(got, want) {
-		t.Fatalf("human-only refusals = %+v, want %+v\nall: %+v", got, want, problems)
-	}
-	for _, p := range problems {
-		if strings.Contains(p.Message, humanOnly) &&
-			!strings.HasSuffix(p.Message, ": "+strings.Join(agent, ", ")+" (did you mean kind: human?)") {
-			t.Errorf("the builder strips %v from a seat becoming an agent, want what the "+
-				"engine refuses on one, in its order: %s", agent, p.Message)
-		}
-	}
-
-	// THE CREDENTIALS: every seat key whose value holds a field a config read
-	// masks, in config.Role's order.
-	var secret []string
-	for _, f := range authoredSeatFields(t) {
-		if config.IsSecret(f.field) || holdsSecret(f.field.Type, map[reflect.Type]bool{}) {
-			secret = append(secret, f.key)
-		}
-	}
-	if got := declared("SEAT_CREDENTIALS"); !slices.Equal(got, secret) {
-		t.Errorf("the builder calls out %v as credentials, want every seat key a config "+
-			"read masks inside, in config.Role's order: %v", got, secret)
-	}
 }
 
 // assertProblemsAreTheRefusal holds the contract between the text and the
@@ -533,8 +449,6 @@ func TestEveryOrgRuleHasTheKindTheContractNames(t *testing.T) {
 		rule, doc, kind string
 	}{
 		{"name must not be empty", "name: Acme\nroles:\n  - goal: ship\n", "missing"},
-		{"human seat needs at least one contact identity",
-			"name: Acme\nroles:\n  - name: Sarah\n    kind: human\n", "missing"},
 		{"unknown seat kind", "name: Acme\nroles:\n  - name: Dev\n    kind: robot\n", "unknown_value"},
 		{"handle must match", "name: Acme\nroles:\n  - name: Dev\n    handle: Dev!\n", "unknown_value"},
 		{"value embeds a ${VAR} reference",
@@ -542,19 +456,16 @@ func TestEveryOrgRuleHasTheKindTheContractNames(t *testing.T) {
 			"unknown_value"},
 		{"duplicate handle",
 			"name: Acme\nroles:\n  - name: Dev\n  - name: Developer\n    handle: dev\n", "conflict"},
-		{"duplicate seat name",
-			"name: Acme\nroles:\n  - name: Dev\n    handle: a\n  - name: Dev\n    handle: b\n", "conflict"},
-		{"duplicate unit name", "name: Acme\nunits:\n  - name: Eng\n  - name: Eng\n", "conflict"},
 		// Two seats on one account carries ErrDuplicateIdentity ALONE — no
-		// name or handle collided — so it is the one duplicate a missing
-		// table entry reports as `invalid`.
+		// handle collided — so a missing table entry reports it as
+		// `invalid`.
 		{"duplicate contact identity",
 			"name: Acme\nroles:\n  - name: Sarah\n    kind: human\n" +
 				"    contact: {slack_user_id: U0F}\n  - name: Ada\n    kind: human\n" +
 				"    contact: {slack_user_id: U0F}\n",
 			"conflict"},
-		// A collision an id carried names no duplicate name and so carries
-		// only the key sentinel, which is the entry the table lost.
+		// The id minted from `Platform` and the one `Product` wrote are
+		// one key.
 		{"duplicate unit key", "name: Acme\nunits:\n  - name: Platform\n  - name: Product\n    id: platform\n",
 			"conflict"},
 		{"agent-only field set on a human seat",
@@ -605,8 +516,8 @@ func TestAParserProblemCarriesItsLineAndNoSegmentsWhenUnplaced(t *testing.T) {
 	if len(problems) != 1 {
 		t.Fatalf("problems = %+v, want one", problems)
 	}
-	if want := `backstroy: unknown field: "backstroy" is not a setting: check the spelling, ` +
-		`or the block it belongs under (line 3)`; problems[0].Message != want {
+	if want := `backstroy: unknown field: "backstroy" isn't a setting. Check the spelling ` +
+		`and the block it's under (line 3)`; problems[0].Message != want {
 		t.Errorf("message = %q, want %q", problems[0].Message, want)
 	}
 
@@ -643,9 +554,9 @@ integrations:
         former.engineer: maintainer
 roles:
   - name: CEO
-    manages: [Eng, Ghost]
+    manages: [eng, ghost]
   - name: Dev
-    unit: Nowhere
+    unit: nowhere
 units:
   - name: Eng
     roles:
@@ -653,7 +564,7 @@ units:
       - name: Engineer
     children:
       - name: Platform
-        lead: Phantom
+        lead: phantom
 `)
 	type want struct {
 		ref, path, seat, unit, from, to string
@@ -667,10 +578,10 @@ units:
 		got = append(got, want{w.Ref, w.Path, w.Seat, w.Unit, w.From, w.To, w.Segments})
 	}
 	expected := []want{
-		{"unit", "roles[1].unit", "dev", "", "Dev", "Nowhere", config.Path{"roles", 1, "unit"}},
-		{"lead", "units[0].children[0].lead", "", "Platform", "Platform", "Phantom",
+		{"unit", "roles[1].unit", "dev", "", "Dev", "nowhere", config.Path{"roles", 1, "unit"}},
+		{"lead", "units[0].children[0].lead", "", "Platform", "Platform", "phantom",
 			config.Path{"units", 0, "children", 0, "lead"}},
-		{"manages", "roles[0].manages[1]", "ceo", "", "CEO", "Ghost", config.Path{"roles", 0, "manages", 1}},
+		{"manages", "roles[0].manages[1]", "ceo", "", "CEO", "ghost", config.Path{"roles", 0, "manages", 1}},
 		{"gitlab_access_level", "integrations.gitlab.provisioning.access_levels.former.engineer", "", "",
 			"integrations.gitlab.provisioning.access_levels", "former.engineer",
 			config.Path{"integrations", "gitlab", "provisioning", "access_levels", "former.engineer"}},
@@ -724,11 +635,10 @@ units:
 	for _, w := range warnings {
 		paths = append(paths, w.Path)
 	}
-	for _, want := range []string{"units[0].name", "units[1].children[0].name",
-		"units[0].roles[0].name", "units[1].children[0].roles[0].name"} {
-		if !slices.Contains(paths, want) {
-			t.Errorf("no admission warning at %s: %v", want, paths)
-		}
+	// THE TWO UNITS, at the id each one's key is — minted from the shared
+	// name — and NOT the two seats called Engineer: a name is prose.
+	if want := []string{"units[0].id", "units[1].children[0].id"}; !reflect.DeepEqual(paths, want) {
+		t.Errorf("admission warnings at %v, want exactly %v", paths, want)
 	}
 
 	// And Warnings is ONE list in a fixed order: the references, then
@@ -747,7 +657,17 @@ units:
 // its references alone.
 func TestAnAdmittedCompanyHasNoAdmissionWarnings(t *testing.T) {
 	t.Parallel()
-	cfg := parsed(t, "name: Acme\nroles:\n  - name: CEO\n    manages: [Ghost]\n")
+	// A WELL-FORMED HANDLE THAT NAMES NOBODY, for the reason
+	// TestDanglingReferencesAreReportedNotRejected states: a display name
+	// in a reference is refused by its own admission rule, so a fixture
+	// written that way would break this one's premise rather than test it.
+	//
+	// AND A REACHABLE PERSON'S SEAT, so the one warning counted is the
+	// reference: a company with no human seat is advised that nobody can
+	// join it.
+	cfg := parsed(t, "name: Acme\nroles:\n  - name: CEO\n    manages: [ghost]\n"+
+		"  - name: Founder\n    kind: human\n"+
+		"    contact:\n      slack_user_id: U0FOUNDER\n")
 	if err := cfg.ValidateAdmission(); err != nil {
 		t.Fatalf("the fixture breaks an admission rule: %v", err)
 	}

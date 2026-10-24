@@ -36,11 +36,11 @@ import (
 // A wait is a DELTA: `sql.DBStats` counts since the process started, and the
 // interesting quantity is how long a caller queued RECENTLY. Consuming a delta
 // is destructive — whoever reads it clears it for everyone after — so it is
-// taken on the trim's tick alone ([RetentionInterval]), at a cadence that is
-// regular by construction — never on the faster alarm evaluation
-// ([AlarmInterval]), which would change what the `pool_wait` alarm's p95 is a
-// percentile OF, and never on a request whose frequency an operator's
-// dashboard decides.
+// taken on the trim's tick alone ([statelog.TrimInterval]), at a cadence that
+// is regular by construction — never on the faster alarm evaluation
+// ([statelog.AlarmInterval]), which would change what the `pool_wait` alarm's
+// p95 is a percentile OF, and never on a request whose frequency an
+// operator's dashboard decides.
 
 // capacity records what one trim tick can measure about this node's own
 // storage.
@@ -186,9 +186,9 @@ func fileBytes(path string) (int64, error) {
 //
 // MEASURED RATHER THAN READ BACK OFF THE GAUGES. The gauges are published on
 // the trim's own tick, which is a quarter of an hour, while the alarms are
-// evaluated every [AlarmInterval]; a volume fills in less time than a quarter
-// hour, and an alarm evaluated against a fifteen-minute-old free count is one
-// that reports the space that was there before the thing that used it.
+// evaluated every [statelog.AlarmInterval]; a volume fills in less time than a
+// quarter hour, and an alarm evaluated against a fifteen-minute-old free count
+// is one that reports the space that was there before the thing that used it.
 func (r *retention) space(out *statelog.Reading) {
 	if r.db == nil {
 		return
@@ -306,43 +306,57 @@ func tightestVolume(files []storedFile) storeVolume {
 	return out
 }
 
-// semanticCoverage is the fraction of this node's sources carrying a current
-// vector, cached for one trim tick.
+// measureCoverage takes the fraction of this node's sources carrying a current
+// vector, on the tick.
+//
+// ON THE TICK, UNCONDITIONALLY, and never on a report. The measurement is a
+// scan of the whole source corpus, and a report is assembled on every operator
+// request and every dashboard poll, so a report may only read what the tick
+// took. The form this replaced measured inside the report whenever the cached
+// figure was a whole [statelog.TrimInterval] old — which the NEXT tick's report
+// usually was not: the ticker fires on a fixed period, but the report starts
+// after the tick's other measurements, so whenever the previous tick's took
+// longer than this one's, the cached figure was a few milliseconds short of an
+// interval old, the scan was skipped, and the coverage the alarm read was half
+// an hour stale while every other input beside it was fifteen minutes old.
+//
+// A MEASUREMENT THAT FAILS LEAVES NOTHING rather than the last figure: an
+// unreadable corpus is not an uncovered one, and not a covered one either —
+// and that includes the gauge, which is withdrawn rather than left holding the
+// figure every other surface has stopped showing.
+func (r *retention) measureCoverage(ctx context.Context) {
+	if r.coverage == nil {
+		return
+	}
+	fraction, known, err := r.coverage(ctx)
+	if err != nil {
+		log.WarnContext(ctx, "vector_coverage_unreadable", "err", err)
+		fraction, known = 0, false
+	}
+	r.mu.Lock()
+	r.coverFraction, r.coverKnown = fraction, known
+	r.mu.Unlock()
+	switch {
+	case r.metrics == nil:
+	case known:
+		r.metrics.Set(metrics.TrackerVectorCoverage, fraction, nil)
+	default:
+		r.metrics.Unset(metrics.TrackerVectorCoverage, nil)
+	}
+}
+
+// semanticCoverage is the tick's coverage measurement, read back.
 //
 // A POINTER, because zero coverage is the alarm and "no embeddings configured"
 // is a company that asked for none — see [statelog.Reading.SemanticCoverage].
-// A measurement that fails answers nil for the same reason: an unreadable
-// corpus is not an uncovered one.
-//
-// A FAILED MEASUREMENT IS CACHED TOO, as unknown, for the same trim tick. The
-// reading is assembled every [AlarmInterval] as well as on every operator
-// request, and a failure that was not remembered would re-run the whole-corpus
-// scan and repeat its WARN line on each of them for as long as the fault
-// lasted.
-func (r *retention) semanticCoverage(ctx context.Context, now time.Time) *float64 {
-	if r.coverage == nil {
-		return nil
-	}
+// A measurement that failed, and a node whose trim has not ticked yet, answer
+// nil for the same reason: an unmeasured corpus is not an uncovered one.
+func (r *retention) semanticCoverage() *float64 {
 	r.mu.Lock()
-	fresh := !r.coverAt.IsZero() && now.Sub(r.coverAt) < RetentionInterval
-	fraction, known := r.coverFraction, r.coverKnown
-	r.mu.Unlock()
-	if !fresh {
-		measured, ok, err := r.coverage(ctx)
-		if err != nil {
-			log.WarnContext(ctx, "vector_coverage_unreadable", "err", err)
-			measured, ok = 0, false
-		}
-		fraction, known = measured, ok
-		r.mu.Lock()
-		r.coverAt, r.coverFraction, r.coverKnown = now, fraction, known
-		r.mu.Unlock()
-		if r.metrics != nil && known {
-			r.metrics.Set(metrics.TrackerVectorCoverage, fraction, nil)
-		}
-	}
-	if !known {
+	defer r.mu.Unlock()
+	if !r.coverKnown {
 		return nil
 	}
+	fraction := r.coverFraction
 	return &fraction
 }

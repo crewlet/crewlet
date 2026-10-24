@@ -110,7 +110,10 @@ func codeNodeAmended(t *testing.T, d codeDeclaration, tokens map[string]string,
 
 	t.Helper()
 	gittest.RequireNode(t)
-	const token = "a-code-token"
+	// THE CREDENTIAL [cli] PRESENTS, so a command a case runs through it
+	// reaches this node as its operator: a node client reads its token from
+	// the invocation's environment and nothing else.
+	const token = cliFixtureToken
 	n := bootUnconfiguredWith(t, token, func(b *config.Bootstrap) {
 		// THE CASE'S OWN, never the machine's: an explicit cache budget
 		// and a pinned transfer lane, so the room this machine's disk has
@@ -127,13 +130,11 @@ func codeNodeAmended(t *testing.T, d codeDeclaration, tokens map[string]string,
 	n.reconcile()
 	h := codeHost{base: n.base, token: token, node: n}
 	h.declare(t, d)
-	cfg := filepath.Join(t.TempDir(), "crewlet.yaml")
-	doc := fmt.Sprintf("api:\n  host: 127.0.0.1\n  port: %d\n  auth:\n    tokens:\n      - id: ops\n"+
-		"        token: %s\n", n.boot.API.Port, token)
-	if err := os.WriteFile(cfg, []byte(doc), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	h.cfg = cfg
+	// A WHOLE TIER A NAMING THIS NODE'S ADDRESS, for a command that finds its
+	// node from a config file: the file is validated before its address is
+	// read, and it names the address alone — the credential is the
+	// invocation's environment, never the file.
+	h.cfg = bootstrapForURL(t, n.base)
 	return h
 }
 
@@ -764,7 +765,7 @@ func TestEveryCodeReadTakesAPagePastTheGeneralCap(t *testing.T) {
 		_, _ = w.Write([]byte(body + `,"padding":"` + padding + `"}`))
 	}))
 	t.Cleanup(server.Close)
-	node := []string{"-url", server.URL, "-token", "t"}
+	node := []string{"-url", server.URL}
 	for _, c := range []struct {
 		args []string
 		// ok is whether the command succeeds; the export of a deleted
@@ -1217,7 +1218,7 @@ func TestAVerifySweepOfANodeWithNoVerifyStopsAtOnce(t *testing.T) {
 			`"position":{"stream":"CREWLET_CODE_LOG","generation":0,"seq":7}}`))
 	}))
 	t.Cleanup(server.Close)
-	_, _, err := cli(t, "code", "verify", "-url", server.URL, "-token", "t")
+	_, _, err := cli(t, "code", "verify", "-url", server.URL)
 	if err == nil || !strings.Contains(err.Error(), "point -url at one") || posts.Load() != 1 {
 		t.Errorf("a sweep of a node serving no verify = %v after %d verifies, want one, and an error naming "+
 			"-url", err, posts.Load())
@@ -1237,9 +1238,9 @@ func TestACodeReadOfANodeWithoutTheRoutesNamesURL(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	for _, args := range [][]string{
-		{"code", "status", "-url", server.URL, "-token", "t"},
-		{"code", "status", "-repo", "web", "-url", server.URL, "-token", "t"},
-		{"code", "verify", "-url", server.URL, "-token", "t"},
+		{"code", "status", "-url", server.URL},
+		{"code", "status", "-repo", "web", "-url", server.URL},
+		{"code", "verify", "-url", server.URL},
 	} {
 		_, _, err := cli(t, args...)
 		if err == nil || !strings.Contains(err.Error(), "point -url at a node") || strings.Contains(err.Error(), "-api") {
@@ -1429,7 +1430,7 @@ func TestAnExportOfARepositoryNotDeclaredSaysSo(t *testing.T) {
 	if entries, _ := os.ReadDir(outDir); len(entries) != 0 {
 		t.Errorf("a refused export left %v", entries)
 	}
-	if _, _, err := cli(t, "code", "export", "web", "-url", h.base, "-token", h.token); err == nil ||
+	if _, _, err := cliIn(t, tokenEnviron(h.token), "code", "export", "web", "-url", h.base); err == nil ||
 		!strings.Contains(err.Error(), "bundle file") {
 		t.Errorf("an export naming no bundle file = %v, want it refused naming what is missing", err)
 	}

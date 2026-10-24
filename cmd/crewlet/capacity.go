@@ -15,6 +15,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -56,12 +57,12 @@ const capacityUsage = `usage: crewlet retention set-capacity <stream> <bytes> -c
   docs/guides/retention.md.`
 
 // retentionSetCapacity is `crewlet retention set-capacity`.
-func retentionSetCapacity(args []string, stdout, stderr io.Writer) error {
+func retentionSetCapacity(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	stream, rest := splitSubject(args)
 	target, rest := splitSubject(rest)
 	var confirm *string
 	var assert *bool
-	client, err := nodeClientFor(rest, "retention set-capacity", stderr,
+	client, err := nodeClientFor(environ, rest, "retention set-capacity", stderr,
 		func(fs *flag.FlagSet) {
 			confirm = fs.String("confirm", "",
 				"repeat the byte count — this restarts the whole fleet three times")
@@ -124,9 +125,30 @@ type capacityOperation struct {
 		ResolvedAt time.Time `json:"resolved_at"`
 		Evidence   string    `json:"evidence"`
 	} `json:"journal"`
-	Blocked   string    `json:"blocked"`
-	EnteredAt time.Time `json:"entered_at"`
-	By        string    `json:"by"`
+	Blocked    string    `json:"blocked"`
+	EnteredAt  time.Time `json:"entered_at"`
+	By         string    `json:"by"`
+	OperatorID string    `json:"operator_id"`
+
+	// ExcludedBy and AbandonedBy are who made those two gestures, each
+	// an author and the credential they made it through.
+	ExcludedBy  map[string]capacityParty `json:"excluded_by"`
+	AbandonedBy capacityParty            `json:"abandoned_by"`
+}
+
+// capacityParty is who made one gesture on a window.
+type capacityParty struct {
+	By         string `json:"by"`
+	OperatorID string `json:"operator_id"`
+}
+
+// describe is the party in the words every trail this CLI prints uses.
+//
+// No stand-in for an empty party: every exclusion records its party in the
+// update that excludes the node, and an abandonment is printed only once it
+// names one.
+func (p capacityParty) describe() string {
+	return describeAuthor(p.By, p.OperatorID)
 }
 
 // printOperation renders one operation, and what an operator does next.
@@ -139,10 +161,14 @@ func printOperation(stdout io.Writer, mode string, op capacityOperation) {
 	if op.ObservedMaxBytes > 0 {
 		fmt.Fprintf(w, "OBSERVED\t%s\t\n", humanBytes(int64(op.ObservedMaxBytes)))
 	}
-	fmt.Fprintf(w, "OPENED\t%s\tby %s\n", stampOrDash(op.EnteredAt), op.By)
+	fmt.Fprintf(w, "OPENED\t%s\tby %s\n", stampOrDash(op.EnteredAt),
+		describeAuthor(op.By, op.OperatorID))
 	fmt.Fprintf(w, "THIS NODE\tmode %s\t\n", mode)
 	if op.Blocked != "" {
 		fmt.Fprintf(w, "BLOCKED\t%s\t\n", op.Blocked)
+	}
+	if op.AbandonedBy.By != "" {
+		fmt.Fprintf(w, "ABANDONED\tby %s\t\n", op.AbandonedBy.describe())
 	}
 	_ = w.Flush()
 
@@ -168,15 +194,15 @@ func printOperation(stdout io.Writer, mode string, op capacityOperation) {
 }
 
 // retentionMaintenance is `crewlet retention maintenance`.
-func retentionMaintenance(args []string, stdout, stderr io.Writer) error {
+func retentionMaintenance(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	switch sub {
 	case "status":
-		return maintenanceStatus(rest, stdout, stderr)
+		return maintenanceStatus(environ, rest, stdout, stderr)
 	case "abandon":
-		return maintenanceAbandon(rest, stdout, stderr)
+		return maintenanceAbandon(environ, rest, stdout, stderr)
 	case "exclude":
-		return maintenanceExclude(rest, stdout, stderr)
+		return maintenanceExclude(environ, rest, stdout, stderr)
 	case "", "help":
 		fmt.Fprintln(stderr, "usage: crewlet retention maintenance "+
 			"status|abandon|exclude -stream <name>")
@@ -192,9 +218,9 @@ func retentionMaintenance(args []string, stdout, stderr io.Writer) error {
 // operation, its phase and attempt, every participant's incarnation against
 // the current one, which acknowledgements are missing, and any admission
 // blocking activation.
-func maintenanceStatus(args []string, stdout, stderr io.Writer) error {
+func maintenanceStatus(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	var stream *string
-	client, err := nodeClientFor(args, "retention maintenance status", stderr,
+	client, err := nodeClientFor(environ, args, "retention maintenance status", stderr,
 		func(fs *flag.FlagSet) {
 			stream = fs.String("stream", "", "which log; required")
 		})
@@ -250,7 +276,8 @@ func maintenanceStatus(args []string, stdout, stderr io.Writer) error {
 	for _, node := range answer.Operation.Participants {
 		baseline := dashIfEmpty(answer.Operation.WriteIncarnations[node])
 		if containsString(answer.Operation.Excluded, node) {
-			fmt.Fprintf(w, "%s\t%s\texcluded by an operator\t\t\n", node, baseline)
+			fmt.Fprintf(w, "%s\t%s\texcluded by %s\t\t\n", node, baseline,
+				answer.Operation.ExcludedBy[node].describe())
 			continue
 		}
 		i, ok := acked[node]
@@ -295,9 +322,9 @@ func maintenanceStatus(args []string, stdout, stderr io.Writer) error {
 // IT NEVER CHANGES THE BARRIER IT MUST CROSS: from anywhere past `opened` it
 // enters the seal, because a paused coordinator's request is outstanding
 // whether or not a person has read a status page.
-func maintenanceAbandon(args []string, stdout, stderr io.Writer) error {
+func maintenanceAbandon(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	var stream, confirm *string
-	client, err := nodeClientFor(args, "retention maintenance abandon", stderr,
+	client, err := nodeClientFor(environ, args, "retention maintenance abandon", stderr,
 		func(fs *flag.FlagSet) {
 			stream = fs.String("stream", "", "which log; required")
 			confirm = fs.String("confirm", "",
@@ -338,9 +365,9 @@ func maintenanceAbandon(args []string, stdout, stderr io.Writer) error {
 //
 // THE ONLY THING THAT WAIVES AN ACKNOWLEDGEMENT. An eviction does not: that is
 // about whose records apply, and this is about whose process is running.
-func maintenanceExclude(args []string, stdout, stderr io.Writer) error {
+func maintenanceExclude(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	var stream, node, confirm *string
-	client, err := nodeClientFor(args, "retention maintenance exclude", stderr,
+	client, err := nodeClientFor(environ, args, "retention maintenance exclude", stderr,
 		func(fs *flag.FlagSet) {
 			stream = fs.String("stream", "", "which log; required")
 			node = fs.String("node", "", "which participant; required")
@@ -387,10 +414,10 @@ func maintenanceExclude(args []string, stdout, stderr io.Writer) error {
 const reanchorRequestTimeout = 6 * time.Minute
 
 // retentionReanchor is `crewlet retention reanchor`.
-func retentionReanchor(args []string, stdout, stderr io.Writer) error {
+func retentionReanchor(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	var stream, confirm *string
 	var force, discard *bool
-	client, err := nodeClientFor(args, "retention reanchor", stderr,
+	client, err := nodeClientFor(environ, args, "retention reanchor", stderr,
 		func(fs *flag.FlagSet) {
 			stream = fs.String("stream", "", "which log was recreated; required")
 			confirm = fs.String("confirm", "",

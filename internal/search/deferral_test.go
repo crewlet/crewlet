@@ -135,17 +135,26 @@ func retainedSeqs(t *testing.T, db *store.DB) []uint64 {
 
 // runLog runs a statelog.Runner for domain over payloads at sequences 1…n
 // until it has committed the last.
+//
+// EACH PAYLOAD IS SEALED on its way onto the log, as the fleet's own writer
+// seals every record, and the runner opens each frame before the domain
+// decodes it: a runner refuses to start without a verifier, and an unsigned
+// record is one every node refuses.
 func runLog(t *testing.T, db *store.DB, domain statelog.Domain, payloads [][]byte) {
 	t.Helper()
-	log := &sliceLog{stored: time.Unix(1_700_000_000, 0).UTC(),
-		messages: append([][]byte(nil), payloads...)}
+	signer := testSigner(t, domain)
+	sealed := make([][]byte, 0, len(payloads))
+	for _, payload := range payloads {
+		sealed = append(sealed, signer.Seal(payload))
+	}
+	log := &sliceLog{stored: time.Unix(1_700_000_000, 0).UTC(), messages: sealed}
 	recorder, err := metrics.New()
 	if err != nil {
 		t.Fatal(err)
 	}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain: domain, Spec: domain.Stream(), Applier: search.NewApplier(), Fetch: log, Log: log,
-		Node: db, DB: db.Replicated(),
+		Verifier: testVerifier(t, domain), Node: db, DB: db.Replicated(),
 		Checkpoint: statelog.Position{Generation: 1}, Metrics: recorder,
 	})
 	if err != nil {

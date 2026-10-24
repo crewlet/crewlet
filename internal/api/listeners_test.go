@@ -15,11 +15,12 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
-	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
 // THE TWO LISTENERS ARE EXACT COMPLEMENTS. With api.public set, every route
@@ -58,8 +59,8 @@ var adminRoutes = []struct{ method, path string }{
 
 // listenerApp is a configured, authenticated node with every optional surface
 // mounted — the webhook edge, the telemetry receiver, the tool bridge and the
-// operator surface — and every native route and code route served, and the
-// public listener set or not.
+// operator surface — and every code route served, and the public listener set
+// or not.
 func listenerApp(t *testing.T, public bool, draining bool) *api.App {
 	t.Helper()
 	b := closedPosture()
@@ -67,8 +68,6 @@ func listenerApp(t *testing.T, public bool, draining bool) *api.App {
 	if public {
 		b.API.Public = config.APIPublic{Port: 8443}
 	}
-	served := filesNative(newFakeFiles(t))
-	served.purger, served.nodes = &fakePurger{}, &fakeNodeGate{}
 	return newApp(t, api.Options{
 		Bootstrap: &b,
 		Runtime: &fakeRuntime{state: api.RuntimeState{
@@ -79,18 +78,15 @@ func listenerApp(t *testing.T, public bool, draining bool) *api.App {
 			Publisher: memory.New(),
 		},
 		OtelReceiver: otlpReceiver(t, "http://127.0.0.1:1"),
-		Bridge:       mcpbridge.New(mcpbridge.Options{Key: []byte("k"), BaseURL: "http://x"}),
-		Operator: operatorSurface(t, operator.Options{
-			Work: builtin.WorkDeps{Reader: stubWorkReader{}, Actor: operator.WorkActor(nil, nil)},
+		Bridge: bridgeFor(t, mcpbridge.Options{
+			Material: runtoken.OneKey("k", "k"), BaseURL: "http://x",
 		}),
-		// SERVED, not merely mounted: a native route over a runtime that
-		// holds nothing answers the mux's own 404, which the walk below
-		// could not tell from a route mounted on the wrong listener.
-		Native: served,
-		// SERVED too, for the same reason: a git route over a node with no
-		// host answers its own 404, which is no route's absence.
+		Operator: operatorSurface(t, builtin.WorkDeps{Reader: stubWorkReader{}}),
+		// SERVED, not merely mounted: a git route over a node with no host
+		// answers its own 404, which the walk below could not tell from a
+		// route mounted on the wrong listener.
 		Code:    fixedCode{git: fakeGitRoutes{}, reads: &fakeCodeReads{}},
-		Sources: queries.Sources{Company: active()},
+		Sources: queries.Sources{Company: active(t)},
 	})
 }
 
@@ -121,8 +117,8 @@ func absent(t *testing.T, rec *httptest.ResponseRecorder) bool {
 		t.Fatalf("a 404 that is not JSON: %v (%q)", err, rec.Body.String())
 	}
 	return body["error"] == string(httpjson.CodeNoRoute) &&
-		(strings.HasPrefix(body["detail"], "this node serves nothing at ") ||
-			strings.HasPrefix(body["detail"], "this listener serves nothing at "))
+		(strings.HasPrefix(body["detail"], "This node serves nothing at ") ||
+			strings.HasPrefix(body["detail"], "This listener serves nothing at "))
 }
 
 // publishedRoutes are the patterns the public listener serves: the whole
@@ -224,6 +220,82 @@ func TestWithoutAPublicListenerEveryRouteIsOnTheAPIPort(t *testing.T) {
 	for _, req := range append(publicRoutes[:len(publicRoutes):len(publicRoutes)], adminRoutes...) {
 		if rec := sendTo(t, a, req.method, req.path); absent(t, rec) {
 			t.Errorf("%s %s is absent from the only listener", req.method, req.path)
+		}
+	}
+}
+
+// EACH LISTENER SAYS WHETHER IT IS HTTPS BY THE ADDRESS IT IS PUBLISHED AT.
+//
+// The two sockets are published apart, and the natural shape of the split is
+// an admin side on a private http address beside a public side behind TLS —
+// which serves the GitHub App return and the Slack OAuth landing, pages a
+// browser renders. One flag decided from `api.external_url` for both sent no
+// Strict-Transport-Security on exactly those pages, and sent it from a plain
+// http admin socket in the reverse arrangement. Both arrangements are held, so
+// a build that hands either listener the other's answer fails one of them.
+func TestEachListenerSendsHSTSByItsOwnAddress(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, admin, public string
+		adminHSTS, pubHSTS  bool
+	}{
+		{"a private http admin side beside a public one behind TLS",
+			"http://127.0.0.1:8080", "https://hooks.example.com", false, true},
+		{"an admin side behind TLS beside a plain http public one",
+			"https://crewlet.example.com", "http://10.0.0.5:8443", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b := closedPosture()
+			b.API.Port = 8080
+			b.API.ExternalURL = tc.admin
+			b.API.Public = config.APIPublic{Port: 8443, ExternalURL: tc.public}
+			a := newApp(t, api.Options{
+				Bootstrap: &b,
+				Runtime:   &fakeRuntime{state: api.RuntimeState{Posture: "serve"}},
+				Sources:   queries.Sources{Company: active(t)},
+			})
+			for _, side := range []struct {
+				name string
+				h    http.Handler
+				path string
+				want bool
+			}{
+				{"api.port", a, "/nope", tc.adminHSTS},
+				{"the public listener", a.Public(), "/webhooks/nope", tc.pubHSTS},
+			} {
+				got := sendTo(t, side.h, http.MethodGet, side.path).
+					Header().Get("Strict-Transport-Security")
+				if want := map[bool]string{true: pagepolicy.HSTS}[side.want]; got != want {
+					t.Errorf("%s: Strict-Transport-Security = %q, want %q", side.name, got, want)
+				}
+			}
+		})
+	}
+}
+
+// AND THE BRIDGE-ONLY LISTENER IS THE PUBLIC ONE. A seats node without the
+// ingress role binds it on api.public, so it answers by the public listener's
+// address — never api.port's, which is another socket under another scheme.
+func TestTheBridgeOnlyListenerSendsHSTSByThePublicAddress(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		admin, public string
+		want          string
+	}{
+		{"http://127.0.0.1:8080", "https://hooks.example.com", pagepolicy.HSTS},
+		{"https://crewlet.example.com", "http://10.0.0.5:8443", ""},
+	} {
+		b := closedPosture()
+		b.API.ExternalURL = tc.admin
+		b.API.Public = config.APIPublic{Port: 8443, ExternalURL: tc.public}
+		h := api.BridgeOnly(&b, bridgeFor(t, mcpbridge.Options{
+			Material: runtoken.OneKey("k", "k"), BaseURL: "http://x",
+		}))
+		got := sendTo(t, h, http.MethodGet, "/nope").Header().Get("Strict-Transport-Security")
+		if got != tc.want {
+			t.Errorf("published at %s beside an admin side at %s: "+
+				"Strict-Transport-Security = %q, want %q", tc.public, tc.admin, got, tc.want)
 		}
 	}
 }
@@ -357,7 +429,7 @@ func TestEveryPublicRouteIsUnguarded(t *testing.T) {
 }
 
 // GIT AND THE CODE READS ARE NEVER PUBLISHED. A person reaches a repository
-// with their own operator token (ADR-0037), and api.public is the socket whose
+// with their own bound token (ADR-0051), and api.public is the socket whose
 // premise is that it serves only outside parties and asks no operator token —
 // so /git/ and /code/ answer the mux's own 404 there, before any credential is
 // read, whether it arrives as git's Basic password or as a bearer, and reach

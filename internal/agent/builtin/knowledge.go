@@ -95,6 +95,16 @@ func (t *searchKnowledge) Parameters() map[string]any {
 					"ticket keys, service and function names. Not a question, " +
 					"and not the whole task.",
 			},
+			"mode": map[string]any{
+				"type": "string",
+				"enum": []any{string(knowledge.ModeHybrid), string(knowledge.ModeKeyword),
+					string(knowledge.ModeSemantic)},
+				"description": "How to rank. `hybrid` (the default) ranks by the " +
+					"words and by meaning together. `keyword` ranks by the words " +
+					"alone — for an exact identifier, error code or name. " +
+					"`semantic` ranks by meaning alone — to find a page that says " +
+					"the same thing in other words.",
+			},
 		},
 		"required": []any{"query"},
 	}
@@ -129,6 +139,13 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"most %d — send 2-8 keywords or key phrases, identifiers verbatim, not the "+
 			"task or a pasted thread.", len(query), knowledge.MaxQueryBytes)), nil
 	}
+	// A MODE THIS BUILD DOES NOT KNOW IS REFUSED, naming the ones it does:
+	// falling back to the default would answer a different question from
+	// the one asked.
+	mode, err := knowledge.ParseMode(argString(args, "mode"))
+	if err != nil {
+		return failed(fmt.Sprintf("search_knowledge: %v.", err)), nil
+	}
 	// THE TURN'S ORG, or the wiring's where there is no turn — see
 	// [searchKnowledge.org]. Reading the turn unconditionally made this
 	// tool refuse every call on the operator surface, where it is
@@ -157,7 +174,7 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 
 	result := t.search.Search(ctx, knowledge.Query{
-		Text: query, Seat: seat, Org: company, Limit: searchHits,
+		Text: query, Seat: seat, Org: company, Limit: searchHits, Mode: mode,
 		// AUTO-DRAFTS HIDDEN, the same exclusion the turn-start prefetch
 		// applies. Those pages are unreviewed proposals a synthesis pass
 		// wrote; an agent cannot tell one from a ratified runbook, and
@@ -166,16 +183,22 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		ExcludeAncestors: []string{knowledge.AutoDraftedParent},
 	})
 	hits := result.Hits
+	degraded := degradedNote(mode, result.Outcome)
 	if len(hits) == 0 && result.ServedMode == "" {
 		// NOTHING RAN, which is not "nothing matched": telling a seat
 		// the company has not written this down, when the knowledge
 		// base could not be read at all, is how it goes and writes a
-		// duplicate of a page that exists.
+		// duplicate of a page that exists. A ranking the backend cannot
+		// serve at all says which, so the seat asks another way.
+		if degraded != "" {
+			return tools.Result{Output: "Nothing was searched, so this says " +
+				"nothing about whether a page exists." + degraded}, nil
+		}
 		return tools.Result{Output: "The knowledge base could not be searched just " +
 			"now, so this says nothing about whether a page exists. Try again " +
 			"shortly, or work from what you have."}, nil
 	}
-	partial := partialNote(result.Coverage)
+	partial := partialNote(result.Coverage) + degraded
 	if len(hits) == 0 {
 		return tools.Result{Output: fmt.Sprintf(
 			"No team documents match %q. Try different keywords, or work from what "+
@@ -204,6 +227,38 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		"knowledge-base tools.")
 	b.WriteString(partial)
 	return tools.Result{Output: b.String()}, nil
+}
+
+// degradedNote is the sentence a search that ranked other than it was asked
+// to owes the seat that asked, or nothing when it served the mode asked for.
+//
+// SAID TO THE MODEL for [partialNote]'s reason: a keyword answer read as a
+// hybrid one is a seat concluding no page means what it typed, and a semantic
+// search that served nothing read as "nothing matched" is the same mistake
+// with no hits at all. internal/knowledge's mode doc is the rule — a search
+// never serves another ranking without saying so.
+func degradedNote(asked knowledge.Mode, o knowledge.Outcome) string {
+	switch o.Degraded {
+	case knowledge.NotDegraded:
+		return ""
+	case knowledge.DegradedSemanticPartial:
+		return "\n\nMeaning was ranked over only part of the knowledge base — " +
+			"some of the fleet could not compare by meaning — so a page that " +
+			"says this in other words may be missing here."
+	}
+	why := "this knowledge base has no ranking by meaning"
+	switch o.Degraded {
+	case knowledge.DegradedNoEmbeddings:
+		why = "this company has no embeddings provider, so nothing ranks by meaning"
+	case knowledge.DegradedEmbeddingFailed:
+		why = "the query's meaning could not be computed just now; asking again may " +
+			"rank by it"
+	}
+	if asked.Resolved() == knowledge.ModeSemantic {
+		return "\n\nNo search by meaning ran: " + why + ". Search with mode " +
+			"`keyword` to rank by the words instead."
+	}
+	return "\n\nRanked by the words alone: " + why + "."
 }
 
 // partialNote is the sentence a search over part of the knowledge base owes

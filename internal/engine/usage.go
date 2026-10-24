@@ -6,19 +6,24 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
 // The usage domain's writer, armed — the loop that turns this node's own event
-// log into the replicated record of what its seats and schedules did each day.
+// log into the replicated record of what its seats, its schedules and the
+// people its auxiliary model spent for did each day.
 //
-// # Every node runs one, and no node runs anybody else's
+// # Every data node runs one, and no node runs anybody else's
 //
 // Unlike the embedding duty beside it this is not a fleet singleton: a node's
 // event log holds only what ITS seats did, so the node is the only thing that
 // can derive its own day, and the node in every subject it writes is what
-// keeps N writers from ever meeting on one. Without it the domain is
+// keeps N writers from ever meeting on one. A node without `data` keeps no
+// event log of its own — its events are written by a data node that keeps
+// them in custody (internal/observe) — so its seats' day is derived, and
+// published, inside that keeper's, and it runs no publisher at all. Without it the domain is
 // registered, applied and replicated over an empty stream — and every spend
 // answer is exactly as partial as it was before the domain existed, while
 // every surface reports a healthy log.
@@ -30,7 +35,7 @@ type usageLoop struct {
 }
 
 // startUsage arms this node's usage publisher, or does nothing on a node that
-// runs no state log.
+// runs no state log — a node without `data` among them.
 func (e *Engine) startUsage(ctx context.Context, s *stateLog) {
 	if s == nil || e.backends == nil || e.backends.Store == nil {
 		return
@@ -40,16 +45,29 @@ func (e *Engine) startUsage(ctx context.Context, s *stateLog) {
 		return
 	}
 	publisher, err := usage.NewPublisher(usage.PublisherDeps{
-		Store:  e.backends.Store,
-		Log:    running.publisher,
+		Store: e.backends.Store,
+		Log:   running.publisher,
+		// RESOLVED ON EVERY READ ([Engine.usageEstate]): an adoption
+		// replaces the file under the handle this node booted with. THIS
+		// NODE'S OWN COPY, never the router's: the rows a day is joined
+		// with are the ones this node's applier wrote, which
+		// [stateLog.usageCaught] is the readiness of.
+		Estate: e.usageEstate(),
 		NodeID: s.nodeID,
+		// WHETHER THIS NODE'S USAGE APPLIER HAS REACHED THE END OF ITS LOG
+		// ([stateLog.usageCaught]).
+		Caught: s.usageCaught,
 		// THE CLOCK AND THE CHART ARE READ PER TICK, from whichever epoch
 		// is current: an apply that moves the company's timezone moves
-		// the next day's cut with it, and a seat renamed today is named
-		// by its new handle from the next flush.
+		// the next day's cut with it.
 		Zone:   e.Zone,
 		Handle: e.seatHandle,
 		Every:  e.usageEvery,
+		// THE SWEEP'S OWN RETENTION for the dispatch ledger: a day the
+		// publisher derives again that the sweep may have cut into is
+		// published without its schedules, so a short schedule-day never
+		// replaces a whole one.
+		FireHistory: maintenance.ScheduledRunRetention,
 		// NO LOGGER: the publisher's own lines carry `component=usage`,
 		// the subsystem that wrote them, rather than this package's.
 	})
@@ -71,7 +89,31 @@ func (e *Engine) startUsage(ctx context.Context, s *stateLog) {
 	}()
 }
 
-// stopUsage ends the loop, waiting for an in-flight flush.
+// usageCaught reports whether THIS node's usage applier — that domain's runner
+// and no other's — has reached the end of its log since it started, read per
+// tick off whichever runner the domain runs now (usage.PublisherDeps.Caught):
+// every day a node publishes is joined with the rows it applied, which right
+// after a restore are the copy's until it has replayed what was published
+// since, so no day is derived until it has. Another domain's applier drained
+// says nothing about this one's rows, and a node running no usage log has none
+// to join with.
+func (s *stateLog) usageCaught() bool {
+	r := s.Domain(usage.Domain{}.Name())
+	return r != nil && r.runner != nil && r.runner.Drained()
+}
+
+// stopUsage ends the loop, waiting for an in-flight flush and for the last
+// one the loop runs as it ends ([usage.Publisher.Run], today and yesterday,
+// bounded by [usage.FinalFlushBudget]).
+//
+// ORDERED BY THE TEARDOWN after every writer of a row this node's day counts —
+// the learning passes, the scheduler, the auxiliary-spend ledger's last flush,
+// the custody keeper leaving its group — and before the
+// trim and long before the core's logs (TestTheDutiesStopBeforeTheirLeasesAndTheLogs).
+// Both halves are what that last flush needs: the day it derives is the
+// node's last, with nothing written after it, and the usage log it publishes
+// into is still applied, so it resolves in milliseconds and the end of this
+// node's day reaches the fleet even if the node never starts again.
 func (e *Engine) stopUsage() {
 	if e.usage == nil {
 		return
@@ -104,11 +146,12 @@ func (e *Engine) seatHandle(agentID string) (string, bool) {
 // this node's estate router, as its tracker and knowledge-base reads are
 // ([OperatorWork]): a data node whose usage copy is in service answers from
 // it, and one whose copy is out of service answers from a peer's rather than
-// from the copy it stopped serving (ADR-0031).
+// from the copy it stopped serving (ADR-0045).
 func (e *Engine) UsageReads() estate.Usage { return e.router.Usage() }
 
 // usageEstate is the replicated estate as this node's own reader of the usage
-// domain's rows needs it — the backend its router answers from in-process.
+// domain's rows needs it — the backend its router answers from in-process, and
+// the rows its own publisher joins a day with.
 //
 // RESOLVED ON EVERY READ through the node handle, never captured: an adoption
 // closes the file and reopens it, and a reader holding the handle it booted

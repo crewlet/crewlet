@@ -1,34 +1,41 @@
 // Package paced is THE PER-MEBIBYTE PACE A CLIENT'S CONNECTION IS HELD TO,
-// both ways — moved here from the file routes because the code host needs
-// the same two rules, and two copies are ADR-0008's failure.
+// both ways: a request's body read, and a response's body written, each
+// mebibyte inside the object store's one pace.
 //
-// [Pace] is [objstore.MiBPace] — THE object store's one floor, which every leg
+// # Why every streamed body needs it
+//
+// The server's ReadTimeout and WriteTimeout are deliberately unset
+// (cmd/crewlet's apiIdleTimeout says why), so a route that streams a body
+// bounds it itself: unbounded, a client could trickle a gibibyte upload a byte
+// at a time, or open a download and never read it, and hold a handler and a
+// connection slot as long as it liked. One deadline over the whole body
+// cannot be the bound either, because a file may be a gibibyte and so can a
+// push, and any single figure is either a cap on real transfers or no bound on
+// a trickle.
+//
+// # The pace is the object store's, and only the client's time is charged
+//
+// [Pace] is [objstore.MiBPace], THE object store's one floor, which every leg
 // a file's bytes cross is held to, the client's included, so no leg can be
-// retuned out from under another — and PER MEBIBYTE rather than per body. The
-// server's ReadTimeout and WriteTimeout are deliberately unset (cmd/crewlet's
-// apiIdleTimeout says why), so a route that streams a body bounds it itself:
-// unbounded, a client could trickle a gibibyte upload a byte at a time, or
-// open a download and never read it, and hold a handler and a connection
-// slot as long as it liked. One deadline over the whole body cannot be the
-// bound either, because a project's file can be a gibibyte and so can a push,
-// and any single figure is either a cap on real transfers or no bound on a
-// trickle.
-//
-// AND CHARGED ONLY FOR THE TIME THE CLIENT IS WAITED ON, never the server's
-// own: storing what arrived can take a broker's publish acknowledgements or a
-// bucket's part upload, and fetching what a download sends can wait on the
-// store, and neither is the client's time to spend.
+// retuned out from under another. And it is CHARGED ONLY FOR THE TIME THE
+// CLIENT IS WAITED ON, never the server's own: storing what arrived can take a
+// broker's publish acknowledgements or a bucket's part upload, and fetching
+// what a download sends can wait on the store, and neither is the client's
+// time to spend.
 //
 // Three shapes, one pace: [Body] for a request read as the server needs it,
 // [Writer] for a response written as it is produced, and [Send] for a stored
 // file handed back whole — which is a Writer fed the file's pieces as the
 // store hands them over.
 //
-// ONE IMPLEMENTATION: TestOnePacingImplementation refuses a deadline set on a
-// client's connection anywhere else under internal/api or internal/code/host,
-// the two places a client's connection is served. The one other such
-// deadline there is httpjson.ReadBody's, which bounds a small body as a whole
-// and is not a pace.
+// ONE PACKAGE for every surface that streams a body to or from a client — a
+// project's files, an artifact's uploads and downloads, and the code host's
+// git requests and responses — so two surfaces cannot hold one client to two
+// paces, and two copies of the rule cannot drift (ADR-0008).
+// TestOnePacingImplementation refuses a deadline set on a client's connection
+// anywhere else under internal/api or internal/code/host, the two places a
+// client's connection is served. The one other such deadline there is
+// httpjson.ReadBody's, which bounds a small body as a whole and is not a pace.
 //
 // # Measured
 //
@@ -69,18 +76,11 @@ const Pace = objstore.MiBPace
 // connection, not the store's, so a route answers it 400 rather than 503.
 var ErrBody = errors.New("paced: the request body could not be read")
 
-// Body paces a request's body r at [Pace] a mebibyte: each Read is given what
-// is left of its mebibyte's budget as the connection's read deadline, set
-// through rc, and only the time spent inside Reads is charged against it, on
-// the clock now. A failure is [ErrBody]; the end of the body is io.EOF
-// itself.
-func Body(r io.Reader, rc *http.ResponseController, now func() time.Time) io.Reader {
-	return &body{r: r, rc: rc, pace: Pace, now: now}
-}
-
-// body is a request's body, every mebibyte of it read inside a budget of
-// [Pace].
-type body struct {
+// Body is a request's body, every mebibyte of it read inside a budget of
+// [Pace]: each Read is given what is left of its mebibyte's budget as the
+// connection's read deadline, and only the time spent inside Reads is charged
+// against it. A failure is [ErrBody]; the end of the body is io.EOF itself.
+type Body struct {
 	r    io.Reader
 	rc   *http.ResponseController
 	pace time.Duration
@@ -93,6 +93,17 @@ type body struct {
 	// and budget how much of its pace is left to spend on them.
 	left   int64
 	budget time.Duration
+}
+
+// NewBody paces a request's body r at [Pace] a mebibyte, measured on now; rc
+// carries the read deadlines to the request's connection.
+func NewBody(r io.Reader, rc *http.ResponseController, now func() time.Time) *Body {
+	return newBody(r, rc, Pace, now)
+}
+
+// newBody is [NewBody] at any pace, for a case that shortens it.
+func newBody(r io.Reader, rc *http.ResponseController, pace time.Duration, now func() time.Time) *Body {
+	return &Body{r: r, rc: rc, pace: pace, now: now}
 }
 
 // Read reads the body, inside what is left of the current mebibyte's budget.
@@ -115,7 +126,7 @@ type body struct {
 // net/http answers as io.ErrUnexpectedEOF, included. The end of the body,
 // io.EOF itself, is passed through untouched: the store ends an object only
 // there ([objstore.Fill]), and a tagged one would read as a failure.
-func (b *body) Read(p []byte) (int, error) {
+func (b *Body) Read(p []byte) (int, error) {
 	if b.left <= 0 {
 		b.left, b.budget = objstore.MiB, b.pace
 	}

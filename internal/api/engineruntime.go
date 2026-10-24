@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -80,9 +81,11 @@ func EngineProbeOptions(boot *config.Bootstrap, e *engine.Engine,
 	}
 	// A BRIDGED SESSION IS A LIVE TOOL SURFACE IN THE PROCESS THAT OPENED IT,
 	// so the node running the agent-mode seat is the only node its box can
-	// reach — and only a node running seats opens one.
-	if profile.RunsSeats() {
-		opts.Bridge = e.Bridge()
+	// reach — and only a node running seats opens one. THROUGH THE PREDICATE
+	// the listener on api.public was bound by, before this engine existed
+	// ([PublicListener]), so the bridge is served exactly where it was bound.
+	if bridge := e.Bridge(); servesBridge(profile.RunsSeats(), bridge != nil) {
+		opts.Bridge = bridge
 	}
 	return opts, nil
 }
@@ -117,13 +120,17 @@ func (r engineRuntime) Tools() []ToolInfo {
 	if company == nil || company.Tools == nil {
 		return nil
 	}
-	entries := company.Tools.List()
+	// ONE SNAPSHOT for both reads: the epoch's shared MCP tools are refiled
+	// when a server comes back with a different catalogue, and a list and a
+	// delivery map read apart could each describe a different one.
+	snapshot := company.Tools.Snapshot()
+	entries := snapshot.Entries()
 	// THE REGISTRY'S OWN PREDICATE for where a tool delivers, never
 	// re-derived here: it is not "was this served by MCP" — a proven
 	// read-only MCP tool delivers nowhere, and the native tracker's
 	// comment tool delivers although it is a builtin. A second derivation
 	// would show one answer on the screen and enforce another at the fence.
-	delivers := company.Tools.Deliveries()
+	delivers := snapshot.Deliveries()
 	out := make([]ToolInfo, 0, len(entries))
 	for _, entry := range entries {
 		out = append(out, toolInfo(entry, delivers[entry.Name()]))
@@ -186,6 +193,10 @@ func (r engineRuntime) Snapshot(ctx context.Context) RuntimeState {
 		ShuttingDown: r.ShuttingDown(),
 		// And the same seats the placement read adds to its listing.
 		Seats: r.Seats(),
+		// WHICH IDENTITY DUTIES THIS NODE ARMED, off the engine's own
+		// record of the loops it started — the same answer the arming
+		// decision produced, never a second derivation from the roles.
+		IdentityDuties: r.engine.IdentityDuties(),
 		// The seats this node could not prove it let go of, and for how
 		// long. The one fleet fault that is silent everywhere else: the
 		// lease is still ours, so no peer claims the seat, and the host
@@ -206,6 +217,9 @@ func (r engineRuntime) Snapshot(ctx context.Context) RuntimeState {
 		// The watchdog's own reading, so a node degrading towards its
 		// self-terminate threshold is visible before it hits it.
 		StallLag: r.engine.StallLag(),
+		// Whether uploads may go straight to the bucket, as the object
+		// store's boot probe found it.
+		DirectUpload: r.engine.DirectUploadStatus(),
 		// Read live, on every probe, rather than cached: a cached posture
 		// is a node that reports healthy through the whole window in which
 		// it stopped being so. This is the ONLY place an operator can see
@@ -226,11 +240,11 @@ func (r engineRuntime) Snapshot(ctx context.Context) RuntimeState {
 // count with it.
 func (r engineRuntime) Fleet(ctx context.Context) FleetState {
 	var state FleetState
-	if kinds, evaluated := r.engine.Alarms(); evaluated {
-		state.Alarms = make([]string, 0, len(kinds))
-		for _, kind := range kinds {
-			state.Alarms = append(state.Alarms, string(kind))
-		}
+	if standing, evaluated := r.engine.Alarms(); evaluated {
+		// NON-NIL ONCE EVALUATED, even with nothing firing: an empty
+		// slice is the real claim that nothing holds, and nil is that no
+		// evaluation has run — see [FleetState.Alarms].
+		state.Alarms = append(make([]statelog.Kind, 0, len(standing)), standing...)
 	}
 	// THE FLEET'S SIZE, from the presence leases every fan-out on this node
 	// divides its work by, read live for the posture's reason. A failed or

@@ -48,6 +48,27 @@ var ErrStalled = errors.New("stalled")
 // ErrNoDeadline is a read asked for under a context with no deadline.
 var ErrNoDeadline = errors.New("objstore: a read must carry a deadline")
 
+// ErrFull is a put the backend refused because its byte reservation is spent:
+// the fleet's own bucket (natsobj) holds as many bytes as it was created to
+// reserve, and refuses a new object rather than discard an old one. Nothing is
+// stored, as for every failed put ([Backend.Put]).
+//
+// A SENTINEL rather than the broker's own text, because the caller's answer is
+// specific: the upload is refused for room the deployment has to make (raise
+// the reservation, collect what nothing names, or move the files to a bucket
+// with `crewlet objects migrate --to s3`), never retried as a blip.
+var ErrFull = errors.New("objstore: the object store's byte reservation is spent")
+
+// Usage is how much of a backend's byte reservation its objects take: Bytes
+// stored, against MaxBytes reserved. Only a backend that holds a reservation
+// answers one ([Reserver]): the fleet's own bucket, whose reservation is
+// carved out of the broker every coordination record shares. A provider's
+// bucket reserves nothing.
+type Usage struct {
+	Bytes    int64 `json:"bytes"`
+	MaxBytes int64 `json:"max_bytes"`
+}
+
 // ErrUndated is what a listing ([Backend.List], [Backend.Pending]) fails with,
 // once it has handed on everything it could date, when the backend answered
 // an object or an upload with no instant: an S3-compatible gateway may leave

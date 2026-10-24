@@ -4,7 +4,18 @@
  */
 
 import { expect, test } from "vitest";
-import { NAME_EXAMPLES, nameExample, reachOf, serversUpLine } from "./mcpServers.ts";
+import {
+  NAME_EXAMPLES,
+  emptyServerForm,
+  formErrors,
+  nameExample,
+  newPair,
+  problemsByField,
+  reachOf,
+  serverEntity,
+  serversUpLine,
+  type Pair,
+} from "./mcpServers.ts";
 import { indexOrg } from "./seats.ts";
 import { withDerived } from "~/test/org.ts";
 
@@ -37,4 +48,83 @@ test("the servers line counts a server with any instance started", () => {
   expect(serversUpLine([{ started: 2 }, { started: 1 }, { started: 0 }, { started: 0 }])).toBe(
     "2 of 4 servers running",
   );
+});
+
+const row = (key: string, value: string, optional = false): Pair => ({
+  ...newPair(),
+  key,
+  value,
+  optional,
+});
+
+// A ROW THAT MAY BE UNSET IS AN `optional_keys` ENTRY, by its key, and only
+// the chosen transport's rows are sent: a key the other transport's rows hold
+// names nothing this entry carries, which the engine refuses.
+test("a row that may be unset is sent as the server's optional key", () => {
+  const form = {
+    ...emptyServerForm(),
+    name: "search",
+    command: "search-mcp",
+    env: [
+      row("API_KEY", "${SEARCH_API_KEY}"),
+      row("NPM_CONFIG_REGISTRY", "${NPM_CONFIG_REGISTRY}", true),
+      row(" PROXY ", "http://${PROXY_HOST}:3128", true),
+    ],
+    headers: [row("Authorization", "Bearer ${T}", true)],
+  };
+  expect(serverEntity(form).optional_keys).toEqual(["NPM_CONFIG_REGISTRY", "PROXY"]);
+  expect(
+    serverEntity({ ...form, transport: "http", url: "mcp.example.com" }).optional_keys,
+  ).toEqual(["Authorization"]);
+  expect(serverEntity({ ...form, env: [row("API_KEY", "${K}")] })).not.toHaveProperty(
+    "optional_keys",
+  );
+});
+
+// NOTHING IN A LITERAL CAN BE UNSET, so a row may be unset only where its value
+// names a secret or a variable — the engine refuses the entry otherwise.
+test("a row that may be unset with nothing to resolve is refused before the round trip", () => {
+  const form = { ...emptyServerForm(), name: "search", command: "search-mcp" };
+  expect(formErrors({ ...form, env: [row("LOG_LEVEL", "debug", true)] }, new Set()).env).toBe(
+    "LOG_LEVEL names no secret, so it can’t be unset. Untick its “may be unset” box.",
+  );
+  expect(
+    formErrors({ ...form, env: [row("PROXY", "http://${PROXY_HOST}", true)] }, new Set()).env,
+  ).toBeUndefined();
+});
+
+// A HEADER IS ONE HEADER IN ANY CASE, as HTTP and the engine read it, so two
+// rows spelling one apart are refused before the round trip — while an
+// environment tells two variables apart by case, and the form does too.
+test("two rows naming one header in two cases are refused, and two variables are not", () => {
+  const form = { ...emptyServerForm(), name: "docs", url: "https://docs.example.com/mcp" };
+  expect(
+    formErrors(
+      {
+        ...form,
+        transport: "http",
+        headers: [row("Authorization", "Bearer ${A}"), row("authorization", "Bearer ${B}")],
+      },
+      new Set(),
+    ).headers,
+  ).toBe("Authorization and authorization are one header: write it once.");
+  expect(
+    formErrors(
+      { ...form, command: "docs-mcp", env: [row("TOKEN", "${A}"), row("token", "${B}")] },
+      new Set(),
+    ).env,
+  ).toBeUndefined();
+});
+
+// THE ENGINE'S REFUSAL OF AN `optional_keys` ENTRY is drawn beside the rows it
+// was sent from: the environment's for a command, the headers' for an address.
+test("an optional key's problem is placed beside the transport's rows", () => {
+  const problem = {
+    path: "mcp_servers[1].optional_keys[0]",
+    segments: ["mcp_servers", 1, "optional_keys", 0],
+    kind: "unknown_value",
+    message: "no value written under it carries a reference",
+  };
+  expect(problemsByField([problem], "stdio").fields).toEqual({ env: problem.message });
+  expect(problemsByField([problem], "http").fields).toEqual({ headers: problem.message });
 });

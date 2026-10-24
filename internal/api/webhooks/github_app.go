@@ -248,8 +248,8 @@ const githubAppTemplate = `<!doctype html>
 // A view for each branch that holds a block, because only the install arrival
 // carries the script. The page is unauthenticated and renders a seat name and
 // GitHub's refusal text from the query, and it shares an origin with the
-// dashboard, whose operator token is in localStorage: a hash policy means that
-// even markup the template failed to escape could run nothing.
+// dashboard, whose requests carry a signed-in person's session: a hash policy
+// means that even markup the template failed to escape could run nothing.
 var githubAppPolicyViews = []any{
 	githubAppView{Heading: "App not created", Error: "refused"},
 	githubAppView{

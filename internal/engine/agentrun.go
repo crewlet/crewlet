@@ -74,6 +74,16 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 			"api.port on this node and point %s at that listener as a sandbox "+
 			"reaches it", mcpbridge.BaseURLVar, mcpbridge.BaseURLVar)
 	}
+	// A SURFACE BOUND TO NO SEAT IS REFUSED BY NAME, before Open, for the
+	// reason the two refusals above are: Open refuses it too — every bridged
+	// call acts as the surface's seat, so a surface with none could decide
+	// nothing — and its empty answer would otherwise be reported below as a
+	// missing bridge URL, sending an operator to a variable that is set.
+	if req.Surface == nil || req.Surface.Turn().Handle() == "" {
+		return fmt.Errorf("the agent-mode executor's tool surface is bound to no " +
+			"seat, so a bridged call would have nobody to act as; this is an " +
+			"assembly fault in the runner, not a setting")
+	}
 	// The run's calls, and with each what they have cost the engine so far,
 	// for the segment that resumes from the run to pay — bound to the run's
 	// job by the launch below, before the box that makes them exists.
@@ -96,12 +106,22 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	}
 
 	company := e.Company()
-	gate := seatSandbox(company, l.seat.Name)
-	setup := manager.DefaultSetup()
+	gate := seatSandbox(company, l.seat.Handle())
+	// A RUN ENVIRONMENT THAT DOES NOT RESOLVE IS SAID AND NOT REFUSED here,
+	// where run_sandbox refuses one. This run is not a tool call a turn
+	// chose but the turn's executor itself: refused, the phase fails and the
+	// turn with it (internal/agent/turn), so every message the seat could
+	// answer through its bridge would fail for a code-host token a pass may
+	// mint in a minute — the reason a seat's mailbox does not wait for a
+	// tool server held back for its credential (toolcredentials.go). The
+	// run starts without what is missing, and the line says why it is.
+	runEnv := e.runEnvironment(ctx, company, l.seat, gate, manager.DefaultSetup())
+	runEnv.logGap(ctx, l.seat.Handle(), "the run starts without them")
+	runEnv.logFacts(ctx, l.seat.Handle())
+	setup := runEnv.setup
 	var servers map[string]sandbox.MCPServer
 	if gate != nil {
-		setup = append(setup, setupSteps(gate.Setup)...)
-		servers = sandboxMCP(e.resolver(), company, l.seat, gate)
+		servers = e.boxServers(ctx, company, l.seat, gate)
 	}
 	// THE SEAT'S OWN SERVERS PLUS THE BRIDGE. Both, because they answer
 	// different questions: a scoped MCP server is a credential the box
@@ -109,17 +129,21 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// colleagues, its channels, its memory, its submission.
 	servers = withBridge(servers, endpoint)
 
-	agentLLM, credentials, credentialEnv := l.executorLLM(company)
-	env := underlay(e.sandboxEnv(l.seat, gate, setup), credentialEnv)
+	run, refused := l.executorRun(company, runEnv.env)
+	if refused != nil {
+		e.bridge.Close(l.turn.RunID)
+		return refused
+	}
+	agentLLM, env := run.llm, run.env
 	spec := manager.BuildSpec(sandbox.SpecInput{
 		Placement:       l.placement,
 		CodingAgent:     l.codingAgent,
 		PauseTTL:        pauseTTL(gate),
 		MaxTurns:        maxTurnsFor(gate),
 		Env:             env,
-		CredentialFiles: credentials,
+		CredentialFiles: run.files,
 	})
-	// THE EXECUTOR'S PHASE, matching executorLLM above: the guard has to
+	// THE EXECUTOR'S PHASE, matching executorRun above: the guard has to
 	// inspect the entry whose login the box will actually run under, and
 	// asking it about llm_sandbox would answer for a model this run never
 	// touches.
@@ -147,15 +171,17 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	return nil
 }
 
-// executorLLM is the model an agent-mode run works under.
+// executorRun is the [codingRun] an agent-mode run works under.
 //
 // THE EXECUTOR'S OWN ENTRY, not llm_sandbox — this run IS the executor. A
 // method rather than an inline call so the choice has a name a test can hold:
-// see [runLLM] for what the two phases mean, and why sending an agent-mode run
-// to llm_sandbox would silently run a seat's whole turn on the model it chose
-// for a subordinate job.
-func (l *agentLauncher) executorLLM(c *Company) (*sandbox.AgentLLM, map[string]string, map[string]string) {
-	return runLLM(c, l.seat, phase.Execute)
+// see [newCodingRun] for what the two phases mean, and why sending an
+// agent-mode run to llm_sandbox would silently run a seat's whole turn on the
+// model it chose for a subordinate job. Its runner is the one the turn
+// resolved from that same entry, so the run is refused only when an apply
+// since moved the executor onto another CLI.
+func (l *agentLauncher) executorRun(c *Company, seatEnv map[string]string) (codingRun, error) {
+	return newCodingRun(c, l.seat, phase.Execute, l.codingAgent, seatEnv)
 }
 
 // withBridge adds the engine-side surface to a box's MCP server list.
@@ -246,7 +272,7 @@ func agentPlacement(c *Company, key string) config.Placement {
 // maxTurnsFor is a seat's coding-round cap, nil-safe on a seat with no
 // sandbox block at all — which an agent-mode seat legitimately is: its
 // executor runs in a box whether or not it was ever offered run_sandbox.
-func maxTurnsFor(gate *config.RoleSandbox) *int {
+func maxTurnsFor(gate *org.RoleSandbox) *int {
 	if gate == nil {
 		return nil
 	}

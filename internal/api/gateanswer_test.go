@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -23,9 +25,11 @@ import (
 const gateAnswerGolden = "testdata/gate_answer.json"
 
 // gateAnswerScenarios is one gesture per shape a log's answer can take, each
-// over the three identity-claiming logs a real node runs — the tracker's, the
-// pages log and the code log, in the order the engine registers them — with
-// the shape under test on the pages log, between two logs that applied.
+// over three of the identity-claiming logs a real node runs — the tracker's,
+// the knowledge base's and the code log — with the shape under test on the
+// pages log, between two logs that applied. Three stand for all of them: every
+// log's entry has the one shape, and what the file pins is that shape and its
+// place among its neighbours, not how many logs there are.
 //
 // The ids are the engine's own grammar and DERIVED, so the file is stable: a
 // dashboard fixture carrying `op-7` is an id no node sends and the route
@@ -126,7 +130,7 @@ func renderGateScenarios(t *testing.T) []byte {
 		if !ok {
 			t.Fatalf("%s is not rendered as a refusal", name)
 		}
-		refusals[name] = goldenRefusal{Status: refusal.Status, Body: refusal.Body}
+		refusals[name] = goldenRefusal{Status: refusal.Status, Body: refusal.Envelope()}
 	}
 	out, err := json.MarshalIndent(map[string]any{
 		"answers": answers, "refusals": refusals,
@@ -258,15 +262,16 @@ func TestEveryGateRefusalCarriesItsActions(t *testing.T) {
 		// AND THE OPERATION IT WAS SENT UNDER, which is what "the same
 		// request with the answer's op_id" reads — a refusal offering
 		// `retry_same_op` without one named a value it did not hold.
-		if got, _ := refusal.Body["op_id"].(string); got != refusalOpID(name) {
+		body := refusal.Envelope()
+		if got, _ := body["op_id"].(string); got != refusalOpID(name) {
 			t.Errorf("%s carries op_id %q, want the one it was sent under %q",
 				name, got, refusalOpID(name))
 		}
-		got, _ := refusal.Body["actions"].([]statelog.GateAction)
+		got, _ := body["actions"].([]statelog.GateAction)
 		if !slices.Equal(got, want[name]) {
 			t.Errorf("%s offers %v, want %v", name, got, want[name])
 		}
-		if hint, _ := refusal.Body["hint"].(string); hint == "" ||
+		if hint, _ := body["hint"].(string); hint == "" ||
 			strings.Contains(hint, "-force") || strings.Contains(hint, "-op-id") ||
 			strings.Contains(hint, "-url") {
 			t.Errorf("%s's hint %q is empty or names a command-line flag — the "+
@@ -276,5 +281,53 @@ func TestEveryGateRefusalCarriesItsActions(t *testing.T) {
 	if _, ok := api.RenderGateRefusal("node-4", refusalOpID("x"),
 		errors.New("unreachable")); ok {
 		t.Error("an ordinary failure was rendered as a refusal rather than a 500")
+	}
+}
+
+// EVERY GATE REFUSAL IS IN THE ENGINE'S ENVELOPE, AND ONLY THE ONE WAITING CAN
+// CLEAR SAYS WHEN TO COME BACK.
+//
+// The refusals were bare maps with no `message`, so the dialog had no sentence
+// of the engine's for any of them — and the one 503, a lease listing this node
+// could not read, said `retry_same_op` in its body while its header, carrying
+// no Retry-After, said "do not come back". Asserted on the wire, through the
+// route's own writer, because the header is not in the golden.
+func TestEveryGateRefusalIsInTheEnvelope(t *testing.T) {
+	t.Parallel()
+	for name, err := range gateRefusalScenarios() {
+		refusal, ok := api.RenderGateRefusal("node-4", refusalOpID(name), err)
+		if !ok {
+			t.Fatalf("%s is not rendered as a refusal", name)
+		}
+		if !refusal.Code.Valid() {
+			t.Errorf("%s answers %q, a code not on httpjson's table", name, refusal.Code)
+		}
+		rec := httptest.NewRecorder()
+		refusal.Write(rec)
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("%s: the refusal is not JSON: %v", name, err)
+		}
+		// A SCENARIO IS NAMED BY ITS CODE, qualified where one code has two
+		// cases: `readmission_unjudged_register` is the readmission whose
+		// fleet-wide read failed rather than one log's.
+		code := string(refusal.Code)
+		if name != code && !strings.HasPrefix(name, code+"_") {
+			t.Errorf("%s answers %q, which is not the code it is named by", name, code)
+		}
+		if rec.Code != refusal.Status || body["error"] != code ||
+			body["message"] != refusal.Code.Message() {
+			t.Errorf("%s answered %d %v, want %d with the table's sentence",
+				name, rec.Code, body, refusal.Status)
+		}
+		retry := rec.Header().Get("Retry-After")
+		switch unavailable := refusal.Status == http.StatusServiceUnavailable; {
+		case unavailable && retry == "":
+			t.Errorf("%s is a 503 whose remedy is asking again, and carries no "+
+				"Retry-After — which tells a client not to", name)
+		case !unavailable && retry != "":
+			t.Errorf("%s is a %d carrying Retry-After %s, which no wait clears",
+				name, refusal.Status, retry)
+		}
 	}
 }

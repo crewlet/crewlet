@@ -13,6 +13,19 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
+// save writes a view the way every caller does: read what it replaces, decide
+// on that, and save against it.
+func save(t *testing.T, w *tracker.Writer, opID string,
+	view tracker.View) (tracker.WriteResult, error) {
+
+	t.Helper()
+	prior, err := w.ViewPrior(t.Context(), view.ID)
+	if err != nil {
+		t.Fatalf("read what saving %s replaces: %v", view.ID, err)
+	}
+	return w.WriteView(t.Context(), opID, view, prior)
+}
+
 // A view fixture the cases vary. The container is the seeded project, which is
 // the only one [newRoundTrip] has applied.
 func aView(id string, mutate func(*tracker.View)) tracker.View {
@@ -33,8 +46,7 @@ func aView(id string, mutate func(*tracker.View)) tracker.View {
 func (r *roundTrip) strip(container tracker.Container, viewer string) tracker.ViewListing {
 	r.t.Helper()
 	listing, err := r.reader.Views(r.t.Context(), tracker.ViewQuery{
-		Container: container, Viewer: tracker.PartyOf(viewer),
-		Level: statelog.ReadStale,
+		Container: container, Viewer: viewer, Level: statelog.ReadStale,
 	})
 	if err != nil {
 		r.t.Fatalf("Views(%s %s, %q): %v", container.Kind, container.ID, viewer, err)
@@ -115,7 +127,7 @@ func TestAViewThatCouldNotBeRunIsRefusedAtTheSave(t *testing.T) {
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := r.writer.WriteView(t.Context(), "op-bad-"+tc.name,
+			_, err := save(t, r.writer, "op-bad-"+tc.name,
 				aView("v-bad", tc.mutate))
 			if err == nil {
 				t.Fatalf("case %d saved a view that cannot be run", i)
@@ -128,7 +140,7 @@ func TestAViewThatCouldNotBeRunIsRefusedAtTheSave(t *testing.T) {
 
 	// THE CONTROL: the same fixture, unmutated, saves. Without it every
 	// case above would pass against a verb that refused everything.
-	if _, err := r.writer.WriteView(t.Context(), "op-good", aView("v-good", nil)); err != nil {
+	if _, err := save(t, r.writer, "op-good", aView("v-good", nil)); err != nil {
 		t.Fatalf("the control view was refused: %v", err)
 	}
 }
@@ -144,7 +156,7 @@ func TestOnlyOneViewInAContainerIsTheDefault(t *testing.T) {
 	eng := tracker.Container{Kind: tracker.ContainerProject, ID: "ENG"}
 
 	for _, id := range []string{"v-1", "v-2"} {
-		if _, err := r.writer.WriteView(t.Context(), "op-"+id,
+		if _, err := save(t, r.writer, "op-"+id,
 			aView(id, func(v *tracker.View) { v.Name = id; v.Default = true })); err != nil {
 			t.Fatalf("save %s: %v", id, err)
 		}
@@ -164,7 +176,7 @@ func TestOnlyOneViewInAContainerIsTheDefault(t *testing.T) {
 	// AND WITHDRAWING ONE TAKES NOTHING FROM ANYBODY ELSE: saving v-2
 	// with the flag off leaves the container with no default rather than
 	// handing it back to v-1, which is a gesture the person did not make.
-	if _, err := r.writer.WriteView(t.Context(), "op-v-2-off",
+	if _, err := save(t, r.writer, "op-v-2-off",
 		aView("v-2", func(v *tracker.View) { v.Name = "v-2" })); err != nil {
 		t.Fatalf("withdraw the default: %v", err)
 	}
@@ -186,7 +198,7 @@ func TestAPersonalViewReachesNobodyElsesStrip(t *testing.T) {
 	for _, spec := range []struct{ id, owner string }{
 		{"v-shared", ""}, {"v-ana", "ana"}, {"v-bob", "bob"},
 	} {
-		if _, err := r.writer.WriteView(t.Context(), "op-"+spec.id,
+		if _, err := save(t, r.writer, "op-"+spec.id,
 			aView(spec.id, func(v *tracker.View) {
 				v.Name, v.Owner = spec.id, spec.owner
 			})); err != nil {
@@ -224,7 +236,7 @@ func TestAProtectedViewRefusesEveryoneButItsOwner(t *testing.T) {
 	r := newRoundTrip(t)
 
 	// Written by ana, whom the harness's own writer is.
-	if _, err := r.writer.WriteView(t.Context(), "op-guarded",
+	if _, err := save(t, r.writer, "op-guarded",
 		aView("v-guarded", func(v *tracker.View) {
 			v.Owner, v.Protected = "ana", true
 		})); err != nil {
@@ -233,7 +245,7 @@ func TestAProtectedViewRefusesEveryoneButItsOwner(t *testing.T) {
 	r.drain()
 
 	bob := r.writer.As("bob", tracker.AuthorHuman, tracker.Provenance{})
-	_, err := bob.WriteView(t.Context(), "op-guarded-bob",
+	_, err := save(t, bob, "op-guarded-bob",
 		aView("v-guarded", func(v *tracker.View) {
 			v.Owner, v.Protected, v.Name = "ana", true, "bob was here"
 		}))
@@ -248,64 +260,11 @@ func TestAProtectedViewRefusesEveryoneButItsOwner(t *testing.T) {
 	}
 
 	// ITS OWNER STILL MAY, or "protected" would mean frozen.
-	if _, err := r.writer.WriteView(t.Context(), "op-guarded-ana",
+	if _, err := save(t, r.writer, "op-guarded-ana",
 		aView("v-guarded", func(v *tracker.View) {
 			v.Owner, v.Protected, v.Name = "ana", true, "ana renamed it"
 		})); err != nil {
 		t.Fatalf("ana could not edit her own protected view: %v", err)
-	}
-}
-
-// AND ITS OWNER IS THE PERSON, UNDER EITHER OF THEIR NAMES.
-//
-// A view is saved through somebody's own credential, so `owner` is the seat
-// where the company bound the token to one and the CREDENTIAL on every row
-// written before that was keyed on the seat. Compared against the actor alone,
-// a founder opening their own protected board was told it belonged to somebody
-// else and offered to ask them — and the somebody else was their own token.
-func TestAProtectedViewIsItsOwnersUnderEitherName(t *testing.T) {
-	t.Parallel()
-	r := newRoundTrip(t)
-
-	// THE PERSON, as the operator surface builds them: the credential in
-	// the author field and the seat it is bound to behind it.
-	bound := r.writer.As("founder", tracker.AuthorOperator, tracker.Provenance{
-		OperatorID: "founder", Seat: "jane-founder",
-	})
-	// BOTH SPELLINGS OF ONE OWNER. `jane-founder` is what a person's own
-	// state is keyed on now; `founder` is what every row written before
-	// that carries. One of them refused is a founder locked out of their
-	// own board, and it was the first.
-	for id, owner := range map[string]string{
-		"v-seat":  "jane-founder",
-		"v-token": "founder",
-	} {
-		if _, err := r.writer.WriteView(t.Context(), "op-save-"+id,
-			aView(id, func(v *tracker.View) {
-				v.Owner, v.Protected = owner, true
-			})); err != nil {
-			t.Fatalf("save the view owned by %s: %v", owner, err)
-		}
-		r.drain()
-		if _, err := bound.WriteView(t.Context(), "op-edit-"+id,
-			aView(id, func(v *tracker.View) {
-				v.Owner, v.Protected, v.Name = owner, true, "still mine"
-			})); err != nil {
-			t.Errorf("the person was refused their own protected view, "+
-				"owned as %q: %v", owner, err)
-		}
-		r.drain()
-
-		// AND SOMEBODY ELSE IS STILL SOMEBODY ELSE, or the widening
-		// would have cost the guard rather than fixed it.
-		bob := r.writer.As("bob", tracker.AuthorHuman, tracker.Provenance{})
-		if _, err := bob.WriteView(t.Context(), "op-bob-"+id,
-			aView(id, func(v *tracker.View) {
-				v.Owner, v.Protected, v.Name = owner, true, "bob was here"
-			})); err == nil {
-			t.Errorf("bob edited a view protected for %q", owner)
-		}
-		r.drain()
 	}
 }
 
@@ -391,14 +350,14 @@ func TestASaveCannotReattributeOrRerankAView(t *testing.T) {
 	r := newRoundTrip(t)
 	eng := tracker.Container{Kind: tracker.ContainerProject, ID: "ENG"}
 
-	if _, err := r.writer.WriteView(t.Context(), "op-first", aView("v-1", nil)); err != nil {
+	if _, err := save(t, r.writer, "op-first", aView("v-1", nil)); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 	r.drain()
 	before := r.strip(eng, "").Views
 
 	bob := r.writer.As("bob", tracker.AuthorHuman, tracker.Provenance{})
-	if _, err := bob.WriteView(t.Context(), "op-second",
+	if _, err := save(t, bob, "op-second",
 		aView("v-1", func(v *tracker.View) {
 			v.Name, v.CreatedBy = "bob renamed it", "bob"
 			v.CreatedAt = wednesday.Add(time.Hour)
@@ -442,7 +401,7 @@ func TestANewViewLandsAtTheEndOfTheStrip(t *testing.T) {
 	eng := tracker.Container{Kind: tracker.ContainerProject, ID: "ENG"}
 
 	for _, id := range []string{"v-1", "v-2", "v-3"} {
-		if _, err := r.writer.WriteView(t.Context(), "op-"+id,
+		if _, err := save(t, r.writer, "op-"+id,
 			aView(id, func(v *tracker.View) { v.Name = id })); err != nil {
 			t.Fatalf("save %s: %v", id, err)
 		}
@@ -480,7 +439,7 @@ func TestAPinOrdersOneViewersStripAndNoOthers(t *testing.T) {
 	eng := tracker.Container{Kind: tracker.ContainerProject, ID: "ENG"}
 
 	for _, id := range []string{"v-1", "v-2", "v-3"} {
-		if _, err := r.writer.WriteView(t.Context(), "op-"+id,
+		if _, err := save(t, r.writer, "op-"+id,
 			aView(id, func(v *tracker.View) { v.Name = id })); err != nil {
 			t.Fatalf("save %s: %v", id, err)
 		}
@@ -563,6 +522,87 @@ func TestAViewReadRefusesTheSpellingsTheWriteRefuses(t *testing.T) {
 	}
 }
 
+// A SAVE IS REFUSED WHEN THE VIEW IT REPLACES IS NOT THE ONE IT WAS DECIDED ON.
+//
+// A save replaces a view whole, by id, so its authority is decided on the view
+// it overwrites as well as on the one it writes — and a decision taken on a
+// read is only worth something if the write refuses when the read no longer
+// holds. Here the view changes hands between the read and the save, and in the
+// second case appears under an id the caller read as free. Both are refused
+// with a conflict the caller re-reads on; the control is the same save against
+// a fresh read.
+func TestASaveDecidedOnAViewThatChangedIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := save(t, r.writer, "op-shared", aView("v-1", nil)); err != nil {
+		t.Fatalf("save the shared view: %v", err)
+	}
+	r.drain()
+
+	stale, err := r.writer.ViewPrior(t.Context(), "v-1")
+	if err != nil || !stale.Held || stale.Owner != "" {
+		t.Fatalf("the prior of a shared view is %+v (%v)", stale, err)
+	}
+	// SOMEBODY ELSE MAKES IT THEIRS in between.
+	if _, err := save(t, r.writer, "op-taken",
+		aView("v-1", func(v *tracker.View) { v.Owner = "bob" })); err != nil {
+		t.Fatalf("the intervening save: %v", err)
+	}
+	r.drain()
+	_, err = r.writer.WriteView(t.Context(), "op-late",
+		aView("v-1", func(v *tracker.View) { v.Name = "late" }), stale)
+	if !errors.Is(err, statelog.ErrConflict) {
+		t.Fatalf("a save decided on the shared view landed on bob's (err %v)", err)
+	}
+	if !strings.Contains(err.Error(), "bob") {
+		t.Errorf("the refusal does not say whose it is now: %v", err)
+	}
+
+	// AN ID READ AS FREE THAT WAS TAKEN in between is the same refusal.
+	if _, err := r.writer.WriteView(t.Context(), "op-free",
+		aView("v-1", nil), tracker.ViewPrior{}); !errors.Is(err, statelog.ErrConflict) {
+		t.Fatalf("a save decided on no view replaced one (err %v)", err)
+	}
+
+	// THE CONTROL: decided on what is there now, it lands.
+	if _, err := save(t, r.writer, "op-fresh",
+		aView("v-1", func(v *tracker.View) { v.Owner, v.Name = "bob", "fresh" })); err != nil {
+		t.Fatalf("a save decided on the current view was refused: %v", err)
+	}
+}
+
+// A PERSONAL VIEW IS NEVER ITS CONTAINER'S DEFAULT.
+//
+// The default is the landing tab for EVERYBODY, and a personal view is in
+// nobody's strip but its owner's — so accepting one cleared the container's
+// shared default for every other reader, on the authority of a caller who
+// needed no more than their own record to save it. A pin is how a person puts
+// their own view first.
+func TestAPersonalViewCannotBeTheDefault(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	_, err := save(t, r.writer, "op-mine", aView("v-mine", func(v *tracker.View) {
+		v.Owner, v.Default = "ana", true
+	}))
+	if err == nil {
+		t.Fatal("a personal view was saved as its container's default")
+	}
+	if !strings.Contains(err.Error(), "pin") {
+		t.Errorf("the refusal does not say what to do instead: %v", err)
+	}
+	// THE CONTROL: the same view shared, or personal and not the default.
+	if _, err := save(t, r.writer, "op-shared", aView("v-shared", func(v *tracker.View) {
+		v.Default = true
+	})); err != nil {
+		t.Fatalf("a shared default was refused: %v", err)
+	}
+	if _, err := save(t, r.writer, "op-mine-plain", aView("v-mine", func(v *tracker.View) {
+		v.Owner = "ana"
+	})); err != nil {
+		t.Fatalf("a personal view was refused: %v", err)
+	}
+}
+
 func containsString(list []string, want string) bool {
 	for _, got := range list {
 		if got == want {
@@ -584,13 +624,13 @@ func TestAViewThatMovesNamesBothStrips(t *testing.T) {
 
 	view := aView("v-move", nil)
 	view.Container = tracker.Container{Kind: tracker.ContainerProject, ID: "ENG"}
-	if _, err := r.writer.WriteView(t.Context(), "op-here", view); err != nil {
+	if _, err := save(t, r.writer, "op-here", view); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 	r.drain()
 
 	view.Container = tracker.Container{Kind: tracker.ContainerProject, ID: "OPS"}
-	if _, err := r.writer.WriteView(t.Context(), "op-there", view); err != nil {
+	if _, err := save(t, r.writer, "op-there", view); err != nil {
 		t.Fatalf("move: %v", err)
 	}
 	r.drain()
@@ -651,7 +691,7 @@ func TestPinnedViewCountsAreTheViewsOwnTotal(t *testing.T) {
 			v.Name, v.Params = "Gone", map[string]string{"f.severity": "high"}
 		}),
 	} {
-		if _, err := r.writer.WriteView(t.Context(), "op-"+view.ID, view); err != nil {
+		if _, err := save(t, r.writer, "op-"+view.ID, view); err != nil {
 			t.Fatalf("save %s: %v", view.ID, err)
 		}
 		r.drain()
@@ -665,7 +705,7 @@ func TestPinnedViewCountsAreTheViewsOwnTotal(t *testing.T) {
 	r.drain()
 
 	listing, err := r.reader.Views(t.Context(), tracker.ViewQuery{
-		Container: eng, Viewer: tracker.PartyOf("ana"), Level: statelog.ReadStale,
+		Container: eng, Viewer: "ana", Level: statelog.ReadStale,
 		Counts: true, Now: wednesday, Zone: time.UTC,
 	})
 	if err != nil {
@@ -776,7 +816,7 @@ func TestAPinnedViewCountsTheListItOpens(t *testing.T) {
 				"subtasks": "collapsed"}
 		}),
 	} {
-		if _, err := r.writer.WriteView(t.Context(), "op-"+view.ID, view); err != nil {
+		if _, err := save(t, r.writer, "op-"+view.ID, view); err != nil {
 			t.Fatalf("save %s: %v", view.ID, err)
 		}
 		r.drain()
@@ -813,7 +853,7 @@ func TestAPinnedViewCountsTheListItOpens(t *testing.T) {
 	}
 
 	listing, err := r.reader.Views(t.Context(), tracker.ViewQuery{
-		Container: eng, Viewer: tracker.PartyOf("ana"), Level: statelog.ReadStale,
+		Container: eng, Viewer: "ana", Level: statelog.ReadStale,
 		Counts: true, Now: wednesday, Zone: time.UTC,
 	})
 	if err != nil {
@@ -840,8 +880,9 @@ func TestAPinnedViewCountsTheListItOpens(t *testing.T) {
 //
 // Three views, each of which reads its viewer a different way: a saved
 // `f.reviewers=me`, which means whoever opens it; `asked_by=` the viewer's own
-// seat, which a person bound to an operator token holds under the token's name
-// too; and a view saved against a PERSON, which a board runs as saved. The
+// seat, which is the author of every question they put whatever credential
+// they put it through (iam.ActorFor); and a view saved against a PERSON, which
+// a board runs as saved. The
 // count and the board share one expansion ([Reader.Expand]) — and a saved
 // `me` was once resolved by neither, so the count and the board refused it
 // alike, or, while the count carried a merge of its own, disagreed.
@@ -858,10 +899,10 @@ func TestAPinnedViewCountsAsTheViewerWhoOpensIt(t *testing.T) {
 	seedWithFields(t, r, "rev-ana-1", map[string]any{"f-rev": []string{"ana"}})
 	seedWithFields(t, r, "rev-ana-2", map[string]any{"f-rev": []string{"ana", "bob"}})
 	seedWithFields(t, r, "rev-bob", map[string]any{"f-rev": []string{"bob"}})
-	// The founder's questions, one through their token and one as their
-	// seat, and somebody else's.
+	// The founder's questions — one through their token and one from the
+	// dashboard, both authored by their seat — and somebody else's.
 	for task, author := range map[string]string{
-		"by-token": "founder", "by-seat": "jane-founder", "by-other": "cy",
+		"by-token": "jane-founder", "by-seat": "jane-founder", "by-other": "cy",
 	} {
 		assign(t, r, task, "ana")
 		askOn(t, r, "op-"+task, task, tracker.Comment{
@@ -884,7 +925,7 @@ func TestAPinnedViewCountsAsTheViewerWhoOpensIt(t *testing.T) {
 			v.Params = map[string]string{"assignee": "ana"}
 		}),
 	} {
-		if _, err := r.writer.WriteView(t.Context(), "op-"+view.ID, view); err != nil {
+		if _, err := save(t, r.writer, "op-"+view.ID, view); err != nil {
 			t.Fatalf("save %s: %v", view.ID, err)
 		}
 		r.drain()
@@ -923,7 +964,7 @@ func TestAPinnedViewCountsAsTheViewerWhoOpensIt(t *testing.T) {
 	count := func(container tracker.Container, viewer tracker.Viewer, id string) tracker.ViewRow {
 		t.Helper()
 		listing, err := r.reader.Views(t.Context(), tracker.ViewQuery{
-			Container: container, Viewer: viewer.Party(), Level: statelog.ReadStale,
+			Container: container, Viewer: viewer.Handle, Level: statelog.ReadStale,
 			Counts: true, Now: wednesday, Zone: time.UTC,
 		})
 		if err != nil {
@@ -950,8 +991,8 @@ func TestAPinnedViewCountsAsTheViewerWhoOpensIt(t *testing.T) {
 			map[string]any{"view": "v-mine", "container": "project:ENG"}, 2},
 		{"a saved me is bob", eng, tracker.Viewer{Handle: "bob"}, "v-mine",
 			map[string]any{"view": "v-mine", "container": "project:ENG"}, 2},
-		{"asked_by reaches the token's asks", eng,
-			tracker.Viewer{Handle: "jane-founder", OperatorID: "founder"}, "v-asked",
+		{"asked_by reaches every ask the founder put", eng,
+			tracker.Viewer{Handle: "jane-founder"}, "v-asked",
 			map[string]any{"view": "v-asked", "container": "project:ENG"}, 2},
 		{"a person's view runs as saved", anaHome, tracker.Viewer{Handle: "ana"},
 			"v-home", map[string]any{"view": "v-home"}, 3},
@@ -1001,7 +1042,7 @@ func TestEveryViewListsAPinnedProjectViewAndCountsItInItsProject(t *testing.T) {
 		}),
 		aView("v-private", func(v *tracker.View) { v.Name, v.Owner = "Bo's own", "bo" }),
 	} {
-		if _, err := r.writer.WriteView(t.Context(), "op-"+view.ID, view); err != nil {
+		if _, err := save(t, r.writer, "op-"+view.ID, view); err != nil {
 			t.Fatalf("save %s: %v", view.ID, err)
 		}
 		r.drain()
@@ -1023,7 +1064,7 @@ func TestEveryViewListsAPinnedProjectViewAndCountsItInItsProject(t *testing.T) {
 	}
 
 	listing, err := r.reader.EveryView(t.Context(), tracker.EveryViewQuery{
-		Viewer: tracker.PartyOf("ana"), Level: statelog.ReadStale,
+		Viewer: "ana", Level: statelog.ReadStale,
 		Counts: true, Now: wednesday, Zone: time.UTC,
 	})
 	if err != nil {

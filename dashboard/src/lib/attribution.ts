@@ -3,8 +3,8 @@
  *
  * # The one thing this product can say that a tracker cannot
  *
- * Every write in this engine is attributed to somebody — a seat, a person, an
- * operator token — and carries the turn it happened in. So a properties rail
+ * Every write in this engine is attributed to somebody — a seat, a person, a
+ * login bound to no seat — and carries the turn it happened in. So a properties rail
  * here can say `set by ada · 3h ago · turn ↗` on the row, where Jira, Linear
  * and ClickUp can only put an actor on a feed entry and leave the reader to
  * match it up. `ObjectHeader.Fact` and `PropertiesRail.Property` were both
@@ -39,13 +39,15 @@
  * after the task was filed, which is the question a reader asks of a row; a
  * field nobody has touched since the create draws none.
  *
- * # Named as the person, not the token
+ * # Named as the person, as every record names them
  *
- * An operator token's change carries `actor_seat`, the seat the token was
- * bound to, and the line names that seat — the activity beside the rail names
- * the same change from the same field, and one person drawn two ways on one
- * page ("founder" in the rail, Jane Founder in the feed) reads as two people.
- * `actor` stays the credential on the wire, which is the audit trail.
+ * The engine records every author the one way (`iam.ActorFor`): a person the
+ * identity directory binds to a seat AS that seat, kind `human`; anybody
+ * bound to none under their whole login, kind `operator`; and the CREDENTIAL
+ * they acted through beside either as `operator_id`. So `actor` is already the
+ * name the activity feed beside the rail draws — one person, one name on one
+ * page — and nothing here re-derives a person from a credential. Which
+ * credential wrote is [throughOf]'s, a column of its own.
  */
 
 import type { SetBy } from "~/app/frame/ObjectHeader.tsx";
@@ -73,18 +75,15 @@ export function attribution(history: readonly WorkChange[] | undefined): Map<str
     // who, and "set by" with nobody after it is worse than silence.
     if (!change.actor) continue;
     if (change.kind === "created") continue;
-    const seat = change.actor_seat ?? "";
     for (const [field, delta] of Object.entries(change.fields ?? {})) {
       if (out.has(field)) continue;
       out.set(field, {
-        actor: seat || change.actor,
-        // A BOUND TOKEN'S CHANGE IS A PERSON'S: only a person's seat names an
-        // operator id, so the seat it resolves to is a human one.
-        actorKind: seat
-          ? "human"
-          : KINDS.has(change.actor_kind ?? "")
-            ? (change.actor_kind as SetBy["actorKind"])
-            : undefined,
+        actor: change.actor,
+        // A KIND THE WIRE DOES NOT SPELL IS DROPPED rather than passed
+        // through: the line's outline is drawn from it.
+        actorKind: KINDS.has(change.actor_kind ?? "")
+          ? (change.actor_kind as SetBy["actorKind"])
+          : undefined,
         turnId: change.turn_id || undefined,
         at: change.at,
         cleared: emptied(delta),
@@ -92,6 +91,33 @@ export function attribution(history: readonly WorkChange[] | undefined): Map<str
     }
   }
   return out;
+}
+
+/**
+ * The credential a write was made through, where it says something its author
+ * does not — or empty.
+ *
+ * TWO NAMES, because every trail records two: the AUTHOR whose authority a
+ * write exercised, and the CREDENTIAL it was made through — a person's machine
+ * token (`pat:<id>`) or browser session (`session:<lineage>`). A Tier A token's
+ * login is both, and "token:ops through token:ops" says one thing twice, so
+ * that credential is not repeated. The engine's command line draws the same
+ * line (`describeAuthor` in cmd/crewlet).
+ */
+export function throughOf(author: string, operatorId: string | undefined): string {
+  return operatorId && operatorId !== author ? operatorId : "";
+}
+
+/**
+ * A recorded author and the credential beside it, as one line a person reads:
+ * `jane.doe (through pat:…)`, or the author alone where [throughOf] has
+ * nothing to add. Empty where no author was recorded, which a caller renders
+ * as its own "nobody recorded" rather than as a name.
+ */
+export function authorLabel(author: string, operatorId: string | undefined): string {
+  if (!author) return "";
+  const through = throughOf(author, operatorId);
+  return through ? `${author} (through ${through})` : author;
 }
 
 /**

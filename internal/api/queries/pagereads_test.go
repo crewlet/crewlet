@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/clientsource"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -78,7 +79,7 @@ func TestPageReadsSumsEveryNodeAndCutsTodayOnTheCompanyClock(t *testing.T) {
 	work := &stubWork{places: map[string]tracker.TurnPlace{
 		"run-b": {TaskID: "t-1", Key: "ENG-412", Title: "Retry PXE boot", Ordinal: 2}}}
 	sources := f.sources()
-	sources.Native = nativeOf(queries.Native{Work: work})
+	sources.Work = work
 	got, ok := askRaw(t, registryOver(t, sources), "page_reads",
 		map[string]any{"page": readPage}).(queries.PageReadsAnswer)
 	if !ok {
@@ -95,10 +96,13 @@ func TestPageReadsSumsEveryNodeAndCutsTodayOnTheCompanyClock(t *testing.T) {
 	if got.Elided != 3 {
 		t.Errorf("elided = %d, want the 3 the sre's day dropped", got.Elided)
 	}
+	// EACH SEAT IS NAMED AS THE CHART CALLS IT NOW — "Site Reliability",
+	// never the "SRE" its day recorded: a day's name is a rename's worth out
+	// of date, and only a seat the chart no longer holds keeps it.
 	want := []queries.PageReadRow{
-		{Handle: "lead", Role: "LEAD", Via: "get_page", Count: 3, LastAt: late, LastTurnID: "run-b",
+		{Handle: "lead", Role: "Lead", Via: "get_page", Count: 3, LastAt: late, LastTurnID: "run-b",
 			LastWorkItem: &tracker.TurnPlace{TaskID: "t-1", Key: "ENG-412", Title: "Retry PXE boot", Ordinal: 2}},
-		{Handle: "sre", Role: "SRE", Via: "search", Count: 4, LastAt: yesterday,
+		{Handle: "sre", Role: "Site Reliability", Via: "search", Count: 4, LastAt: yesterday,
 			LastTurnID: "run-c", LastQuery: "dhcp lease"},
 	}
 	if !reflect.DeepEqual(got.Readers, want) || got.ReadersTotal != 2 {
@@ -114,12 +118,12 @@ func TestPageReadsRefusesAWindowPastItsMonth(t *testing.T) {
 	f := newSpendFixture(t)
 	r := registryOver(t, f.sources())
 	for _, days := range []int{0, 31} {
-		_, err := r.Answer(t.Context(), "page_reads", map[string]any{"page": readPage, "days": days}, "")
+		_, err := r.Answer(everyGrant(t), "page_reads", map[string]any{"page": readPage, "days": days})
 		if !errors.Is(err, queries.ErrBadParams) {
 			t.Errorf("days=%d: err = %v, want bad params", days, err)
 		}
 	}
-	if _, err := r.Answer(t.Context(), "page_reads", map[string]any{}, ""); !errors.Is(err, queries.ErrBadParams) {
+	if _, err := r.Answer(everyGrant(t), "page_reads", map[string]any{}); !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("no page: err = %v, want bad params", err)
 	}
 }
@@ -153,10 +157,8 @@ func TestThePageAnswerSaysWhyItCarriesNoBacklinks(t *testing.T) {
 			t.Parallel()
 			f := newSpendFixture(t)
 			sources := f.sources()
-			sources.Native = nativeOf(queries.Native{
-				Pages:     &stubPages{detail: pages.Detail{Page: pages.Page{ID: readPage, Title: "Deploying"}}},
-				Backlinks: stubBacklinks{err: tc.err},
-			})
+			sources.Pages = &stubPages{detail: pages.Detail{Page: pages.Page{ID: readPage, Title: "Deploying"}}}
+			sources.Backlinks = stubBacklinks{err: tc.err}
 			got, ok := askRaw(t, registryOver(t, sources), "page", map[string]any{"id": readPage}).(queries.PageAnswer)
 			if !ok {
 				t.Fatalf("page answered %T", got)
@@ -212,7 +214,7 @@ func TestThePageAnswerCarriesSkillLoadsAndBacklinks(t *testing.T) {
 	}
 	stub := &stubPages{detail: pages.Detail{Page: pages.Page{ID: readPage, Title: "Deploying"}, Skill: true}}
 	sources := f.sources()
-	sources.Native = nativeOf(queries.Native{Pages: stub, Backlinks: stubBacklinks{links: links}})
+	sources.Pages, sources.Backlinks = stub, stubBacklinks{links: links}
 	got, ok := askRaw(t, registryOver(t, sources), "page", map[string]any{"id": readPage}).(queries.PageAnswer)
 	if !ok {
 		t.Fatalf("page answered %T", got)
@@ -245,7 +247,7 @@ func TestAnUnloadedSkillSendsAnEmptyListNotAnAbsentKey(t *testing.T) {
 	f := newSpendFixture(t)
 	stub := &stubPages{detail: pages.Detail{Page: pages.Page{ID: readPage, Title: "Deploying"}, Skill: true}}
 	sources := f.sources()
-	sources.Native = nativeOf(queries.Native{Pages: stub})
+	sources.Pages = stub
 	wire := func() map[string]json.RawMessage {
 		t.Helper()
 		raw, err := json.Marshal(askRaw(t, registryOver(t, sources), "page", map[string]any{"id": readPage}))
@@ -278,7 +280,7 @@ func TestASkillListingCarriesWhoLoadedEachSkill(t *testing.T) {
 	stub := &stubPages{list: []pages.Summary{{ID: readPage, Title: "Deploying", Skill: true},
 		{ID: "p-quiet", Title: "Rollback", Skill: true}}, total: 2}
 	sources := f.sources()
-	sources.Native = nativeOf(queries.Native{Pages: stub})
+	sources.Pages = stub
 	got := ask(t, registryOver(t, sources), "pages", map[string]any{"skills": true})
 	loads, ok := got["skill_loaded_by"].(map[string][]queries.SkillLoad)
 	if !ok {
@@ -294,5 +296,80 @@ func TestASkillListingCarriesWhoLoadedEachSkill(t *testing.T) {
 	got = ask(t, registryOver(t, sources), "pages", map[string]any{"skills": false})
 	if _, ok := got["skill_loaded_by"]; ok {
 		t.Error("an ordinary listing carries skill_loaded_by")
+	}
+}
+
+// THE PAGES' MARGINS NAME THE WORK ONLY TO WHOEVER HOLDS THE TRACKER
+// (ADR-0033). A page is the knowledge base's, and two things beside it are the
+// tracker's rows: the tasks whose bodies link here (`linked_from.tasks`) and
+// the task each read happened on (`page_reads`' `last_work_item`). A reader of
+// the pages without the tracker is shown the pages that link here and who read
+// it, and no task — the list empty and its total zero rather than the key gone,
+// since the shape a reader parses is the same either way — and the tracker is
+// not asked to place a run for them at all.
+//
+// Mutation: drop the tracker check from linksFor, or from pageReads' placing of
+// each run, and the knowledge-only reader is shown ENG-412.
+func TestLinkedFromTasksNeedTracker(t *testing.T) {
+	t.Parallel()
+	links := search.Backlinks{
+		Pages:      []search.PageLink{{ID: "p-2", Container: "ENG", Title: "Scheduler on-call"}},
+		Tasks:      []search.TaskLink{{ID: "t-1", Key: "ENG-412", Title: "Retry PXE boot"}},
+		PagesTotal: 1, TasksTotal: 1,
+	}
+	late := time.Date(2026, 9, 24, 23, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name    string
+		holding []iam.Grant
+		tasks   bool
+	}{
+		{"the knowledge base alone", []iam.Grant{iam.GrantKnowledge}, false},
+		{"both apps", iam.Apps, true},
+		{"an admin", []iam.Grant{iam.GrantAdmin}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			f := newSpendFixture(t)
+			f.reads("node-a", "2026-09-25", "lead", 0, read("get_page", 1, late, "run-b", ""))
+			work := &stubWork{places: map[string]tracker.TurnPlace{
+				"run-b": {TaskID: "t-1", Key: "ENG-412", Title: "Retry PXE boot", Ordinal: 2}}}
+			sources := f.sources()
+			sources.Work = work
+			sources.Pages = &stubPages{detail: pages.Detail{Page: pages.Page{ID: readPage, Title: "Deploying"}}}
+			sources.Backlinks = stubBacklinks{links: links}
+			r := queries.NewRegistry()
+			queries.Register(r, sources)
+			ctx := asGrants(t, "", c.holding...)
+
+			got, err := r.Answer(ctx, "page", map[string]any{"id": readPage})
+			if err != nil {
+				t.Fatalf("page: %v", err)
+			}
+			linked := got.(queries.PageAnswer).LinkedFrom
+			if linked == nil || len(linked.Pages) != 1 || linked.PagesTotal != 1 {
+				t.Fatalf("linked_from = %+v, want the page that links here", linked)
+			}
+			if shown := len(linked.Tasks) > 0 || linked.TasksTotal > 0; shown != c.tasks {
+				t.Errorf("the tasks that link here are shown: %v, want %v", shown, c.tasks)
+			}
+			if linked.Tasks == nil {
+				t.Error("the task list is null rather than an empty list")
+			}
+
+			got, err = r.Answer(ctx, "page_reads", map[string]any{"page": readPage})
+			if err != nil {
+				t.Fatalf("page_reads: %v", err)
+			}
+			readers := got.(queries.PageReadsAnswer).Readers
+			if len(readers) != 1 || readers[0].Handle != "lead" {
+				t.Fatalf("readers = %+v, want lead's read", readers)
+			}
+			if shown := readers[0].LastWorkItem != nil; shown != c.tasks {
+				t.Errorf("the read's task is shown: %v, want %v", shown, c.tasks)
+			}
+			if asked := len(work.placesAsked) > 0; asked != c.tasks {
+				t.Errorf("the tracker was asked to place the runs: %v, want %v", asked, c.tasks)
+			}
+		})
 	}
 }

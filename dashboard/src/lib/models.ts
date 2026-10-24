@@ -40,22 +40,22 @@ export const POOL_STATE_WORDS: Record<
   degraded: {
     label: "Fewer keys",
     tone: "warning",
-    hint: "Calls still land, on fewer keys than configured: some are cooling or resolve to nothing.",
+    hint: "Some keys are cooling down or missing.",
   },
   exhausted: {
     label: "All keys cooling",
     tone: "danger",
-    hint: "Every key is benched, so each call falls through to the seat's next model until one lifts.",
+    hint: "Calls use the next model until a key recovers.",
   },
   no_key: {
     label: "No key",
     tone: "danger",
-    hint: "No key resolves on this node, so every call is refused as unauthorised. Store the secret its key names, or point it at one that exists.",
+    hint: "Calls are refused. Store the secret its key names.",
   },
   login: {
     label: "CLI login",
     tone: "neutral",
-    hint: "A coding CLI's own login, held on disk: there is no key bag to rotate and nothing cools.",
+    hint: "Uses the CLI’s own login.",
   },
 };
 
@@ -78,8 +78,8 @@ export function needsAttention(row: CredentialPoolRow): boolean {
  */
 export const KEY_SOURCE_WORDS: Record<CredentialKeySource, string> = {
   reference: "a secret or environment variable this model names",
-  default: "the vendor's own variable, read because this model names no keys",
-  inline: "a value written into the configuration itself, never sent here",
+  default: "the vendor’s default variable",
+  inline: "written into the configuration",
 };
 
 /**
@@ -123,17 +123,13 @@ export function keyBackWords(key: CredentialKeyRow): string {
 export function keyWhy(key: CredentialKeyRow): string {
   switch (key.state) {
     case "ready":
-      return key.source === "default"
-        ? "Read from the vendor's own variable, because this model names no keys."
-        : "In the pool.";
+      return key.source === "default" ? "From the vendor’s default variable." : "In the pool.";
     case "cooling":
-      return "Benched after the vendor refused it — a rate limit or an auth failure — by this node or a peer.";
+      return "Cooling down after the vendor refused it.";
     case "unresolved":
-      return key.source === "inline"
-        ? "Written empty."
-        : `Nothing sets ${key.ref} on this node — no stored secret and no environment variable.`;
+      return key.source === "inline" ? "Written empty." : `${key.ref} isn’t set on this node.`;
     case "duplicate":
-      return `The same key as key ${key.same_as}: the pool holds it once.`;
+      return `Same as key ${key.same_as}.`;
   }
 }
 
@@ -175,8 +171,8 @@ export function benchWords(seconds: number): string {
 /**
  * A model's two bench times, NAMED FOR WHAT BENCHES A KEY rather than by the
  * status code: "429" and "401" are what a reader has to already know. One
- * list for every place the bench is drawn — the list's column, the model's
- * header — so it is written one way; the codes ride in `title`.
+ * list for every place the bench is drawn (the list's column, the model's
+ * header), so it is written one way.
  */
 export function benchParts(row: {
   rate_limit_seconds: number;
@@ -186,12 +182,12 @@ export function benchParts(row: {
     {
       key: "rate",
       words: `rate limit ${benchWords(row.rate_limit_seconds)}`,
-      title: `A key the vendor answers 429 (rate limited) is left out for ${benchWords(row.rate_limit_seconds)}, or as long as its Retry-After says`,
+      title: `Rate-limited keys rest ${benchWords(row.rate_limit_seconds)}, or as long as the vendor asks`,
     },
     {
       key: "auth",
       words: `auth ${benchWords(row.auth_seconds)}`,
-      title: `A key the vendor answers 401 or 403 (refused) is left out for ${benchWords(row.auth_seconds)}, doubling on each repeat`,
+      title: `Refused keys rest ${benchWords(row.auth_seconds)}, doubling each time`,
     },
   ];
 }
@@ -343,7 +339,58 @@ export function firstInlineKey(keys: readonly KeyField[]): number {
 
 /** Why a key list cannot grow or shrink while it holds an inline key. */
 export function inlinePlaceWords(keys: readonly KeyField[]): string {
-  return `Key ${firstInlineKey(keys)} is written inline and is kept by its place in the list. Replace it with a \${NAME} from Secrets before adding or removing a key.`;
+  return `Key ${firstInlineKey(keys)} is inline. Replace it with a secret before adding or removing keys.`;
+}
+
+/**
+ * How many keys an entry's form may hold, and the words around the list.
+ *
+ * A `cli-agent` entry is not a key pool. It holds ONE login and rotates
+ * nothing, and the engine reads its `api_keys` only under
+ * `cli.auth.mode: api-key`, where the one value goes in the CLI's own key
+ * variable; in any other mode, or past one value, a write keeping them is
+ * refused, because nothing would read them. So under api-key the form offers
+ * one key, and in any other mode none — a key it already holds is drawn so it
+ * can be removed, with the reason. Every other entry rotates through as many
+ * keys as it is given.
+ */
+export interface KeySlots {
+  /** How many keys the entry may hold. */
+  max: number;
+  legend: string;
+  /** Said when the list is empty. */
+  empty: string;
+  /** Why no key can be added once the list is at `max`, or why it is over it. */
+  full: string;
+}
+
+const KEY_POOL: KeySlots = {
+  max: Number.POSITIVE_INFINITY,
+  legend: "Keys",
+  empty: "None. Uses ANTHROPIC_API_KEY or OPENAI_API_KEY. Type $ to add a secret.",
+  full: "",
+};
+
+/** The key slots of the entity as the engine served it. */
+export function keySlots(entity: Record<string, unknown>): KeySlots {
+  if (entity.type !== "cli-agent") return KEY_POOL;
+  const cli = isRecord(entity.cli) ? entity.cli : {};
+  const auth = isRecord(cli.auth) ? cli.auth : {};
+  const mode = typeof auth.mode === "string" && auth.mode ? auth.mode : "subscription";
+  if (mode === "api-key") {
+    return {
+      max: 1,
+      legend: "API key",
+      empty: "None yet. This entry needs an API key. Type $ to add a secret.",
+      full: "Holds one key. Add more as separate entries.",
+    };
+  }
+  return {
+    max: 0,
+    legend: "API key",
+    empty: "None. Signs in through its CLI.",
+    full: "Keys only work in api-key mode. Remove it.",
+  };
 }
 
 /**
@@ -352,10 +399,16 @@ export function inlinePlaceWords(keys: readonly KeyField[]): string {
  * typing — and the one thing the engine cannot see at all, an inline key
  * moved to another key's place (see [keysKeepInlinePlaces]).
  */
-export function formErrors(form: ModelForm, read: ModelForm): Partial<Record<ModelField, string>> {
+export function formErrors(
+  form: ModelForm,
+  read: ModelForm,
+  slots: KeySlots = KEY_POOL,
+): Partial<Record<ModelField, string>> {
   const out: Partial<Record<ModelField, string>> = {};
   if (!form.model.trim()) out.model = "Name the model this entry serves.";
-  if (form.keys.some((k) => !k.value.trim())) {
+  if (form.keys.length > slots.max) {
+    out.keys = slots.full;
+  } else if (form.keys.some((k) => !k.value.trim())) {
     out.keys = "A key row is empty. Fill it in or remove it.";
   } else if (!keysKeepInlinePlaces(read.keys, form.keys)) {
     out.keys = inlinePlaceWords(form.keys);

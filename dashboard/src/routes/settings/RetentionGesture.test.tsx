@@ -7,7 +7,7 @@
  */
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { engineFile } from "~/test/engineFiles.ts";
 import type {
   RetentionDomain,
@@ -16,7 +16,12 @@ import type {
   RetentionReport,
 } from "~/protocol/index.ts";
 import { Router } from "~/app/router.tsx";
-import { heldGestures, RetentionPanels } from "./Retention.tsx";
+import { heldGestures, RetentionPanels, useRetentionReport } from "./Retention.tsx";
+
+/** The panels as the page draws them: handed the one report it asked for. */
+function Panels() {
+  return <RetentionPanels retention={useRetentionReport(true)} />;
+}
 
 const query = vi.hoisted(() => ({
   data: null as unknown,
@@ -25,6 +30,30 @@ const query = vi.hoisted(() => ({
 vi.mock("~/lib/useQuery.ts", () => ({
   useQuery: () => ({ data: query.data, loading: false, error: null, refetch: query.refetch }),
 }));
+// THE READER HOLDS Admin, which every gate gesture is decided under.
+vi.mock("~/lib/viewer.ts", async () => {
+  const actual = await vi.importActual<typeof import("~/lib/viewer.ts")>("~/lib/viewer.ts");
+  return {
+    ...actual,
+    useViewer: () => ({
+      login: "ops",
+      grants: ["admin"],
+      admin: true,
+      tracker: true,
+      knowledge: true,
+      handle: "",
+      owner: "ops",
+      name: "",
+      acts: [],
+      kind: "",
+      project: "",
+      unbound: true,
+      anonymous: false,
+      loading: false,
+      asking: false,
+    }),
+  };
+});
 
 const golden = engineFile<{ answers: Record<string, RetentionGateResult> }>(
   "internal/api/testdata/gate_answer.json",
@@ -82,11 +111,9 @@ function held(
   return heldGestures(gestures, { nodes, domains, node_id: servedBy ?? "" });
 }
 
-beforeEach(() => localStorage.setItem("crewlet_api_token", "t"));
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
-  localStorage.clear();
 });
 
 // A GESTURE THAT FINISHED IS HELD UNTIL THE REPORT SHOWS IT.
@@ -113,7 +140,7 @@ test("a complete gesture reopens as itself until the report shows it", async () 
   );
   const { rerender } = render(
     <Router>
-      <RetentionPanels />
+      <Panels />
     </Router>,
   );
 
@@ -122,7 +149,7 @@ test("a complete gesture reopens as itself until the report shows it", async () 
     target: { value: "node-4" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Evict" }));
-  await waitFor(() => expect(screen.getByText(/Durable on every log/)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/Recorded on every log/)).toBeTruthy());
   // THE REPORT IS ASKED AGAIN AT ONCE, rather than at the next poll.
   expect(refetch).toHaveBeenCalled();
 
@@ -130,7 +157,7 @@ test("a complete gesture reopens as itself until the report shows it", async () 
   // NOT "Evict…" — which would start a second gesture over the logs this one
   // already holds.
   fireEvent.click(screen.getByRole("button", { name: "Eviction sent…" }));
-  expect(screen.getByText(/Durable on every log/)).toBeTruthy();
+  expect(screen.getByText(/Recorded on every log/)).toBeTruthy();
   expect(screen.queryByLabelText("Type node-4 to confirm")).toBeNull();
   expect(sent.length).toBe(1);
   fireEvent.click(screen.getAllByRole("button", { name: "Close" })[0]!);
@@ -139,7 +166,7 @@ test("a complete gesture reopens as itself until the report shows it", async () 
   query.data = report([node({ evicted })]);
   rerender(
     <Router>
-      <RetentionPanels />
+      <Panels />
     </Router>,
   );
   await waitFor(() => expect(screen.getByRole("button", { name: "Readmit…" })).toBeTruthy());
@@ -308,11 +335,13 @@ test("a log whose evictions could not be read says so above the node block", () 
   );
   render(
     <Router>
-      <RetentionPanels />
+      <Panels />
     </Router>,
   );
-  expect(screen.getByText(/an eviction may be hidden rather than absent/)).toBeTruthy();
-  expect(screen.getAllByText(/could not read/).length).toBe(1);
+  expect(screen.getByText(/evicted nodes may not show/).textContent).toBe(
+    "Couldn’t read pages’s evictions, so evicted nodes may not show.",
+  );
+  expect(screen.getAllByText(/evicted nodes may not show/).length).toBe(1);
 });
 
 test("the row offers a new eviction once a readmission elsewhere overtook this one", async () => {
@@ -330,7 +359,7 @@ test("the row offers a new eviction once a readmission elsewhere overtook this o
   );
   const { rerender } = render(
     <Router>
-      <RetentionPanels />
+      <Panels />
     </Router>,
   );
   fireEvent.click(rowButton("node-4", "Evict…"));
@@ -348,7 +377,7 @@ test("the row offers a new eviction once a readmission elsewhere overtook this o
   query.data = report([node(), servingNode({ tracker: 918280010, pages: 4420, code: 80 })]);
   rerender(
     <Router>
-      <RetentionPanels />
+      <Panels />
     </Router>,
   );
   await waitFor(() => expect(screen.queryByRole("button", { name: "Eviction sent…" })).toBeNull());

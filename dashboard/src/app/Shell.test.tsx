@@ -10,11 +10,14 @@
  * "can I trust what I am looking at", and only three screens publish them.
  */
 
+import { toggleStar } from "~/lib/starred.ts";
+import { noteReader } from "~/lib/reader.ts";
 import { useRef, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useSearchTarget } from "./searchTarget.ts";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { Shell, usePageCoverage, usePublishFleet, useSectionCounts } from "./Shell.tsx";
+import { loadChunk } from "./lazyScreen.ts";
 import { Router, buildHash } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store, type FleetAnswer } from "~/protocol/index.ts";
@@ -71,6 +74,15 @@ const INCOMPLETE: CoverageFacts = {
   },
 };
 
+// THE NEW TASK SHEET'S CODE IS IN BEFORE A CASE STARTS. The sheet is the work
+// chunk's, loaded on first open, and what these cases assert is that the
+// frame opens it, not how long a cold `import()` of that chunk takes under a
+// test transformer, which a `waitFor` would otherwise be measuring (the same
+// reason `App.test.tsx` loads every chunk first).
+beforeAll(async () => {
+  await loadChunk("work");
+});
+
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   // jsdom implements no scrolling at all, and the palette keeps its cursor row
@@ -111,7 +123,11 @@ describe("the state bar's coverage", () => {
   test("it is drawn for the screen that published it", () => {
     frame(<Covered coverage={INCOMPLETE} />);
     expect(screen.getByText(/applied through 41 of 88/)).toBeDefined();
-    expect(screen.getByText("This answer is incomplete")).toBeDefined();
+    expect(
+      screen.getByText(
+        "Some records need a newer engine version to read, so this may be incomplete.",
+      ),
+    ).toBeDefined();
     // AND THE LEVEL IS NOT A WORD ON THE SCREEN. `linearizable` is stronger
     // than this surface's own default; a chip naming it is a label nobody
     // reads, and the one level that matters then arrives as a changed word
@@ -142,15 +158,19 @@ describe("the state bar's coverage", () => {
   });
 
   // THE ONE THAT SHIPPED. Land on the Inbox, which publishes; click through to
-  // a screen that does not — Settings › Secrets, say — and the inbox's
-  // freshness badge and its "this answer is incomplete" banner stayed in the
+  // a screen that does not (Settings › Secrets, say), and the inbox's
+  // freshness badge and its "this may be incomplete" banner stayed in the
   // bar as claims about data the new screen never read.
   test("it goes when the screen that published it does", () => {
     const { show } = frame(<Covered coverage={INCOMPLETE} />);
     show(<Bare />);
     expect(screen.getByText("the bare screen")).toBeDefined();
     expect(screen.queryByText(/applied through/)).toBeNull();
-    expect(screen.queryByText("This answer is incomplete")).toBeNull();
+    expect(
+      screen.queryByText(
+        "Some records need a newer engine version to read, so this may be incomplete.",
+      ),
+    ).toBeNull();
   });
 
   // …and the reset must not eat the INCOMING screen's own facts, which is why
@@ -171,7 +191,11 @@ describe("the state bar's coverage", () => {
     await act(async () => {});
     expect(screen.getByText(/applied through 4 of 9/)).toBeDefined();
     expect(screen.queryByText(/applied through 41 of 88/)).toBeNull();
-    expect(screen.queryByText("This answer is incomplete")).toBeNull();
+    expect(
+      screen.queryByText(
+        "Some records need a newer engine version to read, so this may be incomplete.",
+      ),
+    ).toBeNull();
   });
 });
 
@@ -197,6 +221,10 @@ function answering(
   asked: { what: string; params?: Record<string, unknown> }[] = [],
 ) {
   const store = new Store();
+  // THE SOCKET'S FIRST FRAME CARRIES THE ORG, as a served frame's always
+  // does: what the company runs is known before a read is asked.
+  // NAMELESS, so a case that names the company applies its own.
+  store.applyOrg(withDerived({ name: "", roles: [] }));
   const socket = new LiveSocket(store);
   (
     socket as unknown as {
@@ -207,9 +235,10 @@ function answering(
     if (what === "viewer") {
       return Promise.resolve(
         answers.viewer ?? {
-          operator_id: "U0FOUNDER",
-          operator: true,
+          login: "U0FOUNDER",
+          grants: ["admin", "tracker", "knowledge"],
           handle: "ada",
+          owner: "ada",
           name: "Ada Lovelace",
           kind: "human",
         },
@@ -302,32 +331,45 @@ describe("the Inbox badge", () => {
 describe("the sidebar's figures", () => {
   // THE ENGINE'S WORD, and only it: two seats working, one idle, one parked on
   // a question — the count is two, whatever a live call says. AND IT IS ON
-  // LIVE, which holds the running turns: on Agents it sent a reader looking
-  // for one to the org chart.
-  test("the Live count is the seats the engine calls working, and Agents carries none", async () => {
+  // LIVE, which holds the running turns: on the Org chart it sent a reader
+  // looking for one to the chart.
+  test("the Live count is the seats the engine calls working, and the Org chart carries none", async () => {
     const { store, socket } = answering({});
     mountShell(store, socket);
     act(() =>
-      store.applyAgents([
-        { role: "A", activity: "working" },
-        { role: "B", activity: "working" },
-        { role: "C", activity: "idle", live_call: { in_progress: true, versions: ZERO_VERSIONS } },
-        { role: "D", activity: "needs" },
+      store.applySeats([
+        { id: "a", agent_id: "a", handle: "a", role: "A", activity: "working" },
+        { id: "b", agent_id: "b", handle: "b", role: "B", activity: "working" },
+        {
+          id: "c",
+          agent_id: "c",
+          handle: "c",
+          role: "C",
+          activity: "idle",
+          live_call: { in_progress: true, versions: ZERO_VERSIONS },
+        },
+        { id: "d", agent_id: "d", handle: "d", role: "D", activity: "needs" },
       ] as never),
     );
     expect(screen.getByRole("link", { name: /^Live/ }).textContent).toContain("2");
-    expect(screen.getByRole("link", { name: /^Agents/ }).textContent).toBe("Agents");
+    expect(screen.getByRole("link", { name: /^Org chart/ }).textContent).toBe("Org chart");
   });
 
   // ---------------------------------------------------------------------------
   // The running turns, from every screen
   // ---------------------------------------------------------------------------
 
+  /** A roster row for the seat named `role`, its handle and agent id derived
+   *  from the name the way these fixtures write them. */
+  function seat(role: string, over: Record<string, unknown> = {}) {
+    const handle = role.toLowerCase();
+    return { id: handle, agent_id: `a-${handle}`, handle, role, ...over };
+  }
+
   /** A seat the engine calls working, on `turn`, started at minute `at`. */
   function workingSeat(role: string, turn: string, at: number, item = "") {
     return {
-      role,
-      handle: role.toLowerCase(),
+      ...seat(role),
       activity: "working",
       turn: {
         turn_id: turn,
@@ -360,22 +402,22 @@ describe("the sidebar's figures", () => {
     const { store, socket } = answering({});
     mountShell(store, socket);
     expect(runningRows(), "no group while nothing runs").toEqual([]);
-    act(() =>
-      store.applyAgents([
-        workingSeat("CTO", "t-late", 9),
-        workingSeat("SWE", "t-early", 1, "ENG-412"),
-        { role: "PM", handle: "pm", activity: "needs" },
-        { role: "QA", handle: "qa", activity: "idle" },
-      ] as never),
-    );
+    const roster = [
+      workingSeat("CTO", "t-late", 9),
+      workingSeat("SWE", "t-early", 1, "ENG-412"),
+      seat("PM", { activity: "needs" }),
+      seat("QA", { activity: "idle" }),
+    ];
+    act(() => store.applySeats(roster as never));
     const rows = runningRows();
     expect(rows.map((r) => r.href)).toEqual([watching("t-early"), watching("t-late")]);
     // THE SEAT'S NAME, AND THE ITEM ITS TURN IS CHARGED TO as the row's lead.
     expect(rows[0]!.text).toContain("SWE");
     expect(rows[0]!.text).toContain("ENG-412");
     expect(rows[1]!.text).toContain("CTO");
-    // A TURN THAT STARTS IS APPENDED; the rows above it hold their places.
-    act(() => store.applyAgents([workingSeat("Ops", "t-new", 20)] as never));
+    // A TURN THAT STARTS IS APPENDED; the rows above it hold their places —
+    // here on a seat the roster gains, which is how a new seat arrives.
+    act(() => store.applySeats([...roster, workingSeat("Ops", "t-new", 20)] as never));
     expect(runningRows().map((r) => r.href)).toEqual([
       watching("t-early"),
       watching("t-late"),
@@ -390,9 +432,9 @@ describe("the sidebar's figures", () => {
     const { store, socket } = answering({});
     mountShell(store, socket);
     act(() =>
-      store.applyAgents([
+      store.applySeats([
         workingSeat("A", "t-a", 1),
-        { role: "Fresh", handle: "fresh", activity: "working", turn: null, live_call: null },
+        seat("Fresh", { activity: "working", turn: null, live_call: null }),
         workingSeat("B", "t-b", 2),
         workingSeat("C", "t-c", 3),
         workingSeat("D", "t-d", 4),
@@ -426,9 +468,9 @@ describe("the sidebar's figures", () => {
     });
     mountShell(store, socket, <Home key="home" />);
     act(() =>
-      store.applyAgents([
+      store.applySeats([
         workingSeat("A", "t-a", 1),
-        { role: "Fresh", handle: "fresh", activity: "working", turn: null, live_call: null },
+        seat("Fresh", { activity: "working", turn: null, live_call: null }),
         workingSeat("B", "t-b", 2),
         workingSeat("C", "t-c", 3),
         workingSeat("D", "t-d", 4),
@@ -451,8 +493,7 @@ describe("the sidebar's figures", () => {
     act(() =>
       store.applyAgents(
         ["C", "D", "E"].map((role) => ({
-          role,
-          handle: role.toLowerCase(),
+          agent_id: `a-${role.toLowerCase()}`,
           activity: "idle",
           turn: null,
           live_call: null,
@@ -473,9 +514,9 @@ describe("the sidebar's figures", () => {
     const { store, socket } = answering({});
     mountShell(store, socket);
     act(() =>
-      store.applyAgents([
-        { role: "P", handle: "p", activity: "working", turn: null, live_call: null },
-        { role: "Q", handle: "q", activity: "working", turn: null, live_call: null },
+      store.applySeats([
+        seat("P", { activity: "working", turn: null, live_call: null }),
+        seat("Q", { activity: "working", turn: null, live_call: null }),
       ] as never),
     );
     const rows = runningRows();
@@ -490,13 +531,33 @@ describe("the sidebar's figures", () => {
     location.hash = watching("t-b");
     const { store, socket } = answering({});
     mountShell(store, socket);
-    act(() => store.applyAgents([workingSeat("A", "t-a", 1), workingSeat("B", "t-b", 2)] as never));
+    act(() => store.applySeats([workingSeat("A", "t-a", 1), workingSeat("B", "t-b", 2)] as never));
     const nav = screen.getByRole("navigation", { name: "Navigation" });
     const current = [...nav.querySelectorAll('a[aria-current="page"]')].map((a) =>
       a.getAttribute("href"),
     );
     expect(current).toContain(watching("t-b"));
     expect(current).not.toContain(watching("t-a"));
+  });
+
+  // ONE CURRENT ROW: a starred page's Starred row is the one the reader
+  // followed, and the workspace row containing it gives the mark up. Both
+  // carried the current fill and `aria-current`. Mutation: mark the workspace
+  // row current whatever a shortcut says and the list holds two.
+  test("a starred page is current in Starred alone, not in its workspace too", async () => {
+    location.hash = "#/live/events";
+    noteReader("p-star");
+    const { store, socket } = answering({});
+    mountShell(store, socket);
+    await settle();
+    act(() => void toggleStar({ path: ["live", "events"], label: "Event log", workspace: "live" }));
+    await settle();
+    const nav = screen.getByRole("navigation", { name: "Navigation" });
+    const current = [...nav.querySelectorAll('a[aria-current="page"]')].map((a) =>
+      a.getAttribute("href"),
+    );
+    expect(current).toEqual(["#/live/events"]);
+    act(() => void toggleStar({ path: ["live", "events"], label: "Event log", workspace: "live" }));
   });
 
   // `g r` IS "TAKE ME TO THE RUNNING TURN": the one turn's watch link when one
@@ -513,19 +574,19 @@ describe("the sidebar's figures", () => {
     chord();
     expect(location.hash).toBe("#/live");
     location.hash = "#/";
-    act(() => store.applyAgents([workingSeat("A", "t-a", 1)] as never));
+    act(() => store.applySeats([workingSeat("A", "t-a", 1)] as never));
     chord();
     expect(location.hash).toBe(watching("t-a"));
     location.hash = "#/";
-    act(() => store.applyAgents([workingSeat("B", "t-b", 2)] as never));
+    act(() => store.applySeats([workingSeat("A", "t-a", 1), workingSeat("B", "t-b", 2)] as never));
     chord();
     expect(location.hash).toBe("#/live");
   });
 
-  // A PIN IS A PERSON'S, so every saved view is asked for WITH the viewer —
-  // the shared views carry no pins, which is why the sidebar this replaced
-  // never drew one — across every container, and with the engine's own counts.
-  test("pinned views are asked for as the viewer, and draw the view's own total", async () => {
+  // A PIN IS A PERSON'S, and the engine reads the caller's own off the request
+  // that asks — there is no `viewer=` to name somebody else's — across every
+  // container, and with the engine's own counts.
+  test("pinned views are asked for as the caller, and draw the view's own total", async () => {
     const asked: { what: string; params?: Record<string, unknown> }[] = [];
     const { store, socket } = answering(
       {
@@ -558,13 +619,14 @@ describe("the sidebar's figures", () => {
     mountShell(store, socket);
     await settle();
     const views = asked.find((a) => a.what === "work_saved_views");
-    expect(views?.params).toMatchObject({ viewer: "ada", counts: true });
+    expect(views?.params).toMatchObject({ counts: true });
+    expect(views?.params).not.toHaveProperty("viewer");
     // NOT ONE CONTAINER'S STRIP: a pin made on a project board lives there.
     expect(views?.params).not.toHaveProperty("container");
     // A PIN RUNS THE VIEW: the list with the view's key as `view=`, not the
     // inventory page that describes the view and offers to run it.
     const pin = screen.getByRole("link", { name: /^Blocked, org-wide/ });
-    expect(pin.getAttribute("href")).toBe("#/work?view=blocked");
+    expect(pin.getAttribute("href")).toBe("#/work/tasks?view=blocked");
     expect(pin.textContent).toContain("7");
     expect(screen.queryByText("Not pinned")).toBeNull();
   });
@@ -680,13 +742,11 @@ describe("the sidebar's figures", () => {
     ).toHaveLength(1);
   });
 
-  // EVERY "NEW TASK" OPENS THE FRAME'S ONE SHEET: Home's in its page bar, the
-  // sidebar's head `+` and the Projects group's `+` — not a second form each, and
-  // not the palette it stood in for until the sheet landed.
-  test.each([
-    ["Home's New task", "button", /^New task$/],
-    ["the sidebar's head +", "button", /^New task$/],
-  ] as const)("%s opens the frame's New task sheet", async (who, role, name) => {
+  // EVERY "NEW TASK" OPENS THE FRAME'S ONE SHEET: Home's in its page bar, not
+  // a second form, and not the palette it stood in for until the sheet landed.
+  // AND IT IS THE ONLY ONE ON HOME: the sidebar's head carries no `+`, so a
+  // second New task there is a door nobody decided to put back.
+  test("Home's New task opens the frame's New task sheet, the only one on the page", async () => {
     location.hash = "#/home";
     const { store, socket } = answering({
       work_workload: { rows: [] },
@@ -695,18 +755,18 @@ describe("the sidebar's figures", () => {
     });
     mountShell(store, socket, <Home key="home" />);
     await settle();
-    const presses = screen.getAllByRole(role, { name });
-    // The page bar's button comes after the sidebar's in document order.
-    const press = who === "Home's New task" ? presses[presses.length - 1]! : presses[0]!;
+    const presses = screen.getAllByRole("button", { name: /^New task$/ });
+    expect(presses).toHaveLength(1);
+    expect(document.querySelector(".side-head button")).toBeNull();
     await act(async () => {
-      fireEvent.click(press);
+      fireEvent.click(presses[0]!);
     });
     await waitFor(() => expect(screen.getByRole("dialog", { name: "New task" })).toBeTruthy());
   });
 
-  // THE PROJECTS GROUP'S `+` FILES INTO THE PROJECT THE READER IS IN, which
-  // the sheet shows as its chosen project before anything is sent.
-  test("the Projects group's + opens the sheet on the project the reader is in", async () => {
+  // A PROJECT IS NOT A SIDEBAR ROW: it is a scope of Work, switched where
+  // Work's trail names it, so the rail carries no group of them.
+  test("the sidebar draws no Projects group", async () => {
     location.hash = "#/work/ENG";
     const eng = {
       key: "ENG",
@@ -721,61 +781,10 @@ describe("the sidebar's figures", () => {
     });
     mountShell(store, socket);
     await settle();
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "New task in ENG" }));
-    });
-    const sheet = await waitFor(() => screen.getByRole("dialog", { name: "New task" }));
-    expect(sheet.textContent).toContain("ENG · Core platform");
-  });
-
-  // THE PROJECT A READER IS IN IS THE ROUTE'S OWN ANSWER, the one the sidebar's
-  // head `+` asks — never the path's second segment. Read off the path, every
-  // other Work page was a project: `#/work/views` offered "New task in views"
-  // and opened the sheet asking for a project called `views`, and a task
-  // opened by its uuid named the uuid.
-  test.each([
-    ["#/work/views", ""],
-    ["#/work/projects", ""],
-    ["#/work/history", ""],
-    ["#/work/search", ""],
-    ["#/work/5f0c2a4e-8b1d-4c3a-9e2f-7a6b5c4d3e2f", ""],
-    ["#/work/ENG-12", "ENG"],
-    ["#/work/ENG", "ENG"],
-  ])("on %s the Projects group's + files into %j", async (hash, project) => {
-    location.hash = hash;
-    const eng = {
-      key: "ENG",
-      name: "Core platform",
-      unit: { resolved: true },
-      lead: {},
-      task_counts: { todo: 2, active: 1, done: 0, closed: 0 },
-    };
-    const asked: { what: string; params?: Record<string, unknown> }[] = [];
-    const { store, socket } = answering(
-      {
-        work_projects: { projects: [eng], complete: true },
-        work_project: { ...eng, statuses: [], types: [], fields: [], complete: true },
-      },
-      asked,
-    );
-    mountShell(store, socket);
-    await settle();
-    const row = screen.getByRole("link", { name: /^ENG Core platform/ });
-    // THE ROW MARKED CURRENT IS THE SAME ANSWER as the `+`'s project.
-    expect(row.getAttribute("aria-current")).toBe(project === "ENG" ? "page" : null);
-    const press = screen.getByRole("button", {
-      name: project ? `New task in ${project}` : "New task in a project",
-    });
-    await act(async () => {
-      fireEvent.click(press);
-    });
-    await waitFor(() => screen.getByRole("dialog", { name: "New task" }));
-    await settle();
-    // NO SEGMENT OF THE PATH IS ASKED FOR AS A PROJECT.
-    const projectsAsked = asked
-      .filter((a) => a.what === "work_project")
-      .map((a) => String(a.params?.key));
-    expect(projectsAsked.every((key) => key === "ENG")).toBe(true);
+    const nav = screen.getByRole("navigation", { name: "Navigation" });
+    expect(within(nav).queryByText("Projects")).toBeNull();
+    expect(nav.querySelector('a[href="#/work/ENG"]')).toBeNull();
+    expect(within(nav).queryByRole("button", { name: /^New task in/ })).toBeNull();
   });
 
   // SETTINGS IS NEVER HIDDEN; the lock is what changes.
@@ -820,24 +829,26 @@ describe("the page header", () => {
     expect(unblocked?.getAttribute("href")).toBe("#/me/unblocked?handle=bo");
   });
 
-  // THE WINDOW travels between Spend's sections — the tab and the overview's
-  // "All" link reach Expensive tasks on the same one — and the chart's split
-  // does not, because it is the overview's alone.
-  test("a Spend tab carries the window, and Budgets carries it back", async () => {
-    location.hash = "#/spend?window=90d&group=model";
+  // THE WINDOW travels between Spend's two rows in the Settings column, and
+  // the chart's split does not, because it is the overview's alone.
+  test("a Spend row carries the window, and Expensive tasks carries it back", async () => {
+    location.hash = "#/settings/spend?window=90d&group=model";
     const { store, socket } = answering({});
     mountShell(store, socket);
-    const tab = (label: string) =>
+    await settle();
+    const row = (path: string) =>
       Array.from(
-        screen.getByRole("navigation", { name: "Spend sections" }).querySelectorAll("a"),
-      ).find((a) => a.textContent === label);
-    expect(tab("Expensive tasks")?.getAttribute("href")).toBe("#/spend/tasks?window=90d");
-    expect(tab("Budgets")?.getAttribute("href")).toBe("#/spend/budgets?window=90d");
+        screen.getByRole("navigation", { name: "Settings sections" }).querySelectorAll("a"),
+      ).find((a) => a.getAttribute("href")?.startsWith(path));
+    expect(row("#/settings/spend/tasks")?.getAttribute("href")).toBe(
+      "#/settings/spend/tasks?window=90d",
+    );
     cleanup();
-    location.hash = "#/spend/budgets?window=90d";
+    location.hash = "#/settings/spend/tasks?window=90d";
     const again = answering({});
     mountShell(again.store, again.socket);
-    expect(tab("Overview")?.getAttribute("href")).toBe("#/spend?window=90d");
+    await settle();
+    expect(row("#/settings/spend?")?.getAttribute("href")).toBe("#/settings/spend?window=90d");
   });
 
   // ON AN OBJECT PAGE the crumbs are the way back; a strip of tabs over a
@@ -846,31 +857,46 @@ describe("the page header", () => {
     location.hash = "#/work/ENG-42";
     const { store, socket } = answering({});
     mountShell(store, socket);
-    expect(screen.queryByRole("navigation", { name: "Work sections" })).toBeNull();
+    expect(document.querySelector(".section-tabs")).toBeNull();
     cleanup();
-    location.hash = "#/work/projects";
+    location.hash = "#/live/turns/5f0c2a4e-8b1d-4c3a-9e2f-7a6b5c4d3e2f";
+    const turn = answering({});
+    mountShell(turn.store, turn.socket);
+    expect(screen.queryByRole("navigation", { name: "Live sections" })).toBeNull();
+    cleanup();
+    location.hash = "#/live/turns";
     const again = answering({});
     mountShell(again.store, again.socket);
-    expect(screen.getByRole("navigation", { name: "Work sections" })).toBeDefined();
+    expect(screen.getByRole("navigation", { name: "Live sections" })).toBeDefined();
   });
 
-  // SETTINGS DRAWS A COLUMN, with a lock on a guarded section for a reader
-  // without the credential, and the section the reader is on marked.
-  test("Settings draws its sections as a column, locked where guarded", async () => {
+  // SETTINGS DRAWS A COLUMN, with a lock on a section for a reader holding
+  // none of its grants — naming the grant — and the section the reader is on
+  // marked.
+  test("Settings draws its sections as a column, locked where the reader lacks the grant", async () => {
     location.hash = "#/settings/secrets";
+    // A READER THE SOCKET ANSWERS — every signed-in principal is one, holding
+    // nothing at all: what they lack is the section's own (`sectionOpen`).
     const { store, socket } = answering({
-      viewer: { operator_id: "", operator: false, handle: "", name: "", kind: "" },
+      viewer: {
+        login: "reader",
+        grants: [],
+        handle: "",
+        owner: "reader",
+        name: "",
+        kind: "",
+      },
     });
     mountShell(store, socket);
     await settle();
     const column = screen.getByRole("navigation", { name: "Settings sections" });
     const current = column.querySelector('[aria-current="page"]');
     expect(current?.textContent).toContain("Secrets");
-    expect(current?.textContent).toContain("needs an operator credential");
-    const general = Array.from(column.querySelectorAll("a")).find((a) =>
-      a.textContent?.startsWith("General"),
+    expect(current?.textContent).toContain("needs Admin");
+    const spend = Array.from(column.querySelectorAll("a")).find(
+      (a) => a.getAttribute("href") === "#/settings/spend",
     );
-    expect(general?.textContent).not.toContain("operator credential");
+    expect(spend?.textContent).not.toContain("needs");
   });
 
   // ON A PHONE THE COLUMN IS ONE ROW NAMING THE SECTION. Stacked whole it put
@@ -886,7 +912,14 @@ describe("the page header", () => {
     // BY ITS CLASS: jsdom applies the wide half of the stylesheet, where the
     // toggle is not drawn — the fold is the phone block's, held by frame.test.
     const toggle = document.querySelector<HTMLButtonElement>(".section-picker-toggle")!;
-    expect(toggle.textContent).toBe("Settings section: Secrets");
+    // WHAT IT IS CALLED, its decoration left out — what it SHOWS ("Section ·
+    // Secrets") is the picker's own suite's (`PageHeader.test.tsx`).
+    const spoken = (el: HTMLElement) => {
+      const copy = el.cloneNode(true) as HTMLElement;
+      copy.querySelectorAll("[aria-hidden='true']").forEach((n) => n.remove());
+      return copy.textContent;
+    };
+    expect(spoken(toggle)).toBe("Settings Section: Secrets");
     const list = document.getElementById(toggle.getAttribute("aria-controls") ?? "");
     expect(list?.querySelector("nav[aria-label='Settings sections']")).not.toBeNull();
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
@@ -902,15 +935,15 @@ describe("the page header", () => {
     });
     await settle();
     const moved = document.querySelector<HTMLButtonElement>(".section-picker-toggle")!;
-    expect(moved.textContent).toBe("Settings section: Nodes");
+    expect(spoken(moved)).toBe("Settings Section: Nodes");
     expect(moved.getAttribute("aria-expanded"), "a picked section left the list open").toBe(
       "false",
     );
   });
 
-  // AN ADDRESS THAT NAMES NO SCREEN IS IN NO SECTION. General's path is the
-  // workspace root and so a prefix of every Settings address: a mistyped one
-  // drew "Not found" beside a column, and a phone picker, marking General.
+  // AN ADDRESS THAT NAMES NO SCREEN IS IN NO SECTION. Settings owns every
+  // address under it, so a mistyped one (or one that moved out, as General
+  // did) draws "Not found" beside a column, and a phone picker, marking none.
   test("a Settings address that names no screen marks no section", async () => {
     location.hash = "#/settings/general";
     const { store, socket } = answering({});
@@ -922,11 +955,11 @@ describe("the page header", () => {
   });
 
   // NO OPERATOR POLL OUTSIDE SETTINGS. The frame is mounted for the life of
-  // the tab, so a figure hook that asked unconditionally would put three
+  // the tab, so a figure hook that asked unconditionally would put two
   // operator questions on a timer behind every screen of every tab.
-  const OPERATOR_ANSWERS = ["fleet", "retention", "integrations"];
+  const OPERATOR_ANSWERS = ["fleet", "retention"];
   test("the operator answers are asked only while the Settings column is drawn", async () => {
-    for (const where of ["#/home", "#/work", "#/spend/budgets", "#/knowledge"]) {
+    for (const where of ["#/home", "#/work", "#/company/budgets", "#/knowledge"]) {
       location.hash = where;
       const asked: { what: string }[] = [];
       const { store, socket } = answering({}, asked);
@@ -938,7 +971,7 @@ describe("the page header", () => {
       ).toEqual([]);
       cleanup();
     }
-    location.hash = "#/settings";
+    location.hash = "#/settings/models";
     const asked: { what: string }[] = [];
     const { store, socket } = answering({}, asked);
     mountShell(store, socket);
@@ -948,11 +981,11 @@ describe("the page header", () => {
     );
   });
 
-  test("a reader without an operator credential is asked nothing, even in Settings", async () => {
-    location.hash = "#/settings";
+  test("a reader without the grants is asked nothing, even in Settings", async () => {
+    location.hash = "#/settings/models";
     const asked: { what: string }[] = [];
     const { store, socket } = answering(
-      { viewer: { operator_id: "", operator: false, handle: "", name: "", kind: "" } },
+      { viewer: { login: "", grants: [], handle: "", owner: "", name: "", kind: "" } },
       asked,
     );
     mountShell(store, socket);
@@ -960,36 +993,29 @@ describe("the page header", () => {
     expect(asked.map((a) => a.what).filter((w) => OPERATOR_ANSWERS.includes(w))).toEqual([]);
   });
 
-  // THE PILL IS THE ENGINE'S ROLL-UP, read in the row's name — and painted
-  // as the state it is, not as the accent's unread badge.
-  test("the Integrations row carries the roll-up's attention count as its pill", async () => {
-    location.hash = "#/settings";
+  // A LOCKED ROW DRAWS NO FIGURE: Nodes and Configuration read the health
+  // push every reader holds, and drew "1" and "epoch 1" beside their locks
+  // while the equally locked Backups row drew nothing. Mutation: drop the
+  // gate and the locked rows count.
+  test("a Settings row the reader cannot open draws no figure", async () => {
+    location.hash = "#/settings/spend";
     const { store, socket } = answering({
-      integrations: {
-        integrations: [],
-        traffic_known: true,
-        traffic_since: null,
-        tools: [
-          { key: "slack", surfaces: [], state: "attention", label: "Needs attention", reason: "" },
-          { key: "gitlab", surfaces: [], state: "connected", label: "Connected", reason: "" },
-        ],
-      },
+      viewer: { login: "lee", grants: ["tracker"], handle: "", owner: "lee", name: "", kind: "" },
     });
     mountShell(store, socket);
+    act(() => store.applyHealth(healthFrame({ applied_epoch: 2, nodes: 1 })));
     await settle();
     const column = screen.getByRole("navigation", { name: "Settings sections" });
-    const row = Array.from(column.querySelectorAll("a")).find((a) =>
-      a.textContent?.startsWith("Integrations"),
-    );
-    expect(row?.textContent).toContain("1");
-    expect(row?.textContent).toContain("1 needs attention");
-    expect(row?.closest(".section-row-attention")).not.toBeNull();
-    expect(row?.querySelector(".crewlet-nav-item__badge")?.textContent).toBe("1");
+    const row = (start: string) =>
+      Array.from(column.querySelectorAll("a")).find((a) => a.textContent?.startsWith(start));
+    expect(row("Nodes")?.textContent).toMatch(/needs Admin/);
+    expect(row("Nodes")?.textContent).not.toMatch(/node live/);
+    expect(row("Configuration")?.textContent).not.toMatch(/epoch/);
   });
 
   // A FIGURE SAYS WHAT IT COUNTS: the applied epoch read "e2", a code.
   test("the Configuration row names the epoch this node applied in words", async () => {
-    location.hash = "#/settings";
+    location.hash = "#/settings/models";
     const { store, socket } = answering({});
     mountShell(store, socket);
     act(() => store.applyHealth(healthFrame({ applied_epoch: 2, nodes: 1 })));
@@ -1055,8 +1081,10 @@ describe("what the frame holds open", () => {
     await act(async () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }));
     });
+    // FOUND, NOT QUERIED: the palette's code is a chunk of its own, so the
+    // dialog draws once that chunk is in.
     expect(
-      screen.queryByRole("dialog"),
+      await screen.findByRole("dialog"),
       "ctrl-k did not open the palette, so this test proves nothing",
     ).not.toBeNull();
 
@@ -1071,9 +1099,6 @@ describe("what the frame holds open", () => {
   });
 });
 
-// THE ENGINE'S STATE IS THE HEALTH CARD'S NAME, and the card is the way to the
-// nodes. Every word is the health push's: `HealthCard.test.tsx` holds the
-// precedence, this holds the wiring.
 // THE COMPANY IS THE LOCKUP'S TITLE, beside the product's mark — the approved
 // design's "Nimbus" — and the lockup is the way home.
 test("the lockup is the company's name beside the product's mark, and goes home", async () => {
@@ -1091,21 +1116,68 @@ test("the lockup is the company's name beside the product's mark, and goes home"
   );
 });
 
-test("the health card reads the push and links to the nodes", async () => {
+// THE ENGINE'S STATE IS THE ENGINE ROW'S NAME, at the rail's foot, and the row
+// opens the engine panel. Every word is the health push's: `EnginePanel.test.tsx`
+// holds the precedence and the panel, this holds the wiring.
+test("the engine row reads the push and opens the engine panel", async () => {
   const { store, socket } = answering({});
   mountShell(store, socket);
   act(() => {
     store.setConnected(true);
     store.applyHealth(healthFrame({ nodes: 3, applied_epoch: 42, alarms: { count: 0 } }));
   });
-  const card = document.querySelector<HTMLAnchorElement>("a.health-card");
-  expect(card?.getAttribute("href")).toBe("#/settings/nodes");
-  expect(card?.textContent).toContain("Engine healthy");
-  expect(card?.textContent).toContain("3 nodes · config epoch 42");
+  const row = screen.getByRole("button", { name: "Engine healthy" });
+  expect(row.closest("aside")).not.toBeNull();
+  fireEvent.click(row);
+  const panel = screen.getByRole("dialog", { name: "Engine" });
+  expect(within(panel).getByText("3 live")).toBeDefined();
+  expect(within(panel).getByText("Epoch 42")).toBeDefined();
+});
+
+// THE ALARMS' NAMES ARE THE RETENTION REPORT'S, which takes Admin,
+// so the panel asks for them only where Settings › Backups & retention, the
+// section that lists them, opens for the reader: decided by the rule every
+// lock is drawn by, over the frame's one reading of what the reader holds. A
+// reader without it is told the longest-standing alarm off the push, and the
+// engine is never asked a question it would refuse. Mutation: hand the panel
+// `readsReport` unconditionally and the second reader asks.
+test("the engine panel asks the alarms' names only of a reader the report's section opens for", async () => {
+  const report = { domains: [], alarms: [{ kind: "backup_age", detail: "", remedy: "" }] };
+  const holdsNothingButTheCompany = {
+    login: "reader",
+    grants: [],
+    handle: "ada",
+    owner: "ada",
+    name: "Ada Lovelace",
+    kind: "human",
+  };
+  for (const [viewer, asks] of [
+    [undefined, true],
+    [holdsNothingButTheCompany, false],
+  ] as const) {
+    const asked: { what: string }[] = [];
+    const { store, socket } = answering(
+      viewer ? { viewer, retention: report } : { retention: report },
+      asked,
+    );
+    mountShell(store, socket);
+    await settle();
+    act(() => {
+      store.setConnected(true);
+      store.applyHealth(healthFrame({ alarms: { count: 1, worst: "backup_age" } }));
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Engine serving, 1 alarm" }));
+    await settle();
+    expect(
+      asked.some((a) => a.what === "retention"),
+      viewer ? "a reader without Admin" : "a reader holding Admin",
+    ).toBe(asks);
+    cleanup();
+  }
 });
 
 // A PROJECT'S LENSES ARE BESIDE ITS NAME, on the bar: `Work › ENG Core ·
-// Items | About | History`. As a row of their own under it they cost the
+// Tasks | About | History | Files`. As a row of their own under it they cost the
 // first screenful a line the approved Board does not spend. And the row on
 // the bar still controls the region in the page, by id.
 test("an object's lenses sit on the page bar beside the breadcrumb and control the page", async () => {
@@ -1138,7 +1210,7 @@ test("an object's lenses sit on the page bar beside the breadcrumb and control t
   expect(panel?.closest("main")).toBeTruthy();
   // AND A PAGE WITH NO LENSES LEAVES THE SLOT EMPTY, which draws nothing.
   cleanup();
-  location.hash = "#/work";
+  location.hash = "#/work/views";
   const bare = answering({});
   mountShell(bare.store, bare.socket);
   expect(document.getElementById(PAGE_LENSES_SLOT)?.childElementCount).toBe(0);
@@ -1216,11 +1288,11 @@ describe("where the peek is a column", () => {
   // can read — so the width asked moves with the reader's choice.
   test("at the reader's density", async () => {
     setDensity("comfortable");
-    const { win, app } = await peekAt("#/work?peek=seat:ceo", 1166);
+    const { win, app } = await peekAt("#/work?peek=seat:ceo", 1167);
     try {
-      expect(win.asked).toContain("(width >= 1167px)");
+      expect(win.asked).toContain("(width >= 1168px)");
       expect(app.getAttribute("data-peek")).toBe("drawer");
-      win.set(1167);
+      win.set(1168);
       expect(app.getAttribute("data-peek")).toBe("column");
     } finally {
       win.restore();

@@ -24,9 +24,10 @@ const AdoptPartSuffix = ".adopt.part"
 
 // AdoptDeps is everything the join needs that it does not own.
 type AdoptDeps struct {
-	// Domains are every domain this build registers, by name. An artefact
-	// names all of them or it is refused: adopted wholesale means a domain
-	// it does not name is one this node would believe it was caught up on.
+	// Domains are every log this build registers, by name — every data
+	// node runs them all. An artefact names all of them or it is refused:
+	// adopted wholesale means a domain it does not name is one this node
+	// would believe it was caught up on.
 	Domains map[string]Registered
 
 	// LivePath is the replicated estate this node is running, which the
@@ -95,8 +96,8 @@ type AdoptDeps struct {
 	//
 	// began is the adoption's start, the same at every phase of one join,
 	// and the ADOPTER stamps it rather than the caller: it is the key that
-	// makes one join one row, and only [Adopter.Join] knows when the join
-	// began trying offers.
+	// makes one join one row, it follows every offer the join collected,
+	// and only [Adopter.Join] knows when the last one was in.
 	Record func(ctx context.Context, began time.Time, donor string, m Manifest,
 		phase AdoptionPhase) error
 
@@ -275,6 +276,22 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 	for _, offer := range offers {
 		if err := offer.Usable(req, a.deps.Domains, known); err != nil {
 			refusals = append(refusals, fmt.Errorf("%s: %w", offer.Manifest.NodeID, err))
+			// LOGGED HERE TOO, not only below. A manifest-level
+			// refusal is the CHEAP one — decided from what the peer
+			// said about itself, before a byte moves — and it was the
+			// one nobody could see: the reason went into the joined
+			// error, and the engine's no-offer branch reports that a
+			// join found nothing without saying what it turned down.
+			//
+			// It is also the refusal a rolling upgrade reaches: a
+			// donor on a build that runs fewer domains than this one
+			// is refused on every tick until it is upgraded, and an
+			// operator with no line naming the peer and the domain
+			// has nothing to act on.
+			a.log.WarnContext(ctx, "statelog_adoption_refused",
+				"node", a.deps.NodeID, "donor", offer.Manifest.NodeID,
+				"error", err.Error(), "stage", "manifest",
+				"detail", "refused from the manifest alone, before any transfer")
 			continue
 		}
 		m, err := a.adopt(ctx, offer, began)
@@ -304,7 +321,9 @@ func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
 		}
 		refusals = append(refusals, fmt.Errorf("%s: %w", offer.Manifest.NodeID, err))
 		a.log.WarnContext(ctx, "statelog_adoption_refused",
-			"node", a.deps.NodeID, "donor", offer.Manifest.NodeID, "error", err.Error())
+			"node", a.deps.NodeID, "donor", offer.Manifest.NodeID, "error", err.Error(),
+			"stage", "transfer",
+			"detail", "the artefact was fetched or inspected and did not survive it")
 	}
 	if len(refusals) == 0 {
 		return Manifest{}, fmt.Errorf("%w: nobody answered", ErrNoOffer)
@@ -441,10 +460,9 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (Mani
 		// context: the artefact is the live file now, and whatever opens
 		// the estate next — a running node's restore, or the next start
 		// of one being stopped — opens the artefact. The row stays as
-		// [AdoptionScrubbed] left it, incomplete, which is what happened,
-		// and the file carries its own ledger's watermark whichever side
-		// of the install it stopped on. But the estate is not open, and
-		// that is what the caller has to be told.
+		// [AdoptionScrubbed] left it, incomplete, which is what happened.
+		// But the estate is not open, and that is what the caller has to
+		// be told.
 		return Manifest{}, fmt.Errorf("%w: the artefact is installed and "+
 			"opening it failed: %w", ErrEstateNotRestored, err)
 	}

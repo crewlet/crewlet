@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 )
 
-// THE DERIVED FILES (ADR-0038). A node-local derived file is DECLARED here,
+// THE DERIVED FILES (ADR-0052). A node-local derived file is DECLARED here,
 // lives inside its incarnation, and the cache's sweep, Verify, check, scrub,
 // budget, plan and writers gate read the declaration — a derived file is added
 // by adding a declaration, never beside them.

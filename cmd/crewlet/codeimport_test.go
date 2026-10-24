@@ -825,13 +825,13 @@ func TestAnImportReportsTheStepInFlightBeforeARefusal(t *testing.T) {
 func TestImportWithATokenThatCannotPushStopsBeforeCloning(t *testing.T) {
 	t.Parallel()
 	h := codeNodeWith(t, codeDeclaration{repos: importRepo, settings: importLimits},
-		map[string]string{"ci": "a-ci-token"})
+		map[string]string{"ci": "a-ci-token-long-enough-for-tier-a"})
 	var hist sourceHistory
 	hist.commit("refs/heads/main", 0, map[string]string{"README.md": "# web\n"})
 	_, url, _ := hist.load(t)
 
-	out, _, err := cli(t, "code", "import", url, "web", "-url", h.base, "-token", "a-ci-token", "-git",
-		hermeticGit(t))
+	out, _, err := cliIn(t, tokenEnviron("a-ci-token-long-enough-for-tier-a"), "code", "import", url, "web", "-url", h.base,
+		"-git", hermeticGit(t))
 	if err == nil || !strings.Contains(err.Error(), "not bound to a person") {
 		t.Fatalf("an import with a token bound to nobody = %v, want the node's refusal", err)
 	}
@@ -996,13 +996,15 @@ func TestGitsOutputIsReadALineAtATime(t *testing.T) {
 	}
 }
 
-// runImport runs `crewlet code import url web` against h with git, a case's
-// own say over the run first: tune changes the run prepareImport made — a
-// bound the case scales down to what a test-sized history can reach.
+// runImport runs `crewlet code import url web` against h with git, h's own
+// token the credential its environment holds, and a case's own say over the
+// run first: tune changes the run prepareImport made — a bound the case scales
+// down to what a test-sized history can reach.
 func (h codeHost) runImport(t *testing.T, url, git string, tune func(*importer)) (string, string, error) {
 	t.Helper()
 	var out, errOut bytes.Buffer
-	imp, dry, err := prepareImport(t.Context(), []string{url, "web", h.cfg, "-git", git}, &out, &errOut)
+	imp, dry, err := prepareImport(t.Context(), tokenEnviron(h.token),
+		[]string{url, "web", h.cfg, "-git", git}, &out, &errOut)
 	if err == nil {
 		if tune != nil {
 			tune(imp)
@@ -1702,7 +1704,7 @@ func TestImportProbeQuotesGitAndNeverBlamesTheToken(t *testing.T) {
 // Mutation: hint code.repos at every not_found, and the case goes red.
 func TestImportIntoACompanyThatHostsNoCodeSaysSo(t *testing.T) {
 	t.Parallel()
-	const token = "a-code-token"
+	const token = "a-code-token-long-enough-for-tier-a"
 	n := bootUnconfiguredWith(t, token, nil)
 	n.reconcile()
 	if err := n.settle(n.put(companyYAML)); err != nil {
@@ -1712,7 +1714,7 @@ func TestImportIntoACompanyThatHostsNoCodeSaysSo(t *testing.T) {
 	hist.commit("refs/heads/main", 0, map[string]string{"README.md": "# web\n"})
 	_, url, _ := hist.load(t)
 
-	_, _, err := cli(t, "code", "import", url, "web", "-url", n.base, "-token", token, "-git", hermeticGit(t))
+	_, _, err := cliIn(t, tokenEnviron(token), "code", "import", url, "web", "-url", n.base, "-git", hermeticGit(t))
 	if err == nil || !strings.Contains(err.Error(), "code.native is not set") ||
 		strings.Contains(err.Error(), "code.repos") {
 		t.Errorf("an import into a company hosting no code = %v, want the node's not_hosted and no code.repos", err)

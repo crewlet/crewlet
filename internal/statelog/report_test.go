@@ -20,6 +20,10 @@ import (
 // flake.
 var reportAt = time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)
 
+// replayWindow is the shipped `min_age`, which the trim-blocked cases hold a
+// block against.
+const replayWindow = 7 * 24 * time.Hour
+
 // healthyDomain is a domain where nothing is wrong: every term readable, the
 // age floor binding, plenty of headroom.
 func healthyDomain(name string, feed bool) statelog.DomainInputs {
@@ -188,9 +192,97 @@ func TestTheHeadroomAlarmNamesItsDomain(t *testing.T) {
 	if len(fired) != 1 {
 		t.Fatalf("one domain is at 3%% headroom and %d headroom alarm(s) fired", len(fired))
 	}
-	if !strings.HasPrefix(fired[0].Detail, "vectors: ") {
-		t.Errorf("the headroom alarm reads %q and does not name the log that is "+
-			"filling", fired[0].Detail)
+	if d := fired[0].Domains; len(d) != 1 || d[0].Domain != "vectors" {
+		t.Errorf("the headroom alarm names %+v, not the log that is filling", d)
+	}
+	if !strings.Contains(fired[0].Detail, "3%") {
+		t.Errorf("the headroom alarm reads %q, which is not the filling log's measurement",
+			fired[0].Detail)
+	}
+}
+
+// A LOG TOO SMALL FOR ITS OWN REPLAY WINDOW IS NAMED, and only that log.
+//
+// Each domain has its own ceiling and its own rate, so the comparison is per
+// domain exactly as headroom is — an alarm that said only "a ceiling is too
+// small" would send an operator to resize every log they have.
+func TestTheCeilingShortAlarmNamesItsDomain(t *testing.T) {
+	t.Parallel()
+	busy := healthyDomain("iam", true)
+	// A GIBIBYTE CEILING taking in 200 MiB a day holds five days of a
+	// seven-day window.
+	busy.MaxBytes, busy.BytesPerDay = 1<<30, statelog.PerDay(200<<20)
+	quiet := healthyDomain("tracker", true)
+	quiet.BytesPerDay = statelog.PerDay(10 << 20)
+
+	rep := statelog.NewReport(statelog.ReportInputs{
+		NodeID: "node-1", At: reportAt, ReplayWindow: 7 * 24 * time.Hour,
+		Domains: []statelog.DomainInputs{quiet, busy},
+	})
+	var fired []statelog.Alarm
+	for _, a := range rep.Alarms {
+		if a.Kind == statelog.KindLogCeilingShort {
+			fired = append(fired, a)
+		}
+	}
+	if len(fired) != 1 {
+		t.Fatalf("one log is short of its window and %d alarm(s) fired: %v",
+			len(fired), rep.Alarms)
+	}
+	if d := fired[0].Domains; len(d) != 1 || d[0].Domain != "iam" {
+		t.Fatalf("the alarm stands on %+v, not the log that is short", d)
+	}
+	if fired[0].Detail != fired[0].Domains[0].Detail ||
+		!strings.Contains(fired[0].Detail, "200.0 MiB a day") {
+		t.Errorf("the alarm reads %q, which is not the short log's measurement",
+			fired[0].Detail)
+	}
+
+	// AND THE WINDOW IS WHAT IT IS COMPARED AGAINST: the same log under a
+	// three-day min_age fits, so a report that dropped the window would
+	// fire on every log with any rate at all or on none.
+	rep = statelog.NewReport(statelog.ReportInputs{
+		NodeID: "node-1", At: reportAt, ReplayWindow: 3 * 24 * time.Hour,
+		Domains: []statelog.DomainInputs{quiet, busy},
+	})
+	for _, a := range rep.Alarms {
+		if a.Kind == statelog.KindLogCeilingShort {
+			t.Errorf("a window the ceiling holds fired: %s", a.Detail)
+		}
+	}
+}
+
+// A MEASURED ZERO GOES ON THE WIRE AS ZERO, AND AN UNMEASURED RATE AS
+// NOTHING.
+//
+// The two are opposite facts — a log that took in nothing, and a node that
+// cannot say — and every surface downstream renders from the JSON. Collapsed
+// into one representation, a dashboard would show an idle log on every node
+// that has not ticked yet.
+func TestAMeasuredZeroRateSurvivesTheWireAndAnUnmeasuredOneIsAbsent(t *testing.T) {
+	t.Parallel()
+	idle := healthyDomain("pages", true)
+	idle.BytesPerDay = statelog.PerDay(0)
+	unmeasured := healthyDomain("iam", true)
+
+	raw, err := json.Marshal(statelog.NewReport(statelog.ReportInputs{
+		NodeID: "node-1", At: reportAt,
+		Domains: []statelog.DomainInputs{idle, unmeasured},
+	}))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var doc struct {
+		Domains []map[string]any `json:"domains"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got, present := doc.Domains[0]["bytes_per_day"]; !present || got != float64(0) {
+		t.Errorf("a measured zero went out as %v (present %v), want 0", got, present)
+	}
+	if got, present := doc.Domains[1]["bytes_per_day"]; present {
+		t.Errorf("an unmeasured rate went out as %v, want the field absent", got)
 	}
 }
 
@@ -204,12 +296,15 @@ func TestTheHeadroomAlarmNamesItsDomain(t *testing.T) {
 // reserve itself is reported beside the ceiling it is kept under.
 func TestAReservedLogsHeadroomIsOfItsOrdinaryCeiling(t *testing.T) {
 	t.Parallel()
-	// 12% of the broker's ceiling is left, and 6% of the 1500 bytes
-	// ordinary writes are held to.
+	// 12% of the broker's ceiling is left, and 6% of the 1500 MiB
+	// ordinary writes are held to: at this ceiling the sixteenth is the
+	// larger term of the reserve, the fleet term of a log whose largest
+	// append is four kibibytes being about a mebibyte.
 	reserved := healthyDomain("tracker", true)
-	reserved.Bytes, reserved.MaxBytes, reserved.Reserved = 1408, 1600, true
+	reserved.Bytes, reserved.MaxBytes = 1408<<20, 1600<<20
+	reserved.Reservation = statelog.Reservation{Kept: true, MaxAppend: 4 << 10}
 	plain := healthyDomain("vectors", false)
-	plain.Bytes, plain.MaxBytes = 1408, 1600
+	plain.Bytes, plain.MaxBytes = 1408<<20, 1600<<20
 	rep := statelog.NewReport(statelog.ReportInputs{
 		NodeID: "node-1", At: reportAt,
 		Domains: []statelog.DomainInputs{reserved, plain},
@@ -222,7 +317,7 @@ func TestAReservedLogsHeadroomIsOfItsOrdinaryCeiling(t *testing.T) {
 		headroom float64
 		reserve  uint64
 	}{
-		"tracker": {headroom: 92.0 / 1500, reserve: 100},
+		"tracker": {headroom: 92.0 / 1500, reserve: 100 << 20},
 		"vectors": {headroom: 192.0 / 1600, reserve: 0},
 	} {
 		d := byName[name]
@@ -238,12 +333,14 @@ func TestAReservedLogsHeadroomIsOfItsOrdinaryCeiling(t *testing.T) {
 	var fired []string
 	for _, a := range rep.Alarms {
 		if a.Kind == statelog.KindLogHeadroom {
-			fired = append(fired, a.Detail)
+			for _, d := range a.Domains {
+				fired = append(fired, d.Domain)
+			}
 		}
 	}
-	if len(fired) != 1 || !strings.HasPrefix(fired[0], "tracker: ") {
-		t.Fatalf("the headroom alarm fired %q, want it on tracker alone — the "+
-			"one within a tenth of the ceiling its writes are refused at", fired)
+	if len(fired) != 1 || fired[0] != "tracker" {
+		t.Fatalf("the headroom alarm stands on %q, want tracker alone: the one "+
+			"within a tenth of the ceiling its writes are refused at", fired)
 	}
 }
 
@@ -441,18 +538,23 @@ func TestTheExitCodeIsTheAlarms(t *testing.T) {
 		t.Errorf("a healthy fleet reports %v blocked", got)
 	}
 
+	// BLOCKED PAST THE WINDOW, with a hundred records older than it: the
+	// trim has kept what a working one would have removed, which is the
+	// condition `trim_blocked` fires on.
 	blocked := healthyDomain("tracker", true)
-	in := statelog.TrimInputs{Now: reportAt, HoldsReadable: true, BackupMaxAge: 24 * time.Hour}
+	in := statelog.TrimInputs{Now: reportAt, HoldsReadable: true,
+		BackupMaxAge: 24 * time.Hour, AgeFloor: 800}
 	blocked.Decision = statelog.Trim(in.Terms())
-	blocked.BlockedSince = reportAt.Add(-90 * time.Minute)
+	blocked.BlockedSince = reportAt.Add(-(replayWindow + statelog.TrimInterval + time.Hour))
 	rep := statelog.NewReport(statelog.ReportInputs{
 		NodeID:           "node-1",
 		At:               reportAt,
 		RegisterReadable: true,
+		ReplayWindow:     replayWindow,
 		Domains:          []statelog.DomainInputs{blocked},
 	})
 	if !rep.ExitNonZero() {
-		t.Error("a fleet whose trim has been blocked for 90 minutes exits zero")
+		t.Error("a fleet whose trim has been blocked past its replay window exits zero")
 	}
 	if got := rep.Blocked(); len(got) != 1 || got[0] != "tracker" {
 		t.Errorf("Blocked() is %v, want [tracker]", got)
@@ -465,6 +567,247 @@ func TestTheExitCodeIsTheAlarms(t *testing.T) {
 		t.Error("a blocked domain carries no instant, so its alarm reports a " +
 			"duration measured from the zero time")
 	}
+}
+
+// WHAT A BLOCKED TRIM IS KEEPING PAST THE WINDOW IS READ OFF THE LOG, not off
+// the clock.
+//
+// The report has both halves of the count: the published age term's own
+// sequence — the first record young enough to keep — and the log's first. A
+// block the clock says is old enough is still silent while those say the log
+// holds nothing past the window, which is every young fleet, every log nobody
+// writes to, and a stream this node could not read (whose bounds it does not
+// have). And the count, when there is one, is the one the alarm prints.
+func TestABlockedTrimsAlarmReadsWhatTheLogHoldsPastTheWindow(t *testing.T) {
+	t.Parallel()
+	old := reportAt.Add(-(replayWindow + statelog.TrimInterval + time.Hour))
+	blockedAt := func(ageFloor uint64, mutate func(*statelog.DomainInputs)) statelog.Report {
+		d := healthyDomain("tracker", true)
+		// THE BACKUP TERM BLOCKS, as it does on every fresh deployment.
+		in := statelog.TrimInputs{
+			Now: reportAt, HoldsReadable: true, CountedReadable: true,
+			Counted:      []statelog.NodePosition{{NodeID: "node-1", Seq: 900, At: reportAt}},
+			BackupMaxAge: 24 * time.Hour, HasFeed: true, FeedReadable: true,
+			FeedAckFloor: 890, AgeFloor: ageFloor, HoldStale: statelog.TrimHoldStale,
+		}
+		d.Decision = statelog.Trim(in.Terms())
+		d.BlockedSince = old
+		if mutate != nil {
+			mutate(&d)
+		}
+		return statelog.NewReport(statelog.ReportInputs{
+			NodeID: "node-1", At: reportAt, RegisterReadable: true,
+			ReplayWindow: replayWindow, Domains: []statelog.DomainInputs{d},
+		})
+	}
+
+	// THE CONTROL: the age term keeps from 800, the log starts at 700, so a
+	// hundred records are past the window — and the alarm says so.
+	fired, found := find(blockedAt(800, nil).Alarms, statelog.KindTrimBlocked)
+	if !found {
+		t.Fatal("a trim blocked past its window with a hundred records past it " +
+			"raised no trim_blocked, so every silence below proves nothing")
+	}
+	if !strings.Contains(fired.Detail, "keeping up to 100 record(s)") {
+		t.Errorf("the alarm reads %q; it says what the log is keeping", fired.Detail)
+	}
+	// THE LOG AND THE TERM HOLDING IT ride on the log the alarm stands on.
+	if d := fired.Domains; len(d) != 1 || d[0].Domain != "tracker" ||
+		d[0].Term != statelog.TermBackupFloor || !d[0].Since.Equal(old) {
+		t.Errorf("the alarm stands on %+v; want the tracker's log, held by the "+
+			"backup term since %v", d, old)
+	}
+
+	for name, rep := range map[string]statelog.Report{
+		// Everything the log holds is younger than the window: the age
+		// term keeps from the log's first record.
+		"a young log": blockedAt(700, nil),
+		// Nothing written at all.
+		"an empty log": blockedAt(1, func(d *statelog.DomainInputs) {
+			d.FirstSeq, d.LastSeq = 0, 0
+		}),
+		// A stream this node could not read carries no bounds.
+		"an unreadable stream": blockedAt(800, func(d *statelog.DomainInputs) {
+			d.StreamReadable, d.FirstSeq, d.LastSeq = false, 0, 0
+		}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if a, found := find(rep.Alarms, statelog.KindTrimBlocked); found {
+				t.Errorf("raised %q while the log holds nothing past the window", a.Detail)
+			}
+			// AND IT IS STILL REPORTED AS BLOCKED: the alarm is quiet,
+			// the screen is not.
+			if got := rep.Blocked(); len(got) != 1 {
+				t.Errorf("Blocked() = %v; a quiet alarm must not hide the block", got)
+			}
+		})
+	}
+}
+
+// A HELD RECORD AND AN UNREADABLE FLOOR ARE EACH LOG'S OWN MEASUREMENT, and
+// each says what is true of that log.
+//
+// What the deferral grace does is a log's: every log's copy is judged on its
+// own (ADR-0045), so past it a record held on one log has taken this node's
+// copy of THAT log out of service and no other's. The form this replaced
+// reduced the node to its OLDEST held record, so a node holding an identity
+// record for two hours and a tracker record for forty minutes raised one alarm
+// naming the identity record alone, while the tracker's copy had gone out of
+// service too. A floor is
+// the same: a read of one log refuses on that log's floor, and two logs
+// re-anchored while this node was not are two re-anchors, where the node's
+// longest named one.
+func TestAHeldRecordAndAnUnreadableFloorAreEachLogsOwnAlarm(t *testing.T) {
+	t.Parallel()
+	identity := healthyDomain("iam", true)
+	identity.DeferredAge = 2 * time.Hour
+	identity.DeferredRecord = "at CREWLET_IAM@1:88, written at record version 2 against the 1 this build reads"
+	work := healthyDomain("tracker", true)
+	work.DeferredAge = 40 * time.Minute
+	work.DeferredRecord = "at CREWLET_TRACKER@1:640, written at record version 3 against the 2 this build reads"
+	// AND ONE LOG'S FLOOR UNREADABLE, the other's fine.
+	work.FloorUnknownFor = 3 * time.Minute
+	work.FloorUnknownCause = "the published floor for tracker is at generation 2 and this node is on 1"
+	pages := healthyDomain("pages", true)
+
+	rep := statelog.NewReport(statelog.ReportInputs{
+		NodeID: "node-1", At: reportAt, RegisterReadable: true,
+		ReplayWindow: replayWindow,
+		Domains:      []statelog.DomainInputs{identity, work, pages},
+	})
+	// ONE ALARM PER KIND, listing each log with that log's own measurement,
+	// so the tracker raises and clears a line pair per log while the count
+	// and the gauge say one.
+	byLog := func(kind statelog.Kind) (statelog.Alarm, map[string]string) {
+		var alarm statelog.Alarm
+		out := map[string]string{}
+		for _, a := range rep.Alarms {
+			if a.Kind != kind {
+				continue
+			}
+			if len(alarm.Kind) > 0 {
+				t.Errorf("%s was raised twice: %v", kind, rep.Alarms)
+			}
+			alarm = a
+			for _, d := range a.Domains {
+				out[d.Domain] = d.Detail
+			}
+		}
+		return alarm, out
+	}
+
+	deferred, held := byLog(statelog.KindDeferredOld)
+	if len(held) != 2 {
+		t.Fatalf("deferred_old was raised for %v; want each of the two logs "+
+			"holding a record past the grace, on its own", held)
+	}
+	for log, want := range map[string][]string{
+		"tracker": {"CREWLET_TRACKER@1:640", "held for 40m,",
+			"at which this node's copy of this log goes out of service"},
+		"iam": {"CREWLET_IAM@1:88", "held for 2h,",
+			"at which this node's copy of this log goes out of service"},
+	} {
+		for _, says := range want {
+			if !strings.Contains(held[log], says) {
+				t.Errorf("the %s log's deferred_old reads %q; want it to say %q",
+					log, held[log], says)
+			}
+		}
+	}
+
+	// THE ALARM LEADS WITH THE RECORD HELD LONGEST, which is the identity
+	// log's two hours.
+	if deferred.Detail != held["iam"] {
+		t.Errorf("deferred_old leads with %q; want the identity log's, held longest",
+			deferred.Detail)
+	}
+
+	_, floors := byLog(statelog.KindFloorUnknown)
+	if len(floors) != 1 || !strings.Contains(floors["tracker"], "generation 2") {
+		t.Errorf("floor_unknown was raised for %v; want the tracker's log alone, "+
+			"naming its floor", floors)
+	}
+}
+
+// THE ALARMS THE REPORT RAISES PER LOG ARE EXACTLY THE ONES THE TABLE FLAGS,
+// in both directions.
+//
+// The flag is what the published reference names them from, and what the
+// tracker writes a line pair per log for. So one log is put at the firing value
+// of every per-log condition beside a node reading that fires one of its own:
+// every alarm the report lists a log under must be a flagged kind, every
+// flagged kind must list it, and nothing the node raises may list a log. The
+// one node-wide kind that lists logs is `backup_age`, whose logs are the ones
+// its missing backup holds; this case takes no backup policy, so it is quiet.
+func TestTheAlarmsRaisedPerLogAreTheOnesTheTableFlags(t *testing.T) {
+	t.Parallel()
+	d := healthyDomain("tracker", true)
+	// NEARLY FULL, and taking in a gibibyte a day against a gibibyte ceiling.
+	d.MaxBytes, d.Bytes = 1<<30, 1<<30-1
+	d.BytesPerDay = statelog.PerDay(1 << 30)
+	// BLOCKED ON A BACKUP NOBODY TOOK, for longer than the window, with a
+	// hundred records past it.
+	in := statelog.TrimInputs{
+		Now: reportAt, HoldsReadable: true, CountedReadable: true,
+		Counted:      []statelog.NodePosition{{NodeID: "node-1", Seq: 900, At: reportAt}},
+		BackupMaxAge: 24 * time.Hour, HasFeed: true, FeedReadable: true,
+		FeedAckFloor: 890, AgeFloor: 800, HoldStale: statelog.TrimHoldStale,
+	}
+	d.Decision = statelog.Trim(in.Terms())
+	d.BlockedSince = reportAt.Add(-(replayWindow + statelog.TrimInterval + time.Hour))
+	// HOLDING A RECORD PAST THE GRACE, and unable to read its floor.
+	d.DeferredAge = statelog.DeferralGrace + time.Minute
+	d.FloorUnknownFor = statelog.FloorCacheStale + time.Second
+	// AND READ LINEARIZABLY PAST ITS CENSUS, by more than the drift factor.
+	d.LinearizableReadsExpected = 1_000
+	d.LinearizableReads = int(statelog.CensusDriftFactor*1_000) + 1
+
+	rep := statelog.NewReport(statelog.ReportInputs{
+		NodeID: "node-1", At: reportAt, RegisterReadable: true,
+		ReplayWindow: replayWindow,
+		Reading:      statelog.Reading{ApplyLag: 2 * time.Minute},
+		Domains:      []statelog.DomainInputs{d},
+	})
+	flagged := map[statelog.Kind]bool{}
+	for _, kind := range statelog.PerLogKinds() {
+		flagged[kind] = true
+	}
+	stamped := map[statelog.Kind]bool{}
+	for _, a := range rep.Alarms {
+		switch {
+		case len(a.Domains) == 0 && flagged[a.Kind]:
+			t.Errorf("%s is flagged per log and was raised with no log: %q", a.Kind, a.Detail)
+		case len(a.Domains) > 0 && !flagged[a.Kind]:
+			t.Errorf("%s was raised for the logs %+v and is not flagged per log, so "+
+				"the reference says nothing of it", a.Kind, a.Domains)
+		case len(a.Domains) == 0:
+			// A node-wide alarm, unflagged and listing no log.
+		case len(a.Domains) == 1 && a.Domains[0].Domain == "tracker":
+			stamped[a.Kind] = true
+		default:
+			t.Errorf("%s lists %+v; want the one log this case put at its firing value",
+				a.Kind, a.Domains)
+		}
+	}
+	for kind := range flagged {
+		if !stamped[kind] {
+			t.Errorf("%s is flagged per log and the report never raised it for a log "+
+				"whose inputs are all at the firing value", kind)
+		}
+	}
+	if !alarmedKind(rep.Alarms, statelog.KindApplyLag) {
+		t.Error("the node's own alarm was not raised, so this case proves nothing " +
+			"about what a node-wide alarm carries")
+	}
+}
+
+func alarmedKind(alarms []statelog.Alarm, kind statelog.Kind) bool {
+	for _, a := range alarms {
+		if a.Kind == kind {
+			return true
+		}
+	}
+	return false
 }
 
 // A BLOCKED DOMAIN WITH NO KNOWN INSTANT STILL CARRIES ONE.

@@ -2,12 +2,12 @@ package config_test
 
 import (
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // A WARNING IS A VALID CONFIGURATION WITH A CONSEQUENCE, and the consequence
@@ -80,10 +80,6 @@ func TestTierAWarnsAboutWhatItCannotRefuse(t *testing.T) {
 			},
 			"api.port", "no orchestrator can probe it",
 		},
-		"an in-memory stream loses everything": {
-			func(b *config.Bootstrap) { b.Stream.StoreDir = "" },
-			"stream.store_dir", "keeps them in memory",
-		},
 		// A BROKER ASKED TO BE VERBOSE INTO A SINK THAT TAKES NO DEBUG
 		// produces nothing at all: `stream.debug` unlocks nats-server's
 		// own Debugf population, and those are still DEBUG records.
@@ -108,7 +104,7 @@ func TestTierAWarnsAboutWhatItCannotRefuse(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			b := config.DefaultBootstrap()
+			b := config.RunnableBootstrap()
 			tc.mutate(&b)
 			if err := b.Validate(); err != nil {
 				t.Fatalf("the fixture does not validate, so this is a refusal "+
@@ -151,7 +147,7 @@ func TestTierAWarnsAboutWhatItCannotRefuse(t *testing.T) {
 // has something in it is one nobody reads.
 func TestAFullyStatedDeploymentWarnsAboutNothing(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := config.RunnableBootstrap()
 	b.Stream.StoreDir = "/var/lib/crewlet/stream"
 	b.Retention.BackupOwner = "platform-oncall"
 	if err := b.Validate(); err != nil {
@@ -167,7 +163,7 @@ func TestAFullyStatedDeploymentWarnsAboutNothing(t *testing.T) {
 // is the comparison finding no match rather than having nothing to compare.
 func TestAPeerListOfOtherMembersWarnsAboutNothing(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := config.RunnableBootstrap()
 	b.Stream.StoreDir = "/var/lib/crewlet/stream"
 	b.Retention.BackupOwner = "platform-oncall"
 	b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
@@ -177,8 +173,10 @@ func TestAPeerListOfOtherMembersWarnsAboutNothing(t *testing.T) {
 	// what this case is about.
 	b.Node.Roles = []string{"data", "ingress", "seats", "workers"}
 	// AND A PORT, as an ingress node's is: one with none is warned about
-	// that, which is not what this case is about either.
+	// that, which is not what this case is about either — and with it,
+	// what serving the API asks for, stated soundly.
 	b.API.Port = 8080
+	config.ServeAPI(&b)
 	b.Stream.Cluster = config.StreamCluster{
 		Name: "crewlet", Port: 6222, Host: "10.0.0.11", Advertise: "node-a.internal",
 		Peers: []string{"nats://node-b.internal:6222", "nats://node-c.internal:6222"},
@@ -215,7 +213,7 @@ func TestAVerboseBrokerIsQuietOnceSomethingRecordsIt(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			b := config.DefaultBootstrap()
+			b := config.RunnableBootstrap()
 			b.Stream.StoreDir = "/var/lib/crewlet/stream"
 			b.Retention.BackupOwner = "platform-oncall"
 			b.Stream.Debug = true
@@ -232,22 +230,143 @@ func TestAVerboseBrokerIsQuietOnceSomethingRecordsIt(t *testing.T) {
 	}
 }
 
-// A UNIT WITH NO ID IS KEYED ON ITS NAME, and the warning names BOTH halves —
-// because giving it an id fixes one of them and not the other.
-func TestAUnitWithNoIDIsWarnedAboutInBothHalves(t *testing.T) {
+// AND IT NAMES THE CAUSE IT FOUND, AND ONLY THE REMEDIES THAT WOULD WORK. The
+// obvious one, raising the level, is wrong where `logging.stderr: false` hands
+// the stream to a file with a level of its own: that file does not follow
+// `logging.level`, so a node told to pass `-debug` — one that may have been
+// started with it — would stay exactly as silent.
+func TestAVerboseBrokerIsToldOnlyTheRemediesThatWork(t *testing.T) {
+	t.Parallel()
+	const path = "/var/log/crewlet/node.log"
+	for _, tc := range []struct {
+		name   string
+		mutate func(*config.Bootstrap)
+		says   []string
+		never  []string
+	}{
+		{"no log file",
+			func(b *config.Bootstrap) {},
+			[]string{"`logging.level`", "`info` (unset)", "no log file is configured",
+				"Pass `-debug`"},
+			[]string{"`logging.file.level`", "`logging.stderr`"}},
+		{"a log file that follows the level",
+			func(b *config.Bootstrap) {
+				b.Logging.Level = logging.LevelWarn
+				b.Logging.File.Path = path
+			},
+			[]string{"is `warn`", "the log file follows it", "Pass `-debug`",
+				"or `logging.file.level` to `debug`"},
+			[]string{"`logging.stderr`"}},
+		{"a log file with a quieter level of its own",
+			func(b *config.Bootstrap) {
+				b.Logging.File.Path = path
+				b.Logging.File.Level = logging.LevelError
+			},
+			[]string{"`logging.file.level` is `error`", "Pass `-debug`",
+				"or `logging.file.level` to `debug`"},
+			[]string{"`logging.stderr`"}},
+		{"the console off, and the file follows the level",
+			func(b *config.Bootstrap) {
+				b.Logging.Stderr = new(bool)
+				b.Logging.File.Path = path
+			},
+			[]string{"`logging.stderr` is false", "which follows it, is the only destination",
+				"Pass `-debug`"},
+			nil},
+		// THE SHAPE A `-debug` RUN REACHES: the level is debug already,
+		// so the line says why that is not enough.
+		{"the console off, and the file keeps a level below the console's debug",
+			func(b *config.Bootstrap) {
+				b.Logging.Level = logging.LevelDebug
+				b.Logging.Stderr = new(bool)
+				b.Logging.File.Path = path
+				b.Logging.File.Level = logging.LevelWarn
+			},
+			[]string{"`logging.stderr` is false", "`logging.file.level` is `warn`",
+				"Set that to `debug`", "`logging.stderr` back to true"},
+			[]string{"-debug", "set `logging.level`"}},
+		{"the console off, and the file keeps a level of its own",
+			func(b *config.Bootstrap) {
+				b.Logging.Stderr = new(bool)
+				b.Logging.File.Path = path
+				b.Logging.File.Level = logging.LevelWarn
+			},
+			[]string{"`logging.file.level` is `warn`", "Set that to `debug`"},
+			[]string{"-debug", "set `logging.level`", "`logging.stderr` back to true"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b := config.RunnableBootstrap()
+			b.Stream.StoreDir = "/var/lib/crewlet/stream"
+			b.Retention.BackupOwner = "platform-oncall"
+			b.Stream.Debug = true
+			tc.mutate(&b)
+			if err := b.Validate(); err != nil {
+				t.Fatalf("the fixture does not validate: %v", err)
+			}
+			var message string
+			for _, w := range b.Warnings() {
+				if w.Path == "stream.debug" {
+					message = w.Message
+				}
+			}
+			if message == "" {
+				t.Fatalf("no stream.debug warning: %v", b.Warnings())
+			}
+			for _, want := range tc.says {
+				if !strings.Contains(message, want) {
+					t.Errorf("warning = %q, want it to say %q", message, want)
+				}
+			}
+			for _, wrong := range tc.never {
+				if strings.Contains(message, wrong) {
+					t.Errorf("warning = %q, offers %q, which would change nothing here",
+						message, wrong)
+				}
+			}
+		})
+	}
+}
+
+// A UNIT WITH NO ID IS REFUSED ON A WRITE AND WARNED ABOUT ON A STORED
+// REVISION, which is what an ADMISSION rule is: a unit is referenced by its
+// key, so a new document may not leave a team keyed on prose, while a company
+// stored before the rule still boots on its name.
+//
+// It was an advisory once, and reporting it in both channels would have put
+// one mistake in front of an operator twice.
+func TestAUnitWithNoIDIsRefusedAndWarnedAbout(t *testing.T) {
 	t.Parallel()
 	c := &config.Company{
 		Name: "Acme",
+		// A REACHABLE PERSON'S SEAT, so the one warning counted is the
+		// unit's: a company with no human seat carries an advisory of its
+		// own ([config.Company.AdvisoryWarnings]).
+		Roles: []config.Role{founderSeat()},
 		Units: []config.Unit{{
 			Name:  "Platform",
 			Roles: []config.Role{{Name: "SWE", Handle: "swe"}},
 		}},
 	}
+	// A SUBMITTED DOCUMENT IS REFUSED, and a running one is not: the key
+	// falls back to the name, which is exactly how every company behaved
+	// before the field.
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "units[0].id") {
+		t.Errorf("Validate() = %v, want a refusal naming units[0].id", err)
+	}
+	// The fixture is a bare struct rather than the defaults, so the
+	// runnable half has its own complaints; what matters is that the
+	// missing id is not one of them.
+	if err := c.ValidateRunnable(); err != nil && strings.Contains(err.Error(), "units[0].id") {
+		t.Errorf("ValidateRunnable() = %v: a stored revision with no unit ids "+
+			"still runs, keyed on its names", err)
+	}
+
 	warnings := c.Warnings()
 	if len(warnings) != 1 {
 		t.Fatalf("warnings = %v, want one about the unit", warnings)
 	}
-	for _, want := range []string{"unit \"Platform\"", "no `id`", "renaming it moves", "re-onboarding"} {
+	for _, want := range []string{"unit \"Platform\"", "has no id", "`manages:`", "id: platform"} {
 		if !strings.Contains(warnings[0].Message, want) {
 			t.Errorf("warning does not say %q: %q", want, warnings[0].Message)
 		}
@@ -256,16 +375,28 @@ func TestAUnitWithNoIDIsWarnedAboutInBothHalves(t *testing.T) {
 	// prose: `units[0].id` is the line an editor opens and the node a
 	// dashboard marks, and the unit is named for a reader with no document
 	// in front of them.
-	if w := warnings[0]; w.Kind != config.WarningAdvisory || w.Path != "units[0].id" ||
+	if w := warnings[0]; w.Kind != config.WarningAdmission || w.Path != "units[0].id" ||
 		!reflect.DeepEqual(w.Segments, config.Path{"units", 0, "id"}) || w.Unit != "Platform" {
-		t.Errorf("warning = %+v, want an advisory at units[0].id naming the unit", w)
+		t.Errorf("warning = %+v, want an admission warning at units[0].id naming the unit", w)
 	}
 
-	// AND AN ID SILENCES IT.
+	// AND AN ID SILENCES IT, in both channels.
 	c.Units[0].ID = "platform"
 	if got := c.Warnings(); len(got) != 0 {
 		t.Errorf("a unit with an id still warned: %v", got)
 	}
+	if err := c.Validate(); err != nil && strings.Contains(err.Error(), "units[0].id") {
+		t.Errorf("a unit with an id was refused at its id: %v", err)
+	}
+}
+
+// founderSeat is a human seat somebody can be reached at: what a fixture
+// counting warnings declares, so the count is its subject's alone — a company
+// with no human seat is advised that nobody can join it, and a human seat with
+// no contact identity that nobody can be mentioned at.
+func founderSeat() config.Role {
+	return config.Role{Name: "Founder", Handle: "founder", Kind: org.KindHuman,
+		Contact: &org.HumanContact{SlackUserID: "U0FOUNDER"}}
 }
 
 // AND A NESTED UNIT IS REPORTED WHERE IT WAS WRITTEN. The index is the half
@@ -275,7 +406,8 @@ func TestAUnitWithNoIDIsWarnedAboutInBothHalves(t *testing.T) {
 func TestANestedUnitWithNoIDIsWarnedAboutWhereItWasWritten(t *testing.T) {
 	t.Parallel()
 	c := &config.Company{
-		Name: "Acme",
+		Name:  "Acme",
+		Roles: []config.Role{founderSeat()},
 		Units: []config.Unit{
 			{Name: "Product", ID: "product", Roles: []config.Role{{Name: "PM", Handle: "pm"}}},
 			{Name: "Engineering", ID: "engineering", Children: []config.Unit{
@@ -287,11 +419,11 @@ func TestANestedUnitWithNoIDIsWarnedAboutWhereItWasWritten(t *testing.T) {
 	if len(warnings) != 1 {
 		t.Fatalf("warnings = %+v, want one about the child unit alone", warnings)
 	}
-	if w := warnings[0]; w.Kind != config.WarningAdvisory ||
+	if w := warnings[0]; w.Kind != config.WarningAdmission ||
 		w.Path != "units[1].children[0].id" ||
 		!reflect.DeepEqual(w.Segments, config.Path{"units", 1, "children", 0, "id"}) ||
 		w.Unit != "Platform" {
-		t.Errorf("warning = %+v, want an advisory at units[1].children[0].id", w)
+		t.Errorf("warning = %+v, want an admission warning at units[1].children[0].id", w)
 	}
 }
 
@@ -341,81 +473,175 @@ func TestVectorsNeedAKnowledgeBaseOrANativeTracker(t *testing.T) {
 	}
 }
 
-// A NATIVE BACKEND ON AN IN-MEMORY STREAM IS REFUSED, and it takes both
-// documents to see it.
+// A STATE LOG ON AN IN-MEMORY STREAM IS REFUSED BY TIER A ALONE, company or
+// none, on every broker MEMBER — and never on a leaf, which keeps no stream.
 //
-// The engine's own tracker and its own knowledge base keep their write-ahead
-// logs on the stream, and an embedded stream with no store directory keeps its
-// streams in memory, so a restart recreates them empty and a node whose
-// durable tables are ahead of a stream that restarted from nothing refuses to
-// serve PERMANENTLY: every snapshot it could adopt is above the recreated
-// stream too.
+// A domain's write-ahead log lives on the stream, and an embedded stream with
+// no store directory keeps its streams in memory — so a restart recreates them
+// empty, and a node whose durable tables are ahead of a stream that restarted
+// from nothing refuses to serve PERMANENTLY: every snapshot it could adopt is
+// above the recreated stream too.
 //
-// EITHER BACKEND. The rule once asked only about the tracker, and the
-// knowledge base is native by default, so a company on Jira with no Confluence
-// ran its pages on an in-memory log and was accepted. AND THE CODE HOST: a
-// company on vendors for both that hosts its repositories runs the log on
-// `code.native` alone.
+// # Why this is not a cross-tier rule any more
 //
-// Each tier validates alone and neither can see the other, which is why this
-// is a rule of its own rather than a field's.
-func TestANativeBackendNeedsAStreamThatSurvivesARestart(t *testing.T) {
+// It was one — `CheckTiers`, which asked the company too — while a node's
+// logs waited for its first company: only a company started one. Every data
+// node runs the core runtime from boot now, every domain's log and the
+// identity estate on it, and every member is a data node, so the pair's check
+// let through exactly the node it should have refused: one started with no
+// company, whose first person's invitation would be gone at its first restart.
+// So there is no company in these cases at all.
+//
+// Mutation: let `Durable` pass an embedded stream with a blank directory and
+// the first rows are accepted; drop the call from the stream's validator and
+// Validate accepts them while Durable refuses; drop the leaf's exemption and
+// the leaf row is refused.
+func TestEveryNodeNeedsAStreamThatSurvivesARestart(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		storeDir   string
-		streamType config.StreamType
-		tracker    config.TrackerBackend
-		knowledge  config.KnowledgeBackend
-		code       bool
-		accept     bool
-		leaf       bool
+		stream config.Stream
+		accept bool
 	}{
-		// A LEAF KEEPS NO STREAM: every log it reaches is a member's, and
-		// the member holds the store directory.
-		"native on a leaf with no store directory":   {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, false, true, true},
-		"both native on an in-memory stream":         {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, false, false, false},
-		"a native tracker on an in-memory stream":    {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNone, false, false, false},
-		"native pages on an in-memory stream":        {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNative, false, false, false},
-		"the code host alone on an in-memory stream": {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNone, true, false, false},
-		"a blank store directory is none":            {"  ", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNative, false, false, false},
-		"native with a store directory":              {"/var/lib/crewlet/stream", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, true, true, false},
-		"native on an external cluster":              {"", config.StreamNATS, config.TrackerNative, config.KnowledgeNative, true, true, false},
-		"vendors for both on the same stream":        {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNone, false, true, false},
+		"an embedded stream in memory":      {config.Stream{Type: config.StreamEmbedded, Replicas: 1}, false},
+		"an unset type is embedded":         {config.Stream{Replicas: 1}, false},
+		"a blank store directory is none":   {config.Stream{Type: config.StreamEmbedded, Replicas: 1, StoreDir: "  "}, false},
+		"an embedded stream that persists":  {config.Stream{Type: config.StreamEmbedded, Replicas: 1, StoreDir: "/var/lib/crewlet/stream"}, true},
+		"an external cluster keeps its own": {config.Stream{Type: config.StreamNATS, URL: "nats://broker.example.com:4222", Replicas: 1}, true},
+		// A LEAF KEEPS NO STREAM: it runs no JetStream, every log it
+		// reaches is a member's, and the member holds the store directory
+		// — so it passes with none, and is refused one by its own rule.
+		"a leaf keeps no stream of its own": {config.Stream{Type: config.StreamEmbedded, Replicas: 1,
+			Leaf: config.StreamLeaf{URLs: []string{"nats-leaf://data-a.example.com:7422"}}}, true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			b := config.DefaultBootstrap()
-			b.Stream.Type = tc.streamType
-			b.Stream.StoreDir = tc.storeDir
-			if tc.streamType == config.StreamNATS {
-				b.Stream.URL = "nats://broker.example.com:4222"
+			// THE ENGINE'S DOOR, which asks the same function for a
+			// Bootstrap that did not come through Validate.
+			stream := tc.stream
+			durable := stream.Durable()
+			// AND TIER A'S OWN, over the whole document.
+			b := config.RunnableBootstrap()
+			b.Stream = tc.stream
+			if tc.stream.Type == config.StreamNATS {
+				// A fleet's broker needs the fleet's coordination.
+				b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
 			}
-			if tc.leaf {
-				b.Stream.Leaf.URLs = []string{"nats-leaf://data-a.example.com:7422"}
+			if tc.stream.Leaf.Joins() {
+				// A LEAF IS A NODE WITHOUT `data`, so it keeps a scratch
+				// store and runs nothing a node without data may not.
+				b.Node.Roles = []string{"seats"}
+				b.Store.Scratch = true
+				b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
 			}
-			c := config.DefaultCompany()
-			c.Name = "Acme"
-			c.Tracker.Backend = tc.tracker
-			c.Knowledge.Backend = tc.knowledge
-			c.Code.Native = tc.code
-
-			err := config.CheckTiers(&b, &c)
+			validated := b.Validate()
 			if tc.accept {
-				if err != nil {
-					t.Fatalf("refused: %v", err)
+				if durable != nil || validated != nil {
+					t.Fatalf("refused: Durable %v, Validate %v", durable, validated)
 				}
 				return
 			}
-			if err == nil {
-				t.Fatal("a native backend on an in-memory stream was accepted")
+			for door, err := range map[string]error{"Durable": durable, "Validate": validated} {
+				if err == nil {
+					t.Fatalf("%s accepted a state log on an in-memory stream, so "+
+						"this node would lose every record it holds on its "+
+						"first restart and then refuse to serve", door)
+				}
+				for _, want := range []string{
+					"stream.store_dir", "refuses to serve", "identity estate",
+				} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("%s's refusal = %q, want it to say %q", door, err, want)
+					}
+				}
 			}
-			for _, want := range []string{
-				"stream.store_dir", "refuses to serve",
-				"tracker.backend: " + string(tc.tracker),
-				"knowledge.backend: " + string(tc.knowledge),
-				"code.native: " + strconv.FormatBool(tc.code),
+		})
+	}
+}
+
+// A COMPANY WITH NO HUMAN SEAT IS ONE NOBODY CAN JOIN, and it is said before
+// anybody tries.
+//
+// Every person holds a human seat for as long as they are here (ADR-0032):
+// an invitation and an administrator's create each name the seat the person
+// will hold, and both are refused without one. So a company declaring none
+// admits nobody — which an operator otherwise learns from the refusal of their
+// first invitation, after the revision is live. `crewlet validate` and the
+// builder's check read [config.Company.Warnings], so that is where it is said.
+//
+// ADVISED, NEVER REFUSED: a company its agents run alone, administered through
+// the deployment's Tier A tokens, is legitimate and validates. And a human seat
+// ANYWHERE silences it — inside a unit as much as at the top — because the
+// remedy is a seat, not a seat in a particular place.
+//
+// Mutations: drop the advisory from AdvisoryWarnings and the first two cases
+// go quiet; walk only the top-level roles and the unit's seat is missed.
+func TestACompanyNobodyCanJoinIsAdvisedNotRefused(t *testing.T) {
+	t.Parallel()
+	const agents = "name: Acme\nproviders:\n  llm:\n    main:\n" +
+		"      type: anthropic\n      model: claude-sonnet-5\n" +
+		"      api_keys: [\"${K}\"]\n"
+	for name, tc := range map[string]struct {
+		doc     string
+		advised bool
+	}{
+		"a company declaring no seat at all": {
+			doc: agents, advised: true,
+		},
+		"a company of agents alone": {
+			doc: agents + "roles:\n  - name: CEO\n    handle: ceo\n    llm: main\n" +
+				"units:\n  - name: Platform\n    id: platform\n    roles:\n" +
+				"      - name: SWE\n        handle: swe\n        llm: main\n",
+			advised: true,
+		},
+		"a human seat at the top": {
+			doc: agents + "roles:\n  - name: CEO\n    handle: ceo\n    llm: main\n" +
+				"  - name: Founder\n    handle: founder\n    kind: human\n" +
+				"    contact:\n      slack_user_id: U0FOUNDER\n",
+		},
+		"a human seat inside a unit": {
+			doc: agents + "roles:\n  - name: CEO\n    handle: ceo\n    llm: main\n" +
+				"units:\n  - name: Platform\n    id: platform\n    roles:\n" +
+				"      - name: Lead\n        handle: platform-lead\n        kind: human\n" +
+				"        contact:\n          slack_user_id: U0LEAD\n",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			// NOT A REFUSAL: the document parses and validates.
+			c, err := config.ParseCompany([]byte(tc.doc))
+			if err != nil {
+				t.Fatalf("a company with no human seat was refused — it is "+
+					"legitimate for a company its agents run alone: %v", err)
+			}
+			var advised []config.Warning
+			for _, w := range c.Warnings() {
+				if w.Path == "roles" {
+					advised = append(advised, w)
+				}
+			}
+			if !tc.advised {
+				if len(advised) != 0 {
+					t.Errorf("a company declaring a human seat was advised "+
+						"nobody can join it: %+v", advised)
+				}
+				return
+			}
+			if len(advised) != 1 {
+				t.Fatalf("warnings at `roles` = %+v, want the one advisory "+
+					"that nobody can be invited or created", advised)
+			}
+			w := advised[0]
+			if w.Kind != config.WarningAdvisory || w.Seat != "" || w.Unit != "" ||
+				!reflect.DeepEqual(w.Segments, config.Path{"roles"}) {
+				t.Errorf("warning = %+v, want an advisory at `roles` about no "+
+					"seat or unit in particular", w)
+			}
+			// WHAT HAPPENS, WHEN IT IS FINE, AND WHAT TO DO.
+			for _, says := range []string{
+				"no `kind: human` seat", "nobody can be invited",
+				"agents run it alone", "add a human seat for each person",
 			} {
-				if !strings.Contains(err.Error(), want) {
-					t.Errorf("refusal = %q, want it to say %q", err, want)
+				if !strings.Contains(w.Message, says) {
+					t.Errorf("the advisory does not say %q: %q", says, w.Message)
 				}
 			}
 		})
@@ -424,10 +650,9 @@ func TestANativeBackendNeedsAStreamThatSurvivesARestart(t *testing.T) {
 
 // THE TWO TIERS TOGETHER SAY WHAT NEITHER CAN ALONE: a company hosting code on
 // the default object store of a fleet, whose every bucket member then holds
-// every pack; a git node whose explicit budget cannot hold a repository at its
-// size limit; and a git node whose disabled guard lets nobody push. Each fires
-// on its trigger and on none of its negations, and either document absent is
-// no warning.
+// every pack, and a git node whose explicit budget cannot hold a repository at
+// its size limit. Each fires on its trigger and on none of its negations, and
+// either document absent is no warning.
 //
 // Mutation: drop any one rule, and its row goes red.
 func TestTierWarningsSayWhatTheTwoTiersDoTogether(t *testing.T) {
@@ -470,17 +695,6 @@ func TestTierWarningsSayWhatTheTwoTiersDoTogether(t *testing.T) {
 		"a small budget where no code is hosted": {func(b *config.Bootstrap) {
 			b.Git.CacheMaxBytes = 8 * gib
 		}, false, ""},
-
-		"a git node behind a disabled guard": {func(b *config.Bootstrap) {
-			b.API.Auth.Disabled = true
-		}, true, "api.auth.disabled"},
-		"a node serving no git behind a disabled guard": {func(b *config.Bootstrap) {
-			b.Node.Roles = []string{"data", "ingress", "seats", "workers"}
-			b.API.Auth.Disabled = true
-		}, true, ""},
-		"a disabled guard where no code is hosted": {func(b *config.Bootstrap) {
-			b.API.Auth.Disabled = true
-		}, false, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -501,7 +715,7 @@ func TestTierWarningsSayWhatTheTwoTiersDoTogether(t *testing.T) {
 	}
 	b, c := config.DefaultBootstrap(), config.DefaultCompany()
 	c.Code.Native = true
-	b.API.Auth.Disabled = true
+	b.Git.CacheMaxBytes = 8 * gib
 	if got := config.TierWarnings(nil, &c); got != nil {
 		t.Errorf("no bootstrap: warned %+v", got)
 	}
@@ -565,11 +779,12 @@ func TestOnlyADeclaredIngressNodeIsWarnedForBindingNothing(t *testing.T) {
 		"a declared ingress node with a port": func(b *config.Bootstrap) {
 			b.Node.Roles = []string{"data", "ingress", "seats", "workers"}
 			b.API.Port = 8080
+			config.ServeAPI(b)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			b := config.DefaultBootstrap()
+			b := config.RunnableBootstrap()
 			b.Stream.StoreDir = "/var/lib/crewlet/stream"
 			b.Retention.BackupOwner = "platform-oncall"
 			mutate(&b)

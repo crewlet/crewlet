@@ -27,14 +27,14 @@ roles:
 units:
   - name: Engineering
     id: eng
-    lead: CTO
+    lead: cto
     roles:
       - name: CTO
         handle: cto
         code: {access: full_access}
     children:
       - name: Platform
-` + platformID + `        lead: Plat Lead
+` + platformID + `        lead: plat-lead
         roles:
           - name: Plat Lead
             handle: plat-lead

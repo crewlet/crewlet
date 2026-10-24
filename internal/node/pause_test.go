@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/google/uuid"
 )
 
 // pausedHold is the hold a person's pause takes, spelled as the engine spells
@@ -33,10 +33,12 @@ func TestPlacementMovingAPausedSeatKeepsItPaused(t *testing.T) {
 			f := newFleet(t, sub, "ceo")
 			var mu sync.Mutex
 			paused := true
-			f.attachHolds = func(string) []string {
+			// ASKED BY THE SEAT'S ID, the key a pause is kept under: a
+			// hold answered for any other seat would hold the wrong mail.
+			f.attachHolds = func(id uuid.UUID) []string {
 				mu.Lock()
 				defer mu.Unlock()
-				if paused {
+				if paused && id == seatID("ceo") {
 					return []string{pausedHold}
 				}
 				return nil
@@ -96,8 +98,7 @@ func resume(t *testing.T, f *fleet, nodeID, handle string) {
 	f.mu.Lock()
 	q := f.queues[nodeID]
 	f.mu.Unlock()
-	if err := q.ResumeTopic(t.Context(), topics.AgentInbox(handle),
-		topics.AgentInboxGroup(handle), pausedHold); err != nil {
+	if err := q.ResumeTopic(t.Context(), inbox(handle), inboxGroup(handle), pausedHold); err != nil {
 		t.Fatalf("ResumeTopic: %v", err)
 	}
 }

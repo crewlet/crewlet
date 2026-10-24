@@ -37,9 +37,10 @@ import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.ts
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { plural } from "~/lib/format.ts";
-import type { SeatRing } from "~/lib/seats.ts";
-import type { WorkItem, WorkSummary } from "~/protocol/index.ts";
+import type { AvatarStatus } from "@crewlethq/ui";
+import type { LogRefusal, QueryRefusal, WorkItem, WorkSummary } from "~/protocol/index.ts";
 import { useItemEdits } from "./edit.tsx";
+import { itemPath } from "~/lib/work.ts";
 
 /** The title, drawn as the page's heading and edited in place. */
 export function ItemTitle({ item }: { item: WorkItem }) {
@@ -227,16 +228,13 @@ export function Checklists({ item, chrome }: { item: WorkItem; chrome: RowChrome
                       </span>
                       <span className="task-check-name">{entry.name}</span>
                     </label>
-                    {entry.promoted_to && (
-                      <a className="t-link" href={href(["work", entry.promoted_to])}>
-                        became a sub-task →
-                      </a>
-                    )}
+
                     {entry.assignee && (
                       <Assignee
                         handle={entry.assignee}
                         seatName={chrome.seatName}
                         seatKind={chrome.seatKind}
+                        seatAvatar={chrome.seatAvatar}
                       />
                     )}
                   </li>
@@ -257,18 +255,21 @@ export function Checklists({ item, chrome }: { item: WorkItem; chrome: RowChrome
 export function Subtasks({
   rows,
   error,
+  refusal = null,
   chrome,
   parent,
-  ringOf,
+  statusOf,
   peek,
 }: {
   rows: WorkSummary[];
   error?: string | null;
+  /** What the refusal said beyond its code — see `useQuery`. */
+  refusal?: QueryRefusal | LogRefusal | null;
   chrome: RowChrome;
   /** The task a new sub-task is filed under; absent where none may be added. */
   parent?: WorkItem;
-  /** The ring round a holder's badge — their seat's state. */
-  ringOf?: (handle: string) => SeatRing | undefined;
+  /** The glyph on a holder's badge: their seat's state. */
+  statusOf?: (handle: string) => AvatarStatus | undefined;
   /**
    * Open a child in the rail instead of navigating to it. ABSENT IS A REAL
    * SETTING — the row stays the plain link it already is — and the peek
@@ -284,7 +285,7 @@ export function Subtasks({
         <div className="task-subtasks-head">
           <span className="task-subtasks-title">Sub-tasks</span>
         </div>
-        <QueryState error={error} loading={false} />
+        <QueryState error={error} refusal={refusal} loading={false} />
       </section>
     );
   }
@@ -321,7 +322,7 @@ export function Subtasks({
         <a
           key={row.id}
           className="task-subtask"
-          href={href(["work", row.key])}
+          href={href(itemPath(row))}
           onClick={
             peek
               ? (event) => {
@@ -340,7 +341,8 @@ export function Subtasks({
             handle={row.assignee}
             seatName={chrome.seatName}
             seatKind={chrome.seatKind}
-            ring={row.assignee ? ringOf?.(row.assignee) : undefined}
+            seatAvatar={chrome.seatAvatar}
+            status={row.assignee ? statusOf?.(row.assignee) : undefined}
           />
         </a>
       ))}

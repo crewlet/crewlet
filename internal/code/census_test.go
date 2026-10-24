@@ -29,7 +29,7 @@ func TestABarrierCostsTheCodeLogWhatTheCensusSays(t *testing.T) {
 			t.Parallel()
 			log := openLog(t)
 			spec := code.Domain{}.Stream()
-			reserve, err := statelog.NewReserve(spec.Name,
+			reserve, err := statelog.NewReserve(spec,
 				func(ctx context.Context) (statelog.Usage, error) {
 					stats, err := log.Stats(ctx)
 					return statelog.Usage{Bytes: stats.Bytes, MaxBytes: stats.MaxBytes}, err
@@ -37,7 +37,9 @@ func TestABarrierCostsTheCodeLogWhatTheCensusSays(t *testing.T) {
 			if err != nil {
 				t.Fatalf("build the gate reserve: %v", err)
 			}
-			index, err := statelog.NewReadIndex(code.Domain{}, spec, log, reserve,
+			// SIGNED AS EVERY BARRIER A NODE APPENDS IS, since the frame is
+			// part of what the log stores and so of what a barrier costs it.
+			index, err := statelog.NewReadIndex(code.Domain{}, spec, log, testSigner(t), reserve,
 				code.EncodeBarrier, func() uint32 { return generation }, nil)
 			if err != nil {
 				t.Fatalf("build the read index: %v", err)

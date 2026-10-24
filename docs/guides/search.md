@@ -103,10 +103,10 @@ words are half of what was asked for.
 phrase is the seam's PROBE: it runs nothing and reads nothing, and answers
 `modes` and — for the mode asked — the `degraded` the CONFIGURATION decides
 (`no_embeddings`, `unsupported`; never a transient `embedding_failed`, which is
-a property of one search). The dashboard's Knowledge tree asks it for
-`semantic` and disables a mode the answer does not list, with the reason
-written under the control, rather than letting a reader pick Meaning and find
-out from a degraded answer. The same answer sets the dashboard's DEFAULT:
+a property of one search). The dashboard's Knowledge search asks it for
+`semantic` and disables a mode the answer does not list, with the reason as
+that mode's second line in the menu beside the field, rather than letting a
+reader pick Meaning and find out from a degraded answer. The same answer sets the dashboard's DEFAULT:
 Hybrid where it is served, otherwise the first mode listed — Keyword on a
 company with no embeddings provider — so a search nobody chose a mode for runs
 in a mode the engine serves as asked instead of reporting a degradation of a
@@ -254,7 +254,7 @@ And a third: a node whose **copy is out of service** for what the search reads
 knowledge search — is wrong rather than behind (its applier stopped, its rows
 below the log), and its index is over rows that stopped being the fleet's. It
 answers its range saying so, and is counted missing the same way
-([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-a-domains-fault-takes-only-its-own-copy-out-of-service.md)).
+([ADR-0045](https://github.com/crewlet/crewlet/blob/main/adr/0045-a-domains-fault-takes-only-its-own-copy-out-of-service.md)).
 One whose copy of the **vectors** is out of service still covers its range with
 the keyword half and answers without the vector scan, which is reported as
 `semantic_partial` rather than as a missing range.
@@ -347,7 +347,7 @@ moment ago lists its links once the next lap reads it. The links are read from
 the pages' and the tasks' rows both, so they are answered by a data node whose
 copies of **both** the knowledge base and the tracker are in service — the
 node asked, when its own copy of either is out of service, is another one
-([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-a-domains-fault-takes-only-its-own-copy-out-of-service.md)) —
+([ADR-0045](https://github.com/crewlet/crewlet/blob/main/adr/0045-a-domains-fault-takes-only-its-own-copy-out-of-service.md)) —
 and `linked_from_status: unavailable` when no data node's are.
 
 It has the index's first lap too. Until a node has finished its first lap over

@@ -199,6 +199,43 @@ func TestATypeMismatchIsReportedAsOne(t *testing.T) {
 	}
 }
 
+// A FIELD THE PAYLOAD DOES NOT HAVE IS REFUSED BY NAME, at any depth, and
+// the submission is not recorded.
+//
+// A plain unmarshal DROPS it, so a model that misspelt an optional field had
+// its submission accepted as though it had said less — and was never told
+// which field it got wrong. Refused, it goes back to the model, which is the
+// one failure a model reliably fixes.
+func TestAFieldThePayloadDoesNotHaveIsRefusedByName(t *testing.T) {
+	t.Parallel()
+	tl := tool()
+	res, err := tl.Call(context.Background(), map[string]any{"decision": "yes", "not": "x"})
+	if err != nil {
+		t.Fatalf("Call returned a Go error: %v", err)
+	}
+	if !res.Failed || !strings.Contains(res.Output, `"not"`) {
+		t.Fatalf("output = %q, want the misspelt field refused by name", res.Output)
+	}
+	if _, ok := tl.Value(); ok {
+		t.Error("a refused submission was recorded as the answer")
+	}
+
+	// NESTED TOO: a field inside a list of objects is the same drop one
+	// level down, and the one a schema built of task lists hides best.
+	var plan struct {
+		Tasks []struct {
+			ID    string   `json:"id"`
+			After []string `json:"after"`
+		} `json:"tasks"`
+	}
+	err = structured.Remarshal(map[string]any{"tasks": []any{
+		map[string]any{"id": "b", "afer": []any{"a"}},
+	}}, &plan)
+	if err == nil || !strings.Contains(err.Error(), `"afer"`) {
+		t.Errorf("a nested misspelt field answered %v, want it refused by name", err)
+	}
+}
+
 // Arguments that cannot be encoded at all fail the SUBMISSION, not the turn.
 func TestArgumentsThatCannotBeReEncodedFailTheSubmission(t *testing.T) {
 	t.Parallel()

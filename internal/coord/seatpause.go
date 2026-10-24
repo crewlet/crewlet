@@ -4,6 +4,10 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // A SEAT PAUSE is a person's decision that one seat stops taking work until
@@ -28,6 +32,11 @@ import (
 // nobody set. What ends a pause is a person resuming it, or the seat leaving
 // the company (the apply that removes it clears the record).
 //
+// # Keyed on the seat's IDENTITY
+//
+// The record is filed under the seat's agent id, derived from its handle
+// (ADR-0013), as the inbox the hold sits on is.
+//
 // # Compare-and-set
 //
 // Two people can pause and resume one seat at once, and the one outcome that
@@ -41,21 +50,20 @@ import (
 
 // SeatPause is one paused seat, as the coordination store holds it.
 type SeatPause struct {
-	// Handle is the paused seat, and the record's key.
-	Handle string `json:"handle"`
+	// Seat is the paused seat's id — its agent id — and the record's key.
+	Seat uuid.UUID `json:"seat"`
 
-	// By is who paused it — the author of the write: for a person acting
-	// through a credential, the token's own name, exactly as a tracker
-	// write made through the same credential names it.
-	By string `json:"by"`
-
-	// OperatorID is the credential the pause was made under, and Seat the
-	// chart seat that credential is bound to — the PERSON — empty for a
-	// credential nobody bound. Two facts, as on every operator write: the
-	// credential is what an audit asks about, the person is who a screen
-	// names.
-	OperatorID string `json:"operator_id,omitempty"`
-	Seat       string `json:"seat,omitempty"`
+	// By is who paused it, ByKind what sort of author that is, and
+	// OperatorID the credential they acted through: internal/iam's
+	// [iam.Actor] for the request, exactly as every other write the same
+	// principal makes records it. A person bound to a seat pauses AS that
+	// seat, kind human, with their credential beside it; a credential
+	// nobody is bound through pauses under its own login, kind operator.
+	// The credential is what an audit asks about, the author is who a
+	// screen names.
+	By         string        `json:"by"`
+	ByKind     iam.ActorKind `json:"by_kind"`
+	OperatorID string        `json:"operator_id,omitempty"`
 
 	// Reason is why, in the pauser's own words. Optional.
 	Reason string `json:"reason,omitempty"`
@@ -76,13 +84,21 @@ type SeatPause struct {
 }
 
 // Validate reports why a pause cannot be written.
+//
+// A kind this build cannot name is refused on the way IN, and only there: a
+// record read back keeps whatever kind it carries ([iam.ActorKind.Valid] is
+// how a reader tells), but this build writes nothing it could not itself
+// have decided.
 func (p SeatPause) Validate() error {
 	switch {
-	case p.Handle == "":
-		return errors.New("coord: a seat pause needs the handle of the seat it pauses")
+	case p.Seat == uuid.Nil:
+		return errors.New("coord: a seat pause needs the id of the seat it pauses")
 	case p.By == "":
 		return errors.New("coord: a seat pause needs who paused it: a pause nobody " +
 			"can be named for is one nobody can be asked about")
+	case !p.ByKind.Valid():
+		return errors.New("coord: a seat pause needs what sort of author paused it " +
+			"(iam.ActorFor's kind): agent, human, operator or system")
 	case p.At.IsZero():
 		return errors.New("coord: a seat pause needs the instant it was taken")
 	}
@@ -93,9 +109,25 @@ func (p SeatPause) Validate() error {
 // register.
 const SeatPauseClass = "seat_pause"
 
-// SeatPauseKey is a seat's key in the register. See [PositionKey] for the
-// classes that share it and why none of them may age.
-func SeatPauseKey(handle string) string { return DocumentKey(SeatPauseClass, handle) }
+// SeatPauseKey is a seat's key in the register, by the seat's id. See
+// [PositionKey] for the classes that share it and why none of them may age.
+func SeatPauseKey(seat uuid.UUID) string { return DocumentKey(SeatPauseClass, seat.String()) }
+
+// SeatPauseSeat recovers the seat's id from a key of the pause class. It
+// reports false for a key of another class and for one whose name is not a
+// seat id in canonical form — a key this build did not write names no seat,
+// for [SeatID]'s reason.
+func SeatPauseSeat(key string) (uuid.UUID, bool) {
+	segments, ok := DocumentSegments(key)
+	if !ok || len(segments) != 2 || segments[0] != SeatPauseClass {
+		return uuid.Nil, false
+	}
+	id, err := uuid.Parse(segments[1])
+	if err != nil || id == uuid.Nil || id.String() != segments[1] {
+		return uuid.Nil, false
+	}
+	return id, true
+}
 
 // SeatPauseUpdate is one change a pause watch delivers.
 type SeatPauseUpdate struct {
@@ -103,8 +135,9 @@ type SeatPauseUpdate struct {
 	// pause was lifted.
 	Pause *SeatPause
 
-	// Handle names the seat the update is about. Empty on the marker.
-	Handle string
+	// Seat names the seat the update is about, by its id. uuid.Nil on the
+	// marker.
+	Seat uuid.UUID
 
 	// Current marks the end of the records that existed when the watch
 	// started: every update before it is one of those, and every update
@@ -122,10 +155,11 @@ type SeatPauseUpdate struct {
 // never be able to say that: a seat somebody stopped because it was doing
 // damage would start again on a two-second blip.
 type SeatPauses interface {
-	// SeatPause reads one seat's pause.
-	SeatPause(ctx context.Context, handle string) (SeatPause, bool, error)
+	// SeatPause reads one seat's pause, by the seat's id.
+	SeatPause(ctx context.Context, seat uuid.UUID) (SeatPause, bool, error)
 
-	// ListSeatPauses returns every pause, ordered by handle.
+	// ListSeatPauses returns every pause, ordered by seat id, so two
+	// backends answer in the same order.
 	ListSeatPauses(ctx context.Context) ([]SeatPause, error)
 
 	// CreateSeatPause writes a pause for a seat that has none, returning
@@ -140,7 +174,7 @@ type SeatPauses interface {
 
 	// DeleteSeatPause lifts a pause at a version, reporting whether that
 	// version still held. A version of zero never holds.
-	DeleteSeatPause(ctx context.Context, handle string, version uint64) (bool, error)
+	DeleteSeatPause(ctx context.Context, seat uuid.UUID, version uint64) (bool, error)
 
 	// WatchSeatPauses streams every pause that exists, then the
 	// [SeatPauseUpdate.Current] marker, then every change after it.

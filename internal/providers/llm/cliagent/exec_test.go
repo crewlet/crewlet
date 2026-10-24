@@ -65,6 +65,15 @@ func runFakeCLI() {
 		time.Sleep(time.Duration(delay) * time.Millisecond)
 	}
 	switch {
+	case os.Getenv("FAKE_STORE") == "1":
+		// A CLI that keeps its login, its sessions and their usage in a
+		// database of its own — see credentialstore_test.go.
+		fakeStore()
+	case os.Getenv("FAKE_USAGE_COMMAND") != "" && slices.Contains(os.Args, os.Getenv("FAKE_USAGE_COMMAND")):
+		// A usage command run after the call, told apart from the call by an
+		// argument only it carries, printing FAKE_USAGE_REPORT verbatim —
+		// nothing at all included — and exiting 0.
+		fmt.Print(os.Getenv("FAKE_USAGE_REPORT"))
 	case os.Getenv("FAKE_STUBBORN") == "1":
 		// A CLI that ignores the polite signal and leaves a forking
 		// descendant behind — a Node or Bun runtime under a launcher, which
@@ -125,6 +134,44 @@ func runFakeCLI() {
 			return
 		}
 		fmt.Printf("%s|%s", os.Getenv(os.Getenv("FAKE_READ_SYSTEM_PROMPT")), body)
+	case os.Getenv("FAKE_READ_DISCOVERED") != "":
+		// Reads a file at a path RELATIVE TO ITS WORKING DIRECTORY, FROM
+		// INSIDE THE CHILD, as a CLI that discovers its agents there does —
+		// and prints its argv beside it, so one probe settles that the file
+		// was where the CLI looks and that the argv selected rather than
+		// carried it.
+		path := os.Getenv("FAKE_READ_DISCOVERED")
+		body, err := os.ReadFile(path)
+		if err != nil {
+			fmt.Print("UNREADABLE: ", err)
+			return
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			fmt.Print("UNSTATABLE: ", err)
+			return
+		}
+		fmt.Printf("%s|%o|%s", strings.Join(os.Args[1:], " "), info.Mode().Perm(),
+			base64.StdEncoding.EncodeToString(body))
+	case os.Getenv("FAKE_READ_UNDER_ENV") != "":
+		// Answers, FROM INSIDE THE CHILD, where a relocation variable points
+		// and what is there when the CLI starts: `VAR:rel,rel` prints the
+		// child's working directory, the variable's value, and each file's
+		// bytes under it. The per-call directory is removed on release, so
+		// nothing outside the child can tell a file the CLI found from one
+		// written after it had looked.
+		name, rels, _ := strings.Cut(os.Getenv("FAKE_READ_UNDER_ENV"), ":")
+		cwd, _ := os.Getwd()
+		dir := os.Getenv(name)
+		fmt.Printf("CWD=%s\n%s=%s\n", cwd, name, dir)
+		for rel := range strings.SplitSeq(rels, ",") {
+			body, err := os.ReadFile(filepath.Join(dir, rel))
+			if err != nil {
+				fmt.Printf("%s UNREADABLE: %v\n", rel, err)
+				continue
+			}
+			fmt.Printf("%s=%s\n", rel, base64.StdEncoding.EncodeToString(body))
+		}
 	case os.Getenv("FAKE_REPORT_ENV") != "":
 		// Reports whether one named variable reached the child, FROM
 		// INSIDE it. The parent cannot answer this: what an invocation
@@ -446,19 +493,22 @@ func TestAnEmptyAnswerIsRetryableRatherThanFatal(t *testing.T) {
 }
 
 // The environment is an ALLOWLIST. A child that inherited os.Environ() would
-// hand every seat the org's chat token and its database DSN, and would
-// silently bill a metered key that happened to be exported.
+// hand every seat the org's chat token and the engine's collector credential,
+// and would silently bill a metered key that happened to be exported.
 func TestTheChildEnvironmentIsAnAllowlist(t *testing.T) {
 	t.Setenv("SLACK_BOT_TOKEN", "xoxb-not-for-the-child")
-	t.Setenv("CREWLET_STORE_DSN", "file:/var/lib/crewlet/state.db")
+	t.Setenv("OTEL_EXPORTER_OTLP_HEADERS", "authorization=Bearer%20otlp-ingest-not-for-the-child")
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-should-not-be-billed")
+	t.Setenv("CREWLET_SECRET_KEY_2026_01", "keyring-material-not-for-the-child")
 
 	p := fakeProvider(t, map[string]string{"FAKE_DUMP_ENV": "1"}, nil)
 	comp, err := ask(t, p, llm.Request{})
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	for _, leaked := range []string{"SLACK_BOT_TOKEN", "CREWLET_STORE_DSN", "ANTHROPIC_API_KEY"} {
+	for _, leaked := range []string{
+		"SLACK_BOT_TOKEN", "OTEL_EXPORTER_OTLP_HEADERS", "ANTHROPIC_API_KEY", "CREWLET_SECRET_KEY_2026_01",
+	} {
 		if strings.Contains(comp.Content, leaked+"=") {
 			t.Errorf("%s reached the child:\n%s", leaked, comp.Content)
 		}

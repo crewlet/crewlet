@@ -81,12 +81,24 @@ type Backends struct {
 	// merely dialled.
 	stopServer func()
 
-	// conn is the NATS connection the coordination store rides when it
-	// shares the stream's broker. Held so Close can release it; the store
-	// does not own it, because on an embedded topology the SERVER owns the
-	// lifetime and closing the connection from underneath it would take
-	// the stream down with the leases.
+	// conn is the SECOND connection, the one the coordination store rides
+	// on an embedded broker — dialled through [jetstream.Queue.DialWatched],
+	// so NATS closing it for good stops the node as the queue's own would.
+	// Held here so Close releases it in its place in the order, after the
+	// queue and before the server; the store does not own it. Nil on an
+	// external broker, where the store rides the queue's own.
 	conn *nats.Conn
+
+	// rides is the connection the coordination store rides on EVERY
+	// topology: conn above on an embedded broker, the queue's own on an
+	// external one. Not owned here — see [Backends.CoordinationConn].
+	rides *nats.Conn
+
+	// coordination is the JetStream client over rides, in the API this
+	// node's broker is addressed in — what the coordination stores were
+	// opened with, and what [Backends.CoordinationJetStream] hands the
+	// subsystems that ride the same connection.
+	coordination natsjs.JetStream
 
 	// api is the JetStream API this node's broker is addressed in.
 	api jsapi.API
@@ -95,6 +107,12 @@ type Backends struct {
 	// a member can answer in process: the metadata group's membership. Nil
 	// on an external stream, and on backends a caller lent without one.
 	broker brokerMembership
+
+	// death is that same embedded broker declaring it cannot go on — see
+	// [Engine.watchBroker]. Nil on an external stream, whose broker is its
+	// own operator's to keep alive and whose loss the client reconnects
+	// through.
+	death brokerDeath
 }
 
 // Complete reports which of the four a Backends lacks, or nil when it holds
@@ -136,20 +154,52 @@ func (b *Backends) Complete() error {
 // has to address too. See [jsapi].
 func (b *Backends) API() jsapi.API { return b.api }
 
-// Conn exposes the broker connection this node's coordination store rides.
+// Conn exposes the broker connection this node's coordination store rides
+// on an EMBEDDED broker, and nil on an external one.
 //
-// For the ONE subsystem that has to talk to the broker outside the queue
-// contract and outside coordination: the backup, which snapshots the streams
-// themselves. The estate it copies is not addressable any other way — on the
+// For the ONE subsystem whose answer differs between the two: the backup,
+// which snapshots the streams themselves. The estate it copies is not addressable any other way — on the
 // default topology the broker is embedded here and binds no socket — so a
 // backup that could not reach this connection could not exist.
 //
 // Nil when this node DIALLED an external broker: the queue owns that
 // connection, and the streams belong to a cluster with its own backup tooling.
-// The caller takes no ownership: closing it is [Backends.Close]'s job, and
-// closing it from underneath an embedded server would take the stream down with
-// the leases.
+// The caller takes no ownership: closing it is [Backends.Close]'s job, and a
+// caller that closed it would take this node's leases down with it SILENTLY —
+// a close this process makes itself is never the loss the node stops for.
 func (b *Backends) Conn() *nats.Conn { return b.conn }
+
+// CoordinationConn is the broker connection this node's coordination store
+// rides, on every topology: the second connection [Backends] owns on an
+// embedded broker, the queue's own on an external one. Nil only where there is
+// no broker at all — a Backends a caller assembled around the memory twin.
+//
+// For a subsystem that talks to the broker outside the queue contract and
+// whose answer does NOT depend on who runs the broker: the seat memory
+// changelog, which a node publishes and a peer replays whichever broker the
+// fleet shares. It read [Backends.Conn] once, whose nil is the backup's
+// decision about an external cluster's streams, so every fleet on
+// `stream.type: nats` carried no seat's memory at all, and a seat placement
+// moved forgot everything it had learned, with nothing saying so.
+//
+// THE COORDINATION STORE'S CONNECTION rather than the queue's on an embedded
+// broker, so what a subsystem here does in volume (a seat's replay is an
+// ordered consumer over its whole history) never sits on the read loop every
+// mailbox consumes through. The caller takes no ownership.
+func (b *Backends) CoordinationConn() *nats.Conn { return b.rides }
+
+// CoordinationJetStream is the JetStream client over [Backends.CoordinationConn],
+// in the API this node's broker is addressed in ([jsapi]) — the client the
+// coordination stores themselves were opened with — or nil where there is no
+// broker at all.
+//
+// THE CLIENT AND NOT THE CONNECTION, because the client is where the API is
+// decided: one built over the connection with the defaults reaches a member's
+// JetStream and times out on a leaf's, whose JetStream is the members' under
+// their domain. A subsystem that rides this connection — the seat memory
+// changelog — rides it in the API the stores do, on every topology. The
+// caller takes no ownership.
+func (b *Backends) CoordinationJetStream() natsjs.JetStream { return b.coordination }
 
 // Close releases both slots, in the reverse order of acquisition.
 //
@@ -219,6 +269,24 @@ func (b *Backends) Close(ctx context.Context) {
 	}
 }
 
+// abandon closes a set a failed boot half-built, and answers err as that boot
+// says it: carrying the cause of a broker connection NATS closed for good, where
+// one was ([lostDuring]), beside the step's own error.
+//
+// THE ONE WAY OUT of [OpenBackends] once a queue exists, so no failing step
+// can reach the operator as a bare "connection closed" while the sentence
+// naming why it closed, and what to change, sits unread on the queue. The cause
+// is read BEFORE the close: the client's closed handler runs on the client's
+// own goroutine once the call that failed has been released, so the read waits
+// for it where a connection is already closed — and after the close every
+// connection reads as closed, its owner's close included, with no handler
+// coming ([jetstream.Queue.LostDuring]).
+func (b *Backends) abandon(ctx context.Context, err error) error {
+	err = lostDuring(b.Queue, err)
+	b.Close(ctx)
+	return err
+}
+
 // backgroundCloser is a coordination store that runs something in the
 // background of its own — the KV store's gate view — and stops it.
 type backgroundCloser interface {
@@ -231,7 +299,7 @@ type backgroundCloser interface {
 // refuses the incoherent combinations, and duplicating those rules here would
 // give an operator two places to read and two chances to disagree. What this
 // adds is the construction, and one rule validation cannot express — an
-// embedded-KV coordination store rides the stream's own NATS connection, so the
+// embedded-KV coordination store lives on the stream's own NATS broker, so the
 // two slots are not independent at runtime even though they are in config.
 //
 // It takes the COMPANY as well as the bootstrap, for one field: the width of
@@ -281,8 +349,7 @@ func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company, r
 	// one.
 	db, err := openStore(ctx, b, c)
 	if err != nil {
-		out.Close(ctx)
-		return nil, err
+		return nil, out.abandon(ctx, err)
 	}
 	out.Store = db
 
@@ -313,6 +380,23 @@ func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company, r
 // opened on the handle this returns when the engine is built ([holdEstate]),
 // whichever caller opened the store.
 func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*store.DB, error) {
+	db, err := store.OpenNode(ctx, b.Store.Path, storeOptions(b, c))
+	if err != nil {
+		return nil, fmt.Errorf("engine: store: %w", err)
+	}
+	return db, nil
+}
+
+// storeOptions is what this node's own database is opened with, decided from
+// Tier A and the company.
+//
+// APART FROM THE OPEN so that what the file is opened as can be asked of a
+// node's configuration without one.
+//
+// NO PINS: the writers the state log's apply loops pin are on the REPLICATED
+// estate's pool, which [holdEstate] sizes for the register ([estateLogs]) on a
+// node that holds it — never on this file, which no apply loop writes.
+func storeOptions(b *config.Bootstrap, c *config.Company) store.Options {
 	opts := store.Options{
 		MaxOpenConns:   b.Store.MaxOpenConns,
 		ReplicatedPath: b.Store.ReplicatedPath,
@@ -340,15 +424,11 @@ func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*st
 	if c != nil && c.Providers.Embeddings != nil {
 		opts.EmbeddingDim = c.Providers.Embeddings.Width()
 	}
-	db, err := store.OpenNode(ctx, b.Store.Path, opts)
-	if err != nil {
-		return nil, fmt.Errorf("engine: store: %w", err)
-	}
-	return db, nil
+	return opts
 }
 
 // openNATS builds a JetStream stream, embedded or external, and the
-// coordination store that rides its connection.
+// coordination store on the same broker.
 //
 // TWO BRANCHES FOR THE STREAM, ONE TAIL FOR COORDINATION. The branches differ
 // only in who owns the broker and therefore who owns the connection; what is
@@ -425,22 +505,21 @@ func openNATS(ctx context.Context, b *config.Bootstrap, rec *metrics.Recorder) (
 	if err != nil {
 		return nil, err
 	}
+	out.rides = conn
 	out.api = cfg.API()
 	// IN THE API THE STREAM'S OWN CLIENT SPEAKS, over the connection
 	// coordination rides — see [jsapi] for why a client built any other
 	// way reaches a member's JetStream and times out on a leaf's.
 	js, err := out.api.Client(conn)
 	if err != nil {
-		out.Close(ctx)
-		return nil, fmt.Errorf("engine: coordination: %w", err)
+		return nil, out.abandon(ctx, fmt.Errorf("engine: coordination: %w", err))
 	}
+	out.coordination = js
 	if err = attachCoordination(ctx, b, out, js); err != nil {
-		out.Close(ctx)
-		return nil, err
+		return nil, out.abandon(ctx, err)
 	}
 	if err = openObjects(ctx, b, out, js, rec); err != nil {
-		out.Close(ctx)
-		return nil, err
+		return nil, out.abandon(ctx, err)
 	}
 	return out, nil
 }
@@ -521,8 +600,10 @@ func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js nat
 		// derives it. Sized against the shipped heartbeat instead, a
 		// 15-second lease (renewed every five) waited 20 s behind the
 		// window at the floor and lapsed.
+		reservation, explicit := objectsReservation(ctx, b, out.Queue)
 		backend, err := natsobj.Open(openCtx, js, natsobj.Config{
 			Replicas: b.Stream.Replicas, Clustered: clusteredStream(b),
+			MaxBytes: reservation, Explicit: explicit,
 			AcrossLink:     b.BrokerKind() != placement.BrokerMember,
 			LeaseHeartbeat: effectiveLeaseTTL(b, out.Coord) / seat.HeartbeatRatio,
 		})
@@ -535,14 +616,134 @@ func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js nat
 	return nil
 }
 
+// THE NATS BUCKET'S RESERVATION, and what it is carved out of.
+//
+// The broker grants a stream its whole ceiling when it creates it, against one
+// limit (stream.store_max_bytes, or the share of its volume the embedded
+// broker takes). The state logs reserve [StreamBudgetShare] of what it can
+// grant; every seat's mailbox and every coordination bucket reserve nothing
+// and share what is left. The bucket is given a reservation of its own
+// (internal/objstore/natsobj says why it may not grow into that remainder),
+// so it is sized here, beside the logs' share and a floor the remainder keeps.
+//
+// ITS RESERVATION IS SPENT BEFORE THE LOGS ARE SIZED. The object store opens
+// with the backends, ahead of the state logs, so the logs size themselves
+// from what the broker has left once the bucket holds its reservation
+// ([logsGrantable]) and every restart divides the same remainder, which keeps
+// the logs' ceilings reproducible from boot to boot. That holds on a broker
+// that states no limit too: the free space standing in for the limit is
+// spent by the bucket's reservation, which the broker still reports, so the
+// bucket and the logs never reserve more between them than they would under a
+// stated limit of that size.
+
+// objectsCoordinationFloor is what the derived reservation always leaves the
+// broker beside the state logs' share: the mailboxes and coordination buckets
+// reserve nothing and grow inside it.
+//
+// A GIBIBYTE, the figure the object storage review states, and the size of the
+// smallest corpus-sized log ([MinDomainCeiling]): the leases, ledgers and
+// counters are kilobytes each, and the mailboxes are bounded by the event
+// retention, so a gibibyte is months of a reference company's coordination
+// traffic even with nothing trimmed.
+const objectsCoordinationFloor int64 = 1 << 30
+
+// objectsBucketShare is the most of the broker's limit the derived reservation
+// takes: a quarter, the review's figure. Half of the limit is the state logs',
+// and a quarter left over keeps the coordination remainder as large as the
+// bucket however full the bucket gets.
+const objectsBucketShare = 4
+
+// budgetReader is the broker as the bucket's reservation is sized against it:
+// the JetStream queue's own budget read, declared here by its one caller.
+type budgetReader interface {
+	StreamBudget(ctx context.Context) (jetstream.StorageBudget, error)
+}
+
+// objectsReservation is the byte reservation the nats bucket is created with,
+// and whether an operator wrote it (store.objects.nats_max_bytes). An unset
+// one is derived from the broker's limit ([derivedObjectsReservation]); where
+// the broker states none this node can read, from the stream volume's free
+// space, which is the one figure it has, as the logs' sizing does.
+func objectsReservation(ctx context.Context, b *config.Bootstrap, q any) (int64, bool) {
+	if set := b.Store.Objects.NatsMaxBytes; set > 0 {
+		return set, true
+	}
+	limit := int64(-1)
+	if broker, ok := q.(budgetReader); ok {
+		readCtx, cancel := context.WithTimeout(ctx, jsprovision.LookupBudget)
+		budget, err := broker.StreamBudget(readCtx)
+		cancel()
+		switch {
+		case err != nil:
+			log.WarnContext(ctx, "objects_reservation_budget_unread", "error", err.Error(),
+				"detail", "the nats bucket's reservation is derived from this node's "+
+					"free space instead; set store.objects.nats_max_bytes to choose it")
+		case budget.Limit >= 0:
+			limit = budget.Limit
+		}
+	}
+	if limit < 0 {
+		volume := streamVolume(b)
+		free, err := volumeFree(volume)
+		if err != nil {
+			log.WarnContext(ctx, "objects_reservation_free_space_unmeasured",
+				"path", volume, "error", err.Error(),
+				"detail", "the nats bucket is reserved at its smallest; set "+
+					"store.objects.nats_max_bytes to choose it")
+		}
+		limit = free
+	}
+	reservation := derivedObjectsReservation(limit, b.Stream.DeclaredLogCeilings())
+	log.InfoContext(ctx, "objects_reservation_derived", "bytes", reservation,
+		"broker_limit", limit, "detail", "a bucket created now reserves this much "+
+			"of the broker; one that exists keeps the ceiling it holds")
+	return reservation, false
+}
+
+// derivedObjectsReservation is the reservation an unset
+// store.objects.nats_max_bytes takes against a broker limit of limit bytes,
+// beside state-log ceilings an operator declared summing to declared: the
+// smaller of [objectsBucketShare] of the limit and what the limit leaves once
+// the logs' share (or the declared ceilings, where they exceed it) and
+// [objectsCoordinationFloor] are taken out, held inside the bounds Tier A
+// accepts for the field.
+//
+// Pure arithmetic, so every case is a table row rather than a broker.
+func derivedObjectsReservation(limit, declared int64) int64 {
+	logs := max(int64(float64(limit)*StreamBudgetShare), declared)
+	share := min(limit/objectsBucketShare, limit-logs-objectsCoordinationFloor)
+	return min(max(share, config.NatsObjectsMaxBytesFloor), config.NatsObjectsMaxBytesCeiling)
+}
+
 // openStream dials or starts the broker, and answers the connection
 // coordination should ride.
 //
-// THE COORDINATION STORE RIDES THE STREAM'S CONNECTION either way. A second
-// dial would work and would be worse: two connections to one broker fail
-// independently, so a node could hold live leases over a connection that
-// still works while the one carrying its inbox has dropped — alive to its
-// peers, deaf to its work.
+// THE COORDINATION STORE LIVES ON THE STREAM'S BROKER either way, and that is
+// ADR-0001: one estate, so reaching the leases is reaching the mail. Which
+// CONNECTION it rides differs by topology. On an external broker it is the
+// queue's own. On the embedded one it is a SECOND connection to the same
+// in-process server, which the seat-memory replay and the backup's stream
+// copies ride too, so that neither — an ordered consumer over a seat's whole
+// history, a copy of whole streams — sits on the read loop every mailbox
+// consumes through.
+//
+// Two connections fail independently, and the hazard in that is a node holding
+// live leases over the one that still works while the one carrying its inbox
+// is gone — alive to its peers, deaf to its work. So the second one is dialled
+// WATCHED ([jetstream.Queue.DialWatched]): NATS closing either connection for
+// good stops the node ([Engine.Fatal]), and the split lasts no longer than a
+// reconnect.
+//
+// A NODE WITHOUT `data` IS THE EMBEDDED BRANCH TOO, as a LEAF: its in-process
+// server runs no JetStream of its own and links to the members' listeners
+// (ADR-0025), so both its connections reach JetStream through that link, under
+// the members' domain — which is why every client built over them is built in
+// the API the stream speaks ([jetstream.Config.API]) rather than with the
+// client's defaults.
+//
+// EVERY QUEUE THIS OPENS CARRIES THE CALLER'S OPTIONS — the node every event
+// it publishes is stamped with ([queue.WithNode]) — on both branches, so an
+// event's origin names this node whichever broker topology it rode.
 func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config,
 	opts ...queue.Option,
 ) (*Backends, *nats.Conn, error) {
@@ -576,11 +777,17 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config,
 		server.Shutdown()
 		return nil, nil, fmt.Errorf("engine: stream client: %w", err)
 	}
-	out := &Backends{Queue: q, stopServer: server.Shutdown, broker: server}
-	conn, err := server.Conn()
+	out := &Backends{Queue: q, stopServer: server.Shutdown, broker: server,
+		death: server.Death()}
+	// WATCHED, through the queue: this connection holds every lease the
+	// node renews, so NATS closing it for good is the node's loss exactly
+	// as the queue's own connection closing is, and the queue reports both
+	// as one ([jetstream.Queue.Lost]). A donor's second connection is the
+	// one that is not — see [jetstream.Queue.DialOwned].
+	conn, err := q.DialWatched()
 	if err != nil {
-		out.Close(ctx)
-		return nil, nil, fmt.Errorf("engine: coordination connection: %w", err)
+		return nil, nil, out.abandon(ctx,
+			fmt.Errorf("engine: coordination connection: %w", err))
 	}
 	// OWNED HERE, because this is a SECOND connection to the node's own
 	// in-process server — the queue holds its own. The external branch
@@ -609,10 +816,8 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config,
 // and every one of those has to outlive the PROCESS, on one node as much as
 // on four.
 //
-// It did not, and the consequences were silent: a company's token spend reset
-// to zero on every restart although its bucket is documented as having no
-// retention at all ("a cap is a ceiling for the life of a deployment"), a
-// redelivered trigger after a restart was worked twice, and a detached
+// It did not, and the consequences were silent: a company's token spend for
+// the current window reset to zero on every restart, a redelivered trigger after a restart was worked twice, and a detached
 // sandbox run — a BILLED box — was forgotten by the process that launched it.
 // What persistence the records get is the same choice as the event log's:
 // stream.store_dir.

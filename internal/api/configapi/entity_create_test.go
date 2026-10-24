@@ -31,8 +31,8 @@ func createOnly(summary string) map[string]string {
 // tool block. Nothing else in the document moves either.
 func TestACreateOnlyWriteAddsAnMCPServerAfterTheOthers(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, serversDoc, nil)
+	s := newSurface(t)
+	s.seed(t, serversDoc)
 
 	res := s.do(t, http.MethodPut, "/config/mcp-servers/linear",
 		`{"name":"linear","transport":"http","url":"https://mcp.example.com","headers":{"Authorization":"${LINEAR_TOKEN}"}}`,
@@ -53,9 +53,9 @@ func TestACreateOnlyWriteAddsAnMCPServerAfterTheOthers(t *testing.T) {
 			Name    string            `json:"name"`
 			Headers map[string]string `json:"headers"`
 		} `json:"mcp_servers"`
-		Roles []struct {
-			Handle string `json:"handle"`
-		} `json:"roles"`
+		Providers struct {
+			LLM map[string]json.RawMessage `json:"llm"`
+		} `json:"providers"`
 	}
 	if err := json.Unmarshal([]byte(s.activeDocument(t)), &stored); err != nil {
 		t.Fatal(err)
@@ -67,8 +67,8 @@ func TestACreateOnlyWriteAddsAnMCPServerAfterTheOthers(t *testing.T) {
 	if got := stored.MCPServers[1].Headers["Authorization"]; got != "${LINEAR_TOKEN}" {
 		t.Errorf("the header was stored as %q, want the reference", got)
 	}
-	if len(stored.Roles) != 2 {
-		t.Errorf("the add touched the seats: %+v", stored.Roles)
+	if _, kept := stored.Providers.LLM["zulu"]; !kept || len(stored.Providers.LLM) != 1 {
+		t.Errorf("the add touched the providers: %v", stored.Providers.LLM)
 	}
 }
 
@@ -78,8 +78,8 @@ func TestACreateOnlyWriteAddsAnMCPServerAfterTheOthers(t *testing.T) {
 // a sentence about the company when the caller had asked about one server.
 func TestCreateOnlyAtAnEntityAddressIsAboutTheEntity(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, serversDoc, nil)
+	s := newSurface(t)
+	s.seed(t, serversDoc)
 
 	res := s.do(t, http.MethodPut, "/config/mcp-servers/linear",
 		`{"name":"linear","command":"linear-mcp"}`,
@@ -100,8 +100,8 @@ func TestCreateOnlyAtAnEntityAddressIsAboutTheEntity(t *testing.T) {
 // credentials, so a replace would overwrite what nobody looked at.
 func TestACreateOnlyWriteRefusesANameAlreadyTaken(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, serversDoc, nil)
+	s := newSurface(t)
+	s.seed(t, serversDoc)
 	before := s.activeDocument(t)
 
 	res := s.do(t, http.MethodPut, "/config/mcp-servers/github",
@@ -121,8 +121,8 @@ func TestACreateOnlyWriteRefusesANameAlreadyTaken(t *testing.T) {
 // another server would land under a name the caller did not ask for.
 func TestACreateOnlyWriteKeepsThePathAsTheName(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, serversDoc, nil)
+	s := newSurface(t)
+	s.seed(t, serversDoc)
 
 	res := s.do(t, http.MethodPut, "/config/mcp-servers/linear",
 		`{"name":"jira","command":"jira-mcp"}`, createOnly("add linear"))
@@ -132,13 +132,45 @@ func TestACreateOnlyWriteKeepsThePathAsTheName(t *testing.T) {
 	}
 }
 
-// A SEAT AND A UNIT ARE NOT CREATED BY ADDRESS. Each has a place in the chart
-// — the unit it sits in, its position — that the path does not name, and
-// inventing one would put somebody's new seat where nobody chose.
+// EVERY COLLECTION THIS SURFACE ADDRESSES, IT CREATES BY ADDRESS — but for a
+// seat and a unit, whose members have a place in the company the path cannot
+// name. One added to the table without saying how a member of it is added
+// would reach a create with nothing to call. Mutation: drop one collection's
+// create and this fails.
+func TestEveryCollectionIsCreatable(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t, serversDoc)
+	bodies := map[string]string{
+		configapi.EntityLLMProviders: `{"type":"anthropic","model":"m","api_keys":["k"]}`,
+		configapi.EntityMCPServers:   `{"name":"fresh","command":"fresh-mcp"}`,
+	}
+	for _, kind := range configapi.EntityKinds() {
+		if kind == configapi.EntityRoles || kind == configapi.EntityUnits {
+			continue
+		}
+		body, known := bodies[kind]
+		if !known {
+			t.Errorf("%s is addressed here and this case has no member to add to it: "+
+				"say how one is created, and add it here", kind)
+			continue
+		}
+		res := s.do(t, http.MethodPut, "/config/"+kind+"/fresh?dry_run=true", body,
+			map[string]string{"If-None-Match": "*"})
+		if res.Code != http.StatusOK {
+			t.Errorf("a create-only check of %s = %d, want 200: %s", kind, res.Code, res.Body.String())
+		}
+	}
+}
+
+// A SEAT AND A UNIT ARE NOT CREATED BY ADDRESS. Each has a place in the
+// company — the unit it sits in, its position — that the path does not name,
+// and inventing one would put somebody's new seat where nobody chose. Added
+// through the whole document, or the unit it belongs in.
 func TestASeatIsNotCreatedByAddress(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, serversDoc, nil)
+	s := newSurface(t)
+	s.seed(t, serversDoc)
 
 	for _, kind := range []string{configapi.EntityRoles, configapi.EntityUnits} {
 		res := s.do(t, http.MethodPut, "/config/"+kind+"/newcomer",
@@ -155,8 +187,8 @@ func TestASeatIsNotCreatedByAddress(t *testing.T) {
 // them silently ignored.
 func TestACreateOnlyWriteRefusesAnIfMatchBesideIt(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, serversDoc, nil)
+	s := newSurface(t)
+	s.seed(t, serversDoc)
 	tag := s.do(t, http.MethodGet, "/config", "", nil).Header().Get("ETag")
 
 	headers := createOnly("add linear")
@@ -174,8 +206,8 @@ func TestACreateOnlyWriteRefusesAnIfMatchBesideIt(t *testing.T) {
 // transport with no address) is refused before anything is stored.
 func TestACreateOnlyDryRunStoresNothingAndValidatesTheServer(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, serversDoc, nil)
+	s := newSurface(t)
+	s.seed(t, serversDoc)
 	before := s.activeDocument(t)
 
 	checked := s.do(t, http.MethodPut, "/config/mcp-servers/linear?dry_run=true",
@@ -198,8 +230,8 @@ func TestACreateOnlyDryRunStoresNothingAndValidatesTheServer(t *testing.T) {
 // key identifies it, so the path is the whole of its address.
 func TestACreateOnlyWriteAddsAProviderUnderItsKey(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, serversDoc, nil)
+	s := newSurface(t)
+	s.seed(t, serversDoc)
 
 	res := s.do(t, http.MethodPut, "/config/llm-providers/yankee",
 		`{"type":"anthropic","model":"claude-sonnet-5","api_keys":["${YANKEE_KEY}"]}`,
@@ -225,8 +257,8 @@ func TestACreateOnlyWriteAddsAProviderUnderItsKey(t *testing.T) {
 // founder added them.
 func TestProvidersCreatedOneByOneKeepTheOrderTheyWereAdded(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, serversDoc, nil)
+	s := newSurface(t)
+	s.seed(t, serversDoc)
 
 	for _, key := range []string{"yankee", "alpha"} {
 		res := s.do(t, http.MethodPut, "/config/llm-providers/"+key,

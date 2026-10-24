@@ -42,9 +42,9 @@ import { useNow } from "~/lib/clock.ts";
 import { isRange, useTimeRange, windowParam } from "~/lib/range.ts";
 import { useAgents, useOrg, useOrgBudget } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useServicesRun } from "~/lib/services.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { mayChangeConfig } from "~/lib/useWriteAccess.ts";
-import { DownloadButton } from "~/ui/primitives.tsx";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import type { BudgetWindow } from "~/protocol/types.ts";
 import { ByAgent } from "./ByAgent.tsx";
@@ -55,6 +55,7 @@ import { Hero } from "./Hero.tsx";
 import { PhaseChart } from "./PhaseChart.tsx";
 import { Workers } from "./Workers.tsx";
 import { agentLines, spendCsv, spendOffer, spendWindowParams, windowWords } from "./model.ts";
+import { DownloadButton } from "@crewlethq/ui";
 
 /** The dimensions the chart splits on — the contract's six, and nothing else. */
 const GROUP_VALUES: readonly string[] = GROUPS.map((g) => g.value);
@@ -82,6 +83,7 @@ export function Spend() {
   const budget = useOrgBudget();
   const agents = useAgents();
   const viewer = useViewer();
+  const runs = useServicesRun();
 
   // A REFUSED WINDOW HAS NO FIGURES. The previous answer is still in the
   // hook while the refusal stands, and drawing it under a control that now
@@ -91,16 +93,19 @@ export function Spend() {
   // and nothing is drawn that is not this window's.
   const refused = tokens.error === "bad_params";
   const rollup = refused ? null : tokens.data;
+  // EACH SEAT'S DAY BY ITS AGENT ID, the key the spend row carries too
+  // (`agentLines`).
   const dayOf = useMemo(() => {
-    const byHandle = new Map<string, BudgetWindow | undefined>();
+    const byAgent = new Map<string, BudgetWindow | undefined>();
     for (const a of agents) {
-      if (a.handle)
-        byHandle.set(
-          a.handle,
+      if (a.agent_id) {
+        byAgent.set(
+          a.agent_id,
           a.budget?.windows?.find((w) => w.period === "day"),
         );
+      }
     }
-    return (handle: string) => byHandle.get(handle);
+    return (agentID: string) => byAgent.get(agentID);
   }, [agents]);
   const lines = useMemo(() => agentLines(rollup, dayOf), [rollup, dayOf]);
   const words = rollup ? windowWords(rollup, named) : null;
@@ -110,24 +115,26 @@ export function Spend() {
       <PageActions>
         <TimeRangePicker range={range} ariaLabel="Window" />
         <DownloadButton
-          variant="ghost"
           label="Export"
           filename={`crewlet-spend-${rollup?.from ?? "window"}-${rollup?.to ?? ""}.csv`}
           mime="text/csv;charset=utf-8"
           text={() => (rollup ? spendCsv(rollup, lines, `${rollup.from}..${rollup.to}`) : "")}
           disabled={!rollup}
-          title={
-            rollup
-              ? `The rollup and the by-agent table for ${words}, as CSV — tokens only`
-              : "Nothing to export until the window has answered"
-          }
+          title={rollup ? "Download as CSV" : "Nothing to export until the window has answered"}
         />
       </PageActions>
 
       {/* THE REFUSAL, ABOVE THE FIGURES IT IS ABOUT — in the engine's own
           words where it has some: a window too long, or starting before the
           history, says which and what to change. */}
-      {tokens.error && <QueryState error={tokens.error} detail={tokens.detail} loading={false} />}
+      {tokens.error && (
+        <QueryState
+          error={tokens.error}
+          refusal={tokens.refusal}
+          detail={tokens.detail}
+          loading={false}
+        />
+      )}
 
       {!refused && (
         <div className="spend">
@@ -143,7 +150,9 @@ export function Spend() {
             />
             <PhaseChart series={series} group={group} onGroup={setGroup} zone={zone} />
           </div>
-          <div className="spend-mid">
+          {/* WHO SPENT IT, three ways: the seats' table beside the two ranked
+              lists that break the same tokens down by model and by team. */}
+          <div className="spend-pair">
             <ByAgent
               lines={lines}
               loading={tokens.loading}
@@ -153,17 +162,25 @@ export function Spend() {
             />
             <div className="spend-side">
               <ByModel rollup={rollup} loading={tokens.loading} words={words} />
+              <ByUnit params={params} words={words} />
+              {/* WHERE THE COMPANY RUNS NO CREWLET WORKS there are no tasks to
+                  rank, and the auxiliary model's card joins this column
+                  rather than standing alone in a row of its own. */}
+              {!runs.tracker && <Workers rollup={rollup} loading={tokens.loading} words={words} />}
+            </div>
+          </div>
+          {/* WHAT IT WAS SPENT ON: the tasks, in the wide track their titles
+              need, beside the auxiliary model's purposes. */}
+          {runs.tracker && (
+            <div className="spend-pair">
               <ExpensiveTasksCard
                 since={rollup?.since}
                 until={rollup?.until}
                 window={windowParam(range.window)}
               />
+              <Workers rollup={rollup} loading={tokens.loading} words={words} />
             </div>
-          </div>
-          <div className="spend-pair">
-            <ByUnit params={params} words={words} />
-            <Workers rollup={rollup} loading={tokens.loading} words={words} />
-          </div>
+          )}
         </div>
       )}
     </>

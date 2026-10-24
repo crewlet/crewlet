@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -188,7 +189,7 @@ func TestAColleagueIsKeyedOnTheirHandleAcrossBackends(t *testing.T) {
 		Roles: []*org.Role{{Name: "Tech Lead", DeclaredHandle: "lead"}},
 	}}}
 	o.Normalize()
-	reg := notify.NewRegistry(o)
+	reg := notify.NewRegistry(o, nil)
 	for _, id := range []struct{ ns, external string }{
 		{"chat", "U-lead"}, {"gitlab", "lead-bot"},
 	} {
@@ -299,7 +300,7 @@ func TestThePrefetchReportsWhatEachBlockSurfaced(t *testing.T) {
 		RunID:   "run-1",
 		WorkKey: "work-1",
 		Events:  []*events.Event{notification("gitlab", "dev", nil, true)},
-	}, "a pull request got a comment", auxspend.Use{Stage: types.AuxStageTurn, TurnID: "run-1"})
+	}, "a pull request got a comment", auxspend.Use{Stage: types.AuxStageTurn, TurnID: "run-1"}, provenance.NewBoundary())
 
 	select {
 	case summary := <-got:
@@ -389,7 +390,7 @@ func TestTheThreadBlockReportsWhatItWasHanded(t *testing.T) {
 			"transport": "slack", "channel": "C0ENG",
 			"ts": "1700000002.000100", "thread_ts": "1700000001.000100",
 		}, true)},
-	}, "+1", auxspend.Use{Stage: types.AuxStageTurn})
+	}, "+1", auxspend.Use{Stage: types.AuxStageTurn}, provenance.NewBoundary())
 
 	select {
 	case summary := <-got:
@@ -512,7 +513,7 @@ func TestPrefetchSummaryIsTimed(t *testing.T) {
 	e.prefetchFor(t.Context(), company, Request{
 		Handle: "lead", RunID: "run-4", WorkKey: "work-4",
 		Events: []*events.Event{notification("gitlab", "dev", nil, true)},
-	}, "a pull request got a comment", auxspend.Use{Stage: types.AuxStageTurn, TurnID: "run-4"})
+	}, "a pull request got a comment", auxspend.Use{Stage: types.AuxStageTurn, TurnID: "run-4"}, provenance.NewBoundary())
 	after := time.Now().UTC()
 
 	select {

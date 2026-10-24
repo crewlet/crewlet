@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/search"
 )
@@ -116,10 +117,6 @@ type Blocks struct {
 	// names, since a rename must not restart the clock.
 	SkillIDs []string
 
-	// OnboardingHint renders only for a seat that has not completed
-	// onboarding for its current org chain.
-	OnboardingHint string
-
 	// TurnEmbedding is what became of the turn's one vector: embedded,
 	// failed, or a company with no embeddings — "" where no search asked for
 	// it. Carried out for the reason [Blocks.ThreadContextRead] is: an
@@ -192,17 +189,18 @@ type Blocks struct {
 func (b Blocks) Empty() bool {
 	return b.PersonalMemory == "" && b.RelevantKnowledge == "" &&
 		b.EpisodeRecall == "" && b.CounterpartyProfile == "" &&
-		b.SynthesizedSkills == "" && b.OnboardingHint == "" &&
-		b.ThreadContext == ""
+		b.SynthesizedSkills == "" && b.ThreadContext == ""
 }
 
 // Request is one turn's worth of context to prefetch against.
 type Request struct {
-	// Seat is the agent whose prompt this is.
+	// Seat is the agent whose prompt this is. Its handle is what its
+	// episodes, skills and counterparty profiles are keyed on (see
+	// internal/learning's package doc).
 	Seat *org.Role
 
-	// AgentID is the seat's derived runtime id, which is what the diary
-	// and the episode store are keyed on.
+	// AgentID is the seat's derived runtime id, which is what the diary is
+	// keyed on.
 	AgentID string
 
 	// Org is the company, for the knowledge search's read scope.
@@ -236,7 +234,7 @@ type Request struct {
 	// Senders are the parties who triggered this turn, in the order they
 	// spoke. Several on a coalesced trigger, and every one of them gets a
 	// profile: a turn woken by four people is not a turn about the last
-	// of them.
+	// of them. A colleague is named by their handle.
 	Senders []learning.Subject
 
 	// RequiresRecon says the trigger is a POINTER rather than the
@@ -271,6 +269,13 @@ type Request struct {
 	// say which of the messages it showed came before the trigger only if
 	// it knows which one the trigger is.
 	Message string
+
+	// Boundary is the turn's fence token ([turnctx.Turn.Boundary]): the
+	// thread block is other people's words handed over in the prompt, so it
+	// is fenced with the token the turn's tools fence their reads with. An
+	// invalid one is replaced with a fresh token rather than used
+	// ([provenance.Fence]).
+	Boundary provenance.Boundary
 }
 
 // judgeable says there is something to judge relevance against: the trigger
@@ -372,11 +377,6 @@ type Skills interface {
 	List(ctx context.Context, handle string, opts learning.ListOptions) ([]learning.Skill, error)
 }
 
-// Onboarding says whether this seat has been through its first-turn pass.
-type Onboarding interface {
-	Onboarded(ctx context.Context, agentID, chainHash string) (bool, error)
-}
-
 // Threads reads back the chat thread a turn was woken in.
 //
 // Satisfied by *notify.ThreadReaders, whose fan-out is what keeps a company
@@ -409,7 +409,6 @@ type Sources struct {
 	Episodes       Episodes
 	Counterparties Counterparties
 	Skills         Skills
-	Onboarding     Onboarding
 
 	// Threads reads the chat thread a turn was woken in. Nil renders the
 	// UNREADABLE hint rather than an empty block for a trigger that names
@@ -518,7 +517,6 @@ func (f *Fetcher) Fetch(ctx context.Context, r Request) Blocks {
 		defer recoverSkills(&blocks.SynthesizedSkills, &blocks.SkillIDs)
 		blocks.SynthesizedSkills, blocks.SkillIDs = f.synthesizedSkills(ctx, r)
 	})
-	run(&blocks.OnboardingHint, func() string { return f.onboardingHint(ctx, r) })
 	// Its own goroutine too, and for the same reason twice over: it reports
 	// a message count AND two facts the prose cannot carry.
 	wg.Go(func() {
@@ -561,7 +559,7 @@ func recoverKnowledge(b *Blocks) {
 	}
 }
 
-// recoverThread is [recoverCounted] for the thread block, which reports four
+// recoverThread is [recoverInto] for the thread block, which reports four
 // facts beside its prose.
 //
 // ALL OF THEM GO WITH IT. A render that panicked half way surfaced nothing,

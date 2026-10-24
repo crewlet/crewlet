@@ -65,6 +65,7 @@ func TestThePagesPathRefusesWhatItDidNotBuild(t *testing.T) {
 		topics.TrackerVectorsPrefix + ".source.1",
 		topics.UsageLogPrefix + ".seat.node-a.2026-09-23.a1",
 		topics.CodeLogPrefix + ".repo.1",
+		topics.IamLogPrefix + ".session.0f3c",
 	} {
 		if kind, id, ok := topics.PagesLogPath(subject); ok {
 			t.Errorf("%q was read as kind %q id %q and is not a subject on the "+
@@ -84,6 +85,7 @@ func TestNoDomainsSubjectSpaceOverlapsAnothers(t *testing.T) {
 		"tracker": topics.TrackerLogPrefix + ".",
 		"vectors": topics.TrackerVectorsPrefix + ".",
 		"pages":   topics.PagesLogPrefix + ".",
+		"iam":     topics.IamLogPrefix + ".",
 		"usage":   topics.UsageLogPrefix + ".",
 		"code":    topics.CodeLogPrefix + ".",
 	}

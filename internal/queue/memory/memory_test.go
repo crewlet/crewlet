@@ -70,8 +70,25 @@ func TestConformance(t *testing.T) {
 			Quiescing: func(q queue.EventQueue, topic, group string) bool {
 				return q.(*memory.Queue).Quiescing(topic, group)
 			},
+			// Declared although a create here is a map insert rather than
+			// a replicated write: what the case asserts is that the
+			// second ensure never REACHED the create, which is the same
+			// question on a twin as on a broker — and the twin is the
+			// backend every other package's tests run on, so a regression
+			// that only the broker could see is one the fleet suite would
+			// certify green.
+			ConsumerProposals: func(q queue.EventQueue) int {
+				return q.(*memory.Queue).ConsumerProposals()
+			},
 			History: func(q queue.EventQueue) []*events.Event {
 				return q.(*memory.Queue).History()
+			},
+			// The broker, not the client: every client of it loses it
+			// at once, as every connection to a server that stopped
+			// does on the backend that ships. Nothing to wait for — the
+			// twin's clients read the flag under the broker's lock.
+			BrokerDown: func(_ *testing.T, q queue.EventQueue) {
+				q.(*memory.Queue).Broker().Fail()
 			},
 			// Publish drains before returning, so batch boundaries are
 			// deterministic and a member rotation is exact. Both are

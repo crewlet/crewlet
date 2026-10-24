@@ -5,7 +5,7 @@
  * # Read-only here, and it says where the change is made
  *
  * Every value on this tab is one the org editor writes, so the tab offers
- * "Edit in org" (`#/agents/edit?seat=`) rather than a second, narrower form
+ * "Edit in org" (`#/company/org/edit?seat=`) rather than a second, narrower form
  * that would have its own idea of which fields exist.
  *
  * # A credential is named, never shown
@@ -24,8 +24,9 @@
  * with fallbacks ("default provider" is a model for a seat that runs none).
  */
 
+import { ORG_EDIT_PATH } from "~/app/routes.ts";
 import { useMemo, type ReactNode } from "react";
-import { ButtonLink, Callout, Card, EmptyState } from "@crewlethq/ui";
+import { ButtonLink, Callout, Card, EmptyState, InlineCode } from "@crewlethq/ui";
 import { CpuGlyph, KeyGlyph, PencilGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { PropertiesRail, type Property } from "~/app/frame/PropertiesRail.tsx";
@@ -61,7 +62,7 @@ export function credentialState(value: string | undefined): string {
 /**
  * What each contact identity is called, as a person names it — `contact`'s
  * keys are the config's own (`internal/org/role.go`), and printed with their
- * underscores swapped for spaces they read "crewlet operator id".
+ * underscores swapped for spaces they read "github login".
  */
 const CONTACT_LABELS: Readonly<Record<string, string>> = {
   slack_user_id: "Slack member id",
@@ -69,7 +70,6 @@ const CONTACT_LABELS: Readonly<Record<string, string>> = {
   atlassian_account_id: "Atlassian account id",
   github_login: "GitHub login",
   gitlab_username: "GitLab username",
-  crewlet_operator_id: "Operator id",
 };
 
 /** A contact key's label: the table's, or the key in sentence case for one a newer engine added. */
@@ -98,13 +98,15 @@ export function Settings({
     () => (settings && !human ? mcpEnvOf(settings, seat.kind) : {}),
     [settings, human, seat.kind],
   );
-  const edit = href(["agents", "edit"], { seat: seat.handle });
+  const edit = href(ORG_EDIT_PATH, { seat: seat.handle });
   // THE COMPANY'S CEILINGS, as written on the public chart: a seat with none
   // of its own in a window is still bound by the company's there.
   const company = useOrg()?.token_budget;
   const state = (children: ReactNode) => (
     <SettingsState
+      reading={reading}
       error={config.error}
+      refusal={config.refusal}
       loading={config.loading}
       doc={config.doc}
       settings={settings}
@@ -116,9 +118,9 @@ export function Settings({
   const identity: Property[] = [
     {
       label: "Handle",
-      value: <code className="inline">{handleLabel(seat.handle)}</code>,
+      value: <InlineCode>{handleLabel(seat.handle)}</InlineCode>,
     },
-    { label: "Kind", value: human ? "person — never run by the engine" : "agent" },
+    { label: "Kind", value: human ? "person" : "agent" },
     { label: "Email", value: <ConfigValue value={role?.email} /> },
     ...Object.entries(role?.contact ?? {}).map(([k, v]) => ({
       label: contactLabel(k),
@@ -130,10 +132,7 @@ export function Settings({
   return (
     <div className="col gap-4">
       <div className="row gap-2 wrap">
-        <p className="t-caption prof-lede">
-          From the company document. Every value here is changed in the org editor, where the change
-          is validated and applied as a new revision.
-        </p>
+        <p className="t-caption prof-lede">Change these in Edit org.</p>
         <span className="spacer" />
         <ButtonLink
           size="small"
@@ -152,10 +151,13 @@ export function Settings({
         {state(
           <div className="col gap-3">
             <PropertiesRail groups={[{ properties: identity }]} />
+            {/* A CONTACT IS OPTIONAL — the engine admits a human seat with
+                none and warns at its `contact` — so this says what follows
+                rather than that one is required. */}
             {human && Object.keys(role?.contact ?? {}).length === 0 && (
               <Callout variant="warning">
-                A person needs at least one contact identity, so inbound activity on Slack, GitHub
-                or the tracker can be attributed to them.
+                Reached only through the dashboard: their Slack, GitHub or tracker activity is not
+                attributed to them. Add a contact identity in Edit org.
               </Callout>
             )}
           </div>,
@@ -194,7 +196,7 @@ export function Settings({
                         value: llmChain(role?.llm_auxiliary).length ? (
                           <ModelChain keys={llmChain(role?.llm_auxiliary)} />
                         ) : (
-                          <span className="muted">none — reflection uses the model above</span>
+                          <span className="muted">uses the model above</span>
                         ),
                       },
                       {
@@ -221,9 +223,7 @@ export function Settings({
                             typeof limit === "number" ? (
                               `${fmtCount(limit)} tokens`
                             ) : typeof theirs === "number" ? (
-                              <span className="muted">
-                                no seat cap — the company&rsquo;s {fmtCount(theirs)} applies
-                              </span>
+                              <span className="muted">company limit, {fmtCount(theirs)}</span>
                             ) : (
                               <span className="muted">uncapped</span>
                             ),
@@ -251,7 +251,7 @@ export function Settings({
         <Card>
           <Card.Header
             icon={<KeyGlyph size="sm" />}
-            subtitle="its unit's, with this seat's own entries winning"
+            subtitle="from its team, with its own overrides"
             count={Object.keys(credentials).length}
           >
             <Card.Title as="h3">Tool credentials</Card.Title>
@@ -281,7 +281,7 @@ export function Settings({
                 size="compact"
                 icon={<KeyGlyph size={32} />}
                 title="No per-seat tool credentials"
-                description="This seat's tools run with whatever the shared MCP servers were configured with."
+                description="Its tools use the shared server credentials."
               />
             ),
           )}

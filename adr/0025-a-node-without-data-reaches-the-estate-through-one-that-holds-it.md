@@ -1,4 +1,4 @@
-# ADR-0025 — A node without data reaches the estate through a node that holds it
+# ADR-0025: A node without data reaches the estate through a node that holds it
 
 - **Status:** accepted
 - **Authority:** `internal/estate`
@@ -16,12 +16,16 @@ replicated estate at all), its embedded broker is a leaf of the members' with
 JetStream off, and it runs no applier, no index, no snapshotter and no feed.
 Its seats still use the same tools, and every one of those tools is handed a
 seam answered by a data node over the broker — the ESTATE SERVICE — so the tool
-layer cannot tell which kind of node it is on.
+layer cannot tell which kind of node it is on. The identity directory is part
+of the estate like any other domain: who holds a login and who holds each human
+seat, which a seat's tools and its notification routing ask, are read through
+the same service, floored on the identity log.
 
 Four rules make that sound, and each is stated once, at `internal/estate`:
 the client picks the node and the failover is per operation (a read and a
-tracker write carrying an operation id move on, a page write that went
-unanswered is reported unknown and never repeated); every request carries the
+tracker write carrying an operation id move on, a page write moves on only when
+its caller named the operation, and an unnamed one that went unanswered is
+reported unknown and never repeated); every request carries the
 asking node's SESSION FLOOR, so whichever data node answers has applied the
 node's own writes; what a stateless node publishes is persisted on exactly one
 data node's event log (custody: published durably, taken by a fleet-wide group,
@@ -29,7 +33,11 @@ and kept by the data node whose create-only claim wins) rather than in a store
 deleted at its next boot;
 and every question about "which nodes hold data" — the trim's counted set, the
 eviction gate, the search roster, the capacity handshake — reads the role off
-the presence lease, so a stateless node is never counted as a copy.
+the presence lease, so a stateless node is never counted as a copy. And
+because a data node runs a write request AS the actor it names, every request
+and every reply on that channel is signed under the fleet keyring
+([ADR-0031](0031-every-state-log-record-is-signed.md)), exactly as a record on
+a log is.
 
 What a node without `data` may run is `seats` alone: ingress and workers read
 and write this node's own estate directly, and Tier A refuses them without it.
@@ -48,8 +56,9 @@ to pay.
 request to whichever member it likes — makes the broker choose, and then the
 asker cannot say which node an unanswered write went to. A retry on "whoever
 answers next" is safe only where the write itself says so, and the page writes
-say no: the store mints their operation id per call, so a repeat is a second
-comment or a create refused by its own first copy. A per-node subject keeps the
+say no unless their caller named the operation: the store otherwise mints the
+operation id per call, so a repeat is a second comment or a create refused by
+its own first copy. A per-node subject keeps the
 choice, and therefore the retry rule, with the asker.
 
 **A non-voting replica on the stateless node** — a JetStream member that never
@@ -103,4 +112,4 @@ whether a copy lags rather than whether it is level this instant — and choosin
 a lagging copy last rather than never.
 `internal/estate` states the rules; the authority and the gate are unchanged.
 
-A copy goes out of service one DOMAIN at a time — ADR-0031.
+A copy goes out of service one DOMAIN at a time — ADR-0045.

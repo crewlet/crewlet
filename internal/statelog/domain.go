@@ -129,7 +129,7 @@ type Domain interface {
 	//
 	// IT DOES NOT DECIDE WHETHER THE COPY IS JUDGED. Every domain's copy is
 	// judged ([Health.Healthy]) and a wrong one goes out of service for
-	// that domain's operations alone, whatever this answers — ADR-0031. The
+	// that domain's operations alone, whatever this answers — ADR-0045. The
 	// one declaration that used to answer both questions let a domain that
 	// did not gate seats escape the judgement too, so a wrong copy of it was
 	// served for ever.
@@ -279,6 +279,28 @@ type StreamSpec struct {
 	// own Tier A sized ([StreamSpec.Instantiates]).
 	MaxBytes int64
 
+	// MaxRecordBytes is the largest record this domain publishes — the
+	// payload its decide forms, before the signature — and it is a LIMIT
+	// rather than a description. The publisher refuses a record above it
+	// `record_too_large` before anything is sent, and the broker refuses a
+	// message above [StreamSpec.MaxAppendBytes], which is how a peer on a
+	// build that does not ask is held to it as well.
+	//
+	// DECLARED PER DOMAIN because the gate reserve is sized by it
+	// ([Reservation]): when a log's soft ceiling is crossed, every peer
+	// may hold one append of up to this size in flight that the admitting
+	// node's reading cannot see. Sized as though every log's records were
+	// the transport's eight mebibytes, the reserve on a log whose records
+	// are kilobytes and whose ceiling is tens of mebibytes had to be most
+	// of the log — and sized as a sixteenth of the ceiling instead, as it
+	// was, it was smaller than ONE such record on the two smallest logs.
+	//
+	// REQUIRED, and at most [MaxTransportRecordBytes]: a record the
+	// transport cannot carry is one no declaration can admit, and the
+	// transport's limit is on the signed message, so it is the transport's
+	// maximum less what a stored record carries beside its payload.
+	MaxRecordBytes int64
+
 	// MaxPerSubject retains only the newest message per subject, turning
 	// the stream from a log into a keyed table. Zero is a log; 1 is the
 	// compacted shape, and the pairing with ReplayCompacted is asserted.
@@ -348,6 +370,15 @@ func (s StreamSpec) Validate() error {
 		return fmt.Errorf("statelog: stream %q has no byte ceiling — a log "+
 			"with none fills the volume its own applier commits to", s.Name)
 	}
+	if s.MaxRecordBytes <= 0 || s.MaxRecordBytes > MaxTransportRecordBytes {
+		return fmt.Errorf("statelog: stream %q declares a largest record of %d "+
+			"bytes (want 1..%d, the largest the transport carries once a "+
+			"record is signed and sent) — it is what the log's gate reserve is "+
+			"sized by and the one refusal a record meets before it is sent, so "+
+			"a log without one keeps a reserve sized for nothing and a log "+
+			"past it admits records the broker refuses", s.Name,
+			s.MaxRecordBytes, MaxTransportRecordBytes)
+	}
 	if s.Duplicates <= 0 {
 		return fmt.Errorf("statelog: stream %q sets no duplicate window", s.Name)
 	}
@@ -368,7 +399,11 @@ func (s StreamSpec) Validate() error {
 //
 // ONLY THE CEILING MAY DIFFER: the spec a node creates the stream with
 // carries the byte budget its own Tier A sized, which is the node's to
-// choose.
+// choose. The LARGEST RECORD is not the ceiling's companion but the domain's
+// declaration: the gate reserve is sized by it, the publisher refuses a record
+// past it and the stream's `max_msg_size` holds a peer on another build to it,
+// so a node that ran a log at a largest record of its own choosing would size
+// a reserve and admit records its peers do not.
 func (s StreamSpec) Instantiates(d Domain) error {
 	if err := s.Validate(); err != nil {
 		return err
@@ -387,13 +422,14 @@ func (s StreamSpec) Instantiates(d Domain) error {
 	case s.Replay != want.Replay,
 		s.MaxPerSubject != want.MaxPerSubject,
 		s.MaxAge != want.MaxAge,
+		s.MaxRecordBytes != want.MaxRecordBytes,
 		s.Duplicates != want.Duplicates,
 		!slices.Equal(s.ArbitratedKinds, want.ArbitratedKinds):
 		return fmt.Errorf("statelog: stream %q is not the %s domain's: "+
-			"its replay, per-subject bound, age bound, duplicate window or "+
-			"arbitrated kinds differ from the domain's own declaration, and every "+
-			"one of them decides how the framework reads and writes that log",
-			s.Name, d.Name())
+			"its replay, per-subject bound, age bound, largest record, duplicate "+
+			"window or arbitrated kinds differ from the domain's own declaration, "+
+			"and every one of them decides how the framework reads and writes "+
+			"that log", s.Name, d.Name())
 	}
 	return nil
 }
@@ -558,17 +594,42 @@ type Record struct {
 	// the broker's sequence and the writer's own generation.
 	Position Position
 
-	// Payload is the record as published. The framework never decodes it,
-	// and a record this build cannot read is retained as exactly these
-	// bytes — LOSSLESS MEANS THE BYTES, so a later build reprocesses what
-	// was published rather than what an intermediate build understood of
-	// it.
+	// Payload is the record's BODY: what the domain published, with the
+	// framework's signature frame already opened and checked. An applier
+	// decodes this and never sees the frame, which is ADR-0031's rule
+	// stated at the one field every applier reads — the alternative is
+	// every domain unwrapping for itself, and the one that forgot would
+	// fail on every record in the company while its neighbour worked.
+	//
+	// It is NOT what a retained record is stored as. That is the framed
+	// form, which the framework keeps privately, because LOSSLESS MEANS
+	// THE BYTES: a record filed under a key this node does not hold is
+	// re-opened and re-verified by the build that can finally read it,
+	// rather than trusted because an earlier build once looked at it.
 	Payload []byte
+
+	// framed is the record exactly as it was published, frame and all.
+	//
+	// UNEXPORTED, for [Record.verdict]'s reason: it is the framework's own
+	// copy and only the framework may write it down or open it. An applier
+	// that could reach it could decode bytes the framework has not
+	// authenticated, which is the one thing the frame exists to prevent.
+	// It is what the deferred table stores and what [Runner] re-verifies
+	// on a reprocess.
+	framed []byte
 
 	// StoredAt is the broker's own timestamp for this record, which is
 	// what makes it byte-identical on every node rather than a clock each
 	// one reads for itself.
 	StoredAt time.Time
+
+	// verdict is what the framework's signature check concluded about
+	// this record, unexported for [Record.ack]'s reason: it is the
+	// framework's own fact and the apply loop is the only thing that may
+	// act on it. An applier that could read it might branch on it, and a
+	// state machine whose rows depend on which keys the node happened to
+	// hold is no longer a pure function of the record.
+	verdict Verdict
 
 	// ack acknowledges this record's delivery, and is unexported because
 	// exactly one caller may use it: the apply loop, after the transaction
@@ -627,6 +688,53 @@ type Applier interface {
 	Committed(ctx context.Context)
 }
 
+// RetentionHook is the optional half of the [Applier] contract: an applier that
+// has a consequence to act on when a committed batch RETAINED records rather
+// than applying them implements it, and the framework calls Retained after the
+// commit, IMMEDIATELY BEFORE [Applier.Committed] for the same batch, with how
+// many records the batch retained.
+//
+// # Why a retained record needs a hook of its own
+//
+// Committed's consequences are the ones an applier gathered in Apply, and a
+// retained record never reaches Apply: a record a newer build wrote, one signed
+// under a keyring key this node does not hold, and one whose scope a record
+// already retained covers are each filed in the deferral index and consumed
+// without a row. So an applier that says after a batch what the batch MOVED
+// says nothing about one that retained — and what moved is what this node can
+// vouch for: every read whose scope the record covers is unknown from that
+// commit on ([Runner.Deferred], the readers' coverage answers). A listener held
+// on a decision made before the commit has to hear that it may no longer stand,
+// and only the applier knows who that listener is.
+//
+// # A count, not the records
+//
+// What a retained record is ABOUT is inside the payload this node could not
+// read; its envelope names a scope, and a scope is the domain's own address
+// for what a reader asks rather than a list of whom the record moves. So the
+// hook says THAT the batch retained and how much, and an applier that cannot
+// say whose standing that leaves unknown says everyone's.
+//
+// # When it is not called
+//
+// Only for a batch that retained at least one record. A record the reprocess
+// at a loop's start KEEPS — still above this build's version, still signed
+// under a key it lacks — calls nothing: it was retained before, and was
+// announced then, by this process or by one that ran before any listener this
+// process holds was registered.
+//
+// OPTIONAL, because most domains have no consequence of a record they cannot
+// read beyond the deferral the framework already records: a wake is derived
+// when the record applies, and a reader asks the deferral index itself. An
+// applier that implements it asserts so at compile time
+// (`var _ statelog.RetentionHook = (*Applier)(nil)`), since the framework finds
+// it by a type assertion that a misspelt method would silently fail.
+type RetentionHook interface {
+	// Retained runs after the commit and before Committed, on the apply
+	// loop's own goroutine. It must not block.
+	Retained(ctx context.Context, records int)
+}
+
 // ApplyOptions carries every value an applier would otherwise read from the
 // world.
 //
@@ -648,10 +756,13 @@ type ApplyOptions struct {
 	// does rather than a second copy.
 	ArbitratedKinds []string
 
-	// Epoch is the per-epoch configuration the domain declared it reads.
-	// It is here rather than read by the applier because two nodes
-	// briefly on different epochs must still produce rows a reader can
-	// account for — which is exactly what the Divergent class names.
+	// Epoch is the per-epoch configuration the domain declared it reads,
+	// as this node's epoch stood when the BATCH began
+	// ([RunnerDeps.Epoch]). It is here rather than read by the applier
+	// because two nodes briefly on different epochs must still produce
+	// rows a reader can account for — which is exactly what the Divergent
+	// class names — and "briefly" is the whole of it: each node moves to
+	// a new epoch at its next batch, not at its next restart.
 	Epoch map[string]any
 
 	// MaxVariables is the engine's probed bind-parameter limit, which is

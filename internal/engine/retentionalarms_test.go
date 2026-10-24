@@ -7,25 +7,32 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
+	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// THE ALARM COUNT A NODE'S HEALTH CARRIES IS THE RETENTION REPORT'S ALARMS.
+// THE ALARMS A NODE'S HEALTH CARRIES ARE THE RETENTION REPORT'S ALARMS.
 //
 // [Engine.Alarms] is what every health probe and push tick reads, and it is the
 // evaluation the gauge and the alarm log lines were fed — never a second one.
 // So after an evaluation it names exactly the alarms the report that
-// evaluation was taken from holds (`work_retention`'s `alarms`), and before
-// one it says it cannot say: a node that has not looked at its table is not a
-// node with nothing wrong.
+// evaluation was taken from holds (`work_retention`'s `alarms`), ONE PER KIND,
+// because a kind on two logs is one alarm listing both, and before one it says
+// it cannot say: a node that has not looked at its table is not a node with
+// nothing wrong.
 //
 // Mutation: answer (nil, true) before the first evaluation, or read a list the
-// tracker was not handed, and this fails.
-func TestTheAlarmCountEqualsTheRetentionAlarms(t *testing.T) {
+// tracker was not handed, and this fails; counting a kind once per log is
+// [TestTheHealthAlarmsCountAKindOnTwoLogsOnce]'s, since this node runs no log
+// and every alarm it raises is node-wide.
+func TestTheHealthAlarmsAreTheRetentionAlarms(t *testing.T) {
 	t.Parallel()
 	r := &retention{
 		fleet:  coordmem.NewFleet(),
@@ -35,15 +42,15 @@ func TestTheAlarmCountEqualsTheRetentionAlarms(t *testing.T) {
 		pooled: map[string]poolCounters{},
 	}
 	e := &Engine{}
-	if kinds, evaluated := e.Alarms(); evaluated {
-		t.Fatalf("a node running no alarm table answered %v as evaluated", kinds)
+	if standing, evaluated := e.Alarms(); evaluated {
+		t.Fatalf("a node running no alarm table answered %v as evaluated", standing)
 	}
 	e.alarms.Store(r.alarms)
-	if kinds, evaluated := e.Alarms(); evaluated {
-		t.Fatalf("a table not yet evaluated answered %v as evaluated", kinds)
+	if standing, evaluated := e.Alarms(); evaluated {
+		t.Fatalf("a table not yet evaluated answered %v as evaluated", standing)
 	}
 
-	r.evaluate(t.Context())
+	r.beat(t.Context())
 	report := r.Report(t.Context())
 	want := make([]statelog.Kind, 0, len(report.Alarms))
 	for _, a := range report.Alarms {
@@ -61,45 +68,72 @@ func TestTheAlarmCountEqualsTheRetentionAlarms(t *testing.T) {
 	slices.Sort(got)
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
-		t.Errorf("the health count names %v and the retention report %v", got, want)
+		t.Errorf("the health envelope names %v and the retention report %v", got, want)
 	}
 }
 
-// AN ALARM IS EVALUATED INSIDE THE GRACE IT FIRES AT.
+// ONE ENTRY PER KIND ON A RUNNING NODE, however many logs the kind stands on:
+// two logs whose floor this node cannot use raise ONE `floor_unknown` listing
+// both, and the health envelope counts it once — the count a person reads
+// beside the alarm list is the list's length, never its logs'.
 //
-// The table was evaluated only on the trim's fifteen-minute tick, so
-// `apply_lag` — a one-minute grace whose remedy promises a stopped node is
-// named within a minute — reached the gauge, the log and the health count up
-// to sixteen minutes late. The evaluation runs on the position heartbeat, the
-// cadence its fastest input is measured at.
-//
-// Mutation: set AlarmInterval back to RetentionInterval, and this fails.
-func TestAnAlarmIsEvaluatedInsideTheGraceItFiresAt(t *testing.T) {
+// Mutation: have [statelog.Tracker.Standing] answer one entry per firing
+// instance (a kind once per log), and this fails.
+func TestTheHealthAlarmsCountAKindOnTwoLogsOnce(t *testing.T) {
 	t.Parallel()
-	if AlarmInterval >= statelog.StallGrace {
-		t.Errorf("alarms are evaluated every %s, which is not inside the %s "+
-			"stall grace `apply_lag` fires at", AlarmInterval, statelog.StallGrace)
+	ctx := t.Context()
+	e := bootDirectoryNode(t, nil)
+	r := quietRetention(t, e)
+	logs := []string{tracker.Domain{}.Name(), iamdomain.Domain{}.Name()}
+	for _, name := range logs {
+		generation := r.state.Domain(name).runner.Committed().Generation
+		ahead := coord.TrimFloor{Domain: name, Generation: generation + 1,
+			At: time.Now().UTC(), By: "node-b"}
+		if err := r.fleet.PutFloor(ctx, ahead); err != nil {
+			t.Fatalf("publish a floor ahead of this node on %s: %v", name, err)
+		}
 	}
-	if AlarmInterval < PositionHeartbeat {
-		t.Errorf("alarms are evaluated every %s, faster than the %s heartbeat "+
-			"their inputs are measured at, re-reading facts that have not moved",
-			AlarmInterval, PositionHeartbeat)
+	t0 := time.Now().UTC()
+	r.now = func() time.Time { return t0 }
+	r.beat(ctx)
+	r.now = func() time.Time { return t0.Add(statelog.FloorCacheStale + statelog.AlarmInterval) }
+	r.beat(ctx)
+	report := r.Report(ctx)
+	want := make([]statelog.Kind, 0, len(report.Alarms))
+	for _, a := range report.Alarms {
+		want = append(want, a.Kind)
+	}
+	fired, ok := alarmOf(report, statelog.KindFloorUnknown)
+	if !ok || len(fired.Domains) != len(logs) {
+		t.Fatalf("floor_unknown stands on %+v, want the %d logs %v", fired.Domains, len(logs), logs)
+	}
+	got, evaluated := e.Alarms()
+	if !evaluated {
+		t.Fatal("an evaluated table answered as not evaluated")
+	}
+	// SORTED, NEVER DEDUPLICATED, so a kind named twice stays visible to the
+	// comparison.
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("the health envelope names %v and the retention report %v", got, want)
 	}
 }
 
-// THE HARDWARE MEASUREMENT STAYS ON THE TRIM'S TICK when the alarms move off it.
+// THE HEARTBEAT LEAVES THE HARDWARE MEASUREMENT TO THE TRIM'S TICK.
 //
 // The pool-wait delta is ONE observation per interval, so the `pool_starved`
 // alarm's day-long p95 is a percentile over intervals of the trim's length;
-// taken on the ten-second alarm ticker it would be a percentile over ninety
-// times as many, shorter intervals — a different alarm nobody decided on. The
-// backup-gauge walk reads the coordination register and every announced
-// manifest and logs an unreadable directory at WARN each time, so on the alarm
-// ticker it repeats that line every ten seconds for as long as the fault lasts.
+// taken on every [statelog.AlarmInterval] beat it would be a percentile over
+// [statelog.TrimInterval]/[statelog.AlarmInterval] (ninety) times as many,
+// shorter intervals — a different alarm nobody decided on. The backup-gauge
+// walk reads the coordination register and every announced manifest and logs
+// an unreadable directory at WARN each time, so on the beat it repeats that
+// line every [statelog.AlarmInterval] for as long as the fault lasts.
 //
-// Mutation: have [retention.evaluate] call [retention.capacity] again, and the
-// first half fails; drop it from [retention.tick], and the control fails.
-func TestTheAlarmEvaluationLeavesTheHardwareMeasurementToTheTrimTick(t *testing.T) {
+// Mutation: have [retention.beat] call [retention.capacity], and the first half
+// fails; drop it from [retention.evaluate], and the control fails.
+func TestTheHeartbeatLeavesTheHardwareMeasurementToTheTrimTick(t *testing.T) {
 	t.Parallel()
 	recorder, err := metrics.New()
 	if err != nil {
@@ -136,12 +170,12 @@ func TestTheAlarmEvaluationLeavesTheHardwareMeasurementToTheTrimTick(t *testing.
 	}
 
 	for range 3 {
-		r.evaluate(t.Context())
+		r.beat(t.Context())
 	}
 	if waits, holds := measured(); waits != 0 || holds {
-		t.Fatalf("three alarm evaluations took the hardware measurement "+
+		t.Fatalf("three heartbeats took the hardware measurement "+
 			"(%d pool-wait observation(s), holds gauge published: %v), so the "+
-			"`pool_starved` p95 would be over ten-second intervals rather "+
+			"`pool_starved` p95 would be over heartbeat intervals rather "+
 			"than trim ticks", waits, holds)
 	}
 
@@ -154,36 +188,61 @@ func TestTheAlarmEvaluationLeavesTheHardwareMeasurementToTheTrimTick(t *testing.
 	}
 }
 
-// A FAILED COVERAGE SCAN IS REMEMBERED FOR A TRIM TICK, like a successful one.
+// A FAILED COVERAGE SCAN IS READ BACK AS UNKNOWN, AND NOT RE-RUN BY A READ.
 //
-// The reading is assembled on every alarm evaluation — every ten seconds — as
-// well as on every operator request, and the scan is of the whole corpus. A
-// failure that was not cached re-ran that scan and repeated its WARN line on
-// each of them for as long as the fault lasted.
+// The scan is of the whole corpus and runs on the trim's tick alone; every
+// report — each heartbeat's, each operator request's — reads the tick's figure
+// back. A failure that a read re-ran would repeat the scan and its WARN line on
+// every beat for as long as the fault lasted, and one that left the previous
+// figure behind would report a corpus nobody could read as covered.
 //
-// Mutation: return before caching on the error path, and this fails.
-func TestAFailedCoverageScanIsNotRepeatedEveryEvaluation(t *testing.T) {
+// Mutation: scan inside [retention.semanticCoverage], or keep the last figure
+// on the error path, and this fails.
+func TestAFailedCoverageScanIsUnknownUntilTheNextTick(t *testing.T) {
 	t.Parallel()
-	scans := 0
+	scans, fail := 0, false
 	r := &retention{coverage: func(context.Context) (float64, bool, error) {
 		scans++
-		return 0, false, errors.New("the corpus is unreadable")
+		if fail {
+			return 0, false, errors.New("the corpus is unreadable")
+		}
+		return 0.5, true, nil
 	}}
-	at := time.Date(2026, 9, 26, 12, 0, 0, 0, time.UTC)
-	for i := range 3 {
-		if got := r.semanticCoverage(t.Context(), at.Add(time.Duration(i)*AlarmInterval)); got != nil {
-			t.Fatalf("a failed scan answered coverage %v rather than unknown", *got)
+	r.measureCoverage(t.Context())
+	if got := r.semanticCoverage(); got == nil || *got != 0.5 {
+		t.Fatalf("a measured corpus read back as %v, want 0.5", got)
+	}
+
+	fail = true
+	r.measureCoverage(t.Context())
+	for range 3 {
+		if got := r.semanticCoverage(); got != nil {
+			t.Fatalf("a failed scan read back as coverage %v rather than unknown", *got)
 		}
 	}
-	if scans != 1 {
-		t.Errorf("three readings inside one trim tick ran %d scans after the "+
-			"first failed", scans)
-	}
-	// AND IT IS RETRIED once the tick has passed, or a transient fault
-	// would leave coverage unknown for the life of the process.
-	r.semanticCoverage(t.Context(), at.Add(RetentionInterval))
 	if scans != 2 {
-		t.Errorf("a reading a whole trim tick later ran %d scans in total, "+
-			"want the failure retried", scans)
+		t.Errorf("two ticks and three reads ran %d scans, want one per tick", scans)
+	}
+}
+
+// THE HISTORY ALARM NAMES THE BUDGET THE FAN-OUT WAITS ON, and that number is
+// the fan-out's own. statelog cannot import the layer that defines it, so the
+// reading is where it crosses: a reading without it would word the alarm
+// around no figure at all, and a copy of it anywhere else would drift the day
+// the fan-out was re-tuned.
+//
+// Mutation: drop the assignment from [retention.observed], and this fails.
+func TestTheRetentionReadingCarriesTheFleetReadBudget(t *testing.T) {
+	t.Parallel()
+	recorder, err := metrics.New()
+	if err != nil {
+		t.Fatalf("recorder: %v", err)
+	}
+	r := &retention{metrics: recorder}
+	var reading statelog.Reading
+	r.observed(&reading)
+	if reading.HistoryReadBudget != eventfan.FleetReadBudget {
+		t.Errorf("the reading carries a %s history read budget, want the fan-out's %s",
+			reading.HistoryReadBudget, eventfan.FleetReadBudget)
 	}
 }

@@ -2,11 +2,16 @@ package builtin_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -22,11 +27,15 @@ import (
 // back, so the next call was refused as "not in the trash" before the tracker
 // was asked, and everything that went with it stayed there.
 
-// trashSpy is the trash's write side, answering what a case sets.
+// trashSpy is the trash's write side: it records what it was asked to take
+// out of circulation or bring back, and answers what a case sets.
 type trashSpy struct {
-	answers  []error
-	restores int
-	removes  int
+	removed, restored []string
+	answers           []error
+
+	// subtree and alone are what the last removal and the last restore were
+	// asked for: the items below with it, and the item by itself.
+	subtree, alone bool
 }
 
 func (s *trashSpy) next() error {
@@ -38,17 +47,17 @@ func (s *trashSpy) next() error {
 	return err
 }
 
-func (s *trashSpy) RemoveTask(context.Context, string, string, string, bool,
-	*tracker.Notify) (tracker.WriteResult, error) {
+func (s *trashSpy) RemoveTask(_ context.Context, _, id, _ string, subtree bool,
+	_ *tracker.Notify) (tracker.WriteResult, error) {
 
-	s.removes++
+	s.removed, s.subtree = append(s.removed, id), subtree
 	return trashReceipt(), s.next()
 }
 
-func (s *trashSpy) RestoreTask(context.Context, string, string, string,
-	*tracker.Notify) (tracker.WriteResult, error) {
+func (s *trashSpy) RestoreTask(_ context.Context, _, id, _ string, alone bool,
+	_ *tracker.Notify) (tracker.WriteResult, error) {
 
-	s.restores++
+	s.restored, s.alone = append(s.restored, id), alone
 	return trashReceipt(), s.next()
 }
 
@@ -60,7 +69,9 @@ func trashReceipt() tracker.WriteResult {
 	}}
 }
 
-// trashSurface is the operator catalogue — the one these tools are served on.
+// trashSurface is the operator catalogue — the one these tools are served on —
+// decided by a chart in which the caller leads the item's project, so every
+// case here is about what the tool does once it is allowed.
 func trashSurface(t *testing.T, spy *trashSpy) *tools.Registry {
 	t.Helper()
 	trk := newFakeTracker()
@@ -70,12 +81,92 @@ func trashSurface(t *testing.T, spy *trashSpy) *tools.Registry {
 			Reader: trk, Writer: trk.as, Actor: operatorActor,
 			TrashWriter: func(builtin.Actor) builtin.TrashWriter { return spy },
 		},
+		Authorize: builtin.Decide(chartLeads),
 	}) {
 		if err := reg.Register(tool, tools.OriginBuiltin); err != nil {
 			t.Fatalf("register %s: %v", tool.Name(), err)
 		}
 	}
 	return reg
+}
+
+// A ROW-DECIDED TOOL ASKS ONCE IT HAS READ THE ROW.
+//
+// Taking an item out of circulation is its PROJECT's lead's, and which project
+// an item is filed under is a stored row rather than an argument — so the
+// registration gate cannot form the object and these tools ask themselves.
+// Decided at the gate on the empty object it had, every caller but an admin
+// was refused as naming no project, and a project's own lead could not clear
+// their own board.
+//
+// Both halves, because the gate stepping aside is only safe if the tool then
+// asks: the lead is admitted, and a colleague holding the tracker but leading
+// nothing — and who did not file the item — is refused with the authority's
+// own answer. Delete the
+// ask from either tool and the second half goes red.
+func TestARowDecidedToolAsksAfterItReads(t *testing.T) {
+	t.Parallel()
+	lead := iam.WithPrincipal(context.Background(), iam.Principal{
+		ID: uuid.New(), Kind: iam.KindPerson, Login: "cto.lead", Seat: "cto",
+		Stage:  iam.StageActive,
+		Grants: []iam.Grant{iam.GrantTracker},
+	})
+	for _, c := range []struct {
+		name    string
+		chart   authz.Chart
+		allowed bool
+	}{
+		{"the project's lead", chartLeads, true},
+		{"a colleague who leads nothing", chartRefuses, false},
+	} {
+		for _, verb := range []string{
+			tracker.RemoveWorkItemTool, tracker.RestoreWorkItemTool,
+		} {
+			t.Run(c.name+"/"+verb, func(t *testing.T) {
+				t.Parallel()
+				trk := newFakeTracker()
+				if verb == tracker.RestoreWorkItemTool {
+					detail := trk.tasks["ENG-1"]
+					detail.Task.Removed = &tracker.Tombstone{By: "cto"}
+					trk.tasks["ENG-1"] = detail
+				}
+				spy := &trashSpy{}
+				catalogue := builtin.OperatorTools(builtin.OperatorDeps{
+					Work: builtin.WorkDeps{
+						Reader: trk, Writer: trk.as,
+						TrashWriter: func(builtin.Actor) builtin.TrashWriter {
+							return spy
+						},
+						Actor: builtin.PrincipalActor,
+					},
+					Authorize: builtin.Decide(c.chart),
+				})
+				var got string
+				var failed bool
+				var cause error
+				for _, tool := range catalogue {
+					if tool.Name() != verb {
+						continue
+					}
+					res, err := tool.Call(lead, map[string]any{"item": "ENG-1"})
+					if err != nil {
+						t.Fatalf("%s: %v", verb, err)
+					}
+					got, failed, cause = res.Output, res.Failed, res.Cause
+				}
+				wrote := len(spy.removed)+len(spy.restored) > 0
+				switch {
+				case c.allowed && (failed || !wrote):
+					t.Errorf("the lead was refused: %s", got)
+				case !c.allowed && (!failed || wrote):
+					t.Errorf("a colleague leading nothing wrote the trash: %s", got)
+				case !c.allowed && !errors.Is(cause, builtin.ErrRefused):
+					t.Errorf("the refusal carries %v, not the authority's own "+
+						"answer", cause)
+				}
+			})
+		}
+	}
 }
 
 func stoppedWalk(verb string, err error) error {
@@ -117,9 +208,9 @@ func TestAStoppedRestoreIsReportedAndFinishedFromTheTool(t *testing.T) {
 		map[string]any{"item": "ENG-1"}); got.Failed {
 		t.Fatalf("finishing the restore from the tool failed: %s", got.Output)
 	}
-	if spy.restores != 2 {
+	if len(spy.restored) != 2 {
 		t.Errorf("the tracker was asked %d time(s), want the second call to "+
-			"reach it rather than be refused as not in the trash", spy.restores)
+			"reach it rather than be refused as not in the trash", len(spy.restored))
 	}
 }
 

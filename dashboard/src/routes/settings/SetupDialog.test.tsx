@@ -26,7 +26,7 @@ import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-librar
 // context is no longer supplied anywhere, so a dialog tested under it would
 // pass while writing its confirmation into a hook nothing is listening to.
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import {
   HELD,
   SetupDialog,
@@ -125,7 +125,6 @@ function sent(spy: ReturnType<typeof stubFetch>): RequestInit | undefined {
   return undefined;
 }
 
-beforeEach(() => localStorage.setItem("crewlet_api_token", "t"));
 afterEach(() => {
   cleanup();
   localStorage.clear();
@@ -1433,7 +1432,7 @@ test("the secrets recommendation appears only on a form with a credential", () =
       onDone={() => {}}
     />,
   );
-  expect(screen.queryByText(/Recommendation:/)).toBeNull();
+  expect(screen.queryByText(/keep credentials in/)).toBeNull();
   unmount();
 
   render(
@@ -1452,9 +1451,10 @@ test("the secrets recommendation appears only on a form with a credential", () =
       onDone={() => {}}
     />,
   );
-  // The one line a reader skims, with the reasoning behind the icon's hover.
+  // The one line a reader skims, and no reasoning hidden behind a hover.
   expect(screen.getByText(/keep credentials in/)).toBeTruthy();
-  expect(screen.getByTitle(/rotating it is one edit in one place/)).toBeTruthy();
+  expect(screen.queryByTitle(/Recommendation:/)).toBeNull();
+  expect(screen.queryByText(/Recommendation:/)).toBeNull();
   // THE LINK IS NAMED WHAT THE PAGE IS CALLED, so a reader who follows it
   // lands on the heading they were told to look for.
   expect((screen.getByText("Secrets") as HTMLAnchorElement).getAttribute("href")).toBe(
@@ -1838,7 +1838,8 @@ test("an agent with no manifest is told why not", () => {
     seats: [
       {
         ...perSeatTool.seats![0]!,
-        manifest_note: "no manifest yet: set integrations.public_base_url",
+        manifest_note:
+          "no manifest yet: set `api.external_url` in this node's Tier A file to the address this agent's app delivers to, and restart the node",
       },
     ],
   };
@@ -1851,7 +1852,7 @@ test("an agent with no manifest is told why not", () => {
     />,
   );
   expect(screen.getByText(/No app manifest for SRE Lead yet/)).toBeDefined();
-  expect(screen.getByText(/integrations.public_base_url/)).toBeDefined();
+  expect(screen.getByText(/api.external_url/)).toBeDefined();
   // AND NO EMPTY BOX to copy nothing out of.
   expect(baseElement.querySelector(".int-manifest")).toBeNull();
 });
@@ -2549,7 +2550,9 @@ test("a rotation names itself and says why, over the same fields", () => {
   );
   expect(screen.getByRole("dialog", { name: "Rotate the Datadog token" })).toBeTruthy();
   expect(screen.getByText(reason)).toBeTruthy();
-  expect(screen.getByText(/type it over the one this form holds/)).toBeTruthy();
+  expect(
+    screen.getByText("Create a new token in Datadog, paste it here and save. No restart needed."),
+  ).toBeTruthy();
   // THE SAME FIELDS as the settings form: nothing is filtered away.
   expect(screen.getByLabelText(/Fallback seat/)).toBeTruthy();
   cleanup();

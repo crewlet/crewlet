@@ -1,4 +1,4 @@
-# ADR-0011 — Tier A resolves from the environment and nothing else
+# ADR-0011: Tier A resolves from the environment and nothing else
 
 - **Status:** accepted
 - **Authority:** `internal/config`

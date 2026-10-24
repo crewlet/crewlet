@@ -33,28 +33,29 @@ const listenerTellBudget = 10 * time.Second
 
 // Listeners is every MCP client listening on one node: a client of the
 // 2026-07-28 protocol holding its `subscriptions/listen` stream open, whichever
-// of the node's catalogues answered it.
+// call's catalogue answered it.
 //
-// # Why the node keeps them, rather than each catalogue
+// # Why the node keeps them, rather than each call's server
 //
-// The transport keeps no session (see [guardedMCP]), so the one channel to a
-// client between its requests is that stream, and it stays on the [Server]
-// that answered it. A node builds a NEW Server whenever what it serves changes
-// (the api package's EngineOperators), so an assistant connected at boot is
-// parked on the boot catalogue through every later swap — and a node also
-// hears of its PEERS' swaps, after which its listeners have to be told
-// whatever catalogue they are parked on. So every catalogue a node builds
-// shares ONE registry ([Options.Listeners]), and an announcement reaches every
-// stream on the node: never one catalogue's listeners, and with no list of
-// replaced catalogues to keep, prune and race.
+// The transport keeps no session (see [Server.MCPHandler]), so the one channel
+// to a client between its requests is that stream, and it stays on the MCP
+// server built for the call that opened it, from the catalogue that call read.
+// What a node serves moves after that — its first company brings the native
+// halves, a revision adds or retires a knowledge backend, a shared tool server
+// comes back with other tools — and a node also hears of its PEERS' moves,
+// after which its listeners have to be told whatever catalogue their stream
+// was answered from. So every call's server keeps its streams in ONE registry
+// ([Options.Listeners]), and an announcement reaches every stream on the node:
+// never one server's listeners, and with no list of superseded catalogues to
+// keep, prune and race.
 //
 // # Told one by one, rather than through the SDK's own notifier
 //
 // The SDK announces a tool-list change only when its server's tool registry
 // changes, to every stream subscribed on that one server at once, 10 ms after
 // the change. A catalogue here never changes once built, and the two moments
-// a node must tell somebody are not changes to any registry: a peer rebuilt,
-// or ONE stream has just been opened. So each stream is told directly, with
+// a node must tell somebody are not changes to any registry: what the node
+// or a peer serves moved, or ONE stream has just been opened. So each stream is told directly, with
 // its own subscription named in the notification's `_meta` as the SDK names
 // it, through the sending handler of the server it is on.
 //
@@ -64,9 +65,9 @@ const listenerTellBudget = 10 * time.Second
 // stream fire-and-forget at connect and returns, so its first listing usually
 // races the stream — and a listing may be answered by any node. So a listing
 // can predate a change some node then announced before this client's stream
-// existed to hear it: the stream resolved its catalogue an instant before a
-// swap, or a peer's rebuild was relayed to this node's listeners an instant
-// before the stream subscribed. Nothing would ever tell it again. Telling
+// existed to hear it: the stream read its catalogue an instant before what
+// the node serves moved, or a peer's move was relayed to this node's listeners
+// an instant before the stream subscribed. Nothing would ever tell it again. Telling
 // every stream once as it opens closes that whole window for the price of
 // one listing per connection: whatever a client listed before its stream
 // existed, it lists again once the stream can hear every later change.
@@ -116,8 +117,8 @@ func (l *Listeners) Listening() int {
 // catalogue the node it reaches serves then.
 //
 // IN THE BACKGROUND, so no caller waits on a client: the node announces from
-// the request that found its facts moved, under the lock its rebuilds take,
-// and from its peers' announcements as they arrive. The streams are told one
+// the apply or the tool server that moved what it serves, and from its peers'
+// announcements as they arrive. The streams are told one
 // after another, as the SDK tells its own subscribers, each bounded by
 // [listenerTellBudget]. ctx lends its values and never its cancellation: the
 // announcement is owed to every listener whatever becomes of the request or

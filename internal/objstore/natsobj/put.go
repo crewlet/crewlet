@@ -308,7 +308,9 @@ const purgeWait = 5 * time.Second
 // lost may have landed and would name pieces the next purge removes, and then
 // the pieces, each within [purgeWait]. A piece a very slow or a thawed link
 // delivers after even that is an unfinished upload, which the collector
-// abandons a day later ([Backend.Pending]).
+// abandons a day later ([Backend.Pending]). A piece the stream refuses because
+// the bucket holds its whole reservation fails the put at once, as any refused
+// piece does, and is answered as [objstore.ErrFull].
 func (b *Backend) Put(ctx context.Context, name string, r io.Reader, m objstore.PutMeta) error {
 	p := &put{b: b, name: name, nuid: nuid.Next(), changed: make(chan struct{})}
 	putCtx, cancel := context.WithCancelCause(ctx)
@@ -333,6 +335,14 @@ func (b *Backend) Put(ctx context.Context, name string, r io.Reader, m objstore.
 	p.pub = pub
 	if err := p.run(putCtx, r, m); err != nil {
 		p.clean(context.WithoutCancel(ctx))
+		if full(err) {
+			// THE RESERVATION IS SPENT: the stream refused a message past
+			// its ceiling, which is the bucket filling, never the broker
+			// failing, and the one refusal its caller can name to a person
+			// ([objstore.ErrFull]).
+			return fmt.Errorf("natsobj: put %s: %w (%s holds as many bytes as it reserves): %w",
+				name, objstore.ErrFull, Bucket, err)
+		}
 		return fmt.Errorf("natsobj: put %s: %w", name, err)
 	}
 	return nil

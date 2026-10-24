@@ -101,26 +101,21 @@ export interface Band {
  * empty key precisely so that a phase, a model or a seat genuinely called
  * "other" cannot be mistaken for it.
  *
- * A SEAT BAND IS LABELLED WITH ITS NAME. The engine keys it on the seat's
- * handle — the identity every node computes alike — and a legend of
- * `agent-ai-systems-engineer` beside a table of "Agent AI Systems Engineer"
- * names one seat two ways on one screen. `seatName` is the chart's resolver,
- * which falls back to the handle for a seat the chart no longer has.
+ * A SEAT OR UNIT BAND IS LABELLED WITH THE ENGINE'S `label`. The engine keys
+ * a seat band on its agent id — the identity the usage domain records a seat
+ * under — and a unit band on its key, and sends the NAME beside each, resolved against the
+ * chart where it answered: a legend of ids beside a table of names names one
+ * seat two ways on one screen, and a resolver here would be a second, later
+ * reading of the chart than the one the figures were cut against.
  */
-export function bandsOf(
-  series: TokenSeries | null,
-  group?: string,
-  seatName: (handle: string) => string = (handle) => handle,
-): Band[] {
+export function bandsOf(series: TokenSeries | null, group?: string): Band[] {
   return (series?.by_group ?? []).map((b, i) => ({
     key: b.other ? "" : b.group,
     label: b.other
       ? `other (${b.folded})`
       : group === "phase"
         ? bandLabel(b.group)
-        : group === "seat"
-          ? seatName(b.handle || b.group)
-          : b.group,
+        : b.label || b.group,
     // THE RESIDUAL IS NEVER A BAND. It is "the rest", so it keeps the
     // residual hue whatever the grouping is — a fold of three models drawn
     // in one of their colours would name one of them.

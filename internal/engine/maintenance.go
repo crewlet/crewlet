@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/a2a"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/config"
@@ -14,7 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/node"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
-	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -77,6 +79,12 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 		// what makes a single list of them honest rather than a
 		// coincidence: a node's short-horizon state IS its local index.
 		jobs = append(jobs, maintenance.StoreJobs(db)...)
+		// THE CONTROL PLANE'S OWN TABLE, named separately rather than
+		// folded into the store sweep: company_config is the one table
+		// here whose rows are configuration, and an operator reading
+		// the job list wants to see that it is swept at all — it was
+		// not, for the life of every deployment before this.
+		jobs = append(jobs, maintenance.ConfigJobs(db)...)
 		jobs = append(jobs, maintenance.LearningJobs(learning.NewDiary(db))...)
 		jobs = append(jobs, maintenance.CounterpartyJobs(learning.NewCounterparties(db))...)
 		jobs = append(jobs, maintenance.ScheduleJobs(sqlledger.New(db.SQL()))...)
@@ -95,16 +103,20 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 		// closed one are decisions, so they are taken under the same
 		// singleton duty as every other sweep rather than by a clock.
 		//
-		// The SERVICE rather than the store, because closing an idle
-		// channel publishes a2a_channel_closed and the publisher belongs
-		// to internal/a2a. Built here rather than taken from
-		// [Engine.a2aService], which needs a Company for its directory:
-		// the directory answers "is this handle an agent seat" and only
-		// [a2a.Service.Open] asks, so a sweep that never opens anything
-		// needs no epoch — and demanding one would tie the retention of a
-		// fleet-wide record to whether this node has applied a config.
+		// [a2a.NewSweeper] rather than the store, because closing an
+		// idle channel publishes a2a_channel_closed and what that means
+		// on the wire belongs to internal/a2a — and rather than the
+		// whole [a2a.Service], which needs a directory this caller
+		// deliberately has none of. A directory is built from the
+		// RUNNING COMPANY, so demanding one here would tie the retention
+		// of a fleet-wide record to whether this node has applied a
+		// configuration. Asking for the two verbs the sweep actually
+		// uses is also what stops the service's own requirements
+		// silently disarming it: built as a Service with an empty
+		// Options, this construction began failing the day the directory
+		// became mandatory, and both jobs vanished behind a warning.
 		if queue := e.backends.Queue; queue != nil {
-			svc, err := a2a.New(a2a.NewCoordStore(fleet), queue, a2a.Options{})
+			sweeper, err := a2a.NewSweeper(a2a.NewCoordStore(fleet), queue, nil)
 			if err != nil {
 				// Logged rather than fatal, matching a2aService: a
 				// company whose channels are not swept is degraded,
@@ -112,7 +124,7 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 				log.Warn("a2a_sweep_unavailable", "error", err,
 					"hint", "idle agent-to-agent channels will stay open")
 			} else {
-				jobs = append(jobs, maintenance.ChannelJobs(svc)...)
+				jobs = append(jobs, maintenance.ChannelJobs(sweeper)...)
 			}
 		}
 		// AND THE COORDINATION STORE'S OWN REMOVAL MARKERS, for the
@@ -132,73 +144,66 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 		// per-node job list: the duty is a singleton, so exactly one
 		// node's list runs per tick, and a node with no backend
 		// contributes nothing rather than an empty sweep.
-		if n := e.native.Load(); n != nil {
-			if n.writer != nil {
-				// THE REPLICATED ESTATE WITH ITS WRITE SIDE, which is
-				// what the tracker's two exceptions to the applier-only
-				// rule need — the duty's probe clear and the inbox
-				// sweep, each argued where internal/store's applier
-				// gate allows it — and nothing else on this list takes.
-				trackerEstate := e.backends.Store.Replicated()
-				// THE TRACKER'S OWN JOBS, and they are a different
-				// kind of thing from a sweep: its records are a log
-				// and nothing deletes them here. They finish work a
-				// crash left half-done — a re-spread walk, an
-				// abandoned merge or cross-project move, a one-sided
-				// dependency — and tell
-				// the tasks a close unblocked. Every one is GATED,
-				// so a tick with nothing to do costs one indexed
-				// read.
-				jobs = append(jobs, tracker.Jobs(tracker.DutyDeps{
-					DB: trackerEstate, Writer: n.writer,
-					NodeID: n.nodeID,
-					// AND THE LEAD MAP, for the one repair whose
-					// commit carries a wake. Read per call against
-					// the epoch current when the job runs, for the
-					// reason every other live seam here is: the duty
-					// outlives a revision, and a captured map would
-					// route by an org chart that has since moved.
-					Leads: liveLeads{engine: e},
-				})...)
-				// AND THE INBOX'S OWN SWEEP, which is a range
-				// delete rather than a repair and is therefore
-				// PER NODE — `tracker_notifications` is
-				// Divergent, so each node holds its own rows and
-				// a singleton would tidy one and let the rest
-				// grow for ever. Contributed here rather than in
-				// tracker.Jobs because that list runs under the
-				// duty and this one must not.
-				//
-				// OVER THE REPLICATED ESTATE, which every log of
-				// this node's runtime applies into from boot.
-				//
-				// Its horizon is the company's and is read at
-				// every sweep, for the conversation ledger's
-				// reason above.
-				if n.log != nil {
-					jobs = append(jobs, tracker.InboxJobs(trackerEstate, e.inboxRetention)...)
-				}
-			}
+		core := e.core.Load()
+		if n := e.native.Load(); n != nil && n.writer != nil && core != nil {
+			// THE REPLICATED ESTATE WITH ITS WRITE SIDE, which is what
+			// the tracker's two exceptions to the applier-only rule need
+			// — the duty's probe clear and the inbox sweep, each argued
+			// where internal/store's applier gate allows it — and nothing
+			// else on this list takes. A node holding no estate runs no
+			// core and reaches the tracker through the router, so it
+			// contributes neither.
+			trackerEstate := e.backends.Store.Replicated()
+			// THE TRACKER'S OWN JOBS, and they are a different kind of
+			// thing from a sweep: its records are a log and nothing
+			// deletes them here. They finish work a crash left half-done
+			// — a re-spread walk, an abandoned merge or cross-project
+			// move, a one-sided dependency — and tell the tasks a close
+			// unblocked. Every one is GATED, so a tick with nothing to do
+			// costs one indexed read.
+			jobs = append(jobs, tracker.Jobs(tracker.DutyDeps{
+				DB: trackerEstate, Writer: n.writer,
+				NodeID: core.nodeID,
+				// AND THE LEAD MAP, for the one repair whose commit
+				// carries a wake. Read per call against the epoch
+				// current when the job runs, for the reason every other
+				// live seam here is: the duty outlives a revision, and a
+				// captured map would route by an org chart that has
+				// since moved.
+				Leads: liveLeads{engine: e},
+			})...)
+			// AND THE INBOX'S OWN SWEEP, which is a range delete rather
+			// than a repair and is therefore PER NODE —
+			// `tracker_notifications` is Divergent, so each node holds
+			// its own rows and a singleton would tidy one and let the
+			// rest grow for ever. Contributed here rather than in
+			// tracker.Jobs because that list runs under the duty and
+			// this one must not. Its horizon is the one the PUBLISHED
+			// company states, asked at every sweep — the one the
+			// applier reads per batch — see [tracker.InboxJobs].
+			jobs = append(jobs, tracker.InboxJobs(trackerEstate, e.inboxRetention)...)
+		}
+		if core != nil {
 			// AND THE STATE LOG'S OWN OPERATION LEDGERS, one per
-			// registered domain that keeps one. Every `<domain>_ops` migration says
-			// the table is swept and ships the index a range delete
-			// needs, and nothing swept them: a row per applied record,
-			// kept for ever, on every node. PER NODE rather than under
-			// the singleton, because each node owns its own copy —
-			// see [maintenance.StatelogJobs].
-			if n.log != nil {
-				jobs = append(jobs, maintenance.StatelogJobs(
-					n.log.opsLedgers(), maintenance.Fixed(statelog.OpsRetention))...)
-			}
-			// THE KNOWLEDGE BASE HAS NO SWEEP ANY MORE, and its
-			// absence is a consequence rather than an omission. Its
-			// three passes were a change retention, a revision prune
-			// and an orphan collector; the prune now RIDES EACH
-			// COMMIT as the record's own list of retired versions, the
-			// orphans cannot occur because a create is one
-			// transaction, and the history is a Replicated table an
-			// applier owns — so deleting a row here on one node's own
-			// authority is exactly what the identity claim forbids.
+			// registered domain that keeps one — the CORE's, so they are
+			// swept from boot on every data node, a node with no company
+			// included: its identity log is written from the first
+			// invitation. Every `<domain>_ops` migration says the table
+			// is swept and ships the index a range delete needs, and
+			// nothing swept them: a row per applied record, kept for
+			// ever, on every node. PER NODE rather than under the
+			// singleton, because each node owns its own copy — see
+			// [maintenance.StatelogJobs].
+			jobs = append(jobs, maintenance.StatelogJobs(core.log.opsLedgers())...)
+			// THE KNOWLEDGE BASE HAS NO SWEEP ANY MORE, and its absence
+			// is a consequence rather than an omission. Its three passes
+			// were a change retention, a revision prune and an orphan
+			// collector; the prune now RIDES EACH COMMIT as the record's
+			// own list of retired versions, the orphans cannot occur
+			// because a create is one transaction, and the history is a
+			// Replicated table an applier owns — so deleting a row here
+			// on one node's own authority is exactly what the identity
+			// claim forbids.
 		}
 	}
 	if e.mailboxes != nil {
@@ -214,14 +219,15 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 // rebuildMaintenance replaces the sweep with one built against what the node
 // runs now.
 //
-// FOR THE NATIVE RUNTIME'S ARRIVAL, and nothing else: [Engine.startMaintenance]
-// reads its job list once, and on a node that booted without a native runtime
-// "once" was before there was one to contribute the operation ledgers, the
-// tracker's repairs and the inbox sweep. A company's HORIZONS are no reason to
-// rebuild — every job asks its horizon at every sweep ([maintenance.Horizon]),
-// so a revision that moves one is honoured by the next sweep of the worker
-// already running. The old worker stops — its in-flight tick waited out —
-// before the new one is built, so two sweeps never run at once.
+// FOR A NODE'S FIRST NATIVE RUNTIME, and nothing else: [Engine.startMaintenance]
+// reads its job list once, and on a node that booted without a company "once"
+// was before there were native halves to contribute the tracker's repairs and
+// the inbox sweep. The operation ledgers are the core's, and were in the list
+// from boot. A company's HORIZONS are no reason to rebuild — every job asks its
+// horizon at every sweep ([maintenance.Horizon]), so a revision that moves one
+// is honoured by the next sweep of the worker already running. The old worker
+// stops — its in-flight tick waited out — before the new one is built, so two
+// sweeps never run at once.
 //
 // A node that does not publish never started a sweep, and does not start one
 // here either.
@@ -293,13 +299,20 @@ func (e *Engine) buildMailboxes(b *Backends, nodeID string) (*maintenance.Mailbo
 		Records: b.Fleet, Queue: b.Queue, Leases: b.Coord,
 		Owner:    config.NewIncarnation(nodeID),
 		LeaseTTL: e.leaseTTL,
-		Roster:   e.activeSeatHandles,
+		Roster:   e.activeSeats,
 		Runs:     e.retireSeatRuns,
 	})
 }
 
 // retireSeatRuns ends a retired seat's detached coding runs, for the mailbox
 // retirement that holds the seat's lease under owner and epoch.
+//
+// BY THE SEAT'S ID, which is what the retiring mailbox is filed and named
+// under; handle is the record's label, empty for a mailbox the broker's listing
+// alone found, and selects nothing. See
+// [sandbox.PendingStore.ListActiveForSeatID]. The errors here name the seat by
+// its id alone, because the retirement that called this wraps them in the label
+// it holds.
 //
 // Through the sandbox coordinator, which reclaims each run's box, announces the
 // loss and finishes its record. A node without one (no company it has served
@@ -308,23 +321,23 @@ func (e *Engine) buildMailboxes(b *Backends, nodeID string) (*maintenance.Mailbo
 // recorded: it reads the fleet's run records itself, and refuses while the seat
 // has any. The duty's next holder, or this node once it runs a coordinator,
 // retires the seat instead.
-func (e *Engine) retireSeatRuns(ctx context.Context, handle, owner string, epoch int64) error {
+func (e *Engine) retireSeatRuns(ctx context.Context, seat uuid.UUID, handle, owner string, epoch int64) error {
 	if rt := e.sandbox.Load(); rt != nil {
-		return rt.coordinator.RetireSeat(ctx, handle, owner, epoch)
+		return rt.coordinator.RetireSeat(ctx, seat, handle, owner, epoch)
 	}
 	if e.backends == nil || e.backends.Fleet == nil {
 		return fmt.Errorf("engine: this node has no fleet store, so it cannot tell whether "+
-			"retired seat %q left coding runs behind", handle)
+			"retired seat %s left coding runs behind", seat)
 	}
-	runs, err := sandbox.NewCoordStore(e.backends.Fleet).ListActiveForSeat(ctx, handle)
+	runs, err := sandbox.NewCoordStore(e.backends.Fleet).ListActiveForSeatID(ctx, seat)
 	if err != nil {
-		return fmt.Errorf("engine: reading the coding runs of retired seat %q: %w", handle, err)
+		return fmt.Errorf("engine: reading the coding runs of retired seat %s: %w", seat, err)
 	}
 	if len(runs) > 0 {
-		return fmt.Errorf("engine: retired seat %q still has %d coding runs and this node runs no "+
+		return fmt.Errorf("engine: retired seat %s still has %d coding runs and this node runs no "+
 			"sandbox coordinator to end them (no company it has served configures providers.sandbox); "+
 			"its mailbox is kept until a node that runs one holds the maintenance duty, or this "+
-			"node applies a company that configures providers.sandbox", handle, len(runs))
+			"node applies a company that configures providers.sandbox", seat, len(runs))
 	}
 	return nil
 }
@@ -341,17 +354,18 @@ func (e *Engine) mailboxRegistry() node.MailboxRegistry {
 	return e.mailboxes
 }
 
-// activeSeatHandles is the mailbox sweep's roster: the agent seats of the
-// revision the fleet is pointed at, or an error saying why that is unknown.
+// activeSeats is the mailbox sweep's roster: the agent seats of the revision
+// the fleet is pointed at, or an error saying why that is unknown.
 //
 // # Only when this node serves that revision
 //
 // The sweep judges a seat absent from the roster, and a retirement deletes mail
 // that cannot be recovered, so the roster must be the FLEET's current revision
 // rather than whatever this node happens to be running. A node that has not yet
-// applied the pointer's epoch (propagation, a refused apply, a node stuck on an
+// applied the pointer's activation (propagation, a refused apply, a node stuck on an
 // older revision) answers unknown, and the tick stamps and retires nothing. The
 // next holder of the duty, or this node once it catches up, judges instead.
+//
 // That is the rule every irreversible judgement against the active revision
 // follows, read through its one helper ([Engine.servedFleetRevision]), whose
 // three answers the roster keeps: the seats, nothing activated, or unknown —
@@ -359,7 +373,7 @@ func (e *Engine) mailboxRegistry() node.MailboxRegistry {
 // starting, is [maintenance.ErrRevisionPropagating], which the sweep judges
 // nothing on without a warning, since every activation and every boot puts
 // every node there for the seconds its apply takes.
-func (e *Engine) activeSeatHandles(ctx context.Context) ([]string, error) {
+func (e *Engine) activeSeats(ctx context.Context) ([]placement.Seat, error) {
 	company, err := e.servedFleetRevision(ctx)
 	var behind *errBehindFleet
 	switch {
@@ -368,12 +382,7 @@ func (e *Engine) activeSeatHandles(ctx context.Context) ([]string, error) {
 	case err != nil:
 		return nil, err
 	}
-	seats := company.Seats()
-	handles := make([]string, 0, len(seats))
-	for _, seat := range seats {
-		handles = append(handles, seat.Handle)
-	}
-	return handles, nil
+	return company.Seats(), nil
 }
 
 // Maintenance exposes the retention sweep.
@@ -390,8 +399,9 @@ func (e *Engine) stopMaintenance() {
 	}
 }
 
-// inboxRetention is how long this company's inbox rows live, asked by the
-// sweep at every sweep for the reason [Engine.ConversationRetention] is.
+// inboxRetention is how long this company's inbox rows live, read off the
+// PUBLISHED company each time it is asked — the sweep asks it at every sweep,
+// for the reason [Engine.ConversationRetention] is.
 //
 // A NODE WITH NO COMPANY STATES NO HORIZON, for the reason
 // [Engine.ConversationRetention] gives: a literal zero duration read as

@@ -31,6 +31,15 @@ import (
 //
 // A real broker confirms a flush in microseconds, so no case against one can
 // reach either flush's end; this one talks to a broker that stops answering.
+//
+// THE CALLER'S END IS CUED BY THE BROKER, never timed. Each wait announces
+// itself on the wire (the flush is the client's PING, the wait for a chunk
+// follows the credit the client returns for the one chunk it was sent), and
+// the caller's context ends only once the broker has seen that. A clock
+// started at the call raced the steps in front of the wait: a test process
+// descheduled for longer than the clock had its caller's end land on the
+// entry check or on the fetch's flush, and the error named that step, which
+// was correct and failed the case.
 func TestEveryTransferWaitSaysWhoseEndItReached(t *testing.T) {
 	t.Parallel()
 	const ownBound = 200 * time.Millisecond
@@ -75,7 +84,7 @@ func TestEveryTransferWaitSaysWhoseEndItReached(t *testing.T) {
 	for _, w := range waits {
 		t.Run(w.name+"/its own bound", func(t *testing.T) {
 			t.Parallel()
-			nc := fakeBroker(t, w.confirm)
+			nc, _ := fakeBroker(t, w.confirm)
 			started := time.Now()
 			err := w.run(t.Context(), nc, ownBound, filepath.Join(t.TempDir(), "part"))
 			took := time.Since(started)
@@ -83,8 +92,8 @@ func TestEveryTransferWaitSaysWhoseEndItReached(t *testing.T) {
 				t.Fatal("a wait nothing ended reported success")
 			}
 			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-				t.Fatalf("the package's own bound came back as a context error (%v) — "+
-					"read by a caller, that is its own context ending, which it did not", err)
+				t.Fatalf("the package's own bound came back as a context error (%v), "+
+					"which a caller reads as its own context ending, and it did not", err)
 			}
 			if !strings.Contains(err.Error(), w.own) || !strings.Contains(err.Error(), ownBound.String()) {
 				t.Fatalf("the error does not say %q and name the %s bound: %v",
@@ -99,62 +108,105 @@ func TestEveryTransferWaitSaysWhoseEndItReached(t *testing.T) {
 		})
 		ends := []struct {
 			name string
-			ctx  func(t *testing.T) context.Context
-			want error
+			// caller returns the caller's context and what ends it.
+			caller func(t *testing.T) (context.Context, func())
+			want   error
 		}{
-			{"the caller's deadline", func(t *testing.T) context.Context {
-				ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
-				t.Cleanup(cancel)
-				return ctx
+			{"the caller's deadline", func(t *testing.T) (context.Context, func()) {
+				ctx := &deadlineOnCue{Context: t.Context(), passed: make(chan struct{})}
+				return ctx, ctx.pass
 			}, context.DeadlineExceeded},
-			{"the caller cancelling", func(t *testing.T) context.Context {
+			{"the caller cancelling", func(t *testing.T) (context.Context, func()) {
 				ctx, cancel := context.WithCancel(t.Context())
-				time.AfterFunc(100*time.Millisecond, cancel)
 				t.Cleanup(cancel)
-				return ctx
+				return ctx, cancel
 			}, context.Canceled},
 		}
 		for _, end := range ends {
 			t.Run(w.name+"/"+end.name, func(t *testing.T) {
 				t.Parallel()
-				nc := fakeBroker(t, w.confirm)
-				started := time.Now()
-				err := w.run(end.ctx(t), nc, w.production, filepath.Join(t.TempDir(), "part"))
-				took := time.Since(started)
+				nc, waiting := fakeBroker(t, w.confirm)
+				ctx, endCaller := end.caller(t)
+				var ended time.Time
+				returned := make(chan struct{})
+				go func() {
+					select {
+					case <-waiting:
+						ended = time.Now()
+						endCaller()
+					case <-returned:
+					}
+				}()
+				err := w.run(ctx, nc, w.production, filepath.Join(t.TempDir(), "part"))
+				close(returned)
 				if !errors.Is(err, end.want) {
-					t.Fatalf("a wait ended by %s returned %v, want it wrapped — "+
+					t.Fatalf("a wait ended by %s returned %v, want it wrapped: "+
 						"anything else is the caller's own end reported as somebody "+
 						"else's", end.name, err)
 				}
 				if !strings.Contains(err.Error(), w.step) {
 					t.Fatalf("the error does not name the step it ended (%q): %v", w.step, err)
 				}
-				// Far inside both the production bound and the client's
-				// ten seconds: the caller ended it at 100ms.
-				if took > 3*time.Second {
-					t.Fatalf("a wait whose caller ended it at 100ms took %s — it sat "+
-						"out a bound the caller cannot end", took)
+				// The wrapped end above proves the caller ended it, so the
+				// cue fired and ended is set. Far inside both the production
+				// bound and the client's ten seconds.
+				if took := time.Since(ended); took > 3*time.Second {
+					t.Fatalf("a wait took %s to return once its caller ended it: it "+
+						"sat out a bound the caller cannot end", took)
 				}
 			})
 		}
 	}
 }
 
+// deadlineOnCue is a caller's context whose deadline passes when pass is
+// called rather than at a time, which the standard library cannot express:
+// a deadline that passes on a clock races whatever the code does before the
+// wait under test. Only Done and Err are observed by the waits, and every
+// wait reaches them through a child, which the standard library ends with
+// this parent's own error.
+type deadlineOnCue struct {
+	context.Context
+	passed chan struct{}
+}
+
+func (c *deadlineOnCue) pass() { close(c.passed) }
+
+func (c *deadlineOnCue) Done() <-chan struct{} { return c.passed }
+
+func (c *deadlineOnCue) Err() error {
+	select {
+	case <-c.passed:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+// fakeCreditSubject is the reply subject on the one chunk the fake broker
+// sends, so the credit the client returns for it is recognisable.
+const fakeCreditSubject = "fake.credit"
+
 // fakeBroker is just enough of a NATS server to hold one client connection:
 // it sends INFO, answers the connect handshake's PING, reads everything the
-// client sends after that and delivers nothing.
+// client sends after that and delivers one chunk to each fetch, nothing more.
 //
-// With confirm set it answers every later PING too — a broker that confirms
-// each flush and has nobody to route a message to. Without it, it stops
+// With confirm set it answers every later PING too: a broker that confirms
+// each flush and a donor that sends one chunk and stops. Without it, it stops
 // answering while the connection stays up, which is what a half-open TCP
 // connection to a wedged server looks like to a client: nothing closes, so
 // nothing but a bound ends the wait.
-func fakeBroker(t *testing.T, confirm bool) *nats.Conn {
+//
+// waiting receives once the client is blocked in a wait the broker can see:
+// without confirm, a flush it will never confirm; with it, the wait for the
+// chunk after the one it credited.
+func fakeBroker(t *testing.T, confirm bool) (nc *nats.Conn, waiting <-chan struct{}) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
+	cue := make(chan struct{}, 1)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var conns []net.Conn
@@ -172,7 +224,7 @@ func fakeBroker(t *testing.T, confirm bool) *nats.Conn {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				serveFake(conn, confirm)
+				serveFake(conn, confirm, cue)
 			}()
 		}
 	}()
@@ -186,19 +238,26 @@ func fakeBroker(t *testing.T, confirm bool) *nats.Conn {
 		wg.Wait()
 	})
 
-	nc, err := nats.Connect("nats://"+ln.Addr().String(),
+	nc, err = nats.Connect("nats://"+ln.Addr().String(),
 		nats.NoReconnect(), nats.Timeout(5*time.Second))
 	if err != nil {
 		t.Fatalf("connect to the fake broker: %v", err)
 	}
 	t.Cleanup(nc.Close)
-	return nc
+	return nc, cue
 }
 
 // serveFake speaks the server half of the NATS text protocol, as far as a
-// client needs it to stay connected.
-func serveFake(conn net.Conn, confirm bool) {
+// client needs it to stay connected and to receive one chunk of a fetch.
+// It signals cue, without blocking, as fakeBroker's waiting describes.
+func serveFake(conn net.Conn, confirm bool, cue chan<- struct{}) {
 	defer func() { _ = conn.Close() }()
+	signal := func() {
+		select {
+		case cue <- struct{}{}:
+		default:
+		}
+	}
 	port := conn.LocalAddr().(*net.TCPAddr).Port
 	if _, err := fmt.Fprintf(conn, "INFO {\"server_id\":\"fake\",\"server_name\":\"fake\","+
 		"\"version\":\"2.10.0\",\"proto\":1,\"host\":\"127.0.0.1\",\"port\":%d,"+
@@ -207,6 +266,9 @@ func serveFake(conn net.Conn, confirm bool) {
 	}
 	r := bufio.NewReader(conn)
 	handshake := true
+	// sids maps each subject the client subscribed to onto its sid, so a
+	// fetch's deliver subject can be routed to.
+	sids := map[string]string{}
 	for {
 		line, err := r.ReadString('\n')
 		if err != nil {
@@ -218,22 +280,56 @@ func serveFake(conn net.Conn, confirm bool) {
 		}
 		switch strings.ToUpper(fields[0]) {
 		case "PING":
-			if handshake || confirm {
-				if _, err := io.WriteString(conn, "PONG\r\n"); err != nil {
+			if !handshake && !confirm {
+				signal()
+			} else if _, err := io.WriteString(conn, "PONG\r\n"); err != nil {
+				return
+			}
+			handshake = false
+		case "SUB":
+			// SUB <subject> [queue] <sid>
+			if len(fields) < 3 {
+				return
+			}
+			sids[fields[1]] = fields[len(fields)-1]
+		case "PUB", "HPUB":
+			// THE PAYLOAD IS READ BY ITS DECLARED SIZE, never as lines:
+			// a payload is bytes, and one that happened to hold a line
+			// reading PING would otherwise be answered.
+			//
+			// PUB <subject> [reply] <size>
+			// HPUB <subject> [reply] <header size> <total size>
+			size, err := strconv.Atoi(fields[len(fields)-1])
+			if err != nil || len(fields) < 3 {
+				return
+			}
+			headers := 0
+			if strings.EqualFold(fields[0], "HPUB") {
+				if headers, err = strconv.Atoi(fields[len(fields)-2]); err != nil ||
+					headers > size {
 					return
 				}
 			}
-			handshake = false
-		case "PUB", "HPUB":
-			// THE PAYLOAD IS SKIPPED BY ITS DECLARED SIZE, never read as
-			// lines: a payload is bytes, and one that happened to hold
-			// a line reading PING would otherwise be answered.
-			size, err := strconv.Atoi(fields[len(fields)-1])
-			if err != nil {
+			payload := make([]byte, size+2)
+			if _, err := io.ReadFull(r, payload); err != nil {
 				return
 			}
-			if _, err := io.CopyN(io.Discard, r, int64(size)+2); err != nil {
-				return
+			switch subject := fields[1]; {
+			case subject == fakeCreditSubject:
+				signal()
+			case strings.HasPrefix(subject, SubjectFetchPrefix):
+				// The fetch's body is its deliver subject, which the
+				// client subscribed to before it published the fetch.
+				deliver := string(payload[headers:size])
+				sid, ok := sids[deliver]
+				if !ok {
+					return
+				}
+				const chunk = "chunk"
+				if _, err := fmt.Fprintf(conn, "MSG %s %s %s %d\r\n%s\r\n",
+					deliver, sid, fakeCreditSubject, len(chunk), chunk); err != nil {
+					return
+				}
 			}
 		}
 	}

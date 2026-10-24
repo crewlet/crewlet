@@ -1,8 +1,9 @@
 // Package cliagent drives a coding CLI the operator already pays a
 // subscription for as a headless text model behind [llm.Provider].
 //
-// WHICH CLIs is profiles.yaml's answer, not this comment's — [BuiltinNames]
-// reads the shipped table and `profile_test.go` holds it to the contract. A
+// WHICH CLIs is the profile table's answer, not this comment's —
+// [cliprofile.BuiltinNames] reads the shipped table and config's tests hold it
+// to the agent names a document may write. A
 // prose list here would be a second copy of that answer with nothing checking
 // it, and it already went stale by three.
 //
@@ -25,7 +26,7 @@
 //
 //   - VENDOR DRIFT. These flags and JSON shapes change between releases, so
 //     every profile field is data an operator can replace from YAML rather
-//     than a Go literal that needs a Crewlet release — see profiles.yaml.
+//     than a Go literal that needs a Crewlet release — see [cliprofile].
 //
 // The backend obeys the same two rules as every other member of this
 // contract: it does not retry, and it classifies a failure no further than a
@@ -37,6 +38,8 @@ package cliagent
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -45,6 +48,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 var log = logging.Get("llm.cliagent")
@@ -83,9 +87,17 @@ type Config struct {
 	// which of it reaches the child.
 	Auth Auth
 	// CredentialBundle is a resolved bundle from `crewlet llm export`,
-	// restored into an EMPTY credential directory at boot so a container
-	// rebuilt on every deploy comes up already authenticated.
+	// restored into an EMPTY credential directory so a container rebuilt on
+	// every deploy comes up already authenticated. Kept, not restored, by
+	// [New]: [Provider.RestoreConfiguredBundle] is the restore, made by
+	// whoever builds the entry to run it.
 	CredentialBundle string
+	// CredentialBundleConfigured is whether CredentialBundle came from
+	// cli.auth.credential_bundle rather than the conventional
+	// CREWLET_LLM_CLI_<KEY>_CREDENTIALS ([BundleVarName]), for the lines that
+	// tell an operator what retires it ([Provider.LogoutNotice]) — the same
+	// split [Auth.TokenConfigured] makes for the token.
+	CredentialBundleConfigured bool
 }
 
 // Provider is a coding CLI behind the language-model contract.
@@ -94,7 +106,7 @@ type Provider struct {
 	model     string
 	agent     string
 	agentMode bool
-	profile   Profile
+	profile   cliprofile.Profile
 	ws        *Workspace
 	env       map[string]string
 	auth      Auth
@@ -105,6 +117,12 @@ type Provider struct {
 	// exec so that one value reaches all of them, and so the suite can watch a
 	// stubborn child be killed at a grace it can afford to wait out.
 	termGrace time.Duration
+
+	// bundle is [Config.CredentialBundle], which
+	// [Provider.RestoreConfiguredBundle] restores, and bundleConfigured
+	// [Config.CredentialBundleConfigured].
+	bundle           string
+	bundleConfigured bool
 
 	// slots caps concurrent child processes. A buffered channel rather
 	// than a semaphore type because acquisition has to be selectable
@@ -123,14 +141,17 @@ var _ llm.Provider = (*Provider)(nil)
 // refused to exist would take the whole company down at boot over one
 // provider's credentials.
 func New(cfg Config) (*Provider, error) {
-	profile, err := Load(cfg.Agent, cfg.Overrides)
+	profile, err := cliprofile.Load(cfg.Agent, cfg.Overrides)
 	if err != nil {
 		return nil, err
 	}
-	if cfg.Model != "" && len(profile.ModelArgs) == 0 {
+	// Config refuses the same shape (on every write and at apply), so a
+	// document that reaches here with it was never validated — a caller
+	// building the provider from code.
+	if cfg.Model != "" && !profile.TakesModel() {
 		return nil, fmt.Errorf(
-			"cli-agent %q: the %q CLI takes no model flag, so model %q would be ignored — "+
-				"remove it, or declare cli.overrides.model_args",
+			"cli-agent %q: no model_args element of the %q CLI carries {model}, so model %q "+
+				"would be ignored — remove it, or declare cli.overrides.model_args with {model}",
 			cfg.Key, cfg.Agent, cfg.Model)
 	}
 	if cfg.StateDir == "" {
@@ -146,37 +167,44 @@ func New(cfg Config) (*Provider, error) {
 		slots = 1
 	}
 	p := &Provider{
-		key:       cfg.Key,
-		model:     cfg.Model,
-		agent:     cfg.Agent,
-		agentMode: cfg.AgentMode,
-		profile:   profile,
-		ws:        ws,
-		env:       cfg.Env,
-		auth:      cfg.Auth,
-		timeout:   cfg.Timeout,
-		termGrace: termGrace,
-		slots:     make(chan struct{}, slots),
+		key:              cfg.Key,
+		bundle:           cfg.CredentialBundle,
+		bundleConfigured: cfg.CredentialBundleConfigured,
+		model:            cfg.Model,
+		agent:            cfg.Agent,
+		agentMode:        cfg.AgentMode,
+		profile:          profile,
+		ws:               ws,
+		env:              cfg.Env,
+		auth:             cfg.Auth,
+		timeout:          cfg.Timeout,
+		termGrace:        termGrace,
+		slots:            make(chan struct{}, slots),
 	}
 	if p.timeout <= 0 {
 		return nil, fmt.Errorf("cli-agent %q: timeout is zero — a CLI call with no "+
 			"wall-clock cap holds a seat forever", cfg.Key)
 	}
-	if cfg.CredentialBundle != "" {
-		// Restored, not refused, when it fails: a node with a broken
-		// bundle can still be logged in by hand, and taking the company
-		// down at boot over one blob is the worse outcome. RestoreBundle
-		// itself declines to overwrite a login already on disk — the
-		// running node has the fresher refresh token.
-		if err := p.RestoreBundle(cfg.CredentialBundle); err != nil {
-			log.Warn("cli_agent_bundle_restore_failed", "provider", cfg.Key, "error", err)
-		}
-	}
+	// THE BUNDLE IS NOT RESTORED HERE. Building a provider is what
+	// `crewlet validate` does to a document, and a constructor that wrote a
+	// login into the state directory — under the shared login's lock, which
+	// can wait out another writer — would make validating a document a write
+	// to the host and a wait nobody's context bounds. The restore is
+	// [Provider.RestoreConfiguredBundle], called with a context by the engine
+	// as it builds an epoch to run and by the `crewlet llm` commands.
 	return p, nil
 }
 
 // Model is the configured model identity.
 func (p *Provider) Model() string { return p.model }
+
+// Key is the providers.llm key the entry was built under.
+func (p *Provider) Key() string { return p.key }
+
+// ModelArgument is the model exactly as this entry's text calls hand it to the
+// CLI ([cliprofile.Profile.ModelArgument]) — what a coding run of the same CLI
+// is handed too, so a box and a text call on one entry name one model.
+func (p *Provider) ModelArgument() string { return p.profile.ModelArgument(p.model) }
 
 // AgentMode reports whether this entry runs a seat's executor as the CLI's own
 // agentic run rather than as a text completion behind the engine's tool loop.
@@ -198,7 +226,7 @@ func (p *Provider) AgentMode() bool { return p.agentMode }
 func (p *Provider) CodingAgent() string { return p.agent }
 
 // Profile is the resolved profile, for `crewlet llm doctor`.
-func (p *Provider) Profile() Profile { return p.profile }
+func (p *Provider) Profile() cliprofile.Profile { return p.profile }
 
 // Workspace is the state directory this provider shares.
 func (p *Provider) Workspace() *Workspace { return p.ws }
@@ -225,7 +253,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// THE SYSTEM PROMPT ON ITS OWN CHANNEL where the CLI has one. Lifted
 	// before the transcript is rendered, so it is never both.
 	var system string
-	if p.profile.hasSystemChannel() {
+	if p.profile.HasSystemChannel() {
 		system, req = SplitSystem(req)
 	}
 	prompt, err := RenderPrompt(req)
@@ -243,17 +271,27 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		return nil, p.fail(llm.KindTimeout, 0, fmt.Errorf("waiting for a CLI slot: %w", ctx.Err()))
 	}
 
-	checkout, err := p.ws.Acquire(seat, callID)
+	checkout, err := p.ws.Acquire(ctx, seat, callID, p)
 	if err != nil {
-		return nil, p.fail(llm.KindFatal, 0, err)
+		// CLASSIFIED, not fatal outright: a seat's generation runs the CLI
+		// itself now, so what failed may be a slow host or an unusable
+		// login rather than this host's filesystem — see
+		// [acquireFailureKind].
+		return nil, p.fail(acquireFailureKind(err), 0, err)
 	}
 	defer func() {
+		// WITHOUT THE CALL'S CANCELLATION: a release is a teardown, and a
+		// call that ended because its context was cancelled still has a
+		// login the CLI may have refreshed to write back. Bounded by the
+		// export's own timeout rather than by nothing.
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := checkout.Release(); err != nil {
+		if err := checkout.Release(context.WithoutCancel(ctx)); err != nil {
 			// Logged, not returned: the completion already happened
 			// and failing it over a cleanup would throw away work the
-			// operator paid for. The next call into this seat prunes
-			// again, so the state does not compound.
+			// operator paid for. A login that could not be carried out
+			// is kept in the home, and the next generation to open —
+			// this seat's next call, or any seat's first — carries it
+			// out before it seeds — see [Workspace.Acquire].
 			log.WarnContext(ctx, "cli_agent_release_failed", "provider", p.key, "seat", seat, "error", err)
 		}
 	}()
@@ -272,7 +310,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// there is no faithful incremental view of them, and forwarding raw
 	// lines would stream a banner and a half-written fence as though they
 	// were what the model said.
-	if req.Streaming() && p.profile.output() == OutputJSONL {
+	if req.Streaming() && p.profile.EffectiveOutput() == cliprofile.OutputJSONL {
 		in.onLine = func(line string) {
 			doc, ok := decodeObject(strings.TrimSpace(line))
 			if !ok {
@@ -293,6 +331,17 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 			req.Send(llm.Delta{Content: chunk})
 		}
 	}
+	// THE CALL'S OWN SESSION, named so the usage command below can ask
+	// about it afterwards — see [cliprofile.Profile.SessionArgs]. After the
+	// model arguments for the same reason they precede everything else: a
+	// CLI taking its prompt on argv reads the first non-flag argument.
+	var session string
+	if len(p.profile.SessionArgs) > 0 {
+		session = newSessionID()
+		for _, arg := range p.profile.SessionArgs {
+			in.args = append(in.args, strings.ReplaceAll(arg, "{session}", session))
+		}
+	}
 	// A USAGE REPORT THE CLI WRITES ITSELF, for a vendor whose one-shot
 	// surface prints the answer and nothing else. Appended before the
 	// system and prompt arguments for the same reason the model flag is:
@@ -306,7 +355,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 		}
 	}
 	// EVERY CALL WHERE THE FILE CARRIES POLICY, not only the calls that
-	// have something to put in it — see [SystemPromptFile]. A profile whose
+	// have something to put in it — see [cliprofile.SystemPromptFile]. A profile whose
 	// prompt channel is a vendor agent file declares that CLI's tool
 	// denial in the same file, so skipping it on a request with no system
 	// prompt would hand the vendor's default agent, and every tool it has,
@@ -340,14 +389,14 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// profile puts the model flag before it: a CLI taking its prompt on
 	// argv reads the first non-flag argument, so anything appended after it
 	// is read as part of the prompt.
-	switch p.profile.mode() {
-	case PromptArgv:
+	switch p.profile.EffectivePromptMode() {
+	case cliprofile.PromptArgv:
 		// PromptArgs and then the prompt, ADJACENT and last: a CLI that
 		// takes its prompt as a flag's value needs the two together, and
 		// anything appended between them becomes the prompt instead.
 		in.args = append(in.args, p.profile.PromptArgs...)
 		in.args = append(in.args, prompt)
-	case PromptFile:
+	case cliprofile.PromptFile:
 		// Only the flag and the PATH go on argv; the transcript itself
 		// stays in the per-call working directory at 0600.
 		rendered, writeErr := promptArgs(p.profile.PromptArgs, prompt, checkout.Work)
@@ -376,15 +425,71 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// estimate.
 	var usageDoc string
 	if usagePath != "" {
-		if raw, readErr := os.ReadFile(usagePath); readErr == nil { //nolint:gosec // rooted in the per-call dir
-			usageDoc = string(raw)
-		} else if !os.IsNotExist(readErr) {
+		raw, readErr := os.ReadFile(usagePath) //nolint:gosec // rooted in the per-call dir
+		switch {
+		case os.IsNotExist(readErr):
+		case readErr != nil:
 			log.WarnContext(ctx, "cli_agent_usage_file_unreadable", "provider", p.key,
 				"agent", p.agent, "path", usagePath, "error", readErr)
+		case strings.TrimSpace(string(raw)) == "":
+			// Written and empty is not "the run did not get that far": the
+			// vendor began its report and wrote nothing into it, and what
+			// is read below could not tell this from no file at all.
+			log.WarnContext(ctx, "cli_agent_usage_file_unreadable", "provider", p.key,
+				"agent", p.agent, "path", usagePath, "error", "the file is empty")
+		default:
+			usageDoc = string(raw)
+		}
+	}
+
+	// A USAGE REPORT ASKED FOR AFTERWARDS, for a vendor that records the
+	// call's counts and does not print all of them — see
+	// [cliprofile.Profile.UsageArgs]. Asked whatever the call's outcome,
+	// because a refused call may still have spent tokens; and like a usage
+	// file, a report that cannot be had leaves the counts to stdout rather
+	// than failing an answer the operator paid for. In the working directory
+	// the call ran in, before the checkout is released.
+	if len(p.profile.UsageArgs) > 0 && !res.timedOut {
+		args := make([]string, 0, len(p.profile.UsageArgs))
+		for _, arg := range p.profile.UsageArgs {
+			args = append(args, strings.ReplaceAll(arg, "{session}", session))
+		}
+		report, reportErr := p.runAuxiliary(ctx, args, checkout.Work,
+			buildEnv(p.profile, checkout, p.env, p.auth), "")
+		switch {
+		case reportErr != nil:
+			log.WarnContext(ctx, "cli_agent_usage_report_failed", "provider", p.key,
+				"agent", p.agent, "error", reportErr)
+		case strings.TrimSpace(report) == "":
+			// A command that succeeded and printed nothing reported nothing,
+			// and the empty string handed on below reads as no report at all
+			// — so this is the one place that can say so.
+			log.WarnContext(ctx, "cli_agent_usage_report_failed", "provider", p.key,
+				"agent", p.agent, "error", fmt.Sprintf("%s %s exited 0 and printed nothing",
+					p.profile.Binary, strings.Join(args, " ")))
+		default:
+			usageDoc = report
 		}
 	}
 
 	return p.completion(ctx, prompt, res, usageDoc)
+}
+
+// newSessionID mints the id [cliprofile.Profile.SessionArgs] names a call's
+// session with: 32 lowercase hexadecimal characters from crypto/rand.
+//
+// RANDOM rather than derived from the seat and the call, because the id is the
+// key a usage command looks the call up by in a database every concurrent
+// call of the seat shares — and a retried call that reused its predecessor's
+// id would continue that session, carrying the failed attempt's transcript
+// into the retry and its counts into the retry's bill.
+func newSessionID() string {
+	var raw [16]byte
+	// crypto/rand.Read never fails on the platforms this builds for (it
+	// panics rather than return an error since Go 1.24), so there is no
+	// error to handle.
+	_, _ = rand.Read(raw[:])
+	return hex.EncodeToString(raw[:])
 }
 
 // argv is the invocation's arguments: the profile's completion argv, then the
@@ -435,8 +540,22 @@ func (p *Provider) completion(
 	out := extract(p.profile, res.stdout)
 	// The CLI's own report wins over anything stdout happened to carry:
 	// a profile only names one when its vendor puts the counts nowhere
-	// else, so a hit here is the only real figure there is.
-	out.applyUsageFile(p.profile, usageDoc)
+	// else, so a hit here is the only real figure there is. A report that
+	// ARRIVED and could not be read is said out loud, because the counts
+	// then fall back to stdout's — an estimate, for a CLI that reports
+	// none there — on every call until somebody notices the budget
+	// figures are made up.
+	if outcome := out.applyUsageReport(p.profile, usageDoc); outcome.unreadable() {
+		fallback := "an estimate, four characters a token"
+		if out.reported {
+			fallback = "the counts stdout reported"
+		}
+		log.WarnContext(ctx, "cli_agent_usage_report_unreadable", "provider", p.key,
+			"agent", p.agent, "source", usageSource(p.profile), "reason", outcome.String(),
+			"input_paths", cliprofile.PathList(p.profile.Usage.Input),
+			"output_paths", cliprofile.PathList(p.profile.Usage.Output),
+			"counts_from", fallback)
+	}
 
 	// A spent subscription is checked BEFORE the exit code, because it
 	// arrives on a successful one: the process exits 0 and the answer is
@@ -454,8 +573,13 @@ func (p *Provider) completion(
 	// vendor sentences, and scanning a healthy run's whole telemetry for
 	// them adds false-positive surface for nothing. When the answer WAS
 	// located it is the only thing the vendor said that matters.
+	//
+	// The events scope reads neither as text: it decodes the whole of
+	// stdout and looks only at the CLI's own failure events — see
+	// [cliprofile.MarkerScope] — which is why stdout itself is handed over
+	// beside what was said.
 	said := nonEmpty(out.text, res.stdout)
-	if hit, ok := classifyMarkers(p.profile, said, res.stderr); ok {
+	if hit, ok := classifyMarkers(p.profile, said, res.stdout, res.stderr); ok {
 		return nil, p.fail(hit.Kind, hit.Retry,
 			fmt.Errorf("%s", nonEmpty(hit.Said, firstLine(said, res.stderr))))
 	}
@@ -502,7 +626,7 @@ func (p *Provider) completion(
 				"installed CLI, so nothing it printed can be read as the model's "+
 				"reply. Run `crewlet llm doctor %s` and set "+
 				"providers.llm.%s.cli.overrides.text_paths. It printed:\n%s",
-			p.agent, PathList(p.profile.TextPaths), p.key, p.key, tail(res.stdout)))
+			p.agent, cliprofile.PathList(p.profile.TextPaths), p.key, p.key, tail(res.stdout)))
 	}
 	// LOCATED AND EMPTY IS AN ANSWER OF NOTHING, NOT A FAULT. The CLI
 	// exited 0, reported no error, and the path this profile looks in
@@ -564,7 +688,9 @@ func (p *Provider) completion(
 		// whatever the cache did. CacheRead and CacheWrite break the same
 		// total down for cost reporting; adding them again double-counts.
 		comp.InputTokens = out.input + out.cacheRead + out.cacheWrite
-		comp.OutputTokens = out.output
+		// Reasoning a CLI reports apart from its output is billed as
+		// output, so it is charged as output — see [cliprofile.UsagePaths].
+		comp.OutputTokens = out.output + out.reasoning
 		comp.CacheRead = out.cacheRead
 		comp.CacheWrite = out.cacheWrite
 	} else {
@@ -580,7 +706,7 @@ func (p *Provider) completion(
 		// needs if it turns out to be profile drift after all. Same
 		// shape as agent/prefetch's own answered-nothing warning.
 		log.WarnContext(ctx, "cli_agent_answered_nothing", "provider", p.key,
-			"agent", p.agent, "model", p.model, "text_paths", PathList(p.profile.TextPaths),
+			"agent", p.agent, "model", p.model, "text_paths", cliprofile.PathList(p.profile.TextPaths),
 			"output_tokens", comp.OutputTokens, "reported_usage", out.reported)
 	}
 	return comp, nil
@@ -599,17 +725,26 @@ func (p *Provider) completion(
 // spent plan looks like is a property of the profile table, and the only way
 // to check a shipped profile's sentinels against the output its CLI actually
 // produces is to be able to ask without a running provider.
-func classifyMarkers(p Profile, text, stderr string) (markerHit, bool) {
+//
+// said is what the CLI said — the located answer, or the whole of stdout when
+// none was located — and stdout is the whole of it, which only the events
+// scope reads, and only as decoded events.
+func classifyMarkers(p cliprofile.Profile, said, stdout, stderr string) (markerHit, bool) {
 	// THE ANSWER IS A HAYSTACK ONLY WHERE A VENDOR PUTS ITS FAILURES IN
-	// ONE — see [MarkerScope]. Searching the model's own words is what
+	// ONE — see [cliprofile.MarkerScope]. Searching the model's own words is what
 	// makes a spent Claude Code plan recognisable at all, and it is also
 	// how a seat asked "what is our quota?" answers in prose that benches
 	// its own credential. A profile whose CLI reports on stderr and
 	// nowhere else opts out, and then no sentence the model writes can
 	// classify anything.
-	haystacks := []string{text, stderr}
-	if p.markerScope() == MarkerScopeStderr {
+	var haystacks []string
+	switch p.EffectiveMarkerScope() {
+	case cliprofile.MarkerScopeEvents:
+		return classifyFailureEvents(p, stdout)
+	case cliprofile.MarkerScopeStderr:
 		haystacks = []string{stderr}
+	default:
+		haystacks = []string{said, stderr}
 	}
 	for _, marker := range p.LimitMarkers {
 		for _, hay := range haystacks {
@@ -664,7 +799,7 @@ func lineAt(s string, idx int) string {
 //
 // Zero when the vendor gave none, which the credential pool reads as "use the
 // configured cooldown" — the honest answer, rather than inventing a window.
-func resetAfter(from string, marker LimitMarker) time.Duration {
+func resetAfter(from string, marker cliprofile.LimitMarker) time.Duration {
 	if marker.ResetSeparator == "" {
 		return 0
 	}

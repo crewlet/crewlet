@@ -1,40 +1,75 @@
-// Package auth is the API's bearer-token guard.
+// Package auth is where a request acquires an identity.
 //
-// Tier A lists the accepted tokens under api.auth.tokens. Each entry has an id,
-// recorded as the author of any write made with it, and a token resolved from
-// the environment at startup. The middleware wraps the whole mux: it extracts
-// the bearer token, compares it in constant time, and either attaches the
-// operator id to the request context or answers 401.
+// EVERY REQUEST LEAVES THE MIDDLEWARE CARRYING ONE, and that is the property
+// the rest of the API is built on. A credential that matched resolves to a
+// principal; one that did not is [iam.Anonymous]; a node that could not tell is
+// [iam.Unknown]. Downstream nothing asks "is there a token" — it asks what the
+// principal may do, with a grant, through [iam.From] or the [Caller] shape that
+// has no second value to drop.
 //
-// WHAT IT GUARDS IS A POLICY DECISION, NOT A FIXED PREFIX. Writes and the whole
-// of /config, /secrets, /setup and /operator always need a token, and so do the
-// code host's /git/ and /code/ — see [GuardedPrefixes], which is the list, and
-// the per-prefix rationale beside it. Reads follow allow_anonymous_read, which
-// defaults to open — [Guard.Requires] is the one place that rule is written
-// down, and both the HTTP middleware and the WebSocket handshake consult it, so
-// the two cannot end up guarded in one place and open in the other.
+// # What is guarded is everything, and the list is of what is not
 //
-// A GIT CLIENT IS ANSWERED IN GIT'S OWN TERMS, AS A PERSON (ADR-0037). git is
-// the third person transport beside the dashboard's act route and the
-// operator's MCP: a token bound to a human seat pushes as that person, one
-// bound to nobody fetches only, and neither /git/ nor /code/ is ever on the
+// It used to be the other way round: a list of prefixes that always needed a
+// token, with everything else following `allow_anonymous_read`, which defaulted
+// to open and could not be closed durably because it was an `omitempty` bool
+// whose safe value was its zero. Under it /events, /agents/{id}/memory and
+// /ws/stream served full LLM transcripts — prompts, tool arguments, diary
+// entries — to anyone who could reach the port. There is no such posture now:
+// [Unguarded] is the whole of the exemption, every other route needs a
+// credential whatever its method, and a script that only reads what the
+// company is doing holds a service account's machine token carrying no
+// permission at all — the overview is every resolved principal's (ADR-0033).
+//
+// That is also why there is no longer a list of ALWAYS-guarded prefixes. With
+// every route guarded, a list saying which ones especially are would have no
+// caller and no meaning, and each of those surfaces now states its own
+// authority where it is enforced: a grant on the route, and internal/authz
+// deciding whether THIS caller may do THAT.
+//
+// # Where a principal comes from
+//
+// One resolver, [Guard.Resolve], over THREE credential shapes: a Tier A token
+// the configuration names (resolve.go), a machine token the identity directory
+// minted — a person's own access token or a service account's (tokens.go) —
+// and a session cookie (sessions.go). The first two arrive as a bearer and are
+// told apart by the value's shape; the third arrives as a cookie and yields to
+// any bearer presented beside it.
+// The guard is mounted UNCONDITIONALLY: mounting it only when Tier A carries
+// tokens would be two independent conditions deciding one security property,
+// coinciding only because every real caller happens to supply both. Tier A
+// supplies the POSTURE — which credentials exist and whether this node serves
+// admin to those who hold it — never the existence of a check.
+//
+// # A bearer is compared as it arrives, and its value is what protects it
+//
+// No curve stands in front of the comparison. A bearer names nobody until it is
+// compared, so the only key a curve there could have is the SOURCE, and a
+// refusal decided on an address is one anybody sharing it holds shut for
+// everybody else — every pipeline and the break-glass token at an office, a
+// VPN's egress, or the whole internet behind a proxy this deployment does not
+// trust. What makes guessing hopeless is the value — crypto/rand bytes, a
+// keyring HMAC, a Tier A value config refuses short — and what a guess costs is
+// a count on the audit trail's failure row. bearers.go carries the argument,
+// including the curve that was tried and what it cost.
+//
+// # A git client is answered in git's own terms, as a person
+//
+// git is the third person transport beside the dashboard's act route and the
+// operator's MCP (ADR-0051): a person's own token, presented by their git
+// client, pushes as that person where it is bound to their seat and fetches
+// only where it is bound to nobody, and neither /git/ nor /code/ is ever on the
 // public listener. Which requests under /git/ are fetches and which pushes is
 // [GitAccess]'s answer and nobody else's; on a git route, and on no other, the
-// token may arrive as a Basic credential's password; and a git route's refusal
-// is the challenge git answers with its credential helper, written in the one
-// form git prints ([GitText]).
+// token may arrive as a Basic credential's password ([Guard.Credential]); and a
+// git route's refusal is the challenge git answers with its credential helper,
+// written in the one form git prints ([GitText], [GitChallenge]).
 //
-// A DISABLED GUARD NAMES NOBODY: every caller is the reserved anonymous
-// operator ([AnonymousOperator]), whom no seat can bind, so a surface that acts
-// as a person — the dashboard's act transport, a git push — refuses it, and
-// what a disabled guard can still do there is read: fetch, never push.
+// # And two gates beside it
 //
-// The guard is mounted UNCONDITIONALLY. Mounting it only when Tier A is
-// present, while gating the /config write surface on a store being configured,
-// is two independent conditions deciding one security property — coinciding
-// only because every real caller happens to supply both. Tier A supplies the POSTURE, never the existence of
-// a check: with no tokens at all, no candidate can match, so reads serve and
-// every write and all of every always-guarded surface is refused.
+// [CSRF] refuses a state change a cross-site page could have caused, and
+// [CORS] decides who may read an answer. They are separate because they answer
+// different questions: same-origin policy stops an attacker's page READING a
+// response, which on a write is the part they do not need.
 package auth
 
 import (
@@ -44,72 +79,16 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
-	"github.com/crewlet/crewlet/internal/org"
 )
 
 var log = logging.Get("api.auth")
-
-// GuardedPrefixes are the surfaces that always need a token, reads included,
-// and are never eligible for allow_anonymous_read.
-//
-//   - /config: reading it exposes the whole company document — its org chart,
-//     its integrations, the shape of every credential it holds — and writing
-//     it changes the company.
-//   - /secrets: the fleet's credential store. Even the listing, which carries
-//     no values, says which credentials a company holds and when each last
-//     changed, and one route returns a value outright.
-//   - /setup: connecting an integration. It answers with the NAMES of the
-//     credentials a company holds, which of them are unset, and the
-//     third-party app pages an administrator would visit, and it writes
-//     both the secret store and the company document. Reads included, for
-//     the same reason /secrets guards its listing: the map of what a
-//     company has not configured is worth as much to an attacker as the
-//     configuration.
-//   - /operator: the operator MCP surface, which FILES AND MOVES WORK and
-//     writes the company's own knowledge base. A write is a write whatever
-//     allow_anonymous_read opens, and it is the credential's own name that
-//     lands on each record as the author — so a request with no token has
-//     nobody to attribute the write to. It is deliberately NOT under /mcp/,
-//     which is exempt wholesale for the sandbox bridge, so a box holding no
-//     API token can reach its seat's tools: mounting a writable company
-//     surface there would have put it behind no credential at all.
-//   - /git/ ([GitPrefix]): a repository is the company's source, and a push
-//     writes it — so always a credential, and a person's to push with. A
-//     clone is no more anonymous than a read of /config.
-//   - /code/ ([CodePrefix]): the code host's reads name every repository,
-//     its refs and the people who pushed to it.
-//
-// In the order the slice declares, and A LIST rather than one constant,
-// because the alternative was a second const somewhere else and a second
-// `HasPrefix` beside it — and the two would have drifted the day a third
-// surface was added, each staying self-consistent while one of them stopped
-// being consulted.
-var GuardedPrefixes = []string{"/config", "/secrets", "/setup", "/operator", GitPrefix, CodePrefix}
-
-// AlwaysGuarded reports whether a path is on one of those surfaces.
-func AlwaysGuarded(path string) bool {
-	for _, prefix := range GuardedPrefixes {
-		if strings.HasPrefix(path, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-// AnonymousOperator is the attribution recorded when auth is disabled.
-//
-// Config refuses it as a token id, so a real operator's writes can never be
-// confused in an audit row with the ones made while the guard was off, and the
-// chart refuses it as a seat binding, so a caller the guard never checked is
-// never a person. Taken from [org.ReservedOperatorID] rather than restated: two
-// copies would disagree silently, each side staying self-consistent while the
-// reservation stopped covering what the API actually stamps.
-const AnonymousOperator = org.ReservedOperatorID
 
 // unguardedExact and unguardedPrefixes are the routes served without a bearer
 // token, because they authenticate by other means or because a client must
@@ -128,6 +107,29 @@ const AnonymousOperator = org.ReservedOperatorID
 //   - the dashboard shell and its assets: the page that prompts for the token
 //     cannot itself require one. It ships no data — every byte it renders comes
 //     from an authenticated fetch.
+//   - FIVE ENTRIES UNDER /auth/, and only five. Two because a login cannot
+//     require a login: the posture read and the sign-in are how somebody
+//     OBTAINS a credential, so requiring one is a deployment nobody can
+//     enter. What stands in for the guard on each is the throttle and the
+//     origin check, which they are NOT exempt from. Plus /auth/invite/ and
+//     /auth/reset/, whose links are the credential — the id in the path and
+//     the secret beside it, never in a URL. And the SIGN-OUT
+//     OF THIS SESSION, because a sign-out must clear the cookie whatever this
+//     node can read: guarded, a node that could not read its identity estate
+//     answered it `503 identity_unavailable` before it ran, so on exactly the
+//     node that could vouch for nobody nobody could sign out, and a person
+//     left a shared machine looking at a signed-in page. It needs no guard:
+//     it verifies every bearer the browser holds itself, under the signature
+//     and this node's rows, and ends only a session it finds — and the origin
+//     check still judges it, as it judges every state change. Signing out of
+//     EVERY session, or of one named, stays guarded: those act on a caller
+//     the guard has to have resolved.
+//
+// NOT A /auth/ PREFIX, and that is the whole care in this entry. The same
+// surface ends every session a person holds, ends other sessions by name,
+// enrols second factors and reads who the caller is, and a prefix would exempt
+// every one of them — a credential surface behind no credential, which is the
+// exact shape /operator/ was deliberately kept out of /mcp/ to avoid.
 //
 // The split is deliberate. A PREFIX exempts everything beneath it, so only the
 // ones that genuinely have sub-paths get one, and each ends in a slash, which
@@ -136,26 +138,34 @@ const AnonymousOperator = org.ReservedOperatorID
 // any future route merely starting with those letters — a /health-admin, a
 // /readyz-reset — on the day it was added.
 var unguardedExact = map[string]struct{}{
-	"/": {}, "/dashboard": {}, "/favicon.ico": {}, "/health": {}, "/ready": {},
+	"/": {}, PathDashboard: {}, "/favicon.ico": {}, "/health": {}, "/ready": {},
+	PathAuthConfig: {}, PathAuthLogin: {}, PathAuthLogout: {},
 }
 
-var unguardedPrefixes = slices.Concat(publicPrefixes, []string{"/static/"})
+// unguardedPrefixes is DERIVED from [publicPrefixes] rather than listed beside
+// it, so a route can never be public without also being exempt — see
+// [publicPrefixes]. The rest are exempt and NOT public: the dashboard's
+// /static/ is the shell of the admin surface, served where that surface is, and
+// the invitation and reset links are BROWSER routes a person follows to the
+// dashboard, which the public listener never serves.
+var unguardedPrefixes = slices.Concat(publicPrefixes, []string{
+	"/static/", AuthInvitePrefix, AuthResetPrefix,
+})
 
 // publicPrefixes are the routes OUTSIDE PARTIES call: a vendor delivering a
 // webhook or returning a browser from its app flow, and a sandbox box exporting
-// telemetry or calling its seat's tools. None of them holds an operator
-// credential, each authenticates by its own (a provider signature, a per-run
-// signed token), and they are the only routes a deployment has to publish
-// beyond the people who run it.
+// telemetry or calling its seat's tools. None of them holds a person's or a
+// deployment's credential, each authenticates by its own (a provider
+// signature, a per-run signed token), and they are the only routes a
+// deployment has to publish beyond the people who run it.
 //
-// What the dedicated public listener (Tier A api.public) serves and api.port
-// then refuses, decided by [Public] and nothing else. DERIVED INTO the guard's
-// exemptions rather than listed beside them, so a route can never be public
-// without also being exempt: the public listener is reached by callers that
-// hold no token, and a guarded route there would answer every one of them 401.
-//
-// The dashboard's /static/ is exempt and NOT public: it is the shell of the
-// admin surface, served where that surface is.
+// ONE LIST DECIDES THREE THINGS, and that is why it is one list: what the
+// dedicated public listener (Tier A api.public) serves and api.port then
+// refuses, what the guard exempts, and what the cross-site check does not judge
+// ([CSRF.Middleware]) — each a server reaching the engine rather than a
+// browser, so no `Origin` is ever sent. The sign-in routes are exempt from the
+// guard and are NOT here: they are browser routes, judged by the cross-site
+// rule and served only on the admin listener.
 //
 // UNEXPORTED, and read outside this package only through [PublicPrefixes]'
 // copy: [unguardedPrefixes] is derived from it once, at init, so a slice
@@ -178,6 +188,75 @@ func Public(path string) bool {
 	return false
 }
 
+// The sign-in routes served without a credential, named HERE rather than in
+// the surface that serves them.
+//
+// THE EXEMPTION AND THE REGISTRATION MUST BE ONE SPELLING, and this is the
+// package that owns the exemption — internal/api/authapi registers on these
+// constants, so a route it moved without moving the exemption would not
+// compile rather than quietly landing behind a credential nobody can obtain.
+// The dependency runs that way round because authapi already imports this
+// package for the guard, and the reverse would be a cycle.
+const (
+	// PathAuthConfig is the posture read: the password floor and whether a
+	// second factor is required. No user list and no count of people — see
+	// authapi.
+	PathAuthConfig = "/auth/config"
+
+	// PathAuthLogin is the sign-in itself.
+	PathAuthLogin = "/auth/login"
+
+	// PathAuthLogout ends THIS session. It clears the cookie whatever this
+	// node can read, which is why it is here rather than behind the guard.
+	PathAuthLogout = "/auth/logout"
+
+	// AuthInvitePrefix is the invitation pair, and a PREFIX because the
+	// id is a path segment. Holding the link is the credential — its
+	// secret, which travels beside the id in a header, a body or a form
+	// and never in a path.
+	AuthInvitePrefix = "/auth/invite/"
+
+	// AuthResetPrefix is the password reset pair — the link's view and its
+	// spend — exempt for the invitation's reason: holding the link is the
+	// credential, its secret in a header or a body and never in a path.
+	AuthResetPrefix = "/auth/reset/"
+
+	// PathDashboard is the dashboard's shell: the page every screen is a
+	// fragment route of, and so the page a link a person follows points
+	// at — an invitation's is `PathDashboard + "#/invite/<id>.<secret>"`.
+	// Exempt for the shell's reason above, and named here because the
+	// exemption, the mount and every link to it must be one spelling.
+	PathDashboard = "/dashboard"
+
+	// PathAuthPrefix is the whole sign-in surface.
+	//
+	// NOT AN EXEMPTION — most of what it covers is guarded, and the list
+	// above is the whole of what is not. It names the surface whose
+	// subject is a person's own CREDENTIAL, which is what
+	// [ActsAsThemselves] is about.
+	PathAuthPrefix = "/auth/"
+)
+
+// The three GUARDED routes an enrolment-only session may reach — see
+// [EnrolmentAdmits] — named here for the exemption list's reason: the refusal
+// and the registration are one spelling, so a route authapi moved without
+// moving this would not compile rather than quietly lock a new person out of
+// the one route that lets them in.
+const (
+	// PathAuthSession is who the caller is — and, for an enrolment-only
+	// session, that it is one.
+	PathAuthSession = "/auth/session"
+
+	// PathAuthTOTP enrols a second factor: the one gesture an
+	// enrolment-only session exists to make.
+	PathAuthTOTP = "/auth/totp"
+
+	// PathAuthStepUp re-confirms the password on a session, which an
+	// enrolment-only session needs when enrolling asks for a proof fresher
+	// than the one it was opened with.
+	PathAuthStepUp = "/auth/step-up"
+)
+
 // WebhookPrefix and OTLPPrefix are the two exempt edges a second rule also
 // reads. Named here, beside the exemption, for the reason [SocketPath] is: the
 // API's drain gate refuses the first and serves the second, and a prefix it
@@ -188,26 +267,33 @@ const (
 	OTLPPrefix    = "/otlp/"
 )
 
-// readMethods are treated as reads for allow_anonymous_read.
+// readMethods are the methods that change nothing and start nothing.
 var readMethods = map[string]struct{}{
 	http.MethodGet: {}, http.MethodHead: {}, http.MethodOptions: {},
 }
 
 // IsRead reports whether a method is a read: GET, HEAD or OPTIONS.
 //
-// Exported because a read is a read to more than the guard. The drain gate
-// serves reads for the same reason allow_anonymous_read may open them: a read
-// changes nothing and starts nothing, and a second list of which methods those
-// are would be a second answer to one question.
+// THE GUARD NO LONGER BRANCHES ON IT — every guarded route needs a credential
+// whatever the method — and it stays exported because a read is a read to more
+// than the guard: the DRAIN gate goes on serving reads while it refuses
+// everything that would start work, and the authorization layer above still
+// classifies a route by verb. A second list of which methods those are would
+// be a second answer to one question.
 func IsRead(method string) bool {
 	_, ok := readMethods[strings.ToUpper(method)]
 	return ok
 }
 
-// loopbackHosts are bind addresses no other machine can reach. Anonymous reads
-// on one of these are a laptop; anonymous reads on anything else are a decision
-// somebody may not have made deliberately — which is the difference between
-// stating the posture and warning about it.
+// loopbackHosts are bind addresses no other machine can reach.
+//
+// WHAT READS THIS IS NARROWER THAN IT WAS. It used to decide whether an open
+// read posture on this bind deserved a warning; that posture is gone. What is
+// left is the development principal, which is refused outright off loopback —
+// and note that `api.auth.accept_insecure`'s own rule deliberately judges the
+// EXTERNAL URL instead, because a hardened node binds loopback behind its
+// proxy and a bind check would permit the insecure posture in exactly the
+// deployment that must refuse it.
 var loopbackHosts = map[string]struct{}{
 	"127.0.0.1": {}, "::1": {}, "localhost": {}, "localhost6": {},
 }
@@ -249,119 +335,201 @@ func Unguarded(path string) bool {
 }
 
 // Guard holds the loaded posture and answers every auth question about it.
+//
+// EVERY GUARDED ROUTE NEEDS A CREDENTIAL, reads included. There is no longer a
+// posture in which a GET serves without one: `allow_anonymous_read` defaulted
+// to open over a read surface carrying LLM transcripts, diary entries and the
+// whole event stream, and it was a bool whose safe value was its zero and
+// which was `omitempty`, so closing it did not survive an export round trip. A
+// deliberately public reader is a service account's machine token carrying no
+// permission at all, which reads the overview every resolved principal reads
+// and nothing else (ADR-0033) — never a Tier A entry, whose `grants` config
+// requires non-empty. What is still served without a credential is
+// [Unguarded], and only that.
 type Guard struct {
-	// tokens maps operator id to token. Empty is a real posture: no
-	// candidate can match, so writes and /config are refused outright.
-	tokens map[string]string
+	// tokens maps operator id to that token's whole Tier A entry — its
+	// value and the grants it may use. Empty is a real posture: no candidate can
+	// match, so every guarded route is refused outright. Config refuses
+	// it once the API is served, which is where a `crewlet validate` on
+	// a laptop catches it.
+	//
+	// THE WHOLE ENTRY RATHER THAN THE VALUE, because what a surface
+	// needs is a PRINCIPAL rather than an id: a credential's blast
+	// radius is stated where it is pinned, and the guard is the last
+	// frame that holds both the request and the entry it matched.
+	tokens tierATokens
 
-	disabled      bool
-	anonymousRead bool
+	// admin is this node's own `api.auth.admin`, applied to every principal
+	// at the moment it is resolved ([iam.AdminPosture.Effective]): admin
+	// served or clamped away, every app kept either way. See
+	// [Guard.principalFor].
+	admin iam.AdminPosture
+
+	// proof is `api.auth.session.step_up`: how long a proof of identity
+	// authorises a step-up gesture. See [proofWindow].
+	proof proofWindow
+
+	// now is the clock, injectable so a case can pin what a principal's
+	// freshness is measured against.
+	now func() time.Time
+
+	// bindings is where a Tier A token's seat binding is read and
+	// resolved. See [SeatBindings] and resolve.go.
+	//
+	// THE COMPANY'S HALF OF A PRINCIPAL, handed in rather than read here,
+	// because it comes from the identity estate and the chart while this
+	// package resolves a CREDENTIAL. Carrying it is what makes a LEAD
+	// relation reachable for a token at all: without the seat handle every
+	// authority rule asking "do you lead this" falls through to the admin
+	// grant, and a founder is indistinguishable from a CI pipeline in every
+	// audit row.
+	bindings SeatBindings
+
+	// dev is the development principal an unauthenticated request resolves
+	// to, or nil. Installed by [Guard.WithDevPrincipal], refused at
+	// construction on anything but a loopback bind of an unreleased
+	// binary — see devprincipal.go.
+	dev *DevPrincipal
+
+	// clients resolves a caller's own address through the CIDR blocks
+	// whose forwarded headers this deployment believes. See client.go.
+	clients *Clients
+
+	// sessions turns a browser's cookie into the person holding it, or
+	// nil on a node that mints none. See sessions.go.
+	sessions *Sessions
+
+	// machine turns a machine token — a personal access token or a service
+	// account's — into its owner, or nil where nothing installed the arm
+	// (a suite). See tokens.go.
+	machine *Tokens
+
+	// audit is where a refused credential is counted. See audit.go.
+	audit Audit
+}
+
+// BindSeats installs the seams that let a bound credential act as its seat, and
+// returns the guard for chaining.
+//
+// CALLED ONCE, AT WIRING TIME, before this guard serves anything: the seams
+// are read on every request and a guard whose seam moved under a request in
+// flight would attribute one write two ways.
+func (g *Guard) BindSeats(bindings SeatBindings) *Guard {
+	g.bindings = bindings
+	return g
 }
 
 // New builds the guard from Tier A.
 //
-// It does not fail. The pairings that would leave nothing reachable — no tokens
-// with anonymous reads turned off — and the reserved token id are refused by
-// config validation, which is where a `crewlet validate` on a laptop can catch
-// them rather than a process discovering them at bind time.
+// It does not fail. Every posture that would leave this surface unreachable —
+// no credential once a port is set, no admin posture, no external address, no
+// keyring — and the reserved token id are refused by config validation, which
+// is where a `crewlet validate` on a laptop can catch them rather than a
+// process discovering them at bind time.
 func New(b *config.Bootstrap) *Guard {
 	if b == nil {
-		// No Tier A at all: the posture is unset, so nothing can
-		// authenticate. Reads serve, writes are refused — the same
-		// answer as a config that lists no tokens, which is the honest
-		// reading of "nobody has said who may write".
-		return &Guard{anonymousRead: true}
+		// No Tier A at all: nobody has said who may act, so nothing
+		// authenticates and every guarded route is refused. That is
+		// the honest reading, and it is the same answer as a config
+		// listing no tokens.
+		//
+		// AND NO ADMIN POSTURE, whose zero confers nothing rather than
+		// everything — see [iam.AdminPosture.Effective] for why that
+		// direction is the only safe one.
+		return &Guard{now: time.Now}
 	}
 	auth := b.API.Auth
-	if auth.Disabled {
-		log.Warn("api_auth_disabled",
-			"hint", "api.auth.disabled is true — every route, including LLM "+
-				"transcripts on /events and /agents/{id}/memory, serves without "+
-				"authentication. Never use in production.")
-		return &Guard{disabled: true, anonymousRead: auth.AllowAnonymousRead}
-	}
-
-	tokens := make(map[string]string, len(auth.Tokens))
-	for _, entry := range auth.Tokens {
-		tokens[entry.ID] = entry.Token
-	}
+	tokens := tokensOf(b)
 	if len(tokens) > 0 {
-		log.Info("api_auth_tokens_loaded", "count", len(tokens))
+		log.Info("api_auth_tokens_loaded", "count", len(tokens),
+			"admin", auth.Admin)
 	}
-	return &Guard{tokens: tokens, anonymousRead: auth.AllowAnonymousRead}
+	return &Guard{
+		tokens: tokens, admin: auth.Admin,
+		proof: windowOf(auth.Session), now: time.Now,
+		clients: NewClients(b),
+	}
 }
 
-// AnonymousRead reports the read posture, for the startup line that states it.
-func (g *Guard) AnonymousRead() bool { return g.anonymousRead }
+// Mux is what a surface mounts routes on.
+//
+// DEFINED HERE, in the package that owns the exemption list, because the two
+// packages that need it both already import this one and the alternative is a
+// cycle. It is narrower than [http.ServeMux] — which satisfies it — for one
+// reason: the standard mux reports NOTHING about what was registered on it, so
+// a gate holding the exemption list against the registration could not read
+// one half of what it is about, and the failure when those two drift is a
+// credential surface behind no credential.
+type Mux interface {
+	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
+}
 
-// Disabled reports whether the guard is off entirely.
-func (g *Guard) Disabled() bool { return g.disabled }
+// Client is the address a per-source rule keys on, resolved through this
+// deployment's trusted proxies. See client.go.
+//
+// ON THE GUARD rather than a free function, because the trusted blocks are
+// Tier A's and every caller that needs a client address is already holding a
+// guard — a second parse somewhere else is a second answer to "is this peer
+// the proxy", and the two would drift the day somebody edited one.
+func (g *Guard) Client(r *http.Request) string { return g.clients.Of(r) }
 
 // Tokens reports how many credentials are loaded, for the same startup line.
 func (g *Guard) Tokens() int { return len(g.tokens) }
 
-// TokenIDs names the credentials this guard accepts, sorted — their LABELS and
-// never their values, for the `access` answer.
+// TokenIDs names the Tier A credentials this guard accepts, sorted — their
+// LABELS and never their values, for `GET /iam/node-tokens`.
 //
-// Read off the guard rather than off Tier A, because the guard is what decides:
-// a disabled guard accepts every caller as [AnonymousOperator] and no listed
-// token at all, and an answer built from the document would name credentials
-// that authenticate nobody.
+// READ OFF THE GUARD rather than off Tier A, because the guard is what decides
+// which bearer authenticates on this node: an answer built from a document the
+// guard was not built from would name credentials that authenticate nobody
+// here. Per node because Tier A is — two nodes mid-rollout may accept
+// different tokens, and each answers for its own.
 func (g *Guard) TokenIDs() []string {
 	return slices.Sorted(maps.Keys(g.tokens))
 }
 
-// Operator returns the operator id a bare token authenticates as.
+// entry is the Tier A token a candidate matches, compared in constant time —
+// THE TOKEN COMPARISON, IN ONE PLACE: every bearer the guard resolves, on a
+// header or on the socket's query, is decided here.
 //
-// THE TOKEN COMPARISON, IN ONE PLACE. The HTTP middleware and the socket
-// handshake reach it through [Guard.Presented], which peels the credential
-// off the request first, and the dashboard's WebSocket query channel calls it
-// directly, because an operator-only query arrives as a field on a socket
-// frame rather than as a header. All three therefore accept exactly the same
-// tokens, honour disabled identically, and compare in constant time.
-func (g *Guard) Operator(candidate string) (string, bool) {
-	if g.disabled {
-		// Every caller is accepted. The explicit label is what keeps a
-		// disabled-mode write distinguishable in an audit row.
-		return AnonymousOperator, true
-	}
-	// An empty candidate never authenticates, and the check is not
-	// redundant with the compare below: config refuses an empty token
-	// value, but Bootstrap is an exported struct an embedder can build
-	// directly, and a token configured as "" would otherwise match a
-	// request that presented no credential at all. A total bypass, from
-	// one unset environment variable.
+// EVERY TOKEN IS COMPARED, and the loop does not stop at the first match: an
+// early exit makes the time taken depend on WHICH id matched, which is exactly
+// the leak the constant-time compare exists to close.
+func (g *Guard) entry(candidate string) (config.APIToken, bool) {
+	// AN EMPTY CANDIDATE NEVER MATCHES, and the check is not redundant with
+	// the compare below: config refuses an empty token value, but Bootstrap
+	// is an exported struct an embedder can build directly, and a token
+	// configured as "" would otherwise match a request that presented no
+	// credential at all. A total bypass, from one unset environment
+	// variable.
 	if candidate == "" {
-		return "", false
+		return config.APIToken{}, false
 	}
-	// Every token is compared, and the loop does not stop at the first
-	// match: an early exit makes the time taken depend on WHICH id
-	// matched, which is exactly the leak the constant-time compare below
-	// exists to close.
-	matched := ""
-	for operatorID, expected := range g.tokens {
-		if subtle.ConstantTimeCompare([]byte(candidate), []byte(expected)) == 1 {
-			matched = operatorID
+	var matched config.APIToken
+	for _, held := range g.tokens {
+		if subtle.ConstantTimeCompare([]byte(candidate), []byte(held.Token)) == 1 {
+			matched = held
 		}
 	}
-	return matched, matched != ""
+	return matched, matched.ID != ""
 }
 
-// SocketPath is the dashboard's live socket, the one route whose credential
-// may arrive on the query string. It is named here, beside the rule that
-// reads it, so the mux that mounts it and the handler that serves it cannot
-// spell it differently from the guard that admits it.
+// SocketPath is the dashboard's live socket. It is named here, beside the
+// guard that admits it, so the mux that mounts it, the handler that serves it
+// and the rules that single it out (the enrolment refusal among them) cannot
+// spell it differently.
 const SocketPath = "/ws/stream"
 
-// Credential returns the token a request presented, or "".
+// Credential returns the bearer a request presented, or "".
 //
-// THE ONE PLACE A REQUEST'S CREDENTIAL IS READ. The Authorization bearer
-// header on every route. On the socket path only, the token query parameter
-// as well, because a browser cannot set a header on a WebSocket constructor
-// and the dashboard has no other way to send one. The query is read nowhere
-// else: a token in a URL appears in proxy logs and browser history, which is a
-// price worth paying for exactly one route that has no alternative and for no
-// route that has.
+// THE ONE PLACE A REQUEST'S BEARER IS READ, and it is the Authorization
+// header on every route, the socket included. There is deliberately NO
+// query-string credential: a token in a URL is written into every proxy's
+// access log and the browser's history, and the one route that ever took one
+// — this socket, because a browser cannot set a header on a WebSocket
+// constructor — no longer needs it. A browser's handshake carries its session
+// cookie like any other same-origin request, and a script that dials the
+// socket sets the header, which every WebSocket client outside a browser can.
 //
 // AND ON A GIT ROUTE ONLY ([GitAccess]), the password of a Basic credential,
 // its user name ignored: a git client has no other way to present a token
@@ -369,10 +537,7 @@ const SocketPath = "/ws/stream"
 // helper or a prompt. Basic is accepted nowhere else, because a browser caches
 // a Basic credential it was asked for and replays it to every route of the
 // origin: accepted beyond git, one prompt answered for a clone would be a
-// session on the whole API.
-//
-// The bearer header wins when both are present, so a client that sent the
-// right header is never judged by a stale query.
+// session on the whole API. The bearer header wins when both are present.
 func (g *Guard) Credential(r *http.Request) string {
 	header := r.Header.Get("Authorization")
 	const scheme = "bearer "
@@ -383,58 +548,76 @@ func (g *Guard) Credential(r *http.Request) string {
 		if _, password, ok := r.BasicAuth(); ok {
 			return password
 		}
-		return ""
-	}
-	if r.URL.Path == SocketPath {
-		return r.URL.Query().Get("token")
 	}
 	return ""
 }
 
-// Presented returns the operator id for the credential a request presented.
+// AttributionOf is who a write on this request is ATTRIBUTED to, and it is
+// total: a request nobody resolved answers [iam.AnonymousActor] rather than an
+// empty name.
 //
-// Asked even when the request carries none, because a disabled guard accepts
-// a request with no credential at all.
-func (g *Guard) Presented(r *http.Request) (string, bool) {
-	return g.Operator(g.Credential(r))
+// # The author AND the credential
+//
+// [iam.ActorFor]'s whole answer: the name the write is recorded under, its
+// kind, and the credential it was made through. The trails that key on this —
+// a configuration revision, a stored secret — used to record ONE name, and it
+// was the credential: `pat:<id>` for a person writing through their own
+// machine token, a name the identity sweep can no longer resolve to anybody a
+// week after the token lapses, on a revision kept for ever. They record both
+// now, as every other trail in the engine does.
+//
+// # Why it has no second value, and why that is not the discarded bool
+//
+// It is not how a handler asks whether somebody is there — [Caller] is, and
+// the difference is that Caller writes the refusal and has nothing to drop.
+// This is what a handler calls AFTER that question has been answered, at the
+// moment a row is written, on a surface where the guard has already refused
+// everything but [iam.Resolved].
+//
+// So its total answer covers the case that is left: a handler reached by a
+// path nobody wired through the guard. An empty `created_by` there reads as a
+// write nobody made, and a reader filtering the audit trail would never find
+// it; `anonymous` is a name config refuses to every real credential, so the
+// row says plainly that this engine could not name its author.
+func AttributionOf(ctx context.Context) iam.Actor {
+	principal, how := iam.From(ctx)
+	if how != iam.Resolved {
+		return iam.Actor{Name: iam.AnonymousActor, Kind: iam.ActorOperator}
+	}
+	return iam.ActorFor(principal)
 }
 
-// Requires reports whether this request must carry a valid bearer token.
+// markNoStore marks every answer to a request under [PathAuthPrefix]
+// `Cache-Control: no-store`.
 //
-// The whole rule, in one function.
+// # Why every answer there
 //
-// allow_anonymous_read, on by default, opens READS only. What that opens is
-// worth naming rather than leaving to the reader's imagination: /events,
-// /agents/{id}/memory and /ws/stream carry full LLM transcripts — prompts, tool
-// arguments, diary entries. Turning it off closes them, and the dashboard then
-// authenticates its socket like any other client.
-func (g *Guard) Requires(path, method string) bool {
-	if Unguarded(path) {
-		return false
+// What that surface answers is the one class of body no cache may hold: a
+// second-factor seed and the `otpauth://` URI that carries it, ten recovery
+// codes shown exactly once, who somebody is and what they may do, the address
+// an invitation was sent to, and every `Set-Cookie` a sign-in writes. A
+// response with no Cache-Control is one a browser keeps in its disk cache and
+// a shared proxy may keep for everybody behind it — where it outlives the tab,
+// the session and the step-up that was needed to read it, and where "shown
+// once" stops being true. Refusals are included: they say who the caller is,
+// what their session may reach and which window their proof falls outside of.
+//
+// # Why here, and not beside the routes
+//
+// It was a wrapper around the surface's own mux, which covered what the
+// routes wrote and nothing written before them: this guard's own refusals —
+// `401 invalid_token`, `403 second_factor_enrolment_required` (on an answer
+// that re-issues the session's cookie), `503 identity_unavailable` — the origin
+// check's `403`, and the mux's own `404` and `405` all went out cacheable. This
+// is the one frame every request under /auth passes through, guarded or not,
+// before anything beneath it can write; so it is set here, by path, and a
+// route added under /auth is covered the moment it is mounted. `no-store`
+// rather than `private` or `no-cache`: private still lets the browser's own
+// cache keep it, and no-cache only forces a revalidation of what was stored.
+func markNoStore(w http.ResponseWriter, path string) {
+	if strings.HasPrefix(path, PathAuthPrefix) {
+		w.Header().Set("Cache-Control", "no-store")
 	}
-	if AlwaysGuarded(path) {
-		return true
-	}
-	if g.anonymousRead {
-		return !IsRead(method)
-	}
-	return true
-}
-
-// operatorKey carries the authenticated operator id down the handler chain.
-type operatorKey struct{}
-
-// OperatorFrom returns the operator id the guard attached, if any.
-func OperatorFrom(ctx context.Context) (string, bool) {
-	id, ok := ctx.Value(operatorKey{}).(string)
-	return id, ok
-}
-
-// WithOperator attaches an operator id, for a surface that authenticates
-// outside the middleware — the WebSocket handshake, whose credential arrives on
-// the query string rather than as a header.
-func WithOperator(ctx context.Context, operatorID string) context.Context {
-	return context.WithValue(ctx, operatorKey{}, operatorID)
 }
 
 // Middleware wraps a handler with the guard.
@@ -446,59 +629,176 @@ func WithOperator(ctx context.Context, operatorID string) context.Context {
 // all. The middleware answered 401 first, and the dashboard could not
 // connect with a valid token, on the one posture whose point is that the
 // token is required.
+//
+// EVERY ANSWER UNDER /auth LEAVES HERE `no-store` — see [markNoStore] — set
+// before anything is resolved, so the refusals this writes, the origin check's
+// beneath it and every route's own all carry it.
 func (g *Guard) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
+		markNoStore(w, path)
 
-		// ATTRIBUTION AND AUTHORIZATION ARE DIFFERENT QUESTIONS, and the
-		// credential is resolved for both. A route that does not REQUIRE
-		// a token can still be told who presented one — which is what
-		// lets an operator-only query be answered on a surface the
-		// anonymous-read posture lets through. Skipping the resolution
-		// on an unguarded route made that unreachable: the query arrived
-		// with a valid token, no operator attached, and came back
-		// unauthorized to a caller holding the right credential.
-		operatorID, authenticated := g.Presented(r)
-		if authenticated {
-			r = r.WithContext(WithOperator(r.Context(), operatorID))
-		}
-		if !g.Requires(path, r.Method) {
-			next.ServeHTTP(w, r)
+		// EVERY REQUEST LEAVES HERE CARRYING AN ANSWER, which is what
+		// stops [iam.From] reading a handler nobody wired through this
+		// as [iam.Unknown] — silence is not anonymity, and that
+		// distinction is only worth anything if the resolver actually
+		// runs everywhere. An unguarded route's answer is
+		// [Guard.resolveUnguarded]'s, which never compares a bearer.
+		if Unguarded(path) {
+			next.ServeHTTP(w, g.resolveUnguarded(w, r))
 			return
 		}
-		if !authenticated && GitAccess(r) != GitNone {
-			// A GIT CLIENT IS CHALLENGED, and a challenge to a request
-			// that presented nothing is not a warning: the protocol's
-			// first request carries no credential by design — git asks
-			// its credential helper only after a 401 — so every clone
-			// would write one, and the warning a wrong credential
-			// deserves would drown in them.
-			if r.Header.Get("Authorization") == "" {
-				log.Debug("api_auth_challenge", "route", path, "remote", remoteHost(r))
-			} else {
-				// The candidate is never logged, as below.
+		r, refusal := g.Resolve(w, r)
+		// THE RESOLVED REQUEST'S CONTEXT IS THIS HANDLER'S OWN, carrying
+		// the answer: Resolve returns r.WithContext of a context derived
+		// from r.Context(). contextcheck follows a request only when it is
+		// the handler's parameter, never one a call returned, so it reads
+		// both uses below as new contexts.
+		//nolint:contextcheck // derived from r.Context(); see the paragraph above
+		principal, how := iam.From(r.Context())
+		if refusal != nil && refusal.Applies(r) {
+			// RESOLVED AND STILL REFUSED, on a route the refusal does
+			// not leave them — see [Refusal.Applies]. Logged at info
+			// rather than warn: a seat removed under somebody who is
+			// still signed in is an ordinary consequence of an
+			// offboarding, and a person who has not enrolled their
+			// second factor yet is an ordinary first day.
+			log.Info("api_auth_refused_resolved",
+				"route", path, "code", refusal.Code,
+				"detail", refusal.Detail, "remote", g.Client(r))
+			httpjson.FailWith(w, refusal.Status, refusal.Code,
+				map[string]string{"detail": refusal.Detail})
+			return
+		}
+		if how == iam.Unknown {
+			// 503 AND NEVER 401 ON A NODE THAT CANNOT TELL. A
+			// browser reads 401 as "sign in again" and discards the
+			// cookie, so one stalled applier answering 401 signs
+			// everybody on this node out and stampedes the identity
+			// provider — which is the failure internal/iam/session's
+			// whole three-valued shape exists to prevent, arriving
+			// at the one frame that could still undo it.
+			//nolint:contextcheck // r is the resolved request; see Resolve above
+			log.Log(r.Context(), UnreadLevel(r.Context()), "api_auth_unavailable",
+				"route", path, "remote", g.Client(r))
+			httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable,
+				RetryIdentitySeconds)
+			return
+		}
+		if how != iam.Resolved {
+			// A LOG LINE, AND DELIBERATELY NOT AN EVENT. Whoever can
+			// reach this listener authors the rate of these, with no
+			// credential and no identity — so no per-attempt event
+			// type may carry one into the node estate, which is the
+			// admission rule internal/events states and walks. A
+			// durable record of failed authentication is a COALESCED
+			// count, per source per minute, paced by the engine's own
+			// loop rather than by the caller.
+			//
+			// COUNTED HERE AND ONLY HERE: this is the one arm where a
+			// refused credential decided something. See audit.go.
+			switch {
+			case g.refused(r):
 				log.Warn("api_auth_failed",
 					"route", path,
-					"reason", "invalid_credential",
-					"remote", remoteHost(r))
+					"reason", "credential_refused",
+					// The candidate value is NEVER logged: a rejected
+					// token is still a credential, and a log is a place
+					// it would outlive the request.
+					// THE RESOLVED CLIENT, not the peer. Behind a
+					// proxy every line would otherwise name the
+					// proxy, which is the one address that tells an
+					// operator nothing about who is guessing.
+					"remote", g.Client(r))
+			case GitAccess(r) != GitNone:
+				// A GIT CLIENT'S FIRST REQUEST PRESENTS NOTHING BY DESIGN:
+				// git asks its credential helper only once a 401 carrying
+				// a challenge arrives, so every clone and push begins
+				// here. Logged as the challenge it is answered with, at
+				// debug, so an operator reading a git node's log tells
+				// the protocol's first step from a browser signed out.
+				log.Debug("api_auth_challenge", "route", path,
+					"remote", g.Client(r))
+			default:
+				// NOTHING PRESENTED IS NOBODY, NOT A FAILURE: a signed-out
+				// tab, an invitation's page and a probe all ask without
+				// a credential, and a WARN for each was a thousand lines
+				// an hour from one browser, burying the ones that are
+				// somebody's credential turned away.
+				log.Debug("api_auth_anonymous", "route", path,
+					"remote", g.Client(r))
 			}
-			GitChallenge(w)
-			return
-		}
-		if !authenticated {
-			log.Warn("api_auth_failed",
-				"route", path,
-				"reason", "missing_or_invalid_bearer",
-				// The candidate value is NEVER logged: a rejected token
-				// is still a credential, and a log is a place it would
-				// outlive the request.
-				"remote", remoteHost(r))
+			// THE SAME REFUSAL ENVELOPE EVERY OTHER SURFACE
+			// ANSWERS WITH. This was a hand-written JSON literal
+			// and a hand-set header pair — the shape that drifts,
+			// because nothing about it says which vocabulary the
+			// code belongs to or where the sentence beside it
+			// comes from. A caller refused here and refused by a
+			// route reads one body.
+			if GitAccess(r) != GitNone {
+				// EXCEPT A GIT CLIENT, which is CHALLENGED: it asks its
+				// credential helper for a token only after a 401 carrying
+				// one, and prints nothing of a JSON body. The protocol's
+				// first request carries no credential by design, which is
+				// why nothing presented is logged at debug above.
+				GitChallenge(w)
+				return
+			}
 			httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 			return
 		}
-		log.Debug("api_auth_ok", "operator_id", operatorID, "route", path)
-		next.ServeHTTP(w, r)
+		actor := iam.ActorFor(principal)
+		log.Debug("api_auth_ok", "actor", actor.Name, "operator_id",
+			actor.OperatorID, "route", path)
+		//nolint:contextcheck // the resolved request's; see where Resolve is called
+		entry, tierA := TierA(r.Context())
+		if !tierA {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// A TIER A TOKEN'S OVERREACH IS LOGGED AT THE REQUEST, and only
+		// here, once the route has said no. See audit.go for why its use
+		// is no row at all, and why the resolution itself — which an open
+		// socket runs again on an identity event — records nothing.
+		recorded := &statusWriter{ResponseWriter: w}
+		next.ServeHTTP(recorded, r)
+		if refusalStatus(recorded.status) {
+			g.overreached(r, entry, recorded.status)
+		}
 	})
+}
+
+// resolveUnguarded answers who a request to an [Unguarded] route is — without
+// comparing a presented bearer.
+//
+// # A session is resolved there, and a bearer is only marked
+//
+// One unguarded route reads a resolution at all: the sign-out, which records
+// who signed out when this node can say — so a cookie is resolved here exactly
+// as on a guarded route, and an UNKNOWN answer is handed through rather than
+// refused. A BEARER is not. Nothing unguarded acts on the principal a bearer
+// resolves to — the webhooks verify their own signatures, the per-run edges
+// carry their own token and a sign-out ends only the sessions its cookies
+// name — and comparing one anyway was an oracle: a matching Tier A value reads
+// the identity directory for the token's seat binding before it answers, and
+// a refused one returns after a map compare, so `Authorization: Bearer
+// <guess>` against /health, /favicon.ico or /static answered a right value and
+// a wrong one at different speeds, as fast as they were sent, on routes whose
+// refusals the audit trail's failure count does not include. So the value is
+// never looked at here: the request is anonymous.
+//
+// THE REFUSAL [Guard.Resolve] RETURNS IS DISCARDED ON PURPOSE. It is only ever
+// a credential whose SEAT is gone, or a session that may only enrol a second
+// factor, and the routes that are unguarded are how somebody signs in, how
+// the sign-in screen renders and how somebody signs out — locking either
+// person out of those would leave them holding a live cookie with no way on,
+// or no way off.
+func (g *Guard) resolveUnguarded(w http.ResponseWriter, r *http.Request) *http.Request {
+	if g.Credential(r) != "" {
+		return r.WithContext(iam.WithAnonymous(r.Context()))
+	}
+	resolved, _ := g.Resolve(w, r)
+	return resolved
 }
 
 // remoteHost is the caller's address without its port, for the failure log.

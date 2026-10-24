@@ -162,6 +162,46 @@ var nodeEstatePlacements = []placement{
 			"peer's copy would be a question about rows the peer never wrote.",
 	},
 	{
+		Table: "custody_unsettled_rows",
+		Why: "The identities of the rows of the batches above, keyed on the " +
+			"event log's own (time, id) so every count that leaves a batch in " +
+			"flight out seeks it from the row it counts. Rows THIS node wrote " +
+			"and has not heard back about, so it goes where custody_unsettled " +
+			"goes.",
+	},
+	{
+		Table: "custody_settled",
+		Why: "The custody batches this node has SETTLED, so a redelivery of one " +
+			"writes nothing: its kept rows stay counted, and a copy the fleet " +
+			"keeps elsewhere is not written back. A fact about what this node " +
+			"wrote and heard, swept with its event log.",
+	},
+	{
+		Table: "usage_rederive",
+		Why: "Which of this node's own days a custody settle changed since its " +
+			"usage publisher last derived them: a batch settled as kept makes " +
+			"rows count on whatever day they fall, and only this node derives " +
+			"its days. What the fleet agrees on is the day it then publishes, " +
+			"which is the replicated usage domain's; a peer's copy would name " +
+			"days of rows the peer does not hold.",
+	},
+	{
+		Table: "usage_day_windows",
+		Why: "The instants this node's usage publisher first cut each of its " +
+			"days on, so a day derived again after the company's clock moved " +
+			"counts the instants its first derivation did. Only this node " +
+			"derives its days; what the fleet agrees on is the record it " +
+			"publishes under each label, and a peer's copy would describe cuts " +
+			"of rows the peer does not hold.",
+	},
+	{
+		Table: "usage_watermark",
+		Why: "The oldest of this node's own days its usage publisher has not " +
+			"confirmed published whole, which its next start derives again — " +
+			"the tail of the day the node stopped in. Only this node derives its " +
+			"days, from rows only it holds.",
+	},
+	{
 		Table: "crewlet_event_parties",
 		Why:   "The party index over the rows above, and it goes where they go.",
 	},

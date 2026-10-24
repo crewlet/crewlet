@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/subagent"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 	llm "github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -130,6 +132,70 @@ func TestAnUnreadableBudgetLeavesTheSpawnerOff(t *testing.T) {
 	})
 	if got := executeOffers(t, r); slices.Contains(got, subagent.ToolName) {
 		t.Error("an unreadable budget counter still offered an uncapped spawner")
+	}
+}
+
+// A SEAT OFFERED DELEGATE IS TOLD WHO ITS WORKERS ARE, on both runtimes.
+//
+// `## Your workers` is gated on `delegate` being on the surface, and the gate
+// read the registry snapshot the surface was built FROM — which never holds
+// `delegate`, since the phase adds the spawner to the surface's own copy. So
+// the block was rendered for no seat at all, and an executor with templates
+// configured for it chose between them blind. The control is the same seat
+// whose budget cannot be read: the spawner is left off its surface, so the
+// block naming the templates must be left out with it, while the templates
+// themselves are still configured.
+func TestASeatOfferedDelegateIsToldItsWorkers(t *testing.T) {
+	t.Parallel()
+	workers := map[string]config.Worker{"researcher": {
+		Description:  "reads sources and reports findings with citations",
+		SystemPrompt: "You research.",
+	}}
+	offered := &runner.SubagentConfig{Limits: shipped(), Workers: workers}
+	withheld := &runner.SubagentConfig{
+		Limits: shipped(), Workers: workers,
+		Remaining: headroom{err: errors.New("the coordination store is unreachable")},
+	}
+
+	native := func(t *testing.T, sub *runner.SubagentConfig) string {
+		t.Helper()
+		prov := &scriptedProvider{execute: []llm.Completion{submitCall(t, runner.SubmitWorkTool,
+			`{"outcome":"no_action","summary":"nothing to fan out"}`)}}
+		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}},
+			buildOpts{subagent: sub})
+		if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		return systemOf(t, prov, "execute")
+	}
+	agentMode := func(t *testing.T, sub *runner.SubagentConfig) string {
+		t.Helper()
+		launcher := &recordingLauncher{}
+		r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
+			buildOpts{agentRun: launcher, subagent: sub})
+		if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		if launcher.runs != 1 {
+			t.Fatalf("launched %d runs", launcher.runs)
+		}
+		return launcher.req.Brief
+	}
+
+	for name, prompt := range map[string]func(*testing.T, *runner.SubagentConfig) string{
+		"native": native, "agent mode": agentMode,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := prompt(t, offered)
+			if !strings.Contains(got, "## Your workers") || !strings.Contains(got, "`researcher`") {
+				t.Errorf("a seat offered %s was not told its workers:\n%s", subagent.ToolName, got)
+			}
+			if got := prompt(t, withheld); strings.Contains(got, "## Your workers") {
+				t.Errorf("a seat whose surface holds no %s was told about workers it cannot reach:\n%s",
+					subagent.ToolName, got)
+			}
+		})
 	}
 }
 

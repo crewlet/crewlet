@@ -24,15 +24,20 @@
  * control whose effect the reader cannot see.
  */
 
+import type { ReactNode } from "react";
 import { Button, Popover, Select, Tag } from "@crewlethq/ui";
 import { Settings2Glyph } from "@crewlethq/icons/glyphs";
 import { secondAxisOptions, type Shape } from "~/lib/work.ts";
-import { usePanelAlign } from "~/lib/media.ts";
 import { ColumnChooser } from "~/app/frame/DataGrid.tsx";
 import { columnChoices, isGridShape } from "../shapes/Grid.tsx";
 import { CARD_FACTS, type CardFact } from "~/components/work.tsx";
 
 export interface DisplayMenuProps {
+  /**
+   * Which work, Group by and Sort, where the bar has no room for them (a
+   * phone): drawn first in the panel, as they would be at the bar's end.
+   */
+  arrange?: ReactNode;
   shape: Shape;
   /** The company's list rather than one project's, which decides whether the
    *  grid has a Project column to offer. */
@@ -72,14 +77,14 @@ export interface DisplayMenuProps {
 }
 
 export function DisplayMenu(props: DisplayMenuProps) {
-  // END-ALIGNED under a toolbar's right edge, START on a phone, where the
-  // toolbar wraps this trigger to the left edge — see [usePanelAlign].
-  const align = usePanelAlign("end");
+  // END-ALIGNED under a toolbar's right edge. On a phone the toolbar wraps
+  // this trigger to the left edge, and the kit holds the panel inside the
+  // window there.
   return (
     <Popover
       role="dialog"
       label="Display"
-      align={align}
+      align="end"
       trigger={(open, toggle) => (
         <Button
           size="small"
@@ -99,6 +104,7 @@ export function DisplayMenu(props: DisplayMenuProps) {
 }
 
 function DisplayPanel({
+  arrange,
   shape,
   workspace,
   viewShape,
@@ -120,10 +126,11 @@ function DisplayPanel({
   const columns = isGridShape(shape) ? columnChoices(shape, workspace) : [];
   const board = shape === "board";
   const lanes = board ? hidden : [];
-  const empty = !(nested && groupBy !== "") && columns.length === 0 && !board;
+  const empty = !arrange && !(nested && groupBy !== "") && columns.length === 0 && !board;
 
   return (
     <div className="work-menu work-display">
+      {arrange && <div className="work-display-arrange">{arrange}</div>}
       {nested && groupBy !== "" && (
         <label className="work-display-row">
           <span>Then by</span>
@@ -197,11 +204,7 @@ function DisplayPanel({
         </div>
       )}
 
-      {empty && (
-        <p className="work-menu-empty">
-          Nothing more to arrange on this shape — its grouping and order are in the bar.
-        </p>
-      )}
+      {empty && <p className="work-menu-empty">Grouping and order are in the bar.</p>}
 
       {/* WHAT A SAVED VIEW ITSELF SAYS, and the way back to it. A reader who
           has overridden its shape has no other way to tell that they have: the

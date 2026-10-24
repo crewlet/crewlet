@@ -1,0 +1,434 @@
+/**
+ * Enrolling a second factor, and the recovery codes that stand in for it.
+ *
+ * ONE COMPONENT FOR BOTH DOORS: the enrolment a deployment REQUIRES before a
+ * password session may do anything else (`#/enrol`), and the one a person
+ * opens from their Account page to add or replace an authenticator. The steps are
+ * the engine's and identical either way; only what surrounds them differs.
+ *
+ * # Two requests, and nothing is stored until the second
+ *
+ * The first `POST /auth/totp` answers a SEED and stores nothing. The second
+ * sends the seed back with a code the authenticator derived from it — the
+ * only evidence that the app on the other side works — and only then is the
+ * factor stored. A person who closes this page between the two has enrolled
+ * nothing, which is the right outcome rather than a factor that locks them
+ * out.
+ *
+ * # A value the engine just minted is shown once, here, and never again
+ *
+ * The seed and the recovery codes are the one place this dashboard renders a
+ * credential, and that is the design rule amended rather than broken (see the
+ * design document's "No screen renders a credential"): the engine answers
+ * each exactly once, in the response that minted it, and no route returns it
+ * again. A reload mints a fresh seed and never re-reads the old one.
+ *
+ * # A QR code first, and the key and the link beside it
+ *
+ * An authenticator app usually lives on a phone, and a phone SCANS: shown only
+ * the key, a person types thirty-two characters of base32 into it by hand,
+ * and one slip is a first code that does not match and the whole key typed
+ * again. So the seed's `otpauth://` URI — the value the engine answered,
+ * exactly, and the same one the link opens — is drawn as a QR code
+ * (`@crewlethq/ui`'s `QrCode`, inline SVG, nothing fetched), and the key and the link stay
+ * beside it for whoever cannot scan: an app on this same device opens the
+ * link, and one that only takes typing gets the key, grouped in fours. The
+ * code is drawn only while the seed is on screen, like the key, and the URI
+ * goes nowhere else — no log, no URL, no storage.
+ */
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Button,
+  Callout,
+  CopyButton,
+  DownloadButton,
+  FormField,
+  Input,
+  Modal,
+  QrCode,
+  Skeleton,
+  Text,
+  InlineCode,
+} from "@crewlethq/ui";
+import { KeyGlyph, ShieldUserGlyph } from "@crewlethq/icons/glyphs";
+import { refusalText } from "~/lib/refusal.ts";
+import { goSignIn } from "~/lib/session.ts";
+import { useWaiting } from "~/lib/waiting.ts";
+import {
+  auth,
+  RestError,
+  type SecondFactorEnrolled,
+  type SecondFactorSeed,
+} from "~/protocol/index.ts";
+
+/** A base32 key in groups of four, which is how an app asks for it to be typed. */
+export function groupedKey(secret: string): string {
+  return (secret.match(/.{1,4}/g) ?? []).join(" ");
+}
+
+export function SecondFactorSetup({
+  onEnrolled,
+}: {
+  onEnrolled: (answer: SecondFactorEnrolled) => void;
+}) {
+  const [seed, setSeed] = useState<SecondFactorSeed | null>(null);
+  const [unread, setUnread] = useState<string | null>(null);
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [refusal, setRefusal] = useState<string | null>(null);
+  // WHETHER THE ENGINE SAID A FACTOR IS ALREADY HELD, which a session opened
+  // on a password alone may not replace: the way on is to sign in with it.
+  const [held, setHeld] = useState(false);
+
+  const offer = useCallback(async () => {
+    setUnread(null);
+    try {
+      setSeed(await auth.secondFactorSeed());
+    } catch (err) {
+      setUnread(refusalText(err));
+    }
+  }, []);
+
+  // ONCE PER MOUNT, even under a development build's double effect: every
+  // offer is a fresh seed, and the one on screen must be the one the code is
+  // checked against.
+  const asked = useRef(false);
+  useEffect(() => {
+    if (asked.current) return;
+    asked.current = true;
+    void offer();
+  }, [offer]);
+
+  async function confirm() {
+    if (!seed || busy || code.trim() === "") return;
+    setBusy(true);
+    setRefusal(null);
+    try {
+      onEnrolled(await auth.enrolSecondFactor(seed.secret, code.trim()));
+    } catch (err) {
+      setHeld(err instanceof RestError && err.code === "second_factor_required");
+      setCode("");
+      setRefusal(refusalText(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (unread) {
+    return (
+      <Callout
+        variant="danger"
+        role="alert"
+        action={
+          <Button size="small" variant="secondary" onClick={() => void offer()}>
+            Try again
+          </Button>
+        }
+      >
+        {unread} Nothing was set up.
+      </Callout>
+    );
+  }
+  if (!seed) return <Skeleton variant="text" rows={4} label="Preparing a key" />;
+
+  return (
+    <form
+      className="signin-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void confirm();
+      }}
+    >
+      <ol className="signin-steps">
+        <li>
+          <div className="signin-step">
+            <Text as="p" variant="body">
+              Scan this code with your authenticator app.
+            </Text>
+            <QrCode value={seed.uri} label="QR code for your authenticator app" />
+            <Text as="p" variant="body">
+              Can’t scan it?{" "}
+              <a className="prose-link" href={seed.uri}>
+                Open it in your app
+              </a>
+              , or type this key.
+            </Text>
+            <div className="signin-row">
+              <InlineCode>{groupedKey(seed.secret)}</InlineCode>
+              <CopyButton text={seed.secret} label="Copy key" />
+            </div>
+          </div>
+        </li>
+        <li>
+          <FormField label="Code from the app" helper="The 6-digit code it shows now.">
+            {(field) => (
+              <Input
+                id={field.id}
+                aria-describedby={field.describedBy}
+                autoComplete="one-time-code"
+                inputMode="numeric"
+                spellCheck={false}
+                width="sm"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+              />
+            )}
+          </FormField>
+        </li>
+      </ol>
+      {refusal && (
+        <Callout
+          variant="danger"
+          role="alert"
+          action={
+            held ? (
+              <Button size="small" variant="secondary" onClick={goSignIn}>
+                Sign in again
+              </Button>
+            ) : undefined
+          }
+        >
+          {refusal}
+        </Callout>
+      )}
+      <Button type="submit" variant="primary" disabled={busy || code.trim() === ""}>
+        {busy ? "Checking" : "Confirm"}
+      </Button>
+    </form>
+  );
+}
+
+/**
+ * A set of recovery codes, shown the once the engine answers them.
+ *
+ * COPIED OR SAVED WHOLE, one per line, because a person keeps them in one
+ * place — a password manager's note, a file, a printed page — and ten
+ * separate copies is ten chances to miss one.
+ */
+export function RecoveryCodeList({ codes }: { codes: readonly string[] }) {
+  const text = codes.join("\n");
+  return (
+    <div className="signin-codes">
+      <ul className="signin-code-list" aria-label="Recovery codes">
+        {codes.map((code) => (
+          <li key={code}>
+            <InlineCode>{code}</InlineCode>
+          </li>
+        ))}
+      </ul>
+      <div className="signin-row">
+        <CopyButton text={text} label="Copy all" variant="secondary" />
+        <DownloadButton text={text} filename="crewlet-recovery-codes.txt" variant="secondary" />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The recovery codes a first enrolment issues, and the one step after it.
+ *
+ * ISSUED WITHOUT BEING ASKED, because a person who has just enrolled their
+ * first authenticator holds no other way back in: a phone lost next week is
+ * an account nobody but an administrator can reopen. A set that cannot be
+ * issued is said, with the way to try again, and the way on without it —
+ * the codes can be issued later from the person's Account page.
+ */
+export function FirstRecoveryCodes({ onDone }: { onDone: () => void }) {
+  const [codes, setCodes] = useState<string[] | null>(null);
+  const [refusal, setRefusal] = useState<string | null>(null);
+
+  const issue = useCallback(async () => {
+    setRefusal(null);
+    try {
+      setCodes((await auth.recoveryCodes()).codes);
+    } catch (err) {
+      setRefusal(refusalText(err));
+    }
+  }, []);
+
+  const asked = useRef(false);
+  useEffect(() => {
+    if (asked.current) return;
+    asked.current = true;
+    void issue();
+  }, [issue]);
+
+  if (refusal) {
+    return (
+      <div className="signin-form">
+        <Callout variant="warning" role="alert">
+          {refusal} Couldn’t create recovery codes.
+        </Callout>
+        <Button variant="primary" onClick={() => void issue()}>
+          Try again
+        </Button>
+        <Button variant="ghost" onClick={onDone}>
+          Skip for now
+        </Button>
+      </div>
+    );
+  }
+  if (!codes) return <Skeleton variant="text" rows={4} label="Creating recovery codes" />;
+  return (
+    <div className="signin-form">
+      <Text as="p" variant="body">
+        Save these recovery codes. Each works once. <strong>You won’t see them again.</strong>
+      </Text>
+      <RecoveryCodeList codes={codes} />
+      <Button variant="primary" onClick={onDone}>
+        I’ve saved them
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * Adding or replacing an authenticator, from a person's Account page.
+ *
+ * THE ENGINE ASKS FOR A FRESH PROOF FIRST — the one step-up window, because
+ * this is the gesture that decides whether a stolen session becomes a
+ * permanent hold on somebody's account — and the step-up ceremony answers it
+ * before the seed arrives, so this dialog only ever shows a seed its reader
+ * proved they may have.
+ *
+ * `codes` is whether they hold recovery codes now. Holding none — a first
+ * authenticator — the enrolment ISSUES a first set, as a required enrolment
+ * does ([FirstRecoveryCodes]), since a phone lost next week is otherwise an
+ * account nobody but an administrator can reopen; it used to say "your
+ * recovery codes are unchanged" to somebody who held none, and prompt nothing.
+ * Holding a set, the set stays and the sentence says so.
+ */
+export function AuthenticatorDialog({ codes, onClose }: { codes: boolean; onClose: () => void }) {
+  const [enrolled, setEnrolled] = useState(false);
+  // AS THE DIALOG OPENED: the page behind re-reads the credentials when the
+  // tab comes back — from a password manager the codes were saved into — and
+  // the set issued here would then turn this into the replacement's sentence,
+  // taking the codes off the screen before they were saved.
+  const [first] = useState(!codes);
+  const issuing = enrolled && first;
+  return (
+    <Modal
+      open
+      title="Two-step verification"
+      icon={<ShieldUserGlyph size="md" />}
+      onClose={onClose}
+      size="md"
+      stackBody
+      footer={
+        // THE FIRST SET CARRIES ITS OWN WAY ON, once it is saved or skipped.
+        issuing ? null : (
+          <Button variant={enrolled ? "primary" : "ghost"} onClick={onClose}>
+            {enrolled ? "Done" : "Cancel"}
+          </Button>
+        )
+      }
+    >
+      {issuing ? (
+        <FirstRecoveryCodes onDone={onClose} />
+      ) : enrolled ? (
+        <Text as="p" variant="body">
+          Authenticator set up. Codes from your old app stop working.
+        </Text>
+      ) : (
+        <>
+          <Text as="p" variant="body" tone="secondary">
+            You’ll need a code from this app to sign in. Replaces any earlier app.
+          </Text>
+          <SecondFactorSetup onEnrolled={() => setEnrolled(true)} />
+        </>
+      )}
+    </Modal>
+  );
+}
+
+/**
+ * Issuing a fresh set of recovery codes, from a person's Account page.
+ *
+ * ASKED FOR, never issued on opening: a new set RETIRES the old one, so a
+ * person who opened this to look and closed it again must still hold the set
+ * they came with.
+ *
+ * `held` is whether they hold a set now, which is what every sentence about
+ * an earlier set turns on: told "your earlier codes no longer work" on their
+ * first set, a person went looking for codes they never had.
+ */
+export function RecoveryCodesDialog({ held, onClose }: { held: boolean; onClose: () => void }) {
+  const waiting = useWaiting();
+  const [codes, setCodes] = useState<string[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [refusal, setRefusal] = useState<string | null>(null);
+
+  async function issue() {
+    if (busy) return;
+    setBusy(true);
+    setRefusal(null);
+    try {
+      setCodes((await auth.recoveryCodes()).codes);
+    } catch (err) {
+      // TWO DIFFERENT AFTERMATHS. A refusal stored nothing, so the set held
+      // still works; an answer nobody can confirm — the engine's `503`, or no
+      // answer at all — may have stored a set this page will never see, which
+      // would have retired the one held. Saying "still works" there is the
+      // claim a person would find out was false on the day they need it.
+      const unknown = err instanceof RestError && (err.status === 503 || err.status === 0);
+      const aftermath = unknown
+        ? "Couldn’t confirm new codes were saved. Create a new set."
+        : held
+          ? "No codes created. Your current codes still work."
+          : "No codes created.";
+      setRefusal(`${refusalText(err)} ${aftermath}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal
+      open
+      title="Recovery codes"
+      icon={<KeyGlyph size="md" />}
+      onClose={onClose}
+      dismissable={!busy}
+      closeDisabledReason={waiting.reason}
+      size="md"
+      stackBody
+      footer={
+        codes ? (
+          <Button variant="primary" onClick={onClose}>
+            I’ve saved them
+          </Button>
+        ) : (
+          <>
+            <Button variant="ghost" onClick={onClose} disabled={busy}>
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={() => void issue()} disabled={busy}>
+              {busy ? "Creating" : "Create new codes"}
+            </Button>
+          </>
+        )
+      }
+    >
+      {codes ? (
+        <>
+          <Text as="p" variant="body">
+            {held && "Old codes stopped working. "}Save these now.{" "}
+            <strong>You won’t see them again.</strong>
+          </Text>
+          <RecoveryCodeList codes={codes} />
+        </>
+      ) : (
+        <Text as="p" variant="body" tone="secondary">
+          Each code works once, for when you don’t have your app.
+          {held && " A new set replaces the old one."}
+        </Text>
+      )}
+      {refusal && (
+        <Callout variant="danger" role="alert">
+          {refusal}
+        </Callout>
+      )}
+    </Modal>
+  );
+}

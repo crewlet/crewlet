@@ -1,0 +1,394 @@
+package authz_test
+
+import (
+	"errors"
+	"slices"
+	"testing"
+
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
+)
+
+// EVERY APP IS NAMED BY A ROW A PERSON CAN TAKE.
+//
+// An app no row names is a permission an administrator can tick on somebody's
+// row that opens nothing at all, which reads to that person as a broken
+// screen. Walked from [iam.Apps] rather than from the table, so a third app
+// added to the vocabulary fails here until a verb belongs to it — and a row
+// that is SEAT-ONLY does not count, because no person ever takes it.
+// Mutation: drop the knowledge app from every page row and this goes red.
+func TestEveryAppIsNamedByARow(t *testing.T) {
+	t.Parallel()
+	named := map[iam.Grant]bool{}
+	for _, a := range authz.Actions() {
+		app, _ := authz.AppOf(a)
+		seatOnly, _ := authz.SeatOnlyOf(a)
+		if app == "" || seatOnly {
+			continue
+		}
+		if !app.IsApp() {
+			t.Errorf("%s belongs to %q, which is not one of %v", a, app, iam.Apps)
+		}
+		named[app] = true
+	}
+	for _, app := range iam.Apps {
+		if !named[app] {
+			t.Errorf("no verb a person can take belongs to %q, so holding it "+
+				"opens nothing", app)
+		}
+	}
+	if _, known := authz.AppOf("no.such.verb"); known {
+		t.Error("AppOf knows a verb the table has no row for")
+	}
+}
+
+// EVERY APP ROW ADMITS A HOLDER AND REFUSES A NON-HOLDER, NAMING THE APP.
+//
+// Walked over EVERY row that names an app, on an object and a chart that
+// satisfy whatever relation the row asks — the caller's own record, a comment
+// they wrote, a project and a page container they lead — so the app is the
+// ONLY thing left to decide: the same principal is admitted holding it and
+// refused without it, and the refusal names exactly the app (never admin,
+// which would change the answer too but is not the smallest thing to ask for).
+// That is what holds the app on a RELATION row, which the relation alone would
+// otherwise answer. Mutation: return the relation's decision from withApp
+// untouched and every relation row's second half goes red.
+func TestEveryAppRowAdmitsAHolderAndRefusesANonHolder(t *testing.T) {
+	t.Parallel()
+	walked := 0
+	for _, a := range authz.Actions() {
+		app, _ := authz.AppOf(a)
+		if app == "" {
+			continue
+		}
+		walked++
+		// THE CTO leads the PLATFORM project and the RUNBOOKS container in
+		// the fixture, and the object names them as its owner and author
+		// besides, so every relation class admits them.
+		object := authz.Object{Kind: authz.KindProject, Owner: "cto", Author: "cto",
+			Container: "PLATFORM", ContainerKind: authz.KindProject, Asked: ""}
+		switch app {
+		case iam.GrantKnowledge:
+			object = authz.Object{Kind: authz.KindPage, Owner: "cto", Author: "cto",
+				Container: "RUNBOOKS"}
+		case iam.GrantArtifacts:
+			// AN ARTIFACT THE CTO OWNS, which holds every role.
+			object = authz.Object{Kind: authz.KindArtifact, Owner: "cto"}
+		}
+		holder := authz.Decide(t.Context(), personLeading("cto", app), a, object,
+			nimbus(), decidedAt)
+		if holder.Unknown() || !holder.Allowed {
+			t.Errorf("%s: a holder of %s with every relation decided %+v, want "+
+				"admitted", a, app, holder)
+		}
+		without := authz.Decide(t.Context(), personLeading("cto"), a, object,
+			nimbus(), decidedAt)
+		if without.Unknown() || without.Allowed ||
+			!slices.Equal(without.Grants, []iam.Grant{app}) {
+			t.Errorf("%s: the same caller without %s decided %+v, want refused "+
+				"naming exactly [%s]", a, app, without, app)
+		}
+	}
+	if walked == 0 {
+		t.Fatal("no row names an app, so this walk certifies nothing")
+	}
+}
+
+// THE ASKED ARM ADMITS ONLY THE PERSON ASKED, AND ONLY TO READ AND ANSWER.
+//
+// Somebody a colleague put a question to reads the item and answers it without
+// the tracker. Everything about that is narrow, and each narrowing is a case:
+// it is the person the ask NAMES (by the seat they hold, or the login they act
+// under) and nobody else; an object nobody has read is "read it and decide
+// again", never an admission; and it reaches exactly two verbs — walked over
+// the whole table, no other row admits on being asked. The controls are a
+// tracker holder, admitted whoever is asked, and the person asked on an item
+// whose ask names somebody else. Mutation: admit on any non-empty Asked and
+// the stranger is let in.
+func TestTheAskedArmAdmitsOnlyThePersonAsked(t *testing.T) {
+	t.Parallel()
+	asked := personLeading("sre")
+	item := func(asked string) authz.Object {
+		return authz.Object{Kind: authz.KindTask, Container: "PLATFORM", Asked: asked}
+	}
+	for _, a := range []authz.Action{authz.ActionWorkRead, authz.ActionWorkComment} {
+		for _, c := range []struct {
+			name   string
+			p      iam.Principal
+			object authz.Object
+			want   authz.Reason
+			admit  bool
+		}{
+			{"the seat asked", asked, item("sre"), authz.ReasonAsked, true},
+			{"the login asked", person("jane.doe"), item("jane.doe"),
+				authz.ReasonAsked, true},
+			{"somebody another ask names", asked, item("cto"), authz.ReasonNoGrant, false},
+			{"nobody asked", asked, item(""), authz.ReasonNoGrant, false},
+			{"a tracker holder", person("ana.ops", iam.GrantTracker), item("cto"),
+				authz.ReasonGrant, true},
+		} {
+			d := authz.Decide(t.Context(), c.p, a, c.object, nimbus(), decidedAt)
+			if d.Unknown() || d.Allowed != c.admit || d.Reason != c.want {
+				t.Errorf("%s, %s: decided %+v, want admitted=%v for %s", a, c.name,
+					d, c.admit, c.want)
+			}
+			if !c.admit && !slices.Equal(d.Grants, []iam.Grant{iam.GrantTracker}) {
+				t.Errorf("%s, %s: refused naming %v, want [tracker]", a, c.name, d.Grants)
+			}
+		}
+		unread := authz.Decide(t.Context(), asked, a,
+			authz.Object{Kind: authz.KindTask, Unresolved: true}, nimbus(), decidedAt)
+		if !errors.Is(unread.Err, authz.ErrUnresolved) {
+			t.Errorf("%s on an item nobody has read decided %+v, want told to "+
+				"read it", a, unread)
+		}
+	}
+	for _, a := range authz.Actions() {
+		d := authz.Decide(t.Context(), asked, a, item("sre"), nimbus(), decidedAt)
+		if d.Reason == authz.ReasonAsked && a != authz.ActionWorkRead &&
+			a != authz.ActionWorkComment {
+			t.Errorf("%s admitted the person asked on being asked; only reading "+
+				"the item and answering on it may", a)
+		}
+	}
+}
+
+// AN AUTHOR TIDIES THEIR OWN WORK ONLY WITH ITS APP.
+//
+// A page's creator trashes, restores and renames it and an item's reporter
+// removes and restores it, whoever leads its container — but the app still
+// governs: somebody who no longer uses the knowledge base does not tidy pages
+// in it. And the author arm is the AUTHOR's: a colleague tidies nobody else's
+// work. Mutation: check the author arm after the container relation and the
+// author outside the lead's project is refused.
+func TestAnAuthorTidiesOnlyWithTheApp(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		action authz.Action
+		object authz.Object
+		app    iam.Grant
+	}{
+		{authz.ActionPageTrash, authz.Object{Kind: authz.KindPage,
+			Container: "RUNBOOKS", Author: "sre"}, iam.GrantKnowledge},
+		{authz.ActionPageRestore, authz.Object{Kind: authz.KindPage,
+			Container: "RUNBOOKS", Author: "sre"}, iam.GrantKnowledge},
+		{authz.ActionPageRename, authz.Object{Kind: authz.KindPage,
+			Container: "RUNBOOKS", Author: "sre"}, iam.GrantKnowledge},
+		{authz.ActionWorkRemove, authz.Object{Kind: authz.KindTask,
+			Container: "PLATFORM", Author: "sre"}, iam.GrantTracker},
+		{authz.ActionWorkRestore, authz.Object{Kind: authz.KindTask,
+			Container: "PLATFORM", Author: "sre"}, iam.GrantTracker},
+	} {
+		with := authz.Decide(t.Context(), personLeading("sre", c.app), c.action,
+			c.object, nimbus(), decidedAt)
+		if !with.Allowed || with.Reason != authz.ReasonAuthor {
+			t.Errorf("%s: the author holding %s decided %+v, want admitted as "+
+				"author", c.action, c.app, with)
+		}
+		without := authz.Decide(t.Context(), personLeading("sre"), c.action,
+			c.object, nimbus(), decidedAt)
+		if without.Allowed || !slices.Equal(without.Grants, []iam.Grant{c.app}) {
+			t.Errorf("%s: the author without %s decided %+v, want refused naming it",
+				c.action, c.app, without)
+		}
+		other := authz.Decide(t.Context(), personLeading("sam", c.app), c.action,
+			c.object, nimbus(), decidedAt)
+		if other.Allowed {
+			t.Errorf("%s: a colleague tidied somebody else's work (%s)", c.action,
+				other.Reason)
+		}
+	}
+}
+
+// AN UNRESOLVED TIDY ASKS FOR THE ROW.
+//
+// A surface that offers a verb before it has read anything — the operator's
+// list of what a person may do — names no container and no author, and both
+// decide a tidy. Answered as a refusal, every one of these verbs was missing
+// from a project lead's list (a container nobody named refuses as unnamed for
+// anybody but admin), so a lead's restore control was drawn disabled. Answered
+// [authz.ErrUnresolved] for a caller holding the app — "read the row and ask
+// again" — the verb is offered and decided on the row. A caller without the
+// app is refused there and then, and admin is admitted. Walked over every
+// TIDY, CONTAINER-REMOVAL and MOVE row. Mutation: drop the unresolved arm from
+// the tidy class and its rows answer unnamed.
+func TestAnUnresolvedTidyAsksForTheRow(t *testing.T) {
+	t.Parallel()
+	walked := 0
+	for _, a := range authz.Actions() {
+		class, _ := authz.ClassOf(a)
+		if class != authz.ClassTidy && class != authz.ClassDestructive {
+			continue
+		}
+		walked++
+		app, _ := authz.AppOf(a)
+		object := authz.Object{Kind: authz.KindTask, Unresolved: true}
+		if app == iam.GrantKnowledge {
+			object.Kind = authz.KindPage
+		}
+		holder := authz.Decide(t.Context(), personLeading("cto", app), a, object,
+			nimbus(), decidedAt)
+		if !errors.Is(holder.Err, authz.ErrUnresolved) {
+			t.Errorf("%s: a holder of %s on a row nobody has read decided %+v, "+
+				"want told to read it", a, app, holder)
+		}
+		without := authz.Decide(t.Context(), personLeading("cto"), a, object,
+			nimbus(), decidedAt)
+		if without.Unknown() || without.Allowed {
+			t.Errorf("%s: a caller without %s decided %+v, want refused", a, app, without)
+		}
+		admin := authz.Decide(t.Context(), person("ops.admin", iam.GrantAdmin), a,
+			object, nimbus(), decidedAt)
+		if !admin.Allowed {
+			t.Errorf("%s: admin decided %+v, want admitted", a, admin)
+		}
+	}
+	if walked == 0 {
+		t.Fatal("no tidy or destructive row exists, so this walk certifies nothing")
+	}
+}
+
+// SHOWS FOLLOWS THE KIND'S APP, AND APPFOR NAMES ONLY APPS.
+//
+// The one filter every cross-app answer runs its rows through: a tracker row
+// to a tracker holder, a page to a knowledge holder, a row of no app to
+// everybody — admin seeing everything through the apps it includes. Held over
+// every kind, so a kind added later is decided here rather than shown to
+// everybody by default; and every app is some kind's, or no row of it could
+// ever be filtered, except an app that gates AUTHORING a kind decided per
+// object, which filters no row by design (its rows are [authz.Visible]'s, held
+// by the walk below). Mutation: map a view to no app and the tracker-less
+// reader is shown it.
+func TestShowsFollowsTheKindsApp(t *testing.T) {
+	t.Parallel()
+	// THE ARTIFACTS APP GATES AUTHORING AND NEVER READING: an artifact is
+	// shown by its shares, so no kind belongs to it.
+	authoringOnly := map[iam.Grant]bool{iam.GrantArtifacts: true}
+	used := map[iam.Grant]bool{}
+	for _, k := range authz.ObjectKinds {
+		app := authz.AppFor(k)
+		if app != "" && !app.IsApp() {
+			t.Errorf("%s belongs to %q, which is not an app", k, app)
+		}
+		used[app] = true
+		for _, p := range []iam.Principal{
+			person("jane.doe"),
+			person("jane.doe", iam.GrantTracker),
+			person("jane.doe", iam.GrantKnowledge),
+			person("jane.doe", iam.GrantArtifacts),
+			person("jane.doe", iam.GrantAdmin),
+		} {
+			want := k != authz.KindArtifact && (app == "" || p.Can(app))
+			if got := authz.Shows(p, k); got != want {
+				t.Errorf("Shows(%v, %s) = %v, want %v", p.Grants, k, got, want)
+			}
+		}
+	}
+	for _, app := range iam.Apps {
+		if !used[app] && !authoringOnly[app] {
+			t.Errorf("no kind of object belongs to %q, so no row of it is ever "+
+				"filtered", app)
+		}
+	}
+	for app := range authoringOnly {
+		if used[app] {
+			t.Errorf("%q gates authoring only, and a kind belongs to it, so a "+
+				"row of that kind is shown to whoever holds it", app)
+		}
+	}
+	for k, want := range map[authz.ObjectKind]iam.Grant{
+		authz.KindTask: iam.GrantTracker, authz.KindProject: iam.GrantTracker,
+		authz.KindView: iam.GrantTracker, authz.KindPage: iam.GrantKnowledge,
+		authz.KindContainer: iam.GrantKnowledge, authz.KindPerson: "",
+		authz.KindUnit: "", authz.KindCompany: "", authz.KindArtifact: "",
+	} {
+		if got := authz.AppFor(k); got != want {
+			t.Errorf("AppFor(%s) = %q, want %q", k, got, want)
+		}
+	}
+}
+
+// A CHART THAT CANNOT ANSWER CANNOT ADMIT A CALLER THE APP REFUSES.
+//
+// Every arm of a row that names an app needs the app — the owner's, a lead's
+// and an author's beside their relation, and the admin path through
+// [iam.Expand], which is decided before the chart — so for a caller holding
+// no app the answer is no whatever the chart would have said. Answered
+// unknown it was a 503 telling them to come back to a refusal, for as long as
+// the node could not read its chart (applying a revision, or running none).
+// Walked over EVERY row that names an app, on an object somebody else owns,
+// wrote and leads, resolved and not; the one unknown a caller without the app
+// may still be answered is the asked arm's "read the item", because being
+// asked admits without the app. The named cases pin the refusal to exactly
+// the app, and the CONTROL is the same calls from a caller holding it, for
+// whom the chart's answer IS the decision and so stays unknown. Mutation:
+// convert only an [authz.ErrUnresolved] in withApp, as it once did, and every
+// relation row reading the chart goes red.
+func TestAChartThatCannotAnswerCannotAdmitACallerWithoutTheApp(t *testing.T) {
+	t.Parallel()
+	down := chart{err: errors.New("the chart could not be read")}
+	walked := 0
+	for _, a := range authz.Actions() {
+		app, _ := authz.AppOf(a)
+		if app == "" {
+			continue
+		}
+		class, _ := authz.ClassOf(a)
+		for _, unresolved := range []bool{false, true} {
+			object := authz.Object{Kind: authz.KindProject, Owner: "sre", Author: "sre",
+				Container: "PLATFORM", ContainerKind: authz.KindProject, Unresolved: unresolved}
+			if app == iam.GrantKnowledge {
+				object = authz.Object{Kind: authz.KindPage, Owner: "sre", Author: "sre",
+					Container: "RUNBOOKS", Unresolved: unresolved}
+			}
+			d := authz.Decide(t.Context(), personLeading("cto"), a, object, down, decidedAt)
+			walked++
+			if unresolved && class == authz.ClassAppOrAsked && errors.Is(d.Err, authz.ErrUnresolved) {
+				continue
+			}
+			if d.Allowed || d.Unknown() {
+				t.Errorf("%s (unresolved %v): a caller without %s on a chart that "+
+					"cannot answer decided %+v, want refused", a, unresolved, app, d)
+			}
+		}
+	}
+	if walked == 0 {
+		t.Fatal("no row names an app, so this walk certifies nothing")
+	}
+
+	for _, c := range []struct {
+		name   string
+		action authz.Action
+		object authz.Object
+		app    iam.Grant
+	}{
+		{"a report's record", authz.ActionPersonRead,
+			authz.Object{Kind: authz.KindPerson, Owner: "sre"}, iam.GrantTracker},
+		{"a record nobody has resolved", authz.ActionPersonRead,
+			authz.Object{Kind: authz.KindPerson, Owner: "sre.person", Unresolved: true},
+			iam.GrantTracker},
+		{"a project's policy", authz.ActionProjectPolicy,
+			authz.Object{Kind: authz.KindProject, Container: "PLATFORM",
+				ContainerKind: authz.KindProject}, iam.GrantTracker},
+		{"a page in a container", authz.ActionPageTrash,
+			authz.Object{Kind: authz.KindPage, Author: "sre", Container: "RUNBOOKS"},
+			iam.GrantKnowledge},
+		{"a project's shared view", authz.ActionViewSave,
+			authz.Object{Kind: authz.KindView, Container: "PLATFORM",
+				ContainerKind: authz.KindProject}, iam.GrantTracker},
+	} {
+		without := authz.Decide(t.Context(), personLeading("cto"), c.action, c.object, down,
+			decidedAt)
+		if without.Unknown() || without.Allowed || without.Reason != authz.ReasonNoGrant ||
+			!slices.Equal(without.Grants, []iam.Grant{c.app}) {
+			t.Errorf("%s: a caller without %s decided %+v, want refused no_grant "+
+				"naming exactly [%s]", c.name, c.app, without, c.app)
+		}
+		holding := authz.Decide(t.Context(), personLeading("cto", c.app), c.action, c.object,
+			down, decidedAt)
+		if !holding.Unknown() {
+			t.Errorf("%s: a caller holding %s decided %+v on a chart that cannot "+
+				"answer, want unknown — the chart is their decision", c.name, c.app, holding)
+		}
+	}
+}

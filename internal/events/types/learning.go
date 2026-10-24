@@ -288,7 +288,7 @@ func (o EmbedOutcome) Valid() bool {
 	return false
 }
 
-// PrefetchSummary fires once per turn, after the seven context blocks the
+// PrefetchSummary fires once per turn, after the six context blocks the
 // executor's prompt is built from resolve, recording hit and rendered size for
 // each of them.
 //
@@ -325,8 +325,6 @@ type PrefetchSummary struct {
 	SynthesizedSkillsBytes int       `json:"synthesized_skills_bytes"`
 	EpisodeRecallHit       bool      `json:"episode_recall_hit"`
 	EpisodeRecallBytes     int       `json:"episode_recall_bytes"`
-	OnboardingHintHit      bool      `json:"onboarding_hint_hit"`
-	OnboardingHintBytes    int       `json:"onboarding_hint_bytes"`
 	PersonalMemoryHit      bool      `json:"personal_memory_hit"`
 	PersonalMemoryBytes    int       `json:"personal_memory_bytes"`
 	RelevantKnowledgeHit   bool      `json:"relevant_knowledge_hit"`
@@ -396,18 +394,17 @@ func (e PrefetchSummary) AgentID() string { return e.Agent }
 
 // SummaryFor counts hits out of every block and flags a gated turn
 // separately: without the flag, a thin trigger and a genuinely empty set of
-// stores produce the same "0/7" and lead an operator to look in the wrong
+// stores produce the same "0/6" and lead an operator to look in the wrong
 // place.
 //
 // THE DENOMINATOR IS THE SLICE'S OWN LENGTH. It was a literal, and a literal
-// beside a hand-written list is a number that goes on saying six after the
-// seventh block lands — which reads to an operator as a turn that hit
+// beside a hand-written list is a number that goes on saying one count after
+// a block lands or leaves — which reads to an operator as a turn that hit
 // everything, or as one that hit more blocks than exist.
 func (e PrefetchSummary) SummaryFor(actor string) string {
 	blocks := []bool{
 		e.CounterpartyHit, e.SynthesizedSkillsHit, e.EpisodeRecallHit,
-		e.OnboardingHintHit, e.PersonalMemoryHit, e.RelevantKnowledgeHit,
-		e.ThreadContextHit,
+		e.PersonalMemoryHit, e.RelevantKnowledgeHit, e.ThreadContextHit,
 	}
 	hits := 0
 	for _, hit := range blocks {
@@ -549,7 +546,10 @@ func (e SkillRefined) SummaryFor(actor string) string {
 // review what the agents worked out for themselves.
 type SkillPromoted struct {
 	// Role is a representative role for the unit rather than one author.
-	RoleName  string `json:"role"`
+	RoleName string `json:"role"`
+	// UnitID is the unit's KEY — what a `manages:` entry and a seat's
+	// `unit:` resolve — rather than its display name, so a reader can
+	// filter and join on it and a rename does not orphan the history.
 	UnitID    string `json:"unit_id"`
 	SkillName string `json:"skill_name"`
 	PageID    string `json:"page_id"`

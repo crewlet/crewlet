@@ -11,7 +11,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { engineFile } from "~/test/engineFiles.ts";
 import { GATE_REQUEST_TIMEOUT_MS } from "~/contract/gate.ts";
 import type { RetentionGateResult } from "~/protocol/index.ts";
@@ -57,12 +57,10 @@ function engine(...replies: { status: number; body: unknown }[]): Sent[] {
   return sent;
 }
 
-beforeEach(() => localStorage.setItem("crewlet_api_token", "t"));
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   vi.useRealTimers();
-  localStorage.clear();
 });
 
 /** Types the node id and presses the gesture's own button. */
@@ -90,8 +88,8 @@ test("a gesture pending on a log is not rendered as success and says not to retr
   const banner = screen.getByRole("status");
   expect(banner.className).not.toContain("success");
   expect(banner.className).toContain("warning");
-  expect(screen.getByText(/Do not retry/)).toBeTruthy();
-  expect(screen.getByText(/not yet applied here/)).toBeTruthy();
+  expect(screen.getByText("Don’t retry.")).toBeTruthy();
+  expect(screen.getByText(/still applying here/)).toBeTruthy();
 });
 
 // AN UNKNOWN LOG HAS NO POSITION — never "sequence 0", which reads as a record
@@ -100,9 +98,9 @@ test("an unknown log shows no position and offers finishing under the gesture's 
   const result = answer("unknown");
   render(<GateOutcome result={result} evict />);
   expect(screen.getByRole("alert").className).toContain("danger");
-  expect(screen.getByText(/Finish it under the same operation id/)).toBeTruthy();
+  expect(screen.getByText(/Finish it with the same operation id\./)).toBeTruthy();
   expect(screen.getByText(result.op_id)).toBeTruthy();
-  expect(screen.getByText(/may or may not be on the log/)).toBeTruthy();
+  expect(screen.getByText(/may not be recorded/)).toBeTruthy();
   expect(screen.queryByText(/sequence 0/)).toBeNull();
   expect(screen.queryByText(/CREWLET_PAGES_LOG 0/)).toBeNull();
   expect(finishable({ opId: result.op_id, force: false, answer: result })).toBe(true);
@@ -115,12 +113,14 @@ test("an unknown log shows no position and offers finishing under the gesture's 
 test("an unvouched log says this node cannot tell and sends the gesture elsewhere", () => {
   const result = answer("unvouched");
   render(<GateOutcome result={result} evict />);
-  expect(screen.getByText(/this node cannot tell whether the record is on the log/)).toBeTruthy();
+  expect(screen.getByText(/whether it’s recorded/).textContent).toBe(
+    "unknown whether it’s recorded",
+  );
   expect(screen.getByText(result.domains[1]!.hint!)).toBeTruthy();
   expect(screen.getByText(/Open this dashboard on a node the fleet still counts/)).toBeTruthy();
-  expect(screen.queryByText(/Finish it under the same operation id: a log/)).toBeNull();
+  expect(screen.queryByText(/logs have it/)).toBeNull();
   expect(screen.queryByText(/Finish this gesture sends it again/)).toBeNull();
-  expect(screen.queryByText(/may or may not be on the log/)).toBeNull();
+  expect(screen.queryByText(/may not be recorded/)).toBeNull();
 });
 
 // A FULL LOG IS NOT TOLD TO RETRY — the same request is refused the same way
@@ -129,10 +129,10 @@ test("an unvouched log says this node cannot tell and sends the gesture elsewher
 test("a full log is not offered a retry, shows its hint, and keeps the gesture", () => {
   const result = answer("log_full");
   render(<GateOutcome result={result} evict />);
-  expect(screen.queryByText(/Finish it under the same operation id: a log/)).toBeNull();
+  expect(screen.queryByText(/logs have it/)).toBeNull();
   expect(screen.queryByText(/Finish this gesture sends it again/)).toBeNull();
   expect(screen.getByText(result.domains[1]!.hint!)).toBeTruthy();
-  expect(screen.getByText(/sending it again now cannot finish it/)).toBeTruthy();
+  expect(screen.getByText(/Fix what each log below names/)).toBeTruthy();
   expect(screen.getByText(/crewlet retention set-capacity/)).toBeTruthy();
   expect(finishable({ opId: result.op_id, force: false, answer: result })).toBe(true);
 });
@@ -141,7 +141,7 @@ test("a full log is not offered a retry, shows its hint, and keeps the gesture",
 test("a superseded operation offers no finish and says it needs another remedy", () => {
   const result = answer("superseded");
   render(<GateOutcome result={result} evict />);
-  expect(screen.getByText(/this operation cannot be/)).toBeTruthy();
+  expect(screen.getByText("This operation can’t finish.")).toBeTruthy();
   expect(finishable({ opId: result.op_id, force: false, answer: result })).toBe(false);
 });
 
@@ -277,7 +277,9 @@ test("an unjudged readmission offers to ask again, not to wait for the node", as
   render(<GateDialog node="node-4" evict={false} onHeld={() => {}} onClose={() => {}} />);
   confirmAndPress("node-4", "Readmit");
   await waitFor(() => expect(screen.getByText(String(refusal.body.hint))).toBeTruthy());
-  expect(screen.getByText(/Send it again once what stopped it has cleared/)).toBeTruthy();
+  expect(
+    screen.getByText("Nothing was written. Send it again once the cause has cleared."),
+  ).toBeTruthy();
   expect(screen.getByText(/Open this dashboard on a node the fleet still counts/)).toBeTruthy();
   expect(screen.queryByText(/Wait for it to catch up/)).toBeNull();
   expect(screen.queryByText(/is readmitted/)).toBeNull();
@@ -294,8 +296,10 @@ test("a gesture refused in a capacity window says it waits on the window", async
     render(<GateDialog node="node-4" evict={evict} onHeld={() => {}} onClose={() => {}} />);
     confirmAndPress("node-4", evict ? "Evict" : "Readmit");
     await waitFor(() => expect(screen.getByText(String(refusal.body.hint))).toBeTruthy());
-    expect(screen.getByText(/back in normal mode/)).toBeTruthy();
-    expect(screen.queryByText(/presence lease to lapse/)).toBeNull();
+    expect(
+      screen.getByText(`Wait for normal mode, then ${evict ? "evict" : "readmit"} it again.`),
+    ).toBeTruthy();
+    expect(screen.queryByText(/stops showing live/)).toBeNull();
     expect(screen.queryByText(/Wait for it to catch up/)).toBeNull();
     cleanup();
   }
@@ -330,8 +334,14 @@ test("a gesture that times out keeps its op id and offers to finish it", async (
   });
   expect(screen.queryByText(/No answer/)).toBeNull();
 
+  // AND NOT BEFORE THE ENGINE'S OWN WAIT, which is past the node's bound.
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(GATE_REQUEST_TIMEOUT_MS - 31_000 + 1_000);
+    await vi.advanceTimersByTimeAsync(GATE_REQUEST_TIMEOUT_MS - 31_000 - 1);
+  });
+  expect(screen.queryByText(/No answer/)).toBeNull();
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1);
   });
   expect(screen.getByText(/No answer/)).toBeTruthy();
   const opId = sent[0]!.query.get("op_id")!;
@@ -496,7 +506,7 @@ test("a finish that goes unanswered keeps the answer the gesture already had", a
   fireEvent.click(screen.getByRole("button", { name: "Finish this gesture" }));
   await waitFor(() => expect(screen.getByText(/No answer/)).toBeTruthy());
   // THE PER-LOG ANSWER IS STILL ON SCREEN, and HELD with the gesture.
-  expect(screen.getByText(/may or may not be on the log/)).toBeTruthy();
+  expect(screen.getByText(/may not be recorded/)).toBeTruthy();
   expect(screen.getByText(/CREWLET_TRACKER_LOG 918280002/)).toBeTruthy();
   expect(held.at(-1)?.answer).toEqual(result);
   expect(held.at(-1)?.unanswered).toBeTruthy();

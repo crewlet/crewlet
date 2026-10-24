@@ -167,13 +167,18 @@ type ToolResult struct {
 	// refused.
 	Failed bool
 
-	// Refusal is a failed call's machine-readable class, when the frame
-	// that refused wrote the sentence itself — see [mcp.Refusal]. Empty on
-	// success and on a third-party MCP server's failure, which the engine
-	// does not classify by guessing at prose it did not write. This loop
-	// never reads it — a model reads the sentence — so it is for a caller
-	// that dispatches through a surface with no model behind it.
-	Refusal mcp.Refusal
+	// Cause is WHY a failed call failed — the tool's own [mcp.Result.Cause],
+	// or the class of a call the surface refused before any tool ran — and
+	// nil on success and on a third-party MCP server's failure, which the
+	// engine does not classify by guessing at prose it did not write. This
+	// loop never reads it — a model reads the sentence — so it is for a
+	// caller that dispatches through a surface with no model behind it.
+	//
+	// THE CAUSE AND NOT A CLASS BESIDE IT: [ToolResult.Refusal] and
+	// [ToolResult.Unknown] read the class and the unknown outcome out of
+	// it, so a call carries one classifier of its failure rather than two
+	// that can disagree.
+	Cause error
 
 	// Suspend stops the loop with this call UNANSWERED, for a tool whose
 	// work outlives the turn (the detached sandbox). Honoured only when
@@ -198,6 +203,19 @@ type ToolResult struct {
 	// server that never saw the request.
 	Origin string
 	Server string
+}
+
+// Refusal is the call's class, read out of [ToolResult.Cause] by
+// [mcp.RefusalOf]: "" for a success and for a failure nothing in this engine
+// classified.
+func (r ToolResult) Refusal() mcp.Refusal {
+	return mcp.RefusalOf(mcp.Result{Output: r.Output, Failed: r.Failed, Cause: r.Cause})
+}
+
+// Unknown reports whether the call's write may have landed, by
+// [mcp.UnknownOf].
+func (r ToolResult) Unknown() bool {
+	return mcp.UnknownOf(mcp.Result{Output: r.Output, Failed: r.Failed, Cause: r.Cause})
 }
 
 // Execution records one tool call for the prior-work ledger and the phase
@@ -570,8 +588,8 @@ func (e *BudgetError) Error() string {
 		e.Scope, e.Period, e.Window, e.Used, e.Limit, e.ResetsAt.UTC().Format(time.RFC3339))
 }
 
-// Is makes every budget breach match [ErrBudget], so a caller can test the
-// class without naming which ceiling was hit.
+// Is makes every budget breach match [ErrBudgetExhausted], so a caller can test
+// the class without naming which ceiling was hit.
 func (e *BudgetError) Is(target error) bool { return target == ErrBudgetExhausted }
 
 // StopError is a round whose STOP REASON ends the phase: the response was cut

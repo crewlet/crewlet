@@ -105,11 +105,11 @@ func (c Credential) Held() bool { return strings.TrimSpace(c.Token) != "" }
 func (p Product) servers() []string {
 	switch p {
 	case ProductJira:
-		return []string{"jira", sharedServer}
+		return []string{org.MCPEnvJira, sharedServer}
 	case ProductConfluence:
-		return []string{"confluence", sharedServer}
+		return []string{org.MCPEnvConfluence, sharedServer}
 	default:
-		return []string{sharedServer, "jira", "confluence"}
+		return []string{sharedServer, org.MCPEnvJira, org.MCPEnvConfluence}
 	}
 }
 
@@ -165,7 +165,10 @@ const (
 	// sharedServer is the mcp_env block the community MCP server uses, which
 	// covers both products under one entry and is where a provisioned seat's
 	// credential lands.
-	sharedServer = "atlassian"
+	//
+	// FROM THE ORG MODEL'S OWN TABLE, like the two product blocks above: see
+	// [org.EngineReadMCPEnv].
+	sharedServer = org.MCPEnvAtlassian
 
 	// authorizationKey is a whole header rather than a token, and the scheme
 	// is stripped where it is read. See [CredentialFor].

@@ -191,10 +191,11 @@ type ReanchorInputs struct {
 	// Position is this node's own committed sequence at the OLD
 	// generation, and Highest is the highest any peer published at that
 	// same generation ON THE SAME STREAM — the one this node's rows are
-	// keyed to — among the peers holding history
-	// the LOG DOES NOT: whose checkpoint record the log does not hold, past
-	// its end or with another record at the sequence, or which name no
-	// record ([coord.DomainPosition.CheckpointStoredAt]). A sequence at
+	// keyed to, or any stream when no checkpoint keys them to one — among
+	// the peers holding history the LOG DOES NOT: whose checkpoint record
+	// the log does not hold, past its end or with another record at the
+	// sequence, or which name no record
+	// ([coord.DomainPosition.CheckpointStoredAt]). A sequence at
 	// another generation, or on another stream at this one, is a number in
 	// another space and says nothing about who went further along this one;
 	// and a peer whose checkpoint record the log holds is on the log, so
@@ -450,11 +451,10 @@ func (in ReanchorInputs) Discarding() error {
 func unheldCaveat(r TailRecord) string {
 	if !r.LedgerLostBefore.IsZero() {
 		return fmt.Sprintf("(This node's operation ledger may have lost rows from "+
-			"before %s to its %s sweep, and this record's operation was minted "+
+			"before %s to a retention sweep, and this record's operation was minted "+
 			"before that, so "+
 			"its rows may hold the record after all: if they do, the discard flag "+
-			"discards nothing.)", r.LedgerLostBefore.UTC().Format(time.RFC3339Nano),
-			OpsRetention)
+			"discards nothing.)", r.LedgerLostBefore.UTC().Format(time.RFC3339Nano))
 	}
 	return "(The ledger names every record these rows applied since it last lost " +
 		"any, those held from a peer's snapshot included, so this one is not " +
@@ -590,8 +590,12 @@ type GenerationFacts struct {
 	// Inputs are the facts the transition was decided from.
 	Inputs ReanchorInputs
 
-	// By names the operator, and Writer this node.
-	By, Writer string
+	// By names the operator as the audit trail records them, ByKind the
+	// kind of party that is (a person, a machine, a Tier A token), and
+	// OperatorID the credential they acted through — the three columns
+	// every other write carries, so a generation's audit row says who moved
+	// the log and through what, and never only a name. Writer is this node.
+	By, ByKind, OperatorID, Writer string
 
 	// At is the authored instant.
 	At time.Time
@@ -624,7 +628,10 @@ type GenerationEncoder interface {
 // DECLARED HERE because the transition is the caller.
 type ReanchorStream interface {
 	Appender
-	LogReader
+	// VerifiedReader because the transition decodes what it reads back —
+	// whose record already opened a generation, the tail its rows do not
+	// hold — and the log holds signed frames.
+	VerifiedReader
 
 	// CreatedAt is the stream's creation instant ([StreamCreatedAt]) as a
 	// reading of it reports it NOW — read on every call, never cached.
@@ -682,10 +689,14 @@ type ReanchorDeps struct {
 	// DB is the replicated estate, which holds the checkpoint.
 	DB Estate
 
-	// By names the operator for the record, and NodeID this node — the
-	// writer the eviction gate compares against.
-	By     string
-	NodeID string
+	// By names the operator for the record, ByKind the kind of party they
+	// are and OperatorID the credential they acted through
+	// ([GenerationFacts.By]); NodeID is this node — the writer the eviction
+	// gate compares against. All three about the operator travel, because a
+	// generation record that carried only a name recorded every reanchor as
+	// an operator acting through a credential named after themselves.
+	By, ByKind, OperatorID string
+	NodeID                 string
 
 	// CompletionBudget bounds the steps after the generation record is
 	// appended, which run on a context DETACHED from the caller's — see
@@ -862,7 +873,7 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 	// 4. THE RECORD, first-writer-wins, and the instant read again.
 	record, keeps, err := d.Record.GenerationRecord(GenerationFacts{
 		Generation: gen, Case: plan.Case, Discarded: plan.Discarded, Inputs: in,
-		By: d.By, Writer: d.NodeID,
+		By: d.By, ByKind: d.ByKind, OperatorID: d.OperatorID, Writer: d.NodeID,
 		At: d.Now().UTC(),
 	})
 	if err != nil {
@@ -1051,12 +1062,12 @@ func reanchoredDetail(c ReanchorCase) string {
 //     the record the moment it resumes, from the case's checkpoint — which the
 //     record is above, because the first sequence and the end that checkpoint
 //     was taken from were both read before the append.
-//   - THE GATE RESERVE ([GateReserve]) is not asked either, so the record may
-//     land in it. It is a gate record in the reserve's sense — it installs the
-//     generation every later record is placed in — and the stream it lands on
-//     is one every node's fence refuses ordinary writes to until it has, so
-//     nothing ordinary can have filled it since, and it lands at most once per
-//     generation.
+//   - THE GATE RESERVE ([Reservation.Bytes]) is not asked either, so the
+//     record may land in it. It is a gate record in the reserve's sense — it
+//     installs the generation every later record is placed in — and the
+//     stream it lands on is one every node's fence refuses ordinary writes to
+//     until it has, so nothing ordinary can have filled it since, and it
+//     lands at most once per generation.
 //
 // # A record already there is carried on from only if it is this node's own
 //

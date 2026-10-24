@@ -122,7 +122,7 @@ func TestARestoreStoppedPartOfTheWayIsFinishedAgain(t *testing.T) {
 			op := statelog.NewOpID(time.Now(), "restore")
 
 			lost.refuse("tr-b")
-			_, err := lossy.RestoreTask(t.Context(), op, "tr-root", "ENG", nil)
+			_, err := lossy.RestoreTask(t.Context(), op, "tr-root", "ENG", false, nil)
 			var stopped *tracker.SubtreeStopped
 			if !errors.As(err, &stopped) || stopped.Followed != 1 || stopped.Of != 3 {
 				t.Fatalf("a restore refused at tr-b = %v, want a SubtreeStopped "+
@@ -138,7 +138,7 @@ func TestARestoreStoppedPartOfTheWayIsFinishedAgain(t *testing.T) {
 			if sameOp {
 				again = op
 			}
-			if _, err := lossy.RestoreTask(t.Context(), again, "tr-root", "ENG", nil); err != nil {
+			if _, err := lossy.RestoreTask(t.Context(), again, "tr-root", "ENG", false, nil); err != nil {
 				t.Fatalf("finishing the stopped restore: %v", err)
 			}
 			r.drain()
@@ -165,17 +165,17 @@ func TestARestoreWithNothingToBringBackSaysSo(t *testing.T) {
 	}
 	r.drain()
 	op := statelog.NewOpID(time.Now(), "restore")
-	if _, err := r.writer.RestoreTask(t.Context(), op, "tr-live", "ENG", nil); err != nil {
+	if _, err := r.writer.RestoreTask(t.Context(), op, "tr-live", "ENG", false, nil); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
 	r.drain()
 
-	if _, err := r.writer.RestoreTask(t.Context(), op, "tr-live", "ENG", nil); err != nil {
+	if _, err := r.writer.RestoreTask(t.Context(), op, "tr-live", "ENG", false, nil); err != nil {
 		t.Errorf("the restore's own operation again = %v, want the success its "+
 			"first copy was", err)
 	}
 	_, err := r.writer.RestoreTask(t.Context(), statelog.NewOpID(time.Now(), "restore"),
-		"tr-live", "ENG", nil)
+		"tr-live", "ENG", false, nil)
 	if !errors.Is(err, tracker.ErrNothingToRestore) {
 		t.Errorf("a new restore of a live task with nothing in the trash with it "+
 			"= %v, want ErrNothingToRestore", err)

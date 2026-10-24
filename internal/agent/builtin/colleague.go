@@ -28,35 +28,36 @@
 //     turnctx.CallLog). A re-run makes the same calls and derives the same
 //     ids; a different call, or the same one after a different one, is a new
 //     operation.
-//   - OUTSIDE A TURN, the call's OPERATION ([Actor.Operation]) — the one key
-//     there, and every write the call makes is a step of it. The caller names
-//     it, on the transport it came by: an operator's assistant over MCP
-//     brings back the `op_id` its call was answered with (or is minted one
-//     for a new call, and answered it); the dashboard's act transport names
-//     it from the request id its retry repeats ([RequestOperation]), scoped
-//     to the credential that sent it. Either way the operation carries the
+//   - OUTSIDE A TURN, the request's or the call's own operation. A transport
+//     that names its requests — the act transport and the HTTP write
+//     surface — carries the `Idempotency-Key` a retry repeats, held to the
+//     operation grammar and scoped to the principal by internal/api/opkey,
+//     as [Actor.WorkKey] with its instant as [Actor.WorkSince] (and as
+//     [pages.Actor.OpKey] for a page write), so a request is a unit of work
+//     exactly as a turn's trigger is and every id is derived from it as a
+//     turn's are. The operator's assistant over MCP names the call's
+//     OPERATION ([Actor.Operation]) instead: it brings back the `op_id` its
+//     call was answered with, or is minted one; that operation carries the
 //     instant it was minted and NAMES THE CALL — the tool and a digest of its
 //     arguments — so it is accepted only with that call
-//     ([WorkDeps.bindOperation], and [PageDeps.foreignOperation] for the
-//     page tools): the same call made again is the same operation, and
-//     anything else under it is refused before a write.
+//     ([WorkDeps.bindOperation]): the same call made again is the same
+//     operation, and anything else under it is refused before a write.
 //   - WITH NEITHER — a tool that takes no `op_id`, called over MCP — each
 //     write is fresh, since nothing will repeat it. The page tools are such
 //     tools, and so are write_project and write_work_catalogue, whose writes
 //     restate what they declare, so a repeat under a new operation already
-//     changes nothing a first attempt landed ([bindRequest]).
+//     changes nothing a first attempt landed.
 //
 // There is deliberately no second key: a request key beside the operation, a
 // seed beside the turn, would be a second answer to "is this the same write",
 // free to disagree with the first. And a caller is told only ITS OWN way to
-// repeat: an answer to a request carries no `op_id` and says "send the same
-// request again" ([withOperation], [sameCall]), because an `op_id` beside a
-// request is refused.
+// repeat: an answer carries an `op_id` only where its caller holds an
+// [Actor.Operation] ([withOperation], [sameCall]).
 //
 // # And what it answers when nobody knows
 //
 // A write whose outcome is `unknown` is answered as a FAILED result naming the
-// operation to make again ([unknownWrite], [unknownOutcome]) — never a receipt
+// operation to make again ([unknownWrite], [failedUnknown]) — never a receipt
 // carrying `outcome: unknown` beside a key or a version, which a model reads as
 // the write done and a person's screen would draw.
 package builtin
@@ -71,7 +72,6 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/tools"
-	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 var log = logging.Get("agent.builtin")
@@ -139,7 +139,7 @@ func (t *lookupColleague) CallForTurn(_ context.Context, turn *turnctx.Turn, arg
 			"No organization is in scope, so there is nobody to look up."), nil
 	}
 
-	seats := Corpus(turn.Org, t.env)
+	seats := Corpus(turn.Org, t.env, turn.WithholdsContacts)
 	found := colleague.Resolve(query, seats)
 	safe := clip(query)
 
@@ -189,7 +189,13 @@ func (t *lookupColleague) CallForTurn(_ context.Context, turn *turnctx.Turn, arg
 // secret store and then the environment it was handed, which is what the
 // notification routing that mentions these same people reads. Nil reads the
 // process environment.
-func Corpus(o *org.Organization, lookup org.EnvLookup) []colleague.Seat {
+//
+// withheld is the identity directory's reading, the one the party registry was
+// built from: a human seat it withholds keeps its place and loses every
+// external id, so an id copied from that person's accounts matches nobody —
+// exactly as an inbound message from them resolves to nobody — and the seat is
+// marked [colleague.Seat.Withheld]. Nil withholds nothing.
+func Corpus(o *org.Organization, lookup org.EnvLookup, withheld func(handle string) bool) []colleague.Seat {
 	if o == nil {
 		return nil
 	}
@@ -202,16 +208,22 @@ func Corpus(o *org.Organization, lookup org.EnvLookup) []colleague.Seat {
 		if seat.Kind == "" {
 			seat.Kind = string(org.KindAgent)
 		}
+		if role.IsHuman() && withheld != nil && withheld(seat.Handle) {
+			seat.Withheld = true
+			out = append(out, seat)
+			continue
+		}
 		for _, id := range role.Contact.ResolvedIdentities(lookup) {
-			// UNREACHABLE TRANSPORTS ARE LEFT OUT. This map is both the
+			// EVERY TRANSPORT HERE IS A PLACE A MESSAGE CAN BE SENT.
+			// It was not always: a `crewlet` transport carried the
+			// operator id a Tier A token bound a seat with, and it had
+			// to be filtered out of this map — which is both the
 			// exact-id index and what describe renders under a person's
-			// name, so an operator id would appear beside their Slack id as
-			// though it were somewhere an agent could mention them. It is
-			// an attribution key on the engine's own surface, and the seat
-			// handle already addresses that seat.
-			if !id.Transport.Reachable() {
-				continue
-			}
+			// name — or an attribution key appeared beside their Slack
+			// id as though an agent could mention them there. The
+			// identity estate holds that binding now and the transport
+			// is gone, so there is nothing left to filter.
+			//
 			// Keyed by transport, so an exact-id query matches whichever
 			// platform the id was copied from without the tool having to
 			// be told which.
@@ -220,48 +232,6 @@ func Corpus(o *org.Organization, lookup org.EnvLookup) []colleague.Seat {
 		out = append(out, seat)
 	}
 	return out
-}
-
-// Parties resolves a handle to that person's two identities, from the chart —
-// what [WorkDeps.Party] is wired with.
-//
-// HERE RATHER THAN IN [Corpus], because the roster deliberately leaves an
-// operator id out: that map is the exact-id index AND what `lookup_colleague`
-// renders, so a credential in it would appear beside somebody's Slack id as
-// though it were somewhere an agent could mention them. This is the same fact
-// asked for by name instead.
-//
-// A HANDLE NO SEAT HOLDS IS STILL A PARTY — somebody who has left, a handle on
-// old rows — because the question is about the ROWS and this lookup only ever
-// ADDS an alias.
-//
-// # It is the other direction of the same lookup, and cannot disagree with it
-//
-// `operator.WorkActor` walks credential → seat and this walks seat → credential
-// — as does the dashboard's own `queries.Sources.partyOf` — and all of them go
-// through the one resolution in `org`: see [org.Organization.SeatByOperatorID],
-// whose own doc says why a `${VAR}` has to be resolved rather than compared. A
-// person bound for one direction and unbound for the other is a dashboard that
-// knows who they are and shows them nothing.
-//
-// lookup resolves a `${VAR}` binding — the same lookup the other direction is
-// handed, which a node makes its own chain (see [Corpus]); nil reads the
-// process environment.
-//
-// A nil chart, or one this build has not loaded, answers the handle alone.
-func Parties(chart func() *org.Organization, lookup org.EnvLookup) func(string) tracker.Party {
-	return func(handle string) tracker.Party {
-		party := tracker.PartyOf(handle)
-		if chart == nil {
-			return party
-		}
-		o := chart()
-		if o == nil {
-			return party
-		}
-		party.OperatorID = o.SeatByHandle(handle).ResolvedOperatorID(lookup)
-		return party
-	}
 }
 
 // describe renders one resolved colleague.
@@ -277,7 +247,15 @@ func describe(s colleague.Seat) string {
 			fmt.Fprintf(&b, "  %s: %s\n", transport, s.External[transport])
 		}
 	}
-	if s.Kind == string(org.KindHuman) {
+	switch {
+	case s.Kind == string(org.KindHuman) && s.Withheld:
+		// NOT WHY: a person's standing is not an agent's business, and
+		// what the agent needs is only that nothing it sends will arrive.
+		b.WriteString("  reach them: they cannot be reached on any chat or " +
+			"code-host account right now, so there is nobody to mention or " +
+			"message. Work for this seat goes in the PM tool, assigned to " +
+			"the seat. a2a_ask addresses AGENTS only and will not reach them.\n")
+	case s.Kind == string(org.KindHuman):
 		b.WriteString("  reach them: mention them on a shared surface and " +
 			"continue without waiting — a person answers asynchronously. " +
 			"a2a_ask addresses AGENTS only and will not reach them.\n")

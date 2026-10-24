@@ -504,9 +504,19 @@ func (a *Applier) applyGeneration(ctx context.Context, tx *sql.Tx, c applyContex
 // UPSERTED, NEVER DELETED BY A TASK APPLY, AND NEVER LOWERED FROM CURRENT: a
 // former key must go on resolving for the life of the deployment, because it
 // is pasted into chat and typed into tool calls. A key another task already
-// holds is LEFT AS IT IS and the newer task carries the collision flag —
-// because the alternative, taking the key, silently re-points every reference
-// anybody ever wrote.
+// holds is LEFT AS IT IS — because the alternative, taking the key, silently
+// re-points every reference anybody ever wrote.
+//
+// IT WRITES NO COLLISION FLAG. `key_collision` is derived from the directory
+// by every apply that re-keys the task ([Applier.maintainKeys]) and describes
+// the key the task holds NOW: a claim on a key the task is leaving says
+// nothing about the one it is moving to, and a flag written here would be
+// overwritten by the move's own apply, which lands after this one. Nor does
+// the claim move anybody else's flag: its writer publishes it only for a key
+// nobody else holds ([Writer.claimAlias]).
+//
+// Its subject is the key's own address ([subjectPath]), so it is ordered
+// with every other record that claims, frees or hands that key on.
 func (a *Applier) applyAlias(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
 	var alias KeyAlias
 	if err := decodePayload(c.record.Mutation, &alias); err != nil {
@@ -520,19 +530,7 @@ func (a *Applier) applyAlias(ctx context.Context, tx *sql.Tx, c applyContext) (i
 	if err != nil {
 		return 0, fmt.Errorf("tracker: claim key %s at %s: %w", alias.Key, c.position, err)
 	}
-	rows, err := affected(res)
-	if err != nil {
-		return 0, err
-	}
-	if rows == 0 {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE tracker_tasks SET key_collision = 1 WHERE id = ?`,
-			alias.TaskID); err != nil {
-			return 0, fmt.Errorf("tracker: flag the key collision on %s: %w",
-				alias.TaskID, err)
-		}
-	}
-	return rows, nil
+	return affected(res)
 }
 
 // The small conversions, in one place so a nil pointer means the same thing at

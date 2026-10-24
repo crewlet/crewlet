@@ -16,20 +16,29 @@ import (
 )
 
 // ChainHash is the stable identity of where a seat sits in the org: the
-// company name, every unit above the seat outermost-first, then the seat's
-// own role name.
+// company name, the KEY of every unit above the seat outermost-first, then the
+// seat's own HANDLE.
 //
 // It is what an onboarding marker is stamped with, and it is the entire
-// re-onboarding trigger. A seat that moves between teams, gains an ancestor
-// unit, or whose division is renamed hashes differently; its stored marker
-// stops matching, and the first-turn pass fires again for the structure the
-// seat is actually in now. Content changes are deliberately NOT in it — an
-// edited Onboarding page is the seat's own business to re-read, and hashing
-// page content would re-run a full pass every time somebody fixed a typo.
+// re-onboarding trigger. A seat that moves between teams or gains an ancestor
+// unit hashes differently; its stored marker stops matching, and the
+// first-turn pass fires again for the structure the seat is actually in now.
+// Content changes are deliberately NOT in it — an edited Onboarding page is
+// the seat's own business to re-read, and hashing page content would re-run a
+// full pass every time somebody fixed a typo.
 //
-// Renaming the seat itself needs no help from this hash: the agent id is
-// derived from (org name, handle) through [org.DeriveAgentID], so a rename
-// lands on a different row entirely and the old marker is simply orphaned.
+// IDENTITIES AND NOT DISPLAY NAMES. Hashing the names meant relabelling a
+// division put every seat under it through a full onboarding turn, and
+// correcting one person's name put that person through one, although nobody
+// had moved and nothing about the structure had changed. A restructure is a
+// seat sitting somewhere else, and a unit's key and a seat's handle are
+// immutable (ADR-0013), so they do not move when somebody retypes a label.
+//
+// THE COMPANY NAME STAYS AS WRITTEN, because it is the one part that is an
+// identity here: it is an input to [org.Organization.AgentIDFor] as well, so
+// renaming the company re-derives every seat's id and orphans its whole
+// estate — the marker included. Folding it in under a second rule would be
+// this hash disagreeing with the derivation beside it.
 //
 // Empty for a nil org or seat. Both entry points that take a chain hash
 // refuse an empty one, so a nil can never become a marker nothing matches.
@@ -44,9 +53,9 @@ func ChainHash(o *org.Organization, r *org.Role) string {
 	parts := make([]string, 0, 4)
 	parts = append(parts, o.Name)
 	for _, u := range o.UnitChainFor(r) {
-		parts = append(parts, u.Name)
+		parts = append(parts, u.Key())
 	}
-	parts = append(parts, r.Name)
+	parts = append(parts, r.Handle())
 	return hashChain(parts)
 }
 
@@ -82,8 +91,8 @@ func hashChain(parts []string) string {
 // Marker is one seat's onboarding row: the org chain it has read itself
 // into, and the lease state of any pass running over it.
 type Marker struct {
-	// AgentID is the DERIVED uuid (org name plus handle) — the same
-	// identity the diary and episodes key on, not the handle.
+	// AgentID is the DERIVED uuid over (org name, handle) — the same
+	// identity the diary keys on.
 	AgentID string
 
 	// ChainHash is the chain the seat onboarded for, or empty on a row that
@@ -92,6 +101,10 @@ type Marker struct {
 	// correctly as "not onboarded".
 	ChainHash string
 
+	// Handle and Role are what the seat was called when it marked itself,
+	// for an operator reading the row. Nothing looks a marker up by them,
+	// which is why a corrected role name that leaves Role stale costs
+	// nothing.
 	Handle string
 	Role   string
 
@@ -391,7 +404,8 @@ func (o *Onboarding) Get(ctx context.Context, agentID string) (Marker, bool, err
 // after your unit" is a rule it has to reconstruct and will get wrong.
 const OnboardingPageTitle = "Onboarding"
 
-// Hint is the instruction set an unmarked agent is shown.
+// Hint is the instruction set an unmarked agent's onboarding pass is shown
+// (internal/agent/runner's onboarding pass, under its `## What to do`).
 //
 // It enumerates the SCOPES on the seat's chain — the org, then each unit from
 // the outermost down to its own — and leaves finding each page to the agent's
@@ -424,8 +438,8 @@ func Hint(o *org.Organization, r *org.Role) string {
 		"via `reflect_and_persist`. Write declarative facts, not instructions " +
 		"to yourself.\n" +
 		"- When you have read all available pages and persisted what matters, " +
-		"call `mark_onboarded` with a one-line summary. After that, this " +
-		"section disappears from your prompt.\n\n" +
+		"call `mark_onboarded` with a one-line summary. That ends this " +
+		"pass, and it does not run again for this team configuration.\n\n" +
 		"If a page changes later you can re-read it any time — the onboarding " +
 		"marker only re-fires when the org structure itself changes."
 }

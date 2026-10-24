@@ -33,14 +33,31 @@ import (
 // newer peer's shape survives a rolling upgrade in both directions. Every
 // kind this build writes — a seat's, a schedule's and a person's day — is the
 // base format, version 1.
+//
+// IT IS THE CEILING THIS BUILD READS, NOT WHAT IT WRITES: a record is stamped
+// with the lowest version that reads what it carries ([Record.Encode], over
+// [versionedFields]), so a field a later build adds holds back only the records
+// that carry it. It moves only with the table, and exactly to the table's
+// highest version.
 const RecordVersion = 1
 
-// versionedFields is every field the record has gained since the base format,
-// and the version a reader must be at to apply a record carrying it — today
-// none. A record is stamped with the LOWEST version that reads it
-// ([statelog.RecordFields.Minimum]), so a field or a kind a later build adds
-// takes a row here at the next version, and a record of an existing shape
-// stays readable by every build that reads that shape.
+// baseRecordVersion is version 1, the base format: what a record carrying no
+// versioned field is stamped at.
+const baseRecordVersion = 1
+
+// versionedFields is every field a usage record has gained since the base
+// format, and the version a reader must be at to apply a record carrying it:
+// NONE YET, since every kind this build writes is in the base format.
+//
+// ADDING A FIELD TO A RECORD IS ADDING A ROW HERE, on the tracker's terms: an
+// older build decodes a field it has no home for AROUND — it reads the
+// version, finds it readable, applies what it understands and drops the rest
+// — so its rows for that day differ from every upgraded node's for as long as
+// the day is kept. The row is what makes the encoder stamp a version that build
+// retains instead; the constant above moves with it, and the domain's
+// statelogtest candidate gains a record carrying the field. A field no tag has
+// shipped is still one two builds of a rolling upgrade disagree about, so
+// "nothing has been released" exempts no field from its row.
 //
 // A NEW KIND IS A VALUE of a field every record carries, so its row names the
 // key and the value (`subject.kind` equal to the new kind's name): a row
@@ -85,11 +102,11 @@ func (k Kind) Valid() bool { return slices.Contains(Kinds, k) }
 // Subject is the object a record is about: one kind of thing, on one node, on
 // one company day.
 //
-// THE NODE IS PART OF THE IDENTITY, and that is the whole design. Each node
-// derives only what its own event log holds, so two nodes that both ran a seat
-// on one day publish two records rather than racing for one — no arbitration,
-// no merge at write time, and a reader sums across nodes. A seat that moved
-// at noon is two rows for that day, both true.
+// THE NODE IS PART OF THE IDENTITY, and that is the whole design. Each data
+// node derives only what its own event log holds, so two nodes that both ran a
+// seat on one day publish two records rather than racing for one — no
+// arbitration, no merge at write time, and a reader sums across nodes. A seat
+// that moved at noon is two rows for that day, both true.
 type Subject struct {
 	Kind Kind `json:"kind"`
 
@@ -103,10 +120,11 @@ type Subject struct {
 	// Seat is the seat's agent id, on a seat record.
 	Seat string `json:"seat,omitempty"`
 
-	// Person is the person's seat HANDLE, on a person record — the name
-	// the person's credential is bound to. A handle rather than an id,
-	// because a human seat has none: identity is derived for agent seats
-	// alone.
+	// Person is the person's seat HANDLE, on a person record — the human
+	// seat the spending principal holds ([iam.RecordOwner]). A handle
+	// rather than an id, because a human seat has none: identity is derived
+	// for agent seats alone. And never the identity estate's person id,
+	// which names who holds the seat now rather than the seat that spent.
 	Person string `json:"person,omitempty"`
 
 	// ScopeType, ScopeID and Schedule name a schedule, on a schedule
@@ -518,33 +536,21 @@ func (r Record) validateBody() error {
 	return nil
 }
 
-// minimumVersion is the lowest version r may be stamped at under
-// [versionedFields]: one where it carries nothing the base format lacked.
-func (r Record) minimumVersion() (int, error) {
-	body, err := json.Marshal(r)
-	if err != nil {
-		return 0, err
-	}
-	return versionedFields.Minimum("", body)
-}
-
-// Encode writes a record, stamped with the lowest version that reads it.
+// Encode writes a record, stamping it with the lowest version that reads it.
 //
-// A RECORD STAMPED BELOW ITS FIELDS IS REFUSED: a record carrying a field a
-// build at that version does not read would be one that build reads as a
-// writer fault on every redelivery rather than defers, which is the opposite
-// of what a rolling upgrade promises.
+// A ZERO VERSION IS "STAMP IT": the publisher leaves V unset and this computes
+// the minimum over [versionedFields] from the bytes it is about to publish —
+// carried fields included — so the stamp cannot drift from what the record
+// carries. A version the caller DID set is kept — a relay re-encodes a record
+// at the version its writer gave it — but is refused when it is below what the
+// record's own fields need, because that record would be applied, lossily, by
+// exactly the builds the stamp exists to hold it back from.
 func (r Record) Encode() ([]byte, error) {
-	want, stampErr := r.minimumVersion()
-	if stampErr != nil {
-		return nil, fmt.Errorf("usage: stamp the record on %s: %w", r.Subject, stampErr)
-	}
-	if r.V == 0 {
-		r.V = want
-	}
-	if r.V < want {
-		return nil, fmt.Errorf("usage: the %s record on %s is version %d, and it "+
-			"carries a field introduced at version %d", r.Subject.Kind, r.Subject, r.V, want)
+	stamp := r.V == 0
+	if stamp {
+		// THE LOWEST, never [RecordVersion]: the table raises it to what
+		// the record's own fields need.
+		r.V = baseRecordVersion
 	}
 	if err := r.Subject.Validate(); err != nil {
 		return nil, err
@@ -559,6 +565,33 @@ func (r Record) Encode() ([]byte, error) {
 			return nil, err
 		}
 	}
+	body, err := r.marshal()
+	if err != nil {
+		return nil, err
+	}
+	// NO OP: a usage record has none, so every row of the table applies to
+	// every record.
+	minimum, err := versionedFields.Minimum("", body)
+	if err != nil {
+		return nil, fmt.Errorf("usage: stamp the record on %s: %w", r.Subject, err)
+	}
+	switch {
+	case r.V >= minimum:
+	case stamp:
+		r.V = minimum
+		return r.marshal()
+	default:
+		return nil, fmt.Errorf("usage: the record on %s is stamped version %d and "+
+			"carries %s — a build reading %d would decode it, drop what it has no "+
+			"field for and apply the rest; leave the version unset and the "+
+			"encoder stamps the lowest one that reads it", r.Subject, r.V,
+			strings.Join(versionedFields.Carried("", body), ", "), r.V)
+	}
+	return body, nil
+}
+
+// marshal renders the record with whatever a newer build wrote carried back.
+func (r Record) marshal() ([]byte, error) {
 	body, err := json.Marshal(r)
 	if err != nil || len(r.Extra) == 0 {
 		return body, err

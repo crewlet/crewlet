@@ -12,16 +12,16 @@
 
 import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
 import { Backups } from "./Backups.tsx";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { clearToken, storeToken } from "~/protocol/authToken.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { BackupsAnswer } from "~/contract/backups.ts";
+import type { RetentionReport } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 
@@ -67,23 +67,28 @@ const answer = (): BackupsAnswer => ({
   ],
   history: [
     {
+      // A PRINCIPAL BOUND TO NO SEAT, under its own login (`iam.ActorFor`).
       id: "b-failed",
       at: hoursAgo(1),
       node: "node-b",
-      operator: "ops-cron",
+      actor: "ops-cron",
+      actor_kind: "operator",
       dir: "/full/disk",
       outcome: "failed",
       summary: "ops-cron: backup to /full/disk failed",
     },
     {
+      // A PERSON BOUND TO A SEAT asks AS the seat, and the credential they
+      // asked through rides beside them.
       id: "b-landed",
       at: hoursAgo(2),
       node: "node-a",
-      operator: "U0FOUNDER",
-      actor_seat: "jane",
+      actor: "jane",
+      actor_kind: "human",
+      operator_id: "session:s-1",
       dir: "/var/backups/crewlet-20260929-0200",
       outcome: "applied",
-      summary: "U0FOUNDER (jane) backed up",
+      summary: "jane backed up",
     },
   ],
   more: false,
@@ -104,9 +109,17 @@ class InertWebSocket {
   close(): void {}
 }
 
+/** Who is reading: somebody holding the grant a backup is taken under. */
+const OPERATOR = { login: "ops", owner: "ops", grants: ["admin"] };
+
 function mount(
   over: Partial<BackupsAnswer> = {},
-  { strict = false, historySeconds = (30 * 86_400) as number | null } = {},
+  {
+    strict = false,
+    historySeconds = (30 * 86_400) as number | null,
+    viewer = OPERATOR as unknown,
+    retention = null as RetentionReport | null,
+  } = {},
 ) {
   const store = new Store();
   store.applyOrg(withDerived(org) as never);
@@ -119,6 +132,8 @@ function mount(
   const socket = new LiveSocket(store);
   const query = vi.fn((what: string) => {
     if (what === "backups") return Promise.resolve({ ...answer(), ...over });
+    if (what === "viewer") return Promise.resolve(viewer);
+    if (what === "retention" && retention) return Promise.resolve(retention);
     return new Promise(() => {});
   });
   (socket as unknown as { query: typeof query }).query = query;
@@ -167,12 +182,10 @@ function backupRoute(status: number, body: unknown) {
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
-  storeToken("t0ken");
 });
 
 afterEach(() => {
   cleanup();
-  clearToken();
   vi.unstubAllGlobals();
   location.hash = "#/";
 });
@@ -198,7 +211,7 @@ test("the newest counted point is the engine's, and the others say why they are 
 });
 
 // EVERY REQUESTED BACKUP, WITH THE HOST THAT HOLDS IT, a failure drawn as one
-// and a bound token drawn as its person.
+// and a person drawn as the seat they asked as, with the credential beside.
 test("the history lists each backup with its node, its person and its outcome", async () => {
   mount();
   await settle();
@@ -212,6 +225,7 @@ test("the history lists each backup with its node, its person and its outcome", 
     .closest(".grid-row") as HTMLElement;
   expect(within(landed).getByText("Written")).toBeTruthy();
   expect(within(landed).getByRole("link", { name: /Jane Founder/ })).toBeTruthy();
+  expect(within(landed).getByText("session:s-1")).toBeTruthy();
   expect(screen.getByText("Requested").closest(".crewlet-statcard")?.textContent).toMatch(
     /1 failed/,
   );
@@ -243,7 +257,7 @@ test("the history's span is the one the engine reports", async () => {
   mount({ history: [] }, { historySeconds: 7 * 86_400 });
   await settle();
   expect(screen.getByText("No backup was asked for in the last 7 days")).toBeTruthy();
-  expect(screen.getByText(/the store keeps 7 days/)).toBeTruthy();
+  expect(screen.getByText("Older backups still count above.")).toBeTruthy();
   cleanup();
 
   mount({ history: [] }, { historySeconds: null });
@@ -273,7 +287,7 @@ test("taking a backup posts the directory and says what was written", async () =
   await settle();
   expect(calls).toEqual(["POST /backup?dir=%2Fvar%2Fbackups%2Ftonight"]);
   expect((await screen.findAllByText("Backup written on node-a")).length).toBeGreaterThan(0);
-  expect(screen.getAllByText(/\/var\/backups\/tonight — 2\.0 KB in 4s/).length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/\/var\/backups\/tonight: 2\.0 KB in 4s/).length).toBeGreaterThan(0);
   // AND THE HISTORY IS READ AGAIN, so the row it just made appears.
   expect(query.mock.calls.filter(([what]) => what === "backups").length).toBeGreaterThan(1);
 });
@@ -290,7 +304,7 @@ test("a directory the engine cannot use is said on the field", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Take a backup" }));
   const field = screen.getByLabelText(/Directory/) as HTMLInputElement;
   fireEvent.change(field, { target: { value: "backups/tonight" } });
-  expect(screen.getByText(/An absolute path/)).toBeTruthy();
+  expect(screen.getByText("Use an absolute path on the engine’s host.")).toBeTruthy();
   expect((screen.getByRole("button", { name: "Take backup" }) as HTMLButtonElement).disabled).toBe(
     true,
   );
@@ -326,16 +340,16 @@ test("a directory the host cannot create is said on the field", async () => {
   expect(screen.queryByText(/api_backup_failed/)).toBeNull();
 });
 
-// A READER WITH NO TOKEN is refused the section, and the button says why.
-test("without an operator token the section is refused and the button says why", async () => {
-  clearToken();
-  const { query } = mount();
+// A READER WITHOUT THE GRANT is told which one before pressing: the button is
+// drawn, disabled with the grant a backup is taken under.
+test("without Admin the button is held and names the grant", async () => {
+  mount({}, { viewer: { login: "jane.doe", owner: "jane.doe", grants: [] } });
   await settle();
-  expect(query.mock.calls.some(([what]) => what === "backups")).toBe(false);
   const button = screen.getByRole("button", { name: "Take a backup" });
   expect(
     button.getAttribute("aria-disabled") ?? String((button as HTMLButtonElement).disabled),
   ).toMatch(/true/);
+  expect(button.getAttribute("title")).toMatch(/needs Admin/);
 });
 
 // CLOSING DOES NOT LOSE THE OUTCOME. The engine finishes a copy whether or not
@@ -422,4 +436,133 @@ test("with nothing backed up, the command that takes one is code", async () => {
   await settle();
   expect(screen.getByText("Nothing has been backed up")).toBeTruthy();
   expect(screen.getByText("crewlet backup -dir").tagName).toBe("CODE");
+});
+
+// NOTHING BACKED UP IS SAID ONCE, BY THE FIGURE. The two lists each drew an
+// empty state of their own as well, three ways of saying it beside the alarm
+// that already does; with nothing at all to list they are not drawn.
+test("with nothing at all backed up, the figure says so and the lists are not drawn", async () => {
+  mount({ points: [], history: [] });
+  await settle();
+  expect(screen.getByText("none yet")).toBeTruthy();
+  expect(screen.queryByText("Nothing has been backed up")).toBeNull();
+  expect(screen.queryByText("Backup history")).toBeNull();
+});
+
+// A HISTORY A NODE COULD NOT READ IS NOT AN EMPTY ONE: the lists are drawn so
+// the note naming the missing node is.
+test("an empty history some node could not answer still draws its lists", async () => {
+  mount({
+    points: [],
+    history: [],
+    coverage: {
+      nodes: [
+        { id: "node-a", answered: true, error: "" },
+        { id: "node-b", answered: false, error: "no answer within the read budget" },
+      ],
+      complete: false,
+    },
+  });
+  await settle();
+  expect(screen.getByText("Backup history")).toBeTruthy();
+  expect(screen.getByText(/node-b/)).toBeTruthy();
+});
+
+// WHAT IS WRONG LEADS THE PAGE: the alarms come before the record of backups
+// and the panels, and the backup alarm offers the backup it asks for.
+test("the alarms lead the page, and the backup alarm offers the backup", async () => {
+  const report = {
+    v: 1,
+    node_id: "node-a",
+    at: hoursAgo(0),
+    domains: [],
+    nodes: [],
+    register_readable: true,
+    snapshots: [],
+    replica: { store_bytes: 0, projected_join_seconds: 0, rejoin_window_seconds: 0 },
+    backup_owner: "platform-oncall",
+    alarms: [
+      {
+        kind: "backup_age",
+        detail: "no verified backup has been recorded",
+        remedy: "Run `crewlet backup` against any node.",
+      },
+    ],
+  } as RetentionReport;
+  mount({}, { retention: report });
+  await settle();
+  const alarms = document.getElementById("retention-alarms") as HTMLElement;
+  const record = screen.getByText("Newest counted backup");
+  expect(alarms.compareDocumentPosition(record) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  // THE OWNER IS A FIGURE OF THE RECORD, named once.
+  expect(screen.getByText("platform-oncall")).toBeTruthy();
+  fireEvent.click(within(alarms).getByRole("button", { name: "Take a backup" }));
+  expect(await screen.findByRole("dialog")).toBeTruthy();
+});
+
+// "OPEN ALARMS" LANDS ON THE ALARMS. The engine panel's way to them is
+// `at=alarms`, and their list sits below the backups and the banners, so the
+// screen brings it into view once the report has drawn it, and only then.
+describe("arriving for the alarms", () => {
+  let scrolled: Element[] = [];
+  beforeEach(() => {
+    scrolled = [];
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+      configurable: true,
+      writable: true,
+      value(this: Element) {
+        scrolled.push(this);
+      },
+    });
+    // The list is below the fold, as it is under a page of backups.
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      const top = this.id === "retention-alarms" ? 2_000 : 0;
+      return { top, bottom: top + 40, left: 0, right: 0, width: 0, height: 40 } as DOMRect;
+    });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+  });
+
+  const report = {
+    v: 1,
+    node_id: "node-a",
+    at: hoursAgo(0),
+    domains: [],
+    nodes: [],
+    register_readable: true,
+    snapshots: [],
+    replica: { store_bytes: 0, projected_join_seconds: 0, rejoin_window_seconds: 0 },
+    alarms: [
+      {
+        kind: "backup_age",
+        detail: "no verified backup has been recorded",
+        remedy: "Run `crewlet backup` against any node.",
+      },
+    ],
+  } as RetentionReport;
+
+  test("the alarm list is brought into view", async () => {
+    location.hash = "#/settings/backups?at=alarms";
+    mount({}, { retention: report });
+    await settle();
+    expect(scrolled.map((el) => el.id)).toEqual(["retention-alarms"]);
+    // Its rows say the kind in words and what was measured as a sentence,
+    // with no dash between them.
+    expect(screen.getByText("Backup age")).toBeTruthy();
+    expect(screen.getByText(/No verified backup has been recorded\./).textContent).not.toMatch(
+      /\u2014/,
+    );
+  });
+
+  test("a reader who came for the page is left at its top", async () => {
+    location.hash = "#/settings/backups";
+    mount({}, { retention: report });
+    await settle();
+    expect(screen.getByText(/No verified backup has been recorded\./)).toBeTruthy();
+    expect(scrolled).toEqual([]);
+  });
 });

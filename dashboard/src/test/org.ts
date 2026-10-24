@@ -8,11 +8,13 @@
  * as a company with nobody in it.
  *
  * FOR A SUITE THAT PINS NO HIERARCHY. Every seat runs under the handle its
- * entry DECLARES — a fixture must declare one, because this derives nothing —
- * sits in the unit the tree writes it under, and manages nobody; a unit's lead
- * is the seat its `lead:` names. A suite whose subject IS a reporting line, an
- * inherited lead or a `unit:` placement writes its `derived` block out in
- * full, as `test/orgchart.ts` does.
+ * entry DECLARES and every unit under the key its `id:` declares — a fixture
+ * must declare both, because this derives nothing and the index pairs the
+ * block with the tree by exactly those — sits in the unit the tree writes it
+ * under, and manages nobody; a unit's lead is the seat whose HANDLE its
+ * `lead:` names, as the engine reads it. A suite whose subject IS a reporting
+ * line, an inherited lead or a `unit:` placement writes its `derived` block
+ * out in full, as `test/orgchart.ts` does.
  */
 
 import type { Derived, DerivedSeat, DerivedUnit, OrgSeat, OrgUnit } from "~/protocol/types.ts";
@@ -29,12 +31,12 @@ export function withDerived<T>(fixture: T): T & { derived: Derived } {
   if (org.derived) return fixture as T & { derived: Derived };
   const seats: DerivedSeat[] = [];
   const units: DerivedUnit[] = [];
-  const byName = new Map<string, string>();
+  const handles = new Set<string>();
   const add = (raw: OrgSeat): string => {
     if (!raw.handle) {
       throw new Error(`withDerived: the fixture seat "${raw.name}" declares no handle`);
     }
-    byName.set(raw.name, raw.handle);
+    handles.add(raw.handle);
     seats.push({
       handle: raw.handle,
       name: raw.name,
@@ -51,7 +53,11 @@ export function withDerived<T>(fixture: T): T & { derived: Derived } {
   for (const raw of org.roles ?? []) add(raw);
   const leads: [DerivedUnit, string][] = [];
   const visit = (raw: OrgUnit): void => {
+    if (!raw.id) {
+      throw new Error(`withDerived: the fixture unit "${raw.name}" declares no id`);
+    }
     const unit: DerivedUnit = {
+      id: raw.id,
       name: raw.name,
       type: raw.type ?? "",
       lead: "",
@@ -65,6 +71,15 @@ export function withDerived<T>(fixture: T): T & { derived: Derived } {
     for (const child of raw.children ?? []) visit(child);
   };
   for (const raw of org.units ?? []) visit(raw);
-  for (const [unit, lead] of leads) unit.lead = byName.get(lead) ?? "";
+  for (const [unit, lead] of leads) {
+    // A HANDLE, never a name: the engine resolves `lead:` by handle, and a
+    // fixture that wrote a name would index a unit with no lead in silence.
+    if (!handles.has(lead)) {
+      throw new Error(
+        `withDerived: the fixture unit "${unit.name}" names lead "${lead}", which no fixture seat declares as its handle`,
+      );
+    }
+    unit.lead = lead;
+  }
   return { ...org, derived: { seats, units } } as T & { derived: Derived };
 }

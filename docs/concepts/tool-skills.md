@@ -50,6 +50,22 @@ markdown: with their own assistant over
 [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant)
 on the native backend, or `crewlet confluence import` on Confluence (see below).
 
+**On the native backend the container is a person's to write, never an
+agent's.** The skills container is one of the two [reserved
+containers](knowledge-system.md#who-may-write-where), and the knowledge base's
+store refuses a seat every write into it — creating a page, saving one,
+renaming one, and adding, editing or removing a comment — whichever tool asked.
+A seat cannot see that a page there is machinery rather than knowledge, and one
+it wrote would be excluded from every search — and, declaring a `trigger:`,
+injected into every seat's phase as an instruction. A person publishing through
+their own assistant is not refused by that rule — putting skills there on
+purpose is what the container is for — but writing one is a configuration
+change, so it takes **`admin`** rather than the `knowledge` app: creating,
+saving, renaming, trashing, restoring or purging a skill page is decided as
+`pages.skill.write` ([who may write
+where](knowledge-system.md#who-may-write-where)). On Confluence the same
+question is Confluence's own page permissions.
+
 **One skill sync per node, reading the single-homed knowledge backend** (see [Knowledge System](knowledge-system.md#the-knowledgesearcher-seam)). A walk and a single-page read apply the same **admission test** (`skills.AdmitPage`): the page lives in the configured container *and* its leading YAML frontmatter declares a `trigger:`. A page with no frontmatter, or frontmatter with no trigger, is an ordinary page and is skipped quietly; a page that declares a trigger and does not parse is reported (`skill_page_undecodable`) and skipped. A previously admitted page that stops passing the test (deleted, moved out, or edited into a non-skill) is **dropped**, never left serving its last-good body.
 
 **A page is the registry's identity, and a key is what a model asks for.** Every change names a page, so the registry records what each page holds and derives the key-addressed catalogue from that. A page whose key was edited leaves nothing behind under the old key, and reading the one page that changed ends exactly where a walk of the whole container would. Two pages declaring one key are an authoring error: the page with the lower id (on Confluence, the older page) is served on every node, the other is logged as `skill_key_duplicated`, and it takes the key the moment the first page gives it up.
@@ -83,7 +99,7 @@ A walk or a page read that finds the container as the registry was already built
 
 ## Skill file format
 
-Skills are authored as markdown files with YAML frontmatter — the same format the backend pages round-trip to via the per-backend codec ([below](#page-representation)). The repository ships ten bundled examples under `examples/tool-skills/`.
+Skills are authored as markdown files with YAML frontmatter, the same format the backend pages round-trip to via the per-backend codec ([below](#page-representation)). The repository ships eleven bundled examples under `examples/tool-skills/`.
 
 ```markdown
 ---
@@ -167,7 +183,7 @@ skill_variables:
   confluence_base_url: "https://nimbus.atlassian.net/wiki"
 ```
 
-The bundled `platform_mentions` skill uses them:
+A link rule for a company on Jira and Confluence uses them like this (the bundled `platform_mentions` skill links to the engine's own tracker and pages instead, through `${crewlet_base_url}`, described below):
 
 ```markdown
 - **Work item:** `${jira_base_url}/browse/{ISSUE-KEY}`
@@ -191,17 +207,17 @@ The engine substitutes the variables at **render time**, everywhere a skill's `s
 
 `skill_variables` is **company-wide** and hot-reloadable: changing a value on `PUT /config` re-renders every skill on the next turn.
 
-**`${crewlet_base_url}` is the engine's own.** It carries where people reach this deployment's dashboard, from [`integrations.dashboard_base_url`](../getting-started/configuration.md#integrations) resolved like any `${VAR}`, so a skill links to a work item as `${crewlet_base_url}/#/work/{KEY}` and to a page as `${crewlet_base_url}/#/knowledge/pages/{page-id}` with nothing for an operator to keep in step. The name is reserved — a company declaring it is refused, since two sources for one address is how a link comes to point at the deployment the company used to run on. It is never taken from `integrations.public_base_url`, which is where vendors reach the deployment and, behind a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api), a socket that serves no dashboard. With no dashboard address set it is left undefined, so a skill renders it literally and the registry warns `skill_variable_unresolved`.
+**`${crewlet_base_url}` is the engine's own.** It carries where people reach this deployment's dashboard — Tier A's [`api.external_url`](configuration.md#what-tier-a-must-state-once-the-api-is-served), the address every link a person follows is built on — so a skill links to a work item as `${crewlet_base_url}/#/work/{KEY}` and to a page as `${crewlet_base_url}/#/knowledge/pages/{page-id}` with nothing for an operator to keep in step. The name is reserved — a company declaring it is refused, since two sources for one address is how a link comes to point at the deployment the company used to run on. It is never taken from `api.public.external_url`, which is where vendors reach the deployment and, behind a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api), a socket that serves no dashboard. Where the node's Tier A states no `api.external_url` — a node that serves no API need not — it is left undefined, so a skill renders it literally and the registry warns `skill_variable_unresolved`.
 
 ---
 
 ## Phase scoping (catalogue visibility)
 
-A skill is **catalogued** in a phase's prompt when its declared `phases` includes that phase **and** its `trigger` matches the active surface:
+A skill is **catalogued** in a phase's prompt when its declared `phases` includes that phase **and** its `trigger` matches the phase's tool surface:
 
 | Phase | Tool surface seen | Notes |
 |---|---|---|
-| **Execute** | every first-party tool plus whatever the executor has activated, and the names of the MCP servers whose tools reach the seat | The executor's live surface, so a skill for a tool it discovered mid-run is catalogued from the next round. `run_sandbox` is on it only for a seat whose `role.sandbox` is enabled and whose executor is not itself a coding agent in agent mode, so a `tool: run_sandbox` trigger reaches exactly the seats that can launch a run. |
+| **Execute** | every tool the executor can reach, its first-party tools and every MCP server's tool alike, whether or not it is active yet, and the names of the MCP servers whose tools reach the seat | Matched once, when the phase opens, and the guard is armed over the same names, so a required skill for an MCP tool the executor activates later is enforced as the catalogue said. `run_sandbox` is on it only for a seat whose `role.sandbox` is enabled and whose executor is not itself a coding agent in agent mode, so a `tool: run_sandbox` trigger reaches exactly the seats that can launch a run. |
 | **Review** | empty (Review has no domain tools) | MCP-server-keyed skills still appear when an operator scopes a skill to the Review phase (lists it in the skill's `phases`), even though Review has no domain-tool surface. |
 | **Sub-agent** | the delegated task's allowlist | Same matching as Execute, against the worker's narrower surface. `subagent` is the wire name of the worker phase |
 
@@ -265,7 +281,7 @@ required: false
 
 Because enforcement derives from the trigger, the per-session cost of an enforced skill is governed by two knobs the author controls:
 
-- **Trigger width** decides *which calls wait*. Prefer **exact tool names** — the tools the practices actually apply to. The bundled `skill:platform_mentions` triggers on the write tools only (posting broken mention markup is visible to humans; Atlassian/Mattermost *reads* never wait on it) — its leaves name the write tools of `mcp-atlassian` and the version-pinned `mcp-server-mattermost==0.5.1` release (`jira_add_comment`, `confluence_create_page`, `mattermost_post_message`, …), which is exactly why the example org pins the server versions it can: an unpinned upgrade could rename a tool out from under the gate. `tool:refine_skill` triggers on the single `refine_skill` builtin (no other tool waits on skill-refinement conventions).
+- **Trigger width** decides *which calls wait*. Prefer **exact tool names** — the tools the practices actually apply to. The bundled `skill:platform_mentions` triggers on the write tools only (posting broken mention markup is visible to humans; *reads* never wait on it) — its leaves name the engine's own tracker and knowledge-base writes (`comment_on_work_item`, `create_work_item`, `update_work_item`, `comment_on_page`, `write_page`, `save_page`) and the two posting tools of the version-pinned `mcp-server-mattermost==0.6.1` release (`mattermost_post_message`, `mattermost_update_message`), which is exactly why the example org pins that server while it runs every other at its newest release: an unpinned upgrade could rename a tool out from under the gate. `tool:refine_skill` triggers on the single `refine_skill` builtin (no other tool waits on skill-refinement conventions).
 - **Body size** decides *what each wait costs*. An enforced `mcp_server` trigger gates every tool on that server, so its body must be a one-pager: the bundled `mcp:github` orientation is ~100 tokens, making the once-per-session load before any GitHub work near-free. If a server-wide skill's body grows past orientation size, split it — keep the tiny server-wide overview and move the detailed practices into a narrow tool-triggered skill.
 
 ### What a trigger covers
@@ -287,7 +303,7 @@ Enforcement gates exactly the tools the trigger names:
 - The guard only arms when the session can satisfy it: `load_tool_skill` is an Execute always-on and rides along on every worker surface that can reach it. A surface without it (e.g. a custom always-on override that removed the loader) disables enforcement for that session rather than soft-locking the LLM, with a `skill_guard_disabled_no_loader` warning.
 - A failed `load_tool_skill` call (wrong key, registry error) does **not** unlock anything.
 
-An enforced skill costs the session one extra tool round plus the body tokens, only in sessions that actually use a covered tool — cheap when triggers are narrow and bodies are sized to their blast radius (the tokens are the point: the practices end up in context before the call). When several enforced skills cover the same tool, the block message lists every missing key and the LLM can load them all in a single round of parallel `load_tool_skill` calls. **Most bundled examples ship enforced**: narrow practices like `skill:platform_mentions` gate only their exact tools, and the server-wide enforced skills (`mcp:github` / `mcp:gitlab`) keep their bodies to ~100-token orientation one-pagers so the per-session load is near-free. Three bundled skills are advisory (`required: false`): `skill:code_runtime` (advice on briefing `run_sandbox`, not markup correctness, triggered on that tool so it reaches exactly the seats offered it, whichever code host they push to or none), and `skill:getting_unstuck` / `skill:retrieval_research` — each carries a server-wide `mcp_server: atlassian` leaf in its trigger, and *enforcing* advisory practice prose at that width would gate every Jira and Confluence read, inverting the trigger-width rule above.
+An enforced skill costs the session one extra tool round plus the body tokens, only in sessions that actually use a covered tool: cheap when triggers are narrow and bodies are sized to their blast radius (the tokens are the point: the practices end up in context before the call). When several enforced skills cover the same tool, the block message lists every missing key and the LLM can load them all in a single round of parallel `load_tool_skill` calls. **Most bundled examples ship enforced**: narrow practices like `skill:platform_mentions` gate only their exact tools (and `skill:artifacts`, the artifact design contract, gates only `create_artifact`, `publish_artifact` and `upload_artifact_asset`, never the reads), and the server-wide enforced skills (`mcp:github` / `mcp:gitlab`) keep their bodies to ~100-token orientation one-pagers so the per-session load is near-free. Three bundled skills are advisory (`required: false`): `skill:code_runtime` (advice on briefing `run_sandbox`, not markup correctness, triggered on that tool so it reaches exactly the seats offered it, whichever code host they push to or none), and `skill:getting_unstuck` and `skill:retrieval_research`, practice prose triggered on the commonest calls a seat makes (every chat post, work-item and page comment and `a2a_ask` for the first; every knowledge search, work-item read, episode query and memory refresh for the second), so *enforcing* either would make those calls wait on judgement rather than on markup a call can get wrong, inverting the trigger-width rule above.
 
 ---
 

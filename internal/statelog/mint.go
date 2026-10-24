@@ -52,6 +52,18 @@ import "time"
 // margin would narrow a window nobody can close without widening the one that
 // loses writes.
 //
+// A SUBJECT KIND SWEPT SOONER THAN THE RETENTION NEVER TAKES A DERIVED ID. A
+// domain may declare one kind's own, shorter horizon (internal/maintenance's
+// OpsHorizon.Kinds) — the identity estate's sessions, an hour — and that
+// kind's watermark trails the clock by the hour alone. This horizon is a
+// month: an instant carried for even a fraction of it is long past such a
+// kind's watermark, so every derived retry on it would be answered `unknown`
+// on every node and never published. So such a kind's operations are minted
+// at the instant their gesture happens — a session's from the lineage its
+// sign-in mints ([StepOpID] over it), a close's fresh ([NewOpID]) — and re-asked,
+// if at all, inside the publisher's own resolve budget; nothing that runs as a
+// unit of work long enough to need this rule writes one.
+//
 // THE FLEET'S RECORD OF A REBASE MOVES WITH IT. The instant an attempt rebases
 // onto is recorded in the coordination store (coord.Rebases), whose bucket
 // forgets a record after coord.RebaseRetention — [OpsRetention] itself, so a

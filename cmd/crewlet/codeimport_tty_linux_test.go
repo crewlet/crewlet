@@ -61,8 +61,8 @@ func TestImportAsksForTheSourcesCredentialOnTheTerminal(t *testing.T) {
 
 	master, tty := openPTY(t)
 	cmd := exec.Command(os.Args[0], "code", "import", source.URL+"/acme/web.git", "web", "-url", h.base,
-		"-token", h.token, "-git", hermeticGit(t))
-	cmd.Env = append(promptingEnv(), mainProbeEnv+"=1",
+		"-git", hermeticGit(t))
+	cmd.Env = append(promptingEnv(), apiTokenEnv+"="+h.token, mainProbeEnv+"=1",
 		procgrouptest.GORACE+"="+procgrouptest.StandInRaceOptions())
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = tty, tty, tty
 	// A SESSION OF ITS OWN, the pty its controlling terminal: the session
@@ -126,7 +126,7 @@ func TestImportAsksForTheSourcesCredentialOnTheTerminal(t *testing.T) {
 }
 
 // promptingEnv is this process's environment less the node's token, which the
-// case names with -token, and the probe's switch, which it sets. What would
+// case hands the command itself, and the probe's switch, which it sets. What would
 // answer git's prompt in the person's place or forbid it — GIT_ASKPASS,
 // SSH_ASKPASS, GIT_TERMINAL_PROMPT — is not in it: TestMain removed every git
 // variable before any case ran ([scrubGitEnv]).

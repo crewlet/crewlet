@@ -34,12 +34,9 @@ func askDirectly(t *testing.T, f *fleet, node string, floors []statelog.Position
 	ctx, cancel := context.WithTimeout(t.Context(), code.ReplyMargin+askerSlack)
 	defer cancel()
 	deadline, _ := ctx.Deadline()
-	raw, err := json.Marshal(request{Op: opTasks.spec.name, Args: args, Floors: floors,
-		Deadline: deadline, From: "agent-9"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	replies, err := f.start(t).Ask(ctx, Subject(node), raw, 1)
+	req, sealed := signed(t, fleetEnvelopes, request{Op: opTasks.spec.name, Args: args,
+		Floors: floors, Deadline: deadline, From: "agent-9"})
+	replies, err := f.start(t).Ask(ctx, Subject(node), sealed, 1)
 	left := time.Until(deadline)
 	if err != nil || len(replies) != 1 {
 		t.Fatalf("%s answered %d replies (%v) before its asker stopped listening, want one", node,
@@ -50,9 +47,9 @@ func askDirectly(t *testing.T, f *fleet, node string, floors []statelog.Position
 			"a wait that runs to the deadline answers nobody", node, left.Round(time.Millisecond),
 			code.ReplyMargin)
 	}
-	var rep reply
-	if err := json.Unmarshal(replies[0], &rep); err != nil {
-		t.Fatal(err)
+	rep, why, err := fleetEnvelopes.openReply(replies[0], req.ID)
+	if err != nil || why != "" {
+		t.Fatalf("the reply from %s was not believed: %q, %v", node, why, err)
 	}
 	return rep
 }
@@ -123,13 +120,19 @@ func laggingReadOn(t *testing.T, log statelog.Appender) func(context.Context) er
 	t.Helper()
 	domain := tracker.Domain{}
 	spec := domain.Stream()
-	reserve, err := statelog.NewReserve(spec.Name,
+	reserve, err := statelog.NewReserve(spec,
 		func(context.Context) (statelog.Usage, error) { return statelog.Usage{}, nil })
 	if err != nil {
 		t.Fatal(err)
 	}
+	// SIGNED UNDER THE SUITE'S FLEET KEYRING, as every barrier is: the read
+	// index refuses to be built without a signer.
+	signer, err := statelog.NewSigner(domain.Name(), fleetRing)
+	if err != nil {
+		t.Fatal(err)
+	}
 	encode := func(env statelog.Envelope) ([]byte, error) { return json.Marshal(env) }
-	index, err := statelog.NewReadIndex(domain, spec, log, reserve, encode,
+	index, err := statelog.NewReadIndex(domain, spec, log, signer, reserve, encode,
 		func() uint32 { return 1 }, nil)
 	if err != nil {
 		t.Fatal(err)

@@ -11,7 +11,10 @@ import (
 
 // AN ASK CARRIES THE ITEM THE ASKING TURN IS ON, off the turn and never off an
 // argument: the answering turn is charged to it, and a model that could name
-// the item could charge a colleague's work to anything.
+// the item could charge a colleague's work to anything. The tool declares no
+// such argument, so one sent anyway is refused by name before the tool runs
+// (the undeclared-argument gate) — what this holds is the half that remains:
+// the item that rides the ask is the turn's.
 func TestAnAskCarriesTheTurnsItem(t *testing.T) {
 	t.Parallel()
 	svc := &asker{}
@@ -21,7 +24,6 @@ func TestAnAskCarriesTheTurnsItem(t *testing.T) {
 	turn.WorkItemBasis = types.BasisTrigger
 	res := callFor(t, tool, turn, map[string]any{
 		"target": "agent-cto", "brief": "Is the build green?",
-		"work_item": map[string]any{"backend": "native", "id": "task-9"}, // ignored
 	})
 	if res.Failed || len(svc.asks) != 1 {
 		t.Fatalf("the ask did not go out: %s", res.Output)

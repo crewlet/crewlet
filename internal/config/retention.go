@@ -87,21 +87,119 @@ const (
 	TrackerVectorsMaxBytesCeiling int64 = 2 << 40
 
 	// PagesLogMaxBytesFloor and PagesLogMaxBytesCeiling bound the
-	// knowledge base's log. The floor is every log's, and the ceiling is a
-	// quarter of the mutation log's for the corpus ratio
-	// DerivedPagesLogDivisor states.
+	// knowledge base's log. The floor is the gibibyte every corpus-sized
+	// log takes, and the ceiling is a quarter of the mutation log's for the
+	// corpus ratio DerivedPagesLogDivisor states.
 	PagesLogMaxBytesFloor   int64 = 1 << 30
 	PagesLogMaxBytesCeiling int64 = 256 << 30
 
-	// DefaultUsageLogMaxBytes is the usage log's ceiling: four times the
-	// modelled 181-day census of a three-node, sixty-object fleet (about
-	// 217 MB), and the floor every state log shares.
-	DefaultUsageLogMaxBytes int64 = 1 << 30
+	// ArtifactsLogMaxBytesFloor and ArtifactsLogMaxBytesCeiling bound the
+	// artifacts log, for the knowledge base's reasons and at its ratio
+	// ([DerivedArtifactsLogDivisor]).
+	ArtifactsLogMaxBytesFloor   int64 = 1 << 30
+	ArtifactsLogMaxBytesCeiling int64 = 256 << 30
 
-	// UsageLogMaxBytesFloor and UsageLogMaxBytesCeiling bound it. The floor
-	// is every log's; the ceiling is sixty-four times the default, which is
-	// a fleet two orders of magnitude past the census before any typo.
-	UsageLogMaxBytesFloor   int64 = 1 << 30
+	// ArtifactDataLogMaxBytesFloor and ArtifactDataLogMaxBytesCeiling bound
+	// the datastore's log: the corpus floor, and half the largest mutation
+	// log an operator may write, twice the artifacts log's bound, because a
+	// datastore write is a click rather than a publish and a company whose
+	// pages write heavily outgrows the derived quarter
+	// ([DerivedArtifactDataLogDivisor]).
+	ArtifactDataLogMaxBytesFloor   int64 = 1 << 30
+	ArtifactDataLogMaxBytesCeiling int64 = 512 << 30
+
+	// NatsObjectsMaxBytesFloor and NatsObjectsMaxBytesCeiling bound the
+	// nats object bucket's reservation (store.objects.nats_max_bytes): a
+	// gibibyte is the smallest bucket worth reserving a share of the broker
+	// for, and the ceiling is the store limit's own typo guard.
+	NatsObjectsMaxBytesFloor   int64 = 1 << 30
+	NatsObjectsMaxBytesCeiling int64 = 64 << 40
+
+	// IamLogMaxBytesFloor and IamLogMaxBytesCeiling bound the identity
+	// estate's log, and DefaultIamLogMaxBytes is what an unset value takes.
+	//
+	// THE DEFAULT IS NOT THE FLOOR, and the arithmetic below is why. Like
+	// the usage log's, this ceiling is NOT derived from the disk: what it
+	// grows with is the company's headcount and how often people sign in,
+	// and a volume has nothing to say about either.
+	//
+	// # Half a gibibyte, and where the number comes from
+	//
+	// SESSIONS DOMINATE. People, credentials and invitations are hundreds
+	// of records a year at any company that fits on one broker. A session
+	// writes one record when it opens
+	// and one when it closes and nothing in between, because a re-issue
+	// moves a deadline inside the signed bearer rather than recording one;
+	// so the rate is about (people × sign-ins a day × 2).
+	//
+	// At the reference company docs/guides/retention.md forecasts — whose
+	// 3 000 turns a day and 50 projects put it in the low hundreds of
+	// people — a pessimistic three new sessions per person per day is
+	// roughly 220 000 session records a year, and at the ~700 bytes a
+	// SIGNED record costs on the wire that is about 285 MB a year with
+	// everything else folded in. So this default is around eighteen months
+	// of a COMPLETELY BLOCKED trim at the pessimistic rate and about five
+	// years at a realistic one — and a blocked trim is named on the
+	// retention screen from its first tick and raises `trim_blocked` once it
+	// has been blocked for longer than `min_age` and a tick while its log
+	// keeps records older than `min_age` (a backup behind it that is missing
+	// or past the policy raises `backup_age` sooner), so the question is how
+	// long somebody has to act on a firing alarm, not how long until anyone
+	// notices.
+	//
+	// IT IS NOT 64 MiB. This log moves every morning, and at 64 MiB the
+	// pessimistic rate fills it in under three months — a window that
+	// could refuse an append before somebody got back from leave.
+	//
+	// IT IS NOT THE GIBIBYTE [engine.MinDomainCeiling] names either,
+	// because a FLOOR IS PER LOG: the broker grants a stream its whole
+	// ceiling at create time, so this number is free space a node must have
+	// BEFORE IT CAN BOOT AT ALL, and a domain at the framework floor raises
+	// that by a gibibyte for a log that will not fill one. The framework
+	// floor is a property of the corpus-sized logs it was written for — a
+	// mutation log below a gibibyte really is a window that refuses appends
+	// within a week — and the engine's scaling needs no change for a log
+	// that asks for less: scaling never raises. Half a gibibyte is the
+	// smallest power of two that clears a year at the pessimistic rate with
+	// margin.
+	//
+	// THE FLOOR IS 64 MiB so a small company can pay the small price: ten
+	// people write a fiftieth of the reference rate, for which 64 MiB is
+	// decades. THE CEILING IS A TYPO GUARD rather than a policy, like the
+	// store limit's — 16 GiB is orders of magnitude past any modelled
+	// volume, so anything beyond it is a unit mistake and not a deployment.
+	DefaultIamLogMaxBytes int64 = 512 << 20
+	IamLogMaxBytesFloor   int64 = 64 << 20
+	IamLogMaxBytesCeiling int64 = 16 << 30
+
+	// DefaultUsageLogMaxBytes is the usage log's ceiling, and
+	// UsageLogMaxBytesFloor and UsageLogMaxBytesCeiling bound it.
+	//
+	// # A gibibyte, and the arithmetic behind it
+	//
+	// The log is COMPACTED and holds its whole replay window: one message
+	// per (node, company day, seat or schedule) for the 181 days the
+	// domain's history covers, and the stream forgets a day when the rows
+	// do. So its size is a census rather than a rate. A three-node fleet of
+	// forty seats and twenty schedules is 60 × 3 × 181 ≈ 32 600 messages,
+	// and at a busy seat-day's ≈ 6.5 KiB that is about 217 MB: a gibibyte
+	// holds that window four times over, which is room for a fleet to grow
+	// before anybody has to touch the field. Beside the other logs it is
+	// one of the gibibytes every node reserves at the logs' smallest, which
+	// [StoreMaxBytesFloor] counts.
+	//
+	// THE FLOOR IS 64 MiB, by the per-log rule [IamLogMaxBytesFloor]
+	// records: the broker grants a stream its whole ceiling when it creates
+	// it, so a floor is free space a node must have before it boots, and a
+	// ten-seat node's 181-day census — ten seats × 181 days × 6.5 KiB — is
+	// about 12 MB. A gibibyte floor would make a small company reserve
+	// eighty times what it can ever write.
+	//
+	// THE CEILING IS A TYPO GUARD rather than a policy: sixty-four times
+	// the default is a fleet two orders of magnitude past the reference
+	// census, so anything beyond it is a unit mistake.
+	DefaultUsageLogMaxBytes int64 = 1 << 30
+	UsageLogMaxBytesFloor   int64 = 64 << 20
 	UsageLogMaxBytesCeiling int64 = 64 << 30
 
 	// DerivedPagesLogDivisor is how much smaller an unset PagesLogMaxBytes
@@ -116,8 +214,9 @@ const (
 	DerivedPagesLogDivisor = 4
 
 	// CodeLogMaxBytesFloor and CodeLogMaxBytesCeiling bound the code log's
-	// ceiling: the floor every log shares, and the mutation log's ceiling,
-	// because the two grow at the same order (DerivedCodeLogNumerator).
+	// ceiling: the gibibyte every corpus-sized log takes, and the mutation
+	// log's ceiling, because the two grow at the same order
+	// (DerivedCodeLogNumerator).
 	CodeLogMaxBytesFloor   int64 = 1 << 30
 	CodeLogMaxBytesCeiling int64 = 1 << 40
 
@@ -164,6 +263,22 @@ const (
 	DerivedCodeLogNumerator   = 2
 	DerivedCodeLogDenominator = 3
 
+	// DerivedArtifactsLogDivisor is how much smaller an unset
+	// ArtifactsLogMaxBytes is than the mutation log's ceiling: FOUR, the
+	// knowledge base's ratio, because a publish is a page-rate event.
+	DerivedArtifactsLogDivisor = 4
+
+	// DerivedArtifactDataLogDivisor is how much smaller an unset
+	// ArtifactDataLogMaxBytes is than the mutation log's ceiling: FOUR, the
+	// knowledge base's and the artifacts log's ratio, and the largest share
+	// the state logs' one pool can give it on the volume most deployments
+	// have. Every unset ceiling is scaled down together when the asks exceed
+	// the pool, and at HALF the mutation log's on a 64 GiB volume the
+	// vector changelog would be created below the corpus a model change
+	// republishes. A company whose pages write heavily sets the field: the
+	// bound it accepts is twice the artifacts log's for that reason.
+	DerivedArtifactDataLogDivisor = 4
+
 	// DerivedLogMaxBytesFraction is the share of a volume's free space an
 	// unset TrackerLogMaxBytes takes, and DerivedLogMaxBytesFloor /
 	// DerivedLogMaxBytesCeiling clamp the result.
@@ -179,17 +294,31 @@ const (
 	// broker's own declared store limit.
 	//
 	// THE FLOOR IS SIX GIBIBYTES, which is the smallest limit the engine's
-	// own logs fit inside: five state-log domains, none of which may be
-	// sized below a gibibyte, plus a gibibyte for the mailboxes, the event
-	// stream and every coordination bucket, which reserve nothing and grow
-	// against the same number. Below it a node provisions its way to a
-	// refusal on whichever stream happens to be last. It was five while
-	// there were four domains; beside the code log's gibibyte, five would
-	// leave the unreserved streams nothing. internal/engine holds the floor
-	// to the register it is derived from
-	// (TestTheStoreFloorFitsEveryRegisteredDomain), and the schema tag on
-	// Stream.StoreMaxBytes spells it again, which
-	// TestTheStoreFloorIsTheSchemasMinimum ties back here.
+	// own logs' FLOORS sat inside with room beside them while there were
+	// fewer logs — and it is NOT the room a fresh node needs, which is
+	// COMPUTED from the register (engine.BrokerFloor) rather than written
+	// here, because the register moves and a figure stated here went stale
+	// each time it did: it was five while there were four domains, and the
+	// artifact logs and the code log took what the logs reserve at their
+	// smallest to 7.5 GiB — seven at a gibibyte (the tracker's, the vectors',
+	// the knowledge base's, the code log's and the two artifact logs' at the
+	// gibibyte scaling stops at, and the usage log's default) and the
+	// identity log's 512 MiB default. Every node reserves every one of them
+	// whatever it runs. So a limit between this floor and the computed one is
+	// valid here, `crewlet validate` says it is short, and the boot refuses it
+	// naming both figures; and the mailboxes, the event stream and every
+	// coordination bucket, which reserve nothing, grow against what is left.
+	//
+	// NOT LOWER: at five gibibytes even the original four logs' unreserved
+	// streams would have half a gibibyte, so a document `crewlet validate`
+	// admits — every ceiling unset, which the cross-field check above cannot
+	// sum — would fail at boot on whichever stream the broker reached last,
+	// which is the failure that check exists to move forward to `crewlet
+	// validate`.
+	//
+	// THE COMPANY'S FILES are not in this floor either: where they live in
+	// the broker's own bucket, its reservation (store.objects.nats_max_bytes,
+	// or a share of this limit) is a term of the computed one.
 	//
 	// THE CEILING IS A TYPO GUARD rather than a policy: 64 TiB is more than
 	// an order of magnitude above the largest estate the domain ceilings can
@@ -379,6 +508,57 @@ func (s Stream) PagesMaxBytes(free int64) (int64, bool) {
 		PagesLogMaxBytesCeiling), true
 }
 
+// ArtifactsMaxBytes is the artifacts log's ceiling, and whether it was derived:
+// a quarter of the mutation log's, set or derived, held inside the bounds Tier
+// A accepts for the field, exactly as [Stream.PagesMaxBytes] is.
+func (s Stream) ArtifactsMaxBytes(free int64) (int64, bool) {
+	if s.ArtifactsLogMaxBytes > 0 {
+		return s.ArtifactsLogMaxBytes, false
+	}
+	tracker, _ := s.LogMaxBytes(free)
+	return min(max(tracker/DerivedArtifactsLogDivisor, ArtifactsLogMaxBytesFloor),
+		ArtifactsLogMaxBytesCeiling), true
+}
+
+// ArtifactDataMaxBytes is the datastore log's ceiling, and whether it was
+// derived: a quarter of the mutation log's, set or derived, held inside the
+// bounds Tier A accepts for the field.
+func (s Stream) ArtifactDataMaxBytes(free int64) (int64, bool) {
+	if s.ArtifactDataLogMaxBytes > 0 {
+		return s.ArtifactDataLogMaxBytes, false
+	}
+	tracker, _ := s.LogMaxBytes(free)
+	return min(max(tracker/DerivedArtifactDataLogDivisor, ArtifactDataLogMaxBytesFloor),
+		ArtifactDataLogMaxBytesCeiling), true
+}
+
+// DeclaredLogCeilings is the sum of the state-log ceilings an operator WROTE.
+// A derived ceiling is scaled to fit whatever limit is in force, so only the
+// explicit ones can conflict with stream.store_max_bytes.
+func (s Stream) DeclaredLogCeilings() int64 {
+	return s.TrackerLogMaxBytes + s.TrackerVectorsMaxBytes + s.PagesLogMaxBytes +
+		s.IamLogMaxBytes + s.UsageLogMaxBytes + s.CodeLogMaxBytes +
+		s.ArtifactsLogMaxBytes + s.ArtifactDataLogMaxBytes
+}
+
+// IamMaxBytes is the identity estate's log ceiling, and whether it was derived.
+//
+// IT TAKES NO FREE-SPACE ARGUMENT, like the usage log's and unlike every other
+// ceiling here, and the absence is the statement: this default is a property of
+// the company's HEADCOUNT and its sign-in rate, not of the disk — see
+// [DefaultIamLogMaxBytes] — so a parameter it ignored would be a signature
+// claiming a relationship that does not exist.
+//
+// The second return is still what the engine logs when it sizes the stream, and
+// it still reports `true` for the default: a value nobody wrote is one the
+// shared-budget scaling may lower, and one an operator wrote is not.
+func (s Stream) IamMaxBytes() (int64, bool) {
+	if s.IamLogMaxBytes > 0 {
+		return s.IamLogMaxBytes, false
+	}
+	return DefaultIamLogMaxBytes, true
+}
+
 // VectorsMaxBytes is the vector changelog's ceiling, and whether it was
 // derived.
 //
@@ -425,17 +605,24 @@ func (s Stream) VectorsMaxBytes(free int64) (int64, bool) {
 	return DerivedLogMaxBytes(free), true
 }
 
-// UsageMaxBytes is the usage log's ceiling, and whether the operator set it.
+// UsageMaxBytes is the usage log's ceiling, and whether it was derived.
 //
-// NOT DERIVED FROM THE DISK, unlike the mutation log's: the default is already
-// the floor every state log shares, so a disk-derived value could only ever
-// equal it — and the stream's size is a census of objects rather than a rate
-// a larger disk should buy more of.
+// IT TAKES NO FREE-SPACE ARGUMENT, like the identity estate's: the stream's size is a census of objects rather than a rate a
+// larger disk should buy more of — see [DefaultUsageLogMaxBytes] — so a
+// parameter it ignored would be a signature claiming a relationship that does
+// not exist.
+//
+// The second return is what the engine logs when it sizes the stream, and it
+// reports `true` for the default, as its sibling's does: a value nobody
+// wrote is one the shared-budget scaling may lower, and one an operator wrote
+// is not. It used to report whether the operator SET it — the inverse of
+// every other ceiling's second return, read by a register that asks the same
+// question of all five.
 func (s Stream) UsageMaxBytes() (int64, bool) {
 	if s.UsageLogMaxBytes > 0 {
-		return s.UsageLogMaxBytes, true
+		return s.UsageLogMaxBytes, false
 	}
-	return DefaultUsageLogMaxBytes, false
+	return DefaultUsageLogMaxBytes, true
 }
 
 // CodeMaxBytes is the code log's ceiling, and whether it was derived.

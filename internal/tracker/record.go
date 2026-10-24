@@ -96,9 +96,11 @@ const (
 	// time.
 	MaxRelationNote = 256
 	// MaxDependents is the OTHER end, and it is the cap that bounds a
-	// status write's declared scope: a group change on a blocker rewrites
-	// two columns on every dependent, so the record enumerates at most
-	// this many object terms and never needs a covering one.
+	// write's declared scope on a blocker: every apply of a blocker
+	// rewrites two columns on every dependent, so the record names each
+	// one — this many at most, beside the blocker's own term, which is one
+	// past [MaxScopeTerms] and so folds the largest project into its
+	// container ([ScopeSet.capped]).
 	MaxDependents = 64
 
 	// MaxChecklists, MaxChecklistItems and MaxChecklistItemsTotal bound
@@ -115,11 +117,6 @@ const (
 	// longer than that is a task of its own.
 	MaxChecklistName     = 128
 	MaxChecklistItemName = 256
-
-	// MaxFormerKeys bounds what a task DISPLAYS. Resolution is unbounded:
-	// every former key also has an alias row, and the applier never
-	// deletes one on a task apply.
-	MaxFormerKeys = 16
 
 	// MaxMentions bounds a comment's resolved mentions.
 	MaxMentions = 32
@@ -329,10 +326,6 @@ type ChecklistItem struct {
 	Assignee string  `json:"assignee,omitempty"`
 	Parent   *string `json:"parent,omitempty"`
 	Order    int     `json:"order,omitempty"`
-
-	// PromotedTo names the subtask this item became, which is what renders
-	// it struck through with the new key rather than deleting it.
-	PromotedTo *string `json:"promoted_to,omitempty"`
 }
 
 // Checklist is a group of items. It mints no object and appears on no board.
@@ -363,17 +356,12 @@ type Task struct {
 
 	// FiledUnit is IMMUTABLE and is a RECORD OF WHAT WAS TRUE: nothing
 	// rewrites it, and it may legitimately name a unit the chart no longer
-	// has, or a spelling it no longer uses.
+	// has.
 	//
 	// WHAT A WRITE STORES IS THE UNIT'S KEY — `org.Unit.Key`, resolved
 	// through [Units] by whoever holds the chart — so a rename does not
-	// move the work. WHAT A READ MATCHES IS BOTH OF THE UNIT'S SPELLINGS,
-	// through [unitSpellings], and that is the whole repair for the rows
-	// already written: these are REPLICATED rows derived from an ordered
-	// log, so nothing may rewrite them in place, and a repair record per
-	// task would rewrite history to say a team was called something it was
-	// not. The rows stay as they were written, the stored form is the key
-	// from here on, and every reader resolves the set.
+	// move the work, and a read resolves what it was asked for to the same
+	// key ([unitKeys]).
 	FiledUnit string `json:"filed_unit,omitempty"`
 	// RoutingUnit is the mutable half — whose lead hears about this task
 	// NOW — and is the only unit field any write touches. It takes the
@@ -787,17 +775,6 @@ type TaskPatch struct {
 	// NEVER ON THE WIRE, like Watch.
 	Checklist *ChecklistIntent `json:"-"`
 
-	// Promote is the PARENT's half of a checklist item's promotion — the
-	// same kind of gesture again, for the same reason: [TaskPatch.Checklists]
-	// is carried whole, and a promotion that composed it from the parent it
-	// read before minting the subtask's key discarded every checklist edit
-	// that landed between that read and the mark. Resolved by
-	// [settlePromote] inside the decide snapshot, which refuses it beside a
-	// Checklist gesture or a whole Checklists set.
-	//
-	// NEVER ON THE WIRE, like Watch.
-	Promote *PromoteIntent `json:"-"`
-
 	// The collections, carried WHOLE when touched.
 	Collaborators *[]string                   `json:"collaborators,omitempty"`
 	Watchers      *[]string                   `json:"watchers,omitempty"`
@@ -857,16 +834,6 @@ type WatchIntent struct {
 	// because sixty-four other people are watching — a write refused for
 	// a reason that has nothing to do with what the writer asked for.
 	Auto bool
-}
-
-// PromoteIntent marks one checklist item as having become one task.
-//
-// AN ITEM AND A TASK, never a checklist: what a promotion knows is which line
-// became which subtask, and the lists as a whole belong to whatever the parent
-// holds when the mark is decided.
-type PromoteIntent struct {
-	Item    string
-	Subtask string
 }
 
 // RelationIntent is a gesture over a task's relation set, resolved inside the
@@ -1064,8 +1031,8 @@ type FieldDef struct {
 
 	// RequiredInSubtasks decides INSTEAD of Required for a task with a
 	// parent, defaulting to false — ClickUp's two separate toggles, and
-	// the default that keeps a required field from blocking every
-	// checklist item promoted into a subtask.
+	// the default that keeps a required field from being a form to fill
+	// for every step somebody breaks a task into.
 	RequiredInSubtasks bool `json:"required_in_subtasks,omitempty"`
 
 	Config FieldConfig `json:"config,omitzero"`
@@ -1164,25 +1131,23 @@ type Project struct {
 	Key string `json:"key"`
 
 	// Name, Purpose and Unit are CHART-OWNED: written and rewritten only
-	// by the chart apply, under the epoch guard below. A project genuinely
-	// can move between units, so Unit is not immutable — but it is not a
-	// field a tool writes either.
+	// by the chart apply, under the activation guard below. A project
+	// genuinely can move between units, so Unit is not immutable — but it
+	// is not a field a tool writes either.
 	//
 	// UNIT IS THE UNIT'S KEY (`org.Unit.Key`: its id where the chart gave
 	// it one, its name where it did not) rather than its display name,
 	// because a task filed into this project takes its own filed unit from
 	// here and never rewrites it. A reader renders the key back to the
-	// team's current name through [Units], and being chart-owned this
-	// column re-settles on the current key at the next epoch apply — which
-	// is why a company that adds an id holds the older spelling only in
-	// TASK rows, and only those need reading through [unitSpellings].
+	// team's current name through [Units].
 	Name    string `json:"name"`
 	Purpose string `json:"purpose,omitempty"`
 	Unit    string `json:"unit,omitempty"`
 
 	// ChartEpoch is the activation the chart-owned fields were last
-	// written from ([configplane.ActivationStamp]) — the guard that stops an older chart
-	// walking a newer one back.
+	// written from ([configplane.ActivationStamp]) — the guard that stops
+	// an older configuration, applied late on another node, walking a
+	// newer one back.
 	ChartEpoch int64 `json:"chart_epoch,omitempty"`
 
 	Fields          []FieldDef `json:"fields,omitempty"`
@@ -1444,12 +1409,12 @@ const MaxCommitBytes = 1_279_262
 // KeyMint is a counter value a record took, carried on the record that uses it.
 //
 // ONE NUMBER, even on the root of a moving subtree. The root's record carried
-// the whole range's base and length once, for a duty that would complete an
-// abandoned walk by re-deriving every descendant's number from them; no such
-// duty was ever written, nothing read the two fields, and the re-derivation
-// could not have worked — the subtree's membership moves while a walk is
-// stopped. A move that stopped is finished by its re-run, on a fresh range
-// ([Writer.MoveTaskToProject]).
+// the whole range's base and length once, for a repair that would complete an
+// abandoned walk by re-deriving every descendant's number from them; nothing
+// read the two fields, and the re-derivation could not have worked — the
+// subtree's membership moves while a walk is stopped. A move that stopped is
+// finished by its re-run or by the tracker duty, each on a FRESH range
+// ([Writer.followRoot]).
 type KeyMint struct {
 	// N is the counter value this task took. Its key is "<PROJECT>-<n>"
 	// and its rank is the n-th key of the create lattice.

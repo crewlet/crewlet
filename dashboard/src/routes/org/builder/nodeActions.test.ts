@@ -21,6 +21,7 @@ function unit(lead: LeadView | null | undefined): UnitView {
   return {
     type: "unit",
     key: "unit:engineering" as NodeKey,
+    id: "engineering",
     name: "Engineering",
     unitType: "Department",
     lead,
@@ -33,7 +34,7 @@ function unit(lead: LeadView | null | undefined): UnitView {
   };
 }
 
-const led = (name: string, inherited = false): LeadView => ({ name, inherited });
+const led = (name: string, inherited = false): LeadView => ({ name, handle: "lead", inherited });
 
 describe("a unit's lead, as a table cell writes it", () => {
   /*

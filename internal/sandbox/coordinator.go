@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/redact"
 )
@@ -1626,22 +1627,26 @@ func (c *Coordinator) owes(turnID string) bool {
 // # Who is recorded
 //
 // Every answer that reached a run publishes [types.SandboxRunAnswered], with
-// the route `operator` and the credential and person the answer names —
-// which is the whole of the audit this route needed and the chat route
-// lacked. An answer recorded on its run publishes it once its resume has
+// the route `operator` and who gave it in the three halves iam.ActorFor makes
+// of a principal — the author (the seat of a principal the identity directory
+// binds to one, the login of anybody else), its kind, and the credential the
+// answer came through — which is the whole of the audit this route needed and
+// the chat route lacked. An answer recorded on its run publishes it once its resume has
 // become something ([Coordinator.attemptOwed]); one that was not recorded,
 // here.
 func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswerGiven, trigger *events.Event) (AnswerDisposition, error) {
 	answered := func(run PendingRun, outcome types.AnswerOutcome) {
-		c.announceAnswered(ctx, run, types.AnswerViaOperator, outcome,
-			given.AnsweredBy, given.AnsweredBySeat)
+		c.announceAnswered(ctx, run, types.AnswerViaOperator, outcome, answerer{
+			by: given.AnsweredBy, kind: given.AnsweredByKind, operatorID: given.OperatorID,
+		})
 	}
 	if given.LaunchID == "" {
 		// NO QUESTION NAMED, so none this answer can be paired with: spent,
 		// and said why, rather than recorded against whatever the run waits on.
 		log.ErrorContext(ctx, "sandbox_answer_names_no_question",
 			"turn_id", given.TurnID, "agent", given.AgentHandle,
-			"answered_by", given.AnsweredBy, "answered_by_seat", given.AnsweredBySeat,
+			"answered_by", given.AnsweredBy, "answered_by_kind", given.AnsweredByKind,
+			"operator_id", given.OperatorID,
 			"detail", "an answer by turn arrived naming no question (launch_id), so which "+
 				"question it answers cannot be known; it is spent without resuming the run, "+
 				"and the person has to answer the run again")
@@ -1666,17 +1671,20 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswe
 		if !found {
 			// SETTLED, or never there: a run that is over has no record. What
 			// is known about it is what the answer itself named.
-			answered(PendingRun{TurnID: given.TurnID, AgentHandle: given.AgentHandle}, types.AnswerGone)
+			answered(PendingRun{
+				TurnID: given.TurnID, AgentID: given.Agent, AgentHandle: given.AgentHandle,
+			}, types.AnswerGone)
 			return AnswerNotMine, nil
 		}
-		if run.AgentHandle != given.AgentHandle {
+		if run.AgentID != given.Agent {
 			// THE ANSWER REACHED ANOTHER SEAT'S INBOX. It is addressed off
-			// the row it was accepted against, so this is a delivery this
-			// seat must not act on — resuming it here would re-enter
-			// another seat's conversation as this one.
+			// the row it was accepted against ([AnswerDesk.Deliver]), so
+			// this is a delivery this seat must not act on — resuming it
+			// here would re-enter another seat's conversation as this one.
+			// Compared by the seat's agent id, which its inbox is named by.
 			log.ErrorContext(ctx, "sandbox_answer_misrouted",
-				"turn_id", given.TurnID, "addressed_to", given.AgentHandle,
-				"run_seat", run.AgentHandle,
+				"turn_id", given.TurnID, "addressed_to", given.Agent,
+				"run_seat", run.AgentID,
 				"detail", "an answer by turn arrived on a seat that does not hold the run it "+
 					"names; it is dropped rather than resumed under the wrong seat")
 			return AnswerNotMine, nil
@@ -1733,7 +1741,8 @@ func (c *Coordinator) AnswerByTurn(ctx context.Context, given types.SandboxAnswe
 		}
 		log.InfoContext(ctx, "sandbox_clarification_answered",
 			"turn_id", recorded.TurnID, "via", string(types.AnswerViaOperator),
-			"answered_by", given.AnsweredBy, "answered_by_seat", given.AnsweredBySeat)
+			"answered_by", given.AnsweredBy, "answered_by_kind", given.AnsweredByKind,
+			"operator_id", given.OperatorID)
 		c.clearAnswerAttempts(recorded.AgentHandle, recorded.TurnID)
 		c.resumeOwed(ctx, recorded)
 		return AnswerConsumed, nil
@@ -1769,15 +1778,15 @@ func declinedCopy(declined []string, delivery string) bool {
 }
 
 // answerGivenOf is what recording an answer by turn writes: the answer as the
-// person gave it, the credential and person it names, and the one delivery it
-// arrived in — the [types.SandboxAnswerGiven] event itself, carried so a copy
+// person gave it, who gave it as iam.ActorFor named them — author, kind and
+// credential — and the one delivery it arrived in — the [types.SandboxAnswerGiven] event itself, carried so a copy
 // of it can be handed back to the seat should the answer be let go of.
 func answerGivenOf(given types.SandboxAnswerGiven, trigger *events.Event, now time.Time) RecordedAnswer {
 	answer := RecordedAnswer{
 		// Redacted HERE, as a chat reply is: it is spliced into a phase
 		// record verbatim.
 		Text: redact.Secrets(given.Answer), Via: types.AnswerViaOperator,
-		By: given.AnsweredBy, BySeat: given.AnsweredBySeat,
+		By: given.AnsweredBy, ByKind: given.AnsweredByKind, OperatorID: given.OperatorID,
 		EventIDs: []string{trigger.ID.String()}, PostedAt: trigger.Timestamp, RecordedAt: now,
 	}
 	raw, err := json.Marshal(trigger)
@@ -1802,12 +1811,20 @@ func answeredAs(disposition AnswerDisposition) types.AnswerOutcome {
 	return types.AnswerGone
 }
 
-// answererOf is who a chat reply came from, as its envelope names them.
-func answererOf(trigger *events.Event) string {
+// answerer is who gave an answer, in the three halves iam.ActorFor makes of a
+// principal — see [types.SandboxRunAnswered.AnsweredBy].
+type answerer struct {
+	by, kind, operatorID string
+}
+
+// chatAnswerer is who a chat reply came from: the sender as the transport's
+// envelope names them, a person, and no credential — the chat surface vouched
+// for the sender, and nothing of this engine's was presented.
+func chatAnswerer(trigger *events.Event) answerer {
 	if trigger == nil {
-		return ""
+		return answerer{}
 	}
-	return trigger.Actor()
+	return answerer{by: trigger.Actor(), kind: string(iam.ActorHuman)}
 }
 
 // announceAnswered publishes what an answer to a parked run became.
@@ -1817,12 +1834,13 @@ func answererOf(trigger *events.Event) string {
 // be written is a log line rather than a reason to hand the delivery back and
 // resume the run a second time.
 func (c *Coordinator) announceAnswered(ctx context.Context, run PendingRun,
-	via types.AnswerVia, outcome types.AnswerOutcome, by, bySeat string,
+	via types.AnswerVia, outcome types.AnswerOutcome, by answerer,
 ) {
 	payload := types.SandboxRunAnswered{
 		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
 		TurnID: run.TurnID, WorkKey: run.WorkKey, WorkItem: run.WorkItem,
-		Via: via, Outcome: outcome, AnsweredBy: by, AnsweredBySeat: bySeat,
+		Via: via, Outcome: outcome,
+		AnsweredBy: by.by, AnsweredByKind: by.kind, OperatorID: by.operatorID,
 	}
 	ev := events.New(payload, events.TraceContext{TraceID: run.TraceID, ParentSpanID: run.SpanID})
 	ev.Source = run.Role
@@ -2556,7 +2574,7 @@ func (c *Coordinator) announceEnding(ctx context.Context, run PendingRun) error 
 	if err := c.queue.Publish(ctx, topics.Event(failed.EventType()), ev); err != nil {
 		return fmt.Errorf("sandbox: announcing the end of run %s (%s): %w", run.TurnID, ending.Reason, err)
 	}
-	if control := topics.AgentControl(run.AgentHandle); control != "" {
+	if control := controlSubject(run.AgentID); control != "" {
 		if err := c.queue.Publish(ctx, control, ev); err != nil {
 			log.WarnContext(ctx, "sandbox_failure_control_failed",
 				"turn_id", run.TurnID, "reason", ending.Reason, "error", err.Error())
@@ -3483,8 +3501,9 @@ func (c *Coordinator) fenceClaim(ctx context.Context, run PendingRun, owner stri
 // active revision for the whole retirement grace, and the caller HOLDS ITS
 // LEASE under owner and epoch, so no node can claim the seat and recover these
 // runs while they are ended. Until then they are kept on purpose, for the
-// reason the mailbox is: a seat restored within the grace comes back to its
-// parked questions and its running jobs rather than to lost turns.
+// reason the mailbox is: a seat made an agent's again within the grace comes
+// back to its parked questions and its running jobs rather than to lost
+// turns.
 //
 // Every run is ended whatever its status, because none can continue: a resume
 // needs the seat in the company, a parked question's answer arrives on an
@@ -3498,25 +3517,42 @@ func (c *Coordinator) fenceClaim(ctx context.Context, run PendingRun, owner stri
 // returned as an error, and the caller retries the retirement on its next
 // tick; ending the same run twice reclaims a box that is already gone and
 // finds a record that is already deleted.
-func (c *Coordinator) RetireSeat(ctx context.Context, handle, owner string, epoch int64) error {
-	runs, err := c.pending.ListActiveForSeat(ctx, handle)
+//
+// # By the seat's id, with the handle a label
+//
+// The runs are found by seat, the id the retiring mailbox is named by
+// ([PendingStore.ListActiveForSeatID]), never by handle: a mailbox the
+// broker's listing alone found is retired with no handle at all, and found by
+// one it held none of, its seat's runs were never ended while its
+// subscriptions were deleted under them. handle is what the caller's record
+// calls the seat, possibly nothing; the runs themselves carry the handle they
+// were launched under, which is the one this node's per-seat bookkeeping
+// counted them by and so the one released at the end.
+func (c *Coordinator) RetireSeat(ctx context.Context, seat uuid.UUID, handle, owner string, epoch int64) error {
+	runs, err := c.pending.ListActiveForSeatID(ctx, seat)
 	if err != nil {
-		return fmt.Errorf("sandbox: listing the runs of retired seat %q: %w", handle, err)
+		return fmt.Errorf("sandbox: listing the runs of retired seat %s: %w", seatLabel(seat, handle), err)
 	}
+	if handle == "" && len(runs) > 0 {
+		// ONE HANDLE PER ID: the id is derived from the handle, so every
+		// run of this seat was launched under the same one.
+		handle = runs[0].AgentHandle
+	}
+	label := seatLabel(seat, handle)
 	fence := Fence{Owner: owner, Epoch: epoch}
 	var errs []error
 	for _, run := range runs {
 		if err := ctx.Err(); err != nil {
-			errs = append(errs, fmt.Errorf("sandbox: run %s of retired seat %q was not ended: %w",
-				run.TurnID, handle, err))
+			errs = append(errs, fmt.Errorf("sandbox: run %s of retired seat %s was not ended: %w",
+				run.TurnID, label, err))
 			break
 		}
 		if outranked(run, fence) {
 			// Claimed under a newer lease than the one this retirement
 			// holds, which a held lease rules out; left to that owner
 			// rather than killed out from under it.
-			errs = append(errs, fmt.Errorf("sandbox: run %s of retired seat %q is owned by a newer "+
-				"lease (epoch %d) than the retirement's (%d)", run.TurnID, handle, run.OwnerEpoch, epoch))
+			errs = append(errs, fmt.Errorf("sandbox: run %s of retired seat %s is owned by a newer "+
+				"lease (epoch %d) than the retirement's (%d)", run.TurnID, label, run.OwnerEpoch, epoch))
 			continue
 		}
 		// A box that could not be reclaimed keeps its record, so the
@@ -3525,8 +3561,8 @@ func (c *Coordinator) RetireSeat(ctx context.Context, handle, owner string, epoc
 		// named by nothing, which a settle accepts only because nothing
 		// retries it.
 		if err := c.reclaimBox(ctx, ctx, run); err != nil {
-			errs = append(errs, fmt.Errorf("sandbox: run %s of retired seat %q was not ended: %w",
-				run.TurnID, handle, err))
+			errs = append(errs, fmt.Errorf("sandbox: run %s of retired seat %s was not ended: %w",
+				run.TurnID, label, err))
 			continue
 		}
 		// THE SAME ENDING EVERY OTHER PATH MAKES, which is what keeps
@@ -3545,12 +3581,13 @@ func (c *Coordinator) RetireSeat(ctx context.Context, handle, owner string, epoc
 		decided, err := c.endRecord(ctx, run, ending{
 			fence: fence, whileIn: Active, launch: EveryLaunch,
 			note: &failureNote{reason: types.SandboxFailureSeatRemoved,
-				detail: "the seat was removed from the company and not restored within the " +
-					"retirement grace, so its run was ended; any work it pushed is on its branch"},
+				detail: "the seat left the company's agent seats — removed from the chart, or " +
+					"made a person's and not an agent's again within the retirement grace — so " +
+					"its run was ended; any work it pushed is on its branch"},
 		})
 		if err != nil {
-			errs = append(errs, fmt.Errorf("sandbox: finishing run %s of retired seat %q: %w",
-				run.TurnID, handle, err))
+			errs = append(errs, fmt.Errorf("sandbox: finishing run %s of retired seat %s: %w",
+				run.TurnID, label, err))
 			continue
 		}
 		if decided == nil {
@@ -3559,10 +3596,24 @@ func (c *Coordinator) RetireSeat(ctx context.Context, handle, owner string, epoc
 			continue
 		}
 		log.InfoContext(ctx, "sandbox_retired_seat_run_ended",
-			"turn_id", run.TurnID, "agent", handle, "status", run.Status, "sandbox_id", run.SandboxID)
+			"turn_id", run.TurnID, "agent", run.AgentHandle, "seat", seat.String(),
+			"status", run.Status, "sandbox_id", run.SandboxID)
 	}
-	c.ReleaseSeat(handle)
+	if handle != "" {
+		// Nothing to release for a seat whose handle neither the caller nor
+		// any run names: this node counted no run of it under any handle.
+		c.ReleaseSeat(handle)
+	}
 	return errors.Join(errs...)
+}
+
+// seatLabel is what a retirement's errors call a seat: its handle, beside the
+// id it is retired by, or the id alone for a seat nothing names any more.
+func seatLabel(seat uuid.UUID, handle string) string {
+	if handle == "" {
+		return seat.String()
+	}
+	return fmt.Sprintf("%q (%s)", handle, seat)
 }
 
 // ReleaseSeat stops tracking a seat's runs.

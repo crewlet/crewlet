@@ -369,13 +369,13 @@ func (a *Applier) expirePushes(ctx context.Context, tx *sql.Tx, at applyContext,
 // counted twice in its rows — and behind one formed otherwise, a newer
 // build's or one written by hand, as many as one append carries, since
 // nothing at the apply holds a record to this build's committer's bounds:
-// some sixty thousand deletions of short refs in statelog.MaxAppendBytes,
-// which is why the removal backstop takes whatever the record carries. A
-// fixed share of those falls behind any repository whose pushes delete refs
-// in bulk — a CI deleting its build tags, a branch clean-up: measured,
-// records that each made a thousand refs and deleted the previous thousand
-// grew the table by about 936 tombstones a record with a share of 64, for
-// ever. The rest of the row budget is room the framework's transaction bound
+// some sixty thousand deletions of short refs in the log's largest record
+// (CodeLogMaxRecordBytes), which is why the removal backstop takes whatever
+// the record carries. A fixed share of those falls behind any repository
+// whose pushes delete refs in bulk — a CI deleting its build tags, a branch
+// clean-up: measured, records that each made a thousand refs and deleted the
+// previous thousand grew the table by about 936 tombstones a record with a
+// share of 64, for ever. The rest of the row budget is room the framework's transaction bound
 // already pays for, and every node computes the same budget from the same
 // record and the same rows, so the sweep stays a pure function of the record:
 // 3 995 tombstones behind a one-command push, at least as many as its own

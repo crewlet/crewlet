@@ -12,6 +12,16 @@ import (
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
 )
 
+// olderProtocol and newerProtocol are a mixed fleet's two builds, SPELLED
+// rather than derived from coord.ProtocolVersion: this build is version 1, the
+// first there has been, so "one below this build" is a protocol no lease can
+// hold. The gate's arithmetic is relative, and so are these cases — the
+// coordtest suite's protocol cases are written the same way.
+const (
+	olderProtocol = 1
+	newerProtocol = 2
+)
+
 // holdSeats claims n fresh seats ungated, the way a fleet's seats come to be
 // held without a gate being judged for each.
 func holdSeats(tb testing.TB, s *Store, n int) {
@@ -98,16 +108,17 @@ func TestALeaseWrittenJustBeforeAGateIsInIt(t *testing.T) {
 	for attempt := range 100 {
 		s := openStore(t, embeddedNATS(t), coordtest.LongTTL)
 		if lease, _, err := s.TryAcquire(t.Context(), coord.ClassSeat.Resource("first"),
-			coord.AcquireOptions{Owner: "node-a/1", TTL: coordtest.LongTTL}); err != nil || lease == nil {
+			coord.AcquireOptions{Owner: "node-a/1", TTL: coordtest.LongTTL,
+				Protocol: newerProtocol}); err != nil || lease == nil {
 			t.Fatalf("start the view with a claim: (%v, %v)", lease, err)
 		}
 		if lease, _, err := s.TryAcquire(t.Context(), coord.ClassSeat.Resource("older"),
 			coord.AcquireOptions{Owner: "old-node/1", TTL: coordtest.LongTTL,
-				Protocol: coord.ProtocolVersion - 1, Ungated: true}); err != nil || lease == nil {
+				Protocol: olderProtocol, Ungated: true}); err != nil || lease == nil {
 			t.Fatalf("an older build's lease: (%v, %v)", lease, err)
 		}
 		lease, _, err := s.TryAcquire(t.Context(), coord.ClassSeat.Resource("next"),
-			coord.AcquireOptions{Owner: "node-a/1", TTL: coordtest.LongTTL})
+			coord.AcquireOptions{Owner: "node-a/1", TTL: coordtest.LongTTL, Protocol: newerProtocol})
 		if err != nil {
 			t.Fatalf("attempt %d: the gated claim: %v", attempt, err)
 		}
@@ -117,9 +128,9 @@ func TestALeaseWrittenJustBeforeAGateIsInIt(t *testing.T) {
 				attempt)
 		}
 		floor, found, err := s.FleetProtocolFloor(t.Context())
-		if err != nil || !found || floor != coord.ProtocolVersion-1 {
+		if err != nil || !found || floor != olderProtocol {
 			t.Fatalf("attempt %d: the floor is (%d, %v, %v), want the older build's %d",
-				attempt, floor, found, err, coord.ProtocolVersion-1)
+				attempt, floor, found, err, olderProtocol)
 		}
 	}
 }
@@ -142,7 +153,7 @@ func TestTheViewStopsWhenIdleAndStartsAgainWhenAsked(t *testing.T) {
 			t.Fatalf("claim %s: (%v, %v)", name, lease, err)
 		}
 	}
-	claim("first", 0, false)
+	claim("first", newerProtocol, false)
 	s.gate.mu.Lock()
 	started := s.gate.run
 	s.gate.lastUse = time.Now().Add(-2 * gateViewIdle)
@@ -166,11 +177,11 @@ func TestTheViewStopsWhenIdleAndStartsAgainWhenAsked(t *testing.T) {
 
 	// WHILE IT IS STOPPED an older build's lease lands; the next gate
 	// starts a new view, which must see it.
-	claim("older", coord.ProtocolVersion-1, true)
+	claim("older", olderProtocol, true)
 	floor, found, err := s.FleetProtocolFloor(t.Context())
-	if err != nil || !found || floor != coord.ProtocolVersion-1 {
+	if err != nil || !found || floor != olderProtocol {
 		t.Fatalf("after a restart the floor is (%d, %v, %v), want %d", floor, found, err,
-			coord.ProtocolVersion-1)
+			olderProtocol)
 	}
 	s.gate.mu.Lock()
 	restarted := s.gate.run
@@ -243,8 +254,8 @@ func TestTheProtocolReCheckGivesBackOnlyANewClaim(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			s := openStore(t, embeddedNATS(t), coordtest.LongTTL)
-			seat := coord.SeatResource("engineer")
-			opts := coord.AcquireOptions{Owner: "new:1", TTL: coordtest.LongTTL}
+			seat := "seat:engineer"
+			opts := coord.AcquireOptions{Owner: "new:1", TTL: coordtest.LongTTL, Protocol: newerProtocol}
 			lease, refused, err := s.TryAcquire(ctx, seat, opts)
 			if err != nil || lease == nil {
 				t.Fatalf("claim = (%v, %q, %v)", lease, refused, err)
@@ -252,13 +263,13 @@ func TestTheProtocolReCheckGivesBackOnlyANewClaim(t *testing.T) {
 			// A lower-protocol node becomes live after the claim was judged.
 			if older, _, err := s.TryAcquire(ctx, coord.NodeResource("old"), coord.AcquireOptions{
 				Owner: "old:1", TTL: coordtest.LongTTL,
-				Protocol: coord.ProtocolVersion - 1, Ungated: true,
+				Protocol: olderProtocol, Ungated: true,
 			}); err != nil || older == nil {
 				t.Fatalf("plant the lower-protocol presence = (%v, %v)", older, err)
 			}
 
 			want := leaseValue{Resource: seat, Owner: "new:1", Epoch: lease.Epoch}
-			got, refused, err := s.settle(ctx, s.leases, seat, want, opts, coord.ProtocolVersion, tc.fresh)
+			got, refused, err := s.settle(ctx, s.leases, seat, want, opts, newerProtocol, tc.fresh)
 			if err != nil || got != nil || refused != coord.RefusedProtocol {
 				t.Fatalf("settle beside a lower-protocol node = (%v, %q, %v), want a refusal %q",
 					got, refused, err, coord.RefusedProtocol)

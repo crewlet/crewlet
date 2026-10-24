@@ -236,10 +236,7 @@ func findingsAreKnown(t TB, r Reconciler) {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	for _, f := range findings {
-		phase, actor := f.Kind.Verdict()
-		unknownPhase, unknownActor := integration.FindingKind("no such kind").Verdict()
-		if phase == unknownPhase && actor == unknownActor &&
-			f.Kind != integration.FindingUnknownTier {
+		if !f.Kind.Known() {
 			t.Errorf("finding kind %q is not one this build knows", f.Kind)
 		}
 	}

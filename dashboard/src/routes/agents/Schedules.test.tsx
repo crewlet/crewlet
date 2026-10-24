@@ -31,7 +31,7 @@ import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { CHART_ORG } from "~/test/orgchart.ts";
 import { Router } from "~/app/router.tsx";
-import { setZone } from "~/lib/prefs.ts";
+import { pinZoneForTest } from "~/lib/prefs.ts";
 import type { ScheduleRow } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 
@@ -39,12 +39,12 @@ beforeEach(() => {
   // The READER's zone, which is what each instant is rendered in and is a
   // different question from the one under test. Pinned so the assertions are
   // about the schedule's zone alone.
-  setZone("UTC");
+  pinZoneForTest("UTC");
 });
 
 afterEach(() => {
   cleanup();
-  setZone("");
+  pinZoneForTest("");
 });
 
 const NOW = Date.parse("2026-06-15T00:30:00Z");
@@ -52,7 +52,10 @@ const NOW = Date.parse("2026-06-15T00:30:00Z");
 function row(over: Partial<ScheduleRow> = {}): ScheduleRow {
   return {
     scope_type: "role",
-    scope_id: "ceo",
+    // The scope's IDENTITY is the seat's agent id, which nothing shows; a
+    // person reads its handle.
+    scope_id: "0b6f6c1e-5d1a-5c8e-9a51-2f0c3e7a9b10",
+    scope_name: "ceo",
     name: "standup",
     cron: "0 9 * * *",
     timezone: "Asia/Tokyo",
@@ -75,7 +78,7 @@ test("the fires are worked out in the schedule's zone, not in UTC", () => {
   render(<NextFires row={row()} now={NOW} count={3} />);
   expect(screen.getAllByText(/00:00:00/).length).toBe(3);
   expect(screen.queryByText(/09:00:00/)).toBeNull();
-  expect(screen.getByText(/evaluated in Asia\/Tokyo/)).toBeTruthy();
+  expect(screen.getByText("next 3 runs, in Asia/Tokyo")).toBeTruthy();
 });
 
 // AND A SCHEDULE THAT NAMES NO ZONE ARRIVES ON THE COMPANY'S CLOCK (ADR-0018):
@@ -151,7 +154,7 @@ test("a schedule waking several seats says how many, and names them for a screen
     </Router>,
   );
   expect(screen.getByRole("link", { name: /Agent SWE/ }).getAttribute("href")).toBe(
-    "#/agents/seats/swe",
+    "#/company/org/seats/swe",
   );
 });
 
@@ -178,8 +181,8 @@ test("the header's Wakes names the seats, never their handles", () => {
 test("a role's scope is its seat by name, in every grid and in the definition", () => {
   const { container } = render(
     <Router>
-      <ScopeCell scopeType="role" scopeId="swe" who={who} />
-      <ScopeCell scopeType="unit" scopeId="Core" who={who} />
+      <ScopeCell scopeType="role" name="swe" who={who} />
+      <ScopeCell scopeType="unit" name="Core" who={who} />
     </Router>,
   );
   expect(container.textContent).toContain("Agent SWE");
@@ -223,6 +226,7 @@ async function mountScreen(scope?: string[]) {
   const fire = {
     scope_type: "role",
     scope_id: "pm",
+    scope_name: "pm",
     schedule_name: "standup",
     fire_label: "2026-06-15T00:00:00Z",
     target_handle: "pm",
@@ -234,11 +238,14 @@ async function mountScreen(scope?: string[]) {
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
     Promise.resolve(
       what === "schedules"
-        ? { schedules: [row({ scope_id: "pm", runners: ["pm"] })], recent_runs: [fire] }
+        ? {
+            schedules: [row({ scope_id: "pm", scope_name: "pm", runners: ["pm"] })],
+            recent_runs: [fire],
+          }
         : what === "schedule_runs"
           ? { runs: [fire], truncated: false }
           : what === "viewer"
-            ? { operator_id: "", acts: [] }
+            ? { login: "", owner: "", acts: [] }
             : {},
     );
   const view = render(
@@ -268,7 +275,7 @@ test("both grids name a role's scope by its seat", async () => {
   // The seat, linked, four times: the definition's scope and whom it wakes,
   // and the fire's scope and whom it woke.
   const seat = [...container.querySelectorAll("a")].filter(
-    (a) => a.getAttribute("href") === "#/agents/seats/pm",
+    (a) => a.getAttribute("href") === "#/company/org/seats/pm",
   );
   expect(seat).toHaveLength(4);
 });
@@ -279,10 +286,12 @@ test("both grids name a role's scope by its seat", async () => {
 // it wakes.
 test("the schedule's eyebrow names its scope, never its address", async () => {
   const { container } = await mountScreen(["role", "pm", "standup"]);
-  const eyebrow = container.querySelector(".object-eyebrow")?.textContent ?? "";
+  const eyebrow = container.querySelector(".crewlet-object-header__eyebrow")?.textContent ?? "";
   expect(eyebrow).toContain("Seat · PM");
   expect(eyebrow).not.toContain("role:");
-  expect(container.querySelector(".object-eyebrow .mono")).toBeNull();
+  expect(
+    container.querySelector(".crewlet-object-header__eyebrow .crewlet-object-header__id--mono"),
+  ).toBeNull();
 });
 
 // THE HEADER'S CRON IS THE GRID'S DRAWING, WHOLE. Inline after the chip and

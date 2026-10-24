@@ -1,0 +1,301 @@
+package artifactsdomain
+
+import (
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/statelog"
+)
+
+// THE TYPED PAYLOADS, one per (kind, op).
+//
+// A record carries its COMPLETE new values, never a rule for computing them:
+// a version names every file it holds, a publish names the exact versions it
+// retires, a patch names each field it sets. That is what makes a replay from
+// zero produce the rows the original apply did, and it is what lets the
+// applier stay a pure function of the record and the rows.
+//
+// IDS TRAVEL AS TEXT, not as [artifacts.ID]: a payload is decoded on every
+// node, and an id refused by a decoder would be a record that stalls the log
+// rather than one the applier refuses deterministically and records as
+// refused. The applier parses them.
+
+// VersionPayload is one version as a record states it: the first version of a
+// create, a publish and a rollback all carry one.
+type VersionPayload struct {
+	// Number is head + 1, decided in the artifact subject's snapshot, so
+	// the broker's arbitration makes it unique.
+	Number int `json:"number"`
+
+	// VersionID is a name-based uuid over the record's operation, so a
+	// retry names the version its first attempt made.
+	VersionID string `json:"version_id"`
+
+	// Base is the head the version was decided against: Number - 1, also
+	// when forced (a forced publish skips the caller's base check, not the
+	// subject's arbitration).
+	Base int `json:"base"`
+
+	// Forced marks a publish a person with presence made over a moved head.
+	Forced bool `json:"forced,omitempty"`
+
+	// RestoredFrom is the version a rollback copies, every entry carried.
+	RestoredFrom int `json:"restored_from,omitempty"`
+
+	Label        string                 `json:"label,omitempty"`
+	Contract     string                 `json:"contract,omitempty"`
+	Capabilities []artifacts.Capability `json:"capabilities,omitempty"`
+
+	// Manifest is the version's files in canonical form
+	// (internal/artifacts/manifest), each naming its object.
+	Manifest artifacts.Manifest `json:"manifest"`
+
+	// Prune is the exact list of unlabelled versions this record retires,
+	// decided in the writer's snapshot: retention RIDES THE RECORD rather
+	// than being a rule each node evaluates, so every node deletes the same
+	// rows at the same position.
+	Prune []int `json:"prune,omitempty"`
+
+	// SearchText is what a gallery search matches, at most
+	// [artifacts.MaxSearchTextBytes].
+	SearchText string `json:"search_text,omitempty"`
+}
+
+// CreatePayload makes an artifact and its first version in one record.
+//
+// ITS SUBJECT IS THE ARTIFACT when there is no source key, and the SOURCE
+// address when there is: the apply then writes the claim, the artifact, the
+// first version and the history row in one transaction, and recomputes the
+// subject from Owner and SourceKey, refusing a record that arbitrated on one
+// address and claims another.
+type CreatePayload struct {
+	V int `json:"v"`
+
+	// Artifact is the id, derived from the create's operation. On an
+	// artifact subject it equals the subject's id.
+	Artifact string `json:"artifact"`
+
+	Kind        artifacts.Kind `json:"kind"`
+	Title       string         `json:"title"`
+	Description string         `json:"description,omitempty"`
+	Icon        string         `json:"icon,omitempty"`
+
+	// Owner is the seat handle (or machine login) that owns the artifact,
+	// and OwnerKind its actor kind, which is what opens the lead arm (D12).
+	Owner     string        `json:"owner"`
+	OwnerKind iam.ActorKind `json:"owner_kind"`
+
+	SourceKey string `json:"source_key,omitempty"`
+
+	Version VersionPayload `json:"version"`
+
+	// Shares are granted with the create, such as the requester an agent
+	// published for, as editor. Each share's GrantedAt is the writer's clock
+	// and is never written: a row's instant is the broker's.
+	Shares []artifacts.Share `json:"shares,omitempty"`
+
+	// Authority is the decision stamped at the API, the quota limits inside
+	// it, which the applier enforces against the replicated counters.
+	Authority artifacts.Authority `json:"authority"`
+}
+
+// PublishPayload adds a version: a publish, or a rollback with RestoredFrom set
+// and every entry carried.
+type PublishPayload struct {
+	V         int                 `json:"v"`
+	Version   VersionPayload      `json:"version"`
+	Authority artifacts.Authority `json:"authority"`
+}
+
+// VersionLabel is one version's label as a patch sets it. An empty Label
+// removes the version's label.
+type VersionLabel struct {
+	Number int    `json:"number"`
+	Label  string `json:"label"`
+}
+
+// PatchPayload changes the head's displayed fields or one version's label. A
+// nil field is unchanged.
+type PatchPayload struct {
+	V           int           `json:"v"`
+	Title       *string       `json:"title,omitempty"`
+	Description *string       `json:"description,omitempty"`
+	Icon        *string       `json:"icon,omitempty"`
+	Label       *VersionLabel `json:"label,omitempty"`
+
+	// Prune is the versions a label's removal pushed past the unlabelled
+	// versions kept, retired in the same record so the retention bound
+	// holds after every write rather than after the next publish.
+	Prune []int `json:"prune,omitempty"`
+}
+
+// SharePayload grants one audience a role. A grant that LOWERS an existing
+// role is a narrowing, and moves the artifact's access epoch.
+type SharePayload struct {
+	V     int             `json:"v"`
+	Share artifacts.Share `json:"share"`
+}
+
+// UnsharePayload withdraws one audience's share.
+type UnsharePayload struct {
+	V        int                `json:"v"`
+	Audience artifacts.Audience `json:"audience"`
+}
+
+// TransferPayload moves ownership. The previous owner's source address is
+// released: an address is an owner's, and the new owner does not hold it.
+type TransferPayload struct {
+	V      int           `json:"v"`
+	To     string        `json:"to"`
+	ToKind iam.ActorKind `json:"to_kind"`
+}
+
+// LinkPayload links an existing artifact to one tracker work item: the item is
+// the authority's [artifacts.Authority.WorkItem], stamped at the API with who
+// linked it and how, so the history row it writes is filed under the item the
+// way a create or a publish made for it is.
+type LinkPayload struct {
+	V         int                 `json:"v"`
+	Authority artifacts.Authority `json:"authority"`
+}
+
+// StatusPayload is a trash, a restore, a purge's beginning, a purge, or an
+// asset's removal.
+//
+// A PURGE NAMES ITS DEPENDENTS' OPERATIONS, the steps that removed state other
+// domains keep per artifact before this one (the datastore first), so an
+// operator reading the log sees what the gesture did before it reached here.
+type StatusPayload struct {
+	V          int      `json:"v"`
+	Dependents []string `json:"dependents,omitempty"`
+}
+
+// AssetPayload adds one asset. Never carried: its object is a fresh upload,
+// named by no other row.
+type AssetPayload struct {
+	V           int                 `json:"v"`
+	Name        string              `json:"name"`
+	ContentType string              `json:"content_type"`
+	Object      objstore.Object     `json:"object"`
+	Authority   artifacts.Authority `json:"authority"`
+}
+
+// ReaderPayload is one person's pin, unpin, opened mark or elevated read of
+// one artifact. Version is the version an elevated read opened.
+type ReaderPayload struct {
+	V        int    `json:"v"`
+	Artifact string `json:"artifact"`
+	Version  int    `json:"version,omitempty"`
+}
+
+// Eviction is a node's eviction from this log, or its readmission. PINNED AT
+// [GateRecordVersion] FOR EVER and a gate, so its shape may only grow by
+// addition.
+type Eviction struct {
+	V      int    `json:"v"`
+	NodeID string `json:"node_id"`
+
+	EvictedBy string    `json:"evicted_by,omitempty"`
+	EvictedAt time.Time `json:"evicted_at"`
+
+	// Readmitted makes this the INVERSE COMMIT rather than a delete, so an
+	// evicted, readmitted and evicted again node reads correctly.
+	Readmitted bool `json:"readmitted,omitempty"`
+}
+
+// Generation is a reanchor's record: this log was recreated, and every
+// position below this generation is comparable and safely stale.
+type Generation struct {
+	V           int       `json:"v"`
+	Generation  uint32    `json:"generation"`
+	By          string    `json:"by,omitempty"`
+	PrevHighest uint64    `json:"prev_highest,omitempty"`
+	StreamAt    time.Time `json:"stream_created_at"`
+}
+
+// DecodeMutation reads the typed payload for one record.
+//
+// THE DISPATCH IS ON (kind, op) AND NOTHING ELSE, so a pair this build does
+// not know is an error naming both rather than a nil payload the applier would
+// read as an empty change.
+func DecodeMutation(rec MutationRecord) (any, error) {
+	k, op := rec.Subject.Kind, rec.Op
+	switch {
+	case (k == KindArtifact || k == KindSource) && op == OpCreate:
+		return decodePayload[CreatePayload](rec)
+	case k == KindArtifact && (op == OpPublish || op == OpRestoreVersion):
+		return decodePayload[PublishPayload](rec)
+	case k == KindArtifact && op == OpPatch:
+		return decodePayload[PatchPayload](rec)
+	case k == KindArtifact && op == OpShare:
+		return decodePayload[SharePayload](rec)
+	case k == KindArtifact && op == OpUnshare:
+		return decodePayload[UnsharePayload](rec)
+	case k == KindArtifact && op == OpTransfer:
+		return decodePayload[TransferPayload](rec)
+	case k == KindArtifact && op == OpLinkWorkItem:
+		return decodePayload[LinkPayload](rec)
+	case k == KindArtifact && (op == OpTrash || op == OpRestore || op == OpPurgeBegin || op == OpPurge):
+		return decodePayload[StatusPayload](rec)
+	case k == KindAsset && op == OpCreate:
+		return decodePayload[AssetPayload](rec)
+	case k == KindAsset && op == OpRemove:
+		return decodePayload[StatusPayload](rec)
+	case k == KindReader && (op == OpPin || op == OpUnpin || op == OpOpened ||
+		op == OpReadElevated):
+		return decodePayload[ReaderPayload](rec)
+	case k == KindEviction && op == OpEviction:
+		return decodePayload[Eviction](rec)
+	case k == KindGeneration && op == OpGeneration:
+		return decodePayload[Generation](rec)
+	case k == KindBarrier && op == OpBarrier:
+		// THE ONE PAYLOAD-FREE RECORD, and nil is its value rather than an
+		// absence: the applier has a case for it that writes nothing.
+		return nil, nil
+	}
+	return nil, fmt.Errorf("artifactsdomain: no payload shape for (%s, %s): a "+
+		"record's kind and op together name its payload, and a pair this build "+
+		"does not know is a newer peer's record rather than an empty one", k, op)
+}
+
+// decodePayload reads one typed payload.
+func decodePayload[T any](rec MutationRecord) (T, error) {
+	var out T
+	if len(rec.Mutation) == 0 {
+		return out, fmt.Errorf("artifactsdomain: the record on %s carries no "+
+			"payload, and (%s, %s) needs one", rec.Subject, rec.Subject.Kind, rec.Op)
+	}
+	if err := json.Unmarshal(rec.Mutation, &out); err != nil {
+		return out, fmt.Errorf("artifactsdomain: decode the %s payload on %s: %w",
+			rec.Op, rec.Subject, err)
+	}
+	return out, nil
+}
+
+// EncodeBarrier renders the read index's payload-free append: the framework
+// owns when a barrier goes out, the domain owns what a record on its log looks
+// like.
+//
+// AN OP ID IS REFUSED: it would become the broker's message id, and a repeat
+// inside the duplicate window is answered from the dedupe cache with no quorum
+// round trip, which is the one claim a barrier must never fake.
+func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
+	if env.Kind != statelog.BarrierKind {
+		return nil, fmt.Errorf("artifactsdomain: %q is not a barrier envelope", env.Kind)
+	}
+	if env.OpID != "" {
+		return nil, fmt.Errorf("artifactsdomain: a barrier carries no op id and " +
+			"this one has one: an op id becomes a message id, and a duplicate " +
+			"acknowledgement is served with no quorum round trip at all")
+	}
+	return Encode(MutationRecord{
+		RecordEnvelope: RecordEnvelope{
+			Subject: BarrierSubject(), Op: OpBarrier,
+			Scope: ScopeSet{Subject: true}, Gen: env.Gen,
+		},
+	})
+}

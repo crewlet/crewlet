@@ -215,7 +215,7 @@ func spendOf(ctx context.Context, tx *sql.Tx, ids []string) (map[string]RowSpend
 // set is read at once — the `t.id IN (…)` the list compiles to bounds it at
 // [MaxPriorities] — and [pageListed] pages it in the list's own order.
 func listOrdered(q Query) bool {
-	return q.PriorityListOf.Named() && len(q.PriorityList) > 0
+	return q.PriorityListOf != "" && len(q.PriorityList) > 0
 }
 
 // listCursorOrder is the order a list-ordered cursor is minted under, and it

@@ -122,7 +122,7 @@ export function Histogram({
           const at = Date.parse(b.at);
           const failed = Math.min(b.count, b.failed ?? 0);
           const title =
-            `${when(b.at, bucket)} — ${plural(b.count, noun)}` +
+            `${when(b.at, bucket)} · ${plural(b.count, noun)}` +
             (failed > 0 ? `, ${failed.toLocaleString()} failed` : "");
           const size = {
             height: `${(b.count / peak) * 100}%`,

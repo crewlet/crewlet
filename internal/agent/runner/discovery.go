@@ -80,7 +80,7 @@ func (t *listMCPTools) Call(_ context.Context, args map[string]any) (tools.Resul
 	if strings.TrimSpace(server) == "" {
 		return tools.Result{
 			Output: "Name a server. " + t.knownServers(), Failed: true,
-			Refusal: tools.RefusalInvalid,
+			Cause: tools.RefusalInvalid,
 		}, nil
 	}
 	var lines []string
@@ -97,9 +97,9 @@ func (t *listMCPTools) Call(_ context.Context, args map[string]any) (tools.Resul
 		// means "you have the name wrong". Listing what exists is what
 		// turns the second into a recoverable round.
 		return tools.Result{
-			Output:  fmt.Sprintf("No tools found on MCP server %q. %s", server, t.knownServers()),
-			Failed:  true,
-			Refusal: tools.RefusalNotFound,
+			Output: fmt.Sprintf("No tools found on MCP server %q. %s", server, t.knownServers()),
+			Failed: true,
+			Cause:  tools.RefusalNotFound,
 		}, nil
 	}
 	return tools.Result{Output: strings.Join(lines, "\n")}, nil
@@ -148,7 +148,7 @@ func (t *activateTool) Call(_ context.Context, args map[string]any) (tools.Resul
 	if strings.TrimSpace(name) == "" {
 		return tools.Result{
 			Output: "Name a tool to activate.", Failed: true,
-			Refusal: tools.RefusalInvalid,
+			Cause: tools.RefusalInvalid,
 		}, nil
 	}
 	if t.surface().Activate(name) {
@@ -160,7 +160,7 @@ func (t *activateTool) Call(_ context.Context, args map[string]any) (tools.Resul
 	return tools.Result{
 		Output: fmt.Sprintf("No tool named %q. If it belongs to an MCP server, call "+
 			"%s to see that server's real tool names.", name, ListMCPToolsTool),
-		Failed:  true,
-		Refusal: tools.RefusalNotFound,
+		Failed: true,
+		Cause:  tools.RefusalNotFound,
 	}, nil
 }

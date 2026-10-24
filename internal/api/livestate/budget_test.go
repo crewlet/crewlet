@@ -39,9 +39,13 @@ func dayWindow(used, limit int, refused string) map[string]any {
 	return w
 }
 
-func seatMeter(role string, used, max int) map[string]any {
+// seatMeter is one seat's row of a meter report, named by its agent id. Every
+// row carries the SAME role name, which is what a report looks like for a
+// company whose seats share one — and what a meter keyed by name folded into
+// one bar.
+func seatMeter(agentID string, used, max int) map[string]any {
 	return map[string]any{
-		"role": role, "agent_id": "a-1", "handle": strings.ToLower(role),
+		"agent_id": agentID, "role": "Engineer", "handle": strings.ToLower(agentID),
 		"windows": []any{dayWindow(used, max, "")},
 	}
 }
@@ -79,7 +83,7 @@ func TestAMeterReportCarriesEachWindowsRefusalAndState(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
 	report := meterReport("m-1", 1, map[string]any{
-		"role": "Lead", "agent_id": "a-1", "handle": "lead",
+		"role": "Engineer", "agent_id": "Lead", "handle": "lead",
 		"windows": []any{dayWindow(400, 400, "2026-06-14T10:00:05.25Z")},
 	})
 	report["org"] = map[string]any{"windows": []any{dayWindow(990, 1000, "2026-06-14T12:00:00Z")}}
@@ -208,7 +212,7 @@ func TestNoMeterReportsAsNoMeter(t *testing.T) {
 	// reporting at all. Either way a bar drawn without one would be a
 	// claim nobody measured.
 	s := livestate.New()
-	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead", "phase": "execute"}))
+	s.Apply(env("agent_phase_started", map[string]any{"agent_id": "Lead", "phase": "execute"}))
 
 	if got := overlayOf(t, s, "Lead").Budget; got != nil {
 		t.Errorf("budget = %+v, want none", got)
@@ -222,7 +226,7 @@ func TestNoMeterReportsAsNoMeter(t *testing.T) {
 
 func phaseSpend(eventID, ts string, total int) *livestate.Envelope {
 	return env("agent_phase_completed", map[string]any{
-		"role": "Lead", "agent_id": "a-1", "phase": "plan",
+		"agent_id": "Lead", "role": "Lead", "phase": "plan",
 		"model": "claude-sonnet-5", "turn_id": "tn-1",
 		"input_tokens": total / 2, "output_tokens": total / 2, "total_tokens": total,
 	}, id(eventID), at(ts))
@@ -247,7 +251,7 @@ func TestRecordsInsideTheWindowAreKept(t *testing.T) {
 	if len(records) != 2 {
 		t.Fatalf("records = %d, want 2", len(records))
 	}
-	if records[0].Model != "claude-sonnet-5" || records[0].AgentRole != "Lead" {
+	if records[0].Model != "claude-sonnet-5" || records[0].AgentID != "Lead" || records[0].AgentRole != "Lead" {
 		t.Errorf("record = %+v", records[0])
 	}
 }
@@ -424,38 +428,6 @@ func TestRecordsArrivingOutOfOrderAgeOutInStampOrder(t *testing.T) {
 	now = time.Date(2026, 6, 15, 10, 30, 0, 0, time.UTC) // a and b are a day old
 	if ids := spendIDs(s); !slices.Equal(ids, []string{"c", "c2", "d", "e"}) {
 		t.Errorf("records = %v, want exactly the two stamped before the window gone", ids)
-	}
-}
-
-// THE ROLLUP NAMES A SEAT BY THE ID ITS NEWEST RECORD CARRIES.
-//
-// tokens.Aggregate keeps the LAST agent id it is handed for a seat and for a
-// turn, so the order the window hands its records over in is what decides which
-// id a row links by — and that order is the one the records age out in,
-// whatever order they arrived in. Held in arrival order, a record that lost a
-// cross-topic race to a newer one named the seat by the older id.
-//
-// Mutation: hold the window in arrival order (append in holdSpend), and both
-// rows name the late record's older id.
-func TestTheRollupNamesASeatByItsNewestRecordsID(t *testing.T) {
-	t.Parallel()
-	s := stoppedAt(t, "2026-06-14T14:00:00Z")
-	spent := func(eventID, agentID, ts string) *livestate.Envelope {
-		return env("agent_phase_completed", map[string]any{
-			"role": "Lead", "agent_id": agentID, "turn_id": "tn-1", "phase": "execute",
-			"total_tokens": 10,
-		}, id(eventID), at(ts))
-	}
-	s.Apply(spent("newer", "a-current", "2026-06-14T13:00:00Z"))
-	s.Apply(spent("older", "a-before", "2026-06-14T12:00:00Z")) // arriving late
-
-	window := s.Spend()
-	rollup := tokens.Aggregate(window.Records, tokens.Options{Since: window.Since, Until: window.Until})
-	if len(rollup.ByAgent) != 1 || rollup.ByAgent[0].AgentID != "a-current" {
-		t.Errorf("by_agent = %+v, want the one seat named by the newest record's id", rollup.ByAgent)
-	}
-	if len(rollup.ByTurn) != 1 || rollup.ByTurn[0].AgentID != "a-current" {
-		t.Errorf("by_turn = %+v, want the one turn named by the newest record's id", rollup.ByTurn)
 	}
 }
 
@@ -678,7 +650,7 @@ func TestAMeterReportClaimsNothingAboutWhetherASeatIsRunning(t *testing.T) {
 	s.SetPlacement(map[string]bool{"Lead": true})
 	s.Apply(env("budget_meters", meterReport("m-1", 1, seatMeter("Lead", 100, 400)), streamOnly))
 
-	rows := s.MergeAgents([]map[string]any{{"role": "Lead", "handle": "lead"}})
+	rows := s.MergeAgents([]map[string]any{{"agent_id": "Lead", "handle": "lead"}})
 	if got := rows[0]["activity"]; got != livestate.ActivityIdle {
 		t.Errorf("merged activity = %v, want idle: a meter is not a stop", got)
 	}

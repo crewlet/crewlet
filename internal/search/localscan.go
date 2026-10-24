@@ -16,7 +16,7 @@ import (
 type NodeScanner struct {
 	Index *Indexer
 
-	// Copies is this node's verdict on the copies a scan reads — ADR-0031 —
+	// Copies is this node's verdict on the copies a scan reads — ADR-0045 —
 	// or nil for a process that judges none (a single test node, an
 	// evaluation over a backup's estate), which scans every copy it holds.
 	Copies Copies

@@ -181,7 +181,16 @@ node:
   labels: {zone: eu}
 store: {path: /var/lib/crewlet/crewlet.db, max_open_conns: 6}
 stream: {type: embedded, store_dir: /var/lib/crewlet/stream}
-api: {host: 127.0.0.1, port: 8000, auth: {tokens: [{id: founder, token: tok}]}}
+api:
+  host: 127.0.0.1
+  port: 8000
+  external_url: "http://127.0.0.1:8000"
+  auth:
+    admin: serve
+    tokens: [{id: founder, token: a-token-long-enough-to-pass, grants: [admin]}]
+secrets:
+  active_key_id: k1
+  keys: [{id: k1, material: "`+TestKeyMaterial+`"}]
 `), EnvOnly())
 	if err != nil {
 		t.Fatal(err)

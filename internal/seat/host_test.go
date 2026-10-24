@@ -209,7 +209,7 @@ func TestASeatClaimDoesNotBlankThePresenceProfile(t *testing.T) {
 	}
 	// And the seat row says nothing about what this node IS: a second,
 	// staler answer to the question presence already answers.
-	seat := f.leaseOf(coord.SeatResource("ceo"))
+	seat := f.leaseOf(seatResource("ceo"))
 	if seat == nil || len(seat.Meta) != 0 {
 		t.Fatalf("seat lease meta = %v, want none", seat.Meta)
 	}
@@ -541,7 +541,7 @@ func TestTheShedOrderIsPlainSorted(t *testing.T) {
 	a.Sweep(f.ctx)
 	wantHeld(t, a, "ceo", "eng", "ops")
 	for _, handle := range a.Held() {
-		if hint := f.leaseOf(coord.SeatResource(handle)).Preferred; hint != "node-a" {
+		if hint := f.leaseOf(seatResource(handle)).Preferred; hint != "node-a" {
 			t.Fatalf("hint for %q is %q; the hint names the last claimer, so it cannot rank "+
 				"a node's own seats", handle, hint)
 		}
@@ -622,7 +622,7 @@ func placed(pinned map[string]placement.SeatPlacement, handles ...string) func()
 	return func() []placement.Seat {
 		out := make([]placement.Seat, 0, len(handles))
 		for _, h := range handles {
-			out = append(out, placement.Seat{Handle: h, Placement: pinned[h]})
+			out = append(out, placement.Seat{ID: testSeatID(h), Handle: h, Placement: pinned[h]})
 		}
 		return out
 	}
@@ -699,7 +699,8 @@ func TestASeatThatStopsMatchingIsHandedBack(t *testing.T) {
 	h := f.newHost("node-a", Config{
 		Hooks: hooks,
 		Seats: func() []placement.Seat {
-			return []placement.Seat{{Handle: "ceo", Placement: pin.Load().(placement.SeatPlacement)}}
+			return []placement.Seat{{ID: testSeatID("ceo"), Handle: "ceo",
+				Placement: pin.Load().(placement.SeatPlacement)}}
 		},
 	})
 	h.renewNodePresence(f.ctx)
@@ -920,8 +921,9 @@ func TestAnUndeadSeatOutsideEveryGroupStillCountsAgainstCapacity(t *testing.T) {
 	}}
 	h := f.newHost("node-a", Config{Hooks: hooks, Seats: func() []placement.Seat {
 		return []placement.Seat{
-			{Handle: "s0"}, {Handle: "s1"}, {Handle: "s2"},
-			{Handle: "s3", Placement: pin.Load().(placement.SeatPlacement)},
+			{ID: testSeatID("s0"), Handle: "s0"}, {ID: testSeatID("s1"), Handle: "s1"},
+			{ID: testSeatID("s2"), Handle: "s2"},
+			{ID: testSeatID("s3"), Handle: "s3", Placement: pin.Load().(placement.SeatPlacement)},
 		}
 	}})
 	h.renewNodePresence(f.ctx)
@@ -952,7 +954,7 @@ func TestAnUndeadSeatNeverCrowdsOutAPinnedOne(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	var company atomic.Value
-	company.Store([]placement.Seat{{Handle: "aaron"}, {Handle: "x"}})
+	company.Store([]placement.Seat{testSeat("aaron"), testSeat("x")})
 	seats := func() []placement.Seat { return company.Load().([]placement.Seat) }
 	hooks := &hookLog{releaseErr: func(handle string, _ ReleaseReason, _ int) error {
 		if handle == "x" {
@@ -968,9 +970,9 @@ func TestAnUndeadSeatNeverCrowdsOutAPinnedOne(t *testing.T) {
 	// At once: x is repinned to a node that is not live and will not tear
 	// down, zed is added for this satellite, and an idle core joins.
 	company.Store([]placement.Seat{
-		{Handle: "aaron"},
-		{Handle: "x", Placement: placement.SeatPlacement{Node: "absent"}},
-		{Handle: "zed", Placement: pinnedTo("zed")},
+		testSeat("aaron"),
+		{ID: testSeatID("x"), Handle: "x", Placement: placement.SeatPlacement{Node: "absent"}},
+		{ID: testSeatID("zed"), Handle: "zed", Placement: pinnedTo("zed")},
 	})
 	core := f.newHost("core-1", Config{Seats: seats})
 	core.renewNodePresence(f.ctx)
@@ -1077,7 +1079,7 @@ func TestAWithdrawnNodesShareIsTakenUpByItsPeers(t *testing.T) {
 	seats := placed(map[string]placement.SeatPlacement{"pin": {Node: "node-a"}}, "s0", "s1", "s2", "s3", "pin")
 	var fit atomic.Bool
 	fit.Store(true)
-	a := f.newHost("node-a", Config{Seats: seats, Serviceable: func() (bool, string) {
+	a := f.newHost("node-a", Config{Seats: seats, Serviceable: func(context.Context) (bool, string) {
 		return fit.Load(), "estate unreachable"
 	}})
 	b := f.newHost("node-b", Config{Seats: seats})
@@ -1116,7 +1118,7 @@ func TestAWithdrawnNodeSaysSoAtOnceEvenHoldingNothing(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	seats := seatsNamed("ceo", "eng")
-	a := f.newHost("node-a", Config{Seats: seats, Serviceable: func() (bool, string) {
+	a := f.newHost("node-a", Config{Seats: seats, Serviceable: func(context.Context) (bool, string) {
 		return false, "estate unreachable"
 	}})
 	b := f.newHost("node-b", Config{Seats: seats})
@@ -1191,7 +1193,7 @@ func TestPresenceSurvivesAnOlderProtocolPeer(t *testing.T) {
 	// seats by a count that excludes it and each take a larger share — and
 	// its own capacity excludes it too.
 	f := newFleet(t)
-	if _, _, err := f.store.TryAcquire(f.ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
+	if _, _, err := f.store.TryAcquire(f.ctx, seatResource("ceo"), coord.AcquireOptions{
 		Owner: "old-node:1", TTL: time.Minute, Protocol: 1,
 	}); err != nil {
 		t.Fatalf("stage an old peer: %v", err)
@@ -1240,16 +1242,21 @@ func (c *floorCounter) FleetProtocolFloor(ctx context.Context) (int, bool, error
 func TestASweepOverSeatsItsPeersHoldJudgesNoGate(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
-	peer := f.newHost("node-a", Config{Seats: seatsNamed("ceo", "eng", "ops")})
+	// The fleet speaks protocol 2 so that a protocol-1 lease below is the
+	// OLDER build — the idiom of the gate's other cases here, since this
+	// build's own protocol has nothing below it to stage.
+	const fleet, older = 2, 1
+	peer := f.newHost("node-a", Config{Seats: seatsNamed("ceo", "eng", "ops"), Protocol: fleet})
 	peer.renewNodePresence(f.ctx)
 	counter := &floorCounter{Backend: f.store}
-	h := f.newHost("node-b", Config{Backend: counter, Seats: seatsNamed("ceo", "eng", "ops")})
+	h := f.newHost("node-b", Config{Backend: counter, Seats: seatsNamed("ceo", "eng", "ops"),
+		Protocol: fleet})
 	h.renewNodePresence(f.ctx)
 	peer.Sweep(f.ctx)
 	// The seat the peer's share left over, held by a node no longer
 	// counted in the fleet.
-	lease, _, err := f.store.TryAcquire(f.ctx, coord.SeatResource("ops"), coord.AcquireOptions{
-		Owner: "draining:1", TTL: time.Hour, Protocol: coord.ProtocolVersion,
+	lease, _, err := f.store.TryAcquire(f.ctx, seatResource("ops"), coord.AcquireOptions{
+		Owner: "draining:1", TTL: time.Hour, Protocol: fleet,
 	})
 	if err != nil || lease == nil {
 		t.Fatalf("stage a draining holder: lease=%v err=%v", lease, err)
@@ -1273,11 +1280,11 @@ func TestASweepOverSeatsItsPeersHoldJudgesNoGate(t *testing.T) {
 	// An older build's lease lands and a seat comes free: now the gate is
 	// what refuses, and the stall is named.
 	if _, _, err := f.store.TryAcquire(f.ctx, coord.NodeResource("old"), coord.AcquireOptions{
-		Owner: "old:1", TTL: time.Hour, Protocol: 1, Ungated: true,
+		Owner: "old:1", TTL: time.Hour, Protocol: older, Ungated: true,
 	}); err != nil {
 		t.Fatalf("stage an older build: %v", err)
 	}
-	if ok, err := f.store.Release(f.ctx, coord.SeatResource("ops"), "draining:1", lease.Epoch); err != nil || !ok {
+	if ok, err := f.store.Release(f.ctx, seatResource("ops"), "draining:1", lease.Epoch); err != nil || !ok {
 		t.Fatalf("free a seat: ok=%v err=%v", ok, err)
 	}
 	result := h.Sweep(f.ctx)
@@ -1728,7 +1735,7 @@ func TestAPeerThatSaysNothingNeverMakesTheFleetFull(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	f.present("node-silent", time.Hour, placement.NodeProfile{})
-	if lease, _, err := f.store.TryAcquire(f.ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
+	if lease, _, err := f.store.TryAcquire(f.ctx, seatResource("ceo"), coord.AcquireOptions{
 		Owner: "node-silent:1", TTL: time.Hour, Protocol: coord.ProtocolVersion,
 	}); err != nil || lease == nil {
 		t.Fatalf("stage the silent peer's seat: lease=%v err=%v", lease, err)

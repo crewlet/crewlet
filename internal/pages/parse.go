@@ -71,7 +71,7 @@ type ParserOptions struct {
 func NewParser(opts ParserOptions) *Parser {
 	leads := make(Leads, len(opts.Leads))
 	for container, handle := range opts.Leads {
-		leads[strings.ToUpper(strings.TrimSpace(container))] = handle
+		leads[ContainerKey(container)] = handle
 	}
 	return &Parser{leads: leads, baseURL: strings.TrimRight(opts.BaseURL, "/")}
 }
@@ -187,7 +187,7 @@ func (p *Parser) leadCopy(base notify.Inbound, container, actor string,
 	if container == "" {
 		return nil
 	}
-	lead := p.leads[strings.ToUpper(container)]
+	lead := p.leads[ContainerKey(container)]
 	if lead == "" {
 		log.Debug("pages_no_recipients", "container", container,
 			"page", base.Metadata[MetaTitle])
@@ -200,7 +200,7 @@ func (p *Parser) leadCopy(base notify.Inbound, container, actor string,
 	// AND THE LEAD IS CHECKED AGAINST THE ROSTER LIKE EVERY OTHER RECIPIENT.
 	// The lead map is built from one epoch's org and this parser outlives
 	// that epoch, so a lead whose seat was removed or whose handle was
-	// renamed is a handle the company no longer employs — and routing to one
+	// changed is a handle the company no longer employs — and routing to one
 	// produces a delivery that resolves to nobody at the far end of the
 	// notification service, reported there as an undeliverable recipient
 	// rather than here, where the container that reached nobody is named.

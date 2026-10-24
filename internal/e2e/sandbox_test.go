@@ -106,6 +106,11 @@ roles:
         FAKE_AGENT_PATH: "${FAKE_AGENT_PATH}"
         FAKE_AGENT_ARGV: "${FAKE_AGENT_ARGV}"
         FAKE_AGENT_RELEASE: "${FAKE_AGENT_RELEASE}"
+      # Only the cases that read the argv or hold the agent set these two,
+      # and the stand-in reads both as possibly unset (${VAR:-}). Declared
+      # optional, a case that sets neither runs without them; undeclared,
+      # every such case's run is refused for a value it never needed.
+      optional_keys: [FAKE_AGENT_ARGV, FAKE_AGENT_RELEASE]
   - name: Founder
     kind: human
     contact:
@@ -258,6 +263,7 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 		t.Fatalf("company config: %v", err)
 	}
 	boot := config.DefaultBootstrap()
+	withServingTierA(t, &boot)
 	boot.Store.Path = dbPath
 	boot.Stream.StoreDir = streamDir
 	seedStore(t, &boot)
@@ -747,7 +753,12 @@ func TestAParkedRunReachesTheBoardAnOperatorReads(t *testing.T) {
 // dashboard does.
 func (n *codingNode) board(t *testing.T) []map[string]any {
 	t.Helper()
-	res, err := n.server.Client().Get(n.server.URL + "/query/sandbox_runs")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+		n.server.URL+"/query/sandbox_runs", nil)
+	if err != nil {
+		t.Fatalf("build the request: %v", err)
+	}
+	res, err := n.server.Client().Do(present(req))
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
@@ -845,8 +856,10 @@ func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 }
 
 // THE CONTAINER LEG. Same protocol, real host isolation — and the mode whose
-// in-box paths match a remote backend's, so a setup step that provisions a
-// system path works there and is refused in `direct`.
+// in-box paths match a remote backend's, so a path a step or a brief names
+// under the home reads the same in both. (A setup FILE at a system path is
+// refused here exactly as in `direct`: a container box writes files only
+// under its home mount.)
 //
 // Skipped where no container runtime is usable rather than dropped: it is the
 // half of the gate a workstation cannot always run, and a suite that quietly

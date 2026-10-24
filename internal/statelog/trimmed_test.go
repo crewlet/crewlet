@@ -20,7 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// ---- the trimmed record — ADR-0032 ------------------------------------ //
+// ---- the trimmed record — ADR-0046 ------------------------------------ //
 
 // trimmedEnv is the probe domain's trimmed record naming floor, written by
 // node-a — the probe's envelope IS the framework's, so this is
@@ -479,9 +479,13 @@ func sweepDeps(t testing.TB, estate store.ReplicatedHandle, log *sweepLog) state
 	if log.runner == nil {
 		log.runner = &sweepRunner{}
 	}
+	signer, err := statelog.NewSigner(probeDomain{}.Name(), testRing())
+	if err != nil {
+		t.Fatal(err)
+	}
 	return statelog.SweepDeps{
 		Domain: probeDomain{}, Spec: specOf(probeDomain{}),
-		Log: log, Ends: log.Ends, Runner: log.runner,
+		Log: log, Signer: signer, Ends: log.Ends, Runner: log.runner,
 		Admission: noCeiling(t), Encode: encodeProbe,
 		DB: estate.Reader(), Writer: "node-a",
 	}
@@ -568,7 +572,14 @@ func TestASweepAppendsOneRecordPerBoundAndNoneWhenNothingIsBelow(t *testing.T) {
 				if want := probePrefix + "." + statelog.TrimmedSubject(floor).String(); a.subject != want {
 					t.Fatalf("a trimmed record went to %q, want %q", a.subject, want)
 				}
-				env, err := probeDomain{}.Envelope(a.body)
+				// SIGNED, as every record on the log is: the applier
+				// opens the frame before it reads the envelope.
+				body, verdict := testVerifier(t, probeDomain{}).Open(a.body)
+				if verdict != statelog.Verified {
+					t.Fatalf("a trimmed record's frame opens as %s, want %s",
+						verdict, statelog.Verified)
+				}
+				env, err := probeDomain{}.Envelope(body)
 				if err != nil || env.Subject != statelog.TrimmedSubject(floor) ||
 					env.Writer != "node-a" || env.Gen != floor.Generation {
 					t.Fatalf("a trimmed record reads back as %+v (%v)", env, err)
@@ -613,6 +624,9 @@ func TestASweepRefusesBeforeItAppends(t *testing.T) {
 		}},
 		"no admission on a log that keeps a reserve": {mutate: func(d *statelog.SweepDeps) {
 			d.Admission = nil
+		}},
+		"no signer, so its records would be unsigned": {mutate: func(d *statelog.SweepDeps) {
+			d.Signer = nil
 		}},
 		"no writer":                    {mutate: func(d *statelog.SweepDeps) { d.Writer = "" }},
 		"no time budget":               {unbounded: true},
@@ -880,7 +894,7 @@ func TestASweepAppendsNoRecordPastItsBudget(t *testing.T) {
 				slow: 300 * time.Millisecond, late: true}}
 			deps := sweepDeps(t, estate, log)
 			deps.Domain, deps.Spec = domain, specOf(domain)
-			if !statelog.KeepsGateReserve(domain) {
+			if !statelog.ReservationOf(domain).Kept {
 				deps.Admission = nil
 			}
 			swept, err := sweep(t, deps,

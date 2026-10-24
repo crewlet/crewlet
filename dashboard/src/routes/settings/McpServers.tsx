@@ -1,5 +1,5 @@
 /**
- * The MCP servers on Settings › Tools & MCP: each one's launch, who it reaches,
+ * The MCP servers on Settings › MCP Tools: each one's launch, who it reaches,
  * and what every live node did with it.
  *
  * # Everything here is the engine's
@@ -14,21 +14,23 @@
  * # Operator-only, and the rest of the screen is not
  *
  * The answer names nodes, launch commands and the first line of each failure,
- * so the engine refuses it to a reader without an operator token — and that
+ * so the engine refuses it to a reader without Admin — and that
  * refusal is drawn HERE, in this section's place, while the tool catalogue
  * around it (a push every reader gets) stays exactly as it is.
  */
 
-import { useMemo } from "react";
-import { Card, EmptyState, Tag } from "@crewlethq/ui";
+import { useMemo, type ReactNode } from "react";
+import { fmtCount } from "~/lib/format.ts";
+import { Card, EmptyState, Tag, TableKeyCell, TableNumberCell } from "@crewlethq/ui";
 import { PlugGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { KeyCell, NumberCell } from "~/app/frame/cells.tsx";
+
 import { href } from "~/app/router.tsx";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { reachOf, SERVER_STATE_WORDS } from "~/lib/mcpServers.ts";
 import type { Seat } from "~/lib/seats.ts";
+import type { LogRefusal, QueryRefusal } from "~/protocol/index.ts";
 import type {
   McpServerState,
   McpServerNode,
@@ -42,22 +44,50 @@ import type {
  *
  * UNREPORTED IS NOT ZERO: a node whose last heartbeat carried no status says
  * nothing, and "none" under its name would be a claim it never made.
+ *
+ * WAITING IS SAID AND NEVER TONED: an instance held back for a credential an
+ * integration is still minting is neither running nor failed, so it is named
+ * beside what was launched and leaves the tone to that — a cell where it is
+ * all there is reads neutral rather than "none here".
  */
 export function nodeCellWords(cell: McpServerNode): {
   text: string;
   tone: "success" | "warning" | "danger" | "neutral";
 } {
   if (!cell.reported) return { text: "not reported", tone: "neutral" };
+  const waiting = cell.waiting > 0 ? `${cell.waiting} waiting` : "";
   const launched = cell.started + cell.failed;
-  if (launched === 0) return { text: "none here", tone: "neutral" };
+  if (launched === 0) return { text: waiting || "none here", tone: "neutral" };
+  const words = launchedWords(cell, launched);
+  return waiting ? { text: `${words.text} · ${waiting}`, tone: words.tone } : words;
+}
+
+function launchedWords(
+  cell: McpServerNode,
+  launched: number,
+): { text: string; tone: "success" | "warning" | "danger" } {
   if (cell.failed === 0) return { text: `${cell.started} running`, tone: "success" };
   if (cell.started === 0) return { text: `${cell.failed} failed`, tone: "danger" };
   return { text: `${cell.failed} of ${launched} failed`, tone: "warning" };
 }
 
-/** How many tools a started instance serves, or null where none started. */
+/** How many tools a serving instance serves, or null where none is serving. */
 export function toolsOf(server: McpServerStatus): number | null {
   return server.started > 0 ? server.tools : null;
+}
+
+/**
+ * What the row says about the entry's `tool_annotations` keys no started
+ * instance lists, or null where every key names a tool. A count in the grid,
+ * the keys themselves on the server's page: a key is an identifier a reader
+ * matches against the configuration, and a row has no room for a list.
+ */
+export function unlistedLine(server: McpServerStatus): string | null {
+  const n = server.unlisted_annotations.length;
+  if (n === 0) return null;
+  return n === 1
+    ? "1 tool_annotations key matches no tool"
+    : `${n} tool_annotations keys match no tool`;
 }
 
 /** The launch as one line: the command and its arguments, or the address. */
@@ -70,24 +100,44 @@ export function McpServers({
   data,
   loading,
   error,
+  refusal,
   seats,
 }: {
   data: McpServersStatusAnswer | null;
   loading: boolean;
   error: string | null;
+  /** What the refusal said beyond its code — the grant that would admit. */
+  refusal: QueryRefusal | LogRefusal | null;
   seats: Seat[];
 }) {
   const servers = useMemo(() => data?.servers ?? [], [data]);
+  // A CARD IN EVERY STATE, headed like every other section on Settings: the
+  // empty and refused states were a bare heading over a floating sentence
+  // beside the framed catalogue under it.
+  const card = (body: ReactNode) => (
+    <Card padding="none">
+      <Card.Header icon={<PlugGlyph size="sm" />} count={data ? servers.length : undefined}>
+        <Card.Title>MCP servers</Card.Title>
+      </Card.Header>
+      {body}
+    </Card>
+  );
 
-  if (error || (loading && !data)) return <QueryState error={error} loading={loading && !data} />;
+  if (error || (loading && !data)) {
+    return card(
+      <Card.Body padding="md">
+        <QueryState error={error} refusal={refusal} loading={loading && !data} />
+      </Card.Body>,
+    );
+  }
   if (servers.length === 0) {
-    return (
+    return card(
       <EmptyState
         size="compact"
         icon={<PlugGlyph size="xl" />}
         title="No MCP servers yet"
-        description="Add one to give agents a tool the engine does not ship: a tracker, a database, a vendor's API."
-      />
+        description="Add one to give agents more tools."
+      />,
     );
   }
 
@@ -95,13 +145,13 @@ export function McpServers({
   return (
     <div className="col gap-2">
       {silent.length > 0 && <SilentNodes nodes={silent} />}
-      <Card padding="none">
+      {card(
         <DataGrid<McpServerStatus>
           rows={servers}
           rowKey={(s) => s.name}
           // A ROW NAMES ITS SERVER'S TOOLS: the catalogue below, filtered to
           // this origin, which is what `servers/{name}` is.
-          rowHref={(s) => href(["settings", "tools", "servers", s.name])}
+          rowHref={(s) => href(["settings", "mcp-tools", "servers", s.name])}
           defaultSort="name"
           columns={[
             {
@@ -111,8 +161,9 @@ export function McpServers({
               sortValue: (s) => s.name,
               cell: (s) => (
                 <span className="col" style={{ gap: 2 }}>
-                  <KeyCell value={s.name} />
+                  <TableKeyCell value={s.name} />
                   {!s.configured && <span className="t-caption">not in this configuration</span>}
+                  {unlistedLine(s) && <span className="t-caption">{unlistedLine(s)}</span>}
                 </span>
               ),
             },
@@ -158,11 +209,11 @@ export function McpServers({
               shrink: true,
               align: "right",
               drop: 3,
-              // A COUNT ONLY WHERE AN INSTANCE STARTED: with none running, how
+              // A COUNT ONLY WHERE AN INSTANCE IS SERVING: with none running, how
               // many tools the server serves is unknown, not zero — a 0 beside
               // a failing server reads as a server that offers nothing.
               sortValue: (s) => toolsOf(s),
-              cell: (s) => <NumberCell value={toolsOf(s)} />,
+              cell: (s) => <TableNumberCell value={toolsOf(s)} format={fmtCount} />,
             },
             {
               key: "nodes",
@@ -171,8 +222,8 @@ export function McpServers({
               cell: (s) => <NodeCells server={s} />,
             },
           ]}
-        />
-      </Card>
+        />,
+      )}
     </div>
   );
 }
@@ -186,15 +237,14 @@ export function McpServers({
 function SilentNodes({ nodes }: { nodes: McpStatusNode[] }) {
   return (
     <p className="t-caption">
-      {nodes.length === 1 ? "Node " : "Nodes "}
+      No report from{" "}
       {nodes.map((n, i) => (
         <span key={n.id}>
           {i > 0 ? ", " : ""}
           <span className="mono">{n.id}</span>
         </span>
-      ))}{" "}
-      did not publish {nodes.length === 1 ? "its" : "their"} MCP report on the last heartbeat, so
-      whether the servers started there is unknown.
+      ))}
+      , so {nodes.length === 1 ? "its" : "their"} status is unknown.
     </p>
   );
 }
@@ -228,6 +278,11 @@ export function failureLine(cell: McpServerNode): string {
   return cell.error_seat ? `for ${cell.error_seat}: ${cell.error}` : cell.error;
 }
 
+/** What a waiting instance waits for, under its node's chip as a failure is. */
+export function waitLine(cell: McpServerNode): string {
+  return cell.wait_seat ? `for ${cell.wait_seat}: ${cell.wait}` : cell.wait;
+}
+
 /**
  * One block per live node: its chip, and under THAT chip the first failure it
  * reported — so with several nodes every reason sits under the node it came
@@ -254,6 +309,11 @@ function NodeCells({ server }: { server: McpServerStatus }) {
                 {failureLine(cell)}
               </span>
             )}
+            {cell.wait && (
+              <span className="t-caption clamp mcp-wait" title={waitLine(cell)}>
+                {waitLine(cell)}
+              </span>
+            )}
           </span>
         );
       })}
@@ -265,7 +325,7 @@ function NodeCells({ server }: { server: McpServerStatus }) {
  * A server's own page head: the server as the engine reports it, above the
  * catalogue filtered to its tools.
  *
- * `#/settings/tools/servers/{name}` used to be ONLY a filter, so a row's click
+ * `#/settings/mcp-tools/servers/{name}` used to be ONLY a filter, so a row's click
  * on a server that registered no tools changed nothing a reader could see.
  * This is what the click opens: the state, the launch, the reach and —
  * unclamped, as the heartbeat carried it (bounded at the node, with the whole
@@ -301,14 +361,13 @@ export function ServerHeader({
             the refusal itself is drawn by the servers section below. */}
         {unavailable ? (
           <p className="t-body muted">
-            <span className="mono">{name}</span>&apos;s status could not be read here, so whether it
-            is configured or running is not known. The servers section below says why.
+            Couldn’t read <span className="mono">{name}</span>’s status. See the servers section
+            below.
           </p>
         ) : (
           !loading && (
             <p className="t-body muted">
-              No configuration this engine can see carries a server called{" "}
-              <span className="mono">{name}</span>, and no live node reports one.
+              No server called <span className="mono">{name}</span>.
             </p>
           )
         )}
@@ -317,6 +376,7 @@ export function ServerHeader({
   }
   const reach = reachOf(server, seats);
   const failures = server.nodes.filter((n) => n.error);
+  const waits = server.nodes.filter((n) => n.wait);
   return (
     <>
       <ObjectHeader
@@ -328,7 +388,7 @@ export function ServerHeader({
           { label: "Transport", value: server.transport || "unknown" },
           { label: "Instances", value: server.shared ? "one for the company" : "one per seat" },
           { label: "Reaches", value: reach },
-          { label: "Tools", value: <NumberCell value={toolsOf(server)} /> },
+          { label: "Tools", value: <TableNumberCell value={toolsOf(server)} format={fmtCount} /> },
         ]}
       />
       {/* THE LAUNCH WHOLE, as its own block rather than a fact: a fact track
@@ -342,6 +402,27 @@ export function ServerHeader({
           <p className="t-body muted">Not in this configuration: only a node reports it.</p>
         )}
       </section>
+      {/* THE KEYS WHOLE, where the grid could only count them: each is a
+          name somebody wrote under tool_annotations that no started instance
+          lists — a typo, or a tool the server stopped serving — so it
+          overrides nothing. */}
+      {server.unlisted_annotations.length > 0 && (
+        <section className="col gap-1">
+          <div className="t-label">Annotation overrides that match no tool</div>
+          <p className="t-body muted">
+            No started instance lists a tool by these <span className="mono">tool_annotations</span>{" "}
+            keys, by its own name or with the entry’s prefix, so they override nothing. The server’s
+            tools are listed below.
+          </p>
+          <ul className="mcp-unlisted">
+            {server.unlisted_annotations.map((key) => (
+              <li key={key} className="t-body mono">
+                {key}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       {failures.length > 0 && (
         <section className="col gap-2">
           <div className="t-label">Why it failed</div>
@@ -353,6 +434,26 @@ export function ServerHeader({
                   {cell.error_seat ? `, launched for ${cell.error_seat}` : ""}
                 </span>
                 <span className="t-body mono mcp-failure-whole">{cell.error}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {/* WHAT IT WAITS FOR, beside why it failed and apart from it: a seat's
+          instance held back for a credential an integration is minting is
+          not a fault, and its sentence names the variable and the
+          integration, which is all a reader can act on — or wait for. */}
+      {waits.length > 0 && (
+        <section className="col gap-2">
+          <div className="t-label">What it waits for</div>
+          <ul className="mcp-failures">
+            {waits.map((cell) => (
+              <li key={cell.node} className="col" style={{ gap: 2 }}>
+                <span className="t-caption">
+                  On <span className="mono">{cell.node}</span>
+                  {cell.wait_seat ? `, for ${cell.wait_seat}` : ""}
+                </span>
+                <span className="t-body mono mcp-failure-whole">{cell.wait}</span>
               </li>
             ))}
           </ul>

@@ -52,9 +52,12 @@ type Spec struct {
 	Command string
 	Args    []string
 
-	// Env is layered OVER the engine's own environment for a stdio child.
-	// Values must already have their ${VAR} references resolved: this package
-	// never reads the secret store.
+	// Env is the stdio child's declared environment, layered over the
+	// allowlisted host environment every child gets — NEVER over the engine's
+	// own, which holds its keyring and its Tier A tokens (see mergedEnv). A
+	// variable the server reads that is not on the allowlist is declared
+	// here. Values must already have their ${VAR} references resolved: this
+	// package never reads the secret store.
 	Env map[string]string
 
 	// URL and Headers reach an HTTP server. Headers carry the per-seat
@@ -77,7 +80,9 @@ type Spec struct {
 	//
 	// Keyed by EITHER the server's raw tool name or the prefixed catalogue
 	// name. An operator keying it by the name they see in the dashboard must
-	// not have it silently do nothing.
+	// not have it silently do nothing, and a key that is neither on every
+	// instance of the server is named on its status row for the same reason
+	// ([Bridge.UnlistedOverrides] has why one instance cannot judge it).
 	AnnotationOverrides map[string]Annotations
 
 	// StartupTimeout bounds connect + handshake, and separately the first

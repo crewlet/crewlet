@@ -39,10 +39,20 @@ func BenchmarkBackend(b *testing.B) {
 		{"member", memberClientAt, natsobj.Config{Replicas: 1}},
 		{"leaf", leafClientAt, acrossLink},
 	} {
+		cfg := via.cfg
+		cfg.MaxBytes = benchCeiling
 		b.Run("via="+via.name, func(b *testing.B) {
 			objstoretest.Bench(b, func(b *testing.B) objstoretest.BenchBackend {
-				return objstoretest.BenchBackend{Backend: openWith(b, via.client(b, member), via.cfg)}
+				return objstoretest.BenchBackend{Backend: openWith(b, via.client(b, member), cfg)}
 			})
 		})
 	}
 }
+
+// benchCeiling is the reservation every benchmark bucket is opened with: four
+// gibibytes, since the suite holds the stat case's ten thousand objects of up
+// to 256 KiB at once (some 840 MiB with their metadata) and a 128 MiB object
+// beside the ranged case, where the contract's cases' [testCeiling] holds a
+// few pieces. A put past it is refused as the bucket filling, which a figure
+// must never be made of.
+const benchCeiling = 4 << 30

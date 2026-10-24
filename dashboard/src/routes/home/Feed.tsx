@@ -17,8 +17,9 @@
  * one again.
  */
 
+import { useServicesRun } from "~/lib/services.ts";
 import { useCallback, useMemo, useState } from "react";
-import { Button, Card, SegmentedControl } from "@crewlethq/ui";
+import { Button, Card, SegmentedControl, useMediaMatch } from "@crewlethq/ui";
 import {
   CircleCheckGlyph,
   CalendarClockGlyph,
@@ -29,28 +30,29 @@ import {
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useMediaQuery } from "~/lib/media.ts";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { useClient, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, type OrgIndex } from "~/lib/seats.ts";
 import { fmtCount, fmtDateCompact, parseUTC, plural, readerDay } from "~/lib/format.ts";
 import { zone } from "~/lib/prefs.ts";
-import type { CompanyFeedAnswer, FeedEntry } from "~/protocol/index.ts";
+import type { CompanyFeedAnswer, FeedEntry, FeedWorkRow } from "~/protocol/index.ts";
 import {
-  FEED_FILTERS,
+  feedFilters,
   FEED_PHRASES,
   feedFilterOf,
   mergePages,
   scheduleVerb,
   surfaceName,
 } from "./model.ts";
+import { itemPath } from "~/lib/work.ts";
 
 /** One screen of the feed before "Load older". */
 export const FEED_PAGE = 20;
 
 export function Feed({ now }: { now: number }) {
   const [filterValue, setFilter] = useParam("feed", "all");
-  const filter = feedFilterOf(filterValue);
+  const runs = useServicesRun();
+  const filter = feedFilterOf(filterValue, runs);
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   const { socket } = useClient();
@@ -59,7 +61,7 @@ export function Feed({ now }: { now: number }) {
     [filter.kinds],
   );
   const live = useQuery("company_feed", params, { pollMs: 30_000 });
-  const phone = useMediaQuery(`(width < ${PHONE_BREAKPOINT}px)`);
+  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
 
   // The older pages, the head they were paged from, and where they stopped —
   // all reset by a filter change, which is a different feed.
@@ -117,7 +119,7 @@ export function Feed({ now }: { now: number }) {
             label="Show"
             semantics="radio"
             size={phone ? "sm" : "md"}
-            options={FEED_FILTERS.map((f) => ({ value: f.value, label: f.label }))}
+            options={feedFilters(runs).map((f) => ({ value: f.value, label: f.label }))}
             value={filter.value}
             onValueChange={(v) => setFilter(v === "all" ? "" : v)}
           />
@@ -125,6 +127,7 @@ export function Feed({ now }: { now: number }) {
       </Card.Header>
       <QueryState
         error={live.error}
+        refusal={live.refusal}
         loading={live.loading && !live.data}
         empty={
           head && rows.length === 0
@@ -133,7 +136,7 @@ export function Feed({ now }: { now: number }) {
                   filter.value === "all"
                     ? "Nothing has happened yet"
                     : `No ${filter.label.toLowerCase()} yet`,
-                hint: "A row appears here as the company's agents file, finish and hand on work.",
+                hint: "Agent activity appears here.",
               }
             : undefined
         }
@@ -197,11 +200,15 @@ function nameOf(index: OrgIndex, handle: string | undefined): string {
   return index.byHandle.get(handle)?.name ?? handle;
 }
 
-function Key({ value }: { value: string | undefined }) {
-  if (!value) return null;
+/** The task a row is about: its key as a reader reads it, linked by its address. */
+function Key({ row }: { row: FeedWorkRow }) {
+  if (!row.key && !row.task) return null;
   return (
-    <a className="home-feed-key mono" href={href(["work", value])}>
-      {value}
+    <a
+      className="home-feed-key mono"
+      href={href(itemPath({ id: row.task, key: row.key, key_collision: row.key_collision }))}
+    >
+      {row.key || row.task}
     </a>
   );
 }
@@ -211,20 +218,22 @@ function Key({ value }: { value: string | undefined }) {
 function phrase(row: FeedEntry, index: OrgIndex, now: number) {
   const w = row.work;
   if (w) {
-    const who = <strong>{nameOf(index, w.actor_seat || w.actor)}</strong>;
+    // WHOEVER THE RECORD NAMES (`iam.ActorFor`): a person the directory binds
+    // to a seat writes AS the seat, and anybody bound to none under their login.
+    const who = <strong>{nameOf(index, w.actor)}</strong>;
     switch (w.kind) {
       case "completed": {
         const review =
           w.first_pass === true
-            ? " — approved on first review"
+            ? " · approved on first review"
             : w.first_pass === false
-              ? " — sent back in review"
+              ? " · sent back in review"
               : "";
         return {
           icon: <CircleCheckGlyph size="sm" />,
           text: (
             <>
-              {who} {FEED_PHRASES.completed} <Key value={w.key} /> {w.title}
+              {who} {FEED_PHRASES.completed} <Key row={w} /> {w.title}
               {review}
             </>
           ),
@@ -238,7 +247,7 @@ function phrase(row: FeedEntry, index: OrgIndex, now: number) {
           icon: <PlusGlyph size="sm" />,
           text: (
             <>
-              {who} {FEED_PHRASES.created} <Key value={w.key} /> {w.title}
+              {who} {FEED_PHRASES.created} <Key row={w} /> {w.title}
             </>
           ),
           aside: w.origin ? `from ${surfaceName(w.origin.surface)}` : "",
@@ -248,7 +257,7 @@ function phrase(row: FeedEntry, index: OrgIndex, now: number) {
           icon: <UserGlyph size="sm" />,
           text: (
             <>
-              {who} {FEED_PHRASES.handoff} <Key value={w.key} /> from {nameOf(index, w.from)} to{" "}
+              {who} {FEED_PHRASES.handoff} <Key row={w} /> from {nameOf(index, w.from)} to{" "}
               {nameOf(index, w.to)}
             </>
           ),

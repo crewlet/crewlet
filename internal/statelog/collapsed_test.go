@@ -41,9 +41,9 @@ func TestAnAmbiguousPublishTheLedgerResolvesIsCollapsed(t *testing.T) {
 	h.rows.afterSnapshot = func() {
 		once.Do(func() {
 			seq, _, err := h.log.Append(t.Context(), probePrefix+".object.counter",
-				op, nil, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"},
+				op, nil, signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"},
 					subject, statelog.ScopeSet{Paths: []string{subject.String()}},
-					op, "the earlier copy's"))
+					op, "the earlier copy's")))
 			if err != nil {
 				t.Errorf("land the earlier copy: %v", err)
 				return
@@ -96,9 +96,9 @@ func TestAnAcknowledgedCopyTheLedgerPlacesElsewhereIsCollapsed(t *testing.T) {
 	h.rows.afterSnapshot = func() {
 		once.Do(func() {
 			seq, _, err := h.log.Append(t.Context(), probePrefix+".object.note", op,
-				nil, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"},
+				nil, signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"},
 					subject, statelog.ScopeSet{Paths: []string{subject.String()}},
-					op, "the earlier copy's"))
+					op, "the earlier copy's")))
 			if err != nil {
 				t.Errorf("land the earlier copy: %v", err)
 				return

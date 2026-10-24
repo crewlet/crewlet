@@ -541,92 +541,56 @@ func TestWorkCommentsPagesPastTheDetailsTwenty(t *testing.T) {
 	}
 }
 
-// A THREAD NAMES THE PERSON BEHIND A TOKEN'S COMMENT. The author stays the
-// credential — the audit trail — and the seat it was bound to rides beside it,
-// so a screen drawing the thread draws "maya" as the person she is rather than
-// as the name of her token; an agent's comment, whose author is already a
-// seat, gets no entry.
-func TestAThreadNamesThePersonBehindAnOperatorsComment(t *testing.T) {
+// A TASK FILED AND A REMARK MADE THROUGH A PERSON'S OWN TOKEN NAME THE PERSON.
+//
+// Bound to a seat, a person writes AS it (iam.ActorFor): the reporter and the
+// comment's author ARE the seat, and the token is the operator id the history
+// keeps beside the actor. There is no second "the seat behind the token" field
+// a screen must prefer over the record.
+func TestATaskFiledThroughAPersonsTokenNamesThePerson(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	created := r.createTask("who said that")
-	token := r.writer.As("ops-maya", tracker.AuthorOperator, tracker.Provenance{
-		OperatorID: "ops-maya", Seat: "maya",
-	})
-	byToken := tracker.Comment{ID: "c-token", Task: created.ID, Author: "ops-maya",
-		AuthorKind: tracker.AuthorOperator, Body: "hold it", CreatedAt: wednesday}
-	if _, err := token.UpdateTask(t.Context(), "op-token", created.ID, "ENG", tracker.NoIfMatch,
-		tracker.TaskPatch{Comment: &byToken}, tracker.ChangeComment,
-		&tracker.Notify{Kind: tracker.ChangeComment, CommentID: "c-token"}); err != nil {
-		t.Fatalf("comment as a token: %v", err)
-	}
-	r.drain()
-	byAgent := tracker.Comment{ID: "c-agent", Task: created.ID, Author: "bo",
-		AuthorKind: tracker.AuthorAgent, Body: "ok", CreatedAt: wednesday.Add(time.Minute)}
-	if _, err := r.writer.UpdateTask(t.Context(), "op-agent", created.ID, "ENG", tracker.NoIfMatch,
-		tracker.TaskPatch{Comment: &byAgent}, tracker.ChangeComment, nil); err != nil {
-		t.Fatalf("comment as an agent: %v", err)
-	}
-	r.drain()
-	got, err := r.reader.Task(t.Context(), created.ID, tracker.DetailWants{Comments: true},
-		statelog.Freshness{Level: statelog.ReadStale})
-	if err != nil {
-		t.Fatalf("thread: %v", err)
-	}
-	want := map[string]string{"c-token": "maya"}
-	if len(got.CommentSeats) != 1 || got.CommentSeats["c-token"] != "maya" {
-		t.Errorf("the thread names %v, want %v", got.CommentSeats, want)
-	}
-}
-
-// A TASK NAMES THE PERSON BEHIND THE TOKEN THAT FILED IT. The reporter stays
-// the credential — the record — and the seat it was bound to rides beside it,
-// read off the create's own row so a create that fell out of the history page
-// still resolves; a task a seat filed gets none, its reporter already being a
-// person.
-func TestATaskNamesThePersonBehindTheTokenThatFiledIt(t *testing.T) {
-	t.Parallel()
-	r := newRoundTrip(t)
-	token := r.writer.As("ops-jane", tracker.AuthorOperator, tracker.Provenance{
-		OperatorID: "ops-jane", Seat: "jane-founder",
+	jane := r.writer.As("jane-founder", tracker.AuthorHuman, tracker.Provenance{
+		OperatorID: "pat:jane-laptop",
 	})
 	filed := newTask("t-filed-by-token")
 	filed.Key = ""
-	filed.Reporter = "ops-jane"
-	if _, err := token.CreateTask(t.Context(), "op-filed", filed, nil); err != nil {
-		t.Fatalf("create as a token: %v", err)
+	filed.Reporter = "jane-founder"
+	if _, err := jane.CreateTask(t.Context(), "op-filed", filed, nil); err != nil {
+		t.Fatalf("create through the token: %v", err)
 	}
 	r.drain()
-	// Push the create out of the history page, which is what a busy task's
-	// looks like: the seat must still come back.
-	for i := range 3 {
-		title := fmt.Sprintf("retitled %d", i)
-		if _, err := token.UpdateTask(t.Context(), fmt.Sprintf("op-retitle-%d", i), filed.ID, "ENG",
-			tracker.NoIfMatch, tracker.TaskPatch{Title: &title}, tracker.ChangeFields, nil); err != nil {
-			t.Fatalf("retitle: %v", err)
-		}
-		r.drain()
+	remark := tracker.Comment{ID: "c-token", Task: filed.ID, Author: "jane-founder",
+		AuthorKind: tracker.AuthorHuman, Body: "hold it", CreatedAt: wednesday}
+	if _, err := jane.UpdateTask(t.Context(), "op-remark", filed.ID, "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Comment: &remark}, tracker.ChangeComment,
+		nil); err != nil {
+		t.Fatalf("comment through the token: %v", err)
 	}
-	got, err := r.reader.Task(t.Context(), filed.ID, tracker.DetailWants{History: true, HistoryLimit: 1},
-		statelog.Freshness{Level: statelog.ReadStale})
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	if got.Task.Reporter != "ops-jane" {
-		t.Errorf("reporter %q, want the credential ops-jane — the record is unchanged", got.Task.Reporter)
-	}
-	if got.ReporterSeat != "jane-founder" {
-		t.Errorf("reporter seat %q, want jane-founder", got.ReporterSeat)
-	}
+	r.drain()
 
-	bySeat := r.createTask("filed by a seat")
-	plain, err := r.reader.Task(t.Context(), bySeat.ID, tracker.DetailWants{},
-		statelog.Freshness{Level: statelog.ReadStale})
+	got, err := r.reader.Task(t.Context(), filed.ID, tracker.DetailWants{
+		Comments: true, History: true,
+	}, statelog.Freshness{Level: statelog.ReadStale})
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if plain.ReporterSeat != "" {
-		t.Errorf("a seat's own task names reporter seat %q, want none", plain.ReporterSeat)
+	if got.Task.Reporter != "jane-founder" {
+		t.Errorf("reporter %q, want the person's seat", got.Task.Reporter)
+	}
+	if len(got.Comments) != 1 || got.Comments[0].Author != "jane-founder" {
+		t.Errorf("the thread is %+v, want one remark by jane-founder", got.Comments)
+	}
+	if len(got.History) == 0 {
+		t.Fatal("the task has no history")
+	}
+	for _, entry := range got.History {
+		if entry.Actor != "jane-founder" || entry.ActorKind != tracker.AuthorHuman ||
+			entry.OperatorID != "pat:jane-laptop" {
+			t.Errorf("history row %s is %q (%s) via %q, want jane as a person "+
+				"through her token", entry.Kind, entry.Actor, entry.ActorKind,
+				entry.OperatorID)
+		}
 	}
 }
 

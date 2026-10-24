@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -37,7 +38,7 @@ func pendingAt(seq uint64) code.ProposeResult {
 		Position: statelog.Position{Stream: code.Domain{}.Stream().Name, Seq: seq}}
 }
 
-// ADR-0036: git is told ok for a ref ONLY from the push's own applied row — a
+// ADR-0050: git is told ok for a ref ONLY from the push's own applied row — a
 // pending answer is waited on and its row read, and never reported as ok.
 func TestAnOkIsAnsweredOnlyFromAnAppliedRow(t *testing.T) {
 	t.Run("the row is found", func(t *testing.T) {
@@ -166,7 +167,7 @@ func TestAnUnboundTokenCannotPush(t *testing.T) {
 	}
 	// A POST THAT NEVER ASKED FOR THE ADVERTISEMENT: deletions carry no
 	// pack, so the command section is the whole body. Every command is
-	// refused by the token's grant (ADR-0040) — the domain's not_permitted,
+	// refused by the token's grant (ADR-0054) — the domain's not_permitted,
 	// with the sentence the advertisement gives.
 	body := pkt(head+" "+gitrefZero+" refs/heads/main\x00report-status\n") +
 		pkt(head+" "+gitrefZero+" refs/heads/feature\n") + "0000"
@@ -182,8 +183,11 @@ func TestAnUnboundTokenCannotPush(t *testing.T) {
 	}
 	var unbound int
 	for _, a := range c.Fleet.Audited() {
-		if a.Outcome == types.AuditRefused && a.Refusal == string(host.RefusalUnbound) && a.OperatorID == "ci" &&
-			a.ActorSeat == "" && a.Transport == types.TransportGit {
+		// RECORDED AS THE BARE CREDENTIAL, ci's token acting under its own
+		// login with no seat — never as a seat's holder.
+		if a.Outcome == types.AuditRefused && a.Refusal == string(host.RefusalUnbound) &&
+			a.OperatorID == iam.TokenLogin("ci") && a.ActorName == iam.TokenLogin("ci") &&
+			a.ActorKind == string(iam.ActorOperator) && a.Transport == types.TransportGit {
 			unbound++
 		}
 	}
@@ -222,7 +226,10 @@ func TestEveryPushIsAuditedAsItsPerson(t *testing.T) {
 		t.Fatalf("one applied push left %d rows", len(rows))
 	}
 	applied, refused := audited[0], audited[1]
-	want := types.OperatorActed{OperatorID: "ceo", ActorSeat: "ceo", Transport: types.TransportGit,
+	// AS CEO: the seat as the author, kind human, and ceo's token — its login,
+	// iam.ActorFor's operator id — as the credential.
+	want := types.OperatorActed{ActorName: "ceo", ActorKind: string(iam.ActorHuman),
+		OperatorID: iam.TokenLogin("ceo"), Transport: types.TransportGit,
 		Tool: host.AuditTool, Repo: codetest.RepoName, Outcome: types.AuditApplied,
 		Position: rows[0].Position.String(), RequestID: applied.RequestID}
 	if applied != want {
@@ -232,12 +239,12 @@ func TestEveryPushIsAuditedAsItsPerson(t *testing.T) {
 		t.Errorf("the record's request id %q is not a UUIDv7 (%v)", applied.RequestID, err)
 	}
 	if refused.Outcome != types.AuditRefused || refused.Refusal != string(code.RefusalProtectedForce) ||
-		refused.ActorSeat != "ceo" || !refused.Failed {
+		refused.ActorName != "ceo" || refused.ActorKind != string(iam.ActorHuman) || !refused.Failed {
 		t.Errorf("the refused force-push was recorded as %+v", refused)
 	}
 }
 
-// ADR-0036: receive-pack never runs in a cache — every push, its
+// ADR-0050: receive-pack never runs in a cache — every push, its
 // advertisement included, is received in a scratch repository.
 func TestReceivePackNeverRunsInACache(t *testing.T) {
 	path, calls := gittest.Recording(t)
@@ -436,7 +443,7 @@ func TestOnlyALoneFlushIsTheProbe(t *testing.T) {
 		t.Errorf("a line no command parses from ran receive-pack %d times, want once", n)
 	}
 	if audited := c.Fleet.Audited(); len(audited) != 1 || audited[0].Transport != types.TransportGit ||
-		audited[0].ActorSeat != "ceo" {
+		audited[0].ActorName != "ceo" {
 		t.Errorf("a push of a line no command parses from was recorded as %+v, want once, as ceo's", audited)
 	}
 }

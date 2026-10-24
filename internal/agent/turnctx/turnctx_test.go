@@ -64,6 +64,32 @@ func TestAgentIDIsEmptyWithoutASeatOrAnOrg(t *testing.T) {
 	}
 }
 
+// A DELEGATED WORKER SEES THE SAME PEOPLE WITHHELD AS ITS PARENT, and a turn
+// with no reading withholds nobody rather than panicking.
+//
+// The reading is pinned with the org for one reason: a roster and a colleague
+// lookup must leave out the same people for the whole of a turn, and a worker
+// derived from it that lost the reading would hand an agent an address its
+// parent was not shown. [turnctx.Turn.WithCalls] is the derivation every
+// delegated worker runs under (agent/subagent), so it is the one held here.
+func TestTheDirectoryReadingTravelsWithTheOrg(t *testing.T) {
+	t.Parallel()
+	o := &org.Organization{Name: "Acme", Roles: []*org.Role{
+		{Name: "Lead", DeclaredHandle: "lead"},
+	}}
+	o.Normalize()
+	parent := &turnctx.Turn{Seat: o.Roles[0], Org: o,
+		Withheld: func(handle string) bool { return handle == "sarah-chen" }}
+	worker := parent.WithCalls(nil)
+	if !worker.WithholdsContacts("sarah-chen") || worker.WithholdsContacts("lead") {
+		t.Error("a delegated worker does not withhold what its parent withholds")
+	}
+	var none *turnctx.Turn
+	if none.WithholdsContacts("sarah-chen") || (&turnctx.Turn{}).WithholdsContacts("sarah-chen") {
+		t.Error("a turn with no reading withheld somebody")
+	}
+}
+
 func item(id string) types.WorkItem {
 	return types.WorkItem{Backend: types.WorkNative, ID: id, Key: "ENG-" + id, Project: "ENG"}
 }

@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/tokens"
 )
 
 // AN UNSET INTERVAL TICKS AT THE PRODUCTION CADENCE.
@@ -28,16 +30,9 @@ func TestAnUnsetIntervalTicksAtTheProductionCadence(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			s, err := NewService(livestate.New(), Options{
-				Health:         func() any { return nil },
-				Handles:        func() map[string]string { return nil },
-				Roster:         func() []map[string]any { return nil },
-				Org:            func() any { return nil },
-				Tools:          func() []map[string]any { return nil },
-				Schedules:      func() any { return nil },
-				Placement:      func() (map[string]bool, error) { return nil, nil },
-				HealthInterval: tc.set,
-			})
+			opts := quietOptions()
+			opts.HealthInterval = tc.set
+			s, err := NewService(livestate.New(), opts)
 			if err != nil {
 				t.Fatalf("NewService: %v", err)
 			}
@@ -45,5 +40,24 @@ func TestAnUnsetIntervalTicksAtTheProductionCadence(t *testing.T) {
 				t.Errorf("an interval of %s ticks every %s, want %s", tc.set, s.interval, tc.want)
 			}
 		})
+	}
+}
+
+// quietOptions are the surface functions every case here needs and none reads:
+// a node answering nothing about its company, on no chart and no directory.
+// Each case sets the one option its subject is.
+func quietOptions() Options {
+	return Options{
+		Health:    func() Health { return nodeHealth{Status: "ok"} },
+		Posture:   func(Health) FramePosture { return FrameLive },
+		Seats:     func() tokens.Seats { return tokens.Seats{} },
+		Roster:    func() []map[string]any { return nil },
+		Org:       func() any { return nil },
+		Tools:     func() []map[string]any { return nil },
+		Schedules: func() any { return nil },
+		Placement: func() (map[string]bool, error) { return map[string]bool{}, nil },
+		Chart:     authz.NoChart{},
+		Holders:   blindHolders{},
+		SeatOf:    func(string) (SeatState, bool) { return SeatState{}, false },
 	}
 }

@@ -36,6 +36,13 @@ import (
 // gesture that removed it, so a restore brings back exactly what one removal
 // took and never a task that was already in the trash for its own reasons.
 //
+// That inverse is also why a restore can be asked for its task ALONE: whoever
+// filed a task may take it out of the trash, and what went in with it at a
+// project lead's or an admin's hand is not theirs to bring back. Whether
+// anything did is the same read of `RemovedWith` the restore walks, so the
+// writer answers it ([ErrRestoresOthers]) rather than a caller's earlier read
+// that the walk could disagree with.
+//
 // # It is NOT a write on a frozen task
 //
 // [Writer.UpdateTask] refuses every patch on a removed task — "restore it
@@ -68,6 +75,18 @@ import (
 // this operation put it back. A restore answered from its own first copy is
 // NOT this — it is the success that copy was.
 var ErrNothingToRestore = errors.New("tracker: nothing to restore")
+
+// ErrRestoresOthers reports a restore asked to bring its task back ALONE
+// while the gesture that put it in the trash took other tasks with it. It is
+// carried beside [ErrForbidden], the class every surface reads it as.
+//
+// ALONE IS HOW AN AUTHOR RESTORES: whoever filed an item may take it out of
+// the trash, and what went in with it — at a project lead's or an admin's
+// hand — is not theirs to bring back. The writer decides it, over the same
+// read of what went with the task that the restore walks, so the answer and
+// the walk cannot disagree about what a restore would touch. Nothing is
+// written when it refuses.
+var ErrRestoresOthers = errors.New("tracker: other tasks went into the trash with this one")
 
 // SubtreeStopped reports a subtree removal or restore whose ROOT landed and
 // whose walk over the rest stopped part of the way through.
@@ -109,6 +128,13 @@ func (e *SubtreeStopped) Unwrap() error { return e.Err }
 // removed has already seen its parent go — the same order the move sequence
 // uses and for the same reason: a partially applied gesture must never leave a
 // tree in a shape no single write could have made.
+//
+// EACH DESCENDANT'S STEP IS NAMED FOR THE DESCENDANT, never for its place in
+// the walk, because a re-run's walk is not the first one's: a descendant
+// purged in between drops out of it, and every one after it moves up a place.
+// Keyed on the place, the operation ledger answered the re-run's step for one
+// task with the first run's row for another — reported as done, and left live
+// under a removed parent.
 //
 // The ROOT's own tombstone carries no `RemovedWith`, and every descendant's
 // names the root. A restore reads that to decide what comes back with what.
@@ -176,8 +202,18 @@ func (w *Writer) RemoveTask(ctx context.Context, opID, id, project string,
 // root was removed by that gesture and is restored by its inverse, while one
 // that was already in the trash for its own reasons stays there. That is what
 // `RemovedWith` is for, and it is why a restore can be a single argument.
+//
+// EACH DESCENDANT'S STEP IS NAMED FOR THE DESCENDANT, for [Writer.RemoveTask]'s
+// reason and more sharply: the list a restore walks is what is STILL in the
+// trash, so every descendant a first run restored drops out of a re-run's list
+// and every one after it moves up a place. Keyed on the place, a re-run of a
+// restore that half-finished answered its remaining steps from the first
+// run's ledger rows and left those tasks in the trash, reporting success.
+//
+// ALONE asks for the task by itself — see [ErrRestoresOthers], which it is
+// refused with, before anything is written, when the removal took others.
 func (w *Writer) RestoreTask(ctx context.Context, opID, id, project string,
-	notify *Notify) (WriteResult, error) {
+	alone bool, notify *Notify) (WriteResult, error) {
 
 	switch {
 	case id == "":
@@ -190,6 +226,12 @@ func (w *Writer) RestoreTask(ctx context.Context, opID, id, project string,
 	removedWith, err := w.removedWith(ctx, id)
 	if err != nil {
 		return WriteResult{}, err
+	}
+	if alone && len(removedWith) > 0 {
+		return WriteResult{}, forbiddenAs(ErrRestoresOthers, "%d other tasks "+
+			"went into the trash with task %s, and this restore may bring back "+
+			"that task alone — restoring them is the project lead's or an "+
+			"admin's", len(removedWith), id)
 	}
 	// THE ROOT FIRST AGAIN, and for the mirror of the removal's reason: a
 	// child restored under a still-removed parent is reachable from
@@ -242,16 +284,22 @@ func (w *Writer) tombstone(ctx context.Context, opID, id, project string,
 			case !held:
 				return statelog.Decision{}, missingTask(ctx, tx, id,
 					"there is nothing left to remove")
-			case current.Removed != nil:
+			}
+			// THE PROJECT FIRST, before the no-op below: who may remove
+			// this task was decided on the project the caller read it
+			// in, and a task that has moved since is another project's
+			// to remove — see [stillIn].
+			if moved := stillIn(current, project); moved != nil {
+				return statelog.Decision{}, moved
+			}
+			if current.Removed != nil {
 				// ALREADY IN THE TRASH IS NOTHING TO DO, and it is a
 				// SUCCESS rather than a conflict: a re-run of a removal
 				// that half-finished must be able to complete, and the
 				// task is in the state the caller asked for.
 				return statelog.Decision{}, nil
-			case current.Project != project:
-				return statelog.Decision{}, notInProject(id, current.Project, project)
 			}
-			decision, err := w.decide(stamp, subject, OpTombstone, ChangeRemoved, scope,
+			decision, err := w.decide(ctx, tx, stamp, subject, OpTombstone, ChangeRemoved, scope,
 				opID, TaskPatch{Removed: &removal}, notify, at)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -291,16 +339,18 @@ func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
 			case !held:
 				return statelog.Decision{}, missingTask(ctx, tx, id,
 					"nothing can restore it")
-			case current.Removed == nil:
+			}
+			if moved := stillIn(current, project); moved != nil {
+				return statelog.Decision{}, moved
+			}
+			if current.Removed == nil {
 				// NOT IN THE TRASH IS NOTHING TO DO, on the removal's
 				// own rule: a re-run must be able to finish.
 				*live = true
 				return statelog.Decision{}, nil
-			case current.Project != project:
-				return statelog.Decision{}, notInProject(id, current.Project, project)
 			}
 			*live = false
-			decision, err := w.decide(stamp, subject, OpRestore, ChangeRestored, scope,
+			decision, err := w.decide(ctx, tx, stamp, subject, OpRestore, ChangeRestored, scope,
 				opID, TaskPatch{Removed: &Tombstone{}}, notify, at)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -309,6 +359,54 @@ func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
 			return decision, nil
 		},
 	})
+}
+
+// stillIn refuses a write whose authority was decided on a project the task
+// is no longer filed under — an edit, a removal, a restore or a purge, the
+// four writes that name the task's project. It is the ONE such refusal, and
+// every one of them asks it BEFORE its idempotent no-op.
+//
+// # Why the project a caller passes is checked INSIDE the snapshot
+//
+// Every caller of a task write resolved a key to reach the task and read its
+// project OFF THE ROW, outside this transaction — and then decided on that
+// project who may do what: a removal and a restore are the project lead's, and
+// a re-route is the project's own. A task moved to another project between
+// that read and this snapshot ([Writer.MoveTaskToProject]) is somebody else's
+// decision, and publishing anyway lands one project lead's authority on
+// another project's work.
+//
+// And the write's SCOPE is formed from that argument too, before the snapshot
+// exists: a task in another project would be written under a container it is
+// not in, so a deferral on its real project would not hold this write back and
+// one on the named project would hold back a write that never touches it. A
+// bulk edit names one project for every task in it, which is where a task
+// from elsewhere arrives, and a subtree's descendants are named by a read
+// outside the snapshot, so a removal or a restore of one moved since is
+// refused here and the walk stops where a re-run resolves it again.
+//
+// So the project argument is a PRECONDITION, not a label, and it is checked
+// here — the one place the framework guarantees a single consistent read —
+// exactly as an if-match is. A CONFLICT rather than an ordinary refusal,
+// because nothing is wrong with the request: the caller reads the task again,
+// decides again on the project it is in now, and re-sends. It is also what
+// makes a second walk of one move harmless: a descendant the first walk
+// carried is refused here rather than re-keyed again.
+//
+// BEFORE THE NO-OP, never after it: the no-op answers success, and a success
+// decided on a task another project now holds is the very answer this refusal
+// exists to withhold. A re-run of the SAME operation, which the no-op is for,
+// never reaches either — its ledger row answers it before anything is decided —
+// and a walk re-run under a new one resolves its tasks again first.
+func stillIn(current Task, project string) error {
+	if current.Project == project {
+		return nil
+	}
+	return fmt.Errorf("tracker: task %s (%s) is in project %s, not %s where "+
+		"it was read — what this write may do was decided on a project the "+
+		"task is not in, so read it again and decide on %s: %w",
+		current.Key, current.ID, current.Project, project, current.Project,
+		statelog.ErrConflict)
 }
 
 // subtreeOf reads a task's descendants before the first append.

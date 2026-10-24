@@ -138,6 +138,63 @@ func TestACeilingBelowOneTokenIsRefusedAtTheKeyToRemove(t *testing.T) {
 	}
 }
 
+// A CEILING BELOW ONE TOKEN IS REPORTED ONCE, WHICHEVER DOOR IT CAME IN BY.
+//
+// One rule decides what a ceiling may be ([org.TokenCeilings.Faults]): a
+// company's own block is held to it here and a seat's by the org model's
+// validation, which every company file runs through — and which the org chart
+// runs a runtime write through, a door no company file passes. Checked by both
+// packages, a seat's `day: 0` was two problems at one key in two packages'
+// words, and an author fixing one was told the other was still there. And the
+// value has to REACH that rule: a Ceilings that dropped a 0 or a negative
+// would hand it a budget with nothing wrong in it. Mutation: put the seat
+// check back in config, or drop a refused value from Ceilings, and a case here
+// fails.
+func TestACeilingBelowOneTokenIsReportedOnceAtItsKey(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		doc, path, says string
+	}{
+		"a seat's day of 0": {
+			"name: Acme\nroles:\n  - name: Dev\n    token_budget: {day: 0}\n",
+			"roles[0].token_budget.day", "remove `token_budget.day` for no daily ceiling",
+		},
+		"a seat in a unit with a negative month": {
+			"name: Acme\nunits:\n  - name: Eng\n    roles:\n      - name: Dev\n" +
+				"        token_budget: {month: -1}\n",
+			"units[0].roles[0].token_budget.month", "remove `token_budget.month` for no monthly ceiling",
+		},
+		"the company's own week of 0": {
+			"name: Acme\ntoken_budget: {week: 0}\n",
+			"token_budget.week", "remove `token_budget.week` for no weekly ceiling",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := config.ParseCompany([]byte(tc.doc))
+			problems := config.Problems(err)
+			if len(problems) != 1 {
+				t.Fatalf("the document is %d problem(s), want exactly the one at %s: %+v",
+					len(problems), tc.path, problems)
+			}
+			p := problems[0]
+			if p.Path != tc.path || p.Kind != "out_of_range" || !strings.Contains(p.Message, tc.says) {
+				t.Errorf("the problem is %s %s %q, want %s out_of_range saying %q",
+					p.Path, p.Kind, p.Message, tc.path, tc.says)
+			}
+		})
+	}
+
+	// THE REFUSED VALUE REACHES THE RULE: a 0 and a negative are carried into
+	// the ceilings every reader takes, rather than read as an absent key.
+	zero, negative := 0, -5
+	got := config.TokenBudget{Day: &zero, Month: &negative}.Ceilings()
+	if want := (org.TokenCeilings{period.Day: 0, period.Month: -5}); !maps.Equal(got, want) {
+		t.Errorf("Ceilings carried %v, want %v — a value it dropped is one the "+
+			"rule never sees", got, want)
+	}
+}
+
 // A BUDGET THAT IS NOT A MAPPING IS REFUSED WITH THE LINE TO WRITE INSTEAD.
 //
 // `token_budget: 10000000` is what every example company and the quickstart

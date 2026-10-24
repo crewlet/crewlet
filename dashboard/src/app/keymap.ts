@@ -39,11 +39,21 @@
  */
 
 import { useKeyChords, type Chord, type Sequence } from "~/lib/keys.ts";
-import { WORKSPACES } from "./nav.ts";
+import { WORKSPACES, type Service } from "./nav.ts";
 
 /** Where a row is live. See the file's doc. */
 export type KeyScope =
-  "frame" | "list" | "object" | "peek" | "canvas" | "builder" | "compose" | "search" | "layer";
+  | "frame"
+  | "list"
+  | "object"
+  | "peek"
+  | "artifact"
+  | "canvas"
+  | "draft"
+  | "compose"
+  | "create"
+  | "search"
+  | "layer";
 
 /** The scopes in the order the legend draws them, with what each heading says. */
 export const KEY_SCOPES: readonly { scope: KeyScope; title: string }[] = [
@@ -51,11 +61,16 @@ export const KEY_SCOPES: readonly { scope: KeyScope; title: string }[] = [
   { scope: "list", title: "In a list" },
   { scope: "peek", title: "With a peek open" },
   { scope: "object", title: "On a page with tabs" },
+  { scope: "artifact", title: "On an open artifact" },
   { scope: "canvas", title: "On a chart" },
-  { scope: "builder", title: "In the org builder" },
+  { scope: "draft", title: "Editing a draft: the org builder, or Home while it is arranged" },
   { scope: "compose", title: "Writing a reply" },
+  { scope: "create", title: "Making a new artifact" },
   { scope: "search", title: "In search" },
-  { scope: "layer", title: "In a dialog, a menu or the navigation drawer" },
+  {
+    scope: "layer",
+    title: "In a dialog, a menu, the navigation drawer or an artifact's panel",
+  },
 ];
 
 /** One press: a key, its modifiers, and the prefix it follows if it is a sequence. */
@@ -97,6 +112,12 @@ export interface KeyRow {
    * with K. A bare letter never does — it is a letter in the field.
    */
   whileTyping?: boolean;
+  /**
+   * The service built into Crewlet the row's place reads (`nav.ts`): a jump
+   * to Work is no key at all where the company runs no Crewlet Works, so the
+   * legend leaves it out and the frame binds nothing to it.
+   */
+  service?: Service;
 }
 
 /**
@@ -118,7 +139,7 @@ const FRAME: KeyRow[] = [
     id: "search",
     scope: "frame",
     presses: [{ key: "/" }],
-    does: "Search this screen — or everything, where it has no search box",
+    does: "Search this screen, or everything",
     by: "dashboard",
   },
   { id: "keys", scope: "frame", presses: [{ key: "?" }], does: "Show these keys", by: "dashboard" },
@@ -132,6 +153,7 @@ const FRAME: KeyRow[] = [
     presses: [{ after: "g", key: ws.chord }],
     does: `Go to ${ws.label}`,
     by: "dashboard",
+    ...(ws.service ? { service: ws.service } : {}),
   })),
   // THE ONE `g` SEQUENCE THAT IS NOT A WORKSPACE: a running turn is an object,
   // and reaching it was a workspace, a card, a profile and a tab away. Not a
@@ -140,14 +162,26 @@ const FRAME: KeyRow[] = [
     id: "running",
     scope: "frame",
     presses: [{ after: "g", key: "r" }],
-    does: "Watch the running turn — with several running, see them all",
+    does: "Watch running turns",
     by: "dashboard",
+  },
+  // AND THE SCOPE OF WORK: the switcher under Work's trail, or centred over
+  // any other page, where nothing moves until a project is chosen.
+  {
+    id: "project",
+    scope: "frame",
+    presses: [{ after: "g", key: "p" }],
+    does: "Switch project",
+    by: "dashboard",
+    // A PROJECT IS CREWLET WORKS', so where the company runs none there is
+    // nothing to switch between.
+    service: "tracker",
   },
   {
     id: "drawer",
     scope: "frame",
     presses: [{ key: "\\", mod: true }],
-    does: "Open the navigation, on a window too narrow to show it",
+    does: "Open the navigation",
     by: "dashboard",
     whileTyping: true,
   },
@@ -160,14 +194,14 @@ const PAGE: KeyRow[] = [
     id: "list.next",
     scope: "list",
     presses: [{ key: "j" }],
-    does: "Next row — or, on a task opened from a list, the next task",
+    does: "Next row or task",
     by: "dashboard",
   },
   {
     id: "list.previous",
     scope: "list",
     presses: [{ key: "k" }],
-    does: "Previous row — or, on a task opened from a list, the previous task",
+    does: "Previous row or task",
     by: "dashboard",
   },
   {
@@ -202,6 +236,46 @@ const PAGE: KeyRow[] = [
     whileTyping: true,
   },
   { id: "tab", scope: "object", presses: DIGITS, does: "Go to that tab", by: "dashboard" },
+  // AN OPEN ARTIFACT'S PANELS, each a letter that opens it and closes it
+  // again (`routes/artifacts/ArtifactPage.tsx`). Its first letter wherever it
+  // is free; Escape from inside a panel closes it too, the panel's own key
+  // (the kit's `ArtifactPanel`), listed under the layer's Escape because it
+  // is the same gesture.
+  {
+    id: "artifact.details",
+    scope: "artifact",
+    presses: [{ key: "i" }],
+    does: "Show or hide its details",
+    by: "dashboard",
+  },
+  {
+    id: "artifact.history",
+    scope: "artifact",
+    presses: [{ key: "h" }],
+    does: "Show or hide its versions and history",
+    by: "dashboard",
+  },
+  {
+    id: "artifact.data",
+    scope: "artifact",
+    presses: [{ key: "d" }],
+    does: "Show or hide its data, where it keeps any",
+    by: "dashboard",
+  },
+  {
+    id: "artifact.people",
+    scope: "artifact",
+    presses: [{ key: "p" }],
+    does: "Show or hide who is here",
+    by: "dashboard",
+  },
+  {
+    id: "artifact.share",
+    scope: "artifact",
+    presses: [{ key: "s" }],
+    does: "Share it",
+    by: "dashboard",
+  },
   {
     id: "canvas.in",
     scope: "canvas",
@@ -224,12 +298,14 @@ const PAGE: KeyRow[] = [
     by: "kit",
   },
   {
-    // The builder's undo is its own listener rather than [useKeymap]'s — it
-    // is scoped to presses from inside the builder, which a window chord
-    // cannot see — so it reads its presses from here through [matchesRow].
-    // A field keeps the key: the same press undoes typing there.
-    id: "builder.undo",
-    scope: "builder",
+    // A draft's undo is its own listener rather than [useKeymap]'s (see
+    // `lib/useUndoKeys.ts`): it is scoped to presses from inside the surface
+    // keeping the draft, which a window chord cannot see, so it reads its
+    // presses from here through [matchesRow]. A field keeps the key: the same
+    // press undoes typing there. The org builder and Home's board are never
+    // on screen together, so one pair of rows serves both.
+    id: "draft.undo",
+    scope: "draft",
     // `shift: false` rather than absent: Mod+Shift+Z is redo, so undo has
     // to refuse Shift rather than ignore it.
     presses: [{ key: "z", mod: true, shift: false }],
@@ -237,8 +313,8 @@ const PAGE: KeyRow[] = [
     by: "dashboard",
   },
   {
-    id: "builder.redo",
-    scope: "builder",
+    id: "draft.redo",
+    scope: "draft",
     presses: [{ key: "z", mod: true, shift: true }],
     does: "Redo it",
     by: "dashboard",
@@ -262,6 +338,38 @@ const COMPOSE: KeyRow[] = [
 ];
 
 /**
+ * A CREATE PAGE'S KEY, bound by the shared frame every kind's create page
+ * stands in (`routes/artifacts/new/CreateShell.tsx`) to the page's one primary
+ * action, so every kind starts with the same press and none binds its own. It
+ * fires from inside a field, since a create page is mostly fields, and it
+ * shares its press with the composer's Send, which no create page draws
+ * ([SCOPES_APART]).
+ */
+const CREATE: KeyRow[] = [
+  {
+    id: "create.start",
+    scope: "create",
+    presses: [{ key: "enter", mod: true }],
+    does: "Do the page's main action: create it, or ask the agent",
+    by: "dashboard",
+    whileTyping: true,
+  },
+];
+
+/**
+ * Scopes never live on one screen, which may therefore share a press: a
+ * reply's composer is the Inbox's and a task's, and a create page is
+ * neither, so Send and a create page's main action are both the command key
+ * with Enter.
+ */
+export const SCOPES_APART: readonly (readonly [KeyScope, KeyScope])[] = [["compose", "create"]];
+
+/** Whether two scopes can be live on one screen. */
+export function liveTogether(a: KeyScope, b: KeyScope): boolean {
+  return !SCOPES_APART.some(([x, y]) => (x === a && y === b) || (x === b && y === a));
+}
+
+/**
  * THE PALETTE'S OWN KEYS, read by it from its field through [matchesRow]. They
  * are live while it is the top layer and never beside a page key, so they
  * share a namespace with the layer's Escape and with nothing else.
@@ -271,7 +379,7 @@ const SEARCH: KeyRow[] = [
     id: "search.scope",
     scope: "search",
     presses: [{ key: "tab" }],
-    does: "Next scope — All, Tasks, Pages, Agents, Actions; Shift+Tab goes back",
+    does: "Next scope; Shift+Tab goes back",
     by: "kit",
     whileTyping: true,
   },
@@ -279,7 +387,7 @@ const SEARCH: KeyRow[] = [
     id: "search.ask",
     scope: "search",
     presses: [{ key: "enter", mod: true }],
-    does: "Ask an agent about what you typed — the answer lands in your inbox",
+    does: "Ask an agent about what you typed",
     by: "dashboard",
     whileTyping: true,
   },
@@ -314,14 +422,21 @@ const LAYER: KeyRow[] = [
     id: "layer.close",
     scope: "layer",
     presses: [{ key: "escape" }],
-    does: "Close whatever is on top — a dialog, a menu, search or the drawer",
+    does: "Close what is on top",
     by: "kit",
     whileTyping: true,
   },
 ];
 
 /** The table. */
-export const KEYMAP: readonly KeyRow[] = [...FRAME, ...PAGE, ...COMPOSE, ...SEARCH, ...LAYER];
+export const KEYMAP: readonly KeyRow[] = [
+  ...FRAME,
+  ...PAGE,
+  ...COMPOSE,
+  ...CREATE,
+  ...SEARCH,
+  ...LAYER,
+];
 
 /**
  * Whether a row is live only while a layer holds the keyboard — its own
@@ -336,7 +451,7 @@ const BY_ID = new Map(KEYMAP.map((row) => [row.id, row]));
 /** A row by its id, or a thrown error naming the id nobody declared. */
 export function keyRow(id: string): KeyRow {
   const row = BY_ID.get(id);
-  if (!row) throw new Error(`keymap: no row "${id}" — declare it in app/keymap.ts`);
+  if (!row) throw new Error(`keymap: no row "${id}"; declare it in app/keymap.ts`);
   return row;
 }
 
@@ -435,6 +550,18 @@ const CAP_NAMES: Record<string, string> = {
   tab: "Tab",
   backspace: "Backspace",
 };
+
+/**
+ * A two-key sequence in words, as a tooltip or a hint says it: `g` then `p`
+ * is "G then P". Read off the table, so the words cannot drift from the key.
+ */
+export function sequenceWords(id: string): string {
+  const press = keyRow(id).presses[0]!;
+  return [press.after, press.key]
+    .filter((k): k is string => !!k)
+    .map((k) => k.toUpperCase())
+    .join(" then ");
+}
 
 /**
  * One press as the keys of a kit `Kbd` — `["Mod", "k"]` — so a hint drawn

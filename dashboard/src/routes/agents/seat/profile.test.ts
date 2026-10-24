@@ -13,6 +13,8 @@ import {
   feedRows,
   fortnight,
   liveRow,
+  mayReadRecord,
+  mayReadTrail,
   seatRun,
   pillWord,
   placementWords,
@@ -23,6 +25,7 @@ import {
   turnTokens,
   workersWords,
 } from "./profile.ts";
+import { indexOrg } from "~/lib/seats.ts";
 import type {
   AgentRow,
   BudgetWindow,
@@ -52,27 +55,30 @@ describe("the tabs", () => {
 
 describe("which live row is the seat's", () => {
   const seat = { name: "SWE", handle: "swe-platform" } as Parameters<typeof liveRow>[2];
-  const row = (id: string, role: string, handle: string) => ({ id, role, handle }) as AgentRow;
+  // A ROSTER ROW'S `id` IS ITS SEAT'S HANDLE, as the engine sends it.
+  const row = (handle: string, role: string) => ({ id: handle, role, handle }) as AgentRow;
 
   // A ROLE NAME IS SHARED by two unit seats stamped from one template, so the
   // sibling listed first under it is not this seat's row — the handle says
   // which one is.
   test("the seat's own handle wins over an earlier sibling sharing its role name", () => {
-    const agents = [row("a", "SWE", "swe-core"), row("b", "SWE", "swe-platform")];
-    expect(liveRow(agents, "swe-platform", seat)?.id).toBe("b");
+    const agents = [row("swe-core", "SWE"), row("swe-platform", "SWE")];
+    expect(liveRow(agents, "swe-platform", seat)?.id).toBe("swe-platform");
   });
 
-  // A LINK MINTED FROM A CONFIG FIELD addresses the seat by its NAME, and the
-  // resolved seat's handle still finds its own row.
-  test("a seat addressed by name is found by the handle it resolved to", () => {
-    const agents = [row("a", "SWE", "swe-core"), row("b", "SWE", "swe-platform")];
-    expect(liveRow(agents, "SWE", seat)?.id).toBe("b");
+  // A ROUTE THAT NAMED SOMETHING ELSE still finds the row by the handle the
+  // seat resolved to.
+  test("a seat the route named otherwise is found by the handle it resolved to", () => {
+    const agents = [row("swe-core", "SWE"), row("swe-platform", "SWE")];
+    expect(liveRow(agents, "SWE", seat)?.id).toBe("swe-platform");
   });
 
-  test("a row the engine named no handle on is matched by role, and only then", () => {
-    expect(liveRow([row("a", "SWE", "")], "swe-platform", seat)?.id).toBe("a");
-    expect(liveRow([row("a", "CTO", "")], "swe-platform", seat)).toBeUndefined();
-    expect(liveRow([row("a", "SWE", "")], "swe-platform", null)).toBeUndefined();
+  // NEVER BY THE ROLE NAME, which two seats may share: a row that is not the
+  // seat's own is no row of the seat's, whatever it is called.
+  test("a row is never matched by its role name", () => {
+    expect(liveRow([row("swe-core", "SWE")], "swe-platform", seat)).toBeUndefined();
+    expect(liveRow([row("swe-core", "SWE")], "swe-platform", null)).toBeUndefined();
+    expect(liveRow([row("swe-platform", "SWE")], "swe-platform", null)?.id).toBe("swe-platform");
   });
 });
 
@@ -245,6 +251,7 @@ describe("the recurring work", () => {
   const row = (over: Partial<ScheduleRow>): ScheduleRow => ({
     scope_type: "role",
     scope_id: "swe",
+    scope_name: "swe",
     name: "x",
     cron: "0 9 * * *",
     timezone: "UTC",
@@ -261,10 +268,17 @@ describe("the recurring work", () => {
     const rows = [
       row({ name: "later", next_run: "2026-09-22T09:00:00Z" }),
       row({ name: "broken", problem: "unknown zone" }),
-      row({ name: "unit", scope_type: "unit", scope_id: "Core", next_run: "2026-09-21T10:00:00Z" }),
+      row({
+        name: "unit",
+        scope_type: "unit",
+        scope_id: "Core",
+        scope_name: "Core",
+        next_run: "2026-09-21T10:00:00Z",
+      }),
       row({
         name: "not-ours",
         scope_id: "cto",
+        scope_name: "cto",
         runners: ["cto"],
         next_run: "2026-09-21T08:00:00Z",
       }),
@@ -296,5 +310,96 @@ describe("the company's ceilings", () => {
     );
     expect(companyCeilingShort({ week: 5_000_000 })).toBe("company cap 5M/week");
     expect(companyCeilingShort({})).toBe("");
+  });
+});
+
+describe("whose record this page asks for", () => {
+  const seat = (handle: string, reports: string[], managers: string[]) => ({
+    handle,
+    name: handle,
+    kind: "human",
+    placed_by_ref: false,
+    manager: managers[0] ?? "",
+    managers: managers.length ? managers : null,
+    reports: reports.length ? reports : null,
+    auto_reports: null,
+    onboarding_chain: null,
+  });
+  const roles = ["ana", "ceo", "bo"].map((handle) => ({ name: handle, handle, kind: "human" }));
+  // Ana leads the CEO; Bo leads nobody.
+  const led = indexOrg({
+    roles,
+    units: [],
+    derived: {
+      units: [],
+      seats: [seat("ana", ["ceo"], []), seat("ceo", [], ["ana"]), seat("bo", [], [])],
+    },
+  } as never);
+  const reader = (handle: string, admin = false, tracker = true) => ({
+    handle,
+    admin,
+    tracker: tracker || admin,
+  });
+
+  // THE ENGINE'S RULE, all three arms, each with Tracker: the owner, whoever
+  // leads them, and an admin, who holds every app.
+  test("is the owner's, a lead's and an admin's", () => {
+    expect(mayReadRecord(reader("ceo"), led, "ceo")).toBe(true);
+    expect(mayReadRecord(reader("ana"), led, "ceo")).toBe(true);
+    expect(mayReadRecord(reader("", true), led, "ceo")).toBe(true);
+  });
+
+  test("is not asked by a colleague who leads them not, nor by nobody", () => {
+    expect(mayReadRecord(reader("bo"), led, "ceo")).toBe(false);
+    expect(mayReadRecord(reader(""), led, "ceo")).toBe(false);
+  });
+
+  // A PERSON'S RECORD IS THE TRACKER'S: without the app nobody's is asked —
+  // their own and their report's included — since the engine refuses every
+  // record question to a reader without Tracker.
+  test("is asked by nobody without Tracker, the owner and the lead included", () => {
+    expect(mayReadRecord(reader("ceo", false, false), led, "ceo")).toBe(false);
+    expect(mayReadRecord(reader("ana", false, false), led, "ceo")).toBe(false);
+  });
+});
+
+// A SEAT'S TRAIL — its turns, its memory, the body of a call — is an admin's
+// and its lead's (`audit.seat.read`), and nobody else's, whatever app they
+// hold: everybody reads its status, never its transcript.
+describe("mayReadTrail", () => {
+  const seat = (handle: string, reports: string[], managers: string[]) => ({
+    handle,
+    name: handle,
+    kind: handle === "agent" ? "agent" : "human",
+    placed_by_ref: false,
+    manager: managers[0] ?? "",
+    managers: managers.length ? managers : null,
+    reports: reports.length ? reports : null,
+    auto_reports: null,
+    onboarding_chain: null,
+  });
+  // Ana leads the agent; Bo leads nobody.
+  const roles = ["ana", "agent", "bo"].map((handle) => ({
+    name: handle,
+    handle,
+    kind: handle === "agent" ? "agent" : "human",
+  }));
+  const led = indexOrg({
+    roles,
+    units: [],
+    derived: {
+      units: [],
+      seats: [seat("ana", ["agent"], []), seat("agent", [], ["ana"]), seat("bo", [], [])],
+    },
+  } as never);
+
+  test("is the lead's and an admin's", () => {
+    expect(mayReadTrail({ handle: "ana", admin: false }, led, "agent")).toBe(true);
+    expect(mayReadTrail({ handle: "", admin: true }, led, "agent")).toBe(true);
+  });
+
+  test("is not a colleague's who leads it not, nor nobody's", () => {
+    expect(mayReadTrail({ handle: "bo", admin: false }, led, "agent")).toBe(false);
+    expect(mayReadTrail({ handle: "", admin: false }, led, "agent")).toBe(false);
   });
 });

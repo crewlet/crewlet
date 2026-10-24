@@ -70,7 +70,7 @@ const WalkPage = 500
 // ONLY A REQUIRED TABLE IS WALKED: on a retired one the walk's first Next
 // answers [ReferenceTable.ReferencesAfter]'s refusal, so a pass that forgot to
 // leave a retired table out fails on its first page rather than paging
-// somebody about, or copying, an object nobody is owed (ADR-0033).
+// somebody about, or copying, an object nobody is owed (ADR-0047).
 func (t ReferenceTable) WalkOf(read RowReader) Walk {
 	return &tableWalk{table: t, read: read}
 }

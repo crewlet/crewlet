@@ -17,6 +17,14 @@
 # the target passes the `--skip=sign` that stops it (RELEASING.md). That a
 # rehearsal exists at all is the whole point of keeping this declarative: the
 # PyPI pipeline it replaced could only rehearse by uploading to TestPyPI.
+#
+# THE IMAGE OF MAIN is not built here. `make image-context` builds its binaries
+# with this build's settings (CGO_ENABLED=0, -trimpath, -s -w, the -X stamp,
+# the notices) and .github/workflows/main-image.yml builds the image from the
+# same Dockerfile for the same two platforms, because it is stamped
+# `main-<commit>` and pushed only as `main`, which neither a release nor a
+# snapshot run of this file can do. Change the build here and change it in the
+# Makefile.
 version: 2
 
 project_name: crewlet
@@ -93,7 +101,14 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
-      - -X github.com/crewlet/crewlet/internal/version.value={{ .Version }}
+      # `v` + .Version, which is the TAG ITSELF: goreleaser's .Version is the
+      # tag with its `v` stripped. So `crewlet version` from a release prints
+      # exactly what `go install …@v0.2.0` prints, the name the image is
+      # tagged with and the Go module version a deployment pins — one
+      # spelling of one version everywhere. Not `.Tag`: in snapshot mode that
+      # is the PREVIOUS tag, and a rehearsal would stamp an old release's
+      # name into a build that is not it.
+      - -X github.com/crewlet/crewlet/internal/version.value=v{{ .Version }}
     # Pinned to the commit's own timestamp rather than the build's, for the
     # same reason as -trimpath: a rebuild of a tag must be verifiable
     # against the artifact that shipped.
@@ -149,19 +164,25 @@ checksum:
 #
 # One signature covering the file that covers every artifact, rather than a
 # signature per archive: verifying the checksums file and then the checksum
-# is the same proof with one fetch instead of six.
+# is the same proof with one fetch instead of four.
 #
 # It replaces the property PyPI Trusted Publishing gave — no long-lived
 # credential anywhere in this repository. The certificate is minted from the
 # workflow's OIDC token and logged to Rekor; there is no private key to leak
 # because there is no private key.
+#
+# ONE BUNDLE, `checksums.txt.sigstore.json`, carrying the signature, the
+# certificate and the Rekor entry together. That is cosign 3's format and the
+# only one its sign-blob writes by default: handed the old pair of
+# --output-signature/--output-certificate without --bundle it fails, so a
+# release workflow whose cosign-installer moved to v4 (cosign 3) stopped
+# signing at the tag while every snapshot, which skips signing, stayed green.
 signs:
   - cmd: cosign
-    certificate: "${artifact}.pem"
+    signature: "${artifact}.sigstore.json"
     args:
       - sign-blob
-      - "--output-certificate=${certificate}"
-      - "--output-signature=${signature}"
+      - "--bundle=${signature}"
       - "${artifact}"
       - "--yes"
     artifacts: checksum
@@ -212,7 +233,10 @@ dockers_v2:
       - linux/amd64
       - linux/arm64
     tags:
-      - "{{ .Version }}"
+      # The version as the binary inside reports it, `v` included (see the
+      # ldflags above), so the tag a deployment pulls and the version the
+      # engine it runs prints are the same string.
+      - "v{{ .Version }}"
       # `latest` follows STABLE releases only. A pre-release that took it
       # would hand `docker pull crewlet` to every operator who pinned
       # nothing, which is the container equivalent of a pre-release becoming
@@ -234,8 +258,28 @@ dockers_v2:
       - scripts/git.sh
     labels:
       org.opencontainers.image.title: "{{ .ProjectName }}"
-      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.version: "v{{ .Version }}"
       org.opencontainers.image.revision: "{{ .FullCommit }}"
       org.opencontainers.image.created: "{{ .Date }}"
       org.opencontainers.image.source: "https://github.com/crewlet/crewlet"
       org.opencontainers.image.licenses: MIT
+
+# Keyless Sigstore signing over every image pushed above, BY DIGEST — the same
+# identity and the same short-lived certificate as the checksum signature,
+# and still no key anywhere. A tag can be moved; the digest a signature names
+# cannot, so a deployment that verifies an image verifies the bytes it pulls.
+#
+# The default `artifacts` for a dockers_v2 image is the image itself, once per
+# tag it was pushed under. A stable release pushes one digest as both its tag
+# and `latest`, so that digest carries two equivalent signatures; that costs
+# a Rekor entry and buys not having to filter tags here.
+#
+# Verify with `cosign verify` naming the workflow that built it (RELEASING.md,
+# "Verifying an image"): the identity is what tells a release's image from any
+# other image a workflow of this repository could sign.
+docker_signs:
+  - cmd: cosign
+    args:
+      - sign
+      - "${artifact}@${digest}"
+      - "--yes"

@@ -18,8 +18,8 @@ import (
 // Crossing the ceiling must never drop a day: the stream is created to refuse
 // rather than discard, the publisher reports the refusal as a full log rather
 // than as a transient failure, and the alarm that tells an operator names THIS
-// domain — a fleet with four logs is told which one is full, not that
-// something is.
+// domain — a node with five logs is told which one is full, not that something
+// is.
 func TestAFullUsageLogRefusesTheAppendAndAlarms(t *testing.T) {
 	t.Parallel()
 	q, err := js.Open(t.Context(), js.Config{StoreDir: t.TempDir()})
@@ -35,7 +35,8 @@ func TestAFullUsageLogRefusesTheAppendAndAlarms(t *testing.T) {
 	const ceiling = 16 << 10
 	if err := q.EnsureDomainStream(t.Context(), js.DomainStream{
 		Name: spec.Name, Subjects: spec.Subjects, MaxBytes: ceiling,
-		MaxPerSubject: spec.MaxPerSubject, MaxAge: spec.MaxAge,
+		MaxMessageBytes: spec.MaxAppendBytes(),
+		MaxPerSubject:   spec.MaxPerSubject, MaxAge: spec.MaxAge,
 		Duplicates: spec.Duplicates,
 	}); err != nil {
 		t.Fatalf("provision the log: %v", err)
@@ -77,14 +78,22 @@ func TestAFullUsageLogRefusesTheAppendAndAlarms(t *testing.T) {
 			Bytes: stats.Bytes, MaxBytes: stats.MaxBytes, StreamReadable: true,
 		}},
 	})
+	// THE ALARM NAMES THE LOG IT STANDS ON in its domains, each with the
+	// log's own measurement, rather than in its sentence.
+	domain := usage.Domain{}.Name()
 	var named bool
 	for _, a := range report.Alarms {
-		if a.Kind == statelog.KindLogHeadroom && strings.HasPrefix(a.Detail, "usage: ") {
-			named = true
+		if a.Kind != statelog.KindLogHeadroom {
+			continue
+		}
+		for _, d := range a.Domains {
+			if d.Domain == domain && strings.Contains(d.Detail, "ceiling") {
+				named = true
+			}
 		}
 	}
 	if !named {
-		t.Fatalf("a usage log at %d of %d bytes raised %+v — the headroom alarm "+
+		t.Fatalf("a usage log at %d of %d bytes raised %+v: the headroom alarm "+
 			"must fire and name the usage domain", stats.Bytes, stats.MaxBytes,
 			report.Alarms)
 	}

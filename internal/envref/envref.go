@@ -30,6 +30,15 @@ import (
 	"strings"
 )
 
+// NameGrammar is the NAME a reference carries between its braces, as a
+// regular expression: the identifier rule the shell uses.
+//
+// EXPORTED FOR THE DASHBOARD'S GATE, which holds the screens' own copy of it
+// (`contract/references.ts`) to this one: a screen deciding whether a value
+// is a reference judged by a grammar of its own, and one that drifted would
+// mask a reference as a secret or show a secret as a reference.
+const NameGrammar = `[A-Za-z_][A-Za-z0-9_]*`
+
 // pattern matches valid environment-variable NAMES only — the same
 // identifier rule the shell uses.
 //
@@ -38,16 +47,16 @@ import (
 // config-authored script content, and a sandbox setup step is exactly such
 // content: an operator's helper script full of shell syntax must survive
 // config resolution untouched.
-var pattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+var pattern = regexp.MustCompile(`\$\{(` + NameGrammar + `)\}`)
 
 // wholeRef is the anchored form: the value is EXACTLY one reference and
 // nothing else.
-var wholeRef = regexp.MustCompile(`^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$`)
+var wholeRef = regexp.MustCompile(`^\$\{(` + NameGrammar + `)\}$`)
 
 // namePattern is the same identifier rule with no braces around it: the
 // NAME on its own, as a secret store row is keyed and as the environment
 // spells it.
-var namePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+var namePattern = regexp.MustCompile(`^` + NameGrammar + `$`)
 
 // ValidName reports whether a reference could ever name this variable.
 //
@@ -96,6 +105,40 @@ func Names(value string) []string {
 		}
 		seen[m[1]] = struct{}{}
 		out = append(out, m[1])
+	}
+	return out
+}
+
+// Part is one run of a value: either literal text or one reference.
+type Part struct {
+	// Text is the run exactly as it appears in the value — a reference's
+	// full `${NAME}` spelling included.
+	Text string
+
+	// Name is the variable a reference names, and empty for literal text.
+	Name string
+}
+
+// Split cuts a value into its literal runs and its references, in order.
+//
+// Concatenating every part's Text gives the value back byte for byte, and no
+// two literal runs are adjacent: what is between two references is ONE run.
+// It is the grammar [Expand] substitutes by, so a caller that rewrites the
+// literal half of a value leaves every reference exactly where the resolver
+// will find it, and expanding the rewritten value gives what expanding the
+// original gave.
+func Split(value string) []Part {
+	var out []Part
+	at := 0
+	for _, m := range pattern.FindAllStringSubmatchIndex(value, -1) {
+		if m[0] > at {
+			out = append(out, Part{Text: value[at:m[0]]})
+		}
+		out = append(out, Part{Text: value[m[0]:m[1]], Name: value[m[2]:m[3]]})
+		at = m[1]
+	}
+	if at < len(value) {
+		out = append(out, Part{Text: value[at:]})
 	}
 	return out
 }

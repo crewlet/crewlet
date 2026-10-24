@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -36,12 +37,42 @@ import (
 // alone. Somebody reaching for "delete" should land here.
 
 // TrashWriter is the write side of the trash, declared by the consumer.
+//
+// A RESTORE CAN BE ASKED TO BRING THE ITEM BACK ALONE, which is how a caller
+// admitted only as the item's author restores it: the tracker refuses that
+// with [tracker.ErrRestoresOthers] when the removal took other tasks with it,
+// decided by the writer that reads what went with it rather than by a read
+// here that could race it.
 type TrashWriter interface {
 	RemoveTask(ctx context.Context, opID, id, project string, subtree bool,
 		notify *tracker.Notify) (tracker.WriteResult, error)
-	RestoreTask(ctx context.Context, opID, id, project string,
+	RestoreTask(ctx context.Context, opID, id, project string, alone bool,
 		notify *tracker.Notify) (tracker.WriteResult, error)
 }
+
+// trashObject is a task as the trash's verbs are decided on it
+// ([authz.ClassTidy]): its project, whose lead tidies it, and — with author —
+// its reporter, who tidies their own item. The reporter is set once, at the
+// create, so it is who filed the item and nobody a later edit named.
+func trashObject(task tracker.Task, author bool) authz.Object {
+	o := authz.Object{Kind: authz.KindTask, Container: task.Project}
+	if author {
+		o.Author = task.Reporter
+	}
+	return o
+}
+
+// authorAloneNote is the sentence a refusal of an author's subtree gesture
+// ends with: what they may do, and what is somebody else's.
+func authorAloneNote(verb, next string) string {
+	return "Whoever filed an item may put it in the trash and take it out " +
+		"again; to " + verb + " the items that go with it as well is its " +
+		"project lead's or an admin's. " + next
+}
+
+// authorDetail is the tracker's own account of what went with the item, for
+// a refusal that has to say why the restore was more than the caller's.
+func authorDetail(err error) string { return tracker.Sentence(err) + "." }
 
 // ---- remove_work_item --------------------------------------------------- //
 
@@ -66,7 +97,7 @@ func (t *removeWorkItem) Parameters() map[string]any {
 		"properties": map[string]any{
 			"item": map[string]any{
 				"type":        "string",
-				"description": "The item key (ENG-42) or its id.",
+				"description": "The item to put in the trash. " + itemRef,
 			},
 			"subtree": map[string]any{
 				"type": "boolean",
@@ -106,9 +137,38 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return refused(tools.RefusalNotFound, fmt.Sprintf("There is no work item %q.", clip(ref))), nil
+		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("There is no work item %q.",
+			clip(ref))), nil
 	case err != nil:
-		return readFailure(tracker.RemoveWorkItemTool, err), nil
+		return readFailure(ctx, tracker.RemoveWorkItemTool, err), nil
+	}
+	// THE ROW DECIDES — the project it is filed under and who filed it,
+	// read off the stored task — see the `inTool` entries in
+	// authority.go for why the gate could not ask.
+	if denied := t.deps.mayWrite(ctx, authz.ActionWorkRemove,
+		trashObject(before.Task, true)); denied != nil {
+		return *denied, nil
+	}
+	subtree := argBool(args, "subtree")
+	if subtree {
+		// AN AUTHOR TIDIES THEIR OWN ITEM AND NOTHING BELOW IT. The items
+		// under it may be anybody's, so taking them out with it is the
+		// project lead's or an admin's — asked again without the author
+		// arm, which is what that sentence means as a decision.
+		whole := t.deps.decide(ctx, authz.ActionWorkRemove, trashObject(before.Task, false))
+		switch {
+		case whole == nil:
+		case errors.Is(whole, ErrRefused):
+			refusal := authorityRefusal(tracker.RemoveWorkItemTool, whole)
+			refusal.Output += " " + authorAloneNote("remove", "Leave `subtree` "+
+				"out to put this item in the trash on its own.")
+			return refusal, nil
+		default:
+			// THIS NODE COULD NOT TELL whether the caller leads the
+			// project: the table's own answer, with no note telling an
+			// author to drop a subtree a lead may well be entitled to.
+			return authorityRefusal(tracker.RemoveWorkItemTool, whole), nil
+		}
 	}
 
 	after := before.Task
@@ -120,7 +180,7 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	opID := opIDFor(actor, t.Name(), "remove", before.Task.ID, args)
 	got, err := t.deps.TrashWriter(actor).RemoveTask(ctx, opID, before.Task.ID,
-		before.Task.Project, argBool(args, "subtree"),
+		before.Task.Project, subtree,
 		tracker.Wake{
 			Kind: tracker.ChangeRemoved, Before: before.Task, After: after,
 		}.Notify(t.deps.Leads))
@@ -128,24 +188,24 @@ func (t *removeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	switch {
 	case errors.As(err, &stopped):
 		return t.deps.subtreeStopped(ctx, actor, tracker.RemoveWorkItemTool,
-			before.Task.Key, "removed", got, stopped)
+			before, "removed", got, stopped)
 	case err != nil:
-		return writeFailure(actor, tracker.RemoveWorkItemTool, err), nil
+		return writeFailure(ctx, actor, tracker.RemoveWorkItemTool, err), nil
 	case got.Outcome == statelog.OutcomeUnknown:
 		// See [mergeWorkItem]: the seam's contract, held here.
-		return unknownOutcome(unknownWrite(actor, tracker.RemoveWorkItemTool,
-			fmt.Sprintf("%s went to the trash", before.Task.Key), opID,
+		return unknownWrite(actor, tracker.RemoveWorkItemTool,
+			fmt.Sprintf("%s went to the trash", before.Named()), opID,
 			got.Unvouched, unknownNext(got.Unvouched,
 				sameCall(actor, tracker.RemoveWorkItemTool),
 				fmt.Sprintf("Read %s with get_work_item — it says whether it "+
-					"is in the trash", before.Task.Key),
-				"it changes nothing, since the item is already there"))), nil
+					"is in the trash", before.Address()),
+				"it changes nothing, since the item is already there")), nil
 	}
 	t.deps.settle(ctx, got.Position)
-	return jsonResult(withOperation(map[string]any{
-		"key": before.Task.Key, "removed": true,
+	return jsonResult(withOperation(ReceiptOf(map[string]any{
+		"removed": true,
 		"outcome": string(got.Outcome), "position": positionOf(got.Position), "version": got.Version,
-	}, actor))
+	}, before), actor))
 }
 
 // ---- restore_work_item -------------------------------------------------- //
@@ -170,7 +230,7 @@ func (t *restoreWorkItem) Parameters() map[string]any {
 		"properties": map[string]any{
 			"item": map[string]any{
 				"type":        "string",
-				"description": "The item key (ENG-42) or its id.",
+				"description": "The item to take out of the trash. " + itemRef,
 			},
 		},
 		"required": []any{"item"},
@@ -207,10 +267,28 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return refused(tools.RefusalNotFound, fmt.Sprintf("There is no work item %q.", clip(ref))), nil
+		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("There is no work item %q.",
+			clip(ref))), nil
 	case err != nil:
-		return readFailure(tracker.RestoreWorkItemTool, err), nil
+		return readFailure(ctx, tracker.RestoreWorkItemTool, err), nil
 	}
+	if denied := t.deps.mayWrite(ctx, authz.ActionWorkRestore,
+		trashObject(before.Task, true)); denied != nil {
+		return *denied, nil
+	}
+	// WHETHER THIS CALLER MAY BRING BACK WHAT WENT WITH IT. A restore brings
+	// back exactly what its removal took, and an author restores their own
+	// item and nothing below it — so a caller the table admits only as the
+	// item's author restores it ALONE, and the tracker refuses that when
+	// the gesture that put it in the trash took others with it.
+	whole := t.deps.decide(ctx, authz.ActionWorkRestore, trashObject(before.Task, false))
+	if whole != nil && !errors.Is(whole, ErrRefused) {
+		// THIS NODE COULD NOT TELL whether the caller leads the project,
+		// and guessing "alone" would refuse a lead whatever the trash
+		// holds: the honest answer is the one the table gave.
+		return authorityRefusal(tracker.RestoreWorkItemTool, whole), nil
+	}
+	alone := whole != nil
 	// A LIVE ITEM IS NOT REFUSED HERE, because it is exactly what a restore
 	// that stopped part of the way through leaves: the root is back and
 	// what went with it is not, and this call is how that is finished. The
@@ -220,38 +298,45 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	after.Removed = nil
 	opID := opIDFor(actor, t.Name(), "restore", before.Task.ID, args)
 	got, err := t.deps.TrashWriter(actor).RestoreTask(ctx, opID, before.Task.ID,
-		before.Task.Project,
+		before.Task.Project, alone,
 		tracker.Wake{
 			Kind: tracker.ChangeRestored, Before: before.Task, After: after,
 		}.Notify(t.deps.Leads))
 	var stopped *tracker.SubtreeStopped
 	switch {
+	case errors.Is(err, tracker.ErrRestoresOthers):
+		// FORBIDDEN, on the table's own refusal of the whole gesture: the
+		// item is the caller's to restore and what went with it is not.
+		refusal := authorityRefusal(tracker.RestoreWorkItemTool, whole)
+		refusal.Output += " " + authorDetail(err) + " " + authorAloneNote("restore",
+			"Ask the project's lead or an admin to restore it.")
+		return refusal, nil
 	case errors.Is(err, tracker.ErrNothingToRestore):
 		// CONFLICT: the item's state, not the argument, is what refuses
 		// this — somebody restored it, and what went with it, between the
 		// caller's read and now.
-		return refused(tools.RefusalConflict, fmt.Sprintf("%s is not in the "+
-			"trash, and nothing is in the trash with it, so there is nothing "+
-			"to restore.", before.Task.Key)), nil
+		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s is not in "+
+			"the trash, and nothing is in the trash with it, so there is "+
+			"nothing to restore.", before.Named())), nil
 	case errors.As(err, &stopped):
 		return t.deps.subtreeStopped(ctx, actor, tracker.RestoreWorkItemTool,
-			before.Task.Key, "restored", got, stopped)
+			before, "restored", got, stopped)
 	case err != nil:
-		return writeFailure(actor, tracker.RestoreWorkItemTool, err), nil
+		return writeFailure(ctx, actor, tracker.RestoreWorkItemTool, err), nil
 	case got.Outcome == statelog.OutcomeUnknown:
-		return unknownOutcome(unknownWrite(actor, tracker.RestoreWorkItemTool,
-			fmt.Sprintf("%s came out of the trash", before.Task.Key), opID,
+		return unknownWrite(actor, tracker.RestoreWorkItemTool,
+			fmt.Sprintf("%s came out of the trash", before.Named()), opID,
 			got.Unvouched, unknownNext(got.Unvouched,
 				sameCall(actor, tracker.RestoreWorkItemTool),
 				fmt.Sprintf("Read %s with get_work_item — it says whether it "+
-					"is still in the trash", before.Task.Key),
-				"it is refused, since there is nothing left to restore"))), nil
+					"is still in the trash", before.Address()),
+				"it is refused, since there is nothing left to restore")), nil
 	}
 	t.deps.settle(ctx, got.Position)
-	return jsonResult(withOperation(map[string]any{
-		"key": before.Task.Key, "restored": true,
-		"outcome": string(got.Outcome), "position": positionOf(got.Position), "version": got.Version,
-	}, actor))
+	return jsonResult(withOperation(ReceiptOf(map[string]any{
+		"restored": true,
+		"outcome":  string(got.Outcome), "position": positionOf(got.Position), "version": got.Version,
+	}, before), actor))
 }
 
 // subtreeStopped answers a subtree removal or restore whose ROOT landed and
@@ -273,27 +358,27 @@ func (t *restoreWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // operation stops at the same task here every time, and only a new one decides
 // it afresh — which the operator's surface, the only one these two tools are
 // served on, gets by leaving the op_id out.
-func (d WorkDeps) subtreeStopped(ctx context.Context, actor Actor, tool, key,
-	done string, got tracker.WriteResult,
+func (d WorkDeps) subtreeStopped(ctx context.Context, actor Actor, tool string,
+	item tracker.TaskDetail, done string, got tracker.WriteResult,
 	stopped *tracker.SubtreeStopped) (tools.Result, error) {
 
 	next := fmt.Sprintf("Call %s on %s again, with the same arguments, to "+
 		"finish: whatever has not followed yet goes, and what already has is "+
-		"left where it is.", tool, key)
+		"left where it is.", tool, item.Address())
 	if errors.Is(stopped.Err, tracker.ErrStepUnvouched) {
 		next = fmt.Sprintf("This node cannot vouch for the task it stopped at "+
 			"under this operation, so call %s on %s again WITHOUT an op_id: a "+
-			"new operation decides afresh and finishes it.", tool, key)
+			"new operation decides afresh and finishes it.", tool, item.Address())
 	}
 	d.settle(ctx, got.Position)
-	return jsonResult(withOperation(map[string]any{
-		"key": key, done: true,
+	return jsonResult(withOperation(ReceiptOf(map[string]any{
+		done:      true,
 		"outcome": string(got.Outcome), "position": positionOf(got.Position),
 		"version":          got.Version,
 		"subtree_followed": stopped.Followed, "subtree_total": stopped.Of,
 		"subtree_stopped": fmt.Sprintf("%s is %s, but only %d of the %d tasks "+
-			"that go with it followed before the walk stopped (%v). Do not "+
-			"report it as done. %s", key, done, stopped.Followed, stopped.Of,
-			stopped.Err, next),
-	}, actor))
+			"that go with it followed before the walk stopped (%s). Do not "+
+			"report it as done. %s", item.Named(), done, stopped.Followed,
+			stopped.Of, writeTold(ctx, actor, tool, stopped.Err), next),
+	}, item), actor))
 }

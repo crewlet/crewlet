@@ -13,14 +13,14 @@ import (
 // running a turn.
 func TestHumanSeatsAreMarkedInBothIdentityRenderings(t *testing.T) {
 	t.Parallel()
-	s := seatIn(mixedAcme(), "Engineer")
+	s := seatIn(mixedAcme(), "eng")
 	contains(t, BuildExecutor(s, ExecutorInput{}).Text, "**Reports to:** Sarah Chen (human)")
 	contains(t, BuildIdentityLine(s), "Sarah Chen (human)")
 }
 
 func TestHumanColleaguesNoteAppearsOnlyInMixedOrgs(t *testing.T) {
 	t.Parallel()
-	mixed := BuildExecutor(seatIn(mixedAcme(), "Engineer"), ExecutorInput{}).Text
+	mixed := BuildExecutor(seatIn(mixedAcme(), "eng"), ExecutorInput{}).Text
 	contains(t, mixed, "## Human colleagues", "NOT on A2A", "asynchronously")
 
 	// A pure-agent company's prompts are unchanged by the feature existing.
@@ -36,7 +36,7 @@ func TestRosterRendersHumanMemberBlock(t *testing.T) {
 		Units: []*org.Unit{{
 			Name: "Eng Team",
 			Type: org.UnitTypeTeam,
-			Lead: "Lead",
+			Lead: "lead",
 			Roles: []*org.Role{
 				{Name: "Lead", DeclaredHandle: "lead"},
 				{
@@ -54,7 +54,7 @@ func TestRosterRendersHumanMemberBlock(t *testing.T) {
 	}
 	o.Name = "Acme"
 	o.Normalize()
-	p := BuildExecutor(seatIn(o, "Lead"), ExecutorInput{}).Text
+	p := BuildExecutor(seatIn(o, "lead"), ExecutorInput{}).Text
 
 	contains(t, p, "**Sarah Chen** (sarah-chen) — **human teammate**")
 	// Identities render generically, labelled by transport. The shared
@@ -79,7 +79,7 @@ func TestRosterOmitsUnresolvedContactReferences(t *testing.T) {
 		Units: []*org.Unit{{
 			Name: "Eng Team",
 			Type: org.UnitTypeTeam,
-			Lead: "Lead",
+			Lead: "lead",
 			Roles: []*org.Role{
 				{Name: "Lead", DeclaredHandle: "lead"},
 				{
@@ -91,7 +91,7 @@ func TestRosterOmitsUnresolvedContactReferences(t *testing.T) {
 		}},
 	}
 	o.Normalize()
-	seat := seatIn(o, "Lead")
+	seat := seatIn(o, "lead")
 
 	excludes(t, BuildExecutor(seat, ExecutorInput{}).Text, "${SARAH_SLACK_ID}", "Slack ID:")
 
@@ -131,31 +131,37 @@ func TestCapitalizeMatchesPythonSemantics(t *testing.T) {
 	}
 }
 
-// A PERSON WHO HOLDS ONLY AN OPERATOR CREDENTIAL HAS NOBODY TO @-MENTION.
-// Their id identifies them on the engine's own surface, where nothing is ever
-// sent — so a roster that listed it and then told an agent to mention them
-// would produce a message addressed to a handle resolving to nobody, which
-// reads to everyone else as work handed over.
-func TestRosterDoesNotOfferAnOperatorIDAsAnAddress(t *testing.T) {
+// A PERSON WITH NO CHAT ACCOUNT HAS NOBODY TO @-MENTION.
+//
+// A human seat can be in the chart with no contact identity at all — somebody
+// who signs in to the dashboard and never joined the company's chat — and a
+// roster that told an agent to mention them would produce a message addressed
+// to a handle resolving to nobody, which reads to everyone else as work handed
+// over. The company below is VALIDATED first, because a roster case over a
+// chart validation refuses would be certifying a state no company can be in.
+func TestRosterOffersNoMentionForAPersonWithNoChatAccount(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{
 		Name: "Acme",
 		Units: []*org.Unit{{
 			Name: "Eng Team",
 			Type: org.UnitTypeTeam,
-			Lead: "Lead",
+			Lead: "lead",
 			Roles: []*org.Role{
 				{Name: "Lead", DeclaredHandle: "lead"},
 				{
 					Name:    "Jane Founder",
 					Kind:    org.KindHuman,
-					Contact: &org.HumanContact{CrewletOperatorID: "founder"},
+					Contact: &org.HumanContact{},
 				},
 			},
 		}},
 	}
 	o.Normalize()
-	p := BuildExecutor(seatIn(o, "Lead"), ExecutorInput{}).Text
+	if err := o.Validate(); err != nil {
+		t.Fatalf("a chart holding a person with no chat account is refused: %v", err)
+	}
+	p := BuildExecutor(seatIn(o, "lead"), ExecutorInput{}).Text
 
 	contains(t, p, "**Jane Founder** (jane-founder) — **human teammate**")
 	excludes(t, p, "Crewlet ID:", "crewlet")
@@ -165,7 +171,7 @@ func TestRosterDoesNotOfferAnOperatorIDAsAnAddress(t *testing.T) {
 	// A colleague WITH a reachable account keeps the mention instruction.
 	o.Units[0].Roles[1].Contact.SlackUserID = "U0FOUNDER"
 	o.Normalize()
-	with := BuildExecutor(seatIn(o, "Lead"), ExecutorInput{}).Text
+	with := BuildExecutor(seatIn(o, "lead"), ExecutorInput{}).Text
 	contains(t, with, "Slack ID: U0FOUNDER", "@-mention them on their team's chat")
 	excludes(t, with, "nobody to @-mention")
 }
@@ -269,6 +275,46 @@ func TestTheUserMessagesBlocksAreAllPeers(t *testing.T) {
 			t.Errorf("%q is an h%d — the message's blocks are peers", texts[i], level)
 		}
 	}
+}
+
+// A SEAT WHOSE CONTACT IDENTITIES THE DIRECTORY WITHHOLDS RENDERS NONE.
+//
+// The party registry already resolves a suspended person's Slack message to an
+// outside party; a roster that still printed their Slack id would have a lead's
+// agent DMing somebody the company has off-boarded. The seat stays — work for it
+// waits for whoever holds it next — and the prompt does not say WHY: a
+// person's standing is not an agent's business. The control is the same
+// roster with nothing withheld.
+func TestRosterRendersNoIdentityForAWithheldSeat(t *testing.T) {
+	t.Parallel()
+	o := &org.Organization{
+		Name: "Acme",
+		Units: []*org.Unit{{
+			Name: "Eng Team",
+			Type: org.UnitTypeTeam,
+			Lead: "lead",
+			Roles: []*org.Role{
+				{Name: "Lead", DeclaredHandle: "lead"},
+				{
+					Name: "Sarah Chen", Kind: org.KindHuman,
+					Contact:      &org.HumanContact{SlackUserID: "U0HUMAN"},
+					Availability: "CET business hours",
+				},
+			},
+		}},
+	}
+	o.Normalize()
+	seat := seatIn(o, "lead")
+
+	contains(t, BuildExecutor(seat, ExecutorInput{}).Text, "Slack ID: U0HUMAN")
+
+	seat.Withheld = func(handle string) bool { return handle == "sarah-chen" }
+	p := BuildExecutor(seat, ExecutorInput{}).Text
+	contains(t, p, "**Sarah Chen** (sarah-chen) — **human teammate**",
+		"cannot be reached on any chat or code-host account",
+		"Availability: CET business hours")
+	excludes(t, p, "U0HUMAN", "@-mention them on their team's chat",
+		"suspended", "removed", "retired")
 }
 
 // A SEAT THAT CAN ASK IS TOLD HOW TO ASK FOR A DECISION, AND TO STOP.

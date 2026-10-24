@@ -148,6 +148,7 @@
   "units": [
     {
       "path": "units[0]",
+      "id": "engineering",
       "name": "Engineering",
       "type": "team",
       "lead": "tech-lead",
@@ -163,6 +164,7 @@
     },
     {
       "path": "units[1]",
+      "id": "design",
       "name": "Design",
       "type": "team",
       "lead": "design-lead",

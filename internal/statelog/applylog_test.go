@@ -33,6 +33,7 @@ func TestAStopIsWrittenOnceSayingWhatResumesIt(t *testing.T) {
 	logs := &lockedBuffer{}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain: gatingDomain{}, Spec: specOf(gatingDomain{}),
+		Verifier:   testVerifier(t, gatingDomain{}),
 		Applier:    h.applier,
 		Fetch:      h.fetch,
 		Log:        h.fetch,
@@ -95,6 +96,7 @@ func gatedLine(t *testing.T, offer func(h *applyHarness)) map[string]any {
 	logs := &lockedBuffer{}
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain: domain, Spec: specOf(domain),
+		Verifier:   testVerifier(t, domain),
 		Applier:    h.applier,
 		Fetch:      h.fetch,
 		Log:        h.fetch,

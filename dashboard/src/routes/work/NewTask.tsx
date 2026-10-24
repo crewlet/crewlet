@@ -90,12 +90,12 @@ import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { handleLabel, indexOrg, type OrgIndex, type Seat } from "~/lib/seats.ts";
-import { projectsByUnit } from "~/lib/orgchart.ts";
+import { handleLabel, indexOrg, type Seat } from "~/lib/seats.ts";
+import { projectOptions, startingProject } from "~/lib/startingProject.ts";
 import { DEFAULT_TYPE, PRIORITIES, STATUSES, statusLabel, typeName } from "~/lib/work.ts";
 import { humanize, textBudget } from "~/lib/format.ts";
 import { TASK_BODY_MAX_BYTES, TASK_TITLE_MAX_BYTES } from "~/contract/work.ts";
-import type { WorkProjectDetail, WorkProjectRow } from "~/protocol/index.ts";
+import type { WorkProjectDetail } from "~/protocol/index.ts";
 
 /** How many seats the assignee field offers at once. */
 const SEAT_CHOICES = 8;
@@ -123,7 +123,7 @@ export interface Blocked {
 export function blockedBy(draft: NewTaskDraft): Blocked | undefined {
   if (!draft.project) return { field: "project", reason: "Choose the project it is filed in." };
   if (!draft.title.trim()) {
-    return { field: "title", reason: "Give the task a title — one line saying what the work is." };
+    return { field: "title", reason: "Add a title." };
   }
   const title = textBudget(draft.title, TASK_TITLE_MAX_BYTES, "a title", LONG_FORM);
   if (title.over) {
@@ -212,44 +212,6 @@ export function createArgs(draft: NewTaskDraft): Record<string, unknown> {
   return args;
 }
 
-/**
- * Which project the sheet opens on: the door's, else the ASSIGNEE's (the
- * project filed under the preset seat's own unit, or the nearest unit above it
- * that has one), else the person's own (where their create lands when it names
- * none — the engine's answer, `viewer`), else the first active project. ""
- * while none is known, and the create refuses naming the field rather than
- * guessing.
- *
- * THE ASSIGNEE'S UNIT OUTRANKS THE PERSON'S OWN because a door that names a
- * seat and no project — a seat's Message, a board lane grouped by assignee
- * across every project — is filing work FOR that seat: the Agent CEO's ask
- * belongs on the board its unit works from, not on whichever project the asker
- * happens to sit in or the first one in the list.
- */
-export function startingProject(
-  preset: NewTaskPreset,
-  own: string,
-  projects: readonly WorkProjectRow[],
-  index?: OrgIndex,
-): string {
-  const known = (key: string | undefined) => !!key && projects.some((p) => p.key === key);
-  // BEFORE THE LIST HAS ANSWERED, a named project is trusted as given: a
-  // project page's door knows its key, and blanking it until a second read
-  // lands would draw the sheet empty and then fill it.
-  if (projects.length === 0) return preset.project || own;
-  if (known(preset.project)) return preset.project!;
-  const chain = preset.assignee ? (index?.byHandle.get(preset.assignee)?.unit?.chain ?? []) : [];
-  if (chain.length) {
-    const byUnit = projectsByUnit(projects);
-    for (const unit of [...chain].reverse()) {
-      const key = byUnit.get(unit.name)?.[0];
-      if (key) return key;
-    }
-  }
-  if (known(own)) return own;
-  return projects[0]!.key;
-}
-
 export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClose: () => void }) {
   const nav = useNavigator();
   const viewer = useViewer();
@@ -262,8 +224,8 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
 
   const [draft, setDraft] = useState<NewTaskDraft>(() => ({
     project: startingProject(preset, viewer.project, []),
-    title: "",
-    body: "",
+    title: preset.title ?? "",
+    body: preset.description ?? "",
     type: preset.type ?? "",
     status: preset.status ?? "",
     assignee: preset.assignee ?? "",
@@ -367,14 +329,16 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
     }
     const result = await write.run(createArgs(draft), {
       done: asked
-        ? `Asked ${asked} — the answer lands in your Inbox`
+        ? `Asked ${asked}. The answer lands in your inbox.`
         : `Filed “${title}” in ${draft.project}`,
     });
     if (!result) return;
     if (result.kind === "applied") {
       onClose();
-      const key = (result.receipt as { key?: string } | null)?.key;
-      if (key) nav.to(["work", key]);
+      // AT THE ADDRESS THE RECEIPT NAMES (`item`), never its key: a key a
+      // restored counter handed out again opens the task that claimed it.
+      const address = (result.receipt as { item?: string } | null)?.item;
+      if (address) nav.to(["work", address]);
     } else if (result.kind === "pending") {
       onClose();
     }
@@ -439,11 +403,7 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
         held ? (
           <span className="new-task-hold">{held}</span>
         ) : viewer.name ? (
-          <span>
-            {asked
-              ? `Asked as ${viewer.name} — the answer lands in your Inbox`
-              : `Filed as ${viewer.name}`}
-          </span>
+          <span>{asked ? `Asking as ${viewer.name}` : `Filed as ${viewer.name}`}</span>
         ) : undefined
       }
       footer={
@@ -506,11 +466,7 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
           htmlFor="new-task-body"
           // THE COUNT REPLACES THE HINT only while it is a count; past the cap
           // the hint stays and the refusal is the error line under it.
-          helper={
-            !bodyBudget.over && bodyBudget.line
-              ? bodyBudget.line
-              : "Markdown. What is wanted, why, and how anyone would know it is done."
-          }
+          helper={!bodyBudget.over && bodyBudget.line ? bodyBudget.line : "Markdown."}
           error={bodyBudget.over ? bodyBudget.line : undefined}
         >
           {(field) => (
@@ -593,7 +549,7 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
           helper={
             detail && (detail.tags ?? []).filter((t) => !t.archived).length === 0
               ? `${draft.project} declares no labels yet.`
-              : "The project's own labels — one it does not declare is refused."
+              : "Only this project’s labels."
           }
         >
           {/* THE HELP LINE — which labels the project takes — is the control's
@@ -620,21 +576,6 @@ export function NewTaskSheet({ preset, onClose }: { preset: NewTaskPreset; onClo
   );
 }
 
-/** The projects as the Project field offers them: key and name, archived ones out. */
-function projectOptions(rows: readonly WorkProjectRow[], chosen: string): SelectOption[] {
-  const options: SelectOption[] = rows.map((p) => ({
-    value: p.key,
-    label: p.name ? `${p.key} · ${p.name}` : p.key,
-    text: `${p.key} ${p.name}`,
-  }));
-  // A PROJECT THE DOOR NAMED BEFORE THE LIST ANSWERED is still a value the
-  // field holds, and a select whose value is not among its options draws a
-  // blank — so it is offered as itself until the list says otherwise.
-  if (chosen && !rows.some((p) => p.key === chosen))
-    options.unshift({ value: chosen, label: chosen });
-  return options;
-}
-
 /** The project's types, its catalogue's words, the archived ones out. */
 function typeOptions(detail: WorkProjectDetail | undefined): SelectOption[] {
   const types = (detail?.types ?? []).filter((t) => !t.archived);
@@ -655,7 +596,7 @@ function landingOf(
   detail: WorkProjectDetail | undefined,
   byHandle: ReadonlyMap<string, Seat>,
 ): string {
-  if (!detail) return "Left empty, it lands where the project sends unassigned work.";
+  if (!detail) return "Left empty, it goes to triage.";
   const name = (handle: string) => byHandle.get(handle)?.name ?? handle;
   // A DEFAULT THE CHART NO LONGER HOLDS IS NOT WHERE IT GOES: the engine
   // files such a task to nobody and puts it in triage, warning as it does
@@ -663,15 +604,15 @@ function landingOf(
   // a sentence the create contradicts. The same test the engine makes: the
   // handle, exactly, on the chart this screen loaded.
   if (detail.default_assignee && !byHandle.has(detail.default_assignee)) {
-    return `Left empty, it lands in triage: ${detail.key}'s default assignee, ${detail.default_assignee}, is no longer on the org chart.`;
+    return `Left empty, it goes to triage. ${detail.default_assignee} has left the org.`;
   }
   if (detail.default_assignee) {
     return `Left empty, it goes to ${name(detail.default_assignee)}, ${detail.key}'s default assignee.`;
   }
   if (detail.lead.handle) {
-    return `Left empty, it lands in triage and ${name(detail.lead.handle)}, who leads ${detail.key}, is told.`;
+    return `Left empty, ${name(detail.lead.handle)} triages it.`;
   }
-  return `Left empty, it lands in ${detail.key}'s triage — and nobody leads ${detail.key} to route it.`;
+  return `Left empty, it waits in triage. ${detail.key} has no lead.`;
 }
 
 /**
@@ -781,11 +722,11 @@ function AssigneeField({
       // or it is empty — and only the last is where "left empty" is true.
       helper={
         value
-          ? `${chosen?.name ?? handleLabel(value)} is woken with it and follows it.${
+          ? `${chosen?.name ?? handleLabel(value)} is notified and follows it.${
               why ? ` The engine's match for “${quoted(why.words)}”: ${why.why}.` : ""
             }`
           : unchosen
-            ? "Not chosen yet — take the seat from the list. Typed words are never sent as a handle."
+            ? "Pick a seat from the list."
             : landing
       }
     >

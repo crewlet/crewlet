@@ -44,7 +44,7 @@ const objectsDirName = "objects"
 // position names, since those records write rows too (the package doc's "The
 // objects follow the log").
 //
-// A RETIRED REFERENCE IS NOT CARRIED (ADR-0033). A retired row keeps a
+// A RETIRED REFERENCE IS NOT CARRIED (ADR-0047). A retired row keeps a
 // replaced object from the collector for a grace and names nothing the
 // company is owed, so it is never copied, never asked after and never
 // recorded lost: on S3 its object stays out of objects/, and on the broker's

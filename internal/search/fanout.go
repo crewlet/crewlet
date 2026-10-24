@@ -134,7 +134,7 @@ type Slice struct {
 	Building bool
 
 	// OutOfService says this participant's copy of what this query reads is
-	// OUT OF SERVICE — wrong rather than behind (ADR-0031) — so it scanned
+	// OUT OF SERVICE — wrong rather than behind (ADR-0045) — so it scanned
 	// nothing and the coordinator counts its buckets MISSING, never merges
 	// an answer from rows the node has stopped serving. The zero value is a
 	// copy in service.

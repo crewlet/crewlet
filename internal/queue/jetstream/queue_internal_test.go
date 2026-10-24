@@ -10,7 +10,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/queue"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // A FAILING MESSAGE BACKS OFF, and the budget outlives the outage.
@@ -153,7 +152,7 @@ func TestABatchThatAcksAfterFailingIsForgotten(t *testing.T) {
 	t.Parallel()
 	q := openForTest(t, Config{})
 	ctx := t.Context()
-	topic, group := topics.AgentInbox("erin"), topics.AgentInboxGroup("erin")
+	topic, group := seatInbox("erin"), seatGroup("erin")
 	if _, err := q.EnsureSubscription(ctx, topic, group); err != nil {
 		t.Fatalf("EnsureSubscription: %v", err)
 	}
@@ -235,7 +234,7 @@ func TestAFetchExpiresAfterItsWaitAndAStopEndsItAtOnce(t *testing.T) {
 		t.Parallel()
 		const wait = 500 * time.Millisecond
 		q := newQueue(t)
-		topic, group := topics.AgentInbox("idle"), topics.AgentInboxGroup("idle")
+		topic, group := seatInbox("idle"), seatGroup("idle")
 		if _, err := q.EnsureSubscription(t.Context(), topic, group); err != nil {
 			t.Fatal(err)
 		}
@@ -263,7 +262,7 @@ func TestAFetchExpiresAfterItsWaitAndAStopEndsItAtOnce(t *testing.T) {
 		// A POLL OF A MINUTE, so a fetch the stop did not reach is still
 		// outstanding long after the stop's own grace.
 		q := newQueueWith(t, Config{FetchWait: time.Minute})
-		topic, group := topics.AgentInbox("stopping"), topics.AgentInboxGroup("stopping")
+		topic, group := seatInbox("stopping"), seatGroup("stopping")
 		if err := q.Subscribe(t.Context(), topic, group,
 			func(context.Context, *events.Event) queue.Result { return queue.Ack() }); err != nil {
 			t.Fatal(err)
@@ -301,7 +300,7 @@ func TestAFetchExpiresAfterItsWaitAndAStopEndsItAtOnce(t *testing.T) {
 func TestAFetchWhoseWindowLapsedBeforeItWasSentIsAnEmptyOne(t *testing.T) {
 	t.Parallel()
 	q := newQueue(t)
-	topic, group := topics.AgentInbox("lapsed"), topics.AgentInboxGroup("lapsed")
+	topic, group := seatInbox("lapsed"), seatGroup("lapsed")
 	if _, err := q.EnsureSubscription(t.Context(), topic, group); err != nil {
 		t.Fatal(err)
 	}

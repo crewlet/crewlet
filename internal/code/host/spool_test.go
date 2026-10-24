@@ -15,14 +15,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/code/host"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
+
+// ceoOperatorID is the operator id a log line names ceo's token by: its login,
+// `token:ceo`, as every record names a credential (iam.ActorFor).
+var ceoOperatorID = `"operator_id":"` + iam.TokenLogin("ceo") + `"`
 
 // roomy is an allowance no case here fills unless it means to: the
 // production's at a lane of sixty-four slots.
@@ -275,7 +279,7 @@ func TestAWaitPastItsBoundIs503(t *testing.T) {
 	if took < timing.SpoolWait {
 		t.Errorf("the wait was answered after %v, before its bound of %v", took, timing.SpoolWait)
 	}
-	if n := lines.count("code_fetch_spool_unserved", `"reason":"expired"`, `"operator_id":"ceo"`); n != 1 {
+	if n := lines.count("code_fetch_spool_unserved", `"reason":"expired"`, ceoOperatorID); n != 1 {
 		t.Errorf("logged code_fetch_spool_unserved for the expired wait %d times, want once", n)
 	}
 	if got := counted(node.Metrics(), metrics.CodeHostSpoolWaits, "expired"); got != 1 {
@@ -399,10 +403,14 @@ func TestAWaiterWhoseClientLeavesGivesUpItsPlace(t *testing.T) {
 	body := repeatedWants(head, 8<<10)
 	host.SetSpools(node.Host(), host.SpoolSizes{Limit: 64 << 10, Share: 64 << 10, Request: 64 << 10, Grain: 1 << 10,
 		Places: 64, PlacesPerCredential: 64})
-	// THE HOST'S FETCH ROUTE OVER HTTP/2, admitting every request as ceo.
+	// THE HOST'S FETCH ROUTE OVER HTTP/2, admitting every request as ceo —
+	// the principal the API's guard resolves ceo's token to: the token's
+	// login, acting as the human seat the identity directory binds it to.
+	ceo := iam.Principal{Login: iam.TokenLogin("ceo"), Kind: iam.KindPerson, Seat: "ceo",
+		Stage: iam.StageActive}
 	mux := http.NewServeMux()
 	mux.Handle(host.PatternUploadPack, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		node.Host().UploadPack().ServeHTTP(w, r.WithContext(auth.WithOperator(r.Context(), "ceo")))
+		node.Host().UploadPack().ServeHTTP(w, r.WithContext(iam.WithPrincipal(r.Context(), ceo)))
 	}))
 	h2 := httptest.NewUnstartedServer(mux)
 	h2.EnableHTTP2 = true
@@ -595,7 +603,7 @@ func TestACredentialsEndedSpoolsOutlastingTheWait(t *testing.T) {
 	if took < timing.SpoolWait {
 		t.Errorf("it was answered after %v, before the wait's bound of %v", took, timing.SpoolWait)
 	}
-	if n := lines.count("code_fetch_spool_unserved", `"reason":"expired"`, `"operator_id":"ceo"`); n != 1 {
+	if n := lines.count("code_fetch_spool_unserved", `"reason":"expired"`, ceoOperatorID); n != 1 {
 		t.Errorf("logged code_fetch_spool_unserved for the expired wait %d times, want once", n)
 	}
 	if a := <-fetchAsync(t, c, "dev", body); a.status != http.StatusOK {

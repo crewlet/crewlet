@@ -36,10 +36,8 @@ func resumingEngine(t *testing.T) (*Engine, ledgerstore.Conversations) {
 // THE TWO ARE NEVER EQUAL HERE, and that is the whole point of the pair: they
 // differ for exactly one surface, a direct message, where the partition is the
 // thread the kick-off trigger arrived in and the conversation is the whole DM
-// line. A fixture that set only one left the accessor falling back to the
-// other at every call site in this file, so the ledger key the split exists to
-// fix was filed under whichever field happened to be there — and reverting
-// [Engine.recordResume] to the partition passed every case below.
+// line — so reverting [Engine.recordResume] to the partition fails a case
+// below.
 func resumed(conversation, partition string) resumeInput {
 	return resumeInput{
 		Run: sandbox.PendingRun{
@@ -305,7 +303,7 @@ func TestTheTurnCarriesWhatWorkItDetachesWillNeed(t *testing.T) {
 		Name:  "Acme",
 		Roles: []*org.Role{{Name: "Engineer", DeclaredHandle: "swe"}},
 	}}
-	got := tel.runnerTurn(company, 0, nil, "fix the failing test", turn.ToolReply(""))
+	got := tel.runnerTurn(company, 0, nil, "fix the failing test", turn.ToolReply(""), nil)
 	if got.Context == nil {
 		t.Fatal("the runner turn carries no turn context")
 	}

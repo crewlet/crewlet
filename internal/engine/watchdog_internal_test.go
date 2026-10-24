@@ -30,7 +30,7 @@ roles:
 
 func watchdogEngine(t *testing.T) *Engine {
 	t.Helper()
-	boot := config.DefaultBootstrap()
+	boot := testBootstrap(t)
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	SeedStore(t, &boot)
@@ -57,18 +57,19 @@ func watchdogEngine(t *testing.T) *Engine {
 // while the process went on holding their mail unacked and no orchestrator
 // watching for liveness ever restarted it.
 //
-// The lag is the discriminator, and it is what makes this catch a MISSING
-// Watch as well as a missing constructor: Lag reports 0 both when nothing is
-// watched and when nothing is live, and only becomes non-zero once a watched,
-// live duty has actually stamped a beat.
+// A beat seen is the discriminator, and it is what makes this catch a
+// MISSING Watch as well as a missing constructor: the watchdog reads as
+// beating only once a watched, live duty has actually stamped a beat. The lag
+// cannot be it: a host on its beat is not behind, so its lag is zero, which
+// is also what a watchdog watching nothing reads.
 func TestTheEngineArmsAWatchdogOnTheSeatHost(t *testing.T) {
 	t.Parallel()
 	e := watchdogEngine(t)
 	if e.watchdog == nil {
 		t.Fatal("New built no watchdog, so a wedged node would never end itself")
 	}
-	if got := e.StallLag(); got != 0 {
-		t.Fatalf("lag = %v before the host runs, want none — the premise", got)
+	if e.watchdog.Beating() {
+		t.Fatal("the watchdog reads a beat before the host runs: the premise")
 	}
 
 	if err := e.Start(t.Context()); err != nil {
@@ -76,11 +77,35 @@ func TestTheEngineArmsAWatchdogOnTheSeatHost(t *testing.T) {
 	}
 
 	deadline := time.Now().Add(10 * time.Second)
-	for e.StallLag() == 0 {
+	for !e.watchdog.Beating() {
 		if time.Now().After(deadline) {
 			t.Fatal("the watchdog never saw a beat from the seat host: it is " +
 				"watching nothing, or it was started before the host was live " +
 				"and stood down for the life of the process")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A HEALTHY NODE REPORTS NO STALL LAG.
+//
+// The lag reached /health whole, the time since the host's last beat, which
+// on a turning host is never zero, only under a second: every healthy node
+// carried a `stall_lag_seconds` the docs promise only while the duty is
+// behind. A host on its beat reads zero, and the health body omits zero.
+// Polled rather than read once, because the host beats on a real clock and
+// one late tick on a loaded runner is a missed beat that is honestly reported.
+func TestAHealthyNodeReportsNoStallLag(t *testing.T) {
+	t.Parallel()
+	e := watchdogEngine(t)
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for !e.watchdog.Beating() || e.StallLag() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("a beating seat host still reads %v behind: a healthy node's "+
+				"health carries stall_lag_seconds", e.StallLag())
 		}
 		time.Sleep(20 * time.Millisecond)
 	}

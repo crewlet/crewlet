@@ -2,6 +2,7 @@ package livestate
 
 import (
 	"cmp"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -213,6 +214,7 @@ func (s *LiveState) ActiveSandboxes() []SandboxEntry {
 	for _, held := range s.sandboxes {
 		entry := held.entry
 		entry.WorkItem = cloneItem(entry.WorkItem)
+		entry.AudienceHandles = slices.Clone(entry.AudienceHandles)
 		out = append(out, entry)
 	}
 	slices.SortFunc(out, func(a, b SandboxEntry) int {
@@ -222,13 +224,21 @@ func (s *LiveState) ActiveSandboxes() []SandboxEntry {
 	return out
 }
 
-// sameEntry reports whether two entries say the same thing, the item compared
-// by value rather than by pointer.
+// sameEntry reports whether two entries say the same thing: the item compared
+// by value rather than by pointer, and the question's audience as a list, an
+// empty one the same as none.
+//
+// FIELD BY FIELD THROUGH reflect, because the audience is a slice and a struct
+// holding one cannot be compared with `==`: a hand-written list of fields here
+// would be a second list of the entry's fields, which a field added later
+// would be missing from — and a field missing from this comparison is a change
+// the reconcile never pushes.
 func sameEntry(a, b SandboxEntry) bool {
-	ai, bi := a.WorkItem, b.WorkItem
-	a.WorkItem, b.WorkItem = nil, nil
-	if a != b || (ai == nil) != (bi == nil) {
-		return false
+	if len(a.AudienceHandles) == 0 {
+		a.AudienceHandles = nil
 	}
-	return ai == nil || *ai == *bi
+	if len(b.AudienceHandles) == 0 {
+		b.AudienceHandles = nil
+	}
+	return reflect.DeepEqual(a, b)
 }

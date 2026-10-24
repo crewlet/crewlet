@@ -14,7 +14,7 @@
    `@crewlethq/ui`'s `AppShell` and `SidebarNav`, and nothing here restates it.
    What is here is what the kit has no opinion about: the two rows the page
    header draws, the peek as a column of the sheet, the Settings column, and
-   the sidebar's own few rows (the health card, the user block).
+   the sidebar's own few rows (the engine panel's insides, the user block).
 
    WHERE YOU ARE IS DRAWN WITHOUT A HUE: the current sidebar row and the
    current section are raised or underlined, and the one accent in the chrome
@@ -187,20 +187,6 @@
   }
 }
 
-/* A DIALOG'S MARK SITS ON ITS TITLE'S LINE. The kit centres the header's items,
-   which is right for a title alone and wrong once a subtitle runs to two or
-   three lines under it: the mark floated beside the description, belonging to
-   neither line. With a subtitle the row aligns to the top, and the mark's box
-   is one title line tall so the glyph centres on that line. A dialog with no
-   subtitle keeps the kit's centring, where the two are the same thing. */
-.crewlet-modal__header:has(.crewlet-modal__subtitle) {
-  align-items: flex-start;
-}
-.crewlet-modal__header:has(.crewlet-modal__subtitle) .crewlet-modal__icon {
-  align-items: center;
-  height: calc(var(--font-size-sm) * var(--font-line-height-tight));
-}
-
 /* THE GROUP HEADINGS IN THE DESIGN'S REGISTER: "Tasks", "Pages", "Actions"
    in sentence case at the small label step, as the approved palette writes
    them — the listbox's uppercase micro-label is a table's column head, and
@@ -212,12 +198,6 @@
   text-transform: none;
 }
 
-/* THE LEGEND SPANS THE BAND, keys at its start and what the search is doing at
-   its end, as the approved palette draws it. The kit's start slot is sized to
-   its content; this lets it take the band so the end can sit at the end. */
-.palette .crewlet-modal__footer-start {
-  flex: 1 1 auto;
-}
 /* THE KEYS WRAP rather than run off the band: a phone's palette is 358px wide
    and three keys with their words are not. */
 .palette-keys {
@@ -440,9 +420,9 @@
 }
 
 /* ---- The sidebar's own rows ----------------------------------------------
-   The navigation is the kit's `SidebarNav`; what is here is the three things
-   the kit has no row for — the ⌘K field's place, the engine's state, and who
-   this browser is. */
+   The navigation is the kit's `SidebarNav` and the engine's row is the kit's
+   `AppShell.RailRow`; what is here is what the kit leaves to the application:
+   the ⌘K field's place, the engine panel's inset, and who this browser is. */
 
 /* THE FOOT'S OWN NAVIGATION SITS ON THE FOOT'S INSET. The kit's `SidebarNav`
    brings the rail's gutter with it, and the foot already stands on that
@@ -451,10 +431,8 @@
   padding: 0;
 }
 
-/* THE RAIL'S HEAD: the company's lockup, and the one create the chrome
-   carries at the far end of the same line, as the approved design draws it.
-   The lockup takes what is left, so a long company name truncates rather than
-   pushing the `+` off the rail. */
+/* THE RAIL'S HEAD: the company's lockup, alone on its line. It takes the
+   whole width, so a long company name truncates rather than wrapping. */
 .side-head {
   display: flex;
   align-items: center;
@@ -469,8 +447,16 @@
 
 /* THE ⌘K FIELD SITS ON THE NAV'S OWN GUTTER, so its left edge is the left
    edge every nav row's background starts at. */
+/* THE TRIGGER'S GLYPH ON THE NAV'S GLYPH COLUMN: a nav row's glyph stands
+   the gutter and the row's pad in, and the trigger's the gutter, its own
+   1px edge and its pad, which put it a pixel left of every row under it. The
+   inset makes up the difference from the kit's own measures. */
 .side-search {
   padding: 0 var(--size-nav-gutter) var(--spacing-3);
+  padding-inline-start: calc(
+    var(--size-nav-gutter) + var(--size-nav-row-pad) - (var(--spacing-2) + var(--spacing-1) / 2) -
+      1px
+  );
 }
 
 /* A SIDEBAR SECTION THAT COULD NOT BE DRAWN (`app/boundaries.tsx`): its
@@ -516,170 +502,53 @@
   min-width: 0;
 }
 
-/* A STATE WAITING ON THE READER — the tools the engine says need a person —
-   is the kit's badge in the WARNING tone, as the approved Settings artboard
-   draws Integrations' figure ("pill need"). The kit fills its badge with the
-   accent because its one badge is an unread count; this figure is a state,
-   and colour is state, so in the accent it read as a second inbox. The soft
-   fill and its ink are the feedback pair every warning tag wears, on the
-   rail and on the raised current row alike. */
-.section-row-attention .crewlet-nav-item__badge {
-  background: var(--color-feedback-warning-soft);
-  color: var(--color-feedback-warning-ink);
+/* THE ENGINE PANEL'S INSET. The row that opens it and every part inside it
+   are the kit's (`AppShell.RailRow`, `Popover`, `DescriptionList`, `Button`,
+   `StatusDot`); the kit's popover draws no inset of its own, and this is the
+   one the panel's parts stand on, as every popover here gives its own. */
+.engine-panel {
+  padding: var(--spacing-3);
 }
 
-/* THE ENGINE'S STATE, the design's status block: its words over one detail
-   line, on the card rung inside the hairline — the one row in the foot that
-   reports rather than goes somewhere. A link to the nodes, or the button that
-   asks for a token when the token is what is wrong. */
-.health-card {
-  /* A GRID, so the dot shares the TITLE's row and is centred on that line's
-     own box — whatever the title's size at this density, however many lines
-     follow it. It was a flex row with the dot's box sized to a computed line
-     height, which is a second statement of the title's metrics that drifts
-     the moment either changes; in a row it centred on the whole card. */
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  column-gap: var(--spacing-2);
-  width: 100%;
-  min-width: 0;
-  padding: calc(var(--spacing-2) + 1px) var(--size-nav-row-pad);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface-subtle);
-  color: var(--color-text-primary);
-  font: inherit;
-  text-align: left;
-  text-decoration: none;
-  cursor: pointer;
-}
-
-.health-card:hover {
-  border-color: var(--color-border-hover);
-}
-
-.health-card:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: var(--size-focus-ring-inset-offset);
-}
-
-/* The dot sits in the title's row; the text's lines take the column beside
-   it, each on a row of its own; the chevron spans them all. */
-.health-card-dot {
-  display: flex;
-  grid-row: 1;
-  grid-column: 1;
-}
-
-.health-card-text {
-  display: contents;
-  line-height: var(--font-line-height-snug);
-}
-
-.health-card-text > * {
-  grid-column: 2;
-  line-height: var(--font-line-height-snug);
-}
-
-.health-card-title {
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-medium);
-}
-
-.health-card-detail,
-.health-card-alarm {
-  font-size: var(--font-size-2xs);
-  color: var(--color-text-tertiary);
-  overflow-wrap: anywhere;
-}
-
-/* THE ALARM LINE CARRIES ITS OWN TONE, because the dot beside the title is
-   the posture's: a standing alarm is warning ink with its glyph, a table not
-   yet evaluated is plain secondary text. */
-.health-card-alarm {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  color: var(--color-text-secondary);
-}
-
-.health-card-alarm[data-tone="warning"] {
-  color: var(--color-feedback-warning-ink);
-}
-
-.health-card-alarm > svg {
-  flex: none;
-}
-
-.health-card-go {
-  grid-column: 3;
-  grid-row: 1 / span 3;
-  flex: none;
-  color: var(--color-text-tertiary);
-}
-
-/* WHO THIS BROWSER IS, and the reader's own preferences beside the name. */
-.user-block {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  min-width: 0;
-  padding: var(--spacing-1) 0;
-}
-
-.user-block-who {
-  display: flex;
-  flex: 1 1 auto;
-  align-items: center;
-  gap: var(--spacing-2);
-  min-width: 0;
-  padding: var(--spacing-1) var(--spacing-1);
-  border-radius: var(--radius-md);
-  color: var(--color-text-primary);
-  text-decoration: none;
-}
-
-a.user-block-who:hover {
-  background: var(--color-surface-hover);
-}
-
-a.user-block-who:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: var(--size-focus-ring-inset-offset);
-}
-
-.user-block-text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  line-height: var(--font-line-height-snug);
-}
-
-.user-block-name {
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-medium);
-}
-
-.user-block-detail {
-  font-size: var(--font-size-2xs);
-  color: var(--color-text-tertiary);
-}
-
+/* The Preferences popover's body, beside the account row (`app/sidebar/UserBlock.tsx`). */
+/* AS WIDE AS ITS ROWS, the label column and the one control column: they are
+   the widest thing the popover holds, so they set its width (over the kit's
+   own floor), and the body declares no width of its own. */
 .preferences {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-3);
-  width: 18rem;
   max-width: calc(100vw - 2 * var(--spacing-4));
   padding: var(--spacing-3);
 }
 
+/* A LABEL COLUMN AND A CONTROL COLUMN, and the three controls are ONE WIDTH:
+   the two switchers share one box, three cells each, which the kit's `fill`
+   divides evenly, so a row of glyphs and a row of letters are the same
+   control twice, and the theme's field below them is that box's width. */
 .preferences-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 3.875rem minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-3);
+  gap: var(--spacing-2);
+}
+
+/* As wide as the longest theme's field needs at the comfortable density:
+   "High contrast" with its swatch and the chevron is just over 148px there,
+   and a narrower column cut its name. */
+.preferences-switch {
+  justify-self: start;
+  width: 9.375rem;
+}
+
+/* The theme list is wider than its field, which a narrow popover makes
+   narrow: a theme is read by its name and its tag together, and a list cut
+   to the field's width cut both. It is TALL ENOUGH FOR EVERY THEME at once,
+   ten under five headings at any density; the kit still flips and clamps
+   the list to the window, so a short window scrolls it. */
+.preferences-theme-menu {
+  --crewlet-select-menu-max-height: 42rem;
+  min-width: 17.25rem;
 }
 
 /* ---- The page header -----------------------------------------------------
@@ -710,7 +579,8 @@ a.user-block-who:focus-visible {
    IT WRAPS BY WHAT IT HOLDS, NOT AT A WIDTH. A flex container assigns items to
    lines by their UNSHRUNK size, so a wrap over a trail at its content width
    breaks as soon as a long title and the controls exceed the bar, with free
-   space left on the first line. The trail's basis is therefore 0 (`.crumbs`),
+   space left on the first line. The trail's basis is therefore 0 (the kit's
+   `Breadcrumb`, drawn here as `.page-trail`),
    clamped by its floor — the way back out, measured: the line holds the
    floor plus the controls, the break comes only when even the floor cannot
    sit beside them, and the grow factor hands the trail everything the line
@@ -722,151 +592,31 @@ a.user-block-who:focus-visible {
   gap: var(--spacing-1) var(--spacing-2);
   height: auto;
   min-height: var(--page-bar-h);
-  padding: var(--spacing-1) var(--spacing-4) var(--spacing-1) var(--spacing-5);
+  /* THE KIT'S INLINE INSET (`AppShell`'s top bar): the content's own on both
+     sides and, at the end, the scroller's measured gutter, so the bar's last
+     control ends over the content's edge. A 16px end of our own put every
+     page's actions 15px past the cards under them with classic scrollbars. */
+  padding-block: var(--spacing-1);
 }
 
-/* THE TRAIL IS WHAT GIVES WAY, AND IT IS WHAT TAKES THE SLACK.
+/* THE TRAIL IS THE KIT'S `Breadcrumb`, and so are its rules: it gives way
+   first and takes the line's slack, its floor is the way back out (measured,
+   `--crewlet-breadcrumb-floor`), and past the whole bar it scrolls rather than
+   clipping. What is left here is how it shares this bar with the lenses and
+   the controls. */
 
-   `flex-grow: 1` is the spacer this replaces: the trail absorbs the free
-   space, so the controls stay in the right-hand corner without a blank element
-   between them and the breadcrumb. Its BASIS is 0, which is what lets the bar
-   wrap by what it holds (see `.page-bar`). `flex-shrink: 100` is the ordering
-   against the only other things here that can give — the kit's own idiom
-   (`.crewlet-card__subtitle` takes the same factor so a title never gives way
-   first).
-
-   AND ITS FLOOR IS THE WAY BACK OUT, which is the correction to the obvious
-   `min-width: 0`: at zero the trail gives way until the way back out is gone,
-   and the way back out is the one thing on this bar the reader cannot
-   reconstruct from anywhere else. The floor is MEASURED (`--crumb-floor`,
-   written by `Breadcrumb`): the ancestors at their width and the last crumb's
-   stub — at least 20ch, and at most the room beside the drawer toggle (which
-   `Breadcrumb` caps it at) or the whole bar. A fixed 20ch alone let a
-   seat's trail share a phone's line with its one button and cut
-   "Engineering · Co" mid-letter under it; measured, a trail that cannot show
-   its ancestry beside the controls breaks the line instead.
-
-   Past the whole bar the trail SCROLLS rather than clipping as a box: the
-   ancestors never shrink (see below), so once they alone are wider than the
-   bar there is nothing left to ellipsise and a clip lands wherever the pixels
-   ran out. A thumb, a trackpad or a shift-wheel reaches a scroller, and the
-   tab stop in `Breadcrumb` is what reaches it from a keyboard. The scrollbar
-   is not drawn: on a 52px bar it would sit on the baseline the trail is
-   written on. */
-.crumbs {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex: 1 100 0;
-  min-width: min(100%, max(20ch, var(--crumb-floor, 0px)));
-  overflow-x: auto;
-  overflow-y: hidden;
-  overscroll-behavior-x: contain;
-  scrollbar-width: none;
-  font-size: var(--font-size-sm);
-}
-
-.crumbs::-webkit-scrollbar {
-  display: none;
-}
-
-.crumb-part {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  min-width: 0;
-}
-
-/* THE OBJECT'S OWN NAME TAKES THE CUT, never the way back out. A bar holding
-   a long final crumb — a turn's uuid, a page title — starved the ancestors
-   with it when every part shrank proportionally. The reader knows which object
-   they are on, because the header below says so; what they cannot
-   reconstruct is the links out of it. So the ancestors keep their width and
-   the last part is the one that ellipsises. */
-.crumb-part:not(:last-child) {
-  flex: 0 0 auto;
-}
-
-.crumb-sep {
-  flex: none;
-  margin: 0 var(--spacing-1);
-  color: var(--color-text-muted);
-}
-
-.crumb-link,
-.crumb-here {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.crumb-link {
-  color: var(--color-text-tertiary);
-}
-
-.crumb-link:hover {
-  color: var(--color-text-primary);
-}
-
-.crumb-glyph,
-.crumb-seat {
-  flex: none;
-}
-
-/* A project's key as a chip before its name ([Crumb.tag]): the chip keeps its
-   own weight and ink whether the crumb is a link or the page's heading. */
-.crumb-tag {
-  font-weight: var(--font-weight-regular);
-  line-height: 1.4;
-}
-
-/* THE LABEL IS THE BOX THAT ELLIPSISES. `.crumb-link` and `.crumb-here` are
-   flex containers (a glyph and a label, one gap), and text straight inside a
-   flex container is an anonymous flex item that `text-overflow` never
-   reaches: the page's h1 was cut mid-word at the bar's edge. A span is a
-   real flex item, blockified, which is what an ellipsis applies to — and its
-   `min-width: 0` is what lets it shrink below its text at all. */
-.crumb-text {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-/* THE LAST CRUMB IS THE PAGE'S `h1`, so the heading's own margins and size
-   are the bar's, not the document's. */
-.crumb-here {
-  margin: 0;
-  color: var(--color-text-primary);
-  font-size: inherit;
-  font-weight: var(--font-weight-medium);
-  line-height: inherit;
-}
-
-/* AND THE LAST PART NEVER COLLAPSES TO NOTHING: a floor of a few characters
-   keeps an ellipsised stub, which is what tells a reader the trail has a last
-   part at all. The floor is the last part's alone — an ancestor with no page
-   of its own ("Servers" under Tools) never shrinks, and a floor there would
-   only pad a short word. */
-.crumb-part:last-child > .crumb-here {
-  min-width: 5ch;
-}
-
-/* AN OBJECT'S LENSES, BESIDE ITS NAME (`PageLenses` in PageActions.tsx):
-   `Work › ENG Core · Items | About | History`. On every page without lenses
-   the slot is empty and is no flex item at all, so it costs the bar no gap.
+/* A SCOPE'S LENSES, BESIDE ITS NAME (`PageLenses` in PageActions.tsx, and
+   All projects' drawn by the header): `Work › ENG Core · Tasks | About |
+   History | Files`. On every page without lenses the slot is empty and is no
+   flex item at all, so it costs the bar no gap.
 
    WITH LENSES, THE LENSES TAKE THE LINE'S SLACK, not the trail: the trail's
    grow is what keeps the controls in the right-hand corner, and it would push
    the lenses there too — against the controls, away from the name they are
    about. So the trail sizes to its content and still gives way first
-   (`flex-shrink: 100`, down to its floor), capped at 60% of the bar so a
+   (`flex-shrink: 100`, down to its floor), capped at 62% of the bar so a
    long name ellipsises beside its lenses rather than pushing them onto a line
-   of their own; the lens group grows, holding its tabs at its start. */
+   of their own; the lens group grows, holding its chips at its start. */
 .page-lenses {
   display: flex;
   align-items: center;
@@ -878,9 +628,9 @@ a.user-block-who:focus-visible {
   display: none;
 }
 
-.page-bar:has(> .page-lenses:not(:empty)) > .crumbs {
+.page-bar:has(> .page-lenses:not(:empty)) > .page-trail {
   flex: 0 100 auto;
-  max-width: 60%;
+  max-width: 62%;
 }
 
 /* WHAT THIS PAGE CAN DO, in one element — the portalled slot and the frame's
@@ -896,7 +646,7 @@ a.user-block-who:focus-visible {
    to it and wraps.
 
    `margin-left: auto` KEEPS IT TO THE RIGHT-HAND EDGE when the bar has broken
-   a line under the trail: the grow on `.crumbs` is what pushes it there on
+   a line under the trail: the trail's grow is what pushes it there on
    one line, and on a line of its own there is no trail beside it to grow. */
 .page-controls {
   display: flex;
@@ -915,6 +665,13 @@ a.user-block-who:focus-visible {
 .page-actions {
   flex: 0 1 auto;
   min-width: 0;
+}
+/* A SCREEN WITH NO ACTIONS LEAVES NO GAP: the empty slot was still a flex
+   item, and the row's gap stood the star 8px short of the bar's gutter on
+   every page that adds nothing, out of line with the last control on every
+   page that does. */
+.page-actions:empty {
+  display: none;
 }
 
 /* THE FRAME'S STAR AND COPY LINK are one element only so the phone rule below
@@ -1000,6 +757,50 @@ a.user-block-who:focus-visible {
     display: inline-flex;
     flex: none;
   }
+
+  /* A SCREEN WHOSE BAR LEADS WITH ITS FIND FIELD (`page-find`, a gallery's
+     search) gives the field the line: the controls take the whole row under
+     the trail from the content's own gutter, the field grows into it, and
+     the primary action and "More" end it. Right-aligned at its own width, the
+     field stood indented behind a band of nothing. The line no longer needs to
+     scroll, since the field is what gives way. */
+  .page-controls:has(.page-find) {
+    flex: 1 1 100%;
+    margin-left: 0;
+    padding-inline: calc(var(--spacing-4) - var(--spacing-3));
+    overflow-x: visible;
+  }
+
+  .page-controls:has(.page-find) .page-actions {
+    flex: 1 1 auto;
+  }
+
+  .page-find {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  /* THE LENSES TAKE A ROW OF THEIR OWN under the bar's line, which keeps the
+     drawer toggle, the trail and the one action: four chips beside them cut
+     a scope's name to a stub. The row scrolls sideways if it must, as the
+     controls do, and the trail takes the line the lenses left. */
+  .page-lenses:not(:empty) {
+    order: 10;
+    flex: 1 0 100%;
+    min-height: calc(var(--size-control-sm) + var(--spacing-4));
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+
+  .page-lenses::-webkit-scrollbar {
+    display: none;
+  }
+
+  .page-bar:has(> .page-lenses:not(:empty)) > .page-trail {
+    flex: 1 100 0;
+    max-width: none;
+  }
 }
 
 /* ---- An object's tabs (`ObjectTabs` in app/frame/ObjectTabs.tsx) ----------
@@ -1058,27 +859,18 @@ a.user-block-who:focus-visible {
 }
 
 /* ---- The section tabs ----------------------------------------------------
-   A workspace's sections, under the bar, as LINKS: each goes to its own
-   address, so the current one is `aria-current="page"` and is drawn from that
-   attribute — the underline and the primary ink, no hue — and the two cannot
-   come apart. The row never scrolls: the tabs that do not fit fold into the
-   "More" menu at its end (`SectionTabs` in PageHeader.tsx measures which). It
-   is the containing block of the folded ones, which sit at its start, out of
-   the flow and invisible, so they can be measured again when it grows. */
+   A workspace's sections, under the bar, as LINKS: the kit's underline `Tabs`
+   in router mode (`SectionTabs` in PageHeader.tsx), so the tab, its figure,
+   the bar under the current one and the focus ring are the kit's. What is
+   left here is the strip's place under the bar and its fold: the row never
+   scrolls, because the tabs that do not fit fold into the "More" menu at its
+   end, and the folded ones sit at its start, out of the flow and invisible,
+   so they can be measured again when it grows. */
 .section-tabs {
-  position: relative;
-  display: flex;
-  align-items: stretch;
-  gap: var(--spacing-5);
-  min-height: var(--size-control-lg);
   padding: 0 var(--spacing-5);
-  border-bottom: 1px solid var(--color-border-default);
-  overflow: hidden;
 }
 
-.section-tab[data-folded],
-.section-tabs-more[data-folded],
-.section-tabs-note[data-folded] {
+.section-tabs [data-folded] {
   position: absolute;
   inset-block-start: 0;
   inset-inline-start: 0;
@@ -1086,8 +878,8 @@ a.user-block-who:focus-visible {
   pointer-events: none;
 }
 
-/* "More" is the kit's own quiet menu button — the one the page bar's "More"
-   is — centred on the tabs' line. */
+/* "More" is the kit's own quiet menu button (the one the page bar's "More"
+   is), centred on the tabs' line. */
 .section-tabs-more {
   display: inline-flex;
   flex: none;
@@ -1095,7 +887,7 @@ a.user-block-who:focus-visible {
 }
 
 /* A workspace's reading note (`WorkspaceRow.note`), at the row's far end: a
-   sentence about every section, never one of them. It gives way to the tabs —
+   sentence about every section, never one of them. It gives way to the tabs,
    folded whenever the strip has no room for it beside every one of them
    (`noteFits`), which on a phone is always. */
 .section-tabs-note {
@@ -1115,19 +907,16 @@ a.user-block-who:focus-visible {
    overlay: it fades whatever is under it on every ground, in both themes, with
    no colour of its own to keep in step with the surface. */
 .page-controls[data-more-end],
-.work-tabs-group[data-more-end],
 .work-bar-run[data-more-end] {
   mask-image: linear-gradient(to right, #000 calc(100% - var(--spacing-8)), transparent);
 }
 
 .page-controls[data-more-start],
-.work-tabs-group[data-more-start],
 .work-bar-run[data-more-start] {
   mask-image: linear-gradient(to left, #000 calc(100% - var(--spacing-8)), transparent);
 }
 
 .page-controls[data-more-start][data-more-end],
-.work-tabs-group[data-more-start][data-more-end],
 .work-bar-run[data-more-start][data-more-end] {
   mask-image: linear-gradient(
     to right,
@@ -1136,43 +925,6 @@ a.user-block-who:focus-visible {
     #000 calc(100% - var(--spacing-8)),
     transparent
   );
-}
-
-.section-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  flex: none;
-  padding: 0 2px;
-  border-bottom: 2px solid transparent;
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-  text-decoration: none;
-  white-space: nowrap;
-}
-
-.section-tab:hover {
-  color: var(--color-text-primary);
-}
-
-/* A section's figure: the tertiary step whatever the tab's own ink, so the
-   current tab's name lifts and its number does not. */
-.section-tab-count {
-  color: var(--color-text-tertiary);
-  font-weight: var(--font-weight-regular);
-}
-
-.section-tab[aria-current="page"] {
-  color: var(--color-text-primary);
-  border-bottom-color: var(--color-text-primary);
-}
-
-/* INSIDE ITS OWN BOX, because the row clips at its edges and an outset ring on
-   the first tab would be cut there. */
-.section-tab:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: var(--size-focus-ring-inset-offset);
 }
 
 /* ---- The Settings column and the Knowledge tree ---------------------------
@@ -1262,156 +1014,10 @@ a.user-block-who:focus-visible {
   min-height: 24px;
 }
 
-/* ---- The object header -------------------------------------------------- */
-
-.object-head {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  padding: var(--spacing-4) 0 var(--spacing-3);
-}
-
-.object-head.peek {
-  padding: var(--spacing-3) 0 var(--spacing-2);
-}
-
-.object-eyebrow {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  font-size: var(--font-size-2xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--color-text-tertiary);
-}
-
-.object-id {
-  text-transform: none;
-  letter-spacing: 0;
-}
-
-/* THE RECIPE IS `.clamp`'s, worn in the markup — see ObjectHeader.tsx for why
-   a heading needs one at all. Written out here it would be the second copy of
-   a five-declaration rule that does nothing if any one of them is missing,
-   which is what `styles/text.test.ts` exists to refuse. */
-.object-title {
-  font-size: var(--font-size-xl);
-  font-weight: var(--font-weight-semibold);
-  margin: 0;
-  min-width: 0;
-}
-
-.object-head.peek .object-title {
-  font-size: var(--font-size-lg);
-}
-
-/* THE OBJECT'S STATE, BESIDE ITS NAME — and it keeps its width. These are
-   pills carrying a word each: "13 problems" squeezed to "13 pro…" is a mark
-   that says something else, and "middle not shown" cut anywhere is a mark
-   that says nothing. The HEADING is what gives way in this row, which is what
-   `.object-title` wears `.clamp` for. */
-.object-status {
-  flex: 0 0 auto;
-}
-
-/* THE TRACK FLOOR IS 7.5rem, which is what fits a turn's seven facts on one
-   line at 1280: the fact line there is 984px, and seven 8rem tracks with
-   their six gaps needed 992 — so "Wall clock" took a row of its own on the
-   laptop width this product is designed at. 120px still holds every fact's
-   label and a two-line value. */
-.fact-line {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(7.5rem, 100%), 1fr));
-  column-gap: var(--spacing-4);
-  row-gap: var(--spacing-3);
-  padding-top: var(--spacing-1);
-}
-
-/* TWO BANDS: the label, and the value with its footnotes under it. The
-   labels sit on one line across the row and every value's first line on the
-   next; a note stays under its own value (`.fact-body`) rather than on a band
-   of notes a neighbour's two-line value could push away from it. */
-.fact {
-  display: grid;
-  grid-template-rows: subgrid;
-  grid-row: span 2;
-  row-gap: 0;
-  min-width: 0;
-}
-
-.fact-body {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.fact-label {
-  font-size: var(--font-size-2xs);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--color-text-tertiary);
-}
-
-.fact-value {
-  font-size: var(--font-size-compact);
-  color: var(--color-text-primary);
-}
-
-/* A LINKED FACT WRAPS WITH ITS CLAMP. `.t-link` never wraps (it is written for
-   a link in a row), and inside the two-line clamp that made a linked value one
-   line cut at the track's edge with no ellipsis: "Unit: Leadership › Execut".
-   The clamp is the fact's, so the link inside it wraps like any other text. */
-.fact-value .t-link {
-  white-space: normal;
-}
-
-/* A SET OF CHIPS (`Fact.set`) takes the same two tracks, so a node's three
-   roles sit on one line; it wraps between chips where two are too narrow.
-
-   ONE TOKEN, ONE LINE (`Fact.token`): two tracks, never wrapped, and cut with
-   an ellipsis only where two tracks are still too narrow — its title carries
-   the whole of it. The link inside keeps the line too, which is the opposite
-   of the rule above and the point: an id is not prose. */
-.fact.is-token,
-.fact.is-set {
-  grid-column: span 2;
-}
-.fact-token {
-  display: block;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.fact-token .t-link {
-  white-space: nowrap;
-}
-
-/* A FOOTNOTE MAY NOT SET ITS COLUMN'S WIDTH, and the grid above is what makes
-   that structural rather than capped. `.fact` was a column flex box, so it was
-   as wide as its widest child — and a note is prose where the value above it
-   is a word. Measured on a page header: `v1` under a 146px "set by Agent CEO ·
-   2m ago" and `2m ago` under a 153px "any change, not only a save", beside
-   three note-less facts at 66 to 75px. The gaps between the five labels then
-   ran 85, 162, 90, 169, which reads as five columns placed at random rather
-   than as one row of facts.
-
-   The cap that used to answer it was `max-width: 16ch`, and it could only ever
-   narrow the problem: sixteen characters at `--font-size-2xs` is still wider than
-   most values, so a footnote went on setting its column and the pitch went on
-   being irregular. The column is a grid track now and the note wraps inside
-   whatever it is, so there is nothing left to cap.
-
-   `balance` stays, because it is what makes the wrap look deliberate rather
-   than broken — a hard cut left "2m ago" and "a save" alone on a second line,
-   and an orphan reads as a fault. It is ignored where it is not implemented,
-   which costs nothing now that the track does the bounding. */
-.fact-note,
-.fact-setby {
-  font-size: var(--font-size-2xs);
-  color: var(--color-text-tertiary);
-  text-wrap: balance;
-}
+/* ---- The object header --------------------------------------------------
+   `@crewlethq/ui`'s ObjectHeader and FactLine draw it, and their stylesheet
+   holds the rules: the eyebrow, the two-line title, the fact line's 7.5rem
+   track floor and its two bands. */
 
 /* ---- The detail rail ---------------------------------------------------- */
 
@@ -1530,12 +1136,22 @@ a.user-block-who:focus-visible {
 }
 
 /* A CARD'S BODY (`flush`): the card is the frame, so the grid draws none of
-   its own — one rule parts it from the card's head above. */
-.grid-wrap[data-flush] {
+   its own, and one rule parts it from the card's head above. AND EVERY GRID
+   INSIDE A CARD IS ONE, told or not: a bordered grid a pixel inside a card's
+   border was a table inset in the frame the card already is, and it was on
+   fifteen pages because each had to remember the prop. */
+.grid-wrap[data-flush],
+.crewlet-card .grid-wrap {
   border: 0;
   border-top: 1px solid var(--color-border-default);
   border-radius: 0;
   background: transparent;
+}
+/* UNDER THE KIT'S CARD HEADER, THE HEADER'S RULE IS THAT ONE. The header
+   draws a rule beneath itself, and the grid's own stood a pixel under it: two
+   lines where the card has one edge between its head and its body. */
+.crewlet-card__header + .grid-wrap {
+  border-top: 0;
 }
 
 /* A FULL-WIDTH BAND BY DEFAULT — the head, the body, the footer, the column
@@ -1593,6 +1209,10 @@ a.user-block-who:focus-visible {
   gap: 4px;
   padding: var(--spacing-2) var(--spacing-3);
   font-size: var(--font-size-2xs);
+  /* THE LIST TABLE'S HEAD, 11/500 uppercase as every other list table draws
+     it (the kit's DataTable): at 400 the tracked capitals read lighter than
+     the cells under them. */
+  font-weight: var(--font-weight-medium);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--color-text-tertiary);
@@ -1849,70 +1469,6 @@ a.user-block-who:focus-visible {
   cursor: pointer;
 }
 
-/* ---- Cells -------------------------------------------------------------- */
-
-.cell-date {
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-}
-
-.cell-seat {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  min-width: 0;
-  color: inherit;
-}
-
-/* A NO-OP UNTIL NOW, and nothing could see it: `.cell-seat` takes `color:
-   inherit` and a grid row's colour IS `--color-text-primary`, so "hover moves it to
-   `--color-text-primary`" moved it nowhere, and what actually answered the pointer was the
-   baseline's hover underline that this application never wanted. With that
-   reset, hovering a seat name changed nothing at all.
-
-   The step is the other direction here, and it has to be: the rungs move a
-   link TOWARD `--color-text-primary` when it starts at the accent ink, and this register
-   deliberately starts at `--color-text-primary` so a grid of seat names does not read as a
-   page of links. Onto the accent's one text rung is the same move in reverse,
-   and it says what the row's own wash cannot — that this NAME is the link
-   rather than the row. `.wl-who` in screens.css is the same object and takes
-   the same answer.
-
-   ONLY WHERE THE NAME IS THE LINK: `SeatLabel` wears the same class inside a
-   row that is itself the link, and an accent there would say the name goes
-   somewhere the row does not. */
-a.cell-seat:hover {
-  color: var(--color-brand-accent-ink);
-}
-
-.cell-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.cell-glyph {
-  font-size: var(--font-size-xs);
-  line-height: 1;
-}
-
-.cell-status.positive .cell-glyph {
-  color: var(--color-feedback-success);
-}
-.cell-status.caution .cell-glyph {
-  color: var(--color-feedback-warning);
-}
-.cell-status.critical .cell-glyph {
-  color: var(--color-feedback-danger);
-}
-.cell-status.info .cell-glyph {
-  color: var(--color-feedback-info);
-}
-.cell-status.neutral .cell-glyph {
-  color: var(--color-text-muted);
-}
-
 /* ---- The page's own one-line explanation --------------------------------- */
 
 /* NO WORD ALONE ON THE LAST LINE: at the measure, Secrets' note broke to a
@@ -1925,6 +1481,15 @@ a.cell-seat:hover {
   color: var(--color-text-tertiary);
   max-width: var(--size-measure);
   text-wrap: pretty;
+}
+/* A PAGE'S LEDE IN A COLUMN THAT SETS ITS OWN RHYTHM keeps no margin of its
+   own: the screen's content and a Settings section are flex columns with a
+   gap, and the lede's 12px on top of it stood the first card 32px under the
+   lede while every other block on the page was 20px apart. */
+.app .crewlet-app-shell__content > .page-note,
+.section-body > .page-note,
+.col > .page-note {
+  margin-bottom: 0;
 }
 
 /* ---- An object's own facts ------------------------------------------------
@@ -1963,8 +1528,8 @@ a.cell-seat:hover {
   min-width: 0;
   overflow-wrap: anywhere;
 }
-/* A LINKED VALUE WRAPS WITH ITS CELL, as a linked fact does (`.fact-value
-   .t-link` above): `.t-link` never wraps, being written for a link in a row,
+/* A LINKED VALUE WRAPS WITH ITS CELL, as a linked fact in a header does:
+   `.t-link` never wraps, being written for a link in a row,
    so a turn id linked from a run's properties ran past the card's edge at
    phone width instead of breaking where `overflow-wrap` lets it. */
 .props > dd .t-link {
@@ -2020,27 +1585,6 @@ a.cell-seat:hover {
   margin-top: 2px;
   font-size: var(--font-size-2xs);
   color: var(--color-text-tertiary);
-}
-
-/* THE `turn ↗` LINK IS ONE TOKEN, in the fact line and in the rail alike —
-   both render [SetByLine], so this is one rule rather than two that drift.
-
-   THE ARROW WAS ON A LINE OF ITS OWN, at every width, and no `white-space`
-   could have stopped it: `.t-link` already carries `nowrap`, and what breaks
-   here is not a wrap. `base.css` gives every `svg` `display: block` — right,
-   because the product's glyphs are overwhelmingly flex items and that is what
-   removes the inline baseline gap — and a BLOCK box inside an inline box
-   splits the inline box around it (CSS 2.1 § 9.2.1.1), so the anchor was cut
-   in two and the glyph took the second half. An inline-flex anchor has a
-   formatting context of its own, so the word and the arrow are one atomic
-   box that cannot be split or wrapped between. `align-items: center` is the
-   product's own convention for a glyph beside a word (`.work-type`,
-   `.work-prio`, uilet's own buttons), and the gap is in `em` so it tracks the
-   line's type step rather than the spacing scale, which is about layout. */
-.setby-turn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25em;
 }
 
 /* ---- The log's time axis --------------------------------------------------
@@ -2183,7 +1727,7 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
    COUNTS OF is said beside them — over the loaded page or over the whole
    window, which the rail's own `over` decides — and only where a number is
    actually drawn: a caption about numbers that are not on screen qualifies
-   nothing. A dimension with nothing to count is a `.segmented`, not this.
+   nothing. A dimension with nothing to count is a SegmentedControl, not this.
    See ui/FacetRail.tsx. */
 
 .facet-row {
@@ -2212,37 +1756,15 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
    width at which a layout goes single-pane. The navigation needs nothing
    here: below `breakpoint.shell` the sidebar is already the kit's drawer, and
    the sheet the whole window. What changes at a phone's width is the grid. */
-@media (width < 640px) {
-  /* A PHONE KEEPS THE PALETTE'S KEYS ON ONE LINE: the mode pill and the
-     scope note are what its band can lose without losing a key — the tabs
-     already say the scope, and the mode is a property of the answer, which
-     still reads — and so is the ask chord, which a phone has no keyboard to
-     press (its row is still a row, pressed like any other). */
-  .palette-scope-note,
-  .palette-mode,
-  .palette-keys > .palette-keys-chord {
-    display: none;
-  }
-  /* AND ITS SOURCES WRAP: four chips on one 326px line are four numbers and
-     an ellipsis each. The one-line rule is for the first screen of a desktop
-     window, where the actions under the answer have to stay in view; a
-     phone scrolls to them in any case. */
-  .palette-answer-sources {
-    flex-wrap: wrap;
-  }
-
-  /* The bar's inset tightens to the sheet's own phone inset, so the trail
-     starts where the screen's content does. */
-  .app .page-bar {
-    padding-inline: var(--spacing-3);
-  }
-
-  .section-tabs {
-    padding-inline: var(--spacing-3);
-  }
-
+/* ---- Settings' column folds where its section would be too narrow -------
+   Below `SECTION_COLUMN_MIN` (app/layout.ts: the sidebar, the sheet, the
+   column and a section floor of 720px) the column beside the section left
+   it 489px at 1024: the Audit log's columns were drawn 46px wide and the stat
+   tiles cut their figures. So the column folds to the one-row picker the
+   phone draws, and the section takes the screen's width. */
+@media (width < 1212px) {
   /* ONE PANE: the Settings column stacks above the section rather than
-     taking a third of the phone beside it.
+     taking a third of a narrow window beside it.
 
      AND THE SECTION TAKES WHAT IS LEFT. The frame is at least the view's
      height, and two `auto` rows split a short section's spare height between
@@ -2269,8 +1791,11 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
   /* FOLDED TO ONE ROW, which names where the reader is. Stacked whole, the
      Settings column pushed every section's own content about 520px down —
      below the fold on Nodes and Secrets. */
+  /* ON THE SECTION'S OWN GUTTER, so the toggle starts where the section's
+     content does: the screen padding beside a folded column, the phone's
+     16px below the phone breakpoint. */
   .section-picker {
-    padding: var(--spacing-2) var(--spacing-3);
+    padding: var(--spacing-2) var(--spacing-5);
   }
   .section-picker-toggle {
     display: flex;
@@ -2278,7 +1803,9 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
     gap: var(--spacing-2);
     width: 100%;
     min-height: var(--size-target-min);
-    padding: 0 var(--spacing-2);
+    /* THE ROWS' OWN INSET, less the toggle's border: the toggle's glyph and
+       name stand over the glyphs and names of the list it unfolds. */
+    padding: 0 calc(var(--size-nav-row-pad) - 1px);
     border: 1px solid var(--color-border-default);
     border-radius: var(--radius-sm);
     background: var(--color-surface-elevated);
@@ -2298,6 +1825,13 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* "Section ·" BEFORE THE NAME, in the quiet ink: the row read "General"
+     alone, which a reader takes for the page's title rather than for a
+     control holding the other sections. */
+  .section-picker-prefix {
+    color: var(--color-text-tertiary);
+    font-weight: var(--font-weight-regular);
+  }
   .section-picker-chevron {
     flex: none;
     color: var(--color-text-tertiary);
@@ -2311,9 +1845,44 @@ button.histogram-bar[data-empty]:focus-visible > .histogram-fill {
   .section-picker[data-open] .section-picker-list {
     padding-top: var(--spacing-2);
   }
+  /* THE LIST TAKES NO GUTTER OF ITS OWN inside the picker, which is inset
+     already: with the kit's rail gutter on top, its glyphs and names sat 11px
+     right of the toggle's. */
+  .section-picker-list > .crewlet-sidebar-nav {
+    padding-inline: 0;
+  }
+}
+
+@media (width < 640px) {
+  /* A PHONE KEEPS THE PALETTE'S KEYS ON ONE LINE: the mode pill and the
+     scope note are what its band can lose without losing a key, the tabs
+     already say the scope, and the mode is a property of the answer, which
+     still reads, and so is the ask chord, which a phone has no keyboard to
+     press (its row is still a row, pressed like any other). */
+  .palette-scope-note,
+  .palette-mode,
+  .palette-keys > .palette-keys-chord {
+    display: none;
+  }
+  /* AND ITS SOURCES WRAP: four chips on one 326px line are four numbers and
+     an ellipsis each. The one-line rule is for the first screen of a desktop
+     window, where the actions under the answer have to stay in view; a
+     phone scrolls to them in any case. */
+  .palette-answer-sources {
+    flex-wrap: wrap;
+  }
+
+  /* ONE GUTTER ON A PHONE: the tabs and a Settings section start where
+     every other screen's content does, the kit's 16px. */
+  .section-tabs {
+    padding-inline: var(--spacing-4);
+  }
 
   .section-body {
-    padding: var(--spacing-4) var(--spacing-3) var(--spacing-9);
+    padding: var(--spacing-4) var(--spacing-4) var(--spacing-9);
+  }
+  .section-picker {
+    padding-inline: var(--spacing-4);
   }
 
   /* ---- A ROW IS A CARD ON A PHONE ---------------------------------------

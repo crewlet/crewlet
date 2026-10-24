@@ -339,17 +339,19 @@ jobs:
       # file) is a path the diff cannot see: `git ls-files --others` is the
       # half that catches it, and without `--exclude-standard` because the
       # embed is `all:dashboard`, which ships an ignored file too.
+      # Both trees the build writes: the dashboard, and the artifact tree
+      # (the page runtime and the artifact kit) the third target emits.
       - name: the committed bundle is what this source builds
         run: |
           npm --prefix dashboard run build
-          untracked="$(git ls-files --others -- static/dashboard)"
-          if ! git diff --exit-code -- static/dashboard || [ -n "$untracked" ]; then
-            echo "::error::static/dashboard is not what dashboard/ builds."
+          untracked="$(git ls-files --others -- static/dashboard static/artifacts)"
+          if ! git diff --exit-code -- static/dashboard static/artifacts || [ -n "$untracked" ]; then
+            echo "::error::static/dashboard or static/artifacts is not what dashboard/ builds."
             echo "What a rebuild changed or wrote that the commit does not carry:"
             git status --porcelain --untracked-files=all --ignored=matching \
-              -- static/dashboard | grep -v '^. ' || true
+              -- static/dashboard static/artifacts | grep -v '^. ' || true
             echo "Run:"
-            echo "  make dashboard && git add -A -- static/dashboard"
+            echo "  make dashboard && git add -A -- static/dashboard static/artifacts"
             exit 1
           fi
 
@@ -684,11 +686,12 @@ jobs:
       - *go-caches
       - *gomod-restore
       - *gobuild-restore
-      # `latest` is deliberate, and it is one of the four floating versions
-      # in this repository: the other three are the `node-version: latest` in
-      # the `dashboard` and `end-to-end gates` jobs above and in
-      # dependabot-dashboard.yml's `build` job, each held that way for its own
-      # reason stated at its own line.
+      # `latest` is deliberate, and it is one of the five floating versions
+      # in this repository: the others are the `node-version: latest` in the
+      # `dashboard` and `end-to-end gates` jobs above and in
+      # dependabot-dashboard.yml's `build` job, and goreleaser's `~> v2` in
+      # release.yml, each held that way for its own reason stated at its own
+      # line.
       #
       # Here the reason is that Dependabot bumps the ACTION ref
       # (`golangci-lint-action@v9`) and never a `with:` input, so a pinned
@@ -696,10 +699,10 @@ jobs:
       # pinning rule exists to avoid — and it would hold new checks out of
       # CI until somebody remembered. The cost is that a lint
       # result is not reproducible across time: the linter must also be built
-      # with a Go at least as new as go.mod's `go` line, or it refuses the
-      # module outright, so an older local build reports nothing rather than
-      # disagreeing. Run the gate through `make lint` and match CI by taking
-      # the newest release.
+      # with a Go whose language version (major.minor) is at least go.mod's
+      # `go` line's, or it refuses the module outright, so an older local build
+      # reports nothing rather than disagreeing. Run the gate through
+      # `make lint` and match CI by taking the newest release.
       #
       # The action keeps its own analysis cache (~/.cache/golangci-lint); the
       # build cache above is the go command's, which loading the packages

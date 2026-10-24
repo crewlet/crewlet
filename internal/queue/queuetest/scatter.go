@@ -68,6 +68,70 @@ func (s *suite) runScatter(t *testing.T) {
 		}
 	})
 
+	t.Run("ask_each_hands_a_reply_over_as_it_arrives", func(t *testing.T) {
+		t.Parallel()
+		q := s.start(ctx, t)
+		subject := ns(t) + ".ask"
+		serve(ctx, t, q, subject, echo("fast"))
+		// AN ANSWERER THAT NEVER ANSWERS, so the ask runs its whole
+		// deadline: what this case asks is whether the fast reply was
+		// handed over before that, not whether the ask ended early.
+		serve(ctx, t, q, subject, func(ctx context.Context, _ []byte) ([]byte, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		})
+		deadline, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		started := time.Now()
+		var (
+			got     []string
+			arrived time.Duration
+		)
+		err := q.AskEach(deadline, subject, []byte("q"), func(reply []byte) bool {
+			if got = append(got, string(reply)); len(got) == 1 {
+				arrived = time.Since(started)
+			}
+			return true
+		})
+		if err != nil {
+			t.Fatalf("ask each: %v", err)
+		}
+		if !sameSet(got, []string{"fast:q"}) {
+			t.Fatalf("ask each handed over %v, want the one answer that came", got)
+		}
+		if arrived > time.Second {
+			t.Fatalf("the first reply was handed over %s into a 2s ask: AskEach "+
+				"that collects for the end is Ask under another name", arrived)
+		}
+	})
+
+	t.Run("ask_each_ends_when_each_says_so", func(t *testing.T) {
+		t.Parallel()
+		q := s.start(ctx, t)
+		subject := ns(t) + ".ask"
+		serve(ctx, t, q, subject, echo("first"))
+		serve(ctx, t, q, subject, func(ctx context.Context, _ []byte) ([]byte, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		})
+		deadline, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		started := time.Now()
+		calls := 0
+		if err := q.AskEach(deadline, subject, []byte("q"), func([]byte) bool {
+			calls++
+			return false
+		}); err != nil {
+			t.Fatalf("ask each: %v", err)
+		}
+		if calls != 1 {
+			t.Fatalf("each was called %d times after answering false the first time", calls)
+		}
+		if elapsed := time.Since(started); elapsed > 5*time.Second {
+			t.Fatalf("an ask its caller ended took %s of a 10s deadline", elapsed)
+		}
+	})
+
 	t.Run("a_deadline_returns_what_arrived_and_is_not_an_error", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)

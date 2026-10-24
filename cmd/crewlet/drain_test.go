@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -11,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -35,7 +37,8 @@ import (
 // real SIGTERM to a real process, with a real turn in flight. A signal handler
 // cannot be exercised from inside the process that installed it without
 // taking the test binary with it, so the node runs in a CHILD: the test binary
-// re-executes itself, the child calls [run], and the parent signals it and
+// re-executes itself, the child calls [runEngine] — on the socket the parent
+// reserved for its port ([drainProbeSocketFD]) — and the parent signals it and
 // watches from outside.
 //
 // The turn is held in flight by the model it is waiting on, which answers
@@ -59,7 +62,7 @@ const (
 	// drainProbeToken is the operator credential the child's Tier A
 	// accepts, so a write is refused for draining rather than for having
 	// no token.
-	drainProbeToken = "drain-probe-token"
+	drainProbeToken = "drain-probe-token-long-enough"
 
 	// drainProbeSecret is a well-formed Standard-Webhooks key, the only
 	// shape the GitLab route verifies with.
@@ -91,6 +94,17 @@ const (
 // read below returns EOF.
 const parentDeathFD = 3
 
+// drainProbeSocketFD is the listening socket the parent reserved for the
+// node's api.port, inherited by the child as its second extra descriptor.
+//
+// HANDED OVER rather than found free and bound again, for [reservePort]'s
+// reason — and a child is where that matters most: it starts a whole process,
+// loads its Tier A and resolves its node before its bind, and a port the parent
+// had let go is one the rest of the suite can take in that time. The parent
+// closes its own copy once the child has started, so the socket is the node's
+// alone and closes when the node closes it.
+const drainProbeSocketFD = 4
+
 // exitWithTheParent ends this process the moment the parent's pipe closes.
 func exitWithTheParent() {
 	pipe := os.NewFile(parentDeathFD, "parent-death")
@@ -108,7 +122,8 @@ func exitWithTheParent() {
 	}()
 }
 
-// runDrainProbe is the child. It never returns.
+// runDrainProbe is the child of every case here that runs `crewlet run` in a
+// process of its own ([startNodeChild]). It never returns.
 func runDrainProbe() {
 	exitWithTheParent()
 	// THE PROCESS'S OWN SINK, on stderr, because the parent reads the order
@@ -120,7 +135,29 @@ func runDrainProbe() {
 		fmt.Fprintln(os.Stderr, "probe: args:", err)
 		os.Exit(3)
 	}
-	if err := run(append([]string{"run"}, args...), os.Stdout, os.Stderr); err != nil {
+	inherited := os.NewFile(drainProbeSocketFD, "api-socket")
+	socket, err := net.FileListener(inherited)
+	// The listener holds a copy of its own, and this descriptor left open
+	// would keep the socket listening after the node's stop closed it.
+	_ = inherited.Close()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "probe: no api socket on fd", drainProbeSocketFD, err)
+		os.Exit(8)
+	}
+	// THE ONE BIND THE NODE MAKES THERE is handed the inherited socket; any
+	// other address is bound as the binary binds it.
+	var once sync.Once
+	bind := func(ctx context.Context, addr string) (net.Listener, error) {
+		handed := false
+		if addr == socket.Addr().String() {
+			once.Do(func() { handed = true })
+		}
+		if handed {
+			return socket, nil
+		}
+		return bindTCP(ctx, addr)
+	}
+	if err := runEngine(args, os.Stderr, bind); err != nil {
 		fmt.Fprintln(os.Stderr, "probe: run:", err)
 		os.Exit(4)
 	}
@@ -134,24 +171,39 @@ func TestASignalledNodeDrainsWithItsProbesUp(t *testing.T) {
 	client := drainProbeClient(t)
 	model := newHeldModel(t)
 	forge := newAccountForge(t)
-	port := freePort(t)
+	// THE NODE'S PORT, HELD: see [drainProbeSocketFD].
+	port, socket := reserveNodeSocket(t)
 	base := "http://127.0.0.1:" + strconv.Itoa(port)
 
 	dir := t.TempDir()
+	// THE KEYRING IS PART OF A RUNNABLE TIER A, and this case is the only
+	// one in the tree that starts a node from a real file in a real
+	// process: every record on every state log is signed under it, so a
+	// document without one is a node that refuses to boot rather than a
+	// node with one feature off.
 	boot := writeFile(t, dir, "crewlet.yaml", fmt.Sprintf(`node:
   id: drain-probe
 store:
   path: %s
 stream:
   store_dir: %s
+secrets:
+  active_key_id: drain-probe
+  keys:
+    - id: drain-probe
+      material: %s
 api:
   host: 127.0.0.1
   port: %d
+  external_url: "http://127.0.0.1:%d"
   auth:
+    admin: serve
     tokens:
       - id: founder
         token: %s
-`, filepath.Join(dir, "crewlet.db"), filepath.Join(dir, "stream"), port, drainProbeToken))
+        grants: [admin]
+`, filepath.Join(dir, "crewlet.db"), filepath.Join(dir, "stream"),
+		testKeyMaterial(t), port, port, drainProbeToken))
 	company := writeFile(t, dir, "company.yaml", fmt.Sprintf(`name: Acme
 providers:
   llm:
@@ -177,62 +229,15 @@ turn_engine:
   max_tool_rounds: 3
 `, model.url, forge.URL, drainProbeSecret))
 
-	args, err := json.Marshal([]string{"-config", boot, "-company", company, "-log-format", "json"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	child := exec.CommandContext(t.Context(), os.Args[0],
-		"-test.run=^TestASignalledNodeDrainsWithItsProbesUp$")
-	child.Env = append(os.Environ(),
-		drainProbeEnv+"=1",
-		drainProbeArgsEnv+"="+string(args),
+	node := startNodeChild(t, "TestASignalledNodeDrainsWithItsProbesUp", socket,
+		[]string{"-config", boot, "-company", company, "-log-format", "json"},
 		"CREWLET_DRAIN_PROBE_KEY="+drainProbeKey)
-	var output lockedBuffer
-	child.Stdout, child.Stderr = &output, &output
-	// THE PARENT-DEATH PIPE. See [parentDeathFD]: the child reads this end
-	// and exits on EOF, which the kernel produces the moment this process
-	// dies, including the ways that run no cleanup.
-	death, hold, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("parent-death pipe: %v", err)
-	}
-	child.ExtraFiles = []*os.File{death}
-	// A BOUND ON Wait, so a grandchild holding the inherited output pipe
-	// cannot make the reaping goroutine block for ever.
-	child.WaitDelay = 5 * time.Second
-	if err := child.Start(); err != nil {
-		_ = death.Close()
-		_ = hold.Close()
-		t.Fatalf("starting the node: %v", err)
-	}
-	// THIS COPY IS THE CHILD'S NOW. The write end stays open for as long as
-	// this process lives, which is the whole mechanism.
-	_ = death.Close()
-	t.Cleanup(func() { _ = hold.Close() })
-	exited := make(chan struct{})
-	var waitErr error
-	go func() {
-		defer close(exited)
-		waitErr = child.Wait()
-	}()
-	// On every path out, so a failed assertion cannot leave a node running
-	// or the model holding a request the node is waiting on.
-	t.Cleanup(func() {
-		model.letGo()
-		_ = child.Process.Kill()
-		<-exited
-		if t.Failed() {
-			t.Logf("the node's output:\n%s", output.String())
-		}
-	})
-	alive := func() bool {
-		select {
-		case <-exited:
-			return false
-		default:
-			return true
-		}
-	}
+	// The model lets go of its held request BEFORE the child is killed —
+	// registered after the child's own cleanup, so LIFO runs it first — or
+	// the node's teardown waits on a request the model is still holding.
+	t.Cleanup(model.letGo)
+	alive := node.alive
+	output := node.output
 
 	// UP, with the seat claimed. Readiness first, because a probe is what
 	// an orchestrator gates traffic on; the seat second, because a delivery
@@ -255,7 +260,7 @@ turn_engine:
 	}
 	select {
 	case <-model.entered:
-	case <-exited:
+	case <-node.exited:
 		t.Fatal("the node exited before its turn reached the model")
 	case <-time.After(drainProbeBudget):
 		t.Fatal("the turn never reached the model")
@@ -266,7 +271,7 @@ turn_engine:
 		return inFlight >= 1
 	})
 
-	if err := child.Process.Signal(syscall.SIGTERM); err != nil {
+	if err := node.cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatalf("signalling the node: %v", err)
 	}
 
@@ -306,8 +311,9 @@ turn_engine:
 	if status, code := write(t, client, base+"/config"); status != http.StatusServiceUnavailable || code != "draining" {
 		t.Errorf("PUT /config answered %d %q mid-drain, want 503 draining", status, code)
 	}
-	// And a read is still a read.
-	if status, _ := probe(client, base+"/agents"); status != http.StatusOK {
+	// And a read is still a read — presenting the credential every
+	// guarded route now needs.
+	if status, _ := probeAs(client, base+"/agents", drainProbeToken); status != http.StatusOK {
 		t.Errorf("GET /agents answered %d mid-drain, want 200", status)
 	}
 	if !alive() {
@@ -317,15 +323,11 @@ turn_engine:
 	// THE TURN FINISHES, and only then does the node go.
 	model.letGo()
 	select {
-	case <-exited:
+	case <-node.exited:
 	case <-time.After(drainProbeBudget):
 		t.Fatal("the node did not exit once its turn finished")
 	}
-	var exit *exec.ExitError
-	if !errors.As(waitErr, &exit) || exit.ExitCode() != drainProbeExit {
-		t.Fatalf("the node ended with %v, want run() to return and the probe to exit %d",
-			waitErr, drainProbeExit)
-	}
+	node.exitedWith(t, drainProbeExit)
 
 	// THE LISTENER CLOSED AFTER THE DRAIN AND BEFORE THE TEARDOWN: after,
 	// because the probes above were served while the turn ran; before,
@@ -334,6 +336,123 @@ turn_engine:
 	if !slices.IsSorted(order) || slices.Contains(order, -1) {
 		t.Errorf("the shutdown ran out of order: engine_draining, drain_complete, "+
 			"api_stopped and engine_stopped logged at lines %v", order)
+	}
+}
+
+// reserveNodeSocket holds a loopback port for a node run in a child process,
+// and returns it and the listening socket's descriptor to hand the child as
+// [drainProbeSocketFD]. See there for why the socket is handed over rather
+// than the port found free and bound again.
+func reserveNodeSocket(t *testing.T) (int, *os.File) {
+	t.Helper()
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve the node's port: %v", err)
+	}
+	//nolint:errcheck // Listen on a TCP address always yields *TCPAddr.
+	port := held.Addr().(*net.TCPAddr).Port
+	//nolint:errcheck // Listen on "tcp" always yields a *TCPListener.
+	socket, err := held.(*net.TCPListener).File()
+	// The copy is the socket now; this listener's descriptor is not needed.
+	_ = held.Close()
+	if err != nil {
+		t.Fatalf("the reserved socket's descriptor: %v", err)
+	}
+	t.Cleanup(func() { _ = socket.Close() })
+	return port, socket
+}
+
+// nodeChild is `crewlet run` running in a child process ([runDrainProbe]), on
+// the socket the parent reserved for its api.port.
+type nodeChild struct {
+	cmd    *exec.Cmd
+	output *lockedBuffer
+	// exited closes once the child has been reaped; waitErr is its exit,
+	// and is read only after that.
+	exited  chan struct{}
+	waitErr error
+}
+
+// startNodeChild starts `crewlet run args` in a child, serving on socket, with
+// env added to this process's environment. run names the case, for the
+// child's command line: TestMain dispatches the child before any case runs,
+// so it selects nothing, and is there for whoever reads a process listing.
+//
+// ON EVERY PATH OUT the child is killed and reaped, and its output logged when
+// the case failed. A case holding something the child's teardown waits on
+// lets it go in a cleanup registered AFTER this call, which LIFO runs first.
+func startNodeChild(t *testing.T, run string, socket *os.File, args []string,
+	env ...string,
+) *nodeChild {
+	t.Helper()
+	encoded, err := json.Marshal(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^"+run+"$")
+	cmd.Env = append(append(os.Environ(),
+		drainProbeEnv+"=1",
+		drainProbeArgsEnv+"="+string(encoded)), env...)
+	node := &nodeChild{cmd: cmd, output: &lockedBuffer{}, exited: make(chan struct{})}
+	cmd.Stdout, cmd.Stderr = node.output, node.output
+	// THE PARENT-DEATH PIPE. See [parentDeathFD]: the child reads this end
+	// and exits on EOF, which the kernel produces the moment this process
+	// dies, including the ways that run no cleanup.
+	death, hold, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("parent-death pipe: %v", err)
+	}
+	// fd 3 and fd 4 in the child: [parentDeathFD], [drainProbeSocketFD].
+	cmd.ExtraFiles = []*os.File{death, socket}
+	// A BOUND ON Wait, so a grandchild holding the inherited output pipe
+	// cannot make the reaping goroutine block for ever.
+	cmd.WaitDelay = 5 * time.Second
+	if err := cmd.Start(); err != nil {
+		_ = death.Close()
+		_ = hold.Close()
+		t.Fatalf("starting the node: %v", err)
+	}
+	// THIS COPY IS THE CHILD'S NOW. The write end stays open for as long as
+	// this process lives, which is the whole mechanism.
+	_ = death.Close()
+	t.Cleanup(func() { _ = hold.Close() })
+	// AND SO IS THE SOCKET, which must close when the node closes it: a
+	// copy left open here would keep accepting connections nobody serves
+	// once the node has gone, where its stop leaves them refused.
+	_ = socket.Close()
+	go func() {
+		defer close(node.exited)
+		node.waitErr = cmd.Wait()
+	}()
+	// On every path out, so a failed assertion cannot leave a node running.
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		<-node.exited
+		if t.Failed() {
+			t.Logf("the node's output:\n%s", node.output.String())
+		}
+	})
+	return node
+}
+
+// alive reports whether the child is still running.
+func (n *nodeChild) alive() bool {
+	select {
+	case <-n.exited:
+		return false
+	default:
+		return true
+	}
+}
+
+// exitedWith fails the case unless the child, which has exited, ended with
+// code: [drainProbeExit] is run() returning nil.
+func (n *nodeChild) exitedWith(t *testing.T, code int) {
+	t.Helper()
+	var exit *exec.ExitError
+	if !errors.As(n.waitErr, &exit) || exit.ExitCode() != code {
+		t.Fatalf("the node ended with %v, want run() to return and the probe to exit %d",
+			n.waitErr, code)
 	}
 }
 
@@ -482,6 +601,26 @@ const refused = -1
 //
 // The timeout is well past anything a request here takes, because one that
 // timed out on a loaded machine must not read as a listener that went away.
+// probeAs is [probe] presenting a bearer token, for a guarded route.
+func probeAs(client *http.Client, url, token string) (int, map[string]any) {
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if err != nil {
+		return 0, nil
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	res, err := client.Do(req)
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return refused, nil
+	}
+	if err != nil {
+		return 0, nil
+	}
+	defer func() { _ = res.Body.Close() }()
+	var body map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&body)
+	return res.StatusCode, body
+}
+
 func drainProbeClient(t *testing.T) *http.Client {
 	t.Helper()
 	client := httpxtest.Pool(t)
@@ -491,6 +630,9 @@ func drainProbeClient(t *testing.T) *http.Client {
 
 // probe GETs a URL once and returns its status and decoded body. Zero is a
 // request that got no answer, and [refused] one whose connection was refused.
+//
+// NO CREDENTIAL, because every path it is pointed at is an exempt one — the
+// probes and the dashboard shell. A guarded route needs [probeAs].
 func probe(client *http.Client, url string) (int, map[string]any) {
 	res, err := client.Get(url) //nolint:noctx // a probe against the child's own listener
 	if errors.Is(err, syscall.ECONNREFUSED) {

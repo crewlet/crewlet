@@ -95,11 +95,19 @@ func TestACreateIntoAnArchivedProjectMovesNoCounter(t *testing.T) {
 // A REQUIRED FIELD IS REQUIRED ON A TASK AND NOT ON A SUBTASK.
 //
 // ClickUp ships two toggles and so does this, and the default that matters is
-// the second: one required field on a project would otherwise block every
-// checklist item anybody promotes into a subtask.
+// the second: one required field on a project would otherwise be a form to
+// fill for every step somebody breaks a task into.
 func TestARequiredFieldDoesNotBlockASubtask(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
+	// THE PARENT EXISTS FIRST, filed before the policy that would refuse it
+	// landed: a subtask is filed under a real parent in its own project,
+	// and one naming a parent this node does not hold is refused as such.
+	if _, err := r.writer.CreateTask(t.Context(), "op-parent",
+		newTask("t-parent"), nil); err != nil {
+		t.Fatalf("CreateTask parent: %v", err)
+	}
+	r.drain()
 	requireAField(t, r)
 
 	if _, err := r.writer.CreateTask(t.Context(), "op-1", newTask("t-1"), nil); err == nil {
@@ -114,102 +122,8 @@ func TestARequiredFieldDoesNotBlockASubtask(t *testing.T) {
 	subtask.Parent = &parent
 	if _, err := r.writer.CreateTask(t.Context(), "op-2", subtask, nil); err != nil {
 		t.Fatalf("a SUBTASK missing the same field was refused: %v — the "+
-			"subtask toggle defaults off precisely so a promotion is not "+
-			"blocked by its project's own policy", err)
-	}
-}
-
-// A PROMOTED ITEM IS A SUBTASK WITH A KEY, AND ITS PARENT IS MARKED LAST.
-//
-// The order is the point: marking the parent first leaves a struck-through
-// line pointing at a subtask that does not exist, which no reader can tell
-// from one somebody purged.
-func TestAPromotedItemIsASubtaskAndItsParentPointsAtIt(t *testing.T) {
-	t.Parallel()
-	r := newRoundTrip(t)
-	parent := newTask("t-1")
-	parent.Checklists = []tracker.Checklist{{
-		ID: "l-1", Name: "steps",
-		Items: []tracker.ChecklistItem{{ID: "i-1", Name: "wire it"}},
-	}}
-	if _, err := r.writer.CreateTask(t.Context(), "op-1", parent, nil); err != nil {
-		t.Fatalf("CreateTask: %v", err)
-	}
-	r.drain()
-
-	subtask := newTask("t-2")
-	subtask.Title = "wire it"
-	result, err := r.writer.PromoteItem(t.Context(), "op-2", "t-1", "i-1", subtask, nil)
-	if err != nil {
-		t.Fatalf("PromoteItem: %v", err)
-	}
-	if result.Key != "ENG-2" {
-		t.Fatalf("the promotion minted key %q, and a promoted item is a "+
-			"subtask with a key exactly as a create is", result.Key)
-	}
-	r.drain()
-
-	stored := taskOf(t, r, "t-1")
-	if len(stored.Checklists) != 1 || len(stored.Checklists[0].Items) != 1 {
-		t.Fatalf("the parent's checklist is %+v", stored.Checklists)
-	}
-	item := stored.Checklists[0].Items[0]
-	if item.PromotedTo == nil || *item.PromotedTo != "t-2" {
-		t.Fatalf("the item points at %v, not at the subtask it became — the "+
-			"line is kept and struck through rather than deleted, which is "+
-			"what records that this line became that task", item.PromotedTo)
-	}
-	child := taskOf(t, r, "t-2")
-	if child.Parent == nil || *child.Parent != "t-1" {
-		t.Fatalf("the subtask's parent is %v, want t-1", child.Parent)
-	}
-}
-
-// A RE-RUN OF A PROMOTION COMPLETES IT RATHER THAN DUPLICATING IT.
-//
-// The subtask's id is derived from the item, so the create is refused on its
-// own guarding row and the retry proceeds to the parent commit the first
-// attempt did not reach. Without that, the interrupted promotion's repair
-// would be a second subtask.
-func TestARerunPromotionMarksTheParentItDidNotReach(t *testing.T) {
-	t.Parallel()
-	r := newRoundTrip(t)
-	parent := newTask("t-1")
-	parent.Checklists = []tracker.Checklist{{
-		ID: "l-1", Name: "steps",
-		Items: []tracker.ChecklistItem{{ID: "i-1", Name: "wire it"}},
-	}}
-	if _, err := r.writer.CreateTask(t.Context(), "op-1", parent, nil); err != nil {
-		t.Fatalf("CreateTask: %v", err)
-	}
-	r.drain()
-
-	subtask := newTask("t-2")
-	first, err := r.writer.PromoteItem(t.Context(), "op-2", "t-1", "i-1", subtask, nil)
-	if err != nil {
-		t.Fatalf("PromoteItem: %v", err)
-	}
-	r.drain()
-	// THE SAME PROMOTION AGAIN, which is what a re-run after a crash
-	// between the subtask and the parent commit does.
-	rerun, err := r.writer.PromoteItem(t.Context(), "op-3", "t-1", "i-1", subtask, nil)
-	if err != nil {
-		t.Fatalf("the re-run: %v", err)
-	}
-	r.drain()
-	// ANSWERED WITH THE SUBTASK IT ALREADY FILED, under the key that one
-	// took — not the number the re-run's own mint spent, which is a key no
-	// task holds.
-	if rerun.Key != first.Key {
-		t.Errorf("the re-run answered with key %q, want the subtask's own %q",
-			rerun.Key, first.Key)
-	}
-
-	answer := r.ask(map[string]any{"container": "project:ENG"})
-	if len(answer.Rows) != 2 {
-		t.Fatalf("the project holds %d tasks after one promotion run twice — "+
-			"the subtask's id is derived from the item precisely so the "+
-			"second run finds its own subtask", len(answer.Rows))
+			"subtask toggle defaults off precisely so breaking a task down "+
+			"is not blocked by its project's own policy", err)
 	}
 }
 
@@ -414,7 +328,7 @@ func taskOf(t *testing.T, r *roundTrip, id string) tracker.Task {
 func TestATaskNamingNoUnitIsFiledIntoItsProjectsOwnUnit(t *testing.T) {
 	t.Parallel()
 	r := newRoundTripWithoutProject(t)
-	if _, err := r.writer.ApplyChart(t.Context(), activation(0), []tracker.ChartProject{
+	if _, err := r.writer.ApplyChart(t.Context(), activatedAt(100), []tracker.ChartProject{
 		{Key: "ENG", Name: "Engineering", Unit: "core"},
 		// AND ONE THE CHART GAVE NO UNIT, which is a real shape: a
 		// project on a root-level seat belongs to no team.
@@ -478,44 +392,6 @@ func TestATaskNamingNoUnitIsFiledIntoItsProjectsOwnUnit(t *testing.T) {
 	}
 }
 
-// AND SO IS A PROMOTED CHECKLIST ITEM, which is a task in a project like any
-// other — and was filed into no unit at all, because the one caller that
-// stamped the field never ran on this path.
-func TestAPromotedSubtaskIsFiledIntoItsProjectsOwnUnit(t *testing.T) {
-	t.Parallel()
-	r := newRoundTripWithoutProject(t)
-	if _, err := r.writer.ApplyChart(t.Context(), activation(0), []tracker.ChartProject{
-		{Key: "ENG", Name: "Engineering", Unit: "core"},
-	}); err != nil {
-		t.Fatalf("ApplyChart: %v", err)
-	}
-	r.drain()
-
-	parent := newTask("t-1")
-	parent.Checklists = []tracker.Checklist{{
-		ID: "l-1", Name: "steps",
-		Items: []tracker.ChecklistItem{{ID: "i-1", Name: "wire it"}},
-	}}
-	if _, err := r.writer.CreateTask(t.Context(), "op-1", parent, nil); err != nil {
-		t.Fatalf("CreateTask: %v", err)
-	}
-	r.drain()
-
-	subtask := newTask("t-2")
-	subtask.Title = "wire it"
-	if _, err := r.writer.PromoteItem(t.Context(), "op-2", "t-1", "i-1",
-		subtask, nil); err != nil {
-		t.Fatalf("PromoteItem: %v", err)
-	}
-	r.drain()
-
-	if got := taskOf(t, r, "t-2"); got.FiledUnit != "core" ||
-		got.RoutingUnit != "core" {
-		t.Errorf("the promoted subtask is filed into %q and routed to %q, "+
-			"want core for both", got.FiledUnit, got.RoutingUnit)
-	}
-}
-
 // THE UNIT A CREATE IS FILED INTO HEARS ABOUT IT FROM THE CREATE ITSELF.
 //
 // A create naming no unit is filed into its project's own by the writer,
@@ -534,14 +410,13 @@ func TestAPromotedSubtaskIsFiledIntoItsProjectsOwnUnit(t *testing.T) {
 // AND THE CARD SAYS SO, as the history row does: the applier writes a create's
 // row from every field the task was filed with, the unit the writer settled
 // among them, so a card built from the task the caller handed in named no
-// `routing_unit` while the row beside it did — and a promotion's named no
-// `parent` either, which the writer sets too.
+// `routing_unit` while the row beside it did.
 func TestACreateTellsTheLeadOfTheUnitItIsFiledInto(t *testing.T) {
 	t.Parallel()
 	r := newRoundTripWithoutProject(t)
 	chart := fixedLeads{unit: "core-lead"}
 	r.ledBy(chart)
-	if _, err := r.writer.ApplyChart(t.Context(), activation(0), []tracker.ChartProject{
+	if _, err := r.writer.ApplyChart(t.Context(), activatedAt(100), []tracker.ChartProject{
 		{Key: "ENG", Name: "Engineering", Unit: "core"},
 	}); err != nil {
 		t.Fatalf("ApplyChart: %v", err)
@@ -563,7 +438,7 @@ func TestACreateTellsTheLeadOfTheUnitItIsFiledInto(t *testing.T) {
 		}
 		r.cardIsTheHistoryRow(what, id, wake)
 		routed := tracker.Route(tracker.Candidates(wake, false),
-			func(string) bool { return true }, tracker.PartyOf("ana"))
+			func(string) bool { return true }, "ana")
 		var reached []string
 		for _, c := range routed {
 			reached = append(reached, c.Handle)
@@ -578,30 +453,12 @@ func TestACreateTellsTheLeadOfTheUnitItIsFiledInto(t *testing.T) {
 	// dropped, so the fallback is the whole of who hears about it.
 	task := newTask("t-1")
 	task.Reporter, task.Watchers = "ana", []string{"ana"}
-	task.Checklists = []tracker.Checklist{{
-		ID: "l-1", Name: "steps",
-		Items: []tracker.ChecklistItem{{ID: "i-1", Name: "wire it"}},
-	}}
 	if _, err := r.writer.CreateTask(t.Context(), "op-1", task,
 		tracker.Wake{Kind: tracker.ChangeCreated, After: task}.Notify(chart)); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
 	r.drain()
 	reachesTheLead("a create", "t-1", r.lastWake())
-
-	// AND A PROMOTED CHECKLIST ITEM, the other create the writer files.
-	subtask := newTask("t-2")
-	subtask.Title, subtask.Reporter, subtask.Watchers = "wire it", "ana", []string{"ana"}
-	if _, err := r.writer.PromoteItem(t.Context(), "op-2", "t-1", "i-1", subtask,
-		tracker.Wake{Kind: tracker.ChangeCreated, After: subtask}.Notify(chart)); err != nil {
-		t.Fatalf("PromoteItem: %v", err)
-	}
-	r.drain()
-	wake := r.wakeOf("t-2")
-	reachesTheLead("a promotion", "t-2", wake)
-	if moved := wake.Fields["parent"]; moved.To != "t-1" {
-		t.Errorf("a promotion out of t-1 carries a card whose parent is %+v, want t-1", moved)
-	}
 }
 
 // cardIsTheHistoryRow holds a create's notification card to the history row
@@ -664,7 +521,7 @@ func TestACreatesCardSaysWhatTheWriterSettled(t *testing.T) {
 	bo := "bo"
 	if _, err := r.writer.WriteProject(t.Context(), "op-default", "ENG",
 		tracker.ProjectEdit{DefaultAssignee: &bo},
-		tracker.ProjectAuthority{Lead: true}); err != nil {
+		tracker.ProjectAuthority{Policy: true}); err != nil {
 
 		t.Fatalf("set the default assignee: %v", err)
 	}
@@ -707,30 +564,4 @@ func TestACreatesCardSaysWhatTheWriterSettled(t *testing.T) {
 				snapshot.Watchers, who)
 		}
 	}
-}
-
-// wakeOf reads the notification off the newest record on task id's own
-// subject — off the log, for [roundTrip.lastWake]'s reason, and by subject
-// because a sequence's last record need not be the one about this task.
-func (r *roundTrip) wakeOf(id string) *tracker.Notify {
-	r.t.Helper()
-	last, err := r.log.End(r.t.Context())
-	if err != nil {
-		r.t.Fatalf("read the log's end: %v", err)
-	}
-	for seq := last; seq > 0; seq-- {
-		_, payload, _, ok, err := r.log.At(r.t.Context(), seq)
-		if err != nil || !ok {
-			r.t.Fatalf("read record %d: %v", seq, err)
-		}
-		record, err := tracker.Decode(payload)
-		if err != nil {
-			r.t.Fatalf("decode record %d: %v", seq, err)
-		}
-		if record.Subject == tracker.TaskSubject(id) {
-			return record.Notify
-		}
-	}
-	r.t.Fatalf("no record on the log is about task %s", id)
-	return nil
 }

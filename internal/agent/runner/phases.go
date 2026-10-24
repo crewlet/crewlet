@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -274,9 +275,8 @@ type Runner struct {
 	spend Spend
 
 	// mu guards suspension, which the Execute phase writes and the engine
-	// reads once the turn returns, onboardedThisTurn, which the onboarding
-	// pass writes and the executor reads, and guard, which surfaceWith
-	// writes and a suspend reads back.
+	// reads once the turn returns, and guard, which surfaceWith writes and
+	// a suspend reads back.
 	mu         sync.Mutex
 	suspension *Suspension
 
@@ -290,10 +290,6 @@ type Runner struct {
 	// caller would put it in four places that ignore it. One phase runs at
 	// a time on a runner, so the field is that phase's.
 	guard *skills.Guard
-
-	// onboardedThisTurn suppresses the executor prompt's onboarding hint for a
-	// seat that has just been through the pass. See [Runner.Onboard].
-	onboardedThisTurn bool
 
 	// steered is every person's note this turn has read, rendered, in the
 	// order it was read — opened into every LATER phase's conversation
@@ -312,22 +308,6 @@ type Runner struct {
 }
 
 var _ turn.Phases = (*Runner)(nil)
-
-// onboardingHint is the prefetched hint, unless this turn's own onboarding
-// pass just ran.
-//
-// The prefetch is frozen at turn start and the pass runs after it, so the
-// hint is rendered against a seat that had not onboarded YET. Repeating it
-// afterwards tells a seat that has just read its onboarding pages to go and
-// read them.
-func (r *Runner) onboardingHint() string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.onboardedThisTurn {
-		return ""
-	}
-	return r.cfg.Context.OnboardingHint
-}
 
 // New builds a runner.
 func New(cfg Config) (*Runner, error) {
@@ -373,7 +353,7 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 		}
 		return r.executeAsAgentRun(ctx, round, notes, history)
 	}
-	snapshot := r.cfg.Registry.Snapshot()
+	snapshot := r.executorUniverse(r.cfg.Registry.Snapshot(), false)
 
 	// The submission is validated against THIS surface's live record, so
 	// the tool cannot exist before the surface and the surface cannot
@@ -388,13 +368,13 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 			func() turn.Surface { return describe(surface) }))
 
 	built, err := r.surfaceWith(ctx, r.ownMeter(), phase.Execute, round, snapshot, submit,
-		r.executorActive(snapshot))
+		executorActive(snapshot))
 	if err != nil {
 		return turn.Work{}, turn.Surface{}, err
 	}
 	surface = built
 
-	system, user := r.executorPrompt(ctx, round, notes, history, snapshot)
+	system, user := r.executorPrompt(ctx, round, notes, history, snapshot, built)
 
 	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Execute, surface: surface, system: system, user: user,
@@ -446,13 +426,26 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 // here, once, because this is the one frame that renders the catalogue for
 // both runtimes, and a record made anywhere else would describe a catalogue
 // matched a second time against a live registry rather than the one sent.
+//
+// TWO VIEWS OF THE TOOLS, and each section reads the one it describes.
+// snapshot is the universe the surface was built FROM
+// ([Runner.executorUniverse]): the catalogue lists its first-party tools and
+// the sandbox section is rendered where it holds run_sandbox. built is the
+// surface itself, which also holds what [Runner.surfaceWith] adds to its own
+// copy — submit_work, the discovery pair and `delegate` — so every section
+// gated on a tool being offered, and the tool-skill matching, read built's
+// names. Read off the snapshot, they never saw `delegate`, and `## Your
+// workers` was rendered for no seat at all.
 func (r *Runner) executorPrompt(ctx context.Context, _ int, notes string,
-	history []ledger.Iteration, snapshot tools.Snapshot,
+	history []ledger.Iteration, snapshot tools.Snapshot, built *tools.Surface,
 ) (system, user prompts.Prompt) {
 	offer := r.cfg.Skills.Offer()
+	_, offersSandbox := snapshot.Lookup(RunSandboxTool)
 	system = prompts.BuildExecutor(r.cfg.Seat, prompts.ExecutorInput{
-		ToolCatalogue:  r.cfg.Registry.Catalogue(),
-		AvailableTools: snapshot.Names(),
+		// The catalogue of the universe the surface was built from, so it
+		// lists nothing this executor cannot activate.
+		ToolCatalogue:  snapshot.Catalogue(),
+		AvailableTools: built.Universe().Names(),
 
 		ThreadContext:       r.cfg.Context.ThreadContext,
 		PersonalMemory:      r.cfg.Context.PersonalMemory,
@@ -460,13 +453,16 @@ func (r *Runner) executorPrompt(ctx context.Context, _ int, notes string,
 		EpisodeRecall:       r.cfg.Context.EpisodeRecall,
 		CounterpartyProfile: r.cfg.Context.CounterpartyProfile,
 		SynthesizedSkills:   r.cfg.Context.SynthesizedSkills,
-		OnboardingHint:      r.onboardingHint(),
 		Workers:             r.workerCatalogue(),
 		// The tool-skill catalogue, offered against the surface this
 		// phase actually has — and nil where a company has published
 		// none, which keeps the prompt free of skill scaffolding rather
 		// than rendering an empty section.
 		Skills: offer.Catalogue(),
+		// Read off the universe the surface was built from, so the section
+		// teaching run_sandbox is rendered exactly where the tool is —
+		// never for an agent-mode executor, which is not offered it.
+		OffersSandbox: offersSandbox,
 	})
 	r.emitter().skillsInjected(ctx, phase.Execute, offer.Drain())
 	user = prompts.BuildPhaseUserMessage(prompts.UserMessage{
@@ -1439,9 +1435,9 @@ func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round
 	surface = tools.NewSurface(ph.String(), snapshot, active).
 		ForTurn(m.turn.InPhase(types.Phase(ph)))
 	// THE GUARD IS BUILT FROM THE FINISHED SURFACE, so what it enforces and
-	// what the catalogue showed cannot disagree: both are derived from the
-	// same active list, at the same moment, and the catalogue's "required"
-	// marker is the promise this keeps.
+	// what the catalogue showed cannot disagree: both match the skills
+	// against the surface's universe (catalogueSurface), and the catalogue's
+	// "required" marker is the promise this keeps.
 	guard := r.guardFor(ph, surface, loaded)
 	// RECORDED ONLY HERE, which is what keeps it the TURN's guard: this is
 	// the funnel every phase of the turn goes through, and a sub-agent's
@@ -1498,7 +1494,10 @@ func (a armedGuard) tools() tools.Guard    { return a.wrap }
 // in front of the model and a guard rebuilt empty would block the tools that
 // session already unlocked. Empty for every other phase.
 func (r *Runner) guardFor(ph phase.Phase, surface *tools.Surface, loaded []string) armedGuard {
-	if r.cfg.Skills == nil {
+	// THE LOADER MUST BE ACTIVE, not merely in the universe the triggers are
+	// matched over: a guard is armed only where the session can satisfy it,
+	// and a loader the phase never activated is one its model may not reach.
+	if r.cfg.Skills == nil || !slices.Contains(surface.Active(), skills.LoaderTool) {
 		return armedGuard{}
 	}
 	guard := skills.NewGuard(r.cfg.Skills, promptPhase(ph), catalogueSurface(surface))
@@ -1534,29 +1533,49 @@ func promptPhase(ph phase.Phase) prompts.Phase {
 	}
 }
 
-// catalogueSurface is the tool surface as the skill triggers see it.
+// catalogueSurface is the tool surface as the skill triggers see it: every
+// tool in the surface's UNIVERSE, the names the executor's catalogue lists
+// skills for, and never its active list alone. A surface activates anything in
+// its universe by name, and an executor starts with no MCP tool active, so a
+// guard armed over the active list let an activated MCP tool through without
+// the skill its prompt had called required.
 func catalogueSurface(surface *tools.Surface) prompts.Surface {
-	active := surface.Active()
-	return prompts.Surface{Tools: active, MCPServers: surface.Universe().MCPServers()}
+	universe := surface.Universe()
+	return prompts.Surface{Tools: universe.Names(), MCPServers: universe.MCPServers()}
 }
 
-// executorActive is what the executor is offered: every first-party tool bar
-// the phase-scoped ones. MCP tools are reachable through discovery.
+// executorUniverse is the snapshot an executor's surface is built from: the
+// registry, less what this executor must never reach — the phase-scoped tools,
+// and run_sandbox where it is offered no box ([Runner.offersSandbox]).
+// agentRun is whether the executor runs as somebody else's agentic loop, which
+// a fresh pass reads off the config and a resume off its parked state.
+//
+// THE UNIVERSE, NOT ONLY THE ACTIVE LIST. A surface activates anything in its
+// snapshot by name (`activate_tool`), and the catalogue the prompt lists is
+// read off that same snapshot — so a tool kept off the active list alone was
+// still listed to the executor, one call from active: run_sandbox to a seat
+// whose every call of it would be refused, and mark_onboarded, the one tool
+// phaseScoped exists to keep away from it.
+func (r *Runner) executorUniverse(snapshot tools.Snapshot, agentRun bool) tools.Snapshot {
+	hidden := slices.Clone(phaseScoped)
+	if !r.offersSandbox(agentRun) {
+		hidden = append(hidden, RunSandboxTool)
+	}
+	return snapshot.Without(hidden...)
+}
+
+// executorActive is what the executor is offered: every first-party tool in
+// its universe ([Runner.executorUniverse]). MCP tools are reachable through
+// discovery.
 //
 // The whole first-party surface, not a slice of it chosen in advance. Choosing
 // in advance is what the planner used to do — against a catalogue it was never
 // shown — and every wrong guess became a tool the actor did not have when it
 // turned out to need it.
-func (r *Runner) executorActive(snapshot tools.Snapshot) []string {
+func executorActive(universe tools.Snapshot) []string {
 	var out []string
-	for _, e := range snapshot.Entries() {
+	for _, e := range universe.Entries() {
 		if _, fromMCP := e.FromMCP(); fromMCP {
-			continue
-		}
-		if phaseScoped[e.Name()] {
-			continue
-		}
-		if e.Name() == RunSandboxTool && !r.offersSandbox() {
 			continue
 		}
 		out = append(out, e.Name())
@@ -1587,12 +1606,12 @@ func (r *Runner) executorActive(snapshot tools.Snapshot) []string {
 //     launcher refuses that too (role.sandbox.run_in: self), and this is the
 //     surface that must not offer it in the first place.
 //
-// Read from cfg.AgentRun rather than re-derived from the seat's provider
-// entry: the launcher being present IS the fact that this executor runs as
-// somebody else's agentic loop, and a second derivation is a second thing to
-// keep in step with it.
-func (r *Runner) offersSandbox() bool {
-	if r.cfg.AgentRun != nil {
+// agentRun is never re-derived from the seat's provider entry: a fresh pass
+// reads cfg.AgentRun — the launcher being present IS the fact that this
+// executor runs as somebody else's agentic loop — and a resume reads the state
+// it parked, which decides how it is collected whatever the config says now.
+func (r *Runner) offersSandbox(agentRun bool) bool {
+	if agentRun {
 		return false
 	}
 	seat := r.cfg.Seat.Role
@@ -1613,7 +1632,7 @@ func (r *Runner) offersSandbox() bool {
 // query_episodes and refresh_memory are recon, which the executor now does
 // itself; reflect_and_persist is deliberate too — an agent that learns
 // something mid-turn should be able to keep it.
-var phaseScoped = map[string]bool{MarkOnboardedTool: true}
+var phaseScoped = []string{MarkOnboardedTool}
 
 // taskFor prefixes the reviewer's correction to the ask.
 //
@@ -1729,7 +1748,7 @@ func (s phaseSteer) Drain(round int) []toolloop.SteerNote {
 	out := make([]toolloop.SteerNote, 0, len(notes))
 	emit := s.r.emitter()
 	for _, n := range notes {
-		msg := prompts.SteerMessage(n.Sender(), n.Text)
+		msg := prompts.SteerMessage(n.By, n.Text)
 		s.r.carrySteer(msg)
 		emit.steered(s.ctx, s.ph, s.iteration, s.offset+round, n)
 		out = append(out, toolloop.SteerNote{ID: n.ID, Message: msg})

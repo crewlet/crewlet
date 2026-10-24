@@ -27,7 +27,7 @@ import { FrameReadings } from "~/app/Shell.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { reloadForTest } from "~/lib/prefs.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
+import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
 import type {
   WorkActivityRecord,
   WorkItem,
@@ -40,6 +40,8 @@ import { DECISION_QUESTION_MAX_BYTES } from "~/contract/work.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { DUPLICATE, DUPLICATE_TITLE, SHARED_KEY, collidingHits } from "~/test/keyCollision.ts";
+import { pick } from "~/testing.tsx";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -61,15 +63,14 @@ const EVERY_TOOL = [
 ];
 
 const JANE = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+  login: "U0FOUNDER",
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
+  owner: "jane",
   name: "Jane Founder",
   kind: "human",
   acts: EVERY_TOOL,
 };
-/** A token no seat is bound to: it may read, and every write says why not. */
-const UNBOUND = { operator_id: "U0OPS", operator: true, handle: "", name: "", acts: [] };
 
 const ORG = {
   name: "Acme",
@@ -211,7 +212,7 @@ function mount(
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 1 }));
   store.applyOrg(withDerived(ORG) as never);
-  store.applyAgents(agents as never);
+  store.applySeats(agents as never);
   const socket = new LiveSocket(store);
   socket.query = ((what: string, params?: Record<string, unknown>) => {
     asked.push({ kind: what, params: params ?? {} });
@@ -664,7 +665,7 @@ test("a refused poll says so even when children were listed before", async () =>
     />,
   );
   await settle();
-  expect(screen.getByText(/The engine tried to answer and failed/)).toBeTruthy();
+  expect(screen.getByText(/The engine failed to answer\./)).toBeTruthy();
   expect(screen.queryByText("A child")).toBeNull();
 });
 
@@ -776,7 +777,7 @@ test("a change reads as a sentence, a checklist move included", () => {
   );
   expect(
     said({ checklists: { from: "Acceptance: 0 of 4 done", to: "Acceptance: 1 of 4 done" } }),
-  ).toBe("ticked 1 on Acceptance — 1 of 4 done");
+  ).toBe("ticked 1 on Acceptance, 1 of 4 done");
   expect(
     said({
       checklists: {
@@ -926,8 +927,8 @@ test("a failed turn marks the phase it broke in", async () => {
   expect(phases.map((p) => p.hasAttribute("data-failed"))).toEqual([false, true]);
   expect(phases[1]!.textContent).toContain("(failed)");
   expect(within(card).getByText("failed in review")).toBeTruthy();
-  // No account recorded: one quiet line, the reason on hover.
-  expect(within(card).getByText("No summary recorded — see the trace")).toBeTruthy();
+  // No account recorded: one quiet line.
+  expect(within(card).getByText("No summary. See the trace.")).toBeTruthy();
   // The meta line is its own row, after the tool chips.
   const meta = card.querySelector(".task-turn-meta")!;
   expect(meta.previousElementSibling?.classList.contains("task-turn-tools")).toBe(true);
@@ -1137,6 +1138,34 @@ test("the Woke answers keep their four empty sentences", async () => {
   }
 });
 
+// THE RETENTION WINDOW IS SAID AS A LENGTH. The answer carries the instant the
+// horizon falls on, which the engine sets to its own clock less
+// `inbox_retention_days`, so the whole days between it and now are the setting.
+// An answer that names no horizon falls back to the inbox horizon by name.
+test("a swept answer says how long recipients are kept", async () => {
+  const swept = (retained_from?: string): WorkRoutingAnswer => ({
+    record_id: "r-1",
+    held: true,
+    notified: true,
+    delivery: "swept",
+    ...(retained_from ? { retained_from } : {}),
+    addressed: 0,
+    fallback: 0,
+    recipients: [],
+  });
+  const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
+  for (const [answer, sentence] of [
+    [swept(daysAgo(30)), "Recipients are kept for 30 days. The change is still in history."],
+    [swept(daysAgo(1)), "Recipients are kept for 1 day. The change is still in history."],
+    [swept(), "Recipients are kept for the inbox horizon. The change is still in history."],
+  ] as const) {
+    cleanup();
+    mount(<Routing answer={answer} chrome={{}} />);
+    await settle();
+    expect(screen.getByText(sentence)).toBeTruthy();
+  }
+});
+
 // THE ACCENT SAYS WHERE THE READER IS, and this panel is about other people:
 // whether a notice ASKED is its own mark, never a brand tint on the reason.
 test("the Woke panel spends no accent, and 'asks' is its own mark", async () => {
@@ -1174,10 +1203,9 @@ test("the Woke panel spends no accent, and 'asks' is its own mark", async () => 
 test.each([
   [
     "an anonymous reader",
-    { operator_id: "", operator: false, handle: "", name: "", acts: [], anonymous: true },
+    { login: "", grants: [], handle: "", owner: "", name: "", acts: [], anonymous: true },
     WRITE_REASONS.anonymous,
   ],
-  ["an unbound token", UNBOUND, WRITE_REASONS.unbound],
   ["a person the engine does not serve", { ...JANE, acts: [] }, WRITE_REASONS.not_served],
 ])("%s sees disabled controls with the reason", async (_who, viewer, reason) => {
   mount(<WorkItemPage id="ENG-42" />, { viewer });
@@ -1292,6 +1320,125 @@ test("a comment is posted on the task", async () => {
   ]);
 });
 
+// A REPLY SENT CLOSES ITS TARGET. The "Replying to" banner stayed over the
+// field after the reply was posted, offering to cancel a reply already sent:
+// the page's callback was one the composer only called from an answer mode
+// this page never used.
+test("a reply sent closes the banner that said who it answers", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: {
+      work_comments: {
+        item: "t-1",
+        key: "ENG-42",
+        title: "Fix the login race",
+        comments: [
+          {
+            id: "c-9",
+            task: "t-1",
+            author: "ada",
+            author_kind: "agent",
+            body: "Is the port flapping?",
+            created_at: "2031-04-12T09:00:00Z",
+          },
+        ],
+      },
+    },
+  });
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Reply" }));
+  expect(screen.getByText(/^Replying to/)).toBeTruthy();
+  fireEvent.change(screen.getByRole("combobox", { name: /^Reply to/ }), {
+    target: { value: "Yes, every 20s." },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /^Send$/ }));
+  await settle();
+  expect(posted).toEqual([
+    {
+      tool: "comment_on_work_item",
+      args: { item: "ENG-42", body: "Yes, every 20s.", reply_to: "c-9" },
+    },
+  ]);
+  expect(screen.queryByText(/^Replying to/)).toBeNull();
+});
+
+// AN ASKED PERSON OPENS THE ITEM AND ANSWERS WITHOUT TRACKER. The engine
+// answers the person an open ask names with the item AND its thread (the
+// detail's `comments`) and takes their answer on it, so the page asks the
+// tracker nothing else — no project, no subtasks, no paged history it would
+// refuse — draws the thread it was handed, and offers the answer where the
+// question was put to them. The CONTROL is an ask put to somebody else on the
+// same page, which offers nothing. Mutation: ask the paged histories whatever
+// the reader holds, or offer the answer only to a Tracker holder, and a line
+// here goes red.
+test("an asked person opens the item and answers without Tracker", async () => {
+  const ask = (id: string, to: string, question: string) => ({
+    id,
+    task: "t-1",
+    author: "ada",
+    author_kind: "agent" as const,
+    body: question,
+    created_at: "2031-04-12T09:00:00Z",
+    ask: to,
+    decision: {
+      question,
+      options: [
+        { id: "eu", label: "EU first" },
+        { id: "us", label: "US first" },
+      ],
+      recommended: "eu",
+      role: "approver" as const,
+    },
+  });
+  mount(<WorkItemPage id="ENG-42" />, {
+    viewer: {
+      login: "sam.ito",
+      grants: ["knowledge"],
+      handle: "sam",
+      owner: "sam",
+      name: "Sam Ito",
+      kind: "human",
+      acts: ["comment_on_work_item"],
+    },
+    answers: {
+      work_item: detail({
+        comments: [
+          ask("c-1", "sam", "Which region do we ship first?"),
+          ask("c-2", "jane", "Who signs the release off?"),
+        ],
+      }),
+    },
+  });
+  await settle();
+  for (const kind of [
+    "work_project",
+    "work_items",
+    "work_activity",
+    "work_comments",
+    "work_item_turns",
+  ]) {
+    expect(
+      asked.some((a) => a.kind === kind),
+      kind,
+    ).toBe(false);
+  }
+  expect(
+    screen.getByText(/You can read this task and answer what you were asked on it\./),
+  ).toBeTruthy();
+  // THE THREAD IT WAS HANDED, both asks drawn — and the answer offered on the
+  // one put to them alone.
+  const mine = screen.getAllByText("Which region do we ship first?")[0]!.closest("article")!;
+  const theirs = screen.getAllByText("Who signs the release off?")[0]!.closest("article")!;
+  expect(within(theirs).queryByRole("button", { name: "Accept" })).toBeNull();
+  // NO REPLY BOX AND NO COMPOSER: the one write they may make is the answer.
+  expect(screen.queryByRole("button", { name: "Reply" })).toBeNull();
+  expect(screen.queryByRole("combobox", { name: "Comment on ENG-42" })).toBeNull();
+  fireEvent.click(within(mine).getByRole("button", { name: "Accept" }));
+  await settle();
+  expect(posted).toEqual([
+    { tool: "comment_on_work_item", args: { item: "ENG-42", answers: "c-1", choice: "eu" } },
+  ]);
+});
+
 // AN ASK'S QUESTION STARTS FROM THE COMMENT'S FIRST LINE, WHOLE. It was
 // sliced to 200 characters — not even the engine's figure, which is 300 bytes —
 // so a long opening line arrived as half a sentence nobody wrote. Past the cap
@@ -1313,7 +1460,7 @@ test("an ask's question is prefilled whole and held past the engine's cap", asyn
   }) as HTMLInputElement;
   expect(question.value).toBe(opening);
   expect(document.body.textContent).toContain(
-    `${opening.length} bytes — a question holds at most ${DECISION_QUESTION_MAX_BYTES}.`,
+    `${opening.length} bytes, but a question holds at most ${DECISION_QUESTION_MAX_BYTES}.`,
   );
 });
 
@@ -1461,25 +1608,23 @@ test("an operator reporter is drawn with a person's circle", async () => {
   expect(chip!.querySelector(".crewlet-avatar--human")).not.toBeNull();
 });
 
-// ONE PERSON, ONE NAME ON ONE PAGE. A task a bound token filed names the
-// credential as its reporter; the rail draws the seat the engine names beside
-// it (`reporter_seat`) and every set-by line the seat the history row names
-// (`actor_seat`) — the same resolution the activity column makes, so the rail
-// can no longer say "founder" where the feed says Jane Founder. And the create
-// itself draws no set-by line: the Reporter row already says who filed it.
-test("an operator-authored task names the person in the reporter and set-by lines", async () => {
+// ONE PERSON, ONE NAME ON ONE PAGE. A person the directory binds to a seat
+// files AS that seat (`iam.ActorFor`): the reporter and every set-by line name
+// the seat the record names, and the credential they wrote through rides
+// beside it rather than standing in for them. And the create itself draws no
+// set-by line: the Reporter row already says who filed it.
+test("a task a bound person filed names them in the reporter and set-by lines", async () => {
   const { container } = mount(<ItemPeek itemKey="ENG-42" />, {
     answers: {
       work_item: detail({
-        task: task({ reporter: "founder", priority: "high", assignee: "ada" }),
-        reporter_seat: "jane",
+        task: task({ reporter: "jane", priority: "high", assignee: "ada" }),
         history: [
           {
             id: "h-2",
             kind: "fields",
-            actor: "founder",
-            actor_kind: "operator",
-            actor_seat: "jane",
+            actor: "jane",
+            actor_kind: "human",
+            operator_id: "session:s-1",
             at: "2031-04-16T10:00:00Z",
             log_seq: 2,
             fields: { priority: { from: "normal", to: "high" } },
@@ -1487,12 +1632,12 @@ test("an operator-authored task names the person in the reporter and set-by line
           {
             id: "h-1",
             kind: "created",
-            actor: "founder",
-            actor_kind: "operator",
-            actor_seat: "jane",
+            actor: "jane",
+            actor_kind: "human",
+            operator_id: "session:s-1",
             at: "2031-04-16T09:00:00Z",
             log_seq: 1,
-            fields: { assignee: { from: "", to: "ada" }, reporter: { from: "", to: "founder" } },
+            fields: { assignee: { from: "", to: "ada" }, reporter: { from: "", to: "jane" } },
           },
         ],
       }),
@@ -1501,7 +1646,7 @@ test("an operator-authored task names the person in the reporter and set-by line
   await settle();
   const reporter = rowValue("Reporter");
   expect(reporter.textContent).toContain("Jane Founder");
-  expect(reporter.textContent).not.toContain("founder");
+  expect(reporter.textContent).not.toContain("session:s-1");
   const lines = [...container.querySelectorAll(".props-setby")].map((el) => el.textContent ?? "");
   expect(lines).toHaveLength(1);
   expect(lines[0]).toContain("set by Jane Founder");
@@ -1513,7 +1658,7 @@ test("an operator-authored task names the person in the reporter and set-by line
 test("the peek states each property once", async () => {
   const { container } = mount(<ItemPeek itemKey="ENG-42" />);
   await settle();
-  expect(container.querySelector(".fact-line")).toBeNull();
+  expect(container.querySelector(".crewlet-fact-line")).toBeNull();
   expect(screen.getAllByText("Status")).toHaveLength(1);
   expect(screen.getByText("ENG-42")).toBeTruthy();
 });
@@ -1528,14 +1673,10 @@ test("moving the rail to another task mounts a new body", async () => {
     </PeekNeighbours>,
   );
   // THE PEEK'S BODY IS A LAZY CHUNK, so it is waited for rather than settled.
-  await waitFor(() => expect(container.querySelector(".object-head")).toBeTruthy(), {
-    timeout: 5000,
-  });
-  const before = container.querySelector(".object-head");
+  await waitFor(() => expect(container.querySelector(".crewlet-object-header")).toBeTruthy());
+  const before = container.querySelector(".crewlet-object-header");
   location.hash = `#/work?peek=${refToken({ kind: "item", id: "ENG-43" })}`;
-  await waitFor(() => expect(container.querySelector(".object-head")).not.toBe(before), {
-    timeout: 5000,
-  });
+  await waitFor(() => expect(container.querySelector(".crewlet-object-header")).not.toBe(before));
 });
 
 // THE DESCRIPTION IS NOT REBUILT ON EVERY TICK OF THE PAGE'S CLOCK: a reader
@@ -1576,10 +1717,12 @@ test("a removed task is marked, and a live one carries no such mark", () => {
   expect(live.container.textContent ?? "").not.toContain("In the trash");
 });
 
-test("the removal note names its author and says it is reversible", () => {
-  render(<RemovedNote tomb={{ by: "ada", kind: "human", at: "2031-04-15T09:00:00Z" }} now={NOW} />);
+test("the removal note names its author and when", () => {
+  const { container } = render(
+    <RemovedNote tomb={{ by: "ada", kind: "human", at: "2031-04-15T09:00:00Z" }} now={NOW} />,
+  );
   expect(screen.getByText(/ada/)).toBeTruthy();
-  expect(screen.getByText(/reversible at any age/)).toBeTruthy();
+  expect(container.textContent).toMatch(/^In the trash\. Removed by ada \(human\) \S.*\.$/);
 });
 
 test("a task removed alongside its parent names the parent", () => {
@@ -1590,4 +1733,172 @@ test("a task removed alongside its parent names the parent", () => {
     />,
   );
   expect(screen.getByText("ENG-1")).toBeTruthy();
+});
+
+// ---------------------------------------------------------------------------
+// A task whose key another task claimed first
+// ---------------------------------------------------------------------------
+
+/**
+ * The duplicate of a pair holding one key, as its own page reads it: opened at
+ * its id, flagged `key_collision` on the answer, and drawn under the key.
+ */
+const duplicate = () =>
+  detail({
+    task: task({
+      id: DUPLICATE,
+      key: SHARED_KEY,
+      title: DUPLICATE_TITLE,
+      assignee: "ada",
+      checklists: [
+        {
+          id: "l-1",
+          name: "Done when",
+          items: [{ id: "i-2", name: "An integration test covers it" }],
+        },
+      ],
+    }),
+    key_collision: true,
+  });
+
+// A DUPLICATE'S PAGE CHANGES THE DUPLICATE. Two tasks hold `ENG-7`, and the
+// engine opens that key on the one that claimed it first. The page is opened
+// at the duplicate's id and draws the duplicate, but every write on it went by
+// the key: a tick, a watch, a comment and a hand-off landed on the claimant, a
+// conditional edit was refused against the claimant's version, and the turns
+// it listed were the claimant's. The KEY is still what every sentence says.
+test("a duplicate's page writes and reads by its id, and names it by its key", async () => {
+  mount(<WorkItemPage id={DUPLICATE} />, { answers: { work_item: duplicate() } });
+  await settle();
+
+  fireEvent.click(screen.getByRole("checkbox", { name: "An integration test covers it" }));
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Watch" }));
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: new RegExp(`Status of ${SHARED_KEY}`) }));
+  fireEvent.click(
+    await screen
+      .findByRole("menuitemradio", { name: "In review" })
+      .catch(() => screen.findByRole("menuitem", { name: "In review" })),
+  );
+  await settle();
+  fireEvent.change(screen.getByRole("combobox", { name: `Comment on ${SHARED_KEY}` }), {
+    target: { value: "Seen on the duplicate." },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /^Comment$/ }));
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Reassign" }));
+  const dialog = await screen.findByRole("dialog");
+  expect(dialog.textContent).toContain(`Assign ${SHARED_KEY}`);
+  pick(within(dialog).getByLabelText("Assignee"), /^SWE/);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Assign" }));
+  await settle();
+
+  expect(posted).toEqual([
+    {
+      tool: "update_work_item",
+      args: { item: DUPLICATE, checklist: { op: "set_done", item: "i-2", done: true } },
+    },
+    { tool: "update_work_item", args: { item: DUPLICATE, watch: true } },
+    { tool: "update_work_item", args: { item: DUPLICATE, if_match: 7, status: "in_review" } },
+    { tool: "comment_on_work_item", args: { item: DUPLICATE, body: "Seen on the duplicate." } },
+    { tool: "update_work_item", args: { item: DUPLICATE, assignee: "swe", if_match: 7 } },
+  ]);
+  // AND ITS TURNS ARE ITS OWN, asked by the id the way its history and its
+  // comments are.
+  const turns = asked.filter((q) => q.kind === "work_item_turns").map((q) => q.params.id);
+  expect(turns.length).toBeGreaterThan(0);
+  expect(new Set(turns)).toEqual(new Set([DUPLICATE]));
+});
+
+// A LOST RACE ON THE DUPLICATE NAMES WHO CHANGED THE DUPLICATE. The note asks
+// the task's newest history entry; asked by the key, it named whoever last
+// changed the claimant.
+test("a race lost on a duplicate's page reads the duplicate's history", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init: RequestInit) => {
+      const tool = decodeURIComponent(String(url).split("/operator/act/")[1] ?? "");
+      const body = JSON.parse(init.body as string) as { args: Record<string, unknown> };
+      posted.push({ tool, args: body.args });
+      return new Response(JSON.stringify({ error: "stale_version", tool, detail: "" }), {
+        status: 409,
+        headers: { "Content-Type": "application/json" },
+      });
+    }),
+  );
+  mount(<WorkItemPage id={DUPLICATE} />, {
+    answers: {
+      work_item: duplicate(),
+      work_activity: async (params: Record<string, unknown>) => ({
+        records:
+          params.task === DUPLICATE
+            ? [{ id: "h-9", kind: "status_changed", actor: "ada", actor_kind: "agent" }]
+            : [{ id: "h-1", kind: "status_changed", actor: "swe", actor_kind: "agent" }],
+        complete: true,
+      }),
+    },
+  });
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: new RegExp(`Status of ${SHARED_KEY}`) }));
+  fireEvent.click(
+    await screen
+      .findByRole("menuitemradio", { name: "Done" })
+      .catch(() => screen.findByRole("menuitem", { name: "Done" })),
+  );
+  await settle();
+  expect(posted.map((p) => p.args.item)).toEqual([DUPLICATE]);
+  expect(
+    await screen.findByText(
+      `${SHARED_KEY} was changed by Ada Okonkwo since you opened it. Look again, then retry.`,
+    ),
+  ).toBeTruthy();
+  expect(asked).toContainEqual({
+    kind: "work_activity",
+    params: expect.objectContaining({ task: DUPLICATE, limit: 1 }),
+  });
+  expect(asked.filter((q) => q.kind === "work_activity").map((q) => q.params.task)).not.toContain(
+    SHARED_KEY,
+  );
+});
+
+// LINKING ONE OF A PAIR LINKS THAT ONE. A search finds both tasks under one
+// key; keyed on the key they were one radio, and the duplicate was linked by
+// a key that names the claimant.
+test("linking a task under a shared key links the one chosen", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    answers: { work_search: { hits: collidingHits(), available: true } },
+  });
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Link a task" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.change(within(dialog).getByLabelText("Find a task"), { target: { value: "ENG-7" } });
+  await settle();
+  const radios = within(dialog).getAllByRole("radio");
+  expect(radios).toHaveLength(2);
+  fireEvent.click(radios[1]!);
+  expect(radios[1]!.getAttribute("aria-checked")).toBe("true");
+  expect(radios[0]!.getAttribute("aria-checked")).toBe("false");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Link" }));
+  await settle();
+  expect(posted).toEqual([
+    { tool: "update_work_item", args: { item: "ENG-42", linked: { add: [DUPLICATE] } } },
+  ]);
+});
+
+// A MISSING TASK IS AN EMPTY STATE WITH A WAY BACK, as a missing project and a
+// missing artifact are: it was a full-width grey callout, the one object page
+// that said so in a different shape. Mutation: leave not_found to the generic
+// callout and the way back is gone.
+test("a task that does not exist says so, naming the key, with the way back to Tasks", async () => {
+  location.hash = "#/work/AB-1";
+  mount(<WorkItemPage id="AB-1" />, {
+    answers: { work_item: () => Promise.reject(new QueryError("not_found")) },
+  });
+  await settle();
+  expect(screen.getByText("No task called “AB-1”")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Back to Tasks" }).getAttribute("href")).toBe(
+    "#/work/tasks",
+  );
+  expect(screen.queryByText("Not found. It may have been removed.")).toBeNull();
 });

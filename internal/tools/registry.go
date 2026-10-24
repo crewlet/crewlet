@@ -53,6 +53,32 @@ const (
 	RefusalSteerUnsupported   = mcp.RefusalSteerUnsupported
 	RefusalBudgetExhausted    = mcp.RefusalBudgetExhausted
 	RefusalUnavailable        = mcp.RefusalUnavailable
+	RefusalInternalError      = mcp.RefusalInternalError
+)
+
+// The class is READ, never stored: a failed [Result] carries one value, its
+// [Result.Cause], and these are the only way anything above this package
+// learns its class or whether its write may have landed. Re-exported for the
+// reason the classes are — a builtin, the delegate tool and a reader of a
+// recorded [Call] name them without knowing MCP exists — and as the very
+// functions, so there is one definition to drift from rather than two.
+var (
+	// Classify states a refusal's class beneath the error that decided it.
+	// See [mcp.Classify].
+	Classify = mcp.Classify
+
+	// RefusalOf is a failed result's class, read out of its cause. See
+	// [mcp.RefusalOf].
+	RefusalOf = mcp.RefusalOf
+
+	// UnknownOf reports whether a failed result's write may have landed.
+	// See [mcp.UnknownOf].
+	UnknownOf = mcp.UnknownOf
+
+	// ErrOutcomeUnknown is the cause of a write nobody can vouch for, and
+	// a tool's own unknown-outcome error wraps it. See
+	// [mcp.ErrOutcomeUnknown].
+	ErrOutcomeUnknown = mcp.ErrOutcomeUnknown
 )
 
 // The tool-origin grammar: who put a tool in front of the agents.
@@ -453,21 +479,23 @@ func (v *OriginView) RegisterWith(tool Callable, ann Annotations, opts ...Option
 // Unregister removes every tool this view registered.
 func (v *OriginView) Unregister() []string { return v.reg.UnregisterOrigin(v.origin) }
 
-// Catalogue renders the slim tool catalogue an executor is shown: first-party
-// tools by name and one-line description, MCP servers by name only.
+// Catalogue renders the slim tool catalogue a phase is shown: first-party
+// tools by name and one-line description, MCP servers by name only, in
+// registration order.
 //
 // MCP servers are named rather than expanded because a real server publishes
 // dozens of tools and a model shown all of them decides against a wall of
 // text. Discovery is a tool call — which is also what keeps the prompt prefix
 // stable while a server's catalogue changes underneath.
-func (r *Registry) Catalogue() string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+//
+// OVER A SNAPSHOT, so a phase is shown the universe its own surface was built
+// from: a tool its snapshot leaves out is one it cannot activate, and a
+// catalogue read off the whole registry listed it anyway.
+func (s Snapshot) Catalogue() string {
 	var lines []string
 	servers := map[string]bool{}
 	var serverOrder []string
-	for _, name := range r.order {
-		e := r.byName[name]
+	for _, e := range s.entries {
 		if server, ok := e.FromMCP(); ok {
 			if !servers[server] {
 				servers[server] = true
@@ -475,7 +503,7 @@ func (r *Registry) Catalogue() string {
 			}
 			continue
 		}
-		lines = append(lines, CatalogueLine(name, e.Tool.Description()))
+		lines = append(lines, CatalogueLine(e.Name(), e.Tool.Description()))
 	}
 	for _, server := range serverOrder {
 		lines = append(lines, "- MCP server `"+server+"` (use the discovery tools to list its tools)")
@@ -602,6 +630,28 @@ func (s Snapshot) KnownOpenWorld() []string {
 
 // Entries returns every entry in the snapshot.
 func (s Snapshot) Entries() []Entry { return slices.Clone(s.entries) }
+
+// Without returns a snapshot that does not carry the named entries; a name it
+// does not hold is ignored.
+//
+// A COPY, for [Snapshot.With]'s reason, and THE WAY A PHASE IS KEPT FROM A
+// TOOL: a surface activates anything in its snapshot by name, so a tool left
+// off a phase's active list alone is one discovery away — and one the
+// catalogue rendered from the same snapshot still lists.
+func (s Snapshot) Without(names ...string) Snapshot {
+	out := Snapshot{
+		entries: make([]Entry, 0, len(s.entries)),
+		byName:  make(map[string]Entry, len(s.byName)),
+	}
+	for _, e := range s.entries {
+		if slices.Contains(names, e.Name()) {
+			continue
+		}
+		out.entries = append(out.entries, e)
+		out.byName[e.Name()] = e
+	}
+	return out
+}
 
 // With returns a snapshot carrying one additional entry.
 //

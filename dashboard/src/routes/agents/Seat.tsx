@@ -34,6 +34,31 @@
  * A person is messaged and assigned work like anybody else and is never
  * paused: the engine runs no turn for them, so there is nothing to hold.
  *
+ * # Who holds a human seat
+ *
+ * A human seat is held by whoever the identity directory binds to it, and the
+ * company document cannot say who that is. So a person's page states it from
+ * `GET /iam/seats` through the one [SeatHolding] the peek and the chart's card
+ * menu share: the holder's name (and, to an admin and the holder, their login
+ * and stage); or the open invitation that holds it, with its cancellation (an
+ * admin's to see); or "Nobody holds this seat", with Invite and Create — the
+ * two ways a person comes to exist, since every person holds a human seat.
+ * Every signed-in reader is answered the listing, masked for them, and the
+ * gestures are drawn only for an admin. A read that failed is said rather
+ * than drawn as nothing, because the gestures live here and a page without
+ * them would say nothing about why.
+ *
+ * # Status for everybody, the rest by access
+ *
+ * The page is the OVERVIEW's: anybody signed in reads a seat's state, its
+ * figures and its schedules. What it is working on is the tracker's, so the
+ * open work — the strip's count, the Overview's card, the Work tab — is asked
+ * only of a reader holding Tracker. What it SAID — the Turns and Memory tabs,
+ * a call's prompt and answer — is its trail, which the engine answers to an
+ * admin and to whoever leads the seat (`seat/profile.ts`' `mayReadTrail`);
+ * every other reader finds those tabs drawn and locked, saying what would
+ * open them, and nothing is asked.
+ *
  * # Tabs are sections
  *
  * They push a history entry, because the reader called them, and the tab is
@@ -41,8 +66,10 @@
  * this kind has not got lands on Overview (`useTab`).
  */
 
+import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
+import { ORG_EDIT_PATH } from "~/app/routes.ts";
 import { useId, useMemo, useState } from "react";
-import { Button, ButtonLink, Callout, EmptyState, Menu, Tag, tabId } from "@crewlethq/ui";
+import { Button, ButtonLink, Callout, EmptyState, Menu, Skeleton, Tag, tabId } from "@crewlethq/ui";
 import {
   ActivityGlyph,
   ChartNoAxesGanttGlyph,
@@ -55,7 +82,13 @@ import {
   UserGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href, useNavigator } from "~/app/router.tsx";
-import { seatKindKey, seatPlaceKey, seatUnitKey } from "~/app/crumbs.ts";
+import {
+  avatarLabel,
+  seatAvatarKey,
+  seatKindKey,
+  seatPlaceKey,
+  seatUnitKey,
+} from "~/app/crumbs.ts";
 import { ObjectTabs } from "~/app/frame/ObjectTabs.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
@@ -75,8 +108,9 @@ import {
   awaitingPerson,
   handleLabel,
   indexOrg,
+  isOwnSeat,
   nameOfIn,
-  ringOf,
+  statusOf,
   seatPath,
   seatResolvers,
   stoppedLine,
@@ -85,20 +119,27 @@ import {
   type Seat,
 } from "~/lib/seats.ts";
 import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { ADMIN, TRACKER } from "~/lib/access.ts";
+import { canManagePeople, SeatHolding, useHumanSeats } from "~/components/people.tsx";
+import type { HumanSeat } from "~/contract/identity.ts";
+import type { RestResult } from "~/lib/useRest.ts";
+import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
 import { turnIdOf, watchHref, watchLink } from "~/lib/turns.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { menuHold, useWriteAccess } from "~/lib/useWriteAccess.ts";
+import { menuHold, useMessageSeatAccess, useWriteAccess } from "~/lib/useWriteAccess.ts";
 import type { RowChrome } from "~/components/work.tsx";
 import type { AgentRow } from "~/protocol/index.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { Memory } from "./seat/Memory.tsx";
 import { Overview } from "./seat/Overview.tsx";
 import {
-  AGENT_TABS,
-  HUMAN_TABS,
+  seatTabs,
   TAB_LABELS,
+  TRAIL_WORDS,
   findSeat,
   liveRow,
+  mayReadTrail,
   pillWord,
   seatRun,
   sentence,
@@ -114,6 +155,7 @@ const WORK_PAGE = 50;
 
 export function SeatScreen({ handle }: { handle: string }) {
   const nav = useNavigator();
+  const viewer = useViewer();
   const org = useOrg();
   const agents = useAgents();
   const now = useNow();
@@ -131,13 +173,16 @@ export function SeatScreen({ handle }: { handle: string }) {
       ? {
           [handle]: seat.name,
           [seatKindKey(handle)]: human ? "human" : "agent",
+          ...(seat.avatar ? { [seatAvatarKey(handle)]: avatarLabel(seat.avatar) } : {}),
           ...(seat.unit
-            ? { [seatUnitKey(handle)]: seat.unit.name, [seatPlaceKey(handle)]: unitPath(seat.unit) }
+            ? { [seatUnitKey(handle)]: seat.unit.id, [seatPlaceKey(handle)]: unitPath(seat.unit) }
             : {}),
         }
       : {},
   );
-  const [tab, setTab] = useTab<SeatTab>("tab", human ? HUMAN_TABS : AGENT_TABS);
+  const runs = useServicesRun();
+  const ask = useServicesAsk();
+  const [tab, setTab] = useTab<SeatTab>("tab", seatTabs(human, runs));
   const panelId = useId();
   const agent = liveRow(agents, handle, seat);
   // THE OPEN WORK ON THE SEAT, asked once for the strip's count, the
@@ -157,12 +202,24 @@ export function SeatScreen({ handle }: { handle: string }) {
       sort: "-priority,updated",
       limit: WORK_PAGE,
     },
-    { enabled: !!seat?.handle, pollMs: 30_000 },
+    // THE TRACKER'S QUESTION, asked only of a reader holding it.
+    { enabled: !!seat?.handle && viewer.tracker && ask.tracker, pollMs: 30_000 },
   );
+  // WHAT THE SEAT SAID is its lead's and an admin's to read — see the file's
+  // doc.
+  const trail = !!seat && mayReadTrail(viewer, index, seat.handle);
   // THE GUARDED HALF, read once for every tab that draws it.
   const setup = useSeatSetup(seat?.handle ?? "");
   const chrome: RowChrome = useMemo(() => seatResolvers(index), [index]);
   const nameOf = useMemo(() => nameOfIn(index), [index]);
+  // WHAT HOLDS A HUMAN SEAT, read once for the holding callout and the
+  // Overview: a seat nobody holds has no person to have a day or open work,
+  // so the Overview draws neither. Nothing asked before somebody has said who
+  // this is.
+  const readsSeats = human && !viewer.asking && !viewer.anonymous;
+  const humanSeats = useHumanSeats(readsSeats);
+  const holding = humanSeats.data?.find((s) => s.handle === seat?.handle);
+  const unheld = holding !== undefined && !holding.holder;
 
   // WHAT THE PHONE'S "MORE" HOLDS: every action but the one the bar keeps in
   // view (see the file's doc), each opening what its inline control opens.
@@ -173,7 +230,9 @@ export function SeatScreen({ handle }: { handle: string }) {
   // THE TURN TO WATCH, while the engine says the seat is working on one with
   // an id: a working seat a frame ahead of its turn id has nothing to watch.
   const watching = !human && activityOf(agent) === "working" ? turnIdOf(agent) : "";
-  const messageAccess = useWriteAccess("create_work_item");
+  // THE BUTTON'S OWN RULE, own-seat hold included, so the folded entry is
+  // held in the words the inline control is.
+  const messageAccess = useMessageSeatAccess(seat?.handle ?? "");
   const assignAccess = useWriteAccess("update_work_item");
   const pauseAccess = useWriteAccess("pause_seat");
   usePageMenu(
@@ -192,7 +251,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 },
               ]
             : []),
-          ...(paused
+          ...(paused && runs.tracker
             ? [
                 {
                   key: "message",
@@ -203,13 +262,19 @@ export function SeatScreen({ handle }: { handle: string }) {
                 },
               ]
             : []),
-          {
-            key: "assign",
-            label: "Assign task",
-            icon: <PlusGlyph size="sm" />,
-            onSelect: () => setAssigning(true),
-            ...menuHold(assignAccess),
-          },
+          // FILING OR HANDING OVER A TASK is Crewlet Works', and offered only
+          // where the company runs it, as the inline buttons are.
+          ...(runs.tracker
+            ? [
+                {
+                  key: "assign",
+                  label: "Assign task",
+                  icon: <PlusGlyph size="sm" />,
+                  onSelect: () => setAssigning(true),
+                  ...menuHold(assignAccess),
+                },
+              ]
+            : []),
           ...(human || paused
             ? []
             : [
@@ -235,7 +300,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             key: "edit",
             label: "Edit in org",
             icon: <PencilGlyph size="sm" />,
-            onSelect: () => nav.to(["agents", "edit"], { seat: seat.handle }),
+            onSelect: () => nav.to(ORG_EDIT_PATH, { seat: seat.handle }),
           },
         ]
       : [],
@@ -246,9 +311,9 @@ export function SeatScreen({ handle }: { handle: string }) {
       <EmptyState
         icon={<UserGlyph size={32} />}
         title={`No seat called “${handle}”`}
-        description="Seats are addressed by handle. If a company revision was just applied, this seat may have been renamed or removed."
+        description="It may have been renamed or removed."
         action={
-          <Button variant="primary" onClick={() => nav.to(["agents", "roster"])}>
+          <Button variant="primary" onClick={() => nav.to(["company", "org", "roster"])}>
             All seats
           </Button>
         }
@@ -256,7 +321,7 @@ export function SeatScreen({ handle }: { handle: string }) {
     );
   }
 
-  const tabs = human ? HUMAN_TABS : AGENT_TABS;
+  const tabs = seatTabs(human, runs);
   const openWork = work.data?.total_hint;
   return (
     <div className="prof-frame">
@@ -277,17 +342,26 @@ export function SeatScreen({ handle }: { handle: string }) {
         )}
         {/* FOLDED ON A PHONE into the bar's "More" (published above), all
             but the one action the bar keeps in view. */}
-        <span className={paused ? "page-action-folds" : undefined}>
-          <MessageSeatButton handle={seat.handle} />
-        </span>
-        <span className="page-action-folds">
-          <AssignToSeatButton
-            handle={seat.handle}
-            name={seat.name}
-            open={assigning}
-            onOpenChange={setAssigning}
-          />
-        </span>
+        {/* THE TRACKER'S TWO WRITES, and their wrappers with them: where the
+            company runs no Crewlet Works the buttons draw nothing, and their
+            empty spans still took the bar's gap. */}
+        {runs.tracker && (
+          <>
+            <span className={paused ? "page-action-folds" : undefined}>
+              {/* HELD ON YOUR OWN SEAT BY ITSELF (`useMessageSeatAccess`), as
+                  everywhere the button is drawn. */}
+              <MessageSeatButton handle={seat.handle} />
+            </span>
+            <span className="page-action-folds">
+              <AssignToSeatButton
+                handle={seat.handle}
+                name={seat.name}
+                open={assigning}
+                onOpenChange={setAssigning}
+              />
+            </span>
+          </>
+        )}
         {!human && (
           <span className={paused ? undefined : "page-action-folds"}>
             <PauseSeatButton
@@ -323,7 +397,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 label: "Edit in org",
                 description: "Change this seat in the org editor",
                 icon: <PencilGlyph size="sm" />,
-                onSelect: () => nav.to(["agents", "edit"], { seat: seat.handle }),
+                onSelect: () => nav.to(ORG_EDIT_PATH, { seat: seat.handle }),
               },
             ]}
           />
@@ -357,6 +431,9 @@ export function SeatScreen({ handle }: { handle: string }) {
       </header>
 
       <div className="prof-body">
+        {readsSeats && seat.handle && (
+          <Holder seat={{ handle: seat.handle, name: seat.name }} seats={humanSeats} />
+        )}
         <Notices seat={seat} agent={agent} now={now} nameOf={nameOf} />
         {/* THEIR STRIP, OUR PANEL: the kit's `TabPanel` spreads nothing, so
             it cannot take the `tabIndex={0}` that puts the content in the tab
@@ -378,11 +455,45 @@ export function SeatScreen({ handle }: { handle: string }) {
               reading={setup.reading}
               nameOf={nameOf}
               now={now}
+              unheld={unheld}
             />
           )}
-          {tab === "work" && <Work seat={seat} work={work} chrome={chrome} now={now} />}
-          {tab === "turns" && !human && <Turns seat={seat} agent={agent} now={now} />}
-          {tab === "memory" && !human && <Memory seat={seat} now={now} />}
+          {tab === "work" &&
+            (viewer.loading ? (
+              <AccessPending />
+            ) : viewer.tracker ? (
+              <Work seat={seat} index={index} work={work} chrome={chrome} now={now} />
+            ) : (
+              <GrantRequired size="compact" grants={[TRACKER]} reader={viewer.login} />
+            ))}
+          {tab === "turns" &&
+            !human &&
+            (viewer.loading ? (
+              <AccessPending />
+            ) : trail ? (
+              <Turns seat={seat} agent={agent} now={now} />
+            ) : (
+              <GrantRequired
+                size="compact"
+                grants={[ADMIN]}
+                reader={viewer.login}
+                also={TRAIL_WORDS}
+              />
+            ))}
+          {tab === "memory" &&
+            !human &&
+            (viewer.loading ? (
+              <AccessPending />
+            ) : trail ? (
+              <Memory seat={seat} now={now} />
+            ) : (
+              <GrantRequired
+                size="compact"
+                grants={[ADMIN]}
+                reader={viewer.login}
+                also={TRAIL_WORDS}
+              />
+            ))}
           {tab === "schedules" && !human && <Schedules seat={seat} now={now} />}
           {tab === "settings" && <Settings seat={seat} agent={agent} setup={setup} />}
         </div>
@@ -395,15 +506,16 @@ export function SeatScreen({ handle }: { handle: string }) {
 function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) {
   const human = seat.kind === "human";
   const state = human ? undefined : activityOf(agent);
-  const ring = human ? undefined : ringOf(state);
+  const status = human ? undefined : statusOf(state);
   const place = unitPath(seat.unit);
   return (
     <div className="prof-id">
       <SeatAvatar
         name={seat.name}
         kind={human ? "human" : "agent"}
+        avatar={seat.avatar}
         size={60}
-        {...(ring ? { ring } : {})}
+        status={status}
         decorative
       />
       <div className="prof-who">
@@ -432,6 +544,32 @@ function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) 
           {human && seat.availability ? ` · ${seat.availability}` : ""}
         </p>
       </div>
+    </div>
+  );
+}
+
+/**
+ * What holds this human seat, for every signed-in reader — see the file's
+ * doc. Nothing at all, and nothing asked, before somebody has said who this
+ * is.
+ */
+function Holder({
+  seat,
+  seats,
+}: {
+  seat: { handle: string; name: string };
+  seats: RestResult<HumanSeat[]>;
+}) {
+  const viewer = useViewer();
+  return (
+    <div className="prof-notices">
+      <SeatHolding
+        seat={seat}
+        seats={seats}
+        manages={canManagePeople(viewer.grants)}
+        held={viewer.grants}
+        you={isOwnSeat(viewer, seat.handle)}
+      />
     </div>
   );
 }
@@ -472,21 +610,19 @@ function Notices({
             ) : undefined
           }
         >
-          <strong>{agent.last_error.kind || "error"}</strong> — {agent.last_error.message}
+          <strong>{agent.last_error.kind || "error"}</strong>: {agent.last_error.message}
           {agent.last_error.phase && ` (during ${agent.last_error.phase})`}
           {agent.last_error.at && ` · ${relTime(agent.last_error.at, now)}`}
         </Callout>
       )}
-      {/* THE STATE'S OWN TONE, the pill's and the ring's: a stopped seat is
+      {/* THE STATE'S OWN TONE, the pill's and the badge's: a stopped seat is
           the one red state in the seat vocabulary, and a warning callout
           under a danger pill named one fact in two colours. */}
       {state === "stopped" &&
         (agent.stopped_reason === "paused" && paused ? (
           <Callout variant={toneOf(state)}>
             <strong>Paused by {nameOf(paused.by)}</strong> {relTime(paused.at, now)}
-            {paused.reason ? ` — “${sentence(paused.reason)}”` : "."} It starts no new turn; what is
-            sent to it waits on its inbox, in order, and its scheduled runs are skipped.
-            {paused.stop_running ? " The turn it was on was stopped." : ""}
+            {paused.reason ? `: “${sentence(paused.reason)}”` : "."}
           </Callout>
         ) : (
           <Callout variant={toneOf(state)}>
@@ -510,4 +646,13 @@ function Notices({
       )}
     </div>
   );
+}
+
+/**
+ * A tab whose access is not decided yet — the viewer has not answered — waits
+ * for it, rather than drawing a lock on a guess (a refusal nobody made, naming
+ * nobody as the reader) or a tab whose reads were never sent.
+ */
+function AccessPending() {
+  return <Skeleton variant="text" rows={4} label="Checking your access" />;
 }

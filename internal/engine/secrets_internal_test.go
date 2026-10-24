@@ -6,6 +6,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,7 +54,7 @@ func TestARotatedSecretBeatsAStaleEnvironment(t *testing.T) {
 		t.Fatalf("before any store read, ${SOME_TOKEN} = %q", got)
 	}
 	if err := sv.Set(t.Context(), "SOME_TOKEN", "the-rotated-one",
-		"operator", "cli", time.Now().UTC()); err != nil {
+		testAuthor, secrets.SourceCLI, time.Now().UTC()); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	e.refreshSecrets(t.Context())
@@ -70,28 +71,13 @@ func TestTheEnvironmentStillAnswersWhatTheStoreDoesNot(t *testing.T) {
 	e, sv := engineWithSecrets(t)
 	t.Setenv("PLAIN_URL", "https://tracker.example.com")
 	if err := sv.Set(t.Context(), "SOME_TOKEN", "sealed",
-		"operator", "cli", time.Now().UTC()); err != nil {
+		testAuthor, secrets.SourceCLI, time.Now().UTC()); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	e.refreshSecrets(t.Context())
 
 	if got := e.resolver().Value("${PLAIN_URL}"); got != "https://tracker.example.com" {
 		t.Fatalf("${PLAIN_URL} = %q, want the environment's", got)
-	}
-}
-
-// A NODE WITH NO KEYRING RESOLVES FROM THE ENVIRONMENT and does not fail:
-// that is the pre-store behaviour and a supported deployment, not a
-// degraded one.
-func TestANodeWithNoKeyringUsesTheEnvironmentAlone(t *testing.T) {
-	db := storetest.OpenNode(t, t.TempDir()+"/index.db", store.Options{})
-	t.Cleanup(func() { _ = db.Close() })
-	e := &Engine{backends: &Backends{Store: db}}
-	t.Setenv("SOME_TOKEN", "from-the-environment")
-
-	e.refreshSecrets(t.Context())
-	if got := e.resolver().Value("${SOME_TOKEN}"); got != "from-the-environment" {
-		t.Fatalf("${SOME_TOKEN} = %q", got)
 	}
 }
 
@@ -104,7 +90,7 @@ func TestAnUnreadableStoreKeepsThePreviousSnapshot(t *testing.T) {
 	e, sv := engineWithSecrets(t)
 	t.Setenv("SOME_TOKEN", "the-stale-one")
 	if err := sv.Set(t.Context(), "SOME_TOKEN", "the-rotated-one",
-		"operator", "cli", time.Now().UTC()); err != nil {
+		testAuthor, secrets.SourceCLI, time.Now().UTC()); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
 	e.refreshSecrets(t.Context())
@@ -148,19 +134,25 @@ func TestABrokenKeyringFailsRatherThanDegrading(t *testing.T) {
 	}
 }
 
-// NO KEYRING CONFIGURED IS NOT AN ERROR, which is what keeps every existing
-// deployment working.
-func TestNoKeyringConfiguredIsNotAFailure(t *testing.T) {
+// NO KEYRING CONFIGURED FAILS THE BOOT, naming the field.
+//
+// It was a supported posture — secrets from the environment, the company
+// document read in plaintext — and it was the one a node that booted with no
+// company still reached, because it started no state log until it had one and
+// so met no signer. Every node needs the keyring now, so the engine refuses to
+// build without one rather than handing every seam beneath it a nil to
+// interpret.
+func TestNoKeyringConfiguredFailsTheBoot(t *testing.T) {
 	t.Parallel()
 	cipher, err := openCipher(&config.Bootstrap{})
-	if err != nil {
-		t.Fatalf("openCipher: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "secrets.keys") {
+		t.Fatalf("openCipher(no keyring) = %v, want a refusal naming secrets.keys", err)
 	}
 	if cipher != nil {
 		t.Fatal("a cipher was built for a node with no keys")
 	}
-	if cipher, err = openCipher(nil); err != nil || cipher != nil {
-		t.Fatalf("openCipher(nil) = %v, %v", cipher, err)
+	if cipher, err = openCipher(nil); err == nil || cipher != nil {
+		t.Fatalf("openCipher(nil) = %v, %v, want a refusal", cipher, err)
 	}
 }
 
@@ -171,13 +163,13 @@ func TestNoKeyringConfiguredIsNotAFailure(t *testing.T) {
 func TestOnlyARealStoreProducesASnapshot(t *testing.T) {
 	t.Parallel()
 	if (&Engine{}).refreshSecrets(t.Context()) {
-		t.Error("a node with no store reported that it loaded a snapshot")
+		t.Error("an engine with no store reported that it loaded a snapshot")
 	}
 
 	db := storetest.OpenNode(t, t.TempDir()+"/index.db", store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	if (&Engine{backends: &Backends{Store: db}}).refreshSecrets(t.Context()) {
-		t.Error("a node with no keyring reported that it loaded a snapshot")
+		t.Error("an engine with no keyring reported that it loaded a snapshot")
 	}
 
 	_, cipher := testKeyring(t)
@@ -208,10 +200,10 @@ func engineWithFleetSecrets(t *testing.T) (*Engine, *store.SecretValues, *fleets
 // every node but this one.
 func TestTheFleetsSecretBeatsASurvivingLocalRow(t *testing.T) {
 	e, local, fleet := engineWithFleetSecrets(t)
-	if err := local.Set(t.Context(), "GL", "the-old-token", "sam", "cli", time.Now().UTC()); err != nil {
+	if err := local.Set(t.Context(), "GL", "the-old-token", testAuthor, secrets.SourceCLI, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	if err := fleet.Set(t.Context(), "GL", "the-rotated-token", "sam", "cli", time.Now().UTC()); err != nil {
+	if err := fleet.Set(t.Context(), "GL", "the-rotated-token", testAuthor, secrets.SourceAPI, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -221,12 +213,53 @@ func TestTheFleetsSecretBeatsASurvivingLocalRow(t *testing.T) {
 	}
 }
 
+// NO ${VAR} REACHES THE ENGINE'S OWN KEYS.
+//
+// The blind-index key shares the fleet's bucket with the operator's
+// credentials. While it carried an operator name, every apply decrypted it into
+// this node's resolver, and `${…}` in an `mcp_env` handed it to a child
+// process. The snapshot now holds the operator's rows alone, and an engine name
+// is not one any reference can spell — so neither the snapshot, a lookup nor an
+// expansion answers with one.
+func TestNoReferenceReachesTheEnginesOwnKeys(t *testing.T) {
+	e, _, fleet := engineWithFleetSecrets(t)
+	const key = "iam/blind-index-key"
+	if created, err := fleet.Estate().Create(t.Context(), key, "the-blind-index-key",
+		secrets.Author{Name: "node-a", Kind: "system"}, secrets.SourceIAM,
+		time.Now().UTC()); err != nil || !created {
+		t.Fatalf("mint the engine's key: (%v, %v)", created, err)
+	}
+	if err := fleet.Set(t.Context(), "GL", "glpat-x", testAuthor, secrets.SourceAPI,
+		time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	values, err := e.secretSnapshot(t.Context())
+	if err != nil {
+		t.Fatalf("secretSnapshot: %v", err)
+	}
+	if _, held := values[key]; held || values["GL"] != "glpat-x" {
+		t.Fatalf("the snapshot holds %d values, the engine's key among them: %t",
+			len(values), held)
+	}
+	e.refreshSecrets(t.Context())
+	if got, found := e.LookupSecret(key); found || got != "" {
+		t.Errorf("a lookup of the engine's key answered (%q, %t)", got, found)
+	}
+	if got := e.Resolve("${" + key + "}"); strings.Contains(got, "the-blind-index-key") {
+		t.Errorf("a reference to the engine's key expanded to %q", got)
+	}
+	if got := e.Resolve("${GL}"); got != "glpat-x" {
+		t.Errorf("the operator's own ${GL} = %q, want its value", got)
+	}
+}
+
 // A LOCAL ROW THE FLEET HAS NOT SEEN STILL RESOLVES, which is what keeps a
 // node that was written to while it was stopped serving until its migration
 // runs.
 func TestALocalRowTheFleetLacksStillResolves(t *testing.T) {
 	e, local, _ := engineWithFleetSecrets(t)
-	if err := local.Set(t.Context(), "ONLY_LOCAL", "v", "sam", "cli", time.Now().UTC()); err != nil {
+	if err := local.Set(t.Context(), "ONLY_LOCAL", "v", testAuthor, secrets.SourceCLI, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -240,7 +273,7 @@ func TestALocalRowTheFleetLacksStillResolves(t *testing.T) {
 // shadowing a later unset on the fleet at every boot from now on.
 func TestTheBootMigrationMovesTheLocalRowsAndClearsThem(t *testing.T) {
 	e, local, fleet := engineWithFleetSecrets(t)
-	if err := local.Set(t.Context(), "GL", "glpat-x", "sam", "cli", time.Now().UTC()); err != nil {
+	if err := local.Set(t.Context(), "GL", "glpat-x", testAuthor, secrets.SourceCLI, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -283,7 +316,7 @@ func (refusingFleet) PutSecret(context.Context, coord.SecretRecord) error {
 // copy must survive, or the credential is gone from the only place it existed.
 func TestAFailedMigrationLeavesTheNodeServing(t *testing.T) {
 	e, local, _ := engineWithFleetSecrets(t)
-	if err := local.Set(t.Context(), "GL", "glpat-x", "sam", "cli", time.Now().UTC()); err != nil {
+	if err := local.Set(t.Context(), "GL", "glpat-x", testAuthor, secrets.SourceCLI, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	e.backends.Fleet = refusingFleet{fleetBackend: e.backends.Fleet}

@@ -38,7 +38,7 @@ import (
 // told this assistant of the first change and of nothing after it.
 func TestAListeningAssistantIsToldWhenAnApplyChangesItsTools(t *testing.T) {
 	t.Parallel()
-	n := bootUnconfigured(t, "a-test-token")
+	n := bootUnconfigured(t, "a-test-token-long-enough-for-tier-a")
 	sess, changed := n.listen(t)
 	if listed := toolNames(t, sess); slices.Contains(listed, builtin.CreateWorkItemTool) {
 		t.Fatalf("the premise: a node with no company offers %v", listed)
@@ -71,7 +71,7 @@ func TestAListeningAssistantIsToldWhenAnApplyChangesItsTools(t *testing.T) {
 // publish on.
 func TestAPeersRebuildReachesAnAssistantListeningHere(t *testing.T) {
 	t.Parallel()
-	n := bootUnconfigured(t, "a-test-token")
+	n := bootUnconfigured(t, "a-test-token-long-enough-for-tier-a")
 	_, changed := n.listen(t)
 
 	ev := events.New(types.OperatorToolsChanged{}, events.TraceContext{})
@@ -94,7 +94,7 @@ func TestAPeersRebuildReachesAnAssistantListeningHere(t *testing.T) {
 // shutdown begins.
 func TestAListeningAssistantDoesNotHoldTheListenersShutdown(t *testing.T) {
 	t.Parallel()
-	n := bootUnconfigured(t, "a-test-token")
+	n := bootUnconfigured(t, "a-test-token-long-enough-for-tier-a")
 	n.listen(t)
 
 	ctx, cancel := context.WithTimeout(t.Context(), apiShutdownGrace/2)

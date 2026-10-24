@@ -39,6 +39,8 @@ import (
 var log = logging.Get("agent.ledgerstore")
 
 // Completions answers "has this trigger already been worked?".
+//
+// THE SEAT IS NAMED BY ITS HANDLE, which is immutable (ADR-0013).
 type Completions interface {
 	// Worked returns the subset of keys already recorded for this seat.
 	//

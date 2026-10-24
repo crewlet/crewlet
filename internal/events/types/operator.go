@@ -35,9 +35,9 @@ func init() {
 
 // OperatorSource is the envelope source every runtime audit event carries —
 // what `events?source=operator` selects. Not a node id and not a handle: the
-// actor is the credential (see [OperatorActed.Actor]), and the source says
-// which kind of writer this was, so the log can be narrowed to people without
-// knowing who they are.
+// actor is whoever the call acted AS (see [OperatorActed.Actor]), and the
+// source says which kind of writer this was, so the log can be narrowed to
+// people without knowing who they are.
 const OperatorSource = "operator"
 
 // RuntimeAuditTypes is every event type the runtime audit writes — each
@@ -84,37 +84,55 @@ func (o AuditOutcome) Valid() bool {
 // outcomes that are failures of the call rather than states of a write.
 func (o AuditOutcome) failed() bool { return o == AuditRefused || o == AuditFailed }
 
-// The three transports a person's call arrives on.
+// The four transports a person's call arrives on. Three are operator tool
+// calls, and each reaches the catalogue through one dispatch
+// (internal/api/operator), which is what records the call — so the transport
+// is the ONLY thing about the record that depends on which surface a person
+// used. The fourth is a person's own git client, whose every push the code
+// host records (internal/code/host).
 const (
 	// TransportAct is the dashboard's write surface, `/operator/act`.
 	TransportAct = "act"
 	// TransportMCP is an operator's own assistant, `/operator/mcp`.
 	TransportMCP = "mcp"
+	// TransportWork is the human write surface's tool-backed routes,
+	// `/work/…` and `/pages/…` (internal/api/workapi) — the scriptable
+	// resource REST a CLI or a script writes through, which calls the
+	// same dispatch rather than the tools directly.
+	TransportWork = "work"
 	// TransportGit is a person's git client, smart HTTP at `/git/`: every
 	// push it makes is one record, whatever became of it.
 	TransportGit = "git"
 )
 
 // OperatorActed is one call a person made that is not a proven read, on any
-// of the three transports: the dashboard's act route and an operator's
-// assistant over MCP call the same catalogue, and a person's git client
-// pushes through the code host — the third person transport (ADR-0037), one
-// record a push (internal/code/host). An audit that depended on which one a
-// person used would be missing whichever half nobody tested.
+// of the four transports: the dashboard's act route, an operator's assistant
+// over MCP and the human write surface's tool-backed routes call the same
+// catalogue, and a person's git client pushes through the code host — a person
+// transport of its own (ADR-0051), one record a push (internal/code/host). An
+// audit that depended on which one a person used would be missing whichever
+// surface nobody tested.
 //
 // The ARGUMENTS ARE NEVER HERE, for the reason the act log line omits them: a
 // page body or a comment is the company's content, and it already lives in
 // the history of the object it changed. What is here is who, which verb,
 // which request, and what became of it.
 type OperatorActed struct {
-	// OperatorID is the token's own name — the author every record the
-	// call wrote carries — and ActorSeat the person it is bound to, empty
-	// for a credential nobody bound: the MCP transport admits one, and the
-	// git transport records such a credential's push — refused at its
-	// advertisement or at its POST — as an `unbound` refusal. The act
-	// transport admits none.
+	// ActorName, ActorKind and OperatorID are the caller exactly as every
+	// record the call wrote names it — the three facts iam.ActorFor makes
+	// of the principal, so the audit row and the history row it sits
+	// beside cannot name two different people. ActorName is the author:
+	// the seat for a person the identity directory binds to one, the
+	// login for anybody else. ActorKind is iam.ActorKind's vocabulary
+	// (agent, human, operator, system) — a string on the wire, so a kind
+	// a later build adds is a value here rather than a refused row.
+	// OperatorID is the CREDENTIAL the call came through — `pat:<id>`,
+	// `session:<lineage>`, or the login where the principal is its own
+	// credential — which is what an audit asks of a leaked token and what
+	// tells a person's own write from one made through their token.
+	ActorName  string `json:"actor"`
+	ActorKind  string `json:"actor_kind"`
 	OperatorID string `json:"operator_id"`
-	ActorSeat  string `json:"actor_seat,omitempty"`
 
 	Transport string `json:"transport"`
 	Tool      string `json:"tool"`
@@ -122,11 +140,13 @@ type OperatorActed struct {
 	// transport. A refused push writes no row in the code domain, so this
 	// record is the only one that says where it was refused.
 	Repo string `json:"repo,omitempty"`
-	// RequestID is the act request's identity — the caller's own,
-	// canonical, so every retry of one gesture carries the same value — or
-	// a git push's push id: the one its row and its `code_push` line carry,
-	// and a fresh UUIDv7 for a push refused before it had one, so every git
-	// record names one. MCP names none.
+	// RequestID is the OPERATION the call was made under: the op id
+	// internal/api/opkey derived from the caller's key, so every retry of
+	// one gesture carries the same value and the audit row joins the
+	// ledger entry the write left — or, on the git transport, a push's
+	// push id: the one its row and its `code_push` line carry, and a fresh
+	// UUIDv7 for a push refused before it had one, so every git record
+	// names one. Empty for a tool call that named none.
 	RequestID string `json:"request_id,omitempty"`
 
 	Outcome AuditOutcome `json:"outcome"`
@@ -142,17 +162,17 @@ type OperatorActed struct {
 // EventType is the "operator_acted" wire type.
 func (OperatorActed) EventType() string { return "operator_acted" }
 
-// Actor is the credential, which is who the records name as the author.
-func (e OperatorActed) Actor() string { return e.OperatorID }
+// Actor is the author, which is who the records the call wrote name.
+func (e OperatorActed) Actor() string { return e.ActorName }
 
 // SummaryFor names the verb, the repository a git push was made to, and what
-// became of it — and the person when the credential is bound to one.
+// became of it.
 func (e OperatorActed) SummaryFor(actor string) string {
 	verb := "ran " + e.Tool
 	if e.Repo != "" {
 		verb += " on " + e.Repo
 	}
-	return lead(asPerson(actor, e.ActorSeat), verb+": "+outcomeWords(e.Outcome, e.Refusal))
+	return lead(actor, verb+": "+outcomeWords(e.Outcome, e.Refusal))
 }
 
 // NewOperatorActed builds the audit record for one call, with [Failed]
@@ -172,8 +192,11 @@ func NewOperatorActed(e OperatorActed) OperatorActed {
 // payload `node` beside it would have been the one fact stated twice, and the
 // envelope owns the key: a payload field under it is dropped on the way out.
 type BackupRequested struct {
+	// ActorName, ActorKind and OperatorID are who asked, in the three
+	// halves of [OperatorActed.ActorName].
+	ActorName  string `json:"actor"`
+	ActorKind  string `json:"actor_kind"`
 	OperatorID string `json:"operator_id"`
-	ActorSeat  string `json:"actor_seat,omitempty"`
 
 	Dir string `json:"dir"`
 	// Outcome is `applied` for a backup whose manifest was written and
@@ -189,17 +212,17 @@ type BackupRequested struct {
 // EventType is the "backup_requested" wire type.
 func (BackupRequested) EventType() string { return "backup_requested" }
 
-// Actor is the credential.
-func (e BackupRequested) Actor() string { return e.OperatorID }
+// Actor is who asked for the backup.
+func (e BackupRequested) Actor() string { return e.ActorName }
 
 // SummaryFor says where the copy went, which is the one thing somebody
 // reading the log after the fact needs. The host is the row's own node, which
 // every surface showing the row shows beside it.
 func (e BackupRequested) SummaryFor(actor string) string {
 	if e.Outcome.failed() {
-		return lead(asPerson(actor, e.ActorSeat), "backup to "+e.Dir+" failed")
+		return lead(actor, "backup to "+e.Dir+" failed")
 	}
-	return lead(asPerson(actor, e.ActorSeat), "backed up to "+e.Dir+
+	return lead(actor, "backed up to "+e.Dir+
 		" ("+strconv.Itoa(e.Streams)+" streams)")
 }
 
@@ -208,14 +231,6 @@ func (e BackupRequested) SummaryFor(actor string) string {
 func NewBackupRequested(e BackupRequested) BackupRequested {
 	e.Failed = e.Outcome.failed()
 	return e
-}
-
-// asPerson renders a credential with the person it is bound to.
-func asPerson(actor, seat string) string {
-	if seat == "" || seat == actor {
-		return actor
-	}
-	return actor + " (" + seat + ")"
 }
 
 // outcomeWords renders an outcome, with the refusal class when there is one.

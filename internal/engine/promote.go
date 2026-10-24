@@ -79,7 +79,13 @@ func (e *Engine) promotionUnits() []learning.PromotionUnit {
 		}
 		container, hint := promotionContainer(unit, wired)
 		out = append(out, learning.PromotionUnit{
-			ID: unit.Name, Lead: leads.EffectiveLead(unit),
+			// THE UNIT'S KEY, which is its stable identity — it is what
+			// a `manages:` entry and a seat's `unit:` resolve, and what
+			// every stored row that names a unit holds. The display name
+			// was a different value the moment a unit declared an id, so
+			// the `unit_id` on every skill_promoted event named something
+			// nothing could be filtered or joined on.
+			ID: unit.Key(), Lead: leads.EffectiveLead(unit),
 			Handles: handles, Container: container, Hint: hint,
 		})
 	}

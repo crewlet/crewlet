@@ -13,6 +13,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { TraceScreen } from "./Trace.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 
 class InertWebSocket {
@@ -36,23 +37,45 @@ afterEach(() => {
 
 const TRACE = "4bf92f3577b34da6a3ce929d0e0e4736";
 
-async function mount(answer: Record<string, unknown>) {
+/** An admin, whose screen a trace is. */
+const ADMIN = { login: "founder", owner: "jane", grants: ["admin"] };
+
+async function mount(answer: Record<string, unknown>, viewer: unknown = ADMIN) {
   location.hash = `#/live/traces/${TRACE}`;
   const store = new Store();
   const socket = new LiveSocket(store);
-  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
-    Promise.resolve(what === "trace" ? answer : {});
+  const asked: string[] = [];
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) => {
+    asked.push(what);
+    return Promise.resolve(what === "trace" ? answer : what === "viewer" ? viewer : {});
+  };
   render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>
-        <TraceScreen traceId={TRACE} />
-      </Router>
+      <ViewerProvider>
+        <Router>
+          <TraceScreen traceId={TRACE} />
+        </Router>
+      </ViewerProvider>
     </ClientContext.Provider>,
   );
   await act(async () => {
     await Promise.resolve();
   });
+  await act(async () => {
+    await Promise.resolve();
+  });
+  return { asked };
 }
+
+// A TRACE IS ADMIN'S: every event a piece of work caused, which the engine
+// answers an admin alone. Its address sits under Live's overview, so the
+// screen draws the lock itself, and asks nothing. Mutation: drop the screen's
+// own lock and the trace is asked for a reader the engine refuses.
+test("a reader without Admin is shown the lock, and the trace is never asked", async () => {
+  const { asked } = await mount({}, { login: "erin", owner: "erin", grants: ["tracker"] });
+  expect(await screen.findByText("You need Admin access")).toBeDefined();
+  expect(asked).not.toContain("trace");
+});
 
 const span = {
   id: "e-1",
@@ -96,7 +119,9 @@ test("a trace missing a node names it", async () => {
       complete: false,
     },
   });
-  expect(screen.getByText(/This trace is missing one node/)).toBeTruthy();
+  expect(
+    screen.getByText(/This trace is missing 1 node\. What it published is not here:/),
+  ).toBeTruthy();
   expect(screen.getByText("node-b")).toBeTruthy();
 });
 

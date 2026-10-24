@@ -2,41 +2,61 @@ package statelog_test
 
 import (
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/queue"
+	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A RECORD LARGER THAN THE BROKER CARRIES IS REFUSED ONCE, AS TOO LARGE — on a
-// real broker, whose client refuses it before sending anything.
+// A RECORD TOO LARGE IS REFUSED ONCE, AS TOO LARGE — on a real broker.
 //
-// That refusal is a plain error rather than the broker's, and it was read as
-// no answer: the write asked the log what landed, found nothing, retook its
-// snapshot, decided the same record and was refused again — sixteen times —
-// and then told its caller a colleague kept editing the object.
+// The client's refusal is a plain error rather than the broker's, and it was
+// read as no answer: the write asked the log what landed, found nothing,
+// retook its snapshot, decided the same record and was refused again —
+// sixteen times — and then told its caller a colleague kept editing the
+// object.
 //
-// TWO PATHS TO ONE ANSWER. On a log that keeps a gate reserve the reserve
-// refuses the record before it is sent, since no record above the budget it
-// admits against can be counted in it; on a log that keeps none the client
-// refuses it, and that refusal is what has to be read as too large.
+// TWO PATHS TO ONE ANSWER. A record past its domain's declared largest is
+// refused by the publisher before it is sent, on a log that keeps a gate
+// reserve or none; one inside the declaration that the SERVER still cannot
+// carry is refused by the client, and that refusal is what has to be read as
+// too large. No declaration reaches past the transport's contract any more
+// ([statelog.MaxTransportRecordBytes]) and a server announcing less than that
+// is refused when the queue opens, so the second path is a server that
+// CHANGED under a running node — a reconnect to a cluster member configured
+// apart from the one it booted against, or a server restarted with a smaller
+// max_payload. The case stages the second: it opens on an operator's server
+// that carries the contract and restarts it under the log with less.
 func TestAnOversizedRecordIsRefusedOnceAsTooLarge(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		domain statelog.Domain
-		sent   int64
+		domain  statelog.Domain
+		size    int
+		payload int32
+		sent    int64
 	}{
-		"on a log that keeps a gate reserve": {probeDomain{}, 0},
-		"on a log that keeps none":           {unreservedDomain{}, 1},
+		"past the declaration, on a log that keeps a gate reserve": {
+			probeDomain{}, probeMaxRecord + 1, 0, 0},
+		"past the declaration, on a log that keeps none": {
+			unreservedDomain{}, statelog.MaxTransportRecordBytes + 1, 0, 0},
+		"inside the declaration and past the server's max_payload": {
+			probeDomain{}, probeMaxRecord - 1024, probeMaxRecord / 2, 1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			h := newHarnessFor(t, tc.domain)
-			_, err := h.write(probeSubject("a"), "op-large",
-				strings.Repeat("x", queue.MaxPayloadBytes))
+			var h *harness
+			if tc.payload == 0 {
+				h = newHarnessFor(t, tc.domain)
+			} else {
+				srv := externaltest.Start(t, queue.MaxPayloadBytes)
+				h = newHarnessOn(t, tc.domain, js.Config{URL: srv.URL()})
+				srv.Restart(tc.payload, h.q.Conn())
+			}
+			_, err := h.writeSized(probeSubject("a"), "op-large", tc.size)
 			if !errors.Is(err, queue.ErrTooLarge) {
 				t.Fatalf("an oversized record answered %v, want queue.ErrTooLarge", err)
 			}
@@ -52,10 +72,55 @@ func TestAnOversizedRecordIsRefusedOnceAsTooLarge(t *testing.T) {
 }
 
 // unreservedDomain is the probe log claiming no identity, which is what keeps
-// no gate reserve — the vector changelog's shape.
+// no gate reserve — the vector changelog's shape, down to declaring the
+// largest record the transport carries.
 type unreservedDomain struct{ probeDomain }
 
 func (unreservedDomain) ClaimsIdentity() bool { return false }
+
+func (unreservedDomain) Stream() statelog.StreamSpec {
+	spec := probeDomain{}.Stream()
+	spec.MaxRecordBytes = statelog.MaxTransportRecordBytes
+	return spec
+}
+
+// NO DECLARATION ADMITS A RECORD THE TRANSPORT CANNOT CARRY.
+//
+// The transport's limit is on the signed MESSAGE, and a declaration is on the
+// payload a decide forms, so a log declared at the transport's own number
+// passed the publisher's refusal with a record the broker then refused past
+// its max_payload — naming a server setting on the broker the engine
+// configures itself, where the declaration was supposed to be the one refusal
+// a record meets before it is sent. The spec is refused instead, and the
+// largest the transport carries is what a log that wants it all declares.
+//
+// Mutation: hold the declaration to [queue.MaxPayloadBytes] again and the
+// transport's own number validates.
+func TestADeclarationPastWhatTheTransportCarriesIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		declared int64
+		valid    bool
+	}{
+		{statelog.MaxTransportRecordBytes, true},
+		{statelog.MaxTransportRecordBytes + 1, false},
+		{queue.MaxPayloadBytes, false},
+		{0, false},
+	} {
+		spec := probeDomain{}.Stream()
+		spec.MaxRecordBytes = tc.declared
+		err := spec.Validate()
+		if (err == nil) != tc.valid {
+			t.Errorf("a declared largest record of %d validates %v, want %v",
+				tc.declared, err, tc.valid)
+		}
+		if tc.valid && spec.MaxAppendBytes() > queue.MaxPayloadBytes {
+			t.Errorf("a valid declaration of %d appends %d bytes, past the "+
+				"transport's %d", tc.declared, spec.MaxAppendBytes(),
+				queue.MaxPayloadBytes)
+		}
+	}
+}
 
 // A BROKER REFUSAL THAT IS NOT A FULL LOG IS NOT REPORTED AS ONE.
 //

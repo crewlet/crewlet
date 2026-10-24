@@ -17,14 +17,16 @@ import (
 // page's activity" and "the company-wide digest" — so a wiki that recorded
 // every edit, replicated it and snapshotted it offered no way to ask what had
 // changed. `work_activity`'s own shape, one domain over.
-func (s Sources) pageActivity(ctx context.Context, n Native, p Params) (any, error) {
+func (s Sources) pageActivity(ctx context.Context, p Params) (any, error) {
 	fresh, err := Freshness(p)
 	if err != nil {
 		return nil, err
 	}
 	q := pages.PageActivityQuery{
-		Page:      strings.TrimSpace(p.String("page")),
-		Container: strings.TrimSpace(p.String("container")),
+		Page: strings.TrimSpace(p.String("page")),
+		// CANONICAL BEFORE THE READ, for [Sources.pageList]'s reason: the
+		// deferral scope is composed from what this is handed.
+		Container: pages.ContainerKey(p.String("container")),
 		Limit:     p.Int("limit", 0),
 		Freshness: fresh,
 	}
@@ -56,7 +58,7 @@ func (s Sources) pageActivity(ctx context.Context, n Native, p Params) (any, err
 	if q.Cursor, err = positionParam(p, "cursor"); err != nil {
 		return nil, err
 	}
-	answer, err := n.Pages.Activity(ctx, q)
+	answer, err := s.Pages.Activity(ctx, q)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +95,7 @@ func positionParam(p Params, name string) (uint64, error) {
 // bounded number of revisions, so an old one is an ordinary absence — and a
 // reader has to be able to tell it from a page that never existed, which is a
 // different thing to do about.
-func (s Sources) pageRevision(ctx context.Context, n Native, p Params) (any, error) {
+func (s Sources) pageRevision(ctx context.Context, p Params) (any, error) {
 	page := strings.TrimSpace(p.String("page"))
 	if page == "" {
 		return nil, badParams("page", "", nil)
@@ -106,7 +108,7 @@ func (s Sources) pageRevision(ctx context.Context, n Native, p Params) (any, err
 	if err != nil {
 		return nil, err
 	}
-	revision, held, err := n.Pages.Revision(ctx, page, version, fresh)
+	revision, held, err := s.Pages.Revision(ctx, page, version, fresh)
 	switch {
 	case err != nil:
 		return nil, err

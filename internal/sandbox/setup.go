@@ -46,7 +46,10 @@ type SetupStep struct {
 	// Name is a short identifier, used in logs and setup-failure errors.
 	Name string `yaml:"name" json:"name"`
 
-	// Files are written into the box (path → content) before Commands run.
+	// Files are written into the box (path → content) before Commands run,
+	// byte for byte: each body arrives as the content it is, a whole
+	// `${VAR}` already read by the engine at launch and any other `${…}`
+	// left for whatever reads the file inside the box.
 	Files map[string]string `yaml:"files,omitempty" json:"files,omitempty"`
 
 	// Commands run in order after the files land. A non-zero exit fails the
@@ -56,6 +59,13 @@ type SetupStep struct {
 	// Env is merged into the coding agent's run env. ${VAR} references are
 	// resolved exactly ONCE, with the rest of the sandbox env at launch.
 	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+
+	// OptionalKeys names the keys of Env and the paths of Files whose value
+	// may resolve to nothing at launch: the engine leaves such a variable
+	// out and writes no such file, where any other reference that resolves
+	// to nothing refuses a `run_sandbox` coding run (an agent-mode
+	// executor's box starts without it, and the engine says so).
+	OptionalKeys []string `yaml:"optional_keys,omitempty" json:"optional_keys,omitempty"`
 
 	// Brief is the environment-context paragraph for the coding agent —
 	// what this step made true about the box. Empty means nothing to tell.
@@ -75,36 +85,52 @@ func (s SetupStep) timeout() time.Duration {
 	return DefaultSetupTimeout
 }
 
-// SetupError reports a setup step's command failing — the box is not usable as
-// promised, so the acquisition fails and the caller tears the box down.
+// SetupError reports a setup step failing — the box is not usable as promised,
+// so the acquisition fails and the caller tears the box down.
 //
 // Distinct from an install failure on purpose: a failed setup step is an
 // OPERATOR CONFIG problem (a broken role or provider setup command), not a
 // coding-agent install problem, and the two want different debugging.
+//
+// THREE FAILURES, AND THE MESSAGE SAYS WHICH. A step fails writing one of its
+// files, or running a command that then exits non-zero, or running a command
+// that reports no exit status at all — one the box could not start, or one
+// whose box went away under it, which the message cannot tell apart and so
+// does not claim either of: [SetupError.Detail] carries the box's own account.
+// One sentence for all three named a refused file "command #0 failed (exit
+// 0)" — a command that does not exist, failing with the status that means
+// success — and a command with no exit status "failed (exit 0)" too, which
+// sent the operator to read a command for the reason it exited cleanly.
 type SetupError struct {
-	Step    string
-	Command int // 1-based position within the step
-	Exit    int
-	Detail  string
+	Step string
+	// File is the path a write into the box failed for. Set only when a
+	// file is what failed, and Command is zero then.
+	File string
+	// Command is the failed command's 1-based position within the step.
+	Command int
+	// Exited is whether the command reported an exit status, which Exit
+	// then holds — a signal that ended it as a shell reports one, 128 plus
+	// its number. A command the box could not start has none, and neither
+	// does one whose box went away before it reported.
+	Exited bool
+	Exit   int
+	Detail string
 }
 
 func (e *SetupError) Error() string {
-	msg := fmt.Sprintf("setup step %q command #%d failed (exit %d)", e.Step, e.Command, e.Exit)
+	var msg string
+	switch {
+	case e.File != "":
+		msg = fmt.Sprintf("setup step %q could not write %s", e.Step, e.File)
+	case e.Exited:
+		msg = fmt.Sprintf("setup step %q command #%d failed (exit %d)", e.Step, e.Command, e.Exit)
+	default:
+		msg = fmt.Sprintf("setup step %q command #%d reported no exit status", e.Step, e.Command)
+	}
 	if e.Detail != "" {
 		msg += " — " + e.Detail
 	}
 	return msg
-}
-
-// SetupEnv merges every step's env contribution, in step order (later wins).
-func SetupEnv(steps []SetupStep) map[string]string {
-	merged := map[string]string{}
-	for _, step := range steps {
-		for key, value := range step.Env {
-			merged[key] = value
-		}
-	}
-	return merged
 }
 
 // ApplySetup applies every step to a fresh box: write files, run commands, in
@@ -114,8 +140,8 @@ func SetupEnv(steps []SetupStep) map[string]string {
 // recipe can reference the engine's identity facts and its own configured
 // tokens at provisioning time.
 //
-// Returns a [SetupError] on the FIRST failed command so the caller tears the
-// box down: the coding agent's brief promises this environment, so a partial
+// Returns a [SetupError] on the FIRST failure, a file or a command, so the
+// caller tears the box down: the coding agent's brief promises this environment, so a partial
 // application must never reach a run.
 func ApplySetup(ctx context.Context, box Sandbox, steps []SetupStep, env map[string]string) error {
 	for _, step := range steps {
@@ -124,7 +150,7 @@ func ApplySetup(ctx context.Context, box Sandbox, steps []SetupStep, env map[str
 		paths := slices.Sorted(maps.Keys(step.Files))
 		for _, path := range paths {
 			if err := box.WriteFile(ctx, path, []byte(step.Files[path])); err != nil {
-				return &SetupError{Step: step.Name, Detail: err.Error()}
+				return &SetupError{Step: step.Name, File: path, Detail: err.Error()}
 			}
 		}
 		for i, cmd := range step.Commands {
@@ -136,16 +162,18 @@ func ApplySetup(ctx context.Context, box Sandbox, steps []SetupStep, env map[str
 				return &SetupError{Step: step.Name, Command: i + 1, Detail: err.Error()}
 			}
 			if result.ExitCode != 0 {
-				// NOT the command text. ${VAR} references in commands are
-				// resolved before they get here, so a recipe that pipes a
-				// token into a login carries that token verbatim in cmd —
-				// and this message is logged AND handed back to the LLM.
+				// NOT the command text. The engine resolves nothing in a
+				// command — the box's shell expands its `$VAR`s from the
+				// run env — but a recipe may still spell a credential out
+				// literally, and this message is logged AND handed back to
+				// the LLM.
 				// The step name plus the command's position identifies it
 				// precisely, and the operator has the config; stderr is
 				// redacted for the same reason a transcript is.
 				return &SetupError{
 					Step:    step.Name,
 					Command: i + 1,
+					Exited:  true,
 					Exit:    result.ExitCode,
 					Detail:  redact.Secrets(strings.TrimSpace(result.Stderr)),
 				}

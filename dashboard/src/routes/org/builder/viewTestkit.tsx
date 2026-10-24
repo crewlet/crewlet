@@ -24,6 +24,10 @@ import { treeCanvasParts } from "~/testing.tsx";
 import { useCallback, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { vi } from "vitest";
 import { Router } from "~/app/router.tsx";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider, type Viewer } from "~/lib/viewer.ts";
+import type { IntegrationTool } from "~/contract/integrations.ts";
+import { LiveSocket, Store, type QueryMap, type QueryName } from "~/protocol/index.ts";
 import type { AgentRow, ConfigProblem, ConfigWarning, SandboxEntry } from "~/protocol/index.ts";
 import {
   BuilderContext,
@@ -41,7 +45,6 @@ export interface BuilderSpies {
   openAdd: ReturnType<typeof vi.fn<BuilderApi["openAdd"]>>;
   openMove: ReturnType<typeof vi.fn<(key: NodeKey) => void>>;
   openDelete: ReturnType<typeof vi.fn<(key: NodeKey) => void>>;
-  openChangeKind: ReturnType<typeof vi.fn<(key: NodeKey) => void>>;
   announce: ReturnType<typeof vi.fn<(message: string) => void>>;
   dispatched: BuilderAction[];
 }
@@ -52,7 +55,6 @@ export function builderSpies(): BuilderSpies {
     openAdd: vi.fn(),
     openMove: vi.fn(),
     openDelete: vi.fn(),
-    openChangeKind: vi.fn(),
     announce: vi.fn(),
     dispatched: [],
   };
@@ -66,13 +68,19 @@ export interface HarnessProbe {
   selection: NodeKey | null;
 }
 
+/** A harness's running company holds nothing the draft does not, unless a case says so. */
+const NO_IDENTITIES: ReadonlySet<string> = new Set();
+
 export function BuilderHarness({
   initial,
   spies,
   probe,
   readOnly = false,
+  identities = NO_IDENTITIES,
   agents = [],
   sandboxes = [],
+  tools = [],
+  viewer = null,
   selected: initialSelection = null,
   children,
 }: {
@@ -80,8 +88,13 @@ export function BuilderHarness({
   spies: BuilderSpies;
   probe: HarnessProbe;
   readOnly?: boolean;
+  identities?: ReadonlySet<string>;
   agents?: AgentRow[];
   sandboxes?: SandboxEntry[];
+  /** The tool roll-ups the `integrations` query answers. */
+  tools?: IntegrationTool[];
+  /** Who the `viewer` question says is reading; `null` leaves it unanswered. */
+  viewer?: Viewer | null;
   /** The node selected when the view mounts, as a link naming one leaves it. */
   selected?: NodeKey | null;
   children: ReactNode;
@@ -127,6 +140,10 @@ export function BuilderHarness({
       ? { seats: state.check.derived.seats ?? [], units: state.check.derived.units ?? [] }
       : null;
 
+  const [client] = useState(() => {
+    const store = new Store();
+    return { store, socket: new AnsweringSocket(store, tools, viewer) };
+  });
   const api = useMemo<BuilderApi>(
     () => ({
       state,
@@ -140,21 +157,27 @@ export function BuilderHarness({
       openAdd: spies.openAdd,
       openMove: spies.openMove,
       openDelete: spies.openDelete,
-      openChangeKind: spies.openChangeKind,
       announce: spies.announce,
       focusNode: (key) => view.current?.focusNode(key),
       readOnly,
+      identities,
       agents,
       sandboxes,
       keys,
       registerView,
     }),
-    [state, dispatch, selected, readOnly, agents, sandboxes, keys, registerView, spies],
+    [state, dispatch, selected, readOnly, identities, agents, sandboxes, keys, registerView, spies],
   );
 
   return (
     <Router>
-      <BuilderContext.Provider value={api}>{children}</BuilderContext.Provider>
+      <ClientContext.Provider value={client}>
+        {/* WHO IS READING, as the frame asks it once for every screen: the
+            editor reads it where a human seat's holder is drawn. */}
+        <ViewerProvider>
+          <BuilderContext.Provider value={api}>{children}</BuilderContext.Provider>
+        </ViewerProvider>
+      </ClientContext.Provider>
     </Router>
   );
 }
@@ -169,11 +192,47 @@ export function harnessProbe(): HarnessProbe {
   };
 }
 
+/**
+ * A socket that never connects and answers the two queries the builder asks:
+ * `integrations`, with the tool roll-ups a suite gave, and `viewer`, with the
+ * reader a suite gave or no answer at all. Any other query is one the builder
+ * does not make, so it is refused as the engine refuses a name it does not
+ * know.
+ */
+class AnsweringSocket extends LiveSocket {
+  constructor(
+    store: Store,
+    private readonly tools: IntegrationTool[],
+    private readonly viewer: Viewer | null,
+  ) {
+    super(store);
+  }
+
+  override query<K extends QueryName>(what: K): Promise<QueryMap[K]> {
+    if (what === "viewer" && this.viewer !== null) {
+      return Promise.resolve(this.viewer as QueryMap[K]);
+    }
+    if (what !== "integrations") return Promise.reject(new Error("unknown_query"));
+    const answer: QueryMap["integrations"] = {
+      integrations: [],
+      tools: this.tools,
+      traffic_known: false,
+      traffic_since: null,
+    };
+    return Promise.resolve(answer as QueryMap[K]);
+  }
+}
+
 /** What a suite may set on the harness. */
 export interface HarnessOptions {
   readonly readOnly?: boolean;
+  /** The running company's handles and keys (`BuilderApi.identities`); none by default. */
+  readonly identities?: ReadonlySet<string>;
   readonly agents?: AgentRow[];
   readonly sandboxes?: SandboxEntry[];
+  readonly tools?: IntegrationTool[];
+  /** Who the `viewer` question says is reading; unanswered by default. */
+  readonly viewer?: Viewer;
 }
 
 /**
@@ -194,8 +253,11 @@ export function renderInBuilder(
       spies={spies}
       probe={probe}
       readOnly={options.readOnly}
+      identities={options.identities}
       agents={options.agents}
       sandboxes={options.sandboxes}
+      tools={options.tools}
+      viewer={options.viewer ?? null}
     >
       {ui}
     </BuilderHarness>,

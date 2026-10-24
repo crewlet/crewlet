@@ -3,14 +3,49 @@
 //
 // # Why it is not part of /integrations
 //
-// `GET /integrations` is registered as an ordinary read, so on the default
-// posture it serves without a token. What this surface answers is a different
-// class of thing: the NAMES of the credentials a company holds, which are
-// unset, the third-party app pages an administrator would visit, and the fields a
-// caller can write. Adding that to the anonymous-read answer would hand an
-// unauthenticated reader a map of what to attack. So it is its own prefix,
-// added to the always-guarded list beside /config and /secrets, and every
-// call here needs an operator token, reads included.
+// `GET /integrations` is a question — what each surface's last reconcile
+// reported — answered through the query registry like every other read. What
+// this surface answers is a different class of thing: the NAMES of the
+// credentials a company holds, which are unset, the third-party app pages an
+// administrator would visit, and the fields a caller can write — a map of what
+// to attack — beside the writes that change them. So it is its own prefix,
+// mounted through the authority table route by route, and every route is
+// admin's, reads included.
+//
+// # Connecting is a company write AND a credential write
+//
+// Each route is mounted through [authz.Router]: the listings and a pass's
+// record are `setup.read`, and every route that changes the company is
+// `setup.connect` — both admin's (ADR-0033). A route that SEALS a credential
+// asks `secrets.write` on top — a submission carrying a secret field, a
+// provisioning pass (which is handed a sink that mints and seals), and a
+// GitHub App (whose private key is sealed on the return) — because this
+// surface performs no write of its own: the credential goes through the store
+// /secrets serves, and a caller who could not write it there must not be
+// able to write it here. The pattern cannot see whether a submission carries
+// one, so that half is asked once the body is read, through the same guard.
+//
+// TODAY THE TWO ASK THE SAME PERMISSION, and the second is kept anyway: it is
+// the surface stating that a sealed credential is a `/secrets` write, decided
+// by that verb's own row, so the day the table decides the two verbs apart
+// this surface follows the table rather than a second copy of it.
+//
+// THE ROUTES USED TO DECIDE NOTHING, which was sound while the only credential
+// was an operator token and stopped being sound the day a person could sign
+// in holding a read-only permission alone.
+//
+// # A managed document is refused before every side effect
+//
+// Where Tier A names the company document's writers (ADR-0030), a change to
+// it through any other credential is refused `config_managed` — by
+// internal/api/configapi's own check, asked here EARLIER than the write that
+// would ask it, because this surface acts before it writes: a connect seals a
+// credential, a disconnect queues a teardown at the vendor, and a GitHub App
+// is created once with a key GitHub never reissues. So it is asked after the
+// route's grants and before each of those, and again at the GitHub callback,
+// of the party the sealed state names, before the one-time code is spent. A
+// rotation of a value the document already names changes no byte of it and
+// stays open.
 //
 // # It never returns a value
 //
@@ -36,21 +71,22 @@ import (
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/atlassian"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/datadog"
-	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mattermost"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
-	"github.com/crewlet/crewlet/internal/store"
 )
 
 var log = logging.Get("api.setup")
@@ -63,65 +99,98 @@ var log = logging.Get("api.setup")
 // has sent the wrong thing rather than a large one.
 const MaxBody = 64 << 10
 
-// The refusals this surface answers with, beyond the shared ones.
-const (
-	codeUnknownKind      = httpjson.Code("unknown_kind")
-	codeNoActiveRevision = httpjson.Code("no_active_revision")
-	codeBadBody          = httpjson.Code("bad_body")
-	codeSeatRequired     = httpjson.Code("seat_required")
-	codeNoSuchSeat       = httpjson.Code("no_such_seat")
-	codeNoPublicURL      = httpjson.Code("no_public_url")
-	codeRevisionAdvanced = httpjson.Code("revision_advanced")
-	codeLiteralInConfig  = httpjson.Code("literal_in_config")
-	codeValidationError  = httpjson.Code("validation_error")
-	codeInvalidInput     = httpjson.Code("invalid_input")
-	codeNoKeyring        = httpjson.Code("no_keyring")
+// THE REFUSALS THIS SURFACE ANSWERS WITH are all on internal/api/httpjson's
+// table, where each one carries the sentence a person is shown. They were
+// declared here, with none, so a screen rendering the envelope showed a code
+// and nothing a person could act on — and two of them were second spellings
+// of codes the table already held (`bad_body`, and `no_public_url`, named for
+// the retired Tier B field).
 
-	// codeSurfaceBusy is a disconnect refused because something else is
-	// writing at this surface right now — a reconcile tick, or an operator's
-	// own pass.
-	//
-	// ITS OWN CODE, because it is the one refusal here that is TRANSIENT and
-	// it was indistinguishable from the ones that are not. It answered
-	// `internal_error`, which a caller can only treat as terminal: the
-	// disconnect dialog submits one DELETE per kind in order and stopped at
-	// the first, so a refusal on the second of Atlassian's three left the
-	// tool half disconnected with no retry. Measured on a live disconnect,
-	// where a retry minutes later completed cleanly.
-	codeSurfaceBusy = httpjson.Code("surface_busy")
-)
+// RetryBusy is the Retry-After on [httpjson.CodeSurfaceBusy].
+//
+// THE SPAN THE REQUEST ITSELF ALREADY WAITED before answering busy
+// ([disconnectRetryFor]), and that constant rather than a second spelling of
+// its value: what holds a surface is a reconcile tick — seconds — or an
+// operator's pass, so a tick that outlived one such wait is most likely a
+// moment from ending, and asking again after another is the soonest a second
+// attempt could find it released without the waiting client becoming load on
+// the surface it waits for. Written as its own `3`, it was a number justified
+// as equal to another with nothing keeping it so.
+//
+// THE DASHBOARD'S DISCONNECT DIALOG WAITS EXACTLY THIS, read off the header,
+// and has no cadence of its own: it used to, and this hint was justified as
+// matching it — two copies of one number, each citing the other. Exported for
+// internal/api's gate that holds every fixed hint the dashboard waits out
+// under the bound it waits at most.
+const RetryBusy = disconnectRetryFor
 
 // Options wire the service.
 //
-// EVERY FIELD BUT Now AND StateKeys IS REQUIRED, and [New] refuses a missing one
+// EVERY FIELD BUT Now IS REQUIRED, and [New] refuses a missing one
 // by name. `crewlet run` builds this beside an engine that holds all of them, so
 // a nil is a wiring mistake, and a surface that quietly shrank around one (no
 // surface at all, every secret write refused, every requirement answering
 // `resolved: null`, every disconnect or GitHub App refused) would present the
 // mistake as a deliberate answer.
 type Options struct {
-	// Company reads the ACTIVE document. It returns nil while no revision
+	// Company reads the ACTIVE company: the document a revision stores,
+	// and the ORG this node built from it. Both are nil while no revision
 	// is active, which every route answers as such.
-	Company func() *config.Company
+	//
+	// ONE FUNCTION RETURNING BOTH, never two accessors: two reads can
+	// straddle an activation, and a screen that took the integrations from
+	// one revision and the roster from the next would describe a company
+	// that never existed.
+	Company func() (*config.Company, *org.Organization)
 
 	// Config is the write path, the same one PATCH /config drives.
 	Config *configapi.Service
 
-	// Secrets seals a submitted credential. A node with no keyring still
-	// has one: its seal fails with [secrets.ErrNoKeyring], which every
-	// secret write refuses rather than storing plaintext.
+	// Secrets seals a submitted credential, under the keyring every node
+	// holds.
 	Secrets setup.Secrets
 
 	// Resolve turns a ${VAR} name into what this process actually
 	// resolved, through the engine's own chain.
 	Resolve func(string) (string, bool)
 
+	// WebhookBase is where a THIRD-PARTY APP reaches this deployment,
+	// without its trailing slash: [config.API.WebhookBase] — the public
+	// listener's `api.public.external_url` where one is configured, and
+	// `api.external_url` otherwise.
+	//
+	// THE VENDOR'S ADDRESS AND NEVER THE PERSON'S, because every address
+	// this surface builds on it is one a vendor follows: a webhook's
+	// delivery URL, a Slack app's request URL, a GitHub App's manifest and
+	// the redirect GitHub sends a browser back on, all of which `/webhooks/`
+	// serves — and once there are two listeners, the person's answers 404
+	// for every one of them.
+	//
+	// A PLAIN STRING AND NOT A FUNCTION, unlike Company above, because it
+	// is Tier A: it cannot change under a running process, so a surface
+	// reading it twice in one request cannot get two answers. It used to
+	// be a Tier B field read through Resolve, which is why every caller
+	// below carried the resolver and had to decide what to do with a
+	// reference that resolved to nothing.
+	//
+	// Empty is a deployment with no such address, which every gesture that
+	// would hand one to a vendor refuses by name.
+	WebhookBase string
+
+	// WebhookBaseKey is the Tier A key WebhookBase is read from
+	// ([config.API.WebhookBaseKey]), which the listing and every refusal
+	// about the address name, so an operator edits the setting in force.
+	// REQUIRED, because it is always knowable: a deployment with no address
+	// still has the key that would hold one.
+	WebhookBaseKey string
+
 	// Passes are the third-party apps this build can provision over the
 	// API.
 	Passes *setup.Runner
 
-	// Sink builds the recorder a pass writes minted credentials through.
-	Sink func(operator string) (provision.TokenSink, error)
+	// Sink builds the recorder a pass writes minted credentials through,
+	// recording each under the party the pass runs for.
+	Sink func(by iam.Actor) (provision.TokenSink, error)
 
 	// Status is where a pass records what it found: the SAME fleet row the
 	// reconcile loop writes, so the two cannot disagree.
@@ -141,19 +210,22 @@ type Options struct {
 	// says where the seat's credential lives, which is what it can prove.
 	SlackApps func() map[string]string
 
-	// StateKeys is the Tier A keyring material the GitHub App state signer
-	// is keyed from, and it MUST be the same on every node that mints or
-	// validates a state: a fleet where the begin and the callback land on
-	// different nodes would otherwise refuse every completion.
+	// StateCipher seals the GitHub App state, and it MUST be the fleet's own
+	// keyring, the same on every node that mints or opens a state: a fleet
+	// where the begin and the callback land on different nodes would
+	// otherwise refuse every completion.
 	//
-	// Empty takes a per-process key, which is correct for one node and
-	// cannot work across two. That is a real deployment (a node with no
-	// secrets.keys), so it is not refused; the caller logs what it costs.
-	StateKeys []string
+	// REQUIRED, and it always exists where this surface does: config
+	// refuses to serve the API without `secrets.keys`, and every node that
+	// runs a state log needs them anyway. It used to be the keyring's raw
+	// material with a per-process fallback for a node with none — a node
+	// that could begin a creation and then not seal the app's key, which
+	// GitHub issues once, when the browser came back.
+	StateCipher secrets.Cipher
 
 	// StateClaims is where a spent callback state is recorded, so no state
-	// is accepted twice. It has the same fleet requirement as StateKeys for
-	// the same reason: a callback landing on a node that cannot see the
+	// is accepted twice. It has the same fleet requirement as StateCipher
+	// for the same reason: a callback landing on a node that cannot see the
 	// first one's record would accept a replay. The fleet's claim registry
 	// is open on every node.
 	StateClaims StateClaims
@@ -164,10 +236,13 @@ type Options struct {
 
 // Service serves /setup.
 type Service struct {
-	company func() *config.Company
+	company func() (*config.Company, *org.Organization)
 	config  *configapi.Service
 	writer  setup.Writer
 	resolve func(string) (string, bool)
+	// webhookBase and webhookBaseKey are the vendor's address and the Tier
+	// A key it is read from. See [Options.WebhookBase].
+	webhookBase, webhookBaseKey string
 	// slackApps is which Slack app each seat authenticates as, from the
 	// engine. See [Options.SlackApps].
 	slackApps func() map[string]string
@@ -177,6 +252,10 @@ type Service struct {
 	status    Status
 	clock     func() time.Time
 	appFlow   *AppFlow
+
+	// guard decides every route, and the credential write a route asks
+	// for on top of its own. No chart: not one verb here asks a relation.
+	guard authz.Guard
 }
 
 // New builds the service and the GitHub App flow its begin route and the
@@ -195,7 +274,9 @@ func New(opts Options) (*Service, error) {
 		{"Sink", opts.Sink == nil},
 		{"Status", opts.Status == nil},
 		{"SlackApps", opts.SlackApps == nil},
+		{"StateCipher", opts.StateCipher == nil},
 		{"StateClaims", opts.StateClaims == nil},
+		{"WebhookBaseKey", opts.WebhookBaseKey == ""},
 	} {
 		if field.absent {
 			missing = append(missing, "Options."+field.name)
@@ -216,18 +297,21 @@ func New(opts Options) (*Service, error) {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	s := &Service{
-		company:   opts.Company,
-		config:    opts.Config,
-		resolve:   opts.Resolve,
-		secrets:   opts.Secrets,
-		passes:    opts.Passes,
-		sink:      opts.Sink,
-		status:    opts.Status,
-		slackApps: opts.SlackApps,
-		clock:     now,
+		company:        opts.Company,
+		config:         opts.Config,
+		resolve:        opts.Resolve,
+		webhookBase:    opts.WebhookBase,
+		webhookBaseKey: opts.WebhookBaseKey,
+		secrets:        opts.Secrets,
+		passes:         opts.Passes,
+		sink:           opts.Sink,
+		status:         opts.Status,
+		slackApps:      opts.SlackApps,
+		clock:          now,
+		guard:          authz.ContextGuard(authz.NoChart{}),
 		writer: setup.Writer{
 			Secrets: opts.Secrets,
-			Config:  configWriter{opts.Config},
+			Config:  configWriter{svc: opts.Config},
 			Now:     now,
 		},
 	}
@@ -235,28 +319,65 @@ func New(opts Options) (*Service, error) {
 	// callback reaches the writer and the secret store through it), and one
 	// constructor for both halves leaves no window in which the begin route
 	// has a service with no flow to validate the state it would mint.
-	s.appFlow = newAppFlow(s, opts.StateKeys, opts.StateClaims)
+	s.appFlow = newAppFlow(s, opts.StateCipher, opts.StateClaims)
 	return s, nil
 }
 
 // Routes registers the surface.
-func (s *Service) Routes(mux httpjson.Router) {
-	mux.HandleFunc("GET /setup/integrations", s.list)
-	mux.HandleFunc("GET /setup/integrations/{kind}", s.one)
-	mux.HandleFunc("POST /setup/integrations/{kind}/inputs", s.inputs)
-	mux.HandleFunc("DELETE /setup/integrations/{kind}", s.disconnect)
+func (s *Service) Routes(mux authz.Mux) error {
+	router := authz.NewRouter(mux, s.guard)
+	var failures []error
+	mount := func(pattern string, a authz.Action, h http.HandlerFunc) {
+		if err := router.Handle(pattern, authz.Policy{Action: a}, h); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	mount("GET /setup/integrations", authz.ActionSetupRead, s.list)
+	mount("GET /setup/integrations/{kind}", authz.ActionSetupRead, s.one)
+	mount("POST /setup/integrations/{kind}/inputs", authz.ActionSetupConnect, s.inputs)
+	mount("DELETE /setup/integrations/{kind}", authz.ActionSetupConnect, s.disconnect)
 	// The two that RUN something at the third-party app, and the read that follows
-	// one. See pass.go for why check and provision are one function.
-	mux.HandleFunc("POST /setup/integrations/{kind}/provision", s.provision)
-	mux.HandleFunc("POST /setup/integrations/{kind}/check", s.check)
+	// one. See pass.go for why check and provision are one function. BOTH
+	// are the connect verb: a check writes nothing at the app, and it is
+	// still a pass run against the company's own credentials at a person's
+	// hand — the gesture of whoever connected it, not of a reader.
+	mount("POST /setup/integrations/{kind}/provision", authz.ActionSetupConnect, s.provision)
+	mount("POST /setup/integrations/{kind}/check", authz.ActionSetupConnect, s.check)
 	// ONE AGENT'S OWN APP. Not a company-wide connect: a GitHub App is one
 	// bot identity, so an app per agent is the only way each acts as itself.
-	mux.HandleFunc("POST /setup/integrations/github/app", s.beginApp)
-	mux.HandleFunc("GET /setup/integrations/{kind}/runs/{id}", s.runByID)
+	mount("POST /setup/integrations/github/app", authz.ActionSetupConnect, s.beginApp)
+	mount("GET /setup/integrations/{kind}/runs/{id}", authz.ActionSetupRead, s.runByID)
 	// The LISTING, which is what makes the route above reachable at all:
 	// nothing could name a run id, so one pass was readable only by the
 	// caller that had just started it.
-	mux.HandleFunc("GET /setup/integrations/{kind}/runs", s.runs)
+	mount("GET /setup/integrations/{kind}/runs", authz.ActionSetupRead, s.runs)
+	return errors.Join(failures...)
+}
+
+// mayWriteCredentials asks the credential write a route performs on top of its
+// own verb, and answers the refusal when there is none. It reports whether the
+// handler may go on.
+//
+// ASKED OF THE SAME GUARD the route was, so it is the route's policy asked a
+// second time rather than a gate with rules of its own — and asked BEFORE
+// anything is sealed or minted, so a refused caller leaves nothing behind.
+func (s *Service) mayWriteCredentials(w http.ResponseWriter, r *http.Request) bool {
+	return authz.Admit(w, r, s.guard, authz.Policy{Action: authz.ActionSecretWrite})
+}
+
+// carriesCredential reports whether a submission writes a value the sealed
+// store will hold: any field its requirements declare a [setup.KindSecret],
+// whether the caller supplied it or asked the engine to mint it.
+func carriesCredential(values map[string]string, against []setup.Requirement) bool {
+	for _, req := range against {
+		if req.Kind != setup.KindSecret {
+			continue
+		}
+		if _, present := values[req.Field]; present {
+			return true
+		}
+	}
+	return false
 }
 
 // configWriter adapts the config surface to what setup.Writer needs.
@@ -264,38 +385,31 @@ func (s *Service) Routes(mux httpjson.Router) {
 // The interface is the CONSUMER's — three strings and a patch — so the setup
 // package does not import an HTTP service to perform a write, and a test can
 // drive it with something that is not one.
-//
-// EVERY WRITE IT MAKES IS AN OPERATOR'S. This adapter is the setup screen's:
-// a submission, a disconnect and the GitHub App return are each a flow a
-// person started, so the label the setup package passes is recorded as an
-// operator. The engine's own writes never come through here — they reach the
-// config surface through the engine's writer, which states itself as the node.
 type configWriter struct{ svc *configapi.Service }
 
-// operatorAuthor is a label from this surface, as the revision's author.
-func operatorAuthor(name string) store.Author {
-	return store.Author{Name: name, Kind: store.AuthorOperator}
-}
-
 func (c configWriter) Apply(
-	ctx context.Context, patch []byte, summary, operator, expect string,
+	ctx context.Context, patch []byte, summary string, by iam.Actor, expect string,
 ) (string, int64, error) {
 	applied, err := c.svc.Apply(ctx, configapi.ApplyRequest{
-		Patch: patch, Summary: summary, Author: operatorAuthor(operator), Expect: expect,
+		Patch: patch, Summary: summary, By: by, Expect: expect,
 	})
 	return applied.RevisionID, applied.Epoch, err
 }
 
-func (c configWriter) Authorize(operator string) error {
-	return c.svc.Authorize(operatorAuthor(operator))
+// Authorize is the config surface's own managed-document check
+// ([configapi.Service.Authorize]), so /setup refuses exactly the credentials
+// /config does — asked earlier, before a side effect, rather than by a second
+// reading of the list.
+func (c configWriter) Authorize(by iam.Actor) error {
+	return c.svc.Authorize(by)
 }
 
 func (c configWriter) Current(ctx context.Context) (string, error) {
 	return c.svc.ActiveRevision(ctx)
 }
 
-func (c configWriter) Reload(ctx context.Context, summary, operator string) (string, int64, error) {
-	applied, err := c.svc.Reload(ctx, summary, operatorAuthor(operator))
+func (c configWriter) Reload(ctx context.Context, summary string, by iam.Actor) (string, int64, error) {
+	applied, err := c.svc.Reload(ctx, summary, by)
 	return applied.RevisionID, applied.Epoch, err
 }
 
@@ -311,11 +425,12 @@ func (c configWriter) Seat(ctx context.Context, handle string) ([]byte, error) {
 }
 
 func (c configWriter) SetSeat(
-	ctx context.Context, handle string, body []byte, summary, operator, expect string,
+	ctx context.Context, handle string, body []byte, summary string, by iam.Actor,
+	expect string,
 ) (string, int64, error) {
 	applied, err := c.svc.ApplyEntity(ctx, configapi.ApplyEntityRequest{
-		Kind: "roles", ID: handle, Body: body,
-		Summary: summary, Author: operatorAuthor(operator), Expect: expect,
+		Kind: "roles", ID: handle, Body: body, Summary: summary, By: by,
+		Expect: expect,
 	})
 	return applied.RevisionID, applied.Epoch, err
 }
@@ -539,23 +654,21 @@ const (
 
 // list serves GET /setup/integrations.
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
-	company := s.company()
+	company, roster := s.company()
 	if company == nil {
-		httpjson.FailWith(w, http.StatusConflict, codeNoActiveRevision, map[string]string{
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
 			"hint": "no company configuration is active; import one before connecting an integration",
 		})
 		return
 	}
 	tools := make([]ToolState, 0, len(integration.Kinds))
 	for _, kind := range integration.Kinds {
-		state, ok := s.state(company, kind)
+		state, ok := s.state(company, roster, kind)
 		if !ok {
 			continue
 		}
 		tools = append(tools, withLoopFindings(state, s.loopFindings(r.Context(), kind)))
 	}
-	base := company.Integrations.WebhookBase(s.resolve)
-	present, resolved := setup.Resolution(company.Integrations.PublicBaseURL, s.resolve)
 	httpjson.Write(w, http.StatusOK, map[string]any{
 		"tools": tools,
 		// THE REVISION THIS ANSWER DESCRIBES, so a caller can send it back
@@ -572,33 +685,20 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 		// rather than repeated in each tool: it is one setting, and a
 		// screen that asked for it seven times would be asking the
 		// operator to keep seven copies consistent.
-		"public_base_url": map[string]any{
-			"value": base, "present": present, "resolved": resolved,
-			"config_path": "integrations.public_base_url",
-			// WHICH VARIABLE, when the setting is a whole reference.
-			//
-			// `resolved: false` says the address is configured and
-			// resolves to nothing, which is a misconfiguration the screen
-			// has to NAME to be actionable: "set it" is advice, "export
-			// PUBLIC_BASE_URL" is an instruction. The variable's name is
-			// not the value, and this surface is guarded in full anyway.
-			// Empty for a literal, which by definition resolves.
-			"reference": wholeRef(company.Integrations.PublicBaseURL),
+		//
+		// ONE FIELD WHERE THERE WERE FOUR. While this was a Tier B
+		// pointer the screen also needed `present`, `resolved` and the
+		// variable's `reference`, because "configured and resolving to
+		// nothing" was a state a banner had to name. The address is Tier A
+		// and REQUIRED on a node serving this screen, resolved before the
+		// document is decoded — so a node serving it at all has one, and
+		// the three fields that described its absence described a state
+		// that can no longer occur. WHICH key it is read from rides beside
+		// it, because there are two once a public listener is set.
+		"external_url": map[string]any{
+			"value": s.webhookBase, "config_path": s.webhookBaseKey,
 		},
 	})
-}
-
-// wholeRef is the variable a setting points at, or empty when it is a literal.
-//
-// Only a WHOLE reference, which is what [setup.Resolution] decides `resolved`
-// on: a value with a reference embedded in a longer string resolves per
-// segment and naming one of them would be advice about the wrong half.
-func wholeRef(stored string) string {
-	name, ok := envref.Whole(stored)
-	if !ok {
-		return ""
-	}
-	return name
 }
 
 // activeRevision is the revision this node is serving, or empty when it
@@ -626,16 +726,16 @@ func (s *Service) activeRevision(ctx context.Context) string {
 // one serves GET /setup/integrations/{kind}.
 func (s *Service) one(w http.ResponseWriter, r *http.Request) {
 	kind := integration.Kind(r.PathValue("kind"))
-	company := s.company()
+	company, roster := s.company()
 	if company == nil {
-		httpjson.FailWith(w, http.StatusConflict, codeNoActiveRevision, map[string]string{
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
 			"hint": "no company configuration is active",
 		})
 		return
 	}
-	state, ok := s.stateFor(r.Context(), company, kind)
+	state, ok := s.stateFor(r.Context(), company, roster, kind)
 	if !ok {
-		httpjson.FailWith(w, http.StatusNotFound, codeUnknownKind, map[string]string{
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownKind, map[string]string{
 			"detail": "this build serves no setup for " + string(kind),
 			"hint":   "one of " + kindList(),
 		})
@@ -650,7 +750,9 @@ func (s *Service) one(w http.ResponseWriter, r *http.Request) {
 // AN EXPLICIT ABSENCE rather than an empty requirement list: a third-party app whose
 // requirements nobody has written down would otherwise answer "nothing is
 // missing" and the screen would show a Connect button that collects nothing.
-func (s *Service) state(company *config.Company, kind integration.Kind) (ToolState, bool) {
+func (s *Service) state(company *config.Company, roster *org.Organization,
+	kind integration.Kind,
+) (ToolState, bool) {
 	var reqs []setup.Requirement
 	var seats []SeatState
 	var configured, enabled bool
@@ -668,7 +770,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 			return datadog.AccountEmail(block.Provisioning, handle)
 		})
 		at.Configured = block != nil
-		seats = credentialSeats(company, s.resolve, at, "Datadog",
+		seats = credentialSeats(roster, s.resolve, at, "Datadog",
 			s.passes.Serves(kind), datadogAccess(block))
 		configured = block != nil
 		enabled = block != nil && block.Enabled
@@ -679,7 +781,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		// NOT credentialSeats. What a GitHub seat holds is an APP rather
 		// than a credential somebody pasted, so the question that roster
 		// answers is the wrong one here: see [githubSeats].
-		seats = githubSeats(company, s.resolve)
+		seats = githubSeats(company, roster, s.resolve)
 		managePath = github.ManagePath()
 		configured = block != nil
 		enabled = block != nil && block.Enabled
@@ -704,7 +806,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		at := atlassianAt(atlassian.ProductJira)
 		at.Identity = atlassianIdentity(s.resolve)
 		at.Configured = block != nil
-		seats = credentialSeats(company, s.resolve, at, "Jira", false)
+		seats = credentialSeats(roster, s.resolve, at, "Jira", false)
 		// THE ATLASSIAN BLOCKS HAVE NO `enabled` FIELD. Their presence IS
 		// the switch, which is why a disconnect removes the block rather
 		// than flipping a flag, and why enabled tracks configured here
@@ -717,7 +819,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		at := atlassianAt(atlassian.ProductConfluence)
 		at.Identity = atlassianIdentity(s.resolve)
 		at.Configured = block != nil
-		seats = credentialSeats(company, s.resolve, at, "Confluence", false)
+		seats = credentialSeats(roster, s.resolve, at, "Confluence", false)
 		configured, enabled = block != nil, block != nil
 	case integration.KindAtlassian:
 		block := company.Integrations.Atlassian
@@ -726,7 +828,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		at := atlassianAt(atlassian.ProductAny)
 		at.Identity = atlassianIdentity(s.resolve)
 		at.Configured = block != nil
-		seats = credentialSeats(company, s.resolve, at, "Atlassian",
+		seats = credentialSeats(roster, s.resolve, at, "Atlassian",
 			s.passes.Serves(kind))
 		configured, enabled = block != nil, block != nil
 	case integration.KindGitLab:
@@ -741,7 +843,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 			return gitlab.Username(block.Provisioning, handle)
 		})
 		at.Configured = block != nil
-		seats = credentialSeats(company, s.resolve, at, "GitLab",
+		seats = credentialSeats(roster, s.resolve, at, "GitLab",
 			s.passes.Serves(kind))
 		configured = block != nil
 		enabled = block != nil && block.Enabled
@@ -762,7 +864,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 			return "@" + mattermost.BotUsername(block.Provisioning, handle)
 		})
 		at.Configured = block != nil
-		seats = credentialSeats(company, s.resolve, at, "Mattermost",
+		seats = credentialSeats(roster, s.resolve, at, "Mattermost",
 			s.passes.Serves(kind))
 		configured = block != nil
 		enabled = block != nil && block.Enabled
@@ -773,7 +875,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		block := company.Integrations.Slack
 		summary = slack.Summary()
 		reqs = slack.CompanyRequirements(block)
-		seats = slackSeats(company, s.resolve, s.apps())
+		seats = slackSeats(roster, s.resolve, s.apps(), s.webhookBase, s.webhookBaseKey)
 		managePath = slack.ManagePath()
 		// CONFIGURED WHEN ANY SEAT IS, not when the company block exists:
 		// the block is optional settings, and a company with seven working
@@ -794,7 +896,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 	// could not be chosen when it was not, and the field is required. The
 	// roster is the engine's own — deriving it in each app would be the same
 	// list written six times.
-	seatChoices(company, reqs)
+	seatChoices(roster, reqs)
 	// WHAT A REFERENCE CURRENTLY READS AS, for the links a form draws out of
 	// these values. Credentials are skipped inside. See [setup.FillEffective].
 	setup.FillEffective(reqs, s.resolve)
@@ -883,7 +985,7 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 		ManagePath:    managePath,
 		NeedsOperator: s.passes.Needs(kind),
 	}
-	if base := company.Integrations.WebhookBase(s.resolve); base != "" && state.InboundPath != "" {
+	if base := s.webhookBase; base != "" && state.InboundPath != "" {
 		state.PublicURL = base + state.InboundPath
 	}
 	return state, true
@@ -902,15 +1004,15 @@ func (s *Service) state(company *config.Company, kind integration.Kind) (ToolSta
 // integrations. A card that says Connected over no agents is telling an
 // operator the half that cannot be acted on: the question is which of their
 // people can work in this app, and only a per-seat answer has it.
-func credentialSeats(company *config.Company, resolve func(string) (string, bool),
+func credentialSeats(roster *org.Organization, resolve func(string) (string, bool),
 	at seatCredentialAt, app string, provisions bool, access ...seatAccess,
 ) []SeatState {
 	out := []SeatState{}
-	for role := range company.EachRole() {
+	for role := range roster.AllRoles() {
 		// THROUGH THE SEAT, the same derivation slackSeats uses: a handle
 		// defaults from the name, and "is this a person" is the org model's
 		// question rather than the config's.
-		seat := role.Seat()
+		seat := role
 		if !seat.IsAgent() {
 			continue
 		}
@@ -995,7 +1097,7 @@ func credentialSeats(company *config.Company, resolve func(string) (string, bool
 // seatAccess says how much one seat may do at an app, in the three values a
 // roster renders: the tier this engine speaks, its name, and the line saying
 // what it grants. Empty where the app grades nobody.
-type seatAccess func(role *config.Role) (tier, label, hint string)
+type seatAccess func(role *org.Role) (tier, label, hint string)
 
 // datadogAccess is the role a company's Datadog accounts are created holding.
 //
@@ -1008,7 +1110,7 @@ func datadogAccess(cfg *config.Datadog) seatAccess {
 	if cfg != nil {
 		role = datadog.RoleName(cfg.Provisioning)
 	}
-	return func(*config.Role) (string, string, string) {
+	return func(*org.Role) (string, string, string) {
 		return datadog.TierOf(role), datadog.RoleLabel(role), datadog.RoleHint(role)
 	}
 }
@@ -1096,7 +1198,7 @@ func (s *Service) loopFindings(ctx context.Context, kind integration.Kind) []int
 type seatCredentialAt struct {
 	// Find reports the value this seat holds for the app and the address it
 	// sits at, both empty when the seat holds none.
-	Find func(role *config.Role) (stored, where string)
+	Find func(role *org.Role) (stored, where string)
 	// Address is where a seat holding nothing writes one. It is what the
 	// sentence telling an operator how to opt in names, so it is the
 	// address they edit rather than one a value was found at.
@@ -1110,7 +1212,7 @@ type seatCredentialAt struct {
 	//
 	// Nil derives the list from Find, which is right for every app that
 	// seals one value per seat.
-	Vars func(role *config.Role) []string
+	Vars func(role *org.Role) []string
 
 	// Configured reports whether the company declares this app at all.
 	//
@@ -1140,14 +1242,14 @@ type seatCredentialAt struct {
 	// ONLY OVER A WORKING SEAT, because a derived name is what the engine
 	// WOULD create rather than proof it did. Shown next to a seat with
 	// nothing sealed, it would name an account that may not exist.
-	Identity func(role *config.Role) string
+	Identity func(role *org.Role) string
 }
 
 // mcpEnvAt is the seat credential of an app whose token reaches a child MCP
 // server through the environment.
 func mcpEnvAt(envs, keys []string) seatCredentialAt {
 	return seatCredentialAt{
-		Find: func(role *config.Role) (string, string) {
+		Find: func(role *org.Role) (string, string) {
 			return seatCredential(role.MCPEnv, envs, keys)
 		},
 		Address: "mcp_env." + envs[0],
@@ -1202,13 +1304,14 @@ func mcpEnvAt(envs, keys []string) seatCredentialAt {
 // costs them the product.
 func (s *Service) stillUsedBySibling(
 	ctx context.Context, kind integration.Kind, company *config.Company,
+	roster *org.Organization,
 ) func(string) bool {
 	keep := map[string]bool{}
 	for _, sibling := range atlassianSiblings[kind] {
 		if !s.surfaceStaying(ctx, sibling, company) {
 			continue
 		}
-		for _, name := range atlassianSeatVars(company, sibling) {
+		for _, name := range atlassianSeatVars(roster, sibling) {
 			keep[name] = true
 		}
 	}
@@ -1271,7 +1374,7 @@ func (s *Service) surfaceStaying(
 
 // atlassianSeatVars is every `${VAR}` one Atlassian surface reads a seat's
 // credential out of, across every seat.
-func atlassianSeatVars(company *config.Company, kind integration.Kind) []string {
+func atlassianSeatVars(roster *org.Organization, kind integration.Kind) []string {
 	product := atlassian.ProductAny
 	switch kind {
 	case integration.KindJira:
@@ -1281,7 +1384,7 @@ func atlassianSeatVars(company *config.Company, kind integration.Kind) []string 
 	}
 	at := atlassianAt(product)
 	var out []string
-	for role := range company.EachRole() {
+	for role := range roster.AllRoles() {
 		out = append(out, seatSecretNames(at, role, "")...)
 	}
 	slices.Sort(out)
@@ -1316,7 +1419,7 @@ func orphanedSecrets(kind integration.Kind, state ToolState) []string {
 // THROUGH provision.SoleVar, so a slot holding a literal rather than a whole
 // `${VAR}` names nothing: there is no row in the store for it, and an orphan
 // list has to be a list of things that are there.
-func seatSecretNames(at seatCredentialAt, role *config.Role, stored string) []string {
+func seatSecretNames(at seatCredentialAt, role *org.Role, stored string) []string {
 	var raw []string
 	if at.Vars != nil {
 		raw = at.Vars(role)
@@ -1346,7 +1449,7 @@ func seatSecretNames(at seatCredentialAt, role *config.Role, stored string) []st
 // function here passes values through rather than expanding them.
 func atlassianAt(product atlassian.Product) seatCredentialAt {
 	return seatCredentialAt{
-		Find: func(role *config.Role) (stored, where string) {
+		Find: func(role *org.Role) (stored, where string) {
 			cred, at := atlassian.CredentialAt(product, role.MCPEnv, verbatim)
 			if at == "" {
 				return "", ""
@@ -1360,7 +1463,7 @@ func atlassianAt(product atlassian.Product) seatCredentialAt {
 		// TWO SLOTS PER SEAT. Atlassian assigns the account's address at
 		// creation and its products authenticate base64(address:token), so
 		// the pass seals both and a disconnect orphans both.
-		Vars: func(role *config.Role) []string {
+		Vars: func(role *org.Role) []string {
 			cred, _ := atlassian.CredentialAt(product, role.MCPEnv, verbatim)
 			return []string{cred.Token, atlassian.SeatEmail(role.MCPEnv)}
 		},
@@ -1377,8 +1480,8 @@ func verbatim(v string) string { return v }
 // address when it creates a service account, so the pass writes it onto the
 // seat and this reads it back. Read through the resolver, because the
 // document holds a reference and a roster wants the account.
-func atlassianIdentity(resolve func(string) (string, bool)) func(*config.Role) string {
-	return func(role *config.Role) string {
+func atlassianIdentity(resolve func(string) (string, bool)) func(*org.Role) string {
+	return func(role *org.Role) string {
 		return setup.Deref(atlassian.SeatEmail(role.MCPEnv), resolve)
 	}
 }
@@ -1395,21 +1498,17 @@ func atlassianIdentity(resolve func(string) (string, bool)) func(*config.Role) s
 // answer: a second rule here would name the wrong account the day either
 // changed, and the failure is an operator hunting a user list for a name
 // nothing created.
-func derivedIdentity(name func(handle string) string) func(*config.Role) string {
-	return func(role *config.Role) string {
-		return name(role.Seat().Handle())
+func derivedIdentity(name func(handle string) string) func(*org.Role) string {
+	return func(role *org.Role) string {
+		return name(role.Handle())
 	}
 }
 
 // mattermostAt is the seat credential of a Mattermost bot, which lives on the
 // seat's own block rather than in mcp_env: see [config.RoleMattermost].
 var mattermostAt = seatCredentialAt{
-	Find: func(role *config.Role) (string, string) {
-		block := role.Integrations.Mattermost
-		if block == nil {
-			return "", ""
-		}
-		value := strings.TrimSpace(block.BotToken)
+	Find: func(role *org.Role) (string, string) {
+		value := strings.TrimSpace(role.Mattermost.BotToken)
 		if value == "" {
 			return "", ""
 		}
@@ -1516,13 +1615,13 @@ func named(values map[string]string, reqs []setup.Requirement) bool {
 //
 // An app that already named its own choices keeps them; nothing does today,
 // and one that does knows something this does not.
-func seatChoices(company *config.Company, reqs []setup.Requirement) {
+func seatChoices(roster *org.Organization, reqs []setup.Requirement) {
 	var choices []setup.Choice
-	for role := range company.EachRole() {
+	for role := range roster.AllRoles() {
 		// THROUGH THE SEAT, the same derivation slackSeats uses: a handle
 		// defaults from the name, and "is this a person" is the org model's
 		// question. A second implementation here would eventually disagree.
-		seat := role.Seat()
+		seat := role
 		if !seat.IsAgent() {
 			continue
 		}
@@ -1557,24 +1656,27 @@ func seatChoices(company *config.Company, reqs []setup.Requirement) {
 // transport is running.
 func (s *Service) apps() map[string]string { return s.slackApps() }
 
-func slackSeats(company *config.Company, resolve func(string) (string, bool),
-	apps map[string]string,
+func slackSeats(roster *org.Organization,
+	resolve func(string) (string, bool),
+	apps map[string]string, webhookBase, webhookBaseKey string,
 ) []SeatState {
-	// THROUGH THE RESOLVER, because what is built from this is COPIED INTO
-	// SLACK. `public_base_url` is a Tier B field, so it may be a whole
-	// `${VAR}` and the document stores it verbatim; read raw, the manifest
-	// an operator pastes carries `${PUBLIC_URL}/webhooks/slack/sre-lead`
-	// where an address belongs, and Slack refuses the app with nothing
-	// naming the cause. The same mistake was measured on the Atlassian
-	// pass, which sent the literal `${ATLASSIAN_ORG_ID}` to Atlassian.
-	base := company.Integrations.WebhookBase(resolve)
+	// WHAT IS BUILT FROM THIS IS COPIED INTO SLACK, which is why it was
+	// the sharpest case for moving the address into Tier A. As a Tier B
+	// field it could be a whole `${VAR}` the document stored verbatim, so
+	// a manifest an operator pasted carried
+	// `${PUBLIC_URL}/webhooks/slack/sre-lead` where an address belongs and
+	// Slack refused the app with nothing naming the cause — the same
+	// mistake measured on the Atlassian pass, which sent the literal
+	// `${ATLASSIAN_ORG_ID}` to Atlassian. Tier A resolves before it
+	// decodes, so there is no state in which this is a reference.
+	base := webhookBase
 	out := []SeatState{}
-	for role := range company.EachRole() {
+	for role := range roster.AllRoles() {
 		// THROUGH THE SEAT, which is where the derivation lives: a handle
 		// defaults from the name, and "is this a person" is the org
 		// model's question rather than the config's. Deriving either here
 		// would be a second implementation of an identity rule.
-		seat := role.Seat()
+		seat := role
 		if !seat.IsAgent() {
 			continue
 		}
@@ -1620,9 +1722,9 @@ func slackSeats(company *config.Company, resolve func(string) (string, bool),
 		// instruction pointing at what is not there.
 		switch manifest, err := slack.ManifestJSON(role.Name, handle, base); {
 		case base == "":
-			state.ManifestNote = "no manifest yet: set integrations.public_base_url " +
-				"to the address this agent's app delivers to, as a value this " +
-				"node can read"
+			state.ManifestNote = "no manifest yet: set `" + webhookBaseKey +
+				"` in this node's Tier A file to the address this agent's " +
+				"app delivers to, and restart the node"
 		case err != nil:
 			state.ManifestNote = err.Error()
 		default:
@@ -1643,7 +1745,7 @@ func slackSeats(company *config.Company, resolve func(string) (string, bool),
 // deliveries are signed with. Both are per-seat, both survive a disconnect,
 // and neither is typed in by anybody — so this list is the only way an
 // operator learns they exist.
-func githubSeatSecrets(app *config.RoleGitHub) []string {
+func githubSeatSecrets(app *org.GitHubApp) []string {
 	if app == nil {
 		return nil
 	}
@@ -1687,14 +1789,16 @@ func repoScope(repos []string) string {
 // them all: this is where an operator starts the flow, so the seat with no app
 // yet is precisely the row that has to be there. Human seats are excluded,
 // because a person's GitHub account is not something this engine creates.
-func githubSeats(company *config.Company, resolve func(string) (string, bool)) []SeatState {
+func githubSeats(company *config.Company, roster *org.Organization,
+	resolve func(string) (string, bool),
+) []SeatState {
 	_, webBase := company.Integrations.GitHub.Bases(resolve)
 	out := []SeatState{}
-	for role := range company.EachRole() {
+	for role := range roster.AllRoles() {
 		// THROUGH THE SEAT, the same derivation every other roster uses: a
 		// handle defaults from the name, and "is this a person" is the org
 		// model's question rather than the config's.
-		seat := role.Seat()
+		seat := role
 		if !seat.IsAgent() {
 			continue
 		}
@@ -1702,7 +1806,7 @@ func githubSeats(company *config.Company, resolve func(string) (string, bool)) [
 		// functions the begin route reads it through. A second reading here
 		// would be free to disagree with the app that actually gets created.
 		tier, _ := github.ParseTier(seatTier(role))
-		app := role.Integrations.GitHub
+		app := role.GitHub
 		state := SeatState{
 			Handle: seat.Handle(), Name: role.Name,
 			Tier:      string(tier),
@@ -1858,16 +1962,16 @@ func kindList() string {
 // inputs serves POST /setup/integrations/{kind}/inputs.
 func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	kind := integration.Kind(r.PathValue("kind"))
-	company := s.company()
+	company, roster := s.company()
 	if company == nil {
-		httpjson.FailWith(w, http.StatusConflict, codeNoActiveRevision, map[string]string{
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
 			"hint": "no company configuration is active",
 		})
 		return
 	}
-	state, ok := s.stateFor(r.Context(), company, kind)
+	state, ok := s.stateFor(r.Context(), company, roster, kind)
 	if !ok {
-		httpjson.FailWith(w, http.StatusNotFound, codeUnknownKind, map[string]string{
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownKind, map[string]string{
 			"hint": "one of " + kindList(),
 		})
 		return
@@ -1911,7 +2015,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if !found {
-			httpjson.FailWith(w, http.StatusNotFound, codeInvalidInput, map[string]string{
+			httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeInvalidInput, map[string]string{
 				"detail": "no seat called " + req.Seat + " takes per-seat setup for " + string(kind),
 			})
 			return
@@ -1924,20 +2028,20 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	}
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := mintInto(values, against, req.Generate); err != nil {
-		httpjson.FailWith(w, http.StatusBadRequest, codeInvalidInput, map[string]string{
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidInput, map[string]string{
 			"detail": err.Error(),
 		})
 		return
 	}
 	if len(values) == 0 {
-		httpjson.FailWith(w, http.StatusBadRequest, codeInvalidInput, map[string]string{
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidInput, map[string]string{
 			"detail": "the submission carried no values",
 		})
 		return
 	}
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := refuseUngated(values, against); err != nil {
-		httpjson.FailWith(w, http.StatusBadRequest, codeInvalidInput, map[string]string{
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidInput, map[string]string{
 			"detail": err.Error(),
 			"hint": "the answer this submission gives needs that field; send " +
 				"it, or choose the answer that does not",
@@ -1946,9 +2050,15 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	}
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := refuseEmpty(values, against); err != nil {
-		httpjson.FailWith(w, http.StatusBadRequest, codeInvalidInput, map[string]string{
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidInput, map[string]string{
 			"detail": err.Error(),
 		})
+		return
+	}
+	// A CREDENTIAL IN THE SUBMISSION IS `secrets.write` on top of the
+	// route's `setup.connect`, decided once the body says whether there is
+	// one and before anything is sealed.
+	if carriesCredential(values, against) && !s.mayWriteCredentials(w, r) {
 		return
 	}
 
@@ -1961,7 +2071,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	// here closes that loop: the address arrives in the SAME write as the
 	// credentials, which is what makes the block valid the moment it exists.
 	if note := s.discoverSite(r.Context(), company, kind, against, values); note != "" {
-		httpjson.FailWith(w, http.StatusBadGateway, codeInvalidInput, map[string]string{
+		httpjson.FailWith(w, http.StatusBadGateway, httpjson.CodeInvalidInput, map[string]string{
 			"detail": note,
 		})
 		return
@@ -1970,7 +2080,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	summary := auditSummary(kind, req.Summary)
 	result, err := s.writer.Write(r.Context(), against, setup.Submission{
 		Kind: kind, Values: values, Seat: req.Seat,
-		Summary: summary, Operator: operatorOf(r), Expect: req.IfMatch,
+		Summary: summary, By: attributionOf(r), Expect: req.IfMatch,
 	})
 	if err != nil {
 		s.refuse(w, r, err, result)
@@ -1983,9 +2093,9 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	log.InfoContext(r.Context(), "setup_inputs_written",
 		"kind", kind, "revision", result.RevisionID, "epoch", result.Epoch,
 		"secrets", strings.Join(result.Secrets, ","), "reloaded", result.Reloaded,
-		"operator", operatorOf(r))
+		"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
 
-	after := s.company()
+	after, afterRoster := s.company()
 	// THE ADDRESS THIS SURFACE WAS SET UP AGAINST, for the surfaces whose
 	// address only a person can move.
 	//
@@ -2002,11 +2112,11 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	// typed, however much of Slack's provisioning a pass does converge. See
 	// [integration.Kind.Ingress].
 	if after != nil && kind.Ingress() == integration.IngressOperator {
-		s.recordEndpoint(r.Context(), kind, after.Integrations.WebhookBase(s.resolve))
+		s.recordEndpoint(r.Context(), kind, s.webhookBase)
 	}
 	fresh := state
 	if after != nil {
-		if refreshed, ok := s.state(after, kind); ok {
+		if refreshed, ok := s.state(after, afterRoster, kind); ok {
 			fresh = withLoopFindings(refreshed, s.loopFindings(r.Context(), kind))
 		}
 	}
@@ -2026,16 +2136,16 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 // unset` is the deliberate path, and the setup answer names what is orphaned.
 func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	kind := integration.Kind(r.PathValue("kind"))
-	company := s.company()
+	company, roster := s.company()
 	if company == nil {
-		httpjson.FailWith(w, http.StatusConflict, codeNoActiveRevision, map[string]string{
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
 			"hint": "no company configuration is active",
 		})
 		return
 	}
-	state, ok := s.stateFor(r.Context(), company, kind)
+	state, ok := s.stateFor(r.Context(), company, roster, kind)
 	if !ok {
-		httpjson.FailWith(w, http.StatusNotFound, codeUnknownKind, map[string]string{
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownKind, map[string]string{
 			"hint": "one of " + kindList(),
 		})
 		return
@@ -2052,7 +2162,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	// refuses it here, before the teardown is queued: queued, it would run
 	// at the third-party app and then remove a block the managing system
 	// puts straight back.
-	if err := s.config.Authorize(operatorAuthor(operatorOf(r))); err != nil {
+	if err := s.config.Authorize(attributionOf(r)); err != nil {
 		s.refuse(w, r, err, setup.Result{})
 		return
 	}
@@ -2075,7 +2185,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	// request, the 202 path minutes later when the teardown finishes. See
 	// [Service.orphanedSecrets].
 	orphaned := orphanedSecrets(kind, state)
-	orphaned = slices.DeleteFunc(orphaned, s.stillUsedBySibling(r.Context(), kind, company))
+	orphaned = slices.DeleteFunc(orphaned, s.stillUsedBySibling(r.Context(), kind, company, roster))
 
 	// ASKED FOR, NOT DONE HERE. The block stays in the document until the
 	// third-party app teardown has run, because that block carries the credential
@@ -2088,22 +2198,22 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	// the delete (a revoked token, an instance that is gone) would
 	// otherwise hold the integration in Disconnecting for ever.
 	if !req.Force {
-		if err := s.markDisconnecting(r.Context(), kind, req.RemoveSeats); err != nil {
+		if err := s.markDisconnecting(r.Context(), kind, req.RemoveSeats,
+			attributionOf(r)); err != nil {
 			// TRANSIENT SAID AS TRANSIENT. Both answers are 503 — the
 			// request can be repeated and may then work — but only this
 			// one is a race the caller should sit out and retry, and a
 			// caller cannot tell them apart from the status alone.
-			code := httpjson.CodeInternalError
+			code, after := httpjson.CodeUnavailable, authz.RetryUndecidedSeconds
 			if errors.Is(err, errSurfaceBusy) {
-				code = codeSurfaceBusy
+				code, after = httpjson.CodeSurfaceBusy, httpjson.RetrySeconds(RetryBusy)
 			}
-			httpjson.FailWith(w, http.StatusServiceUnavailable, code,
-				map[string]string{"detail": err.Error()})
+			httpjson.UnavailableWith(w, code, after, httpjson.Detail{"detail": err.Error()})
 			return
 		}
 		log.InfoContext(r.Context(), "setup_disconnect_requested",
 			"integration", kind, "remove_seats", req.RemoveSeats,
-			"operator", operatorOf(r))
+			"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
 		httpjson.Write(w, http.StatusAccepted, map[string]any{
 			"key": kind, "removed": false, "disconnecting": true,
 			"remove_seats": req.RemoveSeats,
@@ -2122,7 +2232,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	applied, err := s.config.Apply(r.Context(), configapi.ApplyRequest{
 		Patch:   patch,
 		Summary: "disconnect " + string(kind),
-		Author:  operatorAuthor(operatorOf(r)),
+		By:      attributionOf(r),
 		Expect:  strings.TrimSpace(r.Header.Get("If-Match")),
 	})
 	if err != nil {
@@ -2141,7 +2251,8 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	// with no block behind it and nothing to remove it again.
 	s.forgetUnderGuard(r.Context(), kind)
 	log.InfoContext(r.Context(), "setup_disconnected",
-		"kind", kind, "revision", applied.RevisionID, "operator", operatorOf(r))
+		"kind", kind, "revision", applied.RevisionID,
+		"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
 	httpjson.Write(w, http.StatusOK, map[string]any{
 		"key": kind, "removed": true,
 		"revision_id": applied.RevisionID, "epoch": applied.Epoch,
@@ -2163,7 +2274,7 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 	case errors.As(err, &managed):
 		configapi.RefuseManaged(w, managed)
 	case errors.As(err, &literal):
-		httpjson.FailWith(w, http.StatusConflict, codeLiteralInConfig, map[string]string{
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeLiteralInConfig, map[string]string{
 			"path": literal.Path,
 			"detail": "this field holds a value rather than a ${VAR} reference, so " +
 				"there is no variable to write the credential into",
@@ -2173,7 +2284,7 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 		// REFUSED BEFORE ANYTHING WAS WRITTEN, which is the difference
 		// from the config surface's own raced answer: there is no stored
 		// revision to name, because nothing was stored.
-		httpjson.FailWith(w, http.StatusConflict, codeRevisionAdvanced, map[string]string{
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeRevisionAdvanced, map[string]string{
 			"your_base": stale.Base, "current_revision_id": stale.Current,
 			"hint": "the configuration changed since you read it; re-read the " +
 				"setup state and submit again",
@@ -2190,7 +2301,7 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 		if raced.Stored != "" {
 			extra["stored_revision_id"] = raced.Stored
 		}
-		httpjson.FailWith(w, http.StatusConflict, codeRevisionAdvanced, extra)
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeRevisionAdvanced, extra)
 	case errors.As(err, &invalid):
 		// THE CONFIG SURFACE'S OWN STRUCTURE, located problems and the
 		// derived hierarchy, so a screen placing a refusal on the field it
@@ -2201,28 +2312,17 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 		fields["hint"] = "the values are checked as the whole company document they " +
 			"produce, so a field that is fine on its own is still refused " +
 			"when it leaves the company invalid"
-		httpjson.FailWithFields(w, http.StatusBadRequest, codeValidationError, fields)
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeValidationError, fields)
 	case errors.As(err, &patchErr):
 		// validation_error rather than the config surface's invalid_patch:
 		// the caller here submitted values, not a patch, and this surface
 		// built the patch they became.
 		fields := configapi.RefusalFields(err)
 		fields["detail"] = patchErr.Err.Error()
-		httpjson.FailWithFields(w, http.StatusBadRequest, codeValidationError, fields)
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeValidationError, fields)
 	case errors.Is(err, configapi.ErrNoActiveRevision):
-		httpjson.FailWith(w, http.StatusConflict, codeNoActiveRevision, map[string]string{
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
 			"hint": "import a company configuration first",
-		})
-	case errors.Is(err, secrets.ErrNoKeyring):
-		// A node whose bootstrap names no key fails at the seal, with this
-		// sentinel, which exists to be recognised. It once fell through to
-		// the generic case, so a screen that could have said "set
-		// secrets.keys" said internal_error and left the operator reading
-		// engine logs to find a one-line fix.
-		httpjson.FailWith(w, http.StatusServiceUnavailable, codeNoKeyring, map[string]string{
-			"detail": "this node has no secrets.keys, so a credential cannot be sealed",
-			"hint": "run `crewlet secrets keygen`, put the key in secrets.keys in " +
-				"crewlet.yaml, and restart the engine",
 		})
 	default:
 		// THE DETAIL GOES TO THE LOG, never to the caller: a third-party app's own
@@ -2234,10 +2334,15 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 	}
 }
 
-// operatorOf is who the guard authenticated, or empty.
-func operatorOf(r *http.Request) string {
-	operator, _ := auth.OperatorFrom(r.Context())
-	return operator
+// attributionOf is who a write on this request is attributed to: the author,
+// its kind and the credential it came through, which every revision, seat
+// record and sealed row this surface writes keeps.
+//
+// TOTAL, never empty, for [auth.AttributionOf]'s reason: this surface is always
+// guarded, so what is left is a handler mounted outside the guard — and a
+// credential sealed under an empty author is one nobody can trace.
+func attributionOf(r *http.Request) iam.Actor {
+	return auth.AttributionOf(r.Context())
 }
 
 // disconnectRequest is what the Disconnect dialog sends.
@@ -2283,7 +2388,7 @@ const disconnectRetryEvery = 500 * time.Millisecond
 // yet still has to carry the intent, or a disconnect asked for before the
 // first pass would be lost.
 func (s *Service) markDisconnecting(
-	ctx context.Context, kind integration.Kind, removeSeats bool,
+	ctx context.Context, kind integration.Kind, removeSeats bool, by iam.Actor,
 ) error {
 	// UNDER THE SURFACE'S OWN LEASE. This is the write that most needs it:
 	// the intent it records is what the loop acts on, and a tick that read
@@ -2333,7 +2438,10 @@ func (s *Service) markDisconnecting(
 	// written here, which is how they came to be three fields short of what
 	// the transition means: a card went on showing the last pass's findings
 	// under the word Disconnecting. See [integration.AskTeardown].
-	return s.status.SaveIntegration(ctx, integration.AskTeardown(state, kind, removeSeats))
+	// AND WHO ASKED, which the teardown's writes are recorded under when the
+	// loop carries it out — see [integration.State.RequestedBy].
+	return s.status.SaveIntegration(ctx,
+		integration.AskTeardown(state, kind, removeSeats, by))
 }
 
 // forgetUnderGuard removes a surface's status row with every other writer at
@@ -2378,9 +2486,10 @@ func githubOrgOf(company *config.Company) string {
 // [withLoopFindings] for why the document and the store are not enough on
 // their own.
 func (s *Service) stateFor(
-	ctx context.Context, company *config.Company, kind integration.Kind,
+	ctx context.Context, company *config.Company, roster *org.Organization,
+	kind integration.Kind,
 ) (ToolState, bool) {
-	state, ok := s.state(company, kind)
+	state, ok := s.state(company, roster, kind)
 	if !ok {
 		return state, false
 	}

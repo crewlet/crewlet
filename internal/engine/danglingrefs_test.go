@@ -35,10 +35,11 @@ roles:
   - name: CEO
     handle: ceo
     llm: zulu
-    manages: [Engineering, Nobody]
+    manages: [engineering, nobody]
 units:
   - name: Engineering
-    lead: Ghost
+    id: engineering
+    lead: ghost
     roles:
       - name: Dev
         handle: dev
@@ -103,7 +104,12 @@ func danglingLines(t *testing.T, logs *bytes.Buffer) []danglingLine {
 func TestDanglingReferencesAreLoggedOncePerAppliedEpoch(t *testing.T) {
 	t.Parallel()
 	var logs bytes.Buffer
-	p := newPlane(t, func(o *engine.ReconcilerOptions) {
+	// The engine boots on the document the revisions below activate, and
+	// each apply resolves the references in it: a lead and a `manages:`
+	// entry name a seat in the same document.
+	p := planeFor(t, newEngine(t, engine.Options{
+		Company: parsedCompany(t, danglingCompanyDoc),
+	}), func(o *engine.ReconcilerOptions) {
 		o.Log = slog.New(slog.NewJSONHandler(&logs, nil))
 	})
 
@@ -114,8 +120,8 @@ func TestDanglingReferencesAreLoggedOncePerAppliedEpoch(t *testing.T) {
 		}
 	}
 	want := []danglingLine{
-		{Epoch: first, Ref: "lead", From: "Engineering", To: "Ghost"},
-		{Epoch: first, Ref: "manages", From: "CEO", To: "Nobody"},
+		{Epoch: first, Ref: "lead", From: "Engineering", To: "ghost"},
+		{Epoch: first, Ref: "manages", From: "CEO", To: "nobody"},
 	}
 	if got := danglingLines(t, &logs); !slices.Equal(got, want) {
 		t.Fatalf("after three ticks on one epoch, logged %+v, want %+v", got, want)
@@ -126,8 +132,8 @@ func TestDanglingReferencesAreLoggedOncePerAppliedEpoch(t *testing.T) {
 		t.Fatal(err)
 	}
 	want = append(want,
-		danglingLine{Epoch: second, Ref: "lead", From: "Engineering", To: "Ghost"},
-		danglingLine{Epoch: second, Ref: "manages", From: "CEO", To: "Nobody"},
+		danglingLine{Epoch: second, Ref: "lead", From: "Engineering", To: "ghost"},
+		danglingLine{Epoch: second, Ref: "manages", From: "CEO", To: "nobody"},
 	)
 	if got := danglingLines(t, &logs); !slices.Equal(got, want) {
 		t.Fatalf("after a re-activation, logged %+v, want %+v", got, want)
@@ -144,5 +150,42 @@ func TestDanglingReferencesAreLoggedOncePerAppliedEpoch(t *testing.T) {
 	}
 	if got := danglingLines(t, &logs); !slices.Equal(got, want) {
 		t.Errorf("a refused revision logged its references: %+v, want only %+v", got, want)
+	}
+}
+
+// A GITLAB ACCESS LEVEL NAMING NO SEAT IS LOGGED WITH THE REST, and one
+// naming a seat by its handle is not.
+//
+// The key is under `integrations` and the seat it names is in the org, both in
+// the one document an apply resolves, so it is logged beside the lead and
+// `manages:` references, once per applied epoch as the documentation promises.
+func TestADanglingAccessLevelIsLoggedWithTheOrgsReferences(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	doc := danglingCompanyDoc + `integrations:
+  gitlab:
+    provisioning:
+      group: acme
+      access_levels:
+        dev: maintainer
+        former-dev: maintainer
+`
+	p := planeFor(t, newEngine(t, engine.Options{
+		Company: parsedCompany(t, doc),
+	}), func(o *engine.ReconcilerOptions) {
+		o.Log = slog.New(slog.NewJSONHandler(&logs, nil))
+	})
+	epoch := p.activate(t.Context(), t, doc)
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	want := []danglingLine{
+		{Epoch: epoch, Ref: "lead", From: "Engineering", To: "ghost"},
+		{Epoch: epoch, Ref: "manages", From: "CEO", To: "nobody"},
+		{Epoch: epoch, Ref: "gitlab_access_level",
+			From: "integrations.gitlab.provisioning.access_levels", To: "former-dev"},
+	}
+	if got := danglingLines(t, &logs); !slices.Equal(got, want) {
+		t.Fatalf("logged %+v, want %+v", got, want)
 	}
 }

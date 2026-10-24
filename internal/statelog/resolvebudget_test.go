@@ -62,7 +62,9 @@ func TestACallsResolveBudgetBoundsItsWaitsAndOnlyItsOwn(t *testing.T) {
 	t.Run("behind", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
-		peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil, []byte("peer"))
+		peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil,
+			signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: 1, Writer: "node-b"}, probeSubject("a"), statelog.ScopeSet{Paths: []string{"object.a"}},
+				"peer-op", "peer")))
 		if err != nil {
 			t.Fatalf("the peer's write: %v", err)
 		}

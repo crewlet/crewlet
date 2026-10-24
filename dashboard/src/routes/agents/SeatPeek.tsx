@@ -8,26 +8,44 @@
  * which round of how many), then the handful of facts a reader asks next:
  * who it reports to, which model it runs on and which one is serving the call
  * in flight, each capped budget window, which node holds it, how much work it
- * holds, where its tools come from, and what it is for. Everything else is
- * the profile's, one press away.
+ * holds, where its tools come from, and what it is for — and for a HUMAN
+ * seat, who holds it. Everything else is the profile's, one press away.
  *
- * # At most three reads, and none a reader will be refused
+ * # A human seat says who holds it, and is filled from here
+ *
+ * The identity directory binds a person to a human seat, and every person
+ * comes from one, so a human seat's peek says what holds it — its holder and
+ * their stage, the open invitation that names it (an admin's to see), or that
+ * it is vacant — and, for an admin, offers what the seat's card menu and
+ * its page offer: Invite and Create on a vacant seat, Cancel invitation on an
+ * invited one. On a phone, whose chart is rows with no card menu, this is
+ * where those gestures are.
+ *
+ * # At most three questions, one directory read, and none a reader will be refused
  *
  * The seat, its state, its model chain and tool sources, and its budget
  * windows all arrive with the org projection and the `agents` push, so they
  * cost nothing. What does cost a read:
  *
- *   * `work_workload` — the seat's open work, for every reader;
- *   * `fleet` — which node holds the seat and since when — OPERATOR-ONLY, so
- *     it is asked only of an operator; every other reader is told what the
- *     public health push says (`heldBy`: this node, by name, or another),
+ *   * `work_workload` — the seat's open work, for a reader holding Tracker,
+ *     whose question it is;
+ *   * `fleet` — which node holds the seat and since when — on Admin, so it
+ *     is asked only of an admin; every
+ *     other reader is told what the health push says (`heldBy`: this node, by
+ *     name, or another),
  *     exactly as the profile's Setup card tells them, rather than being sent
  *     a refusal to draw or told a fact already on their screen is withheld;
  *   * `work_item_turns` — which turn this is on its task ("Turn 2") — asked
- *     only while the seat is working on one.
+ *     only while the seat is working on one, of a Tracker holder.
+ *
+ * And for a HUMAN seat, one REST read of the directory (`GET /iam/seats`),
+ * which every signed-in reader is answered (masked per reader), and never for
+ * an agent's seat, whose holder is the engine.
  *
  * The company document is NOT read: the model chain a turn resolves is on the
- * public projection, so a per-peek read of the whole guarded configuration
+ * org projection for an admin — the one who could read the document — and
+ * everybody else is told which access shows it
+ * ([resolvedAbsence]), so a per-peek read of the whole guarded configuration
  * (on every `[`/`]` step through a list) would buy nothing.
  *
  * # Watch live, from the chart in two presses
@@ -43,10 +61,30 @@
  * There is no person-to-seat chat channel. Message opens the one New task
  * sheet with the seat as assignee and `ask` set, so the question is filed as
  * work the seat owes an answer on, and the answer lands in the asker's Inbox.
+ * On the reader's own seat it is held, by the button itself, exactly as on the
+ * seat's page — an ask only they could answer.
+ *
+ * # Your own seat points at your Account
+ *
+ * The chart is where a person finds themselves first, so the peek of their own
+ * seat carries the profile's **Your account** card (`seat/shared.tsx`): the
+ * seat is the company's page about a place, and how the person in it signs in
+ * is theirs, at `#/account`. No other seat draws it.
  */
 
-import { useMemo } from "react";
-import { ButtonLink, Callout, EmptyState, EmptyValue, Meter, StatusDot, Tag } from "@crewlethq/ui";
+import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
+import { useMemo, useState } from "react";
+import {
+  Button,
+  ButtonLink,
+  Callout,
+  EmptyState,
+  EmptyValue,
+  Meter,
+  StatusDot,
+  Tag,
+  InlineCode,
+} from "@crewlethq/ui";
 import { UserGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { MessageSeatButton } from "~/components/writes.tsx";
@@ -55,28 +93,43 @@ import { fmtCount, fmtElapsed, fmtMinute, fmtTime, plural, readerDay } from "~/l
 import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
+import { TRACKER, accessNames } from "~/lib/access.ts";
+import {
+  canManagePeople,
+  SEAT_GESTURE_WORDS,
+  SeatGestureDialog,
+  seatGestures,
+  useHumanSeats,
+  type SeatGesture,
+} from "~/components/people.tsx";
+import type { HumanSeat } from "~/contract/identity.ts";
 import {
   activityOf,
   awaitingPerson,
   handleLabel,
   heldBy,
   indexOrg,
+  liveRowFor,
   nameOfIn,
-  ringOf,
+  resolvedAbsence,
+  resolvedWithheld,
   roundOf,
   seatPath,
   stateLine,
+  statusOf,
   toneOf,
   type Seat,
 } from "~/lib/seats.ts";
 import { unitPath } from "~/lib/orgchart.ts";
+import { answersAddress, itemAddress, turnItem } from "~/lib/work.ts";
 import type { AgentRow, BudgetWindow, LiveCall, LiveTurn } from "~/protocol/types.ts";
 import { useSandboxes } from "~/lib/store-hooks.ts";
 import { turnIdOf, watchHref } from "~/lib/turns.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { PERIOD_WORDS } from "~/lib/budget.ts";
 import { renderInline } from "~/lib/markdown.ts";
-import { companyCeilings, liveRow, seatRun } from "./seat/profile.ts";
+import { companyCeilings, seatRun } from "./seat/profile.ts";
+import { YourAccount } from "./seat/shared.tsx";
 
 /** How many tool sources the peek names before "+n". */
 const TOOL_CHIPS = 3;
@@ -150,13 +203,11 @@ export function SeatPeek({ handle }: { handle: string }) {
         size="compact"
         icon={<UserGlyph size={32} />}
         title={`No seat called “${handle}”`}
-        description="Seats are addressed by handle. A company revision may have renamed or removed this one."
+        description="It may have been renamed or removed."
       />
     );
   }
-  return (
-    <SeatPeekBody seat={seat} agent={liveRow(agents, handle, seat)} nameOf={nameOfIn(index)} />
-  );
+  return <SeatPeekBody seat={seat} agent={liveRowFor(agents, seat)} nameOf={nameOfIn(index)} />;
 }
 
 function SeatPeekBody({
@@ -175,23 +226,38 @@ function SeatPeekBody({
   const sandboxes = useSandboxes();
   const human = seat.kind === "human";
   const state = human ? undefined : activityOf(agent);
-  const ring = human ? undefined : ringOf(state);
+  const status = human ? undefined : statusOf(state);
   const turn = agent?.turn ?? null;
   const call = agent?.live_call ?? null;
-  const item = call?.work_item?.key || turn?.work_item?.key || "";
+  const ref = call?.work_item?.key ? call.work_item : (turn?.work_item ?? null);
+  // ASKED FOR BY ITS ADDRESS ([turnItem]): a key another task claimed first
+  // would number this turn on the claimant's list.
+  const item = ref?.key ? itemAddress(turnItem(ref)) : "";
 
   // THE THREE READS — see the file's doc.
-  const workload = useQuery("work_workload", undefined, { pollMs: 60_000 });
-  const fleet = useQuery("fleet", undefined, { enabled: viewer.operator, pollMs: 60_000 });
+  // THE TRACKER'S TWO, asked only of a company running Crewlet Works.
+  const runs = useServicesRun();
+  const ask = useServicesAsk();
+  const workload = useQuery("work_workload", undefined, {
+    enabled: viewer.tracker && runs.tracker,
+    pollMs: 60_000,
+  });
+  // THE FLEET'S LEASES ARE THE DEPLOYMENT'S, read on Admin: asked only of an
+  // admin, and everybody else is told what the health push says.
+  const fleet = useQuery("fleet", undefined, { enabled: viewer.admin, pollMs: 60_000 });
   const turns = useQuery(
     "work_item_turns",
     { id: item, limit: 1 },
-    { enabled: state === "working" && item !== "" },
+    { enabled: viewer.tracker && ask.tracker && state === "working" && item !== "" },
   );
 
   const ordinal =
     turn && item
-      ? turnOrdinal(turn.turn_id, turns.data?.turns?.[0], !!turns.data && turns.data.key === item)
+      ? turnOrdinal(
+          turn.turn_id,
+          turns.data?.turns?.[0],
+          !!turns.data && answersAddress(item, turns.data.item, turns.data.key),
+        )
       : null;
   const started = turn?.started_at ?? call?.started_at;
   const elapsed = started ? now - Date.parse(started) : null;
@@ -202,7 +268,15 @@ function SeatPeekBody({
   const chain = seat.raw.llm?.["execute"] ?? [];
   const tools = seat.raw.tool_sources ?? [];
   const sandbox = seatRun(sandboxes, seat);
+  const absent = resolvedAbsence(viewer);
   const place = unitPath(seat.unit);
+  // WHO HOLDS A HUMAN SEAT — the directory read, see the file's doc.
+  const readsDirectory = human && !viewer.asking && !viewer.anonymous;
+  const directory = useHumanSeats(readsDirectory);
+  const holding = directory.data?.find((row) => row.handle === seat.handle);
+  const gestures = canManagePeople(viewer.grants) ? seatGestures(holding) : [];
+  // ABOUT THE SEAT AS IT WAS WHEN THE GESTURE STARTED (`SeatGestureDialog`).
+  const [opening, setOpening] = useState<{ gesture: SeatGesture; row: HumanSeat } | null>(null);
 
   return (
     <div className="seat-peek">
@@ -211,7 +285,8 @@ function SeatPeekBody({
           name={seat.name}
           size="lg"
           kind={human ? "human" : "agent"}
-          {...(ring ? { ring } : {})}
+          avatar={seat.avatar}
+          status={status}
           decorative
         />
         <div className="seat-peek-who">
@@ -238,16 +313,16 @@ function SeatPeekBody({
             Watch live
           </a>
         )}
-        {human && (
-          <span className="seat-peek-facts">
-            The engine never runs a human seat, so there is no turn, model or token budget here.
-          </span>
-        )}
       </section>
+
+      {/* YOUR OWN SEAT POINTS AT YOUR OWN ACCOUNT, as its page does: the
+          chart is where a person finds themselves first, and the peek is
+          what it opens. Nothing on anybody else's seat. */}
+      <YourAccount handle={seat.handle} />
 
       {agent?.last_error && (
         <Callout variant="danger">
-          <strong>{agent.last_error.kind || "error"}</strong> — {agent.last_error.message}
+          <strong>{agent.last_error.kind || "error"}</strong>: {agent.last_error.message}
         </Callout>
       )}
       {sandbox && awaitingPerson(sandbox.status) && (
@@ -267,12 +342,13 @@ function SeatPeekBody({
                 name={seat.manager.name}
                 size="xs"
                 kind={seat.manager.kind === "human" ? "human" : "agent"}
+                avatar={seat.manager.avatar}
                 decorative
               />
               {seat.manager.name}
             </a>
           ) : (
-            "Nobody — the top of the chart"
+            "Nobody, top of the chart"
           )}
         </dd>
 
@@ -290,8 +366,12 @@ function SeatPeekBody({
                     <span className="seat-peek-serving">serving now: {call.model}</span>
                   )}
                 </span>
-              ) : (
+              ) : absent === "none" ? (
                 <EmptyValue label="No provider configured" />
+              ) : absent === "withheld" ? (
+                <span className="muted">{resolvedWithheld()}</span>
+              ) : (
+                <EmptyValue label="Not reported yet" />
               )}
             </dd>
 
@@ -309,15 +389,15 @@ function SeatPeekBody({
                   {/* THE COMPANY'S CEILINGS BIND EVERY SEAT, so a seat with
                       none of its own is capped by those where there are any. */}
                   {companyCeilings(org?.token_budget)
-                    ? `No seat budget — ${companyCeilings(org?.token_budget)}`
-                    : "No budget — nothing caps this seat's tokens"}
+                    ? `No seat budget; ${companyCeilings(org?.token_budget)}`
+                    : "No budget"}
                 </dd>
               </>
             )}
 
             <dt>Running on</dt>
             <dd>
-              {!viewer.operator ? (
+              {!viewer.admin ? (
                 // WHAT THE PUBLIC PUSH SAYS, as the profile says it: this
                 // node by name, or another — never which peer, which is the
                 // operator's fleet read.
@@ -337,22 +417,50 @@ function SeatPeekBody({
           </>
         )}
 
-        <dt>Open work</dt>
-        <dd>
-          {workload.error ? (
-            <EmptyValue label="The tracker did not answer" />
-          ) : !workload.data ? (
-            <EmptyValue label="Reading the tracker" />
-          ) : load && load.open > 0 ? (
-            <a className="t-link" href={href(["work"], { assignee: seat.handle })}>
-              {plural(load.open, "task")}
-              {load.blocked > 0 && ` · ${load.blocked} blocked`}
-              {load.overdue > 0 && ` · ${load.overdue} overdue`}
-            </a>
-          ) : (
-            "Nothing open"
-          )}
-        </dd>
+        {readsDirectory && (
+          <>
+            <dt>Held by</dt>
+            <dd>
+              {holding ? (
+                <HeldBy row={holding} />
+              ) : directory.error ? (
+                <EmptyValue label="The identity directory did not answer" />
+              ) : directory.data ? (
+                <EmptyValue label="Not in this node's directory yet" />
+              ) : (
+                <EmptyValue label="Reading the directory" />
+              )}
+            </dd>
+          </>
+        )}
+
+        {/* CREWLET WORKS' OPEN TASKS, drawn only where the company runs it. */}
+        {runs.tracker && (
+          <>
+            <dt>Open work</dt>
+            <dd>
+              {viewer.loading ? (
+                <EmptyValue label="Checking your access" />
+              ) : !viewer.tracker ? (
+                // NOT ASKED: the open work is the tracker's, and a reader without
+                // it is told what would show it rather than a refusal.
+                <EmptyValue label={`Needs ${accessNames([TRACKER])} access`} />
+              ) : workload.error ? (
+                <EmptyValue label="The tracker did not answer" />
+              ) : !workload.data ? (
+                <EmptyValue label="Reading the tracker" />
+              ) : load && load.open > 0 ? (
+                <a className="t-link" href={href(["work", "tasks"], { assignee: seat.handle })}>
+                  {plural(load.open, "task")}
+                  {load.blocked > 0 && ` · ${load.blocked} blocked`}
+                  {load.overdue > 0 && ` · ${load.overdue} overdue`}
+                </a>
+              ) : (
+                "Nothing open"
+              )}
+            </dd>
+          </>
+        )}
 
         {!human && tools.length > 0 && (
           <>
@@ -386,9 +494,62 @@ function SeatPeekBody({
           Open profile
         </ButtonLink>
         <MessageSeatButton handle={seat.handle} />
+        {holding &&
+          gestures.map((gesture) => (
+            <Button
+              key={gesture}
+              size="small"
+              variant="secondary"
+              leadingIcon={SEAT_GESTURE_WORDS[gesture].icon}
+              onClick={() => setOpening({ gesture, row: holding })}
+            >
+              {SEAT_GESTURE_WORDS[gesture].button}
+            </Button>
+          ))}
       </footer>
+      {opening && (
+        <SeatGestureDialog
+          gesture={opening.gesture}
+          seat={opening.row}
+          held={viewer.grants}
+          onClose={() => setOpening(null)}
+        />
+      )}
     </div>
   );
+}
+
+/**
+ * What holds a human seat, as the VALUE of the peek's **Held by** fact: the
+ * holder's login — a service account said to be one — with their stage short
+ * of active; the open invitation that names the seat; or nobody.
+ *
+ * NOT THE CARD'S LINE (`holdingLine` in `components/people.tsx`), which begins
+ * "Held by" itself because a card has no term beside it: under this term it
+ * read "Held by / Held by jane.doe (suspended)", and "Held by / Vacant".
+ */
+function HeldBy({ row }: { row: HumanSeat }) {
+  const { holder, invitation } = row;
+  if (holder) {
+    const stage = holder.stage && holder.stage !== "active" ? ` (${holder.stage})` : "";
+    return (
+      <span>
+        {holder.kind === "machine" && "The service account "}
+        <InlineCode>{holder.login || holder.person}</InlineCode>
+        {stage}
+      </span>
+    );
+  }
+  if (invitation) {
+    return (
+      <span>
+        {invitation.email && !invitation.sealed
+          ? `An open invitation · ${invitation.email}`
+          : "An open invitation"}
+      </span>
+    );
+  }
+  return <span>Nobody yet</span>;
 }
 
 /** One capped window: its label, its figure and a meter in the engine's state. */

@@ -81,7 +81,11 @@ const DefaultPromotionJaccard = 0.6
 // read it would have to know what a unit is. The writer's job is to create a
 // page in a container it is handed.
 type PromotionUnit struct {
-	// ID is the unit's name, which is its stable identity in the event.
+	// ID is the unit's KEY, which is its stable identity: the value a
+	// `manages:` entry and a seat's `unit:` resolve, and the one every
+	// stored row naming a unit holds. Not its display name — those are
+	// different values the moment a unit declares an id, and this one
+	// lands on an event a reader filters and joins on.
 	ID string
 
 	// Lead is a representative role for the unit — its lead — so a

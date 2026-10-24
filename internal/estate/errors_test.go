@@ -7,6 +7,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -178,20 +179,30 @@ func TestEveryErrorOfTheCrossingPackagesIsRegistered(t *testing.T) {
 	var found int
 	// THIS PACKAGE'S OWN TOO: a router refuses with them, and a node that
 	// answers on another's behalf carries them back across a second hop.
-	for _, pkg := range []string{"tracker", "pages", "search", "usage", "code", "statelog", "estate"} {
-		vars, types := declaredErrors(t, filepath.Join(root, "internal", pkg))
-		for _, name := range vars {
+	//
+	// AND THE IDENTITY DIRECTORY'S, whose reads a node holding no data asks
+	// of a data node, beside the identity vocabulary's and the session's,
+	// whose answers a person verb is decided on. A code is the identifier
+	// as Go code spells it, so a nested package is named by its last
+	// element.
+	for _, pkg := range []string{"tracker", "pages", "search", "usage", "code", "statelog", "estate",
+		"iamdomain", "iam", "iam/session", "artifactsdomain", "artifacts",
+		"artifacts/manifest", "artifacts/mediatype", "artifactdata", "artifactdata/canon",
+		"artifactdata/query"} {
+		vars, types := declaredErrors(t, filepath.Join(root, "internal", filepath.FromSlash(pkg)))
+		name := path.Base(pkg)
+		for _, v := range vars {
 			found++
-			if !registeredSentinels[pkg+"."+name] {
+			if !registeredSentinels[name+"."+v] {
 				t.Errorf("%s.%s is an exported sentinel that does not cross the wire: "+
-					"register it in estate's sentinels", pkg, name)
+					"register it in estate's sentinels", name, v)
 			}
 		}
-		for _, name := range types {
+		for _, ty := range types {
 			found++
-			if !registeredTypes[pkg+"."+name] {
+			if !registeredTypes[name+"."+ty] {
 				t.Errorf("%s.%s is an error type that does not cross the wire: "+
-					"register it in estate's typedKinds", pkg, name)
+					"register it in estate's typedKinds", name, ty)
 			}
 		}
 	}

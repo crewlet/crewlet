@@ -117,12 +117,58 @@ func (c *Client) Ping(ctx context.Context) error {
 // UserByUsername resolves a name to an account.
 func (c *Client) UserByUsername(ctx context.Context, username string) (User, error) {
 	var out User
-	name := strings.TrimPrefix(strings.TrimSpace(username), "@")
+	name := NormalizeUsername(username)
 	if name == "" {
 		return out, fmt.Errorf("mattermost: no username")
 	}
 	_, err := c.request(ctx, http.MethodGet, "/users/username/"+url.PathEscape(name), nil, &out, false)
 	return out, err
+}
+
+// UsersByUsernames resolves names to accounts, every name in ONE request.
+//
+// POST /users/usernames, and the shape of its answer is the server's: the
+// accounts it holds under those names, in no order, with a name it holds no
+// account under simply ABSENT (server/channels/api4/user.go, getUsersByNames).
+// So an answer is complete only for the names asked: a name missing from it
+// is one this session cannot find, which is a different fact from a call that
+// failed, and the caller has to keep the two apart.
+//
+// THE NAMES ARE LOWERCASED, because the server matches them exactly: the
+// store selects `Username IN (...)` (SqlUserStore.GetProfilesByUsernames)
+// against names it saved lowercase (model.User.PreSave, NormalizeUsername) and
+// admits only lowercase ones (model.IsValidUsername). A name written as
+// Mattermost displays it in a profile, `Jane`, would otherwise find nobody —
+// while the single-name read beside it lowercases on the server's side
+// (`Users.Username = lower(?)`), so the same name looked up the two ways would
+// disagree.
+//
+// What it cannot see is absent too. Without the view_members permission —
+// which the built-in system_user role every bot holds carries — the server
+// narrows the answer to the accounts sharing a team or a channel with the
+// caller (GetViewUsersRestrictions), and says nothing about the rest.
+//
+// REPEATABLE although it is a POST: it reads, so a retry after a lost answer
+// repeats nothing.
+func (c *Client) UsersByUsernames(ctx context.Context, usernames []string) ([]User, error) {
+	names := make([]string, 0, len(usernames))
+	for _, name := range usernames {
+		if name = NormalizeUsername(name); name != "" && !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return nil, nil
+	}
+	var out []User
+	_, err := c.request(ctx, http.MethodPost, "/users/usernames", names, &out, true)
+	return out, err
+}
+
+// NormalizeUsername is a name as the server stores it: no surrounding space,
+// no leading `@` a person copied out of a mention, lowercase.
+func NormalizeUsername(name string) string {
+	return strings.ToLower(strings.TrimPrefix(strings.TrimSpace(name), "@"))
 }
 
 // postList is the wire shape of a list-of-posts response: a map plus an

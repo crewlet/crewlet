@@ -32,6 +32,7 @@
  * count used to ride a fifty-row page, with every card's facts, every poll.
  */
 
+import { useServicesAsk } from "./services.ts";
 import { createContext, createElement, useContext, useMemo, type ReactNode } from "react";
 import { useQuery } from "./useQuery.ts";
 import { useViewer } from "./viewer.ts";
@@ -104,7 +105,12 @@ const Reading = createContext<QueueCount | null>(null);
  * asks for, for the reason [InboxCountsProvider] is.
  */
 export function QueueCountProvider({ children }: { children: ReactNode }) {
-  const claim = useQueueCountRead(useViewer().handle);
+  // THE TRACKER'S QUESTION, asked only of a reader holding it — the sidebar
+  // draws My work locked for anybody else.
+  const viewer = useViewer();
+  // AND OF A COMPANY RUNNING CREWLET WORKS: elsewhere My work is not drawn.
+  const ask = useServicesAsk();
+  const claim = useQueueCountRead(viewer.handle, viewer.tracker && ask.tracker);
   const value = useMemo(() => ({ claim }), [claim]);
   return createElement(Reading.Provider, { value }, children);
 }

@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
 )
@@ -28,6 +29,12 @@ type seatWriter struct {
 	seats map[string]map[string]any
 	wrote []string
 	fail  error
+
+	// authors is who each seat write was recorded as, and dropped who each
+	// company-document write was — the two a disconnect records its
+	// requester on.
+	authors []iam.Actor
+	dropped []iam.Actor
 }
 
 func newSeatWriter(handle string, app map[string]any) *seatWriter {
@@ -39,7 +46,12 @@ func newSeatWriter(handle string, app map[string]any) *seatWriter {
 	}}
 }
 
-func (w *seatWriter) Apply(context.Context, []byte, string, string) error { return nil }
+func (w *seatWriter) Apply(_ context.Context, _ []byte, _ string, by iam.Actor) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.dropped = append(w.dropped, by)
+	return nil
+}
 
 func (w *seatWriter) Seat(_ context.Context, handle string) ([]byte, error) {
 	w.mu.Lock()
@@ -52,7 +64,7 @@ func (w *seatWriter) Seat(_ context.Context, handle string) ([]byte, error) {
 }
 
 func (w *seatWriter) SetSeat(
-	_ context.Context, handle string, body []byte, summary, _ string,
+	_ context.Context, handle string, body []byte, summary string, by iam.Actor,
 ) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -65,10 +77,19 @@ func (w *seatWriter) SetSeat(
 	}
 	w.seats[handle] = role
 	w.wrote = append(w.wrote, summary)
+	w.authors = append(w.authors, by)
 	return nil
 }
 
-func (w *seatWriter) Reload(context.Context, string, string) error { return nil }
+// recorded is who the writes so far were recorded as: every seat write, then
+// every company-document write.
+func (w *seatWriter) recorded() (seats, documents []iam.Actor) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.Clone(w.authors), slices.Clone(w.dropped)
+}
+
+func (w *seatWriter) Reload(context.Context, string, iam.Actor) error { return nil }
 
 // installation reads back what one seat's record now claims.
 func (w *seatWriter) installation(handle string) (any, bool) {

@@ -36,7 +36,9 @@ var CredentialKeys = []string{
 }
 
 // SeatEnv is the mcp_env server whose credentials belong to the code host.
-const SeatEnv = "gitlab"
+//
+// FROM THE ORG MODEL'S OWN TABLE: see [org.EngineReadMCPEnv].
+const SeatEnv = org.MCPEnvGitLab
 
 // PlanFor walks the org for seats that need a GitLab account.
 //
@@ -86,11 +88,17 @@ func PlanFor(o *org.Organization, cfg *config.GitLab) (*provision.Plan, error) {
 			continue
 		}
 		// NO EMAIL, and that omission is the whole of the fix below.
-		plan.Add(provision.Seat{
+		entry := provision.Seat{
 			Handle:   handle,
 			Role:     seat.Name,
 			TokenVar: name,
-		})
+		}
+		// THE OVERRIDE THAT NAMES THIS SEAT — see
+		// [config.GitLabProvisioning.OverrideFor].
+		if level, found := cfg.Provisioning.OverrideFor(seat); found {
+			entry.AccessLevel = string(level)
+		}
+		plan.Add(entry)
 	}
 	return plan, nil
 }
@@ -144,6 +152,10 @@ func stripScheme(value string) string {
 // derived one was making and is one the instance can actually keep.
 
 // Username is the service-account name for a seat.
+//
+// FROM THE HANDLE, which is immutable (ADR-0013): GitLab keeps no field of
+// this engine's own, so this name is how the next pass recognises the account
+// it made.
 func Username(p *config.GitLabProvisioning, handle string) string {
 	prefix := strings.TrimSpace(p.UsernamePrefix)
 	if prefix == "" {

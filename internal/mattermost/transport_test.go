@@ -1,9 +1,12 @@
 package mattermost_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -12,6 +15,7 @@ import (
 	"time"
 
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
@@ -31,6 +35,26 @@ type instance struct {
 	// what says a read was made as ONE seat rather than on a client the
 	// transport shares.
 	reads []string
+
+	// people is the accounts the server holds by username, for the
+	// batched username read; asked is every list of names it was asked
+	// about, each with the token it arrived on. peopleStatus, when set, is
+	// what that read answers instead, and refusesPeople names the tokens
+	// it refuses. peopleGate, when set, holds every such read, once it is
+	// recorded, until the gate closes: a server slow to answer, which is
+	// how a case chooses the moment an ask the transport makes on its own
+	// goroutine is answered ([instance.holdPeople]).
+	people        map[string]mattermost.User
+	asked         []askedPeople
+	peopleStatus  int
+	refusesPeople map[string]bool
+	peopleGate    chan struct{}
+}
+
+// askedPeople is one batched username read: the names, and the token.
+type askedPeople struct {
+	names []string
+	token string
 }
 
 func newInstance(t *testing.T, identities map[string]mattermost.User) *instance {
@@ -41,10 +65,16 @@ func newInstance(t *testing.T, identities map[string]mattermost.User) *instance 
 		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/config/client"):
-			json.NewEncoder(w).Encode(map[string]string{
-				"SiteURL": inst.siteURL,
-				"TimeBetweenUserTypingUpdatesMilliseconds": inst.throttle,
-			})
+			// AS MATTERMOST ANSWERS IT: a request carrying no session gets
+			// the LIMITED client config — what a sign-in page needs, the
+			// Site URL among it — and only a signed-in one gets the rest,
+			// the typing cadence included. Which is why the instance is
+			// read on a seat's token rather than as nobody.
+			conf := map[string]string{"SiteURL": inst.siteURL}
+			if token != "" {
+				conf["TimeBetweenUserTypingUpdatesMilliseconds"] = inst.throttle
+			}
+			json.NewEncoder(w).Encode(conf)
 		case strings.HasSuffix(r.URL.Path, "/thread"):
 			inst.mu.Lock()
 			inst.reads = append(inst.reads, token)
@@ -87,6 +117,42 @@ func newInstance(t *testing.T, identities map[string]mattermost.User) *instance 
 						"message": "another channel entirely", "create_at": 5000},
 				},
 			})
+		case strings.HasSuffix(r.URL.Path, "/users/usernames"):
+			var names []string
+			json.NewDecoder(r.Body).Decode(&names)
+			inst.mu.Lock()
+			inst.asked = append(inst.asked, askedPeople{names: names, token: token})
+			gate := inst.peopleGate
+			inst.mu.Unlock()
+			if gate != nil {
+				<-gate
+			}
+			// WHAT THE SERVER HOLDS WHEN IT ANSWERS, not when it was asked:
+			// a held read answers with what the case set up meanwhile.
+			inst.mu.Lock()
+			status, refused := inst.peopleStatus, inst.refusesPeople[token]
+			var users []mattermost.User
+			for _, name := range names {
+				// EXACT, as the server's own store matches them.
+				if u, ok := inst.people[name]; ok {
+					users = append(users, u)
+				}
+			}
+			inst.mu.Unlock()
+			if _, ok := inst.identities[token]; !ok || refused {
+				w.WriteHeader(http.StatusUnauthorized)
+				w.Write([]byte(`{"message":"Invalid or expired session"}`))
+				return true
+			}
+			if status != 0 {
+				w.WriteHeader(status)
+				w.Write([]byte(`{"message":"the database is not answering"}`))
+				return true
+			}
+			if users == nil {
+				users = []mattermost.User{}
+			}
+			json.NewEncoder(w).Encode(users)
 		case strings.HasSuffix(r.URL.Path, "/typing"):
 			inst.mu.Lock()
 			inst.typing = append(inst.typing, r.URL.Path)
@@ -175,14 +241,16 @@ func TestStartResolvesEachSeatsIdentity(t *testing.T) {
 	}
 }
 
-// BOTH namespaces, because the two halves of the system see different
-// identifiers: a payload names a poster by user id, a person typing a
-// mention uses the username.
-func TestStartRegistersBothHalvesOfTheIdentity(t *testing.T) {
+// A BOT IS REGISTERED BY THE ID A PAYLOAD NAMES IT BY, in the bot namespace —
+// and by nothing else. Its username was registered in the transport's own
+// namespace too, which no lookup is ever handed a username for, and which now
+// holds the people's user ids: a 26-character lowercase username is a valid
+// one, so the two kinds of key could collide in one map.
+func TestStartRegistersTheBotByTheIDItsPostsCarry(t *testing.T) {
 	inst := newInstance(t, map[string]mattermost.User{
 		"tok-swe": {ID: "bot-swe", Username: "agent-swe", IsBot: true},
 	})
-	reg := notify.NewRegistry(seatOrg(t))
+	reg := notify.NewRegistry(seatOrg(t), nil)
 	tr := transport(t, inst, func(o *mattermost.TransportOptions) {
 		o.Registry = func() *notify.Registry { return reg }
 	})
@@ -190,17 +258,16 @@ func TestStartRegistersBothHalvesOfTheIdentity(t *testing.T) {
 	if err := tr.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	// A payload naming the bot by id resolves...
+	// A payload naming the bot by id resolves, through the bot namespace
+	// a lookup in the transport's own falls back to.
 	if p, ok := reg.ByExternalID(mattermost.Backend, "bot-swe"); !ok || p.Handle != "swe" {
 		t.Fatalf("the bot id resolved to %+v", p)
 	}
-	// ...and so does a person's mention by name.
-	if p, ok := reg.ByExternalID(mattermost.Backend, "agent-swe"); !ok || p.Handle != "swe" {
-		t.Fatalf("the username resolved to %+v", p)
+	if got := reg.ExternalID(notify.BotNamespace(mattermost.Backend), "swe"); got != "bot-swe" {
+		t.Fatalf("the bot namespace holds %q for the seat", got)
 	}
-	// The outbound direction names the bot the way a person addresses it.
-	if got := reg.ExternalID(mattermost.Backend, "swe"); got != "agent-swe" {
-		t.Fatalf("the outbound id is %q", got)
+	if ids := reg.Identities(mattermost.Backend); len(ids) != 0 {
+		t.Fatalf("the people's namespace holds an agent's key: %v", ids)
 	}
 }
 
@@ -254,28 +321,101 @@ func TestNoSeatsIsNotAFailure(t *testing.T) {
 	}
 }
 
-// THE SILENT FAILURE: Mattermost accepts a websocket only from a browser
-// whose Origin matches its Site URL, so a mismatch blinds every human while
-// agents keep working. Nothing else in the system reports it.
-func TestASiteURLMismatchIsReported(t *testing.T) {
+// syncBuffer is a log destination one test reads while the process writes.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// captureLogs points the process-wide logger at a buffer for one test and
+// puts the default back afterwards. Only a test that is not parallel may
+// call it: the logger belongs to the process.
+func captureLogs(t *testing.T) *syncBuffer {
+	t.Helper()
+	var out syncBuffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, &out)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
+	return &out
+}
+
+// THE ADDRESS THE ENGINE DIALS IS NOT COMPARED WITH THE SITE URL. Here the
+// engine reaches the server at 127.0.0.1 while people browse a public name —
+// the split every operator-managed deployment has, dialling the in-cluster
+// Service. The engine warned that browsers would fail, on every one of them,
+// while the browsers worked: they use the Site URL, and the origin check
+// never sees the engine's sockets, which carry no Origin.
+//
+// Not parallel: it reads the process-wide log.
+func TestAnotherRouteToTheServerIsNotWarnedAbout(t *testing.T) {
+	logs := captureLogs(t)
 	inst := newInstance(t, map[string]mattermost.User{
 		"tok-swe": {ID: "bot-swe", Username: "agent-swe"},
 	})
 	inst.siteURL = "https://chat.example.com"
 	tr := transport(t, inst, nil)
-
-	// It is a WARNING, not a failure: the agents work, and refusing to
-	// start would take away the half that does.
 	if err := tr.Start(t.Context()); err != nil {
-		t.Fatalf("a Site URL mismatch stopped the transport: %v", err)
+		t.Fatalf("Start: %v", err)
 	}
 	if got := tr.Handles(); len(got) != 1 {
 		t.Fatalf("Handles = %v", got)
+	}
+	// The read that judges it ran: the cadence it carries was applied.
+	if got := tr.StatusRefresh(); got != 2*time.Second {
+		t.Fatalf("StatusRefresh = %v: the instance was never read", got)
+	}
+	if strings.Contains(logs.String(), "mattermost_site_url") {
+		t.Errorf("a different route to the server was reported:\n%s", logs)
+	}
+}
+
+// WHAT THE SERVER ITSELF CANNOT USE IS WARNED ABOUT, in the sentence the
+// doctor prints: a Site URL its own validation accepts and no browser can
+// match. It is a WARNING, not a failure: the agents work, and refusing to
+// start would take away the half that does.
+//
+// Not parallel: it reads the process-wide log.
+func TestASiteURLTheServerCannotUseIsWarnedAbout(t *testing.T) {
+	logs := captureLogs(t)
+	inst := newInstance(t, map[string]mattermost.User{
+		"tok-swe": {ID: "bot-swe", Username: "agent-swe"},
+	})
+	inst.siteURL = "localhost:8065"
+	tr := transport(t, inst, nil)
+	if err := tr.Start(t.Context()); err != nil {
+		t.Fatalf("a Site URL the server cannot use stopped the transport: %v", err)
+	}
+	if got := tr.Handles(); len(got) != 1 {
+		t.Fatalf("Handles = %v", got)
+	}
+	out := logs.String()
+	if !strings.Contains(out, mattermost.EventSiteURLRefusesBrowsers) {
+		t.Fatalf("no %s in:\n%s", mattermost.EventSiteURLRefusesBrowsers, out)
+	}
+	if !strings.Contains(out, "absolute http or https") {
+		t.Errorf("the warning does not carry the doctor's sentence:\n%s", out)
 	}
 }
 
 // The server ENFORCES the typing cadence: sending faster is rejected, so a
 // guessed value that is too eager produces an indicator that never appears.
+//
+// And it tells only a SIGNED-IN client what the cadence is: the config an
+// anonymous request gets is the limited one a sign-in page reads, so an
+// instance read made as nobody runs every indicator at the default. Mutation:
+// read the instance with no token and the refresh is the default rather than
+// the server's 2 s (the default is 5 s, so this value tells the two apart).
 func TestTheTypingCadenceComesFromTheServer(t *testing.T) {
 	inst := newInstance(t, map[string]mattermost.User{
 		"tok-swe": {ID: "bot-swe", Username: "agent-swe"},

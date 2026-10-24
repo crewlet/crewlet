@@ -3,11 +3,14 @@ package jetstreamtest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/events"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -83,7 +86,10 @@ func TestAMajoritySurvivesAPartition(t *testing.T) {
 		awaitRoutes(t, c, i, 2)
 	}
 	q := c.Client(t, 0)
-	topic := topics.AgentInbox("alice")
+	// A SEAT'S INBOX is built from the seat's id rather than its handle; a
+	// fixed uuid is all this case needs, since what is under test is the
+	// cluster rather than the seat.
+	topic := topics.AgentInbox(uuid.MustParse("0f1d4c07-6d2a-4e2b-9a3c-5b8e17d04c21"))
 	if err := q.Publish(t.Context(), topic, events.New(probe{N: 1}, events.TraceContext{})); err != nil {
 		t.Fatalf("publish before the partition: %v", err)
 	}
@@ -142,13 +148,15 @@ func holdRoutes(t *testing.T, c *Cluster, i, want int, d time.Duration) {
 	}
 }
 
-// THE PORT PROBE IS WHAT TURNS A TWO-MINUTE TIMEOUT INTO A RETRY.
+// THE PORT PROBE FINDS A TAKEN PORT BEFORE THE MEMBER STARTS.
 //
-// A clustered member whose route port has been taken does not fail fast: it
-// starts, serves clients, never forms a route, and is reported only when its
-// own readiness budget expires — which was measured, in a full run of this
-// repository's suite, as a hundred and twenty seconds of a harness waiting for
-// peers that could never arrive.
+// A member binds its route listener last, after its store is recovered, so a
+// taken port found by the server is found only once the start has been paid
+// for. Before the server's own refusal of that bind was carried at all, it
+// was not found by the server either: the member started, served clients,
+// never formed a route, and was reported only when its readiness budget
+// expired — measured, in a full run of this repository's suite, as a hundred
+// and twenty seconds of a harness waiting for peers that could never arrive.
 func TestThePortProbeSeesAHeldPort(t *testing.T) {
 	t.Parallel()
 	var lc net.ListenConfig
@@ -236,6 +244,42 @@ func TestABindFailureIsClassifiedByWhetherAnotherPortWouldHelp(t *testing.T) {
 			}
 			if gotPort != tc.retryable {
 				t.Errorf("%v: retryable=%v, want %v", tc.in, gotPort, tc.retryable)
+			}
+		})
+	}
+}
+
+// A BROKER THAT DECLARED ITSELF DEAD ENDS THE CASE, UNLESS A PORT WAS TAKEN.
+//
+// The default is to retry, and a death is the exception because what
+// nats-server calls fatal repeats: a store it cannot use, an address it cannot
+// read. Before the server carried its Fatalf, such a member waited out its
+// budget and was then reported as having lost its route port — so the harness
+// retried a refused store four times as a port race. A port somebody else
+// took is still a death, and still the race the attempts are for.
+func TestABrokerDeathIsRetriedOnlyWhenAPortWasTaken(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		in        error
+		retryable bool
+	}{
+		"a store the broker refused": {
+			fmt.Errorf("embedded nats server could not start: %w", js.ErrBrokerDied), false},
+		"a route port taken during the start": {
+			fmt.Errorf("%w: ...: %w", js.ErrRoutePortTaken, js.ErrBrokerDied), true},
+		"a leaf port taken during the start": {
+			fmt.Errorf("%w: ...: %w", js.ErrLeafPortTaken, js.ErrBrokerDied), true},
+		"a server still starting when its budget ran out": {
+			errors.New("embedded nats server did not become ready within 2m0s"), true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			out := startErr(tc.in)
+			if !errors.Is(out, tc.in) {
+				t.Errorf("the start's own error was dropped: %v", out)
+			}
+			if got := !errors.Is(out, errNotRetryable); got != tc.retryable {
+				t.Errorf("%v: retryable=%v, want %v", tc.in, got, tc.retryable)
 			}
 		})
 	}

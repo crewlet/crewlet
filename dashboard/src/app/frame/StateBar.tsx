@@ -4,13 +4,13 @@
  * Three facts that were scattered across five screens and thrown away by five
  * more, in one place, on every screen:
  *
- *  - **Degradation** — the socket is down, the token was refused, no company
+ *  - **Degradation** — the socket is down, nobody is signed in, no company
  *    configuration is active. These are about the CONNECTION rather than about
  *    the answer, and they outrank it: a stale badge on a screen whose socket
  *    has been down for a minute is describing the wrong problem.
- *  - **Coverage** — `read_level` as served, and `complete: false` as a banner
- *    naming what could not be accounted for. The flag is the ENGINE's, so it
- *    is always a banner and never a threshold this client invented.
+ *  - **Coverage**: `read_level` as served, and `complete: false` as a banner
+ *    saying the answer may be incomplete. The flag is the ENGINE's, so it is
+ *    always a banner and never a threshold this client invented.
  *  - **Freshness** — how far this node has applied, stated as a number.
  *
  * LAG IS A NUMBER, NEVER AN ALARM. This dashboard has no threshold of its own
@@ -27,7 +27,7 @@ import {
   SlidersVerticalGlyph,
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
-import { CoverageTags, oddLevel, type CoverageFacts } from "~/components/work.tsx";
+import { CoverageTags, INCOMPLETE_NOTE, oddLevel, type CoverageFacts } from "~/components/work.tsx";
 
 export interface Degradation {
   /** The strip's own variant, in uilet's spelling: two states, both of them bad. */
@@ -37,7 +37,7 @@ export interface Degradation {
    *
    * It was a name out of our own icon set, chosen from a three-value union, and
    * the union was the whole type system this had: a fourth degradation would
-   * have added a name here and a path in `~/ui/Icon.tsx`. A component is the
+   * have added a name here and a drawing of our own. A component is the
    * value uilet's `Callout` takes, and `degradationOf` below is the only thing
    * that ever builds one.
    */
@@ -50,44 +50,56 @@ export interface Degradation {
  * The one degradation worth reporting, chosen in the order a reader can act
  * on them.
  *
- * A REFUSED TOKEN FIRST, because it is the only one that resolves for nobody:
- * every other degraded state repairs itself when the engine comes back, and
- * showing three banners at once buries the one with an affordance.
+ * NOBODY SIGNED IN FIRST, because it is the only one that resolves for
+ * nobody: every other degraded state repairs itself when the engine comes
+ * back, and showing three banners at once buries the one with an affordance.
+ * The app sends a reader it resolved nobody for to the sign-in screen as soon
+ * as it learns so, so this is the frame's word for the moment in between.
  */
 export function degradationOf({
   authRejected,
+  accessRefused = null,
   connected,
   configured,
-  onSetToken,
+  onSignIn,
   onConfig,
 }: {
   authRejected: boolean;
+  /**
+   * Why the engine will not serve this surface to a browser it knows, or
+   * null. Said in place of the screen (`AccessRefused`), never here: it is
+   * not a degradation the strip can describe beside a screen that will
+   * never be answered.
+   */
+  accessRefused?: string | null;
   connected: boolean;
   configured: boolean | undefined;
-  onSetToken: () => void;
+  onSignIn: () => void;
   onConfig: () => void;
 }): Degradation | null {
   if (authRejected) {
     return {
       variant: "danger",
       icon: <KeyGlyph size="md" />,
-      message: "The engine refused this browser's API token.",
-      action: { label: "Set token", onClick: onSetToken },
+      message: "You’re signed out.",
+      action: { label: "Sign in", onClick: onSignIn },
     };
   }
+  // A REFUSED BROWSER'S SOCKET STOPS, so "reconnecting" would be false: the
+  // screen says what is true instead — see `AccessRefused`.
+  if (accessRefused !== null) return null;
   if (!connected) {
     return {
       variant: "warning",
       icon: <RotateCwGlyph size="md" />,
-      message: "Reconnecting to the engine — showing the last state received, polling meanwhile.",
+      message: "Reconnecting. Showing the last state received.",
     };
   }
   if (configured === false) {
     return {
       variant: "warning",
       icon: <SlidersVerticalGlyph size="md" />,
-      message:
-        "No company configuration is active: no seats are running, and inbound webhooks are refused with a 503 their sender will retry.",
+      message: "No company is active, so no seats are running.",
       action: { label: "Configuration", onClick: onConfig },
     };
   }
@@ -146,24 +158,7 @@ export function StateBar({
           every total on this screen was computed over the incomplete set. */}
       {incomplete && (
         <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />} layout="banner">
-          <span>
-            {/* THE BOLD STAYS IN THE SENTENCE rather than becoming Callout's
-                `title`. Its title is a lead-in label with its own trailing
-                space; this is one running sentence whose opening clause is
-                emphasised and whose next word is an em dash or a full stop. */}
-            <strong>This answer is incomplete</strong>
-            {coverage?.incomplete
-              ? ` — ${coverage.incomplete.records} record(s) this build cannot read.`
-              : "."}{" "}
-            Rows may be missing, rows that should have gone may still be here, and the counts were
-            computed over what is shown.
-            {coverage?.incomplete?.scope?.length
-              ? ` Affected: ${coverage.incomplete.scope.join(", ")}.`
-              : ""}
-            {coverage?.incomplete
-              ? ` Record version ${coverage.incomplete.version}, from sequence ${coverage.incomplete.from.seq} — a build that can read it is what resolves this, not a refresh.`
-              : ""}
-          </span>
+          {INCOMPLETE_NOTE}
         </Callout>
       )}
 

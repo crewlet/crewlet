@@ -4,13 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/api/opkey"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -28,16 +32,13 @@ import (
 func TestAnOperatorsAssistantFinishesACreateWithTheOpIDItWasAnswered(t *testing.T) {
 	t.Parallel()
 	work := &recordingWork{}
-	s := newSurface(t, operator.Options{
+	s := newSurface(t, operator.Options{Halves: fixed(operator.Halves{
 		Work: builtin.WorkDeps{
-			Reader: stubWorkReader{}, Merges: stubWorkMerger,
-			Writer: work.writer, Actor: operator.WorkActor(nil, nil),
+			Reader: stubWorkReader{}, Merges: stubWorkMerger, Writer: work.writer,
 		},
-	})
-	if s == nil {
-		t.Fatal("a company on the native tracker got no surface")
-	}
-	sess := dialOperator(t, s, "founder")
+	})})
+	sess := dialOperator(t, s,
+		machine("token:founder", iam.GrantTracker))
 
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
@@ -55,7 +56,7 @@ func TestAnOperatorsAssistantFinishesACreateWithTheOpIDItWasAnswered(t *testing.
 			Properties map[string]json.RawMessage `json:"properties"`
 		}
 		_ = json.Unmarshal(raw, &schema)
-		_, offered = schema.Properties["op_id"]
+		_, offered = schema.Properties[operator.OperationArg]
 	}
 	if !offered {
 		t.Fatal("create_work_item is served with no op_id in its schema, so an " +
@@ -64,14 +65,15 @@ func TestAnOperatorsAssistantFinishesACreateWithTheOpIDItWasAnswered(t *testing.
 
 	args := map[string]any{"title": "the follow-up", "project": "ENG"}
 	first := answered(t, sess, builtin.CreateWorkItemTool, args)
-	op, _ := first["op_id"].(string)
+	op, _ := first[operator.OperationArg].(string)
 	if err := statelog.CheckCallerOpID(op); err != nil {
 		t.Fatalf("the create answered op_id %q, which this surface refuses back: %v", op, err)
 	}
-	args["op_id"] = op
+	args[operator.OperationArg] = op
 	second := answered(t, sess, builtin.CreateWorkItemTool, args)
-	if second["op_id"] != op {
-		t.Errorf("the create brought back answered op_id %v, want %s", second["op_id"], op)
+	if second[operator.OperationArg] != op {
+		t.Errorf("the create brought back answered op_id %v, want %s",
+			second[operator.OperationArg], op)
 	}
 
 	_, ops := work.writes()
@@ -85,31 +87,36 @@ func TestAnOperatorsAssistantFinishesACreateWithTheOpIDItWasAnswered(t *testing.
 	}
 }
 
-// A PERSON'S ACT IS ITS REQUEST, AND NOTHING BESIDE IT NAMES THE OPERATION.
+// A PERSON'S ACT NAMES ITS OPERATION IN ITS HEADER, AND NOTHING BESIDE IT DOES.
 //
-// The two transports reach one catalogue and carry a retry two ways: an
-// assistant over MCP has no request of its own, so its write answers the
-// `op_id` it was and takes it back; a person at the dashboard sends a
-// `request_id`, and the transport derives the call's operation from that. An
-// `op_id` in an act's arguments would be a second answer to "which operation
-// is this" — one the caller picked, beside the one its request names — so it
-// is refused as the caller's mistake, and nothing is written.
-func TestAnActCannotNameAnOperationBesideItsRequest(t *testing.T) {
+// The transports reach one catalogue and carry a retry two ways: an assistant
+// over MCP has no request key, so its write answers the `op_id` it was and
+// takes it back; a person at the dashboard sends an `Idempotency-Key`, and
+// every write the call makes derives from that. An `op_id` in an act's
+// arguments would be a second answer to "which operation is this" — one the
+// caller picked, beside the one its request names — so it is refused `400`
+// as the caller's to change, naming where the operation goes, and nothing is
+// written.
+func TestAnActCannotNameAnOperationBesideItsKey(t *testing.T) {
 	t.Parallel()
 	work := &recordingWork{}
-	h := guarded(actSurface(t, work), false)
-	other := requestOperation(t, "founder", requestB, builtin.CreateWorkItemTool, createArgs())
+	h := guarded(actSurface(t, work))
 	args := createArgs()
-	args["op_id"] = other
-	body, err := json.Marshal(map[string]any{"request_id": requestA, "args": args})
+	args[operator.OperationArg] = newKey()
+	body, err := json.Marshal(map[string]any{"args": args})
 	if err != nil {
 		t.Fatal(err)
 	}
-	status, answer := act(t, h, "founder-secret", builtin.CreateWorkItemTool,
-		"application/json", string(body))
-	if status != http.StatusUnprocessableEntity || answer["error"] != "invalid" {
-		t.Errorf("an act naming op_id %s beside its request answered %d %v, want "+
-			"422 invalid", other, status, answer)
+	status, answer := act(t, h, "founder", builtin.CreateWorkItemTool,
+		"application/json", string(body), newKey())
+	if status != http.StatusBadRequest || answer["error"] != string(httpjson.CodeInvalidBody) {
+		t.Errorf("an act naming op_id beside its key answered %d %v, want 400 "+
+			"invalid_body", status, answer)
+	}
+	if detail, _ := answer["detail"].(string); !containsAll(detail, opkey.Header,
+		operator.OperationArg) {
+
+		t.Errorf("the refusal %q does not say where the operation goes", detail)
 	}
 	if _, ops := work.writes(); len(ops) != 0 {
 		t.Errorf("the act reached the tracker under %v", ops)
@@ -137,4 +144,14 @@ func answered(t *testing.T, sess *mcp.ClientSession, name string,
 		t.Fatalf("%s answered no JSON (%v): %s", name, err, text)
 	}
 	return out
+}
+
+// containsAll reports whether s holds every one of parts.
+func containsAll(s string, parts ...string) bool {
+	for _, part := range parts {
+		if !strings.Contains(s, part) {
+			return false
+		}
+	}
+	return true
 }

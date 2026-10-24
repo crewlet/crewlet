@@ -27,14 +27,16 @@ export function BudgetTile({
   /** `null` until a node has reported the counters: see {@link OrgBudget}. */
   budget: OrgBudget | null;
   /**
-   * Whether the reader may set a ceiling: `mayChangeConfig` — an operator,
-   * and on a managed document one of its writers.
+   * Whether the reader may set a ceiling: `mayChangeConfig` — they hold
+   * Admin, the access every ceiling write takes (an access check, never "is
+   * this an operator", which every signed-in person now is), and on a
+   * managed document they are one of its writers.
    */
   mayConfigure: boolean;
 }) {
   // NOT KNOWN IS NOT NONE. Before the first report nobody has read the
   // counter, and saying "No monthly budget" then — with "Set one" — told the
-  // operator of a capped company, for the first seconds after every engine
+  // founder of a capped company, for the first seconds after every engine
   // start, to set a ceiling it already had. So the tile waits, and says so.
   if (budget === null) {
     return (
@@ -58,7 +60,7 @@ export function BudgetTile({
             else is told there is none, which is the whole of what they can
             act on. */}
         {mayConfigure && (
-          <a className="t-link" href={href(["spend", "budgets"])}>
+          <a className="t-link" href={href(["company", "budgets"])}>
             Set one
           </a>
         )}
@@ -86,9 +88,7 @@ export function BudgetTile({
         hint={`${fmtCount(month.used)} of ${fmtCount(month.limit)} · resets ${resets}`}
       />
       {month.state === "refusing" && (
-        <span className="spend-caption spend-refusing">
-          Refusing charges — turns wait until {resets}, or until the ceiling is raised.
-        </span>
+        <span className="spend-caption spend-refusing">Full until {resets}.</span>
       )}
     </div>
   );

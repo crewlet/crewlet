@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -24,9 +25,30 @@ type Server interface {
 	Serve(ctx context.Context, subject string, answers int, h queue.AnswerFunc) (queue.Unsubscribe, error)
 }
 
+// ServerOptions are a serving node's dependencies.
+type ServerOptions struct {
+	// Self is this node — the subjects it answers on, one a [lane], and the
+	// name its replies carry.
+	Self string
+
+	// Local is this node's own copy of the estate.
+	Local LocalBackends
+
+	// Seams are this node's own: supplied to every operation it answers.
+	Seams ServerSeams
+
+	// Envelopes verify every request this node is sent and sign every
+	// reply it answers with — required: see [Envelopes].
+	Envelopes *Envelopes
+
+	// Now is the clock a request's deadline is judged on, injected for
+	// tests. Nil is the wall clock.
+	Now func() time.Time
+}
+
 // Serve makes this node answer the fleet on its own subjects, one a [lane],
 // from its own copy of the estate — and `out_of_service` for the operations of
-// a domain whose copy is wrong (ADR-0031). The returned withdrawal ends every
+// a domain whose copy is wrong (ADR-0045). The returned withdrawal ends every
 // lane.
 //
 // EVERY DATA NODE SERVES, whether or not any other node asks yet, and from
@@ -40,16 +62,24 @@ type Server interface {
 // before it, because a node that answered its reads and no proposal would be
 // asked first for every push to the repositories it commits for, and cost
 // each one a whole write attempt before the runner-up.
-func Serve(ctx context.Context, q Server, self string, local LocalBackends,
-	seams ServerSeams) (queue.Unsubscribe, error) {
-
+func Serve(ctx context.Context, q Server, opts ServerOptions) (queue.Unsubscribe, error) {
 	switch {
-	case q == nil || local == nil:
+	case q == nil || opts.Local == nil:
 		return nil, errors.New("estate: serve needs a queue and this node's backends")
-	case self == "":
+	case opts.Self == "":
 		return nil, errors.New("estate: serve needs this node's id — it is the subject other nodes ask")
+	case opts.Envelopes == nil:
+		return nil, errNoEnvelopes
 	}
-	srv := server{self: self, local: local, seams: seams}
+	now := opts.Now
+	if now == nil {
+		now = time.Now
+	}
+	// ONE SERVER FOR EVERY LANE, so one guard remembers every request id
+	// the node has taken whichever lane it arrived on: a replay sent to
+	// another lane's subject is the same replay.
+	srv := server{self: opts.Self, local: opts.Local, seams: opts.Seams,
+		env: opts.Envelopes, now: now, seen: signedask.NewGuard()}
 	stops := make([]queue.Unsubscribe, 0, len(lanes))
 	withdraw := func(ctx context.Context) error {
 		var errs []error
@@ -59,7 +89,7 @@ func Serve(ctx context.Context, q Server, self string, local LocalBackends,
 		return errors.Join(errs...)
 	}
 	for _, l := range lanes {
-		stop, err := q.Serve(ctx, l.subject(self), l.answers(),
+		stop, err := q.Serve(ctx, l.subject(opts.Self), l.answers(),
 			func(ctx context.Context, raw []byte) ([]byte, error) {
 				return srv.answer(ctx, l, raw), nil
 			})
@@ -70,7 +100,7 @@ func Serve(ctx context.Context, q Server, self string, local LocalBackends,
 			if undo := withdraw(context.WithoutCancel(ctx)); undo != nil {
 				err = errors.Join(err, undo)
 			}
-			return nil, fmt.Errorf("estate: serve %s on %s: %w", l, l.subject(self), err)
+			return nil, fmt.Errorf("estate: serve %s on %s: %w", l, l.subject(opts.Self), err)
 		}
 		stops = append(stops, stop)
 	}
@@ -82,28 +112,62 @@ type server struct {
 	self  string
 	local LocalBackends
 	seams ServerSeams
+	env   *Envelopes
+	now   func() time.Time
+	seen  *signedask.Guard
 }
 
 // answer runs one request that arrived on lane l and ALWAYS answers: a node
 // that stayed silent would be indistinguishable from one that is down, and the
 // asker would wait out its budget before trying the next — so every failure
-// here, down to a request this build cannot decode, is an answer that says so.
+// here, down to a request this build cannot verify or decode, is an answer
+// that says so.
 func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 	out := reply{Node: s.self}
-	var req request
-	if err := json.Unmarshal(raw, &req); err != nil {
-		out.Err = encodeError(fmt.Errorf("estate: %s could not decode the request: %w", s.self, err))
-		return encodeReply(out)
+	admitted := s.env.admit(raw, s.seen, s.now())
+	switch admitted.Disposition {
+	case signedask.Tampered:
+		// NOT THE FLEET'S, so nothing in it is believed — not even the id
+		// a reply would name, which is why this one names none. At ERROR:
+		// no holder will ever accept it, so it is somebody on the broker
+		// who is not the fleet, or a node whose keyring is not the fleet's.
+		log.ErrorContext(ctx, "estate_request_refused", "node", s.self,
+			"disposition", string(admitted.Disposition), "detail", admitted.Why+"; nothing in it ran")
+		out.Unserved, out.Detail = unservedUnauthenticated, fmt.Sprintf(
+			"%s refused a request that is not signed by this fleet", s.self)
+		return s.encodeReply(out)
+	case signedask.KeyUnknown:
+		// A FACT ABOUT THIS NODE, which an operator changes by adding the
+		// key: answered "did not run", naming the id the asker sent, so
+		// it asks a node that holds the key.
+		log.WarnContext(ctx, "estate_request_refused", "node", s.self,
+			"disposition", string(admitted.Disposition), "claimed_from", admitted.Request.From,
+			"held", s.env.heldKeys(), "detail", admitted.Why+"; nothing in it ran")
+		out.Request, out.Unserved, out.Detail = admitted.ID, unservedUnauthenticated, fmt.Sprintf(
+			"%s does not hold the key the request is signed under (it holds %v)",
+			s.self, s.env.heldKeys())
+		return s.encodeReply(out)
+	case signedask.Undecodable:
+		out.Err = encodeError(fmt.Errorf("estate: %s could not decode a request the "+
+			"fleet signed: %s", s.self, admitted.Why))
+		return s.encodeReply(out)
+	case signedask.Stale:
+		log.WarnContext(ctx, "estate_request_refused", "node", s.self,
+			"from", admitted.Request.From, "op", admitted.Request.Op, "detail", admitted.Why)
+		out.Request, out.Unserved, out.Detail = admitted.ID, unservedStale,
+			fmt.Sprintf("%s: %s", s.self, admitted.Why)
+		return s.encodeReply(out)
 	}
+	req := admitted.Request
+	out.Request = req.ID
 	spec, known := registry[req.Op]
 	if !known {
-		// A NEWER PEER'S OPERATION, which this build cannot run and
-		// which no other node of this build can run either. Unserved
-		// rather than failed, so a fleet mid-upgrade finds a node that
-		// can.
+		// AN OPERATION THIS BUILD DOES NOT DECLARE, which no node of
+		// this build can run either. Unserved rather than failed: it
+		// ran nothing, and a node that can is the one to ask.
 		out.Unserved, out.Detail = unservedNoBackend,
 			fmt.Sprintf("%s does not know the operation %q", s.self, req.Op)
-		return encodeReply(out)
+		return s.encodeReply(out)
 	}
 	if spec.lane != l {
 		// ANSWERED ONLY ON ITS OWN LANE, whatever the asker sent: run
@@ -116,23 +180,23 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 		out.Unserved, out.Detail = unservedNoBackend, fmt.Sprintf(
 			"%s answers %s on %s (%s), and it was asked on %s", s.self, req.Op, spec.lane,
 			spec.lane.subject(s.self), l)
-		return encodeReply(out)
+		return s.encodeReply(out)
 	}
-	if !req.Deadline.IsZero() {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithDeadline(ctx, req.Deadline)
-		defer cancel()
-		// EVERY WAIT ENDS A REPLY'S TRIP SHORT OF IT — the floor's below, and
-		// a read's barrier and level and a write's resolution inside the
-		// operation — so a node that runs out of time says so while its
-		// asker is still listening. Run to the deadline itself, a wait's
-		// honest `behind` reached the asker after it had given up on this
-		// node, which then heard a lagging node as a wedged one: asked it
-		// last for suspectFor and told the placement it went unanswered.
-		// code.ReplyMargin is the one margin a serving node leaves, the
-		// committer's between a batch and its asker's deadline included.
-		ctx = statelog.WithReplyMargin(ctx, code.ReplyMargin)
-	}
+	// AN ADMITTED REQUEST ALWAYS CARRIES ITS DEADLINE, under the signature
+	// ([signedask.Channel.Admit] refuses one without), so it is the bound
+	// on everything run for it.
+	ctx, cancel := context.WithDeadline(ctx, req.Deadline)
+	defer cancel()
+	// EVERY WAIT ENDS A REPLY'S TRIP SHORT OF IT — the floor's below, and a
+	// read's barrier and level and a write's resolution inside the operation
+	// — so a node that runs out of time says so while its asker is still
+	// listening. Run to the deadline itself, a wait's honest `behind`
+	// reached the asker after it had given up on this node, which then heard
+	// a lagging node as a wedged one: asked it last for suspectFor and told
+	// the placement it went unanswered. code.ReplyMargin is the one margin a
+	// serving node leaves, the committer's between a batch and its asker's
+	// deadline included.
+	ctx = statelog.WithReplyMargin(ctx, code.ReplyMargin)
 	b, wrong, unserved := unservedCopy(ctx, s.local, spec)
 	if unserved {
 		// NOTHING RAN, so every class moves on — a page write
@@ -140,7 +204,7 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 		// may have run.
 		out.Unserved = unservedOutOfService
 		out.Detail = outOfService(s.self, wrong)
-		return encodeReply(out)
+		return s.encodeReply(out)
 	}
 	var spent statelog.Spent
 	if req.Spent != nil {
@@ -152,7 +216,7 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 	}
 	if reason != "" {
 		out.Unserved, out.Detail = reason, detail
-		return encodeReply(out)
+		return s.encodeReply(out)
 	}
 	b.ServerSeams = s.seams
 	b.pageBytes = usagePageBytes
@@ -169,23 +233,23 @@ func (s server) answer(ctx context.Context, l lane, raw []byte) []byte {
 	switch {
 	case errors.Is(err, errNoHalf):
 		out.Unserved, out.Detail = unservedNoBackend, ranNothingDetail(s.self, req.Op, err)
-		return encodeReply(out)
+		return s.encodeReply(out)
 	case errors.Is(err, errNotAdmitting):
 		out.Unserved, out.Detail = unservedNotEstablished, fmt.Sprintf(
 			"%s's copy admits no seat yet — the same gate that withholds seats from it", s.self)
-		return encodeReply(out)
+		return s.encodeReply(out)
 	case err != nil:
 		out.Err = encodeError(err)
-		return encodeReply(out)
+		return s.encodeReply(out)
 	}
 	encoded, err := encodeResult(result)
 	if err != nil {
 		out.Err = encodeError(fmt.Errorf("estate: %s could not encode the answer to %s: %w",
 			s.self, req.Op, err))
-		return encodeReply(out)
+		return s.encodeReply(out)
 	}
 	out.Result = encoded
-	return encodeReply(out)
+	return s.encodeReply(out)
 }
 
 // jsonAppender is an answer that writes its own encoding — a usage page, which
@@ -359,20 +423,17 @@ func readSpent(ctx context.Context, spec *opSpec, spent statelog.Spent) context.
 	return statelog.WithSpent(ctx, spent)
 }
 
-// encodeReply never fails: every field of a reply is plain data, and an
-// encoder that refused one would be the silent node answer exists to avoid.
-func encodeReply(r reply) []byte {
-	raw, err := json.Marshal(r)
-	if err != nil {
-		raw, _ = json.Marshal(reply{Node: r.Node, Err: &wireError{
-			Message: fmt.Sprintf("estate: %s could not encode its reply: %v", r.Node, err),
-		}})
-	}
+// encodeReply signs a reply, and never fails: every field of a reply is plain
+// data, and an encoder that refused one would be the silent node answer exists
+// to avoid.
+func (s server) encodeReply(r reply) []byte {
+	raw := s.env.sealReply(r)
 	if len(raw) > queue.MaxPayloadBytes {
 		// TOO LARGE TO SEND, and said so rather than dropped: a reply the
 		// broker refuses is a node the asker waits out and then counts as
-		// down, while this one says what to narrow.
-		raw, _ = json.Marshal(reply{Node: r.Node, Err: encodeError(fmt.Errorf(
+		// down, while this one says what to narrow. Measured as SEALED,
+		// which is what the broker carries.
+		raw = s.env.sealReply(reply{Node: r.Node, Request: r.Request, Err: encodeError(fmt.Errorf(
 			"estate: the answer is %d bytes, over the %d a message carries — "+
 				"narrow the request: %w", len(raw), queue.MaxPayloadBytes, queue.ErrTooLarge))})
 	}

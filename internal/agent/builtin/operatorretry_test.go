@@ -2,6 +2,7 @@ package builtin_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -45,6 +46,7 @@ func retrySurface(t *testing.T, trk *fakeTracker, views builtin.ViewWriter) *too
 			Merges: trk.merges, Actor: operatorActor,
 			ViewWriter: func(builtin.Actor) builtin.ViewWriter { return views },
 		},
+		Authorize: builtin.Decide(chartLeads),
 	}) {
 		if err := reg.Register(tool, tools.OriginBuiltin); err != nil {
 			t.Fatalf("register %s: %v", tool.Name(), err)
@@ -193,7 +195,7 @@ func TestOpIDIsOfferedOnlyOnTheOperatorsWrites(t *testing.T) {
 		PersonWriter: func(builtin.Actor) builtin.PersonWriter { return nil },
 		ViewWriter:   func(builtin.Actor) builtin.ViewWriter { return nil },
 		Actor:        operatorActor,
-	}})
+	}, Authorize: builtin.Decide(chartLeads)})
 	writes := []string{
 		builtin.CreateWorkItemTool, builtin.UpdateWorkItemTool, builtin.CommentOnWorkTool,
 		tracker.MergeWorkItemTool, tracker.MoveWorkItemTool,
@@ -261,7 +263,12 @@ func TestABroughtBackOpIDIsCheckedAndATurnIsRefusedOne(t *testing.T) {
 				"title": "x", "project": "ENG",
 				"op_id": statelog.NewOpID(time.Now(), "create_work_item"),
 			})
-		if !got.Failed || !strings.Contains(got.Output, "takes no `op_id`") {
+		// REFUSED AT THE TOOLS' OWN GATE, because a seat's schema does not
+		// declare `op_id` at all ([builtin.ErrUndeclaredArgument]) — the
+		// same refusal every argument a tool does not read meets, rather
+		// than one of the operation binding's own.
+		if !got.Failed || !errors.Is(got.Cause, builtin.ErrUndeclaredArgument) ||
+			!strings.Contains(got.Output, "op_id") {
 			t.Errorf("a turn's call with an op_id gave %q", got.Output)
 		}
 		if len(trk.created) != 0 {

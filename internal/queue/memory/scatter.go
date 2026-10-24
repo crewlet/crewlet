@@ -59,6 +59,10 @@ func (q *Queue) Serve(ctx context.Context, subject string, answers int,
 		retire()
 		return nil, ErrNotStarted
 	}
+	if q.broker.down {
+		q.broker.mu.Unlock()
+		return nil, ErrBrokerDown
+	}
 	q.broker.servers = append(q.broker.servers, sub)
 	q.broker.mu.Unlock()
 	log.Debug("scatter_server_added", "subject", subject)
@@ -96,17 +100,41 @@ func (q *Queue) Serve(ctx context.Context, subject string, answers int,
 // its caller gave it. An answerer that ignores its context would additionally
 // make every later answerer unreachable rather than merely itself.
 func (q *Queue) Ask(ctx context.Context, subject string, request []byte, want int) ([][]byte, error) {
+	replies := [][]byte{}
+	err := q.AskEach(ctx, subject, request, func(reply []byte) bool {
+		replies = append(replies, reply)
+		return want <= 0 || len(replies) < want
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(replies) == 0 {
+		return nil, nil
+	}
+	return replies, nil
+}
+
+// AskEach scatters one request and hands each reply to each as it arrives,
+// until ctx is done, every answerer has answered or each answers false.
+// Concurrently, for [Queue.Ask]'s reason.
+func (q *Queue) AskEach(ctx context.Context, subject string, request []byte, each func(reply []byte) bool) error {
 	if subject == "" {
-		return nil, ErrEmptySubject
+		return ErrEmptySubject
 	}
 	if len(request) > queue.MaxPayloadBytes {
-		return nil, fmt.Errorf("memory: ask %s: %d bytes exceeds the %d-byte limit: %w",
+		return fmt.Errorf("memory: ask %s: %d bytes exceeds the %d-byte limit: %w",
 			subject, len(request), queue.MaxPayloadBytes, queue.ErrTooLarge)
 	}
 	q.broker.mu.Lock()
 	if q.notStartedLocked() {
 		q.broker.mu.Unlock()
-		return nil, ErrNotStarted
+		return ErrNotStarted
+	}
+	if q.broker.down {
+		// REFUSED, as the real backend refuses a request it cannot send
+		// rather than buffering it — see [queue.EventQueue.Ask].
+		q.broker.mu.Unlock()
+		return ErrBrokerDown
 	}
 	servers := make([]*serveSub, 0, len(q.broker.servers))
 	for _, s := range q.broker.servers {
@@ -116,7 +144,7 @@ func (q *Queue) Ask(ctx context.Context, subject string, request []byte, want in
 	}
 	q.broker.mu.Unlock()
 	if len(servers) == 0 {
-		return nil, nil
+		return nil
 	}
 
 	// THE SCATTER'S OWN CONTEXT, cancelled when the collection ends. It is
@@ -160,23 +188,21 @@ func (q *Queue) Ask(ctx context.Context, subject string, request []byte, want in
 	// answerers are still running.
 	go func() { wg.Wait(); close(answers) }()
 
-	replies := make([][]byte, 0, len(servers))
 	for {
-		if want > 0 && len(replies) >= want {
-			return replies, nil
-		}
 		select {
 		case reply, open := <-answers:
 			if !open {
-				return replies, nil
+				return nil
 			}
-			replies = append(replies, reply)
+			if !each(reply) {
+				return nil
+			}
 		case <-ctx.Done():
 			// WHAT ARRIVED, NOT AN ERROR. A deadline reached
 			// mid-scatter is the ordinary outcome this verb is
 			// written for, and only the caller knows what a
 			// missing answer costs it.
-			return replies, nil
+			return nil
 		}
 	}
 }

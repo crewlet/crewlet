@@ -11,6 +11,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/skills"
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
@@ -95,6 +97,13 @@ var _ queue.Publisher = (*capture)(nil)
 // skill covering the tool the model will reach for.
 func guardedRunner(t *testing.T, prov *scriptedProvider, pub queue.Publisher) *runner.Runner {
 	t.Helper()
+	return guardedRunnerWith(t, prov, pub, tools.OriginBuiltin)
+}
+
+// guardedRunnerWith is guardedRunner with the covered tool registered under
+// origin, so the same skill can cover a first-party tool or an MCP server's.
+func guardedRunnerWith(t *testing.T, prov *scriptedProvider, pub queue.Publisher, origin string) *runner.Runner {
+	t.Helper()
 	registry := skills.NewRegistry()
 	if _, err := registry.PutPage(skills.Skill{
 		Key: "chat-conventions", Title: "Chat conventions",
@@ -112,13 +121,20 @@ func guardedRunner(t *testing.T, prov *scriptedProvider, pub queue.Publisher) *r
 	}
 	reg := tools.NewRegistry()
 	if err := reg.Register(stubTool{name: "slack_post", out: "posted"},
-		tools.OriginBuiltin); err != nil {
+		origin); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	// THE REAL LOADER, not a stub: the unlock is observed from a
 	// SUCCESSFUL call, so a stub that answered anything would unlock the
 	// tool without ever having produced the body.
-	if _, err := builtin.Register(reg, builtin.Deps{ToolSkills: registry}); err != nil {
+	if _, err := builtin.Register(reg, builtin.Deps{
+		ToolSkills: registry,
+		// THE REAL AUTHORITY DECISION, because every builtin is gated at
+		// registration: a nil Authorizer REFUSES, so a fixture without
+		// one would never load the skill and the unlock below could not
+		// happen for a reason that has nothing to do with skills.
+		Authorize: builtin.Decide(authz.NoChart{}),
+	}); err != nil {
 		t.Fatalf("builtin.Register: %v", err)
 	}
 	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
@@ -128,7 +144,19 @@ func guardedRunner(t *testing.T, prov *scriptedProvider, pub queue.Publisher) *r
 		Caps:      runner.Caps{ExecutorRounds: 3},
 		Task:      "post the summary",
 		Publisher: pub,
-		Turn:      runner.Turn{RunID: "t-guard", WorkKey: "wk-t-guard", AgentID: "agent-1"},
+		Turn: runner.Turn{
+			RunID: "t-guard", WorkKey: "wk-t-guard", AgentID: "agent-1",
+			// THE ACTING SEAT, which is what every tool call is
+			// authorized as: [tools.Surface] derives the principal from
+			// it, and a turn with none reaches the authority gate as
+			// nobody — which refuses every builtin, load_tool_skill
+			// included.
+			Context: &turnctx.Turn{
+				RunID: "t-guard", WorkKey: "wk-t-guard",
+				Seat: role,
+				Org:  &org.Organization{Name: "Acme", Roles: []*org.Role{role}},
+			},
+		},
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
@@ -199,6 +227,33 @@ func TestEveryRefusalIsPublishedForOperators(t *testing.T) {
 	// be blocked twice more is a model an operator needs to see whole.
 	if !slices.Equal(got.SkillKeys, []string{"chat-conventions"}) {
 		t.Fatalf("skill keys = %v", got.SkillKeys)
+	}
+}
+
+// A REQUIRED SKILL ON AN MCP TOOL IS ENFORCED as the catalogue promised it.
+// An executor starts with no MCP tool on its active list and activates one by
+// name, while its prompt lists the skills for every tool in its universe — so
+// a guard armed over the active list alone let the activated tool through
+// unread, under a catalogue that had called its skill required.
+func TestARequiredSkillOnAnActivatedMCPToolIsEnforced(t *testing.T) {
+	t.Parallel()
+	prov := &scriptedProvider{execute: []llm.Completion{
+		submitCall(t, runner.ActivateTool, `{"name":"slack_post"}`),
+		submitCall(t, "slack_post", `{"text":"hi"}`),
+		text("gave up"),
+	}}
+	pub := newCapture()
+	r := guardedRunnerWith(t, prov, pub, tools.Origin("slack"))
+
+	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if sys := systemOf(t, prov, "execute"); !strings.Contains(sys, "`chat-conventions` (required") {
+		t.Fatalf("the catalogue does not list the skill as required:\n%s", sys)
+	}
+	blocked := pub.blocked()
+	if len(blocked) != 1 || blocked[0].ToolName != "slack_post" {
+		t.Fatalf("the activated MCP tool ran without its required skill: refusals %+v", blocked)
 	}
 }
 

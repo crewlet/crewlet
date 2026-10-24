@@ -22,7 +22,8 @@ import { ConfigScreen } from "./Config.tsx";
 import { Shell } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { resetForTest } from "~/lib/recents.ts";
+import { noteReader } from "~/lib/reader.ts";
+import { recentsKey, resetForTest } from "~/lib/recents.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 
 class InertWebSocket {
@@ -65,6 +66,8 @@ const revisions = [
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   localStorage.clear();
+  sessionStorage.clear();
+  noteReader("p-1");
   resetForTest();
 });
 
@@ -111,7 +114,7 @@ const trail = () => screen.getByRole("navigation", { name: "Breadcrumb" });
 const here = () => trail().querySelector("[aria-current='page']");
 
 function recents(): string[] {
-  const raw = localStorage.getItem("crewlet_recents");
+  const raw = localStorage.getItem(recentsKey("p-1"));
   return raw ? (JSON.parse(raw) as { label: string }[]).map((r) => r.label) : [];
 }
 
@@ -120,7 +123,7 @@ test("a revision is named by its summary, and the crumb leaves the mono face", a
   await settle();
 
   expect(here()?.textContent).toBe("connect datadog");
-  expect(here()?.classList.contains("mono"), "prose drawn in the mono face").toBe(false);
+  expect(here()?.classList.contains("is-mono"), "prose drawn in the mono face").toBe(false);
   expect(trail().textContent, "the trail still carries the id").not.toContain("01JCFGAAAA");
   expect(document.title).toBe("connect datadog · Crewlet");
   expect(recents()).toEqual(["connect datadog"]);
@@ -133,7 +136,7 @@ test("a revision with no summary keeps its id, in the mono face", async () => {
   await settle();
 
   expect(here()?.textContent).toBe(UNNAMED);
-  expect(here()?.classList.contains("mono")).toBe(true);
+  expect(here()?.classList.contains("is-mono")).toBe(true);
   expect(recents(), "the header's placeholder reached the palette").not.toContain(
     "No summary was written",
   );

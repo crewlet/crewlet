@@ -37,14 +37,14 @@ import (
 // is exclusively owned, migrated on open, written through the one FIFO line
 // its lock carries, and no transaction spans it and the node's own.
 
-// replicatedReadFloor is the fewest readers the replicated estate's pool
-// holds beside the writers its apply loops pin.
+// replicatedReadFloor is the fewest ordinary readers the replicated estate's
+// pool holds beside the identity reserve and the writers its apply loops pin.
 //
 // TWO, so a long scan — a search reading its candidates, a snapshot being
 // taken — never holds the only connection a seat's point read could use. It
 // matters only to a node configured with `store.max_open_conns: 1`, whose
-// own file keeps the one connection it asked for; the replicated file is read
-// by every seat's tools, and one reader there serves them one read at a time
+// own file keeps the one reader it asked for; the replicated file is read by
+// every seat's tools, and one reader there serves them one read at a time
 // behind whatever scan is running.
 const replicatedReadFloor = 2
 
@@ -179,9 +179,10 @@ func (d *DB) OpenReplicated(ctx context.Context, logs int) (*DB, error) {
 }
 
 // replicatedOptions is the Options the replicated estate's handle is opened
-// with: the node's own, with a pool of the node's readers — never fewer than
-// [replicatedReadFloor] — PLUS one connection per log, and the embedding
-// width the node has LEARNED since it was opened.
+// with: the node's own, with the node's readers — never fewer than
+// [replicatedReadFloor] — PLUS the [identityReserve] every handle holds and one
+// connection per log ([Options.poolSize]), and the embedding width the node
+// has LEARNED since it was opened.
 //
 // THE PINS ARE ADDED, NEVER TAKEN OUT OF THE READERS, configured or not: a
 // pool bounded at the configured figure with four writers pinned in it leaves
@@ -191,7 +192,7 @@ func (d *DB) OpenReplicated(ctx context.Context, logs int) (*DB, error) {
 func (d *DB) replicatedOptions(logs int) Options {
 	opts := d.opened
 	opts.Scratch = false
-	opts.MaxOpenConns = max(replicatedReadFloor, d.opened.poolSize()) + logs
+	opts.MaxOpenConns = max(replicatedReadFloor, d.opened.readers())
 	opts.pins = logs
 	opts.EmbeddingDim = int(d.dim.Load())
 	return opts

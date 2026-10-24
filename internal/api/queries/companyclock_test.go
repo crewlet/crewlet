@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // EVERY ANSWER THAT CUTS A DAY CUTS IT ON THE COMPANY'S CLOCK, AS IT IS AT THE
@@ -22,7 +23,7 @@ import (
 // COMPANY's, read per call so an apply that moves it moves the next answer.
 func TestTheWorkAnswersCutTheirDayOnTheCompanysClock(t *testing.T) {
 	t.Parallel()
-	company, err := config.ParseCompany([]byte(partyCompany + "timezone: America/Los_Angeles\n"))
+	company, err := config.ParseCompany([]byte(viewerCompany + "timezone: America/Los_Angeles\n"))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -30,8 +31,8 @@ func TestTheWorkAnswersCutTheirDayOnTheCompanysClock(t *testing.T) {
 	now := time.Date(2026, time.September, 24, 6, 30, 0, 0, time.UTC)
 	work := &stubWork{}
 	sources := queries.Sources{
-		Company: func() *config.Company { return current },
-		Native:  nativeOf(queries.Native{Work: work}),
+		Company: func() (*config.Company, *org.Organization) { return companySource(t, current)() },
+		Work:    work,
 		Now:     func() time.Time { return now },
 	}
 

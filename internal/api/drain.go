@@ -87,18 +87,24 @@ const DrainRetryAfter = 30 * time.Second
 //     keeps a write route added later from being admitted through a drain
 //     because nobody listed it.
 //
-// /operator/mcp is a write by this rule whatever it is asked: it serves only
-// POST, because it keeps no session (operator.MCPPattern), and every JSON-RPC
-// call it carries — reads included — is refused with the writes. Split by
-// call, it would have to read the body to tell a listing from a filed task,
-// which is the per-route carve-out the default exists to avoid; an assistant
-// asking a draining node is told to retry elsewhere, as the dashboard is. A
-// listening stream opened BEFORE the drain is no request this gate sees again:
-// it is held through the drain, still hearing every other node's rebuild of
-// the operator tools, and answered as the listener shuts down
-// (operator.Listeners.End) — ending it at the drain's first moment would cut
-// off a client that does not open another stream for the drain's whole length.
-// /mcp/{token} is not split either, because the whole prefix is exempted above.
+// /operator/mcp is a write by this rule whatever it is asked. It is served
+// STATELESS (see internal/api/operator): every call is a POST carrying its own
+// credential, there is no server-to-client stream for a GET to open and no
+// session for a DELETE to end, and the route is mounted for POST alone
+// (operator.MCPPattern), so either of those meets the mux's own 405 — a read of
+// nothing, which starts nothing either. So every JSON-RPC call it serves, reads
+// included, is refused with the writes: split by call, the gate would have to
+// read the body to tell a listing from a filed task, which is the per-route
+// carve-out the default exists to avoid, and an assistant asking a draining
+// node is told to retry elsewhere, as the dashboard is. A listening stream
+// (`subscriptions/listen`, a POST of its own) opened BEFORE the drain is no
+// request this gate sees again: it is held through the drain, still told of
+// every other node's move of the operator tools, and answered as the listener
+// shuts down (operator.Listeners.End) — ending it at the drain's first moment
+// would cut off a client that does not open another stream for the drain's
+// whole length. /mcp/{token} is the one MCP surface that DOES hold sessions,
+// and it is served through a drain for the reason the bridge bullet above
+// gives.
 //
 // git is r's [auth.GitAccess], which the gate asks once and hands in.
 func servedWhileDraining(r *http.Request, git auth.GitOp) bool {

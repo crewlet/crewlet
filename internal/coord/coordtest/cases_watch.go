@@ -102,7 +102,7 @@ var watchCases = []testCase{
 		// traffic to hear a join. The seat is written FIRST, so a watch
 		// that heard it would hand it over first.
 		writes := h.watch(coord.ClassNode)
-		h.claim(coord.SeatResource("ceo"), coord.AcquireOptions{Owner: "node-a/1", TTL: LongTTL})
+		h.claim(coord.SeatResource(seatID("ceo")), coord.AcquireOptions{Owner: "node-a/1", TTL: LongTTL})
 		h.claim(coord.WorkerResource("scheduler"), coord.AcquireOptions{
 			Owner: "node-a/1", TTL: LongTTL, Ungated: true,
 		})

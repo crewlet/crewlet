@@ -14,7 +14,8 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { ReactNode } from "react";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
-import { NewTaskSheet, blockedBy, createArgs, startingProject } from "./NewTask.tsx";
+import { NewTaskSheet, blockedBy, createArgs } from "./NewTask.tsx";
+import { startingProject } from "~/lib/startingProject.ts";
 import { textBudget } from "~/lib/format.ts";
 import { TASK_BODY_MAX_BYTES, TASK_TITLE_MAX_BYTES } from "~/contract/work.ts";
 import { presetForLane } from "~/app/newTask.ts";
@@ -40,9 +41,10 @@ class InertWebSocket {
 }
 
 const JANE = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+  login: "U0FOUNDER",
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
+  owner: "jane",
   name: "Jane Founder",
   kind: "human",
   acts: ["create_work_item"],
@@ -94,7 +96,7 @@ beforeEach(() => {
       tool: "create_work_item",
       outcome: "applied",
       position: "CREWLET_TRACKER_LOG@1:9",
-      receipt: { key: "ENG-9" },
+      receipt: { item: "ENG-9", key: "ENG-9" },
     },
   };
   vi.stubGlobal(
@@ -284,7 +286,7 @@ test("the assignee's and the labels' help lines describe their controls", async 
   );
   const labels = document.getElementById("new-task-labels")!;
   expect(describedBy(labels.matches("input") ? labels : labels.querySelector("input")!)).toContain(
-    "The project's own labels",
+    "Only this project’s labels.",
   );
 });
 
@@ -301,9 +303,10 @@ test("the project is the door's, else the person's own, else the first", () => {
 // ENG — the first project — while the CEO's unit files its work under LEAD.
 test("a door naming only a seat opens on the project of that seat's own unit", () => {
   const index = indexOrg(CHART_ORG);
+  // A project names its unit by KEY, the address the chart is read by.
   const filed = (key: string, unit: string): WorkProjectRow =>
-    ({ ...row(key, unit), unit: { name: unit, resolved: true } }) as WorkProjectRow;
-  const listed = [filed("ENG", "Core"), filed("LEAD", "Executives"), filed("PROD", "Product")];
+    ({ ...row(key, unit), unit: { key: unit, resolved: true } }) as WorkProjectRow;
+  const listed = [filed("ENG", "core"), filed("LEAD", "executives"), filed("PROD", "product")];
   expect(startingProject({ assignee: "ceo", ask: "ceo" }, "ENG", listed, index)).toBe("LEAD");
   // The nearest unit ABOVE the seat's own, when its own files nothing.
   expect(startingProject({ assignee: "devrel" }, "ENG", listed, index)).toBe("PROD");
@@ -334,6 +337,54 @@ test("a lane's status reaches the wire and applied opens the new task", async ()
   ]);
   expect(closed).toBe(1);
   expect(location.hash).toBe("#/work/ENG-9");
+});
+
+// A DOOR THAT KNOWS THE TASK fills its title and description, which the
+// person can still change before Create, and both reach the wire.
+test("a door's title and description open in the sheet and reach the wire", async () => {
+  mount(
+    <NewTaskSheet
+      preset={{ project: "ENG", title: "Onboarding screens", description: "Three screens." }}
+      onClose={() => {}}
+    />,
+  );
+  await settle();
+  expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("Onboarding screens");
+  expect((screen.getByLabelText(/^Description/) as HTMLTextAreaElement).value).toBe(
+    "Three screens.",
+  );
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Create task" }));
+  });
+  await settle();
+  expect(posted[0]?.args).toEqual({
+    title: "Onboarding screens",
+    project: "ENG",
+    body: "Three screens.",
+  });
+});
+
+// A KEY A RESTORED COUNTER HANDED OUT AGAIN is one another task already
+// claimed, and it opens THAT task — so the new one is opened at the address its
+// receipt names (`item`, its id here), never at its key.
+test("a new task whose key another task claimed opens at the address its receipt names", async () => {
+  reply = {
+    status: 200,
+    body: {
+      tool: "create_work_item",
+      outcome: "applied",
+      position: "CREWLET_TRACKER_LOG@1:9",
+      receipt: { item: "t-new", key: "ENG-7", key_collision: true },
+    },
+  };
+  mount(<NewTaskSheet preset={{ project: "ENG" }} onClose={() => {}} />);
+  await settle();
+  fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Retry PXE boot" } });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Create task" }));
+  });
+  await settle();
+  expect(location.hash).toBe("#/work/t-new");
 });
 
 // A REFUSAL NAMES THE FIELD, in the engine's own sentence, and the sheet stays
@@ -371,13 +422,8 @@ test("a refusal is said in the sheet and the sheet stays open", async () => {
 test.each([
   {
     who: "anonymous",
-    viewer: { operator_id: "", operator: false, handle: "", name: "", acts: [] },
+    viewer: { login: "", grants: [], handle: "", owner: "", name: "", acts: [] },
     reason: WRITE_REASONS.anonymous,
-  },
-  {
-    who: "unbound",
-    viewer: { operator_id: "U0CI", operator: true, handle: "", name: "", acts: [] },
-    reason: WRITE_REASONS.unbound,
   },
   {
     who: "not served the create",
@@ -431,7 +477,7 @@ test("a text is measured in bytes against the engine's cap, and counts down near
   // 86 characters, 258 bytes: over, though far short of 256 characters.
   const wide = textBudget("日".repeat(86), TASK_TITLE_MAX_BYTES, "a title");
   expect(wide.over).toBe(true);
-  expect(wide.line).toContain("258 bytes — a title holds at most 256");
+  expect(wide.line).toContain("258 bytes, but a title holds at most 256");
   // Far from the cap there is nothing to count.
   expect(textBudget("Fix the race", TASK_TITLE_MAX_BYTES, "a title").line).toBeUndefined();
   // WHAT IS SENT is what is measured: the trimmed title.
@@ -487,7 +533,7 @@ test("a title past the cap is marked on its field and Create is held, visibly", 
     .split(/\s+/)
     .map((id) => document.getElementById(id)?.textContent ?? "")
     .join(" ");
-  expect(description).toContain("600 bytes — a title holds at most 256");
+  expect(description).toContain("600 bytes, but a title holds at most 256");
   const create = screen.getByRole("button", { name: "Create task" });
   expect(create.getAttribute("aria-disabled")).toBe("true");
   // THE REASON IS ON THE PAGE, not only in the button's hidden description.
@@ -502,9 +548,7 @@ test("a title past the cap is marked on its field and Create is held, visibly", 
 test("an empty title says so beside Create, and Enter takes the reader to it", async () => {
   mount(<NewTaskSheet preset={{ project: "ENG" }} onClose={() => {}} />);
   await settle();
-  expect(document.querySelector(".new-task-hold")?.textContent).toBe(
-    "Give the task a title — one line saying what the work is.",
-  );
+  expect(document.querySelector(".new-task-hold")?.textContent).toBe("Add a title.");
   const title = screen.getByLabelText("Title");
   // ENTER IN ANOTHER SINGLE-LINE FIELD — the due date — is the press.
   const due = screen.getByLabelText(/Due/);
@@ -592,7 +636,7 @@ test("an assignee typed and not chosen holds Create until a seat is taken", asyn
     .split(/\s+/)
     .map((id) => document.getElementById(id)?.textContent ?? "")
     .join(" ");
-  expect(described).toContain("Not chosen yet");
+  expect(described).toContain("Pick a seat from the list.");
   expect(described).not.toContain("Left empty");
   // CREATE IS HELD, visibly, and a press sends nothing.
   expect(document.querySelector(".new-task-hold")?.textContent).toBe(
@@ -734,7 +778,7 @@ test("the engine's match leads the list by its name, and says why once taken", a
       .map((id) => document.getElementById(id)?.textContent ?? "")
       .join(" ");
   expect(described()).toBe(
-    "Agent SWE is woken with it and follows it. The engine's match for “sw”: part of the name matches.",
+    "Agent SWE is notified and follows it. The engine's match for “sw”: part of the name matches.",
   );
   // A SEAT TAKEN FROM THE CHART'S OWN ROWS is told no engine's tier.
   fireEvent.change(field, { target: { value: "Jane" } });
@@ -745,7 +789,7 @@ test("the engine's match leads the list by its name, and says why once taken", a
     }),
   );
   await settle();
-  expect(described()).toBe("Jane Founder is woken with it and follows it.");
+  expect(described()).toBe("Jane Founder is notified and follows it.");
 });
 
 // THE CLEAR CONTROL IS INSIDE THE FIELD, so the completion list — anchored to
@@ -786,9 +830,8 @@ test("an empty assignee lands where the engine will file it", async () => {
     project: { ...ENG, default_assignee: "ana" } as WorkProjectDetail,
   });
   await settle();
-  expect(helpOfAssignee()).toContain("it lands in triage");
-  expect(helpOfAssignee()).toContain("ana, is no longer on the org chart");
-  expect(helpOfAssignee()).not.toContain("it goes to");
+  expect(helpOfAssignee()).toContain("Left empty, it goes to triage. ana has left the org.");
+  expect(helpOfAssignee()).not.toContain("default assignee");
 });
 
 // AND AN APPLIED CREATE THAT CAME BACK WITH A CAVEAT SAYS IT: "Filed" over a
@@ -802,6 +845,7 @@ test("an applied create's warnings are said, not dropped", async () => {
       outcome: "applied",
       position: "CREWLET_TRACKER_LOG@1:9",
       receipt: {
+        item: "ENG-9",
         key: "ENG-9",
         warnings: ['ENG\'s default assignee "ana" is not a seat on the org chart any more.'],
       },

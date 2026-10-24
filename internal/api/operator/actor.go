@@ -2,186 +2,76 @@ package operator
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
-	"github.com/crewlet/crewlet/internal/api/auth"
-	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
-	"github.com/crewlet/crewlet/internal/tracker"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// operationKey is the context key [WithOperation] stores under. An unexported
-// type, so no other package can write or shadow it.
-type operationKey struct{}
-
-// WithOperation marks ctx as carrying the operation a transport named for ONE
-// call — the identity a retry of that call repeats, and the one every write
-// the call makes is derived from ([builtin.Actor.Operation],
-// [builtin.PageDeps.Operation]).
+// WHO A CALL HERE WRITES AS, AND UNDER WHICH OPERATION.
 //
-// A TRANSPORT SETS IT, never a tool argument: the operation decides which
-// writes are one, and a caller who could put it in the arguments of an
-// ordinary call could collapse somebody else's write by guessing theirs. The
-// act transport derives it from its envelope's `request_id` and the token that
-// sent it ([builtin.RequestOperation]), so a request id names only that
-// credential's own writes. A transport that names no request — MCP — sets
-// nothing: there, a tracker write names its own operation ([builtin.OperatorTools]
-// mints one and answers it as `op_id`, and the call brought back with it is
-// that operation again), and a page write is a new one.
+// # The principal, and nothing a call can choose
 //
-// An empty operation is none: stored as given and read back as "", which
-// every consumer treats exactly as a call that named none.
-func WithOperation(ctx context.Context, op string) context.Context {
-	return context.WithValue(ctx, operationKey{}, op)
-}
-
-// operationFrom reads the operation [WithOperation] stored, or "".
-func operationFrom(ctx context.Context) string {
-	op, _ := ctx.Value(operationKey{}).(string)
-	return op
-}
-
-// seatKey is the context key [withSeat] stores under.
-type seatKey struct{}
-
-// withSeat pins the seat ONE call's caller is bound to — "" for a token
-// nobody binds — so every frame of that call reads the one answer.
-//
-// # Why the seat is resolved once per call and carried
-//
-// The binding lives in the company chart, which a config apply replaces
-// while a call is running. Resolved at each frame that asks, one call asked
-// three times — the act transport's admission, the actor the tool writes as
-// ([WorkActor]) and the audit record ([Server.dispatch]) — and an apply that
-// rebound or unbound the token between them admitted a call as one person,
-// wrote it as another or as nobody, and audited it under a third. A call is
-// made BY whoever it was admitted as, so the first answer is the call's, and
-// a rebinding applies from the next call on.
-//
-// THE DISPATCH SETS IT, for every transport — the act transport's admission
-// pins it first, and the dispatch reuses that answer rather than asking
-// again. Read back by [pinnedSeat], which tells a pinned "" (an unbound
-// caller) from no pin at all.
-func withSeat(ctx context.Context, seat string) context.Context {
-	return context.WithValue(ctx, seatKey{}, seat)
-}
-
-// pinnedSeat reads the seat [withSeat] pinned, and whether one was.
-func pinnedSeat(ctx context.Context) (string, bool) {
-	seat, ok := ctx.Value(seatKey{}).(string)
-	return seat, ok
-}
-
-// WorkActor and PageActor read the operator off the request's context.
-//
-// # An unbound token identifies as itself
-//
-// A Tier A token has a NAME — the key in `api.auth.tokens` — and that name is
-// what lands on the record: `founder`, `ci`, `ops-bot`. It is not a seat and
-// must not look like one, so the actor KIND is [tracker.AuthorOperator] — the
-// discriminator every renderer and every recipient rule already reads — and
-// the credential is recorded again in `OperatorID` so an audit can ask what
-// one token did without reasoning about kinds.
-//
-// The name goes in the author field rather than being left empty because the
-// tracker requires one: a record carrying no author is a history row nobody
-// can attribute, which is the single thing this surface exists to prevent.
+// Every actor this surface hands a tool is [builtin.PrincipalActor]'s of the
+// request's principal — the one conversion the tools make for any caller with
+// no turn — which is [iam.ActorFor]'s: a person the identity directory binds
+// to a seat writes AS that seat, with kind `human`; a credential nobody is
+// bound through writes under its whole login (`token:ops`, colon and all),
+// with kind `operator`; and the credential the call came through is recorded
+// beside either. The binding is the DIRECTORY'S, resolved by the request guard
+// before any handler ran, so it is one value on the context for the whole call:
+// the actor, the dispatch's audit record and every log line read that value,
+// and a rebind or a company revision landing while the call runs changes the
+// next request rather than splitting this one between two people.
 //
 // The alternative — asking the caller to name a seat to act as — was rejected:
-// it lets anybody with the token write as anybody, and a tracker whose author
-// field can be chosen by the writer is not an audit trail.
-//
-// # A BOUND token also says who it IS, and that is a different field
-//
-// `contact.crewlet_operator_id` binds a token to a human seat, and that
-// binding is an ATTRIBUTION rather than an address — so it changes nothing
-// above. What it answers is the question the rule above does not: whose inbox,
-// whose pins, whose queue, whose day. Those are the PERSON's, and the person
-// is the seat. So the seat travels in [builtin.Actor.Seat], beside an author
-// that is still the token and a kind that is still `operator`.
-//
-// Left unresolved, the person tools wrote a second person record named after
-// the credential and `get_my_work` answered for a party of one that no
-// colleague had ever filed anything against.
-//
-// A CONSTRUCTOR because the resolution needs the chart, which is a Tier B
-// value a config apply replaces — so it is read per call rather than captured.
-// A nil chart, or a build with none loaded, resolves no seat, which is exactly
-// an unbound token and an ordinary state. lookup resolves a `${VAR}` binding
-// ([seatFor]).
-//
-// THE SEAT THE CALL WAS PINNED TO WINS ([withSeat]): every call through the
-// dispatch carries the one answer its admission and its audit read, and the
-// chart is read here only for a caller that reached the actor some other way.
-func WorkActor(chart func() *org.Organization, lookup org.EnvLookup) func(
-	context.Context, *turnctx.Turn) (builtin.Actor, error) {
+// it lets anybody with a credential write as anybody, and a tracker whose
+// author field can be chosen by the writer is not an audit trail.
 
-	return func(ctx context.Context, _ *turnctx.Turn) (builtin.Actor, error) {
-		id, ok := auth.OperatorFrom(ctx)
-		if !ok || id == "" {
-			return builtin.Actor{}, fmt.Errorf("operator: no operator on this request")
-		}
-		// THE OPERATOR'S OWN NAME IS THE HANDLE, and the kind says it
-		// is not a seat. A tracker whose author field is chosen by the
-		// writer is not an audit trail, so there is deliberately no way
-		// for a caller to name a seat to act as.
-		actor := builtin.Actor{
-			Handle: id, Kind: tracker.AuthorOperator, OperatorID: id,
-		}
-		if seat, pinned := pinnedSeat(ctx); pinned {
-			actor.Seat = seat
-		} else {
-			actor.Seat = seatFor(chart, lookup, id)
-		}
-		// AND THE OPERATION THE TRANSPORT NAMED, where it named one: it
-		// is what makes a retried request the same writes. See
-		// [WithOperation].
-		actor.Operation = operationFrom(ctx)
-		return actor, nil
-	}
+// keyKey is the context key [withKey] stores under. An unexported type, so no
+// other package can write or shadow it.
+type keyKey struct{}
+
+// withKey marks ctx as carrying the operation ONE call's transport named.
+//
+// A TRANSPORT SETS IT, through [Call.Key], and never a tool argument: the
+// operation decides which writes are one, and a caller who could put it in the
+// arguments of an ordinary call could choose which operation their write
+// collapses into.
+func withKey(ctx context.Context, key string) context.Context {
+	return context.WithValue(ctx, keyKey{}, key)
 }
 
-// seatFor is the chart seat a token id is bound to, or "".
-//
-// lookup resolves a `crewlet_operator_id: ${FOUNDER_ID}`: the serving node's
-// own chain ([Options.Env]) — the secret store, then the environment it was
-// handed — which is where every other consumer of `contact` resolves one, and
-// the same lookup the other direction is handed ([builtin.Parties]), which is
-// what stops a company being bound for one direction and unbound for the
-// other. Nil reads the process environment.
-func seatFor(chart func() *org.Organization, lookup org.EnvLookup, id string) string {
-	if chart == nil {
-		return ""
-	}
-	o := chart()
-	if o == nil {
-		return ""
-	}
-	seat := o.SeatByOperatorID(id, lookup)
-	if seat == nil {
-		return ""
-	}
-	return seat.Handle()
+// keyFrom is the operation [withKey] stored, or "".
+func keyFrom(ctx context.Context) string {
+	key, _ := ctx.Value(keyKey{}).(string)
+	return key
 }
 
-// PageActor is [WorkActor] for the knowledge base, and records the SAME
-// operator under the SAME name.
-//
-// THE HANDLE IS THE TOKEN'S OWN NAME, exactly as above. It used to be left
-// empty here, and `pages.Actor.Name` falls back to `"operator:" + OperatorID`
-// for an actor with no handle — so one person writing through one surface was
-// recorded as `founder` on a work commit and `operator:founder` on a page
-// commit. The kind is already on the row, in its own column, so the prefix was
-// a second encoding of a fact the row carries; what it bought was that the
-// audit feed, which is the one screen that reads both histories, showed the
-// same person as two people three rows apart, and that a reader filtering on
-// a name matched half of what they did.
-func PageActor(ctx context.Context, _ *turnctx.Turn) (pages.Actor, error) {
-	id, ok := auth.OperatorFrom(ctx)
-	if !ok || id == "" {
-		return pages.Actor{}, fmt.Errorf("operator: no operator on this request")
+// workActor is [builtin.WorkDeps.Actor] for this surface: the request's
+// principal, written down by [builtin.PrincipalActor], carrying the call's
+// operation and the instant it was minted at — which every id the tools derive
+// from it carries, and which the ledger vouches for a retry by.
+func workActor(ctx context.Context, turn *turnctx.Turn) (builtin.Actor, error) {
+	actor, err := builtin.PrincipalActor(ctx, turn)
+	if err != nil {
+		return builtin.Actor{}, err
 	}
-	return pages.Actor{Handle: id, Kind: pages.AuthorOperator, OperatorID: id}, nil
+	if key := keyFrom(ctx); key != "" {
+		actor.WorkKey = key
+		actor.WorkSince, _ = statelog.OpMintedAt(key)
+	}
+	return actor, nil
+}
+
+// pageActor is [workActor] for the knowledge base, which binds the call's
+// operation to what each write says itself ([pages.Actor.OpKey]).
+func pageActor(ctx context.Context, turn *turnctx.Turn) (pages.Actor, error) {
+	actor, err := builtin.PrincipalPageActor(ctx, turn)
+	if err != nil {
+		return pages.Actor{}, err
+	}
+	actor.OpKey = keyFrom(ctx)
+	return actor, nil
 }

@@ -489,9 +489,18 @@ func (s *suite) runCore(t *testing.T) {
 		awaitState(t, "the event to reach the dead-letter subject", func() bool {
 			return len(deadLetters(q, "topic", "grp")) == 1
 		})
-		if got := backlog(q, "topic", "grp"); len(got) != 0 {
-			t.Fatalf("a dead-lettered event stayed in the backlog: %v", labelsOf(got))
-		}
+		// AND TO LEAVE THE BACKLOG, awaited rather than read once. A move
+		// between two subjects is two writes, and the safe order copies
+		// before it drops — dropped first, a dead letter that failed to
+		// publish would be lost — so for a moment the event is in both. On
+		// the broker the drop is a Term nobody waits on, which the
+		// consumer's ack floor reflects only once the server has applied
+		// it. Read once, the backlog caught that moment under load through
+		// a leaf, and failed a backend doing what the contract asks; a
+		// backend that never drops the event still fails here.
+		awaitState(t, "the dead-lettered event to leave the backlog", func() bool {
+			return len(backlog(q, "topic", "grp")) == 0
+		})
 		if got := labelsOf(deadLetters(q, "topic", "grp")); !equalStrings(got, []string{"t"}) {
 			t.Fatalf("dead letters = %v, want [t]", got)
 		}
@@ -905,7 +914,7 @@ func (s *suite) runCore(t *testing.T) {
 	// The two points get different rules, and the asymmetry is deliberate —
 	// see queue.EventQueue's Start and Stop.
 
-	// BEFORE START a backend picks its answer and applies it to all fourteen.
+	// BEFORE START a backend picks its answer and applies it to all sixteen.
 	t.Run("an_unstarted_queue_answers_the_same_way_for_every_verb", func(t *testing.T) {
 		t.Parallel()
 		q := s.newQueue(t)
@@ -947,7 +956,7 @@ func (s *suite) runCore(t *testing.T) {
 	//
 	// Deleting it costs nothing, because this case is the GENERAL form of the
 	// same fix and is strictly stronger: it is ungated, it runs on both
-	// backends, and it requires all fourteen verbs — PauseTopic among them — to
+	// backends, and it requires all sixteen verbs (PauseTopic among them) to
 	// refuse with queue.ErrNotLive. A hold that cannot be TAKEN cannot survive
 	// anything, so the window is closed by construction rather than by
 	// observation, and it is closed for every verb rather than for the one
@@ -1086,10 +1095,10 @@ func second(_ bool, err error) error { return err }
 // listErr is second for the listing's shape.
 func listErr(_ []queue.Subscription, err error) error { return err }
 
-// lifecycleVerbs sends every publish, subscription and attachment verb once
-// and reports what each answered.
+// lifecycleVerbs sends every publish, subscription, attachment and ephemeral
+// verb once and reports what each answered.
 //
-// ALL FOURTEEN, in one list, because the property under test is that they AGREE
+// ALL SIXTEEN, in one list, because the property under test is that they AGREE
 // — a helper that took a subset would be certifying the subset the author
 // happened to think of, which is exactly how nine of them went unsent.
 //
@@ -1117,6 +1126,10 @@ func lifecycleVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbRe
 	asking, cancelAsk := context.WithTimeout(ctx, 100*time.Millisecond)
 	defer cancelAsk()
 	_, askErr := q.Ask(asking, topic, []byte("probe"), 1)
+	stopListening, listenErr := q.Listen(ctx, ns+".>", func(string, []byte) {})
+	if stopListening != nil {
+		_ = stopListening(ctx)
+	}
 	return []verbResult{
 		{"Publish", q.Publish(ctx, topic, newEvent(topic))},
 		{"Subscribe", q.Subscribe(ctx, topic, "g", func(context.Context, *events.Event) queue.Result {
@@ -1136,5 +1149,7 @@ func lifecycleVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbRe
 		{"ResumeTopic", q.ResumeTopic(ctx, topic, "g", "test")},
 		{"Serve", serveErr},
 		{"Ask", askErr},
+		{"Broadcast", q.Broadcast(ctx, topic, []byte("probe"))},
+		{"Listen", listenErr},
 	}
 }

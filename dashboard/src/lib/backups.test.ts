@@ -83,11 +83,12 @@ describe("why a backup was not taken", () => {
     expect(refusal).toEqual({ field: true, message: "backup: unusable destination: not empty" });
   });
 
-  test("an engine failure sends the reader to its log, and says the directory is not a backup", () => {
+  test("an engine failure sends the reader to its log", () => {
     const refusal = backupRefusal(new RestError(500, { error: "backup_failed" }));
     expect(refusal.field).toBe(false);
-    expect(refusal.message).toMatch(/api_backup_failed/);
-    expect(refusal.message).toMatch(/not a backup/);
+    expect(refusal.message).toBe(
+      "The copy failed. The engine log has the reason (api_backup_failed).",
+    );
   });
 
   test("a wait that ran out is not called a failure", () => {
@@ -140,10 +141,15 @@ describe("why a backup was not taken", () => {
     expect(bare.message).not.toMatch(/api_backup_failed/);
   });
 
-  test("a refused credential says what to set", () => {
+  // A 401 accepted no credential, so the repair is signing in; a 403 named the
+  // access the backup is taken under, and the sentence names it.
+  test("a refused credential says what would admit it", () => {
     expect(backupRefusal(new RestError(401, { error: "unauthorized" })).message).toMatch(
-      /operator token/,
+      /Sign in to see this\./,
     );
+    expect(
+      backupRefusal(new RestError(403, { error: "unauthorized", grants: ["admin"] })).message,
+    ).toMatch(/Taking a backup needs Admin access\. An admin can give it to you\./);
   });
 });
 

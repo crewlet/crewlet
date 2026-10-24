@@ -9,6 +9,7 @@
  * `boundaries.test.tsx`.
  */
 
+import { startTransition, useState } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
@@ -31,7 +32,7 @@ import { App } from "./App.tsx";
 import { Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
-import { modules, parse, stringValue, walk } from "~/test/source.ts";
+import { modules, parse, stringValue, walk, type Module } from "~/test/source.ts";
 
 let undo: (() => void)[] = [];
 
@@ -63,17 +64,61 @@ afterEach(() => {
 });
 
 describe("which chunk draws a screen", () => {
-  test("every workspace is a chunk, and the org editor is one of its own", () => {
-    expect([...CHUNKS].sort()).toEqual([...WORKSPACES.map((ws) => ws.key), "org"].sort());
+  // A CHUNK IS A SCREEN DIRECTORY, not a sidebar row: Company's rows draw
+  // screens from three of them, and a row that moves moves no code.
+  test("every screen directory is a chunk, and the org editor is one of its own", () => {
+    expect([...CHUNKS].sort()).toEqual(
+      [
+        "account",
+        "agents",
+        "artifacts",
+        "home",
+        "inbox",
+        "knowledge",
+        "live",
+        "me",
+        "org",
+        "palette",
+        "settings",
+        "spend",
+        "work",
+      ].sort(),
+    );
+    // EVERY SIDEBAR ROW'S LANDING is drawn by one of them.
+    for (const ws of WORKSPACES) {
+      const where = resolve(ws.path);
+      expect(where.resolved && CHUNKS.includes(chunkOf(where)), ws.key).toBe(true);
+    }
   });
 
-  test("a screen is drawn by its workspace's chunk, the builder by the org chunk", () => {
-    const edit = resolve(["agents", "edit"]);
-    const chart = resolve(["agents"]);
-    const item = resolve(["work", "ENG-4"]);
-    expect(edit.resolved && chunkOf(edit)).toBe("org");
-    expect(chart.resolved && chunkOf(chart)).toBe("agents");
-    expect(item.resolved && chunkOf(item)).toBe("work");
+  // EVERY SCREEN OPENS THE PALETTE WITH A KEY, so it is the first chunk the
+  // idle prefetch fetches: a ⌘K pressed after the first idle moment finds it in.
+  test("the palette is a chunk of its own, and the first one prefetched", async () => {
+    expect(CHUNKS[0]).toBe("palette");
+    const module = await loadChunk("palette");
+    expect(typeof module.CommandPalette).toBe("function");
+  });
+
+  test("a screen is drawn by its directory's chunk, the builder by the org chunk", () => {
+    const at = (...path: string[]) => {
+      const where = resolve(path);
+      return where.resolved ? chunkOf(where) : null;
+    };
+    expect(at("company", "org", "edit")).toBe("org");
+    expect(at("company", "org")).toBe("agents");
+    expect(at("company", "schedules")).toBe("agents");
+    expect(at("company")).toBe("settings");
+    expect(at("company", "budgets")).toBe("spend");
+    expect(at("settings", "spend")).toBe("spend");
+    expect(at("work", "ENG-4")).toBe("work");
+  });
+
+  test("each kind's create page is a chunk of its own, and none is prefetched", () => {
+    const doc = resolve(["artifacts", "new", "doc"]);
+    const html = resolve(["artifacts", "new", "html"]);
+    expect(doc.resolved && chunkOf(doc)).toBe("new-doc");
+    expect(html.resolved && chunkOf(html)).toBe("new-html");
+    expect(CHUNKS.some((c) => c.startsWith("new-"))).toBe(false);
   });
 
   // Every place the sidebar and the palette can send a reader has a chunk that
@@ -97,9 +142,9 @@ describe("a chunk that does not load", () => {
     const error = await loadChunk("spend").catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ChunkLoadError);
     const message = (error as ChunkLoadError).message;
-    expect(message).toMatch(/^The Spend screens could not be loaded\./);
-    expect(message).toContain("from another engine version");
-    expect(message).toMatch(/reload/);
+    expect(message).toMatch(/^The Spend and Budgets screens could not be loaded\./);
+    expect(message).toContain("The engine was updated.");
+    expect(message).toMatch(/Reload/);
     // The cause survives for whoever reads the console.
     expect((error as ChunkLoadError).cause).toBeInstanceOf(TypeError);
   });
@@ -152,6 +197,39 @@ describe("a lazy screen", () => {
     expect(screen.queryByText("Loading this screen")).toBeNull();
   });
 
+  // A COMPONENT THAT SUSPENDED ON `use` CALLS IT AGAIN when it resumes. A
+  // navigation renders in a TRANSITION, where React keeps the screen it has
+  // and replays the suspended component in place once its chunk arrives; a
+  // fast path that read the arrived chunk before `use` skipped it on exactly
+  // that replay, and React logged "did not call use() when it finished" for
+  // every screen a reader opened before its chunk was in.
+  test("calls use on the render that resumes, so React reports nothing", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const load = held();
+      serve("spend", () => load.promise);
+      const Spend = lazyScreen("spend", (m) => m.Spend);
+      let open: () => void = () => {};
+      function Navigation() {
+        const [opened, setOpened] = useState(false);
+        open = () => startTransition(() => setOpened(true));
+        return (
+          <ScreenBoundary resetKey="spend">
+            {opened ? <Spend /> : <p>the home screen</p>}
+          </ScreenBoundary>
+        );
+      }
+      render(<Navigation />);
+      await act(async () => open());
+      expect(screen.getByText("the home screen")).toBeDefined();
+      await act(async () => load.release({ Spend: () => <p>the spend screen</p> }));
+      expect(await screen.findByText("the spend screen")).toBeDefined();
+      expect(errors.mock.calls.map((call) => String(call[0]))).toEqual([]);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
   // A chunk the idle prefetch already fetched must not flash its skeleton:
   // `use` suspends once on a promise React has not seen, settled or not.
   test("whose chunk is already in draws at once, with no skeleton", async () => {
@@ -176,7 +254,7 @@ describe("preload", () => {
         return Promise.resolve({});
       });
     }
-    preload(["agents", "edit"]);
+    preload(["company", "org", "edit"]);
     preload(["settings", "secrets"]);
     preload(["nowhere", "at", "all"]);
     await Promise.resolve();
@@ -266,18 +344,16 @@ describe("a sidebar row", () => {
   // row, or the keyboard's focus arriving on it.
   test("starts fetching its workspace on hover and on focus", async () => {
     const asked: Chunk[] = [];
-    for (const chunk of ["spend", "knowledge"] as const) {
+    for (const chunk of ["spend", "live"] as const) {
       serve(chunk, async () => {
         asked.push(chunk);
         return chunk === "spend"
           ? import("~/routes/spend/index.ts")
-          : import("~/routes/knowledge/index.ts");
+          : import("~/routes/live/index.ts");
       });
     }
     // The other chunks, back in after the overrides forgot them.
-    await Promise.all(
-      CHUNKS.filter((c) => c !== "spend" && c !== "knowledge").map((c) => loadChunk(c)),
-    );
+    await Promise.all(CHUNKS.filter((c) => c !== "spend" && c !== "live").map((c) => loadChunk(c)));
     Object.defineProperty(globalThis, "WebSocket", {
       writable: true,
       value: class {
@@ -301,9 +377,9 @@ describe("a sidebar row", () => {
     });
     const nav = screen.getByRole("navigation", { name: "Navigation" });
     expect(asked).toEqual([]);
-    fireEvent.pointerEnter(nav.querySelector('a[href="#/spend"]')!);
-    fireEvent.focus(nav.querySelector('a[href="#/knowledge"]')!);
-    expect(asked).toEqual(["spend", "knowledge"]);
+    fireEvent.pointerEnter(nav.querySelector('a[href="#/company/budgets"]')!);
+    fireEvent.focus(nav.querySelector('a[href="#/live"]')!);
+    expect(asked).toEqual(["spend", "live"]);
   });
 });
 
@@ -319,6 +395,33 @@ describe("the split", () => {
     return parts.join("/");
   }
 
+  /**
+   * Each module-relative or `~` import `m` makes that is not type-only, as
+   * the source it spells and the path under `src/` it lands on. A type-only
+   * import is erased and pulls in nothing.
+   */
+  function staticImports(m: Module) {
+    const found: { source: string; to: string }[] = [];
+    walk(parse(m.text, m.lang), (node) => {
+      if (
+        node.type !== "ImportDeclaration" &&
+        node.type !== "ExportNamedDeclaration" &&
+        node.type !== "ExportAllDeclaration"
+      )
+        return;
+      const decl = node as unknown as {
+        source?: unknown;
+        importKind?: string;
+        exportKind?: string;
+      };
+      if (decl.importKind === "type" || decl.exportKind === "type") return;
+      const source = stringValue(decl.source as never);
+      if (!source || !(source.startsWith("~/") || source.startsWith("."))) return;
+      found.push({ source, to: target(m.path, source) });
+    });
+    return found;
+  }
+
   // A SCREEN IMPORTED STATICALLY FROM OUTSIDE `routes/` IS BACK IN THE ENTRY.
   // The bundler follows a static import wherever it is, so one line in the
   // frame — a peek, a helper a screen happens to export — pulls that whole
@@ -332,30 +435,52 @@ describe("the split", () => {
     const offences: string[] = [];
     for (const m of modules()) {
       if (m.path.startsWith("routes/")) continue;
-      walk(parse(m.text, m.lang), (node) => {
-        if (
-          node.type !== "ImportDeclaration" &&
-          node.type !== "ExportNamedDeclaration" &&
-          node.type !== "ExportAllDeclaration"
-        )
-          return;
-        const decl = node as unknown as {
-          source?: unknown;
-          importKind?: string;
-          exportKind?: string;
-        };
-        if (decl.importKind === "type" || decl.exportKind === "type") return;
-        const source = stringValue(decl.source as never);
-        if (!source || !(source.startsWith("~/") || source.startsWith("."))) return;
-        const to = target(m.path, source);
+      for (const { source, to } of staticImports(m)) {
         if (to.startsWith("routes/") && to !== "routes/NotFound.tsx") {
           offences.push(`${m.path} imports ${source}`);
         }
-      });
+      }
     }
     expect(
       offences,
       "reach a screen through lazyScreen.ts's import(), never a static import",
+    ).toEqual([]);
+  });
+
+  // A WORKSPACE'S OWN MODULE UNDER `lib/` IS IN THE ENTRY ONCE THE FRAME
+  // REACHES IT. A bundler places a module whole, so the frame importing one
+  // small helper from a module that is otherwise a screen's carries all of it
+  // into the chunk every reader downloads first: the sidebar's and the
+  // palette's `artifactPath` once brought every artifact write and read with
+  // it. Such a module is named here, and the entry's static graph, walked
+  // from `main.tsx`, must not reach it. So is a LAYER the frame mounts only
+  // while open and loads as a chunk of its own: the command palette, the
+  // largest single piece of the frame, which one static import of it would
+  // put back into the first paint.
+  const SCREEN_ONLY = ["lib/artifacts/api.ts", "app/palette/Palette.tsx"];
+
+  test("the entry's static graph reaches no module only a screen needs", () => {
+    const byPath = new Map(modules().map((m) => [m.path, m]));
+    const from = new Map<string, string>([["main.tsx", ""]]);
+    const queue = ["main.tsx"];
+    for (let path = queue.shift(); path !== undefined; path = queue.shift()) {
+      const m = byPath.get(path);
+      if (!m) continue;
+      for (const { to } of staticImports(m)) {
+        if (from.has(to)) continue;
+        from.set(to, path);
+        queue.push(to);
+      }
+    }
+    const chain = (path: string): string =>
+      from.get(path) ? `${chain(from.get(path)!)} > ${path}` : path;
+    expect(
+      SCREEN_ONLY.filter((path) => from.has(path)).map(chain),
+      "move what the frame needs out of the screen's module",
+    ).toEqual([]);
+    expect(
+      SCREEN_ONLY.filter((path) => !byPath.has(path)),
+      "a module named here that no longer exists",
     ).toEqual([]);
   });
 });

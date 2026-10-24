@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -23,14 +24,14 @@ func testOnlyOneRevisionIsActive(t *testing.T, db *store.DB) {
 	// one a query happened to return first.
 	configs := db.Configs()
 	first, err := configs.InsertActive(t.Context(), store.Revision{
-		CreatedByKind: store.AuthorOperator,
+		CreatedByKind: iam.ActorOperator,
 		Summary:       "one", Payload: json.RawMessage(`{"n":1}`), CreatedAt: base,
 	})
 	if err != nil {
 		t.Fatalf("first: %v", err)
 	}
 	second, err := configs.InsertActive(t.Context(), store.Revision{
-		CreatedByKind: store.AuthorOperator,
+		CreatedByKind: iam.ActorOperator,
 		ParentID:      first, Summary: "two",
 		Payload: json.RawMessage(`{"n":2}`), CreatedAt: base.Add(time.Minute),
 	})
@@ -66,7 +67,7 @@ func testAnInsertedRevisionIsHistoryUntilActivated(t *testing.T, db *store.DB) {
 
 	// With nothing active, an inserted revision leaves nothing active.
 	lone, err := configs.Insert(t.Context(), store.Revision{
-		CreatedByKind: store.AuthorOperator,
+		CreatedByKind: iam.ActorOperator,
 		Summary:       "refused", Payload: json.RawMessage(`{"n":0}`), CreatedAt: base,
 	})
 	if err != nil {
@@ -77,14 +78,14 @@ func testAnInsertedRevisionIsHistoryUntilActivated(t *testing.T, db *store.DB) {
 	}
 
 	live, err := configs.InsertActive(t.Context(), store.Revision{
-		CreatedByKind: store.AuthorOperator,
+		CreatedByKind: iam.ActorOperator,
 		Summary:       "live", Payload: json.RawMessage(`{"n":1}`), CreatedAt: base.Add(time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("insert the live revision: %v", err)
 	}
 	pending, err := configs.Insert(t.Context(), store.Revision{
-		CreatedByKind: store.AuthorOperator,
+		CreatedByKind: iam.ActorOperator,
 		ParentID:      live, Summary: "pending",
 		Payload: json.RawMessage(`{"n":2}`), CreatedAt: base.Add(2 * time.Minute),
 	})
@@ -124,7 +125,7 @@ func testActivatingAMissingRevisionChangesNothing(t *testing.T, db *store.DB) {
 	// unconfigured, every webhook refused, from one mistyped id.
 	configs := db.Configs()
 	id, err := configs.InsertActive(t.Context(), store.Revision{
-		CreatedByKind: store.AuthorOperator,
+		CreatedByKind: iam.ActorOperator,
 		Summary:       "live", Payload: json.RawMessage(`{"n":1}`), CreatedAt: base,
 	})
 	if err != nil {
@@ -146,13 +147,12 @@ func testActivatingAMissingRevisionChangesNothing(t *testing.T, db *store.DB) {
 }
 
 func testPayloadRoundTrips(t *testing.T, db *store.DB) {
-	// The payload is opaque: a sealed envelope when a keyring is
-	// configured, the plaintext document when one is not. Either way what
-	// comes back must be what went in, byte for byte — a re-serialized
-	// document would not decrypt.
+	// The payload is opaque: the sealed envelope every writer stores, under
+	// the keyring every node holds. What comes back must be what went in,
+	// byte for byte — a re-serialized document would not decrypt.
 	sealed := json.RawMessage(`{"__encrypted__":"enc:v1:abc.def"}`)
 	id, err := db.Configs().InsertActive(t.Context(), store.Revision{
-		CreatedByKind: store.AuthorOperator,
+		CreatedByKind: iam.ActorOperator,
 		Summary:       "sealed", Payload: sealed, CreatedAt: base,
 	})
 	if err != nil {
@@ -176,7 +176,7 @@ func testRevisionsListInInsertionOrder(t *testing.T, db *store.DB) {
 	var ids []string
 	for i := range 5 {
 		id, err := configs.InsertActive(t.Context(), store.Revision{
-			CreatedByKind: store.AuthorOperator,
+			CreatedByKind: iam.ActorOperator,
 			Summary:       "burst", CreatedAt: base,
 			Payload: json.RawMessage(`{"n":` + string(rune('0'+i)) + `}`),
 		})
@@ -203,55 +203,79 @@ func testRevisionsListInInsertionOrder(t *testing.T, db *store.DB) {
 
 func testARevisionRecordsWhatWroteIt(t *testing.T, db *store.DB) {
 	// THE KIND IS STORED, NOT INFERRED. `created_by` is a label, and a
-	// label cannot say whether a person or the engine wrote — so a
-	// revision the node seeded and one an operator wrote must read back
-	// as what they are, through every reader the history has.
+	// label cannot say whether a person, a credential or the engine wrote
+	// — so a revision the node seeded, one a person bound to a seat wrote
+	// and one an unbound credential wrote must read back as what they are,
+	// through every reader the history has, each beside the credential it
+	// went through.
 	configs := db.Configs()
+	type author struct {
+		by       string
+		kind     iam.ActorKind
+		operator string
+	}
 	byOperator, err := configs.InsertActive(t.Context(), store.Revision{
-		CreatedBy: "maya", CreatedByKind: store.AuthorOperator,
-		Source: "api", Summary: "an operator's write", CreatedAt: base,
+		CreatedBy: "token:ops", CreatedByKind: iam.ActorOperator, OperatorID: "token:ops",
+		Source: "api", Summary: "a credential's write", CreatedAt: base,
 	})
 	if err != nil {
 		t.Fatalf("operator insert: %v", err)
 	}
+	byPerson, err := configs.Insert(t.Context(), store.Revision{
+		CreatedBy: "maya", CreatedByKind: iam.ActorHuman,
+		OperatorID: "session:0192f00d-0000-7000-8000-0000000000b0",
+		Source:     "api", Summary: "a person's write", CreatedAt: base.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("human insert: %v", err)
+	}
 	byNode, err := configs.Insert(t.Context(), store.Revision{
-		CreatedBy: "node-a", CreatedByKind: store.AuthorNode,
-		Source: "file", Summary: "a node's seed", CreatedAt: base.Add(time.Minute),
+		CreatedBy: "node-a", CreatedByKind: iam.ActorSystem,
+		Source: "file", Summary: "a node's seed", CreatedAt: base.Add(2 * time.Minute),
 	})
 	if err != nil {
 		t.Fatalf("node insert: %v", err)
 	}
-	want := map[string]store.AuthorKind{byOperator: store.AuthorOperator, byNode: store.AuthorNode}
-	for id, kind := range want {
+	want := map[string]author{
+		byOperator: {"token:ops", iam.ActorOperator, "token:ops"},
+		byPerson:   {"maya", iam.ActorHuman, "session:0192f00d-0000-7000-8000-0000000000b0"},
+		byNode:     {"node-a", iam.ActorSystem, ""},
+	}
+	read := func(r store.Revision) author { return author{r.CreatedBy, r.CreatedByKind, r.OperatorID} }
+	for id, w := range want {
 		got, found, gerr := configs.Get(t.Context(), id)
 		if gerr != nil || !found {
 			t.Fatalf("get %s: found=%v err=%v", id, found, gerr)
 		}
-		if got.CreatedByKind != kind {
-			t.Errorf("Get(%s).CreatedByKind = %q, want %q", id, got.CreatedByKind, kind)
+		if read(got) != w {
+			t.Errorf("Get(%s) = %+v, want %+v", id, read(got), w)
 		}
 	}
 	listed, err := configs.List(t.Context(), 0, 0)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
+	if len(listed) != len(want) {
+		t.Fatalf("List = %d revisions, want %d", len(listed), len(want))
+	}
 	for _, r := range listed {
-		if r.CreatedByKind != want[r.ID] {
-			t.Errorf("List: %s has kind %q, want %q", r.ID, r.CreatedByKind, want[r.ID])
+		if read(r) != want[r.ID] {
+			t.Errorf("List: %s = %+v, want %+v", r.ID, read(r), want[r.ID])
 		}
 	}
 	active, _, err := configs.Active(t.Context())
-	if err != nil || active.CreatedByKind != store.AuthorOperator {
-		t.Errorf("Active kind = %q (err %v), want operator", active.CreatedByKind, err)
+	if err != nil || read(active) != want[byOperator] {
+		t.Errorf("Active = %+v (err %v), want %+v", read(active), err, want[byOperator])
 	}
 }
 
 func testAnUnattributedWriteIsRefused(t *testing.T, db *store.DB) {
 	// A WRITER ALWAYS KNOWS WHAT IT IS. A revision stored without saying is
 	// exactly the row the audit screen used to fill in with a guess, so the
-	// store refuses it — including a kind this build does not write.
+	// store refuses it — including a kind that is not an [iam.ActorKind],
+	// `node` among them: the engine's own write is `system`.
 	configs := db.Configs()
-	for _, kind := range []store.AuthorKind{"", "seat", "peer"} {
+	for _, kind := range []iam.ActorKind{"", "seat", "peer", "node"} {
 		if _, err := configs.InsertActive(t.Context(), store.Revision{
 			CreatedBy: "x", CreatedByKind: kind, Summary: "s", CreatedAt: base,
 		}); err == nil {
@@ -270,17 +294,18 @@ func testAnUnattributedWriteIsRefused(t *testing.T, db *store.DB) {
 
 func testAnAdoptedRevisionKeepsItsOriginsAuthor(t *testing.T, db *store.DB) {
 	// THE ORIGIN'S AUTHOR, AND ANY KIND IT CARRIES. A peer's copy of a
-	// revision must read the way the origin's does, and a kind a newer
-	// build wrote is a value to keep rather than a write to refuse — this
-	// node is running that revision either way.
+	// revision must read the way the origin's does — the credential
+	// included — and a kind a newer build wrote is a value to keep rather
+	// than a write to refuse: this node is running that revision either
+	// way.
 	configs := db.Configs()
 	activated := base.Add(time.Hour)
-	for id, kind := range map[string]store.AuthorKind{
-		"rev-op": store.AuthorOperator, "rev-new": "seat",
+	for id, kind := range map[string]iam.ActorKind{
+		"rev-op": iam.ActorOperator, "rev-new": "seat",
 	} {
 		if err := configs.Adopt(t.Context(), store.Revision{
-			ID: id, CreatedBy: "maya", CreatedByKind: kind, Source: "api",
-			Summary: "adopted", CreatedAt: base, ActivatedAt: activated,
+			ID: id, CreatedBy: "maya", CreatedByKind: kind, OperatorID: "pat:42",
+			Source: "api", Summary: "adopted", CreatedAt: base, ActivatedAt: activated,
 		}); err != nil {
 			t.Fatalf("adopt %s: %v", id, err)
 		}
@@ -288,9 +313,10 @@ func testAnAdoptedRevisionKeepsItsOriginsAuthor(t *testing.T, db *store.DB) {
 		if err != nil || !found {
 			t.Fatalf("get %s: found=%v err=%v", id, found, err)
 		}
-		if got.CreatedBy != "maya" || got.CreatedByKind != kind || got.Source != "api" {
-			t.Errorf("%s adopted as (%q, %q, %q), want (maya, %q, api)",
-				id, got.CreatedBy, got.CreatedByKind, got.Source, kind)
+		if got.CreatedBy != "maya" || got.CreatedByKind != kind ||
+			got.OperatorID != "pat:42" || got.Source != "api" {
+			t.Errorf("%s adopted as (%q, %q, %q, %q), want (maya, %q, pat:42, api)",
+				id, got.CreatedBy, got.CreatedByKind, got.OperatorID, got.Source, kind)
 		}
 		// ACTIVE FROM THE FLEET'S INSTANT, never from the revision's
 		// creation: the two differ on every re-activation of an older
@@ -306,11 +332,14 @@ func testAnAdoptionRefusesARevisionThatNamesNobody(t *testing.T, db *store.DB) {
 	// AN ADOPTION STORES WHAT THE POINTER SAYS, AND THE POINTER ALWAYS SAYS
 	// IT: a row with no author kind, no source or no instant would be a
 	// guess on the audit screen, so the store refuses it rather than
-	// recording one, and nothing is left behind.
+	// recording one, and nothing is left behind. The credential alone may
+	// be absent — the engine's own write names none — and is not asked
+	// for here.
 	configs := db.Configs()
 	whole := store.Revision{
-		ID: "rev-1", CreatedBy: "maya", CreatedByKind: store.AuthorOperator,
-		Source: "api", Summary: "s", CreatedAt: base, ActivatedAt: base,
+		ID: "rev-1", CreatedBy: "maya", CreatedByKind: iam.ActorOperator,
+		OperatorID: "pat:42", Source: "api", Summary: "s", CreatedAt: base,
+		ActivatedAt: base,
 	}
 	for name, mutate := range map[string]func(*store.Revision){
 		"no author kind": func(r *store.Revision) { r.CreatedByKind = "" },
@@ -335,7 +364,7 @@ func testAReAdoptionKeepsTheKnownAuthor(t *testing.T, db *store.DB) {
 	// its activation moves.
 	configs := db.Configs()
 	own, err := configs.InsertActive(t.Context(), store.Revision{
-		CreatedBy: "node-a", CreatedByKind: store.AuthorNode, Source: "file",
+		CreatedBy: "node-a", CreatedByKind: iam.ActorSystem, Source: "file",
 		Summary: "mine", CreatedAt: base,
 	})
 	if err != nil {
@@ -343,16 +372,17 @@ func testAReAdoptionKeepsTheKnownAuthor(t *testing.T, db *store.DB) {
 	}
 	later := base.Add(2 * time.Hour)
 	if err = configs.Adopt(t.Context(), store.Revision{
-		ID: own, CreatedBy: "somebody", CreatedByKind: store.AuthorOperator,
-		Source: "api", Summary: "mine", CreatedAt: base, ActivatedAt: later,
+		ID: own, CreatedBy: "somebody", CreatedByKind: iam.ActorOperator,
+		OperatorID: "token:somebody", Source: "api", Summary: "mine", CreatedAt: base,
+		ActivatedAt: later,
 	}); err != nil {
 		t.Fatalf("adopt over a known author: %v", err)
 	}
 	got, _, err := configs.Get(t.Context(), own)
-	if err != nil || got.CreatedBy != "node-a" || got.CreatedByKind != store.AuthorNode ||
-		got.Source != "file" {
-		t.Fatalf("a known author was overwritten: (%q, %q, %q) err %v, want (node-a, node, file)",
-			got.CreatedBy, got.CreatedByKind, got.Source, err)
+	if err != nil || got.CreatedBy != "node-a" || got.CreatedByKind != iam.ActorSystem ||
+		got.OperatorID != "" || got.Source != "file" {
+		t.Fatalf("a known author was overwritten: (%q, %q, %q, %q) err %v, want (node-a, system, none, file)",
+			got.CreatedBy, got.CreatedByKind, got.OperatorID, got.Source, err)
 	}
 	if !got.Active || !got.ActivatedAt.Equal(later) {
 		t.Fatalf("re-adopted active=%v at %s, want active at %s", got.Active, got.ActivatedAt, later)

@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -34,26 +35,28 @@ import (
 // window: a suite on the real clock would assert about the window's edges by
 // sleeping.
 //
-// # Pinned RELATIVE to the real clock, never at a literal instant
+// # RELATIVE TO NOW, and this is why
 //
-// This receiver writes rows a case then reads back through the event log, and
-// [store.EventHistory] ANDs `event_time >= now() - 30 days` onto every list —
-// against the REAL clock, which no option here replaces. So an absolute date
-// is a fixture with an expiry date on it: this suite passed for a month, and
-// then, on a day nobody changed anything, ten of its cases began failing and
-// one panicked with an index out of range — because every row they had just
-// written was older than the floor that reads them back.
+// It used to be an absolute date, and that is a TIME BOMB rather than a
+// fixture: every delivery here is written into the event log with THIS clock's
+// instant, and the log is read back over a window the store measures against
+// the WALL clock ([store.EventHistory], thirty days). A receiver's clock can
+// be pinned and the store's cannot — deliberately, so that a row's timestamp,
+// the read floor and the retention sweep cannot disagree about what "now" is.
 //
-// AN HOUR BACK, which is comfortably inside that floor and unambiguously in
-// the past for anything that compares this instant against the real one —
-// while the replay windows are all evaluated against THIS clock, which the
-// edge is built with, so the offset is invisible to them.
+// So an absolute date works until thirty days after the day somebody wrote
+// it, and then fails for ever, on every machine at once, with no change to
+// any file. That is exactly what happened: the rows were written, every
+// assertion read `0 rows`, and nothing in the failure named a clock.
 //
-// TRUNCATED TO THE SECOND because the Standard Webhooks timestamp travels as
-// a Unix second and the signature is computed over that string: a pin with a
-// fraction on it makes the signed instant and `pinned.Unix()` disagree by up
-// to a second, which is exactly the quantity the window cases measure.
-var pinned = time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+// TRUNCATED TO THE HOUR so a rendered timestamp is stable within one run, and
+// an hour in the PAST rather than at `now` so no assertion here depends on a
+// clock that moved between two statements of one test. An hour boundary is
+// also a whole Unix second, which is what the Standard Webhooks timestamp
+// travels as: a pin with a fraction on it makes the signed instant and
+// `pinned.Unix()` disagree by up to a second, which is exactly the quantity the
+// replay-window cases measure.
+var pinned = time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
 
 // recorder is a queue.Publisher that keeps the WAKES it was given, and can be
 // made to fail.
@@ -413,8 +416,8 @@ func TestARouteWithNoSecretHoldsTheDelivery(t *testing.T) {
 			if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
 				t.Fatalf("decode: %v", err)
 			}
-			if body["reason"] != "no_webhook_secret" {
-				t.Errorf("reason = %q, which does not say what is missing", body["reason"])
+			if body["error"] != string(httpjson.CodeNoWebhookSecret) {
+				t.Errorf("error = %q, which does not say what is missing", body["error"])
 			}
 		})
 	}
@@ -438,16 +441,52 @@ func TestAnEmptySlackMapIsCannotVerifyNotNothingToVerify(t *testing.T) {
 	}
 }
 
-func TestAnUnknownSlackSeatIsRefusedWithoutHoldingTheDelivery(t *testing.T) {
+// A SEAT WITH NO SLACK APP IS ANSWERED EXACTLY AS A BAD SIGNATURE.
+//
+// 401, not 503: the map is populated, so this is a delivery addressed to a
+// seat with no Slack app rather than a node with nothing to check against,
+// and a 503 would tell the sender to keep retrying something that can never
+// succeed. And the SAME 401 a wrong signature on a real seat gets, byte for
+// byte: the route answered `unknown_handle` here and `invalid_signature`
+// there, so an unsigned POST to every name a company might use read back
+// which of its seats have a Slack app. A delivery signed with a REAL seat's
+// key but addressed to a handle with none is refused too, and reaches
+// nothing — the key selects the seat, never the other way round.
+func TestASlackSeatWithNoAppIsAnsweredAsABadSignature(t *testing.T) {
 	t.Parallel()
-	// 401, not 503: the map is populated, so this is a delivery addressed
-	// to a seat with no Slack app rather than a node with nothing to check
-	// against. A 503 would tell the sender to keep retrying something that
-	// can never succeed.
-	e := newEdge(t)
-	res := e.post(t, "/webhooks/slack/nobody", []byte(`{"type":"event_callback"}`), nil)
-	if res.Code != http.StatusUnauthorized {
-		t.Fatalf("got %d, want 401", res.Code)
+	body := []byte(`{"type":"event_callback","event_id":"Ev1"}`)
+	for _, tc := range []struct {
+		name    string
+		headers map[string]string
+	}{
+		{"unsigned", nil},
+		{"signed with a key nobody holds", slackDelivery(body, "not-the-secret", pinned)},
+		{"signed with another seat's key", slackDelivery(body, "slack-secret", pinned)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := newEdge(t)
+			unknown := e.post(t, "/webhooks/slack/nobody", body, tc.headers)
+			if unknown.Code != http.StatusUnauthorized {
+				t.Fatalf("got %d, want 401: %s", unknown.Code, unknown.Body)
+			}
+			// The control: the same request to the seat that HAS an app,
+			// signed with a key that is not its own.
+			known := e.post(t, "/webhooks/slack/ceo", body,
+				slackDelivery(body, "not-the-secret", pinned))
+			if known.Code != http.StatusUnauthorized {
+				t.Fatalf("control: a wrong signature on a real seat got %d: %s",
+					known.Code, known.Body)
+			}
+			if unknown.Body.String() != known.Body.String() {
+				t.Errorf("a seat with no app answers %s, a bad signature on a real "+
+					"seat %s — the difference says which handles have an app",
+					unknown.Body, known.Body)
+			}
+			if e.published.count() != 0 {
+				t.Error("a delivery to a seat with no Slack app reached the queue")
+			}
+		})
 	}
 }
 
@@ -482,10 +521,33 @@ func TestABodyThatIsNotAnObjectIsRefused(t *testing.T) {
 		if res.Code != http.StatusBadRequest {
 			t.Errorf("body %q got %d, want 400", body, res.Code)
 		}
+		if got := refusalCode(t, res); got != httpjson.CodeInvalidBody {
+			t.Errorf("body %q answered error %q, want the vocabulary's %q",
+				body, got, httpjson.CodeInvalidBody)
+		}
 	}
 	if e.published.count() != 0 {
 		t.Error("a non-object body was published")
 	}
+}
+
+// refusalCode reads a refusal's `error` and holds it to the vocabulary: a code
+// outside it is one no client can branch on and carries no sentence for a
+// person, which is what `"invalid JSON"` and `"unreadable body"` were.
+func refusalCode(t *testing.T, res *httptest.ResponseRecorder) httpjson.Code {
+	t.Helper()
+	var body struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("the refusal is not JSON: %v (%s)", err, res.Body)
+	}
+	code := httpjson.Code(body.Error)
+	if !code.Valid() || body.Message == "" {
+		t.Errorf("error %q is outside the vocabulary, or carries no message", body.Error)
+	}
+	return code
 }
 
 func TestABodyOverTheCapIsRefusedBeforeItIsBuffered(t *testing.T) {

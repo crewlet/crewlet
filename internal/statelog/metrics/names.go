@@ -16,6 +16,7 @@ package metrics
 // the declaration; these are its identifiers.
 const (
 	AlarmActive                      = "crewlet.alarm.active"
+	AuthAttemptsFailed               = "crewlet.auth.attempts.failed"
 	BackupAge                        = "crewlet.backup.age"
 	BackupDuration                   = "crewlet.backup.duration"
 	BackupHolds                      = "crewlet.backup.holds"
@@ -68,6 +69,7 @@ const (
 	StatelogDrainRowsPerSecond       = "crewlet.statelog.drain.rows_per_second"
 	StatelogLingerYields             = "crewlet.statelog.linger.yields"
 	StatelogLogBytes                 = "crewlet.statelog.log.bytes"
+	StatelogLogBytesPerDay           = "crewlet.statelog.log.bytes_per_day"
 	StatelogLogHeadroomFraction      = "crewlet.statelog.log.headroom_fraction"
 	StatelogLogMaxBytes              = "crewlet.statelog.log.max_bytes"
 	StatelogPublishConflicts         = "crewlet.statelog.publish.conflicts"
@@ -80,6 +82,8 @@ const (
 	StatelogReadServed               = "crewlet.statelog.read.served"
 	StatelogReadWait                 = "crewlet.statelog.read.wait"
 	StatelogRecordsGated             = "crewlet.statelog.records_gated"
+	StatelogRecordsTampered          = "crewlet.statelog.records_tampered"
+	StatelogRecordsUnverifiable      = "crewlet.statelog.records_unverifiable"
 	StatelogTrimBlockedSeconds       = "crewlet.statelog.trim.blocked_seconds"
 	StatelogWaiters                  = "crewlet.statelog.waiters"
 	StatelogWriteSessionWait         = "crewlet.statelog.write.session_wait"
@@ -93,4 +97,46 @@ const (
 	TrackerSearchConcurrency         = "crewlet.tracker.search.concurrency"
 	TrackerSearchScanDuration        = "crewlet.tracker.search.scan.duration"
 	TrackerVectorCoverage            = "crewlet.tracker.vector.coverage"
+)
+
+// THE ARTIFACTS INSTRUMENTS, named here before their recording sites exist so
+// every package that records one and every reader that alarms on one spells it
+// the same. Each is CATALOGUED by the package that records it, beside its
+// first recording site, because a catalogued instrument with no recording site
+// fails the build (an instrument nobody records reads as a healthy zero). Until
+// then a name here is declared and published nowhere.
+const (
+	// The object store's own ceiling, recorded by internal/objstore.
+	ObjectsBucketBytes    = "crewlet.objects.bucket.bytes"
+	ObjectsBucketMaxBytes = "crewlet.objects.bucket.max_bytes"
+
+	// Uploads and publishes, recorded by internal/artifactupload.
+	ArtifactsUploadBytes         = "crewlet.artifacts.upload.bytes"
+	ArtifactsUploadReservedBytes = "crewlet.artifacts.upload.reserved_bytes"
+	ArtifactsPublishDuration     = "crewlet.artifacts.publish.duration"
+	ArtifactsPublishRefusals     = "crewlet.artifacts.publish.refusals"
+
+	// The artifact origin, recorded by internal/artifactserve.
+	ArtifactsServeRequests   = "crewlet.artifacts.serve.requests"
+	ArtifactsServeDuration   = "crewlet.artifacts.serve.duration"
+	ArtifactsServeBytes      = "crewlet.artifacts.serve.bytes"
+	ArtifactsTicketRefusals  = "crewlet.artifacts.ticket.refusals"
+	ArtifactsAuthzPeerChecks = "crewlet.artifacts.authz.peer_checks"
+
+	// The datastore, recorded by internal/artifactdata.
+	ArtifactsDataWriteDuration  = "crewlet.artifacts.data.write.duration"
+	ArtifactsDataWrites         = "crewlet.artifacts.data.writes"
+	ArtifactsDataFootprintBytes = "crewlet.artifacts.data.footprint.bytes"
+
+	// Presence and pushes, recorded by internal/presence and
+	// internal/api/stream.
+	PresenceFrames   = "crewlet.presence.frames"
+	PresenceRooms    = "crewlet.presence.rooms"
+	ArtifactsPushLag = "crewlet.artifacts.push.lag"
+
+	// The browser-reported time from a ticket to a ready frame, and every
+	// service objective's good and bad events, recorded by
+	// internal/objectives.
+	ArtifactsReadyDuration = "crewlet.artifacts.ready.duration"
+	ObjectivesEvents       = "crewlet.objectives.events"
 )

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -334,9 +335,9 @@ func env(pairs map[string]string) org.EnvLookup {
 func TestHumanContactsRegisterFromTheOrg(t *testing.T) {
 	o := company()
 	o.Normalize()
-	r := notify.NewRegistry(o)
+	r := notify.NewRegistry(o, nil)
 
-	rec := r.ReconcileHumanContacts(o, env(nil))
+	rec := r.ReconcileHumanContacts(o, env(nil), notify.Standing{})
 	if rec.Registered != 2 {
 		t.Fatalf("registered %d identities, want 2: %+v", rec.Registered, rec)
 	}
@@ -356,14 +357,14 @@ func TestHumanContactsRegisterFromTheOrg(t *testing.T) {
 func TestAReconcileWithdrawsItsOwnStalePairs(t *testing.T) {
 	o := company()
 	o.Normalize()
-	r := notify.NewRegistry(o)
-	r.ReconcileHumanContacts(o, env(nil))
+	r := notify.NewRegistry(o, nil)
+	r.ReconcileHumanContacts(o, env(nil), notify.Standing{})
 
 	next := company()
 	next.Roles[2].Contact.SlackUserID = "U0CORRECTED"
 	next.Normalize()
 
-	rec := r.ReconcileHumanContacts(next, env(nil))
+	rec := r.ReconcileHumanContacts(next, env(nil), notify.Standing{})
 	if rec.Withdrawn != 1 {
 		t.Fatalf("withdrew %d, want 1: %+v", rec.Withdrawn, rec)
 	}
@@ -381,28 +382,28 @@ func TestAnIDMovingBetweenHumanSeatsLands(t *testing.T) {
 	o := company()
 	o.Roles = append(o.Roles, &org.Role{
 		Name: "Sam Ops", Kind: org.KindHuman,
-		Contact: &org.HumanContact{MattermostUserID: "shared"},
+		Contact: &org.HumanContact{GitLabUsername: "shared"},
 	})
 	o.Normalize()
-	r := notify.NewRegistry(o)
-	r.ReconcileHumanContacts(o, env(nil))
-	if p, _ := r.ByExternalID("mattermost", "shared"); p.Handle != "sam-ops" {
+	r := notify.NewRegistry(o, nil)
+	r.ReconcileHumanContacts(o, env(nil), notify.Standing{})
+	if p, _ := r.ByExternalID("gitlab", "shared"); p.Handle != "sam-ops" {
 		t.Fatalf("the id started at %q", p.Handle)
 	}
 
 	next := company()
-	next.Roles[2].Contact.MattermostUserID = "shared"
+	next.Roles[2].Contact.GitLabUsername = "shared"
 	next.Roles = append(next.Roles, &org.Role{
 		Name: "Sam Ops", Kind: org.KindHuman,
-		Contact: &org.HumanContact{MattermostUserID: "sam-only"},
+		Contact: &org.HumanContact{GitLabUsername: "sam-only"},
 	})
 	next.Normalize()
 
-	rec := r.ReconcileHumanContacts(next, env(nil))
+	rec := r.ReconcileHumanContacts(next, env(nil), notify.Standing{})
 	if len(rec.Conflicts) != 0 {
 		t.Fatalf("the move collided with itself: %+v", rec.Conflicts)
 	}
-	if p, _ := r.ByExternalID("mattermost", "shared"); p.Handle != "dana-founder" {
+	if p, _ := r.ByExternalID("gitlab", "shared"); p.Handle != "dana-founder" {
 		t.Fatalf("the id landed on %q, want dana-founder", p.Handle)
 	}
 }
@@ -410,14 +411,14 @@ func TestAnIDMovingBetweenHumanSeatsLands(t *testing.T) {
 // A human must never silently take over an AGENT's mapping, or the reverse.
 func TestAReconcileNeverTakesAnAgentsIdentity(t *testing.T) {
 	o := company()
-	o.Roles[2].Contact.MattermostUserID = "contested"
+	o.Roles[2].Contact.GitLabUsername = "contested"
 	o.Normalize()
-	r := notify.NewRegistry(o)
-	if err := r.Register("mattermost", "contested", "backend-engineer"); err != nil {
+	r := notify.NewRegistry(o, nil)
+	if err := r.Register("gitlab", "contested", "backend-engineer"); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 
-	rec := r.ReconcileHumanContacts(o, env(nil))
+	rec := r.ReconcileHumanContacts(o, env(nil), notify.Standing{})
 	if len(rec.Conflicts) != 1 {
 		t.Fatalf("conflicts = %+v, want exactly one", rec.Conflicts)
 	}
@@ -425,14 +426,44 @@ func TestAReconcileNeverTakesAnAgentsIdentity(t *testing.T) {
 	if c.HeldBy != "backend-engineer" || c.Wanted != "dana-founder" || c.ExternalID != "contested" {
 		t.Fatalf("the conflict reads %+v", c)
 	}
-	if p, _ := r.ByExternalID("mattermost", "contested"); p.Handle != "backend-engineer" {
+	if p, _ := r.ByExternalID("gitlab", "contested"); p.Handle != "backend-engineer" {
 		t.Fatalf("the agent lost its identity to a human: %q", p.Handle)
 	}
 	// And the contested pair is NOT owned, so the next reconcile must not
 	// withdraw the agent's mapping on its behalf.
-	r.ReconcileHumanContacts(company(), env(nil))
-	if p, _ := r.ByExternalID("mattermost", "contested"); p.Handle != "backend-engineer" {
+	r.ReconcileHumanContacts(company(), env(nil), notify.Standing{})
+	if p, _ := r.ByExternalID("gitlab", "contested"); p.Handle != "backend-engineer" {
 		t.Fatalf("a later reconcile stripped the agent's identity: %q", p.Handle)
+	}
+}
+
+// A MATTERMOST USERNAME IS NOT AN ID ANY EVENT CARRIES. A post names its
+// author by the 26-character user id, so the name registered as written was a
+// key no lookup ever used, and every person on Mattermost reached the agents
+// as a stranger. The name is the transport's to resolve, so the reconcile
+// leaves it alone — and still counts the ${VAR} behind one that did not
+// resolve, because nobody else reports that.
+func TestAContactAddressedByNameIsLeftToItsTransport(t *testing.T) {
+	o := company()
+	o.Roles[2].Contact.MattermostUserID = "dana"
+	o.Normalize()
+	r := notify.NewRegistry(o, nil)
+
+	rec := r.ReconcileHumanContacts(o, env(nil), notify.Standing{})
+	if rec.Registered != 2 || rec.Unresolved != 0 {
+		t.Fatalf("reconcile = %+v, want the Slack and GitHub ids alone", rec)
+	}
+	if ids := r.Identities("mattermost"); len(ids) != 0 {
+		t.Fatalf("the username was registered as though a post could name it: %v", ids)
+	}
+	if _, ok := r.ByExternalID("slack", "U0FOUNDER"); !ok {
+		t.Fatal("skipping the username skipped the seat's other identities")
+	}
+
+	o.Roles[2].Contact.MattermostUserID = "${DANA_MATTERMOST}"
+	rec = r.ReconcileHumanContacts(o, env(nil), notify.Standing{})
+	if rec.Unresolved != 1 {
+		t.Fatalf("an unset variable behind the username went uncounted: %+v", rec)
 	}
 }
 
@@ -443,9 +474,9 @@ func TestAnUnresolvedReferenceIsSkippedAndCounted(t *testing.T) {
 	o := company()
 	o.Roles[2].Contact.SlackUserID = "${FOUNDER_SLACK_ID}"
 	o.Normalize()
-	r := notify.NewRegistry(o)
+	r := notify.NewRegistry(o, nil)
 
-	rec := r.ReconcileHumanContacts(o, env(nil))
+	rec := r.ReconcileHumanContacts(o, env(nil), notify.Standing{})
 	if rec.Unresolved != 1 {
 		t.Fatalf("unresolved = %d, want 1: %+v", rec.Unresolved, rec)
 	}
@@ -454,7 +485,7 @@ func TestAnUnresolvedReferenceIsSkippedAndCounted(t *testing.T) {
 	}
 
 	// The next pass picks it up once the variable is exported.
-	rec = r.ReconcileHumanContacts(o, env(map[string]string{"FOUNDER_SLACK_ID": "U0REAL"}))
+	rec = r.ReconcileHumanContacts(o, env(map[string]string{"FOUNDER_SLACK_ID": "U0REAL"}), notify.Standing{})
 	if rec.Unresolved != 0 || rec.Registered != 2 {
 		t.Fatalf("the exported variable did not land: %+v", rec)
 	}
@@ -463,19 +494,84 @@ func TestAnUnresolvedReferenceIsSkippedAndCounted(t *testing.T) {
 	}
 }
 
+// AN ID TWO SEATS RESOLVE TO IS NEITHER'S. Validation compares contacts as
+// the chart writes them, so two ${VAR} references resolving to one member id
+// pass it; the reconcile then kept whichever seat it reached last, silently,
+// and the other person's mail and attribution went to them. One account is not
+// two people, and which of the two it is would be a guess: it is registered
+// for neither, the previous holder's registration is withdrawn, and the pass
+// names both seats.
+func TestAnIDTwoHumanSeatsResolveToIsRegisteredForNeither(t *testing.T) {
+	o := company()
+	o.Roles[2].Contact.SlackUserID = "${FOUNDER_SLACK_ID}"
+	o.Roles = append(o.Roles, &org.Role{
+		Name: "Sam Ops", Kind: org.KindHuman,
+		Contact: &org.HumanContact{SlackUserID: "${OPS_SLACK_ID}"},
+	})
+	o.Normalize()
+	if err := o.Validate(); err != nil {
+		t.Fatalf("two references are a collision validation can see: %v", err)
+	}
+	r := notify.NewRegistry(o, nil)
+	r.ReconcileHumanContacts(o, env(map[string]string{
+		"FOUNDER_SLACK_ID": "U0FOUNDER", "OPS_SLACK_ID": "U0OPS",
+	}), notify.Standing{})
+	if p, _ := r.ByExternalID("slack", "U0FOUNDER"); p.Handle != "dana-founder" {
+		t.Fatalf("the founder's id started at %q", p.Handle)
+	}
+
+	shared := env(map[string]string{
+		"FOUNDER_SLACK_ID": "U0FOUNDER", "OPS_SLACK_ID": "U0FOUNDER",
+	})
+	rec := r.ReconcileHumanContacts(o, shared, notify.Standing{})
+	if p, ok := r.ByExternalID("slack", "U0FOUNDER"); ok {
+		t.Fatalf("an id two seats resolve to is attributed to %q", p.Handle)
+	}
+	want := []notify.SharedIdentity{{
+		Namespace: "slack", ExternalID: "U0FOUNDER",
+		Handles: []string{"dana-founder", "sam-ops"},
+	}}
+	if !slices.EqualFunc(rec.Shared, want, func(a, b notify.SharedIdentity) bool {
+		return a.Namespace == b.Namespace && a.ExternalID == b.ExternalID &&
+			slices.Equal(a.Handles, b.Handles)
+	}) {
+		t.Fatalf("shared = %+v, want %+v", rec.Shared, want)
+	}
+	if len(rec.Conflicts) != 0 {
+		t.Fatalf("a shared declaration was reported as a conflict: %+v", rec.Conflicts)
+	}
+	// The founder's GitHub login is theirs alone and stays registered.
+	if p, _ := r.ByExternalID("github", "danaf"); p.Handle != "dana-founder" {
+		t.Fatalf("the founder's other id resolved to %q", p.Handle)
+	}
+
+	// A SEAT THE DIRECTORY WITHHOLDS CONTENDS FOR NOTHING: it declares no
+	// identity this registry holds, so the other seat's is its own again.
+	suspended := notify.NewRegistry(o, nil)
+	rec = suspended.ReconcileHumanContacts(o, shared, notify.StandingOf([]notify.Holder{
+		{Seat: "sam-ops", Stage: iam.StageSuspended},
+	}))
+	if len(rec.Shared) != 0 {
+		t.Fatalf("a withheld seat contended for an id: %+v", rec.Shared)
+	}
+	if p, _ := suspended.ByExternalID("slack", "U0FOUNDER"); p.Handle != "dana-founder" {
+		t.Fatalf("with the other seat withheld, the id resolved to %q", p.Handle)
+	}
+}
+
 // A human seat flipped to an agent, or removed outright, must stop being
 // reachable at the ids it declared.
 func TestASeatThatStopsBeingHumanLosesItsContactIDs(t *testing.T) {
 	o := company()
 	o.Normalize()
-	r := notify.NewRegistry(o)
-	r.ReconcileHumanContacts(o, env(nil))
+	r := notify.NewRegistry(o, nil)
+	r.ReconcileHumanContacts(o, env(nil), notify.Standing{})
 
 	next := company()
 	next.Roles = next.Roles[:2] // the human seat is gone
 	next.Normalize()
 
-	rec := r.ReconcileHumanContacts(next, env(nil))
+	rec := r.ReconcileHumanContacts(next, env(nil), notify.Standing{})
 	if rec.Withdrawn != 2 || rec.Registered != 0 {
 		t.Fatalf("reconcile after removal: %+v", rec)
 	}
@@ -486,7 +582,7 @@ func TestASeatThatStopsBeingHumanLosesItsContactIDs(t *testing.T) {
 
 func TestReconcilingNothingIsSafe(t *testing.T) {
 	r := registry(t)
-	rec := r.ReconcileHumanContacts(nil, env(nil))
+	rec := r.ReconcileHumanContacts(nil, env(nil), notify.Standing{})
 	if rec.Registered != 0 || rec.Withdrawn != 0 || rec.Unresolved != 0 || len(rec.Conflicts) != 0 {
 		t.Fatalf("reconciling a nil org did something: %+v", rec)
 	}

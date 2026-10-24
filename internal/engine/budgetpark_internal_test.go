@@ -150,7 +150,7 @@ func newParkRig(t *testing.T, dayCeiling string) *parkRig {
 			return turn.Result{}, nil
 		},
 	}
-	inbox, group := topics.AgentInbox("lead"), topics.AgentInboxGroup("lead")
+	inbox, group := topics.AgentInbox(seatOf("lead")), topics.AgentInboxGroup(seatOf("lead"))
 	if err := q.SubscribeBatch(t.Context(), inbox, group,
 		func(ctx context.Context, evs []*events.Event) queue.Result {
 			r.mu.Lock()
@@ -201,20 +201,20 @@ func (r *parkRig) leadDay(t *testing.T) coord.WindowUsage {
 func (r *parkRig) deliver(t *testing.T) {
 	t.Helper()
 	ev := &events.Event{ID: uuid.New(), Type: "task_assigned", Timestamp: r.clock()}
-	if err := r.q.Publish(t.Context(), topics.AgentInbox("lead"), ev); err != nil {
+	if err := r.q.Publish(t.Context(), topics.AgentInbox(seatOf("lead")), ev); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 }
 
 func (r *parkRig) holds() []string {
-	return r.q.PauseHolds(topics.AgentInbox("lead"), topics.AgentInboxGroup("lead"))
+	return r.q.PauseHolds(topics.AgentInbox(seatOf("lead")), topics.AgentInboxGroup(seatOf("lead")))
 }
 
 // renew does what the seat host's next successful renew does for a noted
 // deferral: it resumes the attachment the deferral quiesced.
 func (r *parkRig) renew(t *testing.T) {
 	t.Helper()
-	if _, err := r.q.Unquiesce(t.Context(), topics.AgentInbox("lead"), topics.AgentInboxGroup("lead")); err != nil {
+	if _, err := r.q.Unquiesce(t.Context(), topics.AgentInbox(seatOf("lead")), topics.AgentInboxGroup(seatOf("lead"))); err != nil {
 		t.Fatalf("Unquiesce: %v", err)
 	}
 }
@@ -575,7 +575,7 @@ func TestAParkEndsWithItsSeatAndWithTheNode(t *testing.T) {
 	if len(r.alarms.live()) != 1 {
 		t.Fatalf("precondition: %d alarms armed, want the park's one", len(r.alarms.live()))
 	}
-	r.e.forgetBudgetPark("lead")
+	r.e.forgetBudgetPark(seatOf("lead"))
 	if n := len(r.alarms.live()); n != 0 {
 		t.Fatalf("a released seat left %d alarms armed", n)
 	}
@@ -583,8 +583,8 @@ func TestAParkEndsWithItsSeatAndWithTheNode(t *testing.T) {
 	// The seat comes back to this node: the release's detach dropped the
 	// hold, and the attachment is live again. The mail it kept is handed
 	// over and parks again, on the counters it finds.
-	if err := r.q.ResumeTopic(t.Context(), topics.AgentInbox("lead"),
-		topics.AgentInboxGroup("lead"), pauseReasonBudget); err != nil {
+	if err := r.q.ResumeTopic(t.Context(), topics.AgentInbox(seatOf("lead")),
+		topics.AgentInboxGroup(seatOf("lead")), pauseReasonBudget); err != nil {
 		t.Fatalf("ResumeTopic: %v", err)
 	}
 	r.renew(t)

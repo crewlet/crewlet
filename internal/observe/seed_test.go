@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/observe"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/store"
@@ -321,6 +322,13 @@ func TestTheSpendSeedStopsAtTheProjectionsRecordCap(t *testing.T) {
 		t.Errorf("spend read from %v, want the live window's start around %v",
 			history.spend.Since, want)
 	}
+	// AND EXACTLY THE PROJECTION'S WINDOW, measured from the instant the
+	// store is handed: its bottom edge read off one reading of the clock
+	// and its top off another is a window that is not the projection's.
+	if got := history.spendAt.Sub(history.spend.Since); got != livestate.LiveSpendWindow {
+		t.Errorf("spend read covers %s from the instant it was measured from, "+
+			"want exactly the projection's %s", got, livestate.LiveSpendWindow)
+	}
 	if history.feed.Limit != livestate.EventFeedLimit {
 		t.Errorf("feed read limit = %d, want the ring's %d",
 			history.feed.Limit, livestate.EventFeedLimit)
@@ -329,10 +337,12 @@ func TestTheSpendSeedStopsAtTheProjectionsRecordCap(t *testing.T) {
 
 // recordingHistory answers nothing and remembers what it was asked.
 type recordingHistory struct {
-	mu    sync.Mutex
-	feed  store.ListQuery
-	spend store.PhaseTokenQuery
-	turns []store.TurnQuery
+	mu      sync.Mutex
+	feed    store.ListQuery
+	spend   store.PhaseTokenQuery
+	spendAt time.Time
+	turns   []store.TurnQuery
+	turnsAt []time.Time
 }
 
 func (r *recordingHistory) List(_ context.Context, q store.ListQuery) (eventfan.Listing, eventfan.Coverage, error) {
@@ -345,7 +355,7 @@ func (r *recordingHistory) List(_ context.Context, q store.ListQuery) (eventfan.
 func (r *recordingHistory) PhaseTokens(_ context.Context, q store.PhaseTokenQuery) ([]tokens.Record, eventfan.Coverage, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.spend = q
+	r.spend, r.spendAt = q, q.At
 	return nil, answered("node-1"), nil
 }
 
@@ -353,29 +363,66 @@ func (r *recordingHistory) Turns(_ context.Context, q store.TurnQuery) (eventfan
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.turns = append(r.turns, q)
+	r.turnsAt = append(r.turnsAt, q.At)
 	return eventfan.TurnPage{}, answered("node-1"), nil
 }
 
-// THE SEED READS EVERY SEAT'S NEWEST TURNS, once per seat and newest first,
-// because a page of the company's newest turns says nothing about a seat that
-// has been quiet longer than everybody else's recent work.
+// testOrg is a composed org with two agent seats that SHARE A NAME and a
+// person's seat: what a seed reads its seats from. A name is prose two seats
+// may share, so a seed keyed by it would ask once for both and file one's turns
+// as the other's.
+func testOrg() *org.Organization {
+	o := &org.Organization{Name: "Acme", Roles: []*org.Role{
+		{Name: "Engineer", DeclaredHandle: "ada"},
+		{Name: "Engineer", DeclaredHandle: "bob"},
+		{Name: "Founder", DeclaredHandle: "founder", Kind: org.KindHuman},
+	}}
+	o.Normalize()
+	return o
+}
+
+// seatID is the agent id the composed org derives for the seat with this
+// handle — the id every turn row of that seat carries.
+func seatID(t *testing.T, o *org.Organization, handle string) string {
+	t.Helper()
+	id, ok := o.AgentIDFor(o.Role(handle))
+	if !ok {
+		t.Fatalf("no agent id for %q", handle)
+	}
+	return id.String()
+}
+
+// THE SEED READS EVERY AGENT SEAT'S NEWEST TURNS, once per seat and newest
+// first, because a page of the company's newest turns says nothing about a
+// seat that has been quiet longer than everybody else's recent work — and it
+// asks BY AGENT ID, so two seats sharing a name are two reads, and a person's
+// seat, which runs no turns, is none.
+//
+// Mutation: ask by role name, and the two Engineers are one read.
 func TestSeedReadsEverySeatsNewestTurns(t *testing.T) {
 	t.Parallel()
+	o := testOrg()
 	history := &recordingHistory{}
-	if err := observe.Seed(t.Context(), history, []string{"Lead", "Coder", "Lead", ""},
-		livestate.New()); err != nil {
+	if err := observe.Seed(t.Context(), history, o, livestate.New()); err != nil {
 		t.Fatalf("Seed: %v", err)
 	}
-	var roles []string
-	for _, q := range history.turns {
-		roles = append(roles, q.AgentRole)
-		if q.Limit != observe.SeedTurnsPerRole || q.Sort != store.TurnSortStarted {
-			t.Errorf("turn read %+v, want the newest %d by start", q, observe.SeedTurnsPerRole)
+	var seats []string
+	for i, q := range history.turns {
+		seats = append(seats, q.AgentID)
+		if q.Limit != observe.SeedTurnsPerSeat || q.Sort != store.TurnSortStarted {
+			t.Errorf("turn read %+v, want the newest %d by start", q, observe.SeedTurnsPerSeat)
+		}
+		// ONE READING OF THE CLOCK for every windowed read of the seed.
+		if !history.turnsAt[i].Equal(history.spendAt) {
+			t.Errorf("turn read measured from %v and the spend from %v, want one instant",
+				history.turnsAt[i], history.spendAt)
 		}
 	}
-	slices.Sort(roles)
-	if !slices.Equal(roles, []string{"Coder", "Lead"}) {
-		t.Errorf("turn reads for %v, want one per named seat", roles)
+	want := []string{seatID(t, o, "ada"), seatID(t, o, "bob")}
+	slices.Sort(seats)
+	slices.Sort(want)
+	if !slices.Equal(seats, want) {
+		t.Errorf("turn reads for %v, want one per agent seat by its id %v", seats, want)
 	}
 }
 
@@ -386,7 +433,7 @@ func TestSeedReportsWhichNodesItCovered(t *testing.T) {
 	t.Parallel()
 	live := livestate.New()
 	history := partialFleet{}
-	if err := observe.Seed(t.Context(), history, []string{"Lead"}, live); err != nil {
+	if err := observe.Seed(t.Context(), history, testOrg(), live); err != nil {
 		t.Fatalf("Seed: %v", err)
 	}
 	coverage, seeded := live.SeededFrom()
@@ -447,10 +494,12 @@ func TestARestartedNodesSeedIsTheFleets(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()
 	a, b := fanNode(t, "node-a"), fanNode(t, "node-b")
+	o := testOrg()
+	bob := seatID(t, o, "bob")
 	now := time.Now().UTC()
 	mine := storePhase(t, a, "Lead", 30, now.Add(-time.Hour))
 	theirs := storePhase(t, b, "Coder", 70, now.Add(-30*time.Minute))
-	storeTurnEnd(t, b, "Coder", "tn-peer", now.Add(-29*time.Minute))
+	storeTurnEnd(t, b, bob, "tn-peer", now.Add(-29*time.Minute))
 
 	fan := &eventfan.Fleet{
 		Self: "node-a", Local: a, Queue: fanQueue(t, broker, a, "node-a"),
@@ -459,7 +508,7 @@ func TestARestartedNodesSeedIsTheFleets(t *testing.T) {
 	}
 	_ = fanQueue(t, broker, b, "node-b")
 	live := livestate.New()
-	if err := observe.Seed(t.Context(), fan, []string{"Lead", "Coder"}, live); err != nil {
+	if err := observe.Seed(t.Context(), fan, o, live); err != nil {
 		t.Fatalf("Seed: %v", err)
 	}
 	ids := map[string]bool{}
@@ -472,7 +521,7 @@ func TestARestartedNodesSeedIsTheFleets(t *testing.T) {
 	if rollup := tokens.Aggregate(live.SpendRecords(), tokens.Options{}); rollup.Totals.TotalTokens != 100 {
 		t.Errorf("rollup = %d tokens, want both nodes' 30 + 70", rollup.Totals.TotalTokens)
 	}
-	if o := live.AgentOverlay("Coder"); o == nil || o.LastTurn == nil || o.LastTurn.TurnID != "tn-peer" {
+	if o := live.AgentOverlay(bob); o == nil || o.LastTurn == nil || o.LastTurn.TurnID != "tn-peer" {
 		t.Errorf("the peer's seat has no last turn: %+v", o)
 	}
 	if coverage, _ := live.SeededFrom(); !coverage.Complete || len(coverage.Nodes) != 2 {
@@ -505,12 +554,13 @@ func fanQueue(t *testing.T, broker *memory.Broker, log *store.EventLog, id strin
 	return q
 }
 
-// storeTurnEnd writes a turn's completion the way the publish listener would.
-func storeTurnEnd(t *testing.T, log *store.EventLog, role, turnID string, at time.Time) {
+// storeTurnEnd writes a turn's completion, on the seat with this agent id, the
+// way the publish listener would. Every seat carries the same role name.
+func storeTurnEnd(t *testing.T, log *store.EventLog, agentID, turnID string, at time.Time) {
 	t.Helper()
-	ev := events.New(types.TurnCompleted{RoleName: role, Agent: "a-2", TurnID: turnID,
+	ev := events.New(types.TurnCompleted{RoleName: "Engineer", Agent: agentID, TurnID: turnID,
 		StartedAt: at.Add(-time.Minute), EndedAt: at}, events.TraceContext{})
-	ev.Source = role
+	ev.Source = "Engineer"
 	ev.Timestamp = at
 	rec, ok := observe.Record(ev)
 	if !ok {
@@ -531,20 +581,22 @@ func storeTurnEnd(t *testing.T, log *store.EventLog, role, turnID string, at tim
 func TestOneSeatsFailedTurnReadKeepsTheOthersTurns(t *testing.T) {
 	t.Parallel()
 	log := fanNode(t, "node-a")
+	o := testOrg()
+	ada, bob := seatID(t, o, "ada"), seatID(t, o, "bob")
 	now := time.Now().UTC()
-	storeTurnEnd(t, log, "Coder", "tn-coder", now.Add(-time.Hour))
-	storeTurnEnd(t, log, "Lead", "tn-lead", now.Add(-time.Hour))
+	storeTurnEnd(t, log, bob, "tn-bob", now.Add(-time.Hour))
+	storeTurnEnd(t, log, ada, "tn-ada", now.Add(-time.Hour))
 
 	live := livestate.New()
-	history := failingRole{FleetHistory: eventfan.Solo("node-a", log), role: "Lead"}
-	err := observe.Seed(t.Context(), history, []string{"Lead", "Coder"}, live)
+	history := failingSeat{FleetHistory: eventfan.Solo("node-a", log), seat: ada}
+	err := observe.Seed(t.Context(), history, o, live)
 	if err == nil {
 		t.Fatal("Seed reported no error for the seat whose read failed")
 	}
-	if o := live.AgentOverlay("Coder"); o == nil || o.LastTurn == nil || o.LastTurn.TurnID != "tn-coder" {
+	if o := live.AgentOverlay(bob); o == nil || o.LastTurn == nil || o.LastTurn.TurnID != "tn-bob" {
 		t.Errorf("the seat whose read succeeded lost its last turn: %+v", o)
 	}
-	if o := live.AgentOverlay("Lead"); o != nil && o.LastTurn != nil {
+	if o := live.AgentOverlay(ada); o != nil && o.LastTurn != nil {
 		t.Errorf("the seat whose read failed has a last turn %+v from nowhere", o.LastTurn)
 	}
 	coverage, seeded := live.SeededFrom()
@@ -558,14 +610,14 @@ func TestOneSeatsFailedTurnReadKeepsTheOthersTurns(t *testing.T) {
 	}
 }
 
-// failingRole is a fleet whose turn read for one role fails.
-type failingRole struct {
+// failingSeat is a fleet whose turn read for one seat fails.
+type failingSeat struct {
 	observe.FleetHistory
-	role string
+	seat string
 }
 
-func (f failingRole) Turns(ctx context.Context, q store.TurnQuery) (eventfan.TurnPage, eventfan.Coverage, error) {
-	if q.AgentRole == f.role {
+func (f failingSeat) Turns(ctx context.Context, q store.TurnQuery) (eventfan.TurnPage, eventfan.Coverage, error) {
+	if q.AgentID == f.seat {
 		return eventfan.TurnPage{}, eventfan.Coverage{}, errors.New("peer went silent")
 	}
 	return f.FleetHistory.Turns(ctx, q)

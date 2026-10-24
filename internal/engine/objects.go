@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/objstore/references"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // The object store, wired — ADR-0026.
@@ -135,6 +136,11 @@ type collectorDuty struct {
 	// record since this node took the duty.
 	resumed bool
 
+	// usage is the bucket's last-read usage against its reservation,
+	// zero until the holder has read one and on a backend with no
+	// reservation (an S3 bucket).
+	usage objstore.Usage
+
 	// decidesFrom is every domain whose rows name the objects it collects
 	// and audits ([copiesNamedBy]); declines is whether this node is
 	// declining the duty because its copy of one is out of service, and
@@ -236,13 +242,17 @@ func (e *Engine) collectorTurn(ctx context.Context, claim func(context.Context) 
 	if claim != nil {
 		held, err = claim(ctx)
 	}
-	mine, resume := duty.settle(held, err)
+	mine, resume := e.settleCollector(duty, held, err)
 	if err != nil && ctx.Err() == nil {
 		log.WarnContext(ctx, "object_collector_duty_unclaimed", "error", err)
 	}
 	if !mine {
 		return
 	}
+	// THE BUCKET'S USAGE ON EVERY TURN OF THE HOLDER, before whichever pass
+	// is due, so a pass that runs for hours does not hold the gauges and the
+	// near-ceiling alarm at the reading before it.
+	e.sampleObjectsUsage(ctx, duty)
 	// FROM HERE THE TURN KEEPS THE DUTY AS IT GOES — the resume's read and
 	// the pass alike — so a pass may outlive any number of leases
 	// ([dutyRenewal.keep]), and is stopped once the duty is not this node's.
@@ -254,11 +264,24 @@ func (e *Engine) collectorTurn(ctx context.Context, claim func(context.Context) 
 	// it still holds it — writing its report would replace the holder's.
 	// Settled by the same rule as the claim, so the two answers cannot be
 	// read differently.
-	mine, _ = duty.settle(held, err)
+	mine, _ = e.settleCollector(duty, held, err)
 	if !mine || !ran || ctx.Err() != nil {
 		return
 	}
 	e.recordCollection(ctx, duty)
+}
+
+// settleCollector settles an answer about the duty ([collectorDuty.settle])
+// and, where the answer is that this node does NOT hold it, withdraws the
+// bucket's gauges from this node ([Engine.unsetObjectsUsage]), so two nodes
+// never report the one bucket. An unknown answer keeps them, as it keeps the
+// alarm: it says nothing about who holds the duty.
+func (e *Engine) settleCollector(duty *collectorDuty, held bool, err error) (mine, resume bool) {
+	mine, resume = duty.settle(held, err)
+	if !mine && err == nil {
+		e.unsetObjectsUsage()
+	}
+	return mine, resume
 }
 
 // settle applies an answer to "does this node hold the duty?" — the claim at
@@ -290,6 +313,7 @@ func (d *collectorDuty) settle(held bool, err error) (mine, resume bool) {
 	d.holding = held
 	if !held {
 		d.resumed = false
+		d.usage = objstore.Usage{}
 		return false, false
 	}
 	return true, !d.resumed
@@ -318,6 +342,45 @@ func (e *Engine) collectorPass(ctx context.Context, duty *collectorDuty, resume 
 		return false
 	}
 	return true
+}
+
+// sampleObjectsUsage reads how much of the bucket's reservation its objects
+// take, on every turn of the duty's holder: the gauges and the
+// `objects_bucket_near_ceiling` alarm read it.
+//
+// ONE NODE, ONCE A POLL. The bucket is one the whole fleet shares, so the
+// holder's reading is the fleet's, and a read a minute is one stream-info
+// request to the stream's leader, against the hour a bucket at four fifths
+// takes to fill at any upload rate a fleet sustains. A read that fails keeps
+// the last one, since unknown is not empty, and says so.
+func (e *Engine) sampleObjectsUsage(ctx context.Context, duty *collectorDuty) {
+	usage, held, err := e.objects.store.Usage(ctx)
+	switch {
+	case !held:
+		return
+	case err != nil:
+		if ctx.Err() == nil {
+			log.WarnContext(ctx, "objects_usage_unread", "error", err,
+				"detail", "the bucket's gauges and its near-ceiling alarm keep the last reading")
+		}
+		return
+	}
+	duty.mu.Lock()
+	duty.usage = usage
+	duty.mu.Unlock()
+	if e.metrics != nil {
+		e.metrics.Set(metrics.ObjectsBucketBytes, float64(usage.Bytes), nil)
+		e.metrics.Set(metrics.ObjectsBucketMaxBytes, float64(usage.MaxBytes), nil)
+	}
+}
+
+// unsetObjectsUsage withdraws the bucket's gauges from a node that no longer
+// holds the duty, so two nodes never report the one bucket.
+func (e *Engine) unsetObjectsUsage() {
+	if e.metrics != nil {
+		e.metrics.Unset(metrics.ObjectsBucketBytes, nil)
+		e.metrics.Unset(metrics.ObjectsBucketMaxBytes, nil)
+	}
 }
 
 // collectorRetry is how soon a pass that failed is tried again.
@@ -440,9 +503,9 @@ func (e *Engine) stopObjectCollector() {
 	}
 }
 
-// objectsReading fills the object store's half of an alarm reading: the files
-// the collector's last audit to run to its end found missing, damaged or
-// unanswered — on
+// objectsReading fills the object store's half of an alarm reading: the
+// bucket's usage against its reservation, and the files the collector's last
+// audit to run to its end found missing, damaged or unanswered — on
 // the node holding the collector's duty, and nothing on any other, since the
 // store is one the whole fleet shares and one node's count of it is the
 // fleet's. FROM THE FINDINGS, never the last attempt: an audit that failed
@@ -458,11 +521,12 @@ func (e *Engine) objectsReading(_ time.Time, out *statelog.Reading) {
 		return
 	}
 	duty.mu.Lock()
-	holding := duty.holding
+	holding, usage := duty.holding, duty.usage
 	duty.mu.Unlock()
 	if !holding {
 		return
 	}
+	out.ObjectsBucketBytes, out.ObjectsBucketMaxBytes = usage.Bytes, usage.MaxBytes
 	if found := duty.collector.Status().Audit.Found; found != nil {
 		out.ObjectsMissing = found.Lost()
 	}
@@ -530,6 +594,21 @@ func (e *Engine) Objects() *objstore.Store {
 		return nil
 	}
 	return e.objects.store
+}
+
+// DirectUploadStatus is what health reports as `objects.direct_upload`:
+// "available" where the object store can hand a client a presigned put,
+// "unavailable (<reason>)" where it cannot, and "" on a node running no
+// object store. Fixed at boot: the s3 backend's probe decides it once
+// (internal/objstore/s3obj), and the broker's own bucket never offers one.
+func (e *Engine) DirectUploadStatus() string {
+	if e.objects == nil {
+		return ""
+	}
+	if ok, why := e.objects.store.DirectUpload(); !ok {
+		return "unavailable (" + why + ")"
+	}
+	return "available"
 }
 
 // ObjectsStream is the broker stream the company's objects live in, for the

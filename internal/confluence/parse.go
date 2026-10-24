@@ -2,7 +2,6 @@ package confluence
 
 import (
 	"context"
-	"maps"
 	"net/url"
 	"slices"
 	"strings"
@@ -158,24 +157,27 @@ type ParserOptions struct {
 // Watchers is the engine's page-subscription list, as this parser needs it.
 //
 // TWO METHODS, and the read one is a MEMBERSHIP TEST rather than an
-// enumeration: the parser already knows every handle it could route to, so
+// enumeration: the parser already knows every seat it could route to, so
 // asking "which of these is subscribed" is one call whatever the page's
 // history, while "who watches this page" would return identifiers the
 // registry then has to resolve — including every human, who resolve to
 // nothing.
+//
+// A SEAT IS NAMED BY ITS HANDLE, which is immutable (ADR-0013).
 type Watchers interface {
-	// Watching returns the subset of handles subscribed to the page.
+	// Watching returns the subset of seats subscribed to the page, each
+	// named by its handle.
 	//
 	// FAILS OPEN AS EMPTY, deliberately: not knowing who is subscribed
 	// must fall through to the space lead, which is where the event went
 	// before subscriptions existed. The other direction would wake every
 	// seat on a store blip.
-	Watching(ctx context.Context, pageID string, handles []string) (map[string]bool, error)
+	Watching(ctx context.Context, pageID string, seats []string) (map[string]bool, error)
 
-	// Watch subscribes one handle to a page. Best effort: a subscription
-	// that did not land costs one seat one missed follow-up, which is the
-	// pre-subscription behaviour.
-	Watch(ctx context.Context, pageID, handle string, at time.Time) error
+	// Watch subscribes one seat, named by its identity, to a page. Best
+	// effort: a subscription that did not land costs one seat one missed
+	// follow-up, which is the pre-subscription behaviour.
+	Watch(ctx context.Context, pageID, seat string, at time.Time) error
 }
 
 // Parser turns one Confluence webhook into the notifications it implies.
@@ -319,9 +321,13 @@ func (p *Parser) subscribed(ctx context.Context, base notify.Inbound, pageID, ac
 	if p.watchers == nil || pageID == "" || reg == nil {
 		return nil
 	}
-	handles := agentHandles(reg)
-	if len(handles) == 0 {
+	seats := agentSeats(reg)
+	if len(seats) == 0 {
 		return nil
+	}
+	handles := make([]string, 0, len(seats))
+	for _, party := range seats {
+		handles = append(handles, party.Handle)
 	}
 	watching, err := p.watchers.Watching(ctx, pageID, handles)
 	if err != nil {
@@ -350,41 +356,43 @@ func (p *Parser) subscribed(ctx context.Context, base notify.Inbound, pageID, ac
 		}
 	}
 	out := make([]notify.Routed, 0, len(watching))
-	// SORTED, because a map walk would order one page's recipients
+	// IN HANDLE ORDER, because a map walk would order one page's recipients
 	// differently on every delivery — and the order is what a reader of
 	// the feed compares two events by.
-	for _, handle := range slices.Sorted(maps.Keys(watching)) {
-		if !watching[handle] || seen[handle] {
+	for _, party := range seats {
+		if !watching[party.Handle] || seen[party.Handle] {
 			continue
 		}
 		// The actor already knows what it just did. Its own external id
 		// is what the webhook carries, so the handle is resolved back.
-		if party, known := reg.ByExternalID(Backend, actor); known && party.Handle == handle {
+		if self, known := reg.ByExternalID(Backend, actor); known && self.Handle == party.Handle {
 			continue
 		}
 		out = append(out, notify.Routed{
 			Inbound: withVia(base, ViaWatcher),
-			To:      notify.Recipient{Handle: handle},
+			To:      notify.Recipient{Handle: party.Handle},
 		})
 	}
 	return out
 }
 
-// agentHandles is every seat a subscription could wake.
+// agentSeats is every seat a subscription could wake, in handle order.
 //
 // AGENTS ONLY. A person who edits a page is already watching it in Confluence
 // and has already been notified natively; counting one here would spend a
 // membership test on a party the engine cannot wake, and — worse — a human
 // found "subscribed" would suppress the space-lead fallback in favour of a
 // notification the service then skips.
-func agentHandles(reg *notify.Registry) []string {
-	out := make([]string, 0, reg.Len())
+func agentSeats(reg *notify.Registry) []notify.Party {
+	out := make([]notify.Party, 0, reg.Len())
 	for party := range reg.All() {
 		if !party.Human && party.Handle != "" {
-			out = append(out, party.Handle)
+			out = append(out, party)
 		}
 	}
-	slices.Sort(out)
+	slices.SortFunc(out, func(a, b notify.Party) int {
+		return strings.Compare(a.Handle, b.Handle)
+	})
 	return out
 }
 

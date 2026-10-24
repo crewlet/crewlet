@@ -226,34 +226,6 @@ type TaskDetail struct {
 	// life of the task, to tell them something the cursor already says.
 	CommentsCursor string `json:"comments_cursor,omitempty"`
 
-	// CommentSeats names, per comment id, the PERSON behind a comment an
-	// operator token wrote — the seat the token was bound to, off the
-	// history row that recorded the comment. A comment's `author` is the
-	// credential that wrote it, which is the audit trail and a secret's
-	// name rather than a person's; a thread drawn from it showed "maya"
-	// where the chart says Maya Ops. Absent for a comment whose author is
-	// already a seat. Only with the comments it labels.
-	CommentSeats map[string]string `json:"comment_seats,omitempty"`
-
-	// ReporterSeat is the PERSON behind a task an operator token filed —
-	// the seat that token was bound to when it wrote the create, off the
-	// create's own history row — on exactly the terms [CommentSeats] names
-	// the person behind a comment. [Task.Reporter] is the credential, which
-	// is the audit trail and stays the record; a rail drawn from it named
-	// "founder" as the reporter while the activity beside it, which reads
-	// the history row's `actor_seat`, said Jane Founder filed it — one
-	// person with two names on one page.
-	//
-	// FROM THE CREATE ROW rather than from the history page, because the
-	// page is the newest [DetailHistoryDefault] changes and a busy task's
-	// create falls out of it, and rather than from the chart's CURRENT
-	// binding, because a token re-bound since would name somebody who
-	// filed nothing. Only when that row's author IS the reporter — the
-	// create sets the field to its author and nothing else writes it, so
-	// a mismatch is an imported task whose reporter nobody here bound.
-	// Absent for a task a seat filed, whose reporter already is a seat.
-	ReporterSeat string `json:"reporter_seat,omitempty"`
-
 	// Fields are the task's custom-field values with the declaration that
 	// explains each one, and with the values nothing explains reported as
 	// exactly that. The raw map stays on [TaskDetail.Task] — it is the
@@ -303,6 +275,16 @@ type TaskDetail struct {
 	// the browser would be a second definition of blocked.
 	Blocked bool `json:"blocked,omitempty"`
 
+	// KeyCollision is [TaskRow.KeyCollision] for the task this answer is
+	// about, on the ANSWER for [TaskDetail.Blocked]'s reason: it is the
+	// applier's DERIVED column rather than a field of the record, and the
+	// document is the record. A screen showing a flagged task needs it to
+	// hand anything onward — a link back to the board, a peek, a call to
+	// copy — because the task's key opens the task that claimed it first.
+	// Read in the same statement as `blocked`, so the two describe one
+	// instant.
+	KeyCollision bool `json:"key_collision,omitempty"`
+
 	// DueStanding is where the due date stands against the company's
 	// today — see [DueStanding]. Only with [DetailWants.Clock], and absent
 	// for a task with no due date.
@@ -324,10 +306,27 @@ type TaskDetail struct {
 	Incomplete     *Incomplete        `json:"incomplete,omitempty"`
 }
 
+// Address is the reference that opens the task this answer is about: its key,
+// or its id where another task claimed the key first. See [ItemAddress].
+func (d TaskDetail) Address() string {
+	return ItemAddress(d.Task.ID, d.Task.Key, d.KeyCollision)
+}
+
+// Named is how prose names the task this answer is about. See [ItemNamed].
+func (d TaskDetail) Named() string {
+	return ItemNamed(d.Task.ID, d.Task.Key, d.KeyCollision)
+}
+
 // TaskRef is another task as a reader names it.
 type TaskRef struct {
-	ID     string `json:"id"`
-	Key    string `json:"key"`
+	ID  string `json:"id"`
+	Key string `json:"key"`
+
+	// KeyCollision is the task's [TaskRow.KeyCollision]: its key is one
+	// another task claimed first, so a link built from [TaskRef.Key] opens
+	// that task and this one is reached by its id. See [ItemAddress].
+	KeyCollision bool `json:"key_collision,omitempty"`
+
 	Title  string `json:"title"`
 	Status Status `json:"status"`
 }
@@ -335,15 +334,17 @@ type TaskRef struct {
 // readTaskRef names one task, or nil for an id this node holds no row for.
 func readTaskRef(ctx context.Context, tx *sql.Tx, id string) (*TaskRef, error) {
 	ref := TaskRef{ID: id}
+	var collision int
 	err := tx.QueryRowContext(ctx,
-		`SELECT key, title, status FROM tracker_tasks WHERE id = ?`, id).
-		Scan(&ref.Key, &ref.Title, &ref.Status)
+		`SELECT key, key_collision, title, status FROM tracker_tasks WHERE id = ?`, id).
+		Scan(&ref.Key, &collision, &ref.Title, &ref.Status)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, nil
 	case err != nil:
 		return nil, fmt.Errorf("tracker: name task %s: %w", id, err)
 	}
+	ref.KeyCollision = collision == 1
 	return &ref, nil
 }
 
@@ -370,6 +371,12 @@ type DetailLink struct {
 	Title  string `json:"title,omitempty"`
 	Status Status `json:"status,omitempty"`
 
+	// KeyCollision is the other end's [TaskRow.KeyCollision]: its key is
+	// one another task claimed first, so a link built from [DetailLink.Key]
+	// opens that task and this one is reached by [DetailLink.Other]. See
+	// [ItemAddress]. Always false on a page link, which has no task row.
+	KeyCollision bool `json:"key_collision,omitempty"`
+
 	Note string `json:"note,omitempty"`
 
 	// Derived marks the half nobody authored, so an editor knows which end
@@ -389,15 +396,9 @@ type HistoryEntry struct {
 	Actor      string     `json:"actor,omitempty"`
 	ActorKind  AuthorKind `json:"actor_kind,omitempty"`
 	OperatorID string     `json:"operator_id,omitempty"`
-
-	// ActorSeat is the person an operator token was bound to when it
-	// wrote this — see [ActivityRecord.ActorSeat], which this is the same
-	// column of.
-	ActorSeat string `json:"actor_seat,omitempty"`
-
-	CommentID string `json:"comment_id,omitempty"`
-	Excerpt   string `json:"excerpt,omitempty"`
-	TurnID    string `json:"turn_id,omitempty"`
+	CommentID  string     `json:"comment_id,omitempty"`
+	Excerpt    string     `json:"excerpt,omitempty"`
+	TurnID     string     `json:"turn_id,omitempty"`
 
 	// Fields is what changed, as the notification snapshot recorded it.
 	Fields map[string]any `json:"fields,omitempty"`
@@ -480,9 +481,6 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 				return err
 			}
 		}
-		if out.ReporterSeat, err = reporterSeat(ctx, tx, id, task.Reporter); err != nil {
-			return err
-		}
 		switch {
 		case want.Comment != "":
 			// READ WHETHER OR NOT `comments` WAS ASKED FOR: naming one
@@ -497,17 +495,6 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 				want.CommentCursor, commentPage(want.CommentLimit))
 			if err != nil {
 				return err
-			}
-		}
-		// IN THE SAME TRANSACTION as the comments it labels, so a name
-		// cannot come from a later instant than the thread it is on.
-		if operator := operatorComments(out.Comments); len(operator) > 0 {
-			seats, seatsErr := commentSeats(ctx, tx, operator)
-			if seatsErr != nil {
-				return seatsErr
-			}
-			if len(seats) > 0 {
-				out.CommentSeats = seats
 			}
 		}
 		if want.History {
@@ -540,12 +527,16 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 		}
 		// THE SAME EXISTS THE BOARD ROW USES, in this same transaction,
 		// so the badge on the item and the badge on its row cannot
-		// disagree about one task at one instant.
+		// disagree about one task at one instant — and the collision
+		// flag beside it, from the same column the row reads, for the
+		// same reason.
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := tx.QueryRowContext(ctx,
 			`SELECT EXISTS (SELECT 1 FROM tracker_task_deps d
-			 WHERE d.task_id = ? AND d.blocker_open = 1)`,
-			id).Scan(&out.Blocked); err != nil {
+			         WHERE d.task_id = ? AND d.blocker_open = 1),
+			        COALESCE((SELECT key_collision FROM tracker_tasks
+			                  WHERE id = ?), 0) = 1`,
+			id, id).Scan(&out.Blocked, &out.KeyCollision); err != nil {
 			return fmt.Errorf("tracker: read %s's open blockers: %w", id, err)
 		}
 
@@ -612,8 +603,16 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 // reference the caller named.
 //
 // THE TASK'S OWN PATH, under the project it is filed in — the only place a
-// record about it is filed. A key adds its own address term as well, because a
-// deferred alias claim or re-key is filed under the key and not under the task.
+// record about it is filed. A key adds its own address term as well, because
+// which task a key opens is decided by the records filed under the KEY — an
+// alias claim, and every create, re-key and purge that claims, frees or hands
+// it on ([keyTerm]) — and a deferred one of those is not filed under the task.
+//
+// RESOLVED IN [resolveTaskID]'s ORDER — the id, then the key directory, then a
+// task row's own key — because the scope probed has to be the scope of the
+// task the read then returns: a key two tasks hold opens the one that claimed
+// it, and resolved the other way round the probe asked about one task's
+// project while the answer was the other's.
 //
 // A REFERENCE THAT RESOLVES TO NOTHING STILL BOUNDS A SCOPE, because "no such
 // task" is a claim about rows a deferred create has not written yet: a key
@@ -622,63 +621,39 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 func taskReadScope(ctx context.Context, tx *sql.Tx, idOrKey string) (statelog.ScopeSet, error) {
 	ref := strings.TrimSpace(idOrKey)
 	isID := uuid.Validate(ref) == nil
-	var keyTerm *ScopeTerm
+	var named *ScopeTerm
 	if !isID {
-		key := strings.ToUpper(ref)
-		project, _, _ := strings.Cut(key, "-")
-		keyTerm = &ScopeTerm{Kind: TermKey, Container: project, ID: key}
+		term := keyTerm(strings.ToUpper(ref))
+		named = &term
 	}
 	var id, project string
 	err := tx.QueryRowContext(ctx, `
 		SELECT id, project_key FROM tracker_tasks WHERE id = ?
 		UNION ALL
-		SELECT id, project_key FROM tracker_tasks WHERE key = ?
-		UNION ALL
 		SELECT t.id, t.project_key FROM tracker_task_keys k
 		  JOIN tracker_tasks t ON t.id = k.task_id WHERE k.key = ?
+		UNION ALL
+		SELECT id, project_key FROM tracker_tasks WHERE key = ?
 		LIMIT 1`,
 		ref, strings.ToUpper(ref), strings.ToUpper(ref)).Scan(&id, &project)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		if keyTerm == nil {
+		if named == nil {
 			return statelog.ScopeSet{Paths: []string{
 				ScopeTerm{Kind: TermDomain}.Path(),
 			}}, nil
 		}
 		return statelog.ScopeSet{Paths: []string{
-			ScopeTerm{Kind: TermContainer, ID: keyTerm.Container}.Path(),
+			ScopeTerm{Kind: TermContainer, ID: named.Container}.Path(),
 		}}.Normalised(), nil
 	case err != nil:
 		return statelog.ScopeSet{}, fmt.Errorf("tracker: resolve %q: %w", idOrKey, err)
 	}
 	paths := []string{ScopeTerm{Kind: TermObject, Container: project, ID: id}.Path()}
-	if keyTerm != nil {
-		paths = append(paths, keyTerm.Path())
+	if named != nil {
+		paths = append(paths, named.Path())
 	}
 	return statelog.ScopeSet{Paths: paths}.Normalised(), nil
-}
-
-// reporterSeat is the seat bound to the credential that filed this task, off
-// the create's own history row — see [TaskDetail.ReporterSeat].
-//
-// ON THE SUBJECT INDEX (`tracker_history_subject_idx`), whose seek bounds the
-// scan to this task's own rows; a task has exactly one create.
-func reporterSeat(ctx context.Context, tx *sql.Tx, taskID, reporter string) (string, error) {
-	if reporter == "" {
-		return "", nil
-	}
-	var seat string
-	err := tx.QueryRowContext(ctx, `
-		SELECT actor_seat FROM tracker_history
-		WHERE subject_id = ? AND kind = ? AND actor = ? AND actor_seat <> ''
-		ORDER BY log_seq LIMIT 1`, taskID, string(ChangeCreated), reporter).Scan(&seat)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("tracker: read who filed %s: %w", taskID, err)
-	}
-	return seat, nil
 }
 
 // resolveTaskID turns an id or a key — current or former — into an id.
@@ -687,16 +662,22 @@ func reporterSeat(ctx context.Context, tx *sql.Tx, taskID, reporter string) (str
 // projects keeps its old key as an alias precisely so every link, chat message
 // and comment that named it still opens the right record. A lookup that only
 // knew the current key would break every reference the move was meant to keep.
+//
+// A KEY RESOLVES THROUGH THE DIRECTORY FIRST, so a key two tasks hold opens the
+// one that claimed it — the task every earlier reference was written against —
+// on every node, rather than whichever row an index happened to return first.
+// The task row is the fallback for a key whose claim has not been written yet.
 func resolveTaskID(ctx context.Context, tx *sql.Tx, idOrKey string) (string, error) {
 	var id string
+	key := strings.ToUpper(idOrKey)
 	err := tx.QueryRowContext(ctx, `
 		SELECT id FROM tracker_tasks WHERE id = ?
 		UNION ALL
-		SELECT id FROM tracker_tasks WHERE key = ?
-		UNION ALL
 		SELECT task_id FROM tracker_task_keys WHERE key = ?
+		UNION ALL
+		SELECT id FROM tracker_tasks WHERE key = ?
 		LIMIT 1`,
-		idOrKey, strings.ToUpper(idOrKey), strings.ToUpper(idOrKey)).Scan(&id)
+		idOrKey, key, key).Scan(&id)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return "", fmt.Errorf("%w: %s", ErrNoTask, idOrKey)
@@ -704,6 +685,31 @@ func resolveTaskID(ctx context.Context, tx *sql.Tx, idOrKey string) (string, err
 		return "", fmt.Errorf("tracker: resolve %q: %w", idOrKey, err)
 	}
 	return id, nil
+}
+
+// keyOpensAnother is the SQL predicate "opening this key reaches a task other
+// than this id" — [resolveTaskID]'s answer to a key, asked of a row that
+// carries a key and a task's id side by side.
+//
+// THE DIRECTORY AND NOTHING ELSE, because the directory is what the resolver
+// asks first, a create or a re-key writes its claim in the same transaction
+// as the task row ([Applier.maintainKeys]) and a purge hands a claimant's key
+// on to a task still holding it ([handOnKey]), so a task's current key always
+// has its row. An
+// empty key opens nothing and is never a collision — and neither is a key
+// beside an EMPTY id, which names no task the key could fail to open: asked
+// anyway, every directory row would count as "another" and the row's only
+// address would be swapped for an id it does not have.
+//
+// It exists for a key that is NOT the task's current one — a notice stores
+// the key its task held when it was written — where the task row's own
+// `key_collision` describes a different key. A row reading the task's current
+// key reads that column instead, which the applier derives from this same
+// directory.
+func keyOpensAnother(key, id string) string {
+	return `(` + key + ` <> '' AND ` + id + ` <> '' AND EXISTS (
+	          SELECT 1 FROM tracker_task_keys kd
+	          WHERE kd.key = ` + key + ` AND kd.task_id <> ` + id + `))`
 }
 
 // readTaskDocument decodes the task's own record.
@@ -915,18 +921,6 @@ func readCommentPage(ctx context.Context, tx *sql.Tx, taskID, cursor string, lim
 	return out, next, nil
 }
 
-// operatorComments is the ids of the comments an operator token wrote — the
-// only ones whose author is a credential rather than a seat.
-func operatorComments(comments []Comment) []any {
-	var out []any
-	for _, c := range comments {
-		if c.AuthorKind == AuthorOperator {
-			out = append(out, c.ID)
-		}
-	}
-	return out
-}
-
 // readComment is ONE comment, WHOLE — the read that answers one comment by id.
 //
 // A single body is bounded by [MaxCommentBody], which the write already
@@ -979,9 +973,9 @@ func cursorID(cursor string) string {
 // readHistory is the activity feed, NEWEST FIRST and capped.
 func readHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]HistoryEntry, error) {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, kind, actor, actor_kind, operator_id, actor_seat,
-		       comment_id, excerpt, fields_json, turn_id, notified,
-		       effective_at, log_seq, reassignments
+		SELECT id, kind, actor, actor_kind, operator_id, comment_id,
+		       excerpt, fields_json, turn_id, notified, effective_at,
+		       log_seq, reassignments
 		FROM tracker_history
 		WHERE subject_id = ?
 		ORDER BY log_seq DESC
@@ -1006,7 +1000,7 @@ func readHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]H
 		var effective, seq int64
 		var handOffs sql.NullInt64
 		if err := rows.Scan(&e.ID, &e.Kind, &e.Actor, &actorKind, &e.OperatorID,
-			&e.ActorSeat, &e.CommentID, &e.Excerpt, &fields, &e.TurnID, &notified,
+			&e.CommentID, &e.Excerpt, &fields, &e.TurnID, &notified,
 			&effective, &seq, &handOffs); err != nil {
 			return nil, err
 		}
@@ -1040,7 +1034,8 @@ func readHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]H
 func readLinks(ctx context.Context, tx *sql.Tx, taskID string) ([]DetailLink, error) {
 	const columns = `
 		SELECT r.kind, %s, r.derived, r.one_sided, r.one_sided_final, r.note,
-		       COALESCE(t.key, ''), COALESCE(t.title, ''), COALESCE(t.status, '')
+		       COALESCE(t.key, ''), COALESCE(t.title, ''), COALESCE(t.status, ''),
+		       COALESCE(t.key_collision, 0)
 		FROM tracker_relations r
 		LEFT JOIN tracker_tasks t ON t.id = %s
 		WHERE %s = ?
@@ -1061,12 +1056,14 @@ func readLinks(ctx context.Context, tx *sql.Tx, taskID string) ([]DetailLink, er
 		for rows.Next() {
 			var link DetailLink
 			var kind, status string
-			var derived, oneSided, oneSidedFinal int
+			var derived, oneSided, oneSidedFinal, collision int
 			if err := rows.Scan(&kind, &link.Other, &derived, &oneSided,
-				&oneSidedFinal, &link.Note, &link.Key, &link.Title, &status); err != nil {
+				&oneSidedFinal, &link.Note, &link.Key, &link.Title, &status,
+				&collision); err != nil {
 				_ = rows.Close()
 				return nil, err
 			}
+			link.KeyCollision = collision == 1
 			link.Kind = RelationKind(kind)
 			link.Status = Status(status)
 			// THE MIRROR IS DERIVED WHATEVER ITS COLUMN SAYS. The

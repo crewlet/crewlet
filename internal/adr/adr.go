@@ -168,8 +168,14 @@ var fileName = regexp.MustCompile(`^(\d{4})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$`)
 // headerLine matches one field of the header block.
 var headerLine = regexp.MustCompile(`^- \*\*([A-Za-z][A-Za-z-]*):\*\* (.+)$`)
 
-// heading matches the record's own title line.
-var heading = regexp.MustCompile(`^# (ADR-(\d{4})) — (.+)$`)
+// headingForm is the title line every record opens with, as a reader is told
+// to write it.
+const headingForm = "`# ADR-NNNN: Title`"
+
+// heading matches the record's own title line: the id, a colon and a space,
+// then the title. The separator is a colon because this repository's prose
+// takes no em dash, and a title read from the line keeps any colon of its own.
+var heading = regexp.MustCompile(`^# (ADR-(\d{4})): (.+)$`)
 
 // Reference matches a record's id wherever it is cited.
 var Reference = regexp.MustCompile(`\bADR-(\d{4})\b`)
@@ -179,6 +185,16 @@ var Reference = regexp.MustCompile(`\bADR-(\d{4})\b`)
 // The template is skipped by NUMBER rather than by name: it is 0000, which is
 // the one number a real record cannot take, so a template renamed or copied
 // badly shows up as a malformed record instead of being silently ignored.
+//
+// TWO RECORDS WITH ONE NUMBER ARE REFUSED HERE, at the one reader every check
+// goes through, rather than by a test beside it. Every consumer keys the
+// records by their id, and a map keyed on the id keeps whichever record was
+// read last — so the anchor check held one decision's authority and silently
+// skipped the other's, the citation check found the number declared and
+// passed, and a citation of it reached two decisions while the gate certified
+// one. Two branches that each took the next free number and then merged is
+// exactly how it happens, and a merge is the change least likely to be read
+// record by record.
 func Load(root string) ([]Record, error) {
 	dir := filepath.Join(root, Dir)
 	entries, err := os.ReadDir(dir)
@@ -186,6 +202,7 @@ func Load(root string) ([]Record, error) {
 		return nil, fmt.Errorf("adr: read %s: %w", Dir, err)
 	}
 	var out []Record
+	byNumber := map[int]string{}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") || e.Name() == "README.md" {
 			continue
@@ -199,6 +216,13 @@ func Load(root string) ([]Record, error) {
 		if n == 0 {
 			continue // the template
 		}
+		if prior, dup := byNumber[n]; dup {
+			return nil, fmt.Errorf("adr: %s and %s are both numbered %04d, so "+
+				"a citation of ADR-%04d reaches two different decisions; give "+
+				"one of them the next free number and move every citation "+
+				"that means it", prior, e.Name(), n, n)
+		}
+		byNumber[n] = e.Name()
 		rec, err := parse(filepath.Join(dir, e.Name()), e.Name(), n)
 		if err != nil {
 			return nil, err
@@ -232,8 +256,8 @@ func parse(path, name string, number int) (Record, error) {
 			if m == nil {
 				if strings.HasPrefix(line, "# ") {
 					return Record{}, fmt.Errorf("adr: %s opens with %q; the "+
-						"heading is `# ADR-NNNN — Title`, with an em dash",
-						name, line)
+						"heading is %s, with a colon after the id",
+						name, line, headingForm)
 				}
 				continue
 			}
@@ -263,8 +287,8 @@ func parse(path, name string, number int) (Record, error) {
 		return Record{}, fmt.Errorf("adr: read %s: %w", name, err)
 	}
 	if rec.ID == "" {
-		return Record{}, fmt.Errorf("adr: %s has no `# ADR-NNNN — Title` "+
-			"heading, so nothing can cite it", name)
+		return Record{}, fmt.Errorf("adr: %s has no %s heading, so "+
+			"nothing can cite it", name, headingForm)
 	}
 	return rec, nil
 }

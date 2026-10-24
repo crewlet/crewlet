@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -159,7 +160,7 @@ func TestEveryBrokerKindAndRoleCombination(t *testing.T) {
 			}
 			t.Run(fmt.Sprintf("%s/roles %s", kind, orEvery(tc.roles)), func(t *testing.T) {
 				t.Parallel()
-				_, err := ParseBootstrap([]byte(doc), EnvOnly())
+				_, err := ParseRunnableBootstrap([]byte(doc), EnvOnly())
 				var got []refusal
 				for i, p := range Problems(err) {
 					r := refusal{path: p.Path, kind: p.Kind}
@@ -202,7 +203,7 @@ func TestTheDiskRulesFollowTheDataRoleOnEveryBroker(t *testing.T) {
 			t.Run(string(kind)+"/"+name, func(t *testing.T) {
 				t.Parallel()
 				doc := "node:\n  roles: [seats]\n" + tc.store + brokerStreams[kind]
-				_, err := ParseBootstrap([]byte(doc), EnvOnly())
+				_, err := ParseRunnableBootstrap([]byte(doc), EnvOnly())
 				problems := Problems(err)
 				if len(problems) != 1 || problems[0].Path != tc.path || problems[0].Kind != tc.kind {
 					t.Fatalf("want one %s at %s, got %+v", tc.kind, tc.path, problems)
@@ -214,7 +215,7 @@ func TestTheDiskRulesFollowTheDataRoleOnEveryBroker(t *testing.T) {
 	// may have today.
 	for _, kind := range []placement.BrokerKind{placement.BrokerMember, placement.BrokerClient} {
 		doc := "store:\n  scratch: true\n" + brokerStreams[kind]
-		_, err := ParseBootstrap([]byte(doc), EnvOnly())
+		_, err := ParseRunnableBootstrap([]byte(doc), EnvOnly())
 		problems := Problems(err)
 		if len(problems) != 1 || problems[0].Path != "store.scratch" || problems[0].Kind != "conflict" {
 			t.Errorf("%s: a data node with a scratch store: want one conflict at "+
@@ -239,7 +240,7 @@ func TestAMemberOfAFleetMustPersistItsStreams(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			_, err := ParseBootstrap([]byte(doc), EnvOnly())
+			_, err := ParseRunnableBootstrap([]byte(doc), EnvOnly())
 			problems := Problems(err)
 			if len(problems) != 1 || problems[0].Path != "stream.store_dir" ||
 				problems[0].Kind != "missing" {
@@ -254,7 +255,7 @@ func TestAMemberOfAFleetMustPersistItsStreams(t *testing.T) {
 		"a client":        brokerStreams[placement.BrokerClient],
 		"a persisted one": brokerStreams[placement.BrokerMember],
 	} {
-		if _, err := ParseBootstrap([]byte(doc), EnvOnly()); err != nil {
+		if _, err := ParseRunnableBootstrap([]byte(doc), EnvOnly()); err != nil {
 			t.Errorf("%s must load: %v", name, err)
 		}
 	}
@@ -294,7 +295,7 @@ func TestTheBrokerWarnings(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			b, err := ParseBootstrap([]byte(tc.doc), EnvOnly())
+			b, err := ParseRunnableBootstrap([]byte(tc.doc), EnvOnly())
 			if err != nil {
 				t.Fatalf("the fixture must be valid, since a warning is: %v", err)
 			}
@@ -351,7 +352,10 @@ func TestALeaseTooShortForAnUploadAcrossALinkIsWarned(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			b, err := ParseBootstrap([]byte(tc.doc), EnvOnly())
+			// RUNNABLE, so every fixture carries the keyring and — where it
+			// writes no stream block of its own — the durable stream every
+			// member needs: a warning is said of a valid document.
+			b, err := ParseRunnableBootstrap([]byte(tc.doc), EnvOnly())
 			if err != nil {
 				t.Fatalf("the fixture must be valid, since a warning is: %v", err)
 			}
@@ -372,57 +376,66 @@ func TestALeaseTooShortForAnUploadAcrossALinkIsWarned(t *testing.T) {
 	}
 }
 
-// THE IN-MEMORY STREAM IS A MEMBER'S WARNING, because only a member holds a
-// stream: it is the one broker running JetStream in this process. A stateless
-// leaf runs none and is REFUSED a store directory, so warning it that its
-// stream is in memory told a correct node to set the one field it may not; a
-// client's streams are its external cluster's. Every shape below is valid, and
-// each case pins which of the two in-memory warnings it raises — none, or
-// exactly the ones a member with no store directory earns.
-func TestOnlyABrokerThatHoldsStreamsIsWarnedTheyAreInMemory(t *testing.T) {
+// THE IN-MEMORY STREAM IS A MEMBER'S REFUSAL, because only a member holds a
+// stream: it is the one broker running JetStream in this process, and a member
+// keeps the estate's state logs on it from boot, solo or in a fleet
+// ([Stream.Durable]). A stateless leaf runs none and is REFUSED a store
+// directory, so refusing it for having none would tell a correct node to set
+// the one field it may not; a client's streams are its external cluster's. It
+// was two warnings — streams in memory, and a store limit that bounds nothing
+// beside them — and each case pins which shapes load and which are refused at
+// `stream.store_dir`, never at the limit beside it.
+//
+// The keyring is appended rather than [Runnable] applied, because Runnable
+// would hand every case without a `stream:` block the store directory whose
+// absence is the subject.
+func TestOnlyABrokerThatHoldsStreamsMustPersistThem(t *testing.T) {
 	t.Parallel()
 	const (
-		kv       = "coordination:\n  type: embedded-kv\n"
-		data     = "node:\n  roles: [data, seats]\n"
-		seats    = "node:\n  roles: [seats]\nstore:\n  scratch: true\n"
-		inMemory = "stream.store_dir"
-		limit    = "stream.store_max_bytes"
+		kv    = "coordination:\n  type: embedded-kv\n"
+		data  = "node:\n  roles: [data, seats]\n"
+		seats = "node:\n  roles: [seats]\nstore:\n  scratch: true\n"
 	)
 	for _, tc := range []struct {
-		name string
-		doc  string
-		want []string
+		name    string
+		doc     string
+		refused bool
 	}{
 		{"a solo data member with a store directory",
-			data + "stream:\n  store_dir: /var/js\n", nil},
-		{"a solo data member with no store directory", data, []string{inMemory}},
-		{"the every-role default with no store directory", "", []string{inMemory}},
+			data + "stream:\n  store_dir: /var/js\n", false},
+		{"a solo data member with no store directory", data, true},
+		{"the every-role default with no store directory", "", true},
 		{"a data member with a store limit and no store directory",
-			data + "stream:\n  store_max_bytes: 6442450944\n", []string{inMemory, limit}},
+			data + "stream:\n  store_max_bytes: 6442450944\n", true},
 		{"a data member with a store limit inside its store directory",
-			data + "stream:\n  store_dir: /var/js\n  store_max_bytes: 6442450944\n", nil},
-		{"a clustered member", data + brokerStreams[placement.BrokerMember], nil},
+			data + "stream:\n  store_dir: /var/js\n  store_max_bytes: 6442450944\n", false},
+		{"a clustered member", data + brokerStreams[placement.BrokerMember], false},
 		{"a member opening a leaf listener",
-			data + kv + "stream:\n  store_dir: /var/js\n  leaf:\n    port: 7422\n", nil},
-		{"a stateless leaf", seats + brokerStreams[placement.BrokerLeaf], nil},
-		{"a data node on an external cluster", data + brokerStreams[placement.BrokerClient], nil},
+			data + kv + "stream:\n  store_dir: /var/js\n  leaf:\n    port: 7422\n", false},
+		{"a stateless leaf", seats + brokerStreams[placement.BrokerLeaf], false},
+		{"a data node on an external cluster", data + brokerStreams[placement.BrokerClient], false},
 		{"a stateless node on an external cluster",
-			seats + brokerStreams[placement.BrokerClient], nil},
+			seats + brokerStreams[placement.BrokerClient], false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			b, err := ParseBootstrap([]byte(tc.doc), EnvOnly())
-			if err != nil {
-				t.Fatalf("the fixture must be valid, since a warning is: %v", err)
-			}
-			var got []string
-			for _, w := range b.Warnings() {
-				if w.Path == inMemory || w.Path == limit {
-					got = append(got, w.Path)
+			b, err := ParseBootstrap([]byte(tc.doc+TestKeyringYAML), EnvOnly())
+			if !tc.refused {
+				if err != nil {
+					t.Fatalf("refused: %v", err)
 				}
+				for _, w := range b.Warnings() {
+					if w.Path == "stream.store_dir" || w.Path == "stream.store_max_bytes" {
+						t.Errorf("warned at %s, where nothing is held in memory: %s",
+							w.Path, w.Message)
+					}
+				}
+				return
 			}
-			if !slices.Equal(got, tc.want) {
-				t.Fatalf("%s broker: warnings at %v, want %v", b.BrokerKind(), got, tc.want)
+			problems := Problems(err)
+			if len(problems) != 1 || problems[0].Path != "stream.store_dir" ||
+				!errors.Is(err, ErrMissing) {
+				t.Fatalf("want one refusal at stream.store_dir, got %+v", problems)
 			}
 		})
 	}
@@ -465,7 +478,7 @@ func TestALeafDeclinesNoFsync(t *testing.T) {
 			"  replicas: 3\n  sync: 30s\n  cluster:\n    name: acme\n" +
 			"    peers: [nats://b.example.com:6222, nats://c.example.com:6222]\n",
 	} {
-		if _, err := ParseBootstrap([]byte(doc), EnvOnly()); err != nil {
+		if _, err := ParseRunnableBootstrap([]byte(doc), EnvOnly()); err != nil {
 			t.Errorf("%s must load: %v", name, err)
 		}
 	}
@@ -495,7 +508,7 @@ func TestOnlyANodeThatRunsTheTrimIsWarnedAboutItsFloor(t *testing.T) {
 		doc  string
 		want []string
 	}{
-		{"the every-role default", operator("stream:\n"), []string{floor, owner}},
+		{"the every-role default", operator("stream:\n  store_dir: /var/js\n"), []string{floor, owner}},
 		{"a solo data member", data + operator("stream:\n  store_dir: /var/js\n"),
 			[]string{floor, owner}},
 		{"a clustered data member", data + operator(brokerStreams[placement.BrokerMember]),
@@ -509,7 +522,7 @@ func TestOnlyANodeThatRunsTheTrimIsWarnedAboutItsFloor(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			b, err := ParseBootstrap([]byte(tc.doc), EnvOnly())
+			b, err := ParseRunnableBootstrap([]byte(tc.doc), EnvOnly())
 			if err != nil {
 				t.Fatalf("the fixture must be valid, since a warning is: %v", err)
 			}

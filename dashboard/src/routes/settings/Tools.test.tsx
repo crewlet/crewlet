@@ -1,5 +1,5 @@
 /**
- * Settings › Tools & MCP: the catalogue, the servers and what every node did
+ * Settings › MCP Tools: the catalogue, the servers and what every node did
  * with them, and the form that adds one.
  *
  * The invariants, in the order they cost when they go:
@@ -97,34 +97,45 @@ const status: McpServersStatusAnswer = {
       state: "running",
       started: 2,
       failed: 0,
+      waiting: 0,
       tools: 4,
+      unlisted_annotations: [],
       nodes: [
         {
           node: "node-a",
           reported: true,
           started: 1,
           failed: 0,
+          waiting: 0,
           tools: 4,
           error: "",
           error_seat: "",
+          wait: "",
+          wait_seat: "",
         },
         {
           node: "node-b",
           reported: true,
           started: 1,
           failed: 0,
+          waiting: 0,
           tools: 4,
           error: "",
           error_seat: "",
+          wait: "",
+          wait_seat: "",
         },
         {
           node: "node-c",
           reported: false,
           started: 0,
           failed: 0,
+          waiting: 0,
           tools: 0,
           error: "",
           error_seat: "",
+          wait: "",
+          wait_seat: "",
         },
       ],
     },
@@ -139,34 +150,45 @@ const status: McpServersStatusAnswer = {
       state: "partial",
       started: 1,
       failed: 1,
+      waiting: 0,
       tools: 26,
+      unlisted_annotations: ["create_pull_reqest"],
       nodes: [
         {
           node: "node-a",
           reported: true,
           started: 1,
           failed: 0,
+          waiting: 0,
           tools: 26,
           error: "",
           error_seat: "",
+          wait: "",
+          wait_seat: "",
         },
         {
           node: "node-b",
           reported: true,
           started: 0,
           failed: 1,
+          waiting: 0,
           tools: 0,
           error: "401 Bad credentials",
           error_seat: "backend-dev",
+          wait: "",
+          wait_seat: "",
         },
         {
           node: "node-c",
           reported: false,
           started: 0,
           failed: 0,
+          waiting: 0,
           tools: 0,
           error: "",
           error_seat: "",
+          wait: "",
+          wait_seat: "",
         },
       ],
     },
@@ -183,17 +205,22 @@ const status: McpServersStatusAnswer = {
       state: "failing",
       started: 0,
       failed: 1,
+      waiting: 0,
       tools: 0,
+      unlisted_annotations: [],
       nodes: [
         {
           node: "node-a",
           reported: true,
           started: 0,
           failed: 1,
+          waiting: 0,
           tools: 0,
           error:
             'mcp: server "notes" failed to connect: exec: "notes-mcp": executable file not found in $PATH',
           error_seat: "",
+          wait: "",
+          wait_seat: "",
         },
       ],
     },
@@ -201,13 +228,14 @@ const status: McpServersStatusAnswer = {
 };
 
 const OPERATOR = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+  login: "U0FOUNDER",
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
+  owner: "jane",
   name: "Jane",
   kind: "human",
 };
-const READER = { operator_id: "", operator: false, handle: "", name: "", kind: "" };
+const READER = { login: "", grants: [], handle: "", owner: "", name: "", kind: "" };
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -245,7 +273,10 @@ function mount(
   const query = vi.fn((what: string) => {
     if (what === "viewer") return Promise.resolve(viewer);
     if (what === "mcp_servers_status") {
-      return refuse ? Promise.reject(new QueryError("unauthorized")) : Promise.resolve(answer);
+      // REFUSED AS THE ENGINE REFUSES IT: the rule and the grant that would admit.
+      return refuse
+        ? Promise.reject(new QueryError("unauthorized", { reason: "no_grant", grants: ["admin"] }))
+        : Promise.resolve(answer);
     }
     return new Promise(() => {});
   });
@@ -302,7 +333,7 @@ test("a peeked tool names its holders from the pushed grant and asks the engine 
 test("a server granted to every agent seat says so", async () => {
   mount(<ToolPeek name="search_docs" />);
   await settle();
-  expect(screen.getByText(/Every agent seat — 2 seats/)).toBeDefined();
+  expect(screen.getByText("Every agent seat (2).")).toBeDefined();
 });
 
 // A TEMPLATE NOBODY IS GRANTED is a finding, said outright.
@@ -311,7 +342,7 @@ test("a server granted to nobody says no seat can call it", async () => {
     roster: { name: "Acme", roles: [{ name: "PM", handle: "pm", tool_sources: ["builtin"] }] },
   });
   await settle();
-  expect(screen.getByText(/No seat can call this/)).toBeDefined();
+  expect(screen.getByText(/No seat is granted/).textContent).toBe("No seat is granted github.");
 });
 
 // THE LIST IS FOR FINDING A TOOL. A description is written for a model and
@@ -341,7 +372,9 @@ test("each server is drawn with the engine's state and a cell per node", async (
   const docs = screen.getByText("Running").closest(".grid-row") as HTMLElement;
   expect(within(docs).getByText("Running")).toBeDefined();
   expect(within(docs).getByText("Every agent seat")).toBeDefined();
-  expect(screen.getByText(/did not publish its MCP report on the last heartbeat/)).toBeDefined();
+  expect(screen.getByText(/No report from/).textContent).toBe(
+    "No report from node-c, so its status is unknown.",
+  );
 });
 
 test("a node's cell never reads an unreported node as none", () => {
@@ -350,14 +383,99 @@ test("a node's cell never reads an unreported node as none", () => {
     reported: false,
     started: 0,
     failed: 0,
+    waiting: 0,
     tools: 0,
     error: "",
     error_seat: "",
+    wait: "",
+    wait_seat: "",
   };
   expect(nodeCellWords(cell).text).toBe("not reported");
   expect(nodeCellWords({ ...cell, reported: true }).text).toBe("none here");
   expect(nodeCellWords({ ...cell, reported: true, started: 1, failed: 1 }).tone).toBe("warning");
   expect(nodeCellWords({ ...cell, reported: true, failed: 2 }).tone).toBe("danger");
+});
+
+// A WAITING INSTANCE IS SAID AND NEVER TONED: held back for a credential an
+// integration is still minting, it is neither running nor failed, so it is
+// named beside what was launched and leaves the tone to that.
+test("a node's cell names its waiting instances without reading them as a fault", () => {
+  const cell = {
+    node: "n",
+    reported: true,
+    started: 0,
+    failed: 0,
+    waiting: 2,
+    tools: 0,
+    error: "",
+    error_seat: "",
+    wait: "",
+    wait_seat: "",
+  };
+  expect(nodeCellWords(cell)).toEqual({ text: "2 waiting", tone: "neutral" });
+  expect(nodeCellWords({ ...cell, started: 1, waiting: 1 })).toEqual({
+    text: "1 running · 1 waiting",
+    tone: "success",
+  });
+});
+
+// A SERVER WAITING FOR ITS PROVISIONED CREDENTIAL says so and says on what:
+// on a first boot under provisioning every seat's instance waits, and an
+// operator connecting the integration must read that as the pass's to finish,
+// not as a server to fix — and must find which variable it is.
+test("a server waiting for a provisioned credential names what it waits for, not a failure", async () => {
+  const wait =
+    "not started: waiting for the atlassian integration to mint ${CEO_ATLASSIAN_TOKEN}; " +
+    "it starts once the seal reaches this node";
+  const waiting: McpServersStatusAnswer = {
+    nodes: [{ id: "node-a", reported: true }],
+    servers: [
+      {
+        name: "github",
+        configured: true,
+        shared: false,
+        transport: "stdio",
+        command: "npx",
+        args: [],
+        url: "",
+        state: "waiting",
+        started: 0,
+        failed: 0,
+        waiting: 1,
+        tools: 0,
+        unlisted_annotations: [],
+        nodes: [
+          {
+            node: "node-a",
+            reported: true,
+            started: 0,
+            failed: 0,
+            waiting: 1,
+            tools: 0,
+            error: "",
+            error_seat: "",
+            wait,
+            wait_seat: "backend-dev",
+          },
+        ],
+      },
+    ],
+  };
+  mount(<Tools />, { answer: waiting });
+  await settle();
+  const github = screen.getByText("Waiting for credentials").closest(".grid-row") as HTMLElement;
+  expect(within(github).getByText(/1 waiting/)).toBeDefined();
+  const line = within(github).getByText(`for backend-dev: ${wait}`);
+  expect(line.classList.contains("mcp-wait")).toBe(true);
+  expect(within(github).queryByText(/failed/)).toBeNull();
+  cleanup();
+
+  location.hash = "#/settings/mcp-tools/servers/github";
+  mount(<Tools server="github" />, { answer: waiting });
+  await settle();
+  expect(screen.getByText("What it waits for")).toBeDefined();
+  expect(screen.queryByText("Why it failed")).toBeNull();
+  expect(screen.getByText(wait, { selector: ".mcp-failure-whole" })).toBeDefined();
 });
 
 // THE REASON SITS UNDER ITS NODE'S CHIP and does not restate the node: the
@@ -370,6 +488,25 @@ test("a node's failure sits under its chip without repeating the node", async ()
   const reason = within(github).getByText("for backend-dev: 401 Bad credentials");
   expect(reason.classList.contains("mcp-failure")).toBe(true);
   expect(reason.textContent?.startsWith("node-b")).toBe(false);
+});
+
+// AN ANNOTATION KEY NO INSTANCE LISTS IS SAID: counted in the server's row,
+// where there is no room for a list, and named whole on its page — and a
+// server whose keys all match says nothing about them.
+test("a server's annotation keys that match no tool are counted in its row and named on its page", async () => {
+  mount(<Tools />);
+  await settle();
+  const github = screen.getByText("Partly failing").closest(".grid-row") as HTMLElement;
+  expect(within(github).getByText("1 tool_annotations key matches no tool")).toBeDefined();
+  const docs = screen.getByText("Running").closest(".grid-row") as HTMLElement;
+  expect(within(docs).queryByText(/tool_annotations/)).toBeNull();
+  cleanup();
+
+  location.hash = "#/settings/mcp-tools/servers/github";
+  mount(<Tools server="github" />);
+  await settle();
+  expect(screen.getByText("Annotation overrides that match no tool")).toBeDefined();
+  expect(screen.getByText("create_pull_reqest", { selector: ".mcp-unlisted li" })).toBeDefined();
 });
 
 // THE SERVERS' GRID NAMES EACH SERVER'S REACH off the grant on the pushed
@@ -399,7 +536,7 @@ test("the MCP tile counts the servers the engine reports, as the table does", as
 // and every failure whole — with its chip selected, an empty state that says
 // why, and a way back to every tool.
 test("a server with no tools opens its page, never an empty quoted search", async () => {
-  location.hash = "#/settings/tools/servers/notes";
+  location.hash = "#/settings/mcp-tools/servers/notes";
   mount(<Tools server="notes" />);
   await settle();
   expect(screen.queryByText(/“”/)).toBeNull();
@@ -416,13 +553,13 @@ test("a server with no tools opens its page, never an empty quoted search", asyn
     fireEvent.click(screen.getByRole("button", { name: "Show all tools" }));
   });
   await settle();
-  expect(location.hash.startsWith("#/settings/tools")).toBe(true);
+  expect(location.hash.startsWith("#/settings/mcp-tools")).toBe(true);
   expect(location.hash).not.toContain("servers");
 });
 
 // A SEARCH THAT FOUND NOTHING still quotes what was searched.
 test("a search that matches nothing quotes the search", async () => {
-  location.hash = "#/settings/tools?q=zzz";
+  location.hash = "#/settings/mcp-tools?q=zzz";
   mount(<Tools />);
   await settle();
   expect(screen.getByText("No tool matches “zzz”")).toBeDefined();
@@ -433,6 +570,10 @@ test("a refused reader sees the refusal where the servers were, and every tool",
   mount(<Tools />, { viewer: READER, refuse: true });
   await settle();
   expect(screen.queryByText("Partly failing")).toBeNull();
+  // THE REFUSAL NAMES THE GRANT the engine said would admit the reader.
+  expect(
+    screen.getByText(/This answer needs Admin access\. An admin can give it to you\./),
+  ).toBeDefined();
   expect(screen.getByText("Open an issue on a repository")).toBeDefined();
   // The add is drawn, and disabled with the reason.
   const add = screen.getByRole("button", { name: /Add an MCP server/ });
@@ -443,21 +584,23 @@ test("a refused reader sees the refusal where the servers were, and every tool",
 // status who opens a server's page was told the server does not exist, right
 // above the section that says the answer was refused.
 test("a refused reader on a server's page is never told the server does not exist", async () => {
-  location.hash = "#/settings/tools/servers/github";
+  location.hash = "#/settings/mcp-tools/servers/github";
   mount(<Tools server="github" />, { viewer: READER, refuse: true });
   await settle();
   expect(screen.getByRole("heading", { name: "github" })).toBeDefined();
-  expect(screen.queryByText(/No configuration this engine can see carries/)).toBeNull();
-  expect(screen.getByText(/status could not be read here/)).toBeDefined();
+  expect(screen.queryByText(/No server called/)).toBeNull();
+  expect(screen.getByText(/See the servers section below/).textContent).toBe(
+    "Couldn’t read github’s status. See the servers section below.",
+  );
 });
 
 // …and a reader who WAS told, about a name nothing carries, is told so.
 test("a server's page for a name the answer does not carry says so", async () => {
-  location.hash = "#/settings/tools/servers/nowhere";
+  location.hash = "#/settings/mcp-tools/servers/nowhere";
   mount(<Tools server="nowhere" />);
   await settle();
-  expect(screen.getByText(/No configuration this engine can see carries/)).toBeDefined();
-  expect(screen.queryByText(/status could not be read here/)).toBeNull();
+  expect(screen.getByText(/No server called/).textContent).toBe("No server called nowhere.");
+  expect(screen.queryByText(/See the servers section below/)).toBeNull();
 });
 
 // --- adding one ---------------------------------------------------------- //
@@ -504,7 +647,7 @@ const valid = (warnings: unknown[] = []) =>
   json({ valid: true, base_revision_id: "r1", warnings, derived: null }, 200);
 
 async function openAdd() {
-  location.hash = "#/settings/tools?add=server";
+  location.hash = "#/settings/mcp-tools?add=server";
   mount(<Tools />);
   await settle();
   return screen.getByRole("dialog");
@@ -642,13 +785,15 @@ test("a name only a node still reports is said, not refused", async () => {
     if (call.method === "PATCH") return valid();
     return json({}, 200, { ETag: '"r2"' });
   });
-  location.hash = "#/settings/tools?add=server";
+  location.hash = "#/settings/mcp-tools?add=server";
   mount(<Tools />, { answer });
   await settle();
   const dialog = screen.getByRole("dialog");
   type(dialog, "Name", "legacy");
   type(dialog, "Command", "x");
-  expect(within(dialog).getByText(/still runs a server called/)).toBeDefined();
+  expect(
+    within(dialog).getByText("Free to use. An old server by this name is still running."),
+  ).toBeDefined();
   await press(dialog, /Add server/);
   expect(within(dialog).queryByText(/already exists/)).toBeNull();
   expect(calls.length).toBeGreaterThan(0);
@@ -668,4 +813,47 @@ test("removing an environment row keeps every other row's field its own", async 
   const left = within(dialog).getByLabelText(/^Variable 1 name/) as HTMLInputElement;
   expect(left.value).toBe("SECOND");
   expect(left).toBe(second);
+});
+
+// A ROW SAYS WHETHER IT MAY BE UNSET, and the add sends it as the server's
+// `optional_keys` — the one declaration the engine starts a server without a
+// value by.
+test("a variable that may be unset is added as an optional key", async () => {
+  const calls = stubConfig((call) => {
+    if (call.method === "GET") return json(company, 200, { ETag: '"r1"' });
+    if (call.url.includes("dry_run=true")) return valid();
+    return json({ revision_id: "r2", epoch: 5, warnings: [], derived: null }, 201);
+  });
+  const dialog = await openAdd();
+  type(dialog, "Name", "search");
+  type(dialog, "Command", "search-mcp");
+  await press(dialog, /Add variable/);
+  type(dialog, "Variable 1 name", "NPM_CONFIG_REGISTRY");
+  type(dialog, "Variable 1 value", "${NPM_CONFIG_REGISTRY}");
+  await act(async () => {
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: /Variable 1 may be unset/ }));
+  });
+  await press(dialog, /Add server/);
+  const save = calls.find((c) => c.method === "PUT" && !c.url.includes("dry_run"));
+  expect(save?.body).toMatchObject({
+    env: { NPM_CONFIG_REGISTRY: "${NPM_CONFIG_REGISTRY}" },
+    optional_keys: ["NPM_CONFIG_REGISTRY"],
+  });
+});
+
+// A CARD IN EVERY STATE: refused, the servers' section was a bare heading
+// over a floating sentence, beside the framed catalogue under it. Headed like
+// every other Settings section, the refusal is inside it.
+test("the servers' section is a card headed MCP servers, refused or empty", async () => {
+  mount(<Tools />, { viewer: READER, refuse: true });
+  await settle();
+  const heading = screen.getByRole("heading", { name: "MCP servers" });
+  const card = heading.closest(".crewlet-card") as HTMLElement;
+  expect(card).not.toBeNull();
+  expect(within(card).getByText(/This answer needs Admin access/)).toBeDefined();
+  cleanup();
+  mount(<Tools />, { answer: { ...status, servers: [] } });
+  await settle();
+  const empty = screen.getByRole("heading", { name: "MCP servers" }).closest(".crewlet-card");
+  expect(within(empty as HTMLElement).getByText("No MCP servers yet")).toBeDefined();
 });

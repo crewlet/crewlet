@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/jsinflight"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -182,8 +184,32 @@ func (l *DomainLog) Append(ctx context.Context, subject, msgID string, expect *u
 	if expect != nil {
 		opts = append(opts, jetstream.WithExpectLastSequencePerSubject(*expect))
 	}
-	ack, err := l.js.Publish(ctx, subject, body, opts...)
+	// DECIDED BEFORE IT IS ANSWERED. A conditional append the leader refuses
+	// because another write to the subject is still in flight has not been
+	// compared with anything — the write ahead may be this node's own, already
+	// acknowledged — and handed up as a rejection it sent the publisher round
+	// the discriminator to re-decide against the very anchor it had, for as
+	// many rounds as that write took to clear. [jsinflight.Decide] waits it out
+	// within the append's own budget; the leader stored nothing of a refused
+	// attempt, its message id included, so the retry is the same append. One
+	// still in flight at the deadline is [jsinflight.Undecided], which carries
+	// no API error, so the state log reads it as the no-answer it is.
+	var ack *jetstream.PubAck
+	err := jsinflight.Decide(ctx, l.js.Options().DefaultTimeout, func(ctx context.Context) error {
+		var err error
+		ack, err = l.js.Publish(ctx, subject, body, opts...)
+		return err
+	})
 	if err != nil {
+		// THE SIZES TRAVEL WITH A RECORD TOO LARGE TO SEND, because the
+		// client's refusal carries neither and they are the whole of what
+		// its remedy turns on: how far over the record is, and which
+		// server's max_payload it was measured against. Wrapped, so the
+		// state log still classifies it by the sentinel.
+		if errors.Is(err, nats.ErrMaxPayload) {
+			return 0, false, fmt.Errorf("%s: %w",
+				tooLarge(l.js.Conn(), "append to", subject, len(body)), err)
+		}
 		return 0, false, err
 	}
 	return ack.Sequence, ack.Duplicate, nil

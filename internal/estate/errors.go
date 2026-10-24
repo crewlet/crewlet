@@ -7,7 +7,17 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/crewlet/crewlet/internal/artifactdata"
+	"github.com/crewlet/crewlet/internal/artifactdata/canon"
+	"github.com/crewlet/crewlet/internal/artifactdata/query"
+	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/manifest"
+	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/session"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/search"
@@ -47,6 +57,7 @@ var sentinels = []sentinel{
 	{"queue.ErrNotLive", queue.ErrNotLive},
 
 	{"tracker.ErrAlreadyAnswered", tracker.ErrAlreadyAnswered},
+	{"tracker.ErrBadQuery", tracker.ErrBadQuery},
 	{"tracker.ErrBulkInFlight", tracker.ErrBulkInFlight},
 	{"tracker.ErrForbidden", tracker.ErrForbidden},
 	{"tracker.ErrInboxFull", tracker.ErrInboxFull},
@@ -58,9 +69,11 @@ var sentinels = []sentinel{
 	{"tracker.ErrNoProject", tracker.ErrNoProject},
 	{"tracker.ErrNoTask", tracker.ErrNoTask},
 	{"tracker.ErrNoType", tracker.ErrNoType},
+	{"tracker.ErrNotAuthor", tracker.ErrNotAuthor},
 	{"tracker.ErrNothingToRestore", tracker.ErrNothingToRestore},
 	{"tracker.ErrReassignmentBudget", tracker.ErrReassignmentBudget},
 	{"tracker.ErrReparentAcrossProjects", tracker.ErrReparentAcrossProjects},
+	{"tracker.ErrRestoresOthers", tracker.ErrRestoresOthers},
 	{"tracker.ErrStaleVersion", tracker.ErrStaleVersion},
 	{"tracker.ErrStepUnresolved", tracker.ErrStepUnresolved},
 	{"tracker.ErrStepUnvouched", tracker.ErrStepUnvouched},
@@ -72,7 +85,9 @@ var sentinels = []sentinel{
 	{"pages.ErrInvalid", pages.ErrInvalid},
 	{"pages.ErrNoActivation", pages.ErrNoActivation},
 	{"pages.ErrNotFound", pages.ErrNotFound},
+	{"pages.ErrNotInTrash", pages.ErrNotInTrash},
 	{"pages.ErrParent", pages.ErrParent},
+	{"pages.ErrReserved", pages.ErrReserved},
 	{"pages.ErrStaleVersion", pages.ErrStaleVersion},
 	{"pages.ErrTitleTaken", pages.ErrTitleTaken},
 
@@ -102,8 +117,10 @@ var sentinels = []sentinel{
 
 	{"statelog.ErrAheadOfLog", statelog.ErrAheadOfLog},
 	{"statelog.ErrConflict", statelog.ErrConflict},
+	{"statelog.ErrDonorConnectionClosed", statelog.ErrDonorConnectionClosed},
 	{"statelog.ErrEstateNotRestored", statelog.ErrEstateNotRestored},
 	{"statelog.ErrExists", statelog.ErrExists},
+	{"statelog.ErrForeignPosition", statelog.ErrForeignPosition},
 	{"statelog.ErrGenerationPassed", statelog.ErrGenerationPassed},
 	{"statelog.ErrLogDiverged", statelog.ErrLogDiverged},
 	{"statelog.ErrLogTruncated", statelog.ErrLogTruncated},
@@ -111,11 +128,84 @@ var sentinels = []sentinel{
 	{"statelog.ErrNoOffer", statelog.ErrNoOffer},
 	{"statelog.ErrPositionRange", statelog.ErrPositionRange},
 	{"statelog.ErrReanchorRefused", statelog.ErrReanchorRefused},
+	{"statelog.ErrRecordTampered", statelog.ErrRecordTampered},
+	{"statelog.ErrRecordUnverified", statelog.ErrRecordUnverified},
 	{"statelog.ErrStopped", statelog.ErrStopped},
 	{"statelog.ErrStreamRecreated", statelog.ErrStreamRecreated},
 	{"statelog.ErrUnavailable", statelog.ErrUnavailable},
+	{"statelog.ErrUnsigned", statelog.ErrUnsigned},
 	{"statelog.ErrWaitAbandoned", statelog.ErrWaitAbandoned},
 	{"statelog.ErrWrongStream", statelog.ErrWrongStream},
+
+	// THE IDENTITY DIRECTORY'S, which a node holding no data reads through
+	// a data node ([opIdentityBinding], [opSeatHolders]) — and the identity
+	// vocabulary's and the session's, which the questions a person verb is
+	// decided on answer in ([iam.Holders], [session.ResolveSeat]).
+	{"iamdomain.ErrCollapsed", iamdomain.ErrCollapsed},
+	{"iamdomain.ErrInvalid", iamdomain.ErrInvalid},
+	{"iamdomain.ErrInvalidLogin", iamdomain.ErrInvalidLogin},
+	{"iamdomain.ErrInvalidToken", iamdomain.ErrInvalidToken},
+	{"iamdomain.ErrNoBlindKey", iamdomain.ErrNoBlindKey},
+	{"iamdomain.ErrNoCompany", iamdomain.ErrNoCompany},
+	{"iamdomain.ErrNoInvitation", iamdomain.ErrNoInvitation},
+	{"iamdomain.ErrNotCurrent", iamdomain.ErrNotCurrent},
+	{"iamdomain.ErrNotEnrollable", iamdomain.ErrNotEnrollable},
+	{"iamdomain.ErrNotFindable", iamdomain.ErrNotFindable},
+	{"iamdomain.ErrNotFound", iamdomain.ErrNotFound},
+	{"iamdomain.ErrOperationReused", iamdomain.ErrOperationReused},
+	{"iamdomain.ErrRefused", iamdomain.ErrRefused},
+	{"iamdomain.ErrSeatRequired", iamdomain.ErrSeatRequired},
+	{"iamdomain.ErrTokenRefused", iamdomain.ErrTokenRefused},
+
+	{"iam.ErrHolderUnseated", iam.ErrHolderUnseated},
+	{"iam.ErrInvalidPrincipal", iam.ErrInvalidPrincipal},
+	{"iam.ErrNoHolder", iam.ErrNoHolder},
+	{"iam.ErrUnresolved", iam.ErrUnresolved},
+
+	{"session.ErrMalformed", session.ErrMalformed},
+	{"session.ErrNoCompany", session.ErrNoCompany},
+	{"session.ErrNoKeyring", session.ErrNoKeyring},
+
+	// THE ARTIFACTS ESTATE'S, which every data node answers for a node
+	// holding no data ([Artifacts]), and the vocabulary's beneath it: an
+	// audience, an id or a label a write refused, and the manifest grammar's
+	// and the media table's refusals a publish wraps.
+	{"artifactsdomain.ErrAboveOwnRole", artifactsdomain.ErrAboveOwnRole},
+	{"artifactsdomain.ErrAgentCompanyShare", artifactsdomain.ErrAgentCompanyShare},
+	{"artifactsdomain.ErrBadCursor", artifactsdomain.ErrBadCursor},
+	{"artifactsdomain.ErrConflict", artifactsdomain.ErrConflict},
+	{"artifactsdomain.ErrInvalid", artifactsdomain.ErrInvalid},
+	{"artifactsdomain.ErrLabelTaken", artifactsdomain.ErrLabelTaken},
+	{"artifactsdomain.ErrNotFound", artifactsdomain.ErrNotFound},
+	{"artifactsdomain.ErrNotInTrash", artifactsdomain.ErrNotInTrash},
+	{"artifactsdomain.ErrPurged", artifactsdomain.ErrPurged},
+	{"artifactsdomain.ErrPurging", artifactsdomain.ErrPurging},
+	{"artifactsdomain.ErrSourceTaken", artifactsdomain.ErrSourceTaken},
+	{"artifactsdomain.ErrTrashed", artifactsdomain.ErrTrashed},
+	{"artifactsdomain.ErrUploadStale", artifactsdomain.ErrUploadStale},
+
+	{"artifacts.ErrInvalidAudience", artifacts.ErrInvalidAudience},
+	{"artifacts.ErrInvalidID", artifacts.ErrInvalidID},
+	{"artifacts.ErrInvalidLabel", artifacts.ErrInvalidLabel},
+	{"manifest.ErrInvalid", manifest.ErrInvalid},
+	{"manifest.ErrReserved", manifest.ErrReserved},
+	{"mediatype.ErrRefused", mediatype.ErrRefused},
+
+	// THE DATASTORE'S, answered by a data node for a node holding no data
+	// ([ArtifactData]), and its encoder's and query compiler's beneath it.
+	{"artifactdata.ErrBadCursor", artifactdata.ErrBadCursor},
+	{"artifactdata.ErrConflict", artifactdata.ErrConflict},
+	{"artifactdata.ErrForbidden", artifactdata.ErrForbidden},
+	{"artifactdata.ErrGone", artifactdata.ErrGone},
+	{"artifactdata.ErrInvalid", artifactdata.ErrInvalid},
+	{"artifactdata.ErrMigrationTooLarge", artifactdata.ErrMigrationTooLarge},
+	{"artifactdata.ErrNotFound", artifactdata.ErrNotFound},
+	{"artifactdata.ErrNotUndoable", artifactdata.ErrNotUndoable},
+	{"canon.ErrDuplicateKey", canon.ErrDuplicateKey},
+	{"canon.ErrInvalid", canon.ErrInvalid},
+	{"canon.ErrTooDeep", canon.ErrTooDeep},
+	{"query.ErrInvalid", query.ErrInvalid},
+	{"query.ErrNotIndexed", query.ErrNotIndexed},
 
 	{"estate.ErrOutcomeUnknown", ErrOutcomeUnknown},
 }
@@ -137,6 +227,7 @@ var typedKinds = []typedKind{
 	{"tracker.ErrAmbiguous", reflect.TypeFor[*tracker.ErrAmbiguous]()},
 	{"tracker.ErrAmbiguousAnswer", reflect.TypeFor[*tracker.ErrAmbiguousAnswer]()},
 	{"tracker.ErrFutureVersion", reflect.TypeFor[*tracker.ErrFutureVersion]()},
+	{"tracker.MoveStopped", reflect.TypeFor[*tracker.MoveStopped]()},
 	{"tracker.SubtreeStopped", reflect.TypeFor[*tracker.SubtreeStopped]()},
 	{"tracker.TagClash", reflect.TypeFor[*tracker.TagClash]()},
 	{"tracker.TagsFull", reflect.TypeFor[*tracker.TagsFull]()},
@@ -152,11 +243,27 @@ var typedKinds = []typedKind{
 	{"code.ErrFutureVersion", reflect.TypeFor[*code.ErrFutureVersion]()},
 	{"code.TooWideError", reflect.TypeFor[*code.TooWideError]()},
 
+	{"statelog.CallerOpIDError", reflect.TypeFor[*statelog.CallerOpIDError]()},
 	{"statelog.ErrSkipped", reflect.TypeFor[*statelog.ErrSkipped]()},
 	{"statelog.EvictionRefusal", reflect.TypeFor[*statelog.EvictionRefusal]()},
 	{"statelog.ReadmissionRefusal", reflect.TypeFor[*statelog.ReadmissionRefusal]()},
 	{"statelog.Refused", reflect.TypeFor[*statelog.Refused]()},
 	{"statelog.Unavailable", reflect.TypeFor[*statelog.Unavailable]()},
+
+	{"iamdomain.ErrFutureVersion", reflect.TypeFor[*iamdomain.ErrFutureVersion]()},
+	{"iamdomain.ErrTaken", reflect.TypeFor[*iamdomain.ErrTaken]()},
+	{"iamdomain.ErrUnknownVersion", reflect.TypeFor[iamdomain.ErrUnknownVersion]()},
+	{"iamdomain.InvitationRedeemed", reflect.TypeFor[*iamdomain.InvitationRedeemed]()},
+
+	{"iam.LookRefused", reflect.TypeFor[*iam.LookRefused]()},
+
+	{"artifactsdomain.CarriedObjectGone", reflect.TypeFor[*artifactsdomain.CarriedObjectGone]()},
+	{"artifactsdomain.ErrFutureVersion", reflect.TypeFor[*artifactsdomain.ErrFutureVersion]()},
+	{"artifactsdomain.QuotaExceeded", reflect.TypeFor[*artifactsdomain.QuotaExceeded]()},
+	{"artifactsdomain.VersionMoved", reflect.TypeFor[*artifactsdomain.VersionMoved]()},
+
+	{"artifactdata.ErrFutureVersion", reflect.TypeFor[*artifactdata.ErrFutureVersion]()},
+	{"artifactdata.RateLimited", reflect.TypeFor[*artifactdata.RateLimited]()},
 
 	{"estate.ErrUnserved", reflect.TypeFor[*ErrUnserved]()},
 }

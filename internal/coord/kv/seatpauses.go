@@ -9,6 +9,7 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -16,41 +17,45 @@ import (
 
 // ---- seat pauses -------------------------------------------------------- //
 
-// A pause is filed in the positions register under its own class — see
-// [coord.SeatPauseKey] for why that bucket, which is the one with no age.
+// A pause is filed in the positions register under its own class, by the
+// seat's id — see [coord.SeatPauseKey] for why that bucket, which is the one
+// with no age, and the file doc of internal/coord/seatpause.go for why the id.
 
-// SeatPause reads one seat's pause.
-func (f *FleetStore) SeatPause(ctx context.Context, handle string) (coord.SeatPause, bool, error) {
-	if handle == "" {
-		return coord.SeatPause{}, false, errors.New("coord/kv: a seat pause needs a handle")
+// SeatPause reads one seat's pause, by the seat's id.
+func (f *FleetStore) SeatPause(ctx context.Context, seat uuid.UUID) (coord.SeatPause, bool, error) {
+	if seat == uuid.Nil {
+		return coord.SeatPause{}, false, errors.New("coord/kv: a seat pause needs a seat id")
 	}
-	entry, err := f.get(ctx, f.positions, coord.SeatPauseKey(handle))
+	entry, err := f.get(ctx, f.positions, coord.SeatPauseKey(seat))
 	switch {
 	case errors.Is(err, jetstream.ErrKeyNotFound):
 		return coord.SeatPause{}, false, nil
 	case err != nil:
-		return coord.SeatPause{}, false, unavailable("read the pause of seat "+handle, err)
+		return coord.SeatPause{}, false, unavailable("read the pause of seat "+seat.String(), err)
 	}
-	p, err := decodeSeatPause(handle, entry.Value(), entry.Revision())
+	p, err := decodeSeatPause(seat, entry.Value(), entry.Revision())
 	if err != nil {
 		return coord.SeatPause{}, false, err
 	}
 	return p, true, nil
 }
 
-// ListSeatPauses returns every pause, ordered by handle.
+// ListSeatPauses returns every pause, ordered by seat id.
 //
 // A DECODE FAILURE IS RAISED, not skipped: a pause dropped from this listing is
-// a paused seat every node reads as free to work.
+// a paused seat every node reads as free to work. A KEY that names no seat id
+// is skipped instead — this build files no pause under one, so no seat it
+// runs is paused by it, and raising would let one stray key unpause nothing
+// while stopping every node from reading the pauses that do exist.
 func (f *FleetStore) ListSeatPauses(ctx context.Context) ([]coord.SeatPause, error) {
 	var out []coord.SeatPause
 	err := f.eachUnder(ctx, f.positions, coord.DocumentFilter(coord.SeatPauseClass),
 		"the seat pauses", func(kve jetstream.KeyValueEntry) error {
-			handle, ok := seatPauseHandle(kve.Key())
+			seat, ok := coord.SeatPauseSeat(kve.Key())
 			if !ok {
 				return nil
 			}
-			p, err := decodeSeatPause(handle, kve.Value(), kve.Revision())
+			p, err := decodeSeatPause(seat, kve.Value(), kve.Revision())
 			if err != nil {
 				return err
 			}
@@ -60,7 +65,9 @@ func (f *FleetStore) ListSeatPauses(ctx context.Context) ([]coord.SeatPause, err
 	if err != nil {
 		return nil, err
 	}
-	slices.SortFunc(out, func(a, b coord.SeatPause) int { return cmp.Compare(a.Handle, b.Handle) })
+	slices.SortFunc(out, func(a, b coord.SeatPause) int {
+		return cmp.Compare(a.Seat.String(), b.Seat.String())
+	})
 	return out, nil
 }
 
@@ -79,12 +86,12 @@ func (f *FleetStore) CreateSeatPause(ctx context.Context, p coord.SeatPause) (co
 	if err != nil {
 		return coord.SeatPause{}, false, err
 	}
-	revision, err := f.create(ctx, f.positions, coord.SeatPauseKey(p.Handle), raw)
+	revision, err := f.create(ctx, f.positions, coord.SeatPauseKey(p.Seat), raw)
 	switch {
 	case errors.Is(err, jetstream.ErrKeyExists):
 		return coord.SeatPause{}, false, nil
 	case err != nil:
-		return coord.SeatPause{}, false, unavailable("pause seat "+p.Handle, err)
+		return coord.SeatPause{}, false, unavailable("pause seat "+p.Seat.String(), err)
 	}
 	return storedSeatPause(p, revision), true, nil
 }
@@ -104,12 +111,12 @@ func (f *FleetStore) UpdateSeatPause(ctx context.Context, p coord.SeatPause) (co
 	if err != nil {
 		return coord.SeatPause{}, false, err
 	}
-	revision, err := f.positions.Update(ctx, coord.SeatPauseKey(p.Handle), raw, p.Version)
+	revision, err := f.positions.Update(ctx, coord.SeatPauseKey(p.Seat), raw, p.Version)
 	switch {
 	case err != nil && lostUpdateRace(err):
 		return coord.SeatPause{}, false, nil
 	case err != nil:
-		return coord.SeatPause{}, false, unavailable("amend the pause of seat "+p.Handle, err)
+		return coord.SeatPause{}, false, unavailable("amend the pause of seat "+p.Seat.String(), err)
 	}
 	return storedSeatPause(p, revision), true, nil
 }
@@ -118,9 +125,9 @@ func (f *FleetStore) UpdateSeatPause(ctx context.Context, p coord.SeatPause) (co
 //
 // PURGE rather than delete, on this estate's standing rule: a delete leaves a
 // tombstone revision in a bucket with no age, which outlives the deployment.
-func (f *FleetStore) DeleteSeatPause(ctx context.Context, handle string, version uint64) (bool, error) {
-	if handle == "" {
-		return false, errors.New("coord/kv: a seat pause needs a handle")
+func (f *FleetStore) DeleteSeatPause(ctx context.Context, seat uuid.UUID, version uint64) (bool, error) {
+	if seat == uuid.Nil {
+		return false, errors.New("coord/kv: a seat pause needs a seat id")
 	}
 	if version == 0 {
 		// The client drops a LastRevision of 0 and purges unconditionally,
@@ -128,14 +135,14 @@ func (f *FleetStore) DeleteSeatPause(ctx context.Context, handle string, version
 		// is there — somebody else's included.
 		return false, nil
 	}
-	err := f.positions.Purge(ctx, coord.SeatPauseKey(handle), jetstream.LastRevision(version))
+	err := f.positions.Purge(ctx, coord.SeatPauseKey(seat), jetstream.LastRevision(version))
 	switch {
 	case err == nil:
 		return true, nil
 	case lostUpdateRace(err):
 		return false, nil
 	default:
-		return false, unavailable("resume seat "+handle, err)
+		return false, unavailable("resume seat "+seat.String(), err)
 	}
 }
 
@@ -163,6 +170,19 @@ func (f *FleetStore) DeleteSeatPause(ctx context.Context, handle string, version
 // is the call's error rather than a closed channel: there is no answer for a
 // consumer to have stopped hearing. A record in it this build cannot read
 // fails the call the same way, naming the seat.
+//
+// # A change after the answer is the consumer's, and filtered by revision
+//
+// Every update after the answer comes off the same consumer, which is a
+// replica's copy (walk.go): a change it delivers can be LATE, never wrong in
+// order, because the consumer delivers a key's revisions in the order the
+// stream holds them. The revision filter below is what keeps a late one from
+// undoing a newer one the answer already holds, so the worst a lagging replica
+// costs a node is the lag itself — a pause or a resume taken up a moment
+// later, never one taken back. Confirming each change with a leader read would
+// close that lag too, at a read per change on every node; it is not done,
+// because a pause is a person's gesture and a moment's lag in honouring one
+// moves no work that a fence does not already stop.
 func (f *FleetStore) WatchSeatPauses(ctx context.Context) (<-chan coord.SeatPauseUpdate, error) {
 	current, w, err := watchUnder(ctx, f.js, f.positions,
 		coord.DocumentFilter(coord.SeatPauseClass), "the seat pauses")
@@ -176,11 +196,11 @@ func (f *FleetStore) WatchSeatPauses(ctx context.Context) (<-chan coord.SeatPaus
 	for _, key := range slices.Sorted(maps.Keys(current)) {
 		kve := current[key]
 		held[key] = kve.Revision()
-		handle, ok := seatPauseHandle(key)
+		seat, ok := coord.SeatPauseSeat(key)
 		if !ok || kve.Operation() != jetstream.KeyValuePut {
 			continue
 		}
-		p, err := decodeSeatPause(handle, kve.Value(), kve.Revision())
+		p, err := decodeSeatPause(seat, kve.Value(), kve.Revision())
 		if err != nil {
 			// RAISED rather than skipped, as the listing raises it: a
 			// pause dropped from the answer is a seat every node reads
@@ -188,7 +208,7 @@ func (f *FleetStore) WatchSeatPauses(ctx context.Context) (<-chan coord.SeatPaus
 			_ = w.Stop()
 			return nil, err
 		}
-		answer = append(answer, coord.SeatPauseUpdate{Handle: handle, Pause: &p})
+		answer = append(answer, coord.SeatPauseUpdate{Seat: seat, Pause: &p})
 	}
 	answer = append(answer, coord.SeatPauseUpdate{Current: true})
 
@@ -226,7 +246,7 @@ func (f *FleetStore) WatchSeatPauses(ctx context.Context) (<-chan coord.SeatPaus
 					// never: the certified answer has already ended them.
 					continue
 				}
-				handle, ok := seatPauseHandle(kve.Key())
+				seat, ok := coord.SeatPauseSeat(kve.Key())
 				if !ok {
 					continue
 				}
@@ -239,15 +259,15 @@ func (f *FleetStore) WatchSeatPauses(ctx context.Context) (<-chan coord.SeatPaus
 					continue
 				}
 				held[kve.Key()] = kve.Revision()
-				u := coord.SeatPauseUpdate{Handle: handle}
+				u := coord.SeatPauseUpdate{Seat: seat}
 				if op := kve.Operation(); op != jetstream.KeyValueDelete && op != jetstream.KeyValuePurge {
-					p, err := decodeSeatPause(handle, kve.Value(), kve.Revision())
+					p, err := decodeSeatPause(seat, kve.Value(), kve.Revision())
 					if err != nil {
 						// A record this build cannot read ends the watch
 						// rather than being skipped: skipped, it would
 						// be a pause every node forgot. The consumer
 						// watches again and logs the same failure.
-						log.WarnContext(ctx, "seat_pause_undecodable", "handle", handle,
+						log.WarnContext(ctx, "seat_pause_undecodable", "seat", seat.String(),
 							"error", err.Error())
 						return
 					}
@@ -262,32 +282,23 @@ func (f *FleetStore) WatchSeatPauses(ctx context.Context) (<-chan coord.SeatPaus
 	return out, nil
 }
 
-// seatPauseHandle recovers the handle from a key of the pause class.
-func seatPauseHandle(key string) (string, bool) {
-	segments, ok := coord.DocumentSegments(key)
-	if !ok || len(segments) != 2 || segments[0] != coord.SeatPauseClass {
-		return "", false
-	}
-	return segments[1], true
-}
-
 func encodeSeatPause(p coord.SeatPause) ([]byte, error) {
 	p.At = p.At.UTC()
 	raw, err := json.Marshal(p)
 	if err != nil {
-		return nil, fmt.Errorf("coord/kv: encode the pause of seat %s: %w", p.Handle, err)
+		return nil, fmt.Errorf("coord/kv: encode the pause of seat %s: %w", p.Seat, err)
 	}
 	return raw, nil
 }
 
-// decodeSeatPause reads a record back, with the handle taken from the KEY: a
+// decodeSeatPause reads a record back, with the seat taken from the KEY: a
 // record cannot describe a seat other than the one it is filed under.
-func decodeSeatPause(handle string, raw []byte, version uint64) (coord.SeatPause, error) {
+func decodeSeatPause(seat uuid.UUID, raw []byte, version uint64) (coord.SeatPause, error) {
 	var p coord.SeatPause
 	if err := json.Unmarshal(raw, &p); err != nil {
-		return coord.SeatPause{}, unavailable("decode the pause of seat "+handle, err)
+		return coord.SeatPause{}, unavailable("decode the pause of seat "+seat.String(), err)
 	}
-	p.Handle = handle
+	p.Seat = seat
 	p.At = p.At.UTC()
 	p.Version = version
 	return p, nil

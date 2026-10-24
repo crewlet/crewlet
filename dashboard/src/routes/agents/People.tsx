@@ -1,5 +1,5 @@
 /**
- * Agents › Roster: everyone in the company, and what each of them is doing.
+ * Org chart › Roster: everyone in the company, and what each of them is doing.
  *
  * The list is grouped by RUN STATE by default rather than by unit, because the
  * question this screen is opened with is "who is working / who stopped", and a
@@ -17,21 +17,20 @@
  * still spending tokens. It has no page to link to, so its card is not a link.
  */
 
+import { useServicesRun } from "~/lib/services.ts";
 import { useMemo } from "react";
 import { useNow } from "~/lib/clock.ts";
 import { fmtMinutes } from "~/lib/work.ts";
 import { plural } from "~/lib/format.ts";
 import { href, useParam } from "~/app/router.tsx";
 import { SeatCard, Section } from "~/components/common.tsx";
-import { Card, cx, EmptyState, EmptyValue, Tag } from "@crewlethq/ui";
+import { Card, cx, EmptyState, EmptyValue, SegmentedControl, Tag } from "@crewlethq/ui";
 import { UsersGlyph } from "@crewlethq/icons/glyphs";
-// OURS, AND DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
-// `semantics`: `radio` commits the option the arrows land on. Both strips here
-// drive a `useTab`, which pushes a history entry — and the view strip swaps the
-// screen for a table that fires `work_workload`. See the report.
-import { Segmented } from "~/ui/primitives.tsx";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { TRACKER } from "~/lib/access.ts";
+import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
 import { QueryState } from "~/components/common.tsx";
 import {
   activityOf,
@@ -52,6 +51,8 @@ import { useTab } from "~/app/frame/tabs.ts";
 import { AgentsHeader, useAgentsCounts } from "./header.tsx";
 
 const VIEWS = ["seats", "workload"] as const;
+/** The views a company running no Crewlet Works is offered: the workload is its open tasks. */
+const SEATS_ONLY = ["seats"] as const;
 
 const GROUPINGS = ["state", "unit", "flat"] as const;
 type Grouping = (typeof GROUPINGS)[number];
@@ -68,7 +69,13 @@ type Grouping = (typeof GROUPINGS)[number];
  * absolute number that is "full".
  */
 function Workload({ seats, needle }: { seats: Seat[]; needle: string }) {
-  const answer = useQuery("work_workload", undefined, { pollMs: 60_000 });
+  // THE TRACKER'S QUESTION, asked only of a reader holding Tracker: who holds
+  // how much open work is the tracker's to say.
+  const viewer = useViewer();
+  const answer = useQuery("work_workload", undefined, {
+    pollMs: 60_000,
+    enabled: viewer.tracker,
+  });
   // THE BAR'S "FIND A SEAT" NARROWS THIS VIEW TOO, by the fields a load row
   // has: who it is and where they sit. The bar stays the same field whichever
   // view is open, so it has to mean something on both.
@@ -87,9 +94,13 @@ function Workload({ seats, needle }: { seats: Seat[]; needle: string }) {
   // rather than per row, so every track on the table is drawn against the
   // same number.
   const heaviest = useMemo(() => rows.reduce((n, load) => Math.max(n, load.open), 0), [rows]);
+  if (!viewer.loading && !viewer.tracker) {
+    return <GrantRequired grants={[TRACKER]} reader={viewer.login} size="compact" />;
+  }
   return (
     <QueryState
       error={answer.error}
+      refusal={answer.refusal}
       loading={answer.loading}
       empty={
         rows.length
@@ -97,11 +108,11 @@ function Workload({ seats, needle }: { seats: Seat[]; needle: string }) {
           : needle
             ? {
                 title: "Nobody matching holds any work",
-                hint: "Find a seat matches a person's name, handle or unit.",
+                hint: "Search by name, handle or team.",
               }
             : {
                 title: "Nobody holds any work",
-                hint: "No open task on this node's copy of the tracker is assigned to anybody.",
+                hint: "Assigned open tasks appear here.",
               }
       }
     >
@@ -119,12 +130,7 @@ function Workload({ seats, needle }: { seats: Seat[]; needle: string }) {
           ))}
         </div>
       </Card>
-      {answer.data?.truncated && (
-        <PageNote>
-          More people hold work than this answer names. It stops at a cap rather than scanning a
-          company without one.
-        </PageNote>
-      )}
+      {answer.data?.truncated && <PageNote>Only part of the list is shown.</PageNote>}
     </QueryState>
   );
 }
@@ -142,14 +148,14 @@ function LoadRow({ load, heaviest }: { load: Load; heaviest: number }) {
       {/* A DEAD LINK UNTIL NOW: this hand-built `#/company/seats/…` named a
           segment Company routes nothing under, so every name in this table
           landed on "there is no such screen". A seat's page is
-          `#/agents/seats/{handle}`, and `href` is what spells it — the one
+          `#/company/org/seats/{handle}`, and `href` is what spells it, the one
           place the route and its encoding are written down. A plain click
           peeks instead, which on this table is the whole point: the question
           is who is carrying the most, and answering it should not cost the row
           the reader was comparing against. */}
       <a
         className="wl-who"
-        href={href(["agents", "seats", load.handle])}
+        href={href(["company", "org", "seats", load.handle])}
         onClick={rowPeekHandler(() => openPeek({ kind: "seat", id: load.handle }))}
       >
         <span className="truncate">{load.seat?.name ?? load.handle}</span>
@@ -240,7 +246,10 @@ function bucketOf(seat: Seat | null, agent: AgentRow | undefined): string {
 export function People() {
   const agents = useAgents();
   const org = useOrg();
-  const [view, setView] = useTab("view", VIEWS);
+  // THE WORKLOAD IS CREWLET WORKS' OPEN TASKS, and not offered where the
+  // company runs none: the roster is its seats alone.
+  const runs = useServicesRun();
+  const [view, setView] = useTab<(typeof VIEWS)[number]>("view", runs.tracker ? VIEWS : SEATS_ONLY);
   // A GROUPING IS A FILTER, not a section, which is `tabs.ts`'s own
   // distinction: a section is the page you are on and takes the number keys,
   // a filter narrows what is on it and leaves them alone. Declared as a
@@ -266,15 +275,27 @@ export function People() {
   const rows = useMemo<Row[]>(() => {
     const matches = (...fields: (string | undefined)[]) =>
       !needle || fields.some((f) => f?.toLowerCase().includes(needle));
-    const inChart = new Set(index.seats.map((s) => s.name));
-    const byRole = new Map(agents.map((a) => [a.role, a]));
+    // EACH SEAT'S ROW BY ITS HANDLE — the roster row's `id` — never by its
+    // name, which two seats may share.
+    const inChart = new Set(index.seats.map((s) => s.handle).filter(Boolean));
+    const byHandle = new Map(agents.map((a) => [a.id, a]));
     const out: Row[] = [
       ...index.seats
         .filter((s) => matches(s.name, s.handle, s.goal, s.unit?.name))
-        .map((seat) => ({ key: seat.key, name: seat.name, seat, agent: byRole.get(seat.name) })),
+        .map((seat) => ({
+          key: seat.key,
+          name: seat.name,
+          seat,
+          agent: seat.handle ? byHandle.get(seat.handle) : undefined,
+        })),
       ...agents
-        .filter((a) => !inChart.has(a.role) && matches(a.role, a.handle))
-        .map((agent) => ({ key: `removed:${agent.role}`, name: agent.role, seat: null, agent })),
+        .filter((a) => !inChart.has(a.id) && matches(a.role, a.handle))
+        .map((agent) => ({
+          key: `removed:${agent.agent_id}`,
+          name: agent.role,
+          seat: null,
+          agent,
+        })),
     ];
     // By NAME. Never by a field that a live push moves.
     return out.sort((a, b) => a.name.localeCompare(b.name));
@@ -285,9 +306,7 @@ export function People() {
     if (group === "unit") {
       const byUnit = new Map<string, typeof rows>();
       for (const row of rows) {
-        const key = row.seat
-          ? (row.seat.unit?.name ?? "No unit — org-wide")
-          : "Removed from the company";
+        const key = row.seat ? (row.seat.unit?.name ?? "No team") : "Removed from the company";
         byUnit.set(key, [...(byUnit.get(key) ?? []), row]);
       }
       return [...byUnit.entries()]
@@ -382,10 +401,12 @@ export function People() {
       <div className="toolbar">
         <span className="spacer" />
         {view === "seats" && (
-          <Segmented<Grouping>
-            ariaLabel="Grouping"
+          <SegmentedControl<Grouping>
+            semantics="radio"
+            activate="manual"
+            label="Grouping"
             value={group}
-            onChange={setGroup}
+            onValueChange={setGroup}
             options={[
               { value: "state", label: "By state" },
               { value: "unit", label: "By unit" },
@@ -396,15 +417,19 @@ export function People() {
         {/* THE VIEW IS A PLACE, so it pushes history: somebody who opened the
             workload and pressed back expects the roster, not the screen
             before this one. */}
-        <Segmented<(typeof VIEWS)[number]>
-          ariaLabel="View"
-          value={view}
-          onChange={setView}
-          options={[
-            { value: "seats", label: "Seats" },
-            { value: "workload", label: "Workload" },
-          ]}
-        />
+        {runs.tracker && (
+          <SegmentedControl<(typeof VIEWS)[number]>
+            semantics="radio"
+            activate="manual"
+            label="View"
+            value={view}
+            onValueChange={setView}
+            options={[
+              { value: "seats", label: "Seats" },
+              { value: "workload", label: "Workload" },
+            ]}
+          />
+        )}
       </div>
 
       {view === "workload" && <Workload seats={index.seats} needle={needle} />}
@@ -413,11 +438,7 @@ export function People() {
         <EmptyState
           icon={<UsersGlyph size={32} />}
           title={q ? `No seat matches “${q}”` : "This company has no seats"}
-          description={
-            q
-              ? "Find a seat matches a seat's name, handle, goal or unit."
-              : "Roles are defined in the company configuration. Import one to spawn seats."
-          }
+          description={q ? "Search by name, handle, goal or team." : "Add seats in Edit org."}
         />
       )}
 

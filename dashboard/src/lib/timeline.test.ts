@@ -5,6 +5,7 @@ import {
   MinTimelineDays,
   barTitle,
   daysBetween,
+  monthDay,
   shiftDay,
   timelineOf,
   weekTicks,
@@ -61,7 +62,9 @@ describe("where a bar sits", () => {
     expect(bar.kind).toBe("inverted");
     expect(bar.fromDay).toBe("2026-06-10");
     expect(bar.toDay).toBe("2026-06-20");
-    expect(barTitle(bar)).toContain("the wrong way round");
+    expect(barTitle(bar)).toBe(
+      `Due ${monthDay("2026-06-10")}, before its start ${monthDay("2026-06-20")}`,
+    );
   });
 
   it("leaves a row with neither date off the axis rather than placing it", () => {

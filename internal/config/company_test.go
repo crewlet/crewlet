@@ -2,10 +2,10 @@ package config
 
 import (
 	"errors"
-	"slices"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/atlassianhost"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 )
@@ -605,11 +605,6 @@ integrations:
 func TestOrgRulesAreEnforcedThroughTheConfig(t *testing.T) {
 	t.Parallel()
 
-	t.Run("a human seat needs a contact", func(t *testing.T) {
-		t.Parallel()
-		rejects(t, "name: Acme\nroles:\n  - name: Founder\n    kind: human\n", "Founder")
-	})
-
 	t.Run("a human seat rejects runtime fields", func(t *testing.T) {
 		t.Parallel()
 		err := rejects(t, `
@@ -630,16 +625,26 @@ roles:
 		rejects(t, "name: Acme\nroles:\n  - {name: \"Agent CEO\"}\n  - {name: \"agent ceo\"}\n", "duplicate handle")
 	})
 
-	t.Run("two seats sharing a name on distinct handles", func(t *testing.T) {
-		t.Parallel()
-		rejects(t, "name: Acme\nroles:\n  - {name: Dev, handle: dev-one}\n  - {name: Dev, handle: dev-two}\n",
-			"duplicate seat name")
-	})
-
-	t.Run("two units sharing a name in different branches", func(t *testing.T) {
+	t.Run("two units keyed alike in different branches", func(t *testing.T) {
 		t.Parallel()
 		rejects(t, "name: Acme\nunits:\n  - {name: Core, children: [{name: Platform}]}\n"+
-			"  - {name: Edge, children: [{name: Platform}]}\n", "duplicate unit name")
+			"  - {name: Edge, children: [{name: Platform}]}\n", "duplicate unit key")
+	})
+
+	// A NAME IS PROSE: two seats or two units may share one on distinct
+	// addresses, since nothing references either by its name.
+	t.Run("two seats and two units sharing names on distinct addresses", func(t *testing.T) {
+		t.Parallel()
+		c, err := ParseCompany([]byte("name: Acme\n" +
+			"roles:\n  - {name: Dev, handle: dev-one}\n  - {name: Dev, handle: dev-two}\n" +
+			"units:\n  - {name: Core, id: core, children: [{name: Platform, id: core-platform}]}\n" +
+			"  - {name: Edge, id: edge, children: [{name: Platform, id: edge-platform}]}\n"))
+		if err != nil {
+			t.Fatalf("a document sharing names on distinct addresses was refused: %v", err)
+		}
+		if err := c.Validate(); err != nil {
+			t.Fatalf("a document sharing names on distinct addresses was refused: %v", err)
+		}
 	})
 
 	t.Run("a malformed explicit handle", func(t *testing.T) {
@@ -657,6 +662,45 @@ roles:
       - {name: standup, cron: "9 * *", task: post}
 `, "cron")
 	})
+}
+
+// A HUMAN SEAT WITH NO CONTACT IDENTITY IS A COMPANY THE CONFIG ACCEPTS, on
+// both classes of rule. A person who works through the dashboard is bound to
+// the seat in the identity directory and has no chat account to write down.
+// Refusing the document refused them. That nobody can be MESSAGED at the seat is a warning, at the seat's
+// `contact` — and the control is the same seat with an identity, which warns
+// about nothing.
+func TestAHumanSeatWithNoContactIsAValidCompany(t *testing.T) {
+	t.Parallel()
+	cfg := mustCompany(t, "name: Acme\nroles:\n  - name: Founder\n    kind: human\n")
+	if err := cfg.ValidateAdmission(); err != nil {
+		t.Fatalf("ValidateAdmission() = %v, want nil", err)
+	}
+	var unreachable []Warning
+	for _, w := range cfg.AdvisoryWarnings() {
+		if w.Seat == "founder" {
+			unreachable = append(unreachable, w)
+		}
+	}
+	if len(unreachable) != 1 || unreachable[0].Path != "roles[0].contact" ||
+		unreachable[0].Kind != WarningAdvisory {
+		t.Errorf("the founder's warnings = %+v, want one advisory at "+
+			"roles[0].contact saying nobody can be messaged there", unreachable)
+	}
+	reachable := mustCompany(t, "name: Acme\nroles:\n  - name: Founder\n"+
+		"    kind: human\n    contact: {slack_user_id: U0FOUNDER}\n")
+	for _, w := range reachable.AdvisoryWarnings() {
+		if w.Seat == "founder" {
+			t.Errorf("a seat with a contact identity is warned about: %+v", w)
+		}
+	}
+	o, err := cfg.Organization()
+	if err != nil {
+		t.Fatalf("Organization() = %v, want the company to build", err)
+	}
+	if founder := o.Role("founder"); founder == nil || !founder.IsHuman() {
+		t.Fatalf("the founder seat is missing or not human: %+v", founder)
+	}
 }
 
 // A minimal company loads: an org chart can be authored before any
@@ -824,8 +868,8 @@ func TestAnUnknownSurfaceIsTreatedAsDeclared(t *testing.T) {
 //
 // A block with neither `url` nor `cloud_id` has an unknown deployment, and the
 // problem that says so is the only one outstanding. The signing-secret rule
-// fired on it anyway, because "not Cloud" was tested as `cloud == "" &&
-// !IsAtlassianCloud(url)` and an empty url is not a Cloud url.
+// fired on it anyway, because "not Cloud" was tested as "no cloud_id and a
+// url that is not a Cloud host", and an empty url is not one.
 //
 // What that produced is worse than a redundant line. An operator connecting
 // Atlassian — having chosen Atlassian Cloud in the dialog, which is exempt
@@ -852,9 +896,9 @@ func TestAnUnidentifiedAtlassianInstanceAsksOnlyToBeNamed(t *testing.T) {
 			t.Parallel()
 			var err error
 			if tc.in.Jira != nil {
-				err = tc.in.Jira.validate(field(tc.path), false)
+				err = tc.in.Jira.validate(field(tc.path), false, atlassianhost.Unknown)
 			} else {
-				err = tc.in.Confluence.validate(field(tc.path), false)
+				err = tc.in.Confluence.validate(field(tc.path), false, atlassianhost.Unknown)
 			}
 			if err == nil {
 				t.Fatal("a block naming no instance was accepted")
@@ -880,7 +924,7 @@ func TestAnUnidentifiedAtlassianInstanceAsksOnlyToBeNamed(t *testing.T) {
 func TestANamedDataCentreInstanceStillNeedsASigningSecret(t *testing.T) {
 	t.Parallel()
 	jira := &Jira{URL: "https://jira.example.com", Token: "${JIRA_TOKEN}"}
-	err := jira.validate(field("integrations.jira"), false)
+	err := jira.validate(field("integrations.jira"), false, atlassianhost.Unknown)
 	if err == nil || !strings.Contains(err.Error(), "required for a Data Center instance") {
 		t.Fatalf("a Data Center instance was not asked for a signing secret: %v", err)
 	}
@@ -890,7 +934,7 @@ func TestANamedDataCentreInstanceStillNeedsASigningSecret(t *testing.T) {
 func TestACloudSiteIsNotAskedForASigningSecret(t *testing.T) {
 	t.Parallel()
 	jira := &Jira{URL: "https://acme.atlassian.net", Token: "${JIRA_TOKEN}"}
-	if err := jira.validate(field("integrations.jira"), false); err != nil {
+	if err := jira.validate(field("integrations.jira"), false, atlassianhost.Unknown); err != nil {
 		t.Fatalf("a Cloud site was refused: %v", err)
 	}
 }
@@ -938,7 +982,7 @@ func TestAConfluenceBlockWithNoOrganizationStillNeedsASite(t *testing.T) {
 
 // THE RESERVATION IS WHAT KEEPS ONE ADDRESS IN ONE PLACE. An operator who
 // declares the variable and later moves behind a new domain updates
-// integrations.dashboard_base_url, the stale declaration keeps winning, and
+// api.external_url, the stale declaration keeps winning, and
 // every link a person clicks lands nowhere with nothing saying why.
 func TestTheBaseURLVariableIsReserved(t *testing.T) {
 	t.Parallel()
@@ -948,43 +992,11 @@ func TestTheBaseURLVariableIsReserved(t *testing.T) {
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("want ErrConflict, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "integrations.dashboard_base_url") {
+	if !strings.Contains(err.Error(), "api.external_url") {
 		t.Errorf("the refusal must name where the value belongs; got:\n%v", err)
 	}
 
 	// A DIFFERENT name is ordinary. The reservation takes one identifier,
 	// not the idea of an operator-declared URL.
 	mustCompany(t, "name: Acme\nskill_variables:\n  wiki_base_url: https://wiki.example.com\n")
-}
-
-// THE SEATS WITH TURNS ARE EVERY NON-HUMAN ROLE, AT ANY DEPTH.
-//
-// The live projection's boot seed is keyed by this list, so a seat it misses
-// starts every screen at this process's boot, and a human it includes is a
-// seat with no turn seeded as one. A unit nested two deep is the case a
-// top-level walk would silently drop.
-//
-// Mutation: walk c.Roles alone, or drop the human filter, and this fails.
-func TestAgentRolesAreEveryNonHumanSeatAtAnyDepth(t *testing.T) {
-	t.Parallel()
-	c := &Company{
-		Roles: []Role{{Name: "ceo"}, {Name: "founder", Kind: org.KindHuman}},
-		Units: []Unit{{
-			Name:  "eng",
-			Roles: []Role{{Name: "cto"}},
-			Children: []Unit{{
-				Name:  "platform",
-				Roles: []Role{{Name: "sre"}, {Name: "reviewer", Kind: org.KindHuman}},
-			}},
-		}},
-	}
-	got := c.AgentRoles()
-	slices.Sort(got)
-	if want := []string{"ceo", "cto", "sre"}; !slices.Equal(got, want) {
-		t.Errorf("AgentRoles() = %v, want %v", got, want)
-	}
-	var none *Company
-	if got := none.AgentRoles(); got != nil {
-		t.Errorf("a nil company's AgentRoles() = %v, want nil", got)
-	}
 }

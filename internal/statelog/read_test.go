@@ -4,10 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -127,6 +132,11 @@ func TestADoomedReadRefusesBeforeItAppends(t *testing.T) {
 	for name, tc := range map[string]struct {
 		health func() statelog.Health
 		want   statelog.ReadRefusal
+
+		// absent is what the refusal must NOT say: a refusal's detail
+		// reaches every caller, and an applier's own error is a
+		// driver's message or a database path.
+		absent string
 	}{
 		"an evicted node": {
 			health: func() statelog.Health {
@@ -160,13 +170,23 @@ func TestADoomedReadRefusesBeforeItAppends(t *testing.T) {
 			},
 			want: statelog.RefuseStalled,
 		},
+		"a halted applier": {
+			health: func() statelog.Health {
+				h := healthy()
+				h.Err = "apply CREWLET_PROBE_LOG@1:41: open " +
+					"/var/lib/crewlet/replicated.db: disk I/O error"
+				return h
+			},
+			want:   statelog.RefuseStalled,
+			absent: "/var/lib",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			var appends atomic.Int64
 			h := newHarness(t)
 			index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
-				&countingAppends{inner: h.log, n: &appends}, noCeiling(t), probeEncode, h.gen.Load, nil)
+				&countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 			if err != nil {
 				t.Fatalf("NewReadIndex: %v", err)
 			}
@@ -194,6 +214,10 @@ func TestADoomedReadRefusesBeforeItAppends(t *testing.T) {
 			if refusal.Detail == "" {
 				t.Error("the refusal names nothing to do about it")
 			}
+			if tc.absent != "" && strings.Contains(err.Error(), tc.absent) {
+				t.Errorf("the refusal carries the applier's own error to the "+
+					"caller: %q", err)
+			}
 		})
 	}
 }
@@ -211,7 +235,7 @@ func TestANodeReplayingUpToTheFloorIsTheOneToComeBackTo(t *testing.T) {
 	var appends atomic.Int64
 	h := newHarness(t)
 	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
-		&countingAppends{inner: h.log, n: &appends}, noCeiling(t), probeEncode, h.gen.Load, nil)
+		&countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -266,7 +290,7 @@ func TestANodeReplayingUpToTheFloorIsTheOneToComeBackTo(t *testing.T) {
 func TestAStallBelowTheFloorServesNoRead(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), h.log, noCeiling(t), probeEncode, h.gen.Load, nil)
+	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), h.log, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -325,11 +349,60 @@ func (c *countingAppends) LastSeq(ctx context.Context, subject string) (uint64, 
 // linearizable read rests on cannot be written — but a level that takes no
 // broker call at all is unaffected. That asymmetry is worth stating, because
 // the tempting reading is that a full log stops reads.
+//
+// THE REFUSAL IS WHAT A BROKER SENDS. This case used to hand the read index an
+// appender that returned a ready-made `log_full`, which no broker does — a
+// real one answers its own store failure — and the read index passed that
+// answer up unclassified, so on a real full log the read was refused
+// `no_quorum`: retryable, with an election's four-second hint, from a node
+// that refuses the next barrier identically. So the fake now answers what the
+// broker answers, and a second case fills a REAL log to its ceiling.
 func TestAFullLogCostsTheLevelsThatAppendAndNoOthers(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t)
-	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), refusingAppender{}, noCeiling(t), probeEncode,
-		h.gen.Load, nil)
+
+	t.Run("the broker's own answer", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		assertFullLogRead(t, h, refusingAppender{err: &jetstream.APIError{
+			Code: 503, ErrorCode: 10077, Description: "maximum bytes exceeded"}},
+			noCeiling(t))
+	})
+
+	t.Run("a real log at its ceiling", func(t *testing.T) {
+		t.Parallel()
+		h := newHarnessFor(t, tinyLogDomain{})
+		// FILLED TO THE BYTE, in shrinking records: a barrier is a few
+		// hundred bytes, so a log refused one large record can still take
+		// one, and it is the room a barrier needs that has to be gone.
+		written := 0
+		for _, size := range []int{4 << 10, 256, 16} {
+			for {
+				_, err := h.write(probeSubject(fmt.Sprintf("o%d", written)),
+					fmt.Sprintf("op-%d", written), strings.Repeat("x", size))
+				if err != nil {
+					break
+				}
+				written++
+			}
+		}
+		// THROUGH THE LOG'S OWN RESERVE, as every append on it is in
+		// production: the publisher's writes stop at the ordinary ceiling,
+		// so a barrier admitted past the reserve would land in the room
+		// kept for gate records — and the read would be served from a log
+		// every ordinary write is refused on.
+		assertFullLogRead(t, h, h.log, h.reserve)
+	})
+}
+
+// assertFullLogRead reads at every level through a read index appending to
+// log, which is full: the levels that append are refused `log_full` with no
+// hint, and the ones that do not are served.
+func assertFullLogRead(t *testing.T, h *harness, log statelog.Appender,
+	admission statelog.Admission) {
+	t.Helper()
+	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), log,
+		testSigner(t, probeDomain{}),
+		admission, probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -342,11 +415,15 @@ func TestAFullLogCostsTheLevelsThatAppendAndNoOthers(t *testing.T) {
 		t.Fatalf("a linearizable read on a full log = %v, want a Refused", err)
 	}
 	if refusal.Code != statelog.RefuseLogFull {
-		t.Fatalf("code = %q, want %q", refusal.Code, statelog.RefuseLogFull)
+		t.Fatalf("code = %q (%s), want %q", refusal.Code, refusal.Detail,
+			statelog.RefuseLogFull)
 	}
 	if refusal.RetryAfter != 0 {
 		t.Errorf("a full log carries a retry hint of %s — waiting does not empty "+
 			"a log, an operator does", refusal.RetryAfter)
+	}
+	if !strings.Contains(refusal.Detail, "byte ceiling") {
+		t.Errorf("the refusal does not name the ceiling to raise: %s", refusal.Detail)
 	}
 
 	// AND THE LEVELS THAT TAKE NO BROKER CALL KEEP ANSWERING.
@@ -357,14 +434,162 @@ func TestAFullLogCostsTheLevelsThatAppendAndNoOthers(t *testing.T) {
 	}
 }
 
-// refusingAppender is a broker whose log is at its ceiling.
-type refusingAppender struct{}
-
-func (refusingAppender) Append(context.Context, string, string, *uint64, []byte) (uint64, bool, error) {
-	return 0, false, &statelog.Unavailable{
-		Reason: statelog.ReasonLogFull,
-		Detail: "maximum bytes exceeded",
+// A BARRIER THE BROKER REFUSED FOR A REASON OF ITS OWN IS NOT A MISSED QUORUM.
+//
+// A sealed stream, a JetStream store out of resources: the broker answered,
+// and it will answer the same to the next barrier. Read as `no_quorum` — which
+// is where every refusal the read index did not recognise went — it carried an
+// election's retry hint to a caller the node will refuse identically. And a
+// barrier nobody answered IS the missed quorum, which the control holds.
+func TestABarrierTheBrokerRefusedIsNotAMissedQuorum(t *testing.T) {
+	t.Parallel()
+	//
+	// AND THE WORDS: a refusal the broker NAMED carries them, because they
+	// are the remedy; a barrier nobody confirmed is told in this package's
+	// words, naming the barrier's subject, because the error behind it is
+	// the transport's own and every surface sends a refusal's detail to the
+	// caller. `words` is what the detail must say and `absent` what it must
+	// not.
+	for _, c := range []struct {
+		name   string
+		err    error
+		want   statelog.ReadRefusal
+		words  string
+		absent string
+	}{
+		{"a sealed stream", &jetstream.APIError{Code: 400, ErrorCode: 10109,
+			Description: "invalid operation on sealed stream"}, statelog.RefuseBrokerRefused,
+			"invalid operation on sealed stream", ""},
+		// A BARRIER THE CLIENT REFUSED AS TOO LARGE is a server whose
+		// max_payload refuses every record, and the client's decision, so
+		// it is the broker's refusal too — never an unanswered append.
+		{"a barrier past the server's max_payload",
+			fmt.Errorf("append: %w", nats.ErrMaxPayload), statelog.RefuseBrokerRefused,
+			"max_payload", ""},
+		{"nobody answered", errors.New("nats: timeout dialling 10.0.0.7:4222"),
+			statelog.RefuseNoQuorum, "was not confirmed", "10.0.0.7"},
+		// A STORE THAT CLOSED UNDER THE BARRIER is a stream restarting:
+		// the broker answered, and what it said is that the entry may
+		// yet land — which clears exactly as a missed quorum does.
+		{"a store closed under it", &jetstream.APIError{Code: 503, ErrorCode: 10077,
+			Description: "store is closed"}, statelog.RefuseNoQuorum,
+			"was not confirmed", "store is closed"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), refusingAppender{err: c.err},
+				testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
+			if err != nil {
+				t.Fatalf("NewReadIndex: %v", err)
+			}
+			r := newReader(t, &stubStore{}, healthy, &stubWaiter{at: healthy().Position}, index)
+			_, err = r.Read(t.Context(), pointQuery(statelog.ReadLinearizable),
+				func(*sql.Tx) error { return nil })
+			var refusal *statelog.Refused
+			if !errors.As(err, &refusal) || refusal.Code != c.want {
+				t.Fatalf("a barrier the broker answered %v was refused as %v, want %q",
+					c.err, err, c.want)
+			}
+			if got, want := refusal.RetryAfter > 0, c.want.Retryable(); got != want {
+				t.Errorf("%q carries a hint of %s", c.want, refusal.RetryAfter)
+			}
+			if !strings.Contains(refusal.Detail, c.words) {
+				t.Errorf("detail = %q, want it to say %q", refusal.Detail, c.words)
+			}
+			if c.absent != "" && strings.Contains(err.Error(), c.absent) {
+				t.Errorf("the refusal carries the transport's own words to the "+
+					"caller: %q", err)
+			}
+			if c.want == statelog.RefuseNoQuorum &&
+				!strings.Contains(refusal.Detail, probePrefix+"."+statelog.BarrierKind) {
+				t.Errorf("detail = %q, want it to name the barrier's subject",
+					refusal.Detail)
+			}
+		})
 	}
+}
+
+// A CALLER THAT GAVE UP IS NOT A REFUSAL.
+//
+// The read index answers a caller's own cancellation or deadline with that
+// context's error, and the coverage probe's store read fails the same way —
+// and each was mapped onto a refusal: `no_quorum`, counted in the refusal
+// metric and handed an election's four-second hint, and
+// `deferred_scope_unknown`, logged as a store this node could not read. On a
+// deadline the CALLER set, a caller still listening was told the broker's
+// members had not agreed. The read answers the context's own error instead,
+// exactly as the wait for a floor already did.
+func TestACallerThatGaveUpIsNotARefusal(t *testing.T) {
+	t.Parallel()
+	gone, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	t.Run("waiting on a barrier", func(t *testing.T) {
+		t.Parallel()
+		release := make(chan struct{})
+		t.Cleanup(func() { close(release) })
+		index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), blockingAppender{release: release},
+			testSigner(t, probeDomain{}), noCeiling(t), probeEncode, func() uint32 { return 1 }, nil)
+		if err != nil {
+			t.Fatalf("NewReadIndex: %v", err)
+		}
+		r := newReader(t, &stubStore{}, healthy, &stubWaiter{at: healthy().Position}, index)
+		_, err = r.Read(gone, pointQuery(statelog.ReadLinearizable),
+			func(*sql.Tx) error { return nil })
+		if !errors.Is(err, context.Canceled) || errors.Is(err, statelog.ErrUnavailable) {
+			t.Errorf("a linearizable read whose caller gave up = %v, want %v and "+
+				"no refusal", err, context.Canceled)
+		}
+	})
+
+	t.Run("probing a deferred scope", func(t *testing.T) {
+		t.Parallel()
+		deferredHealth := func() statelog.Health {
+			s := healthy()
+			s.Deferred = 1
+			s.DeferredFrom = 1
+			return s
+		}
+		r := newReader(t, ctxStore{}, deferredHealth, &stubWaiter{at: healthy().Position}, nil)
+		_, err := r.Read(gone, pointQuery(statelog.ReadStale),
+			func(*sql.Tx) error { return nil })
+		if !errors.Is(err, context.Canceled) || errors.Is(err, statelog.ErrUnavailable) {
+			t.Errorf("a read whose caller gave up during the coverage probe = %v, "+
+				"want %v and no refusal", err, context.Canceled)
+		}
+	})
+}
+
+// blockingAppender is a broker whose append does not return until release is
+// closed, so a caller that gives up is the only way out of a read.
+type blockingAppender struct{ release chan struct{} }
+
+func (a blockingAppender) Append(context.Context, string, string, *uint64, []byte) (uint64, bool, error) {
+	<-a.release
+	return 0, false, errors.New("released")
+}
+
+func (blockingAppender) LastSeq(context.Context, string) (uint64, bool, error) {
+	return 0, false, nil
+}
+
+// ctxStore is a store whose every read fails the way a real one does under a
+// context that is done: with that context's error.
+type ctxStore struct{}
+
+func (ctxStore) Read(ctx context.Context, fn func(*sql.Tx) error) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("begin read: %w", err)
+	}
+	return fn(nil)
+}
+
+// refusingAppender is a broker that answers every append with err.
+type refusingAppender struct{ err error }
+
+func (a refusingAppender) Append(context.Context, string, string, *uint64, []byte) (uint64, bool, error) {
+	return 0, false, a.err
 }
 
 func (refusingAppender) LastSeq(context.Context, string) (uint64, bool, error) {
@@ -381,7 +606,7 @@ func TestASessionReadWithNoHighWaterMarkWaitsForNothing(t *testing.T) {
 	h := newHarness(t)
 	var appends atomic.Int64
 	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
-		&countingAppends{inner: h.log, n: &appends}, noCeiling(t), probeEncode, h.gen.Load, nil)
+		&countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -420,7 +645,7 @@ func TestASessionReadWithNoHighWaterMarkWaitsForNothing(t *testing.T) {
 func TestALinearizableReadWaitsForThePositionItsBarrierEstablished(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), h.log, noCeiling(t), probeEncode, h.gen.Load, nil)
+	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), h.log, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -511,10 +736,12 @@ func TestOnlyARefusalWaitingCanClearCarriesAHint(t *testing.T) {
 	}
 }
 
-// EVERY REFUSAL ABOUT THIS NODE IS ONE ANOTHER NODE MAY SERVE, and only the two
-// that are facts about the whole fleet are not: a full log refuses every
-// node's barrier, and a capacity window holds every node. Each code is named
-// here, so a code added to the set is a decision this table has to make —
+// EVERY REFUSAL ABOUT THIS NODE IS ONE ANOTHER NODE MAY SERVE, and only the
+// three that are facts about the whole fleet are not: a full log refuses every
+// node's barrier, and so does a broker that refused to store one for a reason
+// of its own (a sealed stream, a store out of resources), since every node
+// appends to the one stream; and a capacity window holds every node. Each code
+// is named here, so a code added to the set is a decision this table has to make —
 // and a code from a newer build, which nobody here can judge, is final.
 func TestOnlyAFleetWideRefusalIsFinalForEveryNode(t *testing.T) {
 	t.Parallel()
@@ -531,6 +758,7 @@ func TestOnlyAFleetWideRefusalIsFinalForEveryNode(t *testing.T) {
 		statelog.RefuseWrongStream:          true,
 		statelog.RefuseTooStale:             true,
 		statelog.RefuseLogFull:              false,
+		statelog.RefuseBrokerRefused:        false,
 		statelog.RefuseMaintenance:          false,
 	}
 	for _, code := range statelog.ReadRefusals {
@@ -545,6 +773,200 @@ func TestOnlyAFleetWideRefusalIsFinalForEveryNode(t *testing.T) {
 	}
 	if statelog.ReadRefusal("made_up").Elsewhere() {
 		t.Error("a refusal code this build does not know says another node may serve it")
+	}
+}
+
+// A REFUSAL WAITING CANNOT CLEAR IS NEVER TOLD TO COME BACK, on the read side
+// or the write side, and one that can is told when.
+//
+// [statelog.RetryAfter] is the one rule every surface answering a refusal in a
+// status code reads its Retry-After from. Each surface wrote its own, and two
+// of them both turned a node holding a record it cannot decode —
+// or an evicted one — into "retry in two seconds", which a client obeys for as
+// long as nobody upgrades or readmits the node.
+func TestARefusalWaitingCannotClearIsNeverToldToComeBack(t *testing.T) {
+	t.Parallel()
+	const otherwise = 2 * time.Second
+	for _, code := range statelog.ReadRefusals {
+		refused := &statelog.Refused{Code: code, Level: statelog.ReadSession,
+			RetryAfter: statelog.RetryHint(code, 1_000, 100)}
+		// WRAPPED, because a surface meets it inside whatever the domain
+		// said about it.
+		got := statelog.RetryAfter(fmt.Errorf("tracker: read: %w", refused), otherwise)
+		switch {
+		case !code.Retryable() && got != 0:
+			t.Errorf("read refusal %q says come back in %s, and waiting on "+
+				"this node cannot clear it", code, got)
+		case code.Retryable() && got != refused.RetryAfter:
+			t.Errorf("read refusal %q says %s, want its own derived %s",
+				code, got, refused.RetryAfter)
+		}
+	}
+	// A RETRYABLE REFUSAL THAT DERIVED NOTHING gets the caller's scale
+	// rather than no header at all, which would read as a node down for
+	// good.
+	bare := &statelog.Refused{Code: statelog.RefuseBehind, Level: statelog.ReadSession}
+	if got := statelog.RetryAfter(bare, otherwise); got != otherwise {
+		t.Errorf("a retryable read refusal with no hint says %s, want %s",
+			got, otherwise)
+	}
+	covered := map[statelog.Reason]bool{}
+	for _, c := range []struct {
+		reason    statelog.Reason
+		retryable bool
+	}{
+		{statelog.ReasonBehind, true},
+		{statelog.ReasonBelowFloor, true},
+		{statelog.ReasonFloorUnknown, true},
+		{statelog.ReasonEvictionUnknown, true},
+		{statelog.ReasonEvicted, false},
+		{statelog.ReasonDeferred, false},
+		{statelog.ReasonDeleted, false},
+		{statelog.ReasonAbandoned, false},
+		{statelog.ReasonOvertaken, false},
+		{statelog.ReasonLogFull, false},
+		{statelog.ReasonRecordTooLarge, false},
+		{statelog.ReasonBrokerRefused, false},
+		{statelog.ReasonSkew, false},
+		{statelog.ReasonOpReused, false},
+		{statelog.ReasonLogTruncated, false},
+		{statelog.ReasonWrongStream, false},
+		{statelog.ReasonSuperseded, false},
+	} {
+		covered[c.reason] = true
+		want := time.Duration(0)
+		if c.retryable {
+			want = otherwise
+		}
+		refused := fmt.Errorf("tracker: publish: %w",
+			&statelog.Unavailable{Reason: c.reason, Detail: "a detail"})
+		if got := statelog.RetryAfter(refused, otherwise); got != want {
+			t.Errorf("write refusal %q says come back in %s, want %s", c.reason,
+				got, want)
+		}
+		if c.reason.Retryable() != c.retryable {
+			t.Errorf("%q reports retryable = %v, want %v", c.reason,
+				c.reason.Retryable(), c.retryable)
+		}
+	}
+	// EVERY REASON HAS A ROW, so a reason added without deciding whether
+	// waiting clears it fails here rather than defaulting to "no".
+	for _, reason := range statelog.Reasons() {
+		if !reason.Valid() {
+			t.Errorf("%q is listed and does not report itself valid", reason)
+		}
+		if !covered[reason] {
+			t.Errorf("write refusal %q has no row above, so nothing decided "+
+				"whether waiting clears it", reason)
+		}
+	}
+	if statelog.Reason("log_fool").Valid() {
+		t.Error("a reason this build never declared reports itself valid")
+	}
+	// AND AN ERROR THIS PACKAGE DID NOT MAKE is the caller's to judge.
+	if got := statelog.RetryAfter(errors.New("a store blip"), otherwise); got != otherwise {
+		t.Errorf("a foreign error says %s, want the caller's own %s", got, otherwise)
+	}
+}
+
+// A WRITE REFUSAL AND ITS READ TWIN AGREE ON WHETHER WAITING HELPS.
+//
+// A [statelog.Reason] spelled like a [statelog.ReadRefusal] names the same
+// state of the same node — behind, below the floor, a floor nobody could read,
+// evicted, a record it cannot decode, a full log, a broker's own refusal — so
+// the two answers are one
+// fact said twice. They disagreed: `floor_unknown` and `below_floor` told a
+// writer to come back and a reader, on the same node at the same instant, that
+// waiting could not clear it. Both clear on their own — the floor is read
+// again, and a below-floor node rejoins by itself.
+func TestAWriteRefusalAndItsReadTwinAgreeOnWaiting(t *testing.T) {
+	t.Parallel()
+	// THE PAIRS ARE DERIVED from the two vocabularies rather than listed, so
+	// a reason added to one side and spelled like the other is compared the
+	// day it lands instead of skipped by a list nobody extended.
+	var twins []string
+	for _, read := range statelog.ReadRefusals {
+		write := statelog.Reason(read)
+		if !write.Valid() {
+			continue
+		}
+		twins = append(twins, string(read))
+		if write.Retryable() != read.Retryable() {
+			t.Errorf("%q: a write refusal says retryable=%v and a read refusal "+
+				"says %v, about one state of one node", read, write.Retryable(),
+				read.Retryable())
+		}
+	}
+	// AND THE SET IS THE ONE THE CONSISTENCY GUIDE STATES, both ways: a twin
+	// renamed on one side stops being compared, and a new one is a sentence
+	// in that guide nobody has written yet.
+	want := []string{"behind", "deferred", "below_floor", "floor_unknown",
+		"evicted", "log_full", "broker_refused", "wrong_stream"}
+	slices.Sort(twins)
+	slices.Sort(want)
+	if !slices.Equal(twins, want) {
+		t.Errorf("the reasons spelled like a read refusal are %v, want %v — "+
+			"docs/guides/consistency.md names which write reasons have a read "+
+			"twin and why the rest have none", twins, want)
+	}
+}
+
+// A DEFERRED SCOPE THIS NODE COULD NOT READ IS REFUSED IN THIS PACKAGE'S
+// WORDS, NEVER THE STORE'S.
+//
+// Every surface that answers a refusal sends its detail to the caller — the
+// query registry in a REST body and a socket frame, `/work` in its own — so a
+// detail built from the probe's error handed a driver's message or a database
+// path to anybody holding the question's grant. The refusal says what could
+// not be read and where the reason is; the reason goes to the log. The
+// control is the read that declares no scope, whose words ARE this package's
+// and are told as they are.
+func TestAnUnreadableDeferredScopeIsRefusedInThisPackagesWords(t *testing.T) {
+	t.Parallel()
+	deferredHealth := func() statelog.Health {
+		s := healthy()
+		s.Deferred = 1
+		s.DeferredFrom = 1
+		return s
+	}
+	storeWords := "open /var/lib/crewlet/replicated.db: database is locked"
+	for _, c := range []struct {
+		name   string
+		store  *stubStore
+		scope  statelog.ScopeSet
+		want   string
+		absent string
+	}{
+		{"a store that could not be read",
+			&stubStore{err: errors.New(storeWords)},
+			statelog.ScopeSet{Paths: []string{"object/a"}},
+			"could not be read", "/var/lib"},
+		// A REAL ESTATE, because the scope is resolved inside the
+		// probe's own transaction — a read by reference has none until
+		// its rows are read — so the no-scope answer is reached there.
+		{"a read that names no objects, the control",
+			newStubStore(t), statelog.ScopeSet{},
+			"declares no scope", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := newReader(t, c.store, deferredHealth,
+				&stubWaiter{at: healthy().Position}, nil)
+			_, err := r.Read(t.Context(), statelog.Query{
+				Level: statelog.ReadStale, Scope: c.scope,
+			}, func(*sql.Tx) error { return nil })
+			var refusal *statelog.Refused
+			if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseDeferredScopeUnknown {
+				t.Fatalf("Read = %v, want a deferred_scope_unknown refusal", err)
+			}
+			if !strings.Contains(refusal.Detail, c.want) {
+				t.Errorf("detail = %q, want it to say %q", refusal.Detail, c.want)
+			}
+			if c.absent != "" && strings.Contains(err.Error(), c.absent) {
+				t.Errorf("the refusal carries the store's own words to the "+
+					"caller: %q", err)
+			}
+		})
 	}
 }
 
@@ -572,7 +994,7 @@ func TestADeferredScopeRefusesAPointReadAndUncertifiesASetRead(t *testing.T) {
 	var appends atomic.Int64
 	broker := newHarness(t)
 	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
-		&countingAppends{inner: broker.log, n: &appends}, noCeiling(t), probeEncode, broker.gen.Load, nil)
+		&countingAppends{inner: broker.log, n: &appends}, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, broker.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -852,7 +1274,7 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 	h := newHarness(t)
 	var appends atomic.Int64
 	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
-		&countingAppends{inner: h.log, n: &appends}, noCeiling(t), probeEncode, h.gen.Load, nil)
+		&countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
@@ -894,10 +1316,9 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 	q := pointQuery(statelog.ReadStale)
 	q.MinPosition = statelog.Position{Stream: "SOME_OTHER_LOG", Generation: 1, Seq: 5}
 	_, err = r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
-	var refusal *statelog.Refused
-	if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseWrongStream {
-		t.Fatalf("a stale read with a floor on another stream = %v, want "+
-			"wrong_stream", err)
+	if !errors.Is(err, statelog.ErrForeignPosition) {
+		t.Fatalf("a stale read with a floor on another stream = %v, want %v",
+			err, statelog.ErrForeignPosition)
 	}
 	if got := w.waited.Load(); got != 0 {
 		t.Errorf("the wrong-stream read waited %d time(s) before refusing", got)
@@ -905,7 +1326,7 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 }
 
 // A FLOOR ON ANOTHER STREAM IS REFUSED AT EVERY LEVEL, INCLUDING WHEN IT
-// SORTS LOW.
+// SORTS LOW — AND AS THE REQUEST'S MISTAKE, NOT AS A STATE OF THE NODE.
 //
 // [statelog.Position.Packed] deliberately carries the generation and the
 // sequence and NOT the stream, so a foreign floor compared against a local
@@ -915,43 +1336,78 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 // inspected a purely local position and waved it through. The read was served
 // as though no floor had been named, under the level the caller asked for.
 //
-// The two cases here are the two sides of that comparison: a foreign floor
+// The two floors here are the two sides of that comparison: a foreign floor
 // BELOW the barrier (silently dropped before) and one above it (refused
 // before). They must answer the same way, because which side of a local
 // barrier a foreign sequence happens to fall on says nothing about anything.
+//
+// AND THE ANSWER IS [statelog.ErrForeignPosition], NEVER A [statelog.Refused]. It
+// was `wrong_stream`, the refusal a node on a recreated stream gives, so every
+// surface answered a pasted position from another log as "this node cannot
+// answer here" — a 503 with no Retry-After that sent a client to another node
+// which refused it identically. The two healths are the rest of that: a
+// request every node refuses the same is refused before this node's own state
+// is consulted, so an EVICTED node answers the request's mistake too rather
+// than a refusal about itself.
 func TestAFloorOnAnotherStreamIsRefusedAtEveryLevel(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), h.log, noCeiling(t), probeEncode, h.gen.Load, nil)
+	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}), h.log, testSigner(t, probeDomain{}), noCeiling(t), probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}
 	db := newStubStore(t)
-	for _, floor := range []statelog.Position{
-		{Stream: "SOME_OTHER_LOG", Generation: 1, Seq: 1},
-		{Stream: "SOME_OTHER_LOG", Generation: 1, Seq: 1 << 30},
-	} {
-		for _, level := range []statelog.ReadLevel{
-			statelog.ReadLinearizable, statelog.ReadSession,
-			statelog.ReadStale, statelog.ReadConsistentPrefix,
+	evicted := func() statelog.Health {
+		out := healthy()
+		out.Evicted = true
+		return out
+	}
+	for _, health := range []struct {
+		name string
+		fn   func() statelog.Health
+	}{{"healthy", healthy}, {"evicted", evicted}} {
+		for _, floor := range []statelog.Position{
+			{Stream: "SOME_OTHER_LOG", Generation: 1, Seq: 1},
+			{Stream: "SOME_OTHER_LOG", Generation: 1, Seq: 1 << 30},
 		} {
-			w := &stubWaiter{at: healthy().Position}
-			r := newReader(t, db, healthy, w, index)
-			q := pointQuery(level)
-			q.MinPosition = floor
-			_, err := r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
-			var refusal *statelog.Refused
-			if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseWrongStream {
-				t.Errorf("a %s read floored at %s answered %v, want a "+
-					"wrong_stream refusal", level, floor, err)
-				continue
-			}
-			if got := w.waited.Load(); got != 0 {
-				t.Errorf("a %s read floored at %s waited %d time(s) before "+
-					"refusing — a sequence from another log is a caller bug "+
-					"rather than a position this node can reach", level, floor, got)
+			for _, level := range []statelog.ReadLevel{
+				statelog.ReadLinearizable, statelog.ReadSession,
+				statelog.ReadStale, statelog.ReadConsistentPrefix,
+			} {
+				w := &stubWaiter{at: healthy().Position}
+				r := newReader(t, db, health.fn, w, index)
+				q := pointQuery(level)
+				q.MinPosition = floor
+				_, err := r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
+				if !errors.Is(err, statelog.ErrForeignPosition) {
+					t.Errorf("a %s read floored at %s on a node that is %s "+
+						"answered %v, want %v", level, floor, health.name, err,
+						statelog.ErrForeignPosition)
+					continue
+				}
+				if errors.Is(err, statelog.ErrUnavailable) {
+					t.Errorf("a %s read floored at %s answered %v, which is a "+
+						"refusal — the caller's mistake reported as this "+
+						"node's state", level, floor, err)
+				}
+				if got := w.waited.Load(); got != 0 {
+					t.Errorf("a %s read floored at %s waited %d time(s) before "+
+						"refusing — a sequence from another log is a caller bug "+
+						"rather than a position this node can reach", level, floor, got)
+				}
 			}
 		}
+	}
+	// THE CONTROL: a floor on this read's own log is no mistake, and the
+	// evicted node answers it with its own refusal.
+	r := newReader(t, &stubStore{}, evicted, &stubWaiter{at: healthy().Position}, index)
+	q := pointQuery(statelog.ReadStale)
+	q.MinPosition = statelog.Position{Stream: probeStream, Generation: 1, Seq: 1}
+	_, err = r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
+	var refusal *statelog.Refused
+	if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseEvicted {
+		t.Errorf("an evicted node's read floored on its own log answered %v, "+
+			"want its evicted refusal", err)
 	}
 }
 
@@ -1170,7 +1626,8 @@ func TestANodeThatPublishesNothingAppendsNoBarrier(t *testing.T) {
 	h := newHarness(t)
 	var appends atomic.Int64
 	index, err := statelog.NewReadIndex(probeDomain{}, specOf(probeDomain{}),
-		&countingAppends{inner: h.log, n: &appends}, noCeiling(t), probeEncode, h.gen.Load, nil)
+		&countingAppends{inner: h.log, n: &appends}, testSigner(t, probeDomain{}), noCeiling(t),
+		probeEncode, h.gen.Load, nil)
 	if err != nil {
 		t.Fatalf("NewReadIndex: %v", err)
 	}

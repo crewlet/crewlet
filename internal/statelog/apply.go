@@ -138,6 +138,11 @@ type RunnerDeps struct {
 	// stream identity — is keyed by its name.
 	Spec StreamSpec
 
+	// Verifier authenticates every record before this domain decodes one.
+	// REQUIRED: a runner built without it would apply whatever reached the
+	// broker, and the broker has no auth of its own. See [signature.go].
+	Verifier *Verifier
+
 	// Log is the same stream read by position, which is how the applier
 	// establishes that the log still holds, at its checkpoint's sequence,
 	// the record it consumed there before it applies anything past it
@@ -200,8 +205,25 @@ type RunnerDeps struct {
 	// operator confirmed, which is the stream the checkpoint then names.
 	StreamCreatedAt time.Time
 
-	// Epoch is the per-epoch configuration the domain declared it reads.
-	Epoch map[string]any
+	// Epoch is where the per-epoch configuration the domain declared it
+	// reads comes from, asked once per BATCH ([ApplyOptions.Epoch]). Nil
+	// hands every batch none.
+	//
+	// A SOURCE AND NOT A VALUE, because the runner outlives every epoch it
+	// applies under: it is built once, at boot, and the epoch moves with
+	// every activation. As a value it was the boot company's for the life
+	// of the process — a node that booted with no company handed its
+	// appliers none at all — so a revision that moved one of those keys
+	// (the tracker's inbox retention) reached the applier only at the next
+	// restart, and two nodes that had restarted at different times applied
+	// one record under two different epochs for as long as they ran.
+	//
+	// ONCE PER BATCH rather than per record, because the batch is the
+	// transaction: every record in one commits under the same options, as
+	// it does under the same [ApplyOptions.Now]. It must not block — it is
+	// asked on the apply loop — and it must be safe to call from that
+	// loop's goroutine while the caller's own changes it.
+	Epoch func() map[string]any
 
 	Metrics *metrics.Recorder
 
@@ -237,6 +259,10 @@ type RunnerDeps struct {
 
 	// Now is the clock, injectable so a test can drive the time budget.
 	Now func() time.Time
+
+	// Witness is told about a record this runner would not authenticate.
+	// Optional; see [Witness].
+	Witness Witness
 }
 
 // Runner is one domain's apply loop: one goroutine, one pinned connection, one
@@ -255,22 +281,29 @@ type RunnerDeps struct {
 // reads; the waiters at or below it; the domain's own non-row consequences;
 // and only then the acknowledgement, by IDENTITY over every record consumed.
 type Runner struct {
-	domain  Domain
-	applier Applier
-	fetch   Fetcher
-	log     CheckpointLog
-	node    NodeEstate
-	db      Estate
-	tables  tables
-	spec    StreamSpec
-	metrics *metrics.Recorder
-	logger  *slog.Logger
-	now     func() time.Time
-	opts    ApplyOptions
-	nodeID  string
-	evicted func(ctx context.Context, node string) (bool, error)
+	domain   Domain
+	applier  Applier
+	fetch    Fetcher
+	verifier *Verifier
+	log      CheckpointLog
+	node     NodeEstate
+	db       Estate
+	tables   tables
+	spec     StreamSpec
+	metrics  *metrics.Recorder
+	logger   *slog.Logger
+	now      func() time.Time
+	opts     ApplyOptions
+	epoch    func() map[string]any
+	nodeID   string
+	evicted  func(ctx context.Context, node string) (bool, error)
 	// onDrained is [RunnerDeps.OnDrained].
 	onDrained func()
+
+	// witnessTo and witnessedKeys are the audit half of a refusal; see
+	// [Witness].
+	witnessTo     Witness
+	witnessedKeys witnessed
 
 	waiters waiters
 
@@ -524,6 +557,15 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 			"file (store.OpenNode), which no adoption replaces", d.Node.Estate())
 	case d.DB == nil:
 		return nil, fmt.Errorf("statelog: applier has no database")
+	case d.Verifier == nil:
+		// REFUSED RATHER THAN DEFAULTED TO ACCEPTING EVERYTHING. A
+		// runner with no verifier applies whatever reached the broker,
+		// and the broker has no auth of its own — so the absence of a
+		// keyring must be a boot failure naming what to configure,
+		// never a node that quietly authenticates nothing.
+		return nil, fmt.Errorf("%w: %s's applier has no verifier, so it would apply "+
+			"any record that reached the broker — Tier A secrets.keys is required "+
+			"wherever a state-log domain runs", ErrUnsigned, d.Domain.Name())
 	}
 	spec := d.Spec
 	if err := spec.Instantiates(d.Domain); err != nil {
@@ -558,6 +600,7 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 		domain:    d.Domain,
 		applier:   d.Applier,
 		fetch:     d.Fetch,
+		verifier:  d.Verifier,
 		log:       d.Log,
 		node:      d.Node,
 		db:        d.DB,
@@ -570,15 +613,31 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 		nodeID:    d.NodeID,
 		evicted:   d.Evicted,
 		onDrained: d.OnDrained,
+
+		witnessTo: d.Witness,
 		opts: ApplyOptions{
 			ArbitratedKinds: spec.ArbitratedKinds,
-			Epoch:           d.Epoch,
 		},
+		epoch: d.Epoch,
 		// THE CHECKPOINT AND THE RECORD IT NAMES, together, for the reason
 		// [Runner.checkpointAt] gives.
 		cursor:       checkpoint,
 		checkpointAt: d.CheckpointStoredAt,
 	}, nil
+}
+
+// batchOptions is what every record of one transaction is applied under: the
+// runner's static declarations, the batch's instant, the store's bind limit
+// and the epoch AS IT STANDS NOW — read here, per batch, so an activation
+// reaches the next batch rather than the next process ([RunnerDeps.Epoch]).
+func (r *Runner) batchOptions(now time.Time) ApplyOptions {
+	opts := r.opts
+	opts.Now = now
+	opts.MaxVariables = r.db.Caps().MaxVariables
+	if r.epoch != nil {
+		opts.Epoch = r.epoch()
+	}
+	return opts
 }
 
 // Committed is this node's committed position on the stream.
@@ -748,9 +807,9 @@ func (r *Runner) Stopped() error {
 // running node comes back at the same generation counting from 1, so its
 // sequences are perfectly plausible and, once it has published past the
 // checkpoint, every sequence term reads healthy. What does see it is any read
-// of the stream's own state — the position heartbeat takes one every interval,
-// and the fence on an expectation of zero takes one within every such write —
-// and each hands the instant here, so the one verdict the read path and the
+// of the stream's own state — the position heartbeat takes one every
+// [PositionHeartbeat], and the fence on an expectation of zero takes one
+// within every such write — and each hands the instant here, so the one verdict the read path and the
 // write path both consult has every observation behind it rather than
 // whichever loop happened to look.
 //
@@ -1014,9 +1073,10 @@ const (
 // The loop, before it applies anything past the checkpoint whenever what
 // follows it may be another history ([Runner.verifyBeforeApplying]) — at every
 // start, after a failed fetch, and after a reading found the log ending below
-// it. And the engine's position heartbeat, every interval, which is what
-// catches a broker restored under a running node between two of those moments
-// and what a node whose loop has stopped for another reason still answers.
+// it. And the engine's position heartbeat, every [PositionHeartbeat], which is
+// what catches a broker restored under a running node between two of those
+// moments and what a node whose loop has stopped for another reason still
+// answers.
 //
 // # And what the log can no longer show
 //
@@ -1617,6 +1677,44 @@ func (r *Runner) PurgeOps(ctx context.Context, cutoff time.Time) (int64, error) 
 	return r.tables.purgeOps(ctx, r.db, cutoff)
 }
 
+// PurgeOpsOfKind deletes this node's operation rows on one subject kind applied
+// before cutoff.
+//
+// FOR A KIND WHOSE WRITERS NEVER RE-ASK LATE. [OpsRetention] is sized for the
+// slowest client that retries an op id — a seat re-asking after a weekend —
+// and a kind no such client writes, whose every op id is re-asked inside the
+// publisher's own resolve budget if at all, holds a month of rows nobody will
+// ever look up. A domain declares such a kind's own horizon at its
+// registration, and ships the `(subject, applied_at)` index this seeks on.
+func (r *Runner) PurgeOpsOfKind(ctx context.Context, kind string,
+	cutoff time.Time) (int64, error) {
+
+	return r.tables.purgeOpsOfKind(ctx, r.db, kind, cutoff)
+}
+
+// PurgeAnchors removes this domain's arbitration anchors below floor.
+//
+// PER NODE, like the operation ledger's sweep and unlike a fleet singleton's:
+// every node holds its own copy of these rows, so a singleton would tidy one
+// node's table and leave every other growing — which looks exactly like a
+// sweep that works to whoever checks the node it ran on.
+func (r *Runner) PurgeAnchors(ctx context.Context, floor Position) (int64, error) {
+	return r.tables.purgeAnchors(ctx, r.db, floor)
+}
+
+// Op answers where an operation was applied on this node — the same ledger
+// read [Rows.Op] makes, for a caller holding the runner rather than the rows.
+func (r *Runner) Op(ctx context.Context, opID string) (OpEntry, bool, error) {
+	var entry OpEntry
+	var ok bool
+	err := r.db.Read(ctx, func(tx *sql.Tx) error {
+		var err error
+		entry, ok, err = r.tables.op(ctx, tx, opID)
+		return err
+	})
+	return entry, ok, err
+}
+
 // Run drives the loop until the context ends or the applier stops.
 //
 // # It may be run AGAIN after it returns
@@ -2151,7 +2249,35 @@ func (r *Runner) reprocess(ctx context.Context, w *store.Writer) error {
 				kept++
 				continue
 			}
-			env, err := r.domain.Envelope(row.payload)
+			// RE-VERIFIED, NEVER TRUSTED BECAUSE IT WAS ONCE
+			// FILED. What the table holds is the bytes as
+			// published, so a record retained for an unheld key is
+			// re-opened here and stays retained until the key
+			// arrives — and one that verifies now is applied by a
+			// build that authenticated it, not by one that
+			// remembered an earlier build had looked at it.
+			body, verdict := r.verifier.Open(row.payload)
+			at := Position{
+				Stream:     r.spec.Name,
+				Generation: uint32(row.position / GenerationStride),
+				Seq:        uint64(row.position % GenerationStride),
+			}
+			switch verdict {
+			case KeyUnknown:
+				// STILL UNREADABLE, and said once per key for this
+				// process: after a restart this is the only place
+				// the node meets the record again.
+				r.witness(ctx, verdict, row.payload, at)
+				kept++
+				continue
+			case Tampered:
+				r.witness(ctx, verdict, row.payload, at)
+				return fmt.Errorf("%w: %s's retained record at packed position %d is "+
+					"not signed by this fleet — it was filed under a key this node "+
+					"did not hold and now fails under one it does",
+					ErrStopped, r.domain.Name(), row.position)
+			}
+			env, err := r.domain.Envelope(body)
 			if err != nil {
 				return fmt.Errorf("statelog: %s could not read the envelope of a "+
 					"retained record at packed position %d, which every build must "+
@@ -2159,12 +2285,9 @@ func (r *Runner) reprocess(ctx context.Context, w *store.Writer) error {
 			}
 			rec := Record{
 				Envelope: env,
-				Position: Position{
-					Stream:     r.spec.Name,
-					Generation: uint32(row.position / GenerationStride),
-					Seq:        uint64(row.position % GenerationStride),
-				},
-				Payload:  row.payload,
+				Position: at,
+				Payload:  body,
+				framed:   row.payload,
 				StoredAt: row.storedAt,
 			}
 			landed, result, err := r.reprocessOne(ctx, w, rec)
@@ -2228,10 +2351,7 @@ func (r *Runner) reprocessOne(ctx context.Context, w *store.Writer, rec Record) 
 		} else if covered {
 			return nil
 		}
-		opts := r.opts
-		opts.Now = r.now()
-		opts.MaxVariables = r.db.Caps().MaxVariables
-		a, err := r.applyOne(ctx, tx, rec, opts)
+		a, err := r.applyOne(ctx, tx, rec, r.batchOptions(r.now()))
 		if err != nil {
 			return err
 		}
@@ -2386,7 +2506,34 @@ func (r *Runner) decode(ctx context.Context, batch []Message) ([]Record, error) 
 	gen, passed := r.cursor.Generation, r.passed != nil
 	r.mu.Unlock()
 	for _, m := range batch {
-		env, err := r.domain.Envelope(m.Payload)
+		// VERIFIED BEFORE THE DOMAIN SEES IT. The broker has no auth of
+		// its own, so a record's signature is the only thing that says
+		// it came from this fleet, and handing an unauthenticated
+		// payload to a domain's decoder is handing it to the one place
+		// that parses attacker-controlled bytes.
+		body, verdict := r.verifier.Open(m.Payload)
+		if verdict != Verified {
+			// OUTSIDE THE TRANSACTION, where the refusal is decided:
+			// the retention that follows for an unknown key runs in a
+			// body the store may run twice.
+			r.witness(ctx, verdict, m.Payload,
+				Position{Stream: r.spec.Name, Generation: gen, Seq: m.Seq})
+		}
+		if verdict == Tampered {
+			// PERMANENT, and it stops the loop. A record whose MAC
+			// fails under a key this fleet holds was written by
+			// something that is not this fleet; applying past it
+			// would be applying whatever it was written to precede.
+			r.countWith(metrics.StatelogRecordsTampered, metrics.Attrs{
+				"domain": r.domain.Name(),
+			})
+			return nil, r.stop(ctx, fmt.Errorf("%w: %s's record at sequence %d is not "+
+				"signed by this fleet — its frame fails under the keys this node "+
+				"holds (%v), so something that can reach the broker wrote it and "+
+				"this node will not apply it or anything after it",
+				ErrStopped, r.domain.Name(), m.Seq, r.verifier.KeyIDs()))
+		}
+		env, err := r.domain.Envelope(body)
 		if err != nil {
 			// AN UNREADABLE ENVELOPE IS A STOP, not a deferral and not
 			// a retry. The envelope is the half every build can read,
@@ -2443,8 +2590,15 @@ func (r *Runner) decode(ctx context.Context, batch []Message) ([]Record, error) 
 		out = append(out, Record{
 			Envelope: env,
 			Position: Position{Stream: r.spec.Name, Generation: gen, Seq: m.Seq},
-			Payload:  m.Payload,
+			// THE BODY TO THE APPLIER, THE FRAME TO THE TABLE. The
+			// domain decodes what it published; the deferred table
+			// keeps what the broker held, so a record retained here
+			// is re-verified by the build that can finally read it
+			// rather than trusted because an earlier build looked.
+			Payload:  body,
+			framed:   m.Payload,
 			StoredAt: m.StoredAt,
+			verdict:  verdict,
 			ack:      m.Ack,
 		})
 	}
@@ -2460,6 +2614,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 	var tally results
 	var rows int
 	var boundBy string
+	var notes []applyNote
 	started := r.now()
 
 	// THE ABORTS ARE COUNTED HERE, and this is the only place that can.
@@ -2493,7 +2648,14 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 		// attempt that failed transiently, so a counter accumulated
 		// across attempts counts the abandoned one too — and the
 		// metrics would report work that was rolled back.
+		//
+		// The NOTES reset with them, for the same reason and a sharper
+		// one: a note is a log line and a count said AFTER the commit,
+		// and a note kept from an abandoned attempt would announce a
+		// record that attempt retained and the committed one may not
+		// have — once for every attempt the store ran.
 		consumed, committedAt, tally, rows, boundBy = consumed[:0], Position{}, results{}, 0, ""
+		notes = notes[:0]
 		committedRecord = time.Time{}
 		txStart := r.now()
 
@@ -2509,9 +2671,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 		// only the committed cursor would apply such a record twice —
 		// the second time against rows the first one wrote.
 		highWater := r.Committed()
-		opts := r.opts
-		opts.Now = txStart
-		opts.MaxVariables = r.db.Caps().MaxVariables
+		opts := r.batchOptions(txStart)
 
 		for i := range run {
 			rec := run[i]
@@ -2537,6 +2697,38 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 			}
 
 			switch {
+			case rec.verdict == KeyUnknown:
+				// THE SAME DISPOSITION AS A RECORD FROM A NEWER
+				// BUILD, and for the same reason: both mean
+				// "this build cannot read this yet", and both
+				// stop being true without the record changing —
+				// one when the build is upgraded, one when the
+				// operator adds the key. Retained under its own
+				// scope, so later records touching the same
+				// objects wait behind it rather than applying on
+				// rows it never wrote.
+				//
+				// A GATE IS STILL A STOP, for the reason the
+				// version arm gives: a deferred gate licenses
+				// every record above it, and an eviction the
+				// evicted node could not read leaves that node
+				// passing every fence it has.
+				if r.domain.InstallsGate(rec.Envelope) {
+					return fmt.Errorf("%w: %s at %s installs an apply gate and is "+
+						"signed under a key this node does not hold (it holds %v) "+
+						"— a gate this node cannot authenticate would license "+
+						"every record above it, so the applier halts and this "+
+						"node takes its copy of the estate out of service, so its "+
+						"seats read it from a data node that can",
+						ErrStopped, rec.Kind, rec.Position, r.verifier.KeyIDs())
+				}
+				if err := r.tables.retain(ctx, tx, rec, r.spec.Replay == ReplayCompacted, opts.MaxVariables); err != nil {
+					return err
+				}
+				hasDeferred = true
+				tally.retained++
+				notes = append(notes, applyNote{rec: rec, kind: noteUnverifiable})
+
 			case !rec.ReadableBy(r.domain.RecordVersion()):
 				if r.domain.InstallsGate(rec.Envelope) {
 					// A GATE IS A STOP, and it is the one
@@ -2560,10 +2752,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 				}
 				hasDeferred = true
 				tally.retained++
-				r.logger.WarnContext(ctx, "statelog_record_deferred",
-					"domain", r.domain.Name(), "position", rec.Position.String(),
-					"kind", rec.Kind, "record_version", rec.V,
-					"build_reads", r.domain.RecordVersion())
+				notes = append(notes, applyNote{rec: rec, kind: noteDeferred})
 
 			default:
 				blocked := false
@@ -2591,7 +2780,8 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 					rows += a.rows
 					tally.swept += a.swept
 					if a.gated {
-						tally.drop(rec, a.reason)
+						tally.gated++
+						notes = append(notes, applyNote{rec: rec, kind: noteGated, gate: a.reason})
 					} else {
 						tally.applied++
 						tally.version = max(tally.version, rec.V)
@@ -2658,15 +2848,12 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 	if len(consumed) == 0 {
 		return consumed, nil
 	}
-
 	// AFTER THE OUTER TRANSACTION RETURNS, IN THIS ORDER.
 	//
-	// WHAT A GATE DROPPED, first: a drop is reported once it has committed,
-	// and before the checkpoint moves, so a caller that sees this node past
-	// a dropped record sees its count too ([Runner.gatedRecord]).
-	for _, d := range tally.dropped {
-		r.gatedRecord(ctx, d.rec, d.reason)
-	}
+	// WHAT THE COMMITTED ATTEMPT SAW, first and once — see [applyNote] — and
+	// before the checkpoint moves, so a caller that sees this node past a
+	// record a gate dropped sees its count too ([Runner.gatedRecord]).
+	r.announce(ctx, notes)
 
 	// THE POSITION THE TRANSACTION COMMITTED, so what this node reports,
 	// releases waiters through and resumes from is the same value the
@@ -2682,6 +2869,15 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 	}
 	r.advance(at, committedRecord)
 	r.waiters.release(at)
+	if tally.retained > 0 {
+		// WHAT THE BATCH RETAINED, which no Apply call saw — see
+		// [RetentionHook]. AFTER the deferral index is refreshed above,
+		// so a listener that reads what this node can vouch for reads
+		// the deferral this batch committed.
+		if hook, ok := r.applier.(RetentionHook); ok {
+			hook.Retained(ctx, tally.retained)
+		}
+	}
 	r.applier.Committed(ctx)
 	r.ack(ctx, consumed)
 
@@ -2758,7 +2954,7 @@ type applyResult struct {
 	// transaction's row budget is held to.
 	rows int
 
-	// swept is how many anchors a trimmed record removed (ADR-0032).
+	// swept is how many anchors a trimmed record removed (ADR-0046).
 	swept int
 
 	// gated is whether a gate dropped the record, and reason which.
@@ -2767,8 +2963,10 @@ type applyResult struct {
 }
 
 // applyOne runs the domain's state machine for one record, unless a gate says
-// it must produce no rows — reporting which gate, and whether one did, for the
-// caller to report once its transaction commits ([Runner.gatedRecord]).
+// it must produce no rows — reporting which gate, and whether one did, and
+// saying NOTHING: it runs inside a transaction body the store may run again,
+// so the caller notes the drop ([applyNote], or the reprocess's own answer)
+// and it is reported once the transaction commits ([Runner.gatedRecord]).
 func (r *Runner) applyOne(ctx context.Context, tx *sql.Tx, rec Record, opts ApplyOptions) (applyResult, error) {
 	started := r.now()
 	opts.StoredAt = rec.StoredAt
@@ -2806,7 +3004,7 @@ func (r *Runner) applyOne(ctx context.Context, tx *sql.Tx, rec Record, opts Appl
 	}
 	out := applyResult{rows: n}
 	if rec.Subject.Kind == TrimmedKind {
-		// THE FRAMEWORK'S OWN EFFECT OF A TRIMMED RECORD — ADR-0032 — in
+		// THE FRAMEWORK'S OWN EFFECT OF A TRIMMED RECORD — ADR-0046 — in
 		// the record's own transaction, once the gates have said it
 		// applies: a record a gate drops removes nothing. AFTER the
 		// domain's own apply, which writes nothing for it but has a case
@@ -2832,10 +3030,81 @@ func (r *Runner) applyOne(ctx context.Context, tx *sql.Tx, rec Record, opts Appl
 		// read can be delayed: a single record past the time budget is
 		// still one transaction, so the batch's own duration cannot
 		// bound it.
+		//
+		// A TIMING, and so the one observation that stays inside the
+		// body: an attempt the store rolled back and ran again still
+		// held the applier for as long as it took, which is exactly
+		// what this bounds. What moves out is every COUNT of an
+		// outcome, which an abandoned attempt would state twice.
 		r.metrics.Observe(metrics.StatelogApplyRecordDuration, r.now().Sub(started),
 			metrics.Attrs{"domain": r.domain.Name(), "kind": rec.Kind})
 	}
 	return out, nil
+}
+
+// applyNote is one thing an apply transaction observed about one record that
+// is SAID rather than written: a warning line, and for two of the three kinds
+// a counter an alarm reads.
+//
+// # Why it is a value and not a call
+//
+// Everything inside an apply transaction's body may run MORE THAN ONCE: the
+// store re-runs a body that failed transiently ([store.Writer.Tx]), and the
+// rows it wrote are rolled back with it. A log line or a counter bumped from
+// inside is not — so a record retained on an abandoned attempt and retained
+// again on the one that committed was announced twice, and
+// `crewlet.statelog.records.unverifiable` and `records.gated`, which the alarm
+// table reads, counted a record two times for the one the node actually holds.
+// The body notes what it saw, resets its notes with its tally on every
+// attempt, and [Runner.announce] says them ONCE, after the commit, for the
+// attempt that landed.
+type applyNote struct {
+	rec  Record
+	kind noteKind
+
+	// gate is the reason a gated record applied nowhere.
+	gate Reason
+}
+
+// noteKind is which of the three things a note says.
+type noteKind int
+
+const (
+	// noteUnverifiable — retained because it is signed under a key this
+	// node does not hold.
+	noteUnverifiable noteKind = iota
+
+	// noteDeferred — retained because a newer build wrote it.
+	noteDeferred
+
+	// noteGated — consumed, and applied nowhere, because a gate said so.
+	noteGated
+)
+
+// announce says what one committed transaction noted, once.
+func (r *Runner) announce(ctx context.Context, notes []applyNote) {
+	for _, note := range notes {
+		rec := note.rec
+		switch note.kind {
+		case noteUnverifiable:
+			r.countWith(metrics.StatelogRecordsUnverifiable, metrics.Attrs{
+				"domain": r.domain.Name(),
+			})
+			r.logger.WarnContext(ctx, "statelog_record_unverifiable",
+				"domain", r.domain.Name(), "position", rec.Position.String(),
+				"kind", rec.Kind, "node_holds", r.verifier.KeyIDs(),
+				"detail", "retained until this node's secrets.keys holds the key "+
+					"it was signed under; expected briefly during a keyring "+
+					"rotation and an operator error if it persists")
+		case noteDeferred:
+			r.logger.WarnContext(ctx, "statelog_record_deferred",
+				"domain", r.domain.Name(), "position", rec.Position.String(),
+				"kind", rec.Kind, "record_version", rec.V,
+				"build_reads", r.domain.RecordVersion())
+		case noteGated:
+			r.gatedRecord(ctx, rec, note.gate)
+		}
+	}
 }
 
 // Voided reports whether this applier drops a record stamped with generation gen
@@ -2870,8 +3139,8 @@ func (r *Runner) Voided(gen uint32, seq uint64) (Reason, bool) {
 // applied again from the same checkpoint. A report made where the gate is
 // asked was therefore made once per attempt: one record dropped, counted and
 // logged as two — the counter the records_gated alarm reads, on a record
-// nothing recovers. So the transaction only notes the drop ([results.drop],
-// or the reprocess's own answer) and this runs after it commits, exactly once
+// nothing recovers. So the transaction only notes the drop ([applyNote], or
+// the reprocess's own answer) and this runs after it commits, exactly once
 // per record this node's rows skip for good; a drop an attempt rolled back is
 // reported by the attempt that commits it.
 func (r *Runner) gatedRecord(ctx context.Context, rec Record, reason Reason) {
@@ -2885,9 +3154,12 @@ func (r *Runner) gatedRecord(ctx context.Context, rec Record, reason Reason) {
 
 // anyDeferred reports whether this node holds any record it cannot decode, so
 // the per-record probe is skipped entirely on the ordinary path.
+//
+// AN EXISTENCE PROBE rather than [tables.oldestDeferred], which reads the
+// record's scope as well: this runs at the top of every apply transaction, and
+// the scope is nothing it needs.
 func (r *Runner) anyDeferred(ctx context.Context, tx *sql.Tx) (bool, error) {
-	_, ok, err := r.tables.oldestDeferred(ctx, tx)
-	return ok, err
+	return r.tables.holdsDeferred(ctx, tx)
 }
 
 // ack acknowledges every record this transaction consumed, BY IDENTITY.
@@ -2995,10 +3267,10 @@ type results struct {
 	retained int
 	skipped  int
 
-	// dropped is every record a gate dropped in this attempt, in order,
-	// reported once the transaction commits ([Runner.gatedRecord]) — its
-	// length is how many were `gated`.
-	dropped []droppedRecord
+	// gated is how many records a gate dropped in this attempt, each noted
+	// beside it ([applyNote]) and reported once the transaction commits
+	// ([Runner.gatedRecord]).
+	gated int
 
 	// version is the highest record version of a record this transaction
 	// APPLIED — what the checkpoint row's applied record version is raised
@@ -3006,7 +3278,7 @@ type results struct {
 	version int
 
 	// swept is how many anchors this transaction's trimmed records removed
-	// (ADR-0032).
+	// (ADR-0046).
 	swept int
 
 	// barriers is how many of the records this batch consumed for the
@@ -3014,18 +3286,6 @@ type results struct {
 	// on the log, which is what the census counts — BY THE HOUR THE BROKER
 	// STORED EACH, as the start of that hour. Nil until the first.
 	barriers map[time.Time]uint64
-}
-
-// droppedRecord is one record a gate dropped, and the gate that dropped it.
-type droppedRecord struct {
-	rec    Record
-	reason Reason
-}
-
-// drop notes that a gate dropped rec, for [Runner.gatedRecord] to report once
-// the transaction that dropped it commits.
-func (t *results) drop(rec Record, reason Reason) {
-	t.dropped = append(t.dropped, droppedRecord{rec: rec, reason: reason})
 }
 
 // barrier counts one barrier the broker stored at storedAt, or at applied — the
@@ -3077,7 +3337,7 @@ func (r *Runner) observe(started time.Time, rows int, boundBy string, tally resu
 		metrics.Attrs{"domain": domain})
 	for result, n := range map[string]int{
 		"applied": tally.applied, "retained": tally.retained,
-		"gated": len(tally.dropped), "skipped": tally.skipped,
+		"gated": tally.gated, "skipped": tally.skipped,
 	} {
 		if n > 0 {
 			r.metrics.Add(metrics.StatelogApplyRecords, uint64(n),

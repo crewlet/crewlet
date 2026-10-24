@@ -31,7 +31,7 @@ var dutyCases = []testCase{
 		// that refused either left that duty unrun on every fleet it
 		// served.
 		duty := coord.WorkerResource("maintenance")
-		baseline := h.claim(coord.SeatResource("ceo"), coord.AcquireOptions{Owner: "node-a:1", TTL: LongTTL})
+		baseline := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a:1", TTL: LongTTL})
 		lease := h.claim(duty, coord.AcquireOptions{
 			Owner: "node-a:1", TTL: coord.MaxDutyTTL, Ungated: true,
 		})
@@ -101,7 +101,7 @@ var dutyCases = []testCase{
 		// a case that only ever claimed the ungated way would certify
 		// the ceiling on half the paths a claim takes.
 		claim := callerClass.Resource("node-a")
-		baseline := h.claim(coord.SeatResource("ceo"), coord.AcquireOptions{Owner: "node-a:1", TTL: LongTTL})
+		baseline := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a:1", TTL: LongTTL})
 		lease := h.claim(claim, coord.AcquireOptions{Owner: "node-a:1", TTL: coord.MaxDutyTTL})
 		// An interval, not an ordering, for the reason the duty case
 		// gives: a store clamping the claim still stamps it later.
@@ -181,7 +181,7 @@ var dutyCases = []testCase{
 		duties := coord.AcquireOptions{Owner: "node-a:1", TTL: coord.MaxDutyTTL, Ungated: true}
 		h.claim(coord.WorkerResource("scheduler"), duties)
 		h.claim(coord.WorkerResource("sandbox-waiter"), duties)
-		h.claim(coord.SeatResource("ceo"), coord.AcquireOptions{Owner: "node-a:1", TTL: LongTTL})
+		h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a:1", TTL: LongTTL})
 		h.claim(coord.NodeResource("node-a"), coord.AcquireOptions{
 			Owner: "node-a:1", TTL: LongTTL, Ungated: true,
 		})

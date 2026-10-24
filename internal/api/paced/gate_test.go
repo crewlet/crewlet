@@ -157,7 +157,7 @@ type exemption struct {
 
 // exempt is every place a deadline may be set on a client's connection.
 var exempt = []exemption{
-	{file: "internal/api/paced/paced.go", funcs: []string{"body.Read", "Writer.Write", "Writer.End"}},
+	{file: "internal/api/paced/paced.go", funcs: []string{"Body.Read", "Writer.Write", "Writer.End"}},
 	{file: "internal/api/httpjson/httpjson.go", funcs: []string{"ReadBody"}},
 }
 

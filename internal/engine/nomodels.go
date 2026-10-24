@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -63,17 +66,19 @@ const pauseReasonNoTurnEngine = string(inbox.HoldNoTurnEngine)
 // epoch's seats instead would resume every seat on every apply to lift holds
 // that almost never exist, and would still miss one the new revision no
 // longer names.
+// BY THE SEAT'S ID, the agent id derived from its handle (ADR-0013), which is
+// what the paused topic is named by. The handle rides along for the log lines.
 type modelHolds struct {
 	mu    sync.Mutex
-	seats map[string]struct{}
+	seats map[uuid.UUID]string
 }
 
-// record notes that handle's inbox holds the no-model pause.
-func (h *modelHolds) record(handle string) {
+// record notes that this seat's inbox holds the no-model pause.
+func (h *modelHolds) record(id uuid.UUID, handle string) {
 	if h.seats == nil {
-		h.seats = map[string]struct{}{}
+		h.seats = map[uuid.UUID]string{}
 	}
-	h.seats[handle] = struct{}{}
+	h.seats[id] = handle
 }
 
 // holdInbox takes the hold a screening's pause-and-park names, before the park
@@ -102,14 +107,15 @@ func (e *Engine) holdInbox(ctx context.Context, handle string, hold inbox.Hold, 
 // the queue call instead would deadlock on the in-memory twin, whose resume
 // drains synchronously into handlers that come straight back here.
 func (e *Engine) pause(ctx context.Context, handle, reason string) error {
-	subject, group := topics.AgentInbox(handle), topics.AgentInboxGroup(handle)
-	if subject == "" || group == "" {
-		return fmt.Errorf("engine: seat %q has no inbox subject", handle)
+	id, err := e.seatID(handle)
+	if err != nil {
+		return err
 	}
+	subject, group := topics.AgentInbox(id), topics.AgentInboxGroup(id)
 	e.modelHolds.mu.Lock()
-	err := e.backends.Queue.PauseTopic(ctx, subject, group, pauseReasonNoTurnEngine)
+	err = e.backends.Queue.PauseTopic(ctx, subject, group, pauseReasonNoTurnEngine)
 	if err == nil {
-		e.modelHolds.record(handle)
+		e.modelHolds.record(id, handle)
 	}
 	e.modelHolds.mu.Unlock()
 	if err != nil {
@@ -132,19 +138,26 @@ func (e *Engine) pause(ctx context.Context, handle, reason string) error {
 // through is screened and run against the company that has a model.
 func (e *Engine) releaseModelHolds(ctx context.Context) {
 	e.modelHolds.mu.Lock()
-	held := slices.Sorted(maps.Keys(e.modelHolds.seats))
+	held := maps.Clone(e.modelHolds.seats)
 	clear(e.modelHolds.seats)
 	e.modelHolds.mu.Unlock()
 
-	for _, handle := range held {
-		subject, group := topics.AgentInbox(handle), topics.AgentInboxGroup(handle)
+	// SORTED BY THE ID, which is the key: the order only has to be stable so
+	// a test and a log read the same way.
+	ids := slices.Collect(maps.Keys(held))
+	slices.SortFunc(ids, func(a, b uuid.UUID) int {
+		return strings.Compare(a.String(), b.String())
+	})
+	for _, id := range ids {
+		handle := held[id]
+		subject, group := topics.AgentInbox(id), topics.AgentInboxGroup(id)
 		if err := e.backends.Queue.ResumeTopic(ctx, subject, group, pauseReasonNoTurnEngine); err != nil {
 			// Kept on the record, so the next release tries it again. A
 			// resume fails only on a client that has stopped, which is a
 			// process on its way out; forgetting the hold would be the one
 			// way to make it permanent.
 			e.modelHolds.mu.Lock()
-			e.modelHolds.record(handle)
+			e.modelHolds.record(id, handle)
 			e.modelHolds.mu.Unlock()
 			log.WarnContext(ctx, "seat_inbox_not_resumed", "handle", handle,
 				"error", err, "detail", "this seat's held work stays on its inbox "+
@@ -154,4 +167,27 @@ func (e *Engine) releaseModelHolds(ctx context.Context) {
 		log.InfoContext(ctx, "seat_inbox_resumed", "handle", handle,
 			"reason", pauseReasonNoTurnEngine)
 	}
+}
+
+// seatID resolves a seat handle to the id its mailbox is named by, through
+// the company this node is running.
+//
+// A LOOKUP IS SAFE HERE and is not on the host's release paths, which is why
+// [placement.Seat] carries the id instead: every caller of this is inside a
+// live dispatch — a park, a pause, a release of one — where the company is by
+// construction the one the delivery was screened against. A node with no
+// company cannot be dispatching at all, so an absent one is a wiring mistake
+// and says so rather than answering with a subject named after nothing.
+func (e *Engine) seatID(handle string) (uuid.UUID, error) {
+	c := e.Company()
+	if c == nil || c.Org == nil {
+		return uuid.Nil, fmt.Errorf("engine: this node runs no company, so seat "+
+			"%q has no mailbox to address", handle)
+	}
+	id, ok := c.Org.AgentIDFor(c.Org.AgentSeatByHandle(handle))
+	if !ok {
+		return uuid.Nil, fmt.Errorf("engine: seat %q is no agent seat in the "+
+			"running company, so it has no inbox subject", handle)
+	}
+	return id, nil
 }

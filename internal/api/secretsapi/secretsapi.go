@@ -9,12 +9,46 @@
 // rows are fleet-wide, and the engine is the only thing that
 // can put one there.
 //
-// # Every route is guarded, reads included
+// # Every route is admin's, reads included
 //
-// [github.com/crewlet/crewlet/internal/api/auth] names /secrets alongside
-// /config as a prefix that is never eligible for allow_anonymous_read. A
-// listing here says which credentials a company holds and when each last
-// changed, which is reconnaissance even without the values.
+// Each is mounted through [authz.Router] with the verb the authority table
+// decides it by: the listing and one row's metadata are `secrets.list`,
+// revealing a value is `secrets.reveal`, and storing, rotating, deleting and
+// re-keying are `secrets.write` — all three admin's (ADR-0033), and the two
+// that hand out or change a credential also ask a recent proof, the reveal a
+// person present besides. A listing says which credentials a company holds and
+// when each last changed, which is reconnaissance even without the values, so
+// it is not part of everybody's overview.
+//
+// THE THREE STAY THREE VERBS although one permission admits them: what
+// differs between them is the proof and the presence each row asks, and the
+// route names the verb so the table decides those, rather than a check here
+// that could drift from it.
+//
+// THE ROUTES USED TO DECIDE NOTHING. They resolved the caller for the audit
+// line and asked no permission, which was sound while the only credential this
+// engine had was an operator token: "somebody resolved" meant "the operator".
+// It stopped being sound the day a person could sign in holding a read-only
+// permission alone — every one of them could then read, reveal, overwrite and
+// delete the company's credentials.
+//
+// # The engine's own key material is not reachable from here at all
+//
+// The same bucket holds the identity estate's blind-index key, under a name in
+// the engine's own namespace ([secrets.Reserved]). Every route that takes a
+// name refuses one with `403 reserved_name` before anything else — whatever the
+// caller holds — and the listing counts them per keyring key without naming
+// any. It was once an ordinary name here, and that made a DELETE a way to
+// orphan every address in the directory.
+//
+// # A rekey is the whole rotation, the identity estate included
+//
+// The keyring that seals this bucket also seals every person's name, address
+// and second factor in the identity estate, whose rows are derived from a log
+// and can only be changed by a record. So `POST /secrets/rekey` moves both —
+// the store's rows at the version it read, and the identity estate's through
+// the node's own writer ([Identity]) — and the listing counts both, because
+// the answer an operator retires the old key on is "nothing is under it".
 //
 // # There is exactly one route that returns a value, and it is break-glass
 //
@@ -26,14 +60,22 @@
 package secretsapi
 
 import (
+	"context"
 	"errors"
+	"maps"
 	"net/http"
+	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
@@ -49,12 +91,39 @@ var log = logging.Get("api.secrets")
 // refused rather than sealed.
 const MaxValueBytes = 64 << 10
 
+// Identity is the identity estate's half of a keyring rotation: the personal
+// values — names, addresses, second factors — the same keyring seals in rows
+// no store write can reach. The engine's `IdentityKeyring` is what a running
+// node hands in.
+type Identity interface {
+	// SealedKeys counts the values those rows hold, by the keyring key
+	// each is sealed under, opening none of them.
+	SealedKeys(ctx context.Context) (iamdomain.SealedCount, error)
+
+	// Reseal moves every person's values onto the active key.
+	Reseal(ctx context.Context) (iamdomain.ResealReport, error)
+}
+
+// IdentityResealed is what a rekey moved in the identity estate, COUNTED: how
+// many people's records it published and how many values those carried. Never
+// the ids — a rekey answers the person who ran it, and the count is what they
+// need to retire the old key, while who carries a value under it is the
+// directory's to answer.
+type IdentityResealed struct {
+	People int `json:"people"`
+	Values int `json:"values"`
+}
+
 // Service is the /secrets surface.
 type Service struct {
-	store  *fleetsecrets.Store
-	keyID  string
-	cipher secrets.Cipher
-	now    func() time.Time
+	store    *fleetsecrets.Store
+	identity Identity
+	keyID    string
+	now      func() time.Time
+
+	// guard decides every route and the reveal a GET asks for on top of
+	// its route. No chart: not one verb here asks a relation.
+	guard authz.Guard
 }
 
 // Options wire the service.
@@ -63,12 +132,22 @@ type Options struct {
 	// node opens the fleet store, and [New] refuses to build without it.
 	Fleet coord.Secrets
 
-	// Cipher seals and opens a value. Nil is a node with no keyring,
-	// which every route refuses rather than storing plaintext.
+	// Cipher seals and opens a value, under the keyring every node holds.
+	// Required: [New] refuses to build without it.
 	Cipher secrets.Cipher
 
-	// ActiveKeyID is the keyring key a rekey re-seals onto.
+	// ActiveKeyID is the keyring key a rekey re-seals onto: Tier A's
+	// secrets.active_key_id. Required for the same reason.
 	ActiveKeyID string
+
+	// Identity is the identity estate's half of a rotation. NIL-ABLE for a
+	// suite about the store alone — `crewlet run` always hands one over,
+	// since every node serving the API holds the estate (ingress requires
+	// the `data` role, ADR-0025) and runs the identity estate from boot —
+	// and every
+	// answer made without one SAYS so (`identity: null`) rather than
+	// reading as an estate with nothing under an old key.
+	Identity Identity
 
 	// Now is injectable so a test can pin a row's timestamp.
 	Now func() time.Time
@@ -76,63 +155,119 @@ type Options struct {
 
 // New builds the service.
 //
-// A MISSING FLEET IS REFUSED rather than served as an absent surface: `crewlet
-// run` builds this beside an engine whose fleet store is open on every
-// topology, so a nil here is a wiring mistake, and an unregistered /secrets
-// answering 404 would hide it.
+// A MISSING FLEET OR KEYRING IS REFUSED rather than served as a narrower
+// surface: `crewlet run` builds this beside an engine whose fleet store is open
+// on every topology and whose Tier A carries a keyring and an active key —
+// validation refuses a file without them and the engine refuses to start — so
+// a nil here is a wiring mistake. An unregistered /secrets answering 404 would
+// hide it, and so did the surface this was: built with no keyring, it answered
+// every route 503 no_keyring, describing a deployment that cannot exist.
 func New(opts Options) (*Service, error) {
 	if opts.Fleet == nil {
 		return nil, errors.New("secretsapi: Options.Fleet is required: the " +
 			"company's credentials live in the fleet's coordination store")
 	}
+	if opts.Cipher == nil {
+		return nil, errors.New("secretsapi: Options.Cipher is required: every " +
+			"node holds the keyring (secrets.keys) a credential is sealed under")
+	}
+	if opts.ActiveKeyID == "" {
+		return nil, errors.New("secretsapi: Options.ActiveKeyID is required: it " +
+			"is the key (secrets.active_key_id) a rekey re-seals onto")
+	}
 	now := opts.Now
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	if opts.Cipher == nil {
-		// SAID AT REGISTRATION. Every route then answers 503, and a 503
-		// with no explanation anywhere is a support ticket: a node with
-		// no secrets.keys genuinely cannot hold a credential, and the
-		// operator's answer is `crewlet secrets keygen`.
-		log.Warn("secret_routes_disabled",
-			"hint", "this node has no secrets.keys, so /secrets cannot seal "+
-				"anything; run `crewlet secrets keygen` and install one")
-	}
 	return &Service{
-		store:  fleetsecrets.New(opts.Fleet, opts.Cipher),
-		keyID:  opts.ActiveKeyID,
-		cipher: opts.Cipher,
-		now:    now,
+		store:    fleetsecrets.New(opts.Fleet, opts.Cipher),
+		identity: opts.Identity,
+		keyID:    opts.ActiveKeyID,
+		now:      now,
+		guard:    authz.ContextGuard(authz.NoChart{}),
 	}, nil
 }
 
-// Routes registers the surface on the API's mux.
-func (s *Service) Routes(mux httpjson.Router) {
-	mux.HandleFunc("GET /secrets", s.list)
+// Routes registers the surface on the API's mux, every route through
+// [authz.Router] with the verb it is decided by. A route mounted without one
+// is refused here and fails the boot — see [authz.Router.Handle].
+func (s *Service) Routes(mux authz.Mux) error {
+	router := authz.NewRouter(mux, s.guard)
+	var failures []error
+	mount := func(pattern string, a authz.Action, h http.HandlerFunc) {
+		if err := router.Handle(pattern, authz.Policy{Action: a}, h); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	mount("GET /secrets", authz.ActionSecretList, s.list)
 	// REKEY IS A POST, and that is what keeps it from swallowing a secret
 	// a company legitimately calls "rekey". Registration order is NOT what
 	// separates them — the mux prefers the more specific pattern whichever
 	// way round they are declared — so the method is doing the work: a
 	// GET, PUT or DELETE of that name reaches the {name} routes, and no
 	// spelling of a secret's name can reach the rekey handler.
-	mux.HandleFunc("POST /secrets/rekey", s.rekey)
-	mux.HandleFunc("GET /secrets/{name}", s.get)
-	mux.HandleFunc("PUT /secrets/{name}", s.put)
-	mux.HandleFunc("DELETE /secrets/{name}", s.delete)
+	mount("POST /secrets/rekey", authz.ActionSecretWrite, s.rekey)
+	// THE METADATA'S VERB, and a reveal asks the value's on top — see
+	// [Service.get]. The pattern cannot see `?reveal=true`.
+	mount("GET /secrets/{name}", authz.ActionSecretList, s.get)
+	mount("PUT /secrets/{name}", authz.ActionSecretWrite, s.put)
+	mount("DELETE /secrets/{name}", authz.ActionSecretWrite, s.delete)
+	return errors.Join(failures...)
 }
 
 // list serves GET /secrets — every name, with no values.
+//
+// THE ENGINE'S OWN KEYS ARE COUNTED AND NEVER NAMED. The blind-index key is not
+// the operator's to read, write or delete, and a listing of it was the first
+// step to every one of those; what an operator does need is to see a rotation
+// reach it, so `engine_keys` says how many there are under each keyring key and
+// nothing else. `identity_values` is the same count for the identity estate's
+// sealed values, by key — null where this surface was given no identity
+// estate, which `crewlet run` never does: every node serving the API holds the
+// estate (ingress requires `data`) and runs the identity estate from boot.
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.store.List(r.Context())
 	if err != nil {
 		s.fail(w, "list the secrets", err)
 		return
 	}
+	engine, err := s.store.EngineKeys(r.Context())
+	if err != nil {
+		s.fail(w, "count the engine's keys", err)
+		return
+	}
+	var identity *iamdomain.SealedCount
+	if s.identity != nil {
+		counted, err := s.identity.SealedKeys(r.Context())
+		if err != nil {
+			s.fail(w, "count the identity estate's sealed values", err)
+			return
+		}
+		identity = &counted
+	}
 	out := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, render(row))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"secrets": out})
+	httpjson.Write(w, http.StatusOK, map[string]any{
+		"secrets": out, "engine_keys": engine, "identity_values": identity,
+	})
+}
+
+// reserved refuses a name in the engine's own namespace, and says what to do
+// instead. Every route that takes a name asks it FIRST — before the verb a
+// reveal asks and before a body is read — because no caller of this surface,
+// whatever it holds, may address one.
+func reserved(w http.ResponseWriter, name string) bool {
+	if !secrets.Reserved(name) {
+		return false
+	}
+	httpjson.FailWith(w, http.StatusForbidden, httpjson.CodeReservedName, map[string]string{
+		"detail": secrets.ErrReservedName.Error(),
+		"hint": "A rekey moves it with everything else (crewlet secrets " +
+			"rekey).",
+	})
+	return true
 }
 
 // get serves GET /secrets/{name} — metadata, or the value with ?reveal=true.
@@ -144,7 +279,11 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if name == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_name"})
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidName,
+			map[string]string{"detail": "the path names no secret"})
+		return
+	}
+	if reserved(w, name) {
 		return
 	}
 	if r.URL.Query().Get("reveal") != "true" {
@@ -153,31 +292,41 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 		case err != nil:
 			s.fail(w, "read the secret", err)
 		case !found:
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_found"})
+			httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
 		default:
-			writeJSON(w, http.StatusOK, render(row))
+			httpjson.Write(w, http.StatusOK, render(row))
 		}
 		return
 	}
-	if !s.sealed(w) {
+	// THE VALUE IS ITS OWN VERB. The route admitted a caller who may see
+	// that the credential exists; revealing it is `secrets.reveal` — a
+	// person present and a recent proof on top of the listing's admin —
+	// asked here because the pattern cannot see the flag, and asked BEFORE
+	// the store is read, so a refused caller never has the value in flight.
+	if !authz.Admit(w, r, s.guard, authz.Policy{Action: authz.ActionSecretReveal}) {
 		return
 	}
 	value, err := s.store.Get(r.Context(), name)
 	switch {
 	case errors.Is(err, secrets.ErrNotFound):
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_found"})
+		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
 		return
 	case err != nil:
 		s.fail(w, "open the secret", err)
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
-	log.WarnContext(r.Context(), "secret_revealed", "name", name, "operator", operator)
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	by := iam.ActorFor(caller)
+	log.WarnContext(r.Context(), "secret_revealed", "name", name,
+		"by", by.Name, "operator", by.OperatorID)
 	// NO-STORE, and it is not decoration: without it a value can sit in a
 	// shared proxy's cache, which is a credential leak with no log line
 	// anywhere and no way to find it afterwards.
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, map[string]any{"name": name, "value": value})
+	httpjson.Write(w, http.StatusOK, map[string]any{"name": name, "value": value})
 }
 
 // put serves PUT /secrets/{name} — store or rotate one value.
@@ -186,22 +335,31 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 // arbitrary text — a PEM key has newlines, a token can be anything — and
 // making the caller escape it into JSON puts an encoding step between the
 // operator and the byte sequence the vendor will check.
+//
+// NOTHING ELSE IS THE REQUEST'S TO SAY. The row's author, kind and credential
+// are the caller the guard authenticated, and its source is this route's own,
+// [secrets.SourceAPI], whoever calls it — see [secrets.Source] for what a
+// source the caller named cost.
 func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	if reserved(w, name) {
+		return
+	}
 	// BEFORE THE BODY, so a name the grammar cannot reference is refused
 	// without moving 64 KiB of credential through the process first. Only
 	// the write checks: a name outside the grammar names no row, so a read
-	// of one answers not_found and a delete answers removed:false.
+	// of one answers not_found and a delete answers removed:false — and
+	// the engine's own names are refused reserved_name before either,
+	// since no route here addresses them at all.
 	if err := secrets.CheckName(name); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error":  "invalid_name",
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidName, map[string]string{
 			"detail": err.Error(),
 			"hint": "a secret is keyed by environment-variable name, because " +
 				"that is what a ${VAR} in the company config resolves through",
 		})
 		return
 	}
-	if !s.sealed(w) {
+	if !noQuery(w, r) {
 		return
 	}
 	// THE SHARED READER, not a copy of it. This route answered
@@ -213,22 +371,70 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		httpjson.Refuse(w, err)
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
-	source := r.URL.Query().Get("source")
-	if source == "" {
-		source = "api"
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
 	}
-	if err := s.store.Set(r.Context(), name, string(body), operator, source, s.now()); err != nil {
+	by := iam.ActorFor(caller)
+	// THE AUTHOR AND THE CREDENTIAL BOTH, on the row: a row that named only
+	// the credential named, for a person's machine token, something the
+	// identity sweep deletes a week after it lapses.
+	if err := s.store.Set(r.Context(), name, string(body), secrets.Author{
+		Name: by.Name, Kind: string(by.Kind), OperatorID: by.OperatorID,
+	}, secrets.SourceAPI, s.now()); err != nil {
 		s.fail(w, "store the secret", err)
 		return
 	}
 	// The NAME and the byte count. Confirming the value would undo the
-	// reason it was sent as a body in the first place.
+	// reason it was sent as a body in the first place. No source: it is
+	// this route's constant, so the line says nothing by carrying it.
 	log.InfoContext(r.Context(), "secret_written", "name", name,
-		"bytes", len(body), "operator", operator, "source", source)
-	writeJSON(w, http.StatusOK, map[string]any{
+		"bytes", len(body), "by", by.Name, "operator", by.OperatorID)
+	// THE PROVENANCE THE ROW RECORDS, in the answer: a client has no say in
+	// any of it, so the only honest confirmation is the node's.
+	httpjson.Write(w, http.StatusOK, map[string]any{
 		"name": name, "bytes": len(body), "key_id": s.keyID,
+		"updated_by": by.Name, "updated_by_kind": string(by.Kind),
+		"operator_id": by.OperatorID, "source": secrets.SourceAPI,
 	})
+}
+
+// noQuery refuses a write that carries a query string, naming its parameters,
+// and reports whether the request may go on.
+//
+// REFUSED, NEVER IGNORED. `?source=` once chose the word a row recorded, and a
+// client still sending it would otherwise be told its write landed while the
+// row says something else — a client that judged its own rows by that word
+// would read every one as overwritten and write it again, for ever, with
+// nothing failing. So any parameter is a 400 before the body is read, and the
+// answer says where the provenance comes from instead.
+func noQuery(w http.ResponseWriter, r *http.Request) bool {
+	if r.URL.RawQuery == "" {
+		return true
+	}
+	names := slices.Sorted(maps.Keys(r.URL.Query()))
+	quoted := make([]string, 0, len(names))
+	for _, name := range names {
+		quoted = append(quoted, strconv.Quote(name))
+	}
+	// A query that parses to no name at all (`?&`) is still a query, and is
+	// refused in general terms rather than by a name it does not have.
+	detail := "PUT /secrets/{name} takes no query parameters"
+	switch {
+	case len(quoted) == 1:
+		detail = quoted[0] + " is not a parameter of PUT /secrets/{name}, which takes none"
+	case len(quoted) > 1:
+		detail = strings.Join(quoted, ", ") + " are not parameters of " +
+			"PUT /secrets/{name}, which takes none"
+	}
+	httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidQuery, map[string]string{
+		"detail": detail,
+		"hint": "who stored a value is the credential this request " +
+			"authenticated with (updated_by, updated_by_kind, operator_id), " +
+			"and its source is this route's own, " + string(secrets.SourceAPI) +
+			"; send the value as the body and nothing in the query",
+	})
+	return false
 }
 
 // delete serves DELETE /secrets/{name}.
@@ -239,7 +445,11 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if name == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_name"})
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidName,
+			map[string]string{"detail": "the path names no secret"})
+		return
+	}
+	if reserved(w, name) {
 		return
 	}
 	removed, err := s.store.Unset(r.Context(), name)
@@ -247,29 +457,28 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, "remove the secret", err)
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	by := iam.ActorFor(caller)
 	log.InfoContext(r.Context(), "secret_removed", "name", name,
-		"removed", removed, "operator", operator)
-	writeJSON(w, http.StatusOK, map[string]any{"name": name, "removed": removed})
+		"removed", removed, "by", by.Name, "operator", by.OperatorID)
+	httpjson.Write(w, http.StatusOK, map[string]any{"name": name, "removed": removed})
 }
 
-// rekey serves POST /secrets/rekey — re-seal every stale row.
+// rekey serves POST /secrets/rekey — re-seal every stale row, and every person's
+// values in the identity estate.
 //
 // THE NAMES, not a count: a pass that moved 12 of 13 rows raises a question a
 // number cannot answer, and this is what an operator reads before retiring
-// the old key.
+// the old key. The engine's key and the identity estate's values are counted,
+// for the listing's reason.
+//
+// THE STORE FIRST, THEN THE ESTATE, and a failure in either is the one
+// `rekey_incomplete` carrying what did move: both halves are their own retry,
+// so running the gesture again finishes it.
 func (s *Service) rekey(w http.ResponseWriter, r *http.Request) {
-	if !s.sealed(w) {
-		return
-	}
-	if s.keyID == "" {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"error": "no_active_key",
-			"hint": "this node's secrets.active_key_id is unset, so there is " +
-				"no key to re-seal onto",
-		})
-		return
-	}
 	// THE CALLER'S EXPECTED KEY, refused on a mismatch rather than
 	// ignored. A CLI whose Tier A names a different active key than this
 	// node's is an operator rekeying onto a key the fleet will not seal
@@ -277,46 +486,90 @@ func (s *Service) rekey(w http.ResponseWriter, r *http.Request) {
 	// rows sealed under something else, which is exactly the state they
 	// are about to retire the old key on the strength of.
 	if want := r.URL.Query().Get("key_id"); want != "" && want != s.keyID {
-		writeJSON(w, http.StatusConflict, map[string]string{
-			"error": "key_id_mismatch", "key_id": s.keyID, "your_key_id": want,
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeKeyIDMismatch, map[string]string{
+			"key_id": s.keyID, "your_key_id": want,
 			"hint": "this node seals under its own secrets.active_key_id; make " +
 				"the two configs agree before rekeying",
 		})
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
-	moved, err := s.store.Rekey(r.Context(), s.keyID, operator, s.now())
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	// WHO ROTATED is this gesture's own fact, and it is logged here: the
+	// rows keep who stored each value, which a rekey did not choose.
+	by := iam.ActorFor(caller)
+	rekeyed, err := s.store.Rekey(r.Context(), s.keyID)
 	if err != nil {
 		// THE NAMES THAT DID MOVE travel with the refusal. A partial
 		// rekey is a fact an operator has to act on, and a bare 500
 		// would leave them re-running a pass with no idea which rows
 		// are already under the new key.
 		log.ErrorContext(r.Context(), "secret_rekey_failed", "error", err,
-			"moved", moved, "operator", operator)
-		writeJSON(w, http.StatusInternalServerError, map[string]any{
-			"error": "rekey_incomplete", "moved": moved,
+			"moved", rekeyed.Moved, "engine_keys_moved", rekeyed.EngineKeys,
+			"by", by.Name, "operator", by.OperatorID)
+		httpjson.FailWithFields(w, http.StatusInternalServerError, httpjson.CodeRekeyIncomplete, httpjson.Detail{
+			"moved":             nonNil(rekeyed.Moved),
+			"engine_keys_moved": rekeyed.EngineKeys,
 			"hint": "a row could not be opened with this node's keyring; the " +
 				"key that sealed it is missing from secrets.keys",
 		})
 		return
 	}
-	log.InfoContext(r.Context(), "secrets_rekeyed", "moved", moved,
-		"key_id", s.keyID, "operator", operator)
-	writeJSON(w, http.StatusOK, map[string]any{"key_id": s.keyID, "moved": moved})
+	var identity *IdentityResealed
+	if s.identity != nil {
+		report, err := s.identity.Reseal(r.Context())
+		identity = &IdentityResealed{People: len(report.People), Values: report.Values}
+		if err != nil || len(report.Unknown) > 0 {
+			// UNKNOWN IS INCOMPLETE TOO: a record nobody could confirm may
+			// not have landed, and the operator is about to drop the key
+			// its value is under on the strength of this answer.
+			log.ErrorContext(r.Context(), "secret_rekey_identity_incomplete",
+				"error", errText(err), "moved", rekeyed.Moved,
+				"engine_keys_moved", rekeyed.EngineKeys,
+				"identity_people", identity.People, "identity_values", identity.Values,
+				"identity_unknown", len(report.Unknown),
+				"by", by.Name, "operator", by.OperatorID)
+			httpjson.FailWithFields(w, http.StatusInternalServerError, httpjson.CodeRekeyIncomplete, httpjson.Detail{
+				"moved":             nonNil(rekeyed.Moved),
+				"engine_keys_moved": rekeyed.EngineKeys,
+				"identity":          identity,
+				"identity_unknown":  len(report.Unknown),
+				"hint": "Some people's details weren't moved to the new key. " +
+					"Run the rekey again.",
+			})
+			return
+		}
+	}
+	log.InfoContext(r.Context(), "secrets_rekeyed", "moved", rekeyed.Moved,
+		"engine_keys_moved", rekeyed.EngineKeys, "identity", identity,
+		"key_id", s.keyID, "by", by.Name, "operator", by.OperatorID)
+	// THE ENGINE'S KEYS AND THE IDENTITY ESTATE'S VALUES AS COUNTS beside the
+	// operator's names: the operator retiring the old key needs to know they
+	// moved, and nothing more — and null where this node runs no identity
+	// estate, which is a different answer from "nothing to move".
+	httpjson.Write(w, http.StatusOK, map[string]any{
+		"key_id": s.keyID, "moved": nonNil(rekeyed.Moved),
+		"engine_keys_moved": rekeyed.EngineKeys, "identity": identity,
+	})
 }
 
-// sealed refuses a write on a node with no keyring, and says what to do.
-func (s *Service) sealed(w http.ResponseWriter) bool {
-	if s.cipher != nil {
-		return true
+// errText is an error as a log attribute, or empty for none.
+func errText(err error) string {
+	if err == nil {
+		return ""
 	}
-	writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-		"error": "no_keyring",
-		"detail": "this node has no secrets.keys, so it cannot seal or open a " +
-			"secret",
-		"hint": "run `crewlet secrets keygen` and install the key in Tier A",
-	})
-	return false
+	return err.Error()
+}
+
+// nonNil is a list as JSON renders it for a reader that ranges over it: an
+// empty array, never null.
+func nonNil(names []string) []string {
+	if names == nil {
+		return []string{}
+	}
+	return names
 }
 
 // render is one row as the surface reports it — never its value.
@@ -326,7 +579,12 @@ func render(row secrets.Record) map[string]any {
 		"key_id":     row.KeyID,
 		"updated_at": row.UpdatedAt.Format(time.RFC3339Nano),
 		"updated_by": row.UpdatedBy,
-		"source":     row.Source,
+		// THE KIND AND THE CREDENTIAL BESIDE THE AUTHOR, the credential
+		// empty on a row no credential wrote: the engine's own, and one
+		// set on a stopped node and moved onto the fleet at its start.
+		"updated_by_kind": row.UpdatedByKind,
+		"operator_id":     row.OperatorID,
+		"source":          row.Source,
 	}
 }
 
@@ -336,15 +594,6 @@ func render(row secrets.Record) map[string]any {
 // carry a bucket name and a broker address, and an error from the cipher can
 // name a key id. None of that belongs in a response body on this surface.
 func (s *Service) fail(w http.ResponseWriter, what string, err error) {
-	if errors.Is(err, secrets.ErrNoKeyring) {
-		s.sealed(w)
-		return
-	}
 	log.Error("secret_request_failed", "what", what, "error", err)
-	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal_error"})
-}
-
-// writeJSON is [httpjson.Write] under this package's own name.
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	httpjson.Write(w, status, body)
+	httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 }

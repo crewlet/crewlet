@@ -1,6 +1,6 @@
 /**
- * The file-storage card on Settings › Nodes: what it says of the store and of
- * the collector's last passes.
+ * Settings › File storage: what it says of the store and of the collector's
+ * last passes.
  */
 
 import { afterEach, describe, expect, test } from "vitest";
@@ -69,7 +69,7 @@ describe("file storage", () => {
     expect(screen.getByText("data-a")).toBeTruthy();
     expect(
       screen.getByText(
-        /deleted 12 objects no file names, of 1,840 stored.*; abandoned 1 unfinished upload$/,
+        /^Deleted 12 objects that no file names, of 1,840 stored \(.*\); abandoned 1 unfinished upload$/,
       ),
     ).toBeTruthy();
     expect(screen.getByText("1,828 named, none missing")).toBeTruthy();
@@ -81,7 +81,7 @@ describe("file storage", () => {
     const r = reported("missing");
     renderCard(r);
     const alert = screen.getByRole("alert");
-    expect(alert.textContent).toContain("3 files cannot be read");
+    expect(alert.textContent).toContain("3 files can’t be read");
     const files = r.audit?.found?.missing_files ?? [];
     expect(files.length).toBe(3);
     for (const m of files) {
@@ -92,13 +92,13 @@ describe("file storage", () => {
     expect(new Set(files.map((m) => m.finding))).toEqual(new Set(OBJECT_FINDINGS));
     expect(screen.getByText("1,828 named, 1 missing, 1 damaged, 1 unanswered")).toBeTruthy();
     expect(
-      screen.getByText("the fleet's own NATS bucket, replicated at stream.replicas"),
+      screen.getByText("The fleet's own NATS bucket, replicated as the stream is"),
     ).toBeTruthy();
   });
 
   test("an audit that failed keeps what the last whole one found, and says it failed", () => {
     renderCard(block("failed"));
-    expect(screen.getByRole("alert").textContent).toContain("3 files cannot be read");
+    expect(screen.getByRole("alert").textContent).toContain("3 files can’t be read");
     expect(
       screen.getByText(
         /^1,828 named, 1 missing, 1 damaged, 1 unanswered \(a later audit stopped: .*did not answer\)$/,
@@ -109,10 +109,13 @@ describe("file storage", () => {
   test("a collection that stopped judging says what it deleted first, and why it stopped", () => {
     renderCard(block("skipped"));
     expect(
-      screen.getByText(/^deleted 500 objects no file names, then stopped: a record this node/),
+      screen.getByText(/^Deleted 500 objects that no file names, then stopped: a record this node/),
     ).toBeTruthy();
     expect(screen.queryByText(/deleted nothing/)).toBeNull();
     // A REFUSED SWEEP is said beside the collection, with what the identity lacks.
+    expect(screen.getByRole("status").textContent).toContain(
+      "Unfinished uploads couldn’t be cleared",
+    );
     expect(screen.getByRole("status").textContent).toContain("s3:ListBucketMultipartUploads");
     // No audit has ended: the row says so rather than drawing a zero.
     expect(screen.getByText("Not run yet")).toBeTruthy();
@@ -120,16 +123,30 @@ describe("file storage", () => {
 
   test("a record the store would not give up is not a fleet with no collection", () => {
     renderCard(block("unavailable"));
-    expect(screen.getByRole("alert").textContent).toContain("could not be read");
+    expect(screen.getByRole("alert").textContent).toBe(
+      "Couldn’t read the collector’s last report. Files are unaffected.",
+    );
     cleanup();
     renderCard(block("not_yet"));
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByText("No collection yet")).toBeTruthy();
   });
 
-  test("a node that reads no record draws no card", () => {
+  // NO RECORD IS NOT AN EMPTY STORE: the page says the node keeps none,
+  // rather than drawing nothing under its own heading.
+  // TWO CARDS, EACH NAMED BY ITS SUBJECT, and neither by the page's own
+  // title: "File storage" over a page called File storage said it twice.
+  test("a report is two cards named by their subjects, not by the page", () => {
+    renderCard(block("reported"));
+    expect(screen.getByText("Where files are kept")).toBeTruthy();
+    expect(screen.getByText("Collector passes")).toBeTruthy();
+    expect(screen.queryByText("File storage")).toBeNull();
+    expect(screen.getByText("Last pass run by")).toBeTruthy();
+  });
+
+  test("a node that reads no record says it keeps none", () => {
     const { container } = renderCard(undefined);
-    expect(container.textContent).toBe("");
+    expect(container.textContent).toContain("No record of the company's files");
   });
 
   test("an incomplete audit's count is a floor, and a failed pass says what stopped it", () => {
@@ -153,7 +170,7 @@ describe("file storage", () => {
         unanswered: 0,
         error: "the bucket did not answer",
       }),
-    ).toBe("stopped: the bucket did not answer");
+    ).toBe("Stopped: the bucket did not answer");
     expect(
       collectSummary({
         at: "",
@@ -165,7 +182,7 @@ describe("file storage", () => {
         abandoned: 0,
         error: "the bucket did not answer",
       }),
-    ).toBe("stopped: the bucket did not answer");
+    ).toBe("Stopped: the bucket did not answer");
     expect(backendSummary("gcs:x")).toBe("gcs:x");
   });
 });

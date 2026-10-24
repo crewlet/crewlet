@@ -25,6 +25,13 @@ bucket crewlet_token_windows  streams/KV_crewlet_token_windows.snapshot  512 B  
 …
 ```
 
+**It needs `admin`.** The command authenticates with
+`CREWLET_API_TOKEN` like every command that talks to a running node, and
+`POST /backup` refuses a credential without it with `403` naming it —
+copying the node's whole durable state, every credential and every seat's
+memory included, to a directory the caller names operates the deployment
+rather than reading the company.
+
 The path is on the **engine's host**, not yours — this writes files where the
 node runs and downloads nothing. Any node produces one, whatever its roles:
 every node holds its own store and, on the embedded topology, its own broker.
@@ -39,7 +46,7 @@ A deployment's durable state lives in six places:
 | Estate | Where | What it holds |
 |---|---|---|
 | **The node's own store file** | `store.path`, with its `-wal` sidecar | The seat's memory — diary, episodes, counterparty profiles, synthesized skills, onboarding markers, the [conversation ledger](../concepts/conversation-sessions.md) — which is also [replicated onto the stream](../concepts/seat-ownership.md#a-seats-memory-follows-it), so this file is a cache of it rather than its only copy; and, held here **only**: the audit event log (30 days), scheduled-run history, the company-config revision history, the [secret store's](../concepts/secret-store.md) bootstrap rows, and this node's own record of any snapshot it has adopted |
-| **The replicated estate** | `store.replicated_path`, with its `-wal` sidecar | Everything a state log's applier derives from the fleet's own records — the work tracker, the knowledge base's pages, the embeddings that search them and every node's daily usage — together with the checkpoint that says how far this node has applied. Derivable by replay **only while the log still holds the records**: past the trim floor, a node with no copy of this file adopts a peer's snapshot instead |
+| **The replicated estate** | `store.replicated_path`, with its `-wal` sidecar | Everything a state log's applier derives from the fleet's own records — the work tracker, the knowledge base's pages, the embeddings that search them, the [identity directory](../concepts/identity-and-access.md), the company's [git repositories](../concepts/code-host.md) and every node's [daily usage](replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day) — together with the checkpoint that says how far this node has applied. Derivable by replay **only while the log still holds the records**: past the trim floor, a node with no copy of this file adopts a peer's snapshot instead |
 | **The object store** | `store.objects`: the `OBJ_crewlet_files` stream on the broker's members (`nats`, the default), or an S3-compatible bucket (`s3`) | The bytes of the company's [files](../concepts/object-store.md), one object per upload. **One store the whole fleet shares**, not a directory of any node's: on `nats` a stream like any other, on `s3` somebody else's bucket. The rows naming the files are in the replicated estate |
 | **The stream estate** | `stream.store_dir` per embedded member, or the external NATS cluster | Agent mailboxes (unacked in-flight work), the shared event and config streams, one ordered **log per state-log domain** — which is the record of truth the file above is derived from — and every [coordination](../concepts/coordination.md) KV bucket: seat, presence and duty leases and fencing epochs, the activation pointer with the current company payload, the completion ledger, delivery dedupe, budget counters, scheduled-fire claims, detached sandbox-run records, the sealed credentials |
 | **Tier A, on disk** | `crewlet.yaml` and the environment it reads | The keyring (`CREWLET_SECRET_KEY_*`) — the sole root of trust for everything sealed — plus API tokens and any NATS credential/TLS files |
@@ -81,6 +88,11 @@ Classify before you size the job:
   billed box exists.
 
 ## What `crewlet backup` produces
+
+A snapshot artefact is adopted **wholesale**, and so is a backup read back:
+the manifest names a position per domain, and a build that registers a domain
+the artefact never named refuses it rather than concluding it is caught up on
+that domain from a checkpoint the file has no rows for.
 
 One directory, and the **manifest is the claim**: a directory holding
 `manifest.json` is a complete backup, one without it is the debris of a run
@@ -341,9 +353,13 @@ peers hold too.
 
 A node is **two** database files, and they answer differently.
 
-The **replicated estate** is a copy of state every node holds: the tracker's
-projects, tasks, comments and history, derived from an ordered log by an
-applier that runs identically everywhere. Any healthy node's copy of it is the
+The **replicated estate** is a copy of state every data node holds: the tracker's
+projects, tasks, comments and history, the knowledge base's pages and
+revisions, the vectors search reads, the org chart's units and seats, the
+identity directory's people, credentials and sessions, the code host's
+repositories, refs and pack lists, and every node's usage
+history — each derived from its
+own ordered log by an applier that runs identically everywhere. Any healthy node's copy of it is the
 company's, in the same sense the stream estate is.
 
 The **node estate** is that node's alone, and what only lives there is what
@@ -448,12 +464,36 @@ ceiling.
 scheduler's name — and `crewlet backup` records it in the manifest, which is
 where it stops being configuration and becomes durable evidence of who was
 responsible for the artefact somebody is now restoring. `crewlet validate`
-warns when it is unset.
+warns when it is unset, and every node logs the same warning at every start
+(`config_advisory`).
 
 Two rules carry over from the cold runbook and are worth repeating because
 this path makes them easier to forget: the directory holds every credential
 the company has, so treat it exactly as you treat the secret store; and the
 **keyring must not travel with it**, or the sealing is undone.
+
+## Moving the files to a bucket
+
+`crewlet objects migrate --to s3` moves the company's files from the fleet's
+NATS bucket to an S3-compatible bucket ([the
+procedure](../concepts/object-store.md#moving-the-files-to-a-bucket)). It
+changes what a backup carries, so take one on each side of it:
+
+- **Take a backup before the final pass.** Until the move, the objects ride
+  the `OBJ_crewlet_files` stream snapshot; a backup taken then holds every
+  file the old store holds.
+- **After the move, the next backup copies the objects into `objects/`**, the
+  way every backup on `s3` does, and the `OBJ_crewlet_files` snapshot it
+  still takes (the stream is sealed, not deleted) is no longer where the files
+  are. A restore of a backup taken before the move restores the fleet onto the
+  NATS bucket, and its nodes must be started with the old `store.objects`
+  block.
+- **Delete the old bucket only after the first backup on the bucket** has
+  finished: that backup is the first that holds the files without it.
+
+The move never deletes anything, so a migration that stops part of the way is
+resumed by running it again, and the fleet keeps working on the NATS bucket
+until the final pass.
 
 ## The cold backup runbook
 
@@ -487,8 +527,8 @@ down anyway.
 6. **Start the fleet again.**
 
 A `stream.store_dir` left empty selects an in-memory stream server: nothing
-survives a restart and there is nothing to back up. Set it before backups are
-worth discussing at all.
+survives a restart and there is nothing to back up. The engine refuses to boot
+without one, so a fleet that reaches this procedure has already set it.
 
 ## Restoring
 
@@ -585,6 +625,20 @@ leaves out. Then:
   record to read the logs to: it carries the objects its copy names and none
   written after the copy — copy the bucket (`aws s3 sync`) at the moment the
   cluster's backup is taken, as the cold path does.
+- **A node's usage history never shrinks under a restore.** A backup copies
+  the store before the streams, and a fleet restore puts one node's store
+  beside another node's streams, so a restored node's event log can stop
+  before records its usage publisher sent after that copy — and its first
+  start derives again the days its restored watermark names, most often today
+  or yesterday. No day, today and yesterday included, is published below what
+  the fleet already holds of it: each figure of the day goes out at the larger
+  of what the node's log now counts and what the fleet held, the node logs
+  `usage_rederive_short` once, and no day is derived at all until the node's
+  usage applier has replayed the usage log to its end. A node started with an
+  empty store gets the same protection, for the day it is running in and for
+  a day a redelivered custody batch names. What the restored log lost is not
+  recovered: a figure the fleet held more of counts the node's new rows only
+  once the node's own count passes it. See [Replication](replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day).
 - **Config converges on its own.** The current revision's payload rides the
   coordination store beside the activation pointer, so a node restored with a
   stale store picks up the live revision; `crewlet config export` from any
@@ -641,6 +695,100 @@ out:
 - **A cold copy** of an embedded member's `stream.store_dir`: it carries the
   bucket in the broker's own files rather than as a snapshot to leave out, so
   a restore into a new bucket is taken from a `crewlet backup` instead.
+
+### The last step is `crewlet iam invalidate-all`
+
+A restore rolls identity backwards as surely as it rolls everything else
+backwards, and one of those rollbacks hands somebody a working credential:
+
+- **A session ended after the artefact was taken comes back alive.** The row
+  that ended it is in the artefact as an open session, so a bearer that was
+  revoked — or that somebody signed out of — validates again.
+- **A revocation performed after the artefact was taken is undone.** A
+  person's revocation epoch is a number in the restored rows, so a leaver
+  whose access was cut yesterday holds an epoch the estate now accepts.
+
+Neither is fixable by finding the affected people, because the artefact does
+not know who they are: whatever ended those sessions happened *after* it was
+written. The **fleet-wide session generation** is the one number that can be
+pushed forward without knowing:
+
+```bash
+crewlet iam invalidate-all -api http://127.0.0.1:8000
+```
+
+Every bearer minted before it — every cookie, every session and every
+machine token — is invalid by construction: everybody signs in again once, and
+every pipeline holding a token minted with `crewlet iam token` needs a new one.
+Tokens are included for the same reason sessions are: a token revoked after the
+artefact was taken is live again in the restored rows, and nothing can say
+which ones were. The Tier A tokens in the configuration file are not in the
+estate and are untouched, which is what you run this command — and re-mint the
+pipelines' tokens — with.
+
+Run it **after** the fleet is up and **before** anybody is told the restore is
+finished. It takes `admin`, a person present and a proof of identity inside
+`step_up` — it ends every person's authority at once — which a Tier A token
+holding `admin` (as the break-glass one does) satisfies by construction, since
+it is its own credential rather than a machine token and is fresh by
+construction. A machine token never can, whatever it carries: the authority
+table refuses it on this row, and the identity domain refuses the record.
+
+**Before you run it, put back what took access away.** The generation ends
+*bearers* — cookies, sessions, machine tokens — and nothing else. Every other
+change to the identity directory made after the artefact was taken is rolled
+back with it, and several of those hand somebody a way in that no bearer
+carries, so everybody signing in again once lets them straight back:
+
+- **Somebody removed or suspended since is enrolled and active again**, with
+  the password and second factor they held when the artefact
+  was taken. A removal comes back whole — their row, their credentials, and
+  their name and address, sealed under the keyring exactly as they were.
+- **A credential withdrawn since is back.** A password or a second factor
+  revoked, a second factor reset and recovery codes
+  regenerated since are all as they were when the artefact was taken — so a
+  factor you reset because a phone was lost works again, and so do the
+  recovery codes it replaced. A password changed since — by its person, or
+  from a reset link — is the one before it again, so a password changed
+  because it leaked signs in once more. (A reset link the artefact holds is
+  not among them: it is ended by the generation, as a machine token is.)
+- **An invitation cancelled since is open again** until its week runs out:
+  cancelling one deletes it, so the artefact's copy comes back with its link
+  working, and whoever holds the link — the stranger an address typo sent it
+  to — can redeem it and be enrolled with what it carries, on the seat it
+  names. While it is open it holds that seat again too: nobody else can be
+  invited onto it or created on it until it is cancelled once more.
+- **A permission taken away since is held again** — `admin` counting only on a
+  node whose `api.auth.admin` serves it, which is Tier A and not in the
+  artefact — and so is a **seat**: a person moved to another seat since is back on
+  the one they held, and a service account unbound since is bound again.
+
+The restored estate cannot list any of these: its own trail
+([`crewlet iam audit`](../reference/cli.md#crewlet-iam)) and every node's event
+log stop at the moment the artefact was taken, exactly like the rows they
+describe. So re-apply each one from a record kept **outside** the estate — your
+own off-boarding and access-change records, or the engine's logs if you ship
+them off the host — with `crewlet iam remove`, `suspend`, `grant`, `bind`
+(a person's move to another seat), `unbind` (a service account's),
+`revoke-credential`, `reset-mfa` and `cancel-invite`. Removals first: a
+removed person is the one the restore handed everything back to. Anybody whose
+password changed since needs a new reset link (`reset-password`), and that one
+comes **after** `invalidate-all`, not before it: a reset link is ended by the
+generation as a machine token is, so a link issued before the generation
+moves is `410 reset_spent` by the time its person opens it.
+
+Then read `crewlet iam people`: a restore under a different keyring shows every
+person as *can't be read: this node's keyring is missing its key* rather than as
+somebody with no name, and putting that key back on the ring ends it. Somebody
+removed **before** the artefact was taken stays removed: its rows hold their
+tombstone and none of their values — though its stream snapshot still holds
+the identity log's records that wrote them, if the trim had not passed them
+when the artefact was taken, and the restored log trims them on its ordinary
+schedule. Somebody removed after it was taken is the first case above, and the
+reason a backup is what an erasure has to outlast: until every backup taken
+before the trim passed a removed person's records is deleted, the person can be
+read — and restored — from it by whoever holds the keyring. See
+[what a removal reaches](../concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-nodes-rows).
 
 ## What not to do
 

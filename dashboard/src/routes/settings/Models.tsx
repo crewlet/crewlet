@@ -38,14 +38,16 @@ import {
   StatCard,
   StatGroup,
   Tag,
+  TableKeyCell,
+  TableEntityCell,
+  TableTextCell,
 } from "@crewlethq/ui";
 import { ClockGlyph, CpuGlyph, KeyGlyph, PencilGlyph, UsersGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { KeyCell, SeatCell, TextCell } from "~/app/frame/cells.tsx";
+import { linkedSeat } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { href } from "~/app/router.tsx";
 import { usePageMenu } from "~/app/Shell.tsx";
 import { useNow } from "~/lib/clock.ts";
@@ -88,7 +90,7 @@ import { EditModelDialog } from "./EditModelDialog.tsx";
 export const MODELS_POLL_MS = 15_000;
 
 export function Models({ id }: { id?: string }) {
-  const { data, loading, error, refetch } = useQuery("credential_pool", undefined, {
+  const { data, loading, error, refusal, refetch } = useQuery("credential_pool", undefined, {
     pollMs: MODELS_POLL_MS,
   });
   const org = useOrg();
@@ -100,7 +102,7 @@ export function Models({ id }: { id?: string }) {
 
   return (
     <>
-      {error && !data && <QueryState error={error} loading={false} />}
+      {error && !data && <QueryState error={error} refusal={refusal} loading={false} />}
       {loading && !data && <Skeleton variant="text" rows={6} label="Loading" />}
 
       {data && !id && <ModelList answer={data} seats={seats} onEdit={setEditing} />}
@@ -112,7 +114,7 @@ export function Models({ id }: { id?: string }) {
         <EmptyState
           icon={<CpuGlyph size="xl" />}
           title={`No model called “${id}”`}
-          description="The active configuration declares no providers.llm entry under this key. It may have been renamed or removed since the link was made."
+          description="It may have been renamed or removed."
           action={
             <a className="t-link" href={href(["settings", "models"])}>
               Every model →
@@ -156,11 +158,6 @@ function ModelList({
 
   return (
     <>
-      <PageNote>
-        The models seats run on, the keys each rotates through, and which of them a vendor is
-        refusing now. Variable names — this screen never holds a key.
-      </PageNote>
-      <KeysCallout />
       <FleetNote answer={answer} />
 
       <Card padding="none">
@@ -169,8 +166,14 @@ function ModelList({
             icon={<CpuGlyph size="xs" />}
             label="Models"
             value={providers.length}
+            // NONE IS NOT ALL READY: "0, all ready" said every model worked on
+            // a node with no model to run a turn on.
             sub={
-              attention ? `${attention} need${attention === 1 ? "s" : ""} attention` : "all ready"
+              providers.length === 0
+                ? "none configured"
+                : attention
+                  ? `${attention} need${attention === 1 ? "s" : ""} attention`
+                  : "all ready"
             }
           />
           <StatCard
@@ -195,8 +198,7 @@ function ModelList({
         {providers.length === 0 ? (
           <div style={{ padding: "var(--spacing-4)" }}>
             <p className="t-body muted">
-              The company configures no model, so every seat&rsquo;s work waits on its inbox until
-              one is added under <InlineCode>providers.llm</InlineCode>.
+              No model configured. Add one under <InlineCode>providers.llm</InlineCode>.
             </p>
           </div>
         ) : (
@@ -262,7 +264,7 @@ function ModelList({
               {
                 key: "act",
                 header: "",
-                label: "Actions",
+                action: true,
                 shrink: true,
                 cell: (p) => <EditButton id={p.key} onEdit={onEdit} icon />,
               },
@@ -449,7 +451,7 @@ function ModelPage({
                     ) : (
                       <span
                         className="t-num"
-                        title={`Leased ${r.key.uses} times by ${answer.node} since it applied this configuration; ${r.key.in_flight} in flight now`}
+                        title={`${plural(r.key.uses, "use")}, ${r.key.in_flight} in progress`}
                       >
                         {r.key.uses}
                         {r.key.in_flight > 0 && (
@@ -465,10 +467,7 @@ function ModelPage({
                   drop: 3,
                   cell: (r) =>
                     r.key.hint ? (
-                      <span
-                        className="mono t-caption muted"
-                        title="The engine's credential_cooled log lines name a key by this hint — never by its value"
-                      >
+                      <span className="mono t-caption muted" title="How logs refer to this key">
                         {r.key.hint}
                       </span>
                     ) : (
@@ -487,17 +486,14 @@ function ModelPage({
         </Card.Header>
         {uses.length === 0 ? (
           <div style={{ padding: "var(--spacing-4)" }}>
-            <p className="t-body muted">
-              No seat&rsquo;s chain names this model. A seat that names none runs on the entry
-              called <InlineCode>default</InlineCode>, or the first one configured.
-            </p>
+            <p className="t-body muted">No seat names this model.</p>
           </div>
         ) : (
           <DataGrid<ModelUse>
             name="seats"
             rows={uses}
             rowKey={(u) => u.seat.key}
-            rowHref={(u) => href(["agents", "seats", u.seat.handle])}
+            rowHref={(u) => href(["company", "org", "seats", u.seat.handle])}
             columns={[
               {
                 key: "seat",
@@ -505,7 +501,14 @@ function ModelPage({
                 floor: "10rem",
                 sortValue: (u) => u.seat.name,
                 cell: (u) => (
-                  <SeatCell handle={u.seat.handle} name={u.seat.name} kind={u.seat.kind} />
+                  <TableEntityCell
+                    {...linkedSeat({
+                      handle: u.seat.handle,
+                      name: u.seat.name,
+                      kind: u.seat.kind,
+                      avatar: u.seat.avatar,
+                    })}
+                  />
                 ),
               },
               {
@@ -513,9 +516,9 @@ function ModelPage({
                 header: "Runs on it",
                 cell: (u) =>
                   u.every ? (
-                    <TextCell>Every phase</TextCell>
+                    <TableTextCell>Every phase</TableTextCell>
                   ) : u.runs.length ? (
-                    <TextCell>{u.runs.join(", ")}</TextCell>
+                    <TableTextCell>{u.runs.join(", ")}</TableTextCell>
                   ) : (
                     <EmptyValue label="Nothing first" />
                   ),
@@ -526,7 +529,7 @@ function ModelPage({
                 drop: 1,
                 cell: (u) =>
                   u.fallback.length ? (
-                    <TextCell>{u.fallback.join(", ")}</TextCell>
+                    <TableTextCell>{u.fallback.join(", ")}</TableTextCell>
                   ) : (
                     <EmptyValue label="Never" />
                   ),
@@ -539,32 +542,6 @@ function ModelPage({
   );
 }
 
-/**
- * Where a key's value lives, said once on the list: a model's keys are
- * pointers into the sealed store, and the edit writes pointers.
- */
-function KeysCallout() {
-  return (
-    <Callout variant="neutral" icon={<KeyGlyph size="md" />}>
-      <span className="col" style={{ gap: 4 }}>
-        <span>
-          Each model names its keys as <InlineCode>{"${NAME}"}</InlineCode>, resolved from the
-          company&rsquo;s{" "}
-          <a className="prose-link" href={href(["settings", "secrets"])}>
-            secrets
-          </a>{" "}
-          or the engine&rsquo;s environment. With several, calls spread across them; a key the
-          vendor refuses is benched and the rest carry on. When every key is benched, a seat falls
-          through to its next model.
-        </span>
-        <span className="t-caption">
-          A bench is shared: one node&rsquo;s refusal is every node&rsquo;s within 15 seconds.
-        </span>
-      </span>
-    </Callout>
-  );
-}
-
 /** Said only when the fleet's ledger was not read: every deadline is this node's alone. */
 function FleetNote({ answer }: { answer: CredentialPoolAnswer }) {
   if (answer.fleet) return null;
@@ -572,9 +549,8 @@ function FleetNote({ answer }: { answer: CredentialPoolAnswer }) {
     <Callout variant="warning" role="status">
       <span className="col" style={{ gap: 4 }}>
         <span>
-          These are <span className="mono">{answer.node}</span>&rsquo;s own cooldowns only: the
-          fleet&rsquo;s cooldown ledger could not be read, so a key another node benched may read
-          ready here.
+          Showing <span className="mono">{answer.node}</span>’s cooldowns only. Other nodes’ may
+          differ.
         </span>
         {answer.fleet_error && <span className="t-caption">{answer.fleet_error}</span>}
       </span>
@@ -611,7 +587,7 @@ function KeyLabel({ keyRow, at }: { keyRow: CredentialKeyRow; at: number }) {
   }
   return (
     <span className="row gap-2">
-      <KeyCell value={keyRow.ref} />
+      <TableKeyCell value={keyRow.ref} />
       {keyRow.source === "default" && (
         <Tag size="sm" appearance="outline" title={`${keyRow.ref}: ${KEY_SOURCE_WORDS.default}`}>
           default
@@ -692,10 +668,10 @@ function ReachLine({ uses }: { uses: ModelUse[] }) {
   const behind = uses.length - runs;
   if (uses.length === 0) return <EmptyValue label={NO_SEAT} />;
   return (
-    <TextCell>
+    <TableTextCell>
       {plural(runs, "seat")}
       {behind > 0 && <span className="muted"> · fallback for {behind}</span>}
-    </TextCell>
+    </TableTextCell>
   );
 }
 

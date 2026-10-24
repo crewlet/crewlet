@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/eventfan"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
@@ -21,6 +22,11 @@ import (
 // bare *store.EventLog does not satisfy it, so a seed that quietly read one
 // node's store — which is what a restarted node's feed, rollup and seat rows
 // used to describe, a third of a three-node fleet — does not compile.
+//
+// The windowed reads are measured from the instant each query carries
+// ([store.PhaseTokenQuery.At], [store.TurnQuery.At]), which the seed reads
+// ONCE: a second reading per read would seed windows a few microseconds apart,
+// each longer than the projection's own.
 type FleetHistory interface {
 	List(ctx context.Context, q store.ListQuery) (eventfan.Listing, eventfan.Coverage, error)
 	PhaseTokens(ctx context.Context, q store.PhaseTokenQuery) ([]tokens.Record, eventfan.Coverage, error)
@@ -33,7 +39,7 @@ type Seeded interface {
 	Seed(livestate.History) livestate.Change
 }
 
-// SeedTurnsPerRole is how many of a seat's newest turns the seed reads to find
+// SeedTurnsPerSeat is how many of a seat's newest turns the seed reads to find
 // the last one it ENDED.
 //
 // THREE, because a seat runs one turn at a time: its newest turn may be the one
@@ -44,7 +50,7 @@ type Seeded interface {
 // asked per seat, rather than as one company-wide page, because a page of the
 // company's newest turns says nothing about a seat that has been quiet longer
 // than everyone else's recent work.
-const SeedTurnsPerRole = 3
+const SeedTurnsPerSeat = 3
 
 // seedTurnReads is how many seats' turn reads are in flight at once.
 //
@@ -77,8 +83,10 @@ const seedTurnReads = 16
 //     inside the seed's time budget, only to be cut to the cap on arrival.
 //     Read in pages ([eventfan.Fleet.PhaseTokens]), because the cap is more
 //     than one node's reply carries;
-//   - each seat's newest [SeedTurnsPerRole] turns, for the seat's last turn
-//     and a turn it left parked on a coding run.
+//   - each agent seat's newest [SeedTurnsPerSeat] turns, for the seat's last
+//     turn and a turn it left parked on a coding run — asked by the seat's
+//     AGENT ID, read off the composed org (nil asks nobody: a node with no
+//     company has no seats).
 //
 // FROM EVERY NODE. Each node's event store holds what that node published, so a
 // seed read from this node's alone showed a restarted node only its own share
@@ -107,7 +115,7 @@ const seedTurnReads = 16
 // spent that whole budget and handed the next an expired context, so one slow
 // read cost them all. Side by side, each has the caller's whole budget and the
 // seed costs the slowest of them rather than their sum.
-func Seed(ctx context.Context, history FleetHistory, roles []string, live Seeded) error {
+func Seed(ctx context.Context, history FleetHistory, organization *org.Organization, live Seeded) error {
 	var (
 		h      livestate.History
 		wg     sync.WaitGroup
@@ -126,6 +134,11 @@ func Seed(ctx context.Context, history FleetHistory, roles []string, live Seeded
 		return true
 	}
 
+	// ONE READING OF THE CLOCK for every windowed read: the store measures
+	// each window from the instant it is handed, so a second reading would
+	// seed a spend window a few microseconds longer than the projection's
+	// own and a turn page cut from another "now".
+	at := time.Now().UTC()
 	wg.Go(func() {
 		listing, c, err := history.List(ctx, store.ListQuery{Limit: livestate.EventFeedLimit, FeedOnly: true})
 		if !report(c, err, "the activity feed's history") {
@@ -139,15 +152,16 @@ func Seed(ctx context.Context, history FleetHistory, roles []string, live Seeded
 	})
 	wg.Go(func() {
 		records, c, err := history.PhaseTokens(ctx, store.PhaseTokenQuery{
-			Since: time.Now().UTC().Add(-livestate.LiveSpendWindow),
+			Since: at.Add(-livestate.LiveSpendWindow),
 			Limit: livestate.SpendRecordLimit,
+			At:    at,
 		})
 		if report(c, err, "the live spend window's history") {
 			h.Spend = records
 		}
 	})
 	wg.Go(func() {
-		turns, cs, asked, err := seedTurns(ctx, history, roles)
+		turns, cs, asked, err := seedTurns(ctx, history, agentSeats(organization), at)
 		// A company with no agent seat asks nobody anything, and a read
 		// that was never made says nothing about who answered it.
 		if !asked {
@@ -157,7 +171,7 @@ func Seed(ctx context.Context, history FleetHistory, roles []string, live Seeded
 		// nothing, and this is one read per seat. A seat whose read
 		// failed costs that seat — its error is reported and the seed is
 		// incomplete — while every seat that WAS read keeps its last turn
-		// and its parked turn. Routed through report, one silent role
+		// and its parked turn. Routed through report, one silent seat
 		// dropped every seat's turns.
 		mu.Lock()
 		defer mu.Unlock()
@@ -174,15 +188,35 @@ func Seed(ctx context.Context, history FleetHistory, roles []string, live Seeded
 	return errors.Join(errs...)
 }
 
-// seedTurns reads each role's newest turns, [seedTurnReads] roles at a time,
-// and reports whether it asked anybody anything.
+// agentSeats is every agent seat's id in the composed org, sorted: the seats
+// the projection states and the turns are asked for.
 //
-// A role whose read fails costs that role, not the others: its turns are
+// BY AGENT ID, the one identity a turn row carries for its seat — never the
+// role name, which two seats may share.
+func agentSeats(organization *org.Organization) []string {
+	if organization == nil {
+		return nil
+	}
+	var out []string
+	for role := range organization.AllRoles() {
+		if id, ok := organization.AgentIDFor(role); ok {
+			out = append(out, id.String())
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// seedTurns reads each seat's newest turns, [seedTurnReads] seats at a time,
+// every read measured from the one instant `at`, and reports whether it asked
+// anybody anything.
+//
+// A seat whose read fails costs that seat, not the others: its turns are
 // missing and its error is returned, while the turns and the coverage of every
 // read that succeeded are returned beside it. The coverage is returned read by
 // read rather than combined, so the caller folds it into the seed's own
 // combination exactly as it does its other reads.
-func seedTurns(ctx context.Context, history FleetHistory, roles []string) (
+func seedTurns(ctx context.Context, history FleetHistory, seats []string, at time.Time) (
 	[]store.Turn, []eventfan.Coverage, bool, error,
 ) {
 	var (
@@ -194,8 +228,8 @@ func seedTurns(ctx context.Context, history FleetHistory, roles []string) (
 		slots  = make(chan struct{}, seedTurnReads)
 	)
 	asked := false
-	for _, role := range slices.Compact(slices.Sorted(slices.Values(roles))) {
-		if role == "" {
+	for _, seat := range seats {
+		if seat == "" {
 			continue
 		}
 		asked = true
@@ -204,18 +238,18 @@ func seedTurns(ctx context.Context, history FleetHistory, roles []string) (
 			case slots <- struct{}{}:
 			case <-ctx.Done():
 				mu.Lock()
-				errs = append(errs, fmt.Errorf("role %s: %w", role, ctx.Err()))
+				errs = append(errs, fmt.Errorf("seat %s: %w", seat, ctx.Err()))
 				mu.Unlock()
 				return
 			}
 			defer func() { <-slots }()
 			page, c, err := history.Turns(ctx, store.TurnQuery{
-				AgentRole: role, Sort: store.TurnSortStarted, Limit: SeedTurnsPerRole,
+				AgentID: seat, Sort: store.TurnSortStarted, Limit: SeedTurnsPerSeat, At: at,
 			})
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
-				errs = append(errs, fmt.Errorf("role %s: %w", role, err))
+				errs = append(errs, fmt.Errorf("seat %s: %w", seat, err))
 				return
 			}
 			out = append(out, page.Turns...)

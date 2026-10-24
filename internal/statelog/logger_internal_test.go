@@ -30,8 +30,9 @@ func TestEveryConstructorGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) 
 	t.Parallel()
 
 	runner, err := NewRunner(RunnerDeps{
-		Domain: loggerProbe{}, Spec: loggerProbeSpec(), Applier: struct{ Applier }{},
-		Fetch: struct{ Fetcher }{}, Log: struct{ CheckpointLog }{},
+		Domain: loggerProbe{}, Spec: loggerProbeSpec(), Verifier: loggerProbeVerifier(t),
+		Applier: struct{ Applier }{},
+		Fetch:   struct{ Fetcher }{}, Log: struct{ CheckpointLog }{},
 		Node: nodeProbe{}, DB: struct{ Estate }{},
 	})
 	if err != nil {
@@ -39,8 +40,10 @@ func TestEveryConstructorGivenNoLoggerWritesThroughThePackagesOwn(t *testing.T) 
 	}
 	publisher, err := NewPublisher(Deps{
 		Domain: loggerProbe{}, Spec: loggerProbeSpec(), Log: struct{ Appender }{},
-		Records: struct{ LogReader }{}, Rows: struct{ Rows }{},
-		Fence: struct{ Fence }{}, Gates: struct{ Gates }{},
+		Signer:  loggerProbeSigner(t),
+		Records: VerifiedLog{Log: struct{ LogReader }{}, Verifier: loggerProbeVerifier(t)},
+		Rows:    struct{ Rows }{},
+		Fence:   struct{ Fence }{}, Gates: struct{ Gates }{},
 		Waiter: struct{ Waiter }{}, Voids: struct{ Voids }{}, Identity: struct{ Identity }{},
 		NodeID: "node-a", Generation: func() uint32 { return 1 },
 	})
@@ -119,6 +122,7 @@ func (loggerProbe) Stream() StreamSpec {
 		Subjects:        []string{"crewlet.loggerprobe.log.>"},
 		SubjectPrefix:   "crewlet.loggerprobe.log",
 		MaxBytes:        16 << 20,
+		MaxRecordBytes:  64 << 10,
 		Duplicates:      2 * time.Minute,
 		Replay:          ReplayStrict,
 		ArbitratedKinds: []string{"object"},
@@ -139,6 +143,29 @@ func (loggerProbe) OpsTable() string                  { return "" }
 func (loggerProbe) GatesSeatAdmission() bool          { return false }
 func (loggerProbe) ClaimsIdentity() bool              { return false }
 func (loggerProbe) FeedGroup() string                 { return "" }
+
+// loggerProbeVerifier is a verifier for [loggerProbe], which every runner must
+// be handed: one built without it would apply any record that reached the
+// broker.
+func loggerProbeVerifier(t *testing.T) *Verifier {
+	t.Helper()
+	verifier, err := NewVerifier(loggerProbe{}.Name(), OneKey("k1", "test-material"))
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	return verifier
+}
+
+// loggerProbeSigner is [loggerProbeVerifier]'s other half, which every
+// publisher must be handed: an unsigned record is refused by every node.
+func loggerProbeSigner(t *testing.T) *Signer {
+	t.Helper()
+	signer, err := NewSigner(loggerProbe{}.Name(), OneKey("k1", "test-material"))
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	return signer
+}
 
 // nodeProbe is a node estate that is nothing but its kind: a runner checks it
 // was handed the node's own file, and the tests that use this never reach a

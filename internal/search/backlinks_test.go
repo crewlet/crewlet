@@ -163,3 +163,59 @@ func TestATaskLinkedByRelationOrByItsDescriptionIsLinkedFrom(t *testing.T) {
 			got.TasksTotal, got.Tasks, want)
 	}
 }
+
+// A BACKLINKED TASK OPENS THE TASK, NOT THE KEY'S CLAIMANT. Two tasks can hold
+// one key — a restored counter mints a number a task already holds — and the
+// tracker answers a key with the task that claimed it first, so a "linked
+// from" row that carried only the duplicate's key would open somebody else's
+// task. The row says so with the tracker's own `key_collision`, which the
+// applier derives and every tracker reader reads as a column; the fixture
+// writes the rows the applier leaves (the directory naming the claimant, the
+// flag on the duplicate) rather than running a second copy of that rule.
+//
+// The claimant is listed first, then the duplicate: one key, so the key alone
+// orders nothing, and a tie left to the batched read's row order drew the two
+// either way round. The duplicate's id sorts BEFORE the claimant's here, so an
+// order by id alone is caught too.
+//
+// Mutation: drop the flag from the read (or read the bare key) and the
+// duplicate's row opens the claimant; drop the claimant-first tie-break and
+// the order flips.
+func TestABacklinkedTaskWhoseKeyAnotherClaimedSaysSo(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	x := search.NewIndexer(db, db.Replicated().Reader()).WithLinks(pages.Links)
+
+	page(t, db, runbookID, "ENG", "Provisioner runbook", "The runbook.", 1)
+	item(t, db, "t-claimant", "ENG", "The claimant", "See /pages/"+runbookID, 1)
+	item(t, db, "t-a-duplicate", "ENG", "The duplicate", "See /pages/"+runbookID, 1)
+	for _, stmt := range []struct {
+		sql  string
+		args []any
+	}{
+		{`UPDATE tracker_tasks SET key = 'ENG-7', key_collision = 0 WHERE id = ?`,
+			[]any{"t-claimant"}},
+		{`UPDATE tracker_tasks SET key = 'ENG-7', key_collision = 1 WHERE id = ?`,
+			[]any{"t-a-duplicate"}},
+		{`INSERT INTO tracker_task_keys (key, task_id, current) VALUES ('ENG-7', ?, 1)`,
+			[]any{"t-claimant"}},
+	} {
+		if _, err := storetest.ReplicatedDB(t, db.Replicated()).SQL().ExecContext(
+			t.Context(), stmt.sql, stmt.args...); err != nil {
+			t.Fatalf("%s: %v", stmt.sql, err)
+		}
+	}
+	indexAll(t, x)
+
+	got := linkedFrom(t, x, runbookID)
+	want := []search.TaskLink{
+		{ID: "t-claimant", Key: "ENG-7", Title: "The claimant", Status: "todo",
+			Via: []string{search.TaskCitesPage}},
+		{ID: "t-a-duplicate", Key: "ENG-7", KeyCollision: true, Title: "The duplicate",
+			Status: "todo", Via: []string{search.TaskCitesPage}},
+	}
+	if !reflect.DeepEqual(got.Tasks, want) || got.TasksTotal != 2 {
+		t.Errorf("tasks (%d) = %+v\nwant %+v — the duplicate's row must say its key "+
+			"opens the claimant, and the claimant's must not", got.TasksTotal, got.Tasks, want)
+	}
+}

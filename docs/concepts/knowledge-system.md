@@ -36,7 +36,7 @@ knowledge:
 ### Native: an index, and what that means
 
 There is a local copy, and being honest about it is the whole design. Every
-page change is one record on an ordered log, every node applies it into its own
+page change is one record on an ordered log, every data node applies it into its own
 database, and a lexical index is built behind those rows asynchronously —
 tokenising a large wiki takes minutes, and doing it inline would put the whole
 index build inside the apply transaction that holds the node's only writer.
@@ -127,7 +127,7 @@ flowchart LR
 
 - **It is replicated state, like the vectors.** The embedding duty trains it
   from the corpus's own codes, publishes it as a record on the vector log,
-  and every node applies that record — so every node holds the same centroids
+  and every data node applies that record — so every data node holds the same centroids
   and files every document in the same list, and a node that adopts a
   snapshot adopts the index inside it. The arithmetic is integer Hamming
   distance with a fixed tie break, so two CPUs never disagree about a list.
@@ -306,7 +306,7 @@ Embedding a document costs a provider call, and it is the one thing in the
 search path a node cannot recompute on its own. So it is not done per node and
 not on the write path — a page save would otherwise carry a third-party HTTP
 round trip inside its own transaction. One **fleet-singleton duty** embeds each
-source once and publishes a record; every node applies it. The company pays the
+source once and publishes a record; every data node applies it. The company pays the
 bill once and holds the answer everywhere. A node whose copy of the vectors, the
 tracker or the knowledge base is out of service does not hold the duty, since
 what it publishes and withdraws would be decided from rows it has stopped
@@ -629,11 +629,11 @@ Contract semantics every backend honors:
 - **`Query.Mode`** is `hybrid` (the zero value), `keyword` or `semantic` — see [modes](#three-modes-and-the-querys-own-vector). A backend that cannot rank that way says so in the outcome; Confluence answers `modes: [keyword]`.
 - **`Query.ExcludeAncestors`** drops hits whose ancestor/parent chain matches any listed title. Left nil it takes the default, `"Auto-Drafted Skills"` (`knowledge.AutoDraftedParent`), so unreviewed [promotion drafts](agent-learning.md) never surface before a lead publishes them; an empty, non-nil list disables the exclusion. Every draft title also carries the `[Auto-draft] ` prefix (`knowledge.AutoDraftTitlePrefix`) as a fail-closed backstop for a backend whose parent lookup fails.
 
-**Selection is by `knowledge.backend`, and single-homed.** Engine start constructs exactly one searcher: the native one over this node's own page index, or the Confluence one, or none. One knowledge home is what makes the turn-start prefetch, the `search_knowledge` builtin, onboarding hints and skill promotion agree about what the company knows — two searchers would make an agent's answer depend on which was asked, and neither would be wrong. With `backend: none`, the searcher stays unwired and the `## Relevant knowledge` block renders empty. A live config change re-points the running turn engine at the new searcher (or at none).
+**Selection is by `knowledge.backend`, and single-homed.** Engine start constructs exactly one searcher: the native one over this node's own page index, or the Confluence one, or none. One knowledge home is what makes the turn-start prefetch, the `search_knowledge` builtin and skill promotion agree about what the company knows — two searchers would make an agent's answer depend on which was asked, and neither would be wrong. With `backend: none`, the searcher stays unwired and the `## Relevant knowledge` block renders empty. A live config change re-points the running turn engine at the new searcher (or at none).
 
 An empty `backend` **derives** rather than defaulting blindly: a company that declares `integrations.confluence` gets `confluence`, and one that declares nothing gets `native`. That is the compatible half of the rename — an Atlassian company that has not read this page keeps the backend it had, and a quickstart company gets a wiki without asking for one.
 
-**The seam has two implementations, and it was written for the second.** `knowledge.Searcher` is declared by its consumers — the prefetch, the onboarding hint, the promotion pass — so the native backend arrived as a new implementation rather than a rewrite of everything that searches. A seam collapsed into its last backend is what makes the next one a rewrite.
+**The seam has two implementations, and it was written for the second.** `knowledge.Searcher` is declared by its consumers — the prefetch, the `search_knowledge` builtin, the promotion pass — so the native backend arrived as a new implementation rather than a rewrite of everything that searches. A seam collapsed into its last backend is what makes the next one a rewrite.
 
 ### Native backend — the engine's own pages
 
@@ -648,33 +648,34 @@ Two properties differ from the vendor path and both are visible:
 - **A CONTAINER IS A DOCUMENT**, and the engine writes one for every `space:`
   the org chart names — a unit's, a seat's own — plus the two reserved ones,
   on every config apply and every boot. It is idempotent: a container whose
-  row already says what the chart says is not written again, so the log grows
-  with edits rather than with restarts.
+  row already says what the org chart says is not written again, so the log
+  grows with edits rather than with restarts.
 
   Its name and purpose follow the configuration **activated last**, whichever
   node applies what when. The row carries the instant its configuration was
   activated (`chart_epoch`, in Unix milliseconds), and a configuration
   activated earlier never overwrites one activated later — so a node
   restarting on a revision the fleet has since replaced leaves the newer names
-  alone, exactly as the chart's projects do (see
+  alone, exactly as the tracker's projects do (see
   [the work tracker](../guides/work-tracker.md#projects-and-keys)). A later
   activation over unchanged settings is still written — a **re-stamp** —
   because a row left at the older stamp is open to any activation between the
-  two.
+  two. A node with no activation instant — one booting on a revision it has
+  never seen activated — stamps nothing.
 
   A page merely **names** its container, so a page can exist in a container
   with no document — it is reachable by address and by search, and it is
-  missing from `GET /containers` and from the Knowledge tree. That is what a
-  space nobody declared looks like.
-- **THE DASHBOARD BROWSES IT AS A TREE**, one level at a time: a space's top
-  (`pages{container, roots: true}`) and one page's children
-  (`pages{parent}`), each read in windows of 500 with the listing's `total`
-  and an `after` cursor, and each page saying how many `children` the same
-  listing would show under it — so an expander never opens onto a folder
-  whose pages are all in the trash. A search there reads THIS NODE'S OWN COPY
-  (the rows, the lexical index and the replicated vectors), and the screen
-  says so: it is as current as this node's place on the pages log. See
-  [the dashboard's Knowledge](../reference/dashboard-design.md#knowledge-a-tree-and-search-with-real-modes).
+  missing from `GET /containers` and from the dashboard's row of spaces. That
+  is what a space nobody declared looks like.
+- **THE DASHBOARD BROWSES A SPACE AS AN OUTLINE**, one level at a time: a
+  space's top (`pages{container, roots: true}`) and one page's children
+  (`pages{parent}`), each read when its row opens, in windows of 500 with the
+  listing's `total` and an `after` cursor, and each page saying how many
+  `children` the same listing would show under it, so an expander never opens
+  onto a level whose pages are all in the trash. A search there reads THIS
+  NODE'S OWN COPY (the rows, the lexical index and the replicated vectors), and
+  the screen says so: it is as current as this node's place on the pages log.
+  See [the dashboard's Knowledge](../reference/dashboard-design.md#knowledge-the-spaces-a-landing-and-search-with-real-modes).
 - **A PAGE KNOWS WHO READ IT AND WHO LINKS TO IT.** Every read a seat makes
   is a recorded `knowledge_read`, and the replicated `usage` domain keeps it
   per company day, so `page_reads` names each seat, how the page reached it
@@ -694,10 +695,30 @@ Two properties differ from the vendor path and both are visible:
   that changes what the index derives re-derives every older row once, on its
   own (`search.IndexDerivation`), with no rebuild command to remember.
 - **THE DASHBOARD EDITS AS THE PERSON.** A save, a new page and a comment go
-  through `/operator/act` bound to the signed-in seat, so the page's history
-  names who wrote it — never "the dashboard". A save states the revision it
-  edited; one against a stale revision is refused rather than overwriting
-  prose somebody else just wrote.
+  through `/operator/act` as the principal the person signed in as — a person
+  writes as the seat they hold, as does a token or service account the
+  identity directory binds to one, and a credential bound to no seat under
+  its own login — so the page's history names who wrote it, never
+  "the dashboard". A save states the revision it edited; one against a stale
+  revision is refused rather than overwriting prose somebody else just wrote.
+- **THE AUTHOR IS ONE NAME, AND EVERYTHING ABOUT THE WRITER READS IT.** A
+  person writes as the seat they hold, so a page's author, its last saver, a
+  revision's author, a comment's and a change's are that seat's handle; a
+  credential bound to no seat writes under its whole login (author kind
+  `operator`); and the credential a write came through rides beside either as
+  `operator_id`. No second field names a person behind a credential, because
+  no credential stands in front of a person: the name already is theirs. A
+  watch follows the page under the seat the writer acts as, because a wake
+  reaches a seat and nothing else: a person's watch is their seat's, and a
+  credential bound to no seat subscribes nobody, so its create is watched by
+  whoever it named and its `watch` moves no set and writes no record. A page
+  somebody creates subscribes them; their own
+  write wakes neither their subscription nor the lead's copy for a space they
+  lead; and a page that names no space lands in the space of the seat that
+  wrote it (`engine.LiveSeatSpace`), as a seat's own write does, while a
+  credential bound to no seat, whose login no seat matches, is told the page
+  needs a container rather than having one guessed for it. This is the
+  tracker's rule, applied to the knowledge base.
 - **A BODY HAS A HISTORY**, and revision N is the body at version N. The
   dashboard reads any one of them back and shows what a save changed against
   the version before it, by line.
@@ -736,6 +757,16 @@ Two properties differ from the vendor path and both are visible:
   `pages_parent_salvaged` warning names the page. **Purging a page re-files
   its children** under its own parent (or the top) rather than leaving them
   pointing at nothing.
+- **A FOLDER IS A PAGE WITH NOTHING WRITTEN IN IT.** There is no folder type:
+  a page whose body is empty is a folder, a page that only groups the pages
+  filed under it. The mark is derived from the body every time it is read and
+  never stored, so it cannot disagree with the page: write a paragraph into a
+  folder and it is a page with children, empty a page and it is a folder
+  again. `write_page` files one with an empty body.
+- **"Last saved" is a change to what the page says.** A listing names the last
+  create, save or rename (`saved_by`, `saved_at`), each of which writes a
+  revision; a label, a watch or a move updates the page and leaves its last
+  save where it was.
 - **A save's note is the one its writer gave.** The one line `save_page`
   takes as `message` is what the page's activity and each watcher's wake show
   under the saver's name; a save without one shows none. It never falls back
@@ -744,6 +775,40 @@ Two properties differ from the vendor path and both are visible:
   What changed is the revision's to say, and History shows it by line.
 
 The tool-skills container is excluded from every result. A tool skill is machinery the engine injects into a phase, and a seat told to read one as knowledge would follow it as an instruction. The exclusion costs a result that page and never a place: the search walks its fused ranking past every page it does not return, so a company whose skills lead a ranking still gets a full answer.
+
+#### Who may write where
+
+Reading and authoring pages — `get_page`, `list_pages`, `search_knowledge`, `write_page`, `save_page`, `comment_on_page` — is the **`knowledge` app**, which every agent seat holds and a person holds when an administrator ticks it (`admin` includes it). Five rules sit beside it.
+
+**A page lives in a space the company declares.** Creating a page under a container key the company does not declare is refused, for a person and an agent alike, with a sentence naming the key and how a space is declared — exactly as filing a task in a project the company does not declare is. The declared spaces are every unit's and seat's `space:`, `knowledge.root_space` and the tool-skills container (`knowledge.skills_container`), read off the configuration current at each create; a company that declares none can create no page until it does. Creating is the only way into a container — a save cannot move a page and a rename keeps its container — so the rule is asked of `write_page`, the human write surface's `POST /pages` and the operator's assistant alike, by the knowledge base's own store, and a page's existing container is never re-judged. A container the chart's apply creates for a declared space needs no create of its own.
+
+**Two containers are reserved from agents, for two different reasons, so they hold back different writes.** The knowledge base's own **store** enforces both, answering `ErrReserved`:
+
+| Container | What it holds | What an agent may not do there |
+|---|---|---|
+| The tool-skills container (`knowledge.skills_container`) | The pages the engine injects into a phase of every seat's turn as instructions. Excluded from knowledge search and from routing | **Anything**: create a page, save one, rename one, or add, edit or remove a remark. A page a seat wrote there would either never be read, or be read by every seat as an order |
+| The org root (`knowledge.root_space`) | What is true of the whole company, starting with the Onboarding page every seat reads first. Searched and routed like any other container | **Add a page.** A new page at the top of the company is a person's decision, and a seat publishes into its own team's space. Keeping a root page current, renaming it and remarking on it is ordinary upkeep, and is not refused |
+
+The rule lives in the store rather than beside one tool because it was once one check on `write_page`, and a seat that could not create a page in the skills container could still save over one, rename it and comment on it. It is a rule about the **actor**, not about capability: an agent cannot see from anything it holds that a page is machinery, or that a container is the company's canon, while a person publishing into either on purpose — through their own assistant over [`/operator/mcp`](#on-the-native-backend-your-own-assistant) — is what the containers are for. The container keys are read off the configuration current at each write, so an apply that moves `skills_container` or `root_space` moves the rule with it.
+
+**A tool skill is configuration, and a person writing one needs `admin`.** The store's rule above is about agents and exempts every person, because whether a person may is a permission and the store holds none — so the tool layer asks it, once the container is known. Creating or saving a page in the skills container (`write_page`, `save_page`), and renaming, trashing, restoring or purging one over the [write surface](../reference/api-endpoints.md#the-human-write-surface), is decided as `pages.skill.write` on top of the verb's own rule: `admin`, the permission that edits the company document, because a skill page is injected into every seat's turn and rewrites the prompt the whole company runs under. The `knowledge` app alone is not a way to put words in every agent's mouth. A remark on a skill page is not the skill, and stays an ordinary comment. The org root needs nothing beyond the app: publishing the onboarding tree there is what a person holding `knowledge` does.
+
+**A remark is its author's.** Editing a comment is the author's alone — nobody puts words in somebody else's mouth, on a record that outlives the page's body. Removing one is the author's, or an administrator's (`admin`): a lead is not automatically a moderator of what is said on their team's pages. Both need the `knowledge` app beside the authorship.
+
+**A page's creator tidies it.** Renaming a page, trashing it and restoring it are its **creator's** — whoever wrote it first, which a save never changes — as well as its container's lead's and an administrator's, each with the `knowledge` app: somebody who drafted a page in the wrong place should not need a lead to take it down again. A **purge**, which nothing undoes, stays an administrator's alone, asks for a recent proof, and is never an agent's.
+
+**A page container is led through a unit's `space:`.** The rules that are a container's lead's — renaming, trashing and restoring a page — ask who leads the unit whose `space:` names the container (or the seat whose own container it is). That is its own question of the org chart rather than the project one: a unit declares its tracker project and its page container in two separate fields, and asking one with the other's key would refuse the lead of every company that spells them differently. See [the authority table](identity-and-access.md#the-authority-table-one-function-decides).
+
+### The trash is emptied after thirty days
+
+A trashed page is out of every reader's way and can be restored by anybody who could trash it, for **thirty days**. After that the `trash-reaper` [fleet duty](seat-ownership.md#singleton-duties) purges it through the same purge record an administrator's purge writes: the page, its revisions, its comments and its history go (a page beneath it is filed under its parent), and a deletion marker keeps who purged it (`trash-reaper`, recorded as an operator, since the engine acts on the company's behalf) and why (the cutoff it was in the trash before). The marker is what keeps a redelivered record from resurrecting the page, exactly as for a purge a person makes.
+
+- **The term runs from the latest trash.** A page restored and trashed again starts its thirty days over, and a page restored while a pass is running is never purged: each purge is decided again in the snapshot its record is decided in, so a restore that lands first refuses it.
+- **Hourly, oldest first, in bounded passes.** A pass purges at most 1,000 pages, oldest in the trash first, and runs the next pass at once when it stops at that bound, so a backlog drains without one burst competing with every seat's writes. A purge that fails is tried again ten minutes later under the same operation id, so a purge that did land is never published twice.
+- **Nobody is woken.** The page's watchers were told when it went into the trash, which was the change anybody could act on; the purge a month later carries no notification.
+- **What a pass did** is recorded in the coordination store (the `objects` bucket's trash reap record) by whichever node held the duty, and logged as `trash_reap_pass` at `info` when it purged, skipped or failed anything. A purge that failed logs `trash_reap_purge_failed` with the page and the error.
+
+The trash on Confluence is Confluence's own: this duty empties the engine's knowledge base only.
 
 ### Confluence backend — the Confluence searcher
 
@@ -824,13 +889,24 @@ sequenceDiagram
   sentence when they do not answer the question. Source `[n]` is the n-th entry
   of the answer's `sources`, so a screen links every citation. A question
   nothing matches is answered without a model at all, and costs nothing.
-- **A person's, not a seat's.** Only a token bound to a person may ask — the
-  spend is on somebody's behalf — and no seat is given the tool: a seat has
-  `search_knowledge` and its own model, and a second model's summary in its
-  context would be one it could not check.
-- **Charged to the company.** It runs on the asker's own seat's auxiliary model
-  and is judged against the company's day, week and month — a person has no seat
-  budget. A company window with no room refuses it before the call; after the
+- **A person's, not a seat's, and only what the asker uses.** It takes either
+  app and a caller who holds a seat: it searches the pages only for a
+  `knowledge` holder and the board only for a `tracker` holder, a caller with
+  neither is refused naming both, and the answer cache is kept apart per set
+  of apps, so an answer drawn from pages is never handed to somebody who
+  cannot read them. The seat is required — a person's, from the dashboard or
+  through their own assistant over `/operator/mcp`, or that of a token or
+  service account the identity directory binds to one — because the spend is on somebody's behalf and it runs on the model
+  of that seat; every person holds a human seat. A credential bound to no
+  seat — a pipeline's token, or a service account bound to none — is refused
+  rather than answered on the company's default model, because a credential is
+  not somebody a spend can be attributed to.
+  And no seat is given the tool: a seat has `search_knowledge` and its own
+  model, and a second model's summary in its context would be one it could not
+  check.
+- **Charged to the company.** It runs on the auxiliary model of the asker's
+  seat and is judged against the company's day, week and month — a person has
+  no seat budget. A company window with no room refuses it before the call; after the
   call, exactly what the reply spent is recorded on the company's counter — a
   reply the model **refused** included, since its prompt was billed even though
   the answer is refused rather than shown.
@@ -860,17 +936,27 @@ with your API token and tell it what to publish:
 > Publish everything under `examples/nimbus-docs/` — one container per
 > directory, the page title from each file's first `# H1`.
 
-It calls `write_page` per file, with your token's own name on each page as the
-author. That handles the parts a flag-driven CLI handles badly: the parent
-chain, a title that already exists (`save_page` with the version it read), and
-a file that turns out to be a [tool skill](tool-skills.md) rather than prose.
+It calls `write_page` per file, and each page names its author exactly as
+every write through that surface does, with the credential beside it: the seat
+you hold — every person holds one — through a token you minted for yourself
+(`crewlet iam token -login`), or the deployment token's own login
+(`token:<id>`) through a Tier A token bound to no seat. That handles the parts a
+flag-driven CLI handles badly: the parent chain, a title that already exists
+(`save_page` with the version it read), and a file that turns out to be a
+[tool skill](tool-skills.md) rather than prose.
 
-The [reserved containers](#accessible-containers) are refused to it, exactly as
-they are to a seat — a page written into the tool-skills container would be
-injected into a phase as an instruction rather than read as knowledge. Which
-containers those are is read from the running company at each write, so a
-revision that moves `knowledge.skills_container` or `knowledge.root_space`
-moves what is refused with it, with no restart.
+The [reserved containers](#who-may-write-where) are **not** refused to it, which
+is the difference from a seat: they are refused to an agent, and publishing the
+tool skills and the onboarding tree on purpose is exactly what a person does
+there. The onboarding tree takes the token's ordinary `knowledge`; the
+tool skills take **`admin`**, because each one is injected into
+every seat's turn. It is also why this is the native way to seed [tool
+skills](tool-skills.md) — a file with a `trigger:` in its frontmatter belongs in
+the skills container, where it is injected into a phase as an instruction
+rather than read as knowledge, and every other file belongs anywhere else.
+Which containers those are is read from the running company at each write, so
+a revision that moves `knowledge.skills_container` or `knowledge.root_space`
+moves what each write is held to with it, with no restart.
 
 ### On Confluence: the import CLI
 
@@ -984,7 +1070,7 @@ A search's `query` is clipped to 200 bytes on a character boundary (with a trail
 
 ## Onboarding markers
 
-The `mark_onboarded` builtin records that an agent has read its team's Onboarding pages so the onboarding hint stops re-rendering on every turn. Markers live in their own small table, `agent_onboarding_markers`, keyed by `agent_id` with UPSERT semantics (so re-onboarding never accumulates stale rows). The marker carries a `chain_hash` over the agent's org chain (`learning.ChainHash`); a chain change (role moved units, ancestor renamed, new unit inserted) silently invalidates the marker, and the dedicated onboarding pass runs again until the agent re-reads and re-marks. The same row holds the cross-process pass lease that stops two turns onboarding one seat at once.
+The `mark_onboarded` builtin records that an agent has read its team's Onboarding pages so the dedicated onboarding pass does not run for it again. Markers live in their own small table, `agent_onboarding_markers`, keyed by `agent_id` with UPSERT semantics (so re-onboarding never accumulates stale rows). The marker carries a `chain_hash` over the agent's org chain (`learning.ChainHash`); a chain change (role moved units, an ancestor unit replaced by one under another key, new unit inserted) silently invalidates the marker, and the dedicated onboarding pass runs again until the agent re-reads and re-marks. The same row holds the cross-process pass lease that stops two turns onboarding one seat at once.
 
 A dedicated table, because `learning.Onboarding.Onboarded` answers with one indexed equality lookup instead of a per-agent metadata-filter scan.
 

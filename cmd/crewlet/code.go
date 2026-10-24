@@ -32,6 +32,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	"github.com/crewlet/crewlet/internal/code/host"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/procgroup"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
@@ -64,34 +65,39 @@ import (
 
 // codeUsage is every `crewlet code` synopsis.
 const codeUsage = `usage: crewlet code <command>
-  status [<config.yaml>] [-url URL] [-token T] [-repo NAME] [-pushes N] [-json]
+  status [<config.yaml>] [-url URL] [-repo NAME] [-pushes N] [-json]
       the repositories and their history, as the node reads them
-  verify [<config.yaml>] [-url URL] [-token T] [-repo NAME]... [-repair] [-json]
+  verify [<config.yaml>] [-url URL] [-repo NAME]... [-repair] [-json]
       check THIS node's cache against the repositories' rows; every git
       node keeps its own cache, so verify each
-  export <name> <file.bundle> [<config.yaml>] [-url URL] [-token T] [-git PATH]
+  export <name> <file.bundle> [<config.yaml>] [-url URL] [-git PATH]
       write a repository's every ref and object to one git bundle
-  import <source-url> <name> [<config.yaml>] [-url URL] [-token T] [-git PATH] [-dry-run]
+  import <source-url> <name> [<config.yaml>] [-url URL] [-git PATH] [-dry-run]
       push another host's repository into a declared one, in steps under
       code.limits.max_push_bytes; the same command again resumes it
   credential [-token-env NAME] get|store|erase
       git's credential helper: credential.<url>.helper = !crewlet code credential
 `
 
-// runCode dispatches `crewlet code`.
-func runCode(args []string, stdout, stderr io.Writer) error {
+// runCode dispatches `crewlet code`. environ is the invocation's environment
+// ([runIn]): the node commands take their credential from it, and so does the
+// credential helper, which answers git with the same variable.
+func runCode(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	switch sub {
 	case "status":
-		return codeStatus(rest, stdout, stderr)
+		return codeStatus(environ, rest, stdout, stderr)
 	case "verify":
-		return codeVerify(rest, stdout, stderr)
+		return codeVerify(environ, rest, stdout, stderr)
 	case "export":
-		return codeExport(rest, stdout, stderr)
+		return codeExport(environ, rest, stdout, stderr)
 	case "import":
-		return codeImport(rest, stdout, stderr)
+		return codeImport(environ, rest, stdout, stderr)
 	case "credential":
-		return codeCredential(rest, os.Stdin, stdout, stderr, os.Getenv)
+		return codeCredential(rest, os.Stdin, stdout, stderr, func(name string) string {
+			value, _ := environ.Lookup(name)
+			return value
+		})
 	case "hook":
 		// THE HOOK NEVER REACHES run: main() dispatches `code hook` before
 		// anything else, because its stdout is git's protocol. Asked here —
@@ -116,7 +122,7 @@ func runCode(args []string, stdout, stderr io.Writer) error {
 const maxCredentialInput = 64 << 10
 
 // codeCredentialUser is the user name the helper answers. FIXED: the API
-// reads only the password of a Basic credential (ADR-0037), so a name would
+// reads only the password of a Basic credential (ADR-0051), so a name would
 // say something the node never reads.
 const codeCredentialUser = "crewlet"
 
@@ -382,13 +388,13 @@ func shortOID(oid string) string {
 
 // codeStatus is `crewlet code status`: the repositories, or with -repo one of
 // them in detail with its recent pushes.
-func codeStatus(args []string, stdout, stderr io.Writer) error {
+func codeStatus(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	var (
 		repo   *string
 		pushes *int
 		asJSON *bool
 	)
-	client, err := nodeClientFor(args, "code status", stderr, func(fs *flag.FlagSet) {
+	client, err := nodeClientFor(environ, args, "code status", stderr, func(fs *flag.FlagSet) {
 		repo = fs.String("repo", "", "one repository in detail, with its recent pushes")
 		pushes = fs.Int("pushes", 10, "with -repo, how many of its newest pushes to print")
 		asJSON = fs.Bool("json", false, "print the node's answers as they came, one JSON document a page")
@@ -797,13 +803,13 @@ func productionVerifyWaits() codeVerifyWaits {
 // exits non-zero when any is not clean — the hook a cron runs on each git
 // node. A repository the node holds no copy of is passed over: nothing there
 // can be damaged.
-func codeVerify(args []string, stdout, stderr io.Writer) error {
+func codeVerify(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	var (
 		named  []string
 		repair *bool
 		asJSON *bool
 	)
-	client, err := nodeClientFor(args, "code verify", stderr, func(fs *flag.FlagSet) {
+	client, err := nodeClientFor(environ, args, "code verify", stderr, func(fs *flag.FlagSet) {
 		fs.Func("repo", "a repository to verify; repeat it for more, or name none to verify every "+
 			"active and archived one", func(v string) error {
 			if strings.TrimSpace(v) == "" {
@@ -922,7 +928,7 @@ func verifyOne(ctx context.Context, client *nodeClient, name string, floor codeP
 	refusedUntil := time.Now().Add(waits.refusedFor)
 	for {
 		var err error
-		header, err = client.exchange(ctx, http.MethodPost, path, nil, &raw)
+		header, err = client.exchange(ctx, http.MethodPost, path, nil, nil, &raw)
 		if err == nil {
 			break
 		}
@@ -1029,7 +1035,7 @@ func awaitVerification(ctx context.Context, client *nodeClient, name string, v *
 			return nil, false
 		}
 		var next json.RawMessage
-		header, err := client.exchange(ctx, http.MethodGet, at, nil, &next)
+		header, err := client.exchange(ctx, http.MethodGet, at, nil, nil, &next)
 		var lost noAnswer
 		switch {
 		case err == nil:
@@ -1173,7 +1179,7 @@ func renderVerification(stdout, stderr io.Writer, name string, v codeVerificatio
 // is the repository's whole size and the volume the operator chose for the
 // bundle is the one sized for it, where a temporary directory is often a
 // small, memory-backed one.
-func codeExport(args []string, stdout, stderr io.Writer) error {
+func codeExport(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	// THE TWO SUBJECTS LEAD, before any flag (`work purge`'s idiom): the
 	// optional config document a node client takes after them is a third
 	// positional, and only their order tells the three apart.
@@ -1181,11 +1187,11 @@ func codeExport(args []string, stdout, stderr io.Writer) error {
 	file, rest := splitSubject(rest)
 	if name == "" || file == "" {
 		fmt.Fprintln(stderr, "usage: crewlet code export <name> <file.bundle> [<config.yaml>] [-url URL] "+
-			"[-token T] [-git PATH]")
+			"[-git PATH]")
 		return errors.New("name the repository to export and the bundle file to write, before any flag")
 	}
 	var gitPath *string
-	client, err := nodeClientFor(rest, "code export", stderr, func(fs *flag.FlagSet) {
+	client, err := nodeClientFor(environ, rest, "code export", stderr, func(fs *flag.FlagSet) {
 		gitPath = fs.String("git", "", "the git binary to run; empty is the first on PATH")
 	})
 	if err != nil {

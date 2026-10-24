@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -34,8 +33,8 @@ type UnsettledBatch struct {
 	WrittenAt time.Time
 }
 
-// rowIdentity is one row of a batch as the unsettled record names it: the
-// event log's own (time, id) key, as stored.
+// rowIdentity is one row of a batch by the event log's own (time, id) key, as
+// stored — the shape [keptSQL] binds a list of names in.
 type rowIdentity struct {
 	Time int64  `json:"t"`
 	ID   string `json:"id"`
@@ -48,8 +47,17 @@ type rowIdentity struct {
 // unsettled record are a copy nothing will ever ask the fleet about — a second
 // copy for good if another node keeps the batch — and a record with no rows
 // would make a release delete nothing it had written. A batch written before
-// is written again harmlessly: each row's append is idempotent, and the
-// record keeps the instant it was first written.
+// and not yet settled is written again harmlessly: each row's append is
+// idempotent, and the record keeps the instant it was first written.
+//
+// A BATCH THIS NODE HAS ALREADY SETTLED IS WRITTEN NOT AT ALL. A group
+// redelivers a batch whose acknowledgement was lost to whichever member asks
+// next, which can be this node after its settle: written again, the batch
+// would be in flight again, and its kept rows — counted and published — would
+// leave every usage count until the claim answered a second time, so a day
+// would be published short over good history in the meantime. Kept, its rows are here and
+// counting; not kept, the fleet's copy is another node's. The settle that
+// follows finds nothing unsettled and settles to nothing.
 //
 // Every record is checked before anything is written, and one that cannot be
 // stored refuses the batch: a batch partly written and recorded as whole would
@@ -59,30 +67,38 @@ func (l *EventLog) WriteCustody(ctx context.Context, b CustodyBatch, at time.Tim
 		return errors.New("store: a custody batch needs an id and an origin")
 	}
 	rows := make([]eventRow, 0, len(b.Records))
-	ids := make([]rowIdentity, 0, len(b.Records))
 	for _, rec := range b.Records {
-		row, err := prepareEvent(rec)
+		row, err := prepareEvent(rec, l.db.eventSeatsNow())
 		if err != nil {
 			return fmt.Errorf("store: custody batch %s: %w", b.ID, err)
 		}
 		rows = append(rows, row)
-		ids = append(ids, rowIdentity{Time: EncodeTime(rec.Time), ID: rec.ID})
-	}
-	events, err := json.Marshal(ids)
-	if err != nil {
-		return fmt.Errorf("store: encode custody batch %s: %w", b.ID, err)
 	}
 	if err := l.db.Tx(ctx, func(tx *sql.Tx) error {
+		var settled int
+		switch err := tx.QueryRowContext(ctx,
+			`SELECT 1 FROM custody_settled WHERE batch_id = ?`, b.ID).Scan(&settled); {
+		case err == nil:
+			return nil
+		case !errors.Is(err, sql.ErrNoRows):
+			return fmt.Errorf("read whether it was settled: %w", err)
+		}
 		for _, row := range rows {
 			if err := row.insert(ctx, tx); err != nil {
 				return fmt.Errorf("event %s: %w", row.rec.ID, err)
 			}
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO custody_unsettled_rows (row_time, row_id, batch_id)
+				VALUES (?, ?, ?) ON CONFLICT DO NOTHING`,
+				EncodeTime(row.rec.Time), row.rec.ID, b.ID); err != nil {
+				return fmt.Errorf("event %s: record it in flight: %w", row.rec.ID, err)
+			}
 		}
 		_, err := tx.ExecContext(ctx, `
-			INSERT INTO custody_unsettled (batch_id, origin, written_at, events)
-			VALUES (?, ?, ?, ?)
+			INSERT INTO custody_unsettled (batch_id, origin, written_at)
+			VALUES (?, ?, ?)
 			ON CONFLICT (batch_id) DO NOTHING`,
-			b.ID, b.Origin, EncodeTime(at.UTC()), string(events))
+			b.ID, b.Origin, EncodeTime(at.UTC()))
 		return err
 	}); err != nil {
 		return fmt.Errorf("store: write custody batch %s: %w", b.ID, err)
@@ -91,40 +107,99 @@ func (l *EventLog) WriteCustody(ctx context.Context, b CustodyBatch, at time.Tim
 }
 
 // SettleCustody records what the fleet decided about a batch this node wrote,
-// in one transaction: kept, the rows stay and the batch is forgotten; not
-// kept, its rows go with it. A batch this node holds no record of settles to
-// nothing — it was settled already, or never written here.
+// in one transaction: kept, the rows stay; not kept, its rows go with it.
+// Either way the batch leaves the unsettled record and is remembered as
+// settled ([EventLog.WriteCustody] says why). A batch this node holds no
+// unsettled record of settles to nothing and records nothing: either it was
+// settled already, and the earlier settle remembered it, or it was never
+// written here.
+//
+// KEPT, ITS ROWS START TO COUNT — every usage count leaves out a batch in
+// flight (usage.go) — so the days they fall on are not the days this node
+// last published, and any of them may be older than the two its usage
+// publisher looks at on every tick: a batch can carry a node's events from a
+// partition that lasted days. So the settle marks the oldest usage row it made
+// count ([DB.UsageRederive]) IN THIS TRANSACTION: written in a transaction of
+// its own, a crash between the two would leave either rows counting on a day
+// nothing will derive again or a mark for rows that do not count. Not kept,
+// its rows were never counted, so no count changes and nothing is marked — a
+// fire whose trace only these rows named loses its turn label
+// ([DB.usageSchedules]), which no count is made of.
 func (l *EventLog) SettleCustody(ctx context.Context, batchID string, kept bool) error {
 	if err := l.db.Tx(ctx, func(tx *sql.Tx) error {
-		var raw string
+		var held int
 		read := tx.QueryRowContext(ctx,
-			`SELECT events FROM custody_unsettled WHERE batch_id = ?`, batchID).Scan(&raw)
+			`SELECT 1 FROM custody_unsettled WHERE batch_id = ?`, batchID).Scan(&held)
 		switch {
 		case errors.Is(read, sql.ErrNoRows):
 			return nil
 		case read != nil:
 			return read
 		}
-		if !kept {
-			var ids []rowIdentity
-			if err := json.Unmarshal([]byte(raw), &ids); err != nil {
-				return fmt.Errorf("decode its rows: %w", err)
+		if kept {
+			if err := markUsageRederive(ctx, tx, batchID); err != nil {
+				return err
 			}
-			for _, id := range ids {
-				if _, err := tx.ExecContext(ctx, `DELETE FROM crewlet_event_parties
-					WHERE event_time = ? AND event_id = ?`, id.Time, id.ID); err != nil {
-					return err
-				}
-				if _, err := tx.ExecContext(ctx, `DELETE FROM crewlet_events
-					WHERE event_time = ? AND event_id = ?`, id.Time, id.ID); err != nil {
-					return err
-				}
-			}
+		} else if err := releaseCustody(ctx, tx, batchID); err != nil {
+			return err
 		}
-		_, err := tx.ExecContext(ctx, `DELETE FROM custody_unsettled WHERE batch_id = ?`, batchID)
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM custody_unsettled_rows WHERE batch_id = ?`, batchID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM custody_unsettled WHERE batch_id = ?`, batchID); err != nil {
+			return err
+		}
+		keptFlag := 0
+		if kept {
+			keptFlag = 1
+		}
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO custody_settled (batch_id, kept, settled_at) VALUES (?, ?, ?)
+			ON CONFLICT (batch_id) DO UPDATE SET kept = excluded.kept,
+			                                     settled_at = excluded.settled_at`,
+			batchID, keptFlag, EncodeTime(now()))
 		return err
 	}); err != nil {
 		return fmt.Errorf("store: settle custody batch %s: %w", batchID, err)
+	}
+	return nil
+}
+
+// releaseCustody deletes the rows of a batch another node keeps, each by the
+// log's own key, read off the batch's in-flight identities.
+func releaseCustody(ctx context.Context, tx *sql.Tx, batchID string) error {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT row_time, row_id FROM custody_unsettled_rows WHERE batch_id = ?`, batchID)
+	if err != nil {
+		return fmt.Errorf("read its rows: %w", err)
+	}
+	var ids []rowIdentity
+	for rows.Next() {
+		var id rowIdentity
+		if err := rows.Scan(&id.Time, &id.ID); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("read its rows: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("read its rows: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("read its rows: %w", err)
+	}
+	for _, id := range ids {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM crewlet_event_parties
+			WHERE event_time = ? AND event_id = ?`, id.Time, id.ID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM crewlet_events
+			WHERE event_time = ? AND event_id = ?`, id.Time, id.ID); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -10,22 +10,25 @@
  * and finishes under, force — are in GateDialog.test.tsx.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, expect, test, vi } from "vitest";
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
-  BlockedBanner,
-  DomainBlock,
+  AlarmItem,
+  Checks,
   DomainSize,
   donorsCounted,
   gateAction,
+  LogRow,
   MaintenanceBanner,
   NodePositions,
   ServedLevelBanner,
-  Terms,
+  SnapshotsCard,
   Tombstone,
 } from "./Retention.tsx";
+import { Router } from "~/app/router.tsx";
 import type {
+  RetentionAlarm,
   RetentionDomain,
   RetentionNode,
   RetentionSnapshot,
@@ -105,7 +108,7 @@ test("an unreadable lag renders as unknown rather than as caught up", () => {
       })}
     />,
   );
-  expect(screen.getByText("lag —")).toBeTruthy();
+  expect(screen.getByText("lag unknown")).toBeTruthy();
 });
 
 const term = (over: Partial<RetentionTerm> = {}): RetentionTerm => ({
@@ -121,12 +124,14 @@ const term = (over: Partial<RetentionTerm> = {}): RetentionTerm => ({
 // zero are three different things to do about.
 test("a term's third value is rendered rather than collapsed to a number", () => {
   render(
-    <Terms
-      terms={[
-        term(),
-        term({ name: "backup", state: "n/a", seq: undefined }),
-        term({ name: "snapshot", state: "unknown", seq: undefined }),
-      ]}
+    <Checks
+      domain={domain({
+        terms: [
+          term(),
+          term({ name: "feed_ack_floor", state: "n/a", seq: undefined }),
+          term({ name: "snapshot_floor", state: "unknown", seq: undefined }),
+        ],
+      })}
     />,
   );
   expect(screen.getByText("41")).toBeTruthy();
@@ -134,12 +139,86 @@ test("a term's third value is rendered rather than collapsed to a number", () =>
   expect(screen.getByText("unknown")).toBeTruthy();
 });
 
-// THE SNAPSHOT BLOCK CARRIES ITS OWN REASON. A stalled snapshot tier and a
-// stalled trim are different problems with different remedies, and the first
-// is silent until a node tries to join.
-test("a blocked snapshot loop says so separately from the trim", () => {
-  render(<Terms terms={[term()]} snapshotBlocked="insufficient_space" />);
-  expect(screen.getByText(/insufficient_space/)).toBeTruthy();
+// A CHECK IS ITS WORDS AND ITS NAME. The name is what the CLI prints and the
+// guide is indexed by, so a reader who meets it there finds it here.
+test("each check is named in words beside the term's own name", () => {
+  render(<Checks domain={domain({ terms: [term({ name: "feed_ack_floor" })] })} />);
+  expect(screen.getByText("Wake feed")).toBeTruthy();
+  expect(screen.getByText("feed_ack_floor")).toBeTruthy();
+});
+
+// ONLY THE CHECK THAT DECIDES THE TRIM CARRIES ITS REMEDY. Six remedies side
+// by side told a healthy single node to evict itself and called `min_age`
+// the problem on a log the backup was holding.
+test("only the check that decides the trim carries its remedy", () => {
+  const six = (blocked?: "backup_floor") =>
+    domain({
+      blocked_by: blocked,
+      terms: [
+        term({ name: "applied", seq: 269, remedy: "Bring the node back." }),
+        term({ name: "min_hold", state: "unbounded", seq: undefined, remedy: "A hold pins it." }),
+        blocked
+          ? term({
+              name: "backup_floor",
+              state: "unknown",
+              seq: undefined,
+              remedy: "Take a backup.",
+            })
+          : term({ name: "backup_floor", seq: 300, remedy: "Take a backup." }),
+        term({ name: "snapshot_floor", state: "unbounded", seq: undefined, remedy: "Snapshot." }),
+        term({ name: "feed_ack_floor", seq: 269, remedy: "The feed lags." }),
+        term({ name: "age_floor", seq: 1, remedy: "Nothing is wrong." }),
+      ],
+    });
+  render(<Checks domain={six("backup_floor")} />);
+  expect(screen.getByText("Take a backup.")).toBeTruthy();
+  expect(screen.getByText("holding the trim")).toBeTruthy();
+  for (const other of ["Bring the node back.", "The feed lags.", "Nothing is wrong."]) {
+    expect(screen.queryByText(other)).toBeNull();
+  }
+
+  // ADVANCING, the lowest term that binds sets the floor, and only it.
+  cleanup();
+  render(<Checks domain={six()} />);
+  expect(screen.getByText("sets the floor")).toBeTruthy();
+  expect(screen.getByText("Nothing is wrong.")).toBeTruthy();
+  expect(screen.queryByText("Take a backup.")).toBeNull();
+  expect(screen.queryByText("holding the trim")).toBeNull();
+});
+
+const snapshot = (over: Partial<RetentionSnapshot>): RetentionSnapshot => ({
+  node_id: "node-a",
+  ...over,
+});
+
+// A SINGLE NODE TAKES NO SNAPSHOTS BY DESIGN, and says it in one sentence:
+// a table of one `sole_node` row, a donor count of 0 of 2 and a warning on
+// every log read as four faults on a fleet working as configured.
+test("a single node's missing snapshots are one sentence, not a fault", () => {
+  render(<SnapshotsCard snapshots={[snapshot({ skip: "sole_node" })]} now={Date.now()} />);
+  expect(screen.getByText(/Snapshots start when a second node joins/)).toBeTruthy();
+  expect(screen.queryByText("sole_node")).toBeNull();
+  expect(screen.queryByText(/donors/)).toBeNull();
+});
+
+// THE SNAPSHOT BLOCK CARRIES ITS OWN REASON everywhere else. A stalled
+// snapshot tier and a stalled trim are different problems with different
+// remedies, and the first is silent until a node tries to join.
+test("a fleet's missing snapshot names its reason, node by node", () => {
+  render(
+    <Router>
+      <SnapshotsCard
+        snapshots={[
+          snapshot({ node_id: "node-a", at: "2031-04-01T12:00:00Z", domains: { tracker: 4 } }),
+          snapshot({ node_id: "node-b", skip: "insufficient_space" }),
+        ]}
+        now={Date.now()}
+      />
+    </Router>,
+  );
+  expect(screen.getByText("insufficient_space")).toBeTruthy();
+  expect(screen.getByText("1 of 2 donors")).toBeTruthy();
+  expect(screen.queryByText(/Snapshots start when a second node joins/)).toBeNull();
 });
 
 const domain = (over: Partial<RetentionDomain> = {}): RetentionDomain => ({
@@ -217,8 +296,8 @@ test("an operation with nobody outstanding says it is waiting on its operator", 
       now={Date.now()}
     />,
   );
-  expect(screen.getByText(/waiting on its operator/)).toBeTruthy();
-  expect(screen.queryByText(/Waiting on/)).toBeNull();
+  expect(screen.getByText("Waiting on its operator.")).toBeTruthy();
+  expect(screen.queryByText(/^Waiting on (?!its operator\.$)/)).toBeNull();
 });
 
 // A DOCUMENT THAT CANNOT CLAIM AN AGE SAYS SO, and one that can says nothing.
@@ -229,10 +308,12 @@ test("an operation with nobody outstanding says it is waiting on its operator", 
 // unreachable, or coordination was. Without the banner the two render
 // identically: the same figures, read as fresh, in exactly the incident that
 // made them unmeasurable.
-test("a replication answer that cannot claim an age renders the reason", () => {
+test("a replication answer that cannot claim an age says so", () => {
   render(<ServedLevelBanner level="consistent_prefix" />);
-  expect(screen.getByText(/no statement about age/)).toBeTruthy();
-  expect(screen.getByText("consistent_prefix")).toBeTruthy();
+  expect(
+    screen.getByText("How current these figures are can’t be measured right now."),
+  ).toBeTruthy();
+  expect(screen.queryByText("consistent_prefix")).toBeNull();
 });
 
 // THE CONTROL, and it is the half that fails when somebody turns this into a
@@ -249,31 +330,131 @@ test("an answer served at stale renders no banner at all", () => {
   expect(missing.container.textContent).toBe("");
 });
 
-// THE SERVER'S SENTENCE IS THE WHOLE SENTENCE. `statelog`'s report composes
-// "Nothing is being trimmed on tracker: <why>." — the headline included,
-// because the CLI prints the same line — and the banner once put its own
-// headline in front of it, so the operator read the headline twice. It is
-// printed once; only a report with no sentence gets the banner's own.
-test("a blocked trim's banner states its headline exactly once", () => {
-  const blocked = (over: Partial<RetentionDomain>) =>
-    ({ domain: "tracker", blocked_by: "backup_max_age", ...over }) as RetentionDomain;
+const alarm = (over: Partial<RetentionAlarm>): RetentionAlarm => ({
+  kind: "backup_age",
+  detail: "no verified backup has been recorded, and the policy asks for one every 24h",
+  remedy: "Run `crewlet backup` against any node.",
+  ...over,
+});
+
+const NOW = Date.parse("2031-04-02T03:14:00Z");
+const HELD_SINCE = "2031-03-31T05:14:00Z"; // 46h before NOW
+
+/** The engine's `trim_blocked` sentence for a log keeping `kept` records past its window. */
+const keeping = (kept: number) =>
+  `the trim has not advanced for 46h, and the log is keeping up to ${kept} record(s) older than its 24h replay window`;
+
+// ONE CAUSE IS ONE ALARM. A company with no backup was drawn as a banner per
+// log, a `trim_blocked` per log and a backup alarm: five problems for one.
+// The logs one term holds are one line under the alarm whose remedy covers
+// them, dated by the one held longest — and each still says what it keeps
+// past its window, which is why it is listed at all and which no date says.
+test("an alarm is drawn once, with the logs it holds as one line and each log's own count", () => {
+  const kept: Record<string, number> = { tracker: 1200, vectors: 40, pages: 7, usage: 310 };
   const { container } = render(
-    <BlockedBanner
-      domain={blocked({
-        prose: "Nothing is being trimmed on tracker: no backup has been recorded.",
+    <AlarmItem
+      alarm={alarm({
+        domains: Object.entries(kept).map(([domain, n]) => ({
+          domain,
+          detail: keeping(n),
+          term: "backup_floor" as const,
+          since: HELD_SINCE,
+        })),
       })}
-      now={Date.now()}
+      now={NOW}
     />,
   );
   const text = container.textContent ?? "";
-  expect(text.match(/Nothing is being trimmed/g)).toHaveLength(1);
-  expect(text).toContain("no backup has been recorded.");
-  expect(text).not.toContain("..");
+  expect(screen.getByText("Backup age")).toBeTruthy();
+  expect(text).toContain(
+    "No verified backup has been recorded, and the policy asks for one every 24h.",
+  );
+  expect(text.match(/Trim held by/g)).toHaveLength(1);
+  expect(text).toContain("Trim held by the backup on tracker, vectors, pages and usage, for 46h.");
+  for (const [domain, n] of Object.entries(kept)) {
+    expect(text).toContain(`${domain}: ${keeping(n)}`);
+  }
+  // EACH LOG IS A WAY TO ITS OWN PAGE, wherever it is named.
+  const links = screen.getAllByRole("link", { name: "pages" });
+  expect(links.length).toBeGreaterThan(0);
+  for (const link of links) {
+    expect(link.getAttribute("href")).toContain("settings/backups/pages");
+  }
+  // THE REMEDY IS THE ENGINE'S, with its command drawn as code.
+  expect(screen.getByText("crewlet backup").tagName).toBe("CODE");
+});
 
-  // No sentence from the server: the banner composes one, naming the term.
+// A BLOCKED TRIM ON TWO LOGS LEADS WITH THE MORE PRESSING ONE, and the other
+// still says its own count: read off the headline alone, the second log was
+// keeping what the first one keeps.
+test("a trim blocked on two logs says each log's count, not only the lead's", () => {
+  const { container } = render(
+    <AlarmItem
+      alarm={alarm({
+        kind: "trim_blocked",
+        detail: keeping(1200),
+        domains: [
+          { domain: "tracker", detail: keeping(1200), term: "applied", since: HELD_SINCE },
+          { domain: "pages", detail: keeping(7), term: "applied", since: HELD_SINCE },
+        ],
+      })}
+      now={NOW}
+    />,
+  );
+  const text = container.textContent ?? "";
+  expect(text).toContain("Trim held by");
+  expect(text).toContain(`pages: ${keeping(7)}`);
+  expect(text).toContain(`tracker: ${keeping(1200)}`);
+});
+
+// ONE HELD LOG WHOSE SENTENCE IS THE HEADLINE is not said twice: the line
+// keeps its term and its date, and the count is the headline's.
+test("a trim blocked on one log says its count once", () => {
+  const { container } = render(
+    <AlarmItem
+      alarm={alarm({
+        kind: "trim_blocked",
+        detail: keeping(1200),
+        domains: [{ domain: "tracker", detail: keeping(1200), term: "applied", since: HELD_SINCE }],
+      })}
+      now={NOW}
+    />,
+  );
+  const text = container.textContent ?? "";
+  expect(text.match(/1200 record\(s\) older/g)).toHaveLength(1);
+  expect(text).toContain("Trim held by");
+  expect(text).toContain("for 46h.");
+});
+
+// A SINGLE LOG WHOSE MEASUREMENT IS THE ALARM'S IS FOLDED INTO IT, as the CLI
+// folds it: drawn as both the headline and a line, one sentence read twice.
+test("a single log's measurement is said once, with the log beside it", () => {
+  const detail = "3% of the log's byte ceiling for ordinary writes is left";
+  const { container } = render(
+    <AlarmItem
+      alarm={alarm({ kind: "log_headroom", detail, domains: [{ domain: "vectors", detail }] })}
+      now={NOW}
+    />,
+  );
+  expect(container.textContent?.match(/byte ceiling/g)).toHaveLength(1);
+  expect(screen.getByRole("link", { name: "vectors" })).toBeTruthy();
+});
+
+// THE BACKUP ALARM OFFERS THE BACKUP, where the page can take one, and no
+// other alarm offers a gesture it does not have.
+test("only the backup alarm offers to take a backup, and only where the page can", () => {
+  const take = vi.fn();
+  render(<AlarmItem alarm={alarm({})} now={NOW} onTakeBackup={take} />);
+  fireEvent.click(screen.getByRole("button", { name: "Take a backup" }));
+  expect(take).toHaveBeenCalledOnce();
+
   cleanup();
-  const bare = render(<BlockedBanner domain={blocked({})} now={Date.now()} />).container;
-  expect(bare.textContent).toMatch(/Nothing is being trimmed on tracker: the backup_max_age term/);
+  render(<AlarmItem alarm={alarm({ kind: "trim_blocked" })} now={NOW} onTakeBackup={take} />);
+  expect(screen.queryByRole("button", { name: "Take a backup" })).toBeNull();
+
+  cleanup();
+  render(<AlarmItem alarm={alarm({})} now={NOW} />);
+  expect(screen.queryByRole("button", { name: "Take a backup" })).toBeNull();
 });
 
 // A GESTURE STILL TO BE FINISHED OWNS THE ROW'S BUTTON.
@@ -319,7 +500,7 @@ test("a node with an unfinished gesture offers to finish it rather than start af
 // recover. Guarded, both drew "floor 0 · advancing".
 test("a reanchored domain with no conclusion renders its state, never advancing", () => {
   render(
-    <DomainBlock
+    <LogRow
       domain={domain({
         generation: 1,
         trim_floor: 0,
@@ -329,7 +510,8 @@ test("a reanchored domain with no conclusion renders its state, never advancing"
       })}
     />,
   );
-  expect(screen.getByText(/concluded nothing about generation 1 yet/)).toBeTruthy();
+  openRow("tracker");
+  expect(screen.getByText("No trim result for generation 1 yet.")).toBeTruthy();
   expect(screen.getByText("no conclusion yet")).toBeTruthy();
   expect(screen.getByText("no floor yet")).toBeTruthy();
   expect(screen.queryByText("advancing")).toBeNull();
@@ -337,32 +519,48 @@ test("a reanchored domain with no conclusion renders its state, never advancing"
 
   // AN UNREADABLE REGISTER IS NOT A TRIM THAT HAS CONCLUDED NOTHING.
   cleanup();
-  render(<DomainBlock domain={domain({ trim_floor_state: "unreadable", terms: [] })} />);
+  render(<LogRow domain={domain({ trim_floor_state: "unreadable", terms: [] })} />);
   expect(screen.getAllByText(/floor unreadable/).length).toBeGreaterThan(0);
   expect(screen.queryByText("advancing")).toBeNull();
 
   // THE CONTROL: a published, unblocked floor is the one that advances.
   cleanup();
-  render(<DomainBlock domain={domain()} />);
+  render(<LogRow domain={domain()} />);
   expect(screen.getByText("advancing")).toBeTruthy();
 });
+
+/** Opens a log row's checks by pressing its disclosure, as a reader does. */
+function openRow(name: string) {
+  fireEvent.click(screen.getByRole("button", { name: new RegExp(name) }));
+}
 
 // A BLOCKED DOMAIN'S CONCLUSION IS "BLOCKED", not "concluded 0": the wire value
 // is zero while blocked, and printed as a number it reads as a position.
 test("a blocked domain reads blocked rather than a conclusion of zero", () => {
   render(
-    <DomainBlock domain={domain({ trim_floor: 700, trim_to: 0, blocked_by: "backup_floor" })} />,
+    <LogRow
+      domain={domain({
+        trim_floor: 700,
+        trim_to: 0,
+        blocked_by: "backup_floor",
+        terms: [term({ name: "backup_floor", state: "unknown", seq: undefined })],
+      })}
+    />,
   );
   expect(screen.getByText(/blocked/)).toBeTruthy();
   expect(screen.queryByText(/concluded/)).toBeNull();
-  expect(screen.getByText("backup_floor")).toBeTruthy();
+  // WHAT HOLDS IT, in words on the row and by its own name in the checks.
+  expect(screen.getByText("held by the backup")).toBeTruthy();
+  openRow("tracker");
+  const checks = screen.getByText("backup_floor").closest("dl") as HTMLElement;
+  expect(within(checks).getByText("holding the trim")).toBeTruthy();
 });
 
 // A DOMAIN THIS NODE REFUSES SAYS SO ABOVE EVERYTHING ELSE ABOUT IT, NAMING THE
 // FINDING — the guides send an operator here after a restore to find it.
 test("a refused domain names its refusal, the finding and the sentence", () => {
   render(
-    <DomainBlock
+    <LogRow
       domain={domain({
         not_ready: {
           code: "wrong_stream",
@@ -425,7 +623,7 @@ test("a node on a generation the log left is labelled rather than caught up", ()
   expect(screen.getByText("left gen 0")).toBeTruthy();
   expect(screen.getByText("gen 0")).toBeTruthy();
   expect(screen.getByText("log diverged")).toBeTruthy();
-  expect(screen.queryByText("lag —")).toBeNull();
+  expect(screen.queryByText("lag unknown")).toBeNull();
   expect(screen.queryByText(/behind/)).toBeNull();
 });
 

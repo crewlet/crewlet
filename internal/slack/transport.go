@@ -240,8 +240,8 @@ func (t *Transport) Start(ctx context.Context) error {
 			}
 			found[i] = resolved{
 				seat: Seat{
-					Handle: cfg.Handle, BotUserID: identity.UserID,
-					AppID: identity.AppID,
+					Handle:    cfg.Handle,
+					BotUserID: identity.UserID, AppID: identity.AppID,
 				},
 				client: client,
 			}

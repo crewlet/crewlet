@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 )
@@ -219,7 +221,7 @@ var coordinatorEntries = map[string][]entryDrive{
 	"RetireSeat": {{
 		name: "the runs of a seat that left the company",
 		call: func(t *testing.T, rig *coordRig) {
-			if err := rig.coordinator.RetireSeat(t.Context(), "swe", "node-a:1", 3); err != nil {
+			if err := rig.coordinator.RetireSeat(t.Context(), sweSeat(), "swe", "node-a:1", 3); err != nil {
 				t.Logf("RetireSeat: %v", err)
 			}
 		},
@@ -439,12 +441,12 @@ func completes(t *testing.T, rig *coordRig) {
 // rather than left to be discovered, because a drive presenting itself as
 // coverage it lacks is the defect this file exists to end and not an instance
 // of it. The settle this reaches ([Coordinator.settleClaimed]) has two call
-// sites and both sit behind a resume that returned nil or [ErrResumeActed] —
-// every other resume failure gives the claim back instead, which is
-// [Coordinator.unclaim]'s path and not this one. Both of those count as an
-// OWNED re-entry, so from the three statuses whose claim is won
-// ([StatusRunning], [StatusAwaiting], [StatusReseed]) [entryDrive.run] takes
-// the turn-ended-its-own-hold exemption before it asks whether a stop was
+// sites and both sit behind a resume that returned nil or
+// [ErrResumeAbandoned] — every other resume failure gives the claim back
+// instead, which is [Coordinator.unclaim]'s path and not this one. Both of
+// those count as an OWNED re-entry, so from the three statuses whose claim is
+// won ([StatusRunning], [StatusAwaiting], [StatusReseed]) [entryDrive.run]
+// takes the turn-ended-its-own-hold exemption before it asks whether a stop was
 // reported; from [StatusLaunching] and [StatusResumed] the claim is refused
 // and the earlier skip fires. So what this drive certifies is that the path
 // RUNS from every status with that read refused, and nothing about what it
@@ -467,8 +469,9 @@ func answersByTurn(t *testing.T, rig *coordRig) {
 	// checked — whatever status the row was placed in.
 	run, _, _ := rig.pending.Get(t.Context(), "t1")
 	given := types.SandboxAnswerGiven{
-		TurnID: "t1", AgentHandle: "swe", Answer: "the release branch",
-		AnsweredBy: "founder-token", AnsweredBySeat: "founder", LaunchID: run.LaunchID,
+		TurnID: "t1", Agent: sweID, AgentHandle: "swe", Answer: "the release branch",
+		AnsweredBy: "founder", AnsweredByKind: "human", OperatorID: "pat:founder-token",
+		LaunchID: run.LaunchID,
 	}
 	if given.LaunchID == "" {
 		given.LaunchID = "launch-of-a-run-with-no-record"
@@ -791,6 +794,13 @@ func (s *refusingStore) ListActiveForSeat(ctx context.Context, handle string) ([
 		return nil, errRefusedCall
 	}
 	return s.inner.ListActiveForSeat(ctx, handle)
+}
+
+func (s *refusingStore) ListActiveForSeatID(ctx context.Context, seat uuid.UUID) ([]PendingRun, error) {
+	if s.called("ListActiveForSeatID") {
+		return nil, errRefusedCall
+	}
+	return s.inner.ListActiveForSeatID(ctx, seat)
 }
 
 func (s *refusingStore) RecordAnswer(ctx context.Context, turnID, launch string,

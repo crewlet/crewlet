@@ -20,7 +20,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { CredentialPeek, provenance, Secrets } from "./Secrets.tsx";
 import type { ReactElement } from "react";
 import { Router } from "~/app/router.tsx";
-import { storeToken } from "~/protocol/index.ts";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
 
 /**
  * A screen renders inside the Router.
@@ -102,17 +103,16 @@ function ok(payload: unknown): Response {
   });
 }
 
-beforeEach(() => {
-  localStorage.setItem("crewlet_api_token", "operator-token");
-});
-
 afterEach(() => {
   cleanup();
   localStorage.clear();
   vi.restoreAllMocks();
 });
 
-test("the list comes from GET /secrets, carrying the operator token", async () => {
+// THE BROWSER'S OWN SESSION and nothing else: the cookie rides a same-origin
+// request, and no bearer is ever set by a page — a credential a page held
+// was one any script on it could read.
+test("the list comes from GET /secrets, on the browser's own session", async () => {
   const spy = stubFetch((path) => (path === "/secrets" ? ok(body) : ok({})));
   render(<Secrets />);
 
@@ -121,7 +121,8 @@ test("the list comes from GET /secrets, carrying the operator token", async () =
 
   const init = spy.mock.calls[0]?.[1];
   const headers = (init?.headers ?? {}) as Record<string, string>;
-  expect(headers.Authorization).toBe("Bearer operator-token");
+  expect(init?.credentials).toBe("same-origin");
+  expect(headers.Authorization).toBeUndefined();
 });
 
 // NO VALUE, EVER. The one route that returns one needs an explicit flag and
@@ -147,15 +148,24 @@ test("the screen never asks for a value", async () => {
 //
 // AND IT REPORTS THE CODE, NOT A SENTENCE. `QueryState` is a table over
 // `QueryErrorCode`; handing it prose missed the table on every refusal and
-// rendered the "code this build does not know" banner — with no way to set
-// the token the same banner exists to offer. This screen is guarded reads
-// included, so a 401 is the refusal an operator actually arrives at.
-test("a 401 renders the auth-gated banner, with the button that fixes it", async () => {
-  stubFetch(() => new Response(JSON.stringify({ error: "invalid_token" }), { status: 401 }));
+// rendered the "code this build does not know" banner — with no way to sign
+// in that the same banner exists to offer. This screen is guarded reads
+// included, so a refusal on authority is what a reader actually arrives at,
+// and it names the grant that would have admitted them.
+test("a refusal on authority names the grant, with the button that fixes it", async () => {
+  stubFetch(
+    () =>
+      new Response(
+        JSON.stringify({ error: "unauthorized", reason: "no_grant", grants: ["admin"] }),
+        { status: 403 },
+      ),
+  );
   render(<Secrets />);
 
-  expect(await screen.findByText(/auth-gated/)).toBeDefined();
-  expect(screen.getByRole("button", { name: "Set token" })).toBeDefined();
+  expect(
+    await screen.findByText(/This answer needs Admin access\. An admin can give it to you\./),
+  ).toBeDefined();
+  expect(screen.getByRole("button", { name: "Sign in" })).toBeDefined();
   expect(screen.queryByText(/code this build does not know/)).toBeNull();
 });
 
@@ -170,7 +180,7 @@ test("a failed read is reported as a fault on the node, not as an unknown code",
   );
   render(<Secrets />);
 
-  expect(await screen.findByText(/tried to answer and failed/)).toBeDefined();
+  expect(await screen.findByText(/The engine failed to answer\./)).toBeDefined();
   expect(screen.queryByText(/code this build does not know/)).toBeNull();
 });
 
@@ -245,8 +255,10 @@ test("a removal names every config field that points at the secret", async () =>
   render(<Secrets />);
   await openRemove("GITHUB_TOKEN");
 
+  expect(screen.getByText("2 fields use it and will stop working:")).toBeDefined();
   expect(screen.getByText("integrations.github.token")).toBeDefined();
   expect(screen.getByText("roles[0].mcp_env.github.GITHUB_TOKEN")).toBeDefined();
+  expect(screen.getByText("Repoint them first.")).toBeDefined();
   // AND IT IS GATED. A referenced credential does not go on one click.
   const remove = screen.getByRole("button", { name: "Remove" });
   expect((remove as HTMLButtonElement).disabled).toBe(true);
@@ -288,8 +300,8 @@ test("a reference check that failed is never shown as nothing pointing at it", a
   render(<Secrets />);
   await openRemove("GITHUB_TOKEN");
 
-  expect(screen.getByText(/could not be read/)).toBeDefined();
-  expect(screen.queryByText(/No field in the active configuration names this/)).toBeNull();
+  expect(screen.getByText("Couldn’t check whether anything uses it.")).toBeDefined();
+  expect(screen.queryByText("Nothing uses it.")).toBeNull();
   // And it is gated exactly as a referenced row is: an unknown answer is not
   // a safe one.
   expect((screen.getByRole("button", { name: "Remove" }) as HTMLButtonElement).disabled).toBe(true);
@@ -310,7 +322,7 @@ test("no active configuration reads as nothing pointing at it, not as a failure"
   render(<Secrets />);
   await openRemove("GITHUB_TOKEN");
 
-  expect(screen.getByText(/No field in the active configuration names this/)).toBeDefined();
+  expect(screen.getByText("Nothing uses it.")).toBeDefined();
   expect((screen.getByRole("button", { name: "Remove" }) as HTMLButtonElement).disabled).toBe(
     false,
   );
@@ -342,9 +354,9 @@ test("editing a secret asks for a new value and never receives the old one", asy
 /**
  * AN ANSWER NOBODY IS WAITING FOR ANY MORE WRITES NOTHING.
  *
- * Three things start a read here — mount, a token arriving, and a store or a
- * removal finishing — and nothing polls, so two are routinely in flight at
- * once. Every answer was written into state unconditionally, which makes the
+ * Three things start a read here — mount, the socket coming back, and a store
+ * or a removal finishing — and nothing polls, so two are routinely in flight
+ * at once. Every answer was written into state unconditionally, which makes the
  * screen hold whichever LANDED last rather than whichever was ASKED last: a
  * refresh started after a slow read finishes second and is overwritten by the
  * list it was meant to replace.
@@ -385,10 +397,17 @@ test("a read that answers after a newer one began does not overwrite it", async 
     }),
   });
 
-  render(<Secrets />);
-  // A TOKEN ARRIVING starts the second read, which is one of the three real
-  // triggers rather than a lever invented for this case.
-  storeToken("operator-token-2");
+  const store = new Store();
+  store.setConnected(true);
+  render(
+    <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
+      <Secrets />
+    </ClientContext.Provider>,
+  );
+  // THE SOCKET COMING BACK starts the second read, which is one of the three
+  // real triggers rather than a lever invented for this case.
+  act(() => store.setConnected(false));
+  act(() => store.setConnected(true));
   expect(await screen.findByText("GITHUB_TOKEN")).toBeTruthy();
 
   // NOW the first read answers, and the screen must ignore it.
@@ -408,9 +427,8 @@ test("a read that answers after a newer one began does not overwrite it", async 
   expect(screen.getByText("GITHUB_TOKEN")).toBeTruthy();
 });
 
-// A COMMAND IS CODE. The info card above the list sets `crewlet secrets get`
-// in the code face, and the empty state under it wrote `crewlet secrets set`
-// as three words of its sentence — the one a reader is being told to type.
+// A COMMAND IS CODE. The empty state once wrote `crewlet secrets set` as three
+// words of its sentence, and it is the one a reader is being told to type.
 test("an empty store names the command that fills it as code", async () => {
   stubFetch((path) => (path === "/secrets" ? ok({ secrets: [] }) : ok({})));
   render(<Secrets />);
@@ -459,18 +477,23 @@ test("a reference check that failed counts nothing as unread", async () => {
 });
 
 // WHICH PATH WROTE A CREDENTIAL, in words: `source` is provenance, and each
-// writer's word is said as what it means. A word no writer in this build
-// stamps is said as the writer's own, never guessed at.
+// word the fleet's listing can carry is said as what it means. No request
+// names its own word any more, so one outside the table is a newer engine's,
+// said as a word this build does not know rather than guessed at — and the
+// words the listing can never carry (`cli` and `llm-login`, which the move
+// onto the fleet replaces, and `rekey`, which no path stamps) have no entry.
 test("a credential's provenance is said as the path that wrote it", async () => {
   stubLoaded();
   render(<CredentialPeek name="DATADOG_WEBHOOK_TOKEN" />);
   expect(await screen.findByText("written by an integration's setup")).toBeDefined();
-  expect(provenance("api")).toBe("stored over the API — this page or PUT /secrets");
-  expect(provenance("cli")).toBe("set with crewlet secrets set");
+  expect(provenance("api")).toBe("stored through the API: this console, the CLI or another client");
+  expect(provenance("provision")).toBe("minted by an integration's provisioning pass");
   expect(provenance("migrated")).toBe("moved onto the fleet from a node's own table");
-  expect(provenance("gitlab-provision")).toBe("its writer named itself “gitlab-provision”");
-  for (const word of ["api", "cli", "setup", "provision", "rekey", "migrated"]) {
-    expect(provenance(word)).not.toMatch(/environment|named itself/);
+  for (const word of ["api", "setup", "provision", "migrated"]) {
+    expect(provenance(word)).not.toMatch(/does not know/);
+  }
+  for (const word of ["cli", "llm-login", "rekey", "gitlab-provision"]) {
+    expect(provenance(word)).toBe(`a source this build does not know (“${word}”)`);
   }
 });
 
@@ -482,7 +505,9 @@ test("the credential's peek says each property once", async () => {
   render(<CredentialPeek name="GITHUB_TOKEN" />);
   expect(await screen.findByText("Where it came from")).toBeDefined();
   const said = (label: string) =>
-    [...document.querySelectorAll(".fact-label, dt")].filter((el) => el.textContent === label);
+    [...document.querySelectorAll(".crewlet-fact-line__label, dt")].filter(
+      (el) => el.textContent === label,
+    );
   for (const label of ["Source", "Key id", "Set by", "Updated"]) {
     expect(said(label), label).toHaveLength(1);
   }

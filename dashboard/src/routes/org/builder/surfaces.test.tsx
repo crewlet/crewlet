@@ -11,7 +11,6 @@
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { AddNodeDialog } from "./AddNodeDialog.tsx";
-import { ChangeKindDialog } from "./ChangeKindDialog.tsx";
 import { DeleteDialog } from "./DeleteDialog.tsx";
 import { MoveDialog } from "./MoveDialog.tsx";
 import { DRAFT_STORAGE_KEY } from "./model/persistence.ts";
@@ -51,7 +50,7 @@ test("the table view draws a row per node, and a row's Edit opens the node edito
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/agents/edit?view=table",
+    hash: "#/company/org/edit?view=table",
   });
   await screen.findByText("No problems");
   await openTheEditorFromTheTable();
@@ -61,9 +60,9 @@ test("the table view draws a row per node, and a row's Edit opens the node edito
 /**
  * The table row whose NAME cell says `name`.
  *
- * The name cell rather than the row, because a unit's lead is a seat's name in
- * another cell: "Dev" matches Engineering's row too, on the column that says
- * who leads it.
+ * The name cell rather than the row, because a unit's lead is shown by its
+ * seat's name in another cell: "Dev" matches Engineering's row too, on the
+ * column that says who leads it.
  */
 async function tableRow(name: string): Promise<HTMLElement> {
   const rows = await screen.findAllByRole("row");
@@ -93,21 +92,20 @@ test("each structural action opens its own dialog", () => {
   expect(builderSurfaces.add).toBe(AddNodeDialog);
   expect(builderSurfaces.move).toBe(MoveDialog);
   expect(builderSurfaces.remove).toBe(DeleteDialog);
-  expect(builderSurfaces.changeKind).toBe(ChangeKindDialog);
 });
 
 test("the toolbar's Delete opens the delete dialog for the selected seat", async () => {
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/agents/edit?view=table",
+    hash: "#/company/org/edit?view=table",
   });
   await screen.findByText("No problems");
   // SELECTED BY A PRESS, not by `seat=` in the address, which is a request
   // to open the seat's editor now (`editWiring.test.tsx`).
   fireEvent.click(await tableRow("CEO"));
-  fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
-  const menu = await screen.findByRole("menu", { name: "Actions for CEO" });
+  fireEvent.click(await screen.findByRole("button", { name: "Actions for CEO, selected" }));
+  const menu = await screen.findByRole("menu", { name: "Actions for CEO, selected" });
   fireEvent.click(within(menu).getByRole("menuitem", { name: /^Delete/ }));
   // An ALERT dialog: a removal interrupts to ask something a save makes
   // permanent, so the whole surface is announced rather than its name alone.
@@ -140,15 +138,15 @@ test("the toolbar offers the selected seat's whole list: its entries, order and 
   const { view } = mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/agents/edit?view=visualization",
+    hash: "#/company/org/edit?view=visualization",
   });
   await screen.findByText("No problems");
   // A press on the card selects it.
   fireEvent.click(
     view.container.querySelector<HTMLElement>('[role="treeitem"][data-tree-id="seat:ceo"]')!,
   );
-  fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
-  const toolbar = entries(await screen.findByRole("menu", { name: "Actions for CEO" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Actions for CEO, selected" }));
+  const toolbar = entries(await screen.findByRole("menu", { name: "Actions for CEO, selected" }));
   const labels = toolbar.map((e) => e.label);
   expect(labels).toContain("Edit reports");
   // The three a card and a row draw as controls of their own, which only the
@@ -171,7 +169,7 @@ test("a node's card menu and its row menu are the same list", async () => {
   const { view } = mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/agents/edit?view=visualization",
+    hash: "#/company/org/edit?view=visualization",
   });
   await screen.findByText("No problems");
   const card = view.container.querySelector<HTMLElement>(
@@ -203,10 +201,10 @@ test("the toolbar offers no screen for a seat that exists only in the draft", as
     engine: new Engine(company()),
     surfaces: builderSurfaces,
     keys: countingKeys("builder"),
-    hash: "#/agents/edit?view=table",
+    hash: "#/company/org/edit?view=table",
   });
   await screen.findByText("No problems");
-  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add to the organization" }));
   fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
   const dialog = await screen.findByRole("dialog", { name: "Add to Acme" });
   fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Analyst" } });
@@ -218,8 +216,8 @@ test("the toolbar offers no screen for a seat that exists only in the draft", as
   );
   // Pressing a row selects the node it holds.
   fireEvent.click(await tableRow("Analyst"));
-  fireEvent.click(await screen.findByRole("button", { name: "Analyst" }));
-  const menu = await screen.findByRole("menu", { name: "Actions for Analyst" });
+  fireEvent.click(await screen.findByRole("button", { name: "Actions for Analyst, selected" }));
+  const menu = await screen.findByRole("menu", { name: "Actions for Analyst, selected" });
   const labels = entries(menu).map((e) => e.label);
   expect(labels).toContain("Edit reports");
   expect(labels).not.toContain("Open seat");
@@ -231,12 +229,12 @@ test("Edit reports opens the seat's editor at Manages", async () => {
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/agents/edit?view=table",
+    hash: "#/company/org/edit?view=table",
   });
   await screen.findByText("No problems");
   fireEvent.click(await tableRow("CEO"));
-  fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
-  const menu = await screen.findByRole("menu", { name: "Actions for CEO" });
+  fireEvent.click(await screen.findByRole("button", { name: "Actions for CEO, selected" }));
+  const menu = await screen.findByRole("menu", { name: "Actions for CEO, selected" });
   fireEvent.click(within(menu).getByRole("menuitem", { name: "Edit reports" }));
   const editor = await screen.findByRole("dialog", { name: "Edit CEO" });
   await waitFor(() =>
@@ -260,10 +258,10 @@ test("Back off the builder over a changed editor asks first, and keeping the cha
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/agents",
+    hash: "#/company/org",
   });
   act(() => {
-    location.hash = "#/agents/edit?view=table";
+    location.hash = "#/company/org/edit?view=table";
   });
   await screen.findByText("No problems");
   const onTable = location.hash;
@@ -271,7 +269,7 @@ test("Back off the builder over a changed editor asks first, and keeping the cha
 
   act(() => history.back());
   const asked = await screen.findByRole("alertdialog", { name: "Discard your changes?" });
-  expect(asked.textContent).toContain("you are leaving the builder");
+  expect(asked.textContent).toContain("Your edits to CEO aren’t in the draft yet.");
   await waitFor(() => expect(location.hash).toBe(onTable));
   fireEvent.click(within(asked).getByRole("button", { name: "Keep editing" }));
   expect((within(editor).getByLabelText(/^Goal/) as HTMLTextAreaElement).value).toBe("Grow");
@@ -307,7 +305,7 @@ test("an editor opened before the engine described the company keeps its node", 
           answer = () => resolve(e.answer(r));
         })
       : null;
-  mountBuilder({ engine, surfaces: builderSurfaces, hash: "#/agents/edit?view=table" });
+  mountBuilder({ engine, surfaces: builderSurfaces, hash: "#/company/org/edit?view=table" });
   await waitFor(() => expect(engine.checks()).toHaveLength(1));
   await openTheEditorFromTheTable();
   expect(await screen.findByRole("dialog", { name: "Edit CEO" })).toBeDefined();
@@ -329,7 +327,7 @@ test("every opening of the editor builds its own node's form", async () => {
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/agents/edit?view=table",
+    hash: "#/company/org/edit?view=table",
   });
   await screen.findByText("No problems");
   await typeIntoTheEditor();
@@ -349,7 +347,7 @@ test("a colleague's save leaves an open editor and its typed form, which then ap
     engine,
     org: { name: "Acme", roles: [], units: [] },
     surfaces: builderSurfaces,
-    hash: "#/agents/edit?view=table&seat=ceo",
+    hash: "#/company/org/edit?view=table&seat=ceo",
   });
   await screen.findByText("No problems");
   // Arrived on a link naming the CEO, so the CEO's editor is what opened.
@@ -394,12 +392,12 @@ test("a unit says the same word and wears the same mark on the chart and in the 
   const { view } = mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/agents/edit?view=visualization",
+    hash: "#/company/org/edit?view=visualization",
   });
   await screen.findByText("No problems");
   const node = orgNodeParts();
   const table = orgTableParts();
-  const card = view.container.querySelector<HTMLElement>('[data-tree-id="unit:Engineering"]')!;
+  const card = view.container.querySelector<HTMLElement>('[data-tree-id="unit:engineering"]')!;
   const onChart = {
     // The caption under the name, which is where both surfaces write the type.
     caption: drawnPart(card, node.caption)?.textContent,
@@ -409,7 +407,7 @@ test("a unit says the same word and wears the same mark on the chart and in the 
   fireEvent.click(screen.getByRole("tab", { name: "Table" }));
   const row = await waitFor(() => {
     const found = view.container.querySelector<HTMLElement>(
-      '[role="row"][data-tree-id="unit:Engineering"]',
+      '[role="row"][data-tree-id="unit:engineering"]',
     );
     if (!found) throw new Error("no row for the unit");
     return found;
@@ -461,10 +459,10 @@ test("an add puts the kind first in both shells, and opens on it in the dialog",
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/agents/edit?view=table",
+    hash: "#/company/org/edit?view=table",
   });
   await screen.findByText("No problems");
-  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add to the organization" }));
   fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
   const dialog = await screen.findByRole("dialog", { name: "Add to Acme" });
   expect(document.activeElement).toBe(within(dialog).getByRole("radio", { name: "Agent seat" }));
@@ -520,11 +518,11 @@ test("an add falls back to the dialog when its parent leaves the draft", async (
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/agents/edit?view=table",
+    hash: "#/company/org/edit?view=table",
   });
   await screen.findByText("No problems");
   // A unit of the draft alone, so an undo can take it away again.
-  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  fireEvent.click(screen.getByRole("button", { name: "Add to the organization" }));
   fireEvent.click(await screen.findByRole("menuitem", { name: "Add unit" }));
   const dialog = await screen.findByRole("dialog", { name: "Add to Acme" });
   fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Tooling" } });

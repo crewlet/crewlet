@@ -195,9 +195,7 @@ describe("in the builder", () => {
     const dialog = await screen.findByRole("dialog", { name: "The company as YAML" });
     expect(await within(dialog).findByText(/name: Acme/)).toBeDefined();
     expect(within(dialog).getByRole("button", { name: "Copy" })).toBeDefined();
-    // The caption reads as a sentence: JSX drops the line break before an
-    // element, and "keeps its${NAME} form" is what it rendered.
-    expect(dialog.textContent).toContain("a reference keeps its ${NAME} form.");
+    expect(within(dialog).getByText("Credentials are hidden.")).toBeDefined();
   });
 
   test("Copy as YAML says when what it read is a later revision", async () => {
@@ -212,14 +210,14 @@ describe("in the builder", () => {
     await save(engine, () => null);
     fireEvent.click(await screen.findByRole("button", { name: "Copy as YAML" }));
     const dialog = await screen.findByRole("dialog", { name: "The company as YAML" });
-    expect(await within(dialog).findByText(/which is active now/)).toBeDefined();
+    expect(await within(dialog).findByText(/Showing active revision/)).toBeDefined();
   });
 });
 
 describe("the org chart", () => {
   function mountCompany(appliedEpoch: number) {
     Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
-    location.hash = "#/agents";
+    location.hash = "#/company/org";
     const store = new Store();
     // The health push, which is where this node's applied epoch comes from.
     store.applyHealth(healthFrame({ applied_epoch: appliedEpoch }));
@@ -243,12 +241,12 @@ describe("the org chart", () => {
   test("say they still draw the previous revision until this node applies the saved one", async () => {
     recordSavedRevision({ revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 });
     mountCompany(3);
-    expect(await screen.findByText(/still applying revision/)).toBeDefined();
+    expect(await screen.findByText(/Still applying/)).toBeDefined();
   });
 
   test("say nothing once the node has applied it", async () => {
     recordSavedRevision({ revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 });
     mountCompany(4);
-    await waitFor(() => expect(screen.queryByText(/still applying revision/)).toBeNull());
+    await waitFor(() => expect(screen.queryByText(/Still applying/)).toBeNull());
   });
 });

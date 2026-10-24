@@ -209,11 +209,22 @@ func TestMyWorkIsAlwaysTheTurnsOwnSeat(t *testing.T) {
 	trk := newFakeTracker()
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
 
-	callWork(t, reg, tracker.MyWorkTool, map[string]any{"handle": "somebody-else"})
-	if trk.myWorkQuery.Who.Handle != "eng" {
+	// A HANDLE SENT ANYWAY IS REFUSED BY NAME and reads nobody's day: a
+	// model that tried to read a colleague's is told it cannot name one,
+	// rather than being shown its own as if it had asked for that.
+	named := callWork(t, reg, tracker.MyWorkTool, map[string]any{"handle": "somebody-else"})
+	if !named.Failed || !errors.Is(named.Cause, builtin.ErrUndeclaredArgument) {
+		t.Errorf("my_work naming a handle answered %q (cause %v), want the "+
+			"argument refused by name", named.Output, named.Cause)
+	}
+	if trk.myWorkQuery.Handle != "" {
+		t.Fatalf("my_work naming a handle read %q's day", trk.myWorkQuery.Handle)
+	}
+	callWork(t, reg, tracker.MyWorkTool, map[string]any{})
+	if trk.myWorkQuery.Handle != "eng" {
 		t.Errorf("my_work read %q's day, want the turn's own seat — a tool "+
 			"that took a handle would hand one agent a colleague's queue",
-			trk.myWorkQuery.Who.Handle)
+			trk.myWorkQuery.Handle)
 	}
 	entry, ok := reg.Lookup(tracker.MyWorkTool)
 	if !ok {
@@ -271,6 +282,47 @@ func TestTaskActivityFallsBackToTheSeatsOwnProject(t *testing.T) {
 	}
 }
 
+// A KIND task_activity DOES NOT HAVE IS REFUSED AS THE ARGUMENT, and the schema
+// offers the set it is refused against.
+//
+// The tool built a change kind from any string it was handed and never checked
+// it, so a model asking for `status_changed` read an empty feed as a project
+// where nothing had happened. The tracker's read refuses such a kind naming
+// every kind it has ([tracker.ErrBadQuery]); what this holds is the tool's
+// half — the kinds are in the schema a model picks from, and the refusal is
+// worded as an argument to change rather than a tracker that could not be
+// read "right now", which a model retries with the same argument.
+func TestTaskActivityOffersItsKindsAndRefusesAnotherAsTheArgument(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	entry, _ := reg.Lookup(tracker.TaskActivityTool)
+	props, _ := entry.Tool.Parameters()["properties"].(map[string]any)
+	kinds, _ := props["kinds"].(map[string]any)
+	offered, _ := kinds["description"].(string)
+	for _, kind := range tracker.ChangeKinds {
+		if !strings.Contains(offered, "`"+string(kind)+"`") {
+			t.Errorf("task_activity's `kinds` does not offer %s: %q", kind, offered)
+		}
+	}
+
+	trk.readErr = fmt.Errorf("%w: %q is not a change kind", tracker.ErrBadQuery,
+		"status_changed")
+	got := callWork(t, reg, tracker.TaskActivityTool, map[string]any{
+		"task": "ENG-1", "kinds": "status_changed",
+	})
+	if !got.Failed || !errors.Is(got.Cause, tracker.ErrBadQuery) ||
+		!strings.Contains(got.Output, "change the arguments") ||
+		!strings.Contains(got.Output, "status_changed") {
+		t.Errorf("a kind nobody has answered %q, want a refusal of the argument", got.Output)
+	}
+	if got := trk.activityQuery.Kinds; len(got) != 1 || got[0] != "status_changed" {
+		t.Errorf("the read was asked for %v, want the kind as it came — the "+
+			"tracker's read is what refuses it", got)
+	}
+}
+
 // A MISTYPED PROJECT KEY IS NOT A READ FAILURE. It used to be reported as one
 // — "could not read the tracker … do not conclude the item does not exist" —
 // which told a model that typed ENGG for ENG to keep believing in ENGG, and
@@ -297,9 +349,14 @@ func TestDescribingAProjectThatIsNotThereSaysSo(t *testing.T) {
 			got := callWork(t, reg, tracker.DescribeProjectTool, map[string]any{
 				"project": "ENGG",
 			})
-			if !got.Failed || got.Refusal != c.want {
+			if !got.Failed || tools.RefusalOf(got) != c.want {
 				t.Fatalf("answered failed %v class %q, want %q", got.Failed,
-					got.Refusal, c.want)
+					tools.RefusalOf(got), c.want)
+			}
+			// AND THE READER'S OWN ERROR IS BENEATH THE CLASS, so a caller
+			// branching on the tracker's sentinel still finds it.
+			if !errors.Is(got.Cause, c.err) {
+				t.Errorf("the cause %v does not carry the reader's error", got.Cause)
 			}
 			if !strings.Contains(got.Output, c.says) || strings.Contains(got.Output, "could not read") {
 				t.Errorf("the refusal %q is not the reader's own sentence", got.Output)

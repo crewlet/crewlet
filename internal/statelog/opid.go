@@ -77,6 +77,21 @@ import (
 // id cannot be retried to a conclusion on a node whose ledger has lost rows —
 // falls on the caller that invented it, never on a colleague's write.
 //
+// # A domain with no ledger mints outside the grammar
+//
+// The two compacted domains — the vectors (`vec-<hex>`) and each node's usage
+// days (`usage-<hex>`) — publish under ids that are a digest of the object and
+// the value written, and carry no instant. That is not the caller's own
+// string the paragraph above prices: neither domain keeps an operation ledger
+// ([Domain.OpsTable] is empty), so there is no watermark for an instant to be
+// compared with and [Publisher.vouches] answers true before it would read one.
+// What makes a retry of theirs safe is the compacted apply itself — a subject's
+// current value replaced under a monotone position, so the same value written
+// twice lands as one — and a grammar whose only purpose is vouching would buy
+// them nothing. A domain that GAINS a ledger takes its ids into the grammar
+// in the same change, or every write it makes reads as minted before every
+// loss that ledger records.
+//
 // # Whose clock
 //
 // The instant is read off the clock of whichever node minted the id, and the
@@ -88,9 +103,12 @@ import (
 // clock AHEAD of it by δ can make an operation whose row was lost up to δ
 // before the watermark look minted after it, and that one is re-decided. So the
 // fleet's wall clocks are assumed to agree to within the margin the sweep
-// leaves, which is its whole thirty days. It is the same kind of assumption the
-// trim's age term already rests on (see the package doc), and it is stated here
-// because this is where it is spent.
+// leaves, which is its horizon: the whole thirty days for the table's own
+// sweep, or a subject kind's shorter one where a domain declares it (an hour
+// for the identity estate's sessions, whose writers never re-ask late —
+// internal/maintenance's OpsHorizon.Kinds). It is the same kind of assumption
+// the trim's age term already rests on (see the package doc), and it is stated
+// here because this is where it is spent.
 
 // opIDLength is the length of the UUID an operation id starts with.
 const opIDLength = 36
@@ -239,27 +257,42 @@ func OpMintedAt(opID string) (time.Time, bool) {
 // turns a line break into a space. An id carrying either was deduplicated at
 // the broker as another id than the one every ledger answers for.
 func CheckCallerOpID(opID string) error {
-	const again = "send back the op_id an earlier answer returned, unchanged, " +
-		"or omit it to start the operation afresh"
 	if len(opID) > MaxCallerOpIDBytes {
-		return fmt.Errorf("op_id is %d bytes, and an operation id is at most %d: %s",
-			len(opID), MaxCallerOpIDBytes, again)
+		return &CallerOpIDError{Fault: fmt.Sprintf("is %d bytes, and an operation id is at most %d",
+			len(opID), MaxCallerOpIDBytes)}
 	}
 	for i := 0; i < len(opID); i++ {
 		if c := opID[i]; c <= ' ' || c > '~' {
-			return fmt.Errorf("op_id %q holds %q at byte %d, and an operation id "+
-				"is visible ASCII with no space — the broker trims the ends of the "+
-				"header it travels in and rewrites a line break, so it would carry "+
-				"another id than the one every log answers for: %s",
-				opID, c, i, again)
+			// The broker trims the ends of the header the id travels in and
+			// rewrites a line break, so it would carry another id than the one
+			// every log answers for.
+			return &CallerOpIDError{Fault: fmt.Sprintf("holds %q at byte %d, and an "+
+				"operation id is visible ASCII with no space", c, i)}
 		}
 	}
 	if _, minted := OpMintedAt(opID); !minted {
-		return fmt.Errorf("op_id is for finishing an operation that came back "+
-			"`unknown` or partial, and %q is not an id this engine's grammar "+
-			"minted, so no node could tell whether it already ran: %s", opID, again)
+		// It carries no instant, so no node could tell whether it already ran.
+		return &CallerOpIDError{Fault: "is not an operation id this engine accepts, " +
+			"which is a UUIDv7, optionally followed by a dot and a name"}
 	}
 	return nil
+}
+
+// CallerOpIDError is an operation id [CheckCallerOpID] refused. Fault says
+// what is wrong with it, as a clause about the id ("is 140 bytes, and an
+// operation id is at most 128"), so a surface can name the id the way its
+// caller sent it (a tool's `op_id`, a route's Idempotency-Key header) and say
+// the remedy that holds there: only a surface whose caller may leave the id
+// out can tell them to.
+type CallerOpIDError struct {
+	Fault string
+}
+
+// Error is the refusal as a tool argument's caller reads it: such a caller may
+// always leave the id out to start the operation afresh.
+func (e *CallerOpIDError) Error() string {
+	return "op_id " + e.Fault + ": send back the op_id an earlier answer returned, " +
+		"unchanged, or omit it to start the operation afresh"
 }
 
 // MaxCallerOpIDBytes bounds an operation id a caller brings back.

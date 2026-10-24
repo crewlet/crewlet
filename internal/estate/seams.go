@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
@@ -17,7 +18,7 @@ import (
 
 // The asking half: the seams every node's tools are handed, each answered by a
 // data node whose copy of the operation's domain serves — this one where it
-// does (ADR-0031).
+// does (ADR-0045).
 //
 // Each method has the signature of the in-process one it stands in for, so
 // the tool layer is handed these on every node and cannot tell which node
@@ -220,7 +221,7 @@ func (w WorkWriter) UpdateTask(ctx context.Context, opID, id, project string, if
 	notify *tracker.Notify) (tracker.WriteResult, error) {
 	out, err := call(ctx, w.r, opUpdateTask, &w.actor, updateTaskArgs{
 		OpID: opID, ID: id, Project: project, IfMatch: ifMatch, Patch: patch,
-		Watch: patch.Watch, Relate: patch.Relate, Depend: patch.Depend, Promote: patch.Promote,
+		Watch: patch.Watch, Relate: patch.Relate, Depend: patch.Depend,
 		Checklist: patch.Checklist, Kind: kind, Notify: notify,
 	})
 	w.settled(out.Result)
@@ -312,10 +313,17 @@ func (w WorkWriter) RecordTurn(ctx context.Context, opID string,
 	return out, err
 }
 
-// WriteView saves a view.
-func (w WorkWriter) WriteView(ctx context.Context, opID string, view tracker.View) (
-	tracker.WriteResult, error) {
-	out, err := call(ctx, w.r, opWriteView, &w.actor, writeViewArgs{OpID: opID, View: view})
+// ViewPrior reads what a save of view id would replace, for the caller to
+// decide its authority on and hand back to [WorkWriter.WriteView].
+func (w WorkWriter) ViewPrior(ctx context.Context, id string) (tracker.ViewPrior, error) {
+	return call(ctx, w.r, opViewPrior, &w.actor, viewPriorArgs{ID: id})
+}
+
+// WriteView saves a view, refused where the stored view is no longer prior.
+func (w WorkWriter) WriteView(ctx context.Context, opID string, view tracker.View,
+	prior tracker.ViewPrior) (tracker.WriteResult, error) {
+	out, err := call(ctx, w.r, opWriteView, &w.actor,
+		writeViewArgs{OpID: opID, View: view, Prior: prior})
 	w.settled(out.Result)
 	return out, err
 }
@@ -336,20 +344,35 @@ func (w WorkWriter) WriteFields(ctx context.Context, opID string, fields []track
 	return out, err
 }
 
-// MarkInbox applies one gesture to a person's inbox.
+// MarkInbox applies one gesture to a person's inbox, under the authority the
+// caller's table decided.
 func (w WorkWriter) MarkInbox(ctx context.Context, opID, handle string,
-	gesture tracker.InboxGesture) (tracker.WriteResult, error) {
-	out, err := call(ctx, w.r, opMarkInbox, &w.actor,
-		markInboxArgs{OpID: opID, Handle: handle, Gesture: gesture})
+	gesture tracker.InboxGesture, authority tracker.PersonAuthority) (tracker.WriteResult, error) {
+	out, err := call(ctx, w.r, opMarkInbox, &w.actor, markInboxArgs{
+		OpID: opID, Handle: handle, Gesture: gesture, Authority: authority,
+	})
 	w.settled(out.Result)
 	return out, err
 }
 
-// WritePins applies one gesture to a person's pinned views and favourites.
+// WritePins applies one gesture to a person's pinned views and favourites,
+// under the authority the caller's table decided.
 func (w WorkWriter) WritePins(ctx context.Context, opID, handle string,
-	gesture tracker.PinGesture) (tracker.WriteResult, error) {
-	out, err := call(ctx, w.r, opWritePins, &w.actor,
-		writePinsArgs{OpID: opID, Handle: handle, Gesture: gesture})
+	gesture tracker.PinGesture, authority tracker.PersonAuthority) (tracker.WriteResult, error) {
+	out, err := call(ctx, w.r, opWritePins, &w.actor, writePinsArgs{
+		OpID: opID, Handle: handle, Gesture: gesture, Authority: authority,
+	})
+	w.settled(out.Result)
+	return out, err
+}
+
+// EditComment rewrites the writer's own remark on a work item.
+func (w WorkWriter) EditComment(ctx context.Context, opID, taskID, project, commentID,
+	body string, notify *tracker.Notify) (tracker.WriteResult, error) {
+	out, err := call(ctx, w.r, opEditTaskComment, &w.actor, editCommentOnTaskArgs{
+		OpID: opID, TaskID: taskID, Project: project, CommentID: commentID, Body: body,
+		Notify: notify,
+	})
 	w.settled(out.Result)
 	return out, err
 }
@@ -374,11 +397,12 @@ func (w WorkWriter) RemoveTask(ctx context.Context, opID, id, project string, su
 	return out, err
 }
 
-// RestoreTask brings a task back out of the trash.
+// RestoreTask brings a task back out of the trash — alone, refused with
+// [tracker.ErrRestoresOthers] when its removal took others, if alone is set.
 func (w WorkWriter) RestoreTask(ctx context.Context, opID, id, project string,
-	notify *tracker.Notify) (tracker.WriteResult, error) {
+	alone bool, notify *tracker.Notify) (tracker.WriteResult, error) {
 	out, err := call(ctx, w.r, opRestoreTask, &w.actor, restoreTaskArgs{
-		OpID: opID, ID: id, Project: project, Notify: notify,
+		OpID: opID, ID: id, Project: project, Alone: alone, Notify: notify,
 	})
 	w.settled(out.Result)
 	return out, err
@@ -445,16 +469,16 @@ func (p Pages) Revision(ctx context.Context, pageID string, version int,
 }
 
 // Create writes a new page. Never repeated when unanswered — see
-// [ErrOutcomeUnknown] — unless it carries the caller's key, under which a
-// repeat is the same operation ([op.repeatableWhen]). So for every page write
-// below.
+// [ErrOutcomeUnknown] — unless its actor carries the caller's operation key,
+// under which a repeat is the same operation ([op.repeatableWhen]). So for
+// every page write below; a comment may carry its turn's key instead.
 func (p Pages) Create(ctx context.Context, actor pages.Actor, in pages.NewPage) (pages.Written, error) {
 	out, err := call(ctx, p.r, opCreatePage, nil, createPageArgs{Actor: actor, Page: in})
 	p.r.Observe(out.Outcome.Position)
 	return out, err
 }
 
-// SavePage saves a page's body. Never repeated when unanswered.
+// SavePage saves a page's body.
 func (p Pages) SavePage(ctx context.Context, actor pages.Actor, pageID string,
 	save pages.Save) (pages.Written, error) {
 	out, err := call(ctx, p.r, opSavePage, nil, savePageArgs{Actor: actor, PageID: pageID, Save: save})
@@ -462,17 +486,17 @@ func (p Pages) SavePage(ctx context.Context, actor pages.Actor, pageID string,
 	return out, err
 }
 
-// Rename moves a page to a new title. Never repeated when unanswered.
+// Rename moves a page to a new title.
 func (p Pages) Rename(ctx context.Context, actor pages.Actor, pageID, title string,
-	quiet bool, key pages.CallKey) (pages.Written, error) {
+	quiet bool) (pages.Written, error) {
 	out, err := call(ctx, p.r, opRenamePage, nil, renamePageArgs{
-		Actor: actor, PageID: pageID, Title: title, Quiet: quiet, Key: key,
+		Actor: actor, PageID: pageID, Title: title, Quiet: quiet,
 	})
 	p.r.Observe(out.Outcome.Position)
 	return out, err
 }
 
-// Comment adds a comment. Never repeated when unanswered.
+// Comment adds a comment.
 func (p Pages) Comment(ctx context.Context, actor pages.Actor, pageID string,
 	in pages.NewComment) (pages.Comment, pages.Written, error) {
 	out, err := call(ctx, p.r, opCommentPage, nil, commentArgs{Actor: actor, PageID: pageID, Comment: in})
@@ -480,14 +504,76 @@ func (p Pages) Comment(ctx context.Context, actor pages.Actor, pageID string,
 	return out.Comment, out.Written, err
 }
 
-// EditComment rewrites a comment. Never repeated when unanswered.
+// EditComment rewrites a comment.
 func (p Pages) EditComment(ctx context.Context, actor pages.Actor, pageID, commentID,
-	body string, key pages.CallKey) (pages.Comment, pages.Written, error) {
+	body string) (pages.Comment, pages.Written, error) {
 	out, err := call(ctx, p.r, opEditComment, nil, editCommentArgs{
-		Actor: actor, PageID: pageID, CommentID: commentID, Body: body, Key: key,
+		Actor: actor, PageID: pageID, CommentID: commentID, Body: body,
 	})
 	p.r.Observe(out.Written.Outcome.Position)
 	return out.Comment, out.Written, err
+}
+
+// Trash moves a page to the trash.
+func (p Pages) Trash(ctx context.Context, actor pages.Actor, pageID string) (pages.Written, error) {
+	out, err := call(ctx, p.r, opTrashPage, nil, pageRefArgs{Actor: actor, PageID: pageID})
+	p.r.Observe(out.Outcome.Position)
+	return out, err
+}
+
+// Restore brings a page back out of the trash.
+func (p Pages) Restore(ctx context.Context, actor pages.Actor, pageID string) (pages.Written, error) {
+	out, err := call(ctx, p.r, opRestorePage, nil, pageRefArgs{Actor: actor, PageID: pageID})
+	p.r.Observe(out.Outcome.Position)
+	return out, err
+}
+
+// Purge destroys a page and everything derived from it.
+func (p Pages) Purge(ctx context.Context, actor pages.Actor, pageID, reason string) (
+	pages.Written, error) {
+	out, err := call(ctx, p.r, opPurgePage, nil, purgePageArgs{
+		Actor: actor, PageID: pageID, Reason: reason,
+	})
+	p.r.Observe(out.Outcome.Position)
+	return out, err
+}
+
+// RemoveComment takes one remark down, under the authority the caller's table
+// decided.
+func (p Pages) RemoveComment(ctx context.Context, actor pages.Actor, pageID, commentID string,
+	authority pages.CommentAuthority) (pages.Written, error) {
+	out, err := call(ctx, p.r, opRemoveComment, nil, removeCommentArgs{
+		Actor: actor, PageID: pageID, CommentID: commentID, Authority: authority,
+	})
+	p.r.Observe(out.Outcome.Position)
+	return out, err
+}
+
+// Identity is the identity directory's read side, answered by a data node:
+// what a node holding no data asks of it — see [IdentityReader].
+type Identity struct{ r *Router }
+
+// Identity answers the identity directory's reads.
+func (r *Router) Identity() Identity { return Identity{r: r} }
+
+// BindingByLogin answers the directory row a login binds, narrowed to the
+// binding ([Binding]), and how far the node that answered could vouch for it.
+// A login nobody holds is the zero binding and no error.
+//
+// THE VOUCH IS THE ANSWERING NODE'S, which is the node whose rows the binding
+// was read from: a lag or a retained record there is what the caller's own
+// table weighs, exactly as it weighs this node's where it reads its own.
+func (i Identity) BindingByLogin(ctx context.Context, login string) (Binding,
+	iamdomain.Vouch, error) {
+	out, err := call(ctx, i.r, opIdentityBinding, nil, bindingArgs{Login: login})
+	return out.Binding, out.Vouch, err
+}
+
+// SeatHolders answers every seat binding the directory holds, read in one
+// snapshot on the node that answered. An error is UNKNOWN, never an empty
+// directory.
+func (i Identity) SeatHolders(ctx context.Context) ([]iamdomain.SeatHolder, error) {
+	return call(ctx, i.r, opSeatHolders, nil, struct{}{})
 }
 
 // Knowledge is the native knowledge search, answered by a data node's index.
@@ -556,7 +642,7 @@ func (k Knowledge) Building(ctx context.Context) bool {
 }
 
 // Usage is the usage domain's reads (ADR-0020), answered by a data node whose
-// usage copy is in service — this node's own where it is one (ADR-0031).
+// usage copy is in service — this node's own where it is one (ADR-0045).
 type Usage struct{ r *Router }
 
 // Usage answers the usage domain.

@@ -169,7 +169,9 @@ test("a phase card shows the duration off the record itself", async () => {
 test("a cut view names the middle as the gap, not the ending", async () => {
   mount({ events: [phase("2026-09-13T10:01:30Z", 90_000)], truncated: true });
   expect(await screen.findByText(/middle not shown/)).toBeTruthy();
-  expect(screen.getByText(/what is missing is the middle/)).toBeTruthy();
+  expect(
+    screen.getByText(/Too long to show in full; the middle phases are missing\./),
+  ).toBeTruthy();
   // Neither note may state what it used to: "no turn record" is a claim about
   // the TURN, and "first to last event" is a claim about
   // a window this page can no longer assume is whole. Both are `Fact.note`
@@ -262,7 +264,7 @@ test("each phase's prompt size is rendered rather than banded and dropped", asyn
   // and the dominant one: a measured turn read ~6,900 tokens here against the
   // provider's 205,000.
   expect(screen.getByTitle("11 tool definitions, as compact JSON").textContent).toBe("3.7 KB");
-  expect(screen.getByTitle("bytes of conversation a resumed phase re-entered")).toBeTruthy();
+  expect(screen.getByTitle("Size of the resumed conversation")).toBeTruthy();
 });
 
 // A SUSPENDED PHASE DRAWS BOTH OF ITS PROMPTS.
@@ -329,7 +331,7 @@ test("every figure column sits inside the box the rows are sized as", async () =
         event({
           type: "prefetch_summary",
           timestamp: "2026-09-13T10:00:00Z",
-          payload: { turn_id: TURN, onboarding_hint_hit: true, onboarding_hint_bytes: 1016 },
+          payload: { turn_id: TURN, counterparty_hit: true, counterparty_bytes: 1016 },
         }),
         promptSize({ approximate_tokens: 7400, system_bytes: 24_000, user_bytes: 1200 }),
       ],
@@ -385,7 +387,7 @@ test("a ledger cell that can be cut carries its whole text in a title", async ()
     },
     "context",
   );
-  const note = await screen.findByText(/but not the newest/);
+  const note = await screen.findByText(/not the newest\. The thread was too long\./);
   expect(note.className).toContain("truncate");
   expect(note.getAttribute("title")).toBe(note.textContent);
   const label = screen.getByText("The thread so far");
@@ -562,7 +564,7 @@ test("a multi-sentence trigger prints whole, under the title's lead", async () =
   mount(woken({ id: "e-9", type: "chat_message", summary: MANY }), "context");
   await screen.findByText("Woken by");
   // The header took the lead, and only the lead.
-  expect(document.querySelector(".object-title")?.textContent).toBe(ONE_SENTENCE);
+  expect(document.querySelector(".crewlet-object-header__title")?.textContent).toBe(ONE_SENTENCE);
   // And the panel carries the whole thing, that lead included.
   expect(briefProse()).toEqual([MANY]);
 });
@@ -573,7 +575,7 @@ test("a one-sentence trigger the title says whole is not printed twice", async (
   // event. What goes is the prose, which is the half the header already is.
   expect(await screen.findByText("Woken by")).toBeTruthy();
   expect(screen.getByRole("link", { name: "the trigger →" })).toBeTruthy();
-  expect(document.querySelector(".object-title")?.textContent).toBe(ONE_SENTENCE);
+  expect(document.querySelector(".crewlet-object-header__title")?.textContent).toBe(ONE_SENTENCE);
   expect(briefProse()).toEqual([]);
 });
 
@@ -581,7 +583,7 @@ test("…and with nothing else to carry, the panel goes with it", async () => {
   mount(woken({ type: "chat_message", summary: ONE_SENTENCE }), "context");
   // The title is what says this screen rendered its answer at all.
   await waitFor(() =>
-    expect(document.querySelector(".object-title")?.textContent).toBe(ONE_SENTENCE),
+    expect(document.querySelector(".crewlet-object-header__title")?.textContent).toBe(ONE_SENTENCE),
   );
   expect(screen.queryByText("Woken by")).toBeNull();
 });
@@ -632,7 +634,7 @@ test("a turn that ran once carries no attempt badge", async () => {
   // …and the fact rather than the Phases CARD, which is a second element
   // with the same word in it.
   const fact = (await screen.findAllByText("Phase")).find((el) =>
-    el.classList.contains("fact-label"),
+    el.classList.contains("crewlet-fact-line__label"),
   );
   expect(fact?.parentElement?.textContent).toContain("Execute");
   expect(screen.queryByText(/attempt \d+\/\d+/)).toBeNull();
@@ -749,7 +751,9 @@ test("a turn with only its opening record is headed by its seat and its wake", a
   });
   mount({ events: [opening] });
   await waitFor(() =>
-    expect(document.querySelector(".object-title")?.textContent).toBe("Ana asked for the numbers"),
+    expect(document.querySelector(".crewlet-object-header__title")?.textContent).toBe(
+      "Ana asked for the numbers",
+    ),
   );
   // THE SEAT IS THE TRAIL'S on the page (see crumbs.test.tsx) and a fact on
   // the rail, which has no trail: read off the record, never "the engine".
@@ -770,7 +774,7 @@ test("a turn with only its opening record is headed by its seat and its wake", a
     </ClientContext.Provider>,
   );
   await waitFor(() => {
-    const head = document.querySelector(".object-head")?.textContent ?? "";
+    const head = document.querySelector(".crewlet-object-header")?.textContent ?? "";
     expect(head, "the rail named no seat for a turn whose record names one").toContain("CEO");
     expect(head).not.toContain("the engine");
   });
@@ -811,7 +815,9 @@ test("the dispatch's opening record heads the turn over a resumed segment's", as
     ],
   });
   await waitFor(() =>
-    expect(document.querySelector(".object-title")?.textContent).toBe("Ana asked for the numbers"),
+    expect(document.querySelector(".crewlet-object-header__title")?.textContent).toBe(
+      "Ana asked for the numbers",
+    ),
   );
 });
 
@@ -885,8 +891,10 @@ test("this turn's reflection sentinel refetches the turn, another turn's does no
 /** Mount over a seat whose live overlay places it on this turn, at `stage`. */
 function onTurn(stage: "phase" | "parked") {
   const store = new Store();
-  store.applyAgents([
+  store.applySeats([
     {
+      id: "ceo",
+      agent_id: "ceo",
       role: "CEO",
       handle: "ceo",
       turn: { turn_id: TURN, started_at: "2026-09-13T10:00:00Z", stage },
@@ -967,6 +975,30 @@ test("the turn as JSON is in the page bar's menu, and only Steer stays on a phon
   expect(screen.getByRole("menuitem", { name: /Copy turn as JSON/ })).toBeTruthy();
 });
 
+// A TURN ON THE TASK THAT DID NOT CLAIM ITS KEY opens that task. A turn's work
+// item carries no collision flag, so its key may be one another task claimed
+// first; Open task goes by the native task's id, which opens it whoever holds
+// the key, and never by the key, which opened the claimant.
+test("Open task opens the task the turn is charged to by its id", async () => {
+  mount({
+    events: [
+      event({
+        type: "agent_turn_started",
+        payload: {
+          turn_id: TURN,
+          role: "CEO",
+          agent_handle: "ceo",
+          work_item: { backend: "native", id: "t-dup", key: "ENG-7", project: "ENG" },
+          started_at: "2026-09-13T10:00:00Z",
+          resumed: false,
+        },
+      }),
+    ],
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Open task" }));
+  expect(location.hash).toBe("#/work/t-dup");
+});
+
 // ---------------------------------------------------------------------------
 // Watching it live
 // ---------------------------------------------------------------------------
@@ -974,6 +1006,8 @@ test("the turn as JSON is in the page bar's menu, and only Steer stays on a phon
 /** The seat's push while it runs this turn's `phase`, as the projection sends it. */
 function runningSeat(phase: string) {
   return {
+    id: "ceo",
+    agent_id: "ceo",
     role: "CEO",
     handle: "ceo",
     activity: "working",
@@ -1016,7 +1050,7 @@ test("a watch link's tab is one the page has", () => {
 test("a watch link lands on the transcript with the running phase open", async () => {
   location.hash = watchHref(TURN);
   const store = new Store();
-  store.applyAgents([runningSeat("review")] as never);
+  store.applySeats([runningSeat("review")] as never);
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     what === "turn"
@@ -1051,7 +1085,9 @@ test("a watch link lands on the transcript with the running phase open", async (
 function mountWatching(seat: Record<string, unknown>, events: EventRecord[], tail?: unknown) {
   location.hash = watchHref(TURN);
   const store = new Store();
-  store.applyAgents([seat] as never);
+  // THE ROSTER FIRST, as the engine sends it — its overlay merged in — since
+  // a later push for a seat the roster does not hold is dropped.
+  store.applySeats([seat] as never);
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     what === "turn"
@@ -1153,6 +1189,8 @@ test("a live phase that completes keeps its card, open", async () => {
 /** The seat's push while its turn is parked on a coding run: working, no call. */
 function parkedSeat() {
   return {
+    id: "ceo",
+    agent_id: "ceo",
     role: "CEO",
     handle: "ceo",
     activity: "working",
@@ -1234,7 +1272,7 @@ test("a parked turn on its second iteration opens the executor it parked in", as
 // stage moves on the push, and the answer naming the run is a refetch behind.
 test("a parked turn whose run is not announced yet says it is reading it", async () => {
   mountWatching(parkedSeat(), [phase("2026-09-13T10:01:30Z", 90_000)]);
-  expect(await screen.findByText(/Reading which run it launched/)).toBeTruthy();
+  expect(await screen.findByText("Finding its coding run…")).toBeTruthy();
 });
 
 // ---------------------------------------------------------------------------
@@ -1370,8 +1408,6 @@ test("the rail's phase strip says when the engine decided for the reviewer", asy
       </ViewerProvider>
     </ClientContext.Provider>,
   );
-  expect(
-    await screen.findByText("never decided — the engine sent the turn back for another round"),
-  ).toBeTruthy();
+  expect(await screen.findByText("undecided, sent back")).toBeTruthy();
   expect(screen.queryByText("sent the turn back for another round")).toBeNull();
 });

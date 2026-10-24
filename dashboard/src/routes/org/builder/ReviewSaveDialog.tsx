@@ -7,8 +7,8 @@
  * accounts behind. `model/changes.ts` derives all of it from the base and the
  * draft as the engine derived them, and this dialog states each one in a
  * sentence. The consequences that cannot be taken back (a company rename, a
- * handle change, a kind change, a change of tool credentials, removing most
- * of the company) each need an acknowledgement before Save enables.
+ * change of tool credentials, removing most of the company) each need an
+ * acknowledgement before Save enables.
  *
  * THE WARNINGS ARE THE ENGINE'S, for exactly the body the save will send: the
  * check of the current draft is a dry run of that same request.
@@ -18,8 +18,10 @@
  * recognize this save if its answer is lost (`useSave.ts`).
  */
 
+import { engineSentence } from "./EngineSentence.tsx";
 import { useState } from "react";
 import { plural } from "~/lib/format.ts";
+import { handleLabel } from "~/lib/seats.ts";
 import type { ConfigWarning } from "~/protocol/index.ts";
 import { ConfigField } from "~/components/ConfigField.tsx";
 import { ACKNOWLEDGEMENT_TEXT } from "./dialogParts.tsx";
@@ -65,9 +67,6 @@ export function changeSentences(changes: ChangeSet): { changes: string[]; conseq
       `Renames the company from ${changes.companyRename.before} to ${changes.companyRename.after}.`,
     );
   }
-  for (const h of changes.handleChanges) {
-    follow.push(`${h.ref.name} changes handle from @${h.before} to @${h.after}.`);
-  }
   for (const group of changes.onboarding) {
     const one = group.seats.length === 1;
     follow.push(
@@ -75,18 +74,12 @@ export function changeSentences(changes: ChangeSet): { changes: string[]; conseq
     );
   }
   for (const u of changes.unitRenames) {
-    const schedules =
-      u.schedules.length > 0
-        ? ` Its schedules get a new identity, so a run due this minute may fire again: ${u.schedules.join(", ")}.`
-        : "";
-    follow.push(
-      `Onboarding pages for ${u.before} are looked up under its new name, ${u.after}.${schedules}`,
-    );
+    follow.push(`Onboarding pages for ${u.before} are looked up under its new name, ${u.after}.`);
   }
   for (const r of changes.reportsTo) {
     follow.push(
       r.orderOnly
-        ? `${r.ref.name} reports first to ${who(r.after)} instead of ${who(r.before)}: the same managers, listed in a different order.`
+        ? `${r.ref.name} reports first to ${who(r.after)} instead of ${who(r.before)}.`
         : `${r.ref.name} reports to ${who(r.after)} instead of ${who(r.before)}.`,
     );
   }
@@ -102,9 +95,7 @@ export function changeSentences(changes: ChangeSet): { changes: string[]; conseq
   }
   for (const r of changes.routing) {
     const container = r.field === "project" ? "tracker project" : "knowledge space";
-    const shared = r.shared
-      ? " More than one owner declares it, and the engine routes to the first it finds."
-      : "";
+    const shared = r.shared ? " Declared by more than one owner." : "";
     follow.push(
       `Unrouted work in the ${container} ${r.scope} goes to ${who(r.after)} instead of ${who(r.before)}.${shared}`,
     );
@@ -117,11 +108,10 @@ export function changeSentences(changes: ChangeSet): { changes: string[]; conseq
       follow.push(`${s.ref.name} no longer receives tool credentials for ${s.lost.join(", ")}.`);
     }
   }
-  for (const s of changes.strippedFields) {
-    const fields = s.fields
-      .map((f) => (f.credential ? `${f.name} (a credential, not recoverable)` : f.name))
-      .join(", ");
-    follow.push(`${s.ref.name} loses fields its new kind cannot hold: ${fields}.`);
+  for (const u of changes.uncarriedCredentials) {
+    follow.push(
+      `${u.ref.name} starts without ${handleLabel(u.from)}'s credentials ${u.fields.join(", ")}: the dashboard never holds their values, so they do not carry over.`,
+    );
   }
   for (const c of changes.clearedReferences) {
     const what =
@@ -143,11 +133,6 @@ export function changeSentences(changes: ChangeSet): { changes: string[]; conseq
       `The GitLab access level for @${g.handle} changes from ${g.before ?? "none"} to ${g.after ?? "none"}.`,
     );
   }
-  for (const m of changes.memoryReuse) {
-    follow.push(
-      `${m.ref.name} takes the handle @${m.handle} of the removed seat ${m.previous}, and its memory reattaches.`,
-    );
-  }
   if (changes.massRemoval) {
     follow.push(
       `Removes ${changes.massRemoval.removed} of the company's ${changes.massRemoval.total} seats.`,
@@ -164,7 +149,7 @@ export function ReviewSaveDialog({
   warnings,
   problemCount,
   documentProblems,
-  needsContact,
+  withoutContact,
   writeId,
   phase,
   onSave,
@@ -179,8 +164,8 @@ export function ReviewSaveDialog({
   warnings: readonly ConfigWarning[];
   problemCount: number;
   documentProblems: readonly PlacedProblem[];
-  /** Human seats holding no contact identity, by name. */
-  needsContact: readonly string[];
+  /** Human seats holding no contact identity, by name: a notice, never a block. */
+  withoutContact: readonly string[];
   writeId: string;
   phase: SavePhase;
   onSave: (summary: string) => void;
@@ -254,14 +239,12 @@ export function ReviewSaveDialog({
       {phase.kind === "retry" && <Callout variant="warning">{phase.message}</Callout>}
       {phase.kind === "settling" && (
         <Callout variant="warning" icon={<RotateCwGlyph />}>
-          The engine's answer did not arrive. Checking whether the save was stored.
+          Checking whether the save was stored.
         </Callout>
       )}
       {unknown && (
         <Callout variant="warning">
-          Whether the save was stored could not be confirmed. {phase.detail} Check again, or save
-          again: a save that already landed is recognized by its write id rather than stored a
-          second time.
+          Couldn’t confirm the save. {phase.detail} Check again, or save again safely.
         </Callout>
       )}
 
@@ -276,22 +259,26 @@ export function ReviewSaveDialog({
       {status === "problems" && documentProblems.length > 0 && (
         <ul className="org-builder-list" aria-label="Problems with the whole configuration">
           {documentProblems.map((p, i) => (
-            <li key={i}>{p.message}</li>
+            <li key={i}>{engineSentence(p.message)}</li>
           ))}
         </ul>
       )}
       {status === "unreachable" && (
         <Callout variant="warning" icon={<PlugGlyph />}>
-          The engine could not be reached to check this draft. Saving still validates it.
+          Couldn’t check this draft. Saving still validates it.
         </Callout>
       )}
 
-      {needsContact.length > 0 && (
-        <section className="col gap-1" aria-label="Seats that need a contact identity">
-          <strong>These human seats need a contact identity</strong>
+      {withoutContact.length > 0 && (
+        <section className="col gap-1" aria-label="Seats with no contact identity">
+          <strong>These human seats have no contact identity</strong>
+          <span className="t-caption">
+            No agent can mention them, and the person is reached through the dashboard only, until
+            one is added in the seat's editor.
+          </span>
           <ul className="org-builder-list">
-            {needsContact.map((name) => (
-              <li key={name}>{name}</li>
+            {withoutContact.map((name, i) => (
+              <li key={i}>{name}</li>
             ))}
           </ul>
         </section>
@@ -314,10 +301,7 @@ export function ReviewSaveDialog({
         <section className="col gap-1" aria-label="Consequences">
           <strong>What follows</strong>
           {!changes.derivedKnown && (
-            <p className="muted">
-              The engine has not described this draft yet, so consequences that depend on its
-              hierarchy (onboarding, reporting lines, leads and routing) are not listed.
-            </p>
+            <p className="muted">Some effects aren’t listed until the check finishes.</p>
           )}
           <ul className="org-builder-list">
             {text.consequences.map((line, i) => (
@@ -332,7 +316,7 @@ export function ReviewSaveDialog({
           <strong>The engine will run this, with {plural(warnings.length, "warning")}</strong>
           <ul className="org-builder-list">
             {warnings.map((w, i) => (
-              <li key={i}>{w.message}</li>
+              <li key={i}>{engineSentence(w.message)}</li>
             ))}
           </ul>
         </section>
@@ -364,16 +348,10 @@ export function ReviewSaveDialog({
         value={summary}
         onChange={setSummary}
         disabled={busy}
-        error={
-          summaryMissing
-            ? "Enter a summary. The engine records one with every revision."
-            : undefined
-        }
+        error={summaryMissing ? "Enter a summary." : undefined}
         help={
           <>
-            Recorded with the revision as{" "}
-            <InlineCode>{signedSummary(summary, writeId).trim()}</InlineCode>. The write id lets the
-            builder recognize this save if its answer is lost.
+            Recorded as <InlineCode>{signedSummary(summary, writeId).trim()}</InlineCode>.
           </>
         }
       />

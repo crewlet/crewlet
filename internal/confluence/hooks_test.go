@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/atlassianhost"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -351,12 +352,14 @@ func (s *recordingSink) NextStep() string { return "restart the test" }
 
 // cloudClient builds a client the site will classify as Cloud, which is
 // decided by the HOST rather than by anything the test server can answer.
-// The httptest address is 127.0.0.1, so the deployment is forced.
+// The httptest address is 127.0.0.1, a host no rule recognises, so the
+// company's declaration decides it — exactly as it does an Isolated Cloud
+// site's.
 func cloudClient(t *testing.T, site *cloudSite) *confluence.Client {
 	t.Helper()
 	c, err := confluence.NewClient(confluence.ClientOptions{
 		URL: site.URL + "/wiki", Email: "org@example.com", Token: "org-token",
-		Deployment: confluence.Cloud,
+		Declared: atlassianhost.Cloud,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -527,7 +530,7 @@ func TestNoBaseRegistersNothingAndSaysSo(t *testing.T) {
 	if len(res.Hooks) != 0 || site.mutations() != 0 {
 		t.Fatalf("a run with no base registered %d hooks and wrote %d times", len(res.Hooks), site.mutations())
 	}
-	if len(res.Notes) == 0 || !strings.Contains(res.Notes[0], "public_base_url") {
+	if len(res.Notes) == 0 || !strings.Contains(res.Notes[0], "api.external_url") {
 		t.Fatalf("the operator is not told how to get a hook registered: %v", res.Notes)
 	}
 	// And the findings say nothing about ingress: a run that was never
@@ -670,7 +673,7 @@ func TestOneRefusedCloudEventDoesNotStopTheOthers(t *testing.T) {
 func dataCenterClient(t *testing.T, site *cloudSite) *confluence.Client {
 	t.Helper()
 	c, err := confluence.NewClient(confluence.ClientOptions{
-		URL: site.URL, Token: "org-token", Deployment: confluence.DataCenter,
+		URL: site.URL, Token: "org-token", Declared: atlassianhost.DataCenter,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -889,8 +892,12 @@ func cuttingClient(
 	if deployment == confluence.Cloud {
 		base, email = site.URL+"/wiki", "org@example.com"
 	}
+	declared := atlassianhost.DataCenter
+	if deployment == confluence.Cloud {
+		declared = atlassianhost.Cloud
+	}
 	c, err := confluence.NewClient(confluence.ClientOptions{
-		URL: base, Email: email, Token: "org-token", Deployment: deployment,
+		URL: base, Email: email, Token: "org-token", Declared: declared,
 		HTTP: &http.Client{Transport: transport},
 	})
 	if err != nil {
@@ -1592,55 +1599,6 @@ func TestASecondPassDoesNotMintOverAValueThisDeploymentAlreadySealed(t *testing.
 				t.Errorf("%s was rotated by a pass nobody asked to rotate "+
 					"anything, so the instance now authenticates with a value "+
 					"this deployment does not hold", tc.vari)
-			}
-		})
-	}
-}
-
-// A NODE WITH NO KEYRING REPORTS, IT DOES NOT FAULT.
-//
-// An error here is a fault the loop retries while telling an operator the
-// engine is working on it, which is the one thing that is certainly not
-// happening: no pass will ever seal anything until somebody sets
-// secrets.keys. It is reported against the field that fixes it — and which
-// field that is depends on the deployment, because Cloud carries its whole
-// authentication in the URL while Data Center signs.
-func TestANodeWithNoKeyringReportsTheFieldThatFixesIt(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name  string
-		cloud bool
-		field string
-	}{
-		{"data center", false, "integrations.confluence.webhook_secret"},
-		{"cloud", true, "integrations.confluence.webhook_token"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			site := newCloudSite(t)
-			res := blindPass(t, site, provision.ReadOnly(), tc.cloud)
-
-			if got := site.mutations(); got != 0 {
-				t.Errorf("%d hook(s) were registered with nothing to "+
-					"authenticate a delivery with", got)
-			}
-			var found bool
-			for _, f := range res.Findings() {
-				if f.Subject != tc.field {
-					continue
-				}
-				found = true
-				if f.Kind != integration.FindingIngressBlocked {
-					t.Errorf("reported as %s, want ingress_blocked", f.Kind)
-				}
-				if !strings.Contains(f.Detail, "secrets.keys") {
-					t.Errorf("the finding does not name the bootstrap field "+
-						"that fixes it:\n%s", f.Detail)
-				}
-			}
-			if !found {
-				t.Errorf("a pass that could seal nothing reported %v, none of "+
-					"it against %s", res.Findings(), tc.field)
 			}
 		})
 	}

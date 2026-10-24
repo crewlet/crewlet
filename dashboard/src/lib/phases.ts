@@ -96,16 +96,10 @@ export interface TimedRound {
  * `contract/stops.ts` is what makes the union the engine's.
  */
 const STOP_NOTES: Record<Exclude<StopReason, "end" | "tool_use">, string> = {
-  max_tokens:
-    "The response was cut off at the model's output cap, so the phase ended here — " +
-    "any tool call it was writing was not run.",
-  refusal:
-    "The model declined this request, so the phase ended here. A refusal is not " +
-    "asked again, and the turn's trigger is not redelivered.",
-  context_exceeded: "The conversation filled the model's context window, so the phase ended here.",
-  paused:
-    "The provider paused this turn for the engine to continue, which it never asks " +
-    "for, so the phase ended here.",
+  max_tokens: "Cut off at the model’s output limit. The phase ended here.",
+  refusal: "The model declined. The phase ended here.",
+  context_exceeded: "Out of context window. The phase ended here.",
+  paused: "The provider paused the turn. The phase ended here.",
 };
 
 /** The sentence for a round that stopped without finishing, or null for a
@@ -345,7 +339,18 @@ export interface PhaseRecord {
    * running right now — a LIVE phase's only, "" / null otherwise.
    */
   roundStartedAt: string;
+  /** The tool call running now; its `arguments` are "" where its body was
+   *  withheld ([bodyWithheld]), its name and timing never. */
   runningCall: { round: number; name: string; arguments: string; startedAt: string } | null;
+  /**
+   * The engine withheld this phase's BODY from this reader — the prompts, the
+   * response, the tool calls, the narration and the trigger's words — and sent
+   * its status alone (`LiveCall.body_withheld`). A renderer says "not shown to
+   * you" in their place, because an empty prompt and a prompt nobody may read
+   * are opposite facts. Always false on a stored record, whose question is the
+   * trail's and answered whole or not at all.
+   */
+  bodyWithheld: boolean;
   /** The notes a person sent the turn that this phase read, and the round
    *  whose provider call first saw each. */
   steers: { round: number; noteId: string }[];
@@ -655,10 +660,11 @@ export function fromLiveCall(call: LiveCall, role: string, turn?: LiveTurn | nul
       ? {
           round: call.running_call.round,
           name: call.running_call.name,
-          arguments: call.running_call.arguments,
+          arguments: call.running_call.arguments ?? "",
           startedAt: call.running_call.started_at,
         }
       : null,
+    bodyWithheld: call.body_withheld === true,
     steers: (call.steers ?? []).map((s) => ({ round: s.round, noteId: s.note_id })),
     node: call.node ?? "",
     clockStart: call.started_at ?? "",
@@ -764,6 +770,7 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     maxRounds: num(p.max_rounds),
     roundStartedAt: "",
     runningCall: null,
+    bodyWithheld: false,
     steers: Array.isArray(p.steers)
       ? (p.steers as Record<string, unknown>[]).map((s) => ({
           round: num(s.round),
@@ -1210,10 +1217,10 @@ type Meaning = { label: string; tone: Tone };
 const DECISIONS: Record<string, Record<string, Meaning>> = {
   execute: {
     delivered: { label: "delivered the work", tone: "positive" },
-    no_action: { label: "nothing to do — ended silently", tone: "neutral" },
+    no_action: { label: "nothing to do", tone: "neutral" },
     blocked: { label: "blocked, and said why", tone: "caution" },
     incomplete: {
-      label: "never said what it did — the engine marked it incomplete",
+      label: "incomplete, no report",
       // CAUTION, NOT CRITICAL. The reviewer still judges the turn after this;
       // what is critical is the reviewer deciding against it.
       tone: "caution",
@@ -1222,7 +1229,7 @@ const DECISIONS: Record<string, Record<string, Meaning>> = {
   review: {
     done: { label: "accepted the work", tone: "positive" },
     self_iterate: { label: "sent the turn back for another round", tone: "caution" },
-    failed: { label: "failed — the turn will not retry", tone: "critical" },
+    failed: { label: "failed, no retry", tone: "critical" },
   },
   onboarding: {
     done: { label: "read its team's pages and marked itself onboarded", tone: "positive" },
@@ -1242,7 +1249,7 @@ const DECISIONS: Record<string, Record<string, Meaning>> = {
 const RESCUED: Record<string, Record<string, Meaning>> = {
   review: {
     self_iterate: {
-      label: "never decided — the engine sent the turn back for another round",
+      label: "undecided, sent back",
       tone: "caution",
     },
   },

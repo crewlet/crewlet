@@ -334,15 +334,16 @@ func documentDeltas(ctx context.Context, tx *sql.Tx, s Subject,
 //
 // THE CHART-OWNED FIELDS AND THE LEAD-OWNED ONES TOGETHER, because one record
 // may carry either: a chart apply rewrites the name, the purpose and the unit
-// under an epoch stamp, and a lead's edit rewrites the field declarations, the
-// default assignee, the target date and the archive flag. A comparison that
-// named only one half would be empty for every write of the other.
+// stamped with the activation they came from, and a lead's edit rewrites the field
+// declarations, the default assignee, the target date and the archive flag. A
+// comparison that named only one half would be empty for every write of the
+// other.
 //
 // `chart_epoch` IS RECORDED, and it is the only thing a re-declaration at a
-// new epoch moves: [Writer.applyChartProject] publishes when the epoch differs
-// although the three chart fields are equal, so leaving it out would put one
-// empty `project_updated` row per project into the feed on every config
-// activation — the exact row this file exists to end.
+// new activation moves: [Writer.applyChartProject] publishes when the epoch
+// differs although the three chart fields are equal, so leaving it out would
+// put one empty `project_updated` row per project into the feed on every
+// config activation — the exact row this file exists to end.
 //
 // The two instants are NOT recorded. `created_at` and `updated_at` say WHEN,
 // and the history row's own `created_at` and `effective_at` already answer

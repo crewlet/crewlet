@@ -11,6 +11,20 @@
 // the broker's routes entirely — at the price of a dependency the engine does
 // not run and a network round trip per request.
 //
+// # One bucket, several companies: only with credentials scoped to a prefix
+//
+// A prefix keeps two companies' keys from colliding in one bucket, and that is
+// all it does. Each company's nodes hold a credential, and a credential that
+// reaches the whole bucket reads, overwrites and deletes every other company's
+// files as readily as its own. So a bucket is shared only where each
+// company's credential is scoped to its own prefix (an IAM policy on
+// `arn:aws:s3:::<bucket>/<prefix>*`, a MinIO or SeaweedFS policy on the same
+// path), and such a credential has no right over the bucket itself. That is
+// why the node checks its bucket with a probe under the prefix (probe.go)
+// rather than a HeadBucket, which needs s3:ListBucket on the whole bucket and
+// refused exactly the credential that makes sharing safe. One bucket per
+// company remains the simpler isolation and the recommended one.
+//
 // # One object per name, streamed
 //
 // Each name is the key `<prefix><name>` — and every name the store writes is
@@ -398,8 +412,11 @@ type Config struct {
 	Region string
 	// Bucket is the bucket's name.
 	Bucket string
-	// Prefix is prepended to every key, so a bucket can hold more than
-	// one company: an object is `<prefix>files/<key>`.
+	// Prefix is prepended to every key: an object is
+	// `<prefix>files/<key>`. Companies sharing one bucket are kept apart
+	// only by credentials scoped to their own prefix; the prefix alone
+	// keeps their keys from colliding and nothing more (see the package
+	// doc).
 	Prefix string
 	// PathStyle addresses the bucket in the path rather than the host
 	// name — what MinIO and most self-hosted gateways need.
@@ -556,6 +573,15 @@ type Backend struct {
 	bucket string
 	prefix string
 
+	// presigner signs the puts a client makes itself, and http is the
+	// client the probe makes them through: the bucket's own transport.
+	presigner *s3.PresignClient
+	http      *http.Client
+
+	// caps is what the boot probe proved of the provider, written once
+	// by Open and read by every put after.
+	caps capabilities
+
 	// partBytes is the size of every part of a multipart upload but its
 	// last: [PartBytes], which Open sets and nothing in the engine changes.
 	//
@@ -640,12 +666,15 @@ func (b *Backend) returnSpares(n int) {
 	}
 }
 
-// Open builds the client and checks the bucket is reachable with these
-// credentials, so a wrong key fails the boot rather than the first upload.
+// Open builds the client and runs the boot probe under the prefix (see
+// probe.go): a credential that cannot store and delete an object there fails
+// the boot rather than the first upload, and what the provider enforces
+// decides whether direct uploads are offered.
 //
-// A bucket that refuses the check — a wrong key, a bucket that is not there —
-// fails it at once; one that throttles, fails or does not answer is asked
-// again for [callBudget], as every request is ([newRetryer]).
+// The probe's own requests are the client's like any other: one the bucket
+// refuses — a wrong key, a bucket that is not there — fails the boot at once,
+// and one it throttles, fails or does not answer is asked again within its
+// budget, as every request is ([newRetryer]).
 func Open(ctx context.Context, cfg Config) (*Backend, error) {
 	return open(ctx, cfg, fullJitter{}, systemClock)
 }
@@ -737,12 +766,14 @@ func open(ctx context.Context, cfg Config, backoff retry.BackoffDelayer, c clock
 		// counted into the node's recorder as it happens.
 		o.APIOptions = append(o.APIOptions, paced(follows(count, &b.stall), b.gate, b.judge))
 	})
+	b.presigner = s3.NewPresignClient(b.client)
+	b.http = httpClient
 	b.cutParts(PartBytes)
-	headCtx, cancel := context.WithTimeout(ctx, callBudget)
-	defer cancel()
-	if _, err := b.client.HeadBucket(headCtx, &s3.HeadBucketInput{Bucket: aws.String(cfg.Bucket)}); err != nil {
-		return nil, fmt.Errorf("s3obj: reach bucket %q: %w", cfg.Bucket, err)
+	caps, err := b.probe(ctx)
+	if err != nil {
+		return nil, err
 	}
+	b.caps = caps
 	return b, nil
 }
 
@@ -777,15 +808,28 @@ func contentType(m objstore.PutMeta) *string {
 }
 
 // putObject stores a body that fit one part in one request.
+//
+// WITH ITS SHA-256 AS A HEADER where the probe proved the provider checks
+// one: the provider then refuses a body damaged on the way, and keeps the
+// digest the audit and the migration read back ([Backend.Stat]). A header,
+// never the SDK's trailing checksum, which providers that are not Amazon
+// refuse or mishandle; and only where proven, so a provider that rejects the
+// header degrades to a put with none rather than to no put at all.
 func (b *Backend) putObject(ctx context.Context, name string, data []byte, m objstore.PutMeta) error {
+	in := &s3.PutObjectInput{
+		Bucket:        aws.String(b.bucket),
+		Key:           aws.String(b.key(name)),
+		ContentLength: aws.Int64(int64(len(data))),
+		ContentType:   contentType(m),
+	}
+	if b.caps.checksums {
+		in.ChecksumSHA256 = aws.String(checksumOf(data))
+	}
 	_, err := call(ctx, sendBudget(int64(len(data))), func(ctx context.Context) (*s3.PutObjectOutput, error) {
-		return b.client.PutObject(ctx, &s3.PutObjectInput{
-			Bucket:        aws.String(b.bucket),
-			Key:           aws.String(b.key(name)),
-			Body:          bytes.NewReader(data),
-			ContentLength: aws.Int64(int64(len(data))),
-			ContentType:   contentType(m),
-		})
+		// A FRESH READER PER ATTEMPT, so the SDK's retry of a failed
+		// request sends the body from its start.
+		in.Body = bytes.NewReader(data)
+		return b.client.PutObject(ctx, in)
 	})
 	if err != nil {
 		return fmt.Errorf("s3obj: put %s: %w", name, err)
@@ -1056,12 +1100,17 @@ func (b *Backend) Get(ctx context.Context, name string, off, n int64) (io.ReadCl
 	}{objstore.ContextReader(ctx, out.Body), out.Body}, nil
 }
 
-// Stat implements [objstore.Backend].
+// Stat implements [objstore.Backend], with the object's whole-content digest
+// where the provider keeps one: only where the probe proved it checks
+// checksums, since a single-part put carries one only then, and never for an
+// object assembled from parts ([digestOf]).
 func (b *Backend) Stat(ctx context.Context, name string) (objstore.Info, error) {
+	in := &s3.HeadObjectInput{Bucket: aws.String(b.bucket), Key: aws.String(b.key(name))}
+	if b.caps.checksums {
+		in.ChecksumMode = types.ChecksumModeEnabled
+	}
 	out, err := call(ctx, callBudget, func(ctx context.Context) (*s3.HeadObjectOutput, error) {
-		return b.client.HeadObject(ctx, &s3.HeadObjectInput{
-			Bucket: aws.String(b.bucket), Key: aws.String(b.key(name)),
-		})
+		return b.client.HeadObject(ctx, in)
 	})
 	if missing(err) {
 		return objstore.Info{}, objstore.ErrNotFound
@@ -1070,7 +1119,8 @@ func (b *Backend) Stat(ctx context.Context, name string) (objstore.Info, error) 
 		return objstore.Info{}, fmt.Errorf("s3obj: stat %s: %w", name, err)
 	}
 	return objstore.Info{Name: name, Size: aws.ToInt64(out.ContentLength),
-		Written: aws.ToTime(out.LastModified).UTC()}, nil
+		Written: aws.ToTime(out.LastModified).UTC(),
+		Digest:  digestOf(out.ChecksumSHA256, string(out.ChecksumType))}, nil
 }
 
 // Delete implements [objstore.Backend].

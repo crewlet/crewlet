@@ -560,3 +560,68 @@ func TestIdentityTellsTheFourCasesApart(t *testing.T) {
 		})
 	}
 }
+
+// A SEAT WHOSE ID CHANGED HYDRATES NOTHING: the changelog's subjects are keyed
+// on the agent id, so a seat under another id — a changed handle, which is a
+// new seat (ADR-0013) — finds none of the old one's memory.
+func TestASeatWhoseIDMovedFindsNoneOfItsMemory(t *testing.T) {
+	t.Parallel()
+	conn := broker(t)
+	ctx := context.Background()
+
+	oldOwner := openStore(t)
+	seedMemory(t, oldOwner)
+	if _, err := syncerOn(t, oldOwner, conn).Publish(ctx, seat.Handle); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	newOwner := openStore(t)
+	moved, err := New(newOwner, jsOn(t, conn), func(string) string {
+		return "11111111-2222-4333-8444-555555555555"
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	carried, err := moved.Hydrate(ctx, seat.Handle)
+	if err != nil {
+		t.Fatalf("hydrate: %v", err)
+	}
+	if carried != 0 {
+		t.Fatalf("a seat under a different id hydrated %d rows; the subjects "+
+			"are not keyed on the id at all", carried)
+	}
+}
+
+// A SEAT WITH NO ID HAS NO ADDRESS, so neither half touches the changelog for
+// it. Published, its rows went to `crewlet.memory..<table>.<hash>` — an empty
+// seat token, which the broker refuses — so every flush failed, and the
+// failure read as a broker fault in the warning it logged.
+//
+// The control is the same seat with its id: its rows publish, so the empty
+// answer is what kept them off the stream.
+func TestASeatWithNoIDCarriesNothing(t *testing.T) {
+	t.Parallel()
+	conn := broker(t)
+	ctx := context.Background()
+	db := openStore(t)
+	seedMemory(t, db)
+
+	nobody, err := New(db, jsOn(t, conn), func(string) string { return "" })
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if published, err := nobody.Publish(ctx, seat.Handle); err != nil || published != 0 {
+		t.Fatalf("a seat with no id published %d rows (%v), want none and no error",
+			published, err)
+	}
+	if carried, err := nobody.Hydrate(ctx, seat.Handle); err != nil || carried != 0 {
+		t.Fatalf("a seat with no id hydrated %d rows (%v), want none and no error",
+			carried, err)
+	}
+
+	if published, err := syncerOn(t, db, conn).Publish(ctx, seat.Handle); err != nil ||
+		published != len(tables) {
+		t.Fatalf("the control published %d rows (%v), want one per table (%d)",
+			published, err, len(tables))
+	}
+}

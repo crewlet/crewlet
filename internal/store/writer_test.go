@@ -148,24 +148,26 @@ func TestAnUntrackedTypeIsNotStored(t *testing.T) {
 }
 
 // THE RUNTIME AUDIT READS ITS ROWS FROM A LISTING, which never selects the
-// payload — so who acted, as whom, with which tool, into which directory and on
-// which node must each survive as a tag, or the Audit log and the backup
-// history can say only the summary's prose. Built from the real types, so a
-// renamed wire field fails here rather than as a blank column.
+// payload — so what sort of author acted, through which credential, with which
+// tool, on which repository, into which directory and on which node must each
+// survive as a tag, or the Audit log and the backup history can say only the
+// summary's prose. Built from the real types, so a renamed wire field fails
+// here rather than as a blank column.
 func TestTheRuntimeAuditsDimensionsSurviveIntoAListing(t *testing.T) {
 	t.Parallel()
 	backupEvent := events.New(types.NewBackupRequested(types.BackupRequested{
-		OperatorID: "maya-laptop", ActorSeat: "maya", Dir: "/var/backups/one",
-		Outcome: types.AuditApplied, Streams: 12,
+		ActorName: "token:ops", ActorKind: "operator", OperatorID: "token:ops",
+		Dir: "/var/backups/one", Outcome: types.AuditApplied, Streams: 12,
 	}), events.TraceContext{})
 	backupEvent.Node = "node-b"
 	acted := events.New(types.NewOperatorActed(types.OperatorActed{
-		OperatorID: "maya-laptop", ActorSeat: "maya", Transport: types.TransportAct,
-		Tool: "update_work_item", Outcome: types.AuditRefused, Refusal: "conflict",
+		ActorName: "maya", ActorKind: "human", OperatorID: "pat:42",
+		Transport: types.TransportAct, Tool: "update_work_item",
+		Outcome: types.AuditRefused, Refusal: "conflict",
 	}), events.TraceContext{})
 	acted.Node = "node-a"
 	pushed := events.New(types.NewOperatorActed(types.OperatorActed{
-		OperatorID: "maya-laptop", ActorSeat: "maya", Transport: types.TransportGit,
+		ActorName: "maya", ActorKind: "human", OperatorID: "pat:43", Transport: types.TransportGit,
 		Tool: "git_push", Repo: "nimbus-web", Outcome: types.AuditRefused, Refusal: "protected_force",
 	}), events.TraceContext{})
 	pushed.Node = "node-c"
@@ -175,15 +177,16 @@ func TestTheRuntimeAuditsDimensionsSurviveIntoAListing(t *testing.T) {
 		want  map[string]string
 	}{
 		{backupEvent, map[string]string{
-			"node": "node-b", "actor_seat": "maya", "dir": "/var/backups/one",
+			"node": "node-b", "actor_kind": "operator", "operator_id": "token:ops",
+			"dir": "/var/backups/one",
 		}},
 		{acted, map[string]string{
-			"node": "node-a", "actor_seat": "maya", "tool": "update_work_item",
-			"failed": "true",
+			"node": "node-a", "actor_kind": "human", "operator_id": "pat:42",
+			"tool": "update_work_item", "failed": "true",
 		}},
 		{pushed, map[string]string{
-			"node": "node-c", "actor_seat": "maya", "tool": "git_push", "repo": "nimbus-web",
-			"failed": "true",
+			"node": "node-c", "actor_kind": "human", "operator_id": "pat:43",
+			"tool": "git_push", "repo": "nimbus-web", "failed": "true",
 		}},
 	} {
 		raw, err := json.Marshal(c.event)
@@ -196,6 +199,11 @@ func TestTheRuntimeAuditsDimensionsSurviveIntoAListing(t *testing.T) {
 				t.Errorf("%s: tag %s = %q, want %q (tags %v)", c.event.Type, key,
 					tags[key], want, tags)
 			}
+		}
+		// NO SEAT BESIDE THE ACTOR: a person bound to a seat is recorded
+		// as the seat, so a second name would be a second author.
+		if seat, held := tags["actor_seat"]; held {
+			t.Errorf("%s: tagged actor_seat %q — the actor is the author", c.event.Type, seat)
 		}
 	}
 }

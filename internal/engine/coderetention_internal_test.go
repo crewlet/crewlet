@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -46,7 +47,7 @@ func activateRevision(t *testing.T, e *Engine, doc string) int64 {
 	}
 	now := time.Now().UTC()
 	id, err := e.backends.Store.Configs().InsertActive(t.Context(), store.Revision{
-		CreatedByKind: store.AuthorOperator, Source: "test", CreatedBy: "operator",
+		CreatedByKind: iam.ActorOperator, Source: "test", CreatedBy: "operator",
 		Summary: "revision", Payload: payload, CreatedAt: now,
 	})
 	if err != nil {
@@ -54,7 +55,7 @@ func activateRevision(t *testing.T, e *Engine, doc string) int64 {
 	}
 	activation, err := e.backends.Fleet.Activate(t.Context(), coord.ActivationRequest{
 		RevisionID: id, Summary: "revision", Payload: payload, At: now,
-		Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: string(store.AuthorOperator),
+		Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: iam.ActorOperator,
 			Source: "api", CreatedAt: now},
 	})
 	if err != nil {

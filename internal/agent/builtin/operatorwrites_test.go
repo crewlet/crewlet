@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -25,10 +26,9 @@ import (
 // the life of the deployment, and the operation ledger collapsed
 // every write after the first as a redelivery.
 //
-// `/operator/mcp` is the only surface that writes with no turn. It is also the
-// ONLY write path the dashboard offers — the whole `ToolCall` surface tells a
-// reader to paste these calls to the assistant they have connected to it — and
-// what an operator's own assistant connects to. Measured against a running
+// Every operator surface writes with no turn — `/operator/mcp`, which an
+// operator's own assistant connects to, the act transport and the HTTP write
+// surface — and the first carries no request key at all. Measured against a running
 // engine: a work item could be updated exactly once. The second update, and
 // every update after it, wrote nothing and answered `outcome: "applied"` with
 // the first write's position and version.
@@ -52,17 +52,20 @@ import (
 
 // operatorActor is a write with no turn: a token acting for the company.
 //
-// It is what `operator.WorkActor` builds — the operator's own name as the
-// handle, the kind saying it is not a seat, and NO TURN ID, which is the whole
-// point of the case.
+// It is what [builtin.PrincipalActor] builds for a token — its whole login as
+// the handle, the kind saying it is not a seat, and NO TURN ID, which is the
+// whole point of the case.
 func operatorActor(context.Context, *turnctx.Turn) (builtin.Actor, error) {
 	return builtin.Actor{
-		Handle: "founder", Kind: tracker.AuthorOperator, OperatorID: "founder",
+		Handle: "token:founder", Kind: tracker.AuthorOperator,
+		OperatorID: "token:founder",
 	}, nil
 }
 
 // callNoTurn drives a seat-callable tool with NO turn, which is what the
-// operator surface does.
+// operator surface does — as a PERSON, because that surface's callers are
+// people and machines and never a seat, and its human-only verbs refuse a
+// seat however it is granted.
 func callNoTurn(t *testing.T, reg *tools.Registry, name string,
 	args map[string]any) tools.Result {
 
@@ -75,7 +78,7 @@ func callNoTurn(t *testing.T, reg *tools.Registry, name string,
 	if !ok {
 		t.Fatalf("%s is not seat-callable", name)
 	}
-	got, err := callable.CallForTurn(t.Context(), nil, args)
+	got, err := callable.CallForTurn(personHolding(iam.AllGrants...), nil, args)
 	if err != nil {
 		t.Fatalf("%s: %v", name, err)
 	}
@@ -178,7 +181,7 @@ func TestTwoRunsOfOneTriggerWriteOneOperation(t *testing.T) {
 		if !ok {
 			t.Fatal("update_work_item is not seat-callable")
 		}
-		if _, err := callable.CallForTurn(t.Context(), turn, map[string]any{
+		if _, err := callable.CallForTurn(everyGrant(), turn, map[string]any{
 			"item": "ENG-1", "priority": "urgent",
 		}); err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -240,9 +243,11 @@ func TestATurnWithNoWorkKeySeedsFromItsRun(t *testing.T) {
 // collapses. The same request twice is one id on every verb; a different
 // request is a different one, or it would collapse a person's SECOND write —
 // the defect the case above guards, reached from the other side. The
-// transport names the operation ([builtin.RequestOperation]) and the actor
-// carries it ([builtin.Actor.Operation]), exactly as an operator's `op_id`
-// is carried: ONE key, whichever way the call names it.
+// transport keys the request (internal/api/opkey, which holds the key to the
+// grammar and scopes it to the principal) and the actor carries the key as
+// its unit of work ([builtin.Actor.WorkKey], with the key's own instant as
+// [builtin.Actor.WorkSince]) — exactly as a turn's trigger is carried, so
+// every id is derived from it as a turn's are.
 func TestARequestNamesTheOperationOutsideATurn(t *testing.T) {
 	t.Parallel()
 	requests := map[string]string{
@@ -259,11 +264,8 @@ func TestARequestNamesTheOperationOutsideATurn(t *testing.T) {
 			Handle: "founder", Kind: tracker.AuthorOperator, OperatorID: "founder",
 		}
 		if request != "" {
-			op, err := builtin.RequestOperation("founder", requests[request], tool, args)
-			if err != nil {
-				t.Fatalf("RequestOperation: %v", err)
-			}
-			actor.Operation = op
+			actor.WorkKey = requests[request]
+			actor.WorkSince, _ = statelog.OpMintedAt(requests[request])
 		}
 		return func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
 			return actor, nil
@@ -291,11 +293,13 @@ func TestARequestNamesTheOperationOutsideATurn(t *testing.T) {
 			t.Errorf("a retried update wrote under %q and then %q — the ledger "+
 				"cannot collapse it", retried[0], retried[1])
 		}
-		op, _ := builtin.RequestOperation("founder", requests["r-1"],
-			builtin.UpdateWorkItemTool, args)
-		if want := statelog.StepOpID(op, "update-i1"); retried[0] != want {
-			t.Errorf("the retried update wrote under %q, want %q — a step of "+
-				"the operation its request names", retried[0], want)
+		// AND THE ID CARRIES THE REQUEST'S OWN INSTANT, which is what the
+		// ledger vouches for a retry by: one minted at the epoch is answered
+		// `unknown` without publishing wherever the ledger ever lost a row.
+		minted, _ := statelog.OpMintedAt(requests["r-1"])
+		if at, ok := statelog.OpMintedAt(retried[0]); !ok || !at.Equal(minted) {
+			t.Errorf("the retried update wrote under %q, which carries %v (%v) — "+
+				"want the request key's own instant %v", retried[0], at, ok, minted)
 		}
 		if two := ids("r-1", "r-2"); two[0] == two[1] {
 			t.Errorf("two requests wrote under one id %q, so the second is "+
@@ -356,7 +360,7 @@ func TestARequestNamesTheOperationOutsideATurn(t *testing.T) {
 			opID := func(request string) string {
 				person := &personSpy{}
 				reg := personSurface(t, newFakeTracker(), person,
-					asked(t, request, verb.tool, verb.args), nil)
+					asked(t, request, verb.tool, verb.args))
 				if got := callNoTurn(t, reg, verb.tool, verb.args); got.Failed {
 					t.Fatalf("%s failed: %q", verb.tool, got.Output)
 				}
@@ -375,100 +379,6 @@ func TestARequestNamesTheOperationOutsideATurn(t *testing.T) {
 			}
 		}
 	})
-}
-
-// A REQUEST'S OPERATION IS ITS SENDER'S, ITS CALL'S AND ITS INSTANT'S.
-//
-// Derived from a request id nobody but the transport vouches for, it has to
-// hold every property a minted `op_id` has: it names the call (so a tool
-// accepts it only with the call it was derived for, and a second call under
-// one request is another operation), it is scoped to the credential that sent
-// it (so nobody can make their write the first attempt of somebody else's by
-// sending their request id first), one id spelled two ways is one request, and
-// it carries the instant the request was minted — an id with none would be
-// read as older than every loss the ledger has had, and every write under it
-// would answer `unknown` without publishing on any node whose ledger ever lost
-// a row.
-func TestARequestsOperationIsItsSendersItsCallsAndItsInstants(t *testing.T) {
-	t.Parallel()
-	at := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
-	request := statelog.NewOpID(at, "")
-	args := map[string]any{"item": "ENG-1", "priority": "urgent"}
-	op, err := builtin.RequestOperation("founder", request, builtin.UpdateWorkItemTool, args)
-	if err != nil {
-		t.Fatalf("RequestOperation: %v", err)
-	}
-	if minted, ok := statelog.OpMintedAt(op); !ok || !minted.Equal(at) {
-		t.Errorf("the operation carries instant %v (%v), want the request's own %v",
-			minted, ok, at)
-	}
-	if err := statelog.CheckCallerOpID(op); err != nil {
-		t.Errorf("the operation is not one the op id grammar accepts: %v", err)
-	}
-	for name, other := range map[string]func() (string, error){
-		"another sender": func() (string, error) {
-			return builtin.RequestOperation("ci", request, builtin.UpdateWorkItemTool, args)
-		},
-		"another tool": func() (string, error) {
-			return builtin.RequestOperation("founder", request, builtin.CommentOnWorkTool, args)
-		},
-		"other arguments": func() (string, error) {
-			return builtin.RequestOperation("founder", request, builtin.UpdateWorkItemTool,
-				map[string]any{"item": "ENG-1", "priority": "low"})
-		},
-	} {
-		got, err := other()
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		if got == op {
-			t.Errorf("%s derived the same operation %q", name, op)
-		}
-	}
-	if same, err := builtin.RequestOperation("founder", strings.ToUpper(request),
-		builtin.UpdateWorkItemTool, args); err != nil || same != op {
-		t.Errorf("the request spelled in upper case derived %q (%v), want %q — "+
-			"one request, whichever way it is spelled", same, err, op)
-	}
-	if _, err := builtin.RequestOperation("founder",
-		"11111111-0000-4000-8000-000000000001", builtin.UpdateWorkItemTool, args); err == nil {
-		t.Error("a request id carrying no instant (a UUIDv4) derived an operation " +
-			"— every write under it answers unknown wherever the ledger lost a row")
-	}
-
-	// AND A TOOL TAKES IT ONLY WITH THE CALL IT NAMES, and refuses an
-	// `op_id` beside it: the request is already the operation.
-	trk := newFakeTracker()
-	reg := tools.NewRegistry()
-	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{Work: builtin.WorkDeps{
-		Reader: trk, Writer: trk.as,
-		Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
-			return builtin.Actor{Handle: "founder", Kind: tracker.AuthorOperator,
-				OperatorID: "founder", Operation: op}, nil
-		},
-	}}) {
-		if err := reg.Register(tool, tools.OriginBuiltin); err != nil {
-			t.Fatalf("register %s: %v", tool.Name(), err)
-		}
-	}
-	if got := callNoTurn(t, reg, builtin.UpdateWorkItemTool, args); got.Failed {
-		t.Fatalf("the call its operation names was refused: %s", got.Output)
-	}
-	for name, call := range map[string]map[string]any{
-		"another call":       {"item": "ENG-1", "priority": "low"},
-		"an op_id beside it": {"item": "ENG-1", "priority": "urgent", "op_id": op},
-	} {
-		written := len(trk.opIDs)
-		got := callNoTurn(t, reg, builtin.UpdateWorkItemTool, call)
-		if !got.Failed || got.Refusal != tools.RefusalInvalid {
-			t.Errorf("%s under the request's operation answered %+v, want an "+
-				"invalid refusal", name, got)
-		}
-		if len(trk.opIDs) != written {
-			t.Errorf("%s under the request's operation still wrote %v", name,
-				trk.opIDs[written:])
-		}
-	}
 }
 
 // opName is the part of an operation id that names the write — its LAST

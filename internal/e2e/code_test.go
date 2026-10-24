@@ -11,7 +11,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codetest"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/rendezvous"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -28,9 +30,58 @@ import (
 // configuration, and a configuration write — the one the dashboard makes —
 // reaching every member's repositories.
 
+// e2eDevID and e2eDevToken are a PERSON'S Tier A token: the identity
+// directory binds its login, `token:e2e-dev`, to the developer's human seat
+// ([bindDev]), so a push made with it is that person's own — the only
+// credential a git push is taken under, since a token bound to nobody fetches
+// only.
+const (
+	e2eDevID    = "e2e-dev"
+	e2eDevToken = "e2e-dev-token-0123456789abcdef"
+)
+
+// withDevCredential adds the developer's token to boot, beside the fixture's
+// ([withCredential]). It lists no grant: what a person may do to a repository
+// is their standing on it (ADR-0054), never a grant a token carries.
+func withDevCredential(boot *config.Bootstrap) {
+	boot.API.Auth.Tokens = append(boot.API.Auth.Tokens,
+		config.APIToken{ID: e2eDevID, Token: e2eDevToken})
+}
+
+// bindDev binds the developer's token to the developer's human seat through
+// n's identity directory — what `crewlet iam create -kind machine -login
+// token:e2e-dev -seat dev -grants none` sends — and waits until n and every one
+// of others reports the binding: each node resolves a token's seat from its own
+// copy of the directory, so a push through a member that had not applied the
+// row would be a push by a token bound to nobody.
+func bindDev(t *testing.T, n *node, others ...*node) {
+	t.Helper()
+	login := iam.TokenLogin(e2eDevID)
+	status, created := tierA(t, n, http.MethodPost, "/iam/people", map[string]any{
+		"kind": iam.KindMachine, "login": login, "name": "Developer's git",
+		"seat": "dev", "grants": []iam.Grant{}, "reason": "the developer's git credential",
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("POST /iam/people for %s on %s answered %d: %v", login, n.id, status, created)
+	}
+	for _, member := range append([]*node{n}, others...) {
+		var tokens []any
+		waitFor(t, fmt.Sprintf("%s to bind %s to the developer", member.id, login), func() bool {
+			code, body := tierA(t, member, http.MethodGet, "/iam/node-tokens", nil)
+			tokens, _ = body["tokens"].([]any)
+			for _, raw := range tokens {
+				if token, _ := raw.(map[string]any); token["id"] == e2eDevID {
+					return code == http.StatusOK && token["row"] == "held" && token["seat"] == "dev"
+				}
+			}
+			return false
+		}, func() string { return fmt.Sprintf("%v", tokens) })
+	}
+}
+
 // withCode amends the golden company into one that hosts code: a developer's
-// human seat, bound to [e2eDevID], and a `code:` block declaring repo, owned
-// by Engineering, its main branch protected.
+// human seat — which [bindDev] binds [e2eDevID] to — and a `code:` block
+// declaring repo, owned by Engineering, its main branch protected.
 //
 // The seat goes in after the FIRST "roles:\n", which is the company's own
 // (companyDoc keeps its units below the seats for exactly this), and the
@@ -43,12 +94,10 @@ func withCode(repo string) func(doc string) string {
 // document a configuration write changes to archive it, and back.
 func codeCompany(repo string, archived bool) func(doc string) string {
 	return func(doc string) string {
-		seat := fmt.Sprintf(`  - name: Developer
+		seat := `  - name: Developer
     handle: dev
     kind: human
-    contact:
-      crewlet_operator_id: %s
-`, e2eDevID)
+`
 		doc = strings.Replace(doc, "roles:\n", "roles:\n"+seat, 1)
 		return doc + fmt.Sprintf(`code:
   native: true
@@ -172,10 +221,9 @@ func putCompany(t *testing.T, n *node, doc, summary string) int64 {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set("Authorization", "Bearer "+e2eOperatorToken)
 	req.Header.Set("Content-Type", "application/yaml")
 	req.Header.Set("X-Summary", summary)
-	resp, err := n.server.Client().Do(req)
+	resp, err := n.server.Client().Do(present(req))
 	if err != nil {
 		t.Fatalf("PUT /config on %s: %v", n.id, err)
 	}
@@ -247,6 +295,7 @@ func claimPersonsPushAndFetchAcrossTheFleet(t *testing.T, c *cluster) {
 		before[n.id] = commitBatches(n)
 	}
 
+	bindDev(t, c.nodes[0], c.nodes[1:]...)
 	dev := codetest.PersonWithToken(t, e2eDevToken)
 	work := dev.Init()
 	first := dev.Commit(work, map[string]string{"README.md": "# fleet-web\n"}, "first")

@@ -36,7 +36,7 @@ A useful mental model: for each integration there is usually
 |---|---|---|
 | **Anthropic** | `type: anthropic` | Official SDK; prompt caching set explicitly by the provider. Each request is shaped for its Claude model — adaptive thinking and an effort level on the current generation, a thinking budget only on the older models that take one (see [Claude models](configuration.md#claude-models-thinking-effort-and-sampling)). Required if you want Claude Code as the sandbox coding agent. |
 | **OpenAI** | `type: openai` | Official SDK; automatic prefix caching. |
-| **Any OpenAI-compatible endpoint** | `type: openai-compatible` + `base_url` | Hosted aggregators (OpenRouter, Together, …), cloud gateways, or your own vLLM / LiteLLM deployment. Fully self-hostable. OpenCode (the provider-agnostic sandbox coding agent) can reuse this same provider. |
+| **Any OpenAI-compatible endpoint** | `type: openai-compatible` + `base_url` | Hosted aggregators (OpenRouter, Together, …), cloud gateways, or your own vLLM / LiteLLM deployment. Fully self-hostable. A reasoning model's reasoning goes back to its host in the host's own field, as models like Kimi K3 require (see [Reasoning models behind an OpenAI-compatible endpoint](configuration.md#reasoning-models-behind-an-openai-compatible-endpoint)). OpenCode (the provider-agnostic sandbox coding agent) can reuse this same provider. |
 | **A gateway or proxy in front of a vendor** | `base_url` on `anthropic` / `openai` | `base_url` is not an `openai-compatible`-only field. It is merely *required* there. On a vendor entry it redirects that vendor's own wire format at an egress proxy, an Anthropic-API gateway, or a subscription OAuth proxy. The last of those has terms and trade-offs worth reading first: [Subscription LLM Backends § the proxy shape](../concepts/subscription-llm-backends.md#the-other-shape-an-oauth-proxy-in-front-of-an-http-entry). |
 | **A coding CLI you subscribe to** | `type: cli-agent` + `cli.agent` | No API key: drives a coding CLI already installed on the engine host — the `claude`, `codex`, `gemini`, `qwen`, `opencode`, `cursor-agent`, `copilot`, `grok`, `muse`, `kimi`, `hermes` or `pi` **binary** — on the operator's own subscription. `cli.agent` names the profile rather than the binary (`claude-code`, `gemini-cli`, `kimi-code`, …); [Supported CLIs](../concepts/subscription-llm-backends.md#supported-clis) pairs them up. The CLI must be installed on the engine host. Flat-rate cost, higher per-call latency, and each seat gets an isolated CLI home so agents never share memory. See [Subscription LLM Backends](../concepts/subscription-llm-backends.md). |
 
@@ -99,10 +99,12 @@ Two slots change once a deployment outgrows one node:
 | **Coordination** | `local` (one node) · `embedded-kv` (a fleet — one node or three; two has no quorum and is refused by name) |
 
 Coordination takes no address of its own, and that is deliberate rather than an
-omission: the KV holding leases, ledgers and the token counter rides the
-stream's **own** connection. Two connections to one broker fail independently,
-so a node could keep renewing leases over a link that still works while the one
-carrying its inbox has dropped — alive to its peers, deaf to its work.
+omission: the KV holding leases, ledgers and the token counter lives on the
+stream's **own** broker. On the embedded broker it holds a second connection
+beside the queue's, and both are watched: either one closing for good stops the
+node, so it cannot keep renewing leases over a link that still works while the
+one carrying its inbox is gone — alive to its peers, deaf to its work — for
+longer than a reconnect.
 
 The **store** is never one of these: it stays one file per node, which is why
 everything genuinely shared lives in coordination instead. See
@@ -171,10 +173,12 @@ What **you** do, by hand:
    creates the tenancy.
 2. **Create per-agent identities**: an Atlassian account (or API token
    identity) per agent seat, so issues can be assigned to agents and comments
-   attribute correctly. Mint one API token per agent and reference them from
-   `role.mcp_env` (`JIRA_API_TOKEN` / `CONFLUENCE_API_TOKEN` for the
-   `atlassian` MCP server), plus one admin/service token for the engine's
-   org-level lookups (`integrations.jira.token`).
+   attribute correctly. Mint one API token per agent and reference it from
+   `role.mcp_env`, beside the account's address (`JIRA_USERNAME` and
+   `JIRA_API_TOKEN`, `CONFLUENCE_USERNAME` and `CONFLUENCE_API_TOKEN` for the
+   `atlassian` MCP server, which refuses a token without its address), plus
+   one admin/service token for the engine's org-level lookups
+   (`integrations.jira.token`).
 3. **Webhooks**:
    - **Cloud** — install the [Crewlet Forge app](https://github.com/crewlet/forge)
      in your site; it forwards Jira + Confluence events to
@@ -387,12 +391,17 @@ agent-mode entry) would fall to it on a catalogue offering more than one cell
 needs none — as long as *something* names a cell, since a backend is only
 built for a cell that is reached.
 
-Coding-agent choice: **OpenCode** is provider-agnostic (reuses any
-OpenAI-compatible provider you already configured — no extra secret);
-**Claude Code** requires an `anthropic` provider entry, a
-[`cli-agent`](../concepts/subscription-llm-backends.md) one, or an
-`ANTHROPIC_*` credential in `role.sandbox.env` (select it per role via
-`role.llm_sandbox`).
+Coding-agent choice: **OpenCode** — version 2, the `@opencode/cli` package,
+in the box — is provider-agnostic (reuses the key of
+any `anthropic`, `openai` or OpenAI-compatible provider you already
+configured — no extra secret — and runs an `opencode`
+[`cli-agent`](../concepts/subscription-llm-backends.md) entry);
+**Claude Code** requires an `anthropic` provider entry, a `claude-code`
+`cli-agent` one, or a Claude Code sign-in of the seat's own in
+`role.sandbox.env` (select the entry per role via `role.llm_sandbox`). A
+`cli-agent` entry's code work needs that same CLI as the seat's
+`coding_agent` — an `opencode` entry needs `coding_agent: opencode` — and
+any other pairing is [refused](../concepts/code-sandbox.md#failure-modes).
 
 One networking caveat for local development: a **cloud** E2B sandbox cannot
 reach services on your laptop (`localhost` GitLab) — in-sandbox tool

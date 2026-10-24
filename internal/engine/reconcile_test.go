@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -35,22 +37,26 @@ var pinnedNow = time.Date(2026, 8, 23, 14, 0, 0, 0, time.UTC)
 // an hour before pinnedNow: the backends refuse an activation without one, and
 // a case about something else has no author to say.
 var anOrigin = coord.RevisionOrigin{
-	Author: "maya", AuthorKind: string(store.AuthorOperator), Source: "api",
+	Author: "maya", AuthorKind: iam.ActorHuman, Source: "api",
 	CreatedAt: pinnedNow.Add(-time.Hour),
 }
 
-// brokenRevision is well-formed JSON that cannot be built: a seat naming a
-// provider the document does not configure. The provider block is non-empty
-// deliberately: a company with no models at all is a supported authoring
-// state, and an empty one would not be refused at all (see nomodels_test.go).
+// brokenRevision is well-formed JSON that cannot be built: a delegate template
+// naming a provider the document does not configure. The provider block is
+// non-empty deliberately: a company with no models at all is a supported
+// authoring state, and an empty one would not be refused at all (see
+// nomodels_test.go).
 var brokenRevision = json.RawMessage(`{"name":"Acme",
   "providers":{"llm":{"zulu":{"type":"anthropic","model":"m","api_keys":["k"]}}},
-  "roles":[{"name":"CEO","handle":"ceo","llm":"nonexistent"}]}`)
+  "workers":{"researcher":{"description":"reads sources and reports findings",
+    "system_prompt":"You research.","model":"nonexistent"}}}`)
 
-// A second company, differing from companyDoc in the one way a reconcile has
-// to be visible through: its seat set.
+// A second company, differing from companyDoc in the ways a reconcile has to
+// be visible through: one more seat, and a token budget.
 const grownCompanyDoc = `
 name: Acme
+token_budget:
+  day: 4242
 providers:
   llm:
     zulu:
@@ -115,11 +121,43 @@ func planeFor(t *testing.T, e *engine.Engine, opts ...func(*engine.ReconcilerOpt
 	return p
 }
 
-// activate writes a revision and points the fleet at it, returning its epoch.
+// fleetPeers is two nodes of ONE fleet: each its own engine and database, the
+// author's coordination store for both, and ONE keyring between them — the
+// shape a deployment has, where every node's Tier A names the same keys. Two
+// engines built apart hold two random keyrings, and a peer could open nothing
+// its author sealed.
+func fleetPeers(t *testing.T, peerOpts ...func(*engine.ReconcilerOptions)) (author, peer *plane) {
+	t.Helper()
+	material := testKeyMaterial(t)
+	keyed := func() *engine.Engine {
+		return newEngine(t, engine.Options{Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
+			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+			b.Secrets.Keys = []config.SecretKey{{ID: b.Secrets.ActiveKeyID, Material: material}}
+		})})
+	}
+	author = planeFor(t, keyed())
+	peer = planeFor(t, keyed(), append([]func(*engine.ReconcilerOptions){
+		func(o *engine.ReconcilerOptions) { o.Fleet = author.fleet },
+	}, peerOpts...)...)
+	return author, peer
+}
+
+// seal is a document as this node's writers store and publish it: sealed under
+// the engine's own keyring, which is the one its reconciler opens with.
+func (p *plane) seal(t *testing.T, document json.RawMessage) json.RawMessage {
+	t.Helper()
+	sealed, err := secrets.Seal(p.engine.Cipher(), document)
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	return sealed
+}
+
+// activate stores a revision and points the fleet at it, returning its epoch.
 //
 // TWO STORES, which is the shape the engine itself now has: the payload goes
-// in the node's database, the pointer in the coordination store.
-// activate stores a revision and points the fleet at it.
+// in the node's database, the pointer in the coordination store — SEALED in
+// both, as every writer stores it.
 //
 // TAKES THE CALLER'S CONTEXT rather than reaching for t.Context(). Most cases
 // pass t.Context() and nothing changes, but the concurrency case below drives
@@ -128,29 +166,45 @@ func planeFor(t *testing.T, e *engine.Engine, opts ...func(*engine.ReconcilerOpt
 // past the window the readers are watching.
 func (p *plane) activate(ctx context.Context, t *testing.T, doc string) int64 {
 	t.Helper()
-	document := yamlToJSON(t, doc)
+	document := p.seal(t, yamlToJSON(t, doc))
 	id, err := p.store.Configs().InsertActive(ctx, store.Revision{
-		CreatedByKind: store.AuthorOperator,
-		Source:        "test", CreatedBy: "operator", Summary: "revision",
+		Source: "test", CreatedBy: revisionAuthor, CreatedByKind: iam.ActorHuman,
+		OperatorID: revisionCredential, Summary: "revision",
 		Payload: document, CreatedAt: pinnedNow,
 	})
 	if err != nil {
 		t.Fatalf("store the revision: %v", err)
 	}
-	published, err := p.fleet.Activate(ctx, coord.ActivationRequest{RevisionID: id, Summary: "revision", Payload: document, At: pinnedNow, Origin: anOrigin})
+	// THE AUTHOR RIDES THE POINTER, as the config surface publishes it —
+	// the whole origin, which the backends refuse an activation without.
+	published, err := p.fleet.Activate(ctx, coord.ActivationRequest{
+		RevisionID: id, Summary: "revision", Payload: document, At: pinnedNow,
+		Origin: coord.RevisionOrigin{
+			Author: revisionAuthor, AuthorKind: iam.ActorHuman,
+			OperatorID: revisionCredential, Source: "test", CreatedAt: pinnedNow,
+		},
+	})
 	if err != nil {
 		t.Fatalf("activate: %v", err)
 	}
 	return published.Epoch
 }
 
+// revisionAuthor and revisionCredential are who [plane.activate] writes a
+// revision as: a person (kind human) through their own machine token.
+const (
+	revisionAuthor     = "jane.doe"
+	revisionCredential = "pat:0192f00d-0000-7000-8000-00000000000a"
+)
+
 // activatePayload is activate for a document that is not a company — a broken
-// one, or a sealed one. Same two writes, because a payload the fleet does not
-// point at is a payload no reconciler will ever read.
+// one, sealed like any other. Same two writes, because a payload the fleet
+// does not point at is a payload no reconciler will ever read.
 func (p *plane) activatePayload(t *testing.T, summary string, payload json.RawMessage) int64 {
 	t.Helper()
+	payload = p.seal(t, payload)
 	id, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
-		CreatedByKind: store.AuthorOperator,
+		CreatedByKind: iam.ActorOperator,
 		Source:        "test", CreatedBy: "operator", Summary: summary,
 		Payload: payload, CreatedAt: pinnedNow,
 	})
@@ -240,10 +294,18 @@ func TestANewRevisionReplacesTheEpoch(t *testing.T) {
 	if p.engine.Company() == before {
 		t.Fatal("the epoch was mutated in place")
 	}
+	if got := dayCeiling(before); got != 0 {
+		t.Errorf("the previous epoch changed under the apply: budget %d", got)
+	}
 	if got := len(before.Seats()); got != 2 {
 		t.Errorf("the previous epoch changed under the apply: %d seats", got)
 	}
-	if got := p.seats(t); len(got) != 3 || got[0] != "ceo" {
+	if got := dayCeiling(p.engine.Company()); got != 4242 {
+		t.Errorf("token budget = %d, want the new revision's", got)
+	}
+	// AND THE ORG IS THE REVISION'S: the seats are part of the document an
+	// apply installs.
+	if got := p.seats(t); !slices.Equal(got, []string{"ceo", "cto", "designer"}) {
 		t.Errorf("seats = %v, want the three the new revision names", got)
 	}
 }
@@ -472,7 +534,7 @@ func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
 			t.Fatalf("Target: %v", err)
 		}
 		stray, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
-			CreatedByKind: store.AuthorOperator,
+			CreatedByKind: iam.ActorOperator,
 			Source:        "test", CreatedBy: "operator", Summary: "stray",
 			Payload: yamlToJSON(t, companyDoc), CreatedAt: pinnedNow.Add(time.Hour),
 		})
@@ -498,16 +560,16 @@ func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
 		t.Parallel()
 		p := newPlane(t)
 		previous, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
-			CreatedByKind: store.AuthorOperator,
+			CreatedByKind: iam.ActorOperator,
 			Source:        "test", CreatedBy: "operator", Summary: "before",
 			Payload: yamlToJSON(t, companyDoc), CreatedAt: pinnedNow,
 		})
 		if err != nil {
 			t.Fatalf("store the previous revision: %v", err)
 		}
-		document := yamlToJSON(t, grownCompanyDoc)
+		document := p.seal(t, yamlToJSON(t, grownCompanyDoc))
 		held, err := p.store.Configs().Insert(t.Context(), store.Revision{
-			CreatedByKind: store.AuthorOperator,
+			CreatedByKind: iam.ActorOperator,
 			ParentID:      previous, Source: "api", CreatedBy: "operator", Summary: "written",
 			Payload: document, CreatedAt: pinnedNow,
 		})
@@ -562,16 +624,32 @@ func TestARevisionThatCannotBeBuiltLeavesTheNodeServing(t *testing.T) {
 	}
 }
 
+// bodiless is a plane whose pointer names a revision it holds no body for.
+//
+// The store cannot be made to produce one — the body is written inside the
+// pointer's own record — so the case needs a plane that says so: it is what a
+// node sees when the pointer moved between its read of the target and its read
+// of the body, and what a pointer an older build wrote beside a body a racing
+// writer had replaced looks like.
+type bodiless struct{ coord.Plane }
+
+func (bodiless) Payload(context.Context, string) (json.RawMessage, bool, error) {
+	return nil, false, nil
+}
+
 func TestAPointerNamingAMissingRevisionIsReported(t *testing.T) {
 	t.Parallel()
 	// A fleet where every node quietly ignores an unreadable pointer
 	// converges on nothing while reporting convergence.
-	p := newPlane(t)
-	// No payload with it either: a pointer whose revision is in neither
-	// store is exactly the ghost this reports.
+	e := newEngine(t, engine.Options{})
+	p := planeFor(t, e, func(o *engine.ReconcilerOptions) {
+		o.Fleet = bodiless{o.Fleet}
+	})
+	// A revision in neither store: the node's database has never seen it,
+	// and the plane has no body for it.
 	if _, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
 		RevisionID: "00000000-0000-0000-0000-000000000000",
-		Summary:    "ghost", At: pinnedNow, Origin: anOrigin}); err != nil {
+		Summary:    "ghost", Payload: []byte("{}"), At: pinnedNow, Origin: anOrigin}); err != nil {
 		t.Fatal(err)
 	}
 	if err := p.recon.Tick(t.Context()); err == nil {
@@ -604,42 +682,174 @@ func TestOneEpochIsRetriedABoundedNumberOfTimes(t *testing.T) {
 	if err := p.recon.Tick(t.Context()); err != nil {
 		t.Fatalf("the fixed revision was refused: %v", err)
 	}
+	// The fixed revision's settings AND its seats: a revision carries both.
+	if got := dayCeiling(p.engine.Company()); got != 4242 {
+		t.Errorf("token budget = %d, want the fixed revision's", got)
+	}
 	if got := p.seats(t); len(got) != 3 {
 		t.Errorf("seats = %v, want the fixed revision's three", got)
 	}
 }
 
-func TestASealedRevisionNeedsItsKeyring(t *testing.T) {
+// A REVISION SEALED UNDER A KEY THIS NODE DOES NOT HOLD IS AN ERROR, NEVER AN
+// EMPTY COMPANY.
+//
+// Booting onto nothing would read on every surface as an operator who
+// configured nothing, where the actual fault is a keyring that does not name
+// the key the revision was sealed under — a node deployed with another fleet's
+// Tier A, or a key dropped before every revision was re-sealed off it.
+//
+// The control is the same document sealed under this node's own keyring.
+func TestASealedRevisionNeedsTheKeyItWasSealedUnder(t *testing.T) {
 	t.Parallel()
-	cipher, err := secrets.NewCipher(secrets.Keyring{
-		ActiveID: "k1", Keys: map[string][]byte{"k1": testKey(t)},
+	foreign, err := secrets.NewCipher(secrets.Keyring{
+		ActiveID: "elsewhere", Keys: map[string][]byte{"elsewhere": testKey(t)},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	sealed, err := secrets.Seal(cipher, yamlToJSON(t, grownCompanyDoc))
+	sealed, err := secrets.Seal(foreign, yamlToJSON(t, grownCompanyDoc))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Without the keyring: an ERROR, never an empty company. Booting onto
-	// nothing reads on every surface as an operator who configured nothing,
-	// where the actual fault is a deployment that lost its root of trust.
-	blind := newPlane(t)
-	blind.activatePayload(t, "sealed", sealed)
-	err = blind.recon.Tick(t.Context())
-	if !errors.Is(err, secrets.ErrSealedWithoutKey) {
-		t.Fatalf("err = %v, want the sealed-without-key error", err)
+	p := newPlane(t)
+	if _, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "sealed-elsewhere", Summary: "sealed", Payload: sealed, At: pinnedNow,
+		Origin: anOrigin,
+	}); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	if err := p.recon.Tick(t.Context()); !errors.Is(err, secrets.ErrDecrypt) {
+		t.Fatalf("err = %v, want the revision refused as undecryptable", err)
+	}
+	if got := dayCeiling(p.engine.Company()); got == 4242 {
+		t.Error("the node runs a revision it could not open")
 	}
 
-	// With it: applied.
-	keyed := newPlane(t, func(o *engine.ReconcilerOptions) { o.Cipher = cipher })
-	keyed.activatePayload(t, "sealed", sealed)
-	if err := keyed.recon.Tick(t.Context()); err != nil {
-		t.Fatalf("a sealed revision with its keyring: %v", err)
+	// THE CONTROL: its own keyring opens it.
+	p.activatePayload(t, "sealed", yamlToJSON(t, grownCompanyDoc))
+	if err := p.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("a revision sealed under this node's keyring: %v", err)
 	}
-	if got := keyed.seats(t); len(got) != 3 {
-		t.Errorf("seats = %v, want the sealed revision's three", got)
+	if got := dayCeiling(p.engine.Company()); got != 4242 {
+		t.Errorf("token budget = %d, want the sealed revision's", got)
+	}
+}
+
+// A PEER'S REVISION THAT IS NOT SEALED IS NEITHER APPLIED NOR KEPT.
+//
+// The payload a peer converges on is read off the coordination store, and
+// anything that can reach the broker can write that bucket — so the seal under
+// the fleet's keyring is what says a node of this fleet wrote it. A plaintext
+// body used to be applied by a node holding a keyring exactly as its own
+// would have been: a forged company document, running on every node, with
+// nothing in the log saying where it came from. Now the apply is recorded as
+// an error, the epoch is not reached, and the body never lands in this node's
+// own config history — where it would have been shown, diffed and offered as a
+// revert target.
+//
+// THE FORGERY IS PUBLISHED STRAIGHT ONTO THE PLANE, as anything reaching the
+// broker could, rather than through a writer: every writer this build has
+// seals under the node's keyring, and none can be built without it.
+//
+// The control is the same document sealed by a node of the fleet: applied and
+// kept.
+//
+// Mutation: let secrets.Open hand back a plaintext payload with a keyring in
+// hand, and the forged revision applies; drop the open in fetchRevision and it
+// is kept although it is refused.
+func TestAnUnsealedRevisionFromThePeersIsNeitherAppliedNorKept(t *testing.T) {
+	t.Parallel()
+	author, node := fleetPeers(t)
+
+	forged, err := author.fleet.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "0192f00d-0000-7000-8000-00000000f0f0", Summary: "forged",
+		Payload: yamlToJSON(t, grownCompanyDoc), At: pinnedNow, Origin: anOrigin,
+	})
+	if err != nil {
+		t.Fatalf("publish the forgery: %v", err)
+	}
+	err = node.recon.Tick(t.Context())
+	if !errors.Is(err, secrets.ErrUnsealedWithKey) {
+		t.Fatalf("Tick = %v, want the unsealed-with-a-keyring refusal", err)
+	}
+	// AND IT SAYS WHERE THE BODY CAME FROM: the coordination store, where
+	// anything that reaches the broker could have written it.
+	for _, says := range []string{"coordination store", "without a seal", "forged"} {
+		if !strings.Contains(err.Error(), says) {
+			t.Errorf("the refusal does not say %q: %v", says, err)
+		}
+	}
+	if got := node.recon.Applied(); got == forged.Epoch {
+		t.Error("the node applied the epoch an unsealed revision was published at")
+	}
+	if got := dayCeiling(node.engine.Company()); got == 4242 {
+		t.Error("the node runs the forged document's settings")
+	}
+	// THE FLEET VIEW the node reports into is the one it reads, the
+	// author's: the author itself never ticked, so the one row is the
+	// node's.
+	if row := author.fleetRow(t); configplane.ApplyStatus(row.Status) != configplane.StatusError ||
+		row.Epoch != forged.Epoch {
+		t.Errorf("the node recorded %+v, want an error against epoch %d", row, forged.Epoch)
+	}
+	if _, held, err := node.store.Configs().Get(t.Context(), forged.RevisionID); err != nil || held {
+		t.Errorf("the forged revision is in the node's own history (held=%v err=%v)", held, err)
+	}
+
+	// THE CONTROL: the same document, sealed by a node of the fleet.
+	sealedEpoch := author.activate(t.Context(), t, grownCompanyDoc)
+	sealedTarget, _, err := author.fleet.Target(t.Context())
+	if err != nil {
+		t.Fatalf("Target: %v", err)
+	}
+	if err := node.recon.Tick(t.Context()); err != nil {
+		t.Fatalf("a sealed revision from the peers: %v", err)
+	}
+	if got := node.recon.Applied(); got != sealedEpoch {
+		t.Errorf("the node applied epoch %d, want the sealed revision's %d", got, sealedEpoch)
+	}
+	if _, held, err := node.store.Configs().Get(t.Context(), sealedTarget.RevisionID); err != nil || !held {
+		t.Errorf("the sealed revision was not kept (held=%v err=%v)", held, err)
+	}
+}
+
+// THIS NODE'S OWN UNSEALED COPY IS NAMED AS ITS OWN.
+//
+// The fleet can point at a revision this node already holds in the clear. That
+// is not a body somebody else published: the remedy is an import HERE, which
+// stores the document sealed, so the refusal says it is this node's own copy.
+//
+// Mutation: answer the local copy with the peer's wording and the case fails.
+func TestThisNodesOwnUnsealedCopyIsNamedAsItsOwn(t *testing.T) {
+	t.Parallel()
+	p := newPlane(t)
+	document := yamlToJSON(t, grownCompanyDoc)
+	id, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
+		Source: "test", CreatedBy: "operator", CreatedByKind: iam.ActorOperator,
+		Summary: "unsealed", Payload: document, CreatedAt: pinnedNow,
+	})
+	if err != nil {
+		t.Fatalf("store the revision: %v", err)
+	}
+	if _, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: id, Summary: "unsealed", Payload: document, At: pinnedNow,
+		Origin: anOrigin,
+	}); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	err = p.recon.Tick(t.Context())
+	if !errors.Is(err, secrets.ErrUnsealedWithKey) {
+		t.Fatalf("Tick = %v, want the unsealed-with-a-keyring refusal", err)
+	}
+	for _, says := range []string{"this node's own copy", id, "crewlet config import"} {
+		if !strings.Contains(err.Error(), says) {
+			t.Errorf("the refusal does not say %q: %v", says, err)
+		}
+	}
+	if strings.Contains(err.Error(), "forged") {
+		t.Errorf("this node's own copy was answered as a forgery: %v", err)
 	}
 }
 
@@ -865,10 +1075,23 @@ func TestAnApplyLeavesADurableTrail(t *testing.T) {
 	if len(got.AppliedSubsystems) == 0 {
 		t.Fatal("applied_subsystems is empty on a successful apply")
 	}
+	// `published` is last because it is what tells every open socket the
+	// company changed, and it must not say so until everything a socket
+	// reads has been rebuilt.
 	if got.AppliedSubsystems[0] != "secrets" ||
-		got.AppliedSubsystems[len(got.AppliedSubsystems)-1] != "scheduler" {
-		t.Errorf("subsystems = %v, want the apply's own order from secrets to scheduler",
+		got.AppliedSubsystems[len(got.AppliedSubsystems)-1] != "published" {
+		t.Errorf("subsystems = %v, want the apply's own order from secrets to published",
 			got.AppliedSubsystems)
+	}
+	// AND EACH IS NAMED ONCE. The trail is what a degraded apply is read
+	// back from, and a stage appearing twice reads as a retry that
+	// happened rather than as one list stated in two places.
+	seen := map[string]bool{}
+	for _, name := range got.AppliedSubsystems {
+		if seen[name] {
+			t.Errorf("subsystems = %v, want %q named once", got.AppliedSubsystems, name)
+		}
+		seen[name] = true
 	}
 	if !slices.Contains(got.AppliedSubsystems, "epoch") {
 		t.Errorf("subsystems = %v, want the epoch publish among them", got.AppliedSubsystems)
@@ -985,10 +1208,10 @@ func waitForApplied(t *testing.T, ch <-chan *events.Event) *events.Event {
 // whole feature.
 func TestAPeerConvergesOnARevisionItHasNeverSeen(t *testing.T) {
 	t.Parallel()
-	author := newPlane(t)
-	// A second node: its own database, the same coordination store. That is
-	// the shape of a fleet, and the only thing the two share.
-	peer := newPlane(t, func(o *engine.ReconcilerOptions) { o.Fleet = author.fleet })
+	// A second node: its own database, the same coordination store and
+	// the same keyring. That is the shape of a fleet, and the only things
+	// the two share.
+	author, peer := fleetPeers(t)
 
 	epoch := author.activate(t.Context(), t, grownCompanyDoc)
 	target, found, err := author.fleet.Target(t.Context())
@@ -1016,7 +1239,24 @@ func TestAPeerConvergesOnARevisionItHasNeverSeen(t *testing.T) {
 	if !adopted.Active {
 		t.Error("the adopted revision is not the peer's active one")
 	}
-	// The seats of the revision it converged on, not the one it booted with.
+	// AND IT NAMES WHO WROTE IT, AND HOW. The copy said `peer` from `fleet`,
+	// so the author was on the one node the write reached and nobody on every
+	// other — the history an operator reads depended on which node answered.
+	// The source is the writer's too: every pointer carries a complete origin
+	// ([coord.RevisionOrigin.Check]), so there is no `fleet` stand-in left to
+	// fall back to. Mutation: adopt as `peer` from `fleet` and this fails.
+	if adopted.CreatedBy != revisionAuthor || adopted.CreatedByKind != iam.ActorHuman ||
+		adopted.OperatorID != revisionCredential || adopted.Source != "test" {
+		t.Errorf("the peer's copy records %q/%q/%q from %q, want the writer's "+
+			"%s/human/%s from %q", adopted.CreatedBy, adopted.CreatedByKind,
+			adopted.OperatorID, adopted.Source, revisionAuthor, revisionCredential, "test")
+	}
+	// The settings and the seats of the revision it converged on, not the
+	// one it booted with.
+	if got := dayCeiling(peer.engine.Company()); got != 4242 {
+		t.Errorf("the peer's token budget is %d, want the revision it "+
+			"converged on", got)
+	}
 	if seats := peer.seats(t); !slices.Contains(seats, "designer") {
 		t.Errorf("the peer's seats are %v, want the revision it converged on", seats)
 	}
@@ -1282,6 +1522,16 @@ func TestTheProgressIsReadAsOneMoment(t *testing.T) {
 	}
 }
 
+// dayCeiling is a company's daily token ceiling, 0 where it declares none — the
+// one window [grownCompanyDoc] sets, so a revision's settings can be told from
+// the one before it.
+func dayCeiling(c *engine.Company) int {
+	if c == nil || c.Config == nil || c.Config.TokenBudget.Day == nil {
+		return 0
+	}
+	return *c.Config.TokenBudget.Day
+}
+
 // --- posture during an apply ------------------------------------------------
 
 // midApplyPlane is the control plane with a window INTO an attempt: the
@@ -1301,7 +1551,7 @@ type midApplyPlane struct {
 	withheld atomic.Pointer[string]
 }
 
-func (m *midApplyPlane) Payload(ctx context.Context, revisionID string) ([]byte, bool, error) {
+func (m *midApplyPlane) Payload(ctx context.Context, revisionID string) (json.RawMessage, bool, error) {
 	if fn := m.during.Load(); fn != nil {
 		(*fn)()
 	}
@@ -1325,10 +1575,12 @@ type sighting struct {
 
 // activateRemotely points the fleet at a revision this node's own store does
 // not hold, which is how every peer but the writer meets a revision — and
-// what makes the attempt fetch it through the window above.
+// what makes the attempt fetch it through the window above. It is SEALED, as
+// every writer of the fleet seals what it publishes: a peer refuses a body
+// that arrives through the coordination store in the clear.
 func activateRemotely(t *testing.T, p *plane, doc string) int64 {
 	t.Helper()
-	document := yamlToJSON(t, doc)
+	document := p.seal(t, yamlToJSON(t, doc))
 	published, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
 		RevisionID: newRevisionID(t), Summary: "revision", Payload: document,
 		At: pinnedNow, Origin: anOrigin,
@@ -1382,7 +1634,7 @@ func TestASuccessfulApplyIsNeverReportedAsADivergence(t *testing.T) {
 		seen = append(seen, sighting{at + " (" + where + ")", posture, e.Company() != nil})
 	}
 	window.observe(func() { look("before the swap") })
-	e.SetOnApplied(func(context.Context) { look("after the swap") })
+	e.SetOnCompanyPublished(func(context.Context) { look("after the swap") })
 
 	ctx, cancel := context.WithCancel(t.Context())
 	var polled []configplane.Posture
@@ -1468,7 +1720,8 @@ func TestAFailedApplyIsReportedOnceItConcludes(t *testing.T) {
 	ghost := newRevisionID(t)
 	window.withheld.Store(&ghost)
 	published, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
-		RevisionID: ghost, Summary: "ghost", At: pinnedNow, Origin: anOrigin,
+		RevisionID: ghost, Summary: "ghost", Payload: []byte("{}"), At: pinnedNow,
+		Origin: anOrigin,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1586,7 +1839,8 @@ func failEverywhere(t *testing.T, p *plane, window *midApplyPlane, attempts int)
 	ghost := newRevisionID(t)
 	window.withheld.Store(&ghost)
 	published, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
-		RevisionID: ghost, Summary: "ghost", At: pinnedNow, Origin: anOrigin,
+		RevisionID: ghost, Summary: "ghost", Payload: []byte("{}"), At: pinnedNow,
+		Origin: anOrigin,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1729,7 +1983,7 @@ func TestAHungApplyStaysLateAcrossANewActivation(t *testing.T) {
 		peerApplied(t, p, next, now())
 		hung = p.recon.Posture(t.Context())
 	}
-	e.SetOnApplied(func(context.Context) { once.Do(moveOn) })
+	e.SetOnCompanyPublished(func(context.Context) { once.Do(moveOn) })
 	if err := p.recon.Tick(t.Context()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}

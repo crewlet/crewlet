@@ -94,7 +94,7 @@ test("the phase is said as its word", () => {
 test("a working seat whose first round has not come back says so", () => {
   render(<SeatCard seat={seat()} agent={running("execute", -1)} nameOf={(k) => k} />);
   expect(screen.getByText("round 1")).toBeTruthy();
-  expect(screen.getByTitle(/first model round is in flight and has not come back/)).toBeTruthy();
+  expect(screen.getByTitle("First round in progress")).toBeTruthy();
   expect(screen.getByText("Ada Lovelace").closest("a")?.textContent).not.toContain("—");
 });
 
@@ -106,29 +106,40 @@ test("a seat two rounds in reads as its third round", () => {
   expect(screen.getByText("round 3")).toBeTruthy();
 });
 
+test("a seat card says its state with the badge's glyph and its pill, and no coloured edge", () => {
+  // A card in a state's colour beside a plate in the agent's own put two hues
+  // on one seat, so the edge stripe is gone and the badge carries the glyph.
+  const { container } = render(
+    <SeatCard seat={seat()} agent={running("execute")} nameOf={(k) => k} />,
+  );
+  const card = container.querySelector("a.seat-card")!;
+  expect(card.getAttribute("data-tone")).toBeNull();
+  expect(card.querySelector(".crewlet-avatar__status--working")).not.toBeNull();
+  expect(card.innerHTML).not.toContain("ring-");
+});
+
 test("a seat card links through seatPath, so an empty handle still reaches a page", () => {
   const { container } = render(
     <SeatCard seat={seat({ handle: "" })} agent={undefined} nameOf={(k) => k} />,
   );
-  // `#/agents/seats/` opens nothing. The seat screen resolves a NAME as well
+  // `#/company/org/seats/` opens nothing. The seat screen resolves a NAME as well
   // as a handle, which is why `seatPath` exists and why the peek this card sits
   // under has always fallen back; the href had not.
   expect(container.querySelector("a.seat-card")!.getAttribute("href")).toBe(
-    "#/agents/seats/Ada%20Lovelace",
+    "#/company/org/seats/Ada%20Lovelace",
   );
 });
 
 // A REFUSAL WITH THE ENGINE'S SENTENCE SAYS THE SENTENCE. The generic
-// `bad_params` banner blames the screen, which is right when the screen asked
-// wrong and wrong when a reader chose a window past the history — the engine's
-// words name the parameter either way, so they replace the guess.
+// `bad_params` banner says only that the engine refused; the engine's words
+// name the parameter, so they replace it.
 test("a bad_params refusal with the engine's sentence shows the sentence, not the guess", () => {
   render(<QueryState error="bad_params" detail="days=91 is past the ninety" loading={false} />);
   expect(
     screen.getByText(/The engine refused this request: days=91 is past the ninety/),
   ).toBeTruthy();
-  expect(screen.queryByText(/screen’s bug/)).toBeNull();
+  expect(screen.queryByText("The engine refused this request.")).toBeNull();
   cleanup();
   render(<QueryState error="bad_params" loading={false} />);
-  expect(screen.getByText(/screen’s bug to fix/)).toBeTruthy();
+  expect(screen.getByText("The engine refused this request.")).toBeTruthy();
 });

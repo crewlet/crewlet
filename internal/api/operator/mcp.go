@@ -28,7 +28,7 @@ const MCPPath = "/operator/mcp"
 
 // MCPPattern is the route the MCP transport is mounted at, on [MCPPath]: a
 // POST, because a transport that keeps no session has nothing for the other
-// two verbs of streamable HTTP to do (see [guardedMCP]). A GET, which asks for
+// two verbs of streamable HTTP to do (see [Server.MCPHandler]). A GET, which asks for
 // a server-to-client stream, and a DELETE, which ends a session, are answered
 // the mux's own 405 naming POST — the answer MCP's streamable-HTTP transport
 // gives a client for "this server offers no stream", and one carrying a code
@@ -41,36 +41,28 @@ const MCPPattern = "POST " + MCPPath
 // serverName is what an MCP client lists this server as.
 const serverName = "crewlet-operator"
 
-// mcpTransport is the catalogue as an MCP server, for an operator's own AI
+// mcpServer is one call's catalogue as an MCP server, for an operator's own AI
 // assistant.
 //
-// IT ADMITS AN UNBOUND TOKEN, which is the difference between this transport
-// and a person's: an assistant connected with a CI token or an ops-bot token
-// is a credential acting as itself, and every write it makes names that
-// credential as its author (see [WorkActor]).
-type mcpTransport struct {
-	srv *mcp.Server
-
-	// handler is the streamable-HTTP handler over srv, the guard's check in
-	// front of it — see [Server.MCPHandler] for why there is exactly one.
-	handler http.Handler
-}
-
-// newMCPTransport registers every catalogue tool on an MCP server, and builds
-// the one HTTP handler that serves it. The streams clients listen on are kept
-// in listeners, the node's one registry of them ([Listeners]).
-func newMCPTransport(s *Server, company string, listeners *Listeners) mcpTransport {
+// BUILT FOR THE REQUEST, from the catalogue the request found: the transport
+// is stateless ([Server.MCPHandler]), so there is no session a server built
+// once would serve and nothing a later one strands — save the stream a
+// listening client holds, which the node's one registry keeps ([Listeners]).
+func (s *Server) mcpServer(cat catalogue) *mcp.Server {
 	title := "Crewlet"
-	if name := strings.TrimSpace(company); name != "" {
+	if name := strings.TrimSpace(cat.company); name != "" {
 		title = name + " (Crewlet)"
 	}
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name: serverName, Title: title, Version: "1",
 	}, nil)
-	srv.AddReceivingMiddleware(listeners.receiving)
-	srv.AddSendingMiddleware(listeners.sending)
-	for _, tool := range s.catalogue.tools {
-		definition := &mcp.Tool{
+	// EVERY CALL'S SERVER KEEPS ITS LISTEN STREAMS IN THE NODE'S ONE
+	// REGISTRY, so an announcement that the node's tools changed reaches
+	// a stream held open on a catalogue no later call reads ([Listeners]).
+	srv.AddReceivingMiddleware(s.listeners.receiving)
+	srv.AddSendingMiddleware(s.listeners.sending)
+	for _, tool := range cat.tools {
+		srv.AddTool(&mcp.Tool{
 			Name:        tool.Name(),
 			Description: tool.Description(),
 			InputSchema: tool.Parameters(),
@@ -85,10 +77,9 @@ func newMCPTransport(s *Server, company string, listeners *Listeners) mcpTranspo
 			// had nothing to ask on.
 			Annotations: crewletmcp.SDKAnnotations(
 				builtin.AnnotationsFor(tool.Name())),
-		}
-		srv.AddTool(definition, handlerFor(s, tool.Name()))
+		}, s.handlerFor(cat, tool.Name()))
 	}
-	return mcpTransport{srv: srv, handler: guardedMCP(srv)}
+	return srv
 }
 
 // handlerFor adapts one catalogue tool to the MCP SDK's own signature.
@@ -96,15 +87,15 @@ func newMCPTransport(s *Server, company string, listeners *Listeners) mcpTranspo
 // BY NAME, THROUGH THE SERVER'S DISPATCH, rather than closing over the tool
 // value, so the MCP transport reaches a tool by exactly the path every other
 // transport does — and is audited by it — and there is no second handle on it
-// to fall out of step. An MCP call names no request, so its audit record
-// carries none.
+// to fall out of step. An MCP call names no operation of its own: a tracker
+// write mints one and answers it as `op_id`, which the assistant brings back
+// as an argument to finish the same write.
 //
-// THE OPERATOR ID COMES FROM THE REQUEST'S CREDENTIAL, carried on the
-// context by the auth middleware and read by the deps' own Actor function —
-// never from an argument. A caller that could name its own actor could file
-// work as anybody, which is the same rule a seat's tools follow and the same
-// reason.
-func handlerFor(s *Server, name string) mcp.ToolHandler {
+// WHO IS CALLING COMES FROM THE REQUEST'S CREDENTIAL, carried on the context
+// by the request guard and read by the catalogue's actor — never from an
+// argument. A caller that could name its own actor could file work as
+// anybody, which is the same rule a seat's tools follow and the same reason.
+func (s *Server) handlerFor(cat catalogue, name string) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		var args map[string]any
 		if len(req.Params.Arguments) > 0 {
@@ -112,18 +103,16 @@ func handlerFor(s *Server, name string) mcp.ToolHandler {
 				return nil, fmt.Errorf("operator: %s: bad arguments: %w", name, err)
 			}
 		}
-		result, served, err := s.dispatch(ctx, types.TransportMCP, "", name, args)
-		if !served {
-			// UNREACHABLE: the SDK dispatches only the names registered
-			// above, which are the catalogue's. Refused by name rather
-			// than trusted if it somehow is not.
-			return nil, fmt.Errorf("operator: %s is not in this company's catalogue", name)
-		}
+		result, err := s.run(ctx, cat, Call{
+			Transport: types.TransportMCP, Tool: name, Args: args,
+		})
 		if err != nil {
 			// A TRANSPORT ERROR, not a tool failure: the caller's context
-			// ended. The distinction is the SDK's own — a failed tool is
-			// an ordinary result with IsError, and reporting it as a
-			// protocol error would make a client retry a refusal.
+			// ended — or, unreachably, a name the SDK dispatched that the
+			// catalogue does not hold. The distinction is the SDK's own:
+			// a failed tool is an ordinary result with IsError, and
+			// reporting it as a protocol error would make a client retry
+			// a refusal.
 			return nil, err
 		}
 		return &mcp.CallToolResult{
@@ -135,13 +124,77 @@ func handlerFor(s *Server, name string) mcp.ToolHandler {
 
 // MCPHandler serves the MCP transport at [MCPPattern].
 //
-// THE SAME HANDLER ON EVERY CALL, built once with the server: the app asks its
-// surface for the catalogue on every request (the api package's
-// OperatorSurface) and nothing about a request changes how its transport is
-// configured. Nothing the handler holds is a client's — see [guardedMCP] — so
-// which handler answers a request, of which catalogue and on which node, is
-// never something a client can tell.
-func (s *Server) MCPHandler() http.Handler { return s.mcp.handler }
+// # STATELESS, so every call is decided by the request that carries it
+//
+// The SDK's stateful handler opens a SESSION on the initialize request and
+// serves every later request on that session through the context the
+// initialize request had — so the principal a tool call reads off its context
+// is whoever OPENED the session, not whoever sent the call. That made two
+// things true that must not be: a grant withdrawn mid-session went on working
+// for as long as the assistant stayed connected (the ceiling, a revoked
+// session and a removed token included), and any other credential presenting
+// the same Mcp-Session-Id header acted as the opener — a session id is an
+// opaque handle a client echoes, not a secret anybody proved.
+//
+// Stateless mode gives each POST a temporary session built from THAT
+// request's own context, so the guard's resolution of each request is the
+// resolution its tool call is decided on, and there is no session for a second
+// credential to ride. Nothing this surface serves needed the state: its
+// catalogue is read for each request and no tool here asks the client anything
+// back. The one thing it tells a client between its requests — that its tools
+// changed — goes down the stream a 2026-07-28 client opens as a POST of its
+// own, `subscriptions/listen`, whose session lives exactly as long as that one
+// request: ended by the client, by its connection dropping, or by the node's
+// listener shutting down ([Listeners.End]). Stateless is also what serves a
+// FLEET: a session is held by the one node that opened it, so behind a load
+// balancer with no affinity every other ingress node refused it, and the MCP
+// client this repository ships reads that refusal as the end of its
+// connection.
+//
+// # Three answers before any tool runs
+//
+// A node that has not been handed a company answers `503
+// no_active_revision`; one whose catalogue is empty — no native half, no
+// search, no seat controls — answers as the route's absence would, since an
+// endpoint that lists no tools reads to an operator as broken; and anything
+// else is served over the catalogue the request found.
+//
+// MOUNTED AT [MCPPattern], a POST: a GET for the server-to-client stream and a
+// DELETE to end a session are answered the mux's own 405 naming POST before
+// anything here runs — the transport's documented way of saying "this server
+// offers no stream", in the engine's envelope rather than the SDK's plain text.
+// Served bare, as a suite serves it, the SDK's stateless handler answers both
+// 405 too, so neither verb reaches a tool whichever way the handler is mounted.
+func (s *Server) MCPHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// THE GUARD IS THE APP'S, not a second one here: this path is not
+		// on the guard's exemption list, so a request that reaches this
+		// handler carries the guard's answer. Read through [auth.Caller]
+		// so its two failures stay apart — a caller who presented nothing
+		// is a 401, and one this node could not CHECK is a 503 — and a
+		// request with no answer at all, which only a route mounted around
+		// the guard could deliver, is refused rather than trusted: this
+		// surface writes to the company, and a write with no writer is the
+		// one thing it must never record.
+		if _, ok := auth.Caller(w, r); !ok {
+			return
+		}
+		cat, up := s.catalogueFor()
+		switch {
+		case !up:
+			httpjson.NoActiveRevision(w, httpjson.Detail{
+				"detail": httpjson.NativeHalvesNotUp})
+			return
+		case len(cat.tools) == 0:
+			httpjson.NoRoute(w, r)
+			return
+		}
+		srv := s.mcpServer(cat)
+		mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv },
+			&mcp.StreamableHTTPOptions{Stateless: true, MaxRequestBodyBytes: MCPMaxBody}).
+			ServeHTTP(w, r)
+	})
+}
 
 // MCPMaxBody bounds one MCP request's body.
 //
@@ -155,68 +208,3 @@ func (s *Server) MCPHandler() http.Handler { return s.mcp.handler }
 // does not fit goes up through `PUT /work/files/{project}/{path...}`, which
 // streams its body to the object store instead of holding it.
 const MCPMaxBody = 4 << 20
-
-// guardedMCP is srv's one streamable-HTTP handler, behind a check that the
-// app's guard has run — see [Server.MCPHandler].
-//
-// STATELESS: each request is served by a session made for it and closed when
-// it ends, and nothing — no session, no goroutine, no Mcp-Session-Id — is kept
-// between two of them. The transport's sessions were state this surface never
-// used: a tool call reads its credential off its own request and its
-// arguments off its own body, and nothing here sends a client progress, a log
-// line, a sampling request or an elicitation. Kept, they cost three things.
-// A FLEET'S INGRESS NODES behind a load balancer with no affinity — a shape
-// the fleet guide draws — each answered a session another node had opened
-// with a 404, so of N nodes (N−1)/N of an assistant's requests were refused,
-// and every node kept the session it had opened for a client that would never
-// reach it again. A CATALOGUE THE NODE BUILT AGAIN (the api package's
-// EngineOperators: a first apply, a knowledge backend added or removed, a
-// rename) ended every session opened on the one it replaced. And an ENDED
-// SESSION is the end of the connection for the MCP client this repository
-// ships, which reads that 404 as terminal where MCP's spec has a client open a
-// new session — so each of those was a broken connection to an operator's
-// assistant, as was the expiry any idle bound would have added, while with no
-// bound a client that crashed held its session for the life of the process.
-// Stateless, any node and any catalogue answers any request. A 2026-07-28
-// client's `subscriptions/listen` is ONE request held open, and its session
-// lives exactly as long as that request — ended by the client, by its
-// connection dropping, or by the node's listener shutting down
-// ([Listeners.End]); what it is for is [Listeners].
-//
-// What it costs is that per-request session, as the SDK builds one: the body
-// read whole, bounded by [MCPMaxBody]; a JSON-RPC connection over it, which
-// starts three goroutines — its reader, its handler queue and the one running
-// the method — and ends them with the request; and the session registered on
-// the catalogue's server and removed again, each under that server's one
-// mutex, the removal a scan of every session the server holds — every request
-// in flight on it and every stream held open on it. That is a linear term in
-// the listeners parked on one catalogue, which at an operator's scale — a
-// handful of assistants — is a few comparisons beside a tool call that crosses
-// the estate router.
-func guardedMCP(srv *mcp.Server) http.Handler {
-	streamable := mcp.NewStreamableHTTPHandler(
-		func(*http.Request) *mcp.Server { return srv },
-		&mcp.StreamableHTTPOptions{Stateless: true, MaxRequestBodyBytes: MCPMaxBody})
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// THE GUARD IS THE APP'S, not a second one here: this path is in
-		// [auth.GuardedPrefixes], so a request that reaches this handler
-		// has already presented a valid operator token. Reading the id
-		// off the context rather than re-checking it is what keeps one
-		// decision about who may write.
-		operator, ok := auth.OperatorFrom(r.Context())
-		if !ok || operator == "" {
-			// UNREACHABLE if the guard is mounted, and refused rather
-			// than trusted if it somehow is not: this surface writes to
-			// the company, and a write with no writer is the one thing
-			// it must never record. Refused as JSON with the guard's own
-			// code, like every refusal this engine writes: a client reads
-			// an answer with no code as something in front of the node.
-			log.WarnContext(r.Context(), "operator_mcp_unguarded",
-				"detail", "a request reached the operator MCP surface with no "+
-					"operator on its context; the auth guard is not in front of it")
-			httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
-			return
-		}
-		streamable.ServeHTTP(w, r)
-	})
-}

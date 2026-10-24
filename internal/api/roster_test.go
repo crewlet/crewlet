@@ -6,11 +6,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // The three surfaces the dashboard renders from CONFIGURATION.
@@ -64,8 +68,27 @@ func rosterAppWith(t *testing.T, runtime api.NodeRuntime, leases coord.Backend) 
 	}
 	return newApp(t, api.Options{
 		Runtime: runtime,
-		Sources: queries.Sources{Company: func() *config.Company { return c }, Coord: leases},
+		Sources: queries.Sources{Company: companySource(t, c), Coord: leases},
 	})
+}
+
+// rosterSeatID is the agent id the roster company derives for the seat with
+// this handle — the name a seat's lease is held under.
+func rosterSeatID(t *testing.T, handle string) uuid.UUID {
+	t.Helper()
+	c, err := config.ParseCompany([]byte(rosterCompany))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	o, err := c.Organization()
+	if err != nil {
+		t.Fatalf("org: %v", err)
+	}
+	id, ok := o.AgentIDFor(o.Role(handle))
+	if !ok {
+		t.Fatalf("no agent id for %q", handle)
+	}
+	return id
 }
 
 // object re-decodes a snapshot value through JSON into an object, which is how
@@ -102,7 +125,7 @@ func TestTheSnapshotCarriesTheCompanysSeats(t *testing.T) {
 	t.Parallel()
 	a := rosterApp(t, &fakeRuntime{})
 
-	got := rows(t, a.Stream().Snapshot()["agents"])
+	got := rows(t, a.Stream().Snapshot(everyRead)["agents"])
 	if len(got) != 2 {
 		t.Fatalf("roster = %v, want the two AGENT seats", got)
 	}
@@ -116,13 +139,17 @@ func TestTheSnapshotCarriesTheCompanysSeats(t *testing.T) {
 		if !ok {
 			t.Fatalf("seat %q is missing from the roster: %v", handle, got)
 		}
-		// The client keys every merge on `role` and links on `id`. A row
-		// without them is a card that never receives its live overlay.
+		// The client merges every overlay on `agent_id`, links on `id` and
+		// prints `role`. A row without the first is a card that never
+		// receives its live overlay.
+		if id, _ := row["agent_id"].(string); id == "" {
+			t.Errorf("seat %q has no agent id: %v", handle, row)
+		}
 		if row["role"] == "" || row["role"] == nil {
 			t.Errorf("seat %q has no role: %v", handle, row)
 		}
 		if id, _ := row["id"].(string); id == "" {
-			t.Errorf("seat %q has no agent id: %v", handle, row)
+			t.Errorf("seat %q has no id to link on: %v", handle, row)
 		}
 	}
 	// A seat nested in a unit is still a seat. The org tree is walked, so a
@@ -168,7 +195,7 @@ func TestEverySeatHeldAnywhereCarriesAState(t *testing.T) {
 			t.Parallel()
 			leases := coordmemory.New()
 			for _, handle := range tc.peer {
-				lease, _, err := leases.TryAcquire(t.Context(), coord.SeatResource(handle),
+				lease, _, err := leases.TryAcquire(t.Context(), coord.SeatResource(rosterSeatID(t, handle)),
 					coord.AcquireOptions{Owner: "node-b:1", TTL: time.Minute})
 				if err != nil || lease == nil {
 					t.Fatalf("a peer could not claim %s: %v", handle, err)
@@ -177,7 +204,7 @@ func TestEverySeatHeldAnywhereCarriesAState(t *testing.T) {
 			a := rosterAppWith(t, &fakeRuntime{state: api.RuntimeState{Seats: tc.local}}, leases)
 
 			byHandle := map[string]map[string]any{}
-			for _, row := range rows(t, a.Stream().Snapshot()["agents"]) {
+			for _, row := range rows(t, a.Stream().Snapshot(everyRead)["agents"]) {
 				handle, _ := row["handle"].(string)
 				byHandle[handle] = row
 			}
@@ -198,6 +225,61 @@ func TestEverySeatHeldAnywhereCarriesAState(t *testing.T) {
 				t.Errorf("the row still carries the retired `state` word: %v", cto)
 			}
 		})
+	}
+}
+
+// A SEAT IS PLACED BY ITS OWN LEASE, named by its agent id. Two seats may share
+// a name — a name is prose — and keyed by it, the lease one Engineer's node
+// holds placed both, so the Engineer no node runs read as idle on every
+// screen.
+//
+// Mutation: key the placement by role name, and bob reads idle.
+func TestASeatIsPlacedByItsOwnLease(t *testing.T) {
+	t.Parallel()
+	c, err := config.ParseCompany([]byte(`
+name: Acme
+providers:
+  llm:
+    zulu:
+      type: anthropic
+      model: claude-sonnet-5
+      api_keys: ["${K}"]
+roles:
+  - name: Engineer
+    handle: ada
+    llm: zulu
+  - name: Engineer
+    handle: bob
+    llm: zulu
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	o, err := c.Organization()
+	if err != nil {
+		t.Fatalf("org: %v", err)
+	}
+	ada, _ := o.AgentIDFor(o.Role("ada"))
+	leases := coordmemory.New()
+	if lease, _, err := leases.TryAcquire(t.Context(), coord.SeatResource(ada),
+		coord.AcquireOptions{Owner: "node-b:1", TTL: time.Minute}); err != nil || lease == nil {
+		t.Fatalf("a peer could not claim ada: %v", err)
+	}
+	a := newApp(t, api.Options{
+		Runtime: &fakeRuntime{},
+		Sources: queries.Sources{Company: companySource(t, c), Coord: leases},
+	})
+	byHandle := map[string]map[string]any{}
+	for _, row := range rows(t, a.Stream().Snapshot(everyRead)["agents"]) {
+		handle, _ := row["handle"].(string)
+		byHandle[handle] = row
+	}
+	if got := byHandle["ada"]["activity"]; got != "idle" {
+		t.Errorf("ada, whose lease a peer holds, reads %v, want idle", got)
+	}
+	if got := byHandle["bob"]; got["activity"] != "stopped" || got["stopped_reason"] != "unplaced" {
+		t.Errorf("bob, whom no node holds, reads %v (%v), want stopped/unplaced",
+			got["activity"], got["stopped_reason"])
 	}
 }
 
@@ -242,7 +324,7 @@ func TestPlacingTheSeatsReadsNoPosture(t *testing.T) {
 func TestAnUnreadableLeaseTableClaimsNoSeatIsUnplaced(t *testing.T) {
 	t.Parallel()
 	a := rosterAppWith(t, &fakeRuntime{}, unreadableLeases{coordmemory.New()})
-	for _, row := range rows(t, a.Stream().Snapshot()["agents"]) {
+	for _, row := range rows(t, a.Stream().Snapshot(everyRead)["agents"]) {
 		if row["activity"] != "idle" {
 			t.Errorf("seat %v reads %v over a lease table nobody could read, want idle",
 				row["handle"], row["activity"])
@@ -266,7 +348,7 @@ func TestTheSnapshotCarriesTheOrgTree(t *testing.T) {
 	t.Parallel()
 	a := rosterApp(t, &fakeRuntime{})
 
-	org := object(t, a.Stream().Snapshot()["org"])
+	org := object(t, a.Stream().Snapshot(everyRead)["org"])
 	if org["name"] != "Acme" {
 		t.Errorf("org name = %v, want the company's own", org["name"])
 	}
@@ -304,7 +386,7 @@ func TestTheSnapshotCarriesTheToolCatalogue(t *testing.T) {
 		{Name: "tracker_search", Description: "find work", Source: "tracker"},
 	}})
 
-	got := rows(t, a.Stream().Snapshot()["tools"])
+	got := rows(t, a.Stream().Snapshot(everyRead)["tools"])
 	if len(got) != 2 {
 		t.Fatalf("tools = %v, want both", got)
 	}
@@ -344,7 +426,7 @@ func TestTheCatalogueCarriesWhatEachToolDoes(t *testing.T) {
 		},
 	}})
 
-	got := rows(t, a.Stream().Snapshot()["tools"])
+	got := rows(t, a.Stream().Snapshot(everyRead)["tools"])
 	if len(got) != 2 {
 		t.Fatalf("tools = %v", got)
 	}
@@ -389,10 +471,10 @@ func TestAnEngineWithNoToolsStillServesTheRoster(t *testing.T) {
 	t.Parallel()
 	a := rosterApp(t, &fakeRuntime{})
 
-	if got := rows(t, a.Stream().Snapshot()["tools"]); len(got) != 0 {
+	if got := rows(t, a.Stream().Snapshot(everyRead)["tools"]); len(got) != 0 {
 		t.Errorf("tools = %v from an engine serving none", got)
 	}
-	if got := rows(t, a.Stream().Snapshot()["agents"]); len(got) != 2 {
+	if got := rows(t, a.Stream().Snapshot(everyRead)["agents"]); len(got) != 2 {
 		t.Errorf("an engine with no tools lost the roster: %v", got)
 	}
 }
@@ -403,7 +485,7 @@ func TestANodeWithNoCompanyAnswersEmptySurfaces(t *testing.T) {
 	t.Parallel()
 	a := newApp(t, api.Options{})
 
-	snap := a.Stream().Snapshot()
+	snap := a.Stream().Snapshot(everyRead)
 	for _, key := range []string{"agents", "org", "tools"} {
 		if _, present := snap[key]; !present {
 			t.Errorf("snapshot is missing %q; the client reads all three", key)
@@ -433,7 +515,7 @@ func TestTheSnapshotCarriesTheConfiguredSchedules(t *testing.T) {
 	t.Parallel()
 	a := rosterApp(t, &fakeRuntime{})
 
-	snap := a.Stream().Snapshot()
+	snap := a.Stream().Snapshot(everyRead)
 	if _, present := snap["schedules"]; !present {
 		t.Fatal("the snapshot carries no schedules slice, so the screen " +
 			"cannot tell 'none configured' from 'not loaded yet'")
@@ -463,3 +545,7 @@ func TestTheSchedulesPushCarriesOnlyTheConfiguredHalf(t *testing.T) {
 			"ledger the screen fetched for itself")
 	}
 }
+
+// everyRead is an admin's audience: the snapshot these tests inspect is the
+// whole bundle — every key, every seat's body — not one reader's slice of it.
+var everyRead = stream.NewAudience(iam.Principal{Grants: []iam.Grant{iam.GrantAdmin}}, nil)

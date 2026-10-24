@@ -7,34 +7,38 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// A UNIT'S LEAD IS NAMED BY THEIR SEAT'S OWN HANDLE — the one [org.Role.Handle]
-// derives — and never by a second derivation of its own.
+// A UNIT'S LEAD IS NAMED BY THE SEAT'S OWN HANDLE, in the document and in
+// this resolver alike — never by a second derivation of its own.
 //
-// This resolver slugified the lead's DISPLAY NAME, which agrees with the
-// accessor on exactly the seats whose operator declared no handle and
-// disagrees on every other: a unit led by "Ada Okonkwo" with `handle: ada`
-// resolved to `ada-okonkwo`, which is nobody in the chart. Nothing downstream
-// could tell that from a lead who simply has no seat — the handle could not be
-// looked up, filtered on, asked, or opened as a person, and every one of those
+// `lead:` holds the handle, so there is one identity and one lookup. It used
+// to hold a DISPLAY NAME, which agrees with the handle on exactly the seats
+// whose operator declared none and disagrees on every other: a unit led by
+// "Ada Okonkwo" with `handle: ada` was resolved by slugifying the name to
+// `ada-okonkwo`, which is nobody in the chart. Nothing downstream could tell
+// that from a lead who simply has no seat — the handle could not be looked
+// up, filtered on, asked, or opened as a person, and every one of those
 // failed by finding nothing rather than by erroring.
-func TestAProjectsLeadIsNamedByTheSeatsOwnHandle(t *testing.T) {
+//
+// THE DECLARED HANDLE AND THE SLUG OF THE NAME DIFFER in every case here,
+// which is the whole point: with them equal this test cannot fail, and the
+// old slugify path would pass it.
+func TestALeadWithAnExplicitHandleResolves(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{
-		Name: "Platform", Lead: "Ada Okonkwo",
+		Name: "Platform", ID: "platform", Lead: "ada",
 		Roles: []*org.Role{
-			// THE DECLARED HANDLE AND THE SLUG OF THE NAME DIFFER, which
-			// is the whole case: with them equal this test cannot fail.
 			{Name: "Ada Okonkwo", DeclaredHandle: "ada", Kind: org.KindHuman},
 		},
 	}}}
 	o.Normalize()
 
-	unit, found := ChartUnits(o).ResolveUnit("Platform")
+	unit, found := ChartUnits(o).ResolveUnit("platform")
 	if !found {
-		t.Fatal("Platform did not resolve")
+		t.Fatal("the unit did not resolve by its key")
 	}
 	if unit.Name != "Platform" {
-		t.Errorf("display = %q, want Platform", unit.Name)
+		t.Errorf("display = %q, want Platform — the key resolves, the NAME is "+
+			"what a person reads", unit.Name)
 	}
 	lead := unit.Lead
 	if lead.Handle != "ada" {
@@ -46,6 +50,49 @@ func TestAProjectsLeadIsNamedByTheSeatsOwnHandle(t *testing.T) {
 	if lead.Kind != tracker.AuthorHuman {
 		t.Errorf("lead.Kind = %q, want %q", lead.Kind, tracker.AuthorHuman)
 	}
+	// THE CONTROL, stated rather than implied: the seat is not reachable by
+	// the slug of its name, so a resolver taking that path answers nobody.
+	if o.Role(org.Slugify("Ada Okonkwo")) != nil {
+		t.Fatal("the slug of the display name resolves to a seat, so this " +
+			"case cannot tell the two derivations apart")
+	}
+}
+
+// A UNIT THAT DECLARES NO ID STILL RESOLVES ITS LEAD, because its KEY falls
+// back to its name and the key is what a stored row holds.
+//
+// This is the other half of the same confusion, and it read as working: the
+// live resolver compared the stored value against each unit's `id` FIELD,
+// which is empty on every unit that has not been given one — so a company
+// that had not adopted ids had a unit lead that answered nobody, and
+// unassigned work routed to no one while looking correctly filed.
+func TestAUnitWithNoExplicitIdResolvesItsLead(t *testing.T) {
+	t.Parallel()
+	unit := &org.Unit{
+		Name: "Platform", Lead: "ada",
+		Roles: []*org.Role{{Name: "Ada Okonkwo", DeclaredHandle: "ada"}},
+	}
+	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{unit}}
+	o.Normalize()
+
+	// THE CONTROL: the id field is empty, so anything keyed on it matches
+	// nothing, while the key is the name.
+	if unit.ID != "" {
+		t.Fatal("the unit declares an id, so this case proves nothing")
+	}
+	if unit.Key() != "Platform" {
+		t.Fatalf("Key() = %q, want the name to stand in for an absent id", unit.Key())
+	}
+
+	if resolved, found := ChartUnits(o).ResolveUnit(unit.Key()); !found ||
+		resolved.Lead.Handle != "ada" {
+		t.Errorf("ResolveUnit(%q) lead = %+v (found %v), want ada",
+			unit.Key(), resolved.Lead, found)
+	}
+	if got := o.EffectiveLead(o.Unit(unit.Key())); got == nil || got.Handle() != "ada" {
+		t.Errorf("the unit lead resolved to %v, want ada — a wake routed to "+
+			"this unit would reach nobody", got)
+	}
 }
 
 // AN INHERITED LEAD IS RESOLVED THE SAME WAY. The ancestor's seat is still a
@@ -53,39 +100,37 @@ func TestAProjectsLeadIsNamedByTheSeatsOwnHandle(t *testing.T) {
 func TestAnInheritedLeadKeepsItsOwnHandleToo(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{
-		Name: "Platform", Lead: "Ada Okonkwo",
+		Name: "Platform", ID: "platform", Lead: "ada",
 		Roles:    []*org.Role{{Name: "Ada Okonkwo", DeclaredHandle: "ada", Kind: org.KindHuman}},
-		Children: []*org.Unit{{Name: "Navigation"}},
+		Children: []*org.Unit{{Name: "Navigation", ID: "navigation"}},
 	}}}
 	o.Normalize()
 
-	if unit, found := ChartUnits(o).ResolveUnit("Navigation"); !found ||
+	if unit, found := ChartUnits(o).ResolveUnit("navigation"); !found ||
 		unit.Lead.Handle != "ada" {
 		t.Errorf("Navigation's lead = %+v (found %v), want ada inherited from "+
 			"Platform", unit.Lead, found)
 	}
 }
 
-// THE SEAM ANSWERS EITHER SPELLING AND HANDS BACK THE KEY, which is the whole
-// of what the two halves of this need: a write stores the key, so that a
-// rename does not move the work, and a screen renders the name.
+// THE SEAM ANSWERS ANY SPELLING AND HANDS BACK THE KEY, which is the whole of
+// what the two halves of this need: a write stores the key, and a screen
+// renders the name.
 //
-// It resolved through an EXACT, case-sensitive name match, so `unit:
-// engineering` on a company with a unit named "Engineering" was refused with
-// "This company has no team", and a unit's id resolved to nothing at all —
-// which is the id being unusable everywhere it is supposed to be the durable
-// spelling.
+// It resolved through an EXACT, case-sensitive match, so `unit: engineering`
+// on a company with a unit named "Engineering" was refused with "This company
+// has no team".
 func TestTheUnitSeamAnswersEitherSpellingWithTheKey(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{
-		ID: "plat", Name: "Platform", Lead: "Ada Okonkwo",
+		ID: "plat", Name: "Platform", Lead: "ada",
 		Roles: []*org.Role{
 			{Name: "Ada Okonkwo", DeclaredHandle: "ada", Kind: org.KindHuman},
 		},
 	}, {
-		// A UNIT WITH NO ID, whose key IS its name — the shape every
-		// company has until somebody opts in.
-		Name: "Navigation", Lead: "Ada Okonkwo",
+		// A UNIT WITH NO ID, whose key IS its name — a tree built in Go,
+		// or a revision stored before the chart minted ids.
+		Name: "Navigation", Lead: "ada",
 	}}}
 	o.Normalize()
 
@@ -116,19 +161,18 @@ func TestTheUnitSeamAnswersEitherSpellingWithTheKey(t *testing.T) {
 	}
 }
 
-// THE UNIT-LEAD FALLBACK RESOLVES ON A COMPANY THAT GAVE ITS UNITS NO IDS,
-// which is every company that did not opt into them — the shipped example
-// included.
+// THE UNIT-LEAD FALLBACK RESOLVES ON A UNIT THE CHART GAVE NO ID, whose key is
+// its name.
 //
-// `id` is optional and [org.Unit.Key] falls back to the name, so the string a
-// task's routing unit holds is the NAME on such a company. Matching the id
-// alone compared it against "" and found nothing: the fallback that reaches a
-// unit's lead when a change named nobody else reached NOBODY, and a wake that
-// went to no one is indistinguishable from a unit whose lead is unset.
+// `id` falls back to the name ([org.Unit.Key]), so the string a task's routing
+// unit holds is the NAME on such a unit. Matching the id alone compared it
+// against "" and found nothing: the fallback that reaches a unit's lead when a
+// change named nobody else reached NOBODY, and a wake that went to no one is
+// indistinguishable from a unit whose lead is unset.
 func TestAUnitsLeadResolvesByItsNameWhenItHasNoID(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{
-		Name: "Platform", Lead: "Ada Okonkwo",
+		Name: "Platform", Lead: "ada",
 		Roles: []*org.Role{
 			{Name: "Ada Okonkwo", DeclaredHandle: "ada", Kind: org.KindHuman},
 		},
@@ -145,15 +189,13 @@ func TestAUnitsLeadResolvesByItsNameWhenItHasNoID(t *testing.T) {
 	}
 }
 
-// AND BY EITHER SPELLING ONCE IT HAS ONE. The id is what a row holds from the
-// moment a founder adds it; the name is what every row written before that
-// keeps, because a task's filed unit is a record of what was true and nothing
-// rewrites it. Both have to reach the lead, or adding an id silences the
-// fallback for every task already filed.
-func TestAUnitsLeadResolvesByItsIDAndByItsName(t *testing.T) {
+// AND BY EVERY SPELLING A ROW MAY HOLD: its key, the key folded, and its name.
+// A task's routing unit is a record of what was true and nothing rewrites it,
+// so every one of them has to reach the lead.
+func TestAUnitsLeadResolvesByEverySpellingARowMayHold(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{
-		ID: "plat", Name: "Platform", Lead: "Ada Okonkwo",
+		ID: "platform", Name: "Platform", Lead: "ada",
 		Roles: []*org.Role{
 			{Name: "Ada Okonkwo", DeclaredHandle: "ada", Kind: org.KindHuman},
 		},
@@ -163,7 +205,7 @@ func TestAUnitsLeadResolvesByItsIDAndByItsName(t *testing.T) {
 	}}}
 	o.Normalize()
 
-	for _, unit := range []string{"plat", "Platform", "PLAT", "nav", "Navigation"} {
+	for _, unit := range []string{"platform", "Platform", "PLATFORM", "nav", "Navigation"} {
 		if got := UnitLeadOf(o, unit); got != "ada" {
 			t.Errorf("the lead of %q is %q, want ada", unit, got)
 		}
@@ -175,9 +217,8 @@ func TestAUnitsLeadResolvesByItsIDAndByItsName(t *testing.T) {
 //
 // The project row is what every task filed into it takes its filed unit from,
 // and a filed unit is never rewritten. So writing the NAME here filed the
-// company's work under a spelling that moves the day somebody renames the
-// team — which is precisely what `id:` exists to prevent, on the one path
-// that writes most of it.
+// company's work under a spelling that moves the day somebody corrects the
+// team's name, on the one path that writes most of it.
 func TestTheChartFilesAProjectUnderTheUnitsKey(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{

@@ -34,11 +34,15 @@ type Envelope struct {
 	Topic        string         `json:"topic"`
 	Payload      map[string]any `json:"payload,omitempty"`
 
-	// AgentID is the seat the event concerns, by the id every node derives
-	// for it — the store's promoted `agent_id`, read by the ONE rule that
-	// fills that column (store.ExtractTags), so a screen narrowing its live
-	// rows to one seat (`seat=`) narrows them exactly as the store narrows
-	// the rows it pages in. Empty for an event about no seat.
+	// AgentID is the agent seat the event is about, when it is about one —
+	// by the id every node derives for it, read by the ONE rule that fills
+	// the store's promoted `agent_id` column (store.ExtractTags), so the row
+	// a feed lists carries it whether it arrived live or from the store
+	// (store.EventRecord.AgentID), and a screen narrowing its live rows to
+	// one seat narrows them exactly as the store narrows the rows it pages
+	// in. Filtered on the actor instead, which is the seat's NAME, a feed
+	// listed a namesake's events as this seat's. Empty for an event about no
+	// seat.
 	AgentID string `json:"agent_id,omitempty"`
 
 	// ChannelID is the agent-to-agent channel the event belongs to — the
@@ -79,7 +83,7 @@ type FeedRow struct {
 	ParentSpanID string `json:"parent_span_id"`
 	Topic        string `json:"topic"`
 	Failed       bool   `json:"failed"`
-	// AgentID is the seat the event concerns — see [Envelope.AgentID].
+	// AgentID is [Envelope.AgentID], carried onto the payload-free row.
 	AgentID string `json:"agent_id,omitempty"`
 	// ChannelID is the A2A channel the event belongs to — see
 	// [Envelope.ChannelID].
@@ -245,9 +249,9 @@ type LiveCall struct {
 // calendar window, as the engine's `budget_meters` frame states it.
 //
 // The fleet's SHARED counters as the gate enforces them: every node's spend in
-// the window on the company's clock, against the ceiling in the active
-// revision, with the gate's own refusal stamp and the engine's judgement of the
-// window ([types.BudgetState]). It is never to be compared with a spend rollup
+// the window on the company's clock, against the ceiling in force — the
+// company's from its own block, a seat's from the seat's — with the gate's own
+// refusal stamp and the engine's judgement of the window ([types.BudgetState]). It is never to be compared with a spend rollup
 // beside it on the same screen, which covers a window of time a reader chose
 // rather than the calendar window a ceiling is written for.
 type BudgetMeter struct {
@@ -277,7 +281,14 @@ func (m BudgetMeter) MarshalJSON() ([]byte, error) {
 // way from the frame to the push.
 type WindowMeter = types.BudgetWindow
 
-// Overlay is the live half of an agent row, merged onto its static config row.
+// Overlay is the live half of an agent row, merged onto its static config row
+// by the seat's agent id.
+//
+// THERE IS NO `runtime_id`. It named "the running instance" and carried
+// whatever the last event put under `agent_id` — the seat's derived id from a
+// turn, its handle from a spawn — so one field read two things on one seat;
+// and the one it usually read is the id the row is keyed by, which the roster
+// row already carries.
 type Overlay struct {
 	// Activity is what the seat is doing, in the one vocabulary every
 	// surface reads — see activity.go. ALWAYS PRESENT: every seat has one.
@@ -289,7 +300,6 @@ type Overlay struct {
 	// again wearing the reason it had stopped for.
 	StoppedReason *StoppedReason `json:"stopped_reason"`
 
-	RuntimeID        string    `json:"runtime_id"`
 	CurrentPhase     *string   `json:"current_phase"`
 	CurrentIteration int       `json:"current_iteration"`
 	LiveCall         *LiveCall `json:"live_call"`
@@ -429,6 +439,10 @@ type LastTurn struct {
 }
 
 // SandboxEntry is one in-flight detached coding run.
+//
+// AgentID is what pairs a run with its seat's row. Role and AgentHandle are
+// what the seat was called when the run started, for a reader with no roster
+// row to name it from — never a key, since a name is shared and a handle moves.
 type SandboxEntry struct {
 	TurnID      string `json:"turn_id"`
 	Role        string `json:"role"`
@@ -447,6 +461,20 @@ type SandboxEntry struct {
 	// Question and Audience appear once a run pauses on a clarification.
 	Question string `json:"question,omitempty"`
 	Audience string `json:"audience,omitempty"`
+
+	// AudienceHandles are the seats the parked question may be answered by
+	// ([sandbox.PendingRun.AudienceHandles]), which is who is shown the
+	// question whatever their reach to the seat that asked it
+	// ([SandboxEntry.For]). NEVER ON THE WIRE: it names people, and what a
+	// reader is told is only whether they were shown the question. Filled
+	// from the durable run record; an entry built from the events alone
+	// holds none until the next reconcile reads it.
+	AudienceHandles []string `json:"-"`
+
+	// BodyWithheld is whether this entry reached its reader without what
+	// the run was asked, and the question it parked on, because neither is
+	// theirs to read — see [SandboxEntry.For].
+	BodyWithheld bool `json:"body_withheld,omitempty"`
 
 	// WorkItem is the item the launching turn is charged to, absent when
 	// it is on nothing — so a panel can say what a box is working on
@@ -535,6 +563,7 @@ type OrgBudget struct {
 // named here did not move and is not re-sent — which is the whole point, since
 // a dashboard should mirror this projection rather than re-implement it.
 type Change struct {
+	// Agents are the agent ids of the seats that moved.
 	Agents    map[string]struct{}
 	Sandboxes bool
 	Tokens    bool
@@ -547,11 +576,11 @@ func (c Change) Moved() bool {
 	return len(c.Agents) > 0 || c.Sandboxes || c.Tokens || c.Events || c.Budget
 }
 
-func (c *Change) agentMoved(role string) {
+func (c *Change) agentMoved(agentID string) {
 	if c.Agents == nil {
 		c.Agents = map[string]struct{}{}
 	}
-	c.Agents[role] = struct{}{}
+	c.Agents[agentID] = struct{}{}
 }
 
 // --- payload accessors ------------------------------------------------- //

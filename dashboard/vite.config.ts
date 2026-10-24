@@ -10,7 +10,8 @@
 // same idiom `go mod tidy -diff` and the generated `schema/` already use.
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // The notices for everything the built dashboard redistributes, served beside it
@@ -198,17 +199,42 @@ function sourceNotices(): Plugin {
 // internal/api's TestTheDesignSystemCascadesInOrder fails a lazy stylesheet
 // that carries one. `enforce: "pre"` so the answers are given before Vite's
 // own resolver and loader see the files; both key on the RESOLVED path, so
-// the dev server's pre-bundled copy of the kit is answered as the build is.
+// the dev server's pre-bundled copy of the kit is answered as the build is —
+// and judge it by the REAL path, see isComponentSheet.
 const DESIGN_SYSTEM_SHEET = "virtual:crewlet-design-system.css";
 const DESIGN_SYSTEM_ID = `\0${DESIGN_SYSTEM_SHEET}`;
 const EMPTIED_ID = "\0crewlet-design-system-sheet-already-loaded";
 const UI_DIST = fileURLToPath(new URL("./node_modules/@crewlethq/ui/dist/", import.meta.url));
 const ICONS_DIST = fileURLToPath(new URL(`${ICONS}/dist/`, import.meta.url));
 
+/** `path` as the filesystem resolves it, or as given where nothing is there. */
+function real(path: string): string {
+  return existsSync(path) ? realpathSync(path) : path;
+}
+
+/**
+ * Whether `file` is one of the per-component stylesheets the kit ships under
+ * `ui` and `icons` — every `.css` there except the single-sheet build,
+ * `styles.css` — judged on REAL paths on both sides.
+ *
+ * The resolver hands the plugin the path a file resolves to, and where
+ * `node_modules` is a symbolic link (an isolated worktree's points into the
+ * main checkout's, as .gitignore says) that is under the link's target, not
+ * under the path the constants above spell. Compared as spelled, no kit sheet
+ * matched there: each component's sheet went into the chunk that imported
+ * it, which is the cascade this plugin exists to prevent, and `npm run build`
+ * wrote 125 files other than the ones a plain install writes, so the
+ * committed bundle could not be rebuilt from a worktree at all.
+ */
+export function isComponentSheet(file: string, ui: string, icons: string): boolean {
+  if (!file.endsWith(".css")) return false;
+  const at = real(file);
+  const under = (dir: string) => at.startsWith(real(dir) + sep);
+  return under(icons) || (under(ui) && at !== real(join(ui, "styles.css")));
+}
+
 function designSystemSheet(): Plugin {
-  const componentSheet = (file: string) =>
-    file.endsWith(".css") &&
-    (file.startsWith(ICONS_DIST) || (file.startsWith(UI_DIST) && file !== `${UI_DIST}styles.css`));
+  const componentSheet = (file: string) => isComponentSheet(file, UI_DIST, ICONS_DIST);
   return {
     name: "crewlet:design-system-sheet",
     enforce: "pre",
@@ -333,9 +359,23 @@ export default defineConfig({
       // Taking a backup (Settings › Backups & retention). The record it
       // lands in is read over the socket.
       "/backup": { target: "http://localhost:8000" },
+      // Signing in, out and up, and an invitation's redemption — how a
+      // browser comes to hold a session cookie (protocol/auth.ts).
+      "/auth": { target: "http://localhost:8000" },
+      // The identity directory People reads and writes, and the
+      // identity trail the audit screen reads beside it.
+      "/iam": { target: "http://localhost:8000" },
+      // Whether anybody has been invited yet, which the sign-in page reads
+      // before anybody has signed in (protocol/auth.ts) — the one unguarded
+      // answer that says so.
+      "/health": { target: "http://localhost:8000" },
       // Removing a dead member from the broker's metadata group (Settings ›
       // Nodes, Broker members). The membership is read over the socket.
       "/fleet": { target: "http://localhost:8000" },
+      // Every artifact write (a share, a label, a schema, a datastore write),
+      // a page's frame and a document's source, and the ready report a frame
+      // makes (lib/artifacts/api.ts). Its reads are the socket's questions.
+      "/artifacts": { target: "http://localhost:8000" },
     },
   },
 });

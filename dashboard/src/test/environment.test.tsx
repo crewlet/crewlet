@@ -1,8 +1,8 @@
 /**
  * The environment every other suite stands on, asserted rather than assumed.
  *
- * Two settings in `vitest.config.ts` decide whether whole families of suites
- * mean anything, and each fails SILENTLY when it stops holding:
+ * Three settings decide whether whole families of suites mean anything, and
+ * each fails SILENTLY when it stops holding:
  *
  *  - THE ZONE. The suites run in Europe/Berlin, which has an offset all year
  *    and two transitions, because under UTC — the zone of every CI runner,
@@ -15,15 +15,20 @@
  *    through Vite, every suite whose graph reaches a component fails to LOAD,
  *    and a suite that fails to load reports no tests rather than a failure
  *    anybody reads.
+ *  - THE BOUNDS (`bounds.ts`). A wait and a case are hang detectors sized
+ *    for a machine the gate shares; back at the tools' defaults, every suite
+ *    stays green on an idle machine and goes red on a loaded one for a reason
+ *    nothing on the page caused.
  *
- * So both are held here, by what they produce rather than by reading the
- * config file: an offset the zone must give, and a component the kit must
- * render with its own class names.
+ * So all three are held here, by what they produce rather than by reading the
+ * config files: an offset the zone must give, a component the kit must render
+ * with its own class names, and the bounds a wait and a case actually get.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, getConfig, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { Button } from "@crewlethq/ui";
+import { CASE_BOUND_MS, WAIT_BOUND_MS } from "./bounds.ts";
 
 afterEach(cleanup);
 
@@ -48,4 +53,14 @@ test("a kit component loads with its stylesheet and renders its own classes", ()
   const button = screen.getByRole("button", { name: "Save" });
   expect(button.className).toContain("crewlet-btn");
   expect(button.className).toContain("crewlet-btn--secondary");
+});
+
+test("a wait and a case get the bounds the suite sized, the wait well inside the case", ({
+  task,
+}) => {
+  expect(getConfig().asyncUtilTimeout).toBe(WAIT_BOUND_MS);
+  expect(task.timeout).toBe(CASE_BOUND_MS);
+  // A hung wait must fail as itself, with the DOM it searched, rather than
+  // be overtaken by the case's bound — and a case holds several waits.
+  expect(3 * WAIT_BOUND_MS).toBeLessThanOrEqual(CASE_BOUND_MS);
 });

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/usage"
 )
@@ -159,11 +160,37 @@ const (
 	// longer hold every other write of the log waits behind.
 	MaxPushesPerRecord = 64
 
-	// MaxRecordBytes is the largest record this domain appends: an eighth of
-	// what one append may carry, so eight maximal code records fit one
-	// node's per-log reservation at once and a committer serving many
-	// repositories is never serialised behind one large record.
-	MaxRecordBytes = statelog.MaxAppendBytes / 8
+	// CodeLogMaxRecordBytes is the largest record the code log admits
+	// ([statelog.StreamSpec.MaxRecordBytes]): THE LARGEST THE TRANSPORT
+	// CARRIES ([statelog.MaxTransportRecordBytes]), as the tracker's is.
+	//
+	// The declaration sizes two things. The node's ordinary appends in flight
+	// on the log are one append of it ([statelog.StreamSpec.MaxAppendBytes],
+	// [statelog.NewReserve]), which is what lets this node's committers hold
+	// eight records of [MaxRecordBytes] out at once (below). And the gate
+	// reserve's fleet term is seven peers' such appends; at the code log's
+	// gibibyte Tier A floor a sixteenth of the ceiling is the larger term
+	// (64 MiB against 57), so the reserve is what any declaration would give
+	// it. What bounds a record THIS build forms is [MaxRecordBytes]; a newer
+	// build's may be as large as this, which the apply's own bounds already
+	// assume of a record it did not form ([Applier]'s tombstone backstop).
+	CodeLogMaxRecordBytes = statelog.MaxTransportRecordBytes
+
+	// MaxRecordBytes is the largest record this domain's committer forms: an
+	// EIGHTH of the node's appends in flight on the code log, each append
+	// counted with what a stored record carries beside its payload, so eight
+	// maximal code records are out at once on one node and a committer
+	// serving many repositories is never serialised behind one large record.
+	// 1 044 480 bytes.
+	MaxRecordBytes = (CodeLogMaxRecordBytes+appendOverheadBytes)/8 - appendOverheadBytes
+
+	// appendOverheadBytes is what the log's reserve counts one append at
+	// beyond its payload — the signature frame, the store's framing, the
+	// subject and headers: the transport's largest message less the largest
+	// record it carries, which is how statelog defines the latter, so the
+	// two readings cannot disagree (TestTheCodeDomainsDeclaration holds
+	// eight maximal records to the log's own [statelog.StreamSpec.MaxAppendBytes]).
+	appendOverheadBytes = queue.MaxPayloadBytes - statelog.MaxTransportRecordBytes
 
 	// MaxRecordRows is the most rows one record's apply may write or delete:
 	// the framework's per-transaction budget, which is checked only at record
@@ -471,7 +498,7 @@ const (
 	// one a receive-pack some receiving node holds open, from as many
 	// repositories — held about a gibibyte of entries on the committer, and
 	// as much again decoded. The largest entry this domain admits is
-	// EntryRoom, 1 048 064 bytes: a push of refs JSON spells long, some six
+	// EntryRoom, 1 043 456 bytes: a push of refs JSON spells long, some six
 	// hundred `&` refs at MaxRefNameBytes (Proposal.ValidateCommands). One of
 	// plain refs is at most 451 222 bytes (MaxCommandsPerPush commands at
 	// MaxRefNameBytes, then MaxIntroduced ids, measured). So four

@@ -10,7 +10,8 @@
 // is a wildcard the broker can match and a listing asks for one kind rather
 // than reading every lease in the fleet. Three classes name three kinds:
 //
-//   - seat:{handle} — one agent seat this node runs.
+//   - seat:{id} — one agent seat this node runs, named by the agent id
+//     derived from its handle (ADR-0013), as its mailbox is.
 //   - worker:{duty} — a fleet singleton: the maintenance sweep, the
 //     scheduler tick, the lifecycle pass. A duty's TTL is sized from its own
 //     cadence rather than from the seat heartbeat, so it runs from seconds to
@@ -87,6 +88,21 @@
 // error means unknown — there is no error worth special-casing into a
 // definite answer.
 //
+// # A definite answer is a CURRENT one
+//
+// The two definite answers are only worth their names if they reflect every
+// write acknowledged before the read began — this node's own and every
+// peer's. A backend whose store is replicated therefore answers from the copy
+// that has applied every acknowledged write, and from no other: an answer read
+// off a copy that is behind is "held as of that copy", which is the fourth
+// answer argued against below, delivered as one of the two definite ones.
+// coord/kv reads every record from its bucket's stream LEADER for exactly this
+// reason, and certifies every listing against the leader's own key index (its
+// kv.go, "Every single-key read is the leader's", and walk.go carry the
+// measurements and the one residue: a leader cut off from its quorum answers
+// from its own copy until it notices, while every write through it fails).
+// The memory twin has one copy and meets it trivially.
+//
 // # Why coordination is not itself a replicated log
 //
 // The engine grows a durable-state framework — internal/statelog — whose
@@ -147,6 +163,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // ProtocolVersion is the seat-host protocol this build speaks.
@@ -176,13 +194,19 @@ import (
 // Bump this when the MEANING of holding a lease changes, never when
 // something merely gains a field. At this version, holding a seat means
 // consulting the completion ledger before a delivery, claiming one means
-// this node satisfies the role's placement, and running one means charging
-// its rounds to the WINDOWED token counters. The bar is silent corruption in
-// a mixed fleet: two builds running seats side by side that charged
-// different counters would each see only their own share of the company's
-// spend, and every cap would bind late — by as much as the other build had
-// spent.
-const ProtocolVersion = 4
+// this node satisfies the role's placement, running one means charging its
+// rounds to the WINDOWED token counters, and a seat's lease, its mailbox and
+// every subject addressed to it are named by the seat's ID — the agent id
+// derived from its handle (ADR-0013) — never by the handle itself. The bar
+// is silent corruption in a mixed fleet: two builds running seats side by
+// side that charged different counters would each see only their own share
+// of the company's spend, and every cap would bind late — by as much as the
+// other build had spent.
+//
+// Version 1 is every build there has been: no build that held a lease to
+// another meaning was ever released, so the number restarted rather than
+// carrying a history of meanings nothing runs.
+const ProtocolVersion = 1
 
 // ProtocolGateCounts reports whether a lease on resource is one the protocol
 // gate judges — and so one [Backend.FleetProtocolFloor] counts. Every backend
@@ -251,7 +275,7 @@ var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 // shared the seat lease bucket, every duty claim longer than the seat lease
 // TTL (45 seconds by default) was refused, and on every `embedded-kv` fleet
 // the retention sweep, the mailbox retirement, the integration reconcile, the
-// skill curator and every integration setup pass failed on their lease claim
+// learning passes and every integration setup pass failed on their lease claim
 // and never ran at all, with one warning per attempt as the only symptom. The
 // in-memory twin honoured any TTL, so no single-node test could see it. Moving
 // the duties out fixed exactly the duties: every other class stayed in the
@@ -818,7 +842,10 @@ func ResourceSegments(resource string) []string {
 }
 
 // SeatResource names the lease for an agent seat.
-func SeatResource(handle string) string { return ClassSeat.Resource(handle) }
+//
+// BY THE SEAT'S ID: the agent id derived from its handle (ADR-0013), which is
+// what its mailbox and its consumer group are named by too.
+func SeatResource(seat uuid.UUID) string { return ClassSeat.Resource(seat.String()) }
 
 // WorkerResource names the lease for a per-company singleton duty.
 func WorkerResource(duty string) string { return ClassWorker.Resource(duty) }
@@ -839,8 +866,22 @@ func IsSeatResource(resource string) bool { return ClassSeat.Holds(resource) }
 // IsNodeResource reports whether a resource names a node's presence.
 func IsNodeResource(resource string) bool { return ClassNode.Holds(resource) }
 
-// SeatHandle recovers the handle from a seat resource name.
-func SeatHandle(resource string) (string, bool) { return ClassSeat.Name(resource) }
+// SeatID recovers the seat id from a seat resource name.
+//
+// It reports false for a resource of another class AND for one whose name is
+// not a canonical uuid, so a key written by hand is answered as "not a seat
+// lease" rather than as a seat with an unreadable name.
+func SeatID(resource string) (uuid.UUID, bool) {
+	name, ok := ClassSeat.Name(resource)
+	if !ok {
+		return uuid.Nil, false
+	}
+	id, err := uuid.Parse(name)
+	if err != nil || id == uuid.Nil || id.String() != name {
+		return uuid.Nil, false
+	}
+	return id, true
+}
 
 // NodeID recovers the node id from a presence resource name.
 func NodeID(resource string) (string, bool) { return ClassNode.Name(resource) }

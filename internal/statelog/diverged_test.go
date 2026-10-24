@@ -447,7 +447,8 @@ func TestOnlyTheNodesOwnFileIsTheRunnersNodeEstate(t *testing.T) {
 		{"the replicated estate's database", replicated, true},
 	} {
 		_, err := statelog.NewRunner(statelog.RunnerDeps{
-			Domain: probeDomain{}, Spec: specOf(probeDomain{}), Applier: h.applier,
+			Domain: probeDomain{}, Spec: specOf(probeDomain{}),
+			Verifier: testVerifier(t, probeDomain{}), Applier: h.applier,
 			Fetch: h.fetch, Log: h.fetch, Node: c.node, DB: h.estate,
 			Metrics: h.metrics,
 		})
@@ -665,7 +666,9 @@ func TestARunnerStandsAtItsCheckpointBeforeItsLoopRuns(t *testing.T) {
 
 	// AND A CHECKPOINT ON ANOTHER STREAM IS REFUSED rather than stood at.
 	_, err = statelog.NewRunner(statelog.RunnerDeps{
-		Domain: probeDomain{}, Spec: specOf(probeDomain{}), Applier: h.applier, Fetch: h.fetch, Log: h.fetch,
+		Domain: probeDomain{}, Spec: specOf(probeDomain{}),
+		Verifier: testVerifier(t, probeDomain{}),
+		Applier:  h.applier, Fetch: h.fetch, Log: h.fetch,
 		Node: h.db, DB: h.estate,
 		Checkpoint: statelog.Position{Stream: "CREWLET_SOMEONE_ELSES_LOG", Generation: 1},
 	})

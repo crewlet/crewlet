@@ -2,12 +2,14 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
@@ -18,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/observe"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // serveAPI is the API half of a node, wired to the engine beside it the way
@@ -44,6 +47,34 @@ func serveAPI(
 // wireAPI is the API half of a node, wired to the engine beside it the way
 // cmd/crewlet wires it, and served on a test listener.
 //
+// # IT IS A SECOND COPY OF THE COMPOSITION ROOT, and that has a cost
+//
+// cmd/crewlet's own wiring is the other one, and the two are deliberately not
+// the same function: this one serves a subset of the surfaces, on a test
+// listener, with a sped-up tick and an amend hook. What they DO share is
+// every required seam, and nothing compares the two lists.
+//
+// So a required option added there and missed here is not a compile error —
+// it is [api.New] or [setupapi.New] refusing by name, at run time, in THIS
+// package. And this package declares internal/solo, so `make test` never
+// reaches it: the refusal lands only in `make test-solo`, which is a separate
+// CI job. Measured: a surface and a write path were added to cmd/crewlet and
+// missed here, and every cluster case failed four bring-up attempts with a
+// `setupapi: Options.… required` refusal while the shared suite stayed green.
+//
+// When you add a required seam to cmd/crewlet, add it here in the same
+// change, and run BOTH suites. CLAUDE.md says the same thing in one line: a
+// run of `make test` by itself has not exercised the fleet.
+//
+// THE HUMAN SURFACES ARE NOT COPIED, and they are the exception that shows the
+// cure. The sign-in surface, the identity directory, the human write surface
+// and the two credential arms beside them are built by
+// [api.NewHumanSurfaces], which `crewlet run` calls too — they lived in
+// package main, where nothing here could reach them, so this suite mounted
+// none of them and a fleet whose sessions did not cross between its members
+// left it green. A surface built here by a function the command also calls
+// cannot drift from the one it serves; a copy can.
+//
 // ONE WIRING FOR EVERY CASE HERE, because there is one wiring: the API is built
 // from the engine's own store, broker and coordination plane, and reads its
 // company off the live epoch rather than being told once that one is active.
@@ -59,15 +90,22 @@ func serveAPI(
 // because a fleet member is built off the test's goroutine, where t.Fatalf
 // ends only that goroutine and leaves the test running with a nil member.
 //
-// THE OPERATOR SURFACE IS THE NODE'S OWN, from [api.NewEngineOperators] — the
-// constructor `crewlet run` calls, asked per request — so `/operator/act` here
-// is the route a person's dashboard writes through, and the viewer names the
-// same verbs.
-// AND THE NATIVE TRACKER'S READS, so a read that names the floor an act
-// answered with is asked of the route the dashboard asks. The file byte routes
-// are IN too, because a file's bytes crossing between members is something
-// only a fleet here can exercise. What it leaves out is what a case here never
-// reaches: the knowledge readers, which have their own suite.
+// THE NATIVE SOURCES ARE NOT COPIED EITHER — the read surface's board, pages,
+// backlinks, search and file listing, and the operator surface both transports
+// serve — and for the same cure: each is built by internal/api
+// ([api.NativeSources], and the operator inside [api.NewHumanSurfaces]) over
+// the engine, resolved per request, because a node meets its tracker and
+// knowledge base at its first company, which a node that booted with none
+// meets after its API is serving. So `/operator/act` here is the route a
+// person's dashboard writes through, and the viewer names the same verbs. The
+// file byte routes are IN too, served by the human write surface, because a
+// file's bytes crossing between members is something only a fleet here can
+// exercise.
+//
+// AND THE ENGINE'S OWN GIT HOST AND THE CODE READS, through [api.EngineCode] —
+// the adapter `crewlet run` hands the API — asked per request, because the
+// code host is built with the native runtime, which a company applied after
+// boot brings up after this wiring ran.
 func wireAPI(
 	ctx context.Context, e *engine.Engine, boot *config.Bootstrap, amend func(*api.Options),
 ) (*api.App, *httptest.Server, []func(), error) {
@@ -81,12 +119,21 @@ func wireAPI(
 	// as cmd/crewlet reads them: an apply replaces the epoch, so a document
 	// captured here would describe a company the node no longer runs.
 	nodeID := e.Node().ID()
-	company := func() *config.Company {
+	company := func() (*config.Company, *org.Organization) {
 		if current := e.Company(); current != nil {
-			return current.Config
+			return current.Config, current.Org
 		}
-		return nil
+		return nil, nil
 	}
+	// ONE KEYRING FOR THE PROCESS, the engine's, handed to every surface
+	// that seals or opens, as cmd/crewlet hands it over: every node in this
+	// suite carries one (withKeyring). The setup surface was the only one
+	// given it here, so the reconciler trusted a plaintext revision, the
+	// config surface stored one and /secrets could seal nothing — three
+	// shapes `crewlet run` never produces. The reconciler reads the
+	// engine's own now, and /config and /secrets refuse to be built
+	// without one.
+	cipher := e.Cipher()
 	// THE RECONCILER, because the health surface reports this node's config
 	// posture and its applied epoch, and the reconciler is what knows both.
 	reconciler, err := e.NewReconciler(engine.ReconcilerOptions{
@@ -101,13 +148,24 @@ func wireAPI(
 		return fail("engine runtime", err)
 	}
 	configSurface, err := configapi.New(configapi.Options{
-		Store: backends.Store, Plane: backends.Fleet, Queue: backends.Queue,
-		Bootstrap: boot,
+		Store: backends.Store, Cipher: cipher, Plane: backends.Fleet, Queue: backends.Queue,
+		Holders:        configapi.DirectoryHolders(e.IAM()),
+		CompanyWriters: boot.API.Auth.CompanyWriters,
 	})
 	if err != nil {
 		return fail("config surface", err)
 	}
-	secretSurface, err := secretsapi.New(secretsapi.Options{Fleet: backends.Fleet})
+	// AND THE IDENTITY ESTATE'S HALF of a rotation, as cmd/crewlet passes it:
+	// the engine's core, which every node holds from boot, company or none —
+	// so an engine without one is refused, never handed over as a typed nil.
+	keyring := e.IdentityKeyring()
+	if keyring == nil {
+		return fail("secret surface", errors.New("the engine opened no identity estate"))
+	}
+	secretSurface, err := secretsapi.New(secretsapi.Options{
+		Fleet: backends.Fleet, Cipher: cipher, ActiveKeyID: boot.Secrets.ActiveKeyID,
+		Identity: keyring,
+	})
 	if err != nil {
 		return fail("secret surface", err)
 	}
@@ -116,26 +174,24 @@ func wireAPI(
 		return fail("integration status", err)
 	}
 	setupSurface, err := setupapi.New(setupapi.Options{
-		Company:     company,
-		Config:      configSurface,
-		Secrets:     fleetsecrets.New(backends.Fleet, nil),
-		Resolve:     e.LookupSecret,
-		Passes:      e.SetupRunner(),
-		Sink:        e.SetupSink,
-		Status:      status,
-		SlackApps:   e.SlackApps,
-		StateClaims: backends.Fleet,
+		Company: company,
+		Config:  configSurface,
+		Secrets: fleetsecrets.New(backends.Fleet, cipher),
+		Resolve: e.LookupSecret,
+		// WHERE A VENDOR REACHES THIS NODE, from Tier A as cmd/crewlet
+		// reads it, and the key it is read from.
+		WebhookBase:    boot.API.WebhookBase(),
+		WebhookBaseKey: boot.API.WebhookBaseKey(),
+		Passes:         e.SetupRunner(),
+		Sink:           e.SetupSink,
+		Status:         status,
+		SlackApps:      e.SlackApps,
+		StateCipher:    cipher,
+		StateClaims:    backends.Fleet,
 	})
 	if err != nil {
 		return fail("setup surface", err)
 	}
-	operators, err := api.NewEngineOperators(ctx, e)
-	if err != nil {
-		return fail("operator surface", err)
-	}
-	// Closed last of all, as cmd/crewlet closes it after its listeners: it
-	// holds a subscription on the engine's queue for its peers' rebuilds.
-	stops = append(stops, func() { operators.Close(context.WithoutCancel(ctx)) })
 	copier, err := backup.New(backup.Options{
 		Store: backends.Store, Estate: backup.HoldingFor(engine.HoldsEstate(boot)),
 		Conn: backends.Conn(), API: backends.API(),
@@ -150,63 +206,97 @@ func wireAPI(
 		return fail("backup", err)
 	}
 
-	// THE ENGINE'S OWN fleet reader, as cmd/crewlet wires it, so the node the
-	// harness serves answers history the way a real node does — from every
-	// live member.
-	sources := queries.Sources{
-		Events:  e.History(),
-		Usage:   e.UsageReads(),
-		Company: company,
-		// AND WHAT A `${VAR}` IN ITS CHART RESOLVES TO, through the node's
-		// own chain as cmd/crewlet wires it: a node here is HANDED its
-		// environment ([engine.Options.Environment]), so a read surface left
-		// on the process environment names unbound a person the node's act
-		// transport admits.
-		Env:    e.LookupSecret,
-		NodeID: nodeID,
-		// THE FLEET VIEW, over the lease table, the control plane and the
-		// object collector's recorded report, as cmd/crewlet reads it: the
-		// seat states the dashboard is served read placement from the
-		// leases, and a member that ran no pass reads the collector's
-		// report off the store every member reads, as a report on the
-		// object store it agreed with the fleet.
-		Coord:   backends.Coord,
-		Plane:   backends.Fleet,
-		Objects: backends,
-		// WHAT A PERSON MAY DO, off the same surface the act route
-		// serves, as cmd/crewlet wires it.
-		OperatorActs: operators.Acts,
-		// THE NATIVE TRACKER AND KNOWLEDGE BASE — the board, the pages,
-		// the file rows, the backlinks and the ranked search — and the
-		// state log's retention answer, through the constructors
-		// cmd/crewlet builds them with, so a harness node answers every
-		// native question a deployment's does, asked per question.
-		Native:    api.EngineReads(e),
-		Retention: api.EngineRetention(e),
+	// THE WAY IN, THE DIRECTORY AND THE HUMAN WRITE SURFACE, through the
+	// constructor cmd/crewlet builds them with — see above.
+	humans, err := api.NewHumanSurfaces(boot, e)
+	if err != nil {
+		return fail("human surfaces", err)
+	}
+	if humans.SignIn != nil {
+		// A SIGN-IN'S AFTERMATH IS THE SURFACE'S OWN TO STOP — a stale
+		// password's rewrite — and it runs after the listener closes
+		// and before the engine it writes to, which is where the
+		// reversed teardown puts it: after the entries appended below,
+		// and before the engine, which every caller stops after this
+		// list.
+		stops = append(stops, func() { humans.SignIn.Stop(context.WithoutCancel(ctx)) })
 	}
 
+	workSource, pageSource, backlinkSource, searchSource, fileSource := api.NativeSources(e)
 	opts := api.Options{
 		Bootstrap:    boot,
+		SeatBindings: auth.SeatBindings{Directory: e, Chart: engine.SeatViewOf(e)},
 		Runtime:      runtime,
+		Inbox:        e,
+		Credentials:  e,
 		QueueBackend: backends.Queue.Backend(),
-		Sources:      sources,
-		Operator:     operators,
-		Config:       configSurface,
-		Secrets:      secretSurface,
-		Setup:        setupSurface,
-		Retention:    backends.Fleet,
-		Capacity:     e,
+		Sources: queries.Sources{
+			// THE ENGINE'S OWN fleet reader, as cmd/crewlet wires it, so
+			// the node the harness serves answers history the way a real
+			// node does — from every live member.
+			Events: e.History(),
+			// EVERY NODE'S company days, through the estate's router as
+			// cmd/crewlet reads them, so a member whose usage copy is out
+			// of service answers from a peer's.
+			Usage:   e.UsageReads(),
+			Company: company,
+			NodeID:  nodeID,
+			Chart:   engine.ChartAuthorityOf(e),
+			// WHOSE RECORD SOMEBODY ELSE'S LOGIN NAMES, as cmd/crewlet
+			// hands it: api.New refuses a missing one by name.
+			Holders: e,
+			// AND WHOSE CONTACT IDENTITIES THE REGISTRY WITHHOLDS, which
+			// api.New requires too.
+			WithheldContacts: e.WithheldContacts,
+			// AND WHAT A `${VAR}` IN A SEAT'S CONTACT IDS RESOLVES TO,
+			// through the node's own chain as cmd/crewlet wires it: a
+			// node here is HANDED its environment
+			// ([engine.Options.Environment]), so a read surface left on
+			// the process environment finds nobody by an id the node's
+			// routing resolves.
+			Env: e.LookupSecret,
+			// THE FLEET VIEW, over the lease table, the control plane and
+			// the object collector's recorded report, as cmd/crewlet reads
+			// it: the seat states the dashboard is served read placement
+			// from the leases, and a member that ran no pass reads the
+			// collector's report off the store every member reads, as a
+			// report on the object store it agreed with the fleet — through
+			// the reader the collector's duty resumes from, so a report
+			// left behind by a move of the files is none here too.
+			Coord:   backends.Coord,
+			Plane:   backends.Fleet,
+			Objects: backends,
+			// THE FLEET'S TOKEN COUNTERS, which the `budgets` question
+			// and every seat's live meter read.
+			Budget: backends.Fleet,
+			// AND THE NATIVE HALVES, per question, as cmd/crewlet hands
+			// them.
+			Work: workSource, Pages: pageSource, Backlinks: backlinkSource,
+			WorkSearch: searchSource, Files: fileSource,
+		},
+		Config:    configSurface,
+		Secrets:   secretSurface,
+		Setup:     setupSurface,
+		Retention: backends.Fleet,
+		Capacity:  e,
 		// THE FLEET BROKER'S MEMBERSHIP, through the engine's own surface,
 		// as `crewlet run` wires it.
 		FleetBroker: e.FleetBroker(),
 		Backup:      copier,
-		Audit:       backends.Queue,
-		// THE ROUTES OVER THE NATIVE RUNTIME — the file bytes, the purge
-		// and the eviction gate — through the adapter `crewlet run` uses,
-		// asked per request: an upload on one member and a download from
-		// another cross the object store the way a deployment's do, and a
-		// harness node serves the purge and the gate a deployment's does.
-		Native: api.EngineNative(e),
+		// THE MOVE OF THE COMPANY'S FILES to an S3 bucket, which only the
+		// engine can make, as cmd/crewlet hands it: api.New requires it.
+		Objects: e,
+		// THE RUNTIME AUDIT, onto this node's own queue as cmd/crewlet
+		// hands it: api.New requires it.
+		Audit: backends.Queue,
+		// THE EVICTION GATE, which every node holding the estate runs
+		// from boot — and NONE on a node that holds none, as cmd/crewlet
+		// hands it: a nil *engine.NodeGate in the interface would be a gate
+		// mounted over nothing on a stateless member.
+		Nodes: nodeGate(e),
+		// THE ENGINE'S OWN TRAIL, as cmd/crewlet hands it: the guard
+		// reports every refused bearer and every token use through it.
+		AuthEvents: e.AuthEvents(),
 		// THE ENGINE'S OWN GIT HOST AND THE CODE READS, through the
 		// adapter `crewlet run` uses, asked per request.
 		Code: api.EngineCode(e),
@@ -224,6 +314,9 @@ func wireAPI(
 		// the snapshot alone while the push path went unexercised.
 		HealthInterval: tickInterval,
 	}
+	// THE SAME HAND-OVER cmd/crewlet makes, which is the one place an
+	// absent surface stays absent rather than being mounted over a nil.
+	humans.Mount(&opts)
 	if amend != nil {
 		amend(&opts)
 	}
@@ -235,7 +328,7 @@ func wireAPI(
 		return fail("api.New", err)
 	}
 	app.Start(ctx)
-	stops = append(stops, app.Stop)
+	stops = append(stops, func() { app.Stop(context.WithoutCancel(ctx)) })
 
 	// The other half of the observability pipeline: the engine persists what
 	// THIS node publishes, and this is what puts the whole company's events
@@ -257,19 +350,15 @@ func wireAPI(
 	// warned about, as cmd/crewlet does: a seed that cannot read the fleet it
 	// was just built beside is a broken case, not a degraded node.
 	seedCtx, cancelSeed := context.WithTimeout(ctx, seedBudget)
-	err = observe.Seed(seedCtx, e.History(), company().AgentRoles(), app.Stream().State())
+	_, composed := company()
+	err = observe.Seed(seedCtx, e.History(), composed, app.Stream().State())
 	cancelSeed()
 	if err != nil {
 		return fail("seed the live projection", err)
 	}
 
 	srv := httptest.NewServer(app)
-	// THE LISTENING STREAMS END AS THE LISTENER COMES DOWN, as cmd/crewlet
-	// registers it on its own listener's shutdown.
-	stops = append(stops, func() {
-		operators.EndListens()
-		srv.Close()
-	})
+	stops = append(stops, srv.Close)
 
 	// AND THE RECONCILE LOOP, as `crewlet run` starts it once the node is
 	// serving: what applies a configuration write. Without it a PUT /config
@@ -306,4 +395,14 @@ func stopInReverse(stops []func()) {
 	for i := len(stops) - 1; i >= 0; i-- {
 		stops[i]()
 	}
+}
+
+// nodeGate is the engine's eviction gate as the API's seam, or nil on a node
+// holding no estate — cmd/crewlet's own rule, so the harness serves a
+// stateless member exactly as `crewlet run` does.
+func nodeGate(e *engine.Engine) api.NodeGate {
+	if g := e.NodeGate(); g != nil {
+		return g
+	}
+	return nil
 }

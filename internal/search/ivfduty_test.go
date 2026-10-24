@@ -469,7 +469,9 @@ func published(t *testing.T, h *embedHarness) []search.RecordEnvelope {
 		if !ok {
 			continue
 		}
-		env, err := search.DecodeEnvelope(payload)
+		// THE FRAME FIRST: every record on the log is signed, and what a
+		// domain decodes is the body inside it.
+		env, err := search.DecodeEnvelope(h.open(seq, payload))
 		if err != nil {
 			t.Fatal(err)
 		}

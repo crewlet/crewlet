@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	natsjs "github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -100,19 +102,18 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 
 	// THE HEARTBEAT NOTICES, the node adopts, and its appliers come back
 	// over the artefact — with no restart and no operator.
-	e.native.Load().log.publishPositions(t.Context())
+	e.core.Load().log.publishPositions(t.Context())
 	waitUntil(t, 90*time.Second, "the node to adopt the donor's snapshot", func() bool {
 		return running.runner.Committed().Seq == last
 	})
 	// THE ADOPTION IS RECORDED AS COMPLETE, in this node's own estate and
 	// naming this donor's artefact.
 	var recorded string
-	var startedAt int64
 	var completedAt sql.NullInt64
 	if err := back.Store.Read(t.Context(), func(tx *sql.Tx) error {
 		return tx.QueryRowContext(t.Context(), `
-			SELECT manifest, started_at, completed_at FROM statelog_adoption
-			ORDER BY started_at DESC LIMIT 1`).Scan(&recorded, &startedAt, &completedAt)
+			SELECT manifest, completed_at FROM statelog_adoption
+			ORDER BY started_at DESC LIMIT 1`).Scan(&recorded, &completedAt)
 	}); err != nil {
 		t.Fatalf("read the newest adoption row: %v", err)
 	}
@@ -133,21 +134,31 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build the tracker's read seam: %v", err)
 	}
-	if before, lost, err := rows.LostBefore(t.Context()); err != nil || lost {
+	if before, lost, err := rows.LostBefore(t.Context(), ""); err != nil || lost {
 		t.Fatalf("the adopted ledger may have lost rows before %s (%v, %v) — a "+
 			"ledger that travelled lost nothing, and every first attempt minted "+
 			"before the join would be refused", before, lost, err)
 	}
+	// AND ITS APPLIERS CAME BACK OVER THE ARTEFACT: a write this node makes
+	// is applied. Only a relaunched loop that got past its start check can
+	// apply it, and that check is the one a wrong artefact fails — so this is
+	// what holds the adoption to its promise. Its committed position says
+	// nothing of the kind: Rejoined moves it before anything is relaunched.
+	res, err := e.native.Load().writer.EvictNode(t.Context(), "op-after", "node-y")
+	if err != nil || res.Outcome != statelog.OutcomeApplied || res.Position.Generation != at.Generation {
+		t.Fatalf("a write after the adoption: %+v, %v (tracker applier stopped: %v) — "+
+			"want it applied in generation %d", res, err, running.runner.Stopped(), at.Generation)
+	}
 	waitUntil(t, 30*time.Second, "the node to admit seats again", hydrated(t, e))
-	if ok, domain := e.SeatsServiceable(); !ok {
+	if ok, domain := e.SeatsServiceable(t.Context()); !ok {
 		t.Fatalf("the node cannot keep its seats after adopting: %s", domain)
 	}
 	// AND THE NEXT BEAT FINDS THE SAME HISTORY: a running node's heartbeat
 	// compares the record its checkpoint names with the log's record there
 	// every ten seconds, so an adoption the node only keeps until that beat
 	// is no adoption. Run once rather than waited for, as above.
-	e.native.Load().log.publishPositions(t.Context())
-	if !e.NativeHydrated(t.Context()) {
+	e.core.Load().log.publishPositions(t.Context())
+	if !e.StateLogHydrated(t.Context()) {
 		t.Fatal("the node withdrew its seats at the first heartbeat after " +
 			"adopting — the adopted checkpoint names another record than the " +
 			"log holds at its sequence")
@@ -210,7 +221,7 @@ func TestAStopMidRejoinEndsTheJoinAndWaitsForItsAppliers(t *testing.T) {
 		t.Fatalf("flush the listener: %v", err)
 	}
 	pushBelowTheFloor(t, e, q)
-	e.native.Load().log.publishPositions(t.Context())
+	e.core.Load().log.publishPositions(t.Context())
 
 	select {
 	case <-asked:
@@ -223,7 +234,7 @@ func TestAStopMidRejoinEndsTheJoinAndWaitsForItsAppliers(t *testing.T) {
 	// flush, and a Stop inside that flush says nothing about the window.
 	// An in-process broker answers a flush in microseconds.
 	time.Sleep(200 * time.Millisecond)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	started := time.Now()
 	s.Stop()
 	took := time.Since(started)
@@ -250,7 +261,7 @@ func TestAStopMidRejoinEndsTheJoinAndWaitsForItsAppliers(t *testing.T) {
 // with its backends and that broker.
 func bootRejoinNode(t testing.TB) (*Engine, *Backends, *jetstream.Queue) {
 	t.Helper()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	SeedStore(t, &b)
@@ -283,9 +294,10 @@ func bootRejoinNode(t testing.TB) (*Engine, *Backends, *jetstream.Queue) {
 // pushBelowTheFloor leaves a running node below its tracker log's floor, which
 // is exactly what the fleet's trim does to a node that has been away: its
 // appliers stop, two barriers land on the log that it never applies, and the
-// log is purged past them. It returns the tracker's running domain, the
-// position the node had applied, and the last sequence purged — which is the
-// position a peer that applied those barriers would hold.
+// log is purged up to the second of them. It returns the tracker's running
+// domain, the position the node had applied, and the last sequence appended —
+// the position a peer that applied those barriers would hold, and, since a
+// purge at N leaves N itself, the log's first record.
 func pushBelowTheFloor(t *testing.T, e *Engine, q *jetstream.Queue) (
 	running *runningLog, at statelog.Position, last uint64) {
 
@@ -311,7 +323,7 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 	if err != nil {
 		t.Fatalf("open the log: %v", err)
 	}
-	s := e.native.Load().log
+	s := e.core.Load().log
 	running = s.Domain(tracker.Domain{}.Name())
 	if running == nil {
 		t.Fatal("the tracker domain is not running")
@@ -353,7 +365,8 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 		t.Fatalf("encode a barrier: %v", err)
 	}
 	for range 2 {
-		if last, _, err = log.Append(t.Context(), spec.SubjectPrefix+"."+statelog.BarrierKind, "", nil, body); err != nil {
+		if last, _, err = log.Append(t.Context(), spec.SubjectPrefix+"."+statelog.BarrierKind,
+			"", nil, running.signer.Seal(body)); err != nil {
 			t.Fatalf("append a barrier: %v", err)
 		}
 	}
@@ -369,21 +382,16 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 // file is self-contained for whatever opens or installs it.
 //
 // THE CHECKPOINT NAMES THE RECORD AT last, by the instant the broker stored it,
-// as a peer's commit of that barrier wrote it. Advancing the sequence alone
-// left it naming the node's own record at at — another record than the log
-// holds at last, which the purge keeps — so the adopter's first heartbeat
-// found the log diverged from the rows it had just installed and took its
-// copy out of service, and a case that read the node before that beat passed
-// on the race.
+// as a peer's commit of that barrier wrote it ([moveCheckpoint]). Advancing the
+// sequence alone left it naming the node's own record at at — another record
+// than the log holds at last, which the purge keeps — so the adopter's first
+// heartbeat found the log diverged from the rows it had just installed and
+// took its copy out of service, and a case that read the node before that
+// beat passed on the race.
 func copyAdvancedTo(t *testing.T, back *Backends, running *runningLog,
 	at statelog.Position, last uint64, path string) {
 
 	t.Helper()
-	_, _, storedAt, ok, err := running.log.At(t.Context(), last)
-	if err != nil || !ok {
-		t.Fatalf("read the log's record at %d, which the copy's checkpoint "+
-			"names: found %v, %v", last, ok, err)
-	}
 	if _, err := storetest.ReplicatedDB(t, back.Store.Replicated()).Backup(t.Context(), path); err != nil {
 		t.Fatalf("copy the replicated estate: %v", err)
 	}
@@ -391,22 +399,9 @@ func copyAdvancedTo(t *testing.T, back *Backends, running *runningLog,
 	if err != nil {
 		t.Fatalf("open the copy: %v", err)
 	}
-	if err := copyDB.Tx(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), `
-			INSERT INTO statelog_cursor
-				(stream, generation, seq, stream_created_at, stored_at, updated_at,
-				 applied_version)
-			VALUES (?, ?, ?, ?, ?, ?, 0)
-			ON CONFLICT (stream) DO UPDATE SET
-				seq = excluded.seq, stream_created_at = excluded.stream_created_at,
-				stored_at = excluded.stored_at`,
-			tracker.Domain{}.Stream().Name, int64(at.Generation), int64(last),
-			store.EncodeTime(running.runner.StreamCreatedAt()), store.EncodeTime(storedAt),
-			store.EncodeTime(time.Now().UTC()))
-		return err
-	}); err != nil {
-		t.Fatalf("advance the copy's checkpoint: %v", err)
-	}
+	moveCheckpoint(t, running.log, copyDB, statelog.Position{
+		Stream: tracker.Domain{}.Stream().Name, Generation: at.Generation, Seq: last,
+	}, running.runner.StreamCreatedAt())
 	if err := copyDB.Close(); err != nil {
 		t.Fatalf("close the copy: %v", err)
 	}
@@ -438,6 +433,46 @@ func quietTheCollector(t testing.TB, e *Engine) {
 	e.stopObjectCollector()
 }
 
+// moveCheckpoint moves db's checkpoint on at's stream to at, keyed to created,
+// NAMING THE RECORD log holds at that sequence by its broker instant, as every
+// checkpoint an applier commits does (statelog's setCursor): a checkpoint is a
+// record, not only a sequence. Moved by its sequence alone, a checkpoint goes
+// on naming the record it stood on before; the applier that loads it finds
+// another record there and stops, rightly, as diverged, and the staged rows
+// are ones no peer could hold. A case passed on them only while its waits beat
+// that stop. A checkpoint at sequence zero, or at one the log does not hold —
+// below a rebuilt log's first record, where a reanchor puts it — names no
+// record, as a reanchor's own checkpoint does.
+func moveCheckpoint(t *testing.T, log *jetstream.DomainLog, db *store.DB,
+	at statelog.Position, created time.Time) {
+
+	t.Helper()
+	var stored int64
+	if at.Seq > 0 {
+		_, _, storedAt, held, err := log.At(t.Context(), at.Seq)
+		if err != nil {
+			t.Fatalf("read the log's record at the checkpoint %s: %v", at, err)
+		}
+		if held {
+			stored = store.EncodeTime(storedAt)
+		}
+	}
+	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
+			INSERT INTO statelog_cursor
+				(stream, generation, seq, stream_created_at, stored_at, updated_at, applied_version)
+			VALUES (?, ?, ?, ?, ?, ?, 0)
+			ON CONFLICT (stream) DO UPDATE SET
+				generation = excluded.generation, seq = excluded.seq,
+				stream_created_at = excluded.stream_created_at, stored_at = excluded.stored_at`,
+			at.Stream, int64(at.Generation), int64(at.Seq), store.EncodeTime(created), stored,
+			store.EncodeTime(time.Now().UTC()))
+		return err
+	}); err != nil {
+		t.Fatalf("move the copy's checkpoint to %s: %v", at, err)
+	}
+}
+
 func waitUntil(t testing.TB, within time.Duration, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(within)
@@ -466,6 +501,11 @@ func waitUntil(t testing.TB, within time.Duration, what string, cond func() bool
 // no donor, which is only reachable by a join that ran over an open estate.
 // With nothing missing — the state an earlier rejoin leaves when the artefact
 // it installed is what failed to open — the restore alone is the recovery.
+//
+// AND A REOPENED ESTATE NAMES EVERYONE TO THE LISTENER, because the file it
+// opened may be a donor's whose revocations no committed batch here ever named
+// — while a rejoin that found nobody to ask changed no row and says nothing,
+// which is the control.
 func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -478,7 +518,7 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			e, back, q := bootRejoinNode(t)
-			s := e.native.Load().log
+			s := e.core.Load().log
 			quietHeartbeat(s)
 			if c.below {
 				pushBelowTheFloor(t, e, q)
@@ -488,6 +528,8 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 			if err := back.Store.CloseReplicated(); err != nil {
 				t.Fatalf("close the replicated estate: %v", err)
 			}
+			heard := &heardMoves{}
+			e.SetOnIdentityMoved(heard.hear)
 			// WHILE IT IS SHUT THE COPY IS NOT SERVED: every read of it
 			// fails, and with the appliers halted on a log nobody writes
 			// nothing else would ever call it wrong — so this node's own
@@ -505,6 +547,11 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 				t.Fatal("the restore left the replicated estate closed — nothing " +
 					"else in a running node reopens it")
 			}
+			if got := heard.take(); !slices.ContainsFunc(got,
+				func(m iamdomain.Moved) bool { return m.Everyone }) {
+				t.Errorf("a reopened estate told the credential listener %+v, "+
+					"want everyone: its rows may be a donor's", got)
+			}
 			if v := s.judgeCopy(t.Context()); v.shut {
 				t.Fatalf("a copy whose file the restore reopened is still judged shut: %+v", v)
 			}
@@ -516,6 +563,11 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 					"node below the floor has nobody to ask, which only a join "+
 					"that could read its own checkpoints gets as far as learning",
 					err, errNoDonor)
+			}
+			if got := heard.take(); slices.ContainsFunc(got,
+				func(m iamdomain.Moved) bool { return m.Everyone }) {
+				t.Errorf("a rejoin that found no donor told the credential "+
+					"listener %+v: it changed no row", got)
 			}
 		})
 	}
@@ -532,7 +584,7 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 func TestALoneNodesJoinEndsOnItsOwnDonorsAnswer(t *testing.T) {
 	t.Parallel()
 	e, _, q := bootRejoinNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 	quietHeartbeat(s)
 	pushBelowTheFloor(t, e, q)
@@ -593,7 +645,7 @@ func TestAnInstalledArtefactMovesTheConsumersWhicheverStepOpensIt(t *testing.T) 
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			e, back, q := bootRejoinNode(t)
-			s := e.native.Load().log
+			s := e.core.Load().log
 			quietHeartbeat(s)
 			running, at, _, last := appendPastTheNode(t, e, q)
 			artefact := filepath.Join(t.TempDir(), "artefact.db")
@@ -703,9 +755,9 @@ func TestALostEstateIsReopenedAtOnceAndTheFleetAskedOnItsInterval(t *testing.T) 
 	}
 	widened := func(t *testing.T, h *harness, why string) {
 		t.Helper()
-		if p, after := pause(h); p != PositionHeartbeat || !after.After(time.Now()) {
+		if p, after := pause(h); p != statelog.PositionHeartbeat || !after.After(time.Now()) {
 			t.Fatalf("%s left a pause of %s until %s, want %s from now — the next "+
-				"heartbeat asks the fleet again", why, p, after, PositionHeartbeat)
+				"heartbeat asks the fleet again", why, p, after, statelog.PositionHeartbeat)
 		}
 	}
 
@@ -817,7 +869,7 @@ func TestARecreationVerdictItsRowsNoLongerBearOutIsReKeyedByAJoin(t *testing.T) 
 	t.Parallel()
 	e, _, _ := bootRejoinNode(t)
 	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
-	s := e.native.Load().log
+	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	name := running.domain.Name()
 	if res, err := e.native.Load().writer.EvictNode(t.Context(), "op-before", "node-x"); err != nil ||
@@ -868,7 +920,7 @@ func TestARecreationVerdictItsRowsNoLongerBearOutIsReKeyedByAJoin(t *testing.T) 
 func TestARestoreWaitsForARecoveryInProgress(t *testing.T) {
 	t.Parallel()
 	e, back, _ := bootRejoinNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	quietHeartbeat(s)
 	s.haltAppliers()
 	if err := back.Store.CloseReplicated(); err != nil {
@@ -900,9 +952,9 @@ func TestARestoreWaitsForARecoveryInProgress(t *testing.T) {
 	}
 }
 
-// hydrated is [Engine.NativeHydrated] as the condition a wait polls, under the
-// test's own context.
+// hydrated is [Engine.StateLogHydrated] as the condition a wait polls, under
+// the test's own context.
 func hydrated(t testing.TB, e *Engine) func() bool {
 	t.Helper()
-	return func() bool { return e.NativeHydrated(t.Context()) }
+	return func() bool { return e.StateLogHydrated(t.Context()) }
 }

@@ -3,7 +3,6 @@ package queries
 import (
 	"cmp"
 	"context"
-	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -163,22 +162,15 @@ func (s Sources) seatActivity(ctx context.Context, p Params) (any, error) {
 			"ask for fewer days", days, prev.First.Label, horizon.Floor, horizon.Days)
 	}
 
-	var seat, agentID string
-	if h := strings.TrimSpace(p.String("seat")); h != "" {
-		if !org.ValidHandle(h) {
-			return nil, fmt.Errorf("%w: seat=%q is not a handle — a seat is named by "+
-				"its handle (lowercase, as on its page)", ErrBadParams, h)
-		}
-		// A PERSON HAS NO ACTIVITY TO COUNT. The engine runs no turn for a
-		// human seat, so a row of zeros would say "took no turns" about
-		// somebody no turn was ever for — and `in_chart: false` beside it
-		// would say the chart does not hold a seat it does.
-		if name, human := s.humanSeat(h); human {
-			return nil, fmt.Errorf("%w: seat=%q is %s, a human seat — the engine runs "+
-				"no turns for a person, so there is no activity to count; ask for an "+
-				"agent seat's handle", ErrBadParams, h, name)
-		}
-		seat, agentID = h, s.derivedAgentID(h)
+	// ONE SEAT, by the handle a person reads — resolved through the chart
+	// to the id its days are filed under ([Sources.seatAgentID]), which
+	// refuses a PERSON's seat by name: the engine runs no turn for a human,
+	// so a row of zeros would say "took no turns" about somebody no turn was
+	// ever for.
+	seat := strings.TrimSpace(p.String("seat"))
+	agentID, err := s.seatParam(p)
+	if err != nil {
+		return nil, err
 	}
 
 	from := window.First.Label
@@ -200,7 +192,7 @@ func (s Sources) seatActivity(ctx context.Context, p Params) (any, error) {
 	}
 	answer.Seats = foldSeatActivity(rows, seatActivityFold{
 		window: window, previous: previous, seat: seat, agentID: agentID,
-		chart: s.chartSeats(),
+		chart: chartSeats(s.organization()),
 	})
 	return answer, nil
 }
@@ -213,43 +205,31 @@ type chartSeat struct {
 // chartSeats is every AGENT seat of the running chart. A human seat is not run
 // by the engine, so it has no turns to count and no row here — a zero beside a
 // person would read as a person who did nothing.
-func (s Sources) chartSeats() []chartSeat {
-	organization := s.organization()
+//
+// EACH BY THE ID ITS DAYS ARE FILED UNDER, derived from the seat's handle
+// ([org.Organization.AgentIDFor]).
+func chartSeats(organization *org.Organization) []chartSeat {
 	if organization == nil {
 		return nil
 	}
 	var out []chartSeat
 	for role := range organization.AllRoles() {
-		if role.IsHuman() {
+		id, ok := organization.AgentIDFor(role)
+		if !ok {
 			continue
 		}
-		handle := role.Handle()
-		id, _ := org.DeriveAgentID(organization.Name, handle)
-		out = append(out, chartSeat{handle: handle, role: role.Name, agentID: id.String()})
+		out = append(out, chartSeat{handle: role.Handle(), role: role.Name, agentID: id.String()})
 	}
 	return out
-}
-
-// humanSeat reports whether the running chart holds a HUMAN seat with this
-// handle, and its name.
-func (s Sources) humanSeat(handle string) (string, bool) {
-	organization := s.organization()
-	if organization == nil {
-		return "", false
-	}
-	for role := range organization.AllRoles() {
-		if role.IsHuman() && role.Handle() == handle {
-			return role.Name, true
-		}
-	}
-	return "", false
 }
 
 // seatActivityFold is what [foldSeatActivity] needs beside the rows.
 type seatActivityFold struct {
 	window   tokens.Range
 	previous bool
-	// seat and agentID narrow to one seat; empty is every seat.
+	// agentID narrows to one seat, and seat is the handle it was asked by,
+	// which names its row when the chart no longer holds it; empty is every
+	// seat.
 	seat, agentID string
 	chart         []chartSeat
 }
@@ -258,9 +238,8 @@ type seatActivityFold struct {
 //
 // PURE over its inputs, so the arithmetic — the sums across nodes, the
 // reviewed-only denominator, the merged quantiles — is testable without a
-// database. A seat is keyed on its AGENT ID, which every node derives alike
-// and which survives a rename; the handle and role shown are the chart's, or
-// else the newest day's.
+// database. A seat is keyed on its AGENT ID, which every node derives alike;
+// the handle and role shown are the org's, or else the newest day's.
 func foldSeatActivity(rows []usage.SeatDay, f seatActivityFold) []SeatActivity {
 	inWindow := func(day string) bool {
 		return day >= f.window.First.Label && day <= f.window.Last.Label
@@ -275,35 +254,25 @@ func foldSeatActivity(rows []usage.SeatDay, f seatActivityFold) []SeatActivity {
 		return sf
 	}
 	for _, c := range f.chart {
-		if f.seat != "" && c.handle != f.seat {
+		if f.agentID != "" && c.agentID != f.agentID {
 			continue
 		}
 		sf := get(c.agentID)
 		sf.row.Handle, sf.row.Role, sf.row.AgentID, sf.row.InChart = c.handle, c.role, c.agentID, true
 	}
-	if f.seat != "" && len(folds) == 0 {
+	if f.agentID != "" && len(folds) == 0 {
 		// THE SEAT ASKED FOR, WHETHER OR NOT THE CHART HOLDS IT: one row of
 		// zeros, so "did nothing" and "no such seat" are not one answer.
-		key := f.agentID
-		if key == "" {
-			key = "handle:" + f.seat
-		}
-		get(key).row.Handle, folds[key].row.AgentID = f.seat, f.agentID
+		get(f.agentID).row.Handle, folds[f.agentID].row.AgentID = f.seat, f.agentID
 	}
 
 	// Rows arrive in (day, node, seat) order, so a later row's name is a
 	// newer day's.
 	for _, r := range rows {
-		key := r.AgentID
-		if f.seat != "" && f.agentID == "" {
-			// No company to derive an id from: the handle the day's record
-			// carried is the only name left to match on.
-			if r.Handle != f.seat {
-				continue
-			}
-			key = "handle:" + f.seat
+		if f.agentID != "" && r.AgentID != f.agentID {
+			continue
 		}
-		sf := get(key)
+		sf := get(r.AgentID)
 		if !sf.row.InChart {
 			if r.Handle != "" {
 				sf.row.Handle = r.Handle

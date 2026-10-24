@@ -14,8 +14,9 @@ import (
 var watchLog = logging.Get("seat.watchdog")
 
 // The watchdog's own cadence. Both are CEILINGS, scaled down against the
-// threshold — see [Host.beatInterval] for the other half of the same rule,
-// and [Watchdog] for why the threshold itself is not a knob.
+// threshold: [beatCeiling] is the rule for the beat, which the host keeps and
+// [Watchdog.Lag] reads a missed beat against, and [Watchdog] says why the
+// threshold itself is not a knob.
 const (
 	// WatchdogBeatInterval is the fastest a watched duty needs to prove it
 	// is turning. A stamp is a mutex and a clock read, so its cost is
@@ -34,7 +35,40 @@ const (
 	// WatchdogExitCode marks a self-terminated wedge, distinct from any
 	// ordinary failure so an orchestrator's restart logs say what happened.
 	WatchdogExitCode = 75
+
+	// FailExitCode marks a node ended by a duty that DECLARED it cannot go on
+	// ([Watchdog.Fail]): today, the embedded broker's own Fatalf.
+	//
+	// A CODE OF ITS OWN rather than the wedge's, because an orchestrator's
+	// restart log is often all a deployment keeps — one that discards stderr
+	// keeps nothing else — and the two send a reader to opposite places: a
+	// wedge is this process, a declaration is the broker's store, its disk or
+	// its settings. It is sysexits' EX_UNAVAILABLE, "a service is
+	// unavailable", whose description also covers a catchall where something
+	// does not work and the program does not know why: the service is the
+	// broker this node runs, and why it stopped is nats-server's to say, in
+	// the line on stderr.
+	FailExitCode = 69
 )
+
+// beatCeiling is the longest a duty guarded at threshold goes between two
+// beats while it is turning: [WatchdogBeatInterval], scaled down so
+// [WatchdogBeatsPerThreshold] beats fit inside the threshold.
+//
+// ONE RULE FOR BOTH ENDS. [Host.beatInterval] beats at this or faster, and
+// [Watchdog.Lag] reads a duty whose last beat is older than this as BEHIND:
+// it has missed a beat. Written twice, the two could disagree, and a host
+// beating at one interval would be judged against another.
+func beatCeiling(threshold time.Duration) time.Duration {
+	d := WatchdogBeatInterval
+	if scaled := threshold / WatchdogBeatsPerThreshold; scaled < d {
+		d = scaled
+	}
+	if d <= 0 {
+		d = time.Millisecond
+	}
+	return d
+}
 
 // Pulse is a liveness source the watchdog watches: a duty that proves it is
 // still turning by stamping a time.
@@ -57,6 +91,10 @@ type Stall struct {
 	Lag time.Duration
 	// Threshold is the deadline it blew — the seat lease TTL.
 	Threshold time.Duration
+	// Cause is the duty's own reason when it DECLARED it can never turn
+	// again ([Watchdog.Fail]) rather than stopped beating: nil for a wedge,
+	// whose Lag is the evidence, and set for a declaration, which has none.
+	Cause error
 }
 
 // Watchdog ends the process when a watched duty stops turning past the seat
@@ -103,7 +141,10 @@ type Stall struct {
 type Watchdog struct {
 	threshold time.Duration
 	poll      time.Duration
-	clock     func() time.Time
+	// beat is the longest a turning duty goes between beats ([beatCeiling]),
+	// which is what [Watchdog.Lag] measures BEHIND against.
+	beat  time.Duration
+	clock func() time.Time
 
 	// onStall is the injection seam. Unexported because the default really
 	// does exit and no caller outside this package may weaken that.
@@ -153,7 +194,13 @@ func newWatchdog(threshold time.Duration, clock func() time.Time, onStall func(S
 	if poll <= 0 {
 		poll = time.Millisecond
 	}
-	return &Watchdog{threshold: threshold, poll: poll, clock: clock, onStall: onStall}
+	return &Watchdog{
+		threshold: threshold,
+		poll:      poll,
+		beat:      beatCeiling(threshold),
+		clock:     clock,
+		onStall:   onStall,
+	}
 }
 
 // Watch registers a duty. Call before [Watchdog.Start]; registering later is
@@ -226,11 +273,71 @@ func (w *Watchdog) Stop() {
 	watchLog.Info("watchdog_stopped")
 }
 
-// Lag is how far behind the worst LIVE duty is, for /health. Zero when no
-// watched duty is live, which is the same reading as "nothing to report".
+// Fail ends the process now, for a duty that has DECLARED it can never turn
+// again — which needs no lease TTL to establish.
+//
+// The one caller is the engine's embedded broker, whose nats-server called
+// Fatalf after its boot (internal/queue/jetstream's Death). Stock
+// nats-server exits the process there, and the reasoning that makes this
+// watchdog exit rather than drain applies to it exactly: every step that
+// would make a drain graceful — acknowledging a turn's work, publishing what
+// it did, giving a seat's lease back — rides that broker, so a drain could
+// only spend the time a turn takes on work none of which can be recorded, and
+// meanwhile answer /health as alive. A node that ends at once is restarted at
+// once, and the restart is what brings a broker back: it recovers its store
+// from what reached the disk.
+//
+// UNCONDITIONAL, unlike a stall: armed or not, started or stopped. A watchdog
+// stands down for a drain because exiting through one abandons the seat
+// release, and a dead broker has already taken that release away; there is
+// nothing for a stand-down to protect. Once, like a stall — a node ends one
+// time, for the first reason that reached it.
+func (w *Watchdog) Fail(duty string, cause error) {
+	w.mu.Lock()
+	if w.fired {
+		w.mu.Unlock()
+		return
+	}
+	w.fired = true
+	w.mu.Unlock()
+	w.onStall(Stall{Duty: duty, Threshold: w.threshold, Cause: cause})
+}
+
+// Lag is how far behind the worst LIVE duty is, for /health: the time since
+// its last beat, once that is longer than the beat interval ([beatCeiling]).
+// A duty whose last beat is older than that has missed one, which is what
+// BEHIND means here; it climbs towards the threshold, at which the watchdog
+// ends the process.
+//
+// ZERO OTHERWISE: no watched duty is live, or every live one is on its beat.
+// That is the same reading as "nothing to report". The time since the last
+// beat is never zero on a turning duty, only less than a beat, so reported
+// whole it put a figure under a second on every healthy node's health, where
+// the field is documented as present only while the duty is behind, and a
+// reader alerting on its presence would have fired on all of them.
 func (w *Watchdog) Lag() time.Duration {
 	_, lag, _ := w.worst(w.clock())
+	if lag <= w.beat {
+		return 0
+	}
 	return lag
+}
+
+// Beating reports whether a watched duty is live and has stamped a beat:
+// the one state in which the watchdog is judging anything. A watchdog
+// watching nothing, or only duties that stopped or have not run yet, judges
+// nothing, and a healthy duty's [Watchdog.Lag] is zero, so Lag alone cannot
+// tell a guarded node from an unguarded one.
+func (w *Watchdog) Beating() bool {
+	w.mu.Lock()
+	pulses := slices.Clone(w.pulses)
+	w.mu.Unlock()
+	for _, p := range pulses {
+		if last, live := p.pulse.Beat(); live && !last.IsZero() {
+			return true
+		}
+	}
+	return false
 }
 
 func (w *Watchdog) watch(ctx context.Context) {
@@ -322,11 +429,30 @@ func (w *Watchdog) worst(now time.Time) (name string, lag time.Duration, anyLive
 // same reason: a configured handler may batch, format, or ship lines
 // somewhere, and that is more machinery than a wedged process has earned.
 func hardExit(s Stall) {
-	fmt.Fprintf(os.Stderr,
-		"crewlet: %s stalled %.1fs past the seat lease TTL; exiting so peers can take over "+
-			"cleanly (code %d)\n",
-		s.Duty, s.Lag.Seconds(), WatchdogExitCode)
-	os.Exit(WatchdogExitCode)
+	fmt.Fprintln(os.Stderr, exitNotice(s))
+	os.Exit(s.exitCode())
+}
+
+// exitCode is the code a node ending for s leaves with: [FailExitCode] for a
+// duty that declared it cannot go on, [WatchdogExitCode] for a wedge.
+func (s Stall) exitCode() int {
+	if s.Cause != nil {
+		return FailExitCode
+	}
+	return WatchdogExitCode
+}
+
+// exitNotice is the one line a node that ends itself leaves on stderr: what
+// stopped, why that ends the process, and the code it ends with.
+func exitNotice(s Stall) string {
+	if s.Cause != nil {
+		return fmt.Sprintf("crewlet: %s declared it cannot go on: %v; exiting so "+
+			"this node is restarted rather than left serving on it (code %d)",
+			s.Duty, s.Cause, s.exitCode())
+	}
+	return fmt.Sprintf("crewlet: %s stalled %.1fs past the seat lease TTL; exiting "+
+		"so peers can take over cleanly (code %d)",
+		s.Duty, s.Lag.Seconds(), s.exitCode())
 }
 
 var _ Pulse = (*Host)(nil)

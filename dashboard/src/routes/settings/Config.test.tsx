@@ -16,7 +16,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { changeValue, ConfigScreen, RevisionAuthor, RevisionPeek } from "./Config.tsx";
+import { changeValue, ConfigScreen, RevisionPeek } from "./Config.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
@@ -30,6 +30,7 @@ const revisions = [
     created_at: "2026-08-23T15:00:00Z",
     created_by: "founder",
     created_by_kind: "operator",
+    operator_id: "",
     source: "api",
     summary: "connect datadog",
     is_active: true,
@@ -38,7 +39,8 @@ const revisions = [
     revision_id: "01JCFGBBBB0000000000000002",
     created_at: "2026-08-22T15:00:00Z",
     created_by: "node-a",
-    created_by_kind: "node",
+    created_by_kind: "system",
+    operator_id: "",
     source: "file",
     summary: "first import",
     is_active: false,
@@ -136,12 +138,12 @@ test("a revision row renders the server's own field names", async () => {
   expect(screen.getByText("01JCFGBBBB")).toBeDefined();
   expect(screen.getByText("connect datadog")).toBeDefined();
   // The author, WHAT the author is, and the active marker. The kind is the
-  // revision's own word: a node's seed reads as the node's, never as a
-  // person's.
+  // revision's own word: a node's seed reads as the engine's (`system`),
+  // never as a person's.
   expect(screen.getByText("founder")).toBeDefined();
   expect(screen.getByText("node-a")).toBeDefined();
   expect(screen.getByText("operator")).toBeDefined();
-  expect(screen.getByText("node")).toBeDefined();
+  expect(screen.getByText("system")).toBeDefined();
   expect(screen.getAllByText("active").length).toBe(1);
 });
 
@@ -169,10 +171,9 @@ test("a diff line carries the kind the server sends", async () => {
 });
 
 // A DIFF IS DRAWN IN ITS OWN TRACKS, and nothing in it is cut. The config
-// list spelled `.diff-line`, which the knowledge page's line diff also spells
-// later in the sheet, so the cascade handed every change the page diff's
-// line-number tracks (`3.5ch 3.5ch 2ch`): at 1440 the path got 23px and the
-// value 13px, and every change read "− mc… {…". jsdom lays nothing out, so
+// list once shared a class with the knowledge page's line diff, so the
+// cascade handed every change that diff's line-number tracks: at 1440 the
+// path got 23px and the value 13px. jsdom lays nothing out, so
 // the cascade over the rendered lines is what is read — with every sheet the
 // dashboard loads, in the order it loads them.
 test("a diff's path and value are drawn whole, in the diff's own tracks", async () => {
@@ -316,6 +317,9 @@ test("a cut diff says how many changes there are", async () => {
   // And where the whole thing is: the CLI writes to a terminal, which has no
   // response budget, so it prints every change.
   expect(screen.getByText("crewlet config diff")).toBeDefined();
+  expect(screen.getByText(/3 of 512 shown/).textContent).toBe(
+    "3 of 512 shown. crewlet config diff shows all.",
+  );
 });
 
 // NO ACTIVE REVISION IS NOT AN EMPTY COLLECTION, and the engine says so by
@@ -585,7 +589,9 @@ test("a revision's peek says each property once, its ids in the mono face", asyn
   // A PROPERTY'S LABEL is a fact's or a rail row's — the eyebrow above the
   // title names the kind of object, which is not one of its properties.
   const said = (label: string) =>
-    [...document.querySelectorAll(".fact-label, dt")].filter((el) => el.textContent === label);
+    [...document.querySelectorAll(".crewlet-fact-line__label, dt")].filter(
+      (el) => el.textContent === label,
+    );
   for (const label of ["Created", "Source", "Activated", "Revision", "Parent"]) {
     expect(said(label), label).toHaveLength(1);
   }
@@ -637,13 +643,10 @@ test("an author's name comes before its kind, on a line the kind leaves first", 
   expect(rule).toMatch(/line-height:\s*var\(--size-control-sm\)/);
 });
 
-// THE NOTE UNDER THE RECORD IS CLEAR OF IT. At the one-step gap the caption
-// sat almost flush on the code block's bottom edge and read as its last line;
-// every note under a block takes the two-step gap.
-test("the note under the active revision keeps its step from the block", async () => {
-  mount("#/config?lens=active");
-  const note = await screen.findByText(/Click into the revision/);
-  const column = note.parentElement!;
-  expect(column.classList.contains("gap-2"), column.className).toBe(true);
-  expect(column.querySelector(".crewlet-codeblock, pre")).not.toBeNull();
+// THE ACTIVE REVISION IS THE RECORD ALONE. The selection tip that sat under
+// the block is gone, and nothing is drawn in its place.
+test("the active revision carries no note under its block", async () => {
+  const { container } = mount("#/config?lens=active");
+  await waitFor(() => expect(container.querySelector(".crewlet-codeblock, pre")).not.toBeNull());
+  expect(screen.queryByText(/Click into the revision|Ctrl\+A/)).toBeNull();
 });

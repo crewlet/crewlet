@@ -52,6 +52,36 @@ func TestHandleDerivationAndOverride(t *testing.T) {
 			// chart, unreachable from everywhere else.
 			name: "a name that slugifies to nothing", role: Role{Name: "###"}, want: "", wantFail: true,
 		},
+		{
+			// A LOGIN'S SHAPE IS NEVER A SEAT'S: a dot is a person's
+			// login separator, and a name carrying one is resolved in
+			// the identity directory rather than the chart.
+			name: "a person's login shape rejected", role: Role{Name: "Jane",
+				DeclaredHandle: "jane.doe"}, want: "jane.doe", wantFail: true,
+		},
+		{
+			name: "a machine's login shape rejected", role: Role{Name: "CI",
+				DeclaredHandle: "ci:release"}, want: "ci:release", wantFail: true,
+		},
+		{
+			// THE WIDTH EVERY HANDLE SHARES, at the bound and one past it —
+			// declared, and derived from a long name, which is the one way
+			// a slug fails the grammar and used to reach the chart before
+			// anything refused it.
+			name: "a handle at the width bound", role: Role{Name: "Wide",
+				DeclaredHandle: strings.Repeat("a", 64)},
+			want: strings.Repeat("a", 64),
+		},
+		{
+			name: "a declared handle past the width bound", role: Role{Name: "Wide",
+				DeclaredHandle: strings.Repeat("a", 65)},
+			want: strings.Repeat("a", 65), wantFail: true,
+		},
+		{
+			name: "a name whose slug is past the width bound",
+			role: Role{Name: strings.Repeat("Word ", 14)},
+			want: strings.TrimSuffix(strings.Repeat("word-", 14), "-"), wantFail: true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -182,7 +212,15 @@ func TestHumanSeatKeepsItsDescriptiveFields(t *testing.T) {
 	}
 }
 
-func TestHumanSeatNeedsAContactIdentity(t *testing.T) {
+// A HUMAN SEAT WITH NO CONTACT IDENTITY IS A LEGITIMATE SEAT.
+//
+// A person who works through the dashboard — bound to the seat in the identity
+// directory, and never on the company's chat — has no account to write into a
+// contact block, so a rule refusing the seat refused the person. Whether
+// anybody can be MESSAGED there is a different question, and it is the
+// company's warnings' (an `advisory` at the seat's `contact`), which name the
+// seat without refusing the company that holds it.
+func TestAHumanSeatNeedsNoContactIdentity(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name    string
@@ -196,16 +234,28 @@ func TestHumanSeatNeedsAContactIdentity(t *testing.T) {
 			t.Parallel()
 			r := human(func(r *Role) { r.Contact = tc.contact })
 			r.Contact.Normalize()
-			if err := r.Validate(); !errors.Is(err, ErrNoContact) {
-				t.Errorf("Validate() = %v, want ErrNoContact", err)
+			if err := r.Validate(); err != nil {
+				t.Errorf("Validate() = %v, want nil — a person reached only "+
+					"through the dashboard holds a legitimate seat", err)
 			}
 		})
 	}
-	// A ${VAR} reference IS a declared identity — the id is instance
-	// specific and lives in the environment, not in a committed file.
-	r := human(func(r *Role) { r.Contact = &HumanContact{GitLabUsername: "${GL_FOUNDER_USERNAME}"} })
-	if err := r.Validate(); err != nil {
-		t.Errorf("Validate() = %v, want nil", err)
+}
+
+// A ${VAR} REFERENCE IS A DECLARED IDENTITY. The id is instance specific and
+// lives in the environment rather than in a committed file, so a seat whose
+// ids are all references is reachable — which is what keeps the company's
+// warnings from reporting it unreachable before the variable is even read.
+func TestAReferenceIsADeclaredContactIdentity(t *testing.T) {
+	t.Parallel()
+	c := &HumanContact{GitLabUsername: "${GL_FOUNDER_USERNAME}"}
+	if c.IsEmpty() {
+		t.Error("IsEmpty() = true for a contact holding a reference, want false")
+	}
+	for _, empty := range []*HumanContact{nil, {}} {
+		if !empty.IsEmpty() {
+			t.Errorf("IsEmpty() = false for %+v, want true", empty)
+		}
 	}
 }
 
@@ -240,10 +290,10 @@ func TestRoleValidateReportsEveryProblemAtOnce(t *testing.T) {
 	r := human(func(r *Role) {
 		r.DeclaredHandle = "Sarah_Chen"
 		r.TokenBudget = TokenCeilings{period.Week: 10}
-		r.Contact = &HumanContact{}
+		r.Contact = &HumanContact{SlackUserID: "U${SUFFIX}"}
 	})
 	err := r.Validate()
-	for _, want := range []error{ErrInvalidHandle, ErrHumanSeatField, ErrNoContact} {
+	for _, want := range []error{ErrInvalidHandle, ErrHumanSeatField, ErrEmbeddedEnvRef} {
 		if !errors.Is(err, want) {
 			t.Errorf("Validate() = %v, missing %v", err, want)
 		}
@@ -267,14 +317,23 @@ func TestContactNormalization(t *testing.T) {
 		want HumanContact
 	}{
 		{
-			name: "case-normalised fields are lowercased",
-			in:   HumanContact{GitHubLogin: "JaneDoe", GitLabUsername: "Jane.Doe"},
-			want: HumanContact{GitHubLogin: "janedoe", GitLabUsername: "jane.doe"},
+			// Each platform compares these without case — Mattermost
+			// lowercases every username it stores and looks one up by
+			// lower(?) — so a capital here names the same account.
+			name: "case-insensitive accounts are lowercased",
+			in: HumanContact{
+				GitHubLogin: "JaneDoe", GitLabUsername: "Jane.Doe",
+				MattermostUserID: "Sarah.Chen",
+			},
+			want: HumanContact{
+				GitHubLogin: "janedoe", GitLabUsername: "jane.doe",
+				MattermostUserID: "sarah.chen",
+			},
 		},
 		{
 			name: "opaque ids keep their case",
-			in:   HumanContact{SlackUserID: "U0HUMAN", AtlassianAccountID: "5b10AC8d", MattermostUserID: "Sarah.Chen"},
-			want: HumanContact{SlackUserID: "U0HUMAN", AtlassianAccountID: "5b10AC8d", MattermostUserID: "Sarah.Chen"},
+			in:   HumanContact{SlackUserID: "U0HUMAN", AtlassianAccountID: "5b10AC8d"},
+			want: HumanContact{SlackUserID: "U0HUMAN", AtlassianAccountID: "5b10AC8d"},
 		},
 		{
 			name: "whitespace is never part of an identity",
@@ -330,52 +389,6 @@ func TestContactRejectsEmbeddedEnvRefs(t *testing.T) {
 				t.Errorf("error does not name %q: %v", tc.field, err)
 			}
 		})
-	}
-}
-
-// THE RESERVED OPERATOR ID IS NOBODY'S. It is what a disabled auth guard
-// stamps on every caller, so a seat bound to it would make everybody who
-// reaches an unguarded engine that person. Refused as a literal — folded,
-// because the lookup that would match it folds — and DROPPED where a ${VAR}
-// resolves to it, since validation cannot always see the environment that
-// value lives in. Only the operator field is reserved: the same text as a
-// GitHub login is somebody's account.
-func TestTheReservedOperatorIDBindsNoSeat(t *testing.T) {
-	t.Parallel()
-	for _, literal := range []string{"anonymous", "Anonymous", " ANONYMOUS "} {
-		c := HumanContact{CrewletOperatorID: literal}
-		c.Normalize()
-		err := c.Validate()
-		if !errors.Is(err, ErrReservedOperatorID) {
-			t.Fatalf("crewlet_operator_id %q: Validate() = %v, want ErrReservedOperatorID",
-				literal, err)
-		}
-		if !strings.Contains(err.Error(), "crewlet_operator_id") {
-			t.Errorf("the refusal does not name the field: %v", err)
-		}
-	}
-	if err := (&HumanContact{GitHubLogin: ReservedOperatorID}).Validate(); err != nil {
-		t.Errorf("a github login spelled like the reserved id was refused: %v", err)
-	}
-
-	ref := &Role{Name: "Ana", Kind: KindHuman,
-		Contact: &HumanContact{SlackUserID: "U1", CrewletOperatorID: "${OPERATOR}"}}
-	if err := ref.Validate(); err != nil {
-		t.Fatalf("a reference is refused before it is resolved: %v", err)
-	}
-	lookup := lookupFrom(map[string]string{"OPERATOR": "Anonymous"})
-	if got := ref.Contact.ResolvedIdentities(lookup); !slices.Equal(got,
-		[]Identity{{TransportSlack, "U1"}}) {
-		t.Errorf("identities = %v: a reference resolving to the reserved id "+
-			"must register no operator binding", got)
-	}
-	if got := ref.ResolvedOperatorID(lookup); got != "" {
-		t.Errorf("ResolvedOperatorID = %q: every disabled-mode write would be "+
-			"read back as this person's", got)
-	}
-	chart := &Organization{Name: "Acme", Roles: []*Role{ref}}
-	if seat := chart.SeatByOperatorID(ReservedOperatorID, lookup); seat != nil {
-		t.Errorf("the disabled guard's caller resolved to seat %q", seat.Handle())
 	}
 }
 
@@ -459,7 +472,7 @@ func TestContactFieldTableIsConsistent(t *testing.T) {
 	t.Parallel()
 	want := []string{
 		"slack_user_id", "mattermost_user_id", "atlassian_account_id",
-		"github_login", "gitlab_username", "crewlet_operator_id",
+		"github_login", "gitlab_username",
 	}
 	for i, key := range want {
 		if contactFields[i].key != key {
@@ -481,75 +494,81 @@ func TestContactFieldTableIsConsistent(t *testing.T) {
 	}
 }
 
-// AN OPERATOR ID IS AN ATTRIBUTION, NEVER AN ADDRESS. The engine never sends
-// as itself, so a roster listing it under "how to reach them" would tell an
-// agent to mention a name no platform resolves — while the id still has to
-// register, so a write arriving with that token is attributed to this seat.
-func TestTheOperatorIDIsAnAttributionAndNotAnAddress(t *testing.T) {
+// A SEAT'S CEILING IS ONE TOKEN OR MORE, UNDER A CALENDAR WINDOW.
+//
+// A `{"year": 5}` decodes into a key the budget's counters have no window
+// for, and a ceiling of 0 is a seat that may never spend. So the rule is the
+// seat's own, in the sentence a company file's author reads, at the key to
+// change. A human seat's budget is refused whole, and its ceilings are not
+// reported again inside a key that has to go. Mutation: drop the check from the
+// field faults, or let a 0 through Faults, and a case here fails.
+func TestASeatsCeilingIsOneTokenOrMoreUnderAWindow(t *testing.T) {
 	t.Parallel()
-	c := &HumanContact{SlackUserID: "U1", CrewletOperatorID: "Founder"}
-	c.Normalize()
-	if c.CrewletOperatorID != "founder" {
-		t.Errorf("operator id = %q: it is compared against a Tier A token id "+
-			"typed in another file, so case must not be two chances to disagree",
-			c.CrewletOperatorID)
+	agent := func(ceilings TokenCeilings) *Role {
+		return &Role{Name: "Ada", Kind: KindAgent, TokenBudget: ceilings}
+	}
+	for name, tc := range map[string]struct {
+		ceilings TokenCeilings
+		field    []any
+		rule     error
+		says     string
+	}{
+		"a day of 0": {TokenCeilings{period.Day: 0}, []any{"token_budget", "day"},
+			ErrTokenCeiling, "remove `token_budget.day` for no daily ceiling"},
+		"a negative week": {TokenCeilings{period.Week: -5, period.Month: 10},
+			[]any{"token_budget", "week"}, ErrTokenCeiling,
+			"remove `token_budget.week` for no weekly ceiling"},
+		"a year": {TokenCeilings{period.Period("year"): 5},
+			[]any{"token_budget", "year"}, ErrUnknownWindow,
+			"remove `token_budget.year`"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			for verb, err := range map[string]error{
+				"Validate": agent(tc.ceilings).Validate(),
+			} {
+				var seatErr *SeatError
+				if !errors.As(err, &seatErr) || !errors.Is(err, tc.rule) {
+					t.Fatalf("%s() = %v, want a seat error for %v", verb, err, tc.rule)
+				}
+				if !slices.Equal(seatErr.Field, tc.field) {
+					t.Errorf("%s() reports the fault at %v, want %v", verb, seatErr.Field, tc.field)
+				}
+				if !strings.Contains(err.Error(), tc.says) {
+					t.Errorf("%s() = %q, want it to say %q", verb, err, tc.says)
+				}
+			}
+		})
 	}
 
-	got := c.ResolvedIdentities(func(string) (string, bool) { return "", false })
-	want := []Identity{{TransportSlack, "U1"}, {TransportCrewlet, "founder"}}
-	if !slices.Equal(got, want) {
-		t.Fatalf("identities = %v, want %v — the id must register, or a write "+
-			"carrying that token is attributed to nobody", got, want)
+	// THE COUNTERFACTUAL: one token is a ceiling, and an absent window is no
+	// ceiling at all rather than a fault.
+	if err := agent(TokenCeilings{period.Day: 1}).Validate(); err != nil {
+		t.Errorf("a ceiling of one token was refused: %v", err)
 	}
-
-	var reachable []Identity
-	for _, id := range got {
-		if id.Transport.Reachable() {
-			reachable = append(reachable, id)
-		}
+	if err := agent(nil).Validate(); err != nil {
+		t.Errorf("a seat with no budget was refused: %v", err)
 	}
-	if !slices.Equal(reachable, []Identity{{TransportSlack, "U1"}}) {
-		t.Errorf("reachable = %v: the engine never sends as itself", reachable)
-	}
-
-	// A seat reachable ONLY through the engine is still not empty: they hold
-	// a credential and act, and IsEmpty gates whether a human seat is
-	// considered configured at all.
-	only := &HumanContact{CrewletOperatorID: "ops"}
-	if only.IsEmpty() {
-		t.Error("a seat bound to an API token reads as having no identity")
+	// A HUMAN SEAT'S BUDGET IS REFUSED WHOLE, once.
+	err := human(func(r *Role) { r.TokenBudget = TokenCeilings{period.Day: 0} }).Validate()
+	if !errors.Is(err, ErrHumanSeatField) || errors.Is(err, ErrTokenCeiling) {
+		t.Errorf("a human seat's 0 ceiling = %v, want the human-seat conflict alone", err)
 	}
 }
 
-// A CONTACT'S FIELDS ARE SHOWN AS WRITTEN, one per config key, and each says
-// whether it resolves by the SAME rule the engine consumes identities by — so
-// a field this reports as resolving is one routing uses, and the reserved
-// operator id reached through a variable resolves nowhere.
-func TestContactFieldsResolveAsTheEngineConsumesThem(t *testing.T) {
+// A MATTERMOST CONTACT IS A NAME, AND THE ONLY ONE. Every other contact field
+// is the id that surface's events carry and registers as written; this one is
+// the username a mention is written with while a post carries the user id, so
+// registered as written it matched no post at all. Whatever reads the answer
+// leaves the name to the transport that can ask the server what it holds.
+func TestOnlyTheMattermostContactIsAName(t *testing.T) {
 	t.Parallel()
-	c := &HumanContact{
-		SlackUserID:        "U0ANA",
-		AtlassianAccountID: "${ATLASSIAN_ID}",
-		GitLabUsername:     "${UNSET_LOGIN}",
-		CrewletOperatorID:  "${OPERATOR}",
+	for _, entry := range contactTransports {
+		if got, want := entry.transport.AddressedByName(), entry.transport == TransportMattermost; got != want {
+			t.Errorf("%s: AddressedByName = %v, want %v", entry.transport, got, want)
+		}
 	}
-	lookup := lookupFrom(map[string]string{"ATLASSIAN_ID": "5b10ac", "OPERATOR": ReservedOperatorID})
-	got := c.Fields(lookup)
-	want := []ContactField{
-		{Key: "slack_user_id", Value: "U0ANA", Resolves: true},
-		{Key: "atlassian_account_id", Value: "${ATLASSIAN_ID}", Reference: true, Resolves: true},
-		{Key: "gitlab_username", Value: "${UNSET_LOGIN}", Reference: true},
-		{Key: "crewlet_operator_id", Value: "${OPERATOR}", Reference: true},
-	}
-	if !slices.Equal(got, want) {
-		t.Fatalf("Fields = %+v\nwant %+v", got, want)
-	}
-	// ONE FIELD PER KEY: Atlassian is two identities to the router and one
-	// field to the person who wrote it.
-	if n := len(c.ResolvedIdentities(lookup)); n != 3 {
-		t.Errorf("resolved identities = %d, want slack plus jira and confluence", n)
-	}
-	if (*HumanContact)(nil).Fields(lookup) != nil {
-		t.Error("a nil contact has fields")
+	if Transport("a surface this build does not have").AddressedByName() {
+		t.Error("an unknown transport reads as addressed by name")
 	}
 }

@@ -498,7 +498,7 @@ func (q *Queue) attach(ctx context.Context, topic, group string, loop func(conte
 		cons, err = jsprovision.SettleWith(ctx, q.provisioning(), consumer)
 	}
 	if err != nil {
-		return fmt.Errorf("open consumer %s/%s: %w", topic, group, err)
+		return fmt.Errorf("open consumer %s/%s: %w", topic, group, q.brokerFailed(ctx, err))
 	}
 
 	key := attachKey{topic, group}

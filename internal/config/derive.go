@@ -46,7 +46,18 @@ type DerivedSeat struct {
 	UnitPath string `json:"unit_path,omitempty"`
 	// PlacedByRef is a seat written at the root that its `unit:` reference
 	// moved into a unit.
-	PlacedByRef bool `json:"placed_by_ref"`
+	//
+	// A FACT ABOUT A DOCUMENT, and therefore ABSENT rather than false for
+	// an organisation derived without one. It says where a seat was
+	// WRITTEN versus where it ended up, and an organisation handed over
+	// already built carries no record of where anything was written.
+	//
+	// A POINTER for exactly that reason. "This seat was not moved" and
+	// "there is no document to have moved it in" are different answers,
+	// and a plain bool collapses the second into the first — which is the
+	// shape that lets a reader act on a claim nothing made. See
+	// [DeriveFrom], which sets it on nothing, and [Derived.WithoutPaths].
+	PlacedByRef *bool `json:"placed_by_ref,omitempty"`
 	// Manager is the handle of the primary manager, the first seat in
 	// engine order whose manages lists this one ([org.Organization.Manager]),
 	// and empty for a seat nobody manages.
@@ -72,6 +83,27 @@ type DerivedSeat struct {
 type DerivedUnit struct {
 	// Path is where the unit was written. Omitted with a seat's.
 	Path string `json:"path,omitempty"`
+
+	// ID is the unit's KEY — its `id`, or its name where it declares none
+	// — and it is what every reference in the document resolves: a
+	// `manages:` entry, a seat's `unit:`, and the unit column on every
+	// stored row.
+	//
+	// IT IS ON THE PROJECTION BECAUSE NOTHING ELSE IN IT CARRIES ONE. A
+	// client reading a `manages` entry sees a key, and with only display
+	// names beside it there is nothing in the same response to resolve
+	// that key against — so it either matched on the name, which is a
+	// different value the moment a unit declares an id, or rendered the
+	// raw string and called the reference broken.
+	//
+	// SPELLED `id` ON THE WIRE, as the authored field and the public
+	// projection both spell it: this hierarchy travels in the same
+	// response as those, and one value under two names in one payload is
+	// a client picking whichever it happened to read first.
+	ID string `json:"id"`
+
+	// Name is what a person reads. It is display only: nothing in the
+	// document resolves a unit by it.
 	Name string `json:"name"`
 	// Type is the effective type: what the unit declares, or team.
 	Type string `json:"type"`
@@ -111,8 +143,44 @@ type DerivedUnit struct {
 // chart's methods — what is left is linear, most of it deriving handles.
 func Derive(c *Company) Derived {
 	o, x := c.organization()
+	return deriveFrom(o, x)
+}
+
+// DeriveFrom is [Derive] over an organization that is already built — the
+// one a node builds when it applies an epoch.
+//
+// # Why the derivation has two entry points
+//
+// [Derive] answers about a DOCUMENT and can therefore say where each seat was
+// written; that is what `crewlet validate` and the guarded config reads use
+// the paths for. The org projection is handed the organisation this node runs
+// rather than the document, so this is the same derivation with the one thing
+// it cannot answer left out — exactly what [Derived.WithoutPaths] produces,
+// and it is the form every live reader asks for.
+func DeriveFrom(o *org.Organization) Derived {
+	if o == nil {
+		return Derived{}
+	}
+	return deriveFrom(o, nil)
+}
+
+// deriveFrom is the one derivation. `paths` is the document index, or nil for
+// an organization nobody authored a path for.
+func deriveFrom(o *org.Organization, paths *identityIndex) Derived {
 	chart := o.Index()
 	var out Derived
+	at := func(seat *org.Role) Path {
+		if paths == nil {
+			return nil
+		}
+		return paths.seats[seat]
+	}
+	unitAt := func(u *org.Unit) Path {
+		if paths == nil {
+			return nil
+		}
+		return paths.units[u]
+	}
 
 	homes := make(map[*org.Role]*org.Unit)
 	for u := range o.AllUnits() {
@@ -123,7 +191,7 @@ func Derive(c *Company) Derived {
 
 	for r := range o.AllRoles() {
 		seat := DerivedSeat{
-			Path:   x.seats[r].String(),
+			Path:   at(r).String(),
 			Handle: r.Handle(),
 			Name:   r.Name,
 			Kind:   string(org.KindAgent),
@@ -131,23 +199,33 @@ func Derive(c *Company) Derived {
 		if r.IsHuman() {
 			seat.Kind = string(org.KindHuman)
 		}
-		if home := homes[r]; home != nil {
-			seat.UnitPath = x.units[home].String()
-			// Written at the root, sitting in a unit: only a unit
-			// reference moves a seat.
-			seat.PlacedByRef = len(x.seats[r]) > 0 && x.seats[r][0] == "roles"
+		home := homes[r]
+		if home != nil {
+			seat.UnitPath = unitAt(home).String()
+		}
+		if paths != nil {
+			// Written at the root and sitting in a unit: only a unit
+			// reference moves a seat. STATED FOR EVERY SEAT, including
+			// a genuine "no" for one that was not moved — and only
+			// where there is a document to have written it in, because
+			// absent is the answer for a company that has none.
+			moved := home != nil && len(at(r)) > 0 && at(r)[0] == "roles"
+			seat.PlacedByRef = &moved
 		}
 		if manager := chart.Manager(r); manager != nil {
 			seat.Manager = manager.Handle()
 		}
+		// BY HANDLE, which is what a normalized manages list holds: an
+		// authored entry names a seat by handle, and a unit key has been
+		// expanded into the handles in it ([org.Index.Managers]).
 		for _, m := range chart.Managers(r) {
 			seat.Managers = append(seat.Managers, m.Handle())
 		}
 		for _, report := range chart.Reports(r) {
 			seat.Reports = append(seat.Reports, report.Handle())
 		}
-		for _, name := range r.AutoManaged {
-			if report := chart.Role(name); report != nil {
+		for _, handle := range r.AutoManaged {
+			if report := chart.Role(handle); report != nil {
 				seat.AutoReports = append(seat.AutoReports, report.Handle())
 			}
 		}
@@ -159,7 +237,8 @@ func Derive(c *Company) Derived {
 
 	for u := range o.AllUnits() {
 		unit := DerivedUnit{
-			Path:             x.units[u].String(),
+			Path:             unitAt(u).String(),
+			ID:               u.Key(),
 			Name:             u.Name,
 			Type:             string(u.Type),
 			Channel:          u.Channel,

@@ -149,10 +149,8 @@ var problemKinds = []struct {
 	{"unknown_field", ErrUnknownField},
 	{"unknown_value", ErrUnknownValue},
 
-	// A seat or unit with no name, and a person nobody can reach, are
-	// required values that are absent.
+	// A seat or unit with no name is a required value that is absent.
 	{"missing", org.ErrMissingName},
-	{"missing", org.ErrNoContact},
 	// A kind outside agent and human, a handle outside its grammar, and a
 	// contact value that is neither a literal id nor one whole reference are
 	// values outside the set a field accepts.
@@ -163,19 +161,17 @@ var problemKinds = []struct {
 	// on one identity, a field on the wrong kind of seat, a schedule and a
 	// unit that has nobody to run it.
 	{"conflict", org.ErrDuplicateHandle},
-	{"conflict", org.ErrDuplicateSeatName},
-	{"conflict", org.ErrDuplicateUnitName},
-	// Two seats on one external account — the "two entities on one
-	// identity" this group's comment opens with, and the only duplicate
-	// that carries no name sentinel alongside it, so with no entry of its
-	// own it arrived as `invalid` while every sibling duplicate was a
-	// conflict.
+	// Two seats on one external account, and two units on one key — the
+	// other two "entities on one identity" this group's comment opens with.
 	{"conflict", org.ErrDuplicateIdentity},
-	// Its own entry, although a duplicate NAME already carries both
-	// sentinels: where an id is what collided the error carries this one
-	// alone, and with no entry that collision arrives as `invalid`.
 	{"conflict", org.ErrDuplicateUnit},
 	{"conflict", org.ErrHumanSeatField},
+	// A seat's token ceiling below one token is a number outside what the
+	// key accepts, and a budget keyed by something no calendar window is
+	// a value outside the set — the company's own block reports the first
+	// as [ErrOutOfRange] through the same org rule.
+	{"out_of_range", org.ErrTokenCeiling},
+	{"unknown_value", org.ErrUnknownWindow},
 	{"conflict", org.ErrAgentSeatField},
 	{"conflict", org.ErrUnrunnableSchedule},
 	{"conflict", org.ErrMisplacedUnitRef},
@@ -315,18 +311,24 @@ func (x *identityIndex) place(leaf error) *located {
 	case errors.As(leaf, &dup):
 		l := &located{err: leaf, text: text}
 		for _, r := range dup.Seats {
+			// A HANDLE IS PLACED AT THE HANDLE, which is its identity in
+			// every document this reads — one is written in from the name
+			// where none was declared ([MintIdentities]) — and the field the
+			// message tells an operator to change, as a unit is placed at
+			// its id below.
 			field := "name"
-			if dup.Kind == org.DuplicateHandle && r.DeclaredHandle != "" {
-				// The handle is written, so that is the line to change; a
-				// derived one is changed by renaming the seat.
+			if dup.Kind == org.DuplicateHandle {
 				field = "handle"
 			}
 			l.problems = append(l.problems,
 				x.problem(extend(x.seats[r], field), kind, text, r.Handle(), ""))
 		}
+		// A UNIT IS PLACED AT ITS ID, which is its key in every document
+		// this reads — one is minted from the name where none was written —
+		// and the field the message tells an operator to change.
 		for _, u := range dup.Units {
 			l.problems = append(l.problems,
-				x.problem(at(x.units[u], "name"), kind, text, "", u.Name))
+				x.problem(at(x.units[u], "id"), kind, text, "", u.Name))
 		}
 		return l
 	case errors.As(leaf, &seatErr):
@@ -397,6 +399,14 @@ func (x *identityIndex) entityOf(path Path) (seat, unit string) {
 // answers them to a caller that never sees a terminal. Each is a moment where
 // the consequence can still change the decision.
 //
+// They are ALSO log lines, because many deployments have neither moment: a
+// document an image, a chart or an operator renders reaches a node nobody
+// validated by hand, Tier A is never written through the API, and a company
+// seeded from a file is answered to nobody. So `crewlet run` logs every Tier A
+// advisory once per start, and every node logs a company's advisories once
+// per epoch it applies — both as `config_advisory`, beside the lines the apply
+// already writes for the other two kinds.
+//
 // # What Kind says
 //
 // "dangling_reference" is a name that resolves to nothing, with Ref naming
@@ -442,6 +452,13 @@ func advisory(path Path, message string) Warning {
 	}
 }
 
+// AdvisoryAt is [advisory] at a dotted field path, for an advisory whose
+// judgement needs a package this one cannot import: the engine's, about how
+// much broker a document's state logs reserve.
+func AdvisoryAt(fields, message string) Warning {
+	return advisory(field(fields), message)
+}
+
 // Warnings is everything a person should know about a company the engine
 // will run: every reference it resolves to nothing
 // ([Company.ReferenceWarnings]), every admission rule it breaks
@@ -483,7 +500,7 @@ func (c *Company) AdmissionWarnings() []Warning {
 // was written at, and a GitLab access level at its key.
 func (c *Company) ReferenceWarnings() []Warning {
 	o, x := c.organization()
-	refs := append(o.DanglingRefs(), c.danglingAccessLevels(o)...)
+	refs := append(o.DanglingRefs(), c.DanglingSettingsRefs(o)...)
 	out := make([]Warning, 0, len(refs))
 	for _, ref := range refs {
 		w := Warning{
@@ -505,7 +522,7 @@ func (c *Company) ReferenceWarnings() []Warning {
 			}
 			w.Seat = ref.Seat.Handle()
 		case ref.Kind == org.RefGitLabAccessLevel:
-			path = entry(field(accessLevelsPath), ref.To)
+			path = entry(field(AccessLevelsSetting), ref.To)
 		}
 		w.Path, w.Segments = path.String(), segmentsOf(path)
 		out = append(out, w)
@@ -514,50 +531,118 @@ func (c *Company) ReferenceWarnings() []Warning {
 }
 
 // AdvisoryWarnings is everything valid about this company that its author
-// should still know.
+// should still know: answered by `crewlet validate` and a `/config` write, and
+// logged by every node that applies the company.
 //
-// Located at the field they would ADD rather than at the entity in prose: a
-// unit with no id is reported at units[i].id, which is the line an editor
-// jumps to and the node a dashboard marks, and the unit is named in Unit for
-// a reader who has no document in front of them.
+// A UNIT WITH NO ID USED TO BE ONE OF THESE, and it is now an ADMISSION rule
+// instead: a unit is referenced by its key, so a document leaving a team
+// keyed on prose is refused rather than advised. The warning survives where
+// a warning is what an admission violation becomes — on a STORED revision
+// ([Company.AdmissionWarnings]) — and it is located at the same
+// `units[i].id`, so nothing about what an operator sees moved except the
+// class. Reporting both would have put one mistake in front of them twice.
+//
+// A BARE `-e NAME` IN providers.sandbox.local.run_args THAT NOTHING SUPPLIES
+// is one: the runtime's CLI copies NAME from its own environment, which is a
+// fixed rule plus runtime_env and never the engine's, so the box gets nothing
+// for it — valid, since an operator may mean exactly that, and silent until
+// whatever read the variable inside the box finds it unset.
+//
+// A COMPANY WITH NO HUMAN SEAT is one ([Company.peoplelessWarnings]): nobody
+// can be invited into it or created in it, which is the right shape for a
+// company its agents run alone and a surprise for one somebody meant to sign
+// in to.
+//
+// So is a token budget a seat's ceilings leave idle ([Company.budgetWarnings]),
+// and an LLM entry worth a second look ([Providers.llmWarnings]): an anthropic
+// model the capability table does not know, named with no claude_model.
+//
+// EMPTY, NEVER NIL, for the reason [Company.ReferenceWarnings] gives.
 func (c *Company) AdvisoryWarnings() []Warning {
-	o, x := c.organization()
-	var out []Warning
-
-	// A UNIT WITH NO ID IS KEYED ON ITS NAME, and a name is prose: it gets
-	// renamed for the reasons prose does. Two different things follow, and
-	// the warning names both because fixing one does not fix the other.
-	//
-	// THE MESSAGE NAMES THE UNIT, as every unit-scoped line in this engine
-	// does ([org.DanglingRef.Message] opens `unit "Platform" names lead`).
-	// The path is an index now rather than the name it used to be, and a
-	// prose reader gets the path and the message and nothing else: without
-	// the name in the sentence they would have to count units in their own
-	// file to find out which one this is about.
-	for u := range o.AllUnits() {
-		if strings.TrimSpace(u.ID) != "" {
-			continue
+	out := []Warning{}
+	if local := c.Providers.Sandbox.localBlock(); local != nil {
+		args := field("providers.sandbox.local.run_args")
+		for _, unsupplied := range local.unsuppliedEnvArgs() {
+			out = append(out, advisory(idx(args, unsupplied.at), fmt.Sprintf(
+				"`-e %[1]s` copies %[1]s from the container runtime's own environment, "+
+					"which is its fixed allowlist plus providers.sandbox.local.runtime_env "+
+					"and never the engine's — and neither carries %[1]s, so the box gets "+
+					"nothing for it. Put what a box needs in role.sandbox.env or a setup "+
+					"step's env, which reach the box directly; or declare "+
+					"`%[1]s: \"${%[1]s}\"` under runtime_env to have the runtime pass the "+
+					"host's value on", unsupplied.name)))
 		}
-		w := advisory(at(x.units[u], "id"), fmt.Sprintf(
-			"unit %q has no `id`, so everything durable is keyed on its NAME, "+
-				"and renaming it moves what is filed under it. Giving it an id "+
-				"fixes that, and does NOT stop a rename re-onboarding the seats "+
-				"beneath it: onboarding turns on the name, because the name is "+
-				"what an agent reads as its team", u.Name))
-		w.Unit = u.Name
-		out = append(out, w)
 	}
+	out = append(out, c.peoplelessWarnings()...)
+	out = append(out, c.unreachableWarnings()...)
 	out = append(out, c.budgetWarnings()...)
-	out = append(out, c.codeWarnings(o)...)
+	out = append(out, c.codeWarnings()...)
 	return append(out, c.Providers.llmWarnings()...)
 }
 
+// peoplelessWarnings is the one warning a company declaring no human seat
+// carries: nobody can be invited into it or created in it.
+//
+// EVERY PERSON HOLDS A HUMAN SEAT for as long as they are here
+// (internal/iamdomain, ADR-0032) — an invitation and an administrator's create
+// each name the seat the person will hold, and both are refused without one —
+// so a company with none is a company nobody can join. Said HERE, before an
+// operator meets the refusal at their first invitation, because `crewlet
+// validate` and the builder's check are the moments the document can still
+// change.
+//
+// A WARNING AND NOT A RULE, because the state is legitimate: a company its
+// agents run alone, administered through the deployment's Tier A tokens, which
+// act as themselves and need no seat, has nobody to invite. Refusing it would
+// refuse that company. AT `roles`, which is where the remedy is written.
+func (c *Company) peoplelessWarnings() []Warning {
+	for role := range c.EachRole() {
+		if role.Kind == org.KindHuman {
+			return nil
+		}
+	}
+	return []Warning{advisory(field("roles"), "this company has no "+
+		"`kind: human` seats, so nobody can be invited. That's fine if agents "+
+		"run it alone. Otherwise add a human seat for each person")}
+}
+
+// unreachableWarnings is every human seat that declares no contact identity:
+// nothing addressed to it on a chat surface reaches anybody.
+//
+// A WARNING AND NOT A RULE, because the state is legitimate: a person who
+// works only through the dashboard has no chat account to declare, and
+// refusing the seat refused them. So this is the one signal an operator gets
+// that nobody can be @-mentioned there — agents hand such a person work by
+// assigning it in the tracker instead.
+//
+// AT THE SEAT'S `contact`, which is where the remedy is written.
+func (c *Company) unreachableWarnings() []Warning {
+	var out []Warning
+	for role, path := range c.EachRole() {
+		if role.Kind != org.KindHuman || !role.Contact.IsEmpty() {
+			continue
+		}
+		handle := role.IdentityKey()
+		w := advisory(at(path, "contact"), fmt.Sprintf("%s is a human seat with "+
+			"no chat contact, so chat messages to it reach nobody. Add one, or "+
+			"leave it if they only use the dashboard", handle))
+		w.Seat = handle
+		out = append(out, w)
+	}
+	return out
+}
+
 // Warnings is everything valid about this bootstrap that its author should
-// still know.
+// still know: printed by `crewlet validate`, and logged by `crewlet run` on
+// every start, judged on the document that run applies — the file with every
+// run flag folded into it.
 //
 // SEPARATE FROM Validate, and it takes no error path: a document that does not
 // validate has problems worth fixing first, and a warning printed beside a
-// refusal is noise at exactly the moment somebody is reading carefully.
+// refusal is noise at exactly the moment somebody is reading carefully. Both
+// callers ask it only of a document that validated — `crewlet run` of the one
+// its flags left, which it holds to every Tier A rule again first, naming the
+// flags in a refusal.
 func (b *Bootstrap) Warnings() []Warning {
 	var out []Warning
 
@@ -616,54 +701,15 @@ func (b *Bootstrap) Warnings() []Warning {
 				"so has nobody to name"))
 	}
 
-	// A BROKER THAT HOLDS STREAMS WITH NOWHERE TO PERSIST THEM loses
-	// everything on a restart. It is the right configuration for a test and
-	// the wrong one for any node serving a company.
-	//
-	// ASKED OF THE BROKER KIND, and only a MEMBER holds a stream: it is the
-	// one broker that runs JetStream in this process, so it is the one whose
-	// streams an empty `store_dir` puts in memory. A LEAF runs no JetStream —
-	// every stream its clients use is a member's, kept in that member's
-	// store directory — and is refused a store directory outright
-	// ([StreamLeaf.validate]), so a correct stateless node would otherwise
-	// be told to set the one field it may not; a CLIENT's streams are its
-	// external cluster's. Both used to be caught by a predicate that asked
-	// only "is the stream embedded", which is a question about the process
-	// rather than about who keeps the data.
-	//
-	// The ROLES are not the question either: a member is a data node
-	// ([Bootstrap.checkRolesAndBroker]), and what its broker keeps in memory
-	// is lost whatever else the node does.
-	inMemory := b.BrokerKind() == placement.BrokerMember &&
-		strings.TrimSpace(b.Stream.StoreDir) == ""
-	if inMemory {
-		out = append(out, advisory(field("stream.store_dir"),
-			"this node's broker holds the company's streams and has no store "+
-				"directory, so it keeps them in memory: a restart loses every "+
-				"mailbox, every coordination record and the company's own history. "+
-				"Correct for a test; not for a node that serves a company"))
-	}
-
-	// A STORE LIMIT ON A BROKER WITH NO STORE bounds nothing. A member with
-	// no `store_dir` keeps its streams in MEMORY, and a memory-backed
-	// stream's ceiling is reserved against the broker's memory allowance
-	// rather than against this number — so the pair that reads as "I have
-	// bounded this node's broker" is the pair that has not. (A leaf and a
-	// client are refused the limit outright: neither runs a store it could
-	// bound — see [Stream.validate].)
-	//
-	// A WARNING RATHER THAN A REFUSAL, because the pair is still valid: a
-	// company on external backends keeps nothing of its own on the stream,
-	// and a test runs this way on purpose. What is NOT valid is a native
-	// tracker or knowledge base on it, and that is refused already — see
-	// [CheckTiers] — so this never softens that rule, it covers the
-	// deployments the rule leaves standing.
-	if inMemory && b.Stream.StoreMaxBytes > 0 {
-		out = append(out, advisory(field("stream.store_max_bytes"),
-			"this node's broker has no `store_dir`, so the streams it holds are "+
-				"kept in memory and this limit bounds none of them: what bounds them "+
-				"is the broker's memory allowance. Name a `store_dir`, or drop the limit"))
-	}
+	// NOT HERE: an embedded stream with no `store_dir`. It was two
+	// advisories — everything lost on a restart, and a `store_max_bytes`
+	// that bounds nothing on a broker holding its streams in memory — and
+	// it is a REFUSAL now ([Stream.Durable]) on every broker MEMBER, solo
+	// included, because every member keeps its state logs on the stream from
+	// boot, so no deployment is left standing for either to describe. A
+	// LEAF runs no JetStream and is refused a store directory outright
+	// ([StreamLeaf.validate]), and a CLIENT's streams are its external
+	// cluster's, so neither has a store for either advisory to be about.
 
 	// A PEER ENTRY THAT IS NOT ANOTHER MEMBER is not counted as one by any
 	// rule that counts members ([StreamCluster.members]) — and that is a
@@ -763,13 +809,15 @@ func (b *Bootstrap) Warnings() []Warning {
 	// filters by level, so the pair that reads as "I asked for broker
 	// diagnostics" is the pair that produces none. `crewlet run`'s own
 	// -debug / -log-level flags override the file and are invisible from
-	// it, which is why this names them rather than being a refusal.
+	// it, which is why this names them rather than being a refusal. The run
+	// folds them into the document before it asks, and the message offers
+	// only what would change the answer for the document it was asked
+	// about ([Bootstrap.unrecordedDebug]), so a node already at `debug` is
+	// told why that is not enough rather than to pass `-debug`.
 	if b.Stream.Debug && !b.logsAtDebug() {
 		out = append(out, advisory(field("stream.debug"),
 			"the embedded broker will produce its debug output and no "+
-				"destination records it: `logging.level` is "+b.loggingLevelName()+
-				" and no `logging.file.level` is `debug`. Set one of them, or pass "+
-				"`-debug` to `crewlet run`"))
+				"destination records it: "+b.unrecordedDebug()))
 	}
 
 	// A LEASE TOO SHORT FOR AN UPLOAD ACROSS A LINK. A node whose uploads to
@@ -820,6 +868,9 @@ func (b *Bootstrap) Warnings() []Warning {
 			"is set and this node does not serve git (node.roles names no %q), "+
 				"so nothing reads it", placement.RoleGit)))
 	}
+
+	out = append(out, b.API.warnings(b.ServesAPI())...)
+	out = append(out, b.API.Artifacts.warnings(b.API, b.ServesAPI())...)
 	return out
 }
 
@@ -867,6 +918,60 @@ func (b *Bootstrap) logsAtDebug() bool {
 	return level == logging.LevelDebug
 }
 
+// unrecordedDebug says why no destination this document installs records a
+// debug line, and what would — one sentence for each shape of
+// [Bootstrap.logsAtDebug]'s false answer, read off the destinations the same
+// way, because the two disagreeing would name a cause the node does not have.
+//
+// # Only the remedies that work
+//
+// The obvious remedy, raising the level, is wrong in exactly the shape that
+// is easiest to reach: `logging.stderr: false` makes the log file the only
+// destination, and a file given a level of its own does not follow
+// `logging.level` — so telling that node to pass `-debug`, or to set
+// `logging.level`, names a change that leaves it exactly as silent, and tells
+// a node already started with `-debug` to do what it did. Each case names the
+// cause it found and the changes that would make a destination record the
+// broker, and no others.
+//
+// `logging.level` is named with the flags that override it, because the
+// level this reads is the one the document holds once `crewlet run` has
+// folded `-log-level` and `-debug` into it — not necessarily the file's.
+func (b *Bootstrap) unrecordedDebug() string {
+	level := "`logging.level` — which `-log-level` and `-debug` override on " +
+		"`crewlet run` — is " + b.loggingLevelName()
+	raise := "Pass `-debug` to `crewlet run`, or set `logging.level`"
+	switch {
+	case strings.TrimSpace(b.Logging.File.Path) == "":
+		// The console is the only destination: `logging.stderr: false`
+		// with no file is refused by name, so it is on.
+		return level + ", and no log file is configured. " + raise + " to `debug`"
+	case b.Logging.File.Level == "":
+		// The file follows the level, so raising it reaches the file
+		// whether or not the console is a destination.
+		where := "the log file follows it"
+		if !b.Logging.StderrEnabled() {
+			where = "`logging.stderr` is false, so the log file, which follows it, " +
+				"is the only destination"
+		}
+		return level + ", and " + where + ". " + raise + " or `logging.file.level` to `debug`"
+	case b.Logging.StderrEnabled():
+		return level + ", and `logging.file.level` is `" + string(b.Logging.File.Level) +
+			"`. " + raise + " or `logging.file.level` to `debug`"
+	default:
+		// The file keeps a level of its own and the console is not a
+		// destination, so the process level reaches nothing: neither
+		// `-debug` nor `logging.level` is a remedy here.
+		out := "`logging.stderr` is false, so the log file is the only destination, " +
+			"and `logging.file.level` is `" + string(b.Logging.File.Level) +
+			"`. Set that to `debug`"
+		if b.Logging.Level == logging.LevelDebug {
+			out += ", or set `logging.stderr` back to true: `logging.level` is `debug` already"
+		}
+		return out
+	}
+}
+
 // loggingLevelName is the level this document names, spelled as an operator
 // wrote it, and as the DEFAULT when they wrote nothing, because "logging.level
 // is " followed by an empty string reads as a bug in the warning.
@@ -877,66 +982,13 @@ func (b *Bootstrap) loggingLevelName() string {
 	return "`" + string(b.Logging.Level) + "`"
 }
 
-// CheckTiers holds the rules that need BOTH documents, and it exists because
-// neither tier can see the other.
-//
-// Tier A is the operator's and Tier B is the founder's; each validates alone,
-// and a rule about the pair has nowhere else to live. There is exactly one
-// today, and it is worth the seam: it turns a permanent, unrecoverable state
-// into a refusal at the moment somebody could still choose otherwise.
-func CheckTiers(boot *Bootstrap, company *Company) error {
-	var p problems
-	if boot == nil || company == nil {
-		return nil
-	}
-
-	// A NATIVE BACKEND ON AN IN-MEMORY STREAM IS UNRECOVERABLE, and that is
-	// why it is an error rather than the warning Tier A raises alone.
-	//
-	// The engine's own tracker, its own knowledge base and its own code host
-	// keep their write-ahead logs on the stream, and any one starts the
-	// node's state log ([Company.RunsStateLog]). An embedded server with no
-	// store directory keeps its streams in MEMORY, so a restart recreates them
-	// empty, and a node whose durable tables are ahead of a stream that has
-	// restarted from nothing cannot tell "the log was trimmed" from "the log
-	// is a different log", refuses to serve, and stays refused: every
-	// snapshot it could adopt is above the recreated stream too.
-	//
-	// THE KNOWLEDGE BASE AS MUCH AS THE TRACKER. This rule once asked only
-	// about the tracker, and the knowledge base is native by default: a
-	// company on Jira with no Confluence ran its pages on an in-memory log,
-	// passed, and lost the ability to serve on its first restart. And the
-	// code host: a company on Jira and Confluence that hosts its
-	// repositories runs the log on `code.native` alone.
-	//
-	// It is an error rather than a warning because there is no correct
-	// deployment it describes. A company whose tracker and knowledge base are
-	// both a vendor's, and that hosts no code, starts no log at all and is
-	// unaffected, which is why the rule needs both documents.
-	//
-	// A MEMBER ONLY: a leaf keeps no stream of its own — every log it
-	// reaches lives on the members it joined, which hold the store
-	// directory — so it has nothing to lose to a restart and a store
-	// directory is refused on it outright ([StreamLeaf.validate]); and a
-	// client's streams are its external cluster's.
-	if company.RunsStateLog() && boot.BrokerKind() == placement.BrokerMember &&
-		strings.TrimSpace(boot.Stream.StoreDir) == "" {
-		p.add(field("stream.store_dir"), ErrMissing,
-			"this company runs the engine's own backends (tracker.backend: %s, "+
-				"knowledge.backend: %s, code.native: %t), whose logs live on the "+
-				"stream, and an embedded stream with no store directory keeps its "+
-				"streams in memory: a restart recreates them empty and this node "+
-				"refuses to serve them permanently. Name a directory",
-			company.TrackerBackendFor(), company.KnowledgeBackendFor(), company.Code.Native)
-	}
-	return p.err()
-}
-
-// TierWarnings is [CheckTiers]' warning half: what is VALID across the two
-// tiers and worth knowing before a company is applied to this node — never a
-// refusal, for [Bootstrap.Warnings]' reason (a warning that can fail a build is
-// one somebody suppresses). Nil-safe: either document absent is no warning,
-// CheckTiers' own posture toward a node that has no company yet.
+// TierWarnings is what is VALID across the two tiers and worth knowing before
+// a company is applied to this node — never a refusal, for [Bootstrap.Warnings]'
+// reason (a warning that can fail a build is one somebody suppresses), and no
+// rule needs both documents any more (the in-memory stream it once refused
+// with the company's help is refused by Tier A alone: [Stream.Durable]).
+// Nil-safe: either document absent is no warning, which is a node that has no
+// company yet.
 //
 // Each is located at the field whose change answers it, and printed in three
 // places: `crewlet validate` given both files, a configuration write's answer
@@ -1028,18 +1080,6 @@ func tierWarnings(boot *Bootstrap, company *Company, cache CacheBudget) []Warnin
 		}
 	}
 
-	// NOBODY CAN PUSH THROUGH A DISABLED GUARD. With the guard off every
-	// caller is the anonymous operator, whom no seat's contact names, and a
-	// push is made by a person, through their own bound token: the
-	// repositories fetch, and every
-	// push is refused — with nothing in either file looking wrong on its
-	// own.
-	if servesGit && company.Code.Native && boot.API.Auth.Disabled {
-		out = append(out, advisory(field("api.auth.disabled"),
-			"the API's guard is disabled, so every git caller is the anonymous "+
-				"operator, whom no seat can name: the company's repositories fetch and "+
-				"nobody can push"))
-	}
 	return out
 }
 
@@ -1059,17 +1099,6 @@ func (a *APIAuth) writerWarnings(path Path) []Warning {
 	}
 	var out []Warning
 	writers := at(path, "company_writers")
-	if a.Disabled {
-		// THE GUARD IS OFF, so every caller is the reserved anonymous id
-		// and no list can name it: nothing at all may change the document
-		// through the API, the managing system included.
-		out = append(out, advisory(writers,
-			"api.auth.disabled is true, so every request is the unauthenticated "+
-				"caller, which no writer can name: nothing may change the company "+
-				"document through the API, the managing system included. Enable "+
-				"api.auth with the managing system's token"))
-		return out
-	}
 	configured := make(map[string]struct{}, len(a.Tokens))
 	for _, t := range a.Tokens {
 		configured[t.ID] = struct{}{}
@@ -1081,16 +1110,13 @@ func (a *APIAuth) writerWarnings(path Path) []Warning {
 			continue
 		}
 		out = append(out, advisory(idx(writers, i), fmt.Sprintf(
-			"%q names no token in api.auth.tokens, so it lets nobody write: "+
-				"add the token, or correct the id to the one the managing "+
-				"system presents", id)))
+			"%q isn't in `api.auth.tokens`, so it can't write anything. Add "+
+				"the token, or fix the id", id)))
 	}
 	if named == 0 {
 		out = append(out, advisory(writers,
-			"no writer names a configured token, so nothing may change the "+
-				"company document through the API: every PUT, PATCH, entity "+
-				"write, revert and /setup connect is refused. That freezes the "+
-				"document; if a system was meant to manage it, list its token id"))
+			"none of these writers is in `api.auth.tokens`, so nobody can "+
+				"change the company config through the API"))
 	}
 	return out
 }

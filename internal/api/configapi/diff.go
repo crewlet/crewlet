@@ -21,7 +21,7 @@ import (
 
 // Change is one difference between two documents.
 type Change struct {
-	// Path is dotted, with list positions as [n]: roles[2].llm,
+	// Path is dotted, with list positions as [n]: mcp_servers[2].url,
 	// integrations.github.webhook_secret.
 	Path string `json:"path"`
 
@@ -188,9 +188,9 @@ func compare(path string, before, after side, out *[]Change) {
 			return
 		}
 		// BY POSITION, which is the only correspondence a JSON list has.
-		// Matching by an identity field would be right for roles and
-		// wrong for api_keys, and guessing which is which per path is how
-		// a diff comes to describe a change nobody made.
+		// Matching by an identity field would be right for mcp_servers
+		// and wrong for api_keys, and guessing which is which per path is
+		// how a diff comes to describe a change nobody made.
 		for i := range max(len(left), len(right)) {
 			at := index(path, i)
 			switch {

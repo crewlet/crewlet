@@ -134,7 +134,7 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		return 0, nil
 	case KindTrimmed:
 		// THE TRIM'S OWN RECORD: the framework removes this log's anchors
-		// below its floor in this same transaction (ADR-0032); this domain
+		// below its floor in this same transaction (ADR-0046); this domain
 		// writes nothing for it.
 		return 0, nil
 	case KindEviction:

@@ -46,7 +46,8 @@ import (
 // behind the gate, so a feature landing in a gated build is recorded here
 // rather than discovered the day somebody tries to use it.
 //
-// turso.tech/database/tursogo v0.8.0-pre.8, measured both ways:
+// turso.tech/database/tursogo, measured both ways at v0.8.0-pre.8 and unchanged
+// at the v0.8.0-pre.14 this build pins:
 //
 //   - the vector functions ship, unflagged.
 //   - fts5 is not a registered module, and behind `experimental=index_method`

@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
+	"github.com/crewlet/crewlet/internal/setup"
 
 	"github.com/crewlet/crewlet/internal/integration"
 )
@@ -130,13 +131,19 @@ type Options struct {
 	// time.Now.
 	Now func() time.Time
 
-	// WebhookBase is this deployment's public base URL, or empty to skip
-	// webhook registration.
+	// WebhookBase is where the instance reaches this deployment
+	// ([config.API.WebhookBase]: the public listener's address where
+	// `api.public` is set), or empty to skip webhook registration.
 	//
 	// SKIPPED RATHER THAN GUESSED: a hook pointing at the wrong host is
 	// worse than no hook, because the instance then reports a healthy
 	// integration that delivers into the void.
 	WebhookBase string
+
+	// WebhookBaseKey is the Tier A key WebhookBase is read from
+	// ([config.API.WebhookBaseKey]), which a run with no address names as
+	// the setting to fill in. Empty is [setup.BaseKey]'s.
+	WebhookBaseKey string
 
 	// RecreateWebhook deletes and remakes the hook to mint a fresh
 	// secret, for the case where the existing one's secret was lost.
@@ -241,19 +248,11 @@ type Result struct {
 	// anywhere but Reconcile must not invent an ingress problem.
 	NoIngress string
 
-	// NoKeyring is a run that had to mint a webhook signing secret and had
-	// nowhere to seal one, so it registered no hook.
-	//
-	// A STATE, not an error, and the distinction is the whole reason the
-	// field exists — the same one [gitlab.Result] and [mattermost.Result]
-	// draw. A fault reports the engine working on it and is retried for
-	// ever; this never resolves until somebody sets secrets.keys or sets
-	// the variable integrations.jira.webhook_secret points at. Reported as
-	// a fault it was exactly the permanent-fault posture
-	// [provision.ReadOnly] was introduced to remove: a node with no
-	// keyring answered [provision.ErrNoSink] from Record on every tick,
-	// for ever, over a deployment doing what it was configured to do.
-	NoKeyring bool
+	// NoIngressKey is the Tier A key this deployment's webhook address is
+	// read from, which NoIngress names as the setting an operator fills in
+	// to give the instance an address — as [Options] handed it over. Empty
+	// is [setup.BaseKey]'s.
+	NoIngressKey string
 }
 
 // Routing reports the seats whose inbound events can reach them.
@@ -369,8 +368,7 @@ func reconcile(ctx context.Context, opts Options) (*Result, error) {
 		return res, err
 	}
 	res.Hooked = in.Hooked
-	res.NoKeyring = in.NoKeyring
-	res.NoIngress = noIngressReason(opts, res.Deployment)
+	res.NoIngress, res.NoIngressKey = noIngressReason(opts, res.Deployment), opts.WebhookBaseKey
 	return res, nil
 }
 
@@ -442,10 +440,12 @@ func resolveSeats(ctx context.Context, opts Options) ([]SeatIdentity, error) {
 	provision.ResolveConcurrently(len(lookups), func(n int) {
 		i := lookups[n]
 		client, err := NewClient(ClientOptions{
-			URL:        opts.Client.URL(),
-			Email:      creds[i].Email,
-			Token:      creds[i].Token,
-			Deployment: opts.Client.Deployment(),
+			URL:   opts.Client.URL(),
+			Email: creds[i].Email,
+			Token: creds[i].Token,
+			// The org client's declaration, so a seat's account is
+			// looked up on the API the org's was.
+			Declared: opts.Client.declared,
 		})
 		if err != nil {
 			// THE CREDENTIAL ITSELF, not the instance: nothing was
@@ -569,25 +569,20 @@ func noIngressReason(opts Options, deployment Deployment) string {
 	if deployment == Cloud || webhookTarget(opts.WebhookBase) != "" {
 		return ""
 	}
-	return "integrations.public_base_url is unset, so this Jira instance has " +
-		"no address to deliver to and no issue or comment reaches this " +
-		"deployment"
+	return setup.BaseKey(opts.WebhookBaseKey) + " is unset, so this Jira " +
+		"instance has no address to deliver to and no issue or comment " +
+		"reaches this deployment"
 }
 
 // ingress is what one pass did about inbound delivery, and why it did not do
 // more.
 //
-// A STRUCT rather than a string, because "no hook" is three different
-// answers to an operator — this run was not given an address, this node
-// cannot hold a signing secret, or there was nothing to change — and only
-// the first two are things anybody has to act on.
+// A STRUCT rather than a string, because the target and what to tell the
+// operator about it travel together.
 type ingress struct {
 	// Hooked is the target this run registered or converged, or empty.
 	Hooked string
-	// NoKeyring is a run that had to mint a signing secret and had
-	// nowhere to seal one. See [Result.NoKeyring].
-	NoKeyring bool
-	Notes     []string
+	Notes  []string
 }
 
 // ensureWebhook registers the inbound hook, or converges the one that is
@@ -604,16 +599,6 @@ func ensureWebhook(ctx context.Context, opts Options) (ingress, error) {
 	key, err := webhookSecret(ctx, opts, target)
 	if err != nil {
 		return ingress{Notes: key.Notes}, err
-	}
-	if key.NoKeyring {
-		// NOTHING IS REGISTERED WITHOUT A KEY TO SIGN WITH. Jira signs a
-		// delivery with whatever string the hook was registered under, and
-		// the engine's own webhook route verifies with the value
-		// integrations.jira.webhook_secret resolves to — which is nothing
-		// here, or this run would not be minting. A hook registered
-		// anyway would make the instance deliver, the edge refuse every
-		// delivery, and both halves look busy.
-		return ingress{NoKeyring: true, Notes: key.Notes}, nil
 	}
 	secret, minted, notes := key.Secret, key.Minted, key.Notes
 
@@ -682,8 +667,8 @@ func ensureWebhook(ctx context.Context, opts Options) (ingress, error) {
 
 // webhookKey is what this run will have the instance sign deliveries with.
 type webhookKey struct {
-	// Secret is the value, and it is empty only where NoKeyring is set or
-	// an error was returned: a hook must never be registered unsigned.
+	// Secret is the value, and it is empty only where an error was
+	// returned: a hook must never be registered unsigned.
 	Secret string
 	// Minted is whether a FRESH secret was minted on this run, and it is
 	// what lets a converged pass leave a working hook alone: Jira never
@@ -691,10 +676,7 @@ type webhookKey struct {
 	// address" is only enough when this run did not change the key it
 	// must be signed with.
 	Minted bool
-	// NoKeyring is a run that had to mint and had nowhere to seal it. See
-	// [Result.NoKeyring].
-	NoKeyring bool
-	Notes     []string
+	Notes  []string
 }
 
 // webhookSecret is the value the hook is registered with.
@@ -712,10 +694,10 @@ type webhookKey struct {
 // # And "nothing usable" includes what this deployment already sealed
 //
 // Which is [provision.MintSecret]'s whole subject, and the reason it is not
-// written out here: the sink is asked before anything is minted, the read is
-// three-valued, and a node with no keyring reports rather than faults. This
-// pass was the one that got that right while three others did not, so the
-// rule moved to the leaf they all share rather than being copied twice more.
+// written out here: the sink is asked before anything is minted and the read
+// is three-valued. This pass was the one that got that right while three
+// others did not, so the rule moved to the leaf they all share rather than
+// being copied twice more.
 func webhookSecret(
 	ctx context.Context, opts Options, target string,
 ) (webhookKey, error) {
@@ -737,20 +719,16 @@ func webhookSecret(
 			"jira: integrations.jira.webhook_secret is %s rather than a value "+
 				"this run could resolve or a whole ${VAR} reference to mint "+
 				"one into — point it at a variable, set that variable, or "+
-				"clear both -public-url and integrations.public_base_url and "+
-				"register %s by hand",
-			provision.Shape(opts.Config.WebhookSecret), target)
+				"clear both -public-url and %s and register %s by hand",
+			provision.Shape(opts.Config.WebhookSecret),
+			setup.BaseKey(opts.WebhookBaseKey), target)
 	}
 	secret, err := provision.MintSecret(ctx, opts.Sink, secretVar,
 		opts.RecreateWebhook, func() (string, error) { return rand.Text(), nil })
 	if err != nil {
 		return webhookKey{}, fmt.Errorf("jira: %w", err)
 	}
-	key := webhookKey{
-		Secret:    secret.Value,
-		Minted:    secret.Minted,
-		NoKeyring: secret.NoKeyring,
-	}
+	key := webhookKey{Secret: secret.Value, Minted: secret.Minted}
 	if secret.Minted {
 		note := fmt.Sprintf(
 			"a fresh webhook secret was minted into %s — %s", secretVar,

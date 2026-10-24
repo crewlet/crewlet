@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -42,11 +44,12 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 
 	held := map[string]int{}
 	seatRows := make([]map[string]any, 0, len(seats))
+	byID := s.seatHandles()
 	for _, lease := range seats {
 		node := nodeOf(lease.Owner)
 		held[node]++
 		row := map[string]any{
-			"handle":     nameIn(coord.ClassSeat, lease.Resource),
+			"handle":     seatHandleOf(byID, lease.Resource),
 			"node":       node,
 			"owner":      lease.Owner,
 			"epoch":      lease.Epoch,
@@ -129,6 +132,28 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 			if live.ProjectionsTotal > 0 {
 				row["projections_ready"] = live.ProjectionsReady
 				row["projections_total"] = live.ProjectionsTotal
+			}
+			// AND WHETHER THIS NODE SERVES ADMIN — its own
+			// `api.auth.admin`, `serve` or `refuse`.
+			//
+			// The posture is applied at decision time and nothing is
+			// written when it changes, which is what makes turning a
+			// node to `refuse` immediate — and what makes a fleet
+			// whose nodes disagree a LEGAL state a rolling restart
+			// passes through, or a deliberate one (an admin node
+			// beside nodes published to the people who only use the
+			// company). Legal and invisible is the problem: whether
+			// somebody can administer the company would depend on
+			// which node a load balancer sent them to, with nothing
+			// anywhere saying so. Two postures on this view is that
+			// being said.
+			//
+			// ABSENT RATHER THAN EMPTY on a node that declares none,
+			// for the reason above it: a worker binding no API has
+			// no opinion, and a blank cell must not read as a node
+			// that refuses.
+			if live.AdminPosture != "" {
+				row["admin"] = live.AdminPosture
 			}
 		}
 		nodeRows = append(nodeRows, row)
@@ -254,6 +279,53 @@ func (s Sources) activation(ctx context.Context) activationTarget {
 	}}
 }
 
+// seatHandles is every seat the running company has, by the ID its lease is
+// named under.
+//
+// A SEAT LEASE CARRIES NO HANDLE. It is named by the seat's agent id
+// (ADR-0013), as its mailbox is. What a fleet view is FOR, though, is a person
+// reading it, so every row is resolved back through the company here rather
+// than showing a uuid — and this is the only place that resolution happens,
+// so the row an operator reads and the set `unplaceable` compares against can
+// never disagree about which seat a lease is.
+//
+// Empty for a node with no company, which is the same answer it gives for a
+// seat the company no longer has: see [seatHandleOf].
+func (s Sources) seatHandles() map[uuid.UUID]string {
+	if s.Company == nil {
+		return nil
+	}
+	_, roster := s.Company()
+	if roster == nil {
+		return nil
+	}
+	out := map[uuid.UUID]string{}
+	for role := range roster.AllRoles() {
+		if id, ok := roster.AgentIDFor(role); ok {
+			out[id] = role.Handle()
+		}
+	}
+	return out
+}
+
+// seatHandleOf names the seat a lease is for, falling back to the id.
+//
+// THE ID IS THE HONEST FALLBACK rather than an empty cell: a lease for a seat
+// the active revision no longer declares is exactly the row an operator is
+// looking for — a node still holding a seat that was removed — and a blank
+// would hide it. The same goes for a node with no company of its own, which
+// can still serve this view for a fleet that has one.
+func seatHandleOf(byID map[uuid.UUID]string, resource string) string {
+	id, ok := coord.SeatID(resource)
+	if !ok {
+		return nameIn(coord.ClassSeat, resource)
+	}
+	if handle, named := byID[id]; named {
+		return handle
+	}
+	return id.String()
+}
+
 // unplaceable are the seats the company declares that no live node may run.
 //
 // The question a fleet view exists to answer and the one a list of leases
@@ -269,13 +341,14 @@ func (s Sources) unplaceable(nodes []placement.NodeProfile, seats []map[string]a
 	if s.Company == nil {
 		return []map[string]any{}
 	}
-	company := s.Company()
+	company, roster := s.Company()
 	if company == nil {
 		return []map[string]any{}
 	}
-	organization, err := company.Organization()
-	if err != nil {
-		log.Warn("fleet_unplaceable_failed", "error", err)
+	// THE COMPANY'S OWN ORG, the one this node built when it applied the
+	// epoch, rather than one re-derived from the document per read: both
+	// come from ONE read of the epoch, so they never describe two revisions.
+	if roster == nil {
 		return []map[string]any{}
 	}
 	claimed := make(map[string]bool, len(seats))
@@ -283,7 +356,7 @@ func (s Sources) unplaceable(nodes []placement.NodeProfile, seats []map[string]a
 		claimed[seat["handle"].(string)] = true
 	}
 	out := []map[string]any{}
-	for role := range organization.AllRoles() {
+	for role := range roster.AllRoles() {
 		if !role.IsAgent() {
 			continue
 		}
@@ -358,7 +431,8 @@ func (s Sources) currentCompany() *config.Company {
 	if s.Company == nil {
 		return nil
 	}
-	return s.Company()
+	company, _ := s.Company()
+	return company
 }
 
 // nodeOf reads the node id out of an owner incarnation ({node}:{random}).

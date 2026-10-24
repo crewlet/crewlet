@@ -2,6 +2,7 @@ package statelog
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -114,23 +115,33 @@ const DefaultBarrierBudget = 5 * time.Second
 // stream's end is, so each log a node runs has its own index proving its own
 // end, and a reader of one log never waits on an append to another.
 //
+// signer is the fleet keyring's signer for the domain: a barrier is a record
+// on the log like any other, so it is signed like any other.
+//
 // admission is the log's gate reserve ([Reserve]) — required of a domain that
 // keeps one, the one every other ordinary append on this log on this node is
 // admitted through, and refused on a domain that keeps none.
-func NewReadIndex(d Domain, spec StreamSpec, log Appender, admission Admission,
-	encode func(Envelope) ([]byte, error), gen func() uint32,
+func NewReadIndex(d Domain, spec StreamSpec, log Appender, signer *Signer,
+	admission Admission, encode func(Envelope) ([]byte, error), gen func() uint32,
 	rec *metrics.Recorder) (*ReadIndex, error) {
 	if err := spec.Instantiates(d); err != nil {
+		return nil, err
+	}
+	// A BARRIER IS A RECORD ON THE DOMAIN'S OWN LOG, so it is signed like
+	// any other: an unsigned one would let anyone who can reach the broker
+	// satisfy a linearizable read's proof of quorum.
+	signed, err := signing(log, signer, d.Name())
+	if err != nil {
 		return nil, err
 	}
 	if encode == nil {
 		return nil, fmt.Errorf("statelog: read index for %q has no encoder", d.Name())
 	}
 	switch {
-	case KeepsGateReserve(d) && admission == nil:
+	case ReservationOf(d).Kept && admission == nil:
 		return nil, fmt.Errorf("statelog: read index for %q has no admission, so "+
 			"its barriers would fill the gate reserve an eviction needs", d.Name())
-	case !KeepsGateReserve(d) && admission != nil:
+	case !ReservationOf(d).Kept && admission != nil:
 		return nil, fmt.Errorf("statelog: read index for %q was given an "+
 			"admission, and its log keeps no gate reserve", d.Name())
 	}
@@ -138,7 +149,7 @@ func NewReadIndex(d Domain, spec StreamSpec, log Appender, admission Admission,
 		return nil, fmt.Errorf("statelog: read index for %q has no generation source", d.Name())
 	}
 	return &ReadIndex{
-		log:       log,
+		log:       signed,
 		stream:    spec.Name,
 		subject:   wireSubject(spec.SubjectPrefix, Subject{Kind: BarrierKind}),
 		domain:    d.Name(),
@@ -253,6 +264,11 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 		}
 		body, err := r.encode(env)
 		if err != nil {
+			// LOGGED HERE, once, for the reason [frameworkAppendError]
+			// gives: every reader waiting on this run is told the
+			// refusal's own sentence, never these words.
+			log.Warn("statelog_barrier_unconfirmed", "subject", r.subject,
+				"stage", "encode", "error", err.Error())
 			run.err = fmt.Errorf("statelog: encode a barrier: %w", err)
 			return
 		}
@@ -276,6 +292,13 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 		release()
 		if err != nil {
 			run.err = frameworkAppendError(BarrierKind, r.subject, err)
+			if refused := (*Unavailable)(nil); !errors.As(run.err, &refused) {
+				// LOGGED HERE, once per append, for the reason
+				// [frameworkAppendError] gives: what nobody answered
+				// is told to no reader in these words.
+				log.Warn("statelog_barrier_unconfirmed", "subject", r.subject,
+					"stage", "append", "error", err.Error())
+			}
 			return
 		}
 		if duplicate {
@@ -298,21 +321,53 @@ func (r *ReadIndex) run(ctx context.Context, run *barrierRun) {
 	}()
 }
 
-// frameworkAppendError is what an append of a framework record — a barrier, a
-// trimmed record — that did not land tells its caller.
+// frameworkAppendError is what an append of a framework record the broker
+// did not store (a barrier, a trimmed record) means to whoever waits on it,
+// decided by the same [classify] a write's append is.
 //
-// A FULL LOG IS NAMED AS ONE. The barrier's append handed its own error on
-// raw, and the read path's mapping ([barrierRefusal]) only knows a full log by
-// its refusal reason — so every linearizable read on a full log was refused
-// `no_quorum`, a majority that did not agree and a thing worth coming back
-// for, where the truth was a byte ceiling an operator has to raise. The trim's
-// line names it `log_full` by the same rule.
+// A REFUSAL THE BROKER NAMED IS A REFUSAL, NOT A MISSED QUORUM. The error went
+// back wrapped and unclassified, and the read mapped anything that was not
+// already an [Unavailable] to `no_quorum`, so a log at its ceiling, which
+// refuses the barrier exactly as it refuses a write, was answered as a failed
+// election: retryable, with a four-second hint, from a node that will refuse
+// the next barrier identically until an operator resizes the log. And
+// `log_full`, the refusal the read vocabulary has for it, was reachable only
+// from a test's fake appender that returned one ready-made. The trim's line
+// names a refused trimmed record `log_full` by the same rule.
+//
+// What nobody answered stays unclassified, and is the missed quorum it was;
+// and so does an answer saying the record may yet land ([faultUnsettled]): a
+// framework record carries no message id, so the one such answer it can meet
+// is a store that closed under an entry raft had committed, which is a stream
+// restarting and clears exactly as a missed quorum does. The barrier's caller
+// LOGS that error, once per append, and never tells it to a reader: it is the
+// transport's or the broker's own words, and every reader waiting on the
+// append is told [barrierRefusal]'s sentence instead. A refusal the broker
+// NAMED is different: its words are the remedy, so they travel on the
+// refusal's detail.
 func frameworkAppendError(record, subject string, err error) error {
-	if f, detail := classify(err); f == faultFull {
+	switch f, detail := classify(err); f {
+	case faultFull:
 		return &Unavailable{
 			Reason: ReasonLogFull,
-			Detail: fmt.Sprintf("the broker refused the %s record on %s: %s", record, subject, detail),
-			Cause:  err,
+			Detail: fmt.Sprintf("the broker refused to store the %s record on %s: "+
+				"%s; a full log refuses appends rather than dropping records, "+
+				"so raise the stream's byte ceiling or unblock the trim "+
+				"(`crewlet retention status` names the term holding it)",
+				record, subject, detail),
+			Cause: err,
+		}
+	case faultTooLarge, faultRefused:
+		// A FRAMEWORK RECORD IS A FEW HUNDRED BYTES, so a broker that
+		// refuses one as too large is one whose limit refuses every
+		// record; either way it is the broker's decision, and the detail
+		// carries its words (and, for a limit, which one and what moves
+		// it).
+		return &Unavailable{
+			Reason: ReasonBrokerRefused,
+			Detail: fmt.Sprintf("the broker refused to store the %s record on %s: %s",
+				record, subject, detail),
+			Cause: err,
 		}
 	}
 	return fmt.Errorf("statelog: append a %s record on %s: %w", record, subject, err)

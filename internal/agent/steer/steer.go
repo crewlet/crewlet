@@ -50,6 +50,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // MaxPendingNotes bounds the notes a turn holds unread.
@@ -110,23 +112,19 @@ type Note struct {
 	// Text is the note, as the person wrote it.
 	Text string
 
-	// By is who sent it — the credential's own name, the author an audit
-	// names — and BySeat the person that credential is bound to, empty for
-	// a token nobody bound.
-	By     string
-	BySeat string
+	// By, ByKind and OperatorID are who sent it, in the three halves
+	// iam.ActorFor makes of a principal: the author (the seat for a person
+	// the identity directory binds to one, the login for anybody else),
+	// what sort of author that is, and the credential the note came
+	// through. By is also the name the note is shown to the turn under —
+	// the person where they are bound to a seat — so there is no second
+	// "sender" name beside it to disagree with.
+	By         string
+	ByKind     iam.ActorKind
+	OperatorID string
 
 	// At is when the box took it, in UTC.
 	At time.Time
-}
-
-// Sender is the name a note is shown under: the person where the credential is
-// bound to one, else the credential.
-func (n Note) Sender() string {
-	if n.BySeat != "" {
-		return n.BySeat
-	}
-	return n.By
 }
 
 // Validate reports what is wrong with a note's text, or nil. The ONE rule,
@@ -249,6 +247,27 @@ func (b *Box) Close() []Note {
 	out := b.pending
 	b.pending = nil
 	return out
+}
+
+// Status is what [Box.Offer] would answer a NEW note now, without offering
+// one — the answer a probe gives ([Request.Probe]). A note whose id the box
+// has already taken is still answered accepted by an offer; a probe carries
+// no id, so it is answered for a note the box has never seen.
+func (b *Box) Status() Status {
+	if b == nil {
+		return StatusClosed
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	switch {
+	case b.closed:
+		return StatusClosed
+	case b.unsupported:
+		return StatusUnsupported
+	case len(b.pending) >= MaxPendingNotes:
+		return StatusFull
+	}
+	return StatusAccepted
 }
 
 // Supported reports whether this box's turn can read a note at all.

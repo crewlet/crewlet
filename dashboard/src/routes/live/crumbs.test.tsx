@@ -32,7 +32,9 @@ import { ChannelScreen } from "./Conversations.tsx";
 import { Shell } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
-import { resetForTest } from "~/lib/recents.ts";
+import { FRAME_ANSWERS } from "~/test/viewer.ts";
+import { noteReader } from "~/lib/reader.ts";
+import { recentsKey, resetForTest } from "~/lib/recents.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { EventRecord, OrgProjection } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
@@ -49,6 +51,8 @@ class InertWebSocket {
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   localStorage.clear();
+  sessionStorage.clear();
+  noteReader("p-1");
   resetForTest();
 });
 
@@ -85,7 +89,7 @@ function mount(
   if (org) store.applyOrg(withDerived(org));
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
-    Promise.resolve(answers[what] ?? {});
+    Promise.resolve(answers[what] ?? FRAME_ANSWERS[what] ?? {});
   render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
@@ -100,7 +104,7 @@ const here = () => trail().querySelector("[aria-current='page']")?.textContent;
 
 /** The labels the palette would offer, read the way its own snapshot reads them. */
 function recents(): string[] {
-  const raw = localStorage.getItem("crewlet_recents");
+  const raw = localStorage.getItem(recentsKey("p-1"));
   return raw ? (JSON.parse(raw) as { label: string }[]).map((r) => r.label) : [];
 }
 

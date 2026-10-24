@@ -44,8 +44,9 @@ func (c *countingClaim) giveBack(context.Context) (bool, error) {
 // domain's wrong and every other domain's in service.
 func wrongCopyNode(domain string) *Engine {
 	e := &Engine{backends: &Backends{}}
+	withCore(e)
 	e.native.Store(&native{trackerReader: &tracker.Reader{}})
-	e.local = localWith(e, time.Now, func(context.Context, *native) copyVerdict {
+	e.local = localWith(e, time.Now, func(context.Context, *core) copyVerdict {
 		return wrongOn(domain)
 	})
 	return e
@@ -73,7 +74,7 @@ func collectorReferences(t *testing.T) collect.References {
 	return refs
 }
 
-// A DUTY DECLINES WHILE A COPY IT DECIDES FROM IS OUT OF SERVICE — ADR-0031.
+// A DUTY DECLINES WHILE A COPY IT DECIDES FROM IS OUT OF SERVICE — ADR-0045.
 //
 // A fleet-singleton duty that decides from a domain's rows decides for the
 // whole fleet: the embedding duty publishes the vectors every node applies —
@@ -241,8 +242,9 @@ func TestADeclinedDutyIsAnnouncedOnceAndResumes(t *testing.T) {
 	set := func(v copyVerdict) { verdict.Store(&v) }
 	set(wrongOn(trackerName))
 	e := &Engine{backends: &Backends{}}
+	withCore(e)
 	e.native.Store(&native{trackerReader: &tracker.Reader{}})
-	e.local = localWith(e, time.Now, func(context.Context, *native) copyVerdict { return *verdict.Load() })
+	e.local = localWith(e, time.Now, func(context.Context, *core) copyVerdict { return *verdict.Load() })
 	rejudge := func() {
 		e.local.mu.Lock()
 		e.local.slot = verdictSlot{}
@@ -328,7 +330,7 @@ func TestATickStopsWhenACopyItDecidesFromGoesOutOfService(t *testing.T) {
 	var held embeddings.Embedder = provider
 	e.embeddings.Store(&held)
 	seedTasks(t, e, 1)
-	duty := e.newEmbedDuty(e.native.Load().log)
+	duty := e.newEmbedDuty(e.core.Load().log)
 	if duty == nil {
 		t.Fatal("a node with the vector log and a corpus built no duty")
 	}

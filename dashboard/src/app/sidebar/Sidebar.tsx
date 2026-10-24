@@ -3,14 +3,18 @@
  *
  * # What is on it, and what is not
  *
- * The WORKSPACES, from `nav.ts`'s one table — the three that are about you
- * (Home, Inbox, My work), then the company's five, and Settings at the foot.
- * Then four LIVE SHORTCUTS, each a real object with its own path: the
- * company's projects, the views this reader pinned, the pages they starred,
- * and the turns running now. Nothing else. A workspace's own sections are tabs
- * in its page header and its objects are rows on the section that lists them;
- * a sidebar that carried either becomes a tree with a different shape on every
- * screen, which is the two-column navigation this replaced.
+ * The WORKSPACES, from `nav.ts`'s one table, in its groups (`SIDEBAR_GROUPS`):
+ * the three that are about you (Home, Inbox, My work), then Company (Overview,
+ * Policies, Org chart, Schedules, Integrations, Budgets), then Workspace
+ * (Work, Knowledge, Artifacts, Live), and Settings at the foot.
+ * Then three LIVE SHORTCUTS, each a real object with its own path: the views
+ * this reader pinned, the pages they starred, and the turns running now.
+ * Nothing else. A workspace's own sections are tabs in its page header and its
+ * objects are rows on the section that lists them; a sidebar that carried
+ * either becomes a tree with a different shape on every screen, which is the
+ * two-column navigation this replaced. The company's projects are no group
+ * here for that reason: a project is a scope of Work, switched where Work's
+ * trail names it (`header/ProjectSwitcher.tsx`).
  *
  * # Running is the way to a turn from anywhere
  *
@@ -29,63 +33,100 @@
  * two kinds of figure are two props: a BADGE is how many things are waiting
  * on the reader (the Inbox's unread primary notices, the one accent fill in
  * the chrome), and a COUNT is how many of something a destination holds (the
- * turns Live is running, a project's open tasks, a pinned view's total). A
+ * turns Live is running, a pinned view's total). A
  * figure the engine did not answer is absent, never a zero.
  *
- * # Settings is never hidden
+ * # A lock goes where the closed thing is, and a row is hidden only for a service
  *
- * It carries a lock for a reader without an operator credential, and stays: a
- * section that vanished when a credential is absent is indistinguishable from
- * one that does not exist.
+ * A ROW THAT READS A SERVICE THE COMPANY DOES NOT RUN IS NOT DRAWN: Work and
+ * My work where it runs no Crewlet Works, Knowledge where it runs no Crewlet
+ * Knowledge (`nav.ts`'s `serviceShown`, over `lib/services.ts`). There is
+ * nothing to ask anybody for, and a locked row would say there was.
+ *
+ * A ROW IS LOCKED ONLY WHEN NOTHING IN ITS WORKSPACE IS OPEN to the reader
+ * (`nav.ts`'s `workspaceOpen`, over the one rule `sectionOpen`), and stays: a
+ * row that vanished when access is absent is indistinguishable from one that
+ * does not exist. Its title names what would open it — the access a reader
+ * would ask an admin for: Inbox, My work and Work say Tracker, Knowledge says
+ * Knowledge. A workspace only PART of which is closed is not locked as a
+ * whole: Settings draws its locks per section, in its column, and is open to
+ * every reader through Spend's readings.
+ *
+ * AND WHAT A LOCKED ROW WOULD SHOW IS NOT ASKED FOR: the Inbox's badge, My
+ * work's count and the pinned views are tracker answers, so a reader without
+ * Tracker asks none of them (`lib/useInboxCounts.ts`, `lib/useQueueCount.ts`,
+ * [PinnedSection]) — a figure beside a lock would be a refusal drawn as a
+ * number.
  */
 
 import { useMemo, type ReactNode } from "react";
 import {
   AppShell,
+  ArtifactKindGlyph,
   BrandLockup,
-  IconButton,
   Kbd,
   SearchTrigger,
   SidebarNav,
   StatusDot,
   useAppShell,
 } from "@crewlethq/ui";
-import { ActivityGlyph, KeyGlyph, PinGlyph, PlusGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
+import { ActivityGlyph, PinGlyph, StarGlyph } from "@crewlethq/icons/glyphs";
+import { LockMark } from "../frame/LockMark.tsx";
 import { href, samePath, useRoute } from "~/app/router.tsx";
-import { WORKSPACES, workspaceOf, type WorkspaceRow } from "~/app/nav.ts";
+import {
+  SIDEBAR_GROUPS,
+  WORKSPACES,
+  landingPath,
+  pathShown,
+  sectionOpen,
+  serviceShown,
+  workspaceMissing,
+  workspaceOf,
+  workspaceRow,
+  type WorkspaceRow,
+} from "~/app/nav.ts";
+import { useServicesKnown, useServicesRun } from "~/lib/services.ts";
+import { useNeedsYouCount } from "~/lib/decisions.ts";
+import { accessNames, type Grant } from "~/lib/access.ts";
 import { glyphFor } from "~/ui/glyph.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useViewer } from "~/lib/viewer.ts";
+import { useHeldGrants, useViewer } from "~/lib/viewer.ts";
 import { useAgents, useConnection, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
-import { activityOf, indexOrg, ringOf, turnItemKey } from "~/lib/seats.ts";
+import type { AgentAvatar } from "~/lib/avatar.ts";
+import { activityOf, indexOrg, statusOf, turnItemKey } from "~/lib/seats.ts";
 import { runningShortList, turnIdOf, watchLink } from "~/lib/turns.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { AgentRow } from "~/protocol/index.ts";
-import { pageCount, unfinished, viewRun } from "~/lib/work.ts";
-import { routeProject } from "../palette/hits.ts";
-import { useOpenNewTask } from "../newTask.ts";
+import { pageCount, viewRun } from "~/lib/work.ts";
 import { useStarred } from "~/lib/starred.ts";
+import { artifactPath } from "~/app/routes.ts";
+import { usePins } from "~/lib/artifacts/pins.ts";
 import { capsOf, keyRow, useKeymap } from "../keymap.ts";
 import { inboxFigure, useInboxCounts } from "~/lib/useInboxCounts.ts";
 import { useOwnQueueCount } from "~/lib/useQueueCount.ts";
-import { HealthCard, healthReading } from "./HealthCard.tsx";
+import { EnginePanel, engineReading } from "./EnginePanel.tsx";
 import { RailBoundary } from "../boundaries.tsx";
 import { preload } from "../lazyScreen.ts";
 import { UserBlock } from "./UserBlock.tsx";
+import { goSignIn } from "~/lib/session.ts";
+import { useKeyHints } from "~/app/layout.ts";
 
-/** How many projects the sidebar asks for: the engine's own page of them. */
-const PROJECTS_PAGE = 200;
-
-export function Sidebar({
-  onSearch,
-  onSetToken,
-}: {
-  onSearch: () => void;
-  onSetToken: () => void;
-}) {
+export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const route = useRoute();
   // THE FRAME'S READINGS, not the sidebar's own: see `FrameReadings`.
   const viewer = useViewer();
+  // WHAT THE READER HOLDS, for the locks — the frame's one reading of it
+  // (`useHeldGrants`), which Settings' column and the route's own refusal read
+  // too. Null while nobody has said: a lock drawn on no answer claims a
+  // refusal nobody has made.
+  const held = useHeldGrants();
+  // THE ALARMS' NAMES ARE THE RETENTION REPORT'S, asked only of a reader the
+  // section that lists them opens for — by the rule every lock is drawn by —
+  // so the panel never asks a question the engine would refuse.
+  const readsReport = useMemo(() => {
+    const backups = workspaceRow("settings")?.sections.find((s) => s.key === "backups");
+    return held !== null && backups !== undefined && sectionOpen(backups, held);
+  }, [held]);
 
   // BELOW THE SHELL BREAKPOINT THE SIDEBAR IS A DRAWER, and Mod+\ opens it —
   // the reader's way to it without reaching for the toggle in the bar. Only
@@ -95,12 +136,21 @@ export function Sidebar({
   // one), and the drawer's own Escape is what closes it.
   const shell = useAppShell();
   useKeymap({ drawer: { run: shell.openDrawer, when: shell.narrow } });
+  const keyHints = useKeyHints();
   const org = useOrg();
   const agents = useAgents();
-  const openNewTask = useOpenNewTask();
   const health = useEngineHealth();
-  const { connected, authRejected } = useConnection();
+  const { connected, authRejected, accessRefused, lostAt, everConnected } = useConnection();
+  // THE ENGINE REFUSED THIS BROWSER (a seat taken out of the chart) and
+  // nothing of the company is offered: the live sections, whose answers an
+  // earlier socket may have left behind, are not drawn.
+  const unserved = accessRefused !== null;
   const inbox = useInboxCounts();
+  const runs = useServicesRun();
+  const known = useServicesKnown();
+  const needsYou = useNeedsYouCount(viewer.owner !== "" && known && !runs.tracker);
+  const shown = (place: WorkspaceRow["place"]) =>
+    WORKSPACES.filter((ws) => ws.place === place && serviceShown(ws, runs));
   const here = workspaceOf(route.path);
   const at = route.path.join("/");
 
@@ -121,11 +171,21 @@ export function Sidebar({
     () => (row: AgentRow) => index.byHandle.get(row.handle ?? "")?.name ?? row.role,
     [index],
   );
+  const avatars = useMemo(
+    () => (row: AgentRow) => index.byHandle.get(row.handle ?? "")?.avatar ?? null,
+    [index],
+  );
 
   const figures: Partial<Record<WorkspaceRow["key"], Pick<NavRowProps, "badge" | "count">>> = {
-    inbox:
-      inbox.waiting !== null && inbox.waiting > 0
+    // WHERE THE COMPANY RUNS NO CREWLET WORKS no notice reaches the Inbox,
+    // and its badge counts what still does: what waits on the reader's
+    // decision ([useNeedsYouCount]).
+    inbox: runs.tracker
+      ? inbox.waiting !== null && inbox.waiting > 0
         ? { badge: { value: inboxFigure(inbox), label: "unread, waiting on you" } }
+        : {}
+      : needsYou !== null && needsYou > 0
+        ? { badge: { value: String(needsYou), label: "waiting on your decision" } }
         : {},
     // NOTHING ON YOU IS NO FIGURE, as nothing waiting is no badge: a zero
     // beside the row is a mark a reader checks, and it would be there for
@@ -163,16 +223,38 @@ export function Sidebar({
         : {},
   };
 
-  const row = (ws: WorkspaceRow) => (
-    <NavRow
-      key={ws.key}
-      label={ws.label}
-      icon={ws.icon}
-      path={ws.path}
-      current={here === ws.key}
-      {...figures[ws.key]}
-    />
-  );
+  // ONE CURRENT ROW. A pin, a star or a running turn that opens exactly this
+  // page is the row the reader followed, and the workspace row containing it
+  // gives the mark up: both carried the current fill and `aria-current`.
+  const viewKey = route.query.get("view") ?? "";
+  const pinned = usePinned({
+    owner: viewer.owner,
+    tracker: viewer.tracker && runs.tracker,
+    enabled: !unserved,
+  });
+  // NOT A PLACE THE COMPANY DOES NOT RUN THE SERVICE FOR: its star's row is
+  // drawn nowhere, and the star is kept until it runs it again.
+  const stars = useStarred().filter((s) => pathShown(s.path, runs));
+  const shortcutHere =
+    (!unserved && pinnedHere(pinned, route.path, viewKey)) ||
+    stars.some((s) => samePath(route.path, s.path)) ||
+    running.shown.some((row) => samePath(route.path, watchLink(turnIdOf(row)).path));
+
+  const row = (ws: WorkspaceRow) => {
+    const needs = held === null ? [] : workspaceMissing(ws, held);
+    return (
+      <NavRow
+        key={ws.key}
+        label={needs.length > 0 ? <Locked label={ws.label} needs={needs} /> : ws.label}
+        icon={ws.icon}
+        // WHERE THE ROW OPENS for this reader ([landingPath]): Settings' row
+        // opens the first of its sections the reader may open.
+        path={landingPath(ws, held, runs)}
+        current={here === ws.key && !shortcutHere}
+        {...figures[ws.key]}
+      />
+    );
+  };
 
   return (
     <AppShell.Rail
@@ -193,56 +275,31 @@ export function Sidebar({
             // can read it and hold it against the proxy table.
             mark={<img src="/static/dashboard/crewlet-icon.svg" alt="" />}
           />
-          {/* THE ONE CREATE THE CHROME CARRIES, beside the company's name as
-              the approved design draws it: filing work is the thing a person
-              does from anywhere, so its door is on every screen. It files
-              into the project on screen when there is one — the sheet says
-              where before anything is sent. NOT GATED HERE: the sheet's own
-              Create is the write control, and it says why a reader who
-              cannot file cannot. */}
-          <IconButton
-            size="sm"
-            variant="ghost"
-            label="New task"
-            icon={<PlusGlyph size="sm" />}
-            onClick={() => openNewTask({ project: routeProject(route.path) || undefined })}
-          />
         </div>
       }
       footer={
         <>
           <SidebarNav label="Settings">
-            {WORKSPACES.filter((ws) => ws.place === "foot").map((ws) => (
-              <NavRow
-                key={ws.key}
-                label={
-                  // THE LOCK IS ON THE ROW, NOT INSTEAD OF IT. General is the
-                  // charter, readable by anybody; every other section needs an
-                  // operator credential, and the lock says so before a click.
-                  !viewer.operator ? (
-                    <span className="side-locked">
-                      {ws.label}
-                      <KeyGlyph size="xs" aria-hidden="true" />
-                      <span className="sr-only">, most sections need an operator credential</span>
-                    </span>
-                  ) : (
-                    ws.label
-                  )
-                }
-                icon={ws.icon}
-                path={ws.path}
-                current={here === ws.key}
-              />
-            ))}
+            {/* THE LOCK IS ON THE ROW, NOT INSTEAD OF IT — see the module's
+                note — and drawn by the same rule as every other row's. */}
+            {shown("foot").map(row)}
           </SidebarNav>
           <RailBoundary label="Engine" resetKey={at}>
-            <HealthCard
-              reading={healthReading({ connected, authRejected, health })}
-              onSetToken={onSetToken}
+            <EnginePanel
+              reading={engineReading({
+                connected,
+                authRejected,
+                accessRefused,
+                lostAt,
+                everConnected,
+                health,
+              })}
+              readsReport={readsReport}
+              onSignIn={goSignIn}
             />
           </RailBoundary>
           <RailBoundary label="You" resetKey={at}>
-            <UserBlock viewer={viewer} seatName={seatName} onSetToken={onSetToken} />
+            <UserBlock viewer={viewer} seatName={seatName} />
           </RailBoundary>
         </>
       }
@@ -254,38 +311,50 @@ export function Sidebar({
           title="Search everything"
           onClick={onSearch}
           keyshortcuts="Meta+K Control+K"
-          shortcut={<Kbd keys={capsOf(keyRow("palette").presses[0]!)} subtle />}
+          // A KEYCAP ONLY FOR A READER WITH KEYS (`useKeyHints`): in the
+          // phone's drawer "Ctrl + K" named a key nobody there has, and cut
+          // the trigger's own label to "Ask or jump t…".
+          shortcut={
+            keyHints ? <Kbd keys={capsOf(keyRow("palette").presses[0]!)} subtle /> : undefined
+          }
         />
       </div>
       <SidebarNav label="Navigation">
-        <SidebarNav.Group>
-          {WORKSPACES.filter((ws) => ws.place === "you").map(row)}
-        </SidebarNav.Group>
-        <SidebarNav.Group label="Workspace">
-          {WORKSPACES.filter((ws) => ws.place === "workspace").map(row)}
-        </SidebarNav.Group>
+        {SIDEBAR_GROUPS.map((group) => (
+          <SidebarNav.Group key={group.place} {...(group.label ? { label: group.label } : {})}>
+            {shown(group.place).map(row)}
+          </SidebarNav.Group>
+        ))}
         {/* EACH LIVE SECTION HAS ITS OWN BOUNDARY: they draw rows the
             engine or the browser's storage sent, and a malformed one must
             cost that list and never the navigation above it. */}
-        <RailBoundary label="Projects" resetKey={at}>
-          <ProjectsSection path={route.path} />
-        </RailBoundary>
-        <RailBoundary label="Pinned" resetKey={at}>
-          <PinnedSection
-            path={route.path}
-            viewKey={route.query.get("view") ?? ""}
-            viewer={viewer.handle}
-          />
-        </RailBoundary>
+        {!unserved && (
+          <RailBoundary label="Pinned" resetKey={at}>
+            <PinnedSection path={route.path} viewKey={viewKey} pinned={pinned} />
+          </RailBoundary>
+        )}
         <RailBoundary label="Starred" resetKey={at}>
-          <StarredSection path={route.path} />
+          <StarredSection path={route.path} stars={stars} />
         </RailBoundary>
         {/* LAST, so a turn starting or ending moves nothing above it. */}
         <RailBoundary label="Running" resetKey={at}>
-          <RunningSection path={route.path} running={running} names={names} />
+          <RunningSection path={route.path} running={running} names={names} avatars={avatars} />
         </RailBoundary>
       </SidebarNav>
     </AppShell.Rail>
+  );
+}
+
+/**
+ * A row's label with the lock beside it ([LockMark]): its title names what
+ * would open it, and a screen reader hears it after the label.
+ */
+function Locked({ label, needs }: { label: string; needs: readonly Grant[] }) {
+  return (
+    <span className="side-locked" title={`Needs ${accessNames(needs)} access`}>
+      {label}
+      <LockMark needs={needs} />
+    </span>
   );
 }
 
@@ -332,60 +401,15 @@ function NavRow({ label, icon, glyph, lead, path, query, current, badge, count }
 }
 
 /**
- * The company's projects, each as its key and name, with its open work.
+ * What THIS READER pinned: their saved views, each with the total it selects,
+ * then the artifacts they pinned.
  *
- * THE ENGINE'S MAINTAINED CENSUS, not a count over a page: the project row
- * carries `task_counts`, so the sidebar sums what is still to do — waiting and
- * started — with no aggregation of its own. A project the answer carries no
- * census for draws no figure rather than a zero.
- */
-function ProjectsSection({ path }: { path: string[] }) {
-  const projects = useQuery("work_projects", { limit: PROJECTS_PAGE }, { pollMs: 120_000 });
-  const openNewTask = useOpenNewTask();
-  const rows = projects.data?.projects ?? [];
-  if (rows.length === 0) return null;
-  // THE PROJECT A READER IS INSIDE is the one marked — its page, or an item
-  // filed in it, whose key names the project — and the one this group's `+`
-  // files into. THE ROUTE'S OWN RESOLVER, the one the sidebar's head `+` asks:
-  // the path's second segment with a number stripped read every other Work
-  // page as a project, so on `#/work/views` this `+` offered "New task in
-  // views" and opened the sheet on a project called `views`, and on a task
-  // opened by its uuid it named the uuid.
-  const inside = routeProject(path);
-  return (
-    <SidebarNav.Group
-      label="Projects"
-      // A TASK IN A PROJECT — the one the reader is inside, preselected, or
-      // the sheet's own choice when they are in none. Not "New project": a
-      // project is minted by the company configuration, never by hand.
-      action={{
-        label: inside ? `New task in ${inside}` : "New task in a project",
-        icon: <PlusGlyph size="sm" />,
-        onClick: () => openNewTask(inside ? { project: inside } : {}),
-      }}
-    >
-      {rows.map((p) => (
-        <NavRow
-          key={p.key}
-          label={p.name || p.key}
-          lead={p.key}
-          path={["work", p.key]}
-          current={inside === p.key}
-          count={
-            p.task_counts == null ? undefined : { value: unfinished(p.task_counts), label: "open" }
-          }
-        />
-      ))}
-    </SidebarNav.Group>
-  );
-}
-
-/**
- * The views THIS READER pinned, each with the total it selects.
- *
- * ASKED WITH THE VIEWER, which is the whole of the fix this row owes: a pin is
- * a person's, and the strip asked for without one has no pins in it — so the
- * section this replaced asked the shared strip and never drew a pinned row.
+ * THE CALLER'S OWN, and the engine says whose: `work_saved_views` counts the
+ * pins of whoever asks — a `viewer=` that named anybody else was a free choice
+ * of whose personal views to read, and the engine takes none — so the section
+ * asks only once the reader has a record to keep pins under (`owner`), and
+ * asks nothing of a reader with none. A saved view is the tracker's, so the
+ * section is mounted only for a reader holding Tracker.
  *
  * AND ACROSS EVERY CONTAINER (`work_saved_views`), never the workspace strip: a
  * view pinned from a project board lives in that project, and read from the
@@ -394,23 +418,61 @@ function ProjectsSection({ path }: { path: string[] }) {
  * `counts=true` makes the engine run each pinned view's own count in the same
  * read; a view that no longer compiles carries a refusal instead, and draws no
  * figure rather than a wrong one.
+ *
+ * AN ARTIFACT PIN NEEDS NO GRANT: a share alone admits a reader to Artifacts,
+ * so the artifacts the reader pinned are listed for every reader the engine
+ * serves, from the one listing the gallery and the page read (`usePins`), and
+ * a press anywhere moves this list at once.
  */
+function usePinned({
+  owner,
+  tracker,
+  enabled,
+}: {
+  /** The name the reader's own record is kept under, or "" for nobody's. */
+  owner: string;
+  /** Whether the reader holds Tracker, which saved views need. */
+  tracker: boolean;
+  /** False where the engine serves this browser nothing at all. */
+  enabled: boolean;
+}) {
+  const views = useQuery(
+    "work_saved_views",
+    { counts: true },
+    {
+      enabled: enabled && tracker && owner !== "",
+      pollMs: 120_000,
+    },
+  );
+  const artifacts = usePins(enabled);
+  return {
+    views: tracker ? (views.data?.views ?? []).filter((v) => v.pinned && v.id) : [],
+    artifacts: artifacts.data?.items ?? [],
+  };
+}
+
+type Pinned = ReturnType<typeof usePinned>;
+
+/** Whether one of the reader's pins opens exactly the page they are on. */
+function pinnedHere(pinned: Pinned, path: readonly string[], viewKey: string): boolean {
+  return (
+    pinned.views.some((v) => samePath(path, viewRun(v).path) && viewKey === v.key) ||
+    pinned.artifacts.some((item) => samePath(path, artifactPath(item.id)))
+  );
+}
+
 function PinnedSection({
   path,
   viewKey,
-  viewer,
+  pinned: { views: pinned, artifacts: pinnedArtifacts },
 }: {
   path: string[];
   /** The `view=` the reader is on, which is what marks a pinned row current. */
   viewKey: string;
-  viewer: string;
+  /** What the reader pinned ([usePinned]). */
+  pinned: Pinned;
 }) {
-  const views = useQuery("work_saved_views", viewer ? { viewer, counts: true } : undefined, {
-    enabled: viewer !== "",
-    pollMs: 120_000,
-  });
-  const pinned = (views.data?.views ?? []).filter((v) => v.pinned && v.id);
-  if (pinned.length === 0) return null;
+  if (pinned.length === 0 && pinnedArtifacts.length === 0) return null;
   return (
     <SidebarNav.Group label="Pinned">
       {pinned.map((v) => {
@@ -437,6 +499,18 @@ function PinnedSection({
           />
         );
       })}
+      {pinnedArtifacts.map((item) => {
+        const at = artifactPath(item.id);
+        return (
+          <NavRow
+            key={`artifact:${item.id}`}
+            label={item.title}
+            glyph={<ArtifactKindGlyph kind={item.kind} size="sm" />}
+            path={at}
+            current={samePath(path, at)}
+          />
+        );
+      })}
     </SidebarNav.Group>
   );
 }
@@ -449,8 +523,7 @@ function PinnedSection({
  * not here. A stored star whose path no longer resolves is dropped when the
  * list is read (`lib/starred.ts`), so every row here leads somewhere.
  */
-function StarredSection({ path }: { path: string[] }) {
-  const stars = useStarred();
+function StarredSection({ path, stars }: { path: string[]; stars: ReturnType<typeof useStarred> }) {
   if (stars.length === 0) return null;
   return (
     <SidebarNav.Group label="Starred">
@@ -469,7 +542,7 @@ function StarredSection({ path }: { path: string[] }) {
 
 /**
  * The turns running now, one row per seat the engine says is WORKING: the
- * seat's badge with its ring, its name, the key of the item the turn is
+ * seat's badge with its status, its name, the key of the item the turn is
  * charged to, and a link that WATCHES the turn — its Transcript, with the
  * phase it is on open, or a parked turn's coding run live above its phases.
  *
@@ -493,10 +566,13 @@ function RunningSection({
   path,
   running,
   names,
+  avatars,
 }: {
   path: string[];
   running: ReturnType<typeof runningShortList>;
   names: (row: AgentRow) => string;
+  /** How each running agent is drawn, off the chart; null where it holds no such seat. */
+  avatars: (row: AgentRow) => AgentAvatar | null;
 }) {
   const { working, shown, more } = running;
   if (working.length === 0) return null;
@@ -514,8 +590,9 @@ function RunningSection({
               <SeatAvatar
                 name={name}
                 kind="agent"
+                avatar={avatars(row)}
                 size="xs"
-                ring={ringOf(activityOf(row))}
+                status={statusOf(activityOf(row))}
                 decorative
               />
             }

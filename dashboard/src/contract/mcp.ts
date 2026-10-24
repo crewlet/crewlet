@@ -1,7 +1,8 @@
 /**
- * `mcp_servers_status`: what each MCP server did on each live node, read off
- * every node's presence heartbeat, beside what the configuration declares for
- * it — the launch and never a credential (`env` and `headers` are not here).
+ * `mcp_servers_status`: what each MCP server is doing on each live node, read
+ * off every node's presence heartbeat, beside what the configuration declares
+ * for it — the launch and never a credential (`env` and `headers` are not
+ * here).
  *
  * EXACTLY WHAT `internal/api/queries` SENDS — held there by
  * `TestTheToolsScreenReadsWhatTheServerStatusSends` in both directions, the
@@ -10,15 +11,20 @@
 
 /**
  * A server's condition across the fleet, decided by the engine. `running`:
- * every instance launched started. `partial`: some started and some did not —
- * a node or one seat's credentials rather than the server. `failing`: none
- * that was launched started. `not_started`: every reporting node started
- * nothing for it. `unreported`: no live node's latest heartbeat carried the
- * report.
+ * every instance launched is serving — it started, listed its tools and was up
+ * at its node's last beat. `partial`: some are serving and some are not — a
+ * node, one seat's credentials or one child being restarted rather than the
+ * server. `failing`: none that was launched is serving. `waiting`: nothing
+ * was launched and nothing failed, and a seat's instance is held back for a
+ * credential a provisioning pass mints for it and has not sealed yet — not a
+ * failure; it starts once the credential is sealed. `not_started`: every
+ * reporting node started nothing for it. `unreported`: no live node's latest
+ * heartbeat carried the report.
  */
-export type McpServerState = "running" | "partial" | "failing" | "not_started" | "unreported";
+export type McpServerState =
+  "running" | "partial" | "failing" | "waiting" | "not_started" | "unreported";
 
-/** One live node, and whether its latest heartbeat carried its MCP starts. */
+/** One live node, and whether its latest heartbeat carried its MCP servers. */
 export interface McpStatusNode {
   id: string;
   /** False: the node's last heartbeat carried no status (its status hook
@@ -32,12 +38,19 @@ export interface McpServerNode {
   reported: boolean;
   started: number;
   failed: number;
-  /** Tools one started instance serves. */
+  /** Instances held back, unstarted, for a credential still being minted. */
+  waiting: number;
+  /** Tools one serving instance serves. */
   tools: number;
-  /** One failed instance's reason, cut to 240 bytes, or "". */
+  /** One failed instance's reason, cut to 512 bytes, or "". */
   error: string;
   /** The seat that instance was launched for, or "" for a shared server. */
   error_seat: string;
+  /** What one waiting instance waits for — the variables and the integration
+   *  minting them — cut to 512 bytes, or "". */
+  wait: string;
+  /** The seat that waiting instance belongs to, or "". */
+  wait_seat: string;
 }
 
 /** One server. */
@@ -56,8 +69,17 @@ export interface McpServerStatus {
   /** Summed over the nodes that report. */
   started: number;
   failed: number;
-  /** The most tools one started instance serves. */
+  /** Neither started nor failed: held back for a credential still being minted. */
+  waiting: number;
+  /** The most tools one serving instance serves. */
   tools: number;
+  /**
+   * The entry's `tool_annotations` keys that no instance started on a
+   * reporting node lists a tool for, sorted: each overrides nothing anywhere.
+   * A key only some instances lack is not here — a per-seat child serves what
+   * its seat's credentials reach. Empty where no instance started.
+   */
+  unlisted_annotations: string[];
   /** One cell per live node, in `nodes` order. */
   nodes: McpServerNode[];
 }

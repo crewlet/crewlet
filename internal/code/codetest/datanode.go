@@ -25,6 +25,14 @@ import (
 // seven days, the committer's and the host's alike.
 const deletedRetention = 7 * 24 * time.Hour
 
+// fleetRing is the keyring every data node signs its records and opens its
+// peers' under: ONE FLEET, ONE KEYRING, as every state log's records are
+// signed (ADR-0031) — so a record one node appended verifies on every other,
+// and a fleet's nodes share this ring whoever started them. A fixture: what
+// the suite is about is what the code domain writes, and the signature's own
+// rules are certified in internal/statelog.
+var fleetRing = statelog.OneKey("codetest", "the codetest fleet's key material")
+
 // DataOptions configure a data node.
 type DataOptions struct {
 	// ID is the node's id: its consumer's name on the code log, the writer
@@ -146,8 +154,11 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 	p := &dataIncarnation{q: q}
 	spec := code.Domain{}.Stream()
 	spec.MaxBytes = d.o.LogBytes
+	// THE DOMAIN'S LARGEST RECORD AS THE BROKER COUNTS A MESSAGE, as the
+	// engine provisions every state log.
 	if err := q.EnsureDomainStream(ctx, js.DomainStream{Name: spec.Name, Subjects: spec.Subjects,
-		MaxBytes: spec.MaxBytes, Duplicates: spec.Duplicates}); err != nil {
+		MaxBytes: spec.MaxBytes, MaxMessageBytes: spec.MaxAppendBytes(),
+		Duplicates: spec.Duplicates}); err != nil {
 		t.Fatalf("codetest: %s: provision the code log: %v", d.o.ID, err)
 	}
 	var err error
@@ -168,9 +179,17 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 	if p.consumer, err = q.DomainConsumer(ctx, spec.Name, d.o.ID, checkpoint.At.Seq); err != nil {
 		t.Fatalf("codetest: %s: open the consumer: %v", d.o.ID, err)
 	}
+	signer, err := statelog.NewSigner(code.Domain{}.Name(), fleetRing)
+	if err != nil {
+		t.Fatalf("codetest: %s: build the record signer: %v", d.o.ID, err)
+	}
+	verifier, err := statelog.NewVerifier(code.Domain{}.Name(), fleetRing)
+	if err != nil {
+		t.Fatalf("codetest: %s: build the record verifier: %v", d.o.ID, err)
+	}
 	if p.runner, err = statelog.NewRunner(statelog.RunnerDeps{
 		Domain: code.Domain{}, Spec: spec, Applier: code.NewApplier(), Fetch: p.consumer,
-		Log: p.log, Node: p.db, DB: p.estate,
+		Verifier: verifier, Log: p.log, Node: p.db, DB: p.estate,
 		Checkpoint: checkpoint.At, CheckpointStoredAt: checkpoint.StoredAt,
 		StreamCreatedAt: stats.CreatedAt.UTC(), NodeID: d.o.ID,
 		// WHOM THE FLEET HAS EVICTED, from this node's own rows — the
@@ -183,7 +202,7 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 	}
 	p.startApplier()
 
-	reserve, err := statelog.NewReserve(spec.Name, func(ctx context.Context) (statelog.Usage, error) {
+	reserve, err := statelog.NewReserve(spec, func(ctx context.Context) (statelog.Usage, error) {
 		s, serr := p.log.Stats(ctx)
 		return statelog.Usage{Bytes: s.Bytes, MaxBytes: s.MaxBytes}, serr
 	})
@@ -206,7 +225,8 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		}
 		fence.Committed = p.runner.Committed
 		pub, perr := statelog.NewPublisher(statelog.Deps{
-			Domain: code.Domain{}, Spec: spec, Log: p.log, Records: p.log, Rows: rows, Fence: fence,
+			Domain: code.Domain{}, Spec: spec, Log: p.log, Signer: signer,
+			Records: statelog.VerifiedLog{Log: p.log, Verifier: verifier}, Rows: rows, Fence: fence,
 			Gates: code.NewGates(p.estate.Reader()), Waiter: p.runner, Voids: p.runner, Identity: p.runner,
 			Admission: reserve, NodeID: writer, Generation: gen,
 		})
@@ -216,7 +236,8 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 		return pub
 	}
 	pub := publisher(d.o.ID)
-	index, err := statelog.NewReadIndex(code.Domain{}, spec, p.log, reserve, code.EncodeBarrier, gen, nil)
+	index, err := statelog.NewReadIndex(code.Domain{}, spec, p.log, signer, reserve,
+		code.EncodeBarrier, gen, nil)
 	if err != nil {
 		t.Fatalf("codetest: %s: build the read index: %v", d.o.ID, err)
 	}

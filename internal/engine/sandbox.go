@@ -2,7 +2,10 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -22,16 +25,21 @@ import (
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 	"github.com/crewlet/crewlet/internal/schedule"
-	"github.com/crewlet/crewlet/internal/seat"
+	seatpkg "github.com/crewlet/crewlet/internal/seat"
+	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
@@ -167,15 +175,7 @@ func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver, pl
 			Template: e2b.Template,
 		})
 	case config.PlacementDirect, config.PlacementContainer:
-		local := spec.Local
-		return sandbox.NewLocal(sandbox.LocalOptions{
-			Placement: sandbox.Placement(placement),
-			StateDir:  local.StateDir,
-			Image:     local.Image,
-			Runtime:   string(local.Runtime),
-			Network:   local.Network,
-			RunArgs:   local.RunArgs,
-		})
+		return sandbox.NewLocal(localOptions(spec.Local, env, placement))
 	default:
 		// UNREACHABLE THROUGH A PARSED CONFIG, because the closed set and
 		// this switch are the same list.
@@ -187,12 +187,37 @@ func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver, pl
 	}
 }
 
-// setupSteps maps the config shape onto the sandbox package's own.
+// localOptions maps the local block onto the backend's options for one cell.
 //
-// A translation rather than a shared type, so the sandbox package does not
-// import the config package: a setup step is a runtime instruction, and
-// keeping the two apart is what lets the sandbox layer be tested with a step
-// built in a test rather than a YAML document parsed into one.
+// runtime_env IS RESOLVED HERE, at the edge, as an MCP server's `env:` is
+// ([resolveServer]): Tier B stores its references verbatim, so a backend handed
+// the block's map would put the literal "${SSH_AUTH_SOCK}" into the runtime's
+// environment, and the sandbox package must not be able to read the secret
+// store to do better.
+func localOptions(local *config.LocalSandbox, env *config.Resolver, placement config.Placement) sandbox.LocalOptions {
+	return sandbox.LocalOptions{
+		Placement:  sandbox.Placement(placement),
+		StateDir:   local.StateDir,
+		Image:      local.Image,
+		Runtime:    string(local.Runtime),
+		Network:    local.Network,
+		RunArgs:    local.RunArgs,
+		RuntimeEnv: resolveMap(env, local.RuntimeEnv),
+	}
+}
+
+// resolveMap expands every ${VAR} in a config map.
+func resolveMap(env *config.Resolver, in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = env.Value(v)
+	}
+	return out
+}
+
 // resolvedOr reads a config value through this node's chain, falling back to
 // the literal when there is no resolver.
 //
@@ -206,6 +231,15 @@ func resolvedOr(env *config.Resolver, value string) string {
 	return strings.TrimSpace(env.Value(value))
 }
 
+// setupSteps converts the PROVIDER-WIDE steps a `providers.sandbox` block
+// declares, which are settings and therefore config's.
+//
+// A translation rather than a shared type, so the sandbox package does not
+// import the config package: a setup step is a runtime instruction, and
+// keeping the two apart is what lets the sandbox layer be tested with a step
+// built in a test rather than a YAML document parsed into one. The values are
+// carried VERBATIM — what a step's file and env become is decided at launch,
+// by [Engine.runEnvironment].
 func setupSteps(steps []config.SandboxSetupStep) []sandbox.SetupStep {
 	if len(steps) == 0 {
 		return nil
@@ -214,10 +248,265 @@ func setupSteps(steps []config.SandboxSetupStep) []sandbox.SetupStep {
 	for _, s := range steps {
 		out = append(out, sandbox.SetupStep{
 			Name: s.Name, Files: s.Files, Commands: s.Commands,
-			Env: s.Env, Brief: s.Brief, TimeoutSeconds: s.Timeout(),
+			Env: s.Env, OptionalKeys: s.OptionalKeys, Brief: s.Brief,
+			TimeoutSeconds: s.Timeout(),
 		})
 	}
 	return out
+}
+
+// seatSetupSteps converts a SEAT's own steps, which ride the org chart.
+//
+// TWO CONVERTERS BECAUSE THERE ARE TWO SOURCES, and only one thing about them
+// could drift — what an unset timeout means — which is why that rule is
+// [org.SetupTimeout] and neither of these states it. Everything else here is
+// field-for-field and the compiler checks it.
+func seatSetupSteps(steps []org.SandboxSetupStep) []sandbox.SetupStep {
+	if len(steps) == 0 {
+		return nil
+	}
+	out := make([]sandbox.SetupStep, 0, len(steps))
+	for _, s := range steps {
+		out = append(out, sandbox.SetupStep{
+			Name: s.Name, Files: s.Files, Commands: s.Commands,
+			Env: s.Env, OptionalKeys: s.OptionalKeys, Brief: s.Brief,
+			TimeoutSeconds: org.SetupTimeout(s.TimeoutSeconds),
+		})
+	}
+	return out
+}
+
+// runEnv is one coding run's environment and provisioning, read through this
+// node's resolver by the rule every tool server's values are
+// ([resolveServer]): every reference resolved, or why the run lacks it.
+type runEnv struct {
+	// env is the run environment the box's setup commands and its coding
+	// agent are handed — the engine's own facts and the configuration's —
+	// before the LLM credentials and the telemetry are laid over it.
+	env map[string]string
+
+	// setup is the provider-wide steps then the seat's own, every file's
+	// body read as the content it is.
+	setup []sandbox.SetupStep
+
+	// gap is what of either resolved to nothing and is not declared
+	// optional, judged against the integrations minting it — nil when
+	// nothing. keys and files name where it sits, for a log line.
+	gap         *credentialMissing
+	keys, files []string
+
+	// facts is what of the engine's own facts — the seat's email, a
+	// reference that resolved to nothing — the run starts without, judged
+	// as gap is; facted names them. Never part of gap: no layer can declare
+	// a fact optional, and code work does not stop for a commit address.
+	facts  *credentialMissing
+	facted []string
+}
+
+// runEnvironment is one coding run's environment and provisioning: the
+// provider-wide setup steps, then the seat's own, and the run environment
+// they, the seat's sandbox block and the engine assemble. ONE PLACE FOR BOTH
+// LAUNCH PATHS — the run_sandbox tool and an agent-mode executor — because a
+// box is provisioned the same way whichever of them opens it. Nil-safe on the
+// gate, since an agent-mode executor runs in a box whether or not the seat
+// has a sandbox block of its own, and on c, a box launched with no company to
+// read a provisioning plan from — every variable is then the operator's.
+//
+// # The environment
+//
+// THE ENGINE CONTRIBUTES ONLY TOOL-AGNOSTIC FACTS: the agent's identity, as
+// CREWLET_AGENT_HANDLE and CREWLET_AGENT_EMAIL — per-launch values static
+// config cannot know, which a setup recipe maps into whatever shape its tool
+// needs. Every tool-specific variable comes from config: an external token is
+// DECLARED in role.sandbox.env or a setup step's env, and the engine never
+// names one of its own. Precedence, later winning: identity, then the setup
+// steps' contributions, then the seat's own env — so an operator's explicit
+// value always beats a step's default.
+//
+// RESOLVED EXACTLY ONCE, here, at launch — not at load. These values are
+// where an operator declares a code-host token, and Tier B stores its
+// references verbatim so an exported revision carries no resolved secret.
+// Resolving at load as well would double-resolve and mangle any secret whose
+// real value contains a literal ${...}.
+//
+// # Every reference resolves, or the key is declared optional
+//
+// By the rule a tool server's values are held to (toolcredentials.go), and
+// for the reason it is: a run handed an empty code-host token clones nothing
+// and pushes nothing, after spending its box, its install and its model's
+// tokens, and nothing in a value can say that a setting — a test
+// DATABASE_URL, a proxy — may be absent. So a key whose value does not
+// resolve, under the declaration of whichever layer wrote the value that
+// won, is LEFT OUT whole where that layer lists it under `optional_keys`, and
+// is otherwise the run's gap: one a provisioning pass mints for the seat,
+// one that pass cannot mint until a person acts, or one nothing will — and a
+// value a pass mints for the seat is waited for whatever the declaration
+// says, as a tool server's is ([refGap.hold]). The engine's own identity
+// facts are never a gap, since no layer can declare them: each is contributed
+// when it resolves, and one that does not — a seat's `email:` naming a
+// variable nobody set — is left out and SAID, because a setup recipe's
+// `git config user.email "$CREWLET_AGENT_EMAIL"` otherwise commits as nobody
+// with nothing to say why.
+//
+// # The files
+//
+// A file is CONTENT rather than a setting ([secrets.ReadContent]): a body
+// that is exactly one `${VAR}` becomes that variable's value, byte for byte,
+// and any other body is written as it is. The env is the engine's setting
+// and the run environment gets the value; a `${HOME}` in a script and a
+// `${NPM_TOKEN}` in an .npmrc are the box's own, expanded there from the run
+// environment the step's env just filled. A file whose whole reference does
+// not resolve is not written where its step lists the path under
+// `optional_keys`, and is otherwise the run's gap like an env value.
+//
+// NEW MAPS, never the steps' own: the provider-wide steps are the manager's,
+// shared by every launch on this node, and a body resolved into them would be
+// a credential cached past the snapshot it came from.
+func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
+	gate *org.RoleSandbox, defaults []sandbox.SetupStep) runEnv {
+
+	resolver := e.resolver()
+	setup := slices.Clone(defaults)
+	if gate != nil {
+		setup = append(setup, seatSetupSteps(gate.Setup)...)
+	}
+
+	// THE LAYERS, each value with what declared it.
+	type layered struct {
+		value, path, where string
+		optional, fact     bool
+	}
+	merged := map[string]layered{}
+	if handle := seat.Handle(); handle != "" {
+		merged["CREWLET_AGENT_HANDLE"] = layered{value: handle, path: "role.handle", fact: true}
+	}
+	if email := seat.Email; email != "" {
+		merged["CREWLET_AGENT_EMAIL"] = layered{value: email, path: "role.email", fact: true}
+	}
+	for i, step := range setup {
+		where := stepOptionalKeys(step.Name, i < len(defaults))
+		for key, value := range step.Env {
+			merged[key] = layered{value: value, path: step.Name + ".env." + key, where: where,
+				optional: slices.Contains(step.OptionalKeys, key)}
+		}
+	}
+	if gate != nil {
+		for key, value := range gate.Env {
+			merged[key] = layered{value: value, path: "role.sandbox.env." + key,
+				where: "role.sandbox.optional_keys", optional: slices.Contains(gate.OptionalKeys, key)}
+		}
+	}
+
+	var minted map[string]integration.Kind
+	if c != nil {
+		minted = e.mintedFor(c, seat.Handle())
+	}
+	gap := refGap{env: resolver, minted: minted}
+	facts := refGap{env: resolver, minted: minted}
+	out := runEnv{env: make(map[string]string, len(merged))}
+	for _, key := range slices.Sorted(maps.Keys(merged)) {
+		l := merged[key]
+		missing := resolver.Missing(l.value)
+		switch {
+		case len(missing) == 0:
+			out.env[key] = resolver.Value(l.value)
+		case l.fact:
+			facts.hold(key, missing, false, "", false)
+			out.facted = append(out.facted, l.path)
+		case gap.hold(key, missing, l.optional, l.where, false):
+			out.keys = append(out.keys, l.path)
+		}
+	}
+
+	out.setup = make([]sandbox.SetupStep, len(setup))
+	for i, step := range setup {
+		out.setup[i] = step
+		if len(step.Files) == 0 {
+			continue
+		}
+		where := stepOptionalKeys(step.Name, i < len(defaults))
+		files := make(map[string]string, len(step.Files))
+		for _, path := range slices.Sorted(maps.Keys(step.Files)) {
+			body := step.Files[path]
+			content, unresolved := secrets.ReadContent(body, resolver.LookupOK)
+			if name, whole := envref.Whole(body); whole && content == "" {
+				// SET TO NOTHING READS AS NOTHING, as an env value does:
+				// an empty credential file is no credential.
+				unresolved = name
+			}
+			if unresolved == "" {
+				files[path] = content
+				continue
+			}
+			if gap.hold(path, []string{unresolved}, slices.Contains(step.OptionalKeys, path), where, false) {
+				out.files = append(out.files, step.Name+":"+path)
+			}
+		}
+		out.setup[i].Files = files
+	}
+
+	out.gap = gap.missing(seat.Handle(), "the run")
+	out.facts = facts.missing(seat.Handle(), "the run")
+	var held []*credentialMissing
+	for _, m := range []*credentialMissing{out.gap, out.facts} {
+		if m != nil {
+			held = append(held, m)
+		}
+	}
+	states := e.mintingStates(ctx, held)
+	out.gap, out.facts = out.gap.judged(states), out.facts.judged(states)
+	return out
+}
+
+// stepOptionalKeys is where a setup step's optional keys are declared, for a
+// sentence: a provider-wide step's or the seat's own.
+func stepOptionalKeys(step string, providerWide bool) string {
+	if providerWide {
+		return fmt.Sprintf("the optional_keys of providers.sandbox.setup step %q", step)
+	}
+	return fmt.Sprintf("the optional_keys of role.sandbox.setup step %q", step)
+}
+
+// logGap writes what a run's environment lacks, by the story a tool server's
+// gap is told by: waiting for provisioning is info, and the rest a warning.
+// what says what becomes of the run. PATHS, KEYS AND VARIABLES ONLY, never a
+// value, which may embed a partial secret, or a file's body, which is a
+// credential more often than not.
+func (r runEnv) logGap(ctx context.Context, seat, what string) {
+	if r.gap == nil {
+		return
+	}
+	attrs := []any{"seat", seat}
+	if len(r.keys) > 0 {
+		attrs = append(attrs, "keys", r.keys)
+	}
+	if len(r.files) > 0 {
+		attrs = append(attrs, "files", r.files)
+	}
+	attrs = append(attrs, r.gap.logAttrs()...)
+	attrs = append(attrs, "detail", what+": "+r.gap.reason())
+	if r.gap.waiting() {
+		log.InfoContext(ctx, "sandbox_env_unresolved", attrs...)
+		return
+	}
+	log.WarnContext(ctx, "sandbox_env_unresolved", attrs...)
+}
+
+// logFacts writes what of the engine's own facts a run that starts goes
+// without, on the line and at the level [runEnv.logGap] writes the gap at,
+// so a setup recipe that read an empty commit address has a line saying why.
+func (r runEnv) logFacts(ctx context.Context, seat string) {
+	if r.facts == nil {
+		return
+	}
+	attrs := append([]any{"seat", seat, "keys", r.facted}, r.facts.logAttrs()...)
+	attrs = append(attrs, "detail", "the run starts without the engine's own "+
+		plural(r.facted, "fact", "facts")+" from "+joined(r.facted)+": "+r.facts.reason())
+	if r.facts.waiting() {
+		log.InfoContext(ctx, "sandbox_env_unresolved", attrs...)
+		return
+	}
+	log.WarnContext(ctx, "sandbox_env_unresolved", attrs...)
 }
 
 func seconds(v float64) time.Duration { return time.Duration(v * float64(time.Second)) }
@@ -422,8 +711,7 @@ func resumedTurn(run sandbox.PendingRun, seat *org.Role, organization *org.Organ
 // It publishes the unhandled-exception guard itself because the frame that
 // would have, the resumed turn's own telemetry, is what did not run: without
 // it the seat renders as whatever it was last doing rather than its failure. The run's
-// own row names the seat, and the live epoch is preferred where it still does,
-// so a seat renamed since the run detached is addressed as it is now.
+// own row names the seat.
 func (e *Engine) guardResume(ctx context.Context, run sandbox.PendingRun, resume func() error) (err error) {
 	defer func() {
 		if panicked := turn.Recovered(recover()); panicked != nil {
@@ -615,7 +903,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// ([turnTelemetry.budget]).
 	tel.budget = e.resumeMeterFor(ctx, company, in.Turn.Handle())
 	turnIdentity := tel.runnerTurn(company, in.Run.DelegationDepth,
-		in.Run.DelegationChain, resumeTask(in), resumedReply)
+		in.Run.DelegationChain, resumeTask(in), resumedReply, e.WithheldContacts())
 	// The runtime, and the note box it decides — see [steerBox].
 	agentRun := e.agentRunFor(company, in.Turn.Handle(), turnIdentity.Context)
 	box := steerBox(agentRun)
@@ -804,7 +1092,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// running and leaves the box for the next completion — and keeps its
 	// indicator on the same terms, off the ROW rather than off the intent.
 	if res.Suspended {
-		working = stillWorking(e.persistSuspension(ctx, r, in.Run.TurnID, tel.written, charge.carry, tel.ask, tel.senders))
+		working = stillWorking(e.persistSuspension(ctx, r, in.Run.TurnID, tel.written, charge, tel.ask, tel.senders))
 	}
 	e.recordResume(ctx, in, res)
 	return nil
@@ -939,14 +1227,16 @@ func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
 // by a sole write, and it can only judge "exactly one" over the whole turn if
 // the half before the park travels with the conversation. So does what the
 // segments so far spent and charged to nothing (execstate.State.Uncharged),
-// for that same finishing segment to pay — see turnspend.go. And so does what
+// for that same finishing segment to pay — see turnspend.go — and what the
+// turn has measured of itself so far (execstate.State.SoFar), for the record
+// that ends it to state the whole turn. And so does what
 // the turn was ASKED (execstate.State.Ask), which the finishing segment's
 // completed-turn event carries and is woken by something else entirely — and
 // WHO asked it (execstate.State.Senders), which a refresh_memory call in any
 // later segment tells the memory filter, since no later segment has the
 // interactions to read them off.
 func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID string,
-	written *turnctx.Written, uncharged *execstate.Uncharged, ask string,
+	written *turnctx.Written, charge segmentCharge, ask string,
 	senders []types.CanonicalIdentity,
 ) (bool, error) {
 	rt := e.sandbox.Load()
@@ -962,7 +1252,8 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 		return false, nil
 	}
 	suspension.State.Written, suspension.State.WrittenMany = written.Items()
-	suspension.State.Uncharged = uncharged
+	suspension.State.Uncharged = charge.carry
+	suspension.State.SoFar = charge.soFar
 	suspension.State.Ask = ask
 	suspension.State.Senders = senders
 	blob, err := execstate.Encode(suspension.State)
@@ -1044,14 +1335,14 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		return sandbox.LaunchResult{}, err
 	}
 	company := e.Company()
-	gate := seatSandbox(company, seat.Name)
+	gate := seatSandbox(company, seat.Handle())
 	if gate == nil || !gate.Enabled {
 		// Belt and braces: the tool is only on a sandbox-enabled seat's
 		// surface, but the surface is built from a snapshot and a seat can
 		// lose its gate across an apply mid-turn.
 		return sandbox.LaunchResult{}, fmt.Errorf("this seat's sandbox is not enabled")
 	}
-	if gate.RunIn == config.PlacementSelf {
+	if config.Placement(gate.RunIn) == config.PlacementSelf {
 		// `self` means this seat's code work rides its own executor run,
 		// which is a coding CLI in agent mode and already holds a shell,
 		// an editor and a checkout. A second box beside it would give the
@@ -1089,24 +1380,45 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		reuse = existing.SandboxID
 	}
 
-	setup := append(manager.DefaultSetup(), setupSteps(gate.Setup)...)
-	servers := sandboxMCP(l.engine.resolver(), company, seat, gate)
+	// A RUN WHOSE ENVIRONMENT DOES NOT RESOLVE IS NOT STARTED, by the rule a
+	// tool server is held to (toolcredentials.go): handed an empty code-host
+	// token it clones nothing and pushes nothing, after spending its box. The
+	// refusal is this call's result, classed unavailable by the tool, so it
+	// costs the turn one round rather than the turn — a model told a token is
+	// being minted can try later or do the work with its own tools.
+	run := e.runEnvironment(ctx, company, seat, gate, manager.DefaultSetup())
+	if run.gap != nil {
+		run.logGap(ctx, seat.Handle(), "no box is started")
+		return sandbox.LaunchResult{}, errors.New(run.gap.runRefusal())
+	}
+	run.logFacts(ctx, seat.Handle())
+	setup := run.setup
+	servers := l.engine.boxServers(ctx, company, seat, gate)
 	// The seat's own model and login, resolved from llm_sandbox — which
 	// falls back to `llm`, because sandboxed work IS this seat's own work
-	// running somewhere else, and `llm` is what that work runs on.
-	agentLLM, credentials, credentialEnv := sandboxLLM(company, seat)
-	env := underlay(e.sandboxEnv(seat, gate, setup), credentialEnv)
+	// running somewhere else, and `llm` is what that work runs on — for the
+	// runner that will read them, resolved here as BuildSpec resolves it, so
+	// a pairing that runner cannot drive is refused before a box exists.
+	runner := gate.CodingAgent
+	if runner == "" {
+		runner = manager.DefaultCodingAgent()
+	}
+	coding, refused := newCodingRun(company, seat, phase.Sandbox, runner, run.env)
+	if refused != nil {
+		return sandbox.LaunchResult{}, refused
+	}
+	agentLLM, env := coding.llm, coding.env
 	spec := manager.BuildSpec(sandbox.SpecInput{
 		// The seat's cell, empty inheriting providers.sandbox's default.
 		// Resolved at LAUNCH rather than at config time, for the same
 		// reason coding_agent is: a catalogue change reaches every seat
 		// that named nothing without rewriting their blocks.
 		Placement:       sandbox.Placement(gate.RunIn),
-		CodingAgent:     string(gate.CodingAgent),
+		CodingAgent:     runner,
 		PauseTTL:        pauseTTL(gate),
 		MaxTurns:        gate.MaxTurns,
 		Env:             env,
-		CredentialFiles: credentials,
+		CredentialFiles: coding.files,
 	})
 	if err := sandboxCredentials(company, seat, phase.Sandbox, spec.Placement, env); err != nil {
 		return sandbox.LaunchResult{}, err
@@ -1212,7 +1524,7 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string) sandbox.T
 		// The conversation is where the resume reports and what admits a
 		// person's answer; the partition states the batch this run was
 		// launched from, which tells two runs parked on one direct message
-		// apart.
+		// apart ([sandbox.ConversationRef.Best]).
 		PartitionKey:    t.PartitionKey,
 		ConversationKey: t.ConversationKey,
 		// The delivery obligation, so the resumed turn knows whether
@@ -1265,31 +1577,103 @@ func sandboxHeadroom(ctx context.Context, remaining runner.Remaining, floor int)
 //
 // The credentials are the seat's OWN, inherited down the org chart at build
 // time, so a seat gets the tokens it is entitled to and no others.
-func sandboxMCP(env *config.Resolver, c *Company, seat *org.Role, gate *config.RoleSandbox) map[string]sandbox.MCPServer {
+//
+// RESOLVED HERE, like the run env and for the same reason: an in-box server
+// has to authenticate, and Tier B stores its references verbatim. Only the
+// scoped servers': a block the box is not given is nothing this run resolves
+// or reports. And resolved by the rule every start of a server passes
+// ([resolveServer]), from the same values the engine's own child of the
+// server is started with: the server's own env, headers and url as well as the
+// seat's block. They were once handed over verbatim, `${VAR}` and all, and
+// written into the CLI's config that way — OpenCode reads `{env:VAR}` and not
+// `${VAR}`, and Claude Code expands one from the run env, which holds none of
+// the company's secrets.
+//
+// SO A SERVER WITH A VALUE THAT DOES NOT RESOLVE IS NOT OFFERED: an in-box
+// server handed an empty token refuses to start or acts as nobody, and the
+// agent would spend a round finding that out — the reason [sandbox.RenderMCP]
+// skips a server it cannot render. It used to be offered with a warning that
+// it "will not authenticate". What was withheld comes back beside the
+// servers, for the caller to judge and say ([Engine.boxServers]); minted is
+// what the seat's provisioning passes mint ([Engine.mintedFor]).
+func sandboxMCP(
+	env *config.Resolver, c *Company, seat *org.Role, gate *org.RoleSandbox,
+	minted map[string]integration.Kind,
+) (map[string]sandbox.MCPServer, []*credentialMissing) {
 	if len(gate.MCP.Servers) == 0 {
-		return nil
+		return nil, nil
 	}
-	servers := make([]sandbox.MCPServer, 0, len(c.Config.MCPServers))
-	for _, s := range c.Config.MCPServers {
-		servers = append(servers, sandbox.MCPServer{
-			Name: s.Name, Transport: sandbox.Transport(s.Kind()),
-			Command: s.Command, Args: s.Args, Env: s.Env,
-			URL: s.URL, Headers: s.Headers,
-		})
+	configured := make(map[string]*config.MCPServer, len(c.Config.MCPServers))
+	for i := range c.Config.MCPServers {
+		configured[c.Config.MCPServers[i].Name] = &c.Config.MCPServers[i]
 	}
-	// RESOLVED HERE, like the run env and for the same reason: an in-box
-	// server has to authenticate, and Tier B stores its references
-	// verbatim.
-	credentials := make(map[string]map[string]string, len(seat.MCPEnv))
-	for name, values := range seat.MCPEnv {
-		resolved, missing := env.Map("mcp_env."+name, values)
-		if len(missing) > 0 {
-			log.Warn("sandbox_mcp_env_unresolved", "seat", seat.Handle(), "server", name,
-				"hint", "the in-box MCP server will not authenticate")
+	var (
+		servers  []sandbox.MCPServer
+		scoped   = make([]string, 0, len(gate.MCP.Servers))
+		withheld []*credentialMissing
+		seen     = make(map[string]struct{}, len(gate.MCP.Servers))
+	)
+	for _, name := range gate.MCP.Servers {
+		if _, dup := seen[name]; dup {
+			continue
 		}
-		credentials[name] = resolved
+		seen[name] = struct{}{}
+		server, known := configured[name]
+		if !known {
+			// LEFT IN THE SCOPE, so the renderer says what it says of a
+			// name the company declares no server under.
+			scoped = append(scoped, name)
+			continue
+		}
+		values, missing := resolveServer(server, seat.Handle(), "", seat.MCPEnv[name], env, minted)
+		if missing != nil {
+			withheld = append(withheld, missing)
+			continue
+		}
+		box := sandbox.MCPServer{
+			Name: server.Name, Transport: sandbox.Transport(server.Kind()),
+			Command: server.Command, Args: server.Args, URL: values.url,
+		}
+		if server.Kind() == config.TransportHTTP {
+			box.Headers = values.values
+		} else {
+			box.Env = values.values
+		}
+		servers = append(servers, box)
+		scoped = append(scoped, name)
 	}
-	return sandbox.RenderMCP(servers, gate.MCP.Servers, credentials)
+	return sandbox.RenderMCP(servers, scoped), withheld
+}
+
+// boxServers is the scoped MCP surface one coding run's box is given
+// ([sandboxMCP]), with every server withheld for its seat credentials judged
+// against the integrations minting them and said, at the level its story
+// earns — the seat's own child's ([Engine.withheldForCredentials]): waiting
+// for provisioning is info, and the rest a warning, since the run goes ahead
+// without the server either way.
+//
+// WHAT STARTS IT DIFFERS from a seat's own child, and the sentence says so:
+// nothing restarts a box's servers, so a server withheld from this run is
+// offered to the first coding run launched once the seal reaches this node.
+func (e *Engine) boxServers(
+	ctx context.Context, c *Company, seat *org.Role, gate *org.RoleSandbox,
+) map[string]sandbox.MCPServer {
+	servers, withheld := sandboxMCP(e.resolver(), c, seat, gate, e.mintedFor(c, seat.Handle()))
+	states := e.mintingStates(ctx, withheld)
+	for _, missing := range withheld {
+		missing = missing.judged(states)
+		attrs := append([]any{"seat", seat.Handle(), "server", missing.server}, missing.logAttrs()...)
+		if missing.waiting() {
+			log.InfoContext(ctx, "sandbox_mcp_server_withheld", append(attrs,
+				"detail", "the coding agent is not given this server for this run: "+
+					missing.reason()+"; a coding run launched once the seal reaches "+
+					"this node is given it")...)
+			continue
+		}
+		log.WarnContext(ctx, "sandbox_mcp_server_withheld", append(attrs,
+			"detail", "the coding agent is not given this server: "+missing.reason())...)
+	}
+	return servers
 }
 
 // pauseTTL reads the seat's override, distinguishing "inherit" from "never".
@@ -1304,7 +1688,7 @@ func sandboxMCP(env *config.Resolver, c *Company, seat *org.Role, gate *config.R
 // role.sandbox was ever written, and reading the override off a block that
 // does not exist panicked that seat's first launch — after the bridge session
 // was opened and before anything would have closed it.
-func pauseTTL(gate *config.RoleSandbox) *time.Duration {
+func pauseTTL(gate *org.RoleSandbox) *time.Duration {
 	if gate == nil || gate.PauseTTLSeconds == nil {
 		return nil
 	}
@@ -1313,90 +1697,41 @@ func pauseTTL(gate *config.RoleSandbox) *time.Duration {
 }
 
 // seatSandbox is a seat's sandbox gate, or nil.
-func seatSandbox(c *Company, roleName string) *config.RoleSandbox {
-	if c == nil || c.Config == nil {
+//
+// KEYED ON THE HANDLE, which is what makes the answer single-valued. Two seats
+// may carry one display NAME — it is an admission rule, so a revision stored
+// before that rule runs with duplicates and a write merely cannot add one —
+// and a walk matching on it returned whichever came first. A seat with no
+// sandbox block would then be handed its namesake's, which is a coding run on
+// another seat's setup steps, its credentials and its box.
+//
+// A handle is unique by a RUNNABLE rule instead: a company carrying two is
+// refused outright, so there is no document on which this can be ambiguous.
+// ONE LOOKUP, NOT A WALK OF ITS OWN, because the seat is what carries the
+// block now.
+//
+// It used to walk the company DOCUMENT — first only the top-level `roles:`,
+// which answered nil for every seat in a unit and refused each of them with
+// "this seat's sandbox is not enabled" on a seat whose block said otherwise;
+// then every seat at any depth, breaking at the first match. Both were
+// walking the wrong thing: a stored revision carries no seats at all, so the
+// walk returned nil for EVERY seat and code work became silently unavailable
+// to the whole company.
+//
+// The seat's own [org.Role] holds it, so this asks the org the company is
+// running, through the one lookup every other layer resolves a handle with —
+// aliases and all. The "two seats with one handle" hazard the walk had to
+// reason about cannot arise there, because that lookup answers a live handle
+// before any retired one and a company carrying two live ones is refused.
+func seatSandbox(c *Company, handle string) *org.RoleSandbox {
+	if c == nil || c.Org == nil {
 		return nil
 	}
-	// EVERY SEAT, AT ANY DEPTH. This walked only the top-level `roles:`,
-	// so a seat declared under `units:` — which, in a company with an org
-	// chart, is most of them — always answered nil. The tool then refused
-	// it with "this seat's sandbox is not enabled" on a seat whose block
-	// says otherwise: code work was silently unavailable to every unit
-	// member, and the message pointed at the one thing that was correct.
-	//
-	// A SEPARATE found FLAG, not the block itself as a sentinel: a seat
-	// that exists and wrote no `sandbox:` block is a nil block, which is
-	// the same value a name nobody holds returns. Overloading the two
-	// meant the walk kept looking after it had its answer, and would have
-	// returned a LATER seat's block for an earlier one of the same name.
-	// THE FIRST MATCH, AND THEN STOP. The walk is an iterator precisely so
-	// this can break: a callback had no way to say "found it", so every
-	// launch ran the whole org chart to the end — and the only way to
-	// track the answer was the nil block itself, which cannot tell a seat
-	// that wrote none from a name nobody holds, so a later seat of the
-	// same name would have had its block returned for this one.
-	for role := range c.Config.EachRole() {
-		if role.Name == roleName {
-			return role.Sandbox
-		}
+	seat := c.Org.Role(handle)
+	if seat == nil {
+		return nil
 	}
-	return nil
-}
-
-// sandboxEnv assembles the run environment.
-//
-// THE ENGINE CONTRIBUTES ONLY TOOL-AGNOSTIC FACTS: the agent's identity, as
-// CREWLET_AGENT_HANDLE and CREWLET_AGENT_EMAIL — per-launch values static
-// config cannot know, which a setup recipe maps into whatever shape its tool
-// needs. Every tool-specific variable comes from config: an external token is
-// DECLARED in role.sandbox.env or a setup step's env, and the engine never
-// names one of its own.
-//
-// Precedence, later winning: identity, then the setup steps' contributions,
-// then the seat's own env — so an operator's explicit value always beats a
-// step's default.
-func (e *Engine) sandboxEnv(seat *org.Role, gate *config.RoleSandbox, setup []sandbox.SetupStep) map[string]string {
-	env := map[string]string{}
-	if handle := seat.Handle(); handle != "" {
-		env["CREWLET_AGENT_HANDLE"] = handle
-	}
-	if email := seat.Email; email != "" {
-		env["CREWLET_AGENT_EMAIL"] = email
-	}
-	for key, value := range sandbox.SetupEnv(setup) {
-		env[key] = value
-	}
-	// NIL-SAFE, because a seat legitimately has no block: an agent-mode
-	// executor is placed by its own providers.llm entry, so it runs in a
-	// box whether or not role.sandbox was ever written. Ranging over a nil
-	// pointer's field panicked the seat's first launch.
-	if gate != nil {
-		for key, value := range gate.Env {
-			env[key] = value
-		}
-	}
-
-	// RESOLVED EXACTLY ONCE, here, at launch — not at load. These values
-	// are where an operator declares a code-host token, and Tier B stores
-	// its references verbatim so an exported revision carries no resolved
-	// secret. Resolving at load as well would double-resolve and mangle any
-	// secret whose real value contains a literal ${...}.
-	resolved, missing := e.resolver().Map("role.sandbox.env", env)
-	if len(missing) > 0 {
-		// KEYS ONLY, never values, which may embed a partial secret. Flagged
-		// per REFERENCE rather than per final value: an embedded form like
-		// "Bearer ${TOKEN}" resolves to a truthy-but-broken "Bearer " when
-		// the variable is unset, so testing the result would miss exactly
-		// the composite shapes this field documents.
-		names := make([]string, 0, len(missing))
-		for _, m := range missing {
-			names = append(names, m.Path)
-		}
-		log.Warn("sandbox_env_unresolved", "seat", seat.Handle(), "keys", names,
-			"hint", "the coding agent will see these as empty; export the "+
-				"variables or put them in the secret store")
-	}
-	return resolved
+	return seat.Sandbox
 }
 
 // sandboxRuntime is this node's code-work machinery, published whole: the
@@ -1709,19 +2044,40 @@ type seatHold struct{ engine *Engine }
 var _ sandbox.SeatHold = seatHold{}
 
 func (h seatHold) Hold(ctx context.Context, handle string) error {
-	subject, group := topics.AgentInbox(handle), topics.AgentInboxGroup(handle)
-	if subject == "" || group == "" {
-		return fmt.Errorf("engine: seat %q has no inbox subject", handle)
+	subject, group, err := h.inboxOf(handle)
+	if err != nil {
+		return err
 	}
 	return h.engine.backends.Queue.PauseTopic(ctx, subject, group, string(inbox.HoldSandbox))
 }
 
 func (h seatHold) Release(ctx context.Context, handle string) error {
-	subject, group := topics.AgentInbox(handle), topics.AgentInboxGroup(handle)
-	if subject == "" || group == "" {
-		return fmt.Errorf("engine: seat %q has no inbox subject", handle)
+	subject, group, err := h.inboxOf(handle)
+	if err != nil {
+		return err
 	}
 	return h.engine.backends.Queue.ResumeTopic(ctx, subject, group, string(inbox.HoldSandbox))
+}
+
+// inboxOf is the inbox a hold on handle sits on, named by the seat's id — the
+// coordinator keeps its holds by handle, and the broker names every mailbox by
+// the id derived from it (ADR-0013).
+//
+// DERIVED rather than looked up in the roster ([Engine.seatID]), because a hold
+// outlives a revision: a run that ends after an apply removed its seat must
+// still release the hold it took, or a seat re-added under the same handle
+// would find its inbox held for a run nobody is running.
+func (h seatHold) inboxOf(handle string) (subject, group string, err error) {
+	c := h.engine.Company()
+	if c == nil || c.Org == nil {
+		return "", "", fmt.Errorf("engine: this node runs no company, so seat %q "+
+			"has no inbox to hold", handle)
+	}
+	id, ok := org.DeriveAgentID(c.Org.Name, handle)
+	if !ok {
+		return "", "", fmt.Errorf("engine: seat %q has no inbox subject", handle)
+	}
+	return topics.AgentInbox(id), topics.AgentInboxGroup(id), nil
 }
 
 // holdSandboxSeat is the dispatcher's [Dispatcher.HoldSandbox]: it asks the
@@ -1947,16 +2303,17 @@ func waiterDutyTTL(interval time.Duration) time.Duration {
 
 // prepareSeat is the node's SeatReady hook: recover this seat's in-flight runs
 // and start listening for their completions, BEFORE its mailbox opens.
-func (e *Engine) prepareSeat(ctx context.Context, handle string, epoch int64, owner string) error {
+func (e *Engine) prepareSeat(ctx context.Context, seat placement.Seat, epoch int64, owner string) error {
+	handle := seat.Handle
 	// THE SEAT'S OWN TOOLS FIRST, because OnAcquire's whole contract is
 	// that everything the first turn needs is ready before the mailbox
 	// opens. A seat that started consuming before its per-role children
 	// were up would run its first turn with a surface missing exactly the
 	// tools it acts through.
-	company := e.Company()
 	// startSeatServers files the registry alongside the bridge, so the two
-	// cannot disagree about which children this seat has.
-	e.startSeatServers(ctx, company, handle)
+	// cannot disagree about which children this seat has — and returns only
+	// once an apply that landed while they were starting has been folded in.
+	e.startSeatServers(ctx, handle)
 
 	// THE SEAT'S MEMORY, before it can take a turn. Its diary, episodes,
 	// counterparties and skills were written on whichever nodes ran it
@@ -1975,12 +2332,12 @@ func (e *Engine) prepareSeat(ctx context.Context, handle string, epoch int64, ow
 	}
 	// AND WHAT IT HAS STILL TO LEARN: reflection runs where the seat is held,
 	// on the memory just hydrated.
-	if err := e.attachSeatReflection(ctx, handle); err != nil {
+	if err := e.attachSeatReflection(ctx, seat); err != nil {
 		return err
 	}
 
 	if rt := e.sandbox.Load(); rt != nil {
-		if err := e.prepareSeatSandbox(ctx, rt, handle, epoch, owner); err != nil {
+		if err := e.prepareSeatSandbox(ctx, rt, seat, epoch, owner); err != nil {
 			return err
 		}
 	}
@@ -2004,13 +2361,17 @@ func (e *Engine) prepareSeat(ctx context.Context, handle string, epoch int64, ow
 // deliver to it. Exactly once per holding, whichever path reaches it first —
 // the seat's own acquisition, or the apply that brought the runtime up while
 // the seat was already held; the caller holds the seat's lock either way.
-func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime, handle string,
-	epoch int64, owner string) error {
+//
+// THE CONTROL TOPIC IS NAMED BY THE SEAT'S ID, the agent id derived from its
+// handle (ADR-0013), as its inbox is.
+func (e *Engine) prepareSeatSandbox(ctx context.Context, rt *sandboxRuntime,
+	seat placement.Seat, epoch int64, owner string) error {
 
+	handle := seat.Handle
 	if e.sandboxSeatAttached(handle) {
 		return nil
 	}
-	control, group := topics.AgentControl(handle), topics.AgentControlGroup(handle)
+	control, group := topics.AgentControl(seat.ID), topics.AgentControlGroup(seat.ID)
 	if control == "" {
 		return nil
 	}
@@ -2073,9 +2434,13 @@ func (e *Engine) markSandboxSeat(handle string, attached bool) {
 // in flight finishes — which is [seat.ReasonUnprepared].
 func (e *Engine) prepareHeldSeats(ctx context.Context, rt *sandboxRuntime) {
 	host := e.node.Host()
-	for _, handle := range host.Held() {
+	// THE SEATS THEMSELVES, as the host recorded them at the claim: the
+	// control topic is named by the seat's id, which the handle alone does
+	// not carry.
+	for _, held := range host.HeldSeats() {
+		handle := held.Handle
 		_, err := host.WithHeldSeat(handle, func(lease coord.Lease) error {
-			return e.prepareSeatSandbox(ctx, rt, handle, lease.Epoch, lease.Owner)
+			return e.prepareSeatSandbox(ctx, rt, held, lease.Epoch, lease.Owner)
 		})
 		if err == nil {
 			continue
@@ -2083,7 +2448,7 @@ func (e *Engine) prepareHeldSeats(ctx context.Context, rt *sandboxRuntime) {
 		log.ErrorContext(ctx, "sandbox_seat_unprepared", "seat", handle, "error", err,
 			"detail", "the seat is handed back so its next acquisition prepares it "+
 				"for code work whole")
-		host.Release(ctx, handle, seat.ReasonUnprepared)
+		host.Release(ctx, handle, seatpkg.ReasonUnprepared)
 	}
 }
 
@@ -2095,8 +2460,14 @@ func (e *Engine) prepareHeldSeats(ctx context.Context, rt *sandboxRuntime) {
 // is in [events.Category]'s map. What reads them is the live seat state, where
 // "this seat is running here now" is exactly the question.
 //
-// THE ROLE, NOT THE HANDLE, because every other event the projection keys on
-// carries the role name and a seat under two spellings is two rows.
+// THE SEAT'S AGENT ID under `agent_id`, because that is what every other
+// seat-level event carries there and what the projection keys a seat by. It
+// carried the HANDLE, so the one field the projection reads its key from meant
+// a different thing on these two types than on every other: a seat's arrival
+// and its first turn landed under two identities. Neither a handle nor a name
+// can stand in for the id — a name is prose two seats may share, and the
+// projection keys every other seat-level event on the id (ADR-0013). The
+// handle and the name ride along for a reader.
 func (e *Engine) publishSeatLifecycle(ctx context.Context, handle string,
 	payload events.Payload) {
 
@@ -2104,20 +2475,22 @@ func (e *Engine) publishSeatLifecycle(ctx context.Context, handle string,
 		return
 	}
 	role := e.seatRole(handle)
-	if role == nil {
+	agentID := e.seatAgentID(role)
+	if role == nil || agentID == "" {
 		// A HANDLE THIS EPOCH NO LONGER HAS, which is the ordinary way a
 		// seat is released: the revision that removed it is already
-		// current. There is no role to key the row on, and inventing one
-		// from the handle would make a second row for the same seat.
+		// current. There is no seat to key the row on, and inventing an
+		// identity from the handle would make a second row for the same
+		// seat.
 		return
 	}
 	var ev *events.Event
 	switch p := payload.(type) {
 	case types.AgentSpawned:
-		p.RoleName, p.Agent = role.Name, handle
+		p.Agent, p.AgentHandle, p.RoleName = agentID, role.Handle(), role.Name
 		ev = events.New(p, tracing.TraceOf(ctx))
 	case types.AgentTerminated:
-		p.RoleName, p.Agent = role.Name, handle
+		p.Agent, p.AgentHandle, p.RoleName = agentID, role.Handle(), role.Name
 		ev = events.New(p, tracing.TraceOf(ctx))
 	default:
 		return
@@ -2141,7 +2514,8 @@ func (e *Engine) publishSeatLifecycle(ctx context.Context, handle string,
 // The control subscription is DETACHED, never deleted: a completion published
 // while the seat is between owners must be held for its successor, and the box
 // it refers to is still real.
-func (e *Engine) releaseSeat(ctx context.Context, handle string) {
+func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
+	handle := seat.Handle
 	// FIRST, while the queue is still reachable and before anything this
 	// release tears down: a seat that went away with no event left its
 	// last state standing on every dashboard — stuck "working" in a phase
@@ -2171,7 +2545,7 @@ func (e *Engine) releaseSeat(ctx context.Context, handle string) {
 	// A budget park's alarm dies with the seat too. The detach that
 	// released the inbox already dropped the hold; the alarm would only
 	// fire into a seat a peer now serves.
-	e.forgetBudgetPark(handle)
+	e.forgetBudgetPark(seat.ID)
 
 	// AND THE SEAT'S WORKING INDICATORS, for the reason the event above
 	// exists: a seat that went away with no signal leaves its last state
@@ -2191,7 +2565,7 @@ func (e *Engine) releaseSeat(ctx context.Context, handle string) {
 
 	// REFLECTION FIRST, so nothing new writes the seat's memory here after
 	// the flush below.
-	e.detachSeatReflection(ctx, handle)
+	e.detachSeatReflection(ctx, seat)
 
 	// A LAST PUBLISH, then forget the seat. The publish is what makes a
 	// graceful handoff lossless: whatever this node learned since its last
@@ -2235,7 +2609,7 @@ func (e *Engine) releaseSeat(ctx context.Context, handle string) {
 	// all; attaching again beside one that survived is a second competing
 	// consumer over the same coordinator, which settles each delivery once.
 	e.markSandboxSeat(handle, false)
-	control, group := topics.AgentControl(handle), topics.AgentControlGroup(handle)
+	control, group := topics.AgentControl(seat.ID), topics.AgentControlGroup(seat.ID)
 	if control == "" {
 		return
 	}
@@ -2259,30 +2633,34 @@ func (e *Engine) SeatHeldBySandbox(handle string) bool {
 	return held
 }
 
-// sandboxLLM resolves the model a coding run works under, and the credential
-// that lets it reach one.
+// codingRun is what one coding box is handed to reach a model: the model, the
+// credential files a local backend seeds, and the whole run environment.
 //
 // THREE things travel, and they travel differently on purpose:
 //
-//   - The MODEL and its endpoint, so an agent that resolves
-//     "<family>/<model>" against a catalogue addresses the right vendor at
-//     the right host rather than the catalogue's default.
-//   - A TOKEN, in the run environment, which reaches any box including a
-//     remote one: it is one scoped, revocable variable.
+//   - The MODEL and its endpoint, so the agent addresses the model the seat
+//     runs on at the right host rather than its catalogue's default — a
+//     cli-agent entry's model exactly as its text calls name it, for its own
+//     CLI only.
+//   - A TOKEN OR A KEY, in the run environment, which reaches any box
+//     including a remote one: it is one scoped, revocable variable — a
+//     subscription's headless token or cli.env key, or an API entry's own
+//     key under the variable its runner reads.
 //   - The credential FILES, only as a host-path map the LOCAL backend seeds
 //     and writes back. They carry a refresh token whose rotation is shared
 //     fleet state, so pushing them onto somebody else's VM is a materially
 //     larger trust step than the token — which is why the map is offered and
 //     each backend decides, rather than being exported like the rest.
-//
-// A seat with no resolvable sandbox model is not an error here: a company with
-// no models takes no turn, so launches no run (see nomodels.go), and a run
-// whose agent reads its credential from the environment needs none of this.
-func sandboxLLM(c *Company, seat *org.Role) (*sandbox.AgentLLM, map[string]string, map[string]string) {
-	return runLLM(c, seat, phase.Sandbox)
+type codingRun struct {
+	llm   *sandbox.AgentLLM
+	files map[string]string
+	env   map[string]string
 }
 
-// runLLM is [sandboxLLM] over an explicit phase.
+// newCodingRun resolves the [codingRun] of a box driven by runner on the
+// entry seat's phase resolves to, over seatEnv — the environment the seat's
+// own config assembled ([Engine.runEnvironment]) — or refuses one that runner
+// cannot drive with a [SandboxModelError], before a box exists.
 //
 // TWO CALLERS, TWO PHASES, and the difference is load-bearing. A run_sandbox
 // call is CODE WORK the executor delegated, so it runs on llm_sandbox — a seat
@@ -2291,49 +2669,199 @@ func sandboxLLM(c *Company, seat *org.Role) (*sandbox.AgentLLM, map[string]strin
 // executor's own entry: sending it to llm_sandbox would run a seat's whole turn
 // on the model it chose for a subordinate job, silently, on any seat that set
 // both.
-func runLLM(c *Company, seat *org.Role, ph phase.Phase) (*sandbox.AgentLLM, map[string]string, map[string]string) {
+//
+// THE RUNNER IS AN INPUT, because what an entry can give a box depends on
+// which coding agent reads it. A run_sandbox launch takes its runner from
+// role.sandbox.coding_agent and its model from llm_sandbox independently, so
+// the pairing is the operator's and two of them cannot work, which used to
+// start a box that failed inside it:
+//
+//   - A cli-agent entry under ANOTHER CLI's runner. Its model is written in
+//     its own CLI's grammar and its sign-in is that CLI's, so Claude Code was
+//     handed an OpenCode entry's `openrouter/anthropic/claude-sonnet-5`, and
+//     OpenCode a Claude Code entry's `sonnet` with a login it never reads. An
+//     agent-mode run never meets this while its turn's epoch holds: its
+//     runner is its entry's own CLI. Config refuses the same pairing on a
+//     write ([config.Company.validateSandboxCodingAgents]) and both say one
+//     sentence ([config.CodingAgentMismatch]).
+//   - Claude Code on an API entry that does not speak Anthropic's wire. See
+//     [claudeCodeOnForeignEntry].
+//
+// A seat with no resolvable model is not an error here: a company with no
+// models takes no turn, so launches no run (see nomodels.go), and the run
+// carries the seat's own environment and nothing else.
+func newCodingRun(c *Company, seat *org.Role, ph phase.Phase, runner string,
+	seatEnv map[string]string) (codingRun, error) {
+	run := codingRun{env: seatEnv}
 	if c == nil || c.Models == nil {
-		return nil, nil, nil
+		return run, nil
 	}
 	member, err := c.Models.Head(seat, ph)
 	if err != nil {
 		log.Warn("sandbox_llm_unresolved", "seat", seat.Handle(),
 			"phase", ph.String(), "error", err)
-		return nil, nil, nil
+		return run, nil
+	}
+	if agent, isCLI := member.Provider.(*cliagent.Provider); isCLI {
+		if agent.Agent() != runner {
+			return codingRun{}, &SandboxModelError{msg: fmt.Sprintf("seat %q: %s",
+				seat.Handle(), config.CodingAgentMismatch(runner, member.Key, agent.Agent()))}
+		}
+		// THE MODEL AS THE ENTRY'S TEXT CALLS PASS IT, AND THE CLI IT IS
+		// WRITTEN FOR. A cli-agent entry's model is in that CLI's own
+		// grammar — OpenCode reads `<provider>/<model>`, Claude Code an
+		// alias — so the run is handed the exact string every text call on
+		// the entry gives the CLI, resolved and rendered as they render it.
+		// Every cli-agent entry shares one providers.llm type, so no family
+		// is sent: one inferred from the CLI addressed an OpenCode entry's
+		// `openrouter/…` as `anthropic/openrouter/…`, which no key signs in.
+		//
+		// No base URL: a cli-agent entry has none of its own — the CLI
+		// talks to its vendor, and declaring a custom provider for it would
+		// point a coding agent at an endpoint nothing is serving.
+		//
+		// Its sign-in UNDERLAID BY NAME, so a variable the seat names in
+		// role.sandbox.env wins: each CLI ranks its own credentials, and a
+		// subscription token is the lowest of Claude Code's, so whatever the
+		// seat brought is what signs the run in.
+		run.llm = &sandbox.AgentLLM{Model: agent.ModelArgument(), CLI: agent.Agent()}
+		run.files = agent.SandboxCredentials()
+		// A LOGIN THE CLI KEEPS IN ITS OWN DATABASE travels as the document
+		// its export printed, mapped where the runner imports it from — the
+		// runner's path, not the profile's, because the runner is what reads
+		// it ([codingagent.Paths.CredentialDocument]).
+		if doc := agent.SandboxCredentialDocument(); doc != "" {
+			if run.files == nil {
+				run.files = map[string]string{}
+			}
+			run.files[codingagent.CredentialDocument] = doc
+		}
+		run.env = underlay(seatEnv, agent.SandboxEnv())
+		return run, nil
 	}
 	spec, ok := c.Config.Providers.LLM[member.Key]
 	if !ok {
-		return nil, nil, nil
+		return run, nil
 	}
-
-	out := &sandbox.AgentLLM{
-		Model:        spec.Model,
-		ProviderType: string(spec.Type),
-		BaseURL:      spec.BaseURL,
+	ep := c.endpoints[member.Key]
+	if runner == codingagent.ClaudeCodeName && spec.Type != config.LLMAnthropic {
+		return claudeCodeOnForeignEntry(seat, member.Key, spec.Type, seatEnv)
 	}
-	agent, isCLI := member.Provider.(*cliagent.Provider)
-	if !isCLI {
-		return out, nil, nil
-	}
-	// Every subscription entry shares one providers.llm type, so the type
-	// does not name the family. The profile's vendor does.
-	if vendor := agent.Vendor(); vendor != "" {
-		out.ProviderType = vendor
-	}
-	// A cli-agent entry has no base URL of its own: the CLI talks to its
-	// vendor, and declaring a custom provider for it would point a coding
-	// agent at an endpoint nothing is serving.
-	out.BaseURL = ""
-	return out, agent.SandboxCredentials(), agent.SandboxEnv()
+	run.llm = &sandbox.AgentLLM{Model: ep.model, ProviderType: string(spec.Type), BaseURL: ep.baseURL}
+	run.env = underlay(seatEnv, apiEntryEnv(spec, ep, runner, seatEnv))
+	return run, nil
 }
+
+// apiEntryEnv is the sign-in an API entry contributes to a box its runner
+// reads: the entry's key under the variable that runner's SDK reads for the
+// entry's wire ([config.LLMProvider.ConventionalKeyVar] — ANTHROPIC_API_KEY for
+// an `anthropic` entry, OPENAI_API_KEY for an `openai` or `openai-compatible`
+// one) and, for Claude Code alone, its base URL as ANTHROPIC_BASE_URL.
+//
+// RESOLVED, NEVER RAW. Tier B stores `${VAR}` verbatim, so the entry's own
+// fields would hand a box the literal "${LLM_BASE_URL}" as its endpoint; ep
+// is the epoch's resolution, the one its seats' own calls are made with.
+//
+// THE KEY TRAVELS, because nothing else in the box can sign the agent in:
+// Claude Code reads only its environment, and OpenCode's providers read the
+// same variable, its declared one by naming it (`env`) rather than holding the
+// value. It is one scoped, revocable variable, exactly the trust step a
+// subscription's headless token already takes into every box. The FIRST key
+// of the entry's pool, because a box cannot rotate: the pool's cooldowns live
+// in this process, and a run holds whatever it was started with.
+//
+// THE BASE URL TRAVELS ONLY WHERE IT IS READ. Claude Code reads its endpoint
+// from ANTHROPIC_BASE_URL. OpenCode is handed its endpoint in opencode.json's
+// declared provider ([codingagent.OpenCode.WriteConfig]), translated to the
+// convention of the SDK it loads there, and that provider is the one place
+// its run takes the entry's endpoint from — a variable beside it would be read
+// by nothing the run is addressed to.
+//
+// ONE UNIT FOR CLAUDE CODE: when the seat's own environment already signs
+// Claude Code in ([codingagent.ClaudeCodeCredentialEnv]), the entry adds
+// neither its key nor its endpoint. Claude Code ranks ANTHROPIC_API_KEY above
+// a plan's CLAUDE_CODE_OAUTH_TOKEN and a cloud toggle routes away from the
+// Anthropic API altogether, so a company key underlaid beside the seat's own
+// sign-in silently moved a plan-billed seat onto metered billing, and a
+// company endpoint underlaid beside the seat's own key sent that key to the
+// company's gateway. Each was underlaid by NAME, which cannot see either.
+func apiEntryEnv(spec config.LLMProvider, ep endpoint, runner string, seatEnv map[string]string) map[string]string {
+	if runner == codingagent.ClaudeCodeName && signsIn(seatEnv, codingagent.ClaudeCodeCredentialEnv) {
+		return nil
+	}
+	env := map[string]string{}
+	if len(ep.keys) > 0 {
+		env[spec.ConventionalKeyVar()] = ep.keys[0]
+	}
+	if runner == codingagent.ClaudeCodeName && ep.baseURL != "" {
+		env[anthropicBaseURLVar] = ep.baseURL
+	}
+	return env
+}
+
+// anthropicBaseURLVar is the variable Claude Code reads its endpoint from:
+// the host root, Anthropic's own SDK convention and the engine's base_url's.
+const anthropicBaseURLVar = "ANTHROPIC_BASE_URL"
+
+// signsIn reports whether env carries a non-blank value under any of names.
+// Blank does not count: a value written blank authenticates nothing. (An
+// unresolved `${VAR}` never arrives as one: the run environment leaves its
+// key out, or the run is not started ([Engine.runEnvironment]).)
+func signsIn(env map[string]string, names []string) bool {
+	for _, name := range names {
+		if strings.TrimSpace(env[name]) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// claudeCodeOnForeignEntry is a Claude Code run on an `openai` or
+// `openai-compatible` entry: refused, unless the seat's own environment signs
+// Claude Code in, when the run carries none of the entry at all.
+//
+// CLAUDE CODE SPEAKS ANTHROPIC'S API ONLY, so such an entry has nothing it can
+// read — not its key, which is OpenAI's, and not its model, an OpenAI-side id
+// (`gpt-5`, or a gateway's `anthropic/claude-sonnet-5`) that `claude --model`
+// refuses at its first call however the run is signed in. So a seat that
+// brought its own sign-in — an Anthropic key, a plan token, a Bedrock, Vertex
+// or Foundry toggle — runs on THAT, under Claude Code's own model choice
+// (ANTHROPIC_MODEL in role.sandbox.env picks one), and the entry's key does
+// not ride into a box that cannot use it. One that brought none is refused
+// with the three edits that make it run.
+func claudeCodeOnForeignEntry(seat *org.Role, key string, kind config.LLMProviderType,
+	seatEnv map[string]string) (codingRun, error) {
+	if signsIn(seatEnv, codingagent.ClaudeCodeCredentialEnv) {
+		return codingRun{env: seatEnv}, nil
+	}
+	return codingRun{}, &SandboxModelError{msg: fmt.Sprintf("seat %q runs code with Claude "+
+		"Code, which speaks the Anthropic API only, on providers.llm.%s, a %q entry whose "+
+		"model and key it cannot use. Point role.llm_sandbox at an anthropic entry, set "+
+		"role.sandbox.coding_agent: %s (which reads OpenAI's wire too), or give the seat a "+
+		"Claude Code sign-in of its own in role.sandbox.env (%s), on which it runs under its "+
+		"own model choice", seat.Handle(), key, kind, codingagent.OpenCodeName,
+		strings.Join(codingagent.ClaudeCodeCredentialEnv, ", "))}
+}
+
+// SandboxModelError reports a coding run whose coding agent cannot use the
+// model and sign-in its providers.llm entry gives it, refused before the box
+// is minted.
+//
+// Its own type for the reason [SandboxCredentialError] is one: the remedy is a
+// config edit — another entry, another coding agent — and never a retry, since
+// nothing about the vendor being up changes what a runner can read.
+type SandboxModelError struct{ msg string }
+
+func (e *SandboxModelError) Error() string { return e.msg }
 
 // SandboxCredentialError reports a coding run whose box could never
 // authenticate, refused before the box is minted.
 //
-// A distinct type because the two remedies are different config edits and an
-// operator has to be told which one is theirs — and because this is the one
-// launch failure that is a CONFIGURATION mistake rather than a provider
-// outage, so it must not be retried as if the vendor were down.
+// A distinct type because the remedies (a token that travels, a provider key
+// that travels, a local cell) are different config edits and an operator has
+// to be told which one is theirs — and because this is the one launch failure
+// that is a CONFIGURATION mistake rather than a provider outage, so it must
+// not be retried as if the vendor were down.
 type SandboxCredentialError struct{ msg string }
 
 func (e *SandboxCredentialError) Error() string { return e.msg }
@@ -2394,17 +2922,58 @@ func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sa
 			return nil
 		}
 	}
-	remedy := fmt.Sprintf("give this seat a local cell — role.sandbox.run_in: %q or %q",
+	// A CLI THAT READS ITS PROVIDER'S KEY FROM ITS OWN ENVIRONMENT has no one
+	// variable to ask about: which one it reads depends on the provider the
+	// entry's model names, and an operator may give it in role.sandbox.env
+	// rather than cli.env. So any credential-named variable the run carries
+	// passes. That is looser than the question — a code-host token the seat
+	// declared for git passes too — and deliberately so: this guard refuses,
+	// and a refusal of a run whose key it could not recognise would block a
+	// seat that works, which is worse than the vendor's own "not
+	// authenticated" it exists to pre-empt.
+	//
+	// IT JUDGES THE RIGHT CLI, and the key it lets through is one the run can
+	// read: the box is handed the entry's model exactly as its text calls
+	// name it, so its provider is the one the operator keyed for those calls,
+	// and a run whose runner is another CLI never gets here ([newCodingRun]).
+	// Narrowing it to the variable the model's provider segment "should" use
+	// would need a table of that CLI's providers the engine does not ship and
+	// would be wrong anyway: OpenCode's `zai` reads ZHIPU_API_KEY,
+	// `moonshotai` MOONSHOT_API_KEY, `amazon-bedrock` the AWS pair.
+	if agent.SignsInThroughEnv() {
+		for name, value := range env {
+			if cliprofile.IsCredentialName(name) && strings.TrimSpace(value) != "" {
+				return nil
+			}
+		}
+	}
+	remedy := fmt.Sprintf("Give this seat a local cell — role.sandbox.run_in: %q or %q",
 		sandbox.Direct, sandbox.Container)
-	if agent.MintsHeadlessToken() {
-		remedy = fmt.Sprintf("mint a token that travels with `crewlet llm login %s "+
+	switch {
+	case agent.MintsHeadlessToken():
+		remedy = fmt.Sprintf("Mint a token that travels with `crewlet llm login %s "+
 			"-capture-token`, or give this seat a local cell (role.sandbox.run_in: %q or %q)",
 			member.Key, sandbox.Direct, sandbox.Container)
+	case agent.SignsInThroughEnv():
+		// This CLI's key travels the way a token does, so the one-line
+		// fix is the key rather than a placement change — named by the
+		// provider segment of the very value the box is handed, the one
+		// fact here that says which provider it is. The VARIABLE stays
+		// the CLI's to name (see above), so it is not guessed at.
+		provider := "the provider its model names"
+		if name, _, found := strings.Cut(agent.ModelArgument(), "/"); found && name != "" {
+			provider = fmt.Sprintf("%q, the provider its model names", name)
+		}
+		remedy = fmt.Sprintf("Set the key of %s, under the variable %s reads for "+
+			"that provider, in providers.llm.%s.cli.env or in this seat's "+
+			"role.sandbox.env — both are exported into the box — or give this seat a "+
+			"local cell (role.sandbox.run_in: %q or %q)",
+			provider, agent.Agent(), member.Key, sandbox.Direct, sandbox.Container)
 	}
 	return &SandboxCredentialError{msg: fmt.Sprintf(
 		"seat %q runs code in %q, where the %q subscription login cannot follow it: "+
-			"the credential files stay on the engine host because they carry a refresh "+
-			"token whose rotation is fleet state, and nothing in this run's environment "+
+			"the login stays on the engine host because it carries a refresh token whose "+
+			"rotation is fleet state, and nothing in this run's environment "+
 			"authenticates. %s",
 		seat.Handle(), placement, member.Key, remedy)}
 }

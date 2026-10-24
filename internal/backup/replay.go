@@ -30,8 +30,9 @@ import (
 // "The objects follow the log" for why this and not a read of the live rows.
 
 // windowBufferBytes bounds each pull the window's reader makes, and so how much
-// of a log it holds ahead of what it has read: [statelog.MaxAppendBytes], the
-// largest record a log admits WITH what the broker counts beside its payload.
+// of a log it holds ahead of what it has read: [statelog.MaxDeliveryBytes], the
+// largest record the transport carries WITH what the broker counts beside it
+// when it delivers one.
 //
 // NOT THE TRANSPORT'S CEILING ALONE (queue.MaxPayloadBytes). The broker admits
 // a publish whose headers and payload reach that ceiling, and then sizes its
@@ -44,7 +45,13 @@ import (
 // framework's own pull is sized past the same floor for the same reason
 // (statelog's FetchBytes); this one holds one maximal record, since the window
 // is read one record at a time.
-const windowBufferBytes = statelog.MaxAppendBytes
+//
+// NOR A LOG'S OWN LARGEST APPEND ([statelog.StreamSpec.MaxAppendBytes]): the
+// window names each declaring log by its stream alone, and what bounds the
+// records on a log the backup reads is the broker that admitted them — a
+// stream made under another build's declaration, or by an operator's restore,
+// holds whatever the transport carried.
+const windowBufferBytes = statelog.MaxDeliveryBytes
 
 // window is what the records past the copy name, keyed for the two questions
 // the pass asks of it: which objects it owes beyond the copy's, and whether a

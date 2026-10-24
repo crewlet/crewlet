@@ -75,17 +75,17 @@ func (t *placeWorkItem) Parameters() map[string]any {
 		"properties": map[string]any{
 			"item": map[string]any{
 				"type":        "string",
-				"description": "The item to place: its key (ENG-42) or its id.",
+				"description": "The item to place. " + itemRef,
 			},
 			"before": map[string]any{
 				"type": "string",
-				"description": "The item it now sits directly above, by key " +
-					"or id. Name this or `after`, never both.",
+				"description": "The item it now sits directly above. Name " +
+					"this or `after`, never both. " + itemRef,
 			},
 			"after": map[string]any{
 				"type": "string",
-				"description": "The item it now sits directly below, by key " +
-					"or id. Name this or `before`, never both.",
+				"description": "The item it now sits directly below. Name " +
+					"this or `before`, never both. " + itemRef,
 			},
 			"status": map[string]any{
 				"type": "string",
@@ -148,9 +148,10 @@ func (t *placeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	current, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
-		return refused(tools.RefusalNotFound, fmt.Sprintf("There is no work item %q.", clip(ref))), nil
+		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("There is no work item %q.",
+			clip(ref))), nil
 	case err != nil:
-		return readFailure(name, err), nil
+		return readFailure(ctx, name, err), nil
 	}
 	task := current.Task
 
@@ -206,7 +207,7 @@ func (t *placeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	opID := opIDFor(actor, t.Name(), "place", task.ID, args)
 	got, err := t.deps.Placer(actor).PlaceTask(ctx, opID, place, notify)
 	if err != nil {
-		return writeFailure(actor, name, err), nil
+		return writeFailure(ctx, actor, name, err), nil
 	}
 	if got.Lane.Outcome == statelog.OutcomeUnknown ||
 		got.Order.Outcome == statelog.OutcomeUnknown {
@@ -215,21 +216,21 @@ func (t *placeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// the card now sits, and a person's board would draw it there.
 		unvouched := (got.Lane.Outcome == statelog.OutcomeUnknown && got.Lane.Unvouched) ||
 			(got.Order.Outcome == statelog.OutcomeUnknown && got.Order.Unvouched)
-		return unknownOutcome(unknownWrite(actor, name, dropped(task, args),
+		return unknownWrite(actor, name, dropped(current, args),
 			opID, unvouched, unknownNext(unvouched, sameCall(actor, name),
 				fmt.Sprintf("Read %s with get_work_item — its status and the "+
-					"board say where it is now", task.Key),
+					"board say where it is now", current.Address()),
 				"it places the card again, which changes nothing where it "+
-					"already sits"))), nil
+					"already sits")), nil
 	}
 
-	answer := withOperation(map[string]any{
-		"key": task.Key, "status": task.Status, "placed": got.Unplaced == nil,
+	answer := withOperation(ReceiptOf(map[string]any{
+		"status": task.Status, "placed": got.Unplaced == nil,
 		// THE ITEM'S VERSION AFTER THE CALL, which is what the board's
 		// next if_match on this card states: the lane change moves it and
 		// the placement never does.
 		"version": got.Version,
-	}, actor)
+	}, current), actor)
 	if place.Status != nil {
 		answer["status"] = *place.Status
 	}
@@ -247,16 +248,18 @@ func (t *placeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// card did not take its place, so the honest answer names both rather
 	// than failing a call whose status write landed.
 	if got.Unplaced != nil {
-		answer["unplaced"] = writeFailure(actor, name, got.Unplaced).Output
+		answer["unplaced"] = writeFailure(ctx, actor, name, got.Unplaced).Output
 	}
 	t.deps.settle(ctx, call.at)
 	return jsonResult(answer)
 }
 
 // dropped says what a drag asked for, as the clause an unknown answer names:
-// "ENG-4 dropped before ENG-2 into in_progress".
-func dropped(task tracker.Task, args map[string]any) string {
-	what := task.Key + " dropped"
+// "ENG-4 dropped before ENG-2 into in_progress" — the card named as prose names
+// a task ([tracker.TaskDetail.Named]), since a key another task claimed first
+// would name that one.
+func dropped(card tracker.TaskDetail, args map[string]any) string {
+	what := card.Named() + " dropped"
 	if ref := strings.TrimSpace(argString(args, "before")); ref != "" {
 		what += " before " + clip(ref)
 	}

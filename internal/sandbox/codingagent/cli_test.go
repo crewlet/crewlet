@@ -176,33 +176,53 @@ func TestEmptyClaudeOutputIsAFailure(t *testing.T) {
 	}
 }
 
-// claude-code exits cleanly, so the done marker is the signal.
-func TestClaudeRelisOnTheDoneMarker(t *testing.T) {
-	t.Parallel()
-	if claude().Finished(`{"type":"result","result":"done","subtype":"success"}`) {
-		t.Fatal("claude-code claimed a streamed terminal signal it does not emit")
-	}
-}
-
 // ---------------------------------------------------------------------
 // opencode: the invocation
 // ---------------------------------------------------------------------
 
-// --format json is load-bearing: `opencode run` finishes and hangs, and in
-// default mode the final summary is buffered and lost.
-func TestTheOpenCodeInvocationAlwaysStreamsJson(t *testing.T) {
-	t.Parallel()
-	cmd := opencode().Command(sandbox.RunRequest{Brief: "fix it"}, codingagent.Paths{}, "")
-	if !strings.Contains(cmd, "--format json") {
-		t.Fatalf("the invocation does not stream JSON:\n%s", cmd)
+// scriptOf is the script inside an OpenCode invocation: the command is
+// `sh -c '<script>'`, quoted the way the runner quotes everything.
+func scriptOf(t *testing.T, cmd string) string {
+	t.Helper()
+	quoted, ok := strings.CutPrefix(cmd, "sh -c '")
+	if !ok || !strings.HasSuffix(quoted, "'") {
+		t.Fatalf("the invocation is not one quoted script:\n%s", cmd)
 	}
-	if !strings.HasPrefix(cmd, "opencode run ") {
-		t.Fatalf("not a non-interactive run:\n%s", cmd)
+	return strings.ReplaceAll(strings.TrimSuffix(quoted, "'"), `'\''`, "'")
+}
+
+// THE RUN IS AGAINST A SERVER OF ITS OWN, streaming JSON, under a session it
+// names — and the brief is NOT on its argv, which OpenCode re-quotes: it
+// arrives on stdin.
+func TestTheOpenCodeInvocationRunsAgainstItsOwnServer(t *testing.T) {
+	t.Parallel()
+	cli := opencode()
+	cmd := cli.Command(sandbox.RunRequest{Brief: `fix "zebra-17"`}, codingagent.Paths{Home: "/box"}, "")
+	script := scriptOf(t, cmd)
+	for _, want := range []string{
+		"opencode serve --hostname 127.0.0.1 --port 0",
+		`opencode run --server "$url" --format json --title crewlet --session 'ses_`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("the script lacks %q:\n%s", want, script)
+		}
+	}
+	if strings.Contains(script, "zebra-17") {
+		t.Errorf("the brief is on the run's argv, which OpenCode re-quotes:\n%s", script)
+	}
+	if !cli.Output(codingagent.Paths{Home: "/box"}).BriefOnStdin {
+		t.Error("the brief does not reach the run on stdin")
+	}
+	// A fresh session every run: OpenCode CONTINUES a session it already
+	// holds, and a reused box holds the last run's.
+	if again := cli.Command(sandbox.RunRequest{}, codingagent.Paths{Home: "/box"}, ""); again == cmd {
+		t.Error("two runs were given one session")
 	}
 }
 
-// A custom base URL means the run's own declared provider; otherwise the model
-// is addressed under its vendor family.
+// AN API ENTRY'S MODEL IS ADDRESSED IN OPENCODE'S GRAMMAR: a custom base URL
+// means the run's own declared provider, and otherwise the OpenCode provider
+// of the entry's wire, whose key variable the run environment carries.
 func TestTheOpenCodeModelIsAddressedUnderTheRightProvider(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -211,30 +231,40 @@ func TestTheOpenCodeModelIsAddressedUnderTheRightProvider(t *testing.T) {
 	}{
 		{sandbox.AgentLLM{Model: "claude-opus-5", ProviderType: "anthropic"}, "anthropic/claude-opus-5"},
 		{sandbox.AgentLLM{Model: "gpt-5", ProviderType: "openai"}, "openai/gpt-5"},
-		{sandbox.AgentLLM{Model: "gemini-3", ProviderType: "google"}, "google/gemini-3"},
 		// A gateway: the catalogue cannot resolve it, so the run declares
 		// its own provider and addresses the model there.
-		{sandbox.AgentLLM{Model: "house-model", ProviderType: "openai", BaseURL: "https://example.com/v1"},
+		{sandbox.AgentLLM{Model: "house-model", ProviderType: "openai-compatible", BaseURL: "https://example.com/v1"},
+			codingagent.OpenCodeProviderID + "/house-model"},
+		{sandbox.AgentLLM{Model: "house-model", ProviderType: "anthropic", BaseURL: "https://example.com"},
 			codingagent.OpenCodeProviderID + "/house-model"},
 	}
 	for _, c := range cases {
-		cmd := opencode().Command(sandbox.RunRequest{Brief: "x", LLM: &c.llm}, codingagent.Paths{}, "")
-		if !strings.Contains(cmd, "--model '"+c.want+"'") {
-			t.Fatalf("%+v gave:\n%s\nwant --model %q", c.llm, cmd, c.want)
+		script := scriptOf(t, opencode().Command(sandbox.RunRequest{Brief: "x", LLM: &c.llm}, codingagent.Paths{}, ""))
+		if !strings.Contains(script, "--model '"+c.want+"'") {
+			t.Fatalf("%+v gave:\n%s\nwant --model %q", c.llm, script, c.want)
 		}
 	}
 }
 
-// A subscription entry's provider type is the same for every vendor, so
-// reading it would address a Claude subscription's model as an OpenAI one —
-// which is why the family comes from the declared type, not from the entry.
-func TestAnUnknownProviderTypeFallsBackToTheOpenAiFamily(t *testing.T) {
+// AN OPENCODE ENTRY'S MODEL REACHES THE BOX AS WRITTEN.
+//
+// It is the string every text call on the same entry passes to `opencode run
+// --model`, which OpenCode splits at its first slash into a provider and a
+// model. The runner used to put a family in front of it, so an entry naming
+// `openrouter/anthropic/claude-sonnet-5` ran its box on
+// `anthropic/openrouter/anthropic/claude-sonnet-5` — a provider-qualified id
+// broke the agent run, and a bare one broke every text call.
+func TestAnOpenCodeEntrysModelIsPassedAsWritten(t *testing.T) {
 	t.Parallel()
-	cmd := opencode().Command(sandbox.RunRequest{
-		Brief: "x", LLM: &sandbox.AgentLLM{Model: "m", ProviderType: "something-new"},
-	}, codingagent.Paths{}, "")
-	if !strings.Contains(cmd, "--model 'openai/m'") {
-		t.Fatalf("cmd = %s", cmd)
+	for _, model := range []string{
+		"anthropic/claude-sonnet-5",
+		"openrouter/anthropic/claude-sonnet-5",
+	} {
+		llm := sandbox.AgentLLM{Model: model, CLI: codingagent.OpenCodeName}
+		script := scriptOf(t, opencode().Command(sandbox.RunRequest{Brief: "x", LLM: &llm}, codingagent.Paths{}, ""))
+		if !strings.Contains(script, "--model '"+model+"'") {
+			t.Errorf("%q gave:\n%s\nwant the model as written", model, script)
+		}
 	}
 }
 
@@ -242,17 +272,40 @@ func TestAnUnknownProviderTypeFallsBackToTheOpenAiFamily(t *testing.T) {
 // opencode: the config
 // ---------------------------------------------------------------------
 
-// The secret is never written into a file inside the box where the agent
-// could read it back and echo it into its report.
-func TestTheOpenCodeConfigReferencesTheKeyRatherThanInliningIt(t *testing.T) {
-	t.Parallel()
+// openCodeConfig is opencode.json as a run writes it, decoded.
+type openCodeConfig struct {
+	Schema    string `json:"$schema"`
+	Share     string `json:"share"`
+	Update    string `json:"update"`
+	Snapshots *bool  `json:"snapshots"`
+	Rules     []struct {
+		Action, Resource, Effect string
+	} `json:"permissions"`
+	Providers map[string]struct {
+		Package  string   `json:"package"`
+		Env      []string `json:"env"`
+		Settings struct {
+			BaseURL string `json:"baseURL"`
+		} `json:"settings"`
+		Models map[string]any `json:"models"`
+	} `json:"providers"`
+	MCP *struct {
+		Servers map[string]struct {
+			Type        string            `json:"type"`
+			Command     []string          `json:"command"`
+			Environment map[string]string `json:"environment"`
+			URL         string            `json:"url"`
+			Headers     map[string]string `json:"headers"`
+			OAuth       *bool             `json:"oauth"`
+			Codemode    *bool             `json:"codemode"`
+		} `json:"servers"`
+	} `json:"mcp"`
+}
+
+func writeOpenCodeConfig(t *testing.T, req sandbox.RunRequest) (openCodeConfig, string) {
+	t.Helper()
 	b := sandbox.NewFakeSandbox("box-1")
-	path, err := opencode().WriteConfig(t.Context(), b, sandbox.RunRequest{
-		LLM: &sandbox.AgentLLM{
-			Model: "house-model", ProviderType: "anthropic",
-			BaseURL: "https://example.com/v1",
-		},
-	}, codingagent.PathsFor(b))
+	path, err := opencode().WriteConfig(t.Context(), b, req, codingagent.PathsFor(b))
 	if err != nil || path == "" {
 		t.Fatalf("WriteConfig = %q, %v", path, err)
 	}
@@ -260,22 +313,78 @@ func TestTheOpenCodeConfigReferencesTheKeyRatherThanInliningIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	body := string(blob)
-	if !strings.Contains(body, "{env:ANTHROPIC_API_KEY}") {
-		t.Fatalf("the key is not referenced through the environment:\n%s", body)
+	var cfg openCodeConfig
+	if err := json.Unmarshal(blob, &cfg); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, blob)
 	}
-	if !strings.Contains(body, "https://example.com/v1") {
-		t.Fatalf("the endpoint was not declared:\n%s", body)
+	return cfg, string(blob)
+}
+
+// The secret is never written into a file inside the box where the agent
+// could read it back and echo it into its report: the provider names the
+// VARIABLE it is read from.
+func TestTheOpenCodeConfigNamesTheKeysVariableRatherThanInliningIt(t *testing.T) {
+	t.Parallel()
+	cfg, body := writeOpenCodeConfig(t, sandbox.RunRequest{
+		LLM: &sandbox.AgentLLM{Model: "house-model", ProviderType: "anthropic", BaseURL: "https://example.com"},
+		Env: map[string]string{"ANTHROPIC_API_KEY": "sk-ant-secret-value"},
+	})
+	got := cfg.Providers[codingagent.OpenCodeProviderID]
+	if !slices.Equal(got.Env, []string{"ANTHROPIC_API_KEY"}) {
+		t.Fatalf("the key is not read from the environment: env = %v\n%s", got.Env, body)
 	}
-	if !strings.Contains(body, `"share": "disabled"`) {
+	if strings.Contains(body, "sk-ant-secret-value") {
+		t.Fatalf("the key was written into the box:\n%s", body)
+	}
+	if _, ok := got.Models["house-model"]; !ok {
+		t.Fatalf("the model was not declared:\n%s", body)
+	}
+	if cfg.Share != "disabled" {
 		t.Fatalf("sharing was left on — a run's transcript is company work:\n%s", body)
 	}
 }
 
+// THE DECLARED ENDPOINT IS WHERE EACH PACKAGE EXPECTS IT.
+//
+// An `anthropic` entry's base_url is the host root, which the engine's own
+// provider and Claude Code's ANTHROPIC_BASE_URL both append /v1/messages to;
+// OpenCode's anthropic-compatible package posts to `<baseURL>/messages`, so the
+// root handed to it as written sent every request on an Anthropic gateway to a
+// path that does not exist. An OpenAI-wire base_url already ends in its
+// version and passes through untouched.
+func TestTheOpenCodeProviderEndpointIsWhereItsPackageExpectsIt(t *testing.T) {
+	t.Parallel()
+	const (
+		anthropic = "@opencode/ai/providers/anthropic-compatible"
+		openai    = "@opencode/ai/providers/openai-compatible"
+	)
+	for _, tc := range []struct {
+		providerType, baseURL, pkg, keyVar, want string
+	}{
+		{"anthropic", "https://gateway.example.com", anthropic, "ANTHROPIC_API_KEY", "https://gateway.example.com/v1"},
+		{"anthropic", "https://gateway.example.com/", anthropic, "ANTHROPIC_API_KEY", "https://gateway.example.com/v1"},
+		{"openai-compatible", "https://llm.example.com/v1", openai, "OPENAI_API_KEY", "https://llm.example.com/v1"},
+		{"openai", "https://llm.example.com/v1/", openai, "OPENAI_API_KEY", "https://llm.example.com/v1/"},
+	} {
+		cfg, body := writeOpenCodeConfig(t, sandbox.RunRequest{LLM: &sandbox.AgentLLM{
+			Model: "house-model", ProviderType: tc.providerType, BaseURL: tc.baseURL,
+		}})
+		got := cfg.Providers[codingagent.OpenCodeProviderID]
+		if got.Package != tc.pkg || got.Settings.BaseURL != tc.want || !slices.Equal(got.Env, []string{tc.keyVar}) {
+			t.Errorf("%s entry at %q declared %s at %q reading %v, want %s at %q reading %s:\n%s",
+				tc.providerType, tc.baseURL, got.Package, got.Settings.BaseURL, got.Env,
+				tc.pkg, tc.want, tc.keyVar, body)
+		}
+	}
+}
+
+// BOTH TRANSPORTS IN OPENCODE 2's SHAPE, every server's tools offered directly
+// rather than through Code Mode — where the transcript would record every call
+// as `execute` — and no remote server starting an OAuth flow a headless run
+// cannot complete.
 func TestTheOpenCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 	t.Parallel()
-	b := sandbox.NewFakeSandbox("box-1")
-	path, err := opencode().WriteConfig(t.Context(), b, sandbox.RunRequest{
+	cfg, body := writeOpenCodeConfig(t, sandbox.RunRequest{
 		MCPServers: map[string]sandbox.MCPServer{
 			"files": {
 				Name: "files", Transport: sandbox.TransportStdio,
@@ -287,44 +396,37 @@ func TestTheOpenCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 				URL: "https://example.com/mcp", Headers: map[string]string{"H": "v"},
 			},
 		},
-	}, codingagent.PathsFor(b))
-	if err != nil || path == "" {
-		t.Fatalf("WriteConfig = %q, %v", path, err)
-	}
-	blob, _ := b.ReadFile(t.Context(), path)
-	var cfg struct {
-		MCP map[string]struct {
-			Type        string            `json:"type"`
-			Command     []string          `json:"command"`
-			Environment map[string]string `json:"environment"`
-			URL         string            `json:"url"`
-			Headers     map[string]string `json:"headers"`
-			Enabled     bool              `json:"enabled"`
-		} `json:"mcp"`
-	}
-	if err := json.Unmarshal(blob, &cfg); err != nil {
-		t.Fatalf("unmarshal: %v\n%s", err, blob)
+	})
+	if cfg.MCP == nil {
+		t.Fatalf("no mcp.servers block:\n%s", body)
 	}
 	// ONE ARGV: this CLI takes the whole invocation as a single array, so
 	// the binary and its arguments are joined rather than kept apart.
-	got := cfg.MCP["files"]
-	if got.Type != "local" || !got.Enabled ||
-		!slices.Equal(got.Command, []string{"mcp-files", "--root", "/src"}) {
+	got := cfg.MCP.Servers["files"]
+	if got.Type != "local" || !slices.Equal(got.Command, []string{"mcp-files", "--root", "/src"}) {
 		t.Fatalf("stdio server = %+v", got)
 	}
 	// The CREDENTIAL reaches the box under this CLI's own key. It is
 	// `environment` here and `env` in Claude Code's file, which is the
 	// whole reason each runner renders its own.
 	if got.Environment["K"] != "v" {
-		t.Errorf("stdio env = %v, want the seat's credential under `environment`",
-			got.Environment)
+		t.Errorf("stdio env = %v, want the seat's credential under `environment`", got.Environment)
 	}
-	got = cfg.MCP["linear"]
-	if got.Type != "remote" || got.URL != "https://example.com/mcp" || !got.Enabled {
+	if got.Codemode == nil || *got.Codemode {
+		t.Errorf("the stdio server's tools are behind Code Mode:\n%s", body)
+	}
+	got = cfg.MCP.Servers["linear"]
+	if got.Type != "remote" || got.URL != "https://example.com/mcp" {
 		t.Fatalf("http server = %+v", got)
 	}
 	if got.Headers["H"] != "v" {
 		t.Errorf("http headers = %v, want the seat's credential", got.Headers)
+	}
+	if got.OAuth == nil || *got.OAuth {
+		t.Errorf("the remote server may start OAuth, which nobody can complete:\n%s", body)
+	}
+	if got.Codemode == nil || *got.Codemode {
+		t.Errorf("the remote server's tools are behind Code Mode:\n%s", body)
 	}
 }
 
@@ -389,38 +491,41 @@ func TestTheClaudeCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 // `ask` is refused and the agent carries on without the tool — which reads as
 // an agent that would not do the work. The box is the boundary instead, the
 // same stance claude-code takes with --permission-mode bypassPermissions.
+// `question` alone is denied: it asks a person through a form a headless run
+// cancels, and a run with something to ask has crewlet-ask.
 func TestTheOpenCodeConfigLeavesNoPermissionGateForNobodyToAnswer(t *testing.T) {
 	t.Parallel()
-	b := sandbox.NewFakeSandbox("box-1")
-	path, err := opencode().WriteConfig(t.Context(), b, sandbox.RunRequest{
+	cfg, body := writeOpenCodeConfig(t, sandbox.RunRequest{
 		MCPServers: map[string]sandbox.MCPServer{
 			"crewlet": {Name: "crewlet", Transport: sandbox.TransportHTTP, URL: "https://example.com/mcp"},
 		},
-	}, codingagent.PathsFor(b))
-	if err != nil || path == "" {
-		t.Fatalf("WriteConfig = %q, %v", path, err)
+	})
+	// THE ORDER IS THE RULE: the last match wins, so the allow comes first
+	// and the one denial after it.
+	want := []string{"* * allow", "question * deny"}
+	var got []string
+	for _, r := range cfg.Rules {
+		got = append(got, r.Action+" "+r.Resource+" "+r.Effect)
 	}
-	blob, _ := b.ReadFile(t.Context(), path)
-	// BOTH ARE POINTERS, so an ABSENT key is distinguishable from one written
-	// false. A plain bool decodes a missing `autoupdate` to false and passes —
-	// which is the exact regression this pins, since the CLI then takes its own
-	// default and nothing says so.
-	var cfg struct {
-		Permission *string `json:"permission"`
-		Autoupdate *bool   `json:"autoupdate"`
-	}
-	if err := json.Unmarshal(blob, &cfg); err != nil {
-		t.Fatalf("unmarshal: %v\n%s", err, blob)
-	}
-	if cfg.Permission == nil || *cfg.Permission != "allow" {
-		t.Errorf("permission = %v, want \"allow\" — a gate nobody can answer is a lost tool call:\n%s",
-			derefOr(cfg.Permission, "(absent)"), blob)
+	if !slices.Equal(got, want) {
+		t.Errorf("permissions = %v, want %v — a gate nobody can answer is a lost tool call:\n%s",
+			got, want, body)
 	}
 	// A CLI that updates itself mid-run swaps the tool under the brief while
 	// the seat's turn is suspended waiting on it.
-	if cfg.Autoupdate == nil || *cfg.Autoupdate {
-		t.Errorf("autoupdate = %v, want a written false:\n%s",
-			derefOr(cfg.Autoupdate, "(absent)"), blob)
+	if cfg.Update != "disable" {
+		t.Errorf("update = %q, want disable:\n%s", cfg.Update, body)
+	}
+	// A pointer, so an ABSENT key is told apart from one written false: the
+	// CLI's own default is on.
+	if cfg.Snapshots == nil || *cfg.Snapshots {
+		t.Errorf("snapshots = %v, want a written false:\n%s", derefOr(cfg.Snapshots, "(absent)"), body)
+	}
+	// 1.x's keys, which 2.0 translates rather than reads: none of them.
+	for _, v1 := range []string{`"permission"`, `"autoupdate"`, `"provider"`, `"npm"`, `"enabled"`} {
+		if strings.Contains(body, v1) {
+			t.Errorf("the config carries 1.x's %s:\n%s", v1, body)
+		}
 	}
 }
 
@@ -441,26 +546,17 @@ func derefOr[T any](p *T, absent string) any {
 // bridge URL included.
 func TestAnOpenCodeConfigIsWrittenEvenWithNoProviderAndNoServers(t *testing.T) {
 	t.Parallel()
-	b := sandbox.NewFakeSandbox("box-1")
-	path, err := opencode().WriteConfig(t.Context(), b, sandbox.RunRequest{}, codingagent.PathsFor(b))
-	if err != nil || path == "" {
-		t.Fatalf("WriteConfig = %q, %v; want the posture written anyway", path, err)
-	}
-	blob, _ := b.ReadFile(t.Context(), path)
-	var cfg map[string]any
-	if err := json.Unmarshal(blob, &cfg); err != nil {
-		t.Fatalf("unmarshal: %v\n%s", err, blob)
-	}
-	if cfg["permission"] != "allow" || cfg["share"] != "disabled" {
-		t.Errorf("a minimal run lost its posture:\n%s", blob)
+	cfg, body := writeOpenCodeConfig(t, sandbox.RunRequest{})
+	if len(cfg.Rules) == 0 || cfg.Share != "disabled" || cfg.Schema == "" {
+		t.Errorf("a minimal run lost its posture:\n%s", body)
 	}
 	// And it states ONLY the posture: a provider block for a run that named
 	// no endpoint would point the agent at nothing.
-	if _, ok := cfg["provider"]; ok {
-		t.Errorf("a run with no base URL declared a provider:\n%s", blob)
+	if cfg.Providers != nil {
+		t.Errorf("a run with no base URL declared a provider:\n%s", body)
 	}
-	if _, ok := cfg["mcp"]; ok {
-		t.Errorf("a run with no servers declared an mcp block:\n%s", blob)
+	if cfg.MCP != nil {
+		t.Errorf("a run with no servers declared an mcp block:\n%s", body)
 	}
 }
 
@@ -468,40 +564,11 @@ func TestAnOpenCodeConfigIsWrittenEvenWithNoProviderAndNoServers(t *testing.T) {
 // opencode: completion and parsing
 // ---------------------------------------------------------------------
 
-// The shape has moved across versions and a box runs whatever the operator's
-// image has, so all three terminal signals must be recognised.
-func TestOpenCodeRecognisesEveryTerminalSignal(t *testing.T) {
-	t.Parallel()
-	cases := map[string]string{
-		"step_finish stop":   `{"type":"step_finish","part":{"reason":"stop"}}`,
-		"session idle":       `{"type":"session.status","properties":{"status":{"type":"idle"}}}`,
-		"an error is an end": `{"type":"error","error":"boom"}`,
-	}
-	for name, line := range cases {
-		if !opencode().Finished(line) {
-			t.Fatalf("%s was not recognised as terminal", name)
-		}
-	}
-}
-
-// An intermediate step carries "tool-calls" and must not end the run.
-func TestAnIntermediateStepIsNotATerminalSignal(t *testing.T) {
-	t.Parallel()
-	stream := `{"type":"step_finish","part":{"reason":"tool-calls"}}
-{"type":"text","part":{"text":"still working"}}`
-	if opencode().Finished(stream) {
-		t.Fatal("an intermediate step ended the run early")
-	}
-}
-
-// The stream is flushed live, so a poll routinely reads it mid-line.
-func TestAPartialLineIsSkippedRatherThanFailingThePoll(t *testing.T) {
+// The stream is flushed live, so a read routinely meets it mid-line.
+func TestAPartialLineIsSkippedRatherThanFailingTheRead(t *testing.T) {
 	t.Parallel()
 	stream := `{"type":"text","part":{"text":"working"}}
 {"type":"step_fin`
-	if opencode().Finished(stream) {
-		t.Fatal("a half-written line was read as terminal")
-	}
 	res := opencode().Parse(stream)
 	if !strings.Contains(res.Text, "working") {
 		t.Fatalf("the complete events were lost with the partial one: %+v", res)
@@ -511,7 +578,7 @@ func TestAPartialLineIsSkippedRatherThanFailingThePoll(t *testing.T) {
 func TestTheOpenCodeParserRebuildsTheAnswerAndTheTranscript(t *testing.T) {
 	t.Parallel()
 	stream := strings.Join([]string{
-		`{"type":"tool_use","part":{"tool":"bash","state":{"input":{"command":"pytest -q"},"status":"completed"}}}`,
+		`{"type":"tool_use","part":{"tool":"shell","state":{"input":{"command":"pytest -q"},"status":"completed"}}}`,
 		`{"type":"text","part":{"text":"Fixed the flake."}}`,
 		`{"type":"text","part":{"text":"Opened https://github.com/acme/api/pull/9"}}`,
 		`{"type":"step_finish","part":{"reason":"stop"}}`,
@@ -526,7 +593,7 @@ func TestTheOpenCodeParserRebuildsTheAnswerAndTheTranscript(t *testing.T) {
 	if len(res.DeliveredRefs) != 1 {
 		t.Fatalf("refs = %v", res.DeliveredRefs)
 	}
-	// A bare "[tool] bash" is useless when a run fails — the transcript has
+	// A bare "[tool] shell" is useless when a run fails — the transcript has
 	// to say WHAT ran.
 	if !strings.Contains(res.Transcript, "pytest -q") {
 		t.Fatalf("the transcript does not say what ran:\n%s", res.Transcript)
@@ -535,7 +602,7 @@ func TestTheOpenCodeParserRebuildsTheAnswerAndTheTranscript(t *testing.T) {
 
 func TestAFailedToolIsMarkedInTheTranscript(t *testing.T) {
 	t.Parallel()
-	stream := `{"type":"tool_use","part":{"tool":"bash","state":{"input":{"command":"pytest"},"status":"error","error":"2 failed"}}}
+	stream := `{"type":"tool_use","part":{"tool":"shell","state":{"input":{"command":"pytest"},"status":"error","error":"2 failed"}}}
 {"type":"text","part":{"text":"could not fix it"}}`
 	res := opencode().Parse(stream)
 	if !strings.Contains(res.Transcript, "error: 2 failed") {
@@ -543,8 +610,36 @@ func TestAFailedToolIsMarkedInTheTranscript(t *testing.T) {
 	}
 }
 
+// THE RUN'S TOKENS ARE THE SESSION'S OWN TOTALS, from the usage report the
+// script appends: the whole prompt (what the cache served and stored
+// included), and the output with the reasoning 2.0 reports beside it added
+// back, as every provider bills it.
+func TestOpenCodeReadsTheSessionsUsageReport(t *testing.T) {
+	t.Parallel()
+	stream := strings.Join([]string{
+		`{"type":"text","part":{"text":"done"}}`,
+		`{"type":"crewlet.usage","report":{"data":{"id":"ses_abc","cost":0.42,` +
+			`"tokens":{"input":100,"output":20,"reasoning":5,"cache":{"read":300,"write":7}}}}}`,
+	}, "\n")
+	res := opencode().Parse(stream)
+	if res.InputTokens != 407 || res.OutputTokens != 25 {
+		t.Errorf("tokens = in %d out %d, want in 407 (100+300+7) out 25 (20+5)",
+			res.InputTokens, res.OutputTokens)
+	}
+	if res.CacheReadTokens != 300 || res.CacheWriteTokens != 7 {
+		t.Errorf("cache = %d/%d, want 300/7", res.CacheReadTokens, res.CacheWriteTokens)
+	}
+	if res.CostUSD != 0.42 || res.SessionID != "ses_abc" {
+		t.Errorf("cost %v session %q, want 0.42 and ses_abc", res.CostUSD, res.SessionID)
+	}
+	if res.Text != "done" {
+		t.Errorf("the usage line leaked into the answer: %q", res.Text)
+	}
+}
+
 // An invented token count in the spend rollup is worse than a missing one,
-// because a reader cannot tell it is invented.
+// because a reader cannot tell it is invented — so a run with no usage report
+// reports none.
 func TestOpenCodeReportsNoTokensRatherThanEstimatingThem(t *testing.T) {
 	t.Parallel()
 	res := opencode().Parse(`{"type":"text","part":{"text":"done"}}`)
@@ -553,18 +648,34 @@ func TestOpenCodeReportsNoTokensRatherThanEstimatingThem(t *testing.T) {
 	}
 }
 
+// A NEGATIVE PRICE IS PASSED ON, as a negative count is: the coordinator floors
+// both where every collected result enters it and says so
+// (sandbox_usage_negative). Zeroed here, an OpenCode price below zero was
+// floored with nothing logged while a negative count beside it was reported.
+//
+// Mutation: keep the price only when it is above zero, and the result reads 0.
+func TestOpenCodeHandsANegativePriceOnForTheCoordinatorToFloor(t *testing.T) {
+	t.Parallel()
+	res := opencode().Parse(`{"type":"text","part":{"text":"done"}}` + "\n" +
+		`{"type":"crewlet.usage","report":{"data":{"cost":-0.25,"tokens":{"input":-3,"output":1}}}}`)
+	if res.CostUSD != -0.25 || res.InputTokens != -3 {
+		t.Errorf("cost %v input %d, want both as reported (-0.25, -3) for the coordinator's floor",
+			res.CostUSD, res.InputTokens)
+	}
+}
+
 func TestAnErrorEventIsAFailure(t *testing.T) {
 	t.Parallel()
-	res := opencode().Parse(`{"type":"error","error":"model refused"}`)
+	res := opencode().Parse(`{"type":"error","error":{"type":"provider.quota","message":"quota exceeded"}}`)
 	if res.Success {
 		t.Fatal("an error event read as success")
 	}
-	if !strings.Contains(res.Error, "model refused") {
+	if !strings.Contains(res.Error, "quota exceeded") {
 		t.Fatalf("error = %q", res.Error)
 	}
 }
 
-// An older CLI, or a run captured before the format flag.
+// Output that is not the event stream is still an answer.
 func TestNonJsonOpenCodeOutputIsTakenAsTheAnswer(t *testing.T) {
 	t.Parallel()
 	res := opencode().Parse("I fixed it and opened https://github.com/acme/api/pull/3")
@@ -580,7 +691,7 @@ func TestNonJsonOpenCodeOutputIsTakenAsTheAnswer(t *testing.T) {
 // findings file exists for — but the parser must still report it honestly.
 func TestAToolOnlyStreamReportsNoAnswer(t *testing.T) {
 	t.Parallel()
-	res := opencode().Parse(`{"type":"tool_use","part":{"tool":"bash","state":{"input":{"command":"ls"}}}}`)
+	res := opencode().Parse(`{"type":"tool_use","part":{"tool":"shell","state":{"input":{"command":"ls"}}}}`)
 	if res.Success {
 		t.Fatal("a run that said nothing read as success")
 	}

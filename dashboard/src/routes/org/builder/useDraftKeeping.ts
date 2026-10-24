@@ -7,9 +7,8 @@
  * NOTHING IS WRITTEN UNTIL THE KEPT DRAFT IS DECIDED. A freshly loaded
  * Builder has an empty log, and the storage plan for an empty log is to
  * clear, so writing before the decision would erase the very draft about to
- * be offered. The decision waits for a base the engine has keyed (in edit
- * mode, the first check's derivation), because a log recorded against
- * handles replays onto nothing else.
+ * be offered. The decision waits for the company to load, since a log
+ * recorded against its handles and unit keys replays onto nothing else.
  *
  * WHAT THE DECISION IS (spec 3.3):
  * - the same revision offers Keep or Discard, and the Builder records nothing
@@ -22,8 +21,9 @@
  *   somebody may have walked away from, not for a trip away and back.
  *
  * WHAT CLEARS IT: whatever makes the plan say so (a save, a discard, an empty
- * log), and a state that may no longer be kept (`keep` false after a token
- * change or a refused token), which also withdraws an offer still on screen.
+ * log), and a state that may no longer be kept (`keep` false after a change
+ * of reader or a refused credential), which also withdraws an offer still on
+ * screen.
  *
  * A KEPT DRAFT A SAVE WAS SENT FOR IS SETTLED BEFORE IT IS DECIDED. A save
  * marks the kept log with its write id before it goes (`markWrite`), and
@@ -46,7 +46,7 @@ import {
   type DraftStorage,
   type KeptDraft,
 } from "./model/persistence.ts";
-import { isBaseKeyed, type BuilderAction, type BuilderState } from "./model/reducer.ts";
+import type { BuilderAction, BuilderState } from "./model/reducer.ts";
 import type { SaveAttempt } from "./model/writes.ts";
 
 /**
@@ -93,8 +93,7 @@ export interface DraftKeeping {
 
 const REFUSED: KeepNotice = {
   tone: "warning",
-  message:
-    "This browser refuses to keep a draft, so unsaved changes will not survive a reload or leaving the builder.",
+  message: "This browser can’t keep drafts. Unsaved changes are lost on reload.",
 };
 
 export function useDraftKeeping({
@@ -135,8 +134,7 @@ export function useDraftKeeping({
 
   // Decide the kept draft once the base can take it.
   useEffect(() => {
-    if (decided || offer || unsettled || restoringFrom.current || !loaded || !isBaseKeyed(state))
-      return;
+    if (decided || offer || unsettled || restoringFrom.current || !loaded) return;
     const restored = restoreDraft(storage);
     switch (restored.kind) {
       case "none":
@@ -154,26 +152,44 @@ export function useDraftKeeping({
       case "discarded":
         setDecisionNotice({
           tone: "neutral",
-          message:
-            "A kept draft could not be read by this version of the dashboard, so it was discarded.",
+          message: "A kept draft couldn’t be read and was discarded.",
         });
         setDecided(true);
         return;
       case "restored": {
         const kept = restored.kept;
         if (kept.write !== undefined) {
-          setUnsettled({ writeId: kept.write, mode: kept.mode, baseRevision: kept.baseRevision });
+          setUnsettled({
+            writeId: kept.write,
+            mode: kept.mode,
+            baseRevision: kept.baseRevision,
+            scope: kept.scope ?? null,
+          });
           return;
         }
-        const decision = restoreOffer(kept, { mode: state.mode, revision: state.base.revision });
+        const decision = restoreOffer(kept, {
+          mode: state.mode,
+          revision: state.base.revision,
+          scope: state.scope,
+        });
+        if (decision.kind === "discard_scope_changed") {
+          clearDraft(storage);
+          setDecisionNotice({
+            tone: "warning",
+            message:
+              "A kept draft of another part of the organization was discarded: it was made of a different unit than the one open now.",
+          });
+          setDecided(true);
+          return;
+        }
         if (decision.kind === "discard_mode_changed") {
           clearDraft(storage);
           setDecisionNotice({
             tone: "warning",
             message:
               decision.kept === "create"
-                ? "A draft for creating a company was discarded, because this engine now has a company."
-                : "A kept draft of the previous company was discarded, because no configuration is active on this engine now.",
+                ? "Your new-company draft was discarded: a company now exists."
+                : "Your draft was discarded: no company is active now.",
           });
           setDecided(true);
           return;
@@ -216,6 +232,7 @@ export function useDraftKeeping({
     const plan = persistencePlan(
       {
         mode: state.mode,
+        scope: state.scope,
         baseRevision: state.base.revision,
         log: state.log,
         keep: state.keep,
@@ -232,14 +249,23 @@ export function useDraftKeeping({
         : result === "too_large"
           ? {
               tone: "warning",
-              message:
-                "This draft holds more changes than can be kept across a reload. Save it in steps, or it is lost if the tab reloads or you leave the builder.",
+              message: "This draft is too large to keep. Save in steps.",
             }
           : null,
     );
-    // `state.log`, `keep`, `mode` and the base revision are what the plan
-    // reads; a check answer, or the base being keyed, moves none of them.
-  }, [loaded, decided, state.log, state.keep, state.mode, state.base.revision, storage, now]);
+    // `state.log`, `keep`, `mode`, the scope and the base revision are what the plan
+    // reads; a check answer moves none of them.
+  }, [
+    loaded,
+    decided,
+    state.log,
+    state.keep,
+    state.mode,
+    state.scope,
+    state.base.revision,
+    storage,
+    now,
+  ]);
 
   const keep = useCallback(() => {
     if (!offer) return;

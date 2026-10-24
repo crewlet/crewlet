@@ -12,9 +12,12 @@
  *    have to find the seat on another screen first.
  *
  * NEVER HIDDEN. Both are drawn for every reader and disabled with the reason
- * for one who cannot change the company's configuration
- * (`useConfigWriteAccess`), which is a different gate from acting in it: a
- * ceiling is a `/config` change, guarded by the operator credential.
+ * for one who cannot change that ceiling (`useOrgWriteAccess`), which is a
+ * different gate from acting in it: a ceiling is a `/config` change, written
+ * by an admin — or, for a seat inside a unit the reader leads, by that lead,
+ * since a ceiling is no credential and the engine admits a lead's write of
+ * their own seats (`lib/leadScope.ts`). The company's own ceilings are
+ * Admin's alone.
  *
  * THERE IS NO RESET, and nothing here offers one. A window's `used` IS what
  * the window spent; the room comes back when it turns over on the company
@@ -30,6 +33,7 @@ import {
   Input,
   Modal,
   Popover,
+  returnFocus,
   useToast,
 } from "@crewlethq/ui";
 import { PencilGlyph, SlidersVerticalGlyph } from "@crewlethq/icons/glyphs";
@@ -41,14 +45,23 @@ import { dayLabelIn } from "~/lib/range.ts";
 import { useOrgBudget } from "~/lib/store-hooks.ts";
 import { useCeilingWrite, type CeilingWrite, type TypedCeilings } from "~/lib/useCeilingWrite.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
+import { useOrgWriteAccess, type OrgTarget } from "~/lib/useWriteAccess.ts";
+import { useWaiting } from "~/lib/waiting.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";
+
+/** What changing a scope's ceilings is a change to: one seat, or the company. */
+function targetOf(scope: CeilingScope): OrgTarget {
+  return scope.kind === "seat" ? { seat: scope.handle } : "company";
+}
 
 /** "Daily", "Weekly", "Monthly" — the label a ceiling's field wears. */
 function periodTitle(period: Period): string {
   const word = PERIOD_ADJECTIVE[period];
   return word.charAt(0).toUpperCase() + word.slice(1);
 }
+
+/** How a ceiling is typed, said under the field that takes one. */
+const CEILING_TYPING = "Type 40M or 2.5M; empty means no limit.";
 
 /**
  * When a window's allowance comes back, as the company's calendar says it:
@@ -80,9 +93,7 @@ function WriteStatus({ write, onReload }: { write: CeilingWrite; onReload: () =>
     <div className="ceiling-status" role="status" aria-live="polite">
       {state.kind === "checking" && <span className="t-caption">Checking with the engine…</span>}
       {state.kind === "saving" && <span className="t-caption">Saving…</span>}
-      {state.kind === "unchanged" && (
-        <span className="t-caption">That is already the ceiling — nothing to save.</span>
-      )}
+      {state.kind === "unchanged" && <span className="t-caption">Already the limit.</span>}
       {state.kind === "warned" && (
         <Callout variant="warning">
           <ul className="ceiling-warnings">
@@ -113,7 +124,7 @@ function WriteStatus({ write, onReload }: { write: CeilingWrite; onReload: () =>
 // ---------------------------------------------------------------------------
 
 /**
- * One window's ceiling as a figure, and — for an operator — as a field.
+ * One window's ceiling as a figure, and — for an admin — as a field.
  *
  * WHAT IT SHOWS AFTER A SAVE is the ceiling SAVED, marked as applying, until
  * this node has applied it and the answer the screen draws carries it. Going
@@ -136,7 +147,7 @@ export function CeilingEditor({
   /** Re-read what the screen draws once this node applies a saved ceiling. */
   onApplied: () => void;
 }) {
-  const access = useConfigWriteAccess();
+  const access = useOrgWriteAccess(targetOf(scope));
   const write = useCeilingWrite(scope, { onApplied });
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState("");
@@ -176,7 +187,7 @@ export function CeilingEditor({
   useEffect(() => {
     if (!editing || !saved) return;
     setEditing(false);
-    pencil.current?.focus();
+    returnFocus(pencil.current);
   }, [editing, saved]);
 
   function open() {
@@ -190,8 +201,9 @@ export function CeilingEditor({
     write.reset();
     setEditing(false);
     // FOCUS GOES BACK TO WHAT OPENED IT, or a keyboard reader lands at the
-    // top of the page after every edit.
-    queueMicrotask(() => pencil.current?.focus());
+    // top of the page after every edit. Handed back rather than focused, so a
+    // pencil a pointer opened is not ringed for leaving the field.
+    queueMicrotask(() => returnFocus(pencil.current));
   }
 
   function submit(event?: FormEvent) {
@@ -257,8 +269,8 @@ export function CeilingEditor({
             error={error}
             helper={
               w
-                ? `${fmtCount(w.used)} spent ${PERIOD_WORDS[period]}, ${resetsWords(w, zone)}. Type 40M, 2.5M or digits; empty is no ceiling.`
-                : "Type 40M, 2.5M or digits; empty is no ceiling."
+                ? `${fmtCount(w.used)} spent ${PERIOD_WORDS[period]}. ${CEILING_TYPING}`
+                : CEILING_TYPING
             }
           >
             <Input
@@ -327,7 +339,8 @@ export function RaiseBudgetDialog({
   onClose: () => void;
 }) {
   const toast = useToast();
-  const access = useConfigWriteAccess();
+  const waiting = useWaiting();
+  const access = useOrgWriteAccess(targetOf(scope));
   const budgets = useQuery("budgets", undefined);
   const write = useCeilingWrite(scope);
   const zone = budgets.data?.timezone ?? "";
@@ -371,9 +384,8 @@ export function RaiseBudgetDialog({
     return read.ok && read.value !== (windowOf(windows, period)?.limit ?? null);
   });
 
-  // A SAVE ENDS THE DIALOG, and the toast carries the revision's own summary
-  // — the sentence the history will show — and that it is applying, since
-  // the gate enforces the ceiling it replaced until each node has it.
+  // A SAVE ENDS THE DIALOG, and the toast carries the revision's own summary:
+  // the sentence the history will show.
   const savedSummary = write.state.kind === "saved" ? write.state.summary : null;
   const announced = useRef(false);
   useEffect(() => {
@@ -384,7 +396,7 @@ export function RaiseBudgetDialog({
     toast.show({
       variant: "success",
       title: savedSummary,
-      message: "Saved. Each node enforces it once it has applied the new configuration.",
+      message: "Saved.",
     });
     onClose();
   }, [savedSummary, toast, onClose]);
@@ -398,7 +410,7 @@ export function RaiseBudgetDialog({
         : !changed
           ? "Change a ceiling first."
           : write.busy
-            ? "Waiting for the engine to answer."
+            ? waiting.reason
             : undefined;
 
   const warned = write.state.kind === "warned";
@@ -436,11 +448,7 @@ export function RaiseBudgetDialog({
       }
     >
       <div className="col gap-3">
-        <p className="t-caption">
-          A window resets on its own at the turn of its day, week or month on the company clock
-          {zone ? ` (${zone})` : ""}; raise the ceiling to make room now. Leave a field empty for no
-          ceiling on that window.
-        </p>
+        <p className="t-caption">Leave a field empty for no limit.</p>
         {BUDGET_WINDOWS.map(({ period }) => {
           const w = windowOf(windows, period);
           const fieldId = `raise-${period}`;
@@ -515,11 +523,11 @@ export function RaiseBudgetButton({
   /** The seat's own window the gate is refusing in, where it names one. */
   window: BudgetWindow | undefined;
 }) {
-  const access = useConfigWriteAccess();
   const org = useOrgBudget();
   const [open, setOpen] = useState(false);
   const company = own ? undefined : waitedOn(org?.org.windows, "refusing");
   const scope: CeilingScope = company ? { kind: "company" } : { kind: "seat", handle, name };
+  const access = useOrgWriteAccess(targetOf(scope));
   const focus = (own ?? company)?.period;
   return (
     <>

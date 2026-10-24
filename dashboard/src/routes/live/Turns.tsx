@@ -54,37 +54,32 @@ import { useCallback, useMemo, useState } from "react";
 import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
-import { Button, Card, Select, Skeleton, Tag } from "@crewlethq/ui";
+import {
+  Button,
+  Card,
+  SegmentedControl,
+  Select,
+  Skeleton,
+  TableDateCell,
+  TableEntityCell,
+  TableNumberCell,
+  Tag,
+} from "@crewlethq/ui";
 import { ChartNoAxesGanttGlyph } from "@crewlethq/icons/glyphs";
-// OURS, AND DELIBERATELY. `SegmentedControl` welds keyboard ACTIVATION to its
-// `semantics`: `radio` selects as the arrows move, `tabs` is manual but
-// demands a `panelId` naming a TabPanel neither of these rows controls. Both
-// rows here drive a `useParam` that re-runs this screen's query, which is the
-// exact case our own `activate="manual"` exists for — arrowing across three
-// options would ask the engine three times.
-import { Segmented } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useClient, useAgents, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg, useSeatBadgeOf } from "~/lib/seats.ts";
-import { plural } from "~/lib/format.ts";
+import { plural, fmtCount, fmtDuration } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { spanWords, useTimeRange } from "~/lib/range.ts";
 import type { Offer } from "~/lib/range.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { Histogram, type Bar } from "~/ui/Histogram.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import {
-  DateCell,
-  DurationCell,
-  NumberCell,
-  SeatLabel,
-  TokenCell,
-  TurnWhatCell,
-  UnsettledCell,
-} from "~/app/frame/cells.tsx";
+import { TurnWhatCell, UnsettledCell, plainSeat } from "~/app/frame/cells.tsx";
 import { openState, runningNow, UNSETTLED, type OpenState } from "~/lib/turns.ts";
 import type { EventSeries, TurnRow, TurnsAnswer } from "~/protocol/index.ts";
 
@@ -282,20 +277,20 @@ export function Turns() {
           icon={<ChartNoAxesGanttGlyph size="sm" />}
           // UNDER THE TITLE, the chart key's place on every chart card (the
           // seat's own turns chart included): beside the title a phone left the
-          // subtitle about thirty characters and cut it at the failed count —
-          // the one number the red stack encodes. The count comes first and
-          // the explanatory tail last, so what gives way is the hint.
+          // subtitle about thirty characters and cut it at the failed count,
+          // the one number the red stack encodes. The count comes first, so
+          // what gives way is the tail.
           className="card-head-stacked"
           subtitle={`${
             series.data
               ? `${plural(total, "turn")} ended over ${spanWords(since, until)}${failedTotal > 0 ? `, ${failedTotal.toLocaleString()} failed` : ""}`
               : `over ${spanWords(since, until)}`
-          }${failed ? AXIS_UNFILTERED : ""} · one bar per ${bucket}, click one to narrow the window`}
+          }${failed ? AXIS_UNFILTERED : ""}`}
         >
           <Card.Title>Turns that ended</Card.Title>
         </Card.Header>
         {series.error && !series.data ? (
-          <QueryState error={series.error} loading={false} />
+          <QueryState error={series.error} refusal={series.refusal} loading={false} />
         ) : series.data ? (
           <Histogram
             bars={bars}
@@ -317,7 +312,7 @@ export function Turns() {
 
       <CoverageNote
         coverage={[series.data?.coverage, list.data?.coverage, ...pages.map((p) => p.coverage)]}
-        what="these turns"
+        what="this list"
       />
 
       <div className="toolbar">
@@ -334,10 +329,12 @@ export function Turns() {
           placeholder="Every seat"
           active={seat !== ""}
         />
-        <Segmented
-          ariaLabel="Which turns"
+        <SegmentedControl
+          semantics="radio"
+          activate="manual"
+          label="Which turns"
           value={failed || "all"}
-          onChange={(v) => setFailed(v === "all" ? "" : v)}
+          onValueChange={(v) => setFailed(v === "all" ? "" : v)}
           options={[
             { value: "all", label: "All" },
             { value: "true", label: "Carried a failure" },
@@ -345,10 +342,12 @@ export function Turns() {
           ]}
         />
         <span className="spacer" />
-        <Segmented
-          ariaLabel="Order"
+        <SegmentedControl
+          semantics="radio"
+          activate="manual"
+          label="Order"
           value={sort}
-          onChange={setSort}
+          onValueChange={setSort}
           options={[
             { value: "-started", label: "Newest" },
             { value: "-tokens", label: "Most tokens" },
@@ -361,13 +360,14 @@ export function Turns() {
       )}
       <QueryState
         error={list.error}
+        refusal={list.refusal}
         loading={list.loading}
         empty={
           rows.length
             ? undefined
             : {
                 title: "No turns in this window",
-                hint: "A turn is recorded when a seat is woken and does something. Widen the range, or clear the seat and failure filters — a company whose seats have not been triggered has none.",
+                hint: "Widen the range, or clear the filters.",
               }
         }
       >
@@ -397,16 +397,16 @@ export function Turns() {
               key: "started",
               header: "Started",
               shrink: true,
-              cell: (t) => <DateCell at={t.started_at} now={now} />,
+              cell: (t) => <TableDateCell value={t.started_at} now={now} />,
             },
             {
               key: "seat",
               header: "Seat",
               shrink: true,
-              // NOT `SeatCell`: it is a link, and the row around it is one.
+              // NOT `linkedSeat`: it is a link, and the row around it is one.
               cell: (t) =>
                 t.role ? (
-                  <SeatLabel {...seatBadge(t.role)} />
+                  <TableEntityCell {...plainSeat({ ...seatBadge(t.role) })} />
                 ) : (
                   // NOT a dash: a turn with no seat is the engine's own work.
                   <span className="muted">the engine</span>
@@ -445,22 +445,28 @@ export function Turns() {
               key: "iterations",
               // SELF-ITERATE ROUNDS, and the word says so — a phase's TOOL
               // rounds are on its own record, under another word.
-              header: (
-                <span title="self-iterate rounds — the tool rounds each phase used are on the turn's own page">
-                  Iterations
-                </span>
-              ),
+              header: <span title="Self-iterate rounds">Iterations</span>,
               label: "Iterations",
               shrink: true,
               align: "right",
-              cell: (t) => (t.complete ? <NumberCell value={t.iterations} /> : <UnsettledCell />),
+              cell: (t) =>
+                t.complete ? (
+                  <TableNumberCell value={t.iterations} format={fmtCount} />
+                ) : (
+                  <UnsettledCell />
+                ),
             },
             {
               key: "tokens",
               header: "Tokens",
               shrink: true,
               align: "right",
-              cell: (t) => (t.complete ? <TokenCell value={t.total_tokens} /> : <UnsettledCell />),
+              cell: (t) =>
+                t.complete ? (
+                  <TableNumberCell value={t.total_tokens} format={fmtCount} />
+                ) : (
+                  <UnsettledCell />
+                ),
             },
             {
               key: "took",
@@ -471,7 +477,11 @@ export function Turns() {
               // busiest turns look like the cheapest — so the cell is handed
               // null and draws the dash that says nothing was measured.
               cell: (t) => (
-                <DurationCell ms={t.complete && t.duration_ms > 0 ? t.duration_ms : null} />
+                <TableNumberCell
+                  value={t.complete && t.duration_ms > 0 ? t.duration_ms : null}
+                  format={fmtDuration}
+                  emptyLabel="Not measured"
+                />
               ),
             },
           ]}
@@ -481,7 +491,7 @@ export function Turns() {
       {(rows.length > 0 || more || pageError) && (
         <div className="row gap-2">
           {pageError ? (
-            <QueryState error={pageError} loading={false} />
+            <QueryState error={pageError} refusal={null} loading={false} />
           ) : more ? (
             <Button
               size="small"
@@ -535,19 +545,13 @@ function TurnState({
       {rerun && (
         <Tag
           appearance="outline"
-          title={
-            `one of ${reruns.get(t.work_key!)} runs of the same trigger listed here — ` +
-            `a turn that fails without acting is redelivered and runs again`
-          }
+          title={`One of ${reruns.get(t.work_key!)} runs of the same trigger`}
         >
           re-run
         </Tag>
       )}
       {t.parked && (
-        <Tag
-          appearance="outline"
-          title="waiting on a coding run it launched — it completes again when the run is collected"
-        >
+        <Tag appearance="outline" title="Waiting on its coding run">
           parked
         </Tag>
       )}

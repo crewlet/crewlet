@@ -14,7 +14,7 @@ import (
 
 // Applier is the usage domain's deterministic state machine: the ONLY writer of
 // `usage_turns`, `usage_tokens`, `usage_reads`, `usage_schedule_runs` and
-// `usage_person_tokens`, on every node.
+// `usage_person_tokens`, on every data node.
 //
 // # An apply REPLACES
 //
@@ -36,17 +36,45 @@ import (
 // # The horizon is applied here, by the record
 //
 // Every apply also deletes the rows older than its own day minus [History].
-// That is a pure function of the record — the day it carries — so every node
-// that applies it deletes the same rows, and no local sweep ever writes this
-// estate. A company that goes quiet keeps its old rows until the next record
-// arrives, which is harmless: the stream has already forgotten them, and a
-// read asks for a window rather than for everything.
+// That is a pure function of the record — the day it carries — so every data
+// node that applies it deletes the same rows, and no local sweep ever writes
+// this estate. A company that goes quiet keeps its old rows until the next
+// record arrives, which is harmless: the stream has already forgotten them,
+// and a read asks for a window rather than for everything.
 type Applier struct{}
 
 // NewApplier builds the usage applier. It takes nothing, for the vector
 // applier's reason: an applier that needed a node id would write rows that
 // depend on which node ran it.
 func NewApplier() Applier { return Applier{} }
+
+// The statements the apply reads an object's guard and clears its rows with,
+// held to the key they seek by the plan test beside this file — as [Applied]'s
+// are, and for its reason: with no statistics the planner prefers the one-column
+// day index over a primary key that does not cover the figure a statement reads,
+// and walks every node's day to read one object, so the one statement it took
+// that way names the key. (The clears seek the key already — a DELETE reads no
+// column the key does not hold.)
+const (
+	applySeatHeadSQL = `
+		SELECT version FROM usage_turns WHERE day = ? AND node = ? AND agent_id = ?`
+	applyClearSeatTokensSQL = `
+		DELETE FROM usage_tokens WHERE day = ? AND node = ? AND agent_id = ?`
+	applyClearSeatReadsSQL = `
+		DELETE FROM usage_reads WHERE day = ? AND node = ? AND agent_id = ?`
+	applyScheduleNewestSQL = `
+		SELECT MAX(version) FROM usage_schedule_runs
+		 WHERE day = ? AND node = ? AND scope_type = ? AND scope_id = ? AND name = ?`
+	applyClearScheduleSQL = `
+		DELETE FROM usage_schedule_runs
+		 WHERE day = ? AND node = ? AND scope_type = ? AND scope_id = ? AND name = ?`
+	applyPersonNewestSQL = `
+		SELECT MAX(version)
+		  FROM usage_person_tokens INDEXED BY sqlite_autoindex_usage_person_tokens_1
+		 WHERE day = ? AND node = ? AND person = ?`
+	applyClearPersonSQL = `
+		DELETE FROM usage_person_tokens WHERE day = ? AND node = ? AND person = ?`
+)
 
 // HorizonDays is [History] in whole days, which is what the apply subtracts
 // from a record's day.
@@ -112,8 +140,7 @@ func (a Applier) seat(ctx context.Context, tx *sql.Tx, r Record, at statelog.Pos
 	s := r.Subject
 	version := at.Packed()
 	var held int64
-	switch err := tx.QueryRowContext(ctx, `
-		SELECT version FROM usage_turns WHERE day = ? AND node = ? AND agent_id = ?`,
+	switch err := tx.QueryRowContext(ctx, applySeatHeadSQL,
 		s.Day, s.Node, s.Seat).Scan(&held); {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
@@ -123,10 +150,11 @@ func (a Applier) seat(ctx context.Context, tx *sql.Tx, r Record, at statelog.Pos
 		return 0, nil
 	}
 
-	for _, table := range []string{"usage_tokens", "usage_reads"} {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+
-			` WHERE day = ? AND node = ? AND agent_id = ?`, s.Day, s.Node, s.Seat); err != nil {
-			return 0, fmt.Errorf("usage: clear %s for %s: %w", table, s, err)
+	for _, clear := range []struct{ table, query string }{
+		{"usage_tokens", applyClearSeatTokensSQL}, {"usage_reads", applyClearSeatReadsSQL},
+	} {
+		if _, err := tx.ExecContext(ctx, clear.query, s.Day, s.Node, s.Seat); err != nil {
+			return 0, fmt.Errorf("usage: clear %s for %s: %w", clear.table, s, err)
 		}
 	}
 
@@ -204,18 +232,14 @@ func (a Applier) schedule(ctx context.Context, tx *sql.Tx, r Record, at statelog
 	s := r.Subject
 	version := at.Packed()
 	var held sql.NullInt64
-	if err := tx.QueryRowContext(ctx, `
-		SELECT MAX(version) FROM usage_schedule_runs
-		 WHERE day = ? AND node = ? AND scope_type = ? AND scope_id = ? AND name = ?`,
+	if err := tx.QueryRowContext(ctx, applyScheduleNewestSQL,
 		s.Day, s.Node, s.ScopeType, s.ScopeID, s.Schedule).Scan(&held); err != nil {
 		return 0, fmt.Errorf("usage: read the newest version of %s: %w", s, err)
 	}
 	if held.Valid && held.Int64 >= version {
 		return 0, nil
 	}
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM usage_schedule_runs
-		 WHERE day = ? AND node = ? AND scope_type = ? AND scope_id = ? AND name = ?`,
+	if _, err := tx.ExecContext(ctx, applyClearScheduleSQL,
 		s.Day, s.Node, s.ScopeType, s.ScopeID, s.Schedule); err != nil {
 		return 0, fmt.Errorf("usage: clear the fires of %s: %w", s, err)
 	}
@@ -241,17 +265,14 @@ func (a Applier) person(ctx context.Context, tx *sql.Tx, r Record, at statelog.P
 	s := r.Subject
 	version := at.Packed()
 	var held sql.NullInt64
-	if err := tx.QueryRowContext(ctx, `
-		SELECT MAX(version) FROM usage_person_tokens
-		 WHERE day = ? AND node = ? AND person = ?`,
+	if err := tx.QueryRowContext(ctx, applyPersonNewestSQL,
 		s.Day, s.Node, s.Person).Scan(&held); err != nil {
 		return 0, fmt.Errorf("usage: read the newest version of %s: %w", s, err)
 	}
 	if held.Valid && held.Int64 >= version {
 		return 0, nil
 	}
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM usage_person_tokens WHERE day = ? AND node = ? AND person = ?`,
+	if _, err := tx.ExecContext(ctx, applyClearPersonSQL,
 		s.Day, s.Node, s.Person); err != nil {
 		return 0, fmt.Errorf("usage: clear the spend of %s: %w", s, err)
 	}

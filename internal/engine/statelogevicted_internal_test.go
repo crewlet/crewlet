@@ -56,7 +56,7 @@ func TestEvictingAPeerThatReanchoredAndVanishedReleasesTheFleet(t *testing.T) {
 func strandedByAVanishedPeer(t *testing.T, published bool, stranded string) {
 	t.Helper()
 	e, _ := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	running := s.Domain(tracker.Domain{}.Name())
 	name := running.domain.Name()
 	spec := running.spec
@@ -82,7 +82,7 @@ func strandedByAVanishedPeer(t *testing.T, published bool, stranded string) {
 	}
 	zero := uint64(0)
 	if _, _, err := running.log.Append(t.Context(), spec.SubjectPrefix+"."+rec.Subject.String(),
-		rec.OpID, &zero, rec.Payload); err != nil {
+		rec.OpID, &zero, running.signer.Seal(rec.Payload)); err != nil {
 		t.Fatalf("land the peer's generation record: %v", err)
 	}
 	appendEvictionAs(t, running, "op-x-abandoned", "node-voided", own.Generation+1, "node-x")
@@ -118,7 +118,7 @@ func strandedByAVanishedPeer(t *testing.T, published bool, stranded string) {
 	}
 	confirm := statelog.ConfirmationOf(live)
 	if _, err := e.Reanchor(t.Context(), ReanchorRequest{
-		Stream: spec.Name, Confirm: confirm, By: "ops-1", Force: true,
+		Stream: spec.Name, Confirm: confirm, By: reanchorOperator, Force: true,
 	}); !errors.Is(err, statelog.ErrReanchorRefused) || !strings.Contains(err.Error(), stranded) {
 		t.Fatalf("a forced reanchor while node-x counts = %v, want a refusal saying %q",
 			err, stranded)
@@ -126,7 +126,7 @@ func strandedByAVanishedPeer(t *testing.T, published bool, stranded string) {
 
 	// THE OPERATOR EVICTS THE PEER, from the node it stranded.
 	res, err := e.NodeGate().Evict(t.Context(), GateRequest{
-		Node: "node-x", OpID: "op-evict-x", By: "ops-1",
+		Node: "node-x", OpID: statelog.NewOpID(time.Now(), "evict-x"), By: gateOperator,
 	})
 	if err != nil || !res.Complete() {
 		t.Fatalf("the eviction of node-x from the node it stranded = %+v, %v — "+
@@ -169,7 +169,7 @@ func strandedByAVanishedPeer(t *testing.T, published bool, stranded string) {
 			"this node's checkpoint, %d", view.Case, view.Cursor, view.Refusal, own.Seq)
 	}
 	plan, err := e.Reanchor(t.Context(), ReanchorRequest{
-		Stream: spec.Name, Confirm: confirm, By: "ops-1",
+		Stream: spec.Name, Confirm: confirm, By: reanchorOperator,
 	})
 	if err != nil {
 		t.Fatalf("Reanchor once node-x was evicted: %v", err)

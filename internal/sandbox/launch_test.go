@@ -16,7 +16,7 @@ import (
 func launchReq(turnID string) LaunchRequest {
 	return LaunchRequest{
 		Turn: TurnRef{
-			TurnID: turnID, AgentID: "a-1", AgentHandle: "swe", Role: "SWE",
+			TurnID: turnID, AgentID: sweID, AgentHandle: "swe", Role: "SWE",
 			WorkKey: "wk-1", WorkSince: launchWorkSince,
 			// A DIRECT MESSAGE, the one shape where the two keys differ:
 			// the conversation an answer is matched on is the bare
@@ -148,7 +148,7 @@ func TestALaunchIsAnnouncedAndRoutedToTheSeat(t *testing.T) {
 	got := rig.queue.topics()
 	want := []string{
 		topics.Event(types.SandboxRunStarted{}.EventType()),
-		topics.AgentControl("swe"),
+		sweControl(),
 	}
 	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("published to %v, want %v", got, want)

@@ -61,8 +61,7 @@ func newFakeBrokerNode(t *testing.T) *fakeBrokerNode {
 			n.mu.Lock()
 			defer n.mu.Unlock()
 			if refusal, ok := api.RenderBrokerRefusal(n.refuse); ok {
-				w.WriteHeader(refusal.Status)
-				_ = json.NewEncoder(w).Encode(refusal.Body)
+				refusal.Write(w)
 				return
 			}
 			n.removed = append(n.removed, r.URL.Path)
@@ -223,7 +222,7 @@ func TestFleetBrokerRemoveConfirmsForcesOnlyOnAskAndRelaysRefusals(t *testing.T)
 	node.refuse = &engine.BrokerMemberLive{Node: "node-b"}
 	_, _, err = cli(t, "fleet", "broker", "remove", "node-b", conf, "-confirm", "node-b")
 	if err == nil || !strings.Contains(err.Error(), "member_live") ||
-		!strings.Contains(err.Error(), "stop the node first") {
+		!strings.Contains(err.Error(), "Stop the node first") {
 		t.Fatalf("a live member's refusal reached the operator as %v", err)
 	}
 }

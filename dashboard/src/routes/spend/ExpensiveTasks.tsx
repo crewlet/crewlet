@@ -1,6 +1,6 @@
 /**
  * The most expensive tasks: on the overview, the top three; at
- * `#/spend/tasks`, the list — every task last changed inside the window,
+ * `#/settings/spend/tasks`, the list, every task last changed inside the window,
  * most tokens first, each saying what drove it.
  *
  * A TASK'S TOKENS ARE ITS WHOLE LIFE'S. The tracker charges a turn to one work
@@ -17,13 +17,21 @@
  *
  * ABSENT ON A COMPANY WHOSE TRACKER IS NOT THE ENGINE'S: `work_items` is then
  * not served (`unknown_query`) and there is no task spend to rank.
+ *
+ * AND THE OVERVIEW'S CARD IS NOT ASKED OF A READER WITHOUT TRACKER. The
+ * overview is everybody's, a task is the tracker's, and a question the engine
+ * would refuse drew its refusal — a "Sign in" callout to somebody already
+ * signed in — on every visit; the card says what would open it instead, as the
+ * median tile beside it does. The list at `#/settings/spend/tasks` is its own section,
+ * drawn locked by the navigation for the same reader.
  */
 
-import { Card, Skeleton } from "@crewlethq/ui";
+import { SquareKanbanGlyph } from "@crewlethq/icons/glyphs";
+import { Card, Skeleton, TableKeyCell, TableNumberCell } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { KeyCell, TokenCell } from "~/app/frame/cells.tsx";
+
 import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { QueryState } from "~/components/common.tsx";
@@ -32,6 +40,8 @@ import { fmtCount, fmtExact } from "~/lib/format.ts";
 import { isRange, useTimeRange } from "~/lib/range.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { TRACKER, accessNames } from "~/lib/access.ts";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import type { WorkSummary } from "~/protocol/types.ts";
 import { useMemo } from "react";
@@ -42,6 +52,7 @@ import {
   taskFacts,
   windowWords,
 } from "./model.ts";
+import { itemAddress } from "~/lib/work.ts";
 
 /** How many the overview's card lists — the design's three. */
 export const TOP_TASKS = 3;
@@ -49,9 +60,9 @@ export const TOP_TASKS = 3;
 /** How many the list asks for: the tracker's page ceiling for one answer. */
 export const TASK_ROWS = 50;
 
-/** A task's address and its peek: the key where it has one, else its id. */
+/** A task's peek, at its address ([itemAddress]). */
 function itemRef(row: WorkSummary): { kind: "item"; id: string } {
-  return { kind: "item", id: row.key || row.id };
+  return { kind: "item", id: itemAddress(row) };
 }
 
 /**
@@ -70,29 +81,54 @@ export function ExpensiveTasksCard({
   /** `window=` as the overview carries it, so "All" opens the same window. */
   window: string;
 }) {
+  const viewer = useViewer();
   const ready = Boolean(since && until);
   const answer = useQuery(
     "work_items",
     ready ? expensiveTasksParams(since!, until!, TOP_TASKS) : undefined,
-    { enabled: ready },
+    { enabled: ready && viewer.tracker },
   );
   if (answer.error === "unknown_query") return null;
+  if (!viewer.loading && !viewer.tracker) {
+    // NO "ALL" LINK: the list is the tracker's too, so it would lead to the
+    // same lock this card already says.
+    return (
+      <Card className="spend-card" padding="none">
+        <Card.Header icon={<SquareKanbanGlyph size="sm" />}>
+          <Card.Title>Most expensive tasks</Card.Title>
+        </Card.Header>
+        <p className="spend-card-body spend-caption">{`Needs ${accessNames([TRACKER])} access`}</p>
+      </Card>
+    );
+  }
   const rows = answer.data?.items ?? [];
   return (
     <Card className="spend-card" padding="none">
-      <div className="spend-card-head">
-        <h2 className="spend-title">Most expensive tasks</h2>
-        <a className="t-link spend-caption" href={href(["spend", "tasks"], { window })}>
-          All
-        </a>
-      </div>
-      <QueryState error={answer.error} detail={answer.detail} loading={false}>
+      <Card.Header
+        icon={<SquareKanbanGlyph size="sm" />}
+        actions={
+          <a
+            className="t-link spend-caption"
+            href={href(["settings", "spend", "tasks"], { window })}
+          >
+            All
+          </a>
+        }
+      >
+        <Card.Title>Most expensive tasks</Card.Title>
+      </Card.Header>
+      <QueryState
+        error={answer.error}
+        refusal={answer.refusal}
+        detail={answer.detail}
+        loading={false}
+      >
         {!answer.data ? (
           <div className="spend-card-body">
             <Skeleton height="6rem" />
           </div>
         ) : rows.length === 0 ? (
-          <p className="spend-card-body spend-muted">
+          <p className="spend-card-body spend-caption">
             No task last changed in this window has spent tokens yet.
           </p>
         ) : (
@@ -123,7 +159,7 @@ export function ExpensiveTasksCard({
   );
 }
 
-/** `#/spend/tasks`: the list. */
+/** `#/settings/spend/tasks`: the list. */
 export function ExpensiveTasks() {
   const zone = useOrg()?.timezone;
   const now = useNow();
@@ -165,6 +201,7 @@ export function ExpensiveTasks() {
         </PageActions>
         <QueryState
           error={refused}
+          refusal={spend.error ? spend.refusal : answer.refusal}
           detail={spend.error ? spend.detail : undefined}
           loading={false}
         />
@@ -177,14 +214,18 @@ export function ExpensiveTasks() {
         <TimeRangePicker range={range} ariaLabel="Window" />
       </PageActions>
       <Card className="spend-card spend-tasks" padding="none">
-        <div className="spend-card-head">
-          <h2 className="spend-title">Most expensive tasks</h2>
-          <span className="spend-caption">
-            {words ? `${words} · ` : ""}tasks last changed in this window · each task&rsquo;s tokens
-            over its whole life
-          </span>
-        </div>
-        <QueryState error={answer.error} detail={answer.detail} loading={false}>
+        <Card.Header
+          icon={<SquareKanbanGlyph size="sm" />}
+          subtitle={`${words ? `${words} · ` : ""}tasks changed in this window · lifetime tokens`}
+        >
+          <Card.Title>Most expensive tasks</Card.Title>
+        </Card.Header>
+        <QueryState
+          error={answer.error}
+          refusal={answer.refusal}
+          detail={answer.detail}
+          loading={false}
+        >
           <DataGrid
             name="tasks"
             rows={answer.data ? rows : undefined}
@@ -202,7 +243,7 @@ export function ExpensiveTasks() {
             onRowActivate={peekRow<WorkSummary>((r) => open(itemRef(r)))}
             empty={{
               title: "No task last changed in this window has spent tokens",
-              hint: "A task appears here once an agent's turn is charged to it.",
+              hint: "Tasks appear once agents spend tokens on them.",
             }}
             columns={[
               {
@@ -210,7 +251,7 @@ export function ExpensiveTasks() {
                 header: "Task",
                 shrink: true,
                 phoneLead: true,
-                cell: (r) => <KeyCell value={r.key || r.id.slice(0, 8)} />,
+                cell: (r) => <TableKeyCell value={r.key || r.id.slice(0, 8)} />,
               },
               {
                 key: "title",
@@ -244,7 +285,7 @@ export function ExpensiveTasks() {
                         }}
                       />
                     </span>
-                    <TokenCell value={r.spend?.tokens} />
+                    <TableNumberCell value={r.spend?.tokens} format={fmtCount} />
                   </span>
                 ),
               },
@@ -252,8 +293,8 @@ export function ExpensiveTasks() {
             footer={
               answer.data && answer.data.total_hint > rows.length ? (
                 <span className="spend-caption">
-                  The {rows.length} that spent the most, of {fmtExact(answer.data.total_hint)}
-                  {answer.data.total_capped ? "+" : ""} last changed in this window
+                  Top {rows.length} of {fmtExact(answer.data.total_hint)}
+                  {answer.data.total_capped ? "+" : ""}
                 </span>
               ) : undefined
             }

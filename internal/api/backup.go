@@ -4,20 +4,22 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	apiOperator "github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
-	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // Taking a backup over HTTP.
 //
-// For the same reason the budget reset is a route rather than a command: what
-// has to be copied is only reachable from inside the running engine. The
+// A route rather than a command, because what has to be copied is only
+// reachable from inside the running engine. The
 // store is one file this process holds an exclusive lock on, and the
 // coordination estate is a broker embedded in this process that binds no
 // socket — so a CLI run while the engine is down cannot read the second, and
@@ -53,15 +55,21 @@ type backupTaker interface {
 func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 	dir := r.URL.Query().Get("dir")
 	if dir == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error":  "no_destination",
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeNoDestination, map[string]string{
 			"detail": "name an absolute directory with ?dir=",
 			"hint":   "it is created on the engine's host, not the caller's",
 		})
 		return
 	}
 
-	operator, _ := auth.OperatorFrom(r.Context())
+	if _, ok := auth.Caller(w, r); !ok {
+		return
+	}
+	// WHO ASKED, in the three halves every record names a caller by — the
+	// author, its kind and the credential — read through the one function
+	// every surface attributes a write with, so the audit row and the log
+	// line below cannot name two different people.
+	by := auth.AttributionOf(r.Context())
 	// WithoutCancel: a backup that has begun copying should finish and
 	// leave one coherent artifact rather than a directory abandoned
 	// halfway because the client hung up. The pieces already written are
@@ -82,13 +90,14 @@ func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 	// backup refused because another is running is the same: refused before
 	// anything was written (backup.ErrBackupRunning), and no failed backup.
 	if !errors.Is(err, backup.ErrBadDestination) && !errors.Is(err, backup.ErrBackupRunning) {
-		a.auditBackup(r, operator, dir, manifest, err)
+		a.auditBackup(r, by, dir, manifest, err)
 	}
 	if err != nil {
 		// The reason goes to the LOG rather than the body, like every
 		// other route here — except the two an operator can actually act
 		// on, which are their own fault and are named.
-		log.Warn("api_backup_failed", "operator", operator, "dir", dir, "error", err)
+		log.Warn("api_backup_failed", "by", by.Name, "operator", by.OperatorID,
+			"dir", dir, "error", err)
 		// THE DETAIL IS RETURNED ONLY FOR THE CALLER'S OWN MISTAKE.
 		// Everywhere else on this surface the internal reason goes to
 		// the log alone, and that holds here: a copy that failed on the
@@ -98,17 +107,25 @@ func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 		// process, and sending them to the engine's logs to find it
 		// would be the wrong instruction.
 		refusal := backupRefusal(err)
-		answer := map[string]string{"error": refusal.code}
 		switch {
+		case refusal.retryAfter > 0:
+			// A STATE THAT CLEARS, with the wait it clears in: a 503
+			// carrying its Retry-After, through the one writer that sets
+			// the header and the envelope together.
+			httpjson.UnavailableWith(w, refusal.code, refusal.retryAfter,
+				httpjson.Detail{"hint": refusal.hint})
 		case refusal.status == http.StatusBadRequest:
-			answer["detail"] = err.Error()
+			httpjson.FailWith(w, refusal.status, refusal.code,
+				map[string]string{"detail": err.Error()})
 		case refusal.hint != "":
-			answer["hint"] = refusal.hint
+			httpjson.FailWith(w, refusal.status, refusal.code,
+				map[string]string{"hint": refusal.hint})
+		default:
+			httpjson.Fail(w, refusal.status, refusal.code)
 		}
-		writeJSON(w, refusal.status, answer)
 		return
 	}
-	log.Info("backup_taken", "operator", operator, "dir", dir,
+	log.Info("backup_taken", "by", by.Name, "operator", by.OperatorID, "dir", dir,
 		"streams", len(manifest.Streams))
 	writeJSON(w, http.StatusOK, manifest)
 }
@@ -119,9 +136,20 @@ func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 // never the error's text, which names files, objects and positions and is the
 // log's.
 type refusal struct {
-	status     int
-	code, hint string
+	status int
+	code   httpjson.Code
+	hint   string
+	// retryAfter is the seconds a 503 tells its caller to wait, and zero
+	// for every refusal waiting cannot clear.
+	retryAfter int
 }
+
+// logGapRetry is how soon a backup a log gap refused may be taken again: AT
+// ONCE, since the next take makes a fresh store copy whose position stands past
+// the records the log no longer holds, so nothing has to happen in between — a
+// second, the smallest wait a Retry-After carries, because zero would tell the
+// caller not to come back at all.
+const logGapRetry = time.Second
 
 // backupRefusal separates the caller's mistakes and the fleet's states from
 // the engine's failures.
@@ -150,49 +178,61 @@ type refusal struct {
 func backupRefusal(err error) refusal {
 	switch {
 	case errors.Is(err, backup.ErrBadDestination):
-		return refusal{status: http.StatusBadRequest, code: "backup_failed"}
+		return refusal{status: http.StatusBadRequest, code: httpjson.CodeBackupFailed}
 	case errors.Is(err, backup.ErrBackupRunning):
-		return refusal{status: http.StatusConflict, code: "backup_running",
+		return refusal{status: http.StatusConflict, code: httpjson.CodeBackupRunning,
 			hint: "a backup is already running on this node; take this one when it finishes"}
 	case errors.Is(err, objstore.ErrRecordUnreadable):
-		return refusal{status: http.StatusConflict, code: "record_unreadable",
+		return refusal{status: http.StatusConflict, code: httpjson.CodeRecordUnreadable,
 			hint: "a log this backup replays holds a record a newer build wrote, which may " +
 				"name a file this node's build cannot read; take the backup from a node " +
 				"running that build, or from this one once it is upgraded"}
 	case errors.Is(err, statelog.ErrStreamRecreated):
-		return refusal{status: http.StatusConflict, code: "log_recreated",
+		return refusal{status: http.StatusConflict, code: httpjson.CodeLogRecreated,
 			hint: "this node's copy is keyed to an earlier instance of a log that has " +
 				"since been recreated; take the backup once this node has re-keyed to the " +
 				"live log, or from a node that has"}
 	case errors.Is(err, backup.ErrObjectsUnreachable):
 		// THE FLEET'S STATE, NOT THIS NODE'S: named by a code and a
-		// fixed hint, never the list of objects, which is the log's.
-		return refusal{status: http.StatusServiceUnavailable, code: "objects_unreachable",
+		// fixed hint, never the list of objects, which is the log's. The
+		// wait is the broker's own election: the default object store is
+		// the data nodes' NATS bucket, which answers again no sooner than
+		// its group elects a leader, and an S3 bucket that did not answer
+		// is a blip of no longer scale.
+		return refusal{status: http.StatusServiceUnavailable,
+			code:       httpjson.CodeObjectsUnreachable,
+			retryAfter: httpjson.RetrySeconds(statelog.ElectionRetryHint),
 			hint: "the company's files name objects the object store did not answer for; " +
 				"check that this node reaches the store store.objects names (the S3 " +
 				"bucket, or the data nodes' NATS bucket) and take the backup again"}
 	case errors.Is(err, backup.ErrLogGap):
-		return refusal{status: http.StatusServiceUnavailable, code: "log_gap",
+		return refusal{status: http.StatusServiceUnavailable, code: httpjson.CodeLogGap,
+			retryAfter: httpjson.RetrySeconds(logGapRetry),
 			hint: "a log a restore would replay from the store copy no longer holds every " +
 				"record the copy needs; take the backup again, whose copy stands past them, " +
 				"and if it is refused the same way look for backup_hold_not_renewed in " +
 				"this node's log"}
 	}
-	return refusal{status: http.StatusInternalServerError, code: "backup_failed"}
+	return refusal{status: http.StatusInternalServerError, code: httpjson.CodeBackupFailed}
 }
 
-// auditBackup publishes the backup's runtime audit record: who asked, the
-// person their token is bound to, where, and whether it finished.
+// auditBackup publishes the backup's runtime audit record: who asked, through
+// which credential, where, and whether it finished.
 //
 // WHICH NODE'S DISK is the envelope's `node`, which the queue stamps on the
 // way out — and the queue this publishes through is this node's own, the node
 // that just took the copy. Naming it here as well would state one fact twice.
-func (a *App) auditBackup(r *http.Request, operatorID, dir string,
+//
+// THROUGH THE OPERATOR SURFACE'S [apiOperator.Audit], so the envelope's source
+// and the detached, logged-not-answered publish are decided once for every
+// runtime audit record rather than once per route.
+func (a *App) auditBackup(r *http.Request, by iam.Actor, dir string,
 	manifest backup.Manifest, err error) {
 
 	record := types.BackupRequested{
-		OperatorID: operatorID,
-		ActorSeat:  apiOperator.BoundSeat(a.chart, a.contacts, operatorID),
+		ActorName:  by.Name,
+		ActorKind:  string(by.Kind),
+		OperatorID: by.OperatorID,
 		Dir:        dir,
 		Outcome:    types.AuditApplied,
 		Streams:    len(manifest.Streams),
@@ -201,22 +241,4 @@ func (a *App) auditBackup(r *http.Request, operatorID, dir string,
 		record.Outcome, record.Streams = types.AuditFailed, 0
 	}
 	apiOperator.Audit(r.Context(), a.audit, types.NewBackupRequested(record))
-}
-
-// chart is the company chart of the current epoch, or nil before one is
-// active — which binds nobody, exactly as an unbound token reads.
-func (a *App) chart() *org.Organization {
-	c := a.company()
-	if c == nil {
-		return nil
-	}
-	// THE SAME DERIVATION the viewer question walks, so the person a
-	// backup names and the person the dashboard says is signed in cannot
-	// differ. A company that does not derive is a chart nobody is bound
-	// in, not a failed backup.
-	organization, err := c.Organization()
-	if err != nil {
-		return nil
-	}
-	return organization
 }

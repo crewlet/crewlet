@@ -148,7 +148,7 @@ func TestAnUnserviceableNodeGivesBackEverySeat(t *testing.T) {
 	fit := true
 	h := f.newHost("node-a", Config{
 		Seats: seatsNamed("ceo", "eng"), Hooks: hooks,
-		Serviceable: func() (bool, string) {
+		Serviceable: func(context.Context) (bool, string) {
 			if fit {
 				return true, ""
 			}
@@ -201,7 +201,7 @@ func TestAPanickingServiceabilityGateKeepsTheSeats(t *testing.T) {
 	hooks := &hookLog{}
 	h := f.newHost("node-a", Config{
 		Seats: seatsNamed("ceo"), Hooks: hooks,
-		Serviceable: func() (bool, string) { panic("status source is down") },
+		Serviceable: func(context.Context) (bool, string) { panic("status source is down") },
 	})
 	h.renewNodePresence(f.ctx)
 	h.Sweep(f.ctx)
@@ -255,12 +255,16 @@ func TestTheSweepReadsNoHintsWhenThereIsNothingToOrder(t *testing.T) {
 	group := func(handles ...string) []placement.Group {
 		return []placement.Group{{Handles: handles, Nodes: 1, Share: len(handles)}}
 	}
+	// The company's seats by handle, as a sweep hands the claim path: a
+	// group names its seats by handle, and the hint is on the lease, which
+	// is named by the seat's id.
+	byHandle := seatIndex([]string{"ceo", "eng"})
 	order := func(groups []placement.Group) []candidate {
 		room := make([]int, len(groups))
 		for i, g := range groups {
 			room[i] = g.Share
 		}
-		return h.claimOrder(f.ctx, groups, room)
+		return h.claimOrder(f.ctx, byHandle, groups, room)
 	}
 
 	// Two candidates: an ordering exists, so the hints are worth reading.
@@ -281,7 +285,7 @@ func TestTheSweepReadsNoHintsWhenThereIsNothingToOrder(t *testing.T) {
 	// Two seats, but one in a group with no room left: one candidate, and
 	// still one ordering.
 	full := append(group("ceo"), group("eng")...)
-	if got := h.claimOrder(f.ctx, full, []int{1, 0}); len(got) != 1 || got[0].handle != "ceo" {
+	if got := h.claimOrder(f.ctx, byHandle, full, []int{1, 0}); len(got) != 1 || got[0].seat.Handle != "ceo" {
 		t.Fatalf("claimOrder with one group full = %v, want only ceo", got)
 	}
 	// Two candidates in two groups of one: the groups' order is the plan's,
@@ -349,4 +353,62 @@ func TestAnUnneededRoleIsNeverReportedUnmanned(t *testing.T) {
 	if got := h.fleetRoleEdges(live); !reflect.DeepEqual(got, roleEdges{}) {
 		t.Fatalf("the sweep after that: %+v, want nothing said again", got)
 	}
+}
+
+// A CLAIM COUNTS ITS LEASE FROM BEFORE IT ASKED FOR IT, as a renew and the
+// presence claim count theirs.
+//
+// The store counts a lease's TTL from the moment it grants it, inside the
+// acquire, and until the first renew replaces it the host's own stamp is what
+// turn admission and the unreachable-store grace measure from. Stamped once
+// the call had returned, it was later than the store's by the round trip, so
+// the host believed it held the seat that much longer than the store did —
+// and admitted turns into time a peer may already own. Here the store's
+// answer arrives three seconds after it granted the lease.
+func TestAClaimCountsItsLeaseFromBeforeItAskedForIt(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	h := f.newHost("node-a", Config{
+		Seats: seatsNamed("ceo"), TTL: 30 * time.Second, HeartbeatInterval: 5 * time.Second,
+		Backend: &lateAnswers{Backend: f.store, clock: f.clock, late: 3 * time.Second},
+	})
+	h.renewNodePresence(f.ctx)
+	h.Sweep(f.ctx)
+	wantHeld(t, h, "ceo")
+	wantAdmits(t, h, "ceo", true)
+
+	// One heartbeat and a second after the store granted the lease, and
+	// only three seconds after this node heard that it had.
+	f.clock.Advance(3 * time.Second)
+	if _, ok := h.MayStart("ceo"); ok {
+		t.Error("a turn is admitted more than a heartbeat after the store granted " +
+			"the seat: the claim stamped its lease from when the store's answer " +
+			"arrived, not from when it was asked for")
+	}
+	// And a whole TTL after the grant, when the store's lease has lapsed and
+	// a peer may take the seat, no child may be started for it here.
+	f.clock.Advance(24 * time.Second)
+	if h.Provable("ceo") {
+		t.Error("the seat is provable a TTL after the store granted it, so a " +
+			"child could be started for an agent a peer may already run")
+	}
+}
+
+// lateAnswers is the lease store with every seat acquire answered late: the
+// store grants the lease at once, by its own clock, and the answer reaches the
+// host once the shared clock has moved on by late.
+type lateAnswers struct {
+	coord.Backend
+	clock *fakeClock
+	late  time.Duration
+}
+
+func (s *lateAnswers) TryAcquire(ctx context.Context, resource string,
+	opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error) {
+
+	lease, refused, err := s.Backend.TryAcquire(ctx, resource, opts)
+	if coord.IsSeatResource(resource) {
+		s.clock.Advance(s.late)
+	}
+	return lease, refused, err
 }

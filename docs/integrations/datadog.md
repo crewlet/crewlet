@@ -6,7 +6,7 @@ The engine registers that webhook itself and keeps its address current, so the o
 
 ## Setting it up from the dashboard
 
-Settings › Integrations connects Datadog without a shell: it takes an API key
+Company › Integrations connects Datadog without a shell: it takes an API key
 and an application key, asks for the monitor tag key and the fallback seat,
 generates the shared token, seals it, points the config at it and activates.
 The next reconcile pass registers the webhook at Datadog. Everything below
@@ -68,7 +68,7 @@ The role is **refused rather than defaulted** if the organization does not have
 it: creating accounts under whatever role happened to match would grant an
 agent access nobody asked for.
 
-It is shown on each agent's row in Settings › Integrations, as the tag a code
+It is shown on each agent's row in Company › Integrations, as the tag a code
 host's tier gets, because it is the same question: how much this agent may do
 there. Datadog's own three are shortened, since "Datadog Standard Role" on a
 row that has already said which app it is about is noise, and mapped onto the
@@ -151,14 +151,14 @@ integrations:
 |---|---|---|
 | `enabled` | yes | Turn the integration on. |
 | `webhook_token` | yes | Compared against the `X-Crewlet-Token` header on every delivery. A route with nothing to check against answers **503** rather than accepting one, and so does one whose token is shorter than **26 characters** — see [Verification is weaker here](#verification-is-weaker-here-and-that-is-the-providers-ceiling). |
-| `route_to` | yes | The handle of an **agent** seat this company declares, or the literal `none`. An alert wakes that seat when no monitor tag names an owner; `none` dismisses those alerts on purpose. A handle no seat has, or one naming a human seat, is refused at validation — and no seat may itself be handled `none`, or it would be silenced by its own name. See [Routing](#routing-is-by-ownership-not-by-mention). |
+| `route_to` | yes | The handle of an **agent** seat this company declares, or the literal `none`. An alert wakes that seat when no monitor tag names an owner; `none` dismisses those alerts on purpose. A value that is not a handle is refused wherever it is written, and so is a handle none of the company's seats has, or one naming a human seat — every write carries the whole document, seats included. No seat may itself be handled `none`, or it would be silenced by its own name. See [Routing](#routing-is-by-ownership-not-by-mention). |
 | `provisioning` | yes | The organization credential pair and the region it was issued in: `site`, `api_key`, `app_key`, all three required. The engine registers the webhook with them, so an enabled block missing any is refused. `site` must be a region Datadog serves — a key issued in one is refused by every other, and the hostname is the only thing that tells them apart. |
 | `webhook_name` | no | The name of the webhook the engine keeps at Datadog, and therefore the handle a monitor writes: `@webhook-crewlet` by default. Give two deployments watching one organization two names, or each rewrites the other's address on every pass. Cannot contain a space, an `@` or a comma. **Renaming leaves the old definition in place** — see below. |
 | `handle_tag` | no | The monitor tag key that names a seat. Defaults to `crewlet`. Cannot contain a colon, a comma or a space, because Datadog uses those to separate a key from its value and one tag from the next. |
 
 **Renaming `webhook_name` is a two-step change, and the engine does the first step and then tells you about the second.** The name is also the handle your monitors write, so every monitor still saying `@webhook-crewlet` keeps delivering through the old definition — same address, same token, still working. The engine therefore does not delete it: doing so would silence exactly those monitors. Nor could anything find it for you afterwards, because Datadog answers a `GET` on the webhooks collection with `405` and there is no listing to enumerate.
 
-So the engine **remembers the name it registered under**, and the first pass after a rename reports the definition left behind: Settings › Integrations carries it as a note on a **Connected** integration, naming both the old definition and the new one. Nothing is broken, which is why it is an advisory rather than a fault. Repoint the monitors to the new handle, then delete the old definition at Datadog and the note clears itself. A disconnect withdraws only the name the field currently holds.
+So the engine **remembers the name it registered under**, and the first pass after a rename reports the definition left behind: Company › Integrations carries it as a note on a **Connected** integration, naming both the old definition and the new one. Nothing is broken, which is why it is an advisory rather than a fault. Repoint the monitors to the new handle, then delete the old definition at Datadog and the note clears itself. A disconnect withdraws only the name the field currently holds.
 
 A disconnect also **reads before it deletes**: a definition under your `webhook_name` that posts somewhere other than this deployment's own `/webhooks/datadog` address is not this engine's, so it is reported and left alone rather than removed.
 
@@ -221,7 +221,9 @@ Because the token is the entire check, its length is the entire strength, so **C
 ## What you do in Datadog
 
 The webhook itself is not on this list. The reconcile pass creates it under
-`webhook_name`, points it at `<public_base_url>/webhooks/datadog`, attaches the
+`webhook_name`, points it at `<webhook address>/webhooks/datadog` —
+`api.public.external_url` when the deployment has a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api),
+`api.external_url` otherwise — attaches the
 `X-Crewlet-Token` header and writes the payload template below, and it rewrites
 that definition whenever the address or the token changes. A disconnect
 withdraws it.
@@ -244,8 +246,8 @@ each one leaving the surface reporting `ready` while alerts went nowhere:
 
 | What it found | What it reports | What clears it |
 |---|---|---|
-| No webhook was registered because this deployment has no inbound address | `ingress_blocked` | set `integrations.public_base_url` |
-| No webhook was registered because `webhook_token` resolved to nothing, or because this node has no keyring to seal one with | `credential_missing` | set `integrations.datadog.webhook_token`, or install `secrets.keys` |
+| No webhook was registered because this deployment has no inbound address | `ingress_blocked` | set the key the finding names: `api.public.external_url` behind a public listener, `api.external_url` otherwise |
+| No webhook was registered because `webhook_token` resolved to nothing | `credential_missing` | set `integrations.datadog.webhook_token` |
 | A seat's service account exists but is **disabled**, with no Crewlet marker | `identity_failed` | re-enable it in Datadog — it was not disabled by this engine |
 | A seat's service account is disabled **by a Crewlet disconnect** | — | the next pass re-enables it |
 | A seat holds a sealed key and its account holds **no application key at all** | — | the next pass mints a replacement and seals it |
@@ -259,7 +261,7 @@ Two of those are worth knowing about in detail.
 
 #### Accounts this engine made and no longer manages
 
-A live organization accumulates them: a seat renamed, a handle changed, an account made by hand at this engine's `.invalid` domain. They are absent from the plan by construction, so no seat's row mentions them and the card read **Connected** over an organization full of them.
+A live organization accumulates them: a seat removed, a handle changed, an account made by hand at this engine's `.invalid` domain. They are absent from the plan by construction, so no seat's row mentions them and the card read **Connected** over an organization full of them.
 
 **Only the enabled ones.** An account that is already disabled has reached the end state this advisory asks for — its remedy is *disable or delete the ones you do not want* — so reporting it asks an operator for work somebody has done. Mostly this engine had done it: a disconnect with account removal **disables** the accounts it removes, so the ordinary reconnect-with-a-smaller-roster cycle turned every correct teardown into a row on the card. That is what one measured pile was: **36 accounts, every one of them disabled and inert**, burying whatever else the card had to say. Skipping them also makes the instruction work — the filter looked only at the address, so an operator who read the note and disabled an account watched the finding come back unchanged on the next tick; now either half of *disable or delete* clears it. The **enabled** orphan is the genuine finding and still reports: that is an identity which can still act, matching nothing any pass will ask for again. Disabled ones are visible where they belong, in Datadog's own user list filtered to disabled — nothing here has anything to add about them.
 
@@ -267,7 +269,7 @@ They are reported in **one** finding, with the addresses in the detail: the deci
 
 **Nothing removes them.** An account is a colleague at Datadog with history attached, so deleting one because a handle changed is not a decision a timer makes — the same rule a disconnect follows when it declines to delete a company's credentials.
 
-Which accounts count as this engine's is decided in two steps, and the domain alone is not enough: Datadog's user filter is a free-text substring match, so a listing under a real domain carries the company's own people. A **`.invalid`** domain (the default, reserved by [RFC 2606](https://www.rfc-editor.org/rfc/rfc2606) precisely so nothing can deliver there) is conclusive — no person has a mailbox at one. Under any other domain the **`crewlet-` prefix** is the marker, so a service account somebody else created at a domain you own is left alone. Other prefixes at a `.invalid` domain are deliberately not enumerated: such a list would have to be kept in step with every name anybody gives an account there, and the `.invalid` clause catches them all without naming any.
+Which accounts count as this engine's is decided in two steps, and the domain alone is not enough: Datadog's user filter is a free-text substring match, so a listing under a real domain carries the company's own people. A **`.invalid`** domain (the default, reserved by [RFC 2606](https://www.rfc-editor.org/rfc/rfc2606) precisely so nothing can deliver there) is conclusive — no person has a mailbox at one. Under any other domain the **`crewlet-` prefix** is the marker, so a service account somebody else created at a domain you own is left alone. The rest of the address is the seat's **handle** (see [A seat's account is named after its handle](../concepts/integration-reconcile.md#a-seats-account-is-named-after-its-handle)), which is immutable — Datadog cannot change an account's address at all. Other prefixes at a `.invalid` domain are deliberately not enumerated: such a list would have to be kept in step with every name anybody gives an account there, and the `.invalid` clause catches them all without naming any.
 
 **An account this engine disabled is re-enabled, and one a person disabled is not.** Disabling is exactly how a disconnect with account removal decommissions an account, so a company that had run that and then reconnected looked fully provisioned while no seat could act. The disconnect writes a marker — the account's `title` becomes `crewlet:disconnected` — *before* it disables, so an interrupted teardown leaves a marked live account rather than an unmarked dead one, and connecting again re-enables only accounts carrying that marker. An account somebody disabled in Datadog's own console is reported and never touched: undoing an operator's explicit decision from a timer is not a decision this loop gets to make.
 
@@ -284,11 +286,6 @@ The other direction of the same mismatch — the account has a key and the seat'
 It used to stop the whole card on *Action required* and tell an operator to "delete the key at Datadog and run this again" — an API call the engine is itself authenticated for, holding the very credentials it listed the key with. Asking a person to perform a write you are authorized for is not a safety property; it is the same write with a worse actor, and it left companies parked on *Action required* over one seat.
 
 Only the keys **this engine minted** are deleted, matched on the name every mint here writes (`crewlet`). That is narrower than what a [disconnect](#giving-each-agent-its-own-datadog-identity) does — a teardown revokes *every* key on the account — and the difference is the goal rather than an inconsistency: a teardown must leave no live credential on a decommissioned account, so a key it cannot attribute is exactly the hazard it exists to remove, while a repair only has to give this seat a working credential and minting is additive. A key somebody else put on the account is left alone and the seat is fixed regardless.
-
-A node with no keyring also no longer creates the accounts. It used to make a
-real Datadog service account per seat and then fail to record its key — so the
-account existed, nothing could authenticate as it, and the next pass made
-another one.
 
 ### The payload template
 

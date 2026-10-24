@@ -94,8 +94,8 @@ somebody opened the page for.
 It weakens one step further when this node could not measure its own lag at
 all — the broker unreachable, or coordination — because `stale` is a claim
 about *age* and there is then no age to claim. `crewlet retention status` and
-Settings › Backups & retention say so in a sentence rather than printing the same figures
-under the stronger name.
+**Settings › Backups & retention** say so in a sentence rather than printing
+the same figures under the stronger name.
 
 An agent cannot choose because the level is not a model's to pick — a tool
 argument for it would be a model trading correctness for latency it cannot
@@ -168,7 +168,12 @@ answer and the retention routes alike, and every read takes it back as
   — with the same derived retry hint — rather than serving rows from before
   the write.
 
-A position on another domain's log is refused `wrong_stream`, not waited for.
+A position on another domain's log is refused, not waited for — and refused
+as a **bad request** rather than as one of the refusals below, because it is
+the caller's mistake and every node answers it the same: `400 bad_params` over
+REST, and `bad_params` on the socket. The read checks it before
+anything about the node answering, so an evicted or stalled node says the same
+thing about it as a healthy one.
 
 Two spellings, one triple: inside an answer a position is the object
 `{stream, generation, seq}` (`seen_through`, `incomplete.from`, a listing's
@@ -228,7 +233,28 @@ an isolated former leader answers with a last sequence it believes and the
 majority has moved past. An append cannot be served that way, because there is
 nothing to commit against.
 
-## The thirteen refusals
+## Which logs can be read at `linearizable`
+
+Six of the eight state logs grant it; the vectors and the usage log do not.
+
+| Log | `linearizable` | Why |
+|---|---|---|
+| The tracker (`CREWLET_TRACKER_LOG`) | Yes | It encodes the barrier as one of its own records. |
+| The knowledge base (`CREWLET_PAGES_LOG`) | Yes | Likewise. |
+| The identity estate (`CREWLET_IAM_LOG`) | Yes | Likewise. |
+| The artifacts log (`CREWLET_ARTIFACTS_LOG`) | Yes | Likewise: an artifact's head, versions, shares and history are read at a position, and a seat tool reads them at `linearizable`. |
+| The artifact datastore (`CREWLET_ARTIFACT_DATA_LOG`) | Yes | Likewise: a store's rows, history and state digest are read at a position, and every datastore read question takes the same freshness parameters as the other estate reads, so a caller that must see every write acknowledged before it asks at `linearizable`. |
+| The code host (`CREWLET_CODE_LOG`) | Yes | Likewise: every answer a person's git is given that names a ref is read at `linearizable`, and the REST reads under `/code/` take the level as the other estate reads do (see [Which surface reads at which level](#which-surface-reads-at-which-level)). |
+| The vectors (`CREWLET_TRACKER_VECTORS`) | **No** — declared, not omitted | A compacted changelog keeping one message per source, and every value in it is derived from a source another log owns, so a read of the vectors claims no position a barrier could prove anything about. No surface reads them at a level: a search ranks with them, and what it answers for is the pages and tasks those sources came from. |
+| The usage log (`CREWLET_USAGE_LOG`) | **No** — declared, not omitted | A compacted changelog keeping one message per (node, company day, seat, schedule or person), each written by the one node whose own event log it was derived from — nothing is arbitrated, and no node can vouch for another node's day being whole until that node publishes it. A barrier would prove only that this node holds every record published before it, which a day still being written by its node never makes complete. A spend window reports the days and the `horizon` it answered from instead. |
+
+The decision is **declared per log**, in the engine's register of domains
+(`internal/engine/statelogregister.go`): each entry states either the barrier
+encoder it appends with or `NoBarrier`, and a boot refuses an entry that states
+neither or both. It used to be a switch, where a log that grants no
+`linearizable` read and a log whose author forgot it looked the same.
+
+## The fourteen refusals
 
 A read that cannot be served at the level asked for is **refused with a code**
 rather than downgraded. Each code names a different thing to do.
@@ -236,26 +262,28 @@ rather than downgraded. Each code names a different thing to do.
 | Code | What happened | What to do |
 |---|---|---|
 | `behind` | This node has not reached the position the read needs — including a node below the published trim floor whose missing records the log still holds, which it is replaying. | Wait — the answer carries a retry hint derived from this node's measured drain. It clears on its own. |
-| `too_stale` | This node's lag is past what the read said it would accept. | Same, or accept more staleness. |
+| `too_stale` | This node's lag is past what the read said it would accept. | Ask a node that is less behind, or accept more staleness. It carries no retry hint: a lag bound is the caller's own choice, and a node past it may stay there. |
 | `stalled` | This node's applied prefix has stopped moving — its applier halted, or has been retrying a failure it cannot get past for longer than the retry budget. | Its rows are frozen, so a short answer would be wrong rather than old. Check the applier — `crewlet retention status` names the domain, its position and the error it is retrying. A retried failure clears on its own the moment an attempt succeeds. A `consistent_prefix` read, which makes no statement about age, is still answered by a stalled node at or above the published trim floor — a frozen prefix is still a coherent one — and refused by one below it. |
 | `no_quorum` | The barrier did not commit in time: the broker answered and a majority did not agree within the barrier's own five seconds — or, on a read another node asked for, within what that node's attempt left, less a second for the answer to reach it. | Retry after the hint (4 s, the broker's own minimum election timeout). If it persists, a member is down or partitioned. |
 | `broker_unreachable` | The broker did not answer at all — the barrier a linearizable read appends, or this node's own reading of its log's ends (not re-read for three seconds) or its eviction row. | Retry. Not the same as `no_quorum`, and the difference is where to look. |
-| `log_full` | The log is at the byte ceiling its ordinary appends are held to — on a log that claims identity (the tracker, pages and code logs) a sixteenth below the broker's, the rest being [kept for gate records](retention.md#the-gate-reserve) — so no barrier can be written. | Raise the ceiling with `crewlet retention set-capacity`, or unblock the trim — `crewlet retention status` names the term. **`stale` keeps answering**, so a full log costs `linearizable` reads — every seat tool read among them — rather than every read. |
+| `log_full` | The log is at the byte ceiling its ordinary appends are held to — on every log that claims identity (the tracker's, the knowledge base's, the code host's and the identity estate's) the gate reserve below the broker's, [kept for gate records](retention.md#the-gate-reserve) — so no barrier can be written. | Raise the ceiling with `crewlet retention set-capacity`, or unblock the trim — `crewlet retention status` names the term. **`stale` keeps answering**, so a full log costs `linearizable` reads — every seat tool read among them — rather than every read. |
+| `broker_refused` | The broker refused to store the barrier for a reason it named and this build has no remedy for — a sealed stream, a JetStream store with no resources left. The detail carries the broker's code and words. | Act on the broker's words; the next barrier is refused the same way. Not `no_quorum` — the broker answered — and, like `log_full`, it costs the levels that append and no others. |
 | `deferred` | This node holds a record it cannot decode covering what this read is about. | Ask another node, or upgrade this one. No amount of waiting changes it. |
 | `deferred_scope_unknown` | The deferred record's own scope could not be read, so nothing can be said about what it covers. | It blocks the whole domain, which is why it is a different code. Upgrade the node that is behind on the record version. |
-| `below_floor` | Records this node never applied are gone from the log. | Its rows are missing state no replay can supply. The node adopts a peer's snapshot on its own; ask another node meanwhile. See [Retention](retention.md#the-join-runbook). |
-| `floor_unknown` | This domain's published trim floor has not been read for four heartbeats (a minute). A read is served the floor this node last read for its domain — refreshed at most once a second, off the read's path, so a read asks the broker nothing — and a blip of coordination therefore refuses nothing; a floor nobody could refresh for the minute is no answer, and the refusal names how long ago it was last read. Each domain's floor is its own key, so one that cannot be read refuses that domain's reads alone. | An unreadable floor blocks: guessing here keeps a node serving over a hole it cannot see. Check coordination — or, where one domain alone refuses, its floor row; see [An unreadable trim floor](retention.md#an-unreadable-trim-floor). |
+| `below_floor` | Records this node never applied are gone from the log. | Its rows are missing state no replay can supply, so the node adopts a peer's snapshot — on its own: the position heartbeat requests the rejoin. Come back after the hint (one heartbeat, 15 s), or ask another node meanwhile; see [the join runbook](retention.md#the-join-runbook). |
+| `floor_unknown` | This domain's published trim floor has not been read for four heartbeats (a minute). A read is served the floor this node last read for its domain — refreshed at most once a second, off the read's path, so a read asks the broker nothing — and a blip of coordination therefore refuses nothing; a floor nobody could refresh for the minute is no answer, and the refusal names how long ago it was last read. Each domain's floor is its own key, so one that cannot be read refuses that domain's reads alone. | The third value blocks: guessing here keeps a node serving over a hole it cannot see. It clears the next time the floor is read, so come back after the hint (one heartbeat, 15 s); if it persists, check coordination — or, where one domain alone refuses, its floor row; see [An unreadable trim floor](retention.md#an-unreadable-trim-floor). |
 | `evicted` | This node has been removed from the fleet. | Nothing it holds is authoritative. Readmit it, or route elsewhere. |
 | `maintenance` | This node runs in a [capacity window](retention.md#changing-a-logs-ceiling) (`-mode maintenance` or `-mode seal`), which publishes nothing — and a `linearizable` read proves the log's end by appending a barrier to it. | Ask again once the fleet is back in normal mode. Every other level appends nothing and is still answered. Every node of a fleet in a window is in one, so no other node answers it either. |
-| `wrong_stream` | The position this read was asked to reach is on another stream — including a `min_position` naming another domain's log, which is refused at every level rather than quietly dropped. Or this node's own log is not the one its rows are keyed to: its checkpoint is past the log's end — what a broker restored from an older copy looks like, since it keeps the stream's creation instant — or the log holds, at that checkpoint, another record than the one it consumed there, which is the same restore written past this node's rows, or the stream was deleted and rebuilt — found at boot against the checkpoint, or under a running node by the position heartbeat and by any write at an expectation of zero, from the stream's own creation instant — or a peer re-anchored the log past this node's generation, so it continues from that peer's rows rather than this node's. Every one of these findings refuses the node's **writes** with the same word. | A caller bug, a cursor from before a reanchor, a recreated stream or a restored broker; see [Retention](retention.md#re-anchoring-a-recreated-or-restored-log). A peer's reanchor clears on its own, once this node has [adopted](retention.md#a-node-a-peer-re-anchored-past) a snapshot from the new generation. |
+| `wrong_stream` | This node's own log is not the one its rows are keyed to: its checkpoint is past the log's end — what a broker restored from an older copy looks like, since it keeps the stream's creation instant — or the log holds, at that checkpoint, another record than the one it consumed there, which is the same restore written past this node's rows, or the stream was deleted and rebuilt — found at boot against the checkpoint, or under a running node by the position heartbeat and by any write at an expectation of zero, from the stream's own creation instant — or a peer re-anchored the log past this node's generation, so it continues from that peer's rows rather than this node's. A position this node derived for the read on another log — a session mark, a barrier — is the same refusal. A **state of this node**, never of the request: a `min_position` naming another domain's log is the caller's mistake, which every node answers the same, and is refused as a bad request instead (above). Every one of these findings refuses the node's **writes** with the same word. | Ask another node meanwhile. A recreated stream or a restored broker is an operator's re-anchor — see [Retention](retention.md#re-anchoring-a-recreated-or-restored-log); no wait clears it. A peer's reanchor clears on its own, once this node has [adopted](retention.md#a-node-a-peer-re-anchored-past) a snapshot from the new generation. |
 
-Four of them are worth coming back to **this** node for — `behind`,
-`no_quorum`, `broker_unreachable` and `stalled`. The rest are not, and the
-distinction is in the code rather than in a retry loop's guesswork: a caller
-that retried `deferred` would loop forever.
+Six of them are worth coming back to **this** node for — `behind`,
+`no_quorum`, `broker_unreachable`, `stalled`, `below_floor` and
+`floor_unknown`. The rest are not, and the distinction is in the code rather
+than in a retry loop's guesswork: a caller that retried `deferred` would loop
+forever.
 
 Coming back to this node and asking another are different questions. Eleven of
-the thirteen are about **this node** — its copy, its view of the log, its side
+the fourteen are about **this node** — its copy, its view of the log, its side
 of a partition — so another data node may serve the same read at once: a
 node that cannot decode a record will never serve it, while a peer that can
 does. The estate's router therefore asks the next data node a read refused
@@ -270,8 +298,10 @@ read budget for is not waited for again (served if the node holds it,
 without committing gets no second one (`no_quorum` at once). So a fleet that
 one burst put behind together refuses a read after one barrier and one read
 budget, rather than a barrier and two seconds per data node.
-Two are about **the whole fleet** — `log_full`, since every node appends its
-barrier to the one log at the one ceiling, and `maintenance`, since every node
+Three are about **the whole fleet** — `log_full`, since every node appends its
+barrier to the one log at the one ceiling, `broker_refused`, since the broker
+that refuses one node's barrier on a log — a sealed stream, a store with no
+resources left — refuses every node's on it, and `maintenance`, since every node
 of a fleet in a capacity window is in one — and those are answered as they
 come, from the first node that gives them.
 
@@ -280,8 +310,66 @@ Every refusal is about **one domain's copy**. A node whose tracker copy refuses
 pages, and the estate's router sends a seat's call on the tracker to a data
 node whose copy of the tracker is in service, while the node's other logs keep
 answering here
-([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-a-domains-fault-takes-only-its-own-copy-out-of-service.md);
+([ADR-0045](https://github.com/crewlet/crewlet/blob/main/adr/0045-a-domains-fault-takes-only-its-own-copy-out-of-service.md);
 see [how a request reaches the estate](../concepts/scaling.md#how-a-request-reaches-the-estate)).
+
+### A write's refusals
+
+A **write** refused by the log names a reason from the same vocabulary, and a
+reason spelled like one of the codes above agrees with it about waiting — the
+two describe one state of one node. Every surface that writes to a state log —
+`/work`, `/pages`, `/iam` and `/auth` — answers every one of them
+`503`, with a `Retry-After` only for the four that clear on their own; the
+other thirteen carry none, because the same write is refused the same however
+often it is sent here.
+
+| Reason | What happened | What to do |
+|---|---|---|
+| `behind` | This node has not yet applied your own previous write, so a decision here would read a state you have already moved. | Wait — it clears on its own. |
+| `below_floor` | This node is below the trim floor, where the retry-at-zero a trimmed anchor needs could overwrite a peer's committed write. | Wait — it catches up or adopts a snapshot on its own. |
+| `floor_unknown` | The trim floor could not be read, and the third value blocks: failing open here is a lost update. | Wait — it clears the next time the floor is read. |
+| `eviction_unknown` | This node could not read its own eviction state, and publishing under an eviction nobody can see produces records every node drops. | Wait — it clears the moment the state reads again. Deliberately not `evicted`, which no wait clears. |
+| `evicted` | This node has been removed from the fleet; nothing it publishes is applied anywhere. | Readmit it, or write through another node. |
+| `deferred` | This node holds a record it cannot decode whose scope covers this object, so its rows are stale. | Write through another node, or upgrade this one. |
+| `deleted` | The object carries a permanent deletion marker. | It stays deleted. |
+| `abandoned` | The record was written in a generation a reanchor abandoned — one only a node the fleet has since evicted held — so it produces rows nowhere. | Nothing to retry: the rows it was decided from are on no disk the fleet still has. Make the change again as a new operation. |
+| `overtaken` | The record was written after a restored reanchor, by a node the move had overtaken before it learned of it, from rows the reanchor did not keep. | The same: make the change again, under a fresh operation id, on a node on the new generation. |
+| `log_full` | The log is at the byte ceiling its ordinary appends are held to, and refuses appends rather than dropping records. On a log that keeps a [gate reserve](retention.md#the-gate-reserve) that is the reserve below the broker's own. | Raise the ceiling with `crewlet retention set-capacity`, or unblock the trim — `crewlet retention status` names the term. |
+| `record_too_large` | The record is larger than its log takes in one message, whatever room the log has. Three limits reach it, and the detail names the record's size and which one refused it: the log's own declared largest record — 8 MiB less 4 KiB on the tracker's, the knowledge base's and the vector changelog's (the largest an 8 MiB message carries once the record is signed), 128 KiB on the identity estate's — which this node refuses before anything is sent and the broker enforces as the stream's `max_msg_size`, for a peer on another build; the NATS server's `max_payload`; or the file store's per-record limit. | Splitting the change into smaller writes answers all three. Otherwise it depends on the limit: raise `max_payload` to 8 MiB on every server of an external NATS cluster, and on the account the engine signs in to where that states a limit of its own — a node refuses to start against a server that holds it to less, so the one that refused is a server it has reconnected to since: a cluster member configured apart from the others, or a server restarted with a smaller limit (the embedded broker's is 8 MiB, and nothing changes it). A limit lowered by a live reload is never this refusal, because the client is not told of it: the server closes the connection over the record, and the node [stops itself](deployment.md#an-external-nats-server). Nothing raises a log's declared largest record, which its gate reserve is sized by, or the file store's limit. No ceiling or trim changes any of them. |
+| `broker_refused` | The broker refused to store the record for a reason it named and this build has no remedy for — a sealed stream, a JetStream store with no resources left. The detail carries the broker's code and words. Two answers the broker names are deliberately **not** this: a record under the write's own operation id still being committed, and a store that closed under a record raft had committed. Each says the record may yet land, so the write answers `unknown` with its operation id instead. | Act on the broker's words; asking again changes nothing. |
+| `skew` | The broker answered a last sequence below an expectation this node formed, which a healthy stream never does. | A store or stream was restored out of step; see [Retention](retention.md#re-anchoring-a-recreated-or-restored-log). |
+| `op_reused` | The write's operation id already names a record on another object: an operation id names one write, and the caller sent it with a different one. Nothing was written. | Send the write under a fresh operation id. |
+| `log_truncated` | The log lost records a peer's rows hold — a broker restored from an older copy, beside a peer whose rows are newer than the copy. | Settle which history the fleet keeps; see [Retention](retention.md#re-anchoring-a-recreated-or-restored-log). Writes refuse until then, because one made now is one the restored reanchor of that peer would apply nowhere. |
+| `wrong_stream` | The log under this domain's name is not the one this node's rows were derived from — every finding the read refusal of the same name lists. | The remedy that refusal names: an operator's re-anchor, or this node's own adoption where a peer re-anchored past it. |
+| `superseded` | This operation's record landed, and a later record on the same object has since undone or replaced it — an eviction retried under its id after a readmission took the node back — so a retry is not a new write of it. | If you still want the effect, start a new operation under a fresh id. |
+
+A record already durable on the log that a gate then dropped is refused under
+the gate that dropped it — `evicted`, `deleted`, `abandoned` or `overtaken` —
+rather than under a generic word, because the gate is what says
+why; republishing it writes another record the same gate drops.
+
+Eight write reasons have a read twin spelled the same, and each agrees with it
+about waiting: `behind`, `deferred`, `below_floor`, `floor_unknown`,
+`evicted`, `log_full`, `broker_refused` and `wrong_stream`. The other nine
+describe something only a write meets:
+
+- `eviction_unknown` — a write's fence reads this node's own eviction rows
+  before every append, and that read can fail; a read takes the eviction flag
+  this node's health already holds, and answers `evicted` from it.
+- `deleted` — a create that would bring back an object carrying a permanent
+  deletion marker. A read of that object simply finds nothing.
+- `abandoned` and `overtaken` — what became of a record already
+  durable on the log. A read appends no record except a barrier, and a barrier
+  is never dropped by a gate.
+- `record_too_large` — the one record a read appends, a barrier, is a few
+  hundred bytes.
+- `skew` — a last sequence below an expectation this node formed. A read forms
+  no expectation.
+- `op_reused` and `superseded` — what the operation ledger says about the
+  write's own operation id. A read carries none.
+- `log_truncated` — this node's own rows are the log's history, so it keeps
+  answering reads; only a write it makes could land where a restored peer
+  would apply it nowhere.
 
 ## Completeness is a different fact from freshness
 
@@ -300,6 +388,18 @@ neither the direction of the difference — a row that would have entered the se
 or one that would have left it — nor reliably the right identifiers, and it
 would truncate. `direction` is always `"unknown"`, and it is a field rather
 than an omission so a reader meets the fact instead of inferring it.
+
+What a read is ABOUT is the object it names, however it was named. A listing
+or a feed of one knowledge-base space is scoped to that space's canonical key,
+so `eng` and `ENG` are one question. A read of one page is judged on the page
+it resolved to — by id or by `SPACE/Title` — in the snapshot that read it, and
+refused `deferred` when a retained record covers that page; a page no row holds
+is refused the same way while a retained record may be the one that creates it
+— one about that page or that address, or one about a whole space, since a
+record about a space may write any page in it — rather than answered "not
+found" from rows that record never wrote. The node decides that in the same
+snapshot it read the page from, so a record retained while the read was
+waiting is seen too.
 
 ## What no level can strengthen
 
@@ -353,6 +453,27 @@ What they buy is the other half: that an answer the turn *decides* on is not
 one from before the read arrived. The operator's reads are `linearizable` too
 and are not settable: the person asking is deciding something about their own
 company, and operators are few.
+
+## The coordination store is not on this scale
+
+Leases, budgets, the activation pointer, the trim's positions and every other
+record in the [coordination store](../concepts/coordination.md) are not a log a
+node applies, so none of the four levels describes them and none can be asked
+for. They have one level, fixed: **every read is answered from the bucket's
+stream leader** — a key by the leader itself, a listing by a pass the leader
+closes before any row is handed over — so it reflects every write acknowledged
+anywhere in the fleet before it began: read-your-writes, whichever node made
+the write. It was not
+always: the client reads through any replica, and a replica that had not yet
+applied an acknowledged write answered from before it.
+
+It is not `linearizable` in this page's sense, and for the reason [How
+`linearizable` actually works](#how-linearizable-actually-works) gives: a leader
+cut off from its quorum answers from its own copy until it notices — ten
+seconds without a quorum, checked every ten — while every write through it
+fails. [Coordination § What a leader read does not
+promise](../concepts/coordination.md#what-a-leader-read-does-not-promise) says
+why no coordination read pays a barrier to close that window.
 
 ## See also
 

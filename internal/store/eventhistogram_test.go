@@ -709,6 +709,12 @@ func TestTheFailedFilterIsTheRuleEveryReadStamps(t *testing.T) {
 		rec.Time = base.Add(time.Minute)
 		rec.Category = "system"
 		rec.Actor = "PM"
+		// THE SEAT THE RELATED-AGENT CASE ASKS BY: a party is an agent id,
+		// never the actor's name.
+		if rec.Tags == nil {
+			rec.Tags = map[string]string{}
+		}
+		rec.Tags["agent_id"] = "a-pm"
 		rec.Payload = []byte(`{}`)
 		if err := log.Append(t.Context(), rec); err != nil {
 			t.Fatalf("append %s: %v", rec.ID, err)
@@ -738,7 +744,7 @@ func TestTheFailedFilterIsTheRuleEveryReadStamps(t *testing.T) {
 		{"failures", store.ListQuery{Failed: &yes}, []string{"by-type", "tagged"}},
 		{"clean", store.ListQuery{Failed: &no}, []string{"clean-tag", "untagged"}},
 		{"either", store.ListQuery{}, []string{"by-type", "clean-tag", "tagged", "untagged"}},
-		{"failures involving a seat", store.ListQuery{Failed: &yes, RelatedAgent: "PM"}, []string{"by-type", "tagged"}},
+		{"failures involving a seat", store.ListQuery{Failed: &yes, RelatedAgent: "a-pm"}, []string{"by-type", "tagged"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			q := c.q

@@ -121,12 +121,30 @@ type Deps struct {
 	// does not run would reach for it and fail at the call.
 	Work WorkDeps
 
-	// LeadsProject answers whether a seat leads the unit that owns a
-	// project, which is the authority over that project's own settings.
-	// Nil REFUSES rather than degrading — see [LeadsProject] — so a build
-	// that wired no chart lookup leaves write_project able to declare a
-	// tag and nothing else, which is the safe direction.
-	LeadsProject LeadsProject
+	// Artifacts are the artifacts tools' dependencies; ArtifactData are the
+	// datastore tools'. Each zero value omits its tools. See artifacts.go and
+	// artifactdata.go.
+	Artifacts    ArtifactDeps
+	ArtifactData ArtifactDataDeps
+
+	// Authorize decides whether the party behind a call may make it.
+	//
+	// EVERY TOOL GOES THROUGH IT, wrapped once at registration rather
+	// than checked inside each one, because the action IS the tool's own
+	// name and there is therefore exactly one place the check could be
+	// forgotten.
+	//
+	// NIL REFUSES EVERYTHING, which is the opposite of what a nil skill
+	// gate means and deliberately so: a missing skill gate is a company
+	// that locked nothing, and a missing authority decision is a surface
+	// that shipped without wiring one. See authority.go.
+	//
+	// ONE FIELD, PUSHED DOWN into [WorkDeps] and [PageDeps] by [Register],
+	// because a few checks can only be taken after a read and those tools
+	// reach the decision through their own deps. A caller that set three
+	// fields could set two of them differently, which is the drift this
+	// whole seam exists to remove.
+	Authorize Authorizer
 }
 
 // Register adds every builtin the given dependencies can support.
@@ -143,14 +161,12 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 	if reg == nil {
 		return nil, fmt.Errorf("builtin: no registry")
 	}
+	deps.Work.Authorize, deps.Pages.Authorize = deps.Authorize, deps.Authorize
 
 	// lookup_colleague is unconditional: its corpus is the turn's own org,
 	// so it works on any node that is running a company at all — and it is
 	// the tool every other addressing decision goes through.
-	candidates := []struct {
-		tool tools.Callable
-		on   bool
-	}{
+	candidates := []candidate{
 		{&lookupColleague{env: deps.Env}, true},
 		{&a2aAsk{svc: deps.A2A, env: deps.Env}, deps.A2A != nil},
 		{&useSkill{skills: deps.Skills, events: deps.Events}, deps.Skills != nil},
@@ -179,7 +195,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		{&listWorkItems{deps: deps.Work}, deps.Work.Reader != nil},
 		{&getWorkItem{deps: deps.Work}, deps.Work.Reader != nil},
 		{&createWorkItem{deps: deps.Work, pages: deps.Pages.Reader}, deps.Work.Writer != nil},
-		{&updateWorkItem{deps: deps.Work, leads: deps.LeadsProject},
+		{&updateWorkItem{deps: deps.Work},
 			deps.Work.Writer != nil && deps.Work.Reader != nil},
 		{&commentOnWorkItem{deps: deps.Work, pages: deps.Pages.Reader},
 			deps.Work.Writer != nil && deps.Work.Reader != nil},
@@ -192,7 +208,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		// AND THE MOVE, which is a seat's behind the gate a re-route has:
 		// the lead of the item's project decides where its work lives.
 		// See workmove.go.
-		{&moveWorkItem{deps: deps.Work, leads: deps.LeadsProject},
+		{&moveWorkItem{deps: deps.Work},
 			deps.Work.Moves != nil && deps.Work.Reader != nil},
 		// AND THE RANKED SEARCH, which is the only way to reach what an
 		// item's DESCRIPTION says — see worksearch.go.
@@ -210,7 +226,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		// AND THE ONE PROJECT WRITE a seat holds, for one facet: a
 		// create refuses a label the project has not declared, so a
 		// seat without this could never use `labels` at all.
-		{&writeProject{deps: deps.Work, leads: deps.LeadsProject},
+		{&writeProject{deps: deps.Work},
 			deps.Work.ProjectWriter != nil},
 		// AND THE TWO ABOUT CHANGE rather than about state: a board says
 		// what is there now, and no filter over its rows can answer
@@ -232,6 +248,7 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		{&savePage{deps: deps.Pages}, deps.Pages.Writer != nil && deps.Pages.Reader != nil},
 		{&commentOnPage{deps: deps.Pages}, deps.Pages.Writer != nil && deps.Pages.Reader != nil},
 	}
+	candidates = slices.Concat(candidates, artifactCandidates(deps), artifactDataCandidates(deps))
 
 	var names []string
 	for _, c := range candidates {
@@ -258,7 +275,12 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		case slices.Contains(PageWrites(), c.tool.Name()):
 			opts = append(opts, tools.DeliversTo(pages.Source))
 		}
-		if err := reg.RegisterWith(c.tool, tools.OriginBuiltin,
+		// THE GATE WRAPS EVERY ONE, and it wraps HERE rather than at
+		// each tool: the authority table is keyed on the tool's own
+		// name, so one wrapper covers every verb and a new tool cannot
+		// ship ungated by somebody forgetting a line inside it.
+		if err := reg.RegisterWith(gate(c.tool, deps.Authorize),
+			tools.OriginBuiltin,
 			annotationsFor(c.tool.Name()), opts...); err != nil {
 			return names, fmt.Errorf("builtin: %w", err)
 		}
@@ -266,6 +288,14 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 	}
 	log.Info("builtin_tools_registered", "count", len(names), "tools", names)
 	return names, nil
+}
+
+// candidate is one builtin a registry may offer, and whether its dependencies
+// are present to serve it: a tool whose dependency is absent is omitted, never
+// registered and broken.
+type candidate struct {
+	tool tools.Callable
+	on   bool
 }
 
 // annotationsFor classifies a builtin for the delivery gate and the sub-agent
@@ -302,6 +332,12 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 // have to advertise the same decision: a hint written down here and thrown
 // away at the edge is a hint nobody outside this process ever sees.
 func annotationsFor(name string) tools.Annotations {
+	if a, ok := artifactAnnotations(name); ok {
+		return a
+	}
+	if a, ok := artifactDataAnnotations(name); ok {
+		return a
+	}
 	switch name {
 	case LookupColleagueTool, UseSkillTool, QueryEpisodesTool, RefreshMemoryTool,
 		LoadToolSkillTool, SearchKnowledgeTool:

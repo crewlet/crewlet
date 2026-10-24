@@ -1483,6 +1483,11 @@ type embedHarness struct {
 	consumed  uint64
 	version   int64
 
+	// verifier opens a record's frame, because this harness replays the
+	// log exactly as the framework's own loop does and that loop verifies
+	// before any domain decodes.
+	verifier *statelog.Verifier
+
 	// refusals is the memory every duty this harness builds shares, held
 	// across ticks as the engine holds it.
 	refusals *search.Refusals
@@ -1533,7 +1538,8 @@ func newEmbedHarness(t *testing.T) *embedHarness {
 	// broker in a temporary directory refuses to reserve it.
 	if err := q.EnsureDomainStream(t.Context(), js.DomainStream{
 		Name: spec.Name, Subjects: spec.Subjects, MaxBytes: 16 << 20,
-		MaxPerSubject: spec.MaxPerSubject, MaxAge: spec.MaxAge,
+		MaxMessageBytes: spec.MaxAppendBytes(),
+		MaxPerSubject:   spec.MaxPerSubject, MaxAge: spec.MaxAge,
 		Duplicates: spec.Duplicates,
 	}); err != nil {
 		t.Fatalf("provision the log: %v", err)
@@ -1556,9 +1562,12 @@ func newEmbedHarness(t *testing.T) *embedHarness {
 	if err != nil {
 		t.Fatalf("build the read seam: %v", err)
 	}
+	h.verifier = testVerifier(t, search.Domain{})
 	publisher, err := statelog.NewPublisher(statelog.Deps{
-		Domain: search.Domain{}, Spec: search.Domain{}.Stream(), Log: log, Records: log, Rows: rows,
-		Fence: search.NewFence(), Gates: search.NewGates(), Waiter: &embedWaiter{}, Voids: embedWaiter{},
+		Domain: search.Domain{}, Spec: search.Domain{}.Stream(), Log: log,
+		Records: statelog.VerifiedLog{Log: log, Verifier: h.verifier}, Rows: rows,
+		Signer: testSigner(t, search.Domain{}),
+		Fence:  search.NewFence(), Gates: search.NewGates(), Waiter: &embedWaiter{}, Voids: embedWaiter{},
 		NodeID: "node-a", Generation: func() uint32 { return 0 }, Identity: &embedWaiter{},
 		ResolveBudget: 2 * time.Second,
 	})
@@ -1787,7 +1796,17 @@ func (h *embedHarness) applyRecord(tx *sql.Tx, seq uint64) error {
 	if !ok {
 		return nil
 	}
-	env, err := search.Domain{}.Envelope(payload)
+	// THE FRAME FIRST, exactly as the framework's loop does it: a record is
+	// signed on its way to the appender, and what a domain decodes is the
+	// BODY. A replay that handed the domain's decoder these bytes would be
+	// reading the signature as JSON, which is what every reader of a signed
+	// log has to get right. Refused as an error rather than a Fatalf, since
+	// this runs inside the drain's transaction.
+	body, verdict := h.verifier.Open(payload)
+	if verdict != statelog.Verified {
+		return fmt.Errorf("record %d did not verify: %s", seq, verdict)
+	}
+	env, err := search.Domain{}.Envelope(body)
 	if err != nil {
 		return fmt.Errorf("decode record %d: %w", seq, err)
 	}
@@ -1796,7 +1815,7 @@ func (h *embedHarness) applyRecord(tx *sql.Tx, seq uint64) error {
 		Position: statelog.Position{
 			Stream: search.Domain{}.Stream().Name, Generation: env.Gen, Seq: seq,
 		},
-		Payload: payload, StoredAt: storedAt,
+		Payload: body, StoredAt: storedAt,
 	}
 	if _, err := h.applier.Apply(h.t.Context(), tx, record,
 		statelog.ApplyOptions{StoredAt: storedAt}); err != nil {
@@ -1817,6 +1836,16 @@ func (h *embedHarness) vectors() int {
 	return n
 }
 
+// open unwraps one record's signature frame and hands back its body.
+func (h *embedHarness) open(seq uint64, framed []byte) []byte {
+	h.t.Helper()
+	body, verdict := h.verifier.Open(framed)
+	if verdict != statelog.Verified {
+		h.t.Fatalf("record %d did not verify: %s", seq, verdict)
+	}
+	return body
+}
+
 // opIDs is every operation id on the stream, in order.
 func (h *embedHarness) opIDs() []string {
 	h.t.Helper()
@@ -1833,7 +1862,7 @@ func (h *embedHarness) opIDs() []string {
 		if !ok {
 			continue
 		}
-		env, err := search.DecodeEnvelope(payload)
+		env, err := search.DecodeEnvelope(h.open(seq, payload))
 		if err != nil {
 			h.t.Fatalf("decode record %d: %v", seq, err)
 		}
@@ -2023,6 +2052,32 @@ func (embedWaiter) WaitCommitted(context.Context, statelog.Position) error {
 }
 func (embedWaiter) WaitApplied(context.Context, statelog.ScopeSet, statelog.Position) error {
 	return nil
+}
+
+// testSigner is this suite's record signer.
+//
+// EVERY RECORD ON EVERY STATE LOG IS SIGNED, so a write authority built
+// without one is refused at construction rather than producing records the
+// fleet would refuse one at a time, on every node, for ever. The key is a
+// fixture: what these cases are about is what the domain writes, and the
+// signature's own rules are certified in [statelog].
+func testSigner(t *testing.T, d statelog.Domain) *statelog.Signer {
+	t.Helper()
+	signer, err := statelog.NewSigner(d.Name(), statelog.OneKey("k1", "test-material"))
+	if err != nil {
+		t.Fatalf("NewSigner: %v", err)
+	}
+	return signer
+}
+
+// testVerifier opens what [testSigner] sealed.
+func testVerifier(t *testing.T, d statelog.Domain) *statelog.Verifier {
+	t.Helper()
+	verifier, err := statelog.NewVerifier(d.Name(), statelog.OneKey("k1", "test-material"))
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	return verifier
 }
 
 // unbounded is a tick nothing bounds: every report of progress is taken and

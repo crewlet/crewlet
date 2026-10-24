@@ -24,7 +24,7 @@ func TestAStripsClosureHoldsEverythingItReads(t *testing.T) {
 		ScopeTerm{Kind: TermObject, Container: "OPS", ID: "t-1"}.Path(),
 	}}.Normalised()
 
-	if !stripScope(ViewQuery{Container: eng, Viewer: PartyOf("ana")}).Intersects(person) {
+	if !stripScope(ViewQuery{Container: eng, Viewer: "ana"}).Intersects(person) {
 		t.Error("a strip read for ana does not cover her person record, " +
 			"which is where the pins that order it are read from")
 	}
@@ -32,7 +32,7 @@ func TestAStripsClosureHoldsEverythingItReads(t *testing.T) {
 		t.Error("a shared strip reads no pins, and its closure should not " +
 			"wait on a person record")
 	}
-	counted := stripScope(ViewQuery{Container: eng, Viewer: PartyOf("ana"),
+	counted := stripScope(ViewQuery{Container: eng, Viewer: "ana",
 		Counts: true})
 	if !counted.Intersects(task) || !counted.Intersects(person) {
 		t.Error("a counted strip runs task queries over any container and " +

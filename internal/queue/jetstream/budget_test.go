@@ -11,6 +11,8 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsprovision"
+	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
 )
 
 // fileQueue opens an embedded broker with a file store, which is the one a
@@ -80,6 +82,38 @@ func TestAnEmbeddedBrokersBudgetIsItsOwnCap(t *testing.T) {
 					"they reserve", ceiling, before.Committed, after.Committed)
 			}
 		})
+	}
+}
+
+// AN OPERATOR'S BROKER THAT STATES NO LIMIT STILL STATES WHAT IT RESERVED.
+//
+// Its servers hold a cap this client cannot read, so a node sizes from its own
+// free space in place of the limit, and every ceiling already granted on the
+// broker (the object bucket's, created before the state logs) is spent from
+// that figure as it is from the cap. A budget that dropped the reservations
+// with the limit sized the logs into bytes the bucket held, and the server
+// refused the last log created.
+func TestAnUnstatedBrokersBudgetCarriesItsReservations(t *testing.T) {
+	t.Parallel()
+	q := newQueueWith(t, Config{URL: externaltest.Start(t, queue.MaxPayloadBytes).URL()})
+	before, err := q.StreamBudget(t.Context())
+	if err != nil {
+		t.Fatalf("StreamBudget: %v", err)
+	}
+	if before.Limit >= 0 || before.Source != BudgetUnstated {
+		t.Fatalf("an operator's broker with no account limit read as %+v, want unstated", before)
+	}
+	const ceiling = int64(1) << 30
+	if err := q.EnsureDomainStream(t.Context(), budgetLog("UNSTATED_SPEND", ceiling)); err != nil {
+		t.Fatalf("EnsureDomainStream: %v", err)
+	}
+	after, err := q.StreamBudget(t.Context())
+	if err != nil {
+		t.Fatalf("StreamBudget: %v", err)
+	}
+	if after.Committed-before.Committed != ceiling {
+		t.Errorf("a %d-byte reservation on a broker that states no limit moved the "+
+			"committed figure from %d to %d", ceiling, before.Committed, after.Committed)
 	}
 }
 
@@ -423,10 +457,14 @@ func TestAnAccountsBudgetIsInCeilingUnits(t *testing.T) {
 			replicas: 3,
 			want:     StorageBudget{Limit: 30 * gib, Committed: gib, Source: BudgetAccount},
 		},
+		// AND WHAT IT HAS RESERVED IS CARRIED WITHOUT ONE: a node sizing
+		// from its own disk in place of the limit spends the ceilings
+		// already granted (the object bucket's, say) from that figure, and
+		// dropping them sized the state logs into bytes the bucket held.
 		"no limit stated": {
-			info:     jetstream.AccountInfo{Tier: limited(-1, -1, 0, 0)},
+			info:     jetstream.AccountInfo{Tier: limited(-1, -1, uint64(3*gib), 0)},
 			replicas: 1,
-			want:     StorageBudget{Limit: -1, Source: BudgetUnstated},
+			want:     StorageBudget{Limit: -1, Committed: 3 * gib, Source: BudgetUnstated},
 		},
 		"memory storage reads the memory limit": {
 			info:     jetstream.AccountInfo{Tier: limited(30*gib, 6*gib, 0, uint64(2*gib))},

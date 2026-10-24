@@ -16,6 +16,7 @@
  * need"), and `model.test.ts` holds each.
  */
 
+import type { ServicesRun } from "~/app/nav.ts";
 import type {
   AgentRow,
   BudgetWindow,
@@ -25,7 +26,7 @@ import type {
   FeedScheduleRun,
   WorkFlowPoint,
 } from "~/protocol/index.ts";
-import { plural } from "~/lib/format.ts";
+import { plural, toWall } from "~/lib/format.ts";
 
 /** The three windows the screen reads over, and what each is called. */
 export const HOME_RANGES = [
@@ -180,8 +181,9 @@ function weekday(at: string, zone: string | undefined): string {
 }
 
 /** What waits on the reader: the engine's count, whether it is a floor, and
- *  when the longest one began. Null while it is not known — anonymous,
- *  unbound, or not answered yet — which is never drawn as zero. */
+ *  when the longest one began. Null while it is not known (nobody signed in,
+ *  or not answered yet), which is never drawn as zero: an unbound reader is
+ *  somebody, asked under their login like anybody. */
 export interface Waiting {
   count: number;
   floor: boolean;
@@ -223,7 +225,7 @@ export interface Segment {
 /**
  * The one sentence under the greeting, as runs of text.
  *
- * THE ORDER IS PRECEDENCE: a refused token and a lost connection are said
+ * THE ORDER IS PRECEDENCE: a refused session and a lost connection are said
  * before anything the last push claimed, because what was pushed may be stale;
  * an engine running no company is said before a fleet size, because a fleet
  * running nothing is not "running"; a node that shed its seats says so rather
@@ -252,15 +254,16 @@ export function statusSentence(input: {
 }): Segment[] {
   const { company, connected, authRejected, configured, posture, draining, nodes } = input;
   const sole = (text: string): Segment[] => [{ text }];
+  // NOBODY IS SIGNED IN: the browser holds a session or nothing, never a token
+  // to set, so the repair is the sign-in the frame already offers.
   if (authRejected)
-    return sole("The engine refused this browser's token — set one to read the company.");
-  if (!connected)
-    return sole("Not connected to the engine. What is shown is the last state it sent.");
+    return sole("Nobody is signed in on this browser. Sign in to read the company.");
+  if (!connected) return sole("Not connected. Showing the last state received.");
   if (configured === false) return sole("No configuration is active, so no seat is running.");
   if (posture && ["shed", "stuck", "isolated"].includes(posture)) {
     return sole(
       posture === "shed"
-        ? "This node has released its seats: it cannot reach the configuration it should run."
+        ? "This node released its seats. It can’t reach its configuration."
         : "This node cannot converge on the fleet's active configuration.",
     );
   }
@@ -336,15 +339,24 @@ function capitalise(s: string): string {
 /** The feed filter's four settings and the kinds each asks the engine for. */
 export const FEED_FILTERS = [
   { value: "all", label: "Everything", kinds: "" },
-  { value: "completed", label: "Completed", kinds: "completed" },
-  { value: "handoffs", label: "Hand-offs", kinds: "handoff" },
+  // CREWLET WORKS' KINDS, offered only where the company runs it: the engine
+  // keeps a kind only where its half is its own, and refuses one named that
+  // it does not keep.
+  { value: "completed", label: "Completed", kinds: "completed", service: "tracker" },
+  { value: "handoffs", label: "Hand-offs", kinds: "handoff", service: "tracker" },
   { value: "schedules", label: "Schedules", kinds: "schedule" },
 ] as const;
 
 export type FeedFilter = (typeof FEED_FILTERS)[number];
 
-export function feedFilterOf(value: string): FeedFilter {
-  return FEED_FILTERS.find((f) => f.value === value) ?? FEED_FILTERS[0];
+/** The filters a company running `runs` is offered. */
+export function feedFilters(runs: ServicesRun): FeedFilter[] {
+  return FEED_FILTERS.filter((f) => !("service" in f) || runs[f.service]);
+}
+
+/** The filter an address names, among those offered; Everything where it names none of them. */
+export function feedFilterOf(value: string, runs: ServicesRun): FeedFilter {
+  return feedFilters(runs).find((f) => f.value === value) ?? FEED_FILTERS[0];
 }
 
 /**
@@ -457,4 +469,19 @@ export function scheduleVerb(run: FeedScheduleRun): string {
 export function surfaceName(surface: string): string {
   const known: Record<string, string> = { slack: "Slack", mattermost: "Mattermost" };
   return known[surface] ?? surface.charAt(0).toUpperCase() + surface.slice(1);
+}
+
+/**
+ * "Good morning, Jane", in the READER's clock, which is whose morning it is,
+ * and with the first word of their name. A reader nobody named is greeted
+ * without one rather than as "there" or as a token id.
+ *
+ * THE READER'S CLOCK IS THE BROWSER'S ZONE (`toWall`), the same one every
+ * timestamp on the page is drawn in.
+ */
+export function greeting(now: number, name: string): string {
+  const hour = Number(toWall(now).slice(11, 13));
+  const part = hour < 5 ? "evening" : hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
+  const first = name.trim().split(/\s+/)[0] ?? "";
+  return first ? `Good ${part}, ${first}` : `Good ${part}`;
 }

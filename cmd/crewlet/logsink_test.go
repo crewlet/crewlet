@@ -48,13 +48,21 @@ func TestMain(m *testing.M) {
 	if status, ok := codetest.RunHookIfAsked(); ok {
 		os.Exit(status)
 	}
-	// THE CASE THAT RE-EXECUTES THIS BINARY as the node it signals.
-	// Before the sink below, which the child installs for itself: its log
-	// is what the parent reads the order of the shutdown from.
+	// THE THREE CASES THAT RE-EXECUTE THIS BINARY: as the node they stop, by
+	// a signal and by taking its broker connection away, and as the process
+	// a second interrupt kills. Before the sink below, which each node probe
+	// installs for itself: its log is what the parent reads the order of
+	// the shutdown from.
 	if os.Getenv(drainProbeEnv) != "" {
 		runDrainProbe()
 	}
-	logging.Configure(slog.LevelError+1, logging.FormatText, io.Discard)
+	if os.Getenv(lostBrokerProbeEnv) != "" {
+		runLostBrokerProbe()
+	}
+	if os.Getenv(interruptProbeEnv) != "" {
+		runInterruptProbe()
+	}
+	silenceProcessLog()
 	// THE PERSON'S GIT ENVIRONMENT, GONE before any case runs — and only now,
 	// after every dispatch above: the hook and the credential helper are
 	// git's own children and read what git hands them, as in production.
@@ -63,6 +71,35 @@ func TestMain(m *testing.M) {
 		os.Exit(2)
 	}
 	os.Exit(m.Run())
+}
+
+// silenceProcessLog points the process sink at nothing, which is where this
+// suite keeps it between the cases that read it.
+func silenceProcessLog() {
+	logging.Configure(slog.LevelError+1, logging.FormatText, io.Discard)
+}
+
+// keepProcessLog sends the process sink to a buffer of this test's own for the
+// rest of it, and prints what the node logged if the test fails.
+//
+// A FAILURE A NODE EXPLAINS ONLY IN ITS LOG IS OTHERWISE UNREADABLE here: the
+// suite discards the sink ([TestMain]), and a route that keeps its reason out
+// of the response body (a backup's, say) answers a bare code. So a case that
+// drives such a route keeps the log, and a red run carries the reason.
+//
+// Not for a parallel test, since it reconfigures the process-wide logger; and
+// called before the engine is built, so its cleanup runs after the engine has
+// stopped and the lines the stop writes are kept too.
+func keepProcessLog(t *testing.T) {
+	t.Helper()
+	sink := &lockedBuffer{}
+	logging.Configure(slog.LevelDebug, logging.FormatText, sink)
+	t.Cleanup(func() {
+		silenceProcessLog()
+		if t.Failed() {
+			t.Logf("the node's log:\n%s", sink.String())
+		}
+	})
 }
 
 // scrubGitEnv removes from the environment environ lists every variable the
@@ -240,7 +277,7 @@ func TestACommandLogsToTheProcessSinkNotItsCallersWriter(t *testing.T) {
 	var sink bytes.Buffer
 	logging.Configure(slog.LevelInfo, logging.FormatText, &sink)
 	t.Cleanup(func() {
-		logging.Configure(slog.LevelError+1, logging.FormatText, io.Discard)
+		silenceProcessLog()
 	})
 
 	var out, errOut bytes.Buffer

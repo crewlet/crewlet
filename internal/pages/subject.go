@@ -106,7 +106,7 @@ const (
 
 	// KindTrimmed is the trim's record that removes the arbitration
 	// anchors below what the log no longer holds — [statelog.TrimmedKind],
-	// ADR-0032 — on one subject per floor, which the subject's id names.
+	// ADR-0046 — on one subject per floor, which the subject's id names.
 	//
 	// THE FRAMEWORK REMOVES THE ANCHORS, in the transaction that applies
 	// the record; this domain writes nothing for it, and has the case that
@@ -230,7 +230,7 @@ func TrimmedSubject(floor statelog.Position) Subject {
 func TitleSubject(container, title string) Subject {
 	return Subject{
 		Kind: KindTitle,
-		ID:   strings.ToUpper(container) + "." + TitleToken(title),
+		ID:   ContainerKey(container) + "." + TitleToken(title),
 	}
 }
 

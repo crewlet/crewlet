@@ -13,12 +13,19 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iam/credential"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
@@ -69,19 +76,25 @@ func startStatelessPairWith(t *testing.T, amend func(doc string) string,
 	if err != nil {
 		t.Fatalf("company config: %v", err)
 	}
-	data, dataBoot := bootDataMember(t, cfg, model, env)
+	// ONE KEYRING FOR THE PAIR, as for any fleet: the stateless node signs
+	// what it asks of the estate and verifies what it is answered under the
+	// keyring the data member holds, and a node keyed differently is a node
+	// whose every request is refused.
+	ring := fleetRing(t)
+	data, dataBoot := bootDataMember(t, cfg, model, env, ring)
 	data.app, data.server = serveAPI(t, data.engine, dataBoot, nil)
 
 	agentDir := t.TempDir()
-	agentBoot := statelessBootstrap(agentDir, dataBoot)
+	agentBoot := statelessBootstrap(agentDir, dataBoot, ring)
 	agent := bootNode(t, &agentBoot, cfg, model, env)
 	return statelessPair{data: data, agent: agent, agentStore: agentDir, agentBoot: &agentBoot}
 }
 
 // statelessBootstrap is the pair's stateless node, `agent-1`: the seats role
 // alone, a scratch store in dir, and a leaf link to the data member data
-// boots.
-func statelessBootstrap(dir string, data *config.Bootstrap) config.Bootstrap {
+// boots — on the pair's keyring, since a node keyed apart from its data member
+// has every request it makes of the estate refused.
+func statelessBootstrap(dir string, data *config.Bootstrap, ring keyring) config.Bootstrap {
 	boot := config.DefaultBootstrap()
 	boot.Node.ID = "agent-1"
 	boot.Node.Roles = []string{"seats"}
@@ -89,14 +102,18 @@ func statelessBootstrap(dir string, data *config.Bootstrap) config.Bootstrap {
 	boot.Store.Scratch = true
 	boot.Stream.Leaf.URLs = []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", data.Stream.Leaf.Port)}
 	boot.Coordination.Type = config.CoordinationEmbeddedKV
+	ring.hold(&boot)
 	return boot
 }
 
 // dataMemberBootstrap is the pair's data member: a node holding the data, with
-// a leaf listener on port for the stateless node to join through.
-func dataMemberBootstrap(t *testing.T, port int) *config.Bootstrap {
+// a leaf listener on port for the stateless node to join through — on the
+// pair's keyring, serving the fixture's credential ([withCredential]).
+func dataMemberBootstrap(t *testing.T, port int, ring keyring) *config.Bootstrap {
 	t.Helper()
 	boot := config.DefaultBootstrap()
+	ring.hold(&boot)
+	withCredential(t, &boot)
 	boot.Node.ID = "data-a"
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
@@ -121,10 +138,10 @@ func dataMemberBootstrap(t *testing.T, port int) *config.Bootstrap {
 // route listener's [jetstream.ErrRoutePortTaken] among them, since this member
 // is no cluster's and opens no route listener to lose.
 func bootDataMember(t *testing.T, cfg *config.Company, model *scriptedModel,
-	env map[string]string) (*node, *config.Bootstrap) {
+	env map[string]string, ring keyring) (*node, *config.Bootstrap) {
 	t.Helper()
 	for attempt := 1; ; attempt++ {
-		boot := dataMemberBootstrap(t, leafPort(t))
+		boot := dataMemberBootstrap(t, leafPort(t), ring)
 		n, err := newNode(t, nodeOptions(boot, cfg, env), model)
 		switch {
 		case err == nil:
@@ -208,7 +225,7 @@ func TestADataMemberRefusesATakenLeafPortByName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("company config: %v", err)
 	}
-	boot := dataMemberBootstrap(t, held.Addr().(*net.TCPAddr).Port)
+	boot := dataMemberBootstrap(t, held.Addr().(*net.TCPAddr).Port, fleetRing(t))
 	_, err = newNode(t, nodeOptions(boot, cfg, nil), model)
 	if !errors.Is(err, jetstream.ErrLeafPortTaken) {
 		t.Fatalf("a data member on a held leaf port answered %v, want %v", err,
@@ -324,6 +341,87 @@ func TestAStatelessNodesAuditTrailLandsOnADataNode(t *testing.T) {
 	})
 }
 
+// A STATELESS NODE ROUTES BY THE DIRECTORY A DATA NODE HOLDS, so a suspended
+// person's word is never attributed to their seat on a node that wins
+// deliveries and holds no rows of its own.
+//
+// Decided by the wiring [engine.New] gives a node without `data`, on the real
+// engine at both ends of a real leaf link, because that wiring is the whole of
+// the guarantee: such a node runs no applier, so nothing would ever signal its
+// party registry that a seat's standing moved, and the one way it learns is
+// the directory [engine.New] hands it — a data node's, read through the
+// estate's router on the registry's own timer ([engine.DirectoryRefresh]).
+// Handed none, it builds the chart-only registry, which routes every suspended,
+// retired and removed holder's accounts for as long as the node runs.
+//
+// The suspension is written on the DATA node and observed on the stateless
+// one, so the reading below can only have crossed the leaf.
+//
+// Mutation: drop New's hand-over of the routed directory to a node without
+// `data` and the first assertion fails at once — the registry consulted no
+// directory — and the suspension never reaches it.
+func TestAStatelessNodesPartyRegistryReadsTheDirectory(t *testing.T) {
+	t.Parallel()
+	p := startStatelessPair(t)
+	agent := p.agent.engine
+	standing := func() string {
+		if reg := agent.Registry(); reg != nil {
+			s := reg.Standing()
+			return fmt.Sprintf("consulted=%v unread=%v withheld=%v",
+				s.Consulted(), s.Unread(), s.Withheld())
+		}
+		return "no registry"
+	}
+
+	// BUILT FROM A READING FROM THE FIRST REGISTRY ON: a node with no
+	// directory to read is chart-only, which is the defect. Unread is a
+	// reading — the fail-closed one — so it passes here; the suspension
+	// below is what proves a read through a data node lands.
+	if reg := agent.Registry(); reg == nil || !reg.Standing().Consulted() {
+		t.Fatalf("the stateless node's party registry was built from no "+
+			"directory (%s): a node without `data` would route a suspended "+
+			"person's word to their seat", standing())
+	}
+
+	// THE FOUNDER, created on their seat and then suspended, on the data
+	// node — which is the only node holding the rows either record lands in.
+	writer := p.data.engine.IAMWriter().As(iam.Principal{
+		Login: iam.TokenLogin(e2eTokenID), Kind: iam.KindMachine,
+		Grants: []iam.Grant{iam.GrantAdmin},
+	})
+	key, err := uuid.NewV7()
+	if err != nil {
+		t.Fatal(err)
+	}
+	founder, err := iamdomain.CreatedPersonID(key.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Create(t.Context(), iamdomain.Creation{
+		PersonID: founder, Kind: iam.KindPerson, Stage: iam.StageActive,
+		Name: "Jane Doe", Email: janeAddress, Login: janeLogin, Seat: janeSeat,
+		LinkExpiresAt: time.Now().Add(credential.EnrolmentLinkLifetime),
+		OpID:          key.String(), Reason: "the stateless directory case",
+	}); err != nil {
+		t.Fatalf("create the founder on the data node: %v", err)
+	}
+	if _, err := writer.SetStage(t.Context(), founder, iam.StageSuspended,
+		statelog.NewOpID(time.Now(), "suspend"), "the stateless directory case"); err != nil {
+		t.Fatalf("suspend the founder on the data node: %v", err)
+	}
+
+	// AND THE STATELESS NODE WITHHOLDS THEIR SEAT, within one net of the
+	// suspension landing — a reading nothing on this node could have made.
+	waitFor(t, "the stateless node to withhold the suspended founder's seat", func() bool {
+		why, withheld := agent.Registry().Withholding(janeSeat)
+		return withheld && why == notify.WithheldSuspended
+	}, standing)
+	if _, routes := agent.Registry().ByExternalID("slack", "U0FOUNDER"); routes {
+		t.Error("the stateless node still attributes the suspended founder's " +
+			"Slack account to their seat")
+	}
+}
+
 // A NODE THAT SERVES NO API CAN STILL BE PROBED, and its readiness is whether
 // it is doing its work. A stateless node binds no API, no dashboard and no
 // webhook — so an orchestrator running it had no way to restart one that
@@ -433,6 +531,7 @@ func TestANodeAdmissionDoesNotApplyToIsReadyOnItsPresence(t *testing.T) {
 			boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 			boot.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 			boot.Coordination.Type = config.CoordinationEmbeddedKV
+			withKeyring(t, &boot)
 			n := bootNodeWith(t, engine.Options{
 				Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation, Mode: tc.mode,
 				Environment: nodeEnvironment(nil),

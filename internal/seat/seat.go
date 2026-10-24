@@ -1,10 +1,12 @@
 // Package seat is which seats this node runs, and how it comes to run them.
 //
 // A seat is an agent's chair in the org: its turns, its per-role MCP
-// children and its inbox consumer all belong to whoever holds
-// seat:{handle}. This package is the placement half — claiming, holding and
-// letting go. What a node DOES with an owned seat is the engine's business,
-// and it arrives here as [Hooks].
+// children and its inbox consumer all belong to whoever holds seat:{id} — the
+// lease named by the agent id derived from the seat's handle (ADR-0013), the
+// id its mailbox is named by too ([placement.Seat.ID]). The handle is what
+// every log line, hook and local map calls the seat. This package is the
+// placement half — claiming, holding and letting go. What a node DOES with an
+// owned seat is the engine's business, and it arrives here as [Hooks].
 //
 // # The policy is deliberately dumb
 //
@@ -358,7 +360,7 @@ type Hooks interface {
 	// (ReasonAcquireFailed) and backs this node off it for one TTL, because
 	// a takeover that failed would otherwise read as owned to the whole
 	// fleet while nothing runs it.
-	OnAcquire(ctx context.Context, handle string, lease coord.Lease) error
+	OnAcquire(ctx context.Context, seat placement.Seat, lease coord.Lease) error
 
 	// OnEstablished reports that a seat OnAcquire returned for is
 	// ESTABLISHED: from this call on, [Host.MayStart] admits turns on it.
@@ -377,7 +379,7 @@ type Hooks interface {
 	// stopped establishing, under the seat's own lock like OnAcquire. It
 	// cannot fail the acquisition — the seat is already serving — so it
 	// returns nothing; anything it does that can fail is its own to retry.
-	OnEstablished(ctx context.Context, handle string, lease coord.Lease)
+	OnEstablished(ctx context.Context, seat placement.Seat, lease coord.Lease)
 
 	// OnRelease tears the seat down. The reason decides whether in-flight
 	// work is finished or abandoned — see [ReleaseReason].
@@ -391,7 +393,7 @@ type Hooks interface {
 	// while still serving it. There is no second error kind for "expected"
 	// failure: an unexpected failure is no more proof of teardown than an
 	// expected one, so both land in the same place.
-	OnRelease(ctx context.Context, handle string, lease coord.Lease, reason ReleaseReason) error
+	OnRelease(ctx context.Context, seat placement.Seat, lease coord.Lease, reason ReleaseReason) error
 
 	// OnAdmission reports that ownership of a HELD seat became unprovable,
 	// or provable again. Only for seats this node keeps — a seat it loses
@@ -411,49 +413,49 @@ type Hooks interface {
 	// one call, not one per heartbeat. Errors are logged and swallowed —
 	// this runs inside the heartbeat, which is what keeps every OTHER seat
 	// on this node alive.
-	OnAdmission(ctx context.Context, handle string, admitted bool) error
+	OnAdmission(ctx context.Context, seat placement.Seat, admitted bool) error
 }
 
 // HookFuncs adapts plain functions to [Hooks]. A nil field is a hook that
 // does nothing, so a caller that only cares about acquire and release writes
 // only those two.
 type HookFuncs struct {
-	Acquire     func(ctx context.Context, handle string, lease coord.Lease) error
-	Established func(ctx context.Context, handle string, lease coord.Lease)
-	Release     func(ctx context.Context, handle string, lease coord.Lease, reason ReleaseReason) error
-	Admission   func(ctx context.Context, handle string, admitted bool) error
+	Acquire     func(ctx context.Context, seat placement.Seat, lease coord.Lease) error
+	Established func(ctx context.Context, seat placement.Seat, lease coord.Lease)
+	Release     func(ctx context.Context, seat placement.Seat, lease coord.Lease, reason ReleaseReason) error
+	Admission   func(ctx context.Context, seat placement.Seat, admitted bool) error
 }
 
 // OnAcquire implements [Hooks].
-func (h HookFuncs) OnAcquire(ctx context.Context, handle string, lease coord.Lease) error {
+func (h HookFuncs) OnAcquire(ctx context.Context, seat placement.Seat, lease coord.Lease) error {
 	if h.Acquire == nil {
 		return nil
 	}
-	return h.Acquire(ctx, handle, lease)
+	return h.Acquire(ctx, seat, lease)
 }
 
 // OnEstablished implements [Hooks].
-func (h HookFuncs) OnEstablished(ctx context.Context, handle string, lease coord.Lease) {
+func (h HookFuncs) OnEstablished(ctx context.Context, seat placement.Seat, lease coord.Lease) {
 	if h.Established == nil {
 		return
 	}
-	h.Established(ctx, handle, lease)
+	h.Established(ctx, seat, lease)
 }
 
 // OnRelease implements [Hooks].
-func (h HookFuncs) OnRelease(ctx context.Context, handle string, lease coord.Lease, reason ReleaseReason) error {
+func (h HookFuncs) OnRelease(ctx context.Context, seat placement.Seat, lease coord.Lease, reason ReleaseReason) error {
 	if h.Release == nil {
 		return nil
 	}
-	return h.Release(ctx, handle, lease, reason)
+	return h.Release(ctx, seat, lease, reason)
 }
 
 // OnAdmission implements [Hooks].
-func (h HookFuncs) OnAdmission(ctx context.Context, handle string, admitted bool) error {
+func (h HookFuncs) OnAdmission(ctx context.Context, seat placement.Seat, admitted bool) error {
 	if h.Admission == nil {
 		return nil
 	}
-	return h.Admission(ctx, handle, admitted)
+	return h.Admission(ctx, seat, admitted)
 }
 
 var _ Hooks = HookFuncs{}

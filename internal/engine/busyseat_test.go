@@ -17,7 +17,6 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/memory"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -130,7 +129,7 @@ func runBusySeat(t *testing.T, q queue.EventQueue) {
 		Park: func(ctx context.Context, handle string, evs []*events.Event) error {
 			parked.Add(1)
 			for _, ev := range evs {
-				if err := q.Publish(ctx, topics.AgentInbox(handle), ev); err != nil {
+				if err := q.Publish(ctx, fixtureInbox(handle), ev); err != nil {
 					return err
 				}
 			}
@@ -138,7 +137,7 @@ func runBusySeat(t *testing.T, q queue.EventQueue) {
 		},
 		NoteDeferred: func(string) {},
 	}
-	if err := q.Subscribe(ctx, topics.AgentInbox("swe"), topics.AgentInboxGroup("swe"),
+	if err := q.Subscribe(ctx, fixtureInbox("swe"), fixtureInboxGroup("swe"),
 		func(ctx context.Context, ev *events.Event) queue.Result {
 			dispatched.Add(1)
 			return d.Dispatch(ctx, "swe", []*events.Event{ev})
@@ -152,7 +151,7 @@ func runBusySeat(t *testing.T, q queue.EventQueue) {
 	// and its announcement never closes. Mail arriving in it is what used to
 	// run a turn beside the job.
 	if _, err := coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
-		Turn: sandbox.TurnRef{TurnID: "t1", AgentID: "a-1", AgentHandle: "swe", Role: "SWE",
+		Turn: sandbox.TurnRef{TurnID: "t1", AgentID: fixtureSeat("swe").String(), AgentHandle: "swe", Role: "SWE",
 			WorkKey: "wk-1", WorkSince: time.Now().UTC(),
 			ConversationKey: "slack:C1:1.0", PartitionKey: "slack:C1:1.0", Reply: "tool"},
 		Brief: "fix the flaky test", Task: "get CI green",
@@ -170,7 +169,7 @@ func runBusySeat(t *testing.T, q queue.EventQueue) {
 
 	// MAIL ARRIVES WHILE THE JOB RUNS, its start still unannounced.
 	for _, body := range []string{"is it done yet?", "also, the docs"} {
-		if err := q.Publish(ctx, topics.AgentInbox("swe"), threadReply(body)); err != nil {
+		if err := q.Publish(ctx, fixtureInbox("swe"), threadReply(body)); err != nil {
 			t.Fatalf("Publish: %v", err)
 		}
 	}

@@ -205,13 +205,18 @@ func BenchmarkApplierDrain(b *testing.B) {
 
 // appendBurst lands n probe records on q's probe log, each on a subject of its
 // own, as peers' writes would have — straight onto the log, through no
-// publisher — and answers the position of the last.
+// publisher, but SIGNED as a peer's publisher signs them, since a wired node's
+// applier opens every frame — and answers the position of the last.
 func appendBurst(b *testing.B, q *js.Queue, n int) statelog.Position {
 	b.Helper()
 	spec := ensureWiredLog(b, q)
 	log, err := q.DomainLog(b.Context(), spec.Name)
 	if err != nil {
 		b.Fatalf("open the log: %v", err)
+	}
+	signer, err := statelog.NewSigner(probeDomain{}.Name(), testRing())
+	if err != nil {
+		b.Fatalf("NewSigner: %v", err)
 	}
 	var last uint64
 	for i := range n {
@@ -220,7 +225,8 @@ func appendBurst(b *testing.B, q *js.Queue, n int) statelog.Position {
 		record := probeRecord(statelog.Stamp{Gen: 1, Writer: "node-w"}, subject,
 			statelog.ScopeSet{Paths: []string{subject.String()}}, opID, "drain")
 		if last, _, err = log.Append(b.Context(),
-			topics.LogSubject(spec.SubjectPrefix, subject.Kind, subject.ID), opID, nil, record); err != nil {
+			topics.LogSubject(spec.SubjectPrefix, subject.Kind, subject.ID), opID, nil,
+			signer.Seal(record)); err != nil {
 			b.Fatalf("append record %d of the burst: %v", i, err)
 		}
 	}

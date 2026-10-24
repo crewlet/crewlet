@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -64,8 +65,7 @@ func TestAFirstCompanyWithASandboxBringsTheCoordinatorUpWithoutARestart(t *testi
 	// company at all: its recovery is part of what the apply has to bring.
 	seedRunningRun(t, e, "wk-before", "box-1")
 
-	status, applied, err := e.Apply(t.Context(),
-		parseCompany(t, sandboxDoc("")), time.Date(2026, 3, 2, 10, 0, 0, 0, time.UTC))
+	status, applied, err := e.Apply(t.Context(), parseCompany(t, sandboxDoc("")), time.Now())
 	if err != nil || status != configplane.StatusOK {
 		t.Fatalf("Apply = (%s, %v, %v), want ok", status, applied, err)
 	}
@@ -303,8 +303,7 @@ roles:
       enabled: true
       run_in: e2b
 `
-	status, applied, err := e.Apply(t.Context(), parseCompany(t, broken),
-		time.Date(2026, 3, 2, 10, 0, 0, 0, time.UTC))
+	status, applied, err := e.Apply(t.Context(), parseCompany(t, broken), time.Now())
 	if err == nil || status != configplane.StatusError {
 		t.Fatalf("Apply = (%s, %v, %v), want a refusal", status, applied, err)
 	}
@@ -322,7 +321,7 @@ roles:
 // was itself fine, with the runtime already published and no poll behind it.
 func TestAPollIntervalNoDutyAdmitsIsRefusedAtBootWithoutASandbox(t *testing.T) {
 	t.Parallel()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	dir := t.TempDir()
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(dir, "stream")
@@ -390,7 +389,7 @@ func sandboxNode(t *testing.T, company *config.Company) *Engine {
 // listening before the node takes a seat.
 func newSandboxNode(t testing.TB, company *config.Company) *Engine {
 	t.Helper()
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	dir := t.TempDir()
 	b.Store.Path = filepath.Join(dir, "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(dir, "stream")
@@ -399,7 +398,6 @@ func newSandboxNode(t testing.TB, company *config.Company) *Engine {
 	RequireNodeGit(t, &b, company)
 	e, err := New(t.Context(), Options{
 		Bootstrap: &b, Company: company,
-		ActivatedAt:         time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
 		SandboxPollInterval: 50 * time.Millisecond,
 	})
 	if err != nil {
@@ -428,8 +426,7 @@ func parseCompany(t testing.TB, doc string) *config.Company {
 // went through.
 func applyOK(t *testing.T, e *Engine, doc string) []string {
 	t.Helper()
-	status, applied, err := e.Apply(t.Context(), parseCompany(t, doc),
-		time.Now().UTC())
+	status, applied, err := e.Apply(t.Context(), parseCompany(t, doc), time.Now())
 	if err != nil || status != configplane.StatusOK {
 		t.Fatalf("Apply = (%s, %v, %v), want ok", status, applied, err)
 	}
@@ -443,9 +440,12 @@ func seedRunningRun(t *testing.T, e *Engine, turnID, sandboxID string) {
 	t.Helper()
 	store := sandbox.NewCoordStore(e.backends.Fleet)
 	ctx := t.Context()
+	// THE SEAT'S ID, as every launch records it: what a reply handed back
+	// is published to, the seat's inbox being named by it (ADR-0013).
+	agentID, _ := org.DeriveAgentID("Nimbus", "swe")
 	if _, err := store.BeginLaunch(ctx, sandbox.PendingRun{
-		TurnID: turnID, AgentHandle: "swe", Role: "SWE", CodingAgent: "claude-code",
-		CreatedAt: time.Now().UTC(),
+		TurnID: turnID, AgentID: agentID.String(), AgentHandle: "swe", Role: "SWE",
+		CodingAgent: "claude-code", CreatedAt: time.Now().UTC(),
 	}, sandbox.Fence{}); err != nil {
 		t.Fatalf("BeginLaunch: %v", err)
 	}

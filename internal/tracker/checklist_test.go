@@ -215,9 +215,8 @@ func TestApplyChecklist(t *testing.T) {
 			intent: tracker.ChecklistIntent{Op: "tick", Item: "flag"},
 			refuse: "not a checklist gesture",
 		},
-		// A PROMOTION IS THE SEQUENCE'S OWN STEP ([tracker.PromoteIntent]),
-		// never a gesture: resolved as one it would re-point an item that
-		// already became another task.
+		// A PROMOTION IS NO GESTURE AT ALL: an item becomes a task by
+		// filing one, and nothing marks a line as having become it.
 		"a promotion": {
 			lists:  launchList(),
 			intent: tracker.ChecklistIntent{Op: "promote", Item: "flag"},

@@ -64,7 +64,7 @@ type TaskTurn struct {
 	// Ordinal is the task's own count: "Turn n". Zero for a turn with no
 	// counted segment on this task.
 	Ordinal int `json:"ordinal"`
-	// Seat is the handle whose turn it was.
+	// Seat is the seat whose turn it was, by its handle.
 	Seat string `json:"seat"`
 	// Trigger is what woke it.
 	Trigger string `json:"trigger,omitempty"`
@@ -110,6 +110,9 @@ type TaskTurns struct {
 	// caller used.
 	Task string `json:"item"`
 	Key  string `json:"key"`
+	// KeyCollision is the task's [TaskRow.KeyCollision] — its key opens
+	// another task, so it is reached by [TaskTurns.Task]; see [ItemAddress].
+	KeyCollision bool `json:"key_collision,omitempty"`
 
 	Turns []TaskTurn `json:"turns"`
 	// Next is the cursor the next page resumes from; empty at the end.
@@ -160,11 +163,13 @@ func (r *Reader) TurnsOf(ctx context.Context, idOrKey, cursor string, limit int,
 			return err
 		}
 		var project string
+		var collision int
 		if err = tx.QueryRowContext(ctx,
-			`SELECT key, project_key FROM tracker_tasks WHERE id = ?`, id).
-			Scan(&out.Key, &project); err != nil {
+			`SELECT key, key_collision, project_key FROM tracker_tasks WHERE id = ?`, id).
+			Scan(&out.Key, &collision, &project); err != nil {
 			return fmt.Errorf("tracker: read task %s for its turns: %w", id, err)
 		}
+		out.KeyCollision = collision == 1
 		out.Task = id
 		turns, next, err := readTaskTurns(ctx, tx, id, below, limit)
 		if err != nil {

@@ -36,9 +36,10 @@ class InertWebSocket {
 }
 
 const JANE = {
-  operator_id: "U0FOUNDER",
-  operator: true,
+  login: "U0FOUNDER",
+  grants: ["admin", "tracker", "knowledge"],
   handle: "jane",
+  owner: "jane",
   name: "Jane Founder",
   kind: "human",
   acts: ["place_work_item", "update_work_item"],
@@ -118,7 +119,7 @@ function client(viewer: Record<string, unknown>, agents: Record<string, unknown>
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 1 }));
   store.applyOrg(withDerived(ORG) as never);
-  store.applyAgents(agents as never);
+  store.applySeats(agents as never);
   const socket = new LiveSocket(store);
   const asked: { kind: string; params: Record<string, unknown> }[] = [];
   const answers: Record<string, unknown> = { viewer };
@@ -228,15 +229,17 @@ describe("the card", () => {
   test("a running turn and a run waiting on the reader each say so in words", async () => {
     mountBoard({
       props: {
+        // KEYED ON EACH TASK'S ID, as the screen builds them (`liveOnItems`):
+        // a key two tasks hold would put one turn on both cards.
         facts: {
           live: new Map([
             [
-              "ENG-1",
+              "eng-1",
               { handle: "swe", doing: "executing · round 7 of 20", since: "2031-04-16T11:54:00Z" },
             ],
           ]),
-          waiting: new Map([["ENG-3", { since: "2031-04-16T11:22:00Z" }]]),
-          ring: () => undefined,
+          waiting: new Map([["eng-3", { since: "2031-04-16T11:22:00Z" }]]),
+          status: () => undefined,
         },
       },
     });
@@ -535,13 +538,13 @@ describe("moving a card", () => {
     mountBoard({ movable: false });
     await settle();
     expect(cardOf("ENG-1").getAttribute("draggable")).toBeNull();
-    expect(screen.queryByText(/Cards move in the manual order/)).toBeNull();
+    expect(screen.queryByText(/Sort by Manual to drag cards/)).toBeNull();
     fireEvent.keyDown(cardOf("ENG-1"), { key: "ArrowRight", altKey: true });
     await settle();
     expect(posted).toEqual([]);
-    expect(screen.getByText(/Cards move in the manual order/)).toBeTruthy();
+    expect(screen.getByText(/Sort by Manual to drag cards/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-    expect(screen.queryByText(/Cards move in the manual order/)).toBeNull();
+    expect(screen.queryByText(/Sort by Manual to drag cards/)).toBeNull();
   });
 
   test("a pointer drag outside the manual order is caught and answered", async () => {
@@ -552,7 +555,7 @@ describe("moving a card", () => {
       cardOf("ENG-1").dispatchEvent(start);
     });
     expect(start.defaultPrevented).toBe(true);
-    expect(screen.getByText(/Cards move in the manual order/)).toBeTruthy();
+    expect(screen.getByText(/Sort by Manual to drag cards/)).toBeTruthy();
   });
 });
 
@@ -565,11 +568,6 @@ describe("moving a card", () => {
 // board.
 describe.each([
   { who: "an anonymous reader", viewer: { anonymous: true }, reason: WRITE_REASONS.anonymous },
-  {
-    who: "an unbound token",
-    viewer: { operator_id: "ci", operator: true, handle: "", unbound: true },
-    reason: WRITE_REASONS.unbound,
-  },
   {
     who: "a person the engine does not move cards for",
     viewer: { ...JANE, acts: ["update_work_item"] },
@@ -621,6 +619,7 @@ describe("the board on the work screen", () => {
   }
 
   const working = (item: string, key = "ENG-9") => ({
+    agent_id: "swe",
     id: "swe",
     role: "SWE",
     handle: "swe",
@@ -657,7 +656,9 @@ describe("the board on the work screen", () => {
     await settle();
     const before = c.asked.filter((a) => a.kind === "work_items").length;
     act(() =>
-      c.store.applyAgents([{ id: "swe", role: "SWE", handle: "swe", activity: "idle" }] as never),
+      c.store.applySeats([
+        { agent_id: "swe", id: "swe", role: "SWE", handle: "swe", activity: "idle" },
+      ] as never),
     );
     await settle();
     expect(c.asked.filter((a) => a.kind === "work_items").length).toBeGreaterThan(before);
@@ -692,7 +693,7 @@ describe("a lane's +", () => {
   test("names its lane and hands the screen what files into it", async () => {
     const added: NewTaskPreset[] = [];
     mountBoard({
-      viewer: { operator_id: "", operator: false, handle: "", name: "", acts: [] },
+      viewer: { login: "", grants: [], handle: "", owner: "", name: "", acts: [] },
       props: { onAdd: (preset) => added.push(preset) },
     });
     await settle();

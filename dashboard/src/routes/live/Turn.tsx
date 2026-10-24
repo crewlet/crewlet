@@ -49,13 +49,14 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
-import { turnHandleKey, turnSeatKey } from "~/app/crumbs.ts";
+import { avatarLabel, seatAvatarKey, turnHandleKey, turnSeatKey } from "~/app/crumbs.ts";
 import { ObjectTabs } from "~/app/frame/ObjectTabs.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { CoverageNote } from "~/components/CoverageNote.tsx";
 import { PauseSeatButton, SteerTurnButton } from "~/components/writes.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { roundOf } from "~/lib/seats.ts";
+import type { AgentAvatar } from "~/lib/avatar.ts";
+import { roundOf, useSeatBadgeOf } from "~/lib/seats.ts";
 import { buildWaterfall, phaseLabel, type Span } from "~/lib/waterfall.ts";
 import { screenScroller } from "~/lib/scroller.ts";
 import { pathOf } from "~/app/frame/objects.ts";
@@ -81,6 +82,9 @@ import {
   useToast,
   writeClipboard,
   type MenuItem,
+  CopyButton,
+  downloadText,
+  InlineCode,
 } from "@crewlethq/ui";
 import {
   BookOpenGlyph,
@@ -101,14 +105,10 @@ import {
   SaveGlyph,
   SquareTerminalGlyph,
 } from "@crewlethq/icons/glyphs";
-// STILL OURS, EACH FOR ITS OWN REASON. `CopyButton` is a bare ACTION over
-// text derived at press time — `Copyable` renders the value it copies and is
-// named by it — and `downloadText` is the file save behind `DownloadButton`,
-// for a menu item: nothing over there saves a file at all.
 // `PhaseTag` has a real peer (`Tag` carries the three phase variants), but it
 // is a primitive in `~/ui`, so porting it is that file's half rather than a
 // copy inlined into a route. See the report.
-import { CopyButton, downloadText, PhaseTag, uiletTone, type Tone } from "~/ui/primitives.tsx";
+import { PhaseTag, uiletTone, type Tone } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import {
   fmtBytes,
@@ -151,11 +151,14 @@ import {
 import { TURN_STOP } from "~/contract/turnbands.ts";
 import { useAgents, useConnection, useEvents, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { seatOnTurn, UNSETTLED, WATCH_TAB } from "~/lib/turns.ts";
+import { itemAddress, turnItem } from "~/lib/work.ts";
 import type {
   EventEnvelope,
   EventRecord,
   FeedRow,
   LiveCall,
+  LogRefusal,
+  QueryRefusal,
   TurnRow,
   TurnStage,
   WorkItemRef,
@@ -318,6 +321,8 @@ export interface TurnView {
   turnId: string;
   loading: boolean;
   error: string | null;
+  /** What the refusal said beyond its code — see `useQuery`. */
+  refusal: QueryRefusal | LogRefusal | null;
   /** Oldest first: a turn is read forwards. */
   events: EventRecord[];
   /** The store stopped at its per-turn cap, so what is missing is the MIDDLE. */
@@ -424,7 +429,7 @@ export function useTurnView(turnId: string): TurnView {
   // GUARDED ON THE ID. A rail is opened from a pasted `peek=turn:` as often as
   // from a row, and an empty one would ask the engine for a turn with no id
   // and be refused on the way in.
-  const { data, loading, error, refetch } = useQuery(
+  const { data, loading, error, refusal, refetch } = useQuery(
     "turn",
     { turn_id: turnId },
     { enabled: turnId !== "" },
@@ -615,8 +620,15 @@ export function useTurnView(turnId: string): TurnView {
           field(opened, "work_item") ??
           liveCall?.work_item ??
           null) as WorkItemRef | null);
-  const role = phases[0]?.role ?? (rec.summary?.actor || str(opened, "role"));
-  const seat = seatRow ?? agents.find((a) => a.role === role);
+  // WHOSE TURN, by the AGENT ID its phases (or its own records) name, paired
+  // with the roster by that id. Never by the role NAME, which namesakes share:
+  // a second "Engineer" was drawn as the first one's turn.
+  const agentId =
+    phases.find((p) => p.agentId)?.agentId ||
+    str(rec.summary, "agent_id") ||
+    str(opened, "agent_id");
+  const seat = seatRow ?? (agentId ? agents.find((a) => a.agent_id === agentId) : undefined);
+  const role = seat?.role || phases[0]?.role || rec.summary?.actor || str(opened, "role");
   const startedAt =
     tsKey(str(opened, "started_at")) ||
     (seatRow?.turn?.turn_id === turnId ? tsKey(seatRow.turn.started_at) : 0);
@@ -648,6 +660,7 @@ export function useTurnView(turnId: string): TurnView {
     turnId,
     loading,
     error,
+    refusal,
     events,
     cut,
     attempt,
@@ -731,7 +744,7 @@ function wokeBy(view: TurnView): string {
  * `v1.2` and `mattermost_post_message` whole — a bare `.` split every one of
  * them. Prose with no boundary at all is returned as it stands: a summary that
  * is one long sentence is still one sentence, and the two-line clamp on
- * `.object-title` is what bounds that case, because a cut mid-clause reads as
+ * `.crewlet-object-header__title` is what bounds that case, because a cut mid-clause reads as
  * a broken string rather than as a short title.
  */
 export function lead(prose: string): string {
@@ -817,7 +830,14 @@ function tokenNote(view: TurnView): string | undefined {
 export function turnFacts(
   view: TurnView,
   now: number = Date.now(),
-  { seat = false }: { seat?: boolean } = {},
+  {
+    seat = false,
+    avatar,
+  }: {
+    seat?: boolean;
+    /** How the seat's agent is drawn, where the chart holds it. */
+    avatar?: AgentAvatar | null;
+  } = {},
 ): Fact[] {
   const counted = view.own.length > 0;
   const { from, to, timed } = view.span;
@@ -837,7 +857,12 @@ export function turnFacts(
           {
             label: "Seat",
             value: view.role ? (
-              <SeatChip name={view.role} handle={view.handle || view.role} kind="agent" />
+              <SeatChip
+                name={view.role}
+                handle={view.handle || view.role}
+                kind="agent"
+                avatar={avatar}
+              />
             ) : (
               "the engine"
             ),
@@ -953,7 +978,7 @@ function turnStatus(view: TurnView, now: number): ReactNode {
     <>
       {view.running &&
         (view.parked ? (
-          <Tag variant="warning" dot title="the turn is parked on a coding run it launched">
+          <Tag variant="warning" dot>
             Parked on a coding run{elapsed}
           </Tag>
         ) : (
@@ -987,10 +1012,7 @@ function turnStatus(view: TurnView, now: number): ReactNode {
       {attempt && (
         <Tag
           appearance="outline"
-          title={
-            `attempt ${attempt.index} of ${attempt.total} at this trigger — a turn ` +
-            `that fails without reaching outside the engine is redelivered and runs again`
-          }
+          title={`Attempt ${attempt.index} of ${attempt.total} for this trigger`}
         >
           attempt {attempt.index}/{attempt.total}
         </Tag>
@@ -1003,11 +1025,7 @@ function turnStatus(view: TurnView, now: number): ReactNode {
         </Tag>
       )}
       {view.clean && (
-        <Tag
-          variant="success"
-          leadingIcon={<CheckGlyph size="xs" />}
-          title="no guard fired, no provider fell through, no call was refused"
-        >
+        <Tag variant="success" leadingIcon={<CheckGlyph size="xs" />}>
           nothing went wrong
         </Tag>
       )}
@@ -1015,7 +1033,7 @@ function turnStatus(view: TurnView, now: number): ReactNode {
         <Tag
           variant="warning"
           leadingIcon={<TriangleAlertGlyph size="xs" />}
-          title="the store stopped at its per-turn cap; this view holds the turn's opening and its ending, and not the middle"
+          title="The turn was too long to show in full"
         >
           middle not shown
         </Tag>
@@ -1114,7 +1132,7 @@ function TurnBrief({ view, omit }: { view: TurnView; omit?: string }) {
 }
 
 /**
- * What went INTO the prompt, from both directions: the seven context blocks the
+ * What went INTO the prompt, from both directions: the six context blocks the
  * executor's prompt was assembled from, and what each phase's prompt then came
  * to. Two halves of one question — whether a heavy prompt is heavy because of
  * what was prefetched or in spite of it — and either alone leaves it open.
@@ -1146,18 +1164,12 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
   const empty = blocks.filter((b) => !b.hit && !b.gated);
   return (
     <Card padding="sm">
-      <Card.Header
-        icon={<BookOpenGlyph size="sm" />}
-        subtitle="the context blocks its prompt was assembled from, and what each phase's prompt weighed"
-      >
+      <Card.Header icon={<BookOpenGlyph size="sm" />} subtitle="What each prompt was built from">
         <Card.Title>What the turn was given</Card.Title>
       </Card.Header>
       <div className="col gap-2">
         {blocks.length === 0 && (
-          <span className="t-caption">
-            No prefetch record for this turn, so there is no breakdown of where the prompt&rsquo;s
-            context came from — only what each phase&rsquo;s prompt came to.
-          </span>
+          <span className="t-caption">No context breakdown for this turn.</span>
         )}
         {blocks.length > 0 && got.length > 0 ? (
           <div className="num-block">
@@ -1212,16 +1224,14 @@ function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWe
         ) : (
           blocks.length > 0 && (
             <span className="t-caption measure">
-              The prompt was built from the seat&rsquo;s own identity and this turn&rsquo;s trigger
-              alone — no stored context reached it.
+              Built from the seat&rsquo;s identity and the trigger only.
             </span>
           )
         )}
         {gated.length > 0 && (
           <Callout variant="neutral">
-            Not searched: {list(gated.map((b) => b.label))}. The trigger was a bare pointer, so
-            these filters were skipped — the executor searches later with{" "}
-            <code className="inline">search_knowledge</code>, once it knows what the task needs.
+            Not searched: {list(gated.map((b) => b.label))}. The agent searches later when it needs
+            to.
           </Callout>
         )}
         {empty.length > 0 && (
@@ -1317,10 +1327,7 @@ function PromptWeights({ rows }: { rows: PromptWeight[] }) {
                   User columns are legitimately 0, because a re-entered phase
                   opens no conversation. */}
               {w.resumed && (
-                <span
-                  className="t-caption"
-                  title="the phase was re-entered with the conversation it parked on a coding run"
-                >
+                <span className="t-caption" title="Resumed after its coding run">
                   resumed
                 </span>
               )}
@@ -1333,7 +1340,7 @@ function PromptWeights({ rows }: { rows: PromptWeight[] }) {
               </span>
               <span
                 className="mono t-num t-caption num-col"
-                title="bytes of conversation a resumed phase re-entered"
+                title="Size of the resumed conversation"
               >
                 {fmtBytes(w.messageBytes)}
               </span>
@@ -1406,7 +1413,7 @@ function TurnEventRow({ run, actor }: { run: Run; actor: string }) {
         count > 1
           ? `${count} identical events, ${fmtDateTime(event.timestamp)} to ${fmtDateTime(
               last.timestamp,
-            )} — this opens the first`
+            )}. Opens the first.`
           : fmtDateTime(event.timestamp)
       }
     >
@@ -1584,11 +1591,7 @@ function ParkedRun({ turnId, run, now }: { turnId: string; run: Span | null; now
     <Card padding="sm">
       <Card.Header
         icon={<SquareTerminalGlyph size="sm" />}
-        subtitle={
-          run?.sub
-            ? `${run.sub} — the turn is parked on it until it is collected`
-            : "the turn is parked on it until it is collected"
-        }
+        subtitle={run?.sub || undefined}
         actions={
           <a className="t-link" href={href(pathOf({ kind: "run", id: turnId }))}>
             Open the run
@@ -1605,9 +1608,7 @@ function ParkedRun({ turnId, run, now }: { turnId: string; run: Span | null; now
         // THE PARK IS PUSHED BEFORE THE ANNOUNCEMENT IS READ: the stage moves
         // on the agents push and the page asks for the turn again on it, so
         // for a moment the run is known to be out and not yet which one.
-        <span className="t-caption">
-          Reading which run it launched — its live output is drawn here once the announcement is in.
-        </span>
+        <span className="t-caption">Finding its coding run…</span>
       )}
     </Card>
   );
@@ -1639,7 +1640,8 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // the prompt weights, every trace the turn touched, and the JSON somebody
   // attaches to a bug report.
   const view = useTurnView(turnId);
-  const { loading, error, events, cut, attempt, phases, own, nested, rec, role } = view;
+  const badgeOf = useSeatBadgeOf();
+  const { loading, error, refusal, events, cut, attempt, phases, own, nested, rec, role } = view;
   const { running, durationMs, story } = view;
   const [tab, setTab] = useTab<TurnTab>("tab", TURN_TABS);
   const [span, setSpan] = useParam("span", "", "filter");
@@ -1704,17 +1706,17 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // THE TRAIL: Live › {agent} › Turn n · KEY — see [turnCrumbLabel], and
   // `app/crumbs.ts` for the seat crumb, which leads back to what is running
   // for that seat.
-  const ordinal = useTurnOrdinal(
-    view.workItem?.key ?? "",
-    turnId,
-    running,
-    view.startedAt || view.span.from,
-  );
+  // ASKED FOR AND OPENED BY ITS ADDRESS ([turnItem]): a key another task
+  // claimed first would number and open the claimant.
+  const taskAddress = view.workItem?.key ? itemAddress(turnItem(view.workItem)) : "";
+  const ordinal = useTurnOrdinal(taskAddress, turnId, running, view.startedAt || view.span.from);
   const crumb = turnCrumbLabel(view, ordinal);
+  const seatAvatar = view.handle ? badgeOf(view.handle).avatar : null;
   usePageLabels({
     ...(crumb ? { [turnId]: crumb } : {}),
     ...(role ? { [turnSeatKey(turnId)]: role } : {}),
     ...(view.handle ? { [turnHandleKey(turnId)]: view.handle } : {}),
+    ...(view.handle && seatAvatar ? { [seatAvatarKey(view.handle)]: avatarLabel(seatAvatar) } : {}),
   });
 
   const title = turnTitle(view);
@@ -1768,8 +1770,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // "Copied" on, so what happened is said in a toast.
   const toast = useToast();
   const [pausing, setPausing] = useState(false);
-  const itemKey = view.workItem?.key ?? "";
-  const openTask = useCallback(() => nav.to(["work", itemKey]), [nav, itemKey]);
+  const openTask = useCallback(() => nav.to(["work", taskAddress]), [nav, taskAddress]);
   const moreItems = useMemo<MenuItem[]>(
     () => [
       ...(attempt?.rows ?? [])
@@ -1812,8 +1813,12 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         description: "the same JSON, saved as a file",
         icon: <SaveGlyph size="sm" />,
         onSelect: () => {
-          const { started, name } = downloadText(turnJSON(), `turn-${turnId}.json`);
-          if (started) toast.ok(`Download started — ${name}`);
+          const { started, name } = downloadText(
+            turnJSON(),
+            `turn-${turnId}.json`,
+            "application/json;charset=utf-8",
+          );
+          if (started) toast.ok(`Download started: ${name}`);
           else toast.show({ variant: "warning", title: "The browser refused the download" });
         },
       },
@@ -1833,7 +1838,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           },
         ]
       : []),
-    ...(itemKey
+    ...(taskAddress
       ? [
           {
             key: "task",
@@ -1948,6 +1953,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
       {loading && <Skeleton variant="text" rows={6} label="Loading the turn" />}
       <QueryState
         error={error}
+        refusal={refusal}
         loading={loading}
         // GATED ON WHAT THE PAGE HOLDS, not on the query's answer alone: a
         // turn deep-linked the moment it started answers with nothing while
@@ -1957,7 +1963,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             ? undefined
             : {
                 title: "No events for this turn",
-                hint: "A turn is assembled from the events that name its id. If it ran outside the store's 30-day window there is nothing to assemble.",
+                hint: "Turns older than 30 days aren’t kept.",
               }
         }
       >
@@ -1967,11 +1973,8 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         <CoverageNote coverage={[view.coverage]} what="this turn" />
         {cut && (
           <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
-            This turn published more than the store returns for one turn. What is here is its{" "}
-            <strong>opening and its ending</strong> — {events.length} events, so the records below
-            are the turn&rsquo;s own — and what is missing is the middle. Phases from the middle of
-            a long self-iterating turn are not on this page, and neither is anything that went wrong
-            in them. {traceId ? "The trace carries the same work from the trigger down." : ""}
+            Too long to show in full; the middle phases are missing.
+            {traceId ? " The trace has the same work." : ""}
           </Callout>
         )}
 
@@ -1983,7 +1986,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             <Card.Header
               icon={<CircleAlertGlyph size="sm" />}
               count={story.wentWrong.length}
-              subtitle="guard breaches, exhausted chains, refused calls — the reason to open this page"
+              subtitle="guard breaches, exhausted chains, refused calls"
             >
               <Card.Title>What went wrong</Card.Title>
             </Card.Header>
@@ -2041,12 +2044,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                       defaultOpen={i === 0 || p.live || p.key === parkedPhase}
                     />
                   ))}
-                  {!own.length && (
-                    <span className="t-caption">
-                      No phase completed in this turn — it may have died before its first phase
-                      published.
-                    </span>
-                  )}
+                  {!own.length && <span className="t-caption">No phase completed.</span>}
                 </div>
               </Card>
 
@@ -2058,7 +2056,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                     // "COLLEAGUES" IS A PROMISE the wire keeps: the A2A records
                     // carry the publishing turn (internal/a2a/service.go), and
                     // internal/events/types/turnbands_client_test.go holds it.
-                    subtitle="work outside the tool loop: coding runs, delegations, colleagues, skills"
+                    subtitle="coding runs, delegations, colleagues, skills"
                   >
                     <Card.Title>What else it did</Card.Title>
                   </Card.Header>
@@ -2084,7 +2082,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                   <Card.Header
                     icon={<ChartNoAxesGanttGlyph size="sm" />}
                     count={story.rest.length}
-                    subtitle="rows this build has no particular place for"
+                    subtitle="other events"
                   >
                     <Card.Title>Also published</Card.Title>
                   </Card.Header>
@@ -2096,10 +2094,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
 
               {(rec.summary || rec.learning) && (
                 <Card padding="sm">
-                  <Card.Header
-                    icon={<FileTextGlyph size="sm" />}
-                    subtitle="the two events the engine closes every turn with"
-                  >
+                  <Card.Header icon={<FileTextGlyph size="sm" />} subtitle="closing events">
                     <Card.Title>The turn&rsquo;s own record</Card.Title>
                   </Card.Header>
                   <div className="col gap-2">
@@ -2116,7 +2111,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                                 label: "Conversation",
                                 value: (
                                   <span className="row gap-2 baseline">
-                                    <code className="inline">{conversation}</code>
+                                    <InlineCode>{conversation}</InlineCode>
                                     <span className="t-caption">
                                       the external conversation this turn served
                                     </span>
@@ -2130,10 +2125,8 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                     )}
                     {rec.summary && (
                       <Disclosure
-                        title="agent_turn_completed — the dashboard's summary"
-                        actions={
-                          <CopyButton text={summaryJSON} variant="ghost" title="copy this record" />
-                        }
+                        title="Turn summary event"
+                        actions={<CopyButton text={summaryJSON} title="copy this record" />}
                       >
                         <CodeBlock
                           plain
@@ -2146,14 +2139,8 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                     )}
                     {rec.learning && (
                       <Disclosure
-                        title="turn_completed — the learning subsystem's record"
-                        actions={
-                          <CopyButton
-                            text={learningJSON}
-                            variant="ghost"
-                            title="copy this record"
-                          />
-                        }
+                        title="Learning record"
+                        actions={<CopyButton text={learningJSON} title="copy this record" />}
                       >
                         <CodeBlock
                           plain
@@ -2176,9 +2163,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
               {prefetch.length > 0 || weights.length > 0 ? (
                 <Given blocks={prefetch} weights={weights} />
               ) : (
-                <p className="t-caption">
-                  No record of what this turn&rsquo;s prompt was assembled from has arrived yet.
-                </p>
+                <p className="t-caption">No prompt breakdown yet.</p>
               )}
             </div>
           )}
@@ -2264,11 +2249,7 @@ function PhaseStrip({ phases }: { phases: PhaseRecord[] }) {
             </div>
           );
         })}
-        {phases.length === 0 && (
-          <span className="t-caption">
-            No phase completed in this turn — it may have died before its first phase published.
-          </span>
-        )}
+        {phases.length === 0 && <span className="t-caption">No phase completed.</span>}
       </div>
     </Card>
   );
@@ -2290,6 +2271,7 @@ function PhaseStrip({ phases }: { phases: PhaseRecord[] }) {
 export function TurnPeek({ turnId }: { turnId: string }) {
   const view = useTurnView(turnId);
   const now = useNow();
+  const badgeOf = useSeatBadgeOf();
   // NOTHING HAS BEEN READ, which is three states and only one of them is an
   // empty rail: an answer that has not landed is a skeleton, a refusal is the
   // engine's own words, and a turn no event names is said plainly. A header
@@ -2297,13 +2279,15 @@ export function TurnPeek({ turnId }: { turnId: string }) {
   const nothing = view.events.length === 0 && view.phases.length === 0;
   if (nothing) {
     if (view.loading) return <Skeleton variant="text" rows={6} label="Loading the turn" />;
-    if (view.error) return <QueryState error={view.error} loading={false} />;
+    if (view.error) {
+      return <QueryState error={view.error} refusal={view.refusal} loading={false} />;
+    }
     return (
       <EmptyState
         size="compact"
         icon={<LayersGlyph size={32} />}
         title="No events carry this turn id"
-        description="A turn is assembled from the events that name its id. If it ran outside the store's 30-day window there is nothing to assemble."
+        description="Turns older than 30 days aren’t kept."
       />
     );
   }
@@ -2318,23 +2302,24 @@ export function TurnPeek({ turnId }: { turnId: string }) {
         identifier={turnId}
         title={title}
         status={turnStatus(view, now)}
-        facts={turnFacts(view, now, { seat: true })}
+        facts={turnFacts(view, now, {
+          seat: true,
+          avatar: badgeOf(view.handle || view.role).avatar,
+        })}
       />
       <div className="col gap-3">
         {/* LOADING IS SETTLED ABOVE. The rail draws only once it holds
             something — a query answer, or a phase off the stream — so passing
             the in-flight flag here would blank a running turn's rail every
             time the query it does not need re-ran on a reconnect. */}
-        <QueryState error={view.error} loading={false}>
+        <QueryState error={view.error} refusal={view.refusal} loading={false}>
           {/* THE SAME WARNING THE PAGE CARRIES, because every count in the
               header above is made from these rows: a cut turn holds its
               opening and its ending and not its middle, and a rail that said
               nothing would report a long turn as a short one. */}
           {view.cut && (
             <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
-              The store stopped at its per-turn cap. This is the turn&rsquo;s opening and its ending
-              — the phases from its middle are not here, and neither is anything that went wrong in
-              them.
+              Too long to show in full; the middle phases are missing.
             </Callout>
           )}
           <PhaseStrip phases={view.own} />

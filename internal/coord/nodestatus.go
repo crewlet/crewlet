@@ -1,8 +1,12 @@
 package coord
 
 import (
+	"slices"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -88,6 +92,36 @@ type NodeStatus struct {
 	ProjectionsReady int
 	ProjectionsTotal int
 
+	// AdminPosture is this node's own `api.auth.admin`: whether it grants
+	// admin to those who hold it (`serve`) or clamps admin away and keeps
+	// every app (`refuse`).
+	//
+	// # Why a fleet publishes this at all
+	//
+	// Because the posture is applied at DECISION time, per node, per
+	// request, and nothing is written when it changes. That is what makes
+	// a fleet whose nodes disagree a LEGAL state rather than a broken one —
+	// one node published to colleagues refusing admin, another an
+	// administrator signs in on serving it, or a rolling restart halfway
+	// through a change.
+	//
+	// Legal and invisible is the problem. Without this, whether an
+	// administrator can run the company depends on which node a load
+	// balancer sent them to, and the symptom is a person who can revoke a
+	// credential on one request and cannot on the next, with nothing
+	// anywhere saying why. One word per node turns that into a row on the
+	// fleet view.
+	//
+	// THE VALUE ITSELF AND NOT A DIGEST, which is what the list of grants it
+	// replaced had to publish: two values are one short word, so there is
+	// nothing to compress.
+	//
+	// EMPTY IS A NODE THAT IS NOT SAYING, never a node that refuses admin:
+	// a node that serves no API has no posture to state and publishes
+	// nothing here, and reading that as "refuses" would draw every such node
+	// as locked down.
+	AdminPosture iam.AdminPosture
+
 	// MCP is what this node's MCP servers did when it last started them,
 	// one row per configured server. Nil is "this node started none": a
 	// node that did not say is one whose heartbeat carried no status at
@@ -100,7 +134,8 @@ type NodeStatus struct {
 	MCP []MCPServerStatus
 }
 
-// MCPServerStatus is one configured MCP server, as ONE node started it.
+// MCPServerStatus is one configured MCP server, as ONE node runs it at the
+// beat.
 //
 // AGGREGATED PER SERVER, NOT PER CHILD. A per-role server is a template with
 // one child per seat this node holds, and a row per child would put a
@@ -116,38 +151,81 @@ type MCPServerStatus struct {
 	// template.
 	Shared bool
 
-	// Started is how many instances started and listed their tools.
-	// What happened to a child AFTER it started is not observed here:
-	// the bridge learns of a child that died only when its next call
-	// fails, and that call's own result is where that is reported.
+	// Started is how many instances are serving: started, listed their
+	// tools, and still up as of this beat. A child that died since is not
+	// counted here but under Failed until its bridge has brought it back.
 	Started int
 
-	// Failed is how many did not: a child that would not start or list
-	// its tools, and a config whose ${VAR} references did not resolve
-	// into a launchable spec.
+	// Failed is how many are not: a child that would not start or list
+	// its tools, one that died after starting and is being restarted, a
+	// config that did not resolve into a launchable spec, and a seat's
+	// child whose credential resolves to nothing that nothing will mint,
+	// or that the integration minting it cannot mint until a person acts.
 	Failed int
+
+	// Waiting is how many this node holds back UNSTARTED, and on purpose:
+	// a seat's child whose credential a provisioning pass mints for it and
+	// has not sealed yet, where nothing that pass last reported stops it.
+	// Neither started nor failed, because nothing is wrong — it starts
+	// once the seal reaches the node — and counting it with either would
+	// tell the person reading it the opposite of that.
+	Waiting int
 
 	// Tools is how many tools one started instance serves — the largest,
 	// where the instances of one template disagree.
 	Tools int
 
 	// Error is ONE failed instance's reason, and ErrorSeat the seat it
-	// belonged to (empty for a shared server). One rather than all, for
-	// the size argument above; the first by seat handle, so two beats
-	// with the same failures publish the same row.
+	// belonged to, by its AGENT ID (uuid.Nil for a shared server). One
+	// rather than all, for the size argument above; the first by agent id,
+	// so two beats with the same failures publish the same row.
+	//
+	// THE ID RATHER THAN THE HANDLE, because this row is published on a
+	// lease every peer reads, and a peer reads it against its OWN org: the
+	// id names the seat the instance was launched for — the agent id
+	// derived from its handle (ADR-0013) — and the reader resolves it to
+	// that handle.
 	Error     string
-	ErrorSeat string
+	ErrorSeat uuid.UUID
+
+	// Wait is ONE waiting instance's sentence — the variables it waits for
+	// and the integration that mints them — and WaitSeat its seat, chosen
+	// and bounded as Error and ErrorSeat are.
+	Wait     string
+	WaitSeat uuid.UUID
+
+	// Unlisted are the entry's tool_annotations keys that NO instance this
+	// node started lists a tool for, sorted. Such a key overrides nothing
+	// here. Only the row can say it: one instance's listing is not the
+	// server's, because a per-role child serves what its seat's credentials
+	// reach, and a key one seat's child lacks may be exactly right for the
+	// next one's. Across nodes the same intersection is the status answer's.
+	//
+	// Whole keys and every one of them, unlike Error: the list is bounded by
+	// the entry's own configuration, as the row count is, rather than by
+	// anything a seat count multiplies — and a key cut short would name a
+	// tool nobody wrote.
+	Unlisted []string
 }
 
-// MaxMCPErrorBytes bounds [MCPServerStatus.Error] on the wire.
+// MaxMCPErrorBytes bounds [MCPServerStatus.Error] and [MCPServerStatus.Wait]
+// on the wire.
 //
-// A start failure's text is a handshake error or a child's last stderr line,
-// and the useful part — "command not found", "401", "connection refused" — is
-// at its head. 240 bytes carries that for every server a company runs while
-// keeping each row a small fraction of a lease payload re-sent every
-// heartbeat; the full text is in the node's own log line
-// (`mcp_server_failed`), which is where a person fixing it reads anyway.
-const MaxMCPErrorBytes = 240
+// Two kinds of text arrive here. A start failure's is a handshake error or a
+// child's last stderr line, whose useful part — "command not found", "401",
+// "connection refused" — is at its head. The engine's own sentence for a
+// server it held back, for a value that resolves to nothing, is the other,
+// and its useful part is all of it: the variable, then each remedy, the last
+// naming the key to declare optional where a server can run without a host's
+// setting. At 240 bytes that last remedy never arrived: the tools guide's own
+// `NPM_CONFIG_REGISTRY` case is about 300 bytes, and a per-role child missing
+// a setting while its seat's token is being minted about 380. 512 carries
+// both under names of ordinary length. A row carries text only while
+// an instance has failed or waits, so the bound costs a healthy server's row
+// nothing on the heartbeat it is re-sent with; the full text is in the node's
+// own log line either way (`mcp_server_failed`,
+// `mcp_server_credential_missing`), which is where a person fixing it reads.
+const MaxMCPErrorBytes = 512
 
 // Meta renders the status for a lease's Meta map.
 func (s NodeStatus) Meta() map[string]any {
@@ -160,6 +238,13 @@ func (s NodeStatus) Meta() map[string]any {
 	}
 	if !s.StartedAt.IsZero() {
 		out["started_at"] = s.StartedAt.UTC().Format(time.RFC3339)
+	}
+	if s.AdminPosture != "" {
+		// OMITTED WHEN UNSET, for [StatusFromMeta]'s reason: a node
+		// that serves no API has no posture to state, and an empty
+		// string on the wire would make it look like a peer whose
+		// posture differs from everybody's.
+		out["admin"] = string(s.AdminPosture)
 	}
 	if s.ProjectionsTotal > 0 {
 		// OMITTED where the node runs none, so a peer on the vendor
@@ -181,8 +266,22 @@ func (s NodeStatus) Meta() map[string]any {
 			if m.Error != "" {
 				row["error"] = textcut.Within(m.Error, MaxMCPErrorBytes)
 			}
-			if m.ErrorSeat != "" {
-				row["error_seat"] = m.ErrorSeat
+			if m.ErrorSeat != uuid.Nil {
+				row["error_seat"] = m.ErrorSeat.String()
+			}
+			// OMITTED WHEN NOTHING WAITS, which is every row but a
+			// seat's during provisioning: absent reads as zero.
+			if m.Waiting > 0 {
+				row["waiting"] = m.Waiting
+			}
+			if m.Wait != "" {
+				row["wait"] = textcut.Within(m.Wait, MaxMCPErrorBytes)
+			}
+			if m.WaitSeat != uuid.Nil {
+				row["wait_seat"] = m.WaitSeat.String()
+			}
+			if len(m.Unlisted) > 0 {
+				row["unlisted"] = m.Unlisted
 			}
 			rows[i] = row
 		}
@@ -216,6 +315,7 @@ func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 		Posture:          stringFromMeta(raw["posture"]),
 		ProjectionsReady: intFromMeta(raw["projections_ready"]),
 		ProjectionsTotal: intFromMeta(raw["projections_total"]),
+		AdminPosture:     iam.AdminPosture(stringFromMeta(raw["admin"])),
 	}
 	status.Draining, _ = raw["draining"].(bool)
 	if at, err := time.Parse(time.RFC3339, stringFromMeta(raw["started_at"])); err == nil {
@@ -238,7 +338,11 @@ func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 			Failed:    intFromMeta(row["failed"]),
 			Tools:     intFromMeta(row["tools"]),
 			Error:     stringFromMeta(row["error"]),
-			ErrorSeat: stringFromMeta(row["error_seat"]),
+			ErrorSeat: seatFromMeta(row["error_seat"]),
+			Waiting:   intFromMeta(row["waiting"]),
+			Wait:      stringFromMeta(row["wait"]),
+			WaitSeat:  seatFromMeta(row["wait_seat"]),
+			Unlisted:  stringsFromMeta(row["unlisted"]),
 		}
 		m.Shared, _ = row["shared"].(bool)
 		status.MCP = append(status.MCP, m)
@@ -285,4 +389,39 @@ func intFromMeta(v any) int {
 func stringFromMeta(v any) string {
 	s, _ := v.(string)
 	return s
+}
+
+// seatFromMeta reads a seat's agent id, and uuid.Nil for anything that is not
+// one in canonical form — a value no build of this one wrote is a seat the
+// row does not name, never a seat named wrongly.
+func seatFromMeta(v any) uuid.UUID {
+	s := stringFromMeta(v)
+	id, err := uuid.Parse(s)
+	if err != nil || id.String() != s {
+		return uuid.Nil
+	}
+	return id
+}
+
+// stringsFromMeta accepts the []string this build writes and the []any a JSON
+// round trip returns, keeping only the strings in it; nil when there are none,
+// so a row that carried no list reads back as one that carried none.
+func stringsFromMeta(v any) []string {
+	switch l := v.(type) {
+	case []string:
+		if len(l) == 0 {
+			return nil
+		}
+		return slices.Clone(l)
+	case []any:
+		var out []string
+		for _, item := range l {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }

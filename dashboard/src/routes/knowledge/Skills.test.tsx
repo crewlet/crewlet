@@ -10,6 +10,7 @@ import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Skills } from "./Skills.tsx";
 import { Router } from "~/app/router.tsx";
 import { FrameReadings } from "~/app/Shell.tsx";
+import { FRAME_ANSWERS } from "~/test/viewer.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { reloadForTest } from "~/lib/prefs.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
@@ -67,7 +68,7 @@ function mount(answers: Record<string, unknown>) {
   const asked: { kind: string; params: Record<string, unknown> }[] = [];
   socket.query = ((what: string, params?: Record<string, unknown>) => {
     asked.push({ kind: what, params: params ?? {} });
-    return Promise.resolve(answers[what] ?? {});
+    return Promise.resolve(answers[what] ?? FRAME_ANSWERS[what] ?? {});
   }) as typeof socket.query;
   render(
     <ToastProvider>
@@ -157,4 +158,19 @@ test("a seat's learned skills say how many of its total are listed", async () =>
   expect(asked.find((a) => a.kind === "agent_memory")?.params).toEqual({ id: "swe" });
   expect(screen.getByText("Triage an alert")).toBeTruthy();
   expect(screen.getByText("1 of 40 learned skills.")).toBeTruthy();
+});
+
+// WHAT A SEAT LEARNED IS ITS TRAIL, which the engine answers to an admin and
+// to whoever leads the seat: anybody else is shown the lock, naming both ways
+// in, and the seat's memory is never asked. The CONTROL is the case above,
+// read by an admin. Mutation: ask regardless and `agent_memory` is asked.
+test("a seat's learned skills are locked to a reader who may not read its trail", async () => {
+  location.hash = "#/knowledge/skills?kind=learned&seat=swe";
+  const { asked } = mount({
+    viewer: { login: "erin", owner: "erin", handle: "", grants: ["knowledge"], acts: [] },
+  });
+  await settle();
+  expect(screen.getByText("You need Admin access")).toBeTruthy();
+  expect(screen.getByText(/This seat’s lead can see it too\./)).toBeTruthy();
+  expect(asked.some((a) => a.kind === "agent_memory")).toBe(false);
 });

@@ -219,15 +219,6 @@ func (s skills) List(context.Context, string, learning.ListOptions) ([]learning.
 	return s.rows, s.err
 }
 
-type onboarding struct {
-	done bool
-	err  error
-}
-
-func (o onboarding) Onboarded(context.Context, string, string) (bool, error) {
-	return o.done, o.err
-}
-
 // searcher is a knowledge backend that records the query it was given.
 type searcher struct {
 	mu      sync.Mutex
@@ -279,11 +270,11 @@ func (s *searcher) asked() []knowledge.Query {
 func company(t *testing.T) (*org.Organization, *org.Role) {
 	t.Helper()
 	o := &org.Organization{Name: "Nimbus", Units: []*org.Unit{{
-		Name: "Engineering", Lead: "Tech Lead",
+		Name: "Engineering", Lead: "lead",
 		Roles: []*org.Role{{Name: "Tech Lead", DeclaredHandle: "lead"}},
 	}}}
 	o.Normalize()
-	return o, o.Role("Tech Lead")
+	return o, o.Role("lead")
 }
 
 // triageScaffold stands in for the guidance an integration's prompt wraps
@@ -360,7 +351,6 @@ func TestEveryStoreFailureCostsOnlyItsOwnBlock(t *testing.T) {
 		Episodes:       episodes{err: failing},
 		Counterparties: counterparties{err: failing},
 		Skills:         skills{err: failing},
-		Onboarding:     onboarding{err: failing},
 		// A CHAT SURFACE THAT REFUSES is the same class of failure, and
 		// on a trigger with no thread it must render nothing at all
 		// rather than a hint: a seat woken by a webhook told its thread
@@ -375,13 +365,13 @@ func TestEveryStoreFailureCostsOnlyItsOwnBlock(t *testing.T) {
 	}
 }
 
-// The SEVEN blocks run CONCURRENTLY, so a panic in any one of them would take
+// The SIX blocks run CONCURRENTLY, so a panic in any one of them would take
 // the process down rather than the turn — and these renderers decode model
 // output and index with numbers an LLM produced.
 //
 // EVERY SOURCE, because the guard is per BLOCK: one goroutine each with its own
 // deferred recover, so a case covering one source says nothing about the other
-// six. The seventh is the chat thread, in
+// five. The sixth is the chat thread, in
 // TestAPanickingThreadReaderCostsOnlyItsOwnBlock next door, where it sits with
 // the three extra facts its block carries and that its recover has to clear
 // alongside the prose.
@@ -393,9 +383,12 @@ func TestAPanickingSourceCostsOnlyItsOwnBlock(t *testing.T) {
 		return prefetch.Sources{
 			Skills: skills{rows: []learning.Skill{
 				{Name: "ship-a-fix", Description: "the release checklist"}}},
-			Onboarding: onboarding{done: false},
-			Models:     models{provider: &aux{answers: []string{"[0]"}}},
-			Embed:      embeds,
+			Counterparties: counterparties{byExternal: map[string]learning.Profile{
+				"U1": {Subject: learning.Subject{ExternalID: "U1", Platform: "chat", Name: "Ana Ruiz"},
+					InteractionCount: 3, Traits: map[string]any{"tone": "terse"}},
+			}},
+			Models: models{provider: &aux{answers: []string{"[0]"}}},
+			Embed:  embeds,
 		}
 	}
 	cases := []struct {
@@ -425,11 +418,7 @@ func TestAPanickingSourceCostsOnlyItsOwnBlock(t *testing.T) {
 		name:    "skills",
 		install: func(s *prefetch.Sources, r *reached) { s.Skills = panickingSkills{r} },
 		block:   func(b prefetch.Blocks) string { return b.SynthesizedSkills },
-		sibling: func(b prefetch.Blocks) string { return b.OnboardingHint },
-	}, {
-		name:    "onboarding",
-		install: func(s *prefetch.Sources, r *reached) { s.Onboarding = panickingOnboarding{r} },
-		block:   func(b prefetch.Blocks) string { return b.OnboardingHint },
+		sibling: func(b prefetch.Blocks) string { return b.CounterpartyProfile },
 	}}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -465,8 +454,7 @@ func TestAPanickingSourceCostsOnlyItsOwnBlock(t *testing.T) {
 	// menu that never rendered are reported to the curator as skills the
 	// turn used.
 	var asked reached
-	blocks := fetch(t, prefetch.Sources{Skills: panickingSkills{&asked},
-		Onboarding: onboarding{done: false}}, request(t))
+	blocks := fetch(t, prefetch.Sources{Skills: panickingSkills{&asked}}, request(t))
 	if !asked.hit.Load() {
 		t.Fatal("the skills source was never asked, so no panic was recovered")
 	}
@@ -533,12 +521,6 @@ type panickingSkills struct{ *reached }
 
 func (p panickingSkills) List(context.Context, string, learning.ListOptions) ([]learning.Skill, error) {
 	panic(p.mark("a malformed skill"))
-}
-
-type panickingOnboarding struct{ *reached }
-
-func (p panickingOnboarding) Onboarded(context.Context, string, string) (bool, error) {
-	panic(p.mark("a malformed marker"))
 }
 
 // ── personal memory ──
@@ -1385,35 +1367,6 @@ func TestTheSkillsBlockIsAMenuWithItsVerb(t *testing.T) {
 	// to.
 	if !strings.Contains(got, "_(unused lately)_") {
 		t.Fatalf("a stale skill rendered without its marker:\n%s", got)
-	}
-}
-
-// ── onboarding ──
-
-func TestTheOnboardingHintRendersOnlyForASeatThatNeedsIt(t *testing.T) {
-	t.Parallel()
-	r := request(t)
-	pending := fetch(t, prefetch.Sources{Onboarding: onboarding{done: false}}, r).OnboardingHint
-	if !strings.Contains(pending, "not yet completed onboarding") {
-		t.Fatalf("a seat that has not onboarded got %q", pending)
-	}
-	settled := fetch(t, prefetch.Sources{Onboarding: onboarding{done: true}}, r).OnboardingHint
-	if settled != "" {
-		t.Fatalf("a settled seat got %q", settled)
-	}
-}
-
-// FAIL CLOSED on an unreadable marker: the alternative nags a seat that
-// onboarded months ago on every turn a database blip lasts, and a missed
-// hint costs one turn of context while a false one costs a paragraph of
-// every prompt.
-func TestAnUnreadableOnboardingMarkerRendersNoHint(t *testing.T) {
-	t.Parallel()
-	got := fetch(t, prefetch.Sources{
-		Onboarding: onboarding{err: errors.New("the database is unhappy")},
-	}, request(t)).OnboardingHint
-	if got != "" {
-		t.Fatalf("an unreadable marker rendered %q", got)
 	}
 }
 

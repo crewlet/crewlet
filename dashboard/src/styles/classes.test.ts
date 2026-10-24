@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 
+import { sheetRules } from "../test/sheets.ts";
 import { modules } from "../test/source.ts";
 
 /**
@@ -538,13 +539,8 @@ interface Allowed {
 
 const ALLOWED: Allowed[] = [
   {
-    name: "crewlet-canvas__controls",
-    why: "uilet's Canvas writes it on the zoom bar a TreeCanvas draws. styles/screens.css moves it to the bottom LEFT corner on the live org chart (`.oc-canvas`), where the approved chart puts it, because the legend takes the bottom right and the kit offers only the right-hand corners. Another rule about OUR composition of the package's component.",
-    pkg: "@crewlethq/ui/styles.css",
-  },
-  {
     name: "crewlet-canvas",
-    why: "uilet's Canvas writes it on the canvas's root, inside the TreeCanvas the live org chart draws. styles/screens.css dots its ground inside `.oc-canvas`, as the approved chart draws the field a reader pans; the kit paints the ground and nothing on it. Another rule about OUR composition of the package's component.",
+    why: "uilet's Canvas writes it on the canvas's root, inside the TreeCanvas the live org chart draws. styles/screens.css takes its frame away inside `.oc-canvas`, so the field runs to the sheet's edges as the approved chart draws it; the dots on that field are the kit's own `ground=\"dotted\"`. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -554,7 +550,7 @@ const ALLOWED: Allowed[] = [
   },
   {
     name: "crewlet-popover",
-    why: "uilet's Popover writes it on its panel, and caps the panel at 360px with a scroll. styles/screens.css raises that cap for Spend › Budgets' ceiling editor (`.ceiling-pop`, the Popover's `className`), whose check can answer a paragraph of the engine's own warning — under the kit's cap it scrolled Save anyway below the fold of the panel. Paired with the kit's class so it wins whichever stylesheet a lazy chunk loads last. Another rule about OUR composition of the package's component.",
+    why: "uilet's Popover writes it on its panel, and caps the panel at 360px with a scroll. styles/screens.css raises that cap for Company › Budgets' ceiling editor (`.ceiling-pop`, the Popover's `className`), whose check can answer a paragraph of the engine's own warning, under the kit's cap it scrolled Save anyway below the fold of the panel. Paired with the kit's class so it wins whichever stylesheet a lazy chunk loads last. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -583,26 +579,6 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
-    name: "crewlet-modal__footer-start",
-    why: "uilet's Modal writes it on the start slot of a dialog's foot, which the CommandPalette's key legend is. styles/frame.css lets it take the band inside the palette (`.palette`), so the legend's keys stand at its start and what the search is doing at its end, as the approved palette draws them; the slot is otherwise sized to its content. Another rule about OUR composition of the package's component.",
-    pkg: "@crewlethq/ui/styles.css",
-  },
-  {
-    name: "crewlet-modal__header",
-    why: "uilet's Modal writes it on a dialog's head row, which centres its items. styles/frame.css aligns the row to the top when the head carries a subtitle (`:has(.crewlet-modal__subtitle)`), because a two- or three-line description under the title left the mark floating beside the description rather than on the title's line — the Add an MCP server dialog was the case found. A head with no subtitle keeps the kit's centring. The kit should do this itself; until it does, this is a rule about how every dialog here uses the package's component.",
-    pkg: "@crewlethq/ui/styles.css",
-  },
-  {
-    name: "crewlet-modal__subtitle",
-    why: "uilet's Modal writes it on the description under a dialog's title. styles/frame.css reads its presence (`.crewlet-modal__header:has(...)`) to top-align the head; see crewlet-modal__header.",
-    pkg: "@crewlethq/ui/styles.css",
-  },
-  {
-    name: "crewlet-modal__icon",
-    why: "uilet's Modal writes it on a dialog's mark. styles/frame.css makes its box one title line tall inside a top-aligned head, so the glyph centres on the title's line; see crewlet-modal__header.",
-    pkg: "@crewlethq/ui/styles.css",
-  },
-  {
     name: "crewlet-app-shell__main",
     why: "uilet's AppShell writes it on the page column's one scroller. styles/frame.css turns smooth scrolling off on it (the router restores a position per history entry, and a smooth restore animates every Back) and publishes `--sticky-top` from it when a screen draws a toolbar. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
@@ -628,8 +604,8 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
-    name: "crewlet-nav-item__badge",
-    why: "uilet's SidebarNav writes it on a row's filled figure, which the kit fills with the accent because its one badge is an unread count. styles/frame.css repaints it in the warning pair on a Settings row whose figure is a STATE waiting on the reader (`.section-row-attention` — Integrations' tools needing a person), as the approved Settings artboard draws that figure; in the accent it read as a second inbox. The kit's pill keeps its size, its place and its spoken figure. Another rule about OUR composition of the package's component.",
+    name: "crewlet-card",
+    why: "uilet's Card writes it on every card. styles/frame.css draws the dashboard's own DataGrid flush inside one (`.crewlet-card .grid-wrap`): the card is the frame, and a bordered grid a pixel inside its border was a double edge on fifteen pages that each had to remember the `flush` prop. A rule about OUR grid's composition inside the package's component; the card itself is untouched.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -639,7 +615,7 @@ const ALLOWED: Allowed[] = [
   },
   {
     name: "crewlet-card__subtitle",
-    why: "uilet's Card writes it on the head's subtitle, beside the title. styles/screens.css moves it onto a line of its own on a narrow screen in every head that also holds actions, where it sat between the title and the actions and cut both — a seat's Current turn to 'Current tu…', Configuration's Active revision to 'Active' over 'revision'. Another rule about OUR composition of the package's component.",
+    why: "uilet's Card writes it on the head's subtitle, beside the title. styles/screens.css gives it a line of its own at every width in the heads the approved artboards draw stacked (`.card-head-stacked`: a chart's key such as 'Last 14 days' under 'Turns per day'). Another rule about OUR composition of the package's component; a narrow card's own wrap is the kit's.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -674,6 +650,12 @@ const ALLOWED: Allowed[] = [
     why: "uilet's Card.Title writes it. styles/screens.css makes it ellipse rather than clip, which the package cannot do for itself: the title is a flex container and text-overflow only reaches a block one. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
+
+  {
+    name: "crewlet-inline-code",
+    why: "uilet's InlineCode writes it. styles/screens.css draws a model key that is a link (`.prof-chain-model`) in the link ink and underlines it under the pointer, which the chip cannot know it is inside. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
   {
     name: "crewlet-card--flush",
     why: "uilet's Card writes it for `padding=\"none\"` content that reaches the card's edges. styles/screens.css turns its `overflow: hidden` into `clip`, which is what the recipe's own comment asks for — `hidden` also makes the card a scroll container, and a sticky box confined to a scrollport that can never scroll never has `top` applied, so every DataGrid inside a flush card had a dead column head. Another rule about OUR composition of the package's component.",
@@ -685,8 +667,18 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
+    name: "crewlet-table-cell__entity",
+    why: "uilet's TableEntityCell writes it on a seat's badge and name. styles/screens.css reads its presence on Spend › By agent's phone rows (`.spend-agents`): a lead cell that is NOT the seat (the figures) keeps its own width, so the seat's name takes the first line's room. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-table-cell__key",
+    why: "uilet's TableKeyCell writes it on an identifier. styles/screens.css gives the work item key on Settings › Token spend › Expensive tasks' phone rows (`.spend-tasks`) a seven-character floor, so every title on the compact row starts at one x rather than at an indent set by each key's own width. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "crewlet-card__header-actions",
-    why: 'uilet\'s Card.Header writes it. styles/screens.css takes the name block out of the shrink where the head holds no actions or panel controls, because the kit\'s 100-to-1 subtitle shrink is proportional and still took a fraction of a pixel off the title — enough, with our ellipsis, to draw "When" as "Wh…" beside a whole subtitle on a phone. Where a head DOES hold actions and a subtitle, a narrow screen moves the subtitle to a line of its own instead (see crewlet-card__subtitle). Another rule about OUR composition of the package\'s component.',
+    why: 'uilet\'s Card.Header writes it. styles/screens.css takes the name block out of the shrink where the head holds no actions or panel controls, because the kit\'s 100-to-1 subtitle shrink is proportional and still took a fraction of a pixel off the title, enough, with our ellipsis, to draw "When" as "Wh…" beside a whole subtitle on a phone. Another rule about OUR composition of the package\'s component.',
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -814,24 +806,17 @@ describe("every class the dashboard names", () => {
     // exactly what a changed `className=` spelling or a moved source root
     // would do to it. These two are the shapes the tree actually writes.
     expect(all.length).toBeGreaterThan(500);
-    expect(all.some((u) => u.name === "segmented")).toBe(true);
+    expect(all.some((u) => u.name === "spacer")).toBe(true);
     expect(all.some((u) => u.name === "muted")).toBe(true);
   });
 
   // AND THE OTHER WAY. See the note at the top: this is the direction nothing
   // was checking while a rewrite left sixty-four recipes behind it.
   //
-  // IT DECLARES ITS OWN BUDGET, because vitest's default is five seconds and
-  // this case is the one in the suite that cannot fit in it. `writtenIn` walks
-  // every `.ts` and `.tsx` under `src` a character at a time — the collector
-  // has to track whether it is inside a `className=` brace, so there is no
-  // regex short cut — and it measures 5.5s on a machine with other work on it
-  // against 2-3s on an idle one. A timeout is not an assertion: when it fires
-  // the build goes red saying "Test timed out", which is a sentence about the
-  // runner and not about the tree, and a gate that goes red for a reason
-  // nobody can act on is a gate people learn to re-run rather than read. 30s
-  // is an order of magnitude over the measured cost, and the cost is bounded
-  // by the size of the source tree rather than by anything that can spike.
+  // The suite's slowest case, and what the case bound in `test/bounds.ts` is
+  // sized against: `writtenIn` walks every `.ts` and `.tsx` under `src` a
+  // character at a time — the collector has to track whether it is inside a
+  // `className=` brace, so there is no regex short cut.
   test("and every class a stylesheet declares is written by something", () => {
     expect(
       orphans(css, writtenIn(files), ALLOWED),
@@ -839,7 +824,7 @@ describe("every class the dashboard names", () => {
         "them, or, if one is written through something this scan cannot see, " +
         "add it to ALLOWED with the reason",
     ).toEqual([]);
-  }, 30_000);
+  });
 
   test("the inverse can tell — a recipe nothing writes is caught", () => {
     // THE MUTATION, run against the functions the test above calls rather
@@ -972,16 +957,68 @@ describe("every class the dashboard names", () => {
 //
 // A missing import has no other symptom: nothing errors, nothing warns, and
 // the page renders — just wrongly, and only where somebody looks.
-test("every stylesheet is imported by the entry point", () => {
+//
+// ONE SHEET IS A SCREEN'S OWN, imported by that screen's module so it arrives
+// with the screen's chunk rather than in the first paint: `create.css`, the
+// create pages'. It is appended after the entry's sheets, so each of its rules
+// must select a class of the screen it arrives with, or a tie it wins would
+// change other screens from the moment a reader first opened that one.
+const LAZY_SHEETS: Readonly<Record<string, { importer: string; owns: RegExp }>> = {
+  "create.css": {
+    importer: "routes/artifacts/new/CreateShell.tsx",
+    owns: /\.(?:[a-z]+-create|artifact-who)\b/,
+  },
+};
+
+test("every stylesheet is imported by the entry point, or by the screen it belongs to", () => {
   const entry = readFileSync(join(SRC, "main.tsx"), "utf8");
   const found = readdirSync(join(SRC, "styles"))
     .filter((f) => f.endsWith(".css"))
     .sort();
   expect(found.length).toBeGreaterThan(0);
-  const missing = found.filter((f) => !entry.includes(`./styles/${f}`));
+  const missing = found.filter((f) => {
+    const lazy = LAZY_SHEETS[f];
+    if (!lazy) return !entry.includes(`./styles/${f}`);
+    return (
+      entry.includes(`styles/${f}`) ||
+      !readFileSync(join(SRC, lazy.importer), "utf8").includes(`import "~/styles/${f}";`)
+    );
+  });
   expect(
     missing,
-    "these stylesheets are in the tree and nothing imports them, so none of " +
-      "their rules reach the browser",
+    "these stylesheets are not imported where they belong: by main.tsx, or, for " +
+      "a screen's own sheet, by its screen's module and not by main.tsx",
   ).toEqual([]);
+});
+
+/** A selector list's selectors: split at the commas outside every parenthesis. */
+function splitSelectors(list: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let from = 0;
+  for (let i = 0; i < list.length; i++) {
+    if (list[i] === "(") depth++;
+    else if (list[i] === ")") depth--;
+    else if (list[i] === "," && depth === 0) {
+      out.push(list.slice(from, i).trim());
+      from = i + 1;
+    }
+  }
+  out.push(list.slice(from).trim());
+  return out;
+}
+
+test("a screen's own sheet selects only that screen's classes", () => {
+  for (const [file, { owns }] of Object.entries(LAZY_SHEETS)) {
+    const rules = sheetRules().filter((r) => r.file === file);
+    expect(rules.length, `${file} holds no rules`).toBeGreaterThan(0);
+    const foreign = rules
+      .flatMap((r) => splitSelectors(r.selector))
+      .filter((selector) => !owns.test(selector));
+    expect(
+      foreign,
+      `${file} arrives after the entry's sheets, so these selectors, which name ` +
+        "no class of its screen, would win ties on other screens once it loads",
+    ).toEqual([]);
+  }
 });

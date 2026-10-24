@@ -31,8 +31,13 @@ export const FILL: Record<string, string> = {
   "<id>": UUID,
   "<uuid>": UUID,
   "<page id>": UUID,
+  // AN INVITATION LINK IS ONE SEGMENT: the invitation's id and its secret,
+  // joined by a dot (`#/invite/<id>.<secret>`).
+  "{id}.{secret}": `${UUID}.secret`,
+  "<id>.<secret>": `${UUID}.secret`,
   "{handle}": "pm",
-  "{unit}": "Platform",
+  // A unit is addressed by its KEY, which is a word nobody renames.
+  "{unit}": "platform",
   "{scope_type}": "role",
   "{scope_id}": "ceo",
   "{name}": "standup",

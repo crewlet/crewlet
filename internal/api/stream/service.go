@@ -2,6 +2,7 @@ package stream
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/tokens"
 )
 
@@ -29,16 +32,41 @@ import (
 // is a socket that is gone, not a company that is quiet.
 const HealthInterval = 5 * time.Second
 
-// HealthFunc reports the current health, for the shared tick and the snapshot.
+// Health is what the shared tick carries and the snapshot opens with: this
+// node's WHOLE health body, pushed as it is on every [KindHealth] frame.
 //
-// THE WHOLE BODY, which is `api.Health` — returned as `any` for the reason
-// [Options.Org] is: its shape is an explicit public type owned by package api,
-// which imports this one, so naming it here would be an import cycle, and this
-// service carries it to the wire without reading into it. The push used to be a
-// three-field type declared HERE, which is how a node refusing every inbound
-// webhook for want of a configuration pushed a frame identical to a healthy idle
-// one's, and how five screens came to poll a query for the rest of the body.
-type HealthFunc func() any
+// AN INTERFACE rather than the struct, because the struct is `api.Health` —
+// an explicit public type owned by package api, which imports this one, so
+// naming it here would be an import cycle. This service carries the value to
+// the wire without reading into it, except for the ONE fact a socket's
+// posture is decided from, which is why that is the one method. The push used
+// to be a three-field type declared HERE, which is how a node refusing every
+// inbound webhook for want of a configuration pushed a frame identical to a
+// healthy idle one's, and how five screens came to poll a query for the rest
+// of the body.
+type Health interface {
+	// NodeStatus is the node's own posture word, the `status` /ready is
+	// decided from — and so the one [PostureFunc] reads.
+	NodeStatus() string
+}
+
+// HealthFunc reports the current health, for the shared tick and the snapshot.
+type HealthFunc func() Health
+
+// PostureFunc maps this node's own health onto the posture its sockets are
+// served in.
+//
+// IT TAKES THE HEALTH IT IS DECIDED FROM rather than reading the node again:
+// the health read reaches the coordination plane, the tick already does one
+// per interval, and a second read would describe a different instant — so a
+// tab could be told "shed" in its health frame while its pushes kept arriving
+// as though the node were serving.
+//
+// The MAPPING lives with the caller (internal/api), not here, because the set
+// of node postures that take a node out of service is already declared there
+// and read by /ready. Two declarations of one set is how the probe and the
+// socket come to disagree about whether this node is serving.
+type PostureFunc func(Health) FramePosture
 
 // Service turns the engine's event stream into the pushes a dashboard mirrors.
 //
@@ -53,10 +81,14 @@ type Service struct {
 	// health is consulted by the shared tick.
 	health HealthFunc
 
-	// handles maps a role to its agent handle, for the per-agent rollup's
-	// cross-links. It answers an empty map while no company is active,
-	// which leaves them blank.
-	handles HandleFunc
+	// posture derives a socket's delivery mode from that health. See
+	// [PostureFunc].
+	posture PostureFunc
+
+	// seats is the chart's seats by agent id, for the per-agent rollup's
+	// names and cross-links. It answers an empty directory while no
+	// company is active, which leaves them blank.
+	seats SeatsFunc
 
 	// roster, org and tools are the config-derived surfaces. See Options.
 	roster    func() []map[string]any
@@ -76,12 +108,41 @@ type Service struct {
 	now      func() time.Time
 	interval time.Duration
 
+	// chart decides a `watch` frame. See [Options.Chart].
+	chart authz.Chart
+
+	// holders resolves a `watch` frame's login. See [Options.Holders].
+	holders iam.Holders
+
+	// seatOf is the published company's word on a seat. See
+	// [Options.SeatOf].
+	seatOf SeatOfFunc
+
+	// listeners is every open socket, by what it was opened with — see
+	// lifetime.go. The service holds it because what ends a socket arrives
+	// here: an identity move, a published company.
+	listeners listeners
+
+	// rooms decides and feeds artifact rooms; work decides them again off
+	// the applier's goroutine, and stopPresence stops hearing the presence
+	// hub. See rooms.go.
+	rooms        Rooms
+	work         *roomWork
+	stopPresence func()
+
+	// withholding is this node's artifact copies out of service: its
+	// appliers' pushes are withheld until they return ([Service.ArtifactsCopy]).
+	withholding atomic.Bool
+
+	// metrics records the socket's push lag; nil records nothing.
+	metrics Metrics
+
 	// tokensDirty means a phase completed since the last rollup went out.
 	// Set on the publish path and cleared on the tick — see flushTokens.
 	tokensDirty atomic.Bool
 
 	// pushMu orders the `agents` pushes, and pushed is what the last of them
-	// said about each seat's live call: which call, and the version of each
+	// said about each seat's live call, by agent id: which call, and the version of each
 	// heavy field it described. See pushAgents.
 	pushMu sync.Mutex
 	pushed map[string]pushedCall
@@ -92,28 +153,35 @@ type Service struct {
 	done    chan struct{}
 }
 
-// HandleFunc answers the role-to-handle map the per-agent rollup links with.
-type HandleFunc func() map[string]string
+// SeatsFunc answers the chart's seats by agent id, which the per-agent rollup
+// names and links its rows with. See [tokens.Seats].
+type SeatsFunc func() tokens.Seats
 
 // PlacementFunc reads which of the company's agent seats some node in the fleet
-// holds, keyed by role: every agent seat in the company, true where a node
-// holds it. An error is a read that did not happen, never "none are held".
+// holds, keyed by AGENT ID — the name a seat's lease is held under — every agent
+// seat in the company, true where a node holds it. An error is a read that did
+// not happen, never "none are held".
 type PlacementFunc func() (map[string]bool, error)
 
 // Options configure a service.
 //
-// Health, Handles, Roster, Org, Tools and Schedules are REQUIRED, and
-// [NewService] refuses a missing one by name. Each is something the engine
-// beside the API always answers, so a missing one is a wiring mistake, and
-// serving around it would push a confident answer where there is none: a
-// health frame reading "ok", an empty catalogue, an organization with no seats.
+// Health, Posture, Seats, Roster, Org, Tools, Schedules, Placement, Chart,
+// Holders and SeatOf are REQUIRED, and [NewService] refuses a missing one by name. Each is
+// something the engine beside the API always answers, so a missing one is a
+// wiring mistake, and serving around it would push a confident answer where
+// there is none: a health frame reading "ok", an empty catalogue, an
+// organization with no seats, a lead told they may not watch their own report.
 type Options struct {
 	Health HealthFunc
 
-	// Handles supplies the role-to-handle map. An empty map leaves each
-	// row's handle blank rather than guessing one: a wrong link is worse
-	// than no link.
-	Handles HandleFunc
+	// Posture decides whether a socket is served live or degraded, from
+	// the same Health the tick just read. See [PostureFunc].
+	Posture PostureFunc
+
+	// Seats supplies the chart's seats by agent id. A seat absent from it
+	// leaves its row's handle blank rather than guessing one: a wrong link
+	// is worse than no link.
+	Seats SeatsFunc
 
 	// Roster, Org and Tools are the three surfaces the dashboard renders
 	// from CONFIGURATION rather than from anything that has happened.
@@ -124,7 +192,7 @@ type Options struct {
 	// the live overlay onto a static roster of nil — an empty list, every
 	// connect, for ever on a company whose model was not answering.
 	//
-	// Functions, not values, for the same reason Handles is one: an apply
+	// Functions, not values, for the same reason Seats is one: an apply
 	// replaces the company, and a roster captured at boot would keep
 	// showing a role a revision deleted.
 	//
@@ -157,6 +225,42 @@ type Options struct {
 	// nothing about the tick at all — and the property worth asserting is
 	// that there is exactly ONE of them however many times it is started.
 	HealthInterval time.Duration
+
+	// Chart answers who leads whom, which is what a `watch` frame is
+	// decided by — see [watching]. REQUIRED: a watch installs routing for
+	// a seat's inbox, and the question it asks is the one the `work_inbox`
+	// query asks of the same seat, through the same seam. A service built
+	// without one would answer every lead's watch of a report as
+	// "undecidable" for the life of the process.
+	Chart authz.Chart
+
+	// Holders says whose record somebody else's LOGIN names — the identity
+	// directory's half of [iam.OwnerOf] — which is what a `watch` frame
+	// naming a login is resolved through before it is decided and
+	// installed. REQUIRED for [Options.Chart]'s reason: `inbox_changed` is
+	// pushed to the name a person's notices are kept under, their SEAT
+	// when the directory binds them to one, so a watch installed on the
+	// login as sent is one no frame ever reaches — and a service built
+	// without it would refuse every such watch as undecidable for the life
+	// of the process.
+	Holders iam.Holders
+
+	// SeatOf answers what the company this node has published says about a
+	// seat, which is what an open socket acting as a seat is decided by
+	// when a company is published — in memory, with no identity read (see
+	// lifetime.go). REQUIRED for [Options.Chart]'s reason: a service built
+	// without it could never say a seat is gone.
+	SeatOf SeatOfFunc
+
+	// Rooms decides and feeds artifact rooms. Optional, and every half or
+	// none: the zero value serves no room, which is a node with no
+	// artifacts domain, and a join there is `unknown_query`. A partial one
+	// is refused by name, because a room that could be joined and never
+	// told who is present is a room that lies.
+	Rooms Rooms
+
+	// Metrics records the socket's push lag; nil records nothing.
+	Metrics Metrics
 }
 
 // NewService builds the fan-out over a projection, or refuses a missing
@@ -168,11 +272,15 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 		absent bool
 	}{
 		{"Health", opts.Health == nil},
-		{"Handles", opts.Handles == nil},
+		{"Posture", opts.Posture == nil},
+		{"Seats", opts.Seats == nil},
 		{"Roster", opts.Roster == nil},
 		{"Org", opts.Org == nil},
 		{"Tools", opts.Tools == nil},
 		{"Schedules", opts.Schedules == nil},
+		{"Chart", opts.Chart == nil},
+		{"Holders", opts.Holders == nil},
+		{"SeatOf", opts.SeatOf == nil},
 		{"Placement", opts.Placement == nil},
 	} {
 		if field.absent {
@@ -184,19 +292,30 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 			"beside the engine, which answers every one of them",
 			strings.Join(missing, ", "))
 	}
+	if r := opts.Rooms; (r.Access != nil || r.Stores != nil || r.Presence != nil) && !r.serves() {
+		return nil, errors.New("stream: Options.Rooms needs Access, Stores and Presence " +
+			"together: a room that could be joined and never told who is present, or " +
+			"where its datastore stands, is a room that lies")
+	}
 	s := &Service{
 		hub:       NewHub(),
 		state:     state,
 		health:    opts.Health,
-		handles:   opts.Handles,
+		posture:   opts.Posture,
+		seats:     opts.Seats,
 		roster:    opts.Roster,
 		org:       opts.Org,
 		tools:     opts.Tools,
 		schedules: opts.Schedules,
+		chart:     opts.Chart,
+		holders:   opts.Holders,
+		seatOf:    opts.SeatOf,
 		placement: opts.Placement,
 		now:       opts.Now,
 		interval:  opts.HealthInterval,
 		pushed:    map[string]pushedCall{},
+		rooms:     opts.Rooms,
+		metrics:   opts.Metrics,
 	}
 	if s.now == nil {
 		s.now = func() time.Time { return time.Now().UTC() }
@@ -204,11 +323,27 @@ func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
 	if s.interval <= 0 {
 		s.interval = HealthInterval
 	}
+	if s.rooms.serves() {
+		s.startRooms()
+	}
 	return s, nil
 }
 
 // Hub exposes the client registry, for a transport to join and leave.
 func (s *Service) Hub() *Hub { return s.hub }
+
+// Join registers a client at the posture this node is serving RIGHT NOW.
+//
+// The tick refreshes the hub's posture every interval, which is what moves
+// every open socket when a node sheds. That leaves one window a tick cannot
+// cover: a tab that connects between two ticks, to a node that changed posture
+// since the last one. So a connect reads the posture once, for itself — a
+// coordination round trip per connect, which is what the health body already
+// costs on every probe, and orders of magnitude rarer than a push.
+func (s *Service) Join(c *Client) {
+	s.hub.SetPosture(s.posture(s.currentHealth()))
+	s.hub.Register(c)
+}
 
 // State exposes the projection, for the snapshot and the query surface.
 func (s *Service) State() *livestate.LiveState { return s.state }
@@ -237,7 +372,7 @@ func (s *Service) Ingest(env livestate.Envelope) {
 	}
 	s.pushAgents(change, now)
 	if change.Sandboxes {
-		s.hub.Broadcast(Push(KindSandboxes, s.state.ActiveSandboxes(), now))
+		s.hub.Broadcast(Push(KindSandboxes, SandboxRows(s.state.ActiveSandboxes()), now))
 	}
 	if change.Tokens {
 		// MARKED, NOT SENT. Aggregating here would run inside the
@@ -263,12 +398,12 @@ func (s *Service) ReconcileSandboxes(records []livestate.SandboxRecord, asOf tim
 	change := s.state.ReconcileSandboxes(records, asOf)
 	now := s.now()
 	if change.Sandboxes {
-		s.hub.Broadcast(Push(KindSandboxes, s.state.ActiveSandboxes(), now))
+		s.hub.Broadcast(Push(KindSandboxes, SandboxRows(s.state.ActiveSandboxes()), now))
 	}
 	s.pushAgents(change, now)
 }
 
-// pushAgents sends the rows of the seats a change moved.
+// pushAgents sends the rows of the seats a change moved, named by agent id.
 //
 // A LIVE CALL'S HEAVY FIELDS GO ONLY WHEN THEY MOVED. A running phase moves
 // its seat's row five times a second while a round streams, and the prompt,
@@ -283,6 +418,15 @@ func (s *Service) ReconcileSandboxes(records []livestate.SandboxRecord, asOf tim
 // frame: what is left out is decided against what the previous push said,
 // so two pushes built side by side could each leave out a field the other
 // was the one to carry. Broadcast never blocks, so nothing waits long here.
+//
+// LEFT OUT ONCE, THEN MASKED PER AUDIENCE. What a push leaves out is decided
+// once per broadcast and shared by every reader, because the bookkeeping it
+// is decided against is per SEAT; the rows then travel as [AgentRows], which
+// the hub masks for each audience variant ([livestate.MaskRow]) — a reader
+// the seat's trail is not open to receives its status and no body, whichever
+// heavy fields this push carried. Masked first, each variant would need its
+// own bookkeeping, and two variants would each leave out a field the other
+// was the one to carry.
 func (s *Service) pushAgents(change livestate.Change, now time.Time) {
 	if len(change.Agents) == 0 {
 		return
@@ -290,17 +434,17 @@ func (s *Service) pushAgents(change livestate.Change, now time.Time) {
 	// Sorted, so a push carrying two seats is byte-stable across runs — Go
 	// map iteration is randomised, and a frame whose row order changes for
 	// no reason makes a diff of two captures unreadable.
-	roles := slices.Sorted(maps.Keys(change.Agents))
+	seats := slices.Sorted(maps.Keys(change.Agents))
 	s.pushMu.Lock()
 	defer s.pushMu.Unlock()
-	rows := s.state.OverlayRows(roles)
+	rows := s.state.OverlayRows(seats)
 	if len(rows) == 0 {
 		return
 	}
 	for _, row := range rows {
 		s.leaveOutWhatIsHeld(row)
 	}
-	s.hub.Broadcast(Push(KindAgents, rows, now))
+	s.hub.Broadcast(Push(KindAgents, AgentRows(rows), now))
 }
 
 // pushedCall is what an `agents` push said about one seat's live call.
@@ -316,14 +460,17 @@ type pushedCall struct {
 //
 // Called under pushMu.
 func (s *Service) leaveOutWhatIsHeld(row map[string]any) {
-	role, _ := row["role"].(string)
+	// KEYED ON THE SEAT'S AGENT ID, which is what names a row: a role is
+	// prose two seats may share, and two seats' calls held under one key
+	// would each leave out what the other's push carried.
+	seat, _ := row["agent_id"].(string)
 	call, _ := row["live_call"].(*livestate.LiveCall)
 	if call == nil {
-		delete(s.pushed, role)
+		delete(s.pushed, seat)
 		return
 	}
-	last, ok := s.pushed[role]
-	s.pushed[role] = pushedCall{key: call.Key(), versions: call.Versions}
+	last, ok := s.pushed[seat]
+	s.pushed[seat] = pushedCall{key: call.Key(), versions: call.Versions}
 	if ok && last.key == call.Key() {
 		row["live_call"] = call.Without(last.versions)
 	}
@@ -356,17 +503,23 @@ func (s *Service) RefreshPlacement() {
 // rebuilt agent history from the store on every reconnect would take a
 // thirty-day scan per tab, and would lose any call mid-flight while it did.
 //
+// It is the snapshot FOR ONE AUDIENCE, and carries only the keys whose push
+// that audience may receive (see [needs]), each SHAPED for it exactly as its
+// push is ([Shaped]): the seats' live calls masked to their status where the
+// audience may not read their trail, the coding runs likewise, and the org
+// tree in the variant the audience reads.
+//
 // The one read it makes is the seat leases ([Service.RefreshPlacement]),
 // because no event says which seats a node holds and a connecting tab must not
 // be handed a placement up to a tick old.
-func (s *Service) Snapshot() map[string]any {
+func (s *Service) Snapshot(audience Audience) map[string]any {
 	s.RefreshPlacement()
-	return map[string]any{
+	full := map[string]any{
 		"health": s.currentHealth(),
 		// THE STATIC ROSTER FIRST, with the live overlay merged onto it.
 		// MergeAgents walks what it is GIVEN, so passing nil here — which
 		// it did — produced an empty list whatever the projection held.
-		"agents": s.state.MergeAgents(s.currentRoster()),
+		"agents": AgentRows(s.state.MergeAgents(s.currentRoster())),
 		"org":    s.currentOrg(),
 		"tools":  s.currentTools(),
 		// THE CONFIGURED ROWS, not the dispatch ledger. The screen renders
@@ -376,23 +529,102 @@ func (s *Service) Snapshot() map[string]any {
 		// true.
 		"schedules": s.currentSchedules(),
 		"events":    s.state.RecentEvents(livestate.EventFeedLimit),
-		"sandboxes": s.state.ActiveSandboxes(),
+		"sandboxes": SandboxRows(s.state.ActiveSandboxes()),
 		"tokens":    s.TokenRollup(),
 		"budget":    s.state.Budget(),
 	}
+	// EACH KEY IS WHAT ITS PUSH WOULD CARRY, so a reader receives in the
+	// handshake exactly what it would receive afterwards: an audience that
+	// is not an admin gets no `events` key rather than an empty one, which
+	// the client reads as "nothing here yet" rather than as "the company
+	// has done nothing" — and every key it does get in the shape its push
+	// hands it.
+	out := make(map[string]any, len(full))
+	for key, value := range full {
+		if audience.Receives(snapshotKinds[key]) {
+			_, out[key] = shapeFor(value, audience)
+		}
+	}
+	return out
 }
 
-// Roster is the company's seat list as the `seats` push carries it.
+// snapshotKinds is the push kind each snapshot key stands in for.
+//
+// Total over the keys [Service.Snapshot] builds, which
+// TestEverySnapshotKeyIsAPushKind holds: a key with no kind here is received
+// by nobody, which is the closed end, and would read as a screen that never
+// loads.
+var snapshotKinds = map[string]Kind{
+	"health":    KindHealth,
+	"agents":    KindAgents,
+	"org":       KindOrg,
+	"tools":     KindTools,
+	"schedules": KindSchedules,
+	"events":    KindEvent,
+	"sandboxes": KindSandboxes,
+	"tokens":    KindTokens,
+	"budget":    KindBudget,
+}
+
+// Roster is the company's seat list as the `seats` push carries it: [Shaped],
+// so each reader is handed it masked to their reach over each seat — through
+// the hub on a push, through [ShapeFor] on its REST mirror.
 //
 // Exported because a config apply has to re-send it: the client's own doc
 // says a merge cannot express a deletion, so a revision that removed a role
 // would leave its card on screen until someone reloaded the page.
-func (s *Service) Roster() []map[string]any {
+func (s *Service) Roster() AgentRows {
 	s.RefreshPlacement()
-	return s.state.MergeAgents(s.currentRoster())
+	return AgentRows(s.state.MergeAgents(s.currentRoster()))
 }
 
-// Org is the company's role and unit tree, for the same re-send.
+// AudienceFor is what principal p may receive on this node: [NewAudience] over
+// the agent seats whose trail p may read, each decided by the authority
+// table's own `audit.seat.read` ([authz.ActionSeatTrailRead]) — its lead, or
+// an admin — against the chart this node runs.
+//
+// THE TABLE'S ROW AND NOT A SECOND COPY OF IT, so who reads a seat's body over
+// the socket is exactly who reads its turns, its memory and its conversations
+// through the questions beside it, and moving the rule moves both.
+//
+// AN UNDECIDABLE SEAT IS NOT BODY: a chart this node cannot read withholds a
+// transcript rather than serving one, and the reader still sees the seat's
+// status. An admin reads every body and is decided without the walk.
+func (s *Service) AudienceFor(ctx context.Context, p iam.Principal) Audience {
+	if p.Can(iam.GrantAdmin) {
+		return NewAudience(p, nil)
+	}
+	now := s.now()
+	var body []string
+	undecided := 0
+	for key, seat := range s.seats() {
+		// THE AGENT SEATS, by their agent id: a human seat's key is
+		// [tokens.PersonKey] of its handle, and a person has no trail
+		// here.
+		if seat.Handle == "" || key == tokens.PersonKey(seat.Handle) {
+			continue
+		}
+		d := authz.Decide(ctx, p, authz.ActionSeatTrailRead, authz.Object{
+			Kind: authz.KindPerson, Owner: seat.Handle}, s.chart, now)
+		switch {
+		case d.Allowed:
+			body = append(body, key)
+		case d.Unknown():
+			undecided++
+		}
+	}
+	if undecided > 0 {
+		log.InfoContext(ctx, "stream_audience_undecided", "login", p.Login,
+			"seats", undecided,
+			"hint", "the chart could not say whether this reader leads those "+
+				"seats; they are shown their status and not their trail until "+
+				"the socket is opened again")
+	}
+	return NewAudience(p, body)
+}
+
+// Org is the company's role and unit tree, [Shaped] — what the `org` push
+// carries, and what its REST mirror hands each reader through [ShapeFor].
 func (s *Service) Org() any { return s.currentOrg() }
 
 // Tools is this node's catalogue, for the same re-send. It changes on an
@@ -419,13 +651,114 @@ func (s *Service) currentSchedules() any { return s.schedules() }
 
 func (s *Service) currentTools() []map[string]any { return s.tools() }
 
-// Broadcast pushes an envelope to every client, for the surfaces that own their
-// own data — the roster, the org tree, the tool catalogue, the schedules.
-func (s *Service) Broadcast(kind Kind, data any) {
-	s.hub.Broadcast(Push(kind, data, s.now()))
+// CompanyPublished re-sends every push a published company changes — the
+// roster, the org tree, the tool catalogue and the schedules — to every client
+// whose audience receives it.
+//
+// WHOLE PAYLOADS, each replacing its predecessor: none of these is ever
+// corrected by an event, and an overlay merge cannot express a deletion, so a
+// screen that got a delta and lost it to backpressure would render a removed
+// seat until it reloaded.
+//
+// ON EVERY PUBLISHED COMPANY, at boot as well as on every apply
+// ([engine.Engine.SetOnCompanyPublished]).
+//
+// ONE METHOD NAMING ITS OWN KINDS, where there could be an exported
+// Broadcast(kind, data) and a caller in another package spelling each kind:
+// the payload each kind carries is this service's to build, and a caller that
+// paired a kind with the wrong payload would compile cleanly.
+//
+// AND EVERY OPEN SOCKET IS DECIDED AGAIN, after the re-sends, in memory
+// against the company just published: the seat its principal acts as may be
+// gone, and a lead may have moved off the team whose inbox the socket watches.
+// See lifetime.go.
+func (s *Service) CompanyPublished() {
+	now := s.now()
+	for _, push := range []struct {
+		kind Kind
+		data any
+	}{
+		{KindSeats, s.Roster()},
+		// UNSHAPED: the hub hands each client the shape its audience may
+		// read, so one push carries every variant ([Shaped]).
+		{KindOrg, s.currentOrg()},
+		{KindTools, s.Tools()},
+		{KindSchedules, s.Schedules()},
+	} {
+		s.hub.Broadcast(Push(push.kind, push.data, now))
+	}
+	s.listeners.each(func(l *listener) { signal(l.published) })
 }
 
-func (s *Service) currentHealth() any { return s.health() }
+// ToolsChanged re-sends the tool catalogue alone, to every client whose
+// audience receives it.
+//
+// FOR A CATALOGUE THAT MOVED WITHOUT A PUBLISHED COMPANY. The catalogue is the
+// current epoch's registry, and an epoch is published whole but for its shared
+// MCP servers' tools, which the engine refiles when a server comes back with a
+// different list or a retried start brings one up
+// ([engine.Engine.SetOnCatalogueChanged]). No event corrects this push either,
+// so without a re-send an open dashboard listed the tools the server had when
+// the company was published until somebody reloaded.
+//
+// THE CATALOGUE ALONE: nothing else [Service.CompanyPublished] re-sends has
+// moved, and deciding every socket again against an unchanged company is work
+// with no new answer.
+func (s *Service) ToolsChanged() {
+	s.hub.Broadcast(Push(KindTools, s.Tools(), s.now()))
+}
+
+// InboxChange is the payload of an `inbox_changed` frame: whose inbox moved,
+// by how many notices, and the subject and reason of the newest.
+//
+// IDENTIFIERS AND A COUNT, NEVER CONTENT. The frame reaches whoever watches
+// the seat, and what it is for is telling that screen to re-read the inbox
+// through the `work_inbox` question — the same question, decided by the same
+// authority, as the poll it makes immediate. An excerpt here would be the
+// inbox's content read around that authority. The count is a HINT: the rows
+// are the truth, and a screen re-reads them rather than adding these up.
+type InboxChange struct {
+	Handle      string `json:"handle"`
+	UnreadDelta int    `json:"unread_delta"`
+	Subject     string `json:"subject"`
+	Reason      string `json:"reason"`
+}
+
+// InboxChanged pushes one seat's inbox movement to the clients watching that
+// seat and to nobody else — see [KindInboxChanged].
+//
+// NEVER BLOCKS, for [Hub.Broadcast]'s reason, and its caller is why that
+// matters: this is called from the tracker applier's post-commit half, on the
+// apply loop's own goroutine, with the next batch waiting behind it.
+func (s *Service) InboxChanged(change InboxChange) {
+	if change.Handle == "" {
+		// NO SEAT, NO AUDIENCE: a seat-routed frame with no address is
+		// refused by the hub, loudly. A movement for nobody is not one.
+		return
+	}
+	s.hub.Broadcast(PushSeat(KindInboxChanged, change.Handle, change, s.now()))
+}
+
+// InboxReread tells every watched seat's sockets to read their inbox again: one
+// `inbox_changed` frame per watched seat, counting nothing and naming no
+// subject — see [KindInboxChanged].
+//
+// FOR A GAP IN WHAT THIS NODE HEARS, never a movement: the engine switched the
+// source its movements come from (its own applier, a peer's relayed), and what
+// moved in between is not replayed. A frame is exactly what a screen needs to
+// cover that — it re-reads the inbox through the `work_inbox` question on every
+// one, whatever it counts — where closing every socket would have rebuilt every
+// tab's whole snapshot to refresh one list.
+//
+// NEVER BLOCKS, for [Service.InboxChanged]'s reason.
+func (s *Service) InboxReread() {
+	now := s.now()
+	for _, seat := range s.hub.WatchedSeats() {
+		s.hub.Broadcast(PushSeat(KindInboxChanged, seat, InboxChange{Handle: seat}, now))
+	}
+}
+
+func (s *Service) currentHealth() Health { return s.health() }
 
 // StartHealthTicks runs the shared tick until the context is cancelled or
 // [Service.Stop] is called.
@@ -455,7 +788,14 @@ func (s *Service) StartHealthTicks(ctx context.Context) {
 			case <-stop:
 				return
 			case <-ticker.C:
-				s.hub.Broadcast(Push(KindHealth, s.currentHealth(), s.now()))
+				// ONE HEALTH READ PER TICK, feeding both the frame
+				// and the posture derived from it. Read twice, a tab
+				// could be told "shed" in the frame it is handed
+				// while the posture that decided whether to hand it
+				// anything came from a different instant.
+				health := s.currentHealth()
+				s.hub.SetPosture(s.posture(health))
+				s.hub.Broadcast(Push(KindHealth, health, s.now()))
 				s.flushTokens()
 				// PLACEMENT ON THE SAME TICK: a seat moves between
 				// nodes on a lease, which publishes nothing, so an open
@@ -506,9 +846,9 @@ func (s *Service) TokenRollup() tokens.Rollup {
 	// its window on its own clock and names the two instants it cut it at.
 	window := s.state.Spend()
 	return tokens.Aggregate(window.Records, tokens.Options{
-		Handles: s.handles(),
-		Since:   window.Since,
-		Until:   window.Until,
+		Seats: s.seats(),
+		Since: window.Since,
+		Until: window.Until,
 	})
 }
 
@@ -524,5 +864,6 @@ func (s *Service) Stop() {
 		close(stop)
 		<-done
 	}
+	s.stopRooms()
 	s.hub.Close()
 }

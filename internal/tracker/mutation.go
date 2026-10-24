@@ -1,6 +1,7 @@
 package tracker
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -24,13 +25,13 @@ import (
 //
 // What a writer stamps is [minimumRecordVersion] — the highest version among
 // the fields in [versionedFields] that the record actually carries, or 1 when
-// it carries none — which [MutationRecord.Encode] computes. Stamping this
-// constant instead was the bug: the day it moved to 2, every record a new
-// node wrote would have been unreadable to an old one, the ones carrying
-// nothing new included, so the old half of a rolling upgrade would have
-// retained every write in the company and refused every read its scopes met.
-// Stamped by content, an old node holds back exactly the records it would
-// otherwise apply lossily and applies everything else.
+// it carries none — which [MutationRecord.Encode] computes. Stamped at this
+// constant instead, the day it moves every record a new node writes would be
+// unreadable to an old one, the ones carrying nothing new included, so the old
+// half of a rolling upgrade would retain every write in the company and refuse
+// every read its scopes met. Stamped by content, an old node holds back
+// exactly the records it would otherwise apply lossily and applies everything
+// else.
 //
 // It moves ONLY with the table, and exactly to the table's highest version:
 // statelogtest's declaration case refuses a build that reads a version no
@@ -59,6 +60,8 @@ const baseRecordVersion = 1
 // versionedFields is every field a tracker record has gained since the base
 // format, and the version a reader must be at to apply a record carrying it.
 //
+// EMPTY, because the base format is everything this build writes.
+//
 // # Adding a field to any record, payload or document is adding a row here
 //
 // A field an older build has no home for is decoded AROUND: the build reads
@@ -74,6 +77,11 @@ const baseRecordVersion = 1
 // — through `mutation` for a payload field — and a record in the domain's
 // statelogtest candidate that carries it, which is what certifies the path is
 // the one the encoder actually writes.
+//
+// A change to how the applier treats a field it ALREADY copies is the same
+// hazard with no new field to carry it, and takes the same gate: a marker the
+// writer sets, a row that stamps it, and the new rule applied only to a record
+// at that version or above.
 //
 // A field that no tag has shipped is still a field two builds of one rolling
 // upgrade disagree about, so "nothing has been released" does not exempt a new
@@ -134,7 +142,7 @@ const (
 	OpBarrier OpKind = "barrier"
 
 	// OpTrimmed is the trim's record that removes the anchors below a
-	// floor (ADR-0032), which writes nothing of this domain's anywhere.
+	// floor (ADR-0046), which writes nothing of this domain's anywhere.
 	OpTrimmed OpKind = "trimmed"
 )
 
@@ -206,8 +214,10 @@ const (
 	// object rather than their own kind of record.
 	TermObject TermKind = "object"
 
-	// TermKey is an addressable NAME — "ENG-142" — because the alias row
-	// is keyed on the key rather than on any object's id.
+	// TermKey is an addressable NAME — "ENG-142" — because the key
+	// directory is keyed on the key rather than on any object's id: the
+	// alias claim, and every create, re-key and purge that claims, frees or
+	// hands on a key, is filed under it (see [keyTerm]).
 	TermKey TermKind = "key"
 
 	// TermContainer is a project key, or the workspace.
@@ -292,15 +302,7 @@ func (t ScopeTerm) Path() string {
 	case TermKey:
 		return join(pathDomain, pathContainer, t.container(), pathKey, t.ID)
 	case TermContainer:
-		// THE CONTAINER TERM'S OWN NAME IS ITS ID, not its Container
-		// field: "container(ENG)" names ENG, and reading the field
-		// here would resolve every container term to the workspace and
-		// make a project-wide deferral cover the whole company.
-		key := t.ID
-		if key == "" {
-			key = t.container()
-		}
-		return join(pathDomain, pathContainer, key)
+		return join(pathDomain, pathContainer, t.named())
 	case TermFamily:
 		if t.ID == "" {
 			return pathDomain
@@ -323,6 +325,19 @@ func (t ScopeTerm) container() string {
 		return WorkspaceContainer
 	}
 	return t.Container
+}
+
+// named is the container a CONTAINER term names.
+//
+// THE CONTAINER TERM'S OWN NAME IS ITS ID, not its Container field:
+// "container(ENG)" names ENG, and reading the field would resolve every
+// container term to the workspace and make a project-wide deferral cover the
+// whole company. One with no ID names the container its field does.
+func (t ScopeTerm) named() string {
+	if t.ID == "" {
+		return t.container()
+	}
+	return t.ID
 }
 
 // join builds a scope path from its segments, skipping empty ones so a
@@ -474,9 +489,10 @@ func subjectPath(s Subject, container string) string {
 		// — which is exactly what an archive is.
 		return ScopeTerm{Kind: TermContainer, ID: s.ID}.Path()
 	case KindAlias:
+		// FILED UNDER THE KEY, with every other record that claims,
+		// frees or hands it on — see [keyTerm].
 		key, _, _ := strings.Cut(s.ID, ".")
-		project, _, _ := strings.Cut(key, "-")
-		return ScopeTerm{Kind: TermKey, Container: project, ID: key}.Path()
+		return keyTerm(key).Path()
 	case KindCatalogue:
 		return ScopeTerm{Kind: TermFamily, ID: string(KindCatalogue)}.Path()
 	case KindPerson:
@@ -576,6 +592,94 @@ func (s ScopeSet) Validate() error {
 		}
 	}
 	return nil
+}
+
+// capped is this scope held to [MaxScopeTerms] by the cap's own rule: a writer
+// whose affected set is larger states the smallest COVERING term instead.
+//
+// THE LARGEST CONTAINERS FOLD FIRST, the name breaking a tie, each into its
+// own container term, until the enumeration fits — so the same set always
+// states the same scope — and one spread over more containers than the cap
+// is the DOMAIN. An object or a key already under a container the scope names
+// whole is dropped, and so is a term named twice.
+//
+// EVERY ENUMERATION A WRITER WIDENS PASSES THROUGH IT, because each widening
+// is bounded on its own and their sum is not: a task's sixty-four dependents
+// are one cap's worth and its own term is a sixty-fifth, which
+// [ScopeSet.Validate] refused — so every write to a blocker somebody had
+// filled was refused inside its decide, for ever. A sentinel is returned as
+// it is.
+func (s ScopeSet) capped() ScopeSet {
+	if s.Subject || len(s.Terms) == 0 {
+		return s
+	}
+	domain := ScopeSet{Terms: []ScopeTerm{{Kind: TermDomain}}}
+	whole := map[string]bool{}
+	for _, t := range s.Terms {
+		switch t.Kind {
+		case TermDomain:
+			return domain
+		case TermContainer:
+			whole[t.named()] = true
+		case TermObject, TermKey, TermFamily:
+		default:
+			// A KIND THIS BUILD DOES NOT WRITE is read as the domain
+			// ([ScopeTerm.Path]), so folding it is folding the domain.
+			return domain
+		}
+	}
+	seen := map[string]bool{}
+	fixed := []ScopeTerm{}
+	byContainer := map[string][]ScopeTerm{}
+	kept := make([]ScopeTerm, 0, len(s.Terms))
+	for _, t := range s.Terms {
+		path := t.Path()
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+		switch t.Kind {
+		case TermContainer, TermFamily:
+			fixed = append(fixed, t)
+		default:
+			if whole[t.container()] {
+				continue
+			}
+			byContainer[t.container()] = append(byContainer[t.container()], t)
+		}
+		kept = append(kept, t)
+	}
+	if len(kept) <= MaxScopeTerms {
+		return ScopeSet{Terms: kept}
+	}
+	containers := make([]string, 0, len(byContainer))
+	for c := range byContainer {
+		containers = append(containers, c)
+	}
+	if len(fixed)+len(containers) > MaxScopeTerms {
+		return domain
+	}
+	slices.SortFunc(containers, func(a, b string) int {
+		if c := cmp.Compare(len(byContainer[b]), len(byContainer[a])); c != 0 {
+			return c
+		}
+		return cmp.Compare(a, b)
+	})
+	count := len(kept)
+	for _, c := range containers {
+		if count <= MaxScopeTerms {
+			break
+		}
+		count -= len(byContainer[c]) - 1
+		fixed = append(fixed, ScopeTerm{Kind: TermContainer, ID: c})
+		delete(byContainer, c)
+	}
+	terms := fixed
+	for _, c := range containers {
+		terms = append(terms, byContainer[c]...)
+	}
+	slices.SortFunc(terms, func(a, b ScopeTerm) int { return cmp.Compare(a.Path(), b.Path()) })
+	return ScopeSet{Terms: terms}
 }
 
 // RecordEnvelope decodes at EVERY version, BEFORE V is consulted.
@@ -679,30 +783,6 @@ type MutationRecord struct {
 	ActorKind  AuthorKind `json:"actor_kind,omitempty"`
 	OperatorID string     `json:"operator_id,omitempty"`
 
-	// ActorSeat is the chart seat the writing credential is BOUND to
-	// with `contact.crewlet_operator_id`, and it has two readers: the
-	// wake's own actor exclusion, and — through the history row's
-	// `actor_seat` — the screen that draws who made a change. Empty for a
-	// token nobody bound and for every writer that already IS a seat.
-	//
-	// IT IS NOT AN AUTHOR. [MutationRecord.Actor] stays the token and
-	// [MutationRecord.ActorKind] stays `operator`, because a tracker whose
-	// author field is chosen by the writer is not an audit trail: every
-	// filter, every audit read and every refusal reads those two. What a
-	// card DRAWS for an operator's change is this — the person — beside
-	// the credential, never instead of it in the record.
-	//
-	// WITHOUT IT THE EXCLUSION CANNOT SEE THE PERSON. [Route] drops a
-	// candidate that is the actor, and a bound operator's own gestures
-	// land on their SEAT: the watch a create leaves, the watch a comment
-	// leaves. So the record said `founder`, the candidate said
-	// `jane-founder`, and a founder was woken by every item their own
-	// assistant filed and every comment it left.
-	//
-	// ADDITIVE, like every field beside it: a build with no field for it
-	// keeps it in [MutationRecord.Extra] and re-encodes it unchanged.
-	ActorSeat string `json:"actor_seat,omitempty"`
-
 	TurnID  string   `json:"turn_id,omitempty"`
 	Chain   []string `json:"chain,omitempty"`
 	BatchID *string  `json:"batch_id,omitempty"`
@@ -764,24 +844,6 @@ type MutationRecord struct {
 // and a field a writer could set is a field a writer could lie about — so it
 // reaches the applier as an argument rather than as a key in the format.
 // Stated here so nobody "completes" the envelope by adding it.
-
-// ActorParty is every name the writer of this record answers to — the person
-// first, the credential behind them.
-//
-// FOR AN EXCLUSION AND NEVER FOR A RENDERING, which is [Party]'s own rule:
-// the alias is matched against and nothing is ever handed a credential where
-// a colleague's handle goes. [Route] is its one caller, and what it answers
-// there is "is this candidate the person who just wrote".
-//
-// A PARTY OF ONE IS THE ORDINARY ANSWER — every seat, every human, and every
-// token nobody bound — and it is exactly the handle the exclusion compared
-// against before this field existed.
-func (r MutationRecord) ActorParty() Party {
-	if seat := strings.TrimSpace(r.ActorSeat); seat != "" {
-		return Party{Handle: seat, OperatorID: r.Actor}
-	}
-	return PartyOf(r.Actor)
-}
 
 // DecodeEnvelope is the FIRST pass, and it never fails on version.
 //
@@ -852,7 +914,7 @@ func Decode(payload []byte) (MutationRecord, error) {
 // hand-maintained list fails in.
 var knownKeys = []string{
 	"v", "op_id", "subject", "op", "created_at", "gen", "writer", "scope",
-	"expect", "mutation", "actor", "actor_kind", "operator_id", "actor_seat",
+	"expect", "mutation", "actor", "actor_kind", "operator_id",
 	"turn_id", "chain", "batch_id", "kind", "notify",
 }
 
@@ -879,7 +941,8 @@ func (e *ErrFutureVersion) Error() string {
 // below what the record's own fields need, because that record would be
 // applied, lossily, by exactly the builds the stamp exists to hold it back
 // from. A record every build must read ([RecordEnvelope.readByEveryBuild]) is
-// refused whenever it carries a versioned field at all, stamped or set.
+// refused whenever it carries a versioned field at all, stamped or set — save
+// a gate's own changed apply ([statelog.VersionedField.Gate]).
 //
 // The scope is validated HERE rather than at the applier, because a scope that
 // under-states a record's blast radius is only ever a writer's mistake and the
@@ -1249,6 +1312,30 @@ type Snapshot struct {
 	// duplicating the id a record already carries is a second place for it
 	// to disagree with itself.
 	Task string `json:"task,omitempty"`
+
+	// KeyCollision says [Snapshot.Key] opens ANOTHER task — one that claimed
+	// the key first — so the task this wake points at is reached only by its
+	// id ([Snapshot.Address]). Without it a seat woken about the duplicate of
+	// a key was told the key, read it with get_work_item, and answered on the
+	// claimant.
+	//
+	// DERIVED BY THE WRITER, never stated by a caller: [Writer.decide] reads
+	// the key directory in the decide's own snapshot ([keyHeldByAnother]) for
+	// every record that carries a notification, and overwrites whatever the
+	// caller's wake held. A writer's reading, which a concurrent create can
+	// overtake — see that function for what that costs.
+	//
+	// READ BY THE PARSER AND NEVER BY THE APPLIER: the inbox derives its own
+	// `subject_key_collision` from the directory at read, so no row depends
+	// on it — the wake is rendered from the record by whichever node wins
+	// its delivery, and that is the reader this field is for.
+	KeyCollision bool `json:"key_collision,omitempty"`
+}
+
+// Address is the reference that opens the task this wake points at: its key,
+// or its id where another task claimed the key first. See [ItemAddress].
+func (s Snapshot) Address(subject Subject) string {
+	return ItemAddress(s.TaskID(subject), s.Key, s.KeyCollision)
 }
 
 // TaskID is the task this wake points at, or empty when it points at none.
@@ -1553,7 +1640,7 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 }
 
 // EncodeTrimmed renders the trim's trimmed record ([statelog.TrimmedEnvelope],
-// ADR-0032) as a record this domain's applier decodes.
+// ADR-0046) as a record this domain's applier decodes.
 //
 // The framework owns WHEN one is appended, what it removes and the floor its
 // subject names; the domain owns what a record on its log looks like — the

@@ -188,18 +188,23 @@ func decodeCell(cell any) (any, error) {
 
 // subject is the row's address on the changelog.
 //
-// The seat and the table are readable; the key is HASHED. A natural key can
-// be anything a counterparty is called on a chat platform — with dots,
-// spaces, wildcards — and every one of those is a token separator or a
-// pattern character in a subject. Hashing makes the address total, and the
-// row carries its own values anyway, so nothing needs to read it back out.
-func (t table) subject(handle string, values map[string]any) string {
+// THE SEAT IS ITS AGENT ID, the UUIDv5 over (org name, handle) (ADR-0013).
+// The changelog is COMPACTED — one message retained per subject — so the
+// subject IS a row's durable address, and the id is a fixed-width token that
+// carries no character a subject cannot.
+//
+// The table is readable; the key is HASHED. A natural key can be anything a
+// counterparty is called on a chat platform — with dots, spaces, wildcards —
+// and every one of those is a token separator or a pattern character in a
+// subject. Hashing makes the address total, and the row carries its own
+// values anyway, so nothing needs to read it back out.
+func (t table) subject(seat string, values map[string]any) string {
 	parts := make([]string, 0, len(t.key))
 	for _, column := range t.key {
 		parts = append(parts, fmt.Sprint(values[column]))
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
-	return fmt.Sprintf("%s%s.%s.%x", topics.MemoryPrefix, handle, t.name, sum[:16])
+	return fmt.Sprintf("%s%s.%s.%x", topics.MemoryPrefix, seat, t.name, sum[:16])
 }
 
 // upsert writes one carried row into this node's store.
@@ -256,14 +261,18 @@ func upsert(ctx context.Context, tx *sql.Tx, t table, row Row) error {
 	return nil
 }
 
-// seatRef is one seat, in both spellings the schema uses for it.
+// seatRef is one seat, in both spellings the schema uses for it: its handle,
+// which the handle-keyed tables (episodes, counterparty profiles, the two
+// skill tables, the conversation ledger) hold, and the agent id derived from
+// it, which the changelog's subjects and the id-keyed tables are built from.
+// Both are stable across nodes because a handle is immutable (ADR-0013).
 type seatRef struct {
 	Handle string
 
-	// AgentID is the derived UUIDv5 over (org name, handle). Derived
-	// rather than looked up, so every node computes the same value with no
-	// database and no running instance — which is exactly what makes a row
-	// written on one node addressable from another.
+	// AgentID is the derived UUIDv5 over (org name, handle).
+	// Derived rather than looked up, so every node computes the same value
+	// with no database and no running instance — which is exactly what
+	// makes a row written on one node addressable from another.
 	AgentID string
 }
 

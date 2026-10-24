@@ -138,30 +138,29 @@ func TestSummaries(t *testing.T) {
 	}, {
 		name:    "a prefetch summary counts its blocks",
 		payload: PrefetchSummary{RoleName: "Dev", CounterpartyHit: true, PersonalMemoryHit: true},
-		want:    "Dev prefetch: 2/7 hits",
+		want:    "Dev prefetch: 2/6 hits",
 	}, {
 		// THE DENOMINATOR IS THE NUMBER OF BLOCKS, and it was a literal
 		// beside a hand-written list with nothing holding the two
-		// together. A count that goes on saying six after a seventh block
-		// lands reads to an operator as a turn that hit everything — or,
-		// on a turn that hit all seven, as "7/6".
+		// together. A count that goes on saying one number after a block
+		// lands or leaves reads to an operator as a turn that hit
+		// everything — or, on a turn that hit them all, as "7/6".
 		name: "every block hit counts, and the denominator follows",
 		payload: PrefetchSummary{RoleName: "Dev",
 			CounterpartyHit: true, SynthesizedSkillsHit: true, EpisodeRecallHit: true,
-			OnboardingHintHit: true, PersonalMemoryHit: true, RelevantKnowledgeHit: true,
-			ThreadContextHit: true},
-		want: "Dev prefetch: 7/7 hits",
+			PersonalMemoryHit: true, RelevantKnowledgeHit: true, ThreadContextHit: true},
+		want: "Dev prefetch: 6/6 hits",
 	}, {
 		name:    "a gated prefetch says it was gated",
 		payload: PrefetchSummary{RoleName: "Dev", TriggerRequiresRecon: true},
-		want:    "Dev prefetch: 0/7 hits (thin trigger — filters gated)",
+		want:    "Dev prefetch: 0/6 hits (thin trigger — filters gated)",
 	}, {
 		// THE THREAD BLOCK IS NOT GATED: it is what makes a thin trigger
 		// thick, so a turn whose filters were all skipped still counts it.
 		name: "a gated turn still counts the thread it was handed",
 		payload: PrefetchSummary{RoleName: "Dev",
 			TriggerRequiresRecon: true, ThreadContextHit: true},
-		want: "Dev prefetch: 1/7 hits (thin trigger — filters gated)",
+		want: "Dev prefetch: 1/6 hits (thin trigger — filters gated)",
 	}, {
 		name:    "a no-op persist decision",
 		payload: PersistDeciderCompleted{RoleName: "Dev", Classification: PersistNOOP},
@@ -194,6 +193,91 @@ func TestSummaries(t *testing.T) {
 		name:    "later rounds count on from there",
 		payload: AgentTurnProgress{RoleName: "Dev", Phase: PhaseReview, RoundNum: 2},
 		want:    "Dev working (review, round 3)",
+	}, {
+		name: "a sign-in names its method and its second factor",
+		payload: IAMSessionStarted{Login: "jane.doe", Method: SignInPassword,
+			SecondFactor: FactorTOTP},
+		want: "jane.doe signed in (password and authenticator app)",
+	}, {
+		// THE WORDS A PERSON READS, never the wire values.
+		name:    "a token's sign-in names the method in words",
+		payload: IAMSessionStarted{Login: "token:ci", Method: SignInToken},
+		want:    "token:ci signed in (API token)",
+	}, {
+		name: "a mint names the credential in words",
+		payload: IAMCredentialMinted{Credential: "c-1", Kind: CredentialTOTP,
+			Owner: "p-1"},
+		want: "Authenticator app created for p-1",
+	}, {
+		name:    "a revocation of an unnamed kind still reads as a sentence",
+		payload: IAMCredentialRevoked{Credential: "c-1", Owner: "p-1"},
+		want:    "A credential revoked for p-1",
+	}, {
+		name:    "a sign-out nobody could be named for names no author",
+		payload: IAMSessionEnded{Person: "p-1", Lineage: "0192aabbccddeeff", Reason: EndLogout},
+		source:  "node-a",
+		want:    "Session 0192aabb of p-1 ended (logout)",
+	}, {
+		name:    "a sign-out everywhere says every session",
+		payload: IAMSessionEnded{Person: "p-1", Reason: EndLogoutAll, By: "jane.doe"},
+		want:    "Every session of p-1 ended (logout_all)",
+	}, {
+		// THE COUNT IS EVERY SOURCE'S, and the one that sent most of it
+		// leads, because that is what a reader of the feed sorts by.
+		name: "a minute of failures counts every source and leads with the busiest",
+		payload: IAMLoginFailures{Sources: []SourceFailures{
+			{Source: "203.0.113.9", Failures: 6}, {Source: "198.51.100.4", Failures: 1}}},
+		want: "7 failed attempt(s) in one minute from 2 source(s); most from 203.0.113.9 (6)",
+	}, {
+		name: "the overflow counts what came from sources past the cap",
+		payload: IAMLoginFailures{Sources: []SourceFailures{{Failures: 2}},
+			Overflow: 900},
+		want: "902 failed attempt(s) in one minute from 1 source(s); most from an " +
+			"unidentified client (2); 900 more from other addresses",
+	}, {
+		name: "an unverifiable record names the key and what the node holds",
+		payload: RecordUnverifiable{Domain: "iam", KeyID: "k3",
+			Held: []string{"k2", "k1"}},
+		want: `iam record signed under key "k3", which this node does not hold ` +
+			`(it holds k1, k2); nothing under it is applied until it does`,
+	}, {
+		name:    "a frame that is not a frame names no key",
+		payload: RecordTampered{Domain: "tracker", Position: "CREWLET_TRACKER_LOG@1:918"},
+		want:    "tracker record at CREWLET_TRACKER_LOG@1:918 fails its signature under no key (not a signed frame); the applier stopped",
+	}, {
+		name:    "a spent recovery code says how many are left",
+		payload: IAMRecoveryCodeUsed{Login: "jane.doe", Remaining: 0},
+		want:    "jane.doe used a recovery code (0 left)",
+	}, {
+		// WHAT IT MEANS, because the reader acts on the password.
+		name: "a second factor at its ceiling says the password is known",
+		payload: IAMSecondFactorThrottled{Person: "p-1", Login: "jane.doe",
+			Remote: "203.0.113.9"},
+		want: "Too many wrong two-step codes for jane.doe, the last from " +
+			"203.0.113.9. Someone may know their password.",
+	}, {
+		name:    "a reset link issued says it is a reset",
+		payload: IAMPasswordResetIssued{Person: "p-1", Credential: "c-1"},
+		want:    "Password reset link issued for p-1",
+	}, {
+		// A FIRST LINK IS NOT A RESET: there was no password to reset.
+		name:    "a first password link says it is the first",
+		payload: IAMPasswordResetIssued{Person: "p-1", Credential: "c-1", First: true},
+		want:    "First password link issued for p-1",
+	}, {
+		name:    "a reset spent says what it ended",
+		payload: IAMPasswordReset{Person: "p-1", Login: "jane.doe"},
+		want: "jane.doe set a new password with a reset link and was signed " +
+			"out everywhere",
+	}, {
+		// AND A FIRST PASSWORD ENDS NOTHING, so it does not claim to.
+		name:    "a first password spent claims to end nothing",
+		payload: IAMPasswordReset{Person: "p-1", Login: "jane.doe", First: true},
+		want:    "jane.doe set their first password",
+	}, {
+		name:    "a grant change lists both directions",
+		payload: IAMGrantsChanged{Person: "p-1", Added: []string{"admin"}, Removed: []string{"tracker", "knowledge"}},
+		want:    "Access for p-1 changed: +admin; -tracker, -knowledge",
 	}, {
 		name:    "a skip names the seat and the reason",
 		payload: NotificationSkipped{Handle: "swe", Reason: "human seat", NotificationSource: "jira"},

@@ -9,17 +9,22 @@
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { LayerHost, ToastProvider } from "@crewlethq/ui";
+import { ToastProvider } from "@crewlethq/ui";
 
 import { CommandPalette } from "./Palette.tsx";
+import { ProjectSwitcherProvider } from "../header/ProjectSwitcher.tsx";
 import { forgetAnswersForTest } from "./answer.ts";
-import { ANSWER_IDLE_MS } from "./hits.ts";
+import { ANSWER_IDLE_MS, destinationHits } from "./hits.ts";
 import { COLLEAGUE_QUERY_MAX, SEARCH_QUERY_MAX } from "~/contract/wire.ts";
 import { Router, href } from "../router.tsx";
 import { DESTINATIONS } from "../nav.ts";
+import { TOUCH_MEDIA } from "../layout.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { remember } from "~/lib/recents.ts";
+import { noteReader } from "~/lib/reader.ts";
+import { reloadForTest } from "~/lib/prefs.ts";
+import { STORAGE_KEYS } from "~/lib/storage.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { withDerived } from "~/test/org.ts";
@@ -39,9 +44,13 @@ class InertWebSocket {
 const EVERY_ACT = ["update_work_item", "create_work_item", "answer_knowledge"];
 
 const JANE: ViewerState = {
-  operatorID: "founder",
-  operator: true,
+  login: "founder",
+  grants: ["admin", "tracker", "knowledge"],
+  admin: true,
+  tracker: true,
+  knowledge: true,
   handle: "jane",
+  owner: "jane",
   name: "Jane Founder",
   acts: EVERY_ACT,
   project: "ENG",
@@ -56,9 +65,13 @@ const JANE: ViewerState = {
 
 const ANONYMOUS: ViewerState = {
   ...JANE,
-  operatorID: "",
-  operator: false,
+  login: "",
+  grants: [],
+  admin: false,
+  tracker: false,
+  knowledge: false,
   handle: "",
+  owner: "",
   name: "",
   acts: [],
   project: "",
@@ -66,10 +79,16 @@ const ANONYMOUS: ViewerState = {
   anonymous: true,
 };
 
+/**
+ * A principal no seat binds — a pipeline, an operator outside the chart. It
+ * ACTS, under its own login (ADR-0024); what it lacks is a seat.
+ */
 const UNBOUND: ViewerState = {
   ...ANONYMOUS,
-  operatorID: "ci",
-  operator: true,
+  login: "ci",
+  owner: "ci",
+  grants: ["tracker"],
+  acts: EVERY_ACT,
   anonymous: false,
   unbound: true,
 };
@@ -82,6 +101,7 @@ const ORG = {
   ],
   units: [
     {
+      id: "platform",
       name: "Platform",
       type: "team",
       roles: [{ name: "SRE", handle: "sre", goal: "Keep it up" }],
@@ -146,7 +166,7 @@ function mount({
   viewer = JANE,
   answers = {},
   hash = "#/",
-  agents = [{ role: "SWE", activity: "working" }],
+  agents = [{ id: "swe", agent_id: "a-swe", role: "SWE", handle: "swe", activity: "working" }],
 }: {
   viewer?: ViewerState;
   answers?: Answers;
@@ -158,7 +178,9 @@ function mount({
   const store = new Store();
   store.setConnected(true);
   store.applyOrg(withDerived(ORG) as never);
-  store.applyAgents(agents as never);
+  // THE ROSTER, which is how a seat reaches the list: an overlay for a seat
+  // the roster does not carry is dropped (`Store.applyAgents`).
+  store.applySeats(agents as never);
   const socket = new LiveSocket(store);
   socket.query = ((kind: string, params?: Record<string, unknown>) => {
     asked.push({ kind, params: params ?? {} });
@@ -167,15 +189,19 @@ function mount({
   }) as typeof socket.query;
   const closed = vi.fn();
   const keys = vi.fn();
+  // NO `LayerHost`, as the application mounts none: every overlay is
+  // portalled to the body, in the one stacking context the layer stack orders
+  // (`app/App.tsx`).
   render(
     <ToastProvider>
-      <LayerHost>
-        <ClientContext.Provider value={{ store, socket }}>
-          <Router>
+      <ClientContext.Provider value={{ store, socket }}>
+        <Router>
+          {/* THE FRAME'S SWITCHER, which "Switch project…" opens. */}
+          <ProjectSwitcherProvider>
             <CommandPalette onClose={closed} onShowKeys={keys} />
-          </Router>
-        </ClientContext.Provider>
-      </LayerHost>
+          </ProjectSwitcherProvider>
+        </Router>
+      </ClientContext.Provider>
     </ToastProvider>,
   );
   const input = screen.getByRole("combobox");
@@ -218,13 +244,59 @@ afterEach(() => {
   location.hash = "#/";
 });
 
+// THE PALETTE IS ON THE PAGE'S ONE LAYER STACK, portalled to the body rather
+// than into a host of its own: a stacking context around it would cap it
+// beneath the narrow layout's open drawer, which paints in the root context,
+// and the palette opened from the drawer's search drew under the drawer.
+test("the palette is portalled to the body, under no layer host", () => {
+  mount();
+  const dialog = screen.getByRole("dialog", { name: "Search" });
+  expect(dialog.closest(".crewlet-layer-host")).toBeNull();
+  expect(dialog.closest(".crewlet-modal-overlay")?.parentElement).toBe(document.body);
+});
+
+// THE PALETTE'S KEYCAPS ARE FOR A READER WITH KEYS: on a phone its footer's
+// legend and its rows' chords named keys nobody there has. Mutation: draw them
+// whatever the input and the touch case goes red; drop them everywhere and the
+// keyboard case does.
+test.each([
+  [true, 0],
+  [false, 1],
+])("on a touch device (%s) the palette's key legend is drawn %d times", async (on, legends) => {
+  const had = Object.getOwnPropertyDescriptor(globalThis, "matchMedia");
+  Object.defineProperty(globalThis, "matchMedia", {
+    configurable: true,
+    writable: true,
+    value: (query: string) => ({
+      matches: on && query === TOUCH_MEDIA,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    }),
+  });
+  try {
+    const p = mount();
+    await p.type("budget");
+    expect(document.querySelectorAll(".palette-keys")).toHaveLength(legends);
+    const create = p.row(/Create task/);
+    expect(create.querySelectorAll(".crewlet-kbd-combo")).toHaveLength(legends);
+  } finally {
+    if (had) Object.defineProperty(globalThis, "matchMedia", had);
+  }
+});
+
 describe("scopes and sigils", () => {
-  test("the five scopes are tabs, All first", () => {
+  test("the six scopes are tabs, All first", () => {
     mount();
     expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
       "All",
       "Tasks",
       "Pages",
+      "Artifacts",
       "Agents",
       "Actions",
     ]);
@@ -268,7 +340,13 @@ describe("scopes and sigils", () => {
 // Oldest first, as every list of running turns is; a seat waiting on a person,
 // or one whose turn has no id yet, is not offered as a way to a running turn.
 describe("running now", () => {
+  // RECENTS ARE A READER'S (`lib/recents.ts`): a place visited before the tab
+  // knows who reads it lands in no list, so the reader is named first.
+  beforeEach(() => noteReader("p-1"));
+
   const working = (role: string, handle: string, turn: string, minute: number, item = "") => ({
+    id: handle,
+    agent_id: `a-${handle}`,
     role,
     handle,
     activity: "working",
@@ -290,7 +368,7 @@ describe("running now", () => {
   const agents = [
     working("SRE", "sre", "t-late", 9),
     working("SWE", "swe", "t-early", 1, "ENG-412"),
-    { role: "Jane Founder", handle: "jane", activity: "needs" },
+    { id: "jane", agent_id: "a-jane", role: "Jane Founder", handle: "jane", activity: "needs" },
     { ...working("SWE 2", "swe-2", "", 3), turn: null, live_call: null },
   ];
 
@@ -339,7 +417,7 @@ describe("running now", () => {
     expect(before, "the highlight is on a row under the group").not.toContain("SRE");
     act(() =>
       p.store.applyAgents([
-        { role: "SWE", handle: "swe", activity: "idle", turn: null, live_call: null },
+        { agent_id: "a-swe", activity: "idle", turn: null, live_call: null },
         agents[0]!,
       ] as never),
     );
@@ -357,10 +435,11 @@ describe("running now", () => {
     expect(location.hash).toBe(href(dest!.path));
   });
 
-  // AND A TURN THAT STARTS while it is open is not offered until the next ⌘K.
+  // AND A TURN THAT STARTS while it is open is not offered until the next ⌘K —
+  // on a seat the roster gains meanwhile, which is how a new seat arrives.
   test("a turn starting while it is open adds no row", () => {
     const p = mount({ agents });
-    act(() => p.store.applyAgents([...agents, working("CTO", "cto", "t-new", 5)] as never));
+    act(() => p.store.applySeats([...agents, working("CTO", "cto", "t-new", 5)] as never));
     expect(within(group("Running now")).getAllByRole("option")).toHaveLength(2);
   });
 
@@ -377,7 +456,9 @@ describe("running now", () => {
     await p.type("deploy");
     expect(screen.queryByText("Running now")).toBeNull();
     cleanup();
-    mount({ agents: [{ role: "SWE", activity: "idle" }] });
+    mount({
+      agents: [{ id: "swe", agent_id: "a-swe", role: "SWE", handle: "swe", activity: "idle" }],
+    });
     expect(screen.queryByText("Running now")).toBeNull();
   });
 });
@@ -388,10 +469,13 @@ test("an agent's state names its pauser by the chart's name", async () => {
   const p = mount({
     agents: [
       {
+        id: "sre",
+        agent_id: "a-sre",
         role: "SRE",
+        handle: "sre",
         activity: "stopped",
         stopped_reason: "paused",
-        paused: { by: "jane", at: new Date().toISOString(), reason: "" },
+        paused: { by: "jane", by_kind: "human", at: new Date().toISOString(), reason: "" },
       },
     ],
   });
@@ -404,7 +488,7 @@ describe("an id pasted out of a log", () => {
     const id = "22222222-2222-4222-8222-222222222222";
     const p = mount();
     await p.type(id);
-    fireEvent.click(p.row("as a trace — every event that carries it"));
+    fireEvent.click(p.row("as a trace"));
     expect(location.hash).toBe(`#/live/traces/${id}`);
   });
 });
@@ -417,7 +501,7 @@ describe("the task search has four answers, kept apart", () => {
   test("too short is not a search", async () => {
     const p = mount();
     await p.type("#a");
-    expect(screen.getByText(/at least two characters/)).toBeDefined();
+    expect(screen.getByText("Type two or more characters.")).toBeDefined();
     expect(asked.filter((a) => a.kind === "work_search")).toEqual([]);
   });
 
@@ -438,7 +522,7 @@ describe("the task search has four answers, kept apart", () => {
   test("a refused read says so rather than claiming nothing matched", async () => {
     const p = mount({ answers: answering(() => Promise.reject(new Error("unknown_query"))) });
     await p.type("#auth");
-    expect(screen.getByText(/does not serve this answer/)).toBeDefined();
+    expect(screen.getByText("Not available on this node.")).toBeDefined();
     expect(screen.queryByText(/No task matches/)).toBeNull();
   });
 
@@ -447,7 +531,7 @@ describe("the task search has four answers, kept apart", () => {
       answers: answering(async () => ({ ...OUTCOME, hits: [], available: false })),
     });
     await p.type("#auth");
-    expect(screen.getByText(/still building/)).toBeDefined();
+    expect(screen.getByText("Still indexing. Try again shortly.")).toBeDefined();
   });
 
   test("an answered term with nothing does say nothing matched", async () => {
@@ -568,7 +652,10 @@ describe("the knowledge answer", () => {
     ["a short term", JANE, "cluster"],
     ["two words", JANE, "cluster joinflakes"],
     ["an anonymous reader", ANONYMOUS, QUESTION],
-    ["an unbound token", UNBOUND, QUESTION],
+    // THE ANSWER RUNS ON THE SEAT'S OWN MODEL, so the engine refuses it to a
+    // principal no seat binds — the one change an unbound principal may not
+    // make — and nothing is sent for one.
+    ["an unbound principal", UNBOUND, QUESTION],
   ])("is never asked for %s", async (_, viewer, term) => {
     vi.useFakeTimers();
     answering();
@@ -583,9 +670,13 @@ describe("the knowledge answer", () => {
     await p.type(QUESTION);
     expect(
       screen.getByText(
-        /Set a token bound to your seat to get an answer from your company’s knowledge/,
+        "Asking needs a seat. Ask whoever manages people here to bind your login to one.",
       ),
     ).toBeDefined();
+    cleanup();
+    const q = mount({ viewer: ANONYMOUS });
+    await q.type(QUESTION);
+    expect(screen.getByText("Sign in to ask.")).toBeDefined();
   });
 
   // "ASKING" IS DRAWN FOR A QUESTION ACTUALLY SENT. A reader whose access is
@@ -700,7 +791,7 @@ describe("the actions, made as the person", () => {
         tool,
         outcome: "applied",
         position: "CREWLET_TRACKER_LOG@1:5",
-        receipt: { key: "ENG-431" },
+        receipt: { item: "ENG-431", key: "ENG-431" },
       }),
     );
     const p = mount({ answers: TASKS });
@@ -709,7 +800,7 @@ describe("the actions, made as the person", () => {
     const where = within(p.row(/Create task “rotate the join timeout”/)).getByText(
       "in ENG · Core platform",
     );
-    expect(where.getAttribute("title")).toBe("ENG — where your own work lands");
+    expect(where.getAttribute("title")).toBe("ENG: where your own work lands");
     await act(async () => {
       fireEvent.click(p.row(/Create task/));
     });
@@ -724,7 +815,7 @@ describe("the actions, made as the person", () => {
     const p = mount({ answers: TASKS, hash: "#/work/OPS-7" });
     await p.type("rotate the join timeout");
     const where = within(p.row(/Create task/)).getByText("in OPS · Operations");
-    expect(where.getAttribute("title")).toBe("OPS — the project you are on");
+    expect(where.getAttribute("title")).toBe("OPS: the project you are on");
   });
 
   // A NAME THE TERM NAMES EXACTLY ONCE is a suggestion; the person still
@@ -735,7 +826,7 @@ describe("the actions, made as the person", () => {
         tool,
         outcome: "applied",
         position: "CREWLET_TRACKER_LOG@1:6",
-        receipt: { key: "ENG-432" },
+        receipt: { item: "ENG-432", key: "ENG-432" },
       }),
     );
     const p = mount({ answers: TASKS });
@@ -759,7 +850,7 @@ describe("the actions, made as the person", () => {
         tool,
         outcome: "applied",
         position: "CREWLET_TRACKER_LOG@1:6",
-        receipt: { key: "ENG-433" },
+        receipt: { item: "ENG-433", key: "ENG-433" },
       }),
     );
     const p = mount({ answers: TASKS });
@@ -783,7 +874,7 @@ describe("the actions, made as the person", () => {
     const p = mount({ answers: TASKS });
     await p.type("swe cluster join");
     const assign = p.row(/Assign ENG-420 to an agent…/);
-    expect(assign.textContent).toContain("suggested: SWE — part of the name matches");
+    expect(assign.textContent).toContain("suggested: SWE, part of the name matches");
     await act(async () => {
       fireEvent.click(assign);
     });
@@ -823,20 +914,21 @@ describe("the actions, made as the person", () => {
 
   // A WRITE ROW IS NEVER HIDDEN: it is drawn for every reader, and where
   // this browser cannot act its hint is the sentence that says why — and a
-  // press on it says so again instead of doing anything.
+  // press on it says so again instead of doing anything. (A reader holding no
+  // Tracker is sent no task search, so no task is at hand to assign.)
   test.each([
-    ["an anonymous reader", ANONYMOUS, WRITE_REASONS.anonymous],
-    ["an unbound token", UNBOUND, WRITE_REASONS.unbound],
+    ["an anonymous reader", ANONYMOUS, WRITE_REASONS.anonymous, [/Ask an agent/, /Create task/]],
     [
       "a person the engine does not make it for",
       { ...JANE, acts: ["answer_knowledge"] },
       WRITE_REASONS.not_served,
+      [/Assign ENG-420/, /Ask an agent/, /Create task/],
     ],
-  ])("for %s each is drawn, disabled with the reason", async (_, viewer, reason) => {
+  ])("for %s each is drawn, disabled with the reason", async (_, viewer, reason, labels) => {
     engine((tool) => json({ tool, outcome: "applied", position: "", receipt: {} }));
     const p = mount({ viewer, answers: TASKS });
     await p.type("cluster join");
-    for (const label of [/Assign ENG-420/, /Ask an agent/, /Create task/]) {
+    for (const label of labels) {
       expect(p.row(label).textContent).toContain(reason);
     }
     await act(async () => {
@@ -846,12 +938,43 @@ describe("the actions, made as the person", () => {
     expect(p.closed).not.toHaveBeenCalled();
   });
 
+  // A BROWSER THE ENGINE REFUSED IS OFFERED NONE OF THE COMPANY. A person
+  // whose seat was taken out of the chart kept a palette listing the agents
+  // and tools of the snapshot they held, and was offered Ask and Create held
+  // as "Offline" — online, and refused. The CONTROL is the same
+  // palette before the refusal, which lists the seat and asks its questions.
+  // Mutation: keep the snapshot on a refusal, ask regardless, or rank offline
+  // first in the gate, and a line here goes red.
+  test("a refused browser asks nothing, lists no seat or tool, and says why it cannot write", async () => {
+    const p = mount({ answers: TASKS });
+    act(() => p.store.applyTools([{ name: "task_activity", source: "mcp:tracker" }] as never));
+    await p.type("swe");
+    expect(screen.getAllByText("SWE").length).toBeGreaterThan(0);
+    await p.type("task");
+    expect(screen.getAllByText("task_activity").length).toBeGreaterThan(0);
+    expect(asked.some((q) => q.kind === "work_search")).toBe(true);
+
+    act(() => p.store.setAccessRefused("your seat is no longer in the chart"));
+    asked = [];
+    await p.type("swe");
+    expect(screen.queryByText("SWE")).toBeNull();
+    await p.type("task");
+    expect(screen.queryByText("task_activity")).toBeNull();
+    expect(asked).toEqual([]);
+    for (const label of [/Ask an agent/, /Create task/]) {
+      expect(p.row(label).textContent).toContain(WRITE_REASONS.refused);
+      expect(p.row(label).textContent).not.toContain(WRITE_REASONS.offline);
+    }
+  });
+
   // NO DEFAULT PROJECT IS NOT A REASON TO REFUSE: the person chooses where,
   // and the project the top task hit is filed in is offered first — offered,
   // never taken for them. This was a disabled row on every screen that is not
   // a project's, for the founder the seeded company is built around.
   test("a person with no default project chooses where, the top hit's first", async () => {
-    engine((tool) => json({ tool, outcome: "applied", position: "", receipt: { key: "OPS-12" } }));
+    engine((tool) =>
+      json({ tool, outcome: "applied", position: "", receipt: { item: "OPS-12", key: "OPS-12" } }),
+    );
     const p = mount({ viewer: { ...JANE, project: "" }, answers: TASKS });
     await p.type("cluster join");
     const create = p.row(/Create task/);
@@ -875,7 +998,9 @@ describe("the actions, made as the person", () => {
   });
 
   test("an ask with no default project steps through the agent, then the project", async () => {
-    engine((tool) => json({ tool, outcome: "applied", position: "", receipt: { key: "ENG-9" } }));
+    engine((tool) =>
+      json({ tool, outcome: "applied", position: "", receipt: { item: "ENG-9", key: "ENG-9" } }),
+    );
     const p = mount({ viewer: { ...JANE, project: "" }, answers: TASKS });
     await p.type("cluster join");
     await act(async () => {
@@ -906,7 +1031,7 @@ describe("the actions, made as the person", () => {
       },
     });
     await p.type("cluster join");
-    expect(p.row(/Create task/).textContent).toContain("no project yet");
+    expect(p.row(/Create task/).textContent).toContain("No projects yet. Add one in Work.");
   });
 
   // WHO HOLDS IT NOW is said on the assign step, from the picker's own read.
@@ -994,7 +1119,7 @@ describe("the search bound", () => {
     expect(posted).toEqual([]);
     expect(
       screen.getByText(
-        `This is ${pasted.length} bytes, and a search takes at most ${SEARCH_QUERY_MAX} — search on a few keywords or a phrase, not a pasted passage.`,
+        `This is ${pasted.length} bytes, and a search takes at most ${SEARCH_QUERY_MAX}. Search on a few keywords or a phrase, not a pasted passage.`,
       ),
     ).toBeDefined();
     // BYTES, as the engine counts, not characters.
@@ -1019,5 +1144,338 @@ describe("closing", () => {
     await p.press("Enter");
     expect(p.keys).toHaveBeenCalledTimes(1);
     expect(p.closed).toHaveBeenCalledTimes(1);
+  });
+});
+
+/*
+ * CHANGE THEME IS A STEP OF THE PALETTE, the kit's own: a list of the themes
+ * in place of the results, whose highlight previews behind the palette and
+ * whose Enter applies. A preview is never written, and leaving the step puts
+ * back the theme in effect.
+ */
+describe("the theme step", () => {
+  const root = () => document.documentElement;
+
+  beforeEach(() => reloadForTest());
+  afterEach(() => {
+    root().removeAttribute("data-palette");
+    localStorage.clear();
+    reloadForTest();
+  });
+
+  async function intoStep() {
+    const p = mount();
+    await p.type(">");
+    await act(async () => {
+      fireEvent.click(p.row("Change theme…"));
+    });
+    return p;
+  }
+
+  const labels = () =>
+    screen
+      .getAllByRole("option")
+      .map((o) => o.querySelector(".crewlet-palette__label")?.textContent);
+
+  test("Actions offers Change theme with the theme in effect, and the modes not in use", async () => {
+    const p = mount();
+    await p.type(">");
+    expect(p.row("Change theme…").textContent).toContain("Crewlet is on");
+    // The mode in effect is the system's, so it is not offered again.
+    expect(screen.queryByText("Mode: match system")).toBeNull();
+    expect(screen.getByText("Mode: dark")).toBeTruthy();
+    expect(screen.queryByText(/^Theme: /)).toBeNull();
+  });
+
+  test("it opens on the theme in effect, keeps the palette open and draws no scopes", async () => {
+    const p = await intoStep();
+    expect(p.closed).not.toHaveBeenCalled();
+    expect(screen.getByRole("combobox", { name: "Change theme" })).toBe(p.input);
+    expect(screen.getByRole("button", { name: "Back from Change theme" })).toBeTruthy();
+    expect(screen.queryAllByRole("tab")).toEqual([]);
+    const active = document.getElementById(p.input.getAttribute("aria-activedescendant")!);
+    expect(active?.textContent).toContain("Crewlet");
+    expect(root().hasAttribute("data-palette")).toBe(false);
+    // Every theme, under its group.
+    expect(screen.getByRole("group", { name: "High contrast" })).toBeTruthy();
+    expect(labels()).toHaveLength(10);
+  });
+
+  test("the highlight previews, a query narrows by group, and Enter applies and closes with Undo", async () => {
+    const p = await intoStep();
+    await p.press("ArrowDown");
+    expect(root().getAttribute("data-palette")).toBe("violet");
+    expect(localStorage.getItem(STORAGE_KEYS.palette)).toBeNull();
+    // A group's name finds its themes, and a tag finds its own: Origin's is
+    // "Purple on charcoal". The best match leads, and is previewed.
+    await p.type("purple");
+    expect(labels()).toEqual(["Origin", "Abyss", "Iris", "Dusk"]);
+    expect(root().getAttribute("data-palette")).toBe("origin");
+    await p.type("abyss");
+    expect(labels()).toEqual(["Abyss"]);
+    expect(root().getAttribute("data-palette")).toBe("abyss");
+    await p.press("Enter");
+    expect(localStorage.getItem(STORAGE_KEYS.palette)).toBe("abyss");
+    expect(root().getAttribute("data-palette")).toBe("abyss");
+    expect(p.closed).toHaveBeenCalledOnce();
+    expect(screen.getAllByText("Theme set to Abyss").length).toBeGreaterThan(0);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    });
+    expect(root().hasAttribute("data-palette")).toBe(false);
+    expect(localStorage.getItem(STORAGE_KEYS.palette)).toBeNull();
+  });
+
+  test("Escape goes back to Actions and puts back the theme in effect", async () => {
+    const p = await intoStep();
+    await p.press("ArrowDown");
+    expect(root().getAttribute("data-palette")).toBe("violet");
+    await p.press("Escape");
+    expect(p.closed).not.toHaveBeenCalled();
+    expect(root().hasAttribute("data-palette")).toBe(false);
+    expect(p.tab()).toBe("Actions");
+    expect(screen.getByText("Change theme…")).toBeTruthy();
+  });
+
+  test("a query that matches no theme says so", async () => {
+    const p = await intoStep();
+    await p.type("zzz");
+    expect(screen.getByText("No theme matches.")).toBeTruthy();
+    expect(root().hasAttribute("data-palette")).toBe(false);
+  });
+});
+
+// THE COMPANY'S PROJECTS ARE A GROUP IN ALL, ranked as the switcher ranks
+// them, and the switcher itself is a row, Switch project…, which opens the
+// panel over wherever the palette was. And the company's work has its full
+// ranked search one row away.
+describe("projects, the switcher and the full search", () => {
+  const listing = async () => ({
+    projects: [
+      {
+        key: "ENG",
+        name: "Core platform",
+        unit: { name: "Engineering" },
+        task_counts: { todo: 2, active: 1, done: 0, closed: 0 },
+        version: 1,
+      },
+      {
+        key: "OPS",
+        name: "Operations",
+        unit: { name: "Platform" },
+        task_counts: { todo: 0, active: 0, done: 4, closed: 0 },
+        version: 1,
+      },
+    ],
+    total: 2,
+    census: { active: 2, archived: 0 },
+    complete: true,
+  });
+
+  test("a term ranks the projects as the switcher does, each going to its page", async () => {
+    const p = mount({ answers: { work_projects: listing } });
+    await act(async () => Promise.resolve());
+    await p.type("o");
+    const group = screen.getByRole("group", { name: "Projects" });
+    const rows = within(group).getAllByRole("option");
+    // A KEY THAT STARTS WITH IT before a name that merely contains it.
+    expect(rows.map((r) => r.querySelector(".crewlet-key-chip")?.textContent)).toEqual([
+      "OPS",
+      "ENG",
+    ]);
+    expect(rows[1]!.textContent).toContain("3 open");
+    fireEvent.click(rows[0]!);
+    expect(location.hash).toBe("#/work/OPS");
+    expect(p.closed).toHaveBeenCalled();
+  });
+
+  test("Switch project… is a place to go, and opens the switcher as the palette closes", async () => {
+    const p = mount({ answers: { work_projects: listing } });
+    // WITH WORK'S PLACES, under the sidebar's own Workspace heading.
+    const go = screen.getByRole("group", { name: "Workspace" });
+    const row = within(go).getByRole("option", { name: /Switch project…/ });
+    expect(row.textContent).toContain("or G then P, from anywhere");
+    await act(async () => {
+      fireEvent.click(row);
+    });
+    expect(p.closed).toHaveBeenCalled();
+    expect(await screen.findByRole("dialog", { name: "Switch project" })).toBeTruthy();
+  });
+
+  test("it is a command too, found by its name", async () => {
+    const p = mount();
+    await p.type(">switch");
+    expect(p.row("Switch project…")).toBeTruthy();
+  });
+
+  test("Search all work for a term goes to the ranked search", async () => {
+    const p = mount();
+    await p.type("invoice");
+    fireEvent.click(p.row("Search all work for “invoice”"));
+    expect(location.hash).toBe("#/work/search?q=invoice");
+  });
+});
+
+// A PERSON LOOKS FOR THEIR ACCOUNT BY WHAT IS ON IT. Only the word "account"
+// found it, so a reader typing "password" or "2fa" was offered nothing but a
+// search — while the row's own hint named both. The words are the table's
+// (`Destination.keywords`), matched after every label and word by word.
+describe("a screen found by what it holds", () => {
+  test.each([
+    "password",
+    "2fa",
+    "two-step",
+    "two step",
+    "security",
+    "profile",
+    "sessions",
+    "token",
+    "my account",
+  ])("%s finds Account, and Enter on it opens it", async (q) => {
+    const p = mount();
+    await p.type(q);
+    const go = screen.getByRole("group", { name: "Go to" });
+    const row = within(go).getByRole("option", { name: /^Account/ });
+    fireEvent.click(row);
+    expect(location.hash).toBe("#/account");
+  });
+
+  // THE EMPTY PALETTE DRAWS THE SIDEBAR'S TREE: one flat "Go to" of every
+  // place hid it, and set look-alikes side by side. Mutation: push every
+  // destination as one group and the headings are gone.
+  test("the empty palette lists every place under the sidebar's own headings", () => {
+    mount();
+    const headings = ["Go to", "Company", "Workspace", "Settings", "Account"];
+    for (const name of headings) expect(screen.getByRole("group", { name })).toBeDefined();
+    expect(
+      within(screen.getByRole("group", { name: "Company" })).getByRole("option", {
+        name: /^Budgets/,
+      }),
+    ).toBeDefined();
+    expect(
+      within(screen.getByRole("group", { name: "Settings" })).getByRole("option", {
+        name: /^Token spend/,
+      }),
+    ).toBeDefined();
+  });
+
+  // A LABEL STILL WINS: a screen called what was typed is never pushed under
+  // one that merely holds the word. "s" starts two of Account's words
+  // ("sessions", "security"), which a flat ranking scored ahead of every label
+  // with an "s" in its middle — Tasks, Projects, Agents.
+  test("every label match ranks above a keyword match, however good", () => {
+    const nav = { to: vi.fn() } as unknown as Parameters<typeof destinationHits>[1];
+    const hits = destinationHits("s", nav, Infinity, null, {
+      tracker: true,
+      knowledge: true,
+    }).map((h) => h.label);
+    // THE LABEL MATCHES COME FIRST, then the screens only a keyword found
+    // ("Account"), and never one after the other.
+    const firstKeyword = hits.findIndex((label) => !label.toLowerCase().includes("s"));
+    expect(hits.slice(firstKeyword)).toEqual(expect.arrayContaining(["Account"]));
+    for (const label of hits.slice(firstKeyword)) expect(label.toLowerCase()).not.toContain("s");
+    for (const label of hits.slice(0, firstKeyword)) expect(label.toLowerCase()).toContain("s");
+    expect(hits).toContain("Tasks");
+  });
+
+  // SETTINGS OPENS WHERE THE READER MAY READ: a reader holding only Tracker
+  // was sent to Models & keys, which is Admin's, and its entry read "needs
+  // Admin access" although Token spend and Expensive tasks are theirs.
+  // Mutation: go to the workspace's own path and the press lands on the lock.
+  test("a reader holding only Tracker opens Settings on Token spend, unlocked", () => {
+    const to = vi.fn();
+    const nav = { to } as unknown as Parameters<typeof destinationHits>[1];
+    const runs = { tracker: true, knowledge: true };
+    const settings = destinationHits(
+      "settings",
+      nav,
+      Infinity,
+      {
+        anonymous: false,
+        grants: ["tracker"],
+      },
+      runs,
+    ).find((h) => h.id === "nav-settings")!;
+    expect(settings.hint).not.toMatch(/needs/);
+    settings.go();
+    expect(to).toHaveBeenCalledWith(["settings", "spend"]);
+    const admin = destinationHits(
+      "settings",
+      nav,
+      Infinity,
+      {
+        anonymous: false,
+        grants: ["admin"],
+      },
+      runs,
+    ).find((h) => h.id === "nav-settings")!;
+    admin.go();
+    expect(to).toHaveBeenLastCalledWith(["settings", "models"]);
+  });
+
+  // THE HINT IS PROSE AND IS NEVER SEARCHED: Service accounts' mentions
+  // "machine principals", and it is no answer to "principals".
+  test("a word only a hint's prose holds finds nothing", async () => {
+    const p = mount();
+    await p.type("principals");
+    expect(screen.queryByRole("option", { name: /^Service accounts/ })).toBeNull();
+  });
+});
+
+// AN ARTIFACT IS FOUND BY ITS TITLE. "Q4 launch" found nothing, and "artif"
+// listed the engine's own agent tools instead. All carries the term into the
+// Artifacts scope rather than asking a fourth question of its own.
+describe("artifacts", () => {
+  const listing = (params: Record<string, unknown>) =>
+    Promise.resolve({
+      items:
+        params["q"] === "Q4 launch"
+          ? [{ id: "a-1", kind: "sheet", title: "Q4 launch review", owner: "jane-founder" }]
+          : [],
+      total: 1,
+      read_level: "",
+      position: "",
+    });
+
+  test("All offers the Artifacts scope for a term, and asks nothing of the listing itself", async () => {
+    const p = mount({ answers: { artifacts: listing } });
+    await p.type("Q4 launch");
+    expect(asked.some((q) => q.kind === "artifacts")).toBe(false);
+    await act(async () => {
+      fireEvent.click(p.row("Find “Q4 launch” in artifacts →"));
+    });
+    expect(p.tab()).toBe("Artifacts");
+    expect(asked.find((q) => q.kind === "artifacts")?.params).toMatchObject({
+      q: "Q4 launch",
+      scope: "all",
+    });
+    const row = await screen.findByText("Q4 launch review");
+    // THE KIND AT THE ROW'S END, never cut away with a long title.
+    expect(
+      row.closest('[role="option"]')?.querySelector(".crewlet-palette__meta")?.textContent,
+    ).toBe("Sheet");
+  });
+
+  // A RECENT ARTIFACT SAYS ITS WORKSPACE BY NAME: the stored key read
+  // "Q4 roadmap artifacts", as if it were one phrase.
+  test("a recent artifact names its workspace as the sidebar does", () => {
+    remember({ path: ["artifacts", "a-1"], label: "Q4 roadmap", workspace: "artifacts" }, true);
+    mount();
+    const row = within(screen.getByRole("group", { name: "Recent" })).getAllByRole("option")[0];
+    expect(row?.textContent).toContain("Artifacts");
+    expect(row?.textContent).not.toContain("artifacts");
+  });
+
+  test("the engine's own agent tools are not offered, and a connected tool is", async () => {
+    const p = mount();
+    act(() => {
+      p.store.applyTools([
+        { name: "get_artifact", description: "", source: "builtin", annotations: {} },
+        { name: "artifact_lint", description: "", source: "mcp:linter", annotations: {} },
+      ] as never);
+    });
+    await p.type("artif");
+    expect(screen.queryByText("get_artifact")).toBeNull();
+    expect(screen.getByText("artifact_lint")).toBeTruthy();
   });
 });

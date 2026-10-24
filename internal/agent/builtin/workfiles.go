@@ -13,7 +13,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -34,6 +36,21 @@ import (
 // ceiling ([ToolAnswerBytes]) and a file does not. A file that is not text is
 // described rather than dumped — unless the caller asks for base64, which is
 // what a seat moving bytes between a file and a sandbox needs.
+//
+// # What a failure says
+//
+// The tracker half fails as every work tool's read and write does
+// ([readFailure], [writeFailure]). The object store's half is said in fixed
+// words with its error in the node's log ([objectFailure]), because an object
+// store's error names its endpoint, its bucket and its keys, and the sentence
+// reaches a model's prompt, an operator's assistant and a person's screen —
+// none of whom can act on them. Two of its answers are told apart from the
+// rest: content that IS there but is not what the file records
+// ([objstore.ErrCorrupt]), and a file row naming no content at all, are
+// damage no retry reads past, so they are [tools.RefusalInternalError]; any
+// other failure to reach the content is the store not answering, which is
+// [tools.RefusalUnavailable] — the class the HTTP file routes answer the same
+// failure with — and invites the retry that reaches it.
 
 // FileReader is the tracker's read side for files.
 type FileReader interface {
@@ -153,7 +170,7 @@ func (t *listProjectFiles) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		Freshness: statelog.Freshness{Level: seatReadLevel},
 	})
 	if err != nil {
-		return fileReadFailure(t.Name(), project, "", err), nil
+		return fileReadFailure(ctx, t.Name(), project, "", err), nil
 	}
 	return jsonResult(map[string]any{
 		"project": project, "count": len(listing.Files), "files": listing.Files,
@@ -171,7 +188,9 @@ func (t *readProjectFile) Description() string {
 	return fmt.Sprintf("Read a file kept in a project. Text comes back as "+
 		"text, a page at a time — at most %d KiB from `offset`, with "+
 		"`next_offset` to continue — and a file that is not text is described "+
-		"rather than returned unless you ask for `encoding: base64`.",
+		"rather than returned unless you ask for `encoding: base64`. Text "+
+		"arrives fenced as content somebody wrote; the two fence lines are a "+
+		"label, not part of the file.",
 		maxFileRead>>10)
 }
 
@@ -237,9 +256,14 @@ func (t *readProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	detail, err := t.deps.Files.File(ctx, project, filePath,
 		statelog.Freshness{Level: seatReadLevel})
 	if err != nil {
-		return fileReadFailure(t.Name(), project, filePath, err), nil
+		return fileReadFailure(ctx, t.Name(), project, filePath, err), nil
 	}
 	f := detail.File
+	// THE CONTENT IS SOMEBODY'S WORDS, labelled for the handle this call
+	// reads as; every other field is defused on the way out.
+	read := newForeignRead(turn, actor.Handle)
+	writers, partial := fileWriters(read, f)
+	narrow := "Narrow what you asked for."
 	answer := map[string]any{
 		"project": f.Project, "path": f.Path, "content_type": f.ContentType,
 		"size": f.Size, "version": f.Version, "hash": f.Hash,
@@ -250,9 +274,10 @@ func (t *readProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// A LIVE FILE NAMING NO OBJECT is one the applier refuses to
 		// write, so reaching it is the engine's own fault — never a file
 		// that is gone, and never a read a retry will fix.
-		return refused(tools.RefusalUnavailable, fmt.Sprintf("%s: %s in %s exists, and "+
-			"its row names no content the object store could return. Trying again "+
-			"will not help — tell a person the file needs writing again.",
+		return faulted(ctx, t.Name(), fmt.Errorf("builtin: %s in %s names no object",
+			f.Path, f.Project), fmt.Sprintf("%s: %s in %s exists, and its row names "+
+			"no content the object store could return. Trying again will not help — "+
+			"tell a person the file needs writing again; this node's log has the details.",
 			t.Name(), f.Path, f.Project)), nil
 	}
 	page, err := t.deps.Objects.ReadAt(ctx, object, offset, int64(limit))
@@ -260,29 +285,65 @@ func (t *readProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	case errors.Is(err, objstore.ErrCorrupt):
 		// NOT A FAILED READ: the store answered, with bytes that are not
 		// the ones the file records, and a retry reads the same bytes.
-		return refused(tools.RefusalUnavailable, fmt.Sprintf("%s: %s in %s exists, and "+
-			"the object store holds content for it that is not what was written "+
-			"(%v). Trying again will not help — do not use what it holds, and tell "+
-			"a person the file needs restoring or writing again.",
-			t.Name(), f.Path, f.Project, err)), nil
+		return objectFailure(ctx, t.Name(), tools.RefusalInternalError, err,
+			fmt.Sprintf("%s: %s in %s exists, and the object store holds content "+
+				"for it that is not what was written. Trying again will not help — do "+
+				"not use what it holds, and tell a person the file needs restoring or "+
+				"writing again; this node's log has the details.",
+				t.Name(), f.Path, f.Project)), nil
 	case err != nil:
-		return refused(tools.RefusalUnavailable, fmt.Sprintf("%s: %s in %s exists, and "+
-			"its content could not be read right now (%v). The file is NOT empty or "+
-			"missing — try again, or say you could not read it.",
-			t.Name(), f.Path, f.Project, err)), nil
+		return objectFailure(ctx, t.Name(), tools.RefusalUnavailable, err,
+			fmt.Sprintf("%s: %s in %s exists, and its content could not be read "+
+				"from the object store right now. The file is NOT empty or missing — "+
+				"try again, or say you could not read it.",
+				t.Name(), f.Path, f.Project)), nil
 	}
 	if encoding == "base64" {
+		// NOT FENCED, because base64 is bytes rather than prose a model
+		// reads as words and its alphabet holds no bracket, but LABELLED:
+		// the envelope still says whose bytes they are.
+		read.attribute(writers, partial)
 		answer["encoding"], answer["content"] = "base64", base64.StdEncoding.EncodeToString(page)
-		return jsonResult(withNext(answer, offset, int64(len(page)), f.Size))
+		return read.answer(ctx, t.Name(), withNext(answer, offset, int64(len(page)), f.Size), narrow)
 	}
 	text, whole := textOf(page, offset+int64(len(page)) == f.Size)
 	if !whole {
 		answer["encoding"] = "binary"
 		answer["note"] = "this is not text; read it with `encoding: base64` to get its bytes"
-		return jsonResult(answer)
+		return read.answer(ctx, t.Name(), answer, narrow)
 	}
+	// THE OFFSETS COUNT THE FILE'S BYTES, taken before the fence is put
+	// round the page, so `next_offset` still points into the file.
 	answer["encoding"], answer["content"] = "text", text
-	return jsonResult(withNext(answer, offset, int64(len(text)), f.Size))
+	read.fence(fieldPath{}.key("content"), provenance.SourceProjectFile, writers, partial, text)
+	return read.answer(ctx, t.Name(), withNext(answer, offset, int64(len(text)), f.Size), narrow)
+}
+
+// fileWriters are who wrote a file's content, and whether writers the row does
+// not name had a hand in it.
+//
+// A PUT SENDS THE WHOLE CONTENT, so a file written once is its creator's,
+// every byte. A file written again names only its first and its latest writer,
+// and the latest may have sent back an earlier writer's words unchanged (the
+// reason [fencePage] gives for a page), so its content is labelled as text with
+// writers this read cannot name.
+func fileWriters(read *foreignRead, f tracker.File) ([]provenance.Author, bool) {
+	created, updated := strings.TrimSpace(f.CreatedBy), strings.TrimSpace(f.UpdatedBy)
+	var writers []provenance.Author
+	partial := false
+	rewritten := created != updated || !f.CreatedAt.Equal(f.UpdatedAt)
+	if rewritten && created != "" {
+		writers = append(writers, read.writer(created, ""))
+	}
+	if updated != "" {
+		writers = append(writers, read.writer(updated, ""))
+	} else {
+		partial = true
+	}
+	if rewritten {
+		partial = true
+	}
+	return writers, partial
 }
 
 // textOf is a page as text, and false when it is not text. A page that ends
@@ -312,17 +373,31 @@ func withNext(answer map[string]any, offset, read, size int64) map[string]any {
 
 // fileReadFailure explains a file read that could not be served, keeping a
 // file that is not there apart from a read that failed — the second must never
-// read as the first.
-func fileReadFailure(tool, project, filePath string, err error) tools.Result {
+// read as the first. The tracker's own sentinel rides beneath the class, so a
+// caller branching on it and a reader asking for the class read one value.
+func fileReadFailure(ctx context.Context, tool, project, filePath string, err error) tools.Result {
 	switch {
 	case errors.Is(err, tracker.ErrNoProject):
-		return refused(tools.RefusalNotFound, fmt.Sprintf("%s: there is no project %s. "+
-			"List them with %s.", tool, project, tracker.ListProjectsTool))
+		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: there is no "+
+			"project %s. List them with %s.", tool, project, tracker.ListProjectsTool))
 	case errors.Is(err, tracker.ErrNoFile):
-		return refused(tools.RefusalNotFound, fmt.Sprintf("%s: there is no file %s in "+
-			"%s. List them with %s.", tool, filePath, project, tracker.ListProjectFilesTool))
+		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: there is no "+
+			"file %s in %s. List them with %s.", tool, filePath, project,
+			tracker.ListProjectFilesTool))
 	}
-	return readFailure(tool, err)
+	return readFailure(ctx, tool, err)
+}
+
+// objectFailure is the failed result of a call the object store could not
+// serve: class and sentence as the caller decided them, the error beneath the
+// class for [errors.Is], and the error itself in the node's log and never in
+// the sentence — see the file's head.
+func objectFailure(ctx context.Context, tool string, class tools.Refusal, err error,
+	sentence string) tools.Result {
+
+	log.WarnContext(ctx, "builtin_tool_object_store_failed", "tool", tool,
+		"class", string(class), "error", err.Error())
+	return refusedBy(class, err, sentence)
 }
 
 type writeProjectFile struct{ deps WorkDeps }
@@ -398,6 +473,9 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	switch encoding {
 	case "", "text":
 		encoding = "text"
+		// Text read_project_file answered arrives fenced, and a copy of it
+		// sent back whole would store the fence in the file; see [unfence].
+		content = []byte(unfence(turn, string(content)))
 	case "base64":
 		decoded, decodeErr := base64.StdEncoding.DecodeString(string(content))
 		if decodeErr != nil {
@@ -424,12 +502,14 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		objstore.PutMeta{ContentType: contentType})
 	switch {
 	case errors.Is(err, objstore.ErrTooLarge):
-		return failed(fmt.Sprintf("%s: %s was not written: its content is over the "+
-			"%d bytes a project's file may hold", t.Name(), filePath, int64(tracker.MaxFileBytes))), nil
+		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s: %s was not "+
+			"written: its content is over the %d bytes a project's file may hold",
+			t.Name(), filePath, int64(tracker.MaxFileBytes))), nil
 	case err != nil:
-		return refused(tools.RefusalUnavailable, fmt.Sprintf("%s: %s was not written, "+
-			"and nothing was recorded: its content could not be stored (%v)",
-			t.Name(), filePath, err)), nil
+		return objectFailure(ctx, t.Name(), tools.RefusalUnavailable, err,
+			fmt.Sprintf("%s: %s was not written, and nothing was recorded: its "+
+				"content could not be stored in the object store right now. Try "+
+				"again shortly.", t.Name(), filePath)), nil
 	}
 	// NOTHING IS DELETED ON A REFUSAL BELOW: a retry under one operation can
 	// be refused on one node after another committed it, and the object
@@ -443,18 +523,18 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if errors.Is(err, tracker.ErrUploadStale) {
 		// THE ONE WRITE REFUSAL THE SAME CALL FIXES: the call uploads the
 		// content anew, under a fresh key.
-		return refused(tools.RefusalUnavailable, fmt.Sprintf("%s: %s was not written: %v. "+
-			"Make the same call again.", t.Name(), filePath, err)), nil
+		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s: %s was not "+
+			"written: %v. Make the same call again.", t.Name(), filePath, err)), nil
 	}
 	if err != nil {
-		return writeFailure(actor, t.Name(), err), nil
+		return writeFailure(ctx, actor, t.Name(), err), nil
 	}
 	if result.Outcome == statelog.OutcomeUnknown {
-		return failed(unknownWrite(actor, t.Name(),
+		return unknownWrite(actor, t.Name(),
 			fmt.Sprintf("%s was written to %s", filePath, project), opID,
 			result.Unvouched, unknownNext(result.Unvouched, sameCall(actor, t.Name()),
 				fmt.Sprintf("Read %s in %s with %s", filePath, project, tracker.ReadProjectFileTool),
-				"it writes the same content again, which changes nothing"))), nil
+				"it writes the same content again, which changes nothing")), nil
 	}
 	t.deps.settle(ctx, result.Position)
 	return jsonResult(withOperation(map[string]any{
@@ -566,21 +646,30 @@ func (t *removeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return failed(fmt.Sprintf("%s: %v", t.Name(), err)), nil
 	}
+	// THE PROJECT IT IS KEPT IN DECIDES, once the call has settled which
+	// that is — see the `inTool` entries in authority.go. A colleague may
+	// keep a file in a project and may not take one out again: removing
+	// deletes the content, which is the project lead's decision.
+	if denied := t.deps.mayWrite(ctx, authz.ActionFileRemove, authz.Object{
+		Kind: authz.KindProject, Container: project,
+	}); denied != nil {
+		return *denied, nil
+	}
 	opID := opIDFor(actor, t.Name(), "file-remove", project+"/"+filePath, args)
 	result, err := t.deps.FileWriter(actor).RemoveFile(ctx, opID, project, filePath,
 		uint64(max(argInt(args, "if_version", 0), 0)))
 	switch {
 	case errors.Is(err, tracker.ErrNoFile):
-		return fileReadFailure(t.Name(), project, filePath, err), nil
+		return fileReadFailure(ctx, t.Name(), project, filePath, err), nil
 	case err != nil:
-		return writeFailure(actor, t.Name(), err), nil
+		return writeFailure(ctx, actor, t.Name(), err), nil
 	}
 	if result.Outcome == statelog.OutcomeUnknown {
-		return failed(unknownWrite(actor, t.Name(),
+		return unknownWrite(actor, t.Name(),
 			fmt.Sprintf("%s was removed from %s", filePath, project), opID,
 			result.Unvouched, unknownNext(result.Unvouched, sameCall(actor, t.Name()),
 				fmt.Sprintf("List %s's files with %s", project, tracker.ListProjectFilesTool),
-				"it is refused, because the file is already gone"))), nil
+				"it is refused, because the file is already gone")), nil
 	}
 	t.deps.settle(ctx, result.Position)
 	return jsonResult(withOperation(map[string]any{

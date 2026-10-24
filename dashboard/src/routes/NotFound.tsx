@@ -1,4 +1,4 @@
-import { Button, EmptyState, Kbd } from "@crewlethq/ui";
+import { Button, EmptyState, InlineCode } from "@crewlethq/ui";
 import { CompassGlyph } from "@crewlethq/icons/glyphs";
 import { useNavigator, useRoute } from "~/app/router.tsx";
 import { sentence } from "~/lib/format.ts";
@@ -23,15 +23,7 @@ export function NotFound({ what, hint }: { what: string; hint?: string }) {
       description={
         <>
           {hint ? <>{sentence(hint)} </> : null}
-          The address was <code className="inline">{route.hash}</code>. Every screen is reachable
-          from the sidebar, and any event, trace or turn id can be pasted into the command{" "}
-          {/* THE PLATFORM'S OWN CHORD, drawn by the part the sidebar's search
-              draws it with: "⌘K" on a machine whose sidebar says Ctrl + K was
-              two answers to one question. Kept on one line with the word before
-              it, so the chord is never a line of its own. */}
-          <span className="nowrap">
-            palette, <Kbd keys={["Mod", "k"]} subtle />.
-          </span>
+          The address was <InlineCode>{route.hash}</InlineCode>.
         </>
       }
       action={

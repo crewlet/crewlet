@@ -1,0 +1,67 @@
+package httpjson
+
+// goPackages is the name of every Go package in this module that has non-test
+// sources, which is what a leading "name: " in an error's text is: the package
+// prefix Go errors carry ("statelog: node-4 may not be evicted"). [Sentence]
+// leaves such a prefix lowercase, because capitalising it names a package that
+// does not exist, and stripping it is the source's job rather than the
+// boundary's.
+//
+// A TABLE, HELD TO THE TREE: TestThePackagePrefixesAreTheModulesPackages
+// reads every package clause in the module and fails, naming the difference,
+// when a package is added, renamed or removed without this table following.
+var goPackages = map[string]bool{
+	"a2a": true, "a2atest": true, "adr": true, "anthropic": true, "api": true,
+	"artifactdata": true, "artifactdataapi": true, "artifacts": true,
+	"artifactsapi": true, "artifactsdomain": true, "artifactserve": true,
+	"artifactspike": true, "artifactupload": true,
+	"atlassian": true, "atlassianhost": true, "auth": true, "authapi": true,
+	"authevents": true, "authz": true, "auxspend": true, "backoff": true,
+	"backup": true, "backuptest": true, "builtin": true, "chain": true, "changefeed": true,
+	"cache": true, "canon": true, "canvasformat": true, "edits": true,
+	"claudemodel": true, "cliagent": true, "clientsource": true,
+	"cliprofile": true, "code": true, "codecluster": true, "codefault": true,
+	"codetest": true, "codingagent": true, "colleague": true, "collect": true,
+	"compact": true, "config": true, "configapi": true, "configplane": true,
+	"confluence": true, "coord": true,
+	"coordtest": true, "costlimit": true, "credential": true, "cron": true,
+	"dashspec": true, "datadog": true, "datasetsapi": true, "decltype": true,
+	"docindex": true, "docsgate": true, "e2e": true, "embeddings": true,
+	"engine": true, "envfile": true, "envref": true, "estate": true,
+	"eventfan": true, "eventfantest": true, "events": true, "execstate": true,
+	"extension": true, "externaltest": true, "filelock": true, "fleetsecrets": true,
+	"github": true, "gitlab": true, "gitproc": true, "gitref": true,
+	"gittest": true, "host": true, "hostbox": true, "httpapi": true,
+	"httpjson": true, "httpx": true, "httpxtest": true, "iam": true,
+	"iamapi": true, "iamdomain": true, "inbox": true, "integration": true,
+	"integrationtest": true, "jetstream": true, "jetstreamtest": true,
+	"jira": true, "jsapi": true, "jsinflight": true, "jsoncarry": true,
+	"jsprovision": true, "jwks": true, "knowledge": true, "kv": true,
+	"learning": true, "ledger": true, "ledgerfit": true, "ledgerstore": true,
+	"livestate": true, "llm": true, "logging": true, "maintenance": true,
+	"lint": true, "manifest": true, "mediatype": true,
+	"mattermost": true, "mcp": true, "mcpbridge": true, "memobj": true,
+	"memory": true, "memread": true, "memsync": true, "metrics": true, "migrate": true,
+	"natsobj": true, "node": true, "notify": true, "objstore": true,
+	"objstoretest": true, "observe": true, "openai": true, "operator": true,
+	"objectives": true, "query": true,
+	"opkey": true, "org": true, "orgchart": true, "paced": true, "pagepolicy": true,
+	"pages": true, "period": true, "phase": true, "placement": true,
+	"prefetch": true, "procgroup": true, "procgrouptest": true, "prompts": true,
+	"presence": true, "provenance": true,
+	"provision": true, "queries": true, "queue": true, "queuetest": true,
+	"redact": true, "references": true, "rendezvous": true, "replicated": true, "runner": true, "runtoken": true,
+	"s3fake": true, "s3obj": true, "sandbox": true, "sandboxtest": true,
+	"schedule": true, "scheduletest": true, "search": true, "seat": true,
+	"secrets": true, "secretsapi": true, "session": true, "setup": true,
+	"setupapi": true, "signedask": true, "skills": true, "skillsync": true,
+	"slack": true, "slideformat": true, "solo": true, "sourcetree": true, "sqlledger": true,
+	"statelog": true, "statelogtest": true, "static": true, "steer": true,
+	"store": true, "storetest": true, "stream": true, "structured": true,
+	"subagent": true, "textcut": true, "textindex": true, "tokens": true,
+	"toolloop": true, "tools": true, "topics": true, "tracing": true,
+	"tracker": true, "turn": true, "turnctx": true, "types": true,
+	"ticket": true, "trashreap": true,
+	"usage": true, "version": true, "webhooks": true, "whsec": true,
+	"workapi": true, "workkey": true,
+}

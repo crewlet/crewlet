@@ -82,7 +82,7 @@ var markerCases = []fleetCase{{
 		// Mailboxes, secrets, integration statuses and trim holds: one
 		// removed and one kept in each.
 		for _, handle := range []string{"cto", "ceo"} {
-			h.createMailbox(coord.MailboxRecord{Handle: handle})
+			h.createMailbox(seat(handle))
 		}
 		cto, _ := h.mailbox("cto")
 		if !h.deleteMailbox("cto", cto.Version) {
@@ -134,7 +134,7 @@ var markerCases = []fleetCase{{
 		if _, found := h.mailbox("cto"); found {
 			h.t.Error("a mailbox record removed before the sweep reads as present after it")
 		}
-		if _, created := h.createMailbox(coord.MailboxRecord{Handle: "cto"}); !created {
+		if _, created := h.createMailbox(seat("cto")); !created {
 			h.t.Error("a mailbox record whose marker was swept could not be created again")
 		}
 		if got := h.secretNames(); !slices.Equal(got, []string{"KEPT_TOKEN"}) {

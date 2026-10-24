@@ -14,7 +14,6 @@ import (
 	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
@@ -315,10 +314,12 @@ func (r Reply) recordedOn(runs []PendingRun) (PendingRun, bool) {
 
 // answerOf is what recording this delivery writes.
 func (r Reply) answerOf(now time.Time) RecordedAnswer {
+	who := chatAnswerer(r.trigger())
 	answer := RecordedAnswer{
 		// Redacted HERE, at the one place the reply becomes a record a
 		// second store keeps: it is spliced into a phase record verbatim.
-		Text: redact.Secrets(r.Text), Via: types.AnswerViaChat, By: answererOf(r.trigger()),
+		Text: redact.Secrets(r.Text), Via: types.AnswerViaChat,
+		By: who.by, ByKind: who.kind, OperatorID: who.operatorID,
 		EventIDs: r.ids(), PostedAt: r.Posted(), RecordedAt: now,
 	}
 	for _, ev := range r.Events {
@@ -600,7 +601,7 @@ func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) {
 		// survives a crash, rather than here and again there.
 		return
 	}
-	c.announceAnswered(ctx, claimed, answer.Via, outcome, answer.By, answer.BySeat)
+	c.announceAnswered(ctx, claimed, answer.Via, outcome, answer.answerer())
 }
 
 // owedFailed counts one failed resume of an owed answer, and schedules the next
@@ -1336,7 +1337,7 @@ func handBackOf(answer RecordedAnswer) []HandedBack {
 // that order; a clear that fails is only logged, because the copies are out
 // and the next reader's repeat of them is the same messages again.
 func (c *Coordinator) deliverHandBack(ctx context.Context, run PendingRun) error {
-	published, err := c.publishCopies(ctx, run.AgentHandle, run.HandBack)
+	published, err := c.publishCopies(ctx, run, run.HandBack)
 	if len(published) > 0 {
 		if _, clearErr := c.pending.ClearHandBack(ctx, run.TurnID, published); clearErr != nil {
 			log.WarnContext(ctx, "sandbox_answer_handback_uncleared",
@@ -1348,13 +1349,20 @@ func (c *Coordinator) deliverHandBack(ctx context.Context, run PendingRun) error
 	return err
 }
 
-// publishCopies publishes copies to a seat's inbox, in order, and reports the
-// ids it published — counting one that can never be published, which is
-// dropped loudly rather than owed for ever — and the error that stopped it.
-func (c *Coordinator) publishCopies(ctx context.Context, handle string, copies []HandedBack) ([]string, error) {
-	inbox := topics.AgentInbox(handle)
+// publishCopies publishes copies to the inbox of the seat that holds run, in
+// order, and reports the ids it published — counting one that can never be
+// published, which is dropped loudly rather than owed for ever — and the error
+// that stopped it.
+//
+// THE ROW'S SEAT ID NAMES THE INBOX ([inboxSubject]), as it does for an answer
+// by turn ([AnswerDesk.Deliver]): a seat's inbox is named by its id (ADR-0013),
+// and the handle the row also carries is only a label for the log.
+func (c *Coordinator) publishCopies(ctx context.Context, run PendingRun, copies []HandedBack) ([]string, error) {
+	handle := run.AgentHandle
+	inbox := inboxSubject(run.AgentID)
 	if inbox == "" {
-		return nil, fmt.Errorf("sandbox: seat %q has no inbox to hand its reply back to", handle)
+		return nil, fmt.Errorf("sandbox: seat %q names no seat id (%q) to hand its reply back to",
+			handle, run.AgentID)
 	}
 	var published []string
 	for _, copied := range copies {

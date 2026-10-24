@@ -678,11 +678,22 @@ func endsAValue(t token, earlier []token) bool {
 }
 
 // opensElement reports whether the `<` at l.pos opens a JSX element rather
-// than a generic arrow function's type parameters.
+// than a generic function's type parameters.
 //
 // `<T,>(x: T) => x` and `<T extends U>(…)` are how a `.tsx` file spells a
-// generic arrow, precisely because `<T>(…)` would be an element there. Every
-// other `<` followed by a name or by `>` (a fragment) is an element.
+// generic arrow, precisely because `<T>(…)` would be an element there.
+//
+// AND A GENERIC FUNCTION TYPE MAY SPELL IT `<T>(…) => R`, because a TYPE
+// position holds no JSX: `importOriginal: <M>() => Promise<M>` annotates a
+// parameter, and `type Load = <M>() => M` declares one. This scanner keeps no
+// track of types, so it reads the SHAPE that only a type can have: `<Name>`,
+// then a balanced `( … )`, then `=>`. In an expression position the compiler
+// reads that shape as an element and refuses the file, so in a tree that
+// compiles it is a type — the one element that shares it is one whose text
+// opens with a parenthesis and an arrow (`<b>(x) => y</b>`), which then fails
+// to scan here, naming the line, rather than being read as the wrong thing.
+//
+// Every other `<` followed by a name or by `>` (a fragment) is an element.
 func (l *lexer) opensElement() bool {
 	src := *l.src
 	i := l.pos + 1
@@ -707,7 +718,46 @@ func (l *lexer) opensElement() bool {
 	rest := src[i:]
 	extends := strings.HasPrefix(rest, "extends") &&
 		(len(rest) == len("extends") || !isNamePart(rest[len("extends")]))
-	return !strings.HasPrefix(rest, ",") && !extends
+	if strings.HasPrefix(rest, ",") || extends {
+		return false
+	}
+	return !strings.HasPrefix(rest, ">") || !functionTypeFollows(src, i+1)
+}
+
+// functionTypeFollows reports whether `src[i:]` is, past any space, a
+// balanced parameter list `( … )` and then `=>` — the rest of a generic
+// function's signature after its type parameters. Strings inside the list are
+// skipped whole, so a parenthesis quoted in a default value counts for nothing.
+func functionTypeFollows(src string, i int) bool {
+	for i < len(src) && isSpace(src[i]) {
+		i++
+	}
+	if i >= len(src) || src[i] != '(' {
+		return false
+	}
+	depth := 0
+	for ; i < len(src); i++ {
+		switch c := src[i]; c {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				i++
+				for i < len(src) && isSpace(src[i]) {
+					i++
+				}
+				return strings.HasPrefix(src[i:], "=>")
+			}
+		case '"', '\'', '`':
+			end := strings.IndexByte(src[i+1:], c)
+			if end < 0 {
+				return false
+			}
+			i += end + 1
+		}
+	}
+	return false
 }
 
 // openElement scans a `<` that opens an element — from code, or as a child of

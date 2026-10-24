@@ -165,7 +165,7 @@ func gitsAnswer(err error) bool {
 // negotiation). Any other encoding is refused 415, an unreadable gzip header
 // 400; ok false when it answered.
 func decodedBody(w http.ResponseWriter, r *http.Request, s *Server) (io.Reader, bool) {
-	in := paced.Body(r.Body, http.NewResponseController(w), s.now)
+	in := paced.NewBody(r.Body, http.NewResponseController(w), s.now)
 	switch r.Header.Get("Content-Encoding") {
 	case "":
 		return in, true

@@ -1,17 +1,27 @@
-// Package hostbox holds the primitives for running somebody else's process in
-// a directory on the engine host.
+// Package hostbox holds the primitives for running somebody else's process on
+// the engine host.
 //
-// Two subsystems do that, and they must do it identically: the subscription
-// CLI LLM backend, which drives a coding CLI per seat with its own HOME, and
-// the local sandbox provider, which runs a whole coding agent in a box. Both
-// seed operator-supplied credential paths in, both copy a refreshed login back
-// out, and both hand a child process an environment. A second implementation
-// of any of those is the one that drifts — and each of them is a guard, so
-// drift means a hole. It is also where a freshly written executable is waited
-// for ([Settle]), because the code host's hook script and every test stand-in
-// hit the same window.
+// Three subsystems do that, and they must do it identically: the subscription
+// CLI LLM backend, which drives a coding CLI per seat with its own HOME; the
+// local sandbox provider, which runs a whole coding agent in a box and drives a
+// container runtime's CLI to make one; and the MCP client, which starts every
+// stdio tool server a company declares. The first two seed operator-supplied
+// credential paths in and copy a refreshed login back out, and all three hand
+// a child process an environment. A second implementation of any of those is
+// the one that drifts — and each of them is a guard, so drift means a hole.
+// The environment had already drifted: the CLI backend carried a copy of the
+// allowlist that disagreed with this one about five names, and the MCP client
+// carried none at all and handed every tool server the engine's whole
+// environment — its keyring and its Tier A token values among it. A container
+// runtime's own CLI has a rule of its own ([ContainerRuntime]), held here for
+// the same reason: two callers start one, the sandbox and a tool server
+// declared as `command: docker`. So does where a local box writes a file it is
+// handed ([InHome], [SafeJoin]), which config validation applies to a setup
+// step before any box exists. It is also where a freshly written executable is
+// waited for ([Settle]), because the code host's hook script and every test
+// stand-in hit the same window.
 //
-// Nothing here imports the rest of Crewlet: it sits below both consumers.
+// Nothing here imports the rest of Crewlet: it sits below every consumer.
 package hostbox
 
 import (
@@ -22,31 +32,43 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
-// DirMode is the mode for every directory these two subsystems create.
-// Credentials and prompt transcripts both land under one, on a host that may
-// run other services.
+// DirMode is the mode for every directory the CLI backend and the local
+// sandbox create. Credentials and prompt transcripts both land under one, on a
+// host that may run other services.
 const DirMode os.FileMode = 0o700
 
 // FileMode is the mode for every file they create, for the same reason.
 const FileMode os.FileMode = 0o600
 
-// PassthroughEnv is the host environment a child process may inherit.
+// PassthroughEnv is the host environment every child process may inherit.
 //
 // An ALLOWLIST, not a denylist, and that polarity is the whole point: the
-// engine's own environment holds the org's chat token, its database DSN and
-// possibly a metered API key, none of which a coding agent has any business
-// reading. A denylist would leak every variable nobody thought to name.
+// engine's own environment holds the keyring every session cookie and every
+// sealed revision is signed under, the Tier A token values, any credential
+// in an external stream URL, the
+// collector credential in OTEL_EXPORTER_OTLP_HEADERS and possibly a metered
+// API key,
+// none of which a child has any business reading. A denylist would leak every
+// variable nobody thought to name — and the engine's Tier A `${VAR}`
+// references mean an operator names those variables, not this package.
 //
 // What is on it is what a process needs to run at all — where to find
-// binaries, how to talk TLS, how to reach the network — never what to
-// authenticate as. Credentials reach a child only through the run environment
-// config deliberately put there.
+// binaries, how to render text, how to talk TLS, how to reach the network —
+// never what to authenticate as. Credentials reach a child only through the
+// environment its config deliberately declares.
+//
+// ONE LIST FOR EVERY CHILD. The CLI backend kept its own and had already
+// drifted from this one: it lacked LC_NUMERIC, TERM and the ALL_PROXY pair (so
+// a coding CLI behind a SOCKS proxy reached nothing), and it carried LANGUAGE,
+// which this one did not.
 var PassthroughEnv = []string{
 	"PATH",
 	"LANG",
+	"LANGUAGE",
 	"LC_ALL",
 	"LC_CTYPE",
 	"LC_NUMERIC",
@@ -67,10 +89,34 @@ var PassthroughEnv = []string{
 	"no_proxy",
 }
 
+// HostUserEnv is where the engine's own user keeps its files and its runtime
+// state: the home, the user's name, the temporary directory and the XDG base
+// directories.
+//
+// SEPARATE FROM [PassthroughEnv] because a box REPLACES every one of these: a
+// coding CLI and a sandboxed coding agent each get a HOME, an XDG tree and a
+// TMPDIR of their own, which is the isolation, so inheriting the engine's would
+// only be overwritten. A child that runs AS the host user in no box of its own —
+// a stdio MCP server launched through `npx` or `uvx`, which keeps its package
+// cache under HOME, and a container runtime's CLI, which finds its config and
+// a rootless daemon's socket through HOME and XDG_RUNTIME_DIR — needs the real
+// ones, and none of them authenticates anything.
+var HostUserEnv = []string{
+	"HOME",
+	"USER",
+	"LOGNAME",
+	"TMPDIR",
+	"XDG_CONFIG_HOME",
+	"XDG_CACHE_HOME",
+	"XDG_DATA_HOME",
+	"XDG_STATE_HOME",
+	"XDG_RUNTIME_DIR",
+}
+
 // Inherit returns the allowlisted slice of the host environment, ready to be
-// extended with a box's own variables. Names that are unset are omitted rather
-// than passed through empty: a child that distinguishes "unset" from "empty"
-// (curl does, for NO_PROXY) must see the same thing the engine saw.
+// extended with a child's own variables. Names that are unset are omitted
+// rather than passed through empty: a child that distinguishes "unset" from
+// "empty" (curl does, for NO_PROXY) must see the same thing the engine saw.
 func Inherit(extra ...string) map[string]string {
 	env := make(map[string]string, len(PassthroughEnv)+len(extra))
 	for _, name := range append(append([]string{}, PassthroughEnv...), extra...) {
@@ -81,8 +127,201 @@ func Inherit(extra ...string) map[string]string {
 	return env
 }
 
+// InheritFamilies adds to env every host variable whose name begins with one
+// of prefixes.
+//
+// FOR A CHILD WHOSE OWN CONFIGURATION IS A DOCUMENTED FAMILY of variables — a
+// container runtime's `DOCKER_*` — where naming each member would break the
+// child the day its vendor adds one, and silently: a runtime that no longer
+// sees its `DOCKER_HOST` dials the default socket instead of failing. A family
+// is still an allowlist; what it cannot do is reach a name outside itself.
+func InheritFamilies(env map[string]string, prefixes ...string) {
+	for _, kv := range os.Environ() {
+		name, value, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(name, prefix) {
+				env[name] = value
+				break
+			}
+		}
+	}
+}
+
+// ContainerRuntimeEnv is what a container runtime's own CLI reads by NAME,
+// beyond the host user's locations: REGISTRY_AUTH_FILE, where Podman reads
+// registry credentials, and DBUS_SESSION_BUS_ADDRESS, which rootless Podman's
+// systemd cgroup manager dials.
+var ContainerRuntimeEnv = []string{
+	"REGISTRY_AUTH_FILE",
+	"DBUS_SESSION_BUS_ADDRESS",
+}
+
+// ContainerRuntimeFamilies is what a container runtime's own CLI reads by
+// PREFIX: the DOCKER_ family — DOCKER_HOST, DOCKER_CONTEXT, DOCKER_CONFIG and
+// the TLS trio, without which a rootless Docker's CLI dials the system socket
+// instead of the user's and a remote daemon is not the one configured — the
+// CONTAINER_ and CONTAINERS_ families, Podman's remote connection and its
+// config, storage and registry files, and the PODMAN_ family.
+//
+// FAMILIES rather than names, because each vendor documents the set as a
+// prefix and adds to it, and a runtime that silently lost a new member would
+// dial something other than what the operator configured. None of them is
+// anything of the engine's.
+var ContainerRuntimeFamilies = []string{"DOCKER_", "CONTAINER_", "CONTAINERS_", "PODMAN_"}
+
+// ContainerRuntime is the host environment a container runtime's CLI runs
+// with: the allowlist, the host user's locations ([HostUserEnv] — where the
+// runtime keeps its config, and XDG_RUNTIME_DIR, where a rootless daemon's
+// socket lives), [ContainerRuntimeEnv] and every member of
+// [ContainerRuntimeFamilies] the engine was started with.
+//
+// ONE RULE FOR EVERY CALLER THAT STARTS ONE, and there are two: the local
+// sandbox drives the CLI to make and run a box, and a stdio MCP server
+// declared as `command: docker` or `podman` IS the CLI. Written twice, the
+// copy on the second path is the one that loses DOCKER_HOST — and a rootless
+// runtime without it dials the system socket, which fails as a permission
+// error at the daemon rather than as anything naming the variable.
+//
+// It is what the runtime needs to reach the daemon the operator configured,
+// never what an image or a credential helper authenticates with: a caller
+// with a declared channel layers that over this.
+func ContainerRuntime() map[string]string {
+	env := Inherit(append(append([]string{}, HostUserEnv...), ContainerRuntimeEnv...)...)
+	InheritFamilies(env, ContainerRuntimeFamilies...)
+	return env
+}
+
+// ContainerRuntimeCarries reports whether [ContainerRuntime] passes name
+// through from the host, whether or not the host has it set.
+//
+// The question a check asks of a `-e NAME` it finds in a container's run
+// arguments: the runtime copies NAME from its OWN environment, so a name this
+// answers false for arrives in the box as nothing at all unless a caller
+// declares it.
+func ContainerRuntimeCarries(name string) bool {
+	if slices.Contains(PassthroughEnv, name) || slices.Contains(HostUserEnv, name) ||
+		slices.Contains(ContainerRuntimeEnv, name) {
+		return true
+	}
+	for _, prefix := range ContainerRuntimeFamilies {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsContainerRuntime reports whether command starts a container runtime's
+// CLI — `docker` or `podman`, by name or by path — and so is owed
+// [ContainerRuntime] rather than the environment of an ordinary child.
+func IsContainerRuntime(command string) bool {
+	switch filepath.Base(strings.TrimSpace(command)) {
+	case "docker", "podman":
+		return true
+	}
+	return false
+}
+
+// Environ renders env as os/exec's KEY=value slice: sorted, and NEVER nil.
+//
+// NEVER NIL, because a nil exec.Cmd.Env does not mean "no environment": os/exec
+// then hands the child the ENGINE's own, which is precisely what the allowlist
+// exists to keep out of it. An empty map therefore renders as an empty,
+// non-nil slice — a child with nothing rather than a child with everything —
+// and a caller whose child genuinely needs something states it.
+//
+// Sorted, so a spawn is reproducible from a log line and a test compares an
+// environment rather than a map's iteration order.
+func Environ(env map[string]string) []string {
+	out := make([]string, 0, len(env))
+	for name, value := range env {
+		out = append(out, name+"="+value)
+	}
+	slices.Sort(out)
+	return out
+}
+
 // ErrEscape reports a path that resolves outside the root it was joined to.
 var ErrEscape = errors.New("hostbox: path escapes its root")
+
+// ContainerHome is where a local sandbox's container box mounts its home, and
+// so the only place a path handed to that box can name a file in it.
+//
+// It is the home of the one account every remote (E2B) template runs as, and
+// the mount was put there so a path reads the same in either cell; the sandbox
+// package's DefaultHome is this value. HERE, beside [InHome], because it is
+// the home InHome judges a container box's paths against: this is the one
+// leaf package that config validation, both local boxes and the sandbox
+// package already import, so each of them reads the value from the rule's own
+// package rather than from a copy of it.
+const ContainerHome = "/home/user"
+
+// InHome is where path lands under a local sandbox box's home: the path
+// relative to that home, and whether it names a file inside it at all.
+//
+// THE LEXICAL HALF OF THE ONE RULE BOTH LOCAL CELLS HOLD A FILE TO — a direct
+// box, which has no filesystem of its own, and a container box, which writes
+// a file on the host side of its one mount — and the half that can be judged
+// before any box exists, which is what config validation does with a setup
+// step's files. Both boxes call this before they touch a path and
+// [SafeJoin] after it, which is the other half: following whatever links the
+// host's existing directories hold, which only a box on that host can do. A
+// copy of the rule in the validator would be the one that drifts, and the
+// symptom of the drift is a document that validates and a seat whose every box
+// fails at setup.
+//
+// A relative path is under the home as it stands. An absolute one is under
+// it only when it names somewhere beneath it, compared after both are
+// cleaned, so "/home/user//x" is inside and "/home/user/../../etc/x" is not.
+// Either is refused when it climbs out with "..", and so is the home itself,
+// which is no file in it — and so is an empty path, which names nothing.
+//
+// A LEADING "~" IS THE HOME, as a remote (E2B) box's own agent reads one when
+// it writes a file there: "~/x" is the relative "x", and "~" alone is the
+// home itself, refused as above. "~name/x" — another account's home — is
+// refused, as that agent refuses it. Read as an ordinary relative path
+// instead, "~/.npmrc" was accepted here and written to a directory named "~"
+// in a local box's home, while the same document put the file in the home in
+// a remote one: one setup step, two places, and a rule that approved both.
+//
+// home is the home as a path inside the box names it: [ContainerHome] for a
+// container box, the host directory a direct box was minted for. EMPTY is a
+// home NO path can name, which is what a direct box's home is to everything
+// written before the box exists — it is minted per box, under a name no
+// document holds — so only a relative path lands in one.
+func InHome(home, path string) (string, bool) {
+	if path == "" {
+		return "", false
+	}
+	if path[0] == '~' {
+		// Both separators, as the remote box's agent takes either after the
+		// tilde; what follows is then relative to the home, and an empty
+		// rest is the home itself, which the check below refuses.
+		if len(path) > 1 && path[1] != '/' && path[1] != '\\' {
+			return "", false
+		}
+		path = "." + string(filepath.Separator) + path[1:]
+	}
+	rel := filepath.Clean(path)
+	if filepath.IsAbs(path) {
+		if home == "" {
+			return "", false
+		}
+		within, err := filepath.Rel(home, rel)
+		if err != nil {
+			return "", false
+		}
+		rel = within
+	}
+	up := ".." + string(filepath.Separator)
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, up) {
+		return "", false
+	}
+	return rel, true
+}
 
 // SafeJoin resolves rel under root, refusing anything that lands outside it.
 //
@@ -190,22 +429,37 @@ func resolve(path string) (string, error) {
 // A missing src is not an error — it is the ordinary case of a profile naming
 // a credential file this vendor does not use — and reports false.
 func CopyFileAtomic(src, dst string) (bool, error) {
+	_, copied, err := CopyFileAtomicDigest(src, dst)
+	return copied, err
+}
+
+// CopyFileAtomicDigest is [CopyFileAtomic], reporting as well the SHA-256 of
+// what it copied, in [Digest]'s form — "" where it copied nothing.
+//
+// THE DIGEST IS OF THE VERY BYTES WRITTEN, taken as they are copied from the
+// one descriptor: a digest read separately, before or after, may describe a
+// newer file than the one dst was given. A caller that judges a later write
+// against what it seeded — a local sandbox's teardown, writing back a login
+// only over the one its box was given — would then excuse a write it should
+// have refused.
+func CopyFileAtomicDigest(src, dst string) (string, bool, error) {
 	info, err := os.Stat(src)
 	if err != nil || !info.Mode().IsRegular() {
-		return false, nil
+		return "", false, nil
 	}
 	if err = os.MkdirAll(filepath.Dir(dst), DirMode); err != nil {
-		return false, err
+		return "", false, err
 	}
 	in, err := os.Open(src)
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	defer func() { _ = in.Close() }()
-	if err := ReplaceFile(dst, in); err != nil {
-		return false, err
+	sum := sha256.New()
+	if err := ReplaceFile(dst, io.TeeReader(in, sum)); err != nil {
+		return "", false, err
 	}
-	return true, nil
+	return hex.EncodeToString(sum.Sum(nil)), true, nil
 }
 
 // ReplaceFile puts what content yields at dst, through a temp file in dst's
@@ -247,26 +501,49 @@ func ReplaceFile(dst string, content io.Reader) error {
 	return os.Rename(tmpName, dst)
 }
 
-// FileDigest is the SHA-256 of a file's contents, or "" if it cannot be read.
+// FileDigest is the SHA-256 of the regular file at path, in [Digest]'s form,
+// and false where there is nothing there.
 //
-// Used to decide whether a credential actually CHANGED before writing it back
-// over the shared store. Comparing mtimes would not do: a coding agent
-// rewrites its credential file on every run whether or not the token rotated,
-// so an mtime test would write back constantly and race a concurrent seat.
-func FileDigest(path string) string {
-	f, err := os.Open(path)
+// Used to decide whether a credential actually CHANGED before writing over
+// it. Comparing mtimes would not do: a coding agent rewrites its credential
+// file on every run whether or not the token rotated, so an mtime test would
+// write back constantly and race a concurrent seat.
+//
+// THREE ANSWERS, because a compare-and-swap reads them differently: a digest;
+// no file, which is a login that has been removed; and a file that could not
+// be read, or is not a regular file, which is an ERROR rather than either — it
+// read as "" once, so an unreadable login compared as different from every
+// digest and a write went ahead over it.
+func FileDigest(path string) (string, bool, error) {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
+	}
 	if err != nil {
-		return ""
+		return "", false, fmt.Errorf("hostbox: reading %s: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", false, fmt.Errorf("hostbox: %s is not a regular file", path)
+	}
+	f, err := os.Open(path) //nolint:gosec // the caller's own file
+	if errors.Is(err, os.ErrNotExist) {
+		// Removed between the two reads, which is what it would have
+		// read a moment later.
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("hostbox: reading %s: %w", path, err)
 	}
 	defer func() { _ = f.Close() }()
 	digest, err := Digest(f)
 	if err != nil {
-		return ""
+		return "", false, fmt.Errorf("hostbox: reading %s: %w", path, err)
 	}
-	return digest
+	return digest, true, nil
 }
 
-// Digest is the SHA-256 of what r yields, in [FileDigest]'s form — for a
+// Digest is the SHA-256 of what r yields, in lowercase hexadecimal — the form
+// every digest here takes ([FileDigest], [CopyFileAtomicDigest]) — for a
 // caller that has the file open already, and compares the same descriptor it
 // then copies from ([ReplaceFile]).
 func Digest(r io.Reader) (string, error) {

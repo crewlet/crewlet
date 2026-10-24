@@ -4,7 +4,8 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // Redacted is what a masked credential reads as on every HTTP surface.
@@ -15,9 +16,14 @@ import (
 // would let a round trip turn "no credential" into "the credential I could
 // not see". It is also what [RestoreRedacted] looks for, so the marker is a
 // contract rather than decoration.
-const Redacted = "__redacted__"
+//
+// IT IS AN ALIAS, and the value lives in [redact.FieldMask], because
+// [secrets.Mask] writes it from below this package. Spelled twice it would
+// drift, and the drift is a working credential replaced by twelve characters.
+const Redacted = redact.FieldMask
 
-// secretTag marks a field that holds a credential.
+// WHICH FIELDS ARE CREDENTIALS is the `secret:"true"` tag — `secret:"content"`
+// for a body read whole — read through [secrets.Field] and nothing else.
 //
 // A TAG rather than a list of paths, and that is the whole point: a path list
 // is maintained by whoever remembers it exists, so the day somebody adds
@@ -25,21 +31,17 @@ const Redacted = "__redacted__"
 // nothing fails. A tag lives on the field, and [TestEveryCredentialFieldIsTagged]
 // fails the build when a field that looks like a credential does not carry one.
 //
-// It has TWO READERS and one predicate, [isSecret]: the redaction below,
+// It has TWO READERS and one predicate, [secrets.Field]: the redaction below,
 // which runs over the company (Tier B) because that is the tier a read
-// serves, and the schema generator, which marks every position the tag
-// covers in BOTH tiers with [secretKeyword] — Tier A's keyring and API
-// tokens are what tooling rendering a node's file most needs to know not to
-// write in clear. Both read the tag the same way — a tagged field covers
-// every string beneath it, a list's members and a map's values included — so
-// what a read masks and what the published schema calls a credential cannot
-// disagree; TestSchemaMarksExactlyWhatRedactionMasks holds the two to one set.
-const secretTag = "secret"
-
-// isSecret reports whether a field declares that it holds a credential.
-func isSecret(field reflect.StructField) bool {
-	return field.Tag.Get(secretTag) == "true"
-}
+// serves — its mask and its restore share the predicate, so they cannot come
+// to disagree about which values are secret — and the schema generator, which
+// marks every position the tag covers in BOTH tiers with [secretKeyword] —
+// Tier A's keyring and API tokens are what tooling rendering a node's file
+// most needs to know not to write in clear. Both read the tag the same way — a
+// tagged field covers every string beneath it, a list's members and a map's
+// values included — so what a read masks and what the published schema calls
+// a credential cannot disagree; TestSchemaMarksExactlyWhatRedactionMasks holds
+// the two to one set.
 
 // Redact returns a copy of the company with every credential masked.
 //
@@ -75,10 +77,12 @@ func (c *Company) Redact() *Company {
 // Only the marker is substituted. A field the caller actually changed keeps
 // their value, and a field they cleared stays cleared.
 //
-// Every member that can name itself is matched by that name, and a seat or a
-// unit is matched ANYWHERE in the prior document (see [documentIdentified]).
-// A mask that cannot be matched to exactly one prior member is left standing,
-// and [Company.Validate] names the field.
+// Every member that can name itself is matched by that identity, and a seat
+// or a unit is matched ANYWHERE in the prior document (see
+// [documentIdentified]) — a seat by its handle, a unit by its key, which is
+// the same identity every other consumer resolves them by. A mask that cannot
+// be matched to exactly one prior member is left standing, and
+// [Company.Validate] names the field.
 func (c *Company) RestoreRedacted(prior *Company) {
 	if c == nil || prior == nil {
 		return
@@ -120,7 +124,7 @@ func copyMasking(src, dst reflect.Value, secret bool) {
 				continue
 			}
 			copyMasking(src.Field(i), dst.Field(i),
-				secret || isSecret(field))
+				secret || secrets.Field(field))
 		}
 	case reflect.Slice:
 		if src.IsNil() {
@@ -172,7 +176,7 @@ type identified interface{ IdentityKey() string }
 
 // documentIdentified is a member whose identity is unique across the WHOLE
 // document rather than within its own list: a seat (its handle) and a unit
-// (its name).
+// (its key).
 //
 // Both MOVE. A seat goes from the root into a unit, from one unit to another,
 // or back to the root; a unit goes under another unit. Its credentials move
@@ -205,7 +209,8 @@ type restorer struct {
 // document, at any depth, by identity.
 //
 // AN IDENTITY THAT IS EMPTY OR NOT UNIQUE IS NOT IN THE INDEX. Two units
-// called "Platform" in a prior — an identity shared by two members, as an
+// answering to the key "platform" in a prior — an identity shared by two
+// members, which an apply admits since the key rule is an admission one, as an
 // empty one is shared by every member without one — are two members with no
 // identity between them: picking either hands one team's credentials to the
 // other, and so does falling back to position. Left out, their masks stay
@@ -295,7 +300,7 @@ func (r *restorer) restore(target, prior reflect.Value, secret bool) {
 			if prior.IsValid() {
 				previous = prior.Field(i)
 			}
-			r.restore(target.Field(i), previous, secret || isSecret(field))
+			r.restore(target.Field(i), previous, secret || secrets.Field(field))
 		}
 	case reflect.Slice, reflect.Array:
 		r.restoreSlice(target, prior, secret)
@@ -382,31 +387,21 @@ func uniqueMembers(prior reflect.Value) map[string]reflect.Value {
 	return byKey
 }
 
-// mask hides a literal credential and leaves a reference alone.
+// mask hides a literal credential and leaves a reference alone: [secrets.Mask]
+// for a value under a credential field, and the value itself anywhere else.
 //
-// # Only a WHOLE reference is shown
-//
-// A value that is exactly one ${VAR} names a credential and carries none: the
-// engine resolves it where a provider is built, so nothing it points at is in
-// this document to leak, and it is the half an operator edits.
-//
-// Anything else is masked, including a value that merely CONTAINS a
-// reference. "Bearer sk-live-${SUFFIX}" and "sk-live-SECRET-${ROTATION}" are
-// legitimate (the resolver expands embedded references), and the literal
-// half of each is a credential. The previous rule showed any value containing
-// "${" and so published exactly that half; a malformed "${line#host=}" or an
-// unclosed "${" is not a reference at all by the resolver's own grammar. The
-// names an embedded reference carries are not lost to the operator:
-// [References] reads the unredacted document and lists every one with its
-// path, and a masked value is restored from the prior revision on a write.
+// ONLY A WHOLE REFERENCE IS SHOWN, the shared rule's reason. The previous rule
+// here showed any value containing "${" and so published exactly the literal
+// half of "sk-live-SECRET-${ROTATION}"; a malformed "${line#host=}" is not a
+// reference at all by the resolver's own grammar. The names an embedded
+// reference carries are not lost to the operator: [References] reads the
+// unredacted document and lists every one with its path, and a masked value
+// is restored from the prior revision on a write.
 func mask(value string, secret bool) string {
-	if !secret || value == "" {
+	if !secret {
 		return value
 	}
-	if _, whole := envref.Whole(value); whole {
-		return value
-	}
-	return Redacted
+	return secrets.Mask(value)
 }
 
 // UnresolvedMasks lists the credential fields still holding the redaction
@@ -446,7 +441,7 @@ func findMasks(v reflect.Value, path Path, secret bool, found *[]Path) {
 				continue
 			}
 			findMasks(v.Field(i), at(path, jsonName(field)),
-				secret || isSecret(field), found)
+				secret || secrets.Field(field), found)
 		}
 	case reflect.Slice, reflect.Array:
 		for i := range v.Len() {

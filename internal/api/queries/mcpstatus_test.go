@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // mcpCompany declares a shared server, a per-seat template and a server no
@@ -66,14 +67,29 @@ func mcpSources(t *testing.T, backend coord.Backend) queries.Sources {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return queries.Sources{Coord: backend, Company: func() *config.Company { return cfg }}
+	return queries.Sources{Coord: backend, Company: companySource(t, cfg)}
 }
 
 // mcpFleet is two reporting nodes and one whose last heartbeat carried no
 // status: github started on both reporting nodes and failed for one seat on
 // node-b; docs started on node-a alone; linear started nowhere.
+//
+// A NODE REPORTS THE FAILING SEAT BY ITS ID, and the answer names it by its
+// handle.
 func mcpFleet(t *testing.T) coord.Backend {
 	t.Helper()
+	cfg, err := config.ParseCompany([]byte(mcpCompany))
+	if err != nil {
+		t.Fatal(err)
+	}
+	organization, err := cfg.Organization()
+	if err != nil {
+		t.Fatal(err)
+	}
+	backendDev, ok := organization.AgentIDFor(organization.AgentSeatByHandle("backend-dev"))
+	if !ok {
+		t.Fatal("the fixture has no backend-dev seat")
+	}
 	backend := coordmemory.New()
 	presentNode(t, backend, "node-a", &coord.NodeStatus{
 		MCP: []coord.MCPServerStatus{
@@ -83,7 +99,7 @@ func mcpFleet(t *testing.T) coord.Backend {
 	})
 	presentNode(t, backend, "node-b", &coord.NodeStatus{
 		MCP: []coord.MCPServerStatus{
-			{Server: "github", Started: 1, Failed: 1, Tools: 25, Error: "401 Bad credentials", ErrorSeat: "backend-dev"},
+			{Server: "github", Started: 1, Failed: 1, Tools: 25, Error: "401 Bad credentials", ErrorSeat: backendDev},
 		},
 	})
 	presentNode(t, backend, "node-c", nil)
@@ -147,7 +163,8 @@ func TestEachServerIsJudgedAcrossEveryNodesReport(t *testing.T) {
 // A SILENT NODE'S CELLS ARE UNKNOWN, NEVER ZERO. Its last heartbeat carried no
 // status (the status hook overran the beat), and a row of zeros under its name
 // would read as "started nothing here" — the confident zero the fleet answer is
-// written to avoid.
+// written to avoid. A node that published a status naming no server DID say:
+// it started none.
 func TestANodeThatDoesNotReportIsUnknownNotIdle(t *testing.T) {
 	t.Parallel()
 	got := askMCPStatus(t, mcpSources(t, mcpFleet(t)))
@@ -165,6 +182,16 @@ func TestANodeThatDoesNotReportIsUnknownNotIdle(t *testing.T) {
 	for _, row := range askMCPStatus(t, mcpSources(t, backend)).Servers {
 		if row.State != queries.MCPUnreported {
 			t.Errorf("%s = %s in a fleet with no report, want unreported", row.Name, row.State)
+		}
+	}
+
+	// THE CONTROL: a status naming no server is a node that started none.
+	backend = coordmemory.New()
+	presentNode(t, backend, "node-c", &coord.NodeStatus{InFlight: 1})
+	for _, row := range askMCPStatus(t, mcpSources(t, backend)).Servers {
+		if row.State != queries.MCPNotStarted {
+			t.Errorf("%s = %s beside a node that reported starting nothing, want not_started",
+				row.Name, row.State)
 		}
 	}
 }
@@ -201,6 +228,100 @@ func TestAServerThatStartedNowhereIsFailing(t *testing.T) {
 	}
 }
 
+// A SEAT'S INSTANCE HELD BACK FOR ITS PROVISIONED CREDENTIAL IS WAITING, NOT
+// FAILING, and says what it waits for.
+//
+// On a first boot under provisioning every seat's instance waits for the
+// credential the pass mints, and an operator watching the tools screen while
+// they connect an integration must not read that as a fault: nothing was
+// launched and nothing failed. The waiting count is its own, its sentence and
+// seat reach the cell as a failure's do, and it decides the state only where
+// nothing else does — a server running for one seat is running, and one with
+// a failure is failing whatever waits beside it.
+func TestAServerWaitingForAProvisionedCredentialIsNotFailing(t *testing.T) {
+	t.Parallel()
+	cfg, err := config.ParseCompany([]byte(mcpCompany))
+	if err != nil {
+		t.Fatal(err)
+	}
+	organization, err := cfg.Organization()
+	if err != nil {
+		t.Fatal(err)
+	}
+	backendDev, _ := organization.AgentIDFor(organization.AgentSeatByHandle("backend-dev"))
+	const wait = "not started: waiting for the gitlab integration to mint ${GITLAB_TOKEN_BACKEND_DEV}; " +
+		"it starts once the seal reaches this node"
+
+	backend := coordmemory.New()
+	presentNode(t, backend, "node-a", &coord.NodeStatus{
+		MCP: []coord.MCPServerStatus{{Server: "github", Waiting: 1, Wait: wait, WaitSeat: backendDev}},
+	})
+	github := serverRow(t, askMCPStatus(t, mcpSources(t, backend)), "github")
+	if github.State != queries.MCPWaiting || github.Waiting != 1 || github.Failed != 0 {
+		t.Errorf("github = %+v, want waiting, and not failing", github)
+	}
+	if cell := github.Nodes[0]; cell.Waiting != 1 || cell.Wait != wait || cell.WaitSeat != "backend-dev" ||
+		cell.Error != "" {
+		t.Errorf("node-a's cell = %+v, want the waiting instance, its sentence and its seat", cell)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		status coord.MCPServerStatus
+		want   queries.MCPServerState
+	}{
+		{"one seat served, another waiting", coord.MCPServerStatus{Server: "github", Started: 1, Waiting: 1}, queries.MCPRunning},
+		{"one seat failed, another waiting", coord.MCPServerStatus{Server: "github", Failed: 1, Waiting: 1}, queries.MCPFailing},
+	} {
+		backend := coordmemory.New()
+		presentNode(t, backend, "node-a", &coord.NodeStatus{MCP: []coord.MCPServerStatus{tc.status}})
+		if got := serverRow(t, askMCPStatus(t, mcpSources(t, backend)), "github").State; got != tc.want {
+			t.Errorf("%s: state = %s, want %s", tc.name, got, tc.want)
+		}
+	}
+}
+
+// AN ANNOTATION KEY IS UNLISTED ONLY WHERE NO STARTED INSTANCE LISTS IT,
+// FLEET-WIDE. Each node's row already names the keys none of its own
+// instances lists; a key one node names and another's instances list is a
+// key some seat's credentials reach — mcp-atlassian serves Confluence tools
+// only to a seat holding a Confluence credential — so only the keys every
+// node that started an instance names reach the answer. A node that started
+// none listed nothing and does not judge, nor does one that did not report;
+// a server started nowhere names nothing, never every key.
+func TestAnAnnotationKeyIsUnlistedOnlyWhereNoStartedInstanceListsIt(t *testing.T) {
+	t.Parallel()
+	backend := coordmemory.New()
+	presentNode(t, backend, "node-a", &coord.NodeStatus{
+		MCP: []coord.MCPServerStatus{
+			{Server: "github", Started: 2, Tools: 26, Unlisted: []string{"create_pull_reqest", "merge_pull_request"}},
+			{Server: "docs", Shared: true, Started: 1, Tools: 4, Unlisted: []string{"docs_search"}},
+		},
+	})
+	presentNode(t, backend, "node-b", &coord.NodeStatus{
+		MCP: []coord.MCPServerStatus{
+			{Server: "github", Started: 1, Tools: 30, Unlisted: []string{"create_pull_reqest"}},
+			{Server: "linear", Failed: 1, Error: "401", Unlisted: []string{"linear_typo"}},
+		},
+	})
+	presentNode(t, backend, "node-c", &coord.NodeStatus{
+		MCP: []coord.MCPServerStatus{
+			{Server: "github", Failed: 2, Error: "401 Bad credentials"},
+		},
+	})
+	presentNode(t, backend, "node-d", nil)
+	got := askMCPStatus(t, mcpSources(t, backend))
+	for name, want := range map[string][]string{
+		"github": {"create_pull_reqest"},
+		"docs":   {"docs_search"},
+		"linear": {},
+	} {
+		if row := serverRow(t, got, name); row.UnlistedAnnotations == nil || !slices.Equal(row.UnlistedAnnotations, want) {
+			t.Errorf("%s: unlisted_annotations = %#v, want %#v", name, row.UnlistedAnnotations, want)
+		}
+	}
+}
+
 // A SERVER ONLY A NODE KNOWS STAYS VISIBLE: a node on an older revision still
 // runs a server this node's configuration removed, and that is the one row an
 // operator who just removed it is looking for.
@@ -222,7 +343,7 @@ func TestTheServerStatusCarriesNoCredential(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, mcpSources(t, mcpFleet(t)))
-	raw, err := r.Answer(t.Context(), "mcp_servers_status", nil, "founder")
+	raw, err := r.Answer(everyGrant(t), "mcp_servers_status", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,23 +355,18 @@ func TestTheServerStatusCarriesNoCredential(t *testing.T) {
 	}
 }
 
-// OPERATOR-ONLY: node ids, launch commands and each failure's first line are
-// the shape of the deployment. And an unreadable lease table is an error, not
-// a fleet with no nodes.
-func TestTheServerStatusIsOperatorOnlyAndNeverGuesses(t *testing.T) {
+// ADMIN'S: launch commands and each failure's first line are the
+// configuration and what became of it, which `/config` shows the same reader.
+// And an unreadable lease table is an error, not a fleet with no nodes.
+func TestTheServerStatusIsAdminsAndNeverGuesses(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, mcpSources(t, mcpFleet(t)))
-	if !r.RequiresOperator("mcp_servers_status") {
-		t.Fatal("mcp_servers_status is served to any caller")
-	}
-	if _, err := r.Answer(t.Context(), "mcp_servers_status", nil, ""); !errors.Is(err, queries.ErrUnauthorized) {
-		t.Errorf("anonymous mcp_servers_status answered %v, want an authorization refusal", err)
-	}
+	requiresExactly(t, r, "mcp_servers_status", iam.GrantAdmin)
 
 	broken := queries.NewRegistry()
 	queries.Register(broken, queries.Sources{Coord: unreadableLeases{coordmemory.New()}})
-	if _, err := broken.Answer(t.Context(), "mcp_servers_status", nil, "founder"); err == nil {
+	if _, err := broken.Answer(everyGrant(t), "mcp_servers_status", nil); err == nil {
 		t.Error("an unreadable lease table was answered as a fleet")
 	}
 }
@@ -261,7 +377,7 @@ func TestTheToolsScreenReadsWhatTheServerStatusSends(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, mcpSources(t, mcpFleet(t)))
-	raw, err := r.Answer(t.Context(), "mcp_servers_status", nil, "founder")
+	raw, err := r.Answer(everyGrant(t), "mcp_servers_status", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

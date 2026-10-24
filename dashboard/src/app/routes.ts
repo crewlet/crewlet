@@ -14,8 +14,19 @@
  * because the switch spelled a route three different ways.
  *
  * So the table is data here, `App.tsx` maps a resolved screen to a component,
- * and everything else asks this function. It imports nothing but `nav.ts`,
- * which is what lets `lib/` and a Node test call it.
+ * and everything else asks this function. It imports nothing but `nav.ts`
+ * and the artifacts' kind words `nav.ts` already reads, which is what lets
+ * `lib/` and a Node test call it.
+ *
+ * # The sign-in screens resolve too, and to no workspace
+ *
+ * Signing in, redeeming an invitation, spending a password reset link and
+ * enrolling a second factor are drawn OUTSIDE the frame (`FRAMELESS` in `nav.ts`), and they are resolved FIRST,
+ * before any workspace is asked: their heads are reserved for them, and a
+ * `#/login?next=…` link is a link to a page like any other, which the link
+ * gates hold. What they lack is a workspace — `workspace` is `""` — because
+ * nothing in the frame draws them, so a recent, a star or a breadcrumb never
+ * names one.
  *
  * # What decides a segment
  *
@@ -29,7 +40,15 @@
  * party's string and `servers` is a legal one.
  */
 
-import { RESERVED_SEGMENTS, workspaceOf, type Workspace } from "./nav.ts";
+import { isArtifactKind } from "~/lib/artifacts/words.ts";
+import type { ArtifactKind } from "~/protocol/index.ts";
+import {
+  framelessOf,
+  RESERVED_SEGMENTS,
+  workspaceOf,
+  type FramelessRoute,
+  type Workspace,
+} from "./nav.ts";
 
 /** A project or container key: uppercase, as the engine mints it. */
 export const KEY_SHAPE = /^[A-Z][A-Z0-9_]*$/;
@@ -71,24 +90,98 @@ const ME_SECTIONS: readonly MeSection[] = [
   "checklist",
 ];
 
-/** Every screen the dashboard draws, with what its path names. */
-export type Screen =
+/**
+ * The Artifacts gallery's sections: All (its landing, everything the reader
+ * can open), Yours and Shared with you, each one of the scopes the engine's
+ * listing answers by (`artifactsdomain.ListScope`).
+ */
+export type ArtifactSection = "all" | "yours" | "shared";
+
+const ARTIFACT_SECTIONS: readonly ArtifactSection[] = ["yours", "shared"];
+
+/**
+ * The sections an earlier gallery had, and the section each now lands on: its
+ * own artifacts are Yours, and what the whole company or an agent shared is
+ * among All. The gallery rewrites such an address in place
+ * (`Navigator.replace`), so a link pasted before the change still opens the
+ * nearest list and the address bar says the current one.
+ */
+export const LEGACY_ARTIFACT_SECTIONS: Readonly<Record<string, ArtifactSection>> = {
+  mine: "yours",
+  company: "all",
+  agents: "all",
+};
+
+/** A gallery section's address. */
+export function artifactSectionPath(section: ArtifactSection): string[] {
+  return section === "all" ? ["artifacts"] : ["artifacts", section];
+}
+
+/**
+ * An artifact's own address in the dashboard, the one `artifactsRoute` reads.
+ * It lives here rather than beside the artifacts' REST calls
+ * (`lib/artifacts/api.ts`) because the frame draws it (a pinned artifact in
+ * the sidebar, a palette hit): a bundler places a module whole, so the frame
+ * importing one function from that module carried every artifact write and
+ * read into the entry.
+ */
+export function artifactPath(id: string): string[] {
+  return ["artifacts", id];
+}
+
+/**
+ * The org builder's address, Org chart › Edit org: the one place the chart,
+ * the seats, the charter and the policies are written, which every page that
+ * reads them offers as its way to change them. Here for the reason
+ * [artifactPath] is: the frame's pages link to it.
+ */
+export const ORG_EDIT_PATH: readonly string[] = ["company", "org", "edit"];
+
+/**
+ * Where a new artifact of a kind is made: each kind has its own page
+ * (`routes/artifacts/new/`), because writing a doc, laying out a deck and
+ * asking an agent for a dashboard are three different gestures. Here for the
+ * reason [artifactPath] is: the frame links to it.
+ */
+export function newArtifactPath(kind: ArtifactKind): string[] {
+  return ["artifacts", "new", kind];
+}
+
+/**
+ * The screens drawn outside the frame. An invitation's and a reset link's one
+ * segment is `<id>.<secret>`, kept whole: the screen itself says when that is
+ * not a whole link — a link cut short by a mail client is the ordinary way it
+ * arrives wrong, and "no such screen" would send the person looking for a
+ * different page rather than for the rest of this one.
+ */
+export type SignInScreen =
+  | { screen: "login" }
+  | { screen: "enrol" }
+  | { screen: "invite"; link: string }
+  | { screen: "reset"; link: string };
+
+/** Every screen the frame draws, with what its path names. */
+export type FramedScreen =
   | { screen: "home" }
   | { screen: "inbox" }
   | { screen: "me"; section: MeSection }
-  | { screen: "work" }
   | { screen: "work-projects" }
+  | { screen: "work-tasks" }
   | { screen: "work-views"; id?: string }
   | { screen: "work-history" }
   | { screen: "work-search" }
   | { screen: "project"; key: string }
   | { screen: "item"; id: string }
+  | { screen: "overview" }
+  | { screen: "policies" }
   | { screen: "org-chart" }
   | { screen: "roster" }
   | { screen: "teams"; unit?: string }
-  | { screen: "schedules"; scope: string[] }
   | { screen: "org-edit" }
   | { screen: "seat"; handle: string }
+  | { screen: "schedules"; scope: string[] }
+  | { screen: "integrations"; kind?: string }
+  | { screen: "budgets" }
   | { screen: "live" }
   | { screen: "turns" }
   | { screen: "turn"; id: string }
@@ -100,22 +193,33 @@ export type Screen =
   | { screen: "knowledge" }
   | { screen: "container"; key: string }
   | { screen: "page"; id: string }
+  | { screen: "new-page" }
   | { screen: "skills" }
   | { screen: "diaries" }
   | { screen: "diary"; handle: string }
+  | { screen: "artifacts"; section: ArtifactSection }
+  | { screen: "artifact"; id: string }
+  /** A kind's own create page, or, with no kind, the address that redirects to one. */
+  | { screen: "new-artifact"; kind: ArtifactKind | null }
+  | { screen: "models"; id?: string }
+  | { screen: "mcp-tools"; server?: string; tool?: string }
+  | { screen: "secrets"; name?: string }
+  | { screen: "limits" }
   | { screen: "spend" }
   | { screen: "spend-tasks" }
-  | { screen: "budgets" }
-  | { screen: "general" }
   | { screen: "people" }
-  | { screen: "integrations"; kind?: string }
-  | { screen: "tools"; server?: string; tool?: string }
-  | { screen: "models"; id?: string }
-  | { screen: "secrets"; name?: string }
+  | { screen: "service-accounts" }
+  | { screen: "tokens" }
+  | { screen: "sign-in" }
+  | { screen: "audit" }
   | { screen: "nodes"; node?: string }
   | { screen: "config"; revisions: boolean; revision?: string }
   | { screen: "backups"; domain?: string }
-  | { screen: "audit" };
+  | { screen: "storage" }
+  | { screen: "account" };
+
+/** Every screen the dashboard draws. */
+export type Screen = FramedScreen | SignInScreen;
 
 export type ScreenName = Screen["screen"];
 
@@ -123,10 +227,12 @@ export type ScreenName = Screen["screen"];
  * A path that addresses a page. The discriminant is `resolved`, deliberately
  * not `kind`: a screen's own parameters are spread beside it, and one of them
  * IS a `kind` (an integration's), which a `kind` discriminant would silently
- * overwrite — `#/settings/integrations/github` would resolve to an
+ * overwrite, `#/company/integrations/github` would resolve to an
  * integration called "screen".
  */
-export type Resolved = Screen & { resolved: true; workspace: Workspace };
+export type Resolved =
+  | (FramedScreen & { resolved: true; workspace: Workspace })
+  | (SignInScreen & { resolved: true; workspace: "" });
 
 /** A path the product has no page for, and a sentence saying which. */
 export interface Unresolved {
@@ -159,12 +265,17 @@ export function resolve(path: string[]): Route {
   // opening this wants to know first is whether anything needs them, and Home
   // answers that for the company as well as for them.
   if (head === undefined) return { resolved: true, workspace: "home", screen: "home" };
-  const under = (label: string) => `“${rest.join("/")}” under ${label}`;
-  const screen = (s: Screen): Resolved => ({
+  const outside = framelessOf(path);
+  if (outside !== null) return signIn(outside, rest);
+  const screen = (s: FramedScreen): Resolved => ({
     ...s,
     resolved: true,
     workspace: workspaceOf(path) as Workspace,
   });
+  // THE ROW THE ADDRESS IS IN, by the longest prefix it owns (`nav.ts`), so a
+  // page nothing resolves under Company is Not Found under the row a reader
+  // was in: `#/company/org/x` under the Org chart, not under Overview.
+  const under = (label: string) => `“${rest.join("/")}” under ${label}`;
   switch (head) {
     case "home":
       return rest.length ? missing("home", under("Home")) : screen({ screen: "home" });
@@ -178,35 +289,55 @@ export function resolve(path: string[]): Route {
       }
       return missing("me", under("My work"));
     }
+    case "company":
+      return company(rest, screen, under);
     case "work":
       return work(rest, screen, under);
-    case "agents":
-      return agents(rest, screen, under);
     case "live":
       return live(rest, screen, under);
     case "knowledge":
       return knowledge(rest, screen, under);
-    case "spend":
-      if (rest.length === 0) return screen({ screen: "spend" });
-      // A CLOSED SET, so an unknown tail is Not Found rather than the spend
-      // screen: `#/spend/budget` — the obvious typo — drawing the spend tables
-      // under a trail reading "Spend / budget" names three different things.
-      if (rest.length === 1 && rest[0] === "budgets") return screen({ screen: "budgets" });
-      if (rest.length === 1 && rest[0] === "tasks") return screen({ screen: "spend-tasks" });
-      return missing("spend", under("Spend"));
+    case "artifacts":
+      return artifactsRoute(rest, screen, under);
     case "settings":
       return settings(rest, screen, under);
+    case "account":
+      return rest.length ? missing("account", under("Account")) : screen({ screen: "account" });
     default:
       return missing("", `the screen “${head}”`);
   }
 }
 
-type Make = (s: Screen) => Resolved;
+type Make = (s: FramedScreen) => Resolved;
+
+/**
+ * A sign-in screen: exactly the tail its address has, and anything longer is
+ * an address the product does not have — except an invitation and a reset
+ * link, whose screens answer a link that is not whole.
+ */
+function signIn(route: FramelessRoute, rest: string[]): Route {
+  const make = (s: SignInScreen): Resolved => ({ ...s, resolved: true, workspace: "" });
+  switch (route) {
+    case "login":
+      return rest.length
+        ? missing("", `“${rest.join("/")}” under sign-in`)
+        : make({ screen: "login" });
+    case "enrol":
+      return rest.length
+        ? missing("", `“${rest.join("/")}” under enrolment`)
+        : make({ screen: "enrol" });
+    case "invite":
+    case "reset":
+      return make({ screen: route, link: rest.length === 1 ? (rest[0] ?? "") : "" });
+  }
+}
 type Under = (label: string) => string;
 
 function work(rest: string[], screen: Make, under: Under): Route {
   const [first, second] = rest;
-  if (first === undefined) return screen({ screen: "work" });
+  // WORK OPENS ON ITS PROJECTS: the landing is All projects' first lens, and
+  // the company's task list is the lens beside it.
+  if (first === undefined) return screen({ screen: "work-projects" });
   if (first === "views") {
     if (rest.length > 2) return missing("work", under("Work"));
     return screen(second ? { screen: "work-views", id: second } : { screen: "work-views" });
@@ -214,15 +345,11 @@ function work(rest: string[], screen: Make, under: Under): Route {
   // THE WORKSPACE-LEVEL LISTS TAKE NO TAIL. Each answers a question about the
   // whole company, so there is nothing under them to address: a project has
   // its own route, and a change is a record on the item it changed.
-  if (first === "projects" || first === "history" || first === "search") {
+  if (first === "tasks" || first === "history" || first === "search") {
     if (rest.length > 1) return missing("work", under("Work"));
     return screen({
       screen:
-        first === "projects"
-          ? "work-projects"
-          : first === "history"
-            ? "work-history"
-            : "work-search",
+        first === "tasks" ? "work-tasks" : first === "history" ? "work-history" : "work-search",
     });
   }
   if (rest.length > 1) return missing("work", under("Work"));
@@ -240,35 +367,59 @@ function work(rest: string[], screen: Make, under: Under): Route {
   return missing("work", under("Work"));
 }
 
-function agents(rest: string[], screen: Make, under: Under): Route {
+/**
+ * Company's rows, each under `#/company`: the Overview at the bare address,
+ * then Policies, the Org chart, Schedules, Integrations and Budgets.
+ */
+function company(rest: string[], screen: Make, under: Under): Route {
   const [first, ...tail] = rest;
-  if (first === undefined) return screen({ screen: "org-chart" });
+  if (first === undefined) return screen({ screen: "overview" });
+  const none = (row: Workspace, label: string) => missing(row, under(label));
   switch (first) {
-    case "roster":
-      return tail.length ? missing("agents", under("Agents")) : screen({ screen: "roster" });
-    case "edit":
-      return tail.length ? missing("agents", under("Agents")) : screen({ screen: "org-edit" });
-    case "teams":
-      if (tail.length > 1) return missing("agents", under("Agents"));
-      return screen(tail[0] ? { screen: "teams", unit: tail[0] } : { screen: "teams" });
+    case "policies":
+      return tail.length ? none("policies", "Policies") : screen({ screen: "policies" });
+    case "org":
+      return org(tail, screen, under);
     case "schedules":
       // NONE OR ALL THREE: `{scope_type}/{scope_id}/{name}` names one
       // schedule, and a partial tail names nothing.
-      if (tail.length !== 0 && tail.length !== 3) return missing("agents", under("Agents"));
+      if (tail.length !== 0 && tail.length !== 3) return none("schedules", "Schedules");
       return screen({ screen: "schedules", scope: tail });
+    case "integrations":
+      // ONE SEGMENT UNDER IT, an integration's kind: its own page.
+      if (tail.length > 1) return none("integrations", "Integrations");
+      return screen(
+        tail[0] ? { screen: "integrations", kind: tail[0] } : { screen: "integrations" },
+      );
+    case "budgets":
+      return tail.length ? none("budgets", "Budgets") : screen({ screen: "budgets" });
+    default:
+      return none("company", "Company");
+  }
+}
+
+/** The Org chart's sections, and every seat's page. */
+function org(rest: string[], screen: Make, under: Under): Route {
+  const [first, ...tail] = rest;
+  const none = (hint?: string) => missing("org", under("Org chart"), hint);
+  if (first === undefined) return screen({ screen: "org-chart" });
+  switch (first) {
+    case "roster":
+      return tail.length ? none() : screen({ screen: "roster" });
+    case "edit":
+      return tail.length ? none() : screen({ screen: "org-edit" });
+    case "teams":
+      if (tail.length > 1) return none();
+      return screen(tail[0] ? { screen: "teams", unit: tail[0] } : { screen: "teams" });
     case "seats":
       // HANDLES LIVE ONLY HERE, which is what lets a handle equal a reserved
-      // word: `#/agents/seats/roster` is a seat called roster.
+      // word: `#/company/org/seats/roster` is a seat called roster.
       if (tail.length !== 1 || !tail[0]) {
-        return missing(
-          "agents",
-          under("Agents"),
-          "a seat is opened from the roster or the org chart",
-        );
+        return none("a seat is opened from the roster or the org chart");
       }
       return screen({ screen: "seat", handle: tail[0] });
     default:
-      return missing("agents", under("Agents"));
+      return none();
   }
 }
 
@@ -292,11 +443,7 @@ function live(rest: string[], screen: Make, under: Under): Route {
       // turns list under a trail naming traces, which is two claims at once
       // and neither of them the address.
       if (!id) {
-        return missing(
-          "live",
-          under("Live"),
-          "a trace has no list — open one from a turn, a run or an event",
-        );
+        return missing("live", under("Live"), "Open a trace from a turn, run or event");
       }
       return screen({ screen: "trace", id });
     default:
@@ -321,6 +468,9 @@ function knowledge(rest: string[], screen: Make, under: Under): Route {
     }
     return screen({ screen: "page", id });
   }
+  // A NEW PAGE, written in the composer. Where it is filed rides the query
+  // (`?space=…&parent=…`), because the composer lets the writer change it.
+  if (first === "new" && tail.length === 0) return screen({ screen: "new-page" });
   // THE SKILLS AGENTS ARE GIVEN, a list that links to each skill's one page.
   if (first === "skills" && tail.length === 0) return screen({ screen: "skills" });
   // EVERY AGENT'S DIARY, and one agent's, by its handle — which lives here as
@@ -340,40 +490,97 @@ function knowledge(rest: string[], screen: Make, under: Under): Route {
   return screen({ screen: "container", key: first });
 }
 
+function artifactsRoute(rest: string[], screen: Make, under: Under): Route {
+  const [first, ...tail] = rest;
+  if (first === undefined) return screen({ screen: "artifacts", section: "all" });
+  // A NEW ARTIFACT IS MADE ON ITS KIND'S OWN PAGE (`#/artifacts/new/doc`).
+  // The bare address, which earlier links carry with `?kind=`, resolves too,
+  // and the frame rewrites it in place to the kind's page or the gallery.
+  if (first === "new") {
+    if (tail.length === 0) return screen({ screen: "new-artifact", kind: null });
+    const [kind, ...more] = tail;
+    if (more.length === 0 && kind !== undefined && isArtifactKind(kind)) {
+      return screen({ screen: "new-artifact", kind });
+    }
+    return missing(
+      "artifacts",
+      under("Artifacts"),
+      "a new artifact is a doc, slides, a sheet, a design, a dashboard or an HTML page",
+    );
+  }
+  // NOTHING IS ADDRESSED UNDER AN ARTIFACT: its tabs, its version and its
+  // compare are queries on its own address (`tab=`, `version=`, `against=`),
+  // so a link survives a reload and a pasted address in chat.
+  if (tail.length > 0) return missing("artifacts", under("Artifacts"));
+  if (ARTIFACT_SECTIONS.includes(first as ArtifactSection)) {
+    return screen({ screen: "artifacts", section: first as ArtifactSection });
+  }
+  const moved = Object.hasOwn(LEGACY_ARTIFACT_SECTIONS, first)
+    ? LEGACY_ARTIFACT_SECTIONS[first]
+    : undefined;
+  if (moved) return screen({ screen: "artifacts", section: moved });
+  // AN ARTIFACT BY ITS ID, the uuid the engine derived from the operation
+  // that created it; a word here names nothing the engine could have minted.
+  if (ID_SHAPE.test(first)) return screen({ screen: "artifact", id: first });
+  return missing(
+    "artifacts",
+    under("Artifacts"),
+    "an artifact is opened from the gallery, a task or a link somebody shared",
+  );
+}
+
+/**
+ * Settings' sections. The bare `#/settings` names none of them: the Settings
+ * row lands on its first section, Models & keys, and an address is one page.
+ */
 function settings(rest: string[], screen: Make, under: Under): Route {
   const [first, ...tail] = rest;
-  if (first === undefined) return screen({ screen: "general" });
   const none = () => missing("settings", under("Settings"));
+  if (first === undefined) {
+    return missing("settings", "Settings itself", "Settings opens on Models & keys");
+  }
+  // THE SECTIONS THAT TAKE NO TAIL: every row they list has a page of its
+  // own somewhere else, or none.
+  const bare: Partial<Record<string, FramedScreen>> = {
+    limits: { screen: "limits" },
+    people: { screen: "people" },
+    "service-accounts": { screen: "service-accounts" },
+    tokens: { screen: "tokens" },
+    "sign-in": { screen: "sign-in" },
+    audit: { screen: "audit" },
+    storage: { screen: "storage" },
+  };
+  const plain = Object.hasOwn(bare, first) ? bare[first] : undefined;
+  if (plain) return tail.length ? none() : screen(plain);
   switch (first) {
-    case "people":
-      // NO TAIL: a person's page is their seat, under Agents.
-      return tail.length ? none() : screen({ screen: "people" });
-    case "integrations":
+    case "models":
+      // ONE SEGMENT UNDER IT, a provider entry's config key: what a seat's
+      // `llm:` names.
       if (tail.length > 1) return none();
-      return screen(
-        tail[0] ? { screen: "integrations", kind: tail[0] } : { screen: "integrations" },
-      );
-    case "tools": {
+      return screen(tail[0] ? { screen: "models", id: tail[0] } : { screen: "models" });
+    case "mcp-tools": {
       // TWO SHAPES UNDER ONE SEGMENT, discriminated on LENGTH: `servers/{name}`
       // is a filter on the catalogue's origin and a bare `{name}` is one tool.
       // A tool name is a third-party MCP server's string, so reading
       // `tail[0] === "servers"` alone would take the page away from a tool
       // actually called that.
-      if (tail.length === 0) return screen({ screen: "tools" });
-      if (tail.length === 1 && tail[0]) return screen({ screen: "tools", tool: tail[0] });
+      if (tail.length === 0) return screen({ screen: "mcp-tools" });
+      if (tail.length === 1 && tail[0]) return screen({ screen: "mcp-tools", tool: tail[0] });
       if (tail.length === 2 && tail[0] === "servers" && tail[1]) {
-        return screen({ screen: "tools", server: tail[1] });
+        return screen({ screen: "mcp-tools", server: tail[1] });
       }
       return none();
     }
-    case "models":
-      // ONE SEGMENT UNDER IT, a provider entry's config key — what a seat's
-      // `llm:` names.
-      if (tail.length > 1) return none();
-      return screen(tail[0] ? { screen: "models", id: tail[0] } : { screen: "models" });
     case "secrets":
       if (tail.length > 1) return none();
       return screen(tail[0] ? { screen: "secrets", name: tail[0] } : { screen: "secrets" });
+    case "spend":
+      // A CLOSED SET, so an unknown tail is Not Found rather than the spend
+      // screen: `#/settings/spend/task`, the obvious typo, drawing the spend
+      // tables under a trail naming a page that does not exist.
+      if (tail.length === 0) return screen({ screen: "spend" });
+      if (tail.length === 1 && tail[0] === "tasks") return screen({ screen: "spend-tasks" });
+      return none();
     case "nodes":
       if (tail.length > 1) return none();
       return screen(tail[0] ? { screen: "nodes", node: tail[0] } : { screen: "nodes" });
@@ -394,9 +601,6 @@ function settings(rest: string[], screen: Make, under: Under): Route {
       // `domains` a legal one.
       if (tail.length > 1) return none();
       return screen(tail[0] ? { screen: "backups", domain: tail[0] } : { screen: "backups" });
-    case "audit":
-      // NO TAIL: every row has a page of its own somewhere else.
-      return tail.length ? none() : screen({ screen: "audit" });
     default:
       return none();
   }

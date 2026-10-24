@@ -37,16 +37,20 @@ var dutyTTLs = map[string]struct {
 	// sizesCeiling is false for a bound derived from coord.MaxDutyTTL.
 	sizesCeiling bool
 }{
-	"maintenanceDutyTTL":      {maintenanceDutyTTL, true},
-	"retentionDutyTTL":        {retentionDutyTTL, true},
-	"embedDutyTTL":            {embedDutyTTL, true},
-	"collectorDutyTTL":        {collectorDutyTTL, true},
-	"codeRetentionDutyTTL":    {codeRetentionDutyTTL, true},
-	"integrationDutyTTL":      {integrationDutyTTL, true},
-	"learningDutyTTL":         {learningDutyTTL, true},
-	"setup.LeaseTTL":          {setup.LeaseTTL, true},
-	"schedule.DutyTTL(tick)":  {schedule.DutyTTL(schedule.MaxTick), true},
-	"waiterDutyTTL(interval)": {waiterDutyTTL(coord.MaxDutyTTL / dutyTTLTicks), false},
+	"maintenanceDutyTTL":   {maintenanceDutyTTL, true},
+	"retentionDutyTTL":     {retentionDutyTTL, true},
+	"embedDutyTTL":         {embedDutyTTL, true},
+	"collectorDutyTTL":     {collectorDutyTTL, true},
+	"codeRetentionDutyTTL": {codeRetentionDutyTTL, true},
+	"trashReaperDutyTTL":   {trashReaperDutyTTL, true},
+	"integrationDutyTTL":   {integrationDutyTTL, true},
+	"learningDutyTTL":      {learningDutyTTL, true},
+	// THE IDENTITY DUTY'S LEASE is three of its interval, the sweep's hour.
+	"identityDutyTTL(interval)": {identityDutyTTL(IdentitySweepInterval), true},
+	"setup.LeaseTTL":            {setup.LeaseTTL, true},
+	"companyKeyHoldTTL":         {companyKeyHoldTTL, true},
+	"schedule.DutyTTL(tick)":    {schedule.DutyTTL(schedule.MaxTick), true},
+	"waiterDutyTTL(interval)":   {waiterDutyTTL(coord.MaxDutyTTL / dutyTTLTicks), false},
 }
 
 // TestEveryDutyTTLFitsTheDutyCeiling ties coord.MaxDutyTTL to the duties that

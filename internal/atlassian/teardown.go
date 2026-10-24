@@ -71,7 +71,8 @@ func Teardown(ctx context.Context, opts TeardownOptions) (provision.Removed, err
 			continue
 		}
 		if err := opts.Client.DeleteServiceAccount(ctx, opts.Key, account.ID); err != nil {
-			return removed, fmt.Errorf("atlassian: delete the account for %s: %w", handle, err)
+			return removed, fmt.Errorf(
+				"atlassian: delete the account for %s: %w", seat.Handle, err)
 		}
 		removed.Add(removalFor(seat, account.Email))
 		delete(wanted, handle)

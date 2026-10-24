@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -43,6 +44,16 @@ import (
 // from that line on. A change that would leave the company invalid is refused
 // even when the entity itself is fine, because a seat naming a provider that
 // no longer exists is exactly the kind of break a per-entity surface invites.
+//
+// # A seat is addressed by its handle and a unit by its key
+//
+// Both are IMMUTABLE: a seat's agent id, its mailbox and its memory derive
+// from its handle, and every `manages:` entry, unit `lead:` and root seat
+// `unit:` names a seat or a unit by them. A display name is only ever an edit
+// of a name — every seat's handle and every unit's key is written into the
+// document on every write ([config.MintIdentities]), so nothing derives either
+// from a name a body changed. Changing a handle or a
+// key is a removal and a creation, made through the whole document.
 const (
 	EntityRoles        = "roles"
 	EntityUnits        = "units"
@@ -70,8 +81,9 @@ var ErrEntityExists = errors.New("configapi: entity already exists")
 //
 // A seat and a unit have a PLACE — the unit they sit in, the position among
 // their siblings — and the path names neither, so "create the seat called X"
-// is a question this route cannot answer without inventing one. The org
-// builder adds them through the whole document, where the place is visible.
+// is a question this route cannot answer without inventing one. A seat or a
+// unit is added through the whole document, or by replacing the unit it sits
+// in, where the place is visible.
 var ErrNotCreatable = errors.New("configapi: this collection is not created by id")
 
 // ErrIdentityMismatch reports a body whose own identity disagrees with the id
@@ -81,11 +93,11 @@ var ErrNotCreatable = errors.New("configapi: this collection is not created by i
 // seat's durable id is a UUIDv5 over (company name, handle), so a handle that
 // changes under an operator strands that seat's diary, its onboarding marker
 // and its counterparty profiles behind an id nothing derives any more, and
-// its inbox subject with them. A unit's name is referenced by every
-// `manages:` entry and root seat `unit:` that names it, and an MCP server's
-// name by every `mcp_env` block, a seat's or a unit's, keyed on it. None of
-// that moves with a splice, and the URL is left naming something that no
-// longer exists.
+// its inbox subject with them. A unit's key is referenced by every `manages:`
+// entry and root seat `unit:` that names it, and an MCP server's name by every
+// `mcp_env` block, a seat's or a unit's, keyed on it; a provider's key is what
+// every model chain naming it holds. None of that moves with a splice, and the
+// URL is left naming something that no longer exists.
 var ErrIdentityMismatch = errors.New("configapi: identity mismatch")
 
 // identityMismatch names both halves, because the caller has to be able to
@@ -99,11 +111,18 @@ func identityMismatch(field, pathID, bodyID string) error {
 		ErrIdentityMismatch, pathID, field, bodyID)
 }
 
-// entityAccess is how one collection is listed, read and replaced.
+// entityAccess is how one collection is listed, read, replaced and added to.
 //
 // Typed rather than a JSON path grammar, deliberately: a path grammar would
 // be a second description of the config's shape, free to drift from the Go
 // types the loader and the validator actually use.
+//
+// EVERY MEMBER IS REQUIRED but the two a create needs, which are nil exactly
+// for a collection whose members have a PLACE the path cannot name — the unit
+// a seat sits in, its position among its siblings — and which answers a create
+// with [ErrNotCreatable]. A table test holds every entry to that, so a
+// collection cannot join the table without saying how a member of it is
+// written — a nil anywhere else is a panic inside a request.
 type entityAccess struct {
 	// ids lists the identities in the document, in a stable order.
 	ids func(*config.Company) []string
@@ -134,26 +153,25 @@ type entityAccess struct {
 	place func(root map[string]any, id string, element map[string]any)
 }
 
-// entityKinds is the table, and the four keys are the paths the dashboard's
-// Config room already addresses.
+// entityKinds is the table, and its keys are the paths the dashboard's Config
+// room addresses — held against the client's own list by
+// entities_client_test.go.
 var entityKinds = map[string]entityAccess{
 	EntityRoles: {
 		ids: func(c *config.Company) []string {
 			var out []string
-			eachRole(c, func(r *config.Role) { out = append(out, roleID(r)) })
+			for r := range c.EachRole() {
+				out = append(out, roleID(r))
+			}
 			return sorted(out)
 		},
 		find: func(c *config.Company, id string) (any, bool) {
-			var found *config.Role
-			eachRole(c, func(r *config.Role) {
-				if found == nil && roleID(r) == id {
-					found = r
+			for r := range c.EachRole() {
+				if roleID(r) == id {
+					return r, true
 				}
-			})
-			if found == nil {
-				return nil, false
 			}
-			return found, true
+			return nil, false
 		},
 		replace: func(c *config.Company, id string, raw submitted) error {
 			// FOUND FIRST, judged second. Both orders refuse the same
@@ -164,11 +182,12 @@ var entityKinds = map[string]entityAccess{
 			// was found is where a body that cannot be read is refused.
 			var target *config.Role
 			var at config.Path
-			eachRoleAt(c, func(p config.Path, r *config.Role) {
-				if target == nil && roleID(r) == id {
+			for r, p := range c.EachRole() {
+				if roleID(r) == id {
 					target, at = r, p
+					break
 				}
-			})
+			}
 			if target == nil {
 				return ErrNoSuchEntity
 			}
@@ -176,16 +195,17 @@ var entityKinds = map[string]entityAccess{
 			if err != nil {
 				return err
 			}
-			// THE IDENTITY IS THE ADDRESS, so a body that renames the
-			// seat is refused rather than silently moved: the caller asked
-			// to replace the entity at this id, and honouring a rename here
-			// would leave the URL naming something that no longer exists.
-			//
-			// Compared on the DERIVED handle rather than the declared one,
-			// because a body that leaves `handle` out derives it from
-			// `name` — so editing a seat's display name alone is the shape
-			// this rename arrives in most often, and the one an operator is
-			// least expecting to be a rename at all.
+			// THE HANDLE IS THE ADDRESS, and a body that leaves it out
+			// keeps the one the path names rather than deriving another
+			// from its name: editing a seat's display name is the edit this
+			// route is most often sent, and it is never a rename. A body
+			// that DECLARES another handle is one, and is refused rather
+			// than silently moved — the caller asked to replace the entity
+			// at this id, and honouring a rename here would leave the URL
+			// naming something that no longer exists.
+			if strings.TrimSpace(incoming.Handle) == "" {
+				incoming.Handle = id
+			}
 			if got := roleID(&incoming); got != id {
 				return identityMismatch("handle", id, got)
 			}
@@ -199,29 +219,28 @@ var entityKinds = map[string]entityAccess{
 	EntityUnits: {
 		ids: func(c *config.Company) []string {
 			var out []string
-			eachUnit(c, func(u *config.Unit) { out = append(out, u.Name) })
+			for u := range c.EachUnit() {
+				out = append(out, u.IdentityKey())
+			}
 			return sorted(out)
 		},
 		find: func(c *config.Company, id string) (any, bool) {
-			var found *config.Unit
-			eachUnit(c, func(u *config.Unit) {
-				if found == nil && u.Name == id {
-					found = u
+			for u := range c.EachUnit() {
+				if u.IdentityKey() == id {
+					return u, true
 				}
-			})
-			if found == nil {
-				return nil, false
 			}
-			return found, true
+			return nil, false
 		},
 		replace: func(c *config.Company, id string, raw submitted) error {
 			var target *config.Unit
 			var at config.Path
-			eachUnitAt(c, func(p config.Path, u *config.Unit) {
-				if target == nil && u.Name == id {
+			for u, p := range c.EachUnit() {
+				if u.IdentityKey() == id {
 					target, at = u, p
+					break
 				}
-			})
+			}
 			if target == nil {
 				return ErrNoSuchEntity
 			}
@@ -229,11 +248,16 @@ var entityKinds = map[string]entityAccess{
 			if err != nil {
 				return err
 			}
-			// The same rule as a seat, and a unit's name is referenced from
-			// further away: every `manages:` entry that expands to it and
-			// every root-level seat whose `unit:` names it.
-			if incoming.Name != id {
-				return identityMismatch("name", id, incoming.Name)
+			// THE SEAT'S RULE, by the unit's KEY and never its name: a
+			// unit is referenced by its key from every `manages:` entry
+			// that expands to it and every root seat whose `unit:` names
+			// it, so renaming the team is an edit of its name and moving
+			// the key is a rename this route refuses.
+			if strings.TrimSpace(incoming.ID) == "" {
+				incoming.ID = id
+			}
+			if got := incoming.IdentityKey(); got != id {
+				return identityMismatch("id", id, got)
 			}
 			*target = incoming
 			return nil
@@ -382,6 +406,10 @@ var entityKinds = map[string]entityAccess{
 	},
 }
 
+// inOrgChart reports whether a collection is part of the org chart, whose
+// routes its leads may take as well as admin.
+func inOrgChart(kind string) bool { return kind == EntityRoles || kind == EntityUnits }
+
 // EntityKinds names every addressable collection, sorted — so a caller can
 // discover the surface rather than carrying its own copy of this list.
 func EntityKinds() []string {
@@ -402,8 +430,9 @@ func (s *Service) Entities(ctx context.Context, kind string) ([]string, error) {
 	}
 	ids := access.ids(company)
 	if ids == nil {
-		// An EMPTY collection, not a missing one. A company with no units
-		// is a real company, and null here would render as a failure.
+		// An EMPTY collection, not a missing one. A company with no MCP
+		// servers is a real company, and null here would render as a
+		// failure.
 		ids = []string{}
 	}
 	return ids, nil
@@ -419,7 +448,7 @@ func (s *Service) Entity(ctx context.Context, kind, id string) (any, error) {
 	}
 	// REDACTED, because Document redacts: this is a slice of the same
 	// document and a per-entity read that skipped the masking would be a
-	// way to fetch every credential in the company one seat at a time.
+	// way to fetch every credential in the company one entity at a time.
 	company, err := s.Document(ctx)
 	if err != nil {
 		return nil, err
@@ -440,29 +469,36 @@ func (s *Service) Entity(ctx context.Context, kind, id string) (any, error) {
 // there the kind and id are the answer to a question, not the resource.
 //
 // Redacted for the same reason [Service.Entity] is: a per-entity read that
-// skipped the masking would fetch every credential in the company one seat at
-// a time, past the masking the document read applies.
+// skipped the masking would fetch every credential in the company one entity
+// at a time, past the masking the document read applies.
 func (s *Service) getEntity(kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		company, revision, err := s.documentOf(r.Context())
 		switch {
 		case errors.Is(err, ErrNoActiveRevision):
-			writeJSON(w, http.StatusNotFound, map[string]string{
-				"error": "no_active_revision",
-				"hint":  "this node has no active company revision to read",
-			})
+			httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoActiveRevision,
+				map[string]string{
+					"hint": "this node has no active company revision to read",
+				})
 			return
 		case err != nil:
 			s.fail(w, "read the active revision", err)
 			return
 		}
+		// A SEAT OR A UNIT IS READ BY ITS LEAD as well as by the admin
+		// who reads the whole document, decided on where it sits — and
+		// BEFORE it is looked for: an id the revision does not hold is
+		// decided at the root, so only an admin is told it is missing.
+		if inOrgChart(kind) && !s.mayReach(w, r, authz.ActionOrgRead, company, kind, id) {
+			return
+		}
 		entity, found := entityKinds[kind].find(company, id)
 		if !found {
-			writeJSON(w, http.StatusNotFound, map[string]string{
-				"error": "no_such_entity",
-				"hint":  "no " + kind + " called " + id + " in the active revision",
-			})
+			httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSuchEntity,
+				map[string]string{
+					"hint": "no " + kind + " called " + id + " in the active revision",
+				})
 			return
 		}
 		// THE DOCUMENT'S TAG, because an entity is a slice of it: the
@@ -477,17 +513,20 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 
 // putEntity replaces one entity and stores the resulting document.
 //
-// The same write [Service.ApplyEntity] performs, through the same draft, with
-// the refusals an HTTP caller needs spelled out: which entity was missing, and
+// Through the entity draft ([entityDraft]), with the refusals an HTTP caller
+// needs spelled out: which entity was missing, which one a create found, and
 // why a rename is not an edit.
 //
 // With `dry_run=true` it is the same request, checked in the same order, that
 // stores and activates nothing — exactly as the whole-document writes are.
 // An entity write needs its check MORE than they do, not less: its caller
 // never sees the rest of the document, so the whole-company validation behind
-// the splice is the only place it can learn that a seat fine on its own leaves
-// the company invalid, or that a ceiling it raised now sits above the
+// the splice is the only place it can learn that a provider fine on its own
+// leaves the company invalid, or that a ceiling it raised now sits above the
 // company's own (a warning, which only a check can show before the save).
+// One answer differs from the write's: a seat or unit sent back unchanged is
+// checked for its lead, where the write is refused as a re-publish
+// (admission.go).
 func (s *Service) putEntity(kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.refusedManaged(w, r) {
@@ -503,14 +542,7 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 			refuseBody(w, err)
 			return
 		}
-		// The same rule the whole-document write has, and for the same
-		// reason: a list of revisions with no summaries is a list of
-		// uuids. A per-entity write can say more, so the hint does. A
-		// check stores nothing, so it needs none.
-		summary, sent, ok := takeSummary(w, r, body, !dryRun,
-			"this write needs an audit summary: the X-Summary header, "+
-				"or a top-level _summary key in the body. Name what changed "+
-				"about "+kind+"/"+id)
+		summary, sent, ok := takeSummary(w, r, body)
 		if !ok {
 			return
 		}
@@ -523,13 +555,30 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 		if !found {
 			// Nothing to splice into. Refused rather than treated as an
 			// empty company: creating the first revision through an entity
-			// route would build a company out of one seat.
-			writeJSON(w, http.StatusConflict, map[string]string{
-				"error": "no_active_revision",
-				"hint": "this node has no active company revision to edit: " +
-					"import one with `crewlet config import`",
-			})
+			// route would build a company out of one provider or server.
+			httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision,
+				map[string]string{
+					"hint": "this node has no active company revision to edit: " +
+						"import one with `crewlet config import`",
+				})
 			return
+		}
+		// A SEAT OR A UNIT IS WRITTEN BY ITS LEAD as well as by an
+		// admin, and decided as a read of it is: where it sits,
+		// BEFORE the id is looked up or the body decoded, so an id outside
+		// the caller's subtree and one the revision does not hold are
+		// refused in the same bytes. Building first answered a body with
+		// another handle 400 naming where the seat sits, a well-formed one
+		// admission's 403 naming its unit, and a missing id 404.
+		if inOrgChart(kind) {
+			var company *config.Company
+			if company, err = s.open(active); err != nil {
+				s.fail(w, "open the active revision", err)
+				return
+			}
+			if !s.mayReach(w, r, authz.ActionOrgWrite, company, kind, id) {
+				return
+			}
 		}
 		create, ok := s.entityPrecondition(w, r, active, found)
 		if !ok {
@@ -542,7 +591,11 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 			s.refuseEntity(w, kind, id, err)
 			return
 		}
-		d.author = authorOf(r)
+		if d.principal, ok = principalOf(w, r); !ok {
+			return
+		}
+		d.addressedCheck = dryRun && inOrgChart(kind)
+		d.by = attributionOf(r)
 		prepared, err := s.prepare(r.Context(), d)
 		if err != nil {
 			s.refuseEntity(w, kind, id, err)
@@ -550,6 +603,14 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 		}
 		if dryRun {
 			writeChecked(w, prepared)
+			return
+		}
+		// The same rule the whole-document write has, and for the same
+		// reason, asked as late: a per-entity write can say more, so the
+		// hint does.
+		if !requireSummary(w, summary, "this write needs an audit summary: "+
+			"the X-Summary header, or a top-level _summary key in the body. "+
+			"Name what changed about "+kind+"/"+id) {
 			return
 		}
 		applied, err := s.commit(r.Context(), prepared, summary)
@@ -582,12 +643,12 @@ func (s *Service) entityPrecondition(w http.ResponseWriter, r *http.Request, act
 		return false, ok
 	}
 	if strings.TrimSpace(r.Header.Get("If-Match")) != "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "conflicting_preconditions",
-			"hint": "If-None-Match: * asks for a create and If-Match names the revision " +
-				"an edit was read from; send one. A create is checked against the " +
-				"revision active when it lands",
-		})
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeConflictingPreconditions,
+			map[string]string{
+				"hint": "If-None-Match: * asks for a create and If-Match names the " +
+					"revision an edit was read from; send one. A create is checked " +
+					"against the revision active when it lands",
+			})
 		return false, false
 	}
 	return true, true
@@ -605,38 +666,41 @@ func (s *Service) refuseEntity(w http.ResponseWriter, kind, id string, err error
 		// often a typo than an intent to add one, and adding through this
 		// route would let a caller grow the company without ever seeing the
 		// document they changed.
-		writeJSON(w, http.StatusNotFound, map[string]string{
-			"error": "no_such_entity",
-			"hint": "no " + kind + " called " + id + " in the active revision; " +
-				"to add one, send the same request with If-None-Match: *",
-		})
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoSuchEntity,
+			map[string]string{
+				"hint": "no " + kind + " called " + id + " in the active revision; " +
+					"to add one, send the same request with If-None-Match: *",
+			})
 	case errors.Is(err, ErrEntityExists):
 		// A CREATE THAT FOUND ONE. 412 because it is the precondition the
 		// caller sent that failed, not the document.
-		writeJSON(w, http.StatusPreconditionFailed, map[string]string{
-			"error": "entity_exists",
-			"hint": "If-None-Match: * asked for " + kind + "/" + id + " to be added, and " +
-				"the active revision already has one: pick another name, or edit " +
-				"that one under If-Match",
-		})
+		httpjson.FailWith(w, http.StatusPreconditionFailed, httpjson.CodeEntityExists,
+			map[string]string{
+				"hint": "If-None-Match: * asked for " + kind + "/" + id + " to be " +
+					"added, and the active revision already has one: pick another " +
+					"name, or edit that one under If-Match",
+			})
 	case errors.Is(err, ErrNotCreatable):
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "not_creatable",
-			"hint": "a member of " + kind + " has a place in the chart the path cannot " +
-				"name; add it through PUT /config, where the place is visible",
-		})
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeNotCreatable,
+			map[string]string{
+				"hint": "a member of " + kind + " has a place in the company the " +
+					"path cannot name; add it through PUT /config, or by " +
+					"replacing the unit it sits in, where the place is visible",
+			})
 	case errors.Is(err, ErrIdentityMismatch):
 		// A RENAME, REFUSED. Not coerced back to the path's id either:
 		// silently keeping the old identity would land every other edit in
 		// the body and leave the caller believing the rename took, which is
 		// the same surprise one revision later.
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "identity_mismatch", "detail": entityErr.Err.Error(),
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeIdentityMismatch, map[string]string{
+			"detail": entityErr.Err.Error(),
 			"hint": "the path is the address: send " + kind + "/" + id +
-				" back under the id it already has. Renaming is a " +
-				"full-document edit: a seat's durable id derives from its " +
-				"handle, so a rename also has to move what references it, " +
-				"and PUT /config is where that is visible",
+				" back under the id it already has. A seat's handle and a " +
+				"unit's key are permanent — a seat's durable id derives from " +
+				"its handle — and an MCP server's name or a provider's key is " +
+				"named by everything that uses it, so a rename is a removal " +
+				"and a creation made through PUT /config, where everything " +
+				"that names it is visible",
 		})
 	default:
 		// A BODY THIS KIND CANNOT READ, which is the same refusal the
@@ -647,8 +711,9 @@ func (s *Service) refuseEntity(w http.ResponseWriter, kind, id string, err error
 }
 
 // firstElement is the first seat, or unit, of a stored document tree whose
-// identity is id, visited in the order [eachRole] and [eachUnit] visit the
-// struct, so it is the element find returned.
+// identity is id, visited in the order [config.Company.EachRole] and
+// [config.Company.EachUnit] visit the struct, so it is the element find
+// returned.
 func firstElement(root map[string]any, isUnit bool, id string) (map[string]any, bool) {
 	var found map[string]any
 	consider := func(element map[string]any, unit bool) {
@@ -711,51 +776,9 @@ func objects(value any) []map[string]any {
 	return out
 }
 
-// --- walking the document -------------------------------------------------
-
-// eachRole visits every seat in the company, root-level and unit-nested
-// alike, because an operator editing "the CEO" does not think about which
-// list it happens to live in.
-func eachRole(c *config.Company, visit func(*config.Role)) {
-	eachRoleAt(c, func(_ config.Path, r *config.Role) { visit(r) })
-}
-
-// eachRoleAt is [eachRole] with the place each seat is written at, in the
-// same order, so a seat found through either is the same seat.
-func eachRoleAt(c *config.Company, visit func(config.Path, *config.Role)) {
-	for i := range c.Roles {
-		visit(config.Path{"roles", i}, &c.Roles[i])
-	}
-	eachUnitAt(c, func(at config.Path, u *config.Unit) {
-		for i := range u.Roles {
-			visit(append(slices.Clone(at), "roles", i), &u.Roles[i])
-		}
-	})
-}
-
-// eachUnit visits every unit, nesting to any depth.
-func eachUnit(c *config.Company, visit func(*config.Unit)) {
-	eachUnitAt(c, func(_ config.Path, u *config.Unit) { visit(u) })
-}
-
-// eachUnitAt is [eachUnit] with the place each unit is written at: parents
-// before their children, depth first.
-func eachUnitAt(c *config.Company, visit func(config.Path, *config.Unit)) {
-	for i := range c.Units {
-		visitUnitAt(config.Path{"units", i}, &c.Units[i], visit)
-	}
-}
-
-func visitUnitAt(at config.Path, u *config.Unit, visit func(config.Path, *config.Unit)) {
-	visit(at, u)
-	for i := range u.Children {
-		visitUnitAt(append(slices.Clone(at), "children", i), &u.Children[i], visit)
-	}
-}
-
-// roleID is a seat's address here: its handle, derived when the document
-// leaves it out — the same derivation the org model uses, so the id in this
-// URL is the handle every other surface shows.
+// roleID is a seat's address here: its handle — declared, since every stored
+// seat carries one ([config.MintIdentities]) — so the id in this URL is the
+// handle every other surface shows.
 func roleID(r *config.Role) string { return r.Seat().Handle() }
 
 func sorted(in []string) []string {
@@ -769,10 +792,10 @@ func sorted(in []string) []string {
 // Unknown fields are refused, which is the same rule Tier B's document parser
 // has and for the same reason: a mistyped setting that silently did nothing is
 // the failure this build refuses to have. `json.Unmarshal` does the opposite:
-// it drops what it does not recognise, so a `PUT /config/roles/ceo` carrying
-// `"gaol"` answered 201 and stored a company with no goal on that seat. This
-// is the surface most likely to be hand-edited in a hurry, so it is the worst
-// place to accept a typo quietly.
+// it drops what it does not recognise, so a `PUT /config/llm-providers/zulu`
+// carrying `"modell"` would answer 201 and store the provider with its model
+// silently gone. This is the surface most likely to be hand-edited in a
+// hurry, so it is the worst place to accept a typo quietly.
 //
 // READ BY THE DOCUMENT'S OWN READER ([config.ParseMember]) and placed in the
 // document, because a refusal's problems are located in the document the

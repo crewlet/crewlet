@@ -35,9 +35,9 @@ flowchart LR
 Today the store holds [a project's files](../guides/work-tracker.md#a-projects-files)
 and the pack bytes of the company's [git repositories](code-host.md) — one
 object per push, named by its `code_packs` row, a required reference like a
-file's.
-It is built for more than that — chat attachments and anything else a row can
-name by key — and every consumer follows the same rule: the estate names the
+file's — and every file of every [artifact](artifacts.md) version and asset.
+It is built for more than that (chat attachments and anything else a row can
+name by key) and every consumer follows the same rule: the estate names the
 object, and the store keeps its bytes.
 
 ---
@@ -224,15 +224,69 @@ storage it already runs, takes the S3 backend.
 [repository the engine hosts](code-host.md) is one object, and nothing removes
 a repository's packs but the repository's own purge, so its repositories grow
 as long as the company works in them — on `nats`, on every member's disk
-beside the logs. And a git node bringing its
+beside the logs, and against the bucket's reservation (below), so a bucket at
+its reservation refuses a push as it refuses any other upload. And a git node bringing its
 [cache](code-host.md#the-cache-on-a-git-node) of a repository up from nothing
 reads every one of those objects, one a push and sixteen at once.
 
-The stream declares **no byte ceiling**, unlike the state logs: the engine
-reserves disk for the company's own records, whose growth the trim governs,
-and the bucket is bounded by the collector instead, which deletes what no row
-names a day after it was written. Size the members' disks for the files as
-well as the logs.
+#### Its byte reservation
+
+The bucket is created with a **byte reservation**, which the broker grants in
+full when it creates the stream, beside the state logs' own. The reservation
+is what keeps the company's files out of the rest of the broker: the state
+logs reserve their ceilings, and every seat's mailbox and every coordination
+bucket (the leases, ledgers and budget counters the fleet runs on) share what
+is left. A bucket allowed to grow into that remainder would, once full, refuse
+a lease heartbeat, which stops the fleet; a bucket at its reservation refuses
+**uploads, and only uploads**. The collector does not bound the bucket: it
+deletes what no row names, never the files a company keeps.
+
+```yaml
+store:
+  objects:
+    backend: nats
+    nats_max_bytes: 107374182400   # 100 GiB; unset derives a share of the broker
+```
+
+- **Unset, it is derived** from the broker's limit (`stream.store_max_bytes`,
+  or the share of its volume the embedded broker takes): the smaller of a
+  quarter of the limit, and what the limit leaves once the state logs' half
+  (or the log ceilings you set, where they are larger) and a 1 GiB floor for
+  the coordination remainder are taken out. It is never below 1 GiB, the
+  smallest value the field accepts. Where the broker states no limit, the
+  stream volume's free space stands in for it. The bucket is created before
+  the state logs are sized, so the logs size themselves from what the broker
+  has left, or from the free space less the bucket's reservation where the
+  broker states no limit.
+- **A broker needs room for it.** On a host whose broker can reserve only a
+  few gibibytes, the bucket's gibibyte is on top of the state logs' floors;
+  give such a host more disk, or set `stream.store_max_bytes` and
+  `store.objects.nats_max_bytes` together.
+- **A bucket that exists keeps the reservation it was created with**, as a
+  state log keeps its ceiling: the setting sizes a bucket that does not exist
+  yet. A node configured with another figure says so as
+  `natsobj_bucket_ceiling_kept`. Change an existing bucket's reservation with
+  `nats stream update OBJ_crewlet_files --max-bytes=<bytes>`, within what the
+  broker can grant.
+- **A bucket with no ceiling is bounded by the figure you write, or refused.**
+  Every bucket an engine built before the reservation created holds none, as
+  does one made by hand or by another tool. A node configured with
+  `store.objects.nats_max_bytes` gives such a bucket that reservation at boot
+  and logs `natsobj_bucket_bounded`; it is the one way to bound the bucket on
+  an embedded broker, which nothing outside the engine reaches. A node whose
+  figure is derived does not start, and names both that setting and the
+  `nats stream update` that bounds the bucket from outside.
+- **A full bucket refuses the upload** with the store's reservation named; the
+  [`objects_bucket_near_ceiling`](#alarms) alarm fires once less than a fifth
+  of the reservation is left, and the `crewlet.objects.bucket.bytes` and
+  `crewlet.objects.bucket.max_bytes` gauges (from the node holding the
+  collector's duty) draw it over time. Raise the reservation, or [move the
+  files to a bucket](#moving-the-files-to-a-bucket).
+- **Size the members' disks for the files as well as the logs.** Every member
+  keeps a copy of the whole reservation's worth of objects. Past about 100 GiB
+  of files at three copies, replacing a member re-replicates the whole bucket
+  over the routes the logs use for long enough to matter; take `s3` before
+  then.
 
 ### An S3 bucket — `s3`
 
@@ -244,7 +298,7 @@ store:
       endpoint: https://s3.eu-west-1.amazonaws.com   # empty: Amazon's own for the region
       region: eu-west-1                              # required; R2: auto, MinIO: us-east-1
       bucket: acme-files
-      prefix: crewlet/                               # optional: one bucket, several companies
+      prefix: crewlet/                               # optional; see "One bucket, several companies"
       path_style: false                              # true for MinIO and most self-hosted gateways
       access_key_id: ${S3_ACCESS_KEY_ID}             # both, or neither for the SDK's own chain
       secret_access_key: ${S3_SECRET_ACCESS_KEY}
@@ -304,23 +358,26 @@ promises, and its size is the provider's problem rather than any node's disk.
 - **Credentials** are `${VAR}` references resolved at boot, or neither, which
   takes the SDK's default chain: the environment (`AWS_ACCESS_KEY_ID`…), a
   shared profile, a web identity token or the instance's role.
-- **The identity needs six permissions** on the bucket and its objects under
-  the prefix: `s3:PutObject` (a single upload, and every step of one in parts),
-  `s3:GetObject`, `s3:DeleteObject` (a deletion, and the collector's batches of
-  them), `s3:ListBucket` (the check at boot, the
-  collector's listing and the audit's listings of ranges), and
-  `s3:ListBucketMultipartUploads` and `s3:AbortMultipartUpload` (finding and
-  aborting unfinished uploads). Without the last two, uploads still work and
-  the collector reports what it could not sweep as `sweep_error`.
+- **The identity needs six permissions**, every one of them confined to the
+  prefix: `s3:PutObject` (a single upload, and every step of one in parts),
+  `s3:GetObject`, `s3:DeleteObject` (a deletion, and the collector's batches
+  of them), `s3:ListBucket` limited to the prefix (the collector's listing and
+  the audit's listings of ranges), and `s3:ListBucketMultipartUploads` and
+  `s3:AbortMultipartUpload` (finding and aborting unfinished uploads). None of
+  them needs a right over the bucket itself. Without the last two, uploads
+  still work and the collector reports what it could not sweep as
+  `sweep_error`.
 - **A private CA** is read from `AWS_CA_BUNDLE`, added to the system roots for
   the bucket's requests only.
 - **Reach the bucket over `https`.** Over plain `http` the S3 signature covers
   the request body, so the node hashes every uploaded byte a second time —
   measured, uploads ran a third slower on a CPU without SHA instructions, and
   up to a fifth slower on one with them.
-- **The bucket is checked at boot.** A node that cannot reach it, or whose
-  credentials it refuses, does not start — a node that started anyway would
-  accept an upload it could not store.
+- **The bucket is checked at boot, under the prefix.** A node stores, deletes
+  and re-puts one object under `<prefix>probe/` (see [The boot
+  probe](#the-boot-probe-and-direct-uploads)). A node that cannot store and
+  delete that object does not start: one that started anyway would accept an
+  upload it could not store.
 - **Every request goes out from the node that serves the upload or the
   download**, a stateless node included, so every node needs to reach the
   endpoint.
@@ -435,6 +492,52 @@ promises, and its size is the provider's problem rather than any node's disk.
   names under its own `files/` corner: another application's objects in the
   same bucket are never listed as the engine's, judged or deleted.
 
+#### One bucket, several companies
+
+A prefix keeps two companies' keys from colliding in one bucket, **and that is
+all it does**. Each company's nodes hold a credential, and a credential that
+reaches the whole bucket reads, overwrites and deletes every other company's
+files as readily as its own. So a bucket is shared between companies only
+where each company's credential is **scoped to its own prefix**: an IAM
+policy whose object actions name `arn:aws:s3:::<bucket>/<prefix>*` and whose
+`s3:ListBucket` carries an `s3:prefix` condition, or the same path in a MinIO
+or SeaweedFS policy. Such a credential has no right over the bucket itself,
+which is why the boot check is a probe under the prefix rather than a
+`HeadBucket`. One bucket per company remains the simpler isolation, and the
+one to prefer.
+
+#### The boot probe and direct uploads
+
+At boot a node runs one probe under `<prefix>probe/<key>`, beside `files/` so
+the collector never mistakes it for a file:
+
+1. It **stores and deletes** the probe object through the same requests every
+   upload makes. A credential that cannot do both fails the boot.
+2. It makes a **presigned put whose `x-amz-checksum-sha256` does not match its
+   body**, and expects the provider to refuse it `BadDigest`.
+3. It makes the **matching put**, under `If-None-Match: *`, and expects it
+   stored.
+4. It makes **the same put again**, and expects `412 Precondition Failed`.
+5. It deletes the probe object, however the probe ended.
+
+A provider that did all of it offers **direct uploads**: an upload can be
+handed to the client as a presigned PUT bound to its exact length, its media
+type, its SHA-256 and `If-None-Match: *`, so the client sends the bytes to the
+bucket itself and cannot store any other bytes, or a second copy over the
+first. The engine still mints every key, and still reads what was stored back,
+verified against the declared SHA-256, before any row names it. A provider
+that skipped any step, or accepts the headers and ignores them, offers none,
+and every upload streams through the engine as before: nothing fails. Which it
+is shows on [`/health`](../reference/api-endpoints.md#the-health-envelope) as
+`objects.direct_upload`, `available` or `unavailable (<reason>)`; the default
+`nats` backend is always `unavailable`, because only the fleet reaches the
+broker.
+
+Where step 2 passed, the engine's own single-part puts also carry
+`x-amz-checksum-sha256` (as a header, never the SDK's trailing checksum, which
+providers other than Amazon refuse), so the provider checks every such upload
+on arrival and keeps its SHA-256, which the audit then compares.
+
 ### One store per fleet
 
 The first node to boot records the store it was configured with in the
@@ -445,10 +548,14 @@ whose bytes the other cannot read, and each one's collector would see the other
 store's objects as nothing at all. Credentials are not part of the record — two
 nodes may reach one bucket with different keys.
 
-Moving a company from one store to the other is a migration, not a config
-change: stop the fleet, copy every object across, delete the `backend` record
-from the `crewlet_objects` coordination bucket, and boot every node with the
-new block. **The fleet stops first** because an upload stores its object before
+Moving a company from the fleet's own bucket to an S3 bucket is a migration,
+not a config change: see [Moving the files to a
+bucket](#moving-the-files-to-a-bucket).
+
+Any other move — from one S3 store to another: another endpoint, bucket or
+prefix — is made with the fleet stopped: copy every object across, delete the
+`backend` record from the `crewlet_objects` coordination bucket, and boot every
+node with the new block. **The fleet stops first** because an upload stores its object before
 it writes the row naming it: an object uploaded after a copy taken while the
 fleet still ran is named by a row and absent from the new store, and its file
 cannot be read. The copy is of the old store's whole `files/` corner, never of
@@ -461,9 +568,8 @@ so the first node to take the collector's duty
 store straight away — and that audit is the check that every file's object
 came across.
 
-Deleting the record reaches the broker from outside the engine, and so does
-the copy when either store is `nats`, so a move in place needs a broker that
-listens: an external NATS cluster (`stream.type: nats`). The embedded broker
+Deleting the record reaches the broker from outside the engine, so a move in
+place needs a broker that listens: an external NATS cluster (`stream.type: nats`). The embedded broker
 listens on no socket and the engine has no command that deletes the record —
 but a restore is the one moment the record need not be put back at all. So on
 the embedded topology the one way to move is a restore: take a backup, then
@@ -475,6 +581,51 @@ files only from `s3` (on `nats` they ride the `OBJ_crewlet_files` snapshot),
 and nothing but a broker that listens puts files into a `nats` store. And like
 every restore it brings the company back as it stood when the backup was
 taken: what the fleet did after it is not moved.
+
+### Moving the files to a bucket
+
+`crewlet objects migrate --to s3` moves the company's files from the fleet's
+NATS bucket to an S3-compatible one, through a running data node, in two
+passes:
+
+1. **Write the target file.** Copy a node's Tier A file and give it the
+   bucket's `store.objects` block (`backend: s3`, with `${VAR}` references for
+   the credentials). It is the file every node will run with afterwards, and
+   it is read on the engine's host, so it goes there.
+2. **Copy on a live fleet**, as often as you like:
+
+   ```sh
+   crewlet objects migrate -to s3 -target /etc/crewlet/crewlet.s3.yaml
+   ```
+
+   The node probes the bucket, then reads every object a file names from the
+   fleet's store, checked against the file's row, and writes it to the bucket
+   under the same key, checking the bucket holds it at its size (and SHA-256,
+   where the provider keeps one). An object the bucket already holds is
+   skipped, so a pass that stopped is resumed by running it again, and later
+   passes copy only what was uploaded since. Nothing about the fleet changes.
+3. **Restart every node in maintenance mode**, `crewlet run -mode maintenance`,
+   so that no node writes a record naming a new file while the last pass runs.
+4. **Run the final pass:**
+
+   ```sh
+   crewlet objects migrate -to s3 -target /etc/crewlet/crewlet.s3.yaml -final
+   ```
+
+   It refuses unless the node is in maintenance mode, no node is still
+   admitted to publish, and the node has applied the company's records to the
+   end. It copies what is left, **seals** the NATS bucket (read, and never
+   written again, so a node not yet restarted cannot store a file where no node
+   will look for it), and moves the fleet's record of its store to the bucket.
+5. **Give every node the bucket's `store.objects` block and restart it** with
+   `crewlet run`. A node still naming the NATS bucket refuses to start.
+6. **Delete the old bucket** once the fleet runs on the new one
+   (`nats stream rm OBJ_crewlet_files`), after your next backup.
+
+A file the fleet's own store could not give back (missing, or damaged) is
+named by both passes and not copied: no copy can bring it back, and
+[`objects_missing`](#alarms) already counts it. Restore it from a
+[backup](../guides/backup.md) or upload it again.
 
 ---
 
@@ -529,6 +680,61 @@ Measured, a 64 KiB page at a random offset of a 128 MiB file took 32–36 ms on
 `nats`; on `s3` the node's side of the one request took about half a
 millisecond, before the provider's own first-byte latency.
 
+### Artifact uploads are reserved before they move
+
+An artifact's files reach the store in three steps, and the first moves no
+bytes at all:
+
+1. **The intent.** The client declares every file it means to send (path,
+   size, SHA-256). The engine decides everything it can without the bytes:
+   whether the caller may publish, the paths and types, the per-file and
+   per-publish limits, which files the artifact **already holds** (those are
+   carried, below, and never sent), and whether the bytes the company's
+   artifacts already name, plus every reservation still outstanding, plus
+   these new bytes, fit `artifacts.limits.company_bytes`. It mints one key per
+   new file and records a **reservation** in the coordination store that lasts
+   until the collector could have deleted those objects. One principal may hold
+   `artifacts.limits.pending_bytes` reserved, a company four times that; past
+   it the intent is refused `429 uploads_outstanding`, naming when the oldest
+   reservation expires.
+2. **The transfer.** On `nats` every file streams through the engine. On `s3`,
+   when the boot probe proved the bucket honours them, the intent instead hands
+   a browser or the CLI a presigned `PUT` for each file, bound to its exact
+   length, its served type, its SHA-256 as a signed checksum and
+   `if-none-match: *`, so the bytes go straight to the bucket and a second put
+   to the same key is refused. An agent's sandbox is never handed one: the
+   engine reads the box and streams the files itself. Either way the engine
+   minted the key; a client never names one.
+3. **Finalize.** Before the version is recorded, the engine reads **every new
+   object back** through the verifying reader. A file whose bytes are not what
+   was declared is refused `422 upload_mismatch`, one that never arrived `409
+   upload_missing`, and a key older than twelve hours is refused as it is for
+   every write. The reservation is released for every object the recorded
+   version names.
+
+So bytes that no row names never exceed the reservation budget, and the row's
+SHA-256 is always the digest of the stored bytes, established by the engine,
+whichever way they travelled. The decision is
+[ADR-0036](https://github.com/crewlet/crewlet/blob/main/adr/0036-bytes-are-reserved-before-they-move.md).
+
+### An unchanged file is carried, never copied
+
+A publish names every file by its SHA-256, and a file **the same artifact
+already holds** is carried: the new version's row names the existing object,
+and no bytes move. A carry is the one way a key comes to be named by a record
+other than the write that uploaded it, and three rules keep the collector's
+lock-free deletion sound:
+
+- the applier performs a carry only by finding the artifact's own live
+  reference to that object **in its own apply transaction**; finding none, it
+  skips the record identically on every node, and the publisher is told `409
+  carried_object_gone`, naming the files to send again;
+- every record that adds or removes an artifact's object reference is ordered
+  on that artifact's own subject, so no carry can race a removal;
+- **no carry crosses an artifact**, so a publish cannot learn whether any other
+  artifact holds a file with a given digest. A library two artifacts both use
+  is stored twice.
+
 ---
 
 ## Collection and audit
@@ -571,8 +777,10 @@ judged against the replicated estate the data node holds:
   then asked about by name. On `nats`, whose listing keeps no order — and on an S3 Express
   directory bucket, which lists in none — a question is about one object. An
   object the store answers it does not hold is **missing**; one it holds at
-  another size, or under another SHA-256 where the store keeps one (`nats`
-  keeps one, S3 does not), or as no object it can read at all (on `nats`,
+  another size, or under another SHA-256 where the store answers one (`nats`
+  keeps one; S3 answers one only for an object asked about by name, uploaded
+  in one request to a provider the boot probe proved checks checksums), or as
+  no object it can read at all (on `nats`,
   metadata that does not decode, which the store answers definitely rather
   than as a failure) is **damaged**; and one the store **fails** to answer
   about — its client asking again until the question's deadline — is
@@ -658,7 +866,7 @@ A project's files are live rows, and a file never retires one: a replaced
 file's bytes go at the first hourly pass once nothing names them and they were
 uploaded more than a day ago (see
 [One object per upload](#one-object-per-upload)). The decision is
-[ADR-0033](https://github.com/crewlet/crewlet/blob/main/adr/0033-a-retired-reference-keeps-its-object-for-a-grace.md).
+[ADR-0047](https://github.com/crewlet/crewlet/blob/main/adr/0047-a-retired-reference-keeps-its-object-for-a-grace.md).
 
 ### Unfinished uploads
 
@@ -693,7 +901,10 @@ more, so no write that could still land can name it. The rule holds as long as
 the clocks of the node deciding a write and the node running the collector
 disagree by less than that margin. There is no lock, no second look and no
 coordination round trip, and two collectors running at once are safe —
-deleting an object that is already gone is not an error. The decision is
+deleting an object that is already gone is not an error. An artifact's
+[carried files](#an-unchanged-file-is-carried-never-copied) keep the rule: a
+carry names only an object the same artifact still names, checked where the
+carry is applied. The decision is
 [ADR-0027](https://github.com/crewlet/crewlet/blob/main/adr/0027-a-deletion-from-the-shared-store-needs-no-lock.md).
 
 ---
@@ -702,6 +913,7 @@ deleting an object that is already gone is not an error. The decision is
 
 | Alarm | Fires when |
 |---|---|
+| `objects_bucket_near_ceiling` | the fleet's NATS bucket holds more than four fifths of its byte reservation, as the node holding the collector's duty last read it: once it is full every upload is refused. Raise the reservation, or move the files to a bucket |
 | `objects_missing` | the collector's last audit to run to its end found files whose object the store does not hold, holds at the wrong size, under the wrong digest or as nothing it can read, or would not answer for twice while it answered for the rest — on the node holding the collector's duty, since one node's audit of a shared store is the fleet's |
 
 A missing or damaged object is a store that lost or changed bytes it
@@ -736,6 +948,15 @@ Take **`s3`** when:
   few hundred waits a second for a request the cluster dropped; on `s3` a
   read is one request.
 
+**To try `s3` on one machine**, the repository's `docker-compose.yml` carries
+a SeaweedFS service behind the `s3` profile: `docker compose --profile s3 up
+-d --wait`, create a bucket on it (`aws --endpoint-url http://127.0.0.1:8333
+s3 mb s3://crewlet-files`), and name it in `store.objects` with
+`endpoint: http://127.0.0.1:8333`, `region: us-east-1` and `path_style: true`.
+It runs with no identities, so it accepts any key pair and listens on the
+loopback address only; a store other people reach needs identities, and one
+key per company scoped to that company's prefix.
+
 **A versioned bucket keeps every object the collector deletes**, as a
 noncurrent version, for as long as the bucket's own rules say — and every
 upload is an object of its own, so a file rewritten daily leaves a noncurrent
@@ -764,7 +985,7 @@ broker member leaving, handled as for every stream (see
 
 `crewlet objects status` prints the store, the node that ran the last passes,
 and what each found; `--json` prints the fleet answer's `objects` block. The
-dashboard draws the same under **Settings › Nodes**.
+dashboard draws the same under **Settings › File storage**.
 
 ---
 

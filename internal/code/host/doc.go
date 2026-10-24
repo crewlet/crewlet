@@ -10,7 +10,7 @@
 // push's objects into the repository it runs in before any hook can refuse
 // them, and a refused push's objects would then be served, and connected
 // against, by a cache that is supposed to be a function of the rows
-// (ADR-0036). The one hook, proc-receive, relays every ref update to the
+// (ADR-0050). The one hook, proc-receive, relays every ref update to the
 // engine over a unix socket; the engine checks what only it can (a forced
 // update under a protection, a blob over the limit), uploads the push's one
 // pack bundle to the object store, and proposes the push to the repository's
@@ -225,18 +225,22 @@
 //
 // # Who pushes
 //
-// A person, with their own Tier A token as the Basic password: a token bound to
-// a human seat (contact.crewlet_operator_id) pushes as that person, a token
-// bound to nobody fetches only, and every push is one operator_acted record on
-// the receiving node, transport git — the third person transport. This package
-// imports nothing from the API but its auth and paced leaves, and nothing from
-// the engine or the estate: its seams (Estate, Uploader, Persons, Audit) are
-// declared here and filled by the engine.
+// A person, with their own token as the Basic password — a machine token they
+// minted, or a Tier A token the identity directory binds to their human seat —
+// pushes as that person; a credential bound to no seat fetches only; and every
+// push is one operator_acted record on the receiving node, transport git — the
+// third person transport. WHO is asking is the API guard's answer, read off
+// the request (iam.From): the seat is the principal's own, which the guard
+// resolved through the identity directory and the running org, so this
+// package looks nobody up a second time. It imports nothing from the API but
+// its auth and paced leaves, and nothing from the engine or the estate: its
+// seams (Estate, Uploader, Audit) are declared here and filled by the engine.
 //
-// What the admitted request may do is its GRANT (code.GrantOf, ADR-0040),
+// What the admitted request may do is its GRANT (code.GrantOf, ADR-0054),
 // built from ONE principal — the admission's principal(), the credential and
-// the person it is bound to, the same value the push's session and proposal
-// carry — and asked with no roster, since a person's grant reads no chart:
+// the seat the guard resolved it to, the same value the push's session and
+// proposal carry — and asked with no roster, since a person's grant reads no
+// chart:
 // maintain for a bound person, read for a token bound to nobody. The
 // advertisement asks it first (Grant.PushRefusal), so a token bound to nobody
 // is refused there, in git's words, before anything is sent; a push that
@@ -244,8 +248,8 @@
 // beside code.StatelessRefusal before the sync, with not_permitted and the
 // grant's own sentence on every ref. Such a push is still recorded under the
 // audit word `unbound` (grantRefusal), the class the dashboard and crewlet
-// read for it, since its remedy is a line of configuration rather than a
-// grant.
+// read for it, since its remedy is a binding in the identity directory rather
+// than a grant.
 //
 // # The hook relay cannot end the process
 //

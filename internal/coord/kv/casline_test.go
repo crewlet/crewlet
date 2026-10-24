@@ -518,7 +518,7 @@ func TestAWriteWhoseCallerHungUpIsWithdrawnAsItsBatchForms(t *testing.T) {
 	asked := false
 	write := func(ctx context.Context, change func(int, bool) (int, bool)) *lineWrite[int] {
 		return &lineWrite[int]{ctx: ctx, verb: "write the probe", resource: "probe", change: change,
-			done: make(chan struct{}), lead: make(chan struct{})}
+			bound: fleetCASAttempts, done: make(chan struct{}), lead: make(chan struct{})}
 	}
 	leader := write(t.Context(), func(n int, _ bool) (int, bool) { return n + 1, true })
 	hungUp := write(gone, func(n int, _ bool) (int, bool) { asked = true; return n + 10, true })

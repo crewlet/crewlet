@@ -27,23 +27,29 @@ func entityOf(t *testing.T, s *surface, kind, id string) map[string]any {
 	return out
 }
 
-// EVERY ADDRESSABLE COLLECTION IS LISTABLE, and a seat inside a unit is a
-// seat: an operator editing "the CTO" does not think about which list it
-// happens to live in, and a surface that only saw root-level roles would
-// make every real org chart's seats unreachable.
+// EVERY ADDRESSABLE COLLECTION IS LISTABLE, in a stable order, so a client
+// can discover what is there rather than carrying its own copy of the list —
+// and a seat inside a unit is a seat: an operator editing "the CTO" does not
+// think about which list it happens to live in, and a surface that only saw
+// root-level roles would make every real org chart's seats unreachable.
 func TestEveryEntityCollectionListsWhatTheDocumentCarries(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, entityDoc)
+	org := newSurface(t)
+	org.seed(t, orgDoc)
 
 	for _, tc := range []struct {
+		on   *surface
 		kind string
 		want []string
 	}{
-		{configapi.EntityRoles, []string{"ceo", "cto"}},
-		{configapi.EntityLLMProviders, []string{"zulu"}},
+		{s, configapi.EntityLLMProviders, []string{"yankee", "zulu"}},
+		{s, configapi.EntityMCPServers, []string{"notion", "tracker"}},
+		{org, configapi.EntityRoles, []string{"ceo", "cto", "staff-eng"}},
+		{org, configapi.EntityUnits, []string{"engineering", "platform-team"}},
 	} {
-		got, err := s.service().Entities(t.Context(), tc.kind)
+		got, err := tc.on.service().Entities(t.Context(), tc.kind)
 		if err != nil {
 			t.Fatalf("Entities(%s): %v", tc.kind, err)
 		}
@@ -53,13 +59,16 @@ func TestEveryEntityCollectionListsWhatTheDocumentCarries(t *testing.T) {
 	}
 
 	// An EMPTY collection is a real answer and must not come back as null:
-	// a company with no units is a company, and null renders as a failure.
-	units, err := s.service().Entities(t.Context(), configapi.EntityUnits)
+	// a company may declare no MCP servers at all, and null renders as a
+	// failure where an empty list renders as "there are none".
+	bare := newSurface(t)
+	bare.seed(t, companyDoc)
+	got, err := bare.service().Entities(t.Context(), configapi.EntityMCPServers)
 	if err != nil {
-		t.Fatalf("Entities(units): %v", err)
+		t.Fatalf("Entities(%s): %v", configapi.EntityMCPServers, err)
 	}
-	if units == nil {
-		t.Error("a company with no units answered null rather than an empty list")
+	if got == nil || len(got) != 0 {
+		t.Errorf("a company with no servers answered %#v rather than an empty list", got)
 	}
 }
 
@@ -68,8 +77,8 @@ func TestEveryEntityCollectionListsWhatTheDocumentCarries(t *testing.T) {
 // for the entity they just deleted.
 func TestAnUnknownEntityKindSaysWhatTheKindsAre(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	_, err := s.service().Entities(t.Context(), "widgets")
 	if err == nil {
@@ -84,11 +93,11 @@ func TestAnUnknownEntityKindSaysWhatTheKindsAre(t *testing.T) {
 
 // AN ENTITY READ IS REDACTED, because it is a slice of a document that is.
 // Otherwise a per-entity read is a way to fetch every credential in the
-// company one seat at a time, past the masking the document read applies.
+// company one entity at a time, past the masking the document read applies.
 func TestAnEntityReadCarriesNoCredential(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, entityDoc)
 
 	provider := entityOf(t, s, configapi.EntityLLMProviders, "zulu")
 	raw, err := json.Marshal(provider)
@@ -107,38 +116,42 @@ func TestAnEntityReadCarriesNoCredential(t *testing.T) {
 }
 
 // A WRITE CHANGES ONE ENTITY AND NOTHING ELSE, which is the whole reason
-// this surface exists beside PUT /config: an operator editing one seat's goal
-// must not send back — and take responsibility for — every other seat.
+// this surface exists beside PUT /config: an operator changing one server's
+// URL must not send back — and take responsibility for — every provider,
+// every integration and every other server in the company.
 func TestAnEntityWriteLeavesTheRestOfTheDocumentAlone(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, entityDoc)
 
-	role := entityOf(t, s, configapi.EntityRoles, "ceo")
-	role["goal"] = "ship the rewrite"
-	body, err := json.Marshal(role)
+	server := entityOf(t, s, configapi.EntityMCPServers, "tracker")
+	server["url"] = "https://tracker.example.com"
+	body, err := json.Marshal(server)
 	if err != nil {
 		t.Fatal(err)
 	}
-	res := s.do(t, http.MethodPut, "/config/roles/ceo", string(body),
-		map[string]string{"X-Summary": "give the CEO a goal"})
+	res := s.do(t, http.MethodPut, "/config/mcp-servers/tracker", string(body),
+		map[string]string{"X-Summary": "move the tracker server"})
 	// 201, like PUT /config: the write creates a REVISION, which is a new
 	// resource whether it changed one entity or the whole document.
 	if res.Code != http.StatusCreated {
-		t.Fatalf("PUT /config/roles/ceo = %d: %s", res.Code, res.Body.String())
+		t.Fatalf("PUT /config/mcp-servers/tracker = %d: %s", res.Code, res.Body.String())
 	}
 
-	if got := entityOf(t, s, configapi.EntityRoles, "ceo")["goal"]; got != "ship the rewrite" {
-		t.Errorf("the edit did not land: goal = %v", got)
+	if got := entityOf(t, s, configapi.EntityMCPServers, "tracker")["url"]; got != "https://tracker.example.com" {
+		t.Errorf("the edit did not land: url = %v", got)
 	}
-	// The seat nobody touched is still there and unchanged, which a
-	// whole-document write could have lost.
-	ids, err := s.service().Entities(t.Context(), configapi.EntityRoles)
+	// The server nobody touched is still there, and so is its credential,
+	// which a whole-document write could have lost.
+	ids, err := s.service().Entities(t.Context(), configapi.EntityMCPServers)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(ids, ",") != "ceo,cto" {
-		t.Errorf("the other seats did not survive the write: %v", ids)
+	if strings.Join(ids, ",") != "notion,tracker" {
+		t.Errorf("the other servers did not survive the write: %v", ids)
+	}
+	if document := s.activeDocument(t); !strings.Contains(document, "notion-literal") {
+		t.Errorf("the untouched server's credential was lost: %s", document)
 	}
 }
 
@@ -148,8 +161,8 @@ func TestAnEntityWriteLeavesTheRestOfTheDocumentAlone(t *testing.T) {
 // discovered when the integration stops authenticating.
 func TestAnEntityWriteRestoresWhatTheReadMasked(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	provider := entityOf(t, s, configapi.EntityLLMProviders, "zulu")
 	provider["model"] = "claude-haiku-4-5"
@@ -177,53 +190,67 @@ func TestAnEntityWriteRestoresWhatTheReadMasked(t *testing.T) {
 	}
 }
 
-// THE WHOLE DOCUMENT IS VALIDATED, not just the entity. A seat naming a
-// provider that no longer exists is valid on its own terms and breaks the
-// company — and a per-entity surface is exactly where that gets introduced,
-// because the caller never sees the rest of the document.
+// THE WHOLE DOCUMENT IS VALIDATED, not just the entity — and the entity the
+// caller sent is beside the point when the rest of the company is broken.
+//
+// # Why the break is somewhere the caller never looked
+//
+// A per-entity surface exists so that an operator does not have to send back
+// the rest of the document. That is also what makes this rule load bearing:
+// they cannot see the rest, so nothing in what they sent tells them the write
+// will leave the company unrunnable. The break is seeded where the write never
+// looks: a delegate template naming a provider nobody configures.
 func TestAnEntityWriteThatBreaksTheCompanyIsRefused(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seedStored(t, entityDoc, refusedByThisBuild)
 
-	role := entityOf(t, s, configapi.EntityRoles, "ceo")
-	role["llm"] = "a-provider-that-does-not-exist"
-	body, err := json.Marshal(role)
+	// A PERFECTLY GOOD ENTITY, and the write is still refused: what the
+	// validation is about is nowhere in this body.
+	server := entityOf(t, s, configapi.EntityMCPServers, "tracker")
+	server["url"] = "https://tracker.example.com"
+	body, err := json.Marshal(server)
 	if err != nil {
 		t.Fatal(err)
 	}
-	res := s.do(t, http.MethodPut, "/config/roles/ceo", string(body),
-		map[string]string{"X-Summary": "point the CEO at nothing"})
+	res := s.do(t, http.MethodPut, "/config/mcp-servers/tracker", string(body),
+		map[string]string{"X-Summary": "move the tracker server"})
 	if res.Code != http.StatusBadRequest {
-		t.Fatalf("PUT with a dangling provider = %d, want 400: %s",
+		t.Fatalf("PUT onto a broken company = %d, want 400: %s",
 			res.Code, res.Body.String())
 	}
 	if !strings.Contains(res.Body.String(), "validation_error") {
 		t.Errorf("the refusal does not say it failed validation: %s", res.Body.String())
 	}
+	// AND IT NAMES THE PART THE CALLER CANNOT SEE, which is the only way
+	// the refusal is actionable at all.
+	if !strings.Contains(res.Body.String(), "nonexistent") {
+		t.Errorf("the refusal does not name what is actually broken: %s", res.Body.String())
+	}
 }
 
 // AN ID NOBODY CARRIES IS NOT CREATED BY A PLAIN PUT. One naming an entity
 // that is not there is far more often a typo than an intent to add one; the
-// intent is said with `If-None-Match: *` (entity_create_test.go), and a seat
-// is not created by address at all.
+// intent is said with `If-None-Match: *` (entity_create_test.go). A seat or a
+// unit has no create by address at all: its place is not something its path
+// can name, so it is `not_creatable`.
 func TestAnEntityWriteNeverCreates(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, entityDoc)
 
-	res := s.do(t, http.MethodPut, "/config/roles/nobody",
-		`{"name":"Nobody","handle":"nobody"}`,
-		map[string]string{"X-Summary": "add a seat sideways"})
+	res := s.do(t, http.MethodPut, "/config/llm-providers/xray",
+		`{"type":"anthropic","model":"claude-sonnet-5","api_keys":["${X}"]}`,
+		map[string]string{"X-Summary": "add a provider sideways"})
 	if res.Code != http.StatusNotFound {
 		t.Fatalf("PUT to an unknown id = %d, want 404: %s", res.Code, res.Body.String())
 	}
-	ids, err := s.service().Entities(t.Context(), configapi.EntityRoles)
+	ids, err := s.service().Entities(t.Context(), configapi.EntityLLMProviders)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(strings.Join(ids, ","), "nobody") {
-		t.Errorf("the refused write created a seat anyway: %v", ids)
+	if strings.Contains(strings.Join(ids, ","), "xray") {
+		t.Errorf("the refused write created a provider anyway: %v", ids)
 	}
 }
 
@@ -232,10 +259,11 @@ func TestAnEntityWriteNeverCreates(t *testing.T) {
 // most likely to be made in a hurry.
 func TestAnEntityWriteNeedsASummary(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, entityDoc)
 
-	res := s.do(t, http.MethodPut, "/config/roles/ceo", `{"name":"CEO"}`, nil)
+	res := s.do(t, http.MethodPut, "/config/llm-providers/zulu",
+		`{"type":"anthropic","model":"claude-sonnet-5"}`, nil)
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("PUT with no summary = %d, want 400", res.Code)
 	}
@@ -253,14 +281,16 @@ func TestAnEntityWriteNeedsASummary(t *testing.T) {
 // quietly succeeds having done nothing.
 //
 // Removal is a full-document edit on purpose: deleting a seat strands its
-// mailbox and its in-flight work, and
-// deleting a provider silently repoints every role that named it. Both belong
-// in a document somebody looked at. docs/guides/configure-via-api.md states
-// this status code, which is why it is asserted rather than assumed.
+// mailbox and its in-flight work, deleting a provider silently repoints every
+// seat whose model chain named it, and deleting a server leaves every
+// `mcp_env` block keyed on it read by nothing. Each belongs in a document
+// somebody looked at.
+// docs/guides/configure-via-api.md states this status code, which is why it is
+// asserted rather than assumed.
 func TestAnEntityPathRefusesEveryVerbButGetAndPut(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	for _, kind := range configapi.EntityKinds() {
 		for _, method := range []string{
@@ -287,112 +317,65 @@ func TestAnEntityPathRefusesEveryVerbButGetAndPut(t *testing.T) {
 	}
 }
 
-// nestedDoc is companyDoc with the shapes the flat fixture cannot exercise:
-// seats inside units, a unit inside a unit, and an MCP server. The entity
-// surface's whole claim is that a seat is reachable by handle "wherever it
-// lives", and a fixture with no units leaves that claim untested.
-const nestedDoc = `
+// entityDoc carries TWO of each collection this surface still writes, which
+// is what the single-member fixture cannot exercise: a write has to change one
+// member and leave its neighbour exactly as it was, and a fixture with one of
+// each cannot tell "edited the right one" from "edited the only one".
+//
+// NO ROLES AND NO UNITS: seats and units have their own fixture (orgDoc, in
+// seatentity_test.go).
+const entityDoc = `
 name: Acme
 providers:
   llm:
     zulu:
       type: anthropic
       model: claude-sonnet-5
-      api_keys: ["sk-literal"]
+      api_keys: ["sk-literal", "${ROTATED}"]
+    yankee:
+      type: anthropic
+      model: claude-haiku-4-5
+      api_keys: ["${YANKEE_KEY}"]
 mcp_servers:
   - name: tracker
     transport: http
     url: https://mcp.example.com
-roles:
-  - name: CEO
-    handle: ceo
-    llm: zulu
-units:
-  - name: engineering
-    lead: cto
-    roles:
-      - name: CTO
-        handle: cto
-        llm: zulu
-    children:
-      - name: platform
-        roles:
-          - name: Staff Engineer
-            handle: staff-eng
-            llm: zulu
+  - name: notion
+    command: notion-mcp
+    env: {TOKEN: notion-literal}
 `
-
-// A SEAT INSIDE A UNIT IS A SEAT, at any depth. An operator editing "the
-// staff engineer" does not think about which list it happens to live in, and
-// a surface that only reached root-level roles would make every real org
-// chart's seats unaddressable.
-func TestAnEntityWriteReachesASeatNestedInAUnit(t *testing.T) {
-	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, nestedDoc, nil)
-
-	ids, err := s.service().Entities(t.Context(), configapi.EntityRoles)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := strings.Join(ids, ","); got != "ceo,cto,staff-eng" {
-		t.Fatalf("roles = %v, want the root seat and both nested ones", ids)
-	}
-
-	role := entityOf(t, s, configapi.EntityRoles, "staff-eng")
-	role["goal"] = "own the build"
-	body, err := json.Marshal(role)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res := s.do(t, http.MethodPut, "/config/roles/staff-eng", string(body),
-		map[string]string{"X-Summary": "give the staff engineer a goal"})
-	if res.Code != http.StatusCreated {
-		t.Fatalf("PUT a twice-nested seat = %d: %s", res.Code, res.Body.String())
-	}
-	if got := entityOf(t, s, configapi.EntityRoles, "staff-eng")["goal"]; got != "own the build" {
-		t.Errorf("the edit did not reach the nested seat: goal = %v", got)
-	}
-}
 
 // A WRITE NEVER RENAMES. The path is the address, and a body carrying a
 // different identity is a rename wearing a replacement's clothes.
 //
 // Refused rather than applied, because none of what points at the old
-// identity moves with the splice: a seat's durable id is a UUIDv5 over
-// (company name, handle), so a silent rename strands its diary, its
-// onboarding marker and its counterparty profiles behind an id nothing
-// derives any more — and leaves the URL naming a seat that is gone.
+// identity moves with the splice: an MCP server's name keys every `mcp_env`
+// block that names it, a seat's or a unit's, and prefixes every tool it
+// serves, so a silent rename unhooks every seat that named it — and leaves the
+// URL naming a server that is gone. The refusal says where a rename CAN be
+// made, since this route cannot see what has to move with it.
 func TestAnEntityWriteNeverRenames(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name, kind, id, body string
 	}{
 		{
-			name: "a seat", kind: configapi.EntityRoles, id: "ceo",
-			body: `{"name":"CEO","handle":"chief","llm":"zulu"}`,
-		},
-		{
-			// THE ONE THAT ARRIVES BY ACCIDENT: no handle in the body at
-			// all, just a new display name — which derives a new handle,
-			// and renames the seat without the word ever being used.
-			name: "a seat renamed by its display name alone",
-			kind: configapi.EntityRoles, id: "ceo",
-			body: `{"name":"Chief Executive","llm":"zulu"}`,
-		},
-		{
-			name: "a unit", kind: configapi.EntityUnits, id: "engineering",
-			body: `{"name":"eng","lead":"cto"}`,
-		},
-		{
 			name: "an mcp server", kind: configapi.EntityMCPServers, id: "tracker",
 			body: `{"name":"issues","transport":"http","url":"https://mcp.example.com"}`,
+		},
+		{
+			// THE ONE THAT ARRIVES BY ACCIDENT: a body with no `name` in
+			// it at all, which reads as a rename to the empty string
+			// rather than as "leave the name alone".
+			name: "an mcp server whose body drops its name",
+			kind: configapi.EntityMCPServers, id: "tracker",
+			body: `{"transport":"http","url":"https://mcp.example.com"}`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			s := newSurface(t, nil)
-			s.seed(t, nestedDoc, nil)
+			s := newSurface(t)
+			s.seed(t, entityDoc)
 			before := s.activeDocument(t)
 
 			path := "/config/" + tc.kind + "/" + tc.id
@@ -409,6 +392,13 @@ func TestAnEntityWriteNeverRenames(t *testing.T) {
 			// is actionable without reading the docs.
 			if !strings.Contains(res.Body.String(), tc.id) {
 				t.Errorf("the refusal does not name %q: %s", tc.id, res.Body.String())
+			}
+			// AND IT SAYS WHERE A RENAME CAN BE MADE: the whole document,
+			// where everything that names the entity — a seat's `mcp_env`
+			// block, a model chain — is visible and moves with it.
+			if !strings.Contains(res.Body.String(), "PUT /config") {
+				t.Errorf("the refusal does not say where a rename can be made: %s",
+					res.Body.String())
 			}
 			// AND NOTHING WAS WRITTEN. A refused write that still stored a
 			// revision would be the same rename, one indirection away.
@@ -427,23 +417,23 @@ func TestAnEntityWriteNeverRenames(t *testing.T) {
 }
 
 // AND AN EDIT THAT KEEPS THE IDENTITY STILL LANDS. The guard above must
-// refuse renames, not name changes: a seat whose display name changes while
-// its handle is sent back unchanged is an ordinary edit, and refusing it
+// refuse renames, not edits: an entity whose every other field changes while
+// its identity is sent back unchanged is the ordinary case, and refusing it
 // would make the surface useless for the thing it is most used for.
-func TestAnEntityWriteAcceptsANameChangeThatKeepsTheHandle(t *testing.T) {
+func TestAnEntityWriteAcceptsAChangeThatKeepsTheIdentity(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, nestedDoc, nil)
+	s := newSurface(t)
+	s.seed(t, entityDoc)
 
-	res := s.do(t, http.MethodPut, "/config/roles/ceo",
-		`{"name":"Chief Executive","handle":"ceo","llm":"zulu"}`,
-		map[string]string{"X-Summary": "spell the CEO's title out"})
+	res := s.do(t, http.MethodPut, "/config/mcp-servers/tracker",
+		`{"name":"tracker","transport":"http","url":"https://issues.example.com"}`,
+		map[string]string{"X-Summary": "point the tracker server somewhere else"})
 	if res.Code != http.StatusCreated {
-		t.Fatalf("PUT a renamed-but-same-handle seat = %d, want 201: %s",
+		t.Fatalf("PUT an edited-but-same-name server = %d, want 201: %s",
 			res.Code, res.Body.String())
 	}
-	if got := entityOf(t, s, configapi.EntityRoles, "ceo")["name"]; got != "Chief Executive" {
-		t.Errorf("the name change did not land: name = %v", got)
+	if got := entityOf(t, s, configapi.EntityMCPServers, "tracker")["url"]; got != "https://issues.example.com" {
+		t.Errorf("the edit did not land: url = %v", got)
 	}
 }
 
@@ -458,20 +448,22 @@ func TestAnEntityWriteAcceptsANameChangeThatKeepsTheHandle(t *testing.T) {
 // The read is now the entity itself, so GET | PUT round-trips.
 func TestAnEntityReadRoundTripsStraightBackIntoTheWrite(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, nestedDoc, nil)
+	s := newSurface(t)
+	s.seed(t, entityDoc)
 
-	// A seat two units deep, because the flat handle namespace is the whole
-	// point of these paths and the read must share it with the write.
-	res := s.do(t, http.MethodGet, "/config/roles/staff-eng", "", nil)
+	// AN ENTITY CARRYING A CREDENTIAL, because that is where the round
+	// trip is hardest: the read masks it and the write has to put the
+	// stored value back, or the loop replaces a working token with the
+	// mask.
+	res := s.do(t, http.MethodGet, "/config/mcp-servers/notion", "", nil)
 	if res.Code != http.StatusOK {
-		t.Fatalf("GET /config/roles/staff-eng = %d: %s", res.Code, res.Body.String())
+		t.Fatalf("GET /config/mcp-servers/notion = %d: %s", res.Code, res.Body.String())
 	}
 	var entity map[string]any
 	if err := json.Unmarshal(res.Body.Bytes(), &entity); err != nil {
 		t.Fatalf("the read is not the entity: %v", err)
 	}
-	if entity["handle"] != "staff-eng" {
+	if entity["name"] != "notion" {
 		t.Fatalf("the read is wrapped in an envelope rather than being the "+
 			"entity PUT takes: %s", res.Body.String())
 	}
@@ -482,13 +474,18 @@ func TestAnEntityReadRoundTripsStraightBackIntoTheWrite(t *testing.T) {
 
 	// STRAIGHT BACK, unmodified and unwrapped, guarded by the tag the read
 	// gave. Anything less than 201 means the two halves still disagree.
-	back := s.do(t, http.MethodPut, "/config/roles/staff-eng", res.Body.String(),
+	back := s.do(t, http.MethodPut, "/config/mcp-servers/notion", res.Body.String(),
 		map[string]string{
 			"X-Summary": "round trip", "If-Match": res.Header().Get("ETag"),
 		})
 	if back.Code != http.StatusCreated {
 		t.Fatalf("the entity a GET returned was refused by its own PUT = %d: %s",
 			back.Code, back.Body.String())
+	}
+	// AND THE CREDENTIAL SURVIVED IT. A round trip that stored the mask
+	// would answer 201 and break the server hours later, naming nothing.
+	if document := s.activeDocument(t); !strings.Contains(document, "notion-literal") {
+		t.Errorf("the round trip replaced the credential with its mask:\n%s", document)
 	}
 }
 
@@ -497,8 +494,8 @@ func TestAnEntityReadRoundTripsStraightBackIntoTheWrite(t *testing.T) {
 // at a time, past the masking the document read applies.
 func TestAnEntityReadOverHTTPCarriesNoCredential(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
 	res := s.do(t, http.MethodGet, "/config/llm-providers/zulu", "", nil)
 	if res.Code != http.StatusOK {
@@ -516,12 +513,12 @@ func TestAnEntityReadOverHTTPCarriesNoCredential(t *testing.T) {
 // AN ID NOBODY CARRIES IS A 404 ON THE READ TOO, not an empty entity.
 func TestReadingAnAbsentEntityIsNotFound(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
-	res := s.do(t, http.MethodGet, "/config/roles/nobody", "", nil)
+	res := s.do(t, http.MethodGet, "/config/mcp-servers/nobody", "", nil)
 	if res.Code != http.StatusNotFound {
-		t.Fatalf("GET an absent seat = %d, want 404: %s", res.Code, res.Body.String())
+		t.Fatalf("GET an absent server = %d, want 404: %s", res.Code, res.Body.String())
 	}
 	if !strings.Contains(res.Body.String(), "no_such_entity") {
 		t.Errorf("the refusal does not name what was missing: %s", res.Body.String())
@@ -540,40 +537,32 @@ func TestAnAbsentEntityIsNotFoundBeforeItIsARename(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, kind, id, body string }{
 		{
-			// The mistyped URL: the body is a perfectly good CEO.
-			name: "a seat", kind: configapi.EntityRoles, id: "nobody",
-			body: `{"name":"CEO","handle":"ceo","llm":"zulu"}`,
-		},
-		{
-			// And the derived-handle shape, which is the one the identity
-			// guard reaches for first if it runs too early.
-			name: "a seat whose handle is derived", kind: configapi.EntityRoles,
-			id: "nobody", body: `{"name":"Chief Executive","llm":"zulu"}`,
-		},
-		{
-			name: "a unit", kind: configapi.EntityUnits, id: "nowhere",
-			body: `{"name":"engineering","lead":"cto"}`,
-		},
-		{
+			// The mistyped URL: the body is a perfectly good server.
 			name: "an mcp server", kind: configapi.EntityMCPServers, id: "nothing",
 			body: `{"name":"tracker","transport":"http","url":"https://mcp.example.com"}`,
+		},
+		{
+			name: "an llm provider", kind: configapi.EntityLLMProviders, id: "nothing",
+			body: `{"type":"anthropic","model":"claude-sonnet-5","api_keys":["${K}"]}`,
 		},
 		{
 			// And a body that cannot be read at all: the path is what went
 			// wrong first, and a body is read at the place of the entity
 			// it replaces, which a missing entity does not have.
-			name: "a seat whose body has a typo", kind: configapi.EntityRoles, id: "nobody",
-			body: `{"name":"CEO","handle":"ceo","gaol":"x"}`,
+			name: "an mcp server whose body has a typo",
+			kind: configapi.EntityMCPServers, id: "nothing",
+			body: `{"name":"tracker","transport":"http","url":"https://mcp.example.com","comand":"npx"}`,
 		},
 		{
-			name: "a unit whose body has a typo", kind: configapi.EntityUnits, id: "nowhere",
-			body: `{"name":"nowhere","rolez":[]}`,
+			name: "an llm provider whose body has a typo",
+			kind: configapi.EntityLLMProviders, id: "nothing",
+			body: `{"type":"anthropic","modell":"claude-sonnet-5"}`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			s := newSurface(t, nil)
-			s.seed(t, nestedDoc, nil)
+			s := newSurface(t)
+			s.seed(t, entityDoc)
 
 			path := "/config/" + tc.kind + "/" + tc.id
 			res := s.do(t, http.MethodPut, path, tc.body,
@@ -593,9 +582,9 @@ func TestAnAbsentEntityIsNotFoundBeforeItIsARename(t *testing.T) {
 
 // A TYPO IN AN ENTITY BODY IS REFUSED, not dropped.
 //
-// `json.Unmarshal` ignores what it does not recognise, so `"gaol"` answered
-// 201 and stored a seat with no goal — the exact failure Tier B's strict
-// document parser exists to prevent, on the surface most likely to be
+// `json.Unmarshal` ignores what it does not recognise, so a misspelt key
+// answered 201 and stored the entity without it — the exact failure Tier B's
+// strict document parser exists to prevent, on the surface most likely to be
 // hand-edited in a hurry. Asserted per kind because each one decodes into its
 // own type and a new kind added without the strict decoder is silent.
 func TestAMistypedFieldInAnEntityBodyIsRefusedByName(t *testing.T) {
@@ -608,21 +597,24 @@ func TestAMistypedFieldInAnEntityBodyIsRefusedByName(t *testing.T) {
 		// a refusal's problems are placed on every route.
 		at string
 	}{
-		{configapi.EntityRoles, "ceo", `{"name":"CEO","llm":"zulu","gaol":"ship it"}`, "roles[0].gaol"},
-		{configapi.EntityRoles, "staff-eng", `{"name":"Staff Engineer","handle":"staff-eng","llm":"zulu","gaol":"x"}`,
-			"units[0].children[0].roles[0].gaol"},
-		{configapi.EntityUnits, "platform", `{"name":"platform","rolez":[]}`, "units[0].children[0].rolez"},
 		{configapi.EntityLLMProviders, "zulu", `{"type":"anthropic","modell":"claude-sonnet-5"}`, "providers.llm.zulu.modell"},
+		{configapi.EntityLLMProviders, "yankee", `{"type":"anthropic","model":"m","api_kies":["${K}"]}`, "providers.llm.yankee.api_kies"},
 		{configapi.EntityMCPServers, "tracker", `{"name":"tracker","transport":"http","url":"https://mcp.example.com","comand":"npx"}`,
 			"mcp_servers[0].comand"},
+		// A MISSPELT KEY IS THIS CASE'S INPUT, as every row's is.
+		{configapi.EntityMCPServers, "notion", `{"name":"notion","command":"notion-mcp","enviroment":{}}`, //nolint:misspell // the typo is the input
+			"mcp_servers[1].enviroment"}, //nolint:misspell // the typo's path
 	} {
 		t.Run(tc.kind+"/"+tc.id, func(t *testing.T) {
 			t.Parallel()
-			// nestedDoc, because every kind has to address something that
-			// EXISTS: a 404 for a missing entity would pass this test
-			// without the body ever being decoded.
-			s := newSurface(t, nil)
-			s.seed(t, nestedDoc, nil)
+			// entityDoc, because every kind has to address something
+			// that EXISTS: a 404 for a missing entity would pass this
+			// test without the body ever being decoded. And the SECOND
+			// member of each collection is what pins the index in the
+			// placed path — one of each cannot tell `[0]` from "the
+			// one there is".
+			s := newSurface(t)
+			s.seed(t, entityDoc)
 
 			res := s.do(t, http.MethodPut, "/config/"+tc.kind+"/"+tc.id, tc.body,
 				map[string]string{"X-Summary": "with a typo in it"})

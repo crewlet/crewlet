@@ -5,7 +5,8 @@
  * - the rows are the TREE, in the chart's own order, and where a node sits is
  *   its level rather than a path written out on every line;
  * - a row says what the engine knows about it: what it IS, once, under its
- *   name and in the chart's own wording; the handle it runs under; who leads
+ *   name and in the chart's own wording; its identity, a seat's handle or a
+ *   unit's key, which is what every reference to it names; who leads
  *   or manages it; and what the last dry run placed on it, with a cell that
  *   cannot hold a value saying so once in the design system's own mark;
  * - a row acts through the same one list of a node's actions the chart's cards
@@ -32,7 +33,7 @@ import { Tag } from "@crewlethq/ui";
 import { fixtureCompany } from "./model/testkit.ts";
 import { checkedEdit } from "./testState.ts";
 import { TableView } from "./TableView.tsx";
-import { NodeGlyph } from "./nodeMarks.tsx";
+import { NodeGlyph } from "~/ui/orgNodes.tsx";
 import { builderSpies, BuilderHarness, harnessProbe } from "./viewTestkit.tsx";
 import { render } from "@testing-library/react";
 
@@ -42,7 +43,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
-  location.hash = "#/agents/edit?view=table";
+  location.hash = "#/company/org/edit?view=table";
 });
 
 function mount(options: { readOnly?: boolean } = {}) {
@@ -176,12 +177,12 @@ describe("the rows", () => {
     expect(names().some((name) => name.includes("/"))).toBe(false);
   });
 
-  test("a row says its kind, its handle and who leads or manages it", () => {
+  test("a row says its kind, its handle or key and who leads or manages it", () => {
     mount();
     expect(cells("Dev")[0]).toMatch(/^DevAgent seat/);
     expect(cells("Dev")).toEqual(expect.arrayContaining(["@dev"]));
     expect(cells("Engineering")).toEqual(
-      expect.arrayContaining(["EngineeringDepartment", "VP Engineering"]),
+      expect.arrayContaining(["EngineeringDepartment", "engineering", "VP Engineering"]),
     );
   });
 
@@ -197,7 +198,7 @@ describe("the rows", () => {
     const headers = screen
       .getAllByRole("columnheader")
       .map((head) => head.textContent?.trim() ?? "");
-    expect(headers).toEqual(["Name", "Handle", "Lead or reports to", "Problems", "Actions"]);
+    expect(headers).toEqual(["Name", "Handle or key", "Lead or reports to", "Problems", "Actions"]);
     const said = (name: string, word: string) =>
       (cells(name).join(" ").match(new RegExp(word, "g")) ?? []).length;
     expect(said("Dev", "Agent seat")).toBe(1);
@@ -252,27 +253,29 @@ describe("the rows", () => {
   });
 
   /*
-   * COLOUR IS NOT IDENTITY, IN THE TABLE AS ON THE CHART. Each row's name, its
-   * mark and the wire arriving at it took one of six hues hashed from an agent
-   * seat's key — a legend a reader had to learn and could never decode, and
-   * the same seat was neutral on the org chart one screen away. The design
+   * AN AGENT SEAT IS TONED, IN THE TABLE AS ON THE CHART, and nothing else is:
+   * its name, its mark and the wire arriving at it take the purple the console
+   * paints an agent seat in, and every other row keeps the neutral ink. One hue
+   * for one kind, never a hash of a key: each agent seat used to take one of
+   * six hues hashed from its key, a legend nobody could decode. The design
    * system tints a row only when asked (`data-tone` on its name group and on
-   * its wire), so nothing on this table may carry one.
+   * its wire), so what carries one here is exactly what asked.
    */
-  test("no row, name or wire of the table is tinted, an agent seat's included", () => {
+  test("an agent seat's row is toned purple, and no other row is", () => {
     const { container } = mount();
-    // The table really drew agent seats hanging below the company, so an empty
-    // list below is a statement about them rather than about an empty table.
-    const agents = screen
-      .getAllByRole("row")
-      .filter(
-        (r) => Number(r.getAttribute("aria-level")) > 1 && within(r).queryByText("Agent seat"),
-      );
+    const rows = screen.getAllByRole("row").filter((r) => r.hasAttribute("aria-level"));
+    const agents = rows.filter((r) => within(r).queryByText("Agent seat"));
+    // The table really drew agent seats and other rows, so the checks below
+    // are statements about them rather than about an empty table.
     expect(agents.length).toBeGreaterThan(0);
-    const tinted = [...container.querySelectorAll("[data-tone]")].map(
-      (el) => `${el.getAttribute("data-tone")}: ${el.closest("[role='row']")?.textContent ?? ""}`,
-    );
-    expect(tinted).toEqual([]);
+    expect(agents.length).toBeLessThan(rows.length);
+    const tinted = [...container.querySelectorAll("[data-tone]")];
+    for (const el of tinted) {
+      expect(el.getAttribute("data-tone")).toBe("purple");
+      expect(agents).toContain(el.closest("[role='row']"));
+    }
+    for (const r of agents)
+      expect(r.querySelector("[data-tone='purple']"), r.textContent ?? "").not.toBeNull();
   });
 });
 
@@ -318,7 +321,6 @@ describe("acting on a row", () => {
     expect(actions("Dev").map(([label]) => label)).toEqual([
       "Open seat",
       "Edit reports",
-      "Change to human seat",
       "Move to",
       "Move up",
       "Move down",
@@ -387,7 +389,7 @@ describe("acting on a row", () => {
     const { spies } = mount();
     fireEvent.click(within(row("Engineering")).getByRole("button", { name: "Add to Engineering" }));
     fireEvent.click(await screen.findByRole("button", { name: "Add human seat to Engineering" }));
-    expect(spies.openAdd).toHaveBeenLastCalledWith("unit:Engineering", "human");
+    expect(spies.openAdd).toHaveBeenLastCalledWith("unit:engineering", "human");
 
     fireEvent.click(within(row("Acme")).getByRole("button", { name: "Add to Acme" }));
     fireEvent.click(await screen.findByRole("button", { name: "Add unit to Acme" }));
@@ -471,7 +473,6 @@ describe("acting on a row", () => {
     expect(actions("Dev")).toEqual([
       ["Open seat", false],
       ["Edit reports", false],
-      ["Change to human seat", true],
       ["Move to", true],
       ["Move up", true],
       ["Move down", true],

@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/rendezvous"
+	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -48,7 +49,7 @@ type LocalBackends interface {
 	// that copy is OUT OF SERVICE: wrong rather than behind, so the node
 	// answers none of that domain's operations from it while its seats'
 	// calls on it go to the other data nodes. Another domain's fault is not
-	// this one's — every other domain's copy keeps serving (ADR-0031).
+	// this one's — every other domain's copy keeps serving (ADR-0045).
 	// [SeatCopy] asks for the copy a SEAT is served by.
 	//
 	// The backend's [Backend.Answers] is that domain's own.
@@ -79,6 +80,10 @@ type RouterOptions struct {
 	// Seams are this node's own: supplied to every operation this node
 	// answers in-process.
 	Seams ServerSeams
+
+	// Envelopes sign every request this node sends and verify every reply
+	// it is sent — required: see [Envelopes].
+	Envelopes *Envelopes
 
 	// Now is the clock the suspect cooldown, the admission cache and a
 	// silent node's wait ([Router.ask]) read, injected for tests. Nil is the
@@ -226,7 +231,7 @@ func (t Timing) refusal() error {
 //
 // A node without the `data` role holds nothing and asks for everything; a data
 // node answers its own seats from its own copy, and asks a peer only while its
-// copy of the operation's domain is out of service (ADR-0031) or cannot take
+// copy of the operation's domain is out of service (ADR-0045) or cannot take
 // the request. Both are the same
 // router, so a tool behaves identically on either, and the path a data node
 // takes to its own copy is the path it takes to a peer's, floors included.
@@ -270,6 +275,7 @@ type Router struct {
 	local     LocalBackends
 	session   *Session
 	seams     ServerSeams
+	env       *Envelopes
 	now       func() time.Time
 
 	// timing is how long each attempt waits ([RouterOptions.Timing]).
@@ -326,6 +332,8 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 	case opts.Self == "":
 		return nil, errors.New("estate: a router needs this node's id — it is " +
 			"what a serving node's log names, and what the router never asks")
+	case opts.Envelopes == nil:
+		return nil, errNoEnvelopes
 	}
 	if err := opts.Timing.refusal(); err != nil {
 		return nil, err
@@ -336,7 +344,7 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 	}
 	return &Router{
 		self: opts.Self, queue: opts.Queue, placement: opts.Placement,
-		local: opts.Local, session: opts.Session, seams: opts.Seams, now: now,
+		local: opts.Local, session: opts.Session, seams: opts.Seams, env: opts.Envelopes, now: now,
 		timing: opts.Timing,
 		sticky: map[string]string{}, suspect: map[string]time.Time{},
 		passedOver: map[nodeCopy]time.Time{}, declined: map[nodeOp]time.Time{},
@@ -544,15 +552,17 @@ type ErrUnserved struct {
 	// Detail is who was asked and what each said, in order.
 	Detail string
 
-	// NodeSilent records that a node the walk asked went SILENT
-	// ([Router.silent]) — read through [ErrUnserved.Silent]. Exported so it
-	// crosses the wire with the rest of the refusal: an estate nobody served
-	// on the far side of a second hop says the same of its own walk.
+	// NodeSilent records that a node the walk asked went SILENT, or gave a
+	// reply that did not verify ([Router.unheard]) — read through
+	// [ErrUnserved.Silent]. Exported so it crosses the wire with the rest of
+	// the refusal: an estate nobody served on the far side of a second hop
+	// says the same of its own walk.
 	NodeSilent bool
 }
 
 // Silent reports whether a node the walk asked went silent rather than
-// answering that it would not run the operation.
+// answering that it would not run the operation — a reply this node could not
+// believe being no such answer.
 //
 // A walk in which nobody went silent is one in which NOTHING RAN the
 // operation — every node answered that its copy was out of service, could not
@@ -586,9 +596,10 @@ type walk struct {
 	reasons  []string
 	fallback *held
 
-	// silent is set once a node the walk asked said nothing ([Router.silent]):
-	// a walk that ends unserved then may have had the operation run by that
-	// node ([ErrUnserved.Silent]).
+	// silent is set once a node the walk asked gave no reply this node
+	// believes — it said nothing, or what it said did not verify
+	// ([Router.unheard]): a walk that ends unserved then may have had the
+	// operation run by that node ([ErrUnserved.Silent]).
 	silent bool
 
 	// lagging is every node that answered that its copy ONLY lags its logs
@@ -743,12 +754,12 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 				suspectFor)
 			continue
 		}
-		rep, answered, err := r.askFor(ctx, spec, actor, x, node, budget, false, w.spent)
+		rep, got, err := r.askFor(ctx, spec, actor, x, node, budget, false, w.spent)
 		if err != nil {
 			return nil, err
 		}
-		if !answered {
-			if err := r.silent(ctx, spec, node, w); err != nil {
+		if !got.answered() {
+			if err := r.unheard(ctx, spec, node, got, w); err != nil {
 				return nil, err
 			}
 			continue
@@ -763,7 +774,14 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 	if w.fallback != nil {
 		return w.fallback.value, w.fallback.err
 	}
-	return nil, &ErrUnserved{Detail: strings.Join(w.reasons, "; "), NodeSilent: w.silent}
+	// WHO WAS ASKED AND WHAT EACH SAID GOES TO THE LOG HERE, the one place
+	// that knows it: every reader of the refusal tells its caller in fixed
+	// words (internal/agent/builtin's Condition), because the detail names
+	// nodes and their copies' faults, and a model's prompt or a person's
+	// screen can act on neither.
+	detail := strings.Join(w.reasons, "; ")
+	log.WarnContext(ctx, "estate_unserved", "op", spec.name, "detail", detail)
+	return nil, &ErrUnserved{Detail: detail, NodeSilent: w.silent}
 }
 
 // lastResort asks the nodes the walk passed over as worse ones to ask, telling
@@ -789,13 +807,13 @@ func (r *Router) lastResort(ctx context.Context, spec *opSpec, actor *Actor, x e
 			}
 			continue
 		}
-		rep, answered, askErr := r.askFor(ctx, spec, actor, x, node, budget, true, w.spent)
+		rep, got, askErr := r.askFor(ctx, spec, actor, x, node, budget, true, w.spent)
 		if askErr != nil {
 			return nil, true, askErr
 		}
-		if !answered {
-			if silentErr := r.silent(ctx, spec, node, w); silentErr != nil {
-				return nil, true, silentErr
+		if !got.answered() {
+			if unheardErr := r.unheard(ctx, spec, node, got, w); unheardErr != nil {
+				return nil, true, unheardErr
 			}
 			continue
 		}
@@ -884,7 +902,7 @@ func refusedHere(spec *opSpec, err error) bool {
 // generation its log abandoned. err is set only where the request could not be
 // made at all.
 func (r *Router) askFor(ctx context.Context, spec *opSpec, actor *Actor, x exchange,
-	node string, budget time.Duration, acceptLagging bool, spent statelog.Spent) (reply, bool, error) {
+	node string, budget time.Duration, acceptLagging bool, spent statelog.Spent) (reply, heard, error) {
 
 	floors := r.floorsFor(spec)
 	req := request{
@@ -894,29 +912,65 @@ func (r *Router) askFor(ctx context.Context, spec *opSpec, actor *Actor, x excha
 	if !spent.IsZero() {
 		req.Spent = &spent
 	}
-	rep, answered, err := r.ask(ctx, node, spec.lane.subject(node), req, budget, r.wholeAttempt(spec))
+	rep, got, err := r.ask(ctx, node, spec.lane.subject(node), req, budget, r.wholeAttempt(spec))
 	if err != nil {
-		return reply{}, false, fmt.Errorf("estate: %s: %w", spec.name, err)
+		return reply{}, got, fmt.Errorf("estate: %s: %w", spec.name, err)
 	}
-	if answered {
+	if got.answered() {
 		r.session.Forget(named(floors, rep.Obsolete)...)
 		x.record(rep)
 	}
-	return rep, answered, nil
+	return rep, got, nil
 }
 
-// silent is what a node that did not answer costs the walk: nothing more for
-// a class that may be repeated, the request itself for a once-write — which
-// that node may have run — and the caller's own ending.
-func (r *Router) silent(ctx context.Context, spec *opSpec, node string, w *walk) error {
+// heard is what came back from one node: nothing at all, a reply this node may
+// believe, or one it may not — whose reason is the string.
+type heard struct {
+	// replied is whether anything came back.
+	replied bool
+
+	// unbelieved is why what came back is not believed, empty for a reply
+	// that verified and answers this request ([Envelopes.openReply]).
+	unbelieved string
+}
+
+// answered reports a reply this node believes.
+func (h heard) answered() bool { return h.replied && h.unbelieved == "" }
+
+// unheard is what a node that gave no reply this node believes costs the walk:
+// nothing more for a class that may be repeated, the request itself for a
+// once-write — which that node may have run, whatever it said or did not say
+// — and the caller's own ending.
+//
+// A REPLY THAT IS NOT BELIEVED IS NO ANSWER, never an answer of "did not run":
+// a refusal the fleet signed for another request is exactly what somebody
+// would replay to make a once-write run twice. But the node that sent it is
+// not SILENT — it is up, and its presence lease says so — so it is not
+// suspected, which would only move it down the order for something its key
+// configuration, not its health, explains. What the walk records of it is
+// what it records of a silent node ([walk.silent]): the node may have run the
+// operation, so a walk that ends unserved does not say that nothing ran it.
+func (r *Router) unheard(ctx context.Context, spec *opSpec, node string, h heard, w *walk) error {
+	if h.replied {
+		log.WarnContext(ctx, "estate_reply_refused", "node", node, "op", spec.name,
+			"detail", h.unbelieved)
+	}
 	if spec.class == opOnceWrite {
+		if h.replied {
+			return fmt.Errorf("%w (%s, asked of %s: %s)", ErrOutcomeUnknown, spec.name,
+				node, h.unbelieved)
+		}
 		return fmt.Errorf("%w (%s, asked of %s)", ErrOutcomeUnknown, spec.name, node)
 	}
 	if ctx.Err() != nil {
 		return fmt.Errorf("estate: %s: %w", spec.name, ctx.Err())
 	}
-	w.note("%s: no answer", node)
 	w.silent = true
+	if h.replied {
+		w.note("%s: %s", node, h.unbelieved)
+		return nil
+	}
+	w.note("%s: no answer", node)
 	return nil
 }
 
@@ -1062,10 +1116,13 @@ func (r *Router) floorsFor(spec *opSpec) []statelog.Position {
 	return r.session.Floors([]string{spec.floorStream})
 }
 
-// ask sends one request to one node, on the subject of the lane its operation
-// is answered on ([opSpec.lane]), waiting budget ([Router.budgetFor]). answered
-// is false for a node that said nothing, and err is set only where the request
-// could not be made at all, which no other node would fare better with.
+// ask sends one request to one node, signed and bound to an id of its own, on
+// the subject of the lane its operation is answered on ([opSpec.lane]),
+// waiting budget ([Router.budgetFor]). heard says whether anything came back
+// and whether it is believed: one whose reply does not verify, or answers
+// another request, is heard and not believed. err is set only where the
+// request could not be made at all, which no other node would fare better
+// with, or where the fleet signed a reply this build cannot decode.
 //
 // A NODE THAT SAID NOTHING IS SUSPECTED — asked last for [suspectFor] and
 // reported to the placement — only where its silence is evidence it is gone
@@ -1081,37 +1138,40 @@ func (r *Router) floorsFor(spec *opSpec) []statelog.Position {
 // last by every request this router made for half a minute — and for a keyed
 // operation that sends every repository it commits to the runner-up, whose
 // committer then contends with it on the repository's subject — and dropped
-// from the placement's answer.
+// from the placement's answer. A node whose reply is not believed is not
+// suspected either: it is up, and its key configuration rather than its
+// health explains the reply ([Router.unheard]).
 func (r *Router) ask(ctx context.Context, node, subject string, req request,
-	budget, whole time.Duration) (reply, bool, error) {
+	budget, whole time.Duration) (reply, heard, error) {
 
 	attempt, cancel := attemptContext(ctx, budget)
 	defer cancel()
+	req.ID = signedask.NewID()
 	req.Deadline = deadlineOf(attempt)
-	raw, err := json.Marshal(req)
+	sealed, err := r.env.sealRequest(req)
 	if err != nil {
-		return reply{}, false, fmt.Errorf("encode the request: %w", err)
+		return reply{}, heard{}, err
 	}
 	sent := r.now()
-	replies, err := r.queue.Ask(attempt, subject, raw, 1)
+	replies, err := r.queue.Ask(attempt, subject, sealed, 1)
 	if err != nil {
 		// THE ASK COULD NOT BE MADE AT ALL — a queue that is not live,
 		// a request over the size limit.
-		return reply{}, false, err
+		return reply{}, heard{}, err
 	}
 	if len(replies) == 0 {
 		if attempt.Err() == nil || errors.Is(context.Cause(attempt), errAttemptSpent) ||
 			r.now().Sub(sent) >= whole {
 			r.markSuspect(node)
 		}
-		return reply{}, false, nil
+		return reply{}, heard{}, nil
 	}
-	var rep reply
-	if err := json.Unmarshal(replies[0], &rep); err != nil {
-		return reply{}, false, fmt.Errorf("%s answered something this build cannot decode: %w",
+	rep, why, err := r.env.openReply(replies[0], req.ID)
+	if err != nil {
+		return reply{}, heard{}, fmt.Errorf("%s answered something this build cannot decode: %w",
 			node, err)
 	}
-	return rep, true, nil
+	return rep, heard{replied: true, unbelieved: why}, nil
 }
 
 // order is the order the data nodes are asked in for spec, an operation any
@@ -1129,7 +1189,7 @@ func (r *Router) ask(ctx context.Context, node, subject string, req request,
 //
 // A node is sticky for the reason its applier is the one most likely to have
 // this node's writes, and each domain has its own applier — and since a fault
-// takes only its own domain's copy out of service (ADR-0031), a node can serve
+// takes only its own domain's copy out of service (ADR-0045), a node can serve
 // one domain and not another. One sticky node for every domain made a router
 // on a node without data, between a peer whose tracker copy was out and one
 // whose knowledge base was, CHASE ITS TAIL: a tracker call asked the first,
@@ -1294,7 +1354,7 @@ func (r *Router) markSuspect(node string) {
 }
 
 // markOutOfService asks node last for [suspectFor] for the operations that read
-// copies: one of its copies of them is out of service (ADR-0031), and every
+// copies: one of its copies of them is out of service (ADR-0045), and every
 // other place it holds stays — so does the node, which answered.
 func (r *Router) markOutOfService(node, copies string) {
 	r.mu.Lock()
@@ -1439,7 +1499,7 @@ func findResults(v reflect.Value, out []statelog.Result) []statelog.Result {
 // data, or one whose copy of a domain that gates seats is out of service
 // ([SeatCopy]) — it is the first data node that answers, and that answer is
 // trusted for [admissionTrust]. A wrong copy of any other domain is not the
-// seat's copy, and admission stays local over it (ADR-0031).
+// seat's copy, and admission stays local over it (ADR-0045).
 func (r *Router) Serves(ctx context.Context) (tracker, pages bool, err error) {
 	if r.local != nil {
 		if b, ok := r.local.For(ctx, SeatCopy); ok {

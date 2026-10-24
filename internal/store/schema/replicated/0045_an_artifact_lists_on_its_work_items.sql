@@ -1,0 +1,28 @@
+-- An artifact lists on the work items it was made for.
+--
+-- Every artifacts record stamps the tracker item its write was charged to
+-- (`artifacts.Authority.WorkItem`): a seat's turn on a work item, or a person
+-- publishing from that item's own panel. The history row of every record keeps
+-- it in `work_item`, and that row is how a work item's Artifacts panel finds
+-- the artifacts made for it: the artifacts listing narrowed to one work item
+-- (`artifactsdomain.ListQuery.WorkItem`) is an EXISTS over these rows.
+--
+-- WHO HAS TO AGREE ON IT: every node, identically. It is an index over the
+-- artifacts log's own replicated rows, which the applier alone writes.
+--
+-- # A plain index, not a partial one
+--
+-- The listing asks `WHERE work_item = ?` with a BOUND value, which a partial
+-- index (`WHERE work_item != ''`) cannot serve: a bound parameter implies
+-- nothing about being non-empty, the reason the identity estate's lookups are
+-- plain. The artifact id rides beside the key so the probe for one artifact
+-- reads the index alone.
+--
+-- # The link lasts as long as its history row
+--
+-- History is kept `artifacts.HistoryRetention` (365 days), pruned by the
+-- applier from broker time, so an artifact last written for a work item more
+-- than a year ago is no longer listed on it. That is the history's own term,
+-- and a second record of the link would be a second retention rule for one
+-- fact.
+CREATE INDEX artifact_history_work_item_idx ON artifact_history (work_item, artifact_id);

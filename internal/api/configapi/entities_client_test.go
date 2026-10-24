@@ -12,11 +12,11 @@ import (
 // against the collections `config_entities` will actually answer for.
 //
 // THE FAILURE IS A SCREEN THAT ASKS FOR NOTHING. A kind the client spells its
-// own way — `seats` for `roles`, `mcp_servers` for `mcp-servers` — is a
-// bad-params refusal on every read, rendered as "the query failed" under a tab
-// a reader opened on purpose. Nothing else in the tree compares the two, and
-// the query went un-asked for long enough that the drift would have been
-// invisible either way.
+// own way — `providers` for `llm-providers`, `mcp_servers` for `mcp-servers`
+// — is a bad-params refusal on every read, rendered as "the query failed"
+// under a tab a reader opened on purpose. Nothing else in the tree compares
+// the two, and the query went un-asked for long enough that the drift would
+// have been invisible either way.
 //
 // The client list may be a SUBSET: a collection it chooses not to offer is a
 // product decision. What it may never contain is a name the engine does not

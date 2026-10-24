@@ -45,7 +45,7 @@ func TestApplyCoversAHandlerThatThoughtNothingAboutHeaders(t *testing.T) {
 		}, pagepolicy.Dashboard},
 	} {
 		rec := httptest.NewRecorder()
-		pagepolicy.Apply(tc.handler).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+		pagepolicy.Apply(tc.handler, false).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 		if got := rec.Header().Get("Content-Security-Policy"); got != tc.want {
 			t.Errorf("%s: policy = %q, want %q", name, got, tc.want)
 		}
@@ -66,23 +66,29 @@ func TestTheDashboardPolicyLetsTheManifestFormReachACodeHost(t *testing.T) {
 		directives[name] = value
 	}
 	for name, want := range map[string]string{
-		"default-src":     "'self'",
-		"script-src":      "'self'",
-		"style-src":       "'self'",
-		"img-src":         "'self' data:",
+		"default-src": "'self'",
+		"script-src":  "'self'",
+		"style-src":   "'self'",
+		// blob: is the object URL the dashboard makes of a native deck's
+		// image, which only script on this origin can mint.
+		"img-src":         "'self' data: blob:",
 		"font-src":        "'self'",
 		"connect-src":     "'self'",
 		"object-src":      "'none'",
 		"base-uri":        "'none'",
 		"frame-ancestors": "'none'",
 		"form-action":     "'self' https:",
+		// TRUSTED TYPES, enforced with no policy: the dashboard reaches no
+		// markup or script sink (dashboard/src/app/trustedTypes.test.ts).
+		"require-trusted-types-for": "'script'",
+		"trusted-types":             "'none'",
 	} {
 		if got := directives[name]; got != want {
 			t.Errorf("%s = %q, want %q", name, got, want)
 		}
 	}
-	if len(directives) != 10 {
-		t.Errorf("the dashboard policy has %d directives, want exactly the ten above: %s",
+	if len(directives) != 12 {
+		t.Errorf("the dashboard policy has %d directives, want exactly the twelve above: %s",
 			len(directives), pagepolicy.Dashboard)
 	}
 }
@@ -176,5 +182,40 @@ func TestHashIsTheSourceExpression(t *testing.T) {
 	want := "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
 	if got := pagepolicy.Hash("body{}"); got != want {
 		t.Errorf("Hash = %s, want %s", got, want)
+	}
+}
+
+// HSTS FOLLOWS THE DEPLOYMENT'S OWN SCHEME, not the request's.
+//
+// The engine ordinarily sits behind a TLS-terminating proxy, so the request it
+// receives is plain http on a loopback socket: a check on `r.TLS` or on the
+// bind address would withhold the header from exactly the deployments that
+// need it. And an http deployment must not send it at all — a browser that
+// accepted one would refuse to reach this engine again for a year, over the
+// only scheme it is served on.
+func TestStrictTransportSecurityFollowsTheDeployment(t *testing.T) {
+	t.Parallel()
+	get := func(secure bool) string {
+		rec := httptest.NewRecorder()
+		pagepolicy.Apply(http.NotFoundHandler(), secure).
+			ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+		return rec.Header().Get("Strict-Transport-Security")
+	}
+	if got := get(false); got != "" {
+		t.Errorf("an http deployment sent %q, which would make a browser refuse "+
+			"to reach it again over the only scheme it serves", got)
+	}
+	if got := get(true); got != pagepolicy.HSTS {
+		t.Errorf("an https deployment sent %q, want %q", got, pagepolicy.HSTS)
+	}
+	// AND IT COMMITS NO DOMAIN BUT THIS ONE. `includeSubDomains` would
+	// bind every other name under the parent to https for a year,
+	// including ones somebody else serves; `preload` is a submission to a
+	// list shipped inside browsers and is close to irreversible.
+	for _, directive := range []string{"includeSubDomains", "preload"} {
+		if strings.Contains(pagepolicy.HSTS, directive) {
+			t.Errorf("HSTS carries %s, which commits domains this engine does "+
+				"not own and cannot undo", directive)
+		}
 	}
 }

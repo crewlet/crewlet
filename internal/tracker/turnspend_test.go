@@ -227,7 +227,7 @@ func TestATurnOnAPurgedTaskIsReadPastNotFatal(t *testing.T) {
 
 	reason, gated, err := tracker.NewGates(r.db.Reader()).GatedAt(t.Context(),
 		statelog.Subject{Kind: string(tracker.KindTurn), ID: "t-1"}, "node-a",
-		"turn/late", turn.Position)
+		"turn/late", turn.Position, nil)
 	if err != nil {
 		t.Fatalf("GatedAt: %v", err)
 	}

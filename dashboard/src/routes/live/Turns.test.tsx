@@ -118,7 +118,7 @@ function mount(turns: TurnRow[], agents: unknown[] = []) {
   const store = new Store();
   store.applyHealth(healthFrame());
   store.applyOrg(withDerived({ roles: [{ name: "CEO", handle: "ceo" }] }));
-  if (agents.length) store.applyAgents(agents);
+  if (agents.length) store.applySeats(agents);
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
     Promise.resolve(
@@ -162,7 +162,16 @@ test("a parked turn is marked parked, and an open one running or not settled by 
       row("t-live", "the running one", {}),
       row("t-dead", "the stopped one", {}),
     ],
-    [{ role: "CEO", activity: "working", turn: { turn_id: "t-live", stage: "phase" } }],
+    [
+      {
+        id: "ceo",
+        agent_id: "ceo",
+        handle: "ceo",
+        role: "CEO",
+        activity: "working",
+        turn: { turn_id: "t-live", stage: "phase" },
+      },
+    ],
   );
   await screen.findByText("the parked one");
 
@@ -226,20 +235,20 @@ test("a row draws the seat's badge and its item key as one token", async () => {
   ]);
   await screen.findByText("reviewed the work");
   const r = rowOf("reviewed the work");
-  expect(r.querySelector(".cell-seat .crewlet-avatar")).not.toBeNull();
+  expect(r.querySelector(".crewlet-table-cell__entity .crewlet-avatar")).not.toBeNull();
   const key = [...r.querySelectorAll("span")].find((s) => s.textContent === "ENG-22");
   expect(key?.classList.contains("item-key")).toBe(true);
 });
 
-// THE CHART'S HINT GIVES WAY BEFORE ITS TITLE. It sat in the header's
-// actions, which never shrink, so on a phone the title read "W" beside a
-// whole sentence; the subtitle is the part the kit lets give way first.
-test("the chart's hint is in the header's subtitle, not its actions", async () => {
+// THE CHART'S SUBTITLE IS ITS COUNT AND ITS SPAN. The hint that followed
+// them ("one bar per day, click one to narrow the window") is gone, from the
+// subtitle and from the header's actions alike.
+test("the chart's subtitle is its count and span, with no hint", async () => {
   const { container } = mount([row("t-1", "one turn", { complete: true })]);
   await screen.findByText("one turn");
   const subtitle = container.querySelector(".crewlet-card__subtitle");
-  expect(subtitle?.textContent).toMatch(/click one to narrow the window/);
-  expect(container.querySelector(".crewlet-card__header-actions")?.textContent ?? "").not.toMatch(
+  expect(subtitle?.textContent).toBe("1 turn ended over 7 days");
+  expect(container.querySelector(".crewlet-card__header")?.textContent ?? "").not.toMatch(
     /narrow the window/,
   );
 });
@@ -311,9 +320,9 @@ test("a node missing from the answer is named above the list", async () => {
     event_series: series(1),
   });
   await screen.findByText("one turn");
-  const note = await screen.findByText(/is missing one node/);
+  const note = await screen.findByText(/is missing 1 node\./);
   expect(note.closest(".coverage-note")?.textContent).toContain(
-    "node-b — no answer inside the fleet read budget",
+    "node-b: no answer inside the fleet read budget",
   );
   expect(note.closest(".coverage-note")?.textContent).not.toContain("node-a");
 });
@@ -434,13 +443,18 @@ test("the seat menu offers every agent in every unit, by name", async () => {
     ],
     units: [
       {
+        id: "executives",
         name: "Executives",
         roles: [
           { name: "Agent CEO", handle: "agent-ceo", kind: "agent" },
           { name: "Agent CTO", handle: "agent-cto", kind: "agent" },
         ],
         children: [
-          { name: "Core", roles: [{ name: "Agent SWE", handle: "agent-swe", kind: "agent" }] },
+          {
+            id: "core",
+            name: "Core",
+            roles: [{ name: "Agent SWE", handle: "agent-swe", kind: "agent" }],
+          },
         ],
       },
     ],

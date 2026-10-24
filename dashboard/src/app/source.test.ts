@@ -24,7 +24,7 @@ import {
 } from "../test/source.ts";
 import { ACTIONS } from "~/contract/actions.ts";
 import { AGENT_TABS } from "~/routes/agents/seat/profile.ts";
-import { WORKSPACES } from "./nav.ts";
+import { FRAMELESS, WORKSPACES } from "./nav.ts";
 import { resolves } from "./routes.ts";
 
 /** Every source file of the given extensions, excluding the suites. */
@@ -227,7 +227,7 @@ const LINK_LITERAL =
 test("the link pattern reads every spelling a route literal is written in", () => {
   const heads = (line: string) => [...line.matchAll(LINK_LITERAL)].map((m) => m[1]);
   expect(heads('<a href={href(["live", "turns"])}>')).toEqual(["live"]);
-  expect(heads('nav.to(["agents", "roster"])')).toEqual(["agents"]);
+  expect(heads('nav.to(["company", "org", "roster"])')).toEqual(["company"]);
   expect(heads('  path: ["settings", "config"],')).toEqual(["settings"]);
   expect(heads('const here = useIsCurrent(["events", record.eventId]);')).toEqual(["events"]);
   expect(heads('samePath(route.path, ["events", id])')).toEqual(["events"]);
@@ -236,7 +236,9 @@ test("the link pattern reads every spelling a route literal is written in", () =
 
 /** Every link in one module's text that reaches no screen, as `line — #/path`. */
 function deadLinks(text: string): string[] {
-  const owned = new Set(WORKSPACES.map((w) => w.path[0]));
+  // A SIGN-IN SCREEN IS OUTSIDE THE FRAME, so no workspace owns it — and it is
+  // still a screen a link may name.
+  const owned = new Set<string>([...WORKSPACES.map((w) => w.path[0] ?? ""), ...FRAMELESS]);
   const literal = new RegExp(LINK_LITERAL.source, LINK_LITERAL.flags);
   const whole = /^(?:\s*,\s*"[^"]*")*\s*,?\s*$/;
   const dead: string[] = [];
@@ -277,8 +279,9 @@ test("every link names a segment a workspace owns, and a whole literal path reso
  * A LINK TO A HEAD NO ROUTE OWNS IS DEAD, AND THE RULE SAYS SO.
  *
  * Every workspace lives under one head: the event log under `#/live/events`,
- * spend under `#/spend`, the fleet, the runs, the configuration and the seats
- * under Settings, Live and Agents, and pages under `#/knowledge/pages`. A link
+ * spend under `#/settings/spend`, the fleet, the runs, the configuration and
+ * the seats under Settings, Live and Company, and pages under
+ * `#/knowledge/pages`. A link
  * written against a plausible head beside one of those — `#/activity`,
  * `#/cost`, `#/pages` — resolves to nothing, and the rule above is only as good
  * as its reading of that — so each such head is fed through it here, beside the
@@ -289,14 +292,14 @@ test("every link names a segment a workspace owns, and a whole literal path reso
 test("a link to a head no route owns is reported, and the live address is not", () => {
   const moves: [dead: string, current: string][] = [
     ['href(["activity"])', 'href(["live", "events"])'],
-    ['href(["cost"])', 'href(["spend"])'],
+    ['href(["cost"])', 'href(["settings", "spend"])'],
     ['nav.to(["fleet"])', 'nav.to(["settings", "nodes"])'],
     ['nav.to(["runs"])', 'nav.to(["live", "runs"])'],
     ['  path: ["config"],', '  path: ["settings", "config"],'],
-    ['href(["seats", handle])', 'href(["agents", "seats", handle])'],
+    ['href(["seats", handle])', 'href(["company", "org", "seats", handle])'],
     ['href(["pages", id])', 'href(["knowledge", "pages", id])'],
-    ['href(["company"])', 'href(["home"])'],
-    ['href(["admin"])', 'href(["settings"])'],
+    ['href(["agents"])', 'href(["company", "org"])'],
+    ['href(["admin"])', 'href(["settings", "models"])'],
   ];
   for (const [dead, current] of moves) {
     expect(deadLinks(dead), dead).toHaveLength(1);
@@ -414,7 +417,7 @@ test("the document-pointer exemption fires, and spares no real link", () => {
   expect(documentPointer('      path: ["settings", "config"],')).toBe(false);
   expect(documentPointer('        { label: "Work", path: ["work"] },')).toBe(false);
   expect(documentPointer('    path: ["live", "turns"],')).toBe(false);
-  expect(documentPointer('      href(["agents", "seats", handle])')).toBe(false);
+  expect(documentPointer('      href(["company", "org", "seats", handle])')).toBe(false);
 });
 
 test("something in the tree is actually exempted, so the rule is not dead weight", () => {
@@ -511,11 +514,74 @@ test("no stat tile builds its caption by joining a list", () => {
   ).toBeGreaterThan(30);
 });
 
+/**
+ * A MENU'S GLYPH IS ITS ICON, NEVER PART OF ITS LABEL.
+ *
+ * `Menu` hands `icon` to its button as the leading icon, which sits a gap away
+ * from the word. A glyph written into `trigger` beside the word is label text
+ * instead, drawn flush against it: the knowledge outline's "+Create", the
+ * search page's "+Filter" and its ranking picker's chevron all shipped that
+ * way. A glyph after the words is `trailingIcon`.
+ */
+test("no menu trigger carries its glyph inside the label", () => {
+  const offenders: string[] = [];
+  let seen = 0;
+  for (const { path, text } of sources()) {
+    for (const el of elements(text, "Menu")) {
+      seen++;
+      if (!/trigger=\{\s*<>[\s\S]*?Glyph[\s\S]*?<\/>\s*\}/.test(el.text)) continue;
+      const line = text.slice(0, el.at).split("\n").length;
+      offenders.push(`${path}:${line}`);
+    }
+  }
+  expect(
+    offenders,
+    "pass the words as `trigger` and the glyph as `icon` or `trailingIcon`",
+  ).toEqual([]);
+  // THE OTHER SIDE: a rename or a broken scan reads no menus at all.
+  expect(seen, "nothing here reads as a Menu any more: this rule covers nothing").toBeGreaterThan(
+    10,
+  );
+});
+
 /*
  * AND THE SCANNER ACTUALLY READS THE SHAPE THE RULE IS FOR. A gate that only
  * ever saw single-line props would pass a reverted multi-line ternary — which is
  * three of the four captions above.
  */
+/**
+ * A QUERYSTATE HANDED A FAILURE IS HANDED WHY.
+ *
+ * `QueryState` turns an `unauthorized` into the grant that would admit the
+ * reader, and an `unavailable` the state log will not lift into that fact —
+ * but only from the `refusal` beside the code, which `useQuery`, `useRest` and
+ * `usePaged` answer and a screen has to pass on. Twenty-nine did not, so a
+ * reader refused a seat's turns or the tool servers' status was shown the
+ * generic banner where the engine had named the grant that would admit them.
+ * Nothing else catches it: `refusal` is optional because a surface with no
+ * query behind it has none, so an omission type-checks and renders.
+ *
+ * `error={null}` is exempt, being no failure at all.
+ */
+test("every QueryState handed an error is handed its refusal", () => {
+  const offenders: string[] = [];
+  let seen = 0;
+  for (const { path, text } of sources()) {
+    for (const el of elements(text, "QueryState")) {
+      const error = /\berror=\{([^}]*)\}/.exec(el.text);
+      if (!error || error[1]!.trim() === "null") continue;
+      seen++;
+      if (/\brefusal=\{/.test(el.text)) continue;
+      const line = text.slice(0, el.at).split("\n").length;
+      offenders.push(`${path}:${line} — error={${error[1]!.trim()}}`);
+    }
+  }
+  expect(offenders, "pass the read's `refusal` beside its `error`").toEqual([]);
+  // THE OTHER SIDE: a renamed component or a broken scan makes the rule
+  // vacuous and still green.
+  expect(seen, "nothing here reads as a QueryState any more").toBeGreaterThan(40);
+});
+
 test("the element scanner reads a multi-line prop", () => {
   const src =
     '<StatCard\n  label="x"\n  sub={\n    a.length ? a.map((x) => x.n).join(", ") : "none"\n  }\n/>\n<StatCard label="y" sub="fixed" />';
@@ -540,6 +606,11 @@ test("the element scanner reads a multi-line prop", () => {
  * THIS: the field is optional by necessity — a column with a real head must not
  * repeat it — so a new glyph column type-checks, renders, and is wrong only on
  * a phone, which no suite in this tree has a viewport for.
+ *
+ * EXCEPT A COLUMN OF ROW ACTIONS, which says `action: true` instead: its cell
+ * is a button that names itself, so the card draws no name beside it — and a
+ * `label` this rule had demanded there printed the word twice, `SIGN OUT  Sign
+ * out` on every session of the Account page.
  *
  * THE SIBLINGS ARE FOUND BY INDENTATION, which is a real invariant here rather
  * than a guess: prettier is a gate (`make dashboard-lint`), so a literal's own
@@ -577,12 +648,13 @@ test("a column with no word in its head declares one", () => {
         }
       }
       if (siblings.some((line) => /^\s*label:\s*["']\S/.test(line))) continue;
+      if (siblings.some((line) => /^\s*action:\s*true,?$/.test(line))) continue;
       offenders.push(`${path}:${at + 1}`);
     }
   }
   expect(
     offenders,
-    "a glyph or empty head leaves the phone's card layout an unnamed line: add `label`",
+    "a glyph or empty head leaves the phone's card layout an unnamed line: add `label`, or `action: true` for a column of self-naming buttons",
   ).toEqual([]);
   // THE OTHER SIDE, as above: a renamed field or a broken scan makes the rule
   // vacuous and still green. Well over a hundred columns today.
@@ -933,15 +1005,15 @@ describe("every read names its question", () => {
  * and every one of those links quietly opened the wrong tab.
  *
  * Both spellings a seat link is written in are read: `href`/`nav.to` over a
- * literal `["agents", "seats", …]` path with a literal query, and a row's
- * `{ path: ["agents", "seats", …], query: { tab } }`.
+ * literal `["company", "org", "seats", …]` path with a literal query, and a row's
+ * `{ path: ["company", "org", "seats", …], query: { tab } }`.
  */
 function seatTabLinks(text: string, lang: Lang): { tab: string; at: number }[] {
   const out: { tab: string; at: number }[] = [];
   const toSeats = (node: Node | undefined): boolean => {
     if (node?.type !== "ArrayExpression") return false;
-    const [a, b] = node.elements as Node[];
-    return stringValue(a) === "agents" && stringValue(b) === "seats";
+    const [a, b, c] = node.elements as Node[];
+    return stringValue(a) === "company" && stringValue(b) === "org" && stringValue(c) === "seats";
   };
   const tabOf = (node: Node | undefined): void => {
     if (node?.type !== "ObjectExpression") return;
@@ -993,11 +1065,44 @@ test("every link to a seat names a tab its profile has", () => {
 
 test("the seat-tab reading sees both link spellings", () => {
   const read = (text: string) => seatTabLinks(text, "tsx").map((l) => l.tab);
-  expect(read('href(["agents", "seats", h], { tab: "memory" });')).toEqual(["memory"]);
-  expect(read('nav.to(["agents", "seats", r.role], { tab: "model" });')).toEqual(["model"]);
-  expect(read('const row = { path: ["agents", "seats", h], query: { tab: "cost" } };')).toEqual([
-    "cost",
-  ]);
+  expect(read('href(["company", "org", "seats", h], { tab: "memory" });')).toEqual(["memory"]);
+  expect(read('nav.to(["company", "org", "seats", r.role], { tab: "model" });')).toEqual(["model"]);
+  expect(
+    read('const row = { path: ["company", "org", "seats", h], query: { tab: "cost" } };'),
+  ).toEqual(["cost"]);
   // Another object's tab is not a seat's.
   expect(read('href(["work", key], { tab: "turns" });')).toEqual([]);
+});
+
+// THE PAGE BAR'S CONTROLS ARE ONE SIZE. Invite person, New service account
+// and Store a secret were the kit's medium buttons, 30px, in a bar whose every
+// other control is a 26px small one, so the bar changed height between
+// Settings sections. Every kit button written straight into `PageActions` says
+// `size="small"`; the product's own buttons (New task and the rest) set it
+// themselves. Mutation: drop one and this names it.
+test("every kit button in the page bar is the bar's small size", () => {
+  const KIT = new Set(["Button", "ButtonLink", "SplitButton"]);
+  const offenders: string[] = [];
+  for (const m of modules()) {
+    if (m.lang !== "tsx") continue;
+    walk(parse(m.text, m.lang), (node) => {
+      if (node.type !== "JSXElement") return;
+      const open = node.openingElement as Node;
+      if ((open.name as Node & { name?: string }).name !== "PageActions") return;
+      walk(node, (inner) => {
+        if (inner.type !== "JSXOpeningElement") return;
+        const name = (inner.name as Node & { name?: string }).name ?? "";
+        if (!KIT.has(name)) return;
+        const size = (inner.attributes as Node[]).find(
+          (a) => (a.name as (Node & { name?: string }) | undefined)?.name === "size",
+        );
+        const value = (size?.value as (Node & { value?: unknown }) | undefined)?.value;
+        if (value !== "small") {
+          offenders.push(`${m.path}:${lineOf(m.text)(inner.start)} ${name}`);
+        }
+      });
+      return false;
+    });
+  }
+  expect(offenders).toEqual([]);
 });

@@ -136,6 +136,10 @@ func TestEveryZeroFenceRefusalNamesItsReason(t *testing.T) {
 			},
 			want: statelog.ReasonEvicted,
 		},
+		// NOT AN EVICTION: the third value blocks, under its own reason,
+		// because an eviction is permanent until an operator readmits the
+		// node and an unread one clears when the store is read again — the
+		// two send a caller opposite ways.
 		"an eviction that cannot be read": {
 			build: func(t *testing.T) *pages.Fence {
 				node, db := openFenceNode(t)
@@ -144,7 +148,7 @@ func TestEveryZeroFenceRefusalNamesItsReason(t *testing.T) {
 				}
 				return wired(db, floor, ends(40, 100))
 			},
-			want: statelog.ReasonEvicted, cause: store.ErrNoEstate,
+			want: statelog.ReasonEvictionUnknown, cause: store.ErrNoEstate,
 		},
 		"a floor that cannot be read": {
 			build: func(t *testing.T) *pages.Fence {

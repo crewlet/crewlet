@@ -166,3 +166,67 @@ func TestObjectsStatusNamesEachStateThatIsNotAReport(t *testing.T) {
 		}
 	}
 }
+
+// serveMigrate answers POST /objects/migrate with report, recording the
+// query each call carried.
+func serveMigrate(t *testing.T, report string, asked *[]string) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /objects/migrate", func(w http.ResponseWriter, r *http.Request) {
+		*asked = append(*asked, r.URL.RawQuery)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(report))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// MIGRATE NAMES THE TARGET ON THE ENGINE'S HOST AND SAYS WHAT HAPPENED: what
+// was copied, what the old store could not give back, and what to do next.
+func TestObjectsMigrateReportsThePassAndTheNextStep(t *testing.T) {
+	t.Parallel()
+	var asked []string
+	srv := serveMigrate(t, `{"from":"nats","to":"s3:https://s3.example.com/files/acme/",
+		"final":true,"sealed":true,"moved":true,"direct_upload":"available",
+		"next":"Give every node the target file's store.objects block.",
+		"pass":{"referenced":5,"present":2,"copied":2,"copied_bytes":2048,"unreadable":1,
+		"complete":true,"unreadable_files":[{"object":"k","named_by":"ENG/gone.md"}]}}`, &asked)
+	out, _, err := cli(t, "objects", "migrate", "-to", "s3", "-target", "/etc/crewlet/s3.yaml",
+		"-final", bootstrapForURL(t, srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) != 1 || asked[0] != "target=%2Fetc%2Fcrewlet%2Fs3.yaml&final=true" {
+		t.Fatalf("the node was asked %v", asked)
+	}
+	for _, want := range []string{"the fleet's own NATS bucket", "an S3 bucket (https://s3.example.com/files/acme/)",
+		"5 (2 already in the bucket, 2 copied", "ENG/gone.md (missing", "now keeps its files in the bucket",
+		"sealed", "Give every node"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("migrate does not say %q:\n%s", want, out)
+		}
+	}
+}
+
+// A TARGET THIS SHELL WOULD READ, OR NO DESTINATION AT ALL, IS REFUSED
+// before the node is asked.
+func TestObjectsMigrateRefusesWhatTheNodeCouldNotRead(t *testing.T) {
+	t.Parallel()
+	var asked []string
+	srv := serveMigrate(t, `{}`, &asked)
+	for name, args := range map[string][]string{
+		"no -to":         {"-target", "/etc/crewlet/s3.yaml"},
+		"another store":  {"-to", "gcs", "-target", "/etc/crewlet/s3.yaml"},
+		"no target":      {"-to", "s3"},
+		"a relative one": {"-to", "s3", "-target", "s3.yaml"},
+	} {
+		argv := append([]string{"objects", "migrate"}, args...)
+		if _, _, err := cli(t, append(argv, bootstrapForURL(t, srv.URL))...); err == nil {
+			t.Errorf("%s: migrate ran", name)
+		}
+	}
+	if len(asked) != 0 {
+		t.Fatalf("refused commands reached the node: %v", asked)
+	}
+}

@@ -149,9 +149,11 @@ func TestNonTaskWakesDoNotShareOneConversation(t *testing.T) {
 			continue
 		}
 		wake := objectWake(kind, "")
-		// The person wake carries a task key and keys on it, which is
-		// right: a priorities write IS about that task.
+		// The person wake carries a task and keys on it, which is right:
+		// a priorities write IS about that task. Without one it is about
+		// nothing but the person's own list.
 		delete(wake.Metadata, tracker.MetaTaskKey)
+		delete(wake.Metadata, tracker.MetaTaskID)
 		key := tracker.Prompt{}.PartitionKey(wake.Metadata, "")
 		if key == "" {
 			t.Errorf("%q has no partition key", kind)
@@ -159,9 +161,9 @@ func TestNonTaskWakesDoNotShareOneConversation(t *testing.T) {
 		}
 		// THE OBJECT IS BOTH KEYS: a task (or the object a non-task wake
 		// names) is one thing that is both the merge unit and the durable
-		// thread, so the identity delegates. A divergence would break the
-		// alignment the key is chosen for — a chat thread about ENG-42 and
-		// the tracker activity on it landing in one ledger.
+		// thread, so the identity delegates. A divergence would let one
+		// coalesced trigger's ledger entry depend on which constituent
+		// sorted first.
 		if got := (tracker.Prompt{}).ConversationIdentity(wake.Metadata, ""); got != key {
 			t.Errorf("%q: identity %q diverged from the partition key %q", kind, got, key)
 		}
@@ -250,7 +252,7 @@ func TestWritingSomebodyElsesPrioritiesWakesThem(t *testing.T) {
 
 	lead := r.writer.As("lead", tracker.AuthorHuman, tracker.Provenance{})
 	if _, err := lead.WritePriorities(t.Context(), "op-prio", "alice",
-		[]string{task.ID}, nil, tracker.PersonAuthority{Lead: true}); err != nil {
+		[]string{task.ID}, nil, tracker.PersonAuthority{Authorized: true}); err != nil {
 
 		t.Fatalf("write alice's priorities: %v", err)
 	}
@@ -282,35 +284,35 @@ func TestWritingSomebodyElsesPrioritiesWakesThem(t *testing.T) {
 	}
 }
 
-// A PERSON REORDERING A REPORT'S QUEUE THROUGH THEIR OWN TOKEN IS NAMED AS
-// THEMSELVES — on the stamp the report reads and in the wake the report's seat
-// is given — while the history row still names the credential.
+// A PERSON REORDERING A REPORT'S QUEUE IS NAMED AS THEIR SEAT — on the stamp
+// the report reads, in the wake the report's seat is given and on the history
+// row — and the credential they held rides beside it.
 //
-// The dashboard writes as the person its token is bound to (ADR-0024), so the
-// writer's ACTOR is the token and its SEAT is the person. Keyed on the actor,
-// the stamp said "founder put this order in place" and the wake "founder put
-// ENG-1 at position 1": a token's label, which no screen resolves to a seat
-// and no seat can ask why. Attribution is the audit trail's question and stays
-// the credential; who DECIDED the order is the queue's, and it is a person.
-func TestAReorderThroughABoundTokenNamesThePersonNotTheToken(t *testing.T) {
+// A person acts AS the seat the identity directory binds them to
+// ([iam.ActorFor]): the actor is the seat, of kind human, and the credential
+// is the operator id. So there is one name for who decided the order, the one
+// every screen resolves, and the audit trail still says which credential made
+// the change. A writer whose actor was the credential named a token's label on
+// the stamp — a secret's name rather than anybody the report knows.
+func TestAReorderByAPersonNamesTheirSeatBesideTheirCredential(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	task := r.createTask("The thing to do first")
 
-	token := r.writer.As("founder", tracker.AuthorOperator, tracker.Provenance{
-		OperatorID: "founder", Seat: "jane-founder",
+	person := r.writer.As("jane-founder", tracker.AuthorHuman, tracker.Provenance{
+		OperatorID: "pat:cred-1",
 	})
-	if _, err := token.WritePriorities(t.Context(), "op-bound", "alice",
-		[]string{task.ID}, nil, tracker.PersonAuthority{Person: true}); err != nil {
-		t.Fatalf("a bound person reordering alice's queue: %v", err)
+	if _, err := person.WritePriorities(t.Context(), "op-person", "alice",
+		[]string{task.ID}, nil, tracker.PersonAuthority{Authorized: true}); err != nil {
+		t.Fatalf("a person reordering alice's queue: %v", err)
 	}
 	wake := r.lastWake()
 	if wake == nil {
 		t.Fatal("somebody else set alice's queue and she was not told")
 	}
 	if wake.Snapshot.PrioritisedBy != "jane-founder" {
-		t.Errorf("the wake says the order came from %q, want the person "+
-			"jane-founder rather than her credential", wake.Snapshot.PrioritisedBy)
+		t.Errorf("the wake says the order came from %q, want the seat "+
+			"jane-founder", wake.Snapshot.PrioritisedBy)
 	}
 	if !strings.HasPrefix(wake.Excerpt, "jane-founder put ") {
 		t.Errorf("the excerpt alice's seat reads is %q, want it to name "+
@@ -318,15 +320,15 @@ func TestAReorderThroughABoundTokenNamesThePersonNotTheToken(t *testing.T) {
 	}
 	r.drain()
 	if got := r.person("alice").PrioritiesSetBy; got != "jane-founder" {
-		t.Errorf("the stamp on alice's queue says %q set it, want jane-founder "+
-			"— a token's id is nobody alice knows", got)
+		t.Errorf("the stamp on alice's queue says %q set it, want jane-founder", got)
 	}
-	// AND THE AUDIT TRAIL IS UNCHANGED: the record is the credential's.
+	// AND THE AUDIT TRAIL NAMES THE CREDENTIAL beside the seat.
 	if got := r.strings(
-		`SELECT actor || '/' || actor_kind FROM tracker_history ORDER BY rowid DESC LIMIT 1`,
-	); len(got) != 1 || got[0] != "founder/operator" {
-		t.Fatalf("the history row is authored %v, want the credential and "+
-			"the kind that says it is not a seat", got)
+		`SELECT actor || '/' || actor_kind || '/' || operator_id
+		 FROM tracker_history ORDER BY rowid DESC LIMIT 1`,
+	); len(got) != 1 || got[0] != "jane-founder/human/pat:cred-1" {
+		t.Fatalf("the history row is authored %v, want the seat, the kind "+
+			"human and the credential", got)
 	}
 }
 
@@ -351,6 +353,46 @@ func TestWritingYourOwnPrioritiesWakesNobody(t *testing.T) {
 
 // ---- helpers ------------------------------------------------------------ //
 
+// A CHECKLIST WAKE IS ABOUT THE ITEM, NOT WHERE IT SITS OR HOW IT WAS READ.
+//
+// It compared whole items with `!=`, and an item carries its nesting as a
+// POINTER: the stored reading and a write's re-sent reading of one unchanged
+// nested item hold two addresses, so every nested item's assignee was woken by
+// any edit to the list. And an item carries its position: dragging one line
+// renumbered its neighbours and woke everybody on them — the positional diff
+// the function's own doc rules out. Only a change to the text, the done flag
+// or the holder is news to the person holding the item.
+func TestAChecklistWakeIsAboutTheItemNotItsLayout(t *testing.T) {
+	t.Parallel()
+	items := func(orderA, orderB int, doneC bool) []tracker.ChecklistItem {
+		// A FRESH POINTER PER READING, as two decodes of one document
+		// give: equal values at different addresses.
+		under := "i0"
+		return []tracker.ChecklistItem{
+			{ID: "ia", Name: "draft", Assignee: "di", Parent: &under, Order: orderA},
+			{ID: "ib", Name: "review", Assignee: "ed", Order: orderB},
+			{ID: "ic", Name: "ship", Assignee: "fa", Done: doneC},
+		}
+	}
+	task := tracker.Task{ID: "t", Key: "ENG-1", Project: "ENG",
+		Status: tracker.StatusTodo, StatusGroup: tracker.GroupNotStarted}
+	before, after := task, task
+	before.Checklists = []tracker.Checklist{{ID: "l", Items: items(1, 2, false)}}
+	// ia and ib swap places, and only ic is actually done.
+	after.Checklists = []tracker.Checklist{{ID: "l", Items: items(2, 1, true)}}
+
+	notify := tracker.Wake{Kind: tracker.ChangeChecklist, Before: before,
+		After: after}.Notify(fixedLeads{})
+	if notify == nil {
+		t.Fatal("the wake is quiet, so this case tests nothing")
+	}
+	if got := notify.Snapshot.ChecklistAssignees; !slices.Equal(got, []string{"fa"}) {
+		t.Errorf("the checklist wake reached %v, want only fa, whose item was "+
+			"done — a nested item re-read and two lines swapping places are "+
+			"news to nobody", got)
+	}
+}
+
 type fixedLeads struct{ project, unit string }
 
 func (f fixedLeads) ProjectLead(string) string { return f.project }
@@ -372,7 +414,7 @@ func (r *roundTrip) lastWake() *tracker.Notify {
 	if err != nil || !ok {
 		r.t.Fatalf("read record %d: %v", last, err)
 	}
-	record, err := tracker.Decode(payload)
+	record, err := tracker.Decode(r.open(last, payload))
 	if err != nil {
 		r.t.Fatalf("decode record %d: %v", last, err)
 	}
@@ -408,11 +450,11 @@ func TestWhoMayWriteSomebodyElsesPriorities(t *testing.T) {
 		allowed   bool
 	}{
 		"an operator": {"ops", tracker.AuthorOperator,
-			tracker.PersonAuthority{Person: true}, true},
+			tracker.PersonAuthority{Authorized: true}, true},
 		"a human": {"founder", tracker.AuthorHuman,
-			tracker.PersonAuthority{Person: true}, true},
+			tracker.PersonAuthority{Authorized: true}, true},
 		"a lead": {"lead", tracker.AuthorAgent,
-			tracker.PersonAuthority{Lead: true}, true},
+			tracker.PersonAuthority{Authorized: true}, true},
 		// A SEAT IS THE ONE PARTY THAT MAY NOT. An agent re-ordering a
 		// colleague's list is a hand-off in disguise: an Addressed wake
 		// that bypasses the guarded take and the reassignment budget.

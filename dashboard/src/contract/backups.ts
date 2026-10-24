@@ -67,9 +67,19 @@ export interface BackupRunRow {
   at: string;
   /** The node whose disk holds the copy. */
   node?: string;
-  /** The credential that asked, and the person it is bound to. */
-  operator: string;
-  actor_seat?: string;
+  /**
+   * Who asked, as every record names its author (`iam.ActorFor`): the seat a
+   * person bound to one asks as (kind `human`), or the whole login of a
+   * credential bound to none (kind `operator`).
+   */
+  actor: string;
+  /** Which of the engine's author kinds `actor` is — `human` or `operator`. */
+  actor_kind?: string;
+  /**
+   * The credential the request came through, where it names something the
+   * actor does not — a person's machine token or browser session.
+   */
+  operator_id?: string;
   dir: string;
   outcome: BackupOutcome;
   summary: string;

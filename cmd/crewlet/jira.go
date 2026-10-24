@@ -28,7 +28,7 @@ import (
 // credential authenticates as, whether every project the org names exists
 // and agrees about its lead, and whether the inbound webhook is registered.
 
-func runJiraProvision(args []string, stdout, stderr io.Writer) error {
+func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("jira provision", flag.ContinueOnError)
@@ -36,7 +36,7 @@ func runJiraProvision(args []string, stdout, stderr io.Writer) error {
 	sinks := addSinkFlags(fs)
 	publicURL := fs.String("public-url", "",
 		"this deployment's public base URL, for registering the webhook; "+
-			"defaults to integrations.public_base_url")
+			"defaults to "+publicURLDefault)
 	recreate := fs.Bool("recreate-webhook", false,
 		"delete and remake the webhook to mint a fresh secret; this "+
 			"invalidates the secret every other deployment of this company holds")
@@ -70,17 +70,13 @@ func runJiraProvision(args []string, stdout, stderr io.Writer) error {
 	}
 
 	ctx := context.Background()
-	env, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
+	env, boot, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
 	if err != nil {
 		return err
 	}
 	defer closeEnv()
 
-	resolved := config.Jira{
-		URL:     strings.TrimSpace(env.Value(cfg.URL)),
-		CloudID: strings.TrimSpace(env.Value(cfg.CloudID)),
-	}
-	base := resolved.BaseURL()
+	base := cfg.ResolvedBaseURL(env.Value)
 	if base == "" {
 		return fmt.Errorf(
 			"jira: neither integrations.jira.url (%q) nor cloud_id (%q) "+
@@ -94,6 +90,7 @@ func runJiraProvision(args []string, stdout, stderr io.Writer) error {
 	}
 	client, err := jira.NewClient(jira.ClientOptions{
 		URL: base, Email: env.Value(cfg.Email), Token: token,
+		Declared: company.Integrations.Atlassian.Declared(),
 	})
 	if err != nil {
 		return err
@@ -112,8 +109,9 @@ func runJiraProvision(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintln(stdout,
 			"-dry-run: reading the instance; no webhook will be registered.")
 	} else {
-		opts.WebhookBase = webhookBase(*publicURL, &company.Integrations, env.LookupOK)
-		sink, closeSink, openErr := sinks.open(ctx, stdout)
+		opts.WebhookBase = webhookBase(*publicURL, boot)
+		opts.WebhookBaseKey = webhookBaseKey(boot)
+		sink, closeSink, openErr := sinks.open(ctx, environ, stdout)
 		if openErr != nil {
 			return openErr
 		}

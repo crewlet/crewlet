@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +21,12 @@ import (
 )
 
 // hostCommand is one command to run on the engine host.
+//
+// Its env is the child's WHOLE environment and it is REQUIRED: [runHost]
+// refuses a nil one, because os/exec reads a nil Cmd.Env as "inherit the
+// engine's" — the keyring, the Tier A tokens and every credential the engine
+// was started with. A box's own command carries [directBox.childEnv]; a
+// command for the container runtime's CLI is built by [containerCLI.command].
 type hostCommand struct {
 	argv    []string
 	cwd     string
@@ -90,23 +96,48 @@ func wholeRunes(b []byte) []byte {
 	return b
 }
 
-// flattenEnv renders an env map as os/exec's KEY=value slice.
+// containerCLI is the container runtime's own CLI as this backend drives it:
+// the binary [ResolveContainerRuntime] picked, and the variables an operator
+// DECLARED for it in providers.sandbox.local.runtime_env, already resolved.
 //
-// Sorted, so a spawn is reproducible and a test can assert on it; nil for an
-// empty map, which is os/exec's "inherit the parent" — a distinction the
-// callers here rely on being explicit, since inheriting the ENGINE's
-// environment is exactly what the allowlist exists to prevent. Every caller
-// passes a populated map.
-func flattenEnv(env map[string]string) []string {
-	if len(env) == 0 {
-		return nil
+// A VALUE every runtime call is built from rather than a binary path each call
+// site pairs with an environment it remembers: every one of these was a
+// hostCommand with no environment at all, which os/exec filled with the
+// engine's, so the runtime's CLI — and every plugin and credential helper it
+// runs — was handed the keyring and the Tier A tokens.
+type containerCLI struct {
+	path     string
+	declared map[string]string
+}
+
+// command is one control command for the runtime's CLI — `run`, `exec`,
+// `pause`, `rm`, `ps`, `info` — its arguments following the binary.
+//
+// ITS ENVIRONMENT IS [hostbox.ContainerRuntime] WITH THE DECLARED VARIABLES
+// OVER IT. Not the engine's, for the reason no child gets that (see
+// [hostbox]); and not the fixed rule alone either, because what a runtime's
+// helpers legitimately read is not a list anybody can close — the credential
+// helper that pulls the image from a private registry wants its cloud's role,
+// profile or key file (docker-credential-ecr-login, docker-credential-gcr),
+// and a plugin its own settings — and a fixed list with no
+// way to add to it leaves an operator whose runtime needs one of those with
+// no way to say so. The declared layer wins over the fixed one, because a
+// value an operator wrote down for this CLI is a decision and the host's is a
+// default.
+//
+// The run environment a coding agent gets is NOT here: it travels as an
+// --env-file inside the box ([containerBox.envArgs]), so what this CLI holds
+// is what the runtime needs and nothing a box does. A bare `-e NAME` in
+// `local.run_args` therefore copies only a name this environment carries,
+// which is what the configuration's advisory about one says.
+func (c containerCLI) command(timeout time.Duration, args ...string) hostCommand {
+	env := hostbox.ContainerRuntime()
+	maps.Copy(env, c.declared)
+	return hostCommand{
+		argv:    append([]string{c.path}, args...),
+		env:     env,
+		timeout: timeout,
 	}
-	out := make([]string, 0, len(env))
-	for key, value := range env {
-		out = append(out, key+"="+value)
-	}
-	slices.Sort(out)
-	return out
 }
 
 // ---------------------------------------------------------------------
@@ -124,7 +155,7 @@ func flattenEnv(env map[string]string) []string {
 type directBox struct {
 	layout      boxLayout
 	env         map[string]string
-	credentials map[string]string
+	credentials map[string]seededCredential
 	// readCap is the whole-read cap the suite gave the box, zero — every
 	// box in production — for [MaxFileBytes]: see [readLimit].
 	readCap int
@@ -139,8 +170,9 @@ func (b *directBox) Home() string { return b.layout.home() }
 // env.
 //
 // Allowlisted for the same reason the CLI LLM backend allowlists: the engine's
-// environment holds the org's chat token, its database DSN and possibly a
-// metered API key, none of which the coding agent has any business reading.
+// environment holds the org's chat token, its collector credential
+// (OTEL_EXPORTER_OTLP_HEADERS) and possibly a metered API key, none of which
+// the coding agent has any business reading.
 // The run env is what config deliberately put there.
 func (b *directBox) childEnv(extra map[string]string) map[string]string {
 	env := hostbox.Inherit()
@@ -218,7 +250,7 @@ func (b *directBox) StartBackground(ctx context.Context, cmd string, opts ExecOp
 	// return.
 	proc := exec.Command("/bin/sh", "-c", cmd) //nolint:noctx // deliberate; see above
 	proc.Dir = dir
-	proc.Env = flattenEnv(b.childEnv(opts.Env))
+	proc.Env = hostbox.Environ(b.childEnv(opts.Env))
 	procgroup.Detach(proc)
 	// nil stdio is os/exec's /dev/null, which is what we want: nothing reads
 	// these, and a pipe nobody drains would block the agent on a full buffer.
@@ -298,25 +330,26 @@ func reap(proc *exec.Cmd) { _ = proc.Wait() }
 // mount namespace, so an in-box path IS a host path. Writing outside the box
 // would therefore hit the engine host's real /usr/local/bin (or worse), which
 // is why a setup step that provisions a system path is rejected here rather
-// than silently doing it. Container mode is the answer for those.
+// than silently doing it. Container mode is NOT the answer for those, though
+// it once said so: it writes files only under its mount and refuses the same
+// path ([containerBox.hostPath]). What works in every cell is the box's home:
+// a file named relative to it, or a setup command writing under "$HOME".
+//
+// Where a path lands is [hostbox.InHome]'s answer, the one config validation
+// gives a setup step's files before any box exists, so the two cannot
+// disagree about which file a box refuses.
 func (b *directBox) resolve(path string) (string, error) {
-	rel := path
-	if filepath.IsAbs(path) {
-		root, err := filepath.EvalSymlinks(b.layout.home())
-		if err != nil {
-			root = filepath.Clean(b.layout.home())
+	// An absolute path that already names somewhere in the box is the
+	// ordinary case: a brief and a setup step both speak in the home the box
+	// reports. It may name that home as written or as its links resolve.
+	rel, inside := hostbox.InHome(b.layout.home(), path)
+	if !inside && filepath.IsAbs(path) {
+		if root, err := filepath.EvalSymlinks(b.layout.home()); err == nil {
+			rel, inside = hostbox.InHome(root, path)
 		}
-		clean := filepath.Clean(path)
-		// An absolute path that already names somewhere in the box is the
-		// ordinary case: a brief and a setup step both speak in the home the
-		// box reports.
-		if within, err := filepath.Rel(root, clean); err == nil && !strings.HasPrefix(within, "..") {
-			rel = within
-		} else if within, err := filepath.Rel(filepath.Clean(b.layout.home()), clean); err == nil && !strings.HasPrefix(within, "..") {
-			rel = within
-		} else {
-			return "", b.escapeError(path)
-		}
+	}
+	if !inside {
+		return "", b.escapeError(path)
 	}
 	resolved, err := hostbox.SafeJoin(b.layout.home(), rel)
 	switch {
@@ -334,8 +367,9 @@ func (b *directBox) resolve(path string) (string, error) {
 func (b *directBox) escapeError(path string) error {
 	return localErrorf("local sandbox (run_in %q) refuses to touch %q: it is outside "+
 		"the box at %s. Direct mode has no filesystem virtualisation, so this would write to "+
-		"the engine host itself. Put the file under the box's home, or use "+
-		"run_in %q.", Direct, path, b.layout.home(), Container)
+		"the engine host itself. Put the file under the box's home: name it relative to the "+
+		"home (\".npmrc\", \".local/bin/tool\"), which every cell writes under its home, or "+
+		"have a setup command write it under \"$HOME\".", Direct, path, b.layout.home())
 }
 
 func (b *directBox) WriteFile(ctx context.Context, path string, content []byte) error {
@@ -436,7 +470,7 @@ func (b *directBox) Close(ctx context.Context) error {
 			awaitJobExit(ctx, b.layout)
 		}
 	}
-	collectCredentials(b.layout, b.credentials)
+	collectCredentials(ctx, b.layout, b.credentials)
 	removeBox(b.layout)
 	localLog.Debug("local_sandbox_closed", "sandbox_id", b.layout.id)
 	return nil
@@ -454,10 +488,10 @@ func (b *directBox) Close(ctx context.Context) error {
 // trip through the runtime.
 type containerBox struct {
 	layout      boxLayout
-	runtime     string
+	cli         containerCLI
 	container   string
 	env         map[string]string
-	credentials map[string]string
+	credentials map[string]seededCredential
 	// readCap is as [directBox]'s.
 	readCap int
 }
@@ -476,22 +510,21 @@ func (b *containerBox) workdir() string { return DefaultHome + "/" + WorkspaceSu
 // alone does not prevent that: "/home/user/../../etc/cron.d/x" starts with the
 // mount point and still resolves outside it, and setup-step file paths are
 // operator config. The final check is the same one direct mode makes, for the
-// same reason.
+// same reason, and so is the first: where a path lands under the mount is
+// [hostbox.InHome]'s answer, which config validation gives a setup step's
+// files too.
 func (b *containerBox) hostPath(path string) (string, error) {
-	clean := filepath.Clean(path)
-	if clean == DefaultHome {
-		return b.layout.home(), nil
-	}
-	prefix := DefaultHome + "/"
-	rel := path
-	switch {
-	case strings.HasPrefix(path, prefix):
-		rel = path[len(prefix):]
-	case filepath.IsAbs(path):
-		// Outside the mount — reachable only from inside the container,
-		// which is exactly what container mode is for.
-		return "", localErrorf("%q is outside the sandbox home mount at %s; write it with a "+
-			"setup-step command instead of a file entry", path, DefaultHome)
+	rel, inside := hostbox.InHome(DefaultHome, path)
+	if !inside {
+		// Not a file under the mount, so a write from out here cannot reach
+		// it. A command inside the container might, but only as whatever
+		// user the container runs as — the engine's own uid on a rootful
+		// runtime ([containerUserArgs]), which an image's system
+		// directories usually refuse — so the remedy that holds is the home.
+		return "", localErrorf("%q is not a file under the sandbox home mount at %s, the only "+
+			"place a file can be written into this box; name it relative to the home "+
+			"(\".npmrc\", \".local/bin/tool\"), which every cell writes under its home, or have a "+
+			"setup command write it under \"$HOME\"", path, DefaultHome)
 	}
 	resolved, err := hostbox.SafeJoin(b.layout.home(), rel)
 	switch {
@@ -537,7 +570,7 @@ func (b *containerBox) envArgs(extra map[string]string) ([]string, error) {
 	// represented are dropped LOUDLY rather than silently truncated into a
 	// different env.
 	var lines []string
-	for _, assignment := range flattenEnv(merged) {
+	for _, assignment := range hostbox.Environ(merged) {
 		key, value, _ := strings.Cut(assignment, "=")
 		if strings.ContainsAny(value, "\n\r") {
 			localLog.Warn("local_sandbox_env_var_unrepresentable", "sandbox_id", b.layout.id, "var", key)
@@ -560,24 +593,22 @@ func (b *containerBox) execArgv(cmd string, opts ExecOptions) ([]string, error) 
 	if cwd == "" {
 		cwd = b.workdir()
 	}
-	argv := []string{b.runtime, "exec", "-w", cwd}
+	args := []string{"exec", "-w", cwd}
 	envArgs, err := b.envArgs(opts.Env)
 	if err != nil {
 		return nil, err
 	}
-	argv = append(argv, envArgs...)
-	return append(argv, b.container, "/bin/sh", "-c", cmd), nil
+	args = append(args, envArgs...)
+	return append(args, b.container, "/bin/sh", "-c", cmd), nil
 }
 
 func (b *containerBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (ExecResult, error) {
-	argv, err := b.execArgv(cmd, opts)
+	args, err := b.execArgv(cmd, opts)
 	if err != nil {
 		return ExecResult{}, err
 	}
-	return runHost(ctx, hostCommand{
-		argv:    argv,
-		timeout: time.Duration(opts.TimeoutSec * float64(time.Second)),
-	})
+	return runHost(ctx, b.cli.command(
+		time.Duration(opts.TimeoutSec*float64(time.Second)), args...))
 }
 
 // StartBackground backgrounds the job inside the container and echoes its pid.
@@ -592,11 +623,11 @@ func (b *containerBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (
 // Direct mode does not need this: it spawns the job itself with its own
 // session, which gets both properties without a shell trick.
 func (b *containerBox) StartBackground(ctx context.Context, cmd string, opts ExecOptions) (string, error) {
-	argv, err := b.execArgv(cmd+" & echo $!", opts)
+	args, err := b.execArgv(cmd+" & echo $!", opts)
 	if err != nil {
 		return "", err
 	}
-	result, err := runHost(ctx, hostCommand{argv: argv})
+	result, err := runHost(ctx, b.cli.command(0, args...))
 	if err != nil {
 		return "", err
 	}
@@ -789,7 +820,7 @@ func (b *containerBox) SetTimeout(ctx context.Context, seconds float64) error {
 }
 
 func (b *containerBox) Pause(ctx context.Context) error {
-	result, err := runHost(ctx, hostCommand{argv: []string{b.runtime, "pause", b.container}})
+	result, err := runHost(ctx, b.cli.command(0, "pause", b.container))
 	if err != nil || result.ExitCode != 0 {
 		detail := strings.TrimSpace(result.Stderr)
 		if err != nil {
@@ -804,7 +835,7 @@ func (b *containerBox) Pause(ctx context.Context) error {
 // container reports an error we ignore, which keeps Connect a single
 // unconditional call.
 func (b *containerBox) unpause(ctx context.Context) {
-	_, _ = runHost(ctx, hostCommand{argv: []string{b.runtime, "unpause", b.container}})
+	_, _ = runHost(ctx, b.cli.command(0, "unpause", b.container))
 }
 
 // paused reports whether the runtime says the container is paused: its own
@@ -812,9 +843,7 @@ func (b *containerBox) unpause(ctx context.Context) {
 // Podman. Anything but a plain "true" is not a pause, a failed inspection
 // included: see [Local.Attach].
 func (b *containerBox) paused(ctx context.Context) bool {
-	res, err := runHost(ctx, hostCommand{
-		argv: []string{b.runtime, "inspect", "--format", "{{.State.Paused}}", b.container},
-	})
+	res, err := runHost(ctx, b.cli.command(0, "inspect", "--format", "{{.State.Paused}}", b.container))
 	return err == nil && res.ExitCode == 0 && strings.TrimSpace(res.Stdout) == "true"
 }
 
@@ -822,14 +851,13 @@ func (b *containerBox) Close(ctx context.Context) error {
 	// A removal that failed LEAKS a container on the engine host, which is
 	// the one outcome here an operator has to be able to see: nothing else
 	// in the teardown path will mention it again.
-	if res, err := runHost(ctx, hostCommand{
-		argv: []string{b.runtime, "rm", "-f", b.container},
-	}); err != nil || res.ExitCode != 0 {
+	if res, err := runHost(ctx, b.cli.command(0, "rm", "-f", b.container)); err != nil ||
+		res.ExitCode != 0 {
 		localLog.Warn("local_sandbox_container_not_removed", "sandbox_id", b.layout.id,
 			"container", b.container, "exit", res.ExitCode,
 			"stderr", strings.TrimSpace(res.Stderr))
 	}
-	collectCredentials(b.layout, b.credentials)
+	collectCredentials(ctx, b.layout, b.credentials)
 	removeBox(b.layout)
 	localLog.Debug("local_sandbox_closed", "sandbox_id", b.layout.id)
 	return nil

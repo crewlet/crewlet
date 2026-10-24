@@ -134,11 +134,16 @@ type Prompt interface {
 	// constituents of one coalesced trigger disagreed about the identity
 	// the ledger key would depend on which event sorted first.
 	//
-	// For eight of the nine sources the two coincide, because an issue
-	// key, a page id, a monitor id and a task key are each one object that
-	// is both the merge unit and the durable thread; those delegate in one
-	// line. [ChatPrompt] is where they differ, and its doc shows the
-	// invariant deciding the answer.
+	// For most sources the two coincide, because an issue key, a page id
+	// and a monitor id are each one object that is both the merge unit and
+	// the durable thread; those delegate in one line. Two cut the
+	// partition finer, and each one's doc shows the invariant deciding the
+	// answer: [ChatPrompt], where a direct conversation is one conversation
+	// however its replies are threaded, and the native tracker's, whose
+	// partition is the task's identity cut by the surface a wake owes its
+	// reply on — so a merge of two wakes owing two surfaces never has to
+	// drop one of the promises, while every turn about the task still
+	// keeps one ledger.
 	ConversationIdentity(metadata map[string]string, subject string) string
 
 	// WakesActor reports whether an event type reaches the party who
@@ -247,8 +252,9 @@ type Party struct {
 	// addressable as an agent", which is the only thing a caller does with
 	// it — so the two need not be told apart here.
 	//
-	// Derived rather than looked up (a UUIDv5 over org name and handle),
-	// which is what lets one node address a seat another node is running.
+	// Derived rather than looked up (a UUIDv5 over the org name and the
+	// handle, ADR-0013), which is what lets one node address a seat another
+	// node is running.
 	AgentID uuid.UUID
 
 	// Human marks a seat that is addressable and never spawned. It changes

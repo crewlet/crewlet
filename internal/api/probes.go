@@ -104,6 +104,12 @@ type ProbeHealth struct {
 	AppliedEpoch int64    `json:"applied_epoch"`
 	Seats        []string `json:"seats"`
 
+	// IdentityDutySeconds is [Health]'s, always an object on the same
+	// terms: a node without the ingress role may still hold the workers
+	// role that arms the identity estate's duties, and this is where an
+	// operator reads that it did.
+	IdentityDutySeconds map[string]float64 `json:"identity_duty_seconds"`
+
 	// The four below are [Health]'s, omitted on the same terms.
 	StallLagSeconds *float64           `json:"stall_lag_seconds,omitempty"`
 	UnprovenSeconds map[string]float64 `json:"unproven_seconds,omitempty"`
@@ -168,7 +174,12 @@ func Probes(opts ProbeOptions) (http.Handler, error) {
 	mux.Handle("GET /health", http.HandlerFunc(p.serveHealth))
 	mux.Handle("GET /ready", http.HandlerFunc(p.serveReady))
 	mountBridge(mux, opts.Bridge)
-	return pagepolicy.Apply(auth.New(opts.Bootstrap).Middleware(httpjson.Mux(mux))), nil
+	// NO CSRF GATE HERE, for [BridgeOnly]'s reason: the probes are reads, and
+	// the bridge's credential is a signed token in its own path rather than
+	// anything a browser attaches, so there is no cross-site request for a
+	// check to refuse.
+	return pagepolicy.Apply(auth.New(opts.Bootstrap).Middleware(httpjson.Mux(mux)),
+		servedOverHTTPS(opts.Bootstrap, false)), nil
 }
 
 func (p *probes) serveHealth(w http.ResponseWriter, r *http.Request) {
@@ -202,6 +213,8 @@ func (p *probes) health(ctx context.Context) ProbeHealth {
 		Posture:      state.Posture,
 		AppliedEpoch: state.AppliedEpoch,
 		Seats:        heldSeats(state),
+
+		IdentityDutySeconds: identityDutySeconds(state),
 	}
 	body.StallLagSeconds, body.UnprovenSeconds = stallAndStranded(state)
 	body.Nodes, body.Alarms = fleetCounts(fleet)

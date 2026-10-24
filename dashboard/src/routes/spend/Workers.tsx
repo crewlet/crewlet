@@ -15,6 +15,7 @@
  * docs/guides/budgets-and-spend.md.
  */
 
+import { WrenchGlyph } from "@crewlethq/icons/glyphs";
 import { BarList, Card, DATA_COLORS, Skeleton } from "@crewlethq/ui";
 import { purposeLabel } from "~/lib/auxiliary.ts";
 import { fmtCount, plural } from "~/lib/format.ts";
@@ -31,30 +32,32 @@ export function Workers({
 }) {
   const rows = (rollup?.by_worker ?? []).filter((w) => w.total_tokens > 0);
   return (
-    <Card className="spend-card spend-list">
-      <div className="spend-card-head">
-        <h2 className="spend-title">Auxiliary model</h2>
-        {words && <span className="spend-caption">{words}</span>}
-      </div>
-      {loading && !rollup ? (
-        <Skeleton height="4.5rem" />
-      ) : (
-        <BarList
-          layout="beside"
-          emptyLabel="The auxiliary model spent no tokens in this window."
-          data={rows
-            .slice()
-            .sort((a, b) => b.total_tokens - a.total_tokens)
-            .map((w) => ({
-              id: w.worker,
-              label: purposeLabel(w.worker),
-              sub: plural(w.calls, "call"),
-              value: w.total_tokens,
-              display: fmtCount(w.total_tokens),
-              color: DATA_COLORS[0],
-            }))}
-        />
-      )}
+    <Card className="spend-card spend-list" padding="none">
+      <Card.Header icon={<WrenchGlyph size="sm" />} subtitle={words ?? undefined}>
+        <Card.Title>Auxiliary model</Card.Title>
+      </Card.Header>
+      <Card.Body padding="md">
+        {loading && !rollup ? (
+          <Skeleton height="4.5rem" />
+        ) : (
+          <BarList
+            className="spend-bars"
+            layout="beside"
+            emptyLabel="The auxiliary model spent no tokens in this window."
+            data={rows
+              .slice()
+              .sort((a, b) => b.total_tokens - a.total_tokens)
+              .map((w) => ({
+                id: w.worker,
+                label: purposeLabel(w.worker),
+                sub: plural(w.calls, "call"),
+                value: w.total_tokens,
+                display: fmtCount(w.total_tokens),
+                color: DATA_COLORS[0],
+              }))}
+          />
+        )}
+      </Card.Body>
     </Card>
   );
 }

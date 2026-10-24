@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -62,6 +64,10 @@ type Profiles interface {
 
 // Stores is this node's own copy of seats' memory. A nil store answers its
 // half empty, which is how a node that keeps no such half says so.
+//
+// KEYED AS EACH HALF IS WRITTEN: the diary and the onboarding marker on the
+// seat's id, and the episodes, skills, profiles and conversation ledger on its
+// handle — both off the [Seat] the asker resolved.
 type Stores struct {
 	Diary         *learning.Diary
 	Episodes      *learning.Episodes
@@ -69,10 +75,6 @@ type Stores struct {
 	Profiles      Profiles
 	Onboarding    *learning.Onboarding
 	Conversations ledgerstore.Conversations
-	// AgentID derives the id the diary and the onboarding marker are keyed
-	// by from a seat's handle, or "" for a handle the company has no agent
-	// seat for. The episodes, skills and profiles are keyed by the handle.
-	AgentID func(handle string) string
 	// Now is the clock a diary entry's lapse is judged against; nil is the
 	// wall clock.
 	Now func() time.Time
@@ -85,11 +87,13 @@ func (s *Stores) now() time.Time {
 	return time.Now().UTC()
 }
 
-func (s *Stores) agentID(handle string) string {
-	if s.AgentID == nil {
+// agentID is the key a seat's diary and onboarding marker are written under,
+// or "" for a seat with no id — which keeps neither.
+func agentID(seat Seat) string {
+	if seat.ID == uuid.Nil {
 		return ""
 	}
-	return s.AgentID(handle)
+	return seat.ID.String()
 }
 
 // Memory is one seat's memory, as the `agent_memory` answer sends it.
@@ -99,7 +103,7 @@ func (s *Stores) agentID(handle string) string {
 // does not carry that half" if the key is simply not there, and both are
 // ordinary states.
 type Memory struct {
-	// ID is the handle the answer is about.
+	// ID is the seat's handle.
 	ID string `json:"id"`
 
 	// Diary is the newest LIVE entries, newest first; DiaryTotal how many
@@ -266,6 +270,9 @@ type SkillRow struct {
 
 // ProfileRow is what one seat learned about one colleague.
 //
+// A COLLEAGUE IS NAMED BY THEIR HANDLE ([SubjectRow.Handle]), as the profile
+// was stored.
+//
 // BOTH INSTANTS, because they measure different cadences: `last_updated_at`
 // moves on every interaction and `last_corroborated_at` only when the traits
 // changed, so a colleague seen daily whose profile has not moved in months is
@@ -334,11 +341,11 @@ func emptyThreads(handle, heldBy string) Threads {
 // TURN, which must not die because a diary was slow — but a screen reporting
 // "this seat remembers nothing" when the store could not be reached is the
 // collapse every three-valued answer in this engine exists to prevent.
-func (s *Stores) Memory(ctx context.Context, handle string, limit int) (Memory, error) {
-	out := emptyMemory(handle, "")
+func (s *Stores) Memory(ctx context.Context, seat Seat, limit int) (Memory, error) {
+	out := emptyMemory(seat.Handle, "")
 	limit = Page(limit)
 	if s.Diary != nil {
-		if id := s.agentID(handle); id != "" {
+		if id := agentID(seat); id != "" {
 			now := s.now()
 			entries, err := s.Diary.Recent(ctx, id, now, limit)
 			if err != nil {
@@ -360,14 +367,14 @@ func (s *Stores) Memory(ctx context.Context, handle string, limit int) (Memory, 
 	}
 	if s.Episodes != nil {
 		// THE OPENINGS, never the whole texts: see [EpisodeRow].
-		episodes, err := s.Episodes.Listing(ctx, handle, limit, ListedTextBytes)
+		episodes, err := s.Episodes.Listing(ctx, seat.Handle, limit, ListedTextBytes)
 		if err != nil {
 			return Memory{}, err
 		}
 		for _, e := range episodes {
 			out.Episodes = append(out.Episodes, episodeRow(e))
 		}
-		if out.EpisodesTotal, err = s.Episodes.Count(ctx, handle); err != nil {
+		if out.EpisodesTotal, err = s.Episodes.Count(ctx, seat.Handle); err != nil {
 			return Memory{}, err
 		}
 	}
@@ -376,12 +383,12 @@ func (s *Stores) Memory(ctx context.Context, handle string, limit int) (Memory, 
 		// describe the same set: archived hidden, stale shown — a stale
 		// skill still works and still revives on use.
 		opts := learning.ListOptions{}
-		total, err := s.Skills.Count(ctx, handle, opts)
+		total, err := s.Skills.Count(ctx, seat.Handle, opts)
 		if err != nil {
 			return Memory{}, err
 		}
 		opts.Limit = limit
-		skills, err := s.Skills.List(ctx, handle, opts)
+		skills, err := s.Skills.List(ctx, seat.Handle, opts)
 		if err != nil {
 			return Memory{}, err
 		}
@@ -391,20 +398,20 @@ func (s *Stores) Memory(ctx context.Context, handle string, limit int) (Memory, 
 		}
 	}
 	if s.Profiles != nil {
-		profiles, err := s.Profiles.List(ctx, handle, limit)
+		profiles, err := s.Profiles.List(ctx, seat.Handle, limit)
 		if err != nil {
 			return Memory{}, fmt.Errorf("memread: read what %s learned about its "+
-				"colleagues: %w", handle, err)
+				"colleagues: %w", seat.Handle, err)
 		}
 		for _, p := range profiles {
 			out.Counterparties = append(out.Counterparties, profileRow(p))
 		}
-		if out.CounterpartiesTotal, err = s.Profiles.Count(ctx, handle); err != nil {
+		if out.CounterpartiesTotal, err = s.Profiles.Count(ctx, seat.Handle); err != nil {
 			return Memory{}, err
 		}
 	}
 	if s.Onboarding != nil {
-		if id := s.agentID(handle); id != "" {
+		if id := agentID(seat); id != "" {
 			marker, found, err := s.Onboarding.Get(ctx, id)
 			if err != nil {
 				return Memory{}, err
@@ -422,12 +429,15 @@ func (s *Stores) Memory(ctx context.Context, handle string, limit int) (Memory, 
 
 // Episode reads one of a seat's episodes whole from THIS node's store: its ask
 // and its account complete, where a listing carries their openings.
-func (s *Stores) Episode(ctx context.Context, handle, id string) (EpisodeDetail, error) {
-	out := EpisodeDetail{Handle: handle}
+//
+// An episode is keyed on the seat's HANDLE, as every row but the diary and the
+// onboarding marker is (see [Seat]).
+func (s *Stores) Episode(ctx context.Context, seat Seat, id string) (EpisodeDetail, error) {
+	out := EpisodeDetail{Handle: seat.Handle}
 	if s.Episodes == nil || id == "" {
 		return out, nil
 	}
-	e, found, err := s.Episodes.Get(ctx, handle, id)
+	e, found, err := s.Episodes.Get(ctx, seat.Handle, id)
 	if err != nil || !found {
 		return out, err
 	}
@@ -440,13 +450,13 @@ func (s *Stores) Episode(ctx context.Context, handle, id string) (EpisodeDetail,
 
 // Threads reads one seat's conversation ledger from THIS node's store — a
 // page of its threads and, when one is named, what it recorded there.
-func (s *Stores) Threads(ctx context.Context, handle, conversation string, limit int) (Threads, error) {
-	out := emptyThreads(handle, "")
+func (s *Stores) Threads(ctx context.Context, seat Seat, conversation string, limit int) (Threads, error) {
+	out := emptyThreads(seat.Handle, "")
 	if s.Conversations == nil {
 		return out, nil
 	}
 	limit = ThreadPage(limit)
-	threads, err := s.Conversations.Threads(ctx, handle, limit)
+	threads, err := s.Conversations.Threads(ctx, seat.Handle, limit)
 	if err != nil {
 		return Threads{}, err
 	}
@@ -454,11 +464,11 @@ func (s *Stores) Threads(ctx context.Context, handle, conversation string, limit
 		out.Conversations = append(out.Conversations,
 			ThreadRow{Key: t.Key, Turns: t.Entries, LastAt: t.LastAt})
 	}
-	if out.ConversationsTotal, err = s.Conversations.ThreadCount(ctx, handle); err != nil {
+	if out.ConversationsTotal, err = s.Conversations.ThreadCount(ctx, seat.Handle); err != nil {
 		return Threads{}, err
 	}
 	if conversation != "" {
-		entries, err := s.Conversations.History(ctx, handle, conversation, limit)
+		entries, err := s.Conversations.History(ctx, seat.Handle, conversation, limit)
 		if err != nil {
 			return Threads{}, err
 		}

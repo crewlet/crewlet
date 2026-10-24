@@ -21,6 +21,11 @@ import (
 // every pass failed to recognise the accounts the last one made and created
 // another. Four runs, four accounts for one agent, before a listing showed
 // it. The name is the field that survives.
+//
+// The marker is the handle because a handle is immutable (ADR-0013): a
+// document that changes one has removed the seat, and the teardown that sees
+// it gone removes its account. The label is the role as the document names it
+// today.
 func AccountName(role, handle string) string {
 	label := strings.TrimSpace(role)
 	if label == "" {

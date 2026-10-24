@@ -4,14 +4,12 @@
  *
  * `useQuery` is the loader for what the query registry answers. What it does
  * not answer is guarded and REST-only — `/secrets`, `/config/references`,
- * `/setup/integrations` and its passes — and four screens each read those with
- * a loader of their own: a `generation` ref, an unmount effect bumping it, an
- * `async` body that checked the ref three times, a `useEffect` over
- * `onTokenChanged`, and a mapping from a `RestError` to what the screen should
+ * `/setup/integrations` and its passes, the identity directory under `/iam` —
+ * and four screens each read those with a loader of their own: a `generation`
+ * ref, an unmount effect bumping it, an `async` body that checked the ref
+ * three times, and a mapping from a `RestError` to what the screen should
  * say. Two of them had already been fixed once for writing an answer nobody
- * was waiting for any more, and one of them — the Audit screen's credential
- * read — never re-read on a token change at all, so an operator who set a
- * token there saw the credential rows only after navigating away and back.
+ * was waiting for any more.
  *
  * ONE IMPLEMENTATION, and it answers the questions each copy answered
  * differently:
@@ -28,22 +26,28 @@
  *   drawn after the engine refused it. Status 0 — a dropped connection, the
  *   deadline — says nothing about the answer, so the last one stays with the
  *   error beside it.
- * - **A retry is the engine's to schedule.** A refusal carrying `Retry-After`
- *   is read again, quietly, after exactly that wait; one without it is not
- *   read again on its own, because a 503 with no hint is a node that no wait
- *   repairs (no keyring, no surface) and re-asking it only repeats it.
- * - **A new credential is a new question.** A read re-runs whenever the
- *   operator token changes, because every route read here is guarded and the
- *   refusal a screen is showing is usually the one the new token answers.
+ * - **A retry is the engine's to schedule.** A `503` the engine wrote with a
+ *   `Retry-After` is read again, quietly, after exactly that wait — bounded at
+ *   `RETRY_AFTER_MAX_MS`, so a derived backlog estimate of minutes does not
+ *   park the screen. One without it is not read again on its own, because a
+ *   503 with no hint is a node that no wait repairs (no keyring, a full log)
+ *   and re-asking it only repeats it.
  * - **A socket that came back is a company that moved.** Where the shell's
  *   client is present, a reconnect re-reads quietly, for the reason
  *   `useQuery` re-asks on one — and it is what makes the `closed` sentence a
- *   REST refusal renders true.
+ *   REST refusal renders true. A sign-in re-dials the socket, so a screen
+ *   that was refused before it is read again once it lands.
  */
 
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { ClientContext } from "./store-hooks.ts";
-import { isAbort, onTokenChanged, RestError } from "~/protocol/index.ts";
+import {
+  isAbort,
+  RestError,
+  retryAfterMs,
+  type LogRefusal,
+  type QueryRefusal,
+} from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 
 export interface RestOptions {
@@ -59,6 +63,15 @@ export interface RestOptions {
    * option of the same name for why `visibilitychange` rather than focus.
    */
   refetchOnFocus?: boolean;
+  /**
+   * Re-read, quietly, when the socket reconnects. Default true: an answer
+   * read before a reconnect is about a company that has since moved. Off
+   * only for a read whose answer is used once and then let go, where a
+   * second answer would redo work rather than correct it: a gallery
+   * preview's ticket, read again, reloads the page already drawn in its
+   * frame.
+   */
+  refetchOnReconnect?: boolean;
 }
 
 export interface RestResult<T> {
@@ -70,8 +83,15 @@ export interface RestResult<T> {
   /** The error as the code `QueryState` renders a sentence for. */
   code: QueryErrorCode | null;
   /**
-   * True while a LOUD read is in flight: the first one, one for a new key, a
-   * token change, and every `reload()` not marked quiet. A quiet re-read —
+   * What the refusal said beyond its code — the rule and the grants that
+   * would admit the reader, or a `503`'s state-log refusal and whether
+   * waiting changes it — in the shape `QueryState` renders from
+   * ([RestError.refusal]). Null beside no error.
+   */
+  refusal: QueryRefusal | LogRefusal | null;
+  /**
+   * True while a LOUD read is in flight: the first one, one for a new key,
+   * and every `reload()` not marked quiet. A quiet re-read —
    * a poll tick, the tab coming back, a hinted retry — keeps what is on
    * screen, because blanking a table into its skeleton to say nothing new
    * takes the row somebody was reading out from under them.
@@ -91,11 +111,12 @@ export interface RestResult<T> {
  * screen once handed it a sentence, the lookup missed, and a 401 rendered the
  * red "a code this build does not know" banner instead of the auth-gated one.
  *
- * `unavailable` ONLY WITH A HINT, because that code's sentence promises the
- * screen asks again on its own, and this loader does so only when the engine
- * said when. Status 0 is `closed`: nothing refused it, and the read runs again
- * when the socket does. A screen whose 404 means something more particular (a
- * surface that is not registered) says so over this.
+ * `unavailable` ONLY FOR A `503` THE ENGINE WROTE ([RestError.retryHint]),
+ * whose refusal says whether this loader asks again on its own and when —
+ * and at zero that waiting will not change it. Status 0 is `closed`: nothing
+ * refused it, and the read runs again when the socket does. A screen whose
+ * 404 means something more particular (a surface that is not registered)
+ * says so over this.
  */
 export function restErrorCode(err: RestError | null): QueryErrorCode | null {
   if (!err) return null;
@@ -103,7 +124,7 @@ export function restErrorCode(err: RestError | null): QueryErrorCode | null {
   if (err.status === 0) return "closed";
   if (err.status === 400) return "bad_params";
   if (err.status === 404) return "not_found";
-  if (err.status === 503 && err.retryAfterSeconds !== null) return "unavailable";
+  if (err.retryHint !== null) return "unavailable";
   return "query_failed";
 }
 
@@ -131,8 +152,8 @@ interface State<T> {
 }
 
 /**
- * Read `read` under `key`, and again whenever the key, the token or the
- * connection says the answer may have moved.
+ * Read `read` under `key`, and again whenever the key or the connection says
+ * the answer may have moved.
  *
  * `key` names the answer — the path, or the paths — and `null` reads nothing:
  * the hook's `enabled`. `read` is called with the signal that supersedes it
@@ -145,7 +166,7 @@ export function useRest<T>(
   read: (signal: AbortSignal) => Promise<T>,
   options: RestOptions = {},
 ): RestResult<T> {
-  const { pollMs, refetchOnFocus = false } = options;
+  const { pollMs, refetchOnFocus = false, refetchOnReconnect = true } = options;
   const [state, setState] = useState<State<T>>({
     key,
     data: null,
@@ -202,15 +223,13 @@ export function useRest<T>(
         error,
         loading: false,
       }));
-      if (error.retryAfterSeconds !== null) {
-        // THE ENGINE'S WAIT, and never less than a second: zero is "now",
-        // which against a node that just said it cannot answer is a loop.
-        retry.current = setTimeout(
-          () => {
-            if (generation.current === mine) void run(true);
-          },
-          Math.max(error.retryAfterSeconds, 1) * 1000,
-        );
+      // THE ENGINE'S WAIT, read the one way every retry here reads it: a
+      // zero — no `Retry-After` on its 503 — is never on a timer.
+      const wait = error.retryHint === null ? null : retryAfterMs(error.retryHint);
+      if (wait !== null) {
+        retry.current = setTimeout(() => {
+          if (generation.current === mine) void run(true);
+        }, wait);
       }
     }
   }, []);
@@ -233,8 +252,6 @@ export function useRest<T>(
     [],
   );
 
-  useEffect(() => onTokenChanged(() => void run(false)), [run]);
-
   useEffect(() => {
     if (key === null || !pollMs) return;
     const timer = setInterval(() => void run(true), pollMs);
@@ -255,7 +272,7 @@ export function useRest<T>(
   // there would make every REST read depend on a transport it does not use.
   const client = useContext(ClientContext);
   useEffect(() => {
-    if (!client || key === null) return;
+    if (!client || key === null || !refetchOnReconnect) return;
     const { store } = client;
     let was = store.state.connected;
     // A RECONNECT, NOT THE FIRST CONNECT. The page's socket opens a moment
@@ -270,7 +287,7 @@ export function useRest<T>(
       if (now) seen = true;
       was = now;
     });
-  }, [client, key, run]);
+  }, [client, key, run, refetchOnReconnect]);
 
   const current = state.key === key;
   const error = current ? state.error : null;
@@ -278,6 +295,7 @@ export function useRest<T>(
     data: current ? state.data : null,
     error,
     code: restErrorCode(error),
+    refusal: error?.refusal ?? null,
     loading: current ? state.loading : key !== null,
     reload,
   };

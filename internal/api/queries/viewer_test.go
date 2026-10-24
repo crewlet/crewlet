@@ -3,21 +3,31 @@
 package queries_test
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// viewerCompany binds one operator id to one seat, and leaves a second seat
-// bound to nobody — which is what makes "somebody else's handle" a real case
-// rather than a typo.
+// viewerCompany holds two human seats, so "somebody else's handle" is a real
+// case rather than a typo.
+//
+// NOTHING BINDS A CREDENTIAL HERE ANY MORE. Ana's contact block used to name
+// the token id `ops-1`, which was the engine's only link between a token and a
+// seat; the identity estate holds that binding now,
+// and a test says who is calling by building the PRINCIPAL rather than by
+// configuring the company.
 const viewerCompany = `
 name: Acme
 roles:
@@ -25,7 +35,7 @@ roles:
     handle: ana
     kind: human
     contact:
-      crewlet_operator_id: ops-1
+      slack_user_id: U0ANA
   - name: Bo Lang
     handle: bo
     kind: human
@@ -40,9 +50,49 @@ func viewerSources(t *testing.T, work *stubWork) queries.Sources {
 		t.Fatalf("parse: %v", err)
 	}
 	return queries.Sources{
-		Company: func() *config.Company { return cfg },
-		Native:  nativeOf(queries.Native{Work: work}),
+		Company: companySource(t, cfg),
+		Work:    work,
+		// THE CHART ANSWERS NO RELATION, which is what makes the
+		// cross-person cases about authority rather than about a lead
+		// this fixture happens to declare. A case that needs the lead
+		// arm states its own chart.
+		Chart: flatChart{},
 	}
+}
+
+// flatChart is a chart that can answer and reports no relation at all —
+// deliberately NOT [authz.NoChart], whose every answer is UNKNOWN.
+//
+// The two are opposite fixtures and the distinction is the whole of what
+// internal/authz's three-valued seam buys: "this company has no lead relation
+// between these two" is a 403, and "this node could not read its chart" is a
+// 503 the caller retries.
+type flatChart struct{}
+
+func (flatChart) Leads(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+func (flatChart) LeadsProject(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+func (flatChart) LeadsUnit(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+func (flatChart) LeadsContainer(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+func (flatChart) LeadsAnyone(context.Context, string) (bool, error) {
+	return false, nil
+}
+
+// MemberOf answers that nobody sits in any unit: no case here shares an
+// artifact with a team.
+func (flatChart) MemberOf(context.Context, string, string) (bool, error) {
+	return false, nil
 }
 
 // answer runs one question and insists it succeeded, so a case about a VALUE
@@ -59,16 +109,19 @@ func answerMap(t *testing.T, got any, err error) map[string]any {
 	return out
 }
 
-// THE CREDENTIAL RESOLVES TO A PERSON. Two steps that have both existed since
-// the engine shipped — a token maps to an operator id, a seat names one in its
-// contact block — and nothing walked them, so every personal surface in the
-// dashboard was guessing.
-func TestTheViewerIsTheSeatTheTokenIsBoundTo(t *testing.T) {
+// THE VIEWER IS THE PRINCIPAL, and nothing is derived.
+//
+// It used to walk two steps — a token mapped to an operator id, and a seat
+// named one in its contact block — which was the engine's only link between a
+// credential and a person. The identity estate replaced both: a person is a
+// row, a session resolves to it, and the seat they hold is on the chart.
+func TestTheViewerIsThePrincipalsOwnSeat(t *testing.T) {
 	t.Parallel()
-	answered, err := askAsOperator(t, viewerSources(t, &stubWork{}), "viewer", nil)
+	answered, err := askAsSeat(t, viewerSources(t, &stubWork{}), "ana",
+		"viewer", nil)
 	got := answerMap(t, answered, err)
 	if got["handle"] != "ana" {
-		t.Errorf("handle = %v, want the seat binding ops-1", got["handle"])
+		t.Errorf("handle = %v, want the principal's own seat", got["handle"])
 	}
 	if got["name"] != "Ana Diaz" {
 		t.Errorf("name = %v, want the seat's own", got["name"])
@@ -76,134 +129,92 @@ func TestTheViewerIsTheSeatTheTokenIsBoundTo(t *testing.T) {
 	if got["kind"] != "human" {
 		t.Errorf("kind = %v, want human", got["kind"])
 	}
-	if got["operator"] != true {
-		t.Errorf("operator = %v; a presented token is what the guarded rows turn on", got["operator"])
+	if got["login"] != "ana" {
+		t.Errorf("login = %v, want the principal's own", got["login"])
 	}
 }
 
-// AN UNBOUND TOKEN IS AN ORDINARY STATE, not an error. The remedy is a line of
-// company configuration, and a screen that renders an error cannot say so —
-// which is why the operator id is answered even when no seat claims it.
-func TestAnUnboundTokenAnswersItsOperatorIdAndNoSeat(t *testing.T) {
+// AN UNBOUND CREDENTIAL IS AN ORDINARY STATE, not an error. The remedy is a
+// binding in the identity directory, and a screen that renders an error cannot
+// say so — which is why the login is answered even when no seat holds it.
+func TestAnUnboundCredentialAnswersItsLoginAndNoSeat(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
 	queries.Register(r, viewerSources(t, &stubWork{}))
-	answered, err := r.Answer(t.Context(), "viewer", nil, "ops-nobody")
+	answered, err := r.Answer(everyGrant(t), "viewer", nil)
 	got := answerMap(t, answered, err)
-	if got["operator_id"] != "ops-nobody" {
-		t.Errorf("operator_id = %v, want the id the token carries", got["operator_id"])
+	if got["login"] == "" {
+		t.Errorf("login = %v, want the one the credential carries", got["login"])
 	}
 	if got["handle"] != "" {
-		t.Errorf("handle = %v, want none: no seat names ops-nobody", got["handle"])
+		t.Errorf("handle = %v, want none: this credential holds no seat", got["handle"])
 	}
 }
 
-// AND AN ANONYMOUS READER IS A THIRD STATE. No token at all is neither an
+// AND AN ANONYMOUS READER IS A THIRD STATE. No credential at all is neither an
 // unbound one nor a bound one, and the three take three different sentences on
 // screen — so the answer has to keep them apart.
-func TestAnAnonymousReaderIsNeitherBoundNorAnOperator(t *testing.T) {
+func TestAnAnonymousReaderIsNeitherBoundNorSeated(t *testing.T) {
 	t.Parallel()
-	answered, err := askNative(t, viewerSources(t, &stubWork{}), "viewer", nil)
-	got := answerMap(t, answered, err)
-	if got["operator_id"] != "" || got["operator"] != false {
-		t.Errorf("anonymous answered %v, want no id and no operator", got)
-	}
-	if got["handle"] != "" {
-		t.Errorf("handle = %v, want none", got["handle"])
-	}
-}
-
-// A DISABLED GUARD IS NEVER A PERSON. With `api.auth.disabled` every caller
-// is stamped with the reserved id, so a seat bound to that id would hand
-// whoever reaches the engine that person's dashboard — their inbox, their
-// queue, their name on every write. The literal is refused where the company
-// is read, naming the field; a `${VAR}` cannot be, because its value lives in
-// an environment validation may not see, so the resolution drops it instead —
-// here through the lookup a node hands its sources ([queries.Sources.Env]),
-// which is what every consumer of the binding reads.
-func TestADisabledGuardIsNeverAPerson(t *testing.T) {
-	t.Parallel()
-	b := config.DefaultBootstrap()
-	b.API.Auth.Disabled = true
-	caller, ok := auth.New(&b).Operator("")
-	if !ok || caller != org.ReservedOperatorID {
-		t.Fatalf("a disabled guard answered %q/%v, want the reserved id", caller, ok)
-	}
-
-	literal := strings.Replace(viewerCompany, "crewlet_operator_id: ops-1",
-		"crewlet_operator_id: "+caller, 1)
-	_, err := config.ParseCompany([]byte(literal))
-	if !errors.Is(err, org.ErrReservedOperatorID) {
-		t.Fatalf("a seat bound to %q parsed with %v, want it refused", caller, err)
-	}
-	if !strings.Contains(err.Error(), "crewlet_operator_id") {
-		t.Errorf("the refusal does not name the field: %v", err)
-	}
-
-	cfg, err := config.ParseCompany([]byte(strings.Replace(viewerCompany,
-		"crewlet_operator_id: ops-1",
-		"crewlet_operator_id: ${CREWLET_TEST_BOUND_OPERATOR}", 1)))
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
 	r := queries.NewRegistry()
-	queries.Register(r, queries.Sources{
-		Company: func() *config.Company { return cfg },
-		Env:     handedOnly(t, "CREWLET_TEST_BOUND_OPERATOR", "Anonymous"),
-		Native:  nativeOf(queries.Native{Work: &stubWork{}}),
-	})
-	answered, err := r.Answer(t.Context(), "viewer", nil, caller)
-	got := answerMap(t, answered, err)
-	if got["handle"] != "" {
-		t.Errorf("the disabled guard's caller is seat %v; a reference resolving "+
-			"to the reserved id must bind nobody", got["handle"])
-	}
-	if got["operator_id"] != caller {
-		t.Errorf("operator_id = %v, want the reserved id the guard stamped",
-			got["operator_id"])
+	queries.Register(r, viewerSources(t, &stubWork{}))
+	_, err := r.Answer(iam.WithAnonymous(t.Context()), "viewer", nil)
+	if !errors.Is(err, queries.ErrUnauthenticated) {
+		t.Fatalf("an anonymous read of `viewer` = %v, want unauthenticated — "+
+			"every question on this surface needs a credential now", err)
 	}
 }
 
-// THE VIEWER NAMES WHAT IT MAY ACT ON, and only a person may act on anything.
-// The act transport admits a token bound to a seat and nobody else
-// (ADR-0024), so the list a screen enables its controls from is that
-// transport's own for a bound token and EMPTY for everybody else — an array
-// either way, because "may do nothing" is a value a screen tests, not an
-// absence it has to guess the meaning of.
+// THE VIEWER NAMES WHAT IT MAY ACT ON, as the authority table decides it for
+// THIS principal — see [queries.Sources.Acts]. Any principal the guard resolved
+// may call the act transport, so the list is never "a bound person's or
+// nothing": it is whatever the table admits the caller to before an object is
+// named, and the viewer hands back exactly that. An array either way, because
+// "may do nothing" is a value a screen tests, not an absence it has to guess
+// the meaning of.
 func TestTheViewerNamesWhatItMayAct(t *testing.T) {
 	t.Parallel()
-	served := []string{"create_work_item", "mark_inbox"}
 	sources := viewerSources(t, &stubWork{})
-	sources.OperatorActs = func() []string { return served }
-	r := queries.NewRegistry()
-	queries.Register(r, sources)
-	for _, tc := range []struct {
-		name, operatorID string
-		want             []string
-	}{
-		{"a bound token", "ops-1", served},
-		{"an unbound token", "ops-nobody", []string{}},
-		{"an anonymous reader", "", []string{}},
-		{"a disabled guard's caller", org.ReservedOperatorID, []string{}},
-	} {
-		answered, err := r.Answer(t.Context(), "viewer", nil, tc.operatorID)
-		got := answerMap(t, answered, err)
-		acts, ok := got["acts"].([]string)
-		if !ok {
-			t.Errorf("%s: acts is %#v, want an array", tc.name, got["acts"])
-			continue
+	var asked []string
+	var mu sync.Mutex
+	sources.Acts = func(_ context.Context, p iam.Principal) ([]string, error) {
+		mu.Lock()
+		asked = append(asked, p.Login)
+		mu.Unlock()
+		if p.Seat == "ana" {
+			return []string{"create_work_item", "mark_inbox"}, nil
 		}
-		if !slices.Equal(acts, tc.want) {
-			t.Errorf("%s: acts = %v, want %v", tc.name, acts, tc.want)
-		}
+		return []string{}, nil
 	}
-	// AND A NODE WITH NOTHING TO SERVE ANSWERS AN EMPTY LIST to a bound
-	// person too, rather than a null a screen would read as "not loaded".
-	bare := queries.NewRegistry()
-	queries.Register(bare, viewerSources(t, &stubWork{}))
-	answered, err := bare.Answer(t.Context(), "viewer", nil, "ops-1")
+	answered, err := askAsSeat(t, sources, "ana", "viewer", nil)
+	if acts, _ := answerMap(t, answered, err)["acts"].([]string); !slices.Equal(acts,
+		[]string{"create_work_item", "mark_inbox"}) {
+		t.Errorf("ana's acts = %v, want what the table admits her to", acts)
+	}
+	answered, err = askAsOperator(t, sources, "viewer", nil)
 	if acts, ok := answerMap(t, answered, err)["acts"].([]string); !ok || len(acts) != 0 {
-		t.Errorf("a bound person on a node serving no acts got %#v", acts)
+		t.Errorf("a credential the table admits to nothing got acts %#v, want []", acts)
+	}
+	if !slices.Contains(asked, "ana") {
+		t.Errorf("the table was asked about %v, never about the caller", asked)
+	}
+
+	// A NODE WITH NOTHING TO SERVE ANSWERS AN EMPTY LIST, rather than a
+	// null a screen would read as "not loaded".
+	answered, err = askAsSeat(t, viewerSources(t, &stubWork{}), "ana", "viewer", nil)
+	if acts, ok := answerMap(t, answered, err)["acts"].([]string); !ok || len(acts) != 0 {
+		t.Errorf("a node serving no acts answered %#v", acts)
+	}
+
+	// AND A TABLE THAT CANNOT DECIDE IS NOT "MAY DO NOTHING": answered as an
+	// empty list, a screen would lock every control a person holds the
+	// authority for while this node cannot read its org.
+	sources.Acts = func(context.Context, iam.Principal) ([]string, error) {
+		return nil, errors.New("this node runs no company yet")
+	}
+	if _, err := askAsSeat(t, sources, "ana", "viewer", nil); !errors.Is(err,
+		queries.ErrUnavailable) {
+		t.Errorf("an undecidable table answered %v, want %v", err, queries.ErrUnavailable)
 	}
 }
 
@@ -211,56 +222,383 @@ func TestTheViewerNamesWhatItMayAct(t *testing.T) {
 //
 // `work_my_work` was registered operator-only and demanded a handle, which
 // made the one screen a human teammate would live on both unreachable to them
-// and, for an operator, a stranger's day. The rule that replaces it is the
-// smallest one that is safe: your own seat without a credential, anybody
-// else's with one.
+// and, for an operator, a stranger's day. The rule that replaces it: your own
+// seat when you name none, and anybody else's by the authority table's
+// owner-or-lead rule.
 func TestAPersonalQuestionDefaultsToTheCallersOwnSeat(t *testing.T) {
 	t.Parallel()
 	work := &stubWork{}
-	if _, err := askAsOperator(t, viewerSources(t, work), "work_my_work", nil); err != nil {
+	if _, err := askAsSeat(t, viewerSources(t, work), "ana", "work_my_work", nil); err != nil {
 		t.Fatalf("work_my_work with no handle: %v", err)
 	}
-	if work.myWorkQuery.Who.Handle != "ana" {
-		t.Errorf("read %q's day, want the caller's own seat", work.myWorkQuery.Who.Handle)
+	if work.myWorkQuery.Handle != "ana" {
+		t.Errorf("read %q's day, want the caller's own seat", work.myWorkQuery.Handle)
 	}
 }
 
-// NAMING SOMEBODY ELSE NEEDS THE CREDENTIAL. Without this the scope rule is
-// decoration: any reader could name any handle.
-func TestReadingAnotherPersonsDayNeedsAnOperatorCredential(t *testing.T) {
+// NAMING SOMEBODY ELSE TAKES THE LEAD RELATION OR ADMIN, and the whole scope
+// rule is decoration without it: any reader could name any handle.
+//
+// It used to be "any operator credential", which made every token in Tier A a
+// reader of every seat's day. It is [authz.ClassOwnOrLead]'s answer now —
+// the owner, whoever leads them, or an admin, each with the tracker — which is
+// the same rule the tracker's own writer enforces at the record.
+func TestReadingAnotherPersonsDayNeedsTheLeadRelation(t *testing.T) {
 	t.Parallel()
 	work := &stubWork{}
-	_, err := askNative(t, viewerSources(t, work), "work_my_work", map[string]any{"handle": "bo"})
+	// A COLLEAGUE, holding every app but not admin, against a chart that
+	// reports no relation: the most authority a caller can have and still
+	// be refused, which is what makes the refusal about the rule.
+	colleague := viewerSources(t, work)
+	_, err := askHolding(t, colleague, "ana", "work_my_work",
+		map[string]any{"handle": "bo"}, iam.Apps...)
 	if !errors.Is(err, queries.ErrUnauthorized) {
-		t.Fatalf("anonymous read of bo's day = %v, want unauthorized", err)
+		t.Fatalf("a colleague read bo's day = %v, want unauthorized", err)
 	}
-	if work.myWorkQuery.Who.Handle != "" {
-		t.Errorf("the reader was called with %q anyway", work.myWorkQuery.Who.Handle)
+	if work.myWorkQuery.Handle != "" {
+		t.Errorf("the reader was called with %q anyway", work.myWorkQuery.Handle)
 	}
-	// And WITH one it is allowed: an operator reading a report's day is a
-	// real thing to do, and the refusal above must not be "handles other
-	// than your own are refused".
-	if _, err := askAsOperator(t, viewerSources(t, work), "work_my_work",
-		map[string]any{"handle": "bo"}); err != nil {
-		t.Fatalf("an operator reading bo's day: %v", err)
+	// AND THE REFUSAL IS THE DECISION'S OWN: the rule's reason and the
+	// grant that would have admitted the caller, read off the decision
+	// rather than written beside it. The literal this replaced named an
+	// admin grant in a sentence nothing held against the table.
+	var refusal *queries.Refusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("refused with %T (%v), want the decision carried whole", err, err)
 	}
-	if work.myWorkQuery.Who.Handle != "bo" {
-		t.Errorf("read %q's day, want the handle the operator named", work.myWorkQuery.Who.Handle)
+	if refusal.Reason != authz.ReasonNotSelf {
+		t.Errorf("reason = %q, want the owner-or-lead rule's own", refusal.Reason)
+	}
+	if !slices.Equal(refusal.Grants, []iam.Grant{iam.GrantAdmin}) {
+		t.Errorf("grants = %v, want admin, which would have admitted it",
+			refusal.Grants)
+	}
+
+	// AND THEIR LEAD MAY, which the refusal above must not be mistaken
+	// for: "handles other than your own are refused" would make a lead's
+	// own screen unreachable.
+	led := viewerSources(t, work)
+	led.Chart = leadsChart{lead: "ana", report: "bo"}
+	if _, err := askHolding(t, led, "ana", "work_my_work",
+		map[string]any{"handle": "bo"},
+		iam.GrantTracker); err != nil {
+
+		t.Fatalf("ana reading her report's day: %v", err)
+	}
+	if work.myWorkQuery.Handle != "bo" {
+		t.Errorf("read %q's day, want the handle the lead named",
+			work.myWorkQuery.Handle)
+	}
+
+	// AND A NODE THAT COULD NOT READ ITS CHART SAYS SO, rather than
+	// refusing: 503 is retried and 403 sends a lead to ask for authority
+	// they hold.
+	blind := viewerSources(t, &stubWork{})
+	blind.Chart = authz.NoChart{}
+	if _, err := askHolding(t, blind, "ana", "work_my_work",
+		map[string]any{"handle": "bo"},
+		iam.GrantTracker); !errors.Is(err, queries.ErrUnavailable) {
+
+		t.Errorf("an unreadable chart answered %v, want unavailable", err)
 	}
 }
 
-// A CALLER NOBODY IS BOUND TO IS REFUSED FOR PARAMETERS, NOT FOR AUTHORITY.
-// Nobody was denied anything: there is no person to answer about, and telling
-// somebody to present a different credential is the wrong remedy for a company
-// that has not bound theirs.
-func TestAnUnbindableCallerIsRefusedForWantOfAHandle(t *testing.T) {
+// A HANDLE NO SEAT HOLDS IS STILL READ, AS NAMED.
+//
+// Somebody who left, a name still on old rows: a caller entitled to read
+// anybody's record naming a handle the chart no longer holds is asking about
+// those rows, and is answered about them rather than refused or told there is
+// nobody. Refusing here would make the reader's answer depend on the chart
+// rather than on the rows the question is about — and a seat-shaped name is
+// never a login, so the identity directory is not the one to ask either.
+func TestAHandleNoSeatHoldsIsStillRead(t *testing.T) {
 	t.Parallel()
-	_, err := askNative(t, viewerSources(t, &stubWork{}), "work_my_work", nil)
+	work := &stubWork{}
+	if _, err := askHolding(t, viewerSources(t, work), "ana", "work_my_work",
+		map[string]any{"handle": "departed"},
+		iam.GrantAdmin); err != nil {
+
+		t.Fatalf("work_my_work for a handle nobody holds: %v", err)
+	}
+	if work.myWorkQuery.Handle != "departed" {
+		t.Errorf("read %q's day, want the handle as it was named",
+			work.myWorkQuery.Handle)
+	}
+}
+
+// EACH PERSONAL QUESTION ASKS ITS OWN VERB, rather than all of them asking
+// whether the caller may read a person record.
+//
+// They are the same class today, so the answers agree; what a shared verb
+// would cost is the day they stop agreeing. `conversations` is the case that
+// proved it: it asked the person-record verb for a seat's trail, and a reader
+// of every seat's trail was refused one seat's threads — see
+// TestALeadReadsTheirSeatsTrailAndNoOneElses.
+func TestEachPersonalQuestionAsksItsOwnVerb(t *testing.T) {
+	t.Parallel()
+	for what, verb := range map[string]authz.Action{
+		"work_my_work": authz.ActionMyWork,
+		"work_inbox":   authz.ActionInboxRead,
+		"work_person":  authz.ActionPersonRead,
+	} {
+		// The question's own app and nothing else, against a chart
+		// reporting no relation: admitted to ASK, refused the record —
+		// so the refusal is the verb's rather than the registration's.
+		_, err := askHolding(t, viewerSources(t, &stubWork{}), "ana", what,
+			map[string]any{"handle": "bo"}, iam.GrantTracker)
+		var refusal *queries.Refusal
+		if !errors.As(err, &refusal) {
+			t.Errorf("%s naming bo = %v, want a refusal", what, err)
+			continue
+		}
+		if !strings.HasPrefix(refusal.What, string(verb)+" ") {
+			t.Errorf("%s was decided as %q, want its own verb %s", what,
+				refusal.What, verb)
+		}
+	}
+}
+
+// leadsChart reports exactly one management relation.
+type leadsChart struct {
+	flatChart
+	lead, report string
+}
+
+func (c leadsChart) Leads(_ context.Context, actor, subject string) (bool, error) {
+	return actor == c.lead && subject == c.report, nil
+}
+
+// LeadsAnyone is [leadsChart.Leads] asked of every subject — and it has to be
+// stated here, because the embedded [flatChart]'s "nobody" would refuse the
+// lead before their report's login was ever looked up.
+func (c leadsChart) LeadsAnyone(_ context.Context, actor string) (bool, error) {
+	return actor == c.lead, nil
+}
+
+// MemberOf answers that nobody sits in any unit: no case here shares an
+// artifact with a team.
+func (leadsChart) MemberOf(context.Context, string, string) (bool, error) {
+	return false, nil
+}
+
+// A CALLER'S OWN RECORD IS READ UNDER THE NAME IT IS WRITTEN UNDER.
+//
+// The tools write a caller's inbox marks, pins, priorities and personal views
+// under [iam.RecordOwner] — a bound person's seat, an unbound person's login,
+// a token's login — and every personal question here read them back under the
+// principal's SEAT: the same name for a bound person, and nothing at all for
+// the other two, who were refused "not bound to a seat" for the record their
+// own assistant had just written. The three shapes of caller, over every
+// personal question and the strip, each read under exactly one name.
+func TestACallersOwnRecordIsReadUnderTheNameItIsWrittenUnder(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name   string
+		caller iam.Principal
+		want   string
+	}{
+		{"a bound person", iam.Principal{Kind: iam.KindPerson,
+			Login: "ana.diaz", Seat: "ana"}, "ana"},
+		{"an unbound person", iam.Principal{Kind: iam.KindPerson,
+			Login: "jane.doe"}, "jane.doe"},
+		{"an unbound token", iam.Principal{Kind: iam.KindMachine,
+			Login: "token:ops"}, "token:ops"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			c.caller.ID, c.caller.Stage = uuid.New(), iam.StageActive
+			c.caller.Grants = []iam.Grant{iam.GrantTracker}
+			ctx := iam.WithPrincipal(t.Context(), c.caller)
+			if want := iam.ActorFor(c.caller).Name; want != c.want {
+				t.Fatalf("this caller writes under %q; the case wants %q", want, c.want)
+			}
+			work := &stubWork{}
+			r := queries.NewRegistry()
+			queries.Register(r, viewerSources(t, work))
+			for _, what := range []string{"work_my_work", "work_inbox", "work_person"} {
+				if _, err := r.Answer(ctx, what, nil); err != nil {
+					t.Fatalf("%s naming nobody: %v", what, err)
+				}
+			}
+			// AND NAMING THEMSELVES BY THEIR LOGIN IS STILL THEM: a
+			// bound person's login is theirs, and answering it as a
+			// colleague's name would read a record nothing writes.
+			if _, err := r.Answer(ctx, "work_inbox",
+				map[string]any{"handle": c.caller.Login}); err != nil {
+				t.Fatalf("work_inbox naming their own login: %v", err)
+			}
+			if _, err := r.Answer(ctx, "work_views",
+				map[string]any{"container": "workspace"}); err != nil {
+				t.Fatalf("work_views: %v", err)
+			}
+			if _, err := r.Answer(ctx, "work_items",
+				map[string]any{"preset": "priorities"}); err != nil {
+				t.Fatalf("work_items: %v", err)
+			}
+			viewer, err := r.Answer(ctx, "viewer", nil)
+			got := answerMap(t, viewer, err)
+			for question, read := range map[string]string{
+				"work_my_work": work.myWorkQuery.Handle,
+				"work_inbox":   work.inboxQuery.Handle,
+				"work_person":  work.personQuery.Handle,
+				"work_views":   work.views.Viewer,
+				"work_items":   work.expandViewer.Handle,
+				"viewer.owner": got["owner"].(string),
+			} {
+				if read != c.want {
+					t.Errorf("%s read %q's record, want %q — the name its "+
+						"own writes are made under", question, read, c.want)
+				}
+			}
+		})
+	}
+}
+
+// loginDirectory is the identity directory as a personal question reads it:
+// `ana.diaz` holds the seat `ana`, `bo.smith` holds no seat, `dev.person` holds
+// `dev`, and nobody else holds anything. err makes every lookup unknown.
+type loginDirectory struct{ err error }
+
+func (d loginDirectory) HolderRecord(_ context.Context, login string) (string, error) {
+	if d.err != nil {
+		return "", d.err
+	}
+	switch login {
+	case "ana.diaz":
+		return "ana", nil
+	case "bo.smith":
+		return "bo.smith", nil
+	case "dev.person":
+		return "dev", nil
+	}
+	return "", fmt.Errorf("%w: %s", iam.ErrNoHolder, login)
+}
+
+// SOMEBODY ELSE'S LOGIN IS READ UNDER THEIR HOLDER'S RECORD, and decided on it.
+//
+// A question naming another person's login read the LITERAL login: an
+// administrator asking for `ana.diaz`, whom the directory binds to the seat
+// `ana`, read an empty inbox under the login while every notice of hers is
+// kept under `ana` — and a lead asking by login was refused as leading nobody,
+// because the lead relation is a fact about a seat. The name resolves through
+// the one owner function the tools write through, and is decided on what it
+// resolved to.
+func TestSomebodyElsesLoginIsReadUnderTheirHoldersRecord(t *testing.T) {
+	t.Parallel()
+	admin := iam.Principal{ID: uuid.New(), Kind: iam.KindMachine, Login: "token:ops",
+		Stage:  iam.StageActive,
+		Grants: []iam.Grant{iam.GrantAdmin}}
+	lead := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson, Login: "lead.person",
+		Seat: "lead", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantTracker}}
+	for _, c := range []struct {
+		name   string
+		caller iam.Principal
+		asked  string
+		want   string
+	}{
+		{"an admin asking for a bound person by login", admin, "ana.diaz", "ana"},
+		{"an admin asking for an unbound person by login", admin, "bo.smith", "bo.smith"},
+		{"a lead asking for their report by login", lead, "dev.person", "dev"},
+	} {
+		for _, question := range []string{"work_my_work", "work_inbox", "work_person"} {
+			t.Run(c.name+"/"+question, func(t *testing.T) {
+				t.Parallel()
+				work := &stubWork{}
+				s := viewerSources(t, work)
+				s.Holders = loginDirectory{}
+				s.Chart = leadsChart{lead: "lead", report: "dev"}
+				r := queries.NewRegistry()
+				queries.Register(r, s)
+				if _, err := r.Answer(iam.WithPrincipal(t.Context(), c.caller),
+					question, map[string]any{"handle": c.asked}); err != nil {
+					t.Fatalf("%s for %q: %v", question, c.asked, err)
+				}
+				read := map[string]string{
+					"work_my_work": work.myWorkQuery.Handle,
+					"work_inbox":   work.inboxQuery.Handle,
+					"work_person":  work.personQuery.Handle,
+				}[question]
+				if read != c.want {
+					t.Errorf("%s for %q read %q's record, want %q", question,
+						c.asked, read, c.want)
+				}
+			})
+		}
+	}
+}
+
+// A LOGIN THAT NAMES NOBODY IS NOT A ROSTER, and a directory that cannot say
+// is 503 rather than "nobody".
+//
+// "Not found" before "you may not" would tell a caller with no authority over
+// anybody which logins exist, so a login nobody holds is decided on the name
+// as typed first — which nobody leads — and only the admin grant learns that
+// it names no record.
+func TestALoginThatNamesNobodyIsNotARosterForAQuestion(t *testing.T) {
+	t.Parallel()
+	admin := iam.Principal{ID: uuid.New(), Kind: iam.KindMachine, Login: "token:ops",
+		Stage:  iam.StageActive,
+		Grants: []iam.Grant{iam.GrantAdmin}}
+	lead := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson, Login: "lead.person",
+		Seat: "lead", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantTracker}}
+	for _, c := range []struct {
+		name   string
+		caller iam.Principal
+		dir    loginDirectory
+		want   error
+	}{
+		{"an admin", admin, loginDirectory{}, queries.ErrNotFound},
+		{"a caller with no authority over anybody", lead, loginDirectory{},
+			queries.ErrUnauthorized},
+		{"a directory this node cannot read", admin,
+			loginDirectory{err: errors.New("the identity applier is behind")},
+			queries.ErrUnavailable},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			work := &stubWork{}
+			s := viewerSources(t, work)
+			s.Holders = c.dir
+			r := queries.NewRegistry()
+			queries.Register(r, s)
+			_, err := r.Answer(iam.WithPrincipal(t.Context(), c.caller), "work_inbox",
+				map[string]any{"handle": "ghost.person"})
+			if !errors.Is(err, c.want) {
+				t.Fatalf("work_inbox for a login nobody holds = %v, want %v", err, c.want)
+			}
+			if errors.Is(c.want, queries.ErrUnauthorized) && errors.Is(err, queries.ErrNotFound) {
+				t.Error("a refused caller was told the login names nobody")
+			}
+			if work.inboxQuery.Handle != "" {
+				t.Errorf("the inbox was read under %q", work.inboxQuery.Handle)
+			}
+		})
+	}
+}
+
+// A SEAT'S TRAIL IS STILL THE SEAT'S. The threads a seat said things in are
+// the seat's, not a person record, so a caller bound to no seat who names none
+// is refused for want of a handle — and the refusal names the remedy where it
+// lives: a row in the identity directory, bound with `crewlet iam bind` to a
+// HUMAN seat, the one kind the directory binds anybody to, because the org
+// chart it used to point at has no field that binds a credential any more.
+func TestAnUnbindableCallerHasNoSeatTrailOfItsOwn(t *testing.T) {
+	t.Parallel()
+	s := viewerSources(t, &stubWork{})
+	s.Memory = &stubMemory{}
+	r := queries.NewRegistry()
+	queries.Register(r, s)
+	_, err := r.Answer(everyGrant(t), "conversations", nil)
 	if !errors.Is(err, queries.ErrBadParams) {
-		t.Fatalf("no token and no handle = %v, want bad_params", err)
+		t.Fatalf("a seatless caller naming no seat = %v, want bad_params", err)
 	}
 	if errors.Is(err, queries.ErrUnauthorized) {
-		t.Error("refused as unauthorized; the remedy is configuration, not a credential")
+		t.Error("refused as unauthorized; the remedy is a binding, not a credential")
+	}
+	if msg := err.Error(); !strings.Contains(msg, "crewlet iam bind") ||
+		!strings.Contains(msg, "human seat") || strings.Contains(msg, "org chart") {
+		t.Errorf("refusal = %q, want it to name `crewlet iam bind` onto a human "+
+			"seat and not the org chart, which no longer binds a credential", msg)
 	}
 }
 
@@ -268,15 +606,17 @@ func TestAnUnbindableCallerIsRefusedForWantOfAHandle(t *testing.T) {
 func TestTheInboxIsScopedTheSameWay(t *testing.T) {
 	t.Parallel()
 	work := &stubWork{}
-	if _, err := askAsOperator(t, viewerSources(t, work), "work_inbox", nil); err != nil {
+	if _, err := askAsSeat(t, viewerSources(t, work), "ana", "work_inbox", nil); err != nil {
 		t.Fatalf("work_inbox with no handle: %v", err)
 	}
-	if work.inboxQuery.Who.Handle != "ana" {
-		t.Errorf("read %q's inbox, want the caller's own", work.inboxQuery.Who.Handle)
+	if work.inboxQuery.Handle != "ana" {
+		t.Errorf("read %q's inbox, want the caller's own", work.inboxQuery.Handle)
 	}
-	if _, err := askNative(t, viewerSources(t, work), "work_inbox",
-		map[string]any{"handle": "bo"}); !errors.Is(err, queries.ErrUnauthorized) {
-		t.Errorf("anonymous read of bo's inbox = %v, want unauthorized", err)
+	if _, err := askHolding(t, viewerSources(t, work), "ana", "work_inbox",
+		map[string]any{"handle": "bo"},
+		iam.GrantTracker); !errors.Is(err, queries.ErrUnauthorized) {
+
+		t.Errorf("a colleague read bo's inbox = %v, want unauthorized", err)
 	}
 }
 
@@ -286,7 +626,7 @@ func TestTheInboxIsScopedTheSameWay(t *testing.T) {
 func TestEveryInboxFilterReachesTheReader(t *testing.T) {
 	t.Parallel()
 	work := &stubWork{}
-	_, err := askAsOperator(t, viewerSources(t, work), "work_inbox", map[string]any{
+	_, err := askAsSeat(t, viewerSources(t, work), "ana", "work_inbox", map[string]any{
 		"unread":       true,
 		"primary_only": true,
 		"snoozed":      "only",
@@ -315,7 +655,7 @@ func TestEveryInboxFilterReachesTheReader(t *testing.T) {
 // acts on by assuming nobody has written to them.
 func TestAnUnknownInboxReasonIsRefusedNamingTheSet(t *testing.T) {
 	t.Parallel()
-	_, err := askAsOperator(t, viewerSources(t, &stubWork{}), "work_inbox",
+	_, err := askAsSeat(t, viewerSources(t, &stubWork{}), "ana", "work_inbox",
 		map[string]any{"reasons": "shouted_at"})
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Fatalf("an unknown reason = %v, want bad_params", err)
@@ -363,16 +703,150 @@ func TestTheSnoozedScopeDefaultsToExcludeAndRefusesAnUnknownOne(t *testing.T) {
 func TestTheInboxResumeTakesTheWholePosition(t *testing.T) {
 	t.Parallel()
 	work := &stubWork{}
-	if _, err := askAsOperator(t, viewerSources(t, work), "work_inbox",
+	if _, err := askAsSeat(t, viewerSources(t, work), "ana", "work_inbox",
 		map[string]any{"since": "CREWLET_TRACKER_LOG@2:41"}); err != nil {
 		t.Fatalf("a whole position: %v", err)
 	}
 	if work.inboxQuery.Since.Generation != 2 || work.inboxQuery.Since.Seq != 41 {
 		t.Errorf("the position reached the reader as %s", work.inboxQuery.Since)
 	}
-	if _, err := askAsOperator(t, viewerSources(t, work), "work_inbox",
+	if _, err := askAsSeat(t, viewerSources(t, work), "ana", "work_inbox",
 		map[string]any{"since": "41"}); !errors.Is(err, queries.ErrBadParams) {
 		t.Errorf("a bare sequence = %v, want bad_params", err)
+	}
+}
+
+// MY WORK, MY INBOX AND MY PERSON RECORD ARE THE CALLER'S WHEN THEY NAME NOBODY.
+//
+// `viewer=` is gone from the query surface: the viewer is the caller's own
+// seat, and every personal question that names no handle is about them. One
+// table over the three, because they are one rule — and the one that went
+// untested was the third: `work_person` defaulted through the same function
+// the other two do, and nothing said so.
+//
+// Each is asked as a caller holding every grant, so the answer is whose record
+// was READ rather than whether the read was allowed; the handle a stub was
+// asked for is the whole assertion. The control is naming somebody else, which
+// must reach them — a default that ignored the argument would pass the first
+// half and fail this.
+func TestMyWorkAndPeopleDefaultToTheCaller(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		what  string
+		asked func(*stubWork) string
+	}{
+		{"work_my_work", func(w *stubWork) string { return w.myWorkQuery.Handle }},
+		{"work_inbox", func(w *stubWork) string { return w.inboxQuery.Handle }},
+		{"work_person", func(w *stubWork) string { return w.personQuery.Handle }},
+	} {
+		t.Run(c.what, func(t *testing.T) {
+			t.Parallel()
+			work := &stubWork{}
+			if _, err := askAsSeat(t, viewerSources(t, work), "ana", c.what, nil); err != nil {
+				t.Fatalf("%s with no handle: %v", c.what, err)
+			}
+			if got := c.asked(work); got != "ana" {
+				t.Errorf("%s with no handle read %q, want the caller's own seat",
+					c.what, got)
+			}
+			if _, err := askAsSeat(t, viewerSources(t, work), "ana", c.what,
+				map[string]any{"handle": "bo"}); err != nil {
+				t.Fatalf("%s naming bo: %v", c.what, err)
+			}
+			if got := c.asked(work); got != "bo" {
+				t.Errorf("%s naming bo read %q — the default is overriding the "+
+					"argument", c.what, got)
+			}
+		})
+	}
+}
+
+// spiedDirectory is [loginDirectory] counting what it was asked.
+type spiedDirectory struct {
+	loginDirectory
+	mu    sync.Mutex
+	asked []string
+}
+
+func (d *spiedDirectory) HolderRecord(ctx context.Context, login string) (string, error) {
+	d.mu.Lock()
+	d.asked = append(d.asked, login)
+	d.mu.Unlock()
+	return d.loginDirectory.HolderRecord(ctx, login)
+}
+
+// A CALLER WITH NO AUTHORITY LEARNS NOTHING FROM THE DIRECTORY, on a question
+// as on a tool — not even when this node cannot read it.
+//
+// The name used to be looked up FIRST: a login nobody holds was refused on
+// the name as typed, while a held one this node could not place answered 503,
+// so a caller who leads nobody read which logins exist off the difference.
+// Decided first, every login is the same refusal — the one a seat they do not
+// lead gets — and the directory is never asked. A lead may still be admitted
+// on the record, so for them a directory that cannot say is 503.
+func TestACallerWithNoAuthorityLearnsNothingFromTheDirectoryOnAQuestion(t *testing.T) {
+	t.Parallel()
+	stranger := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson,
+		Login: "pat.nobody", Seat: "pat", Stage: iam.StageActive,
+		Grants: []iam.Grant{iam.GrantTracker}}
+	lead := iam.Principal{ID: uuid.New(), Kind: iam.KindPerson, Login: "lead.person",
+		Seat: "lead", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantTracker}}
+	blind := loginDirectory{err: errors.New("engine: ana.diaz is bound to ana " +
+		"and this node cannot say where that seat is now")}
+	for _, question := range []string{"work_my_work", "work_inbox", "work_person"} {
+		t.Run(question, func(t *testing.T) {
+			t.Parallel()
+			var answers []string
+			for _, c := range []struct {
+				asked string
+				dir   loginDirectory
+			}{
+				{"ana.diaz", loginDirectory{}},
+				{"ghost.person", loginDirectory{}},
+				{"ana.diaz", blind},
+				{"ghost.person", blind},
+			} {
+				work := &stubWork{}
+				dir := &spiedDirectory{loginDirectory: c.dir}
+				s := viewerSources(t, work)
+				s.Holders = dir
+				s.Chart = leadsChart{lead: "lead", report: "dev"}
+				r := queries.NewRegistry()
+				queries.Register(r, s)
+				_, err := r.Answer(iam.WithPrincipal(t.Context(), stranger), question,
+					map[string]any{"handle": c.asked})
+				var refusal *queries.Refusal
+				if !errors.As(err, &refusal) {
+					t.Fatalf("%q = %v, want the refusal a seat they do not lead gets",
+						c.asked, err)
+				}
+				if len(dir.asked) != 0 {
+					t.Errorf("%q asked the directory %v for a caller it could "+
+						"never admit", c.asked, dir.asked)
+				}
+				answers = append(answers, fmt.Sprintf("%s %v", refusal.Reason,
+					refusal.Grants))
+			}
+			for _, answer := range answers[1:] {
+				if answer != answers[0] {
+					t.Errorf("two logins were refused differently (%s, %s), which "+
+						"is the directory speaking", answers[0], answer)
+				}
+			}
+
+			// A LEAD MAY BE ADMITTED ON THE RECORD, so for them this node
+			// cannot say.
+			s := viewerSources(t, &stubWork{})
+			s.Holders = blind
+			s.Chart = leadsChart{lead: "lead", report: "dev"}
+			r := queries.NewRegistry()
+			queries.Register(r, s)
+			if _, err := r.Answer(iam.WithPrincipal(t.Context(), lead), question,
+				map[string]any{"handle": "dev.person"}); !errors.Is(err, queries.ErrUnavailable) {
+				t.Errorf("a lead on a directory that cannot say = %v, want %v",
+					err, queries.ErrUnavailable)
+			}
+		})
 	}
 }
 
@@ -398,67 +872,80 @@ units:
           - name: Ana Diaz
             handle: ana
             kind: human
-            contact:
-              crewlet_operator_id: ops-1
 roles:
   - name: Bo Lang
     handle: bo
     kind: human
-    contact:
-      crewlet_operator_id: ops-2
 `
 	cfg, err := config.ParseCompany([]byte(company))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	s := queries.Sources{
-		Company: func() *config.Company { return cfg },
-		Native:  nativeOf(queries.Native{Work: &stubWork{}}),
-	}
+	s := queries.Sources{Company: companySource(t, cfg), Work: &stubWork{}}
 
-	answered, err := askAsOperator(t, s, "viewer", nil)
+	answered, err := askAsSeat(t, s, "ana", "viewer", nil)
 	if got := answerMap(t, answered, err); got["project"] != "ENG" {
 		t.Errorf("project = %v, want ENG: Ana's team owns none, so her department's", got["project"])
 	}
 
 	// A SEAT WITH NO PROJECT ANYWHERE ABOVE IT answers "", the value a
 	// create must fill in — never a project borrowed from somebody else.
-	r := queries.NewRegistry()
-	queries.Register(r, s)
-	answered, err = r.Answer(t.Context(), "viewer", nil, "ops-2")
+	answered, err = askAsSeat(t, s, "bo", "viewer", nil)
 	if got := answerMap(t, answered, err); got["project"] != "" {
 		t.Errorf("a seat no team holds: project = %v, want \"\"", got["project"])
 	}
 
-	answered, err = r.Answer(t.Context(), "viewer", nil, "")
-	if anonymous := answerMap(t, answered, err); anonymous["project"] != "" {
-		t.Errorf("an anonymous viewer's project = %v, want \"\"", anonymous["project"])
+	// AND A CALLER BOUND TO NO SEAT answers "", for the same reason.
+	answered, err = askAsOperator(t, s, "viewer", nil)
+	if unbound := answerMap(t, answered, err); unbound["project"] != "" {
+		t.Errorf("an unbound viewer's project = %v, want \"\"", unbound["project"])
 	}
 }
 
 // WHO MAY CHANGE THE COMPANY DOCUMENT is on the viewer, so the dashboard
 // draws a managed document read-only rather than offering saves the config
-// surface refuses — and the writers are named to an operator only.
+// surface refuses (ADR-0030) — judged on the CREDENTIAL the request came
+// through, by the one reading the config surface refuses a write with
+// ([config.APIAuth.MayWriteCompany]). So a person's session, a machine token
+// and a session exchanged from a listed Tier A token are each another
+// credential and may not, while the listed token's own bearer may; and the
+// writers are named to every caller, as the config surface's own refusal names
+// them to anybody whose write it turns away.
+//
+// Mutation: judge the login instead of the credential, and the exchanged
+// session passes; withhold the writers from a caller who may not write, and
+// the screen locks an edit with no reason.
 func TestTheViewerSaysWhetherItMayChangeTheCompany(t *testing.T) {
 	t.Parallel()
+	token := func(id, via string) iam.Principal {
+		return iam.Principal{
+			ID: uuid.New(), Login: iam.TokenLogin(id), Via: via, Kind: iam.KindMachine,
+			Stage: iam.StageActive, Grants: iam.AllGrants,
+		}
+	}
+	person := iam.Principal{
+		ID: uuid.New(), Login: "ana.diaz", Via: "session:lineage-1", Kind: iam.KindPerson,
+		Seat: "ana", Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantAdmin},
+	}
 	for name, tc := range map[string]struct {
 		writers   []string
-		caller    string
+		caller    iam.Principal
 		writer    bool
 		managedBy []string
 	}{
-		"an unmanaged document is every operator's": {nil, "ops-1", true, []string{}},
-		"a listed writer may":                       {[]string{"ops-1"}, "ops-1", true, []string{"ops-1"}},
-		"any other operator may not, and is told":   {[]string{"gitops"}, "ops-1", false, []string{"gitops"}},
-		"an anonymous reader is told nothing":       {[]string{"gitops"}, "", false, []string{}},
+		"an unmanaged document is anybody's":      {nil, person, true, []string{}},
+		"a listed token's own bearer may":         {[]string{"ops-1"}, token("ops-1", ""), true, []string{"ops-1"}},
+		"another token may not, and is told":      {[]string{"gitops"}, token("ops-1", ""), false, []string{"gitops"}},
+		"a session exchanged from a listed token": {[]string{"ops-1"}, token("ops-1", "session:lineage-2"), false, []string{"ops-1"}},
+		"a person's session may not, and is told": {[]string{"gitops"}, person, false, []string{"gitops"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			s := viewerSources(t, &stubWork{})
-			s.Access = &queries.AccessPosture{TokenIDs: []string{"ops-1", "gitops"}, CompanyWriters: tc.writers}
+			s.CompanyWriters = tc.writers
 			r := queries.NewRegistry()
 			queries.Register(r, s)
-			answered, err := r.Answer(t.Context(), "viewer", nil, tc.caller)
+			answered, err := r.Answer(iam.WithPrincipal(t.Context(), tc.caller), "viewer", nil)
 			got := answerMap(t, answered, err)
 			if got["config_writer"] != tc.writer {
 				t.Errorf("config_writer = %v, want %v", got["config_writer"], tc.writer)

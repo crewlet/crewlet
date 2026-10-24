@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // THE GROK PROFILE'S ARGV MUST PARSE, and only the real binary can say so.
@@ -26,7 +28,7 @@ func TestTheGrokProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 	if err != nil {
 		t.Skip("no grok on PATH")
 	}
-	p, ok := Builtin("grok")
+	p, ok := cliprofile.Builtin("grok")
 	if !ok {
 		t.Fatal("no built-in grok profile")
 	}
@@ -102,12 +104,13 @@ func TestTheGrokProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 // twice — it resembled nothing the engine hands a CLI, and a fresh HOME
 // isolates a credential FILE while doing nothing about an exported one, so on
 // any machine with a vendor key in the environment the case signed in and
-// `say hello` became a real, billed completion. Re-composing hostAllowlist and
-// HOME by hand fixed that and left the SAME shape of bug one layer in: each
-// case then named the one or two profile variables it remembered, so a profile
-// declaring a third had a test running a call the engine never makes. kimi-code
-// declares KIMI_CODE_NO_AUTO_UPDATE, KIMI_CODE_BACKGROUND_PRINT_BACKGROUND_MODE
-// and KIMI_LOOP_MAX_ATTEMPTS_PER_STEP; the case carried none of them, so it
+// `say hello` became a real, billed completion. Re-composing the host
+// allowlist and HOME by hand fixed that and left the SAME shape of bug one
+// layer in: each case then named the one or two profile variables it
+// remembered, so a profile declaring a third had a test running a call the
+// engine never makes. kimi-code declares KIMI_CODE_NO_AUTO_UPDATE,
+// KIMI_CODE_BACKGROUND_PRINT_BACKGROUND_MODE and
+// KIMI_LOOP_MAX_ATTEMPTS_PER_STEP; the case carried none of them, so it
 // could trigger the vendor's updater mid-run and wait out its default retry
 // policy in full. Deriving the whole environment is what ends that class.
 //
@@ -121,7 +124,7 @@ func TestTheGrokProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 // AGENTS.md / CLAUDE.md from its working directory, and this repository has
 // both — so a probe left in the checkout is answering with whatever the tree
 // happens to contain rather than about the shipped profile.
-func vendorCLIEnv(p Profile, home string, extra map[string]string) []string {
+func vendorCLIEnv(p cliprofile.Profile, home string, extra map[string]string) []string {
 	// Cache beside the home rather than in it, as Workspace.Acquire lays it
 	// out; Work is unread by buildEnv and set for the same reason.
 	c := &Checkout{
@@ -202,10 +205,10 @@ func assertArgvReachedAuth(t *testing.T, args []string, got string) {
 func TestVendorCLIEnvCarriesEveryProfilesOwnEnvironment(t *testing.T) {
 	t.Parallel()
 
-	for _, name := range BuiltinNames() {
+	for _, name := range cliprofile.BuiltinNames() {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			p, ok := Builtin(name)
+			p, ok := cliprofile.Builtin(name)
 			if !ok {
 				t.Fatalf("Builtin(%q) missing from a table BuiltinNames just listed", name)
 			}

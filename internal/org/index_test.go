@@ -11,13 +11,14 @@ import (
 // asked: each unit's id, name and key and each seat's handle, in other cases
 // and with space around them, references naming nothing, and the empty one —
 // over a chart carrying every ambiguity an applied revision can (an id that is
-// another unit's name, in both orders; one name on two units; one handle on
-// two seats, which only an admission rule refuses). An Index that answered
-// otherwise would make the code host record a different owner than the one
-// its validation accepted.
+// another unit's name-standing-in-for-a-key, in both orders; one name on two
+// units, which names neither; one handle on two seats, which only an admission
+// rule refuses). An Index that answered otherwise would make the code host
+// record a different owner than the one its validation accepted.
 //
-// Mutation: let a later unit win a spelling, or look a name up before an id,
-// and a row goes red.
+// Mutation: let a later unit win a spelling, try a unit keyed on its name
+// before one with an id, fold before the exact key, or let a shared name
+// answer its first unit, and a row goes red.
 func TestTheIndexAnswersWhatTheChartDoes(t *testing.T) {
 	t.Parallel()
 	o := normalized(&Organization{Name: "T",
@@ -79,33 +80,34 @@ func TestTheIndexAnswersWhatTheChartDoes(t *testing.T) {
 
 	// EVERY UNIT'S EFFECTIVE LEAD, on a chart with every shape the rule has
 	// to tell apart: a lead among the unit's own seats, one in a grandchild,
-	// one inherited from the division above (Normalize copies the name
+	// one inherited from the division above (Normalize copies the handle
 	// down), one naming nobody, none at all, one in a sibling's subtree, and
-	// a name three seats share — one in the unit's subtree after another in
+	// a handle three seats share — one in the unit's subtree after another in
 	// the chart's walk, so the subtree's must win, and for a unit whose
 	// subtree holds none of them, one before it and one after, so the
-	// chart's first must, and not the next past the unit's own seats.
+	// chart's first must, and not the next past the unit's own seats. The
+	// three are told apart by their names, since they share the handle.
 	//
-	// Mutations: answer the chart's first seat of the name always (Dup goes
-	// red), the subtree's alone (API, Left and Elsewhere), or read a subtree
-	// as running to the chart's end (Elsewhere answers twin-after).
+	// Mutations: answer the chart's first seat of the handle always (Dup
+	// goes red), the subtree's alone (API, Left and Elsewhere), or read a
+	// subtree as running to the chart's end (Elsewhere answers Twin After).
 	led := normalized(&Organization{Name: "Led",
-		Roles: []*Role{{Name: "Twin", DeclaredHandle: "twin-root"}},
+		Roles: []*Role{{Name: "Twin Root", DeclaredHandle: "twin"}},
 		Units: []*Unit{
-			{Name: "Eng", Lead: "Eng Lead", Roles: []*Role{{Name: "Eng Lead"}, {Name: "E1"}},
+			{Name: "Eng", Lead: "eng-lead", Roles: []*Role{{Name: "Eng Lead"}, {Name: "E1"}},
 				Children: []*Unit{
 					{Name: "API", Roles: []*Role{{Name: "A1"}}},
-					{Name: "Web", Lead: "Web Lead", Roles: []*Role{{Name: "W1"}},
+					{Name: "Web", Lead: "web-lead", Roles: []*Role{{Name: "W1"}},
 						Children: []*Unit{{Name: "Web Core", Roles: []*Role{{Name: "Web Lead"}}}}},
 				}},
-			{Name: "Ops", Lead: "Ghost", Roles: []*Role{{Name: "O1"}}},
+			{Name: "Ops", Lead: "ghost", Roles: []*Role{{Name: "O1"}}},
 			{Name: "Plain", Roles: []*Role{{Name: "P1"}}},
-			{Name: "Left", Lead: "R1", Roles: []*Role{{Name: "L1"}}},
+			{Name: "Left", Lead: "r1", Roles: []*Role{{Name: "L1"}}},
 			{Name: "Right", Roles: []*Role{{Name: "R1"}}},
-			{Name: "Dup", Lead: "Twin", Roles: []*Role{{Name: "D1"}},
-				Children: []*Unit{{Name: "Dup Child", Roles: []*Role{{Name: "Twin", DeclaredHandle: "twin-dup"}}}}},
-			{Name: "Elsewhere", Lead: "Twin", Roles: []*Role{{Name: "X1"}}},
-			{Name: "After", Roles: []*Role{{Name: "Twin", DeclaredHandle: "twin-after"}}},
+			{Name: "Dup", Lead: "twin", Roles: []*Role{{Name: "D1"}},
+				Children: []*Unit{{Name: "Dup Child", Roles: []*Role{{Name: "Twin Dup", DeclaredHandle: "twin"}}}}},
+			{Name: "Elsewhere", Lead: "twin", Roles: []*Role{{Name: "X1"}}},
+			{Name: "After", Roles: []*Role{{Name: "Twin After", DeclaredHandle: "twin"}}},
 		},
 	})
 	lx := led.Index()
@@ -122,11 +124,11 @@ func TestTheIndexAnswersWhatTheChartDoes(t *testing.T) {
 	}
 	// AND THE CASES ARE THE ONES THEY CLAIM TO BE, or the comparison above
 	// holds two nils equal and proves nothing.
-	for unit, handle := range map[string]string{
-		"API": "eng-lead", "Web": "web-lead", "Left": "r1", "Dup": "twin-dup", "Elsewhere": "twin-root",
+	for unit, name := range map[string]string{
+		"API": "Eng Lead", "Web": "Web Lead", "Left": "R1", "Dup": "Twin Dup", "Elsewhere": "Twin Root",
 	} {
-		if got := lx.EffectiveLead(led.Unit(unit)); got == nil || got.Handle() != handle {
-			t.Errorf("EffectiveLead(%q) = %s, want the seat %q", unit, roleName(got), handle)
+		if got := lx.EffectiveLead(led.Unit(unit)); got == nil || got.Name != name {
+			t.Errorf("EffectiveLead(%q) = %s, want the seat %q", unit, roleName(got), name)
 		}
 	}
 	if answered != 8 {
@@ -141,52 +143,52 @@ func TestTheIndexAnswersWhatTheChartDoes(t *testing.T) {
 		t.Errorf("a nil unit answered the lead %s, want none", roleName(got))
 	}
 
-	// EVERY SEAT'S PLACE IN THE HIERARCHY — the seat a name answers, its
+	// EVERY SEAT'S PLACE IN THE HIERARCHY — the seat a handle answers, its
 	// manager and every seat that manages it, its reports, its unit chain —
 	// on a chart with every shape those rules tell apart: a root seat
 	// managing across units, a seat three others manage (its lead, which
 	// Normalize makes manage its unit's seats, then two lists after it in
-	// the walk), a list naming nobody, a name two seats share (the first in
-	// the walk answers it), a seat three units deep and a root seat with no
-	// unit — and a list naming one seat twice, which Normalize never
+	// the walk), a list naming nobody, a handle two seats share (the first
+	// in the walk answers it), a seat three units deep and a root seat with
+	// no unit — and a list naming one seat twice, which Normalize never
 	// leaves, so it is written after: the chart asks whether a list
-	// contains a name, so the seat is its manager once.
+	// contains a handle, so the seat is its manager once.
 	//
 	// Mutations: keep a seat once a time its list names it (O1's), keep the
-	// last seat of a name (Shared), stop a chain at its home (Deep's), or
+	// last seat of a handle (shared), stop a chain at its home (Deep's), or
 	// answer a seat's unit as its outermost (Deep's).
 	ranked := normalized(&Organization{Name: "Ranked",
 		Roles: []*Role{
-			{Name: "CEO", Manages: []string{"VP", "Ghost", "VP"}},
-			{Name: "Shared", DeclaredHandle: "shared-root"},
+			{Name: "CEO", Manages: []string{"vp", "ghost", "vp"}},
+			{Name: "Shared Root", DeclaredHandle: "shared"},
 		},
 		Units: []*Unit{
-			{Name: "Eng", Lead: "VP", Roles: []*Role{{Name: "VP"}, {Name: "E1"}},
+			{Name: "Eng", Lead: "vp", Roles: []*Role{{Name: "VP"}, {Name: "E1"}},
 				Children: []*Unit{
-					{Name: "Core", Roles: []*Role{{Name: "C1", Manages: []string{"Deep", "Shared"}}},
+					{Name: "Core", Roles: []*Role{{Name: "C1", Manages: []string{"deep", "shared"}}},
 						Children: []*Unit{{Name: "Kernel", Roles: []*Role{{Name: "Deep"}}}}},
 				}},
 			{Name: "Ops", Roles: []*Role{
-				{Name: "Shared", DeclaredHandle: "shared-ops"},
-				{Name: "O1", Manages: []string{"Deep", "Deep"}},
+				{Name: "Shared Ops", DeclaredHandle: "shared"},
+				{Name: "O1", Manages: []string{"deep", "deep"}},
 			}},
 		},
 	})
-	twice := ranked.Role("O1")
-	twice.Manages = append(twice.Manages, "Deep")
-	if strings.Count(fmt.Sprint(twice.Manages), "Deep") != 2 {
-		t.Fatalf("the premise: O1's list is %v, want Deep in it twice", twice.Manages)
+	twice := ranked.Role("o1")
+	twice.Manages = append(twice.Manages, "deep")
+	if strings.Count(fmt.Sprint(twice.Manages), "deep") != 2 {
+		t.Fatalf("the premise: O1's list is %v, want deep in it twice", twice.Manages)
 	}
 	rx := ranked.Index()
-	names := []string{"", "Ghost", "Nobody"}
+	handles = []string{"", "ghost", "nobody"}
 	for r := range ranked.AllRoles() {
-		names = append(names, r.Name)
+		handles = append(handles, r.Handle())
 		if got, want := rx.Manager(r), ranked.Manager(r); got != want {
 			t.Errorf("Manager(%s): the index answers %s, the chart %s", roleName(r), roleName(got), roleName(want))
 		}
 		var managers []*Role
 		for m := range ranked.AllRoles() {
-			if slices.Contains(m.Manages, r.Name) {
+			if slices.Contains(m.Manages, r.Handle()) {
 				managers = append(managers, m)
 			}
 		}
@@ -205,27 +207,27 @@ func TestTheIndexAnswersWhatTheChartDoes(t *testing.T) {
 				unitNames(want))
 		}
 	}
-	for _, name := range names {
-		if got, want := rx.Role(name), ranked.Role(name); got != want {
-			t.Errorf("Role(%q): the index answers %s, the chart %s", name, roleName(got), roleName(want))
+	for _, handle := range handles {
+		if got, want := rx.Role(handle), ranked.Role(handle); got != want {
+			t.Errorf("Role(%q): the index answers %s, the chart %s", handle, roleName(got), roleName(want))
 		}
 	}
 	// AND THE CASES ARE THE ONES THEY CLAIM TO BE.
-	deep := ranked.Role("Deep")
+	deep := ranked.Role("deep")
 	if got := handlesOf(rx.Managers(deep)); fmt.Sprint(got) != "[vp c1 o1]" {
 		t.Errorf("the premise: Deep's managers are %v, want [vp c1 o1] (its lead by Normalize, then two lists)", got)
 	}
 	if got := unitNames(rx.UnitChainFor(deep)); fmt.Sprint(got) != "[Eng Core Kernel]" {
 		t.Errorf("the premise: Deep's chain is %v, want [Eng Core Kernel]", got)
 	}
-	if got := rx.Role("Shared"); got == nil || got.Handle() != "shared-root" {
-		t.Errorf("the premise: the name Shared answers %s, want the root seat", roleName(got))
+	if got := rx.Role("shared"); got == nil || got.Name != "Shared Root" {
+		t.Errorf("the premise: the handle shared answers %s, want the root seat", roleName(got))
 	}
-	vp := ranked.Role("VP")
+	vp := ranked.Role("vp")
 	if got := handlesOf(rx.Reports(vp)); !slices.Contains(got, "e1") {
 		t.Errorf("the premise: VP's reports are %v, want its unit's E1 among them", got)
 	}
-	if got := rx.Manager(ranked.Role("CEO")); got != nil || rx.UnitChainFor(ranked.Role("CEO")) != nil {
+	if got := rx.Manager(ranked.Role("ceo")); got != nil || rx.UnitChainFor(ranked.Role("ceo")) != nil {
 		t.Errorf("the premise: the root CEO has the manager %s or a unit chain", roleName(got))
 	}
 	if got := rx.UnitFor(deep); got == nil || got.Name != "Kernel" {
@@ -322,7 +324,7 @@ func ledChart(divisions int) *Organization {
 func ledChartAsWritten(divisions int) *Organization {
 	o := &Organization{Name: "T"}
 	for d := range divisions {
-		division := &Unit{Name: fmt.Sprintf("Division %d", d), Lead: fmt.Sprintf("Lead %d", d),
+		division := &Unit{Name: fmt.Sprintf("Division %d", d), Lead: Slugify(fmt.Sprintf("Lead %d", d)),
 			Roles: []*Role{{Name: fmt.Sprintf("Lead %d", d)}}}
 		for t := range 10 {
 			team := &Unit{Name: fmt.Sprintf("Team %d %d", d, t)}

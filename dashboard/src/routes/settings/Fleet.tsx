@@ -30,6 +30,7 @@
  */
 
 import { useMemo } from "react";
+import { uiletTone } from "~/ui/primitives.tsx";
 
 import {
   Callout,
@@ -41,6 +42,12 @@ import {
   StatCard,
   StatGroup,
   Tag,
+  TableKeyCell,
+  TableNumberCell,
+  TableDateCell,
+  TableEntityCell,
+  TableStatusCell,
+  TableTagsCell,
 } from "@crewlethq/ui";
 import {
   ServerGlyph,
@@ -55,37 +62,28 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import {
-  DateCell,
-  DurationCell,
-  KeyCell,
-  NumberCell,
-  SeatLabel,
-  StatusCell,
-  TagsCell,
-} from "~/app/frame/cells.tsx";
+import { plainSeat } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { href } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { usePublishFleet } from "~/app/Shell.tsx";
 import { useEngineHealth } from "~/lib/store-hooks.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
-import { plural } from "~/lib/format.ts";
+import { plural, fmtCount, fmtDuration } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { FleetAnswer, FleetDutyLease, FleetNode, FleetSeatLease } from "~/protocol/index.ts";
 import { BrokerKindTag, BrokerMembership } from "./FleetBroker.tsx";
-import { FileStorage } from "./FileStorage.tsx";
 
 /**
  * The lease table has no push behind it, so it polls — at 15 seconds, chosen
  * against the lease TTL rather than picked: a poll slower than the TTL would
  * show a node as alive after its lease had already expired somewhere else.
  */
-const POLL_MS = 15_000;
+export const FLEET_POLL_MS = 15_000;
+const POLL_MS = FLEET_POLL_MS;
 
 /** The apply status the control plane reports, as a [Tag] variant. */
 const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "neutral"> = {
@@ -94,7 +92,7 @@ const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "neutral"> 
   error: "danger",
 };
 
-/** Seconds on the wire, milliseconds in a [DurationCell] — converted once. */
+/** Seconds on the wire, milliseconds in a [TableNumberCell], converted once. */
 function leaseMs(seconds?: number | null): number | null {
   return seconds == null ? null : seconds * 1000;
 }
@@ -118,7 +116,7 @@ export function BrokerCell({ broker }: { broker: string }) {
 function FleetScreen() {
   const seatBadge = useSeatBadgeOf();
   const now = useNow();
-  const { data, loading, error } = useQuery("fleet", undefined, { pollMs: POLL_MS });
+  const { data, loading, error, refusal } = useQuery("fleet", undefined, { pollMs: POLL_MS });
   // THE BROKER'S MEMBERSHIP, polled beside the lease table on the same
   // cadence: a member that died is noticed on both at once.
   const broker = useQuery("fleet_broker", undefined, { pollMs: POLL_MS });
@@ -150,11 +148,6 @@ function FleetScreen() {
       <PageActions>
         {data?.this_node && <Tag variant="brand">you are on {data.this_node}</Tag>}
       </PageActions>
-      <PageNote>
-        Seat ownership is a lease with a fencing epoch, so no two nodes ever run one seat. A node
-        that cannot reach the configuration it should be running releases its seats rather than
-        serving stale work.
-      </PageNote>
 
       {/* TWO DIFFERENT FAILURES. A poll that failed AFTER one succeeded
           leaves a reading on screen, and the banner says it is old. One that
@@ -164,13 +157,10 @@ function FleetScreen() {
           then "No nodes are reporting". */}
       {error && data && (
         <Callout variant="danger" role="alert">
-          <span>
-            This poll failed ({error}). What is below is the last reading that succeeded — on this
-            screen above all, do not read it as now.
-          </span>
+          <span>Refresh failed ({error}). Showing the last good reading.</span>
         </Callout>
       )}
-      {error && !data && <QueryState error={error} loading={false} />}
+      {error && !data && <QueryState error={error} refusal={refusal} loading={false} />}
 
       {data && (
         <Card padding="none">
@@ -221,7 +211,7 @@ function FleetScreen() {
               ? undefined
               : {
                   title: "No nodes are reporting",
-                  hint: "A single-node company with local coordination has no lease table to read — this screen is for a fleet.",
+                  hint: "Only multi-node fleets report here.",
                 }
           }
         >
@@ -294,7 +284,7 @@ function FleetScreen() {
                   // the node's peek names its roles among its facts.
                   width: "max-content",
                   drop: 4,
-                  cell: (n) => <TagsCell tags={n.roles} />,
+                  cell: (n) => <TableTagsCell tags={n.roles} />,
                 },
                 {
                   key: "broker",
@@ -323,7 +313,7 @@ function FleetScreen() {
                   sortValue: (n) => n.seats,
                   // A COUNT on the node row; WHICH seats is the placement table
                   // below, and the node's own page, which can name them.
-                  cell: (n) => <NumberCell value={n.seats} />,
+                  cell: (n) => <TableNumberCell value={n.seats} format={fmtCount} />,
                 },
                 {
                   key: "inflight",
@@ -339,14 +329,14 @@ function FleetScreen() {
                   // for a process that was simply not saying — the one reading an
                   // operator must never be given for free.
                   sortValue: (n) => n.in_flight ?? null,
-                  cell: (n) => <NumberCell value={n.in_flight} />,
+                  cell: (n) => <TableNumberCell value={n.in_flight} format={fmtCount} />,
                 },
                 {
                   key: "posture",
                   header: "Posture",
                   shrink: true,
                   sortValue: (n) => n.posture ?? "",
-                  // A TAG RATHER THAN A `StatusCell`: the control plane's
+                  // A TAG RATHER THAN A `TableStatusCell`: the control plane's
                   // postures are a vocabulary the node itself chooses a word
                   // from — `serve`, `hold`, whatever it reports — and a glyph
                   // would claim a binary this column does not have.
@@ -382,6 +372,9 @@ function FleetScreen() {
                   key: "lease",
                   header: "Lease",
                   shrink: true,
+                  // RIGHT, as a duration is in Seat placement and Company-wide
+                  // duties on this same page.
+                  align: "right",
                   // FIRST TO GIVE WAY. Every row here holds an unexpired lease
                   // — a node is listed exactly as long as it does — so this
                   // column is a countdown that reads "healthy" by construction
@@ -393,7 +386,11 @@ function FleetScreen() {
                   sortValue: (n) => n.expires_in ?? null,
                   cell: (n) => (
                     <span title="time until this node's lease expires">
-                      <DurationCell ms={leaseMs(n.expires_in)} />
+                      <TableNumberCell
+                        value={leaseMs(n.expires_in)}
+                        format={fmtDuration}
+                        emptyLabel="Not measured"
+                      />
                     </span>
                   ),
                 },
@@ -401,10 +398,11 @@ function FleetScreen() {
                   key: "up",
                   header: "Up since",
                   shrink: true,
+                  align: "right",
                   // The node's peek carries it beside In flight ("Running").
                   drop: 3,
                   sortValue: (n) => n.started_at ?? "",
-                  cell: (n) => <DateCell at={n.started_at} now={now} />,
+                  cell: (n) => <TableDateCell value={n.started_at} now={now} />,
                 },
               ]}
             />
@@ -419,7 +417,7 @@ function FleetScreen() {
                   .map((n) => (
                     <Callout key={n.id} variant="danger" role="alert">
                       <span>
-                        <InlineCode>{n.id}</InlineCode> — {n.config_error}
+                        <InlineCode>{n.id}</InlineCode>: {n.config_error}
                       </span>
                     </Callout>
                   ))}
@@ -447,10 +445,10 @@ function FleetScreen() {
                     key: "handle",
                     header: "Seat",
                     sortValue: (s) => s.handle,
-                    // NOT `SeatCell`, and not the seat chip this column used to
+                    // NOT `linkedSeat`, and not the seat chip this column used to
                     // draw: both are links and every row here is one now, and an
                     // anchor inside an anchor is markup no browser agrees about.
-                    cell: (s) => <SeatLabel {...seatBadge(s.handle)} />,
+                    cell: (s) => <TableEntityCell {...plainSeat({ ...seatBadge(s.handle) })} />,
                   },
                   {
                     key: "node",
@@ -459,8 +457,10 @@ function FleetScreen() {
                     // a second `1fr` this column took half of what the fixed
                     // columns left — about 155px for a nine-character node id —
                     // and the seat name the row exists to show was the value
-                    // cut ("Agent Frontend …") at a 1440 frame.
-                    shrink: true,
+                    // cut ("Agent Frontend …") at a 1440 frame. ITS OWN WIDTH,
+                    // never capped: a node id is short, and capped it read
+                    // "walk-nat…" beside a seat column with room to spare.
+                    width: "max-content",
                     sortValue: (s) => s.node,
                     // The NODE, not the lease's `owner` — that is the fencing
                     // token (a node id plus a per-process suffix), and showing
@@ -484,7 +484,13 @@ function FleetScreen() {
                     align: "right",
                     shrink: true,
                     sortValue: (s) => s.expires_in ?? null,
-                    cell: (s) => <DurationCell ms={leaseMs(s.expires_in)} />,
+                    cell: (s) => (
+                      <TableNumberCell
+                        value={leaseMs(s.expires_in)}
+                        format={fmtDuration}
+                        emptyLabel="Not measured"
+                      />
+                    ),
                   },
                 ]}
               />
@@ -501,14 +507,14 @@ function FleetScreen() {
                 defaultSort="duty"
                 empty={{
                   title: "No singleton duties are leased",
-                  hint: "The retention sweep and the scheduler are fleet singletons — exactly one node runs each.",
+                  hint: "Duties appear once a node takes them.",
                 }}
                 columns={[
                   {
                     key: "name",
                     header: "Duty",
                     sortValue: (d) => d.duty,
-                    cell: (d) => <KeyCell value={d.duty} />,
+                    cell: (d) => <TableKeyCell value={d.duty} />,
                   },
                   {
                     key: "node",
@@ -516,8 +522,9 @@ function FleetScreen() {
                     // Content-sized for the reason the seat table's is: the
                     // duty's name is the flexible track, and as a second `1fr`
                     // this column left "integration-reconci…" cut beside
-                    // spare space of its own.
-                    shrink: true,
+                    // spare space of its own. Its own width, never capped, for
+                    // the reason the seat table's is.
+                    width: "max-content",
                     sortValue: (d) => d.node,
                     cell: (d) => <HeldBy node={d.node} />,
                   },
@@ -527,18 +534,23 @@ function FleetScreen() {
                     align: "right",
                     shrink: true,
                     sortValue: (d) => d.expires_in ?? null,
-                    cell: (d) => <DurationCell ms={leaseMs(d.expires_in)} />,
+                    cell: (d) => (
+                      <TableNumberCell
+                        value={leaseMs(d.expires_in)}
+                        format={fmtDuration}
+                        emptyLabel="Not measured"
+                      />
+                    ),
                   },
                 ]}
               />
             </Card>
           </div>
 
-          <FileStorage objects={data.objects} now={now} />
-
           <BrokerMembership
             answer={broker.data ?? undefined}
             error={broker.error}
+            refusal={broker.refusal}
             onChanged={broker.refetch}
           />
 
@@ -556,18 +568,17 @@ function FleetScreen() {
                 {data?.unmanned_roles?.map((r) => (
                   <Callout key={r} variant="warning" icon={<UserGlyph size="md" />}>
                     <span>
-                      <strong>{r}</strong> has no seat running on any node. Work published to its
-                      mailbox waits there — a durable subscription retains it — but nothing is
-                      consuming it.
+                      <strong>{r}</strong> isn’t running on any node. Its work is waiting.
                     </span>
                   </Callout>
                 ))}
                 {data?.unplaceable?.map((u) => (
                   <Callout key={u.handle} variant="warning" icon={<TargetGlyph size="md" />}>
                     <span>
-                      <strong>{u.handle}</strong> cannot be placed
-                      {u.placement ? ` — it is pinned to ${u.placement}` : ""}
-                      {u.reason ? `: ${u.reason}` : ", and no live node satisfies its constraint."}
+                      <strong>{u.handle}</strong> can’t be placed:{" "}
+                      {u.reason
+                        ? u.reason
+                        : `no live node matches ${u.placement || "its constraint"}.`}
                     </span>
                   </Callout>
                 ))}
@@ -585,7 +596,7 @@ function FleetScreen() {
           retention now, and the way there is said here, where the question
           starts. */}
       <p className="t-caption">
-        Each node&rsquo;s position in every state-log domain, and what is holding the trim, is under{" "}
+        Log positions are under{" "}
         <a className="prose-link" href={href(["settings", "backups"])}>
           Backups &amp; retention
         </a>
@@ -612,16 +623,7 @@ function FleetScreen() {
  * peeking row already works — so the node is one click away from either row.
  */
 export function HeldBy({ node }: { node: string }) {
-  if (!node) return <EmptyValue label="Not set" />;
-  return (
-    <a
-      className="mono t-link key-cell held-by"
-      href={href(["settings", "nodes", node])}
-      title={node}
-    >
-      {node}
-    </a>
-  );
+  return <TableKeyCell value={node} href={href(["settings", "nodes", node])} />;
 }
 
 /**
@@ -632,7 +634,7 @@ export function HeldBy({ node }: { node: string }) {
  * end.
  */
 export function HeldSince({ lease, now }: { lease: FleetSeatLease; now: number }) {
-  return <DateCell at={lease.acquired_at} now={now} />;
+  return <TableDateCell value={lease.acquired_at} now={now} />;
 }
 
 /**
@@ -665,7 +667,7 @@ function nodeFlags(node: FleetNode, thisNode?: string): React.ReactNode {
  */
 export function NodeScreen({ id }: { id: string }) {
   const now = useNow();
-  const { data, loading, error } = useQuery("fleet", undefined, {
+  const { data, loading, error, refusal } = useQuery("fleet", undefined, {
     enabled: id !== "",
     pollMs: POLL_MS,
   });
@@ -684,7 +686,7 @@ export function NodeScreen({ id }: { id: string }) {
       </PageActions>
 
       {loading && !data && <Skeleton variant="text" rows={6} label="Loading" />}
-      <QueryState error={error} loading={loading}>
+      <QueryState error={error} refusal={refusal} loading={loading}>
         {data &&
           (node ? (
             <>
@@ -706,15 +708,14 @@ export function NodeScreen({ id }: { id: string }) {
                       shares; this card keeps what only the page draws. */}
                   <div className="row wrap gap-2">
                     <span className="t-label">Labels</span>
-                    <TagsCell
+                    <TableTagsCell
                       tags={Object.entries(node.labels ?? {}).map(([k, v]) => `${k}=${v}`)}
                       max={8}
                     />
                   </div>
                   {node.owner && (
                     <p className="t-caption">
-                      Fencing token <InlineCode>{node.owner}</InlineCode> — this node's id plus a
-                      per-process suffix, so a restart is a new owner of the same leases.
+                      Fencing token <InlineCode>{node.owner}</InlineCode>.
                       {node.protocol != null && ` Seat protocol v${node.protocol}.`}
                     </p>
                   )}
@@ -746,7 +747,7 @@ export function NodeScreen({ id }: { id: string }) {
  */
 export function NodePeek({ id }: { id: string }) {
   const now = useNow();
-  const { data, loading, error } = useQuery("fleet", undefined, {
+  const { data, loading, error, refusal } = useQuery("fleet", undefined, {
     enabled: id !== "",
     pollMs: POLL_MS,
   });
@@ -756,7 +757,7 @@ export function NodePeek({ id }: { id: string }) {
   return (
     <>
       {loading && !data && <Skeleton variant="text" rows={6} label="Loading" />}
-      <QueryState error={error} loading={loading}>
+      <QueryState error={error} refusal={refusal} loading={loading}>
         {data &&
           (node ? (
             <>
@@ -861,7 +862,7 @@ export function nodeFacts({
       label: "Lag",
       value:
         applied === 0 ? (
-          <EmptyValue label="Nothing to compare against: this node has reported no config apply" />
+          <EmptyValue label="No configuration applied yet" />
         ) : behind > 0 ? (
           `${plural(behind, "epoch")} behind`
         ) : (
@@ -871,7 +872,7 @@ export function nodeFacts({
     // ZERO SEATS IS A REAL ANSWER — an ingress-only node runs none — and it is
     // the node an operator is most often looking for here, so it must not be
     // the one a `||` turns into a dash.
-    { label: "Seats", value: <NumberCell value={node.seats} /> },
+    { label: "Seats", value: <TableNumberCell value={node.seats} format={fmtCount} /> },
     {
       // WHAT THIS NODE MAY RUN — `ingress`, `seats`, `workers` — which is a
       // different fact from the duties it holds. A FACT rather than a line of
@@ -881,7 +882,7 @@ export function nodeFacts({
       // A SET, so the chips take two tracks and one line (`Fact.set`).
       label: "Roles",
       value: node.roles.length ? (
-        <TagsCell tags={node.roles} max={8} />
+        <TableTagsCell tags={node.roles} max={8} />
       ) : (
         <EmptyValue label="This node advertises no roles" />
       ),
@@ -902,18 +903,12 @@ export function nodeFacts({
           // all, and in one fact track the clamp broke a pseudo-version as
           // "v0.0.0-" over "20260929172955-…". Two tracks on one line, the
           // whole string in the title where even two are too narrow.
-          value: (
-            <code className="inline" title={version}>
-              {version}
-            </code>
-          ),
+          value: <InlineCode title={version}>{version}</InlineCode>,
           token: true,
         }
       : {
           label: "Version",
-          value: (
-            <EmptyValue label="Only the node serving this dashboard reports its build version" />
-          ),
+          value: <EmptyValue label="Unknown" />,
         },
   ];
 }
@@ -940,19 +935,14 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
           which revision it is doing it on. The second half is the question an
           operator came for; the first is the one they check next. */}
       <Card>
-        <Card.Header
-          icon={<PowerGlyph size="sm" />}
-          subtitle="what this process is doing, and the revision it is doing it on"
-        >
-          Running
-        </Card.Header>
+        <Card.Header icon={<PowerGlyph size="sm" />}>Running</Card.Header>
         <div className="col gap-2">
           <div className="row wrap gap-2">
             {/* THE ONE QUESTION THIS PANEL EXISTS FOR, as a state rather than
                 as two numbers to subtract. `config_status` beside it is a
                 different fact: a node can report `ok` about a revision two
                 activations old. */}
-            <StatusCell
+            <TableStatusCell
               glyph={current ? "●" : "○"}
               label={
                 current
@@ -961,15 +951,17 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
                     ? `${plural(behind, "epoch")} behind`
                     : "no apply reported"
               }
-              tone={node.config_status === "error" ? "critical" : current ? "positive" : "caution"}
               title={`applied epoch ${applied}, the fleet has activated ${answer.target_epoch}`}
+              tone={uiletTone(
+                node.config_status === "error" ? "critical" : current ? "positive" : "caution",
+              )}
             />
             <Tag variant={STATUS_TONE[node.config_status ?? ""] ?? "neutral"}>
               {node.config_status || "unknown"}
             </Tag>
             <span className="spacer" />
             <span className="t-caption">reported</span>
-            <DateCell at={node.config_reported_at} now={now} />
+            <TableDateCell value={node.config_reported_at} now={now} />
           </div>
           {node.config_error && (
             <Callout variant="danger" role="alert">
@@ -980,18 +972,11 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
             <span className="t-label">In flight</span>
             {/* ABSENT IS NOT ZERO: the count rides the presence heartbeat, and
                 a node that publishes none is not a node running no turns. */}
-            <NumberCell value={node.in_flight} />
+            <TableNumberCell value={node.in_flight} format={fmtCount} />
             <span className="t-label">Up since</span>
-            <DateCell at={node.started_at} now={now} />
+            <TableDateCell value={node.started_at} now={now} />
           </div>
-          <p className="t-caption">
-            A node reports the epoch it has applied; the activation pointer names the one the fleet
-            agreed on. The two differ for as long as a node takes to rebuild — and for ever if it
-            cannot
-            {/* ONLY WHEN THERE IS ONE ABOVE: the sentence pointed at an apply
-                error on every healthy node, where none is drawn. */}
-            {node.config_error ? ", which is what the apply error above is." : "."}
-          </p>
+          <p className="t-caption">They differ while the node rebuilds.</p>
         </div>
       </Card>
 
@@ -1005,11 +990,12 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
         </Card.Header>
         <div className="row wrap gap-2" style={{ padding: "var(--spacing-3)" }}>
           <span className="t-label">Its own lease</span>
-          <DurationCell ms={leaseMs(node.expires_in)} />
-          <span className="t-caption">
-            until expiry — a node that stops renewing loses every seat below to whoever claims it
-            next
-          </span>
+          <TableNumberCell
+            value={leaseMs(node.expires_in)}
+            format={fmtDuration}
+            emptyLabel="Not measured"
+          />
+          <span className="t-caption">until expiry</span>
         </div>
         <DataGrid<FleetSeatLease>
           name="node-seats"
@@ -1018,7 +1004,7 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
           defaultSort="handle"
           empty={{
             title: "This node holds no seats",
-            hint: "Placement is greedy and converges in both directions — a node that runs no seats is either new, draining, or not in the `seats` role.",
+            hint: "It may be new, draining, or not in the `seats` role.",
           }}
           rowHref={(s) => peekHref({ kind: "seat", id: s.handle })}
           onRowActivate={peekRow<FleetSeatLease>((s) => openPeek({ kind: "seat", id: s.handle }))}
@@ -1027,8 +1013,8 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
               key: "handle",
               header: "Seat",
               sortValue: (s) => s.handle,
-              // NOT `SeatCell`: it is a link and this row is one already.
-              cell: (s) => <SeatLabel {...seatBadge(s.handle)} />,
+              // NOT `linkedSeat`: it is a link and this row is one already.
+              cell: (s) => <TableEntityCell {...plainSeat({ ...seatBadge(s.handle) })} />,
             },
             {
               key: "since",
@@ -1044,7 +1030,13 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
               align: "right",
               shrink: true,
               sortValue: (s) => s.expires_in ?? null,
-              cell: (s) => <DurationCell ms={leaseMs(s.expires_in)} />,
+              cell: (s) => (
+                <TableNumberCell
+                  value={leaseMs(s.expires_in)}
+                  format={fmtDuration}
+                  emptyLabel="Not measured"
+                />
+              ),
             },
           ]}
         />
@@ -1061,14 +1053,14 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
           defaultSort="duty"
           empty={{
             title: "No fleet singletons are held here",
-            hint: "Exactly one node runs each — the trim, the maintenance sweep, the scheduler — so most nodes hold none.",
+            hint: "Most nodes hold none.",
           }}
           columns={[
             {
               key: "name",
               header: "Duty",
               sortValue: (d) => d.duty,
-              cell: (d) => <KeyCell value={d.duty} />,
+              cell: (d) => <TableKeyCell value={d.duty} />,
             },
             {
               key: "ttl",
@@ -1076,7 +1068,13 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
               align: "right",
               shrink: true,
               sortValue: (d) => d.expires_in ?? null,
-              cell: (d) => <DurationCell ms={leaseMs(d.expires_in)} />,
+              cell: (d) => (
+                <TableNumberCell
+                  value={leaseMs(d.expires_in)}
+                  format={fmtDuration}
+                  emptyLabel="Not measured"
+                />
+              ),
             },
           ]}
         />
@@ -1100,7 +1098,7 @@ function NoSuchNode({ id, inline }: { id: string; inline?: boolean }) {
       size={inline ? "compact" : "default"}
       icon={<ServerGlyph size="xl" />}
       title={`No node called “${id}” holds a lease`}
-      description="Either it never existed, or it stopped renewing and the fleet has since dropped it — a node is live exactly as long as its lease is."
+      description="It may have stopped, or never existed."
     />
   );
 }

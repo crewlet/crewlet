@@ -19,7 +19,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
-	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -387,9 +388,10 @@ func TestANodeServingNoCodeHostSaysWhy(t *testing.T) {
 // `not_permitted`, 403, with the reader's own sentence and not the sentinel's
 // Go text — answered by this node or wrapped by the router from another; a
 // level, a cursor or a parameter the reader refuses is `bad_params` with the
-// reader's own sentence; what clears by waiting — a retryable read refusal, no
-// data node serving — is `unavailable` with its Retry-After. The level is the
-// tree's one freshness grammar, and a parameter no read takes is refused
+// reader's own sentence; a read this node could not serve — a state-log
+// refusal, no data node serving — is `unavailable`, with its Retry-After where
+// waiting clears it and none where it cannot (an evicted node). The level is
+// the tree's one freshness grammar, and a parameter no read takes is refused
 // before the reader is asked.
 //
 // Mutation: drop codeRefusal's ErrNotPermitted case, and both refusals answer
@@ -433,7 +435,7 @@ func TestCodeReadsAnswerInTheReadVocabulary(t *testing.T) {
 		{"/code/repos/cursor/pushes", http.StatusBadRequest, "bad_params", "", "not a cursor", "", true},
 		{"/code/repos/behind", http.StatusServiceUnavailable, "unavailable", "", "", "7", true},
 		{"/code/repos/nobody", http.StatusServiceUnavailable, "unavailable", "", "", "5", true},
-		{"/code/repos/evicted", http.StatusInternalServerError, "query_failed", "", "", "", true},
+		{"/code/repos/evicted", http.StatusServiceUnavailable, "unavailable", "", "", "", true},
 		{"/code/repos?read_level=bogus", http.StatusBadRequest, "bad_params", "", "bogus", "", false},
 		{"/code/repos?status=gone", http.StatusBadRequest, "bad_params", "", `"gone"`, "", false},
 		{"/code/repos?limit=-1", http.StatusBadRequest, "bad_params", "", "limit", "", false},
@@ -490,69 +492,68 @@ func TestCodeReadsAnswerInTheReadVocabulary(t *testing.T) {
 			got.Limit != tc.want.Limit || got.Cursor != tc.want.Cursor || got.Fresh != tc.want.Fresh {
 			t.Errorf("GET %s asked %+v, want %+v", tc.path, got, tc.want)
 		}
-		// On a company that binds nobody, the token asks as itself.
-		if want := (code.Principal{Kind: code.PrincipalOperator, OperatorID: "founder"}); got.Asker != want {
+		// A token the directory binds to no seat asks as itself, under
+		// the login the guard composes it with.
+		if want := (code.Principal{Kind: code.PrincipalOperator, OperatorID: iam.TokenLogin("founder")}); got.Asker != want {
 			t.Errorf("GET %s asked as %+v, want %+v", tc.path, got.Asker, want)
 		}
 	}
 }
 
-// A CODE READ ASKS AS THE REQUEST'S PERSON: the credential the guard admitted,
-// bound to the human seat the chart binds it to — or to nobody — and a
-// disabled guard's every caller as the anonymous operator the guard names
-// them by, whom no seat binds. Never as a seat: a REST caller is a person, so
-// the reader judges what it answers by a person's grant (ADR-0040).
+// A CODE READ ASKS AS THE REQUEST'S PERSON: the principal the guard resolved,
+// under the credential it came through, and the human seat it holds — the one
+// the identity directory binds a token to — or none. Never as a seat: a REST
+// caller is a person, so the reader judges what it answers by a person's
+// grant (ADR-0054).
 //
-// Mutation: the asker's bound seat left empty → founder asks unbound; the
-// anonymous operator replaced by an empty id → the disabled guard's read is
-// refused by the reader rather than asked.
+// Mutation: the asker's seat left empty → the bound token asks unbound; the
+// credential replaced by the principal's display name → each token asks as
+// another name than the one its writes are recorded under.
 func TestACodeReadAsksAsTheRequestsPerson(t *testing.T) {
 	t.Parallel()
 	reads := &fakeCodeReads{}
-	b := closedPosture()
-	b.API.Auth.Tokens = append(b.API.Auth.Tokens, config.APIToken{ID: "ci", Token: "ci-secret"})
+	b := config.DefaultBootstrap()
+	authorize(&b, config.APIToken{ID: "founder", Token: "secret"},
+		config.APIToken{ID: "ci", Token: "ci-secret"})
+	seats := map[string]string{iam.TokenLogin("founder"): "jane-founder"}
 	a := newApp(t, api.Options{Bootstrap: &b, Code: fixedCode{reads: reads},
-		Sources: queries.Sources{Company: auditedCompany()}})
-	asked := func(app http.Handler, token string) code.Principal {
+		SeatBindings: auth.SeatBindings{Directory: inboxBindings(seats), Chart: inboxChart(seats)}})
+	asked := func(token string) code.Principal {
 		t.Helper()
-		r := httptest.NewRequest(http.MethodGet, "/code/repos", nil)
-		if token != "" {
-			r.Header.Set("Authorization", "Bearer "+token)
-		}
-		rec := httptest.NewRecorder()
-		app.ServeHTTP(rec, r)
+		rec := ask(t, bearing(a, token), http.MethodGet, "/code/repos", false)
 		if rec.Code != http.StatusOK {
-			t.Fatalf("GET /code/repos answered %d %q", rec.Code, rec.Body.String())
+			t.Fatalf("GET /code/repos with the token %q answered %d %q", token, rec.Code, rec.Body.String())
 		}
 		q := reads.queries()
 		return q[len(q)-1].Asker
 	}
 	for token, want := range map[string]code.Principal{
-		"secret":    {Kind: code.PrincipalOperator, OperatorID: "founder", Seat: "jane-founder"},
-		"ci-secret": {Kind: code.PrincipalOperator, OperatorID: "ci"},
+		"secret": {Kind: code.PrincipalOperator, OperatorID: iam.TokenLogin("founder"),
+			Seat: "jane-founder"},
+		"ci-secret": {Kind: code.PrincipalOperator, OperatorID: iam.TokenLogin("ci")},
 	} {
-		if got := asked(a, token); got != want {
+		if got := asked(token); got != want {
 			t.Errorf("the token %q asked as %+v, want %+v", token, got, want)
 		}
 	}
-
-	open := config.DefaultBootstrap()
-	open.API.Auth.Disabled = true
-	unguarded := newApp(t, api.Options{Bootstrap: &open, Code: fixedCode{reads: reads},
-		Sources: queries.Sources{Company: auditedCompany()}})
-	if got, want := asked(unguarded, ""), (code.Principal{Kind: code.PrincipalOperator,
-		OperatorID: auth.AnonymousOperator}); got != want {
-		t.Errorf("a disabled guard's caller asked as %+v, want %+v", got, want)
-	}
 }
 
-// A CODE READ ASKED FOR NOBODY IS REFUSED, NEVER JUDGED. The guard stamps every
-// caller it admits — a disabled guard's as the anonymous operator — so a request
-// carrying no operator identity reached the read past no guard at all; the
-// reader holds every read to who asks, and is not asked one for nobody. It is
-// `403 operator_required`, as every route that answers to a person refuses one.
+// bearing is h with every request it serves carrying token as its bearer.
+func bearing(h http.Handler, token string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Header.Set("Authorization", "Bearer "+token)
+		h.ServeHTTP(w, r)
+	})
+}
+
+// A CODE READ ASKED FOR NOBODY IS NEVER JUDGED. The guard resolves every
+// request it admits to a code route, so a request carrying no resolution
+// reached the read past no guard at all — a wiring fault, answered as every
+// route answers a node that cannot tell who is asking, `503
+// identity_unavailable` with its Retry-After ([auth.Caller]), and never a read:
+// the reader holds every read to who asks, and is not asked one for nobody.
 //
-// Mutation: drop serveCodeRead's operator check, and every kind asks the reader
+// Mutation: drop serveCodeRead's caller check, and every kind asks the reader
 // with no asker and answers 200.
 func TestACodeReadForNobodyIsRefused(t *testing.T) {
 	t.Parallel()
@@ -561,10 +562,10 @@ func TestACodeReadForNobodyIsRefused(t *testing.T) {
 	for _, kind := range code.ReadKinds() {
 		rec := httptest.NewRecorder()
 		a.CodeRead(kind).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/code/repos", nil))
-		if got, detail := errorBody(t, rec); rec.Code != http.StatusForbidden || got != "operator_required" ||
-			!strings.Contains(detail, "no operator identity") {
-			t.Errorf("a %s read for nobody answered %d %s %q, want 403 operator_required naming the missing "+
-				"identity", kind, rec.Code, got, detail)
+		if got, _ := errorBody(t, rec); rec.Code != http.StatusServiceUnavailable ||
+			got != string(httpjson.CodeIdentityUnavailable) || rec.Header().Get("Retry-After") == "" {
+			t.Errorf("a %s read for nobody answered %d %s (Retry-After %q), want 503 %s with a Retry-After",
+				kind, rec.Code, got, rec.Header().Get("Retry-After"), httpjson.CodeIdentityUnavailable)
 		}
 	}
 	if asked := reads.queries(); len(asked) != 0 {
@@ -572,15 +573,14 @@ func TestACodeReadForNobodyIsRefused(t *testing.T) {
 	}
 }
 
-// THE CODE ROUTES ARE ALWAYS GUARDED, reads included, whatever
-// allow_anonymous_read opens: a repository is the company's source, and the
-// reads name every repository and the people who pushed to it. A code read with
-// no credential is refused in the API's JSON; a git route in git's own form,
-// the Basic challenge git answers with its credential helper.
+// THE CODE ROUTES ARE GUARDED, reads included, as every route the exemption
+// list does not name is: a repository is the company's source, and the reads
+// name every repository and the people who pushed to it. A code read with no
+// credential is refused in the API's JSON; a git route in git's own form, the
+// Basic challenge git answers with its credential helper.
 func TestCodeReadsAreAlwaysGuarded(t *testing.T) {
 	t.Parallel()
 	b := closedPosture()
-	b.API.Auth.AllowAnonymousRead = true
 	a := newApp(t, api.Options{Bootstrap: &b,
 		Code: fixedCode{git: fakeGitRoutes{}, reads: &fakeCodeReads{}}})
 	for _, path := range []string{"/code/repos", "/code/repos/web", "/code/repos/web/pushes"} {

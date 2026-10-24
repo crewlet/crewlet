@@ -5,26 +5,27 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // THE THREE RETENTION GESTURES THAT WRITE, over HTTP for one reason.
 //
-// Every one of them changes FLEET state — the positions register's own
-// records, which live in the coordination store. On the default topology that
-// store is the engine's own embedded broker, which binds no socket: a CLI run
-// while the engine is down cannot reach it, and one run while the engine is UP
-// must not try, because a second server on the same store directory is
-// accepted rather than refused and two writers on one JetStream store is
-// corruption rather than contention.
+// Every one of them changes FLEET state: an acknowledgement is a record in the
+// coordination store's positions register, and an eviction or a readmission is
+// a record on every identity-claiming state log. Both live in the broker, and
+// on the default topology that is the engine's own embedded one, which binds no
+// socket: a CLI run while the engine is down cannot reach it, and one run
+// while the engine is UP must not try, because a second server on the same
+// store directory is accepted rather than refused and two writers on one
+// JetStream store is corruption rather than contention.
 //
 // So each gesture goes where the state is reachable: through a node that
 // already holds it. `crewlet retention ack`, `evict` and `readmit` are clients
@@ -32,10 +33,16 @@ import (
 //
 // # Why they are POSTs even though one of them only publishes a number
 //
-// The anonymous-read posture a laptop deployment allows must never reach any
-// of them. An acknowledgement moves the floor the trim deletes against, an
-// eviction stops a machine writing, and a readmission lets it write again —
-// none is a read, whatever the posture says.
+// An acknowledgement moves the floor the trim deletes against, an eviction
+// stops a machine's records applying, and a readmission lets them apply again
+// — none is a read, and nothing about one should be retried by a proxy or
+// prefetched by a browser the way a GET may be.
+//
+// # Who may make them
+//
+// `admin`, decided by the authority table where [App.mountDeployment] mounts
+// them — every route in this file, the two reads included. The handlers resolve
+// the caller for the audit line and decide nothing themselves.
 
 // retentionWriter is the slice of the fleet these routes need.
 //
@@ -51,34 +58,26 @@ type retentionWriter interface {
 // each log, and answered per log with the same three-valued outcome every other
 // write has. See [engine.NodeGate].
 //
-// EXPORTED, unlike its neighbour, because [NativeRoutes] answers it and an
-// implementation of that seam outside this package has to name it.
+// EXPORTED, unlike its neighbour, because the caller has to convert a typed
+// nil to a genuine one before handing it over: a nil *engine.NodeGate inside a
+// non-nil interface passes this route's own check and panics on the first
+// press.
 type NodeGate interface {
 	// Evict answers a [*statelog.EvictionRefusal], wrapped, for a node
 	// still holding a live presence lease — which this route reports as a
 	// refusal rather than a failure.
+	//
+	// THE REQUEST CARRIES WHO PRESSED, as the principal the guard
+	// resolved, and every log's record is written AS them: an eviction's
+	// history names the person, their kind and the credential they
+	// pressed it through, where it used to name this node's own writer —
+	// so "who stopped node-3 writing" had one answer, the node that
+	// happened to serve the request. See [engine.GateRequest.By].
 	Evict(ctx context.Context, req engine.GateRequest) (engine.GateResult, error)
 
 	// Readmit answers a [*statelog.ReadmissionRefusal], wrapped, for a node
 	// below a trim floor it would be counted against — likewise a refusal.
 	Readmit(ctx context.Context, req engine.GateRequest) (engine.GateResult, error)
-}
-
-// TaskPurger is the purge half, and it is a SEPARATE seam rather than a third
-// method on [NodeGate].
-//
-// The gate is a decision about a MACHINE, written to every identity-claiming
-// log from one judgement; a purge destroys one task's rows on one log, and has
-// nothing to judge but the confirmation. Both records carry the PERSON who
-// asked, so the identity is an argument on each rather than a property of the
-// writer this process happens to hold. Keeping it apart is also what lets this
-// route be exercised without a broker: the alternative signature hands back a
-// concrete `*tracker.Writer`, which no test can supply without a publisher, a
-// store and a log.
-type TaskPurger interface {
-	// PurgeAs destroys a task as the named operator, reporting the same
-	// three-valued outcome every other write has.
-	PurgeAs(ctx context.Context, operator, opID, id, project, reason string) (tracker.WriteResult, error)
 }
 
 // serveRetentionAck answers POST /work/retention/ack.
@@ -95,8 +94,7 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 	stream := r.URL.Query().Get("stream")
 	position, err := strconv.ParseUint(r.URL.Query().Get("position"), 10, 64)
 	if stream == "" || err != nil || position == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "position_required",
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodePositionRequired, map[string]string{
 			"detail": "name the stream and the sequence your copy reaches — " +
 				"an acknowledgement moves the floor the trim deletes against, " +
 				"so there is no value to guess",
@@ -116,13 +114,16 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 		// the same call: nothing here is transient, and a 503 tells an
 		// operator who typed the stream name wrong to wait and try the
 		// identical request again.
-		writeJSON(w, http.StatusNotFound, map[string]string{
-			"error":  "unknown_stream",
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownStream, map[string]string{
 			"detail": err.Error(),
 		})
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	by := iam.ActorFor(caller)
 	point := coord.BackupPoint{
 		Owner: coord.OperatorBackupOwner,
 		At:    time.Now().UTC(),
@@ -136,11 +137,10 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := a.retention.PutBackupPoint(r.Context(), point); err != nil {
 		log.Warn("api_retention_ack_failed", "stream", stream, "error", err)
-		writeJSON(w, http.StatusInternalServerError,
-			map[string]string{"error": "ack_failed"})
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeAckFailed)
 		return
 	}
-	log.Info("retention_acknowledged", "operator", operator,
+	log.Info("retention_acknowledged", "by", by.Name, "operator", by.OperatorID,
 		"stream", stream, "position", position, "generation", generation)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"stream": stream, "position": position, "generation": generation,
@@ -190,136 +190,19 @@ func (a *App) generationOf(stream string) (uint32, error) {
 	return a.capacity.StreamGeneration(stream)
 }
 
-// mountRetention registers the write half of the retention surface.
-func (a *App) mountRetention(mux httpjson.Router) {
-	mux.Handle("POST /work/retention/ack", http.HandlerFunc(a.serveRetentionAck))
-	mux.Handle("POST /work/retention/evict/{node}", a.gate(true))
-	mux.Handle("POST /work/retention/readmit/{node}", a.gate(false))
-	// THE PURGE, and it lives beside the eviction because they are the
-	// two gestures on this engine that DESTROY rather than change: one
-	// stops a machine's records applying, the other removes a task and
-	// every row it produced. Both are guarded, both echo their subject
-	// back as a confirmation, and both answer the three-valued write
-	// outcome whole.
-	//
-	// MOUNTED ON EVERY API and asked of the engine per request, for
-	// [NativeRoutes]' reason.
-	mux.Handle("POST /work/{id}/purge", http.HandlerFunc(a.servePurge))
-}
-
-// servePurge answers POST /work/{id}/purge.
+// mountRetention registers the write half of the retention surface, through
+// the mount [App.mountDeployment] hands it — which is what decides the grant.
 //
-// # Why this route exists at all
-//
-// `tracker.Writer.PurgeTask` is the one operation in this engine with no
-// inverse, restricted in the write path to a person or an operator token — and
-// nothing anywhere called it. No CLI verb, no route, no tool. So a company
-// could not destroy a task under any circumstances: an erasure request had no
-// mechanism, and a credential pasted into a task body stayed in the durable
-// rows of every node for ever, where `remove` only hides it and `delete` only
-// stops later records about it.
-//
-// # The confirmation is the task's KEY, not its id
-//
-// An id is a uuid nobody reads; the key is what a person sees on the board and
-// in the ticket they were asked to act on. Echoing the id back would be a
-// value copied from the same URL that carries it, which confirms nothing —
-// where the key has to be looked up, which is the point of asking.
-//
-// # Where the node hands out no tracker writer
-//
-// The route is absent — the mux's own 404, byte for byte — rather than refused:
-// an operator who cannot purge here must not be told the gesture exists and
-// failed. Asked before anything else, so a request to such a node is judged
-// for nothing and never told which of its parameters it lacked.
-func (a *App) servePurge(w http.ResponseWriter, r *http.Request) {
-	purger, served := a.native.Purger()
-	if !served {
-		httpjson.NoRoute(w, r)
-		return
-	}
-	id := r.PathValue("id")
-	key := strings.TrimSpace(r.URL.Query().Get("confirm"))
-	project := strings.TrimSpace(r.URL.Query().Get("project"))
-	reason := strings.TrimSpace(r.URL.Query().Get("reason"))
-	switch {
-	case id == "" || key == "":
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "confirm_required",
-			"detail": "repeat the task's KEY in ?confirm= — a purge removes the " +
-				"task and every row it produced on every node, and there is " +
-				"nothing that undoes it",
-		})
-		return
-	case project == "":
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "project_required",
-			"detail": "name the task's project in ?project= — it is the " +
-				"container the record arbitrates under, and a purge filed " +
-				"under the wrong one blocks writes to a project it is not about",
-		})
-		return
-	case reason == "":
-		// A REASON IS REQUIRED, unlike every other gesture here. It is
-		// the only thing that survives: the rows are gone, and the
-		// deletion marker's reason is what a person reads a year later
-		// when they ask what used to be at this key.
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "reason_required",
-			"detail": "state why in ?reason= — the rows are destroyed and the " +
-				"marker's reason is the only account of them that survives",
-		})
-		return
-	}
-	operator, ok := auth.OperatorFrom(r.Context())
-	if !ok || operator == "" {
-		// THE GUARD ALREADY REFUSED AN UNAUTHENTICATED CALLER, so this
-		// is the build with no operator identity on the context at all.
-		// The write path refuses it too, and refusing here names the
-		// reason rather than surfacing the writer's own.
-		writeJSON(w, http.StatusForbidden, map[string]string{
-			"error": "operator_required",
-			"detail": "a purge is an operator gesture and this request carries " +
-				"no operator identity",
-		})
-		return
-	}
-
-	// THE CALLER MAY BRING ITS OWN OPERATION ID. A purge that answers
-	// `unknown` has no acknowledgement and no position — it may have
-	// landed and it may not — so the only correct response is to retry,
-	// and a retry with a FRESH id would append a second purge of a task the
-	// first one may already have destroyed. The gate routes beside this
-	// take one for the same reason.
-	opID, ok := callerOpID(w, r, "purge-"+id)
-	if !ok {
-		return
-	}
-	result, err := purger.PurgeAs(r.Context(), operator, opID, id, project, reason)
-	if err != nil {
-		log.Warn("api_purge_failed", "task", id, "operator", operator,
-			"error", err)
-		writeJSON(w, http.StatusInternalServerError,
-			map[string]string{"error": "purge_failed", "detail": err.Error()})
-		return
-	}
-	// LOGGED AT INFO WITH THE REASON, because this is the one gesture
-	// whose subject no longer exists to be inspected afterwards.
-	log.Info("task_purged", "task", id, "key", key, "project", project,
-		"operator", operator, "reason", reason, "outcome", result.Outcome)
-	answer := map[string]any{
-		"task": id, "key": key, "project": project,
-		"outcome": result.Outcome,
-		"op_id":   result.OpID,
-	}
-	// NO POSITION FOR UNKNOWN, which is the whole content of unknown — the
-	// gate routes' rule, for the gate routes' reason: a zero position reads
-	// as a record at the log's origin, and the purge this answers may never
-	// have reached the log at all.
-	if result.Outcome != statelog.OutcomeUnknown {
-		answer["position"] = result.Position
-	}
-	writeJSON(w, http.StatusOK, answer)
+// NO PURGE HERE. A work item's purge used to be `POST /work/{id}/purge` on
+// this surface, with an operator check written beside it; it is
+// `POST /work/items/{key}/purge` on the human write surface now
+// (internal/api/workapi), decided by the authority table's
+// [authz.ActionWorkPurge] like every other verb, with its op id taken from the
+// request's `Idempotency-Key`.
+func (a *App) mountRetention(mount func(string, http.HandlerFunc)) {
+	mount("POST /work/retention/ack", a.serveRetentionAck)
+	mount("POST /work/retention/evict/{node}", a.gate(true))
+	mount("POST /work/retention/readmit/{node}", a.gate(false))
 }
 
 // callerOpID is the operation id a caller brought in `?op_id=`, or a fresh one
@@ -343,9 +226,8 @@ func callerOpID(w http.ResponseWriter, r *http.Request, name string) (string, bo
 		return statelog.NewOpID(time.Now(), name), true
 	}
 	if err := statelog.CheckCallerOpID(opID); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "op_id_invalid", "detail": err.Error(),
-		})
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeOpIDInvalid,
+			map[string]string{"detail": err.Error()})
 		return "", false
 	}
 	return opID, true
@@ -387,84 +269,61 @@ func gateVerb(evict bool) string {
 //
 // A dropped request does not stop a gesture half-way: once its first record is
 // about to be written the engine finishes it under its own budget
-// ([engine.GateBudget]), and the caller that minted the `op_id` it sent can ask
+// ([engine.GateLogBudget]), and the caller that minted the `op_id` it sent can ask
 // again with it to read every log's answer.
 func (a *App) gate(evict bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// ASKED PER REQUEST, for [NativeRoutes]' reason: a node that
-		// booted with no company starts its state log at the first apply
-		// whose company runs one.
-		nodes, runs := a.native.Nodes()
-		if !runs {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-				"error": "no_state_log",
-				"detail": "this node runs no state log, so there is no log to " +
-					"write an eviction to — ask a node that runs the native " +
-					"tracker or knowledge base",
-			})
-			return
-		}
 		node := r.PathValue("node")
 		// THE CONFIRMATION ECHOES THE NODE ID, the same shape the
 		// destructive CLI gestures already use: an eviction stops a
 		// machine's records applying and a readmission lets them apply
 		// again, and neither is a value to get from a shell history.
 		if node == "" || r.URL.Query().Get("confirm") != node {
-			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "confirm_required",
+			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeConfirmRequired, map[string]string{
 				"detail": "repeat the node id in ?confirm= — an eviction stops " +
 					"that machine's records applying anywhere in the fleet",
 			})
 			return
 		}
-		operator, ok := auth.OperatorFrom(r.Context())
-		if !ok || operator == "" {
-			// THE GUARD ALREADY REFUSED AN UNAUTHENTICATED CALLER, so
-			// this is the build with no operator identity on the
-			// context at all — and every log's record names who ran
-			// the gesture, which is what `retention status` prints
-			// beside an eviction.
-			writeJSON(w, http.StatusForbidden, map[string]string{
-				"error": "operator_required",
-				"detail": "an eviction and a readmission are operator gestures " +
-					"and this request carries no operator identity",
-			})
+		caller, ok := auth.Caller(w, r)
+		if !ok {
 			return
 		}
+		by := iam.ActorFor(caller)
 		opID, ok := callerOpID(w, r, gateVerb(evict)+"-"+node)
 		if !ok {
 			return
 		}
 		req := engine.GateRequest{
-			Node: node, OpID: opID, By: operator,
+			Node: node, OpID: opID, By: caller,
 			Force: evict && r.URL.Query().Get("force") == "true",
 		}
 		var result engine.GateResult
 		var err error
 		if evict {
-			result, err = nodes.Evict(r.Context(), req)
+			result, err = a.nodes.Evict(r.Context(), req)
 		} else {
-			result, err = nodes.Readmit(r.Context(), req)
+			result, err = a.nodes.Readmit(r.Context(), req)
 		}
 		if refusal, ok := RenderGateRefusal(node, opID, err); ok {
 			// A REFUSAL IS AN ANSWER, NOT A FAULT: nothing was judged, or
 			// the judgement said no, and nothing was written anywhere. Its
 			// body is rendered in one place for the reason the 200 is; what
 			// is logged is this route's own.
-			logGateRefusal(operator, node, err)
-			writeJSON(w, refusal.Status, refusal.Body)
+			logGateRefusal(by, node, err)
+			refusal.Write(w)
 			return
 		}
 		if err != nil {
 			log.Warn("api_retention_gate_failed", "node", node,
 				"evict", evict, "error", err)
-			writeJSON(w, http.StatusInternalServerError,
-				map[string]string{"error": "gate_failed", "detail": err.Error()})
+			httpjson.FailWith(w, http.StatusInternalServerError, httpjson.CodeGateFailed,
+				map[string]string{"detail": err.Error()})
 			return
 		}
 		answer := RenderGate(evict, result)
-		log.Info("retention_gate", "operator", operator, "node", node,
-			"evict", evict, "force", req.Force, "op_id", answer.OpID,
+		log.Info("retention_gate", "by", by.Name, "operator", by.OperatorID,
+			"node", node, "evict", evict, "force", req.Force, "op_id", answer.OpID,
 			"complete", answer.Complete)
 		writeJSON(w, http.StatusOK, answer)
 	}
@@ -479,8 +338,8 @@ type capacityRunner interface {
 	ReanchorStatus(ctx context.Context, stream string) (engine.ReanchorView, error)
 	StreamGeneration(stream string) (uint32, error)
 	SetCapacity(ctx context.Context, req engine.CapacityRequest) (coord.MaintenanceOperation, error)
-	AbandonCapacity(ctx context.Context, stream string) (coord.MaintenanceOperation, error)
-	ExcludeParticipant(ctx context.Context, stream, node string) (coord.MaintenanceOperation, error)
+	AbandonCapacity(ctx context.Context, stream string, by iam.Actor) (coord.MaintenanceOperation, error)
+	ExcludeParticipant(ctx context.Context, stream, node string, by iam.Actor) (coord.MaintenanceOperation, error)
 	CapacityStatus(ctx context.Context, stream string) (
 		coord.MaintenanceOperation, []coord.MaintenanceAck, []coord.Admission, bool, error)
 	Mode() statelog.MaintenanceMode
@@ -496,13 +355,13 @@ type capacityRunner interface {
 // procedure requires to be stopped. Both cannot hold. What resolves it is that
 // the maintenance-mode node runs its API: these are that mode's own control
 // surface rather than the write routes the mode withholds.
-func (a *App) mountCapacity(mux httpjson.Router) {
-	mux.Handle("POST /work/retention/capacity", http.HandlerFunc(a.serveSetCapacity))
-	mux.Handle("GET /work/retention/maintenance", http.HandlerFunc(a.serveMaintenanceStatus))
-	mux.Handle("POST /work/retention/maintenance/abandon", http.HandlerFunc(a.serveAbandon))
-	mux.Handle("POST /work/retention/maintenance/exclude", http.HandlerFunc(a.serveExclude))
-	mux.Handle("GET /work/retention/reanchor", http.HandlerFunc(a.serveReanchorStatus))
-	mux.Handle("POST /work/retention/reanchor", http.HandlerFunc(a.serveReanchor))
+func (a *App) mountCapacity(mount func(string, http.HandlerFunc)) {
+	mount("POST /work/retention/capacity", a.serveSetCapacity)
+	mount("GET /work/retention/maintenance", a.serveMaintenanceStatus)
+	mount("POST /work/retention/maintenance/abandon", a.serveAbandon)
+	mount("POST /work/retention/maintenance/exclude", a.serveExclude)
+	mount("GET /work/retention/reanchor", a.serveReanchorStatus)
+	mount("POST /work/retention/reanchor", a.serveReanchor)
 }
 
 // serveReanchorStatus answers GET /work/retention/reanchor: the stream's own
@@ -522,23 +381,28 @@ func (a *App) mountCapacity(mux httpjson.Router) {
 func (a *App) serveReanchorStatus(w http.ResponseWriter, r *http.Request) {
 	stream := r.URL.Query().Get("stream")
 	if stream == "" {
-		writeJSON(w, http.StatusBadRequest,
-			map[string]string{"error": "stream_required"})
+		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeStreamRequired)
 		return
 	}
 	view, err := a.capacity.ReanchorStatus(r.Context(), stream)
 	switch {
 	case errors.Is(err, engine.ErrUnknownStream):
-		writeJSON(w, http.StatusNotFound,
-			map[string]string{"error": "unknown_stream", "detail": err.Error()})
+		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownStream,
+			map[string]string{"detail": err.Error()})
 		return
 	case err != nil:
 		// THE LOG EXISTS AND THE BROKER DID NOT ANSWER. The instant is read
 		// live, so this is the one failure here worth retrying — and
 		// reporting it as an unknown stream sent an operator looking for a
 		// typo in a name that was right.
-		writeJSON(w, http.StatusServiceUnavailable,
-			map[string]string{"error": "stream_unreadable", "detail": err.Error()})
+		//
+		// THE RETRY-AFTER IS THE UNDECIDED SCALE ([authz.RetryUndecidedSeconds])
+		// and for its reason: what the caller waits for is one read of the
+		// broker and the fleet's registers coming back — a store blip, not
+		// an outage — and a longer hint leaves an operator waiting on a
+		// status that could already answer.
+		httpjson.UnavailableWith(w, httpjson.CodeStreamUnreadable,
+			authz.RetryUndecidedSeconds, httpjson.Detail{"detail": err.Error()})
 		return
 	}
 	answer := map[string]any{
@@ -559,8 +423,7 @@ func (a *App) serveReanchorStatus(w http.ResponseWriter, r *http.Request) {
 func (a *App) serveReanchor(w http.ResponseWriter, r *http.Request) {
 	stream, confirm := r.URL.Query().Get("stream"), r.URL.Query().Get("confirm")
 	if stream == "" || confirm == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "confirm_required",
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeConfirmRequired, map[string]string{
 			"detail": "echo the stream's own created_at from GET " +
 				"/work/retention/reanchor — a reanchor declares every position " +
 				"below the new generation stale, and the confirmation is what " +
@@ -568,21 +431,25 @@ func (a *App) serveReanchor(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	by := iam.ActorFor(caller)
 	plan, err := a.capacity.Reanchor(r.Context(), engine.ReanchorRequest{
-		Stream: stream, Confirm: confirm, By: operator,
+		Stream: stream, Confirm: confirm, By: by,
 		Force:   r.URL.Query().Get("force") == "true",
 		Discard: r.URL.Query().Get("discard") == "true",
 	})
 	if err != nil {
 		log.Warn("api_reanchor_refused", "stream", stream, "error", err)
-		writeJSON(w, http.StatusConflict,
-			map[string]string{"error": "reanchor_refused", "detail": err.Error()})
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeReanchorRefused,
+			map[string]string{"detail": err.Error()})
 		return
 	}
-	log.Warn("reanchored", "operator", operator, "stream", stream,
-		"generation", plan.Generation, "case", string(plan.Case), "cursor", plan.Cursor,
-		"discarded", plan.Discarded != nil)
+	log.Warn("reanchored", "by", by.Name, "operator", by.OperatorID,
+		"stream", stream, "generation", plan.Generation, "case", string(plan.Case),
+		"cursor", plan.Cursor, "discarded", plan.Discarded != nil)
 	answer := map[string]any{
 		"stream": stream, "generation": plan.Generation, "case": plan.Case,
 		"cursor": plan.Cursor,
@@ -601,8 +468,7 @@ func (a *App) serveSetCapacity(w http.ResponseWriter, r *http.Request) {
 	stream := r.URL.Query().Get("stream")
 	target, err := strconv.ParseUint(r.URL.Query().Get("bytes"), 10, 64)
 	if stream == "" || err != nil || target == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "target_required",
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeTargetRequired, map[string]string{
 			"detail": "name the stream and the byte ceiling — a target is chosen " +
 				"once for the life of an operation and never changed, so there " +
 				"is no value to guess",
@@ -610,16 +476,20 @@ func (a *App) serveSetCapacity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if confirm := r.URL.Query().Get("confirm"); confirm != strconv.FormatUint(target, 10) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "confirm_required",
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeConfirmRequired, map[string]string{
 			"detail": "repeat the byte count in ?confirm= — this restarts the " +
 				"whole fleet three times and changes what the broker will accept",
 		})
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	by := iam.ActorFor(caller)
 	op, err := a.capacity.SetCapacity(r.Context(), engine.CapacityRequest{
-		Stream: stream, TargetMaxBytes: target, By: operator,
+		Stream: stream, TargetMaxBytes: target,
+		By: by.Name, OperatorID: by.OperatorID,
 		Assert: r.URL.Query().Get("assert_excluded") == "true",
 	})
 	if err != nil {
@@ -628,13 +498,14 @@ func (a *App) serveSetCapacity(w http.ResponseWriter, r *http.Request) {
 		// operation that never opened from one that is open and stuck,
 		// and those have opposite next steps.
 		log.Warn("api_set_capacity_refused", "stream", stream, "error", err)
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error": "capacity_refused", "detail": err.Error(),
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeCapacityRefused, httpjson.Detail{
+			"detail":    err.Error(),
 			"operation": operationOrNil(op),
 		})
 		return
 	}
-	log.Info("capacity_requested", "operator", operator, "stream", stream,
+	log.Info("capacity_requested", "by", by.Name, "operator", by.OperatorID,
+		"stream", stream,
 		"target", target, "phase", op.Phase)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"operation": operationOrNil(op), "mode": a.capacity.Mode(),
@@ -645,14 +516,13 @@ func (a *App) serveSetCapacity(w http.ResponseWriter, r *http.Request) {
 func (a *App) serveMaintenanceStatus(w http.ResponseWriter, r *http.Request) {
 	stream := r.URL.Query().Get("stream")
 	if stream == "" {
-		writeJSON(w, http.StatusBadRequest,
-			map[string]string{"error": "stream_required"})
+		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeStreamRequired)
 		return
 	}
 	op, acks, admissions, found, err := a.capacity.CapacityStatus(r.Context(), stream)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError,
-			map[string]string{"error": "maintenance_unreadable", "detail": err.Error()})
+		httpjson.FailWith(w, http.StatusInternalServerError, httpjson.CodeMaintenanceUnreadable,
+			map[string]string{"detail": err.Error()})
 		return
 	}
 	body := map[string]any{
@@ -675,9 +545,9 @@ func (a *App) serveMaintenanceStatus(w http.ResponseWriter, r *http.Request) {
 
 // serveAbandon answers POST /work/retention/maintenance/abandon.
 func (a *App) serveAbandon(w http.ResponseWriter, r *http.Request) {
-	a.capacityGesture(w, r, "abandon", func(ctx context.Context, stream string) (
-		coord.MaintenanceOperation, error) {
-		return a.capacity.AbandonCapacity(ctx, stream)
+	a.capacityGesture(w, r, "abandon", func(ctx context.Context, stream string,
+		by iam.Actor) (coord.MaintenanceOperation, error) {
+		return a.capacity.AbandonCapacity(ctx, stream, by)
 	})
 }
 
@@ -685,42 +555,52 @@ func (a *App) serveAbandon(w http.ResponseWriter, r *http.Request) {
 func (a *App) serveExclude(w http.ResponseWriter, r *http.Request) {
 	node := r.URL.Query().Get("node")
 	if node == "" || r.URL.Query().Get("confirm") != node {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "confirm_required",
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeConfirmRequired, map[string]string{
 			"detail": "repeat the node id in ?confirm= — excluding a participant " +
 				"asserts that its process is stopped and holds no outstanding " +
 				"request, which is the only thing that waives its acknowledgement",
 		})
 		return
 	}
-	a.capacityGesture(w, r, "exclude", func(ctx context.Context, stream string) (
-		coord.MaintenanceOperation, error) {
-		return a.capacity.ExcludeParticipant(ctx, stream, node)
+	a.capacityGesture(w, r, "exclude", func(ctx context.Context, stream string,
+		by iam.Actor) (coord.MaintenanceOperation, error) {
+		return a.capacity.ExcludeParticipant(ctx, stream, node, by)
 	})
 }
 
-// capacityGesture is the shared shape of the two operator writes.
+// capacityGesture is the shared shape of the two operator writes, each handed
+// who is making it so the operation can record them.
 func (a *App) capacityGesture(w http.ResponseWriter, r *http.Request, what string,
-	run func(context.Context, string) (coord.MaintenanceOperation, error)) {
+	run func(context.Context, string, iam.Actor) (coord.MaintenanceOperation, error)) {
 
 	stream := r.URL.Query().Get("stream")
 	if stream == "" {
-		writeJSON(w, http.StatusBadRequest,
-			map[string]string{"error": "stream_required"})
+		httpjson.Fail(w, http.StatusBadRequest, httpjson.CodeStreamRequired)
 		return
 	}
-	op, err := run(r.Context(), stream)
+	// WHO IS ACTING, resolved BEFORE the gesture runs, as every other
+	// write on this surface does. It was resolved after — so an abandon or
+	// an exclusion took effect and only then was asked who had made it,
+	// and a caller the node could not resolve changed the capacity window
+	// and was answered 503 as though nothing had happened.
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	by := iam.ActorFor(caller)
+	op, err := run(r.Context(), stream, by)
 	if err != nil {
 		log.Warn("api_capacity_gesture_refused", "gesture", what,
-			"stream", stream, "error", err)
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error": "capacity_refused", "detail": err.Error(),
+			"stream", stream, "by", by.Name, "operator", by.OperatorID,
+			"error", err)
+		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeCapacityRefused, httpjson.Detail{
+			"detail":    err.Error(),
 			"operation": operationOrNil(op),
 		})
 		return
 	}
-	operator, _ := auth.OperatorFrom(r.Context())
-	log.Info("capacity_gesture", "operator", operator, "gesture", what, "stream", stream)
+	log.Info("capacity_gesture", "by", by.Name, "operator", by.OperatorID,
+		"gesture", what, "stream", stream)
 	writeJSON(w, http.StatusOK, map[string]any{"operation": operationOrNil(op)})
 }
 

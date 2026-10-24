@@ -9,7 +9,7 @@
  *
  * There is no reveal button. The one route that returns a value needs an
  * explicit flag and logs the access, and putting that behind a click in a
- * dashboard that anyone with the token can open is not a trade worth making;
+ * dashboard that anyone signed in can open is not a trade worth making;
  * `crewlet secrets get` is the deliberate path. Storing, editing and removing
  * a row need no such trade: none of them reads a value back. THE PEEK INHERITS
  * THAT and may never grow one either — a rail is a smaller screen, not a
@@ -39,6 +39,9 @@ import {
   StatGroup,
   Tag,
   useToast,
+  TableKeyCell,
+  TableDateCell,
+  TableTextCell,
 } from "@crewlethq/ui";
 import {
   PlusGlyph,
@@ -50,7 +53,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { DateCell, KeyCell, TextCell } from "~/app/frame/cells.tsx";
+
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
@@ -59,12 +62,13 @@ import { SecretDialog } from "./SecretDialog.tsx";
 import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
+import { authorLabel, throughOf } from "~/lib/attribution.ts";
+import { needsWords } from "~/lib/access.ts";
 import { isAbort, rest, RestError } from "~/protocol/index.ts";
 import { restErrorCode, useRest } from "~/lib/useRest.ts";
-import type { ConfigReference, SecretRow } from "~/protocol/index.ts";
+import type { ConfigReference, LogRefusal, QueryRefusal, SecretRow } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 
 /**
  * A refusal as the code [QueryState] renders, with this surface's one 404.
@@ -91,7 +95,9 @@ function refusalCode(err: RestError | null): QueryErrorCode | null {
 function refusal(err: unknown): string {
   if (!(err instanceof RestError)) return String(err);
   if (err.unauthorized) {
-    return "This surface needs an operator token. Set one from the command palette.";
+    // THE GRANT THE REFUSAL NAMED: "needs an operator token" sent a
+    // signed-in person to find a credential they already held.
+    return needsWords("This", err.grants);
   }
   return err.detail || err.code || "the engine refused the read";
 }
@@ -102,6 +108,11 @@ interface Credentials {
   loading: boolean;
   /** The refusal as a machine code, which is what [QueryState] renders from. */
   error: QueryErrorCode | null;
+  /**
+   * What the refusal said beyond its code — the grants that would have
+   * admitted the reader, or the state log's refusal — for [QueryState].
+   */
+  refusal: QueryRefusal | LogRefusal | null;
   /** Why the reference index is unknown, when it is. */
   unknown: string | null;
   /** The config fields naming one credential, or null where the check did not answer. */
@@ -165,6 +176,7 @@ function useCredentials(enabled = true): Credentials {
     rows: answer.data?.rows ?? null,
     loading: answer.loading,
     error: refusalCode(answer.error),
+    refusal: answer.refusal,
     unknown: answer.data?.unknown ?? null,
     readersOf,
     reload: useCallback(() => reload(), [reload]),
@@ -204,28 +216,31 @@ async function readReferences(
 /**
  * What each provenance means, in the words of the path that writes it.
  *
- * `source` IS WHO LAST WROTE THE ROW, never where the value lives: every row
- * `/secrets` lists is sealed in the fleet's store whatever wrote it. Each
- * writer stamps its own word — `PUT /secrets/{name}` defaults to `api`
- * (secretsapi), `crewlet secrets set` to `cli`, an integration's setup to
- * `setup` (internal/setup), a vendor's provision command to `provision`
- * (internal/provision), a rekey to `rekey` and the move off a node's own table
- * to `migrated` (fleetsecrets). `?source=` and `--source` take any word, so a
- * value this table does not know is said as the writer's own rather than
- * guessed at.
+ * `source` IS WHICH PATH LAST WROTE THE ROW, never where the value lives: every
+ * row `/secrets` lists is sealed in the fleet's store whatever wrote it. Each
+ * path stamps its own word and no request can name one (internal/secrets'
+ * `Source`): `PUT /secrets/{name}` stamps `api` whoever calls it — this
+ * screen, `crewlet secrets set` against a running node, any client — an
+ * integration's setup `setup`, an integration's provisioning pass `provision`,
+ * and the move of a stopped node's own rows onto the fleet `migrated`.
+ *
+ * ONLY THOSE FOUR, because they are all this listing can show: the words a
+ * stopped node's own table records (`cli`, `llm-login`) are replaced by
+ * `migrated` when its rows reach the fleet, `iam` marks the engine's own keys,
+ * which the listing never names, and a rekey keeps the word it found. A word
+ * outside the table is a newer engine's, said as one this build does not know
+ * rather than guessed at.
  */
 const PROVENANCE: Record<string, string> = {
-  api: "stored over the API — this page or PUT /secrets",
-  cli: "set with crewlet secrets set",
+  api: "stored through the API: this console, the CLI or another client",
   setup: "written by an integration's setup",
-  provision: "minted by a vendor's provision command",
-  rekey: "sealed again under a new key by a rekey",
+  provision: "minted by an integration's provisioning pass",
   migrated: "moved onto the fleet from a node's own table",
 };
 
 /** What a row's provenance says, as a sentence a reader can act on. */
 export function provenance(source: string): string {
-  return PROVENANCE[source] ?? `its writer named itself “${source}”`;
+  return PROVENANCE[source] ?? `a source this build does not know (“${source}”)`;
 }
 
 /**
@@ -270,26 +285,18 @@ function CredentialBody({
         {paths === null ? (
           <Callout variant="warning">
             <span className="col" style={{ gap: 4 }}>
-              <span>
-                The active configuration could not be read, so it is not known whether anything
-                points at this name.
-              </span>
+              <span>Couldn’t check whether anything uses it.</span>
               {unknown && <span className="t-caption">{unknown}</span>}
             </span>
           </Callout>
         ) : paths.length === 0 ? (
-          <p className="t-body">
-            No field in the active configuration names this. Removing it would change nothing the
-            company is running.
-          </p>
+          <p className="t-body">Nothing uses it.</p>
         ) : (
           <div className="col gap-2">
             <p className="t-body">
               {paths.length === 1
-                ? "One field in the active configuration points at this name."
-                : `${paths.length} fields in the active configuration point at this name.`}{" "}
-              Removing it leaves each of them resolving to nothing, and the surfaces holding one
-              start refusing deliveries.
+                ? "One field uses it. Removing it breaks that field."
+                : `${paths.length} fields use it. Removing it breaks them.`}
             </p>
             <span className="col" style={{ gap: 2 }}>
               {paths.map((path) => (
@@ -325,6 +332,17 @@ function CredentialBody({
                 },
                 { label: "Key id", value: <span className="mono">{row.key_id}</span> },
                 { label: "Set by", value: row.updated_by || undefined },
+                {
+                  // THE CREDENTIAL IT WAS STORED THROUGH, beside the author
+                  // rather than folded into the name: a machine token acting
+                  // as its owner writes under the owner's login, and which of
+                  // their credentials stored a value is the question an
+                  // incident asks of this row.
+                  label: "Through",
+                  value: throughOf(row.updated_by, row.operator_id) ? (
+                    <span className="mono">{throughOf(row.updated_by, row.operator_id)}</span>
+                  ) : undefined,
+                },
                 { label: "Updated", value: fmtDateTime(row.updated_at) },
               ],
             },
@@ -332,15 +350,13 @@ function CredentialBody({
         />
       </Wrap>
 
-      {/* ONLY IN THE RAIL. The page carries this sentence in the banner above
-          its table, and a reader who opened a credential in a peek has the
-          same question with none of that on screen: where is the value. */}
+      {/* IN THE RAIL: a reader who opened a credential in a peek asks where
+          the value is, and the rail is all they have on screen. */}
       {flush && (
         <section className="col gap-2">
           <div className="t-label">The value</div>
           <p className="t-body">
-            Never sent to this page, here or anywhere else in the dashboard. Reading one is{" "}
-            <InlineCode>crewlet secrets get</InlineCode>, which logs the access.
+            Values aren’t shown. Use <InlineCode>crewlet secrets get</InlineCode> to read one.
           </p>
         </section>
       )}
@@ -358,13 +374,13 @@ function CredentialBody({
  * is what somebody deciding about a name actually reads.
  */
 export function CredentialPeek({ name }: { name: string }) {
-  const { rows, loading, error, unknown, readersOf } = useCredentials(name !== "");
+  const { rows, loading, error, refusal, unknown, readersOf } = useCredentials(name !== "");
   const row = (rows ?? []).find((r) => r.name === name) ?? null;
 
   return (
     <>
       {loading && rows === null && <Skeleton variant="text" rows={6} label="Loading" />}
-      <QueryState error={error} loading={loading}>
+      <QueryState error={error} refusal={refusal} loading={loading}>
         {/* NOT AN EMPTY RAIL. A name that matches no row is a hand-edited URL
             or a credential removed since the link was made, and naming the one
             that resolved to nothing is more use than a header over no row. */}
@@ -373,7 +389,7 @@ export function CredentialPeek({ name }: { name: string }) {
             size="compact"
             icon={<KeyGlyph size="xl" />}
             title={`No credential called “${name}”`}
-            description="The fleet holds no row under this name. It may have been removed, or the name may be spelled differently in the config that points at it."
+            description="It may have been removed, or the name is misspelled."
           />
         )}
         {row && (
@@ -392,7 +408,7 @@ export function CredentialPeek({ name }: { name: string }) {
 export function Secrets({ name }: { name?: string }) {
   const now = useNow();
   const toast = useToast();
-  const { rows, loading, error, unknown, readersOf, reload } = useCredentials();
+  const { rows, loading, error, refusal, unknown, readersOf, reload } = useCredentials();
 
   const [writing, setWriting] = useState<{ editing: string } | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
@@ -464,33 +480,12 @@ export function Secrets({ name }: { name?: string }) {
         <Button
           leadingIcon={<PlusGlyph size="sm" />}
           variant="primary"
+          size="small"
           onClick={() => setWriting({ editing: "" })}
         >
           Store a secret
         </Button>
       </PageActions>
-      <PageNote>
-        The company's sealed credentials. Names, key ids and provenance — this screen never asks for
-        a value.
-      </PageNote>
-
-      {/* THE SHIELD, NOT THE TONE'S OWN INFO MARK. This strip is about where
-          the values live and who can read them, and the glyph is half the
-          sentence. */}
-      <Callout variant="neutral" icon={<ShieldGlyph size="md" />}>
-        <span className="col" style={{ gap: 4 }}>
-          <span>
-            These live in the fleet's coordination store, sealed with the Tier A keyring, and every
-            node reads them. A <InlineCode>${"{VAR}"}</InlineCode> in the company config resolves
-            here first and falls back to the process environment.
-          </span>
-          <span className="t-caption">
-            Values are never sent to this page. Reading one is{" "}
-            <InlineCode>crewlet secrets get</InlineCode>, which logs the access. A new value reaches
-            a running seat at the next configuration activation or restart.
-          </span>
-        </span>
-      </Callout>
 
       {rows !== null && (
         <Card padding="none">
@@ -533,18 +528,18 @@ export function Secrets({ name }: { name?: string }) {
       {loading && rows === null && <Skeleton variant="text" rows={4} label="Loading" />}
       <QueryState
         error={error}
+        refusal={refusal}
         loading={loading}
         empty={
           list.length
             ? undefined
             : {
                 title: "No secrets are stored",
-                // A COMMAND IS CODE, as the card above sets `crewlet secrets
-                // get`; in prose it read as three words of the sentence.
+                // A COMMAND IS CODE: in prose it read as three words of the
+                // sentence.
                 hint: (
                   <>
-                    Store one here, set one with <InlineCode>crewlet secrets set</InlineCode>, or
-                    let a provisioning command hand one straight to the engine.
+                    Add one here or with <InlineCode>crewlet secrets set</InlineCode>.
                   </>
                 ),
               }
@@ -580,7 +575,7 @@ export function Secrets({ name }: { name?: string }) {
                 // one a fact the credential's peek carries.
                 floor: "max-content",
                 sortValue: (s) => s.name,
-                cell: (s) => <KeyCell value={s.name} />,
+                cell: (s) => <TableKeyCell value={s.name} />,
               },
               {
                 // NEVER GIVES WAY: what reads a name is what breaks when it
@@ -617,7 +612,7 @@ export function Secrets({ name }: { name?: string }) {
                 // column repeats itself down the list.
                 drop: 1,
                 sortValue: (s) => s.key_id,
-                cell: (s) => <KeyCell value={s.key_id} />,
+                cell: (s) => <TableKeyCell value={s.key_id} />,
               },
               {
                 key: "by",
@@ -630,7 +625,7 @@ export function Secrets({ name }: { name?: string }) {
                 // for an empty string the reader would read as a name.
                 cell: (s) =>
                   s.updated_by ? (
-                    <TextCell>{s.updated_by}</TextCell>
+                    <TableTextCell>{authorLabel(s.updated_by, s.operator_id)}</TableTextCell>
                   ) : (
                     <EmptyValue label="Nobody recorded" />
                   ),
@@ -641,12 +636,12 @@ export function Secrets({ name }: { name?: string }) {
                 shrink: true,
                 drop: 4,
                 sortValue: (s) => tsKey(s.updated_at),
-                cell: (s) => <DateCell at={s.updated_at} now={now} />,
+                cell: (s) => <TableDateCell value={s.updated_at} now={now} />,
               },
               {
                 key: "act",
                 header: "",
-                label: "Actions",
+                action: true,
                 shrink: true,
                 cell: (s) => (
                   <span className="row gap-1">
@@ -693,7 +688,7 @@ export function Secrets({ name }: { name?: string }) {
         <EmptyState
           icon={<KeyGlyph size="xl" />}
           title={`No credential called “${addressed}”`}
-          description="The fleet holds no row under this name. It may have been removed since the link was made, or the name may be spelled differently in the config that points at it."
+          description="It may have been removed, or the name is misspelled."
         />
       )}
 

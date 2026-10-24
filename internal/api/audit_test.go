@@ -7,22 +7,24 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/observe"
-	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -80,70 +82,55 @@ func (auditWork) UpdateTask(context.Context, string, string, string, uint64,
 	return tracker.WriteResult{}, nil
 }
 
-// auditedCompany binds the token `founder` to Jane Founder and leaves `ci`
-// bound to nobody.
-func auditedCompany() func() *config.Company {
-	company := &config.Company{
-		Name: "Nimbus",
-		Roles: []config.Role{
-			{Name: "Jane Founder", Kind: org.KindHuman,
-				Contact: &org.HumanContact{CrewletOperatorID: "founder"}},
-			{Name: "CTO"},
-		},
-	}
-	return func() *config.Company { return company }
-}
-
 // auditedApp is an app serving the act transport and the backup route, both
-// auditing into one record.
+// auditing into one record. Two Tier A credentials: `founder`, holding admin
+// and with it every app, and `ci`, which holds the knowledge base alone — so
+// a tracker write is one the authority table refuses it.
 func auditedApp(t *testing.T, taker *fakeBackup) (*api.App, *recordedAudit) {
 	t.Helper()
 	audit := &recordedAudit{}
-	company := auditedCompany()
-	chart := func() *org.Organization {
-		o, err := company().Organization()
-		if err != nil {
-			t.Fatalf("the test company does not derive: %v", err)
-		}
-		return o
-	}
 	b := config.DefaultBootstrap()
-	b.API.Auth.Tokens = []config.APIToken{
-		{ID: "founder", Token: "founder-secret"}, {ID: "ci", Token: "ci-secret"},
+	authorize(&b, config.APIToken{ID: "founder", Token: "founder-secret"},
+		config.APIToken{ID: "ci", Token: "ci-secret",
+			Grants: []iam.Grant{iam.GrantKnowledge}})
+	operators, err := operator.New(operator.Options{
+		Halves: func() (operator.Halves, bool) {
+			return operator.Halves{Work: builtin.WorkDeps{
+				Reader: stubWorkReader{},
+				Writer: func(builtin.Actor) builtin.WorkWriter { return auditWork{} },
+			}}, true
+		},
+		Authorize: builtin.Decide(authz.NoChart{}),
+		Audit:     audit,
+	})
+	if err != nil {
+		t.Fatalf("operator.New: %v", err)
 	}
 	a := newApp(t, api.Options{
 		Bootstrap: &b,
-		Sources:   queries.Sources{Company: company, NodeID: "node-a"},
-		Operator: operatorSurface(t, operator.Options{
-			Work: builtin.WorkDeps{
-				Reader: stubWorkReader{},
-				Writer: func(builtin.Actor) builtin.WorkWriter { return auditWork{} },
-				Actor:  operator.WorkActor(chart, nil),
-			},
-			Org:   chart,
-			Audit: audit,
-		}),
-		Backup: taker,
-		Audit:  audit,
+		Sources:   queries.Sources{NodeID: "node-a"},
+		Operator:  operators,
+		Backup:    taker,
+		Audit:     audit,
 	})
 	return a, audit
 }
 
-// auditedRequest is the request id every act in this file is sent under: a
-// UUIDv7, as the act transport requires, because the operation it derives
-// carries the id's instant.
-const auditedRequest = "01927c3a-4e5b-7c6d-8e9f-0a1b2c3d4e5f"
-
-// actRequest posts one act request and returns its status.
-func actRequest(t *testing.T, a *api.App, token, tool, args string) int {
+// actRequest posts one act request under a fresh operation key and returns
+// its status and the operation the answer names.
+func actRequest(t *testing.T, a *api.App, token, tool, args string) (int, string) {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodPost, operator.ActPathPrefix+tool,
-		strings.NewReader(`{"request_id":"`+auditedRequest+`","args":`+args+`}`))
+		strings.NewReader(`{"args":`+args+`}`))
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Authorization", "Bearer "+token)
+	r.Header.Set(opkey.Header, statelog.NewOpID(time.Now(), ""))
 	rec := httptest.NewRecorder()
 	a.ServeHTTP(rec, r)
-	return rec.Code
+	var body map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	op, _ := body["op_id"].(string)
+	return rec.Code, op
 }
 
 // EVERY RUNTIME WRITE LEAVES EXACTLY ONE AUDIT RECORD, and a request that
@@ -151,14 +138,15 @@ func actRequest(t *testing.T, a *api.App, token, tool, args string) int {
 //
 // The table is the runtime writes this build serves over HTTP outside the
 // configuration and credential surfaces — every act tool call, whatever
-// became of it, and every backup, whatever became of it — each driven through
-// the real app behind the real guard. Each record must be persisted (a
-// category, so the event store writes it), carry the operator source every
-// audit reader selects on, name the credential as the actor and the person it
-// is bound to, and say what became of the call. The refusals before a call
-// (a read on the write transport, a token that is nobody, a backup with no
-// destination) are the counterfactual: an audit that recorded every request
-// would pass the rest of the table.
+// became of it (a refusal by the authority table included: that is a call
+// somebody made and was not allowed), and every backup, whatever became of it
+// — each driven through the real app behind the real guard. Each record must
+// be persisted (a category, so the event store writes it), carry the operator
+// source every audit reader selects on, name the caller in the three halves
+// every history row names one by — author, kind, credential — and say what
+// became of the call. The refusals before a call (a read on the write
+// transport, a backup with no destination) are the counterfactual: an audit
+// that recorded every request would pass the rest of the table.
 func TestEachRuntimeWriteEmitsOneAuditedEvent(t *testing.T) {
 	t.Parallel()
 	type want struct {
@@ -170,24 +158,30 @@ func TestEachRuntimeWriteEmitsOneAuditedEvent(t *testing.T) {
 	cases := []struct {
 		name   string
 		taker  *fakeBackup
-		run    func(*testing.T, *api.App) int
+		run    func(*testing.T, *api.App) (int, string)
 		status int
+		// operated says the answer names the operation the call was made
+		// under, which the record's request id must be.
+		operated bool
+		// caller is the login the record names, `token:founder` unless
+		// the case says otherwise.
+		caller string
 		want   *want
 	}{{
 		name: "an act that lands",
-		run: func(t *testing.T, a *api.App) int {
+		run: func(t *testing.T, a *api.App) (int, string) {
 			return actRequest(t, a, "founder-secret", tracker.CreateWorkItemTool,
 				`{"title":"Rotate the signing key","project":"ENG"}`)
 		},
-		status: http.StatusOK,
+		status:   http.StatusOK,
+		operated: true,
 		want: &want{eventType: "operator_acted", outcome: types.AuditApplied, fields: map[string]any{
 			"transport": types.TransportAct, "tool": tracker.CreateWorkItemTool,
-			"request_id": auditedRequest,
-			"position":   "CREWLET_TRACKER_LOG@1:7",
+			"position": "CREWLET_TRACKER_LOG@1:7",
 		}},
 	}, {
 		name: "an act the tool refuses",
-		run: func(t *testing.T, a *api.App) int {
+		run: func(t *testing.T, a *api.App) (int, string) {
 			return actRequest(t, a, "founder-secret", tracker.CreateWorkItemTool, `{"project":"ENG"}`)
 		},
 		status: http.StatusUnprocessableEntity,
@@ -195,23 +189,29 @@ func TestEachRuntimeWriteEmitsOneAuditedEvent(t *testing.T) {
 			fields: map[string]any{"refusal": "invalid", "tool": tracker.CreateWorkItemTool}},
 	}, {
 		name: "a read refused on the write transport",
-		run: func(t *testing.T, a *api.App) int {
+		run: func(t *testing.T, a *api.App) (int, string) {
 			return actRequest(t, a, "founder-secret", tracker.ListWorkItemsTool, `{}`)
 		},
 		status: http.StatusBadRequest,
 	}, {
-		name: "an act by a token that is nobody",
-		run: func(t *testing.T, a *api.App) int {
+		// A CALL THE AUTHORITY TABLE REFUSES IS A CALL, and the one an
+		// audit is most often opened to find: somebody asked for a write
+		// they may not make.
+		name: "an act the authority table refuses",
+		run: func(t *testing.T, a *api.App) (int, string) {
 			return actRequest(t, a, "ci-secret", tracker.CreateWorkItemTool,
 				`{"title":"Rotate the signing key","project":"ENG"}`)
 		},
 		status: http.StatusForbidden,
+		caller: "token:ci",
+		want: &want{eventType: "operator_acted", outcome: types.AuditRefused, failed: true,
+			fields: map[string]any{"refusal": "forbidden", "tool": tracker.CreateWorkItemTool}},
 	}, {
 		name:  "a backup that is taken",
 		taker: &fakeBackup{took: backup.Manifest{Streams: make([]backup.StreamArtifact, 3)}},
-		run: func(t *testing.T, a *api.App) int {
+		run: func(t *testing.T, a *api.App) (int, string) {
 			status, _ := post(t, a, "/backup?dir=/var/backups/one", "founder-secret")
-			return status
+			return status, ""
 		},
 		status: http.StatusOK,
 		want: &want{eventType: "backup_requested", outcome: types.AuditApplied, fields: map[string]any{
@@ -220,9 +220,9 @@ func TestEachRuntimeWriteEmitsOneAuditedEvent(t *testing.T) {
 	}, {
 		name:  "a backup that fails",
 		taker: &fakeBackup{err: errors.New("disk full")},
-		run: func(t *testing.T, a *api.App) int {
+		run: func(t *testing.T, a *api.App) (int, string) {
 			status, _ := post(t, a, "/backup?dir=/var/backups/two", "founder-secret")
-			return status
+			return status, ""
 		},
 		status: http.StatusInternalServerError,
 		want: &want{eventType: "backup_requested", outcome: types.AuditFailed, failed: true,
@@ -234,9 +234,9 @@ func TestEachRuntimeWriteEmitsOneAuditedEvent(t *testing.T) {
 		name: "a backup a newer build's record refuses",
 		taker: &fakeBackup{err: fmt.Errorf("backup: a record: %w",
 			objstore.ErrRecordUnreadable)},
-		run: func(t *testing.T, a *api.App) int {
+		run: func(t *testing.T, a *api.App) (int, string) {
 			status, _ := post(t, a, "/backup?dir=/var/backups/four", "founder-secret")
-			return status
+			return status, ""
 		},
 		status: http.StatusConflict,
 		want: &want{eventType: "backup_requested", outcome: types.AuditFailed, failed: true,
@@ -246,9 +246,9 @@ func TestEachRuntimeWriteEmitsOneAuditedEvent(t *testing.T) {
 		// it is not a failed backup in anybody's history.
 		name:  "a backup whose destination is refused",
 		taker: &fakeBackup{err: fmt.Errorf("%w: cannot create /etc/passwd", backup.ErrBadDestination)},
-		run: func(t *testing.T, a *api.App) int {
+		run: func(t *testing.T, a *api.App) (int, string) {
 			status, _ := post(t, a, "/backup?dir=/etc/passwd", "founder-secret")
-			return status
+			return status, ""
 		},
 		status: http.StatusBadRequest,
 	}, {
@@ -256,16 +256,16 @@ func TestEachRuntimeWriteEmitsOneAuditedEvent(t *testing.T) {
 		// no backup anybody's history should count as failed.
 		name:  "a backup asked for while one runs",
 		taker: &fakeBackup{err: backup.ErrBackupRunning},
-		run: func(t *testing.T, a *api.App) int {
+		run: func(t *testing.T, a *api.App) (int, string) {
 			status, _ := post(t, a, "/backup?dir=/var/backups/three", "founder-secret")
-			return status
+			return status, ""
 		},
 		status: http.StatusConflict,
 	}, {
 		name: "a backup that names no destination",
-		run: func(t *testing.T, a *api.App) int {
+		run: func(t *testing.T, a *api.App) (int, string) {
 			status, _ := post(t, a, "/backup", "founder-secret")
-			return status
+			return status, ""
 		},
 		status: http.StatusBadRequest,
 	}}
@@ -277,7 +277,8 @@ func TestEachRuntimeWriteEmitsOneAuditedEvent(t *testing.T) {
 				taker = &fakeBackup{}
 			}
 			a, audit := auditedApp(t, taker)
-			if status := tc.run(t, a); status != tc.status {
+			status, op := tc.run(t, a)
+			if status != tc.status {
 				t.Fatalf("answered %d, want %d", status, tc.status)
 			}
 			published, recorded := audit.take()
@@ -300,24 +301,41 @@ func TestEachRuntimeWriteEmitsOneAuditedEvent(t *testing.T) {
 				t.Errorf("the envelope's source is %q, want %q — the value every audit "+
 					"reader selects runtime writes by", ev.Source, types.OperatorSource)
 			}
-			if ev.Actor() != "founder" {
-				t.Errorf("the actor is %q, want the credential that made the call", ev.Actor())
+			caller := tc.caller
+			if caller == "" {
+				caller = "token:founder"
+			}
+			if ev.Actor() != caller {
+				t.Errorf("the actor is %q, want %q — the principal that made the "+
+					"call, as every history row it wrote names it", ev.Actor(), caller)
 			}
 			rec, persisted := observe.Record(ev)
 			if !persisted {
 				t.Fatalf("a %s is not written to the event store, so the audit it is "+
 					"for never has a row", ev.Type)
 			}
-			if rec.Actor != "founder" || rec.Source != types.OperatorSource {
+			if rec.Actor != caller || rec.Source != types.OperatorSource {
 				t.Errorf("the stored row names actor %q and source %q", rec.Actor, rec.Source)
 			}
 			if (rec.Tags["failed"] == "true") != tc.want.failed {
 				t.Errorf("the row's failed tag is %q, want failed=%v", rec.Tags["failed"], tc.want.failed)
 			}
 			body := decodeFlat(t, ev)
-			if body["operator_id"] != "founder" || body["actor_seat"] != "jane-founder" {
-				t.Errorf("the record names operator %v and seat %v, want the token and "+
-					"the person it is bound to", body["operator_id"], body["actor_seat"])
+			// THE THREE HALVES iam.ActorFor makes of a principal: a Tier A
+			// token nobody is bound to authors under its whole login, as an
+			// operator, through itself.
+			if body["actor_kind"] != string(iam.ActorOperator) || body["operator_id"] != caller {
+				t.Errorf("the record names kind %v and credential %v, want %s through %s",
+					body["actor_kind"], body["operator_id"], iam.ActorOperator, caller)
+			}
+			if _, stale := body["actor_seat"]; stale {
+				t.Error("the record carries actor_seat, which no build writes: the " +
+					"author IS the seat for a person bound to one")
+			}
+			if tc.operated && (op == "" || body["request_id"] != op) {
+				t.Errorf("the record's request is %v and the answer's op_id %q — the "+
+					"audit row must join the operation the caller retries under",
+					body["request_id"], op)
 			}
 			if body["outcome"] != string(tc.want.outcome) {
 				t.Errorf("the outcome is %v, want %s", body["outcome"], tc.want.outcome)
@@ -340,55 +358,6 @@ func TestEachRuntimeWriteEmitsOneAuditedEvent(t *testing.T) {
 					"content and already live in the history of what they changed")
 			}
 		})
-	}
-}
-
-// A BACKUP'S RECORD NAMES ITS TAKER THROUGH THE LOOKUP THE NODE HANDS IN. A
-// token's binding may be a `${VAR}`, resolved through this node's own chain
-// ([queries.Sources.Env]) as the act transport and the dashboard resolve it,
-// so the person who took a backup is named on its record rather than nobody.
-// The variable is set in no process.
-func TestABackupsRecordNamesItsTakerThroughTheHandedLookup(t *testing.T) {
-	t.Parallel()
-	const variable = "CREWLET_API_TEST_BOUND_BACKUP_TAKER"
-	if _, set := os.LookupEnv(variable); set {
-		t.Fatalf("the premise: %s is set in no process", variable)
-	}
-	company := &config.Company{
-		Name: "Nimbus",
-		Roles: []config.Role{
-			{Name: "Jane Founder", Kind: org.KindHuman,
-				Contact: &org.HumanContact{CrewletOperatorID: "${" + variable + "}"}},
-			{Name: "CTO"},
-		},
-	}
-	b := config.DefaultBootstrap()
-	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "founder-secret"}}
-	audit := &recordedAudit{}
-	a := newApp(t, api.Options{
-		Bootstrap: &b,
-		Sources: queries.Sources{
-			Company: func() *config.Company { return company }, NodeID: "node-a",
-			Env: func(name string) (string, bool) {
-				if name == variable {
-					return "founder", true
-				}
-				return "", false
-			},
-		},
-		Backup: &fakeBackup{},
-		Audit:  audit,
-	})
-	if status, body := post(t, a, "/backup?dir=/var/backups/one", "founder-secret"); status != http.StatusOK {
-		t.Fatalf("POST /backup = %d: %v", status, body)
-	}
-	_, recorded := audit.take()
-	if len(recorded) != 1 {
-		t.Fatalf("a backup left %d audit records, want one", len(recorded))
-	}
-	if seat := decodeFlat(t, recorded[0])["actor_seat"]; seat != "jane-founder" {
-		t.Errorf("the backup's record names seat %v, want the person the handed "+
-			"lookup binds the token to", seat)
 	}
 }
 

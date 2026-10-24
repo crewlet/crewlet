@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/org"
@@ -43,7 +45,7 @@ import (
 // Human seats are left out. They have no turn, no phase and no spend, and the
 // agent screen is about what is running; the org tree below carries them, which
 // is where a reader looks for who to talk to.
-func roster(company func() *config.Company) []map[string]any {
+func roster(company func() (*config.Company, *org.Organization)) []map[string]any {
 	organization := agentOrganization(company)
 	if organization == nil {
 		return nil
@@ -71,7 +73,9 @@ func roster(company func() *config.Company) []map[string]any {
 			// links to the right page and answers nothing on it.
 			//
 			// The agent id rides along under its own name for the callers
-			// that genuinely need it — a budget scope is keyed by it.
+			// that genuinely need it: the live overlay is merged onto the
+			// row by it, as the projection keys seats, and a budget scope is
+			// keyed by it.
 			"id":       handle,
 			"agent_id": id.String(),
 			"role":     role.Name,
@@ -83,38 +87,41 @@ func roster(company func() *config.Company) []map[string]any {
 
 // agentOrganization is the active company's org, or nil when there is none to
 // read seats from.
-func agentOrganization(company func() *config.Company) *org.Organization {
+//
+// THE COMPANY'S OWN ORG, the one this node built when it applied the epoch,
+// rather than one re-derived from the document per read. Both halves come from
+// ONE read of the epoch, so a node with no company answers no seats, and the
+// screen says so.
+func agentOrganization(company func() (*config.Company, *org.Organization)) *org.Organization {
 	if company == nil {
 		return nil
 	}
-	c := company()
+	c, organization := company()
 	if c == nil {
-		return nil
-	}
-	organization, err := c.Organization()
-	if err != nil {
-		// A company that will not resolve into an org is one the engine
-		// refused to apply, so this is a config no node is running. An
-		// empty roster is the honest answer and the screen says so.
 		return nil
 	}
 	return organization
 }
 
 // placement reads which of the company's agent seats some node in the fleet
-// holds, keyed by role — the input the seat-state vocabulary's
+// holds, keyed by AGENT ID — the input the seat-state vocabulary's
 // `stopped`/`unplaced` is computed from.
 //
 // FROM THE SEAT LEASES, which every node reads alike, rather than from which
-// seats THIS node runs: a seat a peer holds is placed. This node's own seats
-// are added to what the listing returns, because a prefix listing is free to
-// lag a claim (coord's own contract) and a seat this process is serving right
-// now must never read as held by nobody on its own dashboard.
+// seats THIS node runs: a seat a peer holds is placed. A seat's lease is named
+// by its agent id (coord.SeatResource), which is the key the projection holds
+// the seat under too, so the two meet without a name between them — keyed by
+// role name, two seats sharing a name read as one, and either one's lease
+// placed both. This node's own seats are added to what the listing returns,
+// because a prefix listing is free to lag a claim (coord's own contract) and a
+// seat this process is serving right now must never read as held by nobody on
+// its own dashboard; the runtime names those by handle, which the composed org
+// resolves to the seat they address.
 //
 // An unreadable lease table is an error, never an empty answer: "no node holds
 // any seat" would stop every seat on every screen over a store blip.
-func placement(ctx context.Context, company func() *config.Company, leases coord.Backend,
-	runtime NodeRuntime,
+func placement(ctx context.Context, company func() (*config.Company, *org.Organization),
+	leases coord.Backend, runtime NodeRuntime,
 ) (map[string]bool, error) {
 	organization := agentOrganization(company)
 	if organization == nil {
@@ -124,21 +131,23 @@ func placement(ctx context.Context, company func() *config.Company, leases coord
 	if err != nil {
 		return nil, fmt.Errorf("list the seat leases: %w", err)
 	}
-	held := map[string]bool{}
+	held := map[uuid.UUID]bool{}
 	for _, lease := range live {
-		if handle, ok := coord.SeatHandle(lease.Resource); ok {
-			held[handle] = true
+		if id, ok := coord.SeatID(lease.Resource); ok {
+			held[id] = true
 		}
 	}
 	// FROM MEMORY ([NodeRuntime.Seats]), never through Snapshot, which
 	// reads the config posture off the coordination plane on every call.
 	for _, handle := range runtime.Seats() {
-		held[handle] = true
+		if id, ok := organization.AgentIDFor(organization.AgentSeatByHandle(handle)); ok {
+			held[id] = true
+		}
 	}
 	out := map[string]bool{}
 	for role := range organization.AllRoles() {
-		if _, ok := organization.AgentIDFor(role); ok {
-			out[role.Name] = held[role.Handle()]
+		if id, ok := organization.AgentIDFor(role); ok {
+			out[id.String()] = held[id]
 		}
 	}
 	return out, nil
@@ -194,7 +203,7 @@ func toolRows(runtime NodeRuntime) []map[string]any {
 // to run, but a closure built inside a constructor reads to contextcheck as
 // the constructor's own body — a background context created where the caller
 // had one to pass. streamHealth is a method for the same reason.
-func placementTick(company func() *config.Company, leases coord.Backend,
+func placementTick(company func() (*config.Company, *org.Organization), leases coord.Backend,
 	runtime NodeRuntime,
 ) (map[string]bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), tickReadBudget)

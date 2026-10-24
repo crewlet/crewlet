@@ -64,9 +64,20 @@ GO ?= go
 # a different toolchain than `make GO=/path/to/go` selected, or none at all.
 export CREWLET_GO = $(GO)
 
-# ./crewlet is where `go build ./cmd/crewlet` drops the binary, and — with
-# goreleaser's dist/ — the only build output .gitignore already knows about.
-# Nothing here writes anywhere else, so `make clean` has nothing to guess at.
+# gofmt is the one that ships WITH the toolchain go.mod pins, never whichever
+# gofmt is first on PATH. `GOTOOLCHAIN=auto` fetches go.mod's Go for `go`
+# itself and leaves PATH's gofmt alone, and gofmt's output moves between
+# releases: a host whose PATH still held an older Go reformatted three test
+# files into a layout the pinned gofmt — the one ci.yml's setup-go puts on
+# PATH — then refused. Asking the toolchain for its GOROOT is what makes `make
+# fmt` and `make fmt-check` agree with CI on any host.
+GOFMT = $(shell $(GO) env GOROOT)/bin/gofmt
+
+# ./crewlet is where `go build ./cmd/crewlet` drops the binary; dist/ is
+# goreleaser's, and build/ holds what its before hook generates and the image
+# context `make image-context` stages. Those three are the build output
+# .gitignore knows about and `make clean` removes; nothing here writes
+# anywhere else, so `make clean` has nothing to guess at.
 BIN := crewlet
 
 # -count=1 bypasses the test cache: a cached PASS recorded before the change
@@ -231,7 +242,7 @@ COMPANY ?=
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build crewlet install fmt tidy schema metrics-doc alarms-doc derived gate-answer objects-answer broker-answer \
+.PHONY: help build crewlet install fmt tidy image-context schema metrics-doc alarms-doc derived gate-answer objects-answer broker-answer \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
         check fmt-check tidy-check signoff-check signoff-test git-test vet lint test test-norace test-cross test-solo \
         require-npm bench git test-gitproc \
@@ -259,7 +270,7 @@ install: ## go install the engine onto your PATH
 
 fmt: ## rewrite everything gofmt would change
 	@files="$$($(GOFILES))" || exit 1; \
-	gofmt -w $$files
+	$(GOFMT) -w $$files
 
 tidy: ## tidy go.mod / go.sum
 	$(GO) mod tidy
@@ -268,16 +279,21 @@ tidy: ## tidy go.mod / go.sum
 # directories beside them are a checkout's own company state, not something
 # this file produced, so removing them is the developer's call and not a
 # side effect of cleaning a build.
-clean: ## remove the build output (./crewlet and dist/)
+clean: ## remove the build output (./crewlet, dist/ and build/)
 	rm -f $(BIN)
-	rm -rf dist
+	rm -rf dist build
 	rm -rf $(UI)/node_modules
 
 ##@ Dashboard
 
 # The dashboard's source lives here; its BUILD OUTPUT is committed to
-# static/dashboard, which package static embeds.
+# static/dashboard and static/artifacts (the page runtime and the artifact
+# kit, the third build target), both of which package static embeds.
 UI := dashboard
+
+# Every tree the dashboard's build writes, and so every tree the drift gate
+# judges.
+UI_OUT := static/dashboard static/artifacts
 
 # npm ci rather than npm install: the lockfile is the pin, and `install` is
 # allowed to move it. A build whose dependency versions drift is a build whose
@@ -287,7 +303,7 @@ $(UI)/node_modules: $(UI)/package-lock.json | require-npm
 	cd $(UI) && npm ci
 	@touch $(UI)/node_modules
 
-dashboard: $(UI)/node_modules ## build the dashboard into static/dashboard (commit the result)
+dashboard: $(UI)/node_modules ## build the dashboard into static/dashboard and static/artifacts (commit the result)
 	cd $(UI) && npm run build
 
 dashboard-dev: $(UI)/node_modules ## run the dashboard dev server against a local engine on :8000
@@ -321,7 +337,8 @@ dashboard-lint: $(UI)/node_modules ## check the dashboard's formatting (ci: dash
 # the index.html that imports the new chunk and the deletion of the old one,
 # the diff is empty, and the binary serves a shell asking for a module it does
 # not embed. The second question is `git ls-files --others`: is there
-# anything on disk under static/dashboard the index does not hold at all.
+# anything on disk under static/dashboard or static/artifacts the index does
+# not hold at all.
 #
 # `--others` WITHOUT `--exclude-standard`, so an ignored file fails too. The
 # embed is `all:dashboard`, which ships every file on disk whatever
@@ -338,16 +355,16 @@ dashboard-lint: $(UI)/node_modules ## check the dashboard's formatting (ci: dash
 # checkout the index IS HEAD, so the two readings agree there. The listing
 # drops the staged-only lines (`grep -v '^. '`, an unchanged second column)
 # for the same reason: what it prints is the drift and nothing else.
-dashboard-check: $(UI)/node_modules ## fail if static/dashboard is not what dashboard/ builds (ci: dashboard)
+dashboard-check: $(UI)/node_modules ## fail if static/dashboard or static/artifacts is not what dashboard/ builds (ci: dashboard)
 	cd $(UI) && npm run build
-	@untracked="$$(git ls-files --others -- static/dashboard)" || exit 1; \
-	if ! git diff --exit-code -- static/dashboard || [ -n "$$untracked" ]; then \
+	@untracked="$$(git ls-files --others -- $(UI_OUT))" || exit 1; \
+	if ! git diff --exit-code -- $(UI_OUT) || [ -n "$$untracked" ]; then \
 	  { echo; \
-	    echo "static/dashboard is not what dashboard/ builds."; \
+	    echo "static/dashboard or static/artifacts is not what dashboard/ builds."; \
 	    echo "What a rebuild changed or wrote that the index does not carry:"; \
 	    git status --porcelain --untracked-files=all --ignored=matching \
-	      -- static/dashboard | grep -v '^. '; \
-	    echo "run: make dashboard && git add -A -- static/dashboard"; } >&2; \
+	      -- $(UI_OUT) | grep -v '^. '; \
+	    echo "run: make dashboard && git add -A -- $(UI_OUT)"; } >&2; \
 	  exit 1; \
 	fi
 
@@ -436,7 +453,7 @@ check: fmt-check tidy-check signoff-check signoff-test git-test vet lint build t
 
 fmt-check: ## fail if anything needs gofmt (ci: build + vet)
 	@files="$$($(GOFILES))" || exit 1; \
-	unformatted="$$(gofmt -l $$files)" || exit 1; \
+	unformatted="$$($(GOFMT) -l $$files)" || exit 1; \
 	if [ -n "$$unformatted" ]; then \
 	  { echo "gofmt needed:"; \
 	    echo "$$unformatted"; \
@@ -509,8 +526,14 @@ vet: ## run go vet (ci: build + vet)
 # dependency surface Dependabot does not watch (.github/dependabot.yml).
 #
 # What IS checked is that the linter can run at all. golangci-lint refuses a
-# module whose `go` line is newer than the Go it was itself built with, and
-# says so as a config-load error that names neither the fix nor the cause. The
+# module whose Go LANGUAGE version — the `go` line's major.minor — is newer
+# than the language of the Go it was itself built with, and says so as a
+# config-load error that names neither the fix nor the cause. The language and
+# not the patch, because that is golangci-lint's own rule (CheckGoVersion in
+# its pkg/goutil, which trims both sides to major.minor), and comparing patches
+# here refused the very linter CI runs: the prebuilt releases trail Go's patch
+# releases (v2.14.0, the newest when go.mod moved to 1.27.2, is built with
+# go1.27.0 and lints this module), so `make check` could pass nowhere. The
 # trap is that the obvious way to get "the latest" — `go install ...@latest` —
 # builds it with the LINTER MODULE's own minimum Go, which is behind ours, so
 # it produces a binary that lints nothing. Only the prebuilt releases are built
@@ -529,16 +552,19 @@ lint: ## run golangci-lint (ci: golangci-lint)
 	} >&2
 	@built=$$(golangci-lint version 2>/dev/null | sed -n 's/.*built with go\([0-9][0-9.]*\).*/\1/p'); \
 	need=$$(sed -n 's/^go \([0-9][0-9.]*\)$$/\1/p' go.mod); \
+	built_lang=$$(printf '%s' "$$built" | cut -d. -f1,2); \
+	need_lang=$$(printf '%s' "$$need" | cut -d. -f1,2); \
 	if [ -n "$$built" ] && [ -n "$$need" ] && \
-	   [ "$$(printf '%s\n%s\n' "$$need" "$$built" | sort -V | head -1)" != "$$need" ]; then \
-	  { echo "golangci-lint is built with go$$built, but go.mod targets $$need."; \
+	   [ "$$(printf '%s\n%s\n' "$$need_lang" "$$built_lang" | sort -V | head -1)" != "$$need_lang" ]; then \
+	  { echo "golangci-lint is built with go$$built, but go.mod targets $$need:"; \
+	    echo "  language $$need_lang is newer than the linter's $$built_lang."; \
 	    echo "  It will refuse this module rather than lint it, so this gate"; \
 	    echo "  would report nothing at all."; \
 	    echo "  Install a PREBUILT RELEASE from"; \
 	    echo "  https://golangci-lint.run/welcome/install/ — those are built with"; \
 	    echo "  a current Go. 'go install ...@latest' is NOT enough: it builds"; \
 	    echo "  the linter with the linter module's own minimum Go, which is"; \
-	    echo "  older than $$need."; \
+	    echo "  older than $$need_lang."; \
 	    exit 1; \
 	  } >&2; \
 	fi
@@ -870,3 +896,47 @@ snapshot: ## rehearse a release locally (needs goreleaser and docker)
 	} >&2
 	goreleaser check
 	goreleaser release --snapshot --clean --skip=sign
+
+# THE BUILD CONTEXT OF THE IMAGE OF MAIN, which .github/workflows/main-image.yml
+# pushes as ghcr.io/crewlet/crewlet:main. A release's image is goreleaser's
+# (`snapshot` above rehearses it); this one is stamped with a version no tag
+# carries, which neither way goreleaser runs can do, so the build is written
+# out here with .goreleaser.yaml's settings (CGO_ENABLED=0, -trimpath, -s -w,
+# the -X stamp) and staged in the layout its dockers_v2 stages: each binary
+# under its platform, beside the license, both notices files and the git pin
+# and recipe (scripts/git-pin.env, scripts/git.sh) the Dockerfile's git stage
+# builds from — the files .goreleaser.yaml's extra_files names. A change to the
+# release build is a change to both files.
+#
+# VERSION is required, because an unstamped binary reports a module version:
+# a name for a build nobody made. And the binary this host can run is run and
+# must report it, because a -X flag that names nothing still links and that is
+# its only symptom.
+IMAGE_CONTEXT ?= build/image
+IMAGE_PLATFORMS := linux/amd64 linux/arm64
+
+image-context: ## stage the engine image's build context, stamped VERSION (ci: main image)
+	@test -n "$(VERSION)" || { \
+	  echo "VERSION is required, e.g. make image-context VERSION=main-dev"; exit 1; } >&2
+	@for platform in $(IMAGE_PLATFORMS); do \
+	  echo "==> build $$platform"; \
+	  CGO_ENABLED=0 GOOS=$${platform%/*} GOARCH=$${platform#*/} $(GO) build -trimpath \
+	    -ldflags "-s -w -X github.com/crewlet/crewlet/internal/version.value=$(VERSION)" \
+	    -o $(IMAGE_CONTEXT)/$$platform/crewlet ./cmd/crewlet || exit 1; \
+	done
+	$(GO) run ./scripts/notices -out $(IMAGE_CONTEXT)/build/notices/THIRD_PARTY_NOTICES.txt \
+	  -main ./cmd/crewlet -targets $$(echo $(IMAGE_PLATFORMS) | tr ' ' ',')
+	mkdir -p $(IMAGE_CONTEXT)/static/dashboard $(IMAGE_CONTEXT)/scripts
+	cp LICENSE $(IMAGE_CONTEXT)/LICENSE
+	cp static/dashboard/THIRD_PARTY_NOTICES.txt $(IMAGE_CONTEXT)/static/dashboard/
+	cp scripts/git-pin.env scripts/git.sh $(IMAGE_CONTEXT)/scripts/
+	@host=$$($(GO) env GOHOSTOS)/$$($(GO) env GOHOSTARCH); \
+	case " $(IMAGE_PLATFORMS) " in \
+	  *" $$host "*) \
+	    reported=$$($(IMAGE_CONTEXT)/$$host/crewlet --version | awk '{print $$2}'); \
+	    if [ "$$reported" != "$(VERSION)" ]; then \
+	      echo "the $$host binary reports $$reported, not $(VERSION)" >&2; exit 1; \
+	    fi; \
+	    echo "==> the $$host binary reports $(VERSION)";; \
+	  *) echo "==> NOT CHECKED: this $$host host runs none of $(IMAGE_PLATFORMS), so no binary's version was read";; \
+	esac

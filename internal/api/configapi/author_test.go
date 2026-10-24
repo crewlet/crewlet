@@ -1,73 +1,30 @@
 package configapi_test
 
 import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
-	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
-	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// AN OPERATOR'S WRITE READS AS AN OPERATOR'S — IN THE HISTORY AND ON THE
-// POINTER EVERY PEER ADOPTS FROM.
+// THE ENGINE'S OWN WRITE READS AS THE ENGINE'S — on the row and on the
+// pointer every peer adopts the revision from.
 //
-// The history answer used to carry the label alone, and the audit screen
-// filled in the kind by assuming. The kind is recorded at the write now, where
-// the surface KNOWS it is a person's credential, and it rides the pointer so a
-// peer's copy of the revision says the same.
-func TestAnOperatorsWriteIsRecordedAsTheOperators(t *testing.T) {
+// The reconcile loop writes through this same service rather than through the
+// HTTP door, and under the HTTP defaults its reload after sealing a credential
+// read as an operator's on the audit screen. The writer states its kind, and
+// the engine's is [iam.ActorSystem]: the vocabulary every durable author column
+// writes, so the audit screen reads one set of kinds whichever trail it is on.
+// Mutation: drop Origin from the activation request and the pointer check
+// fails; write the kind as anything but the actor's and the row check does.
+func TestTheEnginesWriteIsRecordedAsTheSystems(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
 
-	req := httptest.NewRequest(http.MethodPatch, "/config", strings.NewReader(`{"mission":"ship it"}`))
-	req.Header.Set("X-Summary", "a mission")
-	req = req.WithContext(auth.WithOperator(req.Context(), "maya"))
-	res := httptest.NewRecorder()
-	s.mux.ServeHTTP(res, req)
-	if res.Code != http.StatusCreated {
-		t.Fatalf("PATCH = %d: %s", res.Code, res.Body.String())
-	}
-
-	listing := s.do(t, http.MethodGet, "/config/revisions", "", nil)
-	var revisions []map[string]any
-	if err := json.Unmarshal(listing.Body.Bytes(), &revisions); err != nil {
-		t.Fatal(err)
-	}
-	if len(revisions) == 0 {
-		t.Fatal("no revisions listed")
-	}
-	newest := revisions[0]
-	if newest["created_by"] != "maya" || newest["created_by_kind"] != "operator" {
-		t.Errorf("the history names (%v, %v), want (maya, operator)",
-			newest["created_by"], newest["created_by_kind"])
-	}
-
-	target, found, err := s.plane.Target(t.Context())
-	if err != nil || !found {
-		t.Fatalf("target: found=%v err=%v", found, err)
-	}
-	if target.Origin.Author != "maya" || target.Origin.AuthorKind != "operator" ||
-		target.Origin.Source != "api" {
-		t.Errorf("the pointer carries origin %+v, want maya, operator, api — "+
-			"every peer adopts the revision from it", target.Origin)
-	}
-}
-
-// THE ENGINE'S OWN WRITE READS AS THE NODE'S. The reconcile loop writes
-// through this same surface, and recorded under the HTTP defaults its reload
-// after sealing a credential read as an operator's on the audit screen.
-func TestTheEnginesWriteIsRecordedAsTheNodes(t *testing.T) {
-	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
-
-	applied, err := s.service().Reload(t.Context(), "reload after sealing",
-		store.Author{Name: "reconcile loop", Kind: store.AuthorNode})
+	by := iam.Actor{Name: "node-a", Kind: iam.ActorSystem}
+	applied, err := s.service().Reload(t.Context(), "reload after sealing", by)
 	if err != nil {
 		t.Fatalf("Reload: %v", err)
 	}
@@ -75,12 +32,25 @@ func TestTheEnginesWriteIsRecordedAsTheNodes(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("get: found=%v err=%v", found, err)
 	}
-	if got.CreatedBy != "reconcile loop" || got.CreatedByKind != store.AuthorNode {
-		t.Errorf("stored as (%q, %q), want (reconcile loop, node)", got.CreatedBy, got.CreatedByKind)
+	if got.CreatedBy != by.Name || got.CreatedByKind != iam.ActorSystem || got.OperatorID != "" {
+		t.Errorf("stored as (%q, %q, %q), want (node-a, system, no credential)",
+			got.CreatedBy, got.CreatedByKind, got.OperatorID)
 	}
 	target, _, err := s.plane.Target(t.Context())
-	if err != nil || target.Origin.AuthorKind != "node" {
-		t.Errorf("the pointer's origin kind = %q (err %v), want node", target.Origin.AuthorKind, err)
+	if err != nil {
+		t.Fatalf("Target: %v", err)
+	}
+	want := coord.RevisionOrigin{
+		Author: by.Name, AuthorKind: iam.ActorSystem, Source: "api", CreatedAt: pinned,
+	}
+	if !target.Origin.CreatedAt.Equal(want.CreatedAt) {
+		t.Errorf("the pointer's origin was made at %v, want the write's own %v",
+			target.Origin.CreatedAt, want.CreatedAt)
+	}
+	target.Origin.CreatedAt = want.CreatedAt
+	if target.Origin != want {
+		t.Errorf("the pointer carries origin %+v, want %+v — every peer adopts "+
+			"the revision from it", target.Origin, want)
 	}
 }
 
@@ -89,11 +59,15 @@ func TestTheEnginesWriteIsRecordedAsTheNodes(t *testing.T) {
 // history that a reader has to guess about.
 func TestAWriteWithNoAuthorKindIsRefused(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t, nil)
-	s.seed(t, companyDoc, nil)
+	s := newSurface(t)
+	s.seed(t, companyDoc)
+	before := s.activeDocument(t)
 	if _, err := s.service().Apply(t.Context(), configapi.ApplyRequest{
-		Patch: []byte(`{"mission":"x"}`), Summary: "s", Author: store.Author{Name: "who"},
+		Patch: []byte(`{"mission":"x"}`), Summary: "s", By: iam.Actor{Name: "who"},
 	}); err == nil {
 		t.Fatal("a write with no author kind was stored and activated")
+	}
+	if after := s.activeDocument(t); after != before {
+		t.Error("a refused write changed the active document")
 	}
 }

@@ -8,9 +8,14 @@ package livestate
 // belong written out where a reader can see them next to the struct tags they
 // must match.
 func mergeOverlay(row map[string]any, o Overlay) {
+	// THE STATE IS ALWAYS WRITTEN, like every key below. The row it is
+	// merged onto is the roster's, which carries no state of its own — the
+	// projection is the only place a seat's state is computed — and a
+	// client merges a pushed row over what it holds, so a key left out
+	// reads as "unchanged" and a seat that started again would keep the
+	// reason it had stopped for.
 	row["activity"] = o.Activity
 	row["stopped_reason"] = o.StoppedReason
-	row["runtime_id"] = o.RuntimeID
 	row["current_phase"] = o.CurrentPhase
 	row["current_iteration"] = o.CurrentIteration
 	row["live_call"] = o.LiveCall

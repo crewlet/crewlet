@@ -26,6 +26,7 @@ import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { calendarWeeks, dayKey, dayLabel, filterPatchForGroup } from "~/lib/work.ts";
 import type { QueryName, WorkGroup, WorkProjectRow, WorkSummary } from "~/protocol/index.ts";
+import { installWindow } from "~/testing.tsx";
 import { withDerived } from "~/test/org.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
@@ -392,8 +393,8 @@ test("overdue and finished chips are marked differently and both are drawn", () 
 test("the calendar names both of the sets its window leaves out", () => {
   const { container } = calendar([row("a", { due: new Date(2031, 3, 16, 9, 0, 0).toISOString() })]);
   const note = container.querySelector(".work-cal-note")!;
-  expect(note.textContent).toContain("no due date");
-  expect(note.textContent).toContain("outside");
+  expect(note.textContent).toContain("Only work due in this window.");
+  expect(note.textContent).toContain("Undated work is on the list.");
 });
 
 // TWO CELLS, ONE NUMERAL. April 2031 opens on 31 March and closes on 4 May, so
@@ -584,7 +585,7 @@ function serving(
     return answers[what as QueryName] ?? {};
   });
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue(
     withDerived({
       name: "Acme",
@@ -617,7 +618,9 @@ test("a refused project list is said to be a refusal, not an empty company", asy
     { work_projects: "unavailable" },
   );
   mountWork();
-  await waitFor(() => expect(screen.getByText(/This is not an empty company/)).toBeTruthy());
+  await waitFor(() =>
+    expect(screen.getByText(/Still catching up\. This screen retries on its own\./)).toBeTruthy(),
+  );
   expect(screen.queryByText("No work has been filed yet")).toBeNull();
 });
 
@@ -727,7 +730,7 @@ test("the engine's own empty-company answer draws the no-work panel", async () =
 // read both as the first: a company with four archived projects holding every
 // item it ever filed was told "nothing can be filed until a unit declares a
 // `project` key, and this company has none", which is false twice over and is
-// the opposite of what `#/work/projects` said beside it. The census is what
+// the opposite of what `#/work` said beside it. The census is what
 // tells them apart, which is why the answer carries both counts whatever the
 // limit.
 test("a company whose every project is archived is not told it has none", async () => {
@@ -745,11 +748,11 @@ test("a company whose every project is archived is not told it has none", async 
   // reader has retired.
   await waitFor(() => expect(screen.getByText("Every project is archived")).toBeTruthy());
   expect(screen.queryByText("No work has been filed yet")).toBeNull();
-  expect(screen.getByText(/All 4 of the company’s projects have been archived/)).toBeTruthy();
   // AND IT GOES TO THEM. The reader's next move is the projects rather than
-  // the scope switch, so the sentence carries the way there.
-  const link = screen.getByRole("link", { name: /See them under Archived/ });
-  expect(link.getAttribute("href")).toBe("#/work/projects?shown=archived");
+  // the scope switch, so the sentence is the way there.
+  const link = screen.getByRole("link", { name: "See them under Archived" });
+  expect(link.getAttribute("href")).toBe("#/work?shown=archived");
+  expect(link.parentElement?.textContent).toBe("See them under Archived.");
 });
 
 // THE LIST IS HEADED BY THE AXIS THE QUERY WAS SENT ON. A saved view may
@@ -1416,9 +1419,9 @@ test("the first row draws the shape and the menus, the second cuts the answer", 
   await waitFor(() => expect(container.querySelector(".work-bar")).toBeTruthy());
   const tabs = container.querySelector(".work-tabs") as HTMLElement;
   expect(
-    within(within(tabs).getByRole("group", { name: "Draw as" }))
-      .getAllByRole("button")
-      .map((el) => el.textContent),
+    within(within(tabs).getByRole("radiogroup", { name: "Draw as" }))
+      .getAllByRole("radio")
+      .map((el) => el.getAttribute("aria-label")),
   ).toEqual(["List", "Board", "Timeline", "Calendar", "Table"]);
   expect(within(tabs).getByRole("button", { name: "Display" })).toBeTruthy();
   expect(within(tabs).getByRole("searchbox", { name: /key or title/ })).toBeTruthy();
@@ -1440,21 +1443,40 @@ test("the first row draws the shape and the menus, the second cuts the answer", 
   expect(within(bar).queryByLabelText("Assignee")).toBeNull();
 });
 
-// ON A PHONE THE BAR'S RUN AND THE SHAPES SCROLL, AND SAY SO: the edge with
-// more past it carries the attribute the sheet fades — a control cut at the
-// edge ("Ta", "No g") with nothing to say more was past it read as a broken
-// label. The RUN fades, never the sticky band it sits on.
+// ON A PHONE THE ARRANGEMENT FOLDS INTO DISPLAY: the bar's one line cut Group
+// by at the edge and put Sort past it, so at a phone's width which work, Group
+// by and Sort open from Display and the bar keeps the chips and the count.
+// Mutation: keep them in the bar at every width and the bar holds them.
+test("on a phone, which work, Group by and Sort are in Display, not the bar", async () => {
+  const screenWidth = installWindow(390);
+  try {
+    serving({ work_items: { items: [], groups: [], complete: true } });
+    const { container } = mountWork();
+    await waitFor(() => expect(container.querySelector(".work-bar")).toBeTruthy());
+    const bar = container.querySelector(".work-bar") as HTMLElement;
+    expect(within(bar).queryByRole("combobox", { name: "Group by" })).toBeNull();
+    expect(within(bar).queryByRole("combobox", { name: "Sort" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Display" }));
+    const panel = await screen.findByRole("dialog", { name: "Display" });
+    expect(within(panel).getByRole("combobox", { name: "Which work" })).toBeTruthy();
+    expect(within(panel).getByRole("combobox", { name: "Group by" })).toBeTruthy();
+    expect(within(panel).getByRole("combobox", { name: "Sort" })).toBeTruthy();
+  } finally {
+    screenWidth.restore();
+  }
+});
+
+// ON A PHONE THE BAR'S RUN SCROLLS, AND SAYS SO: the edge with more past it
+// carries the attribute the sheet fades, because a control cut at the edge
+// ("No g") with nothing to say more was past it read as a broken label. The
+// RUN fades, never the sticky band it sits on. (The shapes no longer scroll:
+// drawn as glyphs in the kit's segmented row they fit on a phone's line.)
 test("a list scroller wider than its box marks the edge with more past it", async () => {
   const had = {
     scroll: Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollWidth"),
     client: Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth"),
   };
-  const widths = (el: HTMLElement) =>
-    el.classList.contains("work-bar-run")
-      ? [745, 356]
-      : el.classList.contains("work-tabs-group")
-        ? [381, 356]
-        : [0, 0];
+  const widths = (el: HTMLElement) => (el.classList.contains("work-bar-run") ? [745, 356] : [0, 0]);
   Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
     configurable: true,
     get(this: HTMLElement) {
@@ -1475,9 +1497,6 @@ test("a list scroller wider than its box marks the edge with more past it", asyn
       expect(container.querySelector(".work-bar-run")?.hasAttribute("data-more-end")).toBe(true),
     );
     expect(container.querySelector(".work-bar")?.hasAttribute("data-more-end")).toBe(false);
-    const shapes = screen.getByRole("group", { name: "Draw as" });
-    expect(shapes.hasAttribute("data-more-end")).toBe(true);
-    expect(shapes.hasAttribute("data-more-start")).toBe(false);
   } finally {
     for (const [key, d] of [
       ["scrollWidth", had.scroll],
@@ -1571,12 +1590,12 @@ test("the strip holds what somebody saved, never the five shapes", async () => {
   await waitFor(() => expect(screen.getByText("Overdue, by owner")).toBeTruthy());
   // THE VIEWS THIS READER PINNED, behind the container's own list — and not
   // the ones they did not, which are one link away in the inventory.
-  const strip = screen.getByRole("group", { name: "Saved views" });
+  const strip = screen.getByRole("radiogroup", { name: "Saved views" });
   expect(
     within(strip)
-      .getAllByRole("button")
+      .getAllByRole("radio")
       .map((el) => el.textContent),
-  ).toEqual(["All work", "Overdue, by owner"]);
+  ).toEqual(["All tasks", "Overdue, by owner"]);
 });
 
 // AND THE SHAPE IS ITS OWN KEY, so switching a saved view to another drawing
@@ -1641,7 +1660,7 @@ test("a container with no default view opens on the list", async () => {
   expect(asked(query).group_by).toBeUndefined();
   expect(asked(query).group_limit).toBeUndefined();
   // And the shape row says which shape is on without anything opening.
-  expect(screen.getByRole("button", { name: "List", pressed: true })).toBeTruthy();
+  expect(screen.getByRole("radio", { name: "List", checked: true })).toBeTruthy();
   expect(container.querySelector(".work-board")).toBeNull();
 });
 
@@ -1710,7 +1729,7 @@ test("the strip and its way into the inventory survive a company that saved noth
   serving({ work_items: { items: [], groups: [], complete: true } });
   mountWork();
   await waitFor(() =>
-    expect(screen.getByRole("button", { name: "All work", pressed: true })).toBeTruthy(),
+    expect(screen.getByRole("radio", { name: "All tasks", checked: true })).toBeTruthy(),
   );
   // A REAL ANCHOR, middle-clickable like every other way out of a screen.
   const more = screen.getByRole("link", { name: "All saved views" });
@@ -1719,7 +1738,7 @@ test("the strip and its way into the inventory survive a company that saved noth
   // AND NO COUNT ON THE CONTAINER TAB. The engine's total is over the FILTER
   // rather than over the container, so a number here would read as the
   // container's size and be the size of whatever is narrowed.
-  expect(screen.getByRole("button", { name: "All work" }).textContent).toBe("All work");
+  expect(screen.getByRole("radio", { name: "All tasks" }).textContent).toBe("All tasks");
 });
 
 // (a) A NARROWING THAT MATCHED NOTHING CARRIES THE CONTROL THAT REMOVES IT,
@@ -1751,7 +1770,7 @@ test("an unfiltered list with nothing open names the scope switch, not the filte
   // MATCHED, so how much finished work sits behind the other segment is not in
   // this answer at all. It names the switch and says nothing about what is
   // behind it, where a project's own counted sentence can say exactly.
-  expect(screen.queryByText(/\d+ items? under Closed/)).toBeNull();
+  expect(screen.queryByText(/\d+ finished items? (is|are) under Closed/)).toBeNull();
   expect(screen.getByText(/Finished work is under Closed/)).toBeTruthy();
 });
 
@@ -1874,7 +1893,7 @@ test("rows past the first page are reachable", async () => {
     what === "work_items" ? pages[String(params?.cursor ?? "")] : {},
   );
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue(withDerived({ name: "Acme", roles: [] }) as never);
   mountWork();
   await waitFor(() => expect(screen.getByText("a task called 2")).toBeTruthy());

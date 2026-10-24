@@ -23,10 +23,23 @@
 //     project headers among them — and sends them to whatever endpoint an
 //     entry names; [WithoutAmbientEnvironment] undoes each, and the
 //     embeddings provider builds its client with the same options.
-//   - A REASONING TRACE HAS NO AGREED FIELD NAME. DeepSeek and several MiniMax
-//     hosts send reasoning_content, some send a bare reasoning, and OpenAI's
-//     own o-series sends neither through this endpoint. Both names are read
-//     off the raw JSON, because the typed struct has neither.
+//   - AN ASSISTANT TURN GOES BACK TO THE ENDPOINT THAT WROTE IT AS IT CAME.
+//     A reasoning model's trace has no field in OpenAI's schema, so each host
+//     added its own — reasoning_content, reasoning, OpenRouter's
+//     reasoning_details, a thought signature on a tool call, a content that is
+//     a list of chunks — and documented that the next request must carry it
+//     back: Kimi K3 is trained to read it on every earlier message, and
+//     DeepSeek and Gemini 3 answer a tool loop without it with a 400. Every
+//     such field is kept verbatim ([llm.Message.Raw]), an empty one included,
+//     and sent back in the shape it arrived in, to the same endpoint only
+//     ([llm.Message.Binding]), because a field one host emits is one another
+//     may refuse. Once a turn going back carries reasoning_content — or from
+//     the first request, on DeepSeek's and Moonshot's own APIs — every other
+//     turn carries an empty one, because a missing one is what Moonshot and
+//     DeepSeek refuse; and a step Gemini 3 did not write goes to Google with the
+//     value Google documents in place of a thought signature, because a
+//     missing one is a 400 (foreign.go). replay.go has the vendors' rules and
+//     the stream's merge.
 package openai
 
 import (
@@ -134,6 +147,15 @@ type Provider struct {
 	effort    shared.ReasoningEffort
 	// timeout is a unary call's total bound and a streamed call's idle one.
 	timeout time.Duration
+	// binding is this endpoint's identity, which a turn's kept reasoning is
+	// bound to and replayed only under — see [endpointBinding].
+	binding string
+	// reasoningContent is whether the endpoint is a host's own API that
+	// refuses an assistant message without reasoning_content, and google
+	// whether it is one of Google's, which holds a step it did not write to a
+	// thought signature: what the URL says about the host — see foreign.go.
+	reasoningContent bool
+	google           bool
 
 	// noStream latches once this endpoint has answered a streaming request
 	// without streaming. Atomic: one Provider serves every seat
@@ -192,6 +214,10 @@ func New(cfg Config) (*Provider, error) {
 		reasoning: cfg.Reasoning,
 		effort:    shared.ReasoningEffort(cfg.ReasoningEffort),
 		timeout:   timeout,
+		binding:   endpointBinding(baseURL),
+
+		reasoningContent: reasoningContentHost(baseURL),
+		google:           googleEndpoint(baseURL),
 	}, nil
 }
 
@@ -223,7 +249,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// concurrent caller, so a field here would be a data race between two
 	// seats streaming at once.
 	attempt := 0
-	var streamed string
+	var streamed *streamTurn
 	resp, err := credential.Rotate(ctx, p.pool,
 		credential.Identity{Provider: p.name, Model: p.model},
 		p.classify,
@@ -244,7 +270,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 			if attempt > 1 {
 				req.Send(llm.Delta{Restart: true, Model: p.model})
 			}
-			out, reasoning, unary, sErr := p.streamOnce(ctx, req, params, opt)
+			out, turn, unary, sErr := p.streamOnce(ctx, req, params, opt)
 			if unary || errors.Is(sErr, errNoStream) {
 				// This endpoint accepted `stream: true` and answered
 				// without streaming. "OpenAI-compatible" is a de-facto
@@ -264,31 +290,26 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 					// round whose first answer no counter ever heard of.
 					// Its reasoning, if any, is on the message itself,
 					// where the unary path reads it.
+					streamed = nil
 					return out, nil
 				}
 				// Answered with nothing a completion could be read from,
 				// so there is no answer to keep: asked again, unary.
 				plain := params
 				plain.StreamOptions = sdk.ChatCompletionStreamOptionsParam{}
+				streamed = nil
 				return p.client.Chat.Completions.New(ctx, plain, opt)
 			}
-			streamed = reasoning
+			streamed = turn
 			return out, sErr
 		})
 	if err != nil {
 		return nil, err
 	}
-	out, err := p.completion(resp)
-	if err != nil {
-		return nil, err
-	}
-	// The assembled message carries no `reasoning_content` — it is not in
-	// the schema, so the SDK's accumulator does not keep it — and the
-	// streamed text is the only record of it.
-	if streamed != "" {
-		out.ReasoningContent = streamed
-	}
-	return out, nil
+	// The assembled message carries none of what a host sends beside
+	// OpenAI's schema — the SDK's accumulator does not keep it — so a streamed
+	// answer's reasoning is read from what the stream itself kept.
+	return p.completion(resp, streamed)
 }
 
 // streamOnce runs one streamed attempt, forwarding fragments as they land and
@@ -304,9 +325,10 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 // interpretation of a response rather than growing a second.
 //
 // REASONING IS ACCUMULATED HERE rather than left to the accumulator, because
-// `reasoning_content` is not in the OpenAI schema — it is the convention the
-// reasoning hosts adopted — so the accumulator neither knows nor keeps it, and
-// the assembled message's raw JSON has no trace of it. See [reasoningText].
+// none of the fields a host carries it in is in the OpenAI schema, so the
+// accumulator neither knows nor keeps them, and the assembled message's raw
+// JSON has no trace of them. The [streamTurn] returned holds them, merged the
+// way a whole response would have carried them (replay.go).
 //
 // unary reports an endpoint that answered with a whole completion instead of a
 // stream ([httpapi.UnaryAnswer]): that completion is the answer, decoded
@@ -314,7 +336,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 func (p *Provider) streamOnce(
 	ctx context.Context, req llm.Request,
 	params sdk.ChatCompletionNewParams, opt option.RequestOption,
-) (out *sdk.ChatCompletion, reasoning string, unary bool, err error) {
+) (out *sdk.ChatCompletion, turn *streamTurn, unary bool, err error) {
 	ctx, watch := httpapi.WatchIdle(ctx, p.timeout)
 	defer watch.Stop()
 	var done doneWatch
@@ -339,13 +361,27 @@ func (p *Provider) streamOnce(
 	defer func() { _ = stream.Close() }()
 
 	var acc sdk.ChatCompletionAccumulator
-	var thinking strings.Builder
+	turn = &streamTurn{}
 	events := 0
 	finished := false
 	for stream.Next() {
 		events++
 		chunk := stream.Current()
-		acc.AddChunk(chunk)
+		if len(chunk.Choices) > 0 {
+			turn.number(&chunk.Choices[0].Delta)
+		}
+		if !acc.AddChunk(chunk) {
+			// THE ANSWER CANNOT HOLD THIS CHUNK. The accumulator refuses
+			// one naming another completion id than the stream's first,
+			// or an index outside its bounds, and leaves the answer
+			// without it — so reading on hands the loop an answer short
+			// of what the live view showed, or a round whose usage never
+			// reached the budget, as though it were whole. The host's
+			// failure, retried like a stream cut short; and nothing of
+			// the chunk is forwarded or kept, so the reasoning record
+			// never holds what the answer does not.
+			return nil, nil, false, errStreamUnassembled
+		}
 		for _, choice := range chunk.Choices {
 			if choice.FinishReason != "" {
 				finished = true
@@ -355,10 +391,12 @@ func (p *Provider) streamOnce(
 			// A usage-only or keep-alive chunk. Accumulated, not shown.
 			continue
 		}
-		delta := chunk.Choices[0].Delta
-		thought := reasoningText(delta.RawJSON())
-		thinking.WriteString(thought)
-		req.Send(llm.Delta{Content: delta.Content, Reasoning: thought})
+		// The text is read off the delta's own JSON, never the typed
+		// Content: a host that sends its content as a list of chunks
+		// arrives there as the list's JSON text, which is not what the
+		// model wrote.
+		content, thought := turn.add(chunk.Choices[0].Delta)
+		req.Send(llm.Delta{Content: content, Reasoning: thought})
 	}
 	if err := stream.Err(); err != nil {
 		// Classified by the caller exactly as a unary failure is. A stream
@@ -366,16 +404,16 @@ func (p *Provider) streamOnce(
 		// returning what accumulated would hand the loop a truncated
 		// response as though the model had finished. A stream the watchdog
 		// ended is reported as the stall it was.
-		return nil, "", false, watch.Err(err)
+		return nil, nil, false, watch.Err(err)
 	}
 	if events == 0 {
 		if whole.Taken() {
-			return &answer, "", true, nil
+			return &answer, nil, true, nil
 		}
 		// Not a failure of the call — the endpoint simply does not do
 		// this. Distinguished so the caller can fall back rather than fail
 		// a phase over a capability.
-		return nil, "", false, errNoStream
+		return nil, nil, false, errNoStream
 	}
 	if !finished && !done.seen.Load() {
 		// A BODY THAT ENDED CLEANLY IS NOT A FINISHED ANSWER. The SDK's
@@ -389,10 +427,10 @@ func (p *Provider) streamOnce(
 		// Neither means the call failed, and it is retried like the
 		// server failure it is. The ""-is-an-end reading stays for unary
 		// responses, which arrive whole or not at all.
-		return nil, "", false, errStreamCut
+		return nil, nil, false, errStreamCut
 	}
 	assembled := acc.ChatCompletion
-	return &assembled, thinking.String(), false, nil
+	return &assembled, turn, false, nil
 }
 
 // errNoStream reports an endpoint that accepted a streaming request and
@@ -402,6 +440,11 @@ var errNoStream = errors.New("endpoint did not stream")
 // errStreamCut reports a stream whose body ended before its terminal event:
 // no choice carried a finish_reason and no `[DONE]` arrived.
 var errStreamCut = errors.New("stream ended before its terminal event (no finish_reason and no [DONE])")
+
+// errStreamUnassembled reports a stream that sent a chunk its answer cannot
+// hold (see [sdk.ChatCompletionAccumulator.AddChunk]).
+var errStreamUnassembled = errors.New("stream sent a chunk its answer cannot hold " +
+	"(another completion id than its first, or an index out of bounds)")
 
 // doneWatch notes whether a streamed body carried the `[DONE]` sentinel.
 //
@@ -474,9 +517,10 @@ func (p *Provider) classify(err error) *llm.Error {
 		classified.Detail = Detail(apiErr)
 		return classified
 	}
-	if errors.Is(err, errStreamCut) {
-		// The response opened with 200 and stopped short: the server's
-		// failure, retried and handed down the chain like one.
+	if errors.Is(err, errStreamCut) || errors.Is(err, errStreamUnassembled) {
+		// The response opened with 200 and stopped short, or sent what
+		// no answer can be assembled from: the server's failure, retried
+		// and handed down the chain like one.
 		return &llm.Error{Kind: llm.KindServer, Provider: p.name, Model: p.model, Err: err}
 	}
 	var streamErr *ssestream.StreamError
@@ -562,7 +606,7 @@ func (p *Provider) params(req llm.Request) (sdk.ChatCompletionNewParams, error) 
 		return sdk.ChatCompletionNewParams{}, fmt.Errorf("request effort %q is not a level (want one of low, "+
 			"medium, high, xhigh, max, or empty)", req.Effort)
 	}
-	messages, err := formatMessages(req.Messages)
+	messages, err := p.formatMessages(req.Messages)
 	if err != nil {
 		return sdk.ChatCompletionNewParams{}, err
 	}
@@ -624,9 +668,26 @@ func (p *Provider) params(req llm.Request) (sdk.ChatCompletionNewParams, error) 
 	return params, nil
 }
 
-func formatMessages(messages []llm.Message) ([]sdk.ChatCompletionMessageParamUnion, error) {
+// formatMessages renders the conversation for this endpoint. Every turn is
+// built from the neutral view; an assistant turn this endpoint wrote also
+// carries back, in the host's own fields, the reasoning it came with
+// ([replay]) — and a turn any other endpoint or backend wrote carries none,
+// because its fields are not this host's to read. Once a turn going back
+// carries reasoning_content, or the endpoint is a host's own API that refuses
+// a message without one ([reasoningContentHost]), every assistant turn does,
+// the empty string where it has none ([speaksReasoningContent]); and where the
+// host holds every step
+// to a thought signature, a step that has none carries the value Google
+// documents for one it did not write ([Provider.signsSteps], foreign.go).
+func (p *Provider) formatMessages(messages []llm.Message) ([]sdk.ChatCompletionMessageParamUnion, error) {
+	records, err := replays(messages, p.binding)
+	if err != nil {
+		return nil, err
+	}
+	emptyReasoning := p.reasoningContent || speaksReasoningContent(records)
+	signing := p.signsSteps(records)
 	out := make([]sdk.ChatCompletionMessageParamUnion, 0, len(messages))
-	for _, m := range messages {
+	for i, m := range messages {
 		switch m.Role {
 		case llm.RoleSystem:
 			msg := sdk.ChatCompletionSystemMessageParam{}
@@ -663,9 +724,6 @@ func formatMessages(messages []llm.Message) ([]sdk.ChatCompletionMessageParamUni
 			if m.Name != "" {
 				msg.Name = param.NewOpt(m.Name)
 			}
-			// ReasoningContent and ThinkingBlocks are deliberately NOT
-			// sent back. This endpoint has no field for either, and the
-			// vendors that emit reasoning_content reject it on input.
 			for _, tc := range m.ToolCalls {
 				args, err := httpapi.EncodeArgs(tc.Arguments, tc.Name)
 				if err != nil {
@@ -681,6 +739,25 @@ func formatMessages(messages []llm.Message) ([]sdk.ChatCompletionMessageParamUni
 							},
 						},
 					})
+			}
+			// The reasoning goes back only as the host sent it, and only to
+			// the host that sent it — never rebuilt from ReasoningContent or
+			// ThinkingBlocks, which are the engine's reading of it and in no
+			// host's field. See replay.go.
+			extra := map[string]any{}
+			if r, ok := records[i]; ok {
+				r.into(&msg, extra)
+			}
+			if _, carried := extra[reasoningContentField]; emptyReasoning && !carried {
+				extra[reasoningContentField] = ""
+			}
+			if signing {
+				if err := signStep(&msg); err != nil {
+					return nil, err
+				}
+			}
+			if len(extra) > 0 {
+				msg.SetExtraFields(extra)
 			}
 			out = append(out, sdk.ChatCompletionMessageParamUnion{OfAssistant: &msg})
 
@@ -728,7 +805,10 @@ func toolSchema(params map[string]any) shared.FunctionParameters {
 	return shared.FunctionParameters(params)
 }
 
-func (p *Provider) completion(resp *sdk.ChatCompletion) (*llm.Completion, error) {
+// completion reads a response into the contract's answer. streamed is what a
+// stream kept beside the SDK's accumulator, nil for a response that arrived
+// whole — whose message carries it in its own raw JSON.
+func (p *Provider) completion(resp *sdk.ChatCompletion, streamed *streamTurn) (*llm.Completion, error) {
 	if len(resp.Choices) == 0 {
 		// Returning an empty completion with finish_reason "error" here
 		// is the tempting shape, and the tool loop reads it as a clean
@@ -744,6 +824,20 @@ func (p *Provider) completion(resp *sdk.ChatCompletion) (*llm.Completion, error)
 	}
 
 	choice := resp.Choices[0]
+	var extra kept
+	var err error
+	if streamed != nil {
+		extra, err = streamed.kept(choice.Message)
+	} else {
+		extra, err = keptFromMessage(choice.Message)
+	}
+	if err != nil {
+		// Only a value this process decoded and could not encode again:
+		// the call answered, and a turn that cannot keep its reasoning
+		// would go back without it — which is the failure this exists to
+		// remove, so it is not handed on as an answer.
+		return nil, &llm.Error{Kind: llm.KindServer, Provider: p.name, Model: p.model, Err: err}
+	}
 	out := &llm.Completion{
 		// The CONFIGURED model id, not the one the response echoes: an
 		// alias resolving to a dated snapshot would re-key the per-model
@@ -755,7 +849,15 @@ func (p *Provider) completion(resp *sdk.ChatCompletion) (*llm.Completion, error)
 		// backend's shape it is in. See [llm.Origin].
 		Provider:         wireName,
 		Content:          choice.Message.Content,
-		ReasoningContent: reasoningText(choice.Message.RawJSON()),
+		ReasoningContent: extra.reasoning,
+	}
+	if extra.listed {
+		// The typed message holds the chunk list's own JSON text here.
+		out.Content = extra.text
+	}
+	if extra.record != nil {
+		out.Raw = []json.RawMessage{extra.record}
+		out.Binding = p.binding
 	}
 
 	for _, tc := range choice.Message.ToolCalls {

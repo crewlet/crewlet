@@ -71,7 +71,7 @@ describe("what it surfaces", () => {
     const items = attentionQueue(input({ engine: healthFrame({ configured: false }) }));
     expect(items[0]?.id).toBe("unconfigured");
     expect(items[0]?.severity).toBe("critical");
-    expect(items[0]?.detail).toContain("webhook");
+    expect(items[0]?.detail).toBe("Import a company to start.");
   });
 
   test("a refused token and an unreachable engine are different items", () => {
@@ -171,7 +171,7 @@ describe("what it surfaces", () => {
   test("a run whose box was reaped is waiting on a person too", () => {
     const items = attentionQueue(input({ runs: [parked("reseed")] }));
     expect(items[0]?.detail).toContain("Which branch should I target?");
-    expect(items[0]?.detail).toContain("already reclaimed");
+    expect(items[0]?.detail).toContain("Answering restarts the work.");
   });
 
   // AND A RUNNING ONE IS NOT WAITING ON ANYBODY. Without this the condition
@@ -185,6 +185,7 @@ describe("what it surfaces", () => {
     // the round started two seconds or eleven minutes ago.
     const call = (updated: string) => ({
       id: "a",
+      agent_id: "a",
       role: "Dev A",
       handle: "dev-a",
       live_call: {
@@ -291,6 +292,7 @@ describe("what it surfaces", () => {
         agents: [
           {
             id: "a",
+            agent_id: "a",
             role: "Dev A",
             handle: "dev-a",
             budget: { windows: [win({ state: "refusing", refused_at: "2026-01-01T11:59:00Z" })] },
@@ -298,8 +300,12 @@ describe("what it surfaces", () => {
         ],
       }),
     );
-    expect(items[0]?.id).toBe("seat-budget-Dev A");
-    expect(items[0]?.detail).toContain("11:59");
+    expect(items[0]?.id).toBe("seat-budget-a");
+    expect(items[0]?.detail).toBe(
+      "10 of 100 tokens spent. Raise the limit, or wait until 2026-01-02T00:00:00Z.",
+    );
+    // The gate's stamp is the row's age rather than a clause of its sentence.
+    expect(items[0]?.at).toBe("2026-01-01T11:59:00Z");
   });
 
   // THE ADVICE IS ONE AN OPERATOR CAN TAKE. The counters are windowed and
@@ -312,8 +318,8 @@ describe("what it surfaces", () => {
       win({ state: "near", used: 95 }),
     ]) {
       const [item] = attentionQueue(input({ budget: meter(w) }));
-      expect(item?.detail).toContain("token_budget.day");
-      expect(item?.detail).toContain("turn over");
+      expect(item?.detail).toContain("Raise the company limit");
+      expect(item?.detail).toContain("or wait until");
       expect(item?.detail).not.toMatch(/reset/i);
     }
   });
@@ -335,6 +341,7 @@ describe("what it surfaces", () => {
         agents: [
           {
             id: "a",
+            agent_id: "a",
             role: "Dev A",
             last_error: {
               kind: "llm_unavailable",
@@ -347,6 +354,7 @@ describe("what it surfaces", () => {
           },
           {
             id: "b",
+            agent_id: "b",
             role: "Dev B",
             handle: "dev-b",
             live_call: {
@@ -411,6 +419,7 @@ describe("where a condition is shown", () => {
         agents: [
           {
             id: "b",
+            agent_id: "b",
             role: "Dev B",
             handle: "dev-b",
             live_call: {
@@ -435,6 +444,7 @@ describe("where a condition is shown", () => {
           },
           {
             id: "c",
+            agent_id: "c",
             role: "Dev C",
             handle: "dev-c",
             activity: "stopped",
@@ -448,7 +458,7 @@ describe("where a condition is shown", () => {
     expect(WHERE_OF[stalled!.subject]).toBe("live");
     // THE INBOX'S ROWS: the stopped seat, and neither the engine's own
     // condition nor the round.
-    expect(conditionsToDecide(items).map((i) => i.id)).toEqual(["stopped-Dev C"]);
+    expect(conditionsToDecide(items).map((i) => i.id)).toEqual(["stopped-c"]);
   });
 });
 
@@ -461,6 +471,7 @@ describe("ordering", () => {
         agents: [
           {
             id: "a",
+            agent_id: "a",
             role: "Dev A",
             last_error: {
               kind: "llm_unavailable",
@@ -487,8 +498,8 @@ describe("ordering", () => {
         connected: false,
         engine: healthFrame({ configured: false }),
         agents: [
-          { id: "a", role: "A", activity: "stopped", stopped_reason: "provider" },
-          { id: "b", role: "B", activity: "stopped", stopped_reason: "provider" },
+          { id: "a", agent_id: "a", role: "A", activity: "stopped", stopped_reason: "provider" },
+          { id: "b", agent_id: "b", role: "B", activity: "stopped", stopped_reason: "provider" },
         ],
       }),
     );
@@ -506,9 +517,10 @@ describe("ordering", () => {
   });
 });
 
-// WHO PAUSED A SEAT IS SAID BY NAME. The engine names the pauser by the seat
-// handle their token is bound to, and the row read "paused by jane-founder" on
-// Home and in the Inbox — an address where a person is meant.
+// WHO PAUSED A SEAT IS SAID BY NAME. The engine names the pauser as it names
+// every author (`iam.ActorFor`) — the seat handle a person is bound to — and
+// the row read "paused by jane-founder" on Home and in the Inbox — an address
+// where a person is meant.
 describe("a stopped seat's row", () => {
   test("names the person who paused it, off the chart", () => {
     const items = attentionQueue(
@@ -516,18 +528,55 @@ describe("a stopped seat's row", () => {
         agents: [
           {
             id: "devrel",
+            agent_id: "devrel",
             role: "Agent DevRel",
             handle: "agent-devrel",
             activity: "stopped",
             stopped_reason: "paused",
-            paused: { by: "jane-founder", at: "2026-01-01T11:00:00Z", stop_running: false },
+            paused: {
+              by_kind: "human",
+              by: "jane-founder",
+              at: "2026-01-01T11:00:00Z",
+              stop_running: false,
+            },
           },
         ],
         nameOf: (key) => (key === "jane-founder" ? "Jane Founder" : key),
       }),
     );
-    expect(items.find((i) => i.id === "stopped-Agent DevRel")?.detail).toBe(
+    expect(items.find((i) => i.id === "stopped-devrel")?.detail).toBe(
       "The seat cannot take work: paused by Jane Founder.",
     );
+  });
+
+  // EACH ROW IS ITS SEAT'S, BY AGENT ID: two seats sharing a name that both
+  // stopped were one row, and the queue said one seat was down when two were.
+  test("two stopped seats that share a name are two rows", () => {
+    const items = attentionQueue(
+      input({
+        agents: [
+          {
+            id: "one",
+            agent_id: "one",
+            role: "Support",
+            handle: "support",
+            activity: "stopped",
+            stopped_reason: "provider",
+          },
+          {
+            id: "two",
+            agent_id: "two",
+            role: "Support",
+            handle: "support-2",
+            activity: "stopped",
+            stopped_reason: "provider",
+          },
+        ],
+      }),
+    );
+    expect(items.filter((i) => i.id.startsWith("stopped-")).map((i) => i.id)).toEqual([
+      "stopped-one",
+      "stopped-two",
+    ]);
   });
 });

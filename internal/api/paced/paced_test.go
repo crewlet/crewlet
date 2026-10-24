@@ -16,7 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
-// stepClock is a pace clock that moves only when a case says time passed —
+// stepClock is a pace clock that moves only when a case says time passed:
 // a client's wait inside a read or a write, or the server's own work between
 // two.
 type stepClock struct{ at time.Time }
@@ -29,7 +29,7 @@ func (c *stepClock) now() time.Time { return c.at }
 
 func (c *stepClock) advance(d time.Duration) { c.at = c.at.Add(d) }
 
-// trickle is a body that hands over one byte a Read, each after a wait — a
+// trickle is a body that hands over one byte a Read, each after a wait: a
 // client sending as slowly as it likes.
 type trickle struct {
 	clock *stepClock
@@ -60,8 +60,7 @@ func TestABodyChargesOnlyTheTimeInsideRead(t *testing.T) {
 	rc := http.NewResponseController(httptest.NewRecorder())
 	clock := newStepClock()
 
-	slow := &body{r: trickle{clock: clock, wait: 300 * time.Millisecond}, rc: rc,
-		pace: time.Second, now: clock.now}
+	slow := newBody(trickle{clock: clock, wait: 300 * time.Millisecond}, rc, time.Second, clock.now)
 	buf := make([]byte, 64)
 	var err error
 	reads := 0
@@ -77,7 +76,7 @@ func TestABodyChargesOnlyTheTimeInsideRead(t *testing.T) {
 			"its budget ran out", reads)
 	}
 
-	waited := &body{r: prompt{}, rc: rc, pace: time.Second, now: clock.now}
+	waited := newBody(prompt{}, rc, time.Second, clock.now)
 	for range 4 {
 		// THE SERVER'S OWN WORK between reads: more than the pace in
 		// all, none of it the client's.
@@ -89,7 +88,7 @@ func TestABodyChargesOnlyTheTimeInsideRead(t *testing.T) {
 
 	// A MEBIBYTE THAT ARRIVES OPENS THE NEXT ONE'S WHOLE BUDGET: what was
 	// left over is not carried, and what was spent is not either.
-	whole := &body{r: io.LimitReader(prompt{}, 3<<20), rc: rc, pace: time.Hour, now: clock.now}
+	whole := newBody(io.LimitReader(prompt{}, 3<<20), rc, time.Hour, clock.now)
 	whole.budget, whole.left = time.Millisecond, 10
 	if _, err := whole.Read(make([]byte, 20)); err != nil {
 		t.Fatal(err)

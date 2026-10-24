@@ -10,7 +10,7 @@
  * (`movePreview.ts`), and the check after the move, and the review before the
  * save, show the engine's own result.
  *
- * A LEAD STAYS A LEAD. A unit's lead is a seat NAME, not a position, so a
+ * A LEAD STAYS A LEAD. A unit's lead is a seat's HANDLE, not a position, so a
  * seat that leads a unit keeps leading it from anywhere in the chart. That is
  * right for a department lead who sits in one of its teams and wrong for a
  * seat moved to another team, so the dialog says "Stays lead of" and offers
@@ -32,10 +32,18 @@ import {
   StrandedNotes,
   WorkingNotes,
 } from "./dialogParts.tsx";
-import { allSeats, allUnits, locate, siblingsAt, subtreeKeys } from "./model/draft.ts";
+import {
+  allSeats,
+  allUnits,
+  handleOf,
+  locate,
+  siblingsAt,
+  subtreeKeys,
+  unitWithKey,
+} from "./model/draft.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import type { Intent } from "./model/operations.ts";
-import { handlesOf, recordIntent } from "./model/reducer.ts";
+import { recordIntent } from "./model/reducer.ts";
 import { movePreview, type MovePreview } from "./movePreview.ts";
 import { isWorking, unitsLedBy } from "./nodeFacts.ts";
 import { newlyStranded, simulate } from "./preflight.ts";
@@ -91,8 +99,10 @@ export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: ()
       .map(({ unit }) => ({ value: unit.key, label: pathName(unit.key) })),
   ];
 
-  const led = isUnit ? [] : unitsLedBy(state.draft, name);
+  const led = found.kind === "unit" ? [] : unitsLedBy(state.draft, handleOf(found.node));
   const unitRef = !isUnit && typeof found.node.data.unit === "string" ? found.node.data.unit : "";
+  // The reference names the unit's key; a person reads the unit's name.
+  const unitRefName = unitWithKey(state.draft, unitRef)?.data.name || unitRef;
 
   const intentFor = (to: NodeKey): Intent => {
     const kind = isUnit ? "unit" : "seat";
@@ -119,9 +129,8 @@ export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: ()
   const moving = isUnit
     ? [...allSeats(state.draft)].filter(({ parent }) => inside.has(parent)).map(({ seat }) => seat)
     : [found.node];
-  const handles = handlesOf(state);
   const working = moving
-    .filter((seat) => isWorking(handles.get(seat.key), api.agents, api.sandboxes))
+    .filter((seat) => isWorking(handleOf(seat), api.agents, api.sandboxes))
     .map((seat) => seat.data.name);
 
   function move() {
@@ -180,15 +189,14 @@ export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: ()
       />
       {unitRef && (
         <p className="t-caption">
-          {name} is placed in {unitRef} by its unit reference. Moving it writes it into the
-          destination and removes the reference.
+          {name} is placed in {unitRefName} by reference. Moving it removes the reference.
         </p>
       )}
       {led.length > 0 && (
         <EditorSection title={`Stays lead of ${led.map((u) => u.data.name).join(", ")}`}>
           <p className="t-caption">
-            A unit's lead is a seat's name, so {name} leads {led.length === 1 ? "it" : "them"} from
-            wherever it sits.
+            {name} still leads {led.length === 1 ? "it" : "them"} after the move: a lead names a
+            seat by its handle.
           </p>
           <Checkbox
             label="Clear lead"
@@ -221,10 +229,7 @@ function MoveChanges({
   if (!preview.known) {
     return (
       <EditorSection title="What changes">
-        <p className="t-body muted">
-          The engine has not described this draft yet, so what the move changes is shown after the
-          next check.
-        </p>
+        <p className="t-body muted">Changes appear after the next check.</p>
       </EditorSection>
     );
   }
@@ -238,12 +243,12 @@ function MoveChanges({
       !preview.reportsTo
         ? `Today ${name} reports to nobody.`
         : preview.endsAsLeadOf
-          ? `Today ${name} reports to ${preview.reportsTo} as the lead of ${preview.endsAsLeadOf}, which ends with the move.`
+          ? `${name} stops reporting to ${preview.reportsTo}.`
           : `Today ${name} reports to ${preview.reportsTo}.`,
     );
     if (preview.destinationLead) {
       lines.push(
-        `In ${destination}, ${preview.destinationLead} leads the unit and manages its direct members unless another member manages ${name}.`,
+        `In ${destination}, ${name} reports to ${preview.destinationLead} unless someone else manages them.`,
       );
     } else if (destination === "the top level") {
       lines.push("At the top level, no unit lead manages it.");
@@ -272,10 +277,7 @@ function MoveChanges({
     lines.push(`${name} loses the tool credentials of ${preview.credentials.lost.join(", ")}.`);
   }
   return (
-    <EditorSection
-      title="What changes"
-      hint="From the engine's check of the draft as it stands. The check after the move confirms it, and the review lists it before you save."
-    >
+    <EditorSection title="What changes">
       <ul className="builder-list">
         {lines.map((line) => (
           <li key={line}>{line}</li>

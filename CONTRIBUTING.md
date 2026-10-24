@@ -93,9 +93,11 @@ loops below; the engine itself needs no services.
 
 Take golangci-lint as a **prebuilt release**, not via `go install ...@latest`:
 that builds it with the linter module's own minimum Go rather than the newest,
-and a golangci-lint built with a Go older than `go.mod`'s `go` line refuses
-this module outright instead of linting it — so the gate reports nothing at
-all rather than disagreeing. `make lint` checks this and says so.
+and a golangci-lint built with a Go whose language version (major.minor) is
+older than that of `go.mod`'s `go` line refuses this module outright instead of
+linting it — so the gate reports nothing at all rather than disagreeing. Only
+the language version counts: a linter built with go1.27.0 lints a module at
+`go 1.27.2`. `make lint` checks this and says so.
 
 ```bash
 git clone https://github.com/crewlet/crewlet.git
@@ -402,6 +404,113 @@ What follows are the prerequisites that legitimately vary by machine.
   dashboard calls is a new proxy entry in the same change, and a route it
   stops calling takes its entry with it.
 
+  **A dashboard suite waits for the work, never for the clock.** `findBy*`
+  and `waitFor` poll the page against a one-second deadline, so a case that
+  waited that way for a screen to finish passed on a quiet machine and failed
+  on a loaded one — four full runs sharing four cores each failed two to four
+  of the org builder's cases, none of which had done anything wrong. A
+  screen that takes its time as an argument is handed time the suite moves:
+  the builder's testkit mounts the lens on a `SuiteClock`, and `settle()`
+  waits for every answer the lens has out and every timer due within the
+  check's debounce. One that does not is flushed with `act` where its work is
+  promises, or driven by fake timers faked only for the calls that arm and
+  cancel one. And a role query is scoped with `within` to the toolbar, dialog
+  or chart it is about: asked by name, it computes the accessible name of
+  every candidate in its container, and in jsdom each element of each name
+  costs a computed style matched against the whole user-agent stylesheet.
+  Not every suite holds to this: the org builder's suites, and the screens
+  that ran out of time under load (the audit, the retention gesture, a seat's
+  settings, the work list's Display menu, the sign-in form), wait for the
+  work, while more than forty others still poll with `findBy*` and
+  `waitFor`. Those are not a pattern to copy — a suite you write, or a case
+  you change, waits for the work.
+
+  **What a case does ends with the case.** A case that times out is failed,
+  not stopped: its function goes on running beside the cases after it. React
+  keeps one `act` scope count for the process, so an `act` it opens beside the
+  next case's leaves every later render in the file queued and never flushed —
+  one timeout read as the rest of the file failing — a `findBy` or `waitFor`
+  it still has out polls the next case's page, where it can find what that
+  case drew, and a `render` or `cleanup` it makes draws into that page or
+  takes it away. So every case runs in an async context of its own
+  (`aroundEach` in `src/test/setup.ts`, over `src/test/cases.ts`, which loads
+  no testing library so a file with no document pays for none), and
+  `src/test/inCase.ts` binds the testing library to it. A suite imports the
+  library from there and nowhere else — `inCase.source.test.ts` fails a file
+  that takes it, or React's own `act`, from anywhere else — so the import that
+  gives a suite the library is the one that binds it: its `act`, `render`,
+  `renderHook` and `cleanup`, refused once their case has ended; its `poll`,
+  which a suite uses in place of Vitest's `vi.waitFor` — that one cannot be
+  bound, goes on looking after its case has ended, and advances whatever fake
+  clock is installed before every look, which by then is the next case's, so
+  the same gate refuses it and `vi.waitUntil` and `expect.poll` with it; and
+  the library's own waits and `fireEvent`, through the library's `asyncWrapper`
+  and `eventWrapper` — the wait's wrapper restated rather than wrapped, because
+  after a wait finds what it looked for the library lets one turn of the page's
+  timer pass before it puts the act environment back, and on a fake clock
+  nothing moves that timer, so a wrapper round the library's could not end a
+  wait held there, or the scopes outside it. When the case ends, every act
+  scope, wait and poll it still has out is closed before the next case begins —
+  innermost first, because each puts back on exit the act count or act
+  environment it found on entry, and closed in any other order a scope opened
+  inside another left React's count raised — and everything it asks for after
+  that is refused before it opens. What the binding does not reach is what a
+  late case writes to the page's globals itself — the fake clock through `vi`,
+  `location.hash`, a stub — in a `catch` or `finally` its refusal passes
+  through, or past an await of something that is none of the above, such as a
+  promise of its own: every act, wait and poll rejects at its case's end, which
+  throws a late case out at the first of them it awaits. Node carries the
+  context through the case's own awaits and timers, so a case that timed out
+  inside a promise of its own and resumes later still reads its own, ended case
+  — which is what a helper every case shares (`answered()`, a suite's
+  `settle()`) could not tell before, and why the flush used to be handed to
+  each case. A case that holds the page's timers advances them as `answered`'s
+  `step`, so the refusal comes before the timers move.
+  `src/test/inCase.test.tsx` holds each of these to a pair: a case that really
+  runs out of its time with something out (`test.fails` on a budget it always
+  spends), and the case after it, which first holds it to having failed by that
+  timeout — `test.fails` passes on any failure at all — and then reads what the
+  late one came to.
+
+  **And the harness's own waits end with it too.** The builder's testkit
+  retires a lens when the case that mounted it finishes (`onTestFinished`):
+  it wakes every wait on the lens's engine, which holds answers back until
+  the case releases them — a wait the binding could close but not wake. A
+  suite that waits for the page without a lens — a move landing, an element
+  the page draws — waits through `waitInCase` (`viewTestkit.tsx`), which
+  listens for the event with no deadline and stops listening the same way.
+  And a case waits only on the lens it mounted: `mountBuilder` hands the
+  case its lens's `settle`, `checked` and `navigate`, because those used to
+  be found in a variable the last mount wrote, and a late `settle()` settled
+  the NEXT case's lens — a value, which no context makes right.
+  `testkit.test.tsx` holds each of those waits to a pair.
+
+  **A warning fails the case that printed it.** `src/test/setup.ts` watches
+  `console.error` and `console.warn` around every case and fails one that
+  wrote to either, after the suite's own teardown so what an unmount says
+  counts too — and fails the FILE for what it wrote outside every case: while
+  it loaded, in a `beforeAll` or an `afterAll`, or between cases, which no
+  case can be blamed for and a per-case watch never heard. Vitest shows nothing a passing case prints, so every warning the
+  suite used to print was a defect nobody saw: a list keyed on a field its
+  fixture lacked, a stand-in observer reporting mid-commit, an announcement
+  with no live region mounted — the application had none — and the audit
+  asking the engine once a second. A case that expects a warning silences that
+  one itself, `vi.spyOn(console, "error").mockImplementation(...)` for the call
+  it is about, and puts it back; the watcher (`src/test/console.ts`) restores
+  both methods when the case ends whatever the case did.
+
+  **A stand-in for the browser answers when the browser would.** jsdom has no
+  layout, so the chart suites install a ResizeObserver of their own, and one
+  that reports from inside `observe()` reports in the middle of React's
+  commit, because `observe()` is called from a ref. A real observer delivers
+  in the event loop's rendering step with React idle, which is what the design
+  system's resize handler is written for: it flushes its sizes synchronously,
+  and inside a commit that flush is a `flushSync` inside a lifecycle — eight
+  warnings about the harness that read as a defect in the chart. Both of the
+  builder's observers, `LayoutObserver` (`viewTestkit.tsx`) and the reference
+  chart's (`src/testing.tsx`), record what they observe and report it inside
+  `act` once the render has committed.
+
   **The built dashboard is committed**, so building the ENGINE needs neither
   node nor npm. Changing the dashboard does: run `make dashboard` and commit
   `static/dashboard` with your source change — `git add -A`, so the new
@@ -521,7 +630,17 @@ cases, `Pending`, an adoption, a fresh-file boot — opens a fresh file with
 `internal/e2e` runs a real engine, a real broker and the real API, then
 replays the frames its socket produced through the dashboard's own
 `protocol.js`. Both halves of the wire protocol are checked against each other
-there and nowhere else, so it needs node too:
+there and nowhere else, so it needs node too.
+
+It is also where a FLEET signs a person in. On a clustered fleet, a Tier A
+token invites somebody onto a human seat, they redeem the link and sign in on
+one member, and the same cookie must then read, write as them and open the
+live socket on the other member — never `401` while it catches up — while a handshake from a
+foreign origin is refused and a sign-out everywhere on the second member is
+refused on the first. The sign-in surface, the identity directory and the
+human write surface it serves are built by `api.NewHumanSurfaces`, the
+constructor `crewlet run` calls, so a seam added to them reaches the suite with
+no copy to update:
 
 ```bash
 make test-solo   # internal/e2e, and every other package that runs alone
@@ -686,10 +805,11 @@ that a value in it changes what the engine *does*, not merely that it parses.
 
 ## Dependency updates
 
-Dependabot watches every dependency surface this repository has but one, and
-opens a pull request when any of them has a newer release. The one is the git
-pin, a source tarball no Dependabot ecosystem reads, and a workflow of this
-repository's own watches it instead:
+Dependabot watches every dependency manifest this repository has, and opens a
+pull request when any of them has a newer release. The git pin is no manifest
+— a source tarball no Dependabot ecosystem reads — so a workflow of this
+repository's own watches it instead (and the tool servers the docs and the
+examples launch are not in a manifest either: a test holds them — see below):
 
 | Surface | Watched by | What it covers |
 |---|---|---|
@@ -707,12 +827,14 @@ from memory, and write it as a literal version (`4.2.4`), never a floating tag:
 `latest` and `@main` leave Dependabot nothing to bump, and a floating tag turns
 a green run into a claim about a build nobody can name afterwards.
 Holding a version back is still fine where there is a reason — put the reason in
-a comment at the pin, as the Compose stack's Postgres image already does.
+a comment at the pin, as the Compose stack's Postgres image already does. The
+one place a version is deliberately left unpinned is what a shipped example
+fetches, which runs its newest release (see below).
 
 The configuration is [`.github/dependabot.yml`](.github/dependabot.yml): one
 entry per surface on a weekly schedule, plus the commit prefix that surface's
 bumps carry, plus three grouping rules on the npm entry. CI runs on each pull
-request, and — as below — CI is what decides whether it lands. Nine things are
+request, and — as below — CI is what decides whether it lands. Ten things are
 worth knowing:
 
 - **The React family is grouped.** `react`, `react-dom`, `@types/react` and
@@ -784,13 +906,25 @@ worth knowing:
   (`@release/v1`) or `@main` yields no update pull requests at all, so pin
   actions to a version tag or a full SHA. That matters most for the one
   handed an OIDC token: pinned, its updates arrive as reviewable pull
-  requests instead of moving under the workflow unannounced.
-- **The git pin is the one surface Dependabot does not watch**, and a bump of
-  it arrives as an issue rather than a pull request: every Monday
+  requests instead of moving under the workflow unannounced. The release and
+  main-image workflows pin every action by **full commit SHA**, with the
+  release in a trailing comment (`@<sha> # v7.2.3`) that Dependabot rewrites
+  with the pin: they hold the registry and the signing identity (and the
+  release workflow the Releases), and a version tag is a ref its owner can move
+  under them.
+- **The git pin is watched by a workflow rather than Dependabot**, and a
+  bump of it arrives as an issue rather than a pull request: every Monday
   [`git-pin.yml`](.github/workflows/git-pin.yml) asks kernel.org whether each
   pin is still the newest release of its series and keeps ONE issue, `git pin
   behind upstream`, naming what moved — see [The git pin is checked every
   week](#the-git-pin-is-checked-every-week).
+- **goreleaser itself floats within its major.** Every goreleaser step in
+  `.github/workflows/release.yml` asks for `version: "~> v2"`, the newest v2
+  on each run, because Dependabot bumps the action's ref but never a `with:`
+  input, so an exact version would age with nothing watching it. The major
+  is held because `.goreleaser.yaml` is a `version: 2` config: moving to a
+  v3 is a migration of that file, made by hand in the same change, and
+  rehearsed with `make snapshot`.
 
 Adding a new dependency surface — a second `package.json`, a second module — means
 adding its `updates:` entry in the same change. Nothing reports the omission:
@@ -798,9 +932,51 @@ a manifest Dependabot has not been told about simply never produces a pull
 request, which is indistinguishable from one that has nothing to update. The
 Go module itself went the length of the rewrite that way.
 
+The tool servers the docs, the examples and the skills launch are versions
+Dependabot cannot see: they sit in a page's YAML or a setup step's command
+line, not in a manifest. [`internal/config/toolservers_test.go`](internal/config/toolservers_test.go)
+holds them instead. Every package a page or a skill fetches by name — an
+`mcp_servers` entry, a `uvx`, `npx`, `npm exec` or `pip install` it tells
+somebody to run — names an exact release; every server a document launches is
+listed in `pinnedToolServers` with `readAt`, the release what the documents
+say about it (its tool names, its variables) was read against; and every
+document that names a release names that one. So moving one means reading the
+new release first, correcting whatever moved, and setting `readAt` in the same
+change — and since nothing proposes the move, check the registry whenever you
+touch those pages. Reading it includes running the documented launch through
+`initialize` and `tools/list`: a runner pins the package it is given and
+resolves every dependency the package leaves unbounded at its newest, so a
+release whose source reads right can still fail to start — `mcp-linear` 0.1.1
+declares `mcp>=0.1.0` and dies at import on mcp 2.
+
+The shipped examples (`examples/`) are held the other way round. An example is
+a company somebody copies and runs long after it was written, and a pin in it
+is a release nothing ever moves, so every package an example fetches names no
+release (`@latest` at most) and runs the newest on the day it is copied. The
+one exception is a server a bundled tool skill (`examples/tool-skills/`)
+triggers on by tool name — `mcp-server-mattermost` today — whose entry names
+`readAt` exactly, because a release that renamed the tool would disarm the
+skill without a sound. The same test derives that exception from the skills'
+own triggers, so a pin that no skill needs any more fails as surely as a skill
+on a server that floats.
+
 Security updates are separate: they come from published advisories rather than
 this file, are enabled in the repository's settings, and are held back by
 neither the weekly schedule nor Dependabot's default release cooldown.
+
+**Promoting an indirect dependency to a direct one is a change to the module's
+surface**, and `go mod tidy` is what records it — a `// indirect` marker that
+should have gone, or one that should have stayed, fails `go mod tidy -diff` in
+`make check`. `golang.org/x/crypto` is direct because `internal/iam/credential`
+calls `argon2` from it: a password hash is the one piece of cryptography in
+this tree that is not hand-written, because it is maintained by the same people
+who maintain the standard library's crypto and there is no second
+implementation of it to disagree with. Everything beside it in that package —
+TOTP, the recovery codes, the token digests — is `crypto/hmac`, `crypto/sha1`,
+`crypto/sha256` and `encoding/base32`, which is the dependency rule working
+rather than an inconsistency: a module earns its place against what `std`
+already does, and for forty lines of RFC 6238 arithmetic `std` does all of
+it.
 
 ### A bump merges itself
 
@@ -1048,7 +1224,7 @@ the pin, to [`scripts/git.sh`](scripts/git.sh) or to the key changes the git
 every git node runs, so it is read as release surface. A floor pin only ever
 moves to a newer patch of its own series; raising a floor itself is a change to
 `gitproc.NodeMinVersion` or `ClientMinVersion` and is argued in
-[ADR-0039](adr/0039-a-git-node-runs-git-2-55-from-one-pin.md). A git 3.x node
+[ADR-0053](adr/0053-a-git-node-runs-git-2-55-from-one-pin.md). A git 3.x node
 pin changes the recipe too: git's own Makefile makes Rust mandatory from 3.0,
 which the report says when it names one.
 
@@ -1091,12 +1267,23 @@ the step that runs the key check on any diff that touches it.
 ## Releasing
 
 Releases are cut by pushing a `v*` tag; GitHub Actions builds every target
-with [goreleaser](https://goreleaser.com), signs the checksums with keyless
-Sigstore, publishes the container image to GHCR and creates the GitHub
-Release. **The tag is the version** — nothing in the tree records one, so
-there is nothing for a tag to disagree with. The whole pipeline rehearses
-locally with `make snapshot`, without a tag and without touching GitHub; the
-full process is in [RELEASING.md](RELEASING.md).
+with [goreleaser](https://goreleaser.com), signs the checksums and the
+container image with keyless Sigstore, publishes the image to GHCR and creates
+the GitHub Release. **The tag is the version** — nothing in the tree records
+one, so there is nothing for a tag to disagree with. The whole pipeline
+rehearses locally with `make snapshot`, without a tag and without touching
+GitHub; the full process is in [RELEASING.md](RELEASING.md).
+
+`main` has a signed image too, `ghcr.io/crewlet/crewlet:main`, rebuilt on
+every push to `main` and moved to that build — one tag, and the only one it
+ever pushes ([RELEASING.md](RELEASING.md#images-from-main)). Its binary
+reports `main-<the first 12 hex digits of the commit>`. A newer push cancels
+the run before it, so when pushes land close together only the newest commit
+is built, and a commit that starts no push run is never built: Dependabot's
+bumps, merged with `GITHUB_TOKEN`, start none, so `main` stays on the last
+pushed commit's image until the next push. That image is **not a release**: it
+creates no Release, carries no notes, and is owed nothing below — a deployment
+that runs `main` has opted out of the compatibility a tag promises.
 
 ### Nothing is released until a tag ships it
 
@@ -1136,7 +1323,14 @@ an older build:
   keyed on the filename, so editing a file that already ran silently never
   re-runs it: a database that applied it keeps the old shape while the code
   assumes the new one. Reshape with a new numbered migration under
-  `internal/store/schema/`.
+  `internal/store/schema/`. A **replicated** migration also carries three
+  rules, checked by
+  `internal/store.TestNoReplicatedMigrationDeclaresAConstraintTheApplyCannotSurvive`:
+  no foreign key, no `UNIQUE` outside a primary key, and no `COLLATE`. Each
+  one aborts an apply transaction deterministically on every data node, so a
+  constraint that would flag an anomaly on one machine stalls the whole
+  fleet's log instead; uniqueness a writer must see whole is arbitrated on the
+  record's subject. The node estate is not governed by them.
 - **This build must be a good older peer to the next.** A rolling upgrade
   will put this build and its successor on one stream and one coordination
   store, so the forward mechanisms stay: the event envelope evolves
@@ -1159,8 +1353,16 @@ regenerated, never hand-edited.
 ## Documentation
 
 The pages under `docs/` are the source of truth and are published to
-[docs.crewlet.ai](https://docs.crewlet.ai). Keep them plain CommonMark: relative
-`.md` links between pages, figures in `docs/assets/`, one `# Heading` per page.
+[docs.crewlet.ai](https://docs.crewlet.ai/engine/latest/), under the engine's
+own path and a version: `/engine/latest/` is the newest release (until this
+engine's first release, a redirect to `main`'s pages), `/engine/next/` is
+`main`, and `/engine/vX.Y/` an older release line, with `schema/` and
+`skills/` published file for file beside each version's pages. Link
+`/engine/latest/`: a page or file the newest release lacks answers there with
+a redirect to its `/engine/next/` copy. Nothing forwards a path the site no
+longer builds. Keep the pages plain
+CommonMark: relative `.md` links between pages, figures in `docs/assets/`, one
+`# Heading` per page.
 The site derives its navigation from `docs/index.md`, so **a new page must be
 linked there** — the site build fails on a page nothing links to.
 
@@ -1171,8 +1373,13 @@ it goes red), and on a page under `docs/` that `docs/index.md` does not list.
 The dashboard's own addresses — `#/work/ENG-42` in a guide, a tool skill or a
 string the engine composes — are held by `dashboard/src/app/links.test.ts`
 against the dashboard's route resolver, along with every pointer at a
-`dashboard-design.md` heading. A link to a page that moved is fixed by pointing
-it at where the subject lives now, never by deleting the gate's view of it.
+`dashboard-design.md` heading. And `internal/docslinks` reads every text file
+in the tree for an absolute `https://docs.crewlet.ai` link, failing on one the
+site does not build — a root-shaped path, or a page, schema or skill under
+`/engine/latest/` or `/engine/next/` that this tree does not have — and on a
+page spelled without its trailing slash, which the site answers with a
+redirect. A link to a page that moved is fixed by pointing it at where the
+subject lives now, never by deleting the gate's view of it.
 
 `docs/` is written for people *running* Crewlet. Reasoning aimed at people
 *changing* it goes in a package doc, where `go doc` surfaces it beside the
@@ -1207,6 +1414,101 @@ this replaced had fifteen decisions, no anchor, no gate, and six false
 statements by the time anybody compared it with the code; `adr/README.md`
 records that, because it is the argument for every field in the template.
 
+## Changes `crewlet-operator` has to follow
+
+[`crewlet-operator`](https://github.com/crewlet/crewlet-operator) is the
+Kubernetes operator that runs Crewlet companies from `crewlet.ai` custom
+resources. It consumes this engine's contract rather than sharing code with it:
+it renders both config tiers from its objects, calls the engine's API, copies a
+few run-time decisions out of the engine's source and runs the engine's image in
+pods of its own. Its suites run this repository's `main` as
+`ghcr.io/crewlet/crewlet:main` publishes it, never a pin of it (its ADR-0002), so
+a change here that it has not followed fails its next run while nothing there
+changed. That red run is the safety net, not the plan: a change that needs
+support there ships with it.
+
+A change needs a companion there when it touches something `crewlet-operator`
+renders, calls, copies, runs or links:
+
+- **A document it renders.** A field, enum value, default, rule or refusal of
+  the company document (Tier B, the company types in `internal/config`) or of
+  `crewlet.yaml` (Tier A, `Bootstrap`, which it writes for each pod: `node`,
+  `stream`, `store`, `coordination`, `api` with `api.auth`, and `secrets` among
+  its blocks), and so of `schema/`. It renders both from its objects, hands
+  every render to `crewlet validate` and to a running engine's `/config`, and
+  holds its CRD rules to the engine's own refusals.
+- **A credential position.** A field tagged `secret:"true"` (`x-crewlet-secret`
+  in the schema). Each takes a reference field on one of its kinds, or a stated
+  reason it has none, and a test holds the two lists to each other in both
+  directions, so a credential added here fails its build until it is mapped.
+- **A route or an answer it calls.** `/health`, `/ready`, `/fleet`, `/agents`,
+  `/config`, `/secrets` and the pause tools of `/operator/mcp`: the path, the
+  method, the status, the error envelope, a field it reads (`/ready`'s `reason`;
+  `/health`'s `status`, `posture` and `applied_epoch`; `/fleet`'s nodes and seat
+  leases), the paths a validation error names, or who may call it.
+- **A table or a function it copies a decision from.** Its
+  `internal/render/mirror_test.go` fingerprints engine functions by file and
+  name — the coding-run launch, the address checks the boot refuses to start on
+  and the Atlassian host rule among them — and its CRD suite reads the Claude
+  model table (`claudemodel`, which its `claudeModel` enum is held to) and the
+  CLI profiles (`cliprofile`: each CLI's token and key variables and the
+  variables that keep it inside a seat's home) from the engine's own refusals. A
+  change to one, or a rename or a move, fails it until it has been read against
+  the files that copy it.
+- **How the engine runs in a pod.** `crewlet run -config`, the `CREWLET_*`
+  variables a pod sets, the ports, `/health` and `/ready` as the probes, the
+  drain and the grace a pod is given for it (the engine puts no bound of its own
+  on a drain), and where the engine writes: `crewlet-operator` runs it as a
+  non-root user with a read-only root filesystem and only a data volume, `/tmp`
+  and the user's home writable, so a new place the engine writes is a write the
+  pod refuses.
+- **The engine image and the tag.** The `Dockerfile`, `.goreleaser.yaml`,
+  `make image-context` and `.github/workflows/main-image.yml`: the image's
+  entrypoint, user ID and home directory, platforms, tags and labels (it reads
+  the commit from `org.opencontainers.image.revision`) and the workflow's own
+  path and name, which its release verifies the keyless signature against. A
+  `v*` tag is one too: its ADR-0002 rests on this engine having released no tag
+  that carries Go code, and each of its releases keeps a copy of the engine it
+  was tested against.
+- **A page or a heading it links.** It links this repository's `docs/` as
+  `https://github.com/crewlet/crewlet/blob/main/docs/<page>.md#<heading>`, and
+  its docs gate fails the day a change here removes or renames one.
+
+When it does:
+
+- **Look in its tree, not in your memory.** It is the authority on what it
+  consumes. Grep it for the field, route, enum value, variable, path or heading
+  you are changing, and for the engine file you are editing, since its mirror
+  table names engine files by path. No hit is the answer.
+- **Make the change there; a note is not the change.** Open a pull request on
+  `crewlet-operator` that names yours, and name it in yours, working to its own
+  `CONTRIBUTING.md`: its `make check`, `git commit -s`, its commit scopes, its
+  docs (`docs/reference/api.md` there is generated). If you cannot, say exactly
+  what it needs — the surface, the files — in your pull request instead of
+  saying nothing.
+- **Prove it against your change, not against `main`.** Its suites run the
+  engine that `main` publishes, which lacks your change until it has merged and
+  the image has been rebuilt. Its `CONTRIBUTING.md` ("The engine suite") and
+  ADR-0002 say how to run them against another engine: `CREWLET_VERSION` for a
+  commit, `CREWLET_IMG` for an image built from a checkout of this repository
+  (`make image-context`). Say what you could not run.
+- **Land the pair back to back, this one first.** Its tests read `main`, so its
+  pull request is green only once this change is on `main` and the image
+  rebuilt, and a change that breaks `crewlet-operator` leaves every run of it
+  that reads `main` red from this merge until its own lands.
+- **Follow `main` plainly.** `crewlet-operator` tests against `main` alone and
+  its API is `v1alpha1`, which breaks without ceremony, so the companion change
+  is a rename or a reshape — no alias, no both-spellings reader, no
+  engine-version switch (see [Nothing is released until a tag ships
+  it](#nothing-is-released-until-a-tag-ships-it)) — unless it has shipped a tag
+  that carries the surface, in which case its own `CONTRIBUTING.md` says what a
+  break takes.
+- **Say what you did, or why nothing was needed.** The pull request description
+  links the companion change, or says in one line why there is none
+  (`crewlet-operator: none — internal to the turn loop`). Most changes touch
+  nothing above and need no companion change; one that touches a surface above
+  and says nothing is what this section exists to catch.
+
 ## Commit messages
 
 Commit subjects follow the [Conventional Commits](https://www.conventionalcommits.org/)
@@ -1240,8 +1542,9 @@ Required, and drawn from this set:
 ### Scope
 
 The scope names the **component** the change lands in. For code that is the
-package directory under `internal/` — `agent`, `api`, `coord`, `engine`,
-`gitlab`, `knowledge`, `mattermost`, `mcp`, `notify`, `queue`,
+package directory under `internal/` — `agent`, `api`, `authz`,
+`coord`, `engine`, `gitlab`, `iam`, `knowledge`, `mattermost`, `mcp`, `notify`,
+`queue`,
 `sandbox`, `schedule`, `seat`, `secrets`, `store`, `tools`, and so on — so a
 reader can go from a subject line to a directory without guessing. Two scopes
 name a component by the name people use rather than by its import path:
@@ -1362,7 +1665,9 @@ what readers see in the generated release notes. See below.
 ## Pull requests
 
 1. Fork and create a feature branch.
-2. Make your change, including tests and doc updates.
+2. Make your change, including tests and doc updates — and, where it touches
+   what `crewlet-operator` consumes, [its companion
+   change](#changes-crewlet-operator-has-to-follow).
 3. Commit it with `git commit -s` — see [Sign your work](#sign-your-work).
 4. Run `make check`.
 5. Open a PR with a clear description of what changed and why. **The title

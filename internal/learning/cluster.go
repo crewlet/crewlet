@@ -90,7 +90,7 @@ func (c SkillCluster) Size() int { return len(c.Episodes) }
 //
 // Returns the events to publish, empty when nothing qualified — which is the
 // ordinary answer for a seat whose work does not repeat, and is not an error.
-func (s *Synthesizer) ClusterPass(ctx context.Context, seat *org.Role, handle, agentID string,
+func (s *Synthesizer) ClusterPass(ctx context.Context, seat *org.Role, agentID string,
 ) ([]events.Payload, error) {
 	if s.episodes == nil {
 		// No episode store was wired, so there is nothing to cluster. A
@@ -98,6 +98,7 @@ func (s *Synthesizer) ClusterPass(ctx context.Context, seat *org.Role, handle, a
 		// synthesizer built for the inline path alone takes.
 		return nil, nil
 	}
+	handle := seat.Handle()
 
 	// THE CAP FIRST, because it is one indexed count and everything below
 	// it — a scan, a clustering, an auxiliary call — is thrown away for a
@@ -137,7 +138,7 @@ func (s *Synthesizer) ClusterPass(ctx context.Context, seat *org.Role, handle, a
 				"agent_handle", handle, "similar_to", name, "cluster_size", cluster.Size())
 			continue
 		}
-		return s.draftFromCluster(ctx, seat, handle, agentID, cluster)
+		return s.draftFromCluster(ctx, seat, agentID, cluster)
 	}
 	log.DebugContext(ctx, "skill_clustering_found_nothing", "agent_handle", handle,
 		"episodes", len(recent), "clusters", len(clusters), "min_size", s.clusterMin)
@@ -146,8 +147,9 @@ func (s *Synthesizer) ClusterPass(ctx context.Context, seat *org.Role, handle, a
 
 // draftFromCluster asks the model for one skill and writes it.
 func (s *Synthesizer) draftFromCluster(ctx context.Context, seat *org.Role,
-	handle, agentID string, cluster SkillCluster,
+	agentID string, cluster SkillCluster,
 ) ([]events.Payload, error) {
+	handle := seat.Handle()
 	member, err := s.models.Auxiliary(seat, auxspend.Use{Stage: types.AuxStageBackground,
 		Purpose: types.AuxSkillClustering})
 	if err != nil {

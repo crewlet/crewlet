@@ -271,13 +271,6 @@
 .dot.accent {
   background: var(--color-brand-accent);
 }
-/* A badge that names its seat itself (`ui/SeatAvatar.tsx`): the wrapper is
-   the image a reader hears, so it takes the badge's box and nothing more —
-   no line box of its own around it, and never squeezed by a row it sits in. */
-.seat-avatar {
-  display: inline-flex;
-  flex: none;
-}
 
 /* A link that IS a row takes the page's text colour, not the link colour.
    Otherwise every seat name in every list renders in the accent — which is
@@ -300,12 +293,13 @@ a.seat-chip:hover {
 
    Every list is a `DataGrid` now (see app/frame/DataGrid.tsx), which is a CSS
    grid rather than a `<table>` because its columns, its sort and its bands are
-   all things the URL carries. What remains here is the retention screen's
-   per-domain terms: a block that already titled itself, with no header row and
-   nothing to sort — a table in the sense the element means, rather than a list
-   of objects. So this is the quiet nested treatment and nothing else; the
+   all things the URL carries. What remains here is a project's Files listing
+   (routes/work/Files.tsx): a block inside a card that already titles it, with
+   nothing to sort, so a table in the sense the element means rather than a
+   list of objects. So this is the quiet nested treatment and nothing else; the
    sortable-header chrome, the row hover and the selected and failed marks went
-   with the component that drew them. */
+   with the component that drew them. (The retention screen's per-domain terms
+   were the other table here; they are a description list now.) */
 
 .table {
   width: 100%;
@@ -329,11 +323,11 @@ a.seat-chip:hover {
    subject is "what is blocking the trim and what do I do about it" takes the
    answer off the screen.
 
-   NO LABELS, unlike the grid's cards: these four cells are a term's name in
-   code, its sequence or state, what was read, and what to do — each one reads
-   as itself, and the name at the top of the block is what the other three are
-   about. The rule between rows is what separates one term from the next; the
-   table had none, because a row was a line.
+   NO LABELS, unlike the grid's cards: a file's path, its size, when it changed
+   and its download each read as themselves, and the path at the top of the
+   block is what the other three are about. The rule between rows is what
+   separates one file from the next; the table had none, because a row was a
+   line.
 
    `display: block` ON EVERY LEVEL, because a `<table>` element ignores its
    children's display unless the table itself stops being one: leaving `.table`
@@ -355,8 +349,8 @@ a.seat-chip:hover {
   .table td {
     padding: 1px 0;
   }
-  /* THE NAME IS THE BLOCK'S HEAD, so it keeps its own line and its nowrap —
-     a term name is an identifier and breaking it mid-word helps nobody. */
+  /* THE PATH IS THE BLOCK'S HEAD, so it keeps its own line and its nowrap:
+     a path is an identifier, and breaking it mid-word helps nobody. */
   .table td:first-child {
     padding-bottom: var(--spacing-1);
   }
@@ -485,84 +479,6 @@ a.seat-chip:hover {
   color: var(--color-text-primary);
 }
 
-/* Segmented control — lenses, tabs, ranges. One implementation; the system
-   this replaces had lens tabs, room tabs and filter pills as three.
-
-   IT WRAPS RATHER THAN OVERFLOWING. Its options never shrink (a label cut
-   mid-word is not a choice anybody can read), so on one unbroken row a group
-   wider than its container ran off the edge: on a phone the spend chart's
-   "Split by" ended at "Worke", clipped by the card with no way to reach the
-   rest. Wrapped, every option stays visible, clickable and inside the
-   focus ring's room — which a horizontal scroll strip would clip.
-
-   IT HUGS ITS OPTIONS WHEREVER IT SITS. `inline-flex` is its outside only in
-   a line box: as the child of a flex column or a grid the item is stretched,
-   and Configuration's collection picker drew as a full-width grey band with
-   its four options at the left, beside a lens control in the page bar that
-   hugged its own. A `width` that is not `auto` is never stretched, and
-   `fit-content` still wraps inside a narrower container. */
-.segmented {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  width: fit-content;
-  gap: 2px;
-  padding: 2px;
-  /* THE TRACK IS DRAWN, border and raised ground, as the approved artboards
-     set it: on the inset ground alone the group had no edge in the dark theme
-     and read as three loose words rather than one choice. */
-  background: var(--color-surface-elevated);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  min-width: 0;
-  max-width: 100%;
-}
-.segmented > button {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  height: calc(var(--size-control-md) - 6px);
-  padding: 0 var(--spacing-3);
-  border-radius: calc(var(--radius-md) - 2px);
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-secondary);
-  white-space: nowrap;
-  transition:
-    background var(--motion-duration-fast) var(--motion-easing-default),
-    color var(--motion-duration-fast) var(--motion-easing-default);
-}
-.segmented > button:hover {
-  color: var(--color-text-primary);
-}
-/* A RADIO GROUP, so the state attribute is aria-checked. The role moved from
-   `tab` to `radio` because not one call site controls a tabpanel — see
-   `Segmented` in ui/primitives.tsx — and a selector left on the old attribute
-   is how a correct role ships with the selected segment drawn as unselected. */
-.segmented > button[aria-checked="true"] {
-  background: var(--color-surface-subtle);
-  color: var(--color-text-primary);
-  box-shadow:
-    var(--shadow-sm),
-    0 0 0 1px var(--color-border-default);
-}
-/* AN OPTION THIS PLACE CANNOT SERVE stays in the row and in the arrows' path
-   — a reader lands on it to hear why — and is drawn quieter, with the
-   not-allowed pointer; the reason is written beside the group, never only in
-   a tooltip. */
-.segmented > button[aria-disabled="true"] {
-  color: var(--color-text-tertiary);
-  cursor: not-allowed;
-}
-.segmented > button[aria-disabled="true"]:hover {
-  color: var(--color-text-tertiary);
-}
-.segmented.sm > button {
-  height: calc(var(--size-control-sm) - 4px);
-  padding: 0 var(--spacing-2);
-  font-size: var(--font-size-2xs);
-}
-
 /* Tabs — the in-page navigation a section owns. The STRIP is uilet's
    SegmentedControl now; what is left here is the panel it switches.
 
@@ -587,24 +503,6 @@ a.seat-chip:hover {
   min-width: 0;
 }
 
-/* ---- Inline code -------------------------------------------------------- */
-
-code.inline {
-  font-size: 0.92em;
-  background: var(--color-surface-inset);
-  border-radius: var(--radius-xs);
-  padding: 1px 4px;
-  color: var(--color-text-secondary);
-  /* A URL IS ONE UNBREAKABLE WORD to a line breaker, and these chips carry
-     public base URLs. Without this the chip is pushed whole onto its own
-     line and the sentence around it is torn into fragments. */
-  overflow-wrap: anywhere;
-}
-/* A SHORT SPAN IS NOT BROKEN at its spaces — see `UnbrokenCode` in
-   lib/markdown.ts, which decides what short is. */
-code.inline.is-whole {
-  white-space: nowrap;
-}
 /* A REFUSAL'S PROBLEMS, one per line.
  *
  * A validation refusal is several of them joined with newlines, and HTML
@@ -623,21 +521,10 @@ code.inline.is-whole {
    problems are drawn with: `tone="inherit"` is the chip inside a message that
    carries that message's ink, and `variant="reference"` is the `${VAR}` face
    that says a name of a sealed entry rather than a path in the document. The
-   two recipes that used to follow this one, `.field-error code.inline` and
-   `.field-error code.inline.is-reference`, only ever reached a chip inside a
+   two recipes that used to follow this one, a local inline-code chip inside a
+   field error and its reference variant, only ever reached a chip inside a
    FIELD's error: the same chip inside the setup dialog's danger banner kept
    its own quiet grey, which is the half nobody noticed. */
-
-kbd {
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-2xs);
-  background: var(--color-surface-inset);
-  border: 1px solid var(--color-border-default);
-  border-bottom-width: 2px;
-  border-radius: var(--radius-xs);
-  padding: 1px 5px;
-  color: var(--color-text-tertiary);
-}
 
 /* ---- Chart -------------------------------------------------------------- */
 

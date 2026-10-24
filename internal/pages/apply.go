@@ -193,12 +193,17 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (
 // gatedPage is the page whose deletion marker gates a record on subj, and
 // false for a subject no page's marker covers.
 //
-// A PAGE SUBJECT NAMES ITS OWN, and a TITLE subject names one in its payload —
-// which neither side of the gate can read: the publisher's reader is handed
-// the subject and nothing else. So a title record is not gated on the page:
-// it is gated on nothing, and its apply refuses to write a head for a page the
-// deletions table holds. That keeps the gate answerable from the subject
-// while still making a purge permanent.
+// A PAGE SUBJECT NAMES ITS OWN, and a TITLE subject (a create, a rename) names
+// one only in its payload — which the two sides of the gate cannot both read.
+// The applier reaches only a record this build can decode, but the publisher's
+// reader ([Gates.GatedAt]) is handed a record's body only when that record is
+// its OWN operation's, and nil when it is asked about another node's. A gate
+// keyed on the payload would answer one way where the applier asks and another
+// where the reader does, which [statelog.Gates] forbids. So a title record is
+// not gated on the page: it is gated on nothing, and its apply refuses to write
+// a head for a page the deletions table holds ([Applier.applyCreate],
+// [Applier.applyRename]). That keeps the gate answerable from the subject
+// alone, on both sides, while still making a purge permanent.
 //
 // ONE FUNCTION, asked by [Applier.Gated] and [Gates.GatedAt] alike, because
 // [statelog.Gates] holds the two to one answer and the tracker's two sides
@@ -242,7 +247,7 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 	case KindTrimmed:
 		// THE TRIM'S OWN RECORD. The framework removes this log's anchors
 		// below the floor its subject names, in this same transaction
-		// (ADR-0032); this domain writes nothing for it.
+		// (ADR-0046); this domain writes nothing for it.
 		return 0, nil
 	case KindEviction:
 		return a.applyEviction(ctx, tx, at)

@@ -17,10 +17,13 @@ import (
 // rows feed, so the two must leave the same rows — the log's own and the
 // parties index, every derived column included — and the custody batch the
 // write rides on must not outlive it: an unsettled batch is a state a reader
-// of the custody table would see.
+// of the custody table would see. The parties are AGENT IDS, the event's own
+// and each seat a participant tag names resolved through the seats the
+// handle was given, so both handles are given the same seats.
 //
 // Mutation: skip the settle, and a batch is left unsettled; derive the rows
-// by any other path, and the tables differ.
+// by any other path — the parties resolved without the handle's seats among
+// them — and the tables differ.
 func TestWrittenEventsAreTheRowsAppendWrites(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -28,6 +31,7 @@ func TestWrittenEventsAreTheRowsAppendWrites(t *testing.T) {
 	recs := []store.EventRecord{
 		{ID: "phase", Type: "agent_phase_completed", Source: "agent", Time: at,
 			Category: "agent", Actor: "lead", TraceID: "tr", SpanID: "sp",
+			Tags: map[string]string{"agent_id": "id-lead"},
 			Payload: []byte(`{"phase":"execute","model":"m","input_tokens":1,` +
 				`"output_tokens":2,"total_tokens":3,"turn_id":"tn"}`)},
 		{ID: "assigned", Type: "task_assigned", Source: "pm", Time: at.Add(time.Second),
@@ -37,8 +41,13 @@ func TestWrittenEventsAreTheRowsAppendWrites(t *testing.T) {
 			Category: "tool", Failed: true},
 	}
 
+	seats := func(handle string) (string, bool) {
+		id, ok := map[string]string{"dev": "id-dev", "qa": "id-qa"}[handle]
+		return id, ok
+	}
 	appended := storetest.OpenNode(t, filepath.Join(t.TempDir(), "appended.db"), store.Options{})
 	defer func() { _ = appended.Close() }()
+	appended.SetEventSeats(seats)
 	for _, rec := range recs {
 		if err := appended.Events().Append(ctx, rec); err != nil {
 			t.Fatalf("append %s: %v", rec.ID, err)
@@ -46,6 +55,7 @@ func TestWrittenEventsAreTheRowsAppendWrites(t *testing.T) {
 	}
 	written := storetest.OpenNode(t, filepath.Join(t.TempDir(), "written.db"), store.Options{})
 	defer func() { _ = written.Close() }()
+	written.SetEventSeats(seats)
 	storetest.WriteEvents(t, written.Events(), recs)
 
 	for _, table := range []string{"crewlet_events", "crewlet_event_parties"} {

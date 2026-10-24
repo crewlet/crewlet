@@ -14,8 +14,9 @@ import (
 )
 
 // EVERY PUSH IS ONE RECORD ON THE NODE THAT RECEIVED IT — operator_acted,
-// transport git, the credential as the actor and the person it is bound to as
-// the seat — whatever became of it: a refused push writes no row in the code
+// transport git, the caller as every record names them (iam.ActorFor: the
+// author — the seat for a person — its kind, and the credential as the
+// operator id) — whatever became of it: a refused push writes no row in the code
 // domain, so this record is the only one that says it happened, and where. A
 // fetch is a proven read and is not audited.
 
@@ -85,9 +86,9 @@ func (s *Server) audit(ctx context.Context, adm admission, rec pushRecord) {
 	// THE PUBLISH OUTLIVES THE REQUEST: a client that hung up is still a
 	// push that happened.
 	s.o.Audit(context.WithoutCancel(ctx), types.NewOperatorActed(types.OperatorActed{
-		OperatorID: adm.operatorID, ActorSeat: adm.seat, Transport: types.TransportGit,
-		Tool: AuditTool, RequestID: rec.pushID, Repo: adm.name, Outcome: rec.outcome,
-		Position: position, Refusal: refusal,
+		ActorName: adm.actor.Name, ActorKind: string(adm.actor.Kind), OperatorID: adm.operatorID,
+		Transport: types.TransportGit, Tool: AuditTool, RequestID: rec.pushID, Repo: adm.name,
+		Outcome: rec.outcome, Position: position, Refusal: refusal,
 	}))
 	var took time.Duration
 	if !rec.started.IsZero() {

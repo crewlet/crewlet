@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// EVERY LOG THAT WRITES ANCHORS HAS A TRIMMED RECORD, AND ONLY THOSE — ADR-0032.
+// EVERY LOG THAT WRITES ANCHORS HAS A TRIMMED RECORD, AND ONLY THOSE — ADR-0046.
 //
 // The trim removes a log's anchors below what it no longer holds by appending
 // the domain's own trimmed record, which [trimmedEncoder] is the switch for. A
@@ -39,16 +39,17 @@ func TestEveryLogThatWritesAnchorsHasATrimmedRecord(t *testing.T) {
 	}
 }
 
-// A TICK'S ANCHOR SWEEPS SHARE ONE ALARM INTERVAL — ADR-0032.
+// A TICK'S ANCHOR SWEEPS SHARE ONE ALARM INTERVAL — ADR-0046.
 //
-// The sweeps run on the goroutine that evaluates this node's alarms
-// ([retention.run]), and each is paced on this node's applier, so an applier
-// slow but still moving would otherwise hold that goroutine for the cap times
-// every wait, log after log. So the logs that have anything to sweep share
-// [AlarmInterval] ([runSweeps]): each is handed an equal share of what is left
-// among the sweeps still to run, and together they hold the goroutine for at
-// most one interval, however many logs write anchors. Every log that writes
-// anchors is handed a sweep, and a log that writes none is handed none.
+// The sweeps run on the trim's own goroutine ([retention.run]), and each is
+// paced on this node's applier, so an applier slow but still moving would
+// otherwise hold that goroutine — and hand every slower data node a backlog —
+// for the cap times every wait, log after log. So the logs that have anything
+// to sweep share one [statelog.AlarmInterval] ([anchorSweepDeadline],
+// [runSweeps]): each is handed an equal share of what is left among the
+// sweeps still to run, and together they hold the goroutine for at most one
+// interval, however many logs write anchors. Every log that writes anchors is
+// handed a sweep, and a log that writes none is handed none.
 func TestATicksAnchorSweepsShareOneAlarmInterval(t *testing.T) {
 	t.Parallel()
 	r := &retention{state: everyLog(), nodeID: "node-a",
@@ -83,16 +84,16 @@ func TestATicksAnchorSweepsShareOneAlarmInterval(t *testing.T) {
 	for i, s := range sweeps {
 		// AN EQUAL SHARE OF WHAT IS LEFT, so the nanoseconds a division
 		// drops go to the last.
-		if want := (AlarmInterval - total) / time.Duration(writers-i); s.budget != want {
+		if want := (statelog.AlarmInterval - total) / time.Duration(writers-i); s.budget != want {
 			t.Errorf("busy log %d was handed %v, want %v — an equal share of one alarm "+
 				"interval among the %d logs with anything to sweep", i, s.budget, want, writers)
 		}
 		total += s.budget
 	}
-	if total > AlarmInterval || clock.at.Sub(time.Unix(0, 0)) > AlarmInterval {
+	if total > statelog.AlarmInterval || clock.at.Sub(time.Unix(0, 0)) > statelog.AlarmInterval {
 		t.Errorf("a tick's sweeps were handed %v together and took %v, past one alarm "+
 			"interval (%v) — the holder's alarms would go unevaluated for longer",
-			total, clock.at.Sub(time.Unix(0, 0)), AlarmInterval)
+			total, clock.at.Sub(time.Unix(0, 0)), statelog.AlarmInterval)
 	}
 
 	// A SWEEP THAT FINISHES EARLY LEAVES WHAT IT DID NOT SPEND to the sweeps
@@ -103,10 +104,10 @@ func TestATicksAnchorSweepsShareOneAlarmInterval(t *testing.T) {
 	runSweeps(t.Context(), clock.at.Add(anchorSweepDeadline), clock.now, []countedSweep{
 		{domain: "quick", plan: quick}, {domain: "slow", plan: slow},
 	})
-	if quick.budget != AlarmInterval/2 || slow.budget != AlarmInterval-time.Second {
+	if quick.budget != statelog.AlarmInterval/2 || slow.budget != statelog.AlarmInterval-time.Second {
 		t.Errorf("a sweep done in a second was handed %v and the one after it %v, want "+
 			"%v and %v — what one sweep leaves goes to the sweeps after it",
-			quick.budget, slow.budget, AlarmInterval/2, AlarmInterval-time.Second)
+			quick.budget, slow.budget, statelog.AlarmInterval/2, statelog.AlarmInterval-time.Second)
 	}
 
 	// COUNTS THAT SPENT THE INTERVAL leave nothing to append in: no sweep is
@@ -119,7 +120,7 @@ func TestATicksAnchorSweepsShareOneAlarmInterval(t *testing.T) {
 	}
 }
 
-// AN IDLE LOG LEAVES ITS SHARE TO THE OTHERS — ADR-0032. A log with nothing
+// AN IDLE LOG LEAVES ITS SHARE TO THE OTHERS — ADR-0046. A log with nothing
 // below its floor this tick is counted and never handed a share, wherever it
 // sits in the order: an equal share for every log that writes anchors spent a
 // share on each idle one, so registering the code log cut the tracker's sweep
@@ -147,9 +148,9 @@ func TestAnIdleLogLeavesItsShareToTheOthers(t *testing.T) {
 				}
 			}
 			runSweeps(t.Context(), clock.at.Add(anchorSweepDeadline), clock.now, counted)
-			if busy[0].budget != AlarmInterval {
+			if busy[0].budget != statelog.AlarmInterval {
 				t.Errorf("the one busy log among %d was handed %v, want the whole %v — an "+
-					"idle log costs the others nothing", len(order), busy[0].budget, AlarmInterval)
+					"idle log costs the others nothing", len(order), busy[0].budget, statelog.AlarmInterval)
 			}
 			for _, s := range idle {
 				if s.called {
@@ -199,7 +200,7 @@ func trimLog(ctx context.Context, r *retention, running *runningLog, shared flee
 func anchorsOf(t *testing.T, e *Engine, stream string) map[string]int64 {
 	t.Helper()
 	out := map[string]int64{}
-	if err := e.native.Load().log.estate().Reader().Read(t.Context(), func(tx *sql.Tx) error {
+	if err := e.core.Load().log.estate().Reader().Read(t.Context(), func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(t.Context(),
 			`SELECT subject, anchor FROM statelog_anchor WHERE stream = ?`, stream)
 		if err != nil {
@@ -224,7 +225,7 @@ func anchorsOf(t *testing.T, e *Engine, stream string) map[string]int64 {
 // sweepingRetention is the trim of e's runtime, as [Engine.startRetention]
 // builds it, over the given register.
 func sweepingRetention(e *Engine, fleet coord.Fleet) *retention {
-	s := e.native.Load().log
+	s := e.core.Load().log
 	return &retention{
 		fleet: fleet, state: s, nodeID: s.nodeID,
 		estate: func() statelog.ReadEstate { return s.estate().Reader() },

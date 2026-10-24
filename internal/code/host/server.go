@@ -118,8 +118,6 @@ type Options struct {
 	Estate Estate
 	// Objects stores a push's pack bundle.
 	Objects Uploader
-	// Persons is the human seat a credential is bound to, "" for none.
-	Persons func(operatorID string) (seat string)
 	// Audit records one push — published by the engine through the operator
 	// surface's audit, which outlives the request.
 	Audit func(ctx context.Context, e types.OperatorActed)
@@ -205,7 +203,6 @@ func New(o Options) (*Server, error) {
 	need(o.Git == nil, "Git")
 	need(o.Estate == nil, "Estate")
 	need(o.Objects == nil, "Objects")
-	need(o.Persons == nil, "Persons")
 	need(o.Audit == nil, "Audit")
 	need(o.Limits == nil, "Limits")
 	need(o.DeletedRetention == nil, "DeletedRetention")

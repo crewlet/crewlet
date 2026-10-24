@@ -14,7 +14,7 @@
 // listed here fails the build, and so does a listed table the schema does not
 // have, or one whose key column no index leads with.
 //
-// # Required and retired (ADR-0033)
+// # Required and retired (ADR-0047)
 //
 // Every declaration states its STANDING ([objstore.Standing]), and the gate
 // below refuses one that states neither. A REQUIRED table's rows are live
@@ -59,7 +59,7 @@
 // list against the estates it hands them, so a table declared in a domain the
 // engine reads no estate of fails the build rather than the boot.
 //
-// # The log half (ADR-0034)
+// # The log half (ADR-0048)
 //
 // A backup reads more than rows: a restore brings its store copy back and
 // replays the declaring domain's log from the copy's position — and a newer
@@ -74,17 +74,20 @@
 package references
 
 import (
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
 // All is every replicated table whose rows keep objects alive — required and
-// retired alike: a project's files, and the pack bundles the company's
-// repositories' pushes stored.
+// retired alike: a project's files, the pack bundles the company's
+// repositories' pushes stored, and an artifact's version files and assets.
 var All = []objstore.ReferenceTable{
 	tracker.FileObjectReferences,
 	code.PackReferences,
+	artifactsdomain.ObjectReferences,
+	artifactsdomain.AssetReferences,
 }
 
 // ObjectColumn is the name every referencing table gives its key column, and

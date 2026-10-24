@@ -3,8 +3,8 @@
  *
  * # One machine, three frames
  *
- * `#/work` is this over the whole company, `#/work/{KEY}`'s Items lens is this
- * over one project, and `#/me`'s Queue and Asked by me are this over one
+ * `#/work/tasks` is this over the whole company, `#/work/{KEY}`'s Tasks lens is
+ * this over one project, and `#/me`'s Queue and Asked by me are this over one
  * person. They
  * ask the same question with one parameter different, so they are one
  * component: written twice, the second copy is the one that quietly falls
@@ -45,8 +45,8 @@
  * # It writes, as the reader
  *
  * A board card can be dragged, and a writer changes a row's status, priority
- * or holder in place — each through `useAct`, as the person the token is bound
- * to (ADR-0024), conditional on the version the row was drawn at. Nothing moves
+ * or holder in place — each through `useAct`, as the person signed in
+ * (ADR-0024), conditional on the version the row was drawn at. Nothing moves
  * until the engine answers; see `shapes/Board.tsx` and `shapes/cells.tsx`.
  *
  * # Every row is reachable
@@ -85,26 +85,27 @@ import {
   ArrangeControls,
   SCOPE_OPTIONS,
   ScopeControl,
-  ShapeTabs,
+  ShapeSwitch,
   SubstringBox,
-  ViewTabs,
+  ViewSwitch,
 } from "./toolbar/WorkBar.tsx";
 import { FEED_PAGE, PurgeBand } from "./feed.tsx";
 import { usePagedItems } from "./usePagedItems.ts";
-import { Button, Callout, EmptyState, Skeleton } from "@crewlethq/ui";
+import {
+  Button,
+  Callout,
+  EmptyState,
+  Skeleton,
+  useMediaMatch,
+  type AvatarStatus,
+} from "@crewlethq/ui";
+import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
 import { useOpenNewTask } from "~/app/newTask.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import {
-  activityOf,
-  indexOrg,
-  liveOnItems,
-  ringOf,
-  seatResolvers,
-  type SeatRing,
-} from "~/lib/seats.ts";
+import { activityOf, indexOrg, liveOnItems, statusOf, seatResolvers } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { useScrollEdges } from "~/lib/useScrollEdges.ts";
 import {
@@ -143,6 +144,8 @@ import {
   type Scope,
   type Shape,
   type TrackerFilters,
+  itemAddress,
+  itemPath,
 } from "~/lib/work.ts";
 import { plural } from "~/lib/format.ts";
 import type { WorkSummary, WorkTaskCounts, WorkView } from "~/protocol/index.ts";
@@ -172,7 +175,7 @@ function useFieldFilters(): Record<string, string> {
 /**
  * What a HOST screen fixes about this list, where one is holding it.
  *
- * Absent, this IS the screen — `#/work` and the project's Items lens — and
+ * Absent, this IS the screen (`#/work/tasks` and the project's Tasks lens), and
  * everything below is the reader's. Present, the list is a panel inside
  * somebody else's tabs and three things belong to that screen rather than to
  * the reader. The type has no optional field for that reason: a host that
@@ -292,16 +295,16 @@ export function ItemsView({
   // here on: it narrows the query, it carries a chip, and the chip takes it
   // off.
   const [unit] = useParam("unit", "");
-  const [groupBy, setGroupBy] = useParam("group_by", "");
+  const [groupBy] = useParam("group_by", "");
   const [groupBy2, setGroupBy2] = useParam("group_by2", "");
   // THE COLUMN NARROWING IS THREE-VALUED and `useParam` cannot say so: its
   // value is "the key, or the fallback", which reads an ABSENT key and a
   // PRESENT EMPTY one as the same string — and the empty one is a real column,
   // the one holding the rows with no value on this axis. So the value is read
-  // off the whole query, the way [useFieldFilters] reads the custom fields, and
-  // the setter is kept for the one gesture that CLEARS it. See
-  // [TrackerFilters.group].
-  const [, setGroup] = useParam("group", "");
+  // off the whole query, the way [useFieldFilters] reads the custom fields,
+  // and the one gesture that CLEARS it is the group-by's own patch
+  // ([onGroupBy]), which takes the narrowing off with the axis it belongs to.
+  // See [TrackerFilters.group].
   const [sort, setSort] = useParam("sort", "");
   const [blocked] = useParam("blocked", "");
   const [due] = useParam("due", "");
@@ -353,14 +356,12 @@ export function ItemsView({
   // nothing reads it, rather than a key that steers a screen with no tab
   // showing which way.
   //
-  // AND IT NAMES THE READER, because a pin is a person's: without `viewer` the
-  // engine answers every view unpinned, and the strip could never draw the
-  // views this reader pinned.
-  const strip = useQuery(
-    "work_views",
-    viewer.handle ? { container, viewer: viewer.handle } : { container },
-    { pollMs: 120_000, enabled: !host },
-  );
+  // AND IT NAMES NOBODY. A pin is a person's, and the engine answers this
+  // reader's pins from their credential — the record kept under their own
+  // name, a seat or a login — so there is no `viewer=` to send: the engine
+  // refuses the key on every question, because whose record a read is about is
+  // never a typed name.
+  const strip = useQuery("work_views", { container }, { pollMs: 120_000, enabled: !host });
   // THE TYPES AND THE COMPANY'S OWN FIELDS COME FROM THE CATALOGUE, never from
   // the rows: a filter built from the page can only offer what happens to be
   // on it, so a board showing no bugs would offer no way to ask for one.
@@ -491,7 +492,7 @@ export function ItemsView({
   // Twenty seconds: a board is read, not watched, and a tracker's own pace is
   // a person typing a comment.
   const paged = usePagedItems(params, { pollMs: ITEMS_POLL_MS });
-  const { data, loading, error } = paged;
+  const { data, loading, error, refusal } = paged;
 
   // A TRASH LISTING IS THE ONE VIEW WHOSE ROWS DO NOT CARRY THEIR OWN STORY.
   // The row says a task is removed; WHO removed it, WHEN, and whether the
@@ -529,7 +530,7 @@ export function ItemsView({
     [rows, groups, shape, hidden],
   );
   const neighbours = useMemo(
-    () => drawn.map((r) => ({ kind: "item" as const, id: r.key })),
+    () => drawn.map((r) => ({ kind: "item" as const, id: itemAddress(r) })),
     [drawn],
   );
   // AND THE QUESTION, so a task opened through the peek's Open carries it like
@@ -541,34 +542,36 @@ export function ItemsView({
   usePeekNeighbours(neighbours, listQuery);
 
   // WHAT IS HAPPENING ON THE CARDS: the turn a seat is running on each task,
-  // its holder's state ring, and — for a bound reader — the coding runs parked
+  // its holder's state, and — for a bound reader — the coding runs parked
   // on a question put to THEM. All the engine's words: `activity` from the
   // push, the item the turn is charged to, and `decisions`' own reading of
   // which runs wait on this person.
   const live = useMemo(() => liveOnItems(agents), [agents]);
-  const rings = useMemo(() => {
-    const out = new Map<string, SeatRing>();
+  const statuses = useMemo(() => {
+    const out = new Map<string, AvatarStatus>();
     for (const a of agents) {
-      const ring = ringOf(activityOf(a));
-      if (a.handle && ring) out.set(a.handle, ring);
+      const status = statusOf(activityOf(a));
+      if (a.handle && status) out.set(a.handle, status);
     }
     return out;
   }, [agents]);
   const decisions = useQuery("decisions", undefined, {
-    enabled: shape === "board" && viewer.handle !== "",
+    enabled: shape === "board" && viewer.owner !== "",
     pollMs: ITEMS_POLL_MS,
   });
   const waiting = useMemo(() => {
     const out = new Map<string, CardWaiting>();
+    // BY THE TASK'S ID, as `liveOnItems` is: a key two tasks hold would put
+    // one run's wait on both cards.
     for (const item of decisions.data?.items ?? []) {
-      const key = item.run?.work_item?.key;
-      if (item.kind === "run" && key && !out.has(key)) out.set(key, { since: item.run?.paused_at });
+      const id = item.run?.work_item?.id;
+      if (item.kind === "run" && id && !out.has(id)) out.set(id, { since: item.run?.paused_at });
     }
     return out;
   }, [decisions.data]);
   const facts = useMemo(
-    () => ({ live, waiting, ring: (handle: string) => rings.get(handle) }),
-    [live, waiting, rings],
+    () => ({ live, waiting, status: (handle: string) => statuses.get(handle) }),
+    [live, waiting, statuses],
   );
 
   // A TURN ENDING ON A TASK THIS LIST DRAWS IS A TASK THAT JUST CHANGED — the
@@ -576,8 +579,8 @@ export function ItemsView({
   // when a task on screen loses its running turn, the list asks again then,
   // rather than drawing the task as it was for up to a poll's length.
   const runningHere = drawn
-    .filter((r) => live.has(r.key))
-    .map((r) => r.key)
+    .filter((r) => live.has(r.id))
+    .map((r) => r.id)
     .join(",");
   const wasRunning = useRef("");
   // THE BAR'S RUN, which scrolls on a phone and fades the edge with more past
@@ -674,7 +677,7 @@ export function ItemsView({
   // A TASK OPENED FROM HERE CARRIES THIS LIST'S QUESTION, so its own page can
   // ask where it sits in it (`around=`) and step to the next one.
   const list = useMemo(() => listParam(params), [params]);
-  const itemHref = (row: WorkSummary) => href(["work", row.key], list ? { list } : undefined);
+  const itemHref = (row: WorkSummary) => href(itemPath(row), list ? { list } : undefined);
 
   // WHERE A COLUMN FOOTER GOES, as the link the browser follows on a middle
   // click and shows in the status bar. Built here because this is the only
@@ -752,7 +755,7 @@ export function ItemsView({
     ? {
         load: paged.more,
         note: paged.pageError
-          ? "The next page could not be read — try again."
+          ? "Couldn’t load more. Try again."
           : loadedOf(rows.length, data?.total_hint ?? 0, data?.total_capped),
       }
     : undefined;
@@ -787,6 +790,25 @@ export function ItemsView({
       ...(next ? {} : { group_by2: null }),
     });
   };
+
+  // WHICH WORK, GROUP BY AND SORT: at the bar's far end on a wide screen, and
+  // in the Display popover on a phone, where the bar's one line cut Group by
+  // at the edge and put Sort past it. The bar holds the chips and the count.
+  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
+  const arrange = (
+    <>
+      <ScopeControl scope={scope} onScope={setScope} />
+      <ArrangeControls
+        shape={shape}
+        workspace={!project}
+        groupBy={axis}
+        sort={order}
+        manual={manualOrder(order, project)}
+        onGroupBy={onGroupBy}
+        onSort={(next) => setSort(next || off(viewOwn.sort))}
+      />
+    </>
+  );
   // THE SAVED VIEW RUNNING, if one is — what the strip's pin acts on.
   const running = saved.find((v) => v.key === chosenView && v.id);
   // WHERE THE BOARD NAMES ITS LANES OUT OF VIEW: a slot at the bar's end the
@@ -799,20 +821,24 @@ export function ItemsView({
 
   return (
     <>
-      {/* THE FIRST ROW: what is drawn. The shape tabs, then — on the screens
+      {/* THE FIRST ROW: what is drawn. The shape switch, then (on the screens
           that ARE this list, never on a host, whose own tabs already name the
-          page — the container's own list, the views this reader pinned, a way
+          page) the container's own list, the views this reader pinned, a way
           to save the query on screen, and the inventory. See
           `toolbar/WorkBar.tsx`. */}
       <div className="work-tabs">
-        <ShapeTabs shape={shape} onShape={(next) => setShapeKey(next === viewShape ? "" : next)} />
+        <ShapeSwitch
+          shape={shape}
+          onShape={(next) => setShapeKey(next === viewShape ? "" : next)}
+        />
         {!host && (
           <>
-            <span className="work-tabs-sep" aria-hidden="true" />
-            <ViewTabs
+            <ViewSwitch
               views={saved}
               chosen={chosenView}
-              containerLabel={project ? "All in this project" : "All work"}
+              // THE TRAIL NAMES THE SCOPE, so the container's own list
+              // reads one way in either: All tasks.
+              containerLabel="All tasks"
               onView={(key) => applyView(key, saved, setViewKey)}
             />
             {/* THE VIEW RUNNING, PINNED OR UNPINNED FROM WHERE IT RUNS: a pin
@@ -841,6 +867,7 @@ export function ItemsView({
         <div className="work-tabs-tools">
           <SubstringBox value={q} onChange={setQ} scopeLabel={project || "work"} />
           <DisplayMenu
+            arrange={phone ? arrange : undefined}
             shape={shape}
             workspace={!project}
             viewShape={savedShape}
@@ -898,16 +925,7 @@ export function ItemsView({
             narrow row — an open peek, a 1280 window — moves them down
             together rather than leaving the count alone on a line. */}
           <span className="work-bar-end">
-            <ScopeControl scope={scope} onScope={setScope} />
-            <ArrangeControls
-              shape={shape}
-              workspace={!project}
-              groupBy={axis}
-              sort={order}
-              manual={manualOrder(order, project)}
-              onGroupBy={onGroupBy}
-              onSort={(next) => setSort(next || off(viewOwn.sort))}
-            />
+            {!phone && arrange}
             {/* THE LANES OUT OF A BOARD'S VIEW are named here, at the bar's end,
               rather than on a row of their own above the lanes: see
               `shapes/Board.tsx`, which draws them into this slot. */}
@@ -930,14 +948,12 @@ export function ItemsView({
       </div>
 
       {data?.groups_overlap && (
-        <Callout variant="info">
-          One item can be on several of these columns, so the counts add up to more than the total.
-        </Callout>
+        <Callout variant="info">Items can appear in more than one column.</Callout>
       )}
       {data?.groups_dropped ? (
         <Callout variant="warning">
-          {data.groups_dropped} more column{data.groups_dropped === 1 ? "" : "s"} did not fit and
-          are not shown. Narrow the list to bring them into range.
+          {data.groups_dropped} more column{data.groups_dropped === 1 ? "" : "s"} hidden. Narrow the
+          list to see them.
         </Callout>
       ) : null}
 
@@ -951,7 +967,7 @@ export function ItemsView({
               used to describe one — and that prop takes a title and a hint. A
               refusal and a pending read still come first: they are the two
               states an empty list must never be confused with. */}
-          <QueryState error={error} loading={loading}>
+          <QueryState error={error} refusal={refusal} loading={loading}>
             {nothingShown ? (
               <EmptyList
                 narrowed={filtered}
@@ -977,7 +993,7 @@ export function ItemsView({
                 detail={detail}
                 selected={peek?.kind === "item" ? peek.id : ""}
                 hrefOf={itemHref}
-                onOpen={(row) => openPeek({ kind: "item", id: row.key })}
+                onOpen={(row) => openPeek({ kind: "item", id: itemAddress(row) })}
                 onOverflow={(axis, key) => openOverflow(filterPatchForGroup(axis, key), "push")}
                 overflowHref={boardOverflowHref}
                 facts={facts}
@@ -1022,7 +1038,7 @@ export function ItemsView({
                 workspace={!project}
                 selected={peek?.kind === "item" ? peek.id : ""}
                 hrefOf={itemHref}
-                onOpen={(row) => openPeek({ kind: "item", id: row.key })}
+                onOpen={(row) => openPeek({ kind: "item", id: itemAddress(row) })}
                 onOverflow={(axis, key) => openOverflow({ group_by: axis, group: key }, "replace")}
                 overflowHref={listOverflowHref}
                 removals={inTrash ? removals : undefined}
@@ -1044,7 +1060,7 @@ export function ItemsView({
                 selected={peek?.kind === "item" ? peek.id : ""}
                 now={now}
                 hrefOf={itemHref}
-                onOpen={(row) => openPeek({ kind: "item", id: row.key })}
+                onOpen={(row) => openPeek({ kind: "item", id: itemAddress(row) })}
                 more={pageMore}
               />
             )}
@@ -1055,7 +1071,7 @@ export function ItemsView({
                 month={thisMonth}
                 chrome={chrome}
                 hrefOf={itemHref}
-                onOpen={(row) => openPeek({ kind: "item", id: row.key })}
+                onOpen={(row) => openPeek({ kind: "item", id: itemAddress(row) })}
                 onMonth={setMonth}
                 onToday={() => setMonth("")}
                 dayHref={dayListHref}
@@ -1213,7 +1229,7 @@ function EmptyList({
       <EmptyState
         size="compact"
         title="Nothing matches"
-        description="No item on this node's copy of the tracker matches the filters you have set. Take one off above, or clear the whole narrowing."
+        description="Remove a filter, or clear them all."
         action={
           <Button size="small" variant="secondary" onClick={onClear}>
             Clear filters
@@ -1243,8 +1259,8 @@ function EmptyList({
   // three sentences below would blame the scope or claim the company has
   // filed nothing — over a company holding every item it ever filed, in
   // projects it has retired. The reader's next move is the projects, not the
-  // scope switch, so this says how many there are and goes to them, which is
-  // the shape the directory's own Active empty state already takes.
+  // scope switch, so this goes to them, which is the shape the directory's own
+  // Active empty state already takes.
   //
   // `Work.tsx` IS THE ONLY CALLER THAT CAN SAY SO, since the count is
   // `work_projects`' census and this list never reads it — so at project
@@ -1256,12 +1272,7 @@ function EmptyList({
         title="Every project is archived"
         description={
           <>
-            {archivedProjects === 1
-              ? "The company’s one project has been archived"
-              : `All ${archivedProjects} of the company’s projects have been archived`}
-            , so nothing is listed here — an archived project keeps its work and stops taking new
-            items.{" "}
-            <a className="prose-link" href={href(["work", "projects"], { shown: "archived" })}>
+            <a className="prose-link" href={href(["work"], { shown: "archived" })}>
               See them under Archived
             </a>
             .
@@ -1284,7 +1295,7 @@ function EmptyList({
       <EmptyState
         size="compact"
         title="Nothing has been filed yet"
-        description="Seats file work with create_work_item, and an inbound webhook or a schedule is usually what starts them."
+        description="Tasks people and agents file appear here."
       />
     );
   }
@@ -1302,8 +1313,8 @@ function EmptyList({
         title={`Nothing is open${where}`}
         description={
           elsewhere
-            ? `Every item here is finished — ${plural(elsewhere, "item")} under Closed. The scope switch in the bar is what shows them.`
-            : "No open item is on this node's copy of the tracker. Finished work is under Closed and All shows both — and if none has been filed at all, seats file it with create_work_item."
+            ? `${plural(elsewhere, "finished item")} ${elsewhere === 1 ? "is" : "are"} under Closed.`
+            : "Finished work is under Closed."
         }
       />
     );
@@ -1314,8 +1325,8 @@ function EmptyList({
       title={`Nothing has been finished${where} yet`}
       description={
         elsewhere
-          ? `Nothing here has been finished — ${plural(elsewhere, "item")} still open. The scope switch in the bar is what shows them.`
-          : "No finished item is on this node's copy of the tracker. Open shows what is still in flight, and All shows both."
+          ? `${plural(elsewhere, "open item")} ${elsewhere === 1 ? "is" : "are"} under Open.`
+          : "Open work is under Open."
       }
     />
   );
@@ -1338,7 +1349,7 @@ export function NoWorkYet() {
     <EmptyState
       icon={<LayoutDashboardGlyph size={32} />}
       title="No work has been filed yet"
-      description="Nothing can be filed until a unit in the company config declares a `project` key, and this company has none. Once one does, seats file work with create_work_item — an inbound webhook or a schedule is usually what starts them."
+      description="Create a project first, with New project."
     />
   );
 }

@@ -16,7 +16,8 @@ import (
 // unheld walks the harness's log back from last, as a restored reanchor does.
 func unheld(t *testing.T, h *applyHarness, last uint64) *statelog.TailRecord {
 	t.Helper()
-	got, err := statelog.UnheldTail(t.Context(), probeDomain{}, specOf(probeDomain{}), h.estate, h.fetch,
+	got, err := statelog.UnheldTail(t.Context(), probeDomain{}, specOf(probeDomain{}), h.estate,
+		statelog.VerifiedLog{Log: h.fetch, Verifier: testVerifier(t, probeDomain{})},
 		h.runner.Committed().Generation, 1, last)
 	if err != nil {
 		t.Fatalf("UnheldTail: %v", err)
@@ -117,9 +118,13 @@ func TestARecordWhoseEnvelopeDoesNotDecodeIsAnError(t *testing.T) {
 	t.Parallel()
 	h := appliedThrough(t, 3)
 	h.fetch.mu.Lock()
-	h.fetch.log[4] = statelog.Message{Seq: 4, StoredAt: otherHistory, Payload: []byte("{")}
+	// SIGNED, so what is undecodable is the body the frame opens to — the
+	// case this is about — rather than a frame that fails its signature,
+	// which the verified log refuses before any envelope is read.
+	h.fetch.log[4] = statelog.Message{Seq: 4, StoredAt: otherHistory, Payload: probeSeal([]byte("{"))}
 	h.fetch.mu.Unlock()
-	_, err := statelog.UnheldTail(t.Context(), probeDomain{}, specOf(probeDomain{}), h.estate, h.fetch,
+	_, err := statelog.UnheldTail(t.Context(), probeDomain{}, specOf(probeDomain{}), h.estate,
+		statelog.VerifiedLog{Log: h.fetch, Verifier: testVerifier(t, probeDomain{})},
 		h.runner.Committed().Generation, 1, 4)
 	if err == nil || !strings.Contains(err.Error(), "does not decode") {
 		t.Fatalf("UnheldTail over an undecodable record = %v, want an error", err)
@@ -237,7 +242,8 @@ func TestARecordHeldFromAPeersSnapshotIsHeld(t *testing.T) {
 	walk := func(t *testing.T, h *joinHarness) *statelog.TailRecord {
 		t.Helper()
 		got, err := statelog.UnheldTail(t.Context(), probeDomain{}, specOf(probeDomain{}), h.joinEstate,
-			log, at.Generation, 1, at.Seq)
+			statelog.VerifiedLog{Log: log, Verifier: testVerifier(t, probeDomain{})},
+			at.Generation, 1, at.Seq)
 		if err != nil {
 			t.Fatalf("UnheldTail over the adopted estate: %v", err)
 		}

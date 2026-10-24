@@ -405,9 +405,12 @@ type CustodyClaims interface {
 	ClaimCustody(ctx context.Context, batch, node string) (string, error)
 }
 
-// Subscriber attaches the keeper to the custody group.
-type Subscriber interface {
+// Attachment is how the keeper joins the custody group and leaves it: the
+// node's queue, whose voluntary leave is quiesce, wait, detach.
+type Attachment interface {
 	Subscribe(ctx context.Context, topic, group string, h queue.Handler) error
+	Quiesce(ctx context.Context, topic, group string) (bool, error)
+	Detach(ctx context.Context, topic, group string) (bool, error)
 }
 
 // Keeper writes custody batches into this data node's event log, keeping each
@@ -418,8 +421,17 @@ type Keeper struct {
 	node   string
 	now    func() time.Time
 
-	stop context.CancelFunc
-	done chan struct{}
+	queue Attachment
+	stop  context.CancelFunc
+	done  chan struct{}
+
+	// mu guards the batches in hand: how many deliveries are being written
+	// and settled, whether the keeper is leaving, and what a leave waiting
+	// for the last of them is told by.
+	mu       sync.Mutex
+	inHand   int
+	stopping bool
+	idle     chan struct{}
 }
 
 // keeperSettleGrace is how old a batch this node wrote must be before
@@ -440,6 +452,23 @@ const keeperPass = time.Minute
 // only after the coordination store was away for a while.
 const keeperPassBatches = 256
 
+// keeperStopWait is how long [Keeper.Stop] waits for a batch in hand to settle
+// before it lets go of the group.
+//
+// ONE SECOND, an order of magnitude past a healthy delivery — one store
+// transaction and one create-only claim, milliseconds each — and what it
+// orders is narrow: a SETTLE landing before the usage publisher's last flush,
+// since a settle as kept is what makes a batch's rows count. A delivery still
+// in hand after it is waiting on a coordination store that is not answering.
+// The detach that follows cancels its context, so its claim fails in this
+// process: the batch goes back to the group, and a copy this node already
+// wrote stays unsettled, counted in no day, until this node's next start
+// reconciles it — which is also where a settle as kept marks its days.
+// Waiting out the claim's own request timeout instead would add
+// those seconds to every stop of a member that has lost its stores, for no
+// row a count would see.
+const keeperStopWait = time.Second
+
 // NewKeeper builds this data node's keeper.
 func NewKeeper(log CustodyLog, claims CustodyClaims, node string) (*Keeper, error) {
 	switch {
@@ -459,7 +488,7 @@ func NewKeeper(log CustodyLog, claims CustodyClaims, node string) (*Keeper, erro
 // SETTLED BEFORE IT ATTACHES, so the copies a crash left are resolved before
 // this node takes anything new — a node that came back after a long absence
 // has the most of them, and the most likely to be somebody else's.
-func (k *Keeper) Start(ctx context.Context, sub Subscriber) error {
+func (k *Keeper) Start(ctx context.Context, sub Attachment) error {
 	if _, err := k.Reconcile(ctx); err != nil {
 		// NOT FATAL: the store will answer later, and the pass retries.
 		log.WarnContext(ctx, "event_custody_unsettled", "error", err.Error(),
@@ -470,22 +499,94 @@ func (k *Keeper) Start(ctx context.Context, sub Subscriber) error {
 	// rather than the call's, and one bound to a start-up context stops
 	// taking batches the moment that context ends.
 	if err := sub.Subscribe(context.WithoutCancel(ctx), topics.CustodyRecords, CustodyGroup,
-		k.Handle); err != nil {
+		k.take); err != nil {
 		return fmt.Errorf("observe: attach the custody keeper: %w", err)
 	}
 	loop, stop := context.WithCancel(context.WithoutCancel(ctx))
-	k.stop, k.done = stop, make(chan struct{})
+	k.queue, k.stop, k.done = sub, stop, make(chan struct{})
 	go k.run(loop)
 	return nil
 }
 
-// Stop ends the settling pass. The group's attachment ends with the queue.
-func (k *Keeper) Stop() {
+// Stop LEAVES THE GROUP and ends the settling pass: it stops taking batches,
+// waits up to [keeperStopWait] for the one in hand to settle, detaches, and
+// then ends the pass.
+//
+// THE GROUP IS LEFT HERE rather than with the queue, because this node's
+// usage publisher runs its last flush between the two: every batch this node
+// settles as kept makes rows count on its day, so a keeper still taking
+// batches when that flush runs settles rows into a day the node — if it never
+// starts again — never publishes. A batch it did not take goes to the group's
+// other data nodes, or waits on the stream for the next start; one it had
+// taken and not settled is handed back to them by the detach. ctx bounds the
+// leave, the wait included.
+func (k *Keeper) Stop(ctx context.Context) {
 	if k == nil || k.stop == nil {
 		return
 	}
+	k.mu.Lock()
+	k.stopping = true
+	k.mu.Unlock()
+	if _, err := k.queue.Quiesce(ctx, topics.CustodyRecords, CustodyGroup); err != nil {
+		log.WarnContext(ctx, "event_custody_not_quiesced", "error", err.Error(),
+			"detail", "the keeper is leaving the group without having stopped "+
+				"its deliveries first; a batch delivered meanwhile is handed back")
+	}
+	wait, cancel := context.WithTimeout(ctx, keeperStopWait)
+	k.settled(wait)
+	cancel()
+	if _, err := k.queue.Detach(ctx, topics.CustodyRecords, CustodyGroup); err != nil {
+		log.WarnContext(ctx, "event_custody_not_detached", "error", err.Error(),
+			"detail", "the keeper's attachment ends with the queue instead")
+	}
 	k.stop()
 	<-k.done
+}
+
+// take is the group's handler: [Keeper.Handle] for a batch delivered while the
+// keeper is attached, counted while it is in hand, and handed back untouched
+// once the keeper is leaving.
+func (k *Keeper) take(ctx context.Context, ev *events.Event) queue.Result {
+	k.mu.Lock()
+	if k.stopping {
+		k.mu.Unlock()
+		return queue.Defer("the custody keeper is leaving the group")
+	}
+	k.inHand++
+	k.mu.Unlock()
+	defer func() {
+		k.mu.Lock()
+		k.inHand--
+		if k.inHand == 0 && k.idle != nil {
+			close(k.idle)
+			k.idle = nil
+		}
+		k.mu.Unlock()
+	}()
+	return k.Handle(ctx, ev)
+}
+
+// settled waits until no batch is in hand, or ctx ends.
+func (k *Keeper) settled(ctx context.Context) {
+	k.mu.Lock()
+	if k.inHand == 0 {
+		k.mu.Unlock()
+		return
+	}
+	if k.idle == nil {
+		k.idle = make(chan struct{})
+	}
+	idle := k.idle
+	k.mu.Unlock()
+	select {
+	case <-idle:
+	case <-ctx.Done():
+		log.WarnContext(ctx, "event_custody_left_in_hand",
+			"detail", "a custody batch was still being settled when the keeper "+
+				"left the group; the detach cancelled it and handed it back to "+
+				"the group, and a copy this node already wrote stays unsettled "+
+				"until this node's next start settles it")
+	}
 }
 
 func (k *Keeper) run(ctx context.Context) {

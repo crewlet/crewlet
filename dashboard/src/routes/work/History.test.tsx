@@ -15,11 +15,10 @@
  * for somebody else.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { History, HistoryView } from "./History.tsx";
-import { pick } from "~/testing.tsx";
 import { Router } from "~/app/router.tsx";
 import { usePageCoverage } from "~/app/Shell.tsx";
 import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
@@ -56,7 +55,7 @@ function servingWith(answer: (what: string, params?: Record<string, unknown>) =>
     answer(what, params),
   );
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue(
     withDerived({
       name: "Acme",
@@ -154,9 +153,10 @@ test("a write an operator made is marked as one", async () => {
       records: [
         record({ id: "r1", actor: "founder", actor_kind: "operator" }),
         record({ id: "r2", actor: "ada", actor_kind: "agent" }),
-        // A TOKEN BOUND TO A SEAT: the row names the PERSON, as every other
-        // screen does, and keeps the token on the title.
-        record({ id: "r3", actor: "founder", actor_kind: "operator", actor_seat: "ada" }),
+        // A PERSON THE DIRECTORY BINDS TO A SEAT writes AS the seat
+        // (`iam.ActorFor`), and the credential they wrote through rides on
+        // the title.
+        record({ id: "r3", actor: "ada", actor_kind: "human", operator_id: "pat:t-1" }),
       ],
       complete: true,
     },
@@ -172,10 +172,8 @@ test("a write an operator made is marked as one", async () => {
   // AN AGENT'S WRITE IS THE ORDINARY CASE, so only the others are marked.
   expect(who[1]).not.toContain("agent");
   expect(who[2]).toContain("Ada Okonkwo");
-  expect(who[2]).not.toContain("founder");
-  expect(rows[2]!.querySelector("[title]")?.getAttribute("title")).toBe(
-    "Through the token founder",
-  );
+  expect(who[2]).not.toContain("pat:t-1");
+  expect(rows[2]!.querySelector("[title]")?.getAttribute("title")).toBe("Written through pat:t-1");
 });
 
 // A HANDLE IS THE DATABASE'S WORD FOR A PERSON, resolved through the chart
@@ -211,14 +209,13 @@ test("a picker's counts say what they are a count of, once", async () => {
     },
   });
   mount();
-  // ONE PICKER PER DIMENSION — the kinds, the authors and the projects — in
-  // the one bar, and one sentence for all three.
+  // ONE PICKER PER DIMENSION, the kinds and the authors, in the one bar, and
+  // one sentence for both.
   await waitFor(() =>
     expect(screen.getAllByText("Counts are over the changes loaded")).toHaveLength(1),
   );
   expect(picker("Kind")).toBeTruthy();
   expect(picker("By")).toBeTruthy();
-  expect(picker("Project")).toBeTruthy();
   // AND THE SET IS WHAT THE PAGE HOLDS rather than a closed set of thirty-two
   // kinds, most of them zero, each with how many of the loaded rows carry it.
   fireEvent.click(picker("Kind"));
@@ -236,11 +233,11 @@ test("choosing a kind narrows the question rather than the page", async () => {
   await waitFor(() => expect(asked(query).kinds).toBe("comment"));
 });
 
-// THE PROJECT IS A DIMENSION THE RECORD CARRIES and the engine already filters
-// on, and until the rail existed the only way to reach it was a link from a
-// project's own page — the page read the key, drew its chip and had no control
-// that set it.
-test("the project rail narrows the log to one project", async () => {
+// ONE PROJECT'S CHANGES ARE ITS OWN HISTORY LENS, a switch away in the trail,
+// so All projects' History has no project narrowing of its own: a `project=`
+// on this page was a second address for the same rows.
+test("All projects' History asks for the company's changes and narrows to no project", async () => {
+  location.hash = "#/work/history?project=ENG";
   const query = serving({
     work_activity: {
       records: [record({ id: "r1", project: "ENG" }), record({ id: "r2", project: "PROD" })],
@@ -248,26 +245,8 @@ test("the project rail narrows the log to one project", async () => {
     },
   });
   mount();
-  await waitFor(() => expect(screen.getAllByText("ENG-1")).toHaveLength(2));
-  pick(picker("Project"), /^ENG/);
-  // THE CONTAINER, which is how `work_activity` takes a project: the engine
-  // maps `project:KEY` onto its own `h.project_key` predicate.
-  await waitFor(() => expect(asked(query).container).toBe("project:ENG"));
-  expect(picker("Project").textContent).toContain("ENG");
-});
-
-// A PROJECT NARROWING IS VISIBLE, because the page is reached from a project's
-// own feed and a reader who cannot see the narrowing reads one project's
-// changes as the company's — so the picker shows it even when no loaded row
-// carries it, and choosing "Every project" takes it off.
-test("a project narrowing arriving in the address is visible and removable", async () => {
-  location.hash = "#/work/history?project=ENG";
-  const query = serving({ work_activity: { records: [], complete: true } });
-  mount();
-  await waitFor(() => expect(asked(query).container).toBe("project:ENG"));
-  expect(picker("Project").textContent).toContain("ENG");
-  pick(picker("Project"), "Every project");
   await waitFor(() => expect(asked(query).container).toBe("workspace"));
+  expect(screen.queryByRole("combobox", { name: "Project" })).toBeNull();
 });
 
 // THE PAGE BOUNDARY IS CROSSED, not announced. The screen used to print that
@@ -410,7 +389,13 @@ const prioritised = () =>
 test("a queue somebody else's is named as theirs", async () => {
   serving({
     work_activity: { records: [prioritised()], complete: true },
-    viewer: { operator_id: "op-1", operator: true, handle: "ada", name: "Ada Okonkwo" },
+    viewer: {
+      login: "op-1",
+      grants: ["admin", "tracker", "knowledge"],
+      handle: "ada",
+      owner: "ada",
+      name: "Ada Okonkwo",
+    },
   });
   const { container } = mount();
   await waitFor(() => expect(container.querySelector(".work-log-what")).toBeTruthy());
@@ -423,7 +408,13 @@ test("a queue somebody else's is named as theirs", async () => {
 test("a reader looking at their own queue is still addressed as themselves", async () => {
   serving({
     work_activity: { records: [prioritised()], complete: true },
-    viewer: { operator_id: "op-2", operator: true, handle: "agent-swe", name: "SWE" },
+    viewer: {
+      login: "op-2",
+      grants: ["admin", "tracker", "knowledge"],
+      handle: "agent-swe",
+      owner: "agent-swe",
+      name: "SWE",
+    },
   });
   const { container } = mount();
   await waitFor(() =>

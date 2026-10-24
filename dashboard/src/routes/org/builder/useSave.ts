@@ -39,6 +39,7 @@ import type { KeySource } from "./model/keys.ts";
 import type { BuilderState } from "./model/reducer.ts";
 import type { CheckOutcome, ConflictReason, SettledCheck } from "./model/scheduler.ts";
 import { saveRequest, type BuilderMode, type ConfigTransport } from "./model/transport.ts";
+import { configGuardedReason } from "~/lib/useWriteAccess.ts";
 import {
   classifySave,
   newWriteId,
@@ -123,9 +124,9 @@ const outstanding = new Map<string, Promise<void>>();
 function refusalMessage(outcome: CheckOutcome): string {
   switch (outcome.status) {
     case "problems":
-      return "The engine refused the save. The problems it found are marked on the chart; fix them, then save again.";
+      return "Save refused. Fix the problems marked on the chart.";
     case "guarded":
-      return "The engine refused this browser's token. Set a token it accepts, then save again.";
+      return configGuardedReason(outcome.code);
     case "managed":
       return managedSentence(outcome.managedBy);
     default:
@@ -184,7 +185,12 @@ export function useSave({
     async (attempt: SaveAttempt, currentRevisionId: string | null) => {
       setPhase({ kind: "settling" });
       const signal = new AbortController().signal;
-      const result = await settleUnknownWrite(transport, attempt, currentRevisionId, signal);
+      // A lead's save is found by the unit it sent, which is the draft as it
+      // stands: nothing is recorded while an outcome is unknown. A save a
+      // previous visit sent has no draft on screen yet (its log waits in
+      // storage), so there is nothing to compare.
+      const sent = resumed.current ? null : toDocument(stateRef.current.draft).document;
+      const result = await settleUnknownWrite(transport, attempt, currentRevisionId, signal, sent);
       switch (result.kind) {
         case "landed":
           landed({
@@ -214,8 +220,7 @@ export function useSave({
           if (nothingMoved) {
             setPhase({
               kind: "retry",
-              message:
-                "The save did not reach the engine, and nothing was stored. Save again once the engine is reachable.",
+              message: "The save didn’t reach the engine. Try again.",
             });
             return;
           }
@@ -231,7 +236,7 @@ export function useSave({
           return;
       }
     },
-    [transport, landed, events],
+    [transport, landed, events, stateRef],
   );
 
   const save = useCallback(
@@ -242,10 +247,17 @@ export function useSave({
         writeId: id,
         mode: state.mode,
         baseRevision: state.base.revision,
+        scope: state.scope,
       };
       const sent: IndexedDocument = toDocument(state.draft);
       const request = saveRequest(
-        { mode: state.mode, baseRevision: state.base.revision, base: state.base.document, sent },
+        {
+          mode: state.mode,
+          baseRevision: state.base.revision,
+          base: state.base.document,
+          sent,
+          scope: state.scope,
+        },
         signedSummary(summary, id),
       );
       lastAttempt.current = attempt;

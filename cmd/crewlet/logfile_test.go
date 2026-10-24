@@ -13,14 +13,29 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
-// THE FLAG OVERRIDES THE FILE ONLY WHERE IT SPOKE — the same rule
-// [logSettings] follows, and it matters in BOTH directions here. `-log-file`
+// foldedLogFile is the log file `crewlet run` attaches for these arguments:
+// the one the document names once [overrideLogging] has folded the flags into
+// it, and whether stderr stays a destination beside it — read back the way
+// runEngine reads them, so a case asserts the document the run applies.
+func foldedLogFile(t *testing.T, boot *config.Bootstrap, args ...string,
+) (config.LogFileSettings, bool, error) {
+	t.Helper()
+	fs, level, format, logFile, debug := runFlags(t, args...)
+	if err := overrideLogging(boot, fs, level, format, debug, logFile); err != nil {
+		return config.LogFileSettings{}, false, err
+	}
+	settings, _ := boot.Logging.File.LogFileSettings()
+	return settings, boot.Logging.StderrEnabled(), nil
+}
+
+// THE FLAG OVERRIDES THE FILE ONLY WHERE IT SPOKE — the same rule the level
+// and the shape follow, and it matters in BOTH directions here. `-log-file`
 // carries the empty string as its default whether or not anyone typed it, so
 // applying it unconditionally would make `logging.file.path` in a
 // deployment's own document dead on arrival; and an EXPLICIT `-log-file ""`
 // has to be how a node with a file configured is asked to write none for one
 // run.
-func TestLogFileSettingsOverrideTheFileOnlyWhenGiven(t *testing.T) {
+func TestTheLogFileFlagOverridesTheFileOnlyWhenGiven(t *testing.T) {
 	t.Parallel()
 	const withFile = "logging:\n  file:\n    path: /var/log/crewlet/crewlet.log\n" +
 		"    format: json\n    max_size_mb: 20\n    max_backups: 2\n"
@@ -44,17 +59,22 @@ func TestLogFileSettingsOverrideTheFileOnlyWhenGiven(t *testing.T) {
 		// AN EXPLICIT EMPTY VALUE IS AN INSTRUCTION, not silence.
 		{"an explicit empty flag turns the file off", withFile, []string{"-log-file", ""},
 			"", ""},
+		// TRIMMED, as the document's own path is: validation normalizes
+		// the document, so an untrimmed path would be one file opened and
+		// another named by the document the engine runs.
+		{"the flag's path is trimmed as the file's is", "",
+			[]string{"-log-file", " /tmp/one-run.log "}, "/tmp/one-run.log", ""},
+		{"a blank flag is the empty one", withFile, []string{"-log-file", "  "}, "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			boot, err := config.ParseBootstrap([]byte(tc.yaml), config.EnvOnly())
+			boot, err := parseTierA([]byte(tc.yaml), config.EnvOnly())
 			if err != nil {
 				t.Fatalf("expected a valid Tier A document, got: %v", err)
 			}
-			fs, _, _, logFile, _ := runFlags(t, tc.args...)
-			settings, _, err := logFileSettings(boot, fs, logFile)
+			settings, _, err := foldedLogFile(t, boot, tc.args...)
 			if err != nil {
-				t.Fatalf("logFileSettings: %v", err)
+				t.Fatalf("overrideLogging: %v", err)
 			}
 			if settings.Open.Path != tc.wantPath {
 				t.Errorf("path = %q, want %q", settings.Open.Path, tc.wantPath)
@@ -71,16 +91,15 @@ func TestLogFileSettingsOverrideTheFileOnlyWhenGiven(t *testing.T) {
 // which is the same line `-roles` and `-api-host` are drawn along.
 func TestTheFlagMovesThePathAndNotTheCaps(t *testing.T) {
 	t.Parallel()
-	boot, err := config.ParseBootstrap([]byte(
+	boot, err := parseTierA([]byte(
 		"logging:\n  file:\n    path: /var/log/crewlet/crewlet.log\n"+
 			"    max_size_mb: 20\n    max_backups: 0\n"), config.EnvOnly())
 	if err != nil {
 		t.Fatalf("expected a valid Tier A document, got: %v", err)
 	}
-	fs, _, _, logFile, _ := runFlags(t, "-log-file", "/tmp/one-run.log")
-	settings, _, err := logFileSettings(boot, fs, logFile)
+	settings, _, err := foldedLogFile(t, boot, "-log-file", "/tmp/one-run.log")
 	if err != nil {
-		t.Fatalf("logFileSettings: %v", err)
+		t.Fatalf("overrideLogging: %v", err)
 	}
 
 	if settings.Open.MaxSizeMB == nil || *settings.Open.MaxSizeMB != 20 {
@@ -98,7 +117,7 @@ func TestAttachingTheLogFileAddsASinkAndDetachesIt(t *testing.T) {
 	var console bytes.Buffer
 	logging.Configure(slog.LevelInfo, logging.FormatText, &console)
 	t.Cleanup(func() {
-		logging.Configure(slog.LevelError+1, logging.FormatText, io.Discard)
+		silenceProcessLog()
 	})
 
 	path := filepath.Join(t.TempDir(), "crewlet.log")
@@ -219,14 +238,13 @@ func TestTheOperatorCommandsWriteTheEnvironmentsLogFile(t *testing.T) {
 func TestRunIgnoresTheEnvironmentsLogFile(t *testing.T) {
 	t.Setenv("CREWLET_LOG_FILE", filepath.Join(t.TempDir(), "ops.log"))
 
-	boot, err := config.ParseBootstrap(nil, config.EnvOnly())
+	boot, err := parseTierA(nil, config.EnvOnly())
 	if err != nil {
 		t.Fatalf("expected a valid Tier A document, got: %v", err)
 	}
-	fs, _, _, logFile, _ := runFlags(t)
-	settings, _, err := logFileSettings(boot, fs, logFile)
+	settings, _, err := foldedLogFile(t, boot)
 	if err != nil {
-		t.Fatalf("logFileSettings: %v", err)
+		t.Fatalf("overrideLogging: %v", err)
 	}
 	if settings.Open.Path != "" {
 		t.Errorf("`crewlet run` took its log file from the environment: %q",
@@ -257,14 +275,13 @@ func TestABrokenEnvironmentLogFileFailsTheCommand(t *testing.T) {
 // this is where a node that would write its log nowhere is stopped.
 func TestRemovingTheOnlyDestinationIsRefused(t *testing.T) {
 	t.Parallel()
-	boot, err := config.ParseBootstrap([]byte(
+	boot, err := parseTierA([]byte(
 		"logging:\n  stderr: false\n  file:\n    path: /var/log/crewlet/crewlet.log\n"),
 		config.EnvOnly())
 	if err != nil {
 		t.Fatalf("expected a valid Tier A document, got: %v", err)
 	}
-	fs, _, _, logFile, _ := runFlags(t, "-log-file", "")
-	if _, _, err = logFileSettings(boot, fs, logFile); err == nil {
+	if _, _, err = foldedLogFile(t, boot, "-log-file", ""); err == nil {
 		t.Fatal("a node with neither destination was accepted")
 	}
 	if !strings.Contains(err.Error(), "logging.stderr") {
@@ -276,15 +293,14 @@ func TestRemovingTheOnlyDestinationIsRefused(t *testing.T) {
 // turn a Tier A log file off for one run.
 func TestRemovingTheFileIsFineWhileStderrRemains(t *testing.T) {
 	t.Parallel()
-	boot, err := config.ParseBootstrap([]byte(
+	boot, err := parseTierA([]byte(
 		"logging:\n  file:\n    path: /var/log/crewlet/crewlet.log\n"), config.EnvOnly())
 	if err != nil {
 		t.Fatalf("expected a valid Tier A document, got: %v", err)
 	}
-	fs, _, _, logFile, _ := runFlags(t, "-log-file", "")
-	settings, stderr, err := logFileSettings(boot, fs, logFile)
+	settings, stderr, err := foldedLogFile(t, boot, "-log-file", "")
 	if err != nil {
-		t.Fatalf("logFileSettings: %v", err)
+		t.Fatalf("overrideLogging: %v", err)
 	}
 	if settings.Open.Path != "" {
 		t.Errorf("the file was not removed: %q", settings.Open.Path)
@@ -294,21 +310,44 @@ func TestRemovingTheFileIsFineWhileStderrRemains(t *testing.T) {
 	}
 }
 
+// AND A RUN WRITING NO FILE KEEPS NONE OF THE FILE'S SETTINGS, so the
+// document it folds into is still one the validator accepts. The run holds
+// Tier A to its rules again once every flag is folded in ([validateFolded]),
+// and engine.New does once more, and a file block carrying a shape, a level or
+// a cap with no path is refused there — it reads as a node that logs to a
+// file — so `-log-file ""` over a fully described file would otherwise turn
+// the documented way to skip the file for one run into a boot that fails.
+func TestRemovingTheFileLeavesADocumentTheValidatorAccepts(t *testing.T) {
+	t.Parallel()
+	boot, err := parseTierA([]byte(
+		"logging:\n  file:\n    path: /var/log/crewlet/crewlet.log\n"+
+			"    format: json\n    level: debug\n    max_size_mb: 20\n    max_backups: 2\n"),
+		config.EnvOnly())
+	if err != nil {
+		t.Fatalf("expected a valid Tier A document, got: %v", err)
+	}
+	if _, _, err = foldedLogFile(t, boot, "-log-file", ""); err != nil {
+		t.Fatalf("overrideLogging: %v", err)
+	}
+	if err = boot.Validate(); err != nil {
+		t.Errorf("the run's own document is one engine.New refuses: %v", err)
+	}
+}
+
 // THE FILE'S OWN LEVEL SURVIVES THE FLAG, like its shape and its caps: a
 // `-log-file` moves where this run writes, never how loud the durable record
 // is, which is a property of the deployment.
 func TestTheFlagMovesThePathAndNotTheLevel(t *testing.T) {
 	t.Parallel()
-	boot, err := config.ParseBootstrap([]byte(
+	boot, err := parseTierA([]byte(
 		"logging:\n  level: warn\n  file:\n    path: /var/log/crewlet/crewlet.log\n"+
 			"    level: debug\n"), config.EnvOnly())
 	if err != nil {
 		t.Fatalf("expected a valid Tier A document, got: %v", err)
 	}
-	fs, _, _, logFile, _ := runFlags(t, "-log-file", "/tmp/one-run.log")
-	settings, _, err := logFileSettings(boot, fs, logFile)
+	settings, _, err := foldedLogFile(t, boot, "-log-file", "/tmp/one-run.log")
 	if err != nil {
-		t.Fatalf("logFileSettings: %v", err)
+		t.Fatalf("overrideLogging: %v", err)
 	}
 	if settings.Sink.Level == nil || *settings.Sink.Level != slog.LevelDebug {
 		t.Errorf("file level = %v, want the document's debug", settings.Sink.Level)
@@ -325,7 +364,7 @@ func TestAttachingWithStderrOffSilencesAndRestoresTheConsole(t *testing.T) {
 	logging.Configure(slog.LevelInfo, logging.FormatText, &console)
 	t.Cleanup(func() {
 		logging.SetConsole(true)
-		logging.Configure(slog.LevelError+1, logging.FormatText, io.Discard)
+		silenceProcessLog()
 	})
 
 	path := filepath.Join(t.TempDir(), "crewlet.log")
@@ -391,7 +430,7 @@ func TestTheHandoverReachesStderrAtEveryLevel(t *testing.T) {
 			logging.Configure(level, logging.FormatText, &console)
 			t.Cleanup(func() {
 				logging.SetConsole(true)
-				logging.Configure(slog.LevelError+1, logging.FormatText, io.Discard)
+				silenceProcessLog()
 			})
 
 			path := filepath.Join(t.TempDir(), "crewlet.log")
@@ -418,7 +457,7 @@ func TestNoHandoverNoticeWhenStderrStaysOn(t *testing.T) {
 	var console bytes.Buffer
 	logging.Configure(slog.LevelInfo, logging.FormatText, &console)
 	t.Cleanup(func() {
-		logging.Configure(slog.LevelError+1, logging.FormatText, io.Discard)
+		silenceProcessLog()
 	})
 
 	path := filepath.Join(t.TempDir(), "crewlet.log")

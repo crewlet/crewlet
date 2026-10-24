@@ -69,11 +69,12 @@ afterEach(() => {
  * Every URL key this screen reads or writes.
  *
  * `useParam` IS THE WHOLE GRAMMAR of it — a key nothing reads is a key nothing
- * can act on — plus the one family read off the whole query rather than one
- * key at a time, because the set of a company's own fields is the company's
- * and there is no key for a build to ask for. Both spellings of the column key
- * arrive through [colsParam], so they are recognised in that form rather than
- * as literals the screen does not contain.
+ * can act on — plus what is read off the whole query rather than through it:
+ * the one family whose keys are the company's own fields, since there is no
+ * key for a build to ask for, and a key whose absence and emptiness are two
+ * values (`route.query.get`), which `useParam` reads as one. Both spellings of
+ * the column key arrive through [colsParam], so they are recognised in that
+ * form rather than as literals the screen does not contain.
  */
 function screenKeys(): string[] {
   const out = new Set<string>();
@@ -82,6 +83,9 @@ function screenKeys(): string[] {
   )) {
     if (literal) out.add(literal);
     if (shape) out.add(colsParam(shape as (typeof GRID_SHAPES)[number]));
+  }
+  for (const [, key] of SOURCE.matchAll(/route\.query\.get\("([^"]+)"\)/g)) {
+    if (key) out.add(key);
   }
   for (const [, prefix] of SOURCE.matchAll(/key\.startsWith\("([^"]+)"\)/g)) {
     if (prefix) out.add(prefix);
@@ -187,7 +191,7 @@ test("the filters with no chip are the segment and the arrangement", () => {
 function serving(answers: Partial<Record<QueryName, unknown>> = {}) {
   const query = vi.fn(async (what: string) => answers[what as QueryName] ?? {});
   vi.mocked(useClient).mockReturnValue({ socket: { query } } as never);
-  vi.mocked(useConnection).mockReturnValue({ connected: true } as never);
+  vi.mocked(useConnection).mockReturnValue({ connected: true, accessRefused: null } as never);
   vi.mocked(useOrg).mockReturnValue(
     withDerived({
       name: "Acme",
@@ -267,11 +271,11 @@ const ARRANGEMENT: Record<
 > = {
   shape: {
     at: "#/work",
-    // THE FIRST ROW'S OWN TABS, never the Display menu: the shape is the one
+    // THE FIRST ROW'S OWN SWITCH, never the Display menu: the shape is the one
     // arrangement a team switches all day.
     press: async () => {
-      const shapes = await screen.findByRole("group", { name: "Draw as" });
-      fireEvent.click(within(shapes).getByRole("button", { name: "Board" }));
+      const shapes = await screen.findByRole("radiogroup", { name: "Draw as" });
+      fireEvent.click(within(shapes).getByRole("radio", { name: "Board" }));
     },
     writes: "shape=board",
   },
@@ -402,10 +406,10 @@ test("the scope is the bar's own switch, with no chip and no row in the Filter m
   expect(screen.queryByText("scope=")).toBeNull();
 });
 
-// A SAVED VIEW IS A TAB IN THE STRIP — a pressed button, pinned by this reader: it is a query somebody arranged and put
-// somewhere, which is neither a narrowing the reader added nor a way of
-// drawing one.
-test("the saved view is a tab rather than a chip or a menu row", async () => {
+// A SAVED VIEW IS AN OPTION IN THE STRIP, pinned by this reader: it is a
+// query somebody arranged and put somewhere, which is neither a narrowing the
+// reader added nor a way of drawing one.
+test("the saved view is an option in the strip rather than a chip or a menu row", async () => {
   location.hash = "#/work";
   serving({
     ...rows,
@@ -426,7 +430,7 @@ test("the saved view is a tab rather than a chip or a menu row", async () => {
     },
   });
   mountList();
-  fireEvent.click(await screen.findByRole("button", { name: "Arranged" }));
+  fireEvent.click(await screen.findByRole("radio", { name: "Arranged" }));
   await waitFor(() => expect(location.hash).toContain("view=arranged"));
   expect(document.querySelector(".work-chip-field")).toBeNull();
 });

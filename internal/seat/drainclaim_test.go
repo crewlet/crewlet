@@ -60,7 +60,7 @@ func TestASweepBegunBeforeTheDrainClaimsNothingAfterIt(t *testing.T) {
 			"after the drain had given them back", n)
 	}
 	for _, handle := range []string{"ceo", "eng"} {
-		if lease := f.leaseOf(coord.SeatResource(handle)); lease != nil {
+		if lease := f.leaseOf(seatResource(handle)); lease != nil {
 			t.Errorf("seat %s is leased to %s after the drain gave it back",
 				handle, lease.Owner)
 		}
@@ -94,7 +94,7 @@ func TestADrainBegunWhileASeatIsBeingTakenGetsTheSeatBack(t *testing.T) {
 
 	wantHeld(t, h)
 	wantStrings(t, hooks.acquired(), nil, "acquire hooks run")
-	if lease := f.leaseOf(coord.SeatResource("ceo")); lease != nil {
+	if lease := f.leaseOf(seatResource("ceo")); lease != nil {
 		t.Errorf("the seat taken as the drain began is leased to %s: it was "+
 			"never given back", lease.Owner)
 	}
@@ -125,7 +125,7 @@ func TestASeatWhoseAcquireFailedAsItsHostStoppedIsGivenBack(t *testing.T) {
 	h.Sweep(pass)
 
 	wantHeld(t, h)
-	if lease := f.leaseOf(coord.SeatResource("ceo")); lease != nil {
+	if lease := f.leaseOf(seatResource("ceo")); lease != nil {
 		t.Errorf("the seat whose acquire failed is leased to %s: its give-back "+
 			"ran on the cancelled pass and released nothing", lease.Owner)
 	}

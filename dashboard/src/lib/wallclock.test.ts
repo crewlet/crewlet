@@ -2,34 +2,34 @@
  * The wall clock a range picker types in, and the instant it names.
  *
  * NOT `@vitest-environment node`, unlike the rest of `format.test.ts`: the
- * conversion reads the VIEWER'S chosen zone out of `lib/prefs.ts`, which is
- * browser storage, and the whole hazard here is that the browser's own zone
- * and the chosen one differ. The suite itself runs in `Europe/Berlin` (see
- * `vitest.config.ts`), so every case that chooses another zone is also a case
- * where the naive `new Date(value)` answer is wrong.
+ * conversion reads the zone in effect out of `lib/prefs.ts`, and the whole
+ * hazard here is a reading taken in one zone and parsed in another. The suite
+ * itself runs in `Europe/Berlin` (see `vitest.config.ts`) and pins each case
+ * to another zone (`pinZoneForTest`), so every case is also one where the
+ * naive `new Date(value)` answer is wrong.
  */
 
 import { beforeEach, describe, expect, it } from "vitest";
 import { fromWall, readerDay, toWall } from "./format.ts";
 import { dayOf, daysBetween, shiftDay } from "./timeline.ts";
 import { calendarWeeks, dayKey, dayLabel, gridRange } from "./work.ts";
-import { reloadForTest, setZone } from "./prefs.ts";
+import { reloadForTest, pinZoneForTest } from "./prefs.ts";
 
 function inZone(zone: string) {
-  setZone(zone);
+  pinZoneForTest(zone);
   reloadForTest();
 }
 
 beforeEach(() => {
   localStorage.clear();
+  pinZoneForTest("");
   reloadForTest();
 });
 
 describe("a wall-clock reading and the instant it names", () => {
-  it("renders an instant in the CHOSEN zone, not the browser's", () => {
-    // The browser is in Europe/Berlin. A reader whose company runs in Tokyo
-    // set the preference, and the input has to show them Tokyo's clock —
-    // `toISOString().slice(0, 16)` would show them UTC and
+  it("renders an instant in the zone in effect, not UTC or the parse's own", () => {
+    // The suite runs in Europe/Berlin and pins Tokyo, and the input has to
+    // show Tokyo's clock: `toISOString().slice(0, 16)` would show UTC and
     // `new Date(...).toISOString()` after a local parse would show Berlin.
     const at = Date.parse("2026-06-15T00:30:00Z");
     inZone("Asia/Tokyo");
@@ -114,7 +114,7 @@ describe("a wall-clock reading and the instant it names", () => {
  * in its cell as well as in its label.
  */
 describe("a day is the reader's day", () => {
-  it("files an instant under the chosen zone's date, not the browser's", () => {
+  it("files an instant under the zone in effect's date", () => {
     const at = "2026-09-22T20:00:00Z";
     inZone("Asia/Tokyo");
     expect(readerDay(Date.parse(at))).toBe("2026-09-23");

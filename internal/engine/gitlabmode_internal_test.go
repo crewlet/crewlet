@@ -153,9 +153,9 @@ roles:
 	return company
 }
 
-// sealingTestSink is a keyring that works, which a pass needs before it will
-// create anything: [provision.CanMint] gates the account on having somewhere
-// to seal the token, so a pass with no sink reports and creates nothing.
+// sealingTestSink is a sealed store held in memory, which a pass needs before
+// it will create anything: with no sink there is nowhere to record a minted
+// credential, so no pass creates one.
 type sealingTestSink struct {
 	mu   sync.Mutex
 	held map[string]string

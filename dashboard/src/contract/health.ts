@@ -20,6 +20,21 @@ interface HealthAlarms {
 }
 
 /**
+ * The object store's half of a health body: `api.HealthObjects` in Go, held
+ * member for member by the same gate as `EngineHealth`.
+ */
+interface HealthObjects {
+  /**
+   * `available` where an upload may go straight to the S3 bucket on a
+   * presigned put, or `unavailable (<reason>)`: the broker's own bucket, or a
+   * provider the boot probe could not prove enforces the checksum and the
+   * If-None-Match condition. Unavailable is no fault: every upload then
+   * streams through the engine.
+   */
+  direct_upload: string;
+}
+
+/**
  * What a node says about itself: the `health` push, which is `api.Health` in
  * Go, WHOLE — in the snapshot and on every five-second tick. There is no query
  * for it any more; read it with `useEngineHealth()`.
@@ -41,6 +56,13 @@ interface HealthAlarms {
  */
 export interface EngineHealth {
   status: string;
+  /**
+   * How far a STARTING node's boot has got — `recovering`, then `preparing` —
+   * beside `status: "starting"`. Only `/health` answers it, before the node
+   * serves anything else; every body that reaches a dashboard comes from a node
+   * that is serving, so its boot is over and this is absent.
+   */
+  phase?: "recovering" | "preparing" | (string & {});
   node: string;
   configured: boolean;
   version: string;
@@ -79,10 +101,19 @@ export interface EngineHealth {
   /** The handles THIS node currently holds. */
   seats: string[];
   /**
-   * How far behind this node's watched duty is, in seconds — present only
-   * while it is behind at all. It climbs towards the seat lease TTL, at which
-   * the watchdog ends the process, so a node degrading shows here before the
-   * restart rather than only afterwards in its exit code.
+   * Each identity duty this node armed (the retention sweep) mapped to the
+   * interval it runs at, in seconds; `{}` on a node that armed none, which is
+   * how an operator tells a duty that never runs from one that finds nothing.
+   */
+  identity_duty_seconds: Record<string, number>;
+  /**
+   * How far behind this node's watched duty is, in seconds, present only
+   * while it is behind at all: once its last beat is older than the beat
+   * interval it keeps (a second at the shipped lease TTL), which is a missed
+   * beat, and then the whole time since that beat. It climbs towards the seat
+   * lease TTL, at which the watchdog ends the process, so a node degrading
+   * shows here before the restart rather than only afterwards in its exit
+   * code. Absent on a node whose duty is on its beat.
    */
   stall_lag_seconds?: number;
   /**
@@ -90,6 +121,14 @@ export interface EngineHealth {
    * long it has been stranded in seconds — present only while one is.
    */
   unproven_seconds?: Record<string, number>;
+  /**
+   * Whether the company has its FIRST PERSON: `ready`, `unclaimed`, or
+   * `unknown` where this node cannot read its identity estate — never folded
+   * into `unclaimed`, which would tell an operator to invite a founder into a
+   * company that has one. Absent where the API was wired with no identity
+   * seam. A value a newer engine adds arrives as itself.
+   */
+  identity?: "ready" | "unclaimed" | "unknown" | (string & {});
   /**
    * How many nodes hold a presence lease — the fleet this node's fan-outs
    * divide their work by. ABSENT WHEN THE PRESENCE READ FAILED, never 0: say
@@ -108,4 +147,9 @@ export interface EngineHealth {
    * Absent until the seed has run.
    */
   seeded_from?: Coverage;
+  /**
+   * What this node's object store offers beyond streaming bytes through the
+   * engine. Absent on a node running no object store.
+   */
+  objects?: HealthObjects;
 }

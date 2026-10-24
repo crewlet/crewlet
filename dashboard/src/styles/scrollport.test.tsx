@@ -238,7 +238,7 @@ test("the two rosters are read from the sheets at all", () => {
   expect(stickyClasses().has("grid-band-head")).toBe(true);
   // The page column's own scroller is the kit's, so it is not in our sheets;
   // two of ours stand for the scan finding one at all, on either axis.
-  expect(scrollportClasses().has("crumbs")).toBe(true);
+  expect(scrollportClasses().has("page-controls")).toBe(true);
   expect(scrollportClasses().has("work-col-body")).toBe(true);
   // And the two values that are NOT scroll containers are not counted as one,
   // or the fix below would read as the bug.

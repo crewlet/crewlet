@@ -35,7 +35,7 @@ import (
 // findings — that is what converged means — so every one of them walked an
 // empty list and passed whatever this package did. The suite now requires an
 // OUTSTANDING world as well, and [outstandingGitLab] is GitLab's: a company
-// that never set integrations.public_base_url, so the pass provisions every
+// that never set api.external_url, so the pass provisions every
 // seat and registers no webhook, and the instance has nowhere to deliver to.
 //
 // # Both hook paths, because the pass has two
@@ -157,10 +157,8 @@ func newWorld(t *testing.T, tb integrationtest.TB, tune func(*adminInstance),
 		// setting that makes the pass do LESS than the loop really does,
 		// and each would make the converged clause pass for the wrong
 		// reason: an empty WebhookBase touches no hook at all, empty
-		// Projects adds no project memberships, and a sink where
-		// provision.CanMint is false short-circuits the whole pass to
-		// NoKeyring without one request. recordingSink has no Mints
-		// method, so CanMint answers true.
+		// Projects adds no project memberships, and a nil sink refuses
+		// the whole pass before one request.
 		//
 		// The three the engine never sets — Mode, Decommission and Rotate
 		// (its PassInput carries no Recreate) — are left at their zero
@@ -254,17 +252,15 @@ func (w *gitlabWorld) vacuous() string {
 }
 
 // outstandingGitLab is a GitLab where something is genuinely wrong AND A
-// PERSON HAS TO ACT: the company never set integrations.public_base_url, so
+// PERSON HAS TO ACT: the company never set api.external_url, so
 // there is no address to point a webhook at and the instance delivers
 // nothing to anybody.
 //
 // # Why this one
 //
-// It is the only person-owed finding this pass reaches that is also a FULL
-// pass. The alternative — handing it [provision.ReadOnly], so the node has no
-// keyring — reports a person-owed finding too, and returns it before one
-// HTTP request is made: every clause downstream would then be certifying an
-// early return rather than the reconciler. This world resolves the group,
+// It is a person-owed finding this pass reaches only at the END of a FULL
+// pass, so every clause downstream certifies the reconciler rather than an
+// early return. This world resolves the group,
 // resolves both projects, reads both rosters, creates two accounts, adds four
 // memberships, mints and seals two tokens, and THEN reports.
 //
@@ -285,7 +281,7 @@ func (w *gitlabWorld) vacuous() string {
 func outstandingGitLab(t *testing.T, tb integrationtest.TB) *gitlabWorld {
 	t.Helper()
 	// NOWHERE TO DELIVER TO, which is what the loop passes whenever
-	// integrations.public_base_url is unset: setup.PassInput.WebhookBase is
+	// api.external_url is unset: setup.PassInput.WebhookBase is
 	// that value verbatim.
 	return newWorld(t, tb, nil, func(o *gitlab.Options) { o.WebhookBase = "" })
 }
@@ -350,7 +346,7 @@ func TestTheOutstandingWorldIsBlockedOnAPerson(t *testing.T) {
 	if got.Kind != integration.FindingIngressBlocked {
 		t.Errorf("kind = %q, want %q", got.Kind, integration.FindingIngressBlocked)
 	}
-	if got.Subject != "integrations.public_base_url" {
+	if got.Subject != "api.external_url" {
 		t.Errorf("subject = %q, want the setting a person has to fill in", got.Subject)
 	}
 	if _, actor := got.Kind.Verdict(); !actor.WaitsOnAPerson() {

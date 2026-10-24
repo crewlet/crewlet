@@ -414,6 +414,13 @@ func TestAReanchorNamesTheCaseItAnswers(t *testing.T) {
 // subject, the per-subject probe, a read of one record back by its sequence,
 // and a creation instant read on every call.
 type reanchorLog struct {
+	// THE STREAM AS THE ENGINE HANDS IT OVER: its append frames a record and
+	// its reads open one, so what goes in and comes out here is the body.
+	// The embedded VerifiedLog states that contract to the type system
+	// ([statelog.VerifiedReader]); its own At is shadowed by this fake's,
+	// which holds bodies because signing is not what these cases measure.
+	statelog.VerifiedLog
+
 	mu      sync.Mutex
 	bySeq   map[uint64]reanchorRecord
 	last    map[string]uint64 // subject → its last sequence
@@ -550,8 +557,9 @@ func (p probeGeneration) GenerationRecord(f statelog.GenerationFacts) (statelog.
 	return statelog.GenerationRecord{
 		Subject: statelog.Subject{Kind: "generation", ID: fmt.Sprint(f.Generation)},
 		OpID:    f.OpID(),
-		Payload: []byte(fmt.Sprintf(`{"gen":%d,"by":%q,"writer":%q}`,
-			f.Generation, f.By, f.Writer)),
+		Payload: []byte(fmt.Sprintf(
+			`{"gen":%d,"by":%q,"by_kind":%q,"operator_id":%q,"writer":%q}`,
+			f.Generation, f.By, f.ByKind, f.OperatorID, f.Writer)),
 	}, true, nil
 }
 
@@ -632,7 +640,7 @@ func (f *reanchorFixture) deps(domain statelog.Domain) statelog.ReanchorDeps {
 	return statelog.ReanchorDeps{
 		Domain: domain, Spec: specOf(domain), Stream: f.log, Record: probeGeneration{keeps: true},
 		Consumer: f.consumer, Runner: f.runner, DB: f.estate,
-		By: "ops-1", NodeID: "node-a",
+		By: "ops-1", ByKind: "human", OperatorID: "session:ops-1", NodeID: "node-a",
 	}
 }
 
@@ -713,6 +721,47 @@ func (secondProbeDomain) Stream() statelog.StreamSpec {
 // next boot found their own streams "recreated" and stopped their appliers —
 // and re-anchoring one of them did the same to the first. Two domains on two
 // streams here, because one domain hides exactly that.
+// A GENERATION RECORD NAMES ITS OPERATOR WHOLE: who, what kind of party, and
+// the credential they acted through — the three columns every other write
+// carries. The deps carried only the name, so the facts a domain encodes its
+// record from had an empty kind and credential on every reanchor, whatever the
+// domain did with them.
+//
+// Mutation: drop ByKind or OperatorID from the facts Reanchor builds and this
+// fails.
+func TestAGenerationRecordCarriesItsOperatorWhole(t *testing.T) {
+	t.Parallel()
+	f := newReanchorFixture(t)
+	seedCursor(t, f.estate, probeStream,
+		statelog.Position{Stream: probeStream, Generation: 1, Seq: 9_000}, keyedCreated)
+	plan, err := statelog.Reanchor(t.Context(), f.deps(probeDomain{}), reanchorInputs(),
+		confirmed())
+	if err != nil {
+		t.Fatalf("Reanchor: %v", err)
+	}
+	seq, found, err := f.log.LastSeq(t.Context(),
+		probePrefix+".generation."+fmt.Sprint(plan.Generation))
+	if err != nil || !found {
+		t.Fatalf("the generation record is not on the log: found %v, %v", found, err)
+	}
+	_, body, _, _, err := f.log.At(t.Context(), seq)
+	if err != nil {
+		t.Fatalf("read the generation record: %v", err)
+	}
+	var got struct {
+		By         string `json:"by"`
+		ByKind     string `json:"by_kind"`
+		OperatorID string `json:"operator_id"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode the generation record %s: %v", body, err)
+	}
+	if got.By != "ops-1" || got.ByKind != "human" || got.OperatorID != "session:ops-1" {
+		t.Fatalf("the generation record names %+v, want ops-1, human, "+
+			"session:ops-1", got)
+	}
+}
+
 func TestAReanchorMovesOnlyTheDomainItNamed(t *testing.T) {
 	t.Parallel()
 	f := newReanchorFixture(t)
@@ -769,7 +818,8 @@ func TestAReanchorMovesOnlyTheDomainItNamed(t *testing.T) {
 	// instant loads the untouched checkpoint and does not stop.
 	secondFetch := newProbeFetch()
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
-		Domain: secondProbeDomain{}, Spec: specOf(secondProbeDomain{}), Applier: newProbeApplier(),
+		Domain: secondProbeDomain{}, Spec: specOf(secondProbeDomain{}),
+		Verifier: testVerifier(t, secondProbeDomain{}), Applier: newProbeApplier(),
 		Fetch: secondFetch, Log: secondFetch, Node: f.db, DB: f.estate,
 		Checkpoint:      statelog.Position{Generation: 1},
 		StreamCreatedAt: secondCreated,
@@ -1186,12 +1236,14 @@ func TestAWriteAfterARestoredReanchorArbitratesOnTheRecordItsRowsHold(t *testing
 	// THE RESTORED COPY: the subject's own record, and another object's
 	// after it, so the log ends past the subject.
 	kept, _, err := h.log.Append(t.Context(), probePrefix+".object.kept", "op-old",
-		nil, []byte("old"))
+		nil, signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, probeSubject("kept"), statelog.ScopeSet{Paths: []string{"object.kept"}},
+			"op-old", "old")))
 	if err != nil {
 		t.Fatalf("the copy's record for the subject: %v", err)
 	}
 	end, _, err := h.log.Append(t.Context(), probePrefix+".object.other", "op-other",
-		nil, []byte("other"))
+		nil, signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, probeSubject("other"), statelog.ScopeSet{Paths: []string{"object.other"}},
+			"op-other", "other")))
 	if err != nil {
 		t.Fatalf("the copy's later record: %v", err)
 	}
@@ -1251,7 +1303,7 @@ func TestARecordTheCheckpointDoesNotCoverIsWaitedFor(t *testing.T) {
 			h := newHarness(t)
 			subject := probeSubject("a")
 			peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op",
-				nil, []byte("peer"))
+				nil, signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, probeSubject("a"), statelog.ScopeSet{Paths: []string{"object.a"}}, "peer-op", "peer")))
 			if err != nil {
 				t.Fatalf("the peer's write: %v", err)
 			}
@@ -1592,7 +1644,9 @@ func TestAPassedGenerationNamesTheRemedyThatExists(t *testing.T) {
 		t.Helper()
 		h := newApplyHarness(t, probeDomain{})
 		runner, err := statelog.NewRunner(statelog.RunnerDeps{
-			Domain: probeDomain{}, Spec: specOf(probeDomain{}), Applier: h.applier, Fetch: h.fetch, Log: h.fetch,
+			Domain: probeDomain{}, Spec: specOf(probeDomain{}),
+			Verifier: testVerifier(t, probeDomain{}),
+			Applier:  h.applier, Fetch: h.fetch, Log: h.fetch,
 			Node: h.db, DB: h.estate, Metrics: h.metrics,
 			Checkpoint: statelog.Position{Generation: 1},
 			NodeID:     self,

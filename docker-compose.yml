@@ -7,7 +7,8 @@
 #
 # What is here is the vendors an integration is developed against — a chat
 # surface and a code host — brought up one profile at a time by the `make`
-# targets that wrap them.
+# targets that wrap them, and an S3-compatible object store for running the
+# engine's files on the `s3` backend.
 services:
   # ---------------------------------------------------------------------------
   # GitLab — local instance for integration-testing the GitLab integration.
@@ -28,7 +29,7 @@ services:
     # exactly like a line with nothing to update, and a green run named a
     # GitLab nobody could identify afterwards. Multi-arch incl. arm64 since
     # 18.1.
-    image: gitlab/gitlab-ee:19.4.1-ee.0
+    image: gitlab/gitlab-ee:19.5.0-ee.0
     profiles: [gitlab]
     hostname: gitlab.local
     shm_size: "256m"                         # image default 64 MB is too small
@@ -154,11 +155,15 @@ services:
       # scripts/mattermost-dev-bootstrap.sh settles it: it derives the
       # address (this variable, else the one you reached the host on over
       # SSH, else localhost), recreates this service when the running
-      # server disagrees, and refuses to finish until it matches. Keep it
-      # in lock-step with the company config's ${MATTERMOST_URL} — same
-      # rule as the GitLab external URL above. An MM_* variable is authoritative
-      # over stored config, so this cannot be corrected in the System
-      # Console or over the API; the container has to be recreated.
+      # server disagrees, and refuses to finish until it matches. It writes
+      # the same address to the company config's ${MATTERMOST_URL}, because
+      # here the engine reaches the server the way people do; that is a
+      # convenience, not a rule — the engine sends no Origin, so any route
+      # to the server that answers under the same path, without a
+      # redirect, works for it. An MM_* variable
+      # is authoritative over stored config, so this cannot be corrected in
+      # the System Console or over the API; the container has to be
+      # recreated.
       # See docs/integrations/mattermost.md § The Site URL.
       MM_SERVICESETTINGS_SITEURL: ${MATTERMOST_PUBLIC_URL:-http://localhost:${MATTERMOST_LISTEN_PORT:-8065}}
       # Required by `crewlet mattermost provision` (see the note above).
@@ -244,7 +249,61 @@ services:
       retries: 5
       start_period: 10s
 
+  # ---------------------------------------------------------------------------
+  # SeaweedFS: an S3-compatible bucket for the object store's `s3` backend.
+  #
+  # Profile-gated like the rest:
+  #     docker compose --profile s3 up -d --wait
+  #     aws --endpoint-url http://127.0.0.1:8333 s3 mb s3://crewlet-files
+  # then point the engine at it in Tier A:
+  #     store:
+  #       objects:
+  #         backend: s3
+  #         s3:
+  #           endpoint: http://127.0.0.1:8333
+  #           region: us-east-1
+  #           bucket: crewlet-files
+  #           path_style: true
+  #           access_key_id: ${S3_ACCESS_KEY_ID}
+  #           secret_access_key: ${S3_SECRET_ACCESS_KEY}
+  # or move a running company's files onto it with
+  # `crewlet objects migrate --to s3`. See docs/concepts/object-store.md.
+  #
+  # SeaweedFS because it is one small Apache-2.0 binary that serves the S3
+  # API with no license ceiling on how it is deployed, which is the reference
+  # self-hosted choice (MinIO, Ceph's gateway and any provider work as well).
+  #
+  # NO IDENTITIES ARE CONFIGURED, so the S3 API accepts any key pair: fine
+  # for a laptop, and the reason the port is published on the loopback
+  # address only. A store other people can reach gets an identity file
+  # (`-s3.config`), and each company a key scoped to its own prefix.
+  #
+  # The engine's boot probe decides whether this build offers direct
+  # uploads (it must refuse a body whose x-amz-checksum-sha256 does not
+  # match, and a second put under If-None-Match: *); `GET /health` says
+  # which as objects.direct_upload. Either way every upload works.
+  # ---------------------------------------------------------------------------
+  seaweedfs:
+    # PINNED EXACTLY, for the reason every service here is.
+    image: chrislusf/seaweedfs:4.48
+    profiles: [s3]
+    command: ["server", "-dir=/data", "-s3", "-s3.port=8333", "-ip.bind=0.0.0.0"]
+    ports:
+      - "127.0.0.1:8333:8333"
+    volumes:
+      - seaweedfs-data:/data
+    restart: unless-stopped
+    healthcheck:
+      # The S3 port answering at all; an unauthenticated listing of no
+      # bucket is a 200 on a store with no identities.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8333/ || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
 volumes:
+  seaweedfs-data:
   gitlab-config:
   gitlab-logs:
   gitlab-data:

@@ -64,12 +64,14 @@ func TestAnInformedAnswerOwesItsAskerAndNobodyElse(t *testing.T) {
 // A turn owes one surface, and a coalesced partition is one turn — so two
 // answers on one item promising two different surfaces, merged, would lose one
 // of the promises. The partition key cuts the conversation by the surface owed
-// while the conversation identity stays the task key, so the ledger still files
-// every wake about ENG-1 in one thread.
+// while the conversation identity stays the task's — `task:<id>`, never its
+// key (see [tracker.Prompt.ConversationIdentity]) — so the ledger still files
+// every wake about the task in one thread.
 func TestAnOwedWakeIsItsOwnPartitionOfTheTask(t *testing.T) {
 	t.Parallel()
 	meta := func(via tracker.Reason, inform string) map[string]string {
-		m := map[string]string{tracker.MetaTaskKey: "ENG-1", tracker.MetaVia: string(via)}
+		m := map[string]string{tracker.MetaTaskID: "t-1", tracker.MetaTaskKey: "ENG-1",
+			tracker.MetaVia: string(via)}
 		if inform != "" {
 			m[tracker.MetaInform] = inform
 		}
@@ -90,10 +92,10 @@ func TestAnOwedWakeIsItsOwnPartitionOfTheTask(t *testing.T) {
 				"of them", name, other, key)
 		}
 		keys[key] = name
-		if got := (tracker.Prompt{}).ConversationIdentity(m, ""); got != "ENG-1" {
-			t.Errorf("%s: the conversation identity is %q, want the task key", name, got)
+		if got := (tracker.Prompt{}).ConversationIdentity(m, ""); got != "task:t-1" {
+			t.Errorf("%s: the conversation identity is %q, want the task's", name, got)
 		}
-		if !strings.HasPrefix(key, "ENG-1") {
+		if !strings.HasPrefix(key, "task:t-1") {
 			t.Errorf("%s: the partition %q is not a cut of the conversation", name, key)
 		}
 	}

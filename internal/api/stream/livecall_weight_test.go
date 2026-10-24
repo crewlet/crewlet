@@ -16,6 +16,10 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
+// leadSeat is the agent id the long phase runs on, which is what names its row:
+// the projection keys a seat by its id, never by the role it is filed under.
+const leadSeat = "agent-1"
+
 // longPhase is the frames one long executor phase publishes, as the runner
 // builds them: an opening frame carrying a 30 KB system prompt and an 8 KB
 // task, then thirty rounds, each streamed for eight seconds at the loop's five
@@ -65,7 +69,7 @@ func buildLongPhase() ([]livestate.Envelope, error) {
 		if failed != nil {
 			return
 		}
-		p.Agent, p.RoleName, p.TurnID, p.Phase, p.Iteration = "agent-1", "Lead", "turn-1", "execute", 0
+		p.Agent, p.RoleName, p.TurnID, p.Phase, p.Iteration = leadSeat, "Lead", "turn-1", "execute", 0
 		p.Model, p.MaxRounds, p.RoundCeiling = "claude-sonnet-4-5", 40, 60
 		raw, err := json.Marshal(p)
 		if err != nil {
@@ -161,19 +165,16 @@ func TestARunningPhasePushesWhatMovedAndTheTabHoldsTheWholeCall(t *testing.T) {
 	lean, whole, streaming, largestStreaming := 0, 0, 0, 0
 	for i, env := range frames {
 		s.Ingest(env)
-		wholeRow, err := stream.Encode(stream.Push(stream.KindAgents, s.State().OverlayRows([]string{"Lead"}), clock))
+		wholeRow, err := stream.Encode(stream.Push(stream.KindAgents, s.State().OverlayRows([]string{leadSeat}), clock))
 		if err != nil {
 			t.Fatal(err)
 		}
 		whole += len(wholeRow)
 		for _, out := range drain(c) {
-			if out.Kind != stream.KindAgents {
+			if out.Kind() != stream.KindAgents {
 				continue
 			}
-			raw, err := stream.Encode(out)
-			if err != nil {
-				t.Fatal(err)
-			}
+			raw := out.Raw()
 			lean += len(raw)
 			call := pushedCall(t, raw)
 			if _, partial := env.Payload["partial_round"]; partial && !carriesDetail(call) {
@@ -304,11 +305,11 @@ func TestATabThatMissedACallsClearingIsToldItIsBehind(t *testing.T) {
 		t.Helper()
 		behind := false
 		for _, out := range drain(c) {
-			if out.Kind != stream.KindAgents {
+			if out.Kind() != stream.KindAgents {
 				continue
 			}
 			var stale bool
-			held, stale = mergeLikeTheDashboard(held, pushedCall(t, mustEncode(t, out)))
+			held, stale = mergeLikeTheDashboard(held, pushedCall(t, out.Raw()))
 			behind = behind || stale
 		}
 		return behind
@@ -330,7 +331,10 @@ func TestATabThatMissedACallsClearingIsToldItIsBehind(t *testing.T) {
 	}
 	s.Ingest(livestate.Envelope{
 		ID: "checkpoint", Type: "agent_phase_completed", Timestamp: checkpoint.Add(time.Second).Format(time.RFC3339Nano),
-		Category: "task", Payload: map[string]any{"role": "Lead", "turn_id": "turn-1", "phase": "execute", "iteration": float64(0)},
+		Category: "task", Payload: map[string]any{
+			"agent_id": leadSeat, "role": "Lead", "turn_id": "turn-1", "phase": "execute",
+			"iteration": float64(0),
+		},
 	})
 	resumed := frames[2*len(frames)/3:]
 	s.Ingest(resumed[0])
@@ -362,7 +366,7 @@ func TestATabThatMissedACallsClearingIsToldItIsBehind(t *testing.T) {
 // wholeCall is the projection's call, as a snapshot carries it.
 func wholeCall(t *testing.T, s *stream.Service) map[string]any {
 	t.Helper()
-	raw, err := json.Marshal(s.State().AgentOverlay("Lead").LiveCall)
+	raw, err := json.Marshal(s.State().AgentOverlay(leadSeat).LiveCall)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +391,7 @@ func TestAPushAfterADroppedOneSaysWhatTheTabMissed(t *testing.T) {
 	for _, env := range frames[:3] {
 		s.Ingest(env)
 	}
-	before := pushedCall(t, mustEncode(t, lastAgents(t, drain(c))))
+	before := pushedCall(t, lastAgents(t, drain(c)).Raw())
 	held := before["versions"].(map[string]any)["narration"].(float64)
 
 	// The frame that commits the first round, whose push this tab never gets.
@@ -403,7 +407,7 @@ func TestAPushAfterADroppedOneSaysWhatTheTabMissed(t *testing.T) {
 	}
 	drain(c) // dropped
 	s.Ingest(frames[commit+1])
-	next := pushedCall(t, mustEncode(t, lastAgents(t, drain(c))))
+	next := pushedCall(t, lastAgents(t, drain(c)).Raw())
 	if _, carried := next["round_narration"]; carried {
 		t.Fatalf("the push after the commit carried the narration again; this case needs one that does not")
 	}
@@ -413,22 +417,13 @@ func TestAPushAfterADroppedOneSaysWhatTheTabMissed(t *testing.T) {
 	}
 }
 
-func lastAgents(t *testing.T, got []stream.Envelope) stream.Envelope {
+func lastAgents(t *testing.T, got []*stream.Frame) *stream.Frame {
 	t.Helper()
 	for i := len(got) - 1; i >= 0; i-- {
-		if got[i].Kind == stream.KindAgents {
+		if got[i].Kind() == stream.KindAgents {
 			return got[i]
 		}
 	}
 	t.Fatal("no agents push")
-	return stream.Envelope{}
-}
-
-func mustEncode(t *testing.T, env stream.Envelope) []byte {
-	t.Helper()
-	raw, err := stream.Encode(env)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return raw
+	return nil
 }

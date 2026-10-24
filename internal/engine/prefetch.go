@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
@@ -69,7 +70,6 @@ func (e *Engine) prefetchSources(company *Company) prefetch.Sources {
 		src.Episodes = learning.NewEpisodes(db)
 		src.Counterparties = learning.NewCounterparties(db)
 		src.Skills = learning.NewSkills(db)
-		src.Onboarding = learning.NewOnboarding(db)
 	}
 	// A nil *Registry would satisfy the interface and then be dereferenced,
 	// so the seam is left unset rather than filled with one — which renders
@@ -94,7 +94,7 @@ func (e *Engine) prefetchSources(company *Company) prefetch.Sources {
 // else a turn is built from: a prefetch resolved against a revision the turn
 // is not running would surface another company's memory.
 func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
-	task string, aux auxspend.Use,
+	task string, aux auxspend.Use, boundary provenance.Boundary,
 ) prefetch.Blocks {
 	seat := company.Org.AgentSeatByHandle(req.Handle)
 	if seat == nil {
@@ -137,6 +137,9 @@ func (e *Engine) prefetchFor(ctx context.Context, company *Company, req Request,
 		// see [prefetch.Blocks.ThreadContextAnswered] and
 		// workedthrough.go.
 		Message: triggerMessageOf(req.Ask()),
+		// THE SEGMENT'S FENCE TOKEN, which its tools fence with too: the
+		// thread is somebody else's words, handed over in the prompt.
+		Boundary: boundary,
 	}
 	// TIMED where it runs: the context assembly is the stretch between a
 	// turn announcing itself and its first phase opening, and nothing else
@@ -219,8 +222,6 @@ func (e *Engine) publishPrefetchSummary(ctx context.Context, seat *org.Role,
 		SynthesizedSkillsBytes: len(b.SynthesizedSkills),
 		EpisodeRecallHit:       b.EpisodeRecall != "",
 		EpisodeRecallBytes:     len(b.EpisodeRecall),
-		OnboardingHintHit:      b.OnboardingHint != "",
-		OnboardingHintBytes:    len(b.OnboardingHint),
 		PersonalMemoryHit:      b.PersonalMemory != "",
 		PersonalMemoryBytes:    len(b.PersonalMemory),
 		RelevantKnowledgeHit:   b.RelevantKnowledge != "",

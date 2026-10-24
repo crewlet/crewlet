@@ -30,10 +30,11 @@ import (
 // log through the estate's router like every other surface, so the node it
 // asks is whichever serves the operation.
 
-// Chart is the CURRENT epoch's organization, nil before a company: the one
-// function every surface that asks "who is this token's person" reads per
-// call, because an apply replaces it — the operator catalogue, the host's
-// Persons and the scheduler's org alike.
+// Chart is the CURRENT epoch's organization, nil before a company: a FUNCTION
+// a surface reads per call rather than a value it captures, because an apply
+// replaces the organization wholesale — the scheduler's org reads it so. Who a
+// person pushing to the code host is comes from the guard's own principal
+// (the identity directory's binding), never from this.
 func (e *Engine) Chart() *org.Organization {
 	if c := e.Company(); c != nil {
 		return c.Org
@@ -141,13 +142,6 @@ func (e *Engine) CodeUnserved() error {
 	return fmt.Errorf("%w (epoch %d)", ErrCodeApplying, p.target)
 }
 
-// boundSeat is the human seat an operator token is bound to by
-// `contact.crewlet_operator_id` on the current chart, "" for none — the host's
-// Persons, the same answer the operator surface gives about the same caller.
-func (e *Engine) boundSeat(operatorID string) string {
-	return operator.BoundSeat(e.Chart, e.LookupSecret, operatorID)
-}
-
 // auditGit records one push onto this node's own queue, through the operator
 // surface's audit — one construction of the record's envelope, whose source is
 // the operator's, and a publish that outlives the request.
@@ -209,7 +203,11 @@ func (e *Engine) gitHook() ([]string, error) {
 // this process, so a retried apply in the same process would otherwise find it
 // held by its own failed attempt: before Open the layout is released, after it
 // the cache is stopped.
-func (e *Engine) buildCodeHost(ctx context.Context, n *native, boot *config.Bootstrap) (codeHostParts, error) {
+//
+// nodeID is the core runtime's resolved id ([core.nodeID]), which the native
+// half no longer holds a copy of: every proposal the host makes names it as the
+// node that received the push ([host.Options.NodeID]).
+func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.Bootstrap) (codeHostParts, error) {
 	// 1. THE DIRECTORY, prepared BEFORE git's HOME exists, since it names it.
 	// Absolute: a store path written relative resolves against the working
 	// directory the store itself is opened from.
@@ -268,13 +266,15 @@ func (e *Engine) buildCodeHost(ctx context.Context, n *native, boot *config.Boot
 	}
 
 	// 7. THE HOST, over the engine's own seams: the router for the rows and
-	// the committer, the chart for a token's person, the operator audit for
-	// every push, and the current epoch's limits and retention.
+	// the committer, the operator audit for every push, and the current
+	// epoch's limits and retention. Who is pushing is the API guard's answer
+	// on each request, the seat the identity directory binds its credential
+	// to included, so the host is handed no chart of its own.
 	h, err := host.New(host.Options{
 		Cache: c, Git: pool, Estate: seam, Objects: objects,
-		Persons: e.boundSeat, Audit: e.auditGit,
+		Audit:  e.auditGit,
 		Limits: e.codeLimits, DeletedRetention: e.codeDeletedRetention,
-		NodeID: n.nodeID, Timing: host.Production, Metrics: e.metrics,
+		NodeID: nodeID, Timing: host.Production, Metrics: e.metrics,
 	})
 	if err != nil {
 		c.Stop(context.WithoutCancel(ctx))

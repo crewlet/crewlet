@@ -1,5 +1,5 @@
 /**
- * The screens, one chunk per workspace, loaded when they are first needed.
+ * The screens, one chunk per screen directory, loaded when they are first needed.
  *
  * # Why the screens are split at all
  *
@@ -8,19 +8,34 @@
  * cost: the PARSE was. Every screen, the org builder among them, was one entry
  * module a browser had to download, parse and evaluate before it could draw
  * the sidebar — about a megabyte of script for a reader who came to look at
- * one inbox. A chunk per workspace makes the first paint pay for the frame and
- * the one screen asked for, and the idle prefetch below means the second
- * workspace a reader opens is usually already in memory, so the round trip
+ * one inbox. A chunk per screen directory makes the first paint pay for the
+ * frame and the one screen asked for, and the idle prefetch below means the
+ * second place a reader opens is usually already in memory, so the round trip
  * the old comment worried about is spent while nobody is waiting on it.
  *
- * # One chunk per workspace, plus the org editor
+ * # One chunk per screen directory, decided by the SCREEN
  *
- * Each `routes/<workspace>/index.ts` is the whole of what this file imports
- * from that workspace, and it is imported ONLY here, by `import()` — a static
- * import of a workspace's module from the frame would pull it back into the
- * entry without a sound. `routes/org` is the one chunk that is not a
- * workspace: the builder is a section of Agents, and it is bigger than any
- * whole workspace, so it is its own (see `routes/org/OrgEdit.tsx`).
+ * Each `routes/<dir>/index.ts` is the whole of what this file imports from
+ * that directory, and it is imported ONLY here, by `import()`: a static
+ * import of one from the frame would pull it back into the entry without a
+ * sound. Which chunk draws a screen is [SCREEN_CHUNKS], keyed by the screen
+ * rather than by the sidebar row it is in, because the two are different
+ * questions: Company's rows draw screens from three directories (the
+ * Overview, Policies and Integrations are `routes/settings`, the Org chart and
+ * Schedules `routes/agents`, Budgets `routes/spend`), and a row that moves
+ * moves no code. `routes/org` is the builder, bigger than any other directory,
+ * so it is its own (see `routes/org/OrgEdit.tsx`). `routes/signin` is the
+ * screens drawn outside the frame, which a reader who is signed in never
+ * needs, so it is the one chunk the idle prefetch leaves alone ([CHUNKS]): a
+ * reader who needs it is already on it. Each kind's create page
+ * (`routes/artifacts/new/`) is a chunk of its own too, and neither is it
+ * prefetched: a reader who opens Artifacts to look never needs an editor.
+ *
+ * The command palette (`palette/Palette.tsx`) is the one chunk of the frame's
+ * own. It is a layer mounted only while open, as the New task sheet is, and
+ * the largest single piece of the frame, so the first paint does not carry it.
+ * Every screen opens it with a key, so it is the FIRST chunk the idle prefetch
+ * fetches, and by the time a reader presses ⌘K it is usually in memory.
  *
  * # A failed load is a ChunkLoadError, and it can be retried
  *
@@ -40,8 +55,9 @@
  */
 
 import { createElement, use, type ComponentType } from "react";
-import { WORKSPACES, type Workspace } from "./nav.ts";
-import { resolve, type Resolved } from "./routes.ts";
+import { NEW_KIND_TITLES } from "~/lib/artifacts/words.ts";
+import type { ArtifactKind } from "~/protocol/index.ts";
+import { resolve, type FramedScreen, type Resolved } from "./routes.ts";
 
 /**
  * How each chunk is fetched. The `import()` literals are what the bundler
@@ -56,28 +72,166 @@ const LOADERS = {
   org: () => import("~/routes/org/index.ts"),
   live: () => import("~/routes/live/index.ts"),
   knowledge: () => import("~/routes/knowledge/index.ts"),
+  artifacts: () => import("~/routes/artifacts/index.ts"),
   spend: () => import("~/routes/spend/index.ts"),
   settings: () => import("~/routes/settings/index.ts"),
-} satisfies Record<Workspace | "org", () => Promise<unknown>>;
+  account: () => import("~/routes/account/index.ts"),
+  signin: () => import("~/routes/signin/index.ts"),
+  "new-doc": () => import("~/routes/artifacts/new/DocCreate.tsx"),
+  "new-slides": () => import("~/routes/artifacts/new/SlidesCreate.tsx"),
+  "new-sheet": () => import("~/routes/artifacts/new/SheetCreate.tsx"),
+  "new-design": () => import("~/routes/artifacts/new/DesignCreate.tsx"),
+  "new-dashboard": () => import("~/routes/artifacts/new/DashboardCreate.tsx"),
+  "new-html": () => import("~/routes/artifacts/new/HtmlCreate.tsx"),
+  palette: () => import("./palette/Palette.tsx"),
+} satisfies Record<
+  ScreenDir | "org" | "signin" | NewArtifactChunk | "palette",
+  () => Promise<unknown>
+>;
 
-/** A chunk: a workspace, or the org editor. */
+/** A directory of framed screens under `routes/`, each one chunk. */
+type ScreenDir =
+  | "home"
+  | "inbox"
+  | "me"
+  | "work"
+  | "agents"
+  | "live"
+  | "knowledge"
+  | "artifacts"
+  | "spend"
+  | "settings"
+  | "account";
+
+/**
+ * A kind's create page, a chunk of its own: a doc's editor, a deck's composer
+ * and a design's canvas share nothing but their frame, and the gallery's
+ * reader should download none of them until they start one.
+ */
+type NewArtifactChunk = `new-${ArtifactKind}`;
+
+/** A chunk: a workspace, the org editor, the sign-in screens, a create page or the palette. */
 export type Chunk = keyof typeof LOADERS;
 
 /** What a chunk's `index.ts` exports. */
 export type ChunkModule<C extends Chunk> = Awaited<ReturnType<(typeof LOADERS)[C]>>;
 
-/** Every chunk, in the order the idle prefetch fetches them: the sidebar's. */
-export const CHUNKS: readonly Chunk[] = [...WORKSPACES.map((ws) => ws.key), "org"];
+/**
+ * The chunk each framed screen is drawn from. EXHAUSTIVE over the route
+ * table's screens, so a screen added to `routes.ts` and not placed here is a
+ * compile error rather than a page that never loads. A kind's create page is
+ * decided by its kind ([chunkOf]).
+ */
+const SCREEN_CHUNKS: Readonly<Record<FramedScreen["screen"], Chunk>> = {
+  home: "home",
+  inbox: "inbox",
+  me: "me",
+  overview: "settings",
+  policies: "settings",
+  "org-chart": "agents",
+  roster: "agents",
+  teams: "agents",
+  "org-edit": "org",
+  seat: "agents",
+  schedules: "agents",
+  integrations: "settings",
+  budgets: "spend",
+  "work-projects": "work",
+  "work-tasks": "work",
+  "work-views": "work",
+  "work-history": "work",
+  "work-search": "work",
+  project: "work",
+  item: "work",
+  knowledge: "knowledge",
+  container: "knowledge",
+  page: "knowledge",
+  "new-page": "knowledge",
+  skills: "knowledge",
+  diaries: "knowledge",
+  diary: "knowledge",
+  artifacts: "artifacts",
+  artifact: "artifacts",
+  "new-artifact": "artifacts",
+  live: "live",
+  turns: "live",
+  turn: "live",
+  runs: "live",
+  a2a: "live",
+  trace: "live",
+  events: "live",
+  event: "live",
+  models: "settings",
+  "mcp-tools": "settings",
+  secrets: "settings",
+  limits: "settings",
+  spend: "spend",
+  "spend-tasks": "spend",
+  people: "settings",
+  "service-accounts": "settings",
+  tokens: "settings",
+  "sign-in": "settings",
+  audit: "settings",
+  nodes: "settings",
+  config: "settings",
+  backups: "settings",
+  storage: "settings",
+  account: "account",
+};
+
+/**
+ * Every chunk the idle prefetch fetches, in the order it fetches them: the
+ * palette, then the sidebar's from the top. NOT `signin` or a create page;
+ * see the note above.
+ */
+export const CHUNKS: readonly Chunk[] = [
+  "palette",
+  "home",
+  "inbox",
+  "me",
+  "settings",
+  "agents",
+  "spend",
+  "work",
+  "knowledge",
+  "artifacts",
+  "live",
+  "account",
+  "org",
+];
+
+/**
+ * What a chunk is called in a sentence a reader sees: the places it draws,
+ * since a directory's name is nobody's word for anything.
+ */
+const CHUNK_LABELS: Readonly<Record<ScreenDir | "org" | "signin" | "palette", string>> = {
+  home: "Home",
+  inbox: "Inbox",
+  me: "My work",
+  work: "Work",
+  agents: "Org chart",
+  live: "Live",
+  knowledge: "Knowledge",
+  artifacts: "Artifacts",
+  spend: "Spend and Budgets",
+  settings: "Company and Settings",
+  account: "Account",
+  org: "Edit org",
+  signin: "sign-in",
+  palette: "Search",
+};
 
 /** What a chunk is called in a sentence a reader sees. */
 export function chunkLabel(chunk: Chunk): string {
-  if (chunk === "org") return "Edit org";
-  return WORKSPACES.find((ws) => ws.key === chunk)?.label ?? chunk;
+  if (chunk.startsWith("new-")) return NEW_KIND_TITLES[chunk.slice(4) as ArtifactKind];
+  return CHUNK_LABELS[chunk as keyof typeof CHUNK_LABELS];
 }
 
 /** Which chunk draws a resolved screen. */
 export function chunkOf(route: Resolved): Chunk {
-  return route.screen === "org-edit" ? "org" : route.workspace;
+  if (route.workspace === "") return "signin";
+  if (route.screen === "new-artifact" && route.kind) return `new-${route.kind}`;
+  return SCREEN_CHUNKS[route.screen];
 }
 
 /**
@@ -91,15 +245,18 @@ export function chunkOf(route: Resolved): Chunk {
 export class ChunkLoadError extends Error {
   override name = "ChunkLoadError";
   readonly chunk: Chunk;
-  /** What failed, naming the workspace: the fallback's heading. */
+  /** What failed, naming the places it draws: the fallback's heading. */
   readonly title: string;
   /** What to do about it: the fallback's sentence. */
   readonly advice: string;
   constructor(chunk: Chunk, cause: unknown) {
-    const title = `The ${chunkLabel(chunk)} screens could not be loaded`;
-    const advice =
-      "This page is probably from another engine version — the engine was upgraded " +
-      "since this tab opened — so reload it to get the current one.";
+    const title =
+      chunk === "palette"
+        ? `${chunkLabel(chunk)} could not be loaded`
+        : chunk.startsWith("new-")
+          ? `The ${chunkLabel(chunk)} page could not be loaded`
+          : `The ${chunkLabel(chunk)} screens could not be loaded`;
+    const advice = "The engine was updated. Reload to continue.";
     super(`${title}. ${advice}`, { cause });
     this.chunk = chunk;
     this.title = title;
@@ -107,18 +264,25 @@ export class ChunkLoadError extends Error {
   }
 }
 
-/** The loads in flight or settled. A rejected load is removed — see the file's doc. */
-const pending = new Map<Chunk, Promise<unknown>>();
-/** The chunks that arrived, so a screen whose code is in memory never suspends. */
-const loaded = new Map<Chunk, unknown>();
+/**
+ * A load as React's `use` reads it: a promise that marks itself once its chunk
+ * is in. React reads a thenable's `status` before it suspends, so one already
+ * marked `fulfilled` is answered at once, while one React has not seen is
+ * suspended on for a frame even when it has settled.
+ */
+type Load<T> = Promise<T> & { status?: "fulfilled"; value?: T };
+
+/** The loads in flight or settled. A rejected load is removed: see the file's doc. */
+const pending = new Map<Chunk, Load<unknown>>();
 
 /** Fetch a chunk, once; a failed fetch is forgotten, so the next ask retries. */
 export function loadChunk<C extends Chunk>(chunk: C): Promise<ChunkModule<C>> {
   let load = pending.get(chunk);
   if (!load) {
-    load = (overrides.get(chunk) ?? LOADERS[chunk])().then(
+    const started: Load<unknown> = (overrides.get(chunk) ?? LOADERS[chunk])().then(
       (module) => {
-        loaded.set(chunk, module);
+        started.status = "fulfilled";
+        started.value = module;
         return module;
       },
       (cause: unknown) => {
@@ -126,7 +290,8 @@ export function loadChunk<C extends Chunk>(chunk: C): Promise<ChunkModule<C>> {
         throw new ChunkLoadError(chunk, cause);
       },
     );
-    pending.set(chunk, load);
+    pending.set(chunk, started);
+    load = started;
   }
   return load as Promise<ChunkModule<C>>;
 }
@@ -139,14 +304,20 @@ export function loadChunk<C extends Chunk>(chunk: C): Promise<ChunkModule<C>> {
  * A CHUNK ALREADY IN MEMORY IS READ SYNCHRONOUSLY. `use` on a promise React
  * has not seen suspends once even when it has settled, so a screen whose chunk
  * the idle prefetch fetched a minute ago would still flash its skeleton for a
- * frame; the `loaded` map is what spares it.
+ * frame; the load marking itself fulfilled ([Load]) is what spares it.
+ *
+ * `use` IS CALLED ON EVERY RENDER. A component that suspended on it must call
+ * it again on the render that resumes, and a fast path that skipped it once
+ * the chunk was in (a map of arrived modules read before `use`) did exactly
+ * that: every screen that suspended logged React's "did not call use() when
+ * it finished" on the render that drew it.
  */
 export function lazyScreen<C extends Chunk, P extends object>(
   chunk: C,
   pick: (module: ChunkModule<C>) => ComponentType<P>,
 ): ComponentType<P> {
   function Lazy(props: P) {
-    const module = (loaded.get(chunk) as ChunkModule<C> | undefined) ?? use(loadChunk(chunk));
+    const module = use(loadChunk(chunk));
     return createElement(pick(module), props);
   }
   Lazy.displayName = `Lazy(${chunk})`;
@@ -244,5 +415,4 @@ export function overrideChunkForTest(chunk: Chunk, load: () => Promise<unknown>)
 /** For a suite: forget every chunk, so a load can be watched from the start. */
 export function resetChunksForTest(): void {
   pending.clear();
-  loaded.clear();
 }

@@ -463,12 +463,11 @@ func newConvergedWorld(
 	opts := github.Options{
 		Config: cfg, Org: convergedOrgChart(),
 		Value: resolveConfigValue,
-		// THE LOOP'S OWN SINK, wrapped rather than replaced. A node with
-		// no keyring gets provision.ReadOnly, and a converged pass must
-		// not reach it at all: a Record here is a webhook secret minted,
-		// which invalidates the key every other deployment of this
-		// company is verifying with.
-		Sink:        countingSink{TokenSink: provision.ReadOnly(), log: &world.routeLog},
+		// A SEALED STORE, counted. A converged pass must not write to it
+		// at all: a Record here is a webhook secret minted, which
+		// invalidates the key every other deployment of this company is
+		// verifying with.
+		Sink:        countingSink{TokenSink: newSealingSink(), log: &world.routeLog},
 		WebhookBase: convergedBase,
 		// NEVER TRUE. The loop never sets it, and true forces a delete
 		// and a create on every target — a converged pass that could not
@@ -521,7 +520,7 @@ func forgetApp(log *routeLog) func(context.Context, string) error {
 	}
 }
 
-// countingSink is the loop's read-only sink with every Record counted.
+// countingSink is a sink with every Record counted.
 //
 // The sink is as much a surface this suite counts writes at as GitHub is:
 // what it records is a credential, and one recorded on a converged world is a
@@ -532,31 +531,35 @@ type countingSink struct {
 	log *routeLog
 }
 
-// Mints forwards, for the reason engine's refreshingSink does: an embedded
-// interface contributes no method, so a wrapper that does not say this hides
-// a [provision.ReadOnly] inside and is answered CanMint TRUE.
-func (s countingSink) Mints() bool { return provision.CanMint(s.TokenSink) }
-
 func (s countingSink) Record(ctx context.Context, name, value string) error {
 	s.log.wrote("secret store: seal " + name)
 	return s.TokenSink.Record(ctx, name, value)
 }
 
-// sealingSink is a keyring that works, for the one case that has to reach
-// Record: [provision.ReadOnly] answers CanMint false and a pass now REPORTS
-// that rather than minting into it, so a counter wired behind one would never
-// see a seal again.
+// sealingSink is the deployment's sealed store, held in memory: what a pass
+// records it reads back, and nothing else.
 type sealingSink struct {
-	provision.TokenSink
 	mu   sync.Mutex
 	held map[string]string
 }
 
 func newSealingSink() *sealingSink {
-	return &sealingSink{TokenSink: provision.ReadOnly(), held: map[string]string{}}
+	return &sealingSink{held: map[string]string{}}
 }
 
-func (s *sealingSink) Mints() bool { return true }
+func (s *sealingSink) Discard(context.Context) error { return nil }
+func (s *sealingSink) Flush(context.Context) error   { return nil }
+func (s *sealingSink) Describe() string              { return "the sealed store" }
+func (s *sealingSink) NextStep() string              { return "nothing" }
+
+func (s *sealingSink) Forget(_ context.Context, names ...string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, name := range names {
+		delete(s.held, name)
+	}
+	return nil
+}
 
 func (s *sealingSink) Record(_ context.Context, name, value string) error {
 	s.mu.Lock()
@@ -772,7 +775,7 @@ func newOutstandingWorld(
 			},
 		},
 		Value:       resolveConfigValue,
-		Sink:        countingSink{TokenSink: provision.ReadOnly(), log: &world.routeLog},
+		Sink:        countingSink{TokenSink: newSealingSink(), log: &world.routeLog},
 		WebhookBase: convergedBase,
 	}
 	if withOrgToken {
@@ -944,11 +947,6 @@ func TestTheWriteCounterSeesASecretSealedWhenThereIsOneToSeal(t *testing.T) {
 	// one way into webhookSecret's minting arm that is not an operator
 	// asking for a rotation.
 	opts.Value = func(string) string { return "" }
-	// AND A KEYRING THAT WORKS. The loop's read-only sink now stops the
-	// mint before Record rather than failing at it, which is the whole
-	// point of the posture — so a counter behind one would never see a
-	// seal again and this clause would certify nothing.
-	opts.Sink = countingSink{TokenSink: newSealingSink(), log: &world.routeLog}
 
 	if _, err := github.Reconcile(t.Context(), opts); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -994,44 +992,6 @@ func TestASecondPassDoesNotMintOverASecretThisDeploymentAlreadySealed(t *testing
 		t.Error("the signing secret was rotated by a pass nobody asked to " +
 			"rotate anything, so GitHub now signs with a key this deployment " +
 			"does not hold")
-	}
-}
-
-// AND A NODE WITH NO KEYRING REPORTS RATHER THAN FAULTING.
-//
-// An error here is a fault the loop retries while telling an operator the
-// engine is working on it, which is the one thing that is certainly not
-// happening: no pass will ever seal anything until somebody sets
-// secrets.keys. It is reported against the field that fixes it, which is what
-// the setup screen joins on.
-func TestANodeWithNoKeyringReportsTheFieldThatFixesIt(t *testing.T) {
-	t.Parallel()
-	_, pem := testKey(t)
-	_, opts, _ := newConvergedWorld(t, t, pem, true)
-	opts.Value = func(string) string { return "" }
-
-	res, err := github.Reconcile(t.Context(), opts)
-	if err != nil {
-		t.Fatalf("a node with no keyring faulted: %v", err)
-	}
-	var found bool
-	for _, f := range res.Findings() {
-		if f.Subject == "integrations.github.webhook_secret" {
-			found = true
-			if f.Kind != integration.FindingIngressBlocked {
-				t.Errorf("reported as %s, want ingress_blocked: a webhook "+
-					"secret is not how this engine authenticates AT GitHub",
-					f.Kind)
-			}
-			if !strings.Contains(f.Detail, "secrets.keys") {
-				t.Errorf("the finding does not name the bootstrap field that "+
-					"fixes it:\n%s", f.Detail)
-			}
-		}
-	}
-	if !found {
-		t.Errorf("a pass that could seal nothing reported %v, none of it "+
-			"against the field an operator has to set", res.Findings())
 	}
 }
 

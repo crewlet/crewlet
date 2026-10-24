@@ -25,10 +25,11 @@ func TestARunningPublisherPublishesWhatArrivesAfterItsFirstFlush(t *testing.T) {
 	marks := &countedMarks{DB: own}
 	log := &loopback{t: t, into: own, node: "node-a"}
 	p, err := usage.NewPublisher(usage.PublisherDeps{
-		Store: marks, Log: log, NodeID: "node-a",
-		Zone:  func() *time.Location { return santiago },
-		Now:   func() time.Time { return at },
-		Every: 20 * time.Millisecond,
+		Store: marks, Log: log, Estate: own.Replicated(), NodeID: "node-a", Caught: caught,
+		Zone:        func() *time.Location { return santiago },
+		Now:         func() time.Time { return at },
+		Every:       20 * time.Millisecond,
+		FireHistory: fireHistory,
 	})
 	if err != nil {
 		t.Fatalf("build the publisher: %v", err)
@@ -59,9 +60,10 @@ func TestARunningPublisherPublishesWhatArrivesAfterItsFirstFlush(t *testing.T) {
 func TestANegativeCadenceIsRefused(t *testing.T) {
 	t.Parallel()
 	_, err := usage.NewPublisher(usage.PublisherDeps{
-		Store: &countedMarks{}, Log: &loopback{t: t}, NodeID: "node-a",
-		Zone:  func() *time.Location { return santiago },
-		Every: -time.Second,
+		Store: &countedMarks{}, Log: &loopback{t: t}, Estate: store.ReplicatedReader{}, NodeID: "node-a", Caught: caught,
+		Zone:        func() *time.Location { return santiago },
+		Every:       -time.Second,
+		FireHistory: fireHistory,
 	})
 	if err == nil || !strings.Contains(err.Error(), "negative") {
 		t.Fatalf("a negative cadence built a publisher (%v)", err)

@@ -36,7 +36,7 @@ const (
 	// [RefusalRefConflict]).
 	RefusalReservedRef Refusal = "reserved_ref"
 	// RefusalNotPermitted is a command the principal's grant on the
-	// repository does not cover ([Grant.RefRule], ADR-0040).
+	// repository does not cover ([Grant.RefRule], ADR-0054).
 	RefusalNotPermitted Refusal = "not_permitted"
 	// RefusalBadRef is not a ref.
 	RefusalBadRef Refusal = "bad_ref"

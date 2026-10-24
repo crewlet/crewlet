@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/learning"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -83,6 +84,52 @@ func TestTheCuratorStalesAnUnusedSkillOnItsOwn(t *testing.T) {
 	}
 }
 
+// A SEAT ON THE ROSTER IS COMPACTED OVER THE EPISODES FILED UNDER ITS HANDLE,
+// and announced under that handle.
+func TestASeatIsCompactedOverItsEpisodesAndAnnouncedByItsHandle(t *testing.T) {
+	t.Parallel()
+	life, eps, _ := lifecycle(t, learning.Options{
+		Threshold: 2, MinAge: time.Hour, MinClusterSize: 2,
+		JaccardThreshold: 0.5, BatchSize: 100,
+	})
+	for _, id := range []string{"a", "b", "c"} {
+		// ONE TOOL RUN, so the three fold into one cluster and the pass
+		// has something to do, not only to count.
+		turn := ep(id, "dev", base)
+		turn.ToolSequence = []string{"fetch", "build", "tag"}
+		mustAppend(t, eps, turn)
+	}
+	dev := &org.Role{Name: "Dev", DeclaredHandle: "dev"}
+
+	var seen announced
+	learning.NewBackground(learning.BackgroundOptions{
+		Passes: learning.BackgroundPasses{
+			Lifecycle:         life,
+			LifecycleInterval: time.Millisecond,
+		},
+		Seats:   func() []*org.Role { return []*org.Role{dev} },
+		Publish: seen.record,
+		Now:     func() time.Time { return base.Add(90 * 24 * time.Hour) },
+	}).Start(t.Context())
+
+	got := seen.awaitEvents(t, 2)
+	req, ok := got[0].(types.CompactionRequested)
+	if !ok {
+		t.Fatalf("first event = %T, want CompactionRequested", got[0])
+	}
+	if req.AgentHandle != "dev" || req.RawCount < 3 {
+		t.Errorf("request = %+v, want the seat, by its handle, due over the "+
+			"three episodes filed under it", req)
+	}
+	done, ok := got[1].(types.CompactionCompleted)
+	if !ok {
+		t.Fatalf("second event = %T, want CompactionCompleted", got[1])
+	}
+	if done.AgentHandle != "dev" || done.ClustersCompacted == 0 {
+		t.Errorf("completion = %+v, want the seat's cluster folded", done)
+	}
+}
+
 // A SEAT UNDER THRESHOLD IS NOT COMPACTED, and the count is what gates it:
 // the check is one indexed query and "not yet" is the overwhelmingly common
 // answer, so the pass must not run to discover it.
@@ -97,7 +144,7 @@ func TestASeatUnderThresholdIsNotCompacted(t *testing.T) {
 			Lifecycle:         life,
 			LifecycleInterval: time.Millisecond,
 		},
-		Seats:   func() []string { return []string{"dev"} },
+		Seats:   func() []*org.Role { return []*org.Role{{Name: "Dev"}} },
 		Publish: seen.record,
 		Now:     func() time.Time { return base.Add(time.Hour) },
 	}).Start(t.Context())
@@ -466,7 +513,7 @@ func TestTheRosterIsReadEveryTick(t *testing.T) {
 			Lifecycle:         life,
 			LifecycleInterval: time.Millisecond,
 		},
-		Seats: func() []string {
+		Seats: func() []*org.Role {
 			mu.Lock()
 			defer mu.Unlock()
 			asked++
@@ -543,7 +590,7 @@ func TestASeatOverThresholdIsCompactedAndAnnounced(t *testing.T) {
 			Lifecycle:         life,
 			LifecycleInterval: time.Millisecond,
 		},
-		Seats:   func() []string { return []string{"dev"} },
+		Seats:   func() []*org.Role { return []*org.Role{{Name: "Dev"}} },
 		Publish: seen.record,
 		Now:     func() time.Time { return base.Add(90 * 24 * time.Hour) },
 	}).Start(t.Context())

@@ -1,37 +1,31 @@
 /**
- * The figures beside Settings' sections, and the three answers they come from.
+ * The figures beside Settings' sections, and the two answers they come from.
  *
  * # Polled only while Settings is open
  *
- * `fleet`, `retention` and `integrations` are operator-only answers with no
- * push behind them, so a figure drawn from one is a poll. The frame is mounted
- * for the life of the tab and React will not let a hook be called
- * conditionally, so the hook runs on every screen — and a hook that polled
- * unconditionally would ask an operator's engine three questions on a timer
- * for the whole life of every tab, on screens that draw none of the answers,
- * and ask a reader without a credential three refusals on the same timer. So
- * each query is ENABLED only while the Settings column is on screen and the
- * reader holds an operator credential; everywhere else the hook asks nothing.
+ * `fleet` and `retention` are guarded answers with no push behind them, so a
+ * figure drawn from one is a poll. The frame is mounted for
+ * the life of the tab and React will not let a hook be called conditionally,
+ * so the hook runs on every screen — and a hook that polled unconditionally
+ * would ask the engine two questions on a timer for the whole life of every
+ * tab, on screens that draw none of the answers, and ask a reader without
+ * Admin two refusals on the same timer. So each query is ENABLED only while
+ * the Settings column is on screen and the section its figure is drawn beside
+ * is open to the reader (`nav.ts`'s `sectionOpen`: Nodes and Backups take
+ * Admin, which is the answers' own); everywhere else the hook asks nothing.
  *
  * # What each figure is
  *
- *  - **Integrations** — how many tools the engine's own roll-up says need a
- *    person (`tools[].state === "attention"`), as the row's ATTENTION pill:
- *    it is the one figure in this column that is something waiting on the
- *    reader, and it is a STATE rather than an unread count, so it wears the
- *    warning tone the approved Settings artboard draws it in (its "pill
- *    need") — never the accent the inbox's unread badge fills with. The
- *    roll-up is the engine's — `integration.Rollup` — so this counts the
- *    cards the screen draws amber, and never re-derives a phase.
  *  - **Nodes** — the nodes holding a presence lease, off the health push the
  *    frame already holds. The fleet answer adds the one thing health cannot
  *    say, because health is about THIS node: how many nodes are behind the
  *    epoch the fleet activated — the Nodes screen's own "Behind on config"
  *    count — drawn as a warning mark and said in the row's name.
  *  - **Configuration** — the epoch this node applied, in words.
- *  - **Backups & retention** — how many state-log domains have a trim that
- *    something is holding (`blocked_by`), drawn only when there is one: a
- *    held trim is a log that only grows.
+ *  - **Backups & retention**: how many alarms stand, the count the engine
+ *    panel shows and the section's own list leads with, drawn only when one
+ *    does. It counted the logs whose trim is held, which put a 4 here beside
+ *    the rail's 5 for one missing backup.
  *
  * ABSENT IS NOT ZERO throughout: an answer that has not arrived, or was
  * refused, draws no figure rather than a 0.
@@ -40,23 +34,15 @@
 import { type ReactNode } from "react";
 import { StatusDot } from "@crewlethq/ui";
 
-import type { IntegrationsAnswer } from "~/contract/integrations.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import type { FleetAnswer, RetentionReport } from "~/protocol/index.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { sectionOpen, workspaceRow } from "../nav.ts";
 
 /** One row's figure, in the column's own three shapes. */
 export interface SectionFigure {
   /** Something waiting on the reader, UNREAD — the accent's filled pill. */
   badge?: { value: number | string; label: string };
-  /**
-   * Something waiting on the reader that is a STATE — tools the engine says
-   * need a person — as the same pill in the warning tone. Colour is state and
-   * the accent is where the reader is, so a state in the accent's fill would
-   * read as a second unread count. The kit draws a figure's pill and speaks
-   * it; the frame repaints this one (`.section-row-attention`).
-   */
-  attention?: { value: number | string; label: string };
   /** How many of something the section holds — a quiet figure. */
   count?: { value: number | string; label: string; mark?: ReactNode };
 }
@@ -69,14 +55,11 @@ export interface SectionFigure {
  * at 15 s for that, and while a Nodes screen is open the column draws THAT
  * screen's reading (`usePublishFleet`) rather than polling beside it.
  * RETENTION at 60 s: a domain's floor moves on the trim's own tick, which is
- * minutes. INTEGRATIONS at 120 s: a tool moves into
- * `attention` when a reconcile pass says so, and passes follow who has to act
- * rather than a clock, so a faster poll only re-reads the same roll-up.
+ * minutes.
  */
 export const SETTINGS_POLL_MS = {
   fleet: 30_000,
   retention: 60_000,
-  integrations: 120_000,
 } as const;
 
 /** The figures, from whichever answers are in hand. Pure, so it is tested alone. */
@@ -84,24 +67,12 @@ export function settingsFigures({
   health,
   fleet,
   retention,
-  integrations,
 }: {
   health: EngineHealth | null | undefined;
   fleet: FleetAnswer | null | undefined;
   retention: RetentionReport | null | undefined;
-  integrations: IntegrationsAnswer | null | undefined;
 }): Record<string, SectionFigure> {
   const figures: Record<string, SectionFigure> = {};
-
-  const attention = integrations?.tools?.filter((t) => t.state === "attention").length ?? 0;
-  if (attention > 0) {
-    figures.integrations = {
-      attention: {
-        value: attention,
-        label: attention === 1 ? "needs attention" : "need attention",
-      },
-    };
-  }
 
   if (health?.nodes !== undefined) {
     // THE NODES SCREEN'S OWN "Behind on config" TILE, to the node: an applied
@@ -133,12 +104,15 @@ export function settingsFigures({
     };
   }
 
-  const held = retention?.domains.filter((d) => d.blocked_by).length ?? 0;
-  if (held > 0) {
+  // THE STANDING ALARMS, the same count the engine panel shows and the
+  // section's own list leads with. It counted the logs whose trim is held,
+  // which put a 4 here beside a 5 in the rail for one missing backup.
+  const alarms = retention?.alarms.length ?? 0;
+  if (alarms > 0) {
     figures.backups = {
       count: {
-        value: held,
-        label: held === 1 ? "domain whose trim is held" : "domains whose trim is held",
+        value: alarms,
+        label: alarms === 1 ? "standing alarm" : "standing alarms",
         mark: <StatusDot tone="warning" />,
       },
     };
@@ -148,42 +122,53 @@ export function settingsFigures({
 }
 
 /**
- * The column's figures, asking the three operator answers only while `here`
- * (the Settings column is drawn) and only for an operator. See the file doc.
+ * Whether a reader holding `grants` may open the Settings section `key` — by
+ * the one rule the column draws its locks by (`sectionOpen`), so a figure is
+ * never asked for beside a section the column locks: each of these answers is
+ * Admin's, and a refusal on a timer is a refusal nobody reads.
+ */
+function opens(key: string, grants: readonly string[]): boolean {
+  const section = workspaceRow("settings")?.sections.find((s) => s.key === key);
+  return section !== undefined && sectionOpen(section, grants);
+}
+
+/**
+ * The column's figures, asking each guarded answer only while `here` (the
+ * Settings column is drawn) and only of a reader its section opens for. See
+ * the file doc.
  */
 export function useSettingsSidebar({
   here,
-  operator,
+  grants,
   health,
   published,
 }: {
   here: boolean;
-  operator: boolean;
+  /** What the reader holds — the frame's `useHeldGrants`, empty while nobody has said. */
+  grants: readonly string[];
   health: EngineHealth | null | undefined;
   /** The `fleet` answer a screen on the page already polls — see
    *  `usePublishFleet`. While one is published the column asks nothing. */
   published: { answer: FleetAnswer | null } | null;
 }): Record<string, SectionFigure> {
-  const enabled = here && operator;
+  const nodes = here && opens("nodes", grants);
+  const backups = here && opens("backups", grants);
   const fleet = useQuery("fleet", undefined, {
-    enabled: enabled && published === null,
+    enabled: nodes && published === null,
     pollMs: SETTINGS_POLL_MS.fleet,
   });
   const retention = useQuery("retention", undefined, {
-    enabled,
+    enabled: backups,
     pollMs: SETTINGS_POLL_MS.retention,
   });
-  const integrations = useQuery("integrations", undefined, {
-    enabled,
-    pollMs: SETTINGS_POLL_MS.integrations,
-    // CONNECTING HAPPENS IN ANOTHER TAB — the vendor's own app — and coming
-    // back is the strongest sign the roll-up moved; see `useQuery`.
-    refetchOnFocus: true,
-  });
-  return settingsFigures({
+  const figures = settingsFigures({
     health,
-    fleet: !enabled ? null : published ? published.answer : fleet.data,
-    retention: enabled ? retention.data : null,
-    integrations: enabled ? integrations.data : null,
+    fleet: !nodes ? null : published ? published.answer : fleet.data,
+    retention: backups ? retention.data : null,
   });
+  // A LOCKED ROW DRAWS NO FIGURE, whatever answer it would come from: Nodes
+  // and Configuration read the health push every reader holds, and drew "1"
+  // and "epoch 1" beside their locks while the equally locked Backups row
+  // drew nothing. Every locked row is drawn the same way.
+  return Object.fromEntries(Object.entries(figures).filter(([key]) => opens(key, grants)));
 }

@@ -66,15 +66,16 @@ import (
 // set that was never asked. [admittedColumns] names the filters that decide
 // it, and why an open axis and the second axis are left as they are.
 //
-// # Two axes group on something other than their column
+// # The unit axes resolve the caller's value, not the rows'
 //
-// Every axis above is its column's own value. The two UNIT axes are not: a
-// unit answers to two spellings — its id and its name — and which one a row
-// holds is whatever was true when it was filed, so grouping on the string
-// drew one team as two columns. They group on the unit's KEY instead, folded
-// in SQL, and a caller's `group=` is folded the same way so either spelling
-// narrows to the one column. [unitAxis] is the expression and
-// [groupAxis.Canonical] is the caller's half.
+// The two UNIT axes group on their column like every other axis: every write
+// stores a unit's KEY ([ChartUnit.Key]), and a team keeps one key for its
+// whole life — internal/org holds a unit's key immutable, as it holds a
+// seat's handle — so the column already draws one team as one column.
+// What differs is the CALLER's half: a person or a model may name a unit by
+// its key or its name, in any case, so a `group=` / `subgroup=` value is
+// resolved through the chart to the key before it is compared. [unitAxis] is
+// the axis and [groupAxis.Canonical] is that resolution.
 
 // MaxGroups bounds how many columns one answer draws.
 //
@@ -186,7 +187,7 @@ type groupAxis struct {
 
 	// Labels is what a person reads where the stored value is not the
 	// word: a custom field's option ids, the relative due bands' slugs,
-	// and a unit key that is an id the chart chose to survive a rename.
+	// and a unit key, which is an id rather than the team's name.
 	// Absent on every axis that stores the word already, because a label
 	// derived where none is needed would be a second name for one value.
 	//
@@ -200,10 +201,10 @@ type groupAxis struct {
 	// Canonical spells a value the way [groupAxis.Expr] spells it.
 	//
 	// Only the unit axes have one, and it is what lets `group=` and
-	// `subgroup=` take either of a team's spellings: that expression folds
-	// every spelling onto the unit's KEY, so a narrowing written with the
-	// name would compare against a value the column never emits — a board
-	// with a column and a narrowing to it that answers nothing.
+	// `subgroup=` take any of a team's spellings: the column holds the
+	// unit's KEY, so a narrowing written with the name would compare
+	// against a value the column never holds — a board with a column and a
+	// narrowing to it that answers nothing.
 	//
 	// It is applied to a key that came from an ANSWER too, where it is a
 	// no-op: the key is already canonical and resolving one answers
@@ -693,69 +694,20 @@ func labelsOf(table map[string]string) func(string) string {
 	return func(key string) string { return table[key] }
 }
 
-// unitAxis is a unit column grouped on the TEAM rather than on the string.
+// unitAxis is a unit column, headed with each team's name.
 //
-// A unit answers to two spellings — its id and its name — and which one a row
-// holds is decided by when it was written, because a filed unit is a record of
-// what was true and nothing rewrites it. Grouped on the column, a company that
-// gave a team an id therefore drew that ONE team as TWO columns, both headed
-// with its name, splitting its counts down the middle: everything filed before
-// the id under one, everything after it under the other. That is the defect
-// the `unit=` filter was fixed for, one surface along.
-//
-// So the expression folds every spelling onto the unit's KEY, in SQL, with the
-// spellings BOUND rather than written into the statement — a unit's name is
-// prose a founder typed, and prose reaching a statement as text is how an
-// injection gets in. One arm per unit that carries an id, two bound values
-// each; the expression appears at most three times in one statement (the
-// SELECT, the narrowing and a subgroup's), so the driver's own variable
-// ceiling is reached at a few hundred id-carrying units — an order of
-// magnitude past any org chart, and a loud refusal rather than a wrong answer
-// if one ever arrives.
-//
-// A COMPANY THAT SET NO IDS GETS NO CASE AT ALL. Its every key IS its name, so
-// every arm would be `WHEN x THEN x` — which the ELSE already answers — and
-// the expression is the bare column it has always been. Same for a nil chart,
-// which is the honest state of a process holding no org.
-//
-// A STORED UNIT THE CHART NO LONGER HAS KEEPS ITS OWN COLUMN, through the
-// ELSE, under the literal the rows hold. It is a team that has left the chart:
-// folding it into anything would be inventing a home for work whose team is
-// gone, and [unitLabels] is what says so on the heading.
-//
-// A NAME THAT IS ANOTHER UNIT'S KEY GETS NO ARM, because an id wins that
-// ambiguity everywhere a reference is resolved (`org.Organization.UnitByRef`):
-// the rows holding that string are the OTHER unit's, filed under its key, and
-// an arm folding them onto this unit's would draw one team's work in another
-// team's column. A submitted document is refused for the pair, but a revision
-// applied under the runnable rules can carry it. Two units of one name are
-// the first unit's, as resolution answers too: the first arm a CASE matches
-// is the one it takes.
+// The rows hold the unit's KEY, which is what every write stores, so the
+// column groups on the team as it is. A STORED UNIT THE CHART NO LONGER HAS
+// keeps its own column under the literal the rows hold: it is a team that has
+// left the chart, and [unitLabels] is what says so on the heading.
 func unitAxis(column string, units Units) groupAxis {
 	axis := groupAxis{Expr: column, Unset: "(no unit)", Labels: unitLabels(units)}
 	if units == nil {
 		return axis
 	}
-	chart := units.AllUnits()
-	keys := make(map[string]bool, len(chart))
-	for _, unit := range chart {
-		keys[strings.TrimSpace(unit.Key)] = true
-	}
-	var arms strings.Builder
-	for _, unit := range chart {
-		key, name := strings.TrimSpace(unit.Key), strings.TrimSpace(unit.Name)
-		if key == "" || name == "" || key == name || keys[name] {
-			continue
-		}
-		arms.WriteString(" WHEN ? THEN ?")
-		axis.ExprArgs = append(axis.ExprArgs, name, key)
-	}
-	if arms.Len() > 0 {
-		axis.Expr = "CASE " + column + arms.String() + " ELSE " + column + " END"
-	}
-	// AND A CALLER'S OWN VALUE IS SPELLED THE WAY THE EXPRESSION SPELLS
-	// IT, so `group=Engineering` and `group=eng` narrow to the one column
-	// the board draws — see [groupAxis.Canonical].
+	// A CALLER'S OWN VALUE IS SPELLED THE WAY THE ROWS SPELL IT, so
+	// `group=Engineering` and `group=eng` narrow to the one column the board
+	// draws — see [groupAxis.Canonical].
 	axis.Canonical = func(key string) string {
 		if unit, found := units.ResolveUnit(key); found {
 			return unit.Key
@@ -769,13 +721,12 @@ func unitAxis(column string, units Units) groupAxis {
 //
 // A COLUMN HEADING IS READ BY A PERSON and what these rows hold is the unit's
 // KEY, which is an id on any company that gave its units one — a word chosen
-// to survive a rename precisely because nobody reads it. Without this, giving
-// a unit an id silently re-headed every board in the company with a slug.
+// to stay fixed precisely because nobody reads it. Without this, giving a unit
+// an id silently re-headed every board in the company with a slug.
 //
 // THE CHART IS ASKED PER KEY rather than enumerated, because the keys are
 // whatever the rows hold: a column may name a team the chart no longer has,
-// or a spelling it no longer uses, and both are legitimate on a record of
-// what was true.
+// which is legitimate on a record of what was true.
 //
 // AN EMPTY LABEL IS THE ANSWER FOR AN UNRESOLVED KEY, never a stand-in like
 // "(unknown)": a client renders the label or falls back to the key, so a

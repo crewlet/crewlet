@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/skillsync"
 	"github.com/crewlet/crewlet/internal/atlassian"
+	"github.com/crewlet/crewlet/internal/atlassianhost"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/knowledge"
@@ -58,6 +59,7 @@ func (e *Engine) startConfluence(c *Company, cfg *config.Confluence) (confluence
 		SiteURL: strings.TrimSpace(env.Value(cfg.SiteURL)),
 	}
 	base := resolved.BaseURL()
+	declared := c.Config.Integrations.Atlassian.Declared()
 	if base == "" {
 		// A reference that did not resolve: the validator already refused
 		// a block with neither literal, and starting anyway would point
@@ -76,7 +78,7 @@ func (e *Engine) startConfluence(c *Company, cfg *config.Confluence) (confluence
 	var orgClient *confluence.Client
 	if token := strings.TrimSpace(env.Value(cfg.Token)); token != "" {
 		client, err := confluence.NewClient(confluence.ClientOptions{
-			URL: base, Email: env.Value(cfg.Email), Token: token,
+			URL: base, Email: env.Value(cfg.Email), Token: token, Declared: declared,
 		})
 		if err != nil {
 			return confluenceParts{}, fmt.Errorf("engine: confluence: %w", err)
@@ -108,7 +110,7 @@ func (e *Engine) startConfluence(c *Company, cfg *config.Confluence) (confluence
 	}
 	if orgClient != nil {
 		parts.searcher = confluence.NewSearcher(confluence.SearcherOptions{
-			Org: orgClient, ForSeat: seatConfluenceClient(env, base),
+			Org: orgClient, ForSeat: seatConfluenceClient(env, base, declared),
 			SkillsSpace: skillsSpace, SiteURL: site,
 		})
 	}
@@ -205,7 +207,7 @@ func (e *Engine) reconcileConfluence(c *Company) {
 // search runs as this seat and Confluence's own ACLs bound it, so an
 // unscoped search is safe. A seat with no credential gets (nil, false) and
 // falls back to the org account, which may not search unscoped.
-func seatConfluenceClient(env *config.Resolver, base string) confluence.SeatClient {
+func seatConfluenceClient(env *config.Resolver, base string, declared atlassianhost.Deployment) confluence.SeatClient {
 	return func(seat *org.Role) (*confluence.Client, bool) {
 		if seat == nil || seat.IsHuman() {
 			return nil, false
@@ -221,7 +223,7 @@ func seatConfluenceClient(env *config.Resolver, base string) confluence.SeatClie
 			return nil, false
 		}
 		client, err := confluence.NewClient(confluence.ClientOptions{
-			URL: base, Email: cred.Email, Token: cred.Token,
+			URL: base, Email: cred.Email, Token: cred.Token, Declared: declared,
 		})
 		if err != nil {
 			log.Warn("confluence_seat_client_failed", "seat", seat.Handle(),
@@ -254,8 +256,8 @@ func confluencePrompt() notify.Prompt { return confluence.Prompt{} }
 // of this function: "what do we already know about this" must not depend on
 // which searcher was asked, so `knowledge.backend` picks one and config
 // refuses a company that configures two. The NATIVE one is answered first
-// because it is the default; a company on `backend: confluence` has no
-// native projector at all, so the branch is a nil check rather than a
+// because it is the default; a company on `backend: confluence` builds no
+// native searcher at all, so the branch is a nil check rather than a
 // preference.
 //
 // Nil means no backend is wired, and every consumer treats that as "search

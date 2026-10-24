@@ -18,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 	coordkv "github.com/crewlet/crewlet/internal/coord/kv"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
@@ -28,7 +30,6 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
 	qmem "github.com/crewlet/crewlet/internal/queue/memory"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -172,7 +173,7 @@ type fleet struct {
 
 	// attachHolds is every node's [node.Config.AttachHolds], for the cases
 	// about a seat a person paused. Set before any node starts.
-	attachHolds func(handle string) []string
+	attachHolds func(seat uuid.UUID) []string
 
 	// queues is each started node's own broker client, by node id: a pause
 	// hold lives on the client that took it.
@@ -198,7 +199,7 @@ func newFleet(t *testing.T, sub substrate, seats ...string) *fleet {
 func (f *fleet) seatList() []placement.Seat {
 	out := make([]placement.Seat, len(f.seats))
 	for i, h := range f.seats {
-		out[i] = placement.Seat{Handle: h, Placement: f.pinned[h]}
+		out[i] = placement.Seat{ID: seatID(h), Handle: h, Placement: f.pinned[h]}
 	}
 	return out
 }
@@ -271,7 +272,7 @@ func (f *fleet) ensureMailboxes() {
 	f.t.Helper()
 	q := f.mkQueue(f.t)
 	for _, h := range f.seats {
-		if _, err := q.EnsureSubscription(f.t.Context(), topics.AgentInbox(h), topics.AgentInboxGroup(h)); err != nil {
+		if _, err := q.EnsureSubscription(f.t.Context(), inbox(h), inboxGroup(h)); err != nil {
 			f.t.Fatalf("EnsureSubscription(%s): %v", h, err)
 		}
 	}
@@ -283,7 +284,7 @@ func (f *fleet) send(handle string, work ...string) {
 	for _, w := range work {
 		ev := events.New(trigger{Work: w}, events.TraceContext{})
 		ev.Payload = map[string]any{notify.PartitionField: "c/" + handle}
-		if err := q.Publish(f.t.Context(), topics.AgentInbox(handle), ev); err != nil {
+		if err := q.Publish(f.t.Context(), inbox(handle), ev); err != nil {
 			f.t.Fatalf("Publish(%s, %s): %v", handle, w, err)
 		}
 	}
@@ -702,7 +703,7 @@ func TestFleet(t *testing.T) {
 func (f *fleet) ownersSettled() []string {
 	var out []string
 	for _, h := range f.seats {
-		if l, err := f.backend.Get(f.t.Context(), coord.SeatResource(h)); err == nil && l != nil {
+		if l, err := f.backend.Get(f.t.Context(), coord.SeatResource(seatID(h))); err == nil && l != nil {
 			out = append(out, h)
 		}
 	}

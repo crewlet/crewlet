@@ -24,19 +24,20 @@
  * thousand pixels of scrolling before the next card.
  */
 
-import { Card, EmptyValue, Meter } from "@crewlethq/ui";
+import { BotGlyph } from "@crewlethq/icons/glyphs";
+import { Card, EmptyValue, Meter, TableEntityCell, TableNumberCell } from "@crewlethq/ui";
+import { plainSeat } from "~/app/frame/cells.tsx";
 import { href } from "~/app/router.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { NumberCell, TokenCell } from "~/app/frame/cells.tsx";
+
 import { peekHref, peekRow, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { fmtCount, fmtExact, plural } from "~/lib/format.ts";
-import { activityOf, ringOf, useSeatBadgeOf } from "~/lib/seats.ts";
+import { activityOf, statusOf, useSeatBadgeOf } from "~/lib/seats.ts";
 import { useAgents } from "~/lib/store-hooks.ts";
 import type { Window } from "~/lib/range.ts";
 import { isRange, windowParam } from "~/lib/range.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
-import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { useMemo } from "react";
 import type { AgentLine } from "./model.ts";
 
@@ -53,13 +54,12 @@ export function turnsLink(w: Window): { path: string; clamped: string | null } {
   const window = isRange(w) ? (clamp ? "30d" : w) : windowParam(w);
   return {
     path: href(["live", "turns"], { sort: "-tokens", window }),
-    clamped: clamp ? "the last 30 days — the turn list keeps no older" : null,
+    clamped: clamp ? "the last 30 days" : null,
   };
 }
 
 /** What a person's row says where a seat's counts its turns. */
-export const PERSON_TAKES_NO_TURNS =
-  "A person takes no turns — this is what the auxiliary model spent for them";
+export const PERSON_TAKES_NO_TURNS = "Auxiliary model spend for this person";
 
 export function ByAgent({
   lines,
@@ -78,7 +78,9 @@ export function ByAgent({
   const agents = useAgents();
   const { open } = usePeekControls();
   const rows = useMemo(() => [...lines], [lines]);
-  const byHandle = useMemo(() => new Map(agents.map((a) => [a.handle ?? "", a])), [agents]);
+  // EACH SEAT'S LIVE ROW BY ITS AGENT ID, the key the spend row carries too
+  // (`agentLines`).
+  const byAgent = useMemo(() => new Map(agents.map((a) => [a.agent_id, a])), [agents]);
   const top = Math.max(0, ...lines.map((l) => l.share));
   const turns = turnsLink(range);
   // WHETHER ANY SEAT'S DAY IS CAPPED — the column exists only if so.
@@ -94,15 +96,14 @@ export function ByAgent({
 
   return (
     <Card className="spend-card spend-agents" padding="none">
-      <div className="spend-card-head">
-        <h2 className="spend-title">By agent</h2>
-        <span className="spend-caption">
-          {words ? `${words} · ` : ""}
-          {capped
-            ? "budget is today\u2019s per-seat allowance"
-            : "no seat has a daily token ceiling"}
-        </span>
-      </div>
+      <Card.Header
+        icon={<BotGlyph size="sm" />}
+        subtitle={`${words ? `${words} · ` : ""}${
+          capped ? "budget is today\u2019s per-seat allowance" : "no seat has a daily token ceiling"
+        }`}
+      >
+        <Card.Title>By agent</Card.Title>
+      </Card.Header>
       <DataGrid
         name="agents"
         rows={loading && rows.length === 0 ? undefined : rows}
@@ -121,7 +122,7 @@ export function ByAgent({
             ? { title: "This window did not answer", hint: "The refusal above says why." }
             : {
                 title: "No agent spent tokens in this window",
-                hint: "A seat appears here once one of its turns makes a model call.",
+                hint: "Agents appear once they spend tokens.",
               }
         }
         columns={[
@@ -136,19 +137,8 @@ export function ByAgent({
             sortValue: (l) => badgeOf(l.row.handle || l.row.role).name,
             cell: (l) => {
               const badge = badgeOf(l.row.handle || l.row.role);
-              const ring = ringOf(activityOf(byHandle.get(l.row.handle)));
-              return (
-                <span className="cell-seat" title={badge.name}>
-                  <SeatAvatar
-                    name={badge.name}
-                    size="xs"
-                    kind={badge.kind === "human" ? "human" : "agent"}
-                    ring={ring}
-                    decorative
-                  />
-                  <span className="truncate">{badge.name}</span>
-                </span>
-              );
+              const status = statusOf(activityOf(byAgent.get(l.row.agent_id)));
+              return <TableEntityCell {...plainSeat({ ...badge, status })} />;
             },
           },
           {
@@ -165,7 +155,7 @@ export function ByAgent({
                 <EmptyValue label={PERSON_TAKES_NO_TURNS} />
               ) : (
                 <>
-                  <NumberCell value={l.row.turns} />
+                  <TableNumberCell value={l.row.turns} format={fmtCount} />
                   <PhoneUnit words={l.row.turns === 1 ? "turn" : "turns"} />
                 </>
               ),
@@ -177,7 +167,7 @@ export function ByAgent({
             width: "5.5rem",
             phoneLead: true,
             sortValue: (l) => l.row.total_tokens,
-            cell: (l) => <TokenCell value={l.row.total_tokens} />,
+            cell: (l) => <TableNumberCell value={l.row.total_tokens} format={fmtCount} />,
           },
           {
             key: "share",

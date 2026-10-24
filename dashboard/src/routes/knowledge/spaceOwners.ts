@@ -6,18 +6,19 @@
  *
  * A unit's `space:` is guarded (`internal/api/orgprojection_test.go`: "a
  * knowledge container key: where this unit's pages are written"), so the
- * anonymous org projection carries none of it and the answer comes from the
- * company document. Four different facts come out of trying to read it, and
- * each has its own sentence:
+ * overview's org projection carries none of it and the answer comes from the
+ * company document, which takes Admin. Four different facts come out
+ * of trying to read it, and each has its own sentence:
  *
  *  - `read`     — the document answered; an EMPTY list is then a real fact
  *                 about the company ("no unit names this space").
- *  - `no_token` — this browser holds no API token, so nothing was asked: the
- *                 refusal is known before the question.
- *  - `loading`  — a token is held and the read is in flight. Not "needs a
- *                 token": that sentence was drawn at an operator who HAS one
- *                 for as long as the read took.
- *  - `refused`  — the read answered with an error: the token did not open it.
+ *  - `no_grant` — the engine has said this reader does not hold Admin, so
+ *                 nothing was asked: the refusal is known before the
+ *                 question.
+ *  - `loading`  — the read is in flight, or the viewer has not answered yet.
+ *                 Not "needs Admin": that sentence was drawn at a reader who
+ *                 HOLDS it for as long as the read took.
+ *  - `refused`  — the read answered with an error: "Owner unknown".
  *
  * ONE HOOK for the tree's space rows and the container rail, because both
  * state the same fact about the same space and two derivations of it had
@@ -26,21 +27,24 @@
 
 import { useMemo } from "react";
 import { useQuery } from "~/lib/useQuery.ts";
-import { apiToken } from "~/protocol/authToken.ts";
-import { documentUnits } from "~/lib/seats.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { documentUnits, RUNTIME_GRANT } from "~/lib/seats.ts";
+import { holds } from "~/lib/access.ts";
 
 export type SpaceOwners =
-  | { state: "read"; units: { name: string; project?: string }[] }
-  | { state: "no_token" }
+  | { state: "read"; units: { id: string; name: string; project?: string }[] }
+  | { state: "no_grant" }
   | { state: "loading" }
   | { state: "refused" };
 
 /** A lookup from a space key to who files into it. */
 export function useSpaceOwners(options: { enabled?: boolean } = {}): (key: string) => SpaceOwners {
-  const token = apiToken() !== "";
-  const doc = useQuery("config", undefined, { enabled: token && (options.enabled ?? true) });
+  const viewer = useViewer();
+  const reads = holds(viewer.grants, RUNTIME_GRANT);
+  const refused = !viewer.loading && !reads;
+  const doc = useQuery("config", undefined, { enabled: reads && (options.enabled ?? true) });
   return useMemo(() => {
-    if (!token) return () => ({ state: "no_token" as const });
+    if (refused) return () => ({ state: "no_grant" as const });
     if (doc.error) return () => ({ state: "refused" as const });
     if (!doc.data) return () => ({ state: "loading" as const });
     const units = documentUnits(doc.data);
@@ -50,20 +54,20 @@ export function useSpaceOwners(options: { enabled?: boolean } = {}): (key: strin
       // in and a config file says whatever its author typed.
       units: units
         .filter((u) => (u.space ?? "").toUpperCase() === key.toUpperCase())
-        .map((u) => ({ name: u.name, project: u.project })),
+        .map((u) => ({ id: u.id ?? "", name: u.name, project: u.project })),
     });
-  }, [token, doc.data, doc.error]);
+  }, [refused, doc.data, doc.error]);
 }
 
 /** The one sentence that states `owners`, for a tooltip or a screen reader. */
 export function ownerSentence(owners: SpaceOwners): string {
   switch (owners.state) {
-    case "no_token":
-      return "Who files here needs an operator token to read";
+    case "no_grant":
+      return "Who files here needs Admin access to read";
     case "loading":
       return "Who files here is still being read";
     case "refused":
-      return "Who files here could not be read with this token";
+      return "Owner unknown";
     case "read": {
       if (owners.units.length === 0) return "No unit names this space in its space:";
       return owners.units

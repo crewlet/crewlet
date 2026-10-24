@@ -117,8 +117,9 @@ type chatServer struct {
 	// token, which is "cannot tell" rather than "this token is bad".
 	identityFails bool
 	// siteURL is what the server reports as its own address. Empty makes
-	// it echo the address it is actually served at, which is the healthy
-	// case; a value is the misconfiguration the doctor exists to find.
+	// it echo the address it is actually served at; a value is either the
+	// address people browse while the engine dials another — healthy — or
+	// a Site URL the doctor exists to find.
 	siteURL string
 	// refuseIdentity makes /users/me 401 for every token, which is what
 	// a revoked operator credential does.
@@ -1329,12 +1330,12 @@ func TestDepartedSeatsAreReportedInAStableOrder(t *testing.T) {
 }
 
 // A CANCELLED PASS RAISES RATHER THAN REPORTING HEALTH, on every shape of
-// run — including the two that answer from the arguments alone.
+// run — including the one that answers from the arguments alone.
 //
 // An error and an empty findings list are OPPOSITE claims to the reconcile
 // loop: one is a fault it retries, the other is a statement that the
-// integration is ready, which it trusts for a full settled interval. Both
-// early returns below decided without consulting the world, so a node
+// integration is ready, which it trusts for a full settled interval. The
+// empty plan's early return decided without consulting the world, so a node
 // shutting down mid-pass recorded Mattermost as healthy on its way out and
 // the next node to hold the duty believed it. The empty plan is not a corner
 // either: a company that enables the mattermost block before any seat carries
@@ -1352,10 +1353,6 @@ func TestACancelledPassIsAFaultOnEveryShapeOfRun(t *testing.T) {
 		"no seat carries a bot token, so the plan is empty": {
 			roles: []*org.Role{chatSeat("CEO", "written-out-by-hand", "leadership")},
 			sink:  newChatSink(),
-		},
-		"this node has no keyring": {
-			roles: []*org.Role{chatSeat("CEO", "${MM_TOKEN_CEO}", "leadership")},
-			sink:  provision.ReadOnly(),
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

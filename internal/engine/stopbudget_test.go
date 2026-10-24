@@ -242,6 +242,11 @@ func TestAStopOnAStreamThatWillNotAcknowledgeLeavesNothingHeld(t *testing.T) {
 	}
 	stream := &unacknowledgedLastRecords{Queue: broker}
 	back.Queue = stream
+	// THE MEMORY CHANGELOG RIDES THE COORDINATION CONNECTION, never the
+	// queue's, so its hold is put on that connection's client.
+	engine.WrapCoordinationJetStream(back, func(js natsjs.JetStream) natsjs.JetStream {
+		return heldMemory{JetStream: js, records: stream}
+	})
 	leases := &recordedReleases{coordBackend: back.Coord}
 	back.Coord = leases
 
@@ -292,7 +297,11 @@ func TestAStopOnAStreamThatWillNotAcknowledgeLeavesNothingHeld(t *testing.T) {
 			"stream's silence spent the time its give-back needed", live, err)
 	}
 	for _, handle := range []string{"ceo", "cto"} {
-		lease, err := back.Coord.Get(ctx, coord.SeatResource(handle))
+		id, ok := seatID(e, handle)
+		if !ok {
+			t.Fatalf("the premise: the running company has no seat %s", handle)
+		}
+		lease, err := back.Coord.Get(ctx, coord.SeatResource(id))
 		if err != nil {
 			t.Fatalf("read seat %s: %v", handle, err)
 		}
@@ -317,9 +326,13 @@ func TestAStopOnAStreamThatWillNotAcknowledgeLeavesNothingHeld(t *testing.T) {
 	}
 
 	for role, handle := range map[string]string{"CEO": "ceo", "CTO": "cto"} {
+		id, ok := seatID(e, handle)
+		if !ok {
+			t.Fatalf("the premise: the running company has no seat %s", handle)
+		}
 		began, ended, published := stream.terminated(role)
-		flushed, carried := stream.flushed(handle)
-		released, gaveBack := leases.released(coord.SeatResource(handle))
+		flushed, carried := stream.flushed(id.String())
+		released, gaveBack := leases.released(coord.SeatResource(id))
 		switch {
 		case !published:
 			t.Errorf("seat %s was released with no `agent_terminated` asked for", handle)
@@ -389,7 +402,7 @@ type unacknowledgedLastRecords struct {
 
 	terminating sync.Map // role name → time.Time its event was asked for
 	ended       sync.Map // role name → time.Time its event was over
-	flushing    sync.Map // seat handle → time.Time its memory was first published
+	flushing    sync.Map // seat id → time.Time its memory was first published
 }
 
 func (q *unacknowledgedLastRecords) Publish(ctx context.Context, subject string, ev *events.Event) error {
@@ -406,12 +419,6 @@ func (q *unacknowledgedLastRecords) Publish(ctx context.Context, subject string,
 		q.ended.Store(ev.Source, time.Now())
 	}
 	return errNoQuorum
-}
-
-// JetStream is the broker's own, but for a seat's memory publishes once the
-// stop has begun — what the release's last flush makes — which are held.
-func (q *unacknowledgedLastRecords) JetStream() natsjs.JetStream {
-	return heldMemory{JetStream: q.Queue.JetStream(), records: q}
 }
 
 // stopping is whether the engine's stop has begun.
@@ -431,18 +438,19 @@ func (q *unacknowledgedLastRecords) terminated(role string) (began, ended time.T
 	return b.(time.Time), e.(time.Time), true
 }
 
-// flushed is when handle's memory was first published once the stop began, if
-// it was.
-func (q *unacknowledgedLastRecords) flushed(handle string) (time.Time, bool) {
-	at, ok := q.flushing.Load(handle)
+// flushed is when the seat's memory was first published once the stop began,
+// if it was — by the seat's id, which its changelog subjects are named by.
+func (q *unacknowledgedLastRecords) flushed(seat string) (time.Time, bool) {
+	at, ok := q.flushing.Load(seat)
 	if !ok {
 		return time.Time{}, false
 	}
 	return at.(time.Time), true
 }
 
-// heldMemory is a JetStream context whose publishes of a seat's memory are
-// acknowledged only after [teardownHold] once the stop has begun.
+// heldMemory is the coordination connection's JetStream client, whose
+// publishes of a seat's memory are acknowledged only after [teardownHold] once
+// the stop has begun.
 type heldMemory struct {
 	natsjs.JetStream
 	records *unacknowledgedLastRecords
@@ -452,8 +460,8 @@ func (j heldMemory) Publish(ctx context.Context, subject string, data []byte,
 	opts ...natsjs.PublishOpt) (*natsjs.PubAck, error) {
 	rest, memory := strings.CutPrefix(subject, topics.MemoryPrefix)
 	if memory && j.records.stopping() {
-		handle, _, _ := strings.Cut(rest, ".")
-		j.records.flushing.LoadOrStore(handle, time.Now())
+		seat, _, _ := strings.Cut(rest, ".")
+		j.records.flushing.LoadOrStore(seat, time.Now())
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()

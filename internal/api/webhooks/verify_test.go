@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/gitlab"
 )
 
@@ -201,8 +203,12 @@ func TestGitLabDecodesAWhsecSecret(t *testing.T) {
 // indistinguishable from an attack, with nothing naming the encoding.
 //
 // 503 rather than 401 is the point: the sender's request was fine, and what
-// is wrong is on this side. That is the same answer a route with no secret
-// at all gives, because it is the same situation — this node cannot verify.
+// is wrong is on this side. That is the same STATUS a route with no secret at
+// all gives, because it is the same situation — this node cannot verify — and
+// NOT the same code: it answered `no_webhook_secret` over a secret the
+// operator could see configured, which sent them looking for a value that was
+// already there. `unusable_webhook_secret` says the one they have is the
+// problem.
 func TestAMalformedSigningSecretIsReportedNotUsedVerbatim(t *testing.T) {
 	t.Parallel()
 	for _, bad := range []string{
@@ -213,16 +219,24 @@ func TestAMalformedSigningSecretIsReportedNotUsedVerbatim(t *testing.T) {
 		e := newEdge(t)
 		e.secrets.GitLab = bad
 
-		got := e.post(t, "/webhooks/gitlab", []byte(`{"object_kind":"issue"}`),
+		res := e.post(t, "/webhooks/gitlab", []byte(`{"object_kind":"issue"}`),
 			map[string]string{
 				"webhook-id":        "msg_1",
 				"webhook-timestamp": strconv.FormatInt(pinned.Unix(), 10),
 				"webhook-signature": "v1,bm90LWEtc2lnbmF0dXJl",
 				"X-Gitlab-Event":    "Issue Hook",
-			}).Code
-		if got != http.StatusServiceUnavailable {
+			})
+		if res.Code != http.StatusServiceUnavailable {
 			t.Errorf("secret %q got %d, want 503 — this node cannot verify, "+
-				"which is not the sender's fault", bad, got)
+				"which is not the sender's fault", bad, res.Code)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if body["error"] != string(httpjson.CodeUnusableWebhookSecret) {
+			t.Errorf("secret %q answered %v, want %s: the secret is configured and "+
+				"unusable, not absent", bad, body["error"], httpjson.CodeUnusableWebhookSecret)
 		}
 	}
 }

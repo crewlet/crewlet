@@ -21,10 +21,11 @@ and it deliberately follows the same doctrine one scope wider.
 **Not a transcript replay.** The engine can already round-trip a whole LLM
 conversation — the detached run's `execute_state` persists the full message
 list, each assistant turn kept as the vendor's own content blocks (signed
-thinking included, in the order the model wrote them) beside the backend and
-model that wrote it and a digest of the tools its reasoning was written under,
-and splices it back into a running loop, which replays those turns
-[exactly as they were written](turn-engine.md#the-conversation-only-grows).
+thinking included, in the order the model wrote them) or an OpenAI-wire host's
+own reasoning fields, beside the backend and model that wrote it and a digest
+of what its reasoning is bound to (the tools it was written under, or the
+endpoint that wrote it), and splices it back into a running loop, which replays
+those turns [exactly as they were written](turn-engine.md#the-conversation-only-grows).
 That is right for a turn *parked* on a question whose dangling tool call
 is waiting for one answer. It is wrong here: a conversation's next turn
 arrives against a thread that has **moved**, and replaying raw prior context
@@ -172,7 +173,10 @@ off the one that wrote it, and `entry_id` says nothing about what a row
 
 `conversation_key` holds the **conversation identity**: the `{source}:{local}`
 grammar of [the event system](event-system.md#inbox-batching--coalescing) —
-`jira:POC-7`, `slack:C9:1718.001`, `github:acme/api#42`. It is the durable
+`jira:POC-7`, `slack:C9:1718.001`, `github:acme/api#42`, and `work:task:<id>`
+for a task in the engine's own tracker, which is named by its id because its key
+is not one task for ever: two tasks can hold one key, and a move re-keys a task
+without ending its thread. It is the durable
 thread, NOT the partition key the seat's inbox coalesces on. The two are the
 same string for every source but chat, and for chat they differ on exactly one
 surface: **a direct message is one conversation however it is threaded**, so it

@@ -55,9 +55,12 @@
 // The rows a record produces, the record's operation id, and the checkpoint
 // that covers it commit in ONE transaction. The acknowledgement is OUTSIDE
 // it, because the store may re-run a transaction's body and a publish inside
-// one would happen twice. Two properties follow: a node can only be
-// BEHIND, never inconsistent; and a transaction ends at a RECORD boundary,
-// never inside one.
+// one would happen twice. The same holds for everything the body SAYS rather
+// than writes — a warning, a count of records retained or gated — so the body
+// notes what it saw, resets the notes with its tally on every attempt, and
+// the loop announces them once the commit lands. Two properties follow: a
+// node can only be BEHIND, never inconsistent; and a transaction ends at a
+// RECORD boundary, never inside one.
 //
 // The shape this must not copy is the one this framework replaced, and it was
 // correct for its own estate. internal/projection — deleted by node migration
@@ -122,7 +125,11 @@
 //
 // So the ledger keeps a WATERMARK, beside it in the same file: the instant
 // before which it may have lost rows ([Rows.LostBefore], ledgerloss.go), moved
-// only forward, by the sweep that loses them and in the same transaction.
+// only forward, by the sweep that loses them and in the same transaction —
+// and, for a subject kind a domain sweeps sooner than the rest
+// ([OpsHorizon.Kinds]), that kind's own, moved by that kind's own sweep, so an
+// hourly sweep of sessions never reads as the whole ledger losing everything
+// older than an hour.
 // Before a decision is published the publisher asks whether the ledger can
 // VOUCH for the operation (Publisher.vouches): it cannot for one minted before
 // the watermark whose row it does not hold, and such a write is answered
@@ -134,7 +141,7 @@
 // [Unavailable]) stands without it. The resolution of a lost acknowledgement
 // asks it too.
 //
-// THE LEDGER TRAVELS INSIDE A SNAPSHOT, and so does its watermark
+// THE LEDGER TRAVELS INSIDE A SNAPSHOT, and so do its watermarks
 // ([Domain.OpsTable]). That is what keeps an adoption from costing anything:
 // the adopter holds a row for every operation its donor applied, so a retry of
 // one is answered from it, and an operation neither holds never applied — so a
@@ -160,6 +167,19 @@
 // attempt past it rebases, records the instant for the fleet and is judged at
 // its own clock rather than an earlier attempt's is ADR-0029.
 //
+// # Every record is SIGNED, and no domain is handed an unverified byte
+//
+// This is ADR-0031. The broker has no authentication of its own and a record
+// is what the next node APPLIES, so the framework frames and signs on the way
+// to the appender and verifies before any domain decodes. The key is Tier A's
+// keyring (ADR-0011), and a node with no keyring refuses to start.
+//
+// The rule is stated for READERS rather than for appliers, and the clause
+// earns its place: the applier is not the only one. The change feed is a
+// second consumer over the same bytes, and what travels onward from either is
+// the BODY. [Verifier.Open] is that one reading; `signature.go` is where the
+// whole argument lives, including why the answer is three-valued.
+//
 // # A record this build cannot decode is RETAINED, with one exception
 //
 // It is kept at its position, never skipped and never stopped on, and
@@ -171,7 +191,7 @@
 // The exception is a record that INSTALLS AN APPLY GATE — a rule under which
 // a durable record produces no rows on ANY node. That is a STOP: the applier
 // halts, health goes false immediately, and the node takes its copy of THAT
-// DOMAIN out of service (ADR-0031) — that domain's operations go to another
+// DOMAIN out of service (ADR-0045) — that domain's operations go to another
 // data node that can decode it, and its seats stay. A deferred gate does not
 // postpone one record's effect on one node; it silently licenses every record
 // above it.
@@ -187,8 +207,16 @@
 // level, and a node whose copy of one of them is out of service routes its
 // seats through its peers. Whether a copy is judged is never declared, because
 // a domain allowed to opt out is a domain whose wrong copy is served for ever.
-// This is ADR-0031; the engine computes the verdict per domain and the
+// This is ADR-0045; the engine computes the verdict per domain and the
 // estate's router asks it of each operation's own domain.
+//
+// The consequence every reader of an ABSENCE inherits: the checkpoint moves
+// past a retained record, so "this node has consumed the log through here" is
+// never "every record through here wrote its rows here". A reader that decides
+// from a row being missing — nobody owns this key, this session has ended —
+// asks [PrefixIn] for the prefix its own snapshot has APPLIED and [DeferredIn]
+// whether a retained record is about what it is reading, both inside the
+// transaction that reads the rows (`prefix.go`).
 //
 // # Retention rests on the ENVELOPE, so a writer can ask who reads what
 //
@@ -352,7 +380,7 @@
 // Below the floor an anchor names a record the log no longer holds, so all it
 // can do is send its subject's next write to be refused before the
 // discriminator takes the zero path — and kept, the table grows by every
-// subject the log ever carried. The trim removes them (ADR-0032): after each
+// subject the log ever carried. The trim removes them (ADR-0046): after each
 // tick's purge it appends a framework [TrimmedKind] record naming the log's
 // first surviving sequence ([PlanSweep], [SweepPlan.Sweep]), and every node's
 // applier removes that log's anchors below it in the transaction that applies
@@ -399,7 +427,7 @@
 // above is in one space again. A generation is per LOG for exactly this
 // reason: it is a coordinate in one stream's number space, and moving another
 // domain's log would key it to a stream it never read. WHICH instant
-// identifies a stream is ADR-0035: the one its creator stamped into its
+// identifies a stream is ADR-0049: the one its creator stamped into its
 // configuration ([CreatedAtKey]), which a snapshot restore keeps and the
 // broker's own does not, read by every consumer through [StreamCreatedAt] and
 // by nothing else.
@@ -538,7 +566,8 @@
 // gate a write passes:
 //
 //   - A publisher exists only on a node with the `data` role. Such a node holds
-//     the replicated estate and runs every log into it; a node without `data`
+//     the replicated estate and runs every log into it, the identity estate's
+//     included, from boot, company or none; a node without `data`
 //     holds no estate and builds no publisher, so it has no write to decide —
 //     its tools reach the estate through a data node that does.
 //   - Every live data node is in every log's counted set ([CountedSet]): by
@@ -583,6 +612,19 @@
 // it is carried out: an alarm never invents a number, it fires at the one some
 // OTHER decision already made — the grace that takes a copy out of service,
 // the grace that stops a node serving a copy it cannot decode, the budget a
-// caller was promised — and ONE evaluation feeds every surface, so a gauge, a
-// log line and a screen cannot disagree about whether something is wrong.
+// caller was promised, the replay window an operator set a log's ceiling to
+// hold — and ONE evaluation feeds every surface, so a gauge, a log line and a
+// screen cannot disagree about whether something is wrong. A condition that
+// is a property of ONE LOG — its headroom, its ceiling against its window, a
+// blocked trim, a record held past the deferral grace, a floor this node
+// cannot read, a read rate past its census — is evaluated once per log
+// ([Report]), because its consequence and its remedy are that log's: the
+// grace takes a node's copy out of service for one log and nothing for
+// another, and a node behind two re-anchors needs two. The kind is still ONE
+// ALARM, listing every log it stands on with that log's own measurement
+// ([Alarm.Domains]), because the count, the gauge and the screen read one
+// cause on four logs as one problem; and each log's onset and clearing is
+// still its own pair of log lines ([Tracker]), since a log joining a kind that
+// is already up, and one leaving it, are things an operator has to be told
+// started and ended.
 package statelog

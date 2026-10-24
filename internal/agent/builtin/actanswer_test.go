@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -27,9 +27,10 @@ import (
 // the answer. A tool that stated them only per record handed the act
 // transport nothing, and it reported `applied` at no position over records
 // whose outcome may have been `unknown`. And both retry an `unknown` write
-// under the same operation — the request id the dashboard sends again, the
-// `op_id` an assistant brings back — which is one write only if every
-// operation the call derives is a step of that one.
+// under the same identity — the `Idempotency-Key` the dashboard sends again,
+// carried on the actor as the request's key, the `op_id` an assistant brings
+// back — which is one write only if every operation the call derives is
+// derived from it.
 //
 // So these walk EVERY write the catalogue serves rather than the ones
 // somebody remembered: a tool added without an entry in [everyWriteCall]
@@ -104,13 +105,13 @@ func TestARetriedOperatorWriteDerivesTheSameOperations(t *testing.T) {
 				t.Fatalf("%s reached no writer at all, so this case certifies nothing", name)
 			}
 			if !slices.Equal(first, retry) {
-				t.Errorf("%s derived %v and then, retried under the same request "+
-					"id, %v — every operation that differs is written twice",
+				t.Errorf("%s derived %v and then, retried under the same "+
+					"Idempotency-Key, %v — every operation that differs is written twice",
 					name, first, retry)
 			}
 			for _, op := range other {
 				if slices.Contains(first, op) {
-					t.Errorf("%s wrote %q under two different request ids — the "+
+					t.Errorf("%s wrote %q under two different Idempotency-Keys — the "+
 						"second gesture is collapsed into the first and answered "+
 						"`applied` without landing", name, op)
 				}
@@ -119,49 +120,11 @@ func TestARetriedOperatorWriteDerivesTheSameOperations(t *testing.T) {
 	}
 }
 
-// A REQUEST'S OPERATION FINISHES ONLY ITS OWN CALL, on every write — the
-// page tools included, which take no `op_id` and so meet only the
-// transport's. Sent under an operation the transport derived for another
-// call (here: the same tool with one more argument), the write is refused
-// before anything reaches a writer, rather than filing its item, its page or
-// its comment under ids the other call derives.
-func TestARequestsOperationFinishesOnlyItsOwnCall(t *testing.T) {
-	t.Parallel()
-	for name, args := range everyWriteCall {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			w := newLedgerFake(statelog.OutcomeApplied)
-			tool := writeSurface(w)[name]
-			other := maps.Clone(args)
-			other["and_another"] = "thing"
-			op, err := builtin.RequestOperation("ops", request(55), name, other)
-			if err != nil {
-				t.Fatalf("RequestOperation: %v", err)
-			}
-			got, err := tool.Call(withOperation(t.Context(), op), args)
-			if err != nil {
-				t.Fatalf("call: %v", err)
-			}
-			if !got.Failed || got.Refusal != tools.RefusalInvalid ||
-				!strings.Contains(got.Output, "derived for another call") {
-				t.Errorf("%s under another call's operation answered %+v, want "+
-					"the refusal naming it", name, got)
-			}
-			w.mu.Lock()
-			defer w.mu.Unlock()
-			if w.calls != 0 {
-				t.Errorf("%s wrote %d records under another call's operation: %v",
-					name, w.calls, w.ops)
-			}
-		})
-	}
-}
-
 // AND ITS ANSWER NAMES THE REQUEST, NEVER AN `op_id`. A caller whose
-// transport named the operation makes the call again by repeating its
-// request, and an `op_id` beside one is refused — so a receipt carrying one
-// hands it an instruction it cannot follow, and an `unknown` that says "make
-// the same call with `op_id` …" sends it to a refusal.
+// transport keyed the request makes the call again by repeating the request
+// under its key, and an `op_id` beside one is refused — so a receipt carrying
+// one hands it an instruction it cannot follow, and an `unknown` that says
+// "make the same call with `op_id` …" sends it to a refusal.
 func TestARequestsAnswerNamesTheRequestNotAnOpID(t *testing.T) {
 	t.Parallel()
 	for name, args := range everyWriteCall {
@@ -181,7 +144,8 @@ func TestARequestsAnswerNamesTheRequestNotAnOpID(t *testing.T) {
 			if err != nil {
 				t.Fatalf("call: %v", err)
 			}
-			if !got.Failed || got.Refusal != tools.RefusalUnavailable || !got.Unknown {
+			if !got.Failed || tools.RefusalOf(got) != tools.RefusalUnavailable ||
+				!tools.UnknownOf(got) {
 				t.Fatalf("%s with its write unknown answered %+v, want the "+
 					"failed unknown", name, got)
 			}
@@ -203,8 +167,8 @@ func TestARequestsAnswerNamesTheRequestNotAnOpID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("call: %v", err)
 	}
-	if want := "send the same update_work_item request again — the same " +
-		"request id"; !strings.Contains(strings.ToLower(got.Output), want) {
+	if want := "send the same update_work_item request again — under the " +
+		"same idempotency-key"; !strings.Contains(strings.ToLower(got.Output), want) {
 		t.Errorf("an unknown update under a request does not say %q: %s",
 			want, got.Output)
 	}
@@ -257,8 +221,8 @@ func TestATwoRecordWriteWithAnUnknownRecordIsUnknown(t *testing.T) {
 				if err != nil {
 					t.Fatalf("call: %v", err)
 				}
-				if !got.Failed || got.Refusal != tools.RefusalUnavailable || !got.Unknown ||
-					!strings.Contains(got.Output, "is unknown") {
+				if !got.Failed || tools.RefusalOf(got) != tools.RefusalUnavailable ||
+					!tools.UnknownOf(got) || !strings.Contains(got.Output, "is unknown") {
 					t.Fatalf("%s with %s record unknown answered %+v, want the "+
 						"failed unknown", name, which, got)
 				}
@@ -296,7 +260,7 @@ func TestARefusedSecondRecordReportsTheFirstLanded(t *testing.T) {
 			if err != nil {
 				t.Fatalf("call: %v", err)
 			}
-			if !got.Failed || got.Refusal != tools.RefusalConflict {
+			if !got.Failed || tools.RefusalOf(got) != tools.RefusalConflict {
 				t.Fatalf("%s answered %+v, want the second record's conflict", name, got)
 			}
 			if !strings.Contains(got.Output, landed) || !strings.Contains(got.Output, "CREWLET_TRACKER_LOG@1:1") {
@@ -309,29 +273,31 @@ func TestARefusedSecondRecordReportsTheFirstLanded(t *testing.T) {
 
 // ---- the surface ------------------------------------------------------- //
 
-// request is the nth request id a test sends: a UUIDv7, as the act transport
-// requires, since the operation it names carries the request's own instant.
+// request is the nth request key a test sends: an operation id in the
+// engine's grammar, as internal/api/opkey holds every `Idempotency-Key` to,
+// since every id derived from it carries its instant.
 func request(n int) string {
 	return fmt.Sprintf("0192a1b2-c3d4-7e5f-8a6b-%012d", n)
 }
 
-type operationCtx struct{}
+type requestKeyCtx struct{}
 
-// withOperation is ctx carrying the operation a transport named for one call,
-// as the act transport carries it.
-func withOperation(ctx context.Context, op string) context.Context {
-	return context.WithValue(ctx, operationCtx{}, op)
+// withRequestKey is ctx carrying the key a transport named one request by —
+// what a keyed surface puts on the actors it hands the tools.
+func withRequestKey(ctx context.Context, key string) context.Context {
+	return context.WithValue(ctx, requestKeyCtx{}, key)
 }
 
-// operationOf reads the operation [withOperation] stored, or "".
-func operationOf(ctx context.Context) string {
-	op, _ := ctx.Value(operationCtx{}).(string)
-	return op
+// requestKeyOf reads the key [withRequestKey] stored, or "".
+func requestKeyOf(ctx context.Context) string {
+	key, _ := ctx.Value(requestKeyCtx{}).(string)
+	return key
 }
 
 // writeSurface is the operator catalogue's writes over one recording fake,
-// with the operator actor carrying the operation the context names — the
-// shape the operator surface builds for the act transport.
+// with the actors carrying the request's key the context names — the shape a
+// keyed surface builds: the tracker's as [builtin.Actor.WorkKey] with its
+// instant, the knowledge base's as [pages.Actor.OpKey].
 func writeSurface(w *ledgerFake) map[string]tools.Callable {
 	trk := newFakeTracker()
 	trk.tasks["ENG-5"] = tracker.TaskDetail{
@@ -357,17 +323,20 @@ func writeSurface(w *ledgerFake) map[string]tools.Callable {
 			Placer:          func(builtin.Actor) builtin.WorkPlacer { return w },
 			Inbox:           trk,
 			Actor: func(ctx context.Context, _ *turnctx.Turn) (builtin.Actor, error) {
+				key := requestKeyOf(ctx)
+				since, _ := statelog.OpMintedAt(key)
 				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator,
-					OperatorID: "ops", Operation: operationOf(ctx)}, nil
+					OperatorID: "ops", WorkKey: key, WorkSince: since}, nil
 			},
 		},
 		Pages: builtin.PageDeps{
 			Reader: kb, Writer: w,
-			Actor: func(context.Context, *turnctx.Turn) (pages.Actor, error) {
-				return pages.Actor{Kind: pages.AuthorOperator, OperatorID: "ops"}, nil
+			Actor: func(ctx context.Context, _ *turnctx.Turn) (pages.Actor, error) {
+				return pages.Actor{Handle: "ops", Kind: pages.AuthorOperator,
+					OperatorID: "ops", OpKey: requestKeyOf(ctx)}, nil
 			},
-			Operation: operationOf,
 		},
+		Authorize: builtin.Decide(chartLeads),
 	}) {
 		if !mcp.ReadOnlyProven(builtin.AnnotationsFor(tool.Name())) {
 			out[tool.Name()] = tool
@@ -405,8 +374,8 @@ func TestTheWriteTableCoversEveryOperatorWrite(t *testing.T) {
 // ---- the recording writer ---------------------------------------------- //
 
 // ledgerFake is every write seam the operator catalogue has, recording the
-// operation (or, for a page, the call key) each write arrives with and
-// answering each at the next position on its log.
+// operation (or, for a page, the actor's key and the verb) each write arrives
+// with and answering each at the next position on its log.
 type ledgerFake struct {
 	mu      sync.Mutex
 	outcome statelog.Outcome
@@ -424,16 +393,17 @@ func newLedgerFake(outcome statelog.Outcome) *ledgerFake {
 }
 
 // asked is the context one call of one tool under a request carries: the
-// operation the act transport derives for it ([builtin.RequestOperation]).
-func (f *ledgerFake) asked(t *testing.T, tool tools.Callable, request string,
-	args map[string]any) context.Context {
+// request's key, and the principal every gated tool is decided for.
+func (f *ledgerFake) asked(t *testing.T, _ tools.Callable, request string,
+	_ map[string]any) context.Context {
 
 	t.Helper()
-	op, err := builtin.RequestOperation("ops", request, tool.Name(), args)
-	if err != nil {
-		t.Fatalf("RequestOperation: %v", err)
+	if err := statelog.CheckCallerOpID(request); err != nil {
+		t.Fatalf("request key %q: %v", request, err)
 	}
-	return withOperation(t.Context(), op)
+	// A PERSON, because the operator surface's callers are people and
+	// machines and never a seat — and place_work_item is human-only.
+	return withRequestKey(personHolding(iam.AllGrants...), request)
 }
 
 // call runs one tool under a request and answers its decoded result and the
@@ -535,7 +505,7 @@ func (f *ledgerFake) RemoveTask(_ context.Context, opID, _, _ string, _ bool,
 	return f.written(opID)
 }
 
-func (f *ledgerFake) RestoreTask(_ context.Context, opID, _, _ string,
+func (f *ledgerFake) RestoreTask(_ context.Context, opID, _, _ string, _ bool,
 	_ *tracker.Notify) (tracker.WriteResult, error) {
 	return f.written(opID)
 }
@@ -569,8 +539,13 @@ func (f *ledgerFake) MoveTaskToProject(_ context.Context, opID, _, target string
 	return r, err
 }
 
-func (f *ledgerFake) WriteView(_ context.Context, opID string, _ tracker.View) (tracker.WriteResult, error) {
+func (f *ledgerFake) WriteView(_ context.Context, opID string, _ tracker.View,
+	_ tracker.ViewPrior) (tracker.WriteResult, error) {
 	return f.written(opID)
+}
+
+func (f *ledgerFake) ViewPrior(context.Context, string) (tracker.ViewPrior, error) {
+	return tracker.ViewPrior{}, nil
 }
 
 func (f *ledgerFake) WriteTypes(_ context.Context, opID string, _ []tracker.TaskType) (tracker.WriteResult, error) {
@@ -582,12 +557,12 @@ func (f *ledgerFake) WriteFields(_ context.Context, opID string, _ []tracker.Fie
 }
 
 func (f *ledgerFake) MarkInbox(_ context.Context, opID, _ string,
-	_ tracker.InboxGesture) (tracker.WriteResult, error) {
+	_ tracker.InboxGesture, _ tracker.PersonAuthority) (tracker.WriteResult, error) {
 	return f.written(opID)
 }
 
 func (f *ledgerFake) WritePins(_ context.Context, opID, _ string,
-	_ tracker.PinGesture) (tracker.WriteResult, error) {
+	_ tracker.PinGesture, _ tracker.PersonAuthority) (tracker.WriteResult, error) {
 	return f.written(opID)
 }
 
@@ -614,37 +589,38 @@ func (f *ledgerFake) EnsureTags(_ context.Context, opID, _ string, tags []string
 }
 
 // The knowledge base's writes. Their operation is derived INSIDE the store
-// from the call key, so the key is what is recorded — keyed with the verb, so
-// a save and its rename under one key are still two entries.
+// from the actor's key ([pages.Actor.OpKey]), so the key is what is recorded —
+// keyed with the verb, so a save and its rename under one key are still two
+// entries.
 
-func (f *ledgerFake) pageWrite(verb string, key pages.CallKey) (pages.Written, error) {
-	r, err := f.record(verb + ":" + key.String())
+func (f *ledgerFake) pageWrite(verb, key string) (pages.Written, error) {
+	r, err := f.record(verb + ":" + key)
 	return pages.Written{Page: pages.Page{ID: "p1", Version: 5}, Revision: uint64(r.Position.Packed()),
 		ChangeID: r.OpID, Outcome: r}, err
 }
 
-func (f *ledgerFake) Create(_ context.Context, _ pages.Actor, in pages.NewPage) (pages.Written, error) {
-	return f.pageWrite("create", in.CallKey)
+func (f *ledgerFake) Create(_ context.Context, actor pages.Actor, _ pages.NewPage) (pages.Written, error) {
+	return f.pageWrite("create", actor.OpKey)
 }
 
-func (f *ledgerFake) SavePage(_ context.Context, _ pages.Actor, _ string, save pages.Save) (pages.Written, error) {
-	return f.pageWrite("save", save.CallKey)
+func (f *ledgerFake) SavePage(_ context.Context, actor pages.Actor, _ string, _ pages.Save) (pages.Written, error) {
+	return f.pageWrite("save", actor.OpKey)
 }
 
-func (f *ledgerFake) Rename(_ context.Context, _ pages.Actor, _, _ string, _ bool,
-	key pages.CallKey) (pages.Written, error) {
-	return f.pageWrite("rename", key)
+func (f *ledgerFake) Rename(_ context.Context, actor pages.Actor, _, _ string,
+	_ bool) (pages.Written, error) {
+	return f.pageWrite("rename", actor.OpKey)
 }
 
-func (f *ledgerFake) EditComment(_ context.Context, _ pages.Actor, _, commentID, _ string,
-	key pages.CallKey) (pages.Comment, pages.Written, error) {
-	w, err := f.pageWrite("edit", key)
+func (f *ledgerFake) EditComment(_ context.Context, actor pages.Actor, _, commentID,
+	_ string) (pages.Comment, pages.Written, error) {
+	w, err := f.pageWrite("edit", actor.OpKey)
 	return pages.Comment{ID: commentID}, w, err
 }
 
-func (f *ledgerFake) Comment(_ context.Context, _ pages.Actor, _ string,
-	in pages.NewComment) (pages.Comment, pages.Written, error) {
-	w, err := f.pageWrite("comment", in.CallKey)
+func (f *ledgerFake) Comment(_ context.Context, actor pages.Actor, _ string,
+	_ pages.NewComment) (pages.Comment, pages.Written, error) {
+	w, err := f.pageWrite("comment", actor.OpKey)
 	return pages.Comment{ID: "m1"}, w, err
 }
 
@@ -655,7 +631,8 @@ func (f *ledgerFake) Comment(_ context.Context, _ pages.Actor, _ string,
 // change was collapsed into the first and answered `applied` without landing.
 // save_work_view did it for EVERY caller: `view-<id>` was one fixed operation
 // for the life of the view. The same call sent again is still one operation —
-// a request's operation names the call it was derived for.
+// a request's key is a unit of work as a turn's trigger is, and every id is
+// derived from it with a digest of the call's own arguments.
 func TestTwoDifferentCallsUnderOneKeyAreTwoOperations(t *testing.T) {
 	t.Parallel()
 	cases := map[string][2]map[string]any{

@@ -2,12 +2,15 @@ package tracker
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,8 +20,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// The SEVEN sequences that stay genuinely cross-object, and the one property
-// that makes them tolerable.
+// The SIX sequences that stay genuinely cross-object — a create (1), a
+// cross-project move (7), a merge (13) and a bulk edit (26) here, a dependency
+// in depend.go and a board drag across lanes in place.go — and the one
+// property that makes them tolerable.
 //
 // # Why a multi-append sequence is not a transaction, and must not pretend
 //
@@ -36,10 +41,11 @@ import (
 //
 // The order is never arbitrary. A create mints its number first and its task
 // second, so a crash leaves a numbering GAP rather than two tasks sharing a
-// key, because a key is what people paste into chat. An item promotion marks
-// its parent LAST, because the other order leaves an item marked promoted with
-// no subtask behind it. A board drag across lanes (move.go) writes the task's
-// status FIRST, because that is the half the caller's if_match guards.
+// key, because a key is what people paste into chat. A cross-project move
+// writes the alias for a key BEFORE it re-keys the task, so a key somebody
+// pasted keeps resolving from the moment it stops being current. A board drag
+// across lanes (place.go) writes the task's status FIRST, because that is the
+// half the caller's if_match guards.
 //
 // # Every step is a step ON THE LOG
 //
@@ -52,10 +58,9 @@ const (
 	// MaxBulkTasks is how many distinct task subjects one bulk gesture
 	// may carry.
 	//
-	// THE SAME 64 as every other fan-out in this design — a move batch, a
-	// merge batch, the scope term cap — because they are the same
-	// quantity: how much work one durable claim covers before it has to
-	// heartbeat.
+	// THE SAME 64 as every other fan-out in this design — a merge batch,
+	// the scope term cap — because they are the same quantity: how much
+	// work one durable claim covers before it has to heartbeat.
 	MaxBulkTasks = 64
 
 	// MaxBulkBytes is the pre-flight ceiling over the commits a bulk
@@ -66,8 +71,10 @@ const (
 	// refused halfway is a caller told "failed" about tasks that changed.
 	MaxBulkBytes = 8 << 20
 
-	// WalkBatch is one batch of a paced walk — a cross-project move's
-	// descendants, a merge's children.
+	// WalkBatch is one batch of a paced walk — a merge's children, a
+	// re-spread's placements — and of every duty selection that finishes
+	// one. Not a move's: that walk is one append per descendant of a
+	// subtree it read whole, bounded by [MaxDescendants].
 	WalkBatch = 64
 
 	// ClaimTTL is how long the durable claim a walking sequence holds
@@ -213,10 +220,21 @@ func resolved(step string, result WriteResult, err error) error {
 type WriteResult struct {
 	statelog.Result
 
-	// Key and Rank are what a create or a promotion minted. Empty on
-	// every other path.
+	// Key and Rank are what a create or a move minted. Empty on every
+	// other path.
 	Key  string
 	Rank Rank
+
+	// KeyCollision says Key opens ANOTHER task — one that claimed it first,
+	// which is what a counter restored beside newer work mints — so the task
+	// this write landed is reached only by its id ([ItemAddress]). Read from
+	// the key directory in the snapshot that decided the write, or that read
+	// the task back ([keyHeldByAnother]); false wherever Key is empty.
+	//
+	// ON THE RECEIPT because the receipt is the first thing that names the
+	// duplicate: a create after a counter restore is what PRODUCES one, and
+	// a caller handed the key alone acts on the claimant with its next call.
+	KeyCollision bool
 
 	// Assignee is who a create filed the task to: the assignee it named,
 	// else the project's default ([Writer.landsOn]), else empty for
@@ -328,6 +346,12 @@ func (w *Writer) createTask(ctx context.Context, opID string, task Task,
 			"— a task's scope path sits under its project's, so one without a "+
 			"project files its deferral where no project-scoped probe looks",
 			task.ID)
+	}
+	if ask != nil {
+		// A COPY, so the instant this write stamps on the question does
+		// not reach the caller's value.
+		copied := *ask
+		ask = &copied
 	}
 	// BEFORE ANY READ, because a cap is a property of the value rather
 	// than of the database: a title past its cap is refused identically
@@ -460,7 +484,7 @@ func (w *Writer) fileTask(ctx context.Context, opID string, task, handed Task,
 			"counter value it minted: %w", task.Project, n, err)
 	}
 	at := w.Now()
-	task.Key = fmt.Sprintf("%s-%d", task.Project, n)
+	task.Key = mintedKey(task.Project, n)
 	task.Rank = rank
 	task.CreatedAt, task.UpdatedAt = at, at
 	if task.Status == "" {
@@ -487,7 +511,8 @@ func (w *Writer) fileTask(ctx context.Context, opID string, task, handed Task,
 		// is the gap this retry left.
 		return w.landedTask(ctx, result.Result, task.ID)
 	}
-	result.Key, result.Rank, result.Assignee = task.Key, task.Rank, task.Assignee
+	result.Key, result.Rank = task.Key, task.Rank
+	result.Assignee = task.Assignee
 	result.Warnings = append(result.Warnings, settled.warnings...)
 	return result, err
 }
@@ -567,10 +592,14 @@ func (w *Writer) landedTask(ctx context.Context, result statelog.Result,
 		return out, nil
 	}
 	var task Task
-	var held bool
+	var held, collision bool
 	if err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		task, held, err = readTask(ctx, tx, id)
+		if err != nil || !held {
+			return err
+		}
+		collision, err = keyHeldByAnother(ctx, tx, task.Key, id)
 		return err
 	}); err != nil {
 		return out, fmt.Errorf("tracker: task %s was filed by an earlier copy of "+
@@ -583,7 +612,8 @@ func (w *Writer) landedTask(ctx context.Context, result statelog.Result,
 	}
 	// AND WHO HOLDS IT, as a create's own answer does ([WriteResult.Assignee]):
 	// the retry is told where the work sits, never the assignee it SENT.
-	out.Key, out.Rank, out.Assignee = task.Key, task.Rank, task.Assignee
+	out.Key, out.Rank, out.KeyCollision = task.Key, task.Rank, collision
+	out.Assignee = task.Assignee
 	return out, nil
 }
 
@@ -672,12 +702,13 @@ func (w *Writer) landsOn(task Task, projectDefault string) landing {
 	if task.Assignee != "" || projectDefault == "" {
 		return landing{assignee: task.Assignee}
 	}
-	if w.World != nil {
-		if seat, found := w.World.ResolveSeat(projectDefault); !found || seat != projectDefault {
+	if world := w.World; world != nil {
+		if seat, found := world.ResolveSeat(projectDefault); !found || seat != projectDefault {
 			return landing{warning: fmt.Sprintf("%s's default assignee %q is not a seat on "+
 				"the org chart any more, so this task was filed to nobody and "+
 				"lands in triage. The project lead sets another with "+
-				"write_project `default_assignee`.", task.Project, projectDefault)}
+				"write_project `default_assignee`.", task.Project,
+				projectDefault)}
 		}
 	}
 	return landing{assignee: projectDefault}
@@ -736,14 +767,24 @@ type TaskCreate struct {
 	Origin *Origin `json:"origin,omitempty"`
 }
 
-// writeTask is sequence 1's second append and 1a's second, shared because they
-// are the same append: a whole task at expectation zero, guarded by its own
-// row — carrying, on sequence 1, the ask the task was filed as.
+// writeTask is sequence 1's second append: a whole task at expectation zero,
+// guarded by its own row — carrying the ask the task was filed as, where it is
+// one.
 func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 	ask *Comment, notify *Notify, at time.Time) (WriteResult, error) {
 
 	subject := TaskSubject(task.ID)
-	scope := ScopeSet{Subject: true, Container: task.Project}
+	// THE TASK AND EVERY KEY IT CARRIES, because the create's apply claims
+	// each one that is not already claimed, and which task holds a key is
+	// decided in log order: on a node that retained another create of the
+	// same key, this one applied first would take the claim every other
+	// node gave to that one (see [keyTerm]). The keys are the task's own,
+	// fixed before the request, so the scope cannot come up short of them.
+	scope := ScopeSet{Subject: true, Container: task.Project}.
+		withKeys(task.ID, keysOf(task)).capped()
+	// WHETHER THE KEY THIS CREATE TOOK IS ANOTHER TASK'S, from the snapshot
+	// the last round decided in — the round whose record was published.
+	var collision bool
 	// THE KEY THIS WRITE MINTED goes on the wake it publishes: the caller
 	// built the wake from a task that had none yet (see [Notify.keyed]).
 	notify.keyed(task.Key)
@@ -766,17 +807,23 @@ func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 			if present > 0 {
 				return statelog.Decision{}, statelog.ErrExists
 			}
-			return w.decide(stamp, subject, OpCreate, ChangeCreated, scope, opID,
+			held, err := keyHeldByAnother(ctx, tx, task.Key, task.ID)
+			if err != nil {
+				return statelog.Decision{}, fmt.Errorf("tracker: read whether "+
+					"key %s is already another task's: %w", task.Key, err)
+			}
+			collision = held
+			return w.decide(ctx, tx, stamp, subject, OpCreate, ChangeCreated, scope, opID,
 				TaskCreate{Task: task, Comment: ask, Origin: w.origin()}, notify, at)
 		},
 	})
 	return WriteResult{
-		Result: result, Warnings: bodyWarnings(task.Body),
+		Result: result, Warnings: bodyWarnings(task.Body), KeyCollision: collision,
 	}, err
 }
 
 // mintKey takes the next key number in a project. SEQUENCE 1's first append,
-// and 1a's and 7's.
+// and 7's.
 //
 // # Why the number is a record and not a row read
 //
@@ -825,7 +872,7 @@ func (w *Writer) mintKey(ctx context.Context, opID, project string, k int,
 			next := Counter{
 				V: DocumentVersion, Project: project, Last: counter.Last + k,
 			}
-			decision, err := w.decide(stamp, subject, OpPatch, "", scope, opID,
+			decision, err := w.decide(ctx, tx, stamp, subject, OpPatch, "", scope, opID,
 				next, nil, at)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -971,6 +1018,11 @@ func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 		return settledCreate{}, invalid("project %s is archived, so "+
 			"it takes no new work; unarchive it first", task.Project)
 	}
+	if task.Parent != nil && *task.Parent != "" {
+		if err = refuseParent(ctx, tx, task, *task.Parent); err != nil {
+			return settledCreate{}, err
+		}
+	}
 	if err = declaredType(ctx, tx, task); err != nil {
 		return settledCreate{}, err
 	}
@@ -987,6 +1039,227 @@ func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 	}
 	return settledCreate{fields: fields, warnings: warnings, unit: project.Unit,
 		assignee: project.DefaultAssignee}, nil
+}
+
+// refuseParent refuses a parent a task cannot be filed under.
+//
+// # A SUBTREE LIVES IN ONE PROJECT
+//
+// A board draws a project's ROOTS and lets their subtrees ride along, and the
+// query carries the container on the outer row as well — so a subtask filed in
+// another project from its root is on neither project's board: its root's
+// filters it out by project, and its own finds no root to hang it from. The
+// attention set's `inconsistent_project` names the shape; this is what keeps
+// a writer from making it. A task's project changes only when a cross-project
+// move carries its whole subtree ([Writer.MoveTaskToProject]), so the parent's
+// project read in THIS snapshot is the one its subtree lives in, and a refusal
+// here closes the shape rather than flagging it afterwards.
+//
+// # Nor does the part of a subtree a move has not carried yet
+//
+// A move re-keys the root first, marking it mid-move, and then each
+// descendant, from a subtree it read ONCE before its first append — so a task
+// filed under a descendant the walk has not reached is one that walk never
+// carries: it passes the project check below, since its parent is still in
+// the old project. So a parent with a MARKED task above it in another project
+// takes no new child until the walk has carried it ([refuseMidMove]). It is
+// [statelog.ErrUnavailable] rather than a refusal, because the walk — or the
+// duty that finishes an abandoned one — carries the parent without anybody
+// acting, and the same call made then files the child where the parent went.
+// It is asked BEFORE the project comparison, so a caller who named the
+// project the parent is going to is told to come back rather than that the
+// parent is somewhere else.
+//
+// The mark is only as good as the snapshot that reads it: a create decided on
+// a node that had not applied the root's move yet cannot see it. The walk's
+// last append is what catches that one — the mark does not come down while
+// anything beneath the root is outside its project ([carriedAll]), so the
+// walk carries it in one more pass, or the re-run or the duty does.
+//
+// # And a parent in the trash takes no new child
+//
+// A live child under a removed parent is the orphan a subtree removal
+// publishes in depth order to avoid, and a restore brings back only what the
+// removal took — so a child filed under the removed parent in between would
+// stay a live row under a parent nobody can see.
+//
+// # Nor does a task's own subtree
+//
+// A task filed under itself, or under one of its own descendants, makes its
+// parent chain a CYCLE: the applier applies it — a committed record is never
+// refused there — and raises `cycle`, and the subtree drops off every board,
+// since a board draws roots and a cycle has none. The closure doc says two
+// concurrent re-parents on two subjects can form one no single write sees;
+// ONE write forming it is simply a write nobody refused, so it is refused
+// here, in the snapshot that also reads the parent.
+//
+// # An absent parent is one of two facts
+//
+// See [missingTask]: a PURGED parent is gone for good and is refused as such,
+// while one this node holds no row of at all may be a create it has not
+// applied yet, which is the only absence worth coming back for.
+func refuseParent(ctx context.Context, tx *sql.Tx, task Task, parentID string) error {
+	parent, held, err := readTask(ctx, tx, parentID)
+	switch {
+	case err != nil:
+		return err
+	case !held:
+		return missingTask(ctx, tx, parentID, "nothing can be filed under it")
+	case parent.Removed != nil:
+		return invalid("parent task %s (%s) was removed by %s at "+
+			"%s; restore it before filing anything under it", parent.Key,
+			parent.ID, parent.Removed.By, parent.Removed.At.Format(time.RFC3339))
+	}
+	if err = refuseMidMove(ctx, tx, parent, "parent task",
+		"a task filed under it now would be left behind"); err != nil {
+		return err
+	}
+	if parent.Project != task.Project {
+		return invalid("task %s is filed under %s and its parent "+
+			"%s under %s — a subtask lives in its parent's project, which is "+
+			"%s", task.ID, task.Project, parent.Key, parent.Project,
+			parent.Project)
+	}
+	under, err := inSubtree(ctx, tx, task.ID, parentID)
+	switch {
+	case err != nil:
+		return err
+	case under:
+		return invalid("task %s cannot be filed under %s (%s), "+
+			"which is itself or one of its own subtasks — the parent chain "+
+			"would be a cycle with no root for a board to draw it from",
+			task.ID, parent.Key, parentID)
+	}
+	return nil
+}
+
+// refuseMidMove refuses a write that would change what a task is filed under,
+// or what is filed under it, while a move it is part of has not carried it —
+// the task sits beneath a task marked mid-move ([TaskPatch.Moving]) that is in
+// another project than it is. why says what the write would do if it landed.
+//
+// UNAVAILABLE, NEVER A REFUSAL: the walk, a re-run of it or the duty that
+// finishes an abandoned one carries the task without anybody acting, and the
+// same write asked again then is decided on the project it went to.
+//
+// THREE WRITES ASK IT. A create or a re-parent asks it of the PARENT, since a
+// child filed under an uncarried task is one the walk never read. A re-parent
+// asks it of the TASK too, since the walk still carries a task it read however
+// it has been filed since: moved out from under the subtree it would land in
+// the new project under a parent in the old one, and moved within it, under a
+// parent the walk may already have carried. And a merge that re-parents asks it
+// of both ends before its mark, for the same two reasons.
+func refuseMidMove(ctx context.Context, tx *sql.Tx, task Task, role, why string) error {
+	target, err := movingAway(ctx, tx, task.ID, task.Project)
+	switch {
+	case err != nil:
+		return err
+	case target == "":
+		return nil
+	}
+	return fmt.Errorf("tracker: %s %s (%s) is still in %s under a task a move "+
+		"into %s is carrying, and the walk has not reached it — %s; ask again "+
+		"once the move has finished, when it is in %s: %w", role, task.Key,
+		task.ID, task.Project, target, why, target, statelog.ErrUnavailable)
+}
+
+// movingAway reports the project a move is carrying a task into when a task
+// ABOVE it is marked mid-move and in another project than it is, and "" when
+// none is — see [refuseMidMove].
+//
+// ANY MARKED ANCESTOR, read off the closure, and never the task's root alone:
+// the mark is on the task that MOVED, and a root re-parented under another
+// while its walk runs is no longer anybody's root — asked by `root_id`, every
+// task its walk had not carried read as settled. The outermost is answered
+// when two are marked, so the answer names the move that decides where the
+// task ends up. A task that is itself marked is in the project it is moving
+// into, so it is never its own answer.
+func movingAway(ctx context.Context, tx *sql.Tx, id, project string) (string, error) {
+	var target string
+	err := tx.QueryRowContext(ctx, `
+		SELECT a.project_key
+		FROM tracker_task_closure c JOIN tracker_tasks a ON a.id = c.ancestor_id
+		WHERE c.descendant_id = ? AND a.moving = 1 AND a.project_key <> ?
+		ORDER BY c.distance DESC LIMIT 1`, id, project).Scan(&target)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("tracker: read whether %s is in a subtree mid-move: %w",
+			id, err)
+	}
+	return target, nil
+}
+
+// carriedAll is the amendment a move's last append is decided under: the mark
+// comes down only in a snapshot where nothing beneath the root is outside the
+// root's project.
+//
+// # Why the last append checks rather than trusting the walk
+//
+// A walk carries the subtree it READ, before its first append, and
+// [refuseMidMove] refuses a new child under an uncarried task only on a node
+// that has applied the root's move — a create decided on a node behind it
+// passes, and lands under a descendant the walk read before it existed. With
+// the mark taken down behind it, that task stayed in the old project for good,
+// under a root in the new one, flagged `inconsistent_project` and repaired by
+// nothing. Checked here, in the snapshot the last append is decided in and
+// after the walk's own appends ([Writer.After]), such a task keeps the mark up:
+// the append is refused as unavailable ([errUncarried]), and a pass
+// ([Writer.followRoot]) re-reads the subtree and carries it — the walk's own,
+// at once, or the re-run's or the duty's. A task in the trash under the root is
+// the same answer, and the pass that meets it names it.
+func carriedAll(ctx context.Context, tx *sql.Tx, current Task,
+	patch TaskPatch) (TaskPatch, error) {
+
+	var id, key, project string
+	err := tx.QueryRowContext(ctx, `
+		SELECT d.id, d.key, d.project_key
+		FROM tracker_task_closure c JOIN tracker_tasks d ON d.id = c.descendant_id
+		WHERE c.ancestor_id = ? AND c.distance > 0 AND d.project_key <> ?
+		ORDER BY c.distance, d.id LIMIT 1`, current.ID, current.Project).
+		Scan(&id, &key, &project)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return patch, nil
+	case err != nil:
+		return TaskPatch{}, fmt.Errorf("tracker: read whether anything under %s "+
+			"is still outside %s: %w", current.ID, current.Project, err)
+	}
+	return TaskPatch{}, fmt.Errorf("tracker: task %s (%s) under %s is still in %s "+
+		"— filed under the subtree after the walk read it, or not carried yet — "+
+		"so %s stays marked mid-move; re-run the move under the same operation "+
+		"id, or leave it to the tracker duty, and the next pass carries it into "+
+		"%s: %w", key, id, current.Key, project, current.Key, current.Project,
+		errUncarried)
+}
+
+// errUncarried is [carriedAll]'s refusal: the walk's last append met a task
+// under the root that is still outside its project. Unavailable, because the
+// next pass carries it with nobody acting — and a sentinel of its own, because
+// the walk that met it is the one caller that runs that pass at once.
+var errUncarried = fmt.Errorf("tracker: a task under a moved root is not "+
+	"carried yet: %w", statelog.ErrUnavailable)
+
+// inSubtree reports whether candidate is root itself or anywhere beneath it,
+// from the closure this snapshot holds — which carries every task at distance
+// zero from itself, so the one probe answers both.
+func inSubtree(ctx context.Context, tx *sql.Tx, root, candidate string) (bool, error) {
+	if root == "" || candidate == "" {
+		return false, nil
+	}
+	if root == candidate {
+		return true, nil
+	}
+	var found int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM tracker_task_closure
+		               WHERE ancestor_id = ? AND descendant_id = ?)`,
+		root, candidate).Scan(&found); err != nil {
+		return false, fmt.Errorf("tracker: read whether %s is under %s: %w",
+			candidate, root, err)
+	}
+	return found == 1, nil
 }
 
 // declaredType refuses a task naming a type the company has not declared.
@@ -1049,7 +1322,8 @@ func declaredType(ctx context.Context, tx *sql.Tx, task Task) error {
 // A SUBTASK IS JUDGED BY A DIFFERENT FLAG. ClickUp ships two toggles and so
 // does this, and the default that matters is the second: a field required on a
 // task is NOT required on a subtask unless the definition says so — otherwise
-// one required field blocks every checklist item anybody promotes.
+// one required field is a form to fill for every step somebody breaks a task
+// into.
 func requiredFields(ctx context.Context, tx *sql.Tx, project Project, task Task) error {
 	declared, err := declaredFields(ctx, tx, project.Key)
 	if err != nil {
@@ -1095,174 +1369,6 @@ func bodyWarnings(body string) []string {
 	return nil
 }
 
-// PromoteItem turns a checklist item into a subtask. SEQUENCE 1a.
-//
-//	Rs the parent and its project → A on the counter → A on the subtask at
-//	expectation 0, carrying rank = intPart(n) → A on the PARENT, marking
-//	the item promoted.
-//
-// # Why this is a sequence at all, and why the parent commit is LAST
-//
-// A promoted item is a subtask, and a subtask has a KEY — so the promotion
-// mints a counter value and carries the identical counter-then-task window a
-// create does, including the numbering gap. It was listed among the one-append
-// gestures for as long as nobody asked what its key came from.
-//
-// The parent is marked last because the other order leaves an item marked
-// promoted with no subtask behind it — a struck-through line pointing at
-// nothing, which no reader can tell from a subtask somebody purged.
-//
-// # Re-running it
-//
-// A RETRY under the same operation id is answered step by step from the
-// ledger: a counter step that landed is not minted again ([Writer.resumeCreate]
-// asks for the subtask instead), a subtask that landed is that one under the
-// key it took, and a parent step that landed is the retry's answer — so a
-// retry of a promotion that finished answers `applied` with the first run's
-// position and appends nothing.
-//
-// A RE-RUN under a new operation re-derives the same subtask id, because it is
-// a uuid5 over the item: its create is refused on the subtask's guarding row,
-// the answer is the subtask already filed, and the run proceeds to the parent
-// step. It spends a number on its own mint, which is the documented gap.
-//
-// # The parent's mark is decided on the PARENT'S OWN SNAPSHOT
-//
-// It is a [PromoteIntent] rather than a checklist set, resolved inside the
-// parent step's decide ([settlePromote]): the lists are carried whole, and a
-// set composed from the read the mint made discarded every checklist edit that
-// landed while the subtask was being filed. An item that already points at the
-// subtask needs no record, and one somebody deleted meanwhile is a warning.
-//
-// CRASH RESIDUE: a numbering gap, exactly as row 1; or a landed subtask whose
-// parent item is still un-marked. REPAIRER: nobody for the gap, and the re-run
-// or retry above for the mark. A subtask that was PURGED is refused as deleted
-// rather than resurrected.
-func (w *Writer) PromoteItem(ctx context.Context, opID, parentID, itemID string,
-	subtask Task, notify *Notify) (WriteResult, error) {
-
-	switch {
-	case parentID == "":
-		return WriteResult{}, invalid("a promotion names no parent")
-	case itemID == "":
-		return WriteResult{}, invalid("a promotion names no item")
-	case subtask.ID == "":
-		return WriteResult{}, invalid("a promotion mints no subtask "+
-			"id — it is a uuid5 over item %s, which is what makes a retry "+
-			"re-derive the same subtask rather than a second one", itemID)
-	case subtask.Project == "":
-		return WriteResult{}, invalid("subtask %s names no project "+
-			"to take its key from", subtask.ID)
-	}
-	// THE SUBTASK AS THE CALLER HANDED IT IN, as a create keeps it: its
-	// wake was built from it, and the type and parent set here are brought
-	// onto that wake with everything else the filing settles.
-	handed := subtask
-	// THE SAME DEFAULT AS A PLAIN CREATE, and for the same reason: a
-	// checklist item carries no type, so a promotion that named none would
-	// be refused by the catalogue check inside the mint.
-	if subtask.Type == "" {
-		subtask.Type = DefaultTaskType
-	}
-	subtask.Parent = &parentID
-
-	// WHAT THE MINT'S SNAPSHOT SETTLED, assigned on every run of its
-	// closure so the last run — the accepted one — is what survives.
-	var (
-		parentProject string
-		settled       settledCreate
-	)
-	n, minted, err := w.mintKey(ctx, stepID(opID, "counter"), subtask.Project, 1,
-		func(tx *sql.Tx) error {
-			project, err := promotableParent(ctx, tx, parentID, itemID)
-			parentProject = project
-			if err != nil {
-				return err
-			}
-			// A PROMOTION'S SUBTASK CARRIES NO CUSTOM FIELDS — it is
-			// built from a checklist item, which has none — so the
-			// coerced map it answers with is empty. Its PROJECT'S
-			// UNIT is not: a promoted subtask is work in a project
-			// like any other, and one filed into no unit is one that
-			// unit's lead is no fallback for.
-			settled, err = w.refuseCreate(ctx, tx, subtask)
-			return err
-		})
-	var created WriteResult
-	switch {
-	case errors.Is(err, errMintLanded):
-		created, err = w.resumeCreate(ctx, opID, subtask, handed, nil, notify)
-	case minted.Outcome == statelog.OutcomeUnknown && minted.Unvouched:
-		// THE SUBTASK'S OWN ROW SAYS WHETHER AN EARLIER RUN FILED IT, as
-		// it does for a create ([Writer.unvouchedCreate]); where it cannot,
-		// the walk stops below as unvouched rather than as "not made".
-		created, err = w.unvouchedCreate(ctx, opID, subtask, minted)
-	case err != nil:
-		return WriteResult{Result: minted}, err
-	default:
-		created, err = w.fileTask(ctx, opID, subtask, handed, nil, n, settled, notify)
-	}
-	if errors.Is(err, statelog.ErrExists) {
-		// THE SUBTASK IS ALREADY FILED, by an earlier run under another
-		// operation — its id is the item's — so it is that one, under the
-		// key IT took; this run's number is the gap.
-		created, err = w.landedTask(ctx, created.Result, subtask.ID)
-	}
-	// A SUBTASK WHOSE CREATE IS UNKNOWN IS NOT ONE TO POINT AT: marking the
-	// item over it is the struck-through line pointing at nothing that this
-	// order exists to prevent.
-	if err = resolved(fmt.Sprintf("subtask %s's create", subtask.ID),
-		created, err); err != nil {
-		return created, err
-	}
-	if parentProject == "" {
-		// THE MINT WAS ANSWERED, NOT DECIDED, so its snapshot never ran
-		// and the parent's project is read here: it is what the parent
-		// step's scope names.
-		if parentProject, err = w.taskProject(ctx, parentID,
-			"nothing can be promoted out of it"); err != nil {
-			return created, err
-		}
-	}
-
-	marked, err := w.UpdateTask(ctx, stepID(opID, "parent"), parentID,
-		parentProject, NoIfMatch,
-		TaskPatch{Promote: &PromoteIntent{Item: itemID, Subtask: subtask.ID}},
-		ChangeChecklist, nil)
-	if err = resolved(fmt.Sprintf("the mark on %s's item", parentID),
-		marked, err); err != nil {
-		return created, fmt.Errorf("tracker: subtask %s is filed and its item "+
-			"in %s may not be marked yet; retry the promotion under the same "+
-			"operation id, which completes it: %w", created.Key, parentID, err)
-	}
-	created.Result = marked.Result
-	created.Warnings = append(created.Warnings, marked.Warnings...)
-	return created, nil
-}
-
-// promotableParent is the refusals a promotion reads its parent for, inside
-// the mint's snapshot, and the project the parent is in.
-func promotableParent(ctx context.Context, tx *sql.Tx, parentID,
-	itemID string) (string, error) {
-
-	current, held, err := readTask(ctx, tx, parentID)
-	switch {
-	case err != nil:
-		return "", err
-	case !held:
-		return "", missingTask(ctx, tx, parentID, "nothing can be promoted out of it")
-	case current.Removed != nil:
-		return "", invalid("task %s was removed by %s at %s; "+
-			"restore it before promoting anything out of it",
-			parentID, current.Removed.By, current.Removed.At.Format(time.RFC3339))
-	}
-	if _, _, found := findItem(current, itemID); !found {
-		return "", invalid("task %s has no checklist item %s",
-			parentID, itemID)
-	}
-	return current.Project, nil
-}
-
 // taskProject is the project a task is in, read outside any decision — for a
 // sequence's later step, whose scope names the container and whose own decide
 // re-reads everything it acts on. refused completes the final refusal of a
@@ -1285,37 +1391,6 @@ func (w *Writer) taskProject(ctx context.Context, id, refused string) (string, e
 		return nil
 	})
 	return project, err
-}
-
-// findItem locates a checklist item on a task.
-func findItem(task Task, itemID string) (list, item int, found bool) {
-	for l := range task.Checklists {
-		for i := range task.Checklists[l].Items {
-			if task.Checklists[l].Items[i].ID == itemID {
-				return l, i, true
-			}
-		}
-	}
-	return 0, 0, false
-}
-
-// markPromoted is the parent's own new checklist state.
-//
-// THE ITEM IS NOT DELETED. It stays, pointing at the subtask, which is what
-// renders it struck through with the new key — a deletion would lose the fact
-// that this line became that task.
-func markPromoted(parent Task, itemID, subtaskID string) []Checklist {
-	lists := make([]Checklist, len(parent.Checklists))
-	copy(lists, parent.Checklists)
-	l, i, found := findItem(parent, itemID)
-	if !found {
-		return lists
-	}
-	items := make([]ChecklistItem, len(lists[l].Items))
-	copy(items, lists[l].Items)
-	items[i].PromotedTo = &subtaskID
-	lists[l].Items = items
-	return lists
 }
 
 // held is one durable claim, heartbeated for as long as a walk runs.
@@ -1433,6 +1508,78 @@ func (h *held) release(ctx context.Context) {
 	_, _ = h.claims.Release(context.WithoutCancel(ctx), h.resource, h.owner, h.epoch)
 }
 
+// MoveStopped reports a cross-project move whose ROOT landed in its target and
+// whose walk over the subtree stopped before carrying all of it.
+//
+// A TYPE RATHER THAN A SENTENCE, for [SubtreeStopped]'s reason: the caller has
+// to say two true things at once — the item it named is in the new project,
+// and some of what goes with it is not — and a bare error made every caller
+// say the second as though it were the first. The move tool answered every
+// such stop but an unknown step with "the change was NOT made", about a root
+// that had moved and been re-keyed; a model told that moves it again, and a
+// person told that goes looking for an item under a key it no longer has.
+//
+// THE REMEDY IS THE SAME OPERATION, and only that — which is where it differs
+// from a removal's: a new operation meets a root already in the target that
+// its own ledger never moved there, and is refused as somebody else's move
+// ([Writer.finishMove]). The same operation is answered from the ledger for
+// the root and carries the rest; and the root stays marked mid-move for as
+// long as anything is left, so the tracker duty finishes the walk on its own
+// once nobody holds its claim ([duty.finishMoves]).
+type MoveStopped struct {
+	// Root is the task the move named, and Key the key it holds in the
+	// target — empty only when this stop could not read it back, which a
+	// get of Root answers.
+	Root, Key string
+
+	// KeyCollision says Key opens ANOTHER task — one that claimed it first —
+	// so the root is reached by Root, its id. See [WriteResult.KeyCollision].
+	KeyCollision bool
+
+	// Target is the project the root is in now.
+	Target string
+
+	// Followed is how many of the tasks under the root are in the target,
+	// and Of how many there are.
+	Followed, Of int
+
+	// Waiting is the ADDRESS of a task under the root that is in the TRASH
+	// and still in the old project — its key, or its id where another task
+	// claimed that key first ([ItemAddress]), since it is what a caller
+	// hands a restore: frozen, so nothing carries it until somebody
+	// restores it — or purges it, which takes it out of the subtree. Empty
+	// for every other stop.
+	Waiting string
+
+	// OpID is the move's operation — what finishes it.
+	OpID string
+
+	// Err is why the walk stopped: a refused step, a step whose outcome
+	// is unknown ([ErrStepUnresolved]) or one this node cannot vouch for
+	// ([ErrStepUnvouched]), or the task in the trash it waits for.
+	Err error
+}
+
+func (e *MoveStopped) Error() string {
+	root := e.Root
+	if e.Key != "" {
+		root = fmt.Sprintf("%s (%s)", e.Key, e.Root)
+	}
+	next := fmt.Sprintf("the same operation (%s) finishes it — a new one is "+
+		"refused, since the root is already in %s — and so does the tracker "+
+		"duty once nobody is walking it", e.OpID, e.Target)
+	if e.Waiting != "" {
+		next = fmt.Sprintf("task %s is in the trash and the move waits for it: "+
+			"restore it and the same operation (%s), or the tracker duty, "+
+			"carries it into %s — or purge it", e.Waiting, e.OpID, e.Target)
+	}
+	return fmt.Sprintf("tracker: task %s moved into %s, and %d of the %d tasks "+
+		"under it followed before the walk stopped — the rest are still in "+
+		"their old project; %s: %v", root, e.Target, e.Followed, e.Of, next, e.Err)
+}
+
+func (e *MoveStopped) Unwrap() error { return e.Err }
+
 // MoveTaskToProject re-homes a task and everything beneath it. SEQUENCE 7.
 //
 //	Rk, then take move/<task> → Rs the target project and its tag set;
@@ -1482,6 +1629,14 @@ func (h *held) release(ctx context.Context) {
 // the mark comes down ([duty.finishMoves]). Before the mark, nothing did: the
 // subtree stayed split across two projects until somebody re-ran the gesture
 // under an operation id nobody had kept.
+//
+// While the mark is up, nothing is filed under, or moved from under, a task the
+// walk has not carried ([refuseMidMove]); and the last append takes it down
+// only once nothing under the root is outside its project ([carriedAll]). A
+// task filed there by a node the mark had not reached yet is therefore carried
+// rather than left behind: the walk runs one more pass for it, as the duty
+// would, and one it cannot carry — put in the trash since — keeps the mark up
+// and is named.
 //
 // # Who hears about it
 //
@@ -1537,6 +1692,11 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		subtree []Task
 		carried []Tag
 		arrived bool
+
+		// rootCollision is whether the root's CURRENT key opens another
+		// task, read beside it: what a move already in the target answers
+		// with, and names its root by when its walk stops.
+		rootCollision bool
 	)
 	if w.db.IsZero() {
 		return WriteResult{}, fmt.Errorf("tracker: this writer has no store, " +
@@ -1556,7 +1716,8 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 				"leave it in a project its parent is not in", taskID)
 		case current.Removed != nil:
 			return invalid("task %s was removed by %s at %s; "+
-				"restore it before moving it", taskID, current.Removed.By,
+				"restore it before moving it", taskID,
+				current.Removed.By,
 				current.Removed.At.Format(time.RFC3339))
 		}
 		root = current
@@ -1564,6 +1725,10 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 			// ALREADY THERE: a re-run of this move, or somebody else's
 			// — which of the two is the ledger's to say, not this read.
 			arrived = true
+			if rootCollision, err = keyHeldByAnother(ctx, tx, current.Key,
+				taskID); err != nil {
+				return err
+			}
 			subtree, err = readSubtree(ctx, tx, taskID)
 			return err
 		}
@@ -1594,13 +1759,14 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 					current.Project, target)
 			}
 		}
-		carried, err = carriedTags(ctx, tx, current, subtree)
+		carried, err = carriedTags(ctx, tx, current.Project,
+			append([]Task{current}, subtree...))
 		return err
 	}); err != nil {
 		return WriteResult{}, err
 	}
 	if arrived {
-		return w.finishMove(ctx, opID, root, target, subtree)
+		return w.finishMove(ctx, opID, root, rootCollision, target, subtree)
 	}
 	if len(subtree) > MaxDescendants {
 		return WriteResult{}, invalid("task %s has %d descendants "+
@@ -1653,8 +1819,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 	// THE MARK RIDES THE ROOT'S OWN MOVE, and only when a subtree is
 	// behind it: a leaf's move is one append, finished the moment it lands,
 	// and a mark on it would be one more append to take it down.
-	former := append(append([]string{}, root.FormerKeys...), root.Key)
-	result, err := w.moveOne(ctx, stepID(opID, "root"), root, target, former,
+	result, err := w.moveOne(ctx, stepID(opID, "root"), root, target,
 		&KeyMint{N: base}, len(subtree) > 0, notify)
 	// A ROOT WHOSE MOVE IS UNKNOWN HAS NO SUBTREE TO FOLLOW IT: moving the
 	// descendants under a root that may still be in its old project splits
@@ -1664,16 +1829,37 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		return result, err
 	}
 	if len(subtree) > 0 {
-		if err = w.moveDescendants(ctx, opID, target, subtree, base+1); err != nil {
-			return result, err
+		var (
+			followed int
+			last     statelog.Position
+		)
+		followed, last, err = w.moveDescendants(ctx, opID, target, subtree, base+1)
+		if err == nil {
+			// THE MARK COMES DOWN ONLY ONCE THIS NODE HOLDS THE WHOLE
+			// WALK: its decide asks whether anything under the root is
+			// still outside the target ([carriedAll]), and the
+			// descendants are on subjects of their own — so the last of
+			// them, and never only the root's position, is what this
+			// append has to see. See [Writer.After].
+			err = w.After(statelog.Later(result.Position, last)).endMove(ctx, opID,
+				taskID, target)
+			if errors.Is(err, errUncarried) {
+				// A TASK FILED BEHIND THE WALK, which this node has
+				// now applied — the append that met it waited for the
+				// whole walk first. So the pass the duty would run a
+				// quarter of an hour from now runs here, under the
+				// claim this call holds: it re-reads the subtree,
+				// carries what the first read could not see, and takes
+				// the mark down. Once — a second task filed behind THIS
+				// pass is the duty's, and the caller is told.
+				_, err = w.finishAbandonedMove(ctx, opID, taskID)
+			}
 		}
-		// THE MARK COMES DOWN ON THE SUBJECT THE ROOT'S MOVE ALREADY
-		// MOVED, and the descendants in between are on subjects of their
-		// own — so the root's position is what this last append has to
-		// see, exactly as a merge's close waits for its mark. See
-		// [Writer.After].
-		if err = w.After(result.Position).endMove(ctx, opID, taskID, target); err != nil {
-			return result, err
+		if err != nil {
+			// THE ROOT MOVED, so whatever stopped the walk is a stop
+			// and never a refusal of the move: see [MoveStopped].
+			return result, w.moveStopped(ctx, result, opID, root, target,
+				mintedKey(target, base), followed, len(subtree), err)
 		}
 	}
 	if result.Collapsed {
@@ -1686,7 +1872,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 	if err != nil {
 		return result, err
 	}
-	result.Key, result.Rank = fmt.Sprintf("%s-%d", target, base), rootRank
+	result.Key, result.Rank = mintedKey(target, base), rootRank
 	return result, nil
 }
 
@@ -1698,7 +1884,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 // THIS operation moved the root, and a Decide that does run means somebody
 // else did, which is a refusal. Then the rest follows it ([Writer.followRoot]).
 func (w *Writer) finishMove(ctx context.Context, opID string, root Task,
-	target string, subtree []Task) (WriteResult, error) {
+	rootCollision bool, target string, subtree []Task) (WriteResult, error) {
 
 	subject := TaskSubject(root.ID)
 	scope := ScopeSet{Subject: true, Container: target}
@@ -1724,18 +1910,21 @@ func (w *Writer) finishMove(ctx context.Context, opID string, root Task,
 			"task %s's move into %s", root.ID, target),
 			WriteResult{Result: answered}, nil)
 	}
-	if err := w.followRoot(ctx, opID, root, subtree); err != nil {
+	// The root is in the target and keyed there, so a stop past this point
+	// is [Writer.followRoot]'s own [MoveStopped].
+	if err := w.followRoot(ctx, opID, root, rootCollision, subtree); err != nil {
 		return WriteResult{Result: answered}, err
 	}
 	out := WriteResult{Result: answered}
-	out.Key, out.Rank = root.Key, root.Rank
+	out.Key, out.Rank, out.KeyCollision = root.Key, root.Rank, rootCollision
 	return out, nil
 }
 
 // finishAbandonedMove completes a move whose walk stopped with its root marked
 // mid-move: the tracker duty's half of [Writer.MoveTaskToProject], run under
 // the move's own claim, which the caller holds. It reports whether there was a
-// walk to finish.
+// walk to finish. The walk runs it too, once, when its last append met a task
+// filed behind it ([errUncarried]).
 //
 // THE ROOT IS READ AGAIN HERE, under the claim, because the holder may have
 // finished between the duty's selection and its claim: a root whose mark is
@@ -1747,9 +1936,10 @@ func (w *Writer) finishAbandonedMove(ctx context.Context, opID, id string) (bool
 			"cannot read the subtree an abandoned move left behind")
 	}
 	var (
-		root    Task
-		subtree []Task
-		marked  bool
+		root      Task
+		subtree   []Task
+		marked    bool
+		collision bool
 	)
 	err := w.db.Read(ctx, func(tx *sql.Tx) error {
 		current, held, err := readTask(ctx, tx, id)
@@ -1762,13 +1952,79 @@ func (w *Writer) finishAbandonedMove(ctx context.Context, opID, id string) (bool
 			return nil
 		}
 		root, marked = current, true
+		if collision, err = keyHeldByAnother(ctx, tx, current.Key, id); err != nil {
+			return err
+		}
 		subtree, err = readSubtree(ctx, tx, id)
 		return err
 	})
 	if err != nil || !marked {
 		return false, err
 	}
-	return true, w.followRoot(ctx, opID, root, subtree)
+	return true, w.followRoot(ctx, opID, root, collision, subtree)
+}
+
+// carryStragglers carries into a root's project every live task under it that
+// is still outside it although no move of that root is running: the tracker
+// duty's repair for a task filed behind a finished move ([duty.carryStragglers]),
+// run under the move's own claim, which the caller holds. It answers how many
+// it carried.
+//
+// THE ROOT IS READ AGAIN HERE, under the claim, and anything that makes it no
+// longer this repair's is nothing to do: a root in the trash is frozen, a
+// MARKED one is a walk the abandoned-move job finishes, and one with a parent
+// is where a cycle's walk stopped rather than a root. A straggler in the trash
+// is left out of the pass rather than waited for — with the mark down there is
+// no walk to hold open for it, and its restore brings it back to the duty.
+func (w *Writer) carryStragglers(ctx context.Context, opID, id string) (int, error) {
+	if w.db.IsZero() {
+		return 0, fmt.Errorf("tracker: this writer has no store, so it " +
+			"cannot read the subtree a move left a task behind in")
+	}
+	var (
+		root      Task
+		subtree   []Task
+		left      int
+		collision bool
+	)
+	err := w.db.Read(ctx, func(tx *sql.Tx) error {
+		current, held, err := readTask(ctx, tx, id)
+		switch {
+		case err != nil:
+			return err
+		case !held:
+			return fmt.Errorf("tracker: task %s has a task filed behind its "+
+				"move and is not on this node: %w", id, statelog.ErrUnavailable)
+		case current.Removed != nil, current.Moving,
+			current.Parent != nil && *current.Parent != "":
+			return nil
+		}
+		all, err := readSubtree(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if collision, err = keyHeldByAnother(ctx, tx, current.Key, id); err != nil {
+			return err
+		}
+		root = current
+		for _, descendant := range all {
+			if descendant.Removed != nil {
+				continue
+			}
+			subtree = append(subtree, descendant)
+			if descendant.Project != current.Project {
+				left++
+			}
+		}
+		return nil
+	})
+	if err != nil || left == 0 {
+		return 0, err
+	}
+	if err := w.followRoot(ctx, opID, root, collision, subtree); err != nil {
+		return 0, err
+	}
+	return left, nil
 }
 
 // followRoot moves every descendant a root's move has not carried yet, and
@@ -1778,8 +2034,11 @@ func (w *Writer) finishAbandonedMove(ctx context.Context, opID, id string) (bool
 //
 // ON A FRESH RANGE, never the first run's — see [Writer.MoveTaskToProject] —
 // and a descendant is LEFT when it is outside the ROOT'S project, whichever
-// project that is: a subtree can hold a child a merge re-parented in from
-// another project, and the move carries the whole subtree.
+// project that is: the move carries the whole subtree as it stands NOW, which
+// includes a task filed under a descendant after the first run read it, by a
+// node the root's mark had not reached yet ([refuseMidMove] refuses one
+// after). That task is what keeps the first run's mark up ([carriedAll]), so
+// this pass is the one that carries it.
 //
 // A DESCENDANT IN THE TRASH IS WAITED FOR, never skipped. The move refuses a
 // subtree holding one before its first append, so this is a task removed
@@ -1795,8 +2054,15 @@ func (w *Writer) finishAbandonedMove(ctx context.Context, opID, id string) (bool
 // each is conditioned on the project it was read in, and the task is no longer
 // there — so nothing is moved twice; the range minted for them is a gap, which
 // is what every other crash residue here costs.
+//
+// EVERY FAILURE IS A [MoveStopped]: the root is in its project before this
+// runs, so whatever stops the pass stops a move that has happened.
+//
+// rootCollision is whether the root's key opens another task, read beside the
+// root by the caller ([keyHeldByAnother]), so a stop names the root the way a
+// caller can open it.
 func (w *Writer) followRoot(ctx context.Context, opID string, root Task,
-	subtree []Task) error {
+	rootCollision bool, subtree []Task) error {
 
 	var left, frozen []Task
 	for _, descendant := range subtree {
@@ -1808,26 +2074,81 @@ func (w *Writer) followRoot(ctx context.Context, opID string, root Task,
 			left = append(left, descendant)
 		}
 	}
-	if len(left) > MaxDescendants {
-		return invalid("task %s has %d descendants still to move "+
-			"and a move carries at most %d", root.ID, len(left), MaxDescendants)
+	carried := len(subtree) - len(left) - len(frozen)
+	stop := func(followed int, waiting string, err error) error {
+		return &MoveStopped{Root: root.ID, Key: root.Key,
+			KeyCollision: rootCollision, Target: root.Project,
+			Followed: followed, Of: len(subtree), Waiting: waiting, OpID: opID,
+			Err: err}
 	}
+	if len(left) > MaxDescendants {
+		return stop(carried, "", invalid("task %s has %d descendants still "+
+			"to move and a move carries at most %d", root.ID, len(left),
+			MaxDescendants))
+	}
+	var last statelog.Position
 	if len(left) > 0 {
+		tags, err := w.followedTags(ctx, left)
+		if err != nil {
+			return stop(carried, "", err)
+		}
+		if len(tags) > 0 {
+			// AN ADD, as the first run's: see [Writer.MoveTaskToProject].
+			declared, declareErr := w.WriteTags(ctx, stepID(opID, tagsStep(tags)),
+				root.Project, TagEdit{Add: tags}, TagAuthority{})
+			if err = resolved("the carried tags in "+root.Project,
+				declared, declareErr); err != nil {
+				return stop(carried, "", fmt.Errorf("tracker: declare the tags "+
+					"the rest of %s's subtree carries in %s: %w", root.ID,
+					root.Project, err))
+			}
+		}
 		base, _, err := w.mintFresh(ctx, root.Project, len(left), nil)
 		if err != nil {
-			return err
+			return stop(carried, "", err)
 		}
-		if err := w.moveDescendants(ctx, opID, root.Project, left, base); err != nil {
-			return err
+		var moved int
+		moved, last, err = w.moveDescendants(ctx, opID, root.Project, left, base)
+		if err != nil {
+			return stop(carried+moved, "", err)
 		}
 	}
 	if len(frozen) > 0 {
-		return invalid("task %s under %s is in the trash and still "+
-			"in project %s, and a removed task is frozen — the move waits for "+
-			"it: restore it and the next pass carries it into %s, or purge it",
-			frozen[0].ID, root.ID, frozen[0].Project, root.Project)
+		return stop(carried+len(left), w.addressOf(ctx, frozen[0]),
+			invalid("task %s (%s) under %s is in the trash and still in "+
+				"project %s, and a removed task is frozen — the move waits for "+
+				"it: restore it and the next pass carries it into %s, or purge "+
+				"it", frozen[0].Key, frozen[0].ID, root.ID, frozen[0].Project,
+				root.Project))
 	}
-	return w.endMove(ctx, opID, root.ID, root.Project)
+	// AFTER WHAT THIS PASS MOVED, for the reason the sequence's own last
+	// append waits: [carriedAll] asks this node's rows whether anything
+	// under the root is still outside its project.
+	if err := w.After(last).endMove(ctx, opID, root.ID, root.Project); err != nil {
+		return stop(carried+len(left), "", err)
+	}
+	return nil
+}
+
+// addressOf is the reference a caller opens a task by: its key, or its id where
+// another task claimed the key first ([ItemAddress]).
+//
+// ITS ID WHEREVER THE DIRECTORY CANNOT BE READ, because the id is the one
+// reference that is never wrong — only less readable — and this names a task
+// to somebody about to act on it.
+func (w *Writer) addressOf(ctx context.Context, task Task) string {
+	if w.db.IsZero() {
+		return task.ID
+	}
+	var collision bool
+	if err := w.db.Read(ctx, func(tx *sql.Tx) error {
+		var err error
+		collision, err = keyHeldByAnother(ctx, tx, task.Key, task.ID)
+		return err
+	}); err != nil {
+		return task.ID
+	}
+	return ItemAddress(task.ID, task.Key, collision)
 }
 
 // endMove takes a root's mid-move mark down: the walk's last append.
@@ -1837,38 +2158,71 @@ func (w *Writer) followRoot(ctx context.Context, opID string, root Task,
 // landed, and a duty that raced the holder's own, each publish nothing rather
 // than a history row saying nothing.
 //
+// A MARK OVER A TASK THE WALK HAS NOT CARRIED STAYS UP ([carriedAll]), decided
+// in the same snapshot — so a caller waits the walk's appends out first
+// ([Writer.After]) or it reads its own walk as unfinished.
+//
 // A QUIET COMMIT UNDER [ChangeMoved]: it is the move finishing, and the people
 // watching the root heard about the move from its first append.
 func (w *Writer) endMove(ctx context.Context, opID, rootID, project string) error {
 	down := false
-	result, err := w.UpdateTask(ctx, stepID(opID, "moved"), rootID, project,
-		NoIfMatch, TaskPatch{Moving: &down}, ChangeMoved, nil)
+	result, err := w.updateTask(ctx, stepID(opID, "moved"), rootID, project,
+		NoIfMatch, TaskPatch{Moving: &down}, ChangeMoved, nil, carriedAll)
 	return resolved(fmt.Sprintf("the mid-move mark's removal from task %s",
 		rootID), result, err)
 }
 
 // moveDescendants moves each of a subtree's descendants, in order, on the
-// consecutive numbers from base.
+// consecutive numbers from base, and answers how many it moved and the
+// position of the last — what the append that takes the mark down has to have
+// applied before it decides. A step that stops the walk is answered as it is:
+// the caller knows how much of the subtree was carried before this pass, which
+// the [MoveStopped] it forms has to count.
 func (w *Writer) moveDescendants(ctx context.Context, opID, target string,
-	descendants []Task, base uint64) error {
+	descendants []Task, base uint64) (int, statelog.Position, error) {
 
+	var last statelog.Position
 	for i, descendant := range descendants {
 		moved, err := w.moveOne(ctx, stepID(opID, "task-"+descendant.ID),
-			descendant, target,
-			append(append([]string{}, descendant.FormerKeys...), descendant.Key),
-			&KeyMint{N: base + uint64(i)}, false, nil)
+			descendant, target, &KeyMint{N: base + uint64(i)}, false, nil)
 		// AN UNKNOWN DESCENDANT STOPS THE WALK like a refused one, and
 		// the root's mark stays up over it: lowering the mark past a
 		// task that may still be in the old project is the split subtree
 		// nothing would look for again.
 		if err = resolved(fmt.Sprintf("task %s's move into %s",
 			descendant.ID, target), moved, err); err != nil {
-			return fmt.Errorf("tracker: %d of %d descendants moved; re-run the "+
-				"move under the same operation id, which moves the rest: %w",
-				i, len(descendants), err)
+			return i, last, err
+		}
+		last = statelog.Later(last, moved.Position)
+	}
+	return len(descendants), last, nil
+}
+
+// moveStopped is what [Writer.MoveTaskToProject] answers when the walk stops
+// after the root's own move landed: a [MoveStopped], and never the bare error
+// that stopped it.
+//
+// A LATER PASS's OWN STOP IS KEPT WHOLE — the pass the walk runs for a task
+// filed behind it ([Writer.followRoot]) read the subtree again and counts what
+// it found, which the first read did not hold. key is the root's key in the
+// target by this run's own range; a root that moved under an EARLIER copy of
+// the operation holds that copy's number instead, read off its row.
+func (w *Writer) moveStopped(ctx context.Context, result WriteResult, opID string,
+	root Task, target, key string, followed, of int, err error) error {
+
+	var stop *MoveStopped
+	if errors.As(err, &stop) {
+		return err
+	}
+	collision := result.KeyCollision
+	if result.Collapsed {
+		key, collision = "", false
+		if landed, readErr := w.landedTask(ctx, result.Result, root.ID); readErr == nil {
+			key, collision = landed.Key, landed.KeyCollision
 		}
 	}
-	return nil
+	return &MoveStopped{Root: root.ID, Key: key, KeyCollision: collision,
+		Target: target, Followed: followed, Of: of, OpID: opID, Err: err}
 }
 
 // moveOne re-homes one task of a moving subtree, and marks it mid-move when it
@@ -1878,35 +2232,61 @@ func (w *Writer) moveDescendants(ctx context.Context, opID, target string,
 // second walk over the same subtree harmless: a task somebody already carried
 // is in another project by the time its step decides, and [Writer.UpdateTask]
 // refuses a write naming the wrong one rather than re-keying it again.
+//
+// THE KEY IT LEAVES IS NOT NAMED HERE: the mint re-keys the task, and the
+// decide turns whatever key it holds in its own snapshot into a former one
+// ([formerKeysAfterRekey]) — a list formed from the read that started the walk
+// replaced the former keys a task had gained since with the ones it held then.
 func (w *Writer) moveOne(ctx context.Context, opID string, task Task,
-	target string, former []string, mint *KeyMint, mark bool,
+	target string, mint *KeyMint, mark bool,
 	notify *Notify) (WriteResult, error) {
 
-	patch := TaskPatch{Project: &target, FormerKeys: &former, Mint: mint}
+	patch := TaskPatch{Project: &target, Mint: mint}
 	if mark {
 		patch.Moving = &mark
 	}
+	// WHETHER THE KEY THIS STEP LANDS THE TASK UNDER IS ANOTHER TASK'S,
+	// read in the snapshot the step decides in — the key is the one the
+	// applier composes from the mint, so no row holds it yet and the
+	// directory is the only thing that can say. Assigned on every round;
+	// the last is the one whose record was published.
+	var key string
+	if mint != nil {
+		key = mintedKey(target, mint.N)
+	}
+	var collision bool
 	// NO NOTIFICATION AND NO HISTORY BUMP on a descendant, whose caller
 	// passes none: a subtree that moved wakes the people watching the
 	// root, not everybody watching every task beneath it.
-	return w.UpdateTask(ctx, opID, task.ID, task.Project, NoIfMatch, patch,
-		ChangeMoved, notify)
+	result, err := w.updateTask(ctx, opID, task.ID, task.Project, NoIfMatch,
+		patch, ChangeMoved, notify,
+		func(ctx context.Context, tx *sql.Tx, _ Task, patch TaskPatch) (TaskPatch, error) {
+			held, err := keyHeldByAnother(ctx, tx, key, task.ID)
+			if err != nil {
+				return TaskPatch{}, fmt.Errorf("tracker: read whether key %s "+
+					"is already another task's: %w", key, err)
+			}
+			collision = held
+			return patch, nil
+		})
+	result.KeyCollision = collision
+	return result, err
 }
 
-// carriedTags is every tag the moving subtree carries, as its own project
+// carriedTags is every tag the tasks a move carries hold, as their own project
 // declares it — the label, colour and description a person chose — so the
 // target is given the same grouping rather than a bare slug. A slug the source
 // no longer declares (a set somebody edited after tagging) is carried as
 // itself.
 //
-// INSIDE THE MOVE'S PRE-FLIGHT READ, beside the subtree it describes, and in
-// the source set's own order so two moves of the same subtree declare the same
-// list.
-func carriedTags(ctx context.Context, tx *sql.Tx, root Task,
-	subtree []Task) ([]Tag, error) {
+// INSIDE A READ BESIDE THE TASKS IT DESCRIBES — the move's pre-flight, or a
+// later pass's ([Writer.followedTags]) — and in the source set's own order so
+// two moves of the same subtree declare the same list.
+func carriedTags(ctx context.Context, tx *sql.Tx, source string,
+	tasks []Task) ([]Tag, error) {
 
 	wanted := map[string]bool{}
-	for _, task := range append([]Task{root}, subtree...) {
+	for _, task := range tasks {
 		for _, slug := range task.Tags {
 			wanted[slug] = true
 		}
@@ -1914,13 +2294,13 @@ func carriedTags(ctx context.Context, tx *sql.Tx, root Task,
 	if len(wanted) == 0 {
 		return nil, nil
 	}
-	source, _, err := readTagSet(ctx, tx, root.Project)
+	set, _, err := readTagSet(ctx, tx, source)
 	if err != nil {
 		return nil, fmt.Errorf("tracker: read %s's tags for the move: %w",
-			root.Project, err)
+			source, err)
 	}
 	var out []Tag
-	for _, tag := range source.Tags {
+	for _, tag := range set.Tags {
 		if wanted[tag.Slug] {
 			out = append(out, Tag{Slug: tag.Slug, Label: tag.Label,
 				Color: tag.Color, Description: tag.Description})
@@ -1938,11 +2318,75 @@ func carriedTags(ctx context.Context, tx *sql.Tx, root Task,
 	return out, nil
 }
 
+// followedTags is [carriedTags] over the tasks a LATER pass carries — a re-run
+// or the duty finishing a walk — each read against the project it is in now.
+//
+// A LATER PASS DECLARES WHAT IT CARRIES as the first run did, because what it
+// carries is not always what the first run read: a task filed under the
+// subtree behind the walk ([carriedAll]) is carrying whatever tags it was
+// given, and moved without them it arrived holding slugs its new project had
+// never declared — shown bare on every board, and refused back by the next
+// edit of its tags.
+func (w *Writer) followedTags(ctx context.Context, left []Task) ([]Tag, error) {
+	byProject := map[string][]Task{}
+	var projects []string
+	for _, task := range left {
+		if _, seen := byProject[task.Project]; !seen {
+			projects = append(projects, task.Project)
+		}
+		byProject[task.Project] = append(byProject[task.Project], task)
+	}
+	slices.Sort(projects)
+	var out []Tag
+	seen := map[string]bool{}
+	err := w.db.Read(ctx, func(tx *sql.Tx) error {
+		for _, project := range projects {
+			tags, err := carriedTags(ctx, tx, project, byProject[project])
+			if err != nil {
+				return err
+			}
+			for _, tag := range tags {
+				if !seen[tag.Slug] {
+					seen[tag.Slug] = true
+					out = append(out, tag)
+				}
+			}
+		}
+		return nil
+	})
+	return out, err
+}
+
+// tagsStep names the append that declares a set of carried tags, by the set.
+//
+// NAMED BY WHAT IT DECLARES, because a walk is finished by as many passes as it
+// takes, each under the operation it was given — and a re-run's passes all
+// share the caller's. A step named for its place would be answered, on the
+// second pass, from the ledger row of the first pass's declaration, and the
+// second pass's own tags would never be declared.
+func tagsStep(tags []Tag) string {
+	slugs := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		slugs = append(slugs, tag.Slug)
+	}
+	slices.Sort(slugs)
+	sum := sha256.Sum256([]byte(strings.Join(slugs, "\x00")))
+	return "tags-" + hex.EncodeToString(sum[:8])
+}
+
 // claimAlias takes a former key, create-only, so the key keeps resolving.
 //
 // FIRST-WRITER-WINS ON ITS OWN SUBJECT, and a claim that loses is not an error:
 // somebody already recorded this key's move, which is the fact the claim
 // exists to establish.
+//
+// A KEY ANOTHER TASK HOLDS IS NOTHING TO CLAIM, and the decide publishes
+// nothing. The directory names another task for a key only when the moving
+// task is a duplicate of it (`key_collision`): the key was never this task's
+// address — it opened the task that claimed it first — so there is nothing to
+// keep resolving, and the claimant goes on answering to it as it always did.
+// This refused instead, naming the claimant, which made a duplicate the one
+// task a move could never re-key: the gesture that gives it a key of its own.
 func (w *Writer) claimAlias(ctx context.Context, opID, key, taskID string,
 	at time.Time) (WriteResult, error) {
 
@@ -1957,10 +2401,9 @@ func (w *Writer) claimAlias(ctx context.Context, opID, key, taskID string,
 			if owner, claimed, err := readAlias(ctx, tx, key); err != nil {
 				return statelog.Decision{}, err
 			} else if claimed && owner != taskID {
-				return statelog.Decision{}, fmt.Errorf("tracker: key %s belongs "+
-					"to task %s, so it cannot be aliased to %s", key, owner, taskID)
+				return statelog.Decision{}, nil
 			}
-			return w.decide(stamp, subject, OpCreate, "", scope, opID, KeyAlias{
+			return w.decide(ctx, tx, stamp, subject, OpCreate, "", scope, opID, KeyAlias{
 				Key: key, TaskID: taskID,
 			}, nil, at)
 		},
@@ -1969,23 +2412,6 @@ func (w *Writer) claimAlias(ctx context.Context, opID, key, taskID string,
 		return result, nil
 	}
 	return result, err
-}
-
-// tagsOf reads a project's tag set outside any decision.
-func (w *Writer) tagsOf(ctx context.Context, project string) (TagSet, error) {
-	var set TagSet
-	err := w.db.Read(ctx, func(tx *sql.Tx) error {
-		stored, held, err := readTagSet(ctx, tx, project)
-		if err != nil {
-			return err
-		}
-		if !held {
-			stored = TagSet{V: DocumentVersion, Project: project}
-		}
-		set = stored
-		return nil
-	})
-	return set, err
 }
 
 // MergeDuplicates folds one task into another. SEQUENCE 13.
@@ -2006,6 +2432,16 @@ func (w *Writer) tagsOf(ctx context.Context, project string) (TagSet, error) {
 // THE MARKER IS CLEARED LAST. While it stands, the duplicate is visibly
 // mid-merge rather than silently half-merged, which is the difference between
 // a state somebody can wait out and one they have to reconstruct.
+//
+// WHAT NOTHING COULD FINISH IS REFUSED BEFORE THE MARK: a survivor in the
+// trash, whichever way the subtasks go; moving the subtasks onto one of them,
+// which would file one under itself; and moving them onto an item in another
+// project ([ErrReparentAcrossProjects]). Each would be a mark the walk, the
+// re-run and the duty all fail on for ever. And moving them while a
+// cross-project move has not carried either end is UNAVAILABLE rather than
+// refused ([refuseMidMove]), since which project each end is in is about to
+// change. What arrives AFTER the mark is the duty's to wait out and name — see
+// [mergeWaits].
 func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into string,
 	reparent bool, notify *Notify) (WriteResult, error) {
 
@@ -2040,7 +2476,8 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 		case current.Removed != nil:
 			return invalid("task %s was removed by %s at %s; "+
 				"restore it before merging it", duplicate,
-				current.Removed.By, current.Removed.At.Format(time.RFC3339))
+				current.Removed.By,
+				current.Removed.At.Format(time.RFC3339))
 		}
 		task = current
 		survivor, held, err := readTask(ctx, tx, into)
@@ -2049,20 +2486,67 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 			return err
 		case !held:
 			return missingTask(ctx, tx, into, "nothing can be merged into it")
-		case !reparent || survivor.Project == current.Project:
+		case survivor.Removed != nil:
+			// REFUSED BEFORE THE MARK, WHICHEVER WAY THE SUBTASKS GO.
+			// Moving them, every re-parent is refused on its own
+			// subject — a parent in the trash takes no new child — so
+			// the mark would be one nothing can finish, retried by the
+			// duty on every tick. Leaving them, the duplicate is
+			// cancelled INTO an item nobody can see, so the one live
+			// copy of the work is closed in favour of one in the trash.
+			// Either way the survivor has to be live first.
+			return invalid("%s (%s) is in the trash — removed by %s at "+
+				"%s; restore it before merging anything into it",
+				survivor.Key, into, survivor.Removed.By,
+				survivor.Removed.At.Format(time.RFC3339))
+		case !reparent:
 			return nil
 		}
-		// A SUBTASK UNDER AN ITEM IN ANOTHER PROJECT is drawn under that
-		// item on neither board and sits in the attention queue as
-		// `inconsistent_project` — a state only a move of its root
-		// clears, and a merge is not a move. Refused before the first
-		// append, naming both ways out, rather than left for somebody to
-		// find.
+		// AND NOT INTO ITS OWN SUBTREE when the subtasks move: the child
+		// the survivor sits under would be re-parented onto the survivor,
+		// which [refuseParent] refuses as a cycle — so the mark would
+		// stand with nothing to finish it.
+		under, err := inSubtree(ctx, tx, duplicate, into)
+		switch {
+		case err != nil:
+			return err
+		case under:
+			return invalid("%s is one of %s's own subtasks, so "+
+				"the duplicate's subtasks cannot move onto it — one of them "+
+				"would end up under itself. Merge without moving the "+
+				"subtasks to leave them where they are",
+				survivor.Key, current.Key)
+		}
+		// ONLY WHAT THERE IS TO CARRY IS JUDGED BELOW: a duplicate with no
+		// subtask in its own project moves nothing onto the survivor, so
+		// neither which project the survivor is in nor whether a move is
+		// still carrying either end is anything to refuse it over.
 		kids, err := readChildBatch(ctx, tx, duplicate, current.Project, "", 1)
-		if err != nil {
+		if err != nil || len(kids) == 0 {
 			return err
 		}
-		if len(kids) > 0 {
+		// NOR WHILE A MOVE HAS NOT CARRIED EITHER END, and asked before
+		// the projects are compared, because one of them is about to
+		// change: the walk carries whatever it read, so a subtask moved
+		// off an uncarried duplicate would land in the move's project
+		// under a survivor left in the old one, and one moved onto an
+		// uncarried survivor is a child that walk never read. See
+		// [refuseMidMove].
+		if err = refuseMidMove(ctx, tx, current, "task",
+			"its subtasks moved now would be split across two projects"); err != nil {
+			return err
+		}
+		if err = refuseMidMove(ctx, tx, survivor, "task",
+			"subtasks moved onto it now would be left behind"); err != nil {
+			return err
+		}
+		if survivor.Project != current.Project {
+			// A SUBTASK UNDER AN ITEM IN ANOTHER PROJECT is drawn under
+			// that item on neither board and sits in the attention
+			// queue as `inconsistent_project` — a state only a move of
+			// its root clears, and a merge is not a move. Refused
+			// before the first append, naming both ways out, rather
+			// than left for somebody to find.
 			return invalid("task %s's subtasks are in %s and %s is "+
 				"in %s, so re-parenting them onto it would file subtasks under "+
 				"an item in another project: move %s into %s first — its "+
@@ -2122,8 +2606,8 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 // SHARED BY THE SEQUENCE AND THE DUTY, which is what [readChildBatch]'s
 // selection buys: the duty's repair is a RE-RUN of the batch the holder did
 // not reach, not a second algorithm that has to keep agreeing with this one.
-// A merge's children are one of the three walks [WalkBatch] is named for, and
-// the value buys the same two things here as there — a bounded read whatever
+// A merge's children are one of the walks [WalkBatch] is named for, and the
+// value buys the same two things here as elsewhere — a bounded read whatever
 // the subtree's size, and a bounded stretch between the claim's heartbeats.
 //
 // THE STEP ID IS KEYED ON THE CHILD rather than on its position in the walk,
@@ -2168,9 +2652,18 @@ func (w *Writer) reparentOnto(ctx context.Context, opID, duplicate, into string)
 			// that may still be under the duplicate.
 			if err = resolved(fmt.Sprintf("subtask %s's move onto %s",
 				child.ID, into), result, err); err != nil {
+				// THE DUTY FINISHES IT ONCE THE MOVE CAN LAND, which is
+				// not the same promise as "the duty finishes it": a
+				// survivor that went to the trash after the pre-flight
+				// takes no child until it is restored, one filed under
+				// the duplicate since takes none of the subtasks above
+				// it, and the duty leaves such a merge waiting —
+				// reported, not retried — rather than failing on it
+				// every tick. See [mergeWaits].
 				return moved, fmt.Errorf("tracker: %d subtask(s) re-parented "+
-					"onto %s and %s still has more; the tracker duty completes "+
-					"the rest idempotently: %w", moved, into, duplicate, err)
+					"onto %s and %s still has more, so it stays marked "+
+					"mid-merge; the tracker duty moves the rest once the "+
+					"move can land: %w", moved, into, duplicate, err)
 			}
 			moved++
 		}

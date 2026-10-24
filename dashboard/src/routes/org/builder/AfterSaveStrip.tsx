@@ -19,7 +19,10 @@
  * diff of what they changed (the saved revision against its parent, never
  * against the active revision, which the save now is), and the company as
  * YAML, which is what keeps a `company.yaml` in a repository in step with what
- * the dashboard wrote.
+ * the dashboard wrote. Both read the company document, so a lead who saved
+ * their unit without Admin is offered neither — and is asked nothing of the
+ * fleet, which is Admin's too, so the strip follows the save by this node's
+ * own health push alone.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -27,6 +30,7 @@ import { href } from "~/app/router.tsx";
 import { plural } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useEngineHealth } from "~/lib/store-hooks.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { rest, RestError, type FleetAnswer } from "~/protocol/index.ts";
 import type { EngineHealth } from "~/contract/health.ts";
 import { useRecheck } from "~/routes/settings/recheck.ts";
@@ -164,9 +168,10 @@ export function AfterSaveStrip({
   onDismiss: () => void;
 }) {
   const [yaml, setYaml] = useState(false);
+  const readsCompany = useViewer().admin;
   const [pollMs, setPollMs] = useState<number | undefined>(APPLYING_POLL_MS);
   const health = useEngineHealth();
-  const fleet = useQuery("fleet", undefined, { pollMs });
+  const fleet = useQuery("fleet", undefined, { pollMs, enabled: readsCompany });
   const state = useMemo(() => applyState(saved, health, fleet.data), [saved, health, fleet.data]);
 
   // The fleet's answer, read through a ref so the recheck window is armed once
@@ -196,7 +201,7 @@ export function AfterSaveStrip({
         }
         action={
           <span className="row gap-1 wrap">
-            {saved.parentRevisionId ? (
+            {!readsCompany ? null : saved.parentRevisionId ? (
               <ButtonLink
                 size="small"
                 variant="ghost"
@@ -215,9 +220,11 @@ export function AfterSaveStrip({
                 View the configuration
               </ButtonLink>
             )}
-            <Button size="small" variant="ghost" onClick={() => setYaml(true)}>
-              Copy as YAML
-            </Button>
+            {readsCompany && (
+              <Button size="small" variant="ghost" onClick={() => setYaml(true)}>
+                Copy as YAML
+              </Button>
+            )}
             {state.showFleet && (
               <ButtonLink size="small" variant="ghost" href={href(screenPath("nodes"))}>
                 Open the fleet
@@ -256,9 +263,8 @@ export function PreviousRevisionNote() {
   if ((health?.applied_epoch ?? 0) >= saved.epoch) return null;
   return (
     <Callout variant="neutral" icon={<RotateCwGlyph />}>
-      This node is still applying revision{" "}
-      <InlineCode>{shortRevision(saved.revisionId)}</InlineCode>, so what is drawn below is the
-      revision before it.
+      Still applying <InlineCode>{shortRevision(saved.revisionId)}</InlineCode>. Showing the
+      previous revision.
     </Callout>
   );
 }
@@ -345,16 +351,12 @@ function YamlDialog({ savedRevision, onClose }: { savedRevision: string; onClose
         <>
           {state.revision !== null && state.revision !== savedRevision && (
             <Callout variant="warning">
-              This is revision{" "}
-              <InlineCode tone="inherit">{shortRevision(state.revision)}</InlineCode>, which is
-              active now, rather than the one you saved.
+              Showing active revision{" "}
+              <InlineCode tone="inherit">{shortRevision(state.revision)}</InlineCode>, not the one
+              you saved.
             </Callout>
           )}
-          <p className="t-caption">
-            Credentials are redacted, as every configuration read is: a value the engine holds reads
-            as <InlineCode>__redacted__</InlineCode>, and a reference keeps its{" "}
-            <InlineCode>${"{NAME}"}</InlineCode> form.
-          </p>
+          <p className="t-caption">Credentials are hidden.</p>
           {/* ITS OWN CEILING, the one block that states one: a dialog is
               portaled to the document, outside the shell's scrollers, so the
               view-derived ceiling they declare (`--record-ceiling`,

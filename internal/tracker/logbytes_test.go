@@ -258,7 +258,7 @@ func measureADay(t *testing.T, c corpus) gestures {
 	// create is filed into, and THE CHART THE WRITER RESOLVES LEADS
 	// THROUGH, as the engine's does.
 	r.ledBy(referenceChart{})
-	if _, err := r.writer.ApplyChart(t.Context(), activation(0), []tracker.ChartProject{
+	if _, err := r.writer.ApplyChart(t.Context(), activatedAt(100), []tracker.ChartProject{
 		{Key: "ENG", Name: referenceUnit, Unit: referenceUnit},
 	}); err != nil {
 		t.Fatalf("apply the chart: %v", err)
@@ -413,8 +413,10 @@ func TestABarrierCostsTheMutationLogWhatTheForecastPricesItAt(t *testing.T) {
 		t.Run(arm.name, func(t *testing.T) {
 			t.Parallel()
 			r := newRoundTrip(t)
+			// SIGNED AS EVERY BARRIER A NODE APPENDS IS, since the frame is
+			// part of what the log stores and so of what a barrier costs it.
 			index, err := statelog.NewReadIndex(tracker.Domain{}, tracker.Domain{}.Stream(),
-				r.log, r.reserve, tracker.EncodeBarrier,
+				r.log, testSigner(t, tracker.Domain{}), r.reserve, tracker.EncodeBarrier,
 				func() uint32 { return arm.generation }, nil)
 			if err != nil {
 				t.Fatalf("build the read index: %v", err)

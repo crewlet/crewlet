@@ -55,6 +55,7 @@ import (
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Turn is everything a turn's own code needs, and nothing else.
@@ -142,6 +143,20 @@ type Turn struct {
 	// resolve against a roster that changed underneath it.
 	Org *org.Organization
 
+	// Withheld reports whether a human seat's contact identities are
+	// withheld — its holder suspended, retired or removed, by the identity
+	// directory's reading the party registry was built from. Pinned with
+	// the org and for the org's reason: it is what a roster and a colleague
+	// lookup leave out, and a turn that could see a person's accounts on
+	// one tool call and not the next would be addressing a moving target.
+	//
+	// ONE READING FOR THE WHOLE ENGINE: an inbound message from a withheld
+	// holder already resolves to an outside party, and an agent that could
+	// still find their Slack id in its roster would go on DMing somebody the
+	// company has off-boarded. Nil withholds nothing, which is a surface
+	// built outside a turn.
+	Withheld func(handle string) bool
+
 	// Depth is the delegation depth this turn inherited, and Chain is who
 	// it came through. Both travel on the work this turn starts — an A2A
 	// ask, a detached coding run — so the turn that work wakes inherits
@@ -220,12 +235,13 @@ type Turn struct {
 	Task  string
 	Reply string
 
-	// Requester is the seat whose message, notice or ask woke this turn,
-	// and empty when no seat did — a schedule, a sender the chart does not
-	// know. Carried for the reason Task and Reply are: a coding run this
-	// turn detaches can stop to ask "the requester" a question days later,
-	// on another node, and the launch is the only frame that can put who
-	// that is on the run's row.
+	// Requester is the handle of the seat whose message, notice or ask woke
+	// this turn, and empty when no seat did — a schedule, a sender the org
+	// does not know. Carried for the reason Task and Reply are: a coding run
+	// this turn detaches can stop to ask "the requester" a question days
+	// later, on another node, and the launch is the only frame that can put
+	// who that is on the run's row. A handle is immutable (ADR-0013), so the
+	// row names the same seat for as long as the seat exists.
 	Requester string
 
 	// Senders are the parties who triggered this turn, in the order they
@@ -283,6 +299,35 @@ type Turn struct {
 	// over. Nil outside a turn, and wherever there is no counter to charge
 	// — the seat's spend is then charged, or not, as before.
 	Budget auxspend.Budget
+
+	// Boundary is the token every fence this turn writes carries: around
+	// the chat thread its prompt was handed and around every page body,
+	// comment and file its tools read that somebody else wrote (see
+	// [provenance.Fence]). Minted once per turn segment from crypto/rand,
+	// beside the run's other identities, and read through
+	// [Turn.FenceBoundary].
+	//
+	// ONE TOKEN FOR THE SEGMENT rather than one per read, so the prompt's
+	// thread and every tool answer read in it are fenced alike and a model
+	// pairing an opening line with its closer meets one token, not a dozen.
+	// A resumed segment mints its own: the fences the parked conversation
+	// already holds keep theirs, and their content has had every token
+	// removed either way.
+	Boundary provenance.Boundary
+}
+
+// FenceBoundary is the token this turn's fences carry: [Turn.Boundary], or a
+// fresh one for each call where there is none.
+//
+// FRESH RATHER THAN EMPTY, because a fence written with an empty token is one
+// any guess closes. Nil is a tool surface built outside a turn (an operator's
+// assistant calling a read over the stateless operator surface, where each
+// call is its own reading), and there a token per call is exactly as strong.
+func (t *Turn) FenceBoundary() provenance.Boundary {
+	if t == nil || !t.Boundary.Valid() {
+		return provenance.NewBoundary()
+	}
+	return t.Boundary
 }
 
 // Aux is the attribution an auxiliary call made for this turn states: the
@@ -384,6 +429,14 @@ func (t *Turn) Role() string {
 		return ""
 	}
 	return t.Seat.Name
+}
+
+// WithholdsContacts reports whether a human seat's contact identities are
+// withheld on this turn — see [Turn.Withheld]. Nil-safe, and a method value
+// rather than the field so a caller passing it on never hands a nil func to
+// somebody who will call it.
+func (t *Turn) WithholdsContacts(handle string) bool {
+	return t != nil && t.Withheld != nil && t.Withheld(handle)
 }
 
 // AgentID is the acting seat's derived agent id, or "".

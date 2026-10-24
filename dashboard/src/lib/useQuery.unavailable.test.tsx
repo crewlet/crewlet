@@ -15,6 +15,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ClientContext } from "./store-hooks.ts";
 import { useQuery } from "./useQuery.ts";
 import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
+import { UNAVAILABLE_RETRY_MS } from "~/contract/retry.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -57,10 +58,17 @@ function mount(answers: Array<() => Promise<unknown>>, pollMs?: number) {
   return { asked, text: () => view.getByTestId("probe").textContent };
 }
 
+/**
+ * A refusal with the code, and for `unavailable` the wait its frame named —
+ * as the socket builds it (`refusalOf`): the state log's refusal, whose
+ * `retryAfter` is the hint.
+ */
 const refuse =
   (code: string, hint: number | null = null) =>
   () =>
-    Promise.reject(new QueryError(code, hint));
+    Promise.reject(
+      new QueryError(code, hint === null ? null : { code: null, detail: null, retryAfter: hint }),
+    );
 const answer = () => Promise.resolve({ nodes: [] });
 
 test("an unavailable answer is asked again after the engine's wait, and fills in", async () => {
@@ -108,13 +116,25 @@ test("an unavailable answer comes back sooner than a slow poll would", async () 
   expect(asked).toHaveBeenCalledTimes(2);
 });
 
-// A hint below a second is not a loop: zero is "now", against a node that has
-// just said it cannot answer.
-test("a zero hint waits a second", async () => {
+// A ZERO HINT IS THE ENGINE SAYING WAITING WILL NOT CHANGE IT — a full log, a
+// record this node cannot decode — so nothing re-asks on a timer; a reconnect
+// or the reader does.
+test("a zero hint is not asked again on its own", async () => {
   const { asked } = mount([refuse("unavailable", 0), answer]);
   await act(async () => {});
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(999);
+    await vi.advanceTimersByTimeAsync(120_000);
+  });
+  expect(asked).toHaveBeenCalledTimes(1);
+});
+
+// AN UNAVAILABLE FRAME THAT NAMED NO WAIT is a peer that said nothing better,
+// and waits what the engine says when it has nothing better.
+test("an unavailable answer that named no wait is asked again after the default", async () => {
+  const { asked } = mount([refuse("unavailable"), answer]);
+  await act(async () => {});
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(UNAVAILABLE_RETRY_MS - 1);
   });
   expect(asked).toHaveBeenCalledTimes(1);
   await act(async () => {
@@ -123,16 +143,14 @@ test("a zero hint waits a second", async () => {
   expect(asked).toHaveBeenCalledTimes(2);
 });
 
-// Only a refusal the engine named a wait for is asked again on its own. Any
-// other code is a fact about the request or the node that waiting does not
-// change, and an `unavailable` with no wait gets no invented one.
+// Only `unavailable` is asked again on its own. Any other code is a fact
+// about the request or the reader that waiting does not change.
 test.each([
   ["bad_params", null],
   ["unknown_query", null],
   ["query_failed", null],
   ["unauthorized", null],
-  ["unavailable", null],
-] as const)("a %s answer with no wait is not asked again", async (code, hint) => {
+] as const)("a %s answer is not asked again", async (code, hint) => {
   const { asked } = mount([refuse(code, hint)]);
   await act(async () => {});
   await act(async () => {

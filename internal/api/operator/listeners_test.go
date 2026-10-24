@@ -14,42 +14,50 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
-	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// A STREAM THAT OPENS AS ITS CATALOGUE IS REPLACED IS STILL TOLD. A listen
-// resolves the catalogue it is served by at the top of its request, and the
-// SDK registers its subscription only later, once the request is read: held
-// between the two while the node swaps and announces, it was in nobody's list
-// when the announcement went out, subscribed on the catalogue just replaced,
-// and heard nothing until the next change — days, perhaps — while its client
-// held whatever it had listed before. Every stream is therefore told once as it
-// opens, which also covers a client whose first listing raced its own stream
-// and reached a node that had not rebuilt yet.
+// A STREAM THAT OPENS AS WHAT THE NODE SERVES MOVES IS STILL TOLD. A listen
+// reads the catalogue it is served by at the top of its request, and the SDK
+// registers its subscription only later, once the request is read: held
+// between the two while the node's halves move and the change is announced,
+// it was in nobody's list when the announcement went out, subscribed on the
+// catalogue just superseded, and heard nothing until the next change — days,
+// perhaps — while its client held whatever it had listed before. Every stream
+// is therefore told once as it opens, which also covers a client whose first
+// listing raced its own stream and reached a node that had not moved yet.
 func TestAStreamOpenedAsItsCatalogueIsReplacedIsStillTold(t *testing.T) {
 	t.Parallel()
 	listeners := operator.NewListeners()
-	work := builtin.WorkDeps{Reader: stubWorkReader{}, Actor: operator.WorkActor(nil, nil)}
-	reads := newSurface(t, operator.Options{Work: work, Listeners: listeners})
-	steers := newSurface(t, operator.Options{
-		Work:      work,
-		Steer:     builtin.SteerDeps{Asker: struct{ builtin.FleetAsker }{}, Actor: operator.WorkActor(nil, nil)},
+	reads := operator.Halves{Work: builtin.WorkDeps{Reader: stubWorkReader{}}}
+	withPages := reads
+	withPages.Pages = builtin.PageDeps{Reader: stubPageReader{}}
+	var current atomic.Pointer[operator.Halves]
+	current.Store(&reads)
+	var hold atomic.Bool
+	resolved, release := make(chan struct{}), make(chan struct{})
+	s := newSurface(t, operator.Options{
+		// READ AT THE TOP of the call, as every call reads it — and the
+		// listen's call held right after, before the SDK subscribes it.
+		Halves: func() (operator.Halves, bool) {
+			h := *current.Load()
+			if hold.CompareAndSwap(true, false) {
+				close(resolved)
+				<-release
+			}
+			return h, true
+		},
 		Listeners: listeners,
 	})
-	var current atomic.Pointer[operator.Server]
-	current.Store(reads)
-	resolved, release := make(chan struct{}), make(chan struct{})
+	ops := machine("token:ops-bot", iam.Apps...)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// RESOLVED AT THE TOP, as the app resolves it for every request.
-		server := current.Load()
-		r = r.WithContext(auth.WithOperator(r.Context(), "ops-bot"))
+		r = r.WithContext(iam.WithPrincipal(r.Context(), ops))
 		if methodOf(t, r) == "subscriptions/listen" {
-			close(resolved)
-			<-release
+			hold.Store(true)
 		}
-		server.MCPHandler().ServeHTTP(w, r)
+		s.MCPHandler().ServeHTTP(w, r)
 	}))
 	t.Cleanup(srv.Close)
 
@@ -80,9 +88,9 @@ func TestAStreamOpenedAsItsCatalogueIsReplacedIsStillTold(t *testing.T) {
 		t.Fatal("the client never opened its stream")
 	}
 
-	// THE SWAP AND ITS ANNOUNCEMENT, while the stream is between resolving
+	// THE MOVE AND ITS ANNOUNCEMENT, while the stream is between reading
 	// the catalogue of reads and subscribing on it.
-	current.Store(steers)
+	current.Store(&withPages)
 	listeners.Announce(t.Context())
 	close(release)
 	sess := <-connected
@@ -94,16 +102,16 @@ func TestAStreamOpenedAsItsCatalogueIsReplacedIsStillTold(t *testing.T) {
 	select {
 	case <-changed:
 	case <-ctx.Done():
-		t.Fatal("a stream that subscribed on a catalogue already replaced was never " +
+		t.Fatal("a stream that subscribed on a catalogue already superseded was never " +
 			"told its tools changed")
 	}
 	listed, err := sess.ListTools(ctx, nil)
 	if err != nil {
 		t.Fatalf("the listing after it was told: %v", err)
 	}
-	if !hasTool(listed, builtin.SteerTurnTool) {
-		t.Errorf("the stream was told and its listing is still the replaced catalogue, "+
-			"without %s", builtin.SteerTurnTool)
+	if !hasTool(listed, builtin.GetPageTool) {
+		t.Errorf("the stream was told and its listing is still the superseded catalogue, "+
+			"without %s", builtin.GetPageTool)
 	}
 }
 
@@ -118,13 +126,14 @@ func TestEndingTheListenersEndsEveryStream(t *testing.T) {
 	t.Parallel()
 	listeners := operator.NewListeners()
 	reads := newSurface(t, operator.Options{
-		Work:      builtin.WorkDeps{Reader: stubWorkReader{}, Actor: operator.WorkActor(nil, nil)},
+		Halves:    fixed(operator.Halves{Work: builtin.WorkDeps{Reader: stubWorkReader{}}}),
 		Listeners: listeners,
 	})
+	ops := machine("token:ops-bot", iam.Apps...)
 	var held atomic.Int64
 	completed := make(chan struct{}, 4)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r = r.WithContext(auth.WithOperator(r.Context(), "ops-bot"))
+		r = r.WithContext(iam.WithPrincipal(r.Context(), ops))
 		if methodOf(t, r) != "subscriptions/listen" {
 			reads.MCPHandler().ServeHTTP(w, r)
 			return

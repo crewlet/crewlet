@@ -280,7 +280,8 @@ func TestTheZeroFenceReadsItsBoundsOnlyAfterTheLogSaysTheSubjectIsEmpty(t *testi
 			decided := h.applier.Committed()
 
 			// A PEER'S RECORD this node has not applied when it decides.
-			r, _, err := h.log.Append(t.Context(), wire, "peer-op", nil, []byte("peer"))
+			r, _, err := h.log.Append(t.Context(), wire, "peer-op", nil,
+				signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, subject, statelog.ScopeSet{Paths: []string{subject.String()}}, "peer-op", "peer")))
 			if err != nil {
 				t.Fatalf("the peer's write: %v", err)
 			}
@@ -389,7 +390,8 @@ func TestOldVersionAgainstARecreatedStream(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
 		h.gen.Store(2)
-		peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil, []byte("peer"))
+		peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil,
+			signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, probeSubject("a"), statelog.ScopeSet{Paths: []string{"object.a"}}, "peer-op", "peer")))
 		if err != nil {
 			t.Fatalf("the peer's write: %v", err)
 		}
@@ -480,8 +482,8 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 		h.appends.beforeLastSeq = func() {
 			h.sweep(minted.Add(time.Hour))
 			if _, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil,
-				probeRecord(statelog.Stamp{Gen: 1, Writer: "node-b"}, probeSubject("a"),
-					statelog.ScopeSet{Paths: []string{"object.a"}}, "peer-op", "peer")); err != nil {
+				signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: 1, Writer: "node-b"}, probeSubject("a"), statelog.ScopeSet{Paths: []string{"object.a"}},
+					"peer-op", "peer"))); err != nil {
 				t.Errorf("the peer's write: %v", err)
 			}
 		}
@@ -545,8 +547,9 @@ func TestLostPubAckIsUnknownNotSuccess(t *testing.T) {
 		h.appends.beforeLastSeq = func() {
 			h.sweep(minted.Add(time.Hour))
 			if _, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil,
-				probeRecord(statelog.Stamp{Gen: 1, Writer: "node-b"}, probeSubject("a"),
-					statelog.ScopeSet{Paths: []string{"object.a"}}, "peer-op", "peer")); err != nil {
+				signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: 1, Writer: "node-b"},
+					probeSubject("a"), statelog.ScopeSet{Paths: []string{"object.a"}},
+					"peer-op", "peer"))); err != nil {
 				t.Errorf("the peer's write: %v", err)
 			}
 		}

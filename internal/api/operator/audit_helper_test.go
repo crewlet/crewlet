@@ -5,7 +5,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/operator"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/events"
 )
 
@@ -41,12 +43,22 @@ func (a *auditLog) published() []*events.Event {
 	return append([]*events.Event(nil), a.events...)
 }
 
-// newSurface builds a surface, filling an unset audit with a log nobody reads,
-// and fails the test on a refusal.
+// fixed is [operator.Options.Halves] for a node whose company is up and serves
+// exactly these halves.
+func fixed(h operator.Halves) func() (operator.Halves, bool) {
+	return func() (operator.Halves, bool) { return h, true }
+}
+
+// newSurface builds a surface, filling an unset audit with a log nobody reads
+// and an unset decision with the authority table over no chart — what every
+// grant-only case is decided by — and fails the test on a refusal.
 func newSurface(t *testing.T, opts operator.Options) *operator.Server {
 	t.Helper()
 	if opts.Audit == nil {
 		opts.Audit = &auditLog{}
+	}
+	if opts.Authorize == nil {
+		opts.Authorize = builtin.Decide(authz.NoChart{})
 	}
 	s, err := operator.New(opts)
 	if err != nil {

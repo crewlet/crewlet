@@ -129,10 +129,7 @@ export function TurnCard({
         {attempt && (
           <Tag
             appearance="outline"
-            title={
-              `attempt ${attempt.index} of ${attempt.total} at this trigger, among the turns ` +
-              `on this screen — a turn that failed without acting is redelivered and runs again`
-            }
+            title={`Attempt ${attempt.index} of ${attempt.total} for this trigger`}
           >
             attempt {attempt.index}/{attempt.total}
           </Tag>
@@ -149,12 +146,12 @@ export function TurnCard({
             usage at all, or a turn the engine stopped before its first call
             came back — rendered as "not recorded". That is the confusion
             `app/frame/cells.tsx` exists to end: absent and zero are different
-            facts and a dash claims the first about the second. The dash stays
-            for the one case where the zero really is an absence — a turn
+            facts and a dash claims the first about the second. An ellipsis
+            marks the one case where the zero really is an absence: a turn
             still running, whose phases have not reported their usage yet. */}
         {group.live && group.totalTokens === 0 ? (
           <span className="phase-meta" title="no phase has reported its usage yet">
-            —
+            …
           </span>
         ) : (
           <span className="phase-meta t-num" title="tokens across every phase of this turn">
@@ -170,11 +167,7 @@ export function TurnCard({
         {took != null && !group.live && (
           <span
             className="phase-meta t-num"
-            title={
-              measured
-                ? "what the engine measured"
-                : "across this turn's phases — its own record is not in hand"
-            }
+            title={measured ? "what the engine measured" : "Sum of its phases"}
           >
             {fmtDuration(took)}
           </span>
@@ -195,7 +188,7 @@ export function TurnCard({
             began > 0 ? (
               fmtElapsed(now - began)
             ) : (
-              <EmptyValue label="Started at an instant this build could not read" />
+              <EmptyValue label="Start time unknown" />
             )
           ) : (
             relTime(group.at, now)
@@ -244,10 +237,6 @@ export function TurnCard({
             >
               Open the whole turn
             </Button>
-            <span className="t-caption">
-              what woke it, what it was given, and what it learned — the events no phase carries
-            </span>
-            <span className="spacer" />
           </footer>
         </div>
       )}

@@ -28,6 +28,7 @@ import { managedSentence, type ConfigRefusal } from "~/protocol/configAnswer.ts"
 import type { TokenBudget } from "~/protocol/types.ts";
 import { PERIOD_ADJECTIVE, readCeiling } from "./budget.ts";
 import { fmtCount } from "./format.ts";
+import { configGuardedReason } from "./useWriteAccess.ts";
 
 export type Period = (typeof BUDGET_WINDOWS)[number]["period"];
 
@@ -183,11 +184,7 @@ export function refusalWords(
 ): { message: string; reload: boolean } {
   switch (refusal.kind) {
     case "guarded":
-      return {
-        message:
-          "The engine did not take this token as an operator's, so the ceiling was not changed.",
-        reload: false,
-      };
+      return { message: configGuardedReason(refusal.code), reload: false };
     case "managed":
       return { message: managedSentence(refusal.managedBy), reload: false };
     case "conflict":
@@ -199,6 +196,11 @@ export function refusalWords(
     case "draining":
       return {
         message: `This node is draining and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`,
+        reload: false,
+      };
+    case "starting":
+      return {
+        message: `This node is still starting and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`,
         reload: false,
       };
     case "unreachable":

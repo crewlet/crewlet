@@ -27,7 +27,7 @@
  */
 
 import { useId, type ReactNode } from "react";
-import { DATA_COLOR_OTHER, dataColor } from "@crewlethq/ui";
+import { dataColor } from "@crewlethq/ui";
 
 // ---------------------------------------------------------------------------
 

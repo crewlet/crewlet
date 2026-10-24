@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
-	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
 // chatReply is a chat delivery offered as an answer: the conversation it came
@@ -384,7 +383,7 @@ func TestAnAnswerThatCannotBeResumedIsHandedBackAfterItsAttempts(t *testing.T) {
 	}
 	var handed []*events.Event
 	for _, p := range rig.queue.published {
-		if p.topic == topics.AgentInbox("swe") {
+		if p.topic == sweInbox() {
 			handed = append(handed, p.event)
 		}
 	}

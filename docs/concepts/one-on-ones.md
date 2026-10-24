@@ -68,8 +68,9 @@ others). Each member's turn opens the 1:1 with its manager:
 ```yaml
 units:
   - name: Core
+    id: core                      # the unit's key; `name` above is display
     type: team
-    lead: CTO
+    lead: cto                     # the lead seat's handle
     schedules:
       - name: weekly-1on1
         cron: "0 14 * * 4"          # 14:00 every Thursday

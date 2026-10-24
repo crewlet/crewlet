@@ -53,7 +53,7 @@ func drainingAppOn(t *testing.T, rt api.NodeRuntime) *api.App {
 		// every role: so a git request the gate lets through reaches a
 		// handler, and one it refuses is told from a route that is absent.
 		Code:    fixedCode{git: fakeGitRoutes{}, reads: &fakeCodeReads{}},
-		Sources: queries.Sources{Company: active()},
+		Sources: queries.Sources{Company: active(t)},
 	})
 	return a
 }
@@ -88,10 +88,11 @@ func refusedForDraining(t *testing.T, rec *httptest.ResponseRecorder) bool {
 // startsWork is every kind of request the gate refuses, one of each route
 // family: the webhook edge (a delivery, and both of its GET landings, one of
 // which acts and the other of which is refused with it), the config and
-// credential writes, the setup pass, the operator writes, the operator MCP
-// surface, a new git fetch — its advertisement, which would begin one — a git
-// push, its advertisement as well as its upload, and a verify of the node's
-// git cache, which may rebuild it.
+// credential writes, the setup pass, the deployment's controls (the backup,
+// the retention gestures and the fleet broker's membership), a project's file
+// bytes, the operator writes, the operator MCP surface, a new git fetch — its
+// advertisement, which would begin one — a git push, its advertisement as well
+// as its upload, and a verify of the node's git cache, which may rebuild it.
 //
 // WHETHER THIS FIXTURE MOUNTS THE ROUTE IS DECLARED, because the gate is
 // middleware and runs BEFORE the mux: it refuses on path and method alone, so
@@ -105,10 +106,11 @@ func refusedForDraining(t *testing.T, rec *httptest.ResponseRecorder) bool {
 // grew a surface and left its declaration behind.
 //
 // [drainingApp] is a node with no store, no coordination store and no company,
-// so the three surfaces that need one (/config, /secrets, /setup) and the
-// three that need a tracker (/work/{id}/purge, /operator/mcp,
-// /operator/act/{tool}) are not mounted on it. Its git routes and the verify
-// are, over a host that answers every request it is handed.
+// so the three surfaces that need one (/config, /secrets, /setup) and the ones
+// that need a tracker, a knowledge base or an object store (the write surface
+// under /work/items and /pages, a project's file bytes under /work/files,
+// /operator/mcp and /operator/act/{tool}) are not mounted on it. Its git routes
+// and the verify are, over a host that answers every request it is handed.
 var startsWork = []struct {
 	method, path string
 	mounted      bool
@@ -126,7 +128,13 @@ var startsWork = []struct {
 	{http.MethodPost, "/setup/integrations/github/provision", false},
 	{http.MethodPost, "/backup", true},
 	{http.MethodPost, "/work/retention/ack", true},
-	{http.MethodPost, "/work/ENG-1/purge", false},
+	{http.MethodPost, "/fleet/broker/remove/node-c", true},
+	{http.MethodPost, "/fleet/broker/remove-peer/abcdefgh", true},
+	{http.MethodPut, "/work/files/ENG/report.md", false},
+	{http.MethodDelete, "/work/files/ENG/report.md", false},
+	{http.MethodPost, "/work/items/ENG-1/purge", false},
+	{http.MethodPatch, "/work/items/ENG-1", false},
+	{http.MethodPost, "/pages/p-1/restore", false},
 	{http.MethodPost, "/operator/mcp", false},
 	{http.MethodPost, "/operator/act/create_work_item", false},
 	{http.MethodGet, "/git/r.git/info/refs?service=git-upload-pack", true},
@@ -601,7 +609,7 @@ func TestACredentialIsStillTheFirstQuestionDuringADrain(t *testing.T) {
 	// route would not.
 	a := drainingApp(t, true)
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/config", strings.NewReader("{}")))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodPut, "/config", strings.NewReader("{}"))))
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("an unauthenticated write answered %d during a drain, want 401", rec.Code)
 	}

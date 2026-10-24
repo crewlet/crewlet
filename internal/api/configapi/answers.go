@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -23,8 +24,8 @@ import (
 // are different mistakes, and answering a single not_found makes the caller
 // check both.
 const (
-	sideTarget  = "not_found"
-	sideAgainst = "against_not_found"
+	sideTarget  = httpjson.CodeNotFound
+	sideAgainst = httpjson.CodeAgainstNotFound
 )
 
 // missingRevision is a revision lookup that found nothing, carrying which
@@ -40,7 +41,7 @@ const (
 // It unwraps to [store.ErrNoRevision], so every existing errors.Is check
 // keeps working and only the handler that needs the side asks for it.
 type missingRevision struct {
-	side string
+	side httpjson.Code
 	id   string
 }
 

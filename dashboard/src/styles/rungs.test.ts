@@ -52,18 +52,9 @@ const SHEETS = readdirSync(STYLES).filter((f) => f.endsWith(".css"));
  * text — or a rule that is deleted — comes back here to be re-justified rather
  * than quietly widening the exemption.
  */
-const ALLOWED: { selector: string; why: string }[] = [
-  ...["positive", "caution", "critical", "info"].map((tone) => ({
-    selector: `.cell-status.${tone} .cell-glyph`,
-    why:
-      "A MARK, NOT TEXT. `cells.tsx` renders this glyph `aria-hidden` beside " +
-      "the visible label it reinforces, so it carries no meaning of its own " +
-      "and takes the 3:1 non-text floor rather than 4.5 — which every one of " +
-      "the four clears. The fill is also the right rung for a drawn mark: " +
-      "`.dot.critical` and the meter bars take the same one, and an ink here " +
-      "would make the glyph a different hue from the dot meaning the same thing.",
-  })),
-];
+// Empty: the status cell's marks, the one entry this held, are uilet's
+// `TableStatusCell` now, and uilet's own palette suite measures them.
+const ALLOWED: { selector: string; why: string }[] = [];
 
 /** Rules with a declaration block, comments stripped. */
 function rules(css: string): { selector: string; body: string }[] {
@@ -137,17 +128,6 @@ describe("the faint rung is decoration", () => {
         'which carries `title="falls back to"` for the meaning.',
     },
     {
-      selector: ".crumb-sep",
-      why: "The `/` between breadcrumb parts. A separator draws a boundary the layout already has.",
-    },
-    {
-      selector: ".cell-status.neutral .cell-glyph",
-      why:
-        "`cells.tsx` renders this glyph `aria-hidden` beside the visible label " +
-        "it reinforces — the same four marks the fill rule above excuses, for " +
-        "the same reason.",
-    },
-    {
       selector: ".work-type",
       why: "A work item's type mark: a `Mark` with an `.sr-only` name beside it and a `title`.",
     },
@@ -193,7 +173,10 @@ describe("the faint rung is decoration", () => {
 
   test("and the scan found the rung at all", () => {
     expect(faint.length).toBe(MARKS.length);
-    expect(faint.length).toBeGreaterThan(5);
+    // A floor under the four marks this tree still paints faint, so a scan
+    // that read nothing cannot pass. The status cell glyph was a fifth until
+    // it moved to uilet.
+    expect(faint.length).toBeGreaterThan(3);
   });
 });
 

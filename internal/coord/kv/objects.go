@@ -3,14 +3,18 @@ package kv
 import (
 	"context"
 	"errors"
+	"fmt"
+
+	"github.com/crewlet/crewlet/internal/coord"
 
 	"github.com/nats-io/nats.go/jetstream"
 )
 
 // ---- the object store ------------------------------------------------- //
 
-// objectBackendKey and collectionKey are the objects bucket's two keys: the
-// fleet's recorded object backend, and the collector's last report.
+// objectBackendKey and collectionKey are the objects bucket's keys for the
+// object store: the fleet's recorded object backend, and the collector's last
+// report. The trash reaper's report shares the bucket ([trashReapKey]).
 const (
 	objectBackendKey = "backend"
 	collectionKey    = "collection"
@@ -21,7 +25,10 @@ const (
 //
 // A refused create is read back FROM THE LEADER, for the custody claim's
 // reason: a replica behind the create would answer that nothing is recorded,
-// and the caller would boot against a backend it never compared.
+// and the caller would boot against a backend it never compared. A record
+// gone between the refusal and the read — which only an operator removing it
+// does, since the bucket has no age — is created again, within the shared
+// bound ([casRetry], [fleetCASAttempts]).
 func (f *FleetStore) AgreeObjectBackend(ctx context.Context, identity string) (string, error) {
 	if identity == "" {
 		return "", errors.New("coord/kv: an object backend needs an identity")
@@ -58,6 +65,54 @@ func (f *FleetStore) AgreeObjectBackend(ctx context.Context, identity string) (s
 		return "", contended("AgreeObjectBackend", objectBackendKey)
 	}
 	return agreed, nil
+}
+
+// MoveObjectBackend replaces the recorded backend from with to, by a
+// compare-and-set on the revision it read from the leader
+// ([coord.ObjectStores]).
+//
+// Its contenders are an operator's own moves and nothing else, since the
+// record is otherwise written once, by the first node to boot against a store
+// ([FleetStore.AgreeObjectBackend]) — so it is far inside the shared bound
+// ([casRetry], [fleetCASAttempts]), and a lost compare-and-set is read again
+// and judged against what won: a move another operator already made to the
+// same store is the answer, and one made elsewhere is [coord.ErrObjectBackendMoved].
+func (f *FleetStore) MoveObjectBackend(ctx context.Context, from, to string) error {
+	if from == "" || to == "" {
+		return errors.New("coord/kv: a move of the object backend names both stores")
+	}
+	settled, err := casRetry(ctx, &f.objectTrips, "move the object backend", func() (bool, error) {
+		entry, err := f.get(ctx, f.objects, objectBackendKey)
+		switch {
+		case errors.Is(err, jetstream.ErrKeyNotFound):
+			return false, fmt.Errorf("%w: no backend is recorded", coord.ErrObjectBackendMoved)
+		case err != nil:
+			return false, unavailable("read the object backend", err)
+		}
+		switch string(entry.Value()) {
+		case to:
+			return true, nil
+		case from:
+		default:
+			return false, fmt.Errorf("%w: %q is recorded", coord.ErrObjectBackendMoved, entry.Value())
+		}
+		_, err = f.objects.Update(ctx, objectBackendKey, []byte(to), entry.Revision())
+		switch {
+		case err == nil:
+			return true, nil
+		case errors.Is(err, jetstream.ErrKeyRevisionMismatch):
+			return false, nil
+		default:
+			return false, unavailable("move the object backend", err)
+		}
+	})
+	switch {
+	case err != nil:
+		return err
+	case !settled:
+		return contended("MoveObjectBackend", objectBackendKey)
+	}
+	return nil
 }
 
 // RecordObjectCollection stores the collector's last report, replacing the

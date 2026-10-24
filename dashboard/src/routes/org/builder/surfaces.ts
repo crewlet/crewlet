@@ -1,5 +1,5 @@
 /**
- * The views and dialogs Agents › Edit org hands its builder.
+ * The views and dialogs Org chart › Edit org hands its builder.
  *
  * ONE PLACE WHERE THE BUILDER IS ASSEMBLED. The Builder hosts its visualization,
  * its table, its node editor and its structural dialogs without importing any
@@ -12,7 +12,6 @@
 import type { BuilderSurfaces } from "./Builder.tsx";
 import { AddNodeDialog } from "./AddNodeDialog.tsx";
 import { CanvasView } from "./CanvasView.tsx";
-import { ChangeKindDialog } from "./ChangeKindDialog.tsx";
 import { DeleteDialog } from "./DeleteDialog.tsx";
 import { MoveDialog } from "./MoveDialog.tsx";
 import { NodeEditor } from "./NodeEditor.tsx";
@@ -25,5 +24,4 @@ export const builderSurfaces: BuilderSurfaces = {
   add: AddNodeDialog,
   move: MoveDialog,
   remove: DeleteDialog,
-  changeKind: ChangeKindDialog,
 };

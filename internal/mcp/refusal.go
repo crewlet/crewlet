@@ -1,6 +1,9 @@
 package mcp
 
-import "slices"
+import (
+	"errors"
+	"slices"
+)
 
 // Refusal is the machine-readable class of a tool call that did not do what it
 // was asked, set ONLY by a first-party tool.
@@ -24,8 +27,26 @@ import "slices"
 // reports failure as a bare isError with prose, and inferring a class from
 // that prose would be the same prose-matching this type exists to end, applied
 // to text the engine did not write. An unclassified failure is [Result.Failed]
-// with an empty Refusal, and a reader that needs a class treats it as the
-// server's own failure rather than guessing one.
+// with no class in its [Result.Cause] — [RefusalOf] answers "" — and a reader
+// that needs a class treats it as the server's own failure rather than
+// guessing one.
+//
+// What IS classed is a call the engine refuses ABOUT a server: one that is not
+// running — down and being restarted, or stopped — or whose session ended
+// under the call. That sentence is the engine's, from a state it observed
+// rather than prose it would have to read, so it carries [RefusalUnavailable]
+// like any other first-party refusal (supervise.go).
+//
+// # Why it is an ERROR, carried in the cause
+//
+// Because the class is a fact about WHY the call failed, and [Result.Cause]
+// is where why lives. A tool states its class as the cause outright (`Cause:
+// RefusalInvalid` for an argument it refuses with nothing underneath), or
+// beneath the error that decided it ([Classify]), and [RefusalOf] reads it
+// back with [errors.As]. A class field beside the cause was the other shape,
+// and it was two classifiers of one failure: a write surface branching on
+// the cause and an audit row recording the field could tell one caller two
+// different stories about the same call.
 //
 // # Why it is a named string with [Refusal.Valid]
 //
@@ -91,10 +112,35 @@ const (
 	RefusalBudgetExhausted Refusal = "budget_exhausted"
 
 	// RefusalUnavailable — this node cannot serve the call right now, or
-	// this company does not run what it needs: the read failed, the log
-	// refused the append, the backend is not configured. Never "the object
-	// does not exist" — a caller told that files a duplicate.
+	// this company does not run what it needs: the node is behind its log,
+	// the log refused the read or the append, the coordination store did
+	// not answer, the backend is not configured. A CONDITION of the node,
+	// which is what tells it from [RefusalInternalError]. Never "the
+	// object does not exist" — a caller told that files a duplicate.
 	RefusalUnavailable Refusal = "unavailable"
+
+	// RefusalInternalError — this node FAILED at something of its own: a
+	// read of its own store that broke, a database that would not answer,
+	// a path in its own code that went wrong. Nothing about the call was
+	// wrong, and — which is what tells it from [RefusalUnavailable] —
+	// waiting does not clear it: a node behind its log catches up and a
+	// coordination store that blinked answers again, while a store that
+	// cannot be read stays that way until somebody fixes the node. Read as
+	// unavailable, a client was told to come back in two seconds, for
+	// ever.
+	//
+	// ITS SENTENCE IS FIXED and its error is in the node's log, never in
+	// the sentence: a store's error is a driver's message, a SQL fragment
+	// or a database path, and the sentence reaches a model's prompt, an
+	// operator's assistant and a person's screen — none of whom can act
+	// on it, while whoever runs the node reads the log.
+	//
+	// SPELLED AS THE ERROR ENVELOPE'S OWN 500, because that is what a
+	// person's surface answers it with, the classes are the codes, and an
+	// unclassified failure — a first-party tool that forgot to classify —
+	// is answered the same: both say the engine broke, and neither has a
+	// remedy the caller can apply.
+	RefusalInternalError Refusal = "internal_error"
 )
 
 // Refusals is every class this build knows, in the order a reader's table
@@ -104,9 +150,100 @@ var Refusals = []Refusal{
 	RefusalStaleVersion, RefusalConflict, RefusalExists,
 	RefusalAlreadyAnswered, RefusalReassignmentBudget, RefusalInboxFull,
 	RefusalNotRunning, RefusalSteerUnsupported, RefusalBudgetExhausted,
-	RefusalUnavailable,
+	RefusalUnavailable, RefusalInternalError,
 }
 
 // Valid reports whether a class off the wire is one this build knows. The
 // empty class is not: it means "unclassified", which is a different fact.
 func (r Refusal) Valid() bool { return slices.Contains(Refusals, r) }
+
+// Error makes a class a cause a tool can state outright: a refusal with
+// nothing underneath it — an argument the tool itself found wrong — carries
+// its class as [Result.Cause], and one decided by something underneath
+// carries it beneath that error through [Classify].
+func (r Refusal) Error() string { return "refused: " + string(r) }
+
+// ErrOutcomeUnknown is the cause of a failed write whose outcome NOBODY CAN
+// VOUCH FOR: the append's acknowledgement was lost, or the node answered
+// before it applied, so the write may have landed — or an MCP server's
+// session ended with the call in flight, so whatever the tool does may have
+// been done (supervise.go). [UnknownOf] is exactly [errors.Is] against it.
+//
+// DEFINED HERE, beneath every tool, because the tools that make writes sit
+// above this package and the readers of a result — the audit, the loop's
+// record, a person's write surface — must be able to ask without importing
+// them: a tool's own unknown-outcome error wraps this one.
+//
+// IT IS [RefusalUnavailable] TOO, and wraps it, because the class answers
+// "can this node serve the call now" — and the answer is still no — while
+// this answers a different question: whether the caller has to find out what
+// happened before doing anything else. A person's surface that read the class
+// alone would tell somebody "nothing happened" about a write that may have
+// landed, and they would make it a second time. A model reads
+// [Result.Output], which says all of this in words.
+var ErrOutcomeUnknown error = &unknownOutcome{}
+
+// unknownOutcome is [ErrOutcomeUnknown]'s type: a sentinel that is also
+// [RefusalUnavailable], so [RefusalOf] reads it as that class and no caller
+// has to state both.
+type unknownOutcome struct{}
+
+func (*unknownOutcome) Error() string { return "whether the write landed is unknown" }
+
+func (*unknownOutcome) Unwrap() error { return RefusalUnavailable }
+
+// Classify states a refusal's class BENEATH the error that decided it, so a
+// caller branching on the domain's own error ([errors.Is] against a tracker or
+// knowledge-base sentinel) and a reader asking [RefusalOf] read one value.
+//
+// The class it is handed WINS over any class err already carries: it is the
+// tool's statement about this call, made with what the tool knows about the
+// gesture, and the class underneath was somebody's statement about a part of
+// it. A nil err is the class alone. The message is err's, because the class is
+// already a value and a log line reads the reason.
+func Classify(class Refusal, err error) error {
+	if err == nil {
+		return class
+	}
+	return &classified{class: class, err: err}
+}
+
+// classified is [Classify]'s error: the class first, so [errors.As] meets it
+// before anything err carries.
+type classified struct {
+	class Refusal
+	err   error
+}
+
+func (c *classified) Error() string { return c.err.Error() }
+
+func (c *classified) Unwrap() []error { return []error{c.class, c.err} }
+
+// RefusalOf is the class of a failed result, read out of its [Result.Cause]:
+// the first [Refusal] the cause's chain carries, or "" for a result that is
+// not failed or whose cause states none — an MCP server's failure, which this
+// engine will not classify by guessing.
+//
+// A SUCCESS HAS NO CLASS, whatever its cause says: the class describes a call
+// that did not do what it was asked, and the caller of a successful one was
+// answered with what it did.
+func RefusalOf(r Result) Refusal {
+	if !r.Failed || r.Cause == nil {
+		return ""
+	}
+	var class Refusal
+	if errors.As(r.Cause, &class) {
+		return class
+	}
+	return ""
+}
+
+// UnknownOf reports whether a failed result's write MAY HAVE LANDED — whether
+// its cause is [ErrOutcomeUnknown]. Every such result is also
+// [RefusalUnavailable] by [RefusalOf], since the sentinel wraps that class.
+//
+// A SUCCESS IS NEVER UNKNOWN, for [RefusalOf]'s reason: its caller was told
+// what it did.
+func UnknownOf(r Result) bool {
+	return r.Failed && errors.Is(r.Cause, ErrOutcomeUnknown)
+}

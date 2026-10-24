@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/jsoncarry"
 )
 
 // DocumentVersion is the shape version every stored document carries. A page
@@ -26,7 +28,7 @@ type Container struct {
 	Purpose string `json:"purpose,omitempty"`
 
 	// ChartEpoch is the configuration activation Name and Purpose were last
-	// written from ([configplane.ActivationStamp]). See
+	// derived from ([configplane.ActivationStamp]). See
 	// [Store.EnsureContainer].
 	ChartEpoch int64 `json:"chart_epoch,omitempty"`
 
@@ -160,28 +162,23 @@ func (e ErrUnknownVersion) Error() string {
 
 // ---- encoding --------------------------------------------------------- //
 
-// The known field names per record: what the zero value marshals, plus every
-// `omitempty` name it leaves out, listed by hand. A name missing here is
-// decoded into the struct AND carried as unknown, so the next encode writes
-// the stale carried copy back over what the caller set —
-// [TestEveryDeclaredFieldIsKnown] holds each list to its type's tags.
+// The known field names per record, read off each struct's own tags — see
+// [jsoncarry.Names] for what a hand-kept list of the omitempty ones cost.
 var (
-	containerFields = fieldSet(Container{}, "name", "purpose", "chart_epoch")
-	pageFields      = fieldSet(Page{}, "parent_id", "body", "labels", "watchers",
-		"muted", "author", "trashed_at")
-	revisionFields = fieldSet(Revision{}, "message", "author")
-	commentFields  = fieldSet(Comment{}, "mentions", "reply_to")
-	changeFields   = fieldSet(Change{}, "actor", "actor_kind", "operator_id",
-		"comment_id", "excerpt", "turn_id", "chain", "quiet")
+	containerFields = jsoncarry.Names(Container{})
+	pageFields      = jsoncarry.Names(Page{})
+	revisionFields  = jsoncarry.Names(Revision{})
+	commentFields   = jsoncarry.Names(Comment{})
+	changeFields    = jsoncarry.Names(Change{})
 )
 
 // EncodeContainer renders a container.
-func EncodeContainer(c Container) ([]byte, error) { return encode(c, c.Extra) }
+func EncodeContainer(c Container) ([]byte, error) { return jsoncarry.Encode(c, c.Extra) }
 
 // DecodeContainer reads a container.
 func DecodeContainer(data []byte) (Container, error) {
 	var c Container
-	extra, err := decodeInto(data, &c, containerFields, c.V)
+	extra, err := jsoncarry.Decode(data, &c, containerFields)
 	if err != nil {
 		return Container{}, fmt.Errorf("pages: decode container: %w", err)
 	}
@@ -193,12 +190,12 @@ func DecodeContainer(data []byte) (Container, error) {
 }
 
 // EncodePage renders a page head.
-func EncodePage(p Page) ([]byte, error) { return encode(p, p.Extra) }
+func EncodePage(p Page) ([]byte, error) { return jsoncarry.Encode(p, p.Extra) }
 
 // DecodePage reads a page head.
 func DecodePage(data []byte) (Page, error) {
 	var p Page
-	extra, err := decodeInto(data, &p, pageFields, p.V)
+	extra, err := jsoncarry.Decode(data, &p, pageFields)
 	if err != nil {
 		return Page{}, fmt.Errorf("pages: decode page: %w", err)
 	}
@@ -210,12 +207,12 @@ func DecodePage(data []byte) (Page, error) {
 }
 
 // EncodeRevision renders a revision.
-func EncodeRevision(r Revision) ([]byte, error) { return encode(r, r.Extra) }
+func EncodeRevision(r Revision) ([]byte, error) { return jsoncarry.Encode(r, r.Extra) }
 
 // DecodeRevision reads a revision.
 func DecodeRevision(data []byte) (Revision, error) {
 	var r Revision
-	extra, err := decodeInto(data, &r, revisionFields, r.V)
+	extra, err := jsoncarry.Decode(data, &r, revisionFields)
 	if err != nil {
 		return Revision{}, fmt.Errorf("pages: decode revision: %w", err)
 	}
@@ -227,12 +224,12 @@ func DecodeRevision(data []byte) (Revision, error) {
 }
 
 // EncodeComment renders a comment.
-func EncodeComment(c Comment) ([]byte, error) { return encode(c, c.Extra) }
+func EncodeComment(c Comment) ([]byte, error) { return jsoncarry.Encode(c, c.Extra) }
 
 // DecodeComment reads a comment.
 func DecodeComment(data []byte) (Comment, error) {
 	var c Comment
-	extra, err := decodeInto(data, &c, commentFields, c.V)
+	extra, err := jsoncarry.Decode(data, &c, commentFields)
 	if err != nil {
 		return Comment{}, fmt.Errorf("pages: decode comment: %w", err)
 	}
@@ -244,12 +241,12 @@ func DecodeComment(data []byte) (Comment, error) {
 }
 
 // EncodeChange renders a change.
-func EncodeChange(c Change) ([]byte, error) { return encode(c, c.Extra) }
+func EncodeChange(c Change) ([]byte, error) { return jsoncarry.Encode(c, c.Extra) }
 
 // DecodeChange reads a change.
 func DecodeChange(data []byte) (Change, error) {
 	var c Change
-	extra, err := decodeInto(data, &c, changeFields, c.V)
+	extra, err := jsoncarry.Decode(data, &c, changeFields)
 	if err != nil {
 		return Change{}, fmt.Errorf("pages: decode change: %w", err)
 	}
@@ -265,75 +262,4 @@ func checkVersion(got int) error {
 		return ErrUnknownVersion{Got: got, Want: DocumentVersion}
 	}
 	return nil
-}
-
-// encode marshals a record and folds unknown fields back in. A carried field
-// LOSES to a known one, so a stale carried copy can never undo the write that
-// set it.
-func encode(record any, extra map[string]json.RawMessage) ([]byte, error) {
-	data, err := json.Marshal(record)
-	if err != nil {
-		return nil, fmt.Errorf("pages: encode: %w", err)
-	}
-	if len(extra) == 0 {
-		return data, nil
-	}
-	var merged map[string]json.RawMessage
-	//nolint:govet // shadow: scoped to this block; see .golangci.yml
-	if err := json.Unmarshal(data, &merged); err != nil {
-		return nil, fmt.Errorf("pages: encode: %w", err)
-	}
-	for name, value := range extra {
-		if _, known := merged[name]; !known {
-			merged[name] = value
-		}
-	}
-	out, err := json.Marshal(merged)
-	if err != nil {
-		return nil, fmt.Errorf("pages: encode: %w", err)
-	}
-	return out, nil
-}
-
-// decodeInto unmarshals into out and returns the fields out has no home for.
-func decodeInto(data []byte, out any, known map[string]bool, _ int) (map[string]json.RawMessage, error) {
-	if err := json.Unmarshal(data, out); err != nil {
-		return nil, err
-	}
-	var all map[string]json.RawMessage
-	if err := json.Unmarshal(data, &all); err != nil {
-		return nil, err
-	}
-	var extra map[string]json.RawMessage
-	for name, value := range all {
-		if known[name] {
-			continue
-		}
-		if extra == nil {
-			extra = map[string]json.RawMessage{}
-		}
-		extra[name] = value
-	}
-	return extra, nil
-}
-
-// fieldSet is the JSON names a struct defines: the ones a zero value
-// marshals, plus the omitempty names given explicitly.
-func fieldSet(v any, omitted ...string) map[string]bool {
-	data, err := json.Marshal(v)
-	if err != nil {
-		panic("pages: a record type does not marshal: " + err.Error())
-	}
-	var named map[string]json.RawMessage
-	if err := json.Unmarshal(data, &named); err != nil {
-		panic("pages: a record type does not marshal to an object: " + err.Error())
-	}
-	out := make(map[string]bool, len(named)+len(omitted))
-	for name := range named {
-		out[name] = true
-	}
-	for _, name := range omitted {
-		out[name] = true
-	}
-	return out
 }

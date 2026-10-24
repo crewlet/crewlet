@@ -179,28 +179,6 @@ func TestAMoveWhoseMarkRemovalIsUnknownDoesNotReportSuccess(t *testing.T) {
 	}
 }
 
-// A PROMOTION WHOSE SUBTASK IS UNKNOWN MARKS NO ITEM: an item pointing at a
-// subtask that may not exist is the struck-through line pointing at nothing
-// that the promotion's order exists to prevent.
-func TestAPromotionWithAnUnknownSubtaskMarksNoItem(t *testing.T) {
-	t.Parallel()
-	r := newRoundTrip(t)
-	r.applyWhileWriting()
-	promotionParent(t, r, "parent-p", "item-1")
-	lossy, lost := r.lossyWriter(t)
-
-	lost.dropFor("sub-s")
-	_, err := lossy.PromoteItem(t.Context(), statelog.NewOpID(time.Now(), "promote"),
-		"parent-p", "item-1", newTask("sub-s"), nil)
-	if !errors.Is(err, tracker.ErrStepUnresolved) {
-		t.Fatalf("a promotion with an unknown subtask = %v, want ErrStepUnresolved", err)
-	}
-	r.drain()
-	if got := promotedTo(t, r, "parent-p", "item-1"); got != "" {
-		t.Errorf("the item points at %q over a subtask nobody can vouch for", got)
-	}
-}
-
 // THE DUTY DOES NOT COUNT A MERGE WHOSE CLOSE IS UNKNOWN as one it finished.
 func TestTheDutyDoesNotCountAnUnknownClose(t *testing.T) {
 	t.Parallel()

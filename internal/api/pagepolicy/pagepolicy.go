@@ -4,13 +4,18 @@
 //
 // # Why it matters here more than on most servers
 //
-// The operator token that writes /config and /secrets lives in the dashboard
-// origin's localStorage. Anything that runs script on that origin can read it,
-// and the engine serves three kinds of HTML there: the dashboard shell, the
+// The dashboard acts with the session cookie of whoever signed in to it, and
+// anything that runs script on its origin acts with that session: the cookie
+// is HttpOnly, so a script cannot read it, but every request it makes carries
+// it. And the engine serves three kinds of HTML: the dashboard shell, the
 // GitHub App landing page and the Slack OAuth landing page. The two landing
 // pages are unauthenticated and render values an arriving browser supplies.
-// A Content-Security-Policy is per response, so a policy on the shell alone
-// would leave exactly those two pages as the way in.
+// While one listener serves everything they share the dashboard's origin; with
+// a public listener (`api.public`) they are served on that socket instead,
+// under an address — and possibly a scheme — of its own, and get the same
+// headers there, [HSTS] decided by that address. A Content-Security-Policy is
+// per response, so a policy on the shell alone would leave exactly those two
+// pages as the way in.
 //
 // # One helper, set before the status
 //
@@ -23,6 +28,17 @@
 // handler thought about (the mux's own 404 and 405, the redirect from `/`) is
 // covered by construction. A handler that serves a page replaces the policy
 // with the one that page needs.
+//
+// # And the origin that holds no session
+//
+// The artifact origin (the api.artifacts listener, internal/artifactserve)
+// serves pages nobody at this company necessarily wrote, so its policies live
+// here too: [ArtifactDocument] for a document in an artifact frame, a strict
+// script policy under a nonce fresh to the response; [ArtifactSubresource] for
+// a file it loads; [ArtifactPublic] for the embedded runtime and kit. And the
+// dashboard's own policy names that origin as the one thing it may frame
+// ([DashboardFor]). One package, so every policy this engine writes can be
+// read side by side.
 package pagepolicy
 
 import (
@@ -53,7 +69,14 @@ import (
 //     not subject to style-src.
 //   - img-src adds data: because Vite inlines an imported image below its
 //     assetsInlineLimit as a data: URI, so a small icon added to the source
-//     arrives in the bundle in that form rather than as a file.
+//     arrives in the bundle in that form rather than as a file. It adds blob:
+//     because a native artifact's image (a deck's picture) is a file of its
+//     version the API serves only as an attachment typed text/plain where a
+//     browser could run it: the dashboard fetches the bytes with the reader's
+//     own credential, types them from the version's manifest, and shows them
+//     through an object URL of its own making. A blob: URL is minted by script
+//     already running on this origin, so it widens nothing an injected
+//     element could reach on its own.
 //   - object-src and base-uri are 'none': the dashboard embeds no plugin and
 //     sets no base, and a base tag injected into the shell would otherwise
 //     re-point every relative URL.
@@ -68,9 +91,20 @@ import (
 // so no static host list can name it. Browsers enforce form-action on a form
 // submitted into a new tab too, so 'self' alone makes the button do nothing
 // but log a violation.
+//
+// TRUSTED TYPES ARE ENFORCED WITH NO POLICY: `require-trusted-types-for
+// 'script'` makes every string handed to a sink that parses markup or loads
+// script throw, and `trusted-types 'none'` lets no code on the origin create a
+// policy to bless one. The dashboard reaches no such sink (its Markdown
+// renderer builds elements and never parses markup, and an artifact's page is
+// framed on its own origin rather than written into this one), and
+// dashboard/src/app/trustedTypes.test.ts holds the source to that, so a
+// script that did get onto this origin finds no markup sink to widen its
+// reach through.
 const Dashboard = "default-src 'self'; script-src 'self'; style-src 'self'; " +
-	"img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; " +
-	"base-uri 'none'; frame-ancestors 'none'; form-action 'self' https:"
+	"img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; " +
+	"base-uri 'none'; frame-ancestors 'none'; form-action 'self' https:; " +
+	"require-trusted-types-for 'script'; trusted-types 'none'"
 
 // API is the policy for every response that is not a page: JSON, plain text,
 // the redirect from `/`, a 404.
@@ -101,12 +135,45 @@ func Set(h http.Header, policy string) {
 
 // Apply is middleware that sets the [API] policy on every response before the
 // next handler runs, so a handler that serves a page only has to replace it.
-func Apply(next http.Handler) http.Handler {
+//
+// `secure` says a browser reaches THE LISTENER THIS WRAPS over https, which
+// adds [HSTS]. It is the address that listener is published at that decides it
+// — `api.external_url` for api.port, `api.public.external_url` for the public
+// listener, which may be published under another scheme — and never the bind
+// address or `r.TLS`: the engine ordinarily sits behind a TLS-terminating
+// proxy, so the request it receives is plain http on a loopback socket, and a
+// check on either would send the header from nowhere and from exactly the
+// deployments that need it.
+func Apply(next http.Handler, secure bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		Set(w.Header(), API)
+		if secure {
+			w.Header().Set("Strict-Transport-Security", HSTS)
+		}
 		next.ServeHTTP(w, r)
 	})
 }
+
+// HSTS is what an https deployment tells a browser about coming back.
+//
+// # Why a year, and why subdomains are not included
+//
+// A YEAR is what makes it worth setting at all: the header only protects a
+// browser that has already been here once, so a short max-age leaves a window
+// open on every device that has not visited recently — which is the device an
+// attacker on a café network is waiting for.
+//
+// NO `includeSubDomains`, and that is a decision rather than an omission. This
+// engine is one host and knows nothing about its neighbours: a deployment at
+// `crewlet.example.com` sending it would commit every other name under
+// `example.com` to https for a year, including ones served by somebody who
+// never agreed to it and cannot undo it inside that year. An operator who
+// wants it sets it at the proxy that actually owns the domain.
+//
+// NO `preload` for the sharper form of the same reason: preloading is a
+// submission to a list shipped inside browsers, and it is close to
+// irreversible. Nothing this engine emits should enrol a domain in that.
+const HSTS = "max-age=31536000"
 
 // inlineStyle and inlineScript find an inline block and its content.
 //

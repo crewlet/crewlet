@@ -54,7 +54,7 @@ export type AddKind = "unit" | "agent" | "human";
  * draft's and an editor's agree on what leaving is.
  *
  * THE ADDRESS IS THE SECTION'S, AND IT IS THE WHOLE OF THE RULE. The builder
- * is Agents › Edit org, `#/agents/edit`. It was a `lens=builder` on the
+ * is Org chart › Edit org, `#/company/org/edit`. It was a `lens=builder` on the
  * company screen, and before that a screen at `#/org`; each move left this
  * predicate spelling the old address, which does not fail loudly —
  * `keepsTheLens` answers FALSE for every move, so the guard holds moves it was
@@ -82,11 +82,13 @@ export function keepsTheLens(to: Route): boolean {
 }
 
 /**
- * Which chart the canvas draws. The Builder owns the `chart` section param
- * (its toolbar is where it is chosen), so the canvas is HANDED the answer
- * rather than reading the URL a second time, where the two could disagree.
+ * Which chart the canvas draws, one of the two arrangements both charts of a
+ * company share (`ui/orgNodes.tsx`). The Builder owns the `chart` section
+ * param (its toolbar is where it is chosen), so the canvas is HANDED the
+ * answer rather than reading the URL a second time, where the two could
+ * disagree.
  */
-export type ChartKind = "structure" | "reporting";
+export type { ChartKind } from "~/ui/orgNodes.tsx";
 
 /** The engine's derivation of the current draft, with its lists always present. */
 export interface BuilderDerived {
@@ -96,12 +98,23 @@ export interface BuilderDerived {
 
 /**
  * A part of the node editor it can be opened at: a seat's Reports (whom it
- * manages) or a unit's Leadership (its lead). The editor then starts on that
- * part's first field rather than on the name at the top of a long form, so an
- * action about one field ("Edit reports", a lead chosen outside the unit)
- * lands on it. A part the node does not have opens the editor as usual.
+ * manages), a unit's Leadership (its lead), or either's Project (the tracker
+ * project it owns, where Work's New project arrives). The editor then starts
+ * on that part's first field rather than on the name at the top of a long
+ * form, so an action about one field ("Edit reports", a lead chosen outside
+ * the unit) lands on it. A part the node does not have opens the editor as
+ * usual.
  */
-export type EditorSectionName = "reports" | "leadership";
+export type EditorSectionName = "reports" | "leadership" | "project";
+
+/**
+ * What an address asks an opening editor to hold on top of the node's own
+ * values: New project's key, in the Project field, as a change the reader has
+ * still to apply. A node that already owns a project keeps it.
+ */
+export interface EditorPreset {
+  project?: string;
+}
 
 /** What the mounted view does for the Builder. */
 export interface BuilderViewHandle {
@@ -132,7 +145,6 @@ export interface BuilderApi {
   openAdd(parent: NodeKey | null, kind?: AddKind): void;
   openMove(key: NodeKey): void;
   openDelete(key: NodeKey): void;
-  openChangeKind(key: NodeKey): void;
   /** Says a sentence through the Builder's one polite live region. */
   announce(message: string): void;
   /** Focuses and reveals a node in whichever view is mounted. */
@@ -143,6 +155,12 @@ export interface BuilderApi {
    * record nothing.
    */
   readOnly: boolean;
+  /**
+   * Every handle and unit key the running company holds, from the org push:
+   * what a node this draft creates must avoid besides the draft's own
+   * (`nodeFacts.takenIdentities`), since a lead's draft holds one unit.
+   */
+  identities: ReadonlySet<string>;
   /** Live state, for the StateBadge on saved agent seats. */
   agents: AgentRow[];
   sandboxes: SandboxEntry[];

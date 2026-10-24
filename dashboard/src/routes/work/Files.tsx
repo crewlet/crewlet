@@ -11,9 +11,11 @@
  *
  * # A download is fetched, not linked
  *
- * A plain link carries no bearer token, so on an engine that guards its reads
- * it would save the refusal instead of the file. The bytes are fetched with the
- * operator's token ([rest.blob]) and handed to the browser as a blob.
+ * A plain link would carry the session cookie too, but its answer would be the
+ * browser's to handle: a refusal saved to disk under the file's own name, and
+ * a lost session downloading a 401 rather than sending the reader to sign in.
+ * The bytes are fetched over the session ([rest.blob]) and handed to the
+ * browser as a blob, so a refusal is the engine's, read and said on the row.
  *
  * # Paged by path, as the engine pages it
  *
@@ -29,6 +31,8 @@ import { FileTextGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fmtBytes, fmtDateTime, relTime } from "~/lib/format.ts";
+import { refusalText } from "~/lib/refusal.ts";
+import { needsWords } from "~/lib/access.ts";
 import { rest, RestError } from "~/protocol/rest.ts";
 import type { WorkFile } from "~/protocol/index.ts";
 
@@ -62,19 +66,23 @@ export function ProjectFiles({ project }: { project: string }) {
       <Card.Header icon={<FileTextGlyph size="sm" />}>
         <Card.Title>Files</Card.Title>
       </Card.Header>
-      <QueryState error={state.error} loading={state.loading && !listing}>
+      <QueryState
+        error={state.error}
+        refusal={state.refusal}
+        detail={state.detail}
+        loading={state.loading && !listing}
+      >
         {listing && files.length === 0 && !after && (
           <EmptyState
             size="compact"
             icon={<FileTextGlyph size="xl" />}
             title="No files are kept in this project yet"
-            description="A seat writes one with write_project_file — a report, a plan, the notes it leaves for the next — and so can your own assistant at /operator/mcp, attributed to your token. PUT /work/files/{project}/{path} uploads one directly."
+            description="Files agents save for this project appear here."
           />
         )}
         {listing && !listing.complete && (
           <Callout variant="warning" title="This listing may be missing files">
-            This node holds a change it could not apply yet, and it may be to a file here. The
-            listing fills in once it has.
+            It fills in once this node catches up.
           </Callout>
         )}
         {files.length > 0 && (
@@ -133,8 +141,14 @@ function FileRow({ file }: { file: WorkFile }) {
     } catch (err) {
       // A REFUSAL SAYS WHY, and a download that never finished says THAT:
       // either way nothing was saved, and the row says so where the button
-      // was pressed rather than failing silently.
-      setRefusal(err instanceof RestError || err instanceof Error ? err.message : String(err));
+      // was pressed rather than failing silently. A refusal on AUTHORITY names
+      // the access the engine said would admit the reader — Tracker, the
+      // listing's own — and anything else is the engine's own words.
+      setRefusal(
+        err instanceof RestError && err.status === 403 && err.grants.length > 0
+          ? needsWords("Downloading a project's file", err.grants)
+          : refusalText(err),
+      );
     } finally {
       setBusy(false);
     }

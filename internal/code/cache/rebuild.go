@@ -215,7 +215,7 @@ const (
 	// only a shape that sweep did not end is rebuilt.
 	RebuildShape RebuildReason = "shape"
 	// RebuildStream is a cache whose log was RECREATED under it — its stream
-	// identity is not the one the cache read from (ADR-0035: a stream the
+	// identity is not the one the cache read from (ADR-0049: a stream the
 	// engine provisions again is stamped anew; a snapshot restore is not a
 	// recreation). Counted by the round that reads it whole.
 	RebuildStream RebuildReason = "stream"

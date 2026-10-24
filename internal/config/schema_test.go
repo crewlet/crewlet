@@ -14,6 +14,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -123,6 +124,8 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		{"CLIAgent", "mode", strs(CLIAgentModes)},
 		{"SandboxProvider", "default_coding_agent", strs(CodingAgents)},
 		{"RoleSandbox", "run_in", strs(Placements)},
+		{"RoleAvatar", "character", strs(AvatarCharacters)},
+		{"RoleAvatar", "color", strs(AvatarColors)},
 		{"LocalSandbox", "runtime", strs(ContainerRuntimes)},
 		{"MCPServer", "transport", strs(MCPTransports)},
 		{"Slack", "typing_status", strs(WorkingStatuses)},
@@ -140,6 +143,12 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		// exactly these, so an editor underlines exactly what the engine
 		// refuses.
 		{"RoleCode", "access", strs(CodeAccessTiers)},
+		// The two service backends, which the org projection also hands
+		// every reader as `services`: a value the schema offered and the
+		// validator refused would be a company an editor passed and no
+		// node would run.
+		{"Tracker", "backend", strs(TrackerBackends)},
+		{"Knowledge", "backend", strs(KnowledgeBackends)},
 	}
 	for _, tc := range cases {
 		def, ok := defs[tc.def].(map[string]any)
@@ -178,6 +187,10 @@ func TestBootstrapSchemaEnumsMatchTheValidators(t *testing.T) {
 		// has its own enum to drift.
 		{"LogFile", "format", strs(logging.Formats)},
 		{"LogFile", "level", strs(logging.Levels)},
+		// The node's admin posture: a value the schema offered that the
+		// validator refused would be a node an editor passed and the
+		// engine would not start.
+		{"APIAuth", "admin", strs(iam.AdminPostures)},
 	} {
 		def, ok := defs[tc.def].(map[string]any)
 		if !ok {
@@ -350,8 +363,16 @@ func TestSchemaNeverRejectsWhatTheValidatorAccepts(t *testing.T) {
 			if tc.tier == TierCompany && tc.env != nil {
 				t.Fatal("Tier B stores a ${VAR} verbatim and resolves nothing at load: an env on this case is never read")
 			}
-			schemaErr := compiled[tc.tier].Validate(asJSON(t, tc.yaml))
-			validatorErr := validateTier(tc.tier, tc.yaml, tc.env)
+			// EVERY TIER A CASE CARRIES THE KEYRING every node needs,
+			// so each one is judged on its own subject — unless the
+			// keyring IS its subject, in which case it states its own
+			// `secrets:` block and [Runnable] leaves it as written.
+			doc := tc.yaml
+			if tc.tier == TierBootstrap {
+				doc = Runnable(doc)
+			}
+			schemaErr := compiled[tc.tier].Validate(asJSON(t, doc))
+			validatorErr := validateTier(tc.tier, doc, tc.env)
 
 			if schemaErr != nil && validatorErr == nil {
 				t.Fatalf("the schema rejects a config the engine accepts — an "+
@@ -389,17 +410,25 @@ func parityCases() []parityCase {
 		// Valid documents. Every one of these must survive BOTH layers, or
 		// the schema is stricter than the engine.
 		{name: "minimal company", tier: TierCompany, yaml: "name: Acme\n"},
-		// Genuinely empty: every Tier A field has a default, so a
-		// document that sets nothing must survive both layers. It used to
-		// carry one throwaway key, which meant the case proved that key
-		// parsed rather than that the defaults stand on their own.
+		// Empty but for the keyring the harness adds: every other Tier A
+		// field has a default, so a document that sets nothing else must
+		// survive both layers. It used to carry one throwaway key, which
+		// meant the case proved that key parsed rather than that the
+		// defaults stand on their own.
 		//
-		// `{}` rather than a zero-byte document because that decodes to
-		// YAML null, which the schema refuses at the root ("got null,
-		// want object") while the loader accepts it. That gap is real but
-		// it is not this case's subject, and an empty MAPPING is what an
-		// operator's "empty" crewlet.yaml actually looks like.
+		// `{}` because that is what an operator's "empty" crewlet.yaml
+		// actually looks like, and [Runnable] reads it as the empty mapping
+		// it is.
 		{name: "empty bootstrap", tier: TierBootstrap, yaml: "{}\n"},
+		// A NODE WITH NO KEYRING, which both layers refuse: every node
+		// signs and verifies every state-log record under it, so an
+		// editor can say so while the file is still being written. The
+		// block is stated — and stated empty — because the keyring is
+		// this case's subject.
+		{name: "a node with no keyring", tier: TierBootstrap, editorCatches: true,
+			yaml: "secrets: {}\n"},
+		{name: "a keyring with no keys", tier: TierBootstrap, editorCatches: true,
+			yaml: "secrets:\n  keys: []\n"},
 		{name: "bootstrap logging block", tier: TierBootstrap, yaml: "logging:\n  level: warn\n  format: json\n"},
 		{
 			name: "bootstrap log file block",
@@ -515,7 +544,7 @@ mcp_servers:
 roles:
   - name: Founder
     kind: human
-    manages: [CEO]
+    manages: [ceo]
     contact: {slack_user_id: U0FOUNDER}
   - name: CEO
     handle: ceo
@@ -524,7 +553,8 @@ roles:
       - {name: standup, cron: "0 9 * * 1-5", task: post a status note}
 units:
   - name: Core
-    lead: CTO
+    id: core
+    lead: cto
     mcp_env: {gitlab: {GITLAB_TOKEN: "${GL_SHARED}"}}
     project: ENG
     roles:
@@ -542,6 +572,25 @@ units:
 			tier: TierBootstrap,
 			yaml: "coordination:\n  type: embedded-kv\nstream:\n  replicas: 3\n  store_dir: /var/lib/crewlet/stream\n" +
 				"  cluster:\n    name: acme\n    peers: [nats://b:6222, nats://c:6222]\n",
+		},
+		// AN EMBEDDED STREAM HELD IN MEMORY, which the schema lets through
+		// because it cannot say "required unless the type is nats or the
+		// node is a leaf" in a way every editor honours, and the validator
+		// refuses: every broker member keeps its state logs on the stream
+		// from boot.
+		{
+			name: "an embedded stream held in memory", tier: TierBootstrap,
+			yaml:          "stream:\n  replicas: 1\n",
+			validatorOnly: true,
+		},
+		// AND A LEAF, WHICH KEEPS NO STREAM AT ALL: both layers accept it
+		// with no store directory, since every log it reaches is a
+		// member's.
+		{
+			name: "a leaf with no store directory", tier: TierBootstrap,
+			yaml: "node:\n  roles: [seats]\nstore:\n  path: /tmp/n.db\n  scratch: true\n" +
+				"stream:\n  leaf:\n    urls: [nats-leaf://data-a.internal:7422]\n" +
+				"coordination:\n  type: embedded-kv\n",
 		},
 		// A LITERAL signing secret, not a ${VAR}. The full company above
 		// carries the reference form, which validate() deliberately does not
@@ -596,7 +645,7 @@ units:
 		},
 		{
 			name: "a backup floor from the environment", tier: TierBootstrap,
-			yaml: "stream:\n  tracker_retention:\n    backup_floor: \"${BACKUP_FLOOR}\"\n",
+			yaml: "stream:\n  store_dir: /var/lib/crewlet/stream\n  tracker_retention:\n    backup_floor: \"${BACKUP_FLOOR}\"\n",
 			env:  map[string]string{"BACKUP_FLOOR": "operator"},
 		},
 		{
@@ -616,11 +665,11 @@ units:
 		// And the same rule's stream half demanded a LITERAL embedded.
 		{
 			name: "an empty stream type on one node", tier: TierBootstrap,
-			yaml: "stream:\n  type: \"\"\n",
+			yaml: "stream:\n  type: \"\"\n  store_dir: /var/lib/crewlet/stream\n",
 		},
 		{
 			name: "a stream type from the environment on one node", tier: TierBootstrap,
-			yaml: "stream:\n  type: \"${STREAM_TYPE}\"\n",
+			yaml: "stream:\n  type: \"${STREAM_TYPE}\"\n  store_dir: /var/lib/crewlet/stream\n",
 			env:  map[string]string{"STREAM_TYPE": "embedded"},
 		},
 		{
@@ -635,17 +684,19 @@ units:
 		// a bool field decodes only for the YAML 1.1 words.
 		{
 			name: "a flag from the environment", tier: TierBootstrap,
-			yaml: "stream:\n  debug: \"${STREAM_DEBUG}\"\n",
+			yaml: "stream:\n  debug: \"${STREAM_DEBUG}\"\n  store_dir: /var/lib/crewlet/stream\n",
 			env:  map[string]string{"STREAM_DEBUG": "yes"},
 		},
 		{
 			name: "a flag from the environment that says true", tier: TierBootstrap,
-			yaml: "stream:\n  debug: \"${STREAM_DEBUG}\"\n",
+			yaml: "stream:\n  debug: \"${STREAM_DEBUG}\"\n  store_dir: /var/lib/crewlet/stream\n",
 			env:  map[string]string{"STREAM_DEBUG": "true"},
 		},
 		{
 			name: "a port from the environment", tier: TierBootstrap,
-			yaml: "api:\n  port: \"${API_PORT}\"\n",
+			// On a node every role is left to — ingress among them — a port
+			// SERVES the API, so the case states what that asks for too.
+			yaml: Served("api:\n  port: \"${API_PORT}\"\n"),
 			env:  map[string]string{"API_PORT": "8080"},
 		},
 		{
@@ -673,10 +724,14 @@ units:
 		// AN EMPTY VALUE IS UNSET, written either way, at every level — and
 		// a rule built from `properties` alone matches a null block, which
 		// is why each condition states the object it looks inside.
-		{name: "a bootstrap that is YAML null", tier: TierBootstrap, yaml: "~\n"},
+		// A NULL DOCUMENT CARRIES NO KEYRING, and none can be added to it
+		// without making it a mapping, so both layers refuse it for the
+		// keyring every node needs — the schema states the keyring as a
+		// required key, which no null document holds.
+		{name: "a bootstrap that is YAML null", tier: TierBootstrap, yaml: "~\n", editorCatches: true},
 		{
 			name: "an empty stream block on a solo fleet member", tier: TierBootstrap,
-			yaml: "coordination:\n  type: embedded-kv\nstream:\n  cluster:\n",
+			yaml: "coordination:\n  type: embedded-kv\nstream:\n  store_dir: /var/lib/crewlet/stream\n  cluster:\n",
 		},
 		{
 			name: "empty log settings", tier: TierBootstrap,
@@ -707,7 +762,7 @@ units:
 		},
 
 		// A BOOLEAN READS YAML 1.1's WORDS too — the decoder keeps them.
-		{name: "a flag written as a word", tier: TierBootstrap, yaml: "stream:\n  debug: off\n"},
+		{name: "a flag written as a word", tier: TierBootstrap, yaml: "stream:\n  debug: off\n  store_dir: /var/lib/crewlet/stream\n"},
 		{name: "a toggle written as a word", tier: TierCompany, yaml: "name: Acme\nlearning:\n  enabled: yes\n"},
 
 		// Mistakes an editor should catch inline.
@@ -1045,10 +1100,74 @@ units:
 		},
 		{name: "a stdio server with no command", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nmcp_servers:\n  - {name: calc}\n"},
 		{name: "duplicate handles", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nroles:\n  - {name: \"Agent CEO\"}\n  - {name: \"agent ceo\"}\n"},
-		{name: "duplicate seat names", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nroles:\n  - {name: Dev, handle: dev-one}\n  - {name: Dev, handle: dev-two}\n"},
-		{name: "duplicate unit names", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nunits:\n  - {name: Core, children: [{name: Platform}]}\n  - {name: Edge, children: [{name: Platform}]}\n"},
+		{name: "duplicate unit keys", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nunits:\n  - {name: Core, children: [{name: Platform}]}\n  - {name: Edge, children: [{name: Platform}]}\n"},
+		// A NAME IS PROSE: neither layer may refuse two seats or two units
+		// sharing one on distinct addresses, which is what the org chart
+		// holds and what an exported chart carries back.
+		{name: "shared names on distinct addresses", tier: TierCompany, yaml: "name: Acme\nroles:\n  - {name: Dev, handle: dev-one}\n  - {name: Dev, handle: dev-two}\nunits:\n  - {name: Core, id: core, children: [{name: Platform, id: core-platform}]}\n  - {name: Edge, id: edge, children: [{name: Platform, id: edge-platform}]}\n"},
 		{name: "duplicate setup step names", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nproviders:\n  sandbox:\n    fake: true\n    setup:\n      - {name: registry, commands: [\"true\"]}\n      - {name: registry, commands: [\"true\"]}\n"},
 		{name: "a ceiling below its base", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nturn_engine: {max_tool_rounds: 20, execute_max_tool_rounds_ceiling: 10}\n"},
+		// A TIER A TOKEN'S ID AT ITS BOUND AND ONE PAST IT. The bound is
+		// the validator's — the id composes `token:<id>`, a login held to
+		// iam.MaxLogin — and an editor has to say it too, or a config the
+		// engine refuses is one the editor called fine.
+		{name: "a token id at its bound", tier: TierBootstrap,
+			yaml: tokenDoc(strings.Repeat("a", tokenIDBound))},
+		{name: "a token id past its bound", tier: TierBootstrap, editorCatches: true,
+			yaml: tokenDoc(strings.Repeat("a", tokenIDBound+1))},
+	}
+}
+
+// tokenIDBound is how long a Tier A token's id may be: the width of a login,
+// less the class every token's login carries.
+var tokenIDBound = iam.MaxLogin - len(iam.TokenLoginPrefix)
+
+// tokenDoc is a Tier A document declaring one token under id, and otherwise
+// valid.
+func tokenDoc(id string) string {
+	return "api:\n  auth:\n    tokens:\n      - id: " + id +
+		"\n        token: a-token-value-long-enough-to-pass-the-floor" +
+		"\n        grants: [admin]\n"
+}
+
+// A TIER A TOKEN'S ID IS BOUNDED IN THE ARTIFACT AT THE WIDTH THE VALIDATOR
+// DERIVES.
+//
+// The bound used to be prose in the field's description, which a schema does
+// not read: an editor accepted a fifty-nine-character id that `crewlet
+// validate` then refused. It is a `maxlen` directive now, and a struct tag is a
+// literal that cannot be computed — so this holds the literal to the
+// derivation, both ways: the artifact's `maxLength` is iam.MaxLogin less the
+// `token:` class, and the validator admits exactly that many and no more.
+//
+// THE BOUND SITS ON THE FIELD'S OWN BRANCH, beside its pattern, and never on
+// the ${VAR} branch Tier A admits beside it: a reference's length says nothing
+// about the id it resolves to.
+func TestTheSchemaBoundsATokenIDWhereTheValidatorDoes(t *testing.T) {
+	t.Parallel()
+	defs, _ := schemaDoc(t, TierBootstrap)["$defs"].(map[string]any)
+	token, _ := defs["APIToken"].(map[string]any)
+	props, _ := token["properties"].(map[string]any)
+	id, _ := props["id"].(map[string]any)
+	var bound any
+	for _, branch := range anyOf(id) {
+		own, _ := branch.(map[string]any)
+		if _, hasPattern := own["pattern"]; hasPattern && own["maxLength"] != nil {
+			bound = own["maxLength"]
+		}
+	}
+	if got, _ := bound.(float64); int(got) != tokenIDBound {
+		t.Fatalf("the schema bounds a token id at %v, and the validator at %d "+
+			"(%d for a login, less %q)", bound, tokenIDBound,
+			iam.MaxLogin, iam.TokenLoginPrefix)
+	}
+	if !iam.ValidTokenID(strings.Repeat("a", tokenIDBound)) {
+		t.Errorf("the validator refuses a token id of %d characters, the "+
+			"bound it derives", tokenIDBound)
+	}
+	if iam.ValidTokenID(strings.Repeat("a", tokenIDBound+1)) {
+		t.Errorf("the validator admits a token id of %d characters, past the "+
+			"bound it derives", tokenIDBound+1)
 	}
 }
 

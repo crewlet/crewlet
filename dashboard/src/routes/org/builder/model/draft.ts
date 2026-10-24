@@ -21,8 +21,10 @@
  * it did not change.
  */
 
+import { AVATAR_CHARACTERS, AVATAR_COLORS } from "~/contract/avatar.ts";
+import { avatarOf, type AgentAvatar } from "~/lib/avatar.ts";
 import type { CompanyDocument, ConfigRole, ConfigUnit } from "~/protocol/index.ts";
-import { COMPANY_KEY, type NodeKey } from "./keys.ts";
+import { COMPANY_KEY, handleOfKey, unitIdOfKey, type NodeKey } from "./keys.ts";
 
 /** One seat: its key and its authored role object. */
 export interface DraftSeat {
@@ -327,12 +329,97 @@ export function placementOf(found: Located): Placement {
   };
 }
 
-/** Every seat name in the draft, in walk order, repeats included. */
-export function seatNames(draft: Draft): string[] {
-  return [...allSeats(draft)].map(({ seat }) => seat.data.name);
+// ---------------------------------------------------------------------------
+// Identities
+// ---------------------------------------------------------------------------
+
+/**
+ * The handle a seat's data declares, or `undefined` when it declares none.
+ *
+ * ONE READING EVERYWHERE, and untrimmed, as the engine reads it: a lead or a
+ * `manages` entry names exactly the string the seat carries.
+ */
+export function declaredHandle(data: Readonly<Record<string, unknown>>): string | undefined {
+  return typeof data.handle === "string" && data.handle !== "" ? data.handle : undefined;
 }
 
-/** Every unit name in the draft, depth-first, repeats included. */
-export function unitNames(draft: Draft): string[] {
-  return [...allUnits(draft)].map(({ unit }) => unit.data.name);
+/** The key a unit's data declares (its `id`), or `undefined` when it declares none. */
+export function declaredUnitKey(data: Readonly<Record<string, unknown>>): string | undefined {
+  return typeof data.id === "string" && data.id !== "" ? data.id : undefined;
+}
+
+/**
+ * A seat's handle: the one its data declares, else the one its key carries.
+ *
+ * Every seat the engine stores declares its handle, and every seat this draft
+ * adds is given one, so the key is the answer only for a document that did not
+ * come from the engine (see `document.fromDocument`).
+ */
+export function handleOf(seat: DraftSeat): string {
+  return declaredHandle(seat.data) ?? handleOfKey(seat.key) ?? "";
+}
+
+/** A unit's key, read as [handleOf] reads a seat's handle. */
+export function unitIdOf(unit: DraftUnit): string {
+  return declaredUnitKey(unit.data) ?? unitIdOfKey(unit.key) ?? "";
+}
+
+/** The seat a handle names in the draft, or `undefined`. */
+export function seatWithHandle(draft: Draft, handle: string): DraftSeat | undefined {
+  if (handle === "") return undefined;
+  for (const { seat } of allSeats(draft)) if (handleOf(seat) === handle) return seat;
+  return undefined;
+}
+
+/** The unit a key names in the draft, or `undefined`. */
+export function unitWithKey(draft: Draft, id: string): DraftUnit | undefined {
+  if (id === "") return undefined;
+  for (const { unit } of allUnits(draft)) if (unitIdOf(unit) === id) return unit;
+  return undefined;
+}
+
+/**
+ * What a `manages:` entry names in the draft, as the engine reads one: the seat
+ * with that handle first, else the unit with that key, else nothing.
+ */
+export function managedBy(
+  draft: Draft,
+  entry: string,
+):
+  | { readonly kind: "seat"; readonly node: DraftSeat }
+  | { readonly kind: "unit"; readonly node: DraftUnit }
+  | undefined {
+  const seat = seatWithHandle(draft, entry);
+  if (seat) return { kind: "seat", node: seat };
+  const unit = unitWithKey(draft, entry);
+  return unit ? { kind: "unit", node: unit } : undefined;
+}
+
+/** Every handle and every unit key the draft holds: what a new node's identity must avoid. */
+export function identitiesOf(draft: Draft): Set<string> {
+  const out = new Set<string>();
+  for (const { seat } of allSeats(draft)) out.add(handleOf(seat));
+  for (const { unit } of allUnits(draft)) out.add(unitIdOf(unit));
+  out.delete("");
+  return out;
+}
+
+/**
+ * How a new agent seat is drawn until its author picks otherwise: the first
+ * character no agent seat in the draft wears yet, in the order the picker
+ * offers them, and the next colour round the six, so a company growing one
+ * agent at a time is told apart at a glance before anybody has chosen.
+ *
+ * A SUGGESTION, written into the new seat's own block where its author can
+ * change it in the same form. Once every character is worn the characters go
+ * round again too, still in order.
+ */
+export function suggestAvatar(draft: Draft): AgentAvatar {
+  const agents = [...allSeats(draft)].filter(({ seat }) => seat.data.kind !== "human");
+  const worn = new Set(agents.map(({ seat }) => avatarOf(seat.data.avatar).character));
+  const fresh = AVATAR_CHARACTERS.find((character) => !worn.has(character));
+  return {
+    character: fresh ?? AVATAR_CHARACTERS[agents.length % AVATAR_CHARACTERS.length]!,
+    color: AVATAR_COLORS[agents.length % AVATAR_COLORS.length]!,
+  };
 }

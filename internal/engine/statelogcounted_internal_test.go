@@ -35,7 +35,7 @@ import (
 func TestTheSnapshotLoopCountsWhatTheTrimCounts(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
-	s := e.native.Load().log
+	s := e.core.Load().log
 	ctx := t.Context()
 	now := time.Now()
 	// others is every node counted at the instant other than this one.

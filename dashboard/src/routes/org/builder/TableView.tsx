@@ -28,7 +28,7 @@
  * EVERY ACTION IS THE CHART'S OWN LIST (`nodeMenu`), AND EACH HAS ONE OWNER.
  * The console's row draws an add pill, a pencil and a trash, so those three
  * are the row's own controls here; the menu at the end of the row carries what
- * has no button of its own (Open seat, Edit reports, Change kind, Move to, and
+ * has no button of its own (Open seat, Edit reports, Move to, and
  * the two moves among the siblings), and a row whose menu would be empty draws
  * none. They were drawn BOTH ways once: on the company's row every entry of
  * the menu was already a button 32 pixels to its left. Read-only disables all
@@ -42,7 +42,6 @@
  */
 
 import { useCallback, useMemo, useRef, type KeyboardEvent } from "react";
-import { usePanelAlign } from "~/lib/media.ts";
 import { plural } from "~/lib/format.ts";
 import { useBuilder, useBuilderView, type BuilderApi } from "./BuilderContext.tsx";
 import type { NodeView } from "./chartModel.ts";
@@ -50,15 +49,14 @@ import type { NodeKey } from "./model/keys.ts";
 import { addSections, isDeletable, leadLabel, rowMenu, type OpenScreen } from "./nodeActions.tsx";
 import {
   LiveState,
-  NodeGlyph,
+  nodeTone,
   SeatMarks,
   UnitMarks,
   handleLabel,
   managerLabel,
   nodeGlyphKind,
-  seatKindLabel,
-  unitTypeLabel,
 } from "./nodeMarks.tsx";
+import { NodeGlyph, seatKindLabel, seatMark, unitTypeLabel } from "~/ui/orgNodes.tsx";
 import { addLabel } from "./AddNodeDialog.tsx";
 import { useReorder, type Reorder } from "./reorder.ts";
 import { useOpenScreen, useStructure } from "./useCharts.ts";
@@ -77,7 +75,6 @@ import {
   type TreeItemAction,
   type TreeViewHandle,
 } from "@crewlethq/ui";
-import { seatBadge } from "~/ui/SeatAvatar.tsx";
 
 /**
  * What a row says, beside its name.
@@ -102,7 +99,7 @@ const COLUMNS: readonly TreeGridColumn[] = [
   // scrolls sideways there, and five and a quarter shares of it was 417px on a
   // 356px screen, so every seat's state pill sat cut in half at the edge.
   { key: "name", header: "Name", width: "var(--btable-name-track, minmax(0, 5.25fr))" },
-  { key: "handle", header: "Handle", width: "minmax(0, 1.75fr)" },
+  { key: "handle", header: "Handle or key", width: "minmax(0, 1.75fr)" },
   { key: "lead", header: "Lead or reports to", width: "minmax(0, 1.75fr)" },
   { key: "problems", header: "Problems", width: "minmax(0, 1fr)" },
   // Read but not seen: the strip at the end of a row is drawn where every
@@ -188,13 +185,13 @@ export function TableView() {
                cell happens to mention a name. */
             <OrgTableName
               className="btable-name"
-              // A SEAT IS ITS BADGE, as it is on the chart: the outline says
-              // who holds it. A container keeps its glyph.
+              // A SEAT IS ITS MARK, as it is on the chart: the Crewlet figure
+              // for an agent, a person for a human. A container keeps its glyph.
               {...(view.type === "seat"
-                ? {
-                    avatar: seatBadge(view.name, view.kind),
-                  }
+                ? seatMark(view.kind, view.avatar)
                 : { icon: NodeGlyph({ kind: nodeGlyphKind(view) }) })}
+              // AN AGENT'S ROW IS TONED, as its card is.
+              tone={nodeTone(view)}
               name={<span className="btable-label">{view.name || "Unnamed company"}</span>}
               caption={kindLabel(view)}
               // THE SAME GLYPHS THE CHART DRAWS, for the same reason: a row is
@@ -224,12 +221,9 @@ export function TableView() {
          * from the different fact that no check has answered yet.
          */
         case HANDLE:
-          if (view.type !== "seat") return <EmptyValue label="Not applicable" />;
-          return view.handle ? (
-            handleLabel(view.handle)
-          ) : (
-            <span className="muted">{handleLabel(undefined)}</span>
-          );
+          if (view.type === "seat") return handleLabel(view.handle);
+          if (view.type === "unit") return view.id;
+          return <EmptyValue label="Not applicable" />;
         case LEAD:
           if (view.type === "unit") return leadLabel(view);
           if (view.type !== "seat") return <EmptyValue label="Not applicable" />;
@@ -296,6 +290,9 @@ export function TableView() {
       controls={false}
       columns={COLUMNS}
       rows={structure.tree}
+      // The branch arriving at an agent's row takes the agent's hue, as the
+      // branch into its card does on the chart.
+      tone={(id) => nodeTone(structure.nodes.get(id as NodeKey))}
       ref={grid}
       renderCell={cell}
       cellHasControl={(_id, column) => column === ACTIONS_COLUMN}
@@ -348,9 +345,6 @@ function RowControls({
   reorder: Reorder;
   view: NodeView;
 }) {
-  // See [usePanelAlign]: a row's menu hangs from its right edge, and starts
-  // at its trigger on a phone.
-  const menuAlign = usePanelAlign("end");
   const name = view.name || "the company";
   const menu = rowMenu(api, view, open, reorder);
   return (
@@ -390,7 +384,7 @@ function RowControls({
                on. */
             label={`Actions for ${name}`}
             icon={<EllipsisVerticalGlyph />}
-            align={menuAlign}
+            align="end"
             open={grid.menuOpen(view.key)}
             onOpenChange={(up) => grid.setMenuOpen(view.key, up)}
             items={menu}

@@ -13,10 +13,10 @@ import {
   Button,
   Callout,
   EmptyState,
-  InlineCode,
   Section as UiSection,
   Tag,
   cx,
+  InlineCode,
 } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { PlugGlyph, KeyGlyph, ClockGlyph, TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
@@ -28,12 +28,14 @@ import { PhaseTag } from "~/ui/primitives.tsx";
 import { href } from "~/app/router.tsx";
 import { fmtDateTime, fmtTime, humanize, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { requestToken } from "~/protocol/index.ts";
+import { isLogRefusal } from "~/protocol/index.ts";
+import { goSignIn } from "~/lib/session.ts";
+import { needsWords } from "~/lib/access.ts";
 import {
   activityOf,
   activityWord,
   handleLabel,
-  ringOf,
+  statusOf,
   roundLabel,
   seatPath,
   stateLine,
@@ -42,7 +44,8 @@ import {
   type Seat,
   type SeatKind,
 } from "~/lib/seats.ts";
-import type { AgentRow, FeedRow } from "~/protocol/index.ts";
+import type { AgentAvatar } from "~/lib/avatar.ts";
+import type { AgentRow, FeedRow, LogRefusal, QueryRefusal } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 
 /** A seat's name and handle, linked. The one way a person appears in a list. */
@@ -50,6 +53,7 @@ export function SeatChip({
   name,
   handle,
   kind,
+  avatar,
   size = "sm",
 }: {
   name: string;
@@ -57,13 +61,15 @@ export function SeatChip({
   /**
    * The seat's kind, which decides the badge's one variant.
    *
-   * THE SAME PROP [SeatCell] TAKES, and it was a `human` boolean here — one
+   * THE SAME PROP [linkedSeat] TAKES, and it was a `human` boolean here: one
    * fact spelled two ways across two components drawing the same badge, so a
    * caller holding the chart's answer had to translate it at every site and
    * eighteen of the nineteen simply did not. Both take the pair [seatLookup]
    * returns now, which is one spread and cannot be half-applied.
    */
   kind?: SeatKind;
+  /** How an agent is drawn, where the chart holds the seat: also off [seatLookup]. */
+  avatar?: AgentAvatar | null | undefined;
   size?: "sm" | "md";
 }) {
   const target = handle || name;
@@ -75,7 +81,7 @@ export function SeatChip({
       // The affordance is the hover state and the cursor.
       className="row seat-chip"
       style={{ gap: "var(--spacing-2)", minWidth: 0 }}
-      href={href(["agents", "seats", target])}
+      href={href(["company", "org", "seats", target])}
     >
       {/* THE KIND IS THE OUTLINE: the kit draws a person as a circle and an
           agent as a squircle, and that is the one cue telling them apart. A
@@ -83,14 +89,20 @@ export function SeatChip({
           squircle — the engine runs agents, and a person is always declared.
           `decorative` because the name is printed immediately beside it —
           without it the row reads "Ada Lovelace avatar, Ada Lovelace". */}
-      <SeatAvatar name={name} size={size} kind={kind === "human" ? "human" : "agent"} decorative />
+      <SeatAvatar
+        name={name}
+        size={size}
+        kind={kind === "human" ? "human" : "agent"}
+        avatar={avatar}
+        decorative
+      />
       <span className="truncate">{name}</span>
     </a>
   );
 }
 
 /**
- * A seat's state as a pill: the engine's word and its ring's tone. An idle
+ * A seat's state as a pill: the engine's word and its status badge's tone. An idle
  * seat is the neutral pill — a green one read as activity.
  */
 export function StateBadge({ agent }: { agent: AgentRow | null | undefined }) {
@@ -113,9 +125,9 @@ export function SeatCard({
   nameOf: NameOf;
 }) {
   const now = useNow();
-  // THE RING'S TONE, OR NONE: a person is not run by the engine, and an idle
-  // seat draws no edge, for the reason `ringOf` gives.
-  const tone = seat.kind === "human" ? undefined : ringOf(activityOf(agent));
+  // THE STATUS, OR NONE: a person is not run by the engine, and an idle seat
+  // draws none, for the reason `statusOf` gives.
+  const status = seat.kind === "human" ? undefined : statusOf(activityOf(agent));
   const call = agent?.live_call;
   // Decoded ONCE, by the helper the attention queue also reads: the number on
   // this card and the sentence in that row are the same reading of one field.
@@ -123,15 +135,18 @@ export function SeatCard({
   return (
     // `seatPath`, not a path spelled out again: a seat's address is one rule,
     // kept in one place.
-    <a className="seat-card" data-tone={tone} href={href(seatPath(seat))}>
+    <a className="seat-card" href={href(seatPath(seat))}>
       <div className="row">
-        {/* THE RING IS THE STATE, as on the chart's cards: one hue per seat,
-            and it is what the seat is doing. */}
+        {/* THE STATE IS THE GLYPH ON THE BADGE and the pill beside the name,
+            never a line round the badge or down the card's edge: a card in
+            a state's colour beside a plate in the agent's own put two hues
+            on one seat. */}
         <SeatAvatar
           name={seat.name}
           size="lg"
           kind={seat.kind === "human" ? "human" : "agent"}
-          {...(tone ? { ring: tone } : {})}
+          avatar={seat.avatar}
+          status={status}
           decorative
         />
         <div className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
@@ -335,70 +350,110 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
       variant="warning"
       icon={<KeyGlyph size="md" />}
       action={
-        // The banner used to say "set a token" and offer nothing that could.
-        // With anonymous reads allowed the socket is never refused, so the
-        // dialog's only other doors — a socket refusal, and the palette —
-        // both stay shut on exactly the screen that needs it.
-        <Button size="small" variant="secondary" leadingIcon={<KeyGlyph />} onClick={requestToken}>
-          Set token
+        // A BANNER THAT NAMES A REPAIR OFFERS IT. The sign-in comes back to
+        // this screen, so somebody who holds the access lands where the
+        // refusal was.
+        <Button size="small" variant="secondary" leadingIcon={<KeyGlyph />} onClick={goSignIn}>
+          Sign in
         </Button>
       }
     >
-      This answer is auth-gated. It needs an API token matching one of your{" "}
-      <InlineCode tone="inherit">api.auth.tokens</InlineCode> entries.
+      {/* ABOUT ACCESS, NOT A TOKEN: what a signed-in reader refused here
+          lacks is access — Admin or an app's — and an answer that names it
+          is drawn by `RefusedOnAuthority` below instead. */}
+      You don’t have access to this.
     </Callout>
   ),
   // NO `icon` ON THIS ONE, OR ON THE THREE BELOW IT. A Callout draws its
   // variant's own mark, and for neutral that is the info glyph and for danger
   // the error glyph — which is exactly what these passed by hand. An icon prop
   // repeating the variant is a second place for the two to disagree.
-  unknown_query: (
-    <Callout variant="neutral">
-      The engine does not serve this answer — the subsystem behind it is not running on this node.
-    </Callout>
-  ),
-  bad_params: (
-    <Callout variant="warning">
-      The engine refused this request: something it needs was missing or not a value it accepts.
-      Retrying sends the same request — this is the screen&rsquo;s bug to fix, not a fault on the
-      node.
-    </Callout>
-  ),
+  unknown_query: <Callout variant="neutral">Not available on this node.</Callout>,
+  bad_params: <Callout variant="warning">The engine refused this request.</Callout>,
   unavailable: (
     <Callout variant="neutral" icon={<ClockGlyph size="md" />}>
-      This node cannot answer yet: its copy of the company&rsquo;s records is still catching up, or
-      it could not reach the coordination store for a moment. Nothing is lost, and this screen asks
-      again on its own.
-      <strong> This is not an empty company.</strong>
+      Still catching up. This screen retries on its own.
     </Callout>
   ),
-  not_found: (
-    <Callout variant="neutral">
-      There is no such record. The link may point at something that was removed.
-    </Callout>
-  ),
+  not_found: <Callout variant="neutral">Not found. It may have been removed.</Callout>,
   timeout: (
     <Callout variant="warning" icon={<ClockGlyph size="md" />}>
-      The engine did not answer within 10 seconds. It may be under load.
+      The engine didn’t answer in time.
     </Callout>
   ),
   // THE TWO THAT HAD NO SENTENCE. Both used to render "the engine refused
   // this query", which is wrong about each of them in a different way.
   query_failed: (
     <Callout variant="danger">
-      The engine tried to answer and failed. This is a fault on the node rather than a refusal — its
-      log says what went wrong.
+      The engine failed to answer. You can check logs for the details.
     </Callout>
   ),
   closed: (
     // A SOCKET, drawn as one. `plug` was ours; `Cable` is the nearest thing
     // uilet vendors and says the same thing about a connection that went away.
     <Callout variant="neutral" icon={<PlugGlyph size="md" />}>
-      The connection went away before this answered. Nothing refused it; the screen reads again once
-      the socket is back.
+      Connection lost. The screen reloads when it’s back.
     </Callout>
   ),
 };
+
+/**
+ * A refusal on authority that says WHY: the access any one of which would
+ * have admitted the reader ("needs Tracker access"), or — an empty list — that
+ * none would, because what is missing is a relation the org chart does not
+ * hold.
+ *
+ * FROM THE ANSWER, NEVER WRITTEN HERE. The engine's error frame carries the
+ * deciding rule's own reason and grants under the keys its REST envelope uses;
+ * a sentence naming a permission typed into this file is a second statement
+ * of the rule, and it is the one that goes stale the day the rule moves.
+ */
+function RefusedOnAuthority({ refusal }: { refusal: QueryRefusal }) {
+  // NO ACCESS WOULD ADMIT THIS READER: the rule asks a relation the org chart
+  // does not hold (leading this person, or the record being their own), so
+  // signing in again changes nothing and no button offers it.
+  if (refusal.grants.length === 0) {
+    return (
+      <Callout variant="warning" icon={<KeyGlyph size="md" />}>
+        Only this person and their lead can see this.
+      </Callout>
+    );
+  }
+  return (
+    <Callout
+      variant="warning"
+      icon={<KeyGlyph size="md" />}
+      action={
+        <Button size="small" variant="secondary" leadingIcon={<KeyGlyph />} onClick={goSignIn}>
+          Sign in
+        </Button>
+      }
+    >
+      {needsWords("This answer", refusal.grants)}{" "}
+      <span className="t-caption">
+        Refused as <InlineCode>{refusal.reason}</InlineCode>.
+      </span>
+    </Callout>
+  );
+}
+
+/**
+ * A refusal by this node's STATE LOG that waiting will not clear — its log at
+ * the byte ceiling, a record it cannot decode, a barrier its broker refused —
+ * said as what it is rather than as the node catching up.
+ *
+ * `unavailable` covers both, and the generic banner promises "this screen asks
+ * again on its own", which for these would be a promise of a loop: the same
+ * read is refused until an admin acts or another node is asked. So the
+ * banner says the one thing the reader can do: ask another node.
+ */
+function RefusedByTheLog() {
+  return (
+    <Callout variant="warning" icon={<TriangleAlertGlyph size="md" />}>
+      Couldn’t load this on this node. Try another node.
+    </Callout>
+  );
+}
 
 /**
  * What an empty or failed answer means, said precisely.
@@ -410,12 +465,21 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
  */
 export function QueryState({
   error,
+  refusal,
   detail,
   loading,
   empty,
   children,
 }: {
   error: string | null;
+  /**
+   * Why the answer was refused — `useQuery`'s and `useRest`'s own `refusal`.
+   * For an `unauthorized` answer the banner then says which grant would have
+   * admitted the reader, or that none would; for an `unavailable` one the
+   * state log refused and waiting will not change, it says so and what the
+   * refusal names, rather than that the node is catching up.
+   */
+  refusal?: QueryRefusal | LogRefusal | null;
   /**
    * The engine's own sentence on a `bad_params` refusal (`useQuery`'s
    * `detail`). Given, the refusal is the ENGINE'S words about what to change
@@ -436,11 +500,17 @@ export function QueryState({
   empty?: { title: ReactNode; hint: ReactNode };
   children?: ReactNode;
 }) {
+  if (error === "unauthorized" && refusal && !isLogRefusal(refusal)) {
+    return <RefusedOnAuthority refusal={refusal} />;
+  }
+  if (error === "unavailable" && refusal && isLogRefusal(refusal) && refusal.retryAfter === 0) {
+    return <RefusedByTheLog />;
+  }
   if (error === "bad_params" && detail) {
     return <Callout variant="warning">The engine refused this request: {detail}</Callout>;
   }
-  const refusal = error ? REFUSALS[error as QueryErrorCode] : undefined;
-  if (refusal) return <>{refusal}</>;
+  const banner = error ? REFUSALS[error as QueryErrorCode] : undefined;
+  if (banner) return <>{banner}</>;
   // A CODE THIS BUILD DOES NOT KNOW. A newer node may send one — the wire
   // evolves additively — and naming it is more use than calling it a refusal.
   if (error) {

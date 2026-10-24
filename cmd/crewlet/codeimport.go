@@ -131,7 +131,7 @@ import (
 // resumed import of the same history, and is refused.
 
 // codeImportUsage is the import's synopsis.
-const codeImportUsage = "usage: crewlet code import <source-url> <name> [<config.yaml>] [-url URL] [-token T] " +
+const codeImportUsage = "usage: crewlet code import <source-url> <name> [<config.yaml>] [-url URL] " +
 	"[-git PATH] [-dry-run]"
 
 // importStepBudget is the most one step's pack may carry: the push limit less
@@ -179,10 +179,10 @@ const maxImportLine = 1 << 20
 const oidHexLen = 40
 
 // codeImport is `crewlet code import`.
-func codeImport(args []string, stdout, stderr io.Writer) error {
+func codeImport(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	imp, dryRun, err := prepareImport(ctx, args, stdout, stderr)
+	imp, dryRun, err := prepareImport(ctx, environ, args, stdout, stderr)
 	if err != nil {
 		return err
 	}
@@ -192,7 +192,9 @@ func codeImport(args []string, stdout, stderr io.Writer) error {
 // prepareImport reads the command line, the repository the import fills and
 // the operator's git, and answers the run they make and whether it is a dry
 // one.
-func prepareImport(ctx context.Context, args []string, stdout, stderr io.Writer) (*importer, bool, error) {
+func prepareImport(ctx context.Context, environ config.Source, args []string, stdout, stderr io.Writer) (
+	*importer, bool, error) {
+
 	// THE TWO SUBJECTS LEAD, before any flag (`work purge`'s idiom): the
 	// optional config document a node client takes after them is a third
 	// positional, and only their order tells the three apart.
@@ -207,7 +209,7 @@ func prepareImport(ctx context.Context, args []string, stdout, stderr io.Writer)
 		gitPath *string
 		dryRun  *bool
 	)
-	client, err := nodeClientFor(rest, "code import", stderr, func(fs *flag.FlagSet) {
+	client, err := nodeClientFor(environ, rest, "code import", stderr, func(fs *flag.FlagSet) {
 		gitPath = fs.String("git", "", "the git binary to run; empty is the first on PATH")
 		dryRun = fs.Bool("dry-run", false, "plan the import and push nothing")
 	})

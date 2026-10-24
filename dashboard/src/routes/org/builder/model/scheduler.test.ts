@@ -44,12 +44,12 @@ describe("requests", () => {
   const base = fixtureCompany();
   const draftDoc = (): IndexedDocument => {
     const changed: CompanyDocument = { ...base, mission: "Changed" };
-    return toDocument(fromDocument(changed, null));
+    return toDocument(fromDocument(changed));
   };
 
   test("an edit-mode check is the merge patch a save sends, conditional on the base, without a summary", () => {
     const sent = draftDoc();
-    const check = checkRequest({ mode: "edit", baseRevision: "rev-1", base, sent });
+    const check = checkRequest({ mode: "edit", baseRevision: "rev-1", base, sent, scope: null });
     expect(check).toEqual({
       method: "PATCH",
       path: "/config",
@@ -59,7 +59,7 @@ describe("requests", () => {
       body: { mission: "Changed" },
     });
     const save = saveRequest(
-      { mode: "edit", baseRevision: "rev-1", base, sent },
+      { mode: "edit", baseRevision: "rev-1", base, sent, scope: null },
       "Update the mission (write abc)",
     );
     expect(save).toEqual({
@@ -70,8 +70,10 @@ describe("requests", () => {
   });
 
   test("a create-mode check puts the whole document, only where no company exists", () => {
-    const sent = toDocument(fromDocument({ name: "New", roles: [{ name: "A" }] }, null));
-    expect(checkRequest({ mode: "create", baseRevision: null, base: null, sent })).toEqual({
+    const sent = toDocument(fromDocument({ name: "New", roles: [{ name: "A" }] }));
+    expect(
+      checkRequest({ mode: "create", baseRevision: null, base: null, sent, scope: null }),
+    ).toEqual({
       method: "PUT",
       path: "/config",
       query: { dry_run: "true" },
@@ -83,7 +85,7 @@ describe("requests", () => {
 
   test("an edit-mode request without its base is a defect", () => {
     expect(() =>
-      checkRequest({ mode: "edit", baseRevision: null, base: null, sent: draftDoc() }),
+      checkRequest({ mode: "edit", baseRevision: null, base: null, sent: draftDoc(), scope: null }),
     ).toThrow(RangeError);
   });
 
@@ -106,26 +108,42 @@ describe("classifyCheck", () => {
         { status: 200, body: { valid: true, base_revision_id: "r1", warnings: null, derived } },
         "edit",
         "r1",
+        null,
       ),
     ).toEqual({ status: "clean", warnings: [], derived });
   });
 
   test("a dry run that validated against another base is a conflict", () => {
     expect(
-      classifyCheck({ status: 200, body: { valid: true, base_revision_id: "r2" } }, "edit", "r1"),
+      classifyCheck(
+        { status: 200, body: { valid: true, base_revision_id: "r2" } },
+        "edit",
+        "r1",
+        null,
+      ),
     ).toEqual({
       status: "conflict",
       reason: "base_moved",
       currentRevisionId: "r2",
     });
     expect(
-      classifyCheck({ status: 200, body: { valid: true, base_revision_id: "r2" } }, "create", null),
+      classifyCheck(
+        { status: 200, body: { valid: true, base_revision_id: "r2" } },
+        "create",
+        null,
+        null,
+      ),
     ).toMatchObject({
       status: "conflict",
       reason: "already_configured",
     });
     expect(
-      classifyCheck({ status: 200, body: { valid: true, base_revision_id: "" } }, "create", null),
+      classifyCheck(
+        { status: 200, body: { valid: true, base_revision_id: "" } },
+        "create",
+        null,
+        null,
+      ),
     ).toMatchObject({
       status: "clean",
     });
@@ -133,11 +151,21 @@ describe("classifyCheck", () => {
 
   test("refusals map to the states that halt, and failures to unreachable", () => {
     const cases: [HttpAnswer, unknown][] = [
-      [{ status: 401, body: { error: "unauthorized" } }, { status: "guarded" }],
-      [{ status: 403, body: {} }, { status: "guarded" }],
+      [
+        { status: 401, body: { error: "unauthorized" } },
+        { status: "guarded", code: "unauthorized" },
+      ],
+      [
+        { status: 403, body: {} },
+        { status: "guarded", code: "" },
+      ],
       [
         { status: 503, body: { error: "draining", detail: "restarting" } },
         { status: "unreachable", detail: "restarting" },
+      ],
+      [
+        { status: 503, body: { error: "starting", detail: "recovering" } },
+        { status: "unreachable", detail: "recovering" },
       ],
       [
         { status: 0, body: { error: "unreachable" } },
@@ -161,7 +189,49 @@ describe("classifyCheck", () => {
       ],
     ];
     for (const [answer, expected] of cases)
-      expect(classifyCheck(answer, "edit", "r1"), JSON.stringify(answer)).toEqual(expected);
+      expect(classifyCheck(answer, "edit", "r1", null), JSON.stringify(answer)).toEqual(expected);
+  });
+
+  // A PART REFUSED IS A PROBLEM ONLY WITH A LEAD'S DRAFT. Drafting the whole
+  // company without Admin is leading no unit, and every write of it is
+  // refused whole — the engine names the unchanged document first — which is
+  // a grant the reader lacks rather than a problem with each edit.
+  test("a refused part is a lead's draft's problem, and a grant the whole company's reader lacks", () => {
+    const answer: HttpAnswer = {
+      status: 403,
+      body: {
+        error: "unauthorized",
+        reason: "no_grant",
+        grants: ["admin"],
+        refused: [{ kind: "document", id: "", place: "", why: "unchanged", reason: "no_grant" }],
+      },
+    };
+    expect(classifyCheck(answer, "edit", "r1", null)).toEqual({
+      status: "guarded",
+      code: "unauthorized",
+    });
+    expect(classifyCheck(answer, "edit", "r1", "engineering")).toMatchObject({
+      status: "problems",
+      code: "unauthorized",
+    });
+  });
+
+  // A MANAGED DOCUMENT IS NOBODY'S MISSING GRANT (ADR-0030): its refusal is a
+  // 403 as well, and read by the whole-company shortcut above it would send a
+  // reader who holds every grant to ask an administrator for one. Whoever
+  // drafts — the company or a lead's unit — it halts as managed. Mutation:
+  // ask the shortcut before the managed reading and the first case is guarded.
+  test("a managed document halts as managed, whoever drafts", () => {
+    const answer: HttpAnswer = {
+      status: 403,
+      body: { error: "config_managed", managed_by: ["gitops"] },
+    };
+    for (const scope of [null, "engineering"]) {
+      expect(classifyCheck(answer, "edit", "r1", scope), String(scope)).toEqual({
+        status: "managed",
+        managedBy: ["gitops"],
+      });
+    }
   });
 
   test("a refused document carries its problems, and a refusal without any is given one from its detail", () => {
@@ -185,6 +255,7 @@ describe("classifyCheck", () => {
         },
         "edit",
         "r1",
+        null,
       ),
     ).toEqual({
       status: "problems",
@@ -198,6 +269,7 @@ describe("classifyCheck", () => {
         { status: 413, body: { error: "body_too_large", detail: "the body is over the limit" } },
         "edit",
         "r1",
+        null,
       ),
     ).toEqual({
       status: "problems",
@@ -447,12 +519,19 @@ function harness() {
     transport,
     prepare: (g) => {
       if (g !== generation) return null;
-      const sent = toDocument(fromDocument({ name: `generation ${g}` }, null));
+      const sent = toDocument(fromDocument({ name: `generation ${g}` }));
       return {
-        request: checkRequest({ mode: "create", baseRevision: null, base: null, sent }),
+        request: checkRequest({
+          mode: "create",
+          baseRevision: null,
+          base: null,
+          sent,
+          scope: null,
+        }),
         sent,
         mode: "create",
         baseRevision: null,
+        scope: null,
       };
     },
     onSettled: (s) => settled.push(s),

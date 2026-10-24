@@ -158,9 +158,13 @@ func spendingEngine(t *testing.T) (*Engine, *servedWriter) {
 	}
 	served := &servedWriter{}
 	placement := wholeEstate{roster: staticRoster{node: "data-1"}}
-	stop, err := estate.Serve(t.Context(), start(), "data-1", &servedEstate{backend: estate.Backend{
-		Writer: func(estate.Actor) estate.TrackerWriter { return served },
-	}}, estate.ServerSeams{})
+	envelopes := routerEnvelopes(t)
+	stop, err := estate.Serve(t.Context(), start(), estate.ServerOptions{
+		Self: "data-1", Envelopes: envelopes,
+		Local: &servedEstate{backend: estate.Backend{
+			Writer: func(estate.Actor) estate.TrackerWriter { return served },
+		}},
+	})
 	if err != nil {
 		t.Fatalf("serve: %v", err)
 	}
@@ -168,7 +172,8 @@ func spendingEngine(t *testing.T) (*Engine, *servedWriter) {
 	q := start()
 	router, err := estate.NewRouter(estate.RouterOptions{
 		Queue: q, Placement: placement, Self: "agent-1", Session: estate.NewSession(),
-		Timing: estate.Production(),
+		Timing:    estate.Production(),
+		Envelopes: envelopes,
 	})
 	if err != nil {
 		t.Fatalf("estate router: %v", err)
@@ -191,7 +196,7 @@ func spendingEngine(t *testing.T) (*Engine, *servedWriter) {
 			MaxIterations: 1, DelegationDepthLimit: 1, MaxToolRounds: 3,
 		}},
 	})
-	e.notify.registry = notify.NewRegistry(organization)
+	e.notify.registry = notify.NewRegistry(organization, nil)
 	return e, served
 }
 

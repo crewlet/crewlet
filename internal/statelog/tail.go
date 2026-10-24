@@ -30,7 +30,7 @@ import (
 // which a node whose rows are the copy's age goes on making — and a trimmed
 // record, whose whole effect is to remove arbitration anchors, so one these
 // rows never applied leaves only anchors a write treats as a probe anyway
-// (ADR-0032). Neither carries an operation id, so the ledger could never say
+// (ADR-0046). Neither carries an operation id, so the ledger could never say
 // these rows hold one, and a reanchor would refuse over a record that wrote
 // nothing until an operator discarded it.
 //
@@ -45,9 +45,10 @@ import (
 // record, and the broker's instant is the record's own rather than a node's.
 //
 // Every answer that is not "yes" is "no", and "no" is not always conclusive.
-// The ledger can LOSE rows — to its own sweep ([OpsRetention]), or to its
-// donor's, whose watermark travelled with it — and it says how far back it
-// may have ([Rows.LostBefore]): for an operation minted before
+// The ledger can LOSE rows — to its own sweeps, the table's ([OpsRetention])
+// and any subject kind's shorter one, or to its donor's, whose watermark
+// travelled with it — and it says how far back it may have
+// ([Rows.LostBefore]), for the record's own kind: for an operation minted before
 // that watermark, absence says nothing, and the record is named with the
 // watermark ([TailRecord.LedgerLostBefore]) so the refusal can say its rows
 // may hold it after all. The other false "no" is a record a gate dropped,
@@ -92,7 +93,10 @@ func (r TailRecord) String() string {
 // A record the log cannot say anything about — its envelope does not decode —
 // is an error: whether it writes rows cannot be told, and a reanchor that
 // cannot tell refuses rather than guesses.
-func UnheldTail(ctx context.Context, d Domain, spec StreamSpec, db ReadEstate, log LogReader,
+//
+// log is the domain's log as a [VerifiedLog]: what the broker holds is the
+// signed frame, and a reader handed the frame decodes nothing.
+func UnheldTail(ctx context.Context, d Domain, spec StreamSpec, db ReadEstate, log VerifiedReader,
 	gen uint32, first, last uint64) (*TailRecord, error) {
 
 	t, err := newTables(d, spec)
@@ -132,7 +136,7 @@ func UnheldTail(ctx context.Context, d Domain, spec StreamSpec, db ReadEstate, l
 			// sweep cannot land between the two. An operation id that
 			// carries no instant reads as minted at the zero one, before
 			// every loss, exactly as the publisher reads it.
-			bound, lost, readErr := t.lostBefore(ctx, tx)
+			bound, lost, readErr := t.lostBefore(ctx, tx, env.Subject.Kind)
 			if readErr == nil && lost && mintedAt(env.OpID).Before(bound) {
 				lostBefore = bound.UTC()
 			}

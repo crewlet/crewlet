@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/procgroup"
+	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // termGrace is how long a terminated CLI has to exit before it is killed.
@@ -49,6 +51,10 @@ const stderrTail = 50
 const maxOutput = 32 << 20
 
 // invocation is one CLI call, fully resolved.
+//
+// Its env is the child's WHOLE environment, from [buildEnv], and it is
+// required: [run] refuses a nil one, because os/exec reads a nil Cmd.Env as
+// "inherit the engine's".
 type invocation struct {
 	binary  string
 	args    []string
@@ -140,6 +146,18 @@ type rawResult struct {
 // runtime that forks helpers, and signalling only the process Go started
 // leaves those holding the seat's memory and its network sockets.
 func run(ctx context.Context, in invocation) (*rawResult, error) {
+	// A MISSING ENVIRONMENT IS NOT AN EMPTY ONE. os/exec hands a child whose
+	// Env is nil the ENGINE's own environment — its keyring, its Tier A
+	// tokens, the org's chat token and every provider key — which is the
+	// one thing the allowlist exists to keep out of a vendor's CLI. The
+	// version probe reached here with none once and ran `--version` with
+	// more access than any completion ever got; refused here, the next
+	// caller that forgets cannot do the same silently.
+	if in.env == nil {
+		return nil, fmt.Errorf("cliagent: %s was about to run with no environment "+
+			"of its own, which os/exec would fill with the engine's; it was not "+
+			"started", in.binary)
+	}
 	if in.grace <= 0 {
 		return nil, fmt.Errorf("cli-agent: starting %q with no termination grace — "+
 			"a child that ignored SIGTERM would hold the call open for ever; "+
@@ -284,6 +302,9 @@ type extracted struct {
 	output     int
 	cacheRead  int
 	cacheWrite int
+	// reasoning is reasoning tokens a CLI reports APART from output, which
+	// the completion adds to the output count — see [cliprofile.UsagePaths].
+	reasoning int
 	// reported is false when no usage path resolved, so the counts are
 	// estimates. `crewlet llm doctor` prints which of the two a provider
 	// gets, because a budget built on estimates is a different promise.
@@ -311,13 +332,13 @@ type extracted struct {
 }
 
 // extract pulls the answer and the usage out of one CLI's stdout.
-func extract(p Profile, stdout string) extracted {
-	switch p.output() {
-	case OutputText:
+func extract(p cliprofile.Profile, stdout string) extracted {
+	switch p.EffectiveOutput() {
+	case cliprofile.OutputText:
 		// Located by definition: a text profile declares that stdout IS
 		// the answer, so there is no path that could fail to resolve.
 		return extracted{text: strings.TrimSpace(stdout), located: true}
-	case OutputJSONL:
+	case cliprofile.OutputJSONL:
 		return extractStream(p, stdout)
 	default:
 		return extractObject(p, stdout)
@@ -329,7 +350,7 @@ func extract(p Profile, stdout string) extracted {
 // A CLI that printed a banner before its JSON is common enough to handle
 // here: the outermost braces are tried when the whole of stdout does not
 // parse, which costs nothing and saves an operator an override.
-func extractObject(p Profile, stdout string) extracted {
+func extractObject(p cliprofile.Profile, stdout string) extracted {
 	doc, ok := decodeObject(strings.TrimSpace(stdout))
 	if !ok {
 		if bare, found := outermostObject(stdout); found {
@@ -358,6 +379,7 @@ func extractObject(p Profile, stdout string) extracted {
 	}
 	out.cacheRead, _ = firstInt(doc, p.Usage.CacheRead)
 	out.cacheWrite, _ = firstInt(doc, p.Usage.CacheWrite)
+	out.reasoning, _ = firstInt(doc, p.Usage.Reasoning)
 	return out
 }
 
@@ -366,7 +388,7 @@ func extractObject(p Profile, stdout string) extracted {
 // Text CONCATENATES in stream order — an event stream spells one answer
 // across several events — while usage figures take the LAST value found,
 // because a stream reports a running total and the final one is the total.
-func extractStream(p Profile, stdout string) extracted {
+func extractStream(p cliprofile.Profile, stdout string) extracted {
 	var out extracted
 	var text strings.Builder
 	for line := range strings.SplitSeq(stdout, "\n") {
@@ -408,42 +430,100 @@ func extractStream(p Profile, stdout string) extracted {
 		if got, ok := firstInt(doc, p.Usage.CacheWrite); ok {
 			out.cacheWrite = got
 		}
+		if got, ok := firstInt(doc, p.Usage.Reasoning); ok {
+			out.reasoning = got
+		}
 	}
 	out.text = strings.TrimSpace(text.String())
 	return out
 }
 
-// applyUsageFile overlays a vendor's SEPARATE usage report on what stdout
-// said, for a profile whose CLI writes one — see [Profile.UsageFileArgs].
+// usageOutcome is what [extracted.applyUsageReport] made of a usage report.
+//
+// THREE WAYS TO TAKE NOTHING, and only one of them is silent. No report to read
+// is a profile that reads none, or a report the place that obtains it already
+// failed to get and said so. A report that arrived and could not be read is
+// different: the CLI did its part and this profile no longer describes what it
+// printed — a release that renamed `data.tokens` — so every call is charged an
+// estimate, and nothing would say why if this did not.
+type usageOutcome int
+
+const (
+	// usageNoReport: the profile reads no report, or none arrived.
+	usageNoReport usageOutcome = iota
+	// usageApplied: both prompt counts came from the report.
+	usageApplied
+	// usageUndecodable: the report is not one JSON object.
+	usageUndecodable
+	// usageUnresolved: it decodes, and usage.input and usage.output do not
+	// both resolve in it.
+	usageUnresolved
+)
+
+// unreadable reports whether a report arrived and none of it was taken.
+func (o usageOutcome) unreadable() bool {
+	return o == usageUndecodable || o == usageUnresolved
+}
+
+// String is the reason a warning names.
+func (o usageOutcome) String() string {
+	switch o {
+	case usageApplied:
+		return "applied"
+	case usageUndecodable:
+		return "the report is not one JSON object"
+	case usageUnresolved:
+		return "usage.input and usage.output do not both resolve in it"
+	default:
+		return "no report"
+	}
+}
+
+// applyUsageReport overlays a vendor's SEPARATE usage report on what stdout
+// said, for a profile whose CLI writes one or prints one to a usage command —
+// see [cliprofile.Profile.UsageFileArgs] and [cliprofile.Profile.UsageArgs] —
+// and says what it made of it.
 //
 // BOTH PROMPT COUNTS COME FROM THE FILE OR NEITHER DOES. A partial overlay
 // would pair one source's input count with another's output count, and the
 // sum is what a budget is charged. The two cache figures are not part of that
 // test: a provider that caches nothing reports neither, and zero is the true
 // answer there.
-func (e *extracted) applyUsageFile(p Profile, raw string) {
-	if len(p.UsageFileArgs) == 0 || strings.TrimSpace(raw) == "" {
-		return
+//
+// Taking nothing leaves the counts to whatever stdout reported, which for a
+// CLI that reports none there is the estimate.
+func (e *extracted) applyUsageReport(p cliprofile.Profile, raw string) usageOutcome {
+	if !p.ReadsUsageReport() || strings.TrimSpace(raw) == "" {
+		return usageNoReport
 	}
 	doc, ok := decodeObject(strings.TrimSpace(raw))
 	if !ok {
-		return
+		return usageUndecodable
 	}
 	input, gotInput := firstInt(doc, p.Usage.Input)
 	output, gotOutput := firstInt(doc, p.Usage.Output)
 	if !gotInput || !gotOutput {
 		// The report exists but this profile cannot read both counts
-		// out of it, which is drift rather than a zero-token call. Left
-		// to the estimate, the same answer a CLI that reports nothing
-		// gets — and better than charging a real output count against a
-		// prompt this build read as zero. The two cache figures are not
-		// in the test: a provider that caches nothing reports neither,
-		// and zero is the true answer there.
-		return
+		// out of it, which is drift rather than a zero-token call —
+		// better left to what stdout said than charging a real output
+		// count against a prompt this build read as zero.
+		return usageUnresolved
 	}
 	e.input, e.output, e.reported = input, output, true
 	e.cacheRead, _ = firstInt(doc, p.Usage.CacheRead)
 	e.cacheWrite, _ = firstInt(doc, p.Usage.CacheWrite)
+	e.reasoning, _ = firstInt(doc, p.Usage.Reasoning)
+	return usageApplied
+}
+
+// usageSource names the profile field a usage report came through, for the
+// warning an unreadable one logs. The two are exclusive
+// ([cliprofile.Profile.Validate]).
+func usageSource(p cliprofile.Profile) string {
+	if len(p.UsageFileArgs) > 0 {
+		return "usage_file_args"
+	}
+	return "usage_args"
 }
 
 // textOf reads the assistant's text out of ONE line of a jsonl stream,
@@ -454,7 +534,7 @@ func (e *extracted) applyUsageFile(p Profile, raw string) {
 // count as "located": a stream that spliced a tool's output into the reply
 // and then repeated the reply would look, to every frame downstream, exactly
 // like a model that had said all of it.
-func textOf(p Profile, doc map[string]any) (string, bool) {
+func textOf(p cliprofile.Profile, doc map[string]any) (string, bool) {
 	if len(p.EventTypePath) == 0 {
 		return firstString(doc, p.TextPaths)
 	}
@@ -469,6 +549,57 @@ func textOf(p Profile, doc map[string]any) (string, bool) {
 	return firstString(doc, p.TextPaths)
 }
 
+// classifyFailureEvents is the [cliprofile.MarkerScopeEvents] scope: every
+// stdout line decoded, only those whose discriminator names one of the CLI's
+// own failure events kept, and each sentinel compared by EQUALITY with the
+// string at the profile's marker path in such an event.
+//
+// NEVER A SUBSTRING SEARCH, which is what this scope was first: OpenCode 2
+// prints a tool call's arguments as the model's own raw JSON object, so a
+// model can put any sentinel on stdout spelled exactly as the CLI spells it,
+// on a healthy call. What it cannot do is change the type of the event its
+// words arrive in, or move them to where the path points in an event of the
+// failure type — the CLI writes those. A line that does not decode, has no
+// discriminator, or whose class is not a string is no failure report.
+//
+// Limit markers before auth markers, the precedence the text scopes keep.
+// The matched event's whole line is what the operator is shown: it carries
+// the provider's own message beside the class.
+func classifyFailureEvents(p cliprofile.Profile, stdout string) (markerHit, bool) {
+	type failure struct{ class, line string }
+	var failures []failure
+	for line := range strings.SplitSeq(stdout, "\n") {
+		line = strings.TrimSpace(line)
+		doc, ok := decodeObject(line)
+		if !ok {
+			continue
+		}
+		kind, _ := lookup(doc, p.EventTypePath)
+		if name, isString := kind.(string); !isString || !slices.Contains(p.MarkerEvents, name) {
+			continue
+		}
+		value, _ := lookup(doc, p.MarkerPath)
+		if class, isString := value.(string); isString {
+			failures = append(failures, failure{class: class, line: line})
+		}
+	}
+	for _, marker := range p.LimitMarkers {
+		for _, f := range failures {
+			if f.class == marker.Sentinel {
+				return markerHit{Kind: llm.KindRateLimit, Said: f.line}, true
+			}
+		}
+	}
+	for _, marker := range p.AuthMarkers {
+		for _, f := range failures {
+			if f.class == marker.Sentinel {
+				return markerHit{Kind: llm.KindAuth, Said: f.line}, true
+			}
+		}
+	}
+	return markerHit{Kind: llm.KindFatal}, false
+}
+
 func decodeObject(s string) (map[string]any, bool) {
 	if s == "" || s[0] != '{' {
 		return nil, false
@@ -481,7 +612,7 @@ func decodeObject(s string) (map[string]any, bool) {
 }
 
 // lookup walks one path into a decoded document.
-func lookup(doc map[string]any, path Path) (any, bool) {
+func lookup(doc map[string]any, path cliprofile.Path) (any, bool) {
 	var current any = doc
 	for _, step := range path {
 		switch node := current.(type) {
@@ -518,7 +649,7 @@ func lookup(doc map[string]any, path Path) (any, bool) {
 // override, and cursor-agent's `[["result"], ["response"]]` depends on an
 // empty `result` falling through to `response`. So the first NON-EMPTY hit
 // wins, and an all-empty walk still reports located.
-func firstString(doc map[string]any, paths []Path) (string, bool) {
+func firstString(doc map[string]any, paths []cliprofile.Path) (string, bool) {
 	located := false
 	for _, path := range paths {
 		v, ok := lookup(doc, path)
@@ -537,7 +668,7 @@ func firstString(doc map[string]any, paths []Path) (string, bool) {
 	return "", located
 }
 
-func firstBool(doc map[string]any, paths []Path) bool {
+func firstBool(doc map[string]any, paths []cliprofile.Path) bool {
 	for _, path := range paths {
 		v, ok := lookup(doc, path)
 		if !ok {
@@ -552,7 +683,7 @@ func firstBool(doc map[string]any, paths []Path) bool {
 
 // firstInt reads a token count, accepting the float64 every JSON number
 // decodes to as well as a string, which some CLIs emit for large counts.
-func firstInt(doc map[string]any, paths []Path) (int, bool) {
+func firstInt(doc map[string]any, paths []cliprofile.Path) (int, bool) {
 	for _, path := range paths {
 		v, ok := lookup(doc, path)
 		if !ok {

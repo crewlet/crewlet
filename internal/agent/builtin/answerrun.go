@@ -2,11 +2,15 @@ package builtin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -46,6 +50,15 @@ type RunDeps struct {
 	Actor func(ctx context.Context, turn *turnctx.Turn) (Actor, error)
 }
 
+// The run's identity on its row, as a decision and the answer read it: the
+// seat that holds it, by id and by its handle, and the seat whose
+// wake started the turn that launched it.
+type runParties struct {
+	seat      uuid.UUID
+	handle    string
+	requester string
+}
+
 // answerRun answers a coding run that stopped to ask a person something, by
 // naming the run.
 //
@@ -58,16 +71,26 @@ type RunDeps struct {
 // tool names the run instead, so any parked run is answerable whatever woke
 // the turn that launched it.
 //
+// # Whose question it is
+//
+// Its REQUESTER's — the person whose message, notice or ask woke the turn that
+// launched the run, recorded on its row by the handle their seat was created
+// under — or whoever leads the run's seat, or an admin
+// ([authz.ActionRunAnswer]). The requester is admitted through the rule's SELF
+// arm, asked about their own seat, so it is the table that says so; and only
+// when the caller IS that person, so nobody who merely leads them answers a
+// question the run put to them.
+//
 // # What it promises, and what it does not
 //
 // It answers `pending`: the answer is on the seat's inbox and the node holding
 // the seat will resume the run with it — but that node is the only one that
 // can, and it may be paused, busy with another of the seat's coding runs
 // (which it finishes or parks before it takes this answer, as it would a chat
-// reply), or restarting. What the answer became is announced there
-// as `sandbox_run_answered` (`resumed`, `not_awaiting`, `gone` or `declined`).
-// What it refuses up front is what this node can know: a run that is not waiting for an
-// answer (`not_running`).
+// reply), or restarting. What the answer became is announced there as
+// `sandbox_run_answered` (`resumed`, `not_awaiting`, `gone` or `declined`).
+// What it refuses up front is what this node can know: a run that is not
+// waiting for an answer (`not_running`).
 //
 // # It answers the question it was given against
 //
@@ -80,7 +103,8 @@ type RunDeps struct {
 // run still waits on that one, and is announced `not_awaiting` otherwise
 // ([sandbox.Coordinator.AnswerByTurn]).
 type answerRun struct {
-	deps RunDeps
+	deps      RunDeps
+	authorize Authorizer
 }
 
 var _ tools.SeatCallable = (*answerRun)(nil)
@@ -149,9 +173,9 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	run, found, err := t.deps.Desk.Run(ctx, turnID)
 	switch {
 	case err != nil:
-		return refused(tools.RefusalUnavailable, fmt.Sprintf("answer_run could not "+
-			"read run %s right now (%v). This does NOT mean it is gone — try again.",
-			clip(turnID), err)), nil
+		return nodeFailure(ctx, AnswerRunTool, err, fmt.Sprintf("answer_run could not "+
+			"read run %s", clip(turnID)), "This does NOT mean it is gone, and "+
+			"nothing was answered."), nil
 	case !found:
 		// NOT_RUNNING RATHER THAN NOT_FOUND: a run that has ended has no
 		// record, exactly like a turn id that never named one, and a
@@ -165,9 +189,22 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"waiting for an answer — there is no question for this to answer.",
 			clip(turnID), run.Status)), nil
 	}
+	parties, refusal := t.parties(ctx, run)
+	if refusal != nil {
+		return *refusal, nil
+	}
+	if refusal := t.mayAnswer(ctx, actor, parties); refusal != nil {
+		return *refusal, nil
+	}
+
+	// WHO ANSWERED, as [iam.ActorFor] names them: a person bound to a seat
+	// answers AS that seat, kind human, with the credential they acted
+	// through beside it. The desk reads the run's row again to stamp the
+	// seat it delivers to, so a seat named here is only ever the same one.
 	given := types.SandboxAnswerGiven{
-		TurnID: run.TurnID, AgentHandle: run.AgentHandle, Answer: answer,
-		AnsweredBy: actor.Handle, AnsweredBySeat: actor.Seat,
+		TurnID: run.TurnID, Agent: parties.seat.String(), AgentHandle: parties.handle,
+		Answer: answer, AnsweredBy: actor.Handle, AnsweredByKind: string(actor.Kind),
+		OperatorID: actor.OperatorID,
 		// THE QUESTION THIS ANSWERS, off the row just checked as waiting:
 		// the answer resumes the run only while it still waits on it.
 		LaunchID: run.LaunchID,
@@ -180,11 +217,51 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// consumed second finds that question no longer waiting — even when
 		// the run has moved on to another question by then.
 		log.WarnContext(ctx, "answer_run_delivery_unknown",
-			"turn_id", run.TurnID, "seat", run.AgentHandle, "error", err.Error())
+			"turn_id", run.TurnID, "seat", parties.handle, "error", err.Error())
 		outcome = statelog.OutcomeUnknown
 	}
 	return jsonResult(map[string]any{
-		"turn_id": run.TurnID, "agent_handle": run.AgentHandle,
+		"turn_id": run.TurnID, "agent_handle": parties.handle,
 		"question": run.Question, "outcome": string(outcome),
 	})
+}
+
+// errUnreadableSeatID is the error a pending run's row carries when the seat
+// id on it is not one: absent, the nil id, or not a uuid at all.
+var errUnreadableSeatID = errors.New("builtin: a pending run's seat id is unreadable")
+
+// parties is the run's seat and requester as its row records them: the seat by
+// its id and its handle, the requester by handle. A handle is immutable
+// (ADR-0013), so the row names the same seats for as long as they exist.
+//
+// A row with no seat id this build can read names no seat a gate can ask
+// about, and is refused rather than answered on a guess — as a FAULT
+// ([faulted]): the row is this node's own and stays unreadable however long
+// anybody waits, so "try again" would be a promise nothing keeps.
+func (t *answerRun) parties(ctx context.Context, run sandbox.PendingRun) (runParties, *tools.Result) {
+	id, err := uuid.Parse(run.AgentID)
+	if err != nil || id == uuid.Nil {
+		return runParties{}, refusalOf(faulted(ctx, AnswerRunTool,
+			fmt.Errorf("pending run %s names seat id %q: %w", run.TurnID, run.AgentID,
+				errUnreadableSeatID), fmt.Sprintf("answer_run cannot answer run %s: its "+
+				"record names no seat id this build can read, so the seat it would wake "+
+				"cannot be named — %s.", clip(run.TurnID), faultSaid)))
+	}
+	return runParties{seat: id, handle: run.AgentHandle, requester: run.Requester}, nil
+}
+
+// mayAnswer asks the authority about this run: about the REQUESTER's own seat
+// when the caller is that requester — the rule's self arm — and about the
+// run's seat otherwise, where its lead and an admin are admitted.
+// The actor is named by [iam.ActorFor], whose name for a bound person is their
+// seat's handle.
+func (t *answerRun) mayAnswer(ctx context.Context, actor Actor,
+	parties runParties) *tools.Result {
+
+	owner := parties.handle
+	if parties.requester != "" && actor.Handle == parties.requester {
+		owner = parties.requester
+	}
+	return askAuthority(ctx, t.authorize, authz.ActionRunAnswer,
+		authz.Object{Kind: authz.KindPerson, ID: parties.seat.String(), Owner: owner})
 }

@@ -227,3 +227,37 @@ func TestEqualPeopleAreOrderedByTheirOwnHandle(t *testing.T) {
 		}
 	}
 }
+
+// A PERSON IS NAMED FROM THEIR HUMAN SEAT IN THE CHART, on both windows, and
+// the provider list names them by their handle. The chart files a human seat
+// under [tokens.PersonKey] — a human seat has no agent id — so a person's row
+// is called what their seat is called now rather than what a record said when
+// the question was asked, exactly as a seat's row is.
+//
+// Mutation: look a person's row up in the chart by their (empty) agent id, and
+// both rows read "Founder".
+func TestAPersonIsNamedFromTheirHumanSeatInTheChart(t *testing.T) {
+	t.Parallel()
+	seats := tokens.Seats{tokens.PersonKey("maya"): {Handle: "maya", Name: "Chair"}}
+	asked := auxRec("operator", "answer_knowledge", "", "2026-06-14T12:00:09Z", 1, 10)
+	asked.AgentID, asked.AgentRole, asked.Person, asked.ProviderKey = "", "Founder", "maya", "cheap"
+	live := tokens.Aggregate([]tokens.Record{asked}, tokens.Options{Seats: seats, Since: since, Until: until})
+	if len(live.ByAgent) != 1 || live.ByAgent[0].Role != "Chair" || live.ByAgent[0].Handle != "maya" ||
+		!live.ByAgent[0].Person || live.ByAgent[0].AgentID != "" {
+		t.Errorf("live by_agent = %+v, want maya's person row named Chair", live.ByAgent)
+	}
+	if len(live.ByProvider) != 1 || !slices.Equal(live.ByProvider[0].Seats, []string{"maya"}) {
+		t.Errorf("live by_provider = %+v, want maya named by her handle", live.ByProvider)
+	}
+
+	named := tokens.FoldDaily([]tokens.Cell{
+		{Day: "2026-06-14", Handle: "maya", Role: "Founder", Person: true, ProviderKey: "cheap",
+			Phase: tokens.PhaseAuxiliary, Bucket: tokens.Bucket{TotalTokens: 10, Calls: 1}},
+	}, nil, tokens.DailyOptions{Seats: seats, Range: days(t, "2026-06-14", "2026-06-14", time.UTC)})
+	if len(named.ByAgent) != 1 || named.ByAgent[0].Role != "Chair" || named.ByAgent[0].Handle != "maya" {
+		t.Errorf("named by_agent = %+v, want maya named Chair", named.ByAgent)
+	}
+	if len(named.ByProvider) != 1 || !slices.Equal(named.ByProvider[0].Seats, []string{"maya"}) {
+		t.Errorf("named by_provider = %+v, want maya named by her handle", named.ByProvider)
+	}
+}

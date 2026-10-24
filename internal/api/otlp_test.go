@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -26,7 +27,7 @@ func otlpReceiver(t *testing.T, upstream string) *sandbox.OtelReceiver {
 	t.Helper()
 	receiver, err := sandbox.NewOtelReceiver(sandbox.OtelReceiverOptions{
 		BaseURL:          "https://engine.internal",
-		Tokens:           sandbox.NewOtelTokens(sandbox.OtelTokenOptions{Key: []byte("test-key")}),
+		Tokens:           otelTokensFor(t, sandbox.OtelTokenOptions{Domain: sandbox.OtelKeyDomain, Material: runtoken.OneKey("k", "test-key")}),
 		UpstreamEndpoint: upstream,
 	})
 	if err != nil {
@@ -100,8 +101,8 @@ func TestAnExportWithoutAValidTokenIsRefused(t *testing.T) {
 		// A token minted with somebody else's key. This is the case that
 		// matters most: anyone who can reach the endpoint can mint one of
 		// their own, and only the signature stops it counting.
-		{"another key's token", sandbox.NewOtelTokens(sandbox.OtelTokenOptions{
-			Key: []byte("attacker-key")}).Mint("trace-abc", time.Hour)},
+		{"another key's token", otelTokensFor(t, sandbox.OtelTokenOptions{
+			Material: runtoken.OneKey("k", "attacker-key")}).Mint("trace-abc", time.Hour)},
 	} {
 		res := postOTLP(a, "/otlp/"+tc.token+"/v1/traces", "spans")
 		if res.StatusCode != http.StatusUnauthorized {
@@ -147,7 +148,7 @@ func TestTheExportRouteNeedsNoAPIToken(t *testing.T) {
 	}
 	// AND THE GUARD IS REALLY ON, or the assertion above proves nothing.
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/agents", nil))
+	a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/agents", nil)))
 	if rec.Result().StatusCode != http.StatusUnauthorized {
 		t.Fatalf("the API is not guarded in this fixture (/agents = %d), so the "+
 			"exemption above was never exercised", rec.Result().StatusCode)
@@ -180,12 +181,27 @@ func TestWithNoReceiverTheRouteIsAbsent(t *testing.T) {
 	}
 }
 
-// closedToReads is a bootstrap that requires a token for EVERYTHING the
-// exemptions do not cover — unlike [guarded], whose anonymous reads would
-// make the assertion above pass for the wrong reason.
+// closedToReads is a bootstrap that requires a credential for EVERYTHING the
+// exemptions do not cover.
+//
+// IT IS NOW THE SAME THING AS [guarded], and it is kept because the assertion
+// above is about the exemption list rather than about a posture: what it pins
+// is that /otlp stays reachable while everything around it is guarded, and a
+// case that named the ordinary fixture would stop saying so the day somebody
+// reintroduced a read posture.
 func closedToReads() *config.Bootstrap {
 	b := config.DefaultBootstrap()
-	b.API.Auth.AllowAnonymousRead = false
 	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
 	return &b
+}
+
+// otelTokensFor is [sandbox.NewOtelTokens] for a keyring a case expects to be
+// usable.
+func otelTokensFor(t *testing.T, opts sandbox.OtelTokenOptions) *sandbox.OtelTokens {
+	t.Helper()
+	tokens, err := sandbox.NewOtelTokens(opts)
+	if err != nil {
+		t.Fatalf("NewOtelTokens: %v", err)
+	}
+	return tokens
 }

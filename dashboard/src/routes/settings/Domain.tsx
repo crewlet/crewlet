@@ -28,33 +28,31 @@
  * A domain absent from the document is NOT a domain at position zero: a node
  * that keeps no state log serves a report with no domains at all, and drawing
  * zeros over that would be a confident claim about a subsystem this node does
- * not run. It says which, and the two read differently.
+ * not run. It says the node reports no such domain instead, and names the
+ * ones it does.
  */
 
 import { useMemo } from "react";
-import { Card, EmptyValue, InlineCode, Skeleton, Tag } from "@crewlethq/ui";
+import { Mark } from "~/ui/glyph.tsx";
+import { Card, EmptyValue, InlineCode, Skeleton, Tag, TableTextCell } from "@crewlethq/ui";
 import { ServerGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 
 import { href } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import { TextCell } from "~/app/frame/cells.tsx";
+
 import { QueryState } from "~/components/common.tsx";
-import { useQuery } from "~/lib/useQuery.ts";
 import {
-  DomainBlock,
+  Checks,
   DomainRefusals,
   DomainSize,
   FloorFact,
-  Terms,
   TrimStatus,
+  useRetentionReport,
 } from "./Retention.tsx";
 import type { RetentionGenerationState } from "~/contract/retention.ts";
 import type { RetentionNode } from "~/protocol/index.ts";
-
-/** How often the retention document is re-read, matching the fleet's own. */
-const POLL_MS = 30_000;
 
 /** One node's position in THIS domain, flattened out of the per-node map. */
 interface Position {
@@ -71,10 +69,7 @@ interface Position {
 }
 
 export function DomainScreen({ name }: { name: string }) {
-  const { data, loading, error } = useQuery("retention", undefined, {
-    enabled: name !== "",
-    pollMs: POLL_MS,
-  });
+  const { data, loading, error, refusal } = useRetentionReport(name !== "");
 
   const domain = data?.domains?.find((d) => d.domain === name);
 
@@ -160,7 +155,7 @@ export function DomainScreen({ name }: { name: string }) {
       </PageActions>
 
       {loading && !data && <Skeleton variant="text" rows={6} label="Loading the domain" />}
-      <QueryState error={error} loading={loading}>
+      <QueryState error={error} refusal={refusal} loading={loading}>
         {data &&
           (domain ? (
             <>
@@ -178,28 +173,17 @@ export function DomainScreen({ name }: { name: string }) {
                 <Card.Header icon={<LayersGlyph size="sm" />}>
                   <Card.Title>What the trim may remove</Card.Title>
                 </Card.Header>
-                {/* THE SIX TERMS, each with its own sentence and its own
-                    remedy — the same block the fleet card draws, so the card
-                    and the page can never disagree about whether this log is
-                    advancing. */}
-                <Terms
-                  terms={domain.terms}
-                  snapshotBlocked={domain.snapshot_blocked_by}
-                  empty={
-                    domain.trim_floor_state === "published"
-                      ? undefined
-                      : domain.trim_floor_state === "unreadable"
-                        ? `The trim floor register could not be read, so nothing is known here about the trim of generation ${domain.generation}.`
-                        : `The trim has concluded nothing about generation ${domain.generation} yet — its first tick on this stream is pending.`
-                  }
-                />
+                {/* THE SIX CHECKS, the same block the log's row draws on the
+                    section page, so the two can never disagree about whether
+                    this log is advancing or what holds it. */}
+                <Checks domain={domain} />
               </Card>
 
               <Card padding="none">
                 <Card.Header
                   icon={<ServerGlyph size="sm" />}
                   count={positions.length}
-                  subtitle="The trim takes a minimum across these, so the lowest row is what the floor is waiting on."
+                  subtitle="The lowest row holds the floor"
                 >
                   <Card.Title>Where each node is</Card.Title>
                 </Card.Header>
@@ -212,7 +196,11 @@ export function DomainScreen({ name }: { name: string }) {
                     {
                       key: "node",
                       header: "Node",
-                      cell: (p) => <TextCell icon="server">{p.node_id}</TextCell>,
+                      cell: (p) => (
+                        <TableTextCell icon={<Mark name={"server"} size="xs" />}>
+                          {p.node_id}
+                        </TableTextCell>
+                      ),
                       sortValue: (p) => p.node_id,
                     },
                     {
@@ -298,12 +286,11 @@ export function DomainScreen({ name }: { name: string }) {
                 <Card.Title>No such domain</Card.Title>
               </Card.Header>
               <p className="t-body">
-                This node&apos;s retention report names no domain <InlineCode>{name}</InlineCode>.
-                The domains it does report are{" "}
-                {(data.domains ?? []).length === 0 ? (
-                  <>none at all, which is what a node running no state log looks like.</>
-                ) : (
+                This node reports no domain <InlineCode>{name}</InlineCode>.
+                {(data.domains ?? []).length > 0 && (
                   <>
+                    {" "}
+                    The domains it does report are{" "}
                     {(data.domains ?? []).map((d, i) => (
                       <span key={d.domain}>
                         {i > 0 && ", "}
@@ -325,6 +312,3 @@ export function DomainScreen({ name }: { name: string }) {
     </>
   );
 }
-
-/** Re-exported so the fleet card and this page are one import away. */
-export { DomainBlock };

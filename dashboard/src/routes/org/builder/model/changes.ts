@@ -2,20 +2,22 @@
  * What a save changes, and what follows from it.
  *
  * DERIVED FROM THE TWO ORGANIZATIONS, NEVER FROM OPERATION TYPES ALONE. A
- * rename does not only rename: it re-onboards the seats whose chain it is in
- * and gives a unit's schedules a new identity. A reorder can change who a seat
+ * rename does not only rename: it re-onboards the seats whose chain it is in,
+ * because onboarding pages are found by names. A reorder can change who a seat
  * reports to, because the engine's primary manager is the first seat that
  * lists it. Deleting a lead changes the lead of every child unit that
  * inherited it, and where unrouted tracker work goes. None of that is visible
  * in the operation that caused it, so this module compares the BASE and the
  * DRAFT as the engine derived them (each side's `derived` block, placed on
  * nodes through that side's own path index) and reads the operation log only
- * for what no document can say afterwards: the fields a kind change removed,
- * and the references an operation cleared.
+ * for what no document can say afterwards: the credentials a replaced seat
+ * left behind, and the references an operation cleared.
  *
- * Nodes are matched by key, which is the engine's identity (see `keys.ts`), so
+ * Nodes are matched by key, which is the node's identity (see `keys.ts`), so
  * "the same seat" here means what it means to the engine's memory and
- * mailboxes, not "a seat with the same name".
+ * mailboxes, not "a seat with the same name". An identity never changes, so
+ * there is no handle change for a save to announce: a seat with a new handle
+ * is a removal and an addition, and the review lists it as both.
  *
  * A SIDE WITHOUT A DERIVATION SAYS SO. Every consequence that needs the
  * engine's derivation (handles, onboarding, reporting lines, effective leads
@@ -24,7 +26,13 @@
  * organization needs no derivation to be known.
  */
 
-import type { CompanyDocument, Derived, DerivedSeat, DerivedUnit } from "~/protocol/index.ts";
+import type {
+  CompanyDocument,
+  ConfigRole,
+  Derived,
+  DerivedSeat,
+  DerivedUnit,
+} from "~/protocol/index.ts";
 import { plural } from "~/lib/format.ts";
 import { COMPANY_KEY, type NodeKey } from "./keys.ts";
 import { allSeats, allUnits, type Draft } from "./draft.ts";
@@ -38,9 +46,8 @@ import {
 } from "./document.ts";
 import { getPath, isRecord, jsonEqual } from "./json.ts";
 import {
-  fieldName,
-  isCredentialField,
   kindOf,
+  withoutMasked,
   type ApplyReport,
   type Operation,
   type ReferenceEffect,
@@ -59,8 +66,6 @@ export interface ChangeInputs {
   /** The draft's operation log, and what applying each one did (aligned). */
   readonly ops: readonly Operation[];
   readonly reports: readonly ApplyReport[];
-  /** Seats removed in recent revisions: handle to the name the seat had. */
-  readonly recentlyRemoved?: ReadonlyMap<string, string>;
 }
 
 /** A seat or a unit, by key, with the name it has on the side it was read from. */
@@ -72,8 +77,7 @@ export interface EntityRef {
 
 export type OnboardingCause = "company_rename" | "seat_rename" | "unit_rename" | "move";
 
-export type Acknowledgement =
-  "company_rename" | "handle_change" | "kind_change" | "credential_servers" | "mass_removal";
+export type Acknowledgement = "company_rename" | "credential_servers" | "mass_removal";
 
 export interface ChangeSet {
   readonly derivedKnown: boolean;
@@ -93,22 +97,16 @@ export interface ChangeSet {
   /** Charter fields that changed. */
   readonly charter: readonly string[];
   readonly companyRename: { readonly before: string; readonly after: string } | null;
-  readonly handleChanges: readonly {
-    readonly ref: EntityRef;
-    readonly before: string;
-    readonly after: string;
-  }[];
   /** Agent seats whose onboarding chain changed, grouped by the first cause that applies. */
   readonly onboarding: readonly {
     readonly cause: OnboardingCause;
     readonly seats: readonly EntityRef[];
   }[];
-  /** Renamed units: their schedules get a new identity, and onboarding pages are looked up under the new name. */
+  /** Renamed units: onboarding pages are looked up under the new name. */
   readonly unitRenames: readonly {
     readonly ref: EntityRef;
     readonly before: string;
     readonly after: string;
-    readonly schedules: readonly string[];
   }[];
   readonly reportsTo: readonly {
     readonly ref: EntityRef;
@@ -155,9 +153,15 @@ export interface ChangeSet {
     readonly gained: readonly string[];
     readonly lost: readonly string[];
   }[];
-  readonly strippedFields: readonly {
+  /**
+   * The credentials a replacing seat does not carry over from the seat it
+   * replaced, by authored name: values the configuration read masked, which
+   * the builder never holds (`operations.withoutMasked`).
+   */
+  readonly uncarriedCredentials: readonly {
     readonly ref: EntityRef;
-    readonly fields: readonly { readonly name: string; readonly credential: boolean }[];
+    readonly from: string;
+    readonly fields: readonly string[];
   }[];
   readonly clearedReferences: readonly {
     readonly kind: ReferenceEffect["kind"];
@@ -172,12 +176,6 @@ export interface ChangeSet {
     readonly handle: string;
     readonly before: string | null;
     readonly after: string | null;
-  }[];
-  /** An added seat the engine gives the handle of a removed seat: it reattaches that seat's memory. */
-  readonly memoryReuse: readonly {
-    readonly ref: EntityRef;
-    readonly handle: string;
-    readonly previous: string;
   }[];
   readonly massRemoval: { readonly removed: number; readonly total: number } | null;
   readonly acknowledgements: readonly Acknowledgement[];
@@ -334,7 +332,6 @@ export function deriveChanges(inputs: ChangeInputs): ChangeSet {
     beforeName !== "" && beforeName !== afterName ? { before: beforeName, after: afterName } : null;
 
   // Derived consequences ---------------------------------------------------
-  const handleChanges: ChangeSet["handleChanges"][number][] = [];
   const onboardingBy = new Map<OnboardingCause, EntityRef[]>();
   const reportsTo: ChangeSet["reportsTo"][number][] = [];
   const leads: ChangeSet["leads"][number][] = [];
@@ -346,8 +343,6 @@ export function deriveChanges(inputs: ChangeInputs): ChangeSet {
       const before = base.seatByKey.get(key);
       if (!before) continue;
       const seatRef = ref(next, key);
-      if (before.handle !== after.handle)
-        handleChanges.push({ ref: seatRef, before: before.handle, after: after.handle });
 
       const agentBoth =
         kindOf(baseSeats.get(key)!) === "agent" && kindOf(nextSeats.get(key)!) === "agent";
@@ -445,35 +440,22 @@ export function deriveChanges(inputs: ChangeInputs): ChangeSet {
 
   const unitRenames = renamed
     .filter((r) => r.ref.kind === "unit")
-    .map((r) => {
-      const schedules = nextUnits.get(r.ref.key)?.schedules;
-      return {
-        ref: r.ref,
-        before: r.before,
-        after: r.after,
-        schedules: Array.isArray(schedules) ? schedules.map((s) => s.name) : [],
-      };
-    });
+    .map((r) => ({ ref: r.ref, before: r.before, after: r.after }));
 
   const routing = derivedKnown
     ? routingChanges(base, next, baseUnits, nextUnits, baseSeats, nextSeats, ref)
     : [];
 
   // What only the log can say -------------------------------------------------
-  const stripped = new Map<NodeKey, Map<string, boolean>>();
+  const uncarriedCredentials: ChangeSet["uncarriedCredentials"][number][] = [];
   for (const op of inputs.ops) {
-    if (op.type !== "changeKind" || !next.refs.has(op.target)) continue;
-    const fields = stripped.get(op.target) ?? new Map<string, boolean>();
-    for (const field of op.stripped)
-      fields.set(fieldName(field.path), isCredentialField(field.path));
-    stripped.set(op.target, fields);
+    if (op.type !== "replaceSeat" || !next.refs.has(op.key)) continue;
+    const old = op.snapshot.json as ConfigRole;
+    const fields = withoutMasked(old).masked;
+    if (fields.length > 0) {
+      uncarriedCredentials.push({ ref: ref(next, op.key), from: old.handle ?? "", fields });
+    }
   }
-  const strippedFields = [...stripped]
-    .filter(([, fields]) => fields.size > 0)
-    .map(([key, fields]) => ({
-      ref: ref(next, key),
-      fields: [...fields].map(([name, credential]) => ({ name, credential })),
-    }));
 
   const clearedReferences = inputs.reports.flatMap((report) =>
     report.cleared.map((effect) => ({
@@ -505,21 +487,6 @@ export function deriveChanges(inputs: ChangeInputs): ChangeSet {
       after: typeof la[handle] === "string" ? (la[handle] as string) : null,
     }));
 
-  const memoryReuse: ChangeSet["memoryReuse"][number][] = [];
-  if (derivedKnown) {
-    const removedHandles = new Map<string, string>();
-    for (const entity of removed) {
-      const seat = base.seatByKey.get(entity.key);
-      if (seat?.handle) removedHandles.set(seat.handle, entity.name);
-    }
-    for (const entity of added) {
-      const seat = next.seatByKey.get(entity.key);
-      if (!seat?.handle) continue;
-      const previous = removedHandles.get(seat.handle) ?? inputs.recentlyRemoved?.get(seat.handle);
-      if (previous !== undefined) memoryReuse.push({ ref: entity, handle: seat.handle, previous });
-    }
-  }
-
   const baseSeatCount = baseSeats.size;
   const removedSeats = removed.filter((r) => r.kind === "seat").length;
   const massRemoval =
@@ -527,18 +494,9 @@ export function deriveChanges(inputs: ChangeInputs): ChangeSet {
       ? { removed: removedSeats, total: baseSeatCount }
       : null;
 
-  const kindChanged = [...nextSeats].some(([key, data]) => {
-    const before = baseSeats.get(key);
-    return before !== undefined && kindOf(before) !== kindOf(data);
-  });
   const acknowledgements: Acknowledgement[] = [];
   if (companyRename) acknowledgements.push("company_rename");
-  if (handleChanges.length > 0) acknowledgements.push("handle_change");
-  if (kindChanged) acknowledgements.push("kind_change");
-  if (
-    credentialServers.length > 0 ||
-    strippedFields.some((s) => s.fields.some((f) => f.credential))
-  ) {
+  if (credentialServers.length > 0 || uncarriedCredentials.length > 0) {
     acknowledgements.push("credential_servers");
   }
   if (massRemoval) acknowledgements.push("mass_removal");
@@ -552,7 +510,6 @@ export function deriveChanges(inputs: ChangeInputs): ChangeSet {
     edited,
     charter,
     companyRename,
-    handleChanges,
     onboarding,
     unitRenames,
     reportsTo,
@@ -560,11 +517,10 @@ export function deriveChanges(inputs: ChangeInputs): ChangeSet {
     channels,
     routing,
     credentialServers,
-    strippedFields,
+    uncarriedCredentials,
     clearedReferences,
     datadogFallback,
     gitlabAccessLevels,
-    memoryReuse,
     massRemoval,
     acknowledgements,
     summary: auditSummary({ added, removed, renamed, moved, edited, charter, ops: inputs.ops }),
@@ -724,8 +680,7 @@ function auditSummary(parts: {
     parts.edited.map((r) => r.ref),
   );
   if (!template && parts.charter.length > 0) phrases.push("edited the charter");
-  if (phrases.length === 0)
-    return "Saved from the organization builder with no changes to the chart";
+  if (phrases.length === 0) return "Saved with no chart changes";
   const sentence = phrases.join(", ");
   return sentence.charAt(0).toUpperCase() + sentence.slice(1);
 }

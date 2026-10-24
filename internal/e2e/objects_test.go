@@ -7,13 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"testing"
-	"time"
 
-	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/natsobj"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -30,20 +28,6 @@ import (
 // object bucket, replicated across the members — so a file uploaded on one
 // node is served, whole and verified, by another.
 
-// e2eOperatorID and e2eOperatorToken are the credential a cluster member's
-// API accepts writes under.
-//
-// e2eDevID and e2eDevToken are a PERSON'S: the developer's human seat names
-// e2eDevID as its contact.crewlet_operator_id ([withCode]), so a push made
-// with the token is that person's own — the only credential a git push is
-// taken under, since a token bound to nobody fetches only.
-const (
-	e2eOperatorID    = "e2e-ops"
-	e2eOperatorToken = "e2e-operator-token-0123456789"
-	e2eDevID         = "e2e-dev"
-	e2eDevToken      = "e2e-dev-token-0123456789abcdef"
-)
-
 // upload PUTs a file through a node's byte route.
 func upload(t *testing.T, n *node, project, path string, content []byte) (int, map[string]any) {
 	t.Helper()
@@ -52,9 +36,8 @@ func upload(t *testing.T, n *node, project, path string, content []byte) (int, m
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set("Authorization", "Bearer "+e2eOperatorToken)
 	req.Header.Set("Content-Type", "text/csv")
-	resp, err := n.server.Client().Do(req)
+	resp, err := n.server.Client().Do(present(req))
 	if err != nil {
 		t.Fatalf("upload: %v", err)
 	}
@@ -72,7 +55,7 @@ func download(t *testing.T, n *node, project, path string) (int, []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := n.server.Client().Do(req)
+	resp, err := n.server.Client().Do(present(req))
 	if err != nil {
 		t.Fatalf("download: %v", err)
 	}
@@ -115,7 +98,9 @@ func claimAFileUploadedToOneNodeDownloadsFromAnother(t *testing.T, c *cluster) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if detail.File.UpdatedBy != e2eOperatorID || detail.File.Size != int64(len(content)) ||
+	// THE FIXTURE'S TIER A TOKEN, which writes under its own login, bound to
+	// no seat ([iam.TokenLogin]).
+	if detail.File.UpdatedBy != iam.TokenLogin(e2eTokenID) || detail.File.Size != int64(len(content)) ||
 		detail.File.Hash != objstore.HashOf(content) || detail.File.Object.IsZero() {
 		t.Errorf("the other member's row: by %q, %d bytes, digest %s, object %s",
 			detail.File.UpdatedBy, detail.File.Size, detail.File.Hash, detail.File.Object)
@@ -197,46 +182,29 @@ func TestAStatelessNodeInAMaintenanceModeServesAFileAndTakesNone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("company config: %v", err)
 	}
-	data, dataBoot := bootDataMember(t, cfg, model, nil)
+	ring := fleetRing(t)
+	data, dataBoot := bootDataMember(t, cfg, model, nil, ring)
+	data.app, data.server = serveAPI(t, data.engine, dataBoot, nil)
+	waitFor(t, "the data node to serve its estate", hydrated(t, data.engine))
 
-	// A FILE THE FLEET HOLDS, written on the data node through the adapter
-	// `crewlet run` serves the upload route with.
+	// A FILE THE FLEET HOLDS, uploaded through the data node's own byte
+	// route — the one `crewlet run` serves — so its row names an object the
+	// shared store holds.
 	const content = "region,quarter,revenue\nemea,q3,1200\n"
-	writes, ok := api.EngineNative(data.engine).FileWrites()
-	if !ok {
-		t.Fatal("the premise: the data node takes no upload")
-	}
-	object, err := writes.Put(t.Context(), strings.NewReader(content), tracker.MaxFileBytes,
-		objstore.PutMeta{ContentType: "text/csv"})
-	if err != nil {
-		t.Fatalf("store the file's bytes: %v", err)
-	}
-	if _, err := writes.PutFileAs(t.Context(), e2eOperatorID,
-		statelog.NewOpID(time.Now(), "file-ENG"), tracker.FilePut{
-			Project: "ENG", Path: "reports/q3.csv", ContentType: "text/csv",
-			Object: object, IfMatch: tracker.NoIfMatch,
-		}); err != nil {
-		t.Fatalf("write the file's row: %v", err)
+	if status, answer := upload(t, data, "ENG", "reports/q3.csv", []byte(content)); status != http.StatusOK ||
+		answer["outcome"] != string(statelog.OutcomeApplied) {
+		t.Fatalf("the premise: the data node takes the upload; it answered %d %v", status, answer)
 	}
 
-	agentBoot := statelessBootstrap(t.TempDir(), dataBoot)
-	agentBoot.API.Auth.Tokens = []config.APIToken{{ID: e2eOperatorID, Token: e2eOperatorToken}}
+	// SERVING THE FIXTURE'S CREDENTIAL, which [download] and [upload]
+	// present: the routes this case asks about are guarded like every other.
+	agentBoot := statelessBootstrap(t.TempDir(), dataBoot, ring)
+	withCredential(t, &agentBoot)
 	agent := bootNodeWith(t, engine.Options{
 		Bootstrap: &agentBoot, Company: cfg, ActivatedAt: harnessActivation,
 		Mode: statelog.ModeMaintenance, Environment: nodeEnvironment(nil),
 	}, model)
 	agent.app, agent.server = serveAPI(t, agent.engine, &agentBoot, nil)
-
-	routes := api.EngineNative(agent.engine)
-	if _, ok := routes.FileReads(); !ok {
-		t.Error("a stateless node in a maintenance mode does not serve a file's bytes")
-	}
-	if _, ok := routes.FileWrites(); ok {
-		t.Error("a stateless node in a maintenance mode serves a file's upload, a write")
-	}
-	if _, ok := routes.Purger(); ok {
-		t.Error("a stateless node in a maintenance mode serves the purge, a write")
-	}
 
 	waitFor(t, "the stateless node to serve the file", func() bool {
 		status, got := download(t, agent, "ENG", "reports/q3.csv")
@@ -245,6 +213,14 @@ func TestAStatelessNodeInAMaintenanceModeServesAFileAndTakesNone(t *testing.T) {
 	status, answer := upload(t, agent, "ENG", "reports/q4.csv", []byte(content))
 	if status != http.StatusNotFound || answer["error"] != "no_route" {
 		t.Errorf("an upload to a stateless node in a maintenance mode answered %d %v, "+
+			"want the mux's own 404 no_route", status, answer)
+	}
+	// THE PURGE IS A WRITE TOO, and is absent for the upload's reason: the
+	// node hands out no tracker writer, so the route answers as one it does
+	// not serve before anything is read — the item named need not exist.
+	if status, answer := operatorCall(t, agent, http.MethodPost,
+		"/work/items/ENG-1/purge"); status != http.StatusNotFound || answer["error"] != "no_route" {
+		t.Errorf("a purge on a stateless node in a maintenance mode answered %d %v, "+
 			"want the mux's own 404 no_route", status, answer)
 	}
 	if _, err := data.engine.Tracker().File(t.Context(), "ENG", "reports/q4.csv",
@@ -261,8 +237,7 @@ func operatorCall(t *testing.T, n *node, method, path string) (int, map[string]a
 	if err != nil {
 		t.Fatal(err)
 	}
-	req.Header.Set("Authorization", "Bearer "+e2eOperatorToken)
-	resp, err := n.server.Client().Do(req)
+	resp, err := n.server.Client().Do(present(req))
 	if err != nil {
 		t.Fatalf("%s %s: %v", method, path, err)
 	}

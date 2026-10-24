@@ -42,7 +42,7 @@ func channelFleet(t *testing.T) *coordmemory.Fleet {
 
 func channelIDs(t *testing.T, params map[string]any, f *coordmemory.Fleet) []string {
 	t.Helper()
-	got := answeredMap(t, queries.Sources{Channels: f}, "a2a_channels", params)
+	got := answeredTranscripts(t, queries.Sources{Channels: f}, "a2a_channels", params)
 	out := []string{}
 	for _, row := range channelRows(t, got) {
 		out = append(out, fmt.Sprint(row["id"]))
@@ -110,7 +110,7 @@ func TestASeatsChannelsAreTheOnesAtEitherEnd(t *testing.T) {
 // answering the default under somebody else's heading.
 func TestAnUnknownChannelStateIsRefusedNamingTheSets(t *testing.T) {
 	t.Parallel()
-	_, err := askNative(t, queries.Sources{Channels: channelFleet(t)}, "a2a_channels",
+	_, err := askTranscripts(t, queries.Sources{Channels: channelFleet(t)}, "a2a_channels",
 		map[string]any{"state": "pending"})
 	if !errors.Is(err, queries.ErrBadParams) {
 		t.Fatalf("state=pending answered %v, want bad params", err)
@@ -137,7 +137,8 @@ func TestTheChannelPageIsBoundedAndSaysSo(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got := answeredMap(t, queries.Sources{Channels: f}, "a2a_channels", nil)
+	raw, err := askTranscripts(t, queries.Sources{Channels: f}, "a2a_channels", nil)
+	got := answerMap(t, raw, err)
 	list := channelRows(t, got)
 	if len(list) != queries.MaxA2AChannels {
 		t.Errorf("the page carries %d channels, want the cap %d",
@@ -148,7 +149,7 @@ func TestTheChannelPageIsBoundedAndSaysSo(t *testing.T) {
 	}
 	// AND A PAGE THAT DID NOT FILL SAYS SO TOO, which is what stops the
 	// flag being a check that the field exists.
-	short := answeredMap(t, queries.Sources{Channels: channelFleet(t)}, "a2a_channels", nil)
+	short := answeredTranscripts(t, queries.Sources{Channels: channelFleet(t)}, "a2a_channels", nil)
 	if short["truncated"] != false {
 		t.Errorf("truncated = %#v on a company with two open channels",
 			short["truncated"])

@@ -13,7 +13,7 @@ import { LIVE_CALL_DETAIL, MAX_EVENTS } from "../contract/wire.ts";
 import { MAX_PHASES, Store } from "./store.ts";
 import { LiveSocket, QueryError } from "./socket.ts";
 import { nodeCountLabel } from "../lib/format.ts";
-import type { EventEnvelope, FeedRow, Overlay } from "./types.ts";
+import type { EventEnvelope, FeedRow, OverlayRow } from "./types.ts";
 import { healthFrame } from "~/test/health.ts";
 
 function feedRow(id: string, over: Partial<FeedRow> = {}): FeedRow {
@@ -40,8 +40,10 @@ describe("agent overlays", () => {
     // lost the seat's static identity on every progress round would redraw
     // the roster several times a second with half its fields blank.
     const store = new Store();
-    store.applySnapshot({ agents: [{ id: "pm", role: "PM", handle: "pm", activity: "idle" }] });
-    store.applyAgents([{ role: "PM", activity: "working", current_phase: "execute" }]);
+    store.applySnapshot({
+      agents: [{ id: "pm", agent_id: "a-pm", role: "PM", handle: "pm", activity: "idle" }],
+    });
+    store.applyAgents([{ agent_id: "a-pm", activity: "working", current_phase: "execute" }]);
 
     const [row] = store.state.agents;
     expect(row?.handle).toBe("pm");
@@ -56,37 +58,53 @@ describe("agent overlays", () => {
     // The guard is what makes that loud rather than silent — and the e2e
     // replay is what makes it impossible to ship again.
     const store = new Store();
-    store.applySnapshot({ agents: [{ id: "pm", role: "PM", activity: "idle" }] });
+    store.applySnapshot({ agents: [{ id: "pm", agent_id: "pm", role: "PM", activity: "idle" }] });
     store.applyAgents({ PM: { activity: "working" } } as never);
     expect(store.state.agents[0]?.activity).toBe("idle");
   });
 
-  test("an overlay for a role the roster does not carry is appended", () => {
-    // A live revision can add a seat before the roster push lands.
+  // A SEAT REACHES THE LIST THROUGH THE ROSTER, which the server merges its
+  // live overlay into before sending: an overlay appended as a row of its own
+  // was a card with no name, no handle and no page.
+  test("an overlay for a seat the roster does not carry is dropped", () => {
     const store = new Store();
-    store.applyAgents([{ role: "New", activity: "working" }]);
-    expect(store.state.agents).toHaveLength(1);
-    expect(store.state.agents[0]?.id).toBe("New");
+    store.applyAgents([{ agent_id: "a-new", activity: "working" }]);
+    expect(store.state.agents).toHaveLength(0);
+  });
+
+  // BY AGENT ID AND NOTHING ELSE: merged by role name, two seats sharing a
+  // name both took every overlay either of them moved.
+  test("an overlay moves only its own seat, whoever shares its name", () => {
+    const store = new Store();
+    store.applySnapshot({
+      agents: [
+        { id: "support", agent_id: "a-1", role: "Support", activity: "idle" },
+        { id: "support-2", agent_id: "a-2", role: "Support", activity: "idle" },
+      ],
+    });
+    store.applyAgents([{ agent_id: "a-2", role: "Support", activity: "working" }]);
+    expect(store.state.agents.map((a) => a.activity)).toEqual(["idle", "working"]);
   });
 
   test("a seats push can express a DELETION, which a merge cannot", () => {
     const store = new Store();
     store.applySnapshot({
       agents: [
-        { id: "pm", role: "PM" },
-        { id: "eng", role: "Engineer" },
+        { id: "pm", agent_id: "pm", role: "PM" },
+        { id: "eng", agent_id: "eng", role: "Engineer" },
       ],
     });
-    store.applySeats([{ id: "pm", role: "PM" }]);
+    store.applySeats([{ id: "pm", agent_id: "pm", role: "PM" }]);
     expect(store.state.agents.map((a) => a.role)).toEqual(["PM"]);
   });
 
   test("a seats push keeps the live overlay the roster knows nothing about", () => {
     const store = new Store();
-    store.applyAgents([{ role: "PM", activity: "working" }]);
-    store.applySeats([{ id: "pm", role: "PM", handle: "pm" }]);
+    store.applySnapshot({ agents: [{ id: "pm", agent_id: "a-pm", role: "PM" }] });
+    store.applyAgents([{ agent_id: "a-pm", activity: "working" }]);
+    store.applySeats([{ id: "pm", agent_id: "a-pm", role: "Product", handle: "pm" }]);
     expect(store.state.agents[0]?.activity).toBe("working");
-    expect(store.state.agents[0]?.handle).toBe("pm");
+    expect(store.state.agents[0]?.role).toBe("Product");
   });
 });
 
@@ -258,6 +276,43 @@ describe("connection state", () => {
     expect(store.state.health).toBeNull();
   });
 
+  // A TAB STILL CONNECTING IS NOT A TAB THAT LOST THE ENGINE. Both are
+  // disconnected, and only the second has been answered, by a close or by a
+  // failed dial; the engine panel draws an amber dot for that one alone, and
+  // says how long it has been gone rather than when it was last retried.
+  test("the engine is lost from the first close, and a connection clears it", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const store = new Store();
+      expect(store.state.lostAt).toBeNull();
+      expect(store.state.everConnected).toBe(false);
+      store.setConnected(false); // the first dial failed
+      expect(store.state.lostAt).toBe(1_000);
+      vi.setSystemTime(5_000);
+      store.setConnected(false); // and a retry failed again
+      expect(store.state.lostAt).toBe(1_000);
+      expect(store.state.everConnected).toBe(false);
+      store.setConnected(true);
+      expect(store.state.lostAt).toBeNull();
+      expect(store.state.everConnected).toBe(true);
+      vi.setSystemTime(9_000);
+      store.setConnected(false);
+      expect(store.state.lostAt).toBe(9_000);
+      expect(store.state.everConnected).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("a health frame answers the loss as the socket's own open does", () => {
+    const store = new Store();
+    store.setConnected(false);
+    store.applyHealth(healthFrame());
+    expect(store.state.lostAt).toBeNull();
+    expect(store.state.everConnected).toBe(true);
+  });
+
   test("refused and unreachable are different facts", () => {
     // The repair differs and the reader cannot guess which they are looking
     // at: a stopped engine comes back on its own, a rejected token never does.
@@ -280,7 +335,10 @@ describe("subscriptions", () => {
     store.subscribe(["tokens"], tokens);
     store.subscribe(["agents"], agents);
 
-    store.applyAgents([{ role: "PM", activity: "working" }]);
+    store.applySnapshot({ agents: [{ id: "pm", agent_id: "a-pm", role: "PM" }] });
+    agents.mockClear();
+    tokens.mockClear();
+    store.applyAgents([{ agent_id: "a-pm", activity: "working" }]);
     expect(agents).toHaveBeenCalledTimes(1);
     expect(tokens).not.toHaveBeenCalled();
   });
@@ -300,7 +358,7 @@ describe("subscriptions", () => {
     const fn = vi.fn();
     const off = store.subscribe(["agents"], fn);
     off();
-    store.applyAgents([{ role: "PM" }]);
+    store.applySeats([{ id: "pm", agent_id: "a-pm", role: "PM" }]);
     expect(fn).not.toHaveBeenCalled();
   });
 
@@ -310,11 +368,20 @@ describe("subscriptions", () => {
     // for useSyncExternalStore.
     const store = new Store();
     const before = store.version("agents");
-    store.applyAgents([{ role: "PM" }]);
+    store.applySeats([{ id: "pm", agent_id: "a-pm", role: "PM" }]);
     expect(store.version("agents")).toBeGreaterThan(before);
     expect(store.version("tokens")).toBe(0);
   });
 });
+
+// THE ROSTER FIRST: an overlay merges onto a seat the roster carries and is
+// dropped for one it does not, so every case here seats PM before it pushes.
+const PM_ROW = { id: "pm", agent_id: "a-pm", role: "PM", handle: "pm", activity: "working" };
+function seated(): Store {
+  const store = new Store();
+  store.applySeats([PM_ROW]);
+  return store;
+}
 
 describe("a live call's heavy fields", () => {
   // What the engine pushes for one call: its identity, its light fields, and
@@ -323,9 +390,9 @@ describe("a live call's heavy fields", () => {
     versions: Partial<Record<keyof typeof LIVE_CALL_DETAIL, number>>,
     carried: Record<string, unknown>,
     over: Record<string, unknown> = {},
-  ): Overlay & { role: string } {
+  ): OverlayRow {
     return {
-      role: "PM",
+      agent_id: "a-pm",
       live_call: {
         turn_id: "t1",
         phase: "execute",
@@ -357,7 +424,7 @@ describe("a live call's heavy fields", () => {
   // Mutation: replace the call with the push's, and the prompt is blank from
   // the second frame on.
   test("keeps the copy it holds of a field a push leaves out", () => {
-    const store = new Store();
+    const store = seated();
     expect(
       store.applyAgents([pushed({ prompt: 1, narration: 1 }, { ...prompt, ...narration(1) })]),
     ).toEqual([]);
@@ -374,14 +441,15 @@ describe("a live call's heavy fields", () => {
   // tab's oldest frame. The tab says so, keeps what it holds, and takes the
   // fetched call whole.
   test("says when it missed a change, and takes the call fetched whole", () => {
-    const store = new Store();
+    const store = seated();
     store.applyAgents([pushed({ prompt: 1, narration: 1 }, { ...prompt, ...narration(1) })]);
     // The push carrying narration 2 was dropped; this one names 3 and carries nothing.
-    expect(store.applyAgents([pushed({ prompt: 1, narration: 3 }, {})])).toEqual(["PM"]);
+    expect(store.applyAgents([pushed({ prompt: 1, narration: 3 }, {})])).toEqual(["a-pm"]);
     expect(store.state.agents[0]?.live_call?.round_narration).toHaveLength(1);
 
     store.applyLiveCall({
-      role: "PM",
+      agent_id: "a-pm",
+      handle: "pm",
       live_call:
         pushed({ prompt: 1, narration: 3 }, { ...prompt, ...narration(3) }).live_call ?? null,
       live_call_seq: 0,
@@ -395,7 +463,7 @@ describe("a live call's heavy fields", () => {
   // AN OLDER COPY NEVER REPLACES A NEWER ONE: a push or an answer overtaken by
   // what the tab already holds is read for its light fields only.
   test("never takes a field back to an older copy", () => {
-    const store = new Store();
+    const store = seated();
     store.applyAgents([pushed({ prompt: 1, narration: 3 }, { ...prompt, ...narration(3) })]);
     store.applyAgents([pushed({ prompt: 1, narration: 2 }, narration(2), { model: "later" })]);
     const call = store.state.agents[0]?.live_call;
@@ -406,14 +474,14 @@ describe("a live call's heavy fields", () => {
   // A CALL OF ITS OWN HOLDS NOTHING OF THE LAST ONE: a new phase whose push
   // left a field out is not drawn with the previous phase's prompt.
   test("carries nothing from one call to the next", () => {
-    const store = new Store();
+    const store = seated();
     store.applyAgents([pushed({ prompt: 1, narration: 1 }, { ...prompt, ...narration(1) })]);
     const stale = store.applyAgents([pushed({ prompt: 1, narration: 0 }, {}, { phase: "review" })]);
     const call = store.state.agents[0]?.live_call;
     expect(call?.phase).toBe("review");
     expect(call?.prompt).toBe("");
     expect(call?.round_narration).toBeNull();
-    expect(stale).toEqual(["PM"]);
+    expect(stale).toEqual(["a-pm"]);
   });
 
   // A CALL BUILT AGAIN UNDER ITS OWN KEY IS NEWER IN EVERY FIELD. A suspended
@@ -430,7 +498,7 @@ describe("a live call's heavy fields", () => {
   // Mutation: stop reporting a field left out at a newer version, and the
   // prompt from before the suspension stays on screen.
   test("takes a call built again under its key, after missing its clearing", () => {
-    const store = new Store();
+    const store = seated();
     store.applyAgents([
       pushed(
         { prompt: 5, response: 5, narration: 5 },
@@ -444,11 +512,12 @@ describe("a live call's heavy fields", () => {
     let call = store.state.agents[0]?.live_call;
     expect(call?.response).toBe("new");
     expect(call?.round_narration).toHaveLength(1);
-    expect(stale).toEqual(["PM"]);
+    expect(stale).toEqual(["a-pm"]);
 
     const resumed = { prompt: "resume it", prompt_messages: [{ role: "system", content: "lead" }] };
     store.applyLiveCall({
-      role: "PM",
+      agent_id: "a-pm",
+      handle: "pm",
       live_call:
         pushed(
           { prompt: 9, response: 11, narration: 11 },
@@ -461,10 +530,55 @@ describe("a live call's heavy fields", () => {
     expect(call?.versions).toMatchObject({ prompt: 9, response: 11, narration: 11 });
   });
 
+  // A STATUS READER IS NEVER SENT A BODY, so a withheld call — every body
+  // version zero, no body key, `body_withheld` — is never behind for one:
+  // asked for whole, the engine would answer the same status again. Its
+  // rounds are status and still merge as any call's do. The CONTROL is the
+  // case below, where a version moved past the copy held is fetched.
+  // Mutation: count a withheld body field as one the tab is behind on, and a
+  // status reader asks for its call on every push.
+  test("a status reader never refetches a live call", () => {
+    const store = seated();
+    const socket = new LiveSocket(store);
+    const ask = vi.spyOn(socket, "query");
+    const frame = (data: unknown) => socket.onMessage(JSON.stringify({ kind: "agents", data }));
+    const withheld = (rounds: number) =>
+      pushed(
+        { rounds },
+        { rounds: Array.from({ length: rounds }, () => ({})) },
+        {
+          body_withheld: true,
+        },
+      );
+    frame([withheld(1)]);
+    frame([withheld(2)]);
+    frame([withheld(3)]);
+    expect(ask.mock.calls.filter(([what]) => what === "live_call")).toEqual([]);
+    const call = store.state.agents[0]?.live_call;
+    expect(call?.body_withheld).toBe(true);
+    expect(call?.prompt).toBeUndefined();
+    expect(call?.versions).toMatchObject({ prompt: 0, narration: 0, rounds: 3 });
+    expect(call?.rounds).toHaveLength(3);
+  });
+
+  // A BODY HELD A MOMENT BEFORE IS NOT KEPT once the engine withholds it: a
+  // reader who could read this seat's trail and now cannot is shown none of
+  // it, and is not sent asking for it either.
+  test("a call withheld after it was whole keeps none of its body", () => {
+    const store = seated();
+    store.applyAgents([pushed({ prompt: 4, narration: 4 }, { ...prompt, ...narration(4) })]);
+    const stale = store.applyAgents([pushed({}, {}, { body_withheld: true })]);
+    expect(stale).toEqual([]);
+    const call = store.state.agents[0]?.live_call;
+    expect(call?.prompt).toBeUndefined();
+    expect(call?.round_narration).toBeUndefined();
+    expect(call?.versions).toMatchObject({ prompt: 0, narration: 0 });
+  });
+
   // THE SOCKET ASKS FOR THE CALL WHOLE, once a seat while an ask is out, and the
   // answer lands on the row.
   test("the socket fetches a call it holds behind, once", async () => {
-    const store = new Store();
+    const store = seated();
     const socket = new LiveSocket(store);
     const ask = vi.spyOn(socket, "query");
     const frame = (data: unknown) => socket.onMessage(JSON.stringify({ kind: "agents", data }));
@@ -472,14 +586,15 @@ describe("a live call's heavy fields", () => {
     frame([pushed({ prompt: 1, narration: 3 }, {})]);
     frame([pushed({ prompt: 1, narration: 4 }, {})]);
     expect(ask).toHaveBeenCalledTimes(1);
-    expect(ask).toHaveBeenCalledWith("live_call", { role: "PM" });
+    expect(ask).toHaveBeenCalledWith("live_call", { agent_id: "a-pm" });
 
     socket.onMessage(
       JSON.stringify({
         kind: "result",
         id: 1,
         data: {
-          role: "PM",
+          agent_id: "a-pm",
+          handle: "pm",
           live_call: pushed({ prompt: 1, narration: 4 }, { ...prompt, ...narration(4) }).live_call,
         },
       }),
@@ -495,8 +610,8 @@ describe("a live_call answer the socket delivers late", () => {
   // each stamped with the overlay sequence the engine reads when the seat's
   // call changes. `seq` is absent on a running row only where a case does not
   // need it; present where ordering is the point.
-  const running = (seq: number, phase = "execute"): Overlay & { role: string } => ({
-    role: "PM",
+  const running = (seq: number, phase = "execute"): OverlayRow => ({
+    agent_id: "a-pm",
     live_call_seq: seq,
     live_call: {
       turn_id: "t1",
@@ -513,8 +628,8 @@ describe("a live_call answer the socket delivers late", () => {
     narration: number,
     carried: object,
     over: object = {},
-  ): Overlay & { role: string } => ({
-    role: "PM",
+  ): OverlayRow => ({
+    agent_id: "a-pm",
     live_call_seq: seq,
     live_call: {
       ...running(seq).live_call,
@@ -544,16 +659,16 @@ describe("a live_call answer the socket delivers late", () => {
   // Mutation: drop the live_call_seq gate in applyLiveCall, and the cleared
   // seat shows the old running call again.
   test("a clear is not undone by an answer read before it", () => {
-    const store = new Store();
-    store.applySnapshot({ agents: [{ id: "pm", role: "PM", activity: "working" }] });
+    const store = seated();
     store.applyAgents([running(10)]);
     // The completion push clears the call at a newer sequence.
-    store.applyAgents([{ role: "PM", activity: "idle", live_call: null, live_call_seq: 12 }]);
+    store.applyAgents([{ agent_id: "a-pm", activity: "idle", live_call: null, live_call_seq: 12 }]);
     expect(store.state.agents[0]?.live_call).toBeNull();
 
     // The overtaken answer — the running call read a moment before the clear.
     store.applyLiveCall({
-      role: "PM",
+      agent_id: "a-pm",
+      handle: "pm",
       live_call: running(10).live_call ?? null,
       live_call_seq: 10,
     });
@@ -564,12 +679,12 @@ describe("a live_call answer the socket delivers late", () => {
   // NOR A NEWER CALL. The push that overtook the answer began a new phase
   // rather than clearing; the older answer must not replace it.
   test("a new call is not replaced by an answer for the one before it", () => {
-    const store = new Store();
-    store.applySnapshot({ agents: [{ id: "pm", role: "PM", activity: "working" }] });
+    const store = seated();
     store.applyAgents([running(10, "execute")]);
     store.applyAgents([running(12, "review")]);
     store.applyLiveCall({
-      role: "PM",
+      agent_id: "a-pm",
+      handle: "pm",
       live_call: running(10, "execute").live_call ?? null,
       live_call_seq: 10,
     });
@@ -587,18 +702,18 @@ describe("a live_call answer the socket delivers late", () => {
   // Mutation: drop an answer behind the applied sequence whole, as the gate
   // first did, and the narration stays at one round.
   test("an answer the same call's pushes overtook still brings its newer fields", () => {
-    const store = new Store();
-    store.applySnapshot({ agents: [{ id: "pm", role: "PM", activity: "working" }] });
+    const store = seated();
     store.applyAgents([call(5, 1, whole(1))]);
     // The push carrying narration 9 was dropped: this one names 9 and carries
     // nothing, so the socket asks for the call whole.
-    expect(store.applyAgents([call(10, 9, {})])).toEqual(["PM"]);
+    expect(store.applyAgents([call(10, 9, {})])).toEqual(["a-pm"]);
     // While that ask is out a later round lands, still naming 9.
-    expect(store.applyAgents([call(12, 9, {}, { model: "later" })])).toEqual(["PM"]);
+    expect(store.applyAgents([call(12, 9, {}, { model: "later" })])).toEqual(["a-pm"]);
 
     // The answer was read at 10: behind the applied 12, the same call.
     const current = store.applyLiveCall({
-      role: "PM",
+      agent_id: "a-pm",
+      handle: "pm",
       live_call_seq: 10,
       live_call: call(10, 9, whole(9), { model: "earlier" }).live_call ?? null,
     });
@@ -624,13 +739,12 @@ describe("a live_call answer the socket delivers late", () => {
   // Mutation: forget a push that found the call behind while an ask was out,
   // and the second ask is never made.
   test("the socket asks again for a call a push found behind while its ask was out", async () => {
-    const store = new Store();
+    const store = seated();
     const socket = new LiveSocket(store);
     const ask = vi.spyOn(socket, "query");
     const frame = (data: unknown) => socket.onMessage(JSON.stringify({ kind: "agents", data }));
-    const answer = (id: number, row: Overlay & { role: string }) =>
+    const answer = (id: number, row: OverlayRow) =>
       socket.onMessage(JSON.stringify({ kind: "result", id, data: row }));
-    store.applySnapshot({ agents: [{ id: "pm", role: "PM", activity: "working" }] });
     frame([call(5, 1, whole(1))]);
     frame([call(10, 3, {})]);
     frame([call(12, 4, {})]);
@@ -662,11 +776,11 @@ describe("a live_call answer the socket delivers late", () => {
   // AND A GENUINELY NEWER ANSWER STILL LANDS: an answer at or past the applied
   // sequence is the repair the fetch exists for.
   test("an answer at a newer sequence is applied", () => {
-    const store = new Store();
-    store.applySnapshot({ agents: [{ id: "pm", role: "PM", activity: "working" }] });
-    store.applyAgents([{ role: "PM", activity: "idle", live_call: null, live_call_seq: 8 }]);
+    const store = seated();
+    store.applyAgents([{ agent_id: "a-pm", activity: "idle", live_call: null, live_call_seq: 8 }]);
     store.applyLiveCall({
-      role: "PM",
+      agent_id: "a-pm",
+      handle: "pm",
       live_call: running(14).live_call ?? null,
       live_call_seq: 14,
     });
@@ -682,19 +796,6 @@ describe("partial pushes", () => {
     const store = new Store();
     store.applySnapshot({ tokens: { by_phase: [] } as never });
     expect(store.state.tokens).toBeNull();
-  });
-});
-
-describe("seat lookup", () => {
-  test("a seat resolves by handle, id, role, and case-insensitively", () => {
-    // Links minted before seats were addressed by handle used ids and role
-    // names, and they are in people's history.
-    const store = new Store();
-    store.applySnapshot({ agents: [{ id: "uuid-1", role: "Product Manager", handle: "pm" }] });
-    for (const key of ["pm", "PM", "uuid-1", "Product Manager", "product manager"]) {
-      expect(store.agentByKey(key)?.handle, key).toBe("pm");
-    }
-    expect(store.agentByKey("nobody")).toBeNull();
   });
 });
 
@@ -737,19 +838,30 @@ describe("a peer this build was not built against", () => {
 
 describe("a refused query", () => {
   // THE WAIT THE ENGINE NAMED TRAVELS WITH THE REFUSAL. The socket used to
-  // reject with the bare code, so `retry_after_seconds` reached no screen and
-  // each guessed a wait of its own.
+  // reject with the bare code, so `retry_after` reached no screen and each
+  // guessed a wait of its own.
   test("an unavailable frame's retry hint reaches the rejection", async () => {
     const store = new Store();
     const socket = new LiveSocket(store);
     const asked = socket.query("fleet");
     socket.onMessage(
-      JSON.stringify({ kind: "error", id: 1, error: "unavailable", retry_after_seconds: 4 }),
+      JSON.stringify({
+        kind: "error",
+        id: 1,
+        error: "unavailable",
+        retry_after: 4,
+        refusal: "log_full",
+        detail: "the tracker log is at its ceiling",
+      }),
     );
     const err = await asked.catch((e: unknown) => e);
     expect(err).toBeInstanceOf(QueryError);
     expect((err as QueryError).message).toBe("unavailable");
-    expect((err as QueryError).retryAfterSeconds).toBe(4);
+    expect((err as QueryError).refusal).toEqual({
+      code: "log_full",
+      detail: "the tracker log is at its ceiling",
+      retryAfter: 4,
+    });
   });
 
   // THE REFUSAL'S SENTENCE TRAVELS WITH IT. A `bad_params` refusal is the
@@ -779,7 +891,7 @@ describe("a refused query", () => {
     const asked = socket.query("fleet");
     socket.onMessage(JSON.stringify({ kind: "error", id: 1, error: "not_found" }));
     const err = await asked.catch((e: unknown) => e);
-    expect((err as QueryError).retryAfterSeconds).toBeNull();
+    expect((err as QueryError).refusal).toBeNull();
     expect((err as QueryError).detail).toBeNull();
   });
 

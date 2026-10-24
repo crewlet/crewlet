@@ -15,6 +15,8 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { PhaseCard } from "./PhaseCard.tsx";
 import type { PhaseRecord } from "~/lib/phases.ts";
 import { Router } from "~/app/router.tsx";
+import { ClientContext } from "~/lib/store-hooks.ts";
+import { LiveSocket, Store } from "~/protocol/index.ts";
 
 afterEach(() => {
   cleanup();
@@ -82,6 +84,7 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     maxRounds: 0,
     roundStartedAt: "",
     runningCall: null,
+    bodyWithheld: false,
     steers: [],
     node: "",
     clockStart: "",
@@ -145,7 +148,7 @@ describe("a settled phase's zero is a number", () => {
     expect(container.querySelector('[title="tool rounds used"]')?.textContent).toBe("0r");
   });
 
-  // THE DASH SURVIVES WHERE THE ZERO REALLY IS AN ABSENCE: a phase still
+  // AN ELLIPSIS MARKS WHERE THE ZERO REALLY IS AN ABSENCE: a phase still
   // running has not reported its usage yet, which is not the same as having
   // spent nothing.
   test("a live phase's zero is still an absence", () => {
@@ -155,10 +158,10 @@ describe("a settled phase's zero is a number", () => {
     expect(container.querySelector('[title="total tokens"]')).toBeNull();
     expect(
       container.querySelector('[title="this phase has not reported its usage yet"]')?.textContent,
-    ).toBe("—");
+    ).toBe("…");
     expect(
       container.querySelector('[title="this phase has not finished a round yet"]')?.textContent,
-    ).toBe("—");
+    ).toBe("…");
   });
 });
 
@@ -323,7 +326,7 @@ describe("the decision chip is drawn in the state it names", () => {
       <PhaseCard record={phase({ phase: "review", decision: "failed" })} />,
     );
     expect(container.querySelector(".crewlet-tag--danger")).not.toBeNull();
-    expect(screen.getByText("failed — the turn will not retry")).not.toBeNull();
+    expect(screen.getByText("failed, no retry")).not.toBeNull();
   });
 
   // AND AN UNEVENTFUL TURN KEEPS THE QUIET PILL, or four status hues are spent
@@ -340,7 +343,7 @@ describe("the decision chip is drawn in the state it names", () => {
 // `roundNum` held the engine's ZERO-BASED `round_num` on a live record and
 // `rounds_used` on a settled one — one name, two quantities — so a live phase
 // whose rounds narrated nothing counted one short, and the opening frame's `-1`
-// never matched the `=== 0` guard the dash above is for, which rendered "0r".
+// never matched the `=== 0` guard the ellipsis above is for, which rendered "0r".
 describe("the tool-round count", () => {
   test("a live phase counts the rounds the engine reported, not the ones that narrated", () => {
     const { container } = render(
@@ -355,7 +358,7 @@ describe("the tool-round count", () => {
     );
     expect(
       container.querySelector('[title="this phase has not finished a round yet"]')?.textContent,
-    ).toBe("—");
+    ).toBe("…");
   });
 });
 
@@ -483,7 +486,7 @@ describe("a tool call's arguments", () => {
     // put its result into the round's text — so the click is the test's own
     // reader opening it.
     fireEvent.click(screen.getByRole("button", { name: /^read_file/ }));
-    return screen.getByRole("region", { name: "read_file — arguments" }).textContent ?? "";
+    return screen.getByRole("region", { name: "read_file · arguments" }).textContent ?? "";
   }
 
   test("are indented, one key to a line", () => {
@@ -642,7 +645,9 @@ describe("a round that answered in prose", () => {
       />,
     );
     const [first, second] = [...container.querySelectorAll(".round")];
-    expect(first!.querySelector(".round-note")?.textContent).toMatch(/asked it again/);
+    expect(first!.querySelector(".round-note")?.textContent).toBe(
+      "It answered in prose and called no tool. It didn’t submit, so it was asked again.",
+    );
     // Neutral: the loop working is not a caution.
     expect(first!.querySelector(".round-note.caution")).toBeNull();
     // THE CONTROL: a round that called its tool carries no note.
@@ -654,7 +659,7 @@ describe("a round that answered in prose", () => {
     expect(second!.classList.contains("declined")).toBe(false);
   });
 
-  test("as the last round of a settled phase, says the phase ended without its submission", () => {
+  test("as the last round of a settled phase, says the engine filled in the outcome", () => {
     const { container } = render(
       <PhaseCard
         record={phase({
@@ -671,9 +676,9 @@ describe("a round that answered in prose", () => {
       />,
     );
     const note = container.querySelectorAll(".round")[1]!.querySelector(".round-note.caution");
-    expect(note?.textContent).toMatch(/last round/);
-    expect(note?.textContent).toMatch(/without its submission/);
-    expect(note?.textContent).toMatch(/rescued/);
+    expect(note?.textContent?.trim()).toBe(
+      "It answered in prose and called no tool. Last round, so the engine filled in the outcome.",
+    );
   });
 
   test("as the newest round of a running phase, claims neither outcome", () => {
@@ -688,15 +693,15 @@ describe("a round that answered in prose", () => {
       />,
     );
     const note = container.querySelector(".round-note")?.textContent ?? "";
-    expect(note).toMatch(/finishes only by calling a tool/);
-    expect(note).not.toMatch(/asked it again|last round/);
+    expect(note).toBe("It answered in prose and called no tool. It didn’t submit.");
+    expect(note).not.toMatch(/asked again|Last round/);
   });
 
-  test("the rescue chip says the phase ended without its submission, not that it was re-asked", () => {
+  test("the rescue chip says the engine filled in the outcome, not that it was re-asked", () => {
     render(<PhaseCard record={phase({ rescueFired: true, decision: "incomplete" })} />);
     const title = screen.getByText("rescued").closest("[title]")?.getAttribute("title") ?? "";
-    expect(title).toMatch(/ended without its submission/);
-    expect(title).not.toMatch(/re-asked/);
+    expect(title).toBe("No submission, so the engine filled in the outcome");
+    expect(title).not.toMatch(/re-asked|asked again/);
   });
 });
 
@@ -934,7 +939,7 @@ describe("a phase a round did not finish", () => {
       />,
     );
     const [first, second] = [...container.querySelectorAll(".round")];
-    expect(second!.querySelector(".round-note.critical")?.textContent).toMatch(/output cap/);
+    expect(second!.querySelector(".round-note.critical")?.textContent).toMatch(/output limit/);
     expect(second!.classList.contains("errored")).toBe(true);
     // THE CONTROL: a round that finished carries no note and no mark.
     expect(first!.querySelector(".round-note")).toBeNull();
@@ -965,11 +970,116 @@ describe("a phase a round did not finish", () => {
     expect(body).toMatch(/declined this request/);
     expect(body).toMatch(/cyber/);
     expect(body).toMatch(/exploit development/);
-    expect(body).toMatch(/not ask it again|does not ask it again/);
+    expect(body).toMatch(/The phase ended here\./);
     // The refused round said nothing and ran nothing, and it still has its
     // place on the rail — it is the round that explains why the phase ended.
     const rounds = container.querySelectorAll(".round");
     expect(rounds.length).toBe(1);
     expect(rounds[0]!.querySelector(".round-note.critical")?.textContent).toMatch(/declined/);
+  });
+});
+
+// A WITHHELD BODY IS SAID, never drawn as a phase that was told nothing and
+// answered nothing: the engine sent this reader its status alone. The CONTROL
+// is the same phase sent whole, which says nothing of the kind. Mutation:
+// drop the notice and the first assertion fails.
+describe("a phase whose body was withheld", () => {
+  function withStore(node: React.ReactNode, seed?: (store: Store) => void) {
+    const store = new Store();
+    seed?.(store);
+    render(
+      <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
+        <Router>{node}</Router>
+      </ClientContext.Provider>,
+    );
+  }
+
+  test("says it is hidden, and who can see it", () => {
+    withStore(<PhaseCard record={phase({ bodyWithheld: true })} defaultOpen />);
+    expect(screen.getByText("Hidden. Only this seat’s lead and admins can see it.")).toBeDefined();
+    cleanup();
+    withStore(<PhaseCard record={phase()} defaultOpen />);
+    expect(screen.queryByText(/^Hidden\./)).toBeNull();
+  });
+
+  // THE LEAD IS NAMED, with a link, so the reader knows whom to ask. Found by
+  // the phase's agent id, never its role name. Mutation: drop the lookup and
+  // the general sentence is drawn instead.
+  test("names the seat's lead, linked, where the chart has one", () => {
+    withStore(
+      <PhaseCard record={phase({ bodyWithheld: true, agentId: "a-dev" })} defaultOpen />,
+      (store) => {
+        // THE REPORTING LINE IS THE SUBJECT, so its derived block is written
+        // out (`test/org.ts`): Jane leads Dev.
+        const seat = (handle: string, name: string, manager: string) => ({
+          handle,
+          name,
+          kind: "agent",
+          placed_by_ref: false,
+          manager,
+          managers: manager ? [manager] : null,
+          reports: null,
+          auto_reports: null,
+          onboarding_chain: null,
+        });
+        store.applyOrg({
+          roles: [
+            { name: "Jane Founder", handle: "jane" },
+            { name: "Dev", handle: "dev" },
+          ],
+          derived: {
+            seats: [seat("jane", "Jane Founder", ""), seat("dev", "Dev", "jane")],
+            units: [],
+          },
+        } as never);
+        store.applySeats([{ agent_id: "a-dev", role: "Dev", handle: "dev" }] as never);
+      },
+    );
+    const lead = screen.getByRole("link", { name: "Jane Founder" });
+    expect(lead.getAttribute("href")).toContain("jane");
+    expect(lead.closest(".crewlet-callout")?.textContent).toBe(
+      "Only Jane Founder (this seat’s lead) and admins can see what it says.",
+    );
+  });
+});
+
+/**
+ * A CALL THAT LANDED A VERSION LINKS THE ARTIFACT IT WROTE, under the call and
+ * outside its fold, so a reader reaches the artifact without opening the
+ * result and copying an id out of it. A call that failed links nothing.
+ */
+describe("a publishing call", () => {
+  const ID = "32f4d7b8-57d4-5ab7-a82f-413394e1825b";
+  function publishing(failed: boolean): PhaseRecord {
+    return phase({
+      roundsUsed: 1,
+      narration: [{ round: 1, reasoning: "", content: "Publishing.", declined: false }],
+      tools: [
+        {
+          name: "create_artifact",
+          round: 1,
+          args: JSON.stringify({ kind: "sheet", title: "Vendor review" }),
+          result: failed
+            ? "create_artifact needs a `title`: two to four words."
+            : JSON.stringify({ outcome: "created", artifact: ID, version: 1, write: "applied" }),
+          failed,
+          durationMs: 0,
+          origin: "builtin",
+          server: "",
+          startedAt: "",
+        },
+      ],
+    });
+  }
+
+  test("links the artifact it wrote", () => {
+    render(<PhaseCard record={publishing(false)} defaultOpen />);
+    const link = screen.getByRole("link", { name: "Open “Vendor review”, version 1" });
+    expect(link.getAttribute("href")).toBe(`#/artifacts/${ID}`);
+  });
+
+  test("links nothing when it failed", () => {
+    render(<PhaseCard record={publishing(true)} defaultOpen />);
+    expect(screen.queryByRole("link", { name: /^Open/ })).toBeNull();
   });
 });
