@@ -119,7 +119,7 @@ func (h *Handler) ticketed(w http.ResponseWriter, r *http.Request, token, file s
 				return ""
 			}
 		}
-		h.serveDocument(w, r, claims, entry.Object, entry.ContentType, entry.Script, v.Contract)
+		h.serveDocument(w, r, claims, entry.Object, entry.ContentType, entry.Script, v.Contract, v.Brand)
 		return destDocument
 	}
 	h.serveFile(w, r, claims, entry.Object, entry.ContentType)
@@ -169,7 +169,7 @@ func (h *Handler) asset(w http.ResponseWriter, r *http.Request, claims artifacts
 		// a version's files, never the asset store, so its bytes are served
 		// as stored, with no nonce substituted into them, and no script in
 		// one can carry the response's nonce: a document there runs none.
-		h.serveDocument(w, r, claims, a.Object, a.ContentType, nil, "")
+		h.serveDocument(w, r, claims, a.Object, a.ContentType, nil, "", "")
 		return destDocument
 	}
 	h.serveFile(w, r, claims, a.Object, a.ContentType)
@@ -206,8 +206,9 @@ func (h *Handler) ticketRefused(w http.ResponseWriter, ref *refusal) {
 
 // serveDocument answers a document: its stored bytes with a fresh nonce
 // substituted for the placeholder the linter wrote into every script element,
-// under the document policy built for that nonce, and an HTML page of a
-// version pinning a runtime contract with that runtime placed first.
+// under the document policy built for that nonce, an HTML page of a version
+// pinning a runtime contract with that runtime placed first, and an HTML page
+// of a version pinning the adopted brand with its stylesheet linked.
 //
 // THE NONCE IS SUBSTITUTED ONLY WHERE THE LINTER PUT THE PLACEHOLDER: a page
 // whose script facts say every script element carries it ([nonceTemplate]).
@@ -220,14 +221,19 @@ func (h *Handler) ticketRefused(w http.ResponseWriter, ref *refusal) {
 // template read and checked once per node; the body differs per response, so
 // no validator could name it, and the response is never stored anywhere.
 func (h *Handler) serveDocument(w http.ResponseWriter, r *http.Request, c artifacts.TicketClaims,
-	obj objstore.Object, contentType string, script *artifacts.ScriptPolicy, contract string) {
+	obj objstore.Object, contentType string, script *artifacts.ScriptPolicy, contract, brand string) {
 
 	if essenceOf(contentType) != "text/html" || !nonceTemplate(script) {
 		// A RUNTIME ONLY WHERE IT CAN RUN: one placed into a document whose
 		// placeholders are left inert would carry no nonce either.
 		contract = ""
 	}
-	template, err := h.template(r.Context(), obj, contract, c.Capabilities)
+	if essenceOf(contentType) != "text/html" {
+		// A STYLESHEET ONLY IN A PAGE: an SVG or XML document of a version
+		// is drawn as it was published.
+		brand = ""
+	}
+	template, err := h.template(r.Context(), obj, contract, brand, c.Capabilities)
 	if err != nil {
 		h.contentFailed(w, r, c, obj, err)
 		return
@@ -275,13 +281,15 @@ func nonceTemplate(script *artifacts.ScriptPolicy) bool {
 
 // template is a document's stored bytes, read and checked once and kept, with
 // the runtime of contract placed first where one is named, telling it the
-// capabilities the frame grants. One document's bytes may be published in
-// versions declaring different capabilities, so they are part of the key.
-func (h *Handler) template(ctx context.Context, obj objstore.Object, contract string,
+// capabilities the frame grants, and the brand stylesheet its version pinned
+// linked after it. One document's bytes may be published in versions
+// declaring different capabilities or pinning different stylesheets, so both
+// are part of the key.
+func (h *Handler) template(ctx context.Context, obj objstore.Object, contract, brand string,
 	granted []artifacts.Capability) ([]byte, error) {
 
 	declared := runtimeCapabilities(granted)
-	key := "t:" + string(obj.Hash) + "|" + contract + "|" + declared
+	key := "t:" + string(obj.Hash) + "|" + contract + "|" + declared + "|" + brand
 	if body, ok := h.bodies.get(key); ok {
 		return body, nil
 	}
@@ -289,6 +297,9 @@ func (h *Handler) template(ctx context.Context, obj objstore.Object, contract st
 	if err != nil {
 		return nil, err
 	}
+	// THE LINK FIRST, THEN THE RUNTIME before it: both go at the page's
+	// opening, and the runtime must precede every element of the page.
+	body = withBrand(body, brand)
 	if contract != "" {
 		body = h.withRuntime(body, contract, declared)
 	}

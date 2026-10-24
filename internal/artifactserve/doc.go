@@ -6,8 +6,11 @@
 //
 // An artifact is arbitrary HTML, SVG and script written by a person, an agent,
 // or an agent somebody prompt-injected, so it is served from a listener of its
-// own that mounts exactly four routes ([Routes]): one file of a ticket's
-// version, one asset of a ticket's artifact, and the embedded runtime and kit.
+// own that mounts exactly five routes ([Routes]): one file of a ticket's
+// version, one asset of a ticket's artifact, the embedded runtime and kit, and
+// the company's adopted brand's files by their hash (ADR-0048, served only
+// while an adoption names them, and linked into a page whose version pinned
+// them).
 // No guard, no session arm, no CSRF judge, no API route, no probe, no redirect.
 // It never reads the Cookie header and never writes Set-Cookie, so a same-site
 // deployment whose browser sends the dashboard's cookie here is answered byte
