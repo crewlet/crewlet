@@ -75,6 +75,20 @@
 // read moves everything ([MoveReset]). No record wakes a seat in this release, so
 // the domain declares no feed.
 //
+// # The adopted brand is a snapshot
+//
+// A brand kit is an artifact; the company's brand is an adoption on the one
+// `brand` subject, written by an administrator, a person, at a recent proof.
+// It snapshots one kit version: its canonical index, the stylesheet generated
+// from it, and a fresh copy of every file it serves, objects its own record
+// uploaded, so no record names another artifact's object and the kit's
+// retention, trash and purge never reach what pages are served. A framed
+// version pins the stylesheet adopted when it is published (and names the
+// brand in its scope, since its apply reads the brand's rows); a superseded
+// adoption's files are pruned at the next adoption or clear once no retained
+// version pins them. The adopted brand is the company's public face, served by
+// its bytes (ADR-0048).
+//
 // # Attribution is a seat handle
 //
 // Every row names who acted by seat handle (or a machine login) and the actor's
