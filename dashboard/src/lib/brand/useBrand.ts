@@ -223,6 +223,10 @@ export function useBrandAssets(
         if (!file || !LOGO_TYPES.has(file.type)) return null;
         try {
           const blob = await source.read(file, ctl.signal);
+          // A READ THAT OUTLIVED THE SCREEN makes no URL: the adopted brand's
+          // reads are shared and ignore the signal, and a URL made after the
+          // cleanup ran would never be revoked.
+          if (ctl.signal.aborted) return null;
           const url = URL.createObjectURL(new Blob([blob], { type: file.type }));
           made.push(url);
           return [slot, url] as const;
