@@ -100,6 +100,15 @@ func TestAWriteTheBucketStopsTakingEndsAStallAfterItMoved(t *testing.T) {
 				s3obj.CutParts(b, c.part)
 			}
 			c.stop(srv)
+			// THE OPEN'S PROBE PUTS AND DELETES ITS OWN OBJECT, and those
+			// requests are the open's, not the put's.
+			ops := []string{"PutObject", "CreateMultipartUpload", "UploadPart",
+				"CompleteMultipartUpload", "AbortMultipartUpload"}
+			before := map[string]int{}
+			for _, op := range ops {
+				before[op] = srv.RequestsOf(op)
+			}
+			sent := func(op string) int { return srv.RequestsOf(op) - before[op] }
 			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 			defer cancel()
 			began := time.Now()
@@ -117,14 +126,13 @@ func TestAWriteTheBucketStopsTakingEndsAStallAfterItMoved(t *testing.T) {
 					"between its %v stall and a second past it", took, caseStall)
 			}
 			for op, want := range c.sent {
-				if got := srv.RequestsOf(op); got != want {
+				if got := sent(op); got != want {
 					t.Errorf("the bucket was sent %d %s; want %d — the put's own, once each", got, op, want)
 				}
 			}
-			for _, op := range []string{"PutObject", "CreateMultipartUpload", "UploadPart",
-				"CompleteMultipartUpload", "AbortMultipartUpload"} {
-				if _, ok := c.sent[op]; !ok && srv.RequestsOf(op) != 0 {
-					t.Errorf("the bucket was sent %d %s; want none", srv.RequestsOf(op), op)
+			for _, op := range ops {
+				if _, ok := c.sent[op]; !ok && sent(op) != 0 {
+					t.Errorf("the bucket was sent %d %s; want none", sent(op), op)
 				}
 			}
 			if pending := srv.Uploads(); len(pending) != 0 {
@@ -145,13 +153,14 @@ func TestAStalledAttemptIsNotAskedAgain(t *testing.T) {
 	srv := s3fake.Start(t, "files")
 	b := openStalling(t, srv)
 	srv.Hang("PutObject", 0)
+	before := srv.RequestsOf("PutObject") // the open's probe's
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
 	err := b.Put(ctx, "stalled", bytes.NewReader(make([]byte, 4<<20)), objstore.PutMeta{})
 	if !errors.Is(err, objstore.ErrStalled) {
 		t.Fatalf("a put the bucket stopped taking = %v; want objstore.ErrStalled", err)
 	}
-	if got := srv.RequestsOf("PutObject"); got != 1 {
+	if got := srv.RequestsOf("PutObject") - before; got != 1 {
 		t.Fatalf("a stalled put was sent %d times; want once", got)
 	}
 	if !strings.Contains(err.Error(), "stopped moving this request for 2s (1 attempt in all)") {

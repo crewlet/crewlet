@@ -745,6 +745,9 @@ func TestABatchDeletionIsOneRequestNamingWhatItCouldNotRemove(t *testing.T) {
 		}
 	}
 	srv.RefuseDelete("crewlet/files/b", "AccessDenied")
+	// THE OPEN'S PROBE DELETES ITS OWN OBJECT, and those deletions are
+	// the open's, not the batch's.
+	batches, singles := srv.RequestsOf("DeleteObjects"), srv.RequestsOf("DeleteObject")
 	err := b.DeleteBatch(t.Context(), names)
 	var refused *objstore.DeleteBatchError
 	if !errors.As(err, &refused) || len(refused.Failed) != 1 || refused.Failed["files/b"] == nil {
@@ -756,17 +759,17 @@ func TestABatchDeletionIsOneRequestNamingWhatItCouldNotRemove(t *testing.T) {
 	if got := srv.Keys(); !slices.Equal(got, []string{"crewlet/files/b"}) {
 		t.Fatalf("after the batch the bucket holds %q, want only the refused key", got)
 	}
-	if n := srv.RequestsOf("DeleteObjects"); n != 1 {
+	if n := srv.RequestsOf("DeleteObjects") - batches; n != 1 {
 		t.Fatalf("a batch of %d names made %d DeleteObjects requests, want one", len(names), n)
 	}
-	if n := srv.RequestsOf("DeleteObject"); n != 0 {
+	if n := srv.RequestsOf("DeleteObject") - singles; n != 0 {
 		t.Fatalf("a batch deletion made %d single deletions, want none", n)
 	}
 	// PAST THE BATCH THE API TAKES, refused before any request.
 	if err := b.DeleteBatch(t.Context(), make([]string, objstore.MaxDeleteBatch+1)); err == nil {
 		t.Fatal("a batch past MaxDeleteBatch was accepted")
 	}
-	if n := srv.RequestsOf("DeleteObjects"); n != 1 {
+	if n := srv.RequestsOf("DeleteObjects") - batches; n != 1 {
 		t.Fatalf("a batch past MaxDeleteBatch was sent (%d requests in all)", n)
 	}
 }

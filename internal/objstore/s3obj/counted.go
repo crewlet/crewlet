@@ -22,6 +22,10 @@ import (
 // each, the API's — the one closed set an `operation` label takes, so a
 // series per key, bucket or prefix cannot open: a name outside it is counted
 // [otherOperation], which the suite holds at none by sending every verb.
+//
+// NO HeadBucket: the client sends none, since the check at open is a probe
+// under the prefix (probe.go) made of the verbs every upload uses, and a label
+// no verb sends is documentation of a request that does not exist.
 var operations = []string{
 	"AbortMultipartUpload",
 	"CompleteMultipartUpload",
@@ -30,7 +34,6 @@ var operations = []string{
 	"DeleteObject",
 	"DeleteObjects",
 	"GetObject",
-	"HeadBucket",
 	"HeadObject",
 	"ListMultipartUploads",
 	"ListObjectsV2",
