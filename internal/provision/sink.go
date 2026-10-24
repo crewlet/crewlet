@@ -160,12 +160,17 @@ func ReferencedVars(value string) []string {
 // The two cases are kept apart because their fixes differ — a literal needs a
 // variable, a composite needs the variable to be the whole value — so
 // collapsing them into "not a reference" would leave an operator to work out
-// which.
+// which. And a slot holding nothing is said to be EMPTY rather than either:
+// read as "a literal", an unset field — a Confluence Cloud webhook_token, a
+// seat's bot_token — sent its operator looking for a value that is not there.
 //
 // ONE IMPLEMENTATION: this was two byte-identical copies, in mattermost and
 // gitlab, and the two provisioners added since had neither and quoted the
 // value instead.
 func Shape(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "empty"
+	}
 	if len(ReferencedVars(value)) == 0 {
 		return "a literal"
 	}
