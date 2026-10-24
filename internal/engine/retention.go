@@ -848,6 +848,11 @@ func (r *retention) sweepDeps(running *runningLog) (statelog.SweepDeps, bool) {
 			return statelog.LogEnds{First: first, Last: last}, err
 		},
 		Runner: running.runner,
+		// SIGNED WITH THE LOG'S OWN SIGNER, the one its reanchor and its
+		// read index's barriers are: every applier opens a record's frame
+		// before it reads one, so a trimmed record nobody signed would be
+		// refused on every node and its anchors kept for good.
+		Signer: running.signer,
 		Encode: encode, DB: r.estate(), Writer: r.nodeID, Evicted: running.evicted,
 	}
 	// NEVER A NIL *Reserve IN THE INTERFACE: a domain that keeps none is

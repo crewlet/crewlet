@@ -400,6 +400,78 @@ func TestATickThatPurgesNothingSweepsBelowTheLogsFirstRecord(t *testing.T) {
 	}
 }
 
+// THE TRIM'S OWN DEPS SIGN WHAT THE SWEEP APPENDS — ADR-0031 beside ADR-0046.
+//
+// Every applier opens a record's frame before it reads one, so a trimmed
+// record that is not a frame this fleet's keyring opens is refused on every
+// node, and the anchors it was appended to remove stay for good.
+// [statelog.SweepDeps] makes its signer REQUIRED for that reason, so a
+// [retention.sweepDeps] that handed it none swept no anchor on any log: the
+// count refused (`ErrUnsigned`) and every tick logged a failed sweep. This is
+// the sweep the tick runs, through the deps the tick builds, and the record it
+// appends is read back off the log and opened by the running log's own
+// verifier — the one its applier opens it with.
+func TestTheTrimsOwnDepsSignTheTrimmedRecord(t *testing.T) {
+	t.Parallel()
+	e, back, running := trimmedTracker(t)
+	at := time.Now().UTC()
+	mustApply(t, "the project", func() (tracker.WriteResult, error) {
+		return e.native.Load().writer.WriteDocument(t.Context(), "op-ENG",
+			tracker.ProjectSubject("ENG"), "", tracker.Project{
+				V: tracker.DocumentVersion, Key: "ENG", Name: "Engineering",
+				CreatedAt: at, UpdatedAt: at,
+			}, tracker.ChangeProjectCreated, nil)
+	})
+	last := barrierOn(t, running)
+	waitUntil(t, 20*time.Second, "the node to apply its own log", func() bool {
+		return running.runner.Committed().Seq >= last
+	})
+	if err := running.log.Purge(t.Context(), last); err != nil {
+		t.Fatalf("purge the project's record: %v", err)
+	}
+
+	r := sweepingRetention(e, back.Fleet)
+	deps, sweeps := r.sweepDeps(running)
+	if !sweeps {
+		t.Fatal("the trim hands the tracker's log no anchor sweep")
+	}
+	below := statelog.Position{
+		Stream: running.spec.Name, Generation: running.runner.Committed().Generation, Seq: last,
+	}
+	plan, err := statelog.PlanSweep(t.Context(), deps, below)
+	if err != nil {
+		t.Fatalf("count the anchors below the log's first record through the trim's own "+
+			"deps: %v", err)
+	}
+	if plan.Records() != 1 {
+		t.Fatalf("the count calls for %d trimmed record(s), want the 1 the project's "+
+			"anchor below the log's first record needs", plan.Records())
+	}
+	swept, err := plan.Sweep(t.Context(), anchorSweepDeadline)
+	if err != nil || swept.Records != 1 {
+		t.Fatalf("the sweep appended %d record(s) (%v), want 1", swept.Records, err)
+	}
+
+	wire, payload, _, held, err := running.log.At(t.Context(), last+1)
+	if err != nil || !held {
+		t.Fatalf("read the record the sweep appended at %d: held %v, %v", last+1, held, err)
+	}
+	body, verdict := running.verifier.Open(payload)
+	if verdict != statelog.Verified {
+		t.Fatalf("the trimmed record on %s opens as %v under the running log's own "+
+			"verifier, want verified — every applier refuses it, and the anchors it "+
+			"names stay on every node", wire, verdict)
+	}
+	env, err := running.domain.Envelope(body)
+	if err != nil {
+		t.Fatalf("decode the trimmed record's envelope: %v", err)
+	}
+	if env.Subject != statelog.TrimmedSubject(below) {
+		t.Errorf("the sweep appended a %v record, want the trimmed record of %v",
+			env.Subject, below)
+	}
+}
+
 // A TICK WITH NO ANCHOR BELOW THE LOG APPENDS NOTHING, so an idle fleet's log
 // gains no record a quarter hour.
 func TestATickWithNoAnchorBelowTheLogAppendsNothing(t *testing.T) {

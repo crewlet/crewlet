@@ -160,7 +160,8 @@ type runningLog struct {
 	// that forgot.
 	//
 	// And signer is the other half, for the appends no write authority
-	// makes: a reanchor's generation record and a read index's barrier.
+	// makes: a reanchor's generation record, a read index's barrier and
+	// the trim's anchor sweep's trimmed records ([retention.sweepDeps]).
 	// Every applier refuses a record that is not a frame this keyring
 	// opens, so an append that skipped it is a record the fleet drops.
 	verifier *statelog.Verifier
