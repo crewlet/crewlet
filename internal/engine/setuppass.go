@@ -995,7 +995,7 @@ func (p *gitlabPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 		// take the other nine down; deleting an account because a seat
 		// left the config cannot be told apart from a company mid-edit.
 		// Both stay deliberate gestures on the command line.
-		Rotate: in.Recreate,
+		Rotate: in.Recreate.Asked(),
 		// WHERE THE ACCOUNTS ARE OWNED, from the company document. It was
 		// absent, so every pass this engine ran assumed the group route —
 		// and against a company provisioned with `-mode instance` it minted

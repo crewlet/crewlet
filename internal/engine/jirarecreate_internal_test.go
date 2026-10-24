@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/jira"
+	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
@@ -100,12 +101,12 @@ func TestTheSetupRoutesRecreateReachesTheJiraPass(t *testing.T) {
 	const held = "the-secret-every-node-holds"
 	for _, tc := range []struct {
 		name     string
-		recreate bool
+		recreate provision.FreshSwitch
 	}{
 		// THE PREMISE: without the flag, a converged hook is left alone, so
 		// any write in the other case is the flag's doing.
-		{"kept without it", false},
-		{"recreated with it", true},
+		{"kept without it", ""},
+		{"recreated with it", "recreate_webhooks"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -150,7 +151,7 @@ roles:
 			deleted, created, updated := host.deleted, host.created, host.updated
 			host.mu.Unlock()
 			recorded, _, _ := sink.Value(t.Context(), "JIRA_WEBHOOK_SECRET")
-			if !tc.recreate {
+			if !tc.recreate.Asked() {
 				if len(deleted)+len(created)+updated != 0 || recorded != "" {
 					t.Fatalf("a pass not asked to recreate wrote to a converged "+
 						"hook: deleted %v, created %d, updated %d, recorded %q",

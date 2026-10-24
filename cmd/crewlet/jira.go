@@ -49,7 +49,7 @@ func runJiraProvision(inv invocation, args []string, stdout, stderr io.Writer) e
 	publicURL := fs.String("public-url", "",
 		"this deployment's public base URL, for registering the webhook; "+
 			"defaults to "+publicURLDefault)
-	recreate := fs.Bool("recreate-webhook", false,
+	recreate := addFreshSwitch(fs, "recreate-webhook",
 		"delete and remake the webhook to mint a fresh secret; this "+
 			"invalidates the secret every other deployment of this company holds")
 	dryRun := fs.Bool("dry-run", false,
@@ -108,7 +108,7 @@ func runJiraProvision(inv invocation, args []string, stdout, stderr io.Writer) e
 	hookBase := webhookBase(*publicURL, boot)
 	if !*dryRun {
 		if err = sinks.refuseOutranked(ctx, companySecrets, "Jira",
-			webhookMintsInto(cfg.WebhookSecret, *recreate, env.Value, hookBase), stdout); err != nil {
+			webhookMintsInto(cfg.WebhookSecret, recreate.value().Asked(), env.Value, hookBase), stdout); err != nil {
 			return err
 		}
 	}
@@ -141,7 +141,7 @@ func runJiraProvision(inv invocation, args []string, stdout, stderr io.Writer) e
 	opts := jira.Options{
 		Client: client, Config: cfg, Org: organization,
 		Value:           env.Value,
-		RecreateWebhook: *recreate,
+		RecreateWebhook: recreate.value(),
 	}
 	if *dryRun {
 		fmt.Fprintln(stdout,

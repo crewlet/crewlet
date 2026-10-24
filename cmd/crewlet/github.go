@@ -47,7 +47,7 @@ func runGitHubProvision(inv invocation, args []string, stdout, stderr io.Writer)
 	publicURL := fs.String("public-url", "",
 		"this deployment's public base URL, for registering the webhooks; "+
 			"defaults to "+publicURLDefault)
-	recreate := fs.Bool("recreate-webhooks", false,
+	recreate := addFreshSwitch(fs, "recreate-webhooks",
 		"delete and remake every webhook to mint a fresh secret; this "+
 			"invalidates the secret every other deployment of this company holds")
 	dryRun := fs.Bool("dry-run", false,
@@ -116,7 +116,7 @@ func runGitHubProvision(inv invocation, args []string, stdout, stderr io.Writer)
 			hookAt = ""
 		}
 		if err = sinks.refuseOutranked(ctx, companySecrets, "GitHub",
-			webhookMintsInto(cfg.WebhookSecret, *recreate, env.Value, hookAt), stdout); err != nil {
+			webhookMintsInto(cfg.WebhookSecret, recreate.value().Asked(), env.Value, hookAt), stdout); err != nil {
 			return err
 		}
 	}
@@ -152,7 +152,7 @@ func runGitHubProvision(inv invocation, args []string, stdout, stderr io.Writer)
 	opts := github.Options{
 		Client: client, Config: cfg, Org: organization,
 		Value:            env.Value,
-		RecreateWebhooks: *recreate,
+		RecreateWebhooks: recreate.value(),
 	}
 	if *dryRun {
 		fmt.Fprintln(stdout,

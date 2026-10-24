@@ -1674,6 +1674,70 @@ func TestALiteralSecretWithNoValueIsRefused(t *testing.T) {
 	}
 }
 
+// THE RECREATE SWITCH OVER A LITERAL IS REFUSED FOR WHAT IT IS. The literal
+// resolves — to itself — and names no variable, so the refusal written for a
+// slot that resolved to nothing ("set that variable") was wrong on both
+// counts, and it never named the switch or the way on that needs no edit: a
+// run without it registers the literal as it is. Nothing is minted and no
+// hook is touched first.
+//
+// NAMED AS ITS CALLER SPELLS IT: `-recreate-webhooks` for `crewlet github
+// provision`, `recreate_webhooks` for the setup route, whose caller has no
+// flag, so a refusal naming one would send them nowhere.
+func TestRecreatingHooksOverALiteralSecretNamesTheSwitchAndBothWaysOn(t *testing.T) {
+	t.Parallel()
+	const literal = "a-literal-webhook-secret-nobody-should-see"
+	for _, fresh := range []provision.FreshSwitch{"-recreate-webhooks", "recreate_webhooks"} {
+		t.Run(string(fresh), func(t *testing.T) {
+			t.Parallel()
+			var writes atomic.Int32
+			client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					writes.Add(1)
+				}
+				_, _ = w.Write([]byte(`[]`))
+			})
+			sink := &recordingSink{}
+			_, err := github.Reconcile(context.Background(), github.Options{
+				Client: client,
+				Config: &config.GitHub{
+					Enabled: true, WebhookSecret: literal,
+					Provisioning: &config.GitHubProvisioning{Org: "acme"},
+				},
+				Value:            func(v string) string { return v },
+				Sink:             sink,
+				WebhookBase:      "https://x",
+				RecreateWebhooks: fresh,
+			})
+			if err == nil {
+				t.Fatalf("%s over a literal webhook_secret went ahead", fresh)
+			}
+			for _, want := range []string{
+				"integrations.github.webhook_secret is a literal",
+				string(fresh) + " has no variable to mint a fresh one into",
+				"at a whole ${VAR} and re-run with " + string(fresh),
+				"run without " + string(fresh) + " to register the value it holds as it is",
+			} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not say %q:\n%v", want, err)
+				}
+			}
+			if fresh == "recreate_webhooks" && strings.Contains(err.Error(), "-recreate") {
+				t.Errorf("the setup route's refusal names a command-line flag:\n%v", err)
+			}
+			if strings.Contains(err.Error(), literal) {
+				t.Errorf("the refusal repeats the secret:\n%v", err)
+			}
+			if len(sink.recorded) != 0 {
+				t.Errorf("the refused run recorded %v", sink.recorded)
+			}
+			if n := writes.Load(); n != 0 {
+				t.Errorf("%d write(s) reached GitHub before the refusal", n)
+			}
+		})
+	}
+}
+
 // recordingSink is a [provision.TokenSink] that remembers what it was given.
 //
 // It counts FLUSHES rather than holding a bool, and keeps the context each

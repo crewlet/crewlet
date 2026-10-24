@@ -278,7 +278,7 @@ func runConfluenceProvision(inv invocation, args []string, stdout, stderr io.Wri
 	publicURL := fs.String("public-url", "",
 		"this deployment's public base URL, for registering the hooks; "+
 			"defaults to "+publicURLDefault)
-	recreate := fs.Bool("recreate-webhooks", false,
+	recreate := addFreshSwitch(fs, "recreate-webhooks",
 		"delete and remake every hook to mint a fresh token or secret; this "+
 			"invalidates the value every other deployment of this company holds")
 	dryRun := fs.Bool("dry-run", false,
@@ -333,8 +333,8 @@ func runConfluenceProvision(inv invocation, args []string, stdout, stderr io.Wri
 	hookBase := webhookBase(*publicURL, boot)
 	if !*dryRun {
 		if err = sinks.refuseOutranked(ctx, companySecrets, "Confluence", unionReads(
-			webhookMintsInto(cfg.WebhookSecret, *recreate, env.Value, hookBase),
-			webhookMintsInto(cfg.WebhookToken, *recreate, env.Value, hookBase)),
+			webhookMintsInto(cfg.WebhookSecret, recreate.value().Asked(), env.Value, hookBase),
+			webhookMintsInto(cfg.WebhookToken, recreate.value().Asked(), env.Value, hookBase)),
 			stdout); err != nil {
 			return err
 		}
@@ -363,7 +363,7 @@ func runConfluenceProvision(inv invocation, args []string, stdout, stderr io.Wri
 	// THE SINK IS OPENED FOR A REAL RUN ONLY, for the reason every sibling
 	// states: a dry run registers nothing and has nothing to record.
 	opts := confluence.Options{
-		Client: client, Config: cfg, Value: env.Value, Recreate: *recreate,
+		Client: client, Config: cfg, Value: env.Value, Recreate: recreate.value(),
 	}
 	if *dryRun {
 		fmt.Fprintln(stdout,

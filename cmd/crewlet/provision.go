@@ -212,6 +212,37 @@ func (e *outrankedSinkError) Error() string {
 		e.command, e.store, held, e.sink, e.vendor, e.vendor)
 }
 
+// freshSwitch is a provisioning command's flag for a fresh webhook secret —
+// `-recreate-webhooks` on github and confluence, `-recreate-webhook` on jira —
+// declared once, by name.
+//
+// THE FLAG AND ITS SPELLING ARE ONE DECLARATION. A pass refuses the switch
+// over a secret the company document holds as a literal, naming it as the
+// surface that set it spells it ([provision.FreshSwitch]), so the command
+// hands its pass the name it parsed. A boolean flag beside a separate literal
+// spelling could drift apart, and the refusal would then send the operator to
+// a flag the command does not have.
+type freshSwitch struct {
+	name string
+	on   *bool
+}
+
+// addFreshSwitch declares the flag named name on fs.
+func addFreshSwitch(fs *flag.FlagSet, name, usage string) freshSwitch {
+	return freshSwitch{name: name, on: fs.Bool(name, false, usage)}
+}
+
+// value is the flag as a pass takes it: spelled as the command declares it
+// (`-recreate-webhooks`, the spelling its usage prints, whichever form the
+// operator typed it in), and empty where the run did not pass it, which is
+// [provision.FreshSwitch]'s "not asked".
+func (f freshSwitch) value() provision.FreshSwitch {
+	if f.on == nil || !*f.on {
+		return ""
+	}
+	return provision.FreshSwitch("-" + f.name)
+}
+
 // webhookMintsInto is the variable a run can mint a webhook secret into: the
 // whole `${VAR}` ref names, where the run registers a hook at all, and either
 // asked for a fresh secret or ref resolves to nothing — a secret that resolves

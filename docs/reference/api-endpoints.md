@@ -2848,7 +2848,14 @@ failed did not observe anything.
 `recreate_webhooks` re-registers with a fresh secret and is **destructive
 across deployments**: the previous secret stops working everywhere else this
 company runs. On GitLab it also rotates every seat's token, which revokes the
-credential each agent is currently authenticating with.
+credential each agent is currently authenticating with. A fresh secret is
+minted into the whole `${VAR}` the secret's field names, so on GitHub, Jira
+and Confluence a field holding a literal — or a reference inside other text —
+has nowhere to put one, and the pass is refused naming the field, its shape
+(never its value) and `recreate_webhooks` itself: point the field at a whole
+`${VAR}` and send it again, or leave `recreate_webhooks` out to register the
+value the field holds as it is. GitLab leaves a literal signing secret alone
+and rotates the seats' tokens all the same.
 
 **No pass on this surface deletes anything.** Decommissioning a service
 account whose seat left the configuration stays a command-line gesture,
