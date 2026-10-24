@@ -86,7 +86,7 @@ describe("structure", () => {
           { path: ["integrations", "github", "tier"], value: "developer" },
         ],
       },
-      { type: "updateCompany", set: [{ path: ["mission"], value: "Make better things." }] },
+      { type: "updateCompany", set: [{ path: ["name"], value: "Acme Labs" }] },
       {
         type: "updateSeat",
         target: "seat:sre",
@@ -110,9 +110,9 @@ describe("structure", () => {
         { ref: { key: "seat:sre", kind: "seat", name: "SRE" }, fields: ["integrations.github"] },
       ]),
     );
-    expect(changes.charter).toEqual(["mission"]);
+    expect(changes.companyRename).toEqual({ before: "Acme", after: "Acme Labs" });
     expect(changes.summary).toBe(
-      "Added 1 seat, removed 1 seat and 1 unit, renamed 1 seat, moved 1 seat, edited 2 seats, edited the charter",
+      "Added 1 seat, removed 1 seat and 1 unit, renamed 1 seat, moved 1 seat, edited 2 seats, renamed the company to Acme Labs",
     );
   });
 
@@ -439,10 +439,7 @@ describe("without a derivation", () => {
   });
 
   test("an empty base needs no derivation, and a template reads as the company it creates", () => {
-    const built = templateIntent(
-      { template: "new_company", charter: { name: "Acme" } },
-      countingKeys(),
-    );
+    const built = templateIntent({ template: "new_company", name: "Acme" }, countingKeys());
     if (!built.ok) throw new Error(built.message);
     const recorded = record(EMPTY_DRAFT, built.intent);
     if (!recorded.ok) throw new Error(recorded.message);

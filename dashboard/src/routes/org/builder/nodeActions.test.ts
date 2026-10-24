@@ -11,10 +11,14 @@
  * a unit declares no lead.
  */
 
-import { describe, expect, test } from "vitest";
-import type { LeadView, UnitView } from "./chartModel.ts";
+import { describe, expect, test, vi } from "vitest";
+import type { MenuEntry, MenuItem } from "@crewlethq/ui";
+import type { BuilderApi, CompanyEdit } from "./BuilderContext.tsx";
+import type { CompanyView, LeadView, UnitView } from "./chartModel.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
-import { leadChipLabel, leadLabel, leadSentence } from "./nodeActions.tsx";
+import { fixtureCompany } from "./model/testkit.ts";
+import { editLabel, leadChipLabel, leadLabel, leadSentence, nodeMenu } from "./nodeActions.tsx";
+import { keyedState, scopedState } from "./testState.ts";
 
 /** A unit with the lead answer under test and nothing else that matters here. */
 function unit(lead: LeadView | null | undefined): UnitView {
@@ -99,5 +103,86 @@ describe("a unit's lead, as a screen reader hears it", () => {
     expect(leadSentence(unit(led("VP Engineering")))).toBe("Lead: VP Engineering.");
     expect(leadSentence(unit(null))).toBe("No lead.");
     expect(leadSentence(unit(undefined))).toBe("Lead after the check.");
+  });
+});
+
+/*
+ * THE COMPANY'S EDIT IS ITS PRINCIPLES. Its mission, vision and standing
+ * policies are written on Company › Principles alone, so once the company
+ * exists its Edit goes there, named for them, and the builder's one company
+ * field, the name, is an entry of its own.
+ */
+describe("the company's menu", () => {
+  const company: CompanyView = {
+    type: "company",
+    key: COMPANY_KEY,
+    name: "Acme",
+    seats: [],
+    units: [],
+  };
+
+  function api(principles: CompanyEdit, state = keyedState(fixtureCompany())): BuilderApi {
+    return {
+      state,
+      readOnly: false,
+      principles,
+      openEditor: vi.fn(),
+      openCompanyRename: vi.fn(),
+      openAdd: vi.fn(),
+    } as unknown as BuilderApi;
+  }
+
+  const items = (menu: MenuEntry[]): MenuItem[] =>
+    menu.filter((e): e is MenuItem => e.kind !== "separator");
+  const entries = (menu: MenuEntry[]) => items(menu).map((e) => [e.label, e.disabled === true]);
+  const item = (menu: MenuEntry[], label: string) => items(menu).find((e) => e.label === label)!;
+
+  test("a reader who may write them is offered Edit principles and Rename company", () => {
+    const at = api("write");
+    const menu = nodeMenu(at, company, vi.fn());
+    expect(entries(menu)).toEqual([
+      ["Add unit", false],
+      ["Add agent seat", false],
+      ["Add human seat", false],
+      ["Edit principles", false],
+      ["Rename company", false],
+    ]);
+    item(menu, "Edit principles").onSelect();
+    expect(at.openEditor).toHaveBeenCalledWith(COMPANY_KEY);
+    item(menu, "Rename company").onSelect();
+    expect(at.openCompanyRename).toHaveBeenCalledTimes(1);
+  });
+
+  test("a reader who may only read them is offered to open them, not to edit them", () => {
+    expect(editLabel(api("read"), company)).toBe("Open principles");
+    expect(entries(nodeMenu(api("read"), company, vi.fn()))).toContainEqual([
+      "Open principles",
+      false,
+    ]);
+  });
+
+  // A LEAD'S DRAFT may open the principles to read them, and is refused the
+  // rename with the reason every company change gets.
+  test("a lead's draft refuses the rename, with the reason", () => {
+    const menu = nodeMenu(
+      api("read", scopedState(fixtureCompany(), "engineering")),
+      company,
+      vi.fn(),
+    );
+    expect(item(menu, "Rename company")).toMatchObject({
+      disabled: true,
+      description:
+        "The company's name and settings are not part of Engineering: changing them takes Admin access.",
+    });
+  });
+
+  // A COMPANY STILL BEING CREATED has no Principles page yet: its Edit is the
+  // name form, and it has no separate rename.
+  test("a company this draft is creating is edited like any other node", () => {
+    const at = api(null);
+    expect(editLabel(at, company)).toBe("Edit Acme");
+    const labels = entries(nodeMenu(at, company, vi.fn())).map(([label]) => label);
+    expect(labels).toContain("Edit");
+    expect(labels).not.toContain("Rename company");
   });
 });

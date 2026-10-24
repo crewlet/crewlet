@@ -143,7 +143,7 @@ describe("a lead's draft", () => {
     fireEvent.click(screen.getByRole("button", { name: "Rename the company" }));
     expect(
       await screen.findByText(
-        "The company's charter and settings are not part of Engineering: changing them takes Admin access.",
+        "The company's name and settings are not part of Engineering: changing them takes Admin access.",
       ),
     ).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: "Add an analyst" }));

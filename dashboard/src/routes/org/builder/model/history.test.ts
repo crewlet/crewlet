@@ -98,17 +98,18 @@ function randomIntent(draft: Draft, rand: () => number, keys: KeySource, label: 
     case 2:
       return seat
         ? { type: "remove", target: seat.key }
-        : { type: "updateCompany", set: [{ path: ["mission"], value: label }] };
+        : { type: "updateCompany", set: [{ path: ["name"], value: `Company ${label}` }] };
     case 3:
       return seat
         ? { type: "renameSeat", target: seat.key, name: `${seat.data.name} ${label}` }
-        : { type: "updateCompany", set: [{ path: ["vision"], value: label }] };
+        : { type: "updateCompany", set: [{ path: ["name"], value: `Company ${label}` }] };
     case 4:
       return unitNode
         ? { type: "renameUnit", target: unitNode.key, name: `${unitNode.data.name} ${label}` }
-        : { type: "updateCompany", set: [{ path: ["mission"], value: label }] };
+        : { type: "updateCompany", set: [{ path: ["name"], value: `Company ${label}` }] };
     case 5: {
-      if (!seat) return { type: "updateCompany", set: [{ path: ["vision"], value: label }] };
+      if (!seat)
+        return { type: "updateCompany", set: [{ path: ["name"], value: `Company ${label}` }] };
       const parent = pick(parents)!;
       return { type: "move", target: seat.key, to: placementIn(parent, "seat", seat.key) };
     }
@@ -126,7 +127,7 @@ function randomIntent(draft: Draft, rand: () => number, keys: KeySource, label: 
                 : { path: [f], value: seat.data[f] },
             ),
           }
-        : { type: "updateCompany", set: [{ path: ["mission"], value: label }] };
+        : { type: "updateCompany", set: [{ path: ["name"], value: `Company ${label}` }] };
     case 7:
       return unitNode
         ? {
@@ -134,7 +135,7 @@ function randomIntent(draft: Draft, rand: () => number, keys: KeySource, label: 
             target: unitNode.key,
             ...(rand() < 0.3 || !seat ? {} : { lead: seat.data.name }),
           }
-        : { type: "updateCompany", set: [{ path: ["mission"], value: label }] };
+        : { type: "updateCompany", set: [{ path: ["name"], value: `Company ${label}` }] };
     case 8:
       return seat
         ? {
@@ -142,7 +143,7 @@ function randomIntent(draft: Draft, rand: () => number, keys: KeySource, label: 
             target: seat.key,
             manages: seats.filter(() => rand() < 0.3).map((s) => s.data.name),
           }
-        : { type: "updateCompany", set: [{ path: ["vision"], value: label }] };
+        : { type: "updateCompany", set: [{ path: ["name"], value: `Company ${label}` }] };
     default:
       return unitNode
         ? {
@@ -150,7 +151,7 @@ function randomIntent(draft: Draft, rand: () => number, keys: KeySource, label: 
             target: unitNode.key,
             set: [{ path: ["purpose"], value: `purpose ${label}` }],
           }
-        : { type: "updateCompany", set: [{ path: ["vision"], value: label }] };
+        : { type: "updateCompany", set: [{ path: ["name"], value: `Company ${label}` }] };
   }
 }
 

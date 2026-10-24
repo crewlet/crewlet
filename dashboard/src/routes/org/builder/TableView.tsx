@@ -46,7 +46,15 @@ import { plural } from "~/lib/format.ts";
 import { useBuilder, useBuilderView, type BuilderApi } from "./BuilderContext.tsx";
 import type { NodeView } from "./chartModel.ts";
 import type { NodeKey } from "./model/keys.ts";
-import { addSections, isDeletable, leadLabel, rowMenu, type OpenScreen } from "./nodeActions.tsx";
+import {
+  addSections,
+  editGlyph,
+  editLabel,
+  isDeletable,
+  leadLabel,
+  rowMenu,
+  type OpenScreen,
+} from "./nodeActions.tsx";
 import {
   LiveState,
   nodeTone,
@@ -60,7 +68,7 @@ import { NodeGlyph, seatKindLabel, seatMark, unitTypeLabel } from "~/ui/orgNodes
 import { addLabel } from "./AddNodeDialog.tsx";
 import { useReorder, type Reorder } from "./reorder.ts";
 import { useOpenScreen, useStructure } from "./useCharts.ts";
-import { TrashGlyph, PencilGlyph, EllipsisVerticalGlyph } from "@crewlethq/icons/glyphs";
+import { TrashGlyph, EllipsisVerticalGlyph } from "@crewlethq/icons/glyphs";
 import {
   EmptyValue,
   IconButton,
@@ -362,8 +370,8 @@ function RowControls({
       <OrgTableActions>
         <IconButton
           size="sm"
-          label={`Edit ${name}`}
-          icon={<PencilGlyph />}
+          label={editLabel(api, view, name)}
+          icon={editGlyph(api, view)}
           onClick={() => api.openEditor(view.key)}
         />
         {isDeletable(view) && (
