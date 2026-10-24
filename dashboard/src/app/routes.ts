@@ -305,7 +305,7 @@ export function resolve(path: string[]): Route {
   });
   // THE ROW THE ADDRESS IS IN, by the longest prefix it owns (`nav.ts`), so a
   // page nothing resolves under Company is Not Found under the row a reader
-  // was in: `#/company/org/x` under the Org chart, not under Overview.
+  // was in: `#/company/org/x` under the Org chart, not under Principles.
   const under = (label: string) => `“${rest.join("/")}” under ${label}`;
   switch (head) {
     case "home":

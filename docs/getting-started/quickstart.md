@@ -602,7 +602,7 @@ a condition the engine itself raised takes over the sentence under the
 greeting.
 
 The sidebar reads top to bottom: Home, Inbox and My work; the Company group
-(Overview, Policies, Org chart, Schedules, Integrations and Budgets); the
+(Principles, Brand, Org chart, Schedules, Integrations and Budgets); the
 Workspace group (Worklet, Chatlet, Doclet, Artifacts and Live); and Settings at
 its foot. Each workspace's sections are tabs in its page header, or Chatlet's
 rail beside its rooms. `g` then a letter jumps between them, and `?` lists
