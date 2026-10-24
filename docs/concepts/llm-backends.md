@@ -294,8 +294,12 @@ providers:
 **`model` is required.** A CLI with no model named runs the vendor's current
 default, which moves under you and bills as a model nobody chose. A reference
 that resolves to nothing is refused when the entry is built for the same reason,
-where a missing *credential* still builds: every call then fails with the CLI's
-own sign-in error, which names it, and a missing model has no such tell.
+naming the variable: one nothing answers for, one set to an empty value or to
+white space (a compose file passing an unset host variable through, an empty
+stored secret), and one part of a composite like `${PROVIDER}/sonnet` alike. A
+missing *credential* still builds: every call then fails with the CLI's own
+sign-in error, which names it, and a missing model has no such tell. The model
+is trimmed before the CLI is handed it.
 
 **`timeout_seconds` caps one invocation, wall clock**: the process launch, the
 model's whole answer and the CLI's own internal retries and backoff. Ten

@@ -25,6 +25,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
@@ -150,12 +151,29 @@ func BuildCLIAgent(key string, spec config.LLMProvider, r *config.Resolver) (*cl
 	// one thing they have to change. A missing CREDENTIAL still builds,
 	// because every call then fails with the CLI's own sign-in error that
 	// names it; a missing model has no such tell.
-	model, modelMissing := r.Expand(spec.Model)
-	if len(modelMissing) > 0 && strings.TrimSpace(model) == "" {
+	//
+	// "RESOLVED TO NOTHING" IS THE PRESENCE RULE, NOT SUBSTITUTION'S. Expand
+	// reports a name only when no source answered, so a variable set to ""
+	// — compose passing through an unset host variable, an empty Kubernetes
+	// env value, an empty stored secret, which the resolver treats as
+	// authoritative — expanded to "" with nothing reported, and the entry
+	// built with no model at all. [config.Resolver.Missing] counts an empty
+	// answer as absent and tests every reference rather than the result, so
+	// `${PROVIDER}/sonnet` with PROVIDER unset is refused too instead of
+	// handing the CLI "/sonnet". The blank check catches what is left: a
+	// value that is all white space, which no CLI reads as a model.
+	model := strings.TrimSpace(r.Value(spec.Model))
+	if missing := r.Missing(spec.Model); len(missing) > 0 || model == "" {
+		if len(missing) == 0 {
+			// Every reference answered, with white space: config refuses
+			// a blank written field, so the blank came from them.
+			missing = envref.Names(spec.Model)
+		}
 		return nil, fmt.Errorf(
-			"engine: provider %q: model is %q and %s resolved to nothing. Set "+
-				"it in the environment, or with `crewlet secrets set`",
-			key, spec.Model, strings.Join(modelMissing, ", "))
+			"engine: provider %q: model is %q and %s resolved to nothing — unset, "+
+				"or set to an empty value. Set it in the environment, or with "+
+				"`crewlet secrets set`",
+			key, spec.Model, strings.Join(missing, ", "))
 	}
 	// RESOLVED HERE for the same reason: a child handed the raw map would
 	// receive the literal reference as its value.

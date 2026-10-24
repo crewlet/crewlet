@@ -114,19 +114,72 @@ func TestAnEntrysConventionalCredentialIsReadThroughTheStore(t *testing.T) {
 // would bill and answer as a model nobody chose. Naming the variable sends
 // them to the one thing they have to change, which is the rule every error in
 // this tree is held to.
+//
+// "Resolved to nothing" is every way a reference gives the CLI no model, not
+// only a variable nobody set: one set to "" (compose passing an unset host
+// variable through, an empty stored secret, which is authoritative) built an
+// entry with no model at all, and a composite reference with one part unset
+// handed the CLI the rest of it ("/sonnet") as a model.
 func TestAnUnresolvedModelNamesTheVariable(t *testing.T) {
 	t.Parallel()
-	_, err := BuildCLIAgent("default", config.LLMProvider{
+	for _, tc := range []struct {
+		name   string
+		model  string
+		values map[string]string
+		names  []string
+	}{
+		{name: "unset", model: "${LLM_MODEL}", names: []string{"LLM_MODEL"}},
+		{
+			name: "set to an empty value", model: "${LLM_MODEL}",
+			values: map[string]string{"LLM_MODEL": ""}, names: []string{"LLM_MODEL"},
+		},
+		{
+			name: "set to white space", model: "${LLM_MODEL}",
+			values: map[string]string{"LLM_MODEL": "  \t"}, names: []string{"LLM_MODEL"},
+		},
+		{
+			name: "a composite with one part unset", model: "${PROVIDER}/sonnet",
+			names: []string{"PROVIDER"},
+		},
+		{
+			name: "a composite with one part set to an empty value", model: "${PROVIDER}/${MODEL}",
+			values: map[string]string{"PROVIDER": "", "MODEL": "sonnet"}, names: []string{"PROVIDER"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := BuildCLIAgent("default", config.LLMProvider{
+				Agent:    config.CLIOpenCode,
+				Model:    tc.model,
+				StateDir: t.TempDir(),
+			}, tierB(tc.values))
+			if err == nil {
+				t.Fatalf("an entry whose model %q resolved to nothing built", tc.model)
+			}
+			for _, want := range append([]string{`"default"`, tc.model}, tc.names...) {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not name %q: %v", want, err)
+				}
+			}
+		})
+	}
+}
+
+// A MODEL IS HANDED TO THE CLI TRIMMED. White space around a resolved value —
+// a stored secret pasted with its newline — is no part of any model's name,
+// and a padded --model argument is one the CLI refuses as a model it has
+// never heard of.
+func TestAResolvedModelIsTrimmed(t *testing.T) {
+	t.Parallel()
+	p, err := BuildCLIAgent("default", config.LLMProvider{
 		Model:    "${LLM_MODEL}",
 		StateDir: t.TempDir(),
-	}, tierB(nil))
-	if err == nil {
-		t.Fatal("a provider with no model built")
+	}, tierB(map[string]string{"LLM_MODEL": " sonnet\n"}))
+	if err != nil {
+		t.Fatalf("BuildCLIAgent: %v", err)
 	}
-	for _, want := range []string{"default", "${LLM_MODEL}", "LLM_MODEL"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal does not name %q: %v", want, err)
-		}
+	if got := p.Model(); got != "sonnet" {
+		t.Errorf("Model() = %q, want %q", got, "sonnet")
 	}
 }
 
