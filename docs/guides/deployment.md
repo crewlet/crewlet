@@ -201,7 +201,7 @@ less than 1 GiB, so setting them only moves the figure up.
   already exist; `crewlet retention set-capacity` is what changes a running
   log's ceiling. A log derived from the disk that is created later — one a new
   version adds — is sized from what the existing logs' ceilings leave of that
-  half, so logs that already hold all of it leave it the 1 GiB floor.
+  share, so logs that already hold all of it leave it the 1 GiB floor.
 
 [Replication](replication.md#how-the-byte-ceilings-are-sized) has the whole
 arithmetic and the refusal's text.
@@ -786,9 +786,10 @@ own cap then refuses what does not fit, by name. See
 **A `max_payload` of at least 8 MiB, on every server.** That is the largest
 single message the engine sends — an event, a webhook delivery, a state-log
 record at the largest its log declares (the tracker's, the knowledge base's,
-the vector changelog's and the usage log's are 8 MiB less 4 KiB, which is
-8 MiB on the wire once the record is signed) — and the embedded broker is configured at exactly
-that; nats-server's own default is 1 MiB. Set `max_payload: 8MB` in the
+the vector changelog's, the usage log's and the code log's are 8 MiB less
+4 KiB, which is 8 MiB on the wire once the record is signed) — and the
+embedded broker is configured at exactly that; nats-server's own default is
+1 MiB. Set `max_payload: 8MB` in the
 configuration of every server in the cluster (nats-server reads `MB` as
 mebibytes, so that is exactly the 8388608 bytes the engine needs). A server
 holds a connection to the **lowest** of its own `max_payload` and the payload

@@ -688,7 +688,9 @@ and the pages' questions, takes and serves a project's files, and offers the
 tracker's and the knowledge base's tools to the dashboard's buttons and to
 your own assistant over [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant),
 from that revision on, with nothing restarted — an assistant already
-connected sees them at its next listing:
+connected that listens for tool changes (the 2026-07-28 MCP protocol's
+`subscriptions/listen` stream) is told at once and lists again, and one on an
+earlier protocol sees them at its next listing:
 
 ```bash
 export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"

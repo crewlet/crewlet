@@ -1214,10 +1214,11 @@ permitted as request headers, and a preflight is cacheable for ten minutes —
 short enough that removing an origin takes effect within one.
 
 The auth middleware compares tokens in constant time (`crypto/subtle`).
-A credential presented and refused logs `api_auth_failed` at WARNING (never
-the candidate token value) — a wrong Basic password on `/git/*` included, with
-reason `invalid_credential` — while a request that presented none — a
-signed-out tab, an invitation's page — logs `api_auth_anonymous` at DEBUG. A
+A credential presented and refused logs `api_auth_failed` at WARNING with
+reason `credential_refused`, the route and the resolved client address (never
+the candidate token value) — a wrong Basic password on `/git/*` included —
+while a request that presented none — a signed-out tab, an invitation's page —
+logs `api_auth_anonymous` at DEBUG. A
 git request under `/git/*` that presented none is answered git's Basic
 challenge and logs `api_auth_challenge` at DEBUG, because git's first request
 never carries a credential: it asks its credential helper only once the `401`

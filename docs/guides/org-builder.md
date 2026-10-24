@@ -408,7 +408,7 @@ parts:
 
 | Node | Tabs |
 |---|---|
-| Agent seat | **Profile** (name, email, handle, kind, profile icon, goal, backstory, responsibilities, behavioral guidelines), **Work** (manages, owns, schedules), **Model** (providers and token ceilings), **Integrations** (one card per connected tool), **Advanced** (what the configuration document sets, and Delete) |
+| Agent seat | **Profile** (name, email, handle, kind, profile icon, goal, backstory, responsibilities, behavioral guidelines), **Work** (manages, owns, schedules), **Model** (providers and token ceilings), **Integrations** (the seat's code access first, where a code host reads it, then one card per connected tool), **Advanced** (what the configuration document sets, and Delete) |
 | Human seat | **Profile** (name, email, handle and kind; the **Person** who holds the seat; and the role: goal, backstory, responsibilities), **Contact** (contact identities and availability), **Work** (manages, and Delete) |
 | Unit | **Profile** (name, key, type, purpose, goals), **Leadership** (lead and channel), **Work** (owns, references, schedules), **Advanced** (tool credentials, and Delete) |
 
@@ -530,16 +530,17 @@ seat. See [Tool Skills](../concepts/tool-skills.md).
 
 ### Seat code access
 
-An agent seat's **Code** section holds its code access (`code.access`): read
-only (the default), review or full access. It is one setting for every code
-host the company runs — on the engine's own [code host](code.md) it caps what
-the chart grants the seat, and on GitHub it is the permission set the seat's
-app is created with — so it is drawn when the company is connected to GitHub
-or sets `code.native`, and not otherwise. A human seat has none: a person acts
+An agent seat's **Code** section, first on its **Integrations** tab, holds its
+code access (`code.access`): read only (the default), review or full access.
+It is one setting for every code host the company runs — on the engine's own
+[code host](code.md) it caps what the chart grants the seat, and on GitHub it
+is the permission set the seat's app is created with — so it is drawn when the
+company is connected to GitHub or sets `code.native`, and not otherwise. A human seat has none: a person acts
 as their own identity on every code host. A seat's GitHub app permissions are
 fixed when the app is created, so after changing the access of a seat whose
-app exists, raise the app's permissions at GitHub as well; the GitHub section
-says so beside the app.
+app exists, raise the app's permissions at GitHub as well; the GitHub card
+below says so beside the app. The GitHub card itself carries no tier: it holds
+the seat's repositories and its app, and the access is this section's alone.
 
 ### Seat integrations
 
