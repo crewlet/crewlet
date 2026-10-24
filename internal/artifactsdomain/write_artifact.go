@@ -27,9 +27,6 @@ import (
 // one source for the first time contend there and one wins, the other told
 // [ErrSourceTaken].
 func (w *Writer) Create(ctx context.Context, c Call, in CreateInput) (Published, error) {
-	if in.Folder != "" {
-		return Published{}, fmt.Errorf("%w: create an artifact in a folder", ErrNotBuilt)
-	}
 	if err := validCall(c); err != nil {
 		return Published{}, err
 	}
@@ -46,13 +43,7 @@ func (w *Writer) Create(ctx context.Context, c Call, in CreateInput) (Published,
 	}
 	id := artifacts.IDFor(opID)
 	versionID := versionIDOf(opID)
-	subject, scope := ArtifactSubject(id), ScopeSet{Subject: true}
-	if in.SourceKey != "" {
-		subject = SourceSubject(in.Owner, in.SourceKey)
-		scope = ScopeSet{Terms: []ScopeTerm{
-			{Kind: TermSource, ID: subject.ID}, artifactTerm(id.String()),
-		}}
-	}
+	subject, scope := createScope(id, in)
 	shares := make([]artifacts.Share, len(in.Shares))
 	for i, s := range in.Shares {
 		shares[i] = artifacts.Share{Audience: s.Audience, Role: s.Role,
@@ -62,7 +53,7 @@ func (w *Writer) Create(ctx context.Context, c Call, in CreateInput) (Published,
 	payload := CreatePayload{
 		V: baseRecordVersion, Artifact: id.String(), Kind: in.Kind, Title: in.Title,
 		Description: in.Description, Icon: in.Icon, Owner: in.Owner,
-		OwnerKind: in.OwnerKind, SourceKey: in.SourceKey,
+		OwnerKind: in.OwnerKind, SourceKey: in.SourceKey, Folder: in.Folder,
 		Version: VersionPayload{
 			Number: 1, VersionID: versionID.String(), Label: first.Label,
 			Contract: first.Contract, Capabilities: canonicalCapabilities(first.Capabilities),
@@ -85,6 +76,11 @@ func (w *Writer) Create(ctx context.Context, c Call, in CreateInput) (Published,
 				return statelog.Decision{}, err
 			} else if marked {
 				return statelog.Decision{}, fmt.Errorf("%w: %s", ErrPurged, id)
+			}
+			if in.Folder != "" {
+				if live, err := folderLive(ctx, tx, in.Folder); err != nil || !live { //nolint:govet // shadow: scoped to this block; see .golangci.yml
+					return statelog.Decision{}, errors.Join(err, folderAbsent(err, in.Folder))
+				}
 			}
 			plan, refusal, err := planObjects(ctx, tx, id.String(), payload.Version.Manifest.Files, nil) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			if err != nil {
@@ -112,8 +108,31 @@ func (w *Writer) Create(ctx context.Context, c Call, in CreateInput) (Published,
 	return out, w.refused(ctx, id.String(), e)
 }
 
+// createScope is a create's subject and scope: the artifact's own subject, or
+// its source address's where it has one (both named), beside the folder it is
+// created in, which the create reads and so orders behind any record about.
+func createScope(id artifacts.ID, in CreateInput) (Subject, ScopeSet) {
+	subject := ArtifactSubject(id)
+	var terms []ScopeTerm
+	if in.SourceKey != "" {
+		subject = SourceSubject(in.Owner, in.SourceKey)
+		terms = append(terms, ScopeTerm{Kind: TermSource, ID: subject.ID})
+	}
+	if in.SourceKey == "" && in.Folder == "" {
+		return subject, ScopeSet{Subject: true}
+	}
+	terms = append(terms, artifactTerm(id.String()))
+	if in.Folder != "" {
+		terms = append(terms, FolderTerm(in.Folder))
+	}
+	return subject, ScopeSet{Terms: terms}
+}
+
 // checkCreate refuses a create the domain would never write.
 func checkCreate(c Call, in CreateInput, at time.Time) error {
+	if in.Folder != "" && !validFolderID(in.Folder) {
+		return fmt.Errorf("%w: %q", ErrFolderNotFound, in.Folder)
+	}
 	if !in.Kind.Valid() {
 		return fmt.Errorf("%w: kind %q is not one of %v", ErrInvalid, in.Kind, artifacts.Kinds)
 	}

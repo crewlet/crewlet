@@ -19,8 +19,10 @@ import (
 // This is the identity claim the domain declares ([artifactsdomain.Domain]
 // claims identity), held across the cases that make it hard: creates, publishes
 // that race on one artifact from both nodes, carries, retention, shares and
-// narrowings, assets, links to work items, pins and a purge, all through two
-// independent publishers and appliers. Every Replicated table is compared
+// narrowings, assets, links to work items, pins, a purge, and the folder tree
+// (chains, renames, moves and a removal on the one tree subject both nodes
+// write, and artifacts filed in it), all through two independent publishers
+// and appliers. Every Replicated table is compared
 // whole.
 //
 // Mutation: write the applying node's own clock into any row (time.Now for a
@@ -101,6 +103,31 @@ func TestTwoNodesConvergeOnOneLogAndAReplayRebuildsTheirEstate(t *testing.T) {
 		}
 		if _, err := n.writer.Opened(ctx, c, shared); err != nil {
 			failures <- fmt.Errorf("%s opened: %w", label, err)
+			return
+		}
+		// THE FOLDER TREE, ONE SUBJECT BOTH NODES WRITE AT ONCE: a chain,
+		// a rename, a move of a folder, and an artifact filed, each node
+		// deciding against a tree the other keeps changing.
+		chain, err := n.writer.CreateFolders(ctx, c, artifactsdomain.FolderCreateInput{
+			Names: []string{"Team " + label, "Inbox"}, Parents: true,
+			Visibility: artifactsdomain.FolderCompany, Owner: c.Authority.Actor.Name,
+			OwnerKind: c.Authority.Actor.Kind,
+		})
+		if err != nil {
+			failures <- fmt.Errorf("%s folders: %w", label, err)
+			return
+		}
+		inbox := chain.Folders[1].ID
+		if _, err := n.writer.Move(ctx, c, own, inbox); err != nil {
+			failures <- fmt.Errorf("%s file: %w", label, err)
+			return
+		}
+		if _, err := n.writer.RenameFolder(ctx, c, inbox, "Inbox of "+label); err != nil {
+			failures <- fmt.Errorf("%s rename: %w", label, err)
+			return
+		}
+		if _, err := n.writer.MoveFolder(ctx, c, inbox, ""); err != nil {
+			failures <- fmt.Errorf("%s move folder: %w", label, err)
 		}
 	}
 	wg.Add(2)
@@ -122,6 +149,19 @@ func TestTwoNodesConvergeOnOneLogAndAReplayRebuildsTheirEstate(t *testing.T) {
 	if _, err := b.writer.Purge(t.Context(), bob, doomed); err != nil {
 		t.Fatalf("purge: %v", err)
 	}
+	// A REMOVAL RE-FILES WHAT ITS FOLDER HELD, on whichever node applies it.
+	b.drain()
+	tree, err := b.reader.Folders(t.Context(), artifactsdomain.Viewer{Record: "bob"}, statelog.Freshness{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range tree.Folders {
+		if f.Name == "Inbox of jane" {
+			if _, err := b.writer.RemoveFolder(t.Context(), bob, f.ID); err != nil {
+				t.Fatalf("remove: %v", err)
+			}
+		}
+	}
 	a.drain()
 	b.drain()
 
@@ -141,8 +181,12 @@ func TestTwoNodesConvergeOnOneLogAndAReplayRebuildsTheirEstate(t *testing.T) {
 				table, want, got)
 		}
 	}
-	if a.table("artifacts") == "" || a.table("artifact_objects") == "" {
+	if a.table("artifacts") == "" || a.table("artifact_objects") == "" || a.table("artifact_folders") == "" ||
+		a.table("artifact_folder_shares") == "" || a.table("artifact_folder_history") == "" {
 		t.Fatal("the compared estate is empty, so the comparison proves nothing")
+	}
+	if got := a.count(`SELECT COUNT(*) FROM artifact_folders WHERE status = 'removed'`); got != 1 {
+		t.Errorf("the estate holds %d removed folders, want the one removed", got)
 	}
 }
 

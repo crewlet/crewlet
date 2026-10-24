@@ -206,6 +206,7 @@ func folderCreatePayload(id string) artifactsdomain.FolderCreatePayload {
 	}
 	return artifactsdomain.FolderCreatePayload{
 		V: 1, Owner: "suite", OwnerKind: iam.ActorHuman, MaxDepth: artifacts.MaxFolderDepth,
+		MaxFolders: artifacts.MaxFolders, MaxChildren: artifacts.MaxFolderChildren,
 		Folders: []artifactsdomain.FolderSpec{{
 			ID: artifactsdomain.FolderIDOf("suite-folder-"+id, 0).String(), Name: name, NameKey: key,
 		}},
