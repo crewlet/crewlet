@@ -162,10 +162,11 @@ export function BrandPage() {
 
   const facts: Fact[] = adoption
     ? [
-        {
-          label: "Adopted",
-          value: `${fmtDate(adoption.adopted_at)} by ${actorName(adoption.adopted_by, people.seatName)}`,
-        },
+        // TWO FACTS, EACH ONE SHORT LINE: the day and the person as one
+        // value wrapped to three lines in its track ("Adopted / Oct 24, 2026
+        // by / Maya Chen") on a wide page.
+        { label: "Adopted", value: fmtDate(adoption.adopted_at) },
+        { label: "Adopted by", value: actorName(adoption.adopted_by, people.seatName) },
         {
           label: "Version",
           value: String(adoption.kit_version),

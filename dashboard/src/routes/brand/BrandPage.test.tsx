@@ -116,8 +116,10 @@ test("a reader reads the adopted brand card by card and is handed no control", a
   expect(screen.getByRole("list", { name: "Write like this" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: /^Edit / })).toBeNull();
   expect(screen.queryByRole("button", { name: /More brand actions/ })).toBeNull();
-  // WHO ADOPTED IT AND WHICH VERSION, linked to the kit.
-  expect(screen.getByText(/by maya/)).toBeTruthy();
+  // WHO ADOPTED IT, AS A FACT OF ITS OWN beside the day (one value wrapped to
+  // three lines in its track), and which version, linked to the kit.
+  expect(screen.getByText("Adopted by")).toBeTruthy();
+  expect(screen.getByText("maya")).toBeTruthy();
 });
 
 test("a reader with no brand adopted is told what that means, and offered nothing", async () => {
