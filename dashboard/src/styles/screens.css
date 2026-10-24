@@ -11803,7 +11803,7 @@ a.live-row:focus-visible {
   margin-top: var(--spacing-3);
 }
 /* The Logos card: the name over three slots, the two wide logos side by side
-   and the mark beside them; one a row on a phone. */
+   and the mark beside them; two a row on a phone. */
 .brand-logos,
 .brand-colours,
 .brand-voice,
@@ -11828,6 +11828,16 @@ a.live-row:focus-visible {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(14rem, 100%), 1fr));
   gap: var(--spacing-3) var(--spacing-4);
+}
+/* ON A PHONE THE LOGOS AND THE SWATCHES GO TWO A ROW, as the approved page
+   draws them: one a row stood the page about 3400px tall at 390. The
+   editor's colour fields keep their own measure, which an input needs. */
+@container page (width < 640px) {
+  .brand-logo-slots,
+  .brand-swatches {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--spacing-3);
+  }
 }
 .brand-contrast,
 .brand-warnings {
