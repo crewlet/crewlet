@@ -72,6 +72,10 @@ func (createReads) Usage(context.Context) (artifactsdomain.Usage, error) {
 	return artifactsdomain.Usage{Complete: true}, nil
 }
 
+func (createReads) Brand(context.Context, statelog.Freshness) (artifactsdomain.Adoption, bool, error) {
+	return artifactsdomain.Adoption{}, false, errSpikeReads
+}
+
 // noWrites is the write side: the byte leg decides nothing.
 type noWrites struct{}
 
@@ -88,6 +92,10 @@ func (noWrites) Publish(context.Context, artifactsdomain.Call, artifactsdomain.P
 
 func (noWrites) AddAsset(context.Context, artifactsdomain.Call, artifactsdomain.AssetInput) (artifactsdomain.Asset, artifactsdomain.Written, error) {
 	return artifactsdomain.Asset{}, artifactsdomain.Written{}, errSpikeWrites
+}
+
+func (noWrites) AdoptBrand(context.Context, artifactsdomain.Call, artifactsdomain.BrandAdoptInput) (artifactsdomain.Written, error) {
+	return artifactsdomain.Written{}, errSpikeWrites
 }
 
 // uploadRig is the upload service over one object store backend.
