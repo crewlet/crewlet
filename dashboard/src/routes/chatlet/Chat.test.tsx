@@ -487,7 +487,10 @@ test("an unanswered message and its same-id retry survive a look at another room
 
   fireEvent.click(screen.getByRole("button", { name: /switch rooms/i }));
   await screen.findByLabelText(/^Message #general/);
-  expect(screen.getByText("did that land?")).toBeTruthy();
+  // WAITED FOR, not read in the same breath: the room's composer and its
+  // unanswered message are drawn on separate commits, and a loaded runner
+  // put a task between them.
+  expect(await screen.findByText("did that land?")).toBeTruthy();
   const retry = await screen.findByRole("button", { name: /send again/i });
   await waitFor(() => expect(retry.getAttribute("aria-disabled")).not.toBe("true"));
   fireEvent.click(retry);

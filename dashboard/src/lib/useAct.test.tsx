@@ -233,7 +233,12 @@ test("unknown stays on screen, and its Retry sends the same operation key", asyn
   expect(posts[0]!.opId).toBeTruthy();
   expect(posts[1]!.opId).toBe(posts[0]!.opId);
 
-  // AND A NEW PRESS IS A NEW OPERATION.
+  // AND A NEW PRESS IS A NEW OPERATION, pressed once the retry has answered:
+  // a button whose write is still out is busy and takes no press, so pressed
+  // a commit early the press went nowhere.
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Pin" }).getAttribute("aria-busy")).toBeNull(),
+  );
   fireEvent.click(screen.getByRole("button", { name: "Pin" }));
   await waitFor(() => expect(posts).toHaveLength(3));
   expect(posts[2]!.opId).not.toBe(posts[0]!.opId);
