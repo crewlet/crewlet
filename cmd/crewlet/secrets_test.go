@@ -93,10 +93,11 @@ func TestASecretRoundTripsThroughTheCLI(t *testing.T) {
 	}
 }
 
-// READ-BACK IS BREAK-GLASS. There is no HTTP route that returns a value, and
-// this refuses without an explicit flag for the same reason: the common need
-// is "is X set", which the listing answers without putting a credential into
-// a terminal and a screen-share.
+// READ-BACK IS BREAK-GLASS. Neither node route that returns a value answers a
+// request that did not ask for one on purpose, and this refuses without an
+// explicit flag for the same reason: the common need is "is X set", which the
+// listing answers without putting a credential into a terminal and a
+// screen-share.
 func TestGettingASecretNeedsTheRevealFlag(t *testing.T) {
 	t.Parallel()
 	cfg := bootstrapWithKeyring(t, "k1")

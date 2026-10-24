@@ -538,13 +538,14 @@ const secretsLocalNote = "This node will put it on the fleet at its next start, 
 	"unless the fleet holds a value written after this one. " +
 	"To reach a RUNNING fleet now, re-run against a node that is up."
 
-// getSecret is the ONLY read-back, and it is break-glass.
+// getSecret is the ONLY command that prints a value, and it is break-glass.
 //
 // It refuses without an explicit flag because the overwhelmingly common need
 // is "is X set and when did it change", which the listing answers without
 // putting a credential into a terminal, a scrollback buffer and a
-// screen-share. The one HTTP route that returns a value is gated the same
-// way, by a ?reveal=true a crawl cannot reach by accident.
+// screen-share. The HTTP route it reads through a node is gated the same way,
+// by a ?reveal=true a crawl cannot reach by accident; the node's other route
+// that returns values, POST /secrets/reveal, is a POST no crawl can make.
 //
 // The access is LOGGED BY NAME, here and — when this goes through a running
 // node — there too, against the operator its own guard authenticated. A
