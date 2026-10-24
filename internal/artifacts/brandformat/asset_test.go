@@ -111,6 +111,7 @@ func TestAPNGOutsideItsRulesIsRefused(t *testing.T) {
 		"unknown chunk":  {pngOf(t, 8, 8, chunk("ZZZZ", []byte("x"))), "critical chunk"},
 		"after iend":     {append(bytes.Clone(honest), 0), "after its IEND"},
 		"after stream":   {pngWithTail(4, 4, bytes.Repeat(row, 4), []byte("hidden")), "after its compressed stream"},
+		"large profile":  {pngOf(t, 8, 8, chunk("iCCP", make([]byte, 64<<10+1))), "sRGB profile"},
 		"not png":        {[]byte("GIF89a"), "not a PNG"},
 		"too many bytes": {make([]byte, brandformat.MaxImageBytes+1), "at most"},
 	} {

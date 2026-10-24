@@ -21,7 +21,9 @@ import (
 //
 // Kept: the critical chunks, and the ancillary ones that change how the image
 // looks (transparency, gamma, chromaticities, the colour space and an ICC
-// profile of at most 64 KiB, the pixel density). Dropped: every other
+// profile of at most 64 KiB, the pixel density). A larger profile is refused,
+// never dropped: dropping it would draw the logo in other colours than the
+// file says, and only metadata is ever dropped. Dropped: every other
 // ancillary chunk, which is where text, EXIF, timestamps and editor state
 // live. Refused: an unknown critical chunk (no decoder would draw it), an
 // animated PNG (acTL, fcTL, fdAT: a logo is one frame), a bad CRC, anything
@@ -36,7 +38,7 @@ var pngKept = map[string]bool{"tRNS": true, "gAMA": true, "cHRM": true, "sRGB": 
 var pngAnimated = map[string]bool{"acTL": true, "fcTL": true, "fdAT": true}
 
 // maxICCPBytes bounds the colour profile a stored PNG keeps; a larger one is
-// dropped, the image then drawn as sRGB.
+// refused, naming the export that fixes it.
 const maxICCPBytes = 64 << 10
 
 // pngDepths are the bit depths each colour type allows (PNG 11.2.2).
@@ -111,7 +113,8 @@ func sanitizePNG(data []byte) ([]byte, int, int, error) {
 		case c.kind == "IEND" && i != len(chunks)-1:
 			return nil, 0, 0, errors.New("the PNG holds chunks after its IEND")
 		case c.kind == "iCCP" && len(c.data) > maxICCPBytes:
-			continue
+			return nil, 0, 0, fmt.Errorf("the PNG's colour profile is %d bytes and a logo's may be at "+
+				"most %d: export it with an sRGB profile", len(c.data), maxICCPBytes)
 		case critical && c.kind != "IHDR" && c.kind != "PLTE" && c.kind != "IDAT" && c.kind != "IEND":
 			return nil, 0, 0, fmt.Errorf("the PNG holds the critical chunk %q, which no decoder draws", c.kind)
 		case !critical && !pngKept[c.kind]:
