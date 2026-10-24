@@ -98,7 +98,7 @@ afterEach(async () => {
 describe("a screen that throws", () => {
   test("leaves the sidebar and ⌘K working", async () => {
     breakExport("spend", "Spend", Throws);
-    location.hash = "#/spend";
+    location.hash = "#/settings/spend";
     await mount();
     const alert = await screen.findByText("This screen could not be drawn");
     expect(alert).toBeDefined();
@@ -113,19 +113,19 @@ describe("a screen that throws", () => {
 
   test("is drawn afresh when the reader goes somewhere else", async () => {
     breakExport("spend", "Spend", Throws);
-    location.hash = "#/spend";
+    location.hash = "#/settings/spend";
     await mount();
     await screen.findByText("This screen could not be drawn");
-    await go("#/spend/budgets");
+    await go("#/company/budgets");
     await waitFor(() => expect(screen.queryByText("This screen could not be drawn")).toBeNull());
   });
 
   test("but not by a query string alone, which is the same screen", async () => {
     breakExport("spend", "Spend", Throws);
-    location.hash = "#/spend";
+    location.hash = "#/settings/spend";
     await mount();
     await screen.findByText("This screen could not be drawn");
-    await go("#/spend?range=7d");
+    await go("#/settings/spend?range=7d");
     expect(screen.getByText("This screen could not be drawn")).toBeDefined();
   });
 });
@@ -139,9 +139,11 @@ describe("a chunk that never arrives", () => {
         return { ...(await import("~/routes/spend/index.ts")), Spend: () => <p>spend, loaded</p> };
       }),
     );
-    location.hash = "#/spend";
+    location.hash = "#/settings/spend";
     await mount();
-    expect(await screen.findByText("The Spend screens could not be loaded")).toBeDefined();
+    expect(
+      await screen.findByText("The Spend and Budgets screens could not be loaded"),
+    ).toBeDefined();
     // NOT the render failure's sentence: a reload fixes this, a report does not.
     expect(screen.queryByText("This screen could not be drawn")).toBeNull();
     expect(screen.getByText(/The engine was updated/)).toBeDefined();
@@ -157,7 +159,7 @@ describe("a chunk that never arrives", () => {
 describe("a peek that throws", () => {
   test("takes its body down and leaves the rail's close and the screen behind", async () => {
     breakExport("work", "ItemPeek", Throws);
-    location.hash = `#/spend?peek=${refToken({ kind: "item", id: "ENG-42" })}`;
+    location.hash = `#/settings/spend?peek=${refToken({ kind: "item", id: "ENG-42" })}`;
     await mount();
     expect(await screen.findByText("This preview could not be drawn")).toBeDefined();
     // The rail around the body stands, with its way out…

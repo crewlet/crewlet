@@ -1,5 +1,5 @@
 /**
- * Settings › Tools & MCP: the catalogue, the servers and what every node did
+ * Settings › MCP Tools: the catalogue, the servers and what every node did
  * with them, and the form that adds one.
  *
  * The invariants, in the order they cost when they go:
@@ -258,15 +258,17 @@ function mount(
     refuse = false,
     roster = org,
     answer = status,
+    catalogue = tools,
   }: {
     viewer?: Record<string, unknown>;
     refuse?: boolean;
     roster?: unknown;
     answer?: McpServersStatusAnswer;
+    catalogue?: ToolRow[];
   } = {},
 ) {
   const store = new Store();
-  store.applyTools(tools);
+  store.applyTools(catalogue);
   store.applyOrg(withDerived(roster) as never);
   store.setConnected(true);
   const socket = new LiveSocket(store);
@@ -356,6 +358,27 @@ test("the catalogue clamps a description and keeps the whole of it in reach", as
   expect(cell.getAttribute("title")).toBe("Open an issue on a repository");
 });
 
+// THE LIST SAYS ONLY WHAT TELLS ROWS APART. A description stands alone (the
+// hint sentence under it repeated the Can tags, cut on every row), an origin
+// is words in a column drawn only where origins differ, the chips name them
+// the same way, and the bar carries no count the Total tile already says.
+test("the catalogue names origins in words, and only where they differ", async () => {
+  mount(<Tools />);
+  await settle();
+  expect(screen.queryByText(/tools? registered/)).toBeNull();
+  expect(screen.queryByText(/nothing said about/)).toBeNull();
+  expect(screen.getByRole("radio", { name: /^Built in/ })).toBeDefined();
+  expect(screen.getByRole("radio", { name: /^github/ })).toBeDefined();
+  // Drawn, or listed as hidden to fit: jsdom gives the grid no width.
+  expect(document.body.textContent).toMatch(/Origin/);
+  cleanup();
+
+  mount(<Tools />, { catalogue: tools.filter((t) => t.source === "builtin") });
+  await settle();
+  expect(screen.queryByRole("radiogroup", { name: "Tool origin" })).toBeNull();
+  expect(document.body.textContent).not.toMatch(/Origin/);
+});
+
 // PER-SERVER, PER-NODE, AS THE ENGINE SENT IT — the state its word, each node
 // its cell, the failing node's reason and seat under it, and the node whose
 // last heartbeat carried no status named once and drawn unknown rather than as
@@ -363,13 +386,15 @@ test("the catalogue clamps a description and keeps the whole of it in reach", as
 test("each server is drawn with the engine's state and a cell per node", async () => {
   mount(<Tools />);
   await settle();
-  const github = screen.getByText("Partly failing").closest(".grid-row") as HTMLElement;
+  const github = screen
+    .getByText("Partly failing")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(github).getByText("Partly failing")).toBeDefined();
   expect(within(github).getByText(/401 Bad credentials/)).toBeDefined();
   expect(within(github).getByText(/backend-dev/)).toBeDefined();
   expect(within(github).getAllByText(/not reported/).length).toBe(1);
   expect(within(github).getByText("1 seat")).toBeDefined();
-  const docs = screen.getByText("Running").closest(".grid-row") as HTMLElement;
+  const docs = screen.getByText("Running").closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(docs).getByText("Running")).toBeDefined();
   expect(within(docs).getByText("Every agent seat")).toBeDefined();
   expect(screen.getByText(/No report from/).textContent).toBe(
@@ -463,14 +488,16 @@ test("a server waiting for a provisioned credential names what it waits for, not
   };
   mount(<Tools />, { answer: waiting });
   await settle();
-  const github = screen.getByText("Waiting for credentials").closest(".grid-row") as HTMLElement;
+  const github = screen
+    .getByText("Waiting for credentials")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(github).getByText(/1 waiting/)).toBeDefined();
   const line = within(github).getByText(`for backend-dev: ${wait}`);
   expect(line.classList.contains("mcp-wait")).toBe(true);
   expect(within(github).queryByText(/failed/)).toBeNull();
   cleanup();
 
-  location.hash = "#/settings/tools/servers/github";
+  location.hash = "#/settings/mcp-tools/servers/github";
   mount(<Tools server="github" />, { answer: waiting });
   await settle();
   expect(screen.getByText("What it waits for")).toBeDefined();
@@ -484,7 +511,9 @@ test("a server waiting for a provisioned credential names what it waits for, not
 test("a node's failure sits under its chip without repeating the node", async () => {
   mount(<Tools />);
   await settle();
-  const github = screen.getByText("Partly failing").closest(".grid-row") as HTMLElement;
+  const github = screen
+    .getByText("Partly failing")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   const reason = within(github).getByText("for backend-dev: 401 Bad credentials");
   expect(reason.classList.contains("mcp-failure")).toBe(true);
   expect(reason.textContent?.startsWith("node-b")).toBe(false);
@@ -496,13 +525,15 @@ test("a node's failure sits under its chip without repeating the node", async ()
 test("a server's annotation keys that match no tool are counted in its row and named on its page", async () => {
   mount(<Tools />);
   await settle();
-  const github = screen.getByText("Partly failing").closest(".grid-row") as HTMLElement;
+  const github = screen
+    .getByText("Partly failing")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(github).getByText("1 tool_annotations key matches no tool")).toBeDefined();
-  const docs = screen.getByText("Running").closest(".grid-row") as HTMLElement;
+  const docs = screen.getByText("Running").closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(docs).queryByText(/tool_annotations/)).toBeNull();
   cleanup();
 
-  location.hash = "#/settings/tools/servers/github";
+  location.hash = "#/settings/mcp-tools/servers/github";
   mount(<Tools server="github" />);
   await settle();
   expect(screen.getByText("Annotation overrides that match no tool")).toBeDefined();
@@ -514,9 +545,11 @@ test("a server's annotation keys that match no tool are counted in its row and n
 test("each server's reach in the grid is the seats the engine grants it", async () => {
   mount(<Tools />);
   await settle();
-  const github = screen.getByText("Partly failing").closest(".grid-row") as HTMLElement;
+  const github = screen
+    .getByText("Partly failing")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(github).getByText("1 seat")).toBeDefined();
-  const docs = screen.getByText("Running").closest(".grid-row") as HTMLElement;
+  const docs = screen.getByText("Running").closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(docs).getByText("Every agent seat")).toBeDefined();
 });
 
@@ -536,7 +569,7 @@ test("the MCP tile counts the servers the engine reports, as the table does", as
 // and every failure whole — with its chip selected, an empty state that says
 // why, and a way back to every tool.
 test("a server with no tools opens its page, never an empty quoted search", async () => {
-  location.hash = "#/settings/tools/servers/notes";
+  location.hash = "#/settings/mcp-tools/servers/notes";
   mount(<Tools server="notes" />);
   await settle();
   expect(screen.queryByText(/“”/)).toBeNull();
@@ -546,20 +579,20 @@ test("a server with no tools opens its page, never an empty quoted search", asyn
     screen.getByText(/executable file not found in \$PATH/, { selector: ".mcp-failure-whole" }),
   ).toBeDefined();
   // The filter in force has a chip, and it is the chosen one.
-  const chip = screen.getByRole("radio", { name: /mcp:notes/ });
+  const chip = screen.getByRole("radio", { name: /^notes/ });
   expect(chip.getAttribute("aria-checked")).toBe("true");
   expect(screen.getByText("notes has registered no tools")).toBeDefined();
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Show all tools" }));
   });
   await settle();
-  expect(location.hash.startsWith("#/settings/tools")).toBe(true);
+  expect(location.hash.startsWith("#/settings/mcp-tools")).toBe(true);
   expect(location.hash).not.toContain("servers");
 });
 
 // A SEARCH THAT FOUND NOTHING still quotes what was searched.
 test("a search that matches nothing quotes the search", async () => {
-  location.hash = "#/settings/tools?q=zzz";
+  location.hash = "#/settings/mcp-tools?q=zzz";
   mount(<Tools />);
   await settle();
   expect(screen.getByText("No tool matches “zzz”")).toBeDefined();
@@ -584,7 +617,7 @@ test("a refused reader sees the refusal where the servers were, and every tool",
 // status who opens a server's page was told the server does not exist, right
 // above the section that says the answer was refused.
 test("a refused reader on a server's page is never told the server does not exist", async () => {
-  location.hash = "#/settings/tools/servers/github";
+  location.hash = "#/settings/mcp-tools/servers/github";
   mount(<Tools server="github" />, { viewer: READER, refuse: true });
   await settle();
   expect(screen.getByRole("heading", { name: "github" })).toBeDefined();
@@ -596,7 +629,7 @@ test("a refused reader on a server's page is never told the server does not exis
 
 // …and a reader who WAS told, about a name nothing carries, is told so.
 test("a server's page for a name the answer does not carry says so", async () => {
-  location.hash = "#/settings/tools/servers/nowhere";
+  location.hash = "#/settings/mcp-tools/servers/nowhere";
   mount(<Tools server="nowhere" />);
   await settle();
   expect(screen.getByText(/No server called/).textContent).toBe("No server called nowhere.");
@@ -647,7 +680,7 @@ const valid = (warnings: unknown[] = []) =>
   json({ valid: true, base_revision_id: "r1", warnings, derived: null }, 200);
 
 async function openAdd() {
-  location.hash = "#/settings/tools?add=server";
+  location.hash = "#/settings/mcp-tools?add=server";
   mount(<Tools />);
   await settle();
   return screen.getByRole("dialog");
@@ -785,7 +818,7 @@ test("a name only a node still reports is said, not refused", async () => {
     if (call.method === "PATCH") return valid();
     return json({}, 200, { ETag: '"r2"' });
   });
-  location.hash = "#/settings/tools?add=server";
+  location.hash = "#/settings/mcp-tools?add=server";
   mount(<Tools />, { answer });
   await settle();
   const dialog = screen.getByRole("dialog");
@@ -839,4 +872,21 @@ test("a variable that may be unset is added as an optional key", async () => {
     env: { NPM_CONFIG_REGISTRY: "${NPM_CONFIG_REGISTRY}" },
     optional_keys: ["NPM_CONFIG_REGISTRY"],
   });
+});
+
+// A CARD IN EVERY STATE: refused, the servers' section was a bare heading
+// over a floating sentence, beside the framed catalogue under it. Headed like
+// every other Settings section, the refusal is inside it.
+test("the servers' section is a card headed MCP servers, refused or empty", async () => {
+  mount(<Tools />, { viewer: READER, refuse: true });
+  await settle();
+  const heading = screen.getByRole("heading", { name: "MCP servers" });
+  const card = heading.closest(".crewlet-card") as HTMLElement;
+  expect(card).not.toBeNull();
+  expect(within(card).getByText(/This answer needs Admin access/)).toBeDefined();
+  cleanup();
+  mount(<Tools />, { answer: { ...status, servers: [] } });
+  await settle();
+  const empty = screen.getByRole("heading", { name: "MCP servers" }).closest(".crewlet-card");
+  expect(within(empty as HTMLElement).getByText("No MCP servers yet")).toBeDefined();
 });

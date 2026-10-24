@@ -27,7 +27,7 @@ import { FrameReadings } from "~/app/Shell.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { reloadForTest } from "~/lib/prefs.ts";
-import { LiveSocket, Store } from "~/protocol/index.ts";
+import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
 import type {
   WorkActivityRecord,
   WorkItem,
@@ -373,7 +373,9 @@ test("a priority of none is the word, with the change that set it", async () => 
   const value = rowValue("Priority");
   expect(value.textContent).toContain("No priority");
   expect(value.textContent).not.toContain(EMPTY_VALUE);
-  expect(value.querySelector(".props-setby")!.textContent).toContain("set by agent-ceo");
+  expect(value.querySelector(".crewlet-property-list__set-by")!.textContent).toContain(
+    "set by agent-ceo",
+  );
 });
 
 // AN ABSENT PRIORITY IS STILL A DASH, with no attribution: no value reached
@@ -382,7 +384,7 @@ test("a task carrying no priority at all still dashes", async () => {
   const { container } = rail(detail());
   await settle();
   expect(rowValue("Priority").textContent).toBe(`${EMPTY_VALUE}Not set`);
-  expect(container.querySelectorAll(".props-setby")).toHaveLength(0);
+  expect(container.querySelectorAll(".crewlet-property-list__set-by")).toHaveLength(0);
 });
 
 // THE PROJECT IS THE TASK'S ADDRESS: the name is what a person calls it and
@@ -540,7 +542,9 @@ test("a property names the change that set it, and only that change", async () =
     }),
   );
   await settle();
-  const lines = [...container.querySelectorAll(".props-setby")].map((el) => el.textContent);
+  const lines = [...container.querySelectorAll(".crewlet-property-list__set-by")].map(
+    (el) => el.textContent,
+  );
   expect(lines).toHaveLength(1);
   expect(lines[0]).toContain("bo");
 });
@@ -1575,7 +1579,9 @@ test("the peek names a person, exactly as the page does", async () => {
   });
   await settle();
   expect(screen.getAllByText("Ada Okonkwo").length).toBeGreaterThan(0);
-  const setBy = [...container.querySelectorAll(".props-setby")].map((el) => el.textContent ?? "");
+  const setBy = [...container.querySelectorAll(".crewlet-property-list__set-by")].map(
+    (el) => el.textContent ?? "",
+  );
   expect(setBy.length).toBeGreaterThan(0);
   expect(setBy.every((line) => line.includes("Ada Okonkwo"))).toBe(true);
 });
@@ -1647,10 +1653,12 @@ test("a task a bound person filed names them in the reporter and set-by lines", 
   const reporter = rowValue("Reporter");
   expect(reporter.textContent).toContain("Jane Founder");
   expect(reporter.textContent).not.toContain("session:s-1");
-  const lines = [...container.querySelectorAll(".props-setby")].map((el) => el.textContent ?? "");
+  const lines = [...container.querySelectorAll(".crewlet-property-list__set-by")].map(
+    (el) => el.textContent ?? "",
+  );
   expect(lines).toHaveLength(1);
   expect(lines[0]).toContain("set by Jane Founder");
-  expect(rowValue("Priority").querySelector(".props-setby")).not.toBeNull();
+  expect(rowValue("Priority").querySelector(".crewlet-property-list__set-by")).not.toBeNull();
 });
 
 // THE PEEK STATES EACH PROPERTY ONCE: its header is the identity and the state
@@ -1884,4 +1892,21 @@ test("linking a task under a shared key links the one chosen", async () => {
   expect(posted).toEqual([
     { tool: "update_work_item", args: { item: "ENG-42", linked: { add: [DUPLICATE] } } },
   ]);
+});
+
+// A MISSING TASK IS AN EMPTY STATE WITH A WAY BACK, as a missing project and a
+// missing artifact are: it was a full-width grey callout, the one object page
+// that said so in a different shape. Mutation: leave not_found to the generic
+// callout and the way back is gone.
+test("a task that does not exist says so, naming the key, with the way back to Tasks", async () => {
+  location.hash = "#/work/AB-1";
+  mount(<WorkItemPage id="AB-1" />, {
+    answers: { work_item: () => Promise.reject(new QueryError("not_found")) },
+  });
+  await settle();
+  expect(screen.getByText("No task called “AB-1”")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Back to Tasks" }).getAttribute("href")).toBe(
+    "#/work/tasks",
+  );
+  expect(screen.queryByText("Not found. It may have been removed.")).toBeNull();
 });

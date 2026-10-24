@@ -82,6 +82,7 @@ import {
   TableDateCell,
   TableEntityCell,
   TableTextCell,
+  PageNote,
 } from "@crewlethq/ui";
 import { KeyGlyph, MonitorGlyph, ShieldUserGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
@@ -94,7 +95,6 @@ import {
 } from "~/components/people.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { linkedSeat, plainSeat } from "~/app/frame/cells.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { LayerBoundary } from "~/app/boundaries.tsx";
 import { href } from "~/app/router.tsx";
 import { peekHref } from "~/app/frame/DetailRail.tsx";
@@ -323,8 +323,7 @@ function Profile({
         {holds(row?.grants ?? session.grants ?? [], ADMIN) ? (
           <>
             Change these in{" "}
-            <Link href={peekHref({ kind: "person", id: session.person })}>People &amp; access</Link>
-            .
+            <Link href={peekHref({ kind: "person", id: session.person })}>People</Link>.
           </>
         ) : (
           "Only an admin can change these."
@@ -355,7 +354,7 @@ function SeatFact({ handle }: { handle: string }) {
   const at = handleLabel(handle);
   if (!held) {
     return linked ? (
-      <Link href={href(["agents", "seats", handle])} size="inherit">
+      <Link href={href(["company", "org", "seats", handle])} size="inherit">
         <Text variant="cell" mono>
           {at}
         </Text>

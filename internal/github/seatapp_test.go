@@ -54,6 +54,47 @@ func TestASeatWithNoAppReportsTheClickThatIsLeft(t *testing.T) {
 	}
 }
 
+// ONE AGENT WITH NO APP IS NAMED ONCE, however the document leaves it so.
+//
+// An agent can have no app two ways: its seat carries no `integrations.github`
+// block at all, which the roster cannot hold and the engine names in
+// [github.SeatAppOptions.Unrecorded], or its block records no app id. Each
+// way used to be reported by its own reader, so an agent named by both was
+// told twice to do the same thing, and a company with one of each read two
+// sentences where the act is one. Mutation: report the roster's empty blocks
+// apart from the unrecorded agents and this finds two findings.
+func TestEveryAgentWithNoAppIsNamedOnceInOneFinding(t *testing.T) {
+	t.Parallel()
+	res, err := github.ReconcileSeatApps(context.Background(), github.SeatAppOptions{
+		Seats:      []github.SeatApp{{Handle: "sre-lead", Tier: github.TierReview}},
+		Unrecorded: []string{"swe", "sre-lead"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := kinds(res.Findings); len(got) != 1 {
+		t.Fatalf("findings = %v, want the one approval every agent with no app shares", got)
+	}
+	if got := res.Findings[0].Subjects; strings.Join(got, ",") != "sre-lead,swe" {
+		t.Errorf("subjects = %v, want each agent once, in order", got)
+	}
+}
+
+// AND AN AGENT THE ROSTER CANNOT HOLD IS STILL REPORTED when no seat carries
+// a block at all, which is how a company that has just connected starts.
+func TestAnAgentWithNoBlockIsReportedWithNoRoster(t *testing.T) {
+	t.Parallel()
+	res, err := github.ReconcileSeatApps(context.Background(), github.SeatAppOptions{
+		Unrecorded: []string{"swe"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Findings) != 1 || !strings.Contains(res.Findings[0].Detail, "swe") {
+		t.Fatalf("findings = %+v, want the agent named", res.Findings)
+	}
+}
+
 // THE KEY IS ISSUED ONCE AND NEVER REISSUED, so an unresolved one is not a
 // credential to re-enter: the app has to be created again, and the sentence
 // has to say so or an operator hunts for a value that does not exist.

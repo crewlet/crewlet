@@ -1,0 +1,240 @@
+{
+  "lengths": [
+    {
+      "name": "ASCII at the mission's bound",
+      "field": "mission",
+      "unit": "a",
+      "repeat": 1024,
+      "chars": 1024,
+      "utf16": 1024,
+      "bytes": 1024,
+      "graphemes": 1024,
+      "admitted": true
+    },
+    {
+      "name": "ASCII a character past the mission's bound",
+      "field": "mission",
+      "unit": "a",
+      "repeat": 1025,
+      "chars": 1025,
+      "utf16": 1025,
+      "bytes": 1025,
+      "graphemes": 1025,
+      "admitted": false
+    },
+    {
+      "name": "an emoji outside the basic plane, at the mission's bound",
+      "field": "mission",
+      "unit": "\ud83d\ude00",
+      "repeat": 1024,
+      "chars": 1024,
+      "utf16": 2048,
+      "bytes": 4096,
+      "graphemes": 1024,
+      "admitted": true
+    },
+    {
+      "name": "an emoji outside the basic plane, a character past the mission's bound",
+      "field": "mission",
+      "unit": "\ud83d\ude00",
+      "repeat": 1025,
+      "chars": 1025,
+      "utf16": 2050,
+      "bytes": 4100,
+      "graphemes": 1025,
+      "admitted": false
+    },
+    {
+      "name": "precomposed accents at the mission's bound",
+      "field": "mission",
+      "unit": "\u00e9",
+      "repeat": 1024,
+      "chars": 1024,
+      "utf16": 1024,
+      "bytes": 2048,
+      "graphemes": 1024,
+      "admitted": true
+    },
+    {
+      "name": "a letter and a combining accent, at the mission's bound",
+      "field": "mission",
+      "unit": "e\u0301",
+      "repeat": 512,
+      "chars": 1024,
+      "utf16": 1024,
+      "bytes": 1536,
+      "graphemes": 512,
+      "admitted": true
+    },
+    {
+      "name": "a letter and a combining accent, past the mission's bound in characters and inside it in graphemes",
+      "field": "mission",
+      "unit": "e\u0301",
+      "repeat": 513,
+      "chars": 1026,
+      "utf16": 1026,
+      "bytes": 1539,
+      "graphemes": 513,
+      "admitted": false
+    },
+    {
+      "name": "the space an editor leaves around a mission at its bound",
+      "field": "mission",
+      "prefix": " \t",
+      "unit": "a",
+      "repeat": 1024,
+      "suffix": "\n",
+      "chars": 1024,
+      "utf16": 1024,
+      "bytes": 1024,
+      "graphemes": 1024,
+      "admitted": true
+    },
+    {
+      "name": "a non-breaking and an ideographic space around a mission at its bound",
+      "field": "mission",
+      "prefix": "\u00a0",
+      "unit": "a",
+      "repeat": 1024,
+      "suffix": "\u3000",
+      "chars": 1024,
+      "utf16": 1024,
+      "bytes": 1024,
+      "graphemes": 1024,
+      "admitted": true
+    },
+    {
+      "name": "a next-line character after a mission at its bound, which the engine trims",
+      "field": "mission",
+      "unit": "a",
+      "repeat": 1024,
+      "suffix": "\u0085",
+      "chars": 1024,
+      "utf16": 1024,
+      "bytes": 1024,
+      "graphemes": 1024,
+      "admitted": true
+    },
+    {
+      "name": "a byte order mark before a mission at its bound, which the engine keeps",
+      "field": "mission",
+      "prefix": "\ufeff",
+      "unit": "a",
+      "repeat": 1024,
+      "chars": 1025,
+      "utf16": 1025,
+      "bytes": 1027,
+      "graphemes": 1025,
+      "admitted": false
+    },
+    {
+      "name": "CJK at the vision's bound",
+      "field": "vision",
+      "unit": "\u6f22",
+      "repeat": 2048,
+      "chars": 2048,
+      "utf16": 2048,
+      "bytes": 6144,
+      "graphemes": 2048,
+      "admitted": true
+    },
+    {
+      "name": "CJK a character past the vision's bound",
+      "field": "vision",
+      "unit": "\u6f22",
+      "repeat": 2049,
+      "chars": 2049,
+      "utf16": 2049,
+      "bytes": 6147,
+      "graphemes": 2049,
+      "admitted": false
+    },
+    {
+      "name": "an emoji outside the basic plane, at the vision's bound",
+      "field": "vision",
+      "unit": "\ud83d\ude00",
+      "repeat": 2048,
+      "chars": 2048,
+      "utf16": 4096,
+      "bytes": 8192,
+      "graphemes": 2048,
+      "admitted": true
+    },
+    {
+      "name": "a joined family emoji in a policy, at the policy's bound",
+      "field": "policy",
+      "unit": "\ud83d\udc69\u200d\ud83d\udc69\u200d\ud83d\udc67",
+      "repeat": 204,
+      "suffix": "abcd",
+      "chars": 1024,
+      "utf16": 1636,
+      "bytes": 3676,
+      "graphemes": 208,
+      "admitted": true
+    },
+    {
+      "name": "an emoji outside the basic plane, a character past the policy's bound",
+      "field": "policy",
+      "unit": "\ud83d\ude00",
+      "repeat": 1025,
+      "chars": 1025,
+      "utf16": 2050,
+      "bytes": 4100,
+      "graphemes": 1025,
+      "admitted": false
+    },
+    {
+      "name": "Cyrillic at the policy's bound",
+      "field": "policy",
+      "unit": "\u0436",
+      "repeat": 1024,
+      "chars": 1024,
+      "utf16": 1024,
+      "bytes": 2048,
+      "graphemes": 1024,
+      "admitted": true
+    },
+    {
+      "name": "a next-line character after a policy at its bound, which the engine trims",
+      "field": "policy",
+      "unit": "\u0436",
+      "repeat": 1024,
+      "suffix": "\u0085",
+      "chars": 1024,
+      "utf16": 1024,
+      "bytes": 2048,
+      "graphemes": 1024,
+      "admitted": true
+    }
+  ],
+  "breaks": [
+    {
+      "name": "a line feed",
+      "char": "\n"
+    },
+    {
+      "name": "a carriage return",
+      "char": "\r"
+    },
+    {
+      "name": "a vertical tab",
+      "char": "\u000b"
+    },
+    {
+      "name": "a form feed",
+      "char": "\f"
+    },
+    {
+      "name": "a next-line character",
+      "char": "\u0085"
+    },
+    {
+      "name": "a line separator",
+      "char": "\u2028"
+    },
+    {
+      "name": "a paragraph separator",
+      "char": "\u2029"
+    }
+  ]
+}

@@ -24,14 +24,20 @@
  * control whose effect the reader cannot see.
  */
 
+import type { ReactNode } from "react";
 import { Button, Popover, Select, Tag } from "@crewlethq/ui";
 import { Settings2Glyph } from "@crewlethq/icons/glyphs";
 import { secondAxisOptions, type Shape } from "~/lib/work.ts";
-import { ColumnChooser } from "~/app/frame/DataGrid.tsx";
+import { ChooserList, ColumnChooser } from "@crewlethq/ui";
 import { columnChoices, isGridShape } from "../shapes/Grid.tsx";
 import { CARD_FACTS, type CardFact } from "~/components/work.tsx";
 
 export interface DisplayMenuProps {
+  /**
+   * Which work, Group by and Sort, where the bar has no room for them (a
+   * phone): drawn first in the panel, as they would be at the bar's end.
+   */
+  arrange?: ReactNode;
   shape: Shape;
   /** The company's list rather than one project's, which decides whether the
    *  grid has a Project column to offer. */
@@ -98,6 +104,7 @@ export function DisplayMenu(props: DisplayMenuProps) {
 }
 
 function DisplayPanel({
+  arrange,
   shape,
   workspace,
   viewShape,
@@ -119,10 +126,11 @@ function DisplayPanel({
   const columns = isGridShape(shape) ? columnChoices(shape, workspace) : [];
   const board = shape === "board";
   const lanes = board ? hidden : [];
-  const empty = !(nested && groupBy !== "") && columns.length === 0 && !board;
+  const empty = !arrange && !(nested && groupBy !== "") && columns.length === 0 && !board;
 
   return (
     <div className="work-menu work-display">
+      {arrange && <div className="work-display-arrange">{arrange}</div>}
       {nested && groupBy !== "" && (
         <label className="work-display-row">
           <span>Then by</span>
@@ -149,26 +157,20 @@ function DisplayPanel({
           columns. Only the descriptive facts: the states a board is triaged
           by are not a reader's to hide (see [CARD_FACTS]). */}
       {board && (
-        <>
-          <div className="grid-cols-label">Card shows</div>
-          <div className="grid-cols-choices" data-card-facts="">
-            {CARD_FACTS.map((fact) => (
-              <label key={fact.key} className="grid-cols-choice">
-                <input
-                  type="checkbox"
-                  checked={!cardHidden.has(fact.key)}
-                  onChange={() => {
-                    const next = new Set(cardHidden);
-                    if (next.has(fact.key)) next.delete(fact.key);
-                    else next.add(fact.key);
-                    onCardHidden(next);
-                  }}
-                />
-                <span>{fact.label}</span>
-              </label>
-            ))}
-          </div>
-        </>
+        <ChooserList
+          label="Card shows"
+          items={CARD_FACTS.map((fact) => ({
+            key: fact.key,
+            label: fact.label,
+            checked: !cardHidden.has(fact.key),
+          }))}
+          onToggle={(key) => {
+            const next = new Set(cardHidden);
+            if (next.has(key)) next.delete(key);
+            else next.add(key);
+            onCardHidden(next);
+          }}
+        />
       )}
 
       {/* THE LANES PUT AWAY, named, each one press from coming back — a

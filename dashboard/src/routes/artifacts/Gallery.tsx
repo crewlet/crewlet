@@ -60,7 +60,7 @@ import {
   Button,
   Input,
   LivePreviewBudgetProvider,
-  Meter,
+  Section,
   SegmentedControl,
   Select,
   Skeleton,
@@ -68,16 +68,18 @@ import {
   PrincipalAvatar,
 } from "@crewlethq/ui";
 import {
+  GaugeGlyph,
   LayoutGridGlyph,
   ListGlyph,
-  PinGlyph,
   PlusGlyph,
   SearchGlyph,
   TrashGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href, useNavigator, useParam, useRoute } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
+import { RelatedRow } from "~/app/frame/RelatedRow.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { type DataGridColumn } from "@crewlethq/ui";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import {
   LEGACY_ARTIFACT_SECTIONS,
@@ -88,17 +90,18 @@ import {
 } from "~/app/routes.ts";
 import { QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { fmtBytes, fmtCount, fmtDate, relTime } from "~/lib/format.ts";
+import { fmtCount, fmtDate, relTime } from "~/lib/format.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
+import { offeredKinds } from "~/app/nav.ts";
+import { useServicesRun } from "~/lib/services.ts";
 import { usePinsChanged } from "~/lib/artifacts/pins.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useArtifactPeople, type ArtifactPeople } from "~/lib/artifacts/people.ts";
 import {
   KIND_WORDS,
-  MAKE_ORDER,
   KINDS,
   ROLE_WORDS,
   TRASH_KEPT,
@@ -172,6 +175,23 @@ const MAKE_DETAILS: Readonly<Record<ArtifactKind, string>> = {
   dashboard: "Live figures",
   html: "Any web page",
   sheet: "A table to fill in",
+};
+
+/**
+ * What a section says when it holds nothing to a reader who cannot make an
+ * artifact: no Make row is drawn for them, and "Start one above" pointed at
+ * nothing.
+ */
+const EMPTY_READER: Readonly<Record<ArtifactSection, { title: string; hint: string }>> = {
+  all: { title: "Nothing here yet", hint: "Artifacts shared with you appear here." },
+  yours: {
+    title: "You have not made an artifact yet",
+    hint: "Ask an agent to make one for you, and it appears here.",
+  },
+  shared: {
+    title: "Nothing is shared with you",
+    hint: "When somebody shares an artifact with you, your team or the company, it appears here.",
+  },
 };
 
 /** What a section says when it holds nothing, and what to do about it. */
@@ -438,14 +458,13 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
           good.
         </p>
       )}
+      {/* THE KIT'S SECTION HEADING for every titled part of the gallery,
+          as every other page's sections take: three local titles here were
+          16px, 16px and 14px at two weights. */}
       {showPinned && (
-        <section className="artifacts-group" aria-labelledby="artifacts-pinned">
-          <h2 className="artifacts-group-title" id="artifacts-pinned">
-            <PinGlyph size="sm" aria-hidden="true" />
-            Pinned
-          </h2>
+        <Section title="Pinned" className="artifacts-group">
           <Listing items={pinned.items} view={view} name="artifacts-pinned" />
-        </section>
+        </Section>
       )}
       {listing.first.loading && <GallerySkeleton shape={shape} />}
       <QueryState
@@ -461,7 +480,9 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
                 }
               : filtered
                 ? noMatch(q.trim(), kind)
-                : EMPTY[section]
+                : // THE COPY FOLLOWS THE ROW: offered to make one only where
+                  // the Make row is drawn, by the same access check.
+                  (author.can ? EMPTY : EMPTY_READER)[section]
             : undefined
         }
       >
@@ -469,17 +490,24 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
           // UNDER PINNED, THE REST IS A GROUP TOO: a titled grid over an
           // untitled one read as the pins' grid running on.
           (showPinned ? (
-            <section className="artifacts-group" aria-labelledby="artifacts-recent">
-              <h2 className="artifacts-group-title" id="artifacts-recent">
-                Recent
-              </h2>
+            <Section title="Recent" className="artifacts-group">
               {rest}
-            </section>
+            </Section>
           ) : (
             rest
           ))}
       </QueryState>
-      {viewer.admin && section === "all" && !trashed && !filtered && <Usage />}
+      {/* WHERE THE COMPANY'S STORAGE IS READ, a quiet row for a reader who
+          may open Settings › File storage (the row asks the gate itself). */}
+      {section === "all" && !trashed && !filtered && (
+        <RelatedRow
+          className="artifacts-related"
+          path={["settings", "storage"]}
+          icon={<GaugeGlyph size="sm" />}
+          title="Company storage"
+          description="What the company holds against its storage quotas, in Settings › File storage."
+        />
+      )}
     </LivePreviewBudgetProvider>
   );
 }
@@ -489,21 +517,19 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
  * under a heading as quiet as the groups' below it.
  */
 function MakeRow() {
+  const runs = useServicesRun();
   return (
-    <section className="artifacts-make" aria-labelledby="artifacts-make-title">
-      <h2 className="artifacts-make-title" id="artifacts-make-title">
-        {MAKE_TITLE}
-      </h2>
+    <Section title={MAKE_TITLE}>
       <ArtifactMakeRow
-        aria-labelledby="artifacts-make-title"
-        items={MAKE_ORDER.map((k) => ({
+        aria-label={MAKE_TITLE}
+        items={offeredKinds(runs).map((k) => ({
           kind: k,
           label: MAKE_WORDS[k],
           detail: MAKE_DETAILS[k],
           href: href(newArtifactPath(k)),
         }))}
       />
-    </section>
+    </Section>
   );
 }
 
@@ -738,7 +764,7 @@ function Listing({
   // "You" and "Owner" on every row; the trash's rows say when each went in
   // and when it goes for good in their place.
   const own = section === "yours";
-  const columns: GridColumn<ArtifactListItem>[] = [
+  const columns: DataGridColumn<ArtifactListItem>[] = [
     {
       key: "title",
       header: "Name",
@@ -872,74 +898,5 @@ function Listing({
         loadedNote={note}
       />
     </div>
-  );
-}
-
-/**
- * The company's artifacts and datastores against the plan's quotas: an
- * administrator's, as one quiet line at the foot of All, each quota a figure
- * with a thin bar under it.
- *
- * THE COUNT IS THE COMPANY'S, not the listing's: it holds every artifact the
- * quota is charged for, the ones in anybody's trash until they are deleted for
- * good and the private ones no listing shows this reader, so it says so
- * rather than leaving "12 of 50k" over eleven cards to read as a mistake.
- */
-function Usage() {
-  const artifacts = useQuery("artifact_usage", undefined, { pollMs: GALLERY_POLL_MS });
-  const data = useQuery("artifact_data_usage", undefined, { pollMs: GALLERY_POLL_MS });
-  const a = artifacts.data;
-  const d = data.data;
-  if (artifacts.error || data.error || !a || !d) return null;
-  const quotas = [
-    {
-      key: "files",
-      label: "Files",
-      value: a.usage.bytes,
-      max: a.limits.company_bytes,
-      text: `${fmtBytes(a.usage.bytes)} of ${fmtBytes(a.limits.company_bytes)}`,
-    },
-    {
-      key: "artifacts",
-      label: "Artifacts",
-      value: a.usage.artifacts,
-      max: a.limits.artifacts,
-      text: `${fmtCount(a.usage.artifacts)} of ${fmtCount(a.limits.artifacts)}`,
-    },
-    {
-      key: "data",
-      label: "Data",
-      value: d.usage.footprint,
-      max: d.data_bytes,
-      text: `${fmtBytes(d.usage.footprint)} of ${fmtBytes(d.data_bytes)}`,
-    },
-  ];
-  return (
-    <footer className="artifacts-storage" aria-labelledby="artifacts-storage-title">
-      <h2 className="artifacts-storage-title" id="artifacts-storage-title">
-        Company storage
-      </h2>
-      <dl className="artifacts-storage-quotas">
-        {quotas.map((quota) => (
-          <div key={quota.key} className="artifacts-storage-quota">
-            <dt>{quota.label}</dt>
-            <dd>
-              <span className="artifacts-storage-figure">{quota.text}</span>
-              <Meter
-                hideLabel
-                size="compact"
-                label={quota.label}
-                value={quota.value}
-                max={quota.max}
-                valueText={quota.text}
-              />
-            </dd>
-          </div>
-        ))}
-      </dl>
-      <p className="artifacts-storage-note">
-        Every version of every artifact the company holds, private ones and the trash included.
-      </p>
-    </footer>
   );
 }

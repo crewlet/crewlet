@@ -5,7 +5,7 @@
  */
 
 import { useMemo } from "react";
-import { Mark } from "~/ui/glyph.tsx";
+import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { Card, EmptyState, EmptyValue, Tag, InlineCode, TableTextCell } from "@crewlethq/ui";
 import { CalendarGlyph } from "@crewlethq/icons/glyphs";
 import { peekHref } from "~/app/frame/DetailRail.tsx";
@@ -51,7 +51,9 @@ export function Schedules({ seat, now }: { seat: Seat; now: number }) {
             key: "name",
             header: "Name",
             cell: (row) => (
-              <TableTextCell icon={<Mark name={"calendar"} size="xs" />}>{row.name}</TableTextCell>
+              <TableTextCell icon={<NamedGlyph name={"calendar"} size="xs" />}>
+                {row.name}
+              </TableTextCell>
             ),
             sortValue: (row) => row.name,
           },
@@ -79,7 +81,7 @@ export function Schedules({ seat, now }: { seat: Seat; now: number }) {
               row.scope_type === "role" ? (
                 <span className="muted">theirs</span>
               ) : (
-                <TableTextCell icon={<Mark name={"building-complex"} size="xs" />}>
+                <TableTextCell icon={<NamedGlyph name={"building-complex"} size="xs" />}>
                   {row.scope_name}
                 </TableTextCell>
               ),

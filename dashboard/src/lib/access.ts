@@ -190,6 +190,27 @@ export function accessNames(needs: readonly string[]): string {
 }
 
 /**
+ * What a lock says, as the kit's `LockedLabel` takes it: "Needs Admin
+ * access", or nothing where nothing is missing. One sentence for the
+ * sidebar's rows, the Settings column's and the section tabs'.
+ */
+export function lockReason(needs: readonly string[]): string | undefined {
+  return needs.length > 0 ? `Needs ${accessNames(needs)} access` : undefined;
+}
+
+/**
+ * A group's lock: the one reason every row of it shares, so the key is drawn
+ * once on the group's label rather than down every row (the kit's
+ * `SidebarNav.Group` `locked`). Nothing where any row is open, where the rows
+ * want different access, or where the group is empty: there the key stays on
+ * each locked row, which is what tells them apart.
+ */
+export function groupLock(reasons: readonly (string | undefined)[]): string | undefined {
+  const [first] = reasons;
+  return first !== undefined && reasons.every((reason) => reason === first) ? first : undefined;
+}
+
+/**
  * The one sentence a lock or a refusal says about `what` (a capitalised
  * subject: "Work", "Taking a backup") and the permissions that would open it:
  * "Work needs Tracker access. An admin can give it to you."

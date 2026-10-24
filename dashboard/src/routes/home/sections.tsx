@@ -14,7 +14,8 @@ import { useWorkingNow } from "~/app/Shell.tsx";
 import { NewTaskButton } from "~/components/NewTaskButton.tsx";
 import type { HomeData } from "./useHomeData.ts";
 import { HOME_RANGES, greeting } from "./model.ts";
-import { KPI_IDS, Kpis, type KpiId } from "./Kpis.tsx";
+import { KPI_IDS, Kpis, kpisShown, type KpiId } from "./Kpis.tsx";
+import { useServicesRun } from "~/lib/services.ts";
 import { Decisions } from "./Decisions.tsx";
 import { LiveNow } from "./LiveNow.tsx";
 import { CompletedChart } from "./CompletedChart.tsx";
@@ -100,9 +101,13 @@ export function Figures({
   data: HomeData;
   figures?: readonly KpiId[];
 }) {
+  // A FIGURE A SERVICE THE COMPANY DOES NOT RUN WOULD ANSWER is not drawn,
+  // and the row closes up over it (`kpisShown`).
+  const shown = kpisShown(figures, useServicesRun());
+  if (shown.length === 0) return null;
   return (
     <Kpis
-      figures={figures}
+      figures={shown}
       range={data.range}
       crew={data.crew}
       viewer={data.viewer}

@@ -127,6 +127,7 @@ func Requirements(
 			ConfigPath: "integrations.confluence.token",
 			SecretName: "CONFLUENCE_TOKEN",
 			Required:   true,
+			Checkable:  true,
 			// NO SENTENCE OF ITS OWN. This is ONE input shared by Jira
 			// and Confluence, and each named the product it was declared
 			// in, so which description rendered depended on which section
@@ -145,6 +146,7 @@ func Requirements(
 			Required:   false,
 			Mintable:   true,
 			Help:       "Cloud signs nothing, so this token in the URL is the whole check.",
+			CheckNote:  "Confluence Cloud proves it with the first delivery it makes to this deployment.",
 			Blocks:     integration.FindingIngressBlocked,
 		},
 		{
@@ -156,6 +158,7 @@ func Requirements(
 			Required:   false,
 			Mintable:   true,
 			Help:       "Data Center signs every delivery, and the engine checks it against this.",
+			CheckNote:  "Confluence Data Center proves it with the first delivery it signs.",
 			Blocks:     integration.FindingIngressBlocked,
 		},
 		{

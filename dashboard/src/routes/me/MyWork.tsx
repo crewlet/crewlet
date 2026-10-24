@@ -88,7 +88,7 @@
  */
 
 import { useMemo } from "react";
-import { Mark } from "~/ui/glyph.tsx";
+import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import type { MeSection } from "~/app/routes.ts";
 import { QueryState, SeatChip } from "~/components/common.tsx";
@@ -406,11 +406,11 @@ export function MyWork({ section }: { section: MeSection }) {
             value={order}
             onValueChange={setOrder}
             options={[
-              { value: "due", label: "Due", icon: <Mark name="calendar" size="xs" /> },
+              { value: "due", label: "Due", icon: <NamedGlyph name="calendar" size="xs" /> },
               {
                 value: "priorities",
                 label: "Priorities",
-                icon: <Mark name={setBy ? "flag" : "list"} size="xs" />,
+                icon: <NamedGlyph name={setBy ? "flag" : "list"} size="xs" />,
                 title: setBy ? `Ordered by ${setByName}` : undefined,
               },
             ]}

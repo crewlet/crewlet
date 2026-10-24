@@ -296,7 +296,7 @@ schema, same call signature. With nothing recorded, a tool missing because its
 server failed to start reads as a missing builtin, which sends an operator to
 debug the wrong subsystem.
 
-`GET /tools` reports it as each tool's `source`, and the dashboard's **Settings › Tools & MCP** screen
+`GET /tools` reports it as each tool's `source`, and the dashboard's **Settings › MCP Tools** screen
 groups on it:
 
 | `source` | Where the tool came from |
@@ -323,7 +323,7 @@ which, for a server that never started, says it registered none and why.
 
 ### Adding a server from the dashboard
 
-**Add an MCP server** on Settings › Tools & MCP (`admin`) writes
+**Add an MCP server** on Settings › MCP Tools (`admin`) writes
 the same `mcp_servers` entry you would write in YAML: a name, a command and its
 arguments (stdio) or an address (http), `shared` or one per seat, and the
 environment or headers — values as `${NAME}` pointers into the secret store,
@@ -551,7 +551,7 @@ whose tool list depends on its vendor) refiles the catalogue it belongs to: a
 shared server's into the company's catalogue and every held seat's surface, a
 per-role child's into its seat's. The next turn sees what the server serves
 now, and a shared server's new catalogue is pushed to every open dashboard's
-**Settings › Tools & MCP**.
+**Settings › MCP Tools**.
 
 **A shared server whose start failed is retried on the same schedule**, 15
 seconds after the failed start and doubling from there. A vendor that was down
@@ -586,7 +586,7 @@ from the old spec would bring back what the revision replaced. A child whose
 start failed is the reconcile's to retry, as before.
 
 On the [heartbeat](../concepts/coordination.md#what-a-node-says-about-itself),
-and so in **MCP servers** on Settings › Tools & MCP (`GET /mcp-servers`), a
+and so in **MCP servers** on Settings › MCP Tools (`GET /mcp-servers`), a
 server that is down counts as failed, with what took it down, until it is back.
 
 | Log event | Level | What it means |
@@ -723,7 +723,7 @@ What the engine does depends on whether anything will fill the variable:
 
 | The variable | The server | Where it shows |
 |---|---|---|
-| Is one a [provisioning pass](../concepts/integration-reconcile.md) mints for this seat — a GitLab or Datadog account's token, an Atlassian account's token or address, or a Mattermost bot's token where `integrations.mattermost.provisioning` is set — and nothing that pass last reported stops it | **Waiting**, not failed. It starts once the seal reaches the node: the pass that sealed it asks the node it ran on for a pass over its seats at once, and re-activates the revision so every other node's apply does the same | `mcp_server_awaiting_credential` (info), naming the variable and the integration that mints it; on **Settings › Tools & MCP** the server's row counts it as *waiting* — the server reads *Waiting for credentials* where nothing else is wrong — and its page lists what each node's instance waits for |
+| Is one a [provisioning pass](../concepts/integration-reconcile.md) mints for this seat, a GitLab or Datadog account's token, an Atlassian account's token or address, or a Mattermost bot's token where `integrations.mattermost.provisioning` is set, and nothing that pass last reported stops it | **Waiting**, not failed. It starts once the seal reaches the node: the pass that sealed it asks the node it ran on for a pass over its seats at once, and re-activates the revision so every other node's apply does the same | `mcp_server_awaiting_credential` (info), naming the variable and the integration that mints it; on **Settings › MCP Tools** the server's row counts it as *waiting*, the server reads *Waiting for credentials* where nothing else is wrong, and its page lists what each node's instance waits for |
 | Is one such a pass mints, and its last report says it cannot until a person acts — its own credential is missing or refused, an administrator has an app or a setting to switch on, or this seat's account could not be made or was switched off by somebody else — or the integration is being disconnected | **Failed**, with the finding that pass recorded: the same finding the integration's card shows. It is a wait with no end until somebody acts, so it is not reported as one | `mcp_server_credential_missing` (error) when the seat's pass meets it; the server's row counts it as failed from the first heartbeat after the integration reports it, whenever that is, and as waiting again from the first after it clears |
 | Is one nothing this engine runs mints — a secret nobody stored, a reference to a name nobody holds, or a variable set to an empty value; for a shared server, every variable is this | **Failed**, naming the variable and the remedies: seal it (`crewlet secrets set`, or for a seat's credential the integration's own `provision` command where it has one) and `POST /config/reload`, or set it in the engine's own environment and restart the engine — a running engine never reads an `export` made after it started; for one set to an empty value, seal a value and `POST /config/reload`; and, where the server can run without it, list the key holding it under the server's `optional_keys` — offered for the server's own settings, and never for a seat's own credential, which is the identity its child acts as, or for a variable the `url` needs, since a server is dialled at its `url` | `mcp_server_credential_missing` (error); the server's row counts it as failed, with the same sentence |
 
@@ -977,7 +977,7 @@ mcp_servers:
       tavily_research: { read_only: true, open_world: true }
 ```
 
-Keys accept snake_case (`read_only`) or the MCP camelCase (`readOnlyHint`); overrides win over whatever the server advertised. A key naming no tool the server lists overrides nothing: the server's row on **Settings › Tools & MCP** names every key no started instance lists (`unlisted_annotations` in [`GET /mcp-servers`](../reference/api-endpoints.md#get-mcp-servers)), and each instance's `tools_discovered` log line names the keys its own listing does not answer — which a key can do rightly, since a per-role child lists only the tools its seat's credentials reach. Because every tool server is now an `mcp_servers` entry — including `atlassian`, `slack`, and `github` — `tool_annotations` is declared there for all of them. This is the *only* place tool names appear in config for behaviour purposes — the engine itself never hardcodes them. See [Tool Capabilities](../concepts/tool-capabilities.md) for the full mechanism.
+Keys accept snake_case (`read_only`) or the MCP camelCase (`readOnlyHint`); overrides win over whatever the server advertised. A key naming no tool the server lists overrides nothing: the server's row on **Settings › MCP Tools** names every key no started instance lists (`unlisted_annotations` in [`GET /mcp-servers`](../reference/api-endpoints.md#get-mcp-servers)), and each instance's `tools_discovered` log line names the keys its own listing does not answer, which a key can do rightly, since a per-role child lists only the tools its seat's credentials reach. Because every tool server is now an `mcp_servers` entry, including `atlassian`, `slack`, and `github`, `tool_annotations` is declared there for all of them. This is the *only* place tool names appear in config for behaviour purposes, the engine itself never hardcodes them. See [Tool Capabilities](../concepts/tool-capabilities.md) for the full mechanism.
 
 ---
 

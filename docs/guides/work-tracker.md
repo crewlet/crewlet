@@ -1399,7 +1399,7 @@ A schedule's entries are its **runs** — the ticks the scheduler dispatched. A
 tick it deliberately skipped (a missed run outside the catch-up window, or one
 that came due while its seat was paused) is not something the company did, so
 the feed leaves it out; it stays in the schedule's own ledger
-(`GET /schedules/{scope_type}/{scope_id}/{name}/runs`, Agents › Schedules),
+(`GET /schedules/{scope_type}/{scope_id}/{name}/runs`, Company › Schedules),
 which is where "why did the standup not run" is answered. And runs of one schedule for one runner that nothing else
 falls between are **one row** ("ran 12 times since 02:40"), so a sweep every
 ten minutes is a line rather than every line of the page.

@@ -1320,10 +1320,12 @@ it](#nothing-is-released-until-a-tag-ships-it)).
 
 ### One change per commit
 
-Keep unrelated work in separate commits, each with its own scope. A bug you
-fixed in passing, or a tuning value you corrected while doing something else,
-belongs in its own commit — that keeps it reviewable, and revertable, on its
-own.
+Keep separate pieces of work in separate commits, each with its own scope. A
+bug you fixed in passing because it affected your change, or a tuning value
+you corrected on the way, belongs in a commit of its own — that keeps it
+reviewable, and revertable, on its own. A bug that does not affect your change
+is not in the pull request at all: it gets an issue (see [A bug you find along
+the way](#a-bug-you-find-along-the-way)).
 
 ### Sign your work
 
@@ -1436,6 +1438,34 @@ format — please open an issue first to discuss the approach.
 Use [GitHub issues](https://github.com/crewlet/crewlet/issues). For bugs,
 include the engine version (`crewlet --version`), your config shape (redact
 secrets!), and relevant structured-log output.
+
+### A bug you find along the way
+
+Working on one change, you will notice bugs. Whether one is fixed in your pull
+request turns on one question: does it affect your change?
+
+- **It affects your change: fix it there.** Your change depends on the broken
+  code, the bug is in the code or text you are changing, your change would
+  make it worse or newly reachable, it is another copy of the defect you are
+  fixing, or it keeps a test or gate your change must pass from passing. Fix
+  it properly, in a commit of its own (see [One change per
+  commit](#one-change-per-commit)), and say so in the pull request's
+  description. That it was broken before you got there does not make it
+  unrelated.
+- **It is unrelated: open an issue.** A bug none of that describes stays out
+  of your pull request. Search the open issues first, and add to one that
+  already describes it; otherwise open one per bug with the bug report
+  template, saying what is wrong and how it shows, where it is (a permalink,
+  or the file and line at a commit, since a line on a branch moves) and the
+  fix you would make. Link it from your pull request's description.
+
+If you cannot tell which it is, it affects your change: fix it. A wrong tuning
+value (a timeout, a retry count, a batch size, a default) goes the same way,
+corrected in your change when it affects it and reported, with the value you
+would set and why, when it does not. And anything you believe is exploitable
+is never a public issue, commit message or pull request description, whether
+or not it affects your change: report it privately (see [Security
+issues](#security-issues)).
 
 ## Security issues
 

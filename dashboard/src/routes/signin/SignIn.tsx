@@ -24,7 +24,7 @@
  * not change, since redeeming it is what creates its person — it is the ONLY
  * way in, so the token form comes first, open, with the primary button, and
  * the page says how to begin: sign in with the token, then invite yourself
- * from Agents › Org chart. The password form is still served there, folded
+ * from Company › Org chart. The password form is still served there, folded
  * behind "Sign in with a password instead", so the first thing a founder
  * tries is the one thing that works. `unknown` (a node that cannot read its identity estate) and a
  * `/health` that did not answer are not "unclaimed": they keep the ordinary
@@ -168,7 +168,7 @@ export function SignIn() {
       {unclaimed ? (
         <>
           <Callout variant="neutral" title="Getting started">
-            Sign in with your API token, then invite yourself from Agents › Org chart.
+            Sign in with your API token, then invite yourself from Company › Org chart.
           </Callout>
           <TokenForm open onSignedIn={(answer) => signedIn(answer, next)} />
           {/* THE TOKEN IS THE ONLY WAY IN before anybody joins, so the password

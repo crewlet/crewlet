@@ -42,6 +42,7 @@ import {
   TableKeyCell,
   TableDateCell,
   TableTextCell,
+  type DataGridActivationEvent,
 } from "@crewlethq/ui";
 import {
   PlusGlyph,
@@ -238,6 +239,24 @@ const PROVENANCE: Record<string, string> = {
   migrated: "moved onto the fleet from a node's own table",
 };
 
+/**
+ * A row's provenance in a word or two, for the list's Source column. Quiet
+ * words, never a pill: a pill on every row of a list whose rows mostly share
+ * one source was a column a reader learned to skip. The sentence is on the
+ * pointer and in the peek.
+ */
+const SOURCE_WORDS: Record<string, string> = {
+  api: "API",
+  setup: "Integration setup",
+  provision: "Provisioning pass",
+  migrated: "Moved from a node",
+};
+
+/** A source in words, or the engine's own word for one this build does not know. */
+export function sourceWords(source: string): string {
+  return SOURCE_WORDS[source] ?? source;
+}
+
 /** What a row's provenance says, as a sentence a reader can act on. */
 export function provenance(source: string): string {
   return PROVENANCE[source] ?? `a source this build does not know (“${source}”)`;
@@ -323,9 +342,7 @@ function CredentialBody({
                   // phone reaches.
                   value: (
                     <span className="col" style={{ gap: 2 }}>
-                      <span>
-                        <Tag appearance="outline">{row.source}</Tag>
-                      </span>
+                      <span>{sourceWords(row.source)}</span>
                       <span className="t-caption">{provenance(row.source)}</span>
                     </span>
                   ),
@@ -437,7 +454,7 @@ export function Secrets({ name }: { name?: string }) {
    * carries no button at all and is never "open elsewhere".
    */
   const openCredential = useCallback(
-    (row: SecretRow, e: React.MouseEvent | React.KeyboardEvent) => {
+    (row: SecretRow, e: DataGridActivationEvent) => {
       const go = () => openPeek({ kind: "credential", id: row.name });
       if (!("button" in e)) {
         go();
@@ -480,6 +497,7 @@ export function Secrets({ name }: { name?: string }) {
         <Button
           leadingIcon={<PlusGlyph size="sm" />}
           variant="primary"
+          size="small"
           onClick={() => setWriting({ editing: "" })}
         >
           Store a secret
@@ -598,9 +616,9 @@ export function Secrets({ name }: { name?: string }) {
                 // Which path wrote it, said in full on the pointer; the peek
                 // says it in words.
                 cell: (s) => (
-                  <Tag appearance="outline" title={provenance(s.source)}>
-                    {s.source}
-                  </Tag>
+                  <span title={provenance(s.source)}>
+                    <TableTextCell>{sourceWords(s.source)}</TableTextCell>
+                  </span>
                 ),
               },
               {

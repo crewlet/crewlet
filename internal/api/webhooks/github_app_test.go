@@ -190,12 +190,12 @@ func TestTheInstallArrivalStillNamesTheSeatAndTheWait(t *testing.T) {
 	// "usually within a minute", which is true only for the first few ticks
 	// of a backoff that runs to ten minutes — so an operator who installed
 	// the app and watched a card for a minute read the silence as the
-	// install not having taken. Recheck is named because it makes the wait
-	// zero. Where a loop IS wired the page says something else entirely:
-	// see [TestTheInstallArrivalAsksTheLoopToLookNow].
+	// install not having taken. Check now is named, with where it is,
+	// because it makes the wait zero. Where a loop IS wired the page says
+	// something else entirely: see [TestTheInstallArrivalAsksTheLoopToLookNow].
 	for _, want := range []string{
 		"sre-lead", "App installed for", "next reconcile pass",
-		"ten minutes", "Recheck",
+		"ten minutes", "Check now", "Company › Integrations",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the page does not mention %q:\n%s", want, body)

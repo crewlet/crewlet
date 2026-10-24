@@ -9,7 +9,7 @@
  * dialling, by the user block, and by the refusal panel — so a signed-out load
  * of `/dashboard` sent two at once and a third from the sign-in it was routed
  * to. A screen that needs who is reading — the Account, Home's greeting for an
- * unbound reader, People & access marking the reader's own row — reads THIS,
+ * unbound reader, People marking the reader's own row, reads THIS,
  * never a read of its own, and the Account re-reads it through [reload].
  *
  * # Every session is dialled

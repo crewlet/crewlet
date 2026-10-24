@@ -286,6 +286,24 @@ func (c *Client) ListServiceAccounts(ctx context.Context, key, orgID string) ([]
 		"atlassian: the service account listing did not end after %d pages", listPageLimit)
 }
 
+// ReadsServiceAccounts reads ONE page of the organization's service
+// accounts and keeps none of it: the proof that a key can reach the
+// account-management service, for a check made before the key is stored.
+//
+// That service rather than any other, because it is the one that refuses a
+// scoped key whatever scopes it holds (see [serviceAccountsPath]): the
+// workspace listing and the token routes accept a scoped key, so a check made
+// against them passes the key this integration cannot create one account
+// with. One page of one entry, because the answer is the status and not the
+// listing.
+func (c *Client) ReadsServiceAccounts(ctx context.Context, key, orgID string) error {
+	path := fmt.Sprintf(serviceAccountsPath, url.PathEscape(orgID)) + "?limit=1"
+	var page struct {
+		Items []ServiceAccount `json:"items"`
+	}
+	return c.call(ctx, key, http.MethodGet, path, nil, &page)
+}
+
 // CreateServiceAccount provisions one agent's identity.
 //
 // The answer carries no credential; MintToken supplies that in a second call.

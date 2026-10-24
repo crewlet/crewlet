@@ -785,6 +785,13 @@ func New(opts Options) (*App, error) {
 	if sources.CompanyWriters == nil && opts.Bootstrap != nil {
 		sources.CompanyWriters = slices.Clone(opts.Bootstrap.API.Auth.CompanyWriters)
 	}
+	// HOW A PERSON SIGNS IN HERE, from this node's own Tier A, through the
+	// accessors the sign-in path enforces it by. A caller that supplied its
+	// own keeps it.
+	if sources.SignIn == nil && opts.Bootstrap != nil {
+		policy := queries.SignInPolicyOf(opts.Bootstrap.API.Auth)
+		sources.SignIn = &policy
+	}
 	a.queries = queries.NewRegistry()
 	queries.Register(a.queries, sources)
 	a.backup, a.audit = opts.Backup, opts.Audit

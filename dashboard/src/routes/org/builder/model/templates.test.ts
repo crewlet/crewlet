@@ -30,36 +30,36 @@ import { countingKeys, fixtureDerived } from "./testkit.ts";
 const FOUNDER = { name: "Alex Rivera", identity: "slack_user_id", value: "U0FOUNDER" } as const;
 
 const CASES: readonly (TemplateOptions & { label: string })[] = [
-  { label: "New company", template: "new_company", charter: { name: "Acme" } },
+  { label: "New company", template: "new_company", name: "Acme" },
   {
     label: "New company with your seat",
     template: "new_company",
-    charter: { name: "Acme", mission: "Build" },
+    name: "Acme",
     founder: FOUNDER,
   },
   {
     label: "Established, leads are agents",
     template: "established_company",
-    charter: { name: "Acme" },
+    name: "Acme",
     leads: "agents",
   },
   {
     label: "Established, leads are people",
     template: "established_company",
-    charter: { name: "Acme" },
+    name: "Acme",
     leads: "people",
   },
   {
     label: "Established, leads are people, with your seat",
     template: "established_company",
-    charter: { name: "Acme" },
+    name: "Acme",
     leads: "people",
     founder: FOUNDER,
   },
   {
     label: "Start empty with your seat",
     template: "empty",
-    charter: { name: "Acme" },
+    name: "Acme",
     founder: FOUNDER,
   },
 ];
@@ -146,14 +146,14 @@ describe("templates", () => {
         .concat([...allUnits(draft)].map(({ unit }) => unit.key));
       expect(keys.every(isMintedKey)).toBe(true);
       expect(new Set(keys).size).toBe(keys.length);
-      expect(intent.type === "applyTemplate" && intent.charter.name).toBe("Acme");
+      expect(intent.type === "applyTemplate" && intent.name).toBe("Acme");
     });
   }
 
   test("the shapes are the ones the create form describes", () => {
     const established = build({
       template: "established_company",
-      charter: { name: "Acme" },
+      name: "Acme",
       leads: "people",
     }).doc;
     expect(established.units!.map((u) => [u.name, (u.children ?? []).map((c) => c.name)])).toEqual([
@@ -174,7 +174,7 @@ describe("templates", () => {
     ]);
     const fresh = build({
       template: "new_company",
-      charter: { name: "Acme" },
+      name: "Acme",
       founder: FOUNDER,
     }).doc;
     expect(fresh.roles!.map((r) => [r.name, r.handle, r.manages])).toEqual([
@@ -197,7 +197,7 @@ describe("templates", () => {
   test("the operator's seat may share a template title, and the two seats get different handles", () => {
     const { doc } = build({
       template: "new_company",
-      charter: { name: "Acme" },
+      name: "Acme",
       founder: { name: "Chief Executive", identity: "github_login", value: "alex" },
     });
     expect(doc.roles!.map((r) => [r.name, r.handle, r.manages])).toEqual([
@@ -213,7 +213,7 @@ describe("templates", () => {
   test("a unit whose lead shares the operator's name is led by the handle that seat was given", () => {
     const { doc } = build({
       template: "established_company",
-      charter: { name: "Acme" },
+      name: "Acme",
       leads: "agents",
       founder: { name: "Engineering Lead", identity: "github_login", value: "alex" },
     });
@@ -229,28 +229,23 @@ describe("templates", () => {
 
   test("a create form missing what a template needs is refused with what to do", () => {
     const keys = countingKeys();
-    expect(templateIntent({ template: "new_company", charter: { name: " " } }, keys)).toMatchObject(
-      { ok: false },
-    );
+    expect(templateIntent({ template: "new_company", name: " " }, keys)).toMatchObject({
+      ok: false,
+    });
     expect(
-      templateIntent(
-        { template: "empty", charter: { name: "Acme" }, founder: { ...FOUNDER, name: " " } },
-        keys,
-      ),
+      templateIntent({ template: "empty", name: "Acme", founder: { ...FOUNDER, name: " " } }, keys),
     ).toMatchObject({ ok: false, message: expect.stringContaining("name for your seat") });
     // The operator's contact identity is optional: the engine admits a human
     // seat with none, and the person is then reached through the dashboard.
     const unreached = templateIntent(
-      { template: "empty", charter: { name: "Acme" }, founder: { ...FOUNDER, value: " " } },
+      { template: "empty", name: "Acme", founder: { ...FOUNDER, value: " " } },
       keys,
     );
     expect(unreached.ok).toBe(true);
     expect(
       unreached.ok && unreached.intent.type === "applyTemplate" && unreached.intent.roles[0]!.data,
     ).toEqual({ name: "Alex Rivera", handle: "alex-rivera", kind: "human" });
-    expect(
-      templateIntent({ template: "established_company", charter: { name: "Acme" } }, keys),
-    ).toMatchObject({
+    expect(templateIntent({ template: "established_company", name: "Acme" }, keys)).toMatchObject({
       ok: false,
       message: expect.stringContaining("people or agents"),
     });
@@ -259,7 +254,7 @@ describe("templates", () => {
   test("the human seats with no contact identity are listed for the review's notice", () => {
     const { draft } = build({
       template: "established_company",
-      charter: { name: "Acme" },
+      name: "Acme",
       leads: "people",
       founder: FOUNDER,
     });
@@ -273,8 +268,6 @@ describe("templates", () => {
       "Design Lead",
       "Go to Market Lead",
     ]);
-    expect(
-      seatsWithoutContact(build({ template: "new_company", charter: { name: "Acme" } }).draft),
-    ).toEqual([]);
+    expect(seatsWithoutContact(build({ template: "new_company", name: "Acme" }).draft)).toEqual([]);
   });
 });

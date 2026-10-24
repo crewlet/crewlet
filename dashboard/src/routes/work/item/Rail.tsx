@@ -408,7 +408,7 @@ export function ItemRail({
 
   return (
     <div className="task-rail-body">
-      <PropertiesRail groups={groups} />
+      <PropertiesRail groups={groups} headings="sentence" />
       <Relations detail={detail} chrome={chrome} />
       <PageLinks links={(detail.links ?? []).filter((l) => l.kind === "page")} />
       <ArtifactLinks item={detail.task.key} />
@@ -416,7 +416,7 @@ export function ItemRail({
       <Watching detail={detail} chrome={chrome} />
       {record.length > 0 && (
         <div className="task-rail-section">
-          <PropertiesRail groups={record} />
+          <PropertiesRail groups={record} headings="sentence" />
         </div>
       )}
     </div>

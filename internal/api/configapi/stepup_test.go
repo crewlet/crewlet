@@ -19,12 +19,12 @@ import (
 // A CONFIGURATION WRITE ASKS FOR A RECENT PROOF, AND A READ DOES NOT.
 //
 // As a person holding every grant whose proof is two hours old: every way of
-// changing the company document — a whole replacement, a patch, a reload, a
-// revert and a write of every entity this surface writes — is refused
-// `step_up_required` naming `step_up` before anything is read, and the reads
-// are served. The routes are this surface's own two verbs, so the table's walk
-// in internal/authz holds every other route mounted on them; this holds the
-// surface to having mounted each on the right one.
+// changing the company document (a whole replacement, a patch, a reload, a
+// revert, a charter write and a write of every entity this surface writes)
+// is refused `step_up_required` naming `step_up` before anything is read, and
+// the reads are served. The routes are this surface's own two verbs, so the
+// table's walk in internal/authz holds every other route mounted on them; this
+// holds the surface to having mounted each on the right one.
 func TestAConfigurationWriteAsksForARecentProof(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
@@ -46,6 +46,7 @@ func TestAConfigurationWriteAsksForARecentProof(t *testing.T) {
 		{http.MethodPatch, "/config"},
 		{http.MethodPost, "/config/reload"},
 		{http.MethodPost, "/config/revisions/a-revision/revert"},
+		{http.MethodPut, "/config/charter"},
 	}
 	for _, kind := range configapi.EntityKinds() {
 		writes = append(writes, [2]string{http.MethodPut, "/config/" + kind + "/an-id"})
@@ -60,7 +61,7 @@ func TestAConfigurationWriteAsksForARecentProof(t *testing.T) {
 		}
 	}
 	for _, path := range []string{"/config", "/config/references",
-		"/config/revisions"} {
+		"/config/revisions", "/config/charter"} {
 		if _, body := serve(http.MethodGet, path); body["error"] ==
 			string(httpjson.CodeStepUpRequired) {
 			t.Errorf("the read GET %s asked for a step-up", path)

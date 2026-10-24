@@ -2,7 +2,7 @@
  * The identity directory as more than one screen offers it: who holds a human
  * seat, and the writes made about one — inviting a person onto a vacant seat,
  * creating one there, cancelling the invitation that holds it — plus minting a
- * token (a service account's on People & access, your own on the Account
+ * token (a service account's on Service accounts, your own on the Account
  * page), the ACCESS a write confers (`lib/access.ts`: Admin, and one
  * permission per app), a value shown once, and what a write came to.
  *
@@ -12,7 +12,7 @@
  * engine refuses a person with none, ADR-0032), so the place a person comes
  * from is a vacant human seat: its card's menu on the org chart, the seat's
  * peek, and its page — each through [SeatHolding]'s three states (held,
- * invited, vacant) and the dialogs [SeatGestureDialog] opens. People & access
+ * invited, vacant) and the dialogs [SeatGestureDialog] opens. People
  * lists, edits, suspends and removes people; it no longer invites anybody, and
  * points at the chart instead.
  *
@@ -41,6 +41,7 @@ import {
   Callout,
   Checkbox,
   Copyable,
+  EmptyState,
   EmptyValue,
   FormField,
   InlineCode,
@@ -164,7 +165,7 @@ export function directoryMoved(): void {
 
 /**
  * Run `heard` whenever a write anywhere on the page may have moved the
- * directory ([directoryMoved]) — while `enabled`. People & access and the
+ * directory ([directoryMoved]), while `enabled`. People and the
  * person peek beside it are two trees, and a removal made in the peek left
  * the list it was opened from naming the person until its next poll.
  */
@@ -527,7 +528,7 @@ export type SeatGesture = "invite" | "create" | "cancel";
  * The gestures a seat offers an admin: a VACANT seat
  * is invited onto or has a person created on it; a seat an open invitation
  * holds offers that invitation's cancellation; a HELD seat offers nothing
- * here — its holder is moved or removed on their row in People & access.
+ * here, its holder is moved or removed on their row in People.
  *
  * NOTHING ON A SEAT THE LISTING DID NOT ANSWER FOR: a read that failed or has
  * not arrived says nothing about whether the seat is free, and an invitation
@@ -645,6 +646,7 @@ export function SeatHolding({
   manages,
   held,
   you = false,
+  form = "notice",
 }: {
   seat: SeatName;
   /** The listing, as [useHumanSeats] read it. */
@@ -655,6 +657,14 @@ export function SeatHolding({
   held: readonly string[];
   /** The seat is the reader's own. */
   you?: boolean;
+  /**
+   * How the holding is said. `notice` is a line above the seat's page, for a
+   * seat somebody holds. `empty` is the page's own empty state, for a seat
+   * nobody holds, whose Overview has no person's day or work to draw: a
+   * notice above an empty column was the page saying "open" and then
+   * nothing.
+   */
+  form?: "notice" | "empty";
 }) {
   const [opening, setOpening] = useState<{ gesture: SeatGesture; row: HumanSeat } | null>(null);
   return (
@@ -664,6 +674,7 @@ export function SeatHolding({
         seats={seats}
         manages={manages}
         you={you}
+        form={form}
         onGesture={(gesture, row) => setOpening({ gesture, row })}
       />
       {opening && (
@@ -684,12 +695,14 @@ function SeatHoldingState({
   seats,
   manages,
   you,
+  form,
   onGesture,
 }: {
   seat: SeatName;
   seats: RestResult<HumanSeat[]>;
   manages: boolean;
   you: boolean;
+  form: "notice" | "empty";
   onGesture: (gesture: SeatGesture, row: HumanSeat) => void;
 }) {
   if (seats.code && !seats.data) {
@@ -722,6 +735,30 @@ function SeatHoldingState({
         </Button>
       ))
     : [];
+  if (form === "empty" && !row.holder) {
+    return (
+      <EmptyState
+        icon={<UserPlusGlyph size={32} />}
+        title={row.invitation ? "An invitation holds this seat" : "This seat is open"}
+        description={
+          row.invitation ? (
+            <HoldingSentence row={row} you={you} />
+          ) : manages ? (
+            "Nobody holds it yet. Invite someone to it, or add a person directly."
+          ) : (
+            "Nobody holds it yet. An admin invites someone to it."
+          )
+        }
+        action={
+          actions.length > 0 ? (
+            <Inline as="span" gap={2}>
+              {actions}
+            </Inline>
+          ) : undefined
+        }
+      />
+    );
+  }
   return (
     <Callout
       variant="neutral"

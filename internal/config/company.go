@@ -224,6 +224,11 @@ var skillVariableKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // It validates the ORG as well: building the hierarchy is where duplicate
 // handles, unrunnable schedules and human-seat rule violations surface, and
 // a config that parses into a company nobody can run has not been validated.
+//
+// The CHARTER's rules are not among them: they judge what a write changes
+// against the revision it replaces rather than the document it leaves, so an
+// old fault never refuses an unrelated write. Every writer asks
+// [Company.ValidateCharterChange] beside this.
 func (c *Company) Validate() error {
 	o, index := c.organization()
 	return index.locate(errors.Join(c.validateRunnable(o), c.validateAdmission(o)))
@@ -773,14 +778,13 @@ const (
 	KnowledgeNone KnowledgeBackend = "none"
 )
 
+// KnowledgeBackends is every knowledge backend, in the order the docs name
+// them: the closed set the schema offers, the validator accepts and the org
+// projection's `services.knowledge` carries, so each of those reads one list.
+var KnowledgeBackends = []KnowledgeBackend{KnowledgeNative, KnowledgeConfluence, KnowledgeNone}
+
 // Valid reports whether b is a backend this build serves.
-func (b KnowledgeBackend) Valid() bool {
-	switch b {
-	case KnowledgeNative, KnowledgeConfluence, KnowledgeNone:
-		return true
-	}
-	return false
-}
+func (b KnowledgeBackend) Valid() bool { return slices.Contains(KnowledgeBackends, b) }
 
 // Tracker is which work tracker the company runs.
 //
@@ -886,14 +890,12 @@ const (
 	TrackerNone TrackerBackend = "none"
 )
 
+// TrackerBackends is every tracker, in the order the docs name them, read on
+// [KnowledgeBackends]' terms.
+var TrackerBackends = []TrackerBackend{TrackerNative, TrackerJira, TrackerNone}
+
 // Valid reports whether b is a tracker this build serves.
-func (b TrackerBackend) Valid() bool {
-	switch b {
-	case TrackerNative, TrackerJira, TrackerNone:
-		return true
-	}
-	return false
-}
+func (b TrackerBackend) Valid() bool { return slices.Contains(TrackerBackends, b) }
 
 // DefaultSkillsContainer is the container tool-skill pages live in when the
 // config names none.

@@ -58,6 +58,7 @@
 
 import { createContext, createElement, useContext, useMemo, type ReactNode } from "react";
 import { useQuery } from "./useQuery.ts";
+import { useServicesAsk } from "./services.ts";
 import { useViewer } from "./viewer.ts";
 
 /** The page the count is taken over — the engine's own bound on the read. */
@@ -77,11 +78,15 @@ export interface InboxCounts {
  * viewer's own is: a push for any other never reaches the tab.
  */
 function useInboxRead(owner: string, enabled: boolean, watched: boolean): InboxCounts {
+  // THE NOTICES ARE CREWLET WORKS': where the company runs another tracker or
+  // none the engine refuses the read, and it was asked on a timer behind every
+  // screen of every tab all the same.
+  const ask = useServicesAsk();
   const inbox = useQuery(
     "work_inbox",
     owner ? { handle: owner, limit: INBOX_PAGE, unread: true, primary_only: true } : undefined,
     {
-      enabled: enabled && owner !== "",
+      enabled: enabled && ask.tracker && owner !== "",
       pollMs: 60_000,
       refetchOnInboxOf: watched ? owner : "",
     },

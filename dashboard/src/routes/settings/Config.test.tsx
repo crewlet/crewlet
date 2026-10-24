@@ -14,7 +14,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { changeValue, ConfigScreen, RevisionPeek } from "./Config.tsx";
 import { Router } from "~/app/router.tsx";
@@ -127,6 +127,22 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   location.hash = "#/";
+});
+
+// READ ONLY, SAID FIRST: the note leads the screen as its page note on every
+// lens, never a callout under the last card. Mutation: move it back under the
+// cards and the note is no longer the content's first element.
+test("the screen says it is read only first, as its page note", async () => {
+  const { container } = mount("#/config?lens=audit");
+  await screen.findByText("01JCFGAAAA");
+  const note = screen.getByText(/Read only here/);
+  expect(note.closest(".crewlet-page-note")).not.toBeNull();
+  expect(note.closest(".crewlet-callout")).toBeNull();
+  expect(container.querySelector(".crewlet-page-note")).toBe(note.closest(".crewlet-page-note"));
+  expect(
+    within(note.closest(".crewlet-page-note") as HTMLElement).getByText("crewlet config import")
+      .tagName,
+  ).toBe("CODE");
 });
 
 test("a revision row renders the server's own field names", async () => {
@@ -458,9 +474,9 @@ test("the picked entity is drawn as a list selection, never the primary button",
 test("the summary is the one flexible track, and the revision is exactly its own width", async () => {
   const { container } = mount("#/config?lens=audit");
   expect(await screen.findByText("connect datadog")).toBeDefined();
-  const grid = container.querySelector<HTMLElement>(".grid-wrap")!;
-  const heads = [...grid.querySelectorAll(".grid-head > .grid-th")].map((h) =>
-    h.textContent?.trim(),
+  const grid = container.querySelector<HTMLElement>(".crewlet-data-grid")!;
+  const heads = [...grid.querySelectorAll(".crewlet-data-grid__head > .crewlet-data-grid__th")].map(
+    (h) => h.textContent?.trim(),
   );
   expect(heads).toEqual(["When", "Revision", "Summary", "By"]);
   const tracks =
@@ -493,14 +509,14 @@ describe("the revisions table, laid out", () => {
     vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (
       this: HTMLElement,
     ) {
-      return this.classList.contains("grid-wrap") ? box : 0;
+      return this.classList.contains("crewlet-data-grid") ? box : 0;
     });
     // Each head is its column's natural width, laid end to end.
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
       this: HTMLElement,
     ) {
       const width = (el: Element) => NATURAL[el.textContent?.trim() ?? ""] ?? 60;
-      if (this.classList.contains("grid-th")) {
+      if (this.classList.contains("crewlet-data-grid__th")) {
         const siblings = [...this.parentElement!.children];
         const left = siblings.slice(0, siblings.indexOf(this)).reduce((n, h) => n + width(h), 0);
         return {
@@ -512,7 +528,7 @@ describe("the revisions table, laid out", () => {
           height: 0,
         } as DOMRect;
       }
-      const right = this.classList.contains("grid-wrap") ? box : 0;
+      const right = this.classList.contains("crewlet-data-grid") ? box : 0;
       return { left: 0, right, width: right, top: 0, bottom: 0, height: 0 } as DOMRect;
     });
   });
@@ -526,10 +542,12 @@ describe("the revisions table, laid out", () => {
     box = width;
     const { container } = mount("#/config?lens=audit");
     expect(await screen.findByText("connect datadog")).toBeDefined();
-    const grid = container.querySelector<HTMLElement>(".grid-wrap")!;
+    const grid = container.querySelector<HTMLElement>(".crewlet-data-grid")!;
     return {
-      heads: [...grid.querySelectorAll(".grid-head > .grid-th")].map((h) => h.textContent?.trim()),
-      hidden: grid.parentElement?.querySelector(".grid-foot")?.textContent ?? "",
+      heads: [...grid.querySelectorAll(".crewlet-data-grid__head > .crewlet-data-grid__th")].map(
+        (h) => h.textContent?.trim(),
+      ),
+      hidden: grid.parentElement?.querySelector(".crewlet-data-grid__foot")?.textContent ?? "",
     };
   }
 
@@ -613,7 +631,9 @@ test("the revision the peek is open on is the marked row", async () => {
     `#/config?lens=audit&revision=${revisions[0]!.revision_id}&peek=revision:${peeked}`,
   );
   expect(await screen.findByText("connect datadog")).toBeDefined();
-  const marked = [...container.querySelectorAll(".grid-wrap .grid-row.selected")];
+  const marked = [
+    ...container.querySelectorAll(".crewlet-data-grid .crewlet-data-grid__row--selected"),
+  ];
   expect(marked).toHaveLength(1);
   expect(marked[0]!.textContent).toContain("first import");
 });
@@ -625,14 +645,16 @@ test("the revision the peek is open on is the marked row", async () => {
 test("an author's name comes before its kind, on a line the kind leaves first", async () => {
   const { container } = mount("#/config?lens=audit");
   expect(await screen.findByText("connect datadog")).toBeDefined();
-  const author = container.querySelector<HTMLElement>(".grid-cell > .revision-author")!;
+  const author = container.querySelector<HTMLElement>(
+    ".crewlet-data-grid__cell > .revision-author",
+  )!;
   expect(author).not.toBeNull();
   expect(author.firstElementChild?.textContent).toBe("founder");
   expect(author.lastElementChild?.classList.contains("crewlet-tag")).toBe(true);
   expect(author.getAttribute("title")).toBe("founder · operator");
 
   const css = readFileSync(join(process.cwd(), "src/styles/screens.css"), "utf8");
-  const at = css.indexOf(".grid-cell > .revision-author {");
+  const at = css.indexOf(".crewlet-data-grid__cell > .revision-author {");
   expect(at, "the one-line author rule is declared").toBeGreaterThan(-1);
   const rule = css.slice(at, css.indexOf("}", at));
   expect(rule).toMatch(/flex-wrap:\s*wrap/);

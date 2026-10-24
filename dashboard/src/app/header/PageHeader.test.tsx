@@ -17,11 +17,9 @@ import {
   StarPage,
   Trail,
   WorkingNow,
-  noteFits,
 } from "./PageHeader.tsx";
 import { ProjectSwitcherProvider } from "./ProjectSwitcher.tsx";
 import { ViewerProvider } from "~/lib/viewer.ts";
-import { foldTabs } from "../frame/tabFit.ts";
 import { WORKSPACES } from "~/app/nav.ts";
 import { Router } from "~/app/router.tsx";
 import { noteReader } from "~/lib/reader.ts";
@@ -30,6 +28,9 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 import { installWindow } from "~/testing.tsx";
+
+/** A company running every service built into Crewlet. */
+const EVERY = { tracker: true, knowledge: true } as const;
 
 afterEach(cleanup);
 
@@ -111,7 +112,7 @@ describe("the star", () => {
       return disabled;
     };
     expect(more(["account"])).toBe(false);
-    expect(more(["settings"])).toBe(true);
+    expect(more(["settings", "models"])).toBe(true);
   });
 
   // A SCREEN WHOSE OWN MENU CARRIES THE STAR (a knowledge page's More) gets
@@ -128,6 +129,8 @@ describe("the star", () => {
             <AppShell
               topbar={
                 <PageHeader
+                  runs={EVERY}
+                  grants={null}
                   crumbs={[]}
                   row={undefined}
                   counts={{}}
@@ -247,6 +250,8 @@ describe("the trail", () => {
         <AppShell
           topbar={
             <PageHeader
+              runs={EVERY}
+              grants={null}
               crumbs={[
                 { label: "Work", path: ["work"], icon: "square-kanban" },
                 { label: "All projects", switch: "project" },
@@ -304,6 +309,8 @@ describe("who is working", () => {
           <AppShell
             topbar={
               <PageHeader
+                runs={EVERY}
+                grants={null}
                 crumbs={[]}
                 row={undefined}
                 counts={{}}
@@ -361,33 +368,11 @@ describe("who is working", () => {
 // WHAT DOES NOT FIT FOLDS INTO "MORE", from the end, and the tab the reader is
 // on is always drawn. A strip that scrolled behind a fade cut "Checklist 0" at
 // 1280 with nothing to say a section was past it.
+// THE ARITHMETIC IS THE KIT'S (uilet's Tabs, `overflow="menu"`), and its suite
+// holds the order a tab leaves in. What stays here is that this strip folds
+// by it, its "More" names the workspace and navigates, and a folded link is
+// out of reach.
 describe("the section tabs fold what does not fit into More", () => {
-  // Seven tabs of 100, 20 apart: 820 in all.
-  const widths = [100, 100, 100, 100, 100, 100, 100];
-
-  test("a strip that fits folds nothing", () => {
-    expect(foldTabs({ widths, current: 0, space: 820, gap: 20, more: 60 })).toEqual([]);
-    expect(foldTabs({ widths, current: 0, space: 819, gap: 20, more: 60 })).not.toEqual([]);
-  });
-
-  test("past the space, the last tabs fold and More takes their room", () => {
-    // 700 of room: More (60) + five tabs and their gaps (5 × 120 = 600) = 660;
-    // a sixth would be 780.
-    expect(foldTabs({ widths, current: 0, space: 700, gap: 20, more: 60 })).toEqual([5, 6]);
-  });
-
-  test("the tab the reader is on is drawn, taking the last place that fits", () => {
-    expect(foldTabs({ widths, current: 6, space: 700, gap: 20, more: 60 })).toEqual([4, 5]);
-  });
-
-  // A RUN FROM THE START, never a pick: a narrow tab further along does not
-  // jump the queue, or the strip's order would change with its width.
-  test("a narrower tab further along does not skip ahead of a wider one", () => {
-    expect(
-      foldTabs({ widths: [100, 100, 300, 20], current: 0, space: 400, gap: 20, more: 60 }),
-    ).toEqual([2, 3]);
-  });
-
   describe("drawn", () => {
     const row = WORKSPACES.find((w) => w.key === "me")!;
     const had = {
@@ -399,7 +384,7 @@ describe("the section tabs fold what does not fit into More", () => {
       HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
         const w = this.hasAttribute("data-section")
           ? 120
-          : this.hasAttribute("data-section-more")
+          : this.hasAttribute("data-tabs-more")
             ? 70
             : 0;
         return {
@@ -434,6 +419,8 @@ describe("the section tabs fold what does not fit into More", () => {
             path={path}
             query={new URLSearchParams()}
             counts={{ queue: "2", checklist: "0" }}
+            runs={EVERY}
+            grants={null}
           />
         </Router>,
       );
@@ -442,7 +429,7 @@ describe("the section tabs fold what does not fit into More", () => {
     // THE TABS ON THE STRIP, by section: a folded one stays in the document,
     // out of the flow, so it is left out here.
     const drawn = () =>
-      [...strip().querySelectorAll("a[data-section]:not([data-folded])")].map((a) =>
+      [...strip().querySelectorAll("a[data-section]:not(.is-folded)")].map((a) =>
         a.getAttribute("data-section"),
       );
 
@@ -454,7 +441,7 @@ describe("the section tabs fold what does not fit into More", () => {
       await waitFor(() => expect(drawn()).toHaveLength(6));
       expect(drawn().at(-1)).toBe("watching");
       // THE FOLDED TAB IS OUT OF REACH on the strip, and in the menu instead.
-      const folded = strip().querySelector("a[data-folded]")!;
+      const folded = strip().querySelector("a.is-folded")!;
       expect(folded.getAttribute("aria-hidden")).toBe("true");
       expect(screen.queryByRole("link", { name: /Checklist/ })).toBeNull();
       fireEvent.click(screen.getByRole("button", { name: "More sections of My work" }));
@@ -485,47 +472,31 @@ describe("the section tabs fold what does not fit into More", () => {
 // draw theirs, so the two rows of tabs in the product read one way. And a
 // figure nobody published is not drawn.
 test("a section's figure rides beside its name, and only if published", () => {
-  const agents = WORKSPACES.find((w) => w.key === "agents")!;
+  const org = WORKSPACES.find((w) => w.key === "org")!;
   render(
     <Router>
       <SectionTabs
-        row={agents}
-        path={["agents"]}
+        row={org}
+        path={["company", "org"]}
         query={new URLSearchParams()}
-        counts={{ roster: "8", schedules: "6" }}
+        counts={{ roster: "8", teams: "6" }}
+        runs={EVERY}
+        grants={null}
       />
     </Router>,
   );
   const roster = screen.getByRole("link", { name: /Roster/ });
   expect(roster.textContent).toBe("Roster8");
-  expect(screen.getByRole("link", { name: /Schedules/ }).textContent).toBe("Schedules6");
-  expect(screen.getByRole("link", { name: /Teams/ }).textContent).toBe("Teams");
-});
-
-// THE READING NOTE GIVES WAY TO THE TABS: a sentence about how to read a
-// workspace takes no room a place would need, so it is drawn only where every
-// tab fits beside it — and a note the sheet draws at no width has nothing to
-// fit.
-describe("the reading note at the strip's end", () => {
-  const widths = [100, 100, 100];
-  test("is drawn where every tab and the note fit", () => {
-    // 3 tabs and 2 gaps are 320; a gap and a 200 note make 530.
-    expect(noteFits({ widths, space: 530, gap: 10, note: 200 })).toBe(true);
-  });
-  test("gives way before any tab would fold", () => {
-    expect(noteFits({ widths, space: 529, gap: 10, note: 200 })).toBe(false);
-  });
-  test("a note drawn at no width is not drawn", () => {
-    expect(noteFits({ widths, space: 2000, gap: 10, note: 0 })).toBe(false);
-  });
+  expect(screen.getByRole("link", { name: /Teams/ }).textContent).toBe("Teams6");
+  expect(screen.getByRole("link", { name: /Chart/ }).textContent).toBe("Chart");
 });
 
 // ON A PHONE SETTINGS' COLUMN IS A PICKER, and whether it is open says whether
 // the reader has chosen a section. Folded on every arrival, Settings' own
-// address showed a phone reader one row reading "General" — and the You group
-// with their Account in it only behind a tap nothing told them to make. A deep
-// link still arrives folded, since the section it names starts right under
-// the picker, and any pick folds it. Mutation: start folded everywhere, or
+// address showed a phone reader one row naming its first section, and its
+// four groups only behind a tap nothing told them to make. A deep link still
+// arrives folded, since the section it names starts right under the picker,
+// and any pick folds it. Mutation: start folded everywhere, or
 // leave the list open after a pick that moves no path, and a case goes red.
 describe("Settings' section picker on a phone", () => {
   const settings = WORKSPACES.find((w) => w.key === "settings")!;
@@ -536,53 +507,108 @@ describe("Settings' section picker on a phone", () => {
   afterEach(() => window.restore());
 
   const column = (path: string[]) => (
-    <SectionColumn row={settings} path={path} grants={null} figures={{}} />
+    <SectionColumn
+      row={settings}
+      path={path}
+      query={new URLSearchParams()}
+      grants={null}
+      figures={{}}
+      runs={EVERY}
+    />
   );
-  const toggle = () => document.querySelector<HTMLButtonElement>(".section-picker-toggle")!;
+  const toggle = () => document.querySelector<HTMLButtonElement>(".crewlet-section-frame__toggle")!;
   const list = () => document.getElementById(toggle().getAttribute("aria-controls") ?? "")!;
   const row = (at: string) => list().querySelector<HTMLAnchorElement>(`a[href="${at}"]`)!;
   /** What the toggle SHOWS, its screen-reader words left out. */
   const shown = () => {
     const copy = toggle().cloneNode(true) as HTMLElement;
-    copy.querySelectorAll(".sr-only").forEach((n) => n.remove());
-    return copy.textContent;
+    copy.querySelectorAll(".crewlet-visually-hidden").forEach((n) => n.remove());
+    return copy.textContent?.replace(/\s+/g, " ").trim();
   };
 
-  test("arriving at Settings' own address opens the list, the reader's Account in it", () => {
-    render(column(["settings"]));
+  test("arriving at Settings' own address opens the list, every group in it", () => {
+    render(column(["settings", "models"]));
     expect(toggle().getAttribute("aria-expanded")).toBe("true");
-    expect(toggle().closest(".section-picker")?.hasAttribute("data-open")).toBe(true);
-    expect(row("#/account")).not.toBeNull();
+    expect(toggle().closest(".crewlet-section-frame__nav")?.hasAttribute("data-open")).toBe(true);
+    expect(row("#/settings/spend")).not.toBeNull();
+    expect(row("#/settings/storage")).not.toBeNull();
   });
 
   test("a link to a section arrives folded, and says it is a picker", () => {
     render(column(["settings", "people"]));
     expect(toggle().getAttribute("aria-expanded")).toBe("false");
-    expect(shown()).toBe("Section · People & access");
+    expect(shown()).toBe("Section · People");
   });
 
   test("a pick folds it, the section the reader is already on included", () => {
-    render(column(["settings"]));
-    fireEvent.click(row("#/settings"));
+    render(column(["settings", "models"]));
+    fireEvent.click(row("#/settings/models"));
     expect(toggle().getAttribute("aria-expanded")).toBe("false");
   });
 
   test("a pick that lands on Settings' own address leaves it folded; an arrival nobody picked opens it", () => {
     const view = render(column(["settings", "people"]));
-    fireEvent.click(row("#/settings"));
-    view.rerender(column(["settings"]));
-    expect(toggle().getAttribute("aria-expanded"), "a pick of General").toBe("false");
+    fireEvent.click(row("#/settings/models"));
+    view.rerender(column(["settings", "models"]));
+    expect(toggle().getAttribute("aria-expanded"), "a pick of Models & keys").toBe("false");
     view.rerender(column(["settings", "nodes"]));
     expect(toggle().getAttribute("aria-expanded"), "a link to Nodes").toBe("false");
     // THE SIDEBAR'S SETTINGS ROW, or Back: no pick in this list made it.
-    view.rerender(column(["settings"]));
+    view.rerender(column(["settings", "models"]));
     expect(toggle().getAttribute("aria-expanded"), "an arrival at Settings").toBe("true");
+  });
+
+  // A SECTION READING A SERVICE THE COMPANY DOES NOT RUN IS NOT DRAWN: Expensive
+  // tasks names its tasks by Crewlet Works' keys, so where the company runs
+  // none the Spend group is the readings alone. Mutation: draw the column's
+  // sections unfiltered and the row is there.
+  test("a section reading a service the company does not run is not drawn", () => {
+    render(
+      <SectionColumn
+        row={settings}
+        path={["settings", "spend"]}
+        query={new URLSearchParams()}
+        grants={null}
+        figures={{}}
+        runs={{ tracker: false, knowledge: true }}
+      />,
+    );
+    expect(row("#/settings/spend")).not.toBeNull();
+    expect(row("#/settings/spend/tasks")).toBeNull();
   });
 
   test("beside a section there is room for the list, and nothing is opened for the reader", () => {
     window.restore();
     window = installWindow(1440);
-    render(column(["settings"]));
+    render(column(["settings", "models"]));
     expect(toggle().getAttribute("aria-expanded")).toBe("false");
   });
+});
+
+// A TAB THE READER CANNOT OPEN IS LOCKED, as the sidebar's rows and the
+// Settings column's are: Live's Turns, Agent-to-agent and Event log looked
+// open to a Tracker-only reader and then refused. Mutation: drop the grants
+// from the tabs and no tab names what it needs.
+test("a section tab the reader cannot open names the access it needs", () => {
+  const live = WORKSPACES.find((w) => w.key === "live")!;
+  const locked = live.sections.filter((s) => s.grants && !s.grants.includes("tracker"));
+  expect(locked.length).toBeGreaterThan(0);
+  render(
+    <Router>
+      <SectionTabs
+        row={live}
+        path={live.sections[0]!.path}
+        query={new URLSearchParams()}
+        counts={{}}
+        runs={EVERY}
+        grants={["tracker"]}
+      />
+    </Router>,
+  );
+  for (const s of locked) {
+    const tab = document.querySelector(`[data-section="${s.key}"]`)!;
+    expect(tab.textContent).toMatch(/Needs Admin access/);
+  }
+  const open = document.querySelector(`[data-section="${live.sections[0]!.key}"]`)!;
+  expect(open.textContent).not.toMatch(/needs/);
 });

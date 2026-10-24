@@ -27,6 +27,7 @@
 import { Fragment, useMemo, useState } from "react";
 import {
   Button,
+  ButtonLink,
   Callout,
   Card,
   EmptyState,
@@ -166,8 +167,14 @@ function ModelList({
             icon={<CpuGlyph size="xs" />}
             label="Models"
             value={providers.length}
+            // NONE IS NOT ALL READY: "0, all ready" said every model worked on
+            // a node with no model to run a turn on.
             sub={
-              attention ? `${attention} need${attention === 1 ? "s" : ""} attention` : "all ready"
+              providers.length === 0
+                ? "none configured"
+                : attention
+                  ? `${attention} need${attention === 1 ? "s" : ""} attention`
+                  : "all ready"
             }
           />
           <StatCard
@@ -187,14 +194,27 @@ function ModelList({
 
       <Card padding="none">
         <Card.Header icon={<CpuGlyph size="sm" />} count={providers.length}>
-          Models
+          <Card.Title>Models</Card.Title>
         </Card.Header>
         {providers.length === 0 ? (
-          <div style={{ padding: "var(--spacing-4)" }}>
-            <p className="t-body muted">
-              No model configured. Add one under <InlineCode>providers.llm</InlineCode>.
-            </p>
-          </div>
+          // THE KIT'S EMPTY STATE, as the MCP servers card beside it draws its
+          // own, with the way to where a model is added: a plain sentence in
+          // a padded box was the one empty card on Settings drawn by hand.
+          <EmptyState
+            size="compact"
+            icon={<CpuGlyph size="xl" />}
+            title="No model configured yet"
+            description={
+              <>
+                Add one under <InlineCode>providers.llm</InlineCode> in the company document.
+              </>
+            }
+            action={
+              <ButtonLink variant="secondary" size="small" href={href(["settings", "config"])}>
+                Open Configuration
+              </ButtonLink>
+            }
+          />
         ) : (
           <DataGrid<CredentialPoolRow>
             rows={providers}
@@ -373,7 +393,7 @@ function ModelPage({
       {row.state !== "login" && (
         <Card padding="none">
           <Card.Header icon={<KeyGlyph size="sm" />} count={row.keys.length}>
-            Keys
+            <Card.Title>Keys</Card.Title>
           </Card.Header>
           {row.keys.length === 0 ? (
             <div style={{ padding: "var(--spacing-4)" }}>
@@ -476,7 +496,7 @@ function ModelPage({
 
       <Card padding="none">
         <Card.Header icon={<UsersGlyph size="sm" />} count={uses.length}>
-          Seats on it
+          <Card.Title>Seats on it</Card.Title>
         </Card.Header>
         {uses.length === 0 ? (
           <div style={{ padding: "var(--spacing-4)" }}>
@@ -487,7 +507,7 @@ function ModelPage({
             name="seats"
             rows={uses}
             rowKey={(u) => u.seat.key}
-            rowHref={(u) => href(["agents", "seats", u.seat.handle])}
+            rowHref={(u) => href(["company", "org", "seats", u.seat.handle])}
             columns={[
               {
                 key: "seat",

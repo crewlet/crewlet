@@ -59,8 +59,10 @@ import {
   TargetGlyph,
   SlidersVerticalGlyph,
   TriangleAlertGlyph,
+  DatabaseGlyph,
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
+import { RelatedRow } from "~/app/frame/RelatedRow.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { plainSeat } from "~/app/frame/cells.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
@@ -76,14 +78,14 @@ import { plural, fmtCount, fmtDuration } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { FleetAnswer, FleetDutyLease, FleetNode, FleetSeatLease } from "~/protocol/index.ts";
 import { BrokerKindTag, BrokerMembership } from "./FleetBroker.tsx";
-import { FileStorage } from "./FileStorage.tsx";
 
 /**
  * The lease table has no push behind it, so it polls — at 15 seconds, chosen
  * against the lease TTL rather than picked: a poll slower than the TTL would
  * show a node as alive after its lease had already expired somewhere else.
  */
-const POLL_MS = 15_000;
+export const FLEET_POLL_MS = 15_000;
+const POLL_MS = FLEET_POLL_MS;
 
 /** The apply status the control plane reports, as a [Tag] variant. */
 const STATUS_TONE: Record<string, "success" | "warning" | "danger" | "neutral"> = {
@@ -217,7 +219,7 @@ function FleetScreen() {
         >
           <Card padding="none">
             <Card.Header icon={<ServerGlyph size="sm" />} count={nodes.length}>
-              Nodes
+              <Card.Title>Nodes</Card.Title>
             </Card.Header>
             <DataGrid<FleetNode>
               rows={nodes}
@@ -372,6 +374,9 @@ function FleetScreen() {
                   key: "lease",
                   header: "Lease",
                   shrink: true,
+                  // RIGHT, as a duration is in Seat placement and Company-wide
+                  // duties on this same page.
+                  align: "right",
                   // FIRST TO GIVE WAY. Every row here holds an unexpired lease
                   // — a node is listed exactly as long as it does — so this
                   // column is a countdown that reads "healthy" by construction
@@ -395,6 +400,7 @@ function FleetScreen() {
                   key: "up",
                   header: "Up since",
                   shrink: true,
+                  align: "right",
                   // The node's peek carries it beside In flight ("Running").
                   drop: 3,
                   sortValue: (n) => n.started_at ?? "",
@@ -406,7 +412,9 @@ function FleetScreen() {
 
           {nodes.some((n) => n.config_error) && (
             <Card>
-              <Card.Header icon={<TriangleAlertGlyph size="sm" />}>Config apply errors</Card.Header>
+              <Card.Header icon={<TriangleAlertGlyph size="sm" />}>
+                <Card.Title>Config apply errors</Card.Title>
+              </Card.Header>
               <div className="col gap-2">
                 {nodes
                   .filter((n) => n.config_error)
@@ -424,7 +432,7 @@ function FleetScreen() {
           <div className="grid grid-auto-lg">
             <Card padding="none">
               <Card.Header icon={<UsersGlyph size="sm" />} count={data?.seats?.length ?? 0}>
-                Seat placement
+                <Card.Title>Seat placement</Card.Title>
               </Card.Header>
               <DataGrid<FleetSeatLease>
                 name="seats"
@@ -453,8 +461,10 @@ function FleetScreen() {
                     // a second `1fr` this column took half of what the fixed
                     // columns left — about 155px for a nine-character node id —
                     // and the seat name the row exists to show was the value
-                    // cut ("Agent Frontend …") at a 1440 frame.
-                    shrink: true,
+                    // cut ("Agent Frontend …") at a 1440 frame. ITS OWN WIDTH,
+                    // never capped: a node id is short, and capped it read
+                    // "walk-nat…" beside a seat column with room to spare.
+                    width: "max-content",
                     sortValue: (s) => s.node,
                     // The NODE, not the lease's `owner` — that is the fencing
                     // token (a node id plus a per-process suffix), and showing
@@ -492,7 +502,7 @@ function FleetScreen() {
 
             <Card padding="none">
               <Card.Header icon={<CpuGlyph size="sm" />} count={data?.duties?.length ?? 0}>
-                Company-wide duties
+                <Card.Title>Company-wide duties</Card.Title>
               </Card.Header>
               <DataGrid<FleetDutyLease>
                 name="duties"
@@ -516,8 +526,9 @@ function FleetScreen() {
                     // Content-sized for the reason the seat table's is: the
                     // duty's name is the flexible track, and as a second `1fr`
                     // this column left "integration-reconci…" cut beside
-                    // spare space of its own.
-                    shrink: true,
+                    // spare space of its own. Its own width, never capped, for
+                    // the reason the seat table's is.
+                    width: "max-content",
                     sortValue: (d) => d.node,
                     cell: (d) => <HeldBy node={d.node} />,
                   },
@@ -540,8 +551,6 @@ function FleetScreen() {
             </Card>
           </div>
 
-          <FileStorage objects={data.objects} now={now} />
-
           <BrokerMembership
             answer={broker.data ?? undefined}
             error={broker.error}
@@ -557,7 +566,7 @@ function FleetScreen() {
           {((data?.unplaceable?.length ?? 0) > 0 || (data?.unmanned_roles?.length ?? 0) > 0) && (
             <Card>
               <Card.Header icon={<TriangleAlertGlyph size="sm" />}>
-                Not running anywhere
+                <Card.Title>Not running anywhere</Card.Title>
               </Card.Header>
               <div className="col gap-2">
                 {data?.unmanned_roles?.map((r) => (
@@ -589,14 +598,14 @@ function FleetScreen() {
           state log's every domain, its evictions and its snapshot tier under
           the node list of a screen called Nodes. It is Settings › Backups &
           retention now, and the way there is said here, where the question
-          starts. */}
-      <p className="t-caption">
-        Log positions are under{" "}
-        <a className="prose-link" href={href(["settings", "backups"])}>
-          Backups &amp; retention
-        </a>
-        .
-      </p>
+          starts. A related row rather than a footnote under the last card,
+          the shape Company › Principles points at Settings › Limits with. */}
+      <RelatedRow
+        path={["settings", "backups"]}
+        icon={<DatabaseGlyph size="sm" />}
+        title="Backups & retention"
+        description="Every log's position on every node, its trim and its evictions."
+      />
     </>
   );
 }
@@ -697,7 +706,9 @@ export function NodeScreen({ id }: { id: string }) {
               />
               <NodePanels node={node} answer={data} now={now} />
               <Card>
-                <Card.Header icon={<SlidersVerticalGlyph size="sm" />}>Placement</Card.Header>
+                <Card.Header icon={<SlidersVerticalGlyph size="sm" />}>
+                  <Card.Title>Placement</Card.Title>
+                </Card.Header>
                 <div className="col gap-2">
                   {/* ITS ROLES ARE A HEADER FACT (`nodeFacts`), which the peek
                       shares; this card keeps what only the page draws. */}
@@ -930,7 +941,9 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
           which revision it is doing it on. The second half is the question an
           operator came for; the first is the one they check next. */}
       <Card>
-        <Card.Header icon={<PowerGlyph size="sm" />}>Running</Card.Header>
+        <Card.Header icon={<PowerGlyph size="sm" />}>
+          <Card.Title>Running</Card.Title>
+        </Card.Header>
         <div className="col gap-2">
           <div className="row wrap gap-2">
             {/* THE ONE QUESTION THIS PANEL EXISTS FOR, as a state rather than
@@ -981,7 +994,7 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
           count={seats.length}
           subtitle="its own, and one per seat it holds"
         >
-          Leases
+          <Card.Title>Leases</Card.Title>
         </Card.Header>
         <div className="row wrap gap-2" style={{ padding: "var(--spacing-3)" }}>
           <span className="t-label">Its own lease</span>
@@ -1039,7 +1052,7 @@ function NodePanels({ node, answer, now }: { node: FleetNode; answer: FleetAnswe
 
       <Card padding="none">
         <Card.Header icon={<CpuGlyph size="sm" />} count={duties.length}>
-          Duties
+          <Card.Title>Duties</Card.Title>
         </Card.Header>
         <DataGrid<FleetDutyLease>
           name="node-duties"

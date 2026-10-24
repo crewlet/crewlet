@@ -358,8 +358,6 @@ img {
    one included, so there is nothing to opt out of here. */
 .working-now,
 .peek-grip,
-.grid-row,
-.grid-th:not(.plain),
 .list-row.clickable,
 .work-row,
 .turn-row,
@@ -371,8 +369,7 @@ img {
 .org-node,
 .tl-chip,
 .tl-name,
-a.seat-chip,
-.histogram-fill {
+a.seat-chip {
   transition:
     background var(--motion-duration-fast) var(--motion-easing-default),
     border-color var(--motion-duration-fast) var(--motion-easing-default),

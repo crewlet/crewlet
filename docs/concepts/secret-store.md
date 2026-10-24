@@ -315,7 +315,7 @@ Before a removal the screen says **which config fields point at the row**, read 
 
 The API's own bearer tokens are NOT in this store: they are Tier A
 (`api.auth.tokens`), the root of trust the store's keyring comes from. Settings
-› **People & access** (`#/settings/people`) lists the answering node's labels —
+› **API tokens** (`#/settings/tokens`) lists the answering node's labels,
 never a value — each beside the directory row holding its `token:<id>` login,
 that row's stage and the seat it binds the token to, read from
 [`GET /iam/node-tokens`](../reference/api-endpoints.md#get-iamnode-tokens-joins-this-nodes-tier-a-labels-to-the-directory)

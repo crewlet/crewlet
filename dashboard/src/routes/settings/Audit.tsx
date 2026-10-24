@@ -120,7 +120,8 @@ import { FileTextGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { useParam } from "~/app/router.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { type DataGridColumn } from "@crewlethq/ui";
 import { linkedSeat, plainSeat } from "~/app/frame/cells.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { TimeRangePicker } from "~/ui/TimeRange.tsx";
@@ -369,7 +370,7 @@ function workSubject(record: WorkActivityRecord): Pick<AuditEntry, "subject" | "
     case "view":
       return { subject: `view ${short(id)}`, path: ["work", "views", id] };
     case "person":
-      return { subject: id, path: ["agents", "seats", id] };
+      return { subject: id, path: ["company", "org", "seats", id] };
     case "project":
       return { subject: id, path: ["work", id] };
     case "file": {
@@ -399,7 +400,7 @@ function workSubject(record: WorkActivityRecord): Pick<AuditEntry, "subject" | "
  * whose session opened and whose row changed to nobody — and otherwise by
  * their kind with the id shortened, except the email, whose id is a keyed
  * blind that says nothing and must never be read as the address. Every one is
- * the People & access screen's to show.
+ * the People screen's to show.
  */
 function identitySubject(entry: IdentityAuditEntry): Pick<AuditEntry, "subject" | "path"> {
   const id = entry.object_id ?? "";
@@ -882,7 +883,8 @@ export function Audit() {
     return short;
   }, [workData, identity.page, runtimeData, knowledgeData, configData, artifactsData, since]);
 
-  const columns = useMemo<GridColumn<AuditEntry>[]>(
+  const anyDetail = rows.some((row) => row.detail);
+  const columns = useMemo<DataGridColumn<AuditEntry>[]>(
     () => [
       {
         key: "at",
@@ -892,9 +894,13 @@ export function Audit() {
         cell: (row) => <TableDateCell value={row.at} now={now} />,
       },
       {
+        // WHERE GIVES WAY SECOND, after the author's kind: the subsystem is
+        // read off What as often as not, and a log whose When, What and To
+        // were drawn 46px wide so that Where could stay said nothing at all.
         key: "source",
         header: "Where",
         shrink: true,
+        drop: 2,
         sortValue: (row) => row.source,
         cell: (row) => <TableTextCell>{SOURCE_LABEL[row.source]}</TableTextCell>,
       },
@@ -914,7 +920,8 @@ export function Audit() {
         key: "as",
         header: "As",
         shrink: true,
-        drop: 2,
+        // FIRST TO GIVE WAY: the author's kind is drawn on Who's own badge.
+        drop: 1,
         sortValue: (row) => row.actorKind,
         cell: (row) =>
           row.actorKind ? (
@@ -929,7 +936,10 @@ export function Audit() {
         key: "through",
         header: "Through",
         shrink: true,
-        drop: 1,
+        // LAST TO GIVE WAY of the three: the credential beside the author is
+        // what an administrator reads the log for, and at 1440 it was hidden
+        // "to fit" while Detail held a page of dashes.
+        drop: 3,
         sortValue: (row) => row.through,
         cell: (row) =>
           row.through ? (
@@ -979,10 +989,15 @@ export function Audit() {
         // THE LINE THAT SAYS WHAT CHANGED is the point of the row, so it keeps
         // a reading width: at zero every content-sized column beside it took
         // its share, and an administrator's read printed as "R…" at 1440.
-        // The credential and the author's kind give way first (`drop`).
+        // The author's kind, the subsystem and the credential give way first
+        // (`drop`). 12rem rather than 16: at 16 the floor held 163px of empty
+        // track on a page of dashes at 1440 while Through was dropped "to
+        // fit", and at 1024 it took half the grid from the columns beside it.
+        // AND A PAGE OF DASHES KEEPS NO READING WIDTH: where no row on screen
+        // carries a detail, the floor is only the dash's.
         key: "detail",
         header: "Detail",
-        floor: "16rem",
+        floor: anyDetail ? "12rem" : "6rem",
         cell: (row) =>
           row.detail ? (
             // THE WHOLE LINE ON THE TITLE, and the serving node under it: the
@@ -998,7 +1013,7 @@ export function Audit() {
           ),
       },
     ],
-    [now, seatOf],
+    [now, seatOf, anyDetail],
   );
 
   // WHAT EACH SOURCE WITHHELD, said by its source: a socket read refused on

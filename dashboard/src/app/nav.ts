@@ -1,23 +1,44 @@
 /**
  * The information architecture: ONE sidebar, and three nouns that keep it one.
  *
- * # One sidebar, not a rail and a tree
+ * # One sidebar, in four runs
  *
- * The dashboard had two columns of navigation: an 80px rail of eight
- * workspaces, and beside it a sidebar holding the open workspace's own tree —
- * its units, its containers, its nodes and domains. Two levels, because six
- * trees would not fit in one list. What it cost was that every workspace had a
- * different second column, the reader's place moved between two columns on
- * every navigation, and the rail spent 97px of every screen on eight icons.
+ * The sidebar reads top to bottom as the reader meets the product:
  *
- * The approved design keeps the trees and moves them: a workspace's own
- * SECTIONS are paths drawn as tabs in the page header (Settings draws them as
- * a column, because its own row in WORKSPACES holds more sections, and
- * cross-links to the reader's Account and to Budgets, in its groups, than a
- * tab strip can — a row nobody reads to the end of), and its
- * OBJECTS — a unit, a container, a node — are rows on the section that lists
- * them. What is left for the sidebar is the part every workspace shares: where
- * you can go, and the few objects this reader keeps coming back to.
+ *   - YOU, unlabelled: Home, Inbox and My work, what needs the reader, what
+ *     reached them and what is theirs.
+ *   - COMPANY: what the company decides. Overview (its name, mission, vision
+ *     and clock), Policies (the standing policies every agent reads), the Org
+ *     chart, Schedules, Integrations (the services built into Crewlet above
+ *     the third-party apps it connects) and Budgets, last.
+ *   - WORKSPACE: what the company does with it. Work, Knowledge, Artifacts and
+ *     Live.
+ *   - The FOOT: Settings, the engine's state and the reader. Account has no
+ *     row: the user block IS the reader, and opens it from its name and menu.
+ *
+ * Settings is what the ENGINE runs, and nothing the company decides: a column
+ * of four groups, Runtime (Models & keys, MCP Tools, Secrets, Limits), Spend
+ * (the readings, never the ceilings), Access (People, Service accounts, API
+ * tokens, Sign-in policy, Audit log) and Engine (Nodes, Configuration,
+ * Backups & retention, File storage). It lists only what lives in it: a row
+ * that left for Company is found there, by the sidebar and the palette, and
+ * never again as a second row here leading out.
+ *
+ * # A sidebar row owns an address PREFIX
+ *
+ * Every Company row lives under `#/company`, so the first segment cannot say
+ * which row a page is in. A row owns a prefix (`owns`, its landing unless it
+ * says otherwise) and an address is in the row owning the LONGEST prefix of
+ * it: `#/company/org/roster` is the Org chart's, `#/company` alone is the
+ * Overview's. Settings lands on its first section, `#/settings/models`, and
+ * owns all of `#/settings`.
+ *
+ * # Addresses that moved
+ *
+ * Moved outright, with no redirect table (see `router.tsx`): no release has
+ * shipped a route from this tree, so nobody holds an old link, and an old
+ * address is Not Found. Every link the dashboard draws, and every address the
+ * docs print, names where the page is now (`app/links.test.ts`).
  *
  * # The three nouns, stated once and asserted in router.test.ts
  *
@@ -28,19 +49,22 @@
  *     `tabs` in the page header, `lenses` beside Work's scope in the trail,
  *     `column` for Settings, or `none` where the workspace's own screens lead
  *     to it (Knowledge's landing).
- *   - An OBJECT TAB is a `tab=` query on an object's own page, bound to 1–9.
+ *   - An OBJECT TAB is a `tab=` query on an object's own page, bound to 1-9.
  *
  * Nothing is two of those. A section is never a sidebar row and never a
- * query; an object tab is never a path. A filter — a reason, a scope, a
- * status — is none of the three and lives in the page's own bar.
+ * query; an object tab is never a path. A filter (a reason, a scope, a
+ * status) is none of the three and lives in the page's own bar.
  *
- * # The order is the argument
+ * # Hidden for a service the company does not run, locked for access
  *
- * You first — what needs you, what reached you, what is yours — then the
- * company's work, its people, what is running, what it knows and what it
- * spent, and the machine last. A founder opening this meets their own
- * decisions first and the engine last, because the company is the product and
- * the engine is what runs it.
+ * A row or section that reads one of Crewlet's own services (its tracker,
+ * Crewlet Works, or its knowledge base, Crewlet Knowledge) names it
+ * ([WorkspaceRow.service], [Section.service]). Where the company runs that
+ * service elsewhere or not at all, the place is HIDDEN, never locked: there is
+ * nothing to ask an admin for, and its addresses say so in place, to every
+ * reader (`ServiceNotice.tsx`, [serviceShown], `lib/services.ts`). Access
+ * the reader lacks is the opposite case and keeps its rule: locked, never
+ * hidden ([sectionOpen]).
  */
 
 import type { GlyphName } from "@crewlethq/icons/glyphs";
@@ -53,14 +77,28 @@ export type Workspace =
   | "home"
   | "inbox"
   | "me"
+  | "company"
+  | "org"
+  | "schedules"
+  | "integrations"
+  | "budgets"
   | "work"
-  | "agents"
-  | "live"
   | "knowledge"
   | "artifacts"
-  | "spend"
+  | "live"
   | "settings"
   | "account";
+
+/**
+ * A service built into Crewlet that a company may run elsewhere or not at
+ * all: `tracker` is Crewlet Works (projects, tasks, the Inbox's updates and My
+ * work), `knowledge` is Crewlet Knowledge (spaces and pages). Named here
+ * because the navigation hides what reads one the company does not run.
+ */
+export type Service = "tracker" | "knowledge";
+
+/** Whether the company runs each of Crewlet's own services: what `lib/services.ts` reads off the wire. */
+export type ServicesRun = Readonly<Record<Service, boolean>>;
 
 /**
  * How a workspace draws its sections: `tabs` in the page header, a `column`
@@ -76,11 +114,20 @@ export type Workspace =
 export type SectionRenderer = "tabs" | "lenses" | "column" | "none";
 
 /**
- * Where a workspace's row sits in the sidebar — or `menu`, for the one with no
- * row: the reader's own Account, which the user block at the sidebar's foot
- * links from its name and its menu, since that block already IS the reader.
+ * Where a workspace's row sits in the sidebar: the unlabelled run at the top
+ * (`you`), the Company and Workspace groups, the foot, or `menu` for the one
+ * with no row: the reader's own Account, which the user block at the sidebar's
+ * foot links from its name and its menu, since that block already IS the
+ * reader.
  */
-export type SidebarPlace = "you" | "workspace" | "foot" | "menu";
+export type SidebarPlace = "you" | "company" | "workspace" | "foot" | "menu";
+
+/** The sidebar's labelled groups, in the order they are drawn, and the words over each. */
+export const SIDEBAR_GROUPS: readonly { place: SidebarPlace; label: string }[] = [
+  { place: "you", label: "" },
+  { place: "company", label: "Company" },
+  { place: "workspace", label: "Workspace" },
+];
 
 /**
  * One section of a workspace: a place with its own path.
@@ -108,8 +155,8 @@ export interface Section {
    * Declared here, once, because a reader names a place by what it holds
    * ("password", "2fa") as often as by what it is called, and searching the
    * hint's prose instead would surface every screen whose sentence happens to
-   * mention a word: People & access for "tokens", which manages somebody
-   * else's.
+   * mention a word: Service accounts for "seats", whose sentence names the
+   * seats its accounts act as.
    */
   keywords?: readonly string[];
   /**
@@ -133,12 +180,13 @@ export interface Section {
   /** The Settings column's group heading. */
   group?: string;
   /**
-   * A CROSS-LINK: a row in this workspace's renderer whose address belongs to
-   * another workspace — Settings › Company lists Budgets, which lives once,
-   * under Spend. It is drawn with an arrow and is never this workspace's, and
-   * it is only ever built by [crossLink], from the row it leads to.
+   * The service built into Crewlet this section reads, where the rest of its
+   * workspace reads none: Expensive tasks names its tasks by the tracker's
+   * keys and titles, and New design's one way to finish is asking an agent,
+   * which files a task. Hidden where the company does not run it
+   * ([serviceShown]).
    */
-  elsewhere?: boolean;
+  service?: Service;
   /**
    * THE READER'S OWN: it reads and writes nothing of the company — the
    * reader's Account, how the console looks in this browser — so it is open
@@ -156,6 +204,12 @@ export interface WorkspaceRow {
   icon: GlyphName;
   /** The workspace's landing address. */
   path: string[];
+  /**
+   * The address prefix the row holds, where it is not the landing: Settings
+   * lands on its first section and holds all of `#/settings`. See "A sidebar
+   * row owns an address PREFIX" above.
+   */
+  owns?: string[];
   /** Shown under the label in the command palette. */
   hint: string;
   /** The words a reader looks for it by, as [Section.keywords]. */
@@ -184,6 +238,12 @@ export interface WorkspaceRow {
   /** The reader's own, as [Section.personal]: the Account. */
   personal?: boolean;
   /**
+   * The service built into Crewlet the whole workspace reads, as
+   * [Section.service]: Work and My work read Crewlet Works, Knowledge reads
+   * Crewlet Knowledge.
+   */
+  service?: Service;
+  /**
    * NO STAR IN THE BAR on this workspace's pages. A workspace's own page is a
    * sidebar row already, and the frame draws its star there unavailable only
    * so the bar holds still between the workspace's sections; a workspace with
@@ -194,25 +254,11 @@ export interface WorkspaceRow {
   /**
    * A sentence at the end of the section tabs that holds for every section —
    * how to read what the workspace draws. It gives way to the tabs: drawn only
-   * where the strip has room for it beside every tab (`noteFits` in
-   * `header/PageHeader.tsx`), so never on a phone.
+   * where the strip has room for it beside every tab (the kit's `Tabs` note,
+   * with `overflow="menu"`), so never on a phone.
    */
   note?: string;
 }
-
-/**
- * Budgets, which live ONCE, under Spend — and which Settings › Company lists
- * as a cross-link ([crossLink]), since that is where an operator looks for a
- * ceiling. Declared on its own so the cross-link is derived from it rather
- * than written beside it.
- */
-const BUDGETS: Section = {
-  key: "budgets",
-  label: "Budgets",
-  icon: "sliders-vertical",
-  path: ["spend", "budgets"],
-  hint: "Daily, weekly and monthly token limits",
-};
 
 /**
  * What the palette says about each kind's create page, and the words a reader
@@ -254,6 +300,14 @@ const NEW_ARTIFACT_PAGES: Readonly<
 };
 
 /**
+ * The kinds made ONLY by asking an agent: a design's create page lays out its
+ * boards and hands them to an agent, which files the work as a task, so where
+ * the company runs no Crewlet Works the page has no way to finish and is not
+ * offered. Every other kind has a create a person finishes on the page.
+ */
+const MADE_BY_AN_AGENT: ReadonlySet<ArtifactKind> = new Set(["design"]);
+
+/**
  * The create page of each kind, as sections of Artifacts reached from its
  * Make row and New menu (`tab: false`), in the order they are offered there.
  */
@@ -264,15 +318,26 @@ const NEW_ARTIFACT_SECTIONS: readonly Section[] = MAKE_ORDER.map((kind) => ({
   ...NEW_ARTIFACT_PAGES[kind],
   tab: false,
   grants: ["artifacts"],
+  ...(MADE_BY_AN_AGENT.has(kind) ? { service: "tracker" as const } : {}),
 }));
 
 /**
+ * The kinds a company running `runs` is offered a create page for, in the
+ * Make row's order: the gallery's tray and its New menu list these, as the
+ * palette lists their sections.
+ */
+export function offeredKinds(runs: ServicesRun): ArtifactKind[] {
+  return MAKE_ORDER.filter((kind) => {
+    const section = NEW_ARTIFACT_SECTIONS.find((s) => s.key === `new-${kind}`);
+    return section === undefined || serviceShown(section, runs);
+  });
+}
+
+/**
  * THE READER'S OWN, AND NO ROW: the user block at the sidebar's foot is the
- * reader, and its name and its menu are where this is opened — a row beside it
+ * reader, and its name and its menu are where this is opened. A row beside it
  * would be the same person twice, and the block takes the row's current mark
- * instead. Settings lists it too, as a cross-link ([crossLink]), since that is
- * where a person looks for their own security. A workspace all the same, so
- * the palette and `g u` reach it. No grant, and PERSONAL: every signed-in
+ * instead. A workspace all the same, so the palette and `g u` reach it. No grant, and PERSONAL: every signed-in
  * reader has an account, the page reads nothing of the company, and it says
  * what a credential that is not a person's can do there.
  */
@@ -331,7 +396,10 @@ export const WORKSPACES: WorkspaceRow[] = [
     place: "you",
     renderer: "none",
     // THE TRACKER'S: the inbox is the notices the tracker routed to the
-    // reader's record, and nothing else lands there.
+    // reader's record, beside the seat and budget conditions waiting on a
+    // person. NOT HIDDEN with the tracker, because those conditions arrive
+    // under every backend: where the company runs no Crewlet Works the
+    // screen draws them and says where asks and mentions go instead.
     grants: ["tracker"],
     sections: [],
   },
@@ -345,8 +413,10 @@ export const WORKSPACES: WorkspaceRow[] = [
     place: "you",
     renderer: "tabs",
     keep: ["handle"],
-    // THE TRACKER'S: every tab is a question about somebody's work items.
+    // THE TRACKER'S: every tab is a question about somebody's work items, so
+    // it reads Crewlet Works and is not offered where the company runs none.
     grants: ["tracker"],
+    service: "tracker",
     sections: [
       {
         key: "queue",
@@ -400,6 +470,122 @@ export const WORKSPACES: WorkspaceRow[] = [
     ],
   },
   {
+    // THE COMPANY'S PRINCIPLES: its mission, its vision and the standing
+    // policies every agent reads on every turn, in the order an agent reads
+    // them, which every signed-in reader reads (the charter is the org
+    // projection's). Its name is the Org chart's, renamed on the company's
+    // own node, and its clock is the company document's. The Company
+    // landing: `#/company` opens it too. The caps the engine holds a turn to
+    // are engine settings, and live once, in Settings › Limits.
+    key: "company",
+    label: "Principles",
+    icon: "building-complex",
+    path: ["company", "principles"],
+    // THE COMPANY LANDING IS THIS PAGE, so the row owns the bare `#/company`
+    // too: the longest prefix decides, and every other Company row is longer.
+    owns: ["company"],
+    hint: "Who the company is and the policies every agent reads on every turn",
+    keywords: ["principles", "mission", "vision", "policies", "charter", "values"],
+    chord: "c",
+    place: "company",
+    renderer: "none",
+    sections: [],
+  },
+  {
+    key: "org",
+    label: "Org chart",
+    icon: "network",
+    path: ["company", "org"],
+    hint: "The org chart and every seat on it",
+    keywords: ["agents", "seats", "hierarchy", "reporting lines", "company name"],
+    chord: "a",
+    place: "company",
+    renderer: "tabs",
+    sections: [
+      {
+        key: "chart",
+        label: "Chart",
+        icon: "network",
+        path: ["company", "org"],
+        hint: "The hierarchy every seat works inside, and the seat each person is invited onto",
+      },
+      {
+        key: "roster",
+        label: "Roster",
+        icon: "list",
+        path: ["company", "org", "roster"],
+        hint: "Every seat and what it is doing",
+      },
+      {
+        key: "teams",
+        label: "Teams",
+        icon: "users",
+        path: ["company", "org", "teams"],
+        hint: "Every team and its goals",
+      },
+      {
+        // THE ONE SECTION THAT WRITES, so it is an address and a button rather
+        // than a tab: a reader arrives at the org chart to look.
+        key: "edit",
+        label: "Edit org",
+        icon: "pencil",
+        path: ["company", "org", "edit"],
+        hint: "Change teams, seats and reporting lines",
+        // NO PERMISSION: the builder answers for itself, saying which of its
+        // saves the reader reaches, an admin's whole company, a lead's own
+        // units, rather than the frame locking it whole. Its draft is kept in
+        // the tab's storage, and a frame refusal drawn the moment admin was
+        // withdrawn would take the draft off screen while the person who
+        // wrote it is still there to copy it out.
+        tab: false,
+      },
+    ],
+  },
+  {
+    key: "schedules",
+    label: "Schedules",
+    icon: "calendar-clock",
+    path: ["company", "schedules"],
+    hint: "Recurring work and when it runs next",
+    keywords: ["cron", "recurring", "standup"],
+    chord: "d",
+    place: "company",
+    renderer: "none",
+    sections: [],
+  },
+  {
+    // THE SERVICES BUILT INTO CREWLET beside the third-party apps the company
+    // connects, in one directory grouped by need. EVERY READER'S: what the
+    // company runs is the overview every reader holds, so a reader without
+    // Admin sees the services in full and the apps with no state, while
+    // connecting and the apps' own state stay an Admin's.
+    key: "integrations",
+    label: "Integrations",
+    icon: "plug",
+    path: ["company", "integrations"],
+    hint: "Crewlet's own services and the apps the company connects",
+    keywords: ["integrations", "connect", "apps", "crewlet works", "crewlet knowledge"],
+    chord: "n",
+    place: "company",
+    renderer: "none",
+    sections: [],
+  },
+  {
+    // LAST IN COMPANY: the ceilings the company sets on its own and each
+    // seat's tokens. The readings they are measured against are Settings ›
+    // Spend, since what was spent is the engine's account of a run.
+    key: "budgets",
+    label: "Budgets",
+    icon: "target",
+    path: ["company", "budgets"],
+    hint: "Token ceilings for the company and each seat, by day, week and month",
+    keywords: ["budget", "limit", "spend cap", "ceiling", "tokens"],
+    chord: "b",
+    place: "company",
+    renderer: "none",
+    sections: [],
+  },
+  {
     key: "work",
     label: "Work",
     icon: "square-kanban",
@@ -416,6 +602,7 @@ export const WORKSPACES: WorkspaceRow[] = [
     // person an open ask names without the tracker, so they can read what they
     // were asked and answer it.
     grants: ["tracker"],
+    service: "tracker",
     sections: [
       {
         // WORK OPENS ON ITS PROJECTS: the first question about the company's
@@ -463,114 +650,6 @@ export const WORKSPACES: WorkspaceRow[] = [
     ],
   },
   {
-    key: "agents",
-    label: "Agents",
-    icon: "network",
-    path: ["agents"],
-    hint: "The org chart and every seat on it",
-    chord: "a",
-    place: "workspace",
-    renderer: "tabs",
-    sections: [
-      {
-        key: "chart",
-        label: "Org chart",
-        icon: "network",
-        path: ["agents"],
-        hint: "The hierarchy every seat works inside, and the seat each person is invited onto",
-      },
-      {
-        key: "roster",
-        label: "Roster",
-        icon: "list",
-        path: ["agents", "roster"],
-        hint: "Every seat and what it is doing",
-      },
-      {
-        key: "teams",
-        label: "Teams",
-        icon: "users",
-        path: ["agents", "teams"],
-        hint: "Every team and its goals",
-      },
-      {
-        key: "schedules",
-        label: "Schedules",
-        icon: "calendar-clock",
-        path: ["agents", "schedules"],
-        hint: "Recurring work and when it runs next",
-      },
-      {
-        // THE ONE SECTION THAT WRITES, so it is an address and a button rather
-        // than a tab: a reader arrives at Agents to look.
-        key: "edit",
-        label: "Edit org",
-        icon: "pencil",
-        path: ["agents", "edit"],
-        hint: "Change teams, seats and reporting lines",
-        // NO PERMISSION: the builder answers for itself, saying which of its
-        // saves the reader reaches — an admin's whole company, a lead's own
-        // units — rather than the frame locking it whole. Its draft is kept in
-        // the tab's storage, and a frame refusal drawn the moment admin was
-        // withdrawn would take the draft off screen while the person who
-        // wrote it is still there to copy it out.
-        tab: false,
-      },
-    ],
-  },
-  {
-    key: "live",
-    label: "Live",
-    icon: "activity",
-    path: ["live"],
-    hint: "Every turn, what ran and what it cost",
-    chord: "l",
-    place: "workspace",
-    renderer: "tabs",
-    sections: [
-      {
-        key: "now",
-        label: "Now running",
-        icon: "zap",
-        path: ["live"],
-        hint: "What is running now",
-      },
-      {
-        key: "turns",
-        label: "Turns",
-        icon: "brain",
-        path: ["live", "turns"],
-        hint: "Every turn the seats ran, round by round",
-        // THE COMPANY-WIDE TRAIL is admin's: a lead reads their own seats'
-        // turns on each seat's page, never everybody's here.
-        grants: ["admin"],
-      },
-      {
-        key: "runs",
-        label: "Coding runs",
-        icon: "square-terminal",
-        path: ["live", "runs"],
-        hint: "Coding runs, live and finished",
-      },
-      {
-        key: "a2a",
-        label: "Agent-to-agent",
-        icon: "link",
-        path: ["live", "a2a"],
-        hint: "The private channels seats opened with each other",
-        grants: ["admin"],
-      },
-      {
-        key: "events",
-        label: "Event log",
-        icon: "list",
-        path: ["live", "events"],
-        hint: "Every engine event",
-        grants: ["admin"],
-      },
-    ],
-  },
-  {
     key: "knowledge",
     label: "Knowledge",
     icon: "book-open",
@@ -585,6 +664,7 @@ export const WORKSPACES: WorkspaceRow[] = [
     renderer: "none",
     // THE KNOWLEDGE BASE'S: every section reads its pages.
     grants: ["knowledge"],
+    service: "knowledge",
     sections: [
       {
         key: "search",
@@ -667,7 +747,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         icon: "share-2",
         path: ["artifacts", "shared"],
         hint: "Artifacts somebody shared with you, your team or the whole company",
-        keywords: ["company", "by agents"],
+        keywords: ["company-wide", "by agents"],
       },
       // EACH KIND'S CREATE PAGE IS AN ADDRESS, not a tab: the gallery's Make
       // row and its New menu open them, and a reader arrives at Artifacts to
@@ -676,125 +756,99 @@ export const WORKSPACES: WorkspaceRow[] = [
     ],
   },
   {
-    key: "spend",
-    label: "Spend",
-    icon: "coins",
-    path: ["spend"],
-    hint: "Token spend and budgets",
-    chord: "t",
+    key: "live",
+    label: "Live",
+    icon: "activity",
+    path: ["live"],
+    hint: "Every turn, what ran and what it cost",
+    chord: "l",
     place: "workspace",
     renderer: "tabs",
-    // THE WINDOW IS THE WORKSPACE'S QUESTION: Overview and Expensive tasks
-    // both read it, and a tab that dropped it opened the next section on the
-    // default while the overview's own "All" link carried it — one section
-    // reached two ways on two windows. Budgets reads its own calendar windows
-    // and ignores it, but carries it, so the way back keeps the reader's.
-    keep: ["window"],
     sections: [
       {
-        key: "overview",
-        label: "Overview",
-        icon: "coins",
-        path: ["spend"],
-        hint: "Tokens over time, by phase, agent, model and team",
+        key: "now",
+        label: "Now running",
+        icon: "zap",
+        path: ["live"],
+        hint: "What is running now",
       },
       {
-        key: "tasks",
-        label: "Expensive tasks",
-        icon: "layers",
-        path: ["spend", "tasks"],
-        hint: "Tasks that spent the most tokens",
-        // A TASK'S KEY AND TITLE are the tracker's; the overview's spend is
-        // everybody's.
-        grants: ["tracker"],
+        key: "turns",
+        label: "Turns",
+        icon: "brain",
+        path: ["live", "turns"],
+        hint: "Every turn the seats ran, round by round",
+        // THE COMPANY-WIDE TRAIL is admin's: a lead reads their own seats'
+        // turns on each seat's page, never everybody's here.
+        grants: ["admin"],
       },
-      BUDGETS,
+      {
+        key: "runs",
+        label: "Coding runs",
+        icon: "square-terminal",
+        path: ["live", "runs"],
+        hint: "Coding runs, live and finished",
+      },
+      {
+        key: "a2a",
+        label: "Agent-to-agent",
+        icon: "link",
+        path: ["live", "a2a"],
+        hint: "The private channels seats opened with each other",
+        grants: ["admin"],
+      },
+      {
+        key: "events",
+        label: "Event log",
+        icon: "list",
+        path: ["live", "events"],
+        hint: "Every engine event",
+        grants: ["admin"],
+      },
     ],
   },
   {
-    // LAST AND LOCKED, and the row is never hidden: a section that vanishes
-    // when a credential is absent is indistinguishable from one that does not
-    // exist, so an operator on a fresh browser would conclude the product has
-    // nowhere to configure anything. General is the one company section every
-    // reader can read — the charter is the org projection's — so the
-    // workspace names no permission as a whole; every other company section
-    // is admin's, and says so on its own row.
+    // AT THE FOOT, AND THE ROW IS NEVER HIDDEN: a place that vanishes when a
+    // credential is absent is indistinguishable from one that does not
+    // exist. Spend's readings are every reader's, so the workspace names no
+    // permission as a whole; every other section is admin's, and says so on
+    // its own row.
     key: "settings",
     label: "Settings",
-    icon: "sliders-vertical",
-    path: ["settings"],
-    hint: "Everything an operator configures, in one place",
+    // THE GEAR: what a reader looks for to change how the engine runs.
+    icon: "settings",
+    path: ["settings", "models"],
+    owns: ["settings"],
+    hint: "What the engine runs: models, tools, spend, access and its nodes",
     chord: "s",
     place: "foot",
     renderer: "column",
+    // THE WINDOW IS SPEND'S QUESTION: Spend and Expensive tasks both read it,
+    // and a row that dropped it opened the next section on the default while
+    // the readings' own links carried it.
+    keep: ["window"],
     sections: [
-      // THE READER'S OWN, FIRST — the order argument above — and a
-      // CROSS-LINK, because Account has one address and it is not under
-      // Settings. Settings is where a person looks for their password and
-      // their second factor, and a reader holding none of the company's
-      // grants found only locks here and concluded there was no two-step
-      // verification to set up.
-      crossLink(ACCOUNT, { key: "account", group: "You" }),
-      {
-        // THE READER'S OWN TOO, beside their Account: how the console looks
-        // in this browser, which no operator configures and nobody else
-        // sees. ONE GROUP for both, first, because a person's own settings
-        // are what they look for first. No permission, because it reads and
-        // writes nothing of the company's.
-        key: "appearance",
-        label: "Appearance",
-        icon: "palette",
-        path: ["settings", "appearance"],
-        hint: "Mode, density and theme, in this browser only",
-        group: "You",
-        personal: true,
-      },
-      {
-        key: "general",
-        label: "General",
-        icon: "house",
-        path: ["settings"],
-        hint: "The charter: mission, vision and the standing policies",
-        group: "Company",
-      },
-      {
-        key: "people",
-        label: "People & access",
-        icon: "users",
-        path: ["settings", "people"],
-        hint: "People, their credentials and sessions, and this node's API tokens",
-        group: "Company",
-        grants: ["admin"],
-      },
-      crossLink(BUDGETS, { key: "budgets", group: "Company" }),
-      {
-        key: "integrations",
-        label: "Integrations",
-        icon: "plug",
-        path: ["settings", "integrations"],
-        hint: "Connected tools and their status",
-        group: "Connect",
-        grants: ["admin"],
-      },
-      {
-        key: "tools",
-        label: "Tools & MCP",
-        icon: "wrench",
-        path: ["settings", "tools"],
-        hint: "Agent tools and MCP servers",
-        group: "Connect",
-        // ADMIN'S, like every company setting: the page is where MCP servers
-        // are added and their templates read, and the overview's own `tools`
-        // push already says which tools each seat has on its page.
-        grants: ["admin"],
-      },
       {
         key: "models",
         label: "Models & keys",
         icon: "cpu",
         path: ["settings", "models"],
         hint: "Models and their API keys",
-        group: "Connect",
+        keywords: ["models", "llm", "provider", "api key"],
+        group: "Runtime",
+        grants: ["admin"],
+      },
+      {
+        key: "mcp-tools",
+        label: "MCP Tools",
+        icon: "wrench",
+        path: ["settings", "mcp-tools"],
+        hint: "The MCP servers the engine runs and every tool its agents call",
+        keywords: ["mcp", "tools", "mcp servers", "agent tools"],
+        group: "Runtime",
+        // ADMIN'S: the page is where MCP servers are added and their
+        // templates read, and the overview's own `tools` push already says
+        // which tools each seat has on its page.
         grants: ["admin"],
       },
       {
@@ -803,7 +857,93 @@ export const WORKSPACES: WorkspaceRow[] = [
         icon: "key",
         path: ["settings", "secrets"],
         hint: "The company’s stored credentials",
-        group: "Connect",
+        keywords: ["credentials", "env"],
+        group: "Runtime",
+        grants: ["admin"],
+      },
+      {
+        key: "limits",
+        label: "Limits",
+        icon: "gauge",
+        path: ["settings", "limits"],
+        hint: "Turn guardrails, delegation, notification and timeout caps",
+        keywords: ["guardrails", "caps", "thresholds", "timeouts", "rounds", "delegation"],
+        group: "Runtime",
+        // ADMIN'S: the caps are read from the company document, which only
+        // an admin reads.
+        grants: ["admin"],
+      },
+      {
+        key: "spend",
+        // NOT "SPEND" UNDER SPEND: where the company runs no Crewlet Works
+        // the group holds this row alone, and it read "Spend › Spend". The
+        // name its Home widget already carries.
+        label: "Token spend",
+        icon: "coins",
+        path: ["settings", "spend"],
+        hint: "Tokens over time, by phase, agent, model and team",
+        keywords: ["spend", "cost", "tokens", "usage"],
+        group: "Spend",
+      },
+      {
+        key: "spend-tasks",
+        label: "Expensive tasks",
+        icon: "layers",
+        path: ["settings", "spend", "tasks"],
+        hint: "Tasks that spent the most tokens",
+        group: "Spend",
+        // A TASK'S KEY AND TITLE are the tracker's; the readings above are
+        // everybody's.
+        grants: ["tracker"],
+        service: "tracker",
+      },
+      {
+        key: "people",
+        label: "People",
+        icon: "users",
+        path: ["settings", "people"],
+        hint: "People, their invitations, grants and sessions",
+        keywords: ["invite", "members", "grants", "directory"],
+        group: "Access",
+        grants: ["admin"],
+      },
+      {
+        key: "service-accounts",
+        label: "Service accounts",
+        icon: "bot",
+        path: ["settings", "service-accounts"],
+        hint: "Machine principals, what they hold and the seats they act as",
+        keywords: ["machine", "bot", "automation"],
+        group: "Access",
+        grants: ["admin"],
+      },
+      {
+        key: "tokens",
+        label: "API tokens",
+        icon: "key",
+        path: ["settings", "tokens"],
+        hint: "This node's API tokens",
+        keywords: ["token", "api key", "node token"],
+        group: "Access",
+        grants: ["admin"],
+      },
+      {
+        key: "sign-in",
+        label: "Sign-in policy",
+        icon: "shield-user",
+        path: ["settings", "sign-in"],
+        hint: "How people sign in, and what a session asks of them",
+        keywords: ["password", "2fa", "mfa", "session", "step-up", "security"],
+        group: "Access",
+        grants: ["admin"],
+      },
+      {
+        key: "audit",
+        label: "Audit log",
+        icon: "shield",
+        path: ["settings", "audit"],
+        hint: "Every change made by people and tokens",
+        group: "Access",
         grants: ["admin"],
       },
       {
@@ -811,7 +951,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         label: "Nodes",
         icon: "server",
         path: ["settings", "nodes"],
-        hint: "Engine nodes, the broker and file storage",
+        hint: "Engine nodes and the broker",
         group: "Engine",
         grants: ["admin"],
       },
@@ -821,6 +961,7 @@ export const WORKSPACES: WorkspaceRow[] = [
         icon: "code",
         path: ["settings", "config"],
         hint: "The active company revision, its history and its diffs",
+        keywords: ["company document", "timezone"],
         group: "Engine",
         grants: ["admin"],
       },
@@ -834,11 +975,12 @@ export const WORKSPACES: WorkspaceRow[] = [
         grants: ["admin"],
       },
       {
-        key: "audit",
-        label: "Audit log",
-        icon: "shield",
-        path: ["settings", "audit"],
-        hint: "Every change made by people and tokens",
+        key: "storage",
+        label: "File storage",
+        icon: "folder",
+        path: ["settings", "storage"],
+        hint: "Where the engine keeps the company's files, and its collector",
+        keywords: ["objects", "bucket", "s3", "files"],
         group: "Engine",
         grants: ["admin"],
       },
@@ -852,19 +994,29 @@ export function workspaceRow(key: Workspace | ""): WorkspaceRow | undefined {
   return WORKSPACES.find((row) => row.key === key);
 }
 
+/** The address prefix a row holds: its `owns`, or its landing. */
+export function ownedBy(row: WorkspaceRow): readonly string[] {
+  return row.owns ?? row.path;
+}
+
 /**
  * Which workspace a route belongs to, so the sidebar marks the right row.
  *
- * The FIRST SEGMENT decides, and each workspace owns exactly one — its own
- * key. The empty fragment is Home, which is the landing screen. A head no
- * workspace owns answers "", never the first row: a sidebar that marked a
- * workspace for a path it does not hold would tell the reader they are
- * somewhere they are not.
+ * The row owning the LONGEST PREFIX of the address decides ([ownedBy]):
+ * `#/company/org/roster` is the Org chart's, `#/company` the Overview's. The
+ * empty fragment is Home, which is the landing screen. An address no row owns
+ * answers "", never the first row: a sidebar that marked a workspace for a
+ * path it does not hold would tell the reader they are somewhere they are not.
  */
-export function workspaceOf(path: string[]): Workspace | "" {
-  const head = path[0] ?? "";
-  if (!head) return "home";
-  return WORKSPACES.find((row) => row.key === head)?.key ?? "";
+export function workspaceOf(path: readonly string[]): Workspace | "" {
+  if (path.length === 0) return "home";
+  let best: WorkspaceRow | undefined;
+  for (const row of WORKSPACES) {
+    const owns = ownedBy(row);
+    if (!startsWith(path, owns)) continue;
+    if (!best || owns.length > ownedBy(best).length) best = row;
+  }
+  return best?.key ?? "";
 }
 
 /**
@@ -909,6 +1061,9 @@ export function framelessOf(path: readonly string[]): FramelessRoute | null {
  * name where it declares none — never by a name two units may share.)
  */
 export const RESERVED_SEGMENTS: string[] = [
+  "company",
+  "principles",
+  "org",
   "tasks",
   "views",
   "history",
@@ -931,18 +1086,23 @@ export const RESERVED_SEGMENTS: string[] = [
   "events",
   "pages",
   "budgets",
+  "spend",
   "people",
+  "service-accounts",
+  "tokens",
+  "sign-in",
   "integrations",
-  "tools",
+  "mcp-tools",
   "servers",
   "models",
   "secrets",
+  "limits",
   "nodes",
   "config",
   "revisions",
   "backups",
+  "storage",
   "audit",
-  "appearance",
   "yours",
   "shared",
   "new",
@@ -955,8 +1115,8 @@ export const RESERVED_SEGMENTS: string[] = [
  * DERIVED FROM [WORKSPACES], never written beside it: a palette that listed
  * its own copy of the sections is a second table that is wrong the day a
  * section moves. A section whose path IS its workspace's landing page is one
- * destination under the workspace's name, and a cross-link (Settings' Budgets
- * row) is the destination of the workspace that owns the address.
+ * destination under the workspace's name, found by that section's words too:
+ * Settings opens on Models & keys, and "models" finds it.
  */
 export interface Destination {
   key: string;
@@ -972,10 +1132,12 @@ export interface Destination {
   keywords?: readonly string[];
   /** What opens it, as [Section.grants]. */
   grants?: readonly Grant[];
+  /** The service built into Crewlet it reads, as [Section.service]: hidden where it is not run. */
+  service?: Service;
 }
 
 export const DESTINATIONS: Destination[] = WORKSPACES.flatMap((row) => {
-  const own = row.sections.find((s) => !s.elsewhere && samePath(s.path, row.path));
+  const own = row.sections.find((s) => samePath(s.path, row.path));
   const landing: Destination = {
     key: row.key,
     workspace: row.key,
@@ -984,13 +1146,16 @@ export const DESTINATIONS: Destination[] = WORKSPACES.flatMap((row) => {
     path: row.path,
     hint: row.hint,
     // A LANDING PAGE IS ALSO ITS LANDING SECTION, so it is found by that
-    // section's words as well as the workspace's, and locked by that
-    // section's grants where the workspace names none of its own.
+    // section's words as well as the workspace's, and its grants are what
+    // opens THAT PAGE (a Home widget summarising it reads them). The
+    // palette's entry for the workspace is locked as the workspace is, and
+    // opens where the reader may read ([landingPath], `palette/hits.ts`).
     ...keywordsOf([...(row.keywords ?? []), ...(own?.keywords ?? [])]),
     ...grantsOf(row.grants ?? own?.grants),
+    ...serviceOf(row.service ?? own?.service),
   };
   const sections = row.sections
-    .filter((s) => !s.elsewhere && !samePath(s.path, row.path))
+    .filter((s) => !samePath(s.path, row.path))
     .map((s): Destination => ({
       key: `${row.key}-${s.key}`,
       workspace: row.key,
@@ -1000,6 +1165,7 @@ export const DESTINATIONS: Destination[] = WORKSPACES.flatMap((row) => {
       hint: s.hint,
       ...keywordsOf(s.keywords),
       ...grantsOf(s.grants),
+      ...serviceOf(row.service ?? s.service),
     }));
   return [landing, ...sections];
 });
@@ -1011,12 +1177,11 @@ export const DESTINATIONS: Destination[] = WORKSPACES.flatMap((row) => {
  * only where that section's path is a prefix of it: `#/work/ENG` is in
  * Projects, which is where the reader reached it from.
  */
-export function sectionOf(path: string[]): Section | undefined {
+export function sectionOf(path: readonly string[]): Section | undefined {
   const row = workspaceRow(workspaceOf(path));
   if (!row) return undefined;
   let best: Section | undefined;
   for (const section of row.sections) {
-    if (section.elsewhere) continue;
     if (section.path.length > path.length) continue;
     if (!section.path.every((seg, i) => seg === path[i])) continue;
     if (!best || section.path.length > best.path.length) best = section;
@@ -1032,33 +1197,16 @@ function keywordsOf(words: readonly string[] | undefined): { keywords?: readonly
   return words && words.length > 0 ? { keywords: words } : {};
 }
 
+function serviceOf(service: Service | undefined): { service?: Service } {
+  return service ? { service } : {};
+}
+
 function samePath(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((seg, i) => seg === b[i]);
 }
 
-/**
- * A CROSS-LINK to `target` — a section of another workspace, or another
- * workspace's landing — drawn in this workspace's renderer at `at`.
- *
- * DERIVED, NEVER RESTATED: its label, glyph, address, hint, grants and whether
- * it is the reader's own are the row it leads to, so one place has one
- * description wherever it is offered. Written out by hand, Settings' Account
- * row said "two-step verification" where the palette and the user block's
- * popover said "second factor", and its Budgets row said nothing but where
- * Budgets live.
- */
-function crossLink(target: Section | WorkspaceRow, at: { key: string; group: string }): Section {
-  return {
-    key: at.key,
-    group: at.group,
-    label: target.label,
-    icon: target.icon,
-    path: target.path,
-    hint: target.hint,
-    elsewhere: true,
-    ...grantsOf(target.grants),
-    ...(target.personal ? { personal: true } : {}),
-  };
+function startsWith(path: readonly string[], prefix: readonly string[]): boolean {
+  return prefix.length <= path.length && prefix.every((seg, i) => seg === path[i]);
 }
 
 /**
@@ -1110,11 +1258,6 @@ export function grantsMissing(
   return section.grants ?? [];
 }
 
-/** A workspace's own sections — never a cross-link, which is another workspace's. */
-function ownSections(row: WorkspaceRow): Section[] {
-  return row.sections.filter((s) => !s.elsewhere);
-}
-
 /**
  * Whether a workspace is open to a reader holding `held`: when it is the
  * reader's own, when any of its own sections is, or — where it has none — when
@@ -1125,10 +1268,30 @@ function ownSections(row: WorkspaceRow): Section[] {
  */
 export function workspaceOpen(row: WorkspaceRow, held: readonly string[]): boolean {
   if (row.personal) return true;
-  const own = ownSections(row);
+  const own = row.sections;
   if (own.some((s) => s.personal)) return true;
   if (!sectionOpen({ grants: row.grants }, held)) return false;
   return own.length === 0 || own.some((s) => sectionOpen(s, held));
+}
+
+/**
+ * Where a workspace's row, its `g` chord and its palette entry open for a
+ * reader holding `held`: its own path, or, where that landing section is
+ * closed to them, the first of its sections they can open and the company
+ * runs. Settings lands on Models & keys, which is Admin's, and a reader
+ * holding only Tracker was sent to a refusal although Token spend and
+ * Expensive tasks are theirs. `held` null is a reader not yet read: the
+ * workspace's own path, as the frame draws every lock only once it knows.
+ */
+export function landingPath(
+  row: WorkspaceRow,
+  held: readonly string[] | null,
+  runs: ServicesRun,
+): string[] {
+  if (held === null) return row.path;
+  const own = row.sections.find((s) => samePath(s.path, row.path));
+  if (!own || sectionOpen(own, held)) return row.path;
+  return row.sections.find((s) => serviceShown(s, runs) && sectionOpen(s, held))?.path ?? row.path;
 }
 
 /**
@@ -1140,7 +1303,7 @@ export function workspaceMissing(row: WorkspaceRow, held: readonly string[]): re
   if (workspaceOpen(row, held)) return [];
   const whole = grantsMissing({ grants: row.grants }, held);
   if (whole.length > 0) return whole;
-  return [...new Set(ownSections(row).flatMap((s) => grantsMissing(s, held)))];
+  return [...new Set(row.sections.flatMap((s) => grantsMissing(s, held)))];
 }
 
 /**
@@ -1154,7 +1317,7 @@ export function workspaceMissing(row: WorkspaceRow, held: readonly string[]): re
  * an open ask names without the tracker.
  */
 export function closedBy(
-  path: string[],
+  path: readonly string[],
   held: readonly string[],
 ): { what: string; needs: readonly Grant[] } | null {
   const row = workspaceRow(workspaceOf(path));
@@ -1173,18 +1336,48 @@ export function closedBy(
  * section's — so the frame waits for the reader's first answer before drawing
  * a screen that may be closed to them.
  */
-export function guardedPath(path: string[]): boolean {
+export function guardedPath(path: readonly string[]): boolean {
   const row = workspaceRow(workspaceOf(path));
   if (row?.personal) return false;
   return (row?.grants?.length ?? 0) > 0 || (sectionOf(path)?.grants?.length ?? 0) > 0;
 }
 
 /**
- * Whether an address is the READER'S OWN — the Account, Settings › Appearance
- * — which the frame draws for every signed-in reader, the engine serving them
- * no company included.
+ * Whether an address is the READER'S OWN (the Account), which the frame draws
+ * for every signed-in reader, the engine serving them no company included.
  */
-export function personalPath(path: string[]): boolean {
+export function personalPath(path: readonly string[]): boolean {
   if (workspaceRow(workspaceOf(path))?.personal) return true;
   return sectionOf(path)?.personal === true;
+}
+
+/**
+ * Whether a place is offered to a company running `runs`: anything that reads
+ * no service built into Crewlet, and otherwise only where the company runs
+ * that service. HIDDEN, never locked, where it does not: see "Hidden for a
+ * service the company does not run" above.
+ */
+export function serviceShown(place: { service?: Service }, runs: ServicesRun): boolean {
+  return place.service === undefined || runs[place.service];
+}
+
+/**
+ * The service an address reads, if the company may not run it: its
+ * workspace's, then its section's. What the router asks before drawing a page
+ * a hidden row held, so the reader is told in place why it is not here
+ * (`ServiceNotice.tsx`).
+ */
+export function serviceOfPath(path: readonly string[]): Service | undefined {
+  const row = workspaceRow(workspaceOf(path));
+  return row?.service ?? sectionOf(path)?.service;
+}
+
+/**
+ * Whether an address is offered to a company running `runs`, as
+ * [serviceShown] decides for a place: what the palette's recents, the
+ * sidebar's stars and Home's pinned shelf ask of a stored address.
+ */
+export function pathShown(path: readonly string[], runs: ServicesRun): boolean {
+  const service = serviceOfPath(path);
+  return service === undefined || runs[service];
 }

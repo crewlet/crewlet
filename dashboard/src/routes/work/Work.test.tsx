@@ -26,6 +26,7 @@ import { useClient, useConnection, useOrg } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { calendarWeeks, dayKey, dayLabel, filterPatchForGroup } from "~/lib/work.ts";
 import type { QueryName, WorkGroup, WorkProjectRow, WorkSummary } from "~/protocol/index.ts";
+import { installWindow } from "~/testing.tsx";
 import { withDerived } from "~/test/org.ts";
 
 vi.mock("~/lib/store-hooks.ts", async () => {
@@ -797,9 +798,15 @@ test("a saved view's grouping heads the list's columns by name", async () => {
     },
   });
   const { container } = mountWork();
-  await waitFor(() => expect(container.querySelector(".grid-band-head")).toBeTruthy());
-  expect(container.querySelector(".grid-band-head")?.textContent).toContain("Ada Okonkwo");
-  expect(container.querySelector(".grid-band-head")?.textContent).not.toContain("ada");
+  await waitFor(() =>
+    expect(container.querySelector(".crewlet-data-grid__band-head")).toBeTruthy(),
+  );
+  expect(container.querySelector(".crewlet-data-grid__band-head")?.textContent).toContain(
+    "Ada Okonkwo",
+  );
+  expect(container.querySelector(".crewlet-data-grid__band-head")?.textContent).not.toContain(
+    "ada",
+  );
 });
 
 /** A company with one project — the listing every list-screen case needs,
@@ -940,8 +947,14 @@ test("a column chip takes its name from the effective axis", async () => {
  * shape. A comparison that sorted these would pass on a table drawing the
  * list's arrangement.
  */
+/**
+ * The words each head DRAWS: a glyph column's name is said to a screen reader
+ * (and on hover) rather than drawn, so it is not read here.
+ */
 const heads = (container: HTMLElement) =>
-  [...container.querySelectorAll(".grid-th")].map((el) => (el.textContent ?? "").trim());
+  [...container.querySelectorAll(".crewlet-data-grid__th")].map((el) =>
+    (el.querySelector(".crewlet-data-grid__truncate")?.textContent ?? "").trim(),
+  );
 
 /** What the list draws with nothing chosen: the compact row, as columns. */
 const LIST_SET = ["", "Key", "Status", "Title", "Due", "", "", "Updated"];
@@ -967,18 +980,18 @@ const TABLE_SET = [
 test("the list and the table are the same grid drawn in two column sets", async () => {
   serving({ work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true } });
   const asList = mountWork();
-  await waitFor(() => expect(asList.container.querySelector(".grid-wrap")).toBeTruthy());
+  await waitFor(() => expect(asList.container.querySelector(".crewlet-data-grid")).toBeTruthy());
   expect(heads(asList.container)).toEqual(LIST_SET);
   cleanup();
 
   location.hash = "#/work?shape=table";
   serving({ work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true } });
   const asTable = mountWork();
-  await waitFor(() => expect(asTable.container.querySelector(".grid-wrap")).toBeTruthy());
+  await waitFor(() => expect(asTable.container.querySelector(".crewlet-data-grid")).toBeTruthy());
   expect(heads(asTable.container)).toEqual(TABLE_SET);
   // ONE GRID, both times: the list is not a hand-rolled panel any more, so it
   // has a head row at all and every column of it is sized by the same tracks.
-  expect(asTable.container.querySelectorAll(".grid-wrap").length).toBe(1);
+  expect(asTable.container.querySelectorAll(".crewlet-data-grid").length).toBe(1);
 });
 
 // `cols=` SELECTS WITHIN THE ACTIVE SET, and a name that set does not hold is
@@ -989,7 +1002,7 @@ test("cols narrows within the active set and ignores what the set does not hold"
   location.hash = "#/work?cols.list=key,title,restore";
   serving({ work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true } });
   const { container } = mountWork();
-  await waitFor(() => expect(container.querySelector(".grid-wrap")).toBeTruthy());
+  await waitFor(() => expect(container.querySelector(".crewlet-data-grid")).toBeTruthy());
   expect(heads(container)).toEqual(["Key", "Title"]);
 });
 
@@ -999,7 +1012,7 @@ test("a cols naming nothing this set draws falls back to the default set", async
   location.hash = "#/work?cols.list=restore,removed_by";
   serving({ work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true } });
   const { container } = mountWork();
-  await waitFor(() => expect(container.querySelector(".grid-wrap")).toBeTruthy());
+  await waitFor(() => expect(container.querySelector(".crewlet-data-grid")).toBeTruthy());
   expect(heads(container)).toEqual(LIST_SET);
 });
 
@@ -1012,7 +1025,7 @@ test("each shape keeps its own column arrangement", async () => {
   location.hash = "#/work?shape=table&cols.list=key,title";
   serving({ work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true } });
   const { container } = mountWork();
-  await waitFor(() => expect(container.querySelector(".grid-wrap")).toBeTruthy());
+  await waitFor(() => expect(container.querySelector(".crewlet-data-grid")).toBeTruthy());
   // The list's narrowing is on the address and the table pays no attention.
   expect(heads(container)).toEqual(TABLE_SET);
   cleanup();
@@ -1020,7 +1033,7 @@ test("each shape keeps its own column arrangement", async () => {
   location.hash = "#/work?shape=table&cols.table=key,title";
   serving({ work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true } });
   const own = mountWork();
-  await waitFor(() => expect(own.container.querySelector(".grid-wrap")).toBeTruthy());
+  await waitFor(() => expect(own.container.querySelector(".crewlet-data-grid")).toBeTruthy());
   expect(heads(own.container)).toEqual(["Key", "Title"]);
 });
 
@@ -1040,7 +1053,7 @@ test("the Display menu offers the active set's columns on the list too", async (
   await waitFor(() => expect(screen.getByText("Columns")).toBeTruthy());
   // THROUGH THE DOCUMENT, not the mount's own container: the menu is a
   // `Popover`, so its panel is portalled out of the tree the screen rendered.
-  const boxes = [...document.querySelectorAll(".grid-cols-choice")].map(
+  const boxes = [...document.querySelectorAll(".crewlet-column-chooser__choice")].map(
     (el) => el.textContent ?? "",
   );
   // THE WHOLE VOCABULARY, not only what is drawn: the four the compact set
@@ -1060,7 +1073,9 @@ test("the Display menu offers the active set's columns on the list too", async (
     "Assignee",
     "Updated",
   ]);
-  const ticked = [...document.querySelectorAll<HTMLInputElement>(".grid-cols-choice input")]
+  const ticked = [
+    ...document.querySelectorAll<HTMLInputElement>(".crewlet-column-chooser__choice input"),
+  ]
     .map((box, at) => (box.checked ? boxes[at] : null))
     .filter(Boolean);
   // AND THE TICKS ARE THE DEFAULT SET until somebody moves one.
@@ -1093,11 +1108,13 @@ test("a grouped answer draws bands with the engine's count on both shapes", asyn
     location.hash = `#/work?shape=${shape}&group_by=status`;
     serving(grouped);
     const { container } = mountWork();
-    await waitFor(() => expect(container.querySelector(".grid-band-head")).toBeTruthy());
-    const band = container.querySelector(".grid-band-head")!;
+    await waitFor(() =>
+      expect(container.querySelector(".crewlet-data-grid__band-head")).toBeTruthy(),
+    );
+    const band = container.querySelector(".crewlet-data-grid__band-head")!;
     expect(band.textContent, shape).toContain("To do");
     expect(band.textContent, shape).toContain("2 of 3");
-    expect(container.querySelectorAll(".grid-row").length, shape).toBe(2);
+    expect(container.querySelectorAll(".crewlet-data-grid__row").length, shape).toBe(2);
     cleanup();
   }
 });
@@ -1127,8 +1144,12 @@ test("a twice-grouped answer nests its bands and keeps its rows", async () => {
     location.hash = `#/work?shape=${shape}&group_by=status&group_by2=assignee`;
     serving(nested);
     const { container } = mountWork();
-    await waitFor(() => expect(container.querySelectorAll(".grid-row").length).toBe(2));
-    const bands = [...container.querySelectorAll(".grid-band-head")].map((el) => el.textContent);
+    await waitFor(() =>
+      expect(container.querySelectorAll(".crewlet-data-grid__row").length).toBe(2),
+    );
+    const bands = [...container.querySelectorAll(".crewlet-data-grid__band-head")].map(
+      (el) => el.textContent,
+    );
     expect(bands.length, shape).toBe(2);
     expect(bands[0], shape).toContain("To do");
     expect(bands[1], shape).toContain("Ada Okonkwo");
@@ -1150,8 +1171,8 @@ test("the foot says the end of it on both shapes", async () => {
       work_items: { items: [row("1"), row("2")], groups: [], total_hint: 2, complete: true },
     });
     const { container } = mountWork();
-    await waitFor(() => expect(container.querySelector(".grid-foot")).toBeTruthy());
-    expect(container.querySelector(".grid-foot")?.textContent, shape).toBe(
+    await waitFor(() => expect(container.querySelector(".crewlet-data-grid__foot")).toBeTruthy());
+    expect(container.querySelector(".crewlet-data-grid__foot")?.textContent, shape).toBe(
       "That is all of it · 2 items",
     );
     cleanup();
@@ -1442,6 +1463,29 @@ test("the first row draws the shape and the menus, the second cuts the answer", 
   expect(within(bar).queryByLabelText("Assignee")).toBeNull();
 });
 
+// ON A PHONE THE ARRANGEMENT FOLDS INTO DISPLAY: the bar's one line cut Group
+// by at the edge and put Sort past it, so at a phone's width which work, Group
+// by and Sort open from Display and the bar keeps the chips and the count.
+// Mutation: keep them in the bar at every width and the bar holds them.
+test("on a phone, which work, Group by and Sort are in Display, not the bar", async () => {
+  const screenWidth = installWindow(390);
+  try {
+    serving({ work_items: { items: [], groups: [], complete: true } });
+    const { container } = mountWork();
+    await waitFor(() => expect(container.querySelector(".work-bar")).toBeTruthy());
+    const bar = container.querySelector(".work-bar") as HTMLElement;
+    expect(within(bar).queryByRole("combobox", { name: "Group by" })).toBeNull();
+    expect(within(bar).queryByRole("combobox", { name: "Sort" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Display" }));
+    const panel = await screen.findByRole("dialog", { name: "Display" });
+    expect(within(panel).getByRole("combobox", { name: "Which work" })).toBeTruthy();
+    expect(within(panel).getByRole("combobox", { name: "Group by" })).toBeTruthy();
+    expect(within(panel).getByRole("combobox", { name: "Sort" })).toBeTruthy();
+  } finally {
+    screenWidth.restore();
+  }
+});
+
 // ON A PHONE THE BAR'S RUN SCROLLS, AND SAYS SO: the edge with more past it
 // carries the attribute the sheet fades, because a control cut at the edge
 // ("No g") with nothing to say more was past it read as a broken label. The
@@ -1629,7 +1673,7 @@ test("a container with no default view opens on the list", async () => {
     work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true },
   });
   const { container } = mountWork();
-  await waitFor(() => expect(container.querySelector(".grid-wrap")).toBeTruthy());
+  await waitFor(() => expect(container.querySelector(".crewlet-data-grid")).toBeTruthy());
   // A LIST IS A PAGED QUESTION rather than a set of columns, which is the half
   // of this that reaches the engine.
   expect(asked(query).limit).toBe(100);
@@ -1774,8 +1818,10 @@ test("a complete list closes with the end of it and an incomplete one does not",
     work_items: { items: [row("1"), row("2")], groups: [], total_hint: 2, complete: true },
   });
   const whole = mountWork();
-  await waitFor(() => expect(whole.container.querySelector(".grid-foot")).toBeTruthy());
-  expect(whole.container.querySelector(".grid-foot")?.textContent).toBe(
+  await waitFor(() =>
+    expect(whole.container.querySelector(".crewlet-data-grid__foot")).toBeTruthy(),
+  );
+  expect(whole.container.querySelector(".crewlet-data-grid__foot")?.textContent).toBe(
     "That is all of it · 2 items",
   );
   cleanup();
@@ -1790,7 +1836,7 @@ test("a complete list closes with the end of it and an incomplete one does not",
     },
   });
   const paged = mountWork();
-  await waitFor(() => expect(paged.container.querySelector(".grid-wrap")).toBeTruthy());
+  await waitFor(() => expect(paged.container.querySelector(".crewlet-data-grid")).toBeTruthy());
   expect(paged.container.textContent).not.toContain("That is all of it");
   expect(screen.getByRole("button", { name: "Load more" })).toBeTruthy();
   expect(paged.container.textContent).toContain("2 of 240 loaded");
@@ -1806,8 +1852,8 @@ test("a narrowed list says its rows are the ones that match, and counts nothing 
     work_items: { items: [row("1")], groups: [], total_hint: 1, complete: true },
   });
   const { container } = mountWork();
-  await waitFor(() => expect(container.querySelector(".grid-foot")).toBeTruthy());
-  expect(container.querySelector(".grid-foot")?.textContent).toBe(
+  await waitFor(() => expect(container.querySelector(".crewlet-data-grid__foot")).toBeTruthy());
+  expect(container.querySelector(".crewlet-data-grid__foot")?.textContent).toBe(
     "That is all of it · 1 item matches",
   );
 });

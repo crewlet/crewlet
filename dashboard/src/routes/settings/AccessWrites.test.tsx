@@ -1,5 +1,5 @@
 /**
- * People & access writes the directory, for a reader holding Admin.
+ * People writes the directory, for a reader holding Admin.
  *
  * The invariants, in the order they cost when they go: a reader without Admin
  * who reaches the screen carries no write control at all; every write sends the request its route
@@ -18,11 +18,11 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { Suspense } from "react";
+import { Suspense, type ComponentType } from "react";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 
 import { ToastProvider } from "@crewlethq/ui";
-import { PeopleAndAccess } from "./Access.tsx";
+import { People, ServiceAccounts } from "./Access.tsx";
 import { PeekHost, PeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { loadChunk } from "~/app/lazyScreen.ts";
 import { Router } from "~/app/router.tsx";
@@ -242,7 +242,12 @@ function engine(writes: Record<string, Response[]> = {}, directory: () => unknow
   };
 }
 
-function mount(viewer: Record<string, unknown> = ADMIN, identity = "ready") {
+/** One of the Access screens, People unless a case names Service accounts. */
+function mount(
+  viewer: Record<string, unknown> = ADMIN,
+  identity = "ready",
+  Screen: ComponentType = People,
+) {
   const store = new Store();
   store.applyOrg(CHART_ORG);
   store.applyHealth(healthFrame({ identity }));
@@ -261,7 +266,7 @@ function mount(viewer: Record<string, unknown> = ADMIN, identity = "ready") {
               {/* THE SCREEN AND THE FRAME'S ONE PEEK, as the shell mounts
                   them: an opened person's gestures are the peek's. */}
               <PeekNeighbours>
-                <PeopleAndAccess />
+                <Screen />
                 <Suspense fallback={null}>
                   <PeekHost />
                 </Suspense>
@@ -294,7 +299,7 @@ async function settle() {
 async function invitationRow(): Promise<HTMLElement> {
   const cells = await screen.findAllByText("sam@example.com");
   const row = cells
-    .map((cell) => cell.closest(".grid-row") as HTMLElement | null)
+    .map((cell) => cell.closest(".crewlet-data-grid__row") as HTMLElement | null)
     .find((r) => r && within(r).queryByRole("button", { name: /^Cancel the invitation/ }));
   if (!row) throw new Error("no invitation row carries a cancellation");
   return row;
@@ -344,17 +349,26 @@ test("a reader without Admin sees no write control, and an administrator sees th
     "Reading where a seat is reached needs Admin access. An admin can give it to you.",
   );
   await screen.findByText("Authenticator app");
-  for (const name of ["Invite person", "New service account", "Cancel", "Revoke"]) {
+  for (const name of ["Invite person", "Cancel", "Revoke"]) {
     expect(screen.queryByRole("button", { name: new RegExp(`^${name}`) })).toBeNull();
   }
   expect(screen.queryByRole("button", { name: /^More for / })).toBeNull();
   cleanup();
   engine();
+  mount(MEMBER, "ready", ServiceAccounts);
+  await screen.findByText(/Changing any of this needs Admin access/);
+  expect(screen.queryByRole("button", { name: "New service account" })).toBeNull();
+  cleanup();
+  engine();
+  mount(ADMIN, "ready", ServiceAccounts);
+  expect(await screen.findByRole("button", { name: "New service account" })).toBeTruthy();
+  cleanup();
+  engine();
   mount(ADMIN);
   await screen.findAllByText("Bo Lang");
   await screen.findAllByText("sam@example.com");
-  await screen.findAllByRole("button", { name: "New service account" });
-  for (const name of ["Invite person", "New service account", "Cancel", "Revoke"]) {
+  await screen.findAllByRole("button", { name: "Invite person" });
+  for (const name of ["Invite person", "Cancel", "Revoke"]) {
     expect(screen.getAllByRole("button", { name: new RegExp(`^${name}`) }).length).toBeGreaterThan(
       0,
     );
@@ -1154,7 +1168,7 @@ test("a service account is created keyed and its token minted unkeyed from its g
       }),
     ],
   });
-  mount();
+  mount(ADMIN, "ready", ServiceAccounts);
   fireEvent.click(await screen.findByRole("button", { name: "New service account" }));
   const create = await screen.findByRole("dialog", { name: "New service account" });
   fireEvent.change(within(create).getByLabelText("Login"), { target: { value: "ci:deploy" } });
@@ -1194,7 +1208,7 @@ test("a service account created on a seat sends it in the same record", async ()
   const eng = engine({
     "POST /iam/people": [json(201, { id: "p-new", outcome: "applied", op_id: "k" })],
   });
-  mount();
+  mount(ADMIN, "ready", ServiceAccounts);
   fireEvent.click(await screen.findByRole("button", { name: "New service account" }));
   const create = await screen.findByRole("dialog", { name: "New service account" });
   fireEvent.change(within(create).getByLabelText("Login"), { target: { value: "ci:deploy" } });
@@ -1214,7 +1228,7 @@ test("a service account created on a seat sends it in the same record", async ()
 // CONTROLS are the cases above, whose logins fit and are posted.
 test("a login outside its kind's grammar is refused under the field and not posted", async () => {
   const eng = engine({});
-  mount();
+  mount(ADMIN, "ready", ServiceAccounts);
   fireEvent.click(await screen.findByRole("button", { name: "New service account" }));
   const create = await screen.findByRole("dialog", { name: "New service account" });
   fireEvent.change(within(create).getByLabelText("Login"), { target: { value: "deploybot" } });
@@ -1252,7 +1266,7 @@ test("an unclaimed deployment's screen points at the seat a person comes from", 
     within(callout).getByText("Invite yourself from your seat in the org chart."),
   ).toBeTruthy();
   const chart = await within(callout).findByRole("link", { name: "Open the org chart" });
-  expect(chart.getAttribute("href")).toBe("#/agents");
+  expect(chart.getAttribute("href")).toBe("#/company/org");
   expect(within(callout).queryByRole("button", { name: /^Invite/ })).toBeNull();
   cleanup();
 
@@ -1263,7 +1277,7 @@ test("an unclaimed deployment's screen points at the seat a person comes from", 
     ".crewlet-callout",
   ) as HTMLElement;
   const add = await within(bare).findByRole("link", { name: "Add a human seat" });
-  expect(add.getAttribute("href")).toBe("#/agents/edit?add=human");
+  expect(add.getAttribute("href")).toBe("#/company/org/edit?add=human");
   expect(within(bare).getByText("No people in the chart yet. Add one in Edit org.")).toBeTruthy();
   cleanup();
 
@@ -1272,6 +1286,25 @@ test("an unclaimed deployment's screen points at the seat a person comes from", 
   mount(ADMIN, "ready");
   await screen.findByText("Bo Lang");
   expect(screen.queryByText("Nobody has joined yet")).toBeNull();
+});
+
+// AN EMPTY DIRECTORY SAYS THE STEP ONCE, in the People card's own empty
+// state: a callout over two stat tiles of zero over the card's "Nobody's here
+// yet" said one thing four times before any data. The CONTROL is the case
+// above, whose directory lists somebody and keeps the callout. Mutation: draw
+// the callout whatever the directory holds and the first query finds two.
+test("an unclaimed deployment with nobody listed says the step once, in the People card", async () => {
+  invitations = { invitations: [], next: "" };
+  engine({}, () => ({ people: [], next: "" }));
+  mount(ADMIN, "unclaimed");
+  const title = await screen.findByText("Nobody has joined yet");
+  expect(screen.getAllByText("Nobody has joined yet")).toHaveLength(1);
+  expect(title.closest(".crewlet-callout")).toBeNull();
+  const state = title.closest(".crewlet-empty-state") as HTMLElement;
+  expect(within(state).getByText("Invite yourself from your seat in the org chart.")).toBeTruthy();
+  expect(within(state).getByRole("link", { name: "Open the org chart" })).toBeTruthy();
+  expect(document.querySelector(".crewlet-stat-group")).toBeNull();
+  expect(screen.queryByText("Nobody’s here yet")).toBeNull();
 });
 
 // A NODE RUNNING NO COMPANY answers the seat listing `409
@@ -1295,7 +1328,7 @@ test("an unclaimed node running no company says to create the company first", as
   ) as HTMLElement;
   expect(within(callout).getByText("No company yet. Create one in Edit org.")).toBeTruthy();
   const create = within(callout).getByRole("link", { name: "Create the company" });
-  expect(create.getAttribute("href")).toBe("#/agents/edit");
+  expect(create.getAttribute("href")).toBe("#/company/org/edit");
   expect(within(callout).queryByRole("link", { name: "Open the org chart" })).toBeNull();
   expect(within(callout).queryByRole("link", { name: "Add a human seat" })).toBeNull();
   // THE GRID SAYS IT TOO, as a sentence rather than a failure.

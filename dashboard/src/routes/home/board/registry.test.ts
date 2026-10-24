@@ -15,7 +15,13 @@ import { describe, expect, test, vi } from "vitest";
 import { HashGlyph } from "@crewlethq/icons/glyphs";
 import { DESTINATIONS, WORKSPACES } from "~/app/nav.ts";
 import { AREAS, WIDGETS, canUse } from "./registry.tsx";
-import { WIDGET_PROBLEMS, defineWidgets, destinationOf, type WidgetDef } from "./kit.tsx";
+import {
+  WIDGET_PROBLEMS,
+  defineWidgets,
+  destinationOf,
+  pageOpens,
+  type WidgetDef,
+} from "./kit.tsx";
 
 const ADMIN = ["admin"];
 const MEMBER = ["tracker", "knowledge"];
@@ -50,11 +56,13 @@ describe("the tray's sections", () => {
       "home",
       "inbox",
       "me",
+      "org",
+      "schedules",
+      "integrations",
+      "budgets",
       "work",
-      "agents",
       "live",
       "knowledge",
-      "spend",
       "settings",
     ] as const) {
       expect(areas, key).toContain(key);
@@ -74,9 +82,26 @@ describe("the tray's sections", () => {
 describe("who may add what", () => {
   const settings = AREAS.find((a) => a.key === "settings")!.widgets;
 
-  test("a reader without admin is offered none of Settings' widgets", () => {
+  // SETTINGS IS ADMIN'S BUT FOR SPEND'S READINGS, which every reader reads:
+  // its widgets follow its sections.
+  test("a reader without admin is offered of Settings' widgets only Spend's readings", () => {
     expect(settings.length).toBeGreaterThan(0);
-    for (const def of settings) expect(canUse(def, MEMBER), def.key).toBe(false);
+    for (const def of settings) {
+      // Expensive tasks names its tasks by the tracker's keys, which MEMBER holds.
+      const readings = def.from === "settings-spend" || def.from === "settings-spend-tasks";
+      expect(canUse(def, MEMBER), def.key).toBe(readings);
+    }
+  });
+
+  // A PAGE EVERY READER OPENS, A WIDGET AN ADMIN'S: Integrations shows every
+  // reader Crewlet's own services, while its widget counts the connected
+  // apps, which only an Admin reads. Mutation: drop the widget's `grants` and
+  // a reader without Admin is offered a card the engine refuses.
+  test("the Integrations page opens for every reader and its widget stays an Admin's", () => {
+    const def = WIDGETS.get("integrations.connected")!;
+    expect(pageOpens(destinationOf(def.from)!, MEMBER)).toBe(true);
+    expect(canUse(def, MEMBER)).toBe(false);
+    expect(canUse(def, ADMIN)).toBe(true);
   });
 
   test("an admin is offered every widget", () => {

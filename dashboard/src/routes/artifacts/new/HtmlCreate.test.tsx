@@ -1,3 +1,4 @@
+import { TestClient } from "~/test/client.tsx";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { installWindow } from "~/testing.tsx";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -61,13 +62,15 @@ beforeEach(() => {
 function mount(hash: string) {
   location.hash = hash;
   return render(
-    <Router>
-      <LayerHost>
-        <ToastProvider>
-          <HtmlCreate />
-        </ToastProvider>
-      </LayerHost>
-    </Router>,
+    <TestClient>
+      <Router>
+        <LayerHost>
+          <ToastProvider>
+            <HtmlCreate />
+          </ToastProvider>
+        </LayerHost>
+      </Router>
+    </TestClient>,
   );
 }
 

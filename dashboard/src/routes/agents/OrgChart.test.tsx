@@ -86,7 +86,7 @@ const AGENTS = [
 let restore: () => void;
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
-  location.hash = "#/agents";
+  location.hash = "#/company/org";
   // jsdom has no layout: the chart's cards are measured through this.
   restore = LayoutObserver.install();
 });
@@ -481,7 +481,7 @@ test("an operator's Add seat goes to the builder, adding an agent", async () => 
     acts: [],
   });
   const add = screen.getByRole("link", { name: /Add seat/ });
-  expect(add.getAttribute("href")).toBe("#/agents/edit?add=agent");
+  expect(add.getAttribute("href")).toBe("#/company/org/edit?add=agent");
 });
 
 // A LEAD ADDS TO THE UNIT THEY LEAD: nothing at the company's top level is
@@ -495,7 +495,7 @@ test("a lead's Add seat goes to the builder, adding to the unit they lead", asyn
     acts: [],
   });
   const add = screen.getByRole("link", { name: /Add seat/ });
-  expect(add.getAttribute("href")).toBe("#/agents/edit?unit=core&add=agent");
+  expect(add.getAttribute("href")).toBe("#/company/org/edit?unit=core&add=agent");
 });
 
 // A MANAGED DOCUMENT (ADR-0030) holds Add seat for a reader whose credential
@@ -525,7 +525,7 @@ test("Add seat is held with the managed sentence for a reader who is not a write
 
   await mount({ ...OPERATOR, config_writer: true, config_managed_by: ["gitops"] });
   expect(screen.getByRole("link", { name: /Add seat/ }).getAttribute("href")).toBe(
-    "#/agents/edit?add=agent",
+    "#/company/org/edit?add=agent",
   );
 });
 
@@ -606,7 +606,7 @@ test("revealing the peeked seat leaves focus where the reader had it", async () 
   document.body.append(outside);
   outside.focus();
   await act(async () => {
-    location.hash = "#/agents?peek=seat%3Adevrel";
+    location.hash = "#/company/org?peek=seat%3Adevrel";
     window.dispatchEvent(new HashChangeEvent("hashchange"));
   });
   standCanvasAt(420);
@@ -657,7 +657,7 @@ function spread(width: number): { left: number; right: number; margins: [number,
  * of the same company (the company, seven units and their seats) is a drawing
  * no width in this suite fits whole above the floor.
  */
-const REPORTING = "#/agents?chart=reporting";
+const REPORTING = "#/company/org?chart=reporting";
 
 // A NEW WIDTH IS FITTED AGAIN. The canvas fits once; the peek then took a
 // third of it away, and the least pan that kept the pressed card in view left
@@ -703,7 +703,7 @@ test("a chart the peek would shrink past reading is drawn at the floor, the seat
 // pasted link) is fitted by the canvas itself, at the narrow width, before any
 // refit — and that fit was the 54% chart as surely as a refit was.
 test("a chart first drawn beside a peek is held at the floor, the seat in view", async () => {
-  location.hash = "#/agents?peek=seat%3Adevrel";
+  location.hash = "#/company/org?peek=seat%3Adevrel";
   standCanvasAt(700);
   await mount();
   await settleChart();
@@ -834,7 +834,7 @@ test("after the reader presses Fit, a new width is fitted again", async () => {
   await settleChart();
   // …and remembered as one, so closing the peek fits the chart again.
   await act(async () => {
-    location.hash = "#/agents";
+    location.hash = "#/company/org";
     window.dispatchEvent(new HashChangeEvent("hashchange"));
   });
   standCanvasAt(VIEWPORT.width);
@@ -877,7 +877,7 @@ test("on a phone the chart is an outline of rows, with the legend at its head", 
     });
     expect(location.hash).toContain("peek=seat%3Aswe");
     await act(async () => {
-      location.hash = "#/agents";
+      location.hash = "#/company/org";
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     });
     const pm = rows[5]!;

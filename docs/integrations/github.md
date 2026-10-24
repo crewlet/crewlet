@@ -28,7 +28,7 @@ the agent's own identity.
 
 ## Setting it up from the dashboard
 
-Connect GitHub in Settings › Integrations. The engine generates the webhook
+Connect GitHub in Company › Integrations. The engine generates the webhook
 secret and the reconcile loop registers the hook on its next tick, running the
 same pass `crewlet github provision` runs with the same secret store behind
 it. The connect step asks for a personal access token nowhere — only the
@@ -220,7 +220,7 @@ of them would no longer say which agent was meant.
 Two acts, both performed by a person signed in to GitHub, and the second can be
 a day after the first.
 
-1. **Create the app.** Settings › Integrations asks the engine for a manifest
+1. **Create the app.** Company › Integrations asks the engine for a manifest
    and submits it to GitHub as a form POST carrying the operator's own GitHub
    session. GitHub shows what is about to be created and, on approval, sends
    the browser back to the engine with a one-time code. The engine converts the
@@ -266,9 +266,9 @@ That discovery used to wait out the loop's admin backoff, which runs from fiftee
 Two things now close that gap:
 
 - **GitHub's return brings the next pass forward.** The install redirect lands at `/webhooks/github-app`, and that arrival asks the loop to look now. It is not a write and nothing in the redirect is believed — no installation id travels with the ask — so the pass that runs is the same verified listing as always, and adopting anything from an unauthenticated query stays out of the question. See [the cadence](../concepts/integration-reconcile.md#the-cadence-follows-who-has-to-act) for the rate limit on that route and why it is where it is.
-- **Settings › Integrations re-asks when you come back to the tab.** Setting an integration up means leaving for GitHub and returning, and returning is a stronger signal that the answer moved than any poll interval can be. The screen held its pre-departure reading for up to a minute otherwise, which is the other half of what made this look broken.
+- **Company › Integrations re-asks when you come back to the tab.** Setting an integration up means leaving for GitHub and returning, and returning is a stronger signal that the answer moved than any poll interval can be. The screen held its pre-departure reading for up to a minute otherwise, which is the other half of what made this look broken.
 
-Together the card is normally correct by the time you switch back to it. If it is not — an engine built without the loop wired, or a second install inside the rate-limited window — the return page says so plainly instead of promising a wait it is not taking, and `POST /setup/integrations/github/provision` runs the pass on demand.
+Together the page is normally correct by the time you switch back to it. If it is not (an engine built without the loop wired, or a second install inside the rate-limited window), the return page says so plainly instead of promising a wait it is not taking, and **Check now** on GitHub's Agents tab, or `POST /setup/integrations/github/check`, asks the loop to look at once.
 
 ### What has to be in place first
 
@@ -781,7 +781,7 @@ So it does the two things GitHub genuinely allows:
 | `-config PATH` / `-api URL` | The Tier A file (default `crewlet.yaml`), and a running node to go through in place of the one it names. The company's `${VAR}`s resolve from the secret store they lead to — through the node's API while its engine runs — and `-secret-store` records into that same store; on a stopped node a variable its own rows lack is unknown, so nothing is minted into it and nothing the shell exports for it is registered as the webhook secret — short of `-recreate-webhooks`, which mints a fresh secret into it whatever the rows hold. See [where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values) |
 | `-dry-run` | Read and report; register nothing and record nothing. The company's values are still read through the run's store — through a running node that is the break-glass `POST /secrets/reveal`, logged on the node by name — and the sink is not opened |
 
-**A hook the company DEMANDED and could not get is reported; the fallback is not.** `integrations.github.token` is optional and the connect form does not ask for it, both deliberately — routing needs nothing from it, because each agent's own app answers who is participating in a thread. With no token the pass reads nothing and writes nothing at the organization, and it used to say so only in its *notes*, which are not findings, so a surface that had authenticated with nobody reported `ready` with an empty finding list. Measured on a live connect: `phase: ready`, `routes: true`, and exactly one webhook on the organization, belonging to a different deployment and never triggered. It is now `ingress_blocked` against `integrations.github.token`.
+**A hook the company DEMANDED and could not get is reported; the fallback is not.** `integrations.github.token` is optional, and the connect form asks for it only when the coverage answer is every repository in the organization, both deliberately: routing needs nothing from it, because each agent's own app answers who is participating in a thread. With no token the pass reads nothing and writes nothing at the organization, and it used to say so only in its *notes*, which are not findings, so a surface that had authenticated with nobody reported `ready` with an empty finding list. Measured on a live connect: `phase: ready`, `routes: true`, and exactly one webhook on the organization, belonging to a different deployment and never triggered. It is now `ingress_blocked` against `integrations.github.token`.
 
 **But only where the company actually asked for a hook this credential must register, and has no other coverage.** Two clauses, and both were learned the same way. The first is `org_webhook: true` (no fallback) or a non-empty `repos` list (no agent's own app covers a named repository): the form *requires* `provisioning.org` — that is where the agents' apps are installed — so reading "the block names an organization" as "this company wants an organization-wide webhook" put a permanent finding on every company that connects GitHub from the dashboard.
 

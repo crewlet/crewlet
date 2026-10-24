@@ -1,10 +1,10 @@
 /**
- * The company's units: Agents › Teams, one unit's page and one unit's peek.
+ * The company's units: Org chart › Teams, one unit's page and one unit's peek.
  *
  * # Teams is the tree of units; the chart is the tree of people
  *
- * `#/agents` (`OrgChart.tsx`) draws who reports to whom, one card per seat.
- * `#/agents/teams` draws the UNITS — what each is for, what it was told to do
+ * `#/company/org` (`OrgChart.tsx`) draws who reports to whom, one card per seat.
+ * `#/company/org/teams` draws the UNITS, what each is for, what it was told to do
  * (its goals, which moved here from the charter: a unit's goals are the
  * unit's, and filed under the company's settings they read as company
  * policy), who leads it, which project its work is filed under, and the seats
@@ -17,7 +17,7 @@
  *
  * # A unit is an object with a page
  *
- * `UnitScreen` is that page, at `#/agents/teams/{unit}`. It existed as a query
+ * `UnitScreen` is that page, at `#/company/org/teams/{unit}`. It existed as a query
  * key on the org screen (`#/org?unit=`), which meant a team could not be
  * linked to, could not carry its own tabs, and was one filter away from being
  * lost.
@@ -26,7 +26,7 @@
 import { useMemo, type CSSProperties } from "react";
 import { href } from "~/app/router.tsx";
 import { StateBadge } from "~/components/common.tsx";
-import { Card, EmptyState, Skeleton, Tag } from "@crewlethq/ui";
+import { Card, EmptyState, Skeleton } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import {
   NetworkGlyph,
@@ -38,10 +38,12 @@ import {
   TargetGlyph,
 } from "@crewlethq/icons/glyphs";
 import { useAgents, useConnection, useOrg } from "~/lib/store-hooks.ts";
+import type { AgentRow } from "~/protocol/types.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { projectsByUnit } from "~/lib/orgchart.ts";
 import {
+  activityOf,
   handleLabel,
   indexOrg,
   liveRowFor,
@@ -108,6 +110,20 @@ function ProjectKeys({ keys }: { keys: readonly string[] }) {
  * props: every caller was subscribing to both for this and for nothing else,
  * and a subscription per row-block is what the store's slice keys are for.
  */
+/**
+ * A seat chip's state, only where it is news. Idle is where a seat rests, and
+ * a pill reading it on every chip of a team was a column a reader learned to
+ * skip; working, waiting on a person and stopped are what a reader scans a
+ * team for. The word stays for a screen reader either way.
+ */
+function SeatState({ agent }: { agent: AgentRow | undefined }) {
+  return activityOf(agent) === "idle" ? (
+    <span className="sr-only">Idle</span>
+  ) : (
+    <StateBadge agent={agent} />
+  );
+}
+
 function SeatLinks({ seats, style }: { seats: Seat[]; style?: CSSProperties }) {
   const agents = useAgents();
   return (
@@ -140,7 +156,7 @@ function SeatLinks({ seats, style }: { seats: Seat[]; style?: CSSProperties }) {
             // screen reader, which does not see the outline.
             <span className="sr-only">human</span>
           ) : (
-            <StateBadge agent={liveRowFor(agents, seat)} />
+            <SeatState agent={liveRowFor(agents, seat)} />
           )}
         </a>
       ))}
@@ -167,7 +183,8 @@ function SubUnitLinks({ units }: { units: Unit[] }) {
             <strong className="t-cell truncate">{child.name}</strong>
             {child.purpose && <span className="t-caption truncate">{child.purpose}</span>}
           </span>
-          <Tag appearance="outline">{child.type || "unit"}</Tag>
+          {/* The kind is a fact, quiet, as on the Teams tree. */}
+          <span className="t-caption muted">{child.type || "unit"}</span>
           <ArrowRightGlyph size="sm" />
         </a>
       ))}
@@ -278,16 +295,21 @@ export function UnitBlock({
           </a>
         </span>
         <ProjectKeys keys={keys} />
-        <Tag appearance="outline">{unit.type || "unit"}</Tag>
+        {/* THE KIND AND THE LEAD ARE FACTS, quiet beside the name rather than
+            two pills on every row: "Engineering ENG team Ada Lovelace" read as
+            four badges, and a pill is the register for a state worth
+            reading. */}
+        <span className="t-caption muted org-unit-fact">{unit.type || "unit"}</span>
         {lead ? (
-          <Tag
-            variant="neutral"
-            leadingIcon={<CrownGlyph size="xs" />}
+          <span
+            className="t-caption muted org-unit-fact"
             title={unit.leadInherited ? "inherited from the parent unit" : "explicit lead"}
           >
+            <CrownGlyph size="xs" aria-hidden="true" />
+            <span className="sr-only">Lead: </span>
             {lead.name}
-            {unit.leadInherited && <span className="muted"> (inherited)</span>}
-          </Tag>
+            {unit.leadInherited && <span> (inherited)</span>}
+          </span>
         ) : null}
         <span className="spacer" />
         {/* THE SUBTREE FIRST, and the direct count only where the two differ —
@@ -320,7 +342,7 @@ export function UnitBlock({
 }
 
 /**
- * Agents › Teams: every unit, nested, with what it is for, what it was told to
+ * Org chart › Teams: every unit, nested, with what it is for, what it was told to
  * do, who leads it, where its work is filed and who is in it.
  *
  * The seats above every unit come first, as their own block: they are part
@@ -411,7 +433,7 @@ export function UnitScreen({ id }: { id: string }) {
   return (
     <>
       <PageActions>
-        <a className="t-link" href={href(["agents"])}>
+        <a className="t-link" href={href(["company", "org"])}>
           Chart →
         </a>
       </PageActions>
@@ -444,11 +466,9 @@ export function UnitScreen({ id }: { id: string }) {
       ) : null}
 
       <Card padding="none">
-        <Card.Header
-          icon={<UsersGlyph size="sm" />}
-          count={seats.length}
-          subtitle="everyone in this unit and everything under it"
-        >
+        {/* NO SUBTITLE: the header's Seats fact says what this list counts
+            (`UNIT_TOTAL_HINT`), 80px above, and the card said it again. */}
+        <Card.Header icon={<UsersGlyph size="sm" />} count={seats.length}>
           <Card.Title>Seats</Card.Title>
         </Card.Header>
         {seats.length > 0 ? (

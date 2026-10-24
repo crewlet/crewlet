@@ -171,7 +171,7 @@ describe("the dialog", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Continue in Edit org" }));
     });
-    await waitFor(() => expect(location.hash).toBe("#/agents/edit?unit=design&project=DES"));
+    await waitFor(() => expect(location.hash).toBe("#/company/org/edit?unit=design&project=DES"));
   });
 
   // A PROJECT KEY IS THE COMPANY GRANT'S: a lead's write that sets one is

@@ -33,7 +33,7 @@ import { goSignIn } from "~/lib/session.ts";
 import { needsWords } from "~/lib/access.ts";
 import {
   activityOf,
-  activityWord,
+  stateWord,
   handleLabel,
   statusOf,
   roundLabel,
@@ -81,7 +81,7 @@ export function SeatChip({
       // The affordance is the hover state and the cursor.
       className="row seat-chip"
       style={{ gap: "var(--spacing-2)", minWidth: 0 }}
-      href={href(["agents", "seats", target])}
+      href={href(["company", "org", "seats", target])}
     >
       {/* THE KIND IS THE OUTLINE: the kit draws a person as a circle and an
           agent as a squircle, and that is the one cue telling them apart. A
@@ -108,8 +108,11 @@ export function SeatChip({
 export function StateBadge({ agent }: { agent: AgentRow | null | undefined }) {
   const state = activityOf(agent);
   return (
+    // SENTENCE CASE, as the seat's own page and the chart write the state
+    // (`stateWord`): the roster's "idle" beside the seat page's "Idle" was one
+    // state in two spellings.
     <Tag variant={toneOf(state)} dot>
-      {activityWord(state)}
+      {stateWord(state)}
     </Tag>
   );
 }
@@ -118,11 +121,18 @@ export function SeatCard({
   seat,
   agent,
   nameOf,
+  stateInHeading = false,
 }: {
   seat: Seat;
   agent: AgentRow | undefined;
   /** A person's name by their handle, off the chart the caller holds — see `NameOf`. */
   nameOf: NameOf;
+  /**
+   * The list this card stands in is grouped by state, so its heading already
+   * says the state: the pill is not drawn a second time on every card under
+   * it. The badge's glyph and the line keep what the heading does not say.
+   */
+  stateInHeading?: boolean;
 }) {
   const now = useNow();
   // THE STATUS, OR NONE: a person is not run by the engine, and an idle seat
@@ -158,7 +168,7 @@ export function SeatCard({
           // circle was the outline said twice; the word stays for a
           // screen reader, which does not see the outline.
           <span className="sr-only">human</span>
-        ) : (
+        ) : stateInHeading ? null : (
           <StateBadge agent={agent} />
         )}
       </div>
@@ -497,7 +507,12 @@ export function QueryState({
    * (`routes/spend/Spend.tsx`); that one now says what to do about it, so the
    * type says what the component always meant.
    */
-  empty?: { title: ReactNode; hint: ReactNode };
+  empty?: {
+    title: ReactNode;
+    hint: ReactNode;
+    /** The one way on from an empty answer, where the reader has one. */
+    action?: ReactNode;
+  };
   children?: ReactNode;
 }) {
   if (error === "unauthorized" && refusal && !isLogRefusal(refusal)) {
@@ -526,7 +541,12 @@ export function QueryState({
       // `size="compact"` IS our `inline`, and the default mark is the inbox
       // glyph ours passed by hand — so both props this used to spell are the
       // component's own defaults now.
-      <EmptyState size="compact" title={empty.title} description={empty.hint} />
+      <EmptyState
+        size="compact"
+        title={empty.title}
+        description={empty.hint}
+        action={empty.action}
+      />
     );
   }
   return <>{children}</>;

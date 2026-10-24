@@ -5,7 +5,7 @@
  * WHAT THIS PROTECTS is the join itself. Every other suite in this directory
  * mounts [Builder] directly, which is right for testing the builder and blind
  * to the one thing that has to be true for a reader to reach it: that
- * `#/agents/edit` resolves to it, that the org chart offers the way there, and
+ * `#/company/org/edit` resolves to it, that the org chart offers the way there, and
  * that no other section of Agents mounts it. A join has no type — a path is a
  * string off a URL — so a section the resolver never reaches is a feature that
  * is present in the tree, passes its own files of tests, and cannot be opened
@@ -14,8 +14,9 @@
  *
  * AND A LINK INTO IT IS A REQUEST. Every way into Edit org from another screen
  * asks to change one thing — a seat's "Edit", the chart's "Add seat" — so
- * `seat=` and `unit=` open that node's editor and `add=` opens the Add, ONCE,
- * on arrival (see `Builder.tsx`'s `Arrival`). "Add seat" used to land on a
+ * `seat=` and `unit=` open that node's editor and `add=` opens the Add,
+ * ONCE, on arrival (see `Builder.tsx`'s `Arrival`). The company's principles
+ * are not among them: the company's Edit leaves for Company › Principles. "Add seat" used to land on a
  * chart with nothing to add, because nothing read `add=` at all.
  *
  * It is also where the read screens' revision note belongs: the builder draws
@@ -85,18 +86,18 @@ function mount(hash: string) {
 }
 
 /** Every address in Agents that reads the org rather than editing it. */
-const READS = ["#/agents", "#/agents/roster", "#/agents/teams"];
+const READS = ["#/company/org", "#/company/org/roster", "#/company/org/teams"];
 
 test("the org chart offers the builder, at the address the resolver gives it", async () => {
-  mount("#/agents");
+  mount("#/company/org");
   const edit = await screen.findByRole("link", { name: "Edit org" });
-  expect(edit.getAttribute("href")).toBe("#/agents/edit");
+  expect(edit.getAttribute("href")).toBe("#/company/org/edit");
   const to = resolve(parseHash(edit.getAttribute("href")!).path);
   expect(to.resolved && to.screen).toBe("org-edit");
 });
 
 test("the builder's address mounts the builder, and the read sections do not", async () => {
-  mount("#/agents/edit");
+  mount("#/company/org/edit");
   // Its toolbar is what the builder draws once the engine has answered, and
   // it belongs to no other section.
   expect(await screen.findByRole("toolbar", { name: "Organization builder" })).toBeDefined();
@@ -121,7 +122,7 @@ test("the builder's address mounts the builder, and the read sections do not", a
  * builder draws the draft itself and needs no such sentence.
  */
 test("the read sections say they still draw the previous revision; the builder does not", async () => {
-  for (const hash of ["#/agents", "#/agents/teams"]) {
+  for (const hash of ["#/company/org", "#/company/org/teams"]) {
     recordSavedRevision({ revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 });
     mount(hash);
     expect(await screen.findByText(/Still applying/), hash).toBeDefined();
@@ -129,27 +130,27 @@ test("the read sections say they still draw the previous revision; the builder d
   }
 
   recordSavedRevision({ revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 });
-  mount("#/agents/edit");
+  mount("#/company/org/edit");
   await screen.findByRole("toolbar", { name: "Organization builder" });
   expect(screen.queryByText(/Still applying/)).toBeNull();
 });
 
 /*
  * A LINK THAT NAMES A SEAT OPENS ITS EDITOR — the profile's "Edit" beside a
- * seat's setup is `#/agents/edit?seat=<handle>`, and the reader who pressed it
+ * seat's setup is `#/company/org/edit?seat=<handle>`, and the reader who pressed it
  * is shown the form rather than a chart with one card outlined somewhere in
  * it. It waits for the engine to key the draft, because a link names a seat by
  * the handle it RUNS under.
  */
 test("a link that names a seat opens that seat's editor", async () => {
-  mount("#/agents/edit?view=table&seat=ceo");
+  mount("#/company/org/edit?view=table&seat=ceo");
   expect(await screen.findByRole("dialog", { name: "Edit CEO" })).toBeDefined();
   // The selection is still mirrored: the link is also where the builder is.
   expect(new URLSearchParams(location.hash.split("?")[1]).get("seat")).toBe("ceo");
 });
 
 test("a link that names a unit opens that unit's editor", async () => {
-  mount("#/agents/edit?view=table&unit=engineering");
+  mount("#/company/org/edit?view=table&unit=engineering");
   expect(await screen.findByRole("dialog", { name: "Edit Engineering" })).toBeDefined();
 });
 
@@ -161,7 +162,7 @@ test("a link that names a unit opens that unit's editor", async () => {
  * over it.
  */
 test("the editor a link opened does not come back, and a press on a row opens none", async () => {
-  mount("#/agents/edit?view=table&seat=ceo");
+  mount("#/company/org/edit?view=table&seat=ceo");
   const editor = await screen.findByRole("dialog", { name: "Edit CEO" });
   fireEvent.keyDown(editor, { key: "Escape" });
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -184,7 +185,7 @@ test("the editor a link opened does not come back, and a press on a row opens no
  * second node. (That the header's link IS `add=agent` is `OrgChart.test.tsx`'s.)
  */
 test("a link that asks for an add opens it once, on that kind, and leaves the address", async () => {
-  mount("#/agents/edit?view=table&add=agent");
+  mount("#/company/org/edit?view=table&add=agent");
   const dialog = await screen.findByRole("dialog", { name: "Add to Acme" });
   expect(
     within(dialog).getByRole("radio", { name: "Agent seat" }).getAttribute("aria-checked"),
@@ -196,9 +197,34 @@ test("a link that asks for an add opens it once, on that kind, and leaves the ad
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
+/*
+ * THE COMPANY'S EDIT IS COMPANY › PRINCIPLES. Its mission, vision and standing
+ * policies are written on that page and nowhere else, so the company's Edit
+ * leaves the builder for it, in edit for a reader who may write them, whether
+ * it is pressed or reached by the row's own key.
+ */
+test("the company's Edit opens Company › Principles in edit", async () => {
+  mount("#/company/org/edit?view=table");
+  fireEvent.click(await screen.findByRole("button", { name: "Edit principles" }));
+  await waitFor(() => expect(location.hash).toBe("#/company/principles?edit=mission"));
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+/*
+ * AND THE BUILDER NO LONGER OPENS THE PRINCIPLES ITSELF. An `edit=` from
+ * before they moved (`edit=charter`, `edit=policies`) is a request nothing
+ * here answers: the chart opens as it would with none.
+ */
+test("an old link asking the builder for the principles opens nothing", async () => {
+  mount("#/company/org/edit?view=table&edit=policies");
+  await screen.findAllByRole("row");
+  await new Promise((r) => setTimeout(r, 20));
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
 /* And with `unit=`, under that unit — the unit's own editor is not what was asked. */
 test("an add with a unit opens under that unit, not the unit's editor", async () => {
-  mount("#/agents/edit?view=table&unit=engineering&add=human");
+  mount("#/company/org/edit?view=table&unit=engineering&add=human");
   const dialog = await screen.findByRole("dialog", { name: "Add to Engineering" });
   expect(
     within(dialog).getByRole("radio", { name: "Human seat" }).getAttribute("aria-checked"),

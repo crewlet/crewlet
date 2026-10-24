@@ -72,7 +72,7 @@ const ORG: OrgProjection = {
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
-  location.hash = "#/agents";
+  location.hash = "#/company/org";
 });
 
 /** A chart block, in the context its seat links reach for. */
@@ -227,4 +227,14 @@ test("a unit's page and peek are found by its key, never by its name", async () 
     expect(screen.getByText("No unit has the key “Backend”")).toBeTruthy();
     cleanup();
   }
+});
+
+// A UNIT ROW SAYS ITS KIND AND ITS LEAD AS QUIET FACTS: "Engineering ENG
+// team Ada Lovelace" drawn as pills read as four badges on every row.
+test("a unit's kind and lead are words, not pills", async () => {
+  await teams(ORG);
+  for (const row of document.querySelectorAll(".org-unit-head")) {
+    expect(row.querySelector(".crewlet-tag")).toBeNull();
+  }
+  expect(document.querySelectorAll(".org-unit-fact").length).toBeGreaterThan(0);
 });

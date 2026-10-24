@@ -8,6 +8,7 @@
  * that looks like a measured nothing is the one thing a tile must not draw.
  */
 
+import type { Service, ServicesRun } from "~/app/nav.ts";
 import { Fragment } from "react";
 import {
   ButtonLink,
@@ -49,6 +50,27 @@ import {
  */
 export const KPI_IDS = ["agents", "waiting", "progress", "completed", "tokens"] as const;
 export type KpiId = (typeof KPI_IDS)[number];
+
+/**
+ * The figures a service built into Crewlet answers, and which: tasks in
+ * progress and tasks completed are Crewlet Works' flow (`work_flow`). Where
+ * the company does not run it they are not drawn, and the rest fill the row.
+ * What waits on the reader's decision is not among them: the seats stopped on
+ * a spent budget and the coding runs parked on a question arrive whatever
+ * runs the tracker.
+ */
+export const KPI_SERVICES: Readonly<Partial<Record<KpiId, Service>>> = {
+  progress: "tracker",
+  completed: "tracker",
+};
+
+/** The figures a company running `runs` is shown, in the row's order. */
+export function kpisShown(figures: readonly KpiId[], runs: ServicesRun): KpiId[] {
+  return figures.filter((id) => {
+    const service = KPI_SERVICES[id];
+    return service === undefined || runs[service];
+  });
+}
 
 /** What each figure is called where it is offered on its own. */
 export const KPI_LABELS: Record<KpiId, string> = {
@@ -201,9 +223,11 @@ function WaitingTile({
       value={`${waiting.count.toLocaleString()}${waiting.floor ? "+" : ""}`}
       trend={review}
       sub={
+        // NO SECOND "NOTHING": the figure says 0, and the greeting says it in
+        // words. The line is for what the figure cannot carry.
         waiting.count > 0 && waiting.oldestAt
           ? `Oldest waiting ${waitedFor(waiting.oldestAt, now)}`
-          : "Nothing waiting on you"
+          : undefined
       }
       subTone={waiting.count > 0 ? "warning" : undefined}
     />
@@ -287,7 +311,7 @@ function CompletedTile({
  * THE WAY TO SET A BUDGET IS OFFERED TO WHOEVER CAN SET ONE: a reader who may
  * change the company's configuration (`mayChangeConfig` — an admin, and on a
  * managed document one of its writers) gets "No
- * weekly budget" as the link into Spend › Budgets; anybody else gets the fact,
+ * weekly budget" as the link into Company › Budgets; anybody else gets the fact,
  * since the screen behind the link would only refuse them. The weekly budget
  * is the COMPANY's ceiling, so no lead path reaches it.
  *
@@ -338,7 +362,7 @@ function TokensTile({
         ) : budget === null ? (
           "Weekly budget not reported yet"
         ) : mayConfigure ? (
-          <a className="t-link" href={href(["spend", "budgets"])}>
+          <a className="t-link" href={href(["company", "budgets"])}>
             No weekly budget
           </a>
         ) : (

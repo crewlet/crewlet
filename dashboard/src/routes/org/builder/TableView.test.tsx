@@ -35,6 +35,8 @@ import { checkedEdit } from "./testState.ts";
 import { TableView } from "./TableView.tsx";
 import { NodeGlyph } from "~/ui/orgNodes.tsx";
 import { builderSpies, BuilderHarness, harnessProbe } from "./viewTestkit.tsx";
+import type { CompanyEdit } from "./BuilderContext.tsx";
+import { COMPANY_KEY } from "./model/keys.ts";
 import { render } from "@testing-library/react";
 
 afterEach(() => {
@@ -43,10 +45,10 @@ afterEach(() => {
 });
 
 beforeEach(() => {
-  location.hash = "#/agents/edit?view=table";
+  location.hash = "#/company/org/edit?view=table";
 });
 
-function mount(options: { readOnly?: boolean } = {}) {
+function mount(options: { readOnly?: boolean; principles?: CompanyEdit } = {}) {
   const spies = builderSpies();
   const probe = harnessProbe();
   const rendered = render(
@@ -55,6 +57,7 @@ function mount(options: { readOnly?: boolean } = {}) {
       spies={spies}
       probe={probe}
       readOnly={options.readOnly}
+      principles={options.principles}
     >
       <TableView />
     </BuilderHarness>,
@@ -348,15 +351,36 @@ describe("acting on a row", () => {
   });
 
   /*
-   * AND A ROW WHOSE MENU WOULD BE EMPTY DRAWS NONE. Everything the company can
-   * take is a button on its own row, so its menu opened onto a list that
-   * repeated them and nothing else.
+   * THE COMPANY'S EDIT IS ITS PRINCIPLES, named for them, and its name is the
+   * one entry its menu holds: Company › Principles writes the mission, the
+   * vision and the policies, so the row's pencil goes there and Rename
+   * company is how the builder's own company field is reached.
    */
-  test("the company's row draws the controls and no menu at all", () => {
-    mount();
+  test("the company's row draws its Add and Edit principles, and a menu of Rename company alone", () => {
+    const { spies } = mount();
+    expect(strip("Acme")).toEqual(["Add to Acme", "Edit principles", "Actions for Acme"]);
+    expect(within(row("Acme")).queryByRole("button", { name: /^Delete/ })).toBeNull();
+    fireEvent.click(within(row("Acme")).getByRole("button", { name: "Edit principles" }));
+    expect(spies.openEditor).toHaveBeenCalledWith(COMPANY_KEY);
+    expect(actions("Acme")).toEqual([["Rename company", false]]);
+    fireEvent.click(screen.getByRole("menuitem", { name: /Rename company/ }));
+    expect(spies.openCompanyRename).toHaveBeenCalledTimes(1);
+  });
+
+  test("a reader who may not write the principles is offered to open them", () => {
+    mount({ principles: "read" });
+    expect(strip("Acme")).toContain("Open principles");
+  });
+
+  /*
+   * AND A ROW WHOSE MENU WOULD BE EMPTY DRAWS NONE. A company this draft is
+   * still creating has no Principles page yet, so its Edit is the name form
+   * and everything it can take is a button on its own row.
+   */
+  test("a company still being created draws the controls and no menu at all", () => {
+    mount({ principles: null });
     expect(strip("Acme")).toEqual(["Add to Acme", "Edit Acme"]);
     expect(menuTrigger("Acme")).toBeNull();
-    expect(within(row("Acme")).queryByRole("button", { name: /^Delete/ })).toBeNull();
   });
 
   /*
@@ -535,6 +559,8 @@ describe("moving a row among its siblings", () => {
      that moves among siblings, and nothing on it offers to. */
   test("the company is never moved", () => {
     mount();
-    expect(menuTrigger("Acme")).toBeNull();
+    const entries = actions("Acme").map(([label]) => label);
+    expect(entries).not.toContain("Move up");
+    expect(entries).not.toContain("Move down");
   });
 });

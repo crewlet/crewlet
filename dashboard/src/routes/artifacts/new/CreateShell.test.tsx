@@ -1,3 +1,4 @@
+import { TestClient } from "~/test/client.tsx";
 import { afterEach, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
@@ -9,11 +10,13 @@ afterEach(cleanup);
 function mount(node: React.ReactNode) {
   location.hash = "#/artifacts/new/doc";
   return render(
-    <Router>
-      <LayerHost>
-        <ToastProvider>{node}</ToastProvider>
-      </LayerHost>
-    </Router>,
+    <TestClient>
+      <Router>
+        <LayerHost>
+          <ToastProvider>{node}</ToastProvider>
+        </LayerHost>
+      </Router>
+    </TestClient>,
   );
 }
 

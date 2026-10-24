@@ -127,7 +127,7 @@ test("every agent is listed, past a dozen, each linking to its diary", async () 
   for (const agent of AGENTS) expect(screen.getByText(agent.name)).toBeTruthy();
   const last = rowOf("Agent 14");
   expect(within(last).getByText("agent-14 noted the deploy window")).toBeTruthy();
-  expect(last.querySelector("a.row-link")?.getAttribute("href")).toBe(
+  expect(last.querySelector("a.crewlet-data-grid__row-link")?.getAttribute("href")).toBe(
     "#/knowledge/diaries/agent-14",
   );
   // THE HEADER COUNTS THE AGENTS, and no partial callout on a complete answer.
@@ -223,7 +223,7 @@ test("one agent's diary is its holder's answer, and names that node", async () =
     screen
       .getByRole("link", { name: "2 learned skills and 5 colleagues remembered" })
       .getAttribute("href"),
-  ).toBe("#/agents/seats/agent-3?tab=memory");
+  ).toBe("#/company/org/seats/agent-3?tab=memory");
 });
 
 test("one agent no node holds says why its diary is not shown", async () => {

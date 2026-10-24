@@ -109,6 +109,9 @@ export const widgets = defineWidgets([
     hue: "rose",
     size: { w: 4, minW: 3, minH: 8, vertical: true },
     once: true,
+    // THE UPDATES ARE CREWLET WORKS' NOTICES, while the Inbox itself stays
+    // for the conditions that arrive without it.
+    service: () => "tracker",
     Component: Updates,
   },
 ]);

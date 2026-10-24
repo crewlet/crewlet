@@ -54,7 +54,7 @@ export type AddKind = "unit" | "agent" | "human";
  * draft's and an editor's agree on what leaving is.
  *
  * THE ADDRESS IS THE SECTION'S, AND IT IS THE WHOLE OF THE RULE. The builder
- * is Agents › Edit org, `#/agents/edit`. It was a `lens=builder` on the
+ * is Org chart › Edit org, `#/company/org/edit`. It was a `lens=builder` on the
  * company screen, and before that a screen at `#/org`; each move left this
  * predicate spelling the old address, which does not fail loudly —
  * `keepsTheLens` answers FALSE for every move, so the guard holds moves it was
@@ -108,6 +108,15 @@ export interface BuilderDerived {
 export type EditorSectionName = "reports" | "leadership" | "project";
 
 /**
+ * What the company node's Edit opens. Its mission, vision and standing
+ * policies are written on Company › Principles alone, so once the company
+ * exists its Edit goes there: in edit for a reader who may write them
+ * (`write`), plainly for one who may not (`read`). A company this draft is
+ * still creating has no such page yet, and its Edit is the name form (`null`).
+ */
+export type CompanyEdit = "write" | "read" | null;
+
+/**
  * What an address asks an opening editor to hold on top of the node's own
  * values: New project's key, in the Project field, as a change the reader has
  * still to apply. A node that already owns a project keeps it.
@@ -139,8 +148,19 @@ export interface BuilderApi {
   documentProblems: ConfigProblem[];
   /** The selected node, mirrored in the URL's `unit=` and `seat=` filters. */
   selection: { key: NodeKey | null; select(key: NodeKey | null): void };
-  /** Opens the node's editor, at `section` when one is named. */
+  /**
+   * Opens the node's editor, at `section` when one is named. The company's is
+   * Company › Principles once the company exists ([BuilderApi.principles]),
+   * and the name form while this draft is creating it.
+   */
   openEditor(key: NodeKey, section?: EditorSectionName): void;
+  /** Opens the form that renames the company, the one company field the builder writes. */
+  openCompanyRename(): void;
+  /**
+   * What the company node's Edit opens: Company › Principles in edit
+   * (`write`), the same page to read (`read`), or the name form (`null`).
+   */
+  principles: CompanyEdit;
   /** `parent` is a unit's key, or `null` for the company root. */
   openAdd(parent: NodeKey | null, kind?: AddKind): void;
   openMove(key: NodeKey): void;

@@ -2274,7 +2274,7 @@ Every LLM completion records prompt, completion and total tokens plus a call
 count, per agent and per model, with cache reads and writes broken out so
 cached prefixes are visible rather than folded into the total.
 
-Read them from the dashboard's **Spend** workspace (Overview and Budgets), or
+Read them from the dashboard's **Settings › Token spend** and **Company › Budgets**, or
 over the socket's query channel — `tokens` for the rollup and `budgets` for the
 caps beside the durable counters the engine enforces against. Both are the same
 functions the REST routes call, so the two surfaces cannot disagree.

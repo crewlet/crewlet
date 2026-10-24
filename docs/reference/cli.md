@@ -419,6 +419,18 @@ With the engine **stopped** it writes to this node's own store and marks the
 revision active there, which the node publishes to the fleet at its next start.
 The line it prints says which of the two happened.
 
+**It never refuses a file for its charter.** A company file whose mission or
+policy breaks the [charter's rules](../concepts/configuration.md#mission-vision-and-policies)
+(past its length, or on two lines) is a file that ran under an earlier build,
+and restoring or migrating it must work: the import prints each fault as a
+`warning (admission): …` line and imports it, both ways. Through a running
+node it sends `PUT /config?import=true`, which judges the charter warn-only
+where an edit would be judged on what it changes; that mode is `admin`'s, so
+the `CREWLET_API_TOKEN` it presents must be a Tier A token, or a machine token
+whose owner holds `admin`, and the revision records `source: file` and the
+credential in `operator_id`, as an offline import does. Every other rule holds
+as for any write.
+
 `-summary` is the audit note recorded with the revision (default
 `imported from <path>`). The revision history is the record of who changed what
 and why, so a fleet-wide write is worth a sentence. Through the API the
@@ -590,7 +602,7 @@ variable at all.
 
 **A person holds a human seat for as long as they are here.** They are invited
 onto a vacant one (`invite -seat`) or created on one (`create -seat`) — the
-seat's **Invite** and **Add person** in the dashboard's Agents › Org chart do
+seat's **Invite** and **Add person** in the dashboard's Company › Org chart do
 the same — `bind` moves them to another, and `remove` frees it. Nothing
 clears a person's seat: `unbind` is for service accounts, whose seat is
 optional. `seats` lists which seats are free.

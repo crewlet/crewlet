@@ -118,6 +118,23 @@ test("a control's announcement is said, in the one region the application mounts
   expect(region().textContent).toBe("Added SRE");
 });
 
+// SAID ONCE. The package writes every sentence into every region mounted, so
+// a second <Announcer> anywhere in the frame (the shell had one, under the
+// package's default name) made a screen reader say every add, move and
+// restore twice. Counted by what holds the sentence, not by name, because a
+// second region under another name is exactly what a count by name misses.
+// Mutation: mount an <Announcer /> in the shell and the count is 2.
+test("an announcement is held by exactly one live region on the frame's screens", async () => {
+  mount();
+  await settle();
+  expect(document.querySelector(".crewlet-app-shell"), "the frame is drawn").not.toBeNull();
+  await say("Moved policy to position 1 of 8");
+  const holders = [...document.querySelectorAll("[aria-live]")].filter(
+    (el) => el.textContent === "Moved policy to position 1 of 8",
+  );
+  expect(holders).toHaveLength(1);
+});
+
 // BESIDE THE FRAME, NOT IN IT. The frame swaps the shell for the sign-in
 // screens; a region inside it would be torn down by a sign-in, and the package
 // forgets its sentence when its last region goes.

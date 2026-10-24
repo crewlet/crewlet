@@ -319,7 +319,10 @@ export function KnowledgeSearchBar() {
   };
 
   return (
-    <div className="knowledge-search">
+    // THE BAR'S FIND FIELD (`page-find`, as a gallery's search is): on a
+    // phone the field gives way, so New page and More stay in view where the
+    // line scrolled them past the edge.
+    <div className="knowledge-search page-find">
       <form
         role="search"
         aria-label="Search the knowledge base"
@@ -331,7 +334,7 @@ export function KnowledgeSearchBar() {
         <Input
           type="search"
           inputSize="sm"
-          width="md"
+          width="full"
           ref={box}
           aria-label="Search pages"
           aria-describedby={reasonID}

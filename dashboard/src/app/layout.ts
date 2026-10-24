@@ -29,7 +29,8 @@
  *     + 420  the peek
  *     +  10  the scroller's reserved gutter  (`scrollbar-gutter: stable`)
  *     +  40  the screen's padding, x density (`spacing.5` each side)
- *     + 236  Settings' section column, on a screen that draws one
+ *     + 236  Settings' section column, where it stands beside the section
+ *            ([SECTION_COLUMN_MIN]; below that it folds to a picker)
  *     + 444  the list
  *
  * = 1160 on a screen and 1396 beside Settings' column, at the normal density.
@@ -139,7 +140,7 @@ export const SCROLLBAR_GUTTER = 10;
 /**
  * What a screen's content keeps on EACH side before the list starts, at the
  * normal density: the kit's `.crewlet-app-shell__content` padding, and
- * `.section-body`'s beside the Settings column, which takes the kit's back
+ * `.crewlet-section-frame__body`'s beside the Settings column, which takes the kit's back
  * and gives the same to the section.
  */
 export const CONTENT_PADDING = px(spacing["5"]);
@@ -161,6 +162,33 @@ export function columnWidth(renderer: SectionRenderer | undefined): number {
       return 0;
   }
 }
+
+/**
+ * The narrowest a Settings section is drawn BESIDE its column: room for a
+ * grid of six facts and a line of detail (the Audit log's), or a row of four
+ * stat tiles, without cutting a value short. Measured: at 1024 the column
+ * left a 489px section, and the audit's When, Where, What and To columns were
+ * drawn 46px wide while its stat tiles read "Not s…".
+ */
+export const SECTION_BODY_FLOOR = 720;
+
+/**
+ * The narrowest window Settings' column stands beside its section at; below
+ * it the column folds to the one-row picker the phone draws, and the section
+ * takes the screen's whole width. Every width between the window's edge and
+ * the section, at the normal density (a media query cannot read the
+ * reader's), as [peekColumnMin] counts them: the sidebar, the sheet's inset
+ * and hairlines, the scroller's gutter, the column, and the section's floor.
+ * `styles/frame.css` writes it as a literal, held here by `frame.test.ts`.
+ */
+export const SECTION_COLUMN_MIN = Math.ceil(
+  px(size.shell.rail) +
+    px(size.shell.inset) +
+    SHEET_HAIRLINES +
+    SCROLLBAR_GUTTER +
+    columnWidth("column") +
+    SECTION_BODY_FLOOR,
+);
 
 /** Which frame a screen sits in, for the one term that differs. */
 export interface Frame {

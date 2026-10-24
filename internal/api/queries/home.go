@@ -95,6 +95,18 @@ func (k FeedKind) object() authz.ObjectKind {
 	return authz.KindTask
 }
 
+// half names what keeps a kind's source, for a refusal of a kind that is not
+// kept on this node.
+func (k FeedKind) half() string {
+	switch k {
+	case FeedPage:
+		return "knowledge base"
+	case FeedSchedule:
+		return "usage domain"
+	}
+	return "tracker"
+}
+
 // DefaultFeedPage is what one screen of the landing feed shows before "Load
 // older"; the ceiling is the tracker's [tracker.MaxFeedPage], shared by every
 // source so one merged page never needs more than one page of any of them.
@@ -244,16 +256,19 @@ const feedSourceReads = 4
 // company keeps pages, and an answer of the rows they may see is the one they
 // asked for.
 func (s Sources) companyFeed(ctx context.Context, p Params) (any, error) {
-	kinds, err := feedKinds(p.String("kinds"), s.feedKept())
+	kept, err := s.feedKept()
+	if err != nil {
+		return nil, err
+	}
+	kinds, err := feedKinds(p.String("kinds"), kept)
 	if err != nil {
 		return nil, err
 	}
 	kinds = slices.DeleteFunc(kinds, func(k FeedKind) bool { return !shows(ctx, k.object()) })
 	for _, kind := range kinds {
-		if (kind == FeedPage && s.Pages == nil) || (kind == FeedSchedule && s.Usage == nil) {
-			return nil, fmt.Errorf("%w: kinds=%s is not kept on this node — the "+
-				"company has no native %s here", ErrBadParams, kind,
-				map[FeedKind]string{FeedPage: "knowledge base", FeedSchedule: "usage domain"}[kind])
+		if !slices.Contains(kept, kind) {
+			return nil, fmt.Errorf("%w: kinds=%s is not kept on this node, because "+
+				"the company has no native %s here", ErrBadParams, kind, kind.half())
 		}
 	}
 	limit := Clamp(p.Int("limit", 0), DefaultFeedPage, tracker.MaxFeedPage)
@@ -415,17 +430,35 @@ func foldRun(last *FeedEntry, entry FeedEntry) bool {
 }
 
 // feedKept is the kinds this node keeps a source for: the tracker's three
-// always (the question is registered only where the tracker is kept), and the
-// page and schedule kinds where their domains are here.
-func (s Sources) feedKept() []FeedKind {
-	out := []FeedKind{FeedCompleted, FeedCreated, FeedHandoff}
+// where the tracker is the engine's own here, the page kind where the
+// knowledge base is, and the schedule kind where the usage domain is.
+//
+// ASKED OF EACH HALF ([keptHere]), never read off whether its source is wired:
+// the engine's live sources are wired on every node and answer per request,
+// so a company on Jira or Confluence had the absent half's kinds kept here,
+// read them, met the half's refusal and refused the whole feed, its schedule
+// runs included. An error is a half this node cannot place yet, answered as
+// such rather than as a feed short of that half.
+func (s Sources) feedKept() ([]FeedKind, error) {
+	var out []FeedKind
+	work, err := keptHere(s.Work)
+	if err != nil {
+		return nil, err
+	}
+	if work {
+		out = append(out, FeedCompleted, FeedCreated, FeedHandoff)
+	}
 	if s.Usage != nil {
 		out = append(out, FeedSchedule)
 	}
-	if s.Pages != nil {
+	wiki, err := keptHere(s.Pages)
+	if err != nil {
+		return nil, err
+	}
+	if wiki {
 		out = append(out, FeedPage)
 	}
-	return out
+	return out, nil
 }
 
 // feedKinds reads `kinds=`, a comma list; empty is every kind this node
@@ -604,7 +637,16 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 		}
 	}
 	answer := map[string]any{"handle": handle}
-	if s.Work != nil {
+	// THE TRACKER'S HALF ONLY WHERE IT IS KEPT HERE ([keptHere]): a company
+	// on Jira, or on no tracker, has no asks in the engine, and its coding
+	// runs parked on a question to a person are sandbox state that every
+	// backend has. Read regardless, the absent half's refusal took the
+	// whole answer with it and those runs reached nobody.
+	work, err := keptHere(s.Work)
+	if err != nil {
+		return nil, err
+	}
+	if work {
 		fresh, err := freshness(p)
 		if err != nil {
 			return nil, err

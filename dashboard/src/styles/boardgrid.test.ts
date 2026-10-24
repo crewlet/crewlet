@@ -40,3 +40,23 @@ test("a dashboard's sections are one board gap apart", () => {
   expect(view).toMatch(/gap:\s*var\(--spacing-4\);/);
   expect(body).toMatch(/gap:\s*var\(--spacing-4\);/);
 });
+
+// THE FIGURES FOLD INTO ROWS THAT FILL. Three a row left a third-width hole
+// beside the last two of five, and a four-figure row one lone tile: four fold
+// two by two, and five three over two on six tracks.
+test("folded figures fill their rows, four two by two and five three over two", () => {
+  const at = css.indexOf("@container page (width < 944px) {\n  .home-kpis");
+  expect(at).toBeGreaterThan(-1);
+  const narrow = css.slice(at, css.indexOf("@container page (width < 640px)", at));
+  expect(narrow).toMatch(
+    /\.home-kpis\[data-count="4"\] \{\s*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/,
+  );
+  expect(narrow).toMatch(
+    /\.home-kpis\[data-count="5"\] \{\s*grid-template-columns: repeat\(6, minmax\(0, 1fr\)\);/,
+  );
+  expect(narrow).toMatch(/\.home-kpis\[data-count="5"\] > \* \{\s*grid-column: span 2;/);
+  expect(narrow).toMatch(
+    /\.home-kpis\[data-count="5"\] > :nth-child\(n \+ 4\) \{\s*grid-column: span 3;/,
+  );
+  expect(narrow).not.toMatch(/repeat\(3, minmax\(0, 1fr\)\)/);
+});

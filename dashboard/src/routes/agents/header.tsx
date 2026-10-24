@@ -1,15 +1,16 @@
 /**
- * What every Agents section carries in the page bar: a way to find a seat, the
- * way into the builder, and the one write the bar offers — adding a seat —
- * plus the section tabs' figures. The chart's other writes are a seat's own
+ * What the Org chart's sections carry in the page bar: a way to find a seat,
+ * the way into the builder ([EditOrgButton]), and the one write the bar
+ * offers, adding a seat, plus the section tabs' figures. Company › Schedules is its own row and draws
+ * none of these: its bar offered Add seat as a schedules page's main action. The chart's other writes are a seat's own
  * and live on it: a vacant human seat's card, peek and page offer Invite and
  * Create to an admin (`components/people.tsx`), since
  * a person comes from the seat they will hold.
  *
  * # One header for every section
  *
- * The chart, the roster, the teams and the schedules are four ways of looking
- * at one company, and a reader moving between them expects the same controls
+ * The chart, the roster and the teams are three ways of looking at one
+ * company's seats, and a reader moving between them expects the same controls
  * in the same place. Written per screen, the chart had "Edit org", the roster
  * had a pair of count tags where the controls should be, and Schedules had
  * none at all, so the bar changed shape with every tab.
@@ -31,6 +32,7 @@
  * put it.
  */
 
+import { ORG_EDIT_PATH } from "~/app/routes.ts";
 import { useMemo, useRef, useState } from "react";
 import { Button, ButtonLink, Combobox, Input, type ComboboxOption } from "@crewlethq/ui";
 import { PencilGlyph, PlusGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
@@ -39,8 +41,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { usePeekControls, usePeek } from "~/app/frame/DetailRail.tsx";
 import { useSearchTarget } from "~/app/searchTarget.ts";
 import { usePageMenu, useSectionCounts } from "~/app/Shell.tsx";
-import { useSchedules } from "~/lib/store-hooks.ts";
-import { CONFIG_WRITE_GRANT, useOrgWriteAccess } from "~/lib/useWriteAccess.ts";
+import { CONFIG_WRITE_GRANT, useOrgWriteAccess, type OrgTarget } from "~/lib/useWriteAccess.ts";
 import { useLeadScope } from "~/lib/leadScope.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { holds } from "~/lib/access.ts";
@@ -77,16 +78,13 @@ export function findSeats(index: OrgIndex, term: string, limit = FIND_LIMIT): Se
 }
 
 /**
- * The section figures every Agents section publishes: seats, units and
- * schedules — each from what this client already holds (the org projection
- * and the schedules push), so a figure costs no read.
+ * The figures the Org chart's tabs carry: its seats and its units, from the
+ * org projection this client already holds, so a figure costs no read.
  */
 export function useAgentsCounts(index: OrgIndex): void {
-  const schedules = useSchedules();
   useSectionCounts({
     roster: String(index.seats.length),
     ...(index.units.length ? { teams: String(index.units.length) } : {}),
-    ...(schedules.length ? { schedules: String(schedules.length) } : {}),
   });
 }
 
@@ -125,10 +123,7 @@ export function AgentsHeader({
   const viewer = useViewer();
   const scope = useLeadScope();
   const lead = !holds(viewer.grants, CONFIG_WRITE_GRANT) ? scope.tops[0] : undefined;
-  const addHref = href(
-    ["agents", "edit"],
-    lead ? { unit: lead.key, add: "agent" } : { add: "agent" },
-  );
+  const addHref = href(ORG_EDIT_PATH, lead ? { unit: lead.key, add: "agent" } : { add: "agent" });
   // ON A PHONE, Edit org FOLDS INTO "More": the bar keeps the finder and the
   // one action the bar offers in view, where the three side by side put Add
   // seat past the window's edge.
@@ -137,21 +132,15 @@ export function AgentsHeader({
       key: "edit-org",
       label: "Edit org",
       icon: <PencilGlyph size="sm" />,
-      onSelect: () => nav.to(["agents", "edit"]),
+      onSelect: () => nav.to(ORG_EDIT_PATH),
+      ...(access.can ? {} : { disabled: true, description: access.reason }),
     },
   ]);
   return (
     <PageActions>
       {filter ? <FilterSeats {...filter} /> : <FindSeat index={index} onFound={onFound} />}
       <span className="page-action-folds">
-        <ButtonLink
-          size="small"
-          variant="secondary"
-          href={href(["agents", "edit"])}
-          leadingIcon={<PencilGlyph size="sm" />}
-        >
-          Edit org
-        </ButtonLink>
+        <EditOrgButton />
       </span>
       {/* NEVER HIDDEN: a reader who may not add a seat sees the control and
           the reason, rather than a product with no way to grow its company. */}
@@ -176,6 +165,38 @@ export function AgentsHeader({
         </Button>
       )}
     </PageActions>
+  );
+}
+
+/**
+ * The way into the org builder, one control wherever the builder writes what
+ * the page shows: the Org chart's sections.
+ *
+ * ASKED THE GATE THE BUILDER ASKS (`useOrgWriteAccess`): a reader holding only
+ * Tracker was offered an enabled Edit org beside a disabled Add seat, and the
+ * page it opened refused them. Never hidden: the control says why.
+ */
+export function EditOrgButton() {
+  return <OrgEditLink label="Edit org" target="anywhere" to={href(ORG_EDIT_PATH)} />;
+}
+
+/** A way into the builder, or the same control disabled with the builder's own reason. */
+function OrgEditLink({ label, target, to }: { label: string; target: OrgTarget; to: string }) {
+  const access = useOrgWriteAccess(target);
+  return access.can ? (
+    <ButtonLink size="small" variant="secondary" href={to} leadingIcon={<PencilGlyph size="sm" />}>
+      {label}
+    </ButtonLink>
+  ) : (
+    <Button
+      size="small"
+      variant="secondary"
+      leadingIcon={<PencilGlyph size="sm" />}
+      disabledReason={access.reason}
+      title={access.reason}
+    >
+      {label}
+    </Button>
   );
 }
 

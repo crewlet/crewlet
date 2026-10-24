@@ -1168,11 +1168,16 @@ func TestTheOutstandingWorldIsReadAndWrittenTo(t *testing.T) {
 		"ingress_blocked on " + blockedRepo,
 		"identity_failed on eng-lead",
 		"grant_short on eng-lead",
-		"approval_required on ops-lead",
 		"approval_required on qa-lead",
+		// EVERY AGENT WITH NO APP, gathered into the one finding that says
+		// the act once (github.SeatsWithNoApp), naming them as its subjects.
+		"approval_required on agents without an app",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("the outstanding world reported\n %v\nwant\n %v", got, want)
+	}
+	if last := findings[len(findings)-1]; !slices.Equal(last.Subjects, []string{"ops-lead"}) {
+		t.Errorf("the agents with no app = %v, want ops-lead", last.Subjects)
 	}
 
 	reads := world.readLog()

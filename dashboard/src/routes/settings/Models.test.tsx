@@ -181,7 +181,9 @@ afterEach(() => {
 });
 
 const smart0 = () =>
-  screen.getByText("claude-sonnet-5", { exact: false }).closest(".grid-row") as HTMLElement;
+  screen
+    .getByText("claude-sonnet-5", { exact: false })
+    .closest(".crewlet-data-grid__row") as HTMLElement;
 
 test("every model is drawn with its keys as the engine judged them", async () => {
   mount();
@@ -218,7 +220,7 @@ test("every model is drawn with its keys as the engine judged them", async () =>
   // Who runs on it, off the chains the org projection carries.
   const smart = screen
     .getByText("claude-sonnet-5", { exact: false })
-    .closest(".grid-row") as HTMLElement;
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(smart).getByText("1 seat")).toBeDefined();
 });
 
@@ -250,9 +252,11 @@ test("a duplicate key comes back as the key it repeats", async () => {
   smart.keys.push({ ...smart.keys[0]!, ref: "ANTHROPIC_KEY_D", state: "duplicate", same_as: 1 });
   mount("smart", { answer });
   await settle();
-  const dup = screen.getByText("ANTHROPIC_KEY_D").closest(".grid-row") as HTMLElement;
+  const dup = screen.getByText("ANTHROPIC_KEY_D").closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(dup).getByText("As key 1")).toBeDefined();
-  const unset = screen.getByText("Key 3 (written inline)").closest(".grid-row") as HTMLElement;
+  const unset = screen
+    .getByText("Key 3 (written inline)")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(unset).getByText("Not in the pool")).toBeDefined();
 });
 
@@ -263,7 +267,7 @@ test("a model no seat names says so in the same words on the list and on its pag
   answer.providers.push({ ...answer.providers[1]!, key: "spare", model: "gpt-spare" });
   mount(undefined, { answer });
   await settle();
-  const row = screen.getByText("spare").closest(".grid-row") as HTMLElement;
+  const row = screen.getByText("spare").closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(row).getByText("No seat names it")).toBeDefined();
   cleanup();
   mount("spare", { answer });
@@ -309,9 +313,9 @@ test("a model's page lists its keys whole and the seats that run on it, and whic
   expect(screen.getByText("OPENAI_API_KEY")).toBeDefined();
   expect(screen.getByText("default")).toBeDefined();
   // The CEO falls back to it; the SWE's reviewer runs on it.
-  const ceo = screen.getByText("CEO").closest(".grid-row") as HTMLElement;
+  const ceo = screen.getByText("CEO").closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(ceo).getByText("executor")).toBeDefined();
-  const swe = screen.getByText("SWE").closest(".grid-row") as HTMLElement;
+  const swe = screen.getByText("SWE").closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(swe).getByText("reviewer")).toBeDefined();
 });
 
@@ -319,6 +323,21 @@ test("a key the engine does not know is said, not drawn as an empty model", asyn
   mount("nope");
   await settle();
   expect(screen.getByText("No model called “nope”")).toBeDefined();
+});
+
+// NO MODEL IS THE KIT'S EMPTY STATE, with the way to where one is added: a
+// plain sentence in a padded box was the one empty card on Settings drawn by
+// hand, beside the MCP servers card's empty state.
+test("a node with no model says so with the empty state and the way to Configuration", async () => {
+  mount(undefined, { answer: { ...pool(), providers: [] } });
+  await settle();
+  const title = await screen.findByText("No model configured yet");
+  const state = title.closest(".crewlet-empty-state") as HTMLElement;
+  expect(state).not.toBeNull();
+  expect(within(state).getByText("providers.llm").tagName).toBe("CODE");
+  expect(within(state).getByRole("link", { name: "Open Configuration" }).getAttribute("href")).toBe(
+    "#/settings/config",
+  );
 });
 
 test("a refused reader sees the refusal alone — no tiles, no empty list", async () => {

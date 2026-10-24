@@ -33,13 +33,19 @@ test("the header and the rail say provenance in the same words", () => {
     </>,
   );
   const header = container.querySelector(".crewlet-fact-line__set-by")!.textContent;
-  const rail = container.querySelector(".props-setby")!.textContent;
+  const rail = container.querySelector(".crewlet-property-list__set-by")!.textContent;
   expect(header).toBe(rail);
   expect(header).toBe("set by ada · 2h ago · turn ");
 });
 
 test("the turn that set a value links to its page", () => {
-  render(<SetByLine setBy={SET} fields={["Status", "Priority", "Type"]} className="props-setby" />);
+  render(
+    <SetByLine
+      setBy={SET}
+      fields={["Status", "Priority", "Type"]}
+      className="crewlet-property-list__set-by"
+    />,
+  );
   expect(screen.getByText(/Status, Priority and Type · set by ada/)).toBeTruthy();
   expect(screen.getByRole("link", { name: "turn" }).getAttribute("href")).toBe(
     href(["live", "turns", "t-1"]),
@@ -52,11 +58,11 @@ test("a fact's route becomes its link, and a named glyph its mark", () => {
       kind="Unit"
       icon="users"
       title="Engineering"
-      facts={[{ label: "Lead", value: "ada", path: ["agents", "seats", "ada"] }]}
+      facts={[{ label: "Lead", value: "ada", path: ["company", "org", "seats", "ada"] }]}
     />,
   );
   expect(screen.getByRole("link", { name: "ada" }).getAttribute("href")).toBe(
-    href(["agents", "seats", "ada"]),
+    href(["company", "org", "seats", "ada"]),
   );
   expect(container.querySelector(".crewlet-object-header__icon svg")).not.toBeNull();
   expect(screen.getByRole("heading", { level: 2, name: "Engineering" })).toBeTruthy();

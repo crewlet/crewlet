@@ -40,7 +40,8 @@ import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
 import { conditionKey, type Attention } from "~/lib/attention.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import type { OrgIndex } from "~/lib/seats.ts";
-import { subjectKey, type DecisionSubject } from "~/components/DecisionRow.tsx";
+import { subjectKey } from "~/components/DecisionRow.tsx";
+import type { DecisionSubject } from "~/lib/decisions.ts";
 import type { WorkAskRow, WorkInboxAnswer, WorkInboxNotice } from "~/protocol/index.ts";
 
 export type InboxRow =

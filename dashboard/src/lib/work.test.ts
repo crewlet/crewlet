@@ -136,7 +136,7 @@ test("a status takes the project's label, then the shipped one, then itself", ()
 //
 // THE NAMES ARE THE DESIGN SYSTEM'S — Lucide's — rather than words we chose,
 // which is the point: one vocabulary means the mark a table asks for and the
-// mark `~/ui/glyph.tsx` draws cannot be two different ideas spelled the same.
+// mark `NamedGlyph` draws cannot be two different ideas spelled the same.
 test("every shipped type has its own icon and an unknown one falls back", () => {
   expect(typeIcon("bug")).toBe("bug");
   expect(typeIcon("milestone")).toBe("flag");

@@ -60,7 +60,7 @@ export function BudgetTile({
             else is told there is none, which is the whole of what they can
             act on. */}
         {mayConfigure && (
-          <a className="t-link" href={href(["spend", "budgets"])}>
+          <a className="t-link" href={href(["company", "budgets"])}>
             Set one
           </a>
         )}

@@ -43,12 +43,35 @@ import {
   type DraftUnit,
 } from "./draft.ts";
 import { mintHandle, mintUnitKey } from "./identity.ts";
+import type { Charter } from "~/contract/config.ts";
 
 /** One step of a document path: a key, or a list index. */
 export type Segment = string | number;
 
-/** The charter fields: the company node's own editable keys. */
-export const CHARTER_FIELDS = ["name", "mission", "vision", "policies"] as const;
+/**
+ * The company node's own keys the builder writes: its name, and nothing else.
+ *
+ * THE PRINCIPLES ARE NOT THE BUILDER'S. The mission, the vision and the
+ * standing policies are written on Company › Principles, in place, and nowhere
+ * else, so a reader never meets two forms for one value that save through two
+ * different flows. The builder neither records a change to them nor names them
+ * in a patch (`buildPatch`), so a save from here can never carry a stale copy
+ * of what that page wrote.
+ */
+export const COMPANY_FIELDS = ["name"] as const;
+
+/**
+ * The company's principles, which Company › Principles writes (see
+ * [COMPANY_FIELDS]): every field of the engine's `Charter`, held to it by the
+ * type, so a part the charter gains is a compile error here rather than a
+ * field the builder would quietly start sending again.
+ */
+const PRINCIPLES: Readonly<Record<keyof Charter, true>> = {
+  mission: true,
+  vision: true,
+  policies: true,
+};
+export const PRINCIPLES_FIELDS: readonly string[] = Object.keys(PRINCIPLES);
 
 /** Where the Datadog fallback seat lives in the document. */
 export const DATADOG_ROUTE_TO: readonly string[] = ["integrations", "datadog", "route_to"];
@@ -268,8 +291,8 @@ export function rekeying(before: Draft, after: Draft): Map<NodeKey, NodeKey> {
 /** A JSON merge patch (RFC 7396): `null` removes a key, an object merges, anything else replaces. */
 export type MergePatch = JsonRecord;
 
-/** The top-level keys a patch may name whole. */
-const WHOLE_KEYS = ["name", "mission", "vision", "policies", "roles", "units"] as const;
+/** The top-level keys a patch may name whole: never the principles (see [COMPANY_FIELDS]). */
+const WHOLE_KEYS = [...COMPANY_FIELDS, "roles", "units"] as const;
 
 /** A list the engine never writes empty reads as absent. */
 function normalized(value: unknown): unknown {

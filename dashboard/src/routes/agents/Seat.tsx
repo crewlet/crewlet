@@ -66,8 +66,20 @@
  * this kind has not got lands on Overview (`useTab`).
  */
 
+import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
+import { ORG_EDIT_PATH } from "~/app/routes.ts";
 import { useId, useMemo, useState } from "react";
-import { Button, ButtonLink, Callout, EmptyState, Menu, Skeleton, Tag, tabId } from "@crewlethq/ui";
+import {
+  Button,
+  ButtonLink,
+  Callout,
+  EmptyState,
+  Menu,
+  Skeleton,
+  Tabs,
+  Tag,
+  tabId,
+} from "@crewlethq/ui";
 import {
   ActivityGlyph,
   ChartNoAxesGanttGlyph,
@@ -87,7 +99,6 @@ import {
   seatPlaceKey,
   seatUnitKey,
 } from "~/app/crumbs.ts";
-import { ObjectTabs } from "~/app/frame/ObjectTabs.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { usePageLabels, usePageMenu } from "~/app/Shell.tsx";
@@ -132,8 +143,7 @@ import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { Memory } from "./seat/Memory.tsx";
 import { Overview } from "./seat/Overview.tsx";
 import {
-  AGENT_TABS,
-  HUMAN_TABS,
+  seatTabs,
   TAB_LABELS,
   TRAIL_WORDS,
   findSeat,
@@ -179,7 +189,9 @@ export function SeatScreen({ handle }: { handle: string }) {
         }
       : {},
   );
-  const [tab, setTab] = useTab<SeatTab>("tab", human ? HUMAN_TABS : AGENT_TABS);
+  const runs = useServicesRun();
+  const ask = useServicesAsk();
+  const [tab, setTab] = useTab<SeatTab>("tab", seatTabs(human, runs));
   const panelId = useId();
   const agent = liveRow(agents, handle, seat);
   // THE OPEN WORK ON THE SEAT, asked once for the strip's count, the
@@ -200,7 +212,7 @@ export function SeatScreen({ handle }: { handle: string }) {
       limit: WORK_PAGE,
     },
     // THE TRACKER'S QUESTION, asked only of a reader holding it.
-    { enabled: !!seat?.handle && viewer.tracker, pollMs: 30_000 },
+    { enabled: !!seat?.handle && viewer.tracker && ask.tracker, pollMs: 30_000 },
   );
   // WHAT THE SEAT SAID is its lead's and an admin's to read — see the file's
   // doc.
@@ -248,7 +260,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 },
               ]
             : []),
-          ...(paused
+          ...(paused && runs.tracker
             ? [
                 {
                   key: "message",
@@ -259,13 +271,19 @@ export function SeatScreen({ handle }: { handle: string }) {
                 },
               ]
             : []),
-          {
-            key: "assign",
-            label: "Assign task",
-            icon: <PlusGlyph size="sm" />,
-            onSelect: () => setAssigning(true),
-            ...menuHold(assignAccess),
-          },
+          // FILING OR HANDING OVER A TASK is Crewlet Works', and offered only
+          // where the company runs it, as the inline buttons are.
+          ...(runs.tracker
+            ? [
+                {
+                  key: "assign",
+                  label: "Assign task",
+                  icon: <PlusGlyph size="sm" />,
+                  onSelect: () => setAssigning(true),
+                  ...menuHold(assignAccess),
+                },
+              ]
+            : []),
           ...(human || paused
             ? []
             : [
@@ -291,7 +309,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             key: "edit",
             label: "Edit in org",
             icon: <PencilGlyph size="sm" />,
-            onSelect: () => nav.to(["agents", "edit"], { seat: seat.handle }),
+            onSelect: () => nav.to(ORG_EDIT_PATH, { seat: seat.handle }),
           },
         ]
       : [],
@@ -304,7 +322,7 @@ export function SeatScreen({ handle }: { handle: string }) {
         title={`No seat called “${handle}”`}
         description="It may have been renamed or removed."
         action={
-          <Button variant="primary" onClick={() => nav.to(["agents", "roster"])}>
+          <Button variant="primary" onClick={() => nav.to(["company", "org", "roster"])}>
             All seats
           </Button>
         }
@@ -312,7 +330,7 @@ export function SeatScreen({ handle }: { handle: string }) {
     );
   }
 
-  const tabs = human ? HUMAN_TABS : AGENT_TABS;
+  const tabs = seatTabs(human, runs);
   const openWork = work.data?.total_hint;
   return (
     <div className="prof-frame">
@@ -333,19 +351,26 @@ export function SeatScreen({ handle }: { handle: string }) {
         )}
         {/* FOLDED ON A PHONE into the bar's "More" (published above), all
             but the one action the bar keeps in view. */}
-        <span className={paused ? "page-action-folds" : undefined}>
-          {/* HELD ON YOUR OWN SEAT BY ITSELF (`useMessageSeatAccess`), as
-              everywhere the button is drawn. */}
-          <MessageSeatButton handle={seat.handle} />
-        </span>
-        <span className="page-action-folds">
-          <AssignToSeatButton
-            handle={seat.handle}
-            name={seat.name}
-            open={assigning}
-            onOpenChange={setAssigning}
-          />
-        </span>
+        {/* THE TRACKER'S TWO WRITES, and their wrappers with them: where the
+            company runs no Crewlet Works the buttons draw nothing, and their
+            empty spans still took the bar's gap. */}
+        {runs.tracker && (
+          <>
+            <span className={paused ? "page-action-folds" : undefined}>
+              {/* HELD ON YOUR OWN SEAT BY ITSELF (`useMessageSeatAccess`), as
+                  everywhere the button is drawn. */}
+              <MessageSeatButton handle={seat.handle} />
+            </span>
+            <span className="page-action-folds">
+              <AssignToSeatButton
+                handle={seat.handle}
+                name={seat.name}
+                open={assigning}
+                onOpenChange={setAssigning}
+              />
+            </span>
+          </>
+        )}
         {!human && (
           <span className={paused ? undefined : "page-action-folds"}>
             <PauseSeatButton
@@ -381,7 +406,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 label: "Edit in org",
                 description: "Change this seat in the org editor",
                 icon: <PencilGlyph size="sm" />,
-                onSelect: () => nav.to(["agents", "edit"], { seat: seat.handle }),
+                onSelect: () => nav.to(ORG_EDIT_PATH, { seat: seat.handle }),
               },
             ]}
           />
@@ -393,7 +418,9 @@ export function SeatScreen({ handle }: { handle: string }) {
         {/* WHAT DOES NOT FIT FOLDS INTO "MORE", the tab the reader is on
             always drawn: scrolled, a phone's strip hid Settings past its edge
             with nothing to say it was there. */}
-        <ObjectTabs
+        <Tabs
+          overflow="menu"
+          variant="underline"
           ariaLabel={`${seat.name}'s sections`}
           className="prof-tabs"
           value={tab}
@@ -415,7 +442,10 @@ export function SeatScreen({ handle }: { handle: string }) {
       </header>
 
       <div className="prof-body">
-        {readsSeats && seat.handle && (
+        {/* A SEAT NOBODY HOLDS says so in its Overview's empty state, with
+            the ways to fill it; the notice is for a seat somebody holds, a
+            listing that could not say, and the seat's other tabs. */}
+        {readsSeats && seat.handle && (!unheld || tab !== "overview") && (
           <Holder seat={{ handle: seat.handle, name: seat.name }} seats={humanSeats} />
         )}
         <Notices seat={seat} agent={agent} now={now} nameOf={nameOf} />
@@ -440,6 +470,7 @@ export function SeatScreen({ handle }: { handle: string }) {
               nameOf={nameOf}
               now={now}
               unheld={unheld}
+              humanSeats={humanSeats}
             />
           )}
           {tab === "work" &&
@@ -508,7 +539,9 @@ function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) 
               names the same seat — two `h1`s reading the same words are two
               page titles to a reader navigating by heading. */}
           <h2 className="prof-name">{seat.name}</h2>
-          <Tag appearance="outline">{human ? "Person" : "Agent"}</Tag>
+          {/* ONE PILL, THE STATE: the kind is a fact, said first on the line
+              under the name, where an outline "Agent" beside the state's pill
+              read as two states. */}
           {!human && (
             <Tag variant={toneOf(state)} dot>
               {pillWord(agent)}
@@ -516,7 +549,9 @@ function SeatHead({ seat, agent }: { seat: Seat; agent: AgentRow | undefined }) 
           )}
         </div>
         <p className="prof-line">
-          {[handleLabel(seat.handle), place || "above every unit"].filter(Boolean).join(" · ")}
+          {[human ? "Person" : "Agent", handleLabel(seat.handle), place || "above every unit"]
+            .filter(Boolean)
+            .join(" · ")}
           {seat.manager ? (
             <>
               {" · reports to "}

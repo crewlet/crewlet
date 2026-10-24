@@ -18,6 +18,7 @@
  * recognize this save if its answer is lost (`useSave.ts`).
  */
 
+import { engineSentence } from "./EngineSentence.tsx";
 import { useState } from "react";
 import { plural } from "~/lib/format.ts";
 import { handleLabel } from "~/lib/seats.ts";
@@ -58,14 +59,13 @@ export function changeSentences(changes: ChangeSet): { changes: string[]; conseq
     out.push(`Moves ${m.ref.name} from ${place(m.from)} to ${place(m.to)}.`);
   }
   for (const e of changes.edited) out.push(`Edits ${e.ref.name}: ${e.fields.join(", ")}.`);
-  if (changes.charter.length > 0) out.push(`Edits the charter: ${changes.charter.join(", ")}.`);
-
-  const follow: string[] = [];
   if (changes.companyRename) {
-    follow.push(
+    out.push(
       `Renames the company from ${changes.companyRename.before} to ${changes.companyRename.after}.`,
     );
   }
+
+  const follow: string[] = [];
   for (const group of changes.onboarding) {
     const one = group.seats.length === 1;
     follow.push(
@@ -258,7 +258,7 @@ export function ReviewSaveDialog({
       {status === "problems" && documentProblems.length > 0 && (
         <ul className="org-builder-list" aria-label="Problems with the whole configuration">
           {documentProblems.map((p, i) => (
-            <li key={i}>{p.message}</li>
+            <li key={i}>{engineSentence(p.message)}</li>
           ))}
         </ul>
       )}
@@ -315,7 +315,7 @@ export function ReviewSaveDialog({
           <strong>The engine will run this, with {plural(warnings.length, "warning")}</strong>
           <ul className="org-builder-list">
             {warnings.map((w, i) => (
-              <li key={i}>{w.message}</li>
+              <li key={i}>{engineSentence(w.message)}</li>
             ))}
           </ul>
         </section>

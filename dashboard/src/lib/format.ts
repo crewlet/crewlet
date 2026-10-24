@@ -311,6 +311,20 @@ export function fmtDuration(ms: number | null | undefined): string {
 }
 
 /**
+ * A SETTING's duration, written in whole seconds, as a person would write it:
+ * in the largest whole unit that divides it ("7 days", "12 hours", "5
+ * minutes"), else as [fmtDuration] measures it. A session that lives 604800
+ * seconds is "7 days", never "168h", which is a reading nobody configured.
+ */
+export function fmtSetting(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return EMPTY_VALUE;
+  if (seconds > 0 && seconds % 86_400 === 0) return plural(seconds / 86_400, "day");
+  if (seconds > 0 && seconds % 3_600 === 0) return plural(seconds / 3_600, "hour");
+  if (seconds > 0 && seconds % 60 === 0) return plural(seconds / 60, "minute");
+  return fmtDuration(seconds * 1000);
+}
+
+/**
  * How long something has been running, for a clock that reruns every second.
  *
  * Distinct from [fmtDuration], which measures a FINISHED span and is free to

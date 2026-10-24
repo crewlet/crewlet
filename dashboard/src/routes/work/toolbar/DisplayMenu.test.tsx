@@ -120,9 +120,11 @@ function optionsOf(name: string): string[] {
 
 /** The column checkboxes, in the order the menu draws them. */
 const columnBoxes = (): string[] =>
-  [...document.querySelectorAll(".grid-cols-choices:not([data-card-facts]) .grid-cols-choice")].map(
-    (el) => el.textContent ?? "",
-  );
+  [
+    ...(screen
+      .queryByRole("group", { name: "Columns" })
+      ?.querySelectorAll(".crewlet-column-chooser__choice") ?? []),
+  ].map((el) => el.textContent ?? "");
 
 // ---------------------------------------------------------------------------
 // The shapes, and the button
@@ -368,7 +370,11 @@ test("the lanes put away are named, and each comes back on its own or all at onc
 test("the board offers what its cards show, and a tick moves exactly that fact", () => {
   const { onCardHidden } = openDisplay({ shape: "board", cardHidden: new Set(["labels"]) });
   expect(screen.queryByText(/Grouping and order are in the bar/)).toBeNull();
-  const boxes = [...document.querySelectorAll("[data-card-facts] .grid-cols-choice")];
+  const boxes = [
+    ...screen
+      .getByRole("group", { name: "Card shows" })
+      .querySelectorAll(".crewlet-column-chooser__choice"),
+  ];
   expect(boxes.map((b) => b.textContent)).toEqual(CARD_FACTS.map((f) => f.label));
   expect((screen.getByLabelText("Labels") as HTMLInputElement).checked).toBe(false);
   expect((screen.getByLabelText("Due date") as HTMLInputElement).checked).toBe(true);
@@ -418,7 +424,9 @@ test("both grid shapes offer their own column set, and no other shape offers one
 // reads it that way, so the ticks show the default until somebody moves one.
 test("with nothing chosen the ticks are the set's own default", () => {
   openDisplay({ shape: "list", workspace: true });
-  const ticked = [...document.querySelectorAll<HTMLInputElement>(".grid-cols-choice input")]
+  const ticked = [
+    ...document.querySelectorAll<HTMLInputElement>(".crewlet-column-chooser__choice input"),
+  ]
     .map((box, at) => (box.checked ? columnBoxes()[at] : null))
     .filter(Boolean);
   expect(ticked).toEqual(

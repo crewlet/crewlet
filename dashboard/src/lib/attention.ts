@@ -216,7 +216,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       id: "unconfigured",
       severity: "critical",
       subject: "engine",
-      icon: "sliders-vertical",
+      icon: "settings",
       title: "No company configuration is active",
       detail: "Import a company to start.",
       path: ["settings", "config"],
@@ -273,7 +273,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       icon: "coins",
       title: `The company's ${PERIOD_ADJECTIVE[orgRefusing.period]} token budget is refusing charges`,
       detail: `${refusalWords(orgRefusing)} Raise the company limit, or wait until ${orgRefusing.resets_at}.`,
-      path: ["spend"],
+      path: ["settings", "spend"],
       at: orgRefusing.refused_at,
     });
   } else if (orgNear) {
@@ -284,7 +284,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       icon: "coins",
       title: `The company's ${PERIOD_ADJECTIVE[orgNear.period]} token budget is nearly spent`,
       detail: `${spentWords(orgNear)} Raise the company limit, or wait until ${orgNear.resets_at}.`,
-      path: ["spend"],
+      path: ["settings", "spend"],
     });
   }
 
@@ -325,7 +325,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         icon: "triangle-alert",
         title: `${agent.role} stopped: ${agent.last_error.kind || "error"}`,
         detail: agent.last_error.message || "The seat stopped and has not done work since.",
-        path: ["agents", "seats", String(agent.handle ?? agent.id)],
+        path: ["company", "org", "seats", String(agent.handle ?? agent.id)],
         at: agent.last_error.at,
         who: String(agent.handle ?? agent.role),
       });
@@ -342,7 +342,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         icon: "pause",
         title: `${agent.role} is stopped`,
         detail: `The seat cannot take work: ${stoppedLine(agent, nameOf)}.`,
-        path: ["agents", "seats", String(agent.handle ?? agent.id)],
+        path: ["company", "org", "seats", String(agent.handle ?? agent.id)],
         // WHEN A PERSON PAUSED IT, where one did: the instant the condition
         // began, which is what orders it among the rest and what its row's
         // age says.
@@ -373,7 +373,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
           detail: `${call.phase} · ${roundLabel(call).text}`,
           // THE OVERVIEW, where the seat's current turn is drawn round by
           // round — the profile's default tab, so the path alone opens it.
-          path: ["agents", "seats", String(agent.handle ?? agent.id)],
+          path: ["company", "org", "seats", String(agent.handle ?? agent.id)],
           at: call.updated_at,
           who: String(agent.handle ?? agent.role),
         });
@@ -394,7 +394,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         detail: `${tokensOf(refusing)} spent. Raise the limit, or wait until ${refusing.resets_at}.`,
         // THE SETTINGS TAB, where the ceiling that refused is written beside
         // each window's live meter.
-        path: ["agents", "seats", String(agent.handle ?? agent.id)],
+        path: ["company", "org", "seats", String(agent.handle ?? agent.id)],
         query: { tab: "settings" },
         at: refusing.refused_at,
       });

@@ -106,6 +106,13 @@ func (l liveWork) reader() (estate.Work, error) {
 	return estate.Work{}, nativeAbsent(started, "tracker")
 }
 
+// Kept answers whether this node serves the tracker half, by the same
+// resolution every read below makes. See [queries.Keeper].
+func (l liveWork) Kept() error {
+	_, err := l.reader()
+	return err
+}
+
 func (l liveWork) Tasks(ctx context.Context, q tracker.Query, now time.Time) (tracker.Answer, error) {
 	r, err := l.reader()
 	if err != nil {
@@ -291,12 +298,26 @@ func (l liveWork) Thread(ctx context.Context, q tracker.ThreadQuery,
 // livePages is the knowledge base's read side, resolved per question.
 type livePages struct{ engine *engine.Engine }
 
+// Both halves the merged questions read answer whether they are kept here, or
+// those questions would read an absent half and refuse whole.
+var (
+	_ queries.Keeper = liveWork{}
+	_ queries.Keeper = livePages{}
+)
+
 func (l livePages) reader() (estate.Pages, error) {
 	started := l.engine.NativeStarted()
 	if r, ok := engine.OperatorPages(l.engine); ok {
 		return r, nil
 	}
 	return estate.Pages{}, nativeAbsent(started, "knowledge base")
+}
+
+// Kept answers whether this node serves the knowledge half, by the same
+// resolution every read below makes. See [queries.Keeper].
+func (l livePages) Kept() error {
+	_, err := l.reader()
+	return err
 }
 
 func (l livePages) List(ctx context.Context, f pages.Filter, fresh statelog.Freshness) (

@@ -49,8 +49,16 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { Announcer, AppShell, useMediaMatch } from "@crewlethq/ui";
-import { DESTINATIONS, WORKSPACES, workspaceOf, workspaceRow } from "./nav.ts";
+import { AppShell, SectionFrame, useMediaMatch } from "@crewlethq/ui";
+import {
+  DESTINATIONS,
+  WORKSPACES,
+  landingPath,
+  serviceShown,
+  workspaceOf,
+  workspaceRow,
+} from "./nav.ts";
+import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
 import { samePath, useNavigator, useRoute } from "./router.tsx";
 import { crumbsFor, titleOf, type Labels } from "./crumbs.ts";
 import { remember } from "~/lib/recents.ts";
@@ -73,7 +81,14 @@ import { SessionReading, useFrameSession } from "~/lib/frameSession.ts";
 import { InboxCountsProvider } from "~/lib/useInboxCounts.ts";
 import { QueueCountProvider } from "~/lib/useQueueCount.ts";
 import { useViewerPrefs } from "~/lib/prefs.ts";
-import { PEEK_WIDTH, columnWidth, densityScale, listReserve, peekColumnMin } from "./layout.ts";
+import {
+  PEEK_WIDTH,
+  SECTION_COLUMN_MIN,
+  columnWidth,
+  densityScale,
+  listReserve,
+  peekColumnMin,
+} from "./layout.ts";
 import { goSignIn } from "~/lib/session.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
 import type { FleetAnswer } from "~/protocol/index.ts";
@@ -446,11 +461,15 @@ function Frame({ children }: { children: ReactNode }) {
   // re-sends it on every reconnect. ONLY WITH TRACKER: `inbox_changed` is the
   // tracker's push, and a watch from anybody else is a refusal on every
   // reconnect.
+  // AND ONLY OF A COMPANY RUNNING CREWLET WORKS, whose push it is.
+  const runs = useServicesRun();
+  const ask = useServicesAsk();
+  const watchesInbox = viewer.owner !== "" && viewer.tracker && ask.tracker;
   useEffect(() => {
-    if (viewer.owner === "" || !viewer.tracker) return;
+    if (!watchesInbox) return;
     socket.watch(viewer.owner);
     return () => socket.watch("");
-  }, [socket, viewer.owner, viewer.tracker]);
+  }, [socket, viewer.owner, watchesInbox]);
 
   // THE FRAME'S KEYS, by row — `keymap.ts` says which key each one is.
   const [legendOpen, setLegendOpen] = useState(false);
@@ -467,7 +486,14 @@ function Frame({ children }: { children: ReactNode }) {
       if (!focusSearchTarget()) setPaletteOpen(true);
     },
     keys: () => setLegendOpen(true),
-    ...Object.fromEntries(WORKSPACES.map((ws) => [`go.${ws.key}`, () => nav.to(ws.path)])),
+    // A JUMP TO A PLACE THE COMPANY DOES NOT RUN is bound to nothing, as its
+    // row is drawn nowhere (`nav.ts`'s `serviceShown`).
+    ...Object.fromEntries(
+      WORKSPACES.map((ws) => [
+        `go.${ws.key}`,
+        { run: () => nav.to(landingPath(ws, held, runs)), when: serviceShown(ws, runs) },
+      ]),
+    ),
     // READ AT THE PRESS, off the store, rather than through `useAgents`: the
     // agents push lands twice per tool-loop round, and a subscription here
     // would re-render the whole frame on every one of them for a key pressed
@@ -493,7 +519,12 @@ function Frame({ children }: { children: ReactNode }) {
   // WHICH SHAPE THE PEEK TAKES — see the file's doc. The frame is described
   // by what stands in front of the list, and the width asked is the one at
   // which this frame, at this density, still leaves the list its floor.
-  const column = columnWidth(row?.renderer);
+  // THE COLUMN STANDS BESIDE THE SECTION only where the window holds both
+  // ([SECTION_COLUMN_MIN]); below that it folds to its one-row picker over
+  // the section, and the peek arithmetic counts no column.
+  const sectionColumn = columnWidth(row?.renderer);
+  const sideBySide = useMediaMatch(`(width >= ${SECTION_COLUMN_MIN}px)`);
+  const column = sideBySide ? sectionColumn : 0;
   const frame = { column, scale: densityScale(prefs.density) };
   const roomy = useMediaMatch(`(width >= ${peekColumnMin(frame)}px)`);
   const peekShape = peekable(peek) ? (roomy ? "column" : "drawer") : undefined;
@@ -599,6 +630,8 @@ function Frame({ children }: { children: ReactNode }) {
                 working={showWorking}
                 menu={menu}
                 star={!ownStar}
+                runs={runs}
+                grants={held}
               >
                 <StateBar degraded={degraded} coverage={coverage} />
               </PageHeader>
@@ -610,17 +643,23 @@ function Frame({ children }: { children: ReactNode }) {
             </PeekRestingWidth.Provider>
           }
         >
-          {row && column > 0 ? (
+          {row && sectionColumn > 0 ? (
             // THE COLUMN'S WIDTH IS THE ONE THE PEEK ARITHMETIC COUNTED
-            // ([columnWidth]), handed to the grid rather than written again
-            // in the stylesheet, so the two cannot drift.
-            <div
-              className="section-frame"
-              style={{ "--section-column": `${column}px` } as CSSProperties}
-            >
-              <SectionColumn row={row} path={route.path} grants={held} figures={figures} />
-              <div className="section-body">{screen}</div>
-            </div>
+            // ([columnWidth]), and the fold is the same answer the peek's
+            // width reads ([SECTION_COLUMN_MIN]), both handed to the kit's
+            // frame rather than written again in a stylesheet, so the column
+            // drawn and the column counted cannot drift.
+            <SectionFrame columnWidth={`${sectionColumn}px`} folded={!sideBySide}>
+              <SectionColumn
+                row={row}
+                path={route.path}
+                query={route.query}
+                grants={held}
+                figures={figures}
+                runs={runs}
+              />
+              <SectionFrame.Body>{screen}</SectionFrame.Body>
+            </SectionFrame>
           ) : (
             screen
           )}
@@ -646,10 +685,7 @@ function Frame({ children }: { children: ReactNode }) {
             <NewTaskSheet preset={newTask} onClose={() => setNewTask(null)} />
           </LayerBoundary>
         )}
-        {legendOpen && <KeyLegend onClose={() => setLegendOpen(false)} />}
-        {/* THE KIT'S ONE POLITE REGION, mounted once: what a control says
-            without moving focus (the switcher's "3 projects"). */}
-        <Announcer />
+        {legendOpen && <KeyLegend runs={runs} onClose={() => setLegendOpen(false)} />}
       </PeekNeighbours>
     </NewTaskOpener.Provider>
   );

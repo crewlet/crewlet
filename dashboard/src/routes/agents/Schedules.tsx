@@ -32,6 +32,7 @@ import { useMemo, type ReactNode } from "react";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import {
   AvatarStack,
+  ButtonLink,
   Card,
   EmptyState,
   EmptyValue,
@@ -43,6 +44,8 @@ import {
   TableDateCell,
   TableEntityCell,
   TableTextCell,
+  PageNote,
+  type DataGridActivationEvent,
 } from "@crewlethq/ui";
 import {
   CalendarGlyph,
@@ -74,10 +77,13 @@ import {
 import { useNow } from "~/lib/clock.ts";
 import type { LogRefusal, QueryRefusal, ScheduleRow, ScheduleRunRow } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { href } from "~/app/router.tsx";
-import { AgentsHeader, useAgentsCounts } from "./header.tsx";
+import { closedBy } from "~/app/nav.ts";
+import { useViewer } from "~/lib/viewer.ts";
+
+/** Where the company document a schedule is written in is read. */
+const CONFIG_PATH = ["settings", "config"];
 
 /** The ledger's three outcomes, and nothing else — see the note above.
  *
@@ -543,11 +549,8 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
   // badge's monogram out of it, and drew a person's seat as an agent's.
   const index = useMemo(() => indexOrg(org), [org]);
   const who = useMemo(() => seatLookup(index), [index]);
-  // THE SAME FIGURES ON EVERY AGENTS TAB, this one's included: a strip whose
-  // numbers came and went with the tab would read as counts that changed.
-  useAgentsCounts(index);
   const { open: openPeek } = usePeekControls();
-  // `#/agents/schedules/{scope_type}/{scope_id}/{name}` names ONE schedule.
+  // `#/company/schedules/{scope_type}/{scope_id}/{name}` names ONE schedule.
   // Three segments because a schedule's identity is all three: two units may
   // each declare a "standup", and a role and a unit may both.
   const [scopeType, scopeId, scheduleName] = scope;
@@ -567,6 +570,8 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
   const { data, loading, error, refusal } = useQuery("schedules", undefined, { pollMs: 30_000 });
 
   const schedules = data?.schedules ?? [];
+  const viewer = useViewer();
+  const mayReadConfig = !viewer.loading && closedBy(CONFIG_PATH, viewer.grants) === null;
   const runs = data?.recent_runs ?? [];
   const due = schedules.filter((s) => tsKey(s.next_run) > 0 && tsKey(s.next_run) - now < 3_600_000);
   // A schedule that cannot fire at all, which is a defect rather than a
@@ -613,7 +618,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
    * keeps the row a real link to the schedule's page. The `enter` chord
    * carries no button at all and is never "open elsewhere".
    */
-  function openSchedule(ref: ObjectRef, e: React.MouseEvent | React.KeyboardEvent): void {
+  function openSchedule(ref: ObjectRef, e: DataGridActivationEvent): void {
     const go = () => openPeek(ref);
     if (!("button" in e)) {
       go();
@@ -648,46 +653,45 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
 
   return (
     <>
-      {/* THE AGENTS PAGE BAR, as every Agents section carries it — Find a
-          seat (a found seat opens beside the list, as on Teams), Edit org and
-          Add seat. Without it the controls vanished from the bar the moment a
-          reader moved from the roster to this tab, and came back when they
-          moved away. */}
-      <AgentsHeader index={index} />
       {/* NO COUNT IN THE BAR AND NO INTRODUCTION: the section's tab carries
           the figure ("Schedules 6"), which the bar's "6 schedules defined"
           restated a few pixels above it, and a working screen opens on its
           work, as the others do. What a schedule guarantees is in the docs. */}
-      {/* The flush Panel is gone: StatGroup draws that surface itself. */}
-      <StatGroup columns={3}>
-        <StatCard
-          icon={<CalendarGlyph size="xs" />}
-          label="Schedules"
-          value={schedules.length}
-          sub="across every seat and unit"
-        />
-        <StatCard
-          icon={<ClockGlyph size="xs" />}
-          label="Firing within the hour"
-          value={due.length}
-          sub={soonest ? `the soonest ${inTime(soonest.next_run, now)}` : "nothing due soon"}
-        />
-        <StatCard
-          icon={<CircleAlertGlyph size="xs" />}
-          label="Cannot fire"
-          tone={broken.length ? "danger" : undefined}
-          value={broken.length}
-          // A `problem` IS FREE TEXT the engine writes — no closed set to split
-          // on — so the only bounded thing to say is where the reasons are. Each
-          // broken row prints its own `problem` in its Next cell, which is the
-          // one place it is legible in full.
-          sub={
-            broken.length
-              ? "each one says why in its Next cell"
-              : "every expression parses and every timezone resolves"
-          }
-        />
-      </StatGroup>
+      {/* The flush Panel is gone: StatGroup draws that surface itself.
+          NOT OVER NOTHING: three tiles reading 0 above an empty state that
+          says no schedule is defined said it four times. The figures are
+          about schedules, so they are drawn once there is one. */}
+      {schedules.length > 0 && (
+        <StatGroup columns={3}>
+          <StatCard
+            icon={<CalendarGlyph size="xs" />}
+            label="Schedules"
+            value={schedules.length}
+            sub="across every seat and unit"
+          />
+          <StatCard
+            icon={<ClockGlyph size="xs" />}
+            label="Firing within the hour"
+            value={due.length}
+            sub={soonest ? `the soonest ${inTime(soonest.next_run, now)}` : "nothing due soon"}
+          />
+          <StatCard
+            icon={<CircleAlertGlyph size="xs" />}
+            label="Cannot fire"
+            tone={broken.length ? "danger" : undefined}
+            value={broken.length}
+            // A `problem` IS FREE TEXT the engine writes — no closed set to split
+            // on — so the only bounded thing to say is where the reasons are. Each
+            // broken row prints its own `problem` in its Next cell, which is the
+            // one place it is legible in full.
+            sub={
+              broken.length
+                ? "each one says why in its Next cell"
+                : "every expression parses and every timezone resolves"
+            }
+          />
+        </StatGroup>
+      )}
 
       {loading && !schedules.length && (
         <Skeleton variant="text" rows={4} label="Loading schedules" />
@@ -701,7 +705,15 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
             ? undefined
             : {
                 title: "No recurring work is defined",
-                hint: "Add a schedule to a role or team in the configuration.",
+                hint: "A schedule is written on a seat or a team in the company document, and imported with crewlet config import.",
+                // WHERE THE DOCUMENT IS READ, for a reader who may open it:
+                // the dashboard writes no new schedule, so the way on is the
+                // document a schedule is added to.
+                action: mayReadConfig ? (
+                  <ButtonLink variant="secondary" size="small" href={href(CONFIG_PATH)}>
+                    Open the configuration
+                  </ButtonLink>
+                ) : undefined,
               }
         }
       >
@@ -999,7 +1011,7 @@ function OneSchedule({
     <>
       <PageActions>
         {
-          <a className="t-link" href={href(["agents", "schedules"])}>
+          <a className="t-link" href={href(["company", "schedules"])}>
             All schedules →
           </a>
         }

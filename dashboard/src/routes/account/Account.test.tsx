@@ -786,13 +786,13 @@ describe("what a person comes for is where they look", () => {
     engine();
     mount();
     const mark = await screen.findByText("This browser");
-    const grid = mark.closest<HTMLElement>(".grid-wrap")!;
-    const labels = [...grid.querySelectorAll(".grid-row > .grid-cell")].map((c) =>
-      c.getAttribute("data-label"),
-    );
+    const grid = mark.closest<HTMLElement>(".crewlet-data-grid")!;
+    const labels = [
+      ...grid.querySelectorAll(".crewlet-data-grid__row > .crewlet-data-grid__cell"),
+    ].map((c) => c.getAttribute("data-label"));
     expect(labels).toContain("Signed in");
     expect(labels).not.toContain("Sign out");
-    expect(mark.closest(".grid-cell")!.hasAttribute("data-label")).toBe(false);
+    expect(mark.closest(".crewlet-data-grid__cell")!.hasAttribute("data-label")).toBe(false);
   });
 });
 
@@ -815,7 +815,7 @@ describe("the profile", () => {
     const seat = await seatFact();
     await waitFor(() =>
       expect(within(seat).getByRole("link", { name: "Ada Lovelace" }).getAttribute("href")).toBe(
-        href(["agents", "seats", "ada"]),
+        href(["company", "org", "seats", "ada"]),
       ),
     );
     expect(within(seat).getByText("@ada")).toBeDefined();
@@ -839,7 +839,7 @@ describe("the profile", () => {
     mount();
     const served = await seatFact();
     expect(within(served).getByRole("link", { name: "@ada" }).getAttribute("href")).toBe(
-      href(["agents", "seats", "ada"]),
+      href(["company", "org", "seats", "ada"]),
     );
   });
 
@@ -878,9 +878,7 @@ describe("the profile", () => {
     ]);
     // AN ADMIN IS SENT TO THEIR OWN ROW, where these are changed.
     expect(screen.queryByText("Only an admin can change these.")).toBeNull();
-    expect(screen.getByRole("link", { name: "People & access" }).getAttribute("href")).toContain(
-      "p-1",
-    );
+    expect(screen.getByRole("link", { name: "People" }).getAttribute("href")).toContain("p-1");
   });
 
   // A CREDENTIAL THAT IS NOT A PERSON SAYS ITS OWN ACCESS too, from the

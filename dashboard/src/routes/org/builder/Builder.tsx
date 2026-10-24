@@ -1,5 +1,5 @@
 /**
- * Agents › Edit org (`#/agents/edit`), the builder: editing the
+ * Org chart › Edit org (`#/company/org/edit`), the builder: editing the
  * organization, and creating the company where none exists.
  *
  * THE POSTURE IS WHAT THE ENGINE ANSWERS, never what the browser holds. Being
@@ -44,6 +44,7 @@
  * from a canvas alone would open invisibly behind it.
  */
 
+import { engineSentence } from "./EngineSentence.tsx";
 import {
   useCallback,
   useEffect,
@@ -70,6 +71,9 @@ import {
   configGuardedReason,
   useManagedConfig,
 } from "~/lib/useWriteAccess.ts";
+import { PRINCIPLES_PATH } from "~/app/routes.ts";
+import { principlesEditQuery } from "~/routes/settings/principles/edit/address.ts";
+import { useMayWriteCharter } from "~/routes/settings/principles/edit/access.ts";
 import { managedSentence } from "~/protocol/configAnswer.ts";
 import { useLeadScope, type LedUnit } from "~/lib/leadScope.ts";
 import type { ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
@@ -81,6 +85,7 @@ import {
   type BuilderApi,
   type BuilderViewHandle,
   type ChartKind,
+  type CompanyEdit,
   type EditorPreset,
   type EditorSectionName,
 } from "./BuilderContext.tsx";
@@ -129,7 +134,7 @@ import { useCheck } from "./useCheck.ts";
 import { useDraftKeeping } from "./useDraftKeeping.ts";
 import { addMenu, nodeMenu } from "./nodeActions.tsx";
 import { useOpenScreen, useStructure } from "./useCharts.ts";
-import { screenPath } from "./dialogParts.tsx";
+import { PROBLEM_LINKS, ScreenLink, screenPath } from "./dialogParts.tsx";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { ChartSwitch, chartKindOf } from "~/ui/orgNodes.tsx";
 import {
@@ -437,10 +442,11 @@ interface SelectionParams {
 /**
  * Whether a key still names something in the draft.
  *
- * The company is a node like any other to a view (its card carries the
- * charter's Edit and the Add menu) and the only one `locate` cannot find: it
- * is the tree's root rather than an element of a list. Read as absent, a
- * selected company card was cleared again on the next state change.
+ * The company is a node like any other to a view (its card carries an Edit,
+ * which opens Company › Principles, and the Add menu) and the only one
+ * `locate` cannot find: it is the tree's root rather than an element of a
+ * list. Read as absent, a selected company card was cleared again on the next
+ * state change.
  */
 function isPresent(state: BuilderState, key: NodeKey): boolean {
   return key === COMPANY_KEY || locate(state.draft, key) !== undefined;
@@ -485,7 +491,9 @@ function addKindOf(value: string): AddKind | null {
 /**
  * What the address a reader ARRIVED at asks the builder to do, beyond showing
  * the organization: open one node's editor (`seat=` or `unit=`), or open an
- * Add (`add=`, under the unit `unit=` names or at the company's root).
+ * Add (`add=`, under the unit `unit=` names or at the company's root). The
+ * company's principles are not opened here: they are written on Company ›
+ * Principles, which every way into them links to directly.
  *
  * WHY A LINK OPENS SOMETHING AT ALL. Every way into this section from another
  * screen is a request to change one thing: the profile's "Edit" beside a
@@ -508,9 +516,9 @@ function addKindOf(value: string): AddKind | null {
  * this section from the profile a node's "Open seat" went to, mounts on the
  * address the builder itself wrote, and nothing in it tells that from a link
  * somebody sent: both open the editor. `docs/guides/org-builder.md` says so.
- * Telling them apart needs a request the address spends (an `edit=` the link
- * sets and this removes, as `add=` is), which is a change to the section's
- * URL grammar rather than to this effect.
+ * Telling them apart needs a request the address spends (a parameter the
+ * link sets and this removes, as `add=` is), which is a change to the
+ * section's URL grammar rather than to this effect.
  *
  * AND ONLY WHEN THE BUILDER CAN EDIT. The draft has to be loaded, in edit
  * mode and not paused — a kept draft waiting for Keep or Discard, a save whose
@@ -1129,6 +1137,23 @@ function BuilderScreen({
     [readOnlyReason, announce, openDialog],
   );
 
+  // WHAT THE COMPANY NODE'S EDIT OPENS. Its principles are written on Company ›
+  // Principles and nowhere else, so once a company exists its Edit goes there,
+  // with the page in edit for a reader who may write them and plainly for one
+  // who may not, as a seat's Edit opens a read-only editor. Who may write them
+  // is the page's own gate (`useMayWriteCharter`), so the builder never offers
+  // an editor the page then withholds. A company this draft is still CREATING
+  // has no page yet, so its Edit is the name form. The move goes through the
+  // leave guard, and the draft is kept for the return either way
+  // (`useDraftKeeping`).
+  const principlesWritable = useMayWriteCharter();
+  const principles: CompanyEdit =
+    state.mode === "create" ? null : principlesWritable ? "write" : "read";
+  const openPrinciples = useCallback(() => {
+    if (principles === "write") nav.to(PRINCIPLES_PATH, principlesEditQuery());
+    else nav.to(PRINCIPLES_PATH);
+  }, [principles, nav]);
+
   // WHAT THE ADDRESS THIS BUILDER WAS MOUNTED ON ASKED FOR — see [Arrival].
   // Read once, in the first render, and spent the moment it is answered or the
   // reader moves the selection before the builder could answer it.
@@ -1405,7 +1430,12 @@ function BuilderScreen({
             .map((p) => p.source as ConfigProblem)
         : [],
       selection: { key: selection, select },
-      openEditor: (key, section) => openDialog({ type: "editor", key, section }),
+      openEditor: (key, section) =>
+        key === COMPANY_KEY && principles !== null
+          ? openPrinciples()
+          : openDialog({ type: "editor", key, section }),
+      openCompanyRename: () => openIfWritable({ type: "editor", key: COMPANY_KEY }),
+      principles,
       openAdd: (parent, kind) => openIfWritable({ type: "add", parent, kind }),
       openMove: (key) => openIfWritable({ type: "move", key }),
       openDelete: (key) => openIfWritable({ type: "remove", key }),
@@ -1426,6 +1456,8 @@ function BuilderScreen({
     select,
     openDialog,
     openIfWritable,
+    openPrinciples,
+    principles,
     announce,
     focusNode,
     readOnly,
@@ -1685,33 +1717,37 @@ function BuilderScreen({
                 onChoose={setChosen}
               />
             )}
-            <span className="spacer" />
-            {/* ON THE TABLE ONLY: the visualization draws it at the end of the
-                chart's own zoom bar, where the console chart keeps it. */}
-            {view === "table" && <FullscreenToggle container={container} />}
-            <Tag variant={look.tone} leadingIcon={<look.icon />}>
-              {look.label}
-            </Tag>
-            <span className="org-builder-wide">
+            {/* THE SAVE CLUSTER WRAPS AS ONE, at the row's end: wrapping item by
+                item, Review and save dropped alone to the start of a second
+                row at 1024 while the check and Discard stayed on the first. */}
+            <span className="org-builder-save">
+              {/* ON THE TABLE ONLY: the visualization draws it at the end of
+                  the chart's own zoom bar, where the console chart keeps it. */}
+              {view === "table" && <FullscreenToggle container={container} />}
+              <Tag variant={look.tone} leadingIcon={<look.icon />}>
+                {look.label}
+              </Tag>
+              <span className="org-builder-wide">
+                <Button
+                  size="small"
+                  variant="ghost"
+                  onClick={handlers.discard}
+                  disabled={readOnly || !changed}
+                >
+                  Discard changes
+                </Button>
+              </span>
               <Button
                 size="small"
-                variant="ghost"
-                onClick={handlers.discard}
-                disabled={readOnly || !changed}
+                variant="primary"
+                leadingIcon={<SaveGlyph />}
+                onClick={openReview}
+                disabled={!rules.review || save.unsettled}
+                title={rules.reason ?? undefined}
               >
-                Discard changes
+                Review and save
               </Button>
             </span>
-            <Button
-              size="small"
-              variant="primary"
-              leadingIcon={<SaveGlyph />}
-              onClick={openReview}
-              disabled={!rules.review || save.unsettled}
-              title={rules.reason ?? undefined}
-            >
-              Review and save
-            </Button>
           </div>
         )}
 
@@ -2242,21 +2278,11 @@ function DocumentProblems({ problems }: { problems: readonly PlacedProblem[] }) 
       <ul className="col gap-1">
         {problems.map((p, i) => (
           <li key={i}>
-            <span>{p.message}</span>
-            {p.link === "integrations" && (
+            <span>{engineSentence(p.message)}</span>
+            {p.link !== null && (
               <>
                 {" "}
-                <a className="t-link prose-link" href={href(screenPath("integrations"))}>
-                  Open Integrations
-                </a>
-              </>
-            )}
-            {p.link === "schedules" && (
-              <>
-                {" "}
-                <a className="t-link prose-link" href={href(screenPath("schedules"))}>
-                  Open Schedules
-                </a>
+                <ScreenLink to={p.link}>{PROBLEM_LINKS[p.link]}</ScreenLink>
               </>
             )}
           </li>

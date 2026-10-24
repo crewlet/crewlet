@@ -170,7 +170,7 @@ test("declining to restore a kept draft onto a newer revision discards it", asyn
 });
 
 test("a draft kept for creating a company is discarded, with a word, when a company exists", async () => {
-  const built = templateIntent({ template: "empty", charter: { name: "Acme" } }, countingKeys("t"));
+  const built = templateIntent({ template: "empty", name: "Acme" }, countingKeys("t"));
   if (!built.ok) throw new Error(built.message);
   const op = record(EMPTY_DRAFT, built.intent);
   if (!op.ok) throw new Error(op.message);
@@ -299,29 +299,29 @@ test("a draft this browser cannot keep asks before the builder is left, not befo
   const start = location.hash;
 
   act(() => {
-    location.hash = "#/agents/edit?view=table";
+    location.hash = "#/company/org/edit?view=table";
   });
-  await waitFor(() => expect(location.hash).toBe("#/agents/edit?view=table"));
+  await waitFor(() => expect(location.hash).toBe("#/company/org/edit?view=table"));
   expect(screen.queryByRole("dialog", { name: "Leave the builder?" })).toBeNull();
 
   act(() => {
-    location.hash = "#/agents/roster";
+    location.hash = "#/company/org/roster";
   });
   const asked = await screen.findByRole("dialog", { name: "Leave the builder?" });
-  await waitFor(() => expect(location.hash).toBe("#/agents/edit?view=table"));
+  await waitFor(() => expect(location.hash).toBe("#/company/org/edit?view=table"));
   fireEvent.click(within(asked).getByRole("button", { name: "Stay" }));
   expect(screen.queryByRole("dialog", { name: "Leave the builder?" })).toBeNull();
 
   act(() => {
-    location.hash = "#/agents/roster";
+    location.hash = "#/company/org/roster";
   });
   fireEvent.click(
     within(await screen.findByRole("dialog", { name: "Leave the builder?" })).getByRole("button", {
       name: "Leave without the draft",
     }),
   );
-  await waitFor(() => expect(location.hash).toBe("#/agents/roster"));
-  expect(start.startsWith("#/agents/edit")).toBe(true);
+  await waitFor(() => expect(location.hash).toBe("#/company/org/roster"));
+  expect(start.startsWith("#/company/org/edit")).toBe(true);
 });
 
 test("coming back to the builder restores this page's own draft without asking", async () => {

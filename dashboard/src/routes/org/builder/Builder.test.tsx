@@ -304,7 +304,7 @@ describe("the views the builder hosts", () => {
    * second, quieter add.
    */
   test("an add asked from the table or the reporting chart is a dialog", async () => {
-    mountBuilder({ engine: new Engine(company()), hash: "#/agents/edit?view=table" });
+    mountBuilder({ engine: new Engine(company()), hash: "#/company/org/edit?view=table" });
     await screen.findByText("No problems");
     fireEvent.click(screen.getByRole("button", { name: "Add to the organization" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
@@ -590,8 +590,8 @@ describe("the selection in the URL", () => {
   // THE COMPANY IS A NODE TOO, and the only one the draft's tree cannot
   // locate: it is the root rather than an element of a list. Read as absent,
   // the card an operator selected was deselected again on the next answer,
-  // and the charter's Edit was unreachable from the toolbar.
-  test("the company stays selected, and the toolbar offers the charter's actions", async () => {
+  // and the company's Edit was unreachable from the toolbar.
+  test("the company stays selected, and the toolbar offers the company's actions", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine });
     await screen.findByText("No problems");
@@ -600,7 +600,13 @@ describe("the selection in the URL", () => {
     fireEvent.click(actions);
     const menu = await screen.findByRole("menu", { name: "Actions for Acme, selected" });
     // Nothing moves or deletes the document the company IS.
-    expect(labels(menu)).toEqual(["Add unit", "Add agent seat", "Add human seat", "Edit"]);
+    expect(labels(menu)).toEqual([
+      "Add unit",
+      "Add agent seat",
+      "Add human seat",
+      "Edit principles",
+      "Rename company",
+    ]);
     fireEvent.keyDown(menu, { key: "Escape" });
 
     // And it survives the next answer about the draft, which is what a
@@ -611,9 +617,29 @@ describe("the selection in the URL", () => {
     expect(screen.getByRole("button", { name: "Actions for Acme, selected" })).toBeDefined();
   });
 
+  // THE COMPANY'S EDIT IS COMPANY › PRINCIPLES, in edit for a reader who may
+  // write the principles and plainly for one who may not, and never a form of
+  // the builder's own, whose draft is kept for the return.
+  test("the company's Edit opens Company › Principles, in edit only for a reader who may write it", async () => {
+    mountBuilder({ engine: new Engine(company()) });
+    await screen.findByText("No problems");
+    fireEvent.click(screen.getByRole("button", { name: "Edit the company" }));
+    await waitFor(() => expect(location.hash).toBe("#/company/principles?edit=mission"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    cleanup();
+
+    mountBuilder({
+      engine: new Engine(company()),
+      viewer: () => ({ ...EDITOR, grants: ["tracker", "knowledge"], leads: [] }),
+    });
+    await screen.findByText("No problems");
+    fireEvent.click(screen.getByRole("button", { name: "Edit the company" }));
+    await waitFor(() => expect(location.hash).toBe("#/company/principles"));
+  });
+
   test("a link naming a seat selects it and opens its editor, and the toolbar offers that seat's actions", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine, hash: "#/agents/edit?view=visualization&seat=ceo" });
+    mountBuilder({ engine, hash: "#/company/org/edit?view=visualization&seat=ceo" });
     await screen.findByText("No problems");
     // The link was a request to edit the seat, so its form is what opens
     // (`editWiring.test.tsx` holds when, and that it happens once); closed,
@@ -894,7 +920,7 @@ describe("the builder that fills the window", () => {
   }
 
   test("the chart view asks the frame for the window's height", async () => {
-    const calls = asked("#/agents/edit?view=visualization");
+    const calls = asked("#/company/org/edit?view=visualization");
     // Not before the engine has answered: until then the builder draws a posture
     // screen, which is an ordinary column and scrolls like one.
     expect(calls).not.toContain(true);
@@ -902,7 +928,7 @@ describe("the builder that fills the window", () => {
   });
 
   test("the table view asks for nothing and leaves the scroller alone", async () => {
-    const calls = asked("#/agents/edit?view=table");
+    const calls = asked("#/company/org/edit?view=table");
     // The toolbar is what both views draw once the engine has answered, so
     // waiting for it is waiting for the same moment the case above measures.
     await screen.findByRole("toolbar", { name: "Organization builder" });
@@ -976,7 +1002,10 @@ describe("a document another system manages", () => {
 // apply, and the address lets go of the key so a reload asks nothing twice.
 test("a link naming a unit and a project opens its editor on the Project field holding the key", async () => {
   const engine = new Engine(company());
-  mountBuilder({ engine, hash: "#/agents/edit?view=visualization&unit=engineering&project=ENG" });
+  mountBuilder({
+    engine,
+    hash: "#/company/org/edit?view=visualization&unit=engineering&project=ENG",
+  });
   await screen.findByText("No problems");
   const editor = await screen.findByRole("dialog", { name: "Edit Engineering" });
   const field = within(editor).getByRole("combobox", { name: /Tracker project/ });
@@ -994,7 +1023,10 @@ test("a project link to a node that owns one leaves its project as it is", async
   const doc = company();
   doc.units![0]!.project = "CORE";
   const engine = new Engine(doc);
-  mountBuilder({ engine, hash: "#/agents/edit?view=visualization&unit=engineering&project=ENG" });
+  mountBuilder({
+    engine,
+    hash: "#/company/org/edit?view=visualization&unit=engineering&project=ENG",
+  });
   await screen.findByText("No problems");
   const editor = await screen.findByRole("dialog", { name: "Edit Engineering" });
   expect(

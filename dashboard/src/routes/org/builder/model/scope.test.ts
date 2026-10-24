@@ -8,7 +8,7 @@
  * about the whole company is moved into the draft's coordinates, and what
  * lies outside the unit is never placed on whichever node of the draft sits
  * at that path; and the parts of the draft that reach outside the unit — the
- * company's charter and top level, the unit's own place and lead, and the
+ * company's name and top level, the unit's own place and lead, and the
  * keys another system finds any of its nodes by — are refused at the
  * recording door with the reason, while everything inside it
  * is recorded as for the whole company.
@@ -210,7 +210,7 @@ describe("what a lead's draft refuses", () => {
   const state = loaded();
   const top = unitKey("eng");
 
-  test("the company's charter, its top level, and the unit's own place and lead", () => {
+  test("the company's name, its top level, and the unit's own place and lead", () => {
     const refused = (intent: Parameters<typeof recordIntent>[1]) => {
       const answer = recordIntent(state, intent);
       return answer.ok ? null : [answer.refusal, answer.message];
@@ -219,7 +219,7 @@ describe("what a lead's draft refuses", () => {
       refused({ type: "updateCompany", set: [{ path: ["name"], value: "Acme Two" }] }),
     ).toEqual([
       "scope",
-      "The company's charter and settings are not part of Engineering: changing them takes Admin access.",
+      "The company's name and settings are not part of Engineering: changing them takes Admin access.",
     ]);
     expect(
       refused({

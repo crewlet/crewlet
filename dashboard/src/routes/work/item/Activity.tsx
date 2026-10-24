@@ -69,7 +69,7 @@ import { QueryState, SeatChip } from "~/components/common.tsx";
 import { AsksTag, type RowChrome } from "~/components/work.tsx";
 import { Composer, type ComposeMode } from "~/components/Composer.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
-import { Mark } from "~/ui/glyph.tsx";
+import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { useQuery, withFloor } from "~/lib/useQuery.ts";
 import { useClient } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -548,7 +548,7 @@ function ChangeRow({
   return (
     <li className="task-entry">
       <span className="task-entry-mark" aria-hidden="true">
-        <Mark name={changeMark(record.kind)} size="sm" />
+        <NamedGlyph name={changeMark(record.kind)} size="sm" />
       </span>
       <div className="task-entry-line">
         <p>

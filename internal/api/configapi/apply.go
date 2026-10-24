@@ -1,6 +1,7 @@
 package configapi
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -227,8 +228,13 @@ type draft struct {
 	// build returns the company the write proposes and the bytes that
 	// carry it, which are what is stored.
 	build func(base) (*config.Company, []byte, error)
-	// rules is what the proposed company is held to.
-	rules func(*config.Company) error
+	// rules is what the proposed company is held to, beside the revision it
+	// replaces (nil when nothing is active): [authoredRules] or
+	// [runnableRules].
+	rules func(next, prior *config.Company) error
+	// source is what the revision records as where it came from: empty for
+	// [revisionSource], or [importSource] for an import.
+	source string
 	// principal is who asked for the write, which is admitted on what it
 	// changes (admission.go); nil for the engine's own writes, which no
 	// request made.
@@ -263,6 +269,8 @@ type prepared struct {
 	// by is the draft's party, carried rather than passed again to
 	// [Service.commit], so the author stored is the one prepare judged.
 	by iam.Actor
+	// source is the draft's, resolved: what the revision records.
+	source string
 }
 
 // prepare builds and checks a write, storing nothing.
@@ -343,7 +351,7 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 		}
 	}
 	derived := config.Derive(company)
-	if invalid := d.rules(company); invalid != nil {
+	if invalid := d.rules(company, b.prior); invalid != nil {
 		return nil, &ValidationError{Err: invalid, Derived: derived}
 	}
 	// AFTER THE RULES, because a document that is refused anyway takes no
@@ -353,6 +361,7 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	}
 	p := &prepared{
 		document: document, warnings: company.Warnings(), derived: derived, by: d.by,
+		source: cmp.Or(d.source, revisionSource),
 	}
 	if found {
 		p.base = active.ID
@@ -391,7 +400,7 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Appl
 	}
 	at := s.now()
 	id, err := s.configs.Insert(ctx, store.Revision{
-		ParentID: p.base, Source: revisionSource, CreatedBy: by.Name,
+		ParentID: p.base, Source: p.source, CreatedBy: by.Name,
 		CreatedByKind: by.Kind, OperatorID: by.OperatorID,
 		Summary: summary, Payload: payload, CreatedAt: at,
 	})
@@ -406,7 +415,7 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Appl
 		// instant it happened to apply it.
 		Origin: coord.RevisionOrigin{
 			Author: by.Name, AuthorKind: by.Kind, OperatorID: by.OperatorID,
-			Source: revisionSource, CreatedAt: at,
+			Source: p.source, CreatedAt: at,
 		},
 		// A WRITE BUILT ON NOTHING SAYS SO. Every write here names what it
 		// was built on as the activation's expectation, and a write with no
@@ -451,7 +460,7 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Appl
 			"detail", "the fleet is running this revision; this node marks "+
 				"it active when its reconciler applies the epoch")
 	}
-	s.nudge(ctx, id, summary, by)
+	s.nudge(ctx, id, summary, p.source, by)
 	log.InfoContext(ctx, "config_revision_written",
 		"revision", id, "epoch", published.Epoch, "by", by.Name,
 		"operator", by.OperatorID, "summary", summary)
@@ -459,6 +468,30 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Appl
 		RevisionID: id, Epoch: published.Epoch, Parent: p.base,
 		Warnings: p.warnings, Derived: p.derived,
 	}, nil
+}
+
+// authoredRules is what a document a caller WROTE is held to: every rule
+// [config.Company.Validate] holds, and the charter's on what the write
+// changes, judged against the revision it replaces
+// ([config.Company.ValidateCharterChange]), so a charter fault the write did
+// not touch is a warning on the answer rather than a refusal of the write.
+func authoredRules(next, prior *config.Company) error {
+	return errors.Join(next.Validate(), next.ValidateCharterChange(prior))
+}
+
+// runnableRules is what a stored document re-activated as it is (a reload, a
+// revert) is held to: the rules a running company depends on, and none a
+// build is free to change, since a newer peer may have admitted it.
+func runnableRules(next, _ *config.Company) error {
+	return next.ValidateRunnable()
+}
+
+// importRules is what an import is held to ([Service.mayImport]): every rule
+// [config.Company.Validate] holds, and the charter's as warnings only, which
+// the answer carries, because a restored file must import whatever its charter
+// says.
+func importRules(next, _ *config.Company) error {
+	return next.Validate()
 }
 
 // patchDraft is a JSON Merge Patch over the active document.
@@ -470,7 +503,7 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Appl
 func patchDraft(req ApplyRequest, sent *yaml.Node) draft {
 	return draft{
 		expect: req.Expect, requireActive: true, by: req.By,
-		rules: (*config.Company).Validate,
+		rules: authoredRules,
 		build: func(b base) (*config.Company, []byte, error) {
 			if len(req.Patch) == 0 {
 				return nil, nil, &PatchError{Err: errEmptyPatch}
@@ -522,7 +555,7 @@ func patchDraft(req ApplyRequest, sent *yaml.Node) draft {
 func replaceDraft(incoming *config.Company, built string, by iam.Actor) draft {
 	return draft{
 		expect: built, expectAbsent: built == "", by: by,
-		rules: (*config.Company).Validate,
+		rules: authoredRules,
 		build: func(b base) (*config.Company, []byte, error) {
 			if b.found {
 				// The masks the caller was shown come back as the values
@@ -688,7 +721,7 @@ func (s *Service) Reload(ctx context.Context, summary string, by iam.Actor) (App
 		// have admitted the document under rules this build does not
 		// share — would make a rotation impossible until somebody
 		// restructured the org. The answer's warnings name each one.
-		rules: (*config.Company).ValidateRunnable,
+		rules: runnableRules,
 		// THE STORED BYTES, UNCHANGED, which is what re-publishing the
 		// active document means. Encoding this build's struct of it would
 		// drop every field a newer peer wrote, on the gesture an operator

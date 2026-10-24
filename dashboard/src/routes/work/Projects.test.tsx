@@ -95,7 +95,7 @@ function peeked(): string | null {
 /** The grid row whose key cell holds this project. */
 function rowFor(key: string): HTMLElement {
   const cell = screen.getByText(key);
-  return cell.closest(".grid-row, tr, [role='row']") as HTMLElement;
+  return cell.closest(".crewlet-data-grid__row, tr, [role='row']") as HTMLElement;
 }
 
 // THE TOTALS ARE ONE SENTENCE, not four tiles: they are context for the rows
@@ -168,7 +168,7 @@ test("a plain click peeks beside the list rather than leaving it", async () => {
   // THE HREF IS THE FRAME'S OWN ADDRESS for the object, which is what the
   // peek's `Open ↗` is built from too: a row and the panel it opens can never
   // name different pages.
-  const link = container.querySelector<HTMLAnchorElement>("a.row-link");
+  const link = container.querySelector<HTMLAnchorElement>("a.crewlet-data-grid__row-link");
   expect(link?.getAttribute("href")).toBe(peekHref({ kind: "project", id: "ENG" }));
 
   const plain = new MouseEvent("click", { bubbles: true, cancelable: true });
@@ -200,7 +200,9 @@ test("closed work is a column of the grid, not a hidden one", async () => {
   // for the segment beside the fill.
   await waitFor(() =>
     expect(
-      [...container.querySelectorAll(".grid-head .grid-th")].map((h) => h.textContent),
+      [...container.querySelectorAll(".crewlet-data-grid__head .crewlet-data-grid__th")].map(
+        (h) => h.textContent,
+      ),
     ).toEqual([
       "Key",
       "Project",
@@ -225,8 +227,10 @@ test("the project name is the flexible column and the progress bar is sized to i
   serving({ work_projects: { projects: [project()], total: 1, complete: true } });
   const { container } = mount();
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
-  const heads = [...container.querySelectorAll(".grid-head .grid-th")].map((h) => h.textContent);
-  const tracks = (container.querySelector(".grid-wrap") as HTMLElement | null)?.style
+  const heads = [
+    ...container.querySelectorAll(".crewlet-data-grid__head .crewlet-data-grid__th"),
+  ].map((h) => h.textContent);
+  const tracks = (container.querySelector(".crewlet-data-grid") as HTMLElement | null)?.style
     .gridTemplateColumns;
   expect(tracks, "the grid declares no track list").toBeTruthy();
   const track = (head: string) => splitTracks(tracks!)[heads.indexOf(head)];
@@ -266,7 +270,9 @@ test("the unit column is off until cols asks for it", async () => {
   const { container } = mount();
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
   expect(
-    [...container.querySelectorAll(".grid-head .grid-th")].map((h) => h.textContent),
+    [...container.querySelectorAll(".crewlet-data-grid__head .crewlet-data-grid__th")].map(
+      (h) => h.textContent,
+    ),
   ).not.toContain("Unit");
   // AND THE PROJECT'S OWN UNIT IS NOT ON SCREEN EITHER, which is the point:
   // the head going without the cell would leave a value under no name.
@@ -281,7 +287,9 @@ test("the unit column is off until cols asks for it", async () => {
   const withUnit = mount();
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
   expect(
-    [...withUnit.container.querySelectorAll(".grid-head .grid-th")].map((h) => h.textContent),
+    [...withUnit.container.querySelectorAll(".crewlet-data-grid__head .crewlet-data-grid__th")].map(
+      (h) => h.textContent,
+    ),
   ).toEqual([
     "Key",
     "Project",
@@ -315,7 +323,7 @@ test("the columns control turns Unit on and writes the key", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Columns" }));
   // THE BOXES ARE THE GRID'S OWN COLUMNS, derived rather than listed beside
   // them — a chooser with its own list is a second declaration of the grid.
-  const boxes = [...document.querySelectorAll<HTMLElement>(".grid-cols-choice")];
+  const boxes = [...document.querySelectorAll<HTMLElement>(".crewlet-column-chooser__choice")];
   expect(boxes.map((el) => el.textContent)).toEqual([
     "Key",
     "Project",
@@ -345,7 +353,9 @@ test("the columns control turns Unit on and writes the key", async () => {
   );
   // AND THE GRID DRAWS IT — the control and the grid read one key.
   expect(
-    [...container.querySelectorAll(".grid-head .grid-th")].map((h) => h.textContent),
+    [...container.querySelectorAll(".crewlet-data-grid__head .crewlet-data-grid__th")].map(
+      (h) => h.textContent,
+    ),
   ).toContain("Unit");
   expect(screen.getByText("Platform")).toBeTruthy();
 });
@@ -630,10 +640,9 @@ test("the grid draws the engine's order rather than re-sorting it", async () => 
   });
   const { container } = mount();
   await waitFor(() => expect(screen.getByText("Product")).toBeTruthy());
-  expect([...container.querySelectorAll(".grid-row .key-mark")].map((c) => c.textContent)).toEqual([
-    "PROD",
-    "ENG",
-  ]);
+  expect(
+    [...container.querySelectorAll(".crewlet-data-grid__row .key-mark")].map((c) => c.textContent),
+  ).toEqual(["PROD", "ENG"]);
 });
 
 // EVERY ORDERING THE ENGINE TAKES IS A HEAD SOMEBODY CAN CLICK, and no other
@@ -657,9 +666,9 @@ test("the sortable heads are exactly the orderings the engine takes", async () =
   serving({ work_projects: { projects: [project()], total: 1, complete: true } });
   const { container } = mount();
   await waitFor(() => expect(screen.getByText("Engineering")).toBeTruthy());
-  const clickable = [...container.querySelectorAll(".grid-head button.grid-th")].map(
-    (h) => h.textContent,
-  );
+  const clickable = [
+    ...container.querySelectorAll(".crewlet-data-grid__head .crewlet-data-grid__sort"),
+  ].map((h) => h.textContent);
   expect(clickable).toEqual([
     "Key",
     "Project",
@@ -675,9 +684,9 @@ test("the sortable heads are exactly the orderings the engine takes", async () =
   // chart at read time and the tracker holds no chart, so there is no column
   // to order by; Progress is a proportion, and one over four tasks and one
   // over four hundred are the same number and not the same fact.
-  const plain = [...container.querySelectorAll(".grid-head [role='columnheader']")].map(
-    (h) => h.textContent,
-  );
+  const plain = [
+    ...container.querySelectorAll(".crewlet-data-grid__head .crewlet-data-grid__th--plain"),
+  ].map((h) => h.textContent);
   expect(plain).toEqual(["Lead", "Progress"]);
 });
 

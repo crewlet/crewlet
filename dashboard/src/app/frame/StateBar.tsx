@@ -24,7 +24,7 @@ import { Button, Callout } from "@crewlethq/ui";
 import {
   KeyGlyph,
   RotateCwGlyph,
-  SlidersVerticalGlyph,
+  SettingsGlyph,
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
 import { CoverageTags, INCOMPLETE_NOTE, oddLevel, type CoverageFacts } from "~/components/work.tsx";
@@ -98,7 +98,7 @@ export function degradationOf({
   if (configured === false) {
     return {
       variant: "warning",
-      icon: <SlidersVerticalGlyph size="md" />,
+      icon: <SettingsGlyph size="md" />,
       message: "No company is active, so no seats are running.",
       action: { label: "Configuration", onClick: onConfig },
     };

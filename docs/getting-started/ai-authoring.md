@@ -94,7 +94,7 @@ crewlet run crewlet.yaml -company company.yaml
 
 Open <http://localhost:8000/> and sign in with the API token your
 `crewlet.yaml` declares; then put yourself on your human seat — open it in
-**Agents › Org chart** and press **Invite** — exactly as the
+**Company › Org chart** and press **Invite**, exactly as the
 [quickstart's step 4](quickstart.md#4-sign-in-and-invite-yourself)
 describes. A company with no integrations has no inbound work, which is why
 the first pass puts a five-minute schedule on the top seat purely to prove

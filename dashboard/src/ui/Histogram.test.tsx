@@ -1,24 +1,21 @@
 /**
- * The two things a bar chart says that a bar cannot draw.
- *
- * A HISTOGRAM WITH NO DATES UNDER IT IS NOT AN AXIS. A seven-day window
- * holding one busy day rendered a single bar hard against the right edge of an
- * empty box with nothing beneath it, and the screenshot that caught it was
- * filed as a rendering failure rather than as a quiet company. The cases here
- * hold the labels to the buckets they name, because a tick that drifts off its
- * own bar is worse than none: it is a date a reader will act on.
+ * What the dashboard's histogram says that the kit's cannot know: the dates in
+ * the reader's chosen zone, the caller's noun and scope, and the bucket a
+ * click narrows the window to. The drawing (the fill, the floors, the failed
+ * foot, which buckets are labelled and where a tick sits) is the kit's
+ * `Histogram`, and its own suite holds it.
  *
  * AND THE SENTENCE NOBODY SEES IS STILL A CLAIM. The one statement this
  * component makes to a screen reader announced a page count as a window count
- * in the wrong noun — "3 events in this window" over a tracker chart whose
+ * in the wrong noun: "3 events in this window" over a tracker chart whose
  * visible caption said three changes on one page. The noun and the scope are
- * the caller's now, required, for the reason `FacetRail`'s `over` is.
+ * the caller's, required, for the reason `FacetRail`'s `over` is.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, test } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, expect, test, vi } from "vitest";
 
-import { Histogram, ticksFor, type Bar } from "./Histogram.tsx";
+import { Histogram, type Bar } from "./Histogram.tsx";
 import { fmtDateCompact } from "~/lib/format.ts";
 
 afterEach(cleanup);
@@ -36,7 +33,10 @@ function days(count: number, counts: number[] = []): Bar[] {
   }));
 }
 
-const ticks = (root: HTMLElement) => [...root.querySelectorAll(".histogram-tick")];
+const ticks = (root: HTMLElement) => [...root.querySelectorAll(".crewlet-histogram__tick")];
+const slots = (root: HTMLElement) => [
+  ...root.querySelectorAll<HTMLElement>(".crewlet-histogram__bar"),
+];
 
 // THE ENDS ARE THE TWO THE WINDOW'S OWN CONTROL ALREADY NAMES, so an axis whose
 // first and last labels disagree with the picker above it is the one failure a
@@ -53,52 +53,6 @@ test("the axis names its first and its last bucket", () => {
   expect(drawn[drawn.length - 1]?.textContent).toBe(fmtDateCompact(bars[13]!.at, NOW));
 });
 
-// AND THE ONES BETWEEN ARE EVENLY SPREAD OVER THE BARS, not over the calendar:
-// a histogram's columns are whatever bucket the window chose, so a rule on
-// weeks would put one tick on an axis of sixty minutes.
-test("the ticks between the ends are an even spread over the buckets", () => {
-  // A WEEK LABELS EVERY OTHER DAY — never 22, 24, 25, 27, 28, whose uneven
-  // gaps read as days missing from the data.
-  expect(ticksFor(7)).toEqual([0, 2, 4, 6]);
-  expect(ticksFor(14)).toEqual([0, 4, 8, 13]);
-  expect(ticksFor(31)).toEqual([0, 10, 20, 30]);
-  // THE WIDEST AXIS THIS PRODUCT DRAWS — `lib/range.ts`'s own `MAX_BARS` — still
-  // carries five labels and no more.
-  expect(ticksFor(90)).toEqual([0, 23, 46, 69, 89]);
-  // AND EVERY INTERIOR GAP IS ONE STRIDE, at every window length.
-  for (let n = 1; n <= 90; n++) {
-    const at = ticksFor(n);
-    expect(at.length, `${n} bars`).toBeLessThanOrEqual(5);
-    expect(at[0]).toBe(0);
-    expect(at[at.length - 1]).toBe(n - 1);
-    const gaps = at.slice(1, -1).map((v, i) => v - at[i]!);
-    expect(new Set(gaps).size, `${n} bars: ${at}`).toBeLessThanOrEqual(1);
-  }
-  // FEWER BARS THAN LABELS IS NOT FEWER LABELS THAN BARS: every bucket gets its
-  // own, and a single bucket gets exactly one rather than two of itself.
-  expect(ticksFor(3)).toEqual([0, 1, 2]);
-  expect(ticksFor(1)).toEqual([0]);
-  expect(ticksFor(0)).toEqual([]);
-});
-
-// A TICK SITS OVER THE BUCKET IT NAMES. The labels are wider than the bars they
-// point at, so they are positioned rather than laid out in flow — and the
-// percentage is the bucket's own CENTRE, because a label at `i / n` names the
-// boundary between two buckets rather than either of them. The two ends are
-// pinned to the edges instead: centred, they would hang off the card.
-test("an interior tick is centred on its own bucket and the ends are pinned", () => {
-  const { container } = render(
-    <Histogram bars={days(4)} bucket="day" total={0} noun="change" over="loaded" axis now={NOW} />,
-  );
-  const drawn = ticks(container) as HTMLElement[];
-  expect(drawn).toHaveLength(4);
-  expect(drawn[0]!.style.left).toBe("0px");
-  expect(drawn[3]!.style.right).toBe("0px");
-  // Bucket 1 of 4 centres at (1 + 0.5) / 4.
-  expect(drawn[1]!.style.left).toBe("37.5%");
-  expect(drawn[1]!.style.transform).toBe("translateX(-50%)");
-});
-
 // AN HOUR IS NOT A DATE. Five repetitions of today's date under a chart of
 // minutes is the noise the compact form exists to remove, and the window is
 // named by the range control directly above the chart.
@@ -111,6 +65,7 @@ test("a bucket shorter than a day is labelled with a clock", () => {
   const { container } = render(
     <Histogram bars={bars} bucket="hour" total={0} noun="event" over="window" axis now={NOW} />,
   );
+  expect(ticks(container).length).toBeGreaterThan(0);
   for (const tick of ticks(container)) {
     expect(tick.textContent).toMatch(/^\d{2}:\d{2}$/);
   }
@@ -125,9 +80,6 @@ test("a chart that did not ask for an axis draws none", () => {
   expect(ticks(container)).toHaveLength(0);
 });
 
-// THE ONE SENTENCE A SIGHTED READER NEVER SEES IS THE ONE THAT WAS WRONG. It
-// announced the caller's page count as a window count, in a noun the tracker
-// does not use.
 test("the announced total carries the caller's own noun and scope", () => {
   const { unmount } = render(
     <Histogram bars={days(2)} bucket="day" total={3} noun="change" over="loaded" />,
@@ -139,51 +91,27 @@ test("the announced total carries the caller's own noun and scope", () => {
 });
 
 // AND SO DOES EVERY BAR'S OWN TOOLTIP, which is the only thing a pointer or a
-// screen reader can ask about one bucket.
-test("a bar names its own bucket in the caller's noun", () => {
+// screen reader can ask about one bucket, with the failed share where the
+// engine split it and no mention of failures where it did not.
+test("a bar names its own bucket in the caller's noun, and its failed share", () => {
+  const bars = [{ ...days(2, [8])[0]!, failed: 2 }, { ...days(2, [0, 1])[1]! }];
   const { container } = render(
-    <Histogram bars={days(2, [0, 1])} bucket="day" total={1} noun="change" over="loaded" />,
+    <Histogram bars={bars} bucket="day" total={9} noun="turn" over="window" now={NOW} />,
   );
-  const bars = [...container.querySelectorAll(".histogram-bar")] as HTMLElement[];
-  expect(bars[0]!.title).toContain("0 changes");
-  expect(bars[1]!.title).toContain("1 change");
+  const [split, plain] = slots(container);
+  expect(split!.title).toMatch(/8 turns, 2 failed$/);
+  expect(plain!.title).toMatch(/1 turn$/);
 });
 
-// THE HEIGHT IS THE FILL'S, NOT THE SLOT'S. The slot is the control and spans
-// its whole column; were the height on it, the stylesheet's 63% cap would have
-// nothing to narrow and a lone busy day would be a card-wide block again.
-test("a bar's height is carried by a fill inside its slot", () => {
-  const { container } = render(
-    <Histogram
-      bars={days(2, [0, 4])}
-      bucket="day"
-      total={4}
-      noun="change"
-      over="loaded"
-      onPick={() => {}}
-    />,
+// A BAR NARROWS THE WINDOW TO THE BUCKET IT COVERS: from its start, one
+// bucket's width long.
+test("a click narrows the window to the bar's own bucket", () => {
+  const onPick = vi.fn();
+  const bars = days(3, [1, 4, 2]);
+  render(
+    <Histogram bars={bars} bucket="day" total={7} noun="turn" over="window" onPick={onPick} />,
   );
-  const slots = [...container.querySelectorAll<HTMLElement>(".histogram-bar")];
-  expect(slots).toHaveLength(2);
-  for (const slot of slots) expect(slot.style.height).toBe("");
-  const fills = slots.map((s) => s.querySelector<HTMLElement>(":scope > .histogram-fill")!);
-  expect(fills.map((f) => f.style.height)).toEqual(["0%", "100%"]);
-  expect(slots[0]!.hasAttribute("data-empty")).toBe(true);
-});
-
-// THE FAILED SHARE IS THE FOOT OF ITS OWN BAR, and said in the bar's title.
-// The column's height stays the bucket's whole count, so totals compare as
-// before; a bar the engine sent no split for draws the plain fill, since a
-// split the answer did not carry is not a split of zero.
-test("a bar's failed share is drawn at its foot and named in its title", () => {
-  const bars = [{ ...days(2, [8])[0]!, failed: 2 }, { ...days(2, [0, 5])[1]! }];
-  const { container } = render(
-    <Histogram bars={bars} bucket="day" total={13} noun="turn" over="window" now={NOW} />,
-  );
-  const [split, plain] = [...container.querySelectorAll(".histogram-bar")];
-  const foot = split!.querySelector<HTMLElement>(".histogram-failed");
-  expect(foot?.style.height).toBe("25%");
-  expect(split!.getAttribute("title")).toMatch(/8 turns, 2 failed$/);
-  expect(plain!.querySelector(".histogram-failed")).toBeNull();
-  expect(plain!.getAttribute("title")).not.toMatch(/failed/);
+  fireEvent.click(screen.getAllByRole("button")[1]!);
+  const from = Date.parse(bars[1]!.at);
+  expect(onPick).toHaveBeenCalledWith({ from, to: from + DAY });
 });

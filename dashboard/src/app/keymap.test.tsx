@@ -28,6 +28,9 @@ import { Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 
+/** A company running every service built into Crewlet. */
+const EVERY = { tracker: true, knowledge: true } as const;
+
 /**
  * EVERY ROW A COMPONENT BINDS, recorded as it binds it. `useKeymap` is passed
  * through untouched — every case below still exercises the real one — and the
@@ -183,7 +186,7 @@ describe("the legend", () => {
   test("renders every row of the table, grouped by where it is live", () => {
     render(
       <LayerHost>
-        <KeyLegend onClose={() => {}} />
+        <KeyLegend runs={EVERY} onClose={() => {}} />
       </LayerHost>,
     );
     const dialog = screen.getByRole("dialog", { name: "Keyboard shortcuts" });
@@ -201,10 +204,26 @@ describe("the legend", () => {
     }
   });
 
+  // A KEY TO A PLACE THE COMPANY DOES NOT RUN IS NOT LISTED: the jumps to
+  // Work and My work, and the project switcher, where it runs no Crewlet Works.
+  test("leaves out the keys to a service the company does not run", () => {
+    render(
+      <LayerHost>
+        <KeyLegend runs={{ tracker: false, knowledge: true }} onClose={() => {}} />
+      </LayerHost>,
+    );
+    const has = (id: string) => document.querySelector(`[data-key-row="${id}"]`) !== null;
+    expect(has("go.work")).toBe(false);
+    expect(has("go.me")).toBe(false);
+    expect(has("project")).toBe(false);
+    expect(has("go.knowledge")).toBe(true);
+    expect(has("go.inbox")).toBe(true);
+  });
+
   test("draws a key in words a screen reader can say", () => {
     render(
       <LayerHost>
-        <KeyLegend onClose={() => {}} />
+        <KeyLegend runs={EVERY} onClose={() => {}} />
       </LayerHost>,
     );
     const palette = document.querySelector('[data-key-row="palette"]')!;

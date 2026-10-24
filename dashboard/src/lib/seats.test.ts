@@ -223,8 +223,8 @@ describe("the engine's hierarchy", () => {
   // NO HANDLE: the seat screen resolves a name as well as a handle, and the
   // rule lives in one place.
   test("a seat is addressed by its handle, or by name where none is known", () => {
-    expect(seatPath(index.byName.get("Dev A")!)).toEqual(["agents", "seats", "dev-a"]);
-    expect(seatPath({ handle: "", name: "Dev A" })).toEqual(["agents", "seats", "Dev A"]);
+    expect(seatPath(index.byName.get("Dev A")!)).toEqual(["company", "org", "seats", "dev-a"]);
+    expect(seatPath({ handle: "", name: "Dev A" })).toEqual(["company", "org", "seats", "Dev A"]);
   });
 
   // ONLY THE ENGINE KNOWS WHERE A ROOT SEAT SITS. The document wrote Designer
@@ -674,6 +674,11 @@ describe("what a seat is doing", () => {
         { now },
       ),
     ).toBe("Idle · last turn 24m ago");
+    // AN IDLE SEAT THAT NEVER RAN says that, not "Idle" a second time beside
+    // the pill that already says it.
+    expect(stateLine({ id: "a", agent_id: "a", role: "Dev A", activity: "idle" }, { now })).toBe(
+      "No turn yet",
+    );
     expect(stateLine(undefined, { now })).toBe("No state from the engine yet");
     expect(stateLine(null, { now, seat: index.byName.get("Jane Founder")! })).toMatch(
       /human|Human/,

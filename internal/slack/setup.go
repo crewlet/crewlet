@@ -70,6 +70,7 @@ func Requirements(handle string, seat *org.Role, resolve func(string) (string, b
 			ConfigPath: "integrations.slack.bot_token",
 			Seat:       handle,
 			Required:   true,
+			Checkable:  true,
 			// THE ROUTE TO THE VALUE, not a description of it.
 			//
 			// Nothing this engine can provision is behind these two boxes:
@@ -114,6 +115,9 @@ func Requirements(handle string, seat *org.Role, resolve func(string) (string, b
 			ConfigPath: "integrations.slack.signing_secret",
 			Seat:       handle,
 			Required:   true,
+			// NOT CHECKABLE AHEAD. Slack never presents a signing secret;
+			// it signs each event with it, and the route proves the match.
+			CheckNote: "Slack proves it with the first event it signs for this agent.",
 			Help: "Navigate to [api.slack.com/apps](https://api.slack.com/apps) > " +
 				"this agent's app > `Basic Information > App Credentials` " +
 				"and paste the `Signing Secret` here.",

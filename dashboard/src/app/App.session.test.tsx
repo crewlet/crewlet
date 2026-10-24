@@ -203,7 +203,7 @@ describe("a session the engine does not accept", () => {
   // THE CONTROL: a sign-in form routed to itself would lose what was typed,
   // and an invitation routed to sign-in would lose the link.
   test("leaves the sign-in screens where they are", async () => {
-    const at = loginFor("#/spend");
+    const at = loginFor("#/settings/spend");
     mount(at);
     act(() => needSession("sign_in"));
     await screen.findByRole("heading", { name: "Sign in to Crewlet" });
@@ -231,9 +231,9 @@ describe("a session the engine does not accept", () => {
   });
 
   test("an enrolment that loses its session signs in toward where it was going", async () => {
-    mount(`#/enrol?next=${encodeURIComponent("#/spend")}`);
+    mount(`#/enrol?next=${encodeURIComponent("#/settings/spend")}`);
     act(() => needSession("sign_in"));
-    await waitFor(() => expect(location.hash).toBe(loginFor("#/spend")));
+    await waitFor(() => expect(location.hash).toBe(loginFor("#/settings/spend")));
   });
 
   // END TO END THROUGH A SCREEN'S OWN REQUEST: no screen recognises a lost

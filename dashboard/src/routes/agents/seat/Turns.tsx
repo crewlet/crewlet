@@ -361,7 +361,7 @@ export function Turns({
                 shrink: true,
                 // NOTHING AT ALL for a turn that ended cleanly — not an empty
                 // wrapper: a cell with no child nodes is what a phone's card
-                // drops (`.grid-cell:empty`), where an empty span left a
+                // drops (`.crewlet-data-grid__cell:empty`), where an empty span left a
                 // "STATE" label alone on a line of every settled turn.
                 cell: (t) => {
                   // NO COMPLETION RECORD is running or not settled, read off

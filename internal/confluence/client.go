@@ -277,15 +277,40 @@ func (c *Client) do(ctx context.Context, method, path string, params url.Values,
 
 // Me is the account this credential authenticates as.
 func (c *Client) Me(ctx context.Context) (string, error) {
-	var out struct {
-		AccountID string `json:"accountId"`
-		Username  string `json:"username"`
-		UserKey   string `json:"userKey"`
-	}
-	if err := c.api(ctx, http.MethodGet, "/user/current", nil, nil, &out); err != nil {
+	me, err := c.current(ctx)
+	return me.id(), err
+}
+
+// MyName is the display name this credential authenticates as, or its
+// identity where the account has none: what a person reads to confirm they
+// pasted the account they meant to, where [Client.Me] is what routing keys on.
+func (c *Client) MyName(ctx context.Context) (string, error) {
+	me, err := c.current(ctx)
+	if err != nil {
 		return "", err
 	}
-	return firstOf(out.AccountID, out.Username, out.UserKey), nil
+	return firstOf(me.DisplayName, me.id()), nil
+}
+
+// currentUser is GET /user/current on both deployments: Cloud names the
+// account by accountId, Data Center by username and userKey.
+type currentUser struct {
+	AccountID   string `json:"accountId"`
+	Username    string `json:"username"`
+	UserKey     string `json:"userKey"`
+	DisplayName string `json:"displayName"`
+}
+
+func (u currentUser) id() string { return firstOf(u.AccountID, u.Username, u.UserKey) }
+
+// current is GET /user/current, the one read both answers above are made
+// from.
+func (c *Client) current(ctx context.Context) (currentUser, error) {
+	var out currentUser
+	if err := c.api(ctx, http.MethodGet, "/user/current", nil, nil, &out); err != nil {
+		return currentUser{}, err
+	}
+	return out, nil
 }
 
 // Page is one page as this integration reads it.

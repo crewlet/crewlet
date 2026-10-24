@@ -10,6 +10,8 @@
  * "can I trust what I am looking at", and only three screens publish them.
  */
 
+import { toggleStar } from "~/lib/starred.ts";
+import { noteReader } from "~/lib/reader.ts";
 import { useRef, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useSearchTarget } from "./searchTarget.ts";
@@ -219,6 +221,10 @@ function answering(
   asked: { what: string; params?: Record<string, unknown> }[] = [],
 ) {
   const store = new Store();
+  // THE SOCKET'S FIRST FRAME CARRIES THE ORG, as a served frame's always
+  // does: what the company runs is known before a read is asked.
+  // NAMELESS, so a case that names the company applies its own.
+  store.applyOrg(withDerived({ name: "", roles: [] }));
   const socket = new LiveSocket(store);
   (
     socket as unknown as {
@@ -325,9 +331,9 @@ describe("the Inbox badge", () => {
 describe("the sidebar's figures", () => {
   // THE ENGINE'S WORD, and only it: two seats working, one idle, one parked on
   // a question — the count is two, whatever a live call says. AND IT IS ON
-  // LIVE, which holds the running turns: on Agents it sent a reader looking
-  // for one to the org chart.
-  test("the Live count is the seats the engine calls working, and Agents carries none", async () => {
+  // LIVE, which holds the running turns: on the Org chart it sent a reader
+  // looking for one to the chart.
+  test("the Live count is the seats the engine calls working, and the Org chart carries none", async () => {
     const { store, socket } = answering({});
     mountShell(store, socket);
     act(() =>
@@ -346,7 +352,7 @@ describe("the sidebar's figures", () => {
       ] as never),
     );
     expect(screen.getByRole("link", { name: /^Live/ }).textContent).toContain("2");
-    expect(screen.getByRole("link", { name: /^Agents/ }).textContent).toBe("Agents");
+    expect(screen.getByRole("link", { name: /^Org chart/ }).textContent).toBe("Org chart");
   });
 
   // ---------------------------------------------------------------------------
@@ -534,6 +540,26 @@ describe("the sidebar's figures", () => {
     expect(current).not.toContain(watching("t-a"));
   });
 
+  // ONE CURRENT ROW: a starred page's Starred row is the one the reader
+  // followed, and the workspace row containing it gives the mark up. Both
+  // carried the current fill and `aria-current`. Mutation: mark the workspace
+  // row current whatever a shortcut says and the list holds two.
+  test("a starred page is current in Starred alone, not in its workspace too", async () => {
+    location.hash = "#/live/events";
+    noteReader("p-star");
+    const { store, socket } = answering({});
+    mountShell(store, socket);
+    await settle();
+    act(() => void toggleStar({ path: ["live", "events"], label: "Event log", workspace: "live" }));
+    await settle();
+    const nav = screen.getByRole("navigation", { name: "Navigation" });
+    const current = [...nav.querySelectorAll('a[aria-current="page"]')].map((a) =>
+      a.getAttribute("href"),
+    );
+    expect(current).toEqual(["#/live/events"]);
+    act(() => void toggleStar({ path: ["live", "events"], label: "Event log", workspace: "live" }));
+  });
+
   // `g r` IS "TAKE ME TO THE RUNNING TURN": the one turn's watch link when one
   // seat is working, and Now running — every one of them — when several are,
   // or none.
@@ -719,7 +745,8 @@ describe("the sidebar's figures", () => {
   // EVERY "NEW TASK" OPENS THE FRAME'S ONE SHEET: Home's in its page bar, not
   // a second form, and not the palette it stood in for until the sheet landed.
   // AND IT IS THE ONLY ONE ON HOME: the sidebar's head carries no `+`, so a
-  // second New task there is a door nobody decided to put back.
+  // second New task there is a door nobody decided to put back. Its one
+  // control is the engine's status.
   test("Home's New task opens the frame's New task sheet, the only one on the page", async () => {
     location.hash = "#/home";
     const { store, socket } = answering({
@@ -731,7 +758,10 @@ describe("the sidebar's figures", () => {
     await settle();
     const presses = screen.getAllByRole("button", { name: /^New task$/ });
     expect(presses).toHaveLength(1);
-    expect(document.querySelector(".side-head button")).toBeNull();
+    const headControls = [...document.querySelectorAll(".crewlet-app-shell__rail-head button")];
+    expect(headControls.every((press) => press.closest(".crewlet-app-shell__rail-status"))).toBe(
+      true,
+    );
     await act(async () => {
       fireEvent.click(presses[0]!);
     });
@@ -762,13 +792,24 @@ describe("the sidebar's figures", () => {
   });
 
   // SETTINGS IS NEVER HIDDEN; the lock is what changes.
-  test("Settings is a row for an operator without the lock", async () => {
+  test("Settings is at the foot for an operator, without the lock, and not current off Settings", async () => {
     const { store, socket } = answering({});
     mountShell(store, socket);
     await settle();
-    const foot = screen.getByRole("navigation", { name: "Settings" });
-    expect(foot.textContent).toContain("Settings");
-    expect(foot.textContent).not.toContain("operator credential");
+    const foot = document.querySelector<HTMLElement>(".crewlet-app-shell__rail-foot")!;
+    const settings = within(foot).getByRole("link", { name: "Settings" });
+    expect(settings.getAttribute("title")).toBe("Settings");
+    expect(settings.hasAttribute("aria-current")).toBe(false);
+    // BEFORE PREFERENCES, in the account row's controls.
+    const controls = [
+      ...foot.querySelectorAll(
+        ".crewlet-account-row__actions a, .crewlet-account-row__actions button",
+      ),
+    ];
+    expect(controls.map((control) => control.getAttribute("aria-label"))).toEqual([
+      "Settings",
+      "Preferences",
+    ]);
   });
 });
 
@@ -803,24 +844,26 @@ describe("the page header", () => {
     expect(unblocked?.getAttribute("href")).toBe("#/me/unblocked?handle=bo");
   });
 
-  // THE WINDOW travels between Spend's sections — the tab and the overview's
-  // "All" link reach Expensive tasks on the same one — and the chart's split
-  // does not, because it is the overview's alone.
-  test("a Spend tab carries the window, and Budgets carries it back", async () => {
-    location.hash = "#/spend?window=90d&group=model";
+  // THE WINDOW travels between Spend's two rows in the Settings column, and
+  // the chart's split does not, because it is the overview's alone.
+  test("a Spend row carries the window, and Expensive tasks carries it back", async () => {
+    location.hash = "#/settings/spend?window=90d&group=model";
     const { store, socket } = answering({});
     mountShell(store, socket);
-    const tab = (label: string) =>
+    await settle();
+    const row = (path: string) =>
       Array.from(
-        screen.getByRole("navigation", { name: "Spend sections" }).querySelectorAll("a"),
-      ).find((a) => a.textContent === label);
-    expect(tab("Expensive tasks")?.getAttribute("href")).toBe("#/spend/tasks?window=90d");
-    expect(tab("Budgets")?.getAttribute("href")).toBe("#/spend/budgets?window=90d");
+        screen.getByRole("navigation", { name: "Settings sections" }).querySelectorAll("a"),
+      ).find((a) => a.getAttribute("href")?.startsWith(path));
+    expect(row("#/settings/spend/tasks")?.getAttribute("href")).toBe(
+      "#/settings/spend/tasks?window=90d",
+    );
     cleanup();
-    location.hash = "#/spend/budgets?window=90d";
+    location.hash = "#/settings/spend/tasks?window=90d";
     const again = answering({});
     mountShell(again.store, again.socket);
-    expect(tab("Overview")?.getAttribute("href")).toBe("#/spend?window=90d");
+    await settle();
+    expect(row("#/settings/spend?")?.getAttribute("href")).toBe("#/settings/spend?window=90d");
   });
 
   // ON AN OBJECT PAGE the crumbs are the way back; a strip of tabs over a
@@ -864,11 +907,32 @@ describe("the page header", () => {
     const column = screen.getByRole("navigation", { name: "Settings sections" });
     const current = column.querySelector('[aria-current="page"]');
     expect(current?.textContent).toContain("Secrets");
-    expect(current?.textContent).toContain("needs Admin");
-    const general = Array.from(column.querySelectorAll("a")).find((a) =>
-      a.textContent?.startsWith("General"),
+    expect(current?.textContent).toContain("Needs Admin");
+    const spend = Array.from(column.querySelectorAll("a")).find(
+      (a) => a.getAttribute("href") === "#/settings/spend",
     );
-    expect(general?.textContent).not.toContain("needs");
+    expect(spend?.textContent).not.toContain("Needs");
+  });
+
+  // ONE KEY FOR A GROUP THE READER HOLDS NONE OF, on the group's label, the
+  // sidebar's rule too: a Tracker-only reader met a key on 13 of 15 rows. A
+  // group with an open row keeps the key on each locked row, and every locked
+  // row still says why, as its title and after its name.
+  test("a Settings group the reader holds none of draws its key once, on its label", async () => {
+    location.hash = "#/settings/spend";
+    const { store, socket } = answering({
+      viewer: { login: "t", grants: ["tracker"], handle: "", owner: "t", name: "", kind: "" },
+    });
+    mountShell(store, socket);
+    await settle();
+    const column = screen.getByRole("navigation", { name: "Settings sections" });
+    const access = within(column).getByRole("group", { name: "Access, Needs Admin access" });
+    expect(access.querySelectorAll("svg.crewlet-locked-label__key")).toHaveLength(1);
+    const people = within(access).getByRole("link", { name: /^People, Needs Admin access/ });
+    expect(people.querySelector("[title='Needs Admin access']")).not.toBeNull();
+    // SPEND HOLDS AN OPEN ROW, so its group is not locked and names no reason.
+    const spend = within(column).getByRole("group", { name: "Spend" });
+    expect(spend.closest(".crewlet-nav-group--locked")).toBeNull();
   });
 
   // ON A PHONE THE COLUMN IS ONE ROW NAMING THE SECTION. Stacked whole it put
@@ -883,7 +947,7 @@ describe("the page header", () => {
     await settle();
     // BY ITS CLASS: jsdom applies the wide half of the stylesheet, where the
     // toggle is not drawn — the fold is the phone block's, held by frame.test.
-    const toggle = document.querySelector<HTMLButtonElement>(".section-picker-toggle")!;
+    const toggle = document.querySelector<HTMLButtonElement>(".crewlet-section-frame__toggle")!;
     // WHAT IT IS CALLED, its decoration left out — what it SHOWS ("Section ·
     // Secrets") is the picker's own suite's (`PageHeader.test.tsx`).
     const spoken = (el: HTMLElement) => {
@@ -895,43 +959,43 @@ describe("the page header", () => {
     const list = document.getElementById(toggle.getAttribute("aria-controls") ?? "");
     expect(list?.querySelector("nav[aria-label='Settings sections']")).not.toBeNull();
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(toggle.closest(".section-picker")?.hasAttribute("data-open")).toBe(false);
+    expect(toggle.closest(".crewlet-section-frame__nav")?.hasAttribute("data-open")).toBe(false);
 
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(toggle.closest(".section-picker")?.hasAttribute("data-open")).toBe(true);
+    expect(toggle.closest(".crewlet-section-frame__nav")?.hasAttribute("data-open")).toBe(true);
 
     await act(async () => {
       location.hash = "#/settings/nodes";
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     });
     await settle();
-    const moved = document.querySelector<HTMLButtonElement>(".section-picker-toggle")!;
+    const moved = document.querySelector<HTMLButtonElement>(".crewlet-section-frame__toggle")!;
     expect(spoken(moved)).toBe("Settings Section: Nodes");
     expect(moved.getAttribute("aria-expanded"), "a picked section left the list open").toBe(
       "false",
     );
   });
 
-  // AN ADDRESS THAT NAMES NO SCREEN IS IN NO SECTION. General's path is the
-  // workspace root and so a prefix of every Settings address: a mistyped one
-  // drew "Not found" beside a column, and a phone picker, marking General.
+  // AN ADDRESS THAT NAMES NO SCREEN IS IN NO SECTION. Settings owns every
+  // address under it, so a mistyped one (or one that moved out, as General
+  // did) draws "Not found" beside a column, and a phone picker, marking none.
   test("a Settings address that names no screen marks no section", async () => {
     location.hash = "#/settings/general";
     const { store, socket } = answering({});
     mountShell(store, socket);
     await settle();
-    const toggle = document.querySelector<HTMLButtonElement>(".section-picker-toggle")!;
+    const toggle = document.querySelector<HTMLButtonElement>(".crewlet-section-frame__toggle")!;
     expect(toggle.textContent).toBe("Settings sections");
-    expect(document.querySelector(".section-picker-list [aria-current]")).toBeNull();
+    expect(document.querySelector(".crewlet-section-frame__list [aria-current]")).toBeNull();
   });
 
   // NO OPERATOR POLL OUTSIDE SETTINGS. The frame is mounted for the life of
-  // the tab, so a figure hook that asked unconditionally would put three
+  // the tab, so a figure hook that asked unconditionally would put two
   // operator questions on a timer behind every screen of every tab.
-  const OPERATOR_ANSWERS = ["fleet", "retention", "integrations"];
+  const OPERATOR_ANSWERS = ["fleet", "retention"];
   test("the operator answers are asked only while the Settings column is drawn", async () => {
-    for (const where of ["#/home", "#/work", "#/spend/budgets", "#/knowledge"]) {
+    for (const where of ["#/home", "#/work", "#/company/budgets", "#/knowledge"]) {
       location.hash = where;
       const asked: { what: string }[] = [];
       const { store, socket } = answering({}, asked);
@@ -943,7 +1007,7 @@ describe("the page header", () => {
       ).toEqual([]);
       cleanup();
     }
-    location.hash = "#/settings";
+    location.hash = "#/settings/models";
     const asked: { what: string }[] = [];
     const { store, socket } = answering({}, asked);
     mountShell(store, socket);
@@ -954,7 +1018,7 @@ describe("the page header", () => {
   });
 
   test("a reader without the grants is asked nothing, even in Settings", async () => {
-    location.hash = "#/settings";
+    location.hash = "#/settings/models";
     const asked: { what: string }[] = [];
     const { store, socket } = answering(
       { viewer: { login: "", grants: [], handle: "", owner: "", name: "", kind: "" } },
@@ -965,36 +1029,29 @@ describe("the page header", () => {
     expect(asked.map((a) => a.what).filter((w) => OPERATOR_ANSWERS.includes(w))).toEqual([]);
   });
 
-  // THE PILL IS THE ENGINE'S ROLL-UP, read in the row's name — and painted
-  // as the state it is, not as the accent's unread badge.
-  test("the Integrations row carries the roll-up's attention count as its pill", async () => {
-    location.hash = "#/settings";
+  // A LOCKED ROW DRAWS NO FIGURE: Nodes and Configuration read the health
+  // push every reader holds, and drew "1" and "epoch 1" beside their locks
+  // while the equally locked Backups row drew nothing. Mutation: drop the
+  // gate and the locked rows count.
+  test("a Settings row the reader cannot open draws no figure", async () => {
+    location.hash = "#/settings/spend";
     const { store, socket } = answering({
-      integrations: {
-        integrations: [],
-        traffic_known: true,
-        traffic_since: null,
-        tools: [
-          { key: "slack", surfaces: [], state: "attention", label: "Needs attention", reason: "" },
-          { key: "gitlab", surfaces: [], state: "connected", label: "Connected", reason: "" },
-        ],
-      },
+      viewer: { login: "lee", grants: ["tracker"], handle: "", owner: "lee", name: "", kind: "" },
     });
     mountShell(store, socket);
+    act(() => store.applyHealth(healthFrame({ applied_epoch: 2, nodes: 1 })));
     await settle();
     const column = screen.getByRole("navigation", { name: "Settings sections" });
-    const row = Array.from(column.querySelectorAll("a")).find((a) =>
-      a.textContent?.startsWith("Integrations"),
-    );
-    expect(row?.textContent).toContain("1");
-    expect(row?.textContent).toContain("1 needs attention");
-    expect(row?.closest(".section-row-attention")).not.toBeNull();
-    expect(row?.querySelector(".crewlet-nav-item__badge")?.textContent).toBe("1");
+    const row = (start: string) =>
+      Array.from(column.querySelectorAll("a")).find((a) => a.textContent?.startsWith(start));
+    expect(row("Nodes")?.textContent).toMatch(/Needs Admin/);
+    expect(row("Nodes")?.textContent).not.toMatch(/node live/);
+    expect(row("Configuration")?.textContent).not.toMatch(/epoch/);
   });
 
   // A FIGURE SAYS WHAT IT COUNTS: the applied epoch read "e2", a code.
   test("the Configuration row names the epoch this node applied in words", async () => {
-    location.hash = "#/settings";
+    location.hash = "#/settings/models";
     const { store, socket } = answering({});
     mountShell(store, socket);
     act(() => store.applyHealth(healthFrame({ applied_epoch: 2, nodes: 1 })));

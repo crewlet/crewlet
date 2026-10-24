@@ -144,6 +144,12 @@ var contract = []Entry{
 	{"BUDGET_WINDOWS", ReadLiteral, "internal/config.TestTheBudgetEditorOffersExactlyTheEnginesWindows"},
 	{"SeatHeldHolder", ReadInterface,
 		"internal/api/configapi.TestTheDashboardReadsWhatASeatHeldRefusalSends"},
+	{"Charter", ReadInterface, "internal/api/configapi.TestTheDashboardReadsTheCharterTheEngineSends"},
+	{"CharterMoved", ReadInterface, "internal/api/configapi.TestTheDashboardReadsWhatACharterConflictSends"},
+	{"MISSION_MAX_CHARS", ReadScalar, "internal/api/configapi.TestTheDashboardBoundsTheCharterAtTheEnginesCaps"},
+	{"VISION_MAX_CHARS", ReadScalar, "internal/api/configapi.TestTheDashboardBoundsTheCharterAtTheEnginesCaps"},
+	{"POLICY_MAX_CHARS", ReadScalar, "internal/api/configapi.TestTheDashboardBoundsTheCharterAtTheEnginesCaps"},
+	{"POLICIES_MAX", ReadScalar, "internal/api/configapi.TestTheDashboardBoundsTheCharterAtTheEnginesCaps"},
 
 	// errors.ts
 	{"QueryErrorCode", ReadUnion,
@@ -228,6 +234,22 @@ var contract = []Entry{
 	{"SeatInvitation", ReadInterface,
 		"internal/api/iamapi.TestTheSeatSurfacesReadWhatTheSeatListingSends"},
 	{"ResetView", ReadInterface, "internal/api/authapi.TestTheResetScreenReadsWhatTheResetViewSends"},
+
+	// services.ts
+	{"OrgServices", ReadInterface, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
+	{"TrackerBackend", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
+	{"KnowledgeBackend", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
+
+	// limits.ts
+	{"LimitsAnswer", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
+	{"LimitRow", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
+	{"LimitGroup", ReadUnion, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
+	{"LimitUnit", ReadUnion, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
+
+	// signin.ts
+	{"SignInPolicyAnswer", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheSignInPolicyTheEngineSends"},
+	{"SignInPolicy", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheSignInPolicyTheEngineSends"},
+	{"SecondFactorRule", ReadUnion, "internal/api.TestTheDashboardReadsExactlyTheSignInPolicyTheEngineSends"},
 
 	// health.ts
 	{"EngineHealth", ReadInterface, "internal/api.TestTheDashboardDeclaresExactlyTheHealthTheEngineReports"},

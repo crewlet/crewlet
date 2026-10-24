@@ -52,7 +52,8 @@ import {
 import { href } from "~/app/router.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { RefusalNote, WriteButton, pressable } from "~/components/WriteButton.tsx";
-import { holdLine, ReassignItem, type SeatCondition } from "~/components/DecisionRow.tsx";
+import { holdLine, ReassignItem } from "~/components/DecisionRow.tsx";
+import type { SeatCondition } from "~/lib/decisions.ts";
 import { RaiseBudgetButton } from "~/components/budgetWrite.tsx";
 import { AnswerAsk, type AskAnswer } from "~/components/writes.tsx";
 import { Composer } from "~/components/Composer.tsx";
@@ -93,6 +94,17 @@ import { questionWithheld } from "~/lib/access.ts";
 
 interface PaneProps {
   row: InboxRow | null;
+  /**
+   * What the pane says with no row open, where the default ("New updates
+   * open here") would promise what the company's services cannot send.
+   */
+  empty?: { title: string; description: string } | undefined;
+  /**
+   * The list beside the pane is empty and says so in its own empty state. The
+   * pane then says no second "All clear": it holds one quiet line, the place a
+   * reader's next update will open.
+   */
+  listEmpty?: boolean | undefined;
   index: OrgIndex;
   now: number;
   /** The company's clock, which the snooze presets are read on. */
@@ -110,13 +122,20 @@ interface PaneProps {
 }
 
 export function InboxPane(props: PaneProps) {
+  if (!props.row && props.listEmpty && !props.empty) {
+    return (
+      <div className="inbox-pane inbox-pane-empty">
+        <Text variant="caption">New updates open here.</Text>
+      </div>
+    );
+  }
   if (!props.row) {
     return (
       <div className="inbox-pane inbox-pane-empty">
         <EmptyState
           icon={<CircleCheckGlyph size={28} />}
-          title="All clear"
-          description="New updates open here."
+          title={props.empty?.title ?? "All clear"}
+          description={props.empty?.description ?? "New updates open here."}
         />
       </div>
     );

@@ -58,7 +58,7 @@ import {
   SquareKanbanGlyph,
   TrashGlyph,
 } from "@crewlethq/icons/glyphs";
-import { useNavigator } from "~/app/router.tsx";
+import { href, useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Coverage, type RowChrome } from "~/components/work.tsx";
 import { RestoreButton } from "~/components/writes.tsx";
@@ -328,7 +328,25 @@ export function WorkItem({ id }: { id: string }) {
       {state.loading && !state.data && (
         <Skeleton variant="text" rows={8} label="Loading the task" />
       )}
-      <QueryState error={state.error} refusal={state.refusal} loading={state.loading}>
+      {/* A MISSING TASK IS AN EMPTY STATE WITH A WAY BACK, as a missing
+          project and a missing artifact are, never a full-width grey line. */}
+      {state.error === "not_found" ? (
+        <EmptyState
+          icon={<SquareKanbanGlyph size="xl" />}
+          title={`No task called “${id}”`}
+          description="It may have been removed, or the link names a key that never existed."
+          action={
+            <ButtonLink variant="secondary" href={href(["work", "tasks"])}>
+              Back to Tasks
+            </ButtonLink>
+          }
+        />
+      ) : null}
+      <QueryState
+        error={state.error === "not_found" ? null : state.error}
+        refusal={state.refusal}
+        loading={state.loading}
+      >
         {state.data && item && (
           <ItemEditsProvider
             item={address}

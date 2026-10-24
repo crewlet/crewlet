@@ -3,6 +3,7 @@
  * gating it, and Create sends the doc as written in one keyed write.
  */
 
+import { TestClient } from "~/test/client.tsx";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
@@ -64,13 +65,15 @@ afterEach(cleanup);
 function mount(hash = "#/artifacts/new/doc") {
   location.hash = hash;
   return render(
-    <Router>
-      <LayerHost>
-        <ToastProvider>
-          <DocCreate />
-        </ToastProvider>
-      </LayerHost>
-    </Router>,
+    <TestClient>
+      <Router>
+        <LayerHost>
+          <ToastProvider>
+            <DocCreate />
+          </ToastProvider>
+        </LayerHost>
+      </Router>
+    </TestClient>,
   );
 }
 

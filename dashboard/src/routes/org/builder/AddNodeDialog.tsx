@@ -330,7 +330,7 @@ function AddNodeFields({ form }: { form: AddForm }) {
  * draws it too. The form hangs off its parent's own branch, in the rank the
  * new node will land in — but the canvas eases onto the ghost, and at the
  * company's root the ghost is a card wide of the parent at the far end of a
- * long branch: arriving from Agents › Add seat, the root and the siblings the
+ * long branch: arriving from Org chart › Add seat, the root and the siblings the
  * node joins were off the canvas and nothing on screen said where it would go.
  *
  * SAID ONCE TO A SCREEN READER. The ghost is a named region with this same

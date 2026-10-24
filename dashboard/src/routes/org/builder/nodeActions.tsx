@@ -38,6 +38,7 @@ import {
   TrashGlyph,
   PencilGlyph,
   FolderInputGlyph,
+  TextCursorGlyph,
   UserGlyph,
 } from "@crewlethq/icons/glyphs";
 import { Kbd, isApplePlatform, type AddPillSection, type MenuEntry } from "@crewlethq/ui";
@@ -132,12 +133,36 @@ function seatScreen(view: SeatView): string[] | null {
   return view.saved ? seatPath({ handle: view.saved.handle, name: view.saved.name }) : null;
 }
 
+/**
+ * What a node's Edit is called, on its menu and on the pencil a surface draws.
+ *
+ * THE COMPANY'S SAYS WHERE IT GOES. Its Edit leaves the builder for Company ›
+ * Principles ([BuilderApi.principles]), which is where its mission, vision
+ * and standing policies are written, so it is named for them: "Edit
+ * principles", or "Open principles" to a reader who may only read them there,
+ * since a page they cannot change is not an edit. While this draft is still
+ * creating the company its Edit is the name form, and an Edit like any other.
+ */
+export function editLabel(api: BuilderApi, view: NodeView, name: string = view.name): string {
+  if (view.type !== "company" || api.principles === null) return name ? `Edit ${name}` : "Edit";
+  return api.principles === "write" ? "Edit principles" : "Open principles";
+}
+
+/** The mark beside [editLabel]: a pencil, or the way out to a page a reader may only read. */
+export function editGlyph(api: BuilderApi, view: NodeView): ReactNode {
+  return view.type === "company" && api.principles === "read" ? (
+    <ArrowUpRightGlyph />
+  ) : (
+    <PencilGlyph />
+  );
+}
+
 /** Every action of a node, in the order every surface offers them. */
 export function nodeMenu(api: BuilderApi, view: NodeView, open: OpenScreen): MenuEntry[] {
   const edit: MenuEntry = {
     key: "edit",
-    label: "Edit",
-    icon: <PencilGlyph />,
+    label: view.type === "company" ? editLabel(api, view, "") : "Edit",
+    icon: editGlyph(api, view),
     hint: <Kbd keys={["Enter"]} />,
     onSelect: () => api.openEditor(view.key),
   };
@@ -158,7 +183,22 @@ export function nodeMenu(api: BuilderApi, view: NodeView, open: OpenScreen): Men
     onSelect: () => api.openMove(view.key),
   };
   if (view.type === "company") {
-    return [...addEntries(api, view.key), { kind: "separator", key: "sep" }, edit];
+    // ONCE THE COMPANY EXISTS ITS EDIT LEAVES FOR ITS PRINCIPLES, so its name,
+    // the one company field the builder writes, is an entry of its own. A
+    // lead's draft refuses it with the reason, as every company change.
+    const rename: MenuEntry[] =
+      api.principles === null
+        ? []
+        : [
+            {
+              key: "rename",
+              label: "Rename company",
+              icon: <TextCursorGlyph />,
+              ...refusedEntry(api, view.key, "edit"),
+              onSelect: () => api.openCompanyRename(),
+            },
+          ];
+    return [...addEntries(api, view.key), { kind: "separator", key: "sep" }, edit, ...rename];
   }
   if (view.type === "unit") {
     return [

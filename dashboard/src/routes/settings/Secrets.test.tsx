@@ -17,7 +17,7 @@
 
 import { act, cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { CredentialPeek, provenance, Secrets } from "./Secrets.tsx";
+import { CredentialPeek, provenance, Secrets, sourceWords } from "./Secrets.tsx";
 import type { ReactElement } from "react";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -495,6 +495,12 @@ test("a credential's provenance is said as the path that wrote it", async () => 
   for (const word of ["cli", "llm-login", "rekey", "gitlab-provision"]) {
     expect(provenance(word)).toBe(`a source this build does not know (“${word}”)`);
   }
+  // THE SAME PATH IN WORDS, never a pill on every row: the list's Source
+  // column and the peek both name it the one way.
+  expect(sourceWords("api")).toBe("API");
+  expect(sourceWords("setup")).toBe("Integration setup");
+  expect(sourceWords("gitlab-provision")).toBe("gitlab-provision");
+  expect(screen.getByText("Integration setup")).toBeDefined();
 });
 
 // EACH PROPERTY ONCE. The peek's header carried Key id, Set by and Updated as
@@ -526,7 +532,7 @@ describe("the credentials table", () => {
     stubLoaded();
     const { container } = render(<Secrets />);
     expect(await screen.findByText("DATADOG_WEBHOOK_TOKEN")).toBeDefined();
-    const all = tracks(container.querySelector<HTMLElement>(".grid-wrap")!);
+    const all = tracks(container.querySelector<HTMLElement>(".crewlet-data-grid")!);
     expect(all).toHaveLength(7);
     expect(all[0]).toBe("minmax(max-content, 1fr)");
     for (const track of all.slice(1)) expect(track).toMatch(/^fit-content\(/);
@@ -541,9 +547,17 @@ describe("the credentials table", () => {
     try {
       render(<Secrets />);
       const name = await screen.findByText("GITHUB_TOKEN");
-      expect(name.closest(".grid-row")?.classList.contains("selected")).toBe(true);
+      expect(
+        name
+          .closest(".crewlet-data-grid__row")
+          ?.classList.contains("crewlet-data-grid__row--selected"),
+      ).toBe(true);
       const other = screen.getByText("DATADOG_WEBHOOK_TOKEN");
-      expect(other.closest(".grid-row")?.classList.contains("selected")).toBe(false);
+      expect(
+        other
+          .closest(".crewlet-data-grid__row")
+          ?.classList.contains("crewlet-data-grid__row--selected"),
+      ).toBe(false);
     } finally {
       location.hash = "#/";
     }
@@ -574,14 +588,14 @@ describe("the credentials table", () => {
       vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (
         this: HTMLElement,
       ) {
-        return this.classList.contains("grid-wrap") ? box : 0;
+        return this.classList.contains("crewlet-data-grid") ? box : 0;
       });
       // Each head is its column's natural width, laid end to end.
       vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
         this: HTMLElement,
       ) {
         const width = (el: Element) => NATURAL[el.textContent?.trim() ?? ""] ?? 60;
-        if (this.classList.contains("grid-th")) {
+        if (this.classList.contains("crewlet-data-grid__th")) {
           const siblings = [...this.parentElement!.children];
           const left = siblings.slice(0, siblings.indexOf(this)).reduce((n, h) => n + width(h), 0);
           return {
@@ -593,7 +607,7 @@ describe("the credentials table", () => {
             height: 0,
           } as DOMRect;
         }
-        const right = this.classList.contains("grid-wrap") ? box : 0;
+        const right = this.classList.contains("crewlet-data-grid") ? box : 0;
         return { left: 0, right, width: right, top: 0, bottom: 0, height: 0 } as DOMRect;
       });
     });
@@ -607,12 +621,12 @@ describe("the credentials table", () => {
       stubLoaded();
       const { container } = render(<Secrets />);
       expect(await screen.findByText("DATADOG_WEBHOOK_TOKEN")).toBeDefined();
-      const grid = container.querySelector<HTMLElement>(".grid-wrap")!;
+      const grid = container.querySelector<HTMLElement>(".crewlet-data-grid")!;
       return {
-        heads: [...grid.querySelectorAll(".grid-head > .grid-th")].map((h) =>
-          h.textContent?.trim(),
+        heads: [...grid.querySelectorAll(".crewlet-data-grid__head > .crewlet-data-grid__th")].map(
+          (h) => h.textContent?.trim(),
         ),
-        hidden: grid.parentElement?.querySelector(".grid-foot")?.textContent ?? "",
+        hidden: grid.parentElement?.querySelector(".crewlet-data-grid__foot")?.textContent ?? "",
       };
     }
 

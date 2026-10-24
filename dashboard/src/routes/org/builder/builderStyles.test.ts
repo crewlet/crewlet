@@ -24,7 +24,7 @@ import { expect, test } from "vitest";
 
 /*
  * THE SCREEN'S STYLESHEET IS `screens.css` IN THIS TREE. The builder is Agents
- * › Edit org (`#/agents/edit`), and every screen's recipes
+ * › Edit org (`#/company/org/edit`), and every screen's recipes
  * live in one sheet here, so the builder's sit beside the chart's rather than
  * in a file of their own — which is what `org.css` was before the two screens
  * became one. Reading the whole sheet costs nothing: every assertion below is

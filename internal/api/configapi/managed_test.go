@@ -86,6 +86,10 @@ type writePath struct {
 	headers            map[string]string
 	// dryRun is a check, which stores nothing either way.
 	dryRun bool
+	// replaces is a write to a resource that already exists, answered 200
+	// rather than the 201 of a write that creates a revision of the whole
+	// document: the charter.
+	replaces bool
 }
 
 // everyWritePath is every route on this surface that changes the document,
@@ -94,6 +98,8 @@ type writePath struct {
 func everyWritePath(first string) map[string]writePath {
 	summary := map[string]string{"X-Summary": "a change"}
 	seat := `{"name":"CTO","handle":"cto","llm":"zulu","backstory":"edited"}`
+	charter := `{"mission":"ship it","vision":"","policies":["One rule."]}`
+	anyCharter := map[string]string{"If-Match": "*"}
 	return map[string]writePath{
 		"PUT /config":   {method: http.MethodPut, path: "/config", body: orgDoc, headers: summary},
 		"PATCH /config": {method: http.MethodPatch, path: "/config", body: `{"mission":"ship it"}`, headers: summary},
@@ -111,6 +117,14 @@ func everyWritePath(first string) map[string]writePath {
 		},
 		"PUT /config/roles/{id}?dry_run=true": {
 			method: http.MethodPut, path: "/config/roles/cto?dry_run=true", body: seat, dryRun: true,
+		},
+		"PUT /config/charter": {
+			method: http.MethodPut, path: "/config/charter", body: charter,
+			headers: anyCharter, replaces: true,
+		},
+		"PUT /config/charter?dry_run=true": {
+			method: http.MethodPut, path: "/config/charter?dry_run=true", body: charter,
+			headers: anyCharter, dryRun: true,
 		},
 	}
 }
@@ -220,7 +234,7 @@ func TestAListedWriterAndAnUnmanagedDocumentWrite(t *testing.T) {
 
 				res := doAs(t, s, posture.caller, tc.method, path, tc.body, tc.headers)
 				want := http.StatusCreated
-				if tc.dryRun {
+				if tc.dryRun || tc.replaces {
 					want = http.StatusOK
 				}
 				if res.Code != want {

@@ -126,10 +126,13 @@ afterEach(() => {
   nav = null;
 });
 
-function mount({ viewer = JANE }: { viewer?: Record<string, unknown> } = {}) {
+function mount({
+  viewer = JANE,
+  services,
+}: { viewer?: Record<string, unknown>; services?: Record<string, string> } = {}) {
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 1 }));
-  store.applyOrg(ORG as never);
+  store.applyOrg((services ? { ...ORG, services } : ORG) as never);
   store.applySeats([] as never);
   const socket = new LiveSocket(store);
   socket.query = ((what: string) => {
@@ -219,6 +222,59 @@ describe("at rest", () => {
     }
     expect(screen.getByRole("button", { name: "Edit Home" })).toBeTruthy();
     expect(screen.getByRole("button", { name: /New task/ })).toBeTruthy();
+  });
+});
+
+// A COMPANY RUNNING JIRA HIDES THE TRACKER'S WIDGETS, and each row closes up
+// over them: Tokens by team stood alone in a third of its row with two thirds
+// of the board empty beside it. Every row the board draws is as wide as the
+// row it was saved as. While Home is edited the hidden widget keeps its cell
+// and says why, so it can be removed. Mutation: draw the saved widths and a
+// row comes up short.
+describe("where the company runs no Crewlet Works", () => {
+  const span = (el: Element) =>
+    Number(/span (\d+)/.exec((el as HTMLElement).style.gridColumn)?.[1] ?? "0");
+  test("every row of the board is drawn full, the tracker's widgets left out", async () => {
+    mount({ services: { tracker: "jira", knowledge: "native" } });
+    await settle();
+    const drawn = blocks();
+    const ids = drawn.map((b) => b.getAttribute("data-widget"));
+    expect(ids.some((id) => id?.includes("completed"))).toBe(false);
+    let row = 0;
+    const rows: number[] = [];
+    for (const b of drawn) {
+      if (row + span(b) > 12) {
+        rows.push(row);
+        row = 0;
+      }
+      row += span(b);
+    }
+    rows.push(row);
+    expect(
+      rows.every((r) => r === 12),
+      `rows ${rows.join(", ")}`,
+    ).toBe(true);
+  });
+
+  // THE TRAY DESCRIBES WHAT THE READER WILL GET: no task figures, and no
+  // finished work or hand-offs, where Crewlet Works is not run.
+  test("the tray's lines say what each widget shows here", async () => {
+    mount({ services: { tracker: "jira", knowledge: "native" } });
+    await settle();
+    await editHome();
+    await openTray();
+    expect(within(tray()).getByText("Agents, decisions and tokens at a glance")).toBeTruthy();
+    expect(within(tray()).getByText("Schedules run and pages published")).toBeTruthy();
+    expect(within(tray()).queryByText(/tasks and tokens/)).toBeNull();
+  });
+
+  test("in Edit Home a hidden widget keeps its cell and says why", async () => {
+    mount({ services: { tracker: "jira", knowledge: "native" } });
+    await settle();
+    await editHome();
+    expect(
+      screen.getAllByText(/^Hidden: the company does not run Crewlet Works\./).length,
+    ).toBeGreaterThan(0);
   });
 });
 
@@ -436,14 +492,20 @@ describe("the tray", () => {
     expect(within(tray()).getByText("No widgets match “zzzz”")).toBeTruthy();
   });
 
-  test("a reader without Admin is offered no Settings widgets, and is told why", async () => {
+  // SPEND'S READINGS ARE EVERY READER'S, and the rest of Settings is Admin's:
+  // a reader without Admin is offered the spend widgets and none of the rest.
+  test("a reader without Admin is offered only Settings' spend widgets, and is told why", async () => {
     mount({ viewer: LEE });
     await settle();
     await editHome();
     await openTray();
     const sections = [...tray().querySelectorAll(".home-tray-title")].map((h) => h.textContent);
-    expect(sections).not.toContain("Settings");
+    expect(sections).toContain("Settings");
     expect(sections).toContain("Work");
+    const names = [...tray().querySelectorAll(".home-tray-tile-name")].map((n) => n.textContent);
+    expect(names).toContain("Token spend");
+    expect(names).not.toContain("Models & keys");
+    expect(names).not.toContain("Backups");
     expect(within(tray()).getByText(/need access you don’t have/)).toBeTruthy();
   });
 });

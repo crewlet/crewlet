@@ -1,5 +1,16 @@
 /**
- * Settings › People & access: who can reach this company, and as whom.
+ * Settings › Access: who can reach this company, and as whom, on three pages
+ * that split the identity directory between them so no row is drawn twice.
+ *
+ *  - PEOPLE ([People]): every principal but a service account, the
+ *    invitations still open, and the human seats people come from.
+ *  - SERVICE ACCOUNTS ([ServiceAccounts]): the machine principals, what each
+ *    holds and the seat it acts as.
+ *  - API TOKENS ([ApiTokens]): this node's Tier A tokens, each joined to the
+ *    directory row its login names.
+ *
+ * A directory finding is drawn on the page of the principal it names
+ * ([findingOn]).
  *
  * # One join, drawn from both ends
  *
@@ -10,7 +21,7 @@
  * names is bound to one. Each half alone hides the half that goes wrong — a
  * seat nobody holds looks staffed on the chart, and a token label mistyped on
  * either side leaves the token acting as itself while its operator believes it
- * acts as a seat — so this screen draws the directory from both ends: each
+ * acts as a seat, so these pages draw the directory from both ends: each
  * principal with the seat it holds, each human seat with whoever holds it, and
  * each of this node's tokens with the row its login names.
  *
@@ -87,6 +98,7 @@
  * them.
  */
 
+import { ORG_EDIT_PATH } from "~/app/routes.ts";
 import { useCallback, useMemo, useState } from "react";
 import {
   Button,
@@ -113,14 +125,17 @@ import {
   TableDateCell,
   TableEntityCell,
   TableTextCell,
+  PageNote,
 } from "@crewlethq/ui";
 import {
   EllipsisGlyph,
   KeyGlyph,
   SendGlyph,
   PlusGlyph,
+  BotGlyph,
   ShieldGlyph,
   TriangleAlertGlyph,
+  UserGlyph,
   UsersGlyph,
 } from "@crewlethq/icons/glyphs";
 import { QueryState } from "~/components/common.tsx";
@@ -149,7 +164,6 @@ import type { ObjectRef } from "~/app/frame/objects.ts";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { linkedSeat } from "~/app/frame/cells.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
@@ -362,7 +376,7 @@ const KIND_WORDS: Record<string, string> = {
 /** What a Tier A token's login names in the directory. */
 export const TOKEN_ROW_WORDS: Record<string, Words> = {
   none: {
-    label: "None",
+    label: "Not bound",
     tone: "neutral",
     hint: "Not bound to a seat. Bind it with crewlet iam create -kind machine -login token:<id> -seat <seat> -grants none.",
   },
@@ -418,6 +432,31 @@ const CONTACT_SURFACES: Record<string, string> = {
   gitlab_username: "GitLab",
 };
 
+/**
+ * A state in a list's column: QUIET WORDS while it is the resting one, a pill
+ * only when it is news. "Active" on every person and every service account,
+ * and a binding state on every token, were pills down whole columns that a
+ * reader learned to skip, so the row that differs was the one they missed.
+ */
+function StateCell({
+  words,
+  fallback,
+  resting,
+}: {
+  words: Words | undefined;
+  fallback: string;
+  resting: boolean;
+}) {
+  if (resting) {
+    return (
+      <span title={words?.hint}>
+        <TableTextCell>{words?.label ?? fallback}</TableTextCell>
+      </span>
+    );
+  }
+  return <WordTag words={words} fallback={fallback} />;
+}
+
 function WordTag({ words, fallback }: { words: Words | undefined; fallback: string }) {
   return (
     <Tag size="sm" variant={words?.tone ?? "neutral"} title={words?.hint}>
@@ -441,74 +480,68 @@ function WordTag({ words, fallback }: { words: Words | undefined; fallback: stri
  * told so with the way to add one. A listing refused for any other reason
  * says nothing about the seats, so the callout claims nothing about them.
  */
-function FirstPerson({
-  waiting,
-  seats,
-}: {
-  waiting: InvitationRow[];
-  seats: RestResult<HumanSeat[]>;
-}) {
+/** The one next step of a company nobody has joined: what to say, and its control. */
+interface FirstStep {
+  body: React.ReactNode;
+  action?: React.ReactNode;
+}
+
+function firstPersonStep(waiting: InvitationRow[], seats: RestResult<HumanSeat[]>): FirstStep {
   if (waiting.length > 0) {
-    return (
-      <Callout variant="neutral" title="Nobody has joined yet">
-        Lost the invitation link? Cancel it and invite again.
-      </Callout>
-    );
+    return { body: "Lost the invitation link? Cancel it and invite again." };
   }
   if (listsNoCompany(seats)) {
-    return (
-      <Callout
-        variant="neutral"
-        title="Nobody has joined yet"
-        action={
-          <ButtonLink size="small" variant="primary" href={href(["agents", "edit"])}>
-            Create the company
-          </ButtonLink>
-        }
-      >
-        No company yet. Create one in Edit org.
-      </Callout>
-    );
+    return {
+      body: "No company yet. Create one in Edit org.",
+      action: (
+        <ButtonLink size="small" variant="primary" href={href(ORG_EDIT_PATH)}>
+          Create the company
+        </ButtonLink>
+      ),
+    };
   }
   if (seats.data && seats.data.length === 0) {
-    return (
-      <Callout
-        variant="neutral"
-        title="Nobody has joined yet"
-        action={
-          <ButtonLink
-            size="small"
-            variant="primary"
-            href={href(["agents", "edit"], { add: "human" })}
-          >
-            Add a human seat
-          </ButtonLink>
-        }
-      >
-        No people in the chart yet. Add one in Edit org.
-      </Callout>
-    );
+    return {
+      body: "No people in the chart yet. Add one in Edit org.",
+      action: (
+        <ButtonLink size="small" variant="primary" href={href(ORG_EDIT_PATH, { add: "human" })}>
+          Add a human seat
+        </ButtonLink>
+      ),
+    };
   }
   const chart = (
-    <ButtonLink size="small" variant="primary" href={href(["agents"])}>
+    <ButtonLink size="small" variant="primary" href={href(["company", "org"])}>
       Open the org chart
     </ButtonLink>
   );
   if (!seats.data) {
-    return (
-      <Callout variant="neutral" title="Nobody has joined yet" action={chart}>
-        This company has no person in it, so nobody can sign in with a password yet. Every person is
-        invited or created on a human seat in the org chart; this node could not list the seats just
-        now, so Human seats below says why. The API token you are using stays the way back in.
-      </Callout>
-    );
+    return {
+      body: (
+        <>
+          This company has no person in it, so nobody can sign in with a password yet. Every person
+          is invited or created on a human seat in the org chart; this node could not list the seats
+          just now, so Human seats below says why. The API token you are using stays the way back
+          in.
+        </>
+      ),
+      action: chart,
+    };
   }
+  return { body: "Invite yourself from your seat in the org chart.", action: chart };
+}
+
+/** The first-run step as a callout, over a directory that already lists somebody. */
+function FirstPerson({ step }: { step: FirstStep }) {
   return (
-    <Callout variant="neutral" title="Nobody has joined yet" action={chart}>
-      Invite yourself from your seat in the org chart.
+    <Callout variant="neutral" title={FIRST_RUN_TITLE} action={step.action}>
+      {step.body}
     </Callout>
   );
 }
+
+/** What a company nobody has joined is told, wherever the step is drawn. */
+const FIRST_RUN_TITLE = "Nobody has joined yet";
 
 /**
  * Whether a read has said something — answered or been refused — rather than
@@ -595,7 +628,104 @@ const READ = DIRECTORY_READ;
 // The screen
 // ---------------------------------------------------------------------------
 
-export function PeopleAndAccess() {
+/**
+ * WHOSE A DIRECTORY ROW IS, as the pages split the directory: a service
+ * account (`machine`) is Settings › Service accounts', and every other
+ * principal (a person, a seat's own principal, the engine's) is Settings ›
+ * People's. One rule, so no row is drawn on both pages and none on neither.
+ */
+function isServiceAccount(row: Pick<DirectoryRow, "kind">): boolean {
+  return row.kind === "machine";
+}
+
+/**
+ * Which page a directory finding belongs on: the page of the principal it
+ * names, or People where it names none (nobody holding Admin is a fact about
+ * the people who could).
+ */
+function findingOn(
+  f: DirectoryFinding,
+  byId: ReadonlyMap<string, DirectoryRow>,
+): "people" | "service-accounts" {
+  const row = f.person ? byId.get(f.person) : undefined;
+  return row && isServiceAccount(row) ? "service-accounts" : "people";
+}
+
+/**
+ * The directory and its report, as People and Service accounts both read
+ * them, each read again after any write that may have moved it.
+ *
+ * A WRITE IS ANNOUNCED ([directoryMoved]) rather than re-read where it is
+ * made, because the person peek beside a list is another tree: an edit or a
+ * removal made there left the list naming what it had replaced until the next
+ * poll.
+ */
+function useDirectory() {
+  const directory = useRest("/iam/people", readDirectory, READ);
+  const check = useRest(
+    "/iam/check",
+    async (signal) => (await rest.get("/iam/check", signal)) as DirectoryCheck | null,
+    READ,
+  );
+  const { reload: reloadDirectory } = directory;
+  const { reload: reloadCheck } = check;
+  useDirectoryMoved(
+    useCallback(() => {
+      for (const reload of [reloadDirectory, reloadCheck]) void reload({ quiet: true });
+    }, [reloadDirectory, reloadCheck]),
+  );
+  return { directory, check };
+}
+
+/**
+ * A list's rows open their principal in the frame's peek, beside the list on
+ * a wide window and as a drawer on a phone, and `[` and `]` step through them
+ * in the order the grid draws them.
+ */
+function usePrincipalPeek(rows: readonly DirectoryRow[]) {
+  const { open } = usePeekControls();
+  usePeekNeighbours(useMemo(() => rows.map((p) => personRef(p.id)), [rows]));
+  return (row: DirectoryRow) => open(personRef(row.id));
+}
+
+/** A refused or loading directory, drawn alike on both pages that read it. */
+function DirectoryState({ directory }: { directory: RestResult<DirectoryRow[]> }) {
+  return (
+    <>
+      {/* A REFUSED DIRECTORY IS NOT AN EMPTY COMPANY: every read here is
+          decided on the same grant, so the first refusal is the whole page's,
+          drawn with the grants that would have admitted the reader. */}
+      {directory.code && !directory.data && (
+        <QueryState
+          error={directory.code}
+          refusal={directory.refusal}
+          detail={directory.error?.detail || undefined}
+          loading={false}
+        />
+      )}
+      {directory.loading && !directory.data && (
+        <Skeleton variant="text" rows={6} label="Loading the directory" />
+      )}
+    </>
+  );
+}
+
+/** The directory's report, narrowed to the findings that belong on this page ([findingOn]). */
+function checkFor(
+  check: RestResult<DirectoryCheck | null>,
+  page: "people" | "service-accounts",
+  byId: ReadonlyMap<string, DirectoryRow>,
+): RestResult<DirectoryCheck | null> {
+  if (!check.data) return check;
+  const findings = (check.data.findings ?? []).filter((f) => findingOn(f, byId) === page);
+  return { ...check, data: { ...check.data, findings } };
+}
+
+/**
+ * Settings › People: who is in the directory, the invitations still open,
+ * and the human seats they come from.
+ */
+export function People() {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   const viewer = useViewer();
@@ -603,50 +733,20 @@ export function PeopleAndAccess() {
   const manages = canManagePeople(viewer.grants);
   const nav = useNavigator();
   const [inviting, setInviting] = useState(false);
-  const [creating, setCreating] = useState(false);
   const [allInvitations, setAllInvitations] = useState(false);
 
-  const directory = useRest("/iam/people", readDirectory, READ);
+  const { directory, check } = useDirectory();
   // THE ONE READING OF THE SEATS every seat surface takes, so a gesture made
-  // on a seat elsewhere on the page — or this page's own — is heard here too.
+  // on a seat elsewhere on the page, or this page's own, is heard here too.
   const seats = useHumanSeats(true);
-  const tokens = useRest("/iam/node-tokens", readNodeTokens, READ);
-  const check = useRest(
-    "/iam/check",
-    async (signal) => (await rest.get("/iam/check", signal)) as DirectoryCheck | null,
-    READ,
-  );
   const invitations = useRest(
     `/iam/invitations?all=${allInvitations}`,
     readInvitations(allInvitations),
     READ,
   );
-  // AFTER A WRITE, EVERY LIST IT MAY HAVE MOVED is read again, quietly: a
-  // cancellation moves the invitations and the vacant seats, a create the
-  // directory, an edit the directory, the seats and the report. A write is
-  // ANNOUNCED ([directoryMoved]) rather than re-read here, because the person
-  // peek beside this list is another tree: an edit or a removal made there
-  // left this list naming what it had replaced until the next poll. The
-  // seats hear it for themselves ([useHumanSeats]).
-  const { reload: reloadDirectory } = directory;
-  const { reload: reloadTokens } = tokens;
-  const { reload: reloadCheck } = check;
   const { reload: reloadInvitations } = invitations;
   useDirectoryMoved(
-    useCallback(() => {
-      for (const reload of [reloadDirectory, reloadTokens, reloadCheck, reloadInvitations]) {
-        void reload({ quiet: true });
-      }
-    }, [reloadDirectory, reloadTokens, reloadCheck, reloadInvitations]),
-  );
-  // A ROW OPENS ITS PERSON IN THE FRAME'S PEEK, beside the list on a wide
-  // window and as a drawer on a phone: the panel was drawn under the stats,
-  // the report and the whole People grid, so the row a reader pressed opened
-  // something below the fold and the page did not move. `[` and `]` step
-  // through the rows as the grid draws them.
-  const { open: openPeek } = usePeekControls();
-  usePeekNeighbours(
-    useMemo(() => (directory.data ?? []).map((p) => personRef(p.id)), [directory.data]),
+    useCallback(() => void reloadInvitations({ quiet: true }), [reloadInvitations]),
   );
   // THE CONTACT IDENTITIES ARE THE COMPANY DOCUMENT'S, which takes Admin. A
   // reader without it is never asked: the refusal is known before the
@@ -655,7 +755,10 @@ export function PeopleAndAccess() {
   const config = useQuery("config", undefined, { enabled: readsConfig });
   const contacts = useMemo(() => contactsByHandle(config.data), [config.data]);
 
-  const people = useMemo(() => directory.data ?? [], [directory.data]);
+  const everyone = useMemo(() => directory.data ?? [], [directory.data]);
+  const byId = useMemo(() => new Map(everyone.map((p) => [p.id, p])), [everyone]);
+  const people = useMemo(() => everyone.filter((p) => !isServiceAccount(p)), [everyone]);
+  const openPeek = usePrincipalPeek(people);
   const active = people.filter((p) => p.stage === "active").length;
   const seatRows = useMemo(() => seats.data ?? [], [seats.data]);
   // VACANT IS HELD BY NOTHING: an open invitation holds its seat as surely as
@@ -663,39 +766,43 @@ export function PeopleAndAccess() {
   // could still invite somebody onto.
   const vacant = seatRows.filter((s) => !s.holder && !s.invitation).length;
   const invited = seatRows.filter((s) => !s.holder && s.invitation).length;
-  const tokenRows = useMemo(() => tokens.data?.tokens ?? [], [tokens.data]);
-  const companyWriters = tokens.data?.companyWriters ?? [];
-  const boundTokens = tokenRows.filter((t) => t.seat).length;
+  // FIRST RUN: nobody has joined, and the first-person step names the one
+  // next step. See [firstPersonStep].
+  const firstRun = health?.identity === "unclaimed" && settled(invitations) && settled(seats);
+  const firstStep = firstRun
+    ? firstPersonStep(
+        (invitations.data ?? []).filter((i) => i.state === "open"),
+        seats,
+      )
+    : null;
+  // NOBODY LISTED: the People card's empty state IS the step. Over an empty
+  // directory the callout, two stat tiles of zero and the card's own "Nobody's
+  // here yet" said one thing four times before any data.
+  const nobody = directory.data !== null && people.length === 0;
 
   return (
     <>
       <PageActions>
-        {/* INVITING IS THE PAGE'S MAIN TASK, so it leads, here: it picks an
-            open seat and opens that seat's invitation, since a person still
-            comes from a seat (see the file's doc). */}
+        {/* INVITING IS THE PAGE'S MAIN TASK, so it leads: it picks an open
+            seat and opens that seat's invitation, since a person still comes
+            from a seat (see the file's doc). */}
+        {/* ONE PRIMARY ACTION FOR ONE STEP: while the first-person callout
+            is drawn its button is the step, and this one steps back. */}
         {manages && (
           <Button
-            variant="primary"
+            variant={firstRun ? "secondary" : "primary"}
+            size="small"
             leadingIcon={<SendGlyph size="sm" />}
             onClick={() => setInviting(true)}
           >
             Invite person
           </Button>
         )}
-        {manages && (
-          <Button
-            variant="secondary"
-            leadingIcon={<PlusGlyph size="sm" />}
-            onClick={() => setCreating(true)}
-          >
-            New service account
-          </Button>
-        )}
         {/* WHERE THIS PAGE LEADS, folded: the trail of identity changes, and
             the chart, where a seat and its contacts are written. */}
         <span className="page-action-folds">
           <Menu
-            label="More on People & access"
+            label="More on People"
             icon={<EllipsisGlyph size="sm" />}
             triggerVariant="ghost"
             align="end"
@@ -705,7 +812,7 @@ export function PeopleAndAccess() {
                 label: "Identity trail",
                 onSelect: () => nav.to(["settings", "audit"], { kind: "identity" }),
               },
-              { key: "edit", label: "Edit org", onSelect: () => nav.to(["agents", "edit"]) },
+              { key: "edit", label: "Edit org", onSelect: () => nav.to(ORG_EDIT_PATH) },
             ]}
           />
         </span>
@@ -722,97 +829,75 @@ export function PeopleAndAccess() {
           onDone={directoryMoved}
         />
       )}
-      {creating && (
-        <ServiceAccountDialog
-          held={viewer.grants}
-          onClose={() => setCreating(false)}
-          onDone={directoryMoved}
-        />
-      )}
 
-      {/* FIRST RUN: nobody has JOINED — `/health`'s `unclaimed` says no person
+      {/* FIRST RUN: nobody has JOINED (`/health`'s `unclaimed` says no person
           is enrolled, and an invitation creates its person only when it is
-          redeemed — and somebody signed in with an API token is reading
-          this. Which step is next turns on the invitations and the seats:
-          with an invitation open, its link; with none, the seat to put
-          yourself on, or — with no human seat at all — adding one. Keyed on
-          `unclaimed` alone, the callout said "nobody has been invited" above
-          the invitation just issued. Drawn once the invitations AND the
-          seats have answered or been refused, so it never says the wrong one
-          first — keyed on the invitations alone, it said "Open the org
-          chart" while the seats were in flight and "Add a human seat" once
-          they answered none. */}
-      {health?.identity === "unclaimed" && settled(invitations) && settled(seats) && (
-        <FirstPerson
-          waiting={(invitations.data ?? []).filter((i) => i.state === "open")}
-          seats={seats}
-        />
-      )}
+          redeemed) and somebody signed in with an API token is reading this.
+          Which step is next turns on the invitations and the seats: with an
+          invitation open, its link; with none, the seat to put yourself on,
+          or, with no human seat at all, adding one. Drawn once the
+          invitations AND the seats have answered or been refused, so it never
+          says the wrong one first. */}
+      {firstStep && !nobody && <FirstPerson step={firstStep} />}
 
-      {/* A REFUSED DIRECTORY IS NOT AN EMPTY COMPANY: every read here is
-          decided on the same grant, so the first refusal is the whole page's,
-          drawn with the grants that would have admitted the reader. */}
-      {directory.code && !directory.data && (
-        <QueryState
-          error={directory.code}
-          refusal={directory.refusal}
-          detail={directory.error?.detail || undefined}
-          loading={false}
-        />
-      )}
-      {directory.loading && !directory.data && (
-        <Skeleton variant="text" rows={6} label="Loading the directory" />
-      )}
+      <DirectoryState directory={directory} />
 
       {directory.data && (
         <>
-          <Card padding="none">
-            <StatGroup columns={3}>
-              <StatCard
-                icon={<UsersGlyph size="xs" />}
-                label="People"
-                value={people.length}
-                sub={`${active} active`}
-              />
-              <StatCard
-                icon={<TriangleAlertGlyph size="xs" />}
-                label="Open seats"
-                value={seats.data ? vacant : EMPTY_VALUE}
-                sub={
-                  seats.data
-                    ? `${invited > 0 ? `${invited} invited · ` : ""}${seatRows.length} total`
-                    : listsNoCompany(seats)
-                      ? "no company yet"
-                      : "not read"
-                }
-              />
-              <StatCard
-                icon={<KeyGlyph size="xs" />}
-                label="API tokens"
-                value={tokens.data ? tokenRows.length : EMPTY_VALUE}
-                sub={tokens.data ? `${boundTokens} with a seat` : "not read"}
-              />
-            </StatGroup>
-          </Card>
+          {!nobody && (
+            <Card padding="none">
+              <StatGroup columns={2}>
+                <StatCard
+                  icon={<UsersGlyph size="xs" />}
+                  label="People"
+                  value={people.length}
+                  sub={`${active} active`}
+                />
+                <StatCard
+                  icon={<TriangleAlertGlyph size="xs" />}
+                  label="Open seats"
+                  value={seats.data ? vacant : EMPTY_VALUE}
+                  sub={
+                    seats.data
+                      ? `${invited > 0 ? `${invited} invited · ` : ""}${seatRows.length} total`
+                      : listsNoCompany(seats)
+                        ? "no company yet"
+                        : "not read"
+                  }
+                />
+              </StatGroup>
+            </Card>
+          )}
 
-          <Findings check={check} people={people} manages={manages} held={viewer.grants} />
+          <Findings
+            check={checkFor(check, "people", byId)}
+            people={everyone}
+            manages={manages}
+            held={viewer.grants}
+          />
 
           <Card padding="none">
             <Card.Header icon={<UsersGlyph size="sm" />} count={people.length}>
-              People
+              <Card.Title>People</Card.Title>
             </Card.Header>
             <DataGrid<DirectoryRow>
               rows={people}
               rowKey={(p) => p.id}
               defaultSort="person"
-              // A ROW IS A REAL LINK AND A PLAIN CLICK PEEKS — the frame's one
-              // rule — and the grid marks the row the peek is open on.
+              // A ROW IS A REAL LINK AND A PLAIN CLICK PEEKS (the frame's one
+              // rule), and the grid marks the row the peek is open on.
               rowHref={(p) => peekHref(personRef(p.id))}
-              onRowActivate={peekRow((p: DirectoryRow) => openPeek(personRef(p.id)))}
-              empty={{
-                title: "Nobody’s here yet",
-                hint: "Invite people from their seat in the org chart.",
-              }}
+              onRowActivate={peekRow(openPeek)}
+              // THE HINT ADDS WHAT THE PAGE NOTE DOES NOT: it repeated the note
+              // word for word 530px below it.
+              empty={
+                firstStep
+                  ? { title: FIRST_RUN_TITLE, hint: firstStep.body, action: firstStep.action }
+                  : {
+                      title: "Nobody’s here yet",
+                      hint: "A person is listed once they accept their invitation, or are created on their seat.",
+                    }
+              }
               columns={[
                 {
                   key: "person",
@@ -846,7 +931,13 @@ export function PeopleAndAccess() {
                   header: "Stage",
                   shrink: true,
                   sortValue: (p) => p.stage,
-                  cell: (p) => <WordTag words={STAGE_WORDS[p.stage]} fallback={p.stage} />,
+                  cell: (p) => (
+                    <StateCell
+                      words={STAGE_WORDS[p.stage]}
+                      fallback={p.stage}
+                      resting={p.stage === "active"}
+                    />
+                  ),
                 },
                 {
                   key: "seat",
@@ -854,12 +945,8 @@ export function PeopleAndAccess() {
                   // A FLOOR, AS EVERY COLUMN THIS LIST KEEPS HAS ONE: beside
                   // the person peek the list is a column of the sheet, and a
                   // flexible track at zero gave way to every content-sized
-                  // one — the seat drew its avatar alone and the grants
-                  // stacked one tag per line, a row ten lines tall — while the
-                  // columns that could have gone stayed. With floors the
-                  // tracks overrun instead, and the grid drops by `drop`. Eight
-                  // rem each, so the full list at 1280 still draws every column
-                  // it drew before.
+                  // one. With floors the tracks overrun instead, and the grid
+                  // drops by `drop`.
                   floor: "8rem",
                   sortValue: (p) => p.seat ?? "",
                   cell: (p) => <SeatHandle seat={p.seat} index={index} />,
@@ -886,8 +973,8 @@ export function PeopleAndAccess() {
           />
 
           <Card padding="none">
-            <Card.Header icon={<UsersGlyph size="sm" />} count={seatRows.length}>
-              Human seats
+            <Card.Header icon={<UserGlyph size="sm" />} count={seatRows.length}>
+              <Card.Title>Human seats</Card.Title>
             </Card.Header>
             {/* NO COMPANY IS NOT A FAILURE: the listing's 409 is the node
                 saying it has no seat to list yet, which the generic refusal
@@ -959,66 +1046,245 @@ export function PeopleAndAccess() {
               </QueryState>
             )}
           </Card>
+        </>
+      )}
+    </>
+  );
+}
 
+/**
+ * Settings › Service accounts: the machine principals, what each holds and the
+ * seat it acts as. A service account signs in with a token it was minted, and
+ * is created here rather than from a seat, since it may hold none.
+ */
+export function ServiceAccounts() {
+  const org = useOrg();
+  const index = useMemo(() => indexOrg(org), [org]);
+  const viewer = useViewer();
+  const manages = canManagePeople(viewer.grants);
+  const [creating, setCreating] = useState(false);
+  const { directory, check } = useDirectory();
+  const everyone = useMemo(() => directory.data ?? [], [directory.data]);
+  const byId = useMemo(() => new Map(everyone.map((p) => [p.id, p])), [everyone]);
+  const accounts = useMemo(() => everyone.filter(isServiceAccount), [everyone]);
+  const openPeek = usePrincipalPeek(accounts);
+  const bound = accounts.filter((a) => a.seat).length;
+
+  return (
+    <>
+      <PageActions>
+        {manages && (
+          <Button
+            variant="primary"
+            size="small"
+            leadingIcon={<PlusGlyph size="sm" />}
+            onClick={() => setCreating(true)}
+          >
+            New service account
+          </Button>
+        )}
+      </PageActions>
+      <PageNote>
+        {manages
+          ? "A service account signs in with its own token, and acts as the seat it is bound to."
+          : needsWords("Changing any of this", [ADMIN])}
+      </PageNote>
+      {creating && (
+        <ServiceAccountDialog
+          held={viewer.grants}
+          onClose={() => setCreating(false)}
+          onDone={directoryMoved}
+        />
+      )}
+
+      <DirectoryState directory={directory} />
+
+      {directory.data && (
+        <>
+          <Findings
+            check={checkFor(check, "service-accounts", byId)}
+            people={everyone}
+            manages={manages}
+            held={viewer.grants}
+          />
           <Card padding="none">
-            <Card.Header icon={<KeyGlyph size="sm" />} count={tokenRows.length}>
-              API tokens on this node
-            </Card.Header>
-            {companyWriters.length > 0 && (
-              <Card.Body padding="md">
-                <CompanyWriters writers={companyWriters} />
-              </Card.Body>
-            )}
-            <QueryState
-              error={tokens.code}
-              refusal={tokens.refusal}
-              detail={tokens.error?.detail || undefined}
-              loading={tokens.loading && !tokens.data}
+            {/* HOW MANY ACT AS A SEAT is the card's fact, said in its head
+                rather than as a footnote floating inside the card under the
+                table. */}
+            <Card.Header
+              icon={<BotGlyph size="sm" />}
+              count={accounts.length}
+              subtitle={
+                accounts.length > 0 ? `${bound} of ${accounts.length} act as a seat` : undefined
+              }
             >
-              <DataGrid<NodeToken>
-                rows={tokenRows}
-                rowKey={(t) => t.id}
-                defaultSort="id"
-                empty={{
-                  title: "This node declares no API token",
-                  hint: "Tokens are set in api.auth.tokens in the bootstrap file and change with a restart.",
-                }}
-                columns={[
-                  {
-                    key: "id",
-                    header: "Label",
-                    shrink: true,
-                    sortValue: (t) => t.id,
-                    cell: (t) => <TableKeyCell value={t.id} />,
-                  },
-                  {
-                    key: "login",
-                    header: "Signs in as",
-                    shrink: true,
-                    drop: 1,
-                    sortValue: (t) => t.login,
-                    cell: (t) => <TableKeyCell value={t.login} />,
-                  },
-                  {
-                    key: "row",
-                    header: "Seat entry",
-                    shrink: true,
-                    sortValue: (t) => t.row,
-                    cell: (t) => <WordTag words={TOKEN_ROW_WORDS[t.row]} fallback={t.row} />,
-                  },
-                  {
-                    key: "seat",
-                    header: "Seat",
-                    floor: "10rem",
-                    sortValue: (t) => t.seat ?? "",
-                    cell: (t) => <BoundSeat seat={t.seat} index={index} />,
-                  },
-                ]}
-              />
-            </QueryState>
+              <Card.Title>Service accounts</Card.Title>
+            </Card.Header>
+            <DataGrid<DirectoryRow>
+              rows={accounts}
+              rowKey={(p) => p.id}
+              defaultSort="account"
+              rowHref={(p) => peekHref(personRef(p.id))}
+              onRowActivate={peekRow(openPeek)}
+              empty={{
+                title: "No service accounts yet",
+                hint: manages
+                  ? "Create one for an automation that signs in on its own."
+                  : "An admin creates one for an automation that signs in on its own.",
+              }}
+              columns={[
+                {
+                  key: "account",
+                  header: "Name",
+                  floor: "12rem",
+                  sortValue: (p) => p.name || p.login || p.id,
+                  cell: (p) => <PersonName row={p} />,
+                },
+                {
+                  key: "login",
+                  header: "Login",
+                  shrink: true,
+                  drop: 2,
+                  sortValue: (p) => p.login ?? "",
+                  cell: (p) =>
+                    p.login ? <TableKeyCell value={p.login} /> : <EmptyValue label="No login" />,
+                },
+                {
+                  key: "stage",
+                  header: "Stage",
+                  shrink: true,
+                  sortValue: (p) => p.stage,
+                  cell: (p) => (
+                    <StateCell
+                      words={STAGE_WORDS[p.stage]}
+                      fallback={p.stage}
+                      resting={p.stage === "active"}
+                    />
+                  ),
+                },
+                // SIZED TO WHAT THEY HOLD, so the name takes the spare width:
+                // as two more flexible tracks, Acts as held a dash in 226px
+                // while the name beside it was cut at 174.
+                {
+                  key: "seat",
+                  header: "Acts as",
+                  shrink: true,
+                  sortValue: (p) => p.seat ?? "",
+                  cell: (p) => <SeatHandle seat={p.seat} index={index} />,
+                },
+                {
+                  key: "grants",
+                  header: "Access",
+                  shrink: true,
+                  drop: 1,
+                  sortValue: (p) => accessLine(p.grants ?? []),
+                  cell: (p) => <TableTextCell>{accessLine(p.grants ?? [])}</TableTextCell>,
+                },
+              ]}
+            />
           </Card>
         </>
       )}
+    </>
+  );
+}
+
+/**
+ * Settings › API tokens: THIS NODE's Tier A tokens, by label, each joined to
+ * the directory row its `token:<id>` login names, and, where the company
+ * document is managed (ADR-0030), the tokens that alone may write it.
+ */
+export function ApiTokens() {
+  const org = useOrg();
+  const index = useMemo(() => indexOrg(org), [org]);
+  const tokens = useRest("/iam/node-tokens", readNodeTokens, READ);
+  const { reload } = tokens;
+  useDirectoryMoved(useCallback(() => void reload({ quiet: true }), [reload]));
+  const tokenRows = useMemo(() => tokens.data?.tokens ?? [], [tokens.data]);
+  const companyWriters = tokens.data?.companyWriters ?? [];
+  return (
+    <>
+      <PageNote>
+        Declared under <InlineCode>api.auth.tokens</InlineCode> in this node&rsquo;s bootstrap file,
+        and changed with a restart. A person&rsquo;s own tokens are on their Account.
+      </PageNote>
+      <Card padding="none">
+        <Card.Header
+          icon={<KeyGlyph size="sm" />}
+          count={tokens.data ? tokenRows.length : undefined}
+        >
+          <Card.Title>API tokens on this node</Card.Title>
+        </Card.Header>
+        {companyWriters.length > 0 && (
+          <Card.Body padding="md">
+            <CompanyWriters writers={companyWriters} />
+          </Card.Body>
+        )}
+        <QueryState
+          error={tokens.code}
+          refusal={tokens.refusal}
+          detail={tokens.error?.detail || undefined}
+          loading={tokens.loading && !tokens.data}
+        >
+          <DataGrid<NodeToken>
+            rows={tokenRows}
+            rowKey={(t) => t.id}
+            defaultSort="id"
+            empty={{
+              title: "This node declares no API token",
+              hint: "Tokens are set in api.auth.tokens in the bootstrap file and change with a restart.",
+            }}
+            columns={[
+              // IDENTIFIERS ARE NEVER CUT: a token's label and the login it
+              // signs in as are what an operator matches against the
+              // bootstrap file, and they read "token:fo…" beside a Seat column
+              // holding a dash in most of the grid. Their tracks are their
+              // own width; the seat takes what is left.
+              {
+                key: "id",
+                header: "Label",
+                width: "max-content",
+                sortValue: (t) => t.id,
+                cell: (t) => <TableKeyCell value={t.id} />,
+              },
+              // THE LOGIN TAKES THE SPARE WIDTH, never cut (its floor is its
+              // content): a Seat column holding a dash took 530px of it.
+              {
+                key: "login",
+                header: "Signs in as",
+                floor: "max-content",
+                sortValue: (t) => t.login,
+                cell: (t) => <TableKeyCell value={t.login} />,
+              },
+              {
+                key: "row",
+                header: "Seat entry",
+                shrink: true,
+                sortValue: (t) => t.row,
+                cell: (t) => (
+                  <StateCell
+                    words={TOKEN_ROW_WORDS[t.row]}
+                    fallback={t.row}
+                    resting={t.row === "none"}
+                  />
+                ),
+              },
+              // A SEAT COLUMN ONLY WHERE A TOKEN IS BOUND TO ONE.
+              ...(tokenRows.some((t) => t.seat)
+                ? [
+                    {
+                      key: "seat",
+                      header: "Seat",
+                      shrink: true,
+                      sortValue: (t: NodeToken) => t.seat ?? "",
+                      cell: (t: NodeToken) => <BoundSeat seat={t.seat} index={index} />,
+                    },
+                  ]
+                : []),
+            ]}
+          />
+        </QueryState>
+      </Card>
     </>
   );
 }
@@ -1186,7 +1452,7 @@ function SeatHandle({ seat, index }: { seat?: string; index: ReturnType<typeof i
   if (!seat) return <EmptyValue label="No seat" />;
   return (
     <Link
-      href={href(["agents", "seats", seat])}
+      href={href(["company", "org", "seats", seat])}
       size="inherit"
       variant="subtle"
       title={index.byHandle.get(seat)?.name}
@@ -1222,10 +1488,15 @@ function Findings({
   const findings = check.data?.findings ?? [];
   const unchecked = check.data?.bindings_unchecked ?? 0;
   const byId = new Map(people.map((p) => [p.id, p]));
+  // NOTHING TO SAY IS NO CARD: "Needs attention 0 / All good." was a whole
+  // bordered section above the one list the page is about. Drawn when there
+  // is a finding, a binding that could not be checked, or a check that
+  // failed; a check still running draws nothing until it has said.
+  if (!check.code && findings.length === 0 && unchecked === 0) return null;
   return (
     <Card padding="none">
       <Card.Header icon={<TriangleAlertGlyph size="sm" />} count={findings.length}>
-        Needs attention
+        <Card.Title>Needs attention</Card.Title>
       </Card.Header>
       <QueryState
         error={check.code}
@@ -1235,11 +1506,6 @@ function Findings({
       >
         <Card.Body padding="md">
           <Stack gap={2}>
-            {findings.length === 0 && (
-              <Text as="p" variant="body" tone="tertiary">
-                All good.
-              </Text>
-            )}
             {findings.map((f, i) => {
               const words = findingWords(f.kind);
               const row = f.person ? byId.get(f.person) : undefined;
@@ -1362,7 +1628,7 @@ function Invitations({
         count={rows.length}
         actions={<Checkbox label="Show used and expired" checked={all} onCheckedChange={onAll} />}
       >
-        Invitations
+        <Card.Title>Invitations</Card.Title>
       </Card.Header>
       <QueryState
         error={invitations.code}
@@ -1378,10 +1644,15 @@ function Invitations({
             title: all ? "No invitations" : "No open invitations",
           }}
           columns={[
+            // THE ADDRESS IS THE ONE FLEXIBLE TRACK, and is never cut (its
+            // floor is its content): it is what a reader matches against the
+            // mail they sent, and it ended in an ellipsis at 1440 while Seat
+            // and Access beside it held 203px each of air. They size to what
+            // they hold.
             {
               key: "email",
               header: "Address",
-              floor: "12rem",
+              floor: "max-content",
               sortValue: (i) => i.email ?? "",
               cell: (i) =>
                 i.sealed ? (
@@ -1398,6 +1669,7 @@ function Invitations({
             {
               key: "seat",
               header: "Seat",
+              shrink: true,
               drop: 2,
               sortValue: (i) => i.seat ?? "",
               cell: (i) => <BoundSeat seat={i.seat} index={index} />,
@@ -1405,6 +1677,7 @@ function Invitations({
             {
               key: "grants",
               header: "Access",
+              shrink: true,
               drop: 1,
               sortValue: (i) => accessLine(i.grants ?? []),
               cell: (i) => <TableTextCell>{accessLine(i.grants ?? [])}</TableTextCell>,
@@ -1518,7 +1791,7 @@ function personRef(id: string): ObjectRef {
 
 /**
  * One principal, beside the directory it was found in — the frame's peek on
- * `person:{id}`, opened from a row of People & access, and their only page
+ * `person:{id}`, opened from a row of People, and their only page
  * (`KindSpec.peekIsPage`).
  *
  * IN THE PEEK, NOT UNDER THE LIST. It was a card drawn after the stats, the

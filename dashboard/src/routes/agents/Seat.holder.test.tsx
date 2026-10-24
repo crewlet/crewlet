@@ -188,12 +188,15 @@ afterEach(() => {
 // ticked, because a person comes to use them. Mutation: send the body without
 // the seat and the engine refuses `seat_required`.
 test("a vacant seat offers its invitation to an administrator, for this seat", async () => {
-  location.hash = "#/agents/seats/sam";
+  location.hash = "#/company/org/seats/sam";
   const sent = engine();
   await mount("sam", ["admin"]);
-  const note = (await screen.findByText("This seat is open.")).closest(
-    ".crewlet-callout",
+  // THE OVERVIEW'S EMPTY STATE, in the column a person's day would fill: a
+  // notice above an empty column read as a page that had failed to load.
+  const note = (await screen.findByText("This seat is open")).closest(
+    ".crewlet-empty-state",
   ) as HTMLElement;
+  expect(document.querySelector(".prof-notices .crewlet-callout")).toBeNull();
   fireEvent.click(await within(note).findByRole("button", { name: "Invite" }));
   const dialog = await screen.findByRole("dialog", { name: "Invite someone as Sam Support" });
   expect(within(dialog).queryByLabelText("Seat")).toBeNull();
@@ -215,12 +218,15 @@ test("a vacant seat offers its invitation to an administrator, for this seat", a
 // and the link the engine answers is shown once, beside the login it took.
 // Mutation: post the create unkeyed and a retry makes a second person.
 test("a vacant seat creates a person on itself, keyed, and shows their first password link", async () => {
-  location.hash = "#/agents/seats/sam";
+  location.hash = "#/company/org/seats/sam";
   const sent = engine();
   await mount("sam", ["admin"]);
-  const note = (await screen.findByText("This seat is open.")).closest(
-    ".crewlet-callout",
+  // THE OVERVIEW'S EMPTY STATE, in the column a person's day would fill: a
+  // notice above an empty column read as a page that had failed to load.
+  const note = (await screen.findByText("This seat is open")).closest(
+    ".crewlet-empty-state",
   ) as HTMLElement;
+  expect(document.querySelector(".prof-notices .crewlet-callout")).toBeNull();
   fireEvent.click(await within(note).findByRole("button", { name: "Add person" }));
   const dialog = await screen.findByRole("dialog", { name: "Add someone as Sam Support" });
   fireEvent.change(within(dialog).getByLabelText("Email address"), {
@@ -247,12 +253,13 @@ test("a vacant seat creates a person on itself, keyed, and shows their first pas
 // AN INVITED SEAT IS NOT VACANT: it names the invitation that holds it and
 // offers its cancellation — never a second invitation onto it.
 test("an invited seat names its invitation, and cancelling it frees the seat", async () => {
-  location.hash = "#/agents/seats/lee";
+  location.hash = "#/company/org/seats/lee";
   const sent = engine();
   await mount("lee", ["admin"]);
   const note = (await screen.findByText("lee@example.com")).closest(
-    ".crewlet-callout",
+    ".crewlet-empty-state",
   ) as HTMLElement;
+  expect(within(note).getByText("An invitation holds this seat")).toBeTruthy();
   expect(within(note).queryByRole("button", { name: "Invite" })).toBeNull();
   fireEvent.click(within(note).getByRole("button", { name: "Cancel invitation" }));
   const dialog = await screen.findByRole("dialog", { name: "Cancel this invitation?" });
@@ -268,21 +275,24 @@ test("an invited seat names its invitation, and cancelling it frees the seat", a
 // and a page without them said nothing about why. Mutation: return null on
 // an error and the banner is gone.
 test("a seat listing that failed is said on the page", async () => {
-  location.hash = "#/agents/seats/sam";
+  location.hash = "#/company/org/seats/sam";
   engine(json(500, { error: "internal", message: "boom" }));
   await mount("sam", ["admin"]);
   expect(await screen.findByText(/The engine failed to answer/)).toBeTruthy();
-  expect(screen.queryByText("This seat is open.")).toBeNull();
+  expect(screen.queryByText("This seat is open")).toBeNull();
   expect(screen.queryByRole("button", { name: "Invite" })).toBeNull();
 });
 
 test("a reader without Admin reads the fact and is offered no gesture", async () => {
-  location.hash = "#/agents/seats/sam";
+  location.hash = "#/company/org/seats/sam";
   engine();
   await mount("sam", ["tracker", "knowledge"]);
-  const note = (await screen.findByText("This seat is open.")).closest(
-    ".crewlet-callout",
+  // THE OVERVIEW'S EMPTY STATE, in the column a person's day would fill: a
+  // notice above an empty column read as a page that had failed to load.
+  const note = (await screen.findByText("This seat is open")).closest(
+    ".crewlet-empty-state",
   ) as HTMLElement;
+  expect(document.querySelector(".prof-notices .crewlet-callout")).toBeNull();
   expect(within(note).queryByRole("button")).toBeNull();
   // NOBODY HOLDS IT, so nobody's day or work is drawn: stats about nobody.
   // The CONTROL is the held seat below, whose assigned work is drawn.
@@ -291,7 +301,7 @@ test("a reader without Admin reads the fact and is offered no gesture", async ()
 });
 
 test("a held seat names its holder and their stage", async () => {
-  location.hash = "#/agents/seats/ana";
+  location.hash = "#/company/org/seats/ana";
   engine();
   await mount("ana", ["admin"], "sam");
   const note = (await screen.findByText("ana.lee")).closest(".crewlet-callout") as HTMLElement;
@@ -308,7 +318,7 @@ test("a held seat names its holder and their stage", async () => {
 // Mutation: compare the seat with anybody but the reader's own and every line
 // here goes red.
 test("the holder reading their own seat is spoken to, and is not offered to message it", async () => {
-  location.hash = "#/agents/seats/ana";
+  location.hash = "#/company/org/seats/ana";
   engine();
   await mount("ana", ["admin"]);
   const note = (await screen.findByText("ana.lee")).closest(".crewlet-callout") as HTMLElement;
@@ -325,12 +335,15 @@ test("the holder reading their own seat is spoken to, and is not offered to mess
 // masks it for them — and reads the fact with no gesture. Mutation: gate the
 // listing on Admin again and the fact is gone.
 test("a reader holding no app still reads who holds the seat", async () => {
-  location.hash = "#/agents/seats/sam";
+  location.hash = "#/company/org/seats/sam";
   const sent = engine();
   await mount("sam", []);
   expect(sent.filter((s) => s.path === "/iam/seats")).toHaveLength(1);
-  const note = (await screen.findByText("This seat is open.")).closest(
-    ".crewlet-callout",
+  // THE OVERVIEW'S EMPTY STATE, in the column a person's day would fill: a
+  // notice above an empty column read as a page that had failed to load.
+  const note = (await screen.findByText("This seat is open")).closest(
+    ".crewlet-empty-state",
   ) as HTMLElement;
+  expect(document.querySelector(".prof-notices .crewlet-callout")).toBeNull();
   expect(within(note).queryByRole("button")).toBeNull();
 });

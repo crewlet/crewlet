@@ -37,7 +37,7 @@ import { windowWords } from "~/routes/spend/model.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";
 import { WidgetCard, defineWidgets, useHomeRange } from "~/routes/home/board/kit.tsx";
 
-/** As Spend › Budgets re-reads the counters: the gate reports every 15s. */
+/** As Company › Budgets re-reads the counters: the gate reports every 15s. */
 const BUDGETS_POLL_MS = 30_000;
 
 /** The window's spend, over Home's range, as Spend's overview asks it. */
@@ -60,7 +60,7 @@ function Overview() {
   const viewer = useViewer();
   if (tokens.error) {
     return (
-      <WidgetCard title="Token spend" from="spend">
+      <WidgetCard title="Token spend" from="settings-spend">
         <div className="home-widget-pad">
           <QueryState
             error={tokens.error}
@@ -89,7 +89,7 @@ function MonthlyBudget() {
   const budget = useOrgBudget();
   const viewer = useViewer();
   return (
-    <WidgetCard title="Monthly budget" from="spend-budgets">
+    <WidgetCard title="Monthly budget" from="budgets">
       <div className="home-widget-pad">
         <BudgetTile budget={budget} mayConfigure={mayChangeConfig(viewer)} />
       </div>
@@ -120,7 +120,7 @@ function NearLimit() {
   );
   const unread = answer !== null && answer.durable === false;
   return (
-    <WidgetCard title="Seats near a limit" from="spend-budgets">
+    <WidgetCard title="Seats near a limit" from="budgets">
       <QueryState
         error={budgets.error}
         refusal={budgets.refusal}
@@ -177,8 +177,8 @@ function ExpensiveTasks() {
 
 export const widgets = defineWidgets([
   {
-    key: "spend.overview",
-    from: "spend",
+    key: "settings.spend",
+    from: "settings-spend",
     label: "Token spend",
     description: "Tokens used over Home's range",
     icon: CoinsGlyph,
@@ -188,8 +188,8 @@ export const widgets = defineWidgets([
     Component: Overview,
   },
   {
-    key: "spend.budget",
-    from: "spend-budgets",
+    key: "budgets.month",
+    from: "budgets",
     label: "Monthly budget",
     description: "This month's tokens against the limit",
     icon: SlidersVerticalGlyph,
@@ -199,8 +199,8 @@ export const widgets = defineWidgets([
     Component: MonthlyBudget,
   },
   {
-    key: "spend.near-limit",
-    from: "spend-budgets",
+    key: "budgets.near-limit",
+    from: "budgets",
     label: "Seats near a limit",
     description: "Seats close to or past a token limit",
     icon: TriangleAlertGlyph,
@@ -210,8 +210,8 @@ export const widgets = defineWidgets([
     Component: NearLimit,
   },
   {
-    key: "spend.by-model",
-    from: "spend",
+    key: "settings.spend-by-model",
+    from: "settings-spend",
     label: "Spend by model",
     description: "Tokens by model provider",
     icon: CpuGlyph,
@@ -221,8 +221,8 @@ export const widgets = defineWidgets([
     Component: SpendByModel,
   },
   {
-    key: "spend.expensive-tasks",
-    from: "spend-tasks",
+    key: "settings.expensive-tasks",
+    from: "settings-spend-tasks",
     label: "Most expensive tasks",
     description: "The tasks that used the most tokens",
     icon: LayersGlyph,

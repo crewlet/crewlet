@@ -4,6 +4,8 @@
  * the trail and by G then P.
  */
 
+import type { OrgServices } from "~/contract/services.ts";
+import { withDerived } from "~/test/org.ts";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -284,10 +286,14 @@ describe("the panel, as data", () => {
 // In the frame
 // ---------------------------------------------------------------------------
 
-function mount(answers: Record<string, unknown>) {
+function mount(answers: Record<string, unknown>, services?: OrgServices, asked: string[] = []) {
   const store = new Store();
+  // THE SOCKET'S FIRST FRAME CARRIES THE ORG, as a served frame's always
+  // does: what the company runs is known before a read is asked.
+  store.applyOrg(withDerived({ name: "Acme", roles: [], ...(services ? { services } : {}) }));
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
+    asked.push(what);
     if (what === "viewer") {
       return Promise.resolve({
         login: "ada",
@@ -382,4 +388,16 @@ describe("in the frame", () => {
     expect(within(lenses).getByRole("link", { name: /^Tasks/ }).textContent).toContain("10");
     expect(document.title).toBe("Projects · All projects · Crewlet");
   });
+});
+
+// A HIDDEN WORK ADDRESS STILL NAMES A SCOPE, and the switcher asked the
+// company's projects on it where the company runs Jira, and was refused.
+// Mutation: gate the read on the reader's grant alone and it is asked.
+test("on a company running Jira the switcher asks no projects, even on a Work address", async () => {
+  location.hash = "#/work/tasks";
+  const asked: string[] = [];
+  mount({}, { tracker: "jira", knowledge: "native" }, asked);
+  await settle();
+  expect(asked.filter((w) => w === "work_projects")).toEqual([]);
+  location.hash = "#/";
 });

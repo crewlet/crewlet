@@ -22,6 +22,7 @@
  * says which access would open it.
  */
 
+import { withDerived } from "~/test/org.ts";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { App } from "./App.tsx";
@@ -119,6 +120,9 @@ async function mount(
   answer: (what: string) => Promise<unknown> = () => new Promise(() => {}),
 ) {
   const store = new Store();
+  // A SERVED SESSION'S FIRST FRAME CARRIES THE ORG; a refused one's never
+  // comes, so nothing about what the company runs is known to it.
+  if (refused === null) store.applyOrg(withDerived({ name: "Acme", roles: [] }));
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = answer;
   const dial = vi.spyOn(socket, "start");
@@ -193,34 +197,50 @@ test("a session holding no app is dialled, and its sidebar locks the apps by nam
   );
   expect(row(/^Work/).querySelector("[title='Needs Tracker access']")).not.toBeNull();
   expect(row(/^Knowledge/).querySelector("[title='Needs Knowledge access']")).not.toBeNull();
-  expect(row(/^Home/).querySelector(".side-locked")).toBeNull();
-  expect(row(/^Agents/).querySelector(".side-locked")).toBeNull();
+  expect(row(/^Home/).querySelector(".crewlet-locked-label")).toBeNull();
+  expect(row(/^Principles/).querySelector(".crewlet-locked-label")).toBeNull();
+  expect(row(/^Org chart/).querySelector(".crewlet-locked-label")).toBeNull();
   // NOTHING SAYS IT WAS REFUSED: there is no refusal to say.
   expect(screen.queryByText("You can’t use Crewlet right now")).toBeNull();
   expect(screen.queryByText(/Blocked|no access/i)).toBeNull();
 });
 
-// A LOCK GOES WHERE THE CLOSED THING IS. Settings' first group, You — the
-// reader's Account and Appearance — reads nothing of the company, so the
-// Settings row is never locked, and the reader's own Appearance is drawn.
-// Mutation: lock a row for any closed section and the Settings row is locked.
-test("a session holding no app finds Settings unlocked, and its own Appearance drawn", async () => {
-  location.hash = "#/settings/appearance";
+// A LOCK GOES WHERE THE CLOSED THING IS. Spend's readings are every reader's,
+// so the Settings row is never locked though most of its sections are, and
+// Spend's row in the column is open. Mutation: lock a row for any closed
+// section and the Settings row is locked.
+test("a session holding no app finds Settings unlocked, and Spend open in it", async () => {
+  location.hash = "#/settings/spend";
   await mount(null);
-  const foot = await screen.findByRole("navigation", { name: "Settings" });
-  const settings = within(foot).getByRole("link", { name: /^Settings/ });
-  expect(settings.querySelector(".side-locked")).toBeNull();
-  expect(settings.textContent).toBe("Settings");
-  expect(await screen.findByRole("radiogroup", { name: "Mode" })).toBeDefined();
+  // THE FOOT'S SETTINGS, its glyph beside the reader's own row, names no lock,
+  // and says the reader is in Settings.
+  const settings = await waitFor(() =>
+    within(document.querySelector<HTMLElement>(".crewlet-app-shell__rail-foot")!).getByRole(
+      "link",
+      {
+        name: "Settings",
+      },
+    ),
+  );
+  expect(settings.getAttribute("title")).toBe("Settings");
+  expect(settings.getAttribute("aria-current")).toBe("page");
+  // AND IT OPENS WHERE THE READER MAY READ: Models & keys is Admin's, so the
+  // row leads to Token spend rather than to a refusal ([landingPath]).
+  await waitFor(() => expect(settings.getAttribute("href")).toBe("#/settings/spend"));
+  const column = await screen.findByRole("navigation", { name: "Settings sections" });
+  const spend = within(column)
+    .getAllByRole("link")
+    .find((a) => a.getAttribute("href") === "#/settings/spend");
+  expect(spend?.textContent).toBe("Token spend");
 });
 
 // ONE READING OF WHAT THE READER HOLDS: Settings' column draws its locks off
-// the same reading the sidebar does — the session's, while the viewer has
-// not answered — so every section Admin opens is locked naming Admin, and the
-// reader's own and General are not. Mutation: hand the column the viewer's
-// grants and no row says it is locked.
-test("Settings' column is locked where Admin is, and nowhere else", async () => {
-  location.hash = "#/settings";
+// the same reading the sidebar does (the session's, while the viewer has not
+// answered), so every section a grant opens is locked naming that grant, and
+// Spend is not. Mutation: hand the column the viewer's grants and no row says
+// it is locked.
+test("Settings' column is locked where a grant is, and nowhere else", async () => {
+  location.hash = "#/settings/models";
   await mount(null);
   const column = await screen.findByRole("navigation", { name: "Settings sections" });
   const sections = new Map(
@@ -232,7 +252,7 @@ test("Settings' column is locked where Admin is, and nowhere else", async () => 
   for (const a of rows) {
     const at = a.getAttribute("href") ?? "";
     if (locked.includes(a)) {
-      expect(a.textContent, at).toMatch(/, needs Admin access/);
+      expect(a.textContent, at).toMatch(/, Needs (Admin|Tracker) access/);
     } else {
       expect(a.textContent, at).not.toMatch(/needs/);
     }

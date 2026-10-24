@@ -1,11 +1,12 @@
 # The Org Builder
 
-The dashboard's Agents workspace has an **Edit org** section
-(`#/agents/edit`, the button on the org chart) for editing the organization of a running company, and
-for creating the company on an engine that has none. It edits the same
-company document `GET /config` serves and `PATCH /config` writes, so every
-change it makes is an ordinary configuration revision: stored, activated,
-audited, and applied by every node on its own tick.
+The dashboard's Org chart, under Company, has an **Edit org** section
+(`#/company/org/edit`, the button on the org chart) for editing the
+organization of a running company, and for creating the company on an engine
+that has none. It edits the same company document `GET /config` serves and
+`PATCH /config` writes, so every change it makes is an ordinary configuration
+revision: stored, activated, audited, and applied by every node on its own
+tick.
 
 The engine is the validator. The builder checks every draft by sending the
 engine a dry run of exactly the write a save would send, and draws the
@@ -100,10 +101,14 @@ node's **Open seat**, say), opens that node's editor, since the builder cannot
 tell that address from a link somebody sent you. A link naming an address the
 draft does not hold selects nothing and opens nothing.
 
+The company's mission, vision and standing policies are not opened here: they
+are written on **Company › Principles**, and every way into them links there
+(see [The company](#the-company)).
+
 ## Creating the company
 
 On an engine with no active configuration the builder opens on a form: the
-company's name and mission, a shape to start from, and a seat for yourself —
+company's name, a shape to start from, and a seat for yourself:
 **Add a seat for yourself**, ticked from the start and named "Founder" (rename
 it for the role; the seat outlives whoever holds it), with an optional contact
 identity for it.
@@ -112,7 +117,7 @@ identity for it.
 person holds exactly one human seat for as long as they exist, and is put on
 it by an invitation or an administrator's create that names it — so the seat
 you add here is the one you put yourself on once the company exists: sign in
-with the deployment's API token, open **Agents › Org chart** and press
+with the deployment's API token, open **Company › Org chart** and press
 **Invite** or **Add person** on it (see [How the first person
 exists](../concepts/identity-and-access.md#how-the-first-person-exists)). A
 company that declares no human seat can admit nobody, the operator included,
@@ -125,7 +130,7 @@ seat.
 |---|---|
 | New company | A chief executive and three units (Engineering, Product, Marketing), each with one agent seat reporting to the chief executive |
 | Established company | A chief executive, Engineering with a Reliability team, Product with a Design team, and Go to Market, with each unit's lead reporting up the chain |
-| Start empty | The charter alone |
+| Start empty | The company alone |
 
 The Established company template asks whether unit leads are **agents** (seats
 the engine runs) or **people** (human seats). A template never invents a
@@ -147,9 +152,11 @@ company is never applied to one that exists, and never replayed onto it.
 **Keep my draft** leaves it on screen to read, read-only, with the same offer
 beside it.
 
-After a successful create, two steps remain that the dashboard cannot take:
-connecting chat and trackers in Settings › Integrations, and adding a model
-provider, which no dashboard screen writes. The engine applies the new company
+After a successful create, three steps remain. **Open Principles** opens
+Company › Principles in edit, to write the mission, the vision and the standing
+policies every agent reads. The builder cannot take the other two: connecting
+chat and trackers in Company › Integrations, and adding a model provider, which
+no dashboard screen writes. The engine applies the new company
 without one, but until the provider is added no agent seat takes a turn:
 whatever is sent to a seat waits on its inbox and runs once the provider
 exists. The panel gives the exact `crewlet config import` and `PATCH /config`
@@ -182,7 +189,7 @@ surface. An agent's character and colour are the ones its author chose (see
 [A seat](#a-seat)), the original Crewlet in purple until somebody does: they
 are never a hash of a name, so a renamed seat keeps them. The
 selected node's card takes the accent on its own edge. The live org chart
-(Agents › Org chart) draws the same nodes, marks and hue, with what each seat
+(Company › Org chart) draws the same nodes, marks and hue, with what each seat
 is doing under its name, and both are drawn on the same dotted field, which
 says it pans before you drag it.
 
@@ -307,8 +314,9 @@ seat added in the draft has no screen until it is saved. A new address
 rewrites the URL rather than leaving a link pointing at something that no
 longer answers to it. A link that arrives naming a node opens its editor as
 well (see [Arriving from a link](#arriving-from-a-link)); selecting a node
-inside the builder never does. Selecting the company itself carries the
-charter's **Edit** and the same **Add** menu; it names no filter, because the
+inside the builder never does. Selecting the company itself carries its
+**Edit principles**, **Rename company** and the same **Add** menu (see
+[The company](#the-company)); it names no filter, because the
 builder is already about that company. Where the builder cannot write (a
 guarded or read-only posture, or a draft waiting to be updated) the actions
 stay in the menu and are marked unavailable, so what the builder does is still
@@ -380,7 +388,7 @@ another character and colour before adding it.
 
 **A new human seat is vacant until somebody is put on it**, which no save
 does: who holds a seat is the identity directory's, not the company
-document's. Once the save is applied, the seat's card in **Agents › Org
+document's. Once the save is applied, the seat's card in **Company › Org
 chart** reads **Open seat** — to everybody, since who holds a seat is the
 overview's — and an administrator invites somebody onto it or creates a person on
 it from there, its peek, its page or the **Person** section of its editor's
@@ -411,7 +419,7 @@ parts:
 | Human seat | **Profile** (name, email, handle and kind; the **Person** who holds the seat; and the role: goal, backstory, responsibilities), **Contact** (contact identities and availability), **Work** (manages, and Delete) |
 | Unit | **Profile** (name, key, type, purpose, goals), **Leadership** (lead and channel), **Work** (owns, references, schedules), **Advanced** (tool credentials, and Delete) |
 
-The charter is short enough for one panel. A tab carries one marker, the most
+The company's name form is one field, with no tabs. A tab carries one marker, the most
 urgent: the number of problems in it, else a warning, else a dot for changes
 you have made there and not applied. A field that stops **Apply** marks its
 tab the same way, and pressing Enter in any field opens the tab that holds the
@@ -440,12 +448,34 @@ are listed at its top. A warning (a lead that names no seat, for example)
 does not stop a save, so it is listed at the top as a caution with the path
 it names, never shown as a field's error.
 
-### The charter
+### The company
+
+The company's **mission**, **vision** and **standing policies** are written on
+**Company › Principles**, in place, and nowhere else. So the company's
+**Edit** (its node's pencil, Enter on it, or **Edit principles** in its menu)
+leaves the builder for that page, opened in edit for a reader who may write
+the principles. A reader who may not is offered **Open principles**, which
+opens the same page to read. Your draft is kept for when you come back (see
+[A draft survives a reload](#a-draft-survives-a-reload)); if the principles
+were saved meanwhile, your next save meets the newer revision and is
+[updated onto it](#when-somebody-else-saves-first) like any other.
+The builder never records or sends a change to the principles, so a save from
+here cannot put an older copy of them back.
+
+What the builder writes about the company itself is its name, through
+**Rename company** in the company's menu:
 
 | You can change | Notes |
 |---|---|
 | Name | Renaming the company asks you to confirm what it does. An agent seat's id is derived from the company name and its handle, so every agent seat gets a new id: each seat's diary and onboarding progress stay under the old id and are no longer read, and every agent seat onboards again. Handles, mailboxes and episodes are unchanged. |
-| Mission, vision, policies | Policies are an ordered list. |
+
+While you are [creating the company](#creating-the-company) it has no
+Principles page yet, so its **Edit** opens the name form in the builder; write
+the principles once it is created, from the next steps the builder shows.
+
+A problem the engine reports with the mission, the vision or a policy is listed
+with the problems about the whole configuration, with **Open Principles**
+beside it.
 
 Everything else in the company document (providers, integrations, workers,
 MCP servers, sandbox and scheduling settings) is edited in the configuration
@@ -660,7 +690,7 @@ seat goes:
   enrolled for (it holds a credential for that tool's `mcp_env` server, or its
   unit does), and the secret store entries its config references, stay until
   you decommission them. They are listed by name, never by value, with links to
-  **Settings › Integrations** and **Settings › Secrets**. A seat added in this draft was never saved,
+  **Company › Integrations** and **Settings › Secrets**. A seat added in this draft was never saved,
   so nothing exists for it outside the chart.
 - **The mailbox, coding runs and memory.** A removed agent seat's mailbox, and
   the mail still addressed to it, is kept for 24 hours after the engine applies
@@ -691,7 +721,7 @@ kept. A human seat somebody holds is deleted only once nothing holds it
 would do before it does it:
 
 - **What changes:** the units and seats added, removed, renamed, moved and
-  edited, and the charter fields.
+  edited, and the company's new name when the save renames it.
 - **What follows:** the consequences the engine attaches to those changes,
   computed from the hierarchy it derives for the base and for the draft:
   a replaced seat (listed as the old seat removed and the new one added,
@@ -747,8 +777,8 @@ A save stores and activates a revision. It does not apply it: every node
 applies on its own reconcile tick (about every fifteen seconds, spread a
 little per node so a fleet does not apply at once), and a node can refuse a
 revision and go on serving the previous one. Until this node has
-applied it, the org chart, Teams and Settings › General still draw the
-previous organization, and say so.
+applied it, the org chart and Teams still draw the previous organization,
+and say so.
 
 The strip under the toolbar follows the revision:
 
@@ -807,7 +837,7 @@ When the builder opens and finds a kept draft:
 
 - **Made against the revision that is still active:** a banner offers **Keep
   the draft** or **Discard it**, and nothing can be edited until you choose.
-  Coming back to Edit org from another section of Agents restores the draft
+  Coming back to Edit org from another section of the Org chart restores the draft
   without asking.
 - **Made against an older revision:** the draft is restored through the same
   update described below, and **Discard the kept draft** removes it instead.
@@ -834,7 +864,7 @@ draft. A draft of more than 500 changes is not kept either; save it in steps.
 
 Every check is conditional on the revision the draft was started from, so a
 revision saved by somebody else (another operator, `crewlet config import`, a
-setup flow in Settings › Integrations) is found at the next check, not at the
+setup flow in Company › Integrations) is found at the next check, not at the
 save. The status reads "The configuration changed", editing pauses, and a
 banner offers **Show what changed** (the newer revision against the one the
 draft was started from — to a reader who may read the company document) and
@@ -900,7 +930,7 @@ company. The engine judges every write
 part by part and refuses what reaches outside the units the caller leads,
 naming each part, and the builder marks each on the seat or unit it is about:
 
-- the company's charter, its settings and its top level, and the unit's own
+- the company's name, its settings and its top level, and the unit's own
   lead and place (a move or a deletion), which decide who leads it. The
   builder draws these controls disabled with the reason, and the Lead of a
   unit inside it stays the lead's to change;
@@ -924,7 +954,7 @@ changes** and **Copy as YAML** read the company document and are not offered.
 The same rule reaches a lead outside the builder, for the seats in the units
 they lead: a seat's profile shows its settings, read through
 `GET /config/roles/{handle}` and its unit's own fields, and its token ceilings
-are changed in Spend › Budgets and with **Raise budget** where a decision about
+are changed in Company › Budgets and with **Raise budget** where a decision about
 a stopped seat offers it, through `PUT /config/roles/{handle}`. The company's
 own ceilings stay `admin`'s.
 

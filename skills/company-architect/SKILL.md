@@ -447,7 +447,7 @@ crewlet run crewlet.yaml -company company.yaml
    seat, and the API token is what puts the first person on theirs — so
    its `grants` must list `admin` (`grants: [admin]`), which runs the
    company and includes both apps, and the node's `api.auth.admin` must be
-   `serve`. Sign in at the dashboard with the API token, open **Agents › Org
+   `serve`. Sign in at the dashboard with the API token, open **Company › Org
    chart**, open the founder's seat (drawn **Vacant**) and press
    **Invite**, then open the link it shows once and choose a login and a
    password — or, from a shell, `crewlet iam invite <address> -seat

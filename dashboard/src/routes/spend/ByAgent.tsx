@@ -24,6 +24,7 @@
  * thousand pixels of scrolling before the next card.
  */
 
+import { BotGlyph } from "@crewlethq/icons/glyphs";
 import { Card, EmptyValue, Meter, TableEntityCell, TableNumberCell } from "@crewlethq/ui";
 import { plainSeat } from "~/app/frame/cells.tsx";
 import { href } from "~/app/router.tsx";
@@ -95,15 +96,15 @@ export function ByAgent({
 
   return (
     <Card className="spend-card spend-agents" padding="none">
-      <div className="spend-card-head">
-        <h2 className="spend-title">By agent</h2>
-        <span className="spend-caption">
-          {words ? `${words} · ` : ""}
-          {capped
-            ? "budget is today\u2019s per-seat allowance"
-            : "no seat has a daily token ceiling"}
-        </span>
-      </div>
+      <Card.Header
+        subtitlePlacement="below"
+        icon={<BotGlyph size="sm" />}
+        subtitle={`${words ? `${words} · ` : ""}${
+          capped ? "budget is today\u2019s per-seat allowance" : "no seat has a daily token ceiling"
+        }`}
+      >
+        <Card.Title>By agent</Card.Title>
+      </Card.Header>
       <DataGrid
         name="agents"
         rows={loading && rows.length === 0 ? undefined : rows}

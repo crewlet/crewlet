@@ -50,11 +50,13 @@ import { CONTACT_IDENTITIES } from "./model/templates.ts";
 // Shapes
 // ---------------------------------------------------------------------------
 
+/**
+ * The company's form: its name, the one company field the builder writes
+ * (`model/document.ts`'s `COMPANY_FIELDS`). Its principles are written on
+ * Company › Principles.
+ */
 export interface CompanyForm {
   readonly name: string;
-  readonly mission: string;
-  readonly vision: string;
-  readonly policies: readonly string[];
 }
 
 export interface UnitForm {
@@ -147,9 +149,6 @@ const scheduleToggles = (data: ConfigRole | ConfigUnit): Record<string, boolean>
 export function companyForm(company: CompanyDocument): CompanyForm {
   return {
     name: text(company.name),
-    mission: text(company.mission),
-    vision: text(company.vision),
-    policies: strings(company.policies),
   };
 }
 
@@ -308,9 +307,6 @@ export function companyParts(initial: CompanyForm, form: CompanyForm): EditPartI
   const set = [
     // A rename, like a seat's or a unit's, comes only from the box.
     ...(renames(initial.name, form.name) ? textPart(["name"], initial.name, form.name, line) : []),
-    ...textPart(["mission"], initial.mission, form.mission, prose),
-    ...textPart(["vision"], initial.vision, form.vision, prose),
-    ...changed(["policies"], listValue(initial.policies), listValue(form.policies)),
   ];
   return set.length > 0 ? [{ type: "updateCompany", set }] : [];
 }

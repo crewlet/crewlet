@@ -150,7 +150,7 @@ function spaceFacts({
       // A LINK ONLY WHERE THERE IS ONE PLACE TO GO: two units may share a space.
       // BY ITS ID, which a rename does not move: a unit's name is prose two
       // units may share, and a link by it opened whichever came first.
-      path: units?.length === 1 && lead?.id ? ["agents", "teams", lead.id] : undefined,
+      path: units?.length === 1 && lead?.id ? ["company", "org", "teams", lead.id] : undefined,
     },
     { label: "Created", value: <TableDateCell value={space.created_at} now={now} /> },
   ];

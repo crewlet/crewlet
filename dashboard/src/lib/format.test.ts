@@ -14,6 +14,7 @@ import { describe, expect, test } from "vitest";
 // unnoticed: it goes green on whatever is written, not on what is correct.
 import { EMPTY_VALUE } from "@crewlethq/ui";
 import {
+  fmtSetting,
   asSentence,
   configValueKind,
   elapsedMs,
@@ -439,4 +440,15 @@ describe("the engine's words as a sentence", () => {
     expect(openSentence("isn't an address")).toBe("Isn't an address");
     expect(openSentence("done, then saved")).toBe("Done, then saved");
   });
+});
+
+// A SETTING READS AS IT WAS WRITTEN: whole days, hours or minutes where the
+// seconds divide, and the measured reading only where they do not.
+test("a configured duration reads in the largest unit that divides it", () => {
+  expect(fmtSetting(604_800)).toBe("7 days");
+  expect(fmtSetting(43_200)).toBe("12 hours");
+  expect(fmtSetting(3_600)).toBe("1 hour");
+  expect(fmtSetting(300)).toBe("5 minutes");
+  expect(fmtSetting(90)).toBe("1m 30s");
+  expect(fmtSetting(0)).toBe("0ms");
 });

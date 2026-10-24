@@ -34,6 +34,7 @@ import {
   type BuilderApi,
   type BuilderDerived,
   type BuilderViewHandle,
+  type CompanyEdit,
 } from "./BuilderContext.tsx";
 import type { NodeKey } from "./model/keys.ts";
 import { countingKeys } from "./model/testkit.ts";
@@ -42,6 +43,7 @@ import { builderReducer, type BuilderAction, type BuilderState } from "./model/r
 /** The spies standing in for what the Builder owns. */
 export interface BuilderSpies {
   openEditor: ReturnType<typeof vi.fn<BuilderApi["openEditor"]>>;
+  openCompanyRename: ReturnType<typeof vi.fn<() => void>>;
   openAdd: ReturnType<typeof vi.fn<BuilderApi["openAdd"]>>;
   openMove: ReturnType<typeof vi.fn<(key: NodeKey) => void>>;
   openDelete: ReturnType<typeof vi.fn<(key: NodeKey) => void>>;
@@ -52,6 +54,7 @@ export interface BuilderSpies {
 export function builderSpies(): BuilderSpies {
   return {
     openEditor: vi.fn(),
+    openCompanyRename: vi.fn(),
     openAdd: vi.fn(),
     openMove: vi.fn(),
     openDelete: vi.fn(),
@@ -76,6 +79,7 @@ export function BuilderHarness({
   spies,
   probe,
   readOnly = false,
+  principles = "write",
   identities = NO_IDENTITIES,
   agents = [],
   sandboxes = [],
@@ -88,6 +92,8 @@ export function BuilderHarness({
   spies: BuilderSpies;
   probe: HarnessProbe;
   readOnly?: boolean;
+  /** What the company node's Edit opens (`BuilderApi.principles`): a saved company's page to write, by default. */
+  principles?: CompanyEdit;
   identities?: ReadonlySet<string>;
   agents?: AgentRow[];
   sandboxes?: SandboxEntry[];
@@ -154,6 +160,8 @@ export function BuilderHarness({
       documentProblems: [],
       selection: { key: selected, select: setSelected },
       openEditor: spies.openEditor,
+      openCompanyRename: spies.openCompanyRename,
+      principles,
       openAdd: spies.openAdd,
       openMove: spies.openMove,
       openDelete: spies.openDelete,
@@ -166,7 +174,19 @@ export function BuilderHarness({
       keys,
       registerView,
     }),
-    [state, dispatch, selected, readOnly, identities, agents, sandboxes, keys, registerView, spies],
+    [
+      state,
+      dispatch,
+      selected,
+      readOnly,
+      principles,
+      identities,
+      agents,
+      sandboxes,
+      keys,
+      registerView,
+      spies,
+    ],
   );
 
   return (

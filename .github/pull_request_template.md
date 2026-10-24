@@ -4,20 +4,7 @@
 
 ## Checklist
 
-- [ ] `make check` passes — gofmt, `go mod tidy -diff`, the DCO sign-off,
-      `go vet`, golangci-lint, the build, the full suite under `-race`, and
-      a cross-compile of every release target
-- [ ] A suite that *skipped* is not a suite that passed (see CONTRIBUTING.md,
-      "A skip is not a pass") — and neither is one `make check` never runs:
-      it names those on the way out
-- [ ] Tests added/updated for the change
-- [ ] If `dashboard/` changed: the dashboard's three gates pass
-      (`make dashboard-lint dashboard-check dashboard-test`) and
-      `static/dashboard` is rebuilt and committed with `make dashboard &&
-      git add -A -- static/dashboard`
-- [ ] Docs updated (`docs/`) — config, CLI, or behavior changes are reflected
-- [ ] Every commit is signed off — `git commit -s` (see CONTRIBUTING.md,
-      "Sign your work"); CI's `sign-off` job fails the build without it
-- [ ] Commit subjects are `type(scope): summary` (see CONTRIBUTING.md)
-- [ ] The PR title takes the same form, and the summary after the prefix reads
-      as a release note — it is what appears in the generated release notes
+- [ ] `make check` passes
+- [ ] Tests and docs cover the change
+- [ ] Commit subjects and the PR title are `type(scope): summary`, and the
+      title reads as a release note

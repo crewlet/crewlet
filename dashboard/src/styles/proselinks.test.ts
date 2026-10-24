@@ -48,7 +48,7 @@ const ALLOWED: Allowed[] = [
     where: "routes/work/shapes/Grid.tsx",
     why:
       "The same `N more →` link at the foot of a band, drawn by " +
-      "`.grid-band-foot a` for the reason the board's entry above gives. The " +
+      "`.crewlet-data-grid__band-foot a` for the reason the board's entry above gives. The " +
       "shapes draw one answer and the link means the same thing in all of them.",
   },
 ];

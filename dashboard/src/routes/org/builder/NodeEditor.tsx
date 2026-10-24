@@ -1,5 +1,5 @@
 /**
- * The node editor: the company's charter, a unit, or a seat, in a side sheet.
+ * The node editor: a unit, a seat, or the company's name, in a side sheet.
  *
  * FORM-LOCAL, APPLIED AS ONE OPERATION. Every field is held in a local form
  * until Apply, which records the fields that changed as one `edit` (see
@@ -731,8 +731,19 @@ function Owns({
 // The company
 // ---------------------------------------------------------------------------
 
-const COMPANY_FIELDS: Segment[][] = [["name"], ["mission"], ["vision"], ["policies"]];
+const COMPANY_FIELDS: Segment[][] = [["name"]];
 
+/**
+ * Renaming the company: the one company field the builder writes.
+ *
+ * THE COMPANY'S PRINCIPLES ARE NOT HERE. Its mission, vision and standing
+ * policies are written on Company › Principles, in place, and the company
+ * node's Edit goes there (`Builder.tsx`'s `openEditor`). What stays is the
+ * name, because a rename is an organization change rather than a principle:
+ * the engine derives every agent's id from it and every seat onboards again,
+ * which is what this form's acknowledgement and the review's rename cause
+ * say. So the form is reached by the company node's Rename company.
+ */
 function CompanyEditor({ onClose }: { onClose: () => void }) {
   const api = useBuilder();
   const { state } = api;
@@ -742,17 +753,16 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
   const { refusal, apply } = useApply(api, COMPANY_KEY, onClose);
   const [acknowledged, setAcknowledged] = useState(false);
   const { errorFor, rest } = placeOnFields(placedOn(api, COMPANY_KEY), COMPANY_FIELDS);
-  // A LEAD'S DRAFT of one unit holds the company's name and nothing else of
-  // it: the charter is shown, and changing it is the company grant's.
+  // A LEAD'S DRAFT of one unit shows the company's name and may not change it:
+  // that is the company grant's.
   const limit = scopeLimit(state.scope, state.draft, COMPANY_KEY, "edit");
   const disabled = api.readOnly || limit !== null;
 
-  // ASKED OF THE FORM THAT RENAMES, AND ONLY THEN. The question is about what
-  // this Apply does, so a name nobody typed in (a draft renamed by an earlier
-  // edit, a stored name with a space around it) asks nothing of a mission
-  // edit. It compares with the SAVED name as the engine holds it, untrimmed,
-  // because the engine derives agent ids from exactly that string, and a
-  // name typed back to the saved one is no rename at all.
+  // ASKED OF THE FORM THAT RENAMES, AND ONLY THEN. A name nobody typed in (a
+  // draft renamed by an earlier edit, a stored name with a space around it)
+  // asks nothing. It compares with the SAVED name as the engine holds it,
+  // untrimmed, because the engine derives agent ids from exactly that string,
+  // and a name typed back to the saved one is no rename at all.
   const savedName = typeof state.base.document?.name === "string" ? state.base.document.name : "";
   const renaming =
     savedName !== "" && renames(initial.name, form.name) && form.name.trim() !== savedName;
@@ -765,14 +775,12 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
         : null);
 
   const parts = companyParts(initial, form);
-  // ONE PANEL, NO TABS: the charter is four fields, and a tab row over four
-  // fields is chrome with nothing to sort.
   return (
     <EditorShell
       title={form.name.trim() || "Company"}
-      subtitle="Company charter"
+      subtitle="Company name"
       icon={<NodeGlyph kind="company" size="md" />}
-      name="the charter"
+      name="the company's name"
       dirty={dirty}
       blocked={blocked}
       blockedPath={["name"]}
@@ -788,6 +796,7 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
         label="Company name"
         value={form.name}
         onChange={(name) => set({ name })}
+        autoFocus={!disabled}
         disabled={disabled}
         error={errorFor(["name"])}
       />
@@ -802,34 +811,10 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
           disabled={disabled}
         />
       )}
-      <ConfigField
-        label="Mission"
-        kind="multiline"
-        value={form.mission}
-        onChange={(mission) => set({ mission })}
-        required={false}
-        disabled={disabled}
-        error={errorFor(["mission"])}
-      />
-      <ConfigField
-        label="Vision"
-        kind="multiline"
-        value={form.vision}
-        onChange={(vision) => set({ vision })}
-        required={false}
-        disabled={disabled}
-        error={errorFor(["vision"])}
-      />
-      <ListInput
-        label="Policies"
-        itemName="policy"
-        multiline
-        value={form.policies}
-        onChange={(policies) => set({ policies })}
-        optional
-        disabled={disabled}
-        error={withProblems(errorFor(["policies"]))}
-      />
+      <p className="builder-note muted">
+        The mission, the vision and the standing policies are written on{" "}
+        <ScreenLink to="principles">Company › Principles</ScreenLink>.
+      </p>
     </EditorShell>
   );
 }

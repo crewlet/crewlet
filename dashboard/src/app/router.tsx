@@ -137,7 +137,7 @@ export function parseHash(raw: string): Route {
 }
 
 export function buildHash(
-  path: string[],
+  path: readonly string[],
   query?: URLSearchParams | Record<string, string>,
 ): string {
   const p = path.map((s) => encodeURIComponent(s)).join("/");
@@ -370,14 +370,14 @@ export function useUnloadGuard(holding: boolean): void {
 
 export interface Navigator {
   /** A new screen. Pushes. */
-  to: (path: string[], query?: URLSearchParams | Record<string, string>) => void;
+  to: (path: readonly string[], query?: URLSearchParams | Record<string, string>) => void;
   /** A lens or a tab within this screen. Pushes — the reader called it. */
   section: (key: string, value: string) => void;
   /** A chip, a sort, a search box. Replaces — it is the same screen. */
   filter: (patch: Record<string, string | null>) => void;
   /** The same place said differently — a canonical form, a resolved default.
    *  Replaces, so Back does not land on the spelling the reader never chose. */
-  replace: (path: string[], query?: URLSearchParams | Record<string, string>) => void;
+  replace: (path: readonly string[], query?: URLSearchParams | Record<string, string>) => void;
   back: () => void;
 }
 
@@ -390,7 +390,7 @@ export function useNavigator(): Navigator {
 }
 
 /** An href for an anchor, so a link is a real link — middle-clickable. */
-export function href(path: string[], query?: Record<string, string>): string {
+export function href(path: readonly string[], query?: Record<string, string>): string {
   return buildHash(path, query);
 }
 

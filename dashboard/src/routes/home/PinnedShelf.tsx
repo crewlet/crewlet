@@ -12,13 +12,14 @@
  * same way in both places.
  */
 
+import { useServicesRun, useServicesAsk } from "~/lib/services.ts";
 import { useMemo, type ReactNode } from "react";
 import { Button, Card, PinTile, Tag } from "@crewlethq/ui";
 import { PinGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { resolve } from "~/app/routes.ts";
-import { workspaceRow, type Workspace } from "~/app/nav.ts";
-import { glyphFor } from "~/ui/glyph.tsx";
+import { pathShown, workspaceRow, type Workspace } from "~/app/nav.ts";
+import { glyphFor } from "@crewlethq/icons/glyphs/registry";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { StateBadge } from "~/components/common.tsx";
 import { useStarred, useToggleStar, type Star } from "~/lib/starred.ts";
@@ -46,7 +47,12 @@ function useFacts(): (star: Star) => Facts {
   const index = useMemo(() => indexOrg(org), [org]);
   const agents = useAgents();
   const viewer = useViewer();
-  const projects = useQuery("work_projects", { limit: 50 }, { enabled: viewer.tracker });
+  const ask = useServicesAsk();
+  const projects = useQuery(
+    "work_projects",
+    { limit: 50 },
+    { enabled: viewer.tracker && ask.tracker },
+  );
   return (star) => {
     const route = resolve(star.path);
     const glyph = (name: Workspace | "") => {
@@ -104,24 +110,34 @@ function useSuggestions(pins: readonly Star[]): Omit<Star, "at">[] {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   const viewer = useViewer();
-  const projects = useQuery("work_projects", { limit: 10 }, { enabled: viewer.tracker });
+  const runs = useServicesRun();
+  const ask = useServicesAsk();
+  const projects = useQuery(
+    "work_projects",
+    { limit: 10 },
+    { enabled: viewer.tracker && ask.tracker },
+  );
   const pinned = new Set(pins.map((p) => keyOf(p.path)));
   const out: Omit<Star, "at">[] = [];
   const offer = (s: Omit<Star, "at">) => {
     if (!pinned.has(keyOf(s.path)) && !out.some((o) => keyOf(o.path) === keyOf(s.path)))
       out.push(s);
   };
-  for (const r of recents) if (resolve(r.path).resolved && r.path.length > 1) offer(r);
+  for (const r of recents) {
+    if (resolve(r.path).resolved && r.path.length > 1 && pathShown(r.path, runs)) offer(r);
+  }
   for (const seat of index.seats)
-    if (seat.kind !== "human")
-      offer({ path: seatPath(seat), label: seat.name, workspace: "agents" });
+    if (seat.kind !== "human") offer({ path: seatPath(seat), label: seat.name, workspace: "org" });
   for (const p of projects.data?.projects ?? [])
     if (!p.archived) offer({ path: projectPath(p.key), label: p.name || p.key, workspace: "work" });
   return out.slice(0, 4);
 }
 
 export function PinnedShelf() {
-  const pins = useStarred();
+  // NOT A PLACE THE COMPANY DOES NOT RUN THE SERVICE FOR, whose star is kept
+  // until it runs it again.
+  const runs = useServicesRun();
+  const pins = useStarred().filter((s) => pathShown(s.path, runs));
   const facts = useFacts();
   const toggle = useToggleStar();
   const suggestions = useSuggestions(pins);
