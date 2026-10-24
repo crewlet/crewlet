@@ -56,7 +56,7 @@ func (e *artifactsEstate) Artifact(_ context.Context, id artifacts.ID, _ statelo
 func (e *artifactsEstate) List(context.Context, artifactsdomain.Viewer, artifactsdomain.ListQuery) (
 	artifactsdomain.ListPage, error) {
 	h := e.heads()
-	return artifactsdomain.ListPage{Items: []artifactsdomain.ListItem{{Head: h[qaPage]}, {Head: h[qaPrivate]}},
+	return artifactsdomain.ListPage{Contents: []artifactsdomain.ListItem{{Head: h[qaPage]}, {Head: h[qaPrivate]}},
 		Total: 2}, nil
 }
 
@@ -211,7 +211,7 @@ func TestTheArtifactsQuestionsAnswerThroughTheOneAdmission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if items := list.(artifactsapi.ListPage).Items; len(items) != 1 || items[0].ID != qaPage {
+	if items := list.(artifactsapi.ListPage).Contents; len(items) != 1 || items[0].ID != qaPage {
 		t.Errorf("bob's listing: %+v", items)
 	}
 

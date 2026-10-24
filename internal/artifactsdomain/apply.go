@@ -110,7 +110,36 @@ const (
 	// RefusedSourceTaken is a create on a source address another artifact
 	// holds.
 	RefusedSourceTaken Refusal = "source_taken"
+
+	// RefusedFolderGone is a create into, or a move into or under, a folder
+	// that is no longer live (removed since the writer decided), or a
+	// folder record naming a folder this log holds no live row for.
+	RefusedFolderGone Refusal = "folder_gone"
+
+	// RefusedFolderCycle is a folder move under itself or a folder beneath
+	// it.
+	RefusedFolderCycle Refusal = "folder_cycle"
+
+	// RefusedFolderDepth is a folder create or move that would place a
+	// folder deeper than the depth stamped on the record.
+	RefusedFolderDepth Refusal = "folder_depth"
+
+	// RefusedFolderNameTaken is a folder create, rename or move that would
+	// give two live siblings one name key.
+	RefusedFolderNameTaken Refusal = "folder_name_taken"
+
+	// RefusedFolderLimit is a folder create past the live folders a company
+	// holds, or past the children one folder holds.
+	RefusedFolderLimit Refusal = "folder_limit"
 )
+
+// The folder refusals above are decided by the WRITER from its snapshot of the
+// one tree subject, so for a well-behaved writer the apply never writes them:
+// it checks them again because a record is applied on every node, and a
+// writer's mistake must be a refusal every node agrees on rather than rows
+// that differ. An adoption's refusal of an absent version is
+// [RefusedVersionNotFound]. A brand's contrast is never an apply's question:
+// it is the writer's, refused before the append ([ErrBrandContrast]).
 
 // The Tier A keys a quota refusal names, so the operator reading it knows what
 // to raise.
@@ -142,6 +171,39 @@ type HistorySummary struct {
 	Limit int64    `json:"limit,omitempty"`
 	Usage int64    `json:"usage,omitempty"`
 	Key   string   `json:"key,omitempty"`
+
+	// FromFolder and ToFolder are a move's folders by id, empty for the top
+	// level: never a name, so the row discloses nothing about a folder its
+	// reader cannot see.
+	FromFolder string `json:"from_folder,omitempty"`
+	ToFolder   string `json:"to_folder,omitempty"`
+}
+
+// FolderHistorySummary is what a folder history row says beyond its columns:
+// folder ids and counts, never a name or an artifact.
+type FolderHistorySummary struct {
+	// Parent is the parent a create, a move or a removal names, and From
+	// the parent a move took the folder from; empty for the top level.
+	Parent string `json:"parent,omitempty"`
+	From   string `json:"from,omitempty"`
+
+	// Created is the chain a create made, parents first.
+	Created []string `json:"created,omitempty"`
+
+	// Folders and Artifacts are what a removal moved up to its parent.
+	Folders   int `json:"folders,omitempty"`
+	Artifacts int `json:"artifacts,omitempty"`
+}
+
+// BrandHistorySummary is what a brand history row says beyond its columns.
+type BrandHistorySummary struct {
+	// CSSSha is the adopted stylesheet's hash, and Files how many files the
+	// adoption serves.
+	CSSSha string `json:"css_sha,omitempty"`
+	Files  int    `json:"files,omitempty"`
+
+	// Label is the label the adoption set on the kit's version.
+	Label string `json:"label,omitempty"`
 }
 
 // historyPruneBatch is how many history rows past [artifacts.HistoryRetention]
@@ -341,6 +403,10 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		rows, err = a.applyAsset(ctx, tx, c)
 	case KindReader:
 		rows, err = a.applyReader(ctx, tx, c)
+	case KindFolder:
+		rows, err = a.applyFolder(ctx, tx, c)
+	case KindBrand:
+		rows, err = a.applyBrand(ctx, tx, c)
 	default:
 		// A KIND THIS BUILD DOES NOT KNOW REACHES HERE ONLY AT A VERSION IT
 		// CAN READ, which is a writer publishing a kind it never declared;

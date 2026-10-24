@@ -19,7 +19,7 @@ func (n *node) listedFor(item string) []artifacts.ID {
 		n.t.Fatalf("list for %s: %v", item, err)
 	}
 	var out []artifacts.ID
-	for _, it := range got.Items {
+	for _, it := range got.Contents {
 		out = append(out, it.ID)
 	}
 	return out

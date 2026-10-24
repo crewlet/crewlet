@@ -27,6 +27,9 @@ import (
 // one source for the first time contend there and one wins, the other told
 // [ErrSourceTaken].
 func (w *Writer) Create(ctx context.Context, c Call, in CreateInput) (Published, error) {
+	if in.Folder != "" {
+		return Published{}, fmt.Errorf("%w: create an artifact in a folder", ErrNotBuilt)
+	}
 	if err := validCall(c); err != nil {
 		return Published{}, err
 	}

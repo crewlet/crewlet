@@ -86,6 +86,11 @@ type CreateInput struct {
 	// Shares are granted with the create, such as the requester as editor
 	// when an agent creates.
 	Shares []artifacts.Share
+
+	// Folder is the folder the artifact is created in, empty for the top
+	// level: a live folder the caller's decision already admitted filing
+	// into (contributor on it).
+	Folder string
 }
 
 // PublishInput is one new version of an artifact.
@@ -407,6 +412,16 @@ func (w *Writer) refusal(ctx context.Context, id string, reason Refusal, s Histo
 		return fmt.Errorf("%w: artifact %s is not in the trash", ErrInvalid, id)
 	case RefusedPurging:
 		return fmt.Errorf("%w: %s", ErrPurging, id)
+	case RefusedFolderGone:
+		return fmt.Errorf("%w: it was removed while this write was decided", ErrFolderNotFound)
+	case RefusedFolderCycle:
+		return ErrFolderCycle
+	case RefusedFolderDepth:
+		return ErrFolderDepth
+	case RefusedFolderNameTaken:
+		return ErrFolderNameTaken
+	case RefusedFolderLimit:
+		return ErrFolderLimit
 	}
 	return fmt.Errorf("%w: the log refused this write as %s", ErrInvalid, reason)
 }

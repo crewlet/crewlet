@@ -3,12 +3,14 @@ package artifactsdomain_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/foldername"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objstore"
@@ -29,9 +31,11 @@ func TestTheArtifactsDomainIsACertifiedDomain(t *testing.T) {
 			// Migrate is nil: these tables ship in the replicated estate's
 			// own migration (0043), so a fresh store already has them.
 			Encode: encodeSuiteRecord,
-			// THE VERSIONED-FIELD TABLE is empty: every field this domain
-			// writes is in the base format.
+			// THE VERSIONED-FIELD TABLE names what version 2 added (the
+			// folder tree, the brand, a move, a create's folder and a
+			// version's brand pin), and carrying builds a record of each.
 			Fields:     artifactsdomain.VersionedFields(),
+			Carrying:   carryingSuiteRecord,
 			Kinds:      kindNames(),
 			Rows:       artifactsdomain.NewRows,
 			Write:      suiteWrite,
@@ -186,8 +190,95 @@ func suitePayload(kind artifactsdomain.ObjectKind, artifact, id string) (
 			artifactsdomain.Generation{V: 1, Generation: 2, By: "suite", StreamAt: suiteStamped}
 	case artifactsdomain.KindBarrier:
 		return artifactsdomain.BarrierSubject(), artifactsdomain.OpBarrier, nil
+	case artifactsdomain.KindFolder:
+		return artifactsdomain.FolderSubject(), artifactsdomain.OpCreate, folderCreatePayload(id)
+	case artifactsdomain.KindBrand:
+		return artifactsdomain.BrandSubject(), artifactsdomain.OpAdopt, brandAdoptPayload(artifact)
 	}
 	return artifactsdomain.Subject{Kind: kind, ID: id}, artifactsdomain.OpPatch, nil
+}
+
+// folderCreatePayload is one top-level folder's create, named for id.
+func folderCreatePayload(id string) artifactsdomain.FolderCreatePayload {
+	name, key, err := foldername.Check("Suite " + id)
+	if err != nil {
+		panic(err)
+	}
+	return artifactsdomain.FolderCreatePayload{
+		V: 1, Owner: "suite", OwnerKind: iam.ActorHuman, MaxDepth: artifacts.MaxFolderDepth,
+		Folders: []artifactsdomain.FolderSpec{{
+			ID: artifactsdomain.FolderIDOf("suite-folder-"+id, 0).String(), Name: name, NameKey: key,
+		}},
+		Authority: suiteAuthority(),
+	}
+}
+
+// brandAdoptPayload is an adoption of version 1 of kit.
+func brandAdoptPayload(kit string) artifactsdomain.BrandAdoptPayload {
+	css := []byte(":root{--brand-primary:#2450e6}")
+	sum := objstore.HashOf(css)
+	return artifactsdomain.BrandAdoptPayload{
+		V: 1, Kit: kit, KitVersion: 1, BrandJSON: []byte(`{"v":1}`), CSSSha: string(sum),
+		Files: []artifactsdomain.BrandFile{{
+			Slot: "css", ContentType: "text/css; charset=utf-8",
+			Object: suiteObject("brand-css-"+kit, string(css)),
+		}},
+		Authority: suiteAuthority(),
+	}
+}
+
+// carryingSuiteRecord is a record carrying exactly one versioned field, its
+// version left for the encoder to stamp.
+func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
+	artifact := suiteArtifact("carrying")
+	var (
+		subject = artifactsdomain.ArtifactSubject(mustID(artifact))
+		op      artifactsdomain.OpKind
+		payload any
+	)
+	switch field.Name {
+	case "Subject.Kind folder":
+		subject, op, payload = artifactsdomain.FolderSubject(), artifactsdomain.OpCreate,
+			folderCreatePayload("carrying")
+	case "Subject.Kind brand":
+		subject, op, payload = artifactsdomain.BrandSubject(), artifactsdomain.OpAdopt,
+			brandAdoptPayload(artifact)
+	case "RecordEnvelope.Op move":
+		op, payload = artifactsdomain.OpMove, artifactsdomain.MovePayload{
+			V: 1, To: artifactsdomain.FolderIDOf("suite-folder-carrying", 0).String(),
+			Authority: suiteAuthority(),
+		}
+	case "CreatePayload.Folder":
+		p := createPayload(artifact)
+		p.Folder = artifactsdomain.FolderIDOf("suite-folder-carrying", 0).String()
+		op, payload = artifactsdomain.OpCreate, p
+	case "VersionPayload.Brand":
+		p := createPayload(artifact)
+		p.Version.Brand = brandAdoptPayload(artifact).CSSSha
+		op, payload = artifactsdomain.OpCreate, p
+	default:
+		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
+	}
+	body, err := marshalPayload(payload)
+	if err != nil {
+		return nil, err
+	}
+	return artifactsdomain.Encode(artifactsdomain.MutationRecord{
+		RecordEnvelope: artifactsdomain.RecordEnvelope{
+			OpID: "suite-carrying", Subject: subject, Op: op, CreatedAt: suiteStamped,
+			Gen: 1, Writer: "suite-node", Scope: artifactsdomain.ScopeSet{Subject: true},
+		},
+		Mutation: body, Actor: "suite", ActorKind: iam.ActorOperator, OperatorID: "suite",
+	})
+}
+
+// mustID parses a suite artifact id.
+func mustID(raw string) artifacts.ID {
+	id, err := artifacts.ParseID(raw)
+	if err != nil {
+		panic(err)
+	}
+	return id
 }
 
 // suiteAuthority is the stamp every suite record that consumes quota carries.

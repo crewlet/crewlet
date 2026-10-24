@@ -85,6 +85,8 @@ func (a *Applier) applyArtifact(ctx context.Context, tx *sql.Tx, c applyContext)
 		return a.applyTransfer(ctx, tx, c, id, p)
 	case LinkPayload:
 		return a.applyLinkWorkItem(ctx, tx, c, id, p)
+	case MovePayload:
+		return a.applyMove(ctx, tx, c, id, p)
 	case StatusPayload:
 		switch c.record.Op {
 		case OpTrash:

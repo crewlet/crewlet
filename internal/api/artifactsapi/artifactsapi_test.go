@@ -746,19 +746,19 @@ func TestAListingIsFilteredForTheViewersRelations(t *testing.T) {
 		t.Errorf("the estate was asked for %+v", v)
 	}
 	var ids []artifacts.ID
-	for _, item := range got.Items {
+	for _, item := range got.Contents {
 		ids = append(ids, item.ID)
 	}
 	if !slices.Equal(ids, []artifacts.ID{page, report}) {
 		t.Errorf("lee is listed %v, want the page (ENG) and the report (led), not jane's notes", ids)
 	}
-	if got.Items[0].Shares == nil || got.Items[0].Role != artifacts.RoleEditor {
-		t.Errorf("an editor's row is shaped %+v", got.Items[0].Artifact)
+	if got.Contents[0].Shares == nil || got.Contents[0].Role != artifacts.RoleEditor {
+		t.Errorf("an editor's row is shaped %+v", got.Contents[0].Artifact)
 	}
 
 	admin, err := g.svc.Gate().List(t.Context(), g.estate, person("ada", iam.GrantAdmin), artifactsdomain.ListQuery{})
-	if err != nil || len(admin.Items) != 0 {
-		t.Errorf("an administrator's listing surfaced %d private artifacts (%v)", len(admin.Items), err)
+	if err != nil || len(admin.Contents) != 0 {
+		t.Errorf("an administrator's listing surfaced %d private artifacts (%v)", len(admin.Contents), err)
 	}
 }
 

@@ -66,7 +66,63 @@ var (
 	// ErrBadCursor refuses a cursor this reader did not mint.
 	ErrBadCursor = errors.New("artifactsdomain: that cursor is not one this " +
 		"listing minted")
+
+	// ErrFolderNotFound reports a folder that does not exist, was removed,
+	// or that the caller cannot see: one answer for all three, so a folder's
+	// existence is never disclosed to a caller it is not visible to.
+	ErrFolderNotFound = errors.New("artifactsdomain: no such folder")
+
+	// ErrFolderNameTaken reports a folder name another folder in the same
+	// place already holds, compared case-insensitively.
+	ErrFolderNameTaken = errors.New("artifactsdomain: a folder in that place " +
+		"already has that name")
+
+	// ErrFolderCycle reports a folder moved into itself or a folder inside
+	// it.
+	ErrFolderCycle = errors.New("artifactsdomain: a folder cannot move into " +
+		"itself or a folder inside it")
+
+	// ErrFolderDepth reports a create or a move that would place a folder
+	// deeper than folders may go (artifacts.MaxFolderDepth).
+	ErrFolderDepth = errors.New("artifactsdomain: that would place a folder " +
+		"deeper than folders may go")
+
+	// ErrFolderLimit reports a create past the folders a company holds
+	// (artifacts.MaxFolders) or one folder holds (artifacts.MaxFolderChildren).
+	ErrFolderLimit = errors.New("artifactsdomain: there are already as many " +
+		"folders there as there may be")
+
+	// ErrBrandContrast reports an adoption whose text colour does not reach
+	// brandformat.MinTextContrast on its light ground: the one contrast pair
+	// that refuses rather than warns.
+	ErrBrandContrast = errors.New("artifactsdomain: the brand's text colour " +
+		"does not contrast enough with its light ground to be read")
+
+	// ErrNotBuilt reports a folder or brand operation whose body has not
+	// landed yet. It exists ONLY on the integration branch the folder and
+	// brand work is assembled on, where the foundation declares every
+	// signature before the bodies arrive; the branch that merges carries
+	// no call that answers it, and no declaration of it.
+	ErrNotBuilt = errors.New("artifactsdomain: this folder or brand operation " +
+		"is not built on this branch yet")
 )
+
+// FolderAmbiguous is a folder path that names more than one folder the caller
+// can see (409 `folder_ambiguous`): every candidate, so the caller can choose
+// one by id.
+type FolderAmbiguous struct {
+	Path       string
+	Candidates []Folder
+}
+
+func (e *FolderAmbiguous) Error() string {
+	ids := make([]string, len(e.Candidates))
+	for i, c := range e.Candidates {
+		ids[i] = c.ID
+	}
+	return fmt.Sprintf("artifactsdomain: %q names %d folders you can see (%s); "+
+		"name the one you mean by its id", e.Path, len(e.Candidates), strings.Join(ids, ", "))
+}
 
 // VersionMoved is a publish based on a head that has moved (412
 // `version_moved`): it carries the live head and its version, so the caller

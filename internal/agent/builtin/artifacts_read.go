@@ -135,13 +135,13 @@ func (t *listArtifacts) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	q := artifactsdomain.ListQuery{
-		Scope:  artifactsdomain.ListScope(strings.TrimSpace(argString(args, "scope"))),
-		Kind:   artifacts.Kind(strings.TrimSpace(argString(args, "kind"))),
-		Q:      strings.TrimSpace(argString(args, "query")),
-		Sort:   artifactsdomain.ListSort(strings.TrimSpace(argString(args, "sort"))),
-		Cursor: strings.TrimSpace(argString(args, "after")),
-		Limit:  argInt(args, "limit", defaultArtifactList),
-		Fresh:  seatRead,
+		Scope:             artifactsdomain.ListScope(strings.TrimSpace(argString(args, "scope"))),
+		Kind:              artifacts.Kind(strings.TrimSpace(argString(args, "kind"))),
+		Q:                 strings.TrimSpace(argString(args, "query")),
+		Sort:              artifactsdomain.ListSort(strings.TrimSpace(argString(args, "sort"))),
+		ContinuationToken: strings.TrimSpace(argString(args, "after")),
+		MaxKeys:           argInt(args, "limit", defaultArtifactList),
+		Fresh:             seatRead,
 	}
 	switch {
 	case q.Scope != "" && !q.Scope.Valid():
@@ -154,7 +154,7 @@ func (t *listArtifacts) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	case len(q.Q) > maxArtifactQuery:
 		return failed(fmt.Sprintf("list_artifacts takes a `query` of at most %d bytes: "+
 			"search for a phrase, not a document.", maxArtifactQuery)), nil
-	case q.Limit < 1 || q.Limit > maxArtifactList:
+	case q.MaxKeys < 1 || q.MaxKeys > maxArtifactList:
 		return failed(fmt.Sprintf("list_artifacts takes a `limit` of 1..%d.", maxArtifactList)), nil
 	}
 	viewer, err := t.deps.viewer(ctx, c)
@@ -167,8 +167,8 @@ func (t *listArtifacts) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return artifactReadFailure(ctx, t.Name(), "", err), nil
 	}
-	rows := make([]map[string]any, 0, len(page.Items))
-	for _, item := range page.Items {
+	rows := make([]map[string]any, 0, len(page.Contents))
+	for _, item := range page.Contents {
 		// THE TABLE DECIDES EACH ROW, the listing only narrows: a row is
 		// shown when reading it admits the caller AND whoever the turn is
 		// acting for, on a relation (an administrator's override shows
@@ -186,8 +186,8 @@ func (t *listArtifacts) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		rows = append(rows, t.deps.listRow(item.Head, dec.Standing.Role))
 	}
 	out := map[string]any{"count": len(rows), "artifacts": rows}
-	if page.After != "" {
-		out["next"] = page.After
+	if page.NextContinuationToken != "" {
+		out["next"] = page.NextContinuationToken
 	}
 	if !page.Complete {
 		out["complete"] = false

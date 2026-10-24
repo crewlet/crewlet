@@ -66,15 +66,21 @@ func NewReader(opts ReaderOptions) (*Reader, error) {
 
 // Head is one artifact as a listing and a point read show it.
 type Head struct {
-	ID           artifacts.ID           `json:"id"`
-	Label        artifacts.Label        `json:"label"`
-	Kind         artifacts.Kind         `json:"kind"`
-	Title        string                 `json:"title"`
-	Description  string                 `json:"description,omitempty"`
-	Icon         string                 `json:"icon,omitempty"`
-	Owner        string                 `json:"owner"`
-	OwnerKind    iam.ActorKind          `json:"owner_kind"`
-	SourceKey    string                 `json:"source_key,omitempty"`
+	ID          artifacts.ID    `json:"id"`
+	Label       artifacts.Label `json:"label"`
+	Kind        artifacts.Kind  `json:"kind"`
+	Title       string          `json:"title"`
+	Description string          `json:"description,omitempty"`
+	Icon        string          `json:"icon,omitempty"`
+	Owner       string          `json:"owner"`
+	OwnerKind   iam.ActorKind   `json:"owner_kind"`
+	SourceKey   string          `json:"source_key,omitempty"`
+
+	// Folder is the folder the artifact is filed in, empty at the top
+	// level. A folder grants nothing: who may open the artifact is still
+	// its owner and its own shares.
+	Folder string `json:"folder,omitempty"`
+
 	HeadNumber   int                    `json:"head_number"`
 	Contract     string                 `json:"contract,omitempty"`
 	Capabilities []artifacts.Capability `json:"capabilities"`
@@ -118,10 +124,16 @@ type VersionSummary struct {
 	Entry        string                 `json:"entry,omitempty"`
 	Contract     string                 `json:"contract,omitempty"`
 	Capabilities []artifacts.Capability `json:"capabilities"`
-	Files        int                    `json:"files"`
-	Bytes        int64                  `json:"bytes"`
-	Author       iam.Actor              `json:"author"`
-	CreatedAt    time.Time              `json:"created_at"`
+
+	// Brand is the adopted brand stylesheet a framed version was published
+	// under (its SHA-256 in hex), which the artifact origin places when it
+	// serves the version; empty for none.
+	Brand string `json:"brand,omitempty"`
+
+	Files     int       `json:"files"`
+	Bytes     int64     `json:"bytes"`
+	Author    iam.Actor `json:"author"`
+	CreatedAt time.Time `json:"created_at"`
 
 	// Position is the packed position of the record that made the version.
 	Position int64 `json:"position"`
@@ -263,8 +275,17 @@ const (
 	MaxListLimit     = 200
 )
 
+// ListDelimiter is the one delimiter a listing accepts, as S3's ListObjectsV2
+// names it: the separator between folder names in a [ListQuery.Prefix].
+const ListDelimiter = "/"
+
 // ListQuery narrows a listing. A zero Scope is [ScopeAll], a zero Sort
 // [SortUpdated], a zero Status [StatusLive], and a zero Fresh `stale`.
+//
+// THE FOLDER HALF SPEAKS S3's ListObjectsV2 (Prefix, Delimiter,
+// ContinuationToken, MaxKeys), so anybody who knows S3 reads it at once. A
+// folder is still a row (ADR-0047), never part of an artifact's key: the
+// prefix is resolved to a folder id once, and the token carries the id.
 type ListQuery struct {
 	Scope  ListScope
 	Kind   artifacts.Kind
@@ -284,10 +305,61 @@ type ListQuery struct {
 	// panel lists. Empty narrows nothing.
 	WorkItem string
 
-	Sort   ListSort
-	Cursor string
-	Limit  int
-	Fresh  statelog.Freshness
+	// Prefix is the folder the listing is about: the path of folder names
+	// from the top level, each followed by [ListDelimiter]
+	// ("Marketing/Q4/"). Empty is the top level. It resolves among the
+	// folders the viewer (and the Requester, where one is named) can see,
+	// and a prefix that resolves to none is ErrFolderNotFound, never an
+	// empty page. A name holds no "/" and siblings are unique, so a path
+	// names at most one folder.
+	Prefix string
+
+	// Delimiter is empty or [ListDelimiter]. With it the page is ONE level:
+	// the artifacts directly in the prefix's folder (at the top level: in no
+	// folder, or in one the viewer cannot see) and, as
+	// [ListPage.CommonPrefixes], the child folders the viewer can see.
+	// Without it the listing is recursive: everything beneath the prefix,
+	// which with no prefix is every artifact the viewer can see.
+	Delimiter string
+
+	// Requester is the person an agent's tool acts for. Where it is named,
+	// the prefix resolves only among folders BOTH the viewer and the
+	// requester can see (the requester ceiling, applied to folder names).
+	Requester *Viewer
+
+	Sort ListSort
+
+	// ContinuationToken is the opaque token a previous page answered as
+	// [ListPage.NextContinuationToken]. It carries the resolved folder's
+	// id, never its path, so a rename mid-way does not move the pages.
+	ContinuationToken string
+
+	// MaxKeys is the page size: [DefaultListLimit] when zero, at most
+	// [MaxListLimit]. It bounds Contents; a one-level page answers every
+	// common prefix on its first page.
+	MaxKeys int
+
+	Fresh statelog.Freshness
+}
+
+// CommonPrefix is one child folder of a one-level listing, as S3 answers a
+// common prefix, with what a folder tile shows.
+type CommonPrefix struct {
+	// Prefix is the folder's path, the listing's prefix and its name and a
+	// "/" ("Marketing/Q4/Campaigns/"): what a caller lists next.
+	Prefix string `json:"prefix"`
+
+	// Folder is its id: the address a create or a move files into, and a
+	// rename-proof link.
+	Folder string `json:"folder"`
+
+	Name       string           `json:"name"`
+	Visibility FolderVisibility `json:"visibility"`
+
+	// Items and Folders count the artifacts and the folders directly in it
+	// that the viewer can see.
+	Items   int `json:"items"`
+	Folders int `json:"folders"`
 }
 
 // ListItem is one artifact as a listing shows it.
@@ -295,17 +367,40 @@ type ListItem struct {
 	Head
 	Pinned   bool      `json:"pinned,omitempty"`
 	OpenedAt time.Time `json:"opened_at"`
+
+	// FolderPath is the path of the folder the artifact is filed in as the
+	// viewer sees it ("Marketing/Q4/"), empty at the top level or in a folder
+	// the viewer cannot see.
+	FolderPath string `json:"folder_path,omitempty"`
 }
 
-// ListPage is one page of a listing and what it is true as of.
+// ListPage is one page of a listing and what it is true as of, in S3's
+// ListObjectsV2 terms.
 type ListPage struct {
-	Items []ListItem `json:"items"`
+	// Prefix and Delimiter echo the query's.
+	Prefix    string `json:"prefix"`
+	Delimiter string `json:"delimiter,omitempty"`
+
+	// Contents are the artifacts on this page.
+	Contents []ListItem `json:"contents"`
+
+	// CommonPrefixes are a one-level page's child folders the viewer can
+	// see, A to Z, every one on the first page and none after it.
+	CommonPrefixes []CommonPrefix `json:"common_prefixes,omitempty"`
+
+	// KeyCount is how many entries this page answers, contents and common
+	// prefixes together, as S3 counts them.
+	KeyCount int `json:"key_count"`
+
+	// IsTruncated reports a page past which there is more, and
+	// NextContinuationToken is what asks for it.
+	IsTruncated           bool   `json:"is_truncated"`
+	NextContinuationToken string `json:"next_continuation_token,omitempty"`
 
 	// Total is how many artifacts the query matches, counted in the same
 	// transaction as the page.
 	Total int `json:"total"`
 
-	After    string             `json:"after,omitempty"`
 	Level    statelog.ReadLevel `json:"read_level"`
 	Position statelog.Position  `json:"position"`
 	Complete bool               `json:"complete"`
@@ -368,7 +463,7 @@ const headColumns = `a.id, a.label, a.kind, a.title, a.description, a.icon, a.ow
 	a.owner_kind, a.source_key, a.head_number, a.contract, a.capabilities, a.status,
 	a.trashed_by, a.trashed_by_kind, a.trashed_at, a.purge_begun_at, a.access_epoch, a.bytes_held,
 	a.created_by, a.created_by_kind, a.created_at, a.updated_by, a.updated_by_kind,
-	a.updated_at, a.version`
+	a.updated_at, a.version, a.folder_id`
 
 // rowScanner is a row or a cursor over rows.
 type rowScanner interface{ Scan(dest ...any) error }
@@ -389,7 +484,7 @@ func scanHead(row rowScanner, extra ...any) (Head, error) {
 		&ownerKind, &h.SourceKey, &h.HeadNumber, &h.Contract, &caps, &status,
 		&trashedBy, &trashedKind, &trashedAt, &purgeBegunAt, &h.AccessEpoch, &h.BytesHeld,
 		&createdBy, &createdKind, &createdAt, &updatedBy, &updatedKind, &updatedAt,
-		&h.Version}
+		&h.Version, &h.Folder}
 	if err := row.Scan(append(dest, extra...)...); err != nil {
 		return Head{}, err
 	}
@@ -497,7 +592,7 @@ func placeholders(n int) string {
 // versionColumns is every column a VersionSummary is read from.
 const versionColumns = `artifact_id, number, version_id, base_number, restored_from,
 	forced, label, entry, contract, capabilities, files, bytes, author, author_kind,
-	created_at, position`
+	created_at, position, brand`
 
 // scanVersion reads one VersionSummary, extra columns after.
 func scanVersion(row rowScanner, extra ...any) (VersionSummary, error) {
@@ -509,7 +604,7 @@ func scanVersion(row rowScanner, extra ...any) (VersionSummary, error) {
 	)
 	dest := []any{&id, &v.Number, &versionID, &v.Base, &v.RestoredFrom, &forced, &v.Label,
 		&v.Entry, &v.Contract, &caps, &v.Files, &v.Bytes, &v.Author.Name, &kind,
-		&createdAt, &v.Position}
+		&createdAt, &v.Position, &v.Brand}
 	if err := row.Scan(append(dest, extra...)...); err != nil {
 		return VersionSummary{}, err
 	}
@@ -1068,6 +1163,9 @@ func trashIDs(ctx context.Context, tx *sql.Tx, q string, args ...any) ([]artifac
 // The authority table still decides each row where the answer is served; this
 // is the filter that keeps the page from holding rows nobody may see.
 func (r *Reader) List(ctx context.Context, v Viewer, q ListQuery) (ListPage, error) {
+	if q.Prefix != "" || q.Delimiter != "" {
+		return ListPage{}, fmt.Errorf("%w: list by prefix or delimiter", ErrNotBuilt)
+	}
 	spec, err := listSpecFor(v, q)
 	if err != nil {
 		return ListPage{}, err
@@ -1129,7 +1227,7 @@ func listSpecFor(v Viewer, q ListQuery) (listSpec, error) {
 	case v.Record == "" && !v.Admin:
 		return listSpec{}, fmt.Errorf("%w: a listing names who is viewing it", ErrInvalid)
 	}
-	s := listSpec{sort: sort, record: v.Record, limit: pageLimit(q.Limit)}
+	s := listSpec{sort: sort, record: v.Record, limit: pageLimit(q.MaxKeys)}
 	s.where = append(s.where, `a.status = ?`)
 	s.args = append(s.args, string(status))
 	if q.Kind != "" {
@@ -1186,8 +1284,8 @@ func listSpecFor(v Viewer, q ListQuery) (listSpec, error) {
 		s.args = append(s.args, string(iam.ActorAgent))
 	case ScopeAll:
 	}
-	if q.Cursor != "" {
-		after, err := decodeListCursor(q.Cursor, sort)
+	if q.ContinuationToken != "" {
+		after, err := decodeListCursor(q.ContinuationToken, sort)
 		if err != nil {
 			return listSpec{}, err
 		}
@@ -1288,7 +1386,7 @@ func (s listSpec) run(ctx context.Context, tx *sql.Tx) (ListPage, error) {
 		return ListPage{}, fmt.Errorf("artifactsdomain: read the listing: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-	page := ListPage{Items: []ListItem{}, Total: total}
+	page := ListPage{Contents: []ListItem{}, Total: total}
 	var keys []string
 	for rows.Next() {
 		var opened int64
@@ -1301,7 +1399,7 @@ func (s listSpec) run(ctx context.Context, tx *sql.Tx) (ListPage, error) {
 		if opened > 0 {
 			item.OpenedAt = store.DecodeTime(opened)
 		}
-		page.Items = append(page.Items, item)
+		page.Contents = append(page.Contents, item)
 		switch s.sort {
 		case SortCreated:
 			keys = append(keys, strconv.FormatInt(store.EncodeTime(head.CreatedAt), 10))
@@ -1316,25 +1414,27 @@ func (s listSpec) run(ctx context.Context, tx *sql.Tx) (ListPage, error) {
 	if err := rows.Err(); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
 		return ListPage{}, err
 	}
-	if len(page.Items) > s.limit {
-		page.Items = page.Items[:s.limit]
-		last := page.Items[s.limit-1]
+	if len(page.Contents) > s.limit {
+		page.Contents = page.Contents[:s.limit]
+		last := page.Contents[s.limit-1]
 		cursor, err := json.Marshal(listCursor{Sort: s.sort, Key: keys[s.limit-1], ID: last.ID.String()}) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
 			return ListPage{}, fmt.Errorf("artifactsdomain: encode the listing cursor: %w", err)
 		}
-		page.After = base64.RawURLEncoding.EncodeToString(cursor)
+		page.NextContinuationToken = base64.RawURLEncoding.EncodeToString(cursor)
+		page.IsTruncated = true
 	}
-	ids := make([]string, len(page.Items))
-	for i, item := range page.Items {
+	page.KeyCount = len(page.Contents)
+	ids := make([]string, len(page.Contents))
+	for i, item := range page.Contents {
 		ids[i] = item.ID.String()
 	}
 	shares, err := readShares(ctx, tx, ids)
 	if err != nil {
 		return ListPage{}, err
 	}
-	for i := range page.Items {
-		page.Items[i].Shares = shares[ids[i]]
+	for i := range page.Contents {
+		page.Contents[i].Shares = shares[ids[i]]
 	}
 	return page, nil
 }

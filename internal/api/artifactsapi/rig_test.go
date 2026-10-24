@@ -203,7 +203,7 @@ func (e *estate) List(_ context.Context, v artifactsdomain.Viewer, _ artifactsdo
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.listed = append(e.listed, v)
-	return artifactsdomain.ListPage{Items: e.listItems, Total: len(e.listItems)}, nil
+	return artifactsdomain.ListPage{Contents: e.listItems, Total: len(e.listItems)}, nil
 }
 
 func (e *estate) SeenBy(context.Context, artifacts.ID) ([]artifactsdomain.Read, error) {

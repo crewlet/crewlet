@@ -170,9 +170,9 @@ func (f *fakeArtifacts) List(_ context.Context, v artifactsdomain.Viewer,
 	f.listed = append(f.listed, v)
 	page := artifactsdomain.ListPage{Complete: true}
 	for _, h := range f.heads {
-		page.Items = append(page.Items, artifactsdomain.ListItem{Head: h})
+		page.Contents = append(page.Contents, artifactsdomain.ListItem{Head: h})
 	}
-	slices.SortFunc(page.Items, func(a, b artifactsdomain.ListItem) int {
+	slices.SortFunc(page.Contents, func(a, b artifactsdomain.ListItem) int {
 		return strings.Compare(a.ID.String(), b.ID.String())
 	})
 	return page, nil

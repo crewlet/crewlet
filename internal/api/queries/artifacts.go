@@ -134,12 +134,15 @@ func (s artifactsAnswers) read(ctx context.Context, what string, p Params, versi
 	return a, artifactFailure(what, err)
 }
 
-// list answers one page of the artifacts the caller can see: `scope=` mine,
-// shared, company, agents or all (the default), `kind=`, `q=` (the title, the
-// description and the head's text), `sort=` updated (the default), created,
-// title or opened, `status=` live (the default) or trashed, `pinned=true`,
-// `work_item=` (the artifacts made for that tracker item), `cursor=` and
-// `limit=`.
+// list answers one page of the artifacts the caller can see, in S3's
+// ListObjectsV2 terms: `prefix=` (a folder path with a trailing "/", empty for
+// the top level), `delimiter=/` (one level, its child folders answered as
+// common prefixes; absent, recursive), `max-keys=` and `continuation-token=`;
+// beside them `scope=` mine, shared, company, agents or all (the default),
+// `kind=`, `q=` (the title, the description and the head's text), `sort=`
+// updated (the default), created, title or opened, `status=` live (the
+// default) or trashed, `pinned=true` and `work_item=` (the artifacts made for
+// that tracker item).
 func (s artifactsAnswers) list(ctx context.Context, p Params) (any, error) {
 	fresh, err := freshness(p)
 	if err != nil {
@@ -149,9 +152,16 @@ func (s artifactsAnswers) list(ctx context.Context, p Params) (any, error) {
 		Scope: artifactsdomain.ListScope(p.String("scope")), Kind: artifacts.Kind(p.String("kind")),
 		Status: artifactsdomain.Status(p.String("status")), Q: p.String("q"),
 		Pinned: p.Bool("pinned", false), WorkItem: p.String("work_item"),
-		Sort: artifactsdomain.ListSort(p.String("sort")), Cursor: p.String("cursor"),
-		Limit: Clamp(p.Int("limit", 0), artifactsdomain.DefaultListLimit, artifactsdomain.MaxListLimit),
+		Sort:              artifactsdomain.ListSort(p.String("sort")),
+		Prefix:            p.String("prefix"),
+		Delimiter:         p.String("delimiter"),
+		ContinuationToken: p.String("continuation-token"),
+		MaxKeys: Clamp(p.Int("max-keys", 0), artifactsdomain.DefaultListLimit,
+			artifactsdomain.MaxListLimit),
 		Fresh: fresh,
+	}
+	if q.Delimiter != "" && q.Delimiter != artifactsdomain.ListDelimiter {
+		return nil, badParams("delimiter", q.Delimiter, []string{artifactsdomain.ListDelimiter})
 	}
 	asking, err := caller(ctx, "artifacts")
 	if err != nil {
