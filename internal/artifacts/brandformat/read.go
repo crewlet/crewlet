@@ -424,7 +424,7 @@ func (r *reader) face(name string, f Face) {
 		}
 		return
 	}
-	if len(f.Family) > MaxFamilyNameBytes || !familyPattern.MatchString(f.Family) {
+	if !ValidFamily(f.Family) {
 		r.field(name+".family", RuleField, "%q: a family name is an ASCII letter, then letters, digits, "+
 			"single spaces and hyphens, at most %d bytes", f.Family, MaxFamilyNameBytes)
 	}
@@ -441,10 +441,11 @@ func (r *reader) face(name string, f Face) {
 		if file.Path == "" {
 			r.field(item+".path", RuleField, "is required: the WOFF2 file of the version")
 		}
-		if file.Weight < 100 || file.Weight > 900 || file.Weight%100 != 0 {
-			r.field(item+".weight", RuleField, "is %d: a weight is a whole hundred from 100 to 900", file.Weight)
+		if !ValidWeight(file.Weight) {
+			r.field(item+".weight", RuleField, "is %d: a weight is a whole hundred from %d to %d",
+				file.Weight, MinFontWeight, MaxFontWeight)
 		}
-		if file.Style != "normal" && file.Style != "italic" {
+		if !slices.Contains(FontStyles, file.Style) {
 			r.field(item+".style", RuleField, "%q: a style is normal or italic", file.Style)
 		}
 		key := strconv.Itoa(file.Weight) + " " + file.Style

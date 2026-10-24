@@ -102,7 +102,7 @@ func CSS(b Brand, files map[Slot]ServedFile) []byte {
 		slot Slot
 		face Face
 	}{{SlotFontHeading, b.Type.Heading}, {SlotFontBody, b.Type.Body}} {
-		if !familyValid(f.face.Family) {
+		if f.face.Family == "" || !ValidFamily(f.face.Family) {
 			continue
 		}
 		for i, file := range f.face.Files {
@@ -111,8 +111,7 @@ func CSS(b Brand, files map[Slot]ServedFile) []byte {
 				continue
 			}
 			url, ok := cssURL(served)
-			if !ok || file.Weight < 100 || file.Weight > 900 || file.Weight%100 != 0 ||
-				(file.Style != "normal" && file.Style != "italic") {
+			if !ok || !ValidWeight(file.Weight) || !slices.Contains(FontStyles, file.Style) {
 				continue
 			}
 			out.WriteString("@font-face {\n")
@@ -132,16 +131,11 @@ func cssStack(f Face) string {
 	switch {
 	case f.Kit != "" && f.Stack == "" && f.Family == "" && slices.Contains(KitFaces, f.Kit):
 	case f.Stack != "" && f.Kit == "" && f.Family == "" && slices.Contains(SystemStacks, f.Stack):
-	case f.Family != "" && f.Kit == "" && f.Stack == "" && familyValid(f.Family):
+	case f.Family != "" && f.Kit == "" && f.Stack == "" && ValidFamily(f.Family):
 	default:
 		return ""
 	}
 	return FontStack(f)
-}
-
-// familyValid reports an uploaded family's name is inside its grammar.
-func familyValid(name string) bool {
-	return name != "" && len(name) <= MaxFamilyNameBytes && familyPattern.MatchString(name)
 }
 
 // cssURL is a served file's address on the artifact origin, false when its

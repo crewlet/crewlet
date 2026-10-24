@@ -1,8 +1,10 @@
 package artifactsapi_test
 
 import (
+	"regexp"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,6 +50,7 @@ func TestTheDashboardSpeaksTheArtifactsVocabulary(t *testing.T) {
 		"ARTIFACT_FOLDER_VISIBILITIES": names(artifactsdomain.FolderVisibilities),
 		"BRAND_KIT_FACES":              brandformat.KitFaces,
 		"BRAND_SYSTEM_STACKS":          brandformat.SystemStacks,
+		"BRAND_FONT_STYLES":            brandformat.FontStyles,
 	} {
 		body, err := clientsource.Literal(tree, name)
 		if err != nil {
@@ -133,6 +136,15 @@ func TestTheDashboardBoundsArtifactTextAtTheEnginesCaps(t *testing.T) {
 		"BRAND_VOICE_SUMMARY_MAX_BYTES":  brandformat.MaxVoiceSummaryBytes,
 		"BRAND_VOICE_MAX_EXAMPLES":       brandformat.MaxVoiceExamples,
 		"BRAND_VOICE_EXAMPLE_MAX_BYTES":  brandformat.MaxVoiceExampleBytes,
+		"BRAND_FAMILY_NAME_MAX_BYTES":    brandformat.MaxFamilyNameBytes,
+		"BRAND_FONT_FILES_MAX":           brandformat.MaxFontFilesPerFamily,
+		"BRAND_FONT_FILE_MAX_BYTES":      brandformat.MaxFontFileBytes,
+		"BRAND_SVG_MAX_BYTES":            brandformat.MaxSVGBytes,
+		"BRAND_IMAGE_MAX_BYTES":          brandformat.MaxImageBytes,
+		"BRAND_IMAGE_MAX_SIDE":           brandformat.MaxImageSide,
+		"BRAND_FONT_WEIGHT_MIN":          brandformat.MinFontWeight,
+		"BRAND_FONT_WEIGHT_MAX":          brandformat.MaxFontWeight,
+		"BRAND_FONT_WEIGHT_STEP":         brandformat.FontWeightStep,
 	} {
 		raw, err := clientsource.Scalar(clientsource.Tree(t), name)
 		if err != nil {
@@ -235,6 +247,35 @@ func TestTheDashboardDrawsTheFacesTheBrandStylesheetNames(t *testing.T) {
 		if got := clientsource.Scalars(body, name); len(got) != 1 || got[0] != brandformat.FaceFamilies[name] {
 			t.Errorf("the dashboard draws %s as %q and the stylesheet as %q", name, got,
 				brandformat.FaceFamilies[name])
+		}
+	}
+}
+
+// THE DASHBOARD NAMES A FAMILY BY THE ENGINE'S GRAMMAR, held by behaviour: the
+// Typography editor checks an uploaded family's name against the pattern and
+// the bound before it uploads a byte, so a name the two answer differently is
+// refused after the upload, or refused at the field when the publish would
+// take it.
+func TestTheDashboardNamesAFamilyByTheEnginesGrammar(t *testing.T) {
+	t.Parallel()
+	tree := clientsource.Tree(t)
+	source, err := clientsource.Scalar(tree, "BRAND_FAMILY_NAME_PATTERN")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pattern, err := regexp.Compile(source)
+	if err != nil {
+		t.Fatalf("BRAND_FAMILY_NAME_PATTERN does not compile: %v", err)
+	}
+	for _, name := range []string{
+		"Acme", "Acme Sans", "Acme Sans 2", "IBM Plex-Sans", "a", "Z9",
+		"", " Acme", "Acme ", "Acme  Sans", "2Acme", "-Acme", "Acme_Sans", "Acmé", "Acme\tSans",
+		`A";}*{x:url(//y)}/*`, strings.Repeat("a", brandformat.MaxFamilyNameBytes),
+		strings.Repeat("a", brandformat.MaxFamilyNameBytes+1),
+	} {
+		dashboard := pattern.MatchString(name) && len(name) <= brandformat.MaxFamilyNameBytes
+		if engine := brandformat.ValidFamily(name); dashboard != engine {
+			t.Errorf("family %q: the dashboard says %v and the engine %v", name, dashboard, engine)
 		}
 	}
 }
