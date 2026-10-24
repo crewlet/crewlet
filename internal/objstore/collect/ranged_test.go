@@ -223,10 +223,12 @@ func TestARangedAuditFindsWhatAStatWould(t *testing.T) {
 	}
 }
 
-// A RANGE THE STORE CANNOT GIVE IN ORDER TURNS THE AUDIT TO ASKING BY NAME —
-// that range's references included — rather than reading every object the
-// order lost as missing.
-func TestARangeOutOfOrderTurnsTheAuditToAskingByName(t *testing.T) {
+// A RANGE THE STORE CANNOT GIVE IN ORDER TURNS THE REST OF THE WALK TO THE
+// STORE'S LISTING, as for a store that keeps no order — and the ranges already
+// handed on are asked about by name — rather than reading every object the
+// order lost as missing. The listing starts after the last range handed on,
+// so no reference is looked at twice.
+func TestARangeOutOfOrderTurnsTheAuditToTheListing(t *testing.T) {
 	t.Parallel()
 	h, r := newRangedHarness(t)
 	h.c.rangeChunk = 10
@@ -243,10 +245,15 @@ func TestARangeOutOfOrderTurnsTheAuditToAskingByName(t *testing.T) {
 	if err != nil || !got.Completed || got.Referenced != files || got.Found.Lost() != 0 {
 		t.Fatalf("Audit = %+v, %v; want every file found whole", got, err)
 	}
+	if n := h.backend.listings(); n != 1 {
+		t.Errorf("the store was listed whole %d times after its ranges came back out of "+
+			"order, want once", n)
+	}
 	h.backend.mu.Lock()
 	defer h.backend.mu.Unlock()
-	if len(h.backend.asks) != files {
-		t.Fatalf("%d objects asked about by name, want all %d", len(h.backend.asks), files)
+	if len(h.backend.asks) == 0 || len(h.backend.asks) >= files {
+		t.Fatalf("%d of %d objects asked about by name; want those of the ranges handed on "+
+			"before the first answer, and the rest read from the listing", len(h.backend.asks), files)
 	}
 	for name, n := range h.backend.asks {
 		if n != 1 {
@@ -254,7 +261,7 @@ func TestARangeOutOfOrderTurnsTheAuditToAskingByName(t *testing.T) {
 		}
 	}
 	if n := r.listings(); n > auditConcurrency {
-		t.Errorf("%d listings were asked of a store that keeps no order; the first answer "+
+		t.Errorf("%d ranges were listed of a store that keeps no order; the first answer "+
 			"should have stopped them", n)
 	}
 }

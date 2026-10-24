@@ -777,8 +777,16 @@ judged against the replicated estate the data node holds:
   thousand keys, and the hundred left over are room for the objects in the
   range no live row names, so a range fits one request and an audit costs a
   request per nine hundred objects; only an object a listing passes over is
-  then asked about by name. On `nats`, whose listing keeps no order — and on an S3 Express
-  directory bucket, which lists in none — a question is about one object. An
+  then asked about by name. On `nats`, whose listing keeps no order — and on
+  an S3 Express directory bucket, which lists in none — the audit reads the
+  store's **whole listing a window at a time**: each listing keeps the hundred
+  thousand smallest keys after the last window's (about thirteen MiB on the
+  node running the duty), and the rows whose keys fall in that window are
+  judged from it, so a store of N objects is listed once per hundred thousand
+  of them. A name the listing hands on holding nothing — on `nats`, metadata
+  that does not decode, or a name only a delete marker holds — is asked about
+  by name, and so is everything after a listing that **fails**, which turns
+  the rest of that audit to a question an object. An
   object the store answers it does not hold is **missing**; one it holds at
   another size, or under another SHA-256 where the store answers one (`nats`
   keeps one; S3 answers one only for an object asked about by name, uploaded
@@ -949,7 +957,11 @@ Take **`s3`** when:
 - the fleet is clustered and reads many small files — on `nats` every read
   makes a consumer, which a cluster decides on together, and one read in a
   few hundred waits a second for a request the cluster dropped; on `s3` a
-  read is one request.
+  read is one request;
+- the company will keep well past a million files — on `nats` the daily
+  audit lists the whole bucket once per hundred thousand of them, so its
+  cost grows with the square of the count ([How far it
+  scales](#how-far-it-scales)); on `s3` it lists each key once.
 
 **To try `s3` on one machine**, the repository's `docker-compose.yml` carries
 a SeaweedFS service behind the `s3` profile: `docker compose --profile s3 up
@@ -1013,6 +1025,23 @@ dashboard draws the same under **Settings › File storage**.
   key order, and asks the store about them outside every read, so it never
   holds a read of the estate open across the store's round trips; a retired
   row costs it nothing, and costs a backup on `s3` no request.
+- **On `nats` an audit lists the whole store once per hundred thousand
+  objects**, the window it holds in memory at 127 bytes a key. Each listing
+  names every object, so the audit names N × ⌈N / 100,000⌉ of them: at the
+  broker's measured 63,000–94,000 names a second a million objects are ten
+  listings and two to three minutes, and two million twenty listings and seven
+  to eleven minutes — where asking each object by name, 15,000–19,000 a second
+  with 32 out on a member's own client, would take one minute and two. What
+  the listing saves at every size is requests: its consumer pulls five
+  hundred names a request from whichever replica the broker places it on, so
+  two million objects are eighty thousand pulls rather than two million reads
+  from the stream's leader. A larger window would list fewer times for 127
+  bytes a key more; the cost grows with the square of the store past a
+  window, so a company far past a million files on `nats` is better served
+  by `s3`, whose listing keeps an order. On an S3 Express directory bucket,
+  which lists in no order either, two million objects are forty thousand
+  listing requests in about twenty minutes, against two million HEADs in
+  twenty-three or twenty-four (an in-process fake held 20 ms away).
 - **An audit on S3 costs a listing request per nine hundred objects.** Its
   ranges tile the bucket's `files/` keys, so the audit lists that corner once:
   two million objects are about 2,200 `ListObjectsV2` requests a day where a
@@ -1024,11 +1053,11 @@ dashboard draws the same under **Settings › File storage**.
   day, a range may take two, and those are a day of uploads rather than the
   whole store. The S3 backend's benchmark listed 31,400–33,000 names a second
   from a bucket 20 ms away and 15,600–16,900 from one 50 ms away, one listing
-  at a time, so those requests are one to two minutes of listing. On `nats`
-  it is still a read from the bucket stream's leader per object.
+  at a time, so those requests are one to two minutes of listing.
 - **The collector asks the store in parallel, and no harder.** The audit keeps
   up to 32 questions out to the store at once — a listing of a range on S3, a
-  stat of an object on `nats` and on an S3 directory bucket — so it asks 32
+  stat of an object a listing did not show, or of every object once a listing
+  of a store that keeps no order has failed — so it asks 32
   divided by the store's mean latency a second, over the engine's own warm
   connections, and inside the 5,500 reads a second AWS documents for a prefix
   unless a question averages under 6 ms. Asked by HEAD, a bucket 20 ms away
@@ -1044,7 +1073,7 @@ dashboard draws the same under **Settings › File storage**.
   rest to the company's uploads. On a gateway that refuses the verb — Google
   Cloud Storage's has none — the collection deletes each object on its own
   instead, up to 16 out, a quarter of the prefix's writes only if a deletion
-  averages under 18 ms. On `nats` a question is a
+  averages under 18 ms. On `nats` a question by name is a
   read from the bucket stream's leader and a deletion three requests to it,
   two of them replicated writes; the backend's own benchmark answered
   15,000–19,000 questions a second with 32 out on a member's own client,

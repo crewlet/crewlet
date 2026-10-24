@@ -137,10 +137,30 @@
 // required table's keyset walk merged into one order ([Source.Required],
 // [objstore.MergeWalks]), holding a page of each — AND THE BACKEND IS ASKED
 // OUTSIDE EVERY READ — up to [auditConcurrency] questions at once while the
-// walk reads on, never inside a read: a read of the estate holds one of the
-// node's few reader connections and the snapshot under it, and a question to
-// the backend is a network round trip — tens of thousands of them inside one
-// read would hold the connection for the length of the audit.
+// walk reads on, and a window of a listing by the walk itself between two of
+// its reads, never inside one: a read of the estate holds one of the node's
+// few reader connections and the snapshot under it, and a question to the
+// backend is a network round trip — tens of thousands of them inside one read
+// would hold the connection for the length of the audit.
+//
+// A STORE THAT KEEPS NO ORDER IS READ FROM ITS LISTING, A WINDOW AT A TIME —
+// the broker's, which lists in the order it was written, and an S3 Express
+// directory bucket, which lists in none. A listing of the whole store keeps
+// the [auditWindow] smallest keys after the last window's
+// ([auditor.listWindow]), and the walk judges each reference whose key falls
+// in it from what it lists: held, or held wrong, as it says; listed holding
+// nothing at all — no bytes and no digest, as the broker lists a name whose
+// metadata does not decode or that only a delete marker holds — or not listed,
+// it waits for a second look by name like any "not found". Once the walk
+// passes a window's last key it lists the next, so each reference is looked at
+// once, the audit holds a window of the inventory and never the whole of it,
+// and a store of N objects is listed ceil(N / [auditWindow]) times — a listing
+// request where there was a request an object, at the price [auditWindow]
+// states. A LISTING THAT FAILS turns the rest of the audit to asking about
+// each object by name, the way the audit asked before it had a listing: a
+// window's extent is its listing's answer, so without one nothing says which
+// references a listing again would cover, and a store that has gone away
+// fails those questions too, which stops the audit ([failedInARow]).
 //
 // A STORE THAT LISTS IN ORDER IS ASKED A RANGE AT A TIME ([objstore.Ranged]):
 // the walk is cut into chunks of [rangeChunk] references, and one listing of
@@ -153,9 +173,11 @@
 // ([rangePageRoom]), so its range fits one page — and the ranges tile the key
 // space, so the audit lists the engine's corner of the bucket once. Only
 // because the walk is merged into ONE order: a range cut from one table's keys
-// would leave out another's between them. A store that keeps no order — the
-// broker's, which lists in the order it was written — is asked about each
-// object, and so is one whose range comes back out of order, from then on.
+// would leave out another's between them. One whose range comes back out of
+// order ([objstore.ErrUnordered]) is read from its listing from then on, as a
+// store that keeps no order is, the listing beginning after the last range the
+// walk handed on and the ranges handed on but not yet listed asked about by
+// name.
 //
 // A RANGE WHOSE LISTING FAILED TAKES ITS SECOND LOOK AS A RANGE: what the
 // listing had not reached waits, with the key it comes after, for ONE listing
@@ -164,7 +186,8 @@
 // throttling or failing it; asking by name there sent a HEAD for each of the
 // range's nine hundred objects to the prefix that had just said to slow down.
 // A re-listing that fails too leaves its objects UNANSWERED by the rule below,
-// and a store that keeps no order after all is asked by name.
+// and what a re-listing that comes back out of order had not reached is asked
+// about by name.
 //
 // WHAT AN AUDIT FOUND OUTLIVES THE AUDIT THAT FAILED AFTER IT, and the duty
 // moving: the report keeps the last audit that ran to its end beside the
@@ -177,15 +200,18 @@
 // # How hard the store is asked
 //
 // A collection makes a request per object it deletes — or, on a store that
-// deletes in batches ([objstore.BatchDeleter]), one per judged batch of them —
-// and an audit one per object it asks about — or, on a store that lists in
-// order, one per [rangeChunk] of them while their range fits a page, and a
-// stat for each object its listings pass over. One at a time they are round
-// trips in a row: an audit of two million objects by stat was two million of
-// them, end to end. So the audit asks up to [auditConcurrency] questions at
-// once — a stat, or a listing of a range — and a collection has up to
-// [deleteConcurrency] deletions in flight beside its listing, or
-// [batchesInFlight] batches of them.
+// deletes in batches ([objstore.BatchDeleter]), one per judged batch of them.
+// An audit makes, on a store that lists in order, one per [rangeChunk] of the
+// objects it asks about while their range fits a page; on one that keeps no
+// order, one listing of the store per [auditWindow]; and a stat for each
+// object its listings pass over, or for every object once a listing has
+// failed. One at a time those stats are round trips in a row: an audit of two
+// million objects by stat was two million of them, end to end. So the audit
+// asks up to [auditConcurrency] questions at once — a stat, or a listing of a
+// range — and a collection has up to [deleteConcurrency] deletions in flight
+// beside its listing, or [batchesInFlight] batches of them. A window's listing
+// is the walk's own, one at a time, since the walk needs it before it can
+// judge the references in it.
 //
 // THE BOUNDS ARE CLOSED LOOPS, never a rate: a request goes out only when one
 // in flight has been answered, so a store that slows down is asked more slowly
@@ -207,17 +233,24 @@
 // abandons what a crash left, a handful a day.
 //
 // THE DEPTH IS MEASURED, NOT INFERRED (BenchmarkAudit, over a modelled store
-// and estate rather than any real one; 2026-10-11, a four-core 2.8 GHz VM):
-// with a stat answered in 2 ms and a page of the estate read in 1 ms, the
-// audit kept a mean of 31.4 of its 32 questions out across sixteen pages — a
-// page read does not drain the bound. Listing ranges as S3 does, a page of a
-// thousand names a request answered in 10 ms, over a store holding one object
-// no row names to every fifty referenced, it made one request per nine hundred
-// references (0.00111 a reference) and kept about four out: there the walk's
-// own page reads, two a range, set the pace, and a slower listing — S3's —
-// keeps more of the bound out rather than slowing the audit. With one to every
-// five, as the last day's keys may hold, each range spanned two pages: two
-// requests a chunk (0.00222), eight out, and the same pace.
+// and estate rather than any real one; 2026-10-24, four vCPUs of a 2.3 GHz
+// Xeon): asked by name, with a stat answered in 2 ms and a page of the estate
+// read in 1 ms, the audit kept a mean of 31.5 of its 32 questions out across
+// sixteen pages — a page read does not drain the bound. Read from the listing
+// of a store that keeps no order, a name listed in 12.5 µs (eighty thousand
+// a second, about the broker's pace), the same eight thousand references took
+// one listing (0.000125 requests a reference) and went 63,700–63,900 a second
+// against 13,300–13,400 by name — and cut into eight windows, eight listings
+// of every name (0.001 a reference) and 9,360–9,380 a second, the listings'
+// cost growing with the windows as [auditWindow] says. Listing ranges as S3
+// does, a page of a thousand names a request answered in 10 ms, over a store
+// holding one object no row names to every fifty referenced, it made one
+// request per nine hundred references (0.00111 a reference) and kept about
+// four and a half out: there the walk's own page reads, two a range, set the
+// pace, and a slower listing — S3's — keeps more of the bound out rather than
+// slowing the audit. With one to every five, as the last day's keys may hold,
+// each range spanned two pages: two requests a chunk (0.00222), eight out,
+// and the same pace.
 // These are the model's figures, not any store's, and are taken again with
 //
 //	go test -run '^$' -bench BenchmarkAudit -benchtime 3x ./internal/objstore/collect/
@@ -228,6 +261,7 @@
 package collect
 
 import (
+	"container/heap"
 	"context"
 	"errors"
 	"fmt"
@@ -281,14 +315,16 @@ const CollectInterval = time.Hour
 //     [objstore.WalkPage] rows a read on one of its few reader connections,
 //     and a pin appending a barrier to every declaring domain's log
 //     ([PinsPerDay]).
-//   - A STAT OF EACH OBJECT on a store that keeps no order: on `nats` a read
-//     from the bucket stream's leader for each, two million of them a pass —
-//     some two minutes of the leader on a member and up to six from a
-//     follower — and on an S3 directory bucket a HEAD for each, 23 to 55
-//     minutes of one ([auditConcurrency]).
+//   - A LISTING OF THE WHOLE STORE PER WINDOW on a store that keeps no order
+//     ([auditWindow]): on `nats` two million objects are twenty listings of
+//     every name, seven to eleven minutes of listing, and on an S3 directory
+//     bucket about twenty minutes — or, once a listing has failed, a stat of
+//     each object, two minutes of the bucket stream's leader on a member and
+//     up to six from a follower, or 23 to 55 minutes of HEADs on a directory
+//     bucket ([auditConcurrency]).
 //
-// Hourly, the directory bucket's audit would run most of every hour and the
-// broker's leader answer forty-eight million reads a day for one company; a
+// Hourly, the directory bucket's audit would run a third of every hour and
+// the broker's listing name nearly a billion objects a day for one company; a
 // day keeps every backend's audit a small share of its day, and a loss is
 // still paged within a day of happening.
 const AuditInterval = 24 * time.Hour
@@ -311,16 +347,18 @@ const judgeBatch = 500
 // once: a stat of one object, or — on a store that lists in order — a listing
 // of a range of [rangeChunk] of them.
 //
-// THIRTY-TWO. On a store that keeps no order an audit is one question per
-// object a required row names, and asked one at a time they are round trips
-// in a row: two million objects are two million round trips end to end, most
-// of a day at any latency a network store answers in, of a pass due daily that
-// holds the duty's only turn for all of it. With thirty-two out the audit asks
-// 32 divided by the store's mean latency a second — whatever the store's
-// latency is; nothing here assumes a figure for it, and what each backend
-// answers is its own benchmark's, below. On one that lists in order the same
-// two million are some 2,200 listings ([rangeChunk]), which the bound takes
-// thirty-two at a time.
+// THIRTY-TWO. Asked by name, an audit is one question per object a required
+// row names — on a store that keeps no order once its listing has failed —
+// and asked one at a time they are round trips in a row: two million objects
+// are two million round trips end to end, most of a day at any latency a
+// network store answers in, of a pass due daily that holds the duty's only
+// turn for all of it. With thirty-two out the audit asks 32 divided by the
+// store's mean latency a second — whatever the store's latency is; nothing
+// here assumes a figure for it, and what each backend answers is its own
+// benchmark's, below. On one that lists in order the same two million are some
+// 2,200 listings ([rangeChunk]), which the bound takes thirty-two at a time; on
+// one that keeps no order its listing is the walk's own, a window at a time
+// ([auditWindow]), and the bound carries the second looks.
 //
 // AND NO MORE, because the bound is what keeps the store from being flooded:
 // a question goes out only when one of the thirty-two has been answered, so a
@@ -341,15 +379,15 @@ const judgeBatch = 500
 //     benchmark listed 31,400–33,000 names a second and 15,600–16,900 one
 //     listing at a time — two million objects in one to two minutes — and
 //     answered 47 HEADs a second and 19 for each one out: 1,380–1,450 and
-//     about 610 with thirty-two out, which is what a directory bucket, asked
-//     by HEAD, costs — 23–24 minutes and 55 for two million objects, rather
-//     than twelve hours and twenty-nine.
+//     about 610 with thirty-two out, which is what a directory bucket costs
+//     asked by HEAD, as it is once its listing has failed — 23–24 minutes and
+//     55 for two million objects, rather than twelve hours and twenty-nine.
 //   - It is the bucket's transport's warm connections to one host
 //     (httpx.MaxIdleConnsPerHost: s3obj's clone of httpx's, over HTTP/1.1,
 //     keeps httpx's pool), so every question rides a connection already open
 //     rather than paying a TLS handshake of its own.
-//   - On `nats` a question is one read from the bucket stream's leader. The
-//     backend's benchmark answered a stat across ten thousand objects
+//   - On `nats` a question by name is one read from the bucket stream's
+//     leader. The backend's benchmark answered a stat across ten thousand objects
 //     4,800–8,600 times a second one at a time on a member's own client and
 //     15,000–19,000 with thirty-two out; through a leaf 2,900–4,200 and
 //     15,000–25,000; and from a follower at three replicas, whose every
@@ -479,6 +517,38 @@ const MissingShown = 100
 // store answers, a hundred thousand of its answers after the one that missed,
 // which is the room a store that lists a new object late is given to show it.
 const maxSuspects = 100_000
+
+// auditWindow is how many listed objects one window of the audit's listing of
+// a store that keeps no order holds in memory ([auditor.listWindow]).
+//
+// A HUNDRED THOUSAND, about thirteen mebibytes: a window keeps 127 bytes a key
+// — the key in its map and its heap, and the size and digest [judged] reads,
+// the digest a string of its own as the broker's listing decodes one
+// (BenchmarkAuditWindow; 2026-10-24, four vCPUs of a 2.3 GHz Xeon) — beside
+// [maxSuspects]' twenty, on the one node that runs the duty.
+//
+// WHAT IT TRADES IS LISTINGS FOR MEMORY. Every window is a listing of the
+// whole store, so an audit of N objects lists N × ceil(N / auditWindow) names,
+// which grows with the square of the store past one window. On the broker,
+// whose listing names 63,000–94,000 objects a second and whose stats answer
+// 15,000–19,000 a second at [auditConcurrency] on a member's own client and
+// 5,600–23,400 from a follower (internal/objstore/natsobj's package doc): a
+// hundred thousand objects are one listing of one or two seconds against five
+// to seven of stats; a million, ten listings and two to three minutes against
+// about one; two million, twenty listings and seven to eleven minutes against
+// two on a member and up to six from a follower. What the listing saves at
+// every size is REQUESTS — its consumer pulls five hundred names a request,
+// from whichever replica the broker places it on, so two million objects are
+// eighty thousand pulls where a stat apiece was two million reads from the
+// stream's leader — and on an S3 directory bucket, which lists a thousand
+// names a request at 31,400–33,000 a second and answers HEADs at 1,380–1,450
+// a second with thirty-two out from 20 ms away (s3obj's package doc, against
+// an in-process fake held that far away), two million objects are forty
+// thousand listing requests in about twenty minutes against two million HEADs
+// in twenty-three or twenty-four. A larger window lists
+// fewer times for 127 bytes a key more — a million keys is 127 MB on one
+// node — and a smaller one the reverse.
+const auditWindow = 100_000
 
 // Status is what the collector last found, for the alarm, the status surface
 // and the next duty holder.
@@ -648,11 +718,13 @@ type Options struct {
 type Collector struct {
 	opts Options
 
-	// suspectsHeld is [maxSuspects], and rangeChunk [rangeChunk], held on
-	// the value so a test can overflow the one without a hundred thousand
-	// references and cross the other without thousands.
+	// suspectsHeld is [maxSuspects], rangeChunk [rangeChunk] and window
+	// [auditWindow], held on the value so a test can overflow the first
+	// without a hundred thousand references and cross the others without
+	// thousands — every use reading the field, never the constant.
 	suspectsHeld int
 	rangeChunk   int
+	window       int
 
 	mu     sync.Mutex
 	status Status
@@ -672,7 +744,7 @@ func New(opts Options) (*Collector, error) {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	return &Collector{opts: opts, suspectsHeld: maxSuspects, rangeChunk: rangeChunk}, nil
+	return &Collector{opts: opts, suspectsHeld: maxSuspects, rangeChunk: rangeChunk, window: auditWindow}, nil
 }
 
 // Status is what the last passes found.
@@ -979,8 +1051,10 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 	if err != nil {
 		return nil, err
 	}
-	a := &auditor{store: c.opts.Store, r: r, q: suspects{limit: c.suspectsHeld}}
-	a.byName.Store(!c.opts.Store.Ranged())
+	a := &auditor{store: c.opts.Store, r: r, q: suspects{limit: c.suspectsHeld}, window: c.window}
+	if !c.opts.Store.Ranged() {
+		a.mode.Store(askListing)
+	}
 	m := mergeWalks(c.opts.References, v)
 
 	// THE WALK READS THE ESTATE ON THIS GOROUTINE ALONE, in key order, and
@@ -988,22 +1062,107 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 	// them out at once: a hand-off waits for a free slot, so the walk reads
 	// its next page only once the questions have caught up with this one,
 	// and a question that stops the audit ends actx, which stops the walk at
-	// its next reference. A question is a stat of one object or, on a store
-	// that lists in order, a listing of a range of [rangeChunk] of them.
+	// its next reference. A question is a listing of a range of [rangeChunk]
+	// references on a store that lists in order, a second look's stat, or a
+	// stat of one object once the audit asks by name. On a store that keeps
+	// no order the walk itself takes each reference's first look, from the
+	// window of the store's listing it falls in ([auditor.listWindow]):
+	// a listing is a request between two reads of the estate, never inside
+	// one, and the walk needs its window before it can go on.
 	asks, actx := errgroup.WithContext(ctx)
 	asks.SetLimit(auditConcurrency)
 	var (
 		walkErr error
 		chunk   []objstore.Reference
 		// after is the last key of the chunk before this one, so the
-		// chunks' ranges tile the key space: (after, chunk's last].
+		// chunks' ranges tile the key space: (after, chunk's last]. The
+		// listing's first window begins there too, so a walk the store
+		// answered a range of out of order lists only what no range
+		// already holds.
 		after objstore.Key
+		// win is the listing's window the walk is in, nil until it
+		// needs one.
+		win *window
 	)
 	ask := func(ref objstore.Reference) { asks.Go(func() error { return a.first(actx, ref) }) }
 	list := func() {
 		refs, from := chunk, after
 		asks.Go(func() error { return a.firstRange(actx, from, refs) })
 		after, chunk = refs[len(refs)-1].Object.Key, nil
+	}
+	// listed is ref's first look from the window of the store's listing its
+	// key falls in, listing the next window first once the walk has passed
+	// the last one's: a reference the window holds is held, or held wrong, as
+	// the listing says, and one it does not waits for a second look by name.
+	// A second look the queue hands back for one at once is asked as a
+	// question of its own, since the walk holds no slot. A listing that fails
+	// turns the audit to asking by name, this reference first.
+	listed := func(ref objstore.Reference) error {
+		for win == nil || (!win.last && ref.Object.Key.Compare(win.through) > 0) {
+			from := after
+			if win != nil {
+				from = win.through
+			}
+			next, err := a.listWindow(actx, from)
+			switch {
+			case err != nil && actx.Err() != nil:
+				return err
+			case err != nil:
+				if ferr := a.failed(fmt.Sprintf("listing the objects after %s", from), err); ferr != nil {
+					return ferr
+				}
+				a.listingFailed(actx, err)
+				ask(ref)
+				return nil
+			}
+			a.answered()
+			win = &next
+		}
+		// A NAME LISTED HOLDING NOTHING IS ASKED ABOUT BY NAME, as though
+		// the listing had not shown it: the broker's listing hands on a
+		// name whose metadata does not decode, and one only a delete
+		// marker holds, as an object of no bytes and no digest — which
+		// is also how an empty file's object reads from a listing that
+		// keeps no digest. Judged from the listing, the marker's object
+		// would be damaged where it is missing, and a spoiled empty
+		// file's held where it is damaged; a stat tells the three apart,
+		// at a stat for each empty file, which a company has few of.
+		got := absent
+		if info, ok := win.held[ref.Object.Key]; ok && (info.size != 0 || info.digest != "") {
+			got = judged(ref, objstore.Info{Size: info.size, Digest: info.digest})
+		}
+		for _, l := range a.firstAnswer(ref, got) {
+			asks.Go(func() error { return a.again(actx, l) })
+		}
+		return nil
+	}
+	// hand gives ref its first look as the audit now asks — what a chunk
+	// gathered for a range before the audit stopped asking in ranges
+	// included, since those references come before ref.
+	hand := func(ref objstore.Reference) error {
+		if a.mode.Load() == askRanges {
+			// A CHUNK ENDS BETWEEN TWO KEYS, never inside one: the next
+			// range begins after the last key of this one, so a key on
+			// both sides of the cut would be left out of the second.
+			if len(chunk) >= c.rangeChunk && ref.Object.Key != chunk[len(chunk)-1].Object.Key {
+				list()
+			}
+			chunk = append(chunk, ref)
+			return nil
+		}
+		gathered := chunk
+		chunk = nil
+		gathered = append(gathered, ref)
+		for _, g := range gathered {
+			if a.mode.Load() == askByName {
+				ask(g)
+				continue
+			}
+			if err := listed(g); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	for {
 		if aerr := actx.Err(); aerr != nil {
@@ -1018,27 +1177,22 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 			break
 		}
 		r.Referenced++
-		if a.byName.Load() {
-			// ASKED NAME BY NAME — a store that keeps no order, or one
-			// whose range came back out of order — and so is what this
-			// walk had gathered for a range.
-			for _, held := range chunk {
-				ask(held)
-			}
-			chunk = nil
-			ask(ref)
-			continue
+		if err := hand(ref); err != nil {
+			walkErr = err
+			break
 		}
-		// A CHUNK ENDS BETWEEN TWO KEYS, never inside one: the next range
-		// begins after the last key of this one, so a key on both sides of
-		// the cut would be left out of the second.
-		if len(chunk) >= c.rangeChunk && ref.Object.Key != chunk[len(chunk)-1].Object.Key {
-			list()
-		}
-		chunk = append(chunk, ref)
 	}
 	if walkErr == nil && actx.Err() == nil && len(chunk) > 0 {
-		list()
+		if a.mode.Load() == askRanges {
+			list()
+		} else {
+			// THE AUDIT STOPPED ASKING IN RANGES after the walk's last
+			// reference was gathered for one: the chunk is handed as it
+			// asks now.
+			last := chunk[len(chunk)-1]
+			chunk = chunk[:len(chunk)-1]
+			walkErr = hand(last)
+		}
 	}
 	// ON EVERY PATH, so no question outlives the pass. A question that
 	// stopped the audit is the root of a walk that stopped for it, so it is
@@ -1087,12 +1241,17 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 type auditor struct {
 	store *objstore.Store
 
-	// byName is set while the audit asks the store about each object rather
-	// than about ranges of them: from the start on a store that keeps no
-	// order, and from the first range one answered out of order
-	// ([objstore.ErrUnordered]).
-	byName   atomic.Bool
-	unsorted sync.Once
+	// mode is how the audit takes each reference's first look: in ranges
+	// ([askRanges]) on a store that lists in order, from the store's listing
+	// a window at a time ([askListing]) on one that keeps no order and from
+	// the first range one answered out of order ([objstore.ErrUnordered]),
+	// and by name ([askByName]) from the first window whose listing failed.
+	// It only ever moves down that list.
+	mode atomic.Int32
+	// window is how many listed objects a window holds ([auditWindow]).
+	window int
+	// unsorted and unlisted log each turn of the mode once an audit.
+	unsorted, unlisted sync.Once
 
 	// mu guards everything below, written by up to [auditConcurrency]
 	// questions at once.
@@ -1270,16 +1429,18 @@ func (a *auditor) again(ctx context.Context, l lookAgain) error {
 // of failures, and one that fails is a failure of the run, whose references it
 // had not reached wait AS A RANGE for their second look — a listing of the
 // range again ([auditor.secondRange]), never a stat of each. One the store
-// cannot give in order turns the rest of the audit — this chunk's remaining
-// references included — to asking about each object ([auditor.byName]).
+// cannot give in order turns the rest of the walk to the store's listing
+// ([askListing]); this chunk's remaining references, which come before what the
+// walk has reached, are asked about by name.
 //
 // NOTHING IS ASKED WHILE THE LISTING RUNS: what the queue hands back to be
 // looked at once is looked at after it, so a question never holds another
 // request open beneath it.
 func (a *auditor) firstRange(ctx context.Context, after objstore.Key, chunk []objstore.Reference) error {
-	if a.byName.Load() {
+	if a.mode.Load() != askRanges {
 		// HANDED ON BEFORE ANOTHER RANGE CAME BACK OUT OF ORDER, and only
-		// now given its slot: asked by name, not listed in vain.
+		// now given its slot: asked by name, not listed in vain — the walk's
+		// listing begins after it.
 		return a.eachByName(ctx, chunk)
 	}
 	i := 0
@@ -1381,15 +1542,37 @@ func (a *auditor) secondRange(ctx context.Context, after objstore.Key, refs []ob
 	return nil
 }
 
-// unordered turns the rest of the audit to asking about each object, the store
-// having answered a range out of order with err.
+// unordered turns the rest of the walk to the store's listing ([askListing]),
+// the store having answered a range out of order with err.
 func (a *auditor) unordered(ctx context.Context, err error) {
-	a.byName.Store(true)
+	if !a.mode.CompareAndSwap(askRanges, askListing) {
+		return
+	}
 	a.unsorted.Do(func() {
-		log.WarnContext(ctx, "objects_audit_by_name", "error", err,
+		log.WarnContext(ctx, "objects_audit_listed", "error", err,
 			"detail", "the object store cannot list a range of its objects in order, "+
-				"so the audit asks about each object instead: one request an object "+
-				"rather than one a range of them")
+				"so the audit reads its whole listing a window at a time instead, as "+
+				"for a store that keeps no order")
+	})
+}
+
+// listingFailed turns the rest of the audit to asking about each object by
+// name ([askByName]), the store having failed a window's listing with err.
+//
+// NOT THE AUDIT'S FAILURE: a listing the store fails is one failed question,
+// which the run of them counts ([failedInARow]) — a store that went away fails
+// the stats that follow too, and stops the audit there. And never a second
+// listing of the window: a window's extent is its listing's answer, so without
+// one nothing says which references the next listing would cover.
+func (a *auditor) listingFailed(ctx context.Context, err error) {
+	if !a.mode.CompareAndSwap(askListing, askByName) {
+		return
+	}
+	a.unlisted.Do(func() {
+		log.WarnContext(ctx, "objects_audit_by_name", "error", err,
+			"detail", "the object store failed a listing of its objects, so the audit "+
+				"asks about each object it has not reached by name instead: one "+
+				"request an object rather than a listing a window of them")
 	})
 }
 
@@ -1597,6 +1780,95 @@ func (q *suspects) drain() []lookAgain {
 	out := slices.Clone(q.queue[q.head:])
 	q.queue, q.head, q.held = nil, 0, 0
 	return out
+}
+
+// How the audit takes each reference's first look ([auditor.mode]).
+const (
+	// askRanges: a ranged listing of each chunk of references, on a store
+	// that lists in order ([objstore.Ranged]).
+	askRanges int32 = iota
+	// askListing: the store's whole listing, a window of keys at a time,
+	// the references walked beside it ([auditor.listWindow]).
+	askListing
+	// askByName: a stat of each reference.
+	askByName
+)
+
+// window is one window of the audit's listing of a store that keeps no order:
+// what the store holds under every key in it, the last key in it, and whether
+// it is the last window.
+type window struct {
+	held    map[objstore.Key]listedObject
+	through objstore.Key
+	last    bool
+}
+
+// listedObject is what a window keeps of one listed object: what [judged]
+// reads, and nothing else — its name is its key, and when it was written the
+// audit never asks.
+type listedObject struct {
+	size   int64
+	digest objstore.Hash
+}
+
+// listWindow lists the store once and keeps the [auditor.window] smallest keys
+// after `after` (the zero key: from the first) — the window. It is the last
+// window when the listing held no more keys than that; otherwise it runs
+// through the largest key kept, and the next window starts after it.
+//
+// ONE LISTING A WINDOW, AND THE WHOLE STORE EACH TIME: a store that keeps no
+// order hands its names in an order of its own, so the only way to know which
+// keys come first is to see them all. An audit of N objects is so
+// ceil(N / [auditWindow]) listings, each naming all N, where a stat apiece was
+// N requests; what that costs, and what it saves, is [auditWindow]'s to say.
+// What the window bounds is the memory: a window of keys and what [judged]
+// reads of each, never the company's inventory.
+//
+// AN UNDATED LISTING IS NO FAILURE HERE. An entry the backend could not date
+// is left out of the listing ([objstore.ErrUndated]), so the reference naming
+// it reads as unlisted and is asked about by name, which answers whether the
+// object is there; the collection, which deletes, is the pass that must refuse
+// to judge what it cannot date.
+func (a *auditor) listWindow(ctx context.Context, after objstore.Key) (window, error) {
+	held := map[objstore.Key]listedObject{}
+	var largest keyHeap
+	truncated := false
+	err := a.store.Backend().List(ctx, func(info objstore.Info) error {
+		k, ours := keyNamed(info.Name)
+		if !ours || (!after.IsZero() && k.Compare(after) <= 0) {
+			return nil
+		}
+		held[k] = listedObject{size: info.Size, digest: info.Digest}
+		heap.Push(&largest, k)
+		if largest.Len() > a.window {
+			delete(held, heap.Pop(&largest).(objstore.Key))
+			truncated = true
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, objstore.ErrUndated) {
+		return window{}, err
+	}
+	w := window{held: held, last: !truncated}
+	if truncated {
+		w.through = largest[0]
+	}
+	return w, nil
+}
+
+// keyHeap is a max-heap of keys: a window keeps the smallest keys it has
+// seen, so the one it gives up is always the largest.
+type keyHeap []objstore.Key
+
+func (h keyHeap) Len() int           { return len(h) }
+func (h keyHeap) Less(i, j int) bool { return h[i].Compare(h[j]) > 0 }
+func (h keyHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *keyHeap) Push(x any)        { *h = append(*h, x.(objstore.Key)) }
+func (h *keyHeap) Pop() any {
+	old := *h
+	k := old[len(old)-1]
+	*h = old[:len(old)-1]
+	return k
 }
 
 // keyNamed is the key a listed name stores, and whether it is one at all —
