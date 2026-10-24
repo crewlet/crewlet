@@ -10439,14 +10439,6 @@ a.live-row:focus-visible {
   inset: 0;
 }
 
-/* COMPANY STORAGE, an administrator's line at the foot of All: three quotas
-   in a row, each a figure over a thin bar, under a hairline that says the
-   gallery has ended. */
-/* THE RELATED ROW at the foot of All: one step under the listing. */
-.artifacts-related {
-  margin-top: var(--spacing-5);
-}
-
 /* THE QUOTA'S KEY on Settings › File storage, quiet under its figure, as a
    settings table draws a key. */
 .storage-quota-key {
