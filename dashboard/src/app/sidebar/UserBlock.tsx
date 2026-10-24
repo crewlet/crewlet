@@ -30,9 +30,14 @@
  *
  * A CREDENTIAL THAT IS NOT A PERSON BUT ACTS AS A SEAT is called by the SEAT,
  * because it has no name of its own and the seat is who it acts as: a Tier A
- * token bound to Miles's seat is "Miles", "via API token review" under it.
+ * token bound to Miles's seat is "Miles", "via API token" under it.
  * It was "token:review" over "Miles", the credential's spelling as the name
- * and the place it acts for as the aside. Its badge is the seat's own face,
+ * and the place it acts for as the aside. The row says only the KIND of
+ * credential (`viaKind`): the token's name beside it ("via API token review")
+ * cut the line short in the rail's width and said what the reader looks up
+ * rather than what they glance at. The whole line (`viaLine`) is where the
+ * reader looks for detail: the row's title, which a screen reader hears as
+ * its description, and the menu's header, under the access. Its badge is the seat's own face,
  * the initials, wearing a key on its corner (the kit's `Avatar` `mark`), so
  * the face says who and the corner says how. Which credential it is comes
  * from the login's grammar (`lib/login.ts`), never the session's `kind`: a
@@ -118,6 +123,7 @@ import { useState, type ReactNode } from "react";
 import {
   AccountRow,
   DensitySwitcher,
+  DescriptionList,
   IconButton,
   IconButtonLink,
   Popover,
@@ -181,7 +187,7 @@ export function whoLine(
       const grants = grantsLine(session.grants ?? []);
       // A CREDENTIAL ACTING AS A SEAT is the seat: the chart is unread
       // under a viewer that has not answered, so the handle stands in.
-      const via = viaLine(session.login);
+      const via = viaKind(session.login);
       if (via && session.seat) return { name: `@${session.seat}`, detail: via, grants };
       return {
         ...said(readerName(session), session.login, session.seat ? `@${session.seat}` : null),
@@ -212,23 +218,43 @@ export function whoLine(
   // what the block already shows.
   const seat = seatName || viewer.name || (viewer.handle ? `@${viewer.handle}` : "");
   // A CREDENTIAL ACTING AS A SEAT is called by the seat, and the line under
-  // it says how it is signed in (see the file's doc).
-  const via = viaLine(viewer.login);
+  // it says what kind of credential it is signed in with (see the file's doc).
+  const via = viaKind(viewer.login);
   if (via && seat) return { name: seat, detail: via, grants };
   return { ...said(name, viewer.login, seat), grants };
 }
 
 /**
+ * The credential a login that is not a person's names: its kind, as the row
+ * says it, and the name that tells it from every other of that kind. Null for
+ * a person's login, which is never said this way. Decided by the login's
+ * grammar (`lib/login.ts`), because a seat-bound token's session is answered
+ * with a person's `kind`.
+ */
+function credentialOf(login: string): { kind: string; name: string } | null {
+  const token = tierATokenOf(login);
+  if (token) return { kind: "via API token", name: token };
+  return loginKind(login) === "machine" ? { kind: "via service account", name: login } : null;
+}
+
+/**
  * How a credential that is not a person is signed in, as the line under the
- * seat it acts as: "via API token review", "via service account ci:deploy".
- * Empty for a person's login, which is never said this way. Decided by the
- * login's grammar (`lib/login.ts`), because a seat-bound token's session is
- * answered with a person's `kind`.
+ * seat it acts as in the row: "via API token", "via service account". Empty
+ * for a person's login.
+ */
+export function viaKind(login: string): string {
+  return credentialOf(login)?.kind ?? "";
+}
+
+/**
+ * The whole of how a credential is signed in, with the name that tells it
+ * apart: "via API token review", "via service account ci:deploy". Said where
+ * the reader looks for detail (the row's title and the menu's header), never
+ * in the row itself. Empty for a person's login.
  */
 export function viaLine(login: string): string {
-  const token = tierATokenOf(login);
-  if (token) return `via API token ${token}`;
-  return loginKind(login) === "machine" ? `via service account ${login}` : "";
+  const credential = credentialOf(login);
+  return credential ? `${credential.kind} ${credential.name}` : "";
 }
 
 /**
@@ -300,9 +326,11 @@ export function UserBlock({
   // "TO", as if it were somebody.
   const login = answered ? viewer.login : (session?.login ?? "");
   const bound = answered ? !viewer.unbound : Boolean(session?.seat);
-  const credential = resolved && viaLine(login) !== "";
+  // THE WHOLE LINE, with the credential's name, for the title and the menu.
+  const via = resolved ? viaLine(login) : "";
+  const credential = via !== "";
 
-  const menu = useAccountMenu(account, who.grants, () => setEverywhere(true));
+  const menu = useAccountMenu(account, who.grants, () => setEverywhere(true), via);
 
   return (
     <>
@@ -333,7 +361,10 @@ export function UserBlock({
         // THE READER'S OWN MENU, once anything can be offered (see the file's doc).
         menu={menu}
         current={here}
-        title={menu ? "Your account and signing out" : undefined}
+        // THE TITLE NAMES THE CREDENTIAL the row only says the kind of, so the
+        // pointer and a screen reader (which hears it as the description)
+        // reach the whole line without opening the menu.
+        title={menu ? (via ? `Signed in ${via}. ${MENU_TITLE}` : MENU_TITLE) : undefined}
         linkSuffix=", your menu"
         actions={
           <>
@@ -417,6 +448,9 @@ const MENU_ROWS = WORKSPACES.filter((ws) => ws.place === "menu");
 /** The reader's own Account, which the menu opens. */
 const ACCOUNT = workspaceRow("account")!;
 
+/** What the row's menu holds, as its title. */
+const MENU_TITLE = "Your account and signing out";
+
 /**
  * The reader's menu: their access above, then the Account and the session's
  * own gestures, or null while nothing can be offered. Exported for its suite.
@@ -427,6 +461,11 @@ export function useAccountMenu(
   grants: string,
   /** Ask whether to sign out everywhere, outside the menu (`SignOutEverywhereDialog`). */
   onSignOutEverywhere: () => void,
+  /**
+   * How a credential that is not a person is signed in, whole (`viaLine`):
+   * said under the access, since the row says only its kind. Empty for a person.
+   */
+  via = "",
 ): AccountRowMenu | undefined {
   const toast = useToast();
   const { socket } = useClient();
@@ -479,7 +518,18 @@ export function useAccountMenu(
   return {
     header:
       account.kind === "session" ? (
-        grants ? (
+        grants && via ? (
+          // TWO FACTS, ONE A LINE: a pair each, so the credential's whole line
+          // stands under the access rather than wrapping beside it.
+          <DescriptionList fit dense>
+            <DescriptionList.Item term="Access">
+              <Tag size="xs" variant="neutral">
+                {grants}
+              </Tag>
+            </DescriptionList.Item>
+            <DescriptionList.Item term="Signed in">{via}</DescriptionList.Item>
+          </DescriptionList>
+        ) : grants ? (
           <>
             <Text variant="label">Access</Text>
             <span>

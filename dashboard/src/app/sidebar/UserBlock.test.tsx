@@ -29,6 +29,7 @@ import {
   UserBlock,
   accountOf,
   useAccountMenu,
+  viaKind,
   viaLine,
   whoLine,
   type Account,
@@ -240,13 +241,15 @@ describe("who the block says this is", () => {
   // Miles's seat read "token:review" over "Miles": the credential's spelling
   // as the name, and the place it acts for as the aside. It has no name of
   // its own, so it is called by the seat, and the line under it says how it
-  // is signed in. Mutation: name it by `readerName` and the first case reads
-  // "token:review" again.
+  // is signed in: the KIND of credential, with its name left to the title and
+  // the menu. Mutation: name it by `readerName` and the first case reads
+  // "token:review" again; say the whole line and it reads "via API token
+  // review", which the rail's width cut short.
   test("a token bound to a seat is the seat, with how it is signed in under it", () => {
     const session = { login: "token:review", seat: "miles", kind: "person" };
     expect(whoLine(reviewToken, "Miles", session)).toEqual({
       name: "Miles",
-      detail: "via API token review",
+      detail: "via API token",
       grants: "Admin",
     });
     // THE CHART UNREAD, the handle stands in, written as a handle.
@@ -254,11 +257,11 @@ describe("who the block says this is", () => {
     // A SERVICE ACCOUNT BOUND TO A SEAT is the seat too.
     expect(
       whoLine({ ...reviewToken, login: "ci:deploy" }, "Miles", { login: "ci:deploy" }),
-    ).toMatchObject({ name: "Miles", detail: "via service account ci:deploy" });
+    ).toMatchObject({ name: "Miles", detail: "via service account" });
     // AND WHILE THE VIEWER HAS NOT ANSWERED, from the session alone.
     expect(whoLine({ ...nobody, loading: true }, "", { ...session, grants: ["admin"] })).toEqual({
       name: "@miles",
-      detail: "via API token review",
+      detail: "via API token",
       grants: "Admin",
     });
   });
@@ -271,6 +274,11 @@ describe("who the block says this is", () => {
     expect(viaLine("ci:deploy")).toBe("via service account ci:deploy");
     expect(viaLine("ada.lovelace")).toBe("");
     expect(viaLine("")).toBe("");
+    // THE ROW'S LINE IS THE KIND ALONE, read off the same grammar.
+    expect(viaKind("token:review")).toBe("via API token");
+    expect(viaKind("ci:deploy")).toBe("via service account");
+    expect(viaKind("ada.lovelace")).toBe("");
+    expect(viaKind("")).toBe("");
   });
 
   test("nobody and not-yet-known are their own sentences", () => {
@@ -392,6 +400,33 @@ describe("who the block says this is", () => {
     expect(menu.getAttribute("aria-describedby")).toBe(header.id);
     expect(menu.textContent).not.toContain("Signed in as");
     expect(header.textContent).not.toContain("ada.lovelace");
+  });
+
+  // THE CREDENTIAL'S NAME IS WHERE THE READER LOOKS FOR DETAIL. The row says
+  // only "via API token"; the token's name is in the row's title, which a
+  // screen reader hears as the row's description, and in the menu's header,
+  // under the access. The CONTROL is a person, whose title and header say no
+  // credential. Mutation: put the name back in the row and the first line goes
+  // red; drop it from the title or the header and a later line does.
+  test("a token bound to a seat says its kind in the row and its name in the title and the menu", async () => {
+    render(block(reviewToken, "Miles"));
+    const row = screen.getByRole("button", { name: /your menu/ });
+    expect(row.querySelector(".crewlet-account-row__detail")!.textContent).toBe("via API token");
+    expect(row.getAttribute("title")).toBe(
+      "Signed in via API token review. Your account and signing out",
+    );
+    fireEvent.click(row);
+    const menu = await screen.findByRole("menu", { name: "Your account" });
+    const header = menu.querySelector(".crewlet-menu__header")!;
+    expect(header.textContent).toBe("AccessAdminSigned invia API token review");
+    expect(within(header as HTMLElement).getByText("via API token review")).toBeTruthy();
+    cleanup();
+    render(block(ada, "Founder"));
+    const person = screen.getByRole("button", { name: /your menu/ });
+    expect(person.getAttribute("title")).toBe("Your account and signing out");
+    fireEvent.click(person);
+    const own = await screen.findByRole("menu", { name: "Your account" });
+    expect(own.querySelector(".crewlet-menu__header")!.textContent).toBe("AccessTracker");
   });
 
   // THE BLOCK IS THE ACCOUNT'S ROW, so on the Account it is current as a
