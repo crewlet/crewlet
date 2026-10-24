@@ -630,8 +630,8 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 		// than one round, and the
 		// submission named here is what makes a round of prose get asked
 		// again (toolloop.Config.TerminateAfter).
-		terminateAfter: []string{SubmitReviewTool}, intent: w.Summary,
-		steerable: true,
+		terminateAfter: []string{SubmitReviewTool},
+		steerable:      true,
 	})
 	if err != nil {
 		// Nothing to salvage here, and nothing lost: a reviewer's surface
@@ -808,15 +808,6 @@ type phaseRun struct {
 	// rounds — the executor and the reviewer, and nothing else. See
 	// [Config.Steer].
 	steerable bool
-
-	// intent is what the turn set out to do, for the extension judge.
-	//
-	// Empty for the executor, which is the phase that decides it as it
-	// goes. The judge's question is whether a phase is progressing, and
-	// progress is only meaningful against an intention: a tool log with
-	// nothing beside it makes "reading the same page twice" and
-	// "re-reading a page in order to compare" the same evidence.
-	intent string
 }
 
 // runPhase returns the PHASE'S CONTEXT as well as its result.
@@ -1098,7 +1089,7 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 			return done()
 		}
 		granted, decision := r.consider(ctx, ph, iteration, out.Rounds, policy, extension.Request{
-			Phase: ph, Task: r.cfg.Task, PlanSummary: in.intent,
+			Phase: ph, Task: r.cfg.Task,
 			Calls: calls(surface), LastText: res.Text, RoundsUsed: out.Rounds,
 		})
 		if granted <= 0 {

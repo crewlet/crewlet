@@ -130,6 +130,13 @@ func TestTheBudgetIsStatedToTheModel(t *testing.T) {
 	if len(m.asked[0].Tools) != 0 {
 		t.Fatal("a rewrite offers no tools")
 	}
+	// WHAT THE NOTE PROMISES, THE MODEL IS TOLD. Every rewrite is announced
+	// to its reader as "identifiers are verbatim, wording is not", and the
+	// instruction to keep them exactly as written is the only thing behind
+	// that promise; a prompt slimmed past it makes the note a lie.
+	if !strings.Contains(system, "Keep, exactly as written:\n- every identifier") {
+		t.Fatalf("the instructions no longer keep identifiers verbatim:\n%s", system)
+	}
 }
 
 // A MISS IS RETRIED ONCE, FROM THE ANSWER: the second call is shown the first

@@ -1098,7 +1098,7 @@ under the same identity, in a column of the same name.
 
 Every turn opens one `agent.turn` OTel span with child spans `agent.turn.execute`, `agent.turn.review`, `agent.turn.judge` (one per extension-judge call, nested under the phase that fired it). A worker does not open a span of its own; it reports as an `agent_phase_completed` event with `phase=subagent`, `host_phase=execute`, its `task_id`, its `worker` template and the `host_round` whose `delegate` call spawned it, so a dashboard groups it under the executor round that delegated it and can pair it with a node of the graph. Each call also emits one `subagent_batched` carrying that graph and every task's status. The trigger event's OTel context is restored exactly once at the turn boundary so the span hierarchy is stable across agents.
 
-The extension judge additionally emits an `AgentPhaseCompleted` event with `phase="judge"` carrying its system prompt, user prompt, response, token counts, and decision (`extend` / `rescue`) — the same shape as the executor / review phase events, so **Turns** and the seat's own transcript render judge calls alongside the main phases without any frontend change.
+The extension judge additionally emits an `AgentPhaseCompleted` event with `phase="judge"` carrying its model, token counts, duration and decision (`extend` / `rescue`), with the judge's own reason in `notes` — the same event as the executor / review phases, so **Turns** and the seat's own transcript render judge calls alongside the main phases without any frontend change. It carries no prompt and no response: the reason is the part of the answer a reader needs, and the evidence the judge read is the host phase's own record.
 
 ### What streams during a turn
 

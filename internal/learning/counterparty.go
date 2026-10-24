@@ -53,6 +53,37 @@ func (s Subject) Valid() bool {
 	return s.Handle != "" || (s.ExternalID != "" && s.Platform != "")
 }
 
+// Label is how every auxiliary prompt names the subject: the display name,
+// then in parentheses the identity that outlives a rename — the seat's handle
+// when the subject resolved to one, platform:externalID when it did not.
+// Either half stands alone when the other is missing, and "" means nobody.
+//
+// ONE RENDERING, because these prompts talk to each other through what they
+// store. The post-turn classifier attributes a fact to its requester as its
+// Requester line names them ("Sam (slack:U1) prefers terse replies"), and the
+// memory filter keeps a per-person memory only for the person its "Current
+// sender:" line names; the profiler and the profile block name the same
+// person again. Two renderings — a bare "Sam" on one side, the platform id
+// on the other — left the filter matching a fact against a name it was
+// written without, and a name is the half that changes.
+func (s Subject) Label() string {
+	name := strings.TrimSpace(s.Name)
+	id := strings.TrimSpace(s.Handle)
+	if id == "" {
+		id = strings.TrimSpace(s.ExternalID)
+		if platform := strings.TrimSpace(s.Platform); id != "" && platform != "" {
+			id = platform + ":" + id
+		}
+	}
+	switch {
+	case name != "" && id != "" && name != id:
+		return name + " (" + id + ")"
+	case name != "":
+		return name
+	}
+	return id
+}
+
 // Profile is what one observer has learned about one subject.
 type Profile struct {
 	// Observer is the observing seat's handle.

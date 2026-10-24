@@ -302,13 +302,10 @@ const ClusterSystemPrompt = `You are given several completed turns by the same
 agent whose tool runs were nearly identical. Write the reusable procedure they
 share, as a skill that agent can follow next time.
 
-Answer with a JSON object and nothing else:
-{"name":"kebab-case-name","description":"one line on when to use it",
- "content":"the procedure, as numbered steps"}
+` + skillDraftAnswer + `
 
-Write for the NEXT occurrence, not about these ones: no ticket numbers, no
-names, no dates, nothing specific to any single turn. Say what varies between
-them as a decision the reader has to make, not as an example.
+` + skillGenerality + ` Say what varies between them as a decision the
+reader has to make, not as an example.
 
 Answer exactly {} if the turns share no procedure worth writing down — similar
 tools do not always mean the same work.`

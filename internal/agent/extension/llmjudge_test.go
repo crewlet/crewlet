@@ -41,7 +41,6 @@ func judgeReq() extension.Request {
 	return extension.Request{
 		Phase:                 phase.Execute,
 		Task:                  "reply to the review comment",
-		PlanSummary:           "read the thread, then post",
 		RoundsUsed:            20,
 		MaxStep:               8,
 		RemainingUnderCeiling: 20,
@@ -165,7 +164,6 @@ func TestTheJudgeIsShownTheEvidence(t *testing.T) {
 		"github_get_pull_request", // the tool log
 		`"number":7`,              // and its arguments
 		"reply to the review comment",
-		"read the thread, then post",
 		"Most you may grant now: 8",
 	} {
 		if !strings.Contains(user, want) {
@@ -176,6 +174,22 @@ func TestTheJudgeIsShownTheEvidence(t *testing.T) {
 	// answer nothing, and there is none this pass could use.
 	if len(model.seen.Tools) != 0 {
 		t.Errorf("the judge was offered %d tools", len(model.seen.Tools))
+	}
+}
+
+// ONE RETRY OF A FAILURE IS NOT A LOOP. A transient failure — a timeout, a
+// 503 — is ridden out by trying the same call again, so a judge told that a
+// single unchanged retry is repetition rescues a phase that was converging.
+// Only the instructions can carry the threshold: the judge decides from them
+// and the log, and nothing downstream second-guesses a RESCUE.
+func TestTheJudgeCountsOnlyARepeatedFailureAsALoop(t *testing.T) {
+	t.Parallel()
+	model := &answering{answer: "RESCUE\nlooping"}
+	if _, err := extension.NewLLMJudge(model, "cheap").Decide(t.Context(), judgeReq()); err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if system := model.seen.Messages[0].Content; !strings.Contains(system, "failed the same way more than twice") {
+		t.Errorf("the judge's instructions lost the retry threshold:\n%s", system)
 	}
 }
 

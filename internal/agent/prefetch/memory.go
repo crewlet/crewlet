@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -84,31 +83,25 @@ const EmptyMemoryHint = "(no stored memories surfaced at turn start — re-run "
 // only — an operational rule may name somebody incidentally (whoever is on
 // leave, whoever the routing target is) while its meaning is about the
 // situation, and a filter that excluded it on a name mismatch would drop
-// exactly the memories that matter most.
+// exactly the memories that matter most. The prompt states that once, in
+// rules 1 and 3, rather than as a preamble the rules then repeat.
+//
+// "Most relevant first" is the half of the cap the model holds:
+// [memoryMaxSelected] keeps the head of the array, so the order decides what
+// survives it, and the number itself is the code's to enforce.
 const memoryFilterSystemPrompt = `You are a memory-relevance filter for an AI agent.
 
-Given the agent's current task and a numbered list of stored personal memories, return the indices of the memories genuinely relevant to this task.
+Given the agent's current task and a numbered list of its stored personal memories, answer with a JSON array of the integer indices of the memories relevant to the task, most relevant first, and nothing else; [] if none is.
 
-Output format (strict):
-- A single JSON array of integer indices, most relevant first.
-- No prose before or after. Examples: [3, 0, 7] or []
-- At most 8 indices.
+A memory is relevant if any one of these holds:
 
-The user prompt may include a "Current sender:" line identifying who triggered this turn. Use it when judging per-subject relevance (rule 3), but it is NOT a hard filter on its own — an operational rule that mentions a different person can still apply.
+1. It is operational context bearing on the task's topic: the state of the world that affects how to handle this kind of task now (routing and coverage, someone away, a freeze window, incident mode, a deployment lock, a capacity limit). It applies whoever is asking, even when it names somebody else.
 
-A memory is RELEVANT if ANY ONE of the following holds. Evaluate all three before deciding to exclude.
+2. It is a general rule, convention or preference for an action the task requires. It applies to every task of that kind.
 
-The distinction underlying these rules is what each memory is ABOUT. An operational memory is about a situation — a state, a condition, a workflow rule — and tells you what to do. A per-subject memory is about how to engage with a named person and tells you how to interact with them. The subject-match filter applies to the second kind only; an operational memory may name a person incidentally while its meaning is about the situation.
+3. It is a preference for engaging with a person the task involves: the person on the "Current sender:" line, the recipient, or someone named in the task. This is the one rule that turns on who is involved: a preference about somebody not party to the task does not apply.
 
-1. Operational context bearing on the task topic. Anything describing the state of the world that affects how to handle this kind of task right now — routing and coverage, someone being away, freeze windows, incident mode, deployment locks, capacity limits. May name people; the rule still applies regardless of who is asking. Subject mismatch alone is NOT grounds for exclusion here.
-
-2. General rules, conventions or preferences for actions the task requires. Workflow-wide patterns ("use semantic commit messages", "review every backend change before merge"). No subject filter — they apply to every instance of the task type.
-
-3. Per-subject preferences for engaging with someone the task explicitly involves. The memory describes how to interact with a named person who IS the current sender, OR is the recipient, OR is named in the task body. Subject mismatch IS a hard filter for this rule: a preference about somebody not party to the task does not apply.
-
-EXCLUDE only when none of the three apply — a per-subject preference about somebody not party to the task, or a memory describing a past state that no longer holds.
-
-If nothing applies, return [].`
+A memory describing a past state that no longer holds is not relevant.`
 
 // personalMemory renders the block.
 func (f *Fetcher) personalMemory(ctx context.Context, r Request, vector turnVector) string {
@@ -251,7 +244,7 @@ func (f *Fetcher) markRetrieved(ctx context.Context, ids []string) {
 // executor is handed. The brief wraps a chat message in scaffolding that is
 // the same on every turn of that surface — the seat's handle and marker, the
 // collectives, a role group in the triage — and the filter's rule 3 admits a
-// per-subject memory about anyone "named in the task body", so read against
+// per-subject memory about "someone named in the task", so read against
 // the brief, a memory about whoever the scaffolding names is relevant to every
 // chat turn it wraps. It was found that way: while the triage carried worked
 // examples ("@PM open a ticket for @SWE"), a preference about the PM matched
@@ -284,10 +277,16 @@ func memoryFilterPrompt(r Request, candidates []learning.DiaryEntry) string {
 }
 
 // senderLine names who triggered the turn, for the filter's rule 3.
+//
+// IN [learning.Subject.Label]'s FORM, which is the form the post-turn
+// classifier attributes a stored fact to its requester in: rule 3 asks the
+// model to match the one against the other, and a sender line that renders
+// a person differently from the memories about them is a match left to
+// guesswork.
 func senderLine(senders []learning.Subject) string {
 	labels := make([]string, 0, len(senders))
 	for _, s := range senders {
-		if label := subjectLabel(s); label != "" && !slices.Contains(labels, label) {
+		if label := s.Label(); label != "" && !slices.Contains(labels, label) {
 			labels = append(labels, label)
 		}
 	}
@@ -391,21 +390,6 @@ func (f *Fetcher) embed(ctx context.Context, text string) (learning.Vector, erro
 		return learning.Vector{}, err
 	}
 	return vector, nil
-}
-
-// subjectLabel renders a counterparty as the filter and the profile block
-// name them.
-func subjectLabel(s learning.Subject) string {
-	if name := strings.TrimSpace(s.Name); name != "" {
-		if handle := strings.TrimSpace(s.Handle); handle != "" {
-			return fmt.Sprintf("%s (%s)", name, handle)
-		}
-		return name
-	}
-	if handle := strings.TrimSpace(s.Handle); handle != "" {
-		return handle
-	}
-	return strings.TrimSpace(s.ExternalID)
 }
 
 // collapse folds a memory's internal newlines so one entry stays one bullet.
