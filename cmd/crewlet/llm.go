@@ -124,7 +124,8 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 	}
 
 	ctx := context.Background()
-	company, resolver, closeResolver, err := loadLLMConfig(ctx, *companyPath, *bootstrapPath, stderr)
+	company, resolver, closeResolver, err := loadLLMConfig(ctx, environ, *companyPath,
+		*bootstrapPath, stderr)
 	if err != nil {
 		return err
 	}
@@ -204,13 +205,19 @@ type cliAgentProvider struct {
 // environment — because a token rotated into the secret store must win over a
 // stale `.env` exported into this shell months ago. A command that resolved
 // from the environment alone would report a provider as having no token while
-// the running engine used one.
-func loadLLMConfig(ctx context.Context, companyPath, bootstrapPath string, notes io.Writer) (*config.Company, *config.Resolver, func(), error) {
+// the running engine used one. Beside a running engine it reads the company's
+// stored values through that engine ([companyResolver]), which is where they
+// are while it runs: these commands are made to run beside the seats, under
+// the lock beside the credentials directory that both take.
+func loadLLMConfig(ctx context.Context, environ config.Source, companyPath, bootstrapPath string,
+	notes io.Writer) (*config.Company, *config.Resolver, func(), error) {
+
 	company, err := config.LoadCompanyToRun(companyPath)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	resolver, _, closeResolver, err := companyResolver(ctx, bootstrapPath, notes)
+	resolver, _, closeResolver, err := companyResolver(ctx, environ, company, bootstrapPath,
+		"", notes)
 	if err != nil {
 		return nil, nil, nil, err
 	}

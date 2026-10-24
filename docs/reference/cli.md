@@ -70,7 +70,7 @@ subcommand below is served by it.
 
 ---
 
-> **Every command that reads the Tier B company document takes `-config`** (default `./crewlet.yaml`), and resolves its `${VAR}` references the way the engine does: **the secret store first, the process environment behind it**. A command that read the environment alone would see an empty string for every value already rotated into the store — and for `integrations.gitlab.signing_secret`, empty is the signal to *mint*, so a re-run would replace a working webhook secret at the third-party app. With no bootstrap at that path the run resolves from the environment alone and says so on its first line; a bootstrap that exists and declares no `secrets.keys` is refused, because every node's Tier A carries a keyring and resolving a company's values from whatever the shell holds on the strength of one that does not would hide the misconfiguration. The one exception is the operator's own credential (`-admin-token` / `$GITLAB_ADMIN_TOKEN` and its siblings), which is read from the environment only — see [the secret store](../concepts/secret-store.md#what-still-has-to-be-in-the-environment).
+> **Every command that reads the Tier B company document takes `-config`** (default `./crewlet.yaml`), and resolves its `${VAR}` references the way the engine does: **the secret store first, the process environment behind it**. A command that read the environment alone would see an empty string for every value already rotated into the store — and for `integrations.gitlab.signing_secret`, empty is the signal to *mint*, so a re-run would replace a working webhook secret at the third-party app. **Which store is read depends on whether the engine is running**, as it does for a write ([`crewlet secrets`](#crewlet-secrets)): a stopped node's own table is opened directly, while a running engine holds that table and the company's values are the fleet's, so they are read through its API — a provisioning command's `-api` names the node, and otherwise it is the `api.host:port` in `-config`. Through a node only the variables the company reads are fetched (what Settings › Secrets lists as "read by"), each with a reveal (`GET /secrets/{name}?reveal=true`), which the node logs by name against the caller and which takes `admin` and a person present: `CREWLET_API_TOKEN` must hold one of Tier A's tokens, since a machine token is refused a reveal. The run says on its first line which node it read. With no bootstrap at that path the run resolves from the environment alone and says so on its first line; a bootstrap that exists and declares no `secrets.keys` is refused, because every node's Tier A carries a keyring and resolving a company's values from whatever the shell holds on the strength of one that does not would hide the misconfiguration. The one exception is the operator's own credential (`-admin-token` / `$GITLAB_ADMIN_TOKEN` and its siblings), which is read from the environment only — see [the secret store](../concepts/secret-store.md#what-still-has-to-be-in-the-environment).
 
 
 > **Every command except `crewlet run` logs at `warn`.** They open a store,
@@ -2095,7 +2095,11 @@ own configuration). A token `auth.mode: api-key` removes from the child is not
 counted. `${VAR}` references and the variables `inherit-env` forwards are
 resolved in the process running `crewlet llm` — the secret store first, then
 that shell's environment — so run it with the engine's environment to get the
-engine's answer.
+engine's answer. Beside a running engine the store's values are read through
+it, as every command that reads the company reads them
+([Commands](#commands)), so `crewlet llm` runs while the seats do —
+with one of Tier A's tokens in `CREWLET_API_TOKEN` when the company reads a
+stored value.
 
 `llm list`'s `SIGN-IN` column is the first route `doctor` would name — both
 restore the entry's configured bundle first, as the engine does:

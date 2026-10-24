@@ -2533,7 +2533,12 @@ variable in `env` on a CLI that reads its key from its environment.
 `${VAR}` references, the conventional variables an entry falls back to, and
 the variables `inherit-env` forwards, are resolved in the process running
 `crewlet llm` — the secret store first, then *that shell's* environment — so
-run it with the engine's environment to get the engine's answer.
+run it with the engine's environment to get the engine's answer. Beside a
+running engine the store is the fleet's and is read through the engine's API,
+one reveal per stored variable the company reads, so every `crewlet llm`
+command runs while the seats do; a reveal takes `admin` and a person present,
+so `CREWLET_API_TOKEN` holds one of Tier A's tokens for it
+([CLI reference](../reference/cli.md#commands)).
 
 When none of those authenticates the CLI, `doctor` reports "no sign-in" as a
 problem, naming first a route you configured whose `${VAR}` resolved to

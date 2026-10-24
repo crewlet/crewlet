@@ -19,7 +19,7 @@ import (
 // operator asked it to: a directory tree of markdown, one space per
 // directory, plus the tool skills the files themselves declare.
 
-func runConfluenceImport(_ config.Source, args []string, stdout, stderr io.Writer) error {
+func runConfluenceImport(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 	directory, args := splitSubject(args)
 
@@ -68,7 +68,7 @@ func runConfluenceImport(_ config.Source, args []string, stdout, stderr io.Write
 	}
 
 	ctx := context.Background()
-	env, _, closeEnv, err := companyResolver(ctx, *bootstrapPath, stdout)
+	env, _, closeEnv, err := companyResolver(ctx, environ, company, *bootstrapPath, "", stdout)
 	if err != nil {
 		return err
 	}
@@ -153,7 +153,7 @@ func printConfluenceResult(w io.Writer, res *confluence.PublishResult) {
 // SKILLS-ONLY, and that is not an omission: knowledge docs are searched live
 // at query time and never loaded into a registry, so for them there is
 // nothing to resync.
-func runConfluenceResync(_ config.Source, args []string, stdout, stderr io.Writer) error {
+func runConfluenceResync(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("confluence resync", flag.ContinueOnError)
@@ -183,7 +183,7 @@ func runConfluenceResync(_ config.Source, args []string, stdout, stderr io.Write
 	}
 
 	ctx := context.Background()
-	env, _, closeEnv, err := companyResolver(ctx, *bootstrapPath, stdout)
+	env, _, closeEnv, err := companyResolver(ctx, environ, company, *bootstrapPath, "", stdout)
 	if err != nil {
 		return err
 	}
@@ -275,7 +275,8 @@ func runConfluenceProvision(environ config.Source, args []string, stdout, stderr
 	}
 
 	ctx := context.Background()
-	env, boot, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
+	env, boot, closeEnv, err := companyResolver(ctx, environ, company, *sinks.bootstrap,
+		*sinks.api, stdout)
 	if err != nil {
 		return err
 	}

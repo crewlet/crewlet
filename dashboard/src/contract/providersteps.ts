@@ -14,9 +14,10 @@
  * (`config.LoadCompanyToRun`, whose runnable rules refuse one) — as does the
  * import's own check, on either route — while the export is the stored
  * document as it stands. The node is stopped
- * first because the export and every `crewlet llm` command open the node's
- * store, which one process holds at a time; the import then takes the offline
- * route, and the node publishes the revision when it starts again.
+ * first because the export reads the node's store, which one process holds at
+ * a time — `crewlet llm` itself runs beside a running node, reading the stored
+ * values through it — and the import then takes the offline route, and the
+ * node publishes the revision when it starts again.
  *
  * `-capture-token` stores a headless token in the secret store under the CLI's
  * own token variable, which an entry naming no `auth.token` reads, so the
@@ -29,7 +30,8 @@
  * A step that reads a file no earlier step wrote fails it.
  */
 export const PROVIDER_STEPS = `# Stop crewlet run first (Ctrl+C), and run these beside its
-# crewlet.yaml: each one opens the store, which one process holds.
+# crewlet.yaml: the export reads the company out of the store,
+# which a running node holds.
 
 # 1. Write the running company to a file
 crewlet config export > company.yaml

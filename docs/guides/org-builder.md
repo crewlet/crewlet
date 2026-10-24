@@ -176,7 +176,8 @@ company has no model:
 
 ```bash
 # Stop crewlet run first (Ctrl+C), and run these beside its
-# crewlet.yaml: each one opens the store, which one process holds.
+# crewlet.yaml: the export reads the company out of the store,
+# which a running node holds.
 
 # 1. Write the running company to a file
 crewlet config export > company.yaml
@@ -196,10 +197,11 @@ crewlet config import company.yaml
 crewlet run
 ```
 
-- **The node is stopped first** because `crewlet config export` and every
-  `crewlet llm` command open the node's own store, and a running node holds
-  it: one process at a time. Run them on the host and in the directory of the
-  node that holds the store.
+- **The node is stopped first** because `crewlet config export` reads the
+  company out of the node's own store, and a running node holds it: one
+  process at a time. Run the steps on the host and in the directory of the
+  node that holds the store. `crewlet llm` itself would run beside the node,
+  reading the stored values through it, but the export it follows would not.
 - **The file comes from `crewlet config export`**, the active revision as it
   is stored, rather than from `GET /config?format=yaml` or **Copy as YAML**:
   those are redacted, and `crewlet llm` refuses a company file that still

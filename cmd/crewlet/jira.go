@@ -70,7 +70,8 @@ func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Wr
 	}
 
 	ctx := context.Background()
-	env, boot, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
+	env, boot, closeEnv, err := companyResolver(ctx, environ, company, *sinks.bootstrap,
+		*sinks.api, stdout)
 	if err != nil {
 		return err
 	}

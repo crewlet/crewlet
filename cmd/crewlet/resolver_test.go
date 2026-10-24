@@ -2,10 +2,22 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // A PROVISIONING RUN READS THE SECRET STORE, NOT JUST THE ENVIRONMENT.
@@ -25,7 +37,7 @@ func TestAProvisioningRunResolvesThroughTheSecretStore(t *testing.T) {
 	}
 
 	var notes bytes.Buffer
-	env, _, closeEnv, err := companyResolver(t.Context(), cfg, &notes)
+	env, _, closeEnv, err := companyResolver(t.Context(), noEnviron, nil, cfg, "", &notes)
 	if err != nil {
 		t.Fatalf("companyResolver: %v", err)
 	}
@@ -55,7 +67,7 @@ func TestAStoredSecretWinsOverAStaleExport(t *testing.T) {
 	}
 	t.Setenv("CONFLUENCE_TOKEN", "the-stale-export")
 
-	env, _, closeEnv, err := companyResolver(t.Context(), cfg, &bytes.Buffer{})
+	env, _, closeEnv, err := companyResolver(t.Context(), noEnviron, nil, cfg, "", &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("companyResolver: %v", err)
 	}
@@ -99,7 +111,7 @@ func TestWithoutAStoreTheRunSaysWhichChainItUsed(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "not-here.yaml")
 
 	var notes bytes.Buffer
-	env, _, closeEnv, err := companyResolver(t.Context(), missing, &notes)
+	env, _, closeEnv, err := companyResolver(t.Context(), noEnviron, nil, missing, "", &notes)
 	if err != nil {
 		t.Fatalf("a missing bootstrap is a supported deployment: %v", err)
 	}
@@ -133,7 +145,7 @@ func TestABootstrapWithNoKeyringIsRefused(t *testing.T) {
 	}
 
 	var notes bytes.Buffer
-	_, _, _, err := companyResolver(t.Context(), path, &notes)
+	_, _, _, err := companyResolver(t.Context(), noEnviron, nil, path, "", &notes)
 	if err == nil {
 		t.Fatal("a keyringless bootstrap was resolved rather than refused")
 	}
@@ -160,11 +172,267 @@ func TestABrokenBootstrapRefusesRatherThanResolvingFromTheEnvironment(t *testing
 	}
 
 	var notes bytes.Buffer
-	if _, _, _, err := companyResolver(t.Context(), path, &notes); err == nil {
+	if _, _, _, err := companyResolver(t.Context(), noEnviron, nil, path, "", &notes); err == nil {
 		t.Fatal("a bootstrap that cannot be read was treated as no bootstrap, " +
 			"so a configured store silently became a stale environment")
 	}
 	if notes.Len() > 0 {
 		t.Errorf("a failed run announced a fallback it did not take: %q", notes.String())
+	}
+}
+
+// revealNode is a running node's /secrets surface as a read through it meets
+// it: a listing of the names the fleet holds, and each value behind a reveal.
+type revealNode struct {
+	server *httptest.Server
+	held   map[string]string
+
+	// refuse, when set, is the status every reveal is answered with, and
+	// its body the engine's own refusal of a machine token.
+	refuse int
+
+	mu       sync.Mutex
+	revealed []string
+	tokens   []string
+}
+
+func newRevealNode(t *testing.T, held map[string]string) *revealNode {
+	t.Helper()
+	n := &revealNode{held: held}
+	n.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n.mu.Lock()
+		n.tokens = append(n.tokens, r.Header.Get("Authorization"))
+		n.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if r.URL.Path == "/secrets" {
+			var rows []map[string]string
+			for name := range n.held {
+				rows = append(rows, map[string]string{"name": name, "key_id": "k1"})
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"secrets": rows})
+			return
+		}
+		name, ok := strings.CutPrefix(r.URL.Path, "/secrets/")
+		if !ok || r.URL.Query().Get("reveal") != "true" {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = fmt.Fprint(w, `{}`)
+			return
+		}
+		n.mu.Lock()
+		n.revealed = append(n.revealed, name)
+		n.mu.Unlock()
+		if n.refuse != 0 {
+			w.WriteHeader(n.refuse)
+			_, _ = fmt.Fprint(w, `{"error":"token_refused","detail":"a person must be present"}`)
+			return
+		}
+		value, held := n.held[name]
+		if !held {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = fmt.Fprint(w, `{"error":"not_found"}`)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"name": name, "value": value})
+	}))
+	t.Cleanup(n.server.Close)
+	return n
+}
+
+// boot is a Tier A whose API address is this node's.
+func (n *revealNode) boot(t *testing.T) *config.Bootstrap {
+	t.Helper()
+	host, port, err := net.SplitHostPort(strings.TrimPrefix(n.server.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bootWithAPI(t, host, p, "")
+}
+
+func (n *revealNode) reveals() []string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	out := slices.Clone(n.revealed)
+	slices.Sort(out)
+	return out
+}
+
+// readingCompany reads two variables: a ${VAR} its model's env names, and the
+// headless token its Claude Code entry falls back to while it names none.
+func readingCompany(t *testing.T) *config.Company {
+	t.Helper()
+	company, err := config.ParseCompanyDocument([]byte(`
+name: Acme
+roles:
+  - name: Chief Executive
+    handle: ceo
+    goal: Run the company
+providers:
+  llm:
+    default:
+      model: sonnet
+      env:
+        CREWLET_TEST_SETTING: "${PROXY_URL}"
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return company
+}
+
+// errLockedStore is the error a store a running engine holds opens with.
+var errLockedStore = fmt.Errorf("open store: %w: /var/lib/crewlet/index.db is held by "+
+	"pid 41 on host-a since 2026-01-01T00:00:00Z", store.ErrLocked)
+
+// BESIDE A RUNNING ENGINE THE COMPANY'S VALUES ARE READ THROUGH IT.
+//
+// The engine holds its store for as long as it runs, and the company's
+// stored values are the fleet's then, inside the engine's own process. Every
+// command that reads the company — `crewlet llm` and the vendor commands —
+// used to stop at the lock, which made `crewlet llm login` impossible beside
+// the seats it signs in. And each value comes back through a REVEAL, so only
+// what the company reads is asked for: a stored name it does not read is
+// never revealed, and a name it reads that the fleet does not hold is left to
+// the environment without a request.
+func TestARunningEngineHandsOverOnlyTheValuesTheCompanyReads(t *testing.T) {
+	t.Parallel()
+	node := newRevealNode(t, map[string]string{
+		"PROXY_URL":               "http://proxy.example.com:3128",
+		"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-fixture",
+		"GITLAB_TOKEN_SWE":        "glpat-not-read-by-this-company",
+	})
+
+	var notes bytes.Buffer
+	values, err := storedThroughTheRunningNode(t.Context(), tokenEnviron("ops-token"),
+		node.boot(t), "crewlet.yaml", readingCompany(t), errLockedStore, &notes)
+	if err != nil {
+		t.Fatalf("a running engine's store was refused rather than read through it: %v", err)
+	}
+	resolver := config.WithStore(values)
+	if got := resolver.Value("${PROXY_URL}"); got != "http://proxy.example.com:3128" {
+		t.Errorf("a ${VAR} the company names resolved to %q, not the fleet's value", got)
+	}
+	if got := resolver.Lookup("CLAUDE_CODE_OAUTH_TOKEN"); got != "sk-ant-oat01-fixture" {
+		t.Errorf("the token the entry falls back to resolved to %q, not the fleet's value", got)
+	}
+	if want := []string{"CLAUDE_CODE_OAUTH_TOKEN", "PROXY_URL"}; !slices.Equal(node.reveals(), want) {
+		t.Errorf("revealed %v, want only what the company reads and the fleet holds, %v",
+			node.reveals(), want)
+	}
+	for _, token := range node.tokens {
+		if token != "Bearer ops-token" {
+			t.Errorf("a request carried %q, not the invocation's own credential", token)
+		}
+	}
+	if !strings.Contains(notes.String(), node.server.URL) {
+		t.Errorf("the run did not say which chain it read: %q", notes.String())
+	}
+}
+
+// A READ THE NODE REFUSES SAYS BOTH WHY, AND WHAT THE READ NEEDS.
+//
+// A machine token is refused every reveal, whatever it carries, and the
+// command has no other way to the values while the engine runs. So the lock
+// and the refusal are both in the error, with the token a reveal takes — and
+// stopping the engine is NOT offered: a stopped node's own table is not where
+// the fleet's values are, and reading it instead is the stale resolution that
+// mints a webhook secret over a working one.
+func TestARefusedReadThroughTheNodeSaysBothWhyAndWhatItTakes(t *testing.T) {
+	t.Parallel()
+	node := newRevealNode(t, map[string]string{"PROXY_URL": "http://proxy.example.com:3128"})
+	node.refuse = http.StatusForbidden
+
+	_, err := storedThroughTheRunningNode(t.Context(), tokenEnviron("pat-of-a-person"),
+		node.boot(t), "crewlet.yaml", readingCompany(t), errLockedStore, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("a refused reveal resolved anyway, so a stored value would read as unset")
+	}
+	if !errors.Is(err, store.ErrLocked) {
+		t.Fatalf("the lock's sentinel was lost: %v", err)
+	}
+	for _, want := range []string{"pid 41", "crewlet.yaml", "403", apiTokenEnv, "Tier A"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal omits %q: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "stop `crewlet run`") {
+		t.Errorf("the refusal offers stopping the engine, whose own table does not "+
+			"hold the fleet's values: %v", err)
+	}
+}
+
+// ONLY A LOCKED STORE IS READ THROUGH THE NODE. Any other failure is a broken
+// node, and an HTTP attempt would replace its message with a connection
+// refused.
+func TestOnlyALockedStoreIsReadThroughTheNode(t *testing.T) {
+	t.Parallel()
+	node := newRevealNode(t, map[string]string{"PROXY_URL": "http://proxy.example.com:3128"})
+	other := errors.New("the keyring cannot open this store")
+
+	_, err := storedThroughTheRunningNode(t.Context(), tokenEnviron("ops-token"),
+		node.boot(t), "crewlet.yaml", readingCompany(t), other, &bytes.Buffer{})
+	if !errors.Is(err, other) || err.Error() != other.Error() {
+		t.Fatalf("an unrelated failure was not returned as it was: %v", err)
+	}
+	if len(node.tokens) != 0 {
+		t.Errorf("an unrelated failure was answered with %d requests to the node", len(node.tokens))
+	}
+}
+
+// A NAMED NODE IS WHERE THE VALUES ARE READ, and the local path is never
+// opened: a vendor command's -api names the node its credentials are written
+// through, possibly from a machine that is not one, where opening the Tier A
+// store path would create an empty database and resolve every stored value as
+// unset.
+func TestANamedNodeIsReadAndTheLocalStoreIsLeftAlone(t *testing.T) {
+	t.Parallel()
+	node := newRevealNode(t, map[string]string{"PROXY_URL": "http://proxy.example.com:3128"})
+	cfg := bootstrapWithKeyring(t, "k1")
+	storePath := filepath.Join(filepath.Dir(cfg), "index.db")
+
+	env, _, closeEnv, err := companyResolver(t.Context(), tokenEnviron("ops-token"),
+		readingCompany(t), cfg, node.server.URL, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("companyResolver through a named node: %v", err)
+	}
+	defer closeEnv()
+	if got := env.Value("${PROXY_URL}"); got != "http://proxy.example.com:3128" {
+		t.Errorf("${PROXY_URL} = %q, not the named node's value", got)
+	}
+	if _, err := os.Stat(storePath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the local store at %s was opened for a run that named a node: %v",
+			storePath, err)
+	}
+}
+
+// SLACK RESOLVES NOTHING, so it opens no store for it. What it reads of the
+// deployment is Tier A's address alone, and resolving the company's values
+// there — opening the store, or beside a running engine revealing them
+// through it — would be a credential read for a run that uses none.
+func TestSlackProvisionReadsTierAAndNoStore(t *testing.T) {
+	t.Parallel()
+	cfg := bootstrapWithKeyring(t, "k1")
+	storePath := filepath.Join(filepath.Dir(cfg), "index.db")
+	companyPath := filepath.Join(t.TempDir(), "company.yaml")
+	if err := os.WriteFile(companyPath, []byte(builderCompany), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errs bytes.Buffer
+	err := run([]string{"slack", "provision", companyPath, "-print", "-config", cfg,
+		"-ledger", filepath.Join(t.TempDir(), "ledger.json")}, &out, &errs)
+	if err != nil {
+		t.Fatalf("slack provision of a company with no Slack seat: %v (%s)", err, errs.String())
+	}
+	if _, err := os.Stat(storePath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("slack provision opened the store at %s, though it resolves nothing: %v",
+			storePath, err)
 	}
 }
