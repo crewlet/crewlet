@@ -362,6 +362,12 @@ func TestAMoveThatWidensIsConfirmed(t *testing.T) {
 	if len(g.writes.all()) != 0 {
 		t.Fatal("an unconfirmed widening move was written")
 	}
+	w = g.do(jane, "PATCH", "/artifact-folders/"+inner, `{"name":"Shared ideas","parent":"`+marketing+`"}`,
+		keyed()...)
+	if w.Code != http.StatusConflict || len(g.writes.all()) != 0 {
+		t.Fatalf("a rename sent with an unconfirmed widening move: %d %s, writes %+v", w.Code, w.Body,
+			g.writes.all())
+	}
 	if w := g.do(jane, "PATCH", "/artifact-folders/"+inner, `{"parent":"`+marketing+`","confirm_widen":true}`,
 		keyed()...); w.Code != http.StatusOK {
 		t.Fatalf("a confirmed widening move: %d %s", w.Code, w.Body)

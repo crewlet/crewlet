@@ -441,19 +441,17 @@ func (s *Service) patchFolder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx, id := r.Context(), pathFolder(r)
-	var res statelog.Result
+	// EVERY DECISION BEFORE ANY WRITE, so a rename and a move sent together
+	// land together or not at all: a move refused (unconfirmed, or into a
+	// folder the caller may not file into) never leaves the rename behind.
+	var rename, move FolderAdmission
 	if body.Name != nil {
 		a, err := s.gate.AdmitFolder(ctx, s.reads, p, authz.ActionArtifactFolderRename, id)
 		if err != nil {
 			refuseFolderAdmission(w, r, authz.ActionArtifactFolderRename, err, true)
 			return
 		}
-		out, err := s.writes.RenameFolder(ctx, a.call(s.gate.limits(), key), id, *body.Name)
-		if err != nil {
-			writeFailed(w, r, key, "rename the folder", err)
-			return
-		}
-		res = out.Result
+		rename = a
 	}
 	if body.Parent != nil {
 		a, err := s.gate.AdmitFolder(ctx, s.reads, p, authz.ActionArtifactFolderMove, id)
@@ -472,7 +470,19 @@ func (s *Service) patchFolder(w http.ResponseWriter, r *http.Request) {
 				"op_id": key})
 			return
 		}
-		out, err := s.writes.MoveFolder(ctx, a.call(s.gate.limits(), key), id, *body.Parent)
+		move = a
+	}
+	var res statelog.Result
+	if body.Name != nil {
+		out, err := s.writes.RenameFolder(ctx, rename.call(s.gate.limits(), key), id, *body.Name)
+		if err != nil {
+			writeFailed(w, r, key, "rename the folder", err)
+			return
+		}
+		res = out.Result
+	}
+	if body.Parent != nil {
+		out, err := s.writes.MoveFolder(ctx, move.call(s.gate.limits(), key), id, *body.Parent)
 		if err != nil {
 			writeFailed(w, r, key, "move the folder", err)
 			return
