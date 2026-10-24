@@ -34,12 +34,13 @@
 //     ([ColorPattern]). Contrast is judged on the effective values (fallbacks
 //     filled): `text` on `light_ground` below [MinTextContrast] refuses an
 //     ADOPTION (never a publish: a draft may be unfinished); every other pair
-//     ([ContrastPairs]) warns.
+//     ([ContrastPairs]) warns. An absent role is measured as the kit paints
+//     it ([Fallbacks]).
 //   - `type.heading` and `type.body` each name EXACTLY ONE source: a kit face
 //     (`kit`: one of [KitFaces]), a curated system stack (`stack`: one of
 //     [SystemStacks]), or an uploaded family (`family`, 1 to
-//     [MaxFamilyNameBytes] bytes of letters, digits, spaces and hyphens, with
-//     1 to [MaxFontFilesPerFamily] WOFF2 `files`, each at most
+//     [MaxFamilyNameBytes] bytes, an ASCII letter then letters, digits, single
+//     spaces and hyphens, with 1 to [MaxFontFilesPerFamily] WOFF2 `files`, each at most
 //     [MaxFontFileBytes], and `licensed` true: the publisher attests the
 //     company may embed it).
 //   - `voice.summary` is 0 to [MaxVoiceSummaryBytes] bytes; `voice.write_like`

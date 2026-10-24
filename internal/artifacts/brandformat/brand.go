@@ -36,11 +36,12 @@ const (
 	MaxImageSide   = 4096
 	MaxImagePixels = 16_777_216
 
-	// The faces. A family is at most four files (regular, italic, and two
-	// weights), each at most 2 MiB, enough for a CJK subset; the WOFF2
-	// header is checked for a table count of 1 to MaxFontTables and a
-	// decoded size of at most MaxFontSFNTBytes.
-	MaxFamilyNameBytes    = 64
+	// The faces. A family's name is at most 40 bytes, the slide format's
+	// family bound, so every brand face can also be a deck's. A family is at
+	// most four files (regular, italic, and two weights), each at most 2 MiB,
+	// enough for a CJK subset; the WOFF2 header is checked for a table count
+	// of 1 to MaxFontTables and a decoded size of at most MaxFontSFNTBytes.
+	MaxFamilyNameBytes    = 40
 	MaxFontFilesPerFamily = 4
 	MaxFontFileBytes      = 2 << 20
 	MaxFontTables         = 64
@@ -118,30 +119,6 @@ type Colors struct {
 	PrimaryOnDark string `json:"primary_on_dark,omitempty"`
 }
 
-// ContrastPairs are the colour pairs an adoption reports, each a foreground
-// role, a ground role and the least ratio it should reach. Only the first,
-// `text` on `light_ground`, refuses an adoption ([MinTextContrast]); the rest
-// warn and are listed in the adopt dialog. A role of `white` or `black` is that
-// colour rather than a role.
-var ContrastPairs = []ContrastPair{
-	{Foreground: "text", Ground: "light_ground", Min: MinTextContrast, Refuses: true},
-	{Foreground: "white", Ground: "primary", Min: 4.5},
-	{Foreground: "black", Ground: "primary", Min: 4.5},
-	{Foreground: "light_ground", Ground: "dark_ground", Min: 4.5},
-	{Foreground: "primary", Ground: "light_ground", Min: 3},
-}
-
-// ContrastPair is one pair of colour roles an adoption measures.
-type ContrastPair struct {
-	Foreground string
-	Ground     string
-	Min        float64
-
-	// Refuses marks the one pair below which an adoption is refused rather
-	// than warned about.
-	Refuses bool
-}
-
 // Type is the kit's two typefaces.
 type Type struct {
 	Heading Face `json:"heading"`
@@ -157,8 +134,9 @@ type Face struct {
 	// Stack is one of [SystemStacks].
 	Stack string `json:"stack,omitempty"`
 
-	// Family is an uploaded family's name, 1 to [MaxFamilyNameBytes] bytes
-	// of letters, digits, spaces and hyphens, with its Files.
+	// Family is an uploaded family's name, 1 to [MaxFamilyNameBytes] bytes:
+	// an ASCII letter, then letters, digits, single spaces and hyphens. Its
+	// Files are its WOFF2 files.
 	Family string     `json:"family,omitempty"`
 	Files  []FontFile `json:"files,omitempty"`
 
