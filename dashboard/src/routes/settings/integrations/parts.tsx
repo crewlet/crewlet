@@ -35,6 +35,19 @@ import {
   type Tool,
 } from "./model.ts";
 
+/**
+ * What an app's action is called to a screen reader: its visible words, then
+ * whose it is ("Open Crewlet Works", "Replace key GitLab").
+ *
+ * A COLUMN OF CARDS EACH SAYING "Open" is a list of identical link names, and
+ * a reader listing the page's links could not tell one card's from the next.
+ * The visible words come first, so a person speaking what they see still
+ * reaches the control by them. One spelling for the app's page and the home.
+ */
+export function actionName(words: string, name: string): string {
+  return `${words} ${name}`;
+}
+
 /** A built-in service's own mark. */
 export function ServiceMark({ service, size }: { service: BuiltInService; size: "md" | number }) {
   return <ProductMark product={service.key} size={size} soon={service.soon} />;

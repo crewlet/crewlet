@@ -15,6 +15,7 @@ import { SetupForm } from "../SetupForm.tsx";
 import { SetupPasses, SurfaceDeliveries, integrationFacts } from "./catalogue.tsx";
 import { workingLine, type Intent, type Model, type Tool } from "./model.ts";
 import {
+  actionName,
   AgentList,
   BeforeYouStart,
   BucketTag,
@@ -49,7 +50,7 @@ function PrimaryAction({
     <Button
       size="small"
       variant="primary"
-      aria-label={`${label} ${tool.entry.name}`}
+      aria-label={actionName(label, tool.entry.name)}
       disabledReason={held}
       onClick={() => {
         if (!held) onOpen(intent);

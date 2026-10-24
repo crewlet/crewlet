@@ -7625,7 +7625,10 @@ one table test), the connected apps (Jira and Confluence as their own
 products) and the Crewlet services in use, each a **compact card** (the kit's
 `CatalogTile` at `density` `compact`: one header line with the mark, the name,
 the state and a figure, the one action at its end, and one line of what it
-gives), two to a row, and, for an Admin while only Crewlet's services are in
+gives), two to a row. The action is named for its card to a screen reader
+(`actionName` in `parts.tsx`: "Open Crewlet Works", "Replace key GitLab", the
+spelling the app's own page uses), because a column of cards each saying Open
+is a list of links nobody can tell apart. And, for an Admin while only Crewlet's services are in
 use, one line saying apps connected from the list show there too. Then the
 recent activity (the latest deliveries and each app's last check), and the
 **address apps deliver to**, said once at the foot, cut to fit with the whole

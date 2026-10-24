@@ -46,7 +46,14 @@ import type { IntegrationRow } from "~/contract/integrations.ts";
 import { CATALOG, deliveryEvent, type Entry } from "./catalogue.tsx";
 import { DIRECTORY, entryOf, type Line } from "./categories.ts";
 import { BUCKET_WORDS, type BuiltInService, type Intent, type Model, type Tool } from "./model.ts";
-import { EngineAddress, FeedRow, IssueRow, ServiceMark, ServiceState } from "./parts.tsx";
+import {
+  actionName,
+  EngineAddress,
+  FeedRow,
+  IssueRow,
+  ServiceMark,
+  ServiceState,
+} from "./parts.tsx";
 import { DESCRIPTION, homeFacts, type InUse } from "./home.ts";
 
 /** How many lines the activity shows: a glance, with each app one press away. */
@@ -202,7 +209,12 @@ function Card({
         status={<ServiceState service={s} />}
         description={s.sentence}
         action={
-          <ButtonLink size="small" variant="secondary" href={pageOf(s.key)}>
+          <ButtonLink
+            size="small"
+            variant="secondary"
+            href={pageOf(s.key)}
+            aria-label={actionName("Open", s.name)}
+          >
             Open
           </ButtonLink>
         }
@@ -214,6 +226,7 @@ function Card({
   const words = BUCKET_WORDS[tool.bucket];
   const figure = figureOf(tool, model!, now);
   const fix = tool.issues.find((i) => i.owner === "you" && i.fix)?.fix;
+  const name = line.kind === "product" ? line.name : entry.name;
   return (
     <CatalogTile
       as="li"
@@ -221,14 +234,19 @@ function Card({
       mark={<VendorMark vendor={entry.vendor} size={MARK} />}
       title={
         <a className="int-tile-link" href={pageOf(line.key)}>
-          {line.kind === "product" ? line.name : entry.name}
+          {name}
         </a>
       }
       status={<StatusDot tone={words.tone}>{words.label}</StatusDot>}
       description={entry.description}
       {...(figure ? { meta: figure } : {})}
       action={
-        <ButtonLink size="small" variant="secondary" href={pageOf(line.key, fix?.intent)}>
+        <ButtonLink
+          size="small"
+          variant="secondary"
+          href={pageOf(line.key, fix?.intent)}
+          aria-label={actionName(fix ? fix.label : "Open", name)}
+        >
           {fix ? fix.label : "Open"}
         </ButtonLink>
       }

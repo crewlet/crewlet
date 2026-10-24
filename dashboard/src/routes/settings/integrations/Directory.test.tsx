@@ -293,13 +293,32 @@ test("the home shows only what is in use, each a compact card with one action", 
     expect(card.className).toContain("crewlet-catalog-tile--compact");
   }
   const gitlab = within(inUse).getByRole("link", { name: "GitLab" }).closest("li") as HTMLElement;
-  expect(within(gitlab).getByRole("link", { name: "Replace key" }).getAttribute("href")).toBe(
-    "#/company/integrations/gitlab?open=rotate",
-  );
+  expect(
+    within(gitlab).getByRole("link", { name: "Replace key GitLab" }).getAttribute("href"),
+  ).toBe("#/company/integrations/gitlab?open=rotate");
   // THE HEADING DESCRIBES THE PAGE, and the count beside In use is of every
   // card under it, the services included.
   expect(screen.getByText(DESCRIPTION)).toBeTruthy();
   expect(within(inUse).getAllByRole("heading")[0]!.textContent).toBe("In use 5");
+});
+
+// EVERY CARD'S ACTION NAMES ITS CARD: a reader listing the links in In use
+// meets "Open Crewlet Works" and "Replace key GitLab", never a column of
+// "Open". Mutation: drop the action's aria-label and the names repeat.
+test("each card's action is named for its app, and no two share a name", async () => {
+  mount(ADMIN);
+  const inUse = await screen.findByRole("region", { name: /^In use/ });
+  const cards = [...inUse.querySelectorAll(".crewlet-catalog-tile")] as HTMLElement[];
+  const names = cards.map((card) => {
+    const title = card.querySelector(".int-tile-link")!.textContent!;
+    const links = within(card).getAllByRole("link");
+    const action = links[links.length - 1]!;
+    const name = action.getAttribute("aria-label") ?? "";
+    expect(name.startsWith(action.textContent!.trim()), name).toBe(true);
+    expect(name.endsWith(title), name).toBe(true);
+    return name;
+  });
+  expect(new Set(names).size).toBe(names.length);
 });
 
 // A FIX LANDS WITH ITS FORM OPEN, read once and taken out of the address.
