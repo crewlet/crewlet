@@ -117,18 +117,23 @@ func TestAPublishNamesTheVersionItWasBasedOn(t *testing.T) {
 
 // A PUBLISH BASED ON A MOVED HEAD CARRIES WHAT A MERGE NEEDS: 412
 // version_moved, the live head and its manifest, and the live entry's text.
+// The head names its folder only where the publisher sees it: sam is told
+// nothing of jane's private Drafts the page is filed in.
 func TestAPublishBasedOnAMovedHeadCarriesTheLiveEntry(t *testing.T) {
 	t.Parallel()
 	g := newRig(t, true)
 	live, _ := g.estate.Version(t.Context(), page, 2)
-	g.pipeline.err = &artifactsdomain.VersionMoved{Head: heads()[page], Live: live}
+	filed := heads()[page]
+	filed.Folder = drafts
+	g.pipeline.err = &artifactsdomain.VersionMoved{Head: filed, Live: live}
 	w := g.do(person("sam"), "POST", at(page, "/versions"), publishV3, append(keyed(), "If-Match", `"1"`)...)
 	if w.Code != http.StatusPreconditionFailed || errorOf(t, w) != "version_moved" {
 		t.Fatalf("a publish on a moved head: %d %s", w.Code, w.Body)
 	}
 	var body struct {
 		Head struct {
-			HeadNumber int `json:"head_number"`
+			HeadNumber int    `json:"head_number"`
+			Folder     string `json:"folder"`
 		} `json:"head"`
 		Live  artifactsdomain.Version `json:"live"`
 		Entry struct {
@@ -143,6 +148,9 @@ func TestAPublishBasedOnAMovedHeadCarriesTheLiveEntry(t *testing.T) {
 		body.Entry.Text != string(indexHTML) {
 		t.Errorf("the 412 carries head %d, live %d, entry %q %q", body.Head.HeadNumber,
 			body.Live.Number, body.Entry.Path, body.Entry.Text)
+	}
+	if body.Head.Folder != "" {
+		t.Errorf("the 412 tells sam the folder %q he cannot see", body.Head.Folder)
 	}
 }
 

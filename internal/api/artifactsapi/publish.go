@@ -575,9 +575,20 @@ func (s *Service) versionMoved(w http.ResponseWriter, r *http.Request, key strin
 			"could not be written")
 		return
 	}
+	head := shapeHead(moved.Head, a.Role(), a.Elevated())
+	// ITS FOLDER ONLY WHERE THE PUBLISHER SEES IT, as every read of a head
+	// names it; a folder this node could not decide on is left out, which
+	// shows less rather than more.
+	shown := folderShowing{g: s.gate, reads: s.reads, p: a.Principal}
+	folder, err := shown.folder(r.Context(), head.Folder)
+	if err != nil {
+		log.WarnContext(r.Context(), "artifacts_moved_folder_undecided", "artifact",
+			moved.Head.ID.String(), "error", err.Error())
+	}
+	head.Folder = folder
 	detail := httpjson.Detail{
 		"detail": say(moved), "op_id": key,
-		"head": shapeHead(moved.Head, a.Role(), a.Elevated()),
+		"head": head,
 		"live": moved.Live,
 	}
 	if entry, err := s.entryText(r.Context(), moved.Live, artifacts.MaxConflictEntryText); err != nil {
