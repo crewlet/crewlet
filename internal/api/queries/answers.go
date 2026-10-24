@@ -321,10 +321,16 @@ type Sources struct {
 	// an unreported surface as connecting rather than guessing either way.
 	Converges func(kind integration.Kind) bool
 
-	// Work and Pages are this node's projections of the company's own
-	// tracker and knowledge base. Nil leaves their questions unregistered,
-	// which is the honest answer for a company on Jira and Confluence:
-	// there is no native record for this node to have a copy of.
+	// Work and Pages are the company's own tracker and knowledge base, read
+	// through this node's estate router: a data node's copy of each
+	// state-log domain — this node's while it serves, another data node's
+	// while it does not (ADR-0025) — never a projection kept beside them.
+	// Nil leaves their questions unregistered, which is the honest answer
+	// for a company on Jira and Confluence: there is no native record to
+	// read. The sources `crewlet run` wires resolve their half per question
+	// (see native.go), so a half not up yet answers [ErrUnavailable] and one
+	// the company keeps on a vendor [ErrUnknown], as an unregistered
+	// question would.
 	//
 	// Consumer-defined interfaces rather than the concrete readers, like
 	// every other seam here — and the READ side only. Nothing on this
@@ -340,17 +346,21 @@ type Sources struct {
 	// and a screen needs to know which. Nil leaves `work_files`
 	// unregistered.
 	Files FileReader
-	// Backlinks is which pages and tasks link to a page — this node's
+	// Backlinks is which pages and tasks link to a page — a data node's
 	// lexical index, which derives the links from the bodies it reads
-	// ([search.Backlinks]). Nil leaves the `page` answer without
-	// `linked_from`, which is absent rather than empty: "nothing links
-	// here" is a claim only a node holding the index can make.
+	// ([search.Backlinks]), asked through the estate router of a data node
+	// whose copies of both the knowledge base and the tracker serve, since
+	// the links are named from both (ADR-0045). Nil leaves the `page`
+	// answer without `linked_from`, which is absent rather than empty:
+	// "nothing links here" is a claim only a data node holding the index,
+	// and serving the copies it is named from, can make.
 	Backlinks PageBacklinks
 
 	// WorkSearch is the ranked item search, and it is SEPARATE from
 	// [Sources.Work] because the two fail independently: the rows are the
-	// fleet's and the lexical index is this node's own, so a node still
-	// building one answers every board question and cannot rank a word.
+	// replicated estate's and the lexical index is each data node's own,
+	// so a data node still building one answers every board question and
+	// cannot rank a word.
 	// Nil leaves `work_search` unregistered, which is what a screen needs
 	// in order to offer the board's filters instead of an empty ranking.
 	WorkSearch WorkSearcher

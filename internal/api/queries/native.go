@@ -17,20 +17,31 @@ import (
 
 // The native tracker and knowledge base, read for a screen.
 //
-// # These read THIS NODE'S OWN COPY, and that is the whole reason they are cheap
+// # These read A COPY OF THE ESTATE, and that is the whole reason they are cheap
 //
 // Every other way to answer "what is on the board" is a listing over the
 // fleet's own record — O(keys) message deliveries, on a request path, for a
-// page a dashboard refreshes. This node's copy is what makes it a SQL query
-// instead, and it is the same copy a seat's own tools read, so an operator and
-// an agent looking at one task see one task.
+// page a dashboard refreshes. A data node's SQL copy is what makes it a query
+// instead, reached through this node's estate router exactly as a seat's own
+// tools reach it — this node's copy while it serves, another data node's while
+// it does not (ADR-0025) — so an operator and an agent looking at one task see
+// one task.
 //
-// The two halves reach that copy differently, and the difference is visible in
-// the answers rather than hidden here: the tracker's rows are derived by an
-// applier from an ordered log, so every answer carries the level it was served
-// at and what it could not account for; the wiki's are maintained by a
-// projector following a bucket's change feed, which could only say hydrated or
-// not.
+// Both halves are state-log domains, so their rows are derived by an applier
+// from an ordered log and every answer carries the level it was served at and
+// what it could not account for.
+//
+// # The halves are found PER QUESTION
+//
+// A node's tracker and knowledge base come up with its first company, which a
+// node that booted with none meets at an apply, long after this surface was
+// wired — so the sources `crewlet run` hands it (internal/api's
+// `NativeSources`) resolve their half for every question rather than once. A
+// half not up yet answers [ErrUnavailable]; a half this company keeps on a
+// vendor answers [ErrUnknown], exactly as a question nothing registered would,
+// since no wait brings it; and a question merging several halves asks each
+// source first, as a [Keeper], so it leaves out the half this company does not
+// keep rather than refusing whole.
 //
 // # A COPY THAT HAS NOT CAUGHT UP SAYS SO rather than answering empty
 //
