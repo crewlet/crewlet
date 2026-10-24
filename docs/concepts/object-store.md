@@ -253,11 +253,14 @@ store:
   quarter of the limit, and what the limit leaves once the state logs' five
   eighths (or the log ceilings you set, where they are larger) and a 1 GiB
   floor for the coordination remainder are taken out. It is never below 1 GiB, the
-  smallest value the field accepts. Where the broker states no limit, the
-  stream volume's free space stands in for it. The bucket is created before
-  the state logs are sized, so the logs size themselves from what the broker
-  has left, or from the free space less the bucket's reservation where the
-  broker states no limit.
+  smallest value the field accepts. Where the broker states no limit (or its
+  budget cannot be read), three quarters of the stream volume's free space
+  stands in for it: the cap a NATS server running its defaults gives itself,
+  which this node cannot read, so the bucket and the logs are never sized
+  past what such a server can grant. The bucket is created before the state
+  logs are sized, so the logs size themselves from what the broker has left,
+  or from that stand-in less the bucket's reservation where the broker states
+  no limit.
 - **A broker needs room for it.** On a host whose broker can reserve only a
   few gibibytes, the bucket's gibibyte is on top of the state logs' floors;
   give such a host more disk, or set `stream.store_max_bytes` and

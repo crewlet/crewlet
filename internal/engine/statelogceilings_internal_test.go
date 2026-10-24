@@ -650,27 +650,31 @@ func TestTheLogsShareLeavesTheEstateTheBucketsRoom(t *testing.T) {
 //
 // Two ways past it, one per reading. Where the broker states its limit, the
 // missing logs were sized as though the existing one held its ask. Where the
-// pool falls back to the volume's free space, the existing ceilings were ADDED
-// to it as well, although free space never paid for a reservation — so even
-// sized from what the others hold, the missing logs were given half of what
-// they hold again.
+// pool falls back to a figure taken from the volume's free space, the existing
+// ceilings were ADDED to it as well, although free space never paid for a
+// reservation — so even sized from what the others hold, the missing logs were
+// given half of what they hold again.
 func TestALogCreatedBesideOnesThatExistFitsTheShare(t *testing.T) {
 	t.Parallel()
-	// 44 GiB free: the tracker and the vector changelog each ask for 11 GiB,
-	// and the knowledge base's log and the artifacts log 2.75 each. The
-	// tracker's stream already holds 16, more than its ask, so what the
-	// others asked for does not fit what it leaves of any share below, and a
-	// sizing that counted the tracker at its ask, or added what it holds to
-	// free space, would hand them all of it. (At a volume where the tracker's
-	// ask equals what it holds, counting it at either reads the same, and
-	// neither mistake shows.) The share left beside the tracker still holds
-	// every log's floor, so what is measured is the counting and not the
-	// floors, which the division may exceed by design.
-	const free = 44 * gib
+	// The tracker and the vector changelog each ask for a quarter of the free
+	// space, and the knowledge base's log and the artifacts log a sixteenth
+	// each: at 44 GiB free 11 GiB and 2.75, at 60 GiB 15 and 3.75. The
+	// tracker's stream already holds 16, more than its ask at either, so what
+	// the others asked for does not fit what it leaves of any share below,
+	// and a sizing that counted the tracker at its ask, or added what it
+	// holds to the figure free space gives, would hand them all of it. (At a
+	// volume where the tracker's ask equals what it holds, counting it at
+	// either reads the same, and neither mistake shows.) The share left beside
+	// the tracker still holds every log's floor, so what is measured is the
+	// counting and not the floors, which the division may exceed by design;
+	// that is why the rows that read no limit measure 60 GiB, whose stand-in
+	// limit (three quarters, [unstatedLimit]) grants 45, where 44 GiB's would
+	// grant 33 and leave less beside the tracker than the floors take.
 	const trackerHolds = 16 * gib
 	for name, tc := range map[string]struct {
 		budget jetstream.StorageBudget
 		unread error
+		free   int64
 		// grantable is what the broker could grant the logs if they held
 		// nothing, worked out here rather than read back from the code.
 		grantable int64
@@ -680,15 +684,18 @@ func TestALogCreatedBesideOnesThatExistFitsTheShare(t *testing.T) {
 		"a broker that states its limit": {
 			budget: jetstream.StorageBudget{Limit: 48 * gib, Committed: 20 * gib,
 				Source: jetstream.BudgetServerStore},
+			free:      44 * gib,
 			grantable: 44 * gib,
 		},
 		"a broker that states no limit": {
 			budget:    jetstream.StorageBudget{Limit: -1, Source: jetstream.BudgetUnstated},
-			grantable: free,
+			free:      60 * gib,
+			grantable: 45 * gib,
 		},
 		"a budget that could not be read": {
 			unread:    errors.New("no responders"),
-			grantable: free,
+			free:      60 * gib,
+			grantable: 45 * gib,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -696,7 +703,7 @@ func TestALogCreatedBesideOnesThatExistFitsTheShare(t *testing.T) {
 			host := sizingHost{budget: tc.budget, unread: tc.unread, held: map[string]int64{
 				tracker.Domain{}.Stream().Name: trackerHolds,
 			}}
-			sized, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream")
+			sized, err := sizeCeilings(t.Context(), host, config.Stream{}, tc.free, "/var/lib/crewlet/stream")
 			if err != nil {
 				t.Fatalf("sizeCeilings: %v", err)
 			}
@@ -769,20 +776,27 @@ func TestARestartSizingFromFreeSpaceSizesTheLogsAsTheFirstBootDid(t *testing.T) 
 // AN OPERATOR'S SERVER THAT STATES NO LIMIT HOLDS THE BUCKET AND EVERY LOG.
 //
 // Such a server's own cap is three quarters of its volume's free space, which
-// this node cannot read, so it stands its own free space in for the limit. The
-// object bucket is reserved first, a quarter of that figure, and the logs were
-// then sized as half of the whole of it: three quarters between them, the
-// server's entire cap, so the last log created (the artifact datastore's,
-// appended last to the register) was refused on a CI runner with 86 GB free.
-// Sized from what the bucket leaves, as under a stated limit, the bucket, every
-// log and the coordination remainder fit the cap on every volume large enough
-// to hold the logs' floors.
+// this node cannot read, so it stands a figure from its own free space in for
+// the limit. Twice that figure was too large. The object bucket is reserved
+// first, a quarter of it, and the logs were then sized as half of the whole of
+// it: three quarters between them, the server's entire cap, so the last log
+// created (the artifact datastore's, appended last to the register) was
+// refused on a CI runner with 86 GB free. Then the figure was the whole free
+// space and the logs took their share of what the bucket left, which came
+// within a thirty-second of the cap once the share was five eighths: the
+// bucket a quarter of the free space and the logs fifteen thirty-seconds,
+// twenty-three between them inside a cap of twenty-four, so the mailboxes and
+// coordination were left less than the gibibyte the bucket's derivation
+// promises them on every volume under 32 GiB. Standing in three quarters
+// ([unstatedLimit]), the cap a server running its defaults takes, the bucket,
+// every log and the coordination remainder fit it on every volume large
+// enough to hold the logs' floors.
 func TestAnUnstatedServerHoldsTheBucketAndEveryLog(t *testing.T) {
 	t.Parallel()
-	for _, free := range []int64{16 * gib, 86104199168, 1 << 40} {
+	for _, free := range []int64{16 * gib, 20 * gib, 24 * gib, 86104199168, 1 << 40} {
 		t.Run(strconv.FormatInt(free, 10), func(t *testing.T) {
 			t.Parallel()
-			bucket := derivedObjectsReservation(free, 0)
+			bucket := derivedObjectsReservation(unstatedLimit(free), 0)
 			host := sizingHost{budget: jetstream.StorageBudget{Limit: -1, Committed: bucket,
 				Source: jetstream.BudgetUnstated}}
 			sized, err := sizeCeilings(t.Context(), host, config.Stream{}, free, "/var/lib/crewlet/stream")

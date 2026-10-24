@@ -260,7 +260,8 @@ func unmeasuredDetail(fields []string) string {
 // UNSTATED IS NOT UNBOUNDED. An external broker whose account states no limit
 // still refuses a reservation its servers cannot back, and a client cannot
 // read their caps; the volume this node measured is the one figure it has, so
-// it stands in for the limit, under the same rule ([logsGrantable]).
+// the cap a server running its defaults takes of it ([unstatedLimit]) stands
+// in for the limit, under the same rule ([logsGrantable]).
 //
 // # What each figure is, and what is taken off it
 //
@@ -273,9 +274,9 @@ func unmeasuredDetail(fields []string) string {
 // disk divided a pool larger than its first boot's by half of what the logs
 // hold. And taking nothing off it counted the OTHER reservations as room: the
 // object bucket is reserved before the logs are sized ([objectsReservation]),
-// a quarter of the same free space, and a pool of half of it on top reached
-// three quarters of the volume, the whole of an operator's server's default
-// cap, so that server refused the last log created.
+// a quarter of the same figure, and a pool of half of the whole of it on top
+// reached three quarters of the volume, the whole of an operator's server's
+// default cap, so that server refused the last log created.
 func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 	free int64, volume string) (map[string]domainCeiling, error) {
 
@@ -400,20 +401,39 @@ func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 // ONE RULE FOR EVERY BROKER: the limit, less every reservation the broker has
 // granted to a stream that is not a state log. Where the broker states its
 // limit, that is what it has left with the logs' own ceilings (holding) added
-// back. Where it states none this node can read, the stream volume's free
-// space stands in for the limit, and what the broker reports reserved beyond
-// the logs' own (the object bucket's, say) comes off it: free space already
-// contains the logs' ceilings, because a reservation never spends it, but no
-// byte of it can be granted twice. A budget that could not be read reports no
-// reservation, so free space is all this node has.
+// back. Where it states none this node can read, [unstatedLimit] of the stream
+// volume's free space stands in for the limit, and what the broker reports
+// reserved beyond the logs' own (the object bucket's, say) comes off it: free
+// space already contains the logs' ceilings, because a reservation never
+// spends it, but no byte of it can be granted twice. A budget that could not be
+// read reports no reservation, so the stand-in is all this node has.
 func logsGrantable(budget jetstream.StorageBudget, readErr error, free, holding int64) int64 {
 	if readErr != nil {
-		return free
+		return unstatedLimit(free)
 	}
 	if available := budget.Available(); available >= 0 {
 		return available + holding
 	}
-	return max(free-max(budget.Committed-holding, 0), 0)
+	return max(unstatedLimit(free)-max(budget.Committed-holding, 0), 0)
+}
+
+// unstatedLimit is the limit this node assumes for a broker that states none
+// it can read, from the free space on its own stream volume: THREE QUARTERS,
+// the limit nats-server gives itself when nobody sets one and the limit the
+// embedded broker states on the same volume ([embeddedShareNum]).
+//
+// NOT THE WHOLE FREE SPACE, because no server running its defaults can
+// reserve that much: an operator's server beside this node on its volume caps
+// itself at three quarters of it, and sized against all of it the bucket took
+// a quarter of the free space and the logs their share of the rest, which
+// reached the server's whole cap — on a 16 GiB volume once the code log's
+// floor was registered, and on every volume under 32 GiB once the logs' share
+// was five eighths — leaving the mailboxes and coordination, which reserve
+// nothing, less than the gibibyte the bucket's derivation promises them. A
+// server elsewhere with more room is only asked for less than it has, which
+// costs ceilings and never a boot.
+func unstatedLimit(free int64) int64 {
+	return free / embeddedShareDen * embeddedShareNum
 }
 
 // heldCeiling is one log's answer to [domainHost.DomainStreamCeiling]: the

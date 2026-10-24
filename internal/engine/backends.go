@@ -600,7 +600,7 @@ func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js nat
 		// derives it. Sized against the shipped heartbeat instead, a
 		// 15-second lease (renewed every five) waited 20 s behind the
 		// window at the floor and lapsed.
-		reservation, explicit := objectsReservation(ctx, b, out.Queue)
+		reservation, explicit := objectsReservation(ctx, b, out.Queue, volumeFree)
 		backend, err := natsobj.Open(openCtx, js, natsobj.Config{
 			Replicas: b.Stream.Replicas, Clustered: clusteredStream(b),
 			MaxBytes: reservation, Explicit: explicit,
@@ -631,10 +631,11 @@ func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js nat
 // from what the broker has left once the bucket holds its reservation
 // ([logsGrantable]) and every restart divides the same remainder, which keeps
 // the logs' ceilings reproducible from boot to boot. That holds on a broker
-// that states no limit too: the free space standing in for the limit is
-// spent by the bucket's reservation, which the broker still reports, so the
-// bucket and the logs never reserve more between them than they would under a
-// stated limit of that size.
+// that states no limit too: the limit standing in for it ([unstatedLimit] of
+// the free space, the cap a server running its defaults takes) is the one both
+// are sized against, and the bucket's reservation, which the broker still
+// reports, comes off it before the logs are, so the bucket and the logs never
+// reserve more between them than they would under a stated limit of that size.
 
 // objectsCoordinationFloor is what the derived reservation always leaves the
 // broker beside the state logs' share: the mailboxes and coordination buckets
@@ -665,9 +666,14 @@ type budgetReader interface {
 // objectsReservation is the byte reservation the nats bucket is created with,
 // and whether an operator wrote it (store.objects.nats_max_bytes). An unset
 // one is derived from the broker's limit ([derivedObjectsReservation]); where
-// the broker states none this node can read, from the stream volume's free
-// space, which is the one figure it has, as the logs' sizing does.
-func objectsReservation(ctx context.Context, b *config.Bootstrap, q any) (int64, bool) {
+// the broker states none this node can read, from [unstatedLimit] of the
+// stream volume's free space, which is the one figure it has, exactly as the
+// logs' sizing stands it in ([logsGrantable]). freeOf measures that space
+// ([volumeFree] in production), handed in as the logs' sizing is handed its
+// figure, so the stand-in is a table row rather than whatever the machine
+// running the case has free.
+func objectsReservation(ctx context.Context, b *config.Bootstrap, q any,
+	freeOf func(dir string) (int64, error)) (int64, bool) {
 	if set := b.Store.Objects.NatsMaxBytes; set > 0 {
 		return set, true
 	}
@@ -687,14 +693,14 @@ func objectsReservation(ctx context.Context, b *config.Bootstrap, q any) (int64,
 	}
 	if limit < 0 {
 		volume := streamVolume(b)
-		free, err := volumeFree(volume)
+		free, err := freeOf(volume)
 		if err != nil {
 			log.WarnContext(ctx, "objects_reservation_free_space_unmeasured",
 				"path", volume, "error", err.Error(),
 				"detail", "the nats bucket is reserved at its smallest; set "+
 					"store.objects.nats_max_bytes to choose it")
 		}
-		limit = free
+		limit = unstatedLimit(free)
 	}
 	reservation := derivedObjectsReservation(limit, b.Stream.DeclaredLogCeilings())
 	log.InfoContext(ctx, "objects_reservation_derived", "bytes", reservation,

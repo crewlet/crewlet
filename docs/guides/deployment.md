@@ -873,8 +873,9 @@ of **zero** under its own source — `account_no_tier` or
 two carry the same number and the opposite instruction, since one clears by
 somebody freeing room and these only by a change of configuration. A tier
 declared **unlimited** is neither again: it states its limit as a negative, the
-broker creates against it, and the engine sizes from its own free disk as it
-does for any broker that states no limit.
+broker creates against it, and the engine sizes from three quarters of its own
+free disk, the cap a server running its defaults takes, as it does for any
+broker that states no limit.
 
 The broker refuses every stream, consumer and bucket create either way, but
 **not with the same words**, so the engine's own refusal carries the ones you
