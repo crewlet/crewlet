@@ -338,6 +338,11 @@ func TestThePostureMatrix(t *testing.T) {
 		// top of it as a token.
 		{"a credential's value", "GET", "/secrets/POSTURE_PROBE?reveal=true", "",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, forbd, ok, unath, forbd, forbd, tokenNo, unath, forbd, stepUp}},
+		// THE SAME VERB MOUNTED ON ITS OWN ROUTE, so the same answer
+		// for every shape: what a document's run reads several of.
+		{"several credentials' values", "POST", "/secrets/reveal",
+			`{"names":["POSTURE_PROBE"]}`,
+			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, forbd, ok, unath, forbd, forbd, tokenNo, unath, forbd, stepUp}},
 		{"overwriting a credential", "PUT", "/secrets/POSTURE_PROBE", "probe",
 			[len(shapes)]int{unath, unath, forbd, forbd, forbd, ok, forbd, ok, unath, forbd, forbd, ok, unath, forbd, stepUp}},
 	} {

@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,7 +16,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
 
 // bundleProvider is a cli-agent provider with a credential directory of its
@@ -51,7 +55,7 @@ func TestALoginBundleRoundTripsThroughTheCLI(t *testing.T) {
 	if err := os.WriteFile(creds, []byte(`{"token":"moved"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	blob, err := source[0].provider.ExportBundle()
+	blob, err := source[0].provider.ExportBundle(t.Context())
 	if err != nil {
 		t.Fatalf("ExportBundle: %v", err)
 	}
@@ -356,4 +360,157 @@ func TestDoctorNamesWhatItDoesNotExamine(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "declares no cli-agent or anthropic providers") {
 		t.Errorf("err = %v", err)
 	}
+}
+
+// A TOKEN PIPED TO -token-stdin IS HELD TO THE SIZE EVERY STORE KEEPS, before
+// the rest of it is read: it was read whole, however much arrived, only for
+// the store to refuse it — and a stream that never ended was never refused.
+// The whitespace around a token is not part of it, and nothing but whitespace
+// is no token.
+func TestATokenPipedToBeStoredIsBounded(t *testing.T) {
+	t.Parallel()
+	if got, err := tokenFromReader(strings.NewReader("  sk-not-real\r\n")); err != nil || got != "sk-not-real" {
+		t.Errorf("a token with whitespace around it read as %q, %v", got, err)
+	}
+	if _, err := tokenFromReader(strings.NewReader(" \n")); err == nil {
+		t.Error("whitespace alone was taken as a token")
+	}
+	endless := &endlessReader{}
+	if _, err := tokenFromReader(endless); !errors.Is(err, secrets.ErrValueTooLarge) {
+		t.Fatalf("a stream that never ends answered %v, want ErrValueTooLarge", err)
+	}
+	if most := secrets.MaxValueBytes + 2; endless.read > most {
+		t.Errorf("read %d bytes of a stream to refuse it, want at most %d", endless.read, most)
+	}
+	if _, err := tokenFromReader(strings.NewReader(strings.Repeat("t", secrets.MaxValueBytes+1))); !errors.Is(err, secrets.ErrValueTooLarge) {
+		t.Errorf("a token a byte past the limit answered %v, want ErrValueTooLarge", err)
+	}
+}
+
+// A WRITE OF WHAT A RUNNING ENGINE READS SAYS WHEN IT IS READ.
+//
+// `crewlet llm login -capture-token` (and `-token-stdin`) and `crewlet llm
+// export -secret-store` write through a running node, as `crewlet secrets set`
+// does — and said only where the value went. But the engine reads the token,
+// and restores the bundle, only when it builds a company to run: at its boot
+// and at every apply. So a running fleet went on signing in without the new
+// token until something applied the company, and the export said a node
+// restores the bundle "whenever its credentials directory is empty", as though
+// a running node watched it. Each write now says what `secrets set` says for
+// the store it reached, and the export says when a node restores a bundle.
+func TestAnLLMWriteSaysWhenARunningEngineReadsIt(t *testing.T) {
+	t.Parallel()
+	for _, route := range []struct {
+		name string
+		// open is the run's store on this route, and held answers what
+		// it then holds under a name.
+		open func(t *testing.T) (*companyStore, func(name string) bool)
+		note string
+	}{
+		{"through a running node", func(t *testing.T) (*companyStore, func(string) bool) {
+			node := newRevealNode(t, nil)
+			return llmStoreAt(t, tokenEnviron(cliFixtureToken), "-api", node.server.URL),
+				func(name string) bool { _, ok := node.holds(name); return ok }
+		}, secretsFleetNote},
+		{"this node's own table", func(t *testing.T) (*companyStore, func(string) bool) {
+			cfg := bootstrapWithKeyring(t, "k1")
+			return llmStoreAt(t, noEnviron, "-config", cfg), func(name string) bool {
+				_, _, err := secretsCmd(t, cfg, "get", name, "-reveal")
+				return err == nil
+			}
+		}, secretsLocalNote},
+	} {
+		t.Run(route.name, func(t *testing.T) {
+			t.Parallel()
+			t.Run("login -capture-token", func(t *testing.T) {
+				t.Parallel()
+				store, held := route.open(t)
+				var stdout, stderr bytes.Buffer
+				err := loginLLM(t.Context(), loginRequest{
+					providers: tokenProvider(t), key: "sub",
+					captureToken: true, companySecrets: store,
+				}, &stdout, &stderr)
+				if err != nil {
+					t.Fatalf("login: %v\n%s", err, stderr.String())
+				}
+				if !held("SUB_TOKEN") {
+					t.Fatal("the token was not written to the run's store")
+				}
+				if !strings.Contains(stdout.String(), route.note) {
+					t.Errorf("the write does not say when it is read (%q):\n%s",
+						route.note, stdout.String())
+				}
+			})
+			t.Run("export -secret-store", func(t *testing.T) {
+				t.Parallel()
+				store, held := route.open(t)
+				providers := bundleProvider(t)
+				creds := filepath.Join(providers[0].provider.Workspace().CredentialsDir(),
+					"creds.json")
+				if err := os.MkdirAll(filepath.Dir(creds), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(creds, []byte(`{"token":"t"}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				var stdout bytes.Buffer
+				if err := exportLLM(t.Context(), providers, "sub", true, store, &stdout); err != nil {
+					t.Fatalf("export: %v", err)
+				}
+				if !held("CREWLET_LLM_CLI_SUB_CREDENTIALS") {
+					t.Fatal("the bundle was not written to the run's store")
+				}
+				out := stdout.String()
+				if !strings.Contains(out, route.note) {
+					t.Errorf("the write does not say when it is read (%q):\n%s", route.note, out)
+				}
+				if !strings.Contains(out, "A node restores it when it builds a company to run") ||
+					strings.Contains(out, "whenever its credentials directory is empty") {
+					t.Errorf("the export does not say when a node restores the bundle:\n%s", out)
+				}
+			})
+		})
+	}
+}
+
+// llmStoreAt is a `crewlet llm` run's store, routed by the store flags given.
+func llmStoreAt(t *testing.T, environ config.Source, flags ...string) *companyStore {
+	t.Helper()
+	fs := flag.NewFlagSet("llm", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	at := addStoreFlags(fs)
+	if err := fs.Parse(flags); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(flags, "-config") {
+		// NO TIER A FILE: the run goes through -api alone.
+		*at.bootstrap = filepath.Join(t.TempDir(), "absent.yaml")
+	}
+	store, err := openCompanyStore(environ, at, "crewlet llm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	return store
+}
+
+// tokenProvider is a cli-agent provider whose CLI mints a headless token into
+// SUB_TOKEN: its capture command prints one, and nothing else runs.
+func tokenProvider(t *testing.T) []cliAgentProvider {
+	t.Helper()
+	p, err := cliagent.New(cliagent.Config{
+		Key: "sub", Agent: "custom", StateDir: t.TempDir(),
+		Timeout: 10 * time.Second, MaxConcurrent: 1,
+		Overrides: map[string]any{
+			"binary": "sh", "complete_args": []any{"-c", "true"}, "model_args": []any{},
+			"output":             "text",
+			"credential_paths":   []any{".fake/creds.json"},
+			"capture_token_args": []any{"-c", "echo tok-captured"},
+			"token_env":          "SUB_TOKEN",
+		},
+	})
+	if err != nil {
+		t.Fatalf("cliagent.New: %v", err)
+	}
+	return []cliAgentProvider{{key: "sub", provider: p}}
 }

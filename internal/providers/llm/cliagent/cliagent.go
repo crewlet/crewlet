@@ -94,7 +94,7 @@ type Config struct {
 	CredentialBundle string
 	// CredentialBundleConfigured is whether CredentialBundle came from
 	// cli.auth.credential_bundle rather than the conventional
-	// CREWLET_LLM_CLI_<KEY>_CREDENTIALS ([BundleVarName]), for the lines that
+	// CREWLET_LLM_CLI_<KEY>_CREDENTIALS ([cliprofile.BundleVarName]), for the lines that
 	// tell an operator what retires it ([Provider.LogoutNotice]) — the same
 	// split [Auth.TokenConfigured] makes for the token.
 	CredentialBundleConfigured bool

@@ -33,13 +33,15 @@ func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Wr
 
 	fs := flag.NewFlagSet("jira provision", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	sinks := addSinkFlags(fs)
+	// THE WEBHOOK SECRET, and no seat's token: Jira mints none on a
+	// provisioner's behalf. -recreate-webhook mints a fresh one.
+	recreate := addFreshFlag(fs, "recreate-webhook",
+		"delete and remake the webhook to mint a fresh secret; this "+
+			"invalidates the secret every other deployment of this company holds")
+	sinks := addSinkFlags(fs, sinkDecisions{secrets: true, fresh: recreate})
 	publicURL := fs.String("public-url", "",
 		"this deployment's public base URL, for registering the webhook; "+
 			"defaults to "+publicURLDefault)
-	recreate := fs.Bool("recreate-webhook", false,
-		"delete and remake the webhook to mint a fresh secret; this "+
-			"invalidates the secret every other deployment of this company holds")
 	dryRun := fs.Bool("dry-run", false,
 		"read and report, and register nothing")
 	if err := fs.Parse(args); err != nil {
@@ -50,7 +52,7 @@ func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Wr
 		fmt.Fprintln(stderr,
 			"usage: crewlet jira provision <company.yaml> "+
 				"[-secret-store|-env-file PATH|-print] [-public-url URL] "+
-				"[-recreate-webhook] [-dry-run]")
+				"[-recreate-webhook] [-dry-run] [-config PATH] [-api URL]")
 		return errors.New("name exactly one company document")
 	}
 
@@ -70,11 +72,16 @@ func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Wr
 	}
 
 	ctx := context.Background()
-	env, boot, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
+	companySecrets, err := openCompanyStore(environ, sinks.store, "crewlet jira provision")
 	if err != nil {
 		return err
 	}
-	defer closeEnv()
+	defer companySecrets.Close()
+	env, err := companySecrets.values(ctx, company, stdout)
+	if err != nil {
+		return err
+	}
+	boot := companySecrets.boot
 
 	base := cfg.ResolvedBaseURL(env.Value)
 	if base == "" {
@@ -103,7 +110,8 @@ func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Wr
 	opts := jira.Options{
 		Client: client, Config: cfg, Org: organization,
 		Value:           env.Value,
-		RecreateWebhook: *recreate,
+		Unvouched:       env.Unvouched,
+		RecreateWebhook: recreate.switched(),
 	}
 	if *dryRun {
 		fmt.Fprintln(stdout,
@@ -111,11 +119,10 @@ func runJiraProvision(environ config.Source, args []string, stdout, stderr io.Wr
 	} else {
 		opts.WebhookBase = webhookBase(*publicURL, boot)
 		opts.WebhookBaseKey = webhookBaseKey(boot)
-		sink, closeSink, openErr := sinks.open(ctx, environ, stdout)
+		sink, openErr := sinks.open(ctx, companySecrets, stdout)
 		if openErr != nil {
 			return openErr
 		}
-		defer closeSink()
 		opts.Sink = sink
 	}
 

@@ -291,7 +291,7 @@ roles:
 	if err != nil {
 		t.Fatalf("BuildCLIAgent: %v", err)
 	}
-	if got := built.SignInState(); got != "token" {
+	if got := built.SignInState(t.Context()); got != "token" {
 		t.Errorf("SignInState = %q, want token — the conventional variable was not read", got)
 	}
 }

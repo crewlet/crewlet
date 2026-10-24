@@ -9,10 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 
@@ -272,13 +274,19 @@ func (p *Provider) Logout(ctx context.Context, out, errOut io.Writer) error {
 	// THE RECORD FIRST: a removal that stopped part way leaves a directory
 	// the record already keeps the bundle out of, and a record that cannot
 	// be written still removes the login, the half an operator relies on.
+	// THEN THE EPOCH, before the removal it counts ([Workspace.bumpLoginEpoch])
+	// and on the same terms: one that cannot be moved still removes the login.
+	//
+	// The removal is ONE WRITE of the empty login ([Workspace.writeLoginLocked]),
+	// so a logout killed part way never leaves one file of the login it was
+	// removing — and it REPLACES a write that stopped part way rather than
+	// finishing it, so a login that was never put in place is discarded
+	// without being written to disk first.
 	removeErr := p.ws.markLoggedOut()
-	for _, path := range p.ws.LoginFiles() {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			removeErr = errors.Join(removeErr, fmt.Errorf("cliagent: removing %q: %w", path, err))
-		}
-	}
 	if err := p.ws.bumpLoginEpoch(); err != nil {
+		removeErr = errors.Join(removeErr, err)
+	}
+	if err := p.ws.writeLoginLocked(ctx, p.key, nil); err != nil {
 		removeErr = errors.Join(removeErr, err)
 	}
 	if removeErr != nil {
@@ -348,6 +356,11 @@ func (p *Provider) Status(ctx context.Context, out, errOut io.Writer) error {
 // ([Provider.exportHostLogin]) — run FIRST, before anything is written, so an
 // export that fails adopts nothing rather than half a login.
 //
+// EVERY FILE IS READ BEFORE ANYTHING IS WRITTEN, and the login it makes is the
+// human's whole: a file the human's home does not hold is removed from the
+// shared login rather than kept beside the ones adopted, which would make a
+// login of two sign-ins.
+//
 // It is the operator's own new login, so it is written over whatever the
 // shared directory holds, under the shared login's lock: a seat carrying out a
 // refresh of the old login at the same moment then finds the login moved and
@@ -373,55 +386,80 @@ func (p *Provider) AdoptHostLogin(ctx context.Context, home string) ([]string, e
 			return nil, fmt.Errorf("cliagent: reading the %q login in %q: %w", p.agent, home, err)
 		}
 	}
-	dest := p.ws.CredentialsDir()
-	if err := os.MkdirAll(dest, 0o700); err != nil {
-		return nil, fmt.Errorf("cliagent: preparing %q: %w", dest, err)
-	}
-	unlock, err := p.ws.lockShared(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer unlock()
+	login := map[string][]byte{}
 	var taken []string
 	for _, rel := range p.hostSources() {
 		src, err := cliprofile.UnderRoot(home, rel)
 		if err != nil {
 			return nil, err
 		}
-		info, err := os.Stat(src)
-		if os.IsNotExist(err) {
-			continue
-		}
+		content, present, err := readHostFile(src)
 		if err != nil {
-			return nil, fmt.Errorf("cliagent: reading %q: %w", src, err)
+			return nil, err
 		}
-		if !info.Mode().IsRegular() {
+		if !present {
 			continue
 		}
-		// REPLACED rather than rewritten in place: a seat starting its
-		// generation now is seeded from this very file.
-		if _, err := hostbox.CopyFileAtomic(src, filepath.Join(dest, filepath.Base(rel))); err != nil {
-			return nil, fmt.Errorf("cliagent: copying %q: %w", src, err)
-		}
+		login[filepath.Base(rel)] = content
 		taken = append(taken, src)
 	}
 	if holdsLogin(document) {
-		if err := hostbox.ReplaceFile(p.ws.documentPath(), bytes.NewReader(document)); err != nil {
-			return nil, fmt.Errorf("cliagent: writing %q: %w", p.ws.documentPath(), err)
-		}
+		login[cliprofile.CredentialStoreDocument] = document
 		taken = append(taken, p.hostStoreName(home))
 	}
 	if len(taken) == 0 {
 		return nil, fmt.Errorf("cliagent: no %q login found under %q — log in with the "+
 			"vendor's CLI first, or name a different home with --home", p.agent, home)
 	}
-	if err := p.ws.clearLoggedOut(); err != nil {
+	unlock, err := p.ws.lockShared(ctx)
+	if err != nil {
 		return nil, err
 	}
+	defer unlock()
+	// THE EPOCH FIRST, before the write it counts ([Workspace.bumpLoginEpoch]):
+	// one that cannot be moved writes nothing, since a login of record that
+	// landed with no epoch behind it reads as no operator's write at all.
 	if err := p.ws.bumpLoginEpoch(); err != nil {
 		return nil, err
 	}
+	// THE HOST'S LOGIN, WHOLE, AS ONE WRITE: every file it holds, and none of
+	// the files it does not — a file of the login it replaces left beside it
+	// would make a login of two sign-ins — put in place in one step a seat
+	// starting its generation now reads before or after, never part way.
+	if err := p.ws.writeLoginLocked(ctx, p.key, login); err != nil {
+		return nil, err
+	}
+	if err := p.ws.clearLoggedOut(); err != nil {
+		return nil, err
+	}
 	return taken, nil
+}
+
+// readHostFile reads one file of a login a human's home holds, reporting false
+// where there is none, or where what is there is not a regular file — not a
+// login file this command could adopt. One larger than
+// [hostbox.MaxCredentialBytes] is refused rather than adopted: the shared login
+// would refuse to hold it.
+func readHostFile(src string) ([]byte, bool, error) {
+	info, err := os.Stat(src)
+	if os.IsNotExist(err) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("cliagent: reading %q: %w", src, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, false, nil
+	}
+	if info.Size() > hostbox.MaxCredentialBytes {
+		return nil, false, fmt.Errorf("cliagent: %q is larger than %d bytes, which is not a login",
+			src, hostbox.MaxCredentialBytes)
+	}
+	content, err := os.ReadFile(src) //nolint:gosec // a path the profile names under the home
+	if err != nil {
+		return nil, false, fmt.Errorf("cliagent: reading %q: %w", src, err)
+	}
+	return content, true, nil
 }
 
 // HostLogin reports where this CLI's login sits in a human's home directory,
@@ -484,22 +522,26 @@ func (p *Provider) hostStoreName(home string) string {
 // ONLY the credential files travel. Sessions, history and caches are never
 // in a bundle: they are per-seat conversation state, and shipping them across
 // hosts would restore one seat's transcripts onto another node's disk.
-func (p *Provider) ExportBundle() (string, error) {
-	files := p.ws.LoginFiles()
-	if len(files) == 0 {
+//
+// The files are read as ONE login ([Workspace.Login]), so a bundle never packs
+// a write that stopped part way — which every fresh volume restoring it would
+// then hold.
+func (p *Provider) ExportBundle(ctx context.Context) (string, error) {
+	login, err := p.ws.Login(ctx)
+	if err != nil {
+		return "", err
+	}
+	if len(login) == 0 {
 		return "", fmt.Errorf("cliagent: %q has no login to export — "+
 			"run `crewlet llm login %s` first", p.agent, p.key)
 	}
 	var raw bytes.Buffer
 	zw := gzip.NewWriter(&raw)
 	tw := tar.NewWriter(zw)
-	for _, path := range files {
-		data, err := os.ReadFile(path) //nolint:gosec // path came from the workspace
-		if err != nil {
-			return "", fmt.Errorf("cliagent: reading %q: %w", path, err)
-		}
+	for _, name := range slices.Sorted(maps.Keys(login)) {
+		data := login[name]
 		header := &tar.Header{
-			Name: filepath.Base(path), Mode: 0o600,
+			Name: name, Mode: 0o600,
 			Size: int64(len(data)), Typeflag: tar.TypeReg,
 		}
 		if err := tw.WriteHeader(header); err != nil {
@@ -655,7 +697,7 @@ func (p *Provider) bundleSource() string {
 	if p.bundleConfigured {
 		return fmt.Sprintf("providers.llm.%s.cli.auth.credential_bundle", p.key)
 	}
-	return BundleVarName(p.key)
+	return cliprofile.BundleVarName(p.key)
 }
 
 // retireBundle says what removes the entry's configured bundle, which is what
@@ -665,7 +707,7 @@ func (p *Provider) retireBundle() string {
 		return fmt.Sprintf("remove providers.llm.%s.cli.auth.credential_bundle from the company "+
 			"document, or the secret it references", p.key)
 	}
-	name := BundleVarName(p.key)
+	name := cliprofile.BundleVarName(p.key)
 	return fmt.Sprintf("remove %s from the secret store (`crewlet secrets unset %s`) and from "+
 		"the engine's environment", name, name)
 }
@@ -692,32 +734,84 @@ func (p *Provider) ImportBundle(ctx context.Context, blob string) error {
 // differ only in whether the restore is the operator's own write of the login
 // of record.
 func (p *Provider) restoreBundle(ctx context.Context, blob string, operator bool) error {
-	dest := p.ws.CredentialsDir()
-	if p.ws.HasLogin() {
-		return ErrLoginPresent
-	}
-	if err := p.declineAfterLogout(operator); err != nil {
+	present, err := p.ws.HasLogin(ctx)
+	if err != nil {
 		return err
 	}
+	if present {
+		return ErrLoginPresent
+	}
+	if err = p.declineAfterLogout(operator); err != nil {
+		return err
+	}
+	staged, err := p.stageBundle(blob)
+	if err != nil {
+		return err
+	}
+
+	// THE EMPTINESS ASKED AGAIN UNDER THE SHARED LOGIN'S LOCK, with the
+	// writes: the check above is the cheap path for a node that already has
+	// a login, and a login that landed while the bundle was being validated
+	// is the fresher one — as a logout that landed meanwhile is the newer
+	// decision.
+	unlock, err := p.ws.lockShared(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	current, err := p.ws.readLoginLocked()
+	if err != nil {
+		return err
+	}
+	if len(current) > 0 {
+		return ErrLoginPresent
+	}
+	if err = p.declineAfterLogout(operator); err != nil {
+		return err
+	}
+	if operator {
+		// The operator's own login of record, counted BEFORE it is written
+		// ([Workspace.bumpLoginEpoch]): an epoch that cannot be moved writes
+		// nothing.
+		if err = p.ws.bumpLoginEpoch(); err != nil {
+			return err
+		}
+	}
+	if err = p.ws.writeLoginLocked(ctx, p.key, staged); err != nil {
+		return err
+	}
+	if operator {
+		// And a logout before it is over.
+		return p.ws.clearLoggedOut()
+	}
+	return nil
+}
+
+// stageBundle unpacks a bundle into the login it holds, by file name, writing
+// nothing.
+//
+// VALIDATED WHOLE, THEN WRITTEN WHOLE. Every entry is checked and held before
+// anything reaches the disk, because the checks reject a bundle mid-archive:
+// writing as the loop went left the rejected bundle's earlier files behind,
+// and HasLogin reads a directory with any credential in it as a login — so a
+// refused restore could leave a half-populated home that the next boot
+// declines to repair. The write itself is ONE STEP for the same reason
+// ([Workspace.writeLoginLocked]): written a file at a time, a restore killed or
+// refused by the disk between two of them left exactly that half.
+func (p *Provider) stageBundle(blob string) (map[string][]byte, error) {
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(blob))
 	if err != nil {
-		return fmt.Errorf("cliagent: the credential bundle is not base64: %w", err)
+		return nil, fmt.Errorf("cliagent: the credential bundle is not base64: %w", err)
 	}
 	zr, err := gzip.NewReader(bytes.NewReader(raw))
 	if err != nil {
-		return fmt.Errorf("cliagent: the credential bundle is not gzip: %w", err)
+		return nil, fmt.Errorf("cliagent: the credential bundle is not gzip: %w", err)
 	}
 	defer func() { _ = zr.Close() }()
 
 	allowed := map[string]bool{}
-	for _, rel := range p.profile.CredentialPaths {
-		allowed[filepath.Base(rel)] = true
-	}
-	if p.profile.CredentialStore != nil {
-		allowed[cliprofile.CredentialStoreDocument] = true
-	}
-	if err = os.MkdirAll(dest, 0o700); err != nil {
-		return fmt.Errorf("cliagent: preparing %q: %w", dest, err)
+	for _, name := range p.ws.loginNames() {
+		allowed[name] = true
 	}
 
 	// REFUSED PAST THE CAP, not clipped to it. io.LimitReader stops at its
@@ -728,80 +822,44 @@ func (p *Provider) restoreBundle(ctx context.Context, blob string, operator bool
 	// "finished".
 	decompressed, err := io.ReadAll(io.LimitReader(zr, maxBundle+1))
 	if err != nil {
-		return fmt.Errorf("cliagent: reading the credential bundle: %w", err)
+		return nil, fmt.Errorf("cliagent: reading the credential bundle: %w", err)
 	}
 	if len(decompressed) > maxBundle {
-		return fmt.Errorf(
+		return nil, fmt.Errorf(
 			"cliagent: the credential bundle is larger than %d bytes decompressed, "+
 				"so it was not unpacked — a bundle this size is not a login; "+
 				"re-export it with `crewlet llm export %s`", maxBundle, p.agent)
 	}
 
-	// VALIDATED WHOLE, THEN WRITTEN. Every entry is checked and held before
-	// anything reaches the disk, because the checks below reject a bundle
-	// mid-archive: writing as the loop went left the rejected bundle's
-	// earlier files behind, and HasLogin reads a directory with any
-	// credential in it as a login — so a refused restore could leave a
-	// half-populated home that the next boot declines to repair.
 	staged := make(map[string][]byte, len(allowed))
 	tr := tar.NewReader(bytes.NewReader(decompressed))
 	for {
 		header, err := tr.Next()
 		if errors.Is(err, io.EOF) {
-			break
+			return staged, nil
 		}
 		if err != nil {
-			return fmt.Errorf("cliagent: reading the credential bundle: %w", err)
+			return nil, fmt.Errorf("cliagent: reading the credential bundle: %w", err)
 		}
 		if header.Typeflag != tar.TypeReg {
-			return fmt.Errorf("cliagent: the credential bundle holds %q, which is not a "+
+			return nil, fmt.Errorf("cliagent: the credential bundle holds %q, which is not a "+
 				"regular file", header.Name)
 		}
 		name := filepath.Base(header.Name)
 		if name != header.Name || !allowed[name] {
-			return fmt.Errorf("cliagent: the credential bundle holds %q, which is not a "+
+			return nil, fmt.Errorf("cliagent: the credential bundle holds %q, which is not a "+
 				"%q credential file", header.Name, p.agent)
 		}
 		data, err := io.ReadAll(io.LimitReader(tr, maxBundle+1))
 		if err != nil {
-			return fmt.Errorf("cliagent: reading %q from the bundle: %w", name, err)
+			return nil, fmt.Errorf("cliagent: reading %q from the bundle: %w", name, err)
 		}
 		if len(data) > maxBundle {
-			return fmt.Errorf("cliagent: %q in the credential bundle is larger than %d bytes",
+			return nil, fmt.Errorf("cliagent: %q in the credential bundle is larger than %d bytes",
 				name, maxBundle)
 		}
 		staged[name] = data
 	}
-
-	// THE EMPTINESS ASKED AGAIN UNDER THE SHARED LOGIN'S LOCK, with the
-	// writes: the check above is the cheap path for a node that already has
-	// a login, and a login that landed while the bundle was being validated
-	// is the fresher one — as a logout that landed meanwhile is the newer
-	// decision.
-	unlock, lockErr := p.ws.lockShared(ctx)
-	if lockErr != nil {
-		return lockErr
-	}
-	defer unlock()
-	if p.ws.HasLogin() {
-		return ErrLoginPresent
-	}
-	if err := p.declineAfterLogout(operator); err != nil {
-		return err
-	}
-	for name, data := range staged {
-		if err := hostbox.ReplaceFile(filepath.Join(dest, name), bytes.NewReader(data)); err != nil {
-			return fmt.Errorf("cliagent: writing %q: %w", name, err)
-		}
-	}
-	if operator {
-		// The operator's own login of record, so a logout before it is over.
-		if err := p.ws.clearLoggedOut(); err != nil {
-			return err
-		}
-		return p.ws.bumpLoginEpoch()
-	}
-	return nil
 }
 
 // declineAfterLogout answers [ErrLoggedOut] for an automatic restore while a
@@ -899,7 +957,7 @@ func (p *Provider) runInCredentialHome(
 	if err := p.ws.prune(home); err != nil {
 		return false, err
 	}
-	seeded, err := p.ws.seed(ctx, home, cache, p)
+	gen, err := p.ws.seed(ctx, home, cache, p, mode)
 	var refused *loginRefusedError
 	switch {
 	case err == nil:
@@ -924,17 +982,6 @@ func (p *Provider) runInCredentialHome(
 		}
 	default:
 		return false, err
-	}
-	gen := generation{Mode: mode, Seeded: seeded}
-	if mode == syncLogin {
-		// The epoch this login is ordered after, should it be carried out by
-		// a later command rather than by this one ([generation.After]) — as
-		// of now, and moved to when it finished should its carry fail below.
-		epoch, err := p.ws.loginEpoch()
-		if err != nil {
-			return false, err
-		}
-		gen.After = &epoch
 	}
 	if err := writeGeneration(record, gen); err != nil {
 		return false, err
@@ -978,11 +1025,14 @@ func (p *Provider) runInCredentialHome(
 	// operator's Ctrl+C too, which is why the export does not inherit the
 	// cancellation that ended the command.
 	//
-	// WITHOUT THE EPOCH, which orders only a login carried out LATER: the one
-	// carried out now is the operator's sign-in finishing, and it is written
-	// over whatever landed while it ran, an operator's other write included —
-	// the later of two sign-ins wins. The record on disk keeps it, for the
-	// next command should this carry fail.
+	// WITHOUT THE EPOCH IT IS ORDERED AFTER ([generation.After]), which orders
+	// only a login carried out LATER: the one carried out now is the
+	// operator's sign-in finishing, and it is written over whatever landed
+	// while it ran, an operator's other write included — the later of two
+	// sign-ins wins. The record on disk keeps it, for the next command should
+	// this carry fail. The epoch it was SEEDED at stays
+	// ([generation.SeededEpoch]): it decides only what becomes of a file the
+	// sign-in removed.
 	now := gen
 	now.After = nil
 	holds, syncErr := p.ws.syncCredentialsOut(context.WithoutCancel(ctx), home, cache, p, now)
@@ -996,13 +1046,15 @@ func (p *Provider) runInCredentialHome(
 			// failed would have been: an operator's write that landed while
 			// the browser flow was open is one this login, finishing later,
 			// would have been written over, and only a write made from here
-			// on outranks it. Where the epoch cannot be read now, the one
-			// read when the command began stays on the record — which errs
-			// towards the operator's other write, never towards this one.
-			if epoch, err := p.ws.loginEpoch(); err == nil {
-				gen.After = &epoch
-				recordErr = writeGeneration(record, gen)
-			}
+			// on outranks it. "Here" is an epoch read UNDER THE SHARED
+			// LOGIN'S LOCK, which an operator's write moves the epoch in
+			// before it writes ([Workspace.orderPendingLogin]): read without
+			// it, between the two, this login was ordered after a write that
+			// landed after it. Where the lock cannot be taken or the epoch
+			// read, the one read with the seed stays on the record — which
+			// errs towards the operator's other write, never towards this one.
+			// Not cancelled with the command, as its carry is not.
+			recordErr = p.ws.orderPendingLogin(context.WithoutCancel(ctx), record, gen)
 		}
 		return holds, errors.Join(fmt.Errorf("cliagent: the login in %q could not be carried "+
 			"back to %s, so it was kept there, and the next `crewlet llm` command that runs "+

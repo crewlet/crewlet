@@ -19,7 +19,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitlab"
+	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/provision"
+	"github.com/crewlet/crewlet/internal/slack"
 )
 
 const gitlabCompanyDoc = `
@@ -172,6 +174,39 @@ func TestARunReportsWhatIsLeftToDoOnlyWhenItRecordedSomething(t *testing.T) {
 	}
 }
 
+// A CHAT RUN SAYS WHAT IS LEFT TO DO AS A GITLAB RUN DOES — Mattermost's and
+// Slack's reports stopped at where the values went, so an operator who chose
+// -secret-store was told nothing while every new bot stayed offline until the
+// engine's next apply. Only a run that recorded something says it.
+func TestAChatRunReportsWhatIsLeftToDoOnlyWhenItRecordedSomething(t *testing.T) {
+	t.Parallel()
+	sink, err := provision.NewPrintSink(io.Discard)
+	if err != nil {
+		t.Fatalf("NewPrintSink: %v", err)
+	}
+	reports := map[string]func(w io.Writer, recorded int){
+		"mattermost": func(w io.Writer, recorded int) {
+			printChatResult(w, &mattermost.Result{Recorded: recorded}, sink)
+		},
+		"slack": func(w io.Writer, recorded int) {
+			printSlackResult(w, &slack.Result{Recorded: recorded}, "slack-apps.json", sink)
+		},
+	}
+	for name, report := range reports {
+		var recorded, unchanged bytes.Buffer
+		report(&recorded, 1)
+		if !strings.Contains(recorded.String(), "Next: "+sink.NextStep()) {
+			t.Errorf("%s: a run that recorded a credential did not say what is "+
+				"left to do:\n%s", name, recorded.String())
+		}
+		report(&unchanged, 0)
+		if strings.Contains(unchanged.String(), "Next:") {
+			t.Errorf("%s: a run that recorded nothing told the operator to act:\n%s",
+				name, unchanged.String())
+		}
+	}
+}
+
 // A DRY RUN SAYS WHAT IT WOULD DO TO THE SIGNING SECRET.
 //
 // The most consequential thing a provisioning run can do is replace the key
@@ -236,6 +271,24 @@ func TestADryRunSaysWhatItWouldDoToTheSigningSecret(t *testing.T) {
 	}
 }
 
+// -rotate SAYS EVERYTHING IT REPLACES. The dry run above plans the signing
+// secret ROTATED under it, and the flag's own help named only the seats'
+// tokens — so an operator rotating tokens on a schedule learned from the plan,
+// or from the hook that stopped verifying, that the key went too.
+func TestTheRotateFlagNamesTheSigningSecretItReplaces(t *testing.T) {
+	t.Parallel()
+	_, errs, err := cliIn(t, noEnviron, "gitlab", "provision", "-h")
+	if !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("gitlab provision -h = %v, want the help", err)
+	}
+	_, help, found := strings.Cut(errs, "  -rotate\n")
+	help, _, _ = strings.Cut(help, "\n")
+	if !found || !strings.Contains(help, "token for every seat") ||
+		!strings.Contains(help, "signing secret") {
+		t.Errorf("-rotate's help does not name both things it replaces: %q\n%s", help, errs)
+	}
+}
+
 // THE PRINT SINK'S DESTINATION IS PER RUN, NOT PER PROCESS.
 //
 // It used to be per process: each provision command assigned the writer to a
@@ -251,15 +304,20 @@ func TestEachRunPrintsToTheWriterItWasGiven(t *testing.T) {
 		t.Helper()
 		fs := flag.NewFlagSet("provision", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
-		sinks := addSinkFlags(fs)
-		if err := fs.Parse([]string{"-print"}); err != nil {
+		sinks := addSinkFlags(fs, sinkDecisions{})
+		if err := fs.Parse([]string{"-print",
+			"-config", filepath.Join(t.TempDir(), "absent.yaml")}); err != nil {
 			t.Fatalf("parse: %v", err)
 		}
-		sink, closeSink, err := sinks.open(t.Context(), noEnviron, w)
+		companySecrets, err := openCompanyStore(noEnviron, sinks.store, "crewlet gitlab provision")
+		if err != nil {
+			t.Fatalf("store: %v", err)
+		}
+		t.Cleanup(companySecrets.Close)
+		sink, err := sinks.open(t.Context(), companySecrets, w)
 		if err != nil {
 			t.Fatalf("open: %v", err)
 		}
-		t.Cleanup(closeSink)
 		return sink
 	}
 

@@ -985,9 +985,9 @@ func chartContainers(c *Company) []chartContainer {
 // not walk the fleet's newer project names back to its own. The activation's
 // instant and never this node's clock, because every node applies one
 // activation separately and only the instant on the pointer is the same on all
-// of them. A company no activation has named yet — a Tier B file a node booted
-// with — applies nothing here; the reconciler's first apply carries the
-// pointer's instant and applies it then.
+// of them. A company no activation has named — one handed to [New] in code —
+// applies nothing here; the reconciler's first apply carries the pointer's
+// instant and applies it then.
 //
 // # Best effort, and what that costs
 //

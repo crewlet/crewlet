@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -419,4 +420,30 @@ func TestAWriteWithAWordNoPathStampsIsRefused(t *testing.T) {
 	}
 	// AND THE PATHS' OWN WORDS PASS, or the guard is just an outage.
 	mustSet(t, s, "GITLAB_TOKEN", "glpat-not-a-real-token")
+}
+
+// A VALUE PAST THE SIZE EVERY STORE KEEPS IS REFUSED HERE, AND NOTHING IS
+// STORED.
+//
+// This table is what `crewlet secrets set` writes on a stopped node, and the
+// next start moves its rows onto the fleet unchanged. It took a value of any
+// size, so a row past [secrets.MaxValueBytes] reached the fleet and was then
+// refused by every read of it — `secrets get -reveal`, a provisioning sink, a
+// run resolving a document through a node — as longer than any answer the
+// node gives. A value exactly at the limit is stored and read back whole.
+func TestAValuePastTheSizeEveryStoreKeepsIsRefused(t *testing.T) {
+	t.Parallel()
+	s, _, _ := secretStore(t, ring(t, "k1"))
+	atLimit := strings.Repeat("&", secrets.MaxValueBytes)
+	mustSet(t, s, "AT_THE_LIMIT", atLimit)
+	err := s.Set(t.Context(), "PAST_IT", atLimit+"&", byOperator, secrets.SourceCLI, secretClock)
+	if !errors.Is(err, secrets.ErrValueTooLarge) {
+		t.Fatalf("a value a byte past the limit answered %v, want ErrValueTooLarge", err)
+	}
+	if _, err := s.Get(t.Context(), "PAST_IT"); !errors.Is(err, secrets.ErrNotFound) {
+		t.Errorf("the refused value left a row behind: %v", err)
+	}
+	if got, err := s.Get(t.Context(), "AT_THE_LIMIT"); err != nil || got != atLimit {
+		t.Errorf("the value at the limit read back as %d bytes, %v", len(got), err)
+	}
 }

@@ -1465,6 +1465,95 @@ func TestAFailedHookRollsBackASecretItHadNoTokensToRevoke(t *testing.T) {
 	}
 }
 
+// A SIGNING SECRET THE RUN COULD NOT SEE IS NOT MINTED OVER. A `crewlet
+// gitlab provision` run on a node whose engine is stopped reads only that
+// node's own rows, and the fleet's store may hold the key every node verifies
+// GitLab's deliveries with: a hook re-pointed at a fresh one would be refused
+// by all of them. So the pass refuses, rolls back what it minted for the
+// seats, and writes no hook.
+func TestASigningSecretTheRunCannotVouchForIsNotMintedOver(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	sink := newRecordingSink()
+	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
+
+	_, err := reconcileWith(t, f, sink, seats, func(o *gitlab.Options) {
+		o.SigningSecret = ""
+		o.SigningSecretVar = "GITLAB_SIGNING_SECRET"
+		o.Unvouched = func(name string) error {
+			return fmt.Errorf("%w: %s is out of this run's sight",
+				provision.ErrUnvouched, name)
+		}
+	})
+	if !errors.Is(err, provision.ErrUnvouched) {
+		t.Fatalf("Reconcile = %v, want the unknown signing secret refused", err)
+	}
+	if got := sink.value("GITLAB_SIGNING_SECRET"); got != "" {
+		t.Errorf("a signing secret was minted over one the run could not see: %q", got)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.hooks)+len(f.projectHooks) != 0 {
+		t.Errorf("a hook was written by a run that refused its signing secret: %+v", f.hooks)
+	}
+}
+
+// NOR IS ONE THE RUN'S OWN ENVIRONMENT FILLED IN REGISTERED IN ITS PLACE.
+//
+// On a stopped node the resolver reads the node's own rows and then this
+// shell's environment, as the engine reads the store and then its own. For a
+// variable the rows lack, the exported value is a guess: the fleet may hold
+// another key, and the store outranks the environment in the engine, so the
+// hook would be re-pointed at a key no node verifies with — the outage the
+// mint's refusal prevents, reached through a value that merely was not empty.
+// So the answer is settled like an empty one: the sink's record, or refused.
+func TestASigningSecretFromOutsideTheStoreIsNotRegistered(t *testing.T) {
+	t.Parallel()
+	unknown := func(name string) error {
+		return fmt.Errorf("%w: %s is out of this run's sight",
+			provision.ErrUnvouched, name)
+	}
+
+	t.Run("nothing recorded: refused", func(t *testing.T) {
+		t.Parallel()
+		f := newAdminInstance()
+		_, err := reconcileWith(t, f, newRecordingSink(),
+			map[string]string{"swe": "GITLAB_TOKEN_SWE"}, func(o *gitlab.Options) {
+				o.SigningSecretVar = "GITLAB_SIGNING_SECRET"
+				o.Unvouched = unknown
+			})
+		if !errors.Is(err, provision.ErrUnvouched) {
+			t.Fatalf("Reconcile = %v, want the guessed key refused", err)
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if len(f.hookBodies) != 0 {
+			t.Errorf("a hook was written with a key the run could not vouch for: %v",
+				f.hookBodies)
+		}
+	})
+
+	t.Run("the sink's record is registered instead", func(t *testing.T) {
+		t.Parallel()
+		const recorded = "whsec_cmVjb3JkZWQtYnktdGhlLXNpbmstMzItYnl0ZXMhISE="
+		f := newAdminInstance()
+		sink := newRecordingSink()
+		sink.values["GITLAB_SIGNING_SECRET"] = recorded
+		if _, err := reconcileWith(t, f, sink,
+			map[string]string{"swe": "GITLAB_TOKEN_SWE"}, func(o *gitlab.Options) {
+				o.SigningSecretVar = "GITLAB_SIGNING_SECRET"
+				o.Unvouched = unknown
+			}); err != nil {
+			t.Fatalf("Reconcile: %v", err)
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if len(f.hookBodies) != 1 || f.hookBodies[0]["signing_token"] != recorded {
+			t.Errorf("the hook was not registered with the sink's record: %v", f.hookBodies)
+		}
+	})
+}
+
 // AND WHEN THE CLEANUP ITSELF FAILS, the report says so loudly: those
 // credentials are live, nothing can use them, and only a human can remove
 // them.
@@ -1950,6 +2039,29 @@ func TestAnUnreadableSinkStopsTheGitLabRun(t *testing.T) {
 	}
 	if f.revoked() != 0 {
 		t.Errorf("%d tokens were revoked on an unreadable sink", f.revoked())
+	}
+}
+
+// AN ACCOUNT THIS RUN CREATES ASKS NO SINK. Nothing can hold a token for an
+// account that did not exist a moment ago, so its first token is minted
+// whatever the sink would answer — even a sink that cannot say, which is what
+// `-secret-store` on a stopped node is, and which the run's note there says
+// it mints into for such a seat.
+func TestAnAccountThisRunCreatesIsMintedWhateverItsSinkCanSay(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	sink := newRecordingSink()
+	sink.holdsErr = fmt.Errorf("GITLAB_TOKEN_SWE: %w", provision.ErrUnvouched)
+	res, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"})
+	if err != nil {
+		t.Fatalf("a seat whose account this run created was refused over its sink: %v", err)
+	}
+	if !slices.Equal(res.Created, []string{"swe"}) || !slices.Equal(res.Rotated, []string{"swe"}) {
+		t.Fatalf("created %v, minted for %v — want the seat created and minted for",
+			res.Created, res.Rotated)
+	}
+	if sink.value("GITLAB_TOKEN_SWE") == "" {
+		t.Error("the created account's first token was not recorded")
 	}
 }
 
@@ -2797,15 +2909,47 @@ func TestRotateReportsASigningSecretItCannotReplace(t *testing.T) {
 		t.Fatalf("the run was refused over a signing secret it was not asked "+
 			"to rotate: %v", err)
 	}
-	var said bool
+	var said string
 	for _, note := range res.Notes {
-		if strings.Contains(note, "signing secret was left alone") {
-			said = true
+		if strings.Contains(note, "leaves the webhook signing secret alone") {
+			said = note
 		}
 	}
-	if !said {
-		t.Errorf("the run said nothing about the signing secret it could not "+
+	if said == "" {
+		t.Fatalf("the run said nothing about the signing secret it could not "+
 			"replace: %v", res.Notes)
+	}
+	// AND HOW TO REPLACE IT, both ways: give -rotate a variable to mint
+	// into, or replace the literal itself.
+	for _, want := range []string{
+		"point the field at a whole ${VAR} and re-run with -rotate",
+		"replace the literal by hand",
+	} {
+		if !strings.Contains(said, want) {
+			t.Errorf("the note does not say %q: %s", want, said)
+		}
+	}
+}
+
+// AND SO DOES THE PLAN A DRY RUN PRINTS. Describe is the line printed before
+// a run acts, and a plan for -rotate over a literal printed a plain "reused":
+// the operator heard that the flag would leave the secret in place only from
+// a real run's notes, after it had rotated every seat's token.
+func TestARotatePlanOverALiteralSaysItLeavesTheSecretAlone(t *testing.T) {
+	t.Parallel()
+	plan := gitlab.PlanSigningSecret(operatorSigningSecret, "", true, true, "api.public.external_url")
+	if plan.Action != gitlab.SigningReuse || plan.Note == "" {
+		t.Fatalf("plan = %+v, want a reuse carrying a note", plan)
+	}
+	if line := plan.Describe(); !strings.Contains(line, plan.Note) {
+		t.Errorf("the plan line does not carry the note:\n%s", line)
+	}
+	// A REUSE NOTHING LEFT IN PLACE carries no note, and its line says only
+	// that the configured secret resolves.
+	plain := gitlab.PlanSigningSecret(operatorSigningSecret, "", false, true, "api.public.external_url")
+	if plain.Note != "" || plain.Describe() !=
+		"webhook signing secret: reused — the configured one already resolves" {
+		t.Errorf("a plain reuse = %+v, %q", plain, plain.Describe())
 	}
 }
 

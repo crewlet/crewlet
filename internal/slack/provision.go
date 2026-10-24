@@ -180,6 +180,19 @@ type Result struct {
 	Failed map[string]string
 
 	Notes []string
+
+	// Recorded counts the values this run obtained from Slack and wrote to
+	// the sink: a created app's signing secret and an installed app's bot
+	// token — what a running engine cannot hold yet.
+	//
+	// A KEPT APP'S SIGNING SECRET IS NOT COUNTED, although every run
+	// records it again from the ledger: it is the value the sink has held
+	// since the run that created the app, so counting it would tell every
+	// re-run's operator to reload an engine that already has it. A count
+	// rather than the names for GitLab's reason: the names are variables
+	// holding live credentials, and this only decides whether the report
+	// says what still has to happen.
+	Recorded int
 }
 
 // Err reports the run's failures as one error, or nil.
@@ -403,6 +416,9 @@ func (o Options) seat(ctx context.Context, configToken string, seat SeatPlan, re
 		}
 	}
 
+	// fresh is whether this run created the app, and so obtained a signing
+	// secret no sink held before it.
+	fresh := false
 	switch {
 	case record.AppID == "":
 		// VALIDATED FIRST. apps.manifest.create is Tier 1 — roughly one
@@ -434,6 +450,7 @@ func (o Options) seat(ctx context.Context, configToken string, seat SeatPlan, re
 				seat.Handle, created.AppID, err)
 		}
 		res.Created = append(res.Created, seat.Handle)
+		fresh = true
 
 	case record.ManifestHash != fingerprint:
 		if err := o.Admin.UpdateApp(ctx, configToken, record.AppID, manifest); err != nil {
@@ -454,13 +471,25 @@ func (o Options) seat(ctx context.Context, configToken string, seat SeatPlan, re
 		if err := o.Sink.Record(ctx, seat.SigningVar, record.SigningSecret); err != nil {
 			return fmt.Errorf("slack: %s: record %s: %w", seat.Handle, seat.SigningVar, err)
 		}
+		if fresh {
+			res.Recorded++
+		}
 	}
 	return o.install(ctx, seat, record, res)
 }
 
 // install completes the workspace install, or reports what is left to click.
+//
+// THE SINK IS ASKED ONLY ABOUT AN APP THAT IS INSTALLED, because only there
+// can its answer spare one: an app the ledger has never seen installed — one
+// this run created among them — has no token anywhere to keep, and is
+// installed whatever the sink holds. Asked first, an unreadable answer
+// refused that install for nothing, which is what `-secret-store` on a
+// stopped node gave every app it had just created: the node's own rows
+// cannot say what the fleet holds, and the app's first install was refused
+// over a token no store could hold.
 func (o Options) install(ctx context.Context, seat SeatPlan, record AppRecord, res *Result) error {
-	if !o.Reinstall {
+	if !o.Reinstall && record.Installed() {
 		held, ok, err := o.Sink.Value(ctx, seat.TokenVar)
 		if err != nil {
 			// UNREADABLE IS NOT UNHELD. Treating it as "no token" would
@@ -470,7 +499,7 @@ func (o Options) install(ctx context.Context, seat SeatPlan, record AppRecord, r
 			return fmt.Errorf("slack: %s: could not read %s: %w",
 				seat.Handle, seat.TokenVar, err)
 		}
-		if ok && held != "" && record.Installed() {
+		if ok && held != "" {
 			return nil
 		}
 	}
@@ -510,6 +539,7 @@ func (o Options) install(ctx context.Context, seat SeatPlan, record AppRecord, r
 	if err := o.Sink.Record(ctx, seat.TokenVar, installed.BotToken); err != nil {
 		return fmt.Errorf("slack: %s: record %s: %w", seat.Handle, seat.TokenVar, err)
 	}
+	res.Recorded++
 	record.BotUserID = installed.BotUserID
 	record.TeamID = installed.TeamID
 	o.Ledger.Apps[seat.Handle] = record

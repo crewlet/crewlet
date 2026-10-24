@@ -683,11 +683,14 @@ type ActivationRequest struct {
 	//
 	// The comparison is "if a pointer exists, it must still name this".
 	// With no pointer at all there is nothing to have lost a race to, and
-	// refusing would break the state a node reaches legitimately and often:
-	// a node seeded from a file has a locally-active revision before it has
-	// published anything, and every config write on it would fail until it
-	// did. The lost-update this exists to catch needs a winner, and an
-	// empty pointer has none.
+	// refusing would break a state a node reaches without doing anything
+	// wrong: its own store holds an active revision, which every config
+	// write on it names here, while the coordination store holds no pointer
+	// — one lost under the running node (an external cluster rebuilt, its
+	// bucket removed), which the node's next boot publishes again from its
+	// own copy. Every config write on it would fail until that boot. The
+	// lost-update this exists to catch needs a winner, and an empty pointer
+	// has none.
 	Expect string
 
 	// ExpectAbsent is the create-only compare-and-set: publish this only
@@ -977,15 +980,43 @@ type Fires interface {
 // that died between the two holding a batch nobody wrote. In this order the
 // worst a crash leaves is a written copy whose claim is unknown, which the
 // node settles the same way on its next pass, and a batch is acknowledged only
-// once its keeper is decided, so the group keeps offering it until then.
+// once its keeper is decided, so the group keeps offering it until then —
+// or once the store answers that the record it holds decides nothing
+// ([ErrCustodyUndecidable]), which no redelivery changes.
 type Custody interface {
 	// ClaimCustody records node as the keeper of batch unless a keeper is
 	// already recorded, and answers the keeper: node itself, or the node
-	// that claimed first. An error is the third answer — the store could
-	// not say — and the caller must neither keep nor delete its copy on
-	// it.
+	// that claimed first.
+	//
+	// An error is the third answer, and the caller must neither keep nor
+	// delete its copy on any of them. Every error is UNKNOWN — the store
+	// could not say, and asking again may — except one wrapping
+	// [ErrCustodyUndecidable], which is the store's DEFINITE answer that a
+	// keeper is recorded and nothing can read who.
 	ClaimCustody(ctx context.Context, batch, node string) (string, error)
 }
+
+// ErrCustodyUndecidable is [Custody.ClaimCustody]'s answer for a batch whose
+// keeper record exists and cannot be read as a keeper: it does not decode, or
+// it names no node. No claim this engine makes writes such a record — every
+// claim names its node and is refused without one — so it is a value that
+// reached the store some other way: written into the bucket by hand or by a
+// process that is not this engine, by a later build that changed the record's
+// shape, or corrupted.
+//
+// DEFINITE, never [ErrUnavailable]: the store answered, and it will answer the
+// same for as long as the record stands, so a caller that read it as a store
+// it could not reach would wait on it for ever — and a caller working through
+// many batches would stop at this one, leaving every batch behind it
+// unsettled. It is about ONE batch, and the caller goes on to the next.
+//
+// And it decides NOTHING about the copy: kept, it may be a second copy of a
+// batch the unreadable record's node already keeps; deleted, it may be the
+// only copy there is. So the copy stays as it is, counted in no node's day,
+// until the record is removed — a claim then creates it afresh — or the batch
+// is past the event log's retention and goes with its rows. A backend whose
+// store can only hold a record a claim wrote never answers it.
+var ErrCustodyUndecidable = errors.New("coord: the record of this custody batch's keeper cannot be read")
 
 // Rebases is the fleet's record of the instant a unit of work's derived
 // operation ids are minted at, for the work whose own start is too old for the

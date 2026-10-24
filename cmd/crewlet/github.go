@@ -33,13 +33,15 @@ func runGitHubProvision(environ config.Source, args []string, stdout, stderr io.
 
 	fs := flag.NewFlagSet("github provision", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	sinks := addSinkFlags(fs)
+	// THE WEBHOOK SECRET, and no seat's token: GitHub mints none on a
+	// provisioner's behalf. -recreate-webhooks mints a fresh one.
+	recreate := addFreshFlag(fs, "recreate-webhooks",
+		"delete and remake every webhook to mint a fresh secret; this "+
+			"invalidates the secret every other deployment of this company holds")
+	sinks := addSinkFlags(fs, sinkDecisions{secrets: true, fresh: recreate})
 	publicURL := fs.String("public-url", "",
 		"this deployment's public base URL, for registering the webhooks; "+
 			"defaults to "+publicURLDefault)
-	recreate := fs.Bool("recreate-webhooks", false,
-		"delete and remake every webhook to mint a fresh secret; this "+
-			"invalidates the secret every other deployment of this company holds")
 	dryRun := fs.Bool("dry-run", false,
 		"read and report, and register nothing")
 	if err := fs.Parse(args); err != nil {
@@ -50,7 +52,7 @@ func runGitHubProvision(environ config.Source, args []string, stdout, stderr io.
 		fmt.Fprintln(stderr,
 			"usage: crewlet github provision <company.yaml> "+
 				"[-secret-store|-env-file PATH|-print] [-public-url URL] "+
-				"[-recreate-webhooks] [-dry-run]")
+				"[-recreate-webhooks] [-dry-run] [-config PATH] [-api URL]")
 		return errors.New("name exactly one company document")
 	}
 
@@ -70,11 +72,16 @@ func runGitHubProvision(environ config.Source, args []string, stdout, stderr io.
 	}
 
 	ctx := context.Background()
-	env, boot, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
+	companySecrets, err := openCompanyStore(environ, sinks.store, "crewlet github provision")
 	if err != nil {
 		return err
 	}
-	defer closeEnv()
+	defer companySecrets.Close()
+	env, err := companySecrets.values(ctx, company, stdout)
+	if err != nil {
+		return err
+	}
+	boot := companySecrets.boot
 
 	resolved := *cfg
 	resolved.URL = strings.TrimSpace(env.Value(cfg.URL))
@@ -106,7 +113,8 @@ func runGitHubProvision(environ config.Source, args []string, stdout, stderr io.
 	opts := github.Options{
 		Client: client, Config: cfg, Org: organization,
 		Value:            env.Value,
-		RecreateWebhooks: *recreate,
+		Unvouched:        env.Unvouched,
+		RecreateWebhooks: recreate.switched(),
 	}
 	if *dryRun {
 		fmt.Fprintln(stdout,
@@ -114,11 +122,10 @@ func runGitHubProvision(environ config.Source, args []string, stdout, stderr io.
 	} else {
 		opts.WebhookBase = webhookBase(*publicURL, boot)
 		opts.WebhookBaseKey = webhookBaseKey(boot)
-		sink, closeSink, openErr := sinks.open(ctx, environ, stdout)
+		sink, openErr := sinks.open(ctx, companySecrets, stdout)
 		if openErr != nil {
 			return openErr
 		}
-		defer closeSink()
 		opts.Sink = sink
 	}
 

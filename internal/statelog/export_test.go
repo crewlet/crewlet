@@ -1,6 +1,12 @@
 package statelog
 
-import "log/slog"
+import (
+	"context"
+	"log/slog"
+	"time"
+
+	"github.com/nats-io/nats.go"
+)
 
 // RankOffersForTest is [collectOffers]' ordering, over offers already
 // collected.
@@ -18,3 +24,17 @@ func RankOffersForTest(offers []Offer, seed uint64) []Offer {
 // — when an alarm started, and how long it stood — and the package's own
 // logger is the process's.
 func LogTrackerTo(t *Tracker, logger *slog.Logger) { t.logger = logger }
+
+// FetchArtefactReporting is [FetchArtefact] with its progress lines every
+// report rather than every [TransferReportEvery].
+//
+// EXPORTED FOR A TEST because the lines are what a deployment sizes its
+// startup probe from, and at the production cadence a case proving that a
+// transfer reports as it goes would need a transfer longer than ten seconds.
+func FetchArtefactReporting(ctx context.Context, nc *nats.Conn, offer Offer, dest string,
+	logger *slog.Logger, report time.Duration) (Fetched, error) {
+
+	return fetchArtefact(ctx, nc, offer, dest, transferPace{
+		wait: TransferChunkWait, report: report, log: loggerOr(logger),
+	})
+}

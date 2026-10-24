@@ -191,6 +191,49 @@ var ErrNotFound = errors.New("secrets: no such secret")
 var ErrInvalidName = errors.New(
 	"secrets: a secret's name is an environment-variable name")
 
+// MaxValueBytes bounds one secret's value, in bytes, in every store and on
+// every path that writes one.
+//
+// The largest real credential this engine handles is a service-account JSON
+// key or a PEM private key, which are a few kilobytes; 64 KiB is an order of
+// magnitude above that and still finite. Every path that writes a value is an
+// operator's or the engine's own, so this bounds a mistake rather than an
+// attacker — a `curl -d @big.tar` or a `crewlet secrets set X < big.tar` typo
+// is refused rather than sealed.
+//
+// ONE LIMIT, HERE, because a value outlives the store it was written to and
+// every reader of it is sized from this one number. A stopped node's own row
+// is moved onto the fleet at the next start, and a revealed value is read
+// back — by `crewlet secrets get -reveal`, a provisioning sink and a run
+// resolving a company document through a node — to the length this allows. It
+// was the API route's alone, so an offline `crewlet secrets set` stored a
+// value of any size, the next start moved it onto the fleet, and from then on
+// every read of it was refused as longer than any answer the node gives: a
+// credential stored and unreadable.
+const MaxValueBytes = 64 << 10
+
+// ErrValueTooLarge reports a value longer than [MaxValueBytes].
+//
+// Its own sentinel because it is the caller's mistake rather than the store's,
+// as [ErrInvalidName] is: what fixes it is different input, never a retry or
+// a repair of the store.
+var ErrValueTooLarge = errors.New("secrets: a secret's value is longer than any store keeps")
+
+// CheckValue refuses a value longer than [MaxValueBytes], naming its length
+// and the limit and never the value.
+//
+// EVERY STORE CALLS IT AT THE WRITE, as it calls [CheckName] and
+// [CheckSource], because the limit is what every reader is sized from: a store
+// that took one byte more holds a value nothing can read back.
+func CheckValue(value string) error {
+	if len(value) <= MaxValueBytes {
+		return nil
+	}
+	return fmt.Errorf("%w: it is %d bytes, and a value is at most %d (%d KiB); "+
+		"a credential is a few kilobytes, so this is most likely the wrong input",
+		ErrValueTooLarge, len(value), MaxValueBytes, MaxValueBytes>>10)
+}
+
 // CheckName refuses a name the reference grammar cannot name.
 //
 // EVERY STORE CALLS THIS, and it is a guard rather than a courtesy. The store

@@ -310,6 +310,53 @@ roles:
 	if e.Company() != nil || e.sandbox.Load() != nil {
 		t.Error("the unbuildable catalogue was installed or started a runtime")
 	}
+	// THE TRAIL NAMES THE COMPANY IT BUILT and nothing past it, so a refusal
+	// after the company is told from one of the company itself.
+	if want := []string{"secrets", "company"}; !slices.Equal(applied, want) {
+		t.Errorf("a refused catalogue reported %v, want %v", applied, want)
+	}
+}
+
+// THE CHECK A WRITE ASKS BEFORE IT LANDS A REVISION IS THE APPLY'S OWN BUILD,
+// over this node's own chain, and it changes nothing.
+//
+// `crewlet run` holds the Tier B file it imports to [Engine.Buildable] before
+// the file is stored or activated, because nothing else builds it until an
+// apply does, after the whole fleet has been pointed at it. A check that built
+// less than an apply — the company, without the sandbox catalogue — passed
+// exactly the file whose every apply is refused; one that resolved from the
+// environment alone refused a key the node keeps in its secret store.
+//
+// Mutations: drop the catalogue from [buildRevision] and the unset key builds;
+// resolve from the environment alone and the stored key does not.
+func TestBuildableIsTheApplysBuildOverThisNodesChain(t *testing.T) {
+	t.Parallel()
+	company := parseCompany(t, `
+name: Nimbus
+providers:
+  sandbox:
+    e2b:
+      api_key: "${CREWLET_TEST_E2B_KEY}"
+roles:
+  - name: SWE
+    handle: swe
+    sandbox:
+      enabled: true
+      run_in: e2b
+`)
+	// AN EMPTY ENVIRONMENT, so the process's own can answer nothing here.
+	e := &Engine{environ: config.MapSource{}}
+	e.installSecrets(map[string]string{})
+	if err := e.Buildable(company); err == nil {
+		t.Error("a revision whose sandbox catalogue cannot be built was buildable")
+	}
+	e.installSecrets(map[string]string{"CREWLET_TEST_E2B_KEY": "e2b_test_key"})
+	if err := e.Buildable(company); err != nil {
+		t.Errorf("a revision whose key this node's secret store holds was refused: %v", err)
+	}
+	if e.Company() != nil || e.sandbox.Load() != nil {
+		t.Error("checking a revision installed it or started a sandbox runtime")
+	}
 }
 
 // A POLL INTERVAL NO DUTY CAN BE GRANTED FOR IS REFUSED AT BOOT, on a node with

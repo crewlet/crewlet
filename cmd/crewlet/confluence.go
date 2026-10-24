@@ -19,13 +19,13 @@ import (
 // operator asked it to: a directory tree of markdown, one space per
 // directory, plus the tool skills the files themselves declare.
 
-func runConfluenceImport(_ config.Source, args []string, stdout, stderr io.Writer) error {
+func runConfluenceImport(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 	directory, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("confluence import", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	bootstrapPath := bootstrapFlag(fs)
+	storeAt := addStoreFlags(fs)
 	space := fs.String("space", "",
 		"the space tool-skill pages are published into; empty reads "+
 			"CREWLET_TOOL_SKILLS_SPACE, then knowledge.skills_container")
@@ -39,7 +39,7 @@ func runConfluenceImport(_ config.Source, args []string, stdout, stderr io.Write
 	if given != 2 {
 		fmt.Fprintln(stderr,
 			"usage: crewlet confluence import <company.yaml> <directory> "+
-				"[-space KEY] [-prune] [-dry-run]")
+				"[-space KEY] [-prune] [-dry-run] [-config PATH] [-api URL]")
 		return errors.New("name exactly one company document and one directory")
 	}
 
@@ -68,11 +68,15 @@ func runConfluenceImport(_ config.Source, args []string, stdout, stderr io.Write
 	}
 
 	ctx := context.Background()
-	env, _, closeEnv, err := companyResolver(ctx, *bootstrapPath, stdout)
+	companySecrets, err := openCompanyStore(environ, storeAt, "crewlet confluence import")
 	if err != nil {
 		return err
 	}
-	defer closeEnv()
+	defer companySecrets.Close()
+	env, err := companySecrets.values(ctx, company, stdout)
+	if err != nil {
+		return err
+	}
 
 	client, err := confluence.NewClient(confluence.ClientOptions{
 		URL: cfg.ResolvedBaseURL(env.Value), Email: env.Value(cfg.Email),
@@ -153,21 +157,22 @@ func printConfluenceResult(w io.Writer, res *confluence.PublishResult) {
 // SKILLS-ONLY, and that is not an omission: knowledge docs are searched live
 // at query time and never loaded into a registry, so for them there is
 // nothing to resync.
-func runConfluenceResync(_ config.Source, args []string, stdout, stderr io.Writer) error {
+func runConfluenceResync(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("confluence resync", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	space := fs.String("space", "",
 		"the skills space key; empty takes knowledge.skills_container")
-	bootstrapPath := bootstrapFlag(fs)
+	storeAt := addStoreFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	companyPath, given := onePositional(fs, companyPath)
 	if given != 1 {
 		fmt.Fprintln(stderr,
-			"usage: crewlet confluence resync <company.yaml> [-space KEY]")
+			"usage: crewlet confluence resync <company.yaml> [-space KEY] "+
+				"[-config PATH] [-api URL]")
 		return errors.New("name exactly one company document")
 	}
 
@@ -183,11 +188,15 @@ func runConfluenceResync(_ config.Source, args []string, stdout, stderr io.Write
 	}
 
 	ctx := context.Background()
-	env, _, closeEnv, err := companyResolver(ctx, *bootstrapPath, stdout)
+	companySecrets, err := openCompanyStore(environ, storeAt, "crewlet confluence resync")
 	if err != nil {
 		return err
 	}
-	defer closeEnv()
+	defer companySecrets.Close()
+	env, err := companySecrets.values(ctx, company, stdout)
+	if err != nil {
+		return err
+	}
 
 	client, err := confluence.NewClient(confluence.ClientOptions{
 		URL: cfg.ResolvedBaseURL(env.Value), Email: env.Value(cfg.Email),
@@ -242,13 +251,15 @@ func runConfluenceProvision(environ config.Source, args []string, stdout, stderr
 
 	fs := flag.NewFlagSet("confluence provision", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	sinks := addSinkFlags(fs)
+	// THE HOOKS' TOKEN OR SECRET, and no seat's token. -recreate-webhooks
+	// mints a fresh one.
+	recreate := addFreshFlag(fs, "recreate-webhooks",
+		"delete and remake every hook to mint a fresh token or secret; this "+
+			"invalidates the value every other deployment of this company holds")
+	sinks := addSinkFlags(fs, sinkDecisions{secrets: true, fresh: recreate})
 	publicURL := fs.String("public-url", "",
 		"this deployment's public base URL, for registering the hooks; "+
 			"defaults to "+publicURLDefault)
-	recreate := fs.Bool("recreate-webhooks", false,
-		"delete and remake every hook to mint a fresh token or secret; this "+
-			"invalidates the value every other deployment of this company holds")
 	dryRun := fs.Bool("dry-run", false,
 		"read and report, and register nothing")
 	if err := fs.Parse(args); err != nil {
@@ -259,7 +270,7 @@ func runConfluenceProvision(environ config.Source, args []string, stdout, stderr
 		fmt.Fprintln(stderr,
 			"usage: crewlet confluence provision <company.yaml> "+
 				"[-secret-store|-env-file PATH|-print] [-public-url URL] "+
-				"[-recreate-webhooks] [-dry-run]")
+				"[-recreate-webhooks] [-dry-run] [-config PATH] [-api URL]")
 		return errors.New("name exactly one company document")
 	}
 
@@ -275,11 +286,16 @@ func runConfluenceProvision(environ config.Source, args []string, stdout, stderr
 	}
 
 	ctx := context.Background()
-	env, boot, closeEnv, err := companyResolver(ctx, *sinks.bootstrap, stdout)
+	companySecrets, err := openCompanyStore(environ, sinks.store, "crewlet confluence provision")
 	if err != nil {
 		return err
 	}
-	defer closeEnv()
+	defer companySecrets.Close()
+	env, err := companySecrets.values(ctx, company, stdout)
+	if err != nil {
+		return err
+	}
+	boot := companySecrets.boot
 
 	base := cfg.ResolvedBaseURL(env.Value)
 	if base == "" {
@@ -304,7 +320,8 @@ func runConfluenceProvision(environ config.Source, args []string, stdout, stderr
 	// THE SINK IS OPENED FOR A REAL RUN ONLY, for the reason every sibling
 	// states: a dry run registers nothing and has nothing to record.
 	opts := confluence.Options{
-		Client: client, Config: cfg, Value: env.Value, Recreate: *recreate,
+		Client: client, Config: cfg, Value: env.Value, Unvouched: env.Unvouched,
+		Recreate: recreate.switched(),
 	}
 	if *dryRun {
 		fmt.Fprintln(stdout,
@@ -312,11 +329,10 @@ func runConfluenceProvision(environ config.Source, args []string, stdout, stderr
 	} else {
 		opts.WebhookBase = webhookBase(*publicURL, boot)
 		opts.WebhookBaseKey = webhookBaseKey(boot)
-		sink, closeSink, openErr := sinks.open(ctx, environ, stdout)
+		sink, openErr := sinks.open(ctx, companySecrets, stdout)
 		if openErr != nil {
 			return openErr
 		}
-		defer closeSink()
 		opts.Sink = sink
 	}
 

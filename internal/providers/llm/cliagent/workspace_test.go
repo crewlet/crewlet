@@ -203,7 +203,7 @@ func TestAMissingLoginDoesNotRefuseTheCheckout(t *testing.T) {
 	if err := checkout.Release(t.Context()); err != nil {
 		t.Errorf("Release: %v", err)
 	}
-	if ws.HasLogin() {
+	if hasLogin(t, ws) {
 		t.Error("HasLogin reported a login that was never written")
 	}
 }

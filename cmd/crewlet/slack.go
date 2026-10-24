@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/slack"
 )
 
@@ -32,7 +33,13 @@ func runSlackProvision(environ config.Source, args []string, stdout, stderr io.W
 
 	fs := flag.NewFlagSet("slack provision", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	sinks := addSinkFlags(fs)
+	// EVERY INSTALLED APP'S BOT TOKEN, and -reinstall a fresh one. It
+	// reads no value of the company's, so no note on a stopped node ever
+	// recites this.
+	reinstall := addFreshFlag(fs, "reinstall",
+		"run the OAuth install again even for a seat whose token is already "+
+			"recorded (this revokes that seat's current token)")
+	sinks := addSinkFlags(fs, sinkDecisions{seatTokens: true, fresh: reinstall})
 	publicURL := fs.String("public-url", "",
 		"this deployment's public HTTPS base URL; every app's request URL "+
 			"and redirect URL are built from it. Defaults to "+
@@ -41,9 +48,6 @@ func runSlackProvision(environ config.Source, args []string, stdout, stderr io.W
 		"a Slack app-configuration REFRESH token; empty reads SLACK_CONFIG_REFRESH_TOKEN")
 	ledgerPath := fs.String("ledger", "",
 		"where the app ledger lives; empty puts it beside the company document")
-	reinstall := fs.Bool("reinstall", false,
-		"run the OAuth install again even for a seat whose token is already "+
-			"recorded (this revokes that seat's current token)")
 	only := fs.String("handles", "",
 		"comma-separated seat handles to provision; empty does every one")
 	noInstall := fs.Bool("no-install", false,
@@ -60,7 +64,7 @@ func runSlackProvision(environ config.Source, args []string, stdout, stderr io.W
 			"usage: crewlet slack provision <company.yaml> "+
 				"[-secret-store|-env-file PATH|-print] [-public-url URL] "+
 				"[-config-token TOKEN] [-ledger PATH] [-handles a,b] "+
-				"[-reinstall] [-no-install] [-dry-run]")
+				"[-reinstall] [-no-install] [-dry-run] [-config PATH] [-api URL]")
 		return errors.New("name exactly one company document")
 	}
 
@@ -72,19 +76,18 @@ func runSlackProvision(environ config.Source, args []string, stdout, stderr io.W
 	if err != nil {
 		return err
 	}
-	// THROUGH THE SAME CHAIN EVERY OTHER COMMAND USES, for the company's
-	// own ${VAR} values. The ADDRESS is no longer one of them: what goes
-	// into an app manifest is a URL, and while it was a Tier B pointer a
-	// manifest could carry "${PUBLIC_URL}/webhooks/slack/<handle>" where
-	// an address belongs — Slack refuses such an app and names nothing.
-	// The address is Tier A's now ([webhookBase]), resolved before the file
-	// is decoded.
-	resolveCtx := context.Background()
-	_, boot, closeEnv, err := companyResolver(resolveCtx, *sinks.bootstrap, stdout)
+	// TIER A AND NOTHING ELSE, because this run reads none of the
+	// company's ${VAR} values: what it builds is URLs and manifests, and
+	// the address they are built on is Tier A's ([webhookBase]), resolved
+	// before the file is decoded. So it opens no store to read — against a
+	// running node a read would only meet the lock — and the store is
+	// routed when -secret-store first records something.
+	companySecrets, err := openCompanyStore(environ, sinks.store, "crewlet slack provision")
 	if err != nil {
 		return err
 	}
-	defer closeEnv()
+	defer companySecrets.Close()
+	boot := companySecrets.boot
 
 	// READ ONCE. Four places below build a URL from it, and four separate
 	// reads of the flag is how one of them ends up using the flag while
@@ -139,16 +142,15 @@ func runSlackProvision(environ config.Source, args []string, stdout, stderr io.W
 	}
 
 	ctx := context.Background()
-	sink, closeSink, err := sinks.open(ctx, environ, stdout)
+	sink, err := sinks.open(ctx, companySecrets, stdout)
 	if err != nil {
 		return err
 	}
-	defer closeSink()
 
 	opts := slack.Options{
 		Admin: slack.NewAdmin(nil), Seats: plans,
 		Ledger: ledger, LedgerPath: *ledgerPath, Sink: sink,
-		BaseURL: base, ConfigRefreshToken: refresh, Reinstall: *reinstall,
+		BaseURL: base, ConfigRefreshToken: refresh, Reinstall: reinstall.asked(),
 		Only: splitHandles(*only),
 	}
 	if !*noInstall {
@@ -216,9 +218,12 @@ func printSlackPlan(w io.Writer, plans []slack.SeatPlan, ledger *slack.Ledger, l
 	printNotes(w, notes)
 }
 
-// printSlackResult renders what a run did.
-func printSlackResult(w io.Writer, res *slack.Result, ledgerPath string, sink interface{ Describe() string }) {
+// printSlackResult renders what a run did, and — where it recorded a value a
+// running engine does not hold yet — what has to happen for the engine to
+// read it ([printNextStep]).
+func printSlackResult(w io.Writer, res *slack.Result, ledgerPath string, sink provision.TokenSink) {
 	fmt.Fprintf(w, "\nRecorded in %s; app ledger in %s.\n", sink.Describe(), ledgerPath)
+	printNextStep(w, res.Recorded, sink)
 	// SAID EVERY RUN, because the ledger holds client secrets Slack
 	// serves once and an operator who commits it has published them.
 	fmt.Fprintf(w, "%s holds app client secrets — keep it out of version control.\n",

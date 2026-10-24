@@ -484,9 +484,13 @@ func Catalogue() []Instrument {
 		{
 			Name: BackupHolds, Kind: KindGauge, Unit: UnitCount,
 			Attributes: nil,
-			Shows: "Live trim holds. A pin that outlives its owner stops the " +
-				"trim until the stale bound expires it, so a count that does " +
-				"not return to zero is a backup that crashed mid-copy.",
+			Shows: "Trim holds in the register: a backup copying the log, or " +
+				"a joining node fetching a snapshot and replaying its tail. A " +
+				"holder renews its pin every fifteen seconds and removes it " +
+				"when it is done, and the trim ignores one nobody has renewed " +
+				"for a minute; nothing else removes it, so a count that does " +
+				"not return to zero is a holder that crashed — a backup " +
+				"mid-copy, or a join before its node published a position.",
 		},
 
 		// ---- the fleet's history ---------------------------------------

@@ -6,7 +6,7 @@ Crewlet uses a **one Slack app per agent** model — each agent gets its own bot
 
 There are two ways to create those apps:
 
-- **[Automated (recommended)](#automated-setup-crewlet-slack-provision)** — `crewlet slack provision` creates and maintains every app through Slack's [App Manifest APIs](https://docs.slack.dev/app-manifests/configuring-apps-with-app-manifests/). One config token to bootstrap, one authorize click per agent, and every secret lands in `.env` automatically.
+- **[Automated (recommended)](#automated-setup-crewlet-slack-provision)** — `crewlet slack provision` creates and maintains every app through Slack's [App Manifest APIs](https://docs.slack.dev/app-manifests/configuring-apps-with-app-manifests/). One config token to bootstrap, one authorize click per agent, and every secret it mints lands where you send it — the fleet's encrypted secret store, an env file or your terminal ([Where the secrets go](#where-the-secrets-go)).
 - **[Manual](#manual-setup)** — click through [api.slack.com/apps](https://api.slack.com/apps) per agent.
 
 Both end in the same place: per-agent credentials referenced from the company YAML ([Configure in YAML](#configure-in-yaml)).
@@ -106,7 +106,7 @@ units:
 
 The `bot_token` drives the transport (the seat's own identity at start, and the working indicator); the same value, named as `SLACK_MCP_XOXB_TOKEN`, drives the Slack MCP tools — two independent subsystems, one credential referenced in two places. `signing_secret` is transport-only — it verifies this seat's inbound deliveries and nothing else reads it. Both live on `role.integrations.slack`, in the file and through the API alike. There is no per-seat channel setting: the engine's transport posts no message, so it has nothing to aim, and the room a seat talks in is [`units[].channel`](../concepts/organization-model.md), which the executor prompt renders as the team channel for whichever chat backend the company runs.
 
-Write this block **first**, with `${VAR}` placeholders — the automated provisioning below reads the placeholder names out of the YAML and fills exactly those variables in `.env`. Whole-value placeholders are required (`"${SLACK_BOT_TOKEN_ENGINEER}"`, not a literal token) so the provisioner knows which env vars to write. Declaring the block at all means declaring **both** credentials: a seat with only a `bot_token` receives messages it can never answer, and one with only a `signing_secret` answers 503 to every delivery while the app's own settings page reports a healthy request URL — so config validation rejects either half on its own, naming the missing field. Whether each one is a placeholder or a literal is a separate question, and config validation's only opinion on it is that a `bot_token` is one or the other — never a reference inside other text (`xoxb-${REST}`), which the transport, resolving the token only when it is one whole `${VAR}`, would send as written: a literal marks a credential you manage by hand, so `crewlet slack provision` reports that half and leaves it alone rather than editing your company document. A **mixed** pair therefore loads and runs, but the seat is only half provisionable — the run says which half and why, and the other value stays yours to paste in.
+Write this block **first**, with `${VAR}` placeholders — the automated provisioning below reads the placeholder names out of the YAML and fills exactly those variables in the sink you choose ([Where the secrets go](#where-the-secrets-go)). Whole-value placeholders are required (`"${SLACK_BOT_TOKEN_ENGINEER}"`, not a literal token) so the provisioner knows which variables to write. Declaring the block at all means declaring **both** credentials: a seat with only a `bot_token` receives messages it can never answer, and one with only a `signing_secret` answers 503 to every delivery while the app's own settings page reports a healthy request URL — so config validation rejects either half on its own, naming the missing field. Whether each one is a placeholder or a literal is a separate question, and config validation's only opinion on it is that a `bot_token` is one or the other — never a reference inside other text (`xoxb-${REST}`), which the transport, resolving the token only when it is one whole `${VAR}`, would send as written: a literal marks a credential you manage by hand, so `crewlet slack provision` reports that half and leaves it alone rather than editing your company document. A **mixed** pair therefore loads and runs, but the seat is only half provisionable — the run says which half and why, and the other value stays yours to paste in.
 
 ---
 
@@ -125,15 +125,15 @@ For every Slack-enabled agent seat (a role whose `integrations.slack` credential
 
 **One seat failing does not cost the others.** A mistyped code paste or a refused manifest is recorded against that handle, the remaining seats still provision, and the command exits non-zero naming what failed. Everything completed is durable — the ledger is written after every mutation — so re-running resumes rather than starting over.
 
-Afterwards: invite each bot to its channels (`/invite @handle`) and restart `crewlet run` so the engine reads the new credentials.
+Afterwards: invite each bot to its channels (`/invite @handle`), and do what the run's `Next:` line says so the engine reads the new credentials — with `-secret-store`, re-activate the current revision on a running node (`POST /config/reload`), or apply the company document that adds the seats' blocks (`crewlet config import`), since an apply is when the engine reads its secret store; with `-env-file`, source the file into the engine's environment and restart it. The line is printed only when the run recorded a value a running engine does not hold yet: a re-run that kept every app has nothing to say.
 
-> **A bot token carries only the scopes it was minted with.** Pushing a new manifest does not give an existing token a new scope — the app has to be installed again, which is what `-reinstall` is for. It is destructive on its own: the new install revokes the token every running node is currently authenticating with, so plan the restart that follows it.
+> **A bot token carries only the scopes it was minted with.** Pushing a new manifest does not give an existing token a new scope — the app has to be installed again, which is what `-reinstall` is for. It is destructive on its own: the new install revokes the token every running node is currently authenticating with, so plan the step the run's `Next:` line names straight after it — a reload with `-secret-store`, a restart with `-env-file` or `-print`.
 
 ### Where the secrets go
 
 The same three-way choice every provisioning command in Crewlet takes, and there is **no default** — a run with nowhere to put what it mints would create live credentials and print none of them:
 
-- `-secret-store` — the node's [encrypted secret store](../concepts/secret-store.md). The running engine rebuilds its resolver on apply, so re-activate the current revision afterwards ([`crewlet config activate`](../reference/cli.md#crewlet-config-activate)).
+- `-secret-store` — the fleet's [encrypted secret store](../concepts/secret-store.md). The running engine rebuilds its resolver on apply, so re-activate the current revision afterwards with `POST /config/reload` to a node that is up — [`crewlet config activate`](../reference/cli.md#crewlet-config-activate) opens this node's store, so it runs only while the engine is stopped, when the next start reads the store anyway.
 - `-env-file PATH` — a `.env` file, which then has to be sourced and the engine restarted.
 - `-print` — stdout, for moving the values into a password manager or a deployment system this binary knows nothing about.
 
@@ -167,6 +167,7 @@ Slack requires HTTPS for both URLs — for local development put a tunnel (ngrok
 | `-secret-store` / `-env-file PATH` / `-print` | Where the minted bot token and signing secret go — exactly one, no default. |
 | `-config-token TOKEN` | The app-configuration **refresh** token; empty reads `$SLACK_CONFIG_REFRESH_TOKEN`. **Bootstrap only** — see [The ledger beats the shell](#the-ledger-beats-the-shell). |
 | `-ledger PATH` | The app ledger (default: `slack-apps.json` beside the company YAML). |
+| `-config PATH` / `-api URL` | The Tier A file (default `crewlet.yaml`), and a running node to go through in place of the one it names. This command reads none of the company's values, so it opens no store until `-secret-store` records into one — through the node's API while its engine runs; on a stopped node a seat whose app is installed and whose token its own rows lack is not installed again, short of `-reinstall`, which installs every app again whatever the rows hold. An app nobody has installed yet — one the run creates among them — has no token anywhere to keep, so it is installed whatever the rows hold. See [where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values) |
 | `-handles a,b` | Only provision these handles. Worth having against a method that allows about one request a minute: fixing one seat in a company of twenty should not cost twenty minutes. |
 | `-reinstall` | Redo the OAuth install even where a bot token is already recorded. Required for a scope change to take effect, and destructive — it revokes the seat's current token. |
 | `-no-install` | Create and update the apps and write the signing secrets, then print the authorize URLs instead of asking for codes. For a non-interactive run, e.g. pushing a scope change from CI. |
@@ -290,7 +291,7 @@ For each app:
 3. Subscribe to bot events: `app_mention`, `message.channels`, `message.groups`, `message.im`, `message.mpim`
 4. Click **Save Changes**
 
-Then paste each pair into that agent's block in Company › Integrations, or export them as `SLACK_BOT_TOKEN_*` / `SLACK_SIGNING_SECRET_*` (or put them in `.env`) under the names your YAML references.
+Then paste each pair into that agent's block in Company › Integrations, or store each value under the name your YAML references with [`crewlet secrets set`](../reference/cli.md#crewlet-secrets-set) — the engine reads it at its next apply, `POST /config/reload` on a running node, as the command says after the write — or export them as `SLACK_BOT_TOKEN_*` / `SLACK_SIGNING_SECRET_*` in the engine's own environment before it starts. The engine reads no `.env` file ([Environment variables](../reference/environment-variables.md)).
 
 > **The `signing_secret` is what makes the endpoint usable.** `/webhooks/slack/{handle}` is
 > exempt from the API's bearer token because it verifies Slack's own signature instead — so

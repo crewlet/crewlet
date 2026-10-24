@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -149,7 +151,9 @@ func (l boxLayout) envFile() string { return filepath.Join(l.records(), "env") }
 
 // seededCredential is one login file a box was seeded with, as the box's
 // RECORD keeps it: where on the engine host it came from, and the SHA-256 of
-// the very bytes the box was given.
+// the very bytes the box was given — "" for a file of the login the shared
+// directory did not hold when the box was seeded, which the box was given
+// nothing for.
 //
 // THE SEED IS WHAT A WRITE-BACK IS JUDGED AGAINST. A box's teardown compared
 // its copy with the shared login as it was AT TEARDOWN, and an idle box's copy
@@ -158,48 +162,155 @@ func (l boxLayout) envFile() string { return filepath.Join(l.records(), "env") }
 // OpenCode's export reproduces its import byte for byte, so every box seeded
 // with its document did — and the vendor had already rotated that seed's
 // refresh token away, logging every seat out at the next expiry.
+//
+// AN ABSENT FILE IS RECORDED TOO, because a login is the set of its files: a
+// write-back is made only while the shared login is still the one the box was
+// seeded from, and a file somebody added since is as much a newer login as a
+// file somebody changed.
 type seededCredential struct {
 	Source string `json:"source"`
 	Seed   string `json:"seed"`
 }
 
+// boxLogin is one login a box is seeded with: the files of one shared
+// credential directory, by the path relative to the box's home each is seeded
+// at, against its absolute path on the engine host.
+type boxLogin struct {
+	dir   string
+	files map[string]string
+}
+
+// names is every file of the login, by its name in the shared directory.
+func (b boxLogin) names() []string {
+	names := make([]string, 0, len(b.files))
+	for _, source := range b.files {
+		names = append(names, filepath.Base(source))
+	}
+	slices.Sort(names)
+	return names
+}
+
+// loginsOf groups a box's credential files into the LOGINS they are: one per
+// shared credential directory, which is the unit every writer of that
+// directory writes and every reader reads ([hostbox.WriteCredentials]). A
+// profile's credential files all live in one directory, so a box has one —
+// but a map naming two is two logins, each read and written whole.
+func loginsOf(files map[string]string) []boxLogin {
+	byDir := map[string]map[string]string{}
+	for relative, source := range files {
+		dir := filepath.Dir(source)
+		if byDir[dir] == nil {
+			byDir[dir] = map[string]string{}
+		}
+		byDir[dir][relative] = source
+	}
+	out := make([]boxLogin, 0, len(byDir))
+	for _, dir := range slices.Sorted(maps.Keys(byDir)) {
+		out = append(out, boxLogin{dir: dir, files: byDir[dir]})
+	}
+	return out
+}
+
 // seedCredentials copies the CLI login into the box before the coding agent
-// runs, and reports what it seeded the box with: every file it copied, by its
-// path relative to the box's home. A file the shared directory does not hold
-// is not seeded and not reported, so nothing is ever written back over it.
+// runs, and reports what it seeded the box with: every file of the login, by
+// its path relative to the box's home, with the digest of what the box was
+// given — and "" for a file the shared directory does not hold, which is not
+// seeded, so nothing is ever written back over it.
+//
+// THE LOGIN IS READ WHOLE, under the shared directory's lock
+// ([hostbox.ReadCredentials]): read a file at a time it could straddle a write
+// — a box seeded with one sign-in's token beside another's config.toml — and a
+// write that stopped part way is finished first rather than read as the half
+// it left. And it is seeded WHOLE OR NOT AT ALL: a login the box cannot be
+// given every file of is given none, and said, because a CLI handed half a
+// login fails inside the run in a way nothing outside it explains.
 //
 // The keys are relative paths from an operator-overridable profile, so they go
 // through hostbox.SafeJoin: an entry like "../../etc/cron.d/x" would otherwise
 // write a host file every time a box was created.
-func seedCredentials(l boxLayout, files map[string]string) map[string]seededCredential {
+func seedCredentials(ctx context.Context, l boxLayout, files map[string]string) map[string]seededCredential {
 	seeded := map[string]seededCredential{}
-	for relative, source := range files {
-		dst, err := hostbox.SafeJoin(l.home(), relative)
-		if err != nil {
-			localLog.Warn("local_sandbox_credential_path_refused",
-				"sandbox_id", l.id, "path", relative, "error", err.Error())
-			continue
-		}
-		// THE SEED'S DIGEST IS OF THE BYTES THE BOX WAS GIVEN, taken as they
-		// are copied: read separately it could describe a newer file than
-		// the box's, and the teardown would then excuse a write it should
-		// have refused.
-		digest, copied, err := hostbox.CopyFileAtomicDigest(source, dst)
+	for _, login := range loginsOf(files) {
+		got, err := seedLogin(ctx, l, login)
 		if err != nil {
 			localLog.Warn("local_sandbox_credential_seed_failed",
-				"sandbox_id", l.id, "path", relative, "error", err.Error())
+				"sandbox_id", l.id, "dir", login.dir, "error", err.Error(),
+				"detail", "the box was given none of this login, so its run is not signed in by it")
 			continue
 		}
-		if copied {
-			seeded[relative] = seededCredential{Source: source, Seed: digest}
-		}
+		maps.Copy(seeded, got)
 	}
 	return seeded
 }
 
+// seedLogin seeds one login into a box — every file the shared directory
+// holds of it, or none — and reports what it seeded.
+func seedLogin(ctx context.Context, l boxLayout, login boxLogin) (map[string]seededCredential, error) {
+	targets := map[string]string{}
+	for relative := range login.files {
+		dst, err := hostbox.SafeJoin(l.home(), relative)
+		if err != nil {
+			return nil, fmt.Errorf("the credential path %q: %w", relative, err)
+		}
+		targets[relative] = dst
+	}
+	names := login.names()
+	if len(slices.Compact(slices.Clone(names))) != len(names) {
+		return nil, fmt.Errorf("two of its files share a name in %s, which keeps one file by each name",
+			login.dir)
+	}
+	unlock, err := hostbox.LockCredentials(ctx, login.dir)
+	if err != nil {
+		return nil, err
+	}
+	shared, err := hostbox.ReadCredentials(login.dir, names)
+	unlock()
+	if err != nil {
+		return nil, err
+	}
+	seeded := map[string]seededCredential{}
+	var written []string
+	for _, relative := range slices.Sorted(maps.Keys(login.files)) {
+		source := login.files[relative]
+		content, present := shared[filepath.Base(source)]
+		if !present {
+			seeded[relative] = seededCredential{Source: source}
+			continue
+		}
+		dst := targets[relative]
+		if err := writeBoxFile(dst, content); err != nil {
+			for _, path := range written {
+				_ = os.Remove(path)
+			}
+			return nil, fmt.Errorf("seeding %q: %w", relative, err)
+		}
+		written = append(written, dst)
+		// THE SEED'S DIGEST IS OF THE BYTES THE BOX WAS GIVEN: read separately
+		// it could describe a newer file than the box's, and the teardown
+		// would then excuse a write it should have refused.
+		seeded[relative] = seededCredential{Source: source, Seed: digestOf(content)}
+	}
+	return seeded, nil
+}
+
+// writeBoxFile puts one seeded login file in a box, its parents created, through
+// a temporary file and a rename.
+func writeBoxFile(dst string, content []byte) error {
+	if err := os.MkdirAll(filepath.Dir(dst), hostbox.DirMode); err != nil {
+		return err
+	}
+	return hostbox.ReplaceFile(dst, bytes.NewReader(content))
+}
+
+// digestOf is the SHA-256 of content in [hostbox.Digest]'s form.
+func digestOf(content []byte) string {
+	digest, _ := hostbox.Digest(bytes.NewReader(content)) // a bytes.Reader does not fail
+	return digest
+}
+
 // collectCredentials writes a login the run refreshed back to the shared
 // directory — a COMPARE-AND-SWAP against what the box was seeded with
-// ([writeBackCredential]).
+// ([writeBackLogin]), one login at a time.
 //
 // OAuth access tokens expire in hours and most vendors rotate the refresh
 // token alongside them, so a box that quietly discards the rewritten file logs
@@ -217,25 +328,30 @@ func seedCredentials(l boxLayout, files map[string]string) map[string]seededCred
 // it — another writer's lock — has its own bound ([hostbox.CredentialLockWait]).
 func collectCredentials(ctx context.Context, l boxLayout, seeded map[string]seededCredential) {
 	ctx = context.WithoutCancel(ctx)
+	files := map[string]string{}
 	for relative, rec := range seeded {
-		src, err := hostbox.SafeJoin(l.home(), relative)
+		files[relative] = rec.Source
+	}
+	for _, login := range loginsOf(files) {
+		got, err := writeBackLogin(ctx, l, login, seeded, hostbox.WriteCredentials)
 		if err != nil {
+			localLog.Warn("local_sandbox_credential_writeback_failed",
+				"sandbox_id", l.id, "dir", login.dir, "error", err.Error())
 			continue
 		}
-		got, err := writeBackCredential(ctx, src, rec)
-		switch {
-		case err != nil:
-			localLog.Warn("local_sandbox_credential_writeback_failed",
-				"sandbox_id", l.id, "file", relative, "error", err.Error())
-		case got == writeBackWritten:
-			localLog.Info("local_sandbox_credential_refreshed", "sandbox_id", l.id, "file", relative)
-		case got == writeBackChanged || got == writeBackRemoved:
-			// WARN, because it is the one trace that a refresh the run made
-			// went nowhere; two in a row on one login are worth somebody
-			// looking at. It names the file, never what either copy holds.
-			localLog.Warn("local_sandbox_credential_superseded",
-				"sandbox_id", l.id, "file", relative, "path", rec.Source, "shared", string(got),
-				"detail", supersededDetail[got])
+		for _, relative := range slices.Sorted(maps.Keys(got)) {
+			switch outcome := got[relative]; outcome {
+			case writeBackWritten:
+				localLog.Info("local_sandbox_credential_refreshed", "sandbox_id", l.id, "file", relative)
+			case writeBackChanged, writeBackRemoved:
+				// WARN, because it is the one trace that a refresh the run
+				// made went nowhere; two in a row on one login are worth
+				// somebody looking at. It names the file, never what either
+				// copy holds.
+				localLog.Warn("local_sandbox_credential_superseded",
+					"sandbox_id", l.id, "file", relative, "path", seeded[relative].Source,
+					"shared", string(outcome), "detail", supersededDetail[outcome])
+			}
 		}
 	}
 }
@@ -272,65 +388,144 @@ const (
 	writeBackRemoved writeBack = "removed"
 )
 
-// writeBackCredential writes the box's src over the shared login rec names,
-// but only where the run CHANGED it and the shared login is STILL what the box
-// was seeded with.
+// writeBackLogin writes the files of one login the run CHANGED back over the
+// shared login, but only while the shared login is STILL, as a whole, the one
+// the box was seeded with — and reports what became of each file the run
+// changed.
 //
 // TWO CONDITIONS, and each is a different lost login. A box whose copy still
 // holds its seed refreshed nothing, and writing it back would revert whatever
-// the host wrote meanwhile. A shared login that no longer holds the seed was
-// rewritten by somebody else — a refresh of its own, which rotated the refresh
-// token the box's copy descends from, or a new login an operator made — and
-// the box's copy is the older of the two. So the comparison and the write are
-// one step, under the shared directory's lock ([hostbox.LockCredentials]),
-// which every writer of it takes.
+// the host wrote meanwhile. A shared login that no longer holds the seed —
+// any file of it, or a file it did not hold — was rewritten by somebody else:
+// a refresh of its own, which rotated the refresh token the box's copy
+// descends from, or a new login an operator made — and the box's copy is the
+// older of the two. Judged a file at a time, a refresh of one file was written
+// beside another writer's newer other file, a login no CLI wrote. So the
+// comparison and the write are one step, under the shared directory's lock
+// ([hostbox.LockCredentials]), which every writer of it takes, and the write
+// is ONE WRITE of the whole login ([hostbox.WriteCredentials]), so a teardown
+// killed part way never leaves half of it.
 //
-// OPENED ONCE, as a box's files are read ([openHostRegular]), and the digest
-// and the copy both read that one descriptor: a file checked by its path and
-// then opened by it again is two reads of whatever the path names at each
-// moment, and the box's side is the one that names it. So a pipe there answers
-// at once as what it is rather than blocking a teardown, a link is refused
-// rather than followed, and what is written back is the file that was
-// compared.
-func writeBackCredential(ctx context.Context, src string, rec seededCredential) (writeBack, error) {
+// A file the box was not seeded with is never written: a box never creates a
+// login, nor a file of one.
+//
+// The write goes through commit, which is [hostbox.WriteCredentials] in every
+// box: see [loginCommit].
+func writeBackLogin(
+	ctx context.Context, l boxLayout, login boxLogin, seeded map[string]seededCredential, commit loginCommit,
+) (map[string]writeBack, error) {
+	got := map[string]writeBack{}
+	changed := map[string][]byte{}
+	byName := map[string]string{}
+	for _, relative := range slices.Sorted(maps.Keys(login.files)) {
+		rec := seeded[relative]
+		name := filepath.Base(rec.Source)
+		byName[name] = relative
+		if rec.Seed == "" {
+			continue
+		}
+		src, err := hostbox.SafeJoin(l.home(), relative)
+		if err != nil {
+			return nil, fmt.Errorf("the credential path %q: %w", relative, err)
+		}
+		content, present, err := readBoxFile(src)
+		if err != nil {
+			return nil, err
+		}
+		if !present || digestOf(content) == rec.Seed {
+			got[relative] = writeBackIdle
+			continue
+		}
+		changed[name] = content
+	}
+	if len(changed) == 0 {
+		return got, nil
+	}
+	verdict := func(outcome writeBack) map[string]writeBack {
+		for name := range changed {
+			got[byName[name]] = outcome
+		}
+		return got
+	}
+	unlock, err := hostbox.LockCredentials(ctx, login.dir)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	names := login.names()
+	current, err := hostbox.ReadCredentials(login.dir, names)
+	if err != nil {
+		return nil, fmt.Errorf("reading the shared login: %w", err)
+	}
+	next := maps.Clone(current)
+	maps.Copy(next, changed)
+	if maps.EqualFunc(next, current, bytes.Equal) {
+		return verdict(writeBackHeld), nil
+	}
+	for relative, rec := range login.files {
+		shared, present := current[filepath.Base(rec)]
+		seed := seeded[relative].Seed
+		if (seed == "") == present || (present && digestOf(shared) != seed) {
+			if len(current) == 0 {
+				return verdict(writeBackRemoved), nil
+			}
+			return verdict(writeBackChanged), nil
+		}
+	}
+	err = commit(login.dir, names, next)
+	if !hostbox.Committed(err) {
+		return nil, err
+	}
+	if err != nil {
+		// THE REFRESH IS THE LOGIN OF RECORD — its journal landed, and every
+		// reader puts it in place before it reads — so it was written, and
+		// the step that could not be finished now is said.
+		localLog.Warn("local_sandbox_credential_unapplied", "sandbox_id", l.id, "dir", login.dir,
+			"error", err.Error())
+	}
+	return verdict(writeBackWritten), nil
+}
+
+// loginCommit is how a write-back puts a whole login in the shared directory:
+// [hostbox.WriteCredentials], in every box.
+//
+// A PARAMETER rather than a call written in, for the one failure after which
+// the refresh HAS been written — its journal landed, and a file the disk then
+// refused is put in place by the next reader — which a write-back has to report
+// as written. Nothing a test can leave in the shared directory beforehand
+// reaches that failure: the write-back reads the login under the same hold of
+// the lock first, and the read refuses whatever would stop the write. So a test
+// hands in a commit that puts the obstacle down between the two.
+type loginCommit func(dir string, names []string, login map[string][]byte) error
+
+// readBoxFile reads one login file a box holds, reporting false where it holds
+// none.
+//
+// OPENED ONCE, as a box's files are read ([openHostRegular]): a file checked by
+// its path and then opened by it again is two reads of whatever the path names
+// at each moment, and the box's side is the one that names it. So a pipe there
+// answers at once as what it is rather than blocking a teardown, a link is
+// refused rather than followed, and what is written back is the file that was
+// read. Larger than [hostbox.MaxCredentialBytes], it is refused: the shared
+// login would not hold it, and a box is not handed the engine's memory.
+func readBoxFile(src string) ([]byte, bool, error) {
 	in, err := openHostRegular(src)
 	switch {
 	case absent(err):
-		return writeBackIdle, nil
+		return nil, false, nil
 	case err != nil:
-		return "", err
+		return nil, false, err
 	}
 	defer func() { _ = in.Close() }()
-	digest, err := hostbox.Digest(in)
+	content, err := io.ReadAll(io.LimitReader(in, hostbox.MaxCredentialBytes+1))
 	if err != nil {
-		return "", fmt.Errorf("reading %s: %w", src, err)
+		return nil, false, fmt.Errorf("reading %s: %w", src, err)
 	}
-	if digest == rec.Seed {
-		return writeBackIdle, nil
+	if len(content) > hostbox.MaxCredentialBytes {
+		return nil, false, fmt.Errorf("%s is larger than %d bytes, which is not a login",
+			src, hostbox.MaxCredentialBytes)
 	}
-	unlock, err := hostbox.LockCredentials(ctx, filepath.Dir(rec.Source))
-	if err != nil {
-		return "", err
-	}
-	defer unlock()
-	current, present, err := hostbox.FileDigest(rec.Source)
-	switch {
-	case err != nil:
-		return "", fmt.Errorf("reading the shared login: %w", err)
-	case !present:
-		return writeBackRemoved, nil
-	case current == digest:
-		return writeBackHeld, nil
-	case current != rec.Seed:
-		return writeBackChanged, nil
-	}
-	if _, err := in.Seek(0, io.SeekStart); err != nil {
-		return "", fmt.Errorf("rereading %s: %w", src, err)
-	}
-	if err := hostbox.ReplaceFile(rec.Source, in); err != nil {
-		return "", err
-	}
-	return writeBackWritten, nil
+	return content, true, nil
 }
 
 // recordCredentialMap persists what the box was seeded with so Connect can
@@ -669,7 +864,7 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	}
 
 	l.reapOrphans(ctx, time.Duration(spec.TimeoutSec)*time.Second)
-	seeded := seedCredentials(layout, spec.CredentialFiles)
+	seeded := seedCredentials(ctx, layout, spec.CredentialFiles)
 	// The box records what it was seeded with and stamps itself alive before
 	// anyone can reap it.
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml

@@ -392,8 +392,23 @@ means "this server did not say", not "it is off".
 
 ```
 export MATTERMOST_ADMIN_TOKEN="..."      # a system-admin personal access token
-crewlet mattermost provision company.yaml
+export CREWLET_API_TOKEN="..."           # one of the running node's Tier A tokens
+crewlet mattermost provision company.yaml -secret-store
 ```
+
+`-secret-store` records each bot's token where every node reads it; one of
+`-secret-store`, `-env-file PATH` and `-print` is required, so a run never
+mints a credential it has nowhere to put. With the engine running the run
+reads the company's values through it, as `CREWLET_API_TOKEN` — one of its
+Tier A tokens carrying `admin`, since that read is the node's break-glass
+reveal and refuses a machine token. See
+[where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values).
+A running engine reads the tokens at its next apply and not before, so a run
+that minted one says what is left on its `Next:` line: for `-secret-store`,
+re-activating the current revision (`POST /config/reload` to a node that is
+up). Where the block itself is new to the running company, the
+`crewlet config import` that applies it is that apply. A re-run that kept
+every token prints no `Next:` line.
 
 For every Mattermost-enabled agent seat the command:
 
@@ -541,6 +556,7 @@ tokens are what this run *mints*, so it cannot bootstrap itself from them.
 | `-admin-token TOKEN` | System-admin PAT (default: `$MATTERMOST_ADMIN_TOKEN`). |
 | `-secret-store` / `-env-file PATH` / `-print` | Where minted credentials go — exactly one, and there is no default: a run with nowhere to put what it mints creates live credentials on the server and prints none of them. `-print` writes `export VAR=…` lines and, when a run rolls back, `unset VAR` for each — the stream is meant to be sourced, and a comment is a no-op to a shell, so an operator who piped it into `source` would otherwise keep a revoked token exported. |
 | `-rotate` | Mint a fresh token for every bot, including bots whose current one still works. |
+| `-config PATH` / `-api URL` | The Tier A file (default `crewlet.yaml`), and a running node to go through in place of the one it names. The company's `${VAR}`s resolve from the secret store they lead to — through the node's API while its engine runs — and `-secret-store` records into that same store; on a stopped node a variable its own rows lack is unknown, so `-secret-store` hands no bot that exists already a new token over it — while `-print` and `-env-file` decide a bot's token from what they hold, as on every route, and mint one for a bot they lack. A bot the run creates is minted its first token in any sink, and `-rotate` mints every bot a fresh one whatever the rows hold. See [where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values) |
 | `-handles a,b` | Provision only these seat handles. It narrows the provisioning loop **only** — a `-handles` run with `-decommission` does not read the seats it skipped as departed. |
 | `-decommission` | Revoke the tokens of, and then disable, managed bot accounts whose seats have left the config. Disable, never delete: a deleted bot takes its posts with it, silently rewriting the history of every channel it spoke in. The token goes because the account does not: a departed colleague whose credential outlived them starts working again the moment the bot is re-enabled. |
 | `-dry-run` | Print the plan; create and modify nothing. |
@@ -1169,8 +1185,12 @@ crewlet run -config examples/nimbus-claude-cli.config.yaml \
 Step 3's `--dry-run --print` prints one line per seat — handle, bot
 username, and the variables it would mint. Step 2 already wrote
 `MATTERMOST_TOKEN_CEO`, `…_CTO`, `…_PM`, `…_DEVREL`, `…_SWE`, `…_FE` and
-`…_AI` into `.env`, which the engine reads on boot; nothing has to be
-re-sourced. Every step is idempotent, so re-run any of them freely.
+`…_AI` into `.env`, and step 3 sourced that file into this shell, so the
+engine step 5 starts from it inherits them: nothing has to be re-sourced as
+long as step 5 runs in the same shell. A new shell sources `.env` again
+first — the engine reads no `.env` file itself, only its own environment
+([Environment variables](../reference/environment-variables.md)). Every step
+is idempotent, so re-run any of them freely.
 
 Step 4 is the one that has no analogue in an API-key deployment, and
 `crewlet llm doctor` is the half that matters: a `cli-agent` entry can be

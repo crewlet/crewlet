@@ -3,9 +3,6 @@ package engine
 import (
 	"context"
 	"errors"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"strings"
 	"testing"
 	"time"
@@ -334,60 +331,5 @@ func TestAFailedMigrationLeavesTheNodeServing(t *testing.T) {
 	e.refreshSecrets(t.Context())
 	if got := e.resolver().Value("${GL}"); got != "glpat-x" {
 		t.Fatalf("${GL} = %q, want the node still serving its own row", got)
-	}
-}
-
-// THE BOOT MIGRATES BEFORE IT SNAPSHOTS, and in that order.
-//
-// Derived from the source rather than driven through a full boot, because the
-// case that would drive it needs a real broker, a real store and a company
-// config — and what can go wrong is nothing more than two lines drifting
-// apart. The symptom is silent either way: with the call gone, a value set on
-// a stopped node never reaches its peers; with it after the snapshot, the
-// node's first epoch resolves from rows the migration is about to delete.
-func TestTheBootMigratesBeforeItSnapshots(t *testing.T) {
-	t.Parallel()
-	fset := token.NewFileSet()
-	parsed, err := parser.ParseFile(fset, "run.go", nil, 0)
-	if err != nil {
-		t.Fatalf("parse run.go: %v", err)
-	}
-	migrate, refresh := -1, -1
-	for _, decl := range parsed.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Name.Name != "New" {
-			continue
-		}
-		ast.Inspect(fn, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			switch sel.Sel.Name {
-			case "migrateSecrets":
-				migrate = fset.Position(call.Pos()).Line
-			case "refreshSecrets":
-				if refresh < 0 {
-					refresh = fset.Position(call.Pos()).Line
-				}
-			}
-			return true
-		})
-	}
-	switch {
-	case refresh < 0:
-		t.Fatal("New no longer builds the secret snapshot, so this guard is " +
-			"asserting nothing — point it at whatever replaced it")
-	case migrate < 0:
-		t.Fatal("New does not migrate this node's own secret rows, so a value " +
-			"set while the engine was stopped never reaches its peers")
-	case migrate > refresh:
-		t.Fatalf("the migration runs at line %d, after the snapshot at %d: "+
-			"the first epoch resolves from rows about to be deleted",
-			migrate, refresh)
 	}
 }

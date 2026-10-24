@@ -129,6 +129,54 @@ func TestASnapshotRefusesRatherThanSkippingAnUnopenableRow(t *testing.T) {
 	}
 }
 
+// A READ OF SEVERAL NAMES OPENS THOSE AND NO OTHERS.
+//
+// It is how a CLI run resolving one company document through a running node
+// is handed the credentials that document reads, so the answer carries exactly
+// the names asked for that are held — an absent name absent, never empty —
+// and the read fails closed on a named row it cannot open, while a row nobody
+// named that it cannot open does not fail a read that never needed it.
+func TestAReadOfSeveralNamesOpensThoseAndNoOthers(t *testing.T) {
+	t.Parallel()
+	s, fleet := fleetStore(t, ring(t, "k1"))
+	mustSet(t, s, "GITLAB_TOKEN", "glpat")
+	mustSet(t, s, "SLACK_TOKEN", "xoxb")
+	mustSet(t, s, "UNASKED", "not-for-this-reader")
+	stranger := fleetsecrets.New(fleet, ring(t, "k9"))
+	if err := stranger.Set(t.Context(), "FOREIGN", "sealed-elsewhere", sam,
+		secrets.SourceAPI, clock); err != nil {
+		t.Fatal(err)
+	}
+
+	values, err := s.Values(t.Context(), []string{"GITLAB_TOKEN", "SLACK_TOKEN",
+		"NEVER_SET", "GITLAB_TOKEN"})
+	if err != nil {
+		t.Fatalf("a row nobody asked for failed the read: %v", err)
+	}
+	if len(values) != 2 || values["GITLAB_TOKEN"] != "glpat" || values["SLACK_TOKEN"] != "xoxb" {
+		t.Fatalf("values = %v, want exactly the two held names asked for", values)
+	}
+	if _, present := values["NEVER_SET"]; present {
+		t.Error("a name nothing holds came back present, so it would resolve " +
+			"to the empty string instead of falling through")
+	}
+
+	if _, err := s.Values(t.Context(), []string{"GITLAB_TOKEN", "FOREIGN"}); err == nil ||
+		!strings.Contains(err.Error(), "FOREIGN") {
+		t.Errorf("a named row this keyring cannot open answered %v, want a "+
+			"refusal naming it", err)
+	}
+	if _, err := s.Values(t.Context(), []string{"iam/blind-index-key"}); !errors.Is(err,
+		secrets.ErrReservedName) {
+		t.Errorf("a read naming the engine's own key answered %v, want "+
+			"ErrReservedName", err)
+	}
+	if _, err := fleetsecrets.New(fleet, nil).Values(t.Context(),
+		[]string{"GITLAB_TOKEN"}); !errors.Is(err, secrets.ErrNoKeyring) {
+		t.Errorf("a store with no keyring answered %v, want ErrNoKeyring", err)
+	}
+}
+
 // A LISTING NEEDS NO KEYRING AND CARRIES NO ENVELOPE. "Is X set, and when did
 // it change" is asked far more often than "what is X", and answering it must
 // not require the ability to decrypt — nor put ciphertext into a scrollback.
@@ -482,7 +530,8 @@ func TestMigrationMovesTheRowsAndEmptiesTheLocalTable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	moved, err := fleetsecrets.Migrate(t.Context(), local, fleet)
+	done, err := fleetsecrets.Migrate(t.Context(), local, fleet)
+	moved := done.Moved
 	if err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
@@ -519,7 +568,8 @@ func TestMigrationCarriesAnOfflineRotationOntoTheFleet(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	moved, err := fleetsecrets.Migrate(t.Context(), local, fleet)
+	done, err := fleetsecrets.Migrate(t.Context(), local, fleet)
+	moved := done.Moved
 	if err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
@@ -559,7 +609,8 @@ func TestTwoOfflineWritesKeepTheLaterWhicheverNodeBootsFirst(t *testing.T) {
 	if _, err := fleetsecrets.Migrate(t.Context(), earlier, fleet); err != nil {
 		t.Fatalf("Migrate (first node): %v", err)
 	}
-	moved, err := fleetsecrets.Migrate(t.Context(), later, fleet)
+	done, err := fleetsecrets.Migrate(t.Context(), later, fleet)
+	moved := done.Moved
 	if err != nil {
 		t.Fatalf("Migrate (second node): %v", err)
 	}
@@ -600,7 +651,8 @@ func TestMigrationKeepsAFleetValueWrittenAfterTheOfflineOne(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	moved, err := fleetsecrets.Migrate(t.Context(), local, fleet)
+	done, err := fleetsecrets.Migrate(t.Context(), local, fleet)
+	moved := done.Moved
 	if err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
@@ -684,7 +736,8 @@ func TestMigrationOnAnEmptyTableDoesNothing(t *testing.T) {
 	t.Parallel()
 	cipher := ring(t, "k1")
 	fleet, _ := fleetStore(t, cipher)
-	moved, err := fleetsecrets.Migrate(t.Context(), localStore(t, cipher), fleet)
+	done, err := fleetsecrets.Migrate(t.Context(), localStore(t, cipher), fleet)
+	moved := done.Moved
 	if err != nil || moved != nil {
 		t.Fatalf("moved = %v, err = %v; want a silent no-op", moved, err)
 	}
@@ -710,7 +763,8 @@ func TestAMigrationThatCannotOpenALocalRowKeepsItAndSaysSo(t *testing.T) {
 	local := db.SecretValues(ring(t, "k2"))
 	fleet, _ := fleetStore(t, ring(t, "k2"))
 
-	moved, err := fleetsecrets.Migrate(context.Background(), local, fleet)
+	done, err := fleetsecrets.Migrate(context.Background(), local, fleet)
+	moved := done.Moved
 	if err == nil {
 		t.Fatalf("a migration that could open nothing reported success, moving %v", moved)
 	}
@@ -781,4 +835,188 @@ func TestAWriteWithAWordNoPathStampsIsRefused(t *testing.T) {
 	// AND THE PATHS' OWN WORDS PASS, or the guard is just an outage.
 	mustSet(t, s, "GITLAB_TOKEN", "glpat")
 	mustCreate(t, s.Estate(), "iam/blind-index-key", "the-key")
+}
+
+// unsetFails is a node's own table whose first delete fails, as one meeting a
+// held write lock past its busy timeout does.
+type unsetFails struct {
+	*store.SecretValues
+	failed bool
+}
+
+func (u *unsetFails) Unset(ctx context.Context, name string) (bool, error) {
+	if !u.failed {
+		u.failed = true
+		return false, errors.New("database is locked")
+	}
+	return u.SecretValues.Unset(ctx, name)
+}
+
+// secretsUnderTest is coord.Secrets under a name of its own, for embedding.
+type secretsUnderTest = coord.Secrets
+
+// ackLost is a fleet whose first secret write lands and is then reported
+// failed, as a put whose acknowledgement never arrived is.
+type ackLost struct {
+	secretsUnderTest
+	lost bool
+}
+
+func (a *ackLost) PutSecret(ctx context.Context, rec coord.SecretRecord) error {
+	if err := a.secretsUnderTest.PutSecret(ctx, rec); err != nil {
+		return err
+	}
+	if !a.lost {
+		a.lost = true
+		return errors.New("nats: timeout waiting for the publish acknowledgement")
+	}
+	return nil
+}
+
+// A PASS THAT STOPPED AFTER ITS PUT LANDED IS FINISHED BY THE NEXT ONE, and
+// what it finds on the fleet is its own copy rather than a later write.
+//
+// The put keeps the local row's instant and author exactly, so the next pass
+// meets a tie, not a later value — and it reported that row as an offline
+// write somebody had since rotated over, naming a value the fleet holds
+// exactly as the operator set it. Two ways reach it with no crash: the local
+// delete fails after the put, or the put lands and its acknowledgement does
+// not.
+//
+// Mutation: drop the own-copy case, and the second pass reports GL superseded.
+func TestAnInterruptedMigrationIsFinishedByTheNextPass(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// interrupt returns the stores the first pass runs against.
+		interrupt func(local *store.SecretValues, fleet coord.Secrets, cipher secrets.Cipher) (fleetsecrets.LocalStore, *fleetsecrets.Store)
+		// landed is what the first pass names as moved.
+		landed []string
+	}{
+		{
+			name: "the local delete failed after the put",
+			interrupt: func(local *store.SecretValues, fleet coord.Secrets, cipher secrets.Cipher) (fleetsecrets.LocalStore, *fleetsecrets.Store) {
+				return &unsetFails{SecretValues: local}, fleetsecrets.New(fleet, cipher)
+			},
+			landed: []string{"GL"},
+		},
+		{
+			name: "the put landed and its acknowledgement did not",
+			interrupt: func(local *store.SecretValues, fleet coord.Secrets, cipher secrets.Cipher) (fleetsecrets.LocalStore, *fleetsecrets.Store) {
+				return local, fleetsecrets.New(&ackLost{secretsUnderTest: fleet}, cipher)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cipher := ring(t, "k1")
+			local := localStore(t, cipher)
+			fleet, raw := fleetStore(t, cipher)
+			dana := secrets.Author{Name: "dana", Kind: "operator",
+				OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a"}
+			if err := local.Set(t.Context(), "GL", "glpat-offline", dana, secrets.SourceCLI, clock); err != nil {
+				t.Fatal(err)
+			}
+
+			from, to := tc.interrupt(local, raw, cipher)
+			first, err := fleetsecrets.Migrate(t.Context(), from, to)
+			if err == nil {
+				t.Fatal("the premise: the first pass was meant to stop with an error")
+			}
+			if !equalNames(first.Moved, tc.landed) {
+				t.Errorf("the stopped pass names %v as moved, want %v: a row whose "+
+					"put it saw land is the fleet's whatever happened after it", first.Moved, tc.landed)
+			}
+
+			second, err := fleetsecrets.Migrate(t.Context(), local, fleet)
+			if err != nil {
+				t.Fatalf("the next pass: %v", err)
+			}
+			if len(second.Superseded) != 0 || len(second.Moved) != 0 {
+				t.Errorf("the next pass = %+v, want GL found already on the fleet: "+
+					"the value there is the one the operator set", second)
+			}
+			if !equalNames(second.AlreadyMoved, []string{"GL"}) {
+				t.Errorf("already moved = %v, want [GL]", second.AlreadyMoved)
+			}
+			if rows, _ := local.List(t.Context()); len(rows) != 0 {
+				t.Errorf("the local copy survived the next pass: %+v", rows)
+			}
+			if values, _ := fleet.All(t.Context()); values["GL"] != "glpat-offline" {
+				t.Errorf("GL on the fleet = %q, want the offline value", values["GL"])
+			}
+		})
+	}
+}
+
+// A WRITE MADE IN THE SAME MICROSECOND BY ANYBODY ELSE IS NOT THIS NODE'S
+// COPY: only a migrated row of the same author through the same credential
+// is, so a running node's write that ties is still the fleet's value, kept,
+// and the offline one reported superseded.
+func TestATieWithAnotherWriteIsNotTheNodesOwnCopy(t *testing.T) {
+	t.Parallel()
+	cipher := ring(t, "k1")
+	local := localStore(t, cipher)
+	fleet, _ := fleetStore(t, cipher)
+	if err := local.Set(t.Context(), "GL", "glpat-offline", sam, secrets.SourceCLI, clock); err != nil {
+		t.Fatal(err)
+	}
+	if err := fleet.Set(t.Context(), "GL", "glpat-online", sam, secrets.SourceAPI, clock); err != nil {
+		t.Fatal(err)
+	}
+	done, err := fleetsecrets.Migrate(t.Context(), local, fleet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !equalNames(done.Superseded, []string{"GL"}) || len(done.AlreadyMoved) != 0 {
+		t.Errorf("Migrate = %+v, want GL superseded: the fleet's row came through the API", done)
+	}
+	if values, _ := fleet.All(t.Context()); values["GL"] != "glpat-online" {
+		t.Errorf("GL on the fleet = %q, want the running node's write kept", values["GL"])
+	}
+}
+
+func equalNames(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// A VALUE PAST THE SIZE EVERY STORE KEEPS IS REFUSED ON THE FLEET, BY EITHER
+// VIEW, AND NOTHING IS WRITTEN.
+//
+// The fleet's store is what every node resolves through and what both reveals
+// read back, to a length sized from [secrets.MaxValueBytes]; a row past it is
+// a credential nothing can read. The API route bounded its body to that size,
+// but this store did not, so a migration carried a stopped node's oversized
+// row straight onto the fleet. A value exactly at the limit is stored.
+func TestAValuePastTheSizeEveryStoreKeepsIsRefusedOnTheFleet(t *testing.T) {
+	t.Parallel()
+	s, fleet := fleetStore(t, ring(t, "k1"))
+	past := strings.Repeat("&", secrets.MaxValueBytes+1)
+	if err := s.Set(t.Context(), "PAST_IT", past, sam, secrets.SourceAPI, clock); !errors.Is(err, secrets.ErrValueTooLarge) {
+		t.Errorf("Set of a value a byte past the limit answered %v, want ErrValueTooLarge", err)
+	}
+	if created, err := s.Estate().Create(t.Context(), "iam/blind-index-key", past,
+		nodeA, secrets.SourceIAM, clock); !errors.Is(err, secrets.ErrValueTooLarge) || created {
+		t.Errorf("Create of a value a byte past the limit answered %v (created %v)", err, created)
+	}
+	rows, err := fleet.SecretValues(t.Context())
+	if err != nil {
+		t.Fatalf("SecretValues: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("a refused write left %d row(s) on the fleet", len(rows))
+	}
+	atLimit := past[1:]
+	mustSet(t, s, "AT_THE_LIMIT", atLimit)
+	if got, err := s.Get(t.Context(), "AT_THE_LIMIT"); err != nil || got != atLimit {
+		t.Errorf("the value at the limit read back as %d bytes, %v", len(got), err)
+	}
 }

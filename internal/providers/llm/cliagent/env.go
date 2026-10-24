@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
@@ -213,26 +212,4 @@ func TokenVarName(p cliprofile.Profile) (string, error) {
 		return "", fmt.Errorf("this CLI mints no headless token")
 	}
 	return p.TokenEnv, nil
-}
-
-// BundleVarName is the conventional secret name a provider's exported
-// credential bundle lives under.
-//
-// A CONVENTION rather than a required setting, so `crewlet llm export -secret-store`
-// and the engine's boot-time restore agree without the operator wiring
-// cli.auth.credential_bundle by hand — and one function, so the writer and
-// the reader cannot derive it differently.
-func BundleVarName(key string) string {
-	var b strings.Builder
-	b.WriteString("CREWLET_LLM_CLI_")
-	for _, r := range strings.ToUpper(key) {
-		switch {
-		case r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('_')
-		}
-	}
-	b.WriteString("_CREDENTIALS")
-	return b.String()
 }

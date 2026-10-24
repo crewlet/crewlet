@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -176,10 +175,15 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 		}
 	}
 
-	files := p.ws.LoginFiles()
+	login, loginErr := p.ws.Login(ctx)
 	loggedOut, loggedOutErr := p.ws.loggedOut()
 	switch {
-	case len(files) > 0:
+	case loginErr != nil:
+		d.Credentials = "unknown — the shared login could not be read"
+		d.Problems = append(d.Problems, fmt.Sprintf("the shared login in %s could not be read, "+
+			"so whether its credential files sign the entry in is unknown: %v",
+			p.ws.CredentialsDir(), loginErr))
+	case len(login) > 0:
 		d.Credentials = "present"
 	default:
 		d.Credentials = "none on disk"
@@ -217,7 +221,7 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 				"provider run on estimates", p.agent))
 	}
 
-	signIn := p.signIn()
+	signIn := p.signInFrom(login, loginErr)
 	d.SignIn = signIn.line()
 	answered := false
 
@@ -255,7 +259,7 @@ func (p *Provider) Diagnose(ctx context.Context, opts DiagnoseOptions) Diagnosis
 	// configuration cannot tell those from a missing key; the smoke test's
 	// answer can, so it decides, and without it the report says what it
 	// sees and asks for the run that settles it.
-	if len(signIn.sources) == 0 {
+	if len(signIn.sources) == 0 && signIn.unreadable == nil {
 		if answered {
 			d.SignIn = "none the engine hands the CLI — but the smoke test was " +
 				"answered, so it authenticates some other way (an endpoint that takes " +
@@ -646,30 +650,30 @@ func orNone(s string) string {
 // SignInState is a one-word summary for `crewlet llm list`: the first route
 // the doctor's sign-in line names, or "none" — the same answer, so the two
 // commands cannot disagree about whether an entry is signed in.
-func (p *Provider) SignInState() string { return p.signIn().state() }
+func (p *Provider) SignInState(ctx context.Context) string { return p.signIn(ctx).state() }
 
 // SandboxCredentials maps this provider's login onto a coding box's home:
 // each credential path RELATIVE to the box home, against the absolute path of
 // the shared file on the engine host.
 //
-// Empty when there is no login on disk, which is the correct answer rather
-// than a set of paths that do not exist — a box seeded with missing files
-// would report a puzzling failure inside the run instead of the plain "not
-// authenticated" the CLI gives when it finds nothing.
+// EVERY FILE THE LOGIN MAY HOLD, whether or not the shared directory holds it
+// now. The box reads the login when it is seeded, as ONE login under the shared
+// directory's lock ([hostbox.ReadCredentials]), and seeds the files that login
+// holds and no others — so a box is never handed a file that does not exist.
+// A map of only the files present when it was built named a set the login may
+// have moved past by the time the box was seeded: a box given hermes's lone
+// .env would be seeded with a newer sign-in's .env and without its auth.json,
+// which is half of that sign-in.
 //
 // A LOCAL box seeds these and writes a refreshed one back. A remote box must
 // ignore them: they carry a refresh token whose rotation is shared fleet
 // state, and pushing that onto somebody else's VM is a materially larger
 // trust step than the scoped headless token the run env already exports.
+// Empty for a profile that keeps no credential file.
 func (p *Provider) SandboxCredentials() map[string]string {
-	shared := p.ws.CredentialsDir()
 	out := map[string]string{}
 	for _, rel := range p.profile.CredentialPaths {
-		host := filepath.Join(shared, filepath.Base(rel))
-		if info, err := os.Stat(host); err != nil || !info.Mode().IsRegular() {
-			continue
-		}
-		out[rel] = host
+		out[rel] = p.ws.sharedPath(filepath.Base(rel))
 	}
 	if len(out) == 0 {
 		return nil
@@ -679,23 +683,20 @@ func (p *Provider) SandboxCredentials() map[string]string {
 
 // SandboxCredentialDocument is the shared login a CLI keeps in a database of
 // its own ([cliprofile.CredentialStore]) — the document its export printed —
-// as an absolute path on the engine host, or "" when the profile keeps none or
-// nobody has signed the entry in.
+// as an absolute path on the engine host, or "" when the profile keeps none.
 //
 // A PATH, NOT A BOX PATH: where a box keeps it is the coding runner's to say,
 // because the runner is what imports it into the CLI's database before a run
 // and exports back over it after, so the engine maps it there. It travels
 // under the same rule as [Provider.SandboxCredentials] — seeded into a local
-// box and written back from one, never handed to a remote one.
+// box from the login as it stands then, and written back from one, never
+// handed to a remote one — and is named whether or not the shared directory
+// holds it now, for the same reason.
 func (p *Provider) SandboxCredentialDocument() string {
 	if p.profile.CredentialStore == nil {
 		return ""
 	}
-	path := p.ws.documentPath()
-	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
-		return ""
-	}
-	return path
+	return p.ws.documentPath()
 }
 
 // SandboxEnv is the credential a coding run carries in its ENVIRONMENT — the

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -427,6 +428,75 @@ func TestCloudMintsOneTokenIntoTheVariable(t *testing.T) {
 		if !strings.HasSuffix(u, "?token="+token) {
 			t.Errorf("hook %q does not carry the minted token", u)
 		}
+	}
+}
+
+// BUT NOT INTO A VARIABLE THE RUN COULD NOT SEE. A `crewlet confluence
+// provision` run on a node whose engine is stopped reads only that node's own
+// rows, and the fleet's store may hold the token every node checks: hooks
+// carrying a fresh one would be refused by all of them. So the pass refuses
+// before it registers a hook.
+func TestCloudDoesNotMintOverATokenTheRunCannotVouchFor(t *testing.T) {
+	t.Parallel()
+	site := newCloudSite(t)
+	sink := newSink()
+
+	_, err := confluence.Reconcile(context.Background(), confluence.Options{
+		Client: cloudClient(t, site),
+		Config: &config.Confluence{URL: site.URL + "/wiki", Token: "t",
+			WebhookToken: "${CONFLUENCE_WEBHOOK_TOKEN}"},
+		Value: func(v string) string {
+			if v == "${CONFLUENCE_WEBHOOK_TOKEN}" {
+				return ""
+			}
+			return v
+		},
+		Unvouched: func(name string) error {
+			return fmt.Errorf("%w: %s is out of this run's sight",
+				provision.ErrUnvouched, name)
+		},
+		Sink: sink, WebhookBase: "https://engine.example.com",
+	})
+	if !errors.Is(err, provision.ErrUnvouched) {
+		t.Fatalf("Reconcile = %v, want the unknown token refused", err)
+	}
+	if got := sink.value(t, "CONFLUENCE_WEBHOOK_TOKEN"); got != "" {
+		t.Errorf("a token was minted over one the run could not see: %q", got)
+	}
+	if n := site.mutations(); n != 0 {
+		t.Errorf("%d write(s) reached the site from a run that refused its token", n)
+	}
+}
+
+// NOR ONE THE RUN'S OWN ENVIRONMENT FILLED IN. What a stopped node's shell
+// exports for a name its own rows lack is a guess at the token the fleet
+// holds, which the store outranks in the engine — so hooks carrying it are
+// refused by every node exactly as a fresh one's would be.
+func TestCloudDoesNotRegisterATokenFromOutsideTheStore(t *testing.T) {
+	t.Parallel()
+	site := newCloudSite(t)
+
+	_, err := confluence.Reconcile(context.Background(), confluence.Options{
+		Client: cloudClient(t, site),
+		Config: &config.Confluence{URL: site.URL + "/wiki", Token: "t",
+			WebhookToken: "${CONFLUENCE_WEBHOOK_TOKEN}"},
+		Value: func(v string) string {
+			if v == "${CONFLUENCE_WEBHOOK_TOKEN}" {
+				return "what-this-shell-exports"
+			}
+			return v
+		},
+		Unvouched: func(name string) error {
+			return fmt.Errorf("%w: %s is out of this run's sight",
+				provision.ErrUnvouched, name)
+		},
+		Sink: newSink(), WebhookBase: "https://engine.example.com",
+	})
+	if !errors.Is(err, provision.ErrUnvouched) {
+		t.Fatalf("Reconcile = %v, want the guessed token refused", err)
+	}
+	if n := site.mutations(); n != 0 {
+		t.Errorf("%d write(s) reached the site with a token the run could not vouch for", n)
 	}
 }
 
@@ -1406,7 +1476,7 @@ func TestADataCenterRecreateThatCannotDeleteDoesNotRegisterASecondHook(t *testin
 		},
 		Sink:        sink,
 		WebhookBase: "https://engine.example.com",
-		Recreate:    true,
+		Recreate:    "-recreate-webhooks",
 	})
 	if err != nil {
 		t.Fatalf("a refused delete failed the whole pass: %v", err)

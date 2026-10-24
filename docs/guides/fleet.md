@@ -99,12 +99,24 @@ the KV like everything else the fleet shares, so `crewlet secrets set` against
 a live node reaches all of them — but it gets there through that node's
 authenticated API, because the coordination broker is inside the engine's own
 process and listens on no socket. Against a **stopped** node the same command
-writes that node's own table instead, which is the bootstrap path: the value
-is on one node until it starts and migrates the row. Fine for a first
-provisioning run, wrong for a rotation on a live fleet. `-secret-store` on a
-provisioner follows the same rule, and both take `-api URL` to name the node
-to write through. The process environment remains the fallback every node
-resolves from, so a platform secret projected as env still works unchanged.
+writes that node's own table instead, which is the bootstrap path for
+`crewlet secrets set`: the value is on one node until it starts and migrates
+the row. A **provisioner** run against a stopped node is not a way to
+bootstrap, though: it reads that node's own rows alone, so a variable they lack
+is unknown to it rather than unset — the fleet may hold it — and it mints no
+webhook or signing secret into one, registers nothing the shell exports for one
+with a vendor, and with `-secret-store` hands no seat whose account exists
+already a new token over one. `-print` and `-env-file` still decide a seat's
+token from what they hold, as on every route, so a seat they lack is minted a
+new one and the token it had is retired; a seat whose account the run creates
+is minted its first token in any sink; and the command's own flag for a fresh
+value — `-rotate`, say — goes ahead whatever the rows hold. Start the node,
+even one that has never run a company, and provision through it with
+`CREWLET_API_TOKEN` set to one of its Tier A tokens, or pass `-api URL` naming
+a running node — see
+[where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values).
+The process environment remains the fallback every node resolves from, behind
+the store, so a platform secret projected as env still works unchanged.
 
 **One keyring and one `api.external_url` on every node that serves the API.**
 A browser behind a load balancer signs in on whichever node it reaches and
@@ -587,7 +599,8 @@ guess at yours.
 A node coming up answers both from its first seconds, before it serves:
 `/ready` is `503 starting` until it does, which is what holds the rollout, and
 `/health` is `503` only while the node recovers what it holds — the startup
-probe's window, sized by the store ([Sizing the startup probe](deployment.md#sizing-the-startup-probe))
+probe's window, sized by the store and, on a data node of a fleet, by the
+join it may have to make ([Sizing the startup probe](deployment.md#sizing-the-startup-probe))
 — and `200` while its company's tools come up, so a slow tool server never
 gets a starting node restarted (see
 [While a node is starting](../reference/api-endpoints.md#while-a-node-is-starting)).
@@ -719,7 +732,12 @@ amount of waiting produces it. What it does instead is ask the fleet for a
 **snapshot** — a copy of another member's replicated estate — verify it
 against its own requirements and a checksum, and install it wholesale before
 anything reads from it. That happens automatically, at boot, before the node
-serves anything.
+serves anything — inside the node's recovery, so on an orchestrator the
+startup probe has to allow for it: see
+[Sizing the startup probe](deployment.md#sizing-the-startup-probe), which
+sizes it by `stream.tracker_retention.rejoin_window`. The transfer logs
+`statelog_join_progress` every ten seconds while it runs. A fleet with one data
+node never transfers anything: there is nobody to donate.
 
 Three things make that work, and all three are per data node — a node
 without `data` holds no copy to fall behind with:
@@ -760,6 +778,28 @@ A node that found no usable offer does not stop — it comes up on the history
 it has, its reads report the coverage they could not account for, the domains
 that gate seat admission keep it from claiming work it cannot answer for, and
 it asks again on a widening interval.
+
+A refusal is only ever about the **offer** — its transfer, its bytes, its
+schema, its positions, a trim that passed it while it was in flight. Two other
+endings are not, and are never logged against a donor:
+
+- **A fault of the joining node's own** before anything is installed — its
+  disk refusing the copy, its own store refusing a write, the coordination
+  store refusing the pin on the log's tail. Every other offer would meet the
+  same fault, so the join ends there, logging `statelog_join_unable` at error
+  with the fault named. Nothing was installed and the node's own database is
+  open and untouched, so it carries on exactly as when nobody could donate: a
+  booting node comes up on the history it has, and a node behind keeps asking
+  on its widening interval — meeting the same fault each time until what the
+  line names is fixed.
+- **Anything after the install.** Once the artefact has been renamed into
+  place it is the node's database, and the join is an adoption whatever fails
+  next — it never fetches another offer to install over it. If the node's own
+  record of the adoption (its `statelog_adoption` row) cannot be advanced, it
+  logs `statelog_adoption_unrecorded` at error beside `statelog_adopted` and
+  serves on the artefact; the row stays incomplete. If the artefact cannot be
+  opened, the node has no replicated database open at all — see
+  `statelog_estate_lost` in [the join runbook](retention.md#the-join-runbook).
 
 **A fleet with no successful backups eventually stops trimming**, which is
 deliberate — see [Backup and restore](backup.md). Until it trims, nothing can

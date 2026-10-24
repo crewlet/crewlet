@@ -3,6 +3,7 @@ package provision_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -68,7 +69,7 @@ func TestASealedValueIsUsedRatherThanMintedOver(t *testing.T) {
 	sink.vals["WEBHOOK_SECRET"] = "already-sealed"
 
 	got, err := provision.MintSecret(
-		context.Background(), sink, "WEBHOOK_SECRET", false, fixed("fresh"))
+		context.Background(), sink, "WEBHOOK_SECRET", false, nil, fixed("fresh"))
 	if err != nil {
 		t.Fatalf("MintSecret: %v", err)
 	}
@@ -87,7 +88,7 @@ func TestANameNothingHoldsIsMintedInto(t *testing.T) {
 	sink := newMintSink()
 
 	got, err := provision.MintSecret(
-		context.Background(), sink, "WEBHOOK_SECRET", false, fixed("fresh"))
+		context.Background(), sink, "WEBHOOK_SECRET", false, nil, fixed("fresh"))
 	if err != nil {
 		t.Fatalf("MintSecret: %v", err)
 	}
@@ -108,7 +109,7 @@ func TestABlankSealedValueIsMintedOver(t *testing.T) {
 	sink.vals["WEBHOOK_SECRET"] = "   \n"
 
 	got, err := provision.MintSecret(
-		context.Background(), sink, "WEBHOOK_SECRET", false, fixed("fresh"))
+		context.Background(), sink, "WEBHOOK_SECRET", false, nil, fixed("fresh"))
 	if err != nil {
 		t.Fatalf("MintSecret: %v", err)
 	}
@@ -128,7 +129,7 @@ func TestASealedValueComesBackTrimmed(t *testing.T) {
 	sink.vals["WEBHOOK_SECRET"] = "  already-sealed\n"
 
 	got, err := provision.MintSecret(
-		context.Background(), sink, "WEBHOOK_SECRET", false, fixed("fresh"))
+		context.Background(), sink, "WEBHOOK_SECRET", false, nil, fixed("fresh"))
 	if err != nil {
 		t.Fatalf("MintSecret: %v", err)
 	}
@@ -148,7 +149,7 @@ func TestAStoreThatCouldNotSayStopsTheMint(t *testing.T) {
 	sink.readErr = errors.New("the store is unreachable")
 
 	_, err := provision.MintSecret(
-		context.Background(), sink, "WEBHOOK_SECRET", false, fixed("fresh"))
+		context.Background(), sink, "WEBHOOK_SECRET", false, nil, fixed("fresh"))
 	if err == nil {
 		t.Fatal("an unreadable sink was treated as one holding nothing")
 	}
@@ -170,7 +171,7 @@ func TestRecreateMintsOverWhatIsHeld(t *testing.T) {
 	sink.vals["WEBHOOK_SECRET"] = "already-sealed"
 
 	got, err := provision.MintSecret(
-		context.Background(), sink, "WEBHOOK_SECRET", true, fixed("fresh"))
+		context.Background(), sink, "WEBHOOK_SECRET", true, nil, fixed("fresh"))
 	if err != nil {
 		t.Fatalf("MintSecret: %v", err)
 	}
@@ -188,7 +189,7 @@ func TestRecreateMintsOverWhatIsHeld(t *testing.T) {
 func TestNoSinkIsRefused(t *testing.T) {
 	t.Parallel()
 	_, err := provision.MintSecret(
-		context.Background(), nil, "WEBHOOK_SECRET", false, fixed("fresh"))
+		context.Background(), nil, "WEBHOOK_SECRET", false, nil, fixed("fresh"))
 	if !errors.Is(err, provision.ErrNoSink) {
 		t.Fatalf("MintSecret with no sink = %v, want ErrNoSink", err)
 	}
@@ -204,12 +205,186 @@ func TestAFailedMintSealsNothing(t *testing.T) {
 	want := errors.New("no entropy")
 
 	_, err := provision.MintSecret(
-		context.Background(), sink, "WEBHOOK_SECRET", false,
+		context.Background(), sink, "WEBHOOK_SECRET", false, nil,
 		func() (string, error) { return "", want })
 	if !errors.Is(err, want) {
 		t.Fatalf("MintSecret = %v, want the mint's own error", err)
 	}
 	if sink.records != 0 {
 		t.Errorf("%d value(s) were sealed by a run that minted none", sink.records)
+	}
+}
+
+// unknownTo is an Unvouched that cannot vouch for the names given, as a run
+// reading only a stopped node's own rows cannot for a variable they lack.
+func unknownTo(names ...string) provision.Unvouched {
+	return func(name string) error {
+		for _, n := range names {
+			if n == name {
+				return fmt.Errorf("%w: %s is out of this run's sight",
+					provision.ErrUnvouched, name)
+			}
+		}
+		return nil
+	}
+}
+
+// AN EMPTY ANSWER THE RUN CANNOT VOUCH FOR IS NOT A REASON TO MINT.
+//
+// A command line run on a node whose engine is stopped resolves the company
+// through that node's own rows, and the fleet's store — which every node
+// resolves through, and which holds nearly every value — is out of its reach.
+// Its "" is UNKNOWN, and minting on it re-points a working hook at a key no
+// node holds: every delivery refused, from a run whose plan said "mint".
+func TestAnUnvouchedEmptyValueIsNotMintedInto(t *testing.T) {
+	t.Parallel()
+	sink := newMintSink()
+
+	_, err := provision.MintSecret(context.Background(), sink, "WEBHOOK_SECRET",
+		false, unknownTo("WEBHOOK_SECRET"), fixed("fresh"))
+	if !errors.Is(err, provision.ErrUnvouched) {
+		t.Fatalf("MintSecret = %v, want the unknown answer refused", err)
+	}
+	if !strings.Contains(err.Error(), "WEBHOOK_SECRET") {
+		t.Errorf("the refusal does not name the variable: %v", err)
+	}
+	if sink.records != 0 {
+		t.Errorf("%d value(s) were minted over a variable the run could not see", sink.records)
+	}
+}
+
+// AND THE SINK STILL ANSWERS FIRST: a value it holds is one the run can use
+// whatever the resolver could see, which is what MintSecret has always done
+// with a value a resolver had not caught up with.
+func TestAnUnvouchedNameTheSinkHoldsIsUsed(t *testing.T) {
+	t.Parallel()
+	sink := newMintSink()
+	sink.vals["WEBHOOK_SECRET"] = "already-sealed"
+
+	got, err := provision.MintSecret(context.Background(), sink, "WEBHOOK_SECRET",
+		false, unknownTo("WEBHOOK_SECRET"), fixed("fresh"))
+	if err != nil {
+		t.Fatalf("MintSecret: %v", err)
+	}
+	if got.Value != "already-sealed" || got.Minted {
+		t.Errorf("MintSecret = %+v, want the value the sink holds", got)
+	}
+}
+
+// RECREATE IS A DECISION, NOT A REASON, so it is not asked about: an operator
+// who asked for a fresh key gets one whatever the run could see.
+func TestRecreateIsNotHeldToWhatTheRunCouldSee(t *testing.T) {
+	t.Parallel()
+	sink := newMintSink()
+
+	got, err := provision.MintSecret(context.Background(), sink, "WEBHOOK_SECRET",
+		true, unknownTo("WEBHOOK_SECRET"), fixed("fresh"))
+	if err != nil {
+		t.Fatalf("MintSecret: %v", err)
+	}
+	if !got.Minted {
+		t.Errorf("MintSecret = %+v, want the rotation the operator asked for", got)
+	}
+}
+
+// A VOUCHED-FOR NAME IS MINTED INTO as before, so the question narrows the
+// rule to exactly the names the run could not see.
+func TestAVouchedForNameIsStillMintedInto(t *testing.T) {
+	t.Parallel()
+	sink := newMintSink()
+
+	got, err := provision.MintSecret(context.Background(), sink, "WEBHOOK_SECRET",
+		false, unknownTo("SOME_OTHER_NAME"), fixed("fresh"))
+	if err != nil {
+		t.Fatalf("MintSecret: %v", err)
+	}
+	if !got.Minted {
+		t.Errorf("MintSecret = %+v, want a mint into a name the run vouched for", got)
+	}
+}
+
+// A NON-EMPTY ANSWER THE RUN CANNOT VOUCH FOR IS NO ANSWER EITHER.
+//
+// A run on a stopped node resolves through that node's own rows and then its
+// shell's environment, as the engine resolves through the store and then its
+// own environment. For a variable the rows lack, the exported value is a guess
+// at the deployment's — the fleet may hold another, and the store outranks the
+// environment in the engine — and registering it with a vendor re-points a
+// working hook exactly as a mint would. So it is settled like an empty answer:
+// the sink's record where there is one, refused where there is none.
+func TestResolvedSettlesAnAnswerTheRunCannotVouchFor(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name      string
+		ref       string
+		resolved  string
+		unvouched provision.Unvouched
+		held      map[string]string
+		want      string
+		ok        bool
+		unknown   bool
+		reads     int
+	}{
+		{name: "a vouched answer is used as it is, without a read",
+			ref: "${SECRET}", resolved: "  from-the-store\n", unvouched: unknownTo("OTHER"),
+			want: "from-the-store", ok: true},
+		{name: "the engine's own pass vouches for everything",
+			ref: "${SECRET}", resolved: "x", unvouched: nil, want: "x", ok: true},
+		{name: "a vouched empty answer is nothing to use, and the caller may mint",
+			ref: "${SECRET}", resolved: "", unvouched: unknownTo("OTHER")},
+		{name: "a literal reads no variable, so it is always vouched for",
+			ref: "a-literal", resolved: "a-literal", unvouched: unknownTo("SECRET"),
+			want: "a-literal", ok: true},
+		{name: "a guessed answer nothing recorded is refused",
+			ref: "${SECRET}", resolved: "from-the-shell", unvouched: unknownTo("SECRET"),
+			unknown: true, reads: 1},
+		{name: "a guessed answer gives way to the sink's record",
+			ref: "${SECRET}", resolved: "from-the-shell", unvouched: unknownTo("SECRET"),
+			held: map[string]string{"SECRET": " recorded "}, want: "recorded", ok: true, reads: 1},
+		{name: "an empty unvouched answer is refused where nothing recorded it",
+			ref: "${SECRET}", resolved: "", unvouched: unknownTo("SECRET"),
+			unknown: true, reads: 1},
+		{name: "a guessed fragment has no variable to read back, and is refused",
+			ref: "prefix-${SECRET}", resolved: "prefix-from-the-shell",
+			unvouched: unknownTo("SECRET"), unknown: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			sink := newMintSink()
+			for name, value := range tc.held {
+				sink.vals[name] = value
+			}
+			got, ok, err := provision.Resolved(context.Background(), sink, tc.ref,
+				tc.resolved, tc.unvouched)
+			switch {
+			case tc.unknown && !errors.Is(err, provision.ErrUnvouched):
+				t.Fatalf("Resolved = (%q, %v, %v), want the guess refused", got, ok, err)
+			case !tc.unknown && err != nil:
+				t.Fatalf("Resolved: %v", err)
+			}
+			if got != tc.want || ok != tc.ok {
+				t.Errorf("Resolved = (%q, %v), want (%q, %v)", got, ok, tc.want, tc.ok)
+			}
+			if sink.reads != tc.reads {
+				t.Errorf("the sink was read %d time(s), want %d", sink.reads, tc.reads)
+			}
+			// THE CONTRACT A CALLER BUILDS ON: a non-empty answer comes
+			// back used or refused, never as nothing — or a caller that
+			// planned to reuse it would register an empty key.
+			if strings.TrimSpace(tc.resolved) != "" && err == nil && (!ok || got == "") {
+				t.Errorf("a non-empty answer came back as nothing: (%q, %v)", got, ok)
+			}
+		})
+	}
+}
+
+// AND NO SINK HOLDS NO RECORD: a guessed answer with nowhere to read one back
+// is refused rather than read through a nil sink.
+func TestResolvedWithNoSinkRefusesAGuess(t *testing.T) {
+	t.Parallel()
+	_, _, err := provision.Resolved(context.Background(), nil, "${SECRET}",
+		"from-the-shell", unknownTo("SECRET"))
+	if !errors.Is(err, provision.ErrUnvouched) {
+		t.Fatalf("Resolved with no sink = %v, want the guess refused", err)
 	}
 }

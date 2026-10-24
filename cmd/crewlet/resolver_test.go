@@ -2,11 +2,37 @@ package main
 
 import (
 	"bytes"
+	"flag"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/config"
 )
+
+// resolveCompany is one run's resolution of the GitLab fixture company, as a
+// provisioning command makes it, through the store the Tier A at cfg names.
+func resolveCompany(t *testing.T, cfg string, notes io.Writer) (*companyValues, error) {
+	t.Helper()
+	fs := flag.NewFlagSet("provision", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	at := addStoreFlags(fs)
+	if err := fs.Parse([]string{"-config", cfg}); err != nil {
+		t.Fatal(err)
+	}
+	company, err := config.LoadCompanyToRun(gitlabCompanyFile(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	companySecrets, err := openCompanyStore(noEnviron, at, "crewlet gitlab provision")
+	if err != nil {
+		return nil, err
+	}
+	t.Cleanup(companySecrets.Close)
+	return companySecrets.values(t.Context(), company, notes)
+}
 
 // A PROVISIONING RUN READS THE SECRET STORE, NOT JUST THE ENVIRONMENT.
 //
@@ -25,17 +51,22 @@ func TestAProvisioningRunResolvesThroughTheSecretStore(t *testing.T) {
 	}
 
 	var notes bytes.Buffer
-	env, _, closeEnv, err := companyResolver(t.Context(), cfg, &notes)
+	env, err := resolveCompany(t, cfg, &notes)
 	if err != nil {
-		t.Fatalf("companyResolver: %v", err)
+		t.Fatalf("resolve: %v", err)
 	}
-	defer closeEnv()
 
 	got := env.Value("${GITLAB_SIGNING_SECRET}")
 	if got != "whsec_c3RvcmVkLXNpZ25pbmcta2V5LW9mLTMyLWJ5dGVzIQ==" {
 		t.Fatalf("the stored secret did not reach the run: %q", got)
 	}
-	if notes.Len() > 0 {
+	// A STOPPED NODE'S OWN ROWS ARE NOT THE FLEET'S, and the run says it
+	// read the first: an operator reading the plan has to know a value
+	// those rows lack is unknown rather than unset.
+	if !strings.Contains(notes.String(), "own secret rows") {
+		t.Errorf("a run that read one node's rows did not say so: %q", notes.String())
+	}
+	if strings.Contains(notes.String(), "environment only") {
 		t.Errorf("a run that DID read the store announced that it did not: %q",
 			notes.String())
 	}
@@ -49,19 +80,18 @@ func TestAProvisioningRunResolvesThroughTheSecretStore(t *testing.T) {
 // nothing.
 func TestAStoredSecretWinsOverAStaleExport(t *testing.T) {
 	cfg := bootstrapWithKeyring(t, "k1")
-	if _, errs, err := secretsCmd(t, cfg, "set", "CONFLUENCE_TOKEN",
+	if _, errs, err := secretsCmd(t, cfg, "set", "GITLAB_TOKEN_SWE",
 		"-value", "the-rotated-one"); err != nil {
 		t.Fatalf("seed the store: %v (%s)", err, errs)
 	}
-	t.Setenv("CONFLUENCE_TOKEN", "the-stale-export")
+	t.Setenv("GITLAB_TOKEN_SWE", "the-stale-export")
 
-	env, _, closeEnv, err := companyResolver(t.Context(), cfg, &bytes.Buffer{})
+	env, err := resolveCompany(t, cfg, &bytes.Buffer{})
 	if err != nil {
-		t.Fatalf("companyResolver: %v", err)
+		t.Fatalf("resolve: %v", err)
 	}
-	defer closeEnv()
 
-	if got := env.Lookup("CONFLUENCE_TOKEN"); got != "the-rotated-one" {
+	if got := env.Lookup("GITLAB_TOKEN_SWE"); got != "the-rotated-one" {
 		t.Fatalf("a stale export shadowed the rotated secret: %q", got)
 	}
 }
@@ -99,11 +129,10 @@ func TestWithoutAStoreTheRunSaysWhichChainItUsed(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "not-here.yaml")
 
 	var notes bytes.Buffer
-	env, _, closeEnv, err := companyResolver(t.Context(), missing, &notes)
+	env, err := resolveCompany(t, missing, &notes)
 	if err != nil {
 		t.Fatalf("a missing bootstrap is a supported deployment: %v", err)
 	}
-	defer closeEnv()
 
 	t.Setenv("SOME_TOKEN", "from-the-environment")
 	if got := env.Lookup("SOME_TOKEN"); got != "from-the-environment" {
@@ -133,7 +162,7 @@ func TestABootstrapWithNoKeyringIsRefused(t *testing.T) {
 	}
 
 	var notes bytes.Buffer
-	_, _, _, err := companyResolver(t.Context(), path, &notes)
+	_, err := resolveCompany(t, path, &notes)
 	if err == nil {
 		t.Fatal("a keyringless bootstrap was resolved rather than refused")
 	}
@@ -160,7 +189,7 @@ func TestABrokenBootstrapRefusesRatherThanResolvingFromTheEnvironment(t *testing
 	}
 
 	var notes bytes.Buffer
-	if _, _, _, err := companyResolver(t.Context(), path, &notes); err == nil {
+	if _, err := resolveCompany(t, path, &notes); err == nil {
 		t.Fatal("a bootstrap that cannot be read was treated as no bootstrap, " +
 			"so a configured store silently became a stale environment")
 	}
