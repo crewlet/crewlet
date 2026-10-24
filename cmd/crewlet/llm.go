@@ -75,6 +75,10 @@ Usage:
 Flags:
   -company PATH  Tier B, the company document naming the providers (default %q)
   -config PATH   Tier A, carrying the store and the secret keyring (default %q)
+  -api URL       The node holding data to read stored values through and store
+                 a token or bundle in; default is this node's store, or the
+                 running engine holding it. A seats node, which holds no data,
+                 names one
   -home PATH     Read a host login from somewhere other than this user's home
   -no-smoke      Skip doctor's real completions (the tool call and both probes)
   -print-token   Write a captured token to stdout instead of the store (login only)
@@ -97,6 +101,16 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 		"Tier B config: the company document naming the providers")
 	bootstrapPath := fs.String("config", defaultBootstrapPath,
 		"Tier A config: this node's store and its secret keyring")
+	// THE SAME FLAG the provisioning commands and `crewlet secrets` take,
+	// and needed here for the node they rarely run on: a seats node holds
+	// no data, its store is scratch, and the logins of the seats it runs
+	// are made on it — so the company's stored values, and the store a
+	// captured token goes to, are a node that holds data, which nothing in
+	// a seats node's Tier A addresses.
+	apiURL := fs.String("api", "",
+		"the node holding data to read stored values through and store a "+
+			"token or bundle in; default is this node's store, or the "+
+			"running engine holding it")
 	fromHost := fs.Bool("from-host", false,
 		"adopt the login this machine already has (login only)")
 	captureToken := fs.Bool("capture-token", false,
@@ -125,7 +139,7 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 
 	ctx := context.Background()
 	company, resolver, closeResolver, err := loadLLMConfig(ctx, environ, *companyPath,
-		*bootstrapPath, stderr)
+		*bootstrapPath, *apiURL, stderr)
 	if err != nil {
 		return err
 	}
@@ -151,7 +165,7 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 			providers: providers, key: key, home: *home,
 			fromHost: *fromHost, captureToken: *captureToken,
 			tokenStdin: *tokenStdin, username: *username, passwordStdin: *passwordStdin,
-			bootstrapPath: *bootstrapPath, printToken: *printToken, stdin: os.Stdin,
+			bootstrapPath: *bootstrapPath, apiURL: *apiURL, printToken: *printToken, stdin: os.Stdin,
 		}, stdout, stderr)
 	case "status":
 		p, err := oneProvider(providers, key)
@@ -182,7 +196,8 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 		}
 		return logoutErr
 	case "export":
-		return exportLLM(ctx, environ, providers, key, *secretStore, *bootstrapPath, stdout)
+		return exportLLM(ctx, environ, providers, key, *secretStore,
+			*bootstrapPath, *apiURL, stdout)
 	case "import":
 		return importLLM(ctx, providers, key, os.Stdin, stdout)
 	default:
@@ -209,15 +224,15 @@ type cliAgentProvider struct {
 // stored values through that engine ([companyResolver]), which is where they
 // are while it runs: these commands are made to run beside the seats, under
 // the lock beside the credentials directory that both take.
-func loadLLMConfig(ctx context.Context, environ config.Source, companyPath, bootstrapPath string,
-	notes io.Writer) (*config.Company, *config.Resolver, func(), error) {
+func loadLLMConfig(ctx context.Context, environ config.Source, companyPath, bootstrapPath,
+	apiURL string, notes io.Writer) (*config.Company, *config.Resolver, func(), error) {
 
 	company, err := config.LoadCompanyToRun(companyPath, nil)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	resolver, _, closeResolver, err := companyResolver(ctx, environ, company, bootstrapPath,
-		"", notes)
+		apiURL, notes)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -455,6 +470,7 @@ type loginRequest struct {
 	username      string
 	passwordStdin bool
 	bootstrapPath string
+	apiURL        string
 	printToken    bool
 	// stdin is what a token, a password or the vendor's own login prompts
 	// are read from — os.Stdin, and the suite's own reader in a test.
@@ -573,7 +589,7 @@ func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdo
 					"Reference it as ${%s}.\n", tokenVar)
 			return nil
 		}
-		where, err := storeLLMSecret(ctx, environ, req.bootstrapPath, tokenVar, token)
+		where, err := storeLLMSecret(ctx, environ, req.bootstrapPath, req.apiURL, tokenVar, token)
 		if err != nil {
 			return err
 		}
@@ -659,7 +675,8 @@ func refuseUnreadToken(p *cliagent.Provider, key string, req loginRequest) error
 		key, sign.Reads, instead)
 }
 
-func exportLLM(ctx context.Context, environ config.Source, providers []cliAgentProvider, key string, toStore bool, bootstrapPath string, stdout io.Writer) error {
+func exportLLM(ctx context.Context, environ config.Source, providers []cliAgentProvider,
+	key string, toStore bool, bootstrapPath, apiURL string, stdout io.Writer) error {
 	p, err := oneProvider(providers, key)
 	if err != nil {
 		return err
@@ -685,7 +702,7 @@ func exportLLM(ctx context.Context, environ config.Source, providers []cliAgentP
 		return nil
 	}
 	name := cliprofile.BundleVarName(key)
-	where, err := storeLLMSecret(ctx, environ, bootstrapPath, name, bundle)
+	where, err := storeLLMSecret(ctx, environ, bootstrapPath, apiURL, name, bundle)
 	if err != nil {
 		return err
 	}
@@ -714,9 +731,12 @@ func authReference(key, field, name string) string {
 // [secrets.SourceLLMLogin] where the store keeps the word — a stopped node's
 // own table — and as the running node's route records it otherwise. It
 // returns which store took the write, said after every write for the reason
-// [secretTarget.where] gives.
-func storeLLMSecret(ctx context.Context, environ config.Source, bootstrapPath, name, value string) (string, error) {
-	sv, closeStore, err := openSecretStore(ctx, environ, bootstrapPath, "")
+// [secretTarget.where] gives. An apiURL names the node it goes through, as
+// `crewlet secrets -api` does.
+func storeLLMSecret(ctx context.Context, environ config.Source, bootstrapPath, apiURL,
+	name, value string) (string, error) {
+
+	sv, closeStore, err := openSecretStore(ctx, environ, bootstrapPath, apiURL)
 	if err != nil {
 		return "", fmt.Errorf("cannot reach the secret store to save %s: %w", name, err)
 	}

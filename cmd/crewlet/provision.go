@@ -161,6 +161,9 @@ func (s sinkStore) Set(ctx context.Context, name, value string, by secrets.Autho
 // command that reads three would put the whole credential set in this process
 // and the node's log for nothing.
 //
+// A node that holds no data (`store.scratch`) has no store of the company's
+// to open, and is refused unless apiURL names one that does.
+//
 // # When there is no store
 //
 // A run with no bootstrap at this path resolves from the environment alone —
@@ -201,6 +204,17 @@ func companyResolver(ctx context.Context, environ config.Source, company *config
 				"through %s: %w%s", client.base, rerr, revealTakesATierAToken)
 		}
 		return config.WithStore(values), boot, func() {}, nil
+	}
+	// A NODE THAT HOLDS NO DATA HAS NO STORE TO READ. Its file is scratch —
+	// the previous run's, deleted at every boot — and the company's values
+	// are a data node's, which nothing in its Tier A addresses. So the run
+	// is told to name one, rather than resolve every stored value as unset:
+	// it is a seats node, where the logins `crewlet llm` makes are made.
+	if boot.Store.Scratch {
+		return nil, nil, nil, fmt.Errorf("%s is a node that holds no data "+
+			"(store.scratch), so the company's stored values are read through "+
+			"a node that does: name one with -api, or run this on one",
+			bootstrapPath)
 	}
 	sv, closeStore, err := openSecretValues(ctx, boot)
 	if err != nil {

@@ -2538,7 +2538,9 @@ running engine the store is the fleet's and is read through the engine's API,
 one reveal per stored variable the company reads, so every `crewlet llm`
 command runs while the seats do; a reveal takes `admin` and a person present,
 so `CREWLET_API_TOKEN` holds one of Tier A's tokens for it
-([CLI reference](../reference/cli.md#commands)).
+([CLI reference](../reference/cli.md#commands)). A `seats` node holds no
+data, so there `-api URL` names a node that does, which the values are read
+through and a captured token is stored in.
 
 When none of those authenticates the CLI, `doctor` reports "no sign-in" as a
 problem, naming first a route you configured whose `${VAR}` resolved to

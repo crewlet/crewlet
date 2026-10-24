@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -194,6 +195,7 @@ type revealNode struct {
 	mu       sync.Mutex
 	revealed []string
 	tokens   []string
+	stored   map[string]string
 }
 
 func newRevealNode(t *testing.T, held map[string]string) *revealNode {
@@ -204,6 +206,17 @@ func newRevealNode(t *testing.T, held map[string]string) *revealNode {
 		n.tokens = append(n.tokens, r.Header.Get("Authorization"))
 		n.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
+		if name, ok := strings.CutPrefix(r.URL.Path, "/secrets/"); ok && r.Method == http.MethodPut {
+			value, _ := io.ReadAll(r.Body)
+			n.mu.Lock()
+			if n.stored == nil {
+				n.stored = map[string]string{}
+			}
+			n.stored[name] = string(value)
+			n.mu.Unlock()
+			_, _ = fmt.Fprint(w, `{"updated_by":"token:ops","updated_by_kind":"operator"}`)
+			return
+		}
 		if r.Method != http.MethodGet {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
@@ -434,5 +447,80 @@ func TestSlackProvisionReadsTierAAndNoStore(t *testing.T) {
 	if _, err := os.Stat(storePath); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("slack provision opened the store at %s, though it resolves nothing: %v",
 			storePath, err)
+	}
+}
+
+// seatsNodeTierA is the Tier A of a node that holds no data: a seats node,
+// whose store is scratch and whose broker is a leaf of the data nodes'.
+func seatsNodeTierA(t *testing.T, dir string) string {
+	t.Helper()
+	body := fmt.Sprintf("node:\n  id: agent-1\n  roles: [seats]\nstore:\n  path: %s\n"+
+		"  scratch: true\nstream:\n  leaf:\n    urls: [\"nats-leaf://data-a.example.com:7422\"]\n"+
+		"coordination:\n  type: embedded-kv\n"+fixtureKeyring,
+		filepath.Join(dir, "index.db"))
+	cfg := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+// A SEATS NODE SIGNS ITS SEATS IN THROUGH A NODE THAT HOLDS DATA.
+//
+// The logins `crewlet llm` makes are made on the node whose seats run on
+// them, and a seats node holds no data: its store is scratch, so there is
+// nothing of the company's to open there, and it used to refuse every `crewlet
+// llm` command — as `crewlet secrets`, which writes. -api names the data node:
+// doctor reads the entry's stored token through it, and a captured token is
+// stored there. Without it the command says to name one, and opens nothing.
+func TestASeatsNodeReadsAndStoresThroughTheDataNodeItNames(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	cfg := seatsNodeTierA(t, dir)
+	node := newRevealNode(t, map[string]string{"FLEET_TOKEN": "fleet-headless-token"})
+	entry := strings.Replace(healthyDoctorEntry(t, "claude", "m"),
+		"auth: {token: fake-headless-token}", `auth: {token: "${FLEET_TOKEN}"}`, 1)
+	company := writeFile(t, dir, "company.yaml", "name: Acme\nproviders:\n  llm:\n"+entry+
+		"roles:\n  - name: CEO\n    handle: ceo\n    llm: claude\n")
+	base := []string{"doctor", "claude", "-no-smoke", "-company", company, "-config", cfg}
+
+	var out, notes bytes.Buffer
+	if err := runLLM(tokenEnviron("ops-token"), base, &out, &notes); err == nil ||
+		!strings.Contains(err.Error(), "store.scratch") || !strings.Contains(err.Error(), "-api") {
+		t.Fatalf("a seats node with no node named = %v, want a refusal naming store.scratch and -api", err)
+	}
+
+	out.Reset()
+	if err := runLLM(tokenEnviron("ops-token"), append(base, "-api", node.server.URL),
+		&out, &notes); err != nil {
+		t.Fatalf("doctor through the named data node: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "problems      : none\n") {
+		t.Errorf("the entry's stored token did not reach doctor through the named node:\n%s", out.String())
+	}
+	if !slices.Equal(node.reveals(), []string{"FLEET_TOKEN"}) {
+		t.Errorf("revealed %v, want the token the entry reads", node.reveals())
+	}
+
+	where, err := storeLLMSecret(t.Context(), tokenEnviron("ops-token"), cfg, node.server.URL,
+		"CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-captured")
+	if err != nil {
+		t.Fatalf("store a captured token through the named node: %v", err)
+	}
+	node.mu.Lock()
+	stored := node.stored["CLAUDE_CODE_OAUTH_TOKEN"]
+	node.mu.Unlock()
+	if stored != "sk-ant-oat01-captured" || !strings.Contains(where, node.server.URL) {
+		t.Errorf("the captured token went to %q holding %q, want the named node", where, stored)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != "config.yaml" && e.Name() != "company.yaml" {
+			t.Errorf("a seats node's run left %s behind: its scratch store was opened", e.Name())
+		}
 	}
 }

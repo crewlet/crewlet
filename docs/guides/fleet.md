@@ -118,6 +118,10 @@ travel through the secret store: a headless token (`crewlet llm login <key>
 set as `auth.credential_bundle` or `CREWLET_LLM_CLI_<KEY>_CREDENTIALS`), which
 each node restores into an empty credential directory when it builds the
 company. A plain `crewlet llm login` signs in the host it ran on and no other.
+A `seats` node holds no data, so `crewlet llm` run on it names a node that
+does with `-api URL` — the company's stored values are read through that
+node, and a captured token is stored there — with one of Tier A's tokens in
+`CREWLET_API_TOKEN`.
 See [LLM Backends § Authentication](../concepts/llm-backends.md#authentication).
 
 **One keyring and one `api.external_url` on every node that serves the API.**

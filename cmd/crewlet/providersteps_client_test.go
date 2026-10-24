@@ -254,7 +254,7 @@ func (w *stepWalk) llm(line string, args []string) {
 		}
 	}
 	company, resolver, closeResolver, err := loadLLMConfig(w.t.Context(), noEnviron,
-		companyPath, defaultBootstrapPath, io.Discard)
+		companyPath, defaultBootstrapPath, "", io.Discard)
 	if err != nil {
 		w.t.Fatalf("`%s` reads the company from %s, and cannot: %v",
 			line, companyPath, err)
