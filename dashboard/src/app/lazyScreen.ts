@@ -56,7 +56,7 @@
 
 import { createElement, use, type ComponentType } from "react";
 import { NEW_KIND_TITLES } from "~/lib/artifacts/words.ts";
-import type { ArtifactKind } from "~/protocol/index.ts";
+import type { MakeKind } from "~/lib/artifacts/words.ts";
 import { resolve, type FramedScreen, type Resolved } from "./routes.ts";
 
 /**
@@ -73,6 +73,7 @@ const LOADERS = {
   live: () => import("~/routes/live/index.ts"),
   knowledge: () => import("~/routes/knowledge/index.ts"),
   artifacts: () => import("~/routes/artifacts/index.ts"),
+  brand: () => import("~/routes/brand/index.ts"),
   spend: () => import("~/routes/spend/index.ts"),
   settings: () => import("~/routes/settings/index.ts"),
   account: () => import("~/routes/account/index.ts"),
@@ -99,6 +100,7 @@ type ScreenDir =
   | "live"
   | "knowledge"
   | "artifacts"
+  | "brand"
   | "spend"
   | "settings"
   | "account";
@@ -108,7 +110,7 @@ type ScreenDir =
  * and a design's canvas share nothing but their frame, and the gallery's
  * reader should download none of them until they start one.
  */
-type NewArtifactChunk = `new-${ArtifactKind}`;
+type NewArtifactChunk = `new-${MakeKind}`;
 
 /** A chunk: a workspace, the org editor, the sign-in screens, a create page or the palette. */
 export type Chunk = keyof typeof LOADERS;
@@ -128,6 +130,7 @@ const SCREEN_CHUNKS: Readonly<Record<FramedScreen["screen"], Chunk>> = {
   me: "me",
   overview: "settings",
   policies: "settings",
+  brand: "brand",
   "org-chart": "agents",
   roster: "agents",
   teams: "agents",
@@ -190,6 +193,7 @@ export const CHUNKS: readonly Chunk[] = [
   "inbox",
   "me",
   "settings",
+  "brand",
   "agents",
   "spend",
   "work",
@@ -213,6 +217,7 @@ const CHUNK_LABELS: Readonly<Record<ScreenDir | "org" | "signin" | "palette", st
   live: "Live",
   knowledge: "Knowledge",
   artifacts: "Artifacts",
+  brand: "Brand",
   spend: "Spend and Budgets",
   settings: "Company and Settings",
   account: "Account",
@@ -223,7 +228,7 @@ const CHUNK_LABELS: Readonly<Record<ScreenDir | "org" | "signin" | "palette", st
 
 /** What a chunk is called in a sentence a reader sees. */
 export function chunkLabel(chunk: Chunk): string {
-  if (chunk.startsWith("new-")) return NEW_KIND_TITLES[chunk.slice(4) as ArtifactKind];
+  if (chunk.startsWith("new-")) return NEW_KIND_TITLES[chunk.slice(4) as MakeKind];
   return CHUNK_LABELS[chunk as keyof typeof CHUNK_LABELS];
 }
 

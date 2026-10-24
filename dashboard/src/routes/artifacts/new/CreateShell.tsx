@@ -53,8 +53,7 @@ import { capsOf, keyRow, useKeymap } from "~/app/keymap.ts";
 import { href, useNavigator } from "~/app/router.tsx";
 import { artifactSectionPath } from "~/app/routes.ts";
 import { useServicesRun } from "~/lib/services.ts";
-import { KIND_WORDS, NEW_KIND_TITLES } from "~/lib/artifacts/words.ts";
-import type { ArtifactKind } from "~/protocol/index.ts";
+import { KIND_WORDS, NEW_KIND_TITLES, type MakeKind } from "~/lib/artifacts/words.ts";
 
 /** Where a create page leads back to: the gallery it was started from. */
 const GALLERY = artifactSectionPath("all");
@@ -69,7 +68,7 @@ export interface CreateAction extends Omit<
 }
 
 export interface CreateShellProps {
-  kind: ArtifactKind;
+  kind: MakeKind;
   /** The kind's one primary action. Left out while the page offers none. */
   action?: CreateAction | undefined;
   /** What the page is doing now, before the controls: "Draft saved", "Starting…". */

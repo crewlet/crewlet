@@ -669,6 +669,7 @@ Settings and Preferences as glyphs beside them.
 | *Company* | | |
 | **Overview** | `#/company` | none: the company's name, clock, mission and vision are every reader's |
 | **Policies** | `#/company/policies` | none |
+| **Brand** | `#/company/brand` | none: the adopted brand is every reader's, and adopting one is an Admin's on the page itself |
 | **Org chart** | `#/company/org` | none |
 | **Schedules** | `#/company/schedules` | none |
 | **Integrations** | `#/company/integrations` | none; every reader opens it, and an app's state and connecting are an Admin's on the page itself |
@@ -795,7 +796,7 @@ does not exist, so an operator on a fresh browser would conclude the product
 has nowhere to configure anything. ONE RULE decides every lock, `sectionOpen`
 in `nav.ts`, over three kinds of section (ADR-0033). The reader's own, their
 Account, needs nothing. The OVERVIEW needs nothing beyond being signed in:
-Home, Company › Overview and Policies, the Org chart (the chart, the roster,
+Home, Company › Overview, Policies and Brand, the Org chart (the chart, the roster,
 Teams and every seat page's status), Schedules, Budgets, Live › Now running and
 Coding runs, and Settings › Token spend: what every seat is doing, what it has spent,
 what it may spend and who answers to whom, which everybody who works here
@@ -1061,7 +1062,7 @@ it; on this screen the company is the subject, and the product is in the mark
 and the tab.
 
 `g` then a letter jumps to a workspace: `g h`, `g i` and `g m` for the first
-run; `g c` for Company's Overview, `g o` for Policies, `g a` for the Org chart,
+run; `g c` for Company's Overview, `g o` for Policies, `g e` for Brand, `g a` for the Org chart,
 `g d` for Schedules, `g n` for Integrations and `g b` for Budgets; `g w`,
 `g k`, `g f` for Artifacts and `g l` for Live; `g s` for Settings, and `g u`
 for your Account. A chord to a hidden place is not answered, as its row is not
@@ -1159,6 +1160,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/work/{KEY}-{n}` · `#/work/{id}` | **Task** — description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost | `activity=all\|comments\|turns\|changes` · `list=` |
 | `#/company` | **Company › Overview** (the sidebar's **Overview** row): who the company is, its name and its clock (the zone every day the engine cuts is cut on), its mission and its vision, read from the org projection by every reader. The standing policies are their own row | |
 | `#/company/policies` | **Policies**: the standing policies every agent reads on every turn, in plain words, numbered in a readable column, with **Edit policies** opening the builder at them. The caps the engine holds a turn to are not policies, and are Settings › Limits, offered as a related row to a reader who may open it | |
+| `#/company/brand` | **Brand**: how the company looks and sounds in every doc, deck and page its agents make: the adopted version of the company's brand kit, as four cards (Logos, Colours, Typography, Voice and tone) beside a sticky preview of a sample doc or slide in light or dark. Every reader reads it, downloads a logo and copies a colour *(changing a card, adopting a newer version of the kit and stopping the brand are an Admin's, a person's, with a recent sign-in)* | |
 | `#/company/org` | **Org chart**, the hierarchy every seat works inside; every human seat with its kind; what holds each one for an admin and for the holder themselves; and, for an admin, where a person is invited or created onto the vacant human seat they will hold | `unit=` · `seat=` |
 | `#/company/org/roster` | **Org chart › Roster**, every seat, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
 | `#/company/org/teams` · `#/company/org/teams/{unit}` | **Org chart › Teams**, every unit with what it is for and its goals; one unit's page | |
@@ -7375,6 +7377,40 @@ the company document under it, the value in tabular figures, and its source,
 switches its limit off (the answer's `off` and `default_off`). Limits is
 read-only and admin's, and Policies offers it as a related row to a reader
 who may open it.
+
+**The brand is Company's too, and adopted.** **Company › Brand**
+(`#/company/brand`) is how the company looks and sounds in everything its
+agents make. A brand KIT is an artifact of kind `brand` (its `brand.json` and
+the logo and font files it names), versioned like any artifact, which agents
+and editors may draft; the company's brand is the one version an
+administrator ADOPTED (`brand{}`), which the engine snapshots and serves by
+its bytes. The page draws that adoption as four cards in the Principles card
+grammar, Logos (`image`: the name and tagline over three `LogoSlot`s, primary
+on a light ground, one for dark grounds and the square mark, each with a
+download), Colours (`blend`: each set role as a `ColorSwatch` with its value
+to copy, and a `ContrastBadge` per pair the adoption measures), Typography
+(`type`: the heading and body faces as `TypeSpecimen`s, drawn in themselves)
+and Voice and tone (`text-quote`), beside a sticky preview (`BrandSample`, a
+doc or a slide, light or dark) in an `AsideLayout` that stacks it under the
+cards on a narrow page. An administrator, a person, edits one card at a time
+in place, the preview drawing every change; Save opens one dialog listing
+what changes (each colour with both values, each logo by its bytes), the
+contrast pairs that fall short, and what adopting makes public, then
+publishes a version of the company's kit and adopts it, the engine asking
+for a recent sign-in when the proof is stale. Text on the light ground below
+4.5:1 holds Save with the engine's own reason; every other pair warns. A
+version somebody else published is offered under the header ("Version 9 by
+@brand-agent is newer than the adopted version 7", with **Review and adopt**
+for an administrator). With no brand adopted, an administrator is offered
+**Set up your brand** (the name, the primary logo and the primary colour,
+adopted in one gesture) and everyone else reads "No brand yet". The bar holds
+the kit's **History** and **Stop using this brand**. The brand meets people
+where they make things: the Make row's `BrandChip` (or **Set up your brand**
+for an administrator), the company's theme first and chosen in a new deck's
+picker, a note under Ask an agent, and a **Brand** fact in an artifact's
+Details (current, an older brand that changes at the next publish, or
+Crewlet's look). A kit's own page draws the same cards and preview for the
+version on show, and says whether it is the adopted one.
 
 **Access** is the identity directory, over the routes `/iam` serves to an
 admin, split over three pages so that no row is drawn twice: People, Service

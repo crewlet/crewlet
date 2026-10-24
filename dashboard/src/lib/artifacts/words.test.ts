@@ -205,7 +205,7 @@ describe("the trash", () => {
 
 describe("the words other screens say an artifact's facts in", () => {
   test("the kind list names every kind the engine has, in its order", () => {
-    expect(KIND_LIST).toBe("HTML pages, docs, slides, dashboards, sheets and designs");
+    expect(KIND_LIST).toBe("HTML pages, docs, slides, dashboards, sheets, designs and brand kits");
   });
 
   // "PAGE" IS KNOWLEDGE'S WORD: the html kind beside Knowledge's Pages named

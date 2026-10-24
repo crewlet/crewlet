@@ -11601,3 +11601,155 @@ a.live-row:focus-visible {
 .charter-page {
   max-width: calc(var(--size-measure) + var(--spacing-10));
 }
+
+/* ---- Company › Brand, and a brand kit's own page ---------------------------
+   THE CARDS IN THE MAIN COLUMN, THE PREVIEW BESIDE THEM. The preview stays in
+   view while a long card is edited, under the bar where one is drawn; where
+   the layout stacks (a narrow page), it follows the cards and scrolls with
+   them. */
+.brand-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+}
+.brand-preview {
+  position: sticky;
+  top: calc(var(--sticky-top) + var(--spacing-4));
+}
+.brand-preview-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+.brand-preview-note {
+  margin-top: var(--spacing-3);
+}
+/* The Logos card: the name over three slots, the two wide logos side by side
+   and the mark beside them; one a row on a phone. */
+.brand-logos,
+.brand-colours,
+.brand-voice,
+.brand-editor,
+.brand-adopt,
+.brand-setup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+.brand-name {
+  margin: 0;
+}
+.brand-logo-slots {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(12rem, 100%), 1fr));
+  gap: var(--spacing-4);
+}
+/* The Colours card: swatches two or three a row, the contrast pairs under them. */
+.brand-swatches,
+.brand-color-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(14rem, 100%), 1fr));
+  gap: var(--spacing-3) var(--spacing-4);
+}
+.brand-contrast,
+.brand-warnings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2) var(--spacing-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.brand-faces {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
+  gap: var(--spacing-4);
+}
+.brand-voice-lists,
+.brand-editor-pair {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
+  gap: var(--spacing-4);
+}
+.brand-voice-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+/* A refusal said under the field it is about, in the danger ink. */
+.brand-refusal {
+  margin: 0;
+  color: var(--color-feedback-danger-ink);
+}
+/* The Typography editor: one fieldset a face, its files a row each. */
+.brand-face-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.brand-face-legend {
+  padding: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+.brand-font-files {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.brand-font-file {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+.brand-font-file-name {
+  flex: 1 1 10rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
+}
+.brand-font-pick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+/* The adopt dialog's changes: what changed, then what it was and is. */
+.brand-diff {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--spacing-2) var(--spacing-4);
+  margin: 0;
+}
+.brand-diff-row {
+  display: contents;
+}
+.brand-diff-row dt {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-compact);
+}
+.brand-diff-row dd {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-compact);
+  overflow-wrap: anywhere;
+}
+.brand-diff-was {
+  color: var(--color-text-tertiary);
+}
+/* A brand kit's gallery cover: the sample doc on its own ground, filling the card. */
+.artifacts-preview-brand {
+  box-sizing: border-box;
+  min-height: 100%;
+  padding: var(--spacing-6);
+  background: var(--color-surface-background);
+}

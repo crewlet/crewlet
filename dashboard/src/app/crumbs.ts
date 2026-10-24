@@ -216,6 +216,7 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
     case "home":
     case "inbox":
     case "policies":
+    case "brand":
     case "org-chart":
     case "budgets":
     case "live":

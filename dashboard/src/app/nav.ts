@@ -8,9 +8,10 @@
  *   - YOU, unlabelled: Home, Inbox and My work, what needs the reader, what
  *     reached them and what is theirs.
  *   - COMPANY: what the company decides. Overview (its name, mission, vision
- *     and clock), Policies (the standing policies every agent reads), the Org
- *     chart, Schedules, Integrations (the services built into Crewlet above
- *     the third-party apps it connects) and Budgets, last.
+ *     and clock), Policies (the standing policies every agent reads), Brand
+ *     (how everything its agents make looks and sounds), the Org chart,
+ *     Schedules, Integrations (the services built into Crewlet above the
+ *     third-party apps it connects) and Budgets, last.
  *   - WORKSPACE: what the company does with it. Work, Knowledge, Artifacts and
  *     Live.
  *   - The FOOT: Settings, the engine's state and the reader. Account has no
@@ -69,8 +70,7 @@
 
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { holdsAny, type Grant } from "~/lib/access.ts";
-import { KIND_LIST, MAKE_ORDER, NEW_KIND_TITLES } from "~/lib/artifacts/words.ts";
-import type { ArtifactKind } from "~/protocol/index.ts";
+import { KIND_LIST, MAKE_ORDER, NEW_KIND_TITLES, type MakeKind } from "~/lib/artifacts/words.ts";
 
 /** The workspaces: the sidebar's navigation rows, and the reader's own Account. */
 export type Workspace =
@@ -79,6 +79,7 @@ export type Workspace =
   | "me"
   | "company"
   | "policies"
+  | "brand"
   | "org"
   | "schedules"
   | "integrations"
@@ -266,7 +267,7 @@ export interface WorkspaceRow {
  * finds it by beside its title.
  */
 const NEW_ARTIFACT_PAGES: Readonly<
-  Record<ArtifactKind, { icon: GlyphName; hint: string; keywords: readonly string[] }>
+  Record<MakeKind, { icon: GlyphName; hint: string; keywords: readonly string[] }>
 > = {
   doc: {
     icon: "file-text",
@@ -306,7 +307,7 @@ const NEW_ARTIFACT_PAGES: Readonly<
  * the company runs no Crewlet Works the page has no way to finish and is not
  * offered. Every other kind has a create a person finishes on the page.
  */
-const MADE_BY_AN_AGENT: ReadonlySet<ArtifactKind> = new Set(["design"]);
+const MADE_BY_AN_AGENT: ReadonlySet<MakeKind> = new Set(["design"]);
 
 /**
  * The create page of each kind, as sections of Artifacts reached from its
@@ -327,7 +328,7 @@ const NEW_ARTIFACT_SECTIONS: readonly Section[] = MAKE_ORDER.map((kind) => ({
  * Make row's order: the gallery's tray and its New menu list these, as the
  * palette lists their sections.
  */
-export function offeredKinds(runs: ServicesRun): ArtifactKind[] {
+export function offeredKinds(runs: ServicesRun): MakeKind[] {
   return MAKE_ORDER.filter((kind) => {
     const section = NEW_ARTIFACT_SECTIONS.find((s) => s.key === `new-${kind}`);
     return section === undefined || serviceShown(section, runs);
@@ -499,6 +500,37 @@ export const WORKSPACES: WorkspaceRow[] = [
     hint: "The standing policies every agent reads on every turn",
     keywords: ["policy", "rules", "values", "charter"],
     chord: "o",
+    place: "company",
+    renderer: "none",
+    sections: [],
+  },
+  {
+    // THE COMPANY'S BRAND: its logos, colours, type and voice, which every
+    // doc, deck and page its agents make follows. Every reader reads it (the
+    // brand is the company's public face); an administrator adopts it. A
+    // sibling of the charter rather than a part of it: the charter is what
+    // every agent reads word for word each turn, and the brand is applied
+    // to what they make.
+    key: "brand",
+    label: "Brand",
+    icon: "swatch-book",
+    path: ["company", "brand"],
+    hint: "The company's logos, colours, type and voice, which everything its agents make follows",
+    keywords: [
+      "brand",
+      "logo",
+      "colours",
+      "colors",
+      "palette",
+      "fonts",
+      "typography",
+      "voice",
+      "tone",
+      "style guide",
+      "design system",
+    ],
+    // `g e`: `b` is Budgets' and `r` watches the running turn.
+    chord: "e",
     place: "company",
     renderer: "none",
     sections: [],
@@ -1074,6 +1106,7 @@ export function framelessOf(path: readonly string[]): FramelessRoute | null {
 export const RESERVED_SEGMENTS: string[] = [
   "company",
   "policies",
+  "brand",
   "org",
   "tasks",
   "views",

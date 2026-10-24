@@ -17,6 +17,9 @@
  *   sliver of its foot rather than leaving an empty strip down each side, and
  *   a phone's board, which filling would cut to its top, is shown whole.
  * - html: its page, framed at a desktop width.
+ * - brand: a sample doc drawn in the kit's colours (the version's outline
+ *   holds its `brand.json`), as the kit's own page and Company › Brand
+ *   preview it, with no logo or face read, as a doc's cover reads no image.
  *
  * # What it costs
  *
@@ -88,6 +91,8 @@ import { useDensity, usePalette, useTheme } from "~/lib/prefs.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { renderSlide } from "~/lib/slides.tsx";
 import { mintFrame, readBoard, readDataset, readOutline } from "~/lib/artifacts/api.ts";
+import { NO_BRAND_ASSETS } from "~/lib/brand/useBrand.ts";
+import { BrandSampleOf } from "~/routes/brand/BrandPreview.tsx";
 import { boardSpan, datasetStatus } from "~/lib/artifacts/dashboard.ts";
 import { sheetColumns, sheetRows } from "~/lib/artifacts/sheet.ts";
 import type { ArtifactPeople } from "~/lib/artifacts/people.ts";
@@ -128,6 +133,7 @@ const LAYOUT_WIDTH: Readonly<Record<ArtifactKind, number | undefined>> = {
   dashboard: BOARD_WIDTH,
   design: undefined,
   html: 880,
+  brand: 600,
 };
 
 /** The kinds whose preview runs the artifact's page in a frame. */
@@ -195,6 +201,8 @@ function KindPreview({ item, people }: { item: ArtifactListItem; people: Artifac
       return <DesignPreview item={item} />;
     case "html":
       return <PagePreview item={item} />;
+    case "brand":
+      return <BrandKitPreview item={item} />;
   }
 }
 
@@ -271,6 +279,19 @@ function SlidesPreview({ item }: { item: ArtifactListItem }) {
       <SlideStage label={`${item.title}, cover`} fit="contain">
         {renderSlide(slides.cover_slide, { prefix, image: noImages, links: "text" })}
       </SlideStage>
+    </div>
+  );
+}
+
+/** A brand kit's cover: the sample doc its own page previews, in light, in the kit's colours. */
+function BrandKitPreview({ item }: { item: ArtifactListItem }) {
+  const outline = useOutline(item);
+  const doc = outline.data?.brand?.document;
+  useSettled(outline.error ? false : outline.data ? doc !== undefined : undefined);
+  if (!doc) return null;
+  return (
+    <div className="artifacts-preview-brand">
+      <BrandSampleOf document={doc} assets={NO_BRAND_ASSETS} kind="doc" mode="light" />
     </div>
   );
 }

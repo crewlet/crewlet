@@ -42,6 +42,9 @@ vi.mock("./WhoBuildsIt.tsx", () => ({
   }),
   WhoBuildsIt: () => <p>Agent: Analyst</p>,
 }));
+// THE BRAND NOTE under Ask an agent reads the company's brand over the
+// socket, which these tests, mounted with no client, do not serve.
+vi.mock("~/components/brand.tsx", () => ({ BrandAgentNote: () => null }));
 vi.mock("~/lib/artifacts/access.ts", async () => {
   const actual = await vi.importActual<typeof import("~/lib/artifacts/access.ts")>(
     "~/lib/artifacts/access.ts",

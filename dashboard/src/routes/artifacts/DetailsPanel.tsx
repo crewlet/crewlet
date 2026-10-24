@@ -2,7 +2,8 @@
  * An artifact's details, in its side panel: what it says about itself, then
  * the facts its page header used to stack over it (who owns it, when it last
  * changed and by whom, the version, the reader's role) and the few a reader
- * asks after once (when it was made, how many it is shared with, its id).
+ * asks after once (when it was made, how many it is shared with, its id),
+ * and whether it follows the company's brand.
  *
  * ONE READING OF THE HEAD, so nothing here can disagree with the bar: the
  * version is the one the bar's chip names, the title the bar's heading. A
@@ -18,6 +19,7 @@ import { fmtDate, relTime } from "~/lib/format.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
 import { KIND_WORDS, ROLE_WORDS } from "~/lib/artifacts/words.ts";
 import type { ArtifactDetail } from "~/protocol/index.ts";
+import { BrandFact } from "~/components/brand.tsx";
 import { copyAddress } from "./parts.tsx";
 
 export function DetailsPanel({
@@ -72,6 +74,7 @@ export function DetailsPanel({
             </dd>
           </>
         )}
+        <BrandFact id={detail.id} kind={detail.kind} version={showing} />
         <dt>Your role</dt>
         <dd>{detail.elevated ? "Administrator" : ROLE_WORDS[detail.role]}</dd>
         <dt>Shares</dt>

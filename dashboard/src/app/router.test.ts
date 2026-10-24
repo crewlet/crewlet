@@ -162,6 +162,7 @@ describe("navigation identity", () => {
       me: "m",
       company: "c",
       policies: "o",
+      brand: "e",
       org: "a",
       schedules: "d",
       integrations: "n",
@@ -214,18 +215,19 @@ describe("am I already here", () => {
 });
 
 describe("the navigation grammar", () => {
-  // FOURTEEN WORKSPACES ARE SIDEBAR ROWS, in four runs, and the sidebar draws
+  // FIFTEEN WORKSPACES ARE SIDEBAR ROWS, in four runs, and the sidebar draws
   // them and nothing else from the table: a section that became a sidebar row
-  // is a second column of navigation arriving one row at a time. The FIFTEENTH
+  // is a second column of navigation arriving one row at a time. The SIXTEENTH
   // is the reader's own Account, which has no row (the user block at the
   // sidebar's foot is the reader, and its menu links it) and is a workspace
   // all the same, so the palette and its chord reach it.
-  test("the sidebar's rows are fourteen workspaces, in the story's order, and the menu holds the fifteenth", () => {
+  test("the sidebar's rows are fifteen workspaces, in the story's order, and the menu holds the sixteenth", () => {
     const run = (place: string) => WORKSPACES.filter((w) => w.place === place).map((w) => w.key);
     expect(run("you")).toEqual(["home", "inbox", "me"]);
     expect(run("company")).toEqual([
       "company",
       "policies",
+      "brand",
       "org",
       "schedules",
       "integrations",

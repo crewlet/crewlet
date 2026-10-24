@@ -27,8 +27,11 @@ import { modules } from "../test/source.ts";
  * the site should be re-justified. Two-sided, so an entry that stopped firing
  * fails as loudly as a site that is not excused.
  *
- * SCOPE, stated rather than assumed: this reads the literal `"brand"` only,
- * and the two places the kit still spends it are the ones excused here — a
+ * SCOPE, stated rather than assumed: this reads the literal `"brand"` where a
+ * TONE is named (a `variant`, `ring`, `tone` or `hue` prop or key, and the
+ * translation's `accent` key), since `"brand"` is also an artifact kind, the
+ * Company row of the company's brand and its named read, none of which is a
+ * tone. The two places the kit still spends it are the ones excused here: a
  * `Tag` of `variant="brand"`, and `Avatar`'s `ring="brand"`, the accent drawn
  * round a badge to say "this one is you". `StatusDot`'s `tone` would be
  * caught by the same literal. Out of scope on
@@ -94,9 +97,17 @@ function lines(): { file: string; at: number; line: string }[] {
   );
 }
 
+/**
+ * A tone named `"brand"`: a prop (`variant="brand"`, `ring={you ? "brand" :
+ * undefined}`) or a key (`variant: "brand"`, the translation's `accent:
+ * "brand"`).
+ */
+const ACCENT_TONE =
+  /\b(?:variant|ring|tone|hue)=\{?(?:[^{}"]*\?\s*)?"brand"|\b(?:variant|ring|tone|hue|accent):\s*"brand"/;
+
 /** Every line spending the accent, wherever it is. */
 export function accentSites(source: { file: string; at: number; line: string }[]) {
-  return source.filter(({ line }) => /"brand"/.test(line));
+  return source.filter(({ line }) => ACCENT_TONE.test(line));
 }
 
 describe("where the accent is spent", () => {
@@ -129,5 +140,22 @@ describe("where the accent is spent", () => {
     expect(
       accentSites([{ file: "/x.tsx", at: 1, line: `<Tag variant="brand">whatever</Tag>` }]),
     ).toHaveLength(1);
+    // EVERY SPELLING OF A TONE IS CAUGHT, and the kind, the Company row and
+    // the named read that share the word are not.
+    const spelled = [
+      `<Avatar ring={you ? "brand" : undefined} />`,
+      `toast.show({ variant: "brand", title })`,
+      `<StatusDot tone="brand" />`,
+      `accent: "brand",`,
+    ];
+    const named = [
+      `brand: { render: "native", store: "none" },`,
+      `case "brand":`,
+      `useQuery("brand", {})`,
+      `kind: "brand",`,
+    ];
+    const at = (line: string) => ({ file: "/x.tsx", at: 1, line });
+    expect(accentSites(spelled.map(at))).toHaveLength(spelled.length);
+    expect(accentSites(named.map(at))).toEqual([]);
   });
 });
