@@ -5278,7 +5278,7 @@ export interface ArtifactFolderCreated {
   position: LogPosition;
 }
 
-/** `PATCH /artifact-folders/{id}`: a rename, a move, or both. */
+/** `PATCH /artifact-folders/{id}`: a rename or a move, one a request (a body naming both is refused). */
 export interface ArtifactFolderPatchRequest {
   name?: string;
   /** The new parent's id; an empty string moves it to the top level. */

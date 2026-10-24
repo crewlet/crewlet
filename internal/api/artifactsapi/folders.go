@@ -419,10 +419,16 @@ type folderPatchBody struct {
 }
 
 // patchFolder renames or moves a folder (`PATCH /artifact-folders/{id}`):
-// `artifacts.folder.rename` and `artifacts.folder.move` on it, and
+// `artifacts.folder.rename` or `artifacts.folder.move` on it, and
 // `artifacts.folder.file` on the new parent. A move into a tree whose audience
 // reaches somebody the folder's present one does not is `409 folder_widens`
 // until it is confirmed.
+//
+// ONE GESTURE A REQUEST. A rename and a move are two records, and a body
+// naming both could leave the rename applied under a move the domain then
+// refused (a name taken at the destination, the depth, the limit, a cycle),
+// which no decision taken here beforehand can rule out. So a body names one
+// or the other, and every decision is taken before its one write.
 func (s *Service) patchFolder(w http.ResponseWriter, r *http.Request) {
 	p, ok := caller(w, r, authz.ActionArtifactFolderRename)
 	if !ok {
@@ -432,8 +438,12 @@ func (s *Service) patchFolder(w http.ResponseWriter, r *http.Request) {
 	if !decodeWithin(w, r, &body, false, maxFolderBodyBytes) {
 		return
 	}
-	if body.Name == nil && body.Parent == nil {
-		invalid(w, "name the folder's new name, its new parent, or both")
+	switch {
+	case body.Name == nil && body.Parent == nil:
+		invalid(w, "name the folder's new name or its new parent")
+		return
+	case body.Name != nil && body.Parent != nil:
+		invalid(w, "a rename and a move are two requests: rename the folder, then move it")
 		return
 	}
 	key, ok := opkey.Require(w, r)
@@ -441,9 +451,6 @@ func (s *Service) patchFolder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx, id := r.Context(), pathFolder(r)
-	// EVERY DECISION BEFORE ANY WRITE, so a rename and a move sent together
-	// land together or not at all: a move refused (unconfirmed, or into a
-	// folder the caller may not file into) never leaves the rename behind.
 	var rename, move FolderAdmission
 	if body.Name != nil {
 		a, err := s.gate.AdmitFolder(ctx, s.reads, p, authz.ActionArtifactFolderRename, id)
