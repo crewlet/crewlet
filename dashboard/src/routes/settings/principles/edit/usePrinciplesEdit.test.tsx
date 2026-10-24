@@ -419,3 +419,18 @@ test("the mission edits on one line that wraps", async () => {
   fireEvent.change(box, { target: { value: "Ship it\nnow" } });
   expect((box as HTMLTextAreaElement).value).not.toMatch(/\n/);
 });
+
+// THE CARD'S TITLE IS THE VISIBLE NAME: the field keeps its own, for a reader
+// listing fields, in a label that is hidden and takes no room under the title.
+test("each statement field is named by a hidden label that takes no room", async () => {
+  mount();
+  for (const [part, name] of [
+    ["mission", "Mission"],
+    ["vision", "Vision"],
+  ] as const) {
+    fireEvent.click(await editOf(part));
+    const box = within(card(part)).getByRole("textbox", { name });
+    const label = document.querySelector(`label[for="${box.id}"]`);
+    expect(label?.classList.contains("crewlet-visually-hidden"), part).toBe(true);
+  }
+});

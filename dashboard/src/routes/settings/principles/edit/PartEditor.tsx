@@ -29,7 +29,7 @@
  * warning above the bar instead.
  */
 
-import { Callout, FormField, InlineEditor, Textarea, VisuallyHidden } from "@crewlethq/ui";
+import { Callout, FormField, InlineEditor, Textarea } from "@crewlethq/ui";
 import {
   PART_HELP,
   PART_TITLES,
@@ -133,8 +133,10 @@ function StatementField({
   return (
     <FormField
       // THE CARD'S TITLE IS THE VISIBLE LABEL, right above the field; the
-      // field still carries its own name for a reader that lists fields.
-      label={<VisuallyHidden>{PART_TITLES[part]}</VisuallyHidden>}
+      // field still carries its own name for a reader that lists fields, in
+      // a label the kit hides without leaving its line standing empty.
+      label={PART_TITLES[part]}
+      hideLabel
       helper={PART_HELP[part]}
       error={error}
       limit={{ length: lengthOf(value), max: limitOf(part) }}
