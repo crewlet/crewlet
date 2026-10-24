@@ -224,6 +224,11 @@ var skillVariableKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // It validates the ORG as well: building the hierarchy is where duplicate
 // handles, unrunnable schedules and human-seat rule violations surface, and
 // a config that parses into a company nobody can run has not been validated.
+//
+// The CHARTER's rules are not among them: they judge what a write changes
+// against the revision it replaces rather than the document it leaves, so an
+// old fault never refuses an unrelated write. Every writer asks
+// [Company.ValidateCharterChange] beside this.
 func (c *Company) Validate() error {
 	o, index := c.organization()
 	return index.locate(errors.Join(c.validateRunnable(o), c.validateAdmission(o)))

@@ -14,9 +14,9 @@
  *
  * AND A LINK INTO IT IS A REQUEST. Every way into Edit org from another screen
  * asks to change one thing — a seat's "Edit", the chart's "Add seat" — so
- * `seat=` and `unit=` open that node's editor, `add=` opens the Add and
- * `edit=` the company's charter, ONCE, on arrival (see `Builder.tsx`'s
- * `Arrival`). "Add seat" used to land on a
+ * `seat=` and `unit=` open that node's editor and `add=` opens the Add,
+ * ONCE, on arrival (see `Builder.tsx`'s `Arrival`). The company's principles
+ * are not among them: the company's Edit leaves for Company › Principles. "Add seat" used to land on a
  * chart with nothing to add, because nothing read `add=` at all.
  *
  * It is also where the read screens' revision note belongs: the builder draws
@@ -198,36 +198,38 @@ test("a link that asks for an add opens it once, on that kind, and leaves the ad
 });
 
 /*
- * "EDIT POLICIES" IS THE CHARTER, AT ITS POLICIES. Company › Policies links to
- * `edit=policies`: the builder opens the company's editor with the focus in
- * the Policies list's new-item box, and takes the request out of the address
- * as it takes `add=`. `edit=charter` opens the same editor at its top, and a
- * value naming neither opens nothing.
+ * THE COMPANY'S PRINCIPLES ARE THE TOOLBAR'S. Its mission, vision and standing
+ * policies are written on Company › Principles and nowhere else, so its row
+ * carries no Edit and Enter on it opens nothing, while the toolbar, with the
+ * company selected, offers Edit principles, which leaves the builder for that
+ * page in edit for a reader who may write them.
  */
-test("a link that asks for the policies opens the charter there, once, and leaves the address", async () => {
-  mount("#/company/org/edit?view=table&edit=policies");
-  const dialog = await screen.findByRole("dialog", { name: /Acme/ });
-  expect(within(dialog).getByText("Company charter")).toBeTruthy();
-  await waitFor(() =>
-    expect(document.activeElement).toBe(within(dialog).getByLabelText("New policy")),
-  );
-  expect(new URLSearchParams(location.hash.split("?")[1]).has("edit")).toBe(false);
-});
-
-test("a link that asks for the charter opens it at its top, and one naming neither opens nothing", async () => {
-  mount("#/company/org/edit?view=table&edit=charter");
-  const dialog = await screen.findByRole("dialog", { name: /Acme/ });
-  expect(document.activeElement).not.toBe(within(dialog).getByLabelText("New policy"));
-  cleanup();
-  mount("#/company/org/edit?view=table&edit=mission");
-  // The draft is loaded (its rows are drawn) and the request was read.
-  await screen.findAllByRole("row");
-  await waitFor(() =>
-    expect(new URLSearchParams(location.hash.split("?")[1]).has("edit")).toBe(false),
-  );
+test("the company's row has no Edit, and the toolbar opens Company › Principles in edit", async () => {
+  mount("#/company/org/edit?view=table");
+  const acme = (await screen.findAllByRole("row")).find((r) => r.textContent?.includes("Acme"))!;
+  expect(within(acme).queryByRole("button", { name: /^Edit|principles/ })).toBeNull();
+  fireEvent.click(acme);
+  fireEvent.keyDown(acme, { key: "Enter" });
   await new Promise((r) => setTimeout(r, 20));
   expect(screen.queryByRole("dialog")).toBeNull();
-  expect(new URLSearchParams(location.hash.split("?")[1]).has("edit")).toBe(false);
+  expect(location.hash.startsWith("#/company/org/edit")).toBe(true);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Actions for Acme, selected" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: /Edit principles/ }));
+  await waitFor(() => expect(location.hash).toBe("#/company/principles?edit=mission"));
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+/*
+ * AND THE BUILDER NO LONGER OPENS THE PRINCIPLES ITSELF. An `edit=` from
+ * before they moved (`edit=charter`, `edit=policies`) is a request nothing
+ * here answers: the chart opens as it would with none.
+ */
+test("an old link asking the builder for the principles opens nothing", async () => {
+  mount("#/company/org/edit?view=table&edit=policies");
+  await screen.findAllByRole("row");
+  await new Promise((r) => setTimeout(r, 20));
+  expect(screen.queryByRole("dialog")).toBeNull();
 });
 
 /* And with `unit=`, under that unit — the unit's own editor is not what was asked. */

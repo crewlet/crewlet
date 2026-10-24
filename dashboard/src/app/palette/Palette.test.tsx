@@ -1340,6 +1340,20 @@ describe("a screen found by what it holds", () => {
     expect(location.hash).toBe("#/account");
   });
 
+  // THE CHARTER IS FOUND BY WHAT IT HOLDS, and opens where it is READ: the
+  // palette is a way to get somewhere, so it lands on the page rather than
+  // in an editor, and never in the org builder that used to write it.
+  test.each(["mission", "vision", "policies", "charter"])(
+    "%s finds Principles, and Enter on it opens the page as it reads",
+    async (q) => {
+      const p = mount();
+      await p.type(q);
+      const go = screen.getByRole("group", { name: "Go to" });
+      fireEvent.click(within(go).getByRole("option", { name: /^Principles/ }));
+      expect(location.hash).toBe("#/company/principles");
+    },
+  );
+
   // THE EMPTY PALETTE DRAWS THE SIDEBAR'S TREE: one flat "Go to" of every
   // place hid it, and set look-alikes side by side. Mutation: push every
   // destination as one group and the headings are gone.

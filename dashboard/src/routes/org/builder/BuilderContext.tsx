@@ -98,15 +98,24 @@ export interface BuilderDerived {
 
 /**
  * A part of the node editor it can be opened at: a seat's Reports (whom it
- * manages), a unit's Leadership (its lead), either's Project (the tracker
- * project it owns, where Work's New project arrives), or the company's
- * Policies (where Company › Policies' Edit policies arrives). The editor then
- * starts on that part's first field rather than on the name at the top of a
- * long form, so an action about one field ("Edit reports", a lead chosen
- * outside the unit) lands on it. A part the node does not have opens the
- * editor as usual.
+ * manages), a unit's Leadership (its lead), or either's Project (the tracker
+ * project it owns, where Work's New project arrives). The editor then starts
+ * on that part's first field rather than on the name at the top of a long
+ * form, so an action about one field ("Edit reports", a lead chosen outside
+ * the unit) lands on it. A part the node does not have opens the editor as
+ * usual.
  */
-export type EditorSectionName = "reports" | "leadership" | "project" | "policies";
+export type EditorSectionName = "reports" | "leadership" | "project";
+
+/**
+ * How the toolbar offers the company's principles. Its mission, vision and
+ * standing policies are written on Company › Principles alone, so once the
+ * company exists the toolbar's entry goes there: in edit for a reader who may
+ * write them (`write`), plainly for one who may not (`read`). A company this
+ * draft is still creating has no such page yet, and no entry (`null`). The
+ * company's node carries no edit of its own (`nodeActions.editsInPlace`).
+ */
+export type CompanyEdit = "write" | "read" | null;
 
 /**
  * What an address asks an opening editor to hold on top of the node's own
@@ -140,8 +149,20 @@ export interface BuilderApi {
   documentProblems: ConfigProblem[];
   /** The selected node, mirrored in the URL's `unit=` and `seat=` filters. */
   selection: { key: NodeKey | null; select(key: NodeKey | null): void };
-  /** Opens the node's editor, at `section` when one is named. */
+  /** Opens a unit's or a seat's editor, at `section` when one is named. */
   openEditor(key: NodeKey, section?: EditorSectionName): void;
+  /** Opens the form that renames the company, the one company field the builder writes. */
+  openCompanyRename(): void;
+  /**
+   * Leaves the builder for Company › Principles, in edit for a reader who may
+   * write them ([BuilderApi.principles]). The draft is kept for the return.
+   */
+  openPrinciples(): void;
+  /**
+   * How the toolbar offers the company's principles: Company › Principles in
+   * edit (`write`), the same page to read (`read`), or nothing (`null`).
+   */
+  principles: CompanyEdit;
   /** `parent` is a unit's key, or `null` for the company root. */
   openAdd(parent: NodeKey | null, kind?: AddKind): void;
   openMove(key: NodeKey): void;

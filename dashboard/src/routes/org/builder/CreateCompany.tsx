@@ -1,9 +1,8 @@
 /**
  * Creating the company on an engine that has none.
  *
- * WHAT IT ASKS FOR is what only a person can answer: the company's name and
- * mission, the shape to start from, and whether the operator wants a seat of
- * their own. Everything else a template writes (units, neutral role titles,
+ * WHAT IT ASKS FOR is what only a person can answer: the company's name, the
+ * shape to start from, and whether the operator wants a seat of their own. Everything else a template writes (units, neutral role titles,
  * who manages whom) is in `model/templates.ts`, and what it produces is one
  * `applyTemplate` operation, so the whole start is a single undo and is
  * checked by the engine exactly like any other draft.
@@ -21,13 +20,18 @@
  * "Leads are people" option therefore creates human leads without identities,
  * which the engine admits, and the review lists each one.
  *
+ * NOT ITS PRINCIPLES. The mission, the vision and the standing policies are
+ * written on Company › Principles and nowhere else, which needs the company
+ * to exist first, so the next steps after a successful create open that page
+ * in edit rather than this form asking for one of the three in passing.
+ *
  * WHAT A CREATE CANNOT DO. The dashboard writes no model provider (that is
- * `providers.llm`, which no screen edits), so the next steps after a
- * successful create name the two things left to do and give the command for
- * the one that has no screen at all.
+ * `providers.llm`, which no screen edits), so the next steps name it too and
+ * give the command for the one step that has no screen at all.
  */
 
 import { useState } from "react";
+import { principlesEditHref } from "~/routes/settings/principles/edit/address.ts";
 import { href } from "~/app/router.tsx";
 import { ConfigField } from "~/components/ConfigField.tsx";
 import type { HumanContactKey } from "~/protocol/index.ts";
@@ -62,7 +66,7 @@ const TEMPLATES: readonly { id: TemplateId; label: string; hint: string }[] = [
   {
     id: "empty",
     label: "Start empty",
-    hint: "The charter alone. Add every unit and seat yourself.",
+    hint: "The company alone. Add every unit and seat yourself.",
   },
 ];
 
@@ -77,7 +81,6 @@ export function CreateCompany({
   disabled: boolean;
 }) {
   const [name, setName] = useState("");
-  const [mission, setMission] = useState("");
   const [template, setTemplate] = useState<TemplateId>("new_company");
   const [leads, setLeads] = useState<LeadsAre>("agents");
   // ON, AND NAMED: see the file's doc. A name left empty is refused by the
@@ -93,7 +96,7 @@ export function CreateCompany({
     const built = templateIntent(
       {
         template,
-        charter: { name, ...(mission.trim() ? { mission } : {}) },
+        name,
         ...(ownSeat ? { founder: { name: seatName, identity, value } } : {}),
         ...(template === "established_company" ? { leads } : {}),
       },
@@ -119,15 +122,6 @@ export function CreateCompany({
           onChange={setName}
           autoFocus
           disabled={disabled}
-        />
-        <ConfigField
-          label="Mission"
-          kind="multiline"
-          rows={2}
-          value={mission}
-          onChange={setMission}
-          disabled={disabled}
-          help="Every agent reads it."
         />
 
         <div className="col gap-1">
@@ -218,15 +212,16 @@ export function CreateCompany({
 }
 
 /**
- * What is left to do once the company exists: connect the tools it works in,
- * and give it a model provider, which no dashboard screen writes.
+ * What is left to do once the company exists: write the principles every
+ * agent reads, connect the tools it works in, and give it a model provider,
+ * which no dashboard screen writes.
  */
 export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
   return (
     <Card as="section">
       <Card.Header
         icon={<CheckGlyph size="sm" />}
-        subtitle="two steps left"
+        subtitle="three steps left"
         actions={
           <Button size="small" variant="ghost" onClick={onDismiss}>
             Dismiss
@@ -236,6 +231,17 @@ export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
         <Card.Title>The company is created</Card.Title>
       </Card.Header>
       <div className="col gap-3">
+        <div className="col gap-1">
+          <strong>Write its principles</strong>
+          <span className="t-caption">
+            The mission, the vision and the standing policies every agent reads on every turn.
+          </span>
+          <div className="row">
+            <ButtonLink variant="secondary" size="small" href={principlesEditHref()}>
+              Open Principles
+            </ButtonLink>
+          </div>
+        </div>
         <div className="col gap-1">
           <strong>Connect chat and trackers</strong>
           <div className="row">

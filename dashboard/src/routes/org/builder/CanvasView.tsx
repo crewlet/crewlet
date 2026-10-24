@@ -122,6 +122,8 @@ import {
   leadMenu,
   refusedEntry,
   leadSentence,
+  editLabel,
+  editsInPlace,
   moveKey,
   reportingMenu,
   type OpenScreen,
@@ -132,10 +134,10 @@ import { useReorder, type Reorder } from "./reorder.ts";
 import { useOpenScreen, useReporting, useStructure } from "./useCharts.ts";
 import {
   NetworkGlyph,
+  PencilGlyph,
   XGlyph,
   Repeat2Glyph,
   TrashGlyph,
-  PencilGlyph,
 } from "@crewlethq/icons/glyphs";
 import {
   AddPill,
@@ -321,8 +323,12 @@ function StructureChart({
     (id: string, action: Exclude<TreeItemAction, "menu">): boolean => {
       const view = structure.nodes.get(id);
       if (!view) return false;
-      if (action === "activate") api.openEditor(id);
-      else {
+      if (action === "activate") {
+        // THE COMPANY HAS NO EDIT ([editsInPlace]): Enter and a double-click
+        // on it do nothing, as a pencil is drawn on it nowhere.
+        if (!editsInPlace(view)) return false;
+        api.openEditor(id);
+      } else {
         if (!isDeletable(view) || api.readOnly) return false;
         api.openDelete(id);
       }
@@ -863,17 +869,19 @@ function NodeActions({
   const deletable = isDeletable(view) && !api.readOnly;
   return (
     <div {...card.actions(id)}>
-      <IconButton
-        label={`Edit ${label}`}
-        icon={<PencilGlyph />}
-        size="sm"
-        variant="ghost"
-        tabIndex={-1}
-        onClick={(event) => {
-          event.stopPropagation();
-          api.openEditor(id);
-        }}
-      />
+      {editsInPlace(view) && (
+        <IconButton
+          label={editLabel(label)}
+          icon={<PencilGlyph />}
+          size="sm"
+          variant="ghost"
+          tabIndex={-1}
+          onClick={(event) => {
+            event.stopPropagation();
+            api.openEditor(id);
+          }}
+        />
+      )}
       {deletable && (
         <IconButton
           label={`Delete ${label}`}

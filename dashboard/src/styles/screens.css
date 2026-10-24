@@ -2742,13 +2742,17 @@ a.prof-row:hover {
   }
 }
 
-/* A screen's column: the landing, a space, the results. */
+/* A screen's column: the landing, a space, the results. AT THE SHEET'S FULL
+   WIDTH, as every screen's column is (`frame.css`, "NO MAX WIDTH"): it was
+   capped at `--size-content-max`, which put the landing's tiles and a space's
+   outline in a 1600px column against the left edge of a 2560px sheet with a
+   third of it empty beside them. The tiles' grid divides whatever width it is
+   given, and prose inside a tile takes its own measure. */
 .knowledge-home {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-6);
   width: 100%;
-  max-width: var(--size-content-max);
   min-width: 0;
 }
 
@@ -3505,13 +3509,17 @@ a.knowledge-reader-how:hover {
 
 /* ---- The composer ------------------------------------------------------- */
 
+/* THE PAGE IS WRITTEN AT THE MEASURE IT IS READ AT (`.knowledge-read-page`),
+   with what helps file it beside. The writing column was the rest of a
+   1600px cap instead, so on a wide screen a page was drafted on lines twice
+   as long as the ones it is then read on, and the cap left the sheet's other
+   side empty. */
 .knowledge-composer {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 16rem;
+  grid-template-columns: minmax(0, var(--size-measure)) 16rem;
   gap: var(--spacing-6);
   align-items: start;
   width: 100%;
-  max-width: var(--size-content-max);
 }
 @container page (width < 760px) {
   .knowledge-composer {
@@ -4048,6 +4056,15 @@ a.knowledge-reader-how:hover {
   padding: var(--spacing-2) 0;
   font-size: var(--font-size-sm);
 }
+/* A line that leads with its app's mark: the mark, the line, its time. */
+.int-feed-row--marked {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--spacing-3);
+}
+.int-feed-mark {
+  display: inline-flex;
+  align-self: center;
+}
 .int-feed-what {
   min-width: 0;
   overflow-wrap: anywhere;
@@ -4094,6 +4111,29 @@ a.int-feed-what:hover {
 
 /* THE ADDRESS APPS DELIVER TO, at the foot of the directory: a small label
    over the address, cut to fit, with the whole of it in its title. */
+/* THE HOME, with nothing chosen: what is in use, in one close column. One
+   small step between its parts, so a section heading reads as the head of what
+   it names rather than a band between two runs of cards. */
+.int-landing {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+.int-landing-foot {
+  padding-top: var(--spacing-3);
+  border-top: 1px solid var(--color-border-default);
+}
+/* AN ITEM'S NAME IS THE WAY TO ITS PAGE, drawn as the title it is: the
+   title's own ink, underlined only under the pointer. */
+.int-tile-link {
+  color: inherit;
+  text-decoration: none;
+}
+.int-tile-link:hover {
+  text-decoration: underline;
+}
+
 .int-engine-address {
   display: flex;
   flex-direction: column;
@@ -10509,14 +10549,6 @@ a.live-row:focus-visible {
   gap: var(--spacing-2);
 }
 
-/* COMPANY STORAGE, an administrator's line at the foot of All: three quotas
-   in a row, each a figure over a thin bar, under a hairline that says the
-   gallery has ended. */
-/* THE RELATED ROW at the foot of All: one step under the listing. */
-.artifacts-related {
-  margin-top: var(--spacing-5);
-}
-
 /* THE QUOTA'S KEY on Settings › File storage, quiet under its figure, as a
    settings table draws a key. */
 .storage-quota-key {
@@ -11707,13 +11739,54 @@ a.live-row:focus-visible {
   height: 100%;
 }
 
-/* ---- The company's own pages (Overview, Policies) --------------------------
-   ONE READABLE COLUMN. The company's own words are read rather than scanned,
-   and across the whole canvas a policy ran to a line no reader follows while
-   a lone card sat in an empty field. The column is the reading measure plus
-   the card's own inset and the policy numbers' gutter. */
-.charter-page {
-  max-width: calc(var(--size-measure) + var(--spacing-10));
+/* ---- Company › Principles ----------------------------------------------------
+   Two equal statement cards side by side, the standing policies one card
+   across the page under them, the engine's caps a related row under that.
+   The cards, the statements' passage text and the compact rows are the
+   kit's; what is here is how the two statement cards stand together. */
+
+.principles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+}
+
+/* NEITHER OUTRANKS THE OTHER: two equal columns sharing their rows on a
+   SUBGRID, so the two heads are one height whatever controls each carries (a
+   head with an Edit stood 3px taller than one without), the bodies one height
+   however long either statement runs, and an editor's Save and Cancel on one
+   line across the pair. */
+.principles-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: auto 1fr auto;
+  column-gap: var(--spacing-4);
+}
+
+.principles-card {
+  min-width: 0;
+}
+
+.principles-pair > .principles-card {
+  display: grid;
+  grid-row: span 3;
+  grid-template-rows: subgrid;
+  row-gap: 0;
+}
+
+/* 720px OF THE PAGE'S OWN WIDTH is where two statements of a few lines each
+   stop fitting side by side at a readable measure: one column below it. */
+@container page (width < 720px) {
+  .principles-pair {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-4);
+  }
+
+  .principles-pair > .principles-card {
+    display: flex;
+    flex-direction: column;
+  }
 }
 
 /* ---- Company › Brand, and a brand kit's own page ---------------------------

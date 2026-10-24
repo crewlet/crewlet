@@ -34,7 +34,7 @@
 import { avatarOf, type AgentAvatar } from "~/lib/avatar.ts";
 import type { GlyphName } from "@crewlethq/icons/glyphs";
 import { unitRoute } from "~/lib/seats.ts";
-import { SIDEBAR_GROUPS, workspaceRow, type Section, type WorkspaceRow } from "./nav.ts";
+import { SIDEBAR_GROUPS, ownedBy, workspaceRow, type Section, type WorkspaceRow } from "./nav.ts";
 import { ITEM_KEY_SHAPE, resolve, type SignInScreen } from "./routes.ts";
 import { ALL_PROJECTS, LENS_LABELS, type ScopeAt } from "./scope.ts";
 
@@ -216,14 +216,13 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
   };
 
   switch (where.screen) {
-    case "overview":
-      // THE GROUP, THEN THE PAGE: the row reads "Overview" under the Company
-      // heading, and the trail says both. The group is not a link: it would
-      // lead to the page it is on.
+    case "principles":
+      // THE GROUP, THEN THE PAGE: the row reads "Principles" under the
+      // Company heading, and the trail says both. The group is not a link: it
+      // would lead to the page it is on.
       return [{ label: rootLabel(row), icon: row.icon }, { label: row.label }];
     case "home":
     case "inbox":
-    case "policies":
     case "brand":
     case "org-chart":
     case "budgets":
@@ -469,11 +468,12 @@ function root(row: WorkspaceRow, link: boolean): Crumb {
 
 /**
  * What the trail calls a workspace: its own name, or, for the row that IS a
- * sidebar group's landing (its path the group's own segment, Company's
- * Overview at `#/company`), the group's, so a mistyped `#/company/…` reads
- * "Company › Not found" rather than "Overview › Not found".
+ * sidebar group's landing (it owns the group's own segment, as Principles owns
+ * `#/company`), the group's, so a mistyped `#/company/…` reads
+ * "Company › Not found" rather than "Principles › Not found".
  */
 function rootLabel(row: WorkspaceRow): string {
   const group = SIDEBAR_GROUPS.find((g) => g.place === row.place && g.label !== "");
-  return group && row.path.length === 1 && row.path[0] === row.place ? group.label : row.label;
+  const owns = ownedBy(row);
+  return group && owns.length === 1 && owns[0] === row.place ? group.label : row.label;
 }

@@ -83,14 +83,13 @@ two seats may share one:
 | `unit=<key>` | that unit's editor |
 | `add=agent`, `add=human` or `add=unit` | the Add on that kind at the company's top level (the org chart's **Add seat** is `add=agent`) |
 | `unit=<key>` and `add=…` | the Add under that unit |
-| `edit=charter` or `edit=policies` | the company's charter, at its top or with the focus in its **Policies** list ready for the next policy (Company › Overview's **Edit charter** and Company › Policies' **Edit policies**) |
 | `unit=<key>` or `seat=<handle>`, and `project=<KEY>` | that node's editor on its **Work** tab, its tracker project set to the key and not yet applied: Work's **New project** continues here, and saving it is what creates the project. Setting a project takes `admin`, so a reader without it finds the field held with that reason |
 
 It happens once, on arrival, and only when the builder can edit: once the
 draft is loaded, and not while a kept draft waits for **Keep** or
 **Discard**, a save's outcome is unknown or the company changed under the
 draft. The request waits through each of those
-and opens once they are settled. `add=`, `edit=` and `project=` are then taken out of
+and opens once they are settled. `add=` and `project=` are then taken out of
 the address, so a reload or a copied link does not ask a second time; `seat=` and `unit=`
 stay, because they are also the selection (see
 [Selecting a node](#selecting-a-node)). Selecting another node inside the
@@ -102,10 +101,14 @@ node's **Open seat**, say), opens that node's editor, since the builder cannot
 tell that address from a link somebody sent you. A link naming an address the
 draft does not hold selects nothing and opens nothing.
 
+The company's mission, vision and standing policies are not opened here: they
+are written on **Company › Principles**, and every way into them links there
+(see [The company](#the-company)).
+
 ## Creating the company
 
 On an engine with no active configuration the builder opens on a form: the
-company's name and mission, a shape to start from, and a seat for yourself —
+company's name, a shape to start from, and a seat for yourself:
 **Add a seat for yourself**, ticked from the start and named "Founder" (rename
 it for the role; the seat outlives whoever holds it), with an optional contact
 identity for it.
@@ -127,7 +130,7 @@ seat.
 |---|---|
 | New company | A chief executive and three units (Engineering, Product, Marketing), each with one agent seat reporting to the chief executive |
 | Established company | A chief executive, Engineering with a Reliability team, Product with a Design team, and Go to Market, with each unit's lead reporting up the chain |
-| Start empty | The charter alone |
+| Start empty | The company alone |
 
 The Established company template asks whether unit leads are **agents** (seats
 the engine runs) or **people** (human seats). A template never invents a
@@ -149,9 +152,11 @@ company is never applied to one that exists, and never replayed onto it.
 **Keep my draft** leaves it on screen to read, read-only, with the same offer
 beside it.
 
-After a successful create, two steps remain that the dashboard cannot take:
-connecting chat and trackers in Company › Integrations, and adding a model
-provider, which no dashboard screen writes. The engine applies the new company
+After a successful create, three steps remain. **Open Principles** opens
+Company › Principles in edit, to write the mission, the vision and the standing
+policies every agent reads. The builder cannot take the other two: connecting
+chat and trackers in Company › Integrations, and adding a model provider, which
+no dashboard screen writes. The engine applies the new company
 without one, but until the provider is added no agent seat takes a turn:
 whatever is sent to a seat waits on its inbox and runs once the provider
 exists. The panel gives the exact `crewlet config import` and `PATCH /config`
@@ -223,15 +228,16 @@ the unit's editor at its lead.
 
 A node's controls appear when it is reached, by the pointer, by focus or by
 being the selected node: the expander on its leading edge, **Edit** and
-**Delete** down its end, and, under a node that can take a child, the **Add**
+**Delete** down its end (the company has neither, see
+[The company](#the-company)), and, under a node that can take a child, the **Add**
 on the branch its children hang from, which splits into **Add unit**, **Add
 agent seat** and **Add human seat** where it stands.
 
 Every node is one stop in a tree. The arrow keys walk the visible order: Right
 opens a closed unit or steps into an open one, Left closes it or climbs to the
 unit above, Home and End jump, and typing a name moves to the next node it
-matches. On a node, Enter opens its editor, Delete or Backspace deletes it
-(never the company), Alt+Up and Alt+Down move it among its siblings, as they
+matches. On a unit or a seat, Enter or a double-click opens its editor (on the
+company they do nothing), Delete or Backspace deletes it (never the company), Alt+Up and Alt+Down move it among its siblings, as they
 move a row in [the table](#the-table), and the context menu key or
 Shift+F10 opens its menu, which holds everything the node's own controls do
 not. Each unit collapses and expands on its own, and **Expand all** and
@@ -285,9 +291,10 @@ widths the table scrolls sideways in its own box, never the page.
 
 Each row ends in its controls: on the company's row and a unit's, the **Add**
 that splits into **Add unit**, **Add agent seat** and **Add human seat**;
-**Edit** and **Delete** on every row but the company's, which cannot be
-deleted; and a menu of the rest (**Open seat**, **Edit reports**, **Move
-to** and the two moves among the siblings). Where the builder
+**Edit** and **Delete** on every row but the company's, which has no Edit and
+cannot be deleted; and a menu of the rest (**Open seat**, **Edit reports**,
+**Move to** and the two moves among the siblings, and **Rename company** on the
+company's row). Where the builder
 cannot write, the controls are disabled with the reason, never hidden.
 
 **Alt+Up** and **Alt+Down** move a row among its siblings of the same kind (a
@@ -309,8 +316,9 @@ seat added in the draft has no screen until it is saved. A new address
 rewrites the URL rather than leaving a link pointing at something that no
 longer answers to it. A link that arrives naming a node opens its editor as
 well (see [Arriving from a link](#arriving-from-a-link)); selecting a node
-inside the builder never does. Selecting the company itself carries the
-charter's **Edit** and the same **Add** menu; it names no filter, because the
+inside the builder never does. Selecting the company itself carries its
+**Edit principles**, **Rename company** and the same **Add** menu (see
+[The company](#the-company)); it names no filter, because the
 builder is already about that company. Where the builder cannot write (a
 guarded or read-only posture, or a draft waiting to be updated) the actions
 stay in the menu and are marked unavailable, so what the builder does is still
@@ -397,7 +405,7 @@ declares.
 
 ## Editing a node
 
-Choose **Edit** on the company, a unit or a seat to open its editor at the side
+Choose **Edit** on a unit or a seat to open its editor at the side
 of the chart. The editor's head shows the node's mark (an agent's profile
 icon, which opens its picker), its name as you type it, and under the name the
 seat's handle and kind (or the unit's type); where the node sits in the
@@ -413,7 +421,7 @@ parts:
 | Human seat | **Profile** (name, email, handle and kind; the **Person** who holds the seat; and the role: goal, backstory, responsibilities), **Contact** (contact identities and availability), **Work** (manages, and Delete) |
 | Unit | **Profile** (name, key, type, purpose, goals), **Leadership** (lead and channel), **Work** (owns, references, schedules), **Advanced** (tool credentials, and Delete) |
 
-The charter is short enough for one panel. A tab carries one marker, the most
+The company's name form is one field, with no tabs. A tab carries one marker, the most
 urgent: the number of problems in it, else a warning, else a dot for changes
 you have made there and not applied. A field that stops **Apply** marks its
 tab the same way, and pressing Enter in any field opens the tab that holds the
@@ -442,12 +450,37 @@ are listed at its top. A warning (a lead that names no seat, for example)
 does not stop a save, so it is listed at the top as a caution with the path
 it names, never shown as a field's error.
 
-### The charter
+### The company
+
+The company's **mission**, **vision** and **standing policies** are written on
+**Company › Principles**, in place, and nowhere else. So the company's node
+carries no **Edit**: no pencil on its card or its row, and Enter or a
+double-click on it does nothing. Select the company and the toolbar's menu
+offers **Edit principles**, which leaves the builder for that page, opened in
+edit for a reader who may write the principles. A reader who may not is offered
+**Open principles**, which opens the same page to read. Your draft is kept for when you come back (see
+[A draft survives a reload](#a-draft-survives-a-reload)); if the principles
+were saved meanwhile, your next save meets the newer revision and is
+[updated onto it](#when-somebody-else-saves-first) like any other.
+The builder never records or sends a change to the principles, so a save from
+here cannot put an older copy of them back.
+
+What the builder writes about the company itself is its name, through
+**Rename company** in the company's menu (on its card and its row, and in the
+toolbar's menu while it is selected):
 
 | You can change | Notes |
 |---|---|
 | Name | Renaming the company asks you to confirm what it does. An agent seat's id is derived from the company name and its handle, so every agent seat gets a new id: each seat's diary and onboarding progress stay under the old id and are no longer read, and every agent seat onboards again. Handles, mailboxes and episodes are unchanged. |
-| Mission, vision, policies | Policies are an ordered list. |
+
+While you are [creating the company](#creating-the-company) it has no
+Principles page yet, so its menu offers **Rename company** alone, which opens
+the name form in the builder; write the principles once it is created, from the
+next steps the builder shows.
+
+A problem the engine reports with the mission, the vision or a policy is listed
+with the problems about the whole configuration, with **Open Principles**
+beside it.
 
 Everything else in the company document (providers, integrations, workers,
 MCP servers, sandbox and scheduling settings) is edited in the configuration
@@ -693,7 +726,7 @@ kept. A human seat somebody holds is deleted only once nothing holds it
 would do before it does it:
 
 - **What changes:** the units and seats added, removed, renamed, moved and
-  edited, and the charter fields.
+  edited, and the company's new name when the save renames it.
 - **What follows:** the consequences the engine attaches to those changes,
   computed from the hierarchy it derives for the base and for the draft:
   a replaced seat (listed as the old seat removed and the new one added,
@@ -749,8 +782,8 @@ A save stores and activates a revision. It does not apply it: every node
 applies on its own reconcile tick (about every fifteen seconds, spread a
 little per node so a fleet does not apply at once), and a node can refuse a
 revision and go on serving the previous one. Until this node has
-applied it, the org chart, Teams and Company › Overview still draw the
-previous organization, and say so.
+applied it, the org chart and Teams still draw the previous organization,
+and say so.
 
 The strip under the toolbar follows the revision:
 
@@ -902,7 +935,7 @@ company. The engine judges every write
 part by part and refuses what reaches outside the units the caller leads,
 naming each part, and the builder marks each on the seat or unit it is about:
 
-- the company's charter, its settings and its top level, and the unit's own
+- the company's name, its settings and its top level, and the unit's own
   lead and place (a move or a deletion), which decide who leads it. The
   builder draws these controls disabled with the reason, and the Lead of a
   unit inside it stays the lead's to change;

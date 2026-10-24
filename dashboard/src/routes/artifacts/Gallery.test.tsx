@@ -33,7 +33,7 @@ vi.mock("~/lib/viewer.ts", async () => {
   return {
     ...actual,
     useViewer: () => ({ owner: "token:review", admin: viewerAdmin, handle: "" }),
-    // THE GRANTS THE RELATED ROW ASKS ITS GATE WITH, the same reader's.
+    // THE GRANTS A GATED LINK WOULD ASK WITH, the same reader's.
     useHeldReading: () => ({ login: "token:review", grants: viewerAdmin ? ["admin"] : [] }),
   };
 });
@@ -75,7 +75,7 @@ function row(over: Partial<ArtifactListItem>): ArtifactListItem {
 let items: ArtifactListItem[];
 /** Whether the reader may make an artifact (`useArtifactAccess`'s `can`). */
 let authoring = true;
-/** The reader is an administrator, for whom All ends on the storage row. */
+/** The reader is an administrator, the one a storage pointer would be for. */
 let viewerAdmin = false;
 
 beforeEach(() => {
@@ -450,17 +450,14 @@ test("a reader who cannot make an artifact is not told to start one above", () =
   expect(screen.queryByText(/Start one above/)).toBeNull();
 });
 
-// THE QUOTAS ARE SETTINGS' NOW: Settings › File storage holds what the
-// company keeps against them, and All ends on one quiet related row there for
-// the administrator that page is for, and on nothing for anybody else.
-test("All ends on a related row to the company's storage, for an administrator only", () => {
+// THE GALLERY ENDS ON ITS ARTIFACTS: the company's storage quotas are
+// Settings › File storage's, and All points nowhere at them, not even for the
+// administrator that page is for. Mutation: draw the related row back and an
+// administrator's All carries a link out of the gallery again.
+test("All ends on its artifacts, with no pointer to the company's storage", () => {
   viewerAdmin = true;
   mount("all");
-  const related = screen.getByRole("navigation", { name: "Related" });
-  expect(within(related).getByRole("link").getAttribute("href")).toBe("#/settings/storage");
-  expect(screen.queryByText("Company storage quotas")).toBeNull();
-  cleanup();
-  viewerAdmin = false;
-  mount("all");
   expect(screen.queryByRole("navigation", { name: "Related" })).toBeNull();
+  expect(screen.queryByText("Company storage")).toBeNull();
+  expect(document.querySelector('a[href="#/settings/storage"]')).toBeNull();
 });

@@ -121,8 +121,7 @@ const NEW_ARTIFACT: Readonly<Record<MakeKind, ComponentType>> = {
 const Spend = lazyScreen("spend", (m) => m.Spend);
 const Budgets = lazyScreen("spend", (m) => m.Budgets);
 const ExpensiveTasks = lazyScreen("spend", (m) => m.ExpensiveTasks);
-const Overview = lazyScreen("settings", (m) => m.Overview);
-const Policies = lazyScreen("settings", (m) => m.Policies);
+const Principles = lazyScreen("settings", (m) => m.Principles);
 const Brand = lazyScreen("brand", (m) => m.BrandPage);
 const Integrations = lazyScreen("settings", (m) => m.Integrations);
 const Models = lazyScreen("settings", (m) => m.Models);
@@ -230,10 +229,8 @@ export function screenFor(route: Resolved): ReactNode {
       const Create = NEW_ARTIFACT[route.kind];
       return <Create key={route.kind} />;
     }
-    case "overview":
-      return <Overview />;
-    case "policies":
-      return <Policies />;
+    case "principles":
+      return <Principles />;
     case "brand":
       return <Brand />;
     case "integrations":

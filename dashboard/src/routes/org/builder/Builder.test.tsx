@@ -590,8 +590,9 @@ describe("the selection in the URL", () => {
   // THE COMPANY IS A NODE TOO, and the only one the draft's tree cannot
   // locate: it is the root rather than an element of a list. Read as absent,
   // the card an operator selected was deselected again on the next answer,
-  // and the charter's Edit was unreachable from the toolbar.
-  test("the company stays selected, and the toolbar offers the charter's actions", async () => {
+  // and the company's actions were unreachable from the toolbar, the one place
+  // its principles are offered.
+  test("the company stays selected, and the toolbar offers the company's actions", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine });
     await screen.findByText("No problems");
@@ -600,7 +601,13 @@ describe("the selection in the URL", () => {
     fireEvent.click(actions);
     const menu = await screen.findByRole("menu", { name: "Actions for Acme, selected" });
     // Nothing moves or deletes the document the company IS.
-    expect(labels(menu)).toEqual(["Add unit", "Add agent seat", "Add human seat", "Edit"]);
+    expect(labels(menu)).toEqual([
+      "Add unit",
+      "Add agent seat",
+      "Add human seat",
+      "Edit principles",
+      "Rename company",
+    ]);
     fireEvent.keyDown(menu, { key: "Escape" });
 
     // And it survives the next answer about the draft, which is what a
@@ -609,6 +616,26 @@ describe("the selection in the URL", () => {
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
     await screen.findByText("No problems");
     expect(screen.getByRole("button", { name: "Actions for Acme, selected" })).toBeDefined();
+  });
+
+  // THE PRINCIPLES ARE COMPANY › PRINCIPLES, in edit for a reader who may
+  // write them and plainly for one who may not, and never a form of the
+  // builder's own, whose draft is kept for the return.
+  test("the principles open Company › Principles, in edit only for a reader who may write them", async () => {
+    mountBuilder({ engine: new Engine(company()) });
+    await screen.findByText("No problems");
+    fireEvent.click(screen.getByRole("button", { name: "Open the principles" }));
+    await waitFor(() => expect(location.hash).toBe("#/company/principles?edit=mission"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    cleanup();
+
+    mountBuilder({
+      engine: new Engine(company()),
+      viewer: () => ({ ...EDITOR, grants: ["tracker", "knowledge"], leads: [] }),
+    });
+    await screen.findByText("No problems");
+    fireEvent.click(screen.getByRole("button", { name: "Open the principles" }));
+    await waitFor(() => expect(location.hash).toBe("#/company/principles"));
   });
 
   test("a link naming a seat selects it and opens its editor, and the toolbar offers that seat's actions", async () => {

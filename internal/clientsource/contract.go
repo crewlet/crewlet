@@ -144,6 +144,12 @@ var contract = []Entry{
 	{"BUDGET_WINDOWS", ReadLiteral, "internal/config.TestTheBudgetEditorOffersExactlyTheEnginesWindows"},
 	{"SeatHeldHolder", ReadInterface,
 		"internal/api/configapi.TestTheDashboardReadsWhatASeatHeldRefusalSends"},
+	{"Charter", ReadInterface, "internal/api/configapi.TestTheDashboardReadsTheCharterTheEngineSends"},
+	{"CharterMoved", ReadInterface, "internal/api/configapi.TestTheDashboardReadsWhatACharterConflictSends"},
+	{"MISSION_MAX_CHARS", ReadScalar, "internal/api/configapi.TestTheDashboardBoundsTheCharterAtTheEnginesCaps"},
+	{"VISION_MAX_CHARS", ReadScalar, "internal/api/configapi.TestTheDashboardBoundsTheCharterAtTheEnginesCaps"},
+	{"POLICY_MAX_CHARS", ReadScalar, "internal/api/configapi.TestTheDashboardBoundsTheCharterAtTheEnginesCaps"},
+	{"POLICIES_MAX", ReadScalar, "internal/api/configapi.TestTheDashboardBoundsTheCharterAtTheEnginesCaps"},
 
 	// errors.ts
 	{"QueryErrorCode", ReadUnion,

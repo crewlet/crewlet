@@ -599,7 +599,7 @@ function FleetScreen() {
           the node list of a screen called Nodes. It is Settings › Backups &
           retention now, and the way there is said here, where the question
           starts. A related row rather than a footnote under the last card,
-          the shape Company › Policies points at Settings › Limits with. */}
+          the shape Company › Principles points at Settings › Limits with. */}
       <RelatedRow
         path={["settings", "backups"]}
         icon={<DatabaseGlyph size="sm" />}

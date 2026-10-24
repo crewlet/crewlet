@@ -155,6 +155,14 @@ export function artifactFolderPath(id: string): string[] {
 export const ORG_EDIT_PATH: readonly string[] = ["company", "org", "edit"];
 
 /**
+ * Company › Principles, where the mission, the vision and the standing
+ * policies are read and, by an administrator, written in place
+ * (`routes/settings/principles/edit/address.ts` builds its edit address). Here
+ * for the reason [artifactPath] is: the org builder links to it.
+ */
+export const PRINCIPLES_PATH: readonly string[] = ["company", "principles"];
+
+/**
  * Where a new artifact of a kind is made: each kind has its own page
  * (`routes/artifacts/new/`), because writing a doc, laying out a deck and
  * asking an agent for a dashboard are three different gestures. Here for the
@@ -189,8 +197,7 @@ export type FramedScreen =
   | { screen: "work-search" }
   | { screen: "project"; key: string }
   | { screen: "item"; id: string }
-  | { screen: "overview" }
-  | { screen: "policies" }
+  | { screen: "principles" }
   | { screen: "brand" }
   | { screen: "org-chart" }
   | { screen: "roster" }
@@ -388,16 +395,17 @@ function work(rest: string[], screen: Make, under: Under): Route {
 }
 
 /**
- * Company's rows, each under `#/company`: the Overview at the bare address,
- * then Policies, Brand, the Org chart, Schedules, Integrations and Budgets.
+ * Company's rows, each under `#/company`: Principles, at its own address and
+ * at the bare one, which is the Company landing, then Brand, the Org chart,
+ * Schedules, Integrations and Budgets.
  */
 function company(rest: string[], screen: Make, under: Under): Route {
   const [first, ...tail] = rest;
-  if (first === undefined) return screen({ screen: "overview" });
+  if (first === undefined) return screen({ screen: "principles" });
   const none = (row: Workspace, label: string) => missing(row, under(label));
   switch (first) {
-    case "policies":
-      return tail.length ? none("policies", "Policies") : screen({ screen: "policies" });
+    case "principles":
+      return tail.length ? none("company", "Principles") : screen({ screen: "principles" });
     case "brand":
       return tail.length ? none("brand", "Brand") : screen({ screen: "brand" });
     case "org":

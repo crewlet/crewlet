@@ -36,7 +36,6 @@ async function startCompany(options: { template?: string; seat?: boolean } = {})
   fireEvent.change(await screen.findByLabelText("Company name"), {
     target: { value: "Nimbus" },
   });
-  fireEvent.change(screen.getByLabelText("Mission"), { target: { value: "Ship weather." } });
   if (options.template) {
     fireEvent.click(screen.getByRole("radio", { name: options.template }));
   }
@@ -62,7 +61,10 @@ test("the form starts the company from a template, and the check is create-only"
   expect(check.headers["If-None-Match"]).toBe("*");
   const sent = check.body as CompanyDocument;
   expect(sent.name).toBe("Nimbus");
-  expect(sent.mission).toBe("Ship weather.");
+  // THE PRINCIPLES ARE NOT ASKED HERE: Company › Principles writes them, once
+  // the company exists, and the next steps below open it.
+  expect(screen.queryByLabelText("Mission")).toBeNull();
+  expect(sent).not.toHaveProperty("mission");
   // The operator's own seat, with the one identity they gave, and the
   // template's neutral titles below it.
   // Every node carries its identity from the start, minted from its name.
@@ -121,6 +123,20 @@ test("the create form carries no builder toolbar until a template is recorded", 
   expect(await screen.findByRole("toolbar", { name: "Organization builder" })).toBeDefined();
 });
 
+// A COMPANY STILL BEING CREATED HAS NO PRINCIPLES PAGE: it is renamed in the
+// builder, in place, rather than sent to a page that has nothing to show.
+test("the company a draft is creating is renamed in the builder", async () => {
+  const engine = new Engine(null);
+  mountBuilder({ engine });
+  await startCompany({});
+  await screen.findByText("No problems");
+  const before = location.hash;
+  fireEvent.click(screen.getByRole("button", { name: "Open the company's name form" }));
+  const dialog = await screen.findByRole("dialog", { name: /Nimbus/ });
+  expect(within(dialog).getByLabelText(/^Company name/)).toBeDefined();
+  expect(location.hash).toBe(before);
+});
+
 test("a company with no name is refused by the form, not by the engine", async () => {
   const engine = new Engine(null);
   mountBuilder({ engine });
@@ -148,9 +164,13 @@ test("the save is a create-only PUT, and says what is left to do", async () => {
   expect(body.name).toBe("Nimbus");
   expect(body._summary).toMatch(/^Created Nimbus in the organization builder \(write [0-9a-f]+\)$/);
 
-  // The two steps the dashboard cannot take, with the command for the one
-  // that has no screen at all.
+  // What is left: the principles, on their own page in edit, and the two
+  // steps the builder cannot take, with the command for the one that has no
+  // screen at all.
   expect(await screen.findByText("The company is created")).toBeDefined();
+  expect(screen.getByRole("link", { name: "Open Principles" }).getAttribute("href")).toBe(
+    "#/company/principles?edit=mission",
+  );
   expect(screen.getByRole("link", { name: "Open Integrations" }).getAttribute("href")).toBe(
     "#/company/integrations",
   );

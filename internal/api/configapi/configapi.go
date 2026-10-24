@@ -244,6 +244,10 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// WHICH FIELDS NAME A ${VAR}, which is what an operator needs before
 	// they remove a credential. See [Service.References].
 	read("GET /config/references", s.references)
+	// THE CHARTER, one resource of three fields: what Company › Principles
+	// edits in place. See charter.go for why it is not PATCH /config.
+	read("GET /config/charter", s.getCharter)
+	write("PUT /config/charter", s.putCharter)
 	read("GET /config/revisions", s.listRevisions)
 	read("GET /config/revisions/{id}", s.getRevision)
 	read("GET /config/revisions/{id}/diff", s.diff)
@@ -567,7 +571,25 @@ func missingSide(err error) httpjson.Code {
 // value, the parameter twice) is refused rather than guessed, because the two
 // readings of a guess differ by whether the fleet's configuration changes.
 func dryRunOf(w http.ResponseWriter, r *http.Request) (dryRun, ok bool) {
-	values, present := r.URL.Query()["dry_run"]
+	return flagOf(w, r, "dry_run", "dry_run=true validates the write and answers "+
+		"what it would produce without storing or activating anything; leave it "+
+		"out to write")
+}
+
+// importOf reads `import` from a PUT /config query, answering the refusal
+// itself; ok is false when the request has been answered. See
+// [Service.mayImport] for what it changes.
+func importOf(w http.ResponseWriter, r *http.Request) (importing, ok bool) {
+	return flagOf(w, r, "import", "import=true writes the document as a restored "+
+		"file, whose charter faults are warned about rather than refused; leave "+
+		"it out for an edit")
+}
+
+// flagOf reads a boolean query parameter: exactly `true` or `false`, given
+// once, or absent for false. Anything else is refused naming the parameter,
+// because the two readings of a guess write different things.
+func flagOf(w http.ResponseWriter, r *http.Request, name, hint string) (set, ok bool) {
+	values, present := r.URL.Query()[name]
 	if !present {
 		return false, true
 	}
@@ -580,9 +602,8 @@ func dryRunOf(w http.ResponseWriter, r *http.Request) (dryRun, ok bool) {
 		}
 	}
 	httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidQuery, map[string]any{
-		"detail": "dry_run must be true or false, given once",
-		"hint": "dry_run=true validates the write and answers what it would " +
-			"produce without storing or activating anything; leave it out to write",
+		"detail": name + " must be true or false, given once",
+		"hint":   hint,
 	})
 	return false, false
 }
@@ -601,6 +622,10 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 	}
 	dryRun, ok := dryRunOf(w, r)
 	if !ok {
+		return
+	}
+	importing, ok := importOf(w, r)
+	if !ok || (importing && !s.mayImport(w, r)) {
 		return
 	}
 	// THE BODY IS READ FIRST, because the summary may be in it. See
@@ -636,6 +661,9 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		built = active.ID
 	}
 	d := replaceDraft(incoming, built, attributionOf(r))
+	if importing {
+		d.rules, d.source = importRules, importSource
+	}
 	if d.principal, ok = principalOf(w, r); !ok {
 		return
 	}
@@ -955,7 +983,7 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 		// reverting to a company that runs must not be refused over one.
 		// The answer's warnings name each one, and each node warns about
 		// it when it applies the epoch.
-		rules: (*config.Company).ValidateRunnable,
+		rules: runnableRules,
 		// THE TARGET'S BYTES AS THEY WERE STORED. A revert carries the old
 		// document, and this build's struct of it is not that document when
 		// a newer peer wrote it: every field this build cannot represent
@@ -1005,8 +1033,51 @@ func attributionOf(r *http.Request) iam.Actor {
 	return auth.AttributionOf(r.Context())
 }
 
-// revisionSource is the source every revision this surface writes records.
+// revisionSource is the source every revision this surface writes records,
+// but an import's.
 const revisionSource = "api"
+
+// importSource is the source an import records ([Service.mayImport]): the
+// one an offline `crewlet config import` records, since both are a file
+// somebody imported rather than an edit made here.
+const importSource = "file"
+
+// mayImport decides `PUT /config?import=true`, answering the refusal itself;
+// it reports whether the write may go on.
+//
+// # An import is a restore, not an edit
+//
+// `crewlet config import` against a running node sends the file here. It is
+// how a company is restored and migrated, and a file that ran under an earlier
+// build must import today: judged as an edit, a file whose charter still
+// carries a fault in a part that differs from the stored company's (a policy
+// a newer revision rewrote, restored to its older, longer self) was refused,
+// and the restore with it. So an import judges the charter WARN-ONLY
+// ([importRules]), exactly as an offline import and a boot import do; every
+// other rule holds as it does for any write, and its faults are named in the
+// answer's warnings.
+//
+// ADMIN'S, never a lead's: the route admits a lead for a write inside their
+// own units, and an import replaces the whole document and relaxes a rule, so
+// it is asked of the company (`config.write`, a recent proof included) before
+// the body is read. It is recorded as any write is (its author, kind and
+// credential, the summary and the activation event), under [importSource].
+// The dashboard never sends it: the org builder and the Principles editor are
+// edits, and an edit is judged on what it changes.
+func (s *Service) mayImport(w http.ResponseWriter, r *http.Request) bool {
+	p, ok := principalOf(w, r)
+	if !ok {
+		return false
+	}
+	policy := authz.Policy{Action: authz.ActionConfigWrite}
+	d := authz.Decide(r.Context(), *p, policy.Action,
+		authz.Object{Kind: authz.KindCompany}, authz.NoChart{}, s.now())
+	if d.Unknown() || !d.Allowed {
+		authz.EnvelopeRefusal(w, r, policy, d)
+		return false
+	}
+	return true
+}
 
 // nudge tells every node an activation happened.
 //
@@ -1015,13 +1086,13 @@ const revisionSource = "api"
 // is what makes losing one cost a poll interval rather than a revision, and
 // what makes an ephemeral broadcast the right delivery: every node has to
 // hear it, and none of them has to.
-func (s *Service) nudge(ctx context.Context, revisionID, summary string, by iam.Actor) {
+func (s *Service) nudge(ctx context.Context, revisionID, summary, source string, by iam.Actor) {
 	if s.queue == nil {
 		return
 	}
 	ev := events.New(types.ConfigRevisionActivated{
-		RevisionID: revisionID, RevisionSummary: summary, CreatedBy: by.Name,
-		CreatedByKind: string(by.Kind), OperatorID: by.OperatorID,
+		RevisionID: revisionID, RevisionSummary: summary, RevisionSource: source,
+		CreatedBy: by.Name, CreatedByKind: string(by.Kind), OperatorID: by.OperatorID,
 	}, tracing.TraceOf(ctx))
 	ev.Timestamp = s.now()
 	ev.Source = by.Name

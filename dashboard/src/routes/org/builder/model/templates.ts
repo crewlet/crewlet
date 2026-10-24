@@ -62,7 +62,8 @@ export interface FounderSeat {
 
 export interface TemplateOptions {
   readonly template: TemplateId;
-  readonly charter: { readonly name: string; readonly mission?: string };
+  /** The company's name. Its principles are written on Company › Principles once it exists. */
+  readonly name: string;
   readonly founder?: FounderSeat;
   /** Required by the Established company template, ignored by the others. */
   readonly leads?: LeadsAre;
@@ -197,7 +198,7 @@ function establishedCompany(leads: LeadsAre): Shape {
  * the event handler: it mints a key for every node it creates.
  */
 export function templateIntent(options: TemplateOptions, keys: KeySource): TemplateBuilt {
-  const name = options.charter.name.trim();
+  const name = options.name.trim();
   if (name === "") return { ok: false, message: "Enter the company name." };
   const founder = options.founder;
   if (founder && founder.name.trim() === "")
@@ -282,14 +283,13 @@ export function templateIntent(options: TemplateOptions, keys: KeySource): Templ
     });
   }
   if (shape.top) roles.push(seat(shape.top));
-  const mission = options.charter.mission?.trim();
 
   return {
     ok: true,
     intent: {
       type: "applyTemplate",
       template: options.template,
-      charter: { name, ...(mission ? { mission } : {}) },
+      name,
       roles,
       units: shape.units.map(unit),
     },

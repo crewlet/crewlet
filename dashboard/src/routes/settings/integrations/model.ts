@@ -211,6 +211,10 @@ export interface BuiltInService {
   /** In use here, run elsewhere, or not shipped yet. */
   on: boolean;
   soon: boolean;
+  /**
+   * What the service is, whether or not the company uses it: what runs in
+   * its place is said once, by the page beneath the header.
+   */
   sentence: string;
   /** The product that does this service's work instead, where the company runs one. */
   replacedBy?: { key: "jira" | "confluence"; name: string };
@@ -472,14 +476,7 @@ export function builtIns(backends: OrgServices | null): BuiltInService[] {
       known: tracker !== undefined,
       on: tracker === "native",
       soon: false,
-      sentence:
-        tracker === undefined
-          ? NO_COMPANY
-          : tracker === "native"
-            ? "Projects, tasks, your inbox and My work."
-            : tracker === "jira"
-              ? "Jira handles work items."
-              : "The company runs no work tracker.",
+      sentence: tracker === undefined ? NO_COMPANY : "Projects, tasks, your inbox and My work.",
       ...(tracker === "jira" ? { replacedBy: { key: "jira", name: "Jira" } as const } : {}),
       ...(tracker === "native" ? { open: { label: "Open Work", path: ["work"] } } : {}),
     },
@@ -490,13 +487,7 @@ export function builtIns(backends: OrgServices | null): BuiltInService[] {
       on: knowledge === "native",
       soon: false,
       sentence:
-        knowledge === undefined
-          ? NO_COMPANY
-          : knowledge === "native"
-            ? "Spaces and pages, agent skills and diaries."
-            : knowledge === "confluence"
-              ? "Confluence holds the knowledge base."
-              : "The company runs no knowledge base.",
+        knowledge === undefined ? NO_COMPANY : "Spaces and pages, agent skills and diaries.",
       ...(knowledge === "confluence"
         ? { replacedBy: { key: "confluence", name: "Confluence" } as const }
         : {}),
@@ -669,17 +660,22 @@ export function useIntegrations(): Model {
   };
 }
 
-/** The one-line count a tool's foot carries. */
-export function toolFacts(tool: Tool): string {
-  if (!tool.configured) return "";
+/**
+ * The line a working tool's overview says: "Working.", then what it counts,
+ * as one sentence of its own.
+ */
+export function workingLine(tool: Pick<Tool, "seats" | "delivered">): string {
   const parts: string[] = [];
   const ready = tool.seats.filter((s) => s.status === "ready").length;
   if (tool.seats.length > 0) parts.push(`${ready} of ${plural(tool.seats.length, "agent")} ready`);
   if (tool.delivered !== null)
     parts.push(
-      tool.delivered === 0 ? "nothing delivered" : plural(tool.delivered, "delivery", "deliveries"),
+      tool.delivered === 0
+        ? "nothing delivered yet"
+        : plural(tool.delivered, "delivery", "deliveries"),
     );
-  return parts.join(" · ");
+  if (parts.length === 0) return "Working.";
+  return `Working. ${asSentence(parts.join(", "))}`;
 }
 
 /** The tool a route segment names: its own key, or any surface it covers. */

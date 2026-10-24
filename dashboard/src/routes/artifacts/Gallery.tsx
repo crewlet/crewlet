@@ -52,9 +52,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArtifactMakeRow, LivePreviewBudgetProvider, Section } from "@crewlethq/ui";
-import { GaugeGlyph } from "@crewlethq/icons/glyphs";
 import { href, useNavigator, useParam, useRoute } from "~/app/router.tsx";
-import { RelatedRow } from "~/app/frame/RelatedRow.tsx";
 import { useKeymap } from "~/app/keymap.ts";
 import {
   LEGACY_ARTIFACT_SECTIONS,
@@ -341,17 +339,6 @@ export function ArtifactGallery({ section }: { section: ArtifactSection }) {
             rest
           ))}
       </QueryState>
-      {/* WHERE THE COMPANY'S STORAGE IS READ, a quiet row for a reader who
-          may open Settings › File storage (the row asks the gate itself). */}
-      {section === "all" && !trashed && !filtered && (
-        <RelatedRow
-          className="artifacts-related"
-          path={["settings", "storage"]}
-          icon={<GaugeGlyph size="sm" />}
-          title="Company storage"
-          description="What the company holds against its storage quotas, in Settings › File storage."
-        />
-      )}
     </LivePreviewBudgetProvider>
   );
 }
