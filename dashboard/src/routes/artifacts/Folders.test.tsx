@@ -363,7 +363,8 @@ describe("Select", () => {
           {
             artifact: "a2",
             outcome: "unauthorized",
-            message: "Moving it needs the “Can edit” role on it.",
+            message:
+              "moving it needs the editor role on the artifact; its owner can share it with you at that role",
           },
         ],
       },
@@ -395,7 +396,7 @@ describe("Select", () => {
     expect(await screen.findByText("Moved 1 of 2 to the top level")).toBeTruthy();
     expect(
       screen.getByText(
-        "“Settlement pulse” was not moved. Moving it needs the “Can edit” role on it.",
+        "“Settlement pulse” was not moved. Moving it needs the editor role on the artifact; its owner can share it with you at that role.",
       ),
     ).toBeTruthy();
   });

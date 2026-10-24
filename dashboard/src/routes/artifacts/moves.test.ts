@@ -52,7 +52,14 @@ describe("fileEach", () => {
           results: body.items.map((item) =>
             item.artifact === "a3"
               ? { artifact: item.artifact, outcome: "unauthorized" }
-              : { artifact: item.artifact, outcome: "moved" },
+              : item.artifact === "a7"
+                ? {
+                    artifact: item.artifact,
+                    outcome: "unauthorized",
+                    message:
+                      "moving it needs the editor role on the artifact; its owner can share it with you at that role",
+                  }
+                : { artifact: item.artifact, outcome: "moved" },
           ),
         },
       };
@@ -60,11 +67,17 @@ describe("fileEach", () => {
     const report = await fileEach(items(30), () => "f1");
     expect(sent.map((r) => (r.body as { items: unknown[] }).items.length)).toEqual([25, 5]);
     expect(new Set(sent.map((r) => r.key)).size).toBe(2);
-    expect(report.moved).toHaveLength(29);
+    expect(report.moved).toHaveLength(28);
+    // THE ENGINE'S CLAUSE IS SET AS A SENTENCE, capitalised and stopped, so
+    // the toast never splices a lowercase clause after a full stop.
     expect(report.refused).toEqual([
       {
         item: { id: "a3", title: "Doc 3", folder: "" },
         why: "Moving it needs the “Can edit” role on it.",
+      },
+      {
+        item: { id: "a7", title: "Doc 7", folder: "" },
+        why: "Moving it needs the editor role on the artifact; its owner can share it with you at that role.",
       },
     ]);
   });

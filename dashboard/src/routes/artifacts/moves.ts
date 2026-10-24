@@ -20,7 +20,7 @@
 import { useCallback, useState } from "react";
 import { useToast } from "@crewlethq/ui";
 import { ARTIFACT_MOVE_MAX_ITEMS } from "~/contract/artifacts.ts";
-import { plural } from "~/lib/format.ts";
+import { asSentence, plural } from "~/lib/format.ts";
 import { keyedWrite, type KeyedAnswer } from "~/lib/keyedWrite.ts";
 import { fileArtifact, fileArtifacts } from "~/lib/artifacts/api.ts";
 import { announceFoldersChanged, TOP_LEVEL } from "~/lib/artifacts/folders.ts";
@@ -57,9 +57,15 @@ const REFUSAL_WORDS: Readonly<Record<string, string>> = {
   unavailable: "The engine could not take it just now. Try again.",
 };
 
-/** Why one artifact did not move, in a sentence. */
+/**
+ * Why one artifact did not move, in a sentence. The engine's `message` is a
+ * clause, lowercase and unterminated as every detail it sends is, so it is
+ * set as a sentence here ([asSentence]) before a toast prints it after a full
+ * stop.
+ */
 function refusalWords(result: ArtifactMoveResult): string {
-  return result.message || REFUSAL_WORDS[result.outcome] || "The engine refused it.";
+  if (result.message) return asSentence(result.message);
+  return REFUSAL_WORDS[result.outcome] || "The engine refused it.";
 }
 
 /** One request's answer, as a result per artifact it carried. */
