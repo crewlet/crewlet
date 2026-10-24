@@ -366,16 +366,15 @@ describe("who the block says this is", () => {
   });
 
   // THE ROW SAYS WHAT IT OPENS, in words and at rest: its name ends ", your
-  // menu", it is a menu button, its title says what the menu holds, and it
-  // draws the menu trigger's chevron where it once drew nothing until
-  // hovered. Mutation: drop the spoken suffix, the title or the chevron and a
-  // line here goes red.
+  // menu", it is a menu button, and its title says what the menu holds. In the
+  // rail's foot the kit draws no chevron (its width goes to the name beside
+  // the larger badge), so the words are what say it. Mutation: drop the spoken
+  // suffix or the title and a line here goes red.
   test("the reader's name says it opens their menu, in words and at rest", () => {
     render(block(ada, "Founder"));
     const row = screen.getByRole("button", { name: /your menu/ });
     expect(row.getAttribute("aria-haspopup")).toBe("menu");
     expect(row.getAttribute("title")).toBe("Your account and signing out");
-    expect(row.querySelector(".crewlet-account-row__go")).not.toBeNull();
     // THE ACCESS IS SAID IN THE MENU, never as the row's title, which would
     // answer a question the reader had not asked.
     expect(row.getAttribute("title")).not.toMatch(/Tracker/);
@@ -433,6 +432,15 @@ describe("who the block says this is", () => {
     expect(within(menu).getByRole("menuitem", { name: /^Account/ })).toBeTruthy();
     expect(within(menu).getByRole("menuitem", { name: "Sign out" })).toBeTruthy();
     expect(within(menu).queryByRole("menuitem", { name: /^Sign out everywhere/ })).toBeNull();
+  });
+
+  // THE READER'S BADGE IS THE MEDIUM STEP, the size the kit's account row
+  // sizes its badge column around. Mutation: draw it small again and this
+  // fails.
+  test("the reader's badge is drawn at the medium step", () => {
+    render(block(ada, "Founder"));
+    const badge = document.querySelector(".crewlet-account-row .crewlet-avatar")!;
+    expect(badge.classList.contains("crewlet-avatar--md")).toBe(true);
   });
 
   // A KEY FOR A FACE, for a principal that is not a person: the initials of

@@ -1006,11 +1006,15 @@ seat is who it acts as. It read "token:review" over "Miles", the credential's
 spelling as the name and the place it acts for as the aside. Its badge is the
 seat's own initials wearing a key on its corner (the kit's `Avatar` `mark`), so
 the face says who and the corner says how; a credential bound to no seat keeps
-the key as its whole face. Which credential it is comes from the login's
+the key as its whole face. The badge is the medium step, which the kit's
+account row sizes its badge column around in the sidebar's foot. Which
+credential it is comes from the login's
 grammar (`lib/login.ts`), never the session's `kind`, which the engine answers
 `person` for a token acting as a seat. **Pressing the name opens the reader's own menu.** For anybody resolved, the
 row is a menu button (the kit's `AccountRow` `menu`), named by the reader and
-", your menu", ending in the up-and-down chevron a menu's trigger draws. **The
+", your menu", with a title saying what the menu holds. In the sidebar's foot
+the kit draws no trailing chevron: its width goes to the name beside the
+larger badge, and the row's hover fill says it can be pressed. **The
 menu says only what the row does not**: its header is the reader's access, the
 one line People uses for it ("Admin", "Tracker · Knowledge",
 "Overview only"), and under it come **Account** (the one workspace with no

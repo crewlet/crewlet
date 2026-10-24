@@ -315,10 +315,12 @@ export function UserBlock({
           // standing in for nobody, or for an answer still out, is not the
           // reader and is not ringed. A badge wearing a mark draws no ring
           // either: the kit cuts the mark's notch from the outline a ring
-          // would follow.
+          // would follow. AT THE MEDIUM STEP, which is what the kit's account
+          // row sizes its badge column around: the small badge sat in that
+          // column with room to spare and read as a placeholder.
           <SeatAvatar
             name={resolved ? who.name || "?" : "?"}
-            size="sm"
+            size="md"
             kind="human"
             ring={resolved ? "brand" : undefined}
             icon={credential && !bound ? <KeyGlyph size="sm" /> : undefined}
