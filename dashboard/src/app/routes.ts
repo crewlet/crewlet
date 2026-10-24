@@ -138,6 +138,14 @@ export function artifactPath(id: string): string[] {
 export const ORG_EDIT_PATH: readonly string[] = ["company", "org", "edit"];
 
 /**
+ * Company › Principles, where the mission, the vision and the standing
+ * policies are read and, by an administrator, written in place
+ * (`routes/settings/principles/edit/address.ts` builds its edit address). Here
+ * for the reason [artifactPath] is: the org builder links to it.
+ */
+export const PRINCIPLES_PATH: readonly string[] = ["company", "principles"];
+
+/**
  * Where a new artifact of a kind is made: each kind has its own page
  * (`routes/artifacts/new/`), because writing a doc, laying out a deck and
  * asking an agent for a dashboard are three different gestures. Here for the

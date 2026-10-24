@@ -52,6 +52,7 @@ export type KeyScope =
   | "draft"
   | "compose"
   | "create"
+  | "charter"
   | "search"
   | "layer";
 
@@ -66,6 +67,7 @@ export const KEY_SCOPES: readonly { scope: KeyScope; title: string }[] = [
   { scope: "draft", title: "Editing a draft: the org builder, or Home while it is arranged" },
   { scope: "compose", title: "Writing a reply" },
   { scope: "create", title: "Making a new artifact" },
+  { scope: "charter", title: "Writing the company's principles" },
   { scope: "search", title: "In search" },
   {
     scope: "layer",
@@ -357,12 +359,45 @@ const CREATE: KeyRow[] = [
 ];
 
 /**
+ * THE PRINCIPLES EDITOR'S KEYS, bound by the kit's `InlineEditor` that each
+ * part of the charter is written in (`routes/settings/principles/edit/`), and
+ * listed here so the legend and the collision check see them. Both fire from
+ * inside a field, since the editor is one: Enter alone is a new line in a
+ * statement and the next policy in the list, so saving takes the command key,
+ * and Escape is the way out of the part without its changes.
+ */
+const CHARTER: KeyRow[] = [
+  {
+    id: "charter.save",
+    scope: "charter",
+    presses: [{ key: "enter", mod: true }],
+    does: "Save the part you are editing",
+    by: "kit",
+    whileTyping: true,
+  },
+  {
+    id: "charter.cancel",
+    scope: "charter",
+    presses: [{ key: "escape" }],
+    does: "Stop editing it, asking first if it has changes",
+    by: "kit",
+    whileTyping: true,
+  },
+];
+
+/**
  * Scopes never live on one screen, which may therefore share a press: a
  * reply's composer is the Inbox's and a task's, and a create page is
  * neither, so Send and a create page's main action are both the command key
- * with Enter.
+ * with Enter. Company › Principles holds no composer, no create page and no
+ * peek, so its editor's Save and Escape are free there.
  */
-export const SCOPES_APART: readonly (readonly [KeyScope, KeyScope])[] = [["compose", "create"]];
+export const SCOPES_APART: readonly (readonly [KeyScope, KeyScope])[] = [
+  ["compose", "create"],
+  ["charter", "compose"],
+  ["charter", "create"],
+  ["charter", "peek"],
+];
 
 /** Whether two scopes can be live on one screen. */
 export function liveTogether(a: KeyScope, b: KeyScope): boolean {
@@ -434,6 +469,7 @@ export const KEYMAP: readonly KeyRow[] = [
   ...PAGE,
   ...COMPOSE,
   ...CREATE,
+  ...CHARTER,
   ...SEARCH,
   ...LAYER,
 ];

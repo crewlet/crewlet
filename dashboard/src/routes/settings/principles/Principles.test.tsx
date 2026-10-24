@@ -192,6 +192,40 @@ test("each unwritten part says so in its card", () => {
   expect(policies.querySelector(".crewlet-card__header")?.textContent).toBe("Standing policies");
 });
 
+// A READER WHO MAY WRITE THE CHARTER writes it at each card: a written part
+// carries its own Edit, an unwritten one its Add, both opening the part in
+// place (`edit/usePrinciplesEdit.test.tsx` walks the writing itself).
+// Mutation: hand the page no editing and both fail.
+test("a reader who may write the charter edits each written part at its card", async () => {
+  const store = mount();
+  act(() => store.applyOrg(withDerived(ACME)));
+  await viewerAnswered();
+  for (const [region, label] of [
+    ["Mission", "Edit the mission"],
+    ["Vision", "Edit the vision"],
+    ["Standing policies", "Edit the standing policies"],
+  ] as const) {
+    const card = screen.getByRole("region", { name: region });
+    expect(within(card).getByRole("button", { name: label })).toBeDefined();
+    expect(within(card).queryByRole("button", { name: /^Add a/ })).toBeNull();
+  }
+});
+
+test("a reader who may write the charter adds each unwritten part at its card", async () => {
+  const store = mount();
+  act(() => store.applyOrg(withDerived({ name: "Acme", roles: [] })));
+  await viewerAnswered();
+  for (const [region, add] of [
+    ["Mission", "Add a mission"],
+    ["Vision", "Add a vision"],
+    ["Standing policies", "Add a policy"],
+  ] as const) {
+    const card = screen.getByRole("region", { name: region });
+    expect(within(card).getByRole("button", { name: add })).toBeDefined();
+    expect(within(card).queryByRole("button", { name: /^Edit/ })).toBeNull();
+  }
+});
+
 // A READER WHO MAY NOT WRITE THE CHARTER reads it with no control on the page
 // at all: no Edit, no Add, and no disabled copy of either standing in for it.
 // Mutation: offer the admin's controls to everybody and the test fails.

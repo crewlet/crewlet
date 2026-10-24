@@ -1156,7 +1156,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` `mode=hybrid\|keyword\|semantic` |
 | `#/work/{KEY}` | **Project**: one project as Work's scope: its Tasks lens, About, History and Files | `lens=about\|history\|files` (Tasks, the first, takes no key) · the same view strip and filter grammar, scoped to the project |
 | `#/work/{KEY}-{n}` · `#/work/{id}` | **Task** — description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost | `activity=all\|comments\|turns\|changes` · `list=` |
-| `#/company` · `#/company/principles` | **Company › Principles** (the sidebar's **Principles** row, and the Company landing): the mission and the vision as two equal cards side by side, then the standing policies every agent reads on every turn, numbered in one card across the page, each card under its own glyph (a target, a telescope, a scroll), then Settings › Limits as a related row to a reader who may open it. An unwritten mission, vision or policy list each says so inside its card. Each card carries its own Edit, and each unwritten part its Add, for a reader who may write the charter, and nothing for anybody else. Read from the org projection by every reader | |
+| `#/company` · `#/company/principles` | **Company › Principles** (the sidebar's **Principles** row, and the Company landing): the mission and the vision as two equal cards side by side, then the standing policies every agent reads on every turn, numbered in one card across the page, each card under its own glyph (a target, a telescope, a scroll), then Settings › Limits as a related row to a reader who may open it. An unwritten mission, vision or policy list each says so inside its card. Each card carries its own Edit, and each unwritten part its Add, for a reader who may write the charter, and nothing for anybody else; either opens the part for writing in place in its card (`?edit=mission`, `vision` or `policies`, a comma list for several). Read from the org projection by every reader | |
 | `#/company/org` | **Org chart**, the hierarchy every seat works inside; every human seat with its kind; what holds each one for an admin and for the holder themselves; and, for an admin, where a person is invited or created onto the vacant human seat they will hold | `unit=` · `seat=` |
 | `#/company/org/roster` | **Org chart › Roster**, every seat, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
 | `#/company/org/teams` · `#/company/org/teams/{unit}` | **Org chart › Teams**, every unit with what it is for and its goals; one unit's page | |
@@ -2060,6 +2060,7 @@ for the keys is the reader who does not know `?` yet.
 | On a chart | `+`, `-` zoom and `0` fits, with focus in the chart (bound by the design system's canvas) |
 | In the org builder | `Mod+Z` undo, `Mod+Shift+Z` redo |
 | Writing a reply | `Mod+Enter` sends it (the Inbox's composer; `Enter` alone is a new line) |
+| Writing the company's principles | `Mod+Enter` saves the part being written and `Esc` stops writing it, asking first when it has changes (bound by the design system's `InlineEditor`); in the standing policies `Enter` adds the policy typed, and `Alt+Up` and `Alt+Down` move the one you are in |
 | In search | `Tab` and `Shift+Tab` walk the scopes (bound by the design system's palette), `Mod+Enter` asks an agent, `Alt+A` assigns the task at hand, `Alt+C` creates a task, `Backspace` in an empty picker goes back |
 | In a dialog, a menu or the drawer | `Esc` closes whatever is on top (bound by the design system's layer stack) |
 
@@ -4043,8 +4044,10 @@ an **Add** in each unwritten one, held for everybody who reads the company's
 charter and never writes it, would be three or six disabled controls on a
 page whose whole content is reading. So a reader without the grant to write
 the charter is offered none, while an admin whose write is held (offline,
-not yet known, a managed document) is shown the control disabled with its
-reason, as everywhere else.
+not yet known) is shown the control disabled with its reason, as everywhere
+else. A document another system manages (ADR-0030) is the one hold that never
+clears from this page, so there an admin is offered no control either, and a
+line above the cards says where the charter is changed instead.
 
 **One press at a time, by every way in.** A write control refuses a press
 while its last one is still out, and so does every other way into the same
@@ -7390,6 +7393,59 @@ and headed by its own glyph:
   [A write control is never hidden](#a-write-control-is-never-hidden)).
 - **Engine limits** follows the cards as a related row, for a reader who may
   open Settings › Limits.
+
+**Writing the charter happens on the page, one part at a time.** Edit (or an
+unwritten part's Add) opens that part in place, in its own card, as the kit's
+`InlineEditor`: the field, then a bar with the editing status, Cancel and
+Save. The other cards stay as they read, so the person writes against them,
+and several parts may be open at once. Each save is one configuration
+revision whose summary names the part ("Changed the mission", "Standing
+policies: added 1, reordered"), so a page mode that saved three unrelated
+edits as one revision was declined. The source is
+`dashboard/src/routes/settings/principles/edit/`.
+
+- **Who may write it.** Admin, on a company document this deployment lets the
+  reader's credential change (the viewer's `config_writer`, ADR-0030):
+  `useMayWriteCharter`, which the org builder's company node asks too. Anybody
+  else is offered no control at all. An admin on a document another system
+  manages is told so above the cards instead of finding no Edit. Offline or
+  while the browser is still being identified, the controls stay and are
+  held with the reason.
+- **The fields.** The mission is one line, and so is each policy, because each
+  is inlined in every seat's prompt (a policy as one item of a list); one line
+  still wraps, so a long one is read whole while it is written (the kit's
+  `singleLine` textarea, which takes no line break and folds a pasted one into
+  a space). The vision is paragraphs. Each statement and each policy shows its count as it
+  nears its bound, counted in characters as the engine counts them (1024 for
+  the mission and for a policy, 2048 for the vision, 25 policies, from
+  `contract/config.ts`). The policies are the kit's `ListInput`: edited where
+  they stand, added with Enter, moved by a grip, by `Alt` with an arrow or by
+  their buttons, and removed with an Undo where the policy was. A policy typed
+  in the new box and not yet added counts as a change and is saved with the
+  rest; a blank row is dropped. A repeated policy is said under its later
+  copy, and Save waits while any problem stands. Only what the person changed
+  is held to the rules, as the engine holds a write: a policy or a statement
+  stored before the rules and left as it was is said as a warning above the
+  bar (*Saved before the current rules*) and never holds Save.
+- **Saving.** The editor starts from the engine's own charter
+  (`GET /config/charter`), not the page's copy, which can lag it. Save reads
+  the charter again and writes it with only this part replaced, conditional
+  on its tag (`PUT /config/charter`, `If-Match`), so a colleague's change to
+  another part is kept. The card then shows the saved words until this
+  browser's chart carries them, with *Sent. This node has not applied it yet.*
+  under them, and a toast says it saved. A refusal keeps the draft and says
+  why once, beside the Save that caused it (the editor's own alert, so no toast
+  reads it a second time); a save that got no answer is settled by reading the
+  charter back rather than sent twice.
+- **A colleague's change to the same part** is never written over unseen. The
+  card says the part changed while the person was editing, shows what changed
+  line by line (the kit's `ConflictNote` and `DiffView`), keeps the draft, and
+  offers **Keep my draft** (save it over theirs knowingly) or **Use theirs**.
+- **Unsaved writing is never lost to a stray key.** Cancel or `Esc` on a part
+  with changes asks first (*Discard your changes?*), and so does a move to
+  another page (*Leave without saving?*) and a reload or a closed tab. Focus
+  goes into the field as a part opens, and back to its Edit (or Add) when it
+  closes.
 
 The company's name and clock are not principles and are not on the page: the
 name is the shell's, and the clock is the company document's.

@@ -9,8 +9,11 @@ import type { ReactNode } from "react";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 
-/** A socket that never opens, for a store nothing is pushed into. */
-class InertWebSocket {
+/**
+ * A socket that never opens, for a store nothing is pushed into. Exported for
+ * a suite that builds its own client (to answer the socket's queries itself).
+ */
+export class InertWebSocket {
   static CONNECTING = 0;
   static OPEN = 1;
   static CLOSED = 3;

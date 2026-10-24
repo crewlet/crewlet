@@ -54,8 +54,9 @@ import {
   StatementText,
   UnwrittenPart,
   type PrincipleCardEdit,
-  type PrinciplesCardsEdit,
 } from "./PrincipleCard.tsx";
+import { PART_PURPOSES } from "./edit/charter.ts";
+import { usePrinciplesEdit } from "./edit/usePrinciplesEdit.tsx";
 
 /** Where the caps the engine holds every turn to are read. */
 const LIMITS_PATH = ["settings", "limits"];
@@ -64,32 +65,17 @@ const LIMITS_PATH = ["settings", "limits"];
 const UNWRITTEN = {
   mission: {
     title: "No mission yet",
-    description: "One sentence on what the company is for tells every agent why its work matters.",
+    description: PART_PURPOSES.mission,
   },
   vision: {
     title: "No vision yet",
-    description: "Where the company is heading helps agents choose between two good options.",
+    description: PART_PURPOSES.vision,
   },
   policies: {
     title: "No policies yet",
-    description: "The rules every agent follows, such as how to handle money or when to ask first.",
+    description: PART_PURPOSES.policies,
   },
 } as const;
-
-/** One card as the company wrote it, with no way to write it. */
-function reading<T>(shown: T): PrincipleCardEdit<T> {
-  return { shown, actions: null, add: null, editor: null, note: null };
-}
-
-/** The charter as every reader reads it. */
-function readOnly(org: OrgProjection): PrinciplesCardsEdit {
-  return {
-    mission: reading(org.mission ?? ""),
-    vision: reading(org.vision ?? ""),
-    policies: reading<readonly string[]>(org.policies ?? []),
-    notice: null,
-  };
-}
 
 export function Principles() {
   const org = useOrg();
@@ -118,7 +104,7 @@ export function Principles() {
 
 /** The three cards, and the engine's caps under them, from a chart the engine has sent. */
 function Charter({ org }: { org: OrgProjection }) {
-  const edit = readOnly(org);
+  const edit = usePrinciplesEdit(org);
   const policies = edit.policies;
   const writing = policies.editor != null;
   return (
