@@ -65,7 +65,7 @@ import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
 import { fmtDateTime, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { authorLabel, throughOf } from "~/lib/attribution.ts";
-import { needsWords } from "~/lib/access.ts";
+import { authorityWords } from "~/lib/refusal.ts";
 import { isAbort, rest, RestError } from "~/protocol/index.ts";
 import { restErrorCode, useRest } from "~/lib/useRest.ts";
 import type { ConfigReference, LogRefusal, QueryRefusal, SecretRow } from "~/protocol/index.ts";
@@ -99,7 +99,7 @@ function refusal(err: unknown): string {
   if (err.unauthorized) {
     // THE GRANT THE REFUSAL NAMED: "needs an operator token" sent a
     // signed-in person to find a credential they already held.
-    return needsWords("This", err.grants);
+    return authorityWords("This", err);
   }
   return err.detail || err.code || "the engine refused the read";
 }

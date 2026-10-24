@@ -9,8 +9,58 @@
  * permission typed here, which would be a second statement of the rule.
  */
 
-import { RestError } from "~/protocol/index.ts";
+import { REFUSAL_SENTENCES } from "~/contract/authority.ts";
+import { ACT_ERRORS } from "~/contract/errors.ts";
+import { isLogRefusal, RestError, type QueryRefusal } from "~/protocol/index.ts";
+import { needsWords } from "./access.ts";
+import { remedyFor } from "./authorityRemedy.ts";
 import { asSentence, fmtWait } from "./format.ts";
+
+/**
+ * The one sentence for a refusal on AUTHORITY, about `what` ("Taking a
+ * backup"), decided by WHAT REFUSED: a REST answer or a socket refusal.
+ *
+ * - A 401 accepted no credential, so the repair is to sign in.
+ * - A rule's refusal (`403 unauthorized` with its reason, or the socket's
+ *   frame) names the access any one of which would admit the reader where
+ *   access is a way past it ([needsWords]), and otherwise is the rule's own
+ *   sentence ([REFUSAL_SENTENCES]), exactly as `QueryState` draws it.
+ * - Any other 403 names the access it carries where that access is the way
+ *   past it ([remedyFor], by the rule its `reason` names: a proof gone stale
+ *   carries the access that admitted the reader), and is otherwise the
+ *   engine's own sentence for its code (a seat taken away, a proof gone
+ *   stale); a refusal saying nothing more is no access.
+ *
+ * NOT BY WHETHER IT NAMED ACCESS. A refusal naming none went to the sign-in
+ * sentence, which is the 401's, so a signed-in person a rule refused was told
+ * to sign in on Audit, Secrets, the backups dialog and Integrations, while
+ * every other screen told the same refusal as no access.
+ */
+export function authorityWords(what: string, refused: RestError | QueryRefusal | null): string {
+  if (refused instanceof RestError) {
+    if (refused.status === 401) return SIGN_IN;
+    const rule = refused.refusal;
+    if (rule !== null && !isLogRefusal(rule)) return ruleWords(what, rule);
+    if (remedyFor(refused.reason, refused.grants).namesAccess) {
+      return needsWords(what, refused.grants);
+    }
+    return asSentence(refused.sentence) || NO_ACCESS;
+  }
+  return refused === null ? NO_ACCESS : ruleWords(what, refused);
+}
+
+/** A rule's refusal as a reader is told it: see [authorityWords]. */
+function ruleWords(what: string, rule: QueryRefusal): string {
+  return remedyFor(rule.reason, rule.grants).namesAccess
+    ? needsWords(what, rule.grants)
+    : (REFUSAL_SENTENCES[rule.reason] ?? "You can’t see this, and no access would change that.");
+}
+
+/** Nothing the engine accepted was presented. */
+const SIGN_IN = "Sign in to see this.";
+
+/** A refusal that said nothing more than that it refused. */
+const NO_ACCESS = ACT_ERRORS.unauthorized;
 
 /**
  * What a person is told when the sign-in surface refuses them — in the
