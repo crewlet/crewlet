@@ -54,25 +54,20 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// every recall scanned, forever.
 		"agent_diary",
 		"agent_diary_long",
-		// THE DATASTORE LOG'S TWO, the per-node operation ledger and
-		// arbitration anchors every strict state log keeps, swept for the
-		// pages log's reason below. Its documents, history and tombstones
-		// are NOT here: all Replicated, their retention rides each record
-		// (the hot history's week and byte bound, pruned in the write's own
-		// transaction).
-		"artifactdata_anchors",
+		// THE DATASTORE LOG'S operation ledger, the per-node table every
+		// strict state log keeps, swept for the pages log's reason below.
+		// Its documents, history and tombstones are NOT here: all
+		// Replicated, their retention rides each record (the hot history's
+		// week and byte bound, pruned in the write's own transaction).
 		"artifactdata_ops",
-		// THE ARTIFACTS LOG'S TWO, for the same reason. The artifacts' own
+		// THE ARTIFACTS LOG'S, for the same reason. The artifacts' own
 		// history and their trashed rows are NOT here: both are Replicated,
 		// so their retention rides a record (the history's term in the
 		// applier, the trash through the trash reaper) rather than a local
 		// delete.
-		"artifacts_anchors",
 		"artifacts_ops",
-		// THE CODE LOG'S TWO, the operation ledger and the arbitration
-		// anchors, per-node jobs for the reason pages_ops and pages_anchors
-		// give below.
-		"code_anchors",
+		// THE CODE LOG'S, a per-node job for the reason pages_ops gives
+		// below.
 		"code_ops",
 		// THE CONFIGURATION ARCHIVE, which had no horizon at all: every
 		// node adopts its own copy of every revision it has ever met,
@@ -99,17 +94,16 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// naming it was the only place that showed.
 		"counterparty_profiles",
 		"events",
-		// THE IDENTITY ESTATE'S TWO, which sort here, swept on every
-		// node by the same per-node jobs every other domain's are: every
-		// node runs every domain in the register, whatever its roles, so
-		// every node holds rows in them to sweep.
+		// THE IDENTITY ESTATE'S, which sorts here, swept on every node by
+		// the same per-node job every other domain's is: every node runs
+		// every domain in the register, whatever its roles, so every node
+		// holds rows in it to sweep.
 		//
 		// The estate's OTHER retention — the authentication trail's two
 		// horizons — is deliberately NOT here: it is a record on the
 		// log rather than a local delete, because those rows are
 		// identity-claimed and two nodes sweeping on their own clocks
 		// would hold different bytes. See internal/iamdomain's sweep.
-		"iam_anchors",
 		"iam_ops",
 		// AND ITS SESSION SUBJECTS' OWN, the one ledger kind with a
 		// horizon shorter than its domain's: a row per sign-in and per
@@ -127,13 +121,14 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// singleton they would be tidied on one node and grow for ever
 		// on the others.
 		//
-		// AND EACH DOMAIN'S ANCHOR TABLE BESIDE IT, for the same
-		// reason and with the same shape: an arbitration anchor is a
-		// row per subject that the framework writes and nothing ever
-		// removed, so a company's anchor table grew one row per object
-		// it has ever written to and kept every one past the trim that
-		// retired the records behind them.
-		"pages_anchors",
+		// NOT EACH DOMAIN'S ANCHOR TABLE BESIDE IT, although an
+		// arbitration anchor is also a row per subject on every node:
+		// anchors are REPLICATED rows, so a per-node delete below a
+		// floor each node read for itself would be a second writer of
+		// rows every copy must hold alike (ADR-0002). The trim removes
+		// them with a trimmed record every applier takes at one
+		// position (ADR-0046), and a `<domain>_anchors` job here would
+		// be that second writer back.
 		"pages_ops",
 		// NEITHER NATIVE BACKEND SWEEPS ANY MORE, and the absence of
 		// their entries is the point. The knowledge base had three —
@@ -161,7 +156,6 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// runs and a board that stays wrong.
 		"tracker_abandoned_merges",
 		"tracker_abandoned_moves",
-		"tracker_anchors",
 		"tracker_duplicate_ranks",
 		// AND A TASK FILED BEHIND A MOVE THAT HAS FINISHED: a create a
 		// lagging node decided before it heard of the move, accepted after
@@ -198,10 +192,9 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		"tracker_respread",
 		"tracker_unblocked",
 		// NOT `vectors_*` OR `usage_*`: the compacted domains keep no
-		// operation ledger and arbitrate on no subject, so there is no
-		// ledger and no anchor table of theirs to sweep — and a job named
-		// after one that does not exist is a sweep that reports itself
-		// working while purging nothing.
+		// operation ledger, so there is no ledger of theirs to sweep —
+		// and a job named after one that does not exist is a sweep that
+		// reports itself working while purging nothing.
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("swept tables:\n got %v\nwant %v", got, want)

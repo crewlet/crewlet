@@ -4770,12 +4770,7 @@ func (s *stateLog) opsLedgers() map[string]maintenance.OpsHorizon {
 			continue
 		}
 		out[name] = maintenance.OpsHorizon{
-			Ledger: domainLedger{
-				name:   name,
-				runner: running.runner,
-				floor:  s.floorOf(name),
-				stream: running.spec.Name,
-			},
+			Ledger:    domainLedger{runner: running.runner},
 			Retention: entry.OpsRetention,
 			Kinds:     entry.OpsKindRetention,
 		}
@@ -4783,23 +4778,15 @@ func (s *stateLog) opsLedgers() map[string]maintenance.OpsHorizon {
 	return out
 }
 
-// domainLedger is one domain's two node-local sweeps, with the anchor half's
-// cutoff resolved where the floor is known.
+// domainLedger is one domain's operation-ledger sweeps, this node's own rows.
 //
-// THE FLOOR IS READ PER TICK rather than captured, for [stateLog.readerFor]'s
-// reason: the trim moves it while the process runs, and a sweep against a
-// captured one would keep deleting the same nothing after the log had trimmed
-// past it.
-//
-// AT THE GENERATION THE SWEEP READS ONCE, which is also the generation of the
-// position it deletes below: a floor read at one generation and a position
-// stamped with another — a reanchor landing between the two reads — would
-// name a sequence in a number space the floor says nothing about.
+// NOT ITS ARBITRATION ANCHORS, which are the replicated estate's: the trim
+// removes them with a trimmed record every node applies at one position
+// (ADR-0046, [retention.sweepAnchors]), because a node deleting below a floor
+// it read for itself would be a second writer of rows every copy must hold
+// alike (ADR-0002).
 type domainLedger struct {
-	name   string
-	stream string
 	runner *statelog.Runner
-	floor  func(ctx context.Context, generation uint32) (uint64, error)
 }
 
 func (l domainLedger) PurgeOps(ctx context.Context, cutoff time.Time) (int64, error) {
@@ -4810,20 +4797,4 @@ func (l domainLedger) PurgeOpsOfKind(ctx context.Context, kind string,
 	cutoff time.Time) (int64, error) {
 
 	return l.runner.PurgeOpsOfKind(ctx, kind, cutoff)
-}
-
-func (l domainLedger) PurgeAnchors(ctx context.Context) (int64, error) {
-	generation := l.runner.Committed().Generation
-	seq, err := l.floor(ctx, generation)
-	if err != nil {
-		// AN UNREADABLE FLOOR SWEEPS NOTHING, and says why. Deleting
-		// on a floor nobody could establish is deleting on a guess,
-		// and the rows it would remove are what the next writer's
-		// expectation is formed from.
-		return 0, fmt.Errorf("engine: the anchor sweep could not read %s's trim floor: %w",
-			l.name, err)
-	}
-	return l.runner.PurgeAnchors(ctx, statelog.Position{
-		Stream: l.stream, Generation: generation, Seq: seq,
-	})
 }

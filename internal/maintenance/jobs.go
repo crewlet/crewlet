@@ -196,17 +196,6 @@ type OpsLedger interface {
 
 	// PurgeOpsOfKind is PurgeOps over one subject kind's rows.
 	PurgeOpsOfKind(ctx context.Context, kind string, cutoff time.Time) (int64, error)
-
-	// PurgeAnchors deletes this node's arbitration anchors below the
-	// domain's published trim floor, reporting how many went.
-	//
-	// KEYED ON THE FLOOR AND NOT ON A CUTOFF, which is why it does not
-	// take one: an anchor answers what a subject's last record expects,
-	// and a row above the floor must stay however old it is, because an
-	// anchor read as absent hands the next writer an expectation the
-	// broker refuses for ever. The caller has no floor to pass — the
-	// domain publishes its own — so the seam asks for none.
-	PurgeAnchors(ctx context.Context) (int64, error)
 }
 
 // OpsHorizon is one domain's operation-ledger horizon, declared at its
@@ -233,10 +222,9 @@ type OpsHorizon struct {
 }
 
 // StatelogJobs sweeps each registered domain's operation ledger: one job per
-// ledger, named `<domain>_ops` after the domain it is keyed by, one more per
-// subject kind with a horizon of its own (`<domain>_ops_<kind>`), and one for
-// the domain's arbitration anchors (`<domain>_anchors`). Every horizon here is
-// this build's own and never moves, so each is [Fixed].
+// ledger, named `<domain>_ops` after the domain it is keyed by, and one more
+// per subject kind with a horizon of its own (`<domain>_ops_<kind>`). Every
+// horizon here is this build's own and never moves, so each is [Fixed].
 //
 // [NodeLocal], and that is what this job is FOR. Every `<domain>_ops` migration
 // says the table is swept and ships `<domain>_ops_swept_idx` for the range
@@ -251,13 +239,23 @@ type OpsHorizon struct {
 // — which looks exactly like a sweep that is working, to the operator who
 // checks the node it ran on. For a long time this was the ONLY job that said
 // so, while six others needed to; see [Scope].
+//
+// # Not the arbitration anchors
+//
+// The same state logs' anchors (`statelog_anchor`) are not swept here, though
+// they too are one row per subject on every node and the first migration ships
+// an index for their range delete. They are REPLICATED rows, which only an
+// applier writes (ADR-0002): a job here would delete them on each node's own
+// tick below a floor each node read for itself, so two copies of one log
+// would hold different anchors. The trim removes them instead with a trimmed
+// record every node's applier takes at one position (ADR-0046).
 func StatelogJobs(domains map[string]OpsHorizon) []Job {
 	// SORTED, so the log's job order is the same on every node and every
 	// tick. A map's iteration order would make one node's sweep line look
 	// like a different sweep from its peer's.
 	names := slices.Sorted(maps.Keys(domains))
 
-	jobs := make([]Job, 0, 2*len(names))
+	jobs := make([]Job, 0, len(names))
 	for _, name := range names {
 		domain := domains[name]
 		jobs = append(jobs, Job{
@@ -279,25 +277,6 @@ func StatelogJobs(domains map[string]OpsHorizon) []Job {
 				},
 			})
 		}
-		jobs = append(jobs, Job{
-			// AND THE ANCHORS, which had no sweep at all:
-			// `0001_the_state_log_lands.sql` ships
-			// `statelog_anchor_swept_idx` and states that the sweep
-			// needs it, and nothing ever wrote the delete. One row
-			// per arbitrated subject, for the life of the
-			// deployment, in the replicated estate and therefore in
-			// every snapshot artefact and every backup.
-			//
-			// NO HORIZON, because this one is not keyed on a clock:
-			// the cutoff is the domain's own published trim floor,
-			// which the ledger reads for itself. A horizon here
-			// would be a second opinion about what a log still
-			// holds.
-			Name: name + "_anchors", Scope: NodeLocal,
-			Run: func(ctx context.Context, _, _ time.Time) (int64, error) {
-				return domain.Ledger.PurgeAnchors(ctx)
-			},
-		})
 	}
 	return jobs
 }
