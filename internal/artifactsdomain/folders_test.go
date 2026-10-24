@@ -182,10 +182,12 @@ func TestTopLevelNamesHaveTwoNamespaces(t *testing.T) {
 // AN AGENT CREATES SUBFOLDERS ONLY, AND A TOP-LEVEL FOLDER STATES WHO SEES IT:
 // a company-wide top-level folder is a company-wide audience, which an agent
 // never grants (as it never shares an artifact with the company), and a
-// subfolder is seen by its tree, so it states nothing.
+// subfolder is seen by its tree, so it states nothing. An unbound machine
+// login is held to the same rule: a top-level folder is a person's.
 //
-// Mutation: drop the agent rule from checkFolderCreate and the agent's
-// top-level company folder is written.
+// Mutation: drop the person rule from checkFolderCreate and the agent's
+// top-level company folder is written; narrow it to agents and the machine
+// login's is.
 func TestAnAgentNeverSharesAFolderWithTheCompany(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)
@@ -202,6 +204,13 @@ func TestAnAgentNeverSharesAFolderWithTheCompany(t *testing.T) {
 		if _, err := n.writer.CreateFolders(t.Context(), scribe, in); !errors.Is(err, artifactsdomain.ErrInvalid) {
 			t.Errorf("%s: %v, want refused", name, err)
 		}
+	}
+	machine := person("ci-bot", artifacts.RoleOwner)
+	machine.Authority.Actor.Kind = iam.ActorOperator
+	if _, err := n.writer.CreateFolders(t.Context(), machine, artifactsdomain.FolderCreateInput{
+		Names: []string{"Builds"}, Visibility: artifactsdomain.FolderCompany, Owner: "ci-bot",
+		OwnerKind: iam.ActorOperator}); !errors.Is(err, artifactsdomain.ErrInvalid) {
+		t.Errorf("an unbound machine login's top-level company folder: %v, want refused", err)
 	}
 	if _, err := n.writer.CreateFolders(t.Context(), jane, artifactsdomain.FolderCreateInput{
 		Names: []string{"Untold"}, Owner: "jane", OwnerKind: iam.ActorHuman}); !errors.Is(err,

@@ -343,7 +343,10 @@ func checkFolderCreate(c Call, in FolderCreateInput) (names, keys []string, err 
 	case len(in.Names) > artifacts.MaxFolderDepth:
 		return nil, nil, fmt.Errorf("%w: the path names %d folders and folders go at most %d deep",
 			ErrFolderDepth, len(in.Names), artifacts.MaxFolderDepth)
-	case in.Parent == "" && c.Authority.Actor.Kind == iam.ActorAgent:
+	case in.Parent == "" && c.Authority.Actor.Kind != iam.ActorHuman:
+		// A TOP-LEVEL FOLDER IS A PERSON'S: it decides an audience (the
+		// company, or its owner alone), which neither an agent nor an
+		// unbound machine login decides for anybody.
 		return nil, nil, fmt.Errorf("%w: a person creates top-level folders; create this one "+
 			"inside a folder that already exists", ErrInvalid)
 	case in.Parent == "" && !in.Visibility.Valid():
