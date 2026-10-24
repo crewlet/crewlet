@@ -2239,12 +2239,20 @@ func later(a, b time.Time) time.Time {
 }
 
 // testCeiling is the reservation every case here opens the bucket with:
-// eight mebibytes, thirty times the largest object any case stores (the
-// suite's two pieces and a tail), and small enough that a test machine's
-// brokers, which reserve against three quarters of its free disk, grant one
-// to every case running at once. The engine never derives one this small
-// (store.objects.nats_max_bytes takes a gibibyte at least); the package
-// itself takes any positive reservation.
+// eight mebibytes, TWICE the largest object any case stores — the 4 MiB read
+// across a lost consumer ([TestAReadWhoseConsumerIsLostFinishesOnItsReplacement])
+// — which leaves the object's metadata and its pieces' message overhead room
+// with a whole second copy to spare. No case holds more at once: the 4 MiB puts
+// put_test.go stalls on a frozen link land a window of pieces at most, and are
+// purged when they fail, and the contract suite's largest object is two pieces
+// and a tail (some 256 KiB, a thirty-second of the ceiling). The margin asks
+// for nothing more: a case needs only its own bytes to fit, and a case about
+// the ceiling opens a bucket of its own size
+// ([TestAFullBucketLeavesTheCoordinationRemainder]). Small enough
+// besides that a test machine's brokers, which reserve against three quarters
+// of its free disk, grant one to every case running at once. The engine never
+// derives one this small (store.objects.nats_max_bytes takes a gibibyte at
+// least); the package itself takes any positive reservation.
 const testCeiling = 8 << 20
 
 // A BUCKET IS CREATED HOLDING ITS RESERVATION, and the ceiling Usage reports
