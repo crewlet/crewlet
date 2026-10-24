@@ -6313,7 +6313,11 @@ export interface ArtifactJoined {
 /** An `artifact_changed` push (`stream.ArtifactChange`): a hint, never content. */
 export interface ArtifactChangedPush {
   artifact: string;
-  /** `version`, `meta`, `share`, `asset`, `trash`, `restore`, `purge`, `transfer` or `reset`. */
+  /**
+   * `version`, `meta`, `share`, `asset`, `trash`, `restore`, `purge`,
+   * `transfer`, `reset` or `folder` (it was filed in another folder; a
+   * folder's removal moves its artifacts up and pushes nothing per artifact).
+   */
   what: string;
   head?: number;
   position: LogPosition;
