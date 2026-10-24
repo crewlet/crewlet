@@ -163,7 +163,7 @@ func TestTheRestartLineIsSaidAtAnActivation(t *testing.T) {
 	logging.Configure(slog.LevelInfo, logging.FormatJSON, logs)
 	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
 
-	b := config.DefaultBootstrap()
+	b := testBootstrap(t)
 	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	SeedStore(t, &b)
@@ -244,7 +244,7 @@ func TestTheRestartLineIsSaidAtAnActivation(t *testing.T) {
 }
 
 // restartLineVendorsOnly is [nativeCleanupCompany] on no native half at all:
-// a company a node runs no native runtime for.
+// a company whose tracker and knowledge base both live elsewhere.
 const restartLineVendorsOnly = restartLineTrackerNone + `knowledge:
   backend: none
 `
@@ -257,11 +257,16 @@ const restartLineTrackerOnly = nativeCleanupCompany + `knowledge:
 // A NODE WITH NO RUNTIME SAYS NOTHING, and the apply that gives it one says
 // nothing either.
 //
-// The runtime an apply meets on such a node is the one its own `native` stage
-// just started, from the revision being applied ([Engine.startNativeFor]), so
-// the two agree by construction — and a line there would tell an operator to
-// restart a node for a revision it is already serving. Once the runtime
-// exists the line is live: a later revision turning the tracker off is said.
+// A data node runs a native runtime for EVERY company it holds, whatever
+// backends that company names: the object collector runs on it, since a
+// company on Jira and Confluence still holds the rows that name its files'
+// objects ([Engine.startNativeCollector]). So the only node with no runtime is
+// one that has no company yet, and the runtime its first apply meets is the
+// one its own `native` stage just started, from the revision being applied
+// ([Engine.startNativeFor]): the two agree by construction, whichever halves
+// that revision keeps, and a line there would tell an operator to restart a
+// node for a revision it is already serving. Once the runtime exists the line
+// is live: a later revision moving the tracker is said.
 //
 // NOT PARALLEL, for [TestTheRestartLineIsSaidAtAnActivation]'s reason.
 func TestTheApplyThatStartsTheRuntimeSaysNothing(t *testing.T) {
@@ -269,39 +274,45 @@ func TestTheApplyThatStartsTheRuntimeSaysNothing(t *testing.T) {
 	logging.Configure(slog.LevelInfo, logging.FormatJSON, logs)
 	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatConsole, os.Stderr) })
 
-	e := newSandboxNode(t, parseCompany(t, restartLineVendorsOnly))
-	if _, runs := e.runtimeBuilt(); runs {
-		t.Fatal("the premise: a node booted on no native half runs a native runtime")
-	}
+	for _, tc := range []struct {
+		name               string
+		first, then        string
+		running, activated string
+	}{
+		{"a first company on the vendors", restartLineVendorsOnly, restartLineTrackerOnly,
+			"none", "native"},
+		{"a first company on the native tracker", restartLineTrackerOnly, restartLineVendorsOnly,
+			"native", "none"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newSandboxNode(t, nil)
+			if _, runs := e.runtimeBuilt(); runs {
+				t.Fatal("the premise: a node booted on no company runs a native runtime")
+			}
+			before := len(restartLines(t, logs))
 
-	// STAYING ON THE VENDORS: nothing to build, nothing to say.
-	applyOK(t, e, restartLineVendorsOnly)
-	if _, runs := e.runtimeBuilt(); runs {
-		t.Error("a revision naming no native half started a native runtime")
-	}
-	if lines := restartLines(t, logs); len(lines) != 0 {
-		t.Errorf("a node with no runtime said %d restart lines: %v", len(lines), lines)
-	}
+			// THE FIRST COMPANY: the runtime is built from this revision,
+			// so it agrees with it.
+			applyOK(t, e, tc.first)
+			built, runs := e.runtimeBuilt()
+			if want := builtFrom(parseCompany(t, tc.first)); !runs || built != want {
+				t.Fatalf("the node's first apply built %+v (runs %v), want the runtime that "+
+					"revision chose, %+v", built, runs, want)
+			}
+			if lines := restartLines(t, logs)[before:]; len(lines) != 0 {
+				t.Errorf("the apply that started the runtime said %d restart lines, want none: "+
+					"it built the runtime from the very revision it applied: %v", len(lines), lines)
+			}
 
-	// THE FIRST NATIVE HALF: built from this revision, so it agrees with it.
-	applyOK(t, e, restartLineTrackerOnly)
-	built, runs := e.runtimeBuilt()
-	if !runs || built.tracker != config.TrackerNative || built.knowledge != config.KnowledgeNone {
-		t.Fatalf("the apply naming the native tracker built %+v (runs %v), want the "+
-			"runtime that revision chose", built, runs)
-	}
-	if lines := restartLines(t, logs); len(lines) != 0 {
-		t.Errorf("the apply that started the runtime said %d restart lines, want none: "+
-			"it built the runtime from the very revision it applied: %v", len(lines), lines)
-	}
-
-	// THE CONTROL: the line is live on this node now.
-	applyOK(t, e, restartLineVendorsOnly)
-	lines := restartLines(t, logs)
-	if len(lines) != 1 || lines[0]["field"] != "tracker.backend" ||
-		lines[0]["running"] != "native" || lines[0]["activated"] != "none" {
-		t.Errorf("a revision turning off the tracker the apply started said %v, want "+
-			"one tracker.backend line, native to none", lines)
+			// THE CONTROL: the line is live on this node now.
+			applyOK(t, e, tc.then)
+			lines := restartLines(t, logs)[before:]
+			if len(lines) != 1 || lines[0]["field"] != "tracker.backend" ||
+				lines[0]["running"] != tc.running || lines[0]["activated"] != tc.activated {
+				t.Errorf("a revision moving the tracker the apply started said %v, want one "+
+					"tracker.backend line, %s to %s", lines, tc.running, tc.activated)
+			}
+		})
 	}
 }
 

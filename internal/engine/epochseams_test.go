@@ -5,9 +5,12 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/artifactdata"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -67,12 +70,13 @@ func (c seamClass) valid() bool {
 // [estate.Backend] field holds is BUILT from, where one is, since that is where
 // what the half reads is decided: the code host's committer, lifecycle store
 // and reader options, the knowledge searcher's, the page reader's and the page
-// store's, and the item search's ranker and the fan-out it and the knowledge
-// searcher answer through. (The tracker's reader, the link index and the usage
-// reader take what they read as arguments, which their Backend rows name.) A
-// Backend row that only named its half would see nothing added to the options
-// behind it: the knowledge searcher read the epoch's skills container and
-// embedding model through options no row covered.
+// store's, the identity directory's reader's, the artifacts estate's and its
+// datastore's readers' and writers', and the item search's ranker and the
+// fan-out it and the knowledge searcher answer through. (The tracker's reader,
+// the link index and the usage reader take what they read as arguments, which
+// their Backend rows name.) A Backend row that only named its half would see
+// nothing added to the options behind it: the knowledge searcher read the
+// epoch's skills container and embedding model through options no row covered.
 var servingSeams = []reflect.Type{
 	reflect.TypeFor[tracker.WriterDeps](),
 	reflect.TypeFor[estate.Backend](),
@@ -83,6 +87,11 @@ var servingSeams = []reflect.Type{
 	reflect.TypeFor[pages.SearcherOptions](),
 	reflect.TypeFor[pages.ReaderOptions](),
 	reflect.TypeFor[pages.Options](),
+	reflect.TypeFor[iamdomain.ReaderOptions](),
+	reflect.TypeFor[artifactsdomain.ReaderOptions](),
+	reflect.TypeFor[artifactsdomain.WriterDeps](),
+	reflect.TypeFor[artifactdata.ReaderOptions](),
+	reflect.TypeFor[artifactdata.WriterDeps](),
 	reflect.TypeFor[engine.ItemRanker](),
 	reflect.TypeFor[search.FanOut](),
 }
@@ -121,6 +130,16 @@ var classified = map[string]struct {
 	"estate.Backend.Usage":     {seamNone, "the usage rows"},
 	"estate.Backend.Code": {seamNone, "the committer and the reader, built over " +
 		"code.CommitterOptions and code.ReaderOptions"},
+	"estate.Backend.Identity": {seamNone, "the identity directory's reader, built over " +
+		"iamdomain.ReaderOptions: who holds a login and each human seat, read from the copy's " +
+		"rows; the chart and the Tier A token list an answer is judged against are the ASKING " +
+		"node's"},
+	"estate.Backend.Artifacts": {seamNone, "the artifacts reader and writer, built over " +
+		"artifactsdomain.ReaderOptions and artifactsdomain.WriterDeps; a caller's role on an " +
+		"artifact is decided and stamped on the asking side"},
+	"estate.Backend.ArtifactData": {seamNone, "the datastore's reader and writer, built over " +
+		"artifactdata.ReaderOptions and artifactdata.WriterDeps; a write's authority is stamped " +
+		"on the asking side"},
 	"estate.Backend.Committed": {seamNone, "the applier's position"},
 	"estate.Backend.Answers":   {seamNone, "the copy's distance from its log"},
 	"estate.Backend.Admits":    {seamNone, "the copy's establishment, for a seat's admission"},
@@ -163,13 +182,44 @@ var classified = map[string]struct {
 		"result leaves out, read live from the epoch's knowledge.skills_container"},
 	"pages.SearcherOptions.Copies": {seamNone, "this node's verdict on the copies it scans"},
 
-	"pages.ReaderOptions.DB":        {seamNone, "the replicated rows a page read answers from"},
-	"pages.ReaderOptions.Log":       {seamNone, "the pages log's read authority"},
-	"pages.ReaderOptions.Committed": {seamNone, "the applier's position"},
+	"pages.ReaderOptions.DB":  {seamNone, "the replicated rows a page read answers from"},
+	"pages.ReaderOptions.Log": {seamNone, "the pages log's read authority"},
 
 	"pages.Options.Publisher": {seamNone, "the pages log's write authority"},
 	"pages.Options.DB":        {seamNone, "the replicated rows a page write decides from"},
 	"pages.Options.Now":       {seamNone, "the clock an authored instant is stamped from"},
+	"pages.Options.Reserved": {seamValue, "the containers an agent's write is held back " +
+		"from and the spaces a page may be created in, read from the epoch's knowledge " +
+		"settings and chart: a write a stale reading admits is one that, sent a moment " +
+		"before the revision, would have landed anyway"},
+
+	"iamdomain.ReaderOptions.DB":        {seamNone, "the replicated rows an identity read answers from"},
+	"iamdomain.ReaderOptions.Log":       {seamNone, "the identity log's read authority"},
+	"iamdomain.ReaderOptions.Committed": {seamNone, "the applier's position"},
+	"iamdomain.ReaderOptions.Lag":       {seamNone, "the applier's distance from its log"},
+	"iamdomain.ReaderOptions.Await":     {seamNone, "the applier's wait for a position"},
+
+	"artifactsdomain.ReaderOptions.DB":  {seamNone, "the replicated rows an artifact read answers from"},
+	"artifactsdomain.ReaderOptions.Log": {seamNone, "the artifacts log's read authority"},
+
+	"artifactsdomain.WriterDeps.Publisher":  {seamNone, "the artifacts log's write authority"},
+	"artifactsdomain.WriterDeps.DB":         {seamNone, "the replicated rows a write decides from"},
+	"artifactsdomain.WriterDeps.Now":        {seamNone, "the clock"},
+	"artifactsdomain.WriterDeps.Dependents": {seamNone, "the datastore a purge clears first"},
+	"artifactsdomain.WriterDeps.SeatKind": {seamValue, "the kind a transfer records as its new " +
+		"owner's, by the epoch's chart: a revision changing that seat's kind just after the " +
+		"transfer leaves the same record"},
+
+	"artifactdata.ReaderOptions.DB":  {seamNone, "the replicated rows a datastore read answers from"},
+	"artifactdata.ReaderOptions.Log": {seamNone, "the datastore log's read authority"},
+
+	"artifactdata.WriterDeps.Publisher": {seamNone, "the datastore log's write authority"},
+	"artifactdata.WriterDeps.DB":        {seamNone, "the replicated rows a write's verdict is read from"},
+	"artifactdata.WriterDeps.SeatExists": {seamValue, "whether a person column's value names a " +
+		"seat of the epoch's chart: a seat removed just after the write leaves the same value"},
+	"artifactdata.WriterDeps.Now":        {seamNone, "the clock"},
+	"artifactdata.WriterDeps.Metrics":    {seamNone, "the node's instruments"},
+	"artifactdata.WriterDeps.Objectives": {seamNone, "the node's objective meter"},
 
 	"engine.itemRanker.fan":   {seamNone, "the item search's fan-out, classified on search.FanOut"},
 	"engine.itemRanker.index": {seamNone, "the node's lexical index"},

@@ -82,7 +82,7 @@ func TestTheRankedWorkSearchFollowsTheTracker(t *testing.T) {
 	t.Cleanup(func() { _ = q.Stop(context.Background()) })
 	router, err := estate.NewRouter(estate.RouterOptions{
 		Self: "data-self", Queue: q, Placement: twoDataNodes{}, Session: estate.NewSession(),
-		Timing: estate.Production(),
+		Envelopes: routerEnvelopes(t), Timing: estate.Production(),
 	})
 	if err != nil {
 		t.Fatal(err)

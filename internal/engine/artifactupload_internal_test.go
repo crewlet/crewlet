@@ -44,7 +44,7 @@ func TestANodeBuildsOnePipelineOverItsRouter(t *testing.T) {
 	}
 	router, err := estate.NewRouter(estate.RouterOptions{
 		Self: "node-1", Queue: q, Placement: oneDataNode{}, Session: estate.NewSession(),
-		Envelopes: routerEnvelopes(t), Now: time.Now,
+		Envelopes: routerEnvelopes(t), Now: time.Now, Timing: estate.Production(),
 	})
 	if err != nil {
 		t.Fatal(err)
