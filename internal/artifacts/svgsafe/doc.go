@@ -41,10 +41,13 @@
 // line and the fix, never silently stripped into something its author did not
 // make.
 //
-// A DRAWING THAT EXPANDS IS BOUNDED BY WHAT IT EXPANDS TO. A `<use>` draws
-// another element of the drawing again, so ten groups of ten uses each referring
-// to the group before draw ten to the tenth shapes from a hundred elements: a
-// standalone file is refused when a `<use>` refers to itself or an element it
-// sits inside (a cycle), or when the drawing expanded through its uses would
-// exceed [MaxExpandedElements].
+// A DRAWING THAT EXPANDS IS BOUNDED BY WHAT IT EXPANDS TO, in every reader
+// ([Drawing.Open], [Drawing.Close], [Drawing.Resolve]). A `<use>` draws
+// another element of the drawing again, so ten groups of ten uses each
+// referring to the group before draw ten to the tenth shapes from a hundred
+// elements; a marker is drawn at every vertex of the path naming it as
+// `marker-mid`; a pattern, a mask, a clip or a filter draws its subtree for
+// the element naming it. A drawing is refused when a reference reaches back
+// into what refers to it (a cycle), or when it would draw more than
+// [MaxExpandedElements] once every reference is expanded.
 package svgsafe

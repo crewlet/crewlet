@@ -2,6 +2,7 @@ package slideformat
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path"
@@ -173,6 +174,8 @@ func TestASlideOutsideTheSubsetIsRefused(t *testing.T) {
 		{"svg escaped by reference", head + `<svg aria-label="x"><rect filter="u&#92;72l(https://x.test/f.svg#a)"/></svg></section>`, "backslash", RuleAttribute, 1},
 		{"svg image-set", head + `<svg aria-label="x"><rect mask="image-set('https://x.test/a.png' 1x)"/></svg></section>`, "url(#id)", RuleAttribute, 1},
 		{"svg var", head + `<svg aria-label="x"><rect fill="var(--x)"/></svg></section>`, "a colour is", RuleAttribute, 1},
+		{"svg use cycle", head + `<svg aria-label="x"><g id="a"><use href="#a"></use></g></svg></section>`, "draws this element again", RuleReference, 1},
+		{"svg use bomb", head + `<svg aria-label="x"><defs><g id="l0"><rect/></g>` + useLevels(10) + `</defs><use href="#l10"/></svg></section>`, "once its uses, markers and paint servers are expanded", RuleReference, 0},
 		{"notes markup", head + `<aside><b>x</b></aside></section>`, "plain text", RuleElement, 1},
 		{"after notes", head + `<aside>x</aside><p>y</p></section>`, "after the notes", RuleElement, 1},
 		{"doctype", "<!doctype html>" + head + "</section>", "no doctype", RuleMarkup, 1},
@@ -563,4 +566,18 @@ func TestTheBrandThemeIsResolvedByItsCaller(t *testing.T) {
 	if err != nil || deck.Theme != BrandTheme || len(deck.Slides) != len(Layouts()) {
 		t.Fatalf("the brand theme sampled as %q with %d slides: %v", deck.Theme, len(deck.Slides), err)
 	}
+}
+
+// useLevels is levels groups, each drawing the one below ten times: ten to
+// the levels shapes from a hundred elements.
+func useLevels(levels int) string {
+	var b strings.Builder
+	for level := 1; level <= levels; level++ {
+		fmt.Fprintf(&b, `<g id="l%d">`, level)
+		for range 10 {
+			fmt.Fprintf(&b, `<use href="#l%d"/>`, level-1)
+		}
+		b.WriteString(`</g>`)
+	}
+	return b.String()
 }

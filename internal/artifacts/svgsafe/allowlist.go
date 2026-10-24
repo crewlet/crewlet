@@ -168,10 +168,18 @@ func Attributes() []string {
 
 // Drawing is one drawing as it is read: the ids it declares and the ids it
 // refers to, each reference with the line it is on, so every reference is
-// resolved once the drawing is closed ([Drawing.Resolve]).
+// resolved once the drawing is closed ([Drawing.Resolve]), and its elements as
+// a tree ([Drawing.Open], [Drawing.Close]), so what it draws once every
+// reference is expanded is bounded the same way for every reader.
 type Drawing struct {
 	ids  map[string]bool
 	refs []reference
+
+	// elems is every element opened, in document order, and open the ones
+	// not yet closed; byID is each declared id's element.
+	elems []element
+	open  []int
+	byID  map[string]int
 }
 
 type reference struct {
@@ -180,7 +188,7 @@ type reference struct {
 }
 
 // NewDrawing begins a drawing.
-func NewDrawing() *Drawing { return &Drawing{ids: map[string]bool{}} }
+func NewDrawing() *Drawing { return &Drawing{ids: map[string]bool{}, byID: map[string]int{}} }
 
 // Attr checks one attribute of an element (SVG's spelling) of the drawing, its
 // key lowercased as an HTML tokenizer reads it (`xlink:href` for the XLink
@@ -226,6 +234,7 @@ func (d *Drawing) Attr(tag, key, val string, line int, bad func(string, ...any))
 			return "", "", false
 		}
 		d.ids[val] = true
+		d.declare(val)
 	case name == "href":
 		id, ok := strings.CutPrefix(val, "#")
 		if !ok || !idPattern.MatchString(id) {
@@ -233,6 +242,7 @@ func (d *Drawing) Attr(tag, key, val string, line int, bad func(string, ...any))
 			return "", "", false
 		}
 		d.refs = append(d.refs, reference{id: id, line: line})
+		d.refer(id, refUse, line)
 	case textAttributes[name]:
 		// Words for a person: nothing reads them as CSS.
 	case strings.Contains(low, "url("):
@@ -243,10 +253,14 @@ func (d *Drawing) Attr(tag, key, val string, line int, bad func(string, ...any))
 			return "", "", false
 		}
 		d.refs = append(d.refs, reference{id: m[1], line: line})
+		d.refer(m[1], refKindOf(name), line)
 	default:
 		if hint, ok := valueHint(name, val, low); !ok {
 			bad("<%s %s=%q>: %s", tag, key, val, hint)
 			return "", "", false
+		}
+		if name == "d" || name == "points" {
+			d.vertices(val)
 		}
 	}
 	return name, val, true
@@ -279,11 +293,19 @@ func valueHint(name, val, low string) (string, bool) {
 		"function or punctuation beyond those is not allowed in a drawing", false
 }
 
-// Resolve reports every reference to an id the drawing does not declare.
+// Resolve reports every reference to an id the drawing does not declare, and,
+// where every reference resolves, a reference cycle and a drawing that draws
+// more than [MaxExpandedElements] once its references are expanded
+// ([Drawing.expansion]).
 func (d *Drawing) Resolve(bad func(line int, format string, args ...any)) {
+	dangling := false
 	for _, r := range d.refs {
 		if !d.ids[r.id] {
 			bad(r.line, "the drawing refers to #%s, which none of its own elements declares", r.id)
+			dangling = true
 		}
+	}
+	if !dangling {
+		d.expansion(bad)
 	}
 }

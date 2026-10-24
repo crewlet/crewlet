@@ -121,9 +121,6 @@ func ParseFile(src []byte, maxBytes int) (Canonical, error) {
 	}
 	width, height := f.viewBox(root)
 	f.drawing.Resolve(func(line int, format string, args ...any) { f.bad(line, format, args...) })
-	if len(f.found) == 0 {
-		f.expansion(root)
-	}
 	if len(f.found) > 0 {
 		return Canonical{}, f.refused()
 	}
@@ -137,7 +134,6 @@ func ParseFile(src []byte, maxBytes int) (Canonical, error) {
 type fileReader struct {
 	found   []Finding
 	drawing *Drawing
-	ids     map[string]*node
 	count   int
 }
 
@@ -149,7 +145,7 @@ func (f *fileReader) refused() error { return &Refused{Findings: f.found} }
 
 // read builds the tree, or answers nil once the file cannot be read on.
 func (f *fileReader) read(src []byte) *node {
-	f.drawing, f.ids = NewDrawing(), map[string]*node{}
+	f.drawing = NewDrawing()
 	d := xml.NewDecoder(bytes.NewReader(src))
 	// STRICT, AND NO ENTITY BUT XML's FIVE: an entity this decoder does not
 	// know is an error, so nothing a DOCTYPE could declare ever expands.
@@ -212,6 +208,7 @@ func (f *fileReader) read(src []byte) *node {
 			stack = append(stack, n)
 		case xml.EndElement:
 			stack = stack[:len(stack)-1]
+			f.drawing.Close()
 		}
 	}
 	if root == nil {
@@ -265,6 +262,7 @@ func (f *fileReader) open(t xml.StartElement, stack []*node, root *node, line in
 		}
 	}
 	n := &node{name: name, line: line}
+	f.drawing.Open(name, line)
 	bad := func(format string, args ...any) { f.bad(line, format, args...) }
 	for _, a := range t.Attr {
 		key, ok := f.attrKey(name, a, bad)
@@ -283,9 +281,6 @@ func (f *fileReader) open(t xml.StartElement, stack []*node, root *node, line in
 			continue
 		}
 		n.attrs[attr] = value
-		if attr == "id" {
-			f.ids[value] = n
-		}
 	}
 	return n, true
 }
@@ -364,58 +359,6 @@ func (f *fileReader) viewBox(root *node) (float64, float64) {
 	}
 	return w, h
 }
-
-// expansion refuses a `<use>` cycle and a drawing that draws more than
-// [MaxExpandedElements] once every use is expanded. Sizes saturate just past
-// the bound, so no count overflows however the uses multiply.
-func (f *fileReader) expansion(root *node) {
-	const unvisited, visiting = 0, -1
-	size := map[*node]int{}
-	var walk func(n *node) (int, bool)
-	walk = func(n *node) (int, bool) {
-		switch s := size[n]; s {
-		case visiting:
-			return 0, false
-		case unvisited:
-		default:
-			return s, true
-		}
-		size[n] = visiting
-		total := 1
-		if n.name == "use" {
-			if target, ok := f.ids[strings.TrimPrefix(n.attrs["href"], "#")]; ok {
-				if size[target] == visiting {
-					f.bad(n.line, "<use href=%q> draws an element that draws this use again: a "+
-						"use refers to an element outside itself", n.attrs["href"])
-					return 0, false
-				}
-				s, ok := walk(target)
-				if !ok {
-					return 0, false
-				}
-				total = saturate(total + s)
-			}
-		}
-		for _, c := range n.children {
-			if c.elem == nil {
-				continue
-			}
-			s, ok := walk(c.elem)
-			if !ok {
-				return 0, false
-			}
-			total = saturate(total + s)
-		}
-		size[n] = total
-		return total, true
-	}
-	if total, ok := walk(root); ok && total > MaxExpandedElements {
-		f.bad(0, "the drawing draws more than %d elements once its <use>s are expanded: draw "+
-			"the repeated shapes once", MaxExpandedElements)
-	}
-}
-
-func saturate(n int) int { return min(n, MaxExpandedElements+1) }
 
 // ---- the canonical form --------------------------------------------------- //
 

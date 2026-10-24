@@ -209,20 +209,21 @@ func TestARefusalNamesTheLine(t *testing.T) {
 	}
 }
 
-// A USE NEVER DRAWS ITSELF, AND NEVER MULTIPLIES PAST THE BOUND: a use inside
-// the element it draws is a cycle, and ten levels of groups each using the one
-// below ten times are a hundred elements that draw ten billion.
+// A REFERENCE NEVER DRAWS ITSELF, AND NEVER MULTIPLIES PAST THE BOUND: a use
+// inside the element it draws is a cycle, ten levels of groups each using the
+// one below ten times are a hundred elements that draw ten billion, and a
+// marker multiplies by its path's vertices.
 //
 // Mutation: drop the visiting check and the cycle recurses without end (the
 // test times out); drop the saturation and the count overflows to a pass.
 func TestAUseNeverDrawsItselfAndNeverMultipliesPastTheBound(t *testing.T) {
 	t.Parallel()
 	_, refused := parse(t, wrap(`<g id="a"><rect/><use href="#a"/></g>`))
-	if refused == nil || !strings.Contains(refused.Error(), "draws this use again") {
+	if refused == nil || !strings.Contains(refused.Error(), "draws this element again") {
 		t.Errorf("a use inside the group it draws was stored: %v", refused)
 	}
 	_, refused = parse(t, wrap(`<g id="a"><use href="#b"/></g><g id="b"><use href="#a"/></g>`))
-	if refused == nil || !strings.Contains(refused.Error(), "draws this use again") {
+	if refused == nil || !strings.Contains(refused.Error(), "draws this element again") {
 		t.Errorf("two groups using each other were stored: %v", refused)
 	}
 
@@ -237,8 +238,30 @@ func TestAUseNeverDrawsItselfAndNeverMultipliesPastTheBound(t *testing.T) {
 	}
 	b.WriteString(`</defs><use href="#l10"/>`)
 	_, refused = parse(t, wrap(b.String()))
-	if refused == nil || !strings.Contains(refused.Error(), "once its <use>s are expanded") {
+	if refused == nil || !strings.Contains(refused.Error(), "once its uses, markers and paint servers are expanded") {
 		t.Errorf("a use bomb was stored: %v", refused)
+	}
+
+	// A MARKER IS DRAWN AT EVERY VERTEX OF THE PATH NAMING IT AS marker-mid,
+	// so a marker of a hundred shapes on a path of a thousand points draws a
+	// hundred thousand from a few hundred elements.
+	b.Reset()
+	b.WriteString(`<defs><marker id="m">`)
+	b.WriteString(strings.Repeat(`<rect width="1" height="1"/>`, 100))
+	b.WriteString(`</marker></defs><path marker-mid="url(#m)" d="M0 0`)
+	for i := range 1000 {
+		fmt.Fprintf(&b, " L%d %d", i, i%7)
+	}
+	b.WriteString(`"/>`)
+	_, refused = parse(t, wrap(b.String()))
+	if refused == nil || !strings.Contains(refused.Error(), "markers and paint servers are expanded") {
+		t.Errorf("a marker bomb was stored: %v", refused)
+	}
+	// AND A PAINT SERVER THAT PAINTS ITSELF is a cycle.
+	_, refused = parse(t, wrap(`<defs><pattern id="p" width="1" height="1">`+
+		`<rect width="1" height="1" fill="url(#p)"/></pattern></defs><rect fill="url(#p)"/>`))
+	if refused == nil || !strings.Contains(refused.Error(), "draws this element again") {
+		t.Errorf("a pattern painting itself was stored: %v", refused)
 	}
 
 	// A MODEST REUSE IS A LOGO: forty dots drawn from one symbol.

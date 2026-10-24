@@ -237,7 +237,10 @@ transform (`matrix`, `translate`, `scale`, `rotate`, `skewX`, `skewY`) or a
 colour (`rgb()`, `rgba()`, `hsl()`, `hsla()`), and is otherwise numbers,
 lengths, percentages, hex colours and keywords; a `font-family` list may
 quote its names. A filter, clip or mask is the drawing's own element, named
-by `url(#id)`, never a CSS function such as `blur()` or `inset()`. The
+by `url(#id)`, never a CSS function such as `blur()` or `inset()`. A drawing
+draws at most 50,000 elements once every `<use>`, marker (at each vertex of a
+path naming it as `marker-mid`) and paint server is expanded, and no reference
+reaches back into what refers to it. The
 dashboard gives each drawn copy of a drawing its own id prefix,
 so a slide drawn twice (its thumbnail and the stage) never resolves the other
 copy's gradients.

@@ -363,6 +363,7 @@ func (p *parser) open(tok html.Token, selfClosing bool, line, start int) bool {
 	if tag == "svg" {
 		p.svg = &svgDrawing{start: start, Drawing: svgsafe.NewDrawing()}
 		p.svgTop = len(p.stack)
+		p.svg.Open("svg", line)
 	}
 	p.attrs(&node, tok.Attr, line)
 	if tag != "section" && tag != "aside" {
@@ -662,11 +663,16 @@ func (p *parser) close(tag string, line, end int) bool {
 		return true
 	}
 	node := *f.node
+	if p.svg != nil && len(p.stack) > p.svgTop {
+		// AN ELEMENT INSIDE THE DRAWING CLOSES its place in the drawing's tree.
+		p.svg.Close()
+	}
 	if p.svg != nil && len(p.stack) == p.svgTop {
 		if end-p.svg.start > MaxSVGBytes {
 			p.bad(RuleBound, f.line, "the drawing is %d bytes and an inline svg may be at most "+
 				"%d: make it an image file", end-p.svg.start, MaxSVGBytes)
 		}
+		p.svg.Close()
 		p.svg.Resolve(func(l int, format string, args ...any) { p.bad(RuleReference, l, format, args...) })
 		p.svg = nil
 	}
@@ -780,6 +786,7 @@ func (p *parser) openSVG(tok html.Token, selfClosing bool, line int) bool {
 		return false
 	}
 	node := Node{Tag: name}
+	p.svg.Open(name, line)
 	for _, a := range tok.Attr {
 		key := a.Key
 		if a.Namespace != "" {
@@ -795,6 +802,7 @@ func (p *parser) openSVG(tok html.Token, selfClosing bool, line int) bool {
 		}
 	}
 	if selfClosing {
+		p.svg.Close()
 		p.attach(node)
 		return true
 	}
