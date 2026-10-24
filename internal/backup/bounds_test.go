@@ -443,6 +443,15 @@ func TestTheFetchBoundRidesWarmConnections(t *testing.T) {
 // million objects is two million references, and a backup that read them all
 // before copying the first held half a gibibyte of them — twice; walked, it
 // holds a page of each table while the objects of the page before are copied.
+//
+// SO WHILE ITS FIRST OBJECTS ARE COPIED IT HAS READ ONE PAGE OF EACH TABLE IT
+// MERGES, and no more: the merge reads every Required table's first page
+// before it can say which key comes first (objstore.MergeWalks), and the
+// tracker's first page holds far more references than a fetch's width. The
+// bound is counted from objstore/references rather than written down, because
+// a table a domain declares is a page the walk reads at its start — it was the
+// literal 2 while the tracker's files and the code host's packs were the only
+// Required tables, and every table declared since read as a gathering walk.
 func TestABackupWalksItsCopyAPageAtATime(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
@@ -461,9 +470,17 @@ func TestABackupWalksItsCopyAPageAtATime(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "paged")
 	done := takeAsync(t, svc, dir)
 	g.waitHeld(t, backup.FetchConcurrency)
-	if read := pages.Load(); read > 2 {
-		t.Fatalf("the backup had read %d pages of the copy while copying its first %d objects: "+
-			"it gathers the copy's references before copying them", read, backup.FetchConcurrency)
+	// One page of the tracker's files and one of every other table the walk
+	// merges — a gathering walk has read the tracker's five by now.
+	tables, _ := othersDeclared()
+	if read, merged := pages.Load(), int32(1+tables); read > merged {
+		t.Fatalf("the backup had read %d pages of the copy while copying its first %d objects, "+
+			"past the one page of each of the %d tables it merges: it gathers the copy's "+
+			"references before copying them", read, backup.FetchConcurrency, merged)
+	}
+	if objstore.WalkPage <= backup.FetchConcurrency {
+		t.Fatalf("a walk page holds %d references, no more than the %d a fetch copies at once; "+
+			"this case cannot tell a walk from a gather", objstore.WalkPage, backup.FetchConcurrency)
 	}
 	g.release()
 	if err := <-done; err != nil {
@@ -472,7 +489,6 @@ func TestABackupWalksItsCopyAPageAtATime(t *testing.T) {
 	// FOUR WHOLE PAGES AND THE SHORT ONE THAT ENDS THE WALK — and no read
 	// past it — plus the one empty page that ends the walk of every other
 	// domain's table, of which this copy holds no row.
-	tables, _ := othersDeclared()
 	if read, want := pages.Load(), int32(5+tables); read != want {
 		t.Fatalf("the backup read the copy in %d pages, want %d: five of the "+
 			"tracker's and one for each of the %d other declared tables", read, want, tables)
