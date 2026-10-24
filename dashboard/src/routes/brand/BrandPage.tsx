@@ -54,6 +54,7 @@ import {
   XGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href, useLeaveGuard, useNavigator } from "~/app/router.tsx";
+import { usePageMenu } from "~/app/Shell.tsx";
 import { artifactPath } from "~/app/routes.ts";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -297,9 +298,29 @@ export function BrandPage() {
   );
 }
 
-/** The administrator's controls in the page bar: the kit's history, and a way to stop using the brand. */
+/**
+ * The administrator's controls in the page bar: the kit's history, and a way to
+ * stop using the brand. ON A PHONE THE MENU FOLDS INTO THE BAR'S ONE "MORE"
+ * (`usePageMenu`): beside it, its own ellipsis was a second "···" a reader
+ * could not tell apart. History stays the one action in view.
+ */
 function BarActions({ adoption, onClear }: { adoption: Adoption; onClear: () => void }) {
   const nav = useNavigator();
+  const openKit = () => nav.to(artifactPath(adoption.kit));
+  usePageMenu([
+    {
+      key: "kit",
+      label: "Open the brand kit",
+      icon: <ExternalLinkGlyph size="sm" />,
+      onSelect: openKit,
+    },
+    {
+      key: "clear",
+      label: "Stop using this brand",
+      icon: <XGlyph size="sm" />,
+      onSelect: onClear,
+    },
+  ]);
   return (
     <PageActions>
       <ButtonLink
@@ -310,28 +331,30 @@ function BarActions({ adoption, onClear }: { adoption: Adoption; onClear: () => 
       >
         History
       </ButtonLink>
-      <Menu
-        label="More brand actions"
-        icon={<EllipsisGlyph size="sm" />}
-        triggerVariant="ghost"
-        align="end"
-        items={[
-          {
-            key: "kit",
-            label: "Open the brand kit",
-            icon: <ExternalLinkGlyph size="sm" />,
-            onSelect: () => nav.to(artifactPath(adoption.kit)),
-          },
-          { kind: "separator", key: "sep" },
-          {
-            key: "clear",
-            label: "Stop using this brand",
-            icon: <XGlyph size="sm" />,
-            danger: true,
-            onSelect: onClear,
-          },
-        ]}
-      />
+      <span className="page-action-folds">
+        <Menu
+          label="More brand actions"
+          icon={<EllipsisGlyph size="sm" />}
+          triggerVariant="ghost"
+          align="end"
+          items={[
+            {
+              key: "kit",
+              label: "Open the brand kit",
+              icon: <ExternalLinkGlyph size="sm" />,
+              onSelect: openKit,
+            },
+            { kind: "separator", key: "sep" },
+            {
+              key: "clear",
+              label: "Stop using this brand",
+              icon: <XGlyph size="sm" />,
+              danger: true,
+              onSelect: onClear,
+            },
+          ]}
+        />
+      </span>
     </PageActions>
   );
 }

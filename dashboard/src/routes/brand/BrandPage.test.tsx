@@ -136,6 +136,16 @@ test("an administrator with no brand adopted is offered the setup, held until a 
   expect(within(dialog).getByText(/visible to everyone in the company/)).toBeTruthy();
 });
 
+// ON A PHONE THE BAR KEEPS ONE "MORE": the brand's own menu is marked to fold
+// (`page-action-folds`), its actions published to the bar's menu, so two
+// identical ellipses never stand side by side.
+test("an administrator's brand menu folds into the bar's More on a phone", async () => {
+  mount(["admin"], ADOPTED);
+  const more = await screen.findByRole("button", { name: /More brand actions/ });
+  expect(more.closest(".page-action-folds")).not.toBeNull();
+  expect(screen.getByRole("link", { name: "History" }).closest(".page-action-folds")).toBeNull();
+});
+
 test("an administrator edits one card at a time, and a colour that would be refused holds Save", async () => {
   mount(["admin"], ADOPTED);
   fireEvent.click(await screen.findByRole("button", { name: "Edit Colours" }));
