@@ -228,6 +228,11 @@ type Identity struct {
 	// BotID is the B… identity, distinct from the U… user id: a legacy
 	// bot_message echo carries only this one.
 	BotID string
+	// UserName and TeamName are the bot user's name and its workspace's,
+	// as auth.test spells them: what a person recognises, where the ids
+	// above are what routing keys on.
+	UserName string
+	TeamName string
 }
 
 // AuthTest is the identity behind this client's token.
@@ -241,11 +246,16 @@ func (c *Client) AuthTest(ctx context.Context) (Identity, error) {
 		UserID string `json:"user_id"`
 		TeamID string `json:"team_id"`
 		BotID  string `json:"bot_id"`
+		User   string `json:"user"`
+		Team   string `json:"team"`
 	}
 	if err := call(ctx, c.http, "auth.test", c.token, map[string]any{}, &out); err != nil {
 		return Identity{}, err
 	}
-	id := Identity{UserID: out.UserID, TeamID: out.TeamID, BotID: out.BotID}
+	id := Identity{
+		UserID: out.UserID, TeamID: out.TeamID, BotID: out.BotID,
+		UserName: out.User, TeamName: out.Team,
+	}
 	// THE APP, WHICH auth.test DOES NOT SAY.
 	//
 	// It answers with the bot's user id, its team and its bot id, and no

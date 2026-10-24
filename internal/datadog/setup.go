@@ -66,6 +66,7 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			SecretName: "DATADOG_API_KEY",
 			Required:   true,
 			Connect:    true,
+			Checkable:  true,
 			Help:       "Create one on your",
 			LinkText:   "API keys page",
 			VendorURL:  "https://app.datadoghq.com/organization-settings/api-keys",
@@ -78,6 +79,7 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 			SecretName: "DATADOG_APP_KEY",
 			Required:   true,
 			Connect:    true,
+			Checkable:  true,
 			Help:       "Create one on your",
 			LinkText:   "application keys page",
 			VendorURL:  "https://app.datadoghq.com/organization-settings/application-keys",
@@ -119,6 +121,7 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 				"registers; nothing has to be pasted anywhere.",
 			VendorURL: "https://app.datadoghq.com/integrations/webhooks",
 			Blocks:    integration.FindingCredentialMissing,
+			CheckNote: "Datadog proves it with the first alert it delivers to this deployment.",
 		},
 		{
 			// THE ONE THING A PERSON STILL HAS TO WRITE DOWN AT DATADOG.

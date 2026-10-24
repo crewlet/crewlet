@@ -238,6 +238,21 @@ type Requirement struct {
 	// not.
 	Mintable bool `json:"mintable,omitempty"`
 
+	// Checkable reports that this credential can be checked at the vendor
+	// before it is stored, with a read-only call, so a form offers a Test
+	// button for it. See [Probe].
+	Checkable bool `json:"checkable,omitempty"`
+
+	// CheckNote is, for a credential that CANNOT be checked ahead, the
+	// sentence saying when the vendor proves it: a signing secret is proved
+	// by the first delivery the vendor signs with it, and nothing short of
+	// registering the hook, which is a write, makes the vendor do that.
+	//
+	// It is what a check of the field answers, as [VerifyUnchecked], so the
+	// sentence is written once, beside the field it is about, rather than
+	// in each vendor's probe as well.
+	CheckNote string `json:"check_note,omitempty"`
+
 	// Shape is what a minted value has to LOOK like, for the fields where
 	// the third-party app accepts one form and no other.
 	//

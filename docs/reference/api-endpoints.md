@@ -1956,7 +1956,7 @@ changed. Every node serving the API serves them, because every node opens the fl
 | `GET /secrets/{name}?reveal=true` | `admin`, a **person present** — a request that presented a machine token is refused `403 token_refused` — and a proof of identity inside `step_up`, decided before the store is read, so a caller refused is refused alike for a name that exists and one that does not |
 | `PUT /secrets/{name}`, `DELETE /secrets/{name}`, `POST /secrets/rekey` | `admin`, and a proof inside `step_up` |
 | `GET /setup/integrations`, `GET /setup/integrations/{kind}`, the two `runs` reads | `admin` |
-| `POST /setup/integrations/{kind}/inputs`, `DELETE /setup/integrations/{kind}`, `POST /setup/integrations/{kind}/check` | `admin` |
+| `POST /setup/integrations/{kind}/inputs`, `POST /setup/integrations/{kind}/verify`, `DELETE /setup/integrations/{kind}`, `POST /setup/integrations/{kind}/check` | `admin` |
 | `POST /setup/integrations/{kind}/provision`, `POST /setup/integrations/github/app` | `admin`: a writing pass is handed a sink that mints and seals, and an app's private key is sealed on its way back |
 
 **Connecting is `admin`'s and nothing more.** `/setup` performs no write of
@@ -1971,6 +1971,7 @@ Every `/setup` and `/secrets` write asks for a proof of identity inside
 | `GET` | `/setup/integrations` | What every integration this build can set up still needs, plus the address third-party apps reach this deployment on. `external_url` carries a single `value` and the `config_path` it was read from: `api.public.external_url` when the node has a [public listener](#which-listener-serves-what), and `api.external_url` otherwise — never the person's address where the two differ, since every webhook, manifest and redirect is built on it. Both are Tier A, required on a node serving this listing and resolved before that file is decoded, so the `present`/`resolved`/`reference` triple the Tier B pointer needed describes a state that can no longer occur |
 | `GET` | `/setup/integrations/{kind}` | One integration's requirement list and state |
 | `POST` | `/setup/integrations/{kind}/inputs` | Supply or generate those values: credentials are sealed, the rest is patched into the company |
+| `POST` | `/setup/integrations/{kind}/verify` | Check one typed credential at its vendor with a read-only call, before anything stores it. Writes nothing: no secret, no config, no revision and no reconcile state. See [Checking a credential before it is stored](#checking-a-credential-before-it-is-stored) |
 | `DELETE` | `/setup/integrations/{kind}` | Disconnect: remove what the integration holds at the third-party app, then its block |
 | `POST` | `/setup/integrations/{kind}/provision` | Run the third-party app's provisioning pass: mint what it needs, register its webhook |
 | `POST` | `/setup/integrations/{kind}/check` | Run the same pass read-only, to see whether something fixed at the third-party app took |
@@ -2427,6 +2428,13 @@ that this input being absent produces, which is what lets a row reporting
 `mintable` means the engine can generate the value, so nobody should be asked
 to invent it. **No route here ever returns a credential.**
 
+`checkable` means the credential can be [checked at its
+vendor](#checking-a-credential-before-it-is-stored) before it is stored, so a
+form offers a Test button for it. A `secret` that cannot be checked ahead
+carries `check_note` instead: the sentence saying when the vendor proves it. A
+webhook signing secret is the usual case, since the vendor never presents it
+and only signs its deliveries with it.
+
 ### Supplying them
 
 ```bash
@@ -2490,6 +2498,70 @@ What the route does, in this order:
 Answers `201 {"revision_id", "epoch", "wrote_secrets", "reloaded", "state"}`.
 Refusals: `400 invalid_input`, `400 validation_error`, `404 unknown_kind`,
 `409 revision_advanced`, `409 literal_in_config`, `409 no_active_revision`.
+
+### Checking a credential before it is stored
+
+`POST /setup/integrations/{kind}/verify` asks the vendor whether a credential
+somebody has typed works, with one read-only identity call, and **stores
+nothing**: not the value, not a `${VAR}` pointer, not a revision and not a
+reconcile finding. It is what a connect form's Test button calls, so a key is
+checked while the vendor's page is still open rather than by the next
+reconcile pass, minutes later. It is `setup.connect`, the verb connecting is,
+because it spends a credential at a vendor on a person's hand.
+
+```bash
+curl -X POST https://engine.example.com/setup/integrations/datadog/verify \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"field": "api_key", "value": "<the typed key>",
+       "values": {"site": "datadoghq.eu", "app_key": "${DATADOG_APP_KEY}"}}'
+```
+
+| Field | Meaning |
+|---|---|
+| `field` | The requirement to check, by its `field`. It must be a `secret` |
+| `value` | What was typed, or a whole `${NAME}` naming a stored secret |
+| `seat` | The seat a per-seat credential belongs to, such as a Slack agent's bot token |
+| `values` | The other fields typed in the same form, by `field`. Each may be a whole `${NAME}` too |
+
+**Every field the person did not type is read the way a submission would read
+it**: what the company document holds for it (a whole `${VAR}` resolved
+through this node's chain), else the field's `default`. So a key changed on a
+working integration is checked against the region, the instance and the other
+key already in force. Jira and Confluence are checked under the company's
+declared `integrations.atlassian.deployment`, and at the site the Atlassian
+organization names when neither the form nor the document gives one.
+
+Answers `200 {"outcome", "detail"}`. `detail` is one sentence for a person and
+never repeats the value that was checked.
+
+| `outcome` | Meaning |
+|---|---|
+| `works` | The vendor accepted it, and `detail` says who or what it authenticates as where the vendor says: "Works. Datadog accepted it for the FairSplit organization in datadoghq.eu." |
+| `refused` | The vendor answered and refused it: a 401 or 403, Slack's `invalid_auth`, or a credential that authenticates without what the integration needs (a Mattermost account that is not a system administrator, a GitLab token without its scope, an Atlassian key created with scopes, a Slack user token where a bot token belongs). The vendor's own reason is repeated where it is short |
+| `unreachable` | The vendor gave no answer about the credential: no connection, ten seconds without an answer, a `429` or `5xx`, or an answer that is not the vendor's API (often a wrong address). The detail says nothing was stored |
+| `unchecked` | The field cannot be checked ahead without acting on it, and `detail` is its `check_note` |
+
+What each surface checks, and with what:
+
+| Surface | Checkable | Read-only call | Proved later, by the vendor's first delivery |
+|---|---|---|---|
+| `atlassian` | `api_key`, against `org_id` | one page of the organization's service accounts, which a scoped key is refused | |
+| `confluence` | `token`, with `email` on Cloud | `GET /rest/api/user/current` | `webhook_token` (Cloud), `webhook_secret` (Data Center) |
+| `datadog` | `api_key` and `app_key`, checked together in `site` | `GET /api/v1/org` | `webhook_token` |
+| `github` | `token`, at `url` for Enterprise Server | `GET /user` | `webhook_secret` |
+| `gitlab` | `admin_token` (needs `api`) and `token` (needs `read_api`), at `url` | `GET /user`, then the token's own scopes and expiry where the instance describes them | `signing_secret` |
+| `jira` | `token`, with `email` on Cloud | `GET /myself` | `webhook_secret` |
+| `mattermost` | `admin_token`, at `url` | `GET /users/me`, and the `system_admin` role | |
+| `slack` | a seat's `bot_token` | `auth.test` | a seat's `signing_secret` |
+
+Refusals: `400 invalid_body` for an unknown key; `400 invalid_input` when
+`field` is not a requirement of that surface (or seat) or is not a `secret`,
+when `value` is empty, when a key in `values` is not a field of the surface,
+when a `${NAME}` names no stored secret ("There is no secret NAME."), and when
+the check cannot be made from what was given (Datadog's other key, a site
+address, an organization id), each with a sentence saying what is missing;
+`404 unknown_kind`; `404 invalid_input` for a seat that takes no per-seat
+setup; `409 no_active_revision`.
 
 ### Running the provisioning pass
 

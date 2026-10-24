@@ -122,7 +122,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	}
 	if !KnownSite(site) {
 		return nil, fmt.Errorf(
-			"datadog: %q is not a region Datadog serves — it is one of %s",
+			"datadog: %q is not a region Datadog serves: it is one of %s",
 			opts.Site, strings.Join(sites, ", "))
 	}
 	client := opts.HTTP
@@ -246,8 +246,12 @@ func detailOf(contentType string, payload []byte) string {
 	if detail := httpx.Refusal(contentType, payload); detail != "" {
 		return detail
 	}
-	return "no detail"
+	return noDetail
 }
+
+// noDetail is what [detailOf] answers for a refusal that said nothing, which
+// a verdict shown to a person leaves out rather than repeating as a reason.
+const noDetail = "no detail"
 
 // Org is the organization a credential pair belongs to.
 type Org struct {

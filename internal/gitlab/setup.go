@@ -71,10 +71,13 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 			// in exactly one form and computes its HMAC over the decoded
 			// bytes, so a plain token here is a secret that cannot match
 			// any delivery: see [setup.ShapeSigningKey].
-			Shape:  setup.ShapeSigningKey,
-			Help:   "Signs every delivery, and has a shape, so the engine generates it.",
-			Format: "whsec_ then standard base64 of a 32-byte key",
-			Blocks: integration.FindingCredentialMissing,
+			Shape: setup.ShapeSigningKey,
+			Help:  "Signs every delivery, and has a shape, so the engine generates it.",
+			// PROVED BY THE FIRST DELIVERY: GitLab never presents the
+			// secret, it signs with it.
+			CheckNote: "GitLab proves it with the first delivery it signs.",
+			Format:    "whsec_ then standard base64 of a 32-byte key",
+			Blocks:    integration.FindingCredentialMissing,
 		},
 		{
 			Field:      "provisioning.group",
@@ -96,6 +99,7 @@ func Requirements(in *config.GitLab, resolve func(string) (string, bool)) []setu
 			Kind:       setup.KindSecret,
 			ConfigPath: "integrations.gitlab.token",
 			SecretName: "GITLAB_ROUTING_TOKEN",
+			Checkable:  true,
 			// OPTIONAL, AND ITS ABSENCE IS A DOCUMENTED DEGRADATION
 			// rather than a fault: without it a comment reaches whoever
 			// the payload named — the assignees — instead of everyone
@@ -161,6 +165,7 @@ func AdminCredential() setup.Requirement {
 		Kind:       setup.KindSecret,
 		ConfigPath: "integrations.gitlab.provisioning.admin_token",
 		Required:   true,
+		Checkable:  true,
 		// BLOCKS THE FINDING THIS FIELD ACTUALLY CLEARS. It declared
 		// none, and `url` and `team` (or `signing_secret`) claimed
 		// credential_missing instead — none of which is the credential.
