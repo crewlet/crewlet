@@ -224,11 +224,75 @@ func TestTheRequesterNarrowsEveryFolderAndRow(t *testing.T) {
 	}
 }
 
-// A FOLDER'S COUNT HOLDS ONLY WHAT THE READER MAY SEE, and a breadcrumb never
-// names a hidden ancestor: the tree read answers bob the company tree whole
-// (every folder's parent is in it, so every path is complete), counts only
-// what bob may open, and puts inDrafts among the artifacts in no folder he
-// sees; jane is answered her own tree too.
+// A FOLDER GRANTS NOTHING TO ITS CONTENTS: jane's unshared artifact filed in
+// the company's Marketing is not shown to bob, however he reaches Marketing
+// (its listing, everything beneath it, its count), and an artifact shared with
+// bob filed in jane's own Drafts is still his to open, at his top level. Who
+// may open an artifact is its owner and its own shares, and nothing else.
+//
+// Mutation: admit an artifact by its folder's audience in the listing's
+// predicate and bob is shown jane's hidden artifact in Marketing.
+func TestAFolderGrantsNothingToItsContents(t *testing.T) {
+	t.Parallel()
+	g := newGallery(t)
+	for _, q := range []artifactsdomain.ListQuery{
+		{Prefix: "Marketing/", Delimiter: "/"}, {Prefix: "Marketing/"}, {},
+	} {
+		if page := g.list(g.bob, q); slices.Contains(idsOf(page), g.hidden) {
+			t.Errorf("bob listing %+v is shown jane's unshared artifact", q)
+		}
+	}
+	if h := g.n.head(g.hidden); len(h.Shares) != 0 || h.Folder != g.marketing.ID {
+		t.Errorf("filing it changed its shares to %v", h.Shares)
+	}
+	if page := g.list(g.bob, artifactsdomain.ListQuery{}); !slices.Contains(idsOf(page), g.inDrafts) {
+		t.Error("an artifact shared with bob is hidden from him by the folder it is filed in")
+	}
+}
+
+// A BREADCRUMB NEVER NAMES A HIDDEN ANCESTOR: a folder is seen through its
+// top-level folder, so every folder a reader is answered comes after its
+// parent, every one of its ancestors is answered too, and every path a row or
+// a prefix names is the whole path from the top level. Bob is answered none of
+// jane's own tree, whatever he owns under the company's.
+//
+// Mutation: decide a subfolder's visibility on its own owner and bob, who owns
+// a folder moved into jane's own tree, is answered it under a parent he is
+// not.
+func TestABreadcrumbNeverNamesAHiddenAncestor(t *testing.T) {
+	t.Parallel()
+	g := newGallery(t)
+	bobsCall := person("bob", artifacts.RoleOwner)
+	bobs := g.n.mkdir(bobsCall, g.q3.ID, "", "Bob's notes")[0]
+	if _, err := g.n.writer.MoveFolder(t.Context(), g.janeCall, bobs.ID, g.drafts.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range []artifactsdomain.Viewer{g.bob, g.jane} {
+		tree, err := g.n.reader.Folders(t.Context(), v, statelog.Freshness{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen := map[string]bool{}
+		for _, f := range tree.Folders {
+			if f.Parent != "" && !seen[f.Parent] {
+				t.Errorf("%s is answered %s before its parent, or without it", v.Record, f.Name)
+			}
+			seen[f.ID] = true
+			if v.Record == "bob" && (f.ID == bobs.ID || f.ID == g.drafts.ID) {
+				t.Errorf("bob is answered %s, in jane's own tree", f.Name)
+			}
+		}
+	}
+	page := g.list(g.jane, artifactsdomain.ListQuery{Prefix: "Drafts/", Delimiter: "/"})
+	if len(page.CommonPrefixes) != 1 || page.CommonPrefixes[0].Prefix != "Drafts/Bob's notes/" {
+		t.Errorf("jane's Drafts answers %+v", page.CommonPrefixes)
+	}
+}
+
+// A FOLDER'S COUNT HOLDS ONLY WHAT THE READER MAY SEE: the tree read counts
+// only what bob may open, by the listing's own predicate, and puts inDrafts
+// among the artifacts in no folder he sees; jane is answered her own tree and
+// her own count.
 //
 // Mutation: count a folder's artifacts from the rows alone and bob's
 // Marketing counts the hidden artifact.
@@ -240,12 +304,7 @@ func TestAFolderCountHoldsOnlyWhatTheReaderMaySee(t *testing.T) {
 		t.Fatal(err)
 	}
 	counts := map[string]int{}
-	seen := map[string]bool{}
 	for _, f := range tree.Folders {
-		if f.Parent != "" && !seen[f.Parent] {
-			t.Errorf("%s comes before its parent, or its parent is hidden", f.Name)
-		}
-		seen[f.ID] = true
 		counts[f.Name] = f.Artifacts
 	}
 	if len(tree.Folders) != 2 || counts["Marketing"] != 1 || counts["Q3"] != 1 || tree.TopLevel != 2 {

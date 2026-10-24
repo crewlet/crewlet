@@ -186,7 +186,7 @@ func TestTopLevelNamesHaveTwoNamespaces(t *testing.T) {
 //
 // Mutation: drop the agent rule from checkFolderCreate and the agent's
 // top-level company folder is written.
-func TestAnAgentNeverMakesATopLevelFolder(t *testing.T) {
+func TestAnAgentNeverSharesAFolderWithTheCompany(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)
 	jane, scribe := person("jane", artifacts.RoleOwner), agent("agent-scribe", artifacts.RoleContributor)
@@ -325,19 +325,19 @@ func TestARenameIsHeldToItsSiblings(t *testing.T) {
 	}
 }
 
-// FILING NEVER MOVES THE ACCESS EPOCH, AND A MOVE ROW NAMES NO FOLDER: a move
-// changes where the artifact is filed and nothing about who may open it (its
-// shares, its epoch), leaves its `updated_at` alone (a move is not an edit),
-// and its history row names the folders by id alone, so a reader of the
-// artifact is never told a folder's name.
+// FILING NEVER MOVES THE ACCESS EPOCH: a move changes where the artifact is
+// filed and nothing about who may open it (its shares, its epoch, which every
+// view ticket carries), and leaves its `updated_at` alone (a move is not an
+// edit). It is told to listeners as a folder movement, which narrows nothing;
+// a move to where it already is writes nothing, and a trashed artifact is
+// filed nowhere.
 //
-// Mutation: touch the head in applyMove and the epoch or the instant moves;
-// write the folder's name into the summary and the row carries it.
-func TestFilingNeverMovesTheAccessEpochAndItsRowNamesNoFolder(t *testing.T) {
+// Mutation: touch the head in applyMove and the epoch or the instant moves.
+func TestFilingNeverMovesTheAccessEpoch(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)
 	jane := person("jane", artifacts.RoleOwner)
-	secret := n.mkdir(jane, "", artifactsdomain.FolderPrivate, "Layoffs Q1")[0]
+	folder := n.mkdir(jane, "", artifactsdomain.FolderCompany, "Plans")[0]
 	id := n.create(jane, "Plan", upload(t, "index.html", "<p>plan</p>")).Artifact
 	if _, err := n.writer.Share(t.Context(), jane, id, artifacts.Share{
 		Audience: artifacts.Audience{Kind: artifacts.AudienceSeat, ID: "bob"}, Role: artifacts.RoleViewer}); err != nil {
@@ -345,12 +345,12 @@ func TestFilingNeverMovesTheAccessEpochAndItsRowNamesNoFolder(t *testing.T) {
 	}
 	before := n.head(id)
 	n.moved = nil
-	if _, err := n.writer.Move(t.Context(), jane, id, secret.ID); err != nil {
+	if _, err := n.writer.Move(t.Context(), jane, id, folder.ID); err != nil {
 		t.Fatalf("file it: %v", err)
 	}
 	after := n.head(id)
 	switch {
-	case after.Folder != secret.ID:
+	case after.Folder != folder.ID:
 		t.Errorf("the artifact is filed in %q", after.Folder)
 	case after.AccessEpoch != before.AccessEpoch || !slices.Equal(after.Shares, before.Shares):
 		t.Errorf("filing changed its access: epoch %d to %d, shares %v to %v", before.AccessEpoch,
@@ -359,21 +359,12 @@ func TestFilingNeverMovesTheAccessEpochAndItsRowNamesNoFolder(t *testing.T) {
 		t.Errorf("filing moved updated_at from %v to %v", before.UpdatedAt, after.UpdatedAt)
 	}
 	if !slices.ContainsFunc(n.moved, func(m artifactsdomain.Moved) bool {
-		return m.Artifact == id && m.What == artifactsdomain.MoveFolder
+		return m.Artifact == id && m.What == artifactsdomain.MoveFolder && m.AccessEpoch == before.AccessEpoch
 	}) {
 		t.Errorf("the move was not told: %+v", n.moved)
 	}
-	page, err := n.reader.History(t.Context(), id, "", 1)
-	if err != nil || len(page.Entries) != 1 || page.Entries[0].Op != string(artifactsdomain.OpMove) {
-		t.Fatalf("the newest history row is %+v (%v)", page.Entries, err)
-	}
-	row := page.Entries[0]
-	raw, _ := json.Marshal(row)
-	if row.Summary.ToFolder != secret.ID || row.Summary.FromFolder != "" || strings.Contains(string(raw), "Layoffs") {
-		t.Errorf("the move's row says %s", raw)
-	}
 	rows := n.count(`SELECT COUNT(*) FROM artifact_history WHERE artifact_id = ?`, id.String())
-	if _, err := n.writer.Move(t.Context(), jane, id, secret.ID); err != nil {
+	if _, err := n.writer.Move(t.Context(), jane, id, folder.ID); err != nil {
 		t.Fatal(err)
 	}
 	if got := n.count(`SELECT COUNT(*) FROM artifact_history WHERE artifact_id = ?`, id.String()); got != rows {
@@ -385,8 +376,43 @@ func TestFilingNeverMovesTheAccessEpochAndItsRowNamesNoFolder(t *testing.T) {
 	if _, err := n.writer.Trash(t.Context(), jane, id); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := n.writer.Move(t.Context(), jane, id, secret.ID); !errors.Is(err, artifactsdomain.ErrTrashed) {
+	if _, err := n.writer.Move(t.Context(), jane, id, folder.ID); !errors.Is(err, artifactsdomain.ErrTrashed) {
 		t.Errorf("filing a trashed artifact: %v", err)
+	}
+}
+
+// A MOVE ROW NAMES NO FOLDER: the history row a move writes names the folders
+// by id alone, so a reader of the artifact (who reads its history) is never
+// told the name of a folder they cannot see.
+//
+// Mutation: write the folder's name into the summary and the row carries
+// "Layoffs Q1" to every viewer of the artifact.
+func TestAMoveRowNamesNoFolder(t *testing.T) {
+	t.Parallel()
+	n := newHarness(t)
+	jane := person("jane", artifacts.RoleOwner)
+	secret := n.mkdir(jane, "", artifactsdomain.FolderPrivate, "Layoffs Q1")[0]
+	open := n.mkdir(jane, "", artifactsdomain.FolderCompany, "Open plans")[0]
+	id := n.create(jane, "Plan", upload(t, "index.html", "<p>plan</p>")).Artifact
+	for _, to := range []string{secret.ID, open.ID} {
+		if _, err := n.writer.Move(t.Context(), jane, id, to); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page, err := n.reader.History(t.Context(), id, "", 2)
+	if err != nil || len(page.Entries) != 2 {
+		t.Fatalf("the history is %+v (%v)", page.Entries, err)
+	}
+	newest, older := page.Entries[0], page.Entries[1]
+	if newest.Op != string(artifactsdomain.OpMove) || newest.Summary.FromFolder != secret.ID ||
+		newest.Summary.ToFolder != open.ID || older.Summary.FromFolder != "" || older.Summary.ToFolder != secret.ID {
+		t.Errorf("the move rows say %+v then %+v", older.Summary, newest.Summary)
+	}
+	for _, e := range page.Entries {
+		raw, _ := json.Marshal(e)
+		if strings.Contains(string(raw), "Layoffs") || strings.Contains(string(raw), "Open plans") {
+			t.Errorf("a move's row names a folder: %s", raw)
+		}
 	}
 }
 
@@ -401,7 +427,7 @@ func TestFilingNeverMovesTheAccessEpochAndItsRowNamesNoFolder(t *testing.T) {
 // Mutation: cascade the removal to the artifacts (trash them) and the live one
 // is trashed; skip the re-parent of child folders and Week 1 hangs under a
 // tombstone, out of every tree.
-func TestRemovingAFolderMovesWhatItHoldsUp(t *testing.T) {
+func TestDeletingAFolderReparentsWhatItHolds(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)
 	jane := person("jane", artifacts.RoleOwner)

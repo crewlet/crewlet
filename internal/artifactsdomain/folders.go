@@ -124,7 +124,11 @@ type Folder struct {
 type FolderStatus string
 
 const (
-	FolderLive    FolderStatus = "live"
+	// FolderLive is a folder in the tree.
+	FolderLive FolderStatus = "live"
+
+	// FolderRemoved is a removed folder's tombstone: kept so a late retry
+	// of its create never brings the id back, and in no reader's tree.
 	FolderRemoved FolderStatus = "removed"
 )
 
@@ -281,7 +285,7 @@ func (w *Writer) CreateFolders(ctx context.Context, c Call, in FolderCreateInput
 	ns := namespaceOf(in.Owner, shares)
 	var answer FolderCreated
 	res, err := w.publish(ctx, request(FolderSubject(), treeScope, opID, statelog.PatternArbitrated,
-		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+		func(tx *sql.Tx, stamp statelog.Stamp) (_ statelog.Decision, err error) {
 			tree, err := readLiveTree(ctx, tx)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -353,7 +357,7 @@ func checkFolderCreate(c Call, in FolderCreateInput) (names, keys []string, err 
 		return nil, nil, fmt.Errorf("%w: owner kind %q: a folder is owned by a seat (an agent's "+
 			"or a person's) or an unbound machine", ErrInvalid, in.OwnerKind)
 	}
-	if err := checkName("the owner", in.Owner); err != nil {
+	if err = checkName("the owner", in.Owner); err != nil {
 		return nil, nil, err
 	}
 	if in.Parent != "" && !validFolderID(in.Parent) {
@@ -515,7 +519,7 @@ func (w *Writer) RenameFolder(ctx context.Context, c Call, id, name string) (Wri
 		return Written{}, err
 	}
 	res, err := w.publish(ctx, request(FolderSubject(), treeScope, opID, statelog.PatternArbitrated,
-		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+		func(tx *sql.Tx, stamp statelog.Stamp) (_ statelog.Decision, err error) {
 			tree, err := readLiveTree(ctx, tx)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -563,7 +567,7 @@ func (w *Writer) MoveFolder(ctx context.Context, c Call, id, parent string) (Wri
 		return Written{}, err
 	}
 	res, err := w.publish(ctx, request(FolderSubject(), treeScope, opID, statelog.PatternArbitrated,
-		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+		func(tx *sql.Tx, stamp statelog.Stamp) (_ statelog.Decision, err error) {
 			tree, err := readLiveTree(ctx, tx)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -651,7 +655,7 @@ func (w *Writer) RemoveFolder(ctx context.Context, c Call, id string) (Written, 
 	// folder held, which nests every artifact's path.
 	scope := ScopeSet{Terms: []ScopeTerm{TreeTerm(), ArtifactsTerm()}}
 	res, err := w.publish(ctx, request(FolderSubject(), scope, opID, statelog.PatternArbitrated,
-		func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+		func(tx *sql.Tx, stamp statelog.Stamp) (_ statelog.Decision, err error) {
 			tree, err := readLiveTree(ctx, tx)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -730,7 +734,7 @@ func (w *Writer) Move(ctx context.Context, c Call, id artifacts.ID, folder strin
 		}
 		scope := moveScope(id, from, folder)
 		res, err = w.publish(ctx, request(subject, scope, opID, statelog.PatternArbitrated,
-			func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+			func(tx *sql.Tx, stamp statelog.Stamp) (_ statelog.Decision, err error) {
 				head, err := mustHead(ctx, tx, id.String())
 				switch {
 				case err != nil:
@@ -743,8 +747,12 @@ func (w *Writer) Move(ctx context.Context, c Call, id artifacts.ID, folder strin
 					return statelog.Decision{}, nil
 				}
 				if folder != "" {
-					if live, err := folderLive(ctx, tx, folder); err != nil || !live {
-						return statelog.Decision{}, errors.Join(err, folderAbsent(err, folder))
+					live, err := folderLive(ctx, tx, folder)
+					switch {
+					case err != nil:
+						return statelog.Decision{}, err
+					case !live:
+						return statelog.Decision{}, fmt.Errorf("%w: %s", ErrFolderNotFound, folder)
 					}
 				}
 				return w.decision(stamp, c, subject, OpMove, scope, opID,
@@ -755,15 +763,6 @@ func (w *Writer) Move(ctx context.Context, c Call, id artifacts.ID, folder strin
 		}
 	}
 	return w.written(ctx, id, opID, res, err)
-}
-
-// folderAbsent is the refusal of a folder that is not live, unless reading it
-// failed (err), which is answered as it is.
-func folderAbsent(err error, folder string) error {
-	if err != nil {
-		return nil
-	}
-	return fmt.Errorf("%w: %s", ErrFolderNotFound, folder)
 }
 
 // moveScope is a move's scope: the artifact, and each folder it reads (the one

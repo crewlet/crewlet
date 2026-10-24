@@ -1479,7 +1479,7 @@ func (s listSpec) run(ctx context.Context, tx *sql.Tx) (ListPage, error) {
 	where := ` WHERE ` + strings.Join(conds, ` AND `)
 	baseArgs := append([]any{s.record}, condArgs...)
 	var total int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*)`+from+where, baseArgs...).
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*)`+from+where, baseArgs...).
 		Scan(&total); err != nil {
 		return ListPage{}, fmt.Errorf("artifactsdomain: count the listing: %w", err)
 	}

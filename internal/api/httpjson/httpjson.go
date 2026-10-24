@@ -923,6 +923,32 @@ const (
 	// renders itself (a doc, a native sheet), which runs no
 	// author code and so is never opened on the artifact origin. 409.
 	CodeArtifactNotFramed Code = "artifact_not_framed"
+
+	// CodeFolderNotFound is a folder a write names (a parent, a destination,
+	// the folder a create files into) that does not exist, was removed, or
+	// that the caller cannot see: one answer for all three, so a folder's
+	// existence is never disclosed to somebody it is not shown to. 404.
+	CodeFolderNotFound Code = "folder_not_found"
+	// CodeFolderNameTaken is a folder name its place already holds, compared
+	// without regard to case. 409, the detail naming it.
+	CodeFolderNameTaken Code = "folder_name_taken"
+	// CodeFolderCycle is a folder moved into itself or a folder inside it.
+	// 409.
+	CodeFolderCycle Code = "folder_cycle"
+	// CodeFolderDepth is a create or a move that would place a folder deeper
+	// than folders go. 409.
+	CodeFolderDepth Code = "folder_depth"
+	// CodeFolderLimit is a create or a move past the folders the company or
+	// one folder holds. 409.
+	CodeFolderLimit Code = "folder_limit"
+	// CodeFolderWidens is a folder move into a tree whose audience reaches
+	// somebody the folder's present one does not: everything beneath it
+	// becomes visible to them by name. 409 until the request confirms it
+	// (`confirm_widen`).
+	CodeFolderWidens Code = "folder_widens"
+	// CodeFolderAmbiguous is a folder path that names more than one folder
+	// the caller can see. 409, the detail listing each by id.
+	CodeFolderAmbiguous Code = "folder_ambiguous"
 )
 
 // THE ARTIFACT DATASTORE'S OWN (`/artifacts/{id}/data`): the verdicts its
@@ -1279,6 +1305,16 @@ var codes = map[Code]string{
 		"`api.artifacts.external_url`.",
 	CodeArtifactNotFramed: "This artifact is shown here directly rather than " +
 		"opened as a page.",
+	CodeFolderNotFound: "There is no such folder, or it is not one you can see.",
+	CodeFolderNameTaken: "A folder there already has that name. Choose another " +
+		"name, or rename the one the detail names.",
+	CodeFolderCycle: "A folder can't move into itself or a folder inside it.",
+	CodeFolderDepth: "That would place a folder deeper than folders go. Choose a place higher up.",
+	CodeFolderLimit: "There are already as many folders there as there may be. Remove some first.",
+	CodeFolderWidens: "Moving this folder there makes it, and everything in it, visible by " +
+		"name to more people. Confirm the move to go ahead.",
+	CodeFolderAmbiguous: "That path names more than one folder you can see. Choose one " +
+		"of the folders the detail lists, by its id.",
 	CodeDataQuota: "This would take the data past its size limit, so nothing " +
 		"was written. Delete rows, or ask an operator to raise the limit the " +
 		"detail names.",

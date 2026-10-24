@@ -293,6 +293,64 @@ nothing a preview sets is kept.
 
 ---
 
+## Folders
+
+The company files its artifacts in **one folder tree**, and an artifact sits
+in **at most one folder** (or at the top level). **A folder grants nothing**:
+who may open an artifact is its owner and its own shares wherever it is filed,
+so filing it, moving it and removing its folder never show it to anybody new
+and never hide it from anybody who could open it
+([ADR-0047](../../adr/0047-an-artifact-lives-in-one-folder-and-a-folder-grants-nothing.md)).
+
+```mermaid
+flowchart TD
+    M["Marketing (everyone at the company)"] --> Q["Q3"]
+    M --> C["Campaigns"]
+    D["Drafts (only its owner)"] --> I["Ideas"]
+    Q -. "filed in" .-> A["A launch page (shared with two seats)"]
+```
+
+- **A folder is seen by its top-level folder's audience.** A top-level folder
+  is made with one of two presets, **everyone at the company** (the company as
+  `contributor`) or **only its owner**, and every folder beneath it is seen by
+  exactly that audience. A tree is seen whole or not at all, so a breadcrumb
+  never names a folder its reader cannot see, and a folder somebody cannot see
+  is answered as one that does not exist.
+- **An artifact in a folder you cannot see is at your top level.** Bob opens a
+  page shared with him that its owner keeps in her own Drafts; he finds it at
+  his top level, and is never told the folder's name.
+- **Filing asks the artifact and the folder.** Moving an artifact needs
+  `editor` on it and `contributor` on the folder it goes to. A folder's owner,
+  the owner's lead (for an agent's folder) and an administrator manage it:
+  rename it, move it, remove it, and take out anything in it they can read.
+  Managing is a person's; an agent creates folders only inside one, never at
+  the top level, since a company-wide folder is a company-wide audience.
+- **Names.** At most 80 bytes, no `/` and no invisible character; siblings are
+  unique without regard to case. At the top level the company's folders are
+  unique among themselves and each person's own among their own, so nobody is
+  refused a name because of a folder they cannot see. Folders nest four deep,
+  a company keeps at most 2000 and a folder at most 1000 folders.
+- **Removing a folder moves everything in it up a level**, folders and
+  artifacts alike, live and trashed, in one record. It is never refused for
+  being full, it trashes nothing, and nobody loses access. A folder moved to
+  the top level, or whose top-level folder is removed, keeps the audience it
+  had; a folder moved into another tree is seen by that tree's audience, and
+  the dashboard asks before a move that shows it to more people.
+- **Counts are the reader's.** "12 artifacts · 2 folders" counts only what that
+  reader may open, by the same filter the listing beside it uses, and a move's
+  history row names folders by id, never by name.
+
+The listing speaks **S3's `ListObjectsV2`**, so anybody who knows S3 reads it
+at once: `prefix=Marketing/Q3/` (or `folder=<id>`) names the folder,
+`delimiter=/` answers one level with its child folders as `common_prefixes`,
+and `max-keys` and `continuation-token` page it; the token carries the folder's
+id, so a rename between pages moves nothing. Folders are still rows, never part
+of an artifact's key, and an agent's `list_artifacts` takes `prefix` and
+`delimiter` the same way. The routes are in the
+[API reference](../reference/api-endpoints.md#folders).
+
+---
+
 ## Work items
 
 A tracker work item's **Artifacts** panel lists every artifact made or linked

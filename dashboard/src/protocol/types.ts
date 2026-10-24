@@ -5447,6 +5447,9 @@ export interface ArtifactHistorySummary {
   limit?: number;
   usage?: number;
   key?: string;
+  /** A move's folders by id, absent for the top level: never a folder's name. */
+  from_folder?: string;
+  to_folder?: string;
 }
 
 /** One row of an artifact's change record (`artifactsdomain.HistoryEntry`). */

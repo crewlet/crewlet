@@ -201,9 +201,9 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, c applyContext, i
 	if p.Folder != "" {
 		// THE FOLDER WAS LIVE WHEN THE WRITER DECIDED, on another subject:
 		// a removal that landed since files nothing into it.
-		live, err := folderLive(ctx, tx, p.Folder)
-		if err != nil {
-			return 0, err
+		live, liveErr := folderLive(ctx, tx, p.Folder)
+		if liveErr != nil {
+			return 0, liveErr
 		}
 		if !live {
 			return no(RefusedFolderGone, HistorySummary{ToFolder: p.Folder})
