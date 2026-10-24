@@ -225,6 +225,18 @@ func TestAStoreSealedUnderAnotherKeyRefusesRatherThanReseeding(t *testing.T) {
 	}
 }
 
+// sealed is a company document as a peer of the fixture keyring's fleet
+// publishes it: every activated payload is sealed, and a node opens the
+// fleet's under its own keyring before comparing it with its file.
+func sealed(t *testing.T, document []byte) []byte {
+	t.Helper()
+	payload, err := secrets.Seal(fixtureCipher, document)
+	if err != nil {
+		t.Fatalf("seal the fleet's document: %v", err)
+	}
+	return payload
+}
+
 // opened is a stored payload as the fixture keyring reads it.
 func opened(t *testing.T, payload []byte) []byte {
 	t.Helper()
@@ -470,7 +482,7 @@ func TestABootstrapSeedDoesNotOverwriteTheFleetsCompany(t *testing.T) {
 		t.Fatal(err)
 	}
 	peer, err := fleet.Activate(t.Context(), coord.ActivationRequest{
-		RevisionID: "peer-revision", Summary: "edited live", Payload: document,
+		RevisionID: "peer-revision", Summary: "edited live", Payload: sealed(t, document),
 		At: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC),
 		Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: "operator",
 			Source: "api", CreatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)},
@@ -495,7 +507,7 @@ func TestABootstrapSeedDoesNotOverwriteTheFleetsCompany(t *testing.T) {
 			db := seedStore(t)
 			var logged bytes.Buffer
 			log := slog.New(slog.NewTextHandler(&logged, nil))
-			if err := seedCompany(t.Context(), db, fleet, nil, seedOf(tc.file), nil,
+			if err := seedCompany(t.Context(), db, fleet, nil, seedOf(tc.file), fixtureCipher,
 				testNode, log); err != nil {
 				t.Fatalf("seed: %v", err)
 			}
@@ -525,7 +537,7 @@ func TestABootstrapSeedDoesNotOverwriteTheFleetsCompany(t *testing.T) {
 	// AN OVERRIDE still replaces it: that is what -import-company is for.
 	db := seedStore(t)
 	if err := seedCompany(t.Context(), db, fleet, nil, overrideOf(parse(t,
-		strings.Replace(companyYAML, "name: Acme", "name: Acme Imported", 1))), nil,
+		strings.Replace(companyYAML, "name: Acme", "name: Acme Imported", 1))), fixtureCipher,
 		testNode, quiet()); err != nil {
 		t.Fatalf("override: %v", err)
 	}
@@ -550,7 +562,7 @@ func TestABootstrapSeedThatLosesTheRaceToAPeerStandsDown(t *testing.T) {
 	fleet := coordmemory.NewFleet()
 	peer, err := fleet.Activate(t.Context(), coord.ActivationRequest{
 		RevisionID: "peer-revision", Summary: "a peer's bootstrap",
-		Payload: []byte(`{"name":"Peer"}`), At: time.Now().UTC(),
+		Payload: sealed(t, []byte(`{"name":"Peer"}`)), At: time.Now().UTC(),
 		Origin: coord.RevisionOrigin{Author: "node-b", AuthorKind: "node",
 			Source: "file", CreatedAt: time.Now().UTC()},
 	})
@@ -562,7 +574,7 @@ func TestABootstrapSeedThatLosesTheRaceToAPeerStandsDown(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(&logged, nil))
 	// The pointer read happened before the peer's write landed.
 	if err := seedCompany(t.Context(), db, unreadPointer{fleet}, nil,
-		seedOf(parse(t, companyYAML)), nil, testNode, log); err != nil {
+		seedOf(parse(t, companyYAML)), fixtureCipher, testNode, log); err != nil {
 		t.Fatalf("a bootstrap that lost the race failed the boot: %v", err)
 	}
 	target, _, err := fleet.Target(t.Context())
@@ -587,7 +599,7 @@ func TestABootstrapSeedThatLosesTheRaceToAPeerStandsDown(t *testing.T) {
 
 	// THE RESTART, before any tick adopted the peer's revision.
 	if err := seedCompany(t.Context(), db, fleet, nil, seedOf(parse(t, companyYAML)),
-		nil, testNode, quiet()); err != nil {
+		fixtureCipher, testNode, quiet()); err != nil {
 		t.Fatalf("the restart: %v", err)
 	}
 	if after, _, err := fleet.Target(t.Context()); err != nil {
@@ -620,7 +632,7 @@ func TestASeedTheFleetDidNotTakeIsNotThisNodesCompany(t *testing.T) {
 			db := seedStore(t)
 			fleet := coordmemory.NewFleet()
 			err := seedCompany(t.Context(), db, unreachableActivation{fleet}, nil,
-				tc.seed, nil, testNode, quiet())
+				tc.seed, fixtureCipher, testNode, quiet())
 			if !errors.Is(err, errActivationUnreachable) {
 				t.Fatalf("seed = %v, want the boot failed by the activation's own error", err)
 			}
@@ -639,14 +651,14 @@ func TestASeedTheFleetDidNotTakeIsNotThisNodesCompany(t *testing.T) {
 			// before the seed's own.
 			peer, err := fleet.Activate(t.Context(), coord.ActivationRequest{
 				RevisionID: "peer-revision", Summary: "a peer's bootstrap",
-				Payload: []byte(`{"name":"Peer"}`), At: time.Now().Add(-time.Minute),
+				Payload: sealed(t, []byte(`{"name":"Peer"}`)), At: time.Now().Add(-time.Minute),
 				Origin: coord.RevisionOrigin{Author: "node-b", AuthorKind: "node",
 					Source: "file", CreatedAt: time.Now().Add(-time.Minute)},
 			})
 			if err != nil {
 				t.Fatalf("the peer's activation: %v", err)
 			}
-			if err := seedCompany(t.Context(), db, fleet, nil, tc.seed, nil, testNode,
+			if err := seedCompany(t.Context(), db, fleet, nil, tc.seed, fixtureCipher, testNode,
 				quiet()); err != nil {
 				t.Fatalf("the restart: %v", err)
 			}

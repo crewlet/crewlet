@@ -32,6 +32,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -79,13 +80,12 @@ type codeDeclaration struct {
 }
 
 // company is the company document declaring d: companyYAML, the founder's
-// human seat bound to the token `ops`, and code.native with d.
+// human seat — which [unconfiguredNode.bindToken] binds the token `ops` to —
+// and code.native with d.
 func (d codeDeclaration) company() string {
 	doc := companyYAML + `  - name: Founder
     handle: founder
     kind: human
-    contact:
-      crewlet_operator_id: ops
 code:
   native: true
 ` + d.settings
@@ -96,7 +96,7 @@ code:
 }
 
 // codeNodeWith is [codeNode] declaring d, with the Tier A tokens tokens names
-// (id → value) beside the founder's — bound to no seat, since the company
+// (id → value) beside the founder's — bound to no seat, since the directory
 // binds `ops` alone.
 func codeNodeWith(t *testing.T, d codeDeclaration, tokens map[string]string) codeHost {
 	t.Helper()
@@ -121,7 +121,13 @@ func codeNodeAmended(t *testing.T, d codeDeclaration, tokens map[string]string,
 		b.Git.CacheMaxBytes = config.GitCacheMaxBytesFloor
 		b.Git.MaxTransfers = 4
 		for _, id := range slices.Sorted(maps.Keys(tokens)) {
-			b.API.Auth.Tokens = append(b.API.Auth.Tokens, config.APIToken{ID: id, Token: tokens[id]})
+			// A TOKEN STATES WHAT IT MAY DO — Tier A refuses one that
+			// lists nothing — and no app is a code permission: what a
+			// credential may do to a repository is the standing of the
+			// person it is bound to (ADR-0054), so the grant decides
+			// nothing a code case reads.
+			b.API.Auth.Tokens = append(b.API.Auth.Tokens, config.APIToken{
+				ID: id, Token: tokens[id], Grants: []iam.Grant{iam.GrantTracker}})
 		}
 		if amend != nil {
 			amend(b)
@@ -130,6 +136,7 @@ func codeNodeAmended(t *testing.T, d codeDeclaration, tokens map[string]string,
 	n.reconcile()
 	h := codeHost{base: n.base, token: token, node: n}
 	h.declare(t, d)
+	n.bindToken("ops", "founder")
 	// A WHOLE TIER A NAMING THIS NODE'S ADDRESS, for a command that finds its
 	// node from a config file: the file is validated before its address is
 	// read, and it names the address alone — the credential is the

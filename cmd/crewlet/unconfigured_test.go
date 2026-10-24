@@ -199,3 +199,60 @@ func (n *unconfiguredNode) send(t *testing.T, method, path string) (int, string)
 	}
 	return res.StatusCode, string(body)
 }
+
+// bindToken binds the Tier A token id to the human seat seat through the
+// node's identity directory — what `crewlet iam create -kind machine -login
+// token:<id> -seat <seat> -grants none` sends — and returns once the node
+// reports the binding. A Tier A token acts as a seat only through the active
+// machine row under its login, `token:<id>`, which the guard resolves against
+// the running company on every request; a request before the row lands acts
+// as a token bound to nobody. The company must already declare seat as a
+// human seat: the directory refuses a binding to any other.
+func (n *unconfiguredNode) bindToken(id, seat string) {
+	n.t.Helper()
+	login := iam.TokenLogin(id)
+	body, err := json.Marshal(map[string]any{
+		"kind": iam.KindMachine, "login": login, "name": "the " + id + " token",
+		"seat": seat, "grants": []iam.Grant{}, "reason": "the case binds its token to " + seat,
+	})
+	if err != nil {
+		n.t.Fatal(err)
+	}
+	req, err := http.NewRequestWithContext(n.t.Context(), http.MethodPost, n.base+"/iam/people",
+		strings.NewReader(string(body)))
+	if err != nil {
+		n.t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+n.token)
+	req.Header.Set("Content-Type", "application/json")
+	res, err := n.client.Do(req)
+	if err != nil {
+		n.t.Fatalf("POST /iam/people for %s: %v", login, err)
+	}
+	created, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		n.t.Fatalf("POST /iam/people for %s = %d %s, want 201", login, res.StatusCode, created)
+	}
+	var last string
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		status, answer := n.get(n.t, "/iam/node-tokens")
+		last = answer
+		var listing struct {
+			Tokens []struct {
+				ID   string `json:"id"`
+				Row  string `json:"row"`
+				Seat string `json:"seat"`
+			} `json:"tokens"`
+		}
+		if status != http.StatusOK || json.Unmarshal([]byte(answer), &listing) != nil {
+			continue
+		}
+		for _, token := range listing.Tokens {
+			if token.ID == id && token.Row == "held" && token.Seat == seat {
+				return
+			}
+		}
+	}
+	n.t.Fatalf("the node never reported %s bound to %s: GET /iam/node-tokens = %s", login, seat, last)
+}

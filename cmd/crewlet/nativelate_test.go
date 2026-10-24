@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // A COMPANY APPLIED AFTER BOOT IS SERVED WHOLE: every native surface the API
@@ -34,12 +35,12 @@ func TestNativeSurfacesServeACompanyAppliedAfterBoot(t *testing.T) {
 	n := bootUnconfigured(t, "a-test-token-long-enough-for-tier-a")
 	n.reconcile()
 	if err := n.settle(n.put(companyYAML + `  - name: Founder
+    handle: founder
     kind: human
-    contact:
-      crewlet_operator_id: ops
 `)); err != nil {
 		t.Fatalf("the company: %v", err)
 	}
+	n.bindToken("ops", "founder")
 
 	// THE READS: the board's and the knowledge base's questions, and the
 	// state log's own retention answer, which a node running no state log
@@ -68,9 +69,10 @@ func TestNativeSurfacesServeACompanyAppliedAfterBoot(t *testing.T) {
 		// And the upload, the write half on its own, through the same
 		// tracker read — before a byte of the body is stored.
 		{http.MethodPut, "/work/files/NOSUCH/no-such.txt", http.StatusNotFound, "no_project"},
-		// The purge's own refusal, before anything is judged.
-		{http.MethodPost, "/work/no-such/purge?confirm=X", http.StatusBadRequest,
-			"project_required"},
+		// The purge's own refusal — a confirmation with no reason — before
+		// it reads a row.
+		{http.MethodPost, "/work/items/no-such/purge?confirm=X", http.StatusBadRequest,
+			"invalid_query"},
 		// The gate's own refusal, before anything is judged.
 		{http.MethodPost, "/work/retention/evict/no-such-node", http.StatusBadRequest,
 			"confirm_required"},
@@ -170,8 +172,6 @@ func TestCodeRoutesServeACompanyAppliedAfterBoot(t *testing.T) {
 	if err := n.settle(n.put(companyYAML + `  - name: Founder
     handle: founder
     kind: human
-    contact:
-      crewlet_operator_id: ops
 code:
   native: true
   repos:
@@ -180,6 +180,7 @@ code:
 `)); err != nil {
 		t.Fatalf("the company: %v", err)
 	}
+	n.bindToken("ops", "founder")
 
 	// THE READS: the declared repository, read at the log's head — the
 	// reconcile that creates it follows the apply.
@@ -223,10 +224,13 @@ code:
 	if err := json.Unmarshal([]byte(body), &history); err != nil || status != http.StatusOK {
 		t.Fatalf("GET /code/repos/web/pushes = %d %s (%v)", status, body, err)
 	}
+	// THE CREDENTIAL IS THE ACTOR, under its whole login, and the seat the
+	// directory binds it to is the person the push was theirs as.
 	if len(history.Pushes) != 1 || history.Pushes[0].ActorSeat != "founder" ||
-		history.Pushes[0].Actor != "ops" || len(history.Pushes[0].Commands) != 1 ||
+		history.Pushes[0].Actor != iam.TokenLogin("ops") || len(history.Pushes[0].Commands) != 1 ||
 		history.Pushes[0].Commands[0].New != commit {
-		t.Fatalf("the repository's history is %s, want the founder's one push of %s as ops", body, commit)
+		t.Fatalf("the repository's history is %s, want the founder's one push of %s as %s",
+			body, commit, iam.TokenLogin("ops"))
 	}
 }
 
@@ -260,8 +264,6 @@ func TestANodeWhoseCodeHostCannotStartSaysSo(t *testing.T) {
 	n.put(companyYAML + `  - name: Founder
     handle: founder
     kind: human
-    contact:
-      crewlet_operator_id: ops
 code:
   native: true
 `)

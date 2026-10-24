@@ -55,7 +55,7 @@ func TestARestartAfterALiveSwitchSaysNothingAtTheFirstTick(t *testing.T) {
 			cfg := filepath.Join(dir, "crewlet.yaml")
 			tierA := fmt.Sprintf("node:\n  id: cli-test\nstore:\n  path: %s\n"+
 				"stream:\n  store_dir: %s\napi:\n  port: 0\n",
-				filepath.Join(dir, "crewlet.db"), filepath.Join(dir, "stream"))
+				filepath.Join(dir, "crewlet.db"), filepath.Join(dir, "stream")) + fixtureKeyring
 			if err := os.WriteFile(cfg, []byte(tierA), 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -89,7 +89,7 @@ func TestARestartAfterALiveSwitchSaysNothingAtTheFirstTick(t *testing.T) {
 			t.Cleanup(func() { e.Stop(context.Background()) })
 
 			before := logs.count(t, "native_backend_needs_restart")
-			if _, err := startReconciler(t.Context(), e, boot, seed, nil, quiet()); err != nil {
+			if _, err := startReconciler(t.Context(), e, boot, seed, fixtureCipher, quiet()); err != nil {
 				t.Fatalf("startReconciler: %v", err)
 			}
 			if got := logs.count(t, "native_backend_needs_restart") - before; got != tc.want {
