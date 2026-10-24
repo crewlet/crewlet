@@ -219,6 +219,13 @@ export function ColoursBody({ colors }: { colors: BrandDocument["colors"] }) {
   );
 }
 
+/**
+ * The line each face is read in: short enough for one line in a specimen half
+ * the card wide, where the kit's longer default was cut with an ellipsis even
+ * on a wide page.
+ */
+const SPECIMEN_SAMPLE = "Every page, in your own type.";
+
 /** The Typography card's body: the heading face and the body face, each drawn in itself. */
 export function TypographyBody({
   type,
@@ -238,6 +245,7 @@ export function TypographyBody({
             family={face.name}
             fontFamily={face.stack || undefined}
             detail={face.detail}
+            sample={SPECIMEN_SAMPLE}
             weight={role === "heading" ? "semibold" : "regular"}
           />
         );
