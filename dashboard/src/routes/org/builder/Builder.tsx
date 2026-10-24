@@ -75,7 +75,7 @@ import { PRINCIPLES_PATH } from "~/app/routes.ts";
 import { PROVIDER_STEPS } from "~/contract/providersteps.ts";
 import { principlesEditQuery } from "~/routes/settings/principles/edit/address.ts";
 import { useMayWriteCharter } from "~/routes/settings/principles/edit/access.ts";
-import { managedSentence } from "~/protocol/configAnswer.ts";
+import { managedSentence, managerOf } from "~/protocol/configAnswer.ts";
 import { useLeadScope, type LedUnit } from "~/lib/leadScope.ts";
 import type { ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
 import type { Tone } from "@crewlethq/ui";
@@ -126,7 +126,7 @@ import { seatsWithoutContact } from "./model/templates.ts";
 import type { KeySource } from "./model/keys.ts";
 import { ReviewSaveDialog } from "./ReviewSaveDialog.tsx";
 import { AfterSaveStrip } from "./AfterSaveStrip.tsx";
-import { CreateCompany, NextSteps } from "./CreateCompany.tsx";
+import { CreateCompany, managedModelSentence, NextSteps } from "./CreateCompany.tsx";
 import { clearSavedRevision, recordSavedRevision, useSavedRevision } from "./savedRevision.ts";
 import { configTransport } from "~/protocol/configWrite.ts";
 import { browserClock, randomKeys, sessionDraftStorage } from "./runtime.ts";
@@ -969,6 +969,13 @@ function BuilderScreen({
   const checkManagedBy = status === "managed" ? managedByOf(state) : null;
   const managedBy = checkManagedBy ?? (viewerManaged !== null ? viewer.configManagedBy : null);
   const managed = managedBy === null ? null : managedSentence(managedBy);
+  // AND WHO MANAGES THE DOCUMENT AT ALL, whoever reads it — a writer it names
+  // included, whose edits `managedBy` lets through. It decides where a model
+  // comes from rather than whether this reader may edit: no reader of a
+  // managed document can take the terminal steps, whose offline import it
+  // refuses ([managedModelSentence]).
+  const documentManagedBy =
+    checkManagedBy ?? (viewer.configManagedBy.length > 0 ? viewer.configManagedBy : null);
 
   // Why editing is paused, as the sentence the live region says after
   // "Editing is paused."
@@ -977,7 +984,7 @@ function BuilderScreen({
       return "The outcome of the last save is not known yet.";
     }
     if (managedBy !== null) {
-      return `This company's configuration is managed by ${managedBy.join(", ") || "another system"}.`;
+      return `This company's configuration is managed by ${managerOf(managedBy)}.`;
     }
     if (keeping.offer) return "A kept draft is waiting for Keep or Discard.";
     if (guarded) return signedIn ? configGuardedReason(guardedCode) : "Nobody is signed in.";
@@ -1497,7 +1504,9 @@ function BuilderScreen({
   // providers.llm and places its seats, then holds every delivery on the
   // seat's inbox until an apply brings a provider (engine/nomodels.go). The
   // dashboard writes none, so the builder gives the terminal steps that add
-  // one — the same the card after a create gives, from the same declaration.
+  // one — the same the card after a create gives, from the same declaration —
+  // or, on a document another system manages, says the model is added there,
+  // since those steps end in an import a managed document refuses.
   // So while that card is up the caution waits: it would say the same thing
   // twice, steps and all. A lead's draft holds one unit and no settings, so it
   // says nothing either way.
@@ -1910,11 +1919,20 @@ function BuilderScreen({
         )}
         {noProvider && (
           <Callout variant="warning" icon={<CpuGlyph />}>
-            No model provider is set, so agents can’t work. One is added from a terminal on the
-            node’s host, starting from the company the store holds:
-            <Disclosure title="The steps" size="compact" headingLevel="none">
-              <CodeBlock plain wrap code={PROVIDER_STEPS} />
-            </Disclosure>
+            {documentManagedBy === null ? (
+              <>
+                No model provider is set, so agents can’t work. One is added from a terminal on the
+                node’s host, starting from the company the store holds:
+                <Disclosure title="The steps" size="compact" headingLevel="none">
+                  <CodeBlock plain wrap code={PROVIDER_STEPS} />
+                </Disclosure>
+              </>
+            ) : (
+              <>
+                No model provider is set, so agents can’t work.{" "}
+                {managedModelSentence(documentManagedBy)}
+              </>
+            )}
           </Callout>
         )}
         {refusal && (
@@ -1955,7 +1973,7 @@ function BuilderScreen({
           </Callout>
         )}
 
-        {created && <NextSteps onDismiss={() => setCreated(false)} />}
+        {created && <NextSteps onDismiss={() => setCreated(false)} managedBy={documentManagedBy} />}
 
         {startingCompany ? (
           <CreateCompany

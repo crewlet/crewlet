@@ -160,7 +160,10 @@ no dashboard screen adds. The engine applies the new company
 without one, but until the provider is added no agent seat takes a turn:
 whatever is sent to a seat waits on its inbox and runs once the provider
 exists. The panel gives the terminal steps for it, which
-[Giving the company a model](#giving-the-company-a-model) explains.
+[Giving the company a model](#giving-the-company-a-model) explains — unless
+another system [manages the company
+document](../concepts/configuration.md#managed-configuration), in which case it
+says the model is added there.
 
 ### Giving the company a model
 
@@ -214,6 +217,12 @@ crewlet run
 - **The import is offline**, with the node stopped: it marks the revision
   active in the node's store, and the node publishes it to the fleet as it
   starts. The work that waited on the seats' inboxes runs on the new model.
+
+None of this applies to a company another system
+[manages](../concepts/configuration.md#managed-configuration): an offline
+import of a managed document is refused, so the model is added at the
+company's source like any other change, and the builder says so instead of
+giving these steps.
 
 ## Reading the organization
 
@@ -413,8 +422,15 @@ The builder does not write providers, and the dashboard does not add one:
 Settings › Models & keys edits a model the configuration already declares.
 The caution folds away the steps that add one — the panel's own, starting from
 the company the store holds ([Giving the company a model](#giving-the-company-a-model)).
-It waits while the panel a create leaves is on screen, which says the same and
-gives the same steps. Any write of the document adds the entry, `PATCH /config`
+On a company another system [manages](../concepts/configuration.md#managed-configuration)
+it gives no steps and says the model is added there, by whoever reads it, a
+writer the document names included: the steps end in an offline
+`crewlet config import`, which a managed document refuses, and the managing
+system replaces any revision written around it at its next reconcile. The
+model is added at the company's source, like every other change to it: the
+repository a pipeline applies, or the resources an operator renders it from.
+The caution waits while the panel a create leaves is on screen, which says the
+same and gives the same steps. Any write of the document adds the entry, `PATCH /config`
 included ([Configure via the API](configure-via-api.md)); what only a terminal
 does is sign its CLI in, and `crewlet llm` reads the entry it signs in from a
 company file.

@@ -28,7 +28,9 @@
  * WHAT A CREATE CANNOT DO. The dashboard writes no model provider (that is
  * `providers.llm`, which no screen adds), so the next steps after a successful
  * create name it too and give the terminal steps for the one step that has no
- * screen at all (`contract/providersteps.ts`).
+ * screen at all (`contract/providersteps.ts`) — unless another system manages
+ * the document, which is where its model is added then
+ * ([managedModelSentence]).
  */
 
 import { useState } from "react";
@@ -36,6 +38,7 @@ import { principlesEditHref } from "~/routes/settings/principles/edit/address.ts
 import { href } from "~/app/router.tsx";
 import { ConfigField } from "~/components/ConfigField.tsx";
 import { PROVIDER_STEPS } from "~/contract/providersteps.ts";
+import { managerOf } from "~/protocol/configAnswer.ts";
 import type { HumanContactKey } from "~/protocol/index.ts";
 import type { KeySource } from "./model/keys.ts";
 import type { Intent, TemplateId } from "./model/operations.ts";
@@ -214,13 +217,36 @@ export function CreateCompany({
 }
 
 /**
+ * Where a managed company's model is added: where the rest of the company is
+ * written (ADR-0030).
+ *
+ * THE TERMINAL STEPS ARE NOT DRAWN FOR ONE, whoever reads it, a writer the
+ * engine names included: they end in an offline `crewlet config import`, which
+ * a managed document refuses to every caller (`cmd/crewlet/managed.go`), and
+ * the managing system replaces any revision written around it at its next
+ * reconcile. What the document is managed by is the engine's answer, so the
+ * sentence names it rather than guessing at a tool.
+ */
+export function managedModelSentence(managedBy: readonly string[]): string {
+  return `The company’s configuration is managed by ${managerOf(managedBy)}, so the model is added there.`;
+}
+
+/**
  * What is left to do once the company exists: write the principles every
  * agent reads, connect the tools it works in, and give it a model provider,
- * which no dashboard screen adds. The company this card follows is in the
- * store and in no file, which is where the steps start
- * (`contract/providersteps.ts` says why each one is the one it is).
+ * which no dashboard screen adds. The company
+ * this card follows is in the store and in no file, which is where the steps
+ * start (`contract/providersteps.ts` says why each one is the one it is). On a
+ * document another system manages, `managedBy` names it, and the card says the
+ * model is added there instead ([managedModelSentence]).
  */
-export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
+export function NextSteps({
+  onDismiss,
+  managedBy,
+}: {
+  onDismiss: () => void;
+  managedBy: readonly string[] | null;
+}) {
   return (
     <Card as="section">
       <Card.Header
@@ -256,13 +282,21 @@ export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
         </div>
         <div className="col gap-1">
           <strong>Add a model provider</strong>
-          <span className="t-caption">
-            Agents can’t work until one is added. Every model runs through a coding CLI, signed in
-            on the node’s host. These steps write the company you just created to a file, add Claude
-            Code to it, sign it in with <InlineCode>crewlet llm login</InlineCode> and import the
-            file:
-          </span>
-          <CodeBlock plain wrap code={PROVIDER_STEPS} />
+          {managedBy === null ? (
+            <>
+              <span className="t-caption">
+                Agents can’t work until one is added. Every model runs through a coding CLI, signed
+                in on the node’s host. These steps write the company you just created to a file, add
+                Claude Code to it, sign it in with <InlineCode>crewlet llm login</InlineCode> and
+                import the file:
+              </span>
+              <CodeBlock plain wrap code={PROVIDER_STEPS} />
+            </>
+          ) : (
+            <span className="t-caption">
+              Agents can’t work until one is added. {managedModelSentence(managedBy)}
+            </span>
+          )}
         </div>
       </div>
     </Card>

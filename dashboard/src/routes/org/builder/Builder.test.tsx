@@ -1003,6 +1003,33 @@ describe("a document another system manages", () => {
     expect(await screen.findByText("No problems")).toBeDefined();
     expect(screen.queryByText(/managed by gitops/i)).toBeNull();
   });
+
+  // ITS MODEL IS ADDED WHERE IT IS WRITTEN. The terminal steps end in an
+  // offline `crewlet config import`, which a managed document refuses to every
+  // caller, and the managing system would replace any other write at its next
+  // reconcile — so a managed company with no model is told where the model
+  // comes from and is given no steps, a writer it names included: managed is
+  // where the document is written, not who may edit it here.
+  test.each([
+    ["a reader it blocks", MANAGED],
+    ["a writer it names", { ...EDITOR, config_writer: true, config_managed_by: ["gitops"] }],
+  ])(
+    "a managed company with no model is told it is added there, not given steps: %s",
+    async (_, viewer) => {
+      const without = company();
+      delete without.providers;
+      mountBuilder({ engine: new Engine(without), viewer: () => viewer });
+      const caution = (
+        await screen.findByText(/No model provider is set, so agents can’t work\./)
+      ).closest(".crewlet-callout") as HTMLElement;
+      expect(caution.textContent).toContain(
+        "The company’s configuration is managed by gitops, so the model is added there.",
+      );
+      expect(within(caution).queryByRole("button", { name: "The steps" })).toBeNull();
+      expect(document.body.textContent).not.toContain("crewlet config");
+      expect(document.body.textContent).not.toContain("crewlet llm");
+    },
+  );
 });
 
 // WORK'S NEW PROJECT ARRIVES HERE, naming the unit by its key: the node's
