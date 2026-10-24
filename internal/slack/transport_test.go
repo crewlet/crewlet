@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -212,7 +213,8 @@ func TestTheWorkingIndicatorIsRaisedAndCleared(t *testing.T) {
 	if !tr.SupportsStatusText() {
 		t.Fatal("Slack's indicator renders text and the poster says it does not")
 	}
-	if !tr.SetStatus(context.Background(), "swe", "C0ENG", "1.1", "is thinking...") {
+	if !tr.SetStatus(context.Background(), notify.StatusPost{Handle: "swe", Channel: "C0ENG",
+		Thread: "1.1", Text: "is thinking..."}) {
 		t.Fatal("the indicator was not raised")
 	}
 	if got := ws.lastBody("assistant.threads.setStatus")["status"]; got != "is thinking..." {
@@ -237,20 +239,33 @@ func TestAFailedIndicatorIsReportedNotRaised(t *testing.T) {
 	if err := tr.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if tr.SetStatus(context.Background(), "swe", "C0ENG", "1.1", "is thinking...") {
+	if tr.SetStatus(context.Background(), notify.StatusPost{Handle: "swe", Channel: "C0ENG",
+		Thread: "1.1", Text: "is thinking..."}) {
 		t.Fatal("a refused status reported success")
 	}
 }
 
-// THE DM PREFIX IS EXACT ON THIS BACKEND, which is what lets the indicator
+// THE INDICATOR AND THE PROMPT READ ONE RULE, and the transport is the door
+// the indicator reads it through. A second declaration here would raise a
+// spinner on messages the prompt tells the agent it may ignore.
+//
+// Its DM prefix is exact on this backend, which is what lets the indicator
 // answer for an app_mention — whose payload omits the channel type.
-func TestTheDMPrefixIsDeclared(t *testing.T) {
+func TestTheIndicatorReadsThePromptsOwnAddressRule(t *testing.T) {
 	t.Parallel()
 	ws := newWorkspace(t)
 	ws.replies["auth.test"] = `{"ok":true,"user_id":"` + botUser + `"}`
 	tr := transport(t, ws, nil)
-	if got := tr.DMChannelPrefix(); got != "D" {
+	if got := tr.AddressRule(); !reflect.DeepEqual(got, slack.Prompt().Address) {
+		t.Fatalf("the transport addresses by %+v, the prompt by %+v", got, slack.Prompt().Address)
+	}
+	if got := tr.AddressRule().DMPrefix; got != "D" {
 		t.Fatalf("DM prefix = %q", got)
+	}
+	// An app_mention omits channel_type entirely, so the prefix is the
+	// only thing that can answer for one.
+	if !tr.AddressRule().IsDirect(map[string]string{notify.ChannelField: "D0ANA"}) {
+		t.Error("a DM id was not read as direct")
 	}
 	if got := tr.StatusRefresh(); got <= 0 || got >= 2*time.Minute {
 		t.Errorf("refresh = %s, want well inside Slack's two-minute expiry", got)

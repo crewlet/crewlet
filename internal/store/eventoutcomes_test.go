@@ -78,7 +78,7 @@ func TestNotificationOutcomesCountExactlyTheirWindow(t *testing.T) {
 // AND FLOORED AT THE INSTANT IT IS ASKED AT, like every read of the log: an
 // edge below the history floor is held to it, and the floor is `At` −
 // [store.EventHistory] rather than this node's own clock's — because a fleet
-// asks every node at the ASKER's instant, and a node flooring at its own
+// asks every data node at the ASKER's instant, and a node flooring at its own
 // would count a different window from its neighbours. The rows here sit a
 // second either side of the floor under an instant an hour old: the one above
 // it is under the clock's floor and still counted, and the one below it is

@@ -454,7 +454,8 @@ func TestTheApplierReadsNoOtherDomain(t *testing.T) {
 	applier := []string{"apply.go", "evaluate.go", "configure.go", "history.go", "storerows.go",
 		"values.go", "rules.go", "payload.go", "record.go", "subject.go", "scope.go", "tables.go",
 		"domain.go", "moved.go", "errors.go", "meter.go"}
-	other := []string{"writer.go", "read.go", "export.go", "rows.go", "ratelimit.go", "doc.go"}
+	other := []string{"writer.go", "read.go", "export.go", "rows.go", "ratelimit.go", "doc.go",
+		"sentence.go"}
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
@@ -508,7 +509,7 @@ func TestTheApplierReadsNoOtherDomain(t *testing.T) {
 }
 
 // THE APPLIER'S DECISION IS TOTAL: whatever a record carries, every write ends
-// in a verdict and none in an error that would stop the log on every node
+// in a verdict and none in an error that would stop the log on every data node
 // (review AV3). Seeded with the hostile shapes the review names; `go test
 // -fuzz` explores further.
 func FuzzTheApplierDecisionIsTotal(f *testing.F) {
@@ -557,7 +558,7 @@ func FuzzTheApplierDecisionIsTotal(f *testing.F) {
 		rec := statelog.Record{Envelope: env, Payload: body, StoredAt: monday,
 			Position: statelog.Position{Stream: spec.Name, Seq: at}}
 		// A VERDICT IS THE ONLY ACCEPTABLE OUTCOME: an error here is a
-		// record that would stop the log on every node.
+		// record that would stop the log on every data node.
 		if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
 			_, err := applier.Apply(t.Context(), tx, rec, statelog.ApplyOptions{
 				Now: monday, StoredAt: monday, MaxVariables: 999})

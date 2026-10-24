@@ -16,10 +16,12 @@
 //
 // Three channels are instructions, and each is a [Channel]:
 //
-//   - the ESTATE SERVICE (internal/estate): a data node runs a tracker or a
-//     knowledge-base write AS THE ACTOR THE REQUEST NAMES, so unsigned, anybody
-//     on the broker could file, edit or purge as any seat in the company, and
-//     the log would carry it signed by the data node that obeyed;
+//   - the ESTATE SERVICE (internal/estate): a data node runs a tracker, a
+//     knowledge-base or a chat write AS THE ACTOR THE REQUEST NAMES, and
+//     answers a chat read FOR THE VIEWER IT NAMES, so unsigned, anybody on the
+//     broker could file, edit, post or purge as any seat in the company — and
+//     the log would carry it signed by the data node that obeyed — or read any
+//     private room as anybody;
 //   - the FLEET BROKER'S MEMBERSHIP (internal/engine, fleetbroker.go): a member
 //     removes a voter from the broker's metadata group through its own system
 //     account, the one action the design keeps off the shared account — so
@@ -89,15 +91,30 @@
 // ([OneWay]): the same frame, a key domain of its own, and an expiry inside the
 // signed body in place of the id and deadline a reply would be bound to.
 //
+// # And a read whose answer is shown
+//
+// One request-and-reply channel carries no instruction either: the LIVE RELAY
+// (internal/engine, liverelay.go), on which a data node whose own copy is out
+// of service asks a sound peer what that peer's appliers committed. It only
+// reads, and it is a [Channel] all the same, because what the asker does with
+// the answer is PUSH it to every socket it holds as the peer's work — a chat
+// batch's excerpts and mentions, a datastore batch's documents — so a forged
+// answer is words shown under somebody's name. Its asks are bound like any
+// request, so the answer a follower believes is the one to the ask it just
+// sent; a one-way seal would let a captured answer be believed by any follower
+// asking inside its validity.
+//
 // # What it does not cover
 //
-// The scatters that only READ — the fleet's history, a search slice, a held
-// seat's memory, a sandbox's live tail — carry no instruction a node carries
-// out, so they are not channels here; and the queue's own event envelopes,
-// custody batches among them, carry what a node observed rather than what it
-// must do (ADR-0031). A broker that anybody can reach can read and forge on
-// those as it can on any subject: keeping both ports private is the operator's
-// half of the rule (SECURITY.md).
+// The scatters whose answer is READ — the fleet's history, a search slice, a
+// held seat's memory, a sandbox's live tail, each handed back to the one
+// caller that asked as the answer to its question — carry no instruction a
+// node carries out and nothing a node shows as another's content, so they are
+// not channels here; and the queue's own event envelopes, custody batches
+// among them, carry what a node observed rather than what it must do
+// (ADR-0031). A broker that anybody can reach can read and forge on those as
+// it can on any subject: keeping both ports private is the operator's half of
+// the rule (SECURITY.md).
 package signedask
 
 import (
@@ -109,6 +126,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Request is a channel's request as the envelope binds it.
@@ -263,7 +281,7 @@ func (c *Channel[Q, R]) Admit(sealed []byte, seen *Guard, now time.Time) Admissi
 	case statelog.KeyUnknown:
 		out.Disposition = KeyUnknown
 		out.Why = fmt.Sprintf("the request is signed under a key this node does not hold "+
-			"(it holds %v) — add the key to secrets.keys", c.HeldKeys())
+			"(it holds %s) — add the key to secrets.keys", words.And(c.HeldKeys()))
 		var claimed Q
 		if err := json.Unmarshal(body, &claimed); err == nil {
 			out.Request = claimed
@@ -321,7 +339,7 @@ func (c *Channel[Q, R]) OpenReply(sealed []byte, asked string) (rep R, why strin
 		return zero, "its reply is not signed by this fleet", nil
 	case statelog.KeyUnknown:
 		return zero, fmt.Sprintf("its reply is signed under a key this node does not "+
-			"hold (it holds %v) — add the key to secrets.keys", c.repliesOpened.KeyIDs()), nil
+			"hold (it holds %s) — add the key to secrets.keys", words.And(c.repliesOpened.KeyIDs())), nil
 	}
 	if err := json.Unmarshal(body, &rep); err != nil {
 		return zero, "", fmt.Errorf("signedask: decode the reply: %w", err)

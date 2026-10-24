@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/whsec"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Integrations is the INBOUND half of the external world: how events reach
@@ -500,7 +501,11 @@ type WorkingStatus string
 
 const (
 	// StatusAddressed shows it only when a human is plausibly waiting on
-	// this seat: a DM, a direct mention, or a thread it already follows.
+	// this seat, which is whatever the chat surface's own address rule says
+	// (notify.AddressRule): a direct message, a personal mention, or a
+	// thread the seat is in for a reason that owes an answer — never one it
+	// reached through a room-wide address or only by having spoken there
+	// once, which every seat in the room shares and most stay silent on.
 	StatusAddressed WorkingStatus = "addressed"
 	// StatusAlways shows it on every chat-triggered turn, including
 	// passive channel messages and broadcasts. It is the DEFAULT: a turn
@@ -739,7 +744,7 @@ func atlassianDeployment(p *problems, path Path, url, cloudID string, declared a
 		p.add(at(path, "url"), ErrConflict,
 			"%q is an Atlassian Cloud address, and integrations.atlassian.deployment "+
 				"declares %s: no Data Center instance is served there, so one "+
-				"of the two is wrong — declare %s, or give the instance's own address",
+				"of the two is wrong. Declare %s, or give the instance's own address",
 			url, AtlassianDataCenter, AtlassianCloud)
 	}
 	return deploy
@@ -1262,7 +1267,7 @@ func (g *GitLab) validate(path Path) error {
 	// account reported removed and still live.
 	if !pv.Mode.Valid() {
 		p.add(at(pp, "mode"), ErrUnknownValue, "%q is not one of %s",
-			pv.Mode, strings.Join(GitLabModes(), ", "))
+			pv.Mode, words.Or(GitLabModes()))
 	}
 	if pv.AccessLevel != "" && !slices.Contains(GitLabAccessLevels, pv.AccessLevel) {
 		p.add(at(pp, "access_level"), ErrUnknownValue, "%q (want %s)",
@@ -1640,7 +1645,7 @@ func (d *Datadog) validate(path Path) error {
 				"required when datadog is enabled: it is the region the keys "+
 					"were issued in, and a key from one region is refused by "+
 					"every other. One of %s",
-				strings.Join(DatadogSites, ", "))
+				words.Or(DatadogSites))
 		case envref.Has(d.Provisioning.Site):
 			// A ${VAR} IS UNKNOWN, NOT WRONG. Tier B holds pointers
 			// verbatim and resolves them where a client is built, so the
@@ -1652,7 +1657,7 @@ func (d *Datadog) validate(path Path) error {
 					"that tells one organization's keys from another's, so a "+
 					"value Datadog does not serve resolves to no API at all. "+
 					"One of %s",
-				d.Provisioning.Site, strings.Join(DatadogSites, ", "))
+				d.Provisioning.Site, words.Or(DatadogSites))
 		}
 	}
 

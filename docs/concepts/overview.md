@@ -44,7 +44,7 @@ The hierarchy is informational + delegation-routing, not a special upward escala
 
 - **Event-driven** — agents are reactive; events trigger agent work, agent work produces events
 - **Concurrent by default** — a seat's turn, its MCP children and the node's own duties run in parallel, and every shared structure is checked under the race detector
-- **Provider-agnostic**: pluggable LLM, storage, tracker, knowledge and embedding backends, each behind a small contract; external tools via MCP. Only the LLM is required: the tracker and the knowledge base ship with the engine, so a company with an API key and nothing else runs
+- **Provider-agnostic**: pluggable LLM, storage, tracker, knowledge and embedding backends, each behind a small contract; external tools via MCP. Only the LLM is required: the tracker, the knowledge base and chat ship with the engine, so a company with an API key and nothing else runs
 - **Config-driven** — a company is a YAML document, validated against a schema generated from the same types the engine runs on
 - **Extension-oriented**: anything beyond running the company is built outside the process, not added to the core
 - **Observable**: structured logging, OpenTelemetry tracing, and an event store the dashboard reads, from day one
@@ -61,14 +61,14 @@ flowchart TB
     subgraph proc["<b>crewlet run</b> — one process by default; node.roles picks the groups"]
         direction TB
         API["<b>ingress — API + dashboard</b><br/>webhook routes · REST · /config · /secrets<br/>/ws/stream · OTLP ingest · /health · /ready"]
-        SEAT["<b>seats — the agents</b><br/>Seat host: leases, mailboxes, MCP children<br/>Turn engine: executor → reviewer, one per running turn<br/>Tool registry: builtins · per-role MCP · a2a_ask<br/>Provider chain: fallback models over a credential pool"]
-        DUTY["<b>workers — company-wide singletons</b><br/>scheduler · sandbox waiter · retention sweep · learning passes"]
-        CORE["<b>always on, whatever the roles</b><br/>notification service — parse, resolve, wake<br/>config reconciler · node presence · reflection · observability edge"]
+        SEAT["<b>seats — the agents</b><br/>Seat host: leases, mailboxes, MCP children<br/>Turn engine: executor → reviewer, one per running turn<br/>Post-turn reflection, where the seat's memory is held<br/>Tool registry: builtins · per-role MCP · a2a_ask<br/>Provider chain: fallback models over a credential pool"]
+        DUTY["<b>workers — company-wide singletons</b><br/>scheduler · sandbox waiter · maintenance sweep · learning passes<br/>log trim · embeddings · identity sweep · object collector<br/>chat prune · trash reaper · integration reconcile"]
+        CORE["<b>always on, whatever the roles</b><br/>notification service — parse, resolve, wake<br/>config reconciler · node presence · observability edge · chat hub<br/>usage publisher, on a data node"]
     end
 
     STREAM[("<b>Event stream</b><br/><i>embedded NATS JetStream by default</i><br/>crewlet.agent.SEAT-ID.inbox · .control · .reflect<br/>crewlet.notifications.inbound · crewlet.events.*<br/>crewlet.config.* · crewlet.memory.* · dlq.*")]
     KV[("<b>Coordination KV</b><br/><i>on the stream's own broker</i><br/>seat · node · worker leases with a fencing epoch<br/>activation pointer · per-node status<br/>ledgers · counters · the company's secrets")]
-    DB[("<b>Store</b><br/><i>two local files, owned exclusively</i><br/>this node's: crewlet_events · agent_diary · episodes<br/>replicated: the tracker, the pages, the vectors,<br/>the identity directory, the usage history")]
+    DB[("<b>Store</b><br/><i>two local files, owned exclusively</i><br/>this node's: crewlet_events · agent_diary · episodes<br/>replicated: the tracker, the pages, the vectors,<br/>the identity directory, the usage history, chat")]
 
     EXT -->|"webhooks / websocket"| API
     API -->|"verify · claim once per fleet · publish"| STREAM
@@ -92,7 +92,7 @@ node, the hop-by-hop path a trigger takes across a fleet, what a turn does,
 where every table and bucket lives, and what changes when a second node
 appears.
 
-**Infrastructure**: none to operate. The stream is a NATS JetStream server the process embeds, and the store is a local file it creates. Outgrowing one node moves only the stream: the embedded servers join one cluster, or every node dials one external NATS (see [Running a Fleet](../guides/fleet.md)). It is the same client code either way — embedded versus external is a connection choice, not a second backend — and the store stays each node's own file. OpenTelemetry for distributed tracing.
+**Infrastructure**: none to operate. The stream is a NATS JetStream server the process embeds, and the store is two local files it creates. Outgrowing one node moves only the stream: the embedded servers join one cluster, or every node dials one external NATS (see [Running a Fleet](../guides/fleet.md)). It is the same client code either way — embedded versus external is a connection choice, not a second backend — and the store stays each node's own files. OpenTelemetry for distributed tracing.
 
 **One node type**: `crewlet run` is the node, and what it does is a config value: `node.roles` picks from `data` (hold the company's durable state), `ingress` (serve the HTTP API and its webhooks), `seats` (run agents), and `workers` (the company-wide singleton duties). The default is all four: one process holding the company's records, serving the API and the dashboard and running every agent, which is the whole stack. Giving the API nodes of its own is the same command with `-roles data,ingress`: an engine that serves the API and claims no seats, so both topologies are the same code path rather than two wirings that have to be kept in step. And an agent host can hold **no data at all** — `-roles seats` on a scratch store, joined to the fleet as a leaf — which keeps it small and disposable while its seats read and write through a node that holds the data ([ADR-0025](https://github.com/crewlet/crewlet/blob/main/adr/0025-a-node-without-data-reaches-the-estate-through-one-that-holds-it.md)).
 
@@ -129,7 +129,7 @@ External dependencies sit behind small Go interfaces, each declared by the packa
 
 A provider does not retry and does not decide what a failure means beyond a coarse `llm.ErrorKind` (`rate_limit`, `auth`, `timeout`, `server`, or fatal). The HTTP backends classify by status, except for an error that ends a response already streaming: it arrives after the `200`, so the status says nothing about it. The Anthropic backend reads the error type the API names in every error body first — an `overloaded_error` half-way through a round is `server` and the chain moves on, where its status alone would have made it fatal — and the OpenAI backend treats an error chunk mid-stream as `server` unless the host names an HTTP status in its `code`. Rotation across keys belongs to the credential pool (`internal/providers/credential`), and falling back to the next model belongs to the seat's chain (`internal/providers/llm/chain`), which tries its members in order and stops at a fatal error.
 
-**The request shape is the model's.** A request field a model does not accept is a 400, and a 400 is fatal — the chain does not try the next member on it — so the Anthropic provider sends nothing the model in front of it would refuse, read from one capability table (`internal/providers/llm/anthropic/claudemodel`) under the model's normalized id. Thinking is adaptive with a summarized display on every call to a model that has that mode (there is no off: several models refuse it, and depth is the effort level), and a budget only on the budget-era models that predate it, only when the entry gives one; `output_config.effort` is the entry's level (`high` when unset) lowered to the call's ceiling, only where the model takes effort; a request's temperature reaches the wire only on a model that takes sampling and a call that is not thinking; `max_tokens` is the model's own output cap, a call's smaller cap honoured only on a call that is not thinking; and neither a forced tool choice nor a prefill is ever sent. An id the table does not know gets the current generation's shape, which an entry's `claude_model` corrects for a gateway alias hiding an older model. The rules are checked at `crewlet validate` and again when the provider is built; [Claude models](../getting-started/configuration.md#claude-models-thinking-effort-and-sampling) has the table. The conversation goes back the same way it came: every assistant turn is replayed as the vendor's own content blocks, verbatim and in the order the model wrote them, because the current models bind each thinking block to the conversation before it and refuse one whose earlier turns were rebuilt. The one thing that does not only grow is the tool list (`activate_tool` adds to it, and a resume renders it again), so on a model that runs that check the reasoning written under an earlier tool set is shed, oldest first, rather than replayed into a 400 — see [the conversation only grows](turn-engine.md#the-conversation-only-grows). The OpenAI provider does the same for the reasoning a host returns beside OpenAI's schema (`reasoning_content`, OpenRouter's `reasoning_details`, a Gemini thought signature, …): it goes back on every later round, in the host's own field, to the endpoint that wrote it and no other, because Kimi K3 is trained to read it and DeepSeek and Gemini 3 refuse a tool loop without it — see [reasoning models behind an OpenAI-compatible endpoint](../getting-started/configuration.md#reasoning-models-behind-an-openai-compatible-endpoint).
+**The request shape is the model's.** A request field a model does not accept is a 400, and a 400 is fatal — the chain does not try the next member on it — so the Anthropic provider sends nothing the model in front of it would refuse, read from one capability table (`internal/providers/llm/anthropic/claudemodel`) under the model's normalized id. Thinking is adaptive with a summarized display on every call to a model that has that mode (there is no off: several models refuse it, and depth is the effort level), and a budget only on the budget-era models that predate it, only when the entry gives one; `output_config.effort` is the entry's level (`high` when unset) lowered to the call's ceiling, only where the model takes effort; a request's temperature reaches the wire only on a model that takes sampling and a call that is not thinking; `max_tokens` is the model's own output cap, a call's smaller cap honoured only on a call that is not thinking; and neither a forced tool choice nor a prefill is ever sent. An id the table does not know gets the current generation's shape, which an entry's `claude_model` corrects for a gateway alias hiding an older model. The rules are checked at `crewlet validate` and again when the provider is built; [Claude models](../getting-started/configuration.md#claude-models-thinking-effort-and-sampling) has the table. The conversation goes back the same way it came: every assistant turn is replayed as the vendor's own content blocks, verbatim and in the order the model wrote them, because the current models bind each thinking block to the conversation before it and refuse one whose earlier turns were rebuilt. The one thing that does not only grow is the tool list (`activate_tool` adds to it, and a resume renders it again), so on a model that runs that check the reasoning written under an earlier tool set is shed, oldest first, rather than replayed into a 400 — see [the conversation only grows](turn-engine.md#the-conversation-only-grows). The OpenAI provider does the same for the reasoning a host returns beside OpenAI's schema (`reasoning_content`, OpenRouter's `reasoning_details`, a Gemini thought signature, …): it goes back on every later round, in the host's own field, to the endpoint that wrote it and no other, because Kimi K3 is trained to read it and DeepSeek and Gemini 3 refuse a tool loop without it — see [reasoning models behind an OpenAI-compatible endpoint](../getting-started/configuration.md#reasoning-models-behind-an-openai-compatible-endpoint). On that wire an earlier tool call goes back with its arguments as a JSON *string*, which the host hands the model as the text it holds rather than decoding it, so every value in them is spelled as the model spelled it: `<`, `>` and `&` as themselves, never the escapes an HTML-safe encoder writes.
 
 Built-in providers: **OpenAI**, **Anthropic** (using their official SDKs), any OpenAI-compatible endpoint, and **`cli-agent`**: a locally installed coding CLI (`claude`, `codex`, `gemini`, `opencode`, and others) driven on the operator's *subscription* rather than a metered API key. Different roles can use different providers and models (for example, executives on Claude and junior agents on a smaller, cheaper model).
 
@@ -153,7 +153,7 @@ Built-in providers: **OpenAI**, **Anthropic** (using their official SDKs), any O
 - **`counterparty_profiles`** — per-(observer, subject) profiles built up from observed interactions.
 - **`agent_onboarding_markers`** — `mark_onboarded` bookkeeping (one row per agent, UPSERT-keyed).
 - **`conversation_sessions`** — the [conversation ledger](conversation-sessions.md): one row per completed turn, keyed on the seat and the conversation it served, rendered back into that conversation's next turn. Deduped on the work key, trimmed on write, swept on a retention horizon.
-- **`secret_values`** — the local half of the [secret store](secret-store.md), and now only its bootstrap path: the company's credentials live on the coordination KV where every node reads them, and rows written here while the engine was stopped are migrated there at its next start. Sealed with the Tier A keyring either way; no plaintext mode.
+- **`secret_values`** — the local half of the [secret store](secret-store.md), and now only its bootstrap path: the company's credentials live on the coordination KV where every node reads them, and rows written here while the engine was stopped are migrated there at its next start — beside `secret_removals`, the dated removals an offline `crewlet secrets unset` leaves, carried there the same way. Sealed with the Tier A keyring either way; no plaintext mode.
 
 Alongside them sit the durable runtime tables a turn leaves behind — `crewlet_events`, `scheduled_runs` — and the config plane's `company_config` payloads. The full migration list is in `internal/store/schema/`.
 
@@ -171,9 +171,9 @@ adr/                      # Architecture decision records — a decision that
                           #   anchors each one to its authority
 cmd/crewlet/              # The one binary: run, validate, schema, migrate,
                           #   budgets, backup, retention, work, objects,
-                          #   fleet, seats, secrets, config, iam, llm, search,
-                          #   and the six integration CLIs — gitlab/github/
-                          #   jira/slack
+                          #   fleet, seats, chat, secrets, config, iam, llm,
+                          #   search, and the six integration CLIs — gitlab/
+                          #   github/jira/slack
                           #   `provision`, confluence `import|resync`,
                           #   mattermost `provision|doctor`
 internal/
@@ -209,14 +209,19 @@ internal/
 ├── iamdomain/            # The identity estate — statelog's fourth domain:
 │                         #   people, logins, credentials, invitations and
 │                         #   sessions, uniqueness arbitrated on one subject
-├── usage/                # Each node's day, replicated — statelog's fifth
-│                         #   domain: spend, turns and reads that outlive the
-│                         #   node that recorded them
+├── usage/                # Each data node's day, replicated — statelog's
+│                         #   fifth domain: spend, turns and reads that
+│                         #   outlive the node that recorded them
+├── chat/                 # The engine's own chat — statelog's eighth domain:
+│                         #   rooms, threads, messages and reactions, a
+│                         #   message sequenced on its room's subject
 ├── eventfan/             # The fleet's turn-level history, read from every
-│                         #   node at query time, with coverage on every answer
+│                         #   data node at query time, with coverage on every
+│                         #   answer
 ├── search/               # Both halves of knowledge search — the BM25 index
 │                         #   and the two-stage semantic retrieval — plus the
-│                         #   embedding domain and the fleet's bucket fan-out
+│                         #   embedding domain, the fleet's bucket fan-out and
+│                         #   chat's own keyword index
 ├── textindex/            # The analyzer and the BM25 arithmetic, as pure
 │                         #   functions: Turso has no fts5
 ├── changefeed/           # How a committed record becomes a WAKE, derived by
@@ -280,7 +285,18 @@ internal/
 ├── jsinflight/           # A compare-and-set the leader answers "another write
 │                         #   is still in flight" is waited out until the
 │                         #   leader decides it, never read as a lost race
-├── httpx/ textcut/      # The shared HTTP transport; rune-safe shortening
+├── httpx/ textcut/       # The shared HTTP transport; rune-safe shortening
+├── plainjson/            # JSON read as text: `<`, `>` and `&` as themselves,
+│                         #   for every record and answer a person or a model
+│                         #   reads
+├── toolname/             # The engine's own tool names that a package below
+│                         #   their owner must spell, declared once and held
+│                         #   by a walk of every string literal in the tree
+├── keyset/               # A row's place in an order as the arms the rows
+│                         #   after or before it are read through — one seek
+│                         #   of the order's index each — so a later page
+│                         #   and a task's neighbours cost what the first
+│                         #   page does
 ├── api/                  # REST + dashboard: webhooks/, stream/, queries/,
 │                         #   livestate/, configapi/, setupapi/, secretsapi/,
 │                         #   auth/, httpjson/, mcpbridge/, operator/ (ONE

@@ -17,6 +17,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // Decision is the judge's answer.
@@ -114,6 +116,12 @@ type Request struct {
 	// RemainingUnderCeiling is what is left for the whole phase across all
 	// extensions.
 	RemainingUnderCeiling int
+
+	// Boundary is the token the turn's fences carry ([turnctx.Turn.Boundary]):
+	// the task the phase works on fences the words somebody else wrote under
+	// it, and a judge reads them under a token of its own call instead
+	// ([LLMJudge.Decide]), so nothing it could echo is one of the turn's.
+	Boundary provenance.Boundary
 }
 
 // Judge is the model-facing half.
@@ -216,14 +224,14 @@ func (p Policy) Grant(d Decision, used int) int {
 func FinishHint(ph phase.Phase) string {
 	switch ph {
 	case phase.Execute:
-		return "If you cannot finish in this window, call `submit_work` with " +
+		return "If you cannot finish in this window, call `" + toolname.SubmitWork + "` with " +
 			"whatever you have — reporting honestly what is done and what is " +
 			"outstanding is better than being cut off mid-round."
 	case phase.Review:
-		return "If you cannot finish in this window, call `submit_review` with " +
+		return "If you cannot finish in this window, call `" + toolname.SubmitReview + "` with " +
 			"the decision the evidence supports so far."
 	case phase.Onboarding:
-		return "If you cannot finish in this window, call `mark_onboarded` " +
+		return "If you cannot finish in this window, call `" + toolname.MarkOnboarded + "` " +
 			"anyway after persisting what you have read — an onboarding pass " +
 			"that never marks itself done runs again on every turn you take."
 	default:
@@ -234,7 +242,13 @@ func FinishHint(ph phase.Phase) string {
 }
 
 // Nudge is the message handed to a phase that has been granted more rounds.
-func Nudge(ph phase.Phase, granted int, reason string) string {
+//
+// THE REASON IS DEFUSED under b, the turn's token (ADR-0040): it is a model's
+// sentence about a phase whose task carries other people's words, and it is
+// written into the seat's own conversation, where nothing it echoes may open
+// or close one of the turn's fences.
+func Nudge(b provenance.Boundary, ph phase.Phase, granted int, reason string) string {
+	reason = provenance.Neutralise(b, reason)
 	if reason == "" {
 		reason = "(none)"
 	}

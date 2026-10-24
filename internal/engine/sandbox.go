@@ -30,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -41,6 +42,7 @@ import (
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/tracing"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The sandbox's engine-side wiring: which concrete thing satisfies which seam.
@@ -182,8 +184,8 @@ func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver, pl
 		//
 		// Answered rather than panicked: an embedder building a spec by
 		// hand is a caller, not an operator to be crashed at.
-		return nil, fmt.Errorf("providers.sandbox: %q is not one of %v",
-			placement, config.Placements)
+		return nil, fmt.Errorf("providers.sandbox: %q is not one of %s",
+			placement, words.Or(config.Placements))
 	}
 }
 
@@ -492,6 +494,18 @@ func (r runEnv) logGap(ctx context.Context, seat, what string) {
 	log.WarnContext(ctx, "sandbox_env_unresolved", attrs...)
 }
 
+// launchWhy is what clears a coding run this gap kept from starting, as the
+// run_sandbox tool tells its model: a pass that is minting what is missing
+// clears it by itself ([sandbox.WhyAwaitingCredential]), and anything else is
+// a person's to supply ([sandbox.WhyConfiguration]). What is missing, and
+// each remedy, is the log's ([runEnv.logGap]).
+func (m *credentialMissing) launchWhy() sandbox.Why {
+	if m.waiting() {
+		return sandbox.WhyAwaitingCredential
+	}
+	return sandbox.WhyConfiguration
+}
+
 // logFacts writes what of the engine's own facts a run that starts goes
 // without, on the line and at the level [runEnv.logGap] writes the gap at,
 // so a setup recipe that read an empty commit address has a line saying why.
@@ -501,7 +515,7 @@ func (r runEnv) logFacts(ctx context.Context, seat string) {
 	}
 	attrs := append([]any{"seat", seat, "keys", r.facted}, r.facts.logAttrs()...)
 	attrs = append(attrs, "detail", "the run starts without the engine's own "+
-		plural(r.facted, "fact", "facts")+" from "+joined(r.facted)+": "+r.facts.reason())
+		plural(r.facted, "fact", "facts")+" from "+asWritten(r.facted)+": "+r.facts.reason())
 	if r.facts.waiting() {
 		log.InfoContext(ctx, "sandbox_env_unresolved", attrs...)
 		return
@@ -1092,7 +1106,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// running and leaves the box for the next completion — and keeps its
 	// indicator on the same terms, off the ROW rather than off the intent.
 	if res.Suspended {
-		working = stillWorking(e.persistSuspension(ctx, r, in.Run.TurnID, tel.written, charge, tel.ask, tel.senders))
+		working = stillWorking(e.persistSuspension(ctx, r, in.Run.TurnID, tel.written, charge, tel.ask, tel.askLabel, tel.senders))
 	}
 	e.recordResume(ctx, in, res)
 	return nil
@@ -1231,12 +1245,13 @@ func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
 // turn has measured of itself so far (execstate.State.SoFar), for the record
 // that ends it to state the whole turn. And so does what
 // the turn was ASKED (execstate.State.Ask), which the finishing segment's
-// completed-turn event carries and is woken by something else entirely — and
-// WHO asked it (execstate.State.Senders), which a refresh_memory call in any
+// completed-turn event carries and is woken by something else entirely, with
+// who wrote it (execstate.State.AskProvenance), which nothing the finishing
+// segment reads could say again — and WHO asked it (execstate.State.Senders), which a refresh_memory call in any
 // later segment tells the memory filter, since no later segment has the
 // interactions to read them off.
 func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID string,
-	written *turnctx.Written, charge segmentCharge, ask string,
+	written *turnctx.Written, charge segmentCharge, ask string, askLabel *provenance.Label,
 	senders []types.CanonicalIdentity,
 ) (bool, error) {
 	rt := e.sandbox.Load()
@@ -1255,6 +1270,7 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 	suspension.State.Uncharged = charge.carry
 	suspension.State.SoFar = charge.soFar
 	suspension.State.Ask = ask
+	suspension.State.AskProvenance = askLabel
 	suspension.State.Senders = senders
 	blob, err := execstate.Encode(suspension.State)
 	if err != nil {
@@ -1327,7 +1343,8 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	e := l.engine
 	rt := e.sandbox.Load()
 	if rt == nil {
-		return sandbox.LaunchResult{}, fmt.Errorf("this engine has no sandbox backend configured")
+		return sandbox.LaunchResult{}, sandbox.Because(sandbox.WhyConfiguration,
+			errors.New("this node runs no code sandbox: its company configures no providers.sandbox"))
 	}
 	manager, pending := rt.coordinator.Manager(), rt.pending
 	seat, err := t.RequireSeat()
@@ -1340,7 +1357,8 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		// Belt and braces: the tool is only on a sandbox-enabled seat's
 		// surface, but the surface is built from a snapshot and a seat can
 		// lose its gate across an apply mid-turn.
-		return sandbox.LaunchResult{}, fmt.Errorf("this seat's sandbox is not enabled")
+		return sandbox.LaunchResult{}, sandbox.Because(sandbox.WhyConfiguration,
+			fmt.Errorf("seat %q has role.sandbox.enabled off in the running revision", seat.Handle()))
 	}
 	if config.Placement(gate.RunIn) == config.PlacementSelf {
 		// `self` means this seat's code work rides its own executor run,
@@ -1349,10 +1367,9 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		// seat two filesystems with the work in the one the turn cannot
 		// see — so the tool refuses and says which shell to use, rather
 		// than provisioning a box whose output is invisible.
-		return sandbox.LaunchResult{}, fmt.Errorf(
-			"this seat runs its code work in its own agent session (role.sandbox.run_in: " +
-				"self) — use the shell and editor you already have rather than " +
-				"starting a second box")
+		return sandbox.LaunchResult{}, sandbox.Because(sandbox.WhyOwnSession, fmt.Errorf(
+			"seat %q runs its code work in its own agent session (role.sandbox.run_in: "+
+				"self), so no second box is started", seat.Handle()))
 	}
 
 	// THE PRE-FLIGHT BUDGET FLOOR. turn_engine.sandbox_min_budget_tokens
@@ -1360,8 +1377,9 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	// company that set it got a new revision and no behaviour.
 	//
 	// It is checked HERE rather than in the tool, because this is the frame
-	// that holds the seat's counter — and refused as a launch error, which
-	// the tool reports back to the model as a failed call. That is the
+	// that holds the seat's counter — and refused as a launch error
+	// ([sandbox.WhyBudget]), which the tool reports back to the model as a
+	// failed call. That is the
 	// point of a floor: a coding run costs a box, a clone and a toolchain
 	// install before it produces a token, so a seat with no headroom must
 	// learn that now and fall back to its own tools rather than after the
@@ -1383,13 +1401,19 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	// A RUN WHOSE ENVIRONMENT DOES NOT RESOLVE IS NOT STARTED, by the rule a
 	// tool server is held to (toolcredentials.go): handed an empty code-host
 	// token it clones nothing and pushes nothing, after spending its box. The
-	// refusal is this call's result, classed unavailable by the tool, so it
-	// costs the turn one round rather than the turn — a model told a token is
-	// being minted can try later or do the work with its own tools.
+	// refusal is this call's result, so it costs the turn one round rather
+	// than the turn — a model told a token is being minted can try later or
+	// do the work with its own tools, and one told a person must supply it
+	// does the work with its own tools. What is missing is the log's: the
+	// line below names every variable and its remedy.
 	run := e.runEnvironment(ctx, company, seat, gate, manager.DefaultSetup())
 	if run.gap != nil {
 		run.logGap(ctx, seat.Handle(), "no box is started")
-		return sandbox.LaunchResult{}, errors.New(run.gap.runRefusal())
+		// THE GAP'S OWN REASON, not its error, which is a tool server's
+		// sentence and says it "starts once the seal reaches this node":
+		// a run does not start by itself, its turn launches it again.
+		return sandbox.LaunchResult{}, sandbox.Because(run.gap.launchWhy(), fmt.Errorf(
+			"no box is started, because the run environment is not complete: %s", run.gap.reason()))
 	}
 	run.logFacts(ctx, seat.Handle())
 	setup := run.setup
@@ -1557,13 +1581,16 @@ func sandboxHeadroom(ctx context.Context, remaining runner.Remaining, floor int)
 	}
 	left, err := remaining.Remaining(ctx)
 	if err != nil {
+		// UNCLASSED, deliberately: what kept the counter from being read —
+		// a coordination store that did not answer, or a fault — is the
+		// caller's to word, and not a budget anybody spent.
 		return fmt.Errorf("this seat's remaining token budget could not be read, "+
 			"and a coding run costs a box before it produces anything: %w", err)
 	}
 	if left < floor {
-		return fmt.Errorf("this seat has %d tokens left and a coding run needs at "+
-			"least %d (turn_engine.sandbox_min_budget_tokens): do the work with "+
-			"your own tools, or report that the budget is exhausted", left, floor)
+		return sandbox.Because(sandbox.WhyBudget, fmt.Errorf("this seat has %d tokens "+
+			"left and a coding run needs at least %d (turn_engine.sandbox_min_budget_tokens)",
+			left, floor))
 	}
 	return nil
 }
@@ -2704,8 +2731,8 @@ func newCodingRun(c *Company, seat *org.Role, ph phase.Phase, runner string,
 	}
 	if agent, isCLI := member.Provider.(*cliagent.Provider); isCLI {
 		if agent.Agent() != runner {
-			return codingRun{}, &SandboxModelError{msg: fmt.Sprintf("seat %q: %s",
-				seat.Handle(), config.CodingAgentMismatch(runner, member.Key, agent.Agent()))}
+			return codingRun{}, refusedModel(fmt.Sprintf("seat %q: %s",
+				seat.Handle(), config.CodingAgentMismatch(runner, member.Key, agent.Agent())))
 		}
 		// THE MODEL AS THE ENTRY'S TEXT CALLS PASS IT, AND THE CLI IT IS
 		// WRITTEN FOR. A cli-agent entry's model is in that CLI's own
@@ -2834,13 +2861,20 @@ func claudeCodeOnForeignEntry(seat *org.Role, key string, kind config.LLMProvide
 	if signsIn(seatEnv, codingagent.ClaudeCodeCredentialEnv) {
 		return codingRun{env: seatEnv}, nil
 	}
-	return codingRun{}, &SandboxModelError{msg: fmt.Sprintf("seat %q runs code with Claude "+
+	return codingRun{}, refusedModel(fmt.Sprintf("seat %q runs code with Claude "+
 		"Code, which speaks the Anthropic API only, on providers.llm.%s, a %q entry whose "+
 		"model and key it cannot use. Point role.llm_sandbox at an anthropic entry, set "+
 		"role.sandbox.coding_agent: %s (which reads OpenAI's wire too), or give the seat a "+
 		"Claude Code sign-in of its own in role.sandbox.env (%s), on which it runs under its "+
 		"own model choice", seat.Handle(), key, kind, codingagent.OpenCodeName,
-		strings.Join(codingagent.ClaudeCodeCredentialEnv, ", "))}
+		strings.Join(codingagent.ClaudeCodeCredentialEnv, ", ")))
+}
+
+// refusedModel is a [SandboxModelError] saying msg, classed as what it is to
+// whoever is told a run did not start ([sandbox.WhyConfiguration]): an
+// operator's edit clears it, and nothing about waiting does.
+func refusedModel(msg string) error {
+	return sandbox.Because(sandbox.WhyConfiguration, &SandboxModelError{msg: msg})
 }
 
 // SandboxModelError reports a coding run whose coding agent cannot use the
@@ -2970,12 +3004,17 @@ func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sa
 			"local cell (role.sandbox.run_in: %q or %q)",
 			provider, agent.Agent(), member.Key, sandbox.Direct, sandbox.Container)
 	}
-	return &SandboxCredentialError{msg: fmt.Sprintf(
+	// CLASSED AT THE SOURCE as the configuration it is, so a run_sandbox
+	// call that meets it tells its model that a person's edit clears it, not
+	// a wait. An agent-mode executor that meets it fails its phase whatever
+	// the class ([runner.AgentLauncher]): no model reads it there, and the
+	// sentence is for whoever reads the turn's failure.
+	return sandbox.Because(sandbox.WhyConfiguration, &SandboxCredentialError{msg: fmt.Sprintf(
 		"seat %q runs code in %q, where the %q subscription login cannot follow it: "+
 			"the login stays on the engine host because it carries a refresh token whose "+
 			"rotation is fleet state, and nothing in this run's environment "+
 			"authenticates. %s",
-		seat.Handle(), placement, member.Key, remedy)}
+		seat.Handle(), placement, member.Key, remedy)})
 }
 
 // underlay adds defaults to env WITHOUT overwriting what is already there.

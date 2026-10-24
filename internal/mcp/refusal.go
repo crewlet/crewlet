@@ -14,9 +14,12 @@ import (
 // [Result.Output] and is expected to act on its words — that is why the output
 // is the whole story for it, and why the refusal text names the argument to
 // change. A PERSON's surface cannot: the dashboard has to decide whether to
-// show the tool's sentence at all (it names a field only for [RefusalInvalid]
-// and [RefusalForbidden]), which HTTP status the write surface answers, and
-// whether a retry could ever help — and every one of those decisions, made by
+// show the engine's sentence at all (the tool's for [RefusalInvalid] and
+// [RefusalForbidden], which name a field or a rule; the deciding domain's own
+// for a [RefusalConflict] or a [RefusalExists], which internal/api/operator's
+// Said puts in front of a person, since the tool's names the next call for a
+// model), which HTTP status the write surface answers, and whether a retry
+// could ever help — and every one of those decisions, made by
 // matching the prose, is a decision that changes when somebody rewords a
 // refusal for the model's benefit. The prompt text is tuned against observed
 // model behaviour; it cannot also be a wire contract.
@@ -48,6 +51,61 @@ import (
 // the cause and an audit row recording the field could tell one caller two
 // different stories about the same call.
 //
+// # Which class a refusal is
+//
+// ONE RULE, for every domain a first-party tool writes: a refusal is classed by
+// WHAT IT IS ABOUT and by WHAT WOULD MAKE THE SAME REQUEST LAND, because that
+// is the one thing every reader of a class decides from — a model choosing
+// between another argument and another attempt, a screen choosing between the
+// sentence and a re-read, a client choosing a status.
+//
+//   - THE REQUEST ITSELF is [RefusalInvalid]: an argument outside its
+//     grammar, a value past a limit of its own (a body's bytes, the members
+//     one call names, what one move may carry), or an argument naming ANOTHER
+//     object that cannot take part — a parent in the trash, a blocker at its
+//     dependents' cap, an archived type, a destination that takes nothing.
+//     Nothing anybody does makes the same request land; a different one does.
+//   - A COLLISION is [RefusalExists]: a name, a title, a label, an address or
+//     an id the call gives an object is ANOTHER object's already — a page
+//     title in its container, a room's name, a tag label another tag carries,
+//     a label another version holds, a source address another artifact holds
+//     — as is a create of an object that is already there. The request is
+//     well formed and the object it is about refuses nothing by its state:
+//     another value lands now, the same one once its holder gives it up, and
+//     the sentence names the holder, because using it is often the move.
+//   - THE OBJECT THE CALL IS ABOUT — or the container it writes into, a room,
+//     a project, an artifact — NOT BEING THERE is [RefusalNotFound], and it
+//     being gone for good (purged, erased, taken back) is the same.
+//   - THAT OBJECT IN A STATE THAT REFUSES THE GESTURE UNTIL SOMEBODY CHANGES
+//     IT is [RefusalConflict]: archived, in the trash, being purged, frozen,
+//     nothing in the trash to restore, a history that cannot be undone, an
+//     upload too old to name — and its own contents at their cap, which is
+//     its state too: a message's distinct emoji, a project's tags, the views a
+//     person pins, every label an artifact keeps in use. The request was
+//     well formed; reading the object again shows the state, and the very
+//     same request lands once whoever the sentence names changes it, and not
+//     before. A write that lost its race is the same class for the same
+//     reason: the object moved, and the request is not wrong.
+//   - A LIMIT THIS VOCABULARY GIVES A CLASS OF ITS OWN is that class, because
+//     what lifts it is not a change of the object and a surface names the
+//     remedy: [RefusalQuotaExceeded] (the company's plan),
+//     [RefusalInboxFull] (a person's marks), [RefusalReassignmentBudget] (an
+//     item's hand-offs, which must not invite another attempt) and
+//     [RefusalBudgetExhausted] (a token window).
+//
+// So a room archived a moment before a post, a project archived before a task
+// is filed into it and an artifact in the trash are one class wherever they
+// are met, and a parent in the trash is another, since the call is about the
+// child; and a label another version holds is a collision while every label
+// in use is the artifact's state, since another label lands on the first and
+// on the second none does. internal/agent/builtin's
+// TestEveryDomainRefusalIsClassed holds every sentinel each native domain
+// declares to the meaning it carries and the class this rule gives that
+// meaning, on the domains' own table and on every domain's tools alike, and
+// holds the meaning to the sentinel's own name where the name says it — a
+// …Taken, …Clash or …Exists is a collision, a …Full the object's contents at
+// their cap; internal/api/operator answers each class with one status.
+//
 // # Why it is a named string with [Refusal.Valid]
 //
 // The value travels: a newer build may classify a refusal this build has no
@@ -57,9 +115,12 @@ import (
 type Refusal string
 
 const (
-	// RefusalInvalid — an argument is wrong, and the sentence names which
-	// one. The only class whose fix is "send something different", and the
-	// default for a refusal that says nothing more specific.
+	// RefusalInvalid — the REQUEST is wrong: an argument outside its
+	// grammar, a value past a limit of its own, or an argument naming
+	// another object that cannot take part, and the sentence names which.
+	// The only class whose fix is "send something different", and the
+	// default for a refusal that says nothing more specific. NOT a state of
+	// the object the call is about — see [RefusalConflict].
 	RefusalInvalid Refusal = "invalid"
 
 	// RefusalNotFound — the object the call is ABOUT does not exist. Not
@@ -78,12 +139,24 @@ const (
 	RefusalStaleVersion Refusal = "stale_version"
 
 	// RefusalConflict — the write lost its race against other writers for
-	// its whole round budget, or another bulk gesture holds the object, or
-	// the running turn a note is for already holds as many unread notes as
-	// it takes. Each clears on its own: try again shortly.
+	// its whole round budget, the running turn a note is for already holds
+	// as many unread notes as it takes, or the object the call is about is
+	// in a STATE that refuses the gesture until somebody changes it — a room
+	// or a project archived, an artifact in the trash or being purged, a task
+	// frozen in the trash, a restore with nothing in the trash, or the
+	// object's own contents at their cap, a message carrying all the emoji
+	// it may — which the sentence names. Read the object again: a race
+	// clears on its own, and a state is changed by whoever the sentence
+	// names, after which the same request lands.
 	RefusalConflict Refusal = "conflict"
 
-	// RefusalExists — the object this call would create already exists.
+	// RefusalExists — the object this call would create already exists, or
+	// a name, a title, a label, an address or an id the call gives an object
+	// is another object's already: a COLLISION, which the sentence names the
+	// holder of. Another value lands now, and the same one once its holder
+	// gives it up — never "change an argument that is malformed"
+	// ([RefusalInvalid]) and never "the object refuses this by its state"
+	// ([RefusalConflict]).
 	RefusalExists Refusal = "exists"
 
 	// RefusalAlreadyAnswered — the question this answers has an answer.
@@ -95,6 +168,15 @@ const (
 
 	// RefusalInboxFull — a person's inbox list is at its ceiling.
 	RefusalInboxFull Refusal = "inbox_full"
+
+	// RefusalQuotaExceeded — the write would take what the company holds
+	// past a limit its plan sets (the artifacts' bytes, a datastore's
+	// footprint), which the sentence names with the setting an operator
+	// raises. Nothing was written. NOT [RefusalForbidden]: no permission
+	// lifts it, and a caller told it may not would go and ask for one. It
+	// clears when somebody removes what the company no longer needs or
+	// raises the limit, never by trying again.
+	RefusalQuotaExceeded Refusal = "quota_exceeded"
 
 	// RefusalNotRunning — the run or turn the call addresses is not
 	// running, or not waiting for what the call supplies.
@@ -149,7 +231,8 @@ var Refusals = []Refusal{
 	RefusalInvalid, RefusalNotFound, RefusalForbidden,
 	RefusalStaleVersion, RefusalConflict, RefusalExists,
 	RefusalAlreadyAnswered, RefusalReassignmentBudget, RefusalInboxFull,
-	RefusalNotRunning, RefusalSteerUnsupported, RefusalBudgetExhausted,
+	RefusalQuotaExceeded, RefusalNotRunning, RefusalSteerUnsupported,
+	RefusalBudgetExhausted,
 	RefusalUnavailable, RefusalInternalError,
 }
 

@@ -248,7 +248,7 @@ func (out *DependencyResult) fold(result WriteResult, own bool) {
 // second to first. Named by position, that mirror was answered with X's ledger
 // row — refused as an operation that landed on another object, or before that
 // check existed, answered as landed — and this task never learned of its new
-// dependent. [Writer.UpdateTasks] learned the same thing the same way.
+// dependent.
 //
 // THE SIGN IS PART OF AN AUTHORED STEP'S NAME, because one call may add an
 // edge on a task and remove another's, and a task listed on both sides must
@@ -438,11 +438,11 @@ func (w *Writer) readParties(ctx context.Context, change DependencyChange) (part
 			}
 		}
 	}
-	if len(wanted) > MaxBulkTasks {
+	if len(wanted) > MaxTasksNamed {
 		return parties{}, invalid("this dependency change names %d "+
 			"counterparties and one call may name %d — each is a commit of "+
 			"its own, and a gesture larger than that is a batch",
-			len(wanted), MaxBulkTasks)
+			len(wanted), MaxTasksNamed)
 	}
 	required := append(slices.Clone(change.WaitingOnAdd), change.BlockingAdd...)
 	out := parties{byID: make(map[string]Task, len(wanted))}

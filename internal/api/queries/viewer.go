@@ -30,7 +30,7 @@ import (
 // seat, because that is the only kind the directory binds anybody to: a bind
 // naming an agent's seat is refused, so "bind it to one" sent a caller to try
 // the seat whose trail they were reading.
-var errNoSeat = fmt.Errorf("%w: this credential is not bound to a seat — bind "+
+var errNoSeat = fmt.Errorf("%w: this credential is not bound to a seat. Bind "+
 	"its row in the identity directory to a human seat (`crewlet iam bind`), "+
 	"or name a handle", ErrBadParams)
 
@@ -42,7 +42,7 @@ var errNoSeat = fmt.Errorf("%w: this credential is not bound to a seat — bind 
 // so what reaches this is a principal the engine can name nothing for, and the
 // remedy is to name whose record to read.
 var errNoRecord = fmt.Errorf("%w: this credential names nobody whose own "+
-	"record there is — name a handle", ErrBadParams)
+	"record there is. Name a handle", ErrBadParams)
 
 // viewer answers who this caller is.
 //
@@ -122,6 +122,18 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 		// ALWAYS AN ARRAY; empty is not managed.
 		"config_writer":     s.companyWriters().MayWriteCompany(iam.ActorFor(principal)),
 		"config_managed_by": slices.Clone(s.companyWriters().CompanyWriters),
+		// WHICH VENDOR CHAT SURFACES THIS COMPANY DECLARES, on a company
+		// whose chat is a vendor's. Whether it runs the engine's own chat
+		// at all is every reader's, as the org projection's `services`; the
+		// vendors' names are the one further fact a screen naming where
+		// the company talks needs, and they are ANSWERED TO A HOLDER OF
+		// `chat`, the app they describe, as every app's disclosures are
+		// (ADR-0033): an empty list for anybody else, for a company on the
+		// engine's own chat or on none, and for a node with no company yet.
+		"chat_vendors": []string{},
+	}
+	if principal.Can(iam.GrantChat) {
+		out["chat_vendors"] = s.chatVendors()
 	}
 	if out["config_managed_by"] == nil {
 		out["config_managed_by"] = []string{}
@@ -287,7 +299,7 @@ func (s Sources) mayLook(principal iam.Principal, action authz.Action) iam.MayLo
 			return fmt.Errorf("%w: this node cannot decide %s on somebody "+
 				"else's record yet: %w", ErrUnavailable, action, d.Err)
 		}
-		return refused(string(action)+" of somebody else's record", d)
+		return NewRefusal(string(action)+" of somebody else's record", d)
 	}
 }
 
@@ -312,7 +324,7 @@ func (s Sources) mayRead(ctx context.Context, principal iam.Principal,
 		return fmt.Errorf("%w: this node cannot decide %s on %s's record "+
 			"yet: %w", ErrUnavailable, action, handle, d.Err)
 	case !d.Allowed:
-		return refused(string(action)+" of "+handle, d)
+		return NewRefusal(string(action)+" of "+handle, d)
 	}
 	return nil
 }

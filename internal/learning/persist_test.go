@@ -625,10 +625,10 @@ func TestEveryCoalescedRequesterReachesThePrompt(t *testing.T) {
 
 	prompt := p.prompt(t, 0)
 	for _, want := range []string{
-		"- Requester: Sam (slack:U0TESTUSER1)",
-		`- Inbound message: "please open replies with hey sam"`,
-		"- Requester: miles",
-		`- Inbound message: "and cc me"`,
+		"- Requester: Sam (slack:U0TESTUSER1)\n- Inbound message:\n[untrusted:",
+		"\nplease open replies with\nhey sam\n[/untrusted:",
+		"- Requester: miles\n- Inbound message:\n[untrusted:",
+		"\nand cc me\n[/untrusted:",
 		"- Woken by: Help with reporting",
 		"- What it did: Summarise",
 		"- Tools called: search",
@@ -671,10 +671,10 @@ func TestDescribeSenderIsOneRendering(t *testing.T) {
 		{"named on a platform",
 			types.CanonicalIdentity{DisplayName: "Sam", ExternalID: "U1", Platform: "slack"}, "Sam (slack:U1)"},
 		{"named with no platform",
-			types.CanonicalIdentity{DisplayName: "Sam", ExternalID: "U1"}, "Sam (U1)"},
+			types.CanonicalIdentity{DisplayName: "Sam", ExternalID: "U1"}, "Sam (unknown:U1)"},
 		{"a seat", types.CanonicalIdentity{Handle: "dev"}, "dev"},
 		{"a handle behind a display name",
-			types.CanonicalIdentity{Handle: "dev", DisplayName: "Dev Bot"}, "Dev Bot"},
+			types.CanonicalIdentity{Handle: "dev", DisplayName: "Dev Bot"}, "Dev Bot (dev)"},
 		{"an id on a platform", types.CanonicalIdentity{ExternalID: "U1", Platform: "slack"}, "slack:U1"},
 		{"an id from nowhere", types.CanonicalIdentity{ExternalID: "U1"}, "unknown:U1"},
 		{"nobody", types.CanonicalIdentity{}, ""},

@@ -12,7 +12,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -64,10 +63,13 @@ var ErrReassignmentBudget = errors.New("tracker: this task has been handed on to
 var ErrForbidden = errors.New("tracker: not this actor's to write")
 
 // ErrInvalid marks a write the tracker refuses on its CONTENT: a missing or
-// malformed argument, a value a field does not take, a cap the object would
-// exceed, a tombstoned or archived thing named as the target of new work.
-// Whatever carries it, the same request can never land and a different one
-// can — so the caller's answer is to change what it sent.
+// malformed argument, a value a field does not take, a value past a limit of
+// its own, or an argument naming ANOTHER object that cannot take part — a
+// parent or a blocker in the trash, a blocker at its dependents' cap, an
+// archived type or tag, a destination project that takes nothing. Whatever
+// carries it, the same request can never land and a different one can — so
+// the caller's answer is to change what it sent. What the object the write is
+// ABOUT refuses by being what it is now is [ErrState].
 //
 // A MARK RATHER THAN A DEFAULT, because the opposite default is the one that
 // lies. A write fails for two kinds of reason — what was asked, and what the
@@ -83,45 +85,91 @@ var ErrForbidden = errors.New("tracker: not this actor's to write")
 // text a model was tuned against and the mark is for a reader that is not one.
 var ErrInvalid = errors.New("tracker: invalid")
 
+// ErrState marks a write the OBJECT IT IS ABOUT refuses by its state, until
+// somebody changes it: a project archived before work is filed into it, a task
+// frozen in the trash that a write would place, move or merge, a project whose
+// tags, a task whose watchers or checklists, or a person whose pins and stars
+// are at their cap. Nothing is wrong with the request, and nothing about it
+// changes the answer: the same request lands once whoever the sentence names
+// reopens the project, restores the task or takes something off the set, and
+// not before.
+//
+// ITS OWN MARK beside [ErrInvalid] because the two send a caller to opposite
+// places, which is the one rule every domain's refusals are classed by
+// (internal/mcp's Refusal): told `invalid`, a seat sends another argument to
+// an object that will refuse every one, and a screen shows the sentence where
+// it should redraw the object; this is the class an artifact in the trash and
+// a room archived before a post are answered in too. The sentence names the
+// state and who changes it, as [ErrInvalid]'s names what to send instead.
+var ErrState = errors.New("tracker: its state refuses this")
+
+// ErrTaken marks a write the tracker refuses because what it would give an
+// object — a tag's label, a checklist's or a line's id — is ANOTHER object's
+// already: a COLLISION. Nothing about the request is malformed and the object
+// it is about refuses nothing by its state; another object holds the value, so
+// the same request lands once that one gives it up, and a different value lands
+// now. The sentence names the holder, which is the one fact a caller acts on:
+// use it if it means the same thing, or choose a value of its own.
+//
+// ITS OWN MARK beside [ErrInvalid] and [ErrState] for the one rule every
+// domain's refusals are classed by (internal/mcp's Refusal): a collision is the
+// class a page title, a room name, an artifact's label and its source address
+// another object holds are answered in, `exists`, and a tag label another tag
+// carries was the one collision classed `invalid` — as if the label were
+// malformed rather than held.
+var ErrTaken = errors.New("tracker: another object already holds that")
+
 // ErrAlreadyAnswered reports an `answers` naming a question somebody already
 // answered. Its own sentinel because nothing about the comment is wrong and
 // nothing a caller could change makes it land: the answer it meant to give
 // exists, and the useful move is to read it.
 var ErrAlreadyAnswered = errors.New("tracker: that question is already answered")
 
-// refusal is a write this package refuses on what was asked or on who asked
-// it: the writer's own SENTENCE, and the sentinel that classes it beside that
-// sentence's own %w chain.
+// Refusal is a write this package refuses on what was asked or on who asked
+// it: the writer's own SENTENCE ([Refusal.Err]), and the sentinel that classes
+// it ([Refusal.Mark]) beside that sentence's own %w chain.
 //
-// THE SENTENCE IS HELD WITHOUT THE PACKAGE PREFIX, and [refusal.Error] adds
+// THE SENTENCE IS HELD WITHOUT THE PACKAGE PREFIX, and [Refusal.Error] adds
 // it, so the Go error reads exactly as every error here does
-// ("tracker: …") while [Sentence] has the words a PERSON is shown. Both
+// ("tracker: …") while [Sentence] has the words a PERSON is shown. Two of the
 // classes built here — [ErrInvalid] and [ErrForbidden] — are the two a
 // person's write surface prints as they stand, because only their sentences
-// name what to change or whom to ask; "tracker:" in front of that sentence is
+// name what to change or whom to ask, and [ErrState]'s is the tool's sentence
+// beside a screen that redraws the object; "tracker:" in front of that sentence is
 // a word about where the error came from, for a log, and a person filing a
 // task was shown "create_work_item refused that: tracker: …". The forbidden
 // class used to be built with fmt.Errorf wrapping the sentinel, which also
 // appended the sentinel's own words — ": tracker: not this actor's to write"
 // — after a sentence that had already said whose it was.
-type refusal struct {
-	mark error
-	// also is a sentinel of the refusal's own beside its class, or nil —
+//
+// EXPORTED, FIELDS AND ALL, because a refusal crosses the estate router's wire
+// (internal/estate) whenever the node that decided it is not the node whose
+// caller is told: the wire rebuilds an error TYPE from its exported fields,
+// and an unexported one arrived as its message alone — so [Sentence] on the
+// asking node found no refusal and handed a person the whole "tracker: …".
+// Only this package builds one ([invalid], [refusedByState], [collision],
+// [forbidden], [forbiddenAs]).
+type Refusal struct {
+	// Mark is the sentinel that classes the refusal: [ErrInvalid],
+	// [ErrState], [ErrTaken] or [ErrForbidden].
+	Mark error
+	// Also is a sentinel of the refusal's own beside its class, or nil —
 	// see [forbiddenAs].
-	also error
-	err  error
+	Also error
+	// Err is the sentence, without the package prefix, and its %w chain.
+	Err error
 }
 
-func (e *refusal) Error() string { return "tracker: " + e.err.Error() }
-func (e *refusal) Unwrap() []error {
-	if e.also != nil {
-		return []error{e.mark, e.also, e.err}
+func (e *Refusal) Error() string { return "tracker: " + e.Err.Error() }
+func (e *Refusal) Unwrap() []error {
+	if e.Also != nil {
+		return []error{e.Mark, e.Also, e.Err}
 	}
-	return []error{e.mark, e.err}
+	return []error{e.Mark, e.Err}
 }
-func (e *refusal) sentence() string { return e.err.Error() }
+func (e *Refusal) sentence() string { return e.Err.Error() }
 
-// sentenced is a refusal this package wrote, whatever its type: [refusal]
+// sentenced is a refusal this package wrote, whatever its type: [Refusal]
 // itself, and the typed refusals a caller several steps away has to take
 // apart ([TagClash], [TagsFull]). Each holds its sentence without the prefix
 // its Error adds.
@@ -131,16 +179,63 @@ type sentenced interface {
 }
 
 // invalid is fmt.Errorf for a content refusal: the sentence — written WITHOUT
-// the package prefix, which [refusal.Error] adds — and its %w chain, marked
+// the package prefix, which [Refusal.Error] adds — and its %w chain, marked
 // [ErrInvalid].
 func invalid(format string, args ...any) error {
-	return &refusal{mark: ErrInvalid, err: fmt.Errorf(format, args...)}
+	return &Refusal{Mark: ErrInvalid, Err: fmt.Errorf(format, args...)}
+}
+
+// collision is [invalid] for a collision, marked [ErrTaken]. The sentence names
+// the object that holds the value.
+func collision(format string, args ...any) error {
+	return &Refusal{Mark: ErrTaken, Err: fmt.Errorf(format, args...)}
+}
+
+// refusedByState is [invalid] for a write the object it is about refuses by
+// its state, marked [ErrState]. The sentence names the state and who changes
+// it.
+func refusedByState(format string, args ...any) error {
+	return &Refusal{Mark: ErrState, Err: fmt.Errorf(format, args...)}
+}
+
+// inTheTrash is the refusal of a gesture on a task in the trash — the task's
+// state, which a restore changes — naming who put it there and what to do
+// before the gesture ("moving it"), or before anything where before is empty.
+//
+// WRITTEN FOR THE PERSON WHO READS IT, and a model reads it as well: it used to
+// name the task by its id and the removal by its RFC 3339 instant, neither of
+// which a screen showing the refusal beside the task has any use for.
+func inTheTrash(task Task, before string) error {
+	restore := "Restore it first"
+	if before != "" {
+		restore = "Restore it before " + before
+	}
+	if task.Removed == nil || task.Removed.By == "" {
+		return refusedByState("this task is in the trash. %s", restore)
+	}
+	return refusedByState("this task is in the trash, put there by %s. %s",
+		task.Removed.By, restore)
+}
+
+// unarchiveProject is who changes an archived project, said wherever a gesture
+// meets one: the archive's own relation (authz's work.project.archive, the
+// project's lead or an administrator), because "unarchive it first" told a
+// person to do what most people reading it may not.
+const unarchiveProject = "Its lead or an administrator can unarchive it"
+
+// nameOf is how a refusal names a task other than the one it is about: its
+// key, or its id where it has none yet.
+func nameOf(task Task) string {
+	if task.Key != "" {
+		return task.Key
+	}
+	return task.ID
 }
 
 // forbidden is [invalid] for a write that is not this actor's to make, marked
 // [ErrForbidden]. The sentence names who may.
 func forbidden(format string, args ...any) error {
-	return &refusal{mark: ErrForbidden, err: fmt.Errorf(format, args...)}
+	return &Refusal{Mark: ErrForbidden, Err: fmt.Errorf(format, args...)}
 }
 
 // forbiddenAs is [forbidden] carrying a sentinel of its own BESIDE the class:
@@ -150,20 +245,34 @@ func forbidden(format string, args ...any) error {
 // sentinel's own words — "tracker: …" — would be read to a person after a
 // sentence that had already said them.
 func forbiddenAs(sentinel error, format string, args ...any) error {
-	return &refusal{mark: ErrForbidden, also: sentinel, err: fmt.Errorf(format, args...)}
+	return &Refusal{Mark: ErrForbidden, Also: sentinel, Err: fmt.Errorf(format, args...)}
 }
 
 // Sentence is a refusal this package wrote, as a person reads it: the
-// writer's own sentence, without the package prefix a Go error carries. Any
-// other error — one this package did not write as a refusal, or a refusal a
-// caller wrapped in context of its own — is its whole message, because context
-// is never dropped to tidy a prefix away.
+// writer's own sentence, without the package prefix a Go error carries.
+//
+// ANY OTHER ERROR THIS PACKAGE WROTE — a sentinel with the words after it
+// ("tracker: no such task: ENG-42"), a typed refusal of its own — opens with
+// that prefix too, which says where it came from and nothing a reader acts on:
+// the prefix goes and every word after it stays. A refusal a caller wrapped in
+// context of its own opens with that context and is its whole message, because
+// context is never dropped to tidy a prefix away. The tools used to print such
+// an error whole, so a model read "tracker:" in front of what it was told.
+//
+// THE FRAMEWORK'S OWN THREE — a lost race, a create of what is there and a
+// write a deletion keeps deleted — are told in the state log's words for a
+// person ([statelog.Sentence]), as every surface that asks the state log first
+// tells them, so a caller asking only this one never prints the subject the
+// framework met.
 func Sentence(err error) string {
+	if said, ok := statelog.Sentence(err); ok {
+		return said
+	}
 	var r sentenced
 	if errors.As(err, &r) && r.Error() == err.Error() {
 		return r.sentence()
 	}
-	return err.Error()
+	return strings.TrimPrefix(err.Error(), "tracker: ")
 }
 
 // NoIfMatch omits an update's version precondition, which MERGES the patch
@@ -237,18 +346,6 @@ type Writer struct {
 	// [Provenance.Origin] — and what every task it creates states.
 	Origin *Origin
 
-	// metrics is where the counters this package owns are recorded. Nil
-	// records nothing, which is what a writer built for a test gets: the
-	// instruments are the engine's, and a nil check here is cheaper than
-	// a second recorder nobody reads.
-	metrics *metrics.Recorder
-
-	// Drain is the applier's measured rows a second on this node, which
-	// is the divisor of every projection and every retry hint computed
-	// from one. Nil means unmeasured, which the projection reads as its
-	// pessimistic floor rather than as infinity.
-	Drain func() float64
-
 	// Leads resolves a project's or a unit's lead, and it is the ONE
 	// thing this writer needs that the rows cannot give: a project's lead
 	// is chart-owned, `tracker_projects` carries no column for it, and the
@@ -316,8 +413,6 @@ type WriterDeps struct {
 	// field type whose value is a colleague — see [Writer.World].
 	World FieldWorld
 
-	Metrics   *metrics.Recorder
-	Drain     func() float64
 	Actor     string
 	ActorKind AuthorKind
 	Leads     Leads
@@ -512,8 +607,7 @@ func NewWriter(d WriterDeps) (*Writer, error) {
 	}
 	return &Writer{
 		publisher: d.Publisher, db: d.DB, claims: d.Claims, nodeID: d.NodeID,
-		metrics: d.Metrics, Actor: d.Actor,
-		ActorKind: d.ActorKind, Drain: d.Drain, Leads: d.Leads, World: d.World,
+		Actor: d.Actor, ActorKind: d.ActorKind, Leads: d.Leads, World: d.World,
 		Now: now, Zone: d.Zone,
 	}, nil
 }
@@ -555,10 +649,26 @@ func (w *Writer) zone() *time.Location {
 // on the record. Deciding it in the applier instead would make every node
 // re-derive it from rows it applied in its own order, and a counter derived
 // twice is a counter two nodes can disagree about.
+//
+// # A remark's edit is not a patch a caller forms
+//
+// A patch carrying a comment POSTS it, and the one way to rewrite a remark is
+// [Writer.EditComment], which forms the edit from the stored row inside the
+// decide and refuses anybody but its author. A caller stating the edit kind
+// here would be stating a remark it read in another transaction, under an
+// author rule nothing checked — so a patch carrying a comment under that kind
+// is refused, and the kind the applier rewrites words on is only ever this
+// writer's own.
 func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 	ifMatch uint64, patch TaskPatch, kind ChangeKind,
 	notify *Notify) (WriteResult, error) {
 
+	if patch.Comment != nil && kind == ChangeCommentEdited {
+		return WriteResult{}, invalid("an edit of comment %s on task %s is not "+
+			"a patch: a remark is rewritten through EditComment, which forms "+
+			"the edit from the stored row and refuses anybody but its author",
+			patch.Comment.ID, id)
+	}
 	return w.updateTask(ctx, opID, id, project, ifMatch, patch, kind, notify, nil)
 }
 
@@ -627,11 +737,13 @@ func (w *Writer) EditComment(ctx context.Context, opID, taskID, project,
 					"%s — reply to it instead of rewriting it", ErrNotAuthor,
 					commentID, stored.Author)
 			}
-			// THE STORED COMMENT WITH ITS BODY REPLACED, whole, because
-			// the apply is an upsert of the row the record carries: a
-			// patch holding only the id and the body would clear the
-			// question it asked, the answer it closed and the mentions it
-			// woke.
+			// THE STORED COMMENT WITH ITS BODY REPLACED, whole, so the
+			// record states the remark as it now reads: the history row
+			// and the wake quote it, and every reader of the record sees
+			// the question it asked and whom it mentioned. The apply
+			// rewrites the words alone whatever the record carries
+			// ([editComment]), so this is the record's account of the
+			// remark, not what keeps the row's other columns.
 			edited := stored
 			edited.Body, edited.UpdatedAt = patch.Comment.Body, at
 			patch.Comment = &edited
@@ -679,7 +791,7 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 	if patch.Tags != nil {
 		// NORMALISED BEFORE THE PUBLISH, so the record carries the
 		// spelling the rows hold rather than the one somebody typed —
-		// every node applies this payload, and a node that re-derived
+		// every data node applies this payload, and a node that re-derived
 		// the slug itself would be a second implementation of the
 		// grammar.
 		tags, err := normaliseTags(project, *patch.Tags)
@@ -750,13 +862,27 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 				return statelog.Decision{}, missingTask(ctx, tx, id,
 					"no change can be made to it")
 			}
+			if patch.Comment != nil && kind != ChangeCommentEdited {
+				// A REMARK ALREADY POSTED IS ANSWERED FROM ITS ROW — see
+				// [postedComment] — and asked before anything about the
+				// item as it stands now, for the reason the ledger answers
+				// a landed operation before its decide runs: the post has
+				// landed, so whatever has become of the item since is not
+				// a reason to refuse it.
+				//nolint:govet // shadow: scoped to this block; see .golangci.yml
+				posted, err := postedComment(ctx, tx, id, patch.Comment.ID)
+				if err != nil {
+					return statelog.Decision{}, err
+				}
+				if posted {
+					return statelog.Decision{Version: int64(current.Version)}, nil
+				}
+			}
 			// THE PROJECT THE CALLER DECIDED ON IS STILL THIS TASK'S —
 			// see [stillIn]. A re-route is the project's own decision and
 			// the tag set, the scope and every lead check upstream were
 			// formed against it, so a task that moved in between is
-			// another project's write. A bulk edit names one project for
-			// every task in it, which is where a task from elsewhere
-			// arrives.
+			// another project's write.
 			if moved := stillIn(current, project); moved != nil {
 				return statelog.Decision{}, moved
 			}
@@ -766,10 +892,7 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 				// removal an entirely local decision with no walk
 				// behind it. Asked before anything about a new parent,
 				// because it is the answer whatever the parent is.
-				return statelog.Decision{}, invalid("task %s was "+
-					"removed by %s at %s; restore it first",
-					id, current.Removed.By,
-					current.Removed.At.Format(time.RFC3339))
+				return statelog.Decision{}, inTheTrash(current, "")
 			}
 			if patch.Parent != nil {
 				// A TASK A MOVE HAS NOT CARRIED KEEPS ITS PLACE until it
@@ -850,15 +973,17 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 				}
 			}
 			asks := ""
-			if patch.Comment != nil {
-				//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-				fresh, err := settleComment(ctx, tx, id, patch.Comment)
-				if err != nil {
+			if patch.Comment != nil && kind != ChangeCommentEdited {
+				// A POST, and a new one — [postedComment] answered every
+				// other above — so the question it asks is asked now.
+				// An edit asks nobody: what it carries beyond its words
+				// is the stored remark's, and its own amendment is its
+				// check.
+				//nolint:govet // shadow: scoped to this block; see .golangci.yml
+				if err := settleAnswer(ctx, tx, id, patch.Comment); err != nil {
 					return statelog.Decision{}, err
 				}
-				if fresh {
-					asks = patch.Comment.Ask
-				}
+				asks = patch.Comment.Ask
 			}
 			charged, err := w.chargeHandOff(current, patch)
 			if err != nil {
@@ -960,63 +1085,70 @@ func (w *Writer) updateTask(ctx context.Context, opID, id, project string,
 	return result, err
 }
 
-// settleComment is the comment's check against the rows it lands among.
+// postedComment reports whether a remark is already on this task under its id.
 //
-// INSIDE THE DECIDE SNAPSHOT, because both facts it checks are about OTHER
-// rows and one of them moves: whether the ask an answer names is still open.
-// The thread read that routes the wake runs before the publish, so two answers
-// decided at once both passed it; the applier's `answered_by IS NULL` then
-// kept the first on the ask while the second landed anyway, claiming to
-// answer a question it did not close. Checked here, the second loses: the
-// first answer's append moved the task's subject, the broker refused the
-// second round's expectation, and the re-decide reads the ask answered and
-// refuses it by name. The ask's decision is immutable, so the choice checked
-// against it here is the choice every node will read beside it.
+// A POST IS WRITTEN ONCE, and the row is its durable record. A re-run of the
+// call that posted it names the same id — derived as the work began, so a
+// rebased attempt names it too even though its operation is new and the
+// ledger does not hold it ([commentID] in internal/agent/builtin) — and the
+// decide answers it from the row and publishes nothing: no history row, no
+// second wake, no watch gesture. Published, the post re-sent the remark as it
+// was first written, and its watch put back on the item somebody who had since
+// stopped following it; the apply leaves an existing row alone
+// ([writeComment]), so the row was safe, but nothing else the record carried
+// was.
 //
-// It reports whether the comment is NEW — no row holds its id yet — because a
-// question asks somebody only when it is written: an edit re-sends the whole
-// comment, `ask` included, and must not put the person asked back on a
-// watcher list they have since left.
-func settleComment(ctx context.Context, tx *sql.Tx, task string,
-	comment *Comment) (bool, error) {
-	var document []byte
-	fresh := false
-	err := tx.QueryRowContext(ctx, `
-		SELECT document FROM tracker_comments WHERE id = ? AND task_id = ?`,
-		comment.ID, task).Scan(&document)
+// AN ID ANOTHER TASK HOLDS IS REFUSED rather than answered: the row is that
+// task's remark, not this one, and a post under its id would be a remark that
+// can never land.
+func postedComment(ctx context.Context, tx *sql.Tx, task, comment string) (bool, error) {
+	var holder string
+	err := tx.QueryRowContext(ctx,
+		`SELECT task_id FROM tracker_comments WHERE id = ?`, comment).Scan(&holder)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		// A NEW COMMENT, which is the only place a decision may be set.
-		fresh = true
+		return false, nil
 	case err != nil:
-		return false, fmt.Errorf("tracker: read comment %s: %w", comment.ID, err)
-	default:
-		var stored Comment
-		if len(document) > 0 {
-			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			if err := json.Unmarshal(document, &stored); err != nil {
-				return false, fmt.Errorf("tracker: decode comment %s: %w", comment.ID, err)
-			}
-		}
-		if !sameDecision(stored.Decision, comment.Decision) {
-			return false, invalid("comment %s on task %s already exists, and "+
-				"a decision is set only when the question is asked and never "+
-				"changed after — an answer names an option by id, and options "+
-				"edited under it would make that answer mean something else; "+
-				"ask again in a new comment", comment.ID, task)
-		}
+		return false, fmt.Errorf("tracker: read comment %s: %w", comment, err)
+	case holder != task:
+		return false, invalid("comment %s is a remark on task %s, so it "+
+			"cannot be posted on task %s — a new remark takes an id of its own",
+			comment, holder, task)
 	}
+	return true, nil
+}
+
+// settleAnswer is a new remark's check against the rows it lands among: the
+// question it answers, if it answers one.
+//
+// INSIDE THE DECIDE SNAPSHOT, because what it checks is about ANOTHER row and
+// moves: whether the ask an answer names is still open. The thread read that
+// routes the wake runs before the publish, so two answers decided at once both
+// passed it; the applier's `answered_by IS NULL` then kept the first on the
+// ask while the second landed anyway, claiming to answer a question it did not
+// close. Checked here, the second loses: the first answer's append moved the
+// task's subject, the broker refused the second round's expectation, and the
+// re-decide reads the ask answered and refuses it by name. The ask's decision
+// is immutable, so the choice checked against it here is the choice every node
+// will read beside it.
+//
+// ONLY A NEW REMARK REACHES IT. A decision is set when its question is asked
+// and never after, and nothing here has to say so: a post naming a remark
+// already on the thread is answered from that row before this runs
+// ([postedComment]), and an edit carries the stored remark's decision whole
+// ([Writer.EditComment]) and is never settled here at all.
+func settleAnswer(ctx context.Context, tx *sql.Tx, task string, comment *Comment) error {
 	if comment.Answers == nil || *comment.Answers == "" {
-		return fresh, nil
+		return nil
 	}
 	ask, err := readAsk(ctx, tx, task, *comment.Answers)
 	if err != nil {
-		return false, err
+		return err
 	}
 	if err = ask.answerableBy("", comment.ID); err != nil {
-		return false, err
+		return err
 	}
-	return fresh, checkChoice(task, ask.id, ask.decision, comment.Choice)
+	return checkChoice(task, ask.id, ask.decision, comment.Choice)
 }
 
 // settleAskWatch puts the person a new question asks on the task's watchers.
@@ -1152,10 +1284,13 @@ func settleWatch(current Task, patch TaskPatch) (TaskPatch, error) {
 			patch.Watch = nil
 			return patch, nil
 		}
-		return patch, invalid("task %s already has %d watchers and "+
-			"the maximum is %d — an item this many people follow is an "+
-			"announcement, and a comment on it wakes all of them",
-			current.ID, len(current.Watchers), MaxWatchers)
+		//
+		// AND AN EXPLICIT ONE IS THE TASK'S STATE ([ErrState]), never the
+		// request's: the gesture names one person, and it lands once
+		// somebody stops watching.
+		return patch, refusedByState("this task already has %d watchers, "+
+			"the most a task can. Somebody has to stop watching it first",
+			len(current.Watchers))
 	}
 	patch.Watch = nil
 	patch.Watchers, patch.Muted = &watchers, &muted
@@ -1229,7 +1364,7 @@ func (w *Writer) MoveTasks(ctx context.Context, opID, project string,
 		return WriteResult{}, invalid("a move names no project")
 	case len(placements) == 0:
 		return WriteResult{}, invalid("a move places no task")
-	case len(placements) > MaxBulkTasks+RankRespreadInline:
+	case len(placements) > MaxTasksNamed+RankRespreadInline:
 		// THE CALLER'S OWN MOVES PLUS A RE-SPREAD'S WORTH OF
 		// NEIGHBOURS. The scope is the project CONTAINER rather than an
 		// enumeration precisely so the placement list is not bounded by
@@ -1238,7 +1373,7 @@ func (w *Writer) MoveTasks(ctx context.Context, opID, project string,
 		return WriteResult{}, invalid("a move carries %d "+
 			"placements and one record carries at most %d — %d moves plus "+
 			"a re-spread's %d neighbours", len(placements),
-			MaxBulkTasks+RankRespreadInline, MaxBulkTasks, RankRespreadInline)
+			MaxTasksNamed+RankRespreadInline, MaxTasksNamed, RankRespreadInline)
 	}
 	for _, placement := range placements {
 		if !placement.Rank.Valid() {
@@ -1464,7 +1599,9 @@ var errTurnTaskMoved = errors.New("tracker: the task moved project while its tur
 // it read when the turn was woken, and a task moved since would put the
 // record's scope in a container its rows are no longer in — a deferral in the
 // project the task now lives in would not see it. So the project is read off
-// the task's own row, and the decide confirms it inside its snapshot.
+// the task's own row ([Writer.projectOfTask]) to form the scope, and the decide
+// confirms it inside its snapshot ([chargeable]); a move landing between the
+// two is the refusal [Writer.recordTurn] reads again on.
 func (w *Writer) RecordTurn(ctx context.Context, opID string, turn TurnRecord) (WriteResult, error) {
 	switch {
 	case opID == "":
@@ -1491,8 +1628,23 @@ func (w *Writer) RecordTurn(ctx context.Context, opID string, turn TurnRecord) (
 			"replicated estate, and a turn's scope is its task's project, " +
 			"which only the task's own row can say")
 	}
+	return w.recordTurn(ctx, opID, turn, w.projectOfTask)
+}
+
+// recordTurn is [Writer.RecordTurn]'s attempts: read the task's project, form
+// the scope from it, and decide — reading again, up to [recordTurnAttempts]
+// times, while the decide finds the task moved since the read.
+//
+// THE READ IS A PARAMETER because the window it guards cannot be produced any
+// other way: a move landing between the read outside the snapshot and the
+// decide inside it is milliseconds wide, and a test that must show the decide
+// refusing a stale scope, the retry forming a fresh one and the bound ending
+// a chase hands in a read that answers what it needs.
+func (w *Writer) recordTurn(ctx context.Context, opID string, turn TurnRecord,
+	read func(context.Context, string) (string, error)) (WriteResult, error) {
+
 	for attempt := 1; ; attempt++ {
-		project, err := w.projectOfTask(ctx, turn.Task)
+		project, err := read(ctx, turn.Task)
 		if err != nil {
 			return WriteResult{}, err
 		}
@@ -1503,14 +1655,23 @@ func (w *Writer) RecordTurn(ctx context.Context, opID string, turn TurnRecord) (
 	}
 }
 
+// taskProjectStatement is the project one task's row names, read by
+// [Writer.projectOfTask] and [chargeable] and named for the plan test.
+//
+// ONE STATEMENT FOR BOTH READS, and that is why a wrong column in it would
+// agree with itself: the scope's read and the decide's confirmation would name
+// the same wrong value, and nothing compared either with the task's project.
+// TestATurnIsScopedToTheProjectItsTaskIsIn is what does — it reads the
+// record's scope back and holds it to the project the task is in.
+const taskProjectStatement = `SELECT project_key FROM tracker_tasks WHERE id = ?`
+
 // projectOfTask is the project a task's own row names, read ahead of the
 // decide so the record's scope can be formed. Empty for a task this node does
 // not hold, which the decide then refuses with the message that says why.
 func (w *Writer) projectOfTask(ctx context.Context, id string) (string, error) {
 	var project string
 	err := w.db.Read(ctx, func(tx *sql.Tx) error {
-		err := tx.QueryRowContext(ctx,
-			`SELECT project_key FROM tracker_tasks WHERE id = ?`, id).Scan(&project)
+		err := tx.QueryRowContext(ctx, taskProjectStatement, id).Scan(&project)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
@@ -1550,8 +1711,7 @@ func (w *Writer) recordTurnIn(ctx context.Context, opID, project string,
 // is a purge — final — or a create this node has not applied yet.
 func chargeable(ctx context.Context, tx *sql.Tx, id, project string) error {
 	var home string
-	switch err := tx.QueryRowContext(ctx,
-		`SELECT project_key FROM tracker_tasks WHERE id = ?`, id).Scan(&home); {
+	switch err := tx.QueryRowContext(ctx, taskProjectStatement, id).Scan(&home); {
 	case errors.Is(err, sql.ErrNoRows):
 		return missingTask(ctx, tx, id, "a turn cannot be charged to rows that "+
 			"no longer exist — the spend is still on the seat's own counters")
@@ -1787,15 +1947,26 @@ func (w *Writer) publish(ctx context.Context, req statelog.Request) (statelog.Re
 	req.Session = w.after
 	wrote := w.recording(ctx, &req)
 	result, err := w.publisher.Publish(ctx, req)
-	switch {
-	case err == nil:
-		w.report(wrote, result)
-		return result, nil
-	case errors.Is(err, statelog.ErrExists):
-		return result, fmt.Errorf("tracker: %s already exists: %w",
-			req.Subject.ID, err)
+	if err != nil {
+		return result, publishRefusal(err)
 	}
-	return result, err
+	w.report(wrote, result)
+	return result, nil
+}
+
+// publishRefusal is the framework's refusal of a publish in this package's
+// terms: a create it found already made is this package's to say, and any
+// other refusal travels unchanged.
+//
+// THE FRAMEWORK'S SENTINEL AND NOT ITS ERROR, whose text names the subject it
+// found made, and not the subject either: the translation carried both, so a
+// caller that printed this error would show a person a broker path and an id
+// they never chose.
+func publishRefusal(err error) error {
+	if errors.Is(err, statelog.ErrExists) {
+		return fmt.Errorf("tracker: that already exists: %w", statelog.ErrExists)
+	}
+	return err
 }
 
 // recording arranges for a task record's item to be reported to the turn's
@@ -1888,15 +2059,4 @@ func writtenItem(ctx context.Context, tx *sql.Tx, id string, payload []byte) typ
 		}
 	}
 	return named
-}
-
-// count records one of this package's own counters.
-//
-// NIL RECORDS NOTHING, deliberately: the instruments belong to the engine,
-// which builds one recorder for the whole process, and a writer in a test has
-// no reason to carry a second one whose numbers nobody reads.
-func (w *Writer) count(name string, attrs metrics.Attrs) {
-	if w.metrics != nil {
-		w.metrics.Add(name, 1, attrs)
-	}
 }

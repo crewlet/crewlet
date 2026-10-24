@@ -38,6 +38,30 @@ var ErrNoDeadline = errors.New("objstore: a read must carry a deadline")
 // with `crewlet objects migrate --to s3`), never retried as a blip.
 var ErrFull = errors.New("objstore: the object store's byte reservation is spent")
 
+// FullWords is [ErrFull] as a person uploading a file is told it: what
+// happened and who acts, since no wait clears it and nobody uploading can make
+// the room. Here, beside the sentinel, for [SizeWords]' reason: every surface
+// that stores a person's file answers it, and each kept its own words.
+const FullWords = "There's no room left for the company's files. An " +
+	"administrator needs to make room for them."
+
+// ErrUnanswered is a put the backend did not take for a reason none of this
+// package's sentinels names: a request that ran out of its own time, a link
+// that dropped, a broker or a provider that did not answer, or a refusal its
+// library words in its own terms. Nothing is stored ([Backend.Put]), and a
+// later put may be.
+//
+// CLASSIFIED ONCE, HERE, by [Store] — because every surface that stores a
+// person's file has to tell this from a fault of the node, and each was
+// telling it differently: a project file's upload answered it as a store that
+// would answer again, an artifact's upload as the node's own fault, and their
+// two tools the same two ways. It is the reading every object-store surface
+// already gives a READ it cannot name (a download, the backup, the
+// migration): the store did not answer. A put the backend stopped reading
+// before its end is not this but a fault, and a put whose caller's own
+// context ended carries that context's error instead.
+var ErrUnanswered = errors.New("objstore: the object store did not take the bytes")
+
 // Usage is how much of a backend's byte reservation its objects take: Bytes
 // stored, against MaxBytes reserved. Only a backend that holds a reservation
 // answers one ([Reserver]): the fleet's own bucket, whose reservation is

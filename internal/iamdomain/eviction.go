@@ -86,12 +86,12 @@ func (Domain) Evicts(payload []byte) (bool, error) {
 // passed.
 //
 // THIS DOMAIN'S OWN TABLE, because an eviction is a record on this log: every
-// node applies it into `iam_evictions`, and every node's copy is identical,
-// which is what makes the applier's gate hold when coordination cannot be
-// reached. The trim read the tracker's table instead, filtered on this log's
-// stream name, and found nothing for as long as the fleet existed — so an
-// evicted node was counted here for ever, and this log grew toward its ceiling
-// behind a machine that was never coming back.
+// node applies it into `iam_evictions`, and every data node's copy is
+// identical, which is what makes the applier's gate hold when coordination
+// cannot be reached. The trim read the tracker's table instead, filtered on
+// this log's stream name, and found nothing for as long as the fleet existed —
+// so an evicted node was counted here for ever, and this log grew toward its
+// ceiling behind a machine that was never coming back.
 //
 // THROUGH THE REPLICATED ESTATE'S HANDLE, for the reason [Fence.Evicted]
 // gives: no file is open while an adoption swaps it, and
@@ -139,10 +139,10 @@ func (Domain) Evictions(ctx context.Context, db store.ReplicatedReader) ([]state
 
 // EvictNode installs the gate that drops a node's records on this log.
 //
-// THE POSITION IS THE LOG'S OWN, and nothing else is: every node reaches the
-// same verdict about every record from the order they all already have, with
-// no clock and no coordination read — which is what makes it the fence that
-// holds when coordination cannot be reached at all.
+// THE POSITION IS THE LOG'S OWN, and nothing else is: every data node reaches
+// the same verdict about every record from the order they all already have,
+// with no clock and no coordination read — which is what makes it the fence
+// that holds when coordination cannot be reached at all.
 //
 // UNJUDGED HERE. Whether the node may be evicted is a fleet question this
 // package holds none of the inputs to, and it is asked ONCE, before the first
@@ -258,8 +258,8 @@ func (GenerationRecord) GenerationSubject(gen uint32) (statelog.Subject, bool) {
 // landed.
 //
 // THE OPERATOR IS THE AUTHOR, on the record and on the `by` the audit row a
-// replay writes on every node carries — who moved the log is the one fact a
-// later reader of `iam_log_generations` is asking. A reanchor nobody named is
+// replay writes on every data node carries — who moved the log is the one fact
+// a later reader of `iam_log_generations` is asking. A reanchor nobody named is
 // the node's own, and is recorded as the node's writer is ([generationActor]).
 // The credential is not on the record: a generation writes no trail row, so
 // nothing would read it.
@@ -307,12 +307,10 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 // generationActor is who a generation record names as its author, and the
 // principal kind this domain's records carry for them.
 //
-// THE FACTS' KIND IS READ IN EITHER VOCABULARY — a principal's kind, or the
-// kind [iam.ActorFor] records it under — as the knowledge base's and the
-// tracker's generation records read it, so one reanchor names one party the
-// same way on every log: the reanchor verb is the framework's and names its
-// operator the way every other domain's audit columns do, while this domain's
-// records carry the PRINCIPAL's kind.
+// [statelog.GenerationFacts.Author]'s party, which every domain's generation
+// record names alike, so one reanchor names one party the same way on every
+// log — in the PRINCIPAL's kind, which this domain's records carry where the
+// others carry the actor's.
 //
 // THREE ACTOR KINDS NAME ONE PRINCIPAL KIND EACH, AND THE FOURTH DOES NOT.
 // [iam.ActorOperator] is a principal acting under its own login — a MACHINE's,
@@ -323,27 +321,25 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 // in a person's grammar is never recorded as a service account's.
 //
 // NOBODY NAMED IS THE NODE, recorded as the node's own writer records itself —
-// its id, a machine — rather than as an empty author column.
+// its id, the engine ([NodeKind]) — rather than as an empty author column.
 func generationActor(f statelog.GenerationFacts) (string, iam.Kind) {
-	if f.By == "" {
-		return f.Writer, iam.KindMachine
+	party, named := f.Author()
+	if !named {
+		return f.Writer, NodeKind
 	}
-	if kind := iam.Kind(f.ByKind); kind.Valid() {
-		return f.By, kind
-	}
-	switch iam.ActorKind(f.ByKind) {
+	switch party.Kind {
 	case iam.ActorAgent:
-		return f.By, iam.KindSeat
+		return party.Name, iam.KindSeat
 	case iam.ActorHuman:
-		return f.By, iam.KindPerson
+		return party.Name, iam.KindPerson
 	case iam.ActorSystem:
-		return f.By, iam.KindEngine
+		return party.Name, iam.KindEngine
 	}
 	// AN OPERATOR, and a kind nobody stated, by the login's shape: a
 	// person's where it is one, and a machine's otherwise — the kind a
 	// credential nobody enrolled, a Tier A token, is recorded under.
-	if iam.ValidLogin(f.By) {
-		return f.By, iam.KindPerson
+	if iam.ValidLogin(party.Name) {
+		return party.Name, iam.KindPerson
 	}
-	return f.By, iam.KindMachine
+	return party.Name, iam.KindMachine
 }

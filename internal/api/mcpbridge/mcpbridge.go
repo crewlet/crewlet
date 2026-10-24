@@ -43,7 +43,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -433,7 +432,7 @@ func (b *Bridge) resolve(token string) (s *Session, runID, reason string) {
 		return held, runID, ""
 	}
 	if held != nil {
-		return nil, runID, "this node holds a DIFFERENT session for that run — " +
+		return nil, runID, "this node holds a DIFFERENT session for that run: " +
 			"the run was relaunched and this token names the superseded one, " +
 			"which is a box that outlived the run it was started for"
 	}
@@ -654,7 +653,12 @@ func (s *Session) Connections() int {
 // handler dispatches one bridged call through the seat's own surface.
 func (s *Session) handler(name string) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		args, err := decodeArgs(req)
+		// THE ONE DECODE every transport into a tool shares
+		// ([tools.DecodeCallArgs]): through json.Number, so a large id in
+		// a tool's arguments survives, and exactly one object, so a call
+		// with a second value after it is refused rather than read as its
+		// first half.
+		args, err := tools.DecodeCallArgs(req.Params.Arguments)
 		if err != nil {
 			// BACK TO THE CALLER AS A FAILED RESULT, not a protocol
 			// error: malformed arguments are the one failure a model
@@ -670,9 +674,15 @@ func (s *Session) handler(name string) mcp.ToolHandler {
 			// genuinely could not run — a torn-down turn. That IS a
 			// protocol error: there is nothing for the caller to fix
 			// and nothing to retry against.
+			//
+			// IN WORDS OF ITS OWN, never the error's: the caller is the
+			// coding agent in the box, a model, and the error was a Go
+			// error's text ("context canceled") the protocol carried to
+			// it whole. The error goes to this node's log.
 			log.ErrorContext(ctx, "mcp_bridge_dispatch_failed",
 				"run_id", s.RunID, "seat", s.Handle, "tool", name, "error", err)
-			return nil, fmt.Errorf("crewlet: %s: %w", name, err)
+			return nil, fmt.Errorf("crewlet: %s didn't run, because the turn this coding "+
+				"run belongs to has ended", name)
 		}
 		if res.Suspend {
 			// A SUSPEND CANNOT CROSS THIS BOUNDARY. It stops the
@@ -767,30 +777,6 @@ func (s *Session) appendCall(ctx context.Context, name string, args map[string]a
 		log.WarnContext(ctx, "mcp_bridge_ledger_append_failed",
 			"run_id", s.RunID, "seat", s.Handle, "tool", name, "error", err)
 	}
-}
-
-// decodeArgs turns a call's raw arguments into the map the surface takes.
-//
-// THROUGH json.Number, so a large id in a tool's arguments survives: Go's
-// default decodes every JSON number to float64, which silently rounds an
-// issue id past 2^53 and sends the wrong one to a tracker.
-func decodeArgs(req *mcp.CallToolRequest) (map[string]any, error) {
-	raw := req.Params.Arguments
-	// A tool with no arguments arrives as an absent or empty raw message,
-	// which is a call with an empty object rather than a malformed one.
-	if len(raw) == 0 || string(raw) == "null" {
-		return map[string]any{}, nil
-	}
-	dec := json.NewDecoder(strings.NewReader(string(raw)))
-	dec.UseNumber()
-	var out map[string]any
-	if err := dec.Decode(&out); err != nil {
-		return nil, fmt.Errorf("arguments are not a JSON object: %w", err)
-	}
-	if out == nil {
-		out = map[string]any{}
-	}
-	return out, nil
 }
 
 // failure is a tool result the caller reads and can act on.

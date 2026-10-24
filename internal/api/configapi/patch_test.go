@@ -1,10 +1,13 @@
 package configapi_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
@@ -209,8 +212,9 @@ func TestAPatchHonoursIfMatch(t *testing.T) {
 
 	res := s.do(t, http.MethodPatch, "/config", `{"mission": "x"}`,
 		map[string]string{"X-Summary": "a patch", "If-Match": "not-the-active-one"})
-	if res.Code != http.StatusConflict {
-		t.Fatalf("PATCH = %d %s, want 409", res.Code, res.Body.String())
+	if res.Code != http.StatusPreconditionFailed {
+		t.Fatalf("PATCH = %d %s, want 412: the condition the request stated is false",
+			res.Code, res.Body.String())
 	}
 	if !strings.Contains(res.Body.String(), "current_revision_id") {
 		t.Errorf("the conflict does not name what to re-read: %s", res.Body.String())
@@ -287,22 +291,20 @@ func TestAPatchAcceptsYAML(t *testing.T) {
 // success in the loser's hand and nothing anywhere to find it by.
 //
 // Driven by moving the pointer out from under a write the way a second node
-// would, which is the only thing a single-process test can do honestly: the
-// conformance suite proves the store's half on both backends.
+// would, between the write's read of it and its own compare-and-set, which is
+// the only thing a single-process test can do honestly: the conformance suite
+// proves the store's half on both backends.
 func TestAWriteThatLostTheRaceIsRefused(t *testing.T) {
 	t.Parallel()
-	s := newSurface(t)
+	peer := &overtakenPlane{}
+	s := newSurfaceWith(t, func(o *configapi.Options) {
+		peer.Plane = o.Plane
+		o.Plane = peer
+	})
 	base := s.seed(t, companyDoc)
-
 	// A peer activates something else, expecting the same base this
 	// surface is about to build on.
-	if _, err := s.plane.Activate(t.Context(), coord.ActivationRequest{
-		RevisionID: "from-a-peer", Summary: "a peer got there first",
-		Payload: []byte("{}"), At: pinned, Expect: base,
-		Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: "operator", Source: "api", CreatedAt: pinned},
-	}); err != nil {
-		t.Fatalf("peer activate: %v", err)
-	}
+	peer.overtake(t, s.cipher, base)
 
 	res := s.do(t, http.MethodPatch, "/config", `{"mission": "mine"}`, summaryHeader)
 	if res.Code != http.StatusConflict {
@@ -317,12 +319,97 @@ func TestAWriteThatLostTheRaceIsRefused(t *testing.T) {
 			t.Errorf("the conflict omits %q: %s", want, res.Body.String())
 		}
 	}
-	// AS HISTORY, and nothing more: this node goes on serving the revision
-	// it served, which its reconciler moves on to whatever won.
+	// AS HISTORY, and nothing more: what this node answers is the revision
+	// that won, never the one the fleet refused.
 	s.assertKeptInert(t, decode(t, res))
-	if got := s.do(t, http.MethodGet, "/config", "", nil); got.Header().Get("ETag") != `"`+base+`"` {
-		t.Errorf("GET /config after the refusal serves %s, want the base %s it served before",
-			got.Header().Get("ETag"), base)
+	if got := s.do(t, http.MethodGet, "/config", "", nil); got.Header().Get("ETag") != `"from-a-peer"` {
+		t.Errorf("GET /config after the refusal serves %s, want the revision that won, from-a-peer",
+			got.Header().Get("ETag"))
+	}
+}
+
+// overtakenPlane is a plane on which another node's activation lands between
+// this surface's read of the pointer and its own compare-and-set, once it is
+// armed: the window a lost race happens in.
+type overtakenPlane struct {
+	coord.Plane
+	mu   sync.Mutex
+	peer *coord.ActivationRequest
+}
+
+// overtake arms the plane: the next activation finds a peer's revision,
+// expecting base, already landed.
+func (p *overtakenPlane) overtake(t *testing.T, cipher secrets.Cipher, base string) {
+	t.Helper()
+	payload, err := secrets.Seal(cipher, companyJSON(t, companyDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.peer = &coord.ActivationRequest{
+		RevisionID: "from-a-peer", Summary: "a peer got there first",
+		Payload: payload, At: pinned, Expect: base,
+		Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: "operator",
+			Source: "api", CreatedAt: pinned},
+	}
+}
+
+func (p *overtakenPlane) Activate(ctx context.Context, req coord.ActivationRequest) (coord.Activation, error) {
+	p.mu.Lock()
+	peer := p.peer
+	p.peer = nil
+	p.mu.Unlock()
+	if peer != nil {
+		if _, err := p.Plane.Activate(ctx, *peer); err != nil {
+			return coord.Activation{}, fmt.Errorf("the peer's activation: %w", err)
+		}
+	}
+	return p.Plane.Activate(ctx, req)
+}
+
+// A LOST RACE IS A FAILED PRECONDITION EXACTLY WHERE THE REQUEST NAMED A
+// REVISION (RFC 9110 §13.1.1, [RevisionStatus]): an If-Match that matched
+// this node's revision and lost the activation's compare-and-set stated a
+// condition that was false before the write could land — 412, as the same tag
+// refused at the check is — while a write that named none lost a race it never
+// declared a condition for, and `If-Match: *` declared one ("a company
+// exists") the company that won still satisfies — 409, both. One code
+// throughout, because what moved is the company's revision either way.
+func TestALostRaceIsAFailedPreconditionOnlyWhereARevisionWasNamed(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		ifMatch func(base string) string
+		want    int
+	}{
+		{"no If-Match", func(string) string { return "" }, http.StatusConflict},
+		{"If-Match: *", func(string) string { return "*" }, http.StatusConflict},
+		{"If-Match naming the base", func(base string) string { return `"` + base + `"` },
+			http.StatusPreconditionFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			peer := &overtakenPlane{}
+			s := newSurfaceWith(t, func(o *configapi.Options) {
+				peer.Plane = o.Plane
+				o.Plane = peer
+			})
+			base := s.seed(t, companyDoc)
+			peer.overtake(t, s.cipher, base)
+			headers := map[string]string{"X-Summary": "a patch"}
+			if v := tc.ifMatch(base); v != "" {
+				headers["If-Match"] = v
+			}
+			res := s.do(t, http.MethodPatch, "/config", `{"mission": "mine"}`, headers)
+			if res.Code != tc.want {
+				t.Fatalf("PATCH = %d %s, want %d", res.Code, res.Body.String(), tc.want)
+			}
+			body := decode(t, res)
+			if body["error"] != "revision_advanced" || body["current_revision_id"] != "from-a-peer" {
+				t.Errorf("refusal = %v, want revision_advanced naming from-a-peer", body)
+			}
+		})
 	}
 }
 
@@ -447,6 +534,7 @@ func (s *surface) seedStored(t *testing.T, doc string, mutate func(map[string]an
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
+	s.publish(t, id, payload)
 	return id
 }
 

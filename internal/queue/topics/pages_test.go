@@ -52,7 +52,7 @@ func TestAPagesSubjectWithNoKindIsRefusedRatherThanBuilt(t *testing.T) {
 }
 
 // THE INVERSE REFUSES WHAT THE BUILDER COULD NOT HAVE PRODUCED — and, with
-// five domains on one broker, that now includes the other four's subjects.
+// every domain on one broker, that includes every other domain's subjects.
 func TestThePagesPathRefusesWhatItDidNotBuild(t *testing.T) {
 	t.Parallel()
 	for _, subject := range []string{
@@ -65,6 +65,9 @@ func TestThePagesPathRefusesWhatItDidNotBuild(t *testing.T) {
 		topics.TrackerVectorsPrefix + ".source.1",
 		topics.UsageLogPrefix + ".seat.node-a.2026-09-23.a1",
 		topics.IamLogPrefix + ".session.0f3c",
+		topics.ArtifactsLogPrefix + ".artifact.1",
+		topics.ArtifactDataLogPrefix + ".store.1",
+		topics.ChatLogPrefix + ".message.1",
 	} {
 		if kind, id, ok := topics.PagesLogPath(subject); ok {
 			t.Errorf("%q was read as kind %q id %q and is not a subject on the "+
@@ -73,7 +76,8 @@ func TestThePagesPathRefusesWhatItDidNotBuild(t *testing.T) {
 	}
 }
 
-// THE FIVE DOMAINS' SUBJECT SPACES ARE DISJOINT.
+// EVERY DOMAIN'S SUBJECT SPACE IS DISJOINT FROM EVERY OTHER'S, and so is the
+// ephemeral presence space every kind of room shares, `crewlet.rooms.`.
 //
 // They share one broker, and a stream created over a wildcard that overlapped
 // another's would take deliveries meant for it — silently, because both
@@ -81,11 +85,15 @@ func TestThePagesPathRefusesWhatItDidNotBuild(t *testing.T) {
 func TestNoDomainsSubjectSpaceOverlapsAnothers(t *testing.T) {
 	t.Parallel()
 	prefixes := map[string]string{
-		"tracker": topics.TrackerLogPrefix + ".",
-		"vectors": topics.TrackerVectorsPrefix + ".",
-		"pages":   topics.PagesLogPrefix + ".",
-		"iam":     topics.IamLogPrefix + ".",
-		"usage":   topics.UsageLogPrefix + ".",
+		"tracker":      topics.TrackerLogPrefix + ".",
+		"vectors":      topics.TrackerVectorsPrefix + ".",
+		"pages":        topics.PagesLogPrefix + ".",
+		"iam":          topics.IamLogPrefix + ".",
+		"usage":        topics.UsageLogPrefix + ".",
+		"artifacts":    topics.ArtifactsLogPrefix + ".",
+		"presence":     topics.PresencePrefix + ".",
+		"artifactdata": topics.ArtifactDataLogPrefix + ".",
+		"chat":         topics.ChatLogPrefix + ".",
 	}
 	for a, pa := range prefixes {
 		for b, pb := range prefixes {

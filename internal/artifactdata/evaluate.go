@@ -1,7 +1,6 @@
 package artifactdata
 
 import (
-	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -11,15 +10,16 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata/query"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE DECISION A WRITE GETS: a pure function of the batch, the stamped
-// authority and the rows this transaction reads, so every node reaches the same
+// authority and the rows this transaction reads, so every data node reaches the same
 // verdict for every record.
 //
 // It is TOTAL. Every input a record can carry, hostile or merely wrong, ends in
 // a verdict rather than an error: an error from the applier stops the log on
-// every node at once (the datastore's whole company read-only until a build
+// every data node at once (the datastore's whole company read-only until a build
 // ships), while a verdict is one refused write. The only errors here are the
 // store's own (a read that failed), which the framework retries.
 
@@ -134,6 +134,15 @@ type storeTotals struct {
 func (t storeTotals) footprint() int64 { return t.docBytes + t.historyBytes }
 
 // refusal is a verdict other than applied, and why.
+//
+// IT IS A VALUE AND NEVER AN ERROR: the record's verdict, written as a history
+// row on every data node, or a decide-time answer the writer restates in its
+// caller's terms ([configRefusal]), so it never leaves this package as itself.
+// Every function that can refuse returns one BESIDE its error, which is only
+// ever the store's. As an error it shared one return with a failed read, told
+// apart by an errors.As at the end of the chain, and it was an unexported
+// error type, which the estate router's wire cannot rebuild: one that escaped
+// a writer would have crossed as its message alone.
 type refusal struct {
 	verdict   artifacts.DataVerdict
 	reason    string
@@ -148,8 +157,6 @@ type refusal struct {
 	class error
 }
 
-func (r *refusal) Error() string { return string(r.verdict) + ": " + r.reason }
-
 // docRef names one document.
 type docRef struct {
 	Collection string `json:"c"`
@@ -161,13 +168,9 @@ func refuse(v artifacts.DataVerdict, format string, args ...any) *refusal {
 	return &refusal{verdict: v, reason: fmt.Sprintf(format, args...)}
 }
 
-// fromErr turns a validation error into an invalid refusal, keeping a refusal
-// that already is one.
+// fromErr is a validation error as an invalid refusal, in the validator's own
+// words without the package's prefix.
 func fromErr(err error) *refusal {
-	var r *refusal
-	if errors.As(err, &r) {
-		return r
-	}
 	return &refusal{verdict: artifacts.DataInvalid, reason: strings.TrimPrefix(err.Error(),
 		ErrInvalid.Error()+": ")}
 }
@@ -213,7 +216,6 @@ func evaluate(v view, authority artifacts.Authority, ops []artifacts.DataOp, und
 	b := &batch{v: v, authority: authority, undo: undo,
 		colls: map[string]*collState{}, docs: map[docRef]*docState{}}
 	if r := checkAuthority(authority); r != nil {
-		//nolint:nilerr // A refusal is the plan's verdict, never the store's error.
 		return plan{refusal: r}, nil
 	}
 	if len(ops) == 0 || len(ops) > artifacts.MaxBatchOps {
@@ -263,18 +265,13 @@ func evaluate(v view, authority artifacts.Authority, ops []artifacts.DataOp, und
 				len(conflicts)), conflicts: conflicts, creators: creators}}, nil
 	}
 	for i, op := range ops {
-		if err := b.apply(op); err != nil {
-			var r *refusal
-			if errors.As(err, &r) {
-				r.reason = fmt.Sprintf("op %d: %s", i, r.reason)
-				return plan{refusal: r}, nil
-			}
-			if errors.Is(err, ErrInvalid) {
-				r := fromErr(err)
-				r.reason = fmt.Sprintf("op %d: %s", i, r.reason)
-				return plan{refusal: r}, nil
-			}
+		r, err := b.apply(op)
+		if err != nil {
 			return plan{}, err
+		}
+		if r != nil {
+			r.reason = fmt.Sprintf("op %d: %s", i, r.reason)
+			return plan{refusal: r}, nil
 		}
 	}
 	return b.finish()
@@ -305,16 +302,16 @@ func checkAuthority(a artifacts.Authority) *refusal {
 // checkOpShape refuses an op whose names or operands no store holds.
 func checkOpShape(op artifacts.DataOp) error {
 	if !op.Op.Valid() {
-		return fmt.Errorf("%w: op %q is not one of %v", ErrInvalid, op.Op, artifacts.DataOpKinds)
+		return fmt.Errorf("%w: op %q is not one of %s", ErrInvalid, op.Op, words.Or(artifacts.DataOpKinds))
 	}
 	if op.Collection != StateCollection && !artifacts.ValidCollectionName(op.Collection) {
 		return fmt.Errorf("%w: collection %q is a lowercase letter, then lowercase letters, "+
-			"digits and `_`, at most %d bytes, and not one of %v", ErrInvalid, op.Collection,
-			artifacts.MaxCollectionNameBytes, artifacts.ReservedCollections)
+			"digits and `_`, at most %d bytes, and not one of %s", ErrInvalid, op.Collection,
+			artifacts.MaxCollectionNameBytes, words.Or(artifacts.ReservedCollections))
 	}
 	if !ValidDocID(op.Doc) {
 		return fmt.Errorf("%w: document id %q is 1..%d letters, digits, `_` and `-`, and "+
-			"not one of %v", ErrInvalid, op.Doc, artifacts.MaxDocIDBytes, reservedDocIDs)
+			"not one of %s", ErrInvalid, op.Doc, artifacts.MaxDocIDBytes, words.Or(reservedDocIDs))
 	}
 	if op.IfVersion != nil && *op.IfVersion < 0 {
 		return fmt.Errorf("%w: if_version is a version a read returned, never negative", ErrInvalid)
@@ -375,11 +372,12 @@ func (b *batch) doc(c *collState, id string) (*docState, error) {
 	return d, nil
 }
 
-// apply is one op, against the batch's working state.
-func (b *batch) apply(op artifacts.DataOp) error {
+// apply is one op, against the batch's working state: its refusal, or nil,
+// beside the store's error.
+func (b *batch) apply(op artifacts.DataOp) (*refusal, error) {
 	c, err := b.collection(op.Collection)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if c == nil {
 		// A COLLECTION NOBODY DECLARED is created by the write under the
@@ -391,11 +389,11 @@ func (b *batch) apply(op artifacts.DataOp) error {
 	b.adopt(c)
 	d, err := b.doc(c, op.Doc)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if c.spec.Name == StateCollection && !strings.HasPrefix(op.Doc, StateToken(b.authority.Actor.Name)+"_") {
 		return refuse(artifacts.DataForbidden, "a state document is its viewer's own, and %s "+
-			"is not %s's", op.Doc, b.authority.Actor.Name)
+			"is not %s's", op.Doc, b.authority.Actor.Name), nil
 	}
 	if !d.listed {
 		d.listed = true
@@ -403,11 +401,11 @@ func (b *batch) apply(op artifacts.DataOp) error {
 	}
 	switch op.Op {
 	case artifacts.DataDelete:
-		return b.delete(c, d)
+		return b.delete(c, d), nil
 	case artifacts.DataSet, artifacts.DataMerge:
-		return b.setFields(c, d, op)
+		return b.setFields(c, d, op), nil
 	}
-	return b.fieldOp(c, d, op)
+	return b.fieldOp(c, d, op), nil
 }
 
 // role is the stamped role.
@@ -422,7 +420,7 @@ func (b *batch) owns(d *docState) bool {
 }
 
 // create makes d live for the writer, under the collection's create role.
-func (b *batch) create(c *collState, d *docState) error {
+func (b *batch) create(c *collState, d *docState) *refusal {
 	if !b.role().Includes(c.spec.Create) {
 		return refuse(artifacts.DataForbidden, "creating a row in %s needs %s, and the writer is %s",
 			c.spec.Name, c.spec.Create, b.role())
@@ -447,7 +445,7 @@ func scopedRead(rule artifacts.ReadRule) bool {
 }
 
 // delete tombstones d.
-func (b *batch) delete(c *collState, d *docState) error {
+func (b *batch) delete(c *collState, d *docState) *refusal {
 	if !d.live {
 		// DELETING WHAT IS NOT THERE CHANGES NOTHING, and is not an
 		// error: two people deleting one row at once both succeed.
@@ -474,11 +472,11 @@ func (b *batch) delete(c *collState, d *docState) error {
 
 // setFields applies a set (every field replaced) or a merge (the named fields
 // set, a null removing one).
-func (b *batch) setFields(c *collState, d *docState, op artifacts.DataOp) error {
+func (b *batch) setFields(c *collState, d *docState, op artifacts.DataOp) *refusal {
 	creating := !d.live
 	if creating {
-		if err := b.create(c, d); err != nil {
-			return err
+		if r := b.create(c, d); r != nil {
+			return r
 		}
 	}
 	next := map[string]canon.Value{}
@@ -495,7 +493,7 @@ func (b *batch) setFields(c *collState, d *docState, op artifacts.DataOp) error 
 	for _, name := range names {
 		v, err := canon.Parse(op.Fields[name], MaxValueDepth+1)
 		if err != nil {
-			return fmt.Errorf("%w: field %s: %w", ErrInvalid, name, err)
+			return refuse(artifacts.DataInvalid, "field %s: %v", name, err)
 		}
 		if v.Kind == canon.KindNull {
 			delete(next, name)
@@ -515,12 +513,12 @@ func (b *batch) setFields(c *collState, d *docState, op artifacts.DataOp) error 
 		if !changed && !named {
 			continue
 		}
-		if err := b.mayWrite(c, d, name, op, creating, had, has, changed); err != nil {
-			return err
+		if r := b.mayWrite(c, d, name, op, creating, had, has, changed); r != nil {
+			return r
 		}
 		if has && changed {
 			if err := b.checkField(c, name, val); err != nil {
-				return err
+				return fromErr(err)
 			}
 		}
 	}
@@ -529,7 +527,7 @@ func (b *batch) setFields(c *collState, d *docState, op artifacts.DataOp) error 
 }
 
 // fieldOp applies an increment, an append, an add or a remove to one field.
-func (b *batch) fieldOp(c *collState, d *docState, op artifacts.DataOp) error {
+func (b *batch) fieldOp(c *collState, d *docState, op artifacts.DataOp) *refusal {
 	if op.Op == artifacts.DataRemove && !d.live {
 		// REMOVING FROM A ROW THAT IS NOT THERE CHANGES NOTHING, and creates
 		// nothing either.
@@ -537,13 +535,13 @@ func (b *batch) fieldOp(c *collState, d *docState, op artifacts.DataOp) error {
 	}
 	creating := !d.live
 	if creating {
-		if err := b.create(c, d); err != nil {
-			return err
+		if r := b.create(c, d); r != nil {
+			return r
 		}
 	}
 	operand, err := canon.Parse(op.Value, MaxValueDepth+1)
 	if err != nil {
-		return fmt.Errorf("%w: the value of %s: %w", ErrInvalid, op.Field, err)
+		return refuse(artifacts.DataInvalid, "the value of %s: %v", op.Field, err)
 	}
 	col, declared := c.columns[op.Field]
 	old, had := d.fields[op.Field]
@@ -551,63 +549,63 @@ func (b *batch) fieldOp(c *collState, d *docState, op artifacts.DataOp) error {
 	switch op.Op {
 	case artifacts.DataIncrement:
 		if declared && col.Type != artifacts.ColumnNumber {
-			return fmt.Errorf("%w: %s is a %s column, and only a number is incremented",
-				ErrInvalid, op.Field, col.Type)
+			return refuse(artifacts.DataInvalid, "%s is a %s column, and only a number is incremented",
+				op.Field, col.Type)
 		}
 		if operand.Kind != canon.KindNumber {
-			return fmt.Errorf("%w: an increment adds a number", ErrInvalid)
+			return refuse(artifacts.DataInvalid, "an increment adds a number")
 		}
 		if _, err := finite(operand.Number); err != nil { //nolint:govet // shadow: scoped to this block; see .golangci.yml
-			return fmt.Errorf("%w: %w", ErrInvalid, err)
+			return refuse(artifacts.DataInvalid, "%v", err)
 		}
 		base := "0"
 		if had {
 			if old.Kind != canon.KindNumber {
-				return fmt.Errorf("%w: %s holds a value that is not a number", ErrInvalid, op.Field)
+				return refuse(artifacts.DataInvalid, "%s holds a value that is not a number", op.Field)
 			}
 			base = old.Number
 		}
 		sum, err := addDecimal(base, operand.Number) //nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		if err != nil {
-			return fmt.Errorf("%w: %s: %w", ErrInvalid, op.Field, err)
+			return refuse(artifacts.DataInvalid, "%s: %v", op.Field, err)
 		}
 		next = canon.Value{Kind: canon.KindNumber, Number: sum}
 	case artifacts.DataAppend:
 		textual := declared && (col.Type == artifacts.ColumnText || col.Type == artifacts.ColumnLongText)
 		listy := declared && col.Type == artifacts.ColumnMultiSelect
 		if declared && !textual && !listy {
-			return fmt.Errorf("%w: %s is a %s column, and append grows text or a list",
-				ErrInvalid, op.Field, col.Type)
+			return refuse(artifacts.DataInvalid, "%s is a %s column, and append grows text or a list",
+				op.Field, col.Type)
 		}
 		switch {
 		case textual || (!declared && operand.Kind == canon.KindString &&
 			(!had || old.Kind == canon.KindString)):
 			if operand.Kind != canon.KindString {
-				return fmt.Errorf("%w: appending to text appends text", ErrInvalid)
+				return refuse(artifacts.DataInvalid, "appending to text appends text")
 			}
 			base := ""
 			if had {
 				if old.Kind != canon.KindString {
-					return fmt.Errorf("%w: %s holds a value that is not text", ErrInvalid, op.Field)
+					return refuse(artifacts.DataInvalid, "%s holds a value that is not text", op.Field)
 				}
 				base = old.String
 			}
 			next = canon.Value{Kind: canon.KindString, String: base + operand.String}
 		default:
-			next, err = withElement(op.Field, old, had, operand, listy)
-			if err != nil {
-				return err
+			var r *refusal
+			if next, r = withElement(op.Field, old, had, operand, listy); r != nil {
+				return r
 			}
 		}
 	case artifacts.DataAdd, artifacts.DataRemove:
 		if declared && col.Type != artifacts.ColumnMultiSelect {
-			return fmt.Errorf("%w: %s is a %s column, and only a list gains or loses an "+
-				"element", ErrInvalid, op.Field, col.Type)
+			return refuse(artifacts.DataInvalid, "%s is a %s column, and only a list gains or "+
+				"loses an element", op.Field, col.Type)
 		}
 		if op.Op == artifacts.DataAdd {
-			next, err = withElement(op.Field, old, had, operand, true)
-			if err != nil {
-				return err
+			var r *refusal
+			if next, r = withElement(op.Field, old, had, operand, true); r != nil {
+				return r
 			}
 			break
 		}
@@ -615,7 +613,7 @@ func (b *batch) fieldOp(c *collState, d *docState, op artifacts.DataOp) error {
 			return nil
 		}
 		if old.Kind != canon.KindArray {
-			return fmt.Errorf("%w: %s holds a value that is not a list", ErrInvalid, op.Field)
+			return refuse(artifacts.DataInvalid, "%s holds a value that is not a list", op.Field)
 		}
 		next = canon.Value{Kind: canon.KindArray, Array: []canon.Value{}}
 		for _, e := range old.Array {
@@ -625,14 +623,14 @@ func (b *batch) fieldOp(c *collState, d *docState, op artifacts.DataOp) error {
 		}
 	}
 	changed := !had || !sameValue(old, next)
-	if err := b.mayWrite(c, d, op.Field, op, creating, had, true, changed); err != nil {
-		return err
+	if r := b.mayWrite(c, d, op.Field, op, creating, had, true, changed); r != nil {
+		return r
 	}
 	if !changed {
 		return nil
 	}
 	if err := b.checkField(c, op.Field, next); err != nil {
-		return err
+		return fromErr(err)
 	}
 	if d.fields == nil {
 		d.fields = map[string]canon.Value{}
@@ -644,14 +642,16 @@ func (b *batch) fieldOp(c *collState, d *docState, op artifacts.DataOp) error {
 
 // withElement is a list with one element added. unique says the list is a set
 // (a multiselect, or an add), where an element already held changes nothing.
-func withElement(field string, old canon.Value, had bool, elem canon.Value, unique bool) (canon.Value, error) {
+func withElement(field string, old canon.Value, had bool, elem canon.Value, unique bool) (canon.Value, *refusal) {
 	if elem.Kind == canon.KindArray || elem.Kind == canon.KindObject {
-		return canon.Value{}, fmt.Errorf("%w: a list element added to %s is a scalar", ErrInvalid, field)
+		return canon.Value{}, refuse(artifacts.DataInvalid, "a list element added to %s is a scalar",
+			field)
 	}
 	out := canon.Value{Kind: canon.KindArray, Array: []canon.Value{}}
 	if had {
 		if old.Kind != canon.KindArray {
-			return canon.Value{}, fmt.Errorf("%w: %s holds a value that is not a list", ErrInvalid, field)
+			return canon.Value{}, refuse(artifacts.DataInvalid, "%s holds a value that is not a list",
+				field)
 		}
 		out.Array = append(out.Array, old.Array...)
 	}
@@ -668,12 +668,12 @@ func withElement(field string, old canon.Value, had bool, elem canon.Value, uniq
 // every write naming it, and what a value may become only of one that moves
 // it.
 func (b *batch) mayWrite(c *collState, d *docState, field string, op artifacts.DataOp,
-	creating, had, has, changed bool) error {
+	creating, had, has, changed bool) *refusal {
 
 	col, declared := c.columns[field]
 	if !c.schemaless() && !declared {
-		return fmt.Errorf("%w: %s declares no field %q; a typo is refused rather than "+
-			"dropped", ErrInvalid, c.spec.Name, field)
+		return refuse(artifacts.DataInvalid, "%s declares no field %q; a typo is refused rather "+
+			"than dropped", c.spec.Name, field)
 	}
 	writeRole := c.spec.Create
 	explicit := declared && col.Write != ""
@@ -726,8 +726,8 @@ func (b *batch) mayWrite(c *collState, d *docState, field string, op artifacts.D
 	// loses anything.
 	if declared && col.Type == artifacts.ColumnLongText && d.live0 && !d.created &&
 		(op.Op == artifacts.DataSet || op.Op == artifacts.DataMerge) && op.IfVersion == nil {
-		return fmt.Errorf("%w: %s is long text, written whole only guarded: name the "+
-			"if_version you edited, or append", ErrInvalid, field)
+		return refuse(artifacts.DataInvalid, "%s is long text, written whole only guarded: name "+
+			"the if_version you edited, or append", field)
 	}
 	return nil
 }
@@ -766,7 +766,6 @@ func (b *batch) finish() (plan, error) {
 		}
 		if d.live {
 			if r := checkWhole(d); r != nil {
-				//nolint:nilerr // A refusal is the plan's verdict, never the store's error.
 				return plan{refusal: r}, nil
 			}
 		}

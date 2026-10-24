@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // How this binary's four node clients render a refusal.
@@ -52,20 +52,46 @@ func credentialRefusal(status int, raw []byte, sentToken bool) (string, bool) {
 		if json.Unmarshal(raw, &body) != nil {
 			return "", false
 		}
-		var code, reason string
+		var code, reason, message string
 		var grants []string
 		_ = json.Unmarshal(body["error"], &code)
 		_ = json.Unmarshal(body[authz.DetailReason], &reason)
 		_ = json.Unmarshal(body[authz.DetailGrants], &grants)
+		_ = json.Unmarshal(body["message"], &message)
 		if code != string(httpjson.CodeUnauthorized) || (reason == "" && grants == nil) {
 			return "", false
 		}
-		if len(grants) > 0 {
-			return "this token doesn't have " + strings.Join(grants, " or ") +
+		lacks := reason == "" || reason == string(authz.ReasonNoGrant)
+		switch {
+		case reason == string(authz.ReasonUnseated):
+			// NO GRANT WOULD, AND NO RELATION EITHER: the verb is made AS
+			// A SEAT — said in a room, read as somebody who is in it — and
+			// this credential acts as itself. What changes it is which
+			// credential, or a binding, so that is what is named, in this
+			// binary's own commands: the reason's bare word sent an
+			// operator holding admin looking for a permission they already
+			// had.
+			return "this token acts as no seat, and this is done as one. Use " +
+				"your own token (`crewlet iam token -login LOGIN`), or bind " +
+				"this one to a human seat (`crewlet iam bind ID SEAT`)", true
+		case lacks && len(grants) > 0:
+			return "this token doesn't have " + words.Or(grants) +
+				". Ask an admin for it", true
+		case message != "":
+			// ANY OTHER RULE IS THE NODE'S TO WORD, and its `message`
+			// follows the reason: a relation it refused, naming the
+			// permission that would admit the token anyway, or one no
+			// permission changes — an account that is not active, a verb
+			// only an agent's seat makes. This said the reason's bare word
+			// for all of them, and that what was missing was a relation,
+			// which for most of them it was not.
+			return "this token isn't allowed to do this (" + reason + "): " +
+				message, true
+		case len(grants) > 0:
+			return "this token doesn't have " + words.Or(grants) +
 				". Ask an admin for it", true
 		}
-		// NO GRANT WOULD: what is missing is a relation — the seat is not
-		// the caller's and they do not lead it — and the reason names it.
+		// NO GRANT WOULD, and the node named no rule's words for it.
 		return "this token isn't allowed to do this (" + reason + ")", true
 	}
 	return "", false

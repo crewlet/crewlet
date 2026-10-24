@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/structured"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -313,7 +314,9 @@ type taskReport struct {
 }
 
 // renderResults is the tool's output: JSON, so the parent reads the per-task
-// split as data rather than re-parsing a prose blob.
+// split as data rather than re-parsing a prose blob — and [plainjson.Marshal]'s,
+// so a worker's submission carries the code and markup it found as written
+// rather than as the escapes an HTML-safe encoder writes.
 //
 // The SUBMISSION and the PROSE never both appear. A task that answered
 // structurally has its fields; one that did not has its prose, labelled by a
@@ -334,7 +337,7 @@ func renderResults(results []Result) string {
 		}
 		reports = append(reports, rep)
 	}
-	blob, err := json.Marshal(map[string]any{"tasks": reports})
+	blob, err := plainjson.Marshal(map[string]any{"tasks": reports}, "")
 	if err != nil {
 		// Nothing in taskReport can refuse to marshal EXCEPT a submitted
 		// field the schema let through, so this is reachable — and

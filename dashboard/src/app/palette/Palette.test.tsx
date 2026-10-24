@@ -49,6 +49,7 @@ const JANE: ViewerState = {
   admin: true,
   tracker: true,
   knowledge: true,
+  chat: true,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -61,6 +62,7 @@ const JANE: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  chatVendors: [],
 };
 
 const ANONYMOUS: ViewerState = {
@@ -70,6 +72,7 @@ const ANONYMOUS: ViewerState = {
   admin: false,
   tracker: false,
   knowledge: false,
+  chat: false,
   handle: "",
   owner: "",
   name: "",
@@ -332,6 +335,69 @@ describe("scopes and sigils", () => {
     expect(screen.getByText("Teams")).toBeDefined();
     expect(screen.getByText("Platform")).toBeDefined();
     expect(screen.getByText("SWE")).toBeDefined();
+  });
+});
+
+// A DESTINATION SAYS WHAT OPENS IT BEFORE A PRESS, read from the navigation's
+// own table: Chat is the Chat app's, so a reader holding the tracker and the
+// knowledge base but not Chat is told which access to ask for — and a reader
+// holding it is told nothing. Mutation: drop the row's `grants` and the first
+// case goes red; lock on the table's grants whatever the reader holds and the
+// second does.
+describe("a destination's lock", () => {
+  const WITHOUT_CHAT: ViewerState = {
+    ...JANE,
+    grants: ["tracker", "knowledge"],
+    admin: false,
+    chat: false,
+  };
+
+  test.each([
+    ["without Chat", WITHOUT_CHAT, true],
+    [
+      "holding Chat",
+      { ...WITHOUT_CHAT, grants: ["tracker", "knowledge", "chat"], chat: true },
+      false,
+    ],
+  ])("Chat's lock, to a reader %s", async (_, viewer, locked) => {
+    const p = mount({ viewer });
+    await p.type("chat");
+    expect(/· needs Chat access$/.test(p.row(/^Chat$/).textContent ?? "")).toBe(locked);
+  });
+
+  // A SECTION IS LOCKED BY ITS WORKSPACE FIRST, as the frame refuses it: a
+  // reader who cannot open Chat cannot open its Mentions, and one who cannot
+  // open Knowledge is told Knowledge before Agent diaries' own Admin. Read
+  // off a section's own list, every section of a workspace that names the
+  // app — Work's, My work's, Chat's — was offered with no lock at all, and
+  // the press opened onto the refusal. Mutation: lock by the section's own
+  // grants alone and the Mentions and Asked of me rows go red.
+  test.each([
+    { term: "mentions", label: /^Mentions$/, viewer: WITHOUT_CHAT, needs: "Chat" },
+    { term: "search chat", label: /^Search chat$/, viewer: WITHOUT_CHAT, needs: "Chat" },
+    {
+      term: "asked of me",
+      label: /^Asked of me$/,
+      viewer: { ...WITHOUT_CHAT, grants: ["knowledge"] },
+      needs: "Tracker",
+    },
+    {
+      term: "diaries",
+      label: /^Agent diaries$/,
+      viewer: { ...WITHOUT_CHAT, grants: ["tracker"] },
+      needs: "Knowledge",
+    },
+    { term: "diaries", label: /^Agent diaries$/, viewer: WITHOUT_CHAT, needs: "Admin" },
+  ])("$term is locked naming $needs access where the reader lacks it", async (c) => {
+    const p = mount({ viewer: c.viewer });
+    await p.type(c.term);
+    expect(p.row(c.label).textContent).toMatch(new RegExp(`· needs ${c.needs} access$`));
+  });
+
+  test("a section whose workspace and own access the reader holds is not locked", async () => {
+    const p = mount({ viewer: { ...WITHOUT_CHAT, grants: ["chat"], chat: true } });
+    await p.type("mentions");
+    expect(p.row(/^Mentions$/).textContent).not.toMatch(/needs/);
   });
 });
 
@@ -621,6 +687,36 @@ describe("the knowledge answer", () => {
       .closest(".palette-answer")!;
     expect(lead.textContent).toMatch(/tokens/);
     expect(lead.textContent).not.toMatch(/[$€£¥]|USD|cost|price/i);
+  });
+
+  // A REFUSAL IS TOLD IN THE ENGINE'S OWN WORDS: answer_knowledge words each
+  // for the person who asked, and the act route's sentence for its class is
+  // about a change ("could not make the change just now. Try again in a
+  // moment"), which is wrong for a question and invites a retry the engine
+  // said no wait clears (it sent no Retry-After).
+  test("a refused question is told in the engine's words", async () => {
+    vi.useFakeTimers();
+    const said =
+      "No model is set up to answer questions, so nothing was spent. An administrator needs to set one up.";
+    engine((tool) =>
+      tool === "answer_knowledge"
+        ? json(
+            {
+              error: "unavailable",
+              message: "This can't be done here, and waiting won't change that.",
+              detail: said,
+              op_id: "op-1",
+            },
+            503,
+          )
+        : json({ error: "not_found", detail: "no" }, 404),
+    );
+    const p = mount();
+    await p.type(QUESTION);
+    await settle(ANSWER_IDLE_MS);
+    await settle(0);
+    expect(screen.getByText(said)).toBeDefined();
+    expect(screen.queryByText(/could not make the change/)).toBeNull();
   });
 
   test("a new term abandons the question before it, which is never drawn", async () => {
@@ -1362,17 +1458,21 @@ describe("a screen found by what it holds", () => {
   // A LABEL STILL WINS: a screen called what was typed is never pushed under
   // one that merely holds the word. "s" starts two of Account's words
   // ("sessions", "security"), which a flat ranking scored ahead of every label
-  // with an "s" in its middle — Tasks, Projects, Agents.
+  // with an "s" in its middle — Tasks, Projects, Agents. Chat holds it only
+  // in its words too ("messages", "rooms"), so every screen found that way is
+  // ranked after every label that has one.
   test("every label match ranks above a keyword match, however good", () => {
     const nav = { to: vi.fn() } as unknown as Parameters<typeof destinationHits>[1];
     const hits = destinationHits("s", nav, Infinity, null, {
       tracker: true,
       knowledge: true,
+      chat: true,
     }).map((h) => h.label);
     // THE LABEL MATCHES COME FIRST, then the screens only a keyword found
-    // ("Account"), and never one after the other.
+    // ("Account", "Chat"), and never one after the other.
     const firstKeyword = hits.findIndex((label) => !label.toLowerCase().includes("s"));
-    expect(hits.slice(firstKeyword)).toEqual(expect.arrayContaining(["Account"]));
+    expect(firstKeyword).toBeGreaterThan(0);
+    expect(hits.slice(firstKeyword)).toEqual(expect.arrayContaining(["Account", "Chat"]));
     for (const label of hits.slice(firstKeyword)) expect(label.toLowerCase()).not.toContain("s");
     for (const label of hits.slice(0, firstKeyword)) expect(label.toLowerCase()).toContain("s");
     expect(hits).toContain("Tasks");
@@ -1385,7 +1485,7 @@ describe("a screen found by what it holds", () => {
   test("a reader holding only Tracker opens Settings on Token spend, unlocked", () => {
     const to = vi.fn();
     const nav = { to } as unknown as Parameters<typeof destinationHits>[1];
-    const runs = { tracker: true, knowledge: true };
+    const runs = { tracker: true, knowledge: true, chat: true };
     const settings = destinationHits(
       "settings",
       nav,

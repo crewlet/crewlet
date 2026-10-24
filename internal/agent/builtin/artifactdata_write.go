@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -99,7 +100,10 @@ func (t *writeArtifactData) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	if a.head.Status == artifactsdomain.StatusTrashed {
-		return refusedBy(tools.RefusalForbidden, artifactdata.ErrGone, fmt.Sprintf("%s: the "+
+		// THE ARTIFACT'S STATE, under its own sentinel: never the
+		// datastore's ErrGone, which is a purge's and says the data will
+		// not come back.
+		return refusedBy(tools.RefusalConflict, artifactsdomain.ErrTrashed, fmt.Sprintf("%s: the "+
 			"artifact is in the trash, and its data is not written until a person restores "+
 			"it. Nothing was written.", t.Name())), nil
 	}
@@ -108,14 +112,14 @@ func (t *writeArtifactData) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			return dataFailure(ctx, t.Name(), err), nil
 		}
 	}
-	t.d.touch(a.c, a.head.ID, artifacts.PresenceEditing,
-		artifacts.Focus{Collection: ops[0].Collection, Doc: ops[0].Doc})
+	t.d.touch(a.c, a.head.ID, presence.Editing,
+		presence.Focus{Collection: ops[0].Collection, Doc: ops[0].Doc})
 	res, err := t.d.data.Store.Write(ctx, t.d.art.call(a.c, a.stamp, a.dec.Elevated),
 		a.head.ID, artifacts.DataWrite{Ops: ops})
 	if err != nil {
 		return dataFailure(ctx, t.Name(), err), nil
 	}
-	return t.d.verdict(ctx, turn, t.Name(), a, res, "Read the rows with read_artifact_data: "+
+	return t.d.verdict(ctx, turn, t.Name(), a, res, "Read the rows with "+ReadArtifactDataTool+": "+
 		"they say whether the write landed.")
 }
 
@@ -209,13 +213,7 @@ func (d dataTools) verdict(ctx context.Context, turn *turnctx.Turn, tool string,
 		}
 		return r, err
 	}
-	class := tools.RefusalInvalid
-	switch res.Verdict {
-	case artifacts.DataForbidden, artifacts.DataQuota:
-		class = tools.RefusalForbidden
-	case artifacts.DataGone:
-		class = tools.RefusalNotFound
-	}
+	class := DataVerdictClass(res.Verdict)
 	return refusedBy(class, fmt.Errorf("artifactdata: %s: %s", res.Verdict, res.Reason),
 		fmt.Sprintf("%s did not write anything: the datastore refused the batch (%s: %s). "+
 			"No op of it landed.", tool, res.Verdict, res.Reason)), nil
@@ -232,7 +230,7 @@ func (t *setArtifactSchema) Name() string { return SetArtifactSchemaTool }
 func (t *setArtifactSchema) Description() string {
 	return "Set the schema of an artifact's datastore in this Crewlet company: EVERY " +
 		"collection it keeps after the change (read the current one with " +
-		"read_artifact_data and no `collection`, and send it back with your change), " +
+		ReadArtifactDataTool + " and no `collection`, and send it back with your change), " +
 		"each with its columns, who reads it, who creates and deletes rows, and each " +
 		"column's write rule. An agent may tighten a collection's rules (add " +
 		"`humans_only`, raise a role) and never loosen them; that is a person's call."
@@ -308,23 +306,23 @@ func (t *setArtifactSchema) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if _, given := args["collections"]; !given {
 		return failed(t.Name() + " needs `collections`: every collection the datastore " +
-			"keeps after the change, read first with read_artifact_data."), nil
+			"keeps after the change, read first with " + ReadArtifactDataTool + "."), nil
 	}
 	a, refusal := t.d.admit(ctx, turn, t.Name(), authz.ActionArtifactSchema, args, true)
 	if refusal != nil {
 		return *refusal, nil
 	}
 	if a.head.Status == artifactsdomain.StatusTrashed {
-		return refusedBy(tools.RefusalForbidden, artifactdata.ErrGone, fmt.Sprintf("%s: the "+
+		return refusedBy(tools.RefusalConflict, artifactsdomain.ErrTrashed, fmt.Sprintf("%s: the "+
 			"artifact is in the trash. Nothing was changed.", t.Name())), nil
 	}
-	t.d.touch(a.c, a.head.ID, artifacts.PresenceEditing, artifacts.Focus{})
+	t.d.touch(a.c, a.head.ID, presence.Editing, presence.Focus{})
 	res, err := t.d.data.Store.Configure(ctx, t.d.art.call(a.c, a.stamp, a.dec.Elevated),
 		a.head.ID, collections)
 	if err != nil {
 		return dataFailure(ctx, t.Name(), err), nil
 	}
-	return t.d.verdict(ctx, turn, t.Name(), a, res, "Read the schema with read_artifact_data: "+
+	return t.d.verdict(ctx, turn, t.Name(), a, res, "Read the schema with "+ReadArtifactDataTool+": "+
 		"it says whether the change landed.")
 }
 

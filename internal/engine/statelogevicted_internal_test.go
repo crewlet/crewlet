@@ -43,7 +43,7 @@ func TestEvictingAPeerThatReanchoredAndVanishedReleasesTheFleet(t *testing.T) {
 		// stranded is what a reanchor says before the eviction.
 		stranded string
 	}{
-		{"its row names the generation it opened", true, "re-anchored peers: [node-x]"},
+		{"its row names the generation it opened", true, `"node-x" has re-anchored it past this node`},
 		{"it died before its row said so", false, "nothing to re-anchor"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -119,7 +119,7 @@ func strandedByAVanishedPeer(t *testing.T, published bool, stranded string) {
 	confirm := statelog.ConfirmationOf(live)
 	if _, err := e.Reanchor(t.Context(), ReanchorRequest{
 		Stream: spec.Name, Confirm: confirm, By: reanchorOperator, Force: true,
-	}); !errors.Is(err, statelog.ErrReanchorRefused) || !strings.Contains(err.Error(), stranded) {
+	}); !errors.Is(err, statelog.ErrReanchorRefused) || !strings.Contains(toldOrError(err), stranded) {
 		t.Fatalf("a forced reanchor while node-x counts = %v, want a refusal saying %q",
 			err, stranded)
 	}

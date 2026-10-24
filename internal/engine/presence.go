@@ -16,11 +16,6 @@ import (
 // halves of presence happen everywhere: a node serving the API holds sockets
 // in rooms, and a node running seats holds the agents whose tool calls put
 // them in rooms, and a `seats`-only node is the second without the first.
-//
-// AND THE ARTIFACT COPIES' SERVICE, which the socket's rooms follow: while
-// this node's copy is out of service its appliers' movements describe a copy
-// nobody vouches for, so the rooms are told to re-read as it leaves service
-// and again as it returns ([Engine.SetOnArtifactsServing]).
 
 // newPresenceWire is the one-way sealed channel presence frames cross the
 // fleet on, built from the keyring every state-log record is signed under. It
@@ -50,6 +45,11 @@ func (e *Engine) armPresence(ctx context.Context) error {
 	// writer's does.
 	if e.metrics != nil {
 		opts.Metrics = e.metrics
+	}
+	// THE NODE'S OBJECTIVE METER, which presence's joins and moves are
+	// timed into.
+	if e.objectives != nil {
+		opts.Objectives = e.objectives
 	}
 	hub, err := presence.New(opts)
 	if err != nil {
@@ -88,62 +88,4 @@ func ArtifactDataToolDeps(e *Engine) builtin.ArtifactDataDeps {
 		return builtin.ArtifactDataDeps{}
 	}
 	return builtin.ArtifactDataDeps{Store: e.router.ArtifactData(), Turns: e.dataTurns}
-}
-
-// SetOnArtifactsServing registers what this node does when its artifact
-// copies go out of service (false) or come back (true): the socket's rooms,
-// which withhold this node's appliers' pushes while out and tell every room
-// to re-read at each switch. Nil tells nobody. It must not block: it is called
-// on the watcher's goroutine, once per switch.
-func (e *Engine) SetOnArtifactsServing(fn func(serving bool)) {
-	e.onArtifactsServing.Store(&fn)
-}
-
-// watchArtifactCopies tells [Engine.SetOnArtifactsServing]'s listener every
-// time this node's copy leaves or returns to service, judged on the copy's
-// own verdict at its own cadence ([servingRecheck]), until ctx ends. Only a
-// data node holds a copy, so only a data node watches.
-func (e *Engine) watchArtifactCopies(ctx context.Context) {
-	serving := true
-	for {
-		faulted := e.local.faultedUnasked(ctx)
-		if faulted == serving {
-			serving = !faulted
-			log.InfoContext(ctx, "artifact_copies_serving", "serving", serving,
-				"detail", "the sockets' artifact rooms re-read through the estate router "+
-					"at every switch, and hear this node's appliers only while it serves")
-			if fn := e.onArtifactsServing.Load(); fn != nil && *fn != nil {
-				(*fn)(serving)
-			}
-		}
-		if !sleepCtx(ctx, servingRecheck) {
-			return
-		}
-	}
-}
-
-// armArtifactWatch starts the copy watcher on a data node; its lifetime is the
-// engine's, ended by [Engine.stopArtifactWatch].
-func (e *Engine) armArtifactWatch(ctx context.Context) {
-	if e.local == nil {
-		return
-	}
-	watchCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		e.watchArtifactCopies(watchCtx)
-	}()
-	e.stopArtifactWatchFn = func() {
-		cancel()
-		<-done
-	}
-}
-
-// stopArtifactWatch ends the copy watcher.
-func (e *Engine) stopArtifactWatch() {
-	if e.stopArtifactWatchFn != nil {
-		e.stopArtifactWatchFn()
-		e.stopArtifactWatchFn = nil
-	}
 }

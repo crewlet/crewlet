@@ -114,8 +114,10 @@ func engineKinds(t *testing.T) []string {
 			}
 		}
 	}
-	// A FLOOR, not a count: fourteen today, and a gate that read none — a
-	// Kind moved to another file shape, or the type renamed — must not pass.
+	// A FLOOR, NOT A COUNT, and stated without the number it stands at: a
+	// count here is a comment every new kind makes stale, while what the
+	// floor has to catch is a gate that read none — a Kind moved to another
+	// file shape, or the type renamed — and that must not pass.
 	if len(kinds) < 10 {
 		t.Fatalf("found %d Kind constant(s) in this package, so this gate reads "+
 			"less than the socket sends", len(kinds))

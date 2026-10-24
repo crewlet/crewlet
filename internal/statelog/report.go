@@ -102,8 +102,8 @@ type Report struct {
 	// once here. The CLI's exit code is derived from THIS field.
 	Alarms []Alarm `json:"alarms"`
 
-	// Maintenance is the capacity operation currently holding the fleet,
-	// and nil when there is none.
+	// Maintenance is every capacity operation currently holding the
+	// fleet, the oldest first, and absent when there is none.
 	//
 	// ABSENT RATHER THAN ZEROED, because a zeroed block is a claim that an
 	// operation exists in phase "" with nobody outstanding — and the whole
@@ -112,7 +112,23 @@ type Report struct {
 	// no scheduler, no write routes. An hour of that is an outage nobody
 	// is watching, which is what `maintenance_open` alarms on and what
 	// this renders while it is happening rather than after.
-	Maintenance *MaintenanceReport `json:"maintenance,omitempty"`
+	//
+	// EVERY ONE, because a window is per log and two can be open at once (a
+	// fleet resizing two logs runs both in the same restarts), each waiting
+	// on its own nodes. The oldest alone hid what the other was waiting on
+	// until the first had closed.
+	Maintenance []MaintenanceReport `json:"maintenance,omitempty"`
+
+	// MaintenanceUnread is every log whose capacity window this node
+	// couldn't read, and absent when it read every one.
+	//
+	// NOT A LOG WITH NO WINDOW, which is what leaving it out of Maintenance
+	// alone said: the read that fails is the coordination read, and the
+	// outage that fails it is exactly when somebody opens this to ask why the
+	// company has gone quiet. It is THIS NODE'S read: a data node's own boot
+	// reads the same register, and won't start in service while it can't
+	// read a log's window there, for the same reason.
+	MaintenanceUnread []string `json:"maintenance_unread,omitempty"`
 }
 
 // MaintenanceReport is one open capacity operation, as a reader sees it.
@@ -142,15 +158,41 @@ type MaintenanceReport struct {
 	By         string    `json:"by,omitempty"`
 	OperatorID string    `json:"operator_id,omitempty"`
 
-	// ParticipantsMissing names the nodes whose acknowledgement the seal
-	// is still waiting for. EMPTY IS NOT THE SAME AS UNKNOWN: an
-	// operation with nobody outstanding is one waiting on its operator,
-	// and that is the state an operator most needs to be able to see.
+	// ParticipantsMissing names the nodes the window's next step is still
+	// waiting for: at `opened`, those with no restart into a maintenance
+	// mode recorded, which is what the baseline reads ([BaselineMissing]);
+	// from the baseline to the seal, those whose acknowledgement the seal is
+	// still waiting for ([SealOutstanding]); and once it has sealed, none,
+	// since the verify and the release wait on no node.
+	// EMPTY IS NOT THE SAME AS UNKNOWN: an operation with nobody
+	// outstanding is one waiting on its operator, and that is the state an
+	// operator most needs to be able to see.
 	ParticipantsMissing []string `json:"participants_missing,omitempty"`
 
+	// AcksUnread says the acknowledgements ParticipantsMissing is read from
+	// couldn't be read, and AdmissionsUnread the same of the admissions
+	// AdmissionsBlocking is read from. Either list is then absent, and
+	// NEITHER IS EMPTY: a list formed from nothing named every participant
+	// as owing a restart, or nobody's admission as holding the window, and
+	// both surfaces printed it as a fact.
+	AcksUnread       bool `json:"acks_unread,omitempty"`
+	AdmissionsUnread bool `json:"admissions_unread,omitempty"`
+
+	// AdmissionsBlocking names the nodes holding an admission that keeps a
+	// window at `opened` from sending anything ([AdmissionBlocks]). Empty
+	// past `opened`, where no step reads an admission. Said beside the
+	// missing participants because it is the one thing holding a window
+	// that no participant owes: every node can have restarted and the
+	// window still wait on a node that stopped without giving its
+	// admission back.
+	AdmissionsBlocking []string `json:"admissions_blocking,omitempty"`
+
 	// Blocked names why the operation cannot proceed without a person,
-	// empty while it can.
-	Blocked string `json:"blocked,omitempty"`
+	// empty while it can: a code for scripts. BlockedDetail is the same in
+	// the words a person reads ([BlockedDetail]), who blocked it and what
+	// clears it, and it is what every surface shows.
+	Blocked       coord.MaintenanceBlock `json:"blocked,omitempty"`
+	BlockedDetail string                 `json:"blocked_detail,omitempty"`
 
 	// AbandonedBy is who abandoned the operation, once somebody has: a
 	// window blocked because it was abandoned is still carrying out that
@@ -263,6 +305,19 @@ type DomainReport struct {
 	// re-dating it. ABSENT WHEN READ, so only the case a reader must treat
 	// differently carries the key.
 	EvictionsUnreadable bool `json:"evictions_unreadable,omitempty"`
+
+	// BackupAt is when the backup this log's trim counts was taken: the
+	// newest verified point the backup policy takes the word of that
+	// covers this log's stream — a node's copy under `engine`, the
+	// operator's acknowledgement of this log under `operator`. ABSENT
+	// where none covers it, which is the state the backup term blocks on
+	// and the backup-age alarm names, per log.
+	//
+	// PER LOG because the answer differs per log: an acknowledgement
+	// names one stream, and a node's copy reaches the logs it ran. One
+	// instant for the node, which is what the alarm aged, was the newest
+	// point's whatever it covered.
+	BackupAt time.Time `json:"backup_at,omitzero"`
 }
 
 // TrimFloorState says what a domain's trim floor, conclusion and terms are.
@@ -679,6 +734,10 @@ type DomainInputs struct {
 	// evictions failed — see [DomainReport.EvictionsUnreadable].
 	EvictionsUnreadable bool
 
+	// BackupAt is when the backup this log's trim counts was taken — see
+	// [DomainReport.BackupAt] — and zero where none covers the log.
+	BackupAt time.Time
+
 	// SnapshotSkip is this node's snapshot loop's own reason for taking
 	// none, empty when it is taking them.
 	SnapshotSkip SkipReason
@@ -709,6 +768,10 @@ type DomainInputs struct {
 	// evaluated per log, because each log was sized for its own census.
 	LinearizableReads, LinearizableReadsExpected int
 
+	// CeilingField is the Tier A field that sets this log's byte ceiling,
+	// which a log past its census names ([Reading.LogCeilingField]).
+	CeilingField string
+
 	// Tombstones is this log's own evictions: with the register's rows
 	// naming the log and the live data nodes ([ReportInputs.Live]), the
 	// three inputs the trim counts the log's nodes from, which the node
@@ -729,11 +792,12 @@ type ReportInputs struct {
 
 	// Reading is this node's alarm reading, MINUS the conditions that are
 	// per domain: a log's headroom, its ceiling against its window, a
-	// blocked trim, a record held past the deferral grace, an unreadable
-	// floor and a read rate past the census are evaluated per domain here,
-	// from the domain rows and [DomainInputs], so a two-domain fleet
-	// reports which log is full, blocked, holding, refusing or read past
-	// its sizing rather than that something is.
+	// blocked trim, the age of the backup its trim counts, a record held
+	// past the deferral grace, an unreadable floor and a read rate past the
+	// census are evaluated per domain here, from the domain rows and
+	// [DomainInputs], so a fleet reports which log is full, blocked,
+	// uncovered, holding, refusing or read past its sizing rather than that
+	// something is.
 	Reading Reading
 
 	// ReplayWindow is `stream.tracker_retention.min_age`: how much of its
@@ -742,6 +806,16 @@ type ReportInputs struct {
 	// governs every domain's trim — and it is what `log_ceiling_short`
 	// asks each log's ceiling to hold at that log's measured rate.
 	ReplayWindow time.Duration
+
+	// BackupMaxAge is the backup policy every log's backup is aged
+	// against (`backup_max_age`), and zero for a deployment with none.
+	//
+	// HERE AND NOT ON Reading, because the age it is compared with is a
+	// property of each LOG: under `backup_floor: operator` every log is
+	// acknowledged on its own, so the logs' backups have as many ages as
+	// there are logs, and the one age a node-wide reading could carry was
+	// the newest point's — green beside every log that point left out.
+	BackupMaxAge time.Duration
 
 	Domains []DomainInputs
 
@@ -764,8 +838,10 @@ type ReportInputs struct {
 
 	Replica ReplicaReport
 
-	// Maintenance is the open capacity operation, or nil.
-	Maintenance *MaintenanceReport
+	// Maintenance is every open capacity operation, the oldest first, and
+	// MaintenanceUnread every log whose window couldn't be read.
+	Maintenance       []MaintenanceReport
+	MaintenanceUnread []string
 }
 
 // NewReport assembles the answer.
@@ -785,6 +861,7 @@ func NewReport(in ReportInputs) Report {
 	rep.Snapshots = in.snapshots()
 	rep.Alarms = in.alarms(rep.Domains)
 	rep.Maintenance = in.Maintenance
+	rep.MaintenanceUnread = in.MaintenanceUnread
 	// THE LEVEL IS RESOLVED FROM THIS NODE'S OWN LAG, not from the
 	// fleet's: the document's every "this node" figure is a fact this
 	// process states about itself, and a peer whose row could not be read
@@ -863,6 +940,7 @@ func (in ReportInputs) domain(d DomainInputs) DomainReport {
 		NotReady:            d.NotReady,
 		WritesRefused:       d.WritesRefused,
 		EvictionsUnreadable: d.EvictionsUnreadable,
+		BackupAt:            d.BackupAt.UTC(),
 		// AN EMPTY LIST, NEVER NULL: a domain the trim has concluded
 		// nothing about has no terms, and `"terms": null` is what
 		// crashed both retention screens after every reanchor.
@@ -1145,17 +1223,18 @@ func (in ReportInputs) snapshots() []SnapshotReport {
 //
 // # Why the per-domain half is evaluated separately
 //
-// [Reading] describes ONE node, and six of its conditions (the log's headroom,
-// a ceiling too small for the log's own replay window, a blocked trim, a
-// record held past the deferral grace, a floor this node cannot read and a
-// read rate past the log's census) are properties of a DOMAIN ([PerLogKinds]).
-// Evaluating the node-wide reading once and each domain's own fields once per
-// domain is what lets a two-domain fleet say WHICH log is filling. Folding them
-// into one reading would report the worst of the two with no name on it, which
-// is the number an operator then has to go and find by hand, and for the
-// deferral and the floor it would say the WRONG thing about the others, since
-// what the grace does and which re-anchor a floor needs differ from one log to
-// the next.
+// [Reading] describes ONE node, and seven of its conditions (the log's
+// headroom, a ceiling too small for the log's own replay window, a blocked
+// trim, the age of the backup the log's trim counts, a record held past the
+// deferral grace, a floor this node cannot read and a read rate past the log's
+// census) are properties of a DOMAIN ([PerLogKinds]). Evaluating the node-wide
+// reading once and each domain's own fields once per domain is what lets a
+// fleet say WHICH log is filling. Folding them into one reading would report
+// the worst of them with no name on it, which is the number an operator then
+// has to go and find by hand; for the deferral and the floor it would say the
+// WRONG thing about the others, since what the grace does and which re-anchor a
+// floor needs differ from one log to the next; and for the backup it reported
+// the BEST, the newest point's age, for every log that point did not cover.
 //
 // The domain rows are [ReportInputs.domain]'s, one per [ReportInputs.Domains]
 // entry and in the same order, so a row and the inputs it was built from share
@@ -1168,24 +1247,25 @@ func (in ReportInputs) snapshots() []SnapshotReport {
 // operator has to look at. So a kind raised on several logs is one alarm
 // listing them ([Alarm.Domains]), each with its own measurement and the most
 // pressing log's as its detail, rather than one alarm per log that the health
-// count would add up and the gauge would not. The log lines are the one
+// count would add up and the gauge would not. A measurement taken in the same
+// words on several logs no term holds is ONE entry naming them ([withEntry]),
+// so no surface draws one sentence once per log. The log lines are the one
 // surface that stays per log, and the [Tracker] forms them from this list.
 //
 // # A trim the backup policy holds is the backup alarm's
 //
-// While [KindBackupAge] fires, a log held by the backup term whose own
-// [KindTrimBlocked] fires is not a second problem: the backup is the remedy,
-// and the backup alarm already says that the trim waits for one. Its log is
-// listed under that alarm instead, so a company with no backup reads as the
-// one problem it has rather than as one per log. A hold that has not yet
-// lasted past the replay window and a tick, or that keeps nothing past the
-// window, raises nothing and is listed under neither — exactly as a hold by
-// any other term. A log the backup term holds while that alarm is quiet (a
-// backup taken on an earlier generation of the log) stays under
-// [KindTrimBlocked], because nothing else names it.
+// While a log's own [KindBackupAge] fires, its [KindTrimBlocked] held by the
+// backup term is not a second problem: the backup is the remedy, and the backup
+// alarm already says that the trim waits for one. The term and the instant the
+// trim stopped ride on the log's entry under that alarm instead, so a company
+// with no backup reads as the one problem it has rather than as two per log. A
+// hold that has not yet lasted past the replay window and a tick, or that keeps
+// nothing past the window, raises no [KindTrimBlocked] and so is folded nowhere
+// — exactly as a hold by any other term. A log the backup term holds while its
+// OWN backup is inside the policy (a backup taken on an earlier generation of
+// the log) stays under [KindTrimBlocked], because nothing else names it.
 func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 	out := Evaluate(in.Reading)
-	backup := slices.IndexFunc(out, func(a Alarm) bool { return a.Kind == KindBackupAge })
 	// Where each per-domain kind sits in out, and the reading its detail is
 	// from.
 	at := make(map[Kind]int)
@@ -1203,6 +1283,9 @@ func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 			LogBytesPerDay: d.BytesPerDay,
 			LogMaxBytes:    d.MaxBytes,
 			ReplayWindow:   in.ReplayWindow,
+			// THE BACKUP THIS LOG'S TRIM COUNTS, aged against the one
+			// policy: each log has its own, so the age is per log.
+			BackupMaxAge: in.BackupMaxAge,
 			// WHAT THIS NODE HOLDS AND CANNOT READ on this log, as the
 			// caller measured it from its own applier and its own
 			// observations of the floor.
@@ -1214,17 +1297,39 @@ func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 			// AND HOW FAR PAST ITS OWN CENSUS this log's reads run.
 			LinearizableReads:         held.LinearizableReads,
 			LinearizableReadsExpected: held.LinearizableReadsExpected,
+			LogCeilingField:           held.CeilingField,
 		}
 		if d.BlockedBy != "" && !d.BlockedSince.IsZero() {
 			perDomain.TrimBlockedFor = in.At.Sub(d.BlockedSince)
 		}
-		for _, a := range Evaluate(perDomain) {
-			entry := AlarmDomain{Domain: d.Domain, Detail: a.Detail}
-			if a.Kind == KindTrimBlocked {
-				entry.Term, entry.Since = d.BlockedBy, d.BlockedSince
-				if d.BlockedBy == TermBackupFloor && backup >= 0 {
-					out[backup].Domains = append(out[backup].Domains, entry)
+		if !d.BackupAt.IsZero() {
+			perDomain.BackupAge = Age(in.At.Sub(d.BackupAt))
+		}
+		fired := Evaluate(perDomain)
+		// FOLDED ONLY WHERE BOTH FIRE ON THIS LOG: its trim_blocked, raised
+		// on the backup term, and its own backup_age. A younger hold raises
+		// no trim_blocked, so there is nothing to fold and nothing to stamp
+		// on the backup entry; a hold whose own backup is inside the policy
+		// raises no backup_age, so it stays under trim_blocked.
+		trimAt := slices.IndexFunc(fired, func(a Alarm) bool { return a.Kind == KindTrimBlocked })
+		heldByBackup := d.BlockedBy == TermBackupFloor && trimAt >= 0 &&
+			slices.ContainsFunc(fired, func(a Alarm) bool { return a.Kind == KindBackupAge })
+		for _, a := range fired {
+			entry := AlarmDomain{Domains: []string{d.Domain}, Detail: a.Detail}
+			switch a.Kind {
+			case KindTrimBlocked:
+				if heldByBackup {
 					continue
+				}
+				entry.Term, entry.Since = d.BlockedBy, d.BlockedSince
+			case KindBackupAge:
+				if heldByBackup {
+					// THE HOLD'S OWN MEASUREMENT RIDES BESIDE THE
+					// BACKUP'S, since its trim_blocked is not raised:
+					// how long the trim has stood still and what it is
+					// keeping is what makes the missing backup urgent.
+					entry.Term, entry.Since = d.BlockedBy, d.BlockedSince
+					entry.Detail += "; " + fired[trimAt].Detail
 				}
 			}
 			slot, seen := at[a.Kind]
@@ -1233,10 +1338,10 @@ func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 				at[a.Kind] = slot
 				out = append(out, Alarm{Kind: a.Kind, Remedy: a.Remedy})
 			}
-			out[slot].Domains = append(out[slot].Domains, entry)
+			out[slot].Domains = withEntry(out[slot].Domains, entry)
 			if current, has := lead[a.Kind]; !has || morePressing(a.Kind, perDomain, current) {
 				lead[a.Kind] = perDomain
-				out[slot].Detail = a.Detail
+				out[slot].Detail = entry.Detail
 			}
 		}
 	}
@@ -1246,6 +1351,21 @@ func (in ReportInputs) alarms(domains []DomainReport) []Alarm {
 		return tableIndex(a.Kind) - tableIndex(b.Kind)
 	})
 	return out
+}
+
+// withEntry is an alarm's entries with one more log's: carried on the entry
+// already naming the same measurement where no trim term holds either, and as
+// an entry of its own otherwise ([AlarmDomain.Domains]).
+func withEntry(entries []AlarmDomain, entry AlarmDomain) []AlarmDomain {
+	if entry.Term == "" {
+		if i := slices.IndexFunc(entries, func(e AlarmDomain) bool {
+			return e.Term == "" && e.Detail == entry.Detail
+		}); i >= 0 {
+			entries[i].Domains = append(entries[i].Domains, entry.Domains...)
+			return entries
+		}
+	}
+	return append(entries, entry)
 }
 
 // pastWindow is how many records a domain's log holds that are older than the
@@ -1287,9 +1407,10 @@ func pastWindow(d DomainReport) uint64 {
 // morePressing reports whether one log's reading of a per-domain alarm is more
 // urgent than current's, which decides whose measurement the alarm leads with:
 // the log with the least headroom left, the ceiling that holds the least of its
-// window, the trim held longest, the record held longest, the floor unreadable
-// longest and the read rate furthest past its census. A tie keeps the log the
-// report reached first, which is the report's own order.
+// window, the trim held longest, the log with no backup at all or else the
+// oldest one, the record held longest, the floor unreadable longest and the
+// read rate furthest past its census. A tie keeps the log the report reached
+// first, which is the report's own order.
 func morePressing(kind Kind, r, current Reading) bool {
 	switch kind {
 	case KindLogHeadroom:
@@ -1306,6 +1427,13 @@ func morePressing(kind Kind, r, current Reading) bool {
 			float64(current.LogMaxBytes)/float64(*current.LogBytesPerDay)
 	case KindTrimBlocked:
 		return r.TrimBlockedFor > current.TrimBlockedFor
+	case KindBackupAge:
+		// NO BACKUP AT ALL LEADS: a nil age is a log nothing covers, which
+		// is worse than any copy that is merely old.
+		if r.BackupAge == nil {
+			return current.BackupAge != nil
+		}
+		return current.BackupAge != nil && *r.BackupAge > *current.BackupAge
 	case KindDeferredOld:
 		return r.DeferredAge > current.DeferredAge
 	case KindFloorUnknown:

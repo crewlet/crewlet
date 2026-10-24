@@ -61,11 +61,10 @@ func (s *served) postPage(w http.ResponseWriter, r *http.Request) {
 // has a header for, and the tool refuses a save without one.
 func (s *served) putPage(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
-	if !ok || !fromPath(w, args, "page", r.PathValue("id")) ||
-		!ifMatch(w, r, args, "base_version") {
+	if !ok || !fromPath(w, args, "page", r.PathValue("id")) {
 		return
 	}
-	s.call(w, r, builtin.SavePageTool, args)
+	s.callIfMatched(w, r, builtin.SavePageTool, args, "base_version")
 }
 
 func (s *served) postPageComment(w http.ResponseWriter, r *http.Request) {
@@ -166,7 +165,7 @@ func (s *served) postPagePurge(w http.ResponseWriter, r *http.Request) {
 	if pages.NormalizeTitle(confirm) != pages.NormalizeTitle(detail.Page.Title) {
 		httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeInvalid,
 			map[string]string{"detail": fmt.Sprintf("?confirm= says %q and the "+
-				"page is %q — nothing was destroyed", confirm, detail.Page.Title)})
+				"page is %q, so nothing was destroyed", confirm, detail.Page.Title)})
 		return
 	}
 	if !s.maySkillPage(w, r, detail.Page.Container) {

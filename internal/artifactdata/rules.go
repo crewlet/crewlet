@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata/query"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE COLLECTION RULES: the name grammar, the presets and what they compile to,
@@ -143,8 +144,8 @@ func Compile(c artifacts.Collection) (artifacts.Collection, error) {
 	if c.Preset != "" {
 		rules, known := presetRules[c.Preset]
 		if !known {
-			return c, fmt.Errorf("%w: collection %q: preset %q is not one of %v", ErrInvalid,
-				c.Name, c.Preset, artifacts.Presets)
+			return c, fmt.Errorf("%w: collection %q: preset %q is not one of %s", ErrInvalid,
+				c.Name, c.Preset, words.Or(artifacts.Presets))
 		}
 		for _, clash := range []struct {
 			field      string
@@ -174,16 +175,16 @@ func ValidateCollection(c artifacts.Collection) error {
 	switch {
 	case !artifacts.ValidCollectionName(c.Name):
 		return fail("a collection name is a lowercase letter, then lowercase letters, digits "+
-			"and `_`, at most %d bytes, and not one of %v", artifacts.MaxCollectionNameBytes,
-			artifacts.ReservedCollections)
+			"and `_`, at most %d bytes, and not one of %s", artifacts.MaxCollectionNameBytes,
+			words.Or(artifacts.ReservedCollections))
 	case len(c.Title) > MaxLabelBytes:
 		return fail("the title is %d bytes and the maximum is %d", len(c.Title), MaxLabelBytes)
 	case c.Preset != "" && !c.Preset.Valid():
-		return fail("preset %q is not one of %v", c.Preset, artifacts.Presets)
+		return fail("preset %q is not one of %s", c.Preset, words.Or(artifacts.Presets))
 	case !c.Read.Valid():
-		return fail("read rule %q is not one of %v", c.Read, artifacts.ReadRules)
+		return fail("read rule %q is not one of %s", c.Read, words.Or(artifacts.ReadRules))
 	case !c.Create.Valid() || !c.Delete.Valid():
-		return fail("the create and delete roles are each one of %v", artifacts.Roles)
+		return fail("the create and delete roles are each one of %s", words.Or(artifacts.Roles))
 	case c.MaxRows < 0 || c.MaxRows > artifacts.MaxDocsPerStore:
 		return fail("max_rows is 0..%d", artifacts.MaxDocsPerStore)
 	case c.MaxRowsPerPrincipal < 0 || c.MaxRowsPerPrincipal > artifacts.MaxDocsPerStore:
@@ -240,19 +241,19 @@ func validateColumn(col artifacts.Column) error {
 		return fail("a column key is a field name: a letter, then letters, digits and `_`, at "+
 			"most %d bytes", artifacts.MaxFieldNameBytes)
 	case !col.Type.Valid():
-		return fail("type %q is not one of %v", col.Type, artifacts.ColumnTypes)
+		return fail("type %q is not one of %s", col.Type, words.Or(artifacts.ColumnTypes))
 	case len(col.Label) > MaxLabelBytes:
 		return fail("the label is %d bytes and the maximum is %d", len(col.Label), MaxLabelBytes)
 	case col.Write != "" && !col.Write.Valid():
-		return fail("write role %q is not one of %v", col.Write, artifacts.Roles)
+		return fail("write role %q is not one of %s", col.Write, words.Or(artifacts.Roles))
 	case col.When != "" && !col.When.Valid():
-		return fail("condition %q is not one of %v", col.When, artifacts.FieldConditions)
+		return fail("condition %q is not one of %s", col.When, words.Or(artifacts.FieldConditions))
 	case col.When != "" && col.Write == "":
 		return fail("a condition narrows a write role the column names, and it names none")
 	case col.When != artifacts.WhenAssignedToViewer && col.AssignedField != "":
 		return fail("assigned_field is read only by the assigned_to_viewer condition")
 	case col.Mode != "" && !col.Mode.Valid():
-		return fail("mode %q is not one of %v", col.Mode, artifacts.FieldModes)
+		return fail("mode %q is not one of %s", col.Mode, words.Or(artifacts.FieldModes))
 	case col.Mode == artifacts.FieldAppend && !appendable(col.Type):
 		return fail("mode append is for text, long text and multiselect columns")
 	case col.MaxLength < 0 || col.MaxItems < 0:
@@ -298,7 +299,7 @@ func validateColumn(col artifacts.Column) error {
 				return fail("option %q's color is a design-token hue name such as `green`, "+
 					"never a literal colour", o.ID)
 			case col.Type == artifacts.ColumnStatus && !slices.Contains(StatusCategories, o.Category):
-				return fail("status option %q names a category, one of %v", o.ID, StatusCategories)
+				return fail("status option %q names a category, one of %s", o.ID, words.Or(StatusCategories))
 			case col.Type != artifacts.ColumnStatus && o.Category != "":
 				return fail("option %q names a category, which only a status column reads", o.ID)
 			}

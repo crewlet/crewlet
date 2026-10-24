@@ -26,11 +26,19 @@ import (
 // the last one it honoured waits for the tick, which is the latency it would
 // have had without asking. Wall-clock, like the ticker, never the injected
 // clock the leases are judged by.
+//
+// AN ASKED-FOR PASS THE CLAIM GATE WITHHELD SPENDS NOTHING when it gave
+// nothing back either ([SweepResult.idle]): it claimed nothing, so the rate the
+// claim limit bounds is untouched, and the next ask is honoured as though none
+// had come. Counted, an apply's ask that found the node still catching up with
+// its logs spent the interval, and the ask that says the gate has opened
+// ([Config.Ready]) — the one that would actually claim — waited for the tick.
 func (h *Host) sweepLoop(ctx context.Context, asks <-chan struct{}) {
 	ticker := time.NewTicker(h.sweepEvery)
 	defer ticker.Stop()
 	var asked time.Time
 	for {
+		honoured := false
 		select {
 		case <-ctx.Done():
 			return
@@ -39,10 +47,14 @@ func (h *Host) sweepLoop(ctx context.Context, asks <-chan struct{}) {
 			if !asked.IsZero() && time.Since(asked) < h.sweepEvery {
 				continue
 			}
-			asked = time.Now()
+			asked, honoured = time.Now(), true
 			ticker.Reset(h.sweepEvery)
 		}
-		h.safely("seat_sweep_tick_failed", func() { h.Sweep(ctx) })
+		var result SweepResult
+		h.safely("seat_sweep_tick_failed", func() { result = h.Sweep(ctx) })
+		if honoured && result.idle() {
+			asked = time.Time{}
+		}
 	}
 }
 
@@ -50,7 +62,10 @@ func (h *Host) sweepLoop(ctx context.Context, asks <-chan struct{}) {
 // without waiting for it. For a change to the seats [Config.Seats] answers —
 // a role added or removed, a placement moved, a node's first company — which
 // the next tick would otherwise be the first to see, up to [SweepInterval]
-// later with every new seat unclaimed and every removed one still held.
+// later with every new seat unclaimed and every removed one still held. And
+// for the claim gate opening ([Config.Ready]), which only the gate's owner can
+// see: a node refused by it claims nothing, and the tick was the first thing
+// to ask it again.
 //
 // DROPPED BY A HOST THAT IS NOT RUNNING, whose [Host.Start] begins with a pass
 // of its own over the seats as they are by then. Kept, an ask made before the
@@ -998,8 +1013,9 @@ func (h *Host) checkFleetRoles(live []placement.NodeProfile) {
 // The hook is BOUNDED. Answering may mean reading the control plane, and
 // this is the path that renews presence: an unbounded read on a wedged store
 // would hold the beat until the watchdog shot the process, to publish a
-// display column. Overrunning it publishes the placement half alone, which
-// the reading side already renders as "did not say".
+// display column. A hook that does not answer — it says so with its error,
+// see [Config].Status — publishes the placement half alone, which the
+// reading side already renders as "did not say".
 func (h *Host) presenceMeta(ctx context.Context) map[string]any {
 	meta := h.profile.Meta()
 	// HOW MANY SEATS THIS NODE HOLDS, which its peers sum to learn whether
@@ -1020,8 +1036,12 @@ func (h *Host) presenceMeta(ctx context.Context) map[string]any {
 	}
 	ctx, cancel := context.WithTimeout(ctx, h.statusBudget())
 	defer cancel()
-	status := h.status(ctx)
-	if ctx.Err() != nil {
+	// NOT ctx.Err() after the call. Whether the hook answered is the
+	// hook's fact: the clock read here cannot tell a hook the deadline
+	// cut short from one that had already returned its whole answer when
+	// the goroutine was descheduled past the deadline.
+	status, err := h.status(ctx)
+	if err != nil {
 		return meta
 	}
 	meta[coord.StatusKey] = status.Meta()

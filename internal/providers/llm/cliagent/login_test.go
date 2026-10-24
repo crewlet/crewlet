@@ -570,7 +570,7 @@ func TestALogoutIsNotUndoneByTheConfiguredBundle(t *testing.T) {
 	}
 	for _, want := range []string{"`crewlet llm login sub -from-host`", "`crewlet llm import sub`",
 		"a headless token signs the entry in without ending the logout",
-		"fresh volume", "crewlet secrets unset " + BundleVarName("sub")} {
+		"fresh volume", "crewlet secrets unset " + BundleVarName("sub") + " -api URL"} {
 		if err != nil && !strings.Contains(err.Error(), want) {
 			t.Errorf("the decline does not name %q: %v", want, err)
 		}
@@ -591,8 +591,12 @@ func TestALogoutIsNotUndoneByTheConfiguredBundle(t *testing.T) {
 	// from: the conventional secret here, the field where one is set — and
 	// that a headless token, which writes no login there, does not end it.
 	notice := logoutNotice(t, p)
+	// And how the bundle is retired from the FLEET's store: the logout runs
+	// where no engine holds this node's, so `secrets unset` here reaches the
+	// fleet only at the next start, and `-api` is the way to reach it now.
 	for _, want := range []string{BundleVarName("sub"), "fresh volume", "`crewlet llm login sub -from-host`",
-		"`-token-stdin` signs it in without ending this"} {
+		"`-token-stdin` signs it in without ending this",
+		"`crewlet secrets unset " + BundleVarName("sub") + " -api URL`", "next start"} {
 		if !strings.Contains(notice, want) {
 			t.Errorf("the logout notice does not name %q: %s", want, notice)
 		}

@@ -456,22 +456,12 @@ func taskBodies(n int) map[string]string {
 // published is the envelope of every record on the log, in log order.
 func published(t *testing.T, h *embedHarness) []search.RecordEnvelope {
 	t.Helper()
-	last, err := h.log.End(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out []search.RecordEnvelope
-	for seq := uint64(1); seq <= last; seq++ {
-		_, payload, _, ok, err := h.log.At(t.Context(), seq)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !ok {
-			continue
-		}
+	_, records := h.readLog(1)
+	out := make([]search.RecordEnvelope, 0, len(records))
+	for _, rec := range records {
 		// THE FRAME FIRST: every record on the log is signed, and what a
 		// domain decodes is the body inside it.
-		env, err := search.DecodeEnvelope(h.open(seq, payload))
+		env, err := search.DecodeEnvelope(h.open(rec.seq, rec.payload))
 		if err != nil {
 			t.Fatal(err)
 		}

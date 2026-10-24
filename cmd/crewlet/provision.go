@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The provisioning commands, and the flags they share.
@@ -51,7 +52,7 @@ func addSinkFlags(fs *flag.FlagSet) sinkFlags {
 		// reason: a running engine holds its database, so -secret-store
 		// writes through its API — which is also what puts a minted
 		// credential on every node rather than on this one.
-		api: fs.String("api", "",
+		api: nodeAPIFlag(fs,
 			"the running node to record credentials through; default is the "+
 				"api.host:port in -config"),
 	}
@@ -189,11 +190,11 @@ func companyResolver(ctx context.Context, bootstrapPath string, notes io.Writer)
 // Deliberately NOT through [companyResolver], which every company value goes
 // through. This is the operator's credential rather than the company's, and
 // the difference is not bookkeeping: a GitLab admin PAT carries `api` scope
-// over the whole group, and the secret store is replicated to every node
-// that holds the keyring. Crewlet never persists one, and reading one back
-// from the store would imply it may be kept there — which is how the most
-// powerful credential in the deployment ends up in the shared table beside
-// the seat tokens it exists to mint.
+// over the whole group, and the secret store is held on the coordination KV,
+// which every node reads and every node's keyring opens. Crewlet never
+// persists one, and reading one back from the store would imply it may be
+// kept there — which is how the most powerful credential in the deployment
+// ends up in the shared store beside the seat tokens it exists to mint.
 func operatorCredential(name string) string {
 	return strings.TrimSpace(config.EnvOnly().Lookup(name))
 }
@@ -265,7 +266,7 @@ func runGitLabProvision(environ config.Source, args []string, stdout, stderr io.
 	// working out which seats landed.
 	if modeGiven && !gitlab.Mode(*mode).Valid() {
 		return fmt.Errorf("-mode %q is not one of %s",
-			*mode, strings.Join(gitlab.Modes(), ", "))
+			*mode, words.Or(gitlab.Modes()))
 	}
 
 	company, err := config.LoadCompanyToRun(companyPath)
@@ -441,7 +442,7 @@ func printKept(w io.Writer, kept []string) {
 	if len(kept) == 0 {
 		return
 	}
-	fmt.Fprintf(w, "Left %d seat(s) alone — their credential still works, "+
+	fmt.Fprintf(w, "Left %d seat(s) alone: their credential still works, "+
 		"and rotating it would revoke what the running engine is using: %s\n"+
 		"  (pass -rotate to mint fresh ones, and restart the engine after)\n",
 		len(kept), strings.Join(kept, ", "))
@@ -785,7 +786,7 @@ func printDoctor(w io.Writer, report *mattermost.Report) {
 		// SAID OUT LOUD: one failing line with nothing after it reads
 		// as "one thing is wrong", when what it means is "nothing else
 		// was even asked".
-		fmt.Fprintln(w, "\nThe checks stopped here — everything below this "+
+		fmt.Fprintln(w, "\nThe checks stopped here: everything below this "+
 			"would have reported a consequence rather than a cause. Fix it "+
 			"and run again.")
 	case report.Healthy():

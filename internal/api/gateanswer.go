@@ -195,20 +195,19 @@ func RenderGateRefusal(node, opID string, err error) (GateRefusal, bool) {
 		// remedy is the fleet's return to normal mode rather than anything
 		// about the node named. Nothing was judged and nothing was written.
 		return GateRefusal{Status: http.StatusConflict, Code: httpjson.CodeNotPublishing,
-			Fields: httpjson.Detail{
-				"detail": err.Error(),
+			Fields: withTold(httpjson.Detail{
 				"hint": "this node is in a capacity window and writes nothing to " +
 					"the logs until the fleet is restarted into normal mode; run " +
 					"the gesture again then",
 				"actions": []statelog.GateAction{statelog.GateWait},
 				"node":    node, "op_id": opID,
-			}}, true
+			}, err)}, true
 	case errors.Is(err, engine.ErrInvalidGate):
 		// A NODE ID NO NODE COULD RUN UNDER is a typo rather than a fault,
 		// and it is the caller's to fix: nothing was judged and nothing
 		// was written.
 		return GateRefusal{Status: http.StatusBadRequest, Code: httpjson.CodeInvalidGate,
-			Fields: httpjson.Detail{"detail": err.Error()}}, true
+			Fields: withTold(httpjson.Detail{}, err)}, true
 	case errors.As(err, &unjudged):
 		// COORDINATION COULD NOT BE READ HERE, which is this node's
 		// condition rather than the target's — so a 503 carrying the way
@@ -220,7 +219,7 @@ func RenderGateRefusal(node, opID string, err error) (GateRefusal, bool) {
 		return GateRefusal{Status: http.StatusServiceUnavailable,
 			Code: httpjson.CodeEvictionUnjudged, RetryAfter: authz.RetryUndecidedSeconds,
 			Fields: httpjson.Detail{
-				"detail": unjudged.Error(), "hint": remedy.Detail,
+				"detail": unjudged.Tell(), "hint": remedy.Detail,
 				"actions": remedy.Actions, "node": node, "op_id": opID,
 			}}, true
 	case errors.As(err, &readmissionUnjudged):
@@ -232,7 +231,7 @@ func RenderGateRefusal(node, opID string, err error) (GateRefusal, bool) {
 		// for is one read coming back.
 		remedy := readmissionUnjudged.Remedy()
 		fields := httpjson.Detail{
-			"detail": readmissionUnjudged.Error(), "hint": remedy.Detail,
+			"detail": readmissionUnjudged.Tell(), "hint": remedy.Detail,
 			"actions": remedy.Actions, "node": node, "op_id": opID,
 		}
 		if readmissionUnjudged.Log != "" {
@@ -248,7 +247,7 @@ func RenderGateRefusal(node, opID string, err error) (GateRefusal, bool) {
 		remedy := readmission.Remedy()
 		return GateRefusal{Status: http.StatusConflict,
 			Code: httpjson.CodeReadmissionRefused, Fields: httpjson.Detail{
-				"detail": readmission.Error(),
+				"detail": readmission.Tell(),
 				"hint":   remedy.Detail, "actions": remedy.Actions,
 				"node": node, "op_id": opID, "domain": readmission.Domain,
 				"published":        readmission.Published,
@@ -264,11 +263,22 @@ func RenderGateRefusal(node, opID string, err error) (GateRefusal, bool) {
 		remedy := eviction.Remedy()
 		return GateRefusal{Status: http.StatusConflict,
 			Code: httpjson.CodeEvictionRefused, Fields: httpjson.Detail{
-				"detail": eviction.Error(), "hint": remedy.Detail,
+				"detail": eviction.Tell(), "hint": remedy.Detail,
 				"actions": remedy.Actions, "node": node, "op_id": opID,
 			}}, true
 	}
 	return GateRefusal{}, false
+}
+
+// withTold is fields with the sentence err tells its operator as the detail
+// ([statelog.Told]), and fields alone for an error that tells none, whose code
+// says it in its own sentence: never the error's text, which names the
+// package that wrote it.
+func withTold(fields httpjson.Detail, err error) httpjson.Detail {
+	if said, ok := statelog.Tell(err); ok {
+		fields["detail"] = said
+	}
+	return fields
 }
 
 // logGateRefusal is the route's own line for a refusal it answered, naming who
@@ -296,6 +306,9 @@ func logGateRefusal(by iam.Actor, node string, err error) {
 			"operator", by.OperatorID, "node", node, "detail", eviction.Detail)
 	case errors.Is(err, engine.ErrNotPublishing):
 		log.Info("retention_gate_not_publishing", "by", by.Name,
+			"operator", by.OperatorID, "node", node, "detail", err.Error())
+	case errors.Is(err, engine.ErrInvalidGate):
+		log.Info("retention_gate_invalid", "by", by.Name,
 			"operator", by.OperatorID, "node", node, "detail", err.Error())
 	}
 }

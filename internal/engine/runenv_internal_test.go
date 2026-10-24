@@ -73,11 +73,16 @@ func TestARunSandboxLaunchIsRefusedUntilItsEnvironmentResolves(t *testing.T) {
 	if err == nil {
 		t.Fatal("a run whose code-host token is unset was launched")
 	}
-	for _, said := range []string{"no box was started", "${SWE_GITLAB_TOKEN} is not set",
+	// THE ERROR IS THE LOG'S DETAIL, the class is what the tool tells its
+	// model: a variable nobody set is a person's to set.
+	for _, said := range []string{"no box is started", "${SWE_GITLAB_TOKEN} is not set",
 		"list GITLAB_TOKEN under role.sandbox.optional_keys"} {
 		if !strings.Contains(err.Error(), said) {
 			t.Errorf("the refusal %q does not say %q", err, said)
 		}
+	}
+	if why, ok := sandbox.WhyOf(err); !ok || why != sandbox.WhyConfiguration {
+		t.Errorf("the refusal is classed %q (%v), want %q", why, ok, sandbox.WhyConfiguration)
 	}
 	if strings.Contains(err.Error(), "SWE_TEST_DATABASE") || strings.Contains(err.Error(), "NPM") {
 		t.Errorf("the refusal names what the run declared it may go without: %v", err)
@@ -128,12 +133,15 @@ func TestARunWaitingForAMintedCredentialIsRefusedSayingWhenItCanRun(t *testing.T
 	if run.gap == nil || !run.gap.waiting() {
 		t.Fatalf("gap = %+v: want a run waiting for the gitlab integration", run.gap)
 	}
-	refusal := run.gap.runRefusal()
-	for _, said := range []string{"waiting for the gitlab integration to mint ${SWE_GITLAB_TOKEN}",
-		"try again then"} {
-		if !strings.Contains(refusal, said) {
-			t.Errorf("the refusal %q does not say %q", refusal, said)
-		}
+	// A WAIT CLEARS IT, so the launch is classed as one, and the log says
+	// what it waits for.
+	if why := run.gap.launchWhy(); why != sandbox.WhyAwaitingCredential {
+		t.Errorf("a run waiting for a minted credential is classed %q, want %q",
+			why, sandbox.WhyAwaitingCredential)
+	}
+	if said := run.gap.reason(); !strings.Contains(said,
+		"waiting for the gitlab integration to mint ${SWE_GITLAB_TOKEN}") {
+		t.Errorf("the gap %q does not say what it waits for", said)
 	}
 	run.logGap(t.Context(), seat.Handle(), "no box is started")
 	if lines := logs.records("sandbox_env_unresolved", "swe"); len(lines) != 1 ||
@@ -168,15 +176,17 @@ func TestARunWaitingForAMintedCredentialIsRefusedSayingWhenItCanRun(t *testing.T
 	if stopped.gap == nil || stopped.gap.waiting() {
 		t.Fatalf("gap = %+v: want a run the blocked gitlab pass will not mint for", stopped.gap)
 	}
-	refusal = stopped.gap.runRefusal()
+	refusal := stopped.gap.reason()
 	for _, said := range []string{"the gitlab integration will not mint", "until a person acts",
 		"admin token"} {
 		if !strings.Contains(refusal, said) {
-			t.Errorf("the refusal %q does not say %q", refusal, said)
+			t.Errorf("the gap %q does not say %q", refusal, said)
 		}
 	}
-	if strings.Contains(refusal, "try again then") {
-		t.Errorf("a run no pass will mint for is told to try again: %q", refusal)
+	// AND NO WAIT CLEARS IT: a run no pass will mint for is a person's to
+	// supply, which the tool tells its model rather than to try again.
+	if why := stopped.gap.launchWhy(); why != sandbox.WhyConfiguration {
+		t.Errorf("a run no pass will mint for is classed %q, want %q", why, sandbox.WhyConfiguration)
 	}
 
 	// DECLARED OPTIONAL, IT IS STILL WAITED FOR: the declaration is for a

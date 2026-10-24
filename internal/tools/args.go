@@ -6,47 +6,26 @@ import (
 	"errors"
 	"io"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/plainjson"
 )
 
 // RecordArgs renders a call's arguments as the JSON text a RECORD holds — a
 // phase event's payload, a bridged run's row — for a person to read back on a
-// transcript afterwards.
+// transcript afterwards: [plainjson.Marshal] on one line, so a URL argument
+// reads `?a=1&b=2` on the screen rather than the escapes an HTML-safe encoder
+// writes (that package's doc says why it is not `json.Marshal`).
 //
-// NOT `json.Marshal`, and the difference is one that reader sees. Marshal
-// escapes `<`, `>` and `&` into `\u003c`, `\u003e` and `\u0026` so its
-// output can be dropped inside an HTML document without closing a tag. Nothing
-// on this path is such a document: the bytes go into a store column and come
-// out as the text of a `pre`. What the escaping buys here is nothing, and what
-// it costs is that every URL argument reads `?a=1\u0026b=2` and every
-// markdown or HTML body `\u003ch1\u003e` on the one screen somebody opens
-// to find out what a tool was actually called with.
-//
-// ONE FUNCTION because the two callers are two copies of one rule, which is
-// how the copies in this tree have always started drifting: `internal/whsec`
-// and `internal/textcut` are both what a second spelling of a small decision
-// cost. What stays with each caller is what genuinely differs — a phase event
-// spells "no arguments" as `{}` and a bridged run's row spells it as the empty
-// string, and an encoder that chose for them would be choosing what two
-// different screens say.
-//
-// NOT the only place the rule is written down. `internal/agent/ledger` renders
-// a call into a prior-work line for the model to re-read — and for a person to
-// read, since that line is what the seat screen shows as the conversation
-// ledger — and imports nothing from crewlet by design, so it keeps its own
-// encoder with the same escaping off. The two point at each other rather than
-// folding into one name, because the import would drag this whole tool layer
-// behind a type the turn context, the prompt builder and the API all hold.
+// What stays with each of its two callers is how it spells "no arguments": a
+// phase event spells it as `{}` and a bridged run's row as the empty string,
+// and an encoder that chose for them would be choosing what two different
+// screens say.
 func RecordArgs(args map[string]any) (string, error) {
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(args); err != nil {
+	text, err := plainjson.Marshal(args, "")
+	if err != nil {
 		return "", err
 	}
-	// Encode writes a trailing newline after the document. A record holds the
-	// document alone — the newline would be one more byte every consumer has
-	// to know to ignore.
-	return strings.TrimSuffix(buf.String(), "\n"), nil
+	return string(text), nil
 }
 
 // ReadArgs turns a recorded argument document back into the map a renderer
@@ -97,3 +76,58 @@ func ReadArgs(raw string) map[string]any {
 	}
 	return args
 }
+
+// DecodeCallArgs reads the arguments a caller sent one tool over a transport —
+// a person's request on the HTTP write surface or the act transport, an
+// operator's assistant over MCP, a coding agent over the bridge: nothing at
+// all (empty, whitespace or a literal `null`) is a call with no arguments, and
+// anything else must be exactly one JSON object. The map is never nil.
+//
+// THROUGH json.Number, because every reader of a tool's arguments reads one —
+// a seat's arguments arrive that way from its provider
+// ([github.com/crewlet/crewlet/internal/providers/llm/httpapi.DecodeArgs]) and
+// the tools are written for it. Decoded into a float64 instead, an integer
+// past 2^53 is rounded before any tool sees it: a 19-digit vendor id names a
+// different entity, and a whole-number custom-field value is stored as one
+// its writer never typed, and nothing reports an error.
+//
+// EXACTLY ONE VALUE, for [ReadArgs]'s reason: a Decoder reads one value and
+// stops, so a request body `{"a":1} {"a":2}` would decode clean with the
+// second dropped in silence — a call nobody can say which half of to run.
+//
+// ONE FUNCTION for every transport, because the copies had already drifted:
+// the bridge read through json.Number while the HTTP write surface, the act
+// transport and the operator's MCP read every number as a float64.
+//
+// ARGUMENTS THAT DO NOT DECODE ARE SAID IN WORDS ([plainjson.Unreadable]), the
+// decoder's error beneath them for a caller that names the document otherwise:
+// a model and a person each read "invalid character '}' looking for beginning
+// of object key string" where they now read where the arguments went wrong.
+func DecodeCallArgs(raw []byte) (map[string]any, error) {
+	if trimmed := bytes.TrimSpace(raw); len(trimmed) == 0 || string(trimmed) == "null" {
+		return map[string]any{}, nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var args map[string]any
+	if err := dec.Decode(&args); err != nil {
+		return nil, &unreadableArgs{err: err}
+	}
+	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
+		return nil, &unreadableArgs{err: plainjson.ErrTrailing}
+	}
+	if args == nil {
+		args = map[string]any{}
+	}
+	return args, nil
+}
+
+// unreadableArgs is a call's arguments that did not decode, said in words
+// ([plainjson.Unreadable]); the decoder's error is beneath it, so a surface
+// that calls the document something else words it again.
+type unreadableArgs struct{ err error }
+
+func (e *unreadableArgs) Error() string {
+	return plainjson.Unreadable("the arguments object", e.err)
+}
+func (e *unreadableArgs) Unwrap() error { return e.err }

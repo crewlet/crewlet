@@ -14,14 +14,14 @@
  * (their record is their login) and is asked like anybody.
  */
 
-import { Card, EmptyState, Tag } from "@crewlethq/ui";
+import { Card, Tag } from "@crewlethq/ui";
 import { TriangleAlertGlyph } from "@crewlethq/icons/glyphs";
-import { QueryState } from "~/components/common.tsx";
 import { DecisionList, decisionsHref } from "~/components/DecisionRow.tsx";
 import { decisionSubjects, type SeatCondition } from "~/lib/decisions.ts";
 import type { ViewerState } from "~/lib/viewer.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import type { DecisionsAnswer, LogRefusal, QueryRefusal } from "~/protocol/index.ts";
+import { WidgetQuery, gapsOf } from "./board/kit.tsx";
 
 /** What a reader signed in as nobody is told: a decision is a person's, so
  *  there is nothing to list until the browser is somebody. */
@@ -78,25 +78,30 @@ export function Decisions({
       {!viewer.owner && !viewer.loading ? (
         <p className="home-card-note">{NOBODY_SENTENCE}</p>
       ) : (
-        <QueryState error={error} refusal={refusal} loading={loading && !answer}>
-          {subjects.length === 0 ? (
-            // WHAT THE CARD IS FOR, not "nothing" a third time: the greeting
-            // and the figure above already say none is waiting.
-            <EmptyState
-              size="compact"
-              headingLevel="none"
-              title="No decisions waiting"
-              description="When an agent asks you something, it appears here with the way to answer."
-            />
-          ) : (
-            <DecisionList
-              subjects={subjects}
-              decider={{ handle: viewer.owner }}
-              now={now}
-              limit={HOME_DECISIONS}
-            />
-          )}
-        </QueryState>
+        <WidgetQuery
+          error={error}
+          refusal={refusal}
+          loading={loading && !answer}
+          gaps={gapsOf([answer])}
+          // WHAT THE CARD IS FOR, not "nothing" a third time: the greeting
+          // and the figure above already say none is waiting.
+          empty={
+            subjects.length === 0
+              ? {
+                  headingLevel: "none",
+                  title: "No decisions waiting",
+                  hint: "When an agent asks you something, it appears here with the way to answer.",
+                }
+              : undefined
+          }
+        >
+          <DecisionList
+            subjects={subjects}
+            decider={{ handle: viewer.owner }}
+            now={now}
+            limit={HOME_DECISIONS}
+          />
+        </WidgetQuery>
       )}
     </Card>
   );

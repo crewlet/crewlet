@@ -24,8 +24,8 @@ Crewlet uses a [two-tier config](../concepts/configuration.md):
 ## 0. There is no infrastructure to start
 
 Crewlet is one binary. Its event stream is a NATS JetStream server it
-embeds, and its database is a local file it creates — so a company runs with
-no broker to operate and nothing to point a DSN at. Both slots take an
+embeds, and its database is two local files it creates — so a company runs
+with no broker to operate and nothing to point a DSN at. The stream takes an
 external address when a deployment outgrows that; see
 [Deployment](../guides/deployment.md).
 
@@ -54,9 +54,9 @@ stream:
                           #   survives a restart — including the people
                           #   who sign in, whom every node keeps on a
                           #   state log whatever backends the company
-                          #   names, and its items and pages, which are on
-                          #   the engine's own tracker and knowledge base
-                          #   here. The engine
+                          #   names, and its items, pages and messages,
+                          #   which are on the engine's own tracker,
+                          #   knowledge base and chat here. The engine
                           #   REFUSES to boot without one rather than lose
                           #   them at the first restart
 
@@ -105,7 +105,7 @@ api:
         token: "${CREWLET_API_TOKEN_FOUNDER}"   # 26 characters at minimum
         grants: [admin]   # what this credential may do — required and
                           #   non-empty: admin, tracker, knowledge,
-                          #   artifacts. Admin runs the company and
+                          #   artifacts, chat. Admin runs the company and
                           #   includes every app.
 
 secrets:                  # REQUIRED. Every record on every state log — the
@@ -153,8 +153,10 @@ roles:
   # you connect later. It is also the seat you join on in step 4: every
   # person holds a human seat, so a company with none admits nobody.
   # `contact` is optional — without one you are reached through the
-  # dashboard only, and agents cannot @-mention you on chat; scope
-  # `manages` to the top seat so you aren't copied on everything.
+  # dashboard only, whose chat is the engine's own and mentions you by your
+  # handle, and agents cannot @-mention you on a vendor's chat you connect
+  # later; scope `manages` to the top seat so you aren't copied on
+  # everything.
   - name: Your Name
     handle: founder             # see the note under this block — set these now
     kind: human
@@ -188,6 +190,10 @@ units:
     type: team
     lead: pm                    # the lead seat's HANDLE
     purpose: "Define what gets built and why"
+    # The team's room. Chat defaults to the engine's own too, so this opens
+    # a channel called `product` with this unit's seats in it — and it is an
+    # address, so it is `product` rather than `#product` or `Product Team`.
+    channel: product
     # A unit's identity on the tracker and the knowledge base. Both default
     # to the engine's own backends, so these two keys are all it takes to
     # give the team somewhere to file work and write things down — no site,
@@ -208,6 +214,7 @@ units:
     type: team
     lead: cto
     purpose: "Build and ship the product"
+    channel: engineering
     project: ENG
     space: ENG
     goals:
@@ -459,8 +466,8 @@ from the keyboard, and on the seat's page). Press **Invite** — the dialog is
 for that seat and offers no other — and fill in
 
 - **your email address** — what the invitation is held against;
-- **your access** — tick **Admin**, which ticks and locks both apps (Tracker
-  and Knowledge) beside it. The founder token holds `admin`, and nobody can
+- **your access** — tick **Admin**, which ticks and locks every app (Tracker,
+  Knowledge and Chat) beside it. The founder token holds `admin`, and nobody can
   confer a permission they do not hold. Keep Admin, or nobody after you can be
   invited or created except with the token again.
 
@@ -510,15 +517,16 @@ credential, not how people should be signing in. Everybody after you arrives
 the same way, on a seat of their own: add a human seat for them (**Org chart ›
 Edit org › Add human seat**), and once it is saved an administrator invites
 them onto it, or creates them on it, from its card in the org chart — with
-both apps ticked by default and Admin not. A person handed no permission at all
+every app ticked by default and Admin not. A person handed no permission at all
 still sees the company's overview: the org chart, what the agents are doing,
-spend and schedules — just not its tracker or its knowledge base.
+spend and schedules — just not its tracker, its knowledge base or its chat.
 
 **From a shell instead**, `crewlet iam invite` issues the same invitation
 through the running node, authenticating with `CREWLET_API_TOKEN` like every
-command that talks to one, and prints its link once. `-seat` is required —
-every invitation names the seat its redemption binds — and `crewlet iam seats
--unheld` lists the human seats nothing holds yet:
+command that talks to one, and prints where the issue stands and its link
+once. `-seat` is required — every invitation names the seat its redemption
+binds — and `crewlet iam seats -unheld` lists the human seats nothing holds
+yet:
 
 ```bash
 export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"
@@ -526,11 +534,12 @@ crewlet iam invite you@example.com -seat founder -grants admin
 ```
 
 `-grants admin` stores `admin` and every app beside it; `-grants` takes
-`admin`, `tracker`, `knowledge`, `artifacts` or `none`, and left out on an
-invitation it sends every app and not admin.
+`admin`, `tracker`, `knowledge`, `artifacts`, `chat` or `none`, and left out
+on an invitation it sends every app and not admin.
 
 ```
 invitation 0192f4c8-…
+applied at CREWLET_IAM_LOG@0:3 (op 0192f4c7-…)
 http://localhost:8000/dashboard#/invite/0192f4c8-….kR3…
 
 expires 2026-06-21 12:00
@@ -549,9 +558,10 @@ greeting.
 
 The sidebar reads top to bottom: Home, Inbox and My work; the Company group
 (Overview, Policies, Org chart, Schedules, Integrations and Budgets); the
-Workspace group (Work, Knowledge, Artifacts and Live); and Settings at its
-foot. Each workspace's sections are tabs in its page header. `g` then a
-letter jumps between them, and `?` lists every key.
+Workspace group (Work, Chat, Knowledge, Artifacts and Live); and Settings at
+its foot. Each workspace's sections are tabs in its page header, or Chat's
+rail beside its rooms. `g` then a letter jumps between them, and `?` lists
+every key.
 While an agent is working, the Live row counts the seats at work and a
 **Running** group under the sidebar's shortcuts (after Projects, Pinned and
 Starred) lists up to four running turns. Press one to watch it — its
@@ -594,6 +604,14 @@ so rather than guessing — a token bound to no seat is an ordinary state, not a
 fault, and its day is the one kept under its own login. See [Humans in the Org
 Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api).
 
+**Chat** is yours the same way, and only that way. Its rooms are the engine's
+own — `chat.backend` defaults to `native` — and every one of them is read and
+spoken in as your seat, because a room shows each speaker by seat and its
+members are seats: the units' channels above are already open, with their
+seats in them. Signed in with the API token instead, Chat reads nothing at
+all, not even a public room, because that credential acts as no seat. See
+[Chat](../concepts/chat.md#people).
+
 **⌘K (Ctrl+K elsewhere) searches everything and acts on it.** Type to find a
 screen, a task, a page or a colleague — `#` narrows to tasks, `@` to agents,
 `>` to actions — or paste an event, trace or turn id out of a log to open it.
@@ -626,17 +644,23 @@ client at `/operator/mcp` with your API token:
 }
 ```
 
-It gets the same tracker and knowledge-base tools a seat holds — eighteen over
-the tracker and five over the pages — and eleven more that no seat is given:
-the saved views, the catalogue write, a person's own queue, inbox and pins, the
-trash, and the board drag. Each is decided by the same authority table a seat's
-calls are, and knowledge search sits beside them, with the gestures a person
+It gets the same tracker, knowledge-base and chat tools a seat holds — eighteen
+over the tracker, five over the pages and nine in the chat — and twenty-three
+more that no seat is given: the saved views, the catalogue write, a person's own
+queue, inbox and pins, the trash, the board drag, the chat's furniture — making
+a room, opening a conversation, a room's settings and membership, editing and
+taking back a message, and how far you have read — and the gestures a person
 makes about the company rather than its work — pausing and resuming a seat,
-steering a running turn, answering a coding run's question. On the
-deployment's token its writes carry the token's own login, `token:founder`,
-with author kind `operator` — never an agent's — so an audit can tell them from
-an agent's. The token cannot write as your seat: a seat is held by one row of
-the identity directory, and yours is you. See
+steering a running turn, answering a coding run's question and answering a
+question from the company's knowledge.
+Each is decided by the same authority table a seat's calls are, and knowledge
+search sits beside them. On the deployment's token its writes carry the token's
+own login, `token:founder`, with author kind `operator` — never an agent's — so
+an audit can tell them from an agent's. The token cannot write as your seat: a
+seat is held by one row of the identity directory, and yours is you. Which is
+also why it is refused every chat tool, the reads included (`unseated`): a room
+renders a speaker by seat and its membership is seats, so chat is spoken in as
+somebody — your own token, below, does. See
 [the operator surface](../reference/api-endpoints.md#operatormcp--your-own-assistant).
 
 Once you sign in as a person, give the assistant **your own** token rather than
@@ -675,10 +699,10 @@ so you can sign in on it with the founder token before any company exists. You
 cannot invite yourself yet — there is no seat to put you on, so an invitation
 there answers `409 no_active_revision` — and the company comes first: import
 or create it with your human seat in it, then invite yourself onto that seat
-as above. The work tracker's and the knowledge base's routes
+as above. The work tracker's, the knowledge base's and chat's routes
 answer `503 no_active_revision` until the first revision arrives. That
-revision brings up everything the company needs, the engine's own tracker and
-knowledge base included, with their projects and spaces, and the
+revision brings up everything the company needs, the engine's own tracker,
+knowledge base and chat included, with their projects, spaces and rooms, and the
 [code sandbox](../concepts/code-sandbox.md) when it configures
 `providers.sandbox` — under the same API, with nothing restarted:
 
@@ -769,8 +793,8 @@ instead (`-api-port 8001`) when something should probe it: without the
 [Probes on a node without ingress](../reference/api-endpoints.md#probes-on-a-node-without-ingress).
 
 The agents node claims the seats once the data node answers that its copy of
-the company's records is level with its logs, and its seats' tracker and knowledge
-tools read and write through it. See
+the company's records is level with its logs, and its seats' tracker, knowledge
+and chat tools read and write through it. See
 [Running One Agent Somewhere Else](../guides/satellite-nodes.md) for what a
 node without data can and cannot do.
 
@@ -811,15 +835,24 @@ through external surfaces — pick yours in
 base, code host, chat, sandbox — with the hosted vs self-hosted options for
 each), then wire them in:
 
-- Connect chat so agents collaborate in channels and you can DM them. If
-  your company already runs on [Slack](../integrations/slack.md), use it —
+- **You already have chat.** `chat.backend` defaults to the engine's own, so
+  the units you gave a `channel` above have rooms in the dashboard right now,
+  with their seats in them — and you are in them as your own seat once you
+  have signed in (above): post in one and its team's agents wake to answer.
+  What it does not do is reach you when you are not looking — the engine
+  sends no email, no push and no SMS, so a mention becomes an unread count
+  and a mention feed. See [Chat](../concepts/chat.md).
+- Connect a **vendor** chat instead if your people already live in one, or if
+  being notified while away matters. It is exclusive with the engine's own —
+  one live chat home, or a person answers in the place the agents are not
+  reading. If your company already runs on [Slack](../integrations/slack.md), use it —
   the agents land where the conversations already happen, under the
   workspace admin and compliance setup you already have. It needs a public
   URL for its Events API and one OAuth **Allow** click per agent:
   ```bash
   crewlet slack provision company.yaml -public-url https://your-server.com
   ```
-  To try chat on this machine first,
+  To try a vendor chat on this machine first,
   [Mattermost](../integrations/mattermost.md) ships in this repo's
   `docker-compose.yml` and needs no account, no inbound URL and no clicks:
   ```bash

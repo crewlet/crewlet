@@ -18,7 +18,7 @@ import (
 //
 // A route rather than a command, because what has to be copied is only
 // reachable from inside the running engine. The
-// store is one file this process holds an exclusive lock on, and the
+// store is two files this process holds an exclusive lock on, and the
 // coordination estate is a broker embedded in this process that binds no
 // socket — so a CLI run while the engine is down cannot read the second, and
 // one run while the engine is UP cannot safely open the first.

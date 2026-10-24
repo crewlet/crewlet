@@ -73,20 +73,7 @@ func InsertRows(ctx context.Context, tx Execer, maxVariables int,
 		if s, ok := built[rows]; ok {
 			return s
 		}
-		var b strings.Builder
-		b.Grow(len(prefix) + rows*(len(row)+1) + len(suffix) + 1)
-		b.WriteString(prefix)
-		for i := range rows {
-			if i > 0 {
-				b.WriteString(",")
-			}
-			b.WriteString(row)
-		}
-		if suffix != "" {
-			b.WriteString(" ")
-			b.WriteString(suffix)
-		}
-		s := b.String()
+		s := InsertStatement(prefix, row, suffix, rows)
 		built[rows] = s
 		return s
 	}
@@ -119,4 +106,25 @@ func InsertRows(ctx context.Context, tx Execer, maxVariables int,
 		written += int(rows)
 	}
 	return written, nil
+}
+
+// InsertStatement is the statement [InsertRows] issues for a chunk of rows:
+// the prefix, the row template that many times, and the suffix. It is
+// exported so a caller's plan test can explain the statement its collection
+// write actually issues rather than a copy assembled beside it.
+func InsertStatement(prefix, row, suffix string, rows int) string {
+	var b strings.Builder
+	b.Grow(len(prefix) + rows*(len(row)+1) + len(suffix) + 1)
+	b.WriteString(prefix)
+	for i := range rows {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		b.WriteString(row)
+	}
+	if suffix != "" {
+		b.WriteString(" ")
+		b.WriteString(suffix)
+	}
+	return b.String()
 }

@@ -2,10 +2,12 @@ package claudemodel_test
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/providers/llm/anthropic/claudemodel"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The default is sent to every model that takes effort, unasked — so a row
@@ -123,5 +125,26 @@ func TestCheckBudgetRefusesWhatTheModelAnswersWithA400(t *testing.T) {
 	if err := row.CheckBudget("gw-alias", 4096); err == nil ||
 		!strings.Contains(err.Error(), `"gw-alias"`) || !strings.Contains(err.Error(), "not in the capability table") {
 		t.Errorf("unknown id: %v, want it named as written and called unknown", err)
+	}
+}
+
+// AN OVERRIDE THE TABLE DOES NOT LIST IS REFUSED NAMING EVERY ID IT TAKES, as
+// a sentence says a set: each id quoted, the last two joined by "or". The
+// operator's API reads its claudeModel enum off this sentence (crewlet-operator's
+// test/crd/claudemodel_engine_test.go), so its shape is pinned here: the id, the
+// refusal, and `Use` before the set. Mutation: put back
+// `strings.Join(IDs(), ", ")` and this fails.
+func TestAnUnlistedOverrideIsRefusedNamingEveryIDTheTableTakes(t *testing.T) {
+	t.Parallel()
+	_, err := claudemodel.Resolve("gw-alias", "claude-unlisted-0")
+	want := `"claude-unlisted-0" isn't a Claude model this build knows. Use ` +
+		words.Or(claudemodel.IDs())
+	if err == nil || err.Error() != want {
+		t.Fatalf("the refusal is %v, want %s", err, want)
+	}
+	for _, id := range claudemodel.IDs() {
+		if !strings.Contains(err.Error(), strconv.Quote(id)) {
+			t.Errorf("the refusal does not name %q", id)
+		}
 	}
 }

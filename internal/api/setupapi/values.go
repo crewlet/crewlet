@@ -14,7 +14,8 @@ import (
 // values a person should not be asked to invent.
 
 // decode reads a JSON body strictly, so a misspelled key is a refusal rather
-// than a field silently ignored.
+// than a field silently ignored. Its error is the decoder's, which a caller
+// answers in words ([plainjson.Unreadable]).
 func decode(body []byte, into any) error {
 	dec := json.NewDecoder(strings.NewReader(string(body)))
 	dec.DisallowUnknownFields()

@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ReorderBufferBytes bounds what a strict loop holds while it waits for a
@@ -256,6 +257,27 @@ type RunnerDeps struct {
 	// returns.
 	OnDrained func()
 
+	// OnLevel is told each time this loop comes LEVEL with its log — a
+	// fetch the broker answers with nothing while the loop holds nothing —
+	// having been anything else since it was last told: just started,
+	// holding records it fetched, or retrying a failure. The first drain of
+	// a run is the first such moment, and every later empty fetch of an
+	// idle loop is not one. Nil tells nobody.
+	//
+	// A PUSH for [RunnerDeps.OnDrained]'s reason, and a different latch
+	// because its reader asks a different question: not whether this node
+	// has ever held the whole state, but whether it is level NOW — the
+	// strict half of [Health.Established], which a node's seat claims wait
+	// on. That instant returns after every burst of writes the loop works
+	// through and after every broker outage it retries across, and a gate
+	// told only of the first drain learned of the rest by asking again on
+	// a timer, with every seat it could have claimed unclaimed until then.
+	//
+	// CALLED ON THE APPLY LOOP'S OWN GOROUTINE, outside the runner's lock,
+	// after the drain latch is set and after the records it applied are
+	// committed. It must not block, for OnDrained's reason.
+	OnLevel func()
+
 	// Now is the clock, injectable so a test can drive the time budget.
 	Now func() time.Time
 
@@ -298,6 +320,8 @@ type Runner struct {
 	evicted  func(ctx context.Context, node string) (bool, error)
 	// onDrained is [RunnerDeps.OnDrained].
 	onDrained func()
+	// onLevel is [RunnerDeps.OnLevel].
+	onLevel func()
 
 	// witnessTo and witnessedKeys are the audit half of a refusal; see
 	// [Witness].
@@ -378,6 +402,13 @@ type Runner struct {
 	// an adoption installs a peer's rows under a new history — what this
 	// node drained before says nothing about the one it now applies.
 	drained bool
+
+	// level records that the loop's last fetch found it level with its log
+	// and that it has done nothing since — fetched no records, met no
+	// failed fetch, not started again — which is what decides whether the
+	// next empty fetch is news ([RunnerDeps.OnLevel]). Unlike drained it
+	// goes back to false, on every one of those.
+	level bool
 
 	// foreign is the stream this applier's positions do NOT belong to,
 	// once it has been established that the broker serves one under this
@@ -611,6 +642,7 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 		nodeID:    d.NodeID,
 		evicted:   d.Evicted,
 		onDrained: d.OnDrained,
+		onLevel:   d.OnLevel,
 
 		witnessTo: d.Witness,
 		opts: ApplyOptions{
@@ -1586,6 +1618,28 @@ func (r *Runner) markDrained() {
 	}
 }
 
+// markLevel records that the broker answered this loop's fetch with nothing
+// while it held nothing, and tells [RunnerDeps.OnLevel] when that is news:
+// the first such answer since the loop started, fetched records or failed.
+// After [Runner.markDrained], so a reader the hook wakes sees the latch set.
+func (r *Runner) markLevel() {
+	r.mu.Lock()
+	news := !r.level
+	r.level = true
+	r.mu.Unlock()
+	if news && r.onLevel != nil {
+		r.onLevel()
+	}
+}
+
+// unlevel records that the loop is no longer level with its log as far as it
+// knows — it fetched records — so the next empty fetch is news again.
+func (r *Runner) unlevel() {
+	r.mu.Lock()
+	r.level = false
+	r.mu.Unlock()
+}
+
 // Deferred is the earliest record this node holds and cannot decode, and false
 // when it holds none.
 func (r *Runner) Deferred() (Deferral, bool) {
@@ -1704,8 +1758,8 @@ func (r *Runner) PurgeOpsOfKind(ctx context.Context, kind string,
 // PurgeAnchors removes this domain's arbitration anchors below floor.
 //
 // PER NODE, like the operation ledger's sweep and unlike a fleet singleton's:
-// every node holds its own copy of these rows, so a singleton would tidy one
-// node's table and leave every other growing — which looks exactly like a
+// every data node holds its own copy of these rows, so a singleton would tidy
+// one node's table and leave every other growing — which looks exactly like a
 // sweep that works to whoever checks the node it ran on.
 func (r *Runner) PurgeAnchors(ctx context.Context, floor Position) (int64, error) {
 	return r.tables.purgeAnchors(ctx, r.db, floor)
@@ -1744,7 +1798,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	// AND THE DRAIN LATCH, for the reason its own field states: a restart
 	// here is an adoption or a re-anchor, and a drain of the history this
 	// loop used to apply is not a claim about the one it is about to.
-	r.drained = false
+	r.drained, r.level = false, false
 	r.mu.Unlock()
 
 	var w *store.Writer
@@ -1812,7 +1866,7 @@ func (r *Runner) Run(ctx context.Context) error {
 			// is delivered past the checkpoint after it is verified
 			// first ([Runner.verifyBeforeApplying]).
 			r.mu.Lock()
-			r.verify = true
+			r.verify, r.level = true, false
 			r.mu.Unlock()
 			if stopped := r.faulted(ctx, err); stopped != nil {
 				return stopped
@@ -1825,12 +1879,15 @@ func (r *Runner) Run(ctx context.Context) error {
 			// is not wrong now. It is also the one moment this node
 			// can prove its rows are the WHOLE state rather than a
 			// prefix of it — nothing is pending and nothing is in
-			// hand — so it is where the drain latch is set.
+			// hand — so it is where the drain latch is set, and where
+			// the loop is level with its log ([RunnerDeps.OnLevel]).
 			r.markDrained()
 			r.recovered(ctx)
+			r.markLevel()
 			pause = 0
 			continue
 		}
+		r.unlevel()
 		if verifyErr := r.verifyBeforeApplying(ctx, run); verifyErr != nil {
 			if errors.Is(verifyErr, ErrStopped) {
 				verifyErr = r.stop(ctx, verifyErr)
@@ -2506,9 +2563,9 @@ func (r *Runner) decode(ctx context.Context, batch []Message) ([]Record, error) 
 			})
 			return nil, r.stop(ctx, fmt.Errorf("%w: %s's record at sequence %d is not "+
 				"signed by this fleet — its frame fails under the keys this node "+
-				"holds (%v), so something that can reach the broker wrote it and "+
+				"holds (%s), so something that can reach the broker wrote it and "+
 				"this node will not apply it or anything after it",
-				ErrStopped, r.domain.Name(), m.Seq, r.verifier.KeyIDs()))
+				ErrStopped, r.domain.Name(), m.Seq, words.And(r.verifier.KeyIDs())))
 		}
 		env, err := r.domain.Envelope(body)
 		if err != nil {
@@ -2692,12 +2749,12 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 				// passing every fence it has.
 				if r.domain.InstallsGate(rec.Envelope) {
 					return fmt.Errorf("%w: %s at %s installs an apply gate and is "+
-						"signed under a key this node does not hold (it holds %v) "+
+						"signed under a key this node does not hold (it holds %s) "+
 						"— a gate this node cannot authenticate would license "+
 						"every record above it, so the applier halts and this "+
 						"node takes its copy of the estate out of service, so its "+
 						"seats read it from a data node that can",
-						ErrStopped, rec.Kind, rec.Position, r.verifier.KeyIDs())
+						ErrStopped, rec.Kind, rec.Position, words.And(r.verifier.KeyIDs()))
 				}
 				if err := r.tables.retain(ctx, tx, rec, r.spec.Replay == ReplayCompacted, opts.MaxVariables); err != nil {
 					return err

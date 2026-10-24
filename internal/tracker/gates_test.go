@@ -152,11 +152,11 @@ func TestEveryWriteOnAPurgedTaskIsRefusedAsPurged(t *testing.T) {
 // as "not on this node".
 //
 // That refusal is the one the CALLER retries — the estate's router hands it
-// back as the holder gave it — and every node holding the task's deletion
+// back as the holder gave it — and every data node holding the task's deletion
 // marker would say it again: an operator re-running a purge to be sure was
-// told the node was behind, of a task every node had destroyed. The purge's
-// own retry, under its own id, is answered by the first purge's outcome
-// instead, and nothing is appended.
+// told the node was behind, of a task every data node had destroyed. The
+// purge's own retry, under its own id, is answered by the first purge's
+// outcome instead, and nothing is appended.
 func TestASecondPurgeOfAPurgedTaskIsRefusedAsPurged(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -243,7 +243,7 @@ func TestTheDeletionGateCountsItsHits(t *testing.T) {
 //
 // Whether the readmission is PERMITTED is not this writer's to judge any more:
 // it is one fleet gesture over every identity-claiming log, judged once by the
-// engine's node gate before either log is written, and certified there.
+// engine's node gate before any log is written, and certified there.
 func TestAReadmissionIsTheInverseCommitOnThisLog(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

@@ -11,6 +11,8 @@ const PERSON: ViewerState = {
   admin: false,
   tracker: false,
   knowledge: false,
+  chat: false,
+  chatVendors: [],
   handle: "maya",
   owner: "maya",
   name: "Maya Ortiz",

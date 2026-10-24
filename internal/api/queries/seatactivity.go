@@ -20,9 +20,9 @@ import (
 // A seat's page drew "Turns in the record" as the LENGTH of its phase history —
 // a page of at most fifty, read from the answering node's own event log — so a
 // busy seat's number stopped at fifty, a quiet one's described one node of the
-// fleet, and neither said over what window. Here the numbers are every node's
-// days, summed: the same on whichever node is asked, still counting a node
-// that has left, and labelled with the days they cover.
+// fleet, and neither said over what window. Here the numbers are every data
+// node's days, summed: the same on whichever node is asked, still counting a
+// node that has left, and labelled with the days they cover.
 
 // DefaultSeatActivityDays is the window a seat's activity covers when the
 // question names none: a week, which is what a profile's KPIs compare against
@@ -146,7 +146,7 @@ func (s Sources) seatActivity(ctx context.Context, p Params) (any, error) {
 		days = p.Int("days", 0)
 		if days < 1 || days > tokens.MaxSpendRangeDays {
 			return nil, refuseAs(tokens.ErrWindowLength, "days is %v, and a seat's "+
-				"activity covers 1 to %d company days — ask for at most %d",
+				"activity covers 1 to %d company days. Ask for at most %d",
 				p.Values()["days"], tokens.MaxSpendRangeDays, tokens.MaxSpendRangeDays)
 		}
 	}
@@ -158,8 +158,8 @@ func (s Sources) seatActivity(ctx context.Context, p Params) (any, error) {
 	prev := window.Previous()
 	if previous && !horizon.Admits(prev) {
 		return nil, refuseAs(tokens.ErrOutOfRange, "the window before these %d days "+
-			"starts %s, before %s — the oldest day the %d-day usage history holds; "+
-			"ask for fewer days", days, prev.First.Label, horizon.Floor, horizon.Days)
+			"starts %s, before %s, the oldest day the %d-day usage history holds. "+
+			"Ask for fewer days", days, prev.First.Label, horizon.Floor, horizon.Days)
 	}
 
 	// ONE SEAT, by the handle a person reads — resolved through the chart
@@ -234,7 +234,7 @@ type seatActivityFold struct {
 	chart         []chartSeat
 }
 
-// foldSeatActivity sums every node's days into one row per seat.
+// foldSeatActivity sums every data node's days into one row per seat.
 //
 // PURE over its inputs, so the arithmetic — the sums across nodes, the
 // reviewed-only denominator, the merged quantiles — is testable without a

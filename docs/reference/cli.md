@@ -14,18 +14,18 @@ subcommand below is served by it.
 | `crewlet migrate [config.yaml]` | Apply pending schema migrations (Tier A file, default `./crewlet.yaml`). Every process migrates on open, so this is a way to do it *without* starting one — `-check` reports pending work and exits non-zero without applying it |
 | `crewlet budgets show [config]` | Print each scope's day, ISO week and month on the company clock — spend, ceiling (`unlimited` where none), the engine's `STATE` (`ok`, `near`, `refusing`), when the window turns over and `LAST REFUSED` — read from a running node, because the counters are the fleet's and not this file's. Any token reads it — budgets are everybody's overview. There is no reset: a window's allowance comes back when the window turns over |
 | `crewlet backup -dir PATH [config]` | Copy a running node's store files **and** its stream estate into one verified directory on the *engine's* host — the only way to copy either, since the store is locked to that process and the embedded broker binds no socket. The token takes `admin`. See [Backups & Restore](../guides/backup.md) |
-| `crewlet retention status [config]` | Every `retention` command that talks to a node takes `admin`, the reads included. What each domain's log is holding, what the trim concluded and which of the six terms is stopping it, every node's position, and what this node costs to replace. **Exits non-zero when any alarm is active**, printing each one's measurement and remedy on stderr — the hook for your own cron |
+| `crewlet retention status [config]` | Every `retention` command that talks to a node takes `admin`, the reads included. What each domain's log is holding, what the trim concluded and which of the six terms is stopping it, every data node's position, and what this node costs to replace. **Exits non-zero when any alarm is active**, printing each one's measurement and remedy on stderr — the hook for your own cron |
 | `crewlet retention snapshots [config]` | The per-node snapshot inventory: what each machine holds, per domain, how old and how large — or why it holds none. The question you ask when a join fails |
 | `crewlet retention ack -stream NAME -position N` | Publish an operator backup floor, for `backup_floor: operator`. It exists because the engine cannot see a copy that has left the host |
-| `crewlet retention evict <node> -confirm <node> [-op-id ID] [-force]` | Stop a node's records applying on every log the trim counts nodes on — the tracker's, the knowledge base's and the identity estate's — so the trim can pass a floor an absent machine is pinning. Refused, with nothing written, while the node still holds a live presence lease, or while its lease cannot be read (`-force` overrides both). Prints one line per log with its outcome and the watermark before and after; **exits non-zero when not every log holds the record**, printing under each unfinished log what finishes it — the command with `-op-id` where running it again can, and what to do instead where it cannot |
+| `crewlet retention evict <node> -confirm <node> [-op-id ID] [-force]` | Stop a node's records applying on every log the trim counts nodes on — the tracker's, the knowledge base's, the identity estate's, the artifacts log's, the artifact datastore's and chat's — so the trim can pass a floor an absent machine is pinning. Refused, with nothing written, while the node still holds a live presence lease, or while its lease cannot be read (`-force` overrides both). Prints one line per log with its outcome and the watermark before and after; **exits non-zero when not every log holds the record**, printing under each unfinished log what finishes it — the command with `-op-id` where running it again can, and what to do instead where it cannot |
 | `crewlet retention readmit <node> -confirm <node> [-op-id ID]` | The inverse commit, on the same logs. Refused while the node has not applied every record up to the one just before the higher of the trim floor and the first surviving sequence of any one of those logs, and the refusal prints the numbers. Nothing is written to any log on a refusal; a partial readmission is finished like an eviction |
 | `crewlet retention set-capacity <stream> <bytes> -confirm <bytes>` | Change a log's byte ceiling, up or down. Runs inside a fleet-wide maintenance window and costs three restarts, because a log's Tier A ceiling is only the value its stream is created with. A raise the broker has no room for is refused **before** the window opens, and one it refuses at the apply is reported as a refusal rather than as an unknown outcome |
 | `crewlet retention maintenance status\|abandon\|exclude -stream NAME` | Where that window stands, who has not acknowledged, and the two gestures that act on it |
 | `crewlet retention reanchor -stream NAME -confirm <created_at> [-force] [-discard]` | Adopt a recreated stream, or a broker restored from an older copy: move that one log to its next generation, declaring every position below it comparable and safely stale, and resume its applier with no restart. A recreated log is followed from its first surviving record, a restored one from its end, and one continuing in a generation only an evicted peer held from this node's own checkpoint, that generation's records void. A restored log holding records written after the restore that this node's rows do not hold is refused unless `-discard` accepts that they are applied on no node |
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
-| `crewlet work purge <item> -reason TEXT -confirm <item-key> [-op-id ID]` | Destroy a task and every row it produced, on every node. The one operation with no inverse, restricted to a credential holding `admin`, and never a seat. Its children move onto its own parent rather than being destroyed with it |
+| `crewlet work purge <item> -reason TEXT -confirm <item-key> [-op-id ID]` | Destroy a task and every row it produced, on every data node. The one operation with no inverse, restricted to a credential holding `admin`, and never a seat. Its children move onto its own parent rather than being destroyed with it |
 | `crewlet objects migrate -to s3 -target <path> [-final]` | Moves the company's files from the fleet's NATS bucket to an S3-compatible bucket, through a running data node: a copy pass on a live fleet, then `-final` with every node in maintenance mode, which seals the NATS bucket and moves the fleet's record. See [Moving the files to a bucket](../concepts/object-store.md#moving-the-files-to-a-bucket). The token takes `admin` |
-| `crewlet objects status [config] [-json]` | Where the company's files are kept — the [object store's](../concepts/object-store.md) backend, `nats` or an S3 bucket — read from a running node, the node that ran the collector's last passes, and what each found: objects listed and deleted and unfinished uploads abandoned by the last collection; files named, **missing** and **damaged** by the last audit to finish, with those files listed. `-json` prints the fleet view's `objects` block as the node answered it. The token takes `admin` |
+| `crewlet objects status [config] [-json]` | Where the company's files are kept — the [object store's](../concepts/object-store.md) backend, `nats` or an S3 bucket — read from a running node, the node that ran the collector's last passes, and what each found: objects listed and deleted and unfinished uploads abandoned by the last collection; files named, **missing** and **damaged** by the last audit to finish, with those files listed. `-json` prints the fleet view's `objects` block as JSON for a script: every field and number as the node answered them, its text as written. The token takes `admin` |
 | `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a kind this build does not know) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it. The token takes `admin` |
 | `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it. The token takes `admin` |
 | `crewlet seats pause <handle> [-stop] [-reason TEXT] [-op-id ID]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends the turn it is on at its next round. Taken by the seat's holder, whoever leads it, or an administrator, and recorded under the caller's own name, kind and credential |
@@ -33,6 +33,13 @@ subcommand below is served by it.
 | `crewlet artifacts list\|get\|versions\|assets\|usage` | Read the company's artifacts through a running node, as the token's principal: the listing it may see (`-scope`, `-kind`, `-q`, `-status`, `-work-item`), one artifact's head (its runtime contract and capabilities among it) and audience, its versions, each with its contract and capabilities, its assets, and the company's usage against its quota (an administrator's). See [`crewlet artifacts`](#crewlet-artifacts) |
 | `crewlet artifacts publish <dir\|file> [-artifact ID] [-op-id ID]` | Publish a directory or a file as a new artifact, or as the next version of one: an upload intent first, then only the files the artifact does not already hold are sent, then the version is published against the head it read |
 | `crewlet artifacts update\|restore\|label\|share\|unshare\|trash\|untrash\|purge` | Change the title, description or icon, roll back to a version, label one, share with a seat, a unit or the company, withdraw a share, move to and from the trash, and purge for good (an administrator's, with a person present; the id is asked twice) |
+| `crewlet chat channels [-archived]` | The rooms of the company's own chat that your seat is in, most recently active first, each with the id every other chat verb takes and what you have not read there. Every `crewlet chat` verb is made as the seat `CREWLET_API_TOKEN` acts as — see [`crewlet chat`](#crewlet-chat) |
+| `crewlet chat read <room-id> [-limit N] [-before CURSOR]` | One room's transcript, oldest first, each message with its id and the thread it hangs under |
+| `crewlet chat post <room> -body TEXT [-link URL]... [-op-id ID]` | Say something in a room — by its id or its name — as your seat, through the same `post_message` the dashboard's composer calls |
+| `crewlet chat search <text> [-channel ROOM-ID] [-author HANDLE] [-limit N]` | Rank every room your seat may read, each hit with the message's id |
+| `crewlet chat erase <room-id> -message ID... -reason TEXT -confirm N [-op-id ID]` | Destroy the messages named, on every data node — what a credential pasted into one message needs. No inverse: `admin`, a recent proof, never a seat |
+| `crewlet chat prune <room-id> -cutoff TIME -confirm TIME [-op-id ID]` | Destroy everything a room said before an instant, on every data node, now rather than at its [retention](../concepts/chat.md#retention) horizon. The same authority as `erase` |
+| `crewlet chat retention <room-id> -days N \| -company -confirm N\|company [-op-id ID]` | Set how long one room keeps what is said in it (`0` for ever), or return it to the company's `chat.native.message_retention_days`, with `-confirm` repeating the horizon. A shorter horizon is a prune on a delay, so the same authority as `erase` |
 | `crewlet schema [company\|bootstrap]` | Print the JSON Schema for a config tier (editor autocomplete, CI, [AI-assisted authoring](../getting-started/ai-authoring.md)) |
 | `crewlet config import <company.yaml>` | Load a company file as a new active `company_config` revision — through a running node's `PUT /config`, which activates it fleet-wide, or offline into this node's store, which the node publishes at its next start; the line it prints says which it did |
 | `crewlet config export [--revision <UUID>]` | Dump the active (or specified) revision as YAML to stdout |
@@ -45,7 +52,7 @@ subcommand below is served by it.
 | `crewlet secrets keygen [-key-id ID]` | Generate a fresh encryption-keyring key + the `crewlet.yaml` snippet to install it |
 | `crewlet secrets set <NAME>` | Store an encrypted secret in the [secret store](../concepts/secret-store.md); the engine resolves `${NAME}` from it ahead of the environment. Takes `admin` |
 | `crewlet secrets list` | List stored secret names + metadata (never values). Takes `admin` |
-| `crewlet secrets unset <NAME>` | Remove a stored secret. Takes `admin` |
+| `crewlet secrets unset <NAME>` | Remove a stored secret — on a stopped node, a dated removal the engine carries onto the fleet at its next start. Takes `admin` |
 | `crewlet secrets get <NAME> -reveal` | Print one stored value to stdout — break-glass, audited, CLI-only. Takes `admin`, and a person present: a machine token is refused it whatever it carries, so the token this command reads is a Tier A one |
 | `crewlet secrets rekey [-dry-run]` | Re-encrypt stored secrets under the active keyring key. Takes `admin` |
 | `crewlet search eval [-store PATH]` | Measure the two-stage semantic search against the exact scan, on the vectors a store file actually holds. Ground truth is the exact scan's own top-K, so nobody authors a judgement; exits non-zero below the floor for that corpus size |
@@ -70,7 +77,7 @@ subcommand below is served by it.
 
 ---
 
-> **Every command that reads the Tier B company document takes `-config`** (default `./crewlet.yaml`), and resolves its `${VAR}` references the way the engine does: **the secret store first, the process environment behind it**. A command that read the environment alone would see an empty string for every value already rotated into the store — and for `integrations.gitlab.signing_secret`, empty is the signal to *mint*, so a re-run would replace a working webhook secret at the third-party app. With no bootstrap at that path the run resolves from the environment alone and says so on its first line; a bootstrap that exists and declares no `secrets.keys` is refused, because every node's Tier A carries a keyring and resolving a company's values from whatever the shell holds on the strength of one that does not would hide the misconfiguration. The one exception is the operator's own credential (`-admin-token` / `$GITLAB_ADMIN_TOKEN` and its siblings), which is read from the environment only — see [the secret store](../concepts/secret-store.md#what-still-has-to-be-in-the-environment).
+> **Every command that reads the Tier B company document takes `-config`** (default `./crewlet.yaml`), and resolves its `${VAR}` references in the engine's order: **the secret store first, the process environment behind it** — where the secret store is **this node's own rows** in the store `-config` names (what was set there while its engine was stopped, before the engine migrated it), because a command run where no engine holds that file cannot reach the fleet's store the engine reads. A command that read the environment alone would see an empty string for every value already rotated into the store — and for `integrations.gitlab.signing_secret`, empty is the signal to *mint*, so a re-run would replace a working webhook secret at the third-party app. With no bootstrap at that path the run resolves from the environment alone and says so on its first line; a bootstrap that exists and declares no `secrets.keys` is refused, because every node's Tier A carries a keyring and resolving a company's values from whatever the shell holds on the strength of one that does not would hide the misconfiguration. The one exception is the operator's own credential (`-admin-token` / `$GITLAB_ADMIN_TOKEN` and its siblings), which is read from the environment only — see [the secret store](../concepts/secret-store.md#what-still-has-to-be-in-the-environment).
 
 
 > **Every command except `crewlet run` logs at `warn`.** They open a store,
@@ -148,7 +155,7 @@ the wrong document on a machine that has both. Tier B is read from the `company_
 | `-api-host HOST` | Bind address, overriding `api.host` |
 | `-api-port PORT` | Bind port, overriding `api.port`. With the `ingress` role it carries the whole HTTP surface (less the routes `api.public.port` moves to its own listener); without it, only the [probes](api-endpoints.md#probes-on-a-node-without-ingress) — `/health` and `/ready` — and a seats node's agent-mode tool bridge where `api.public.port` is unset. `0` serves **no HTTP at all** — no dashboard, no REST, no webhook endpoint and no probe, so every integration goes deaf and no orchestrator can probe the node. That is why leaving the flag off is not the same as passing `0`. Any other port is bound as the node starts, before it opens its store, so a port somebody holds fails the run at once; until the node serves, it answers what a [starting node](api-endpoints.md#while-a-node-is-starting) answers. Either flag is refused when it contradicts the file's other listeners: `0` beneath an `api.public.port`, or a port another listener in the file binds on the same address. So is a port on an ingress node whose file has no `api:` block: a node serving the API must state `api.external_url`, `api.auth.admin` and a token. |
 | `-mode MODE` | `maintenance` or `seal`: boot for a [capacity window](../guides/retention.md#changing-a-logs-ceiling) rather than for service. Both start the broker and **no publisher** — no seats, no duties, no schedulers, no writer on any surface, no barrier (a `linearizable` read is refused `maintenance`), no object collection or audit (each pins the estate with a barrier), and no eviction, readmission or reanchor — while the node keeps its presence lease, and the difference is that `maintenance` may write stream configuration while `seal` may not, which is exactly what makes a `seal`-mode acknowledgement evidence. Leave it off for a node in service; a node in either mode refuses to run a company. |
-| `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `data` (hold the company's durable state), `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all four — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. The flag is applied after the file validates, so what the roles require of the file is checked again here: dropping `data` from a node whose store is not `store.scratch` is refused, naming the setting. Roles decide what a node serves and which duties it holds, and `data` alone decides which state logs it applies: every data node applies all five, the identity directory included, and a node without `data` applies none and reaches the estate through one that does — see [what a satellite holds](../guides/satellite-nodes.md#what-a-satellite-holds). See [Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data). |
+| `-roles ROLE[,ROLE...]` | What this node runs, overriding `node.roles`: `data` (hold the company's durable state), `ingress` (serve the HTTP API and its webhooks), `seats` (claim seat leases and run agents), `workers` (the company-wide singleton duties). Default: all four — one process running a whole company. An unknown name is **rejected rather than dropped**, because a typo would otherwise produce a node that runs nothing and reports itself healthy. The flag is applied after the file validates, so what the roles require of the file is checked again here: dropping `data` from a node whose store is not `store.scratch` is refused, naming the setting. Roles decide what a node serves and which duties it holds, and `data` alone decides which state logs it applies: every data node applies every state log, the identity directory and chat included, and a node without `data` applies none and reaches the estate through one that does — see [what a satellite holds](../guides/satellite-nodes.md#what-a-satellite-holds). See [Running a Fleet](../guides/fleet.md#nodes-that-hold-no-data). |
 | `-dev-principal LOGIN` | **Development only.** Resolve every request that presents no credential to `dev:LOGIN`, carrying every app, and `admin` only where `api.auth.admin` is `serve`. It is what `api.auth.disabled` should have been, and it is **refused** unless *both* hold: `api.host` binds a loopback address, and the binary is a development build. See below. |
 
 The logging flags override the Tier A `logging:` block **only when they are actually given**: a flag carries its default whether or not anyone typed it, so applying them unconditionally would pin every node at `info` and make the file's own setting dead on arrival. `-log-file` needs that distinction in both directions — its default *is* the empty string, which is also how an operator says "no file for this run". Every flag that overrides Tier A is **folded into the document** the node runs, the logging flags as much as `-roles` and the API's: the verbosity, the log file and the [advisories the start logs](#every-start-says-what-its-tier-a-is-worth-knowing) all read that one document. The run holds that document to every Tier A rule once the flags are in, and a refusal names the flags given — the file passed as it loaded, but a flag reaches every rule that reads what it moved — and the engine asks the rules again before it opens anything.
@@ -278,7 +285,7 @@ Publishing knowledge and tool skills is its own command rather than a flag on `r
 Press `Ctrl+C` for graceful shutdown — signals escalate in two tiers:
 
 1. **First `Ctrl+C`**: graceful. Pressed while the node is still starting, it ends the boot — once an embedded broker's store recovery in progress has finished, which cannot be cut short — with the listener answering a drain's answers, as far as a [starting node](api-endpoints.md#while-a-node-is-starting) can give them, until the boot has unwound. Once the node serves, every held seat quiesces, running LLM turns finish their rounds (there is no internal timeout, and `drain_in_progress` logs the in-flight count every 10 s), and turns still queued behind the concurrency limit are returned to the broker for prompt redelivery. The HTTP surface stays up **for the whole drain** and closes only once it completes: `/health` stays `200`, `/ready` answers `503` naming the drain, and the dashboard and every read keep answering, so the drain can be watched there as well as in the logs. What it stops doing, from the first moment, is taking work: every webhook, config, secret and setup write, operator write and backup answers `503` with `{"error": "draining"}` and a `Retry-After`, because the drain waits on in-flight turns and a surface still accepting deliveries would keep making more.
-2. **Second `Ctrl+C`**: the process exits immediately. The first signal hands signal handling back to the operating system precisely so this works: in-flight turns are killed with their triggers unacknowledged, and the broker redelivers them once its ack window elapses.
+2. **Second `Ctrl+C`**: the process exits immediately. The first signal hands signal handling back to the operating system precisely so this works: in-flight turns are killed with their triggers unacknowledged, and the broker redelivers them once its ack window elapses. A node started with SIGINT ignored, as a background job of a non-interactive shell is (`crewlet run &` in a script), has no default to hand SIGINT back to. Its second SIGINT still exits at once, with status 130 rather than by the signal, which a shell reports the same way (see [Force stop](../concepts/agent-runtime.md#graceful-shutdown)). A node started with SIGHUP ignored (`nohup crewlet run`) goes on ignoring a hangup, but starts every child, a local box's run script among them, with SIGHUP's default.
 
 There is no third tier, because the second is already an unconditional exit rather than something the engine has to be well enough to perform.
 
@@ -322,6 +329,13 @@ what is live and make it live (`GET /config/revisions/<UUID>/diff` and
 
 With the engine **stopped** it writes to this node's own store and marks the
 revision active there, which the node publishes to the fleet at its next start.
+It is dated after the activation this node's copy holds, so a clock running
+behind the fleet's does not hold it back. **The later activation wins**: a
+change the fleet activated while this node was stopped but before the command
+ran is replaced by this revision when the node starts, and one activated after
+the command keeps this revision from being published, which the node logs at
+its start (`local_revision_superseded`, a warning). Run it against a running
+node to avoid both.
 The line it prints says which of the two happened.
 
 `-summary` is the audit note recorded with the revision (default
@@ -386,7 +400,7 @@ Dumps the active revision (or `-revision <UUID>`) as YAML to stdout. It does **n
 crewlet config show [-config PATH]
 ```
 
-Prints the whole active revision as **redacted** YAML — exactly `crewlet config export -redact`, with no way to ask for the unredacted form. Use it to read what the fleet is actually running; use `crewlet config revisions` for the id, author and audit note.
+Prints the whole active revision as **redacted** YAML — exactly `crewlet config export -redact`, with no way to ask for the unredacted form; use `crewlet config revisions` for the id, author and audit note. It reads this node's own store, so the active revision is **this node's copy**: the one it boots on, which the fleet may have moved past while the node was stopped. What the fleet is running is [`GET /config`](api-endpoints.md#config--live-config-management-auth-gated) on any running node.
 
 Errors with ``no revision is active; run `crewlet config import` `` when nothing is active.
 
@@ -396,7 +410,7 @@ Errors with ``no revision is active; run `crewlet config import` `` when nothing
 crewlet config revisions [-config PATH] [-limit 20]
 ```
 
-Lists recent revisions. The active revision is marked with `*`. `BY` is the
+Lists recent revisions. This node's copy of the active revision is marked with `*`, as `crewlet config show` reads it. `BY` is the
 revision's author, with the credential it was written through beside them where
 that names something the author does not — `jane.doe (through pat:…)` for a
 person's machine token; a Tier A token's `token:<id>` is both, and says so once.
@@ -443,7 +457,7 @@ to read a long diff was the one a shared cap kept it from.
 crewlet config activate <UUID> [-config PATH]
 ```
 
-Marks a revision active in **this node's** store, which the node publishes to the fleet at its next start; every node then applies it on its next reconcile. It opens the store, so it runs while the engine is stopped. On a **running** fleet, `POST /config/revisions/<UUID>/revert` to a node that is up does the same without a restart — it stores that revision's document again and activates it — and the note this command prints names it.
+Marks a revision active in **this node's** store, which the node publishes to the fleet at its next start; every node then applies it on its next reconcile. It opens the store, so it runs while the engine is stopped. On a **running** fleet, `POST /config/revisions/<UUID>/revert` to a node that is up does the same without a restart — it stores that revision's document again and activates it — and the note this command prints names it. The activation is dated after the one it replaces, by the rule the fleet's pointer applies to every activation, so it still reaches the fleet when this machine's clock is behind the node that made the last one. The later activation wins, as for [an offline import](#crewlet-config-import): one the fleet makes after this command keeps it from being published.
 
 **Re-activating the revision that is already active is not a no-op**, and that is the point: the pointer is append-only, so it mints a new epoch. A node's reconciler skips on the *epoch* it has applied, never on the payload, so the apply always runs — re-reading the [secret store](../concepts/secret-store.md) and rebuilding every provider, transport and MCP child that captured a resolved value. It is the documented way to make a rotated credential take effect; on a running fleet the same gesture is `POST /config/reload`.
 
@@ -462,7 +476,7 @@ Rotates the master key: re-encrypts the active revision's config document under 
 
 **Run this and [`crewlet secrets rekey`](#crewlet-secrets-rekey) together.** They are the two halves of one rotation — the company document and the secret store are sealed with the same keyring — and doing only one, then dropping the retired key, makes whatever the other still holds unreadable.
 
-It opens the store directly, so it runs on a **stopped** node, and the node publishes the re-sealed document at its next start. While the engine holds the store it refuses and names the running node's equivalent, `POST /config/reload`, which stores the active document again under that node's active key. Workflow, in outline: `crewlet secrets keygen -key-id <new>` → add the new key to `secrets.keys` on every node and restart → set `active_key_id: <new>` and restart again → `crewlet secrets rekey` **and** this command, or a reload → drop the old key only once [the rotation runbook](../concepts/secret-store.md#rotating-the-keyring-with-nothing-in-flight-lost)'s conditions hold.
+It opens the store directly, so it runs on a **stopped** node, and the node publishes the re-sealed document at its next start, unless the fleet has activated something later by then. While the engine holds the store it refuses and names the running node's equivalent, `POST /config/reload`, which stores the active document again under that node's active key. Workflow, in outline: `crewlet secrets keygen -key-id <new>` → add the new key to `secrets.keys` on every node and restart → set `active_key_id: <new>` and restart again → `crewlet secrets rekey` **and** this command, or a reload → drop the old key only once [the rotation runbook](../concepts/secret-store.md#rotating-the-keyring-with-nothing-in-flight-lost)'s conditions hold.
 
 `-dry-run` reports what would move by reading the key id off the envelope, decrypting nothing. Idempotent: a document already under the active key is skipped and says so. A **plaintext** revision is refused like every other reader refuses one: it has no key to rotate, and nothing vouches for who wrote it, so the refusal names `crewlet config import`, which stores the document sealed again from your own copy. Fails clearly, naming the key, if the document is sealed under one no longer in the keyring.
 
@@ -505,22 +519,22 @@ optional. `seats` lists which seats are free.
 | `people` | The directory, paged. `-q` narrows on the login and the seat; `-stage` on the enrolment stage; `-limit` on the page; `-after ID` starts the next page, as the listing's last line spells it |
 | `show ID` | One person, in full, with their name and address opened |
 | `seats` | The company's **human seats** and what holds each, in the order the company declares them: `HANDLE`, `NAME`, `UNIT`, the `HOLDER` (marked `(service account)` for one) and their `STAGE`, the open `INVITATION` for the seat (its id, and the address it was sent to) and when that invitation `EXPIRES`. **What a token reads depends on whose it is**, because the listing is everybody's and only the overview's half of it is: for an admin, and for the holder themselves, the `HOLDER` is their login; for anybody else it is the name they go by (`(name unavailable)` where this node's keyring did not open it, `(held)` for somebody enrolled with no name), and `STAGE`, `INVITATION` and `EXPIRES` are an admin's alone — so to anybody else a seat with an open invitation reads as unheld. `-unheld` keeps only the **vacant** ones — nobody holds them and no open invitation is for them — which are the seats `invite` and `create` take, and it is an admin's. An empty listing says why: a company that declares no `kind: human` seat, which can admit nobody until it declares one, or one whose every seat is held or invited — which an empty `-unheld` listing tells apart by asking the node for every seat once (never under `-json`), and whose remedy names what frees a seat: `remove` for a person, `unbind` for a service account, `cancel-invite` for an invitation, or a new `kind: human` seat. A node that runs no company yet refuses it, naming the step before: a company declaring a human seat. See [`GET /iam/seats`](api-endpoints.md#get-iamseats-lists-the-human-seats-and-who-holds-each) |
-| `invite EMAIL -seat SEAT` | Invite someone to a vacant human seat. **`-seat` is required**: a person holds a human seat for as long as they are here, so nobody is invited onto none — the command refuses a missing one before it reads any config, naming `seats -unheld`, which lists the seats that are free. The seat must be a human seat that no person and no open invitation holds. Prints the link **once** — nothing stores it and no route reads one back — good for a week. The link is the dashboard's invitation screen, `<api.external_url>/dashboard#/invite/<id>.<secret>`, and redeeming it creates the person on that seat. While it is open the invitation **holds the seat** as it holds the address: a create, a move or another invitation naming the seat is refused naming it, and so is a company write that would remove the seat — see [An invitation names its seat, and holds it](../concepts/identity-and-access.md#an-invitation-names-its-seat-and-holds-it). Run under a Tier A token on an empty estate, it is how the company's **first person** arrives — onto a human seat the company declares, so a company that declares none declares one first: give them `-grants admin` — see [How the first person exists](../concepts/identity-and-access.md#how-the-first-person-exists) |
+| `invite EMAIL -seat SEAT` | Invite someone to a vacant human seat. **`-seat` is required**: a person holds a human seat for as long as they are here, so nobody is invited onto none — the command refuses a missing one before it reads any config, naming `seats -unheld`, which lists the seats that are free. The seat must be a human seat that no person and no open invitation holds. Prints where the issue stands — `applied` or `pending`, with its op id, as every write does — and the link **once** — nothing stores it and no route reads one back — good for a week. The link is the dashboard's invitation screen, `<api.external_url>/dashboard#/invite/<id>.<secret>`, and redeeming it creates the person on that seat. While it is open the invitation **holds the seat** as it holds the address: a create, a move or another invitation naming the seat is refused naming it, and so is a company write that would remove the seat — see [An invitation names its seat, and holds it](../concepts/identity-and-access.md#an-invitation-names-its-seat-and-holds-it). Run under a Tier A token on an empty estate, it is how the company's **first person** arrives — onto a human seat the company declares, so a company that declares none declares one first: give them `-grants admin` — see [How the first person exists](../concepts/identity-and-access.md#how-the-first-person-exists) |
 | `invitations` | The invitations nobody has redeemed and that are still good, paged like `people` (`-limit`, `-after ID`); `-all` adds the expired and redeemed ones the estate still holds, each with its state. Every row says for whom, which seat it binds, what it confers, who issued it and until when — and **never the link**, which was shown once: an inviter who lost it cancels and issues another |
 | `cancel-invite ID` | Withdraw an invitation nobody redeemed: its link opens nothing from then on, and the address and the seat it held are free at once — for a new invitation, a create or a move. A redeemed one is refused naming the person it created — what undoes that is `remove`. See [A person arrives on their seat: invited, or created](../concepts/identity-and-access.md#a-person-arrives-on-their-seat-invited-or-created) |
 | `create` | Create somebody directly, active from the moment it lands. **A person** — `create -email E -seat SEAT [-login L] [-name N] [-grants G,...]`, every app when `-grants` is left out — needs the address they sign in with and the vacant human seat they will hold, and the command refuses either missing before it reads any config. `-login` may be left out: the node proposes one from the address (`jane.doe@example.com` → `jane.doe`), as an invitation's screen does, and the command prints the login it took. It prints their id, login and seat and the outcome, and then their **first password link, once** — `<api.external_url>/dashboard#/reset/<id>.<secret>`, good for a week — which sets their first password once and signs nobody in: they sign in afterwards, enrolling a second factor there where the deployment requires one. Send it to them yourself; this engine sends no mail. See [A person created directly gets their first password link](../concepts/identity-and-access.md#a-person-created-directly-gets-their-first-password-link). **A service account** — `create -kind machine -login L -grants G,... [-seat SEAT] [-name N]` — needs its login, because it has no address to be found by, and `-grants`, because nobody is behind it to have meant a default (`-grants none` for the overview alone; a missing one is refused before any config is read); `-seat` is optional and binds it to act as that human seat (`-login token:<id> -seat SEAT -grants none` binds a Tier A token in one step — the row carries nothing itself, since the token's permissions are its Tier A entry's). It gets no link — it has no password — and the command prints the `iam token -person ID` that mints its token. **Every principal enrols with a login** in its kind's grammar — a person's is dotted (`jane.doe`), a machine's coloned (`ci:release`, or `token:<id>`), at most 64 characters either way — and anything else is refused |
 | `bind ID SEAT` | **Move a person to another vacant human seat**, or bind a service account to one, so they act as it on the engine's own surface — its inbox, its day, the lead relations it holds. `SEAT` is the seat's handle, and it must be a **human** seat that no person and no open invitation holds. A Tier A token acts under the login `token:<id>`, so binding one is a service account's row under that login — `create -kind machine -login token:<id> -seat SEAT -grants none` makes it bound. See [Humans in the Org Chart](../concepts/humans-in-the-org.md#acting-as-your-seat-on-the-dashboard-and-the-api) |
 | `unbind ID` | Take a **service account's** seat back. A person always holds a human seat, so the node refuses to unbind one (`seat_required`) and the command names what does free it: `bind ID SEAT` moves them to another seat, `remove ID` frees it |
-| `grant ID` | Change someone's permissions: `-grants`, the whole set: `admin` (which stores every app beside it), `tracker`, `knowledge`, `artifacts`, or `none` |
+| `grant ID` | Change someone's permissions: `-grants`, the whole set: `admin` (which stores every app beside it), `tracker`, `knowledge`, `artifacts`, `chat`, or `none` |
 | `suspend ID` / `activate ID` | Stop somebody acting, or let them again. The row stays either way; a suspension also ends every session, token and password reset link they hold, which activating does not bring back |
-| `remove ID` | Tombstone them — which frees the seat they held — and erase every sealed value of theirs — name, address, second factor — from every node's rows, the invitation and trail rows that outlive them included. The identity log keeps the records that wrote those values, sealed under the keyring, until the retention trim passes them, and a backup keeps what it held until you delete it; their login is not sealed and outlives the removal in the clear. See [Removing somebody erases what is theirs from every node's rows](../concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-nodes-rows) |
+| `remove ID` | Tombstone them — which frees the seat they held — and erase every sealed value of theirs — name, address, second factor — from every data node's rows, the invitation and trail rows that outlive them included. The identity log keeps the records that wrote those values, sealed under the keyring, until the retention trim passes them, and a backup keeps what it held until you delete it; their login is not sealed and outlives the removal in the clear. See [Removing somebody erases what is theirs from every data node's rows](../concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-data-nodes-rows) |
 | `revoke ID` | End every session, token and password reset link they hold, by raising their sign-out count |
 | `sessions ID` | Their sessions, newest first, ended ones included — each ended one with why and when: the sign-out or gesture that ended it — a password change, a reset link, signing out everywhere, a suspension — which a later gesture never rewrites; or, for one ended with every session in the company, that |
 | `credentials` | List someone's credentials. `-person` names them; without it, yourself |
-| `token` | Mint a machine token, naming exactly one owner. **`-login L` mints your own**: a person's token is theirs alone to mint, so the command signs in as `L` for the one request — the password read from the terminal without echo, or the first line piped in, and a second-factor code — when your account holds one — asked for the same way, or piped as the line after it — mints from that session, and signs out, reading no `CREWLET_API_TOKEN`. **`-person ID` mints a service account's**, and takes `admin`; it is refused for a person's id, whoever asks. Either way the value is printed **once** and the estate holds a hash. It acts as that owner, carrying `-grants` (default: everything the owner holds, `admin` included) cut to what they still hold on every request, for `-days` (90, at most 365). A token may carry `admin`; what keeps it off the gestures that need a person present is the authority table's presence rows and the identity domain's refusal of an administrative record written through a token. See [Machine tokens](../concepts/identity-and-access.md#machine-tokens-a-persons-own-and-a-service-accounts) |
+| `token` | Mint a machine token, naming exactly one owner. **`-login L` mints your own**: a person's token is theirs alone to mint, so the command signs in as `L` for the one request — the password read from the terminal without echo, or the first line piped in, and a second-factor code — when your account holds one — asked for the same way, or piped as the line after it — mints from that session, and signs out, reading no `CREWLET_API_TOKEN`. **`-person ID` mints a service account's**, and takes `admin`; it is refused for a person's id, whoever asks. Either way the value is printed **once**, with where the mint stands — `applied` or `pending`, with its op id, as every write does: a `pending` token works on every node that has applied its record, and one that has not yet answers it `503` rather than refusing it — and the estate holds a hash. It acts as that owner, carrying `-grants` (default: everything the owner holds that the minting session may confer — `admin` included, except on a node whose `api.auth.admin` is `refuse`, where the token gets the owner's apps) cut to what they still hold on every request, for `-days` (90, at most 365). A token may carry `admin`; what keeps it off the gestures that need a person present is the authority table's presence rows and the identity domain's refusal of an administrative record written through a token. See [Machine tokens](../concepts/identity-and-access.md#machine-tokens-a-persons-own-and-a-service-accounts) |
 | `revoke-credential ID` | Withdraw one credential, naming its owner with `-person`. Run with a machine token, it withdraws machine tokens only |
 | `reset-mfa ID` | Clear the second factor **and** end every session, because clearing alone leaves the ones opened with it live — and with them every token and password reset link they hold, so a link they need as well is issued after this |
-| `reset-password ID\|LOGIN` | Issue somebody a **one-time password reset link**, printed **once** — `<api.external_url>/dashboard#/reset/<id>.<secret>` — and good for a day; send it to them yourself, as an invitation's. The person is named by their id or by their login, resolved to the one row holding it exactly. Spending it sets a new password, ends every session and token they held, and signs nobody in: they sign in afterwards, where a second factor they hold still applies. Issuing another revokes the one before — a created person's first password link included, so this is also how somebody whose first link lapsed or went astray gets a new one, and their screen then says it sets their first password — and `suspend`, `revoke`, `reset-mfa` and `invalidate-all` each end it, so issue it after any of those it is needed beside; a machine, somebody suspended or retired, and somebody holding a permission you do not hold are refused — you are shown the link, so it is held to the rule an invitation is. Takes no `-idempotency-key`: a retry could not hand back a secret its first attempt never showed, so an unknown issue is issued again. A person changes their **own** password signed in, through `POST /auth/password`, which needs a person present — no token this command reads is one — so there is no command for it. See [A forgotten password is a one-time link from an administrator](../concepts/identity-and-access.md#a-forgotten-password-is-a-one-time-link-from-an-administrator) |
+| `reset-password ID\|LOGIN` | Issue somebody a **one-time password reset link**, printed **once** with where the issue stands — `applied` or `pending`, with its op id, as every write does — as `<api.external_url>/dashboard#/reset/<id>.<secret>`, and good for a day; send it to them yourself, as an invitation's. The person is named by their id or by their login, resolved to the one row holding it exactly. Spending it sets a new password, ends every session and token they held, and signs nobody in: they sign in afterwards, where a second factor they hold still applies. Issuing another revokes the one before — a created person's first password link included, so this is also how somebody whose first link lapsed or went astray gets a new one, and their screen then says it sets their first password — and `suspend`, `revoke`, `reset-mfa` and `invalidate-all` each end it, so issue it after any of those it is needed beside; a machine, somebody suspended or retired, and somebody holding a permission you do not hold are refused — you are shown the link, so it is held to the rule an invitation is. Takes no `-op-id`: a retry could not hand back a secret its first attempt never showed, so an unknown issue is issued again. A person changes their **own** password signed in, through `POST /auth/password`, which needs a person present — no token this command reads is one — so there is no command for it. See [A forgotten password is a one-time link from an administrator](../concepts/identity-and-access.md#a-forgotten-password-is-a-one-time-link-from-an-administrator) |
 | `invalidate-all` | Invalidate every session, every machine token and every password reset link in the company. The restore runbook's last step — it ends bearers and nothing else, so a removal, a suspension, a withdrawn credential or a reduced permission the restore rolled back is re-applied by hand before it, and a reset link the restore calls for is issued after it ([Backups & Restore](../guides/backup.md#the-last-step-is-crewlet-iam-invalidate-all)) — and the token takes `admin`, a Tier A token's (a machine token is refused it, whatever it carries); the Tier A tokens in the config file are untouched |
 | `check` | Find problems with the company's access: no administrator, people with no way in, dangling bindings (a seat the running company no longer holds as a human seat), an administrator this node clamps because it refuses admin. A binding a node that runs no company yet cannot judge is counted and said first rather than reported either way. See [below](#crewlet-iam-check) |
 | `audit` | Show the identity audit trail. `-person`, `-event`, `-since POSITION`, `-at TIME`, `-before POSITION` (the next page, as the listing's last line spells it), `-limit`. The actor column names the credential beside them where the entry records one — `ana.admin (through pat:…)` for something their machine token did |
@@ -531,9 +545,9 @@ optional. `seats` lists which seats are free.
 |---|---|---|
 | `-config PATH` | `crewlet.yaml` | The node config file naming the node to reach |
 | `-api URL` | the `api.host:port` in `-config` | The running node to talk to |
-| `-json` | off | Print the raw answer rather than a table |
+| `-json` | off | Print the node's answer as JSON rather than a table: every field and number as the node sent them, its text as written (`<`, `>` and `&` as themselves) and its keys sorted |
 | `-reason TEXT` | the surface's own | Saved with the change for the audit trail |
-| `-grants G,...` | see below | A comma-separated list of `admin`, `tracker`, `knowledge` and `artifacts`, or the word `none` for an empty one — anything else is refused before any config is read, naming the set. `admin` also sends every app, as the dashboard's picker stores it, so taking admin away later leaves the apps. Left out: on a person's `invite` or `create`, **every app** and not admin; on a service account's `create`, refused — it has no default; on `grant`, nothing is changed; on `token`, everything the owner holds. `none` stands alone — beside a permission it is refused, since the two say opposite things — and the flag is refused on every command but `invite`, `create`, `grant` and `token` rather than ignored |
+| `-grants G,...` | see below | A comma-separated list of `admin`, `tracker`, `knowledge`, `artifacts` and `chat`, or the word `none` for an empty one — anything else is refused before any config is read, naming the set. `admin` also sends every app, as the dashboard's picker stores it, so taking admin away later leaves the apps. Left out: on a person's `invite` or `create`, **every app** and not admin; on a service account's `create`, refused — it has no default; on `grant`, nothing is changed; on `token`, everything the owner holds that the minting session may confer. `none` stands alone — beside a permission it is refused, since the two say opposite things — and the flag is refused on every command but `invite`, `create`, `grant` and `token` rather than ignored |
 | `-person ID` | yourself | Whose credentials or sessions, and — on `token` — the **service account** a minted token is for; a person's id is refused there, whoever asks |
 | `-login L` | — | On `create`, the login to enrol under — required for a service account, and proposed from the address for a person given none. On `token`, **your own** login: the command signs in as you for the one request, mints, and signs out. The password and any second-factor code are read from the terminal or piped in, and **no flag takes either**: a recovery code on a command line lands in shell history and `ps`, and stays good there — a sign-in refused for a mistyped password spends nothing |
 | `-email E` | — | On `create`, the address a person signs in with — required for a person, optional for a service account |
@@ -549,7 +563,7 @@ optional. `seats` lists which seats are free.
 | `-all` | open ones only | On `invitations` only: the expired and redeemed invitations too. Refused on every other command rather than ignored |
 | `-seat SEAT` | — | On `invite` and `create`: the human seat they will hold, by its handle — one nobody holds and no open invitation is for, which `seats -unheld` lists. **Required** on `invite` and on a person's `create`, optional on a service account's. Refused on every other command rather than ignored — somebody who already exists is moved with `bind` |
 | `-unheld` | every seat | On `seats` only: the vacant ones. Refused on every other command rather than ignored |
-| `-idempotency-key OP` | a new operation | Retry a write whose outcome was unknown **as the same operation** — the op id its refusal named. Refused on a read, on `token` and on `reset-password` (a retry of either would hand back a record whose value was shown to nobody, so an unknown mint or issue is made again) |
+| `-op-id OP` | a new operation, minted before the command asks | Retry a write whose outcome was unknown **as the same operation** — the op id its refusal named, or the one an unanswered write printed. Refused on a read, on `token` and on `reset-password` (a retry of either would hand back a record whose value was shown to nobody, so an unknown mint or issue is made again) |
 
 **`-grants none` strips and an omitted `-grants` means what the command
 states.** On `grant` they are opposite intentions and an empty flag value
@@ -566,7 +580,7 @@ carries after the id, the same for a first password link and a reset link, and
 a SHA-256 of the token. Lost one is re-issued rather than recovered — an
 invitation cancelled and issued again, a first password link replaced by
 `reset-password` — with one exception: an `invite` or a `create` retried with
-`-idempotency-key <op id>` is the same operation, and hands back the very link
+`-op-id <op id>` is the same operation, and hands back the very link
 its first attempt issued while that link still opens, because both are derived
 from the operation under the company's own key. A first password link that no
 longer opens by then is not printed: the command says so and names the
@@ -578,12 +592,23 @@ applied it yet, and carries the position to read at — each with the op id it
 was published under. A link is printed on `pending` too: the record is durable,
 and the link opens on every node that has applied it. `unknown` means nothing
 can be established from here, and it fails naming the op id and the one safe
-retry: the **same** command with `-idempotency-key <op id>`. A fresh attempt
+retry: the **same** command with `-op-id <op id>`. A write the node never
+answered — the connection dropped, or a proxy in front of it answered in its
+place — fails the same way, naming the op id it was sent under: every write that
+takes `-op-id` is sent under one the command mints before it asks, so a lost
+answer never loses the operation with it. So does a write the node answered
+successfully with an outcome this build cannot read — a node newer than the
+command may answer one — or with none at all: nobody here can vouch for it, so
+it **exits non-zero** naming the op id it was sent under, and prints nothing of
+the answer, under `-json` too — no invitation, first password link, reset link
+or token: the retry under `-op-id` hands back an invitation's or a create's
+link, and a token or a reset link is made again (below). A fresh attempt
 would be a second operation — for `create` and `invite` a second person or a
 second invitation, which the first attempt's person or invitation refuses as a
 conflict, since it holds the address and the seat. `token` and
-`reset-password` are the exceptions, because their routes read no key: an
-unknown mint or issue names its op id for the trail and is run again as a new
+`reset-password` are the exceptions, because their routes read no key: a mint
+or an issue answered `unknown`, with an outcome this build cannot read, or with
+none, names the op id the node answered for the trail and is run again as a new
 one — a token that may have landed is one nobody holds, which expires, and a
 reset link issued again revokes the one before it.
 
@@ -638,7 +663,7 @@ Prints a fresh base64 32-byte encryption key plus a copy-pasteable `crewlet.yaml
 
 The remaining subcommands operate on the [secret store](../concepts/secret-store.md) — the company's encrypted credentials, one sealed value per `${VAR}` name, which the engine consults **ahead of** the process environment. All of them read the Tier A bootstrap (`-config`, default `./crewlet.yaml`) for the keyring, and all of them need one: the store has no plaintext mode, so a config declaring no `secrets.keys` is refused with a pointer at `keygen` rather than silently storing plaintext.
 
-**Which store they reach depends on whether the engine is running**, and the command says which it used. The rows live on the coordination KV so every node reads them, and on the default topology that KV is inside the engine's own process — so a running node is written through its authenticated `/secrets` API, and a stopped one falls back to its own local table, which the engine migrates onto the fleet at its next start — replacing a name the fleet already holds only when the fleet's value was written earlier (see [Secret Store](../concepts/secret-store.md#operational-notes)). The engine's exclusive database lock is what tells the two apart, with a pid attached.
+**Which store they reach depends on whether the engine is running**, and the command says which it used. The rows live on the coordination KV so every node reads them, and on the default topology that KV is inside the engine's own process — so a running node is written through its authenticated `/secrets` API, and a stopped one falls back to its own local table, which the engine migrates onto the fleet at its next start — replacing a name the fleet already holds only when the fleet's value was written earlier, and carrying an `unset` made there as a dated removal under the same rule (see [Secret Store](../concepts/secret-store.md#operational-notes)). The engine's exclusive database lock is what tells the two apart, with a pid attached.
 
 `-api URL` names the node to write through, for running the command from a machine that is not the node. The bearer token comes from `CREWLET_API_TOKEN` and from nowhere else — `api.auth.tokens` is what a node **accepts** rather than a wallet the CLI helps itself from — and the credential's own identity is recorded as the author of the write.
 
@@ -670,7 +695,10 @@ The engine's own key — the identity directory's blind-index key — shares the
 crewlet secrets unset <NAME> [-config PATH] [-api URL]
 ```
 
-Removes the record and says whether one was there — "was not set" is the outcome a cleanup script wanted on its second run, not a failure. Afterwards `${NAME}` falls back to the environment.
+Removes the secret, and says which store it reached and what that store does next, as `set` does.
+
+- **Through a running node** (the engine holds the database, or `-api` names one) it removes the record from the fleet's store and says whether one was there — "was not set" is the outcome a cleanup script wanted on its second run, not a failure. Every node stops resolving the value at its next configuration activation, and afterwards `${NAME}` falls back to the environment.
+- **On a stopped node** the fleet's store is out of reach, so it records a **dated removal** in the node's own database (`recorded the removal of NAME`) and deletes the node's own value of the name, if any. The engine carries the removal onto the fleet at its next start: the fleet's value is removed when the removal is the later write, and kept — logged as `secrets_offline_removals_superseded` — when somebody set the name through a running node afterwards. `crewlet secrets list` shows a removal that is still waiting. A later `set` of the same name on the stopped node replaces the removal. To remove a secret from a running fleet now, run the command with `-api` naming a node that is up.
 
 ### `crewlet secrets get`
 
@@ -719,8 +747,10 @@ unit keys, bad cron expressions, invalid timezones, two seats declaring one
 contact identity, and a knowledge scope with no backend behind it all fail here
 rather than at run time. A human seat with **no** contact identity is not among
 them: a person who works only through the dashboard has no chat account to
-name, so validation admits the seat and prints a warning at its `contact`
-instead. It reads
+name, so validation admits the seat — and on a company that talks on
+Mattermost or Slack prints a warning at its `contact` when it names no account
+on that workspace. On the engine's own chat, or with no chat at all, there is
+no such warning: a person reads the engine's rooms on the dashboard. It reads
 **no environment**: Tier B keeps `${VAR}` references verbatim, so a config
 validates fully before any secret exists.
 For the same reason a company with no `providers.llm` at all validates, and
@@ -731,7 +761,7 @@ hold their work until a provider is added (see
 | Flag | Description |
 |------|-------------|
 | `-tier` | Which tier a positional file is. `auto` (default) reads the document's **keys**, not its filename. The two tiers share no top-level key, so `name`/`roles`/`units`/`providers` mean Tier B and `node`/`stream`/`store`/`coordination` mean Tier A. A document that carries neither, or an equal count of both, is **refused naming this flag** rather than guessed at: guessing wrong reports every field of the file as invalid, and an operator reading that cannot tell it from a genuinely broken document. |
-| `-json` | Emit a machine-readable result on stdout instead of prose. |
+| `-json` | Emit a machine-readable result on stdout instead of prose, its text as written: a problem naming `token:<id>` says so, never `token:\u003cid\u003e`. |
 | `-config` / `-company` | The two-tier form. Ignored when a positional file is given. |
 
 A Tier A document's prose summary names what it resolved to:
@@ -757,7 +787,7 @@ everything in one pass:
   "problems": [
     { "path": "roles[1].llm", "segments": ["roles", 1, "llm"],
       "kind": "unknown_value", "seat": "cto",
-      "message": "roles[1].llm: value not in the allowed set: \"nonexistent\" is not a configured provider: providers.llm has primary. A key that misses is not an error at run time: the seat falls back to another model and bills against it, so this is the only place the typo can be seen" }
+      "message": "roles[1].llm: value not in the allowed set: \"nonexistent\" is not a configured provider. Use one of providers.llm's: \"primary\". A key that misses is not an error at run time: the seat falls back to another model and bills against it, so this is the only place the typo can be seen" }
   ],
   "warnings": []
 }
@@ -870,17 +900,16 @@ crewlet budgets show                       # usage per scope
 
 | Flag | Default | What it does |
 |---|---|---|
-| `-url` | the `api` block of the config named on the command line | The running node's base URL. A wildcard bind (`0.0.0.0`, `::`) becomes the loopback address, because a wildcard is not something anything can dial |
+| `-api URL` | the `api` block of the config named on the command line | The running node's base URL. A wildcard bind (`0.0.0.0`, `::`) becomes the loopback address, because a wildcard is not something anything can dial |
 
 **The credential is `CREWLET_API_TOKEN` and nothing else**, here and on every
-command that talks to a running node — `backup`, `retention`, `work`,
-`objects`, `fleet`, `seats`, `secrets`, `config` and `iam` too. Every guarded route needs one,
-reads included. It is never a flag: a token typed as an argument is in the
-shell history, in `ps`, and in any CI log that echoes the command, so
-`-token` is refused as an unknown flag. And it is never read out of the
-config's own `api.auth.tokens`: that list is what the node *accepts*, and a
-write authored by whichever entry came first landed under a name nobody
-chose. The one command that reads no token is `iam token -login`, which mints
+command that talks to a running node, each of which names that node with
+`-api`. Every guarded route needs one, reads included. It is never a flag: a
+token typed as an argument is in the shell history, in `ps`, and in any CI log
+that echoes the command, so `-token` is refused as an unknown flag. And it is
+never read out of the config's own `api.auth.tokens`: that list is what the
+node *accepts*, and a write authored by whichever entry came first landed
+under a name nobody chose. The one command that reads no token is `iam token -login`, which mints
 your own and so signs in as you for that request instead — a person's token is
 theirs alone to mint. A `401` therefore has one thing to check — the value exported in
 `CREWLET_API_TOKEN`.
@@ -941,7 +970,7 @@ where a counter zeroed by hand left no record of who made the room or why.
 ## `crewlet backup`
 
 ```
-crewlet backup [<config.yaml>] -dir <absolute path> [-url URL] [-wait DURATION]
+crewlet backup [<config.yaml>] -dir <absolute path> [-api URL] [-wait DURATION]
 ```
 
 Copies what a running node holds — its own store file, the replicated
@@ -964,11 +993,13 @@ broker is embedded in the engine and **binds no socket**, so there is no
 address to give the `nats` CLI. The one process that can reach both is the
 engine, and this asks it to.
 
-The report names what it captured, per estate. Every node holds its own store
-whatever its `node.roles`, and a data node the replicated estate beside it. On
-the embedded topology the fleet's streams come too: a member snapshots them
-from its own broker, and a leaf, whose broker keeps no stream, snapshots the
-same streams from the members across its leaf link. A node that dialled an
+The report names what it captured, per estate: the node's own store and the
+replicated estate beside it. Every backup is a data node's — only a node with
+`ingress` serves the route this asks, and `ingress` requires `data` — and a
+node without `data` keeps nothing of its own to copy: its store is scratch, and
+its events are in the data node keeping them in custody. On the embedded
+topology the fleet's streams come too, snapshotted from the node's own broker,
+of which a data node is always a member. A node that dialled an
 external NATS cluster copies its store files alone and says so, naming the
 cluster as where the stream half is backed up, rather than presenting a
 partial copy as a backup.
@@ -998,7 +1029,7 @@ what the copy is a copy *of*, and how a restore uses it.
 
 ```
 crewlet work purge <item> -reason TEXT -confirm <item-key>
-    [-op-id ID] [<config.yaml>] [-url URL]
+    [-op-id ID] [<config.yaml>] [-api URL]
 ```
 
 The gestures on work items that belong on a **shell**. Everything else a
@@ -1064,8 +1095,8 @@ duration to state, and `crewlet retention status` names which nodes those are.
 ## `crewlet objects`
 
 ```
-crewlet objects status [-json] [<config.yaml>] [-url URL]
-crewlet objects migrate -to s3 -target <path> [-final] [-wait D] [-json] [<config.yaml>] [-url URL]
+crewlet objects status [-json] [<config.yaml>] [-api URL]
+crewlet objects migrate -to s3 -target <path> [-final] [-wait D] [-json] [<config.yaml>] [-api URL]
 ```
 
 Where the company's files are kept, and what the
@@ -1102,8 +1133,8 @@ for each pass:
   [backup](../guides/backup.md) or upload again.
 
 Before the collector has finished a pass — on a new fleet, in the minute or so
-before a data node first claims the duty — it says so. `-json` prints the block exactly as the node answered it,
-for a script. The exit status is non-zero when the node cannot say — its
+before a data node first claims the duty — it says so. `-json` prints the block as JSON for a script: every field and every number as
+the node answered them, its text as written and its keys sorted. The exit status is non-zero when the node cannot say — its
 coordination store did not answer, the node runs no object store, or it
 answered a state this build does not know — and zero otherwise, files that
 cannot be read included: a store that lost bytes is an answer, and the
@@ -1141,14 +1172,15 @@ direct uploads, any file the fleet's own store could not give back (no copy
 can bring those back), and what to do next. `-wait` (six hours) is how long
 it waits for the answer; the node finishes the pass either way, and running
 the command again reports where the copy stands. `-json` prints the node's
-report as it answered it. The token takes `admin`.
+report as JSON for a script: every field and every number as the node answered
+them, its text as written and its keys sorted. The token takes `admin`.
 
 ## `crewlet fleet broker`
 
 ```
-crewlet fleet broker list [-json] [<config.yaml>] [-url URL]
-crewlet fleet broker remove <node> -confirm <node> [-force] [<config.yaml>] [-url URL]
-crewlet fleet broker remove -peer <peer> -confirm <peer> [-force] [<config.yaml>] [-url URL]
+crewlet fleet broker list [-json] [<config.yaml>] [-api URL]
+crewlet fleet broker remove <node> -confirm <node> [-force] [<config.yaml>] [-api URL]
+crewlet fleet broker remove -peer <peer> -confirm <peer> [-force] [<config.yaml>] [-api URL]
 ```
 
 The fleet broker's membership. Two records say who its members are: every node
@@ -1188,7 +1220,8 @@ answering member happens to have heard.
 A group no member could report is said to be unread, never shown as empty. On a
 fleet whose broker is an external cluster it says so and lists nothing: that
 membership is the cluster's own operator's. `-json` prints the node's answer as
-it came.
+JSON for a script: every field and every number as the node sent them, its text
+as written and its keys sorted.
 
 ### `crewlet fleet broker remove`
 
@@ -1229,9 +1262,9 @@ member.
 
 ```
 crewlet seats pause <handle> [-stop] [-reason TEXT]
-    [-op-id ID] [<config.yaml>] [-url URL]
+    [-op-id ID] [<config.yaml>] [-api URL]
 crewlet seats resume <handle>
-    [-op-id ID] [<config.yaml>] [-url URL]
+    [-op-id ID] [<config.yaml>] [-api URL]
 ```
 
 Pause an agent seat, or resume it — the same `pause_seat` and `resume_seat`
@@ -1286,7 +1319,7 @@ crewlet artifacts purge <id> -confirm <id> [-op-id ID]
 crewlet artifacts assets <id>
 crewlet artifacts sources [<name>]
 crewlet artifacts usage
-    ... [<config.yaml>] [-url URL]
+    ... [<config.yaml>] [-api URL]
 ```
 
 The company's artifacts from a shell, through the same routes the dashboard is
@@ -1357,10 +1390,14 @@ left as it is, and a call that names none is refused before anything is sent.
 
 Every write sends an operation id as the request's `Idempotency-Key`: `-op-id`
 takes one in the engine's operation-id grammar, and without it the command
-mints one. An `unknown` outcome, or no answer at all, prints it; send it again
-with `-op-id` so the retry is the same operation rather than a second one. A
-publish keys its upload intent with the id and its version with a step of it,
-so a retried publish reuses the upload and lands one version.
+mints one before it asks. An `unknown` outcome, no answer at all, or a
+success whose outcome this build cannot read **exits non-zero** and prints it;
+send it again with `-op-id` so the retry is the same operation rather than a
+second one — through another node with `-api` where the node answering cannot
+vouch for it. A `503` refusal that wrote nothing says so, and the retry once
+the node can take it is under the same id. A publish keys its upload intent
+with the id and its version with a step of it, so a retried publish reuses the
+upload and lands one version.
 
 **`sources` lists the dashboard source catalogue** the node answers: each
 engine source a `dashboard`'s datasets may read, what it reads, who may read
@@ -1369,11 +1406,172 @@ it refreshes on, or one source whole when named. A source is answered as each
 board's viewer, so the list holds no row; see the
 [Dashboard Spec](dashboard-spec.md#the-engine-source-catalogue).
 
+## `crewlet chat`
+
+```
+crewlet chat channels|read|post|search|erase|prune|retention
+    [<config.yaml>] [-api URL] [-op-id ID]
+```
+
+The company's own chat from a shell — the
+[`chat.backend: native`](../concepts/chat.md) axis. On a company whose chat is
+a vendor's or `none`, chat's questions, routes and tools are never registered
+at all, so every verb here is refused and says that `chat.backend` is why —
+an honest "this company has no such surface" rather than an empty room that
+reads like a company with nothing in it. A node started in a maintenance mode
+(`crewlet run -mode`) refuses the writes the same way, because it may publish
+nothing, and a node without the `ingress` role serves no chat route at all.
+
+**Every verb talks to a running node**, for the reason `crewlet budgets` and
+[`crewlet work purge`](#crewlet-work-purge) do and one more of chat's own: the
+rooms and the messages are the state log's, so a write is a record the broker
+arbitrates and every data node applies — and on the default topology that
+broker is inside the engine's own process with no listener at all. A command
+that opened the store instead would find a database locked to a live engine,
+or write rows the log never carried.
+
+**No verb here names an author.** The node decides every call on the
+principal `CREWLET_API_TOKEN` resolves to, and a chat verb is made **as a
+seat**: your own machine token (`crewlet iam token -login <login>`) reads and
+speaks as the seat you hold, and a service account or a Tier A token's row the
+identity directory binds to a human seat (`crewlet iam bind`) as that one.
+There is nowhere here to write a handle. A credential acting as itself — the
+deployment's own Tier A token, a service account bound to no seat — is refused
+every room, reads included, `unseated`, and the command prints those two
+remedies. `erase`, `prune` and `retention` are the exception: they are said in
+nobody's voice, so they are an administrator's, on the terms of
+[`crewlet work purge`](#crewlet-work-purge) — `admin`, a recent proof, never a
+seat — made under the caller's own name, a Tier A token holding `admin`
+included, and none of them reads the room it acts on. See
+[Chat § People](../concepts/chat.md#people).
+
+Every read prints the [level it was served at](../guides/consistency.md), the
+position it answered at and how far behind the log the copy that answered is —
+this node's while it serves, a data node's otherwise; a copy that could not
+present every row says `incomplete` rather than silently answering short.
+Every write is three-valued, like every write here: `applied` is on the
+answering node's rows, `pending` is durable on the log and not yet applied
+there — **do not run it again** — and `unknown` is the one to retry. Every
+write sends an operation id as the request's `Idempotency-Key`: `-op-id` takes
+an id the engine printed, and without it the command mints one **before** it
+asks. An `unknown` outcome, an answer this build cannot read, or no answer at
+all — a dropped connection, a timeout, since the write may have landed all the
+same — exits non-zero printing that id; send it again with `-op-id` so the
+retry is the same operation rather than a second message, erase or prune. Pass
+it exactly as printed: it carries the instant it was minted, which a node
+reads to decide whether it can still vouch for a retry.
+
+### `crewlet chat channels`
+
+```
+crewlet chat channels [-archived]
+```
+
+The rooms this seat is in, most recently active first, as `ID  NAME  KIND
+UNREAD  LAST`. The **id** is the value `read`, `post`, `search`, `erase`,
+`prune` and `retention` take. A direct conversation has no name — its identity
+is its participants — so its row carries the handles instead. An unread count
+that hit its ceiling prints as `N+`, and a room this seat muted says so. When
+the node could not read where this seat has read to — read state lives in the
+coordination store, not on the log — every count prints `?` and a line says
+why, rather than a zero that would call every room read. `-archived` includes the rooms
+that take no new messages and stay readable.
+
+### `crewlet chat read`
+
+```
+crewlet chat read <room-id> [-limit N] [-before CURSOR]
+```
+
+One room's transcript, oldest first, a page at a time: each line carries the
+message's number in the room, when it was said, **its id** — what
+[`chat erase`](#crewlet-chat-erase) takes — who said it and, for a reply, the
+root it hangs under (`↳<id>`). A message of several lines keeps them under
+its own heading, its links are printed beneath it, an edited one says so and
+a taken-back one reads `(deleted)`. The page ends where the room does or at
+`-limit`, and prints the `-before` cursor that reads the page before it. A
+room the seat may not read answers exactly as a room that does not exist.
+
+### `crewlet chat post`
+
+```
+crewlet chat post <room> -body TEXT [-link URL]... [-op-id ID]
+```
+
+Says something in a room, by its id or its name, as your seat — the same
+`post_message` the dashboard's composer calls, over the same route
+([`POST /operator/act/{tool}`](api-endpoints.md#operatoract--the-dashboards-write-surface)),
+so a post from a terminal and one from the dashboard are one gesture with one
+record and one `operator_acted` audit row. `-link` repeats, for what the
+message points at — a message links to a file rather than carrying one. It
+prints the message's id and outcome, the seats it mentions, and — when
+`@channel` in the body addressed the whole room — that it wakes the agents in
+the room; the people in it are told, and never woken.
+
+### `crewlet chat search`
+
+```
+crewlet chat search <text> [-channel ROOM-ID] [-author HANDLE] [-limit N]
+```
+
+Ranks every room this seat may read — or one, with `-channel` — as `SCORE
+ROOM MESSAGE WHEN WHO SNIPPET`, and says how many rooms it searched. A node
+whose index is still being built says so rather than reading as nothing said.
+The query is at most 400 bytes, the bound every ranked search shares, and a
+longer one is refused rather than cut.
+
+### `crewlet chat erase`
+
+```
+crewlet chat erase <room-id> -message ID... -reason TEXT -confirm N [-op-id ID]
+```
+
+Destroys the messages named, on every data node, with the reactions, mentions
+and thread rows that hang off them — what a credential pasted into one message
+needs, without taking the conversation around it. It has no inverse, so
+`-confirm` repeats how many messages it destroys — counted once a repeated id
+is folded — and `-reason` is required: the messages are gone, and the erase
+record's reason is the only account of them that survives. The ids are the
+ones [`chat read`](#crewlet-chat-read) and [`chat search`](#crewlet-chat-search)
+print. Like every destruction it reads nothing from the room first, so it
+takes a message out of a private room the administrator is not in. See
+[`POST /chat/channels/{channel_id}/erase`](api-endpoints.md#a-chat-erase-prune-or-horizon).
+
+### `crewlet chat prune`
+
+```
+crewlet chat prune <room-id> -cutoff TIME -confirm TIME [-op-id ID]
+```
+
+Destroys everything a room said before an RFC 3339 instant, on every data
+node, now rather than at the room's [retention](../concepts/chat.md#retention)
+horizon — what an erasure request covering a room's history needs. It has no
+inverse, so the cutoff is typed twice and compared as an instant (two zones
+naming one moment are one cutoff), and a cutoff in the future is refused,
+since that would empty the room rather than enforce a horizon.
+
+### `crewlet chat retention`
+
+```
+crewlet chat retention <room-id> -days N | -company -confirm N|company [-op-id ID]
+```
+
+Sets how long one room keeps what is said in it — `-days N`, `0` keeping it
+for ever — or, with `-company`, returns it to the company's own
+`chat.native.message_retention_days`. Exactly one of the two. Nothing is
+destroyed by the change itself; the retention duty prunes what the new
+horizon no longer covers on its next pass, on every data node, with no
+inverse — which is why a shorter horizon is decided as a prune is, and
+confirmed as one: `-confirm` repeats the horizon, the same number of days
+(`0` included) or `company`, and a command whose two disagree sends nothing.
+Every horizon takes it, a longer one too, because whether it shortens the
+room's depends on what the room had, which the command does not read.
+
 ## `crewlet retention`
 
 ```
 crewlet retention status|snapshots|ack|evict|readmit|set-capacity|maintenance|reanchor|verify
-    [<config.yaml>] [-url URL]
+    [<config.yaml>] [-api URL]
 ```
 
 What the state log is holding, why it is not shrinking, and the gestures that
@@ -1398,6 +1596,20 @@ NOT READY pages: wrong_stream (recreated): pages's rows are keyed to the stream 
 WRITES REFUSED tracker: log_truncated: peer node-4 stands at sequence … of CREWLET_TRACKER_LOG, which ends at …
 ```
 
+While a capacity window is open on any log it leads with that window
+(`MAINTENANCE IS OPEN on <log>: no node starts in service until it closes.`),
+naming what it waits on, or saying it couldn't read that rather than printing a
+list, and a window that needs a person says why in the node's words
+(`BLOCKED`, never the code a script reads from `blocked`) and who abandoned it.
+`crewlet retention maintenance status`, `set-capacity` and the gestures print
+that sentence on a line of its own under the table, as the window's next step.
+A log whose window the node couldn't read is said in a line of its own rather
+than left out:
+
+```
+This node couldn't read whether a capacity window is open on "CREWLET_PAGES_LOG". A data node restarted now won't start in service until it can read it. `crewlet retention maintenance status -stream CREWLET_PAGES_LOG` asks again.
+```
+
 Then the blocking term, **in prose**, because it is the answer to the only
 question anybody runs this for:
 
@@ -1417,15 +1629,16 @@ generation (`GEN`), and a position from a generation the log has left prints
 `left gen N` (or `ahead gen N`) in place of a lag, since its sequence compares
 with nothing the log holds now; a node that reported its log diverged at its
 checkpoint is marked `LOG DIVERGED`. `RESERVE` is the top of the ceiling every
-identity-claiming log — the tracker's, the knowledge base's and the identity
-estate's — keeps for gate records ([the gate
-reserve](../guides/retention.md#the-gate-reserve)), `-` on the vector
-changelog, which keeps none; `HEADROOM` is what is left of the rest, the
-ceiling ordinary writes are refused at — so a log at `0%` still takes an
-eviction.
+identity-claiming log — the tracker's, the knowledge base's, the identity
+estate's, the artifacts log's, the artifact datastore's and chat's — keeps for
+gate records ([the gate reserve](../guides/retention.md#the-gate-reserve)), `-`
+on the vector changelog and the usage log, which keep none; `HEADROOM` is what
+is left of the rest, the ceiling ordinary writes are refused at — so a log at
+`0%` still takes an eviction.
 
 A term that does not apply to a domain prints `n/a` rather than `0`: the
-vector log and the identity estate's have no wake feed, and an
+vector log, the identity estate's, the artifacts log's, the artifact
+datastore's and the usage log have no wake feed, and an
 absent term is a different fact from one that permits nothing. Where a log does
 have one, its `feed_ack_floor` is that log's own feed — never another domain's.
 `PER DAY` prints `-` for the same reason where nothing was measured — a
@@ -1438,9 +1651,12 @@ report's own rule rather than a second one in the CLI — the shell script
 watching this exit code would otherwise be watching the definition nobody
 maintained. Each alarm's measurement and remedy go to **stderr**, so a cron
 capturing stdout for a dashboard still gets the reason in its own mail. An alarm
-that stands on logs names them: one log in its headline (`log_headroom on
-usage: 3% of the log's byte ceiling for ordinary writes is left`), several as a
-line each with the term holding the log's trim (`  tracker (backup_floor): the
+that stands on logs names them: one measurement in its headline with the logs
+it was taken on (`log_headroom on usage: 3% of the log's byte ceiling for
+ordinary writes is left`, or a fleet with no backup yet as `backup_age on
+tracker, vectors, pages, iam, usage: no verified backup of this log has been
+recorded, …` — once, since every log measured it in the same words), several as
+a line each with the term holding the log's trim (`  tracker (backup_floor): the
 trim has not advanced for 46h 33m, and the log is keeping up to 1840 record(s)
 older than its 24h replay window`).
 
@@ -1468,6 +1684,11 @@ backup until it leaves the host and the engine cannot see that it has. Both
 flags are required: an acknowledgement moves the floor the trim deletes
 against, so there is no value to guess.
 
+One acknowledgement covers the one log it names, and is kept per log:
+acknowledging the next log leaves this one standing, and each log's trim reads
+its own. Under `operator`, acknowledge every log once its copy is off the host
+— a log never acknowledged is never trimmed, and `backup_age` names it.
+
 ### `crewlet retention evict` / `readmit`
 
 ```
@@ -1480,10 +1701,11 @@ coming back; eviction is the gesture for one that is not.
 
 `-confirm` repeats the node id, the same shape the other destructive gestures
 use. The trim counts nodes per log, so the eviction is a record on every log it
-counts nodes on — the tracker's, the knowledge base's and the identity
-estate's — and each answers on its
-own line with its [three-valued outcome](../guides/replication.md#a-write-has-three-outcomes),
-or `not written` and the reason that stopped it:
+counts nodes on — the tracker's, the knowledge base's, the identity estate's,
+the artifacts log's, the artifact datastore's and chat's — and each answers on
+its own line with its
+[three-valued outcome](../guides/replication.md#a-write-has-three-outcomes), or
+`not written` and the reason that stopped it:
 
 ```
 $ crewlet retention evict node-4 -confirm node-4
@@ -1491,10 +1713,16 @@ evict node-4 (operation 01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4)
   tracker: applied at CREWLET_TRACKER_LOG 918280002
   pages: applied at CREWLET_PAGES_LOG 4410
   iam: applied at CREWLET_IAM_LOG 58311
+  artifacts: applied at CREWLET_ARTIFACTS_LOG 30552
+  artifactdata: applied at CREWLET_ARTIFACT_DATA_LOG 112940
+  chat: applied at CREWLET_CHAT_LOG 207714
   node-4 stays COUNTED for about a minute, so a live node is certain to have read its own tombstone before the trim passes it.
   tracker trim floor 918100000 → 918100000
   pages trim floor 4100 → 4100
   iam trim floor 57000 → 57000
+  artifacts trim floor 30100 → 30100
+  artifactdata trim floor 112000 → 112000
+  chat trim floor 206900 → 206900
 ```
 
 The command prints the watermark before and after and the instant the
@@ -1504,7 +1732,7 @@ one is certain to have read its own tombstone before the trim passes it.
 The node you ran it on writes every log itself: every data node holds the
 whole estate, so one command reaches every log.
 
-The gesture is **judged once, before either log is written**. A node that still
+The gesture is **judged once, before any log is written**. A node that still
 holds a live presence lease is refused with `409 eviction_refused` — it is
 still reaching the fleet and almost certainly running, and an eviction would
 drop everything it writes and take its copy out of service. Stop it and wait
@@ -1544,7 +1772,7 @@ ordinary writes still takes them — needs
 
 ```
   pages: not written (log_full): pages: statelog: unavailable (log_full): …
-    CREWLET_PAGES_LOG is full to its broker ceiling, past even the reserve kept there for gate records: raise its ceiling, which is the only thing that makes room for it — then the same gesture under the same operation id finishes it, where a fresh one would write every log that already holds the record again
+    CREWLET_PAGES_LOG is full to its broker ceiling, past even the reserve kept there for gate records: raise its ceiling, which is the only thing that makes room for it. Then the same gesture under the same operation id finishes it, where a fresh one would write every log that already holds the record again
     crewlet retention set-capacity CREWLET_PAGES_LOG <bytes> -confirm <bytes>, then run this again with -op-id 01a0cd85-…
 ```
 
@@ -1553,7 +1781,7 @@ Not the same command now — it is refused the same way until the ceiling moves
 `-op-id` is what finishes it, because a fresh id is a second eviction that
 writes every log already holding the record again — here the tracker's and the
 identity estate's — and re-dates the eviction there. A node that is
-itself `evicted` cannot write, so it prints `-url <that node>` with the same
+itself `evicted` cannot write, so it prints `-api <that node>` with the same
 `-op-id`; a `wrong_stream` log needs a [reanchor](#crewlet-retention-reanchor)
 first, and then the same `-op-id`; and a `superseded` operation — an eviction
 retried after a readmission took the node back — is a new gesture, without
@@ -1583,14 +1811,16 @@ inequality is the reason:
 ```
 $ crewlet retention readmit node-4 -confirm node-4
 crewlet: the node answered 409: readmission_refused
-  statelog: node-4 may not be readmitted: its last position in tracker (reported 2031-04-02T03:14:00Z) is 1200 and records below 9000 may already be gone from the tracker log (published floor 9000, first surviving sequence 8800) — it has to catch up before the fleet counts it again.
-  Start node-4 if it is not running: it catches up on its own, …
+  node-4 may not be readmitted: its last position in tracker (reported 2031-04-02T03:14:00Z) is 1200 and records below 9000 may already be gone from the tracker log (published floor 9000, first surviving sequence 8800). It has to catch up before the fleet counts it again.
+  Start node-4 if it isn't running: it catches up on its own, …
   its SEQ in `crewlet retention status`, at the domain's own GEN, says when it has caught up, and `crewlet retention snapshots` whether a peer can donate one; then run this again
 ```
 
 The comparison is the one the node's own write fence makes: its **last
 published position** in each log that claims identity — the tracker's, the
-knowledge base's and the identity estate's — against the **higher of the published floor and the log's first
+knowledge base's, the identity estate's, the artifacts log's, the artifact
+datastore's and chat's — against the **higher of
+the published floor and the log's first
 surviving sequence**, and the node must have applied every record up to the
 one just before it. A node that has never published a position is judged as
 holding nothing; one whose position is from a generation the log has since
@@ -1618,7 +1848,7 @@ A readmission that cannot be **judged** is refused as well, with nothing
 written: `503 readmission_unjudged`, when the positions register, a published
 floor or a log's first surviving sequence could not be read. The node's
 position is not what is wrong there, so it is not told to catch up: the
-command is asked again, on this node or through another (`-url <that node>`).
+command is asked again, on this node or through another (`-api <that node>`).
 And either gesture on a node in a
 [capacity window](../guides/retention.md#changing-a-logs-ceiling) is refused `409 not_publishing`
 before anything is judged; its line points at `crewlet retention status`, which
@@ -1639,8 +1869,8 @@ crewlet retention set-capacity CREWLET_TRACKER_LOG 8589934592 -confirm 858993459
 
 Changes a log's byte ceiling, raising or lowering it. A log's Tier A ceiling
 (`stream.tracker_log_max_bytes`, `stream.tracker_vectors_max_bytes`,
-`stream.pages_log_max_bytes`,
-`stream.iam_log_max_bytes`, `stream.usage_log_max_bytes`) is not a live
+`stream.pages_log_max_bytes`, `stream.iam_log_max_bytes`,
+`stream.usage_log_max_bytes`, `stream.chat_log_max_bytes`) is not a live
 setting, only the value its stream is created with. A resize is decided
 against the usage the log is at, and a
 publisher makes that a moving quantity, so this runs with the whole fleet in a
@@ -1668,17 +1898,20 @@ There the engine does not run the broker and cannot establish who else holds a
 connection to it, so the assertion is yours in your own words rather than a
 check that quietly proves nothing.
 
-A target whose ordinary ceiling is at or below what the log already holds is
-refused before the window opens, naming both numbers and the least target that
+A target the log's ceiling already is opens no window, since there's nothing
+to change: that is the verb run again after its own window closed with its
+answer lost on the way back. A target whose ordinary ceiling is at or below
+what the log already holds is refused before the window opens, naming both numbers and the least target that
 would do: that ceiling would refuse every ordinary append the moment it
-applied. On the three identity logs the ordinary ceiling is the target less
+applied. On the logs that claim identity the ordinary ceiling is the target less
 its [gate reserve](../guides/retention.md#the-gate-reserve) — the larger of a
 sixteenth of it and seven of the log's largest records with a mebibyte beside
 them; on the vector changelog and the usage log, which hold no gate, it is the
 whole target. A target under the floor Tier A holds the log's own field to is
 refused too, naming the field — a gibibyte on the tracker's, the knowledge
-base's and the vector changelog's, 64 MiB on the identity
-estate's and the usage log's. A target under the
+base's, the vector changelog's, the artifacts log's, the artifact datastore's
+and chat's, 64 MiB on the identity estate's and the usage log's. A target under
+the
 current ceiling and above the usage is accepted, and is how a log gives a
 reservation back. A raise the broker cannot
 reserve is refused before the window opens too, naming what it reserves and
@@ -1687,9 +1920,26 @@ embedded node, or a NATS account's own limit. A clustered member cannot, and
 there the broker refuses such a raise when the window applies it.
 
 Run from a node in `normal` mode it refuses outright, naming the restart. Run
-from `maintenance` it opens, baselines and applies; run from `seal` it collects
+from `maintenance` it opens, baselines and applies, and on a window already
+baselined it records again who is running before it sends its request; run
+from `seal` it collects
 the barrier, seals, verifies and confirms. It prints the phase it reached and
-the next gesture, never the transition table.
+the next gesture, with the command to run in full, never the transition
+table. Once its window closes it sends the fleet back to service only when no
+log has a window open and the node could read every log's, since a node won't
+start in service otherwise: it names each window still open with the
+command that finishes it, and each log whose window it couldn't read. A node
+holding an **admission** (one that may be publishing) stops it in
+one of two ways. If the process that wrote the admission is still running, the
+window is closed again as it opens and nothing is sent: restart that node with
+`-mode maintenance` and run the verb again. If it isn't running, the window
+stays at `opened`, which has sent nothing for this attempt, and the first
+request is refused naming the node: restart it with `-mode maintenance`, or
+`exclude` one that will never boot again. While it waits the window refuses
+every node that starts in service, so that refusal names `abandon` too. An
+admission whose node now runs another process is withdrawn by the window
+itself. A later attempt back at `opened` says what the last one left the
+ceiling at.
 
 ### `crewlet retention maintenance`
 
@@ -1700,11 +1950,24 @@ crewlet retention maintenance abandon -stream CREWLET_TRACKER_LOG -confirm capac
 ```
 
 `status` is the one page an operator can see why a fleet is still excluded: the
-operation, its phase and attempt, every participant's baselined incarnation
-against what it acknowledged as, which acknowledgements are missing, any
-unresolved write attempt, and any admission still blocking activation. On a
-fleet with no window it says so — *no window* and *a window in phase `opened`*
-are different facts with different next steps.
+operation, its phase and attempt, the process each participant was running as
+the newest request left (RUNNING AT REQUEST) against what it acknowledged as
+for this log (its ATTEMPT reads `no window`
+for a node that restarted before a window opened on the log, and `another
+window` for one that last acknowledged an earlier window on it), any
+unresolved request and when it was sent, and what the
+window's next step is waiting on. At `opened` that is the baseline's: the
+participants with no restart into a maintenance mode recorded, and any
+admission still stopping the window's first request. From the baseline on it is
+the seal's: which acknowledgements are missing. On a fleet with no window it
+says so — *no window* and *a window in phase `opened`* are different facts with
+different next steps — and, on a node in a maintenance mode, names any node
+still holding an admission before you open one. A window the node couldn't read is a
+third answer, never the first: the command says it couldn't read it and exits
+non-zero, and asking again once coordination answers is the remedy. When the node read the window and couldn't read its
+acknowledgements or the admissions beside it, the page says so in their place
+(`couldn't read` in the acknowledgement column, and a line saying what it can't
+tell), never a dash or an empty list.
 
 `exclude` is your assertion that a participant's **process is stopped** and
 holds no outstanding request. It is the only thing that waives an
@@ -1712,13 +1975,24 @@ acknowledgement; an eviction does not, because that is about whose records
 apply and this is about whose process is running. The window records it as
 yours — `status` prints the participant as `excluded by` you, with the
 credential you used — and an `abandon` that leaves the window open is recorded
-and printed (`ABANDONED`) the same way.
+and printed (`ABANDONED`) the same way. It also withdraws the node's
+admission, which is how a window gets past a node that crashed and will never
+boot again: a node that does boot again withdraws its last process's admission
+itself. Any node can be excluded, whether or not it is a participant, and
+`-node` names it.
 
 `abandon` changes what the operation is trying to reach and never the barrier
-it must cross. From `opened` it clears outright — no request was issued. From
-anywhere else the fleet still has to restart into `seal`, because a paused
+it must cross. From `opened` it clears outright, since no request was issued,
+and says what's left before service as set-capacity does once it closes a
+window. From anywhere else it still crosses the seal, because a paused
 coordinator's request is outstanding whether or not a person has read a status
-page. `-confirm` repeats the operation id from `status`.
+page: every node restarted into `seal` since the request left, which a window
+abandoned after it sealed already has. Once the seal holds, set-capacity run
+again closes the window at whatever ceiling the log has then, rather than
+trying the target again, and the window's `BLOCKED` sentence says which of the
+two it is. `-confirm` repeats the operation id from `status`, and the node checks
+it against the operation that is open before it abandons anything: one naming
+another operation is refused and nothing changes.
 
 ### `crewlet retention reanchor`
 
@@ -1772,7 +2046,8 @@ used, an evicted peer's included — every other domain's stays where it is, and
 the domain's applier resumes on the node with no restart.
 
 For every log that keeps a generation record — the tracker's, the knowledge
-base's and the identity estate's — it refuses while any peer
+base's, the identity estate's, the artifacts log's, the artifact datastore's
+and chat's — it refuses while any peer
 has already re-anchored the stream, **naming the peer** — that peer's rows are the fleet's
 history in the new generation, and this node adopts its snapshot instead. A
 peer that is gone for good is released by evicting it first
@@ -1976,11 +2251,11 @@ index        measured on 118432 sources: 0.9812 against a 0.9800 floor in its wo
 recall       0.9761  (floor 0.9312 for this corpus size)
 worst query  0.9467
 head misses  0  (documents dropped from the exact top ten)
-scan recall  0.9803 with 0 head miss(es) — the same search with the full scan as its first stage
-narrowed     source:page      recall 0.9950  floor 0.9800  head misses 0  (25 of 25 scanned)  — scan 0.9950, 0 head miss(es)
-narrowed     source:task      recall 0.9772  floor 0.9368  head misses 0  — scan 0.9810, 0 head miss(es)
-narrowed     container:task   recall 0.9967  floor 0.9800  head misses 0  (19 of 21 scanned)  — scan 0.9967, 0 head miss(es)
-narrowed     container:page   recall 1.0000  floor 0.9800  head misses 0  (4 of 4 scanned)  — scan 1.0000, 0 head miss(es)
+scan recall  0.9803 with 0 head miss(es), from the same search with the full scan as its first stage
+narrowed     source:page      recall 0.9950  floor 0.9800  head misses 0  (25 of 25 scanned)  (scan 0.9950, 0 head miss(es))
+narrowed     source:task      recall 0.9772  floor 0.9368  head misses 0  (scan 0.9810, 0 head miss(es))
+narrowed     container:task   recall 0.9967  floor 0.9800  head misses 0  (19 of 21 scanned)  (scan 0.9967, 0 head miss(es))
+narrowed     container:page   recall 1.0000  floor 0.9800  head misses 0  (4 of 4 scanned)  (scan 1.0000, 0 head miss(es))
 verdict      the two-stage search recovers the exact ranking at the shipped depth, in every shape
 window       8192 bytes a source (the corpus's opening): a semantic search sees each source's title and body up to it, a keyword search the whole body
 past window  task  2110 of 104208 sources (2.0%), 7.4 MiB of 196.0 MiB of text (3.8%)
@@ -2033,10 +2308,10 @@ crewlet llm list
 crewlet llm doctor [KEY] [-no-smoke]
 crewlet llm login  <KEY> [-from-host | -capture-token | -token-stdin |
                           -username U -password-stdin] [-home PATH]
-                          [-print-token]
+                          [-print-token] [-api URL]
 crewlet llm status <KEY>
 crewlet llm logout <KEY>
-crewlet llm export <KEY> [-secret-store]
+crewlet llm export <KEY> [-secret-store] [-api URL]
 crewlet llm import <KEY>          # bundle on stdin
 ```
 
@@ -2075,12 +2350,22 @@ the smoke test was answered, which proves the CLI authenticates some way the
 engine does not hand it (an endpoint that takes no key, a credential in its
 own configuration). A token `auth.mode: api-key` removes from the child is not
 counted. `${VAR}` references and the variables `inherit-env` forwards are
-resolved in the process running `crewlet llm` — the secret store first, then
-that shell's environment — so run it with the engine's environment to get the
-engine's answer.
+resolved in the process running `crewlet llm` — **this node's own secret rows**
+first (the `-config` store: what was set here while its engine was stopped and
+has not been migrated yet), then that shell's environment — and **not** the
+fleet's secret store, which the engine reads first and these commands cannot
+reach: they open this node's own database, which a running engine holds, and on
+the default topology the fleet's store is inside the engine's process. So a
+token or a bundle stored through a running node (`-api`, the dashboard, `crewlet
+secrets set` while the engine was up) is not in these answers; run them with the
+engine's environment, and with the value in this node's rows or the shell, to
+get the engine's answer. `list`, `status`, `export` and `doctor` each say on
+stderr which of the two they resolved from.
 
 `llm list`'s `SIGN-IN` column is the first route `doctor` would name — both
-restore the entry's configured bundle first, as the engine does:
+restore the entry's configured bundle first, as the engine does, but from the
+bundle this node's own rows or the shell resolve (above) rather than the
+fleet's store:
 `credentials` (files a login wrote), `token` (a headless token), `api key`
 (under `auth.mode: api-key`), `inherited token` or `inherited key` (forwarded
 by `auth.mode: inherit-env`), `environment` (a `cli.env` key), or `none`.
@@ -2145,6 +2430,21 @@ store](../concepts/secret-store.md) instead of stdout; without it the blob goes
 to stdout in the clear, which is what you want when piping into your own
 secret manager and never what you want in a shell history.
 
+A token `login` stores and a bundle `export -secret-store` stores land in the
+rows of the store `-config` names — this node's own, which its engine moves
+into the fleet's store at its next start — or, with `-api`, go through the
+running node it names, which puts them on every node at once. The command
+says which, as `secrets set` does. Like every `crewlet llm` command it first
+reads the company's `${VAR}` references out of that store, so it runs where
+no engine is holding it: on a node whose engine is up it is refused before
+anything is written, and a stopped node reaches the running fleet with `-api`.
+The store is the **fleet's**, so one export reaches every node: each one
+whose credential directory for the provider is empty, and where nobody has
+logged the entry out since its last login (below), restores the same login at
+boot and at every apply it publishes, and every copy then descends from one
+refresh token — see [Move a login onto another
+host](../concepts/subscription-llm-backends.md#4-move-a-login-onto-another-host).
+
 **`import`** is the other half, and it reads the bundle from **stdin** — a
 credential on argv is visible in `ps` and lands in shell history, and the
 natural spelling is a pipe anyway:
@@ -2168,7 +2468,10 @@ headless token (`-token-stdin`, or the one `-capture-token` mints, unless its
 sign-in also left a login file) signs the entry in without ending the logout. A
 fresh state directory holds no such record and restores the bundle as before,
 so `logout` names the field or secret that retires it when the entry has one —
-even when the CLI's own logout fails, since the login is removed and the logout
+and, since a secret is the fleet's, `crewlet secrets unset NAME -api URL`
+through a node that is up as the way to remove it now: run where the engine is
+stopped, the unset reaches the fleet only at that engine's next start — even
+when the CLI's own logout fails, since the login is removed and the logout
 recorded either way.
 
 The engine also restores a bundle **itself**, at boot and at every apply it
@@ -2177,8 +2480,10 @@ publishes (never for a revision it refuses), from
 `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` variable — and only into an empty
 credential directory, by the same rule, and never after a `logout` until a
 login is written again. `list`, `status`, `export` and `doctor` make
-the same restore before they look, so they report the login the engine would
-run with; `validate` never writes one. That path authenticates a fresh
+the same restore before they look, from the bundle they resolve — this node's
+own secret rows and the shell, never the fleet's store the engine reads (each
+says which on stderr) — so they report the login the engine would run with only
+where that is the bundle the engine resolves too; `validate` never writes one. That path authenticates a fresh
 container before its first turn rather than after an operator remembers a
 command; `import` is for the hosts that are already up. See [environment
 variables](environment-variables.md).

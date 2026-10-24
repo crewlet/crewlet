@@ -1,6 +1,7 @@
 package authz
 
 import (
+	"context"
 	"maps"
 	"net/http"
 	"path"
@@ -68,11 +69,59 @@ func ContextGuard(chart Chart) Guard {
 		if p.Object != nil {
 			object = p.Object(r)
 		}
-		// NOW, at the request: how recently the caller proved who they
-		// are is judged at the instant they ask, against the deadlines
-		// the guard composed for this very request.
-		return Decide(r.Context(), principal, p.Action, object, chart, time.Now())
+		// AT THE REQUEST'S INSTANT: how recently the caller proved who
+		// they are is judged when they asked, against the deadlines the
+		// guard composed for this very request — and every later check
+		// of the same request is judged at that same instant
+		// ([DecidedAt]).
+		return Decide(r.Context(), principal, p.Action, object, chart,
+			DecidedAt(r.Context()))
 	}
+}
+
+// decidedAtKey carries the instant a request's route was decided at.
+type decidedAtKey struct{}
+
+// DecidedAt is the instant a request is decided at: the one its route was
+// decided at, which every [Router] route stamps on the request before its
+// guard runs, or the current time for a context no route decided.
+//
+// ONE INSTANT FOR EVERY CHECK OF ONE REQUEST. A handler decides more than its
+// route did — a verb only the body names ([Admit]), every part of a
+// configuration write once the document is built — and each of those asked
+// for a recent proof at its own `time.Now()`. A proof the route accepted could
+// lapse while the body was read, and the handler then refused, as stale, the
+// request the route had just admitted on it: an administrator was told on
+// every part of their write that they needed admin. The request is one
+// gesture, so it is judged at one instant.
+//
+// FOR A DECISION ABOUT THE REQUEST ITSELF, never one made later on its
+// behalf: an open socket's watch is decided again whenever a credential moves,
+// at that moment, and is not a check of the handshake.
+func DecidedAt(ctx context.Context) time.Time {
+	if at, ok := RouteInstant(ctx); ok {
+		return at
+	}
+	return time.Now()
+}
+
+// RouteInstant is the instant a [Router] route stamped on the request, and
+// whether one did: [DecidedAt] for a surface whose own clock stands in where
+// no route decided — a gate a tool reaches too, whose clock a test sets —
+// rather than the current time.
+func RouteInstant(ctx context.Context) (time.Time, bool) {
+	at, ok := ctx.Value(decidedAtKey{}).(time.Time)
+	return at, ok
+}
+
+// decidedNow stamps r with the instant its route is decided at, keeping one an
+// outer route already stamped: a surface mounted behind another router is the
+// same request, decided at the first.
+func decidedNow(r *http.Request) *http.Request {
+	if _, stamped := RouteInstant(r.Context()); stamped {
+		return r
+	}
+	return r.WithContext(context.WithValue(r.Context(), decidedAtKey{}, time.Now()))
 }
 
 // Admit decides one more verb from INSIDE a handler the router already
@@ -172,39 +221,28 @@ const RetryUndecidedSeconds = 2
 //     it holds no company yet — so it is `503 unavailable` with a
 //     `Retry-After`, never a 403 that sends somebody to ask for an authority
 //     they already hold. See the package doc.
-//   - A REFUSAL is `403 unauthorized`, carrying the rule's reason and the
-//     grants that would have admitted the caller ([RefusalDetail]).
-//   - A STALE PROOF is `403 step_up_required` — the code the sign-in surface
-//     already answers for the same fact, so a client learns ONE spelling —
-//     carrying the window it needs ([StepUpDetail]): the rule admitted the
-//     caller, and confirming who they are and replaying the request is the
-//     whole remedy, which a client can do without asking anybody.
-//   - A MACHINE TOKEN on a verb that needs a person present is `403
-//     token_refused`, its own code for step_up_required's reason: the
-//     `unauthorized` code's sentence is about a grant the credential lacks,
-//     and no grant on a token would admit it. It was that code with a
-//     sentence of its own as `detail`, so the envelope's `message` and its
-//     `detail` contradicted each other.
+//   - A REFUSAL is a 403 in the code [RefusalFields] gives it: `unauthorized`
+//     carrying the rule's reason and the grants that would have admitted the
+//     caller; `step_up_required` for a stale proof — the code the sign-in
+//     surface already answers for the same fact, so a client learns ONE
+//     spelling — carrying the window it needs, which a client can clear
+//     without asking anybody; and `token_refused` for a machine token on a
+//     verb that needs a person present, since the `unauthorized` code's
+//     sentence is about a grant the credential lacks and no grant on a token
+//     would admit it. It was that code with a sentence of its own as
+//     `detail`, so the envelope's `message` and its `detail` contradicted
+//     each other.
 //   - A CALLER WITH NO RELATION to an artifact is `404 not_found` with
-//     nothing beside it ([Decision.NotFound]): no reason and no grants, the
-//     answer a surface gives for an id nothing holds, so the refusal cannot
-//     say whether the artifact exists.
+//     nothing beside it ([Decision.NotFound]), the same mapping's answer: no
+//     reason and no grants, the answer a surface gives for an id nothing
+//     holds, so the refusal cannot say whether the artifact exists.
 func EnvelopeRefusal(w http.ResponseWriter, _ *http.Request, _ Policy, d Decision) {
-	switch {
-	case d.Unknown():
+	if d.Unknown() {
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, RetryUndecidedSeconds)
-	case d.NotFound():
-		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
-	case d.Reason == ReasonStepUp:
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeStepUpRequired,
-			StepUpDetail(d))
-	case d.Reason == ReasonTokenRefused:
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeTokenRefused,
-			RefusalDetail(d.Reason, d.Grants))
-	default:
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-			RefusalDetail(d.Reason, d.Grants))
+		return
 	}
+	status, code, detail := RefusalFields(d)
+	httpjson.FailWithFields(w, status, code, detail)
 }
 
 // Handle mounts one guarded route.
@@ -255,9 +293,11 @@ func (t *Router) PolicyFor(pattern string) (Policy, bool) {
 	return p, ok
 }
 
-// wrap is the guard around one route's handler.
+// wrap is the guard around one route's handler, stamping the request with the
+// instant it is decided at first ([DecidedAt]).
 func (t *Router) wrap(p Policy, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r = decidedNow(r)
 		d := t.guard(r, p)
 		if d.Unknown() || !d.Allowed {
 			t.refuse(w, r, p, d)

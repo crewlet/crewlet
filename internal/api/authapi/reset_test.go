@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -47,7 +48,7 @@ func withResetLink(t *testing.T, e *estate, change func(*iamdomain.Credential)) 
 func viewReset(t *testing.T, h http.Handler, id, secret string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/auth/reset/"+id, nil)
-	req.Header.Set("X-Crewlet-Reset-Secret", secret)
+	req.Header.Set(authapi.ResetSecretHeader, secret)
 	req.RemoteAddr = "203.0.113.9:4711"
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

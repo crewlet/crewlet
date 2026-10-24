@@ -257,7 +257,9 @@ func companyJSON(t *testing.T, doc string) []byte {
 	return document
 }
 
-// seedPayload stores payload as the active revision, byte for byte.
+// seedPayload stores payload as the active revision, byte for byte, and
+// points the fleet at it, as a node's boot seed does: the active revision this
+// surface answers is the one the fleet's pointer names.
 func (s *surface) seedPayload(t *testing.T, payload []byte) string {
 	t.Helper()
 	id, err := s.configs.InsertActive(t.Context(), store.Revision{
@@ -268,7 +270,21 @@ func (s *surface) seedPayload(t *testing.T, payload []byte) string {
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
+	s.publish(t, id, payload)
 	return id
+}
+
+// publish points the fleet at a revision this node stored, as the node that
+// stored it does once it is written.
+func (s *surface) publish(t *testing.T, id string, payload []byte) {
+	t.Helper()
+	if _, err := s.plane.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: id, Summary: "seed", Payload: payload, At: pinned,
+		Origin: coord.RevisionOrigin{Author: "operator", AuthorKind: iam.ActorOperator,
+			Source: "test", CreatedAt: pinned},
+	}); err != nil {
+		t.Fatalf("point the fleet at the seeded revision: %v", err)
+	}
 }
 
 func decode(t *testing.T, res *httptest.ResponseRecorder) map[string]any {
@@ -561,7 +577,7 @@ func TestEveryConfigRefusalCarriesItsSentence(t *testing.T) {
 	check("a write somebody else's beat", s.do(t, http.MethodPut, "/config",
 		strings.Replace(companyDoc, "Acme", "Ours", 1),
 		map[string]string{"X-Summary": "ours", "If-Match": base}),
-		http.StatusConflict, httpjson.CodeRevisionAdvanced)
+		http.StatusPreconditionFailed, httpjson.CodeRevisionAdvanced)
 }
 
 func TestAWriteActivatesANewRevision(t *testing.T) {
@@ -700,8 +716,8 @@ func TestConcurrentEditorsAreToldRatherThanOverwritten(t *testing.T) {
 	// Ours was based on the revision they replaced.
 	res := s.do(t, http.MethodPut, "/config", strings.Replace(companyDoc, "Acme", "Ours", 1),
 		map[string]string{"X-Summary": "ours", "If-Match": base})
-	if res.Code != http.StatusConflict {
-		t.Fatalf("got %d, want 409", res.Code)
+	if res.Code != http.StatusPreconditionFailed {
+		t.Fatalf("got %d, want 412: the revision If-Match named is not the active one", res.Code)
 	}
 	body := decode(t, res)
 	if body["error"] != "revision_advanced" {
@@ -1022,13 +1038,19 @@ func TestADiffOfAMissingRevisionSaysSo(t *testing.T) {
 func TestADiffAgainstTheActiveOfAnUnconfiguredNode(t *testing.T) {
 	t.Parallel()
 	// There is no active revision to compare against, which is a different
-	// answer from "the revision you named does not exist".
+	// answer from "the revision you named does not exist". The revision is
+	// history the fleet never activated, as a write that lost its
+	// compare-and-set leaves one.
 	s := newSurface(t)
-	id := s.seed(t, companyDoc)
-	// Deactivate everything, which is what a node looks like before its
-	// first import.
-	if _, err := s.db.SQL().ExecContext(t.Context(),
-		`UPDATE company_config SET is_active = 0`); err != nil {
+	payload, err := secrets.Seal(s.cipher, companyJSON(t, companyDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.configs.Insert(t.Context(), store.Revision{
+		CreatedByKind: iam.ActorOperator, Source: "test", CreatedBy: "operator",
+		Summary: "never activated", Payload: payload, CreatedAt: pinned,
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	res := s.do(t, http.MethodGet, "/config/revisions/"+id+"/diff", "", nil)
@@ -1454,8 +1476,8 @@ func TestTheDocumentReadCarriesAnEntityTag(t *testing.T) {
 	// The tag moved with the document, so the stale one is now refused.
 	stale := s.do(t, http.MethodPut, "/config", s.activeDocument(t),
 		map[string]string{"X-Summary": "stale write", "If-Match": tag})
-	if stale.Code != http.StatusConflict {
-		t.Errorf("PUT with a superseded tag = %d, want 409", stale.Code)
+	if stale.Code != http.StatusPreconditionFailed {
+		t.Errorf("PUT with a superseded tag = %d, want 412", stale.Code)
 	}
 }
 
@@ -1484,7 +1506,9 @@ func TestAnUnchangedDocumentAnswers304(t *testing.T) {
 // there". `If-None-Match: *` is the reverse, and the only create-only
 // precondition: every other If-Match value is an entity-tag, whatever word it
 // happens to be, and one no revision carries matches nothing, configured or
-// not.
+// not. A condition that is false is 412 (§13.1.1) whichever it is: an
+// entity-tag the active revision does not carry was answered 409, the status
+// of a race the request never stated a condition about.
 func TestThePreconditionsFollowTheSpec(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1498,7 +1522,7 @@ func TestThePreconditionsFollowTheSpec(t *testing.T) {
 		{"if-none-match:* is create-only", "If-None-Match", "*", false, http.StatusCreated, ""},
 		{"if-none-match:* refuses an existing document", "If-None-Match", "*", true, http.StatusPreconditionFailed, "already_configured"},
 		{"a word is an entity-tag an unconfigured node cannot match", "If-Match", "none", false, http.StatusPreconditionFailed, "no_active_revision"},
-		{"a word is an entity-tag a configured node does not carry", "If-Match", "none", true, http.StatusConflict, "revision_advanced"},
+		{"a word is an entity-tag a configured node does not carry", "If-Match", "none", true, http.StatusPreconditionFailed, "revision_advanced"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

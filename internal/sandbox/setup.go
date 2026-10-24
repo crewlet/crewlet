@@ -115,6 +115,12 @@ type SetupError struct {
 	Exited bool
 	Exit   int
 	Detail string
+
+	// Err is what the box answered where it did not run the step to an
+	// exit status — a write or a command it could not take — and nil for
+	// a command that exited: what kept the step from running is the
+	// box's, and [WhyOf] reads it through [SetupError.Unwrap].
+	Err error
 }
 
 func (e *SetupError) Error() string {
@@ -133,6 +139,14 @@ func (e *SetupError) Error() string {
 	return msg
 }
 
+// Unwrap is what the box answered, where it answered something.
+func (e *SetupError) Unwrap() error { return e.Err }
+
+// why is a step a command of which EXITED non-zero: the recipe is the
+// company's, so a person changes it. A step the box never ran to an exit is
+// not classed here: the box's own answer says why ([SetupError.Err]).
+func (e *SetupError) why() (Why, bool) { return WhyConfiguration, e.Exited }
+
 // ApplySetup applies every step to a fresh box: write files, run commands, in
 // order.
 //
@@ -150,7 +164,7 @@ func ApplySetup(ctx context.Context, box Sandbox, steps []SetupStep, env map[str
 		paths := slices.Sorted(maps.Keys(step.Files))
 		for _, path := range paths {
 			if err := box.WriteFile(ctx, path, []byte(step.Files[path])); err != nil {
-				return &SetupError{Step: step.Name, File: path, Detail: err.Error()}
+				return &SetupError{Step: step.Name, File: path, Detail: err.Error(), Err: err}
 			}
 		}
 		for i, cmd := range step.Commands {
@@ -159,7 +173,7 @@ func ApplySetup(ctx context.Context, box Sandbox, steps []SetupStep, env map[str
 				TimeoutSec: step.timeout().Seconds(),
 			})
 			if err != nil {
-				return &SetupError{Step: step.Name, Command: i + 1, Detail: err.Error()}
+				return &SetupError{Step: step.Name, Command: i + 1, Detail: err.Error(), Err: err}
 			}
 			if result.ExitCode != 0 {
 				// NOT the command text. The engine resolves nothing in a

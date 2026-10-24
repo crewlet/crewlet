@@ -3,6 +3,8 @@ package config
 import (
 	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // StoreObjects is where the company's files are kept: which backend every node
@@ -110,7 +112,7 @@ func (o StoreObjects) validate(path Path) error {
 	var p problems
 	if o.Backend != "" && !o.Backend.Valid() {
 		p.add(at(path, "backend"), ErrUnknownValue,
-			"must be one of %v, got %q", ObjectBackends, o.Backend)
+			"must be one of %s, got %q", words.Or(ObjectBackends), o.Backend)
 	}
 	s3 := at(path, "s3")
 	switch {

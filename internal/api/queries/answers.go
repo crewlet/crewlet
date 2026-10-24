@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 var log = logging.Get("api.queries")
@@ -66,7 +67,7 @@ const (
 type Sources struct {
 	State *livestate.LiveState
 
-	// Events is the FLEET's turn-level history: every node's own event
+	// Events is the FLEET's turn-level history: every data node's own event
 	// store, asked at query time, with a [eventfan.Coverage] beside every
 	// answer saying which nodes it came from (ADR-0021).
 	//
@@ -77,9 +78,9 @@ type Sources struct {
 	// be handed without being told.
 	Events FleetEvents
 
-	// Usage is the replicated estate's usage domain: every node's company
-	// days, for every NAMED spend window and its series (ADR-0020). Not
-	// this node's event log, which answered for this node alone and only
+	// Usage is the replicated estate's usage domain: every data node's
+	// company days, for every NAMED spend window and its series (ADR-0020).
+	// Not this node's event log, which answered for this node alone and only
 	// thirty days back. Nil leaves `token_series` unregistered and a named
 	// `tokens` window empty.
 	Usage usage.Estate
@@ -138,8 +139,10 @@ type Sources struct {
 	// bound. An ERROR is the table's UNKNOWN — this node could not decide
 	// for this principal — and `viewer` refuses rather than answering an
 	// empty list a screen would draw as "you may do nothing". Nil answers
-	// none: a node with no native backend has nothing a person could act
-	// on.
+	// none: it is a surface built with no operator catalogue, which mounts
+	// no act route — never an engine node, whose catalogue serves the seat
+	// controls whatever backends its company runs — so no press could
+	// reach anything.
 	Acts func(ctx context.Context, p iam.Principal) ([]string, error)
 
 	// WithheldContacts reads the identity directory's withholding as the
@@ -319,10 +322,11 @@ type Sources struct {
 	// an unreported surface as connecting rather than guessing either way.
 	Converges func(kind integration.Kind) bool
 
-	// Work and Pages are this node's projections of the company's own
-	// tracker and knowledge base. Nil leaves their questions unregistered,
-	// which is the honest answer for a company on Jira and Confluence:
-	// there is no native record for this node to have a copy of.
+	// Work and Pages are the company's own tracker and knowledge base, read
+	// through the estate router and resolved per question: a company whose
+	// tracker or wiki is a vendor's has each of that half's questions
+	// answered unknown, as an unregistered question is. Nil — a surface
+	// built without them — leaves their questions unregistered.
 	//
 	// Consumer-defined interfaces rather than the concrete readers, like
 	// every other seam here — and the READ side only. Nothing on this
@@ -352,6 +356,32 @@ type Sources struct {
 	// Nil leaves `work_search` unregistered, which is what a screen needs
 	// in order to offer the board's filters instead of an empty ranking.
 	WorkSearch WorkSearcher
+
+	// Chat is the company's own conversation through the estate router,
+	// the third native backend beside the tracker and the wiki and resolved
+	// per question the same way: a company talking on Slack has each chat
+	// question answered unknown. Nil leaves them unregistered.
+	//
+	// EVERY QUESTION IT SERVES IS ABOUT THE CALLER, as the seat the
+	// request's principal acts as — see chat.go's file doc. There is no
+	// handle parameter anywhere on this family and no arm that reads
+	// somebody else's rooms.
+	Chat ChatReader
+
+	// ChatSearch is the ranked search over that conversation, through the
+	// router: the data node that answers resolves the viewer's rooms beside
+	// the index it reads. A seam of its own rather than a method of
+	// [Sources.Chat] because it is a search FOR A VIEWER rather than a read
+	// of rooms — see [ChatSearcher]. Nil leaves `chat_search`
+	// unregistered.
+	ChatSearch ChatSearcher
+
+	// ChatReads is where each person's eye has reached, which rooms they
+	// muted and whether they are in do-not-disturb: the ONE piece of chat
+	// state that is not on the log, kept in coordination. Nil is "this
+	// process cannot say", which the rail reports rather than badging
+	// every room with its whole history.
+	ChatReads ChatReads
 
 	// WebhookBase is where a THIRD-PARTY APP reaches this deployment —
 	// `config.API.WebhookBase`: the public listener's
@@ -410,9 +440,10 @@ type Sources struct {
 		Since(ctx context.Context, now time.Time) (map[string]time.Time, error)
 	}
 
-	// Backups is the fleet's backup register — each owner's newest
-	// announced point, which is what the trim's backup term reads. With
-	// [Sources.Events] it answers `backups`; nil leaves that unregistered.
+	// Backups is the fleet's backup register — each node's newest announced
+	// point and the operator's newest acknowledgement of each log, which is
+	// what each log's backup term reads. With [Sources.Events] it answers
+	// `backups`; nil leaves that unregistered.
 	Backups interface {
 		BackupPoints(ctx context.Context) ([]coord.BackupPoint, error)
 	}
@@ -541,7 +572,7 @@ func Register(r *Registry, s Sources) {
 		// push names a version of a heavy field newer than the copy it
 		// holds — the push that carried it was dropped. From the projection
 		// alone, so it costs what a push does; `agent` reads the seat's
-		// history from every node as well. Everybody's, as the `agents`
+		// history from every data node as well. Everybody's, as the `agents`
 		// push is, and masked as that push is: only a reader the seat's
 		// trail is open to — its lead, or an admin — receives the body.
 		r.Register("live_call", Everybody(), s.liveCall)
@@ -596,7 +627,7 @@ func Register(r *Registry, s Sources) {
 		// merged duration quantiles and a day-by-day series. A screen
 		// counting the rows of a list it loaded was counting the list.
 		r.Register("seat_activity", Everybody(), s.seatActivity)
-		// WHO READ A PAGE, from every node's days — see pagereads.go.
+		// WHO READ A PAGE, from every data node's days — see pagereads.go.
 		// Gated on the USAGE domain rather than on the native pages: a
 		// read is recorded with its backend, so a company on Confluence
 		// has readers too. The knowledge base's, as the pages are.
@@ -826,6 +857,25 @@ func Register(r *Registry, s Sources) {
 		r.Register("page_activity", Requires(iam.GrantKnowledge), s.pageActivity)
 		r.Register("page_revision", Requires(iam.GrantKnowledge), s.pageRevision)
 	}
+	if s.Chat != nil {
+		// THE CHAT APP, and then the SEAT: the registry asks for `chat`
+		// as it asks every app's questions, and each answer decides its
+		// own verb on the authority table before it reads a thing, so a
+		// credential acting as itself is refused as the table refuses it
+		// (`unseated`) — a room is read as a seat, and such a caller has
+		// none to be shown it as. See chat.go.
+		r.Register("chat_channels", Requires(iam.GrantChat), s.chatChannels)
+		r.Register("chat_channel", Requires(iam.GrantChat), s.chatChannel)
+		r.Register("chat_messages", Requires(iam.GrantChat), s.chatMessages)
+		// A THREAD IS ITS OWN QUESTION, not a filter on the room: it is
+		// opened beside the transcript and paged the other way, because a
+		// conversation is read forwards.
+		r.Register("chat_thread", Requires(iam.GrantChat), s.chatThread)
+		r.Register("chat_mentions", Requires(iam.GrantChat), s.chatMentions)
+		if s.ChatSearch != nil {
+			r.Register("chat_search", Requires(iam.GrantChat), s.chatSearch)
+		}
+	}
 	if s.Memory != nil {
 		// A SEAT'S TRAIL — what it remembers and what it said — ANSWERED
 		// BY THE HOLDER, and saying which node that was (see
@@ -957,9 +1007,9 @@ func (s Sources) agent(ctx context.Context, p Params) (any, error) {
 		// in the store addressable by id.
 		"next": next,
 		// WHICH NODES THE HISTORY CAME FROM. A seat moves between nodes,
-		// so its history is on every node that ever held it; null when it
-		// could not be read at all, which is not the same as a seat that
-		// has never run.
+		// so its history is on every data node it ran on or that kept its
+		// events in custody; null when it could not be read at all, which
+		// is not the same as a seat that has never run.
 		"coverage": coverage,
 	}
 	// ASSIGNED ONLY WHEN THERE IS ONE, because a nil *Overlay stored in an
@@ -1243,7 +1293,7 @@ func (s Sources) events(ctx context.Context, p Params) (any, error) {
 		id, ok := s.agentSeatID(q.RelatedAgent)
 		if !ok {
 			return nil, fmt.Errorf("%w: agent %q names no agent seat in this "+
-				"company — the related filter is about an agent; a person's "+
+				"company. The related filter is about an agent; a person's "+
 				"events are the ones they acted in, under `actor`",
 				ErrBadParams, q.RelatedAgent)
 		}
@@ -1252,9 +1302,9 @@ func (s Sources) events(ctx context.Context, p Params) (any, error) {
 	q.Limit = Clamp(p.Int("limit", 0), DefaultEventPage, MaxEventPage)
 	if before := p.String("before_id"); before != "" {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		at, err := time.Parse(time.RFC3339Nano, p.String("before_time"))
+		at, err := cursorTime(p)
 		if err != nil {
-			return nil, fmt.Errorf("%w: before_id needs a before_time: %w", ErrBadParams, err)
+			return nil, err
 		}
 		q.Before = &store.Cursor{Time: at, ID: before}
 	}
@@ -1297,19 +1347,27 @@ func (s Sources) eventSeries(ctx context.Context, p Params) (any, error) {
 	}
 	bucket := store.EventBucket(p.String("bucket"))
 	if !bucket.Valid() {
-		return nil, fmt.Errorf("%w: bucket %q is not one of %v",
-			ErrBadParams, bucket, store.EventBuckets)
+		return nil, fmt.Errorf("%w: the bucket parameter is one of %s, and %q isn't",
+			ErrBadParams, words.Or(store.EventBuckets), bucket)
 	}
 	got, coverage, err := s.Events.Histogram(ctx, store.HistogramQuery{ListQuery: filters, Bucket: bucket})
 	switch {
-	case errors.Is(err, store.ErrHistogramBucket),
-		errors.Is(err, store.ErrHistogramSpan),
-		errors.Is(err, store.ErrHistogramRelated):
-		// A REQUEST THIS SURFACE UNDERSTOOD AND REFUSED, so it answers
-		// 400 with the store's own sentence rather than 500 with
-		// "something went wrong": every one of these names the parameter
-		// the caller has to change.
-		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+	// A REQUEST THIS SURFACE UNDERSTOOD AND REFUSED, so it answers 400
+	// rather than 500 with "something went wrong", each naming the
+	// parameter the caller has to change — in words of this surface's,
+	// because the store's open with its package's name and say the window
+	// as Go prints a duration ("hour over 2160h0m0s is 2160 buckets").
+	case errors.Is(err, store.ErrHistogramBucket):
+		return nil, fmt.Errorf("%w: the bucket parameter is one of %s, and %q isn't",
+			ErrBadParams, words.Or(store.EventBuckets), bucket)
+	case errors.Is(err, store.ErrHistogramSpan):
+		return nil, fmt.Errorf("%w: that window holds more %s bars than a "+
+			"chart shows, which is %d at most. Pick a coarser bucket or a "+
+			"shorter window", ErrBadParams, bucket, store.MaxHistogramBuckets)
+	case errors.Is(err, store.ErrHistogramRelated):
+		return nil, fmt.Errorf("%w: a chart can't be narrowed to a related "+
+			"agent, since its bars would disagree with the events they "+
+			"count. Leave related_agent out of it", ErrBadParams)
 	case err != nil:
 		return nil, err
 	}
@@ -1413,7 +1471,7 @@ func (s Sources) eventFilters(p Params) (store.ListQuery, error) {
 	}
 	q.Since, q.Until = since, until
 	if !since.IsZero() && !until.IsZero() && !until.After(since) {
-		return store.ListQuery{}, fmt.Errorf("%w: until (%s) is not after since (%s) — the "+
+		return store.ListQuery{}, fmt.Errorf("%w: until (%s) is not after since (%s). The "+
 			"window is half-open, so an empty one names no rows at all",
 			ErrBadParams, until.Format(time.RFC3339), since.Format(time.RFC3339))
 	}
@@ -1437,8 +1495,8 @@ func workItemParam(p Params) (string, error) {
 	}
 	backend, id, ok := strings.Cut(raw, ":")
 	if !ok || backend == "" || id == "" {
-		return "", fmt.Errorf("%w: work_item=%q is not a work item's identity — "+
-			"want `<backend>:<id>` (for example `native:<task id>` or `jira:<issue id>`), "+
+		return "", fmt.Errorf("%w: work_item=%q is not a work item's identity. "+
+			"Send `<backend>:<id>` (for example `native:<task id>` or `jira:<issue id>`), "+
 			"never its key", ErrBadParams, raw)
 	}
 	return raw, nil
@@ -1475,19 +1533,19 @@ func (s Sources) seatParam(p Params) (string, error) {
 // from.
 func (s Sources) seatAgentID(handle string) (string, error) {
 	if !org.ValidHandle(handle) {
-		return "", fmt.Errorf("%w: seat=%q is not a handle — a seat is named by "+
+		return "", fmt.Errorf("%w: seat=%q is not a handle. A seat is named by "+
 			"its handle (lowercase, as on its page), never its role name", ErrBadParams, handle)
 	}
 	organization := s.organization()
 	if organization == nil {
 		return "", fmt.Errorf("%w: seat=%q cannot be resolved until a company "+
-			"configuration is applied on this node — a seat's id is derived from "+
+			"configuration is applied on this node, since a seat's id is derived from "+
 			"the company's name", ErrUnavailable, handle)
 	}
 	if role := organization.Role(handle); role != nil {
 		id, ok := organization.AgentIDFor(role)
 		if !ok {
-			return "", fmt.Errorf("%w: seat=%q is %s, a human seat — the engine "+
+			return "", fmt.Errorf("%w: seat=%q is %s, a human seat. The engine "+
 				"runs no turns for a person, so no seat's history is filed under "+
 				"it; a person's events are the ones they acted in, under `actor`, "+
 				"and what was spent for them is a row of its own in the "+
@@ -1498,7 +1556,7 @@ func (s Sources) seatAgentID(handle string) (string, error) {
 	id, ok := org.DeriveAgentID(organization.Name, handle)
 	if !ok {
 		return "", fmt.Errorf("%w: seat=%q cannot be resolved until the company "+
-			"this node runs has a name — a seat's id is derived from it",
+			"this node runs has a name, since a seat's id is derived from it",
 			ErrUnavailable, handle)
 	}
 	return id.String(), nil
@@ -1518,10 +1576,27 @@ func instantParam(p Params, name string) (time.Time, error) {
 	}
 	at, err := time.Parse(time.RFC3339, raw)
 	if err != nil {
+		// NEVER THE PARSE ERROR, which says the value against Go's layout
+		// ("cannot parse \"x\" as \"2006\""): what the caller sent and
+		// what it should be are the whole of it.
 		return time.Time{}, fmt.Errorf("%w: %s must be an RFC 3339 instant "+
-			"(2026-04-16T09:00:00Z), and %q is not: %w", ErrBadParams, name, raw, err)
+			"(2026-04-16T09:00:00Z), and %q isn't", ErrBadParams, name, raw)
 	}
 	return at.UTC(), nil
+}
+
+// cursorTime is the before_time a before_id pages from, refused as
+// [instantParam] refuses one, and required: a cursor is the pair.
+func cursorTime(p Params) (time.Time, error) {
+	at, err := instantParam(p, "before_time")
+	switch {
+	case err != nil:
+		return time.Time{}, err
+	case at.IsZero():
+		return time.Time{}, fmt.Errorf("%w: before_id needs a before_time, an "+
+			"RFC 3339 instant (2026-04-16T09:00:00Z)", ErrBadParams)
+	}
+	return at, nil
 }
 
 // cursorOf is the position a caller resumes from, or nil at the end.

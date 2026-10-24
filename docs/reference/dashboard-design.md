@@ -61,8 +61,7 @@ whether it is connected is the state beside it, and a drained Datadog read as
 a placeholder image rather than as Datadog. Crewlet's own services carry their
 **product marks** (`ProductMark`) on the same terms: drawn only beside the
 service's name, the one place the brand's violet is identity rather than a
-token, and Crewlet Chat's *coming soon* is the mark's own soon state, never a
-greyed copy.
+token.
 
 The second exception is the organization's two charts, **Company › Org chart**
 and **Org chart › Edit org**, which draw it the way the console's org chart does:
@@ -403,7 +402,7 @@ share does not move.
 ## Information architecture
 
 **One sidebar, and three nouns that keep it one.** The sidebar lists where a
-reader can go (fourteen **workspaces**, in three runs and a foot) and the
+reader can go (fifteen **workspaces**, in three runs and a foot) and the
 few objects they keep coming back to: the views and artifacts they pinned and
 the pages they starred. A workspace's own **sections** are paths drawn as tabs
 in its page header (Settings draws its fifteen as a column of four groups, and
@@ -427,7 +426,11 @@ list a section of Settings.
   ([Work's scope](#works-scope-is-named-and-switched-in-the-trail)).
 - A **section** is a **path segment** inside a workspace, drawn by one
   renderer: `tabs` in the page header, `lenses` beside Work's scope in the
-  trail, or `column` for Settings.
+  trail, `column` for Settings, or `rail` for Chat, whose screen draws them
+  beside its rooms. Chat draws no tabs because the header draws them on a
+  section's own page and never on an object's, and a room is the object page a
+  chat reader spends their time on, so Mentions and Search sit at the head of
+  the rail, drawn from the same table, and the frame draws nothing for them.
 - An **object tab** is a `tab=` query on an object's own page (a seat's
   Overview, Work, Turns…), bound to 1–9.
 
@@ -657,9 +660,9 @@ what needs you, what reached you, what is yours. Then **Company**, what the
 company decides: who it is, the policies its agents read, its org chart, its
 schedules, the services and apps it runs, and, last, the ceilings it sets on
 what it spends. Then **Workspace**, what the company does with all of that:
-its work, what it knows, what it made and what is running. The engine stands
-beside the company's name in the head, and the foot is the reader, with
-Settings and Preferences as glyphs beside them.
+its work, what its people say to each other, what it knows, what it made and
+what is running. The engine stands beside the company's name in the head, and
+the foot is the reader, with Settings and Preferences as glyphs beside them.
 
 | Row | Route | Figure |
 |---|---|---|
@@ -675,6 +678,7 @@ Settings and Preferences as glyphs beside them.
 | **Budgets** | `#/company/budgets` | none (tokens only; nothing in this product renders money) |
 | *Workspace* | | |
 | **Work** | `#/work` | — |
+| **Chat** | `#/chat` | none (the unread counts are per room, on the screen's own rail). Locked, like Work, for a reader without Chat access; a reader who holds it but whose credential acts as no seat is answered by the screen itself, since every chat page is read as a seat |
 | **Knowledge** | `#/knowledge` | — |
 | **Artifacts** | `#/artifacts` | none, and never a lock: a share alone admits a reader, and starting a sheet is the one thing in it the Artifacts access gates |
 | **Live** | `#/live` | the agents working now, beside the working mark, the chrome's one pulsing dot. On Live because a count says how many of something the DESTINATION holds, and Live › Now running holds the running turns, one row each; on the org chart's row it sent a reader looking for a running turn to the chart |
@@ -800,7 +804,8 @@ Teams and every seat page's status), Schedules, Budgets, Live › Now running an
 Coding runs, and Settings › Token spend: what every seat is doing, what it has spent,
 what it may spend and who answers to whom, which everybody who works here
 reads. An APP's sections need that app: Inbox, My work, Work and Settings ›
-Expensive tasks are the tracker's, Knowledge is the knowledge base's. And the
+Expensive tasks are the tracker's, Knowledge is the knowledge base's, and every
+section of Chat is chat's. And the
 company-wide TRANSCRIPTS (Live › Turns, Agent-to-agent and the Event log,
 Knowledge › Agent diaries, and a seat's Turns and Memory tabs to anybody but its
 lead) and every other Settings page are admin's; Company › Integrations is
@@ -820,7 +825,11 @@ READING, `useHeldReading` in `lib/viewer.ts` — who the reader is and what they
 hold, from one source — which the sidebar's rows, Settings' column and the
 frame's refusal of a section all take, so the column and the sidebar can never
 lock one reader differently. The command palette says the same of a guarded
-destination in the same words — "Needs Admin access" beside its hint. There is
+destination in the same words — "needs Admin access" beside its hint — read
+off its address by the rule the frame's refusal reads (`nav.ts`'s `closedBy`),
+the workspace's access first: every section of Work, My work or Chat is
+offered to a reader without that app saying what opens the workspace, where
+a lock read off the section alone offered them unlocked. There is
 NO "no access yet" state: a person somebody gave no app still reads the
 overview, so the socket is dialled for every signed-in principal and the
 frame never replaces the company with a panel saying they hold nothing — they
@@ -835,18 +844,20 @@ it held — an outage keeps the last state, and a refusal is not an
 outage.
 
 **A service the company does not run is hidden, never locked.** A company
-runs Crewlet's own tracker (Crewlet Works) or Jira in its place, or none, and
-Crewlet's own knowledge base (Crewlet Knowledge) or Confluence, or none. The
-engine decides which from the company document and publishes it to every
-signed-in reader on the `viewer` answer, which the frame already reads
-(`lib/services.ts`). Where the company does not run one, the places that read
+runs Crewlet's own tracker (Crewlet Works) or Jira in its place, or none;
+Crewlet's own knowledge base (Crewlet Knowledge) or Confluence, or none; and
+Crewlet's own chat (Crewlet Chat) or the Mattermost or Slack it declares, or
+none. The engine decides which from the company document and publishes it to
+every signed-in reader as `services` on the org projection, which the frame
+already reads (`lib/services.ts`). Where the company does not run one, the places that read
 it are HIDDEN rather than locked, because there is nothing to ask an admin
 for and a lock would say there was (`serviceShown` in `nav.ts`): without
 Crewlet Works, Work and My work leave the sidebar, the palette and the `g`
 chords, and so does every way to file or move a task (New task, the palette's
 Create task, Ask an agent and Assign, a seat's Message and Assign, every
 create page's Ask an agent, and New design, whose one way to finish files a
-task); without Crewlet Knowledge, Knowledge does. The Inbox stays, because
+task); without Crewlet Knowledge, Knowledge does; without Crewlet Chat, Chat
+does, with a seat's Direct message and Chat's Home widgets. The Inbox stays, because
 the seat and budget conditions waiting on a person arrive under every
 backend: it draws those, and one line in place of its updates. Home leaves
 out the blocks and figures that cannot arrive, and each row of the board
@@ -880,7 +891,7 @@ is named from the reading the refusal was decided on (`useHeldReading`), never
 from the viewer beside it, which has not answered in the moment between the
 session's answer and the socket's — named off it, the refusal told a person
 signed in that nobody was. It names ACCESS by the word People gives
-it (Admin, Tracker, Knowledge) rather than a credential,
+it (Admin, Tracker, Knowledge, Chat) rather than a credential,
 because a signed-in person lacks access, and "needs an operator credential"
 sent them looking for a credential they have no use for. A screen that mounted anyway was
 refused and drew the refusal as data: "0 nodes" in its header, four tiles of 0
@@ -905,6 +916,22 @@ kept in the tab's storage: replacing the builder the moment the reader's
 access was withdrawn would take the draft off screen while the person who wrote it is
 still there to copy it out, and the builder says for itself which of its
 saves the reader's access reaches.
+
+**Chat is guarded whole, and keeps one refusal of its own.** Every chat page
+is read AS A SEAT — the engine answers for the seat the session's principal
+holds, with no handle parameter anywhere in the chat family and no arm, an
+administrator's included, that reads somebody else's rooms — so the
+workspace's row and all three of its sections name the Chat app, and a reader
+without it meets the frame's refusal on every chat page, a room included. What
+the frame cannot say is chat's own. A principal that holds Chat and acts as NO
+seat — a deployment's own token, a service account — reads nothing there, not
+even a public room, so the screen says that ("Chat is read as the seat you
+hold"), naming the binding that would give the credential one (`crewlet iam
+bind`). A company whose chat is not Crewlet Chat (`chat.backend: vendor` or
+`none`) is no refusal at all: Chat is a service like Crewlet Works and Crewlet
+Knowledge, so its row is hidden there and an address under it says where the
+company talks instead, naming the vendor to a reader holding Chat, rather than
+showing rooms it cannot have or offering a room it cannot hold.
 
 **A figure beside a row says what it counts.** The kit's `NavItem` takes a
 figure only with the words that name it, and two kinds of figure are two
@@ -1063,9 +1090,9 @@ and the tab.
 `g` then a letter jumps to a workspace: `g h`, `g i` and `g m` for the first
 run; `g c` for Company's Overview, `g o` for Policies, `g a` for the Org chart,
 `g d` for Schedules, `g n` for Integrations and `g b` for Budgets; `g w`,
-`g k`, `g f` for Artifacts and `g l` for Live; `g s` for Settings, and `g u`
-for your Account. A chord to a hidden place is not answered, as its row is not
-drawn. A chord rather than a
+`g t` for Chat, `g k`, `g f` for Artifacts and `g l` for Live; `g s` for
+Settings, and `g u` for your Account. A chord to a hidden place is not
+answered, as its row is not drawn. A chord rather than a
 modifier, because every single-modifier combination worth having is already
 the browser's. `g r` is the one `g` sequence that is not a workspace: it
 watches the running turn when exactly one seat is working, and opens Live ›
@@ -1167,6 +1194,10 @@ a screen, and every workspace and section the code declares is below.
 | `#/company/schedules` · `#/company/schedules/{scope_type}/{scope_id}/{name}` | **Schedules**, recurring work, its figures drawn once there is a schedule to count, and with none an empty state offering the configuration a schedule is written in to a reader who may open it; one schedule | |
 | `#/company/integrations` · `#/company/integrations/{kind}` | **Integrations**: a directory grouped by need (Chat, Work tracking, Docs and knowledge, Code, Observability), Crewlet's own service first in each, Atlassian listed as Jira and Confluence, and the address apps deliver to at its foot; beside it the page of the line chosen (an app's Overview, Agents, Activity and Settings, its settings form opening in place; a service's counts, agents, activity and settings, or what does its work instead), and with nothing chosen what needs a look. `{kind}` is an app's key, a surface (`atlassian` and `forge` select Jira) or a service (`works`, `knowledge`, `chat`). Every reader's; an app's state and connecting are an Admin's | |
 | `#/company/budgets` | **Budgets**, the company's and every agent seat's day, week and month: spent, the ceiling (raised in place by an admin whose credential the document admits), and what is refusing. Last in Company: what the company decides, while what it spent is Settings › Token spend | `window=` is not read here |
+| `#/chat` | **Chat**: the company's own rooms, with the rail of what you are in *(the whole of Chat needs Chat access)*. Every chat page is read as the seat your session holds: a credential acting as no seat (a deployment's own token, or a service account bound to nobody) reads nothing here, not even a public room | `dm=` (a seat's handle, from its page or peek: opens New direct message with that seat chosen, once, then leaves the address) |
+| `#/chat/mentions` | **Chat › Mentions**: every message that named you, across every room. The whole away story: the engine sends no email, no push and no SMS | |
+| `#/chat/search` | **Chat › Search chat**: ranked over every room you may READ, which is wider than your rail | `q=` · `in=` (narrowed to one room) |
+| `#/chat/{id}` | **Room**: the transcript, who is here, and the composer | `thread=` (which thread is open beside it, one level deep) |
 | `#/live` | **Live › Now running** — the running turns, the coding runs waiting on a person and the rest in a box, the activity strip and the recent phases | `window=15m\|1h\|6h` (the activity strip) · `seat=` (a handle) · `phase=` · `failed=true` (the same spelling Turns uses) |
 | `#/live/turns` · `#/live/turns/{id}` | **Turns** — the turns that ended over the window, counted by the engine, then every turn one row each; one turn *(needs Admin access)* | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `seat=` (a handle) · `failed=true\|false` · `sort=-started\|-tokens` (the engine's order) |
 | `#/live/runs` · `#/live/runs/{turn_id}` | **Coding runs** — live and durable; a run's own page draws the run alone, answered in place, and a collected run's page reads its turn | |
@@ -1177,7 +1208,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/knowledge/{CONTAINER}` | **Space** (a knowledge container, by its key): its head, and its pages as an outline read one level at a time, with Create (a document or a folder) at the end of every open level | |
 | `#/knowledge/new` | **New page**: the composer, filed where it was opened from | `space=` · `parent=` (a page id) |
 | `#/knowledge/pages/{id}` | **Page**: addressed by its id, which a rename does not change. The document with its outline, its properties, its comments and what it is connected to; edited as you | `edit=1` · `version=` (History: one revision in the document's place) · `lens=diff\|full` |
-| `#/knowledge/skills` | **Agent skills** — the tool skills the engine offers a phase, who loaded each; and what one agent learned | `kind=pages\|learned` · `seat=` (learned) |
+| `#/knowledge/skills` | **Agent skills** — the tool skills the engine offers a phase, who loaded each; and what one agent learned | `kind=pages\|learned` · `sort=title\|-updated` (tool skills: the engine's order) · `seat=` (learned) |
 | `#/knowledge/diaries` · `#/knowledge/diaries/{handle}` | **Agent diaries** — every agent's diary at a glance, each counted by the node holding the agent; one agent's diary and episodes *(needs Admin access)*. Handles live here as they do under `seats/` | |
 | `#/artifacts` · `#/artifacts/yours` · `#/artifacts/shared` | **Artifacts**: All (everything the reader can open, the latest activity first, their pins above as a Pinned group), Yours (what they own, with their trash behind the Trash toggle) and Shared with you, each the engine's `artifacts` listing under one scope, every row decided by `get_artifact`. An earlier gallery's `#/artifacts/mine` is rewritten in place to Yours, and `#/artifacts/company` and `#/artifacts/agents` to All. All and Yours open on **Start a new artifact**, a quiet tray of the kinds (`ArtifactMakeRow`): each kind's glyph on its own tint, its name and what it is for, on the dotted field the org chart's canvas uses, one line on a wide page (the words under each name dropped on a narrower one) and three across in two rows on a phone, each opening New on that kind; it is drawn for a reader who may start one, and steps aside for a search, a type and the trash. The artifacts are a **grid of cards** by default: each card's preview is a snapshot of the artifact's own content, drawn small by the renderer its page uses (a doc's opening, a deck's cover slide, a sheet's first rows, a board's widgets from its top with their figures, filling the card within six dataset reads, a design's cover board filling the card edge to edge (a phone's board, which that would cut to its top, shown whole) and a page, each framed, a page that reads its datastore answered its reads by a read-only preview host that refuses every write, names no viewer and joins no room, and a page that keeps each viewer's own state handed a newcomer's, empty and kept by that host alone, so it draws as a first visit does), rendered once when the card comes within a screen of the scroller's view, no more than six rendering at once, and then kept as a still copy with nothing live behind it, so scrolling past a card again reads and draws nothing; a card mounted again on the same visit (a filter, the shape, a page of results) shows its copy at once, a new version is drawn afresh, and a page loaded afresh takes new snapshots; a page or a design's board keeps its frame instead, since a frame cannot be copied, at most twelve kept, and its datastore reads are each answered once; the kind's drawing stands in before a card has drawn, and every read is a preview that records no open; under it the title, who can open it (a lock, people or the company) and when it was edited, and a More menu (pin, copy link, rename, move to the trash; restore in the trash). The list is the second shape, and which one a browser shows is remembered there: each row the kind's glyph on its tint beside the title, with the kind's word and the description under it (`ArtifactNameCell`, so there is no Type column), who can open it as a glyph and a word (`ArtifactAccessLabel`: Private, Shared or Company; not in the trash), the owner's badge and name, when it was edited and the reader's role, a row's ground moving under the pointer and its mark's hairline taking the kind's hue. The page bar holds the search and New; the toolbar holds the type, the order, the trash (Yours) and the shape. The reader's own artifacts are owned by "You", and Yours draws no owner or role column; the trash's rows say when each was trashed and when it is deleted for good. No permission opens the workspace: a share alone admits a reader (D01), and the engine decides every artifact. All ends, for an administrator, on a quiet related row to Settings › File storage, which holds the company's storage against its quotas | `kind=html\|doc\|slides\|design\|dashboard\|sheet` · `q=` · `sort=updated\|created\|title\|opened` (all three kept across the sections) · `status=trashed` (Yours: the reader's own trash) |
 | `#/artifacts/new/doc` · `#/artifacts/new/slides` · `#/artifacts/new/sheet` · `#/artifacts/new/design` · `#/artifacts/new/dashboard` · `#/artifacts/new/html` | **New doc**, **New slide deck**, **New sheet**, **New design**, **New dashboard**, **New HTML page**: each kind's own create page, in one shared frame (the artifact page's slim bar, then a full-bleed body the kind draws), each a chunk of its own. A doc or a deck starts from the engine's starter and a sheet blank or from the Review sheet template, owned by the reader *(needs Artifacts access)*. A design starts as the canvas a person lays out: a starting layout (landing page, app screens, one screen at three sizes, a presentation or a blank canvas), then boards shaped on the canvas (Frame `F` places one; Text and Sticky place notes) with a panel that follows the selection (a board's name, frame preset or size, order and brief) and the hand-off panel beside it (the design's name, brief and references and who builds it); Create and ask publishes the boards as placeholder pages, shares the design with the chosen agent as an editor, files the agent a task carrying the brief and every board, links the design to it, and opens the design, whose boards fill in as the agent publishes. Every page offers **Ask an agent** in its bar, which opens the hand-off panel beside the page rather than replacing it ([Asking an agent from a create page is a panel, not a mode](#asking-an-agent-from-a-create-page-is-a-panel-not-a-mode)); a design and an HTML page arrive with it open where it fits beside the page. The gallery's Make row and its New menu open them | `item=` (the task it is made for, which lists it on that task's Artifacts card) · `panel=ask\|closed` (the hand-off panel; `closed` on a design or an HTML page, which open with it) |
@@ -2061,7 +2092,7 @@ for the keys is the reader who does not know `?` yet.
 | On an open artifact | `i` its details, `h` its versions and history, `d` its data (where it keeps any), `p` who is here, each pressed again to close what it opened; `s` Share. `Esc` from inside a panel closes it (bound by the design system's `ArtifactPanel`, and listed with the layer's Escape) |
 | On a chart | `+`, `-` zoom and `0` fits, with focus in the chart (bound by the design system's canvas) |
 | In the org builder | `Mod+Z` undo, `Mod+Shift+Z` redo |
-| Writing a reply | `Mod+Enter` sends it (the Inbox's composer; `Enter` alone is a new line) |
+| Writing a reply | `Mod+Enter` sends it — the Inbox's composer and a chat room's or thread's alike, one key for every composer; `Enter` alone is a new line |
 | In search | `Tab` and `Shift+Tab` walk the scopes (bound by the design system's palette), `Mod+Enter` asks an agent, `Alt+A` assigns the task at hand, `Alt+C` creates a task, `Backspace` in an empty picker goes back |
 | In a dialog, a menu or the drawer | `Esc` closes whatever is on top (bound by the design system's layer stack) |
 
@@ -2094,13 +2125,13 @@ presses inside the builder and reads its keys from the table with
 the frame alone, so the suite mounts it and refuses an "Anywhere" row it did
 not bind — a key the legend offered and nothing answered.
 
-**`/` searches what you are looking at.** A screen with a search box of its
-own — the seat filter, the event log, the tools catalogue, the audit log's
-actor, work search and a list's key-or-title box, the knowledge base and its
-page finder — registers it with `useSearchTarget`, and `/` focuses it with its
-text selected to type over; on a screen with none, `/` opens the palette. It
-opened the palette everywhere, so on those screens the key a reader pressed to
-search the screen took them away from it.
+**`/` searches what you are looking at.** A screen with a search box of its own
+— the seat filter, the event log, the tools catalogue, the audit log's actor,
+work search and a list's key-or-title box, the knowledge base and its page
+finder, Search chat — registers it with `useSearchTarget`, and `/` focuses it
+with its text selected to type over; on a screen with none, `/` opens the
+palette. It opened the palette everywhere, so on those screens the key a reader
+pressed to search the screen took them away from it.
 
 **A key waits for the reader.** A bare key does nothing while they are typing
 in a field, a select or anything a screen made focusable and handles keys for;
@@ -2476,7 +2507,11 @@ every sign-in path to a quiet console.
 **An invitation is read, never spent, by opening it.** The link carries the
 whole credential in the fragment, which no browser sends to a server, and the
 screen sends the secret BESIDE the id — the `X-Crewlet-Invite-Secret` header on
-the view, the body on the redemption — never in a request URL. The view names
+the view, the body on the redemption — never in a request URL. Both link
+headers are declared in `contract/identity.ts` (`INVITE_SECRET_HEADER`,
+`RESET_SECRET_HEADER`) and held to the views' own spellings by an engine test,
+because a header renamed on one side alone presents no secret and every link
+opens as the `410` an id nobody issued answers. The view names
 who it is for, who sent it — when a person did: one a Tier A token or a service
 account issued, the company's first person's above all, names no sender, since
 `token:founder` is nothing its reader would recognise — and the seat it binds.
@@ -2575,13 +2610,62 @@ builder's kept draft. That draft is stamped with the reader it was kept for, and
 one kept for anybody else is discarded unoffered.
 
 **And so does a session somebody else left in the browser.** Signing in as
-somebody else in one tab ends the session every other tab of the browser was
-opened with (each socket closes `4401`) and moves the cookie they share, so the
-next `GET /auth/session` — the socket's before it dials again, the frame's on
-its next read — answers for them. A tab read by anybody else is handed over
-exactly as a sign-in by them would hand it — emptied, its new reader recorded,
-reloaded where it was — and the socket dials nothing for them first
-(`lib/session.ts`'s `takeSession`, which `main.tsx` hands the socket).
+somebody else in one tab moves the cookie every other tab of the browser
+shares, and tries to end the session those tabs were opened with — best effort,
+since a sign-in is never refused over the close of somebody's other session.
+Where the close lands, each socket closes `4401`, and the socket's
+`GET /auth/session` before it dials again answers for the new person; the
+frame's own read answers for them too when the tab next becomes visible. Where
+it does not, nothing on the socket says so, and a window left open beside the
+one that signed in would go on drawing the last person's screen with every
+request it sent going out as the new one. So every request a tab makes for its
+reader names them (`X-Crewlet-Reader`, `protocol/signin.ts`): a REST read or
+change, an act and its Retry, a download, the degraded-mode snapshot, the
+socket's refusal probe, and the session keepalive (`protocol/keepalive.ts`),
+which reads the session every five minutes while the socket is open unless the
+engine answered something else in the last five. The socket's handshake is the
+one request a browser cannot put a header on, so it names the reader in its URL
+instead (`/ws/stream?reader=`, `READER_PARAM`), which the engine reads on an
+upgrade alone. The engine refuses one whose cookie is anybody else's `409
+reader_changed` before it runs, so a press in that window makes no change as
+the new person, a Retry of the last person's change sends their operation as
+nobody's, and a socket that dropped for another reason and dialled again under
+the new cookie draws nothing of the new person's company: its refused handshake
+reaches the page as a bare 1006, and the refusal probe reads the `409`. The two
+requests that name nobody are the session read itself, which is how a tab
+learns who to be handed to, and the token exchange, which signs somebody in. On
+any of these signals a tab read by anybody else is handed over exactly as a
+sign-in by them would hand it — emptied, its new reader recorded, reloaded
+where it was — and the socket dials nothing for them first (`lib/session.ts`'s
+`takeSession`, which `main.tsx` hands the socket, and `sessionMoved`, which it
+installs for the refusal). The reader's id is no secret, but it is in the
+socket's URL, so a proxy's access log of `/ws/stream` records it. A window
+whose socket stays open and that sends nothing of its own is handed over by
+the keepalive in under ten minutes, two keepalive intervals rather than one: a
+tick passes over a tab the engine answered less than five minutes before, and
+that answer may have come just before the sign-in.
+
+**A tab learns who it is read by before it is served anything.** The check
+above covers what a tab asks once it has recorded its reader, and a tab opened
+with a session already in the browser records nobody until a read of the
+session answers. The frame's own `GET /auth/session` records it before the
+socket is dialled, and the socket holds every dial it makes for a tab that has
+still recorded nobody — the frame's when that read FAILED, a reconnect, a
+signed-out tab coming back into view — behind a session read of its own
+(`protocol/socket.ts`'s `learnReader`): it records whoever answers and dials
+naming them, a `401` is the sign-in, and any other failure dials nothing and
+asks again on the backoff, since a dial naming nobody is served as whoever
+holds the cookie. A dial made blind was the tab's first sight of the company,
+and a sign-in in another tab before its next session read was then ADOPTED as
+its reader by a tab drawing what it had been served for the last one. What
+stays outside the check is exact. A browser that refuses the tab's storage
+records nobody however often it reads the session (`lib/reader.ts` keeps the
+reader nowhere else), so its requests name nobody and a cookie moved under it
+is served rather than refused — the setting that blocks a site's storage
+usually blocks its cookie as well, and with it the session. And a screen's own
+REST read sent before any session read has answered names nobody; none is sent
+today, because every screen's REST read waits for the frame's session answer or
+for the viewer, which the socket answers only after a session read has.
 
 **A thing worth linking to gets an address, not a scroll position.** The
 previous dashboard revealed a unit by scrolling the org screen to it
@@ -2778,6 +2862,28 @@ widgets, Cancel and Done. New task steps aside until Done.
   questions its page asks and only reads; every write stays on the page. A
   contribution that names no such page is left out and reported, and a suite
   (`board/registry.test.ts`) fails the build on it.
+- **A widget never says "nothing" over an answer that could not account for
+  everything.** An answer says when it is short: a record this build cannot
+  read met the read (`complete: false`), or a node did not answer a fleet read
+  (`coverage`). `WidgetQuery` in `routes/home/board/kit.tsx` is the one place
+  that is decided, over the gaps `gapsOf` reads from every answer a widget
+  draws and the widget's own lines (a muted room, a list cut at its bound): a
+  widget's claim ("You're caught up", "No turn failed in the last 24 hours")
+  is drawn only over an answer with no gap; with a gap and no rows the card
+  says there is nothing to list and why it may be wrong, and with rows it says
+  the gap under them. A figure says "May be incomplete" on its second line, and
+  a count that stopped at its ceiling is written as the floor it is ("50+").
+  A count another surface already says is read from that surface's reading,
+  never from the widget's own page: the Inbox card's is the sidebar badge's
+  (`useInboxCounts`), so the two never name different numbers. And a widget
+  that follows one thing reads it by its key, as its own page does, never by
+  finding it in a page of a listing: the Project widget and a pinned project
+  ask `work_project`, so a project past the listing's first page is still the
+  one the reader chose, and a picker whose list the engine cut says so.
+  Every widget module, and every card Home's own widgets draw, goes through
+  `WidgetQuery` rather than `QueryState` or `EmptyState`, which
+  `board/kit.test.tsx` holds, and `board/widgets.render.test.tsx` answers every
+  widget's questions short and holds each to saying so.
 - **Per reader, per browser**, as stars are (`STORAGE_KEYS.homeBoard`), and
   read back as untrusted input: every field is checked, every string capped,
   and every link held to a `#/` address or an `https://` one. A widget whose
@@ -3049,7 +3155,15 @@ at a time — `work_activity` for what changed, `work_comments` for what was
 said, `work_item_turns` for the agent turns charged to the task — and merged
 only down to the newest point any of them with more pages stopped at, so a
 stretch it draws is complete in all three; **Earlier activity** reads the
-history that stopped there. All | Comments | Agent turns | Changes narrows it.
+history that stopped there. Each history stays whole while its newest page
+moves under a reader who paged back (`lib/usePaged.ts`, which a seat's Turns
+tab pages through too): an arrival at the top pushes the newest page's oldest
+entry off its foot, so before the list moves the range between the newest page
+and the pages held is read and spliced in, and until it has been the list stays
+as it was drawn. A gap longer than everything the reader paged back through,
+or one a read failed on, drops the older pages instead, so the reader pages
+back again from a list with no hole in it.
+All | Comments | Agent turns | Changes narrows it.
 A change is a sentence about the task ("Jane Founder filed this in ENG",
 "CTO assigned it to SWE: “owns the provisioner”", "Jane Founder ticked 1 on
 Acceptance — 1 of 4 done"), with a quiet **· Who this reached ›** at the end of
@@ -3319,11 +3433,14 @@ vacant seat, **Cancel invitation** on an invited one), which on a phone are
 the only place they are; Message opens the New task sheet with
 the seat as assignee and `ask` set — on the project filed under the seat's own
 unit, or the nearest unit above it that has one — so the question is filed as
-work the seat owes an answer on and the answer lands in the Inbox — there is no
-person-to-seat chat. Message files a task, so where the company runs no
+work the seat owes an answer on and the answer lands in the Inbox. Where the
+company runs the engine's own chat and you hold Chat, **Direct message** sits
+beside it and opens a conversation with the seat instead
+(`#/chat?dm={handle}`), a remark that obliges nothing; it never replaces
+Message. Message files a task, so where the company runs no
 Crewlet Works it is not drawn, nor is a seat's Assign (see
 [the sidebar](#the-sidebar)). **The peek of your own seat is your own seat's page in
-small**: Message is held, saying it is your own seat — held by the button
+small**: Message and Direct message are held, saying it is your own seat — held by the button
 itself (`useMessageSeatAccess`), never by the screen drawing it, because the
 page held it while the peek drew it bare and offered a person who found
 themselves on the chart an enabled Message to themselves — and under the state
@@ -3406,7 +3523,10 @@ for a reader who cannot make it:
 
 - **Message** opens the New task sheet with the seat as assignee and `ask` set:
   the question is filed as work the seat owes an answer on, and the answer
-  lands in the asker's Inbox. There is no person-to-seat chat.
+  lands in the asker's Inbox. Where the company runs the engine's own chat and
+  the reader holds Chat, **Direct message** beside it opens chat's New direct
+  message with the seat chosen — a conversation rather than an ask, so neither
+  stands in for the other; it folds into "More" on a phone.
 - **Assign task** finds an existing task by search and hands it over against
   the version a read of it returned (`update_work_item{assignee, if_match}`),
   so a task somebody moved in between is refused rather than taken from
@@ -3437,8 +3557,8 @@ tone: its last error, a pause, another stop, or a coding run parked on a
 question — answerable from the notice.
 
 **The Overview is the seat's week and its charter.** Four figures, all ONE
-answer (`seat_activity` with `previous`, every node's usage rows summed): turns
-over seven company days with the change against the week before, the
+answer (`seat_activity` with `previous`, every data node's usage rows summed):
+turns over seven company days with the change against the week before, the
 engine's first-pass rate over the turns it REVIEWED (a week nobody reviewed has
 no rate, never 0%) with how many reviews sent work back, the median turn with
 its p90, and tokens — the seat's capped window nearest its ceiling, over that
@@ -3822,8 +3942,10 @@ naming its size and the limit, where the answer would be: sent, all three
 would be refused, and a list that lost its tasks and pages with nothing saying
 why reads as nothing matching. The work search and the knowledge screen do the
 same with a phrase in their address, and so do the two pickers that find a
-task — handing one over and linking one — in place of their list. Every
-`work_search` and `knowledge` read is asked through one hook,
+task — handing one over and linking one — in place of their list, and the
+chat screen's search and its room finder, whose `chat_search` takes the same
+bound. Every `work_search`, `knowledge` and `chat_search` read is asked
+through one hook,
 `useSearchQuery` (`lib/useSearchQuery.ts`), which applies the bound, says why
 and holds no answer from a shorter phrase under one it never sent; a source
 test fails on a ranked search asked any other way, so a new picker cannot skip
@@ -4026,7 +4148,7 @@ same, under its own login:
 | Offline | Offline. Reconnect to make changes. |
 | Not yet known | Checking who you are before anything can be changed. |
 | Anonymous | Sign in to make changes. |
-| Without the app the change lands in — the tracker for a change to work, the knowledge base for one to a page (read off the act's own `domain`) | This change needs Tracker access. An admin can give it to you. (Knowledge, for a page.) |
+| Without any app the change needs — the tracker for a change to work, the knowledge base for one to a page, chat for one in a room, either for a question answered from both (the act's own `apps`, which the engine holds to its authority table) | This change needs Tracker access. An admin can give it to you. (Knowledge, for a page; Chat, in a room; Tracker or Knowledge, for a question.) |
 | Somebody the engine does not make this change for | This can’t be changed from here. |
 | Looking at somebody else's record | The screen's own sentence, naming whose record it is — My work read on a report's day holds every control on it (`HoldWrites`), and releases exactly the one change it offers there, a lead's reorder of that queue. |
 
@@ -4093,8 +4215,12 @@ one, beside its class). The dashboard never retries on its own. When you press
 Retry it sends the **same operation key** it sent the first time, from which the
 engine derives the same operations; a new press is a new key. Each Retry is
 bound to the press it reports — press twice and the first toast's Retry still
-sends the first press, never the second. A refusal a busy, draining or
-starting node caused offers "Try again" on the same terms; one the request caused does not,
+sends the first press, never the second — and to the person it was pressed
+for: it names the tab's reader as every request does, so a Retry from a tab
+whose browser somebody else has signed in to since is refused
+`reader_changed` unrun, and the tab handed to them, rather than made as their
+write. A refusal a busy, draining or starting node caused offers "Try again"
+on the same terms; one the request caused does not,
 because the same request would be refused again. A control reused across
 objects — the Inbox's Mark read as you move between notices — belongs to the
 object it is drawn for, so one notice's refusal never appears under another's.
@@ -4138,7 +4264,7 @@ route and is not a read, every argument is one the tool takes, every required
 one can be sent. It carries a row for each tool a control presses and no
 other — `app/source.test.ts` holds it to the `useAct("…")` calls both ways — so
 a tool arrives in it with the control that sends it. The controls
-(`components/writes.tsx`):
+(`components/writes.tsx`, and chat's in its own screen, `routes/chat`):
 
 | Control | Where | Tool |
 |---|---|---|
@@ -4148,6 +4274,7 @@ a tool arrives in it with the control that sends it. The controls
 | + (a sub-task) | A task's sub-tasks | `create_work_item{title, project, parent}` |
 | Create task (the New task sheet) | A work screen's New task, a board lane's `+` | `create_work_item{title, project, body?, type?, status?, assignee?, priority?, due?, labels?}`, only what was set |
 | Message (the same sheet, titled "Ask {seat}") | A seat's peek | `create_work_item{title, project, assignee, ask, …}` — the answer lands in your Inbox |
+| Direct message (chat's New direct message, the seat chosen) | A seat's page and peek, on the engine's own chat | `open_dm{to}` — opening one that exists is that conversation |
 | Edit project (the target date) | A project's page bar | `write_project{project, target_date}` — `null` clears it; a company write, whose authority the engine decides |
 | Comment · Reply · Ask… | A task's composer | `comment_on_work_item{item, body}`, `{item, body, reply_to}`, `{item, body, ask, decision?}` |
 | Restore (named "Restore ENG-42" to a screen reader, so a grid of them can be told apart) | A task in the trash, on its page and in the trash grid | `restore_work_item` |
@@ -4165,6 +4292,17 @@ a tool arrives in it with the control that sends it. The controls
 | Save (with "What changed") | A page's editor | `save_page{page, base_version, body, message?}`, against the revision the edit started from |
 | Watch · Stop watching (the eye) | A page's bar | `save_page{page, base_version, watch}`: the person's own subscription, nothing else |
 | Comment · Reply | A page's comments | `comment_on_page{page, body}` / `{page, body, reply_to}` |
+| Send (`Mod+Enter`) | A chat room's composer | `post_message{channel, body}` — under the operation key the outbox keeps (`Idempotency-Key`), so a retry after a lost answer is the same message rather than a second one |
+| Reply | A chat thread's composer | `reply_in_thread{channel, reply_to, body}` |
+| Edit, then Save | A chat message of your own | `edit_message{channel, message_id, body}` — the author's alone, never an admin's on somebody else's words, and taken in an archived room. Save is held over a rewrite that is the message as it stands or is empty; the editor closes on an answer that took it and keeps your words on any other |
+| Delete (pressed twice) | A chat message of your own, and anybody's to an admin | `delete_message{channel, message_id}` — the author's, or an admin's moderation, and the tombstone records who. Reaches past membership and past an archive; held on a room this build cannot classify, and while another message's delete is out |
+| A reaction | A chat message's reaction chips | `react_to_message{channel, message_id, emoji, remove}` — quiet, no toast; a refusal is said above the transcript. Held outside a private room you are not in, as a post is; an archived room takes it |
+| Join · Leave | A chat room's header; Join in **Find a room** | `join_channel{channel}` / `leave_channel{channel}` — refused on a unit's room and a direct conversation, so neither offers it |
+| Mute · Unmute | A chat room's header | `mark_chat_read{mute}` / `{unmute}` — this room alone, every other room's state kept |
+| New room | The chat rail | `create_channel{channel, kind, topic?, members?}` |
+| New direct message | The chat rail | `open_dm{to}` — a direct conversation's identity is who is in it, so opening one again reaches the same room |
+| Topic · Purpose | A chat room's settings dialog | `update_channel{channel, topic?, purpose?}` — only the fields changed. Archiving and the room's horizon are not offered anywhere in the dashboard, and the dialog says so: an archive closes the room for everybody in it, and the horizon decides what survives on every data node and is an administrator's step-up gesture (`PUT /chat/channels/{channel_id}/retention`) |
+| — (the read cursor, no control) | Written as you read a chat room | `mark_chat_read{cursors}` — every `READ_FLUSH_MS` (15 s) and at once on leaving the room, hiding the tab or closing it; quiet, and on no log (`domain: null`). Its answer is your seat's read state as it left it, and the tab applies it as it would the push — so the rail asks again once, when the revision moves |
 
 A change to the **company's configuration** is not an act. The company
 document — its ceiling, an MCP server, a model — is a new configuration
@@ -4215,7 +4353,22 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   and `closed` — as a sentence saying which.
   `bad_params` is the one that names the SCREEN as the fault: the engine
   understood the question and refused it, so retrying sends the same bad
-  request again. `unavailable` is the opposite: the node will answer in a
+  request again. `unauthorized` says the rule that refused — the access the
+  refusal names where access is a way past it, the rule's own sentence
+  (`contract/authority.ts`, keyed by the engine's reasons) where it is not —
+  and offers the ONE control that clears that rule (`lib/authorityRemedy.ts`):
+  **Sign in** for a reader short of access or an agent's seat on a verb only a
+  person makes, **Confirm it’s you** for a proof gone stale (the step-up
+  ceremony, after which the screen asks again on the socket's reconnect),
+  **Sign in as yourself** for a credential acting as no seat or a token on a
+  gesture that needs the person, **Try again** once an admin has activated an
+  account that is not active or an artifact's owner has shared it at the role
+  the verb needs, **Reload** for a request this engine's build has no rule
+  for, and nothing where no reader can clear it from here (a verb only an
+  agent's seat makes, a request that named no record, an agent acting for
+  somebody who could not take the verb). A stale proof's `grants` are what
+  admitted the reader, and an artifact refusal's `admin` is the override beside
+  the share its owner makes, so neither is drawn as access to ask for. `unavailable` is the opposite: the node will answer in a
   moment, so `useQuery` asks again on its own rather than leaving a person to
   reload — WHEN the engine's frame says (`retry_after`, read through
   `protocol/retry.ts`), never after a constant of the client's. A hint is
@@ -4237,7 +4390,11 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   answer's own `traffic_known`. The budgets answer says `durable: false` when
   the counter could not be READ.
 - **Not configured** vs **empty.** A knowledge search with no backend says so;
-  a company with no seats says roles come from the configuration.
+  a company with no seats says roles come from the configuration; and an
+  address under a service the company does not run says what runs instead
+  ("This company talks on Mattermost" under Chat) rather than asking a
+  question the engine does not serve there and drawing the `unknown_query` it
+  would get as a node fault.
 - **Everything in the window** vs **everything that arrived.** Where a screen
   narrows client-side it says so, naming the SOURCE rather than hedging the
   whole answer. **Audit** is the case that made this a rule: it composes four
@@ -4313,7 +4470,9 @@ turns for the last one it ended. Until that read existed, every one of these
 screens started blank after a restart, a deploy or a node joining a fleet,
 which is the one empty state a reader has no way to question; a seed that
 missed a node is named on `/health` (`seeded_from`) rather than drawn as a
-quieter company. Spend is not among them: the Overview and Spend screens read
+quieter company, and every screen drawing the seeded feed names it too: Live ›
+Events and Live now's Activity card add it to the coverage note above their
+rows, and Home's Latest events widget says it as its gap. Spend is not among them: the Overview and Spend screens read
 named windows — whole company days from the replicated `usage` domain, the
 same on every node — so a restart never empties them, and the 24-hour spend
 window the seed also fills is the `tokens` push's, which no screen draws.
@@ -5640,13 +5799,16 @@ hidden: the document is not allowed to grow, so the invariant is unreachable
 rather than merely unused.
 
 Two other kinds of scroller sit inside it, and both are covered below. A
-**full-height screen** (`useFillScreen`: a task, the Inbox, a knowledge page)
-holds `#screen-scroll` still and lets its own columns scroll — `.task-main` and
-`.task-rail`, `.inbox-list` and `.inbox-pane-scroll`, `.kpage-main` and
-`.kpage-rail`. Each is exactly the main region's height, so `100cqb` is its view
-too, and on that screen those columns are the page's scrollers: a box inside
-one hands the wheel to the column, not to `#screen-scroll`. And a **box inside
-the page** may scroll its own content, on the two conditions below.
+**full-height screen** (`useFillScreen`, whose doc in `app/fill.tsx` is the one
+list of the screens that ask and of when each withdraws) holds `#screen-scroll`
+still. A canvas fills it and pans rather than scrolls; a screen of two columns
+lets each column scroll on its own, as a task does with its body and its rail
+(`.task-main`, `.task-rail`) and the Inbox with its list and its pane
+(`.inbox-list`, `.inbox-pane`). Each column is exactly the main region's
+height, so `100cqb` is its view too, and on that screen those columns are the
+page's scrollers: a box inside one hands the wheel to the column, not to
+`#screen-scroll`. And a **box inside the page** may scroll its own content, on
+the two conditions below.
 
 The shell hands the kit that id as its `mainId`, and everything that needs the
 scroller finds it through ONE accessor, `screenScroller()` in `lib/scroller.ts`:
@@ -6589,8 +6751,15 @@ that can.
   live](../concepts/code-sandbox.md#watching-a-run-live)), and only then:
   closing the span or the job stopping ends the poll — and only
   `not_running` is stopping: a job still being set up (`launching`), a box
-  paused before its record moves on (`box_paused`), a silent owner and a
-  failed read all keep asking, and keep what is on screen.
+  paused before its record moves on (`box_paused`), a box gone before its
+  record says how the run ended (`box_gone`), a silent owner and a failed
+  read all keep asking, and keep what is on screen. The one failed read that
+  ends the poll is a refusal the engine says no wait clears (`unavailable`
+  whose `retry_after` is zero: a sandbox setup somebody has to fix, a refused
+  key), since every ask would be answered the same and logged on the owner;
+  a reconnect, or opening the view again, asks again. A failed read is told in
+  the engine's own sentence for it (`QueryState`, as every screen tells one),
+  never by its code, over what the view already shows.
   - **The view holds what it was sent.** It asks by CURSOR — the reading it
     holds, how far and the owner's digest there — and APPENDS what the owner
     says it lacks, or replaces what it holds on a reset. `lib/useLiveTail.ts`
@@ -6745,6 +6914,136 @@ vocabulary yet — falls back to the client's own line for that code, the same
 table the socket's query errors use.
 
 ---
+
+## Chat: a rail, a room, and where you have read to
+
+The company's own chat (`chat.backend: native`), read AS A SEAT: the engine
+answers every chat question for the seat the session's principal holds, so the
+workspace is guarded whole and a principal that acts as no seat is told so and
+how to give it one (see [The sidebar](#the-sidebar)). On a company whose chat
+is a vendor's or none there is no Chat: its row is hidden and its addresses
+say where the company talks, as every service the company does not run is
+(see [The sidebar](#the-sidebar)).
+
+- **The rail is the row's renderer** (`rail`, `app/nav.ts`). It starts with the
+  three gestures that start a conversation — **New room**, **Message** (a direct
+  conversation) and **Find a room**, the first two held as the change their
+  dialog makes is held (a reader the engine opens no room for is told so on the
+  button) — then the row's other sections as links (Mentions, Search chat), then
+  the seat's own **Rooms**, newest activity first: the room's name (`#` for a
+  room, the people for a direct conversation), the last thing said, how long
+  ago, `muted` and `following` where they hold, and the unread count. The count
+  is the ENGINE'S, against the seat's own read cursor, and it stops at `99+`
+  only where the answer says it stopped counting; when the cursors could not be
+  read the badges are absent and a callout says so, because a zero would claim
+  the reader is caught up. A rail past its bound says so too: it is sorted by
+  activity, which cannot be paged.
+- **A room** (`#/chat/{id}`) is the transcript, paged back on request, who is
+  looking at it, typing in it or working on a reply in it, and the composer
+  (`Mod+Enter` sends; `Enter` is a new line). A room that takes no messages from
+  you — archived, a private room you are outside, a kind this build cannot
+  classify — closes the box and says why in it; a browser that cannot send
+  (offline, a reader the engine posts nothing for) leaves the box open and holds
+  Send, with the sentence written beside it, as every composer does. Its header
+  holds Join or Leave, Mute and the settings dialog, whose opener is held where
+  the engine would refuse its Save — outside a private room, on a kind this
+  build cannot classify — and not on an archived room, which keeps its topic.
+  Each of a message's changes (Edit, Delete, a reaction) is held by its own
+  tool, because the engine serves each to a person on its own — and by that
+  tool's own rule in the room rather than the composer's: an archive closes a
+  room to new messages and to nothing else, a delete reaches past membership,
+  and every one of them is drawn and held with its sentence where the engine
+  would refuse it, never hidden. A room whose own read failed says so on every
+  control rather than reading for ever. A public room or a unit's room is
+  readable by every seat, joined or not, so arriving from a search outside a
+  room whose whole transcript is on screen is ordinary. A public room's header
+  then offers to join it; a unit's room offers neither Join nor Leave, because
+  its membership is the org chart's — a seat is in it by being in the unit — and
+  says so instead. A message is not drawn until the engine has it: what you sent
+  waits beneath the transcript until a read carries it — with **Send again**
+  where nobody can say whether it landed (asked under the same operation key,
+  because the engine derives the message's id from it and a fresh key would
+  say it twice), **Try again** where the node refused it, and **Take it off
+  the screen**, which unsays nothing. A message the node accepted without having
+  applied it yet (`pending`) is not yet decided — the room may have been
+  archived, or its author taken out of it, just ahead of it — so the screen asks
+  again under the same key, first after the two seconds the node's applier is
+  given to reach it (`contract/chat.ts`'s `PENDING_REASK_MS`, the engine's
+  `chat.DecisionWait`) and then at doubling intervals up to thirty seconds,
+  until the answer is a decision: it landed, and the transcript brings it, or it
+  was refused, and the row says why. It waits there while you look at another
+  room, and is there when you come back.
+- **A thread** is `thread=` on its room, opened beside the transcript — one
+  level deep, so a reply offers no thread of its own.
+- **Mentions** (`#/chat/mentions`) is every message that named your seat, in
+  every room: the whole away story, because the engine sends no email, push or
+  SMS. Each row is the moment you were named and is dated by it. An edit that
+  still names you leaves the row where it was, with the new words and marked
+  edited; one that names you anew puts it at the top; a delete takes it away.
+- **Search chat** (`#/chat/search`, `q=` and `in=`) ranks what was said in every
+  room your seat may READ — wider than your rail — by keyword alone: chat is not
+  in the vector corpus
+  ([ADR-0046](../../adr/0046-chat-is-a-keyword-corpus-and-takes-no-vectors.md)).
+  A phrase past the engine's bound is not sent, and the screen says why. It
+  asks for the engine's own page — forty hits, `contract/chat.ts`'s
+  `CHAT_SEARCH_PAGE`, the engine's `search.MaxChatSearchLimit` — and so does
+  **Find a room**, which offers the rooms those hits are in: the ranking has no
+  next page, so a full page says there may be more matches and how to narrow
+  the search, rather than reading as everything that matched.
+- **On Home**, Chat offers two widgets for the reader's board
+  (`routes/chat/home.widgets.tsx`; see
+  [Home is the reader's board](#home-is-the-readers-board)), each asking what
+  its page asks and re-reading on the frames its page re-reads on: **Unread
+  rooms**, the rail's rooms with something unread and the engine's count on
+  each — a muted room left out and counted, a rail cut at the engine's bound
+  said to count only the reader's most recently active rooms, a room a newer
+  engine made counted as left out, a rail that met a record this build cannot
+  read said to be incomplete, and where the cursors could not be read a
+  sentence saying so, none of them ever drawn as "caught up" — and **Mentions**, the feed's newest page, a mention in a
+  thread opening the thread. Neither marks anything read. Like every chat page
+  they are the Chat app's: a credential acting as no seat is told so in a line
+  and asked nothing, and a company whose chat is a vendor's or none is offered
+  neither, as Home offers no widget of a service it does not run.
+- **Live, by evidence.** A chat frame carries no body: it says a room moved, and
+  the screen re-reads, a burst coalesced into one read. What a reader has paged
+  to is read again only where a frame names something on it: a room's newest
+  page on every frame in it, and then — once that page has caught up with the
+  frame on the log — the page that ends at an edited, deleted or reacted-to
+  message it does not reach, or every page held below it for an erase or a
+  prune; a thread's first page for its root, the page holding a changed reply,
+  and its last page for a new reply; Mentions' newest page on every frame, and
+  a page held below it for a change to a mention on it, an erase or prune in a
+  room it holds a mention from, or a membership change. A page read again is
+  put back only once it still meets the page after it: a room joined makes the
+  mentions said in it visible, so a page can come back holding the same number
+  over a shorter range, and the range it no longer reaches is read in before
+  anything moves rather than drawn as a hole. A tab that let a frame go unseen —
+  a bound, or a frame naming no room, which is the engine saying it dropped
+  some — reads everything it holds again, because what it missed is unknown.
+  Presence is pushed whole for the rooms the tab says it has open. Your seat's
+  read state reaches every tab of yours as `chat_cursor_moved` — the one that
+  wrote it included, which also has the write's own answer — and the rail asks
+  again once when its revision moves, whichever of the two lands first.
+- **Where you have read to** is written as you read — every `READ_FLUSH_MS`
+  (15 s), at once on leaving a room, hiding the tab or closing it — through
+  `mark_chat_read`, the same audited act every other change is. A badge
+  therefore clears when a flush lands, not on the scroll.
+- **A seat that moves is a new screen.** A write goes out as the seat the
+  engine resolves when it arrives, so the whole screen is mounted under the
+  seat the viewer names and is drawn again when the directory binds the person
+  elsewhere: the last seat's unsent messages with their Retry, a draft, an open
+  thread and a half-filled dialog go with it, and what it had read and not yet
+  written is not written as the next seat — a cursor only moves forward, so it
+  would mark rooms read for good. A different person signing in hands the
+  whole tab over by a reload with its storage emptied, which is the same thing
+  for every screen.
+- **Offline**, chat is every other socket screen: it keeps what it last read,
+  the frame's banner says the live channel is down, and it reads again on
+  reconnect. Nothing is said while the socket is down; a message is never
+  queued for later.
+- **On a phone** the screen still takes the window's height — a transcript
+  inside a page that also scrolls is two scrollers under one wheel — and the
+  rail stacks above the room, each with its share.
 
 ## Knowledge: the spaces, a landing, and search with real modes
 
@@ -6998,9 +7297,22 @@ unavailable, never a button that fails.
 (`kind=pages`, the default) lists every published tool-skill page with who it
 reached over thirty company days — the `pages` listing's `skill_loaded_by`,
 read with the listing rather than per row — and the total the listing counts,
-with Load more past a window. **Learned** (`kind=learned&seat=`) is one agent
+with Load more past a window. Their order is the ENGINE's, chosen in the
+toolbar's **Order** and kept in `sort=`: **Name** (`sort=title`, the
+knowledge base's own order) or **Newest** (`sort=-updated`, the listing's
+`order: "newest"`, by when each skill last changed, read from the skill rows'
+own index). The column heads are not sortable: a head would order the rows
+one window held, so past a window "Updated" put the newest of the
+alphabetically first skills at the top. Home's **Agent skills** widget asks
+for the newest the same way, a widget's window of the engine's order.
+**Learned** (`kind=learned&seat=`) is one agent
 seat's synthesized skills from `agent_memory`, answered by the node holding
-the seat, with "n of total" when the page is cut.
+the seat, with "n of total" when the page is cut. Their order is the HOLDER's
+for the same reason, chosen in the same toolbar **Order** and kept in `sort=`:
+**Most used** (`sort=-uses`, the default) or **Recently changed**
+(`sort=-updated`), asked as the question's `skills_order` (`uses`, `updated`)
+and applied to the seat's whole set before the page is cut. The heads are not
+sortable: sorted here, "most used" was the most used of the newest fifty.
 
 ### Agent diaries
 
@@ -7579,7 +7891,7 @@ need:
 
 | Group | Lines |
 |---|---|
-| Chat | Crewlet Chat (coming soon), Slack, Mattermost |
+| Chat | Crewlet Chat, Slack, Mattermost |
 | Work tracking | Crewlet Works, Jira |
 | Docs and knowledge | Crewlet Knowledge, Confluence |
 | Code | GitHub, GitLab |
@@ -7589,8 +7901,8 @@ need:
 so Jira sits under work tracking and Confluence under docs, each with its own
 product's state, and both open the one Atlassian page, since it is one key and
 one account per agent. A line carries its mark, its name (a product's app as a
-hint under it) and its state only where it carries one: **On**, **Off** or
-**Soon** for a service (none on a node running no company, which is "not known
+hint under it) and its state only where it carries one: **On** or **Off**
+for a service (none on a node running no company, which is "not known
 yet", never Off), and for an app the engine's bucket (*Connected*, *Needs
 attention*, *Setting up*), never *Not connected* repeated down the list. The
 **address apps deliver to** is the list's foot, said once, cut to fit with the
@@ -7658,8 +7970,12 @@ constant. A service the company runs elsewhere says what does its work instead
 (*Jira does this for your company*, with the way to Jira's page), what running
 it here would give, and that the company document decides it: turning a
 service on or off is not offered, since a switch here that did nothing would
-be a lie. Crewlet Chat is coming soon, pointing at Slack and Mattermost
-meanwhile.
+be a lie. Crewlet Chat counts nothing, since the rooms it answers for are the
+reader's own seat's: in use, its page says what it gives and, to a reader
+holding Chat, opens it (a reader without Chat is told it needs Chat access); on a
+vendor's chat it says which (*Slack does this for your company*, named from the
+`viewer` answer, which tells it to a holder of Chat), with the way to that
+app's line.
 
 **A reader without Admin** sees the whole directory: the services with their
 states and their pages in full (each count read only where the reader holds
@@ -7906,8 +8222,12 @@ once, named in words, with the engine's measurement as a sentence, the logs it
 stands on (logs one term holds are one line, "Trim held by the backup on
 tracker, vectors, pages and usage, for 46h", with each log's own measurement
 under it, since what a log keeps past its replay window is why it is listed and
-no shared date says it; each log a link to its page; a single log whose
-measurement is the alarm's is said once), and the engine's remedy, each a row
+no shared date says it; each log a link to its page; a single measurement that
+is the alarm's is said once with the logs it was taken on beside it, so a fleet
+with no backup yet reads "tracker, vectors, pages, iam and usage: No verified
+backup of this log has been recorded…" once — the engine carries a sentence
+measured alike on several logs once, naming them, and the page draws what it
+is given), and the engine's remedy, each a row
 of the one Alarms card with its warning glyph rather than a callout framed
 inside it. The backup they ask for is the page bar's **Take a backup**, the
 only one on the screen. Then the record of
@@ -7932,29 +8252,37 @@ refused before the round trip, and the engine's own refusal of a directory —
 occupied, or one its host cannot create or write — is said on the field. The request
 waits up to 30 minutes, the CLI's own wait, and closing the dialog does not
 stop the copy: the outcome arrives as a notice either way. Its figures are the
-newest backup the trim counts, the `backup_floor` policy, how many were
-requested and failed (over the span the event log reads, named from the
-`event_history_seconds` the engine reports rather than written into the
-screen, or "in the newest N" when the history filled its page), and the
+oldest backup any log's trim reads (each log reads the newest counted backup
+that covers it, so under `operator` there is one per log acknowledged, and the
+stalest is the one the backup-age alarm leads with), the `backup_floor` policy,
+how many were requested and failed (over the span the event log reads, named
+from the `event_history_seconds` the engine reports rather than written into
+the screen, or "in the newest N" when the history filled its page), and the
 backup owner (`retention.backup_owner`, "Not set" where nobody is named). With
 nothing backed up and every node's history read, the figure says "none yet"
-and the two lists are not drawn. Otherwise come **Newest per owner**, each node's newest copy and
-the operator's acknowledgement, with its directory, size (none for an
-acknowledgement, never 0), reach, and whether the trim counts it: exactly one
-row reads **counted · newest**, the engine's choice rather than the latest
+and the two lists are not drawn. Otherwise come **Newest per node and log**,
+each node's newest copy and the operator's newest acknowledgement of each log,
+one row per log, with its directory, size (none for an acknowledgement, never
+0), reach, and whether the trim counts it: a row reads **counted · newest**
+where some log's trim reads it, the engine's choice rather than the latest
 date, so a newer copy nobody verified reads **not verified**. Then **Backup
 history**: every backup a person asked any node for over the event log's 30
 days, with the node that holds it, the person, the directory and whether its
 manifest was written. A failure is drawn as one. Neither table is derived from
-the other: the register keeps each owner's newest point only, which is why a
-failed night shows in the history alone.
+the other: the register keeps each node's newest point and each log's newest
+acknowledgement only, which is why a failed night shows in the history alone.
 
 **Audit log** reads five sources over one window: the tracker's feed, the
 knowledge base's changes, the configuration history, the credential rows —
 and **Runtime**, the runtime audit (`events{source: "operator"}`), which is
 every call a person made through a running node whatever became of it: each
 operator tool call that is not a proven read — through the act route, an
-assistant over `/operator/mcp` or the human write surface — and every backup.
+assistant over `/operator/mcp` or the human write surface, whose chat erase,
+prune and horizon are rows named by their verbs (`chat.erase`, `chat.prune`,
+`chat.channel.retention`) — and every backup. **Chat is not a source of its
+own**: the other four are change records and a transcript is content — a
+private room's is not an administrator's to read — while what a person *did*
+in chat is already here, every chat write being a call this source records.
 A runtime row names the tool (or "backup" and its directory), who made the
 call as the engine recorded it (`actor` and `actor_kind`: the seat a bound
 person acted as, or a credential's own login) with the credential it came
@@ -8127,22 +8455,68 @@ count its live `nodes` and name the worst of its standing `alarms` (the company
 has never taken a backup, so one stands). The replay and the Go half each hold
 all of it, so a red run says which side stopped.
 
-The capture ends with a **write**, made AS THE PERSON A SESSION RESOLVES TO:
-a browser holding the cookie a password sign-in minted, whom the identity
-directory binds to the founder's seat, pins a project through
-`POST /operator/act/set_pins` under its own operation key in
-`Idempotency-Key`, exactly as the dashboard's `act` sends it. The route is the
-node's own operator surface, the one `crewlet run` builds inside
-`api.NewHumanSurfaces`, so the harness wires no second catalogue, and the
-viewer names the write among its `acts` before it is pressed. The Go
-half holds the answer to the read it promises: its `position` is in the grammar
-a read accepts back, and `GET /work/people/{handle}` at
+The captured tab is a **person's**: a browser holding the cookie a password
+sign-in minted, whom the identity directory binds to the founder's seat, holding
+`admin` — every permission there is, so the one tab is sent every kind of frame
+a tab can be. It is the only kind of socket the company's own chat is pushed to,
+since every chat frame is decided per recipient seat; one tab is one person, as
+on the dashboard. So the capture also carries the founder using **Chat** the way
+its screen does: a room made from the tab with a seat in it, looked at (the
+chat room's `presence` frame), a message said and reacted to, and the seat asked in that
+message's thread. The seat's turn claims to have answered, is refused for
+having said nothing, replies in the thread — held on that round until the
+room's presence has shown it at work, which is true only while its turn runs —
+and submits citing the reply: three rounds, the captured company's cap, so the
+turn ends on its own `delivered` rather than on the engine's rescue, which the
+Go half reads off the turn's phase record. Then the first message is edited and
+deleted, the room read through the seat's answer with `mark_chat_read`, left,
+and pruned through the human write surface's
+`POST /chat/channels/{channel_id}/prune` — an administrator's gesture, with the
+step-up the sign-in has just proved. Every other change is a press of the act
+transport. Every chat push kind is then on the capture, held against the
+engine's own list (`stream.ChatPushKinds`), so a kind the engine adds is a
+capture that stops passing until it is produced. The replay is handed an
+account of the room written beside the frames, never read from them — its id,
+the person and the seat, the highest `channel_seq` the engine minted, every
+record it took (its op, the message it names, its author and their kind, and a
+post's thread), where its last record sits and the cursor the founder flushed.
+What the engine minted is read from its answers: the room's id, each message's
+id from its post's receipt (the seat's from the room's transcript), the
+numbering, the prune's position. Each record is otherwise the gesture the
+capture made, written down as it made it — the founder as the human seat a
+person writes as, through the act transport and the prune route alike, and the
+seat as an agent in the thread it was asked in — so an author or a thread the
+write path recorded wrongly is a failure rather than part of the expectation.
+The replay holds the store to that account: the room filed with that
+high-water mark, a frame filed for every record naming exactly what the capture
+did and none naming anything else (the Go half holds the frames to the same
+account first, so a red run says which side stopped), its newest moment the
+prune's position, presence that at some frame showed the founder looking and
+the seat working, and the founder's read state with that cursor and a
+revision. Each record is held on its own because the room's messages taken
+together are named by its posts alone: an edit, a delete or a reaction filed
+under the wrong message is a screen re-reading the wrong range of a room, and
+only a comparison per frame sees it.
+
+The capture also carries two **writes** whose floors the replay holds, each
+made AS THE PERSON THE SESSION RESOLVES TO under its own operation key in
+`Idempotency-Key`, exactly as the dashboard's `act` sends it. The founder pins
+a project through `POST /operator/act/set_pins` after the frames are taken, and
+the founder's first message in the room is `POST /operator/act/post_message`.
+The route is the node's own operator surface, the one `crewlet run` builds
+inside `api.NewHumanSurfaces`, so the harness wires no second catalogue, and
+the viewer names each write among its `acts` before it is pressed. The Go half
+holds each answer to the read it promises: its `position` is in the grammar a
+read accepts back, and `GET /work/people/{handle}` (for the pin) or
+`GET /chat/channels/{channel_id}/messages` (for the message) at
 `read_level=session&min_position=<position>` is served at `session` and already
-holds the pin. The replay hands the same answer, byte for byte, to the client's
-own `act` and `SessionFloors`: the tab's `tracker` floor must be that position,
-and a read of `work_person` or `work_items` must name it as its `min_position`.
-A floor the client could not parse raises nothing, and the screen that pressed
-the button would redraw from before the press with nothing to say so.
+holds the write. The replay hands the same answers, byte for byte, to the
+client's own `act` and one tab's `SessionFloors`: the `tracker` floor must be
+the pin's position and the `chat` floor the message's, and a read of
+`work_person` or `work_items` — or of `chat_messages` or `chat_channels` — must
+name its log's as its `min_position`. A floor the client could not parse raises
+nothing, and the screen that pressed the button would redraw from before the
+press with nothing to say so.
 
 The suites themselves run in **Europe/Berlin** under jsdom (`vitest.config.ts`), and
 `src/test/environment.test.tsx` says so by what the zone produces — both
@@ -8205,10 +8579,10 @@ and fails a build over any of four numbers:
 
 | What | Budget | Measured as | Why this number |
 |---|---|---|---|
-| The initial load: the entry, its static imports and the linked stylesheet | 314 KiB | gzip at the best level, which is what the engine serves | Under two seconds on a 1.5 Mbit/s link. It was 300 KiB until the rich editor: the first paint had reached 297 KiB, and the shell sends every design system stylesheet in one sheet by rule, so the editor's 1.8 KiB of rules ride it although its code is fetched only to edit, and the Markdown grammar the renderer and the editor share became a 2 KiB chunk of its own. The create pages took it to 314.5 KiB: their rules (3.1 KiB) moved into `create.css`, which arrives with them, and the command palette (about 10 KiB) became a chunk of its own, which left it at 300.2 KiB. The rail head's engine status (uilet 0.41) took it to 312.1 KiB, over the 312 the settings tables had asked for |
-| Each chunk fetched later: a workspace, the org builder, a lazy stylesheet | 150 KiB | the same | Half the initial load, for the first click into a screen the idle prefetch has not reached |
+| The initial load: the entry, its static imports and the linked stylesheet | 320 KiB | gzip at the best level, which is what the engine serves | Under two seconds on a 1.5 Mbit/s link. It was 300 KiB until the rich editor: the first paint had reached 297 KiB, and the shell sends every design system stylesheet in one sheet by rule, so the editor's 1.8 KiB of rules ride it although its code is fetched only to edit, and the Markdown grammar the renderer and the editor share became a 2 KiB chunk of its own. The create pages took it to 314.5 KiB: their rules (3.1 KiB) moved into `create.css`, which arrives with them, and the command palette (about 10 KiB) became a chunk of its own, which left it at 300.2 KiB. The rail head's engine status (uilet 0.41) took it to 312.1 KiB, over the 312 the settings tables had asked for. The company's own chat adds about 5 KiB to it: its pushes and rooms in the socket client, routes and rail are the frame's, since a mention is told on whatever screen the reader is on. With it the load measured 317.2 KiB, so it moved to 320 KiB: 1.75 seconds on that link |
+| Each chunk fetched later: a workspace, the org builder, a lazy stylesheet | 150 KiB | the same | Half the initial load when it was 300 KiB, for the first click into a screen the idle prefetch has not reached |
 | Every font face the build embeds | 90 KB | as served — woff2 is never recompressed | The four Geist faces (83,736 bytes) and room to re-cut them, never a fifth |
-| The whole of `static/dashboard`, which every binary and image carries | 4 MiB | raw | Every binary carries it, opened or not. 3 MiB, then 3.5 MiB for the artifacts workspace, then 4 MiB for the rich editor, whose chunk is about 276 KB raw (ProseMirror 228 KB of it) plus 15 KB of its packages' notices: it measured 3.54 MiB after it. A doubled 2.3 MB baseline is still refused |
+| The whole of `static/dashboard`, which every binary and image carries | 4.25 MiB | raw | Every binary carries it, opened or not. 3 MiB, then 3.5 MiB for the artifacts workspace, then 4 MiB for the rich editor, whose chunk is about 276 KB raw (ProseMirror 228 KB of it) plus 15 KB of its packages' notices: it measured 3.54 MiB after it. Then 4.25 MiB: the company's own chat took it from about 3.95 MiB to about 4.08 MiB. A doubled 2.3 MB baseline is still refused |
 
 The initial load is the shell's scripts and stylesheet and everything they reach
 through a static `import`, derived from the modules themselves rather than from
@@ -8327,8 +8701,8 @@ brings that carries a design-system rule.
   re-asking it only repeats it — see
   [Honest empty states](#honest-empty-states). There is no retry constant of
   the client's own beyond the engine's health tick, because a flat one is
-  wrong both ways on one fleet — too early for a node grinding through a bulk
-  apply, too late for one that caught up in milliseconds.
+  wrong both ways on one fleet — too early for a node grinding through a long
+  backlog, too late for one that caught up in milliseconds.
 - **A newer peer's frame is ignored and counted.** A push kind this build does
   not dispatch is dropped rather than thrown on or applied by a guess, and the
   store counts it (`unknownPushes`), because the same fall-through is what a

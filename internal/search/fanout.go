@@ -17,8 +17,10 @@ import (
 //
 // # What is being divided, and what is not
 //
-// Every node holds the WHOLE corpus — that is the fleet shape, and nothing
-// here changes it. So a fan-out divides CPU, never data: the coordinator hands
+// Every DATA node holds the WHOLE corpus — that is the fleet shape, and
+// nothing here changes it. A node without `data` holds none of it, takes no
+// range and is never in the roster: it asks a data node to search, and that
+// node coordinates. So a fan-out divides CPU, never data: the coordinator hands
 // each participant a range of [SearchShards] buckets, every participant scans
 // only its range, and the union is one scan of the corpus done N ways. A node
 // that does not answer therefore costs the answer a slice of RELEVANCE rather
@@ -47,10 +49,10 @@ import (
 // Semantic similarity is comparable by construction: one model, one metric,
 // one vector space. BM25 would NOT be comparable if each participant computed
 // its statistics from its own slice — but it does not have to, because every
-// node holds the whole corpus, so document frequency and the document count
-// come from that node's complete tables whatever buckets it scanned. THE SCAN
-// IS BUCKET-LIMITED; THE STATISTICS ARE GLOBAL. That sentence is the whole of
-// why lexical fusion stays correct here and would not in a design that
+// data node holds the whole corpus, so document frequency and the document
+// count come from that node's complete tables whatever buckets it scanned. THE
+// SCAN IS BUCKET-LIMITED; THE STATISTICS ARE GLOBAL. That sentence is the whole
+// of why lexical fusion stays correct here and would not in a design that
 // divided storage.
 
 // Method names one of the two rankers a hybrid answer fuses.
@@ -114,7 +116,7 @@ type Slice struct {
 	// range at all and the coordinator must count its buckets MISSING.
 	//
 	// It is not a degradation like the field above, and that is the whole
-	// point of it being separate. Every node holds the whole corpus, but
+	// point of it being separate. Every data node holds the whole corpus, but
 	// the lexical index over it is each node's OWN — built by that node's
 	// own walk, in its own database, on its own schedule — so a node that
 	// joined a minute ago holds the corpus and can find nothing in it.
@@ -226,7 +228,7 @@ const FanOutFloor = 10_000
 // THE LOCAL SCAN IS NOT A PARTICIPANT LIKE THE OTHERS. This node always takes
 // an assignment and runs it directly, never through the broker: a search that
 // answered nothing because the broker hiccupped would be a fleet-wide outage
-// of a read every node could serve alone.
+// of a read every data node could serve alone.
 type FanOut struct {
 	// Self is this node's id, which is its name in the assignment table.
 	Self string

@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/authapi"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
@@ -31,8 +32,10 @@ import (
 // owner's account or regenerate the recovery codes and read them back. The
 // two proof routes and the password change are refused by the AUTHORITY TABLE
 // (`token_refused`, the proof verb's row needing a person present) and the
-// step-up by its own
-// check, since confirming who you are is no verb in the table. The token here
+// step-up by its own check, since confirming who you are is no verb in the
+// table — in the table's own words, `token_refused`, because no proof the
+// caller could give would lift it and `step_up_required` asked for one. Every
+// row is held to the code as well as the reason. The token here
 // carries ADMIN, minted from an owner who holds it (ADR-0033 lets a token
 // carry it), so the refusal is the person-present rule's and no permission
 // could stand in for it. The request goes through the REAL guard so the
@@ -40,7 +43,8 @@ import (
 //
 // Mutation: spare the proof verb's self arm in internal/authz and the recovery
 // codes are regenerated for the token's holder; drop the step-up's own check
-// and it answers something other than 403.
+// and it answers something other than 403; answer the step-up
+// `step_up_required` again and its row goes red.
 func TestAMachineTokenManagesNoProof(t *testing.T) {
 	t.Parallel()
 	owner := uuid.Must(uuid.NewV7())
@@ -81,7 +85,7 @@ func TestAMachineTokenManagesNoProof(t *testing.T) {
 		// AND THE PASSWORD ITSELF, decided by the same row: a token that
 		// could change its owner's password would take the account.
 		"/auth/password": authz.ReasonTokenRefused,
-		"/auth/step-up":  authz.ReasonStepUp,
+		"/auth/step-up":  authz.ReasonTokenRefused,
 	} {
 		req := httptest.NewRequest(http.MethodPost, path,
 			strings.NewReader(`{"password":"a-password-long-enough","code":"123456"}`))
@@ -90,9 +94,10 @@ func TestAMachineTokenManagesNoProof(t *testing.T) {
 		guarded.ServeHTTP(rec, req)
 		var body map[string]any
 		_ = json.Unmarshal(rec.Body.Bytes(), &body)
-		if rec.Code != http.StatusForbidden || body[authz.DetailReason] != string(reason) {
+		if rec.Code != http.StatusForbidden || body[authz.DetailReason] != string(reason) ||
+			body["error"] != string(httpjson.CodeTokenRefused) {
 			t.Errorf("%s with a machine token answered %d %v, want 403 "+
-				"naming %s", path, rec.Code, body, reason)
+				"token_refused naming %s", path, rec.Code, body, reason)
 		}
 	}
 	if n := writer.count(); n != 0 {

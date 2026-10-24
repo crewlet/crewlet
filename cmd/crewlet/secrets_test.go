@@ -13,7 +13,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -85,11 +88,73 @@ func TestASecretRoundTripsThroughTheCLI(t *testing.T) {
 
 	if out, _, err := secretsCmd(t, cfg, "unset", "TOKEN"); err != nil {
 		t.Fatalf("unset: %v", err)
-	} else if !strings.Contains(out, "removed") {
+	} else if !strings.Contains(out, "recorded the removal of TOKEN") {
 		t.Fatalf("unset said %q", out)
 	}
 	if _, _, err := secretsCmd(t, cfg, "get", "TOKEN", "-reveal"); err == nil {
 		t.Fatal("a removed secret was still readable")
+	}
+}
+
+// AN UNSET ON A STOPPED NODE REACHES THE FLEET, and says where it was written.
+//
+// The node's broker is inside its engine, so a stopped node's command cannot
+// reach the fleet's store, and `secrets unset` there used to delete the node's
+// own row and print nothing about where: the fleet's value, which every node
+// resolves, survived it, and the next start had nothing to carry because a
+// deleted row is not one a migration can see. It now leaves a DATED REMOVAL,
+// names the store it wrote and what that store does next, lists it as
+// pending, and the boot migration removes the fleet's value — written before
+// the removal — at the next start.
+//
+// Mutations, each red: unset deleting the local row again (nothing is pending
+// and the fleet keeps TOKEN), and the store line left out.
+func TestAnOfflineUnsetReachesTheFleetAtTheNextStart(t *testing.T) {
+	t.Parallel()
+	cfg := bootstrapWithKeyring(t, "k1")
+	out, errs, err := secretsCmd(t, cfg, "unset", "TOKEN")
+	if err != nil {
+		t.Fatalf("unset: %v (%s)", err, errs)
+	}
+	boot, err := loadBootstrapForStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"recorded the removal of TOKEN",
+		"written to " + boot.Store.Path, secretsLocalRemovalNote} {
+		if !strings.Contains(out, want) {
+			t.Errorf("unset said %q, want it to carry %q", out, want)
+		}
+	}
+	list, _, err := secretsCmd(t, cfg, "list")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if !strings.Contains(list, "for the fleet at this node's next start") ||
+		!strings.Contains(list, "TOKEN") {
+		t.Errorf("list = %q, want the pending removal of TOKEN", list)
+	}
+
+	// THE NEXT START: the fleet holds TOKEN from before the removal.
+	cipher, err := boot.Secrets.Cipher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fleet := fleetsecrets.New(coordmem.NewFleet(), cipher)
+	if err := fleet.Set(t.Context(), "TOKEN", "the-fleet-token", hostAuthor(),
+		secrets.SourceAPI, time.Now().UTC().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	sv, closeStore, err := openSecretValues(t.Context(), boot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore()
+	if _, err := fleetsecrets.Migrate(t.Context(), sv, fleet); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	if _, err := fleet.Get(t.Context(), "TOKEN"); !errors.Is(err, secrets.ErrNotFound) {
+		t.Fatalf("after the next start the fleet's TOKEN answers %v, want it removed", err)
 	}
 }
 

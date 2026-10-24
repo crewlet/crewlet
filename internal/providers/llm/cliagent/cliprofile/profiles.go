@@ -7,10 +7,11 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strings"
 	"sync"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 //go:embed profiles.yaml
@@ -157,7 +158,7 @@ func Load(name string, overrides map[string]any) (Profile, error) {
 	builtin, ok := Builtin(name)
 	if !ok {
 		return Profile{}, fmt.Errorf("cli-agent: unknown agent %q (want %s)",
-			name, strings.Join(BuiltinNames(), ", "))
+			name, words.Or(BuiltinNames()))
 	}
 	if len(overrides) == 0 {
 		if err := builtin.Validate(name); err != nil {

@@ -37,7 +37,10 @@ import {
 import type { HumanSeat } from "~/contract/identity.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import type { OrgServices } from "~/contract/services.ts";
+import { withDerived } from "~/test/org.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -139,9 +142,48 @@ function mount(node: React.ReactNode) {
   const socket = new LiveSocket(store);
   render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>{node}</Router>
+      <ViewerProvider>
+        <Router>{node}</Router>
+      </ViewerProvider>
     </ClientContext.Provider>,
   );
+}
+
+/**
+ * The reach note as an admin granting access reads it, on a company whose
+ * chat is `chat` (the org projection's `services`): the one fact about the
+ * company it reads.
+ */
+async function reach(node: React.ReactNode, chat: OrgServices["chat"]) {
+  const viewer = {
+    login: "ada.admin",
+    owner: "ada",
+    handle: "ada",
+    name: "Ada",
+    kind: "human",
+    grants: ["admin"],
+    acts: [],
+    project: "",
+    config_writer: true,
+    config_managed_by: [],
+    chat_vendors: [],
+  };
+  const store = new Store();
+  store.setConnected(true);
+  store.applyOrg(
+    withDerived({
+      name: "Acme",
+      roles: [],
+      services: { tracker: "native", knowledge: "native", chat },
+    }),
+  );
+  const socket = { query: vi.fn(async (what: string) => (what === "viewer" ? viewer : {})) };
+  render(
+    <ClientContext.Provider value={{ store, socket } as never}>
+      <ViewerProvider>{node}</ViewerProvider>
+    </ClientContext.Provider>,
+  );
+  await settle();
 }
 
 /** A seat's holding as its page draws it, over the real listing hook — which
@@ -326,7 +368,9 @@ describe("a seat's holding", () => {
       await settle();
       expect(eng.reads("/iam/seats")).toBeGreaterThan(before);
       if (refused)
-        expect(screen.getByText("Couldn’t load this on this node. Try another node.")).toBeTruthy();
+        expect(
+          screen.getByText("Couldn’t load this here, and waiting won’t change that."),
+        ).toBeTruthy();
       expect(screen.getAllByRole("dialog")).toHaveLength(1);
       expect(
         screen.getByText("https://crewlet.example.com/dashboard#/reset/c-first.s3cret"),
@@ -376,7 +420,7 @@ describe("an invitation onto a seat", () => {
     expect(dialog.textContent).toMatch(/The seat is held until they join\./);
     // EVERY APP IS PRE-TICKED AND ADMIN IS NOT: a person invited works in
     // every app unless somebody says otherwise.
-    for (const app of ["Tracker", "Knowledge", "Artifacts"]) {
+    for (const app of ["Tracker", "Knowledge", "Artifacts", "Chat"]) {
       expect(within(dialog).getByRole("checkbox", { name: app })).toHaveProperty("checked", true);
     }
     expect(within(dialog).getByRole("checkbox", { name: "Admin" })).toHaveProperty(
@@ -394,7 +438,7 @@ describe("an invitation onto a seat", () => {
     expect(sent?.key).toMatch(UUID7);
     expect(sent?.body).toEqual({
       email: "dee@example.com",
-      grants: ["tracker", "artifacts"],
+      grants: ["tracker", "artifacts", "chat"],
       seat: "sam",
     });
     expect(
@@ -418,6 +462,8 @@ describe("an invitation onto a seat", () => {
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "Knowledge" }));
     expect(within(dialog).queryByText(/^Overview only:/)).toBeNull();
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "Artifacts" }));
+    expect(within(dialog).queryByText(/^Overview only:/)).toBeNull();
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Chat" }));
     expect(within(dialog).getByText(/^Overview only:/)).toBeTruthy();
     expect(within(dialog).queryByText(/Without Tracker/)).toBeNull();
   });
@@ -482,7 +528,7 @@ describe("an invitation onto a seat", () => {
     const [first, second] = eng.writes();
     expect(second?.body).toEqual({
       email: "jane@example.com",
-      grants: ["tracker", "knowledge", "artifacts"],
+      grants: ["tracker", "knowledge", "artifacts", "chat"],
       seat: "sam",
     });
     expect(second?.key).toMatch(UUID7);
@@ -498,7 +544,7 @@ describe("an invitation onto a seat", () => {
         json(403, {
           error: "unauthorized",
           message:
-            "You don’t have the access this needs (Admin, Tracker or Knowledge). Ask an admin for it.",
+            "You don’t have the access this needs (Admin, Tracker, Knowledge or Chat). Ask an admin for it.",
           reason: "directory",
           grants: ["admin"],
         }),
@@ -511,7 +557,7 @@ describe("an invitation onto a seat", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Invite" }));
     await settle();
     const alert = within(dialog).getByRole("alert");
-    expect(alert.textContent).not.toMatch(/Admin, Tracker or Knowledge/);
+    expect(alert.textContent).not.toMatch(/Admin, Tracker, Knowledge or Chat/);
     expect(alert.textContent).toMatch(/You need Admin access for this\./);
     fireEvent.click(within(dialog).getByRole("button", { name: "Invite" }));
     await settle();
@@ -559,7 +605,7 @@ describe("a person created on a seat", () => {
       kind: "person",
       seat: "sam",
       email: "dee.ray@example.com",
-      grants: ["tracker", "knowledge", "artifacts"],
+      grants: ["tracker", "knowledge", "artifacts", "chat"],
     });
     expect(within(dialog).getByText("dee.ray")).toBeTruthy();
     expect(dialog.textContent).toMatch(/dee\.ray is now Sam Support/);
@@ -597,7 +643,7 @@ describe("a person created on a seat", () => {
         email: "dee.ray@example.com",
         login: "dee.ray",
         name: "Dee Ray",
-        grants: ["tracker", "knowledge", "artifacts"],
+        grants: ["tracker", "knowledge", "artifacts", "chat"],
       },
     ]);
   });
@@ -780,12 +826,14 @@ describe("the access picker", () => {
     expect(box("Knowledge").disabled).toBe(true);
     expect(box("Artifacts").checked).toBe(true);
     expect(box("Artifacts").disabled).toBe(true);
-    expect(screen.getAllByText("Included with Admin.")).toHaveLength(3);
-    expect(value()).toBe("admin,tracker,knowledge,artifacts");
+    expect(box("Chat").checked).toBe(true);
+    expect(box("Chat").disabled).toBe(true);
+    expect(screen.getAllByText("Included with Admin.")).toHaveLength(4);
+    expect(value()).toBe("admin,tracker,knowledge,artifacts,chat");
     fireEvent.click(box("Admin"));
     expect(box("Tracker").disabled).toBe(false);
     expect(box("Tracker").checked).toBe(true);
-    expect(value()).toBe("tracker,knowledge,artifacts");
+    expect(value()).toBe("tracker,knowledge,artifacts,chat");
   });
 
   // A ROW STORED AS ADMIN ALONE keeps its apps when Admin is taken away.
@@ -793,7 +841,7 @@ describe("the access picker", () => {
     render(<Picker initial={["admin"]} held={ADMIN} />);
     expect(box("Tracker").checked).toBe(true);
     fireEvent.click(box("Admin"));
-    expect(value()).toBe("tracker,knowledge,artifacts");
+    expect(value()).toBe("tracker,knowledge,artifacts,chat");
   });
 
   test("a permission the writer does not hold is offered disabled, with why", () => {
@@ -806,10 +854,32 @@ describe("the access picker", () => {
 });
 
 // WHAT A PERSON WILL MISS, said to the reader about themselves as well.
-test("the reach note speaks to the reader about their own access", () => {
-  render(<AppReachNote grants={["knowledge"]} you />);
+test("the reach note speaks to the reader about their own access", async () => {
+  await reach(<AppReachNote grants={["knowledge"]} you />, "native");
   expect(screen.getByText(/agents can’t send you work/)).toBeTruthy();
   cleanup();
-  render(<AppReachNote grants={["admin"]} you />);
+  await reach(<AppReachNote grants={["admin"]} you />, "native");
   expect(document.body.textContent).toBe("");
 });
+
+// WITHOUT CHAT, WHAT AGENTS SAY NEVER REACHES THEM, on a company running
+// Crewlet Chat, and only there: on a vendor's the conversation is the
+// vendor's. The tracker's note comes first where both are missing.
+// Mutation: drop the services check and the vendor row goes red; drop the
+// chat note and the native row does.
+test.each([
+  ["native", true],
+  ["vendor", false],
+  ["none", false],
+] as const)(
+  "on a company whose chat is %j, a person without Chat is told so: %s",
+  async (backend, said) => {
+    await reach(<AppReachNote grants={["tracker"]} />, backend);
+    expect(/Without Chat, what agents say to them/.test(document.body.textContent ?? "")).toBe(
+      said,
+    );
+    cleanup();
+    await reach(<AppReachNote grants={["knowledge"]} />, backend);
+    expect(document.body.textContent).toMatch(/Without Tracker/);
+  },
+);

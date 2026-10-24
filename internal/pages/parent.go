@@ -102,7 +102,7 @@ func judgeParent(ctx context.Context, tx *sql.Tx, pageID, container,
 	// THE WALK UP FROM THE PARENT, looking for the page itself, to the top.
 	// It ends because the tree is acyclic, by induction over the strict log:
 	// every write of a parent keeps it so — a create and a move are judged
-	// here at their own position, on rows identical on every node, so the
+	// here at their own position, on rows identical on every data node, so the
 	// second of two crossing moves finds the page above its new parent and
 	// keeps the old one ([salvageParent]); a purge re-parents its children
 	// onto its own parent, which in an acyclic tree is never beneath them;
@@ -112,8 +112,7 @@ func judgeParent(ctx context.Context, tx *sql.Tx, pageID, container,
 			return parentBeneath, parent, nil
 		}
 		var next string
-		err := tx.QueryRowContext(ctx,
-			`SELECT parent_id FROM pages_heads WHERE id = ?`, at).Scan(&next)
+		err := tx.QueryRowContext(ctx, parentOfStatement, at).Scan(&next)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			next = ""
@@ -146,7 +145,7 @@ func checkParent(ctx context.Context, tx *sql.Tx, pageID, container,
 			"empty to file it at its container's top")
 	case parentMissing:
 		return badParent("there is no page %s. Name the id of a page in "+
-			"container %s (list_pages finds one), or leave parent_id empty to "+
+			"container %s ("+ListPagesTool+" finds one), or leave parent_id empty to "+
 			"file this page at the container's top", parentID, container)
 	case parentPurged:
 		return badParent("page %s was purged and is gone for good. Name "+
@@ -195,3 +194,7 @@ func salvageParent(ctx context.Context, tx *sql.Tx, at applyContext, pageID,
 			"applies"))
 	return have, nil
 }
+
+// parentOfStatement is one step of a parent walk: a page's parent, by its key,
+// named for the plan gate.
+const parentOfStatement = `SELECT parent_id FROM pages_heads WHERE id = ?`

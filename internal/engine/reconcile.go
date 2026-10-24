@@ -350,7 +350,34 @@ func (r *Reconciler) Applied() int64 { return r.snapshot().applied }
 // Read from the store on every call rather than cached, because it is asked by
 // the readiness probe and a cached posture is a node that reports healthy
 // through the whole window in which it stopped being so.
+//
+// It FAILS OPEN: a control plane it cannot read answers serve — see
+// [Reconciler.ReadPosture] for the reason, and for the one reader that must
+// not be handed that answer.
 func (r *Reconciler) Posture(ctx context.Context) configplane.Posture {
+	posture, err := r.ReadPosture(ctx)
+	if err != nil {
+		return configplane.PostureServe
+	}
+	return posture
+}
+
+// ReadPosture is [Reconciler.Posture] without its fail-open answer: the
+// posture this node concluded, or the error that kept it from reading the
+// control plane.
+//
+// FOR THE PEERS. The readiness probe and the admission gate want the
+// fail-open answer, because the alternative takes every node out of rotation
+// on a database blip. The presence heartbeat must not have it: broadcast, the
+// fail-open serve is a confident healthy posture on exactly the node an
+// operator is looking for. The engine used to catch that only when the read
+// overran the beat's budget, by the budget's clock — so a plane that refused
+// at once had its fail-open serve published as this node's answer.
+//
+// The gate is decided exactly as [Reconciler.Posture] decides it: a plane it
+// cannot read records serve here too, so which of the two a caller asks
+// through never changes what [Reconciler.Admits] answers.
+func (r *Reconciler) ReadPosture(ctx context.Context) (configplane.Posture, error) {
 	// BOUNDED, because this is on the liveness and readiness path. The view
 	// below is two coordination round trips, one of which iterates the
 	// fleet's keys — which the NATS client's default per-API timeout does
@@ -360,9 +387,10 @@ func (r *Reconciler) Posture(ctx context.Context) configplane.Posture {
 	// timeout to get there and the operator learns nothing.
 	//
 	// ProbeReadBudget is an eighth of the reconcile cadence and inside a
-	// typical 5s liveness timeout, so a slow plane degrades to the
-	// fail-open PostureServe answer below — which this function's own
-	// comment already promises for a plane it cannot read.
+	// typical 5s liveness timeout, so a slow plane degrades to the error
+	// below — which [Reconciler.Posture] answers with the fail-open
+	// PostureServe it promises for a plane it cannot read, and the gate
+	// records the same.
 	ctx, cancel := context.WithTimeout(ctx, ProbeReadBudget)
 	defer cancel()
 
@@ -375,9 +403,10 @@ func (r *Reconciler) Posture(ctx context.Context) configplane.Posture {
 		// of rotation on a database blip.
 		r.log.WarnContext(ctx, "posture_unknown", "error", err,
 			"detail", "cannot read the control plane; assuming this node is current")
-		return r.decide(configplane.PostureServe)
+		r.decide(configplane.PostureServe)
+		return "", fmt.Errorf("read this node's posture: %w", err)
 	}
-	return r.decide(configplane.DecidePosture(view))
+	return r.decide(configplane.DecidePosture(view)), nil
 }
 
 // ProbeReadBudget bounds one coordination read made for a health probe: the
@@ -493,8 +522,10 @@ func (r *Reconciler) Tick(ctx context.Context) error {
 		return fmt.Errorf("engine: reconcile: %w", err)
 	}
 	if !found {
-		// Nothing has been activated. Not an error and not a state to
-		// report: a fresh deployment sits here until the first import.
+		// Nothing has been activated: a fresh deployment sits here until
+		// the first import. Or the pointer is GONE while this node holds
+		// the company it runs, which this node offers back.
+		r.restorePointer(ctx)
 		return nil
 	}
 	progress := r.snapshot()
@@ -534,6 +565,61 @@ func (r *Reconciler) Tick(ctx context.Context) error {
 	return r.apply(ctx, target)
 }
 
+// restorePointer offers this node's own active revision to a fleet whose
+// activation pointer names nothing, and only then: published create-only, so
+// the first node to offer one is the fleet's and every other converges on it.
+//
+// A POINTER CAN GO WHILE THE FLEET RUNS: a coordination store recreated under
+// running nodes keeps no activation. Every node went on running its company
+// while /config, which answers the pointer, told an operator nothing was
+// configured, and a create-only import landed over the running company
+// unrefused. A node restarting republishes its copy at boot, and nothing did
+// until one did. Every node holding a copy now offers it on its next tick,
+// which is the same offer the boot makes, with the same seal check: a copy
+// stored without one is never published, since every peer would refuse it.
+//
+// A node holding no copy offers nothing: that is the fresh deployment, which
+// waits for its first import.
+func (r *Reconciler) restorePointer(ctx context.Context) {
+	active, found, err := r.configs.Active(ctx)
+	if err != nil {
+		r.log.WarnContext(ctx, "local_revision_unread", "error", err,
+			"detail", "the fleet has no activation, and this node could not read "+
+				"its own active revision to offer it; the next tick tries again")
+		return
+	}
+	if !found {
+		return
+	}
+	if _, err = secrets.Open(r.cipher, active.Payload); err != nil {
+		r.log.WarnContext(ctx, "fleet_activation_not_restored", "revision", active.ID,
+			"error", openRefusal(active.ID, true, err))
+		return
+	}
+	published, err := r.plane.Activate(ctx, coord.ActivationRequest{
+		RevisionID: active.ID, Summary: active.Summary, Payload: active.Payload,
+		At: active.ActivatedAt, ExpectAbsent: true,
+		Origin: coord.RevisionOrigin{
+			Author: active.CreatedBy, AuthorKind: active.CreatedByKind,
+			OperatorID: active.OperatorID, Source: active.Source,
+			CreatedAt: active.CreatedAt,
+		},
+	})
+	switch {
+	case errors.Is(err, coord.ErrActivationRaced):
+		// Another node offered its copy first, which is the fleet's now.
+		return
+	case err != nil:
+		r.log.WarnContext(ctx, "fleet_activation_not_restored", "revision", active.ID,
+			"error", err, "detail", "the fleet has no activation and this node's "+
+				"offer of its own did not land; the next tick tries again")
+		return
+	}
+	r.log.WarnContext(ctx, "fleet_activation_restored", "revision", active.ID,
+		"epoch", published.Epoch, "detail", "the fleet had no activation while "+
+			"this node ran a company, so this node published the revision it runs")
+}
+
 // apply loads, opens, parses and publishes one revision, then records what
 // happened for the rest of the fleet to read.
 //
@@ -564,16 +650,24 @@ func (r *Reconciler) apply(ctx context.Context, target coord.Activation) error {
 // holdLocalCopy makes the revision the fleet is on this node's active one,
 // once this node serves it.
 //
-// This node's active revision is what its GET /config answers, what it boots
-// on, and what it offers the whole fleet at its next start whenever that
-// revision is newer than the pointer. So once the node runs the fleet's epoch
-// it has to be the fleet's revision, and three ordinary paths leave it
+// This node's active revision is its copy of the fleet's pointer: what it
+// boots on, and what it offers the whole fleet at its next start whenever
+// that revision is newer than the pointer. So once the node runs the fleet's
+// epoch it has to be the fleet's revision, and two ordinary paths leave it
 // otherwise: an API write whose own local activation failed after the fleet
-// took it, a write that marked itself active a moment after this node had
-// adopted a newer one, and an offline import the fleet had already superseded
-// when the node started. Each is corrected here, every tick, rather than
-// trusted to the path that caused it, and each left alone was a node serving,
-// and one restart later republishing, a company the fleet is not running.
+// took it, and an offline import the fleet had already superseded when the
+// node started. Each is corrected here, every tick, rather than trusted to
+// the path that caused it, and each left alone was a node booting on, and one
+// restart later republishing, a company the fleet is not running.
+//
+// IT NEVER MOVES THE COPY BACK. target is the epoch this tick read, and an
+// apply can take long enough for the fleet to move on while it runs: a write
+// on this node that lands meanwhile has already made ITS revision this node's
+// active one by the time the apply ends. Marking target active then was the
+// copy going back to the revision that write replaced, which is what this
+// node's GET /config answered after the write's 201 while it read the copy.
+// The store refuses it ([store.SupersededError]) inside the transaction that
+// would make it, and the next tick reads the pointer the write moved.
 //
 // Best effort, like every local copy: the epoch is applied either way, and
 // the next tick tries again.
@@ -614,6 +708,9 @@ func (r *Reconciler) holdLocalCopy(ctx context.Context, target coord.Activation)
 		return
 	}
 	if _, err := r.configs.Activate(ctx, target.RevisionID, target.At); err != nil {
+		if r.logSuperseded(ctx, err, target) {
+			return
+		}
 		r.log.WarnContext(ctx, "local_revision_not_marked_active", "revision", target.RevisionID,
 			"error", err, "detail", "the fleet's revision is applied, and this node's "+
 				"own active revision is still another; the next tick tries again")
@@ -625,6 +722,21 @@ func (r *Reconciler) holdLocalCopy(ctx context.Context, target coord.Activation)
 	}
 	r.log.InfoContext(ctx, "local_revision_realigned", "revision", target.RevisionID,
 		"previous", previous, "epoch", target.Epoch)
+}
+
+// logSuperseded reports a local activation the store refused because this
+// node's copy already holds a later one, and whether err was that.
+//
+// DEBUG, because nothing is wrong: the fleet moved on while this node was
+// applying target, and the later revision is already this node's.
+func (r *Reconciler) logSuperseded(ctx context.Context, err error, target coord.Activation) bool {
+	var superseded *store.SupersededError
+	if !errors.As(err, &superseded) {
+		return false
+	}
+	r.log.DebugContext(ctx, "local_revision_newer", "revision", target.RevisionID,
+		"epoch", target.Epoch, "held", superseded.Held, "held_at", superseded.HeldAt)
+	return true
 }
 
 // applyRevision is the part that can fail, separated so every exit records.
@@ -800,7 +912,7 @@ func (r *Reconciler) fetchRevision(ctx context.Context, target coord.Activation)
 		return store.Revision{}, openRefusal(target.RevisionID, false, err)
 	}
 	revision := adopted(target, payload)
-	if err := r.configs.Adopt(ctx, revision); err != nil {
+	if err := r.configs.Adopt(ctx, revision); err != nil && !r.logSuperseded(ctx, err, target) {
 		r.log.WarnContext(ctx, "revision_not_cached", "revision", target.RevisionID,
 			"error", err, "detail", "the revision is applied; this node's config "+
 				"history will not show it and it will be re-fetched next time")

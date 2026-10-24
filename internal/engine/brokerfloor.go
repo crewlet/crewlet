@@ -19,7 +19,11 @@ import (
 // the refusal a boot gives ([stateLog.storageRefused]), the advisory `crewlet
 // validate` gives ([BrokerFloorFor]'s caller in cmd/crewlet) and the figures
 // the deployment guide quotes are all read from this one computation, and the
-// guide's are held to it by a test.
+// guide's are held to it by a test. So is the one figure that cannot be read
+// from it: the least stream.store_max_bytes accepts
+// ([config.StoreMaxBytesFloor]), a constant because internal/config validates
+// a document without the register, held to the default document's floor and
+// the gibibyte [objectsCoordinationFloor] keeps beside it.
 //
 // # What it does not count
 //

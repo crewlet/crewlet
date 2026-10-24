@@ -24,6 +24,22 @@ export type QueryErrorCode =
    *  second is an answer a person acts on. A source this node does not have
    *  at all is `unknown_query`, which waiting never changes. */
   | "unavailable"
+  /** A question about the CONTENT of an artifact in the trash — its
+   *  datastore, its room — asked by somebody it is disclosed to: the REST
+   *  routes' `409 artifact_trashed`. Its owner's restore ends it, so a screen
+   *  says the artifact is in the trash rather than that it does not exist
+   *  (`not_found`, the answer for a reader it is not disclosed to). */
+  | "artifact_trashed"
+  /** A configuration revision this node cannot open: sealed under a key the
+   *  keyring lost, stored without a seal, or the fleet's active revision met
+   *  only through its pointer, sealed under a key this node was never given or
+   *  put there without a seal. The REST route's own four codes; the frame's
+   *  `detail` names the key or the document that brings it back, which only
+   *  an administrator can do, so a screen shows it and never retries. */
+  | "unreadable_revision"
+  | "unsealed_revision"
+  | "unreadable_fleet_revision"
+  | "unsealed_fleet_revision"
   | "timeout"
   | "closed";
 
@@ -46,11 +62,28 @@ export type QueryErrorCode =
  * told to sign in again, never to set anything.
  *
  * THE SENTENCE IS SECOND PERSON, and it is ours — except where it is `null`,
- * which means "show the tool's own `detail`". Those are the two classes whose
- * sentence names the argument that was wrong (`invalid`) or the rule that
- * forbade it (`forbidden`); every other class's sentence is written for a
- * model reading a tool result, and a person reading it would be told about
- * `if_match` and record ids.
+ * which means "show the engine's own `detail`". Those are the four classes
+ * whose `detail` is written for the person reading it: the argument that was
+ * wrong (`invalid`), the rule that forbade it (`forbidden`), and — in the words
+ * of the domain that decided it, since the tool's own names the next call for
+ * a model (`internal/api/operator`'s `Said`) — the state that refused the
+ * change and who changes it (`conflict`: a room archived, an item in the
+ * trash, a write that lost its race and may be made again), or what already
+ * holds the name it asked for (`exists`). One fixed sentence for every
+ * `conflict` ended "retry", which re-trying an archived room's post never
+ * changes. Every other class's `detail` is written for a model reading a tool
+ * result, and a person reading it would be told about `if_match` and record
+ * ids.
+ *
+ * TWO ANSWERS OVERRULE A SENTENCE HERE, because each could only contradict it
+ * (`protocol/act.ts`, `sentenceOf`): a refusal whose `detail` the engine wrote
+ * for the person, which it says by carrying the tool's own sentence beside it
+ * as `tool_detail` (a condition of the node told in step with its
+ * `Retry-After`, a domain's words for a conflict, a collision or a deletion),
+ * is shown in that `detail`; and a sentence below that asks for a wait
+ * (`unavailable`, `identity_unavailable`) gives way to the engine's own
+ * sentence for the code where the answer carries no `Retry-After`, since the
+ * engine said waiting won't change it.
  */
 export const ACT_ERRORS = {
   // Who is asking — the request guard's, before any tool is named.
@@ -58,6 +91,8 @@ export const ACT_ERRORS = {
   identity_unavailable: "Couldn’t confirm who you are. Try again.",
   seat_unavailable: "Your seat was removed. Ask an admin to move you.",
   second_factor_enrolment_required: "Set up two-step verification first.",
+  reader_changed:
+    "Someone else is signed in here now, so nothing changed. Reload to continue as them.",
   csrf_origin:
     "The engine refused a change sent from another site. Make it from this page's own address.",
   // The authority table's, through the one refusal mapping.
@@ -76,7 +111,7 @@ export const ACT_ERRORS = {
   body_too_large: "The change is larger than the engine accepts in one request.",
   unreadable_body: "The change could not be read in full by the engine.",
   no_active_revision:
-    "This node has not been handed a company yet, so there is nothing to change. Try again once it has.",
+    "This node isn’t running a company yet, so there’s nothing to change. Try again once it is.",
   draining: "This node is shutting down and takes no changes now. Try again in a moment.",
   starting: "This node is still starting and takes no changes yet. Try again in a moment.",
   // The tool's own refusal classes. `internal_error` is one of them — a fault
@@ -86,12 +121,14 @@ export const ACT_ERRORS = {
   not_found: "It is not there any more. Somebody may have removed or moved it.",
   forbidden: null,
   stale_version: "Changed by somebody else since you opened it. Look again, then retry.",
-  conflict: "It collided with another change landing at the same moment. Look again, then retry.",
-  exists: "That already exists.",
+  conflict: null,
+  exists: null,
   already_answered: "Somebody has already answered it.",
   reassignment_budget:
     "It has been handed between seats too many times. A person has to pick it up now.",
   inbox_full: "Your inbox holds too many marks. Mark everything read up to here first.",
+  quota_exceeded:
+    "This would pass a limit on what the company keeps. Remove what it no longer needs, or ask an admin to raise the limit.",
   not_running: "It is not running any more.",
   steer_unsupported: "That turn cannot take a note: it runs in a coding agent's own loop.",
   budget_exhausted:

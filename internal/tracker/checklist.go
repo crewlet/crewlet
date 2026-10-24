@@ -153,10 +153,22 @@ func ApplyChecklist(lists []Checklist, c ChecklistIntent) ([]Checklist, error) {
 		case c.List == "":
 			return nil, invalid("an add_list gesture mints no list id")
 		case slices.ContainsFunc(out, func(l Checklist) bool { return l.ID == c.List }):
-			return nil, invalid("this task already has a checklist %q", c.List)
+			// AN ID MINTED FROM THE GESTURE'S OWN OPERATION (the tools'
+			// checklistIntent), so one the task holds is this gesture made
+			// again: said without the id, which nobody reading it chose.
+			return nil, collision("this task already has that checklist. Look at " +
+				"the task rather than adding it again")
 		}
 		if err := checkChecklistName(c.Name, MaxChecklistName, "checklist name"); err != nil {
 			return nil, err
+		}
+		if len(c.Items) > MaxChecklistItems {
+			// THE GESTURE PAST THE CAP ON ITS OWN is the request's: no
+			// state of the task lets a list that long land. A list it
+			// only pushes past a cap is the task's state, below.
+			return nil, invalid("this add_list gesture carries %d lines and a "+
+				"list holds at most %d — split it, or file some of them as "+
+				"subtasks with %s", len(c.Items), MaxChecklistItems, CreateWorkItemTool)
 		}
 		items := make([]ChecklistItem, 0, len(c.Items))
 		for _, item := range c.Items {
@@ -265,7 +277,9 @@ func newItem(lists []Checklist, adding []ChecklistItem, item ChecklistItem) (Che
 		})
 	}
 	if taken {
-		return ChecklistItem{}, invalid("this task already has a checklist item %q", item.ID)
+		// THE SAME GESTURE AGAIN, as a list's id is: said without the id.
+		return ChecklistItem{}, collision("this task already has that checklist " +
+			"line. Look at the task rather than adding it again")
 	}
 	if err := checkChecklistName(item.Name, MaxChecklistItemName, "checklist item name"); err != nil {
 		return ChecklistItem{}, err
@@ -299,26 +313,35 @@ func checkChecklistName(name string, limit int, field string) error {
 // The caps are what the design maximum of one record is sized from
 // ([MaxCommitBytes] counts the whole tree at every cap), so a collection past
 // them is a record the arithmetic never allowed for.
+//
+// EVERY ONE IS THE TASK'S STATE ([ErrState]): a gesture adds one list or one
+// line, or a list [ApplyChecklist] has already held to the per-list cap on its
+// own, so what takes the result past a cap is what the task already carries —
+// and the same gesture lands once something is removed.
+//
+// THE TOTAL IS SAID AS WHAT THE GESTURE WOULD LEAVE, not as what the task
+// holds: one new list of up to [MaxChecklistItems] lines can cross it from
+// well below, where "already holds 256" would be false about a task holding
+// 200.
 func checkChecklistCaps(lists []Checklist) error {
 	if len(lists) > MaxChecklists {
-		return invalid("a task carries at most %d checklists and this "+
-			"change would leave %d — split the work into subtasks instead",
-			MaxChecklists, len(lists))
+		return refusedByState("this task already has %d checklists, the most "+
+			"a task can. Remove one, or split the work into subtasks",
+			MaxChecklists)
 	}
 	total := 0
 	for _, list := range lists {
 		if len(list.Items) > MaxChecklistItems {
-			return invalid("checklist %q would hold %d items and a "+
-				"list holds at most %d — split it, or file some of them as "+
-				"subtasks with create_work_item and remove those lines", list.Name, len(list.Items), MaxChecklistItems)
+			return refusedByState("the checklist %q already holds %d lines, the "+
+				"most a list can. Remove one, or file some as subtasks", list.Name,
+				MaxChecklistItems)
 		}
 		total += len(list.Items)
 	}
 	if total > MaxChecklistItemsTotal {
-		return invalid("a task carries at most %d checklist items "+
-			"across its lists and this change would leave %d — file some of "+
-			"them as subtasks with create_work_item and remove those lines",
-			MaxChecklistItemsTotal, total)
+		return refusedByState("that would leave this task's checklists with %d "+
+			"lines, and %d is the most a task can hold. Remove some, or file them "+
+			"as subtasks", total, MaxChecklistItemsTotal)
 	}
 	return nil
 }

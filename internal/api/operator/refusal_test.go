@@ -13,12 +13,17 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/opkey"
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -96,14 +101,27 @@ func TestAStoreFaultIsAFiveHundredWithNoRetryAfter(t *testing.T) {
 	if after := header.Get("Retry-After"); after != "9" {
 		t.Errorf("Retry-After = %q, want the refusal's own 9 seconds", after)
 	}
+	// IN A PERSON'S WORDS FOR THE REFUSAL, the tool's sentence for a model
+	// beside it, and the refusal's own detail in neither: it was the
+	// tool's sentence, framework and detail and all.
+	said, _ := statelog.ConditionSentence(behind)
+	if answer["detail"] != said || strings.Contains(fmt.Sprint(answer), "40 records") ||
+		strings.Contains(fmt.Sprint(answer), "statelog") {
+		t.Errorf("a refusal the state log made answered %v, want the detail %q and "+
+			"nothing of its own text", answer, said)
+	}
+	if tool, _ := answer["tool_detail"].(string); !strings.Contains(tool, tracker.UpdateWorkItemTool) {
+		t.Errorf("the tool's own sentence does not travel beside the person's: %v", answer)
+	}
 }
 
 // A WRITER'S ERROR IS WORDED FOR WHOEVER READS IT, on the surfaces that call a
 // writer without a tool. The human write surface handed [operator.Fail] the
 // error's own text whatever it was, so a disk error's path was the `detail`;
 // [operator.FailWrite] tells a fault in fixed words and leaves its error to
-// the log, a condition in its own words with its hint, and the domain's
-// refusal as the domain composed it.
+// the log, a condition in a person's words for it with its hint
+// ([builtin.ConditionSentence]), and the domain's refusal as the domain
+// composed it.
 func TestAWritersErrorIsWordedForWhoeverReadsIt(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -119,7 +137,7 @@ func TestAWritersErrorIsWordedForWhoeverReadsIt(t *testing.T) {
 		{"a coordination store that did not answer",
 			fmt.Errorf("dial nats://10.0.0.7:4222: %w", coord.ErrUnavailable),
 			http.StatusServiceUnavailable, httpjson.CodeUnavailable,
-			"The coordination store did not answer", true},
+			"couldn't reach the rest of the fleet", true},
 		{"a refusal the domain composed",
 			fmt.Errorf("%w: the comment is longer than a comment may be", tracker.ErrInvalid),
 			http.StatusUnprocessableEntity, httpjson.CodeInvalid, "longer than", false},
@@ -130,7 +148,13 @@ func TestAWritersErrorIsWordedForWhoeverReadsIt(t *testing.T) {
 		{"an estate nobody served",
 			&estate.ErrUnserved{Detail: "10.0.0.7: out_of_service: applier halted"},
 			http.StatusServiceUnavailable, httpjson.CodeUnavailable,
-			"No data node could serve it", true},
+			"No node could serve this", true},
+		// A STATE-LOG REFUSAL, in the state log's sentence for its code and
+		// never its own text, which names the framework and its detail.
+		{"a log at its ceiling", fmt.Errorf("tracker: %w", &statelog.Unavailable{
+			Reason: statelog.ReasonLogFull, Detail: "raise stream.tracker_max_bytes on 10.0.0.7"}),
+			http.StatusServiceUnavailable, httpjson.CodeUnavailable,
+			"There's no room left to save this kind of change. An administrator needs to make room for it.", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -145,7 +169,7 @@ func TestAWritersErrorIsWordedForWhoeverReadsIt(t *testing.T) {
 			if !strings.Contains(detail, tc.says) {
 				t.Errorf("detail = %q, want it to say %q", detail, tc.says)
 			}
-			for _, never := range []string{"/var/lib", "10.0.0.7"} {
+			for _, never := range []string{"/var/lib", "10.0.0.7", "statelog", "tracker_max"} {
 				if strings.Contains(detail, never) {
 					t.Errorf("detail = %q carries the error's own %q", detail, never)
 				}
@@ -155,6 +179,239 @@ func TestAWritersErrorIsWordedForWhoeverReadsIt(t *testing.T) {
 				t.Errorf("Retry-After = %q, want one only for a condition", after)
 			}
 		})
+	}
+}
+
+// A REFUSAL A DOMAIN WROTE IS TOLD IN ITS OWN WORDS on a verb with no tool,
+// exactly as that domain's tools tell it: the writer's sentence, without the
+// package prefix its Go error opens with. The human write surface's purge,
+// rename and destructions answered the error's own text, so a person read
+// "chat: invalid: `reason`: …" — where the error came from, before what to
+// change — while the same refusal through a tool read as the sentence alone.
+//
+// Mutation: answer err.Error() for a classified refusal again and every row
+// goes red.
+func TestADomainsRefusalIsToldInItsOwnWords(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		err    error
+		status int
+		says   string
+	}{
+		"the tracker's": {&tracker.Refusal{Mark: tracker.ErrForbidden,
+			Err: errors.New("only its author may rewrite a remark")},
+			http.StatusForbidden, "Only its author may rewrite a remark."},
+		"the knowledge base's": {&pages.InvalidError{Field: "title",
+			Why: "a title is at most 200 bytes"},
+			http.StatusUnprocessableEntity, "`title`: a title is at most 200 bytes."},
+		"chat's": {&chat.InvalidError{Field: "reason",
+			Why: "an erase's reason is 700 bytes against a 600 cap"},
+			http.StatusUnprocessableEntity,
+			"`reason`: an erase's reason is 700 bytes against a 600 cap."},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rec := httptest.NewRecorder()
+			operator.FailWrite(t.Context(), rec, tc.err, newKey(), nil)
+			body := decode(t, rec)
+			if rec.Code != tc.status || body["detail"] != tc.says {
+				t.Errorf("answered %d with detail %q, want %d with %q", rec.Code,
+					body["detail"], tc.status, tc.says)
+			}
+		})
+	}
+}
+
+// A STATE OR A COLLISION A DOMAIN DECIDED IS TOLD TO A PERSON IN THE DOMAIN'S
+// WORDS, and the tool's own sentence travels beside it as `tool_detail`.
+//
+// The tool's sentence for a refusal is a model's — "post_message refused that:
+// … say it somewhere that is still open, or say nothing", "write_project on ENG
+// with tags_add: …" — so the dashboard drew every conflict in one fixed
+// sentence ending "retry", which re-trying an archived room's post never
+// changes, and every collision as "That already exists". The domain's sentence
+// says what refused the call and what changes it, for the person a screen
+// shows it to; a lost race says to try again, and a state names who changes
+// it. Every other refusal keeps the tool's sentence, which is already worded
+// for a person, and a conflict no domain decided (a turn's note box) is the
+// tool's own too.
+//
+// Mutation: answer result.Output for every class in Said, or drop the
+// tool_detail, and a row goes red.
+func TestAStateOrACollisionIsToldToAPersonInTheDomainsWords(t *testing.T) {
+	t.Parallel()
+	model := "post_message refused that: the model's sentence, naming the tool to call next."
+	for name, tc := range map[string]struct {
+		cause      error
+		status     int
+		says, tool string
+	}{
+		"an archived room": {crewletmcp.Classify(crewletmcp.RefusalConflict,
+			fmt.Errorf("%w: this room is archived, so it takes no new messages. "+
+				"Only whoever created it, the lead of its team or of a team above it, "+
+				"or an admin can reopen it", chat.ErrArchived)), http.StatusConflict,
+			"This room is archived, so it takes no new messages. Only whoever created " +
+				"it, the lead of its team or of a team above it, or an admin can reopen it.",
+			model},
+		"a task in the trash": {crewletmcp.Classify(crewletmcp.RefusalConflict,
+			&tracker.Refusal{Mark: tracker.ErrState,
+				Err: errors.New("this task is in the trash, put there by ana. Restore it first")}),
+			http.StatusConflict, "This task is in the trash, put there by ana. Restore it first.",
+			model},
+		"a lost race": {crewletmcp.Classify(crewletmcp.RefusalConflict,
+			fmt.Errorf("%w: crewlet.tracker.task.x kept changing", statelog.ErrConflict)),
+			http.StatusConflict, "Someone else changed this at the same moment", model},
+		"a label another tag carries": {crewletmcp.Classify(crewletmcp.RefusalExists,
+			&tracker.TagClash{Project: "ENG", Slug: "api", Label: "API",
+				Other: tracker.Tag{Slug: "backend-api", Label: "API"}}), http.StatusConflict,
+			`ENG already has a tag labelled "API" (backend-api).`, model},
+		"an argument refused": {crewletmcp.Classify(crewletmcp.RefusalInvalid,
+			&chat.InvalidError{Field: "body", Why: "a message is at most 32768 bytes"}),
+			http.StatusUnprocessableEntity, "post_message refused that: the model's", ""},
+		"a turn's note box": {crewletmcp.RefusalConflict, http.StatusConflict,
+			"post_message refused that: the model's", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rec := httptest.NewRecorder()
+			operator.FailResult(rec, crewletmcp.Result{Failed: true, Output: model,
+				Cause: tc.cause}, newKey(), httpjson.Detail{"tool": "post_message"})
+			body := decode(t, rec)
+			detail, _ := body["detail"].(string)
+			if rec.Code != tc.status || !strings.HasPrefix(detail, tc.says) {
+				t.Errorf("answered %d with detail %q, want %d opening %q", rec.Code,
+					detail, tc.status, tc.says)
+			}
+			if got, _ := body["tool_detail"].(string); got != tc.tool {
+				t.Errorf("tool_detail is %q, want %q", got, tc.tool)
+			}
+			if body["tool"] != "post_message" {
+				t.Errorf("the answer lost what it was about: %v", body)
+			}
+		})
+	}
+}
+
+// A NOTE THE RUNNING NODE COULD NOT VERIFY IS TOLD TO A PERSON IN THEIR OWN
+// WORDS, UNDER NO WAIT: who fixes it as the `detail`, the assistant's sentence
+// beside it as `tool_detail`, and no Retry-After, since only an operator giving
+// the fleet's nodes the same keys changes the answer. A refusal carrying the
+// person's sentence alone, with no condition beneath it, reached the dashboard
+// as an unavailable with nothing to say it was worded for a person, so the
+// dashboard drew "Try again in a moment" over it.
+//
+// Mutation: drop the steer arm from builtin's condition table and the detail
+// is the model's sentence with no tool_detail; mark it as a condition a wait
+// clears and the answer carries a Retry-After.
+func TestAnUnverifiedNoteIsToldToAPersonUnderNoWait(t *testing.T) {
+	t.Parallel()
+	model := "The node running this turn couldn't verify the note; tell the person steering."
+	rec := httptest.NewRecorder()
+	operator.FailResult(rec, crewletmcp.Result{Failed: true, Output: model,
+		Cause: crewletmcp.Classify(crewletmcp.RefusalUnavailable,
+			fmt.Errorf("ask: %w", steer.ErrUnverified))}, newKey(),
+		httpjson.Detail{"tool": "steer_turn"})
+	body := decode(t, rec)
+	detail, _ := body["detail"].(string)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(detail, "your note") ||
+		!strings.Contains(detail, "An administrator") {
+		t.Errorf("answered %d with detail %q, want 503 saying who fixes it", rec.Code, detail)
+	}
+	if got, _ := body["tool_detail"].(string); got != model {
+		t.Errorf("tool_detail is %q, want the assistant's sentence %q", got, model)
+	}
+	if after := rec.Header().Get("Retry-After"); after != "" {
+		t.Errorf("Retry-After: %s on a refusal no wait clears", after)
+	}
+}
+
+// A DELETION AND A REUSED KEY ARE TOLD WITHOUT THE FRAMEWORK'S WORDS, through
+// a tool and around one alike.
+//
+// Both are the state log's refusals, and its error names the subject each met
+// and the operation each was about: "statelog: unavailable (deleted):
+// crewlet.tracker.task.t-1 was deleted and stays deleted". A tool-less write
+// handed that to a person as its `detail`, and a tool-backed one handed them
+// the tool's restatement of it for a model; a reused key's answer opened with
+// either before saying which header to change.
+//
+// Mutation: answer a deletion's `detail` with the writer's sentence again in
+// Said or in writeSentence, or put the sentence back in front of the reused
+// key's words, and a row goes red.
+func TestADeletionAndAReusedKeyAreToldWithoutTheFrameworksWords(t *testing.T) {
+	t.Parallel()
+	deleted := &statelog.Unavailable{Reason: statelog.ReasonDeleted,
+		Detail: "crewlet.tracker.task.t-1 was deleted and stays deleted"}
+	reused := &statelog.Unavailable{Reason: statelog.ReasonOpReused,
+		Detail: `operation "op" landed on crewlet.tracker.task.t-2 at 3:4, and ` +
+			`this write is to crewlet.tracker.task.t-1`}
+	model := func(err error) string {
+		return "update_work_item did not land (" + err.Error() + ")."
+	}
+	for _, tc := range []struct {
+		name   string
+		answer func(w http.ResponseWriter)
+		status int
+		says   string
+	}{
+		{"a deletion, around a tool", func(w http.ResponseWriter) {
+			operator.FailWrite(t.Context(), w, deleted, newKey(), nil)
+		}, http.StatusNotFound, statelog.Deleted},
+		{"a deletion, through a tool", func(w http.ResponseWriter) {
+			operator.FailResult(w, crewletmcp.Result{Failed: true, Output: model(deleted),
+				Cause: crewletmcp.Classify(crewletmcp.RefusalUnavailable, deleted)},
+				newKey(), httpjson.Detail{"tool": "update_work_item"})
+		}, http.StatusNotFound, statelog.Deleted},
+		{"a reused key, around a tool", func(w http.ResponseWriter) {
+			operator.FailWrite(t.Context(), w, reused, newKey(), nil)
+		}, http.StatusConflict, "This " + opkey.Header + " was already used"},
+		{"a reused key, through a tool", func(w http.ResponseWriter) {
+			operator.FailResult(w, crewletmcp.Result{Failed: true, Output: model(reused),
+				Cause: crewletmcp.Classify(crewletmcp.RefusalUnavailable, reused)},
+				newKey(), httpjson.Detail{"tool": "update_work_item"})
+		}, http.StatusConflict, "This " + opkey.Header + " was already used"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rec := httptest.NewRecorder()
+			tc.answer(rec)
+			body := decode(t, rec)
+			detail, _ := body["detail"].(string)
+			if rec.Code != tc.status || !strings.HasPrefix(detail, tc.says) {
+				t.Errorf("answered %d with detail %q, want %d opening %q", rec.Code,
+					detail, tc.status, tc.says)
+			}
+			for _, leak := range []string{"statelog", "crewlet.", "update_work_item"} {
+				if strings.Contains(detail, leak) {
+					t.Errorf("the detail a person reads carries %q: %s", leak, detail)
+				}
+			}
+		})
+	}
+}
+
+// A REUSED KEY'S ANSWER CARRIES NO tool_detail, because a tool_detail says the
+// detail beside it was written for a person and the dashboard shows it in
+// place of its own sentence: a reused key's detail is written for whoever sent
+// the header, and a person pressing a button again was told to send a key they
+// never chose. Mutation: keep the tool's sentence in the op-reused arm and
+// this fails.
+func TestAReusedKeyCarriesNoToolDetail(t *testing.T) {
+	t.Parallel()
+	reused := &statelog.Unavailable{Reason: statelog.ReasonOpReused,
+		Detail: `operation "op" landed on crewlet.tracker.task.t-2 at 3:4`}
+	rec := httptest.NewRecorder()
+	operator.FailResult(rec, crewletmcp.Result{Failed: true,
+		Output: "update_work_item did not land.",
+		Cause:  crewletmcp.Classify(crewletmcp.RefusalUnavailable, reused)},
+		newKey(), httpjson.Detail{"tool": "update_work_item"})
+	body := decode(t, rec)
+	if rec.Code != http.StatusConflict || body["field"] != opkey.Header {
+		t.Fatalf("a reused key answered %d %v, want 409 naming the header", rec.Code, body)
+	}
+	if said, ok := body["tool_detail"]; ok {
+		t.Errorf("a reused key's answer carries tool_detail %q, which tells a client "+
+			"its detail was written for a person", said)
 	}
 }
 
@@ -170,7 +427,8 @@ func TestAWritersErrorIsWordedForWhoeverReadsIt(t *testing.T) {
 //
 // Mutation: drop the UnknownCause step from ClassifyWrite and the two
 // unknowns go red; drop the ErrUnserved arm from builtin.Condition and the
-// unserved estate does.
+// unserved estate does; class by a list of this package's own instead of
+// builtin.WriterClass and the domain rows do.
 func TestAWritersErrorIsClassedByTheToolsRule(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -179,6 +437,16 @@ func TestAWritersErrorIsClassedByTheToolsRule(t *testing.T) {
 		unknown bool
 	}{
 		{err: tracker.ErrNoTask, want: crewletmcp.RefusalNotFound},
+		// EVERY CLASS A DOMAIN DECIDES, by the tools' own table
+		// (builtin.WriterClass) rather than a shorter list here: each of
+		// these was a 500 on the surface while its tool classed it.
+		{err: fmt.Errorf("x: %w", tracker.ErrInboxFull), want: crewletmcp.RefusalInboxFull},
+		{err: fmt.Errorf("x: %w", tracker.ErrAlreadyAnswered),
+			want: crewletmcp.RefusalAlreadyAnswered},
+		{err: fmt.Errorf("x: %w", tracker.ErrReassignmentBudget),
+			want: crewletmcp.RefusalReassignmentBudget},
+		{err: fmt.Errorf("x: %w", &tracker.TagClash{Project: "OPS", Slug: "api"}),
+			want: crewletmcp.RefusalExists},
 		{err: &statelog.Unavailable{Reason: statelog.ReasonLogFull},
 			want: crewletmcp.RefusalUnavailable},
 		{err: fmt.Errorf("x: %w", coord.ErrUnavailable), want: crewletmcp.RefusalUnavailable},
@@ -255,4 +523,137 @@ func actAnswer(t *testing.T, h http.Handler, tool, body string) (int, map[string
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, r)
 	return rec.Code, decode(t, rec), rec.Header()
+}
+
+// AN OBJECT NAMED BY A LIST IS NAMED BY THE LIST. A direct conversation is its
+// participants, and `send_dm` and `open_dm` address it by them alone, so a
+// refusal's detail names who it was with — the handles as the call gave them,
+// its empty and non-text entries dropped — beside the text arguments every
+// other tool names its object by. Read as text only, a failed DM named
+// nothing at all.
+//
+// Mutation: drop About's list arm and the participants go missing; keep an
+// entry that is blank and the first case does.
+func TestAnObjectNamedByAListIsNamedInTheRefusal(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		tool string
+		args map[string]any
+		want httpjson.Detail
+	}{
+		{"a conversation, by its participants", "send_dm",
+			map[string]any{"to": []any{"bob", " ", 7, "ana"}, "body": "hi"},
+			httpjson.Detail{"tool": "send_dm", "to": []string{"bob", "ana"}}},
+		{"a list naming nobody names nothing", "open_dm",
+			map[string]any{"to": []any{"", "  "}},
+			httpjson.Detail{"tool": "open_dm"}},
+		{"a room, by its text", "post_message",
+			map[string]any{"channel": "#launch", "body": "hi"},
+			httpjson.Detail{"tool": "post_message", "channel": "#launch"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := operator.About(tc.tool, tc.args)
+			if fmt.Sprint(got) != fmt.Sprint(tc.want) {
+				t.Errorf("About(%s, %v) = %v, want %v", tc.tool, tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
+// A REFUSAL A SURFACE DECIDED IS ANSWERED IN THE AUTHORITY TABLE'S OWN CODE.
+//
+// [operator.RefuseDecision] answers a decision the human write surface took on
+// a row it read, and it mapped a refusal to its code with a copy of the
+// table's mapping that knew a stale proof and nothing else: a machine token on
+// a verb that needs a person present was answered `unauthorized`, whose
+// sentence sends the caller to ask for a permission no token could carry,
+// where the router answers the same refusal `token_refused`. Each refusal is
+// held to the code [authz.RefusalFields] gives it. Mutation: map the refusals
+// here by a table of this package's own and the token's case fails.
+func TestARefusalASurfaceDecidedIsAnsweredInTheTablesCode(t *testing.T) {
+	t.Parallel()
+	for _, d := range []authz.Decision{
+		{Reason: authz.ReasonTokenRefused},
+		{Reason: authz.ReasonStepUp, Recency: iam.RecencyStepUp,
+			Grants: []iam.Grant{iam.GrantAdmin}},
+		{Reason: authz.ReasonNoGrant, Grants: []iam.Grant{iam.GrantAdmin}},
+	} {
+		t.Run(string(d.Reason), func(t *testing.T) {
+			t.Parallel()
+			r := httptest.NewRequest(http.MethodPost, "/work/items/ENG-1/purge", nil)
+			r = r.WithContext(iam.WithPrincipal(r.Context(), iam.Principal{
+				Kind: iam.KindPerson, Login: "jane.doe", Seat: "jane",
+				Stage: iam.StageActive,
+			}))
+			rec := httptest.NewRecorder()
+			operator.RefuseDecision(rec, r, authz.ActionWorkPurge, d)
+			var answer map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &answer); err != nil {
+				t.Fatal(err)
+			}
+			status, code, _ := authz.RefusalFields(d)
+			if rec.Code != status || answer["error"] != string(code) ||
+				answer[authz.DetailReason] != string(d.Reason) {
+				t.Errorf("answered %d %v, want %d %s", rec.Code, answer, status, code)
+			}
+		})
+	}
+}
+
+// AN If-Match HEADER CHANGES ONE ANSWER AND NO OTHER: a stale version the
+// header stated is HTTP's failed precondition, `412 version_moved` (RFC 9110
+// §13.1.1), and every other class — and every arm decided before the class,
+// an outcome nobody can establish among them — is answered byte for byte as
+// [operator.Fail] answers it, so a route that folds the header into a tool's
+// version cannot answer anything but its staleness differently from the act
+// route the dashboard writes through.
+//
+// Mutation: answer the stale class 409 under the header, or any other class
+// differently, and this goes red naming it.
+func TestAnIfMatchHeaderRefinesOnlyAStaleVersion(t *testing.T) {
+	t.Parallel()
+	answer := func(fail func(http.ResponseWriter, error, string, string, httpjson.Detail),
+		cause error) *httptest.ResponseRecorder {
+
+		rec := httptest.NewRecorder()
+		fail(rec, cause, "the sentence", "the-key", httpjson.Detail{"tool": "update_work_item"})
+		return rec
+	}
+	causes := map[string]error{
+		"an outcome nobody can establish": crewletmcp.ErrOutcomeUnknown,
+		"an unclassified failure":         errors.New("a tool that forgot to classify"),
+	}
+	for _, class := range crewletmcp.Refusals {
+		causes[string(class)] = crewletmcp.Classify(class, errors.New("the reason"))
+	}
+	for name, cause := range causes {
+		plain, matched := answer(operator.Fail, cause), answer(operator.FailIfMatched, cause)
+		if name == string(crewletmcp.RefusalStaleVersion) {
+			var body, class map[string]any
+			if json.Unmarshal(matched.Body.Bytes(), &body) != nil ||
+				json.Unmarshal(plain.Body.Bytes(), &class) != nil {
+				t.Fatalf("a stale version answered %q and %q", matched.Body, plain.Body)
+			}
+			if matched.Code != http.StatusPreconditionFailed ||
+				body["error"] != string(httpjson.CodeVersionMoved) ||
+				body["detail"] != class["detail"] || body["tool"] != "update_work_item" {
+				t.Errorf("a stale version under If-Match answered %d %v, want 412 "+
+					"version_moved carrying the sentence and what it was about",
+					matched.Code, body)
+			}
+			if plain.Code != http.StatusConflict {
+				t.Errorf("a stale version stated as an argument answered %d, want the "+
+					"class's 409", plain.Code)
+			}
+			continue
+		}
+		if matched.Code != plain.Code || matched.Body.String() != plain.Body.String() ||
+			matched.Header().Get("Retry-After") != plain.Header().Get("Retry-After") {
+			t.Errorf("%s: under If-Match %d %s, and as an argument %d %s: only a stale "+
+				"version may differ", name, matched.Code, matched.Body, plain.Code, plain.Body)
+		}
+	}
 }

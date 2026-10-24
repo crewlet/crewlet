@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -8,6 +9,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -150,6 +153,14 @@ func TestAColleaguesQuestionIsCarriedOnTheTurnsRecord(t *testing.T) {
 	if !strings.Contains(done.Ask, "which test is flaky?") {
 		t.Fatalf("ask = %q, want the colleague's question", done.Ask)
 	}
+	// AND WHOSE WORDS THEY ARE (ADR-0040): the record a learning worker reads
+	// after the turn says the question is the asking colleague's, as the
+	// trigger fenced it.
+	want := provenance.LabelFor("", provenance.SourceA2AMessage,
+		[]provenance.Author{{Kind: iam.ActorAgent, Seat: "lead"}})
+	if done.AskProvenance == nil || !reflect.DeepEqual(*done.AskProvenance, want) {
+		t.Fatalf("the ask is recorded under %+v, want %+v", done.AskProvenance, want)
+	}
 }
 
 // AND NOT REPEATED where the interactions carry it: a notification's ask is
@@ -160,8 +171,18 @@ func TestANotificationsAskIsNotCarriedTwice(t *testing.T) {
 	if len(done.Interactions) == 0 {
 		t.Fatal("the chat wake recorded no interaction, so this asserts nothing")
 	}
-	if done.Ask != "" {
-		t.Fatalf("ask = %q beside %d interactions carrying it", done.Ask, len(done.Interactions))
+	if done.Ask != "" || done.AskProvenance != nil {
+		t.Fatalf("ask = %q under %+v beside %d interactions carrying it", done.Ask,
+			done.AskProvenance, len(done.Interactions))
+	}
+	// EACH INTERACTION SAYS WHO WROTE ITS BODY, as the trigger fenced it: a
+	// message from somebody the company does not know, which nothing vouches
+	// for — never the zero label, which says nothing at all.
+	for _, in := range done.Interactions {
+		if !in.Provenance.Valid() || in.Provenance.Trust != provenance.TrustExternal {
+			t.Errorf("an interaction's body is recorded under %+v, want a stranger's message",
+				in.Provenance)
+		}
 	}
 }
 
@@ -170,6 +191,7 @@ func TestANotificationsAskIsNotCarriedTwice(t *testing.T) {
 // asked.
 func TestAResumedTurnRecordsTheAskItParkedWith(t *testing.T) {
 	t.Parallel()
+	parked := provenance.Label{Source: provenance.SourceWorkComment, Trust: provenance.TrustExternal}
 	e, p := starting(t, refusingModels(t))
 	company := e.Company()
 	if err := e.resumeTurn(t.Context(), resumeInput{
@@ -178,7 +200,8 @@ func TestAResumedTurnRecordsTheAskItParkedWith(t *testing.T) {
 			TurnID: "run-1", AgentHandle: "swe", Reply: "tool",
 			TaskDescription: "fix the failing test", DelegationDepth: 3,
 		},
-		State: execstate.State{Ask: "the login test fails on main — can you fix it?"},
+		State: execstate.State{Ask: "the login test fails on main — can you fix it?",
+			AskProvenance: &parked},
 		Turn: &turnctx.Turn{RunID: "run-1", Seat: company.Org.AgentSeatByHandle("swe"),
 			Org: company.Org},
 		Answer:  "use the main branch",
@@ -189,5 +212,10 @@ func TestAResumedTurnRecordsTheAskItParkedWith(t *testing.T) {
 	done := only[*types.TurnCompleted](t, p, "turn_completed")
 	if done.Ask != "the login test fails on main — can you fix it?" {
 		t.Fatalf("ask = %q, want the one the turn parked with", done.Ask)
+	}
+	// UNDER THE LABEL IT PARKED WITH: nothing the resumed segment reads
+	// could decide who wrote it again.
+	if done.AskProvenance == nil || !reflect.DeepEqual(*done.AskProvenance, parked) {
+		t.Fatalf("the ask is recorded under %+v, want the parked %+v", done.AskProvenance, parked)
 	}
 }

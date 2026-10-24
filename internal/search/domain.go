@@ -266,7 +266,8 @@ func NewRows(db store.ReplicatedReader, spec statelog.StreamSpec) (statelog.Rows
 // by the broker and dropped by every applier, so a writer that does not know
 // it is out collects acknowledgements for records nobody applies. Neither half
 // of that is true here: this domain installs no apply gate, so a record from
-// any node applies everywhere, and nothing is waiting on the acknowledgement.
+// any node is applied on every data node, and nothing is waiting on the
+// acknowledgement.
 //
 // What actually stops an evicted node writing vectors is stronger than a
 // fence: the duty is a FLEET SINGLETON and an evicted node does not hold the

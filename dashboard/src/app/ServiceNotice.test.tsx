@@ -39,11 +39,24 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function mount(service: Service, path: string[], services: OrgServices, grants: string[]): void {
+function mount(
+  service: Service,
+  path: string[],
+  services: OrgServices,
+  grants: string[],
+  vendors: string[] = [],
+): void {
   const store = new Store();
   store.applyOrg(withDerived({ name: "Acme", roles: [], services }));
   const socket = new LiveSocket(store);
-  const viewer = { login: "lee", owner: "lee", handle: "lee", grants, acts: [] };
+  const viewer = {
+    login: "lee",
+    owner: "lee",
+    handle: "lee",
+    grants,
+    acts: [],
+    chat_vendors: vendors,
+  };
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
     what === "viewer" ? Promise.resolve(viewer) : new Promise(() => {});
   render(
@@ -59,7 +72,7 @@ function mount(service: Service, path: string[], services: OrgServices, grants: 
   );
 }
 
-const JIRA: OrgServices = { tracker: "jira", knowledge: "native" };
+const JIRA: OrgServices = { tracker: "jira", knowledge: "native", chat: "native" };
 
 // THE SERVICES' PAGES ARE EVERY READER'S: a reader holding only Tracker who
 // followed a link to Work is told in place and offered the page about the
@@ -74,9 +87,23 @@ test("a reader without Admin is told in place and offered the service's own page
 });
 
 test("a hidden knowledge base offers Crewlet Knowledge's page", async () => {
-  mount("knowledge", ["knowledge"], { tracker: "native", knowledge: "confluence" }, ["admin"]);
+  mount(
+    "knowledge",
+    ["knowledge"],
+    { tracker: "native", knowledge: "confluence", chat: "native" },
+    ["admin"],
+  );
   const link = await screen.findByRole("link", { name: "See what is built into Crewlet" });
   expect(link.getAttribute("href")).toBe("#/company/integrations/knowledge");
+});
+
+// EACH SERVICE OPENS ITS OWN LINE. Mutation: send every service but the
+// tracker to Knowledge's line, as the link did before chat was a service,
+// and a company talking on Slack is shown Crewlet Knowledge.
+test("a chat run elsewhere offers Crewlet Chat's page", async () => {
+  mount("chat", ["chat"], { tracker: "native", knowledge: "native", chat: "vendor" }, ["admin"]);
+  const link = await screen.findByRole("link", { name: "See what is built into Crewlet" });
+  expect(link.getAttribute("href")).toBe("#/company/integrations/chat");
 });
 
 // WHAT THE READER ASKED FOR IS NAMED: a New design address says why design is
@@ -89,10 +116,27 @@ test("each hidden place says why it is not here", () => {
     "My work is part of Crewlet Works, which is not in use here.",
   );
   expect(noticeText("knowledge", ["knowledge"])).toMatch(/Memory tab/);
-  expect(noticeTitle("tracker", { tracker: "none", knowledge: "native" })).toBe(
+  expect(noticeTitle("tracker", { tracker: "none", knowledge: "native", chat: "native" })).toBe(
     "This company runs no work tracker",
   );
-  expect(noticeTitle("knowledge", { tracker: "native", knowledge: "confluence" })).toBe(
-    "Confluence holds this company's knowledge",
+  expect(
+    noticeTitle("knowledge", { tracker: "native", knowledge: "confluence", chat: "native" }),
+  ).toBe("Confluence holds this company's knowledge");
+});
+
+// CHAT IS A CREWLET SERVICE LIKE THE OTHER TWO: an address under it, on a
+// company talking on a vendor's chat or on none, says where the company talks.
+// The vendor is named to a reader the viewer answer names it to, one holding
+// Chat, and called a vendor's to anybody else. Mutation: drop the chat arm of
+// `noticeTitle` and every case here fails.
+test("an address under Chat names where the company talks instead", async () => {
+  const slack: OrgServices = { tracker: "native", knowledge: "native", chat: "vendor" };
+  mount("chat", ["chat"], slack, ["chat"], ["slack"]);
+  expect(await screen.findByText("This company talks on Slack")).toBeTruthy();
+  expect(screen.getByText("Chat is part of Crewlet Chat, which is not in use here.")).toBeTruthy();
+  expect(noticeTitle("chat", slack)).toBe("This company talks on a vendor's chat");
+  expect(noticeTitle("chat", slack, ["mattermost", "slack"])).toBe(
+    "This company talks on Mattermost and Slack",
   );
+  expect(noticeTitle("chat", { ...slack, chat: "none" })).toBe("This company runs no chat");
 });

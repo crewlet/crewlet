@@ -115,8 +115,7 @@ func (s *Service) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	switch resolution {
 	case iam.Resolved:
 	case iam.Unknown:
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable,
-			auth.RetryIdentity(iam.Reason(r.Context())))
+		auth.UnavailableIdentity(w, iam.Reason(r.Context()))
 		return
 	default:
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
@@ -160,7 +159,7 @@ func (s *Service) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	held, err := s.directory.PersonByLogin(r.Context(), principal.Login)
 	if err != nil {
 		log.WarnContext(r.Context(), "api_password_lookup_failed", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
+		auth.UnavailableIdentity(w, err)
 		return
 	}
 	attempt := authevents.Failure{Source: source, Method: types.FailPassword}

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // EVERY INDEX ON THE VECTOR TABLES SERVES A QUERY THIS PACKAGE ISSUES, and the
@@ -31,11 +32,12 @@ import (
 // Every statement this package issues against the vector tables — the
 // two-stage search in each shape its callers issue it, through the index and
 // through the full scan, built by the function [search.Semantic] calls, and the
-// reads the index's own duty and applier make — run through EXPLAIN QUERY PLAN
+// reads the index's own duty and applier make — planned ([storetest.Plan])
 // on a corpus large enough that the planner has a real choice. Then the
 // inverse: every index the schema declares must appear in at least one of
 // those plans, or it is a copy of the row order nobody reads and a trap the
-// planner can still fall into.
+// planner can still fall into. And no plan answers a per-row aggregate from
+// its whole child table ([refuseUnnested]).
 func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()
 	const dim, model = 32, "plan-embed"
@@ -153,18 +155,10 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	}
 
 	plans := map[string][]string{}
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
-		for name, q := range registered {
-			steps, err := explain(t, tx, q.statement, q.args...)
-			if err != nil {
-				return fmt.Errorf("%s: %w", name, err)
-			}
-			plans[name] = steps
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
+	for name, q := range registered {
+		plans[name] = storetest.Plan(t, db.Replicated(), q.statement, q.args)
 	}
+	refuseUnnested(t, plans)
 
 	for name, method := range methods {
 		joined := strings.Join(plans[name], "\n")
@@ -232,15 +226,10 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	// AND RE-FILES THEM DRIVEN BY ITS OWN PAIRS, each seeking its row by
 	// rowid: a plan that walked the table and looked each row up in the
 	// pairs would read the whole corpus per batch, in the one statement that
-	// replaced a thousand. Explained in a write transaction, the only kind
-	// that plans an UPDATE.
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
-		steps, err := explain(t, tx, search.RefileStatement, generation, `[[1, 0], [2, 1]]`)
-		plans["a reassign's re-filing"] = steps
-		return err
-	}); err != nil {
-		t.Fatalf("a reassign's re-filing: %v", err)
-	}
+	// replaced a thousand. Planned in a write transaction, the only kind
+	// that plans an UPDATE, which storetest.Plan opens for one.
+	plans["a reassign's re-filing"] = storetest.Plan(t, db.Replicated(),
+		search.RefileStatement, []any{generation, `[[1, 0], [2, 1]]`})
 	if joined := strings.Join(plans["a reassign's re-filing"], "\n"); !strings.Contains(joined,
 		"SCAN json_each AS m") || !strings.Contains(joined,
 		"SEARCH kb_vectors_bin USING INTEGER PRIMARY KEY (rowid=?)") {
@@ -292,32 +281,10 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 			"model index:\n%s", joined)
 	}
 
-	// THE INVERSE: an index no registered plan reaches.
-	var declared []string
-	if err := db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(t.Context(), `
-			SELECT name FROM sqlite_master
-			WHERE type = 'index' AND tbl_name IN ('kb_vectors', 'kb_vectors_bin')
-			  AND name NOT LIKE 'sqlite_autoindex%'`)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var name string
-			if err := rows.Scan(&name); err != nil {
-				return err
-			}
-			declared = append(declared, name)
-		}
-		return rows.Err()
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if len(declared) == 0 {
-		t.Fatal("no indexes were read back, so this half of the check " +
-			"cannot fail and is not asserting anything")
-	}
+	// THE INVERSE: an index no registered plan reaches. What the schema
+	// declares is read through storetest, which fails on a schema that
+	// declares none, so this half cannot pass having read nothing.
+	declared := storetest.IndexesOn(t, db.Replicated(), []string{"kb_vectors", "kb_vectors_bin"})
 	all := ""
 	for _, steps := range plans {
 		all += strings.Join(steps, "\n") + "\n"
@@ -342,24 +309,25 @@ func firstStage(steps []string) string {
 	return ""
 }
 
-// explain runs one statement through EXPLAIN QUERY PLAN.
-func explain(t *testing.T, tx *sql.Tx, statement string, args ...any) ([]string, error) {
+// refuseUnnested fails every registered statement whose plan answers a per-row
+// aggregate from its whole child table: a correlated scalar subquery the
+// planner unnested, by its cost guess over a database nobody has ANALYZEd,
+// into one grouped read of every row of the table it counts or bounds
+// ([storetest.Decorrelated], which states the rule). Whether a statement
+// reads its answer's rows or the whole table is then decided by no line of
+// it, and an index or a driver bump can flip it — so the plan is asked, as
+// the tracker's and the knowledge base's gates ask it of theirs, and a
+// statement it fires on is rewritten in a form the rule cannot reach: a
+// minimum or maximum as `ORDER BY … LIMIT 1`, a count read for the rows
+// already in hand by their keys.
+func refuseUnnested(t *testing.T, plans map[string][]string) {
 	t.Helper()
-	rows, err := tx.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+statement, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	var out []string
-	for rows.Next() {
-		var id, parent, notUsed int
-		var detail string
-		if err := rows.Scan(&id, &parent, &notUsed, &detail); err != nil {
-			return nil, err
+	for name, steps := range plans {
+		if line, unnested := storetest.Decorrelated(steps); unnested {
+			t.Errorf("%s answers a per-row aggregate from its whole child "+
+				"table (%q):\n%s", name, line, strings.Join(steps, "\n"))
 		}
-		out = append(out, detail)
 	}
-	return out, rows.Err()
 }
 
 // EVERY INDEX ON THE LEXICAL TABLES SERVES A QUERY THIS PACKAGE ISSUES, and
@@ -376,7 +344,21 @@ func explain(t *testing.T, tx *sql.Tx, statement string, args ...any) ([]string,
 // A term's posting list is the outer loop and kb_docs is reached per posting
 // by its primary key. Any plan that drives on kb_docs instead walks a bucket
 // range — one sixty-fourth of the corpus, which is far more documents than a
-// term appears in — and probes the postings per document.
+// term appears in — and probes the postings per document. And no plan answers
+// a per-row aggregate from its whole child table ([refuseUnnested]).
+//
+// # The statements planned are the statements run
+//
+// Each is the indexer's own text (search.Lexical…Statement), and every
+// fragment of the module's source that reads kb_docs or kb_postings must be
+// one of them ([storetest.StatementLiterals]): the gate registered a copy of
+// each, and the copies had already drifted — the held-version read lost its
+// derivation column, the indexed count bound its source as a literal — so a
+// change to what the indexer issues left the gate planning what it used to.
+//
+// Mutation: drive the posting scan on kb_docs (`FROM kb_docs d JOIN
+// kb_postings p`) and the shape check names it; read kb_docs inline anywhere
+// in the module and the completeness check names the file.
 func TestEveryLexicalIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
@@ -408,67 +390,59 @@ func TestEveryLexicalIndexServesARegisteredQuery(t *testing.T) {
 		statement string
 		args      []any
 	}{
-		// THE POSTING SCAN, in the shape a fan-out issues it: a term, a
-		// container filter and a bucket range at once, which is the plan
-		// with the most for a planner to get wrong.
-		"the posting scan under an assignment": {`
-			SELECT p.doc_id, p.freq, d.length
-			  FROM kb_postings p
-			  JOIN kb_docs d ON d.id = p.doc_id
-			 WHERE p.term = ? AND d.container IN (?)
-			   AND d.search_shard >= ? AND d.search_shard < ?
-			 ORDER BY p.freq DESC
-			 LIMIT ?`,
+		// THE POSTING SCAN, in the shapes it is issued in: a term, a
+		// container filter and a bucket range at once — a fan-out's, the
+		// plan with the most for a planner to get wrong — a term narrowed
+		// to its sources, and a term alone.
+		"the posting scan under an assignment": {
+			search.LexicalPostingScanStatement(1, 0, true),
 			[]any{"migration", "ENG", 0, half, 5_000}},
-		"the posting scan with no assignment": {`
-			SELECT p.doc_id, p.freq, d.length
-			  FROM kb_postings p
-			  JOIN kb_docs d ON d.id = p.doc_id
-			 WHERE p.term = ?
-			 ORDER BY p.freq DESC
-			 LIMIT ?`,
+		"the posting scan narrowed to a source": {
+			search.LexicalPostingScanStatement(0, 1, false),
+			[]any{"migration", "page", 5_000}},
+		"the posting scan with no assignment": {
+			search.LexicalPostingScanStatement(0, 0, false),
 			[]any{"migration", 5_000}},
-		"the term's document frequency": {
-			`SELECT COUNT(*) FROM kb_postings WHERE term = ?`,
+		"the term's document frequency": {search.LexicalTermDocsStatement,
 			[]any{"migration"}},
-		"the corpus statistics": {
-			`SELECT COUNT(*), COALESCE(AVG(length), 0) FROM kb_docs`, nil},
-		"the hit hydration": {`
-			SELECT id, source, source_id, container, title, excerpt
-			  FROM kb_docs WHERE id IN (?, ?)`,
+		"the corpus statistics": {search.LexicalCorpusStatement, nil},
+		"the hit hydration": {search.LexicalHydrateStatement(2),
 			[]any{"page:p.0001", "page:p.0002"}},
-		"what the index already holds": {
-			`SELECT source_id, source_rev FROM kb_docs WHERE id IN (?, ?)`,
+		"what the index already holds": {search.LexicalHeldStatement(2),
 			[]any{"page:p.0001", "page:p.0002"}},
-		"the orphan walk": {`
-			SELECT source_id FROM kb_docs WHERE source = 'page' AND source_id > ?
-			  ORDER BY source_id LIMIT ?`,
-			[]any{"", 200}},
-		"the indexed page count": {
-			`SELECT COUNT(*) FROM kb_docs WHERE source = 'page'`, nil},
-		"one document's removal": {
-			`DELETE FROM kb_docs WHERE source = ? AND source_id = ?`,
+		"the orphan walk": {search.LexicalOrphanWalkStatement,
+			[]any{"page", "", 200}},
+		"the indexed page count": {search.LexicalIndexedCountStatement,
+			[]any{"page"}},
+		"one document's removal": {search.LexicalRemoveDocStatement,
 			[]any{"page", "p.0001"}},
-		"one document's postings": {
-			`DELETE FROM kb_postings WHERE doc_id = ?`, []any{"page:p.0001"}},
+		"one document's postings": {search.LexicalClearPostingsStatement,
+			[]any{"page:p.0001"}},
+		"what links to a page": {search.LinkedFromStatement, []any{"p.0001"}},
 	}
 
-	// IN A WRITE TRANSACTION, because two of the registered statements are
-	// the index's own removals: a read transaction runs with writes refused
-	// (store.DB.Read), and the engine refuses even to plan a DELETE there.
-	plans := map[string][]string{}
-	if err := db.Tx(t.Context(), func(tx *sql.Tx) error {
-		for name, q := range registered {
-			steps, err := explain(t, tx, q.statement, q.args...)
-			if err != nil {
-				return fmt.Errorf("%s: %w", name, err)
-			}
-			plans[name] = steps
+	// EVERY READER IN THE SOURCE IS ONE OF THEM, matched whole.
+	for _, literal := range storetest.StatementLiterals(t, "internal/search",
+		"kb_docs", "kb_postings") {
+		planned := false
+		for _, q := range registered {
+			planned = planned || strings.Contains(q.statement, literal.Text)
 		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
+		if !planned {
+			t.Errorf("%s reads a lexical table in a statement this test does not "+
+				"plan — name it beside the indexer's others and register it:\n%s",
+				literal.File, literal.Text)
+		}
 	}
+
+	// TWO OF THE REGISTERED STATEMENTS ARE the index's own removals, which a
+	// read transaction refuses even to plan (store.DB.Read runs with writes
+	// refused); storetest.Plan plans each in a write transaction.
+	plans := map[string][]string{}
+	for name, q := range registered {
+		plans[name] = storetest.Plan(t, db, q.statement, q.args)
+	}
+	refuseUnnested(t, plans)
 
 	// THE TERM DRIVES, IN BOTH SHAPES. A bucket range the planner can seek
 	// is the one thing that would make kb_docs the outer table, and it
@@ -476,6 +450,7 @@ func TestEveryLexicalIndexServesARegisteredQuery(t *testing.T) {
 	// searches get slow.
 	for _, name := range []string{
 		"the posting scan under an assignment",
+		"the posting scan narrowed to a source",
 		"the posting scan with no assignment",
 	} {
 		joined := strings.Join(plans[name], "\n")
@@ -498,32 +473,9 @@ func TestEveryLexicalIndexServesARegisteredQuery(t *testing.T) {
 	}
 
 	// THE INVERSE: an index no registered plan reaches is a copy of the row
-	// order nobody reads, and one the planner can still choose.
-	var declared []string
-	if err := db.Read(t.Context(), func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(t.Context(), `
-			SELECT name FROM sqlite_master
-			WHERE type = 'index' AND tbl_name IN ('kb_docs', 'kb_postings')
-			  AND name NOT LIKE 'sqlite_autoindex%'`)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var name string
-			if err := rows.Scan(&name); err != nil {
-				return err
-			}
-			declared = append(declared, name)
-		}
-		return rows.Err()
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if len(declared) == 0 {
-		t.Fatal("no indexes were read back, so this half of the check " +
-			"cannot fail and is not asserting anything")
-	}
+	// order nobody reads, and one the planner can still choose — read
+	// through storetest, which fails on a schema that declares none.
+	declared := storetest.IndexesOn(t, db, []string{"kb_docs", "kb_postings"})
 	all := ""
 	for _, steps := range plans {
 		all += strings.Join(steps, "\n") + "\n"

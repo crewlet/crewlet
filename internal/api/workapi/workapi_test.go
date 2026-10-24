@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/opkey"
@@ -97,73 +98,97 @@ func TestEachOutcomeIsItsOwnStatus(t *testing.T) {
 // evicted node, a read refused by a node holding a record it cannot decode —
 // both answer the same however often they are asked, and a client told to come
 // back in two seconds polls them until somebody readmits or upgrades the node.
+//
+// AND EACH IS TOLD IN A PERSON'S WORDS FOR IT ([builtin.ConditionSentence]),
+// whose advice agrees with that hint, and never in its own text: a tool's
+// sentence for it carried the refusal's message, framework, detail and all,
+// and a read this surface takes answered "this node could not read what the
+// decision is about: " and the same.
+//
+// Mutation: answer a read this surface takes in [builtin.Condition]'s words
+// again, or a tool's failure in the tool's own sentence, and its rows go red.
 func TestARefusalWaitingCannotClearSaysNothingAboutComingBack(t *testing.T) {
 	t.Parallel()
+	const detail = "the write needs 3:4182 on crewlet.tracker.task.ENG-1"
+	write := func(err error) func(*rig) { return func(r *rig) { r.writes.err = err } }
+	read := func(err error) func(*rig) { return func(r *rig) { r.reader.err = err } }
 	for _, c := range []struct {
 		name       string
-		setup      func(*rig)
+		err        error
+		setup      func(error) func(*rig)
 		method     string
 		target     string
 		body       any
 		retryAfter string
 	}{
 		{"a write refused by an evicted node",
-			func(r *rig) {
-				r.writes.err = &statelog.Unavailable{Reason: statelog.ReasonEvicted}
-			}, http.MethodPost, "/work/items",
+			&statelog.Unavailable{Reason: statelog.ReasonEvicted, Detail: detail},
+			write, http.MethodPost, "/work/items",
 			map[string]any{"title": "rotate the key", "project": "ENG"}, ""},
 		{"a write refused because this node is behind",
-			func(r *rig) {
-				r.writes.err = &statelog.Unavailable{Reason: statelog.ReasonBehind}
-			}, http.MethodPost, "/work/items",
+			&statelog.Unavailable{Reason: statelog.ReasonBehind, Detail: detail},
+			write, http.MethodPost, "/work/items",
 			map[string]any{"title": "rotate the key", "project": "ENG"},
 			strconv.Itoa(authz.RetryUndecidedSeconds)},
 		{"a read refused by a node holding a record it cannot decode",
-			func(r *rig) {
-				r.reader.err = &statelog.Refused{Code: statelog.RefuseDeferred,
-					Level: statelog.ReadSession}
-			}, http.MethodPost, "/work/items/ENG-1/rank",
+			&statelog.Refused{Code: statelog.RefuseDeferred, Level: statelog.ReadSession,
+				Detail: detail},
+			read, http.MethodPost, "/work/items/ENG-1/rank",
 			map[string]any{"after": "ENG-2", "if_match": 3}, ""},
 		{"a read refused by a node behind its log, from its own backlog",
-			func(r *rig) {
-				r.reader.err = &statelog.Refused{Code: statelog.RefuseBehind,
-					Level: statelog.ReadSession, RetryAfter: 9 * time.Second}
-			}, http.MethodPost, "/work/items/ENG-1/rank",
+			&statelog.Refused{Code: statelog.RefuseBehind, Level: statelog.ReadSession,
+				RetryAfter: 9 * time.Second, Detail: detail},
+			read, http.MethodPost, "/work/items/ENG-1/rank",
 			map[string]any{"after": "ENG-2", "if_match": 3}, "9"},
+		{"a read this surface takes refused by a node at its log's ceiling",
+			&statelog.Refused{Code: statelog.RefuseLogFull, Level: statelog.ReadSession,
+				Detail: detail},
+			read, http.MethodPost, "/work/items/ENG-1/purge?confirm=ENG-1&reason=why", nil, ""},
 		// AN ESTATE NO DATA NODE SERVED clears when one serves again, so it
 		// is this node's undecided hint — never the `500` it answered while
 		// the router's refusal wrapped nothing the tools' rule knew. On a
 		// read this surface takes, a read a tool takes, a write a tool
-		// makes and a write this surface makes without one.
+		// makes and a write this surface makes without one. A write's is
+		// every node REFUSING it: one no node answered is an unknown
+		// outcome instead (TestAWriteNoDataNodeAnsweredIsAnUnknownCarryingItsKey).
 		{"a read this surface takes that no data node served",
-			func(r *rig) { r.reader.err = &estate.ErrUnserved{Detail: "data-b: no answer"} },
-			http.MethodPost, "/work/items/ENG-1/purge?confirm=ENG-1&reason=why", nil,
+			&estate.ErrUnserved{Detail: "data-b: no answer"},
+			read, http.MethodPost, "/work/items/ENG-1/purge?confirm=ENG-1&reason=why", nil,
 			strconv.Itoa(authz.RetryUndecidedSeconds)},
 		{"a read a tool takes that no data node served",
-			func(r *rig) { r.reader.err = &estate.ErrUnserved{Detail: "data-b: no answer"} },
-			http.MethodPost, "/work/items/ENG-1/rank",
+			&estate.ErrUnserved{Detail: "data-b: no answer"},
+			read, http.MethodPost, "/work/items/ENG-1/rank",
 			map[string]any{"after": "ENG-2", "if_match": 3},
 			strconv.Itoa(authz.RetryUndecidedSeconds)},
 		{"a write a tool makes that no data node served",
-			func(r *rig) { r.writes.err = &estate.ErrUnserved{Detail: "data-b: no answer"} },
-			http.MethodPost, "/work/items",
+			&estate.ErrUnserved{Detail: "data-b: out_of_service"},
+			write, http.MethodPost, "/work/items",
 			map[string]any{"title": "rotate the key", "project": "ENG"},
 			strconv.Itoa(authz.RetryUndecidedSeconds)},
 		{"a write this surface makes that no data node served",
-			func(r *rig) { r.writes.err = &estate.ErrUnserved{Detail: "data-b: no answer"} },
-			http.MethodPost, "/work/items/ENG-1/purge?confirm=ENG-1&reason=why", nil,
+			&estate.ErrUnserved{Detail: "data-b: out_of_service"},
+			write, http.MethodPost, "/work/items/ENG-1/purge?confirm=ENG-1&reason=why", nil,
 			strconv.Itoa(authz.RetryUndecidedSeconds)},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			r := newRig(t, chart{})
-			c.setup(r)
+			c.setup(c.err)(r)
 			got := r.do(as(admin("ana")), c.method, c.target, c.body)
 			if got.status != http.StatusServiceUnavailable {
 				t.Fatalf("answered %d, want 503: %v", got.status, got.body)
 			}
 			if after := got.header.Get("Retry-After"); after != c.retryAfter {
 				t.Errorf("Retry-After = %q, want %q", after, c.retryAfter)
+			}
+			want, _ := builtin.ConditionSentence(c.err)
+			if got.body["detail"] != want {
+				t.Errorf("detail = %q, want a person's words for it, %q",
+					got.body["detail"], want)
+			}
+			if text := fmt.Sprint(got.body["detail"]); strings.Contains(text, "3:4182") ||
+				strings.Contains(text, "statelog") || strings.Contains(text, "data-b") {
+				t.Errorf("detail = %q carries the refusal's own text", text)
 			}
 		})
 	}
@@ -543,6 +568,78 @@ func TestARankMovePlacesAnItemBesideItsNeighbour(t *testing.T) {
 	}
 }
 
+// A BODY'S NUMBERS ARRIVE EXACTLY, as a seat's do.
+//
+// Every other path into the tools reads a call's arguments through
+// json.Number, and this surface decoded its bodies with the default decoder,
+// which turns every number into a float64 first: an integer past 2^53 — a
+// whole-number custom-field value somebody typed — was rounded before the
+// tool saw it, and filed as one they never typed.
+//
+// Mutation: decode readArgs' body with json.Unmarshal and the value is filed
+// rounded.
+func TestABodysNumbersArriveExactly(t *testing.T) {
+	t.Parallel()
+	const past = "9007199254740993" // 2^53 + 1, the first integer a float64 rounds
+	r := newRig(t, chart{})
+	got := r.do(as(admin("ana")), http.MethodPost, "/work/items",
+		`{"title": "rotate the key", "project": "ENG", "fields": {"points": `+past+`}}`)
+	if got.status != http.StatusOK || len(r.writes.created) != 1 {
+		t.Fatalf("answered %d %v and created %d", got.status, got.body, len(r.writes.created))
+	}
+	if filed := string(r.writes.created[0].Fields["points"]); filed != past {
+		t.Errorf("points was filed as %s, want %s as it was sent", filed, past)
+	}
+	// AND ONE OBJECT: a second value after it is a request nobody can say
+	// which half of to make.
+	if got := r.do(as(admin("ana")), http.MethodPost, "/work/items",
+		`{"title": "rotate the key", "project": "ENG"} {"title": "and this"}`); got.status != http.StatusBadRequest {
+		t.Errorf("a body carrying two JSON values answered %d %v", got.status, got.body)
+	}
+}
+
+// A BODY THAT STATES ANOTHER VERSION THAN ITS If-Match IS REFUSED, whatever
+// shape the second version takes.
+//
+// The body's version was read as a float64 and truncated, so `if_match: 3.5`
+// beside `If-Match: 3` agreed with it and was silently overwritten; and once
+// a body's numbers arrive as json.Number, a float64 assertion matches nothing
+// at all, so every disagreement would pass. A body that states the header's
+// own version is the same request said twice, and is taken.
+//
+// Mutation: compare the body's value by its float64, or skip a value that is
+// not one, and a disagreeing row is placed.
+func TestABodyDisagreeingWithItsIfMatchIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		body string
+		want int
+	}{
+		{"the same version", `{"after": "ENG-2", "if_match": 3}`, http.StatusOK},
+		{"another version", `{"after": "ENG-2", "if_match": 4}`, http.StatusBadRequest},
+		{"a fraction of it", `{"after": "ENG-2", "if_match": 3.5}`, http.StatusBadRequest},
+		{"a negative", `{"after": "ENG-2", "if_match": -3}`, http.StatusBadRequest},
+		{"text", `{"after": "ENG-2", "if_match": "4"}`, http.StatusBadRequest},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t, chart{})
+			got := r.do(as(colleague("ana")), http.MethodPost, "/work/items/ENG-1/rank",
+				c.body, "If-Match", "3")
+			if got.status != c.want {
+				t.Fatalf("answered %d %v, want %d", got.status, got.body, c.want)
+			}
+			switch {
+			case c.want == http.StatusOK && (len(r.writes.placed) != 1 || r.writes.placed[0].IfMatch != 3):
+				t.Errorf("the tracker was asked to place %+v, want version 3", r.writes.placed)
+			case c.want != http.StatusOK && len(r.writes.placed) != 0:
+				t.Errorf("a request stating two versions placed %+v", r.writes.placed)
+			}
+		})
+	}
+}
+
 // ---- the gestures no tool makes ---------------------------------------- //
 
 // A REMARK ON A WORK ITEM IS REWRITTEN BY ITS AUTHOR.
@@ -793,6 +890,8 @@ func TestEveryWriteRouteIsGuardedAndDocumented(t *testing.T) {
 		"PATCH /pages/{id}/comments/{cid}",
 		"PATCH /work/items/{key}",
 		"PATCH /work/items/{key}/comments/{cid}",
+		"POST /chat/channels/{channel_id}/erase",
+		"POST /chat/channels/{channel_id}/prune",
 		"POST /pages",
 		"POST /pages/{id}/comments",
 		"POST /pages/{id}/purge",
@@ -808,6 +907,7 @@ func TestEveryWriteRouteIsGuardedAndDocumented(t *testing.T) {
 		"POST /work/items/{key}/restore",
 		"POST /work/projects/{key}/tags",
 		"POST /work/views",
+		"PUT /chat/channels/{channel_id}/retention",
 		"PUT /pages/{id}",
 		"PUT /work/catalogue",
 		"PUT /work/files/{project}/{path...}",
@@ -824,7 +924,7 @@ func TestEveryWriteRouteIsGuardedAndDocumented(t *testing.T) {
 		_, path, _ := strings.Cut(pattern, " ")
 		path = strings.NewReplacer("{key}", "ENG-1", "{id}", "p-1",
 			"{cid}", "c-1", "{handle}", "ana", "{project}", "ENG",
-			"{path...}", "reports/q3.csv").Replace(path)
+			"{path...}", "reports/q3.csv", "{channel_id}", "c-1").Replace(path)
 		if auth.Unguarded(path) {
 			t.Errorf("%s is exempt from the guard, so a write surface is "+
 				"reachable with no credential", pattern)

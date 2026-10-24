@@ -121,11 +121,10 @@ func (s *served) postItem(w http.ResponseWriter, r *http.Request) {
 
 func (s *served) patchItem(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
-	if !ok || !fromPath(w, args, "item", r.PathValue("key")) ||
-		!ifMatch(w, r, args, "if_match") {
+	if !ok || !fromPath(w, args, "item", r.PathValue("key")) {
 		return
 	}
-	s.call(w, r, tracker.UpdateWorkItemTool, args)
+	s.callIfMatched(w, r, tracker.UpdateWorkItemTool, args, "if_match")
 }
 
 func (s *served) postItemComment(w http.ResponseWriter, r *http.Request) {
@@ -139,21 +138,19 @@ func (s *served) postItemComment(w http.ResponseWriter, r *http.Request) {
 func (s *served) postDepend(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !only(w, args, "waiting_on", "blocking", "dependency_note", "if_match") ||
-		!fromPath(w, args, "item", r.PathValue("key")) ||
-		!ifMatch(w, r, args, "if_match") {
+		!fromPath(w, args, "item", r.PathValue("key")) {
 		return
 	}
-	s.call(w, r, tracker.UpdateWorkItemTool, args)
+	s.callIfMatched(w, r, tracker.UpdateWorkItemTool, args, "if_match")
 }
 
 func (s *served) postRelate(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !only(w, args, "linked", "linked_pages", "if_match") ||
-		!fromPath(w, args, "item", r.PathValue("key")) ||
-		!ifMatch(w, r, args, "if_match") {
+		!fromPath(w, args, "item", r.PathValue("key")) {
 		return
 	}
-	s.call(w, r, tracker.UpdateWorkItemTool, args)
+	s.callIfMatched(w, r, tracker.UpdateWorkItemTool, args, "if_match")
 }
 
 func (s *served) deleteItem(w http.ResponseWriter, r *http.Request) {
@@ -283,7 +280,7 @@ func (s *served) personRecord(w http.ResponseWriter, r *http.Request, tool strin
 	}, handle, write)
 	about := operator.About(tool, args)
 	about["handle"] = handle
-	s.answerDispatched(w, r, key, tool, about, result, err)
+	s.answerDispatched(w, r, key, tool, about, result, err, false)
 }
 
 // ---- the gestures no tool makes ---------------------------------------- //
@@ -302,11 +299,10 @@ func (s *served) personRecord(w http.ResponseWriter, r *http.Request, tool strin
 func (s *served) postRank(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !only(w, args, "after", "before", "status", "if_match") ||
-		!fromPath(w, args, "item", r.PathValue("key")) ||
-		!ifMatch(w, r, args, "if_match") {
+		!fromPath(w, args, "item", r.PathValue("key")) {
 		return
 	}
-	s.call(w, r, tracker.PlaceWorkItemTool, args)
+	s.callIfMatched(w, r, tracker.PlaceWorkItemTool, args, "if_match")
 }
 
 // patchItemComment rewrites one remark on a work item, AS ITS AUTHOR.
@@ -345,7 +341,7 @@ func (s *served) patchItemComment(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	actor, ok := s.actor(w, r, key)
+	actor, ok := s.actor(w, r)
 	if !ok {
 		return
 	}
@@ -355,10 +351,12 @@ func (s *served) patchItemComment(w http.ResponseWriter, r *http.Request) {
 		Kind: tracker.ChangeCommentEdited, Before: detail.Task, After: detail.Task,
 		Comment: &edited, Mentions: edited.Mentions,
 	}.Notify(s.Work.Leads)
-	result, err := s.Tracker(actor).EditComment(r.Context(),
-		keyedOp(key, "comment-edit", cid, args), detail.Task.ID, detail.Task.Project,
-		cid,
-		body, notify)
+	opID, ok := keyedOp(w, r, key, "comment-edit", cid, args)
+	if !ok {
+		return
+	}
+	result, err := s.Tracker(actor).EditComment(r.Context(), opID, detail.Task.ID,
+		detail.Task.Project, cid, body, notify)
 	operator.AuditGesture(r.Context(), s.audit, types.TransportWork,
 		string(authz.ActionWorkCommentEdit), key, result.Outcome, result.Position, err)
 	if err != nil {
@@ -372,7 +370,7 @@ func (s *served) patchItemComment(w http.ResponseWriter, r *http.Request) {
 	}, detail))
 }
 
-// postPurge destroys an item and every row it produced, on every node.
+// postPurge destroys an item and every row it produced, on every data node.
 //
 // # The confirmation is the item's KEY, and it is CHECKED
 //
@@ -407,13 +405,13 @@ func (s *served) postPurge(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case confirm == "":
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidQuery,
-			map[string]string{"detail": "repeat the item's KEY in ?confirm= — " +
-				"a purge removes the item and every row it produced on every " +
-				"node, and there is nothing that undoes it"})
+			map[string]string{"detail": "repeat the item's KEY in ?confirm=. " +
+				"A purge removes the item and every row it produced on every " +
+				"data node, and there is nothing that undoes it"})
 		return
 	case reason == "":
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidQuery,
-			map[string]string{"detail": "state why in ?reason= — the rows are " +
+			map[string]string{"detail": "state why in ?reason=. The rows are " +
 				"destroyed and the marker's reason is the only account of them " +
 				"that survives"})
 		return
@@ -425,20 +423,23 @@ func (s *served) postPurge(w http.ResponseWriter, r *http.Request) {
 	if !strings.EqualFold(confirm, detail.Task.Key) {
 		httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeInvalid,
 			map[string]string{"detail": fmt.Sprintf("?confirm= says %q and the "+
-				"item is %s — nothing was destroyed", confirm, detail.Task.Key)})
+				"item is %s, so nothing was destroyed", confirm, detail.Task.Key)})
 		return
 	}
 	key, ok := operationKey(w, r)
 	if !ok {
 		return
 	}
-	actor, ok := s.actor(w, r, key)
+	actor, ok := s.actor(w, r)
 	if !ok {
 		return
 	}
-	result, err := s.Tracker(actor).PurgeTask(r.Context(),
-		keyedOp(key, "purge", detail.Task.ID, purgeArgs(confirm, reason)),
-		detail.Task.ID, detail.Task.Project, reason)
+	opID, ok := keyedOp(w, r, key, "purge", detail.Task.ID, purgeArgs(confirm, reason))
+	if !ok {
+		return
+	}
+	result, err := s.Tracker(actor).PurgeTask(r.Context(), opID, detail.Task.ID,
+		detail.Task.Project, reason)
 	operator.AuditGesture(r.Context(), s.audit, types.TransportWork,
 		string(authz.ActionWorkPurge), key, result.Outcome, result.Position, err)
 	if err != nil {

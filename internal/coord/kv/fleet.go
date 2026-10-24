@@ -415,7 +415,7 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why NINETEEN buckets and not one
+// # Why TWENTY buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -448,6 +448,19 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	           stamp — and a follow that expired while the thread was still
 //	           live costs at most one missed non-mention reply, which the
 //	           next mention re-establishes through the ordinary path
+//	chatReads  none at all, and it is the clearest case in the table: a read
+//	           cursor has no expiry that means anything. Somebody who has
+//	           not opened a room in four months has still read it up to
+//	           where they read it, and an aged-out cursor would silently
+//	           mark the whole channel unread — the exact opposite of the
+//	           fact it stores. Removal is a decision, never an age. Its
+//	           retention is the positions register's, so it is the one
+//	           bucket here kept apart for its LOAD rather than its age: it
+//	           is the busiest record the fleet writes and every chat screen
+//	           reads it, and as a class of the register its flushes would
+//	           go through the one raft group, and its reads to the one
+//	           leader, that order and answer the trim's inputs and the
+//	           capacity window (coord's chatread.go)
 //	fires      the scheduler's catchup ceiling, days: a claim that expired
 //	           inside the window a tick can still evaluate lets that fire
 //	           run a second time
@@ -519,6 +532,7 @@ const (
 	budgetSuffix       = "_token_windows"
 	channelSuffix      = "_channels"
 	followsSuffix      = "_follows"
+	chatReadsSuffix    = "_chat_reads"
 	firesSuffix        = "_fires"
 	rebasesSuffix      = "_rebases"
 	runsSuffix         = "_sandbox_runs"
@@ -668,6 +682,7 @@ type FleetStore struct {
 	budgets      jetstream.KeyValue
 	channels     jetstream.KeyValue
 	follows      jetstream.KeyValue
+	chatReads    jetstream.KeyValue
 	secrets      jetstream.KeyValue
 	fires        jetstream.KeyValue
 	rebases      jetstream.KeyValue
@@ -678,13 +693,16 @@ type FleetStore struct {
 	custody      jetstream.KeyValue
 	uploads      jetstream.KeyValue
 
-	// positions is the register every ageless key class the fleet still
-	// composes shares: a node's log positions, a trim hold, a backup point,
+	// positions is the register the ageless key classes the fleet still
+	// composes share: a node's log positions, a trim hold, a backup point,
 	// a domain's published floor, a capacity operation, a node's admission,
 	// its maintenance acknowledgement and a seat pause. They are together
 	// because none of them may ever expire — each is read to decide what
 	// somebody ELSE may delete, publish or run — and every listing over the
 	// bucket filters by class, which is the load-bearing half of sharing it.
+	// The chat read state is ageless too and stays out of it, in chatReads
+	// above, so the busiest record the fleet writes never shares this
+	// register's raft group and leader with the trim (coord's chatread.go).
 	// The document families that once had buckets beside this one left with
 	// the last projector; only their key grammar outlived them, in
 	// coord/keys.go.
@@ -736,7 +754,7 @@ var _ coord.Fleet = (*FleetStore)(nil)
 // The buckets below are opened one after another and each takes its own
 // provisioning budget, so without a ceiling the real bound on this call is the
 // PRODUCT rather than the term: a wedged cluster is rediscovered once per
-// bucket, nineteen buckets in a row, and a boot that nobody meant to allow ten
+// bucket, twenty buckets in a row, and a boot that nobody meant to allow ten
 // minutes gets it. Nothing declared that number, which is the shape of a limit
 // that is not a decision. [jsprovision.SequenceBudget] is the decision,
 // applied once here.
@@ -816,6 +834,9 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 		{&store.follows, followsSuffix,
 			"Crewlet chat thread-follows; the bucket TTL is the last-activity horizon",
 			cfg.FollowRetention},
+		{&store.chatReads, chatReadsSuffix,
+			"Crewlet per-person chat read state; NO TTL — an expired cursor marks a room unread",
+			0},
 		{&store.fires, firesSuffix,
 			"Crewlet scheduled-fire claims; the bucket TTL outlasts the catchup ceiling",
 			cfg.FireRetention},
@@ -1842,6 +1863,11 @@ func (f *FleetStore) pointer(ctx context.Context) (activationRecord, uint64, boo
 //
 // previous is the instant of the pointer seq names, which an expecting write
 // read in [FleetStore.expectedSeq].
+//
+// A WRITE THAT FAILED FOR ANY OTHER REASON IS UNKNOWN ([writeUnknown]): it was
+// sent, so the pointer may name it, and an unavailable store alone read as
+// "nothing moved" told an administrator to send again an activation that had
+// landed — refused, next time, as a race lost to their own write.
 func (f *FleetStore) flip(ctx context.Context, req coord.ActivationRequest,
 	payload json.RawMessage, seq uint64, previous time.Time) (uint64, time.Time, error) {
 
@@ -1858,7 +1884,7 @@ func (f *FleetStore) flip(ctx context.Context, req coord.ActivationRequest,
 				return 0, time.Time{}, fmt.Errorf("%w: an activation was published "+
 					"while this write was being prepared", coord.ErrActivationRaced)
 			}
-			return 0, time.Time{}, unavailable("publish the activation", err)
+			return 0, time.Time{}, writeUnknown("publish the activation", err)
 		}
 		return revision, at, nil
 	case req.Expect == "":
@@ -1878,7 +1904,7 @@ func (f *FleetStore) flip(ctx context.Context, req coord.ActivationRequest,
 			return 0, time.Time{}, fmt.Errorf("%w: %s was replaced while this "+
 				"write was being prepared", coord.ErrActivationRaced, req.Expect)
 		}
-		return 0, time.Time{}, unavailable("publish the activation", err)
+		return 0, time.Time{}, writeUnknown("publish the activation", err)
 	}
 	return revision, at, nil
 }
@@ -1927,7 +1953,7 @@ func (f *FleetStore) assert(ctx context.Context, req coord.ActivationRequest,
 			}
 			continue
 		default:
-			return 0, time.Time{}, unavailable("publish the activation", err)
+			return 0, time.Time{}, writeUnknown("publish the activation", err)
 		}
 	}
 }
@@ -2256,6 +2282,32 @@ func (f *FleetStore) DeleteSecret(ctx context.Context, name string) (bool, error
 		return false, unavailable("delete the secret", err)
 	}
 	return true, nil
+}
+
+// DeleteSecretAt removes a value only while it is still at version.
+//
+// PURGED, as [FleetStore.DeleteSecret] is and for its reason, with the purge
+// conditioned on the key's last revision — SETTLED like every conditional
+// write here (settle.go), so a removal at the very revision just read is never
+// answered lost while the leader is still deciding another write to the key.
+// A zero version names no row, for [FleetStore.UpdateSecret]'s reason: the
+// client reads an expected revision of zero as "never written".
+func (f *FleetStore) DeleteSecretAt(ctx context.Context, name string, version uint64) (bool, error) {
+	if name == "" {
+		return false, errors.New("coord/kv: a secret needs a name")
+	}
+	if version == 0 {
+		return false, nil
+	}
+	err := f.secrets.Purge(ctx, encodeKey(name), jetstream.LastRevision(version))
+	switch {
+	case err == nil:
+		return true, nil
+	case lostUpdateRace(err):
+		return false, nil
+	default:
+		return false, unavailable("delete the secret", err)
+	}
 }
 
 // decodeSecret reads one stored record.

@@ -29,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
@@ -440,7 +441,7 @@ func (r *Runner) executorPrompt(ctx context.Context, _ int, notes string,
 	history []ledger.Iteration, snapshot tools.Snapshot, built *tools.Surface,
 ) (system, user prompts.Prompt) {
 	offer := r.cfg.Skills.Offer()
-	_, offersSandbox := snapshot.Lookup(RunSandboxTool)
+	_, offersSandbox := snapshot.Lookup(toolname.RunSandbox)
 	system = prompts.BuildExecutor(r.cfg.Seat, prompts.ExecutorInput{
 		// The catalogue of the universe the surface was built from, so it
 		// lists nothing this executor cannot activate.
@@ -1072,9 +1073,11 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 				attribute.Bool("crewlet.suspended", out.Suspended))
 			return done()
 		}
+		fence := surface.Turn().FenceBoundary()
 		granted, decision := r.consider(ctx, ph, iteration, out.Rounds, policy, extension.Request{
 			Phase: ph, Task: r.cfg.Task, PlanSummary: in.intent,
 			Calls: calls(surface), LastText: res.Text, RoundsUsed: out.Rounds,
+			Boundary: fence,
 		})
 		if granted <= 0 {
 			log.InfoContext(ctx, "phase_not_extended", "phase", ph, "iteration", iteration,
@@ -1085,7 +1088,7 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 			"granted", granted, "rounds_used", out.Rounds, "reason", decision.Reason)
 		messages = append(messages, llm.Message{
 			Role:    llm.RoleUser,
-			Content: extension.Nudge(ph, granted, decision.Reason),
+			Content: extension.Nudge(fence, ph, granted, decision.Reason),
 		})
 		// An exhausted phase was still calling tools, so no run of
 		// declines is being continued.
@@ -1497,7 +1500,7 @@ func (r *Runner) guardFor(ph phase.Phase, surface *tools.Surface, loaded []strin
 	// THE LOADER MUST BE ACTIVE, not merely in the universe the triggers are
 	// matched over: a guard is armed only where the session can satisfy it,
 	// and a loader the phase never activated is one its model may not reach.
-	if r.cfg.Skills == nil || !slices.Contains(surface.Active(), skills.LoaderTool) {
+	if r.cfg.Skills == nil || !slices.Contains(surface.Active(), toolname.LoadToolSkill) {
 		return armedGuard{}
 	}
 	guard := skills.NewGuard(r.cfg.Skills, promptPhase(ph), catalogueSurface(surface))
@@ -1559,7 +1562,7 @@ func catalogueSurface(surface *tools.Surface) prompts.Surface {
 func (r *Runner) executorUniverse(snapshot tools.Snapshot, agentRun bool) tools.Snapshot {
 	hidden := slices.Clone(phaseScoped)
 	if !r.offersSandbox(agentRun) {
-		hidden = append(hidden, RunSandboxTool)
+		hidden = append(hidden, toolname.RunSandbox)
 	}
 	return snapshot.Without(hidden...)
 }
@@ -1632,7 +1635,7 @@ func (r *Runner) offersSandbox(agentRun bool) bool {
 // query_episodes and refresh_memory are recon, which the executor now does
 // itself; reflect_and_persist is deliberate too — an agent that learns
 // something mid-turn should be able to keep it.
-var phaseScoped = []string{MarkOnboardedTool}
+var phaseScoped = []string{toolname.MarkOnboarded}
 
 // taskFor prefixes the reviewer's correction to the ask.
 //

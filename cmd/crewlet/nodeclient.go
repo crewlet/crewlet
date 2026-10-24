@@ -81,8 +81,8 @@ func nodeClientFor(environ config.Source, args []string, name string, stderr io.
 	fs.SetOutput(stderr)
 	configPath := fs.String("config", defaultBootstrapPath,
 		"node config file: where this node serves its API")
-	addr := fs.String("url", "",
-		"the running node's base URL (default: from the config's api block). "+
+	addr := nodeAPIFlag(fs,
+		"the running node's API (default: from the config's api block). "+
 			"The token comes from "+apiTokenEnv+", never a flag")
 	if extra != nil {
 		extra(fs)
@@ -120,7 +120,7 @@ func nodeClientFor(environ config.Source, args []string, name string, stderr io.
 		// not have.
 		boot, err := config.LoadBootstrap(bootstrapPath, config.EnvOnly())
 		if err != nil {
-			return nil, fmt.Errorf("%w\n\nPass -url to reach a node whose config "+
+			return nil, fmt.Errorf("%w\n\nPass -api to reach a node whose config "+
 				"this machine does not hold", err)
 		}
 		base, err = nodeBaseURL(boot, "", "this node")
@@ -149,6 +149,19 @@ func (c *nodeClient) post(ctx context.Context, path string, into any) error {
 // takes a gesture's arguments as `{"args": …}` and refuses any other
 // Content-Type.
 func (c *nodeClient) postKeyed(ctx context.Context, path, key string, body, into any) error {
+	return c.sendKeyed(ctx, http.MethodPost, path, key, body, into)
+}
+
+// putKeyed is [nodeClient.postKeyed] for a route that REPLACES a value rather
+// than making a change of its own — a room's horizon.
+func (c *nodeClient) putKeyed(ctx context.Context, path, key string, body, into any) error {
+	return c.sendKeyed(ctx, http.MethodPut, path, key, body, into)
+}
+
+// sendKeyed is one write under an operation key, by method.
+func (c *nodeClient) sendKeyed(ctx context.Context, method, path, key string,
+	body, into any) error {
+
 	header := http.Header{}
 	if key = strings.TrimSpace(key); key != "" {
 		header.Set(opkey.Header, key)
@@ -161,7 +174,7 @@ func (c *nodeClient) postKeyed(ctx context.Context, path, key string, body, into
 		}
 		payload = raw
 	}
-	return c.send(ctx, http.MethodPost, path, header, payload, into)
+	return c.send(ctx, method, path, header, payload, into)
 }
 
 // maxNodeResponseBytes bounds one answer read back from a node.
@@ -171,7 +184,7 @@ func (c *nodeClient) postKeyed(ctx context.Context, path, key string, body, into
 // seat's day, week and month — about two hundred bytes a window, so some seven
 // hundred a seat. Four megabytes is some six thousand seats, an order of
 // magnitude above a large company, because an answer past the bound fails the
-// command outright; and it is still small enough that a misdirected -url cannot
+// command outright; and it is still small enough that a misdirected -api cannot
 // make the CLI buffer a website.
 const maxNodeResponseBytes = 4 << 20
 
@@ -207,7 +220,7 @@ func (c *nodeClient) send(ctx context.Context, method, path string,
 	if err != nil {
 		return noAnswer{fmt.Errorf("reach the node at %s: %w\n\n"+
 			"This command acts on state the RUNNING engine holds. Start the node, "+
-			"or pass -url to name another one", c.base, err)}
+			"or pass -api to name another one", c.base, err)}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -232,7 +245,7 @@ func (c *nodeClient) send(ctx context.Context, method, path string,
 		return noAnswer{fmt.Errorf(
 			"the answer to %s exceeded %d bytes, so it was not read: this build "+
 				"caps one answer to bound a proxy's error page, and what the node "+
-				"did with the request is unknown. Check that -url names the engine "+
+				"did with the request is unknown. Check that -api names the engine "+
 				"rather than something in front of it",
 			path, maxNodeResponseBytes)}
 	}
@@ -292,12 +305,12 @@ func engineCode(body []byte) string {
 func missingSurface(base, surface, code string) error {
 	if code == string(httpjson.CodeNoRoute) {
 		return fmt.Errorf("%s serves no %s surface: it is a node without the "+
-			"%s role, which serves only its probes and tool bridge — point -api at a node "+
+			"%s role, which serves only its probes and tool bridge. Point -api at a node "+
 			"whose node.roles include %s", base, surface,
 			placement.RoleIngress, placement.RoleIngress)
 	}
 	return fmt.Errorf("%s has no %s surface: whatever answered is not a "+
-		"Crewlet node's API — point -api (or api.host and api.port) at a node "+
+		"Crewlet node's API. Point -api (or api.host and api.port) at a node "+
 		"with the %s role rather than at a proxy or another service",
 		base, surface, placement.RoleIngress)
 }
@@ -319,7 +332,7 @@ func notTheNode(path string, status int, contentType string, body []byte) error 
 	said := foreignAnswer(contentType, body)
 	return noAnswer{fmt.Errorf("the answer to %s came back %d with no error code "+
 		"the engine writes, so it is not the node's own: something in front of it "+
-		"answered — a proxy or gateway, most often its read timeout — and the node "+
+		"answered (a proxy or gateway, most often its read timeout), and the node "+
 		"may still have done what was asked. It said: %s", path, status, said)}
 }
 
@@ -365,7 +378,7 @@ type nodeRefusal struct {
 	// Unvouched is an unknown this node cannot settle: its operation ledger
 	// may have lost the row the operation needs, so the same request here
 	// answers the same way until the write reaches it — the retry goes
-	// through another node (-url), under the same id.
+	// through another node (-api), under the same id.
 	Unvouched bool
 
 	// detail and hint are the refusal's own sentences, which the message

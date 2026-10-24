@@ -309,6 +309,11 @@ func TestProjectEditRefusesAnEmptyGesture(t *testing.T) {
 		t.Fatalf("the refusal does not say where the name and unit come "+
 			"from: %v", err)
 	}
+	// AND A TAG BY THE ARGUMENT THAT ADDS ONE: it named `tags.add`, which
+	// nothing reads. Mutation: put it back and this fails.
+	if !strings.Contains(err.Error(), "`tags_add`") || strings.Contains(err.Error(), "tags.add") {
+		t.Fatalf("the refusal does not name the argument that adds a tag: %v", err)
+	}
 }
 
 // TestProjectEditNamesAnUnknownProject rather than creating one: a project is
@@ -494,14 +499,14 @@ func TestUnassignedWorkLandsOnTheProjectsDefaultAssignee(t *testing.T) {
 		t.Errorf("the wake's assignee delta is %+v, want it to name %q", moved, "bo")
 	}
 	woken := false
-	for _, c := range tracker.Candidates(wake, false) {
+	for _, c := range tracker.Candidates(wake) {
 		if c.Handle == "bo" && c.Reason == tracker.ReasonAssignee {
 			woken = true
 		}
 	}
 	if !woken {
 		t.Errorf("the default assignee is not woken as the assignee: %+v",
-			tracker.Candidates(wake, false))
+			tracker.Candidates(wake))
 	}
 
 	// A NAMED ASSIGNEE IS LEFT ALONE.

@@ -9,7 +9,9 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // SearchKnowledgeTool is the tool's wire name.
@@ -80,7 +82,7 @@ func (t *searchKnowledge) Description() string {
 		"turn start, so use this once you know what the task actually " +
 		"needs — above all when the trigger was a bare pointer (a webhook " +
 		"naming an item, a thread reply) and that block came back empty. " +
-		"For a procedure you distilled from your own turns, use `use_skill` " +
+		"For a procedure you distilled from your own turns, use `" + UseSkillTool + "` " +
 		"instead: those are yours, not the team's."
 }
 
@@ -123,7 +125,7 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 ) (tools.Result, error) {
 	query := strings.TrimSpace(argString(args, "query"))
 	if query == "" {
-		return failed("search_knowledge needs a `query`: a few keywords describing " +
+		return failed(SearchKnowledgeTool + " needs a `query`: a few keywords describing " +
 			"what you are looking for."), nil
 	}
 	if knowledge.CheckQuery(query) != nil {
@@ -135,7 +137,7 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// though it were the one the model wrote, so a search on the wrong
 		// words read as a search that found nothing.
 		//nolint:nilerr // A tool failure is a RESULT the caller reads.
-		return failed(fmt.Sprintf("search_knowledge's `query` is %d bytes and takes at "+
+		return failed(fmt.Sprintf(SearchKnowledgeTool+"'s `query` is %d bytes and takes at "+
 			"most %d — send 2-8 keywords or key phrases, identifiers verbatim, not the "+
 			"task or a pasted thread.", len(query), knowledge.MaxQueryBytes)), nil
 	}
@@ -144,7 +146,8 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// the one asked.
 	mode, err := knowledge.ParseMode(argString(args, "mode"))
 	if err != nil {
-		return failed(fmt.Sprintf("search_knowledge: %v.", err)), nil
+		return refusedBy(tools.RefusalInvalid, err, unknownMode(SearchKnowledgeTool,
+			argString(args, "mode"))), nil
 	}
 	// THE TURN'S ORG, or the wiring's where there is no turn — see
 	// [searchKnowledge.org]. Reading the turn unconditionally made this
@@ -159,7 +162,7 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		company = t.org()
 	}
 	if company == nil {
-		return refused(tools.RefusalUnavailable,
+		return refusedBy(tools.RefusalUnavailable, waits(),
 			"No organization is in scope, so there is no knowledge base to search."), nil
 	}
 	// THE CHEAP GATE FIRST, exactly as the turn-start prefetch does it:
@@ -199,10 +202,15 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"shortly, or work from what you have."}, nil
 	}
 	partial := partialNote(result.Coverage) + degraded
+	// THE QUERY ECHOED BACK is the seat's own words and only neutralised, so
+	// even a query that spells the turn's token or a marker opens no fence
+	// beside the hits' own.
+	fence := turn.FenceBoundary()
 	if len(hits) == 0 {
 		return tools.Result{Output: fmt.Sprintf(
 			"No team documents match %q. Try different keywords, or work from what "+
-				"you have — not everything is written down.%s", clip(query), partial)}, nil
+				"you have — not everything is written down.%s",
+			provenance.Neutralise(fence, clip(query)), partial)}, nil
 	}
 	// EVERY HIT THE MODEL WAS SHOWN, in the order it was shown them. A
 	// search is a read of titles and snippets rather than of pages, and
@@ -212,13 +220,15 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	note(ctx, t.events, turn, knowledgeRead(turn, types.ReadViaSearch,
 		hits[0].Backend, query, knowledge.ReadPages(hits)))
 
+	// FENCED, under the turn's token and the label the backend stamped on
+	// its pages ([knowledge.Render], ADR-0040), exactly as the turn-start
+	// block renders them.
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d team documents match %q:\n", len(hits), clip(query))
-	for _, hit := range hits {
-		if line := renderHit(hit); line != "" {
-			b.WriteString(line)
-			b.WriteString("\n")
-		}
+	fmt.Fprintf(&b, "%d team documents match %q:\n", len(hits),
+		provenance.Neutralise(fence, clip(query)))
+	if listed := knowledge.Render(fence, hits); listed != "" {
+		b.WriteString(listed)
+		b.WriteString("\n")
 	}
 	// THE POINTER IS THE POINT: these are titles and snippets, not the
 	// pages. A seat that acted on a snippet would be acting on the first
@@ -227,6 +237,19 @@ func (t *searchKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		"knowledge-base tools.")
 	b.WriteString(partial)
 	return tools.Result{Output: b.String()}, nil
+}
+
+// unknownMode is the refusal of a `mode` this build does not know, naming the
+// ones it does: composed here, because the parser's error opens with its
+// package ("knowledge: unknown search mode …"), which a model read after its
+// own tool's name.
+func unknownMode(tool, asked string) string {
+	names := make([]string, len(knowledge.Modes))
+	for i, m := range knowledge.Modes {
+		names[i] = string(m)
+	}
+	return fmt.Sprintf("%s does not search in mode %q. It takes `mode` as one of %s.",
+		tool, strings.TrimSpace(asked), words.Or(names))
 }
 
 // degradedNote is the sentence a search that ranked other than it was asked
@@ -274,24 +297,4 @@ func partialNote(c knowledge.Coverage) string {
 	}
 	return "\n\nThis search covered only part of the knowledge base — some of the " +
 		"fleet did not answer in time — so a page not listed here may still exist."
-}
-
-// renderHit renders one page as a bullet.
-//
-// Falls back to the title alone where a page has no snippet — an empty page,
-// or one whose body is a table the extractor could not read — because the
-// title is still enough to decide whether to open it.
-func renderHit(hit knowledge.Hit) string {
-	title := strings.TrimSpace(hit.Title)
-	snippet := strings.Join(strings.Fields(hit.Snippet), " ")
-	switch {
-	case title == "" && snippet == "":
-		return ""
-	case title == "":
-		title = "(untitled)"
-	}
-	if snippet == "" {
-		return "- **" + title + "**"
-	}
-	return "- **" + title + "**: " + snippet
 }

@@ -3,8 +3,10 @@ package webhooks
 import (
 	"html/template"
 	"net/http"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // slackOAuthPage is the install landing page every provisioned Slack app
@@ -31,10 +33,11 @@ var slackOAuthPage = template.Must(template.New("slack-oauth").Parse(`<!doctype 
   <body>
     <h1>Slack app install {{.Heading}}</h1>
     {{if .Error}}
-      <p>Slack reported an error: <code>{{.Error}}</code></p>
-      <p>Close this tab and re-run the install from the CLI.</p>
-    {{else if and .Code .Handle}}
-      <p>Approved for agent <strong>@{{.Handle}}</strong>.
+      <p>{{.Error}}</p>
+      {{if .CLI}}<p>Close this tab and run <code>crewlet slack provision</code> again.</p>
+      {{else}}<p>Go back to the app's settings in Slack and install it again.</p>{{end}}
+    {{else if and .Code .CLI}}
+      <p>{{if .Handle}}Approved for agent <strong>@{{.Handle}}</strong>.{{else}}Approved.{{end}}
       Paste this code into the waiting
       <code>crewlet slack provision</code> prompt:</p>
       <p><code>{{.Code}}</code></p>
@@ -52,9 +55,9 @@ var slackOAuthPage = template.Must(template.New("slack-oauth").Parse(`<!doctype 
       <code>crewlet slack provision</code>, which is the ordinary way to do it
       by hand. You can close this tab.</p>
     {{else}}
-      <p>No <code>code</code> query parameter. Open this page by installing
-      a Crewlet agent's Slack app, or through the authorize URL printed by
-      <code>crewlet slack provision</code>.</p>
+      <p>Slack didn't send an install code with this page. Open it by
+      installing a Crewlet agent's Slack app, or from the link
+      <code>crewlet slack provision</code> prints.</p>
     {{end}}
   </body>
 </html>
@@ -69,7 +72,60 @@ var slackOAuthPage = template.Must(template.New("slack-oauth").Parse(`<!doctype 
 // the escaping is ever wrong.
 var slackOAuthPolicy = pagepolicy.MustForTemplate(slackOAuthPage, slackOAuthView{})
 
-type slackOAuthView struct{ Heading, Error, Code, Handle string }
+type slackOAuthView struct {
+	Heading, Error, Code string
+
+	// Handle is the agent the CLI's install was for, shown only when it is
+	// one a seat could have: the state is whatever the address that brought
+	// the browser here says.
+	Handle string
+
+	// CLI is the install having begun at the CLI's own authorize URL,
+	// whose state names the agent: the code goes to its waiting prompt.
+	CLI bool
+}
+
+// What the page tells a person Slack refused, in its own words rather than
+// Slack's code: the code is the log's.
+const (
+	// slackCancelled is Slack's `access_denied`: the person declined.
+	slackCancelled = "The install was cancelled in Slack."
+
+	// slackRefused is any other refusal Slack sent back.
+	slackRefused = "Slack didn't approve the install."
+)
+
+// maxSlackCode is the longest `code` this page treats as one Slack sent.
+//
+// Slack documents no length. Its codes are two numeric ids and a hex digest,
+// under a hundred characters, and 255 leaves them room to grow while keeping
+// the page from printing whatever an address carries.
+const maxSlackCode = 255
+
+// slackCode is the query's `code` as the page shows it, or "" where it can't
+// be one Slack sent: longer than [maxSlackCode], or holding anything but
+// letters, digits, dots, dashes and underscores.
+//
+// THE CODE IS PRINTED, under "Approved for agent @x. Paste this code", on
+// the dashboard's own origin, and the query is whatever the address that
+// brought the browser here says. Shown as it came, a code reading "Your
+// workspace is suspended. Call support at example.com" was printed as
+// though Crewlet said it. A value that can't be a code is no code: the page
+// says Slack sent none, which is true of it.
+func slackCode(raw string) string {
+	if raw == "" || len(raw) > maxSlackCode {
+		return ""
+	}
+	for _, c := range raw {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9',
+			c == '.', c == '-', c == '_':
+		default:
+			return ""
+		}
+	}
+	return raw
+}
 
 // slackOAuthLanding serves GET /webhooks/slack-oauth.
 //
@@ -91,17 +147,31 @@ type slackOAuthView struct{ Heading, Error, Code, Handle string }
 // holds. It is a function rather than a method for exactly that reason.
 func slackOAuthLanding(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	view := slackOAuthView{
-		Error:  q.Get("error"),
-		Code:   q.Get("code"),
-		Handle: q.Get("state"),
+	state := strings.TrimSpace(q.Get("state"))
+	view := slackOAuthView{Code: slackCode(q.Get("code")), CLI: state != ""}
+	// ONLY A HANDLE IS NAMED, as the agent the install was for: anything
+	// else in the state is no agent this page should claim was approved.
+	if iam.ValidSeatHandle(state) {
+		view.Handle = state
 	}
 	status := http.StatusOK
-	switch {
-	case view.Error != "":
+	switch refused := strings.TrimSpace(q.Get("error")); {
+	case refused != "":
+		// SLACK'S CODE IS THE LOG'S, and the page says what it means: the
+		// query is whatever the address that brought the browser here
+		// says, printed on the dashboard's origin.
 		view.Heading, status = "failed", http.StatusBadRequest
+		view.Error = slackRefused
+		if refused == "access_denied" {
+			view.Error = slackCancelled
+		}
+		log.Warn("slack_oauth_refused", "error", refused, "handle", view.Handle)
 	case view.Code == "":
 		status = http.StatusBadRequest
+		if q.Get("code") != "" {
+			log.Warn("slack_oauth_code_malformed", "handle", view.Handle,
+				"length", len(q.Get("code")))
+		}
 	default:
 		view.Heading = "approved"
 		// NAMED, because the two arrivals are operationally different: one
@@ -109,10 +179,14 @@ func slackOAuthLanding(w http.ResponseWriter, r *http.Request) {
 		// to go back for a token. An operator reading the log after being
 		// asked "did my install work" needs to see which happened.
 		log.Info("slack_oauth_code_displayed", "handle", view.Handle,
-			"flow", map[bool]string{true: "cli", false: "manual"}[view.Handle != ""])
+			"flow", map[bool]string{true: "cli", false: "manual"}[view.CLI])
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	pagepolicy.Set(w.Header(), slackOAuthPolicy)
+	// NEVER STORED: the page carries a code that installs an app for
+	// whoever holds the app's client secret, and a browser's cache is a
+	// place it would outlive the prompt waiting for it.
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	// Rendered straight to the response: the template is parsed at
 	// startup, so the only way this errors is a broken connection, and

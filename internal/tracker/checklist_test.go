@@ -73,9 +73,9 @@ func TestTickingOneChecklistItemKeepsAConcurrentAdd(t *testing.T) {
 	}
 }
 
-// A GESTURE THAT GROWS THE CHECKLISTS PAST A CAP IS REFUSED — and one that
-// shrinks them never is, or a task that somehow grew past a cap could never be
-// brought back under it.
+// A GESTURE THAT GROWS THE CHECKLISTS PAST A CAP IS REFUSED, as the task's
+// state — and one that shrinks them never is, or a task that somehow grew past
+// a cap could never be brought back under it.
 func TestAChecklistGesturePastTheCapIsRefused(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -94,8 +94,11 @@ func TestAChecklistGesturePastTheCapIsRefused(t *testing.T) {
 	err := checklistGesture(t, r, "op-over", "t-full", tracker.ChecklistIntent{
 		Op: tracker.ChecklistAddItem, List: "big", Item: "one-more", Name: "one more",
 	})
-	if !errors.Is(err, tracker.ErrInvalid) || !strings.Contains(err.Error(), "at most") {
-		t.Fatalf("a sixty-fifth line was %v, want a refusal naming the cap", err)
+	// THE TASK'S STATE, which the same line meets until one is removed —
+	// never the request's, since one line is not too many on its own.
+	if !errors.Is(err, tracker.ErrState) || errors.Is(err, tracker.ErrInvalid) ||
+		!strings.Contains(err.Error(), "the most a list can") {
+		t.Fatalf("a sixty-fifth line was %v, want the task's state naming the cap", err)
 	}
 	if got := len(oneTask(t, r, "t-full").Checklists[0].Items); got != tracker.MaxChecklistItems {
 		t.Errorf("the refused line landed anyway: the list holds %d", got)
@@ -130,12 +133,35 @@ func TestApplyChecklist(t *testing.T) {
 	for i := range tracker.MaxChecklists {
 		manyLists = append(manyLists, tracker.Checklist{ID: "l" + itoa(i), Name: "list"})
 	}
+	fullList := []tracker.Checklist{{ID: "launch", Name: "Launch"}}
+	for i := range tracker.MaxChecklistItems {
+		fullList[0].Items = append(fullList[0].Items, tracker.ChecklistItem{ID: "i" + itoa(i), Name: "line"})
+	}
+	tooMany := make([]tracker.ChecklistItem, 0, tracker.MaxChecklistItems+1)
+	for i := range tracker.MaxChecklistItems + 1 {
+		tooMany = append(tooMany, tracker.ChecklistItem{ID: "n" + itoa(i), Name: "line"})
+	}
+	// FOUR LISTS OF FIFTY, so a full new list crosses the task's total from
+	// well below it: 200 lines, and 264 with the new one.
+	nearTotal := make([]tracker.Checklist, 0, 4)
+	for l := range 4 {
+		list := tracker.Checklist{ID: "t" + itoa(l), Name: "list"}
+		for i := range 50 {
+			list.Items = append(list.Items, tracker.ChecklistItem{
+				ID: "t" + itoa(l) + "-" + itoa(i), Name: "line"})
+		}
+		nearTotal = append(nearTotal, list)
+	}
 
 	for name, c := range map[string]struct {
 		lists  []tracker.Checklist
 		intent tracker.ChecklistIntent
 		check  func(t *testing.T, got []tracker.Checklist)
 		refuse string
+		// mark is the refusal's class mark, ErrInvalid unless the case
+		// says otherwise: an id another list or line holds is a
+		// collision, ErrTaken.
+		mark error
 	}{
 		"add a list with its first lines": {
 			lists: launchList(),
@@ -187,7 +213,14 @@ func TestApplyChecklist(t *testing.T) {
 		"an item id already taken": {
 			lists:  launchList(),
 			intent: tracker.ChecklistIntent{Op: tracker.ChecklistAddItem, List: "launch", Item: "flag", Name: "dup"},
-			refuse: "already has a checklist item",
+			refuse: "already has that checklist line",
+			mark:   tracker.ErrTaken,
+		},
+		"a list id already taken": {
+			lists:  launchList(),
+			intent: tracker.ChecklistIntent{Op: tracker.ChecklistAddList, List: "launch", Name: "dup"},
+			refuse: "already has that checklist.",
+			mark:   tracker.ErrTaken,
 		},
 		"an unknown item": {
 			lists:  launchList(),
@@ -205,10 +238,33 @@ func TestApplyChecklist(t *testing.T) {
 				Name: strings.Repeat("n", tracker.MaxChecklistItemName+1)},
 			refuse: "maximum",
 		},
+		// A SET THE GESTURE ONLY PUSHES PAST A CAP is the task's state, and
+		// a gesture past the cap on its own is the request's.
 		"a seventeenth list": {
 			lists:  manyLists,
 			intent: tracker.ChecklistIntent{Op: tracker.ChecklistAddList, List: "one-more", Name: "more"},
 			refuse: "checklists",
+			mark:   tracker.ErrState,
+		},
+		"a line past a full list": {
+			lists:  fullList,
+			intent: tracker.ChecklistIntent{Op: tracker.ChecklistAddItem, List: "launch", Item: "x", Name: "one more"},
+			refuse: "the most a list can",
+			mark:   tracker.ErrState,
+		},
+		// THE TOTAL IS SAID AS WHAT THE GESTURE WOULD LEAVE, since a task
+		// holding 200 lines does not "already hold" 256.
+		"a full new list past the task's total": {
+			lists: nearTotal,
+			intent: tracker.ChecklistIntent{Op: tracker.ChecklistAddList, List: "more",
+				Name: "more", Items: tooMany[:tracker.MaxChecklistItems]},
+			refuse: "would leave this task's checklists with 264 lines",
+			mark:   tracker.ErrState,
+		},
+		"a new list longer than a list may be": {
+			lists:  launchList(),
+			intent: tracker.ChecklistIntent{Op: tracker.ChecklistAddList, List: "long", Name: "long", Items: tooMany},
+			refuse: "holds at most",
 		},
 		"an unknown op": {
 			lists:  launchList(),
@@ -228,8 +284,13 @@ func TestApplyChecklist(t *testing.T) {
 			before := len(c.lists)
 			got, err := tracker.ApplyChecklist(c.lists, c.intent)
 			if c.refuse != "" {
-				if !errors.Is(err, tracker.ErrInvalid) || !strings.Contains(err.Error(), c.refuse) {
-					t.Fatalf("got %v, want a refusal mentioning %q", err, c.refuse)
+				mark := c.mark
+				if mark == nil {
+					mark = tracker.ErrInvalid
+				}
+				if !errors.Is(err, mark) || !strings.Contains(err.Error(), c.refuse) {
+					t.Fatalf("got %v, want a refusal marked %v mentioning %q", err, mark,
+						c.refuse)
 				}
 				return
 			}

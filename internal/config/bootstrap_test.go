@@ -2,11 +2,14 @@ package config
 
 import (
 	"errors"
+	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -21,6 +24,7 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 	}{
 		{"node id shape", "node:\n  id: has space\n", "node.id", ErrUnknownValue},
 		{"node id too long", "node:\n  id: " + strings.Repeat("a", 65) + "\n", "node.id", ErrUnknownValue},
+		{"node id the operator's backups are filed under", "node:\n  id: operator\n", "node.id", ErrUnknownValue},
 		{"unknown node role", "node:\n  roles: [ingres]\n", "node.roles", ErrUnknownValue},
 		{"empty node roles", "node:\n  roles: []\n", "node.roles", ErrMissing},
 		{"blank label key", "node:\n  labels:\n    \"\": eu\n", "node.labels", ErrMissing},
@@ -447,6 +451,29 @@ func TestResolveNodeIDPrecedence(t *testing.T) {
 			t.Fatal("a malformed resolved id was accepted")
 		}
 	})
+
+	// THE OPERATOR'S BACKUP OWNER IS NOT A NODE. The backup register files the
+	// operator's acknowledgements under that word, so a node running under it
+	// announced its own copies as the operator's — counted as the off-host
+	// acknowledgement under `backup_floor: operator`, or refused as one. It is
+	// refused wherever a node takes its id, and by the rule a gesture naming
+	// some other node is held to.
+	t.Run("the operator's backup owner is refused", func(t *testing.T) {
+		r := NewResolver(MapSource{NodeIDEnvVar: coord.OperatorBackupOwner})
+		_, err := ResolveNodeID(&Bootstrap{}, r)
+		if !errors.Is(err, ErrUnknownValue) || !strings.Contains(err.Error(), "reserved") {
+			t.Fatalf("a node id of %q answered %v, want a refusal saying it is reserved",
+				coord.OperatorBackupOwner, err)
+		}
+		if ValidNodeID(coord.OperatorBackupOwner) {
+			t.Errorf("ValidNodeID accepts %q, so a gesture could name it as a node",
+				coord.OperatorBackupOwner)
+		}
+		// Only the word itself: an id that merely contains it names a node.
+		if !ValidNodeID("operator-1") {
+			t.Error("ValidNodeID refuses operator-1, which is an ordinary node id")
+		}
+	})
 }
 
 // A holder identity names one INCARNATION, so a replacement process is
@@ -577,6 +604,48 @@ func TestAZeroDurationAccessorStaysZero(t *testing.T) {
 	}
 	if got := (&Stream{}).EventRetention(); got != 0 {
 		t.Errorf("EventRetention = %v, want 0", got)
+	}
+}
+
+// A LEASE TTL BELOW THE FLOOR IS REFUSED, NAMING THE FIELD AND THE FLOOR.
+//
+// The lease TTL is also the watchdog's threshold: a node whose heartbeat goes
+// that long without a beat ends itself, and nothing bounded the setting from
+// below, so a TTL of a few seconds let a busy node end itself at boot. Zero is
+// still the default rather than a setting, a fraction above the floor is as
+// good as a whole number, and the schema's description states the floor the
+// validator holds (the js tag can publish only the zero).
+//
+// Mutation: drop the floor case from Coordination.validate, and every value
+// below it loads.
+func TestALeaseTTLBelowTheFloorIsRefused(t *testing.T) {
+	t.Parallel()
+	floor := MinLeaseTTL.Seconds()
+	for _, below := range []float64{0.9, 1.5, 3, 10, floor - 0.001} {
+		_, err := ParseRunnableBootstrap([]byte(fmt.Sprintf(
+			"coordination:\n  lease_ttl_seconds: %v\n", below)), NewResolver(MapSource{}))
+		if !errors.Is(err, ErrOutOfRange) {
+			t.Errorf("lease_ttl_seconds: %v = %v, want it refused as out of range", below, err)
+			continue
+		}
+		problems := Problems(err)
+		if len(problems) != 1 || problems[0].Path != "coordination.lease_ttl_seconds" ||
+			!strings.Contains(problems[0].Message, fmt.Sprintf("%v-second floor", floor)) {
+			t.Errorf("lease_ttl_seconds: %v refused with %+v, want one problem at "+
+				"coordination.lease_ttl_seconds naming the %v-second floor", below, problems, floor)
+		}
+	}
+	for _, ok := range []float64{0, floor, 22.5, 45, 600} {
+		cfg, err := ParseRunnableBootstrap([]byte(fmt.Sprintf(
+			"coordination:\n  lease_ttl_seconds: %v\n", ok)), NewResolver(MapSource{}))
+		if err != nil || cfg.Coordination.LeaseTTLSeconds != ok {
+			t.Errorf("lease_ttl_seconds: %v = (%v, %v), want it loaded as written", ok, cfg, err)
+		}
+	}
+	field, _ := reflect.TypeFor[Coordination]().FieldByName("LeaseTTLSeconds")
+	if desc := field.Tag.Get("desc"); !strings.Contains(desc, fmt.Sprintf("at least %v", floor)) {
+		t.Errorf("the schema describes lease_ttl_seconds as %q, which does not state the "+
+			"%v-second floor the validator holds it to", desc, floor)
 	}
 }
 

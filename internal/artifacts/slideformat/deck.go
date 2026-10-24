@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ---- the files ------------------------------------------------------------ //
@@ -309,7 +310,7 @@ func ParseIndex(raw []byte) (*Index, []Finding) {
 		bad("title is longer than %d bytes", MaxTitleBytes)
 	}
 	if _, ok := ThemeByID(idx.Theme); idx.Theme != "" && !ok {
-		bad("theme is %q, and a deck's theme is one of %s", idx.Theme, strings.Join(themeIDs(), ", "))
+		bad("theme is %q, and a deck's theme is one of %s", idx.Theme, words.Or(themeIDs()))
 	}
 	if idx.Lists != "" && idx.Lists != "css" {
 		bad("lists is %q, and the only list style is css", idx.Lists)

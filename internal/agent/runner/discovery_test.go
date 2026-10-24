@@ -9,8 +9,9 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
-	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/toolname"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 func TestAPhaseCanDiscoverAndActivateAnMCPTool(t *testing.T) {
@@ -187,20 +188,24 @@ func TestOneSurfacesActivationDoesNotLeakIntoAnother(t *testing.T) {
 	}
 }
 
-func TestTheEngineSkipsExactlyTheDiscoveryTools(t *testing.T) {
+// THE DISCOVERY TOOLS ARE EXACTLY THE PAIR internal/toolname NAMES, as a set:
+// the skill guard exempts that list, the worker deny list keeps a child off
+// it, the ledger skips it and the prompts tell a model to call it, so a third
+// discovery tool registered here and not there would be guarded, inherited,
+// recorded and never mentioned. Mutation: a third tool in DiscoveryTools, or
+// a name changed on one of the two, is red.
+func TestTheDiscoveryToolsAreExactlyTheNamedPair(t *testing.T) {
 	t.Parallel()
-	// A meta-tool is never a delivery, so in a record whose only job is
-	// "what already happened that matters" it is pure noise — and the
-	// engine names the skip list while this package names the tools. Two
-	// places, one fact: renaming a tool here without touching the engine
-	// would leave discovery calls in every ledger block, and a reader would
-	// see a phase that "did" four things when it delivered one.
-	want := []string{runner.ActivateTool, runner.ListMCPToolsTool}
-	got := slices.Clone(engine.MetaToolNames())
+	var got []string
+	for _, tool := range runner.DiscoveryTools(func() *tools.Surface { return nil }) {
+		got = append(got, tool.Name())
+	}
+	want := toolname.Discovery()
 	slices.Sort(got)
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
-		t.Errorf("the engine skips %v, want exactly the discovery pair %v", got, want)
+		t.Errorf("the runner registers the discovery tools %v, and the list every "+
+			"other package reads is %v", got, want)
 	}
 }
 
@@ -262,7 +267,7 @@ func TestTheReviewerIsOfferedOnlyItsSubmission(t *testing.T) {
 	r, prov, _ := fixture(t, &scriptedProvider{
 		execute: []llm.Completion{submitWork(t)},
 		review: []llm.Completion{
-			{ToolCalls: []llm.ToolCall{{ID: "a", Name: runner.ActivateTool,
+			{ToolCalls: []llm.ToolCall{{ID: "a", Name: toolname.Activate,
 				Arguments: map[string]any{"name": "slack_post"}}}},
 			submitCall(t, runner.SubmitReviewTool, `{"decision":"done","final_artifact":"a"}`),
 		},

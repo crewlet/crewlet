@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // FleetReadBudget is how long a history read waits for the other nodes.
@@ -136,18 +137,23 @@ type Trace struct {
 	Total int
 }
 
-// TurnDetail is one turn from every node that ran part of it.
+// TurnDetail is one turn from every data node holding part of it.
 type TurnDetail struct {
 	Rows   []store.EventRecord
 	Total  int
 	Traces []string
 
-	// Nodes is every node whose OWN store holds part of this turn, sorted —
-	// which is where the turn RAN, since an event is written only to the
-	// store of the node that published it. More than one for a turn resumed
-	// on another node after a restart, or one whose seat moved while a
-	// coding run was out. A stored row carries no node of its own, so this
-	// is the only place the answer can say it.
+	// Nodes is every node that PUBLISHED any of this turn's events, sorted —
+	// where the turn RAN. More than one for a turn resumed on another node
+	// after a restart, or one whose seat moved while a coding run was out.
+	//
+	// READ OFF THE ROWS ([store.EventRecord.Node]), never off which node
+	// answered: a node without the `data` role keeps no event log, and the
+	// data node that keeps its events in custody (ADR-0025) holds a turn it
+	// never ran, so the nodes holding a turn name the custody keeper where
+	// an operator needs the agent host. Asked of every answering node's
+	// whole share rather than of the rows returned, so a node whose rows
+	// fell in a capped read's middle is still named.
 	Nodes []string
 
 	// At is the instant the turn was asked at, which every node floored
@@ -189,8 +195,8 @@ type gathered[T any] struct {
 	fanned bool
 }
 
-// gather asks every live node one question and reads this node's own answer
-// beside it.
+// gather asks every live data node one question and reads this node's own
+// answer beside it.
 func gather[T any](ctx context.Context, f *Fleet, q Question, params any, ids []string,
 	local func(context.Context) (T, error),
 ) (gathered[T], error) {
@@ -522,7 +528,7 @@ func (f *Fleet) ByID(ctx context.Context, id string) (store.EventRecord, Coverag
 	if !found {
 		if missing := g.coverage.Missing(); len(missing) > 0 {
 			return store.EventRecord{}, g.coverage, fmt.Errorf("%w: event %s is held by "+
-				"no node that answered, and %v did not answer", store.ErrNotFound, id, missing)
+				"no node that answered, and %s did not answer", store.ErrNotFound, id, words.And(missing))
 		}
 		return store.EventRecord{}, g.coverage, fmt.Errorf("%w: event %s", store.ErrNotFound, id)
 	}
@@ -548,7 +554,8 @@ func (f *Fleet) Trace(ctx context.Context, id string) (Trace, Coverage, error) {
 	return Trace{Rows: rows, Total: total}, coverage, nil
 }
 
-// Turn answers every event of one turn, from every node that ran part of it.
+// Turn answers every event of one turn, from every data node holding part of
+// it — which, under custody, is not every node that ran part of it.
 func (f *Fleet) Turn(ctx context.Context, id string) (TurnDetail, Coverage, error) {
 	started := time.Now()
 	at := f.now()
@@ -564,20 +571,18 @@ func (f *Fleet) Turn(ctx context.Context, id string) (TurnDetail, Coverage, erro
 	}
 	rows, total, traces := MergeTurn(parts)
 	f.report(QuestionTurn, coverage, started)
-	return TurnDetail{Rows: rows, Total: total, Traces: traces, Nodes: turnNodes(f.Self, g), At: at},
+	return TurnDetail{Rows: rows, Total: total, Traces: traces, Nodes: turnNodes(g), At: at},
 		coverage, nil
 }
 
-// turnNodes is every node that answered with part of the turn.
-func turnNodes(self string, g gathered[turnPart]) []string {
-	var nodes []string
-	if g.mine.rows() > 0 || len(g.mine.Closing) > 0 {
-		nodes = append(nodes, self)
-	}
-	for _, p := range g.peers {
-		if p.part.rows() > 0 || len(p.part.Closing) > 0 {
-			nodes = append(nodes, p.node)
-		}
+// turnNodes is every node that published part of the turn, by every answering
+// node's own rows ([turnPart.Nodes]): the union, since a node resumed on
+// another host and a custody keeper's copy in flight both name origins
+// another answer names too.
+func turnNodes(g gathered[turnPart]) []string {
+	nodes := []string{}
+	for _, part := range g.parts() {
+		nodes = append(nodes, part.Nodes...)
 	}
 	slices.Sort(nodes)
 	return slices.Compact(nodes)
@@ -607,9 +612,9 @@ func (f *Fleet) Phases(ctx context.Context, agentID string, limit int, before *s
 // the seat named by its agent id, never a role name two seats may share.
 //
 // A SEAT MOVES — placement hands it to another node when its owner leaves or
-// the fleet rebalances — so its history is on every node that ever held it,
-// and the seat page read from one node showed only the turns since the last
-// move.
+// the fleet rebalances — so its history is on every data node that ran it or
+// kept its events in custody while it ran on a node without `data`, and the
+// seat page read from one node showed only the turns since the last move.
 func (f *Fleet) SeatPhases(ctx context.Context, agentID string, before *store.Cursor) (Listing, Coverage, error) {
 	started := time.Now()
 	if agentID == "" {
@@ -636,11 +641,11 @@ func (f *Fleet) SeatPhases(ctx context.Context, agentID string, before *store.Cu
 // on.
 //
 // TWO SCATTERS, because the node a turn is SELECTED on is not always the only
-// node that holds it. The first asks every node for its page — each node's
-// share of the turns it would list — and the second asks every node for its
-// share of exactly the turns any of them listed, so a turn resumed on another
-// node after a restart is folded from both halves rather than listed as two
-// half-turns or as whichever half was nearer.
+// node that holds it. The first asks every data node for its page — each
+// node's share of the turns it would list — and the second asks every data
+// node for its share of exactly the turns any of them listed, so a turn
+// resumed on another node after a restart is folded from both halves rather
+// than listed as two half-turns or as whichever half was nearer.
 //
 // A page by START is exact down to the newest point any full page stopped at,
 // for [MergeListing]'s reason, and the cursor resumes from there. A point is a
@@ -649,8 +654,10 @@ func (f *Fleet) SeatPhases(ctx context.Context, agentID string, before *store.Cu
 // that was a start alone put the second of two such turns, past a page's cut,
 // behind the cursor and on no page. A page by
 // TOKENS ranks each node's top candidates by their MERGED totals — which is
-// exact for every turn that ran on one node, and can miss a turn split across
-// nodes whose every half fell below every node's cut. That is stated rather
+// exact for every turn one data node holds whole, and can miss a turn split
+// across data nodes — resumed on another node, or run on one node without
+// `data` whose custody batches two keepers took — when every half fell below
+// every node's cut. That is stated rather
 // than hidden: the coverage is honest about nodes, and a ranking has no cursor
 // to be honest about.
 //
@@ -673,8 +680,8 @@ func (f *Fleet) SeatPhases(ctx context.Context, agentID string, before *store.Cu
 func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverage, error) {
 	started := time.Now()
 	if !q.Sort.Valid() {
-		return TurnPage{}, Coverage{}, fmt.Errorf("%w: sort %q is not one of %v",
-			store.ErrTurnSort, q.Sort, store.TurnSorts)
+		return TurnPage{}, Coverage{}, fmt.Errorf("%w: sort %q is not one of %s",
+			store.ErrTurnSort, q.Sort, words.Or(store.TurnSorts))
 	}
 	byTokens := q.Sort == store.TurnSortTokens
 	if byTokens && q.Before != nil {
@@ -862,9 +869,9 @@ func (l listings) at(id string, start time.Time) {
 // than this in its window; a smaller one pages a quiet company.
 const PhaseTokenPage = 4096
 
-// PhaseTokens answers the per-phase spend records of a window from every node,
-// newest first, cut to the query's limit — what the live projection's spend
-// rollup is seeded from.
+// PhaseTokens answers the per-phase spend records of a window from every data
+// node, newest first, cut to the query's limit — what the live projection's
+// spend rollup is seeded from.
 //
 // THE WINDOW IS PINNED to the caller's instant ([store.PhaseTokenQuery.At],
 // read here once only when it pinned none) before anybody is asked, for

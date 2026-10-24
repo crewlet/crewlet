@@ -804,7 +804,8 @@ home is read by nothing, and the CLI would run on its vendor defaults.
 Instead the CLI is used strictly as a text model, and the tool channel
 rides in the prompt:
 
-1. The phase's messages flatten into a labelled transcript.
+1. The phase's messages flatten into a labelled transcript, an assistant
+   message's own earlier tool calls rendered back in the contract's shape.
 2. The request's tool definitions (`llm.Request.Tools`) render as a JSON catalogue (name, description,
    JSON Schema).
 3. A response contract asks for one fenced JSON block:
@@ -818,6 +819,13 @@ rides in the prompt:
 
 4. The reply is parsed back into `Completion.content` +
    `Completion.ToolCalls`.
+
+The catalogue and the earlier calls are JSON **the model reads as text**,
+not through a decoder, so they are written with `<`, `>` and `&` as
+themselves — never the `\u003c` escapes an HTML-safe encoder writes.
+A model shown the call it made in a different spelling replies in that
+spelling, and a catalogue whose description says `f.<slug>` is the only
+place a text-mode model learns that argument's grammar.
 
 The parser is deliberately forgiving — it accepts the last fenced block,
 a bare object, `arguments` as a JSON string, one call object written
@@ -1229,7 +1237,10 @@ a container that comes up on an empty volume restores the bundle as it always
 did: to retire a bundle for good, remove `cli.auth.credential_bundle` or the
 `CREWLET_LLM_CLI_<KEY>_CREDENTIALS` secret it was exported to, which `logout`
 reminds you of when the entry has one — even when the CLI's own logout fails,
-since the login is removed and the logout recorded either way.
+since the login is removed and the logout recorded either way. The secret is the
+fleet's: `crewlet secrets unset <NAME> -api URL` through a node that is up
+removes it now, while the same command where the engine is stopped records a
+removal that engine carries onto the fleet at its next start.
 
 `crewlet llm logout` also discards a login a failed export left in the login
 home for the next command
@@ -1313,18 +1324,33 @@ encrypted secret store:
 crewlet llm export default -secret-store
 ```
 
-That engine restores it when it builds a company to run — at boot, and again
+An engine restores it when it builds a company to run — at boot, and again
 at every apply it publishes (a revision the apply refuses writes none) —
 whenever its own `credentials/` directory is empty and nobody has [logged the
-entry out](#1-broker-the-vendors-own-login-any-cli) since its last login, so a
-fresh container on the same store comes up already authenticated. `crewlet llm
-list`, `status`, `export` and `doctor` restore it first too, so they answer
-about the login the engine would run with; `login`, `logout` and `import` do
-not, since each replaces or removes that login. `crewlet validate` never does:
-checking a document writes nothing onto the host.
-It is **that node's** store and nothing else's — the rows do not travel, and a
-second host needs its own `crewlet llm login`, or the same bundle handed to it
-through `providers.llm[].auth.credential_bundle`. The blob is validated on the way back in — only the
+entry out](#1-broker-the-vendors-own-login-any-cli) there since its last login,
+so a fresh container comes up already authenticated. `crewlet llm list`,
+`status`, `export` and `doctor` restore it first too — but from the bundle
+**this node's own secret rows and the shell** resolve, never the fleet's store
+the engine reads first ([below](#how-doctor-judges-a-sign-in)), and each says
+which on stderr — so they answer about the login the engine would run with only
+where the bundle they resolve is the engine's too; a bundle stored through a
+running node is the fleet's, and they do not see it. `login`, `logout` and
+`import` do not restore, since each replaces or removes that login. `crewlet validate` never does: checking a
+document writes nothing onto the host. The secret store is the **fleet's**:
+written through the running node `-api` names, the bundle is on every node at
+once, and written without it, it goes into the rows of the store `-config`
+names, which that node's engine moves into the fleet's store at its next start.
+The export, like every `crewlet llm` command, reads the company's references
+out of that same store first, so it runs where no engine is holding it — on a
+node whose engine is up it is refused, and a stopped node reaches the fleet
+with `-api`. So one export reaches every node, and every node whose
+`credentials/` directory is empty and whose entry nobody logged out there
+restores the same login. Each copy then
+descends from one refresh token, exactly as
+[`-from-host`](#0-already-logged-in-on-this-machine-adopt-it)'s copy does, and
+a vendor that rotates refresh tokens can log out whichever node refreshes
+second — where the CLI mints a headless token (option 2), that is the better
+answer for a fleet. The blob is validated on the way back in — only the
 profile's own credential paths, files only, size-capped — because an
 archive is an execution surface if it is unpacked on trust.
 
@@ -2119,15 +2145,24 @@ the environment the CLI is actually given, after `auth.mode` has set and
 removed what it does — never off the configuration beside it. So a token
 that `auth.mode: api-key` removes is not a sign-in, and `crewlet llm list`'s
 `SIGN-IN` column is the first route the line names — both restore the entry's
-configured bundle first, as the engine does — so the two commands cannot
-disagree. The routes are credential files in the entry's directory,
+configured bundle first, as the engine does, from the same place (below) — so
+the two commands cannot disagree. The routes are credential files in the entry's directory,
 a headless token, an API key under `api-key`, a token or key forwarded under
 `inherit-env`, and a [credential-named](#5-a-provider-key-in-clienv-hermes-pi-opencode)
 variable in `cli.env` on a CLI that reads its key from its environment.
 
-`${VAR}` references, and the variables `inherit-env` forwards, are resolved
-in the process running `crewlet llm` — the secret store first, then *that
-shell's* environment — so run it with the engine's environment to get the
+`${VAR}` references, and the variables `inherit-env` forwards — the
+configured bundle among them — are resolved in the process running `crewlet
+llm`: **this node's own secret rows** first (the store its `-config` names,
+holding what was set there while the engine was stopped and not yet migrated),
+then *that shell's* environment. That is **not** the engine's chain, whose
+store is the fleet's: these commands open this node's own database, which a
+running engine holds, so they run where the engine is stopped and the fleet's
+store — inside the engine's process on the default topology — is out of reach.
+A token or a bundle stored through a running node is the fleet's, and these
+answers do not see it; `list`, `status`, `export` and `doctor` each say on
+stderr which of the two places they read. Run them with the engine's
+environment, and with the value in this node's rows or the shell, to get the
 engine's answer.
 
 When none of those authenticates the CLI, `doctor` reports "no sign-in" as a

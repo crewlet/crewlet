@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // PromptMode is how a CLI receives the prompt.
@@ -2102,9 +2104,13 @@ func (p *Profile) ReadsUsage() bool {
 // operator to put one there: its credential files, the database a
 // [CredentialStore] reads and writes, or both.
 func (p *Profile) LoginLocation() string {
-	var where []string
+	var where []words.Said
 	if len(p.CredentialPaths) > 0 {
-		where = append(where, "its credential files ("+strings.Join(p.CredentialPaths, ", ")+")")
+		paths := make([]words.Said, len(p.CredentialPaths))
+		for i, path := range p.CredentialPaths {
+			paths[i] = words.Said(path)
+		}
+		where = append(where, words.Said("its credential files ("+words.And(paths)+")"))
 	}
 	if p.CredentialStore != nil {
 		where = append(where, "the login it keeps in its own database")
@@ -2112,7 +2118,7 @@ func (p *Profile) LoginLocation() string {
 	if len(where) == 0 {
 		return "a login this profile names no place for"
 	}
-	return strings.Join(where, " and ")
+	return words.And(where)
 }
 
 // ReadsUsageReport reports whether this profile takes its counts from a report

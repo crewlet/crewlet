@@ -37,7 +37,9 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/provenance"
 	llm "github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Version is the format this build writes.
@@ -228,6 +230,13 @@ type State struct {
 	// embedded as its label and what it did.
 	Ask string `json:"ask,omitempty"`
 
+	// AskProvenance is who wrote Ask ([types.TurnCompleted.AskProvenance]),
+	// parked beside it for the same reason: the segment that records the
+	// ask reads no trigger, so the label the first segment read it under is
+	// one nothing else could rebuild. Nil where Ask is the company's or the
+	// seat's own words, or empty.
+	AskProvenance *provenance.Label `json:"ask_provenance,omitempty"`
+
 	// Senders is who ASKED — every distinct identifiable sender of the
 	// turn's interactions, in the order they first spoke — parked beside
 	// the ask for the reason the ask is: the resumed segment re-reads no
@@ -351,7 +360,7 @@ func (s State) Validate() error {
 				ErrNoPendingCall, dangling[0], s.PendingCallID)
 		}
 	default:
-		return fmt.Errorf("%w: %v", ErrDanglingCalls, dangling)
+		return fmt.Errorf("%w: %s", ErrDanglingCalls, words.And(dangling))
 	}
 	return nil
 }

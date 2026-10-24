@@ -12,6 +12,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -147,8 +149,8 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
 	if t.deps.Desk == nil || t.deps.Actor == nil {
-		return refused(tools.RefusalUnavailable, AnswerRunTool+" is unavailable: "+
-			"this surface was built without the run record."), nil
+		return refusedBy(tools.RefusalUnavailable, waitless(), AnswerRunTool+
+			" is unavailable: this surface was built without the run record."), nil
 	}
 	actor, err := t.deps.Actor(ctx, turn)
 	if err != nil {
@@ -158,12 +160,12 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	turnID := strings.TrimSpace(argString(args, "turn_id"))
 	if turnID == "" {
-		return failed("answer_run needs a `turn_id` — the parked run's turn id."), nil
+		return failed(AnswerRunTool + " needs a `turn_id` — the parked run's turn id."), nil
 	}
 	answer := strings.TrimSpace(argString(args, "answer"))
 	switch {
 	case answer == "":
-		return failed("answer_run needs an `answer` — what the coding agent should be told."), nil
+		return failed(AnswerRunTool + " needs an `answer` — what the coding agent should be told."), nil
 	case len(answer) > MaxRunAnswerBytes:
 		return failed(fmt.Sprintf("That answer is %d KiB and one answer may be at most %d KiB: "+
 			"it is spliced into the run as a single tool reply. Put the detail on a page "+
@@ -173,7 +175,7 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	run, found, err := t.deps.Desk.Run(ctx, turnID)
 	switch {
 	case err != nil:
-		return nodeFailure(ctx, AnswerRunTool, err, fmt.Sprintf("answer_run could not "+
+		return nodeFailure(ctx, AnswerRunTool, err, fmt.Sprintf(AnswerRunTool+" could not "+
 			"read run %s", clip(turnID)), "This does NOT mean it is gone, and "+
 			"nothing was answered."), nil
 	case !found:
@@ -220,10 +222,17 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"turn_id", run.TurnID, "seat", parties.handle, "error", err.Error())
 		outcome = statelog.OutcomeUnknown
 	}
-	return jsonResult(map[string]any{
+	// THE QUESTION IS THE RUN'S WORDS, written by the seat's coding agent in
+	// the seat's name, and whoever answers it is usually reading through an
+	// assistant: it goes back fenced as what that seat's run wrote
+	// (ADR-0040), not as a line of the engine's receipt.
+	read := newForeignRead(turn, actor.Handle)
+	read.fence(fieldPath{}.key("question"), provenance.SourceCodingRun,
+		[]provenance.Author{read.writer(parties.handle, iam.ActorAgent)}, false, run.Question)
+	return read.answer(ctx, AnswerRunTool, map[string]any{
 		"turn_id": run.TurnID, "agent_handle": parties.handle,
 		"question": run.Question, "outcome": string(outcome),
-	})
+	}, "")
 }
 
 // errUnreadableSeatID is the error a pending run's row carries when the seat
@@ -243,7 +252,7 @@ func (t *answerRun) parties(ctx context.Context, run sandbox.PendingRun) (runPar
 	if err != nil || id == uuid.Nil {
 		return runParties{}, refusalOf(faulted(ctx, AnswerRunTool,
 			fmt.Errorf("pending run %s names seat id %q: %w", run.TurnID, run.AgentID,
-				errUnreadableSeatID), fmt.Sprintf("answer_run cannot answer run %s: its "+
+				errUnreadableSeatID), fmt.Sprintf(AnswerRunTool+" cannot answer run %s: its "+
 				"record names no seat id this build can read, so the seat it would wake "+
 				"cannot be named — %s.", clip(run.TurnID), faultSaid)))
 	}

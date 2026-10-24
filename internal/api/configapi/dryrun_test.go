@@ -94,6 +94,15 @@ func (c *counted) forget() {
 	c.queue.publishes.Store(0)
 }
 
+// seed is [surface.seed] left out of the counts: what a case measures is what
+// its REQUEST writes, and a seed stores a revision and points the fleet at it.
+func (c *counted) seed(t *testing.T, doc string) string {
+	t.Helper()
+	id := c.surface.seed(t, doc)
+	c.forget()
+	return id
+}
+
 // writeCounts is what a surface has written: revisions stored, revisions this
 // node marked active, fleet activations, and events published.
 type writeCounts struct{ stored, markedActive, activated, published int32 }
@@ -150,6 +159,10 @@ func TestADryRunStoresActivatesAndPublishesNothing(t *testing.T) {
 				s.seed(t, companyDoc)
 			}
 			before := s.do(t, http.MethodGet, "/config/revisions", "", nil).Body.String()
+			pointer, _, err := s.plane.Target(t.Context())
+			if err != nil {
+				t.Fatalf("Target: %v", err)
+			}
 
 			res := s.do(t, tc.method, "/config?dry_run=true", tc.body, nil)
 			if res.Code != tc.want {
@@ -161,8 +174,9 @@ func TestADryRunStoresActivatesAndPublishesNothing(t *testing.T) {
 			if after := s.do(t, http.MethodGet, "/config/revisions", "", nil).Body.String(); after != before {
 				t.Errorf("a dry run changed the history:\nbefore %s\nafter  %s", before, after)
 			}
-			if _, found, err := s.plane.Target(t.Context()); err != nil || found {
-				t.Errorf("a dry run moved the fleet pointer (found=%v err=%v)", found, err)
+			if target, _, err := s.plane.Target(t.Context()); err != nil || target.Epoch != pointer.Epoch {
+				t.Errorf("a dry run moved the fleet pointer from epoch %d to %d (err %v)",
+					pointer.Epoch, target.Epoch, err)
 			}
 		})
 	}
@@ -386,8 +400,8 @@ func TestADryRunIsRefusedForWhatTheWriteIsRefusedFor(t *testing.T) {
 	s.seed(t, companyDoc)
 	stale := s.do(t, http.MethodPatch, "/config?dry_run=true", `{"mission": "x"}`,
 		map[string]string{"If-Match": `"a-revision-that-moved-on"`})
-	if stale.Code != http.StatusConflict || decode(t, stale)["error"] != "revision_advanced" {
-		t.Errorf("a stale patch check = %d %s, want 409 revision_advanced", stale.Code, stale.Body)
+	if stale.Code != http.StatusPreconditionFailed || decode(t, stale)["error"] != "revision_advanced" {
+		t.Errorf("a stale patch check = %d %s, want 412 revision_advanced", stale.Code, stale.Body)
 	}
 	created := s.do(t, http.MethodPut, "/config?dry_run=true", companyDoc,
 		map[string]string{"If-None-Match": "*"})

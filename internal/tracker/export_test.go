@@ -10,9 +10,9 @@ var (
 	MoveClaim  = moveClaim
 )
 
-// BulkClaim is the name of the one fleet-wide bulk admission, for the cases
-// that read who holds it.
-func BulkClaim() string { return bulkClaim(trackerStream) }
+// OpenAsksStatement is [openAsksStatement], for the gate that plans the
+// statement the ask inference runs rather than a copy of it.
+const OpenAsksStatement = openAsksStatement
 
 // Hold takes resource as one of w's walks does, for the cases that hold a
 // claim the way a live walk on this very node holds it, and hands back its
@@ -25,9 +25,26 @@ func (w *Writer) Hold(ctx context.Context, resource string) (func(), error) {
 	return func() { h.release(ctx) }, nil
 }
 
-// Admit takes the bulk admission one of w's bulk edits takes, for rows rows,
-// and hands back its release.
-func (w *Writer) Admit(ctx context.Context, rows int) (func(), error) {
-	release, _, err := w.admit(ctx, rows)
-	return release, err
+// FileTaskAt runs a create's task step on the number n, as a create whose mint
+// took n does — for the case where the task lands between the mint and the
+// task's own append, which no ordering of whole creates reproduces.
+func (w *Writer) FileTaskAt(ctx context.Context, opID string, task Task,
+	n uint64) (WriteResult, error) {
+
+	return w.fileTask(ctx, opID, task, nil, n, settledCreate{}, nil)
+}
+
+// The turn's moved-task refusal and the bound on reading again after one, for
+// the cases that drive [Writer.recordTurn] through a read of their own.
+var (
+	ErrTurnTaskMoved   = errTurnTaskMoved
+	RecordTurnAttempts = recordTurnAttempts
+)
+
+// RecordTurnReading is [Writer.RecordTurn]'s attempts with the task's project
+// read by read — the seam the window between the read and the decide needs.
+func (w *Writer) RecordTurnReading(ctx context.Context, opID string, turn TurnRecord,
+	read func(context.Context, string) (string, error)) (WriteResult, error) {
+
+	return w.recordTurn(ctx, opID, turn, read)
 }

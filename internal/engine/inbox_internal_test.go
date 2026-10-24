@@ -84,8 +84,11 @@ func TestTheTrackerApplierTheRegisterBuildsFeedsTheInbox(t *testing.T) {
 		applier.Committed(t.Context())
 	}
 
+	// THE PATCH'S OWN BROKER INSTANT rides the movement, which the
+	// socket's push is timed from.
 	want := []tracker.InboxMovement{
-		{Handle: "bo", UnreadDelta: 1, Subject: "t-1", Reason: tracker.ReasonAssignee},
+		{Handle: "bo", UnreadDelta: 1, Subject: "t-1", Reason: tracker.ReasonAssignee,
+			At: at.Add(2 * time.Second)},
 	}
 	if len(heard) != 1 || !slices.Equal(heard[0], want) {
 		t.Fatalf("the API heard %v, want exactly one batch %v", heard, want)

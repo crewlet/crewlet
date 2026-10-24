@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"slices"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Domain is one replicated state machine: one ordered stream, one
@@ -400,9 +402,9 @@ func (s StreamSpec) Instantiates(d Domain) error {
 	case s.Name != want.Name,
 		s.SubjectPrefix != want.SubjectPrefix,
 		!slices.Equal(s.Subjects, want.Subjects):
-		return fmt.Errorf("statelog: stream (%q, %q, %v) is not the %s domain's, "+
-			"which is (%q, %q, %v)", s.Name, s.SubjectPrefix, s.Subjects, d.Name(),
-			want.Name, want.SubjectPrefix, want.Subjects)
+		return fmt.Errorf("statelog: stream (%q, %q, %s) is not the %s domain's, "+
+			"which is (%q, %q, %s)", s.Name, s.SubjectPrefix, words.And(s.Subjects), d.Name(),
+			want.Name, want.SubjectPrefix, words.And(want.Subjects))
 	case s.Replay != want.Replay,
 		s.MaxPerSubject != want.MaxPerSubject,
 		s.MaxAge != want.MaxAge,

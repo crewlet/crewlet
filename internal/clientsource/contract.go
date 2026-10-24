@@ -82,6 +82,9 @@ var contract = []Entry{
 	// reasons.ts
 	{"PHRASES", ReadLiteral, "internal/api/queries.TestEveryWakeReasonReadsAsEnglishOnTheClient"},
 
+	// authority.ts
+	{"REFUSAL_SENTENCES", ReadLiteral, "internal/authz.TestTheDashboardSaysEveryReasonTheEngineDecidesBy"},
+
 	// spend.ts
 	{"GROUPS", ReadLiteral, "internal/api/queries.TestEveryCostDimensionTheScreenOffersIsOneTheEngineAccepts"},
 	{"BANDS", ReadLiteral, "internal/api/queries.TestTheSpendChartDrawsExactlyTheEnginesPhaseBands"},
@@ -117,6 +120,22 @@ var contract = []Entry{
 	{"BackupOwnerKind", ReadUnion, "internal/api/queries.TestTheBackupsScreenReadsWhatTheAnswerSends"},
 	{"BackupOutcome", ReadUnion, "internal/api/queries.TestTheBackupsScreenReadsWhatTheAnswerSends"},
 	{"BackupPolicy", ReadUnion, "internal/api/queries.TestTheBackupsScreenReadsWhatTheAnswerSends"},
+
+	// chat.ts
+	{"MAX_CHANNEL_NAME", ReadScalar, "internal/chat.TestTheDashboardsChatLimitsAreTheEngines"},
+	{"MAX_BODY_BYTES", ReadScalar, "internal/chat.TestTheDashboardsChatLimitsAreTheEngines"},
+	{"MAX_TOPIC_BYTES", ReadScalar, "internal/chat.TestTheDashboardsChatLimitsAreTheEngines"},
+	{"MAX_PURPOSE_BYTES", ReadScalar, "internal/chat.TestTheDashboardsChatLimitsAreTheEngines"},
+	{"MAX_DIRECT_PARTICIPANTS", ReadScalar, "internal/chat.TestTheDashboardsChatLimitsAreTheEngines"},
+	{"CHANNEL_NAME_PATTERN", ReadScalar, "internal/chat.TestTheDashboardsChannelNameGrammarIsTheEngines"},
+	{"TYPING_THROTTLE_MS", ReadScalar, "internal/presence.TestTheDashboardReassertsTypingInsideTheEnginesExpiry"},
+	{"PENDING_REASK_MS", ReadScalar, "internal/chat.TestTheDashboardAsksAPendingPostAgainAfterTheApplierHadItsWait"},
+	{"CHAT_SEARCH_PAGE", ReadScalar, "internal/search.TestTheDashboardAsksForTheChatSearchPageTheEngineServes"},
+
+	// presence.ts
+	{"PRESENCE_ROOMS", ReadLiteral, "internal/presence.TestTheDashboardSpeaksThePresenceVocabulary"},
+	{"PRESENCE_ACTIVITIES", ReadLiteral, "internal/presence.TestTheDashboardSpeaksThePresenceVocabulary"},
+	{"PRESENCE_FRAMES_PER_SECOND", ReadScalar, "internal/presence.TestTheDashboardSpeaksThePresenceVocabulary"},
 
 	// audit.ts
 	{"OPERATOR_SOURCE", ReadScalar, "internal/events/types.TestTheAuditLogReadsEveryRuntimeAuditType"},
@@ -202,6 +221,8 @@ var contract = []Entry{
 	{"Episode", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
 	{"EpisodeCompaction", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
 	{"SynthesizedSkill", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
+	{"LEARNED_SKILL_ORDERS", ReadLiteral,
+		"internal/learning.TestTheDashboardAsksForExactlyTheOrdersASeatsSkillsAreReadIn"},
 	{"CounterpartyProfile", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
 	{"CounterpartySubject", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
 	{"MemoryOverview", ReadInterface, "internal/api/queries.TestTheMemoryScreenReadsWhatThisAnswerSends"},
@@ -228,11 +249,19 @@ var contract = []Entry{
 	{"SeatInvitation", ReadInterface,
 		"internal/api/iamapi.TestTheSeatSurfacesReadWhatTheSeatListingSends"},
 	{"ResetView", ReadInterface, "internal/api/authapi.TestTheResetScreenReadsWhatTheResetViewSends"},
+	{"INVITE_SECRET_HEADER", ReadScalar,
+		"internal/api/authapi.TestTheDashboardSendsALinksSecretInTheHeaderItsViewReads"},
+	{"RESET_SECRET_HEADER", ReadScalar,
+		"internal/api/authapi.TestTheDashboardSendsALinksSecretInTheHeaderItsViewReads"},
+	{"READER_HEADER", ReadScalar, "internal/api/auth.TestTheDashboardNamesItsReaderInTheGuardsHeader"},
+	{"READER_PARAM", ReadScalar,
+		"internal/api/auth.TestTheDashboardsSocketNamesItsReaderInTheGuardsParameter"},
 
 	// services.ts
 	{"OrgServices", ReadInterface, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
 	{"TrackerBackend", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
 	{"KnowledgeBackend", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
+	{"ChatBackend", ReadUnion, "internal/api.TestTheDashboardKnowsExactlyTheServicesTheEngineSends"},
 
 	// limits.ts
 	{"LimitsAnswer", ReadInterface, "internal/api.TestTheDashboardReadsExactlyTheLimitsTheEngineSends"},
@@ -253,6 +282,7 @@ var contract = []Entry{
 	// wire.ts
 	{"PushKind", ReadUnion, "internal/api/stream.TestTheDashboardKnowsExactlyThePushKindsTheEngineSends"},
 	{"QUERY_TIMEOUT_MS", ReadScalar, "internal/api.TestTheDashboardWaitsPastAReadOfTheGroup"},
+	{"MAX_IN_FLIGHT_QUERIES", ReadScalar, "internal/api/stream.TestTheDashboardAsksNoMoreAtOnceThanTheSocketRuns"},
 	{"MAX_EVENTS", ReadScalar, "internal/api/livestate.TestTheDashboardKeepsTheFeedTheEngineKeeps"},
 	{"LIVE_CALL_DETAIL", ReadLiteral, "internal/api/livestate.TestTheDashboardMergesEveryVersionedField"},
 	{"COLLEAGUE_QUERY_MAX", ReadScalar, "internal/api/queries.TestTheDashboardSendsNoNameTheEngineWouldRefuse"},
@@ -298,6 +328,8 @@ var contract = []Entry{
 	{"PAGE_LABELS_MAX", ReadScalar, "internal/pages.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
 	{"PAGE_LABEL_MAX_BYTES", ReadScalar, "internal/pages.TestTheDashboardBoundsPageTextAtTheEnginesCaps"},
 	{"PAGE_CHANGES", ReadLiteral, "internal/pages.TestEveryPageChangeTheEngineWritesReadsAsASentence"},
+	{"PAGE_LIST_ORDERS", ReadLiteral,
+		"internal/pages.TestTheDashboardAsksForExactlyTheOrdersAListingIsReadIn"},
 
 	// artifacts.ts
 	{"ARTIFACT_KINDS", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},
@@ -330,7 +362,6 @@ var contract = []Entry{
 	{"SHAREABLE_ROLES", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},
 	{"AUDIENCE_KINDS", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},
 	{"ORIGIN_MODES", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},
-	{"PRESENCE_ACTIVITIES", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},
 	{"ARTIFACT_LIST_SCOPES", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},
 	{"ARTIFACT_LIST_SORTS", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},
 	{"ARTIFACT_HISTORY_OPS", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardSpeaksTheArtifactsVocabulary"},
@@ -338,7 +369,6 @@ var contract = []Entry{
 	{"ARTIFACT_DESCRIPTION_MAX_BYTES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"ARTIFACT_ICON_MAX_BYTES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"ARTIFACT_LABEL_MAX_BYTES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
-	{"PRESENCE_FRAMES_PER_SECOND", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"ARTIFACT_CHECK_MAX_FILES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"ARTIFACT_CHECK_MAX_BYTES", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"DOC_MAX_TABS", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},

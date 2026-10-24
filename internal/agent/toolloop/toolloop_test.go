@@ -661,7 +661,7 @@ func TestTheFinishingCorrectiveNamesEveryTerminator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !strings.Contains(res.Messages[len(res.Messages)-3].Content, "one of `approve`, `reject`") {
+	if !strings.Contains(res.Messages[len(res.Messages)-3].Content, "one of `approve` or `reject`") {
 		t.Errorf("corrective = %q, want both terminators named as a choice",
 			res.Messages[len(res.Messages)-3].Content)
 	}

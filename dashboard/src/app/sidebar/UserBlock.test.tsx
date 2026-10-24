@@ -79,6 +79,7 @@ const nobody: ViewerState = {
   admin: false,
   tracker: false,
   knowledge: false,
+  chat: false,
   handle: "",
   owner: "",
   name: "",
@@ -91,6 +92,7 @@ const nobody: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  chatVendors: [],
 };
 const ada: ViewerState = {
   ...nobody,
@@ -205,7 +207,11 @@ describe("who the block says this is", () => {
     engine({ "GET /auth/session": { status: 200, body: { ...PERSON, name: "Ada Lovelace" } } });
     render(block(ada, "Ada Lovelace"));
     const who = await screen.findByRole("button", { name: /Ada Lovelace/ });
-    expect(who.querySelector(".crewlet-account-row__detail")?.textContent).toBe("ada.lovelace");
+    // THE LOGIN IS DRAWN ONCE THE SESSION HAS ANSWERED, a commit after the
+    // row: waited for, not read at once.
+    await waitFor(() =>
+      expect(who.querySelector(".crewlet-account-row__detail")?.textContent).toBe("ada.lovelace"),
+    );
     expect(who.textContent).not.toContain("human seat");
   });
 

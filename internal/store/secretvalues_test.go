@@ -420,3 +420,66 @@ func TestAWriteWithAWordNoPathStampsIsRefused(t *testing.T) {
 	// AND THE PATHS' OWN WORDS PASS, or the guard is just an outage.
 	mustSet(t, s, "GITLAB_TOKEN", "glpat-not-a-real-token")
 }
+
+// A NAME IS EITHER WRITTEN OR REMOVED HERE, NEVER BOTH, and the last act wins.
+//
+// A removal on a stopped node is a dated record the next start carries onto
+// the fleet, so this node's own value of the name — written before it — must
+// go with it, or the start would carry the value and the removal both. And a
+// value written after a removal deletes the removal, or the start would remove
+// the fleet's copy of a name the operator set again. Each removal keeps who
+// made it, through which path and when, which is what the start compares.
+//
+// Mutations, each red: Remove leaving the value row, or Set leaving the
+// removal row.
+func TestARemovalAndALaterWriteAreTheLastActOnAName(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, _, _ := secretStore(t, ring(t, "k1"))
+	mustSet(t, s, "GL", "glpat-x")
+
+	held, err := s.Remove(ctx, "GL", byOperator, secrets.SourceCLI, secretClock.Add(time.Hour))
+	if err != nil || !held {
+		t.Fatalf("Remove = (%v, %v), want this node's value reported as removed", held, err)
+	}
+	if _, err := s.Get(ctx, "GL"); !errors.Is(err, secrets.ErrNotFound) {
+		t.Fatalf("after the removal GL answers %v, want no value here", err)
+	}
+	removals, err := s.Removals(ctx)
+	if err != nil || len(removals) != 1 {
+		t.Fatalf("removals = %+v (%v), want the one", removals, err)
+	}
+	want := secrets.Removal{Name: "GL", RemovedAt: secretClock.Add(time.Hour),
+		RemovedBy: byOperator.Name, RemovedByKind: byOperator.Kind,
+		OperatorID: byOperator.OperatorID, Source: secrets.SourceCLI}
+	if got := removals[0]; got.Name != want.Name || !got.RemovedAt.Equal(want.RemovedAt) ||
+		got.RemovedBy != want.RemovedBy || got.RemovedByKind != want.RemovedByKind ||
+		got.OperatorID != want.OperatorID || got.Source != want.Source {
+		t.Fatalf("the removal = %+v, want %+v", got, want)
+	}
+	// A REMOVAL OF A NAME THIS NODE NEVER HELD is still recorded: the fleet
+	// may hold it.
+	held, err = s.Remove(ctx, "NEVER_SET", byOperator, secrets.SourceCLI, secretClock)
+	if err != nil || held {
+		t.Fatalf("Remove of a name never held = (%v, %v), want it recorded and none "+
+			"reported held", held, err)
+	}
+
+	if err := s.Set(ctx, "GL", "glpat-y", byOperator, secrets.SourceCLI,
+		secretClock.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	removals, err = s.Removals(ctx)
+	if err != nil || len(removals) != 1 || removals[0].Name != "NEVER_SET" {
+		t.Fatalf("removals after GL was set again = %+v (%v), want GL's gone", removals, err)
+	}
+	if err := s.ForgetRemoval(ctx, "NEVER_SET"); err != nil {
+		t.Fatal(err)
+	}
+	if removals, err = s.Removals(ctx); err != nil || len(removals) != 0 {
+		t.Fatalf("removals after the forget = %+v (%v), want none", removals, err)
+	}
+	if _, err := s.Remove(ctx, "not a name", byOperator, secrets.SourceCLI, secretClock); err == nil {
+		t.Fatal("a removal of a name no reference can name was accepted")
+	}
+}

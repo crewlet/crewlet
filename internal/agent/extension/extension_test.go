@@ -219,7 +219,7 @@ func TestTheFinishHintMatchesHowThePhaseEnds(t *testing.T) {
 
 func TestTheNudgeCarriesTheGrantAndTheReason(t *testing.T) {
 	t.Parallel()
-	got := extension.Nudge(phase.Execute, 3, "making steady progress")
+	got := extension.Nudge("", phase.Execute, 3, "making steady progress")
 	for _, want := range []string{"3 additional tool-call rounds", "making steady progress", "submit_work"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the nudge is missing %q:\n%s", want, got)
@@ -227,12 +227,12 @@ func TestTheNudgeCarriesTheGrantAndTheReason(t *testing.T) {
 	}
 	// One round is one round. "1 rounds" in a prompt reads as a template
 	// the engine did not finish.
-	if one := extension.Nudge(phase.Execute, 1, ""); !strings.Contains(one, "1 additional tool-call round ") &&
+	if one := extension.Nudge("", phase.Execute, 1, ""); !strings.Contains(one, "1 additional tool-call round ") &&
 		!strings.Contains(one, "1 additional tool-call round\n") {
 		t.Errorf("a single round was pluralised:\n%s", one)
 	}
 	// A judge that gave no reason still produces a readable line.
-	if none := extension.Nudge(phase.Review, 2, ""); !strings.Contains(none, "(none)") {
+	if none := extension.Nudge("", phase.Review, 2, ""); !strings.Contains(none, "(none)") {
 		t.Errorf("an absent reason left a dangling label:\n%s", none)
 	}
 }

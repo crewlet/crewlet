@@ -54,29 +54,6 @@ const FixtureMeanPairCos = 0.50
 // distribution.
 const FixtureWidth = 3072
 
-// fixtureRank is how many directions carry the corpus's structure.
-//
-// # Why the corpus is low-rank plus noise
-//
-// Real embedding spectra are heavy-tailed — most of the variance lives in a
-// few dozen directions — and that anisotropy is exactly what a sign code
-// exploits. Generating it as a handful of shared directions with power-law
-// weights reproduces the property the gate is sensitive to, and does it in a
-// form where a document's exact similarity is a dot product over THIRTY-TWO
-// coefficients rather than over three thousand: the ground-truth scan the
-// gate needs a hundred times becomes affordable, and the corpus fits in
-// memory beside the race detector.
-//
-// Thirty-two rather than more because the gate's cost is linear in it and the
-// recall it produces is already inside the band real corpora occupy; more
-// directions make the corpus more isotropic, which is the direction that
-// makes a sign code WORSE and would understate the floor further.
-var (
-	spectrumRank    = fixtureRank
-	spectrumAlpha   = fixtureAlpha
-	spectrumSupport = fixtureSupport
-)
-
 // The spectrum, and it is CHOSEN to put the fixture in the regime the recall
 // floors describe rather than in the easiest one the generator can reach.
 //
@@ -86,8 +63,31 @@ var (
 // These values were swept against measured recall at twenty thousand rows:
 // they land the curve where the floors were declared against, so the gate has
 // something to bind on and a regression has somewhere to show.
+//
+// CONSTANTS, and never variables a test may set: every fixture constructor
+// reads them, those constructors run in parallel tests across the package,
+// and a setter writing package state under them would race every one.
 const (
-	fixtureRank  = 32
+	// fixtureRank is how many directions carry the corpus's structure.
+	//
+	// Real embedding spectra are heavy-tailed — most of the variance lives
+	// in a few dozen directions — and that anisotropy is exactly what a sign
+	// code exploits. Generating it as a handful of shared directions with
+	// power-law weights reproduces the property the gate is sensitive to,
+	// and does it in a form where a document's exact similarity is a dot
+	// product over THIRTY-TWO coefficients rather than over three thousand:
+	// the ground-truth scan the gate needs a hundred times becomes
+	// affordable, and the corpus fits in memory beside the race detector.
+	//
+	// Thirty-two rather than more because the gate's cost is linear in it
+	// and the recall it produces is already inside the band real corpora
+	// occupy; more directions make the corpus more isotropic, which is the
+	// direction that makes a sign code WORSE and would understate the floor
+	// further.
+	fixtureRank = 32
+
+	// fixtureAlpha is the power law the directions' weights decay by:
+	// direction k weighs 1/(k+1)^fixtureAlpha.
 	fixtureAlpha = 0.4
 
 	// fixtureSupport is how many coordinates each direction touches.
@@ -293,30 +293,30 @@ type basis struct {
 func newBasis() *basis {
 	rng := rand.New(rand.NewPCG(fixtureSeed, 0xBA515))
 	b := &basis{
-		weights: make([]float32, spectrumRank),
-		support: make([][]int32, spectrumRank),
-		values:  make([][]float32, spectrumRank),
+		weights: make([]float32, fixtureRank),
+		support: make([][]int32, fixtureRank),
+		values:  make([][]float32, fixtureRank),
 	}
-	for k := range spectrumRank {
+	for k := range fixtureRank {
 		// A POWER LAW rather than an exponential: measured embedding
 		// spectra decay polynomially, and an exponential one would make
 		// the corpus effectively rank-three and the gate trivially easy.
-		b.weights[k] = float32(1 / math.Pow(float64(k+1), spectrumAlpha))
-		support := make([]int32, spectrumSupport)
-		values := make([]float32, spectrumSupport)
+		b.weights[k] = float32(1 / math.Pow(float64(k+1), fixtureAlpha))
+		support := make([]int32, fixtureSupport)
+		values := make([]float32, fixtureSupport)
 		for i := range support {
 			support[i] = int32(rng.IntN(FixtureWidth))
 			values[i] = float32(rng.NormFloat64())
 		}
-		scale := float32(math.Sqrt(float64(spectrumSupport)))
+		scale := float32(math.Sqrt(float64(fixtureSupport)))
 		for i := range values {
 			values[i] /= scale
 		}
 		b.support[k], b.values[k] = support, values
 	}
-	b.meanSupport = make([]int32, spectrumSupport)
-	b.meanValues = make([]float32, spectrumSupport)
-	scale := float32(math.Sqrt(float64(spectrumSupport)))
+	b.meanSupport = make([]int32, fixtureSupport)
+	b.meanValues = make([]float32, fixtureSupport)
+	scale := float32(math.Sqrt(float64(fixtureSupport)))
 	for i := range b.meanSupport {
 		b.meanSupport[i] = int32(rng.IntN(FixtureWidth))
 		b.meanValues[i] = float32(rng.NormFloat64()) / scale
@@ -643,13 +643,4 @@ func (f *Fixture) MeanPairwiseCosine(pairs int, seed uint64) float64 {
 		}
 	}
 	return total / float64(pairs)
-}
-
-// SetSpectrumForTest is how the fixture's own parameters were chosen.
-//
-// It exists so the spectrum could be swept against measured recall rather
-// than guessed, and it is exported for that one purpose: the shipped values
-// are the constants above, and nothing in the engine calls this.
-func SetSpectrumForTest(rank int, alpha float64, support int) {
-	spectrumRank, spectrumAlpha, spectrumSupport = rank, alpha, support
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/credential"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // MaxBodyBytes bounds one directory write.
@@ -268,7 +269,7 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 	person, err := iamdomain.CreatedPersonID(seed)
 	if err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": iamdomain.Sentence(err)})
 		return
 	}
 	// PUBLISHED UNDER A STEP OF THE KEY BOUND TO THIS REQUEST, for
@@ -304,6 +305,12 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 		OpID: published, Reason: reason,
 	})
 	switch {
+	case errors.As(err, new(*iamdomain.NotReadBack)):
+		// A CREATE THAT LANDED and whose first password link this node
+		// cannot read back yet: the person exists, so the answer names
+		// them beside the op id the same request is sent again under.
+		s.answerWrite(w, r, opID, created.Result, err, map[string]any{"id": person})
+		return
 	case err != nil:
 		// THE ID ONLY BESIDE A CREATE THAT MAY HAVE LANDED: a refused one
 		// created nobody, and naming the person it would have made reads
@@ -353,13 +360,8 @@ func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 // unknownStage is the refusal of a stage this build does not know, naming the
 // ones it does, read off [iam.Stages] so a stage added there is named here.
 func unknownStage(stage iam.Stage) string {
-	names := make([]string, len(iam.Stages))
-	for i, s := range iam.Stages {
-		names[i] = string(s)
-	}
-	last := len(names) - 1
 	return strconv.Quote(string(stage)) + " isn't a valid status. Use " +
-		strings.Join(names[:last], ", ") + " or " + names[last] + "."
+		words.Or(iam.Stages) + "."
 }
 
 // refuseSeatless answers a person's gesture that names no seat — `400

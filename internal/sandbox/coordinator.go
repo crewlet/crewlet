@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // ErrResumeUnavailable reports that this node cannot resume the run a
@@ -1168,8 +1169,8 @@ func (c *Coordinator) charge(ctx context.Context, run PendingRun, result Result)
 // no phase record at all: the executor that launched it publishes nothing when
 // it suspends, and its resumed record is the EXECUTOR's — its own rounds and
 // its own tokens. So every token a coding run spent was missing from the spend
-// rollup and from each node's daily usage (the budget counter was charged, and
-// nothing a person reads agreed with it), and the activity transcript the
+// rollup and from each data node's daily usage (the budget counter was charged,
+// and nothing a person reads agreed with it), and the activity transcript the
 // runner reconstructs — the only account of what an agent with no telemetry
 // did — was collected, redacted and thrown away. It is published here, where
 // the result is in hand, for every collected run: one that finished and one
@@ -3716,7 +3717,7 @@ func answerText(run PendingRun, answer, by string) string {
 	}
 	if run.SandboxID != "" {
 		lines = append(lines, "\nThe sandbox is still up with that work-in-progress. Continue the "+
-			"task: call run_sandbox again with a brief that incorporates this "+
+			"task: call "+toolname.RunSandbox+" again with a brief that incorporates this "+
 			"answer so the coding agent finishes the work (it reuses the same "+
 			"checkout). When it's done, report the outcome to the requester on "+
 			"the channel this came from.")
@@ -3728,7 +3729,7 @@ func answerText(run PendingRun, answer, by string) string {
 		lines = append(lines, "\nThat sandbox has since been reclaimed, so the next run starts on "+
 			"a FRESH machine — the earlier working tree and the coding agent's "+
 			"memory of it are gone, but the pushed branch has the work. "+
-			"Continue the task: call run_sandbox again with a brief that tells "+
+			"Continue the task: call "+toolname.RunSandbox+" again with a brief that tells "+
 			"it to "+branch+", re-read the code there, and finish the work with "+
 			"this answer incorporated. When it's done, report the outcome to "+
 			"the requester on the channel this came from.")

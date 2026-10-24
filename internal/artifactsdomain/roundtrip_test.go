@@ -219,6 +219,69 @@ func TestRetentionKeepsAHundredUnlabelledVersionsAndEveryLabelledOne(t *testing.
 	}
 }
 
+// A LABEL ANOTHER VERSION HOLDS AND A FULL SET OF LABELS ARE TWO REFUSALS,
+// because they send a caller to different places: a held label is a collision,
+// which another label avoids at once, and every kept label in use is the
+// artifact's own state, which no other label changes until one is removed. One
+// sentinel answered both, so a caller told to choose another label for a full
+// set chose one and was refused again.
+//
+// Mutation: refuse the full set with ErrLabelTaken in Publish or in Patch, or a
+// held label with ErrLabelsFull, and a case goes red.
+func TestAHeldLabelAndAFullSetOfLabelsAreTwoRefusals(t *testing.T) {
+	t.Parallel()
+	n := newHarness(t)
+	jane := person("jane", artifacts.RoleOwner)
+	id := n.create(jane, "Labelled", upload(t, "index.html", "<p>1</p>")).Artifact
+	number := 1
+	publish := func(label string) error {
+		in := page(upload(t, "index.html", fmt.Sprintf("<p>%d</p>", number+1)))
+		in.Artifact, in.Base, in.Label = id, number, label
+		_, err := n.writer.Publish(t.Context(), jane, in)
+		if err == nil {
+			number++
+		}
+		return err
+	}
+	if err := publish("first"); err != nil {
+		t.Fatalf("publish the first label: %v", err)
+	}
+	if err := publish("first"); !errors.Is(err, artifactsdomain.ErrLabelTaken) ||
+		errors.Is(err, artifactsdomain.ErrLabelsFull) {
+		t.Fatalf("a label version 2 holds was refused %v, want ErrLabelTaken alone", err)
+	}
+	for kept := 1; kept < artifacts.MaxLabels; kept++ {
+		if err := publish(fmt.Sprintf("label %d", kept)); err != nil {
+			t.Fatalf("publish label %d: %v", kept, err)
+		}
+	}
+	err := publish("one too many")
+	if !errors.Is(err, artifactsdomain.ErrLabelsFull) || errors.Is(err, artifactsdomain.ErrLabelTaken) {
+		t.Fatalf("a label past the %d kept was refused %v, want ErrLabelsFull alone",
+			artifacts.MaxLabels, err)
+	}
+	// THE PATCH meets the same two refusals: version 1 carries no label.
+	_, err = n.writer.Patch(t.Context(), jane, id, artifactsdomain.Patch{
+		Label: &artifactsdomain.VersionLabel{Number: 1, Label: "one too many"}})
+	if !errors.Is(err, artifactsdomain.ErrLabelsFull) || errors.Is(err, artifactsdomain.ErrLabelTaken) {
+		t.Fatalf("a patch labelling a version past the cap was refused %v, want ErrLabelsFull", err)
+	}
+	_, err = n.writer.Patch(t.Context(), jane, id, artifactsdomain.Patch{
+		Label: &artifactsdomain.VersionLabel{Number: 1, Label: "first"}})
+	if !errors.Is(err, artifactsdomain.ErrLabelTaken) || errors.Is(err, artifactsdomain.ErrLabelsFull) {
+		t.Fatalf("a patch taking version 2's label was refused %v, want ErrLabelTaken", err)
+	}
+	// AND THE SAME REQUEST LANDS ONCE A LABEL IS REMOVED, which is what makes
+	// the full set the artifact's state rather than the request's.
+	if _, err := n.writer.Patch(t.Context(), jane, id, artifactsdomain.Patch{
+		Label: &artifactsdomain.VersionLabel{Number: 2, Label: ""}}); err != nil {
+		t.Fatalf("remove a label: %v", err)
+	}
+	if err := publish("one too many"); err != nil {
+		t.Fatalf("the refused label, once a label was removed: %v", err)
+	}
+}
+
 // versionNumbers is every version an artifact keeps, oldest first.
 func (n *node) versionNumbers(id artifacts.ID) []int {
 	n.t.Helper()

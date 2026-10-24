@@ -324,7 +324,13 @@ func TestTheRoutersOwnRefusalIsTheEnvelope(t *testing.T) {
 				t.Fatalf("answered %d, want %d", rec.Code, c.status)
 			}
 			body := envelope(t, rec)
-			if body["error"] != string(c.code) || body["message"] != c.code.Message() {
+			// THE SENTENCE FOR THIS REFUSAL, which for `unauthorized` is
+			// the one its reason chooses — built the way the envelope
+			// builds it rather than typed here.
+			_, _, detail := authz.RefusalFields(c.d)
+			sentence := httpjson.Envelope(c.code, detail)["message"]
+			if body["error"] != string(c.code) || body["message"] != sentence ||
+				sentence == "" {
 				t.Errorf("answered %v, want %s with its sentence", body, c.code)
 			}
 			if c.status == http.StatusServiceUnavailable {
@@ -443,7 +449,10 @@ func policyFor(pattern string) authz.Policy {
 
 // grantedOnly is an active person carrying exactly one permission.
 func grantedOnly(g iam.Grant) iam.Principal {
+	// BOUND TO A SEAT, as every person is (ADR-0032), so a verb made as one
+	// is asked of its permission rather than refused before it.
 	p := person("jane.doe", g)
+	p.Seat = "jane"
 	return p
 }
 

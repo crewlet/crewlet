@@ -30,6 +30,7 @@ import { seatConditionsOf } from "~/lib/decisions.ts";
 import { useLeadScope } from "~/lib/leadScope.ts";
 import { conditionKey, conditionsToDecide } from "~/lib/attention.ts";
 import { DEFAULT_RANGE, crewOf, flowPoints, rangeOf, statusSentence, waitingOf } from "./model.ts";
+import { gapsOf } from "./board/kit.tsx";
 
 /** How often the decisions are asked again: a person answers one and another
  *  lands, and the push carries neither. */
@@ -100,7 +101,9 @@ export function useHomeData() {
   // WHAT WAITS ON THE READER: the engine's count of their asks and parked
   // runs, and the stopped seats they can act on. Unknown (nobody signed in,
   // or not answered yet) is null, never zero.
-  const waiting = viewer.owner ? waitingOf(decisions.data, seats.mine) : null;
+  const waiting = viewer.owner
+    ? waitingOf(decisions.data, seats.mine, gapsOf([decisions.data]).length > 0)
+    : null;
   // THE OTHER CONDITIONS: what the engine raised that a person decides and
   // that is not one of this reader's own decisions: a seat stopped for
   // another reason, a budget near its ceiling. Exactly the Inbox's condition

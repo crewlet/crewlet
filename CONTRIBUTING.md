@@ -31,7 +31,7 @@ make build        # or: go build ./...
 
 `make help` lists every target, and that is the whole setup — nothing to
 install beyond the prerequisites above. The engine embeds its own event
-stream (a NATS JetStream server) and its store is a local file it creates, so
+stream (a NATS JetStream server) and its store is two local files it creates, so
 `crewlet run` in an empty directory is a working company — there is no broker
 to operate and nothing to point a DSN at.
 
@@ -90,6 +90,17 @@ is the form to copy into a hook or a script. The inline
 fails: the shell discards a command substitution's exit status, and gofmt
 handed no paths formats its standard input, finds nothing wrong and exits 0.
 Run from anywhere but the module root, the listing fails every time.
+
+**Two of those gates judge formatting, at two standards.** `gofmt -l` over
+`go run ./internal/sourcetree/gofiles` is one of them; `golangci-lint run` is
+the other, because `.golangci.yml` enables the `gofmt` *formatter* too and its
+`simplify` pass is on — so a redundant composite-literal type passes the first
+and fails the second. `make fmt` repairs both (it runs `gofmt -s -w` over that
+same list); `golangci-lint fmt` repairs those plus the `goimports` grouping the
+lint job also enforces — hand it the captured list too, since on its own it
+steps over a dot-directory by name but walks into a nested checkout anywhere
+else. Reach for one of those two rather than plain `gofmt -w`, which cannot
+fix what the linter reports.
 
 Run the dashboard's suites through `npm test` (or `npm test -- <file>` for
 one file, `npm run test:watch` for the watch loop), never a bare
@@ -1085,9 +1096,9 @@ an older build:
   a state-log record this build cannot read is deferred and kept, never
   dropped — except a gate record above the version it reads, or one whose
   envelope it cannot decode at all, which stops the applier rather than
-  apply it wrong — which is why every node names the version it reads on
-  its position heartbeat, a writer of a gate above the base version waits on
-  that census before publishing one, and an envelope never refuses what a
+  apply it wrong — which is why every data node names the version it reads
+  on its position heartbeat, a writer of a gate above the base version waits
+  on that census before publishing one, and an envelope never refuses what a
   newer build may add to it; and a bump of the seat-host lease protocol makes
   the newer node refuse to claim beside a live lower lease. That contract
   runs FORWARD, to the builds after this one, and never obliges this tree to

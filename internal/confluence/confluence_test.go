@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 const (
@@ -255,6 +257,13 @@ func TestASeatWithItsOwnCredentialSearchesUnscoped(t *testing.T) {
 	}
 	if hits[0].Snippet != "Run the pipeline." {
 		t.Errorf("snippet = %q", hits[0].Snippet)
+	}
+	// A SITE PAGE NAMES NOBODY AND IS EXTERNAL (ADR-0040): a search result
+	// never says one person wrote every word, and the site is not the
+	// company's alone.
+	if got, want := hits[0].Provenance, (provenance.Label{Source: provenance.SourcePageBody,
+		Trust: provenance.TrustExternal}); !reflect.DeepEqual(got, want) {
+		t.Errorf("the hit is labelled %+v, want %+v", got, want)
 	}
 	if q := inst.lastQuery(); !strings.Contains(q, "type+%3D+page") {
 		t.Errorf("query = %q", q)

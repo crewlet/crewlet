@@ -90,6 +90,9 @@ type LeaseView struct {
 	// of invalidations between two listings is one listing.
 	kick chan struct{}
 
+	// listed is closed by the first listing that answers ([LeaseView.Listed]).
+	listed chan struct{}
+
 	mu       sync.Mutex
 	leases   []Lease
 	loaded   bool
@@ -117,7 +120,7 @@ func NewLeaseView(lister Lister, class Class, opts ViewOptions) (*LeaseView, err
 	}
 	return &LeaseView{
 		lister: lister, class: class, every: opts.Every, trust: opts.Trust,
-		now: now, kick: make(chan struct{}, 1),
+		now: now, kick: make(chan struct{}, 1), listed: make(chan struct{}),
 	}, nil
 }
 
@@ -180,6 +183,9 @@ func (v *LeaseView) refresh(ctx context.Context) {
 		}
 		return
 	}
+	if !v.loaded {
+		close(v.listed)
+	}
 	v.leases, v.loaded, v.listedAt, v.lastErr = slices.Clone(leases), true, asked, nil
 }
 
@@ -221,6 +227,17 @@ func (v *LeaseView) ListedAt() time.Time {
 	defer v.mu.Unlock()
 	return v.listedAt
 }
+
+// Listed is closed once the view's first listing has answered — the moment
+// [LeaseView.ListedAt] stops reading zero — and never before, however many
+// listings failed first.
+//
+// FOR A GATE THAT WAITS ON THE FIRST LISTING, which no reading of the view
+// can learn without asking again: a node's seat claims are refused while the
+// view that routes its seats' calls has never listed the fleet, and the
+// claims are asked again when this closes rather than at the next sweep. Read
+// it, never poll ListedAt for it.
+func (v *LeaseView) Listed() <-chan struct{} { return v.listed }
 
 // Invalidate asks for a listing now, because a caller asked a node this view
 // named and got no answer. It does not wait, and it does not drop the answer

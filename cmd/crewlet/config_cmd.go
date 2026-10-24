@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -38,7 +39,7 @@ import (
 // revision a meaningful gesture — it mints a new epoch every node is
 // watching, which is how a rotated secret reaches a running fleet.
 
-const configUsage = `crewlet config — the company configuration in the store
+const configUsage = `crewlet config: the company configuration in the store
 
 Usage:
   crewlet config import FILE       Write a company document as a new active revision
@@ -55,6 +56,11 @@ Usage:
 Flags:
   -config PATH   Tier A config naming the store and its keyring (default %q)
   -dry-run       Report what a rekey would do without writing
+
+show, export, revisions, diff, activate and rekey read this node's own store,
+so "active" is this node's copy: the revision it boots on. import goes through
+the running node when there is one, and builds on the fleet's revision. What a
+running fleet runs is GET /config on any node.
 
 A keyring rotation needs BOTH halves: "crewlet config rekey" moves the company
 document and "crewlet secrets rekey" moves the secret store. Run both before
@@ -126,12 +132,12 @@ func runConfig(environ config.Source, args []string, stdout, stderr io.Writer) e
 		dryRun   bool
 	)
 	var (
-		apiURL  string
+		apiURL  = new(string)
 		summary string
 	)
 	switch sub {
 	case "import":
-		fs.StringVar(&apiURL, "api", "",
+		apiURL = nodeAPIFlag(fs,
 			"import through a running node's API; default is the "+
 				"api.host:port in -config when the engine holds the store")
 		fs.StringVar(&summary, "summary", "",
@@ -169,7 +175,7 @@ func runConfig(environ config.Source, args []string, stdout, stderr io.Writer) e
 		return importCompany(ctx, importTarget{
 			bootstrapPath: *bootstrapPath,
 			path:          subject,
-			apiURL:        apiURL,
+			apiURL:        *apiURL,
 			summary:       summary,
 			environ:       environ,
 		}, stdout)
@@ -315,7 +321,7 @@ func importConfig(ctx context.Context, cs *configStore, path string,
 	id, err := cs.configs.InsertActive(ctx, store.Revision{
 		ParentID: parent, Source: "file", CreatedBy: hostActor().Name,
 		CreatedByKind: hostActor().Kind, Summary: summary,
-		Payload: payload,
+		Payload: payload, ActivatedAt: claimedAt(active, found),
 	})
 	if err != nil {
 		return fmt.Errorf("import %s: %w", path, err)
@@ -345,7 +351,8 @@ func importConfig(ctx context.Context, cs *configStore, path string,
 // below are several rather than one: `PUT /config` stores and activates a
 // document, but it activates nothing that is already stored and re-seals
 // nothing.
-const offlinePublish = "This node will publish it to the fleet at its next start."
+const offlinePublish = "This node will publish it to the fleet at its next " +
+	"start, unless the fleet has activated something later by then."
 
 // importPublishNote is an offline import's: the route to a running fleet is
 // `PUT /config` on a node that is up, which this same command takes while a
@@ -381,23 +388,23 @@ func lockedStoreRemedy(sub string) string {
 	const stop = "stop `crewlet run` on this node and re-run."
 	switch sub {
 	case "show", "export":
-		return "Read it through the running node instead — GET /config " +
+		return "Read it through the running node instead (GET /config " +
 			"serves the active revision with its credentials masked, and " +
-			"GET /config/revisions/<id> any other — or " + stop
+			"GET /config/revisions/<id> any other), or " + stop
 	case "revisions":
-		return "Read them through the running node instead — GET " +
-			"/config/revisions — or " + stop
+		return "Read them through the running node instead (GET " +
+			"/config/revisions), or " + stop
 	case "diff":
-		return "Compare them through the running node instead — GET " +
-			"/config/revisions/<id>/diff?against=<id|active> — or " + stop
+		return "Compare them through the running node instead (GET " +
+			"/config/revisions/<id>/diff?against=<id|active>), or " + stop
 	case "activate":
-		return "Activate it through the running node instead — POST " +
+		return "Activate it through the running node instead (POST " +
 			"/config/revisions/<id>/revert stores that revision's document " +
-			"again and activates it fleet-wide — or " + stop
+			"again and activates it fleet-wide), or " + stop
 	case "rekey":
-		return "Re-seal through the running node instead — POST " +
+		return "Re-seal through the running node instead (POST " +
 			"/config/reload stores the active document again under that " +
-			"node's active key — or " + stop
+			"node's active key), or " + stop
 	default:
 		// Every subcommand that opens the store is named above; a new one
 		// still gets the stop, which is always true.
@@ -635,7 +642,11 @@ func activateRevision(ctx context.Context, cs *configStore, revisionID string, s
 	if err := refuseManagedActivation(ctx, cs, revisionID); err != nil {
 		return err
 	}
-	if _, err := cs.configs.Activate(ctx, revisionID, time.Now().UTC()); err != nil {
+	active, found, err := cs.configs.Active(ctx)
+	if err != nil {
+		return fmt.Errorf("read the active revision: %w", err)
+	}
+	if _, err := cs.configs.Activate(ctx, revisionID, claimedAt(active, found)); err != nil {
 		return err
 	}
 	// RE-ACTIVATING THE CURRENT REVISION IS NOT A NO-OP, and that is worth
@@ -645,6 +656,24 @@ func activateRevision(ctx context.Context, cs *configStore, revisionID string, s
 	fmt.Fprintf(stdout, "marked %s active on this node\n", revisionID)
 	fmt.Fprintln(stdout, activatePublishNote(revisionID))
 	return nil
+}
+
+// claimedAt is the instant an offline command marks a revision active at: now,
+// or just after the activation this node's copy holds (held, when found),
+// whichever is later — the forward rule the fleet's pointer applies to every
+// activation ([coord.ActivationAt]).
+//
+// The copy carries the instant of whichever node's clock made the activation
+// it holds. Dated by this machine's clock alone, an offline activation on a
+// clock behind that one was refused by the copy, which never moves back, and
+// an offline import or rekey read at the next start as older than the fleet's
+// pointer, so the boot dropped what the command had promised to publish.
+func claimedAt(held store.Revision, found bool) time.Time {
+	at := time.Now().UTC()
+	if found {
+		at = coord.ActivationAt(at, held.ActivatedAt)
+	}
+	return at
 }
 
 // revisionOrActive resolves an id, or the active revision for an empty one.

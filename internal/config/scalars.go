@@ -26,9 +26,12 @@ import (
 //   - a fractional number bound for an integer field is TRUNCATED by the
 //     decoder without a word — `api.port: 8080.9` ran as 8080, and
 //     `max_iterations: 3.7` as 3 — so it has to be refused before the
-//     decoder gets the chance to drop what the author wrote.
+//     decoder gets the chance to drop what the author wrote; and a number
+//     that is not FINITE (YAML's `.nan` and `.inf`) is read into a
+//     fractional field as exactly what it spells, past every bound a
+//     validator then checks it against (see [refuseNonFinite]).
 //
-// Both walk the node beside the type the decoder will read it into, with the
+// They walk the node beside the type the decoder will read it into, with the
 // decoder's own rules for which key lands in which field.
 
 // unmarshalerType is the interface of a type whose YAML reading is its own.
@@ -192,6 +195,45 @@ func refuseFractions(node *yaml.Node, t reflect.Type) problems {
 			"%s is not a whole number, and this setting counts whole units: the "+
 				"fraction would be dropped rather than read, running it as %.0f. "+
 				"Write the whole number you mean", n.Value, math.Trunc(f))})
+	})
+	return out
+}
+
+// refuseNonFinite is every number node holds that is not finite — YAML's
+// `.nan`, `.inf` and `-.inf`, in any of their spellings — where t takes a
+// fractional one, as faults on the nodes that carry them, in the coordinates of
+// node as [refuseFractions]' are.
+//
+// THE DECODER READS ONE FAITHFULLY, and nothing after it can be trusted to
+// notice. Every bound a validator holds a number to is a comparison, and NaN
+// fails every comparison it is put to, so `lease_ttl_seconds: .nan` passed
+// "must not be negative" and `notification_coalesce_window_seconds: .nan`
+// passed "0..60"; an infinity passes every lower bound. Each is then converted
+// to a duration, a conversion Go leaves undefined for both — on amd64 the
+// result is the most negative duration there is — so a node ran its leases,
+// its timeouts and its windows on a value nobody wrote. No setting in either
+// tier has a meaning for one, so it is refused here, once, for every field,
+// rather than by a check each validator would have to remember. A whole-number
+// field needs nothing of the kind: the decoder refuses a non-finite number
+// there itself.
+//
+// A Tier A reference is substituted before this runs ([ParseBootstrap]), so a
+// `${VAR}` resolving to `.nan` is refused too, at the line that names it.
+func refuseNonFinite(node *yaml.Node, t reflect.Type) problems {
+	var out problems
+	eachScalar(node, t, nil, func(n *yaml.Node, into reflect.Type, _ Path) {
+		if into == nil || (into.Kind() != reflect.Float32 && into.Kind() != reflect.Float64) ||
+			n.ShortTag() != "!!float" {
+			return
+		}
+		var f float64
+		if n.Decode(&f) != nil || !(math.IsInf(f, 0) || math.IsNaN(f)) {
+			return
+		}
+		out = append(out, &Fault{Kind: ErrShape, pos: positionOf(n, false), Detail: fmt.Sprintf(
+			"%s is not a finite number, and no setting has a meaning for one: it "+
+				"passes the bounds a value is checked against and has no duration "+
+				"to convert to. Write the number you mean", n.Value)})
 	})
 	return out
 }

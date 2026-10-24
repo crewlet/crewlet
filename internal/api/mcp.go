@@ -95,9 +95,9 @@ func BridgeOnly(bootstrap *config.Bootstrap, bridge *mcpbridge.Bridge) http.Hand
 // A nil server is a surface this API serves none of — a suite about something
 // else — and both routes are then ABSENT. Otherwise each is mounted ONCE and
 // every request reads the catalogue this node serves at that moment: a node
-// that has not met its company answers `503 no_active_revision`, and one whose
-// catalogue is empty answers as the route's absence would — an endpoint that
-// exists and lists no tools reads to an operator as broken.
+// that has not met its company answers `503 no_active_revision`, and every
+// other is served the catalogue it finds, which the seat controls keep from
+// ever being empty.
 func (a *App) mountOperator(mux httpjson.Router, server *operator.Server) {
 	if server == nil {
 		return
@@ -110,9 +110,10 @@ func (a *App) mountOperator(mux httpjson.Router, server *operator.Server) {
 	mux.Handle(operator.MCPPath, server.MCPHandler())
 	log.Info("operator_mcp_mounted", "path", operator.MCPPath,
 		"detail", "an operator's own AI assistant can read and write the "+
-			"company's tracker and knowledge base here, authenticated with "+
-			"an api.auth.tokens entry or a person's own credential; the tools "+
-			"it lists are the ones this node serves when it asks")
+			"company's tracker, knowledge base and chat here, authenticated "+
+			"with an api.auth.tokens entry or a person's own credential — "+
+			"chat only as a person, or a credential bound to a seat; the "+
+			"tools it lists are the ones this node serves when it asks")
 	// AND THE PERSON'S OWN TRANSPORT over the same catalogue: POST only, one
 	// tool per request, as the principal the request resolved to
 	// (ADR-0024). Guarded like every route the exemption list does not

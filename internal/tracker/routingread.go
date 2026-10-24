@@ -351,6 +351,13 @@ func routingScope() statelog.ScopeSet {
 	return statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised()
 }
 
+// routingRecordStatement is [readRoutingRecord]'s one statement, named for the
+// plan test.
+const routingRecordStatement = `
+		SELECT kind, subject_id, actor, actor_kind, notified, created_at
+		  FROM tracker_history
+		 WHERE id = ?`
+
 // readRoutingRecord fills in the change's own facts.
 //
 // A MISSING ROW IS NOT AN ERROR. A record id that names nothing is an ordinary
@@ -362,11 +369,8 @@ func readRoutingRecord(ctx context.Context, tx *sql.Tx, answer *RoutingAnswer) e
 	var kind, actor, actorKind string
 	var createdAt int64
 	var notified int
-	err := tx.QueryRowContext(ctx, `
-		SELECT kind, subject_id, actor, actor_kind, notified, created_at
-		  FROM tracker_history
-		 WHERE id = ?`, answer.RecordID).Scan(&kind, &answer.SubjectID,
-		&actor, &actorKind, &notified, &createdAt)
+	err := tx.QueryRowContext(ctx, routingRecordStatement, answer.RecordID).
+		Scan(&kind, &answer.SubjectID, &actor, &actorKind, &notified, &createdAt)
 	switch {
 	case err == sql.ErrNoRows:
 		return nil

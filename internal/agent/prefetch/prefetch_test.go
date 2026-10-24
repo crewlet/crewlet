@@ -296,7 +296,7 @@ func request(t *testing.T) prefetch.Request {
 	return prefetch.Request{
 		Seat: seat, AgentID: "agent-1", Org: o,
 		Task: triageScaffold + "\n\n**Message:** " + theAsk,
-		Ask:  theAsk,
+		Ask:  prefetch.PlainAsk(theAsk),
 		Aux:  turnAux,
 		Senders: []learning.Subject{
 			{ExternalID: "U1", Platform: "chat", Name: "Ana Ruiz"},
@@ -569,6 +569,40 @@ func TestTheFilterIsToldWhoTriggeredTheTurn(t *testing.T) {
 	}
 	if !strings.Contains(prompts[0], "Current sender: Ana Ruiz") {
 		t.Fatalf("the filter was not told the sender:\n%s", prompts[0])
+	}
+}
+
+// THE FILTER NAMES A SENDER AS THE DECIDER ATTRIBUTED THEM. The persist
+// decider files a fact under its requester as [learning.DescribeSender] names
+// them, and the filter's subject rule rejects a memory about somebody not party
+// to the task — so the sender line must name each person the same way, and
+// two people of one name on two surfaces must read as two people. The line
+// read "Sam" for both while the memories read "Sam (slack:U1)" and "Sam
+// (mattermost:U2)", so a preference about one was applied to the other.
+func TestTheFilterNamesASenderAsTheDeciderAttributesThem(t *testing.T) {
+	t.Parallel()
+	senders := []types.CanonicalIdentity{
+		{DisplayName: "Sam", ExternalID: "U1", Platform: "slack"},
+		{DisplayName: "Sam", ExternalID: "U2", Platform: "mattermost"},
+	}
+	r := request(t)
+	r.Senders = nil
+	for _, id := range senders {
+		r.Senders = append(r.Senders, learning.SubjectOf(id))
+	}
+	model := &aux{answers: []string{"[]"}}
+	fetch(t, prefetch.Sources{
+		Diary:  diary{recent: []learning.DiaryEntry{memory("m1", "a memory")}},
+		Models: models{provider: model},
+	}, r)
+	prompts := model.prompts()
+	if len(prompts) == 0 {
+		t.Fatal("the filter was never asked")
+	}
+	want := "Current sender: " + learning.DescribeSender(senders[0]) + ", " +
+		learning.DescribeSender(senders[1]) + "\n"
+	if !strings.Contains(prompts[0], want) || learning.DescribeSender(senders[0]) == learning.DescribeSender(senders[1]) {
+		t.Fatalf("the filter does not name each sender as the decider does (%q):\n%s", want, prompts[0])
 	}
 }
 
@@ -972,9 +1006,9 @@ func TestRecallShowsWhatAPastTurnWasAskedAndDidBesideItsLabel(t *testing.T) {
 		}}}},
 		Embed: embeds,
 	}, request(t)).EpisodeRecall
-	want := "- Woken by: Message from Ana: Slack message _(outcome: done)_\n" +
-		"  Asked: The staging deploy keeps failing.\n" +
-		"  What it did: Rolled staging back to v41 and posted the runbook fix in #ops."
+	want := "- woken by: Message from Ana: Slack message (outcome: done)\n" +
+		"  asked: The staging deploy keeps failing.\n" +
+		"  what it did: Rolled staging back to v41 and posted the runbook fix in #ops."
 	if got != want {
 		t.Fatalf("recall =\n%s\nwant\n%s", got, want)
 	}
@@ -1020,7 +1054,7 @@ func TestAnAccountNoModelCanCondenseIsNamedNotCut(t *testing.T) {
 		}}}},
 		Embed: embeds,
 	}, request(t)).EpisodeRecall
-	if strings.Contains(got, "OPENING-") || !strings.Contains(got, "What it did: (") ||
+	if strings.Contains(got, "OPENING-") || !strings.Contains(got, "what it did: (") ||
 		!strings.Contains(got, "not shown") {
 		t.Fatalf("recall = %q, want the account named by its size", got)
 	}
@@ -1107,7 +1141,7 @@ func TestTheEpisodeSummaryReadsTheAccountsWholeAndPaysNoRewrite(t *testing.T) {
 		Models:  models{provider: failing},
 		Compact: compact.New(models{provider: rewriter}, compact.NewCache()),
 	}, request(t)).EpisodeRecall
-	if !strings.Contains(got, "What it did: fixed the cache key") || strings.Contains(got, "OPENING-") {
+	if !strings.Contains(got, "what it did: fixed the cache key") || strings.Contains(got, "OPENING-") {
 		t.Fatalf("after a failed summary, recall = %q, want the condensed bullet", got)
 	}
 }
@@ -1166,7 +1200,7 @@ func TestTheEpisodeBlockHoldsItsSummaryAndItsRewritesToOneDeadline(t *testing.T)
 		SummarizeEpisodes: true, Models: models{provider: summary},
 		Compact: compact.New(models{provider: rewrites}, compact.NewCache()),
 	}, request(t)).EpisodeRecall
-	if !strings.Contains(got, "What it did: condensed") {
+	if !strings.Contains(got, "what it did: condensed") {
 		t.Fatalf("after a failed summary, recall = %q, want the condensed bullets", got)
 	}
 	asked, rewritten := summary.seen(), rewrites.seen()

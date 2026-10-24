@@ -152,8 +152,8 @@ func (t *steerTurn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
 	if t.deps.Asker == nil || t.deps.Actor == nil || t.deps.Wire == nil {
-		return refused(tools.RefusalUnavailable, SteerTurnTool+" is unavailable: "+
-			"this surface was built without a way to reach the fleet."), nil
+		return refusedBy(tools.RefusalUnavailable, waitless(), SteerTurnTool+
+			" is unavailable: this surface was built without a way to reach the fleet."), nil
 	}
 	actor, err := t.deps.Actor(ctx, turn)
 	if err != nil {
@@ -163,7 +163,7 @@ func (t *steerTurn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	turnID := strings.TrimSpace(argString(args, "turn_id"))
 	if turnID == "" {
-		return failed("steer_turn needs a `turn_id` — the running turn's id."), nil
+		return failed(SteerTurnTool + " needs a `turn_id` — the running turn's id."), nil
 	}
 	note := strings.TrimSpace(argString(args, "note"))
 	if invalid := steer.Validate(note); invalid != nil {
@@ -174,7 +174,7 @@ func (t *steerTurn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 				"Put the detail on the work item and send a note saying where it is.",
 				long.Runes, steer.MaxNoteRunes)), nil
 		}
-		return failed("steer_turn needs a `note` — what the running turn should take into account."), nil
+		return failed(SteerTurnTool + " needs a `note` — what the running turn should take into account."), nil
 	}
 	if refusal := t.maySteer(ctx, turnID); refusal != nil {
 		return *refusal, nil
@@ -206,8 +206,8 @@ func (t *steerTurn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	if answered && reply.Unverified != "" {
-		return unverifiedRefusal(turnID, reply), nil
+	if answered && reply.Unverified != nil {
+		return unverifiedRefusal(ctx, turnID, reply), nil
 	}
 	if !answered {
 		log.WarnContext(ctx, "steer_turn_unanswered",
@@ -227,9 +227,11 @@ func (t *steerTurn) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"it has ended or parked, so no later round will read a note. Nothing was sent.",
 			clip(turnID))), nil
 	case steer.StatusFull:
-		return refused(tools.RefusalConflict, fmt.Sprintf("Turn %s already holds %d "+
-			"notes it has not read yet. Nothing was sent: once it has read them — at "+
-			"its next round — this note may be sent again.", clip(turnID), steer.MaxPendingNotes)), nil
+		// THE TURN'S STATE, which clears on its own: it reads its notes
+		// at its next round.
+		return refused(tools.RefusalConflict, fmt.Sprintf("This turn already has %d "+
+			"notes it hasn't read yet, so nothing was sent. Send it again once it "+
+			"reads them, at its next round.", steer.MaxPendingNotes)), nil
 	case steer.StatusUnsupported:
 		return refused(tools.RefusalSteerUnsupported, fmt.Sprintf("Turn %s cannot "+
 			"take a note: %s's executor runs as a coding CLI's own agentic loop, "+
@@ -274,16 +276,16 @@ func (t *steerTurn) maySteer(ctx context.Context, turnID string) *tools.Result {
 	case !answered:
 		// NOTHING WAS OFFERED, so this is not the offer's `unknown`: no
 		// note is in flight to be uncertain about.
-		return refusalOf(refused(tools.RefusalUnavailable, fmt.Sprintf("No node "+
+		return refusalOf(refusedBy(tools.RefusalUnavailable, waits(), fmt.Sprintf("No node "+
 			"answered for turn %s within %s: it is not running anywhere, or the node "+
 			"running it did not answer in time. Nothing was sent; try again.",
 			clip(turnID), SteerAskBudget)))
-	case reply.Unverified != "":
-		return refusalOf(unverifiedRefusal(turnID, reply))
+	case reply.Unverified != nil:
+		return refusalOf(unverifiedRefusal(ctx, turnID, reply))
 	}
 	owner, named := t.seatOf(reply)
 	if !named {
-		return refusalOf(refused(tools.RefusalUnavailable, fmt.Sprintf("The node "+
+		return refusalOf(refusedBy(tools.RefusalUnavailable, waits(), fmt.Sprintf("The node "+
 			"running turn %s could not name the seat it runs for, so whether you may "+
 			"steer it cannot be decided. Nothing was sent; try again shortly.",
 			clip(turnID))))
@@ -333,7 +335,7 @@ func (t *steerTurn) ask(ctx context.Context, req steer.Request) (steer.Reply, bo
 		// A FAULT: the request is this build's own struct, bound here, so
 		// a seal that fails fails the same way every time.
 		return steer.Reply{}, false, refusalOf(faulted(ctx, SteerTurnTool, err,
-			"steer_turn could not sign its request: "+faultSaid+". Nothing was sent."))
+			SteerTurnTool+" could not sign its request: "+faultSaid+". Nothing was sent."))
 	}
 	replies, err := t.deps.Asker.Ask(askCtx, topics.SeatSteer, request, 1)
 	if err != nil {
@@ -341,7 +343,7 @@ func (t *steerTurn) ask(ctx context.Context, req steer.Request) (steer.Reply, bo
 		// is `unavailable` rather than `unknown`: there is no note in
 		// flight to be uncertain about.
 		return steer.Reply{}, false, refusalOf(nodeFailure(ctx, SteerTurnTool, err,
-			"steer_turn could not reach the fleet", "Nothing was sent."))
+			SteerTurnTool+" could not reach the fleet", "Nothing was sent."))
 	}
 	reply, answered := t.replyFor(ctx, replies, req)
 	return reply, answered, nil
@@ -373,11 +375,29 @@ func (t *steerTurn) replyFor(ctx context.Context, replies [][]byte, req steer.Re
 }
 
 // unverifiedRefusal is the running node saying it took nothing because it
-// could not verify the request: unavailable, since a keyring an operator
-// brings into agreement is what changes the answer, and naming what the node
-// holds, which is all a person needs to say to the operator.
-func unverifiedRefusal(turnID string, reply steer.Reply) tools.Result {
-	return refused(tools.RefusalUnavailable, fmt.Sprintf("Turn %s's node could not "+
-		"verify the note, so it took nothing: %s. Nothing was sent.", clip(turnID),
-		reply.Unverified))
+// could not verify the request: unavailable, on [steer.ErrUnverified], a
+// condition no wait clears, since what changes the answer is an operator
+// bringing the two nodes' keyrings into agreement.
+//
+// A CONDITION, SO EACH READER IS TOLD IT IN THEIR OWN WORDS: a person, at the
+// dashboard or reading what the operator surface answers, is told the note was
+// not taken and who fixes it ([ConditionSentence]); the assistant that called
+// the tool is told the same and that retrying won't help. As a bare refusal
+// carrying the person's sentence alone, every surface that draws an
+// unavailable refusal in words of its own drew "try again" over it. The node
+// running the turn, the keys it holds and the turn go to this node's log,
+// which is where the person who administers the keyring reads them. Said to
+// the person steering, they were a turn id and a list of key ids nobody at a
+// dashboard chose. They are fields the running node answered rather than a
+// sentence it wrote, because its sentence said "this node", which read here as
+// this one.
+func unverifiedRefusal(ctx context.Context, turnID string, reply steer.Reply) tools.Result {
+	log.WarnContext(ctx, "steer_turn_unverified", "turn_id", turnID,
+		"running_node", reply.Unverified.Node, "held_keys", reply.Unverified.HeldKeys,
+		"detail", "the node running the turn holds none of the keys the note is "+
+			"signed under; add the key the fleet signs with to its secrets.keys")
+	return refusedBy(tools.RefusalUnavailable, steer.ErrUnverified, "The node running "+
+		"this turn couldn't verify the note, so it took nothing, and sending it again "+
+		"won't change that. Tell the person steering that an administrator needs to "+
+		"give the fleet's nodes the same keys.")
 }

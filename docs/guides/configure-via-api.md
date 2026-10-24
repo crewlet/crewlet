@@ -129,7 +129,7 @@ curl -X PUT $CREWLET_URL/config \
   -H "Content-Type: application/yaml" \
   -H "X-Summary: bootstrap Nimbus" \
   --data-binary @examples/nimbus.company.yaml
-# 409 revision_advanced if the active revision moved past $REV between read + write
+# 412 revision_advanced if the active revision moved past $REV between read + write
 ```
 
 ---
@@ -293,7 +293,7 @@ holder, each a gesture for an administrator:
 | An open invitation | Cancel it (`DELETE /iam/invitations/{invitation}`, or `crewlet iam cancel-invite <invitation>`) |
 
 Then send the write again. A node that cannot read the directory refuses such
-a write `503 identity_unavailable` rather than allowing it. An offline
+a write `503 seat_holders_unavailable` rather than allowing it. An offline
 `crewlet config import` has no directory to ask, so the binding it strands is
 reported by `crewlet iam check`, and an invitation to a seat it removed is
 refused when somebody tries to redeem it.
@@ -328,7 +328,8 @@ space, channel, address or contact id, changing a credential, naming a
 `${VAR}` in any field, and any setting take `admin`. A write that reaches past them
 is refused whole —
 `403 unauthorized` with a `refused` list naming every part, the place it
-reaches and why; see [A lead edits their own
+reaches, why, and the `reason` and `grants` of its own, beside the write's
+`reason` and the permission that would admit all of it; see [A lead edits their own
 team](../reference/api-endpoints.md#a-lead-edits-their-own-team). A seat or a
 unit outside their team, and a name the company does not have, is refused
 `403` at its own address before the body is read, in the same words either
@@ -449,21 +450,22 @@ classified, beside the `detail` that renders them.
 | `400` | `identity_mismatch` | A per-entity `PUT` whose body names another id than its path: this route never renames — a seat's handle and a unit's key are permanent, and a server or provider is renamed in the whole document, with everything that names it |
 | `400` | `not_creatable` | A create-only `PUT` (`If-None-Match: *`) of a seat or a unit: each has a place the path cannot name, so add it by replacing the unit it sits in, or through `PUT /config` |
 | `401` | `invalid_token` | Bearer missing / wrong / wrong scheme |
-| `403` | `unauthorized` | The credential holds neither `admin`, which the route takes, nor, on the org chart, the lead relation. A lead's write that reaches outside their team names every part under `refused` |
+| `403` | `unauthorized` | The credential holds neither `admin`, which the route takes, nor, on the org chart, the lead relation; `reason` names the rule that refused the write. A lead's write that reaches outside their team names every part under `refused` |
 | `403` | `config_managed` | The document is [managed by another system](#when-another-system-manages-the-document) and this credential is not one of the Tier A tokens `api.auth.company_writers` lists; `managed_by` names the writers. A write and its dry run alike, asked once the grant has admitted the caller and before the body is read |
-| `403` | `step_up_required` | A write whose proof of identity is older than `step_up`: confirm who you are and send it again |
+| `403` | `step_up_required` | A write whose proof of identity is older than `step_up` when it arrived: confirm who you are and send it again. A proof fresh when the write arrived is not judged again part-way through it |
 | `404` | `no_active_revision` | Reading `/config` before the first PUT |
 | `404` | `no_such_entity` | A per-entity `PUT` naming an id the active revision does not carry — a plain `PUT` never creates; send `If-None-Match: *` to add an MCP server or an LLM provider. Of a seat or a unit, only `admin` is told: a lead is refused `403` as for one outside their team |
 | `404` | `no_route` | A path under `/config` this surface does not serve |
 | `405` | `method_not_allowed` | A `/config` path under a method it does not take; `Allow` names the ones it does |
 | `409` | `no_active_revision` | A per-entity write before the first PUT: there is nothing to splice into |
-| `409` | `revision_advanced` | Stale `If-Match`, a concurrent writer won the race, or the write was built on an empty store while the fleet is running a company |
+| `409` | `revision_advanced` | A write that named no revision in `If-Match` (or sent `If-Match: *`) lost: a concurrent writer won the race, or the write was built on an empty store while the fleet is running a company |
 | `409` | `seat_held` | A write that removes a human seat, or makes it an agent's, while the identity directory binds somebody to it or an open invitation names it; `held` names the one thing holding each seat. Move or remove a person, unbind a service account, or cancel the invitation first |
+| `412` | `revision_advanced` | `If-Match: <revision>` names a revision that is not the active one — when the write arrived, or because another write was activated first. Re-read `/config` and send the edit again |
 | `412` | `no_active_revision` | `If-Match: <revision>` sent while the node has no active revision; retry without `If-Match`, or send `If-None-Match: *` |
 | `412` | `already_configured` | `If-None-Match: *` on `PUT /config` sent while a revision is active on this node or anywhere in the fleet |
 | `412` | `entity_exists` | A per-entity create (`If-None-Match: *`) naming an MCP server or LLM provider the active revision already has |
 | `415` | `unsupported_patch_media_type` | A `PATCH` in a patch format other than a JSON Merge Patch, such as `application/json-patch+json` |
 | `503` | `draining` | The node has been told to stop. Nothing was written; `Retry-After` says when to try again, against a peer or against this node once it has restarted — see [During a drain](../reference/api-endpoints.md#during-a-drain) |
-| `503` | `identity_unavailable` | A write that removes a human seat, on a node that could not read the identity directory to see whether anybody holds it. Nothing was written; retry after `Retry-After` |
+| `503` | `seat_holders_unavailable` | A write that removes a human seat, on a node that could not read the identity directory to see whether anybody holds it. Nothing was written; retry after `Retry-After`, and where there is none, waiting won't change it |
 
 The full reference is in [API endpoints](../reference/api-endpoints.md).

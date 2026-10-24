@@ -79,8 +79,8 @@ var markerCases = []fleetCase{{
 			}
 		}
 		h.createRun("turn-again", `{"status":"running"}`)
-		// Mailboxes, secrets, integration statuses and trim holds: one
-		// removed and one kept in each.
+		// Mailboxes, secrets, integration statuses, trim holds and chat
+		// read state: one removed and one kept in each.
 		for _, handle := range []string{"cto", "ceo"} {
 			h.createMailbox(seat(handle))
 		}
@@ -103,6 +103,18 @@ var markerCases = []fleetCase{{
 		if err := h.f.ReleaseHold(h.ctx, "node-a/backup"); err != nil {
 			h.t.Fatalf("ReleaseHold: %v", err)
 		}
+		// Chat read state: one person forgotten, one kept.
+		for _, handle := range []string{"left", "stayed"} {
+			if _, err := h.f.AdvanceChatRead(h.ctx, handle, coord.ChatReadDelta{
+				Cursors: map[string]int64{"eng": 7}, At: h.now(),
+			}); err != nil {
+				h.t.Fatalf("AdvanceChatRead(%s): %v", handle, err)
+			}
+		}
+		if _, err := h.f.SetChatReadAbsence(h.ctx, "left", h.now()); err != nil {
+			h.t.Fatalf("SetChatReadAbsence: %v", err)
+		}
+		h.forgetChatRead("left", h.now(), true)
 
 		h.sweepAll()
 		if n := h.sweepAll(); n != 0 {
@@ -148,6 +160,28 @@ var markerCases = []fleetCase{{
 		}
 		if got := h.holdOwners(); !slices.Equal(got, []string{"node-b/snapshot"}) {
 			h.t.Errorf("trim holds after the sweep = %v, want [node-b/snapshot]", got)
+		}
+		readers, err := h.f.ChatReaders(h.ctx)
+		if err != nil || !slices.Equal(readers, []coord.ChatReader{{Handle: "stayed"}}) {
+			h.t.Errorf("chat readers after the sweep = (%v, %v), want [stayed]", readers, err)
+		}
+		forgotten, err := h.f.ChatRead(h.ctx, "left")
+		if err != nil || len(forgotten.Cursors) != 0 {
+			h.t.Errorf("a chat read state forgotten before the sweep reads as (%+v, %v) after it", forgotten, err)
+		}
+		// THE CREATE OVER A SWEPT MARKER: a person who comes back flushes
+		// into a key whose marker is gone, and a create that conditioned on
+		// the marker's revision would report the key as held and refuse
+		// their first cursor.
+		back, err := h.f.AdvanceChatRead(h.ctx, "left", coord.ChatReadDelta{
+			Cursors: map[string]int64{"eng": 9}, At: h.now(),
+		})
+		if err != nil || back.Cursors["eng"] != 9 {
+			h.t.Errorf("a chat read state whose marker was swept could not be written again: (%+v, %v)", back, err)
+		}
+		again, err := h.f.ChatRead(h.ctx, "left")
+		if err != nil || again.Cursors["eng"] != 9 {
+			h.t.Errorf("a chat read state written over a swept marker reads back as (%+v, %v)", again, err)
 		}
 	},
 }}

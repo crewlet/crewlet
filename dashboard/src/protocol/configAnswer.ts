@@ -28,7 +28,10 @@ export interface ConfigAnswer {
 
 /** Why the engine holds a revision the write was not built on. */
 export type ConfigConflictReason =
-  /** `409 revision_advanced`: another write activated after the write's base. */
+  /**
+   * `412 revision_advanced`: another write activated after the base the
+   * write's `If-Match` named — `409` for one that named none.
+   */
   | "revision_advanced"
   /** `412 already_configured`: a company exists, and the write was creating one. */
   | "already_configured"
@@ -161,6 +164,35 @@ export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
     return {
       kind: "problems",
       problems: heldSeatProblems(body.held, text(body.detail) || code),
+      derived: null,
+      code,
+      hint: text(body.hint),
+    };
+  }
+  // A 503 THAT STORED NOTHING. `seat_holders_unavailable` refuses a write
+  // taking a human seat out of the company on a node that couldn't read who
+  // holds it: the engine refused it before writing anything, so it is a
+  // problem with this save, on each seat the write removes, in the engine's
+  // own words (what clears it, and whether waiting does). Read as
+  // unreachable, the builder settled that definite "nothing was written" as a
+  // save that might have landed, and showed the bare code.
+  if (answer.status === 503 && code === "seat_holders_unavailable") {
+    const said = text(body.detail) || code;
+    const seats = Array.isArray(body.seats)
+      ? body.seats.filter((seat): seat is string => typeof seat === "string")
+      : [];
+    return {
+      kind: "problems",
+      problems:
+        seats.length > 0
+          ? seats.map((seat): ConfigProblem => ({
+              path: "",
+              segments: null,
+              kind: "seat_holders_unavailable",
+              seat,
+              message: said,
+            }))
+          : [{ path: "", segments: null, kind: "seat_holders_unavailable", message: said }],
       derived: null,
       code,
       hint: text(body.hint),

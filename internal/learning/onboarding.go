@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // ChainHash is the stable identity of where a seat sits in the org: the
@@ -435,10 +436,10 @@ func Hint(o *org.Organization, r *org.Role) string {
 		"the id) to locate each page. If a page is missing for some scope, " +
 		"that's fine — skip it.\n" +
 		"- For each page, capture conventions you should apply going forward " +
-		"via `reflect_and_persist`. Write declarative facts, not instructions " +
+		"via `" + toolname.ReflectAndPersist + "`. Write declarative facts, not instructions " +
 		"to yourself.\n" +
 		"- When you have read all available pages and persisted what matters, " +
-		"call `mark_onboarded` with a one-line summary. That ends this " +
+		"call `" + toolname.MarkOnboarded + "` with a one-line summary. That ends this " +
 		"pass, and it does not run again for this team configuration.\n\n" +
 		"If a page changes later you can re-read it any time — the onboarding " +
 		"marker only re-fires when the org structure itself changes."

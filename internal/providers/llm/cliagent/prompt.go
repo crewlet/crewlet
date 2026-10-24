@@ -1,12 +1,12 @@
 package cliagent
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
@@ -44,7 +44,7 @@ func RenderPrompt(req llm.Request) (string, error) {
 				Parameters:  tool.Parameters,
 			})
 		}
-		catalogue, err := RenderTools(specs)
+		catalogue, err := renderTools(specs)
 		if err != nil {
 			return "", err
 		}
@@ -139,6 +139,13 @@ func renderMessage(msg llm.Message) string {
 //
 // The same shape on purpose: a model shown its previous answer in one format
 // and asked to reply in another produces the format it was shown.
+//
+// And the same TEXT, which is why this is [plainjson.Marshal] and not
+// `json.MarshalIndent`: the model reads the block as written rather than
+// through a JSON decoder, so an argument it wrote as `if a < b && c > d` came
+// back to it spelt with `\u003c` and `\u0026` escapes — a call it never made,
+// in a spelling it copies into its next reply — and at six bytes for each of
+// those characters, which [EstimateTokens] counts where a CLI reports no usage.
 func renderPriorCalls(calls []llm.ToolCall) string {
 	specs := make([]map[string]any, 0, len(calls))
 	for _, call := range calls {
@@ -151,7 +158,7 @@ func renderPriorCalls(calls []llm.ToolCall) string {
 			"arguments": args,
 		})
 	}
-	encoded, err := json.MarshalIndent(map[string]any{"tool_calls": specs}, "", "  ")
+	encoded, err := plainjson.Marshal(map[string]any{"tool_calls": specs}, "  ")
 	if err != nil {
 		// Arguments came off a decoded JSON document, so this cannot
 		// happen; rendering the call names keeps the transcript honest

@@ -100,8 +100,8 @@ var (
 // errTokenBudgetShape is the refusal of a budget that is neither a mapping nor
 // a number, in both encodings.
 var errTokenBudgetShape = errors.New("token_budget must be a mapping of " +
-	"ceilings per calendar window — `day`, `week` and `month`, each " +
-	"optional — e.g. `token_budget: {day: 2000000}`")
+	"ceilings per calendar window (`day`, `week` and `month`, each " +
+	"optional), e.g. `token_budget: {day: 2000000}`")
 
 // oneNumberRefusal is the refusal of `token_budget: <number>`, in both
 // encodings: the author's own number in the example when it could be a
@@ -115,7 +115,7 @@ func oneNumberRefusal(value string) string {
 	return "token_budget is a ceiling per calendar window, not one number: " +
 		"one number was a ceiling for the life of the deployment, which no " +
 		"window is. Write it under the window it should reset on, e.g. " +
-		"`token_budget: {month: " + example + "}` — `day`, `week` and `month` " +
+		"`token_budget: {month: " + example + "}`. `day`, `week` and `month` " +
 		"are each optional, and a window with no key has no ceiling"
 }
 

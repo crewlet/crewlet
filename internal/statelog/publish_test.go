@@ -1125,6 +1125,177 @@ func TestThePendingThatWaitedIsDistinguishable(t *testing.T) {
 	}
 }
 
+// A DURABLE WRITE IS NEVER ANSWERED AS A FAILURE BECAUSE ITS WAIT ENDED.
+//
+// Past the broker's acknowledgement the record is on the log and every other
+// node is applying it, whatever the caller does next. A caller whose context
+// ended during the apply wait was answered with that context's error, which
+// every caller reads as a write that did not land — a seat's tool said the
+// change was NOT made, the command line that the attempt wrote nothing — and
+// the position and the operation id of a write that landed were lost with it.
+// It is answered with what is known of the record instead: pending at its
+// position where the record there is this operation's, and unknown with no
+// position where the ambiguous path found a record nobody here could read as
+// this operation's — which a wait that ran out of its own budget answers too,
+// since naming another writer's record as this one's is what [Result.Position]
+// forbids.
+func TestAWriteWhoseWaitEndsIsAnsweredByWhatLanded(t *testing.T) {
+	t.Parallel()
+	// stoppedCaller is a context that ends while this node's applier is
+	// still not there: long before the publisher's own budget would, so it
+	// is the CALLER that stopped waiting.
+	stoppedCaller := func(t *testing.T) context.Context {
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+		t.Cleanup(cancel)
+		return statelog.WithResolveBudget(ctx, time.Minute)
+	}
+	publish := func(ctx context.Context, h *harness, subject statelog.Subject,
+		opID string) (statelog.Result, error) {
+		return h.pub.Publish(ctx, statelog.Request{
+			Subject: subject,
+			Scope:   statelog.ScopeSet{Paths: []string{subject.String()}},
+			OpID:    opID,
+			Pattern: statelog.PatternArbitrated,
+			Decide: func(_ *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
+				return statelog.Decision{Payload: probeRecord(stamp, opID, "body"), Version: 1}, nil
+			},
+		})
+	}
+	behind := func(h *harness) {
+		h.applier.mu.Lock()
+		h.applier.auto = false
+		h.applier.mu.Unlock()
+	}
+
+	t.Run("its own acknowledged append is pending at its position", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		behind(h)
+		res, err := publish(stoppedCaller(t), h, probeSubject("a"), "op-1")
+		if err != nil {
+			t.Fatalf("a write the broker acknowledged answered %v — a caller "+
+				"reads that as a write that did not land", err)
+		}
+		if res.Outcome != statelog.OutcomePending || res.Position.Seq == 0 ||
+			res.Position.Seq != uint64(h.appends.lastSeq.Load()) {
+			t.Fatalf("answered %+v, want pending at the position the broker "+
+				"acknowledged (%d)", res, h.appends.lastSeq.Load())
+		}
+		if res.OpID != "op-1" || !res.Waited {
+			t.Errorf("answered %+v, want its own operation id and a wait that was "+
+				"made", res)
+		}
+	})
+
+	t.Run("a record found newest is unknown, naming no position", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		behind(h)
+		// THE RECORD LANDS AND ITS ACKNOWLEDGEMENT IS LOST, so the write
+		// resolves the record it FINDS newest on its subject — which, its
+		// caller having stopped, nobody here can read as its own.
+		h.appends.fail(errors.New("no response from stream"), false)
+		res, err := publish(stoppedCaller(t), h, probeSubject("a"), "op-1")
+		if err != nil {
+			t.Fatalf("a write whose record landed answered %v", err)
+		}
+		if res.Outcome != statelog.OutcomeUnknown || !res.Position.IsZero() {
+			t.Fatalf("answered %+v, want unknown with no position", res)
+		}
+		// WAITED: the wait was reached, so this is the found record's
+		// answer and not the one a subject nobody could probe gives.
+		if res.OpID != "op-1" || !res.Waited {
+			t.Errorf("answered %+v, want the operation id to retry under, "+
+				"from a wait that was made", res)
+		}
+	})
+
+	// A READ AFTER THE WAIT THAT FAILS fails the read and not the write,
+	// whatever failed it: the caller stopping, or a store that was busy or
+	// closed while this node adopted a snapshot — which every caller reads as
+	// the change not having been made just as it reads a context error.
+	for _, c := range []struct {
+		name string
+		// fail is what the ledger read after the record landed meets:
+		// the caller's end, or an error of the store's own.
+		fail func(cancel context.CancelFunc) error
+	}{
+		{"its caller's end", func(cancel context.CancelFunc) error { cancel(); return nil }},
+		{"the store", func(context.CancelFunc) error {
+			return errors.New("the replicated estate is closed")
+		}},
+	} {
+		t.Run("a read after the wait that "+c.name+" fails is pending", func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t)
+			// THIS NODE APPLIES THE RECORD AT ONCE, so the wait succeeds,
+			// and the read that says what it produced fails.
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			h.applier.mu.Lock()
+			h.applier.beforeOp = func() error {
+				// ONLY ONCE THE RECORD HAS LANDED: the ledger is read before
+				// the decision too, and a write stopped there wrote nothing.
+				if h.appends.lastSeq.Load() > 0 {
+					return c.fail(cancel)
+				}
+				return nil
+			}
+			h.applier.mu.Unlock()
+			res, err := publish(ctx, h, probeSubject("a"), "op-1")
+			if err != nil {
+				t.Fatalf("a write this node applied answered %v — a caller reads "+
+					"that as a write that did not land", err)
+			}
+			if res.Outcome != statelog.OutcomePending || res.Position.Seq == 0 ||
+				res.Position.Seq != uint64(h.appends.lastSeq.Load()) {
+				t.Fatalf("answered %+v, want pending at the position the broker "+
+					"acknowledged (%d)", res, h.appends.lastSeq.Load())
+			}
+		})
+	}
+
+	t.Run("a wait that runs out under a peer's newer record is unknown", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t)
+		first, err := h.write(probeSubject("a"), "op-0", "one")
+		if err != nil {
+			t.Fatalf("the first write: %v", err)
+		}
+		h.anchorAt(probeSubject("a"), first.Position.Seq)
+		behind(h)
+		h.appends.fail(errors.New("no response from stream"), false)
+		// A PEER'S WRITE LANDS ABOVE THIS ONE before the subject is asked
+		// what it holds, so the record found newest is another operation's.
+		var peer atomic.Uint64
+		h.appends.mu.Lock()
+		h.appends.beforeLastSeq = func() {
+			seq, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil,
+				signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: 1, Writer: "node-b"},
+					"peer-op", "peer")))
+			if err != nil {
+				t.Errorf("the peer's write: %v", err)
+			}
+			peer.Store(seq)
+		}
+		h.appends.mu.Unlock()
+
+		res, err := publish(statelog.WithResolveBudget(t.Context(), 300*time.Millisecond),
+			h, probeSubject("a"), "op-1")
+		if err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		if peer.Load() == 0 {
+			t.Fatal("the peer's record never landed, so this case staged nothing")
+		}
+		if res.Outcome != statelog.OutcomeUnknown || !res.Position.IsZero() {
+			t.Fatalf("answered %+v, want unknown with no position — the record "+
+				"at %d is the peer's, and pending there tells this caller its own "+
+				"write is durable at another writer's record", res, peer.Load())
+		}
+	})
+}
+
 // THE FLAG DOES NOT REACH THE SESSION WAIT, which is the one it must never
 // skip.
 //

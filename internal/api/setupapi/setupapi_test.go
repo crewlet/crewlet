@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
+	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/datadog"
 	"github.com/crewlet/crewlet/internal/github"
@@ -30,7 +31,6 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/mattermost"
-	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -83,6 +83,9 @@ type vault struct {
 	// attribution asserts.
 	authors map[string]secrets.Author
 	fail    error
+	// failName, when set, keeps fail to the one name: a case where one
+	// seal lands and the next does not.
+	failName string
 }
 
 func (v *vault) Set(_ context.Context, name, value string, by secrets.Author,
@@ -90,7 +93,7 @@ func (v *vault) Set(_ context.Context, name, value string, by secrets.Author,
 
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.fail != nil {
+	if v.fail != nil && (v.failName == "" || v.failName == name) {
 		return v.fail
 	}
 	if v.values == nil {
@@ -119,8 +122,10 @@ type surface struct {
 	mux     *http.ServeMux
 	config  *configapi.Service
 	vault   *vault
-	company func() (*config.Company, *org.Organization)
 	configs *store.Configs
+	// plane is the fleet's activation pointer the config surface answers
+	// from, which a revision the case plants is pointed at.
+	plane coord.Plane
 	// cipher is the keyring the config surface seals under, which a
 	// revision the case plants is sealed under too.
 	cipher secrets.Cipher
@@ -163,13 +168,14 @@ func newSurfaceWithNoExternalURL(t *testing.T) *surface {
 //
 // writers, when given, are the token ids Tier A names as the company
 // document's only writers (`api.auth.company_writers`).
-func newConfigSurface(t *testing.T, writers ...string) (*configapi.Service, *store.DB, secrets.Cipher) {
+func newConfigSurface(t *testing.T, writers ...string) (*configapi.Service, *store.DB, coord.Plane, secrets.Cipher) {
 	t.Helper()
 	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "c.db"), store.Options{})
 	t.Cleanup(func() { _ = db.Close() })
 	cipher := testCipher(t)
+	plane := newBlinkingPlane(coordmemory.NewFleet())
 	cfg, err := configapi.New(configapi.Options{
-		Store: db, Plane: coordmemory.NewFleet(), Cipher: cipher,
+		Store: db, Plane: plane, Cipher: cipher,
 		Holders: func(context.Context, []string, time.Time) (
 			map[string]configapi.SeatHolder, error) {
 
@@ -181,7 +187,7 @@ func newConfigSurface(t *testing.T, writers ...string) (*configapi.Service, *sto
 	if err != nil {
 		t.Fatalf("configapi.New: %v", err)
 	}
-	return cfg, db, cipher
+	return cfg, db, plane, cipher
 }
 
 // newService builds the service over whatever a case names, filling each
@@ -204,11 +210,8 @@ const oneListener = "api.external_url"
 func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 	t.Helper()
 	v := &vault{}
-	if opts.Company == nil {
-		opts.Company = companySource(t, nil)
-	}
 	if opts.Config == nil {
-		opts.Config, _, _ = newConfigSurface(t)
+		opts.Config, _, _, _ = newConfigSurface(t)
 	}
 	if opts.Secrets == nil {
 		opts.Secrets = v
@@ -258,11 +261,10 @@ func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 // GitHub App refused. The constructor is where it has to surface.
 func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 	t.Parallel()
-	cfg, _, _ := newConfigSurface(t)
+	cfg, _, _, _ := newConfigSurface(t)
 	v := &vault{}
 	complete := func() setupapi.Options {
 		return setupapi.Options{
-			Company:        companySource(t, nil),
 			Config:         cfg,
 			Secrets:        v,
 			Resolve:        v.get,
@@ -280,7 +282,6 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		t.Fatalf("the premise is wrong: a complete set was refused: %v", err)
 	}
 	for field, strip := range map[string]func(*setupapi.Options){
-		"Company":        func(o *setupapi.Options) { o.Company = nil },
 		"Config":         func(o *setupapi.Options) { o.Config = nil },
 		"Secrets":        func(o *setupapi.Options) { o.Secrets = nil },
 		"Resolve":        func(o *setupapi.Options) { o.Resolve = nil },
@@ -330,30 +331,15 @@ func buildSurface(t *testing.T, apps map[string]string, webhookBase, webhookBase
 	writers ...string) *surface {
 
 	t.Helper()
-	cfg, db, cipher := newConfigSurface(t, writers...)
+	cfg, db, plane, cipher := newConfigSurface(t, writers...)
 	v := &vault{}
 	s := &surface{
-		mux: http.NewServeMux(), config: cfg, vault: v, configs: db.Configs(), cipher: cipher,
+		mux: http.NewServeMux(), config: cfg, vault: v, configs: db.Configs(),
+		plane: plane, cipher: cipher,
 		status: &statusStore{}, webhookBase: webhookBase, webhookBaseKey: webhookBaseKey,
 	}
-	// THE ACTIVE DOCUMENT, read fresh on every call, the same way the
-	// engine hands it over: a screen bound to the company this process
-	// booted on would describe one that is no longer running.
-	s.company = func() (*config.Company, *org.Organization) {
-		doc, err := cfg.Document(t.Context())
-		if err != nil {
-			return nil, nil
-		}
-		// THE ORG THE DOCUMENT DESCRIBES, which is what the engine builds
-		// from the revision it applies.
-		o, err := doc.Organization()
-		if err != nil {
-			return doc, nil
-		}
-		return doc, o
-	}
 	s.setup = newService(t, setupapi.Options{
-		Company: s.company, Config: cfg, Secrets: v,
+		Config: cfg, Secrets: v,
 		// The resolution chain: what the vault holds is what resolved.
 		Resolve:        v.get,
 		Status:         s.status,
@@ -454,11 +440,22 @@ func (s *surface) seedDocument(t *testing.T, document string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.configs.InsertActive(t.Context(), store.Revision{
+	at := time.Now().UTC()
+	id, err := s.configs.InsertActive(t.Context(), store.Revision{
 		Source: "test", CreatedBy: "operator", CreatedByKind: iam.ActorOperator,
-		Summary: "first import", Payload: payload, CreatedAt: time.Now().UTC(),
-	}); err != nil {
+		Summary: "first import", Payload: payload, CreatedAt: at,
+	})
+	if err != nil {
 		t.Fatalf("seed: %v", err)
+	}
+	// AND THE FLEET POINTED AT IT, as a node's own seed does: the active
+	// revision the config surface answers is the one the pointer names.
+	if _, err := s.plane.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: id, Summary: "first import", Payload: payload, At: at,
+		Origin: coord.RevisionOrigin{Author: "operator", AuthorKind: iam.ActorOperator,
+			Source: "test", CreatedAt: at},
+	}); err != nil {
+		t.Fatalf("point the fleet at the seed: %v", err)
 	}
 }
 
@@ -769,7 +766,9 @@ func TestASubmissionIsValidatedAsTheWholeCompany(t *testing.T) {
 }
 
 // A STALE BASE IS REFUSED BEFORE ANYTHING IS WRITTEN, and the refusal names
-// both sides so the caller can re-read and re-derive.
+// both sides so the caller can re-read and re-derive. 409, because the base
+// is the body's `if_match` rather than an If-Match header: a race the request
+// stated no HTTP condition about (a disconnect's header is 412, below).
 func TestAStaleRevisionIsRefused(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
@@ -868,6 +867,51 @@ func TestRotatingASecretPublishesAnyway(t *testing.T) {
 }
 
 // --- disconnect ------------------------------------------------------------- //
+
+// A DISCONNECT UNDER A STALE If-Match IS A FAILED PRECONDITION: the base it
+// names is the request's own header, so it is answered as the configuration
+// surface answers the same header (`412 revision_advanced`,
+// [configapi.RevisionStatus]) — where a connect, whose base is the body's
+// `if_match`, is the 409 above. Nothing is removed.
+//
+// Mutation: answer the stale arms 409 whatever the request stated, or 412
+// wherever an If-Match header arrived, and this goes red.
+func TestADisconnectUnderAStaleIfMatchIsAFailedPrecondition(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	connect := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs",
+		`{"values": {"route_to": "sre-lead", "enabled": "true", "site": "datadoghq.com", "api_key": "dd-api", "app_key": "dd-app"}, "generate": ["webhook_token"]}`, nil)
+	if connect.Code != http.StatusCreated {
+		t.Fatalf("connect = %d: %s", connect.Code, connect.Body)
+	}
+
+	res := s.do(t, http.MethodDelete, "/setup/integrations/datadog", `{"force": true}`,
+		map[string]string{"If-Match": `"a-revision-that-moved-on"`})
+	if res.Code != http.StatusPreconditionFailed {
+		t.Fatalf("status = %d, want 412: %s", res.Code, res.Body)
+	}
+	if body := decode(t, res); body["error"] != "revision_advanced" ||
+		body["current_revision_id"] == nil {
+		t.Errorf("refusal = %v, want revision_advanced naming the current revision", body)
+	}
+	after := decode(t, s.do(t, http.MethodGet, "/setup/integrations/datadog", "", nil))
+	if after["configured"] != true {
+		t.Errorf("configured = %v after a refused disconnect", after["configured"])
+	}
+
+	// AND ONLY THE HEADER A WRITE READS: a connect reads no If-Match, so
+	// one that carries a header and loses on its body's base stated no
+	// condition the server evaluated.
+	ignored := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs", `{
+		"if_match": "01JSOMETHINGELSE",
+		"values": {"route_to": "sre-lead", "enabled": "true", "site": "datadoghq.com", "api_key": "dd-api", "app_key": "dd-app"}
+	}`, map[string]string{"If-Match": `"01JSOMETHINGELSE"`})
+	if ignored.Code != http.StatusConflict {
+		t.Errorf("a connect with a header it does not read = %d, want 409: %s",
+			ignored.Code, ignored.Body)
+	}
+}
 
 // A FORCED DISCONNECT REMOVES THE BLOCK AND NAMES WHAT IS ORPHANED, without
 // deleting it. A credential an operator may be sharing with another
@@ -1075,7 +1119,7 @@ func (s *surface) withPassSink(
 	s.mux = http.NewServeMux()
 	s.status = status
 	s.setup = newService(t, setupapi.Options{
-		Company: s.company, Config: s.config, Secrets: s.vault,
+		Config: s.config, Secrets: s.vault,
 		Resolve:        s.vault.get,
 		Passes:         runner,
 		Sink:           sink,
@@ -2289,5 +2333,46 @@ func TestEverySetupRouteIsAdmins(t *testing.T) {
 				t.Error("a refused submission sealed a value")
 			}
 		})
+	}
+}
+
+// A SUBMISSION THAT DOES NOT DECODE IS TOLD IN WORDS ([plainjson.Unreadable]):
+// the detail was encoding/json's own sentence (`json: unknown field
+// "valuez"`, "json: cannot unmarshal string into Go struct field .values of
+// type map[string]string"). Mutation: answer err.Error() again and both rows
+// go red; answer the App's begin under `hint` again and its case does.
+func TestASubmissionThatDoesNotDecodeIsToldInWords(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	for _, tc := range []struct{ body, says string }{
+		{`{"valuez": {}}`, `In the body, "valuez" isn't a field this takes.`},
+		{`{"values": "route_to"}`, `In the body, "values" holds text where an object belongs.`},
+	} {
+		res := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs", tc.body, nil)
+		body := decode(t, res)
+		if res.Code != http.StatusBadRequest || body["detail"] != tc.says {
+			t.Errorf("%s answered %d %v, want 400 saying %q", tc.body, res.Code,
+				body, tc.says)
+		}
+	}
+	// THE GITHUB APP'S BEGIN TOO, under `detail` as every other setup route
+	// answers it: under `hint` a screen read the code's own sentence first
+	// and this one after it.
+	res := s.do(t, http.MethodPost, "/setup/integrations/github/app", `{"seat": 5}`, nil)
+	body := decode(t, res)
+	if res.Code != http.StatusBadRequest ||
+		body["detail"] != `In the body, "seat" holds a number where text belongs.` ||
+		body["hint"] != nil {
+		t.Errorf("the App's begin answered %d %v, want 400 saying it in detail", res.Code, body)
+	}
+	// THE CHECK OF A TYPED VALUE TOO, which reads its body as a submission
+	// does.
+	res = s.do(t, http.MethodPost, "/setup/integrations/datadog/verify",
+		`{"field": "api_key", "value": "x", "store": true}`, nil)
+	body = decode(t, res)
+	if res.Code != http.StatusBadRequest ||
+		body["detail"] != `In the body, "store" isn't a field this takes.` {
+		t.Errorf("the check answered %d %v, want 400 saying it in words", res.Code, body)
 	}
 }

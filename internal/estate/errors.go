@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/chat"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -24,11 +25,18 @@ import (
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
-// ErrOutcomeUnknown is a write that was sent and never answered, of a kind a
-// repeat is not safe for — see [opOnceWrite]. It may have landed.
+// ErrOutcomeUnknown is a write that was sent and never answered. It may have
+// landed.
+//
+// TWO CLASSES REACH IT, and they differ in what makes the retry safe, which is
+// why the sentence names neither. A write a repeat is not safe for
+// ([opOnceWrite]) is reported at the first node that did not answer, and is
+// read back before it is written again. A write carrying its caller's
+// operation id ([opIdempotentWrite]) is asked of every other data node first,
+// and reported only when none of them ran it either — where repeating it
+// under that SAME id is the safe retry, and a fresh one is a second write.
 var ErrOutcomeUnknown = errors.New("estate: the write was sent to a data node " +
-	"that did not answer, so whether it landed is unknown — read it back " +
-	"before writing again")
+	"that did not answer, so whether it landed is unknown")
 
 // sentinel is one error value whose identity crosses the wire.
 type sentinel struct {
@@ -55,7 +63,6 @@ var sentinels = []sentinel{
 
 	{"tracker.ErrAlreadyAnswered", tracker.ErrAlreadyAnswered},
 	{"tracker.ErrBadQuery", tracker.ErrBadQuery},
-	{"tracker.ErrBulkInFlight", tracker.ErrBulkInFlight},
 	{"tracker.ErrForbidden", tracker.ErrForbidden},
 	{"tracker.ErrInboxFull", tracker.ErrInboxFull},
 	{"tracker.ErrInvalid", tracker.ErrInvalid},
@@ -72,8 +79,10 @@ var sentinels = []sentinel{
 	{"tracker.ErrReparentAcrossProjects", tracker.ErrReparentAcrossProjects},
 	{"tracker.ErrRestoresOthers", tracker.ErrRestoresOthers},
 	{"tracker.ErrStaleVersion", tracker.ErrStaleVersion},
+	{"tracker.ErrState", tracker.ErrState},
 	{"tracker.ErrStepUnresolved", tracker.ErrStepUnresolved},
 	{"tracker.ErrStepUnvouched", tracker.ErrStepUnvouched},
+	{"tracker.ErrTaken", tracker.ErrTaken},
 	{"tracker.ErrTooBroad", tracker.ErrTooBroad},
 	{"tracker.ErrUploadStale", tracker.ErrUploadStale},
 
@@ -87,6 +96,18 @@ var sentinels = []sentinel{
 	{"pages.ErrReserved", pages.ErrReserved},
 	{"pages.ErrStaleVersion", pages.ErrStaleVersion},
 	{"pages.ErrTitleTaken", pages.ErrTitleTaken},
+	{"pages.ErrUnservedOrder", pages.ErrUnservedOrder},
+
+	{"chat.ErrArchived", chat.ErrArchived},
+	{"chat.ErrConflict", chat.ErrConflict},
+	{"chat.ErrForbidden", chat.ErrForbidden},
+	{"chat.ErrInvalid", chat.ErrInvalid},
+	{"chat.ErrNameTaken", chat.ErrNameTaken},
+	{"chat.ErrNoActivation", chat.ErrNoActivation},
+	{"chat.ErrNotFound", chat.ErrNotFound},
+	{"chat.ErrReactionsFull", chat.ErrReactionsFull},
+	{"chat.ErrRoomExists", chat.ErrRoomExists},
+	{"chat.ErrUnknownKind", chat.ErrUnknownKind},
 
 	{"statelog.ErrAheadOfLog", statelog.ErrAheadOfLog},
 	{"statelog.ErrConflict", statelog.ErrConflict},
@@ -147,8 +168,10 @@ var sentinels = []sentinel{
 	{"artifactsdomain.ErrAgentCompanyShare", artifactsdomain.ErrAgentCompanyShare},
 	{"artifactsdomain.ErrBadCursor", artifactsdomain.ErrBadCursor},
 	{"artifactsdomain.ErrConflict", artifactsdomain.ErrConflict},
+	{"artifactsdomain.ErrExists", artifactsdomain.ErrExists},
 	{"artifactsdomain.ErrInvalid", artifactsdomain.ErrInvalid},
 	{"artifactsdomain.ErrLabelTaken", artifactsdomain.ErrLabelTaken},
+	{"artifactsdomain.ErrLabelsFull", artifactsdomain.ErrLabelsFull},
 	{"artifactsdomain.ErrNotFound", artifactsdomain.ErrNotFound},
 	{"artifactsdomain.ErrNotInTrash", artifactsdomain.ErrNotInTrash},
 	{"artifactsdomain.ErrPurged", artifactsdomain.ErrPurged},
@@ -201,6 +224,7 @@ var typedKinds = []typedKind{
 	{"tracker.ErrAmbiguousAnswer", reflect.TypeFor[*tracker.ErrAmbiguousAnswer]()},
 	{"tracker.ErrFutureVersion", reflect.TypeFor[*tracker.ErrFutureVersion]()},
 	{"tracker.MoveStopped", reflect.TypeFor[*tracker.MoveStopped]()},
+	{"tracker.Refusal", reflect.TypeFor[*tracker.Refusal]()},
 	{"tracker.SubtreeStopped", reflect.TypeFor[*tracker.SubtreeStopped]()},
 	{"tracker.TagClash", reflect.TypeFor[*tracker.TagClash]()},
 	{"tracker.TagsFull", reflect.TypeFor[*tracker.TagsFull]()},
@@ -208,23 +232,34 @@ var typedKinds = []typedKind{
 
 	{"pages.ErrFutureVersion", reflect.TypeFor[*pages.ErrFutureVersion]()},
 	{"pages.ErrUnknownVersion", reflect.TypeFor[pages.ErrUnknownVersion]()},
+	{"pages.InvalidError", reflect.TypeFor[*pages.InvalidError]()},
+
+	{"chat.ErrFutureVersion", reflect.TypeFor[*chat.ErrFutureVersion]()},
+	{"chat.ErrUnknownVersion", reflect.TypeFor[chat.ErrUnknownVersion]()},
+	{"chat.InvalidError", reflect.TypeFor[*chat.InvalidError]()},
 
 	{"statelog.CallerOpIDError", reflect.TypeFor[*statelog.CallerOpIDError]()},
 	{"statelog.ErrSkipped", reflect.TypeFor[*statelog.ErrSkipped]()},
+	{"statelog.FreshnessError", reflect.TypeFor[*statelog.FreshnessError]()},
 	{"statelog.EvictionRefusal", reflect.TypeFor[*statelog.EvictionRefusal]()},
 	{"statelog.ReadmissionRefusal", reflect.TypeFor[*statelog.ReadmissionRefusal]()},
+	{"statelog.ReanchorNotApplied", reflect.TypeFor[*statelog.ReanchorNotApplied]()},
 	{"statelog.Refused", reflect.TypeFor[*statelog.Refused]()},
+	{"statelog.Telling", reflect.TypeFor[*statelog.Telling]()},
 	{"statelog.Unavailable", reflect.TypeFor[*statelog.Unavailable]()},
 
 	{"iamdomain.ErrFutureVersion", reflect.TypeFor[*iamdomain.ErrFutureVersion]()},
 	{"iamdomain.ErrTaken", reflect.TypeFor[*iamdomain.ErrTaken]()},
 	{"iamdomain.ErrUnknownVersion", reflect.TypeFor[iamdomain.ErrUnknownVersion]()},
 	{"iamdomain.InvitationRedeemed", reflect.TypeFor[*iamdomain.InvitationRedeemed]()},
+	{"iamdomain.NotReadBack", reflect.TypeFor[*iamdomain.NotReadBack]()},
+	{"iamdomain.Refusal", reflect.TypeFor[*iamdomain.Refusal]()},
 
 	{"iam.LookRefused", reflect.TypeFor[*iam.LookRefused]()},
 
 	{"artifactsdomain.CarriedObjectGone", reflect.TypeFor[*artifactsdomain.CarriedObjectGone]()},
 	{"artifactsdomain.ErrFutureVersion", reflect.TypeFor[*artifactsdomain.ErrFutureVersion]()},
+	{"artifactsdomain.AlreadyExists", reflect.TypeFor[*artifactsdomain.AlreadyExists]()},
 	{"artifactsdomain.QuotaExceeded", reflect.TypeFor[*artifactsdomain.QuotaExceeded]()},
 	{"artifactsdomain.VersionMoved", reflect.TypeFor[*artifactsdomain.VersionMoved]()},
 

@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // SubagentPreamble is the mandated runtime contract every sub-agent carries,
@@ -15,8 +16,9 @@ import (
 // desk under the parent's name.
 const SubagentPreamble = "You are a short-lived worker. Do not delegate further. " +
 	"Do not contact colleagues. You can discover and activate more tools " +
-	"yourself: call `list_mcp_server_tools(server=...)` to see what an " +
-	"MCP server offers, then `activate_tool(name=...)` to promote a tool " +
+	"yourself: call `" + toolname.ListMCPServerTools + "(server=...)` to " +
+	"see what an MCP server offers, then `" + toolname.Activate +
+	"(name=...)` to promote a tool " +
 	"into your `tools=[...]` so you can call it on the next round. Only " +
 	"read-only tools are available this way — you cannot post to " +
 	"channels, comment on issues, open PRs, or otherwise write to a " +
@@ -28,7 +30,7 @@ const SubagentPreamble = "You are a short-lived worker. Do not delegate further.
 // wrong: it writes the answer as prose, calls the tool with a pointer to what
 // it just said, and the parent reads a field saying "see above" about a
 // conversation it cannot see.
-const SubagentSubmitRule = "When you are done, call `submit_result` with your " +
+const SubagentSubmitRule = "When you are done, call `" + toolname.SubmitResult + "` with your " +
 	"answer and stop. That submission is the ONLY thing passed back — your " +
 	"tool calls, your reasoning and anything you wrote as prose are not. If " +
 	"you could not finish, submit what you do have and say why in the fields " +

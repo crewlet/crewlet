@@ -220,15 +220,158 @@ describe("what a change came to", () => {
         }),
     );
     const result = await act("set_pins", {}, { floors: new SessionFloors() });
-    expect(result).toMatchObject({ kind: "refused", code: "unavailable", retryable: true });
+    // AND IT CARRIES THE ENGINE'S OWN DETAIL beside the dashboard's
+    // sentence, for a screen whose tool words every refusal for a person.
+    expect(result).toMatchObject({
+      kind: "refused",
+      code: "unavailable",
+      retryable: true,
+      detail: "sealed",
+    });
   });
 
   test("an unavailable the engine says no wait clears is not worth retrying", async () => {
     stub(async () =>
-      json({ error: "unavailable", tool: "set_pins", refusal: "log_full", detail: "full" }, 503),
+      json(
+        {
+          error: "unavailable",
+          tool: "set_pins",
+          refusal: "log_full",
+          detail:
+            "There's no room left to save this kind of change. An administrator needs to make room for it.",
+          tool_detail: "set_pins could not make the change: the tracker is full.",
+        },
+        503,
+      ),
     );
     const result = await act("set_pins", {}, { floors: new SessionFloors() });
     expect(result).toMatchObject({ kind: "refused", code: "unavailable", retryable: false });
+  });
+
+  // A FIXED SENTENCE IS SHOWN ONLY WHERE THE ENGINE'S ANSWER CANNOT CONTRADICT
+  // IT. "Try again in a moment" drawn over an answer carrying no Retry-After
+  // told a person to wait for a full log, an evicted node or a note the running
+  // node could not verify, none of which a wait changes.
+  describe("the sentence a refusal is shown in", () => {
+    const answer = (payload: Record<string, unknown>, status: number, retryAfter?: string) =>
+      stub(
+        async () =>
+          new Response(JSON.stringify(payload), {
+            status,
+            headers: {
+              "Content-Type": "application/json",
+              ...(retryAfter === undefined ? {} : { "Retry-After": retryAfter }),
+            },
+          }),
+      );
+    const sentenceOf = async () => {
+      const result = await act("steer_turn", {}, { floors: new SessionFloors() });
+      if (result.kind !== "refused") throw new Error(`answered ${result.kind}`);
+      return result.sentence;
+    };
+
+    // THE ENGINE WROTE THE DETAIL FOR THE PERSON where the tool's own sentence
+    // travels beside it, so it is shown whatever the code: what happened and
+    // who fixes it, in step with the answer's Retry-After.
+    test("a detail the engine wrote for the person is shown, wait or none", async () => {
+      const person =
+        "The node running this turn couldn't verify your note, so it took nothing. An administrator needs to give the fleet's nodes the same keys.";
+      answer(
+        {
+          error: "unavailable",
+          message: "This can't be done here, and waiting won't change that.",
+          detail: person,
+          tool_detail: "The node running this turn couldn't verify the note; tell the person.",
+        },
+        503,
+      );
+      expect(await sentenceOf()).toBe(person);
+
+      const soon = "No node could serve this right now. Try again in a moment.";
+      answer({ error: "unavailable", detail: soon, tool_detail: "steer_turn: unserved" }, 503, "2");
+      expect(await sentenceOf()).toBe(soon);
+
+      const deleted = "It was deleted, and stays deleted.";
+      answer({ error: "not_found", detail: deleted, tool_detail: "statelog: deleted" }, 404);
+      expect(await sentenceOf()).toBe(deleted);
+    });
+
+    // A REUSED KEY IS THE DASHBOARD'S OWN SENTENCE: its detail is written for
+    // whoever sent the header, naming a key a person never chose, and the
+    // engine answers it with no tool_detail, so what is shown is the
+    // dashboard's sentence for the code, which says to look again.
+    test("a reused key is the dashboard's sentence, never the header's", async () => {
+      answer(
+        {
+          error: "invalid_input",
+          field: "Idempotency-Key",
+          detail:
+            "This Idempotency-Key was already used for a different change, so nothing was written. Look at what you were changing again, then send the change with a new key.",
+        },
+        409,
+      );
+      expect(await sentenceOf()).toBe(ACT_ERRORS.invalid_input);
+    });
+
+    // NO DETAIL FOR THE PERSON AND NO WAIT: the engine's own sentence for the
+    // code, never the tool's detail, which is written for a model.
+    test("an unavailable no wait clears is the engine's sentence for it", async () => {
+      answer(
+        {
+          error: "unavailable",
+          message: "This can't be done here, and waiting won't change that.",
+          detail: "steer_turn is unavailable: this surface was built without the wire.",
+        },
+        503,
+      );
+      expect(await sentenceOf()).toBe("This can't be done here, and waiting won't change that.");
+
+      answer(
+        {
+          error: "identity_unavailable",
+          message: "Can't check who you are here, and waiting won't change that.",
+        },
+        503,
+      );
+      expect(await sentenceOf()).toBe(
+        "Can't check who you are here, and waiting won't change that.",
+      );
+    });
+
+    test("a refusal a wait clears keeps the dashboard's sentence", async () => {
+      answer({ error: "unavailable", message: "Can't answer right now.", detail: "x" }, 503, "2");
+      expect(await sentenceOf()).toBe(ACT_ERRORS.unavailable);
+      answer({ error: "identity_unavailable", message: "Can't check who you are." }, 503, "2");
+      expect(await sentenceOf()).toBe(ACT_ERRORS.identity_unavailable);
+    });
+
+    // EVERY FIXED SENTENCE THAT ASKS FOR A WAIT gives way to the engine's where
+    // the answer carries none, except the codes the engine always answers with
+    // a Retry-After, each named here with where it writes one. A sentence
+    // reworded to ask for a wait without being one of those fails here; so does
+    // a name below whose sentence stopped asking.
+    test("every fixed sentence asking for a wait yields where the answer carries none", async () => {
+      const alwaysWaits = new Set([
+        "draining", // internal/api/drain.go: drainGate sets DrainRetryAfter
+        "starting", // internal/api/boot.go: BootRetryAfter
+        "no_active_revision", // httpjson.NoActiveRevision: NoActiveRevisionRetry
+      ]);
+      const asksForAWait = (sentence: string) => /\btry again\b|\bin a moment\b/i.test(sentence);
+      for (const code of alwaysWaits) {
+        expect(asksForAWait(ACT_ERRORS[code as keyof typeof ACT_ERRORS] ?? "")).toBe(true);
+      }
+      const yielding = Object.entries(ACT_ERRORS).filter(
+        ([code, sentence]) => sentence !== null && asksForAWait(sentence) && !alwaysWaits.has(code),
+      );
+      expect(yielding.map(([code]) => code).sort()).toEqual([
+        "identity_unavailable",
+        "unavailable",
+      ]);
+      for (const [code] of yielding) {
+        answer({ error: code, message: `the engine's own for ${code}` }, 503);
+        expect(await sentenceOf()).toBe(`the engine's own for ${code}`);
+      }
+    });
   });
 
   // THE TOOL'S OWN SENTENCE ONLY WHERE IT NAMES THE ARGUMENT; everywhere else

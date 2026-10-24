@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ReadLevel is how fresh an answer has to be, and there are four because
@@ -198,9 +199,11 @@ type Refused struct {
 	Level ReadLevel
 
 	// Detail names the specific thing — the deferred record's version and
-	// position, the field an operator has to change. Written for a CALLER,
-	// since every surface sends it on, so it is never an error's own text
-	// — see [Unavailable]'s detail, held to the same rule.
+	// position, the field an operator has to change. Written for WHOEVER
+	// RUNS THE NODE: it goes to the node's log and to the gate and
+	// retention tooling, never to a screen, where a person is told the
+	// code in [ConditionSentence]'s words. Never an error's own text — see
+	// [Unavailable]'s detail, held to the same rule.
 	Detail string
 
 	// RetryAfter is DERIVED rather than fixed where it can be: how far
@@ -225,7 +228,7 @@ func (r *Refused) Unwrap() error { return ErrUnavailable }
 //
 // FROM THE OBSERVED DRAIN, not from a constant. A flat hint is wrong in both
 // directions on the same fleet: it sends a caller back too early on a node
-// grinding through a bulk apply, and holds one waiting on a node that caught
+// grinding through a long backlog, and holds one waiting on a node that caught
 // up in milliseconds. Zero means no hint at all, which is what a refusal
 // waiting cannot clear deserves.
 func RetryHint(code ReadRefusal, lag uint64, recordsPerSecond float64) time.Duration {
@@ -477,8 +480,8 @@ func NewReader(d ReaderDeps) (*Reader, error) {
 	case d.Health == nil:
 		return nil, fmt.Errorf("statelog: reader has no health source")
 	case !d.Mode.Valid():
-		return nil, fmt.Errorf("statelog: reader has no mode (%q; want one of %v): "+
-			"whether a read may append a barrier turns on it", d.Mode, MaintenanceModes)
+		return nil, fmt.Errorf("statelog: reader has no mode (%q; want one of %s): "+
+			"whether a read may append a barrier turns on it", d.Mode, words.Or(MaintenanceModes))
 	case !d.Mode.Publishes() && d.Index != nil:
 		return nil, fmt.Errorf("statelog: a reader in %s mode was given a read index, "+
 			"and a read index appends barriers to a log this mode publishes nothing to",
@@ -532,8 +535,8 @@ func NewReader(d ReaderDeps) (*Reader, error) {
 func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Answer, error) {
 	started := time.Now()
 	if !q.Level.Valid() {
-		return Answer{}, fmt.Errorf("statelog: %q is not a read level (want %v)",
-			q.Level, ReadLevels)
+		return Answer{}, fmt.Errorf("statelog: %q is not a read level (want %s)",
+			q.Level, words.Or(ReadLevels))
 	}
 	// THE CALLER'S FLOOR NAMES A STREAM, and it is checked before any
 	// level — or this node's own health — looks at anything.

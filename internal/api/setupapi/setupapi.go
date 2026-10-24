@@ -68,9 +68,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
@@ -84,6 +86,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -134,17 +137,8 @@ const RetryBusy = disconnectRetryFor
 // `resolved: null`, every disconnect or GitHub App refused) would present the
 // mistake as a deliberate answer.
 type Options struct {
-	// Company reads the ACTIVE company: the document a revision stores,
-	// and the ORG this node built from it. Both are nil while no revision
-	// is active, which every route answers as such.
-	//
-	// ONE FUNCTION RETURNING BOTH, never two accessors: two reads can
-	// straddle an activation, and a screen that took the integrations from
-	// one revision and the roster from the next would describe a company
-	// that never existed.
-	Company func() (*config.Company, *org.Organization)
-
-	// Config is the write path, the same one PATCH /config drives.
+	// Config is the write path, the same one PATCH /config drives, and the
+	// read of the company every route describes ([Service.serving]).
 	Config *configapi.Service
 
 	// Secrets seals a submitted credential, under the keyring every node
@@ -167,12 +161,12 @@ type Options struct {
 	// serves — and once there are two listeners, the person's answers 404
 	// for every one of them.
 	//
-	// A PLAIN STRING AND NOT A FUNCTION, unlike Company above, because it
-	// is Tier A: it cannot change under a running process, so a surface
-	// reading it twice in one request cannot get two answers. It used to
-	// be a Tier B field read through Resolve, which is why every caller
-	// below carried the resolver and had to decide what to do with a
-	// reference that resolved to nothing.
+	// A PLAIN STRING AND NOT A FUNCTION, because it is Tier A: it cannot
+	// change under a running process, so a surface reading it twice in one
+	// request cannot get two answers. It used to be a Tier B field read
+	// through Resolve, which is why every caller below carried the resolver
+	// and had to decide what to do with a reference that resolved to
+	// nothing.
 	//
 	// Empty is a deployment with no such address, which every gesture that
 	// would hand one to a vendor refuses by name.
@@ -248,7 +242,6 @@ type Options struct {
 
 // Service serves /setup.
 type Service struct {
-	company func() (*config.Company, *org.Organization)
 	config  *configapi.Service
 	writer  setup.Writer
 	resolve func(string) (string, bool)
@@ -279,7 +272,6 @@ func New(opts Options) (*Service, error) {
 		name   string
 		absent bool
 	}{
-		{"Company", opts.Company == nil},
 		{"Config", opts.Config == nil},
 		{"Secrets", opts.Secrets == nil},
 		{"Resolve", opts.Resolve == nil},
@@ -316,7 +308,6 @@ func New(opts Options) (*Service, error) {
 		now = func() time.Time { return time.Now().UTC() }
 	}
 	s := &Service{
-		company:        opts.Company,
 		config:         opts.Config,
 		resolve:        opts.Resolve,
 		webhookBase:    opts.WebhookBase,
@@ -676,15 +667,84 @@ const (
 	StepInstallApp = "install_app"
 )
 
-// list serves GET /setup/integrations.
-func (s *Service) list(w http.ResponseWriter, r *http.Request) {
-	company, roster := s.company()
-	if company == nil {
+// serving is the company this surface describes and writes against: the
+// fleet's active revision, the document it holds and the org it describes,
+// from ONE read.
+//
+// THE FLEET'S, read where /config reads it ([configapi.Service.ActiveCompany]),
+// never the company this node has applied. The two differ for as long as an
+// apply takes, and longer on a node behind the pointer, and this surface used
+// to answer the applied company's integrations beside the pointer's revision
+// id: a client sending that id back as `if_match` passed the stale-base check
+// with requirements read from the older revision, and its write replaced
+// what the newer one had changed. From one read, the revision a listing names
+// is the revision it describes, and a write built on it is refused once the
+// pointer moves past it.
+type serving struct {
+	company  *config.Company
+	roster   *org.Organization
+	revision string
+}
+
+// serving reads the company every route describes ([serving]):
+// [configapi.ErrNoActiveRevision] where the fleet has none.
+func (s *Service) serving(ctx context.Context) (serving, error) {
+	company, revision, err := s.config.ActiveCompany(ctx)
+	if err != nil {
+		return serving{}, err
+	}
+	roster, err := company.Organization()
+	if err != nil {
+		// A STORED REVISION THAT BUILDS NO ORG is one no node could have
+		// applied either; nothing a caller sends changes it.
+		return serving{}, fmt.Errorf("setupapi: the active revision %s builds no "+
+			"organization: %w", revision.ID, err)
+	}
+	return serving{company: company, roster: roster, revision: revision.ID}, nil
+}
+
+// serve is [Service.serving] for a route, answering the refusal itself and
+// reporting whether the request may go on: `409 no_active_revision` with hint
+// where the fleet has no company, the /config surface's own answer for a
+// revision this node cannot open, and a condition of the node as every write
+// surface tells one.
+func (s *Service) serve(w http.ResponseWriter, r *http.Request, hint string) (serving, bool) {
+	current, err := s.serving(r.Context())
+	if err == nil {
+		return current, true
+	}
+	if errors.Is(err, configapi.ErrNoActiveRevision) {
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
-			"hint": "no company configuration is active; import one before connecting an integration",
+			"detail": "No company has been configured yet",
+			"hint":   hint,
 		})
+		return serving{}, false
+	}
+	refuseRead(w, r, err)
+	return serving{}, false
+}
+
+// refuseRead answers a failed read of the active company: a revision this node
+// cannot open as /config answers it, a condition in its own words under its
+// own hint, and anything else as the fault it is.
+func refuseRead(w http.ResponseWriter, r *http.Request, err error) {
+	if configapi.RefuseUnreadable(w, r, err) {
 		return
 	}
+	if operator.AnswerCondition(r.Context(), w, log, "setup_read_unavailable", err) {
+		return
+	}
+	log.ErrorContext(r.Context(), "setup_read_failed", "error", err)
+	httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+}
+
+// list serves GET /setup/integrations.
+func (s *Service) list(w http.ResponseWriter, r *http.Request) {
+	current, ok := s.serve(w, r, "import a company before connecting an integration")
+	if !ok {
+		return
+	}
+	company, roster := current.company, current.roster
 	tools := make([]ToolState, 0, len(integration.Kinds))
 	for _, kind := range integration.Kinds {
 		state, ok := s.state(company, roster, kind)
@@ -704,7 +764,7 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 		// could not use either. The guard was unreachable from the surface
 		// it guards, which made the whole stale-base path dead code that
 		// looked like protection.
-		"revision_id": s.activeRevision(r.Context()),
+		"revision_id": current.revision,
 		// THE ADDRESS EVERY INBOUND VENDOR IS BUILT ON, answered once
 		// rather than repeated in each tool: it is one setting, and a
 		// screen that asked for it seven times would be asking the
@@ -725,38 +785,14 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// activeRevision is the revision this node is serving, or empty when it
-// cannot say.
-//
-// EMPTY RATHER THAN AN ERROR, because it is a courtesy on a read: a caller
-// that gets one can hold the surface still with `if_match`, and one that does
-// not is exactly where every caller was before — writing unconditionally.
-// Failing the whole read over it would trade a working screen for a
-// precondition nobody asked for.
-func (s *Service) activeRevision(ctx context.Context) string {
-	if s.writer.Config == nil {
-		return ""
-	}
-	id, err := s.writer.Config.Current(ctx)
-	if err != nil {
-		log.WarnContext(ctx, "setup_revision_unreadable", "error", err,
-			"detail", "this answer carries no revision, so a client cannot "+
-				"send if_match with its write")
-		return ""
-	}
-	return id
-}
-
 // one serves GET /setup/integrations/{kind}.
 func (s *Service) one(w http.ResponseWriter, r *http.Request) {
 	kind := integration.Kind(r.PathValue("kind"))
-	company, roster := s.company()
-	if company == nil {
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
-			"hint": "no company configuration is active",
-		})
+	current, ok := s.serve(w, r, "import a company before connecting an integration")
+	if !ok {
 		return
 	}
+	company, roster := current.company, current.roster
 	state, ok := s.stateFor(r.Context(), company, roster, kind)
 	if !ok {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownKind, map[string]string{
@@ -1985,13 +2021,11 @@ func kindList() string {
 // inputs serves POST /setup/integrations/{kind}/inputs.
 func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	kind := integration.Kind(r.PathValue("kind"))
-	company, roster := s.company()
-	if company == nil {
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
-			"hint": "no company configuration is active",
-		})
+	current, ok := s.serve(w, r, "import a company before connecting an integration")
+	if !ok {
 		return
 	}
+	company, roster := current.company, current.roster
 	state, ok := s.stateFor(r.Context(), company, roster, kind)
 	if !ok {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownKind, map[string]string{
@@ -2019,7 +2053,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := decode(body, &req); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
-			"detail": err.Error(),
+			"detail": plainjson.Unreadable("the body", err),
 		})
 		return
 	}
@@ -2118,7 +2152,17 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 		"secrets", strings.Join(result.Secrets, ","), "reloaded", result.Reloaded,
 		"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
 
-	after, afterRoster := s.company()
+	// THE STATE AFTER THE WRITE, from the fleet's pointer the write just
+	// moved: the company this node had applied still described the one
+	// before it, so the answer to a connect said it had not happened.
+	var after *config.Company
+	var afterRoster *org.Organization
+	if current, err := s.serving(r.Context()); err == nil {
+		after, afterRoster = current.company, current.roster
+	} else {
+		log.WarnContext(r.Context(), "setup_state_unread", "kind", kind, "error", err,
+			"detail", "the write landed; its answer carries the state read before it")
+	}
 	// THE ADDRESS THIS SURFACE WAS SET UP AGAINST, for the surfaces whose
 	// address only a person can move.
 	//
@@ -2159,13 +2203,11 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 // unset` is the deliberate path, and the setup answer names what is orphaned.
 func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	kind := integration.Kind(r.PathValue("kind"))
-	company, roster := s.company()
-	if company == nil {
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
-			"hint": "no company configuration is active",
-		})
+	current, ok := s.serve(w, r, "import a company before connecting an integration")
+	if !ok {
 		return
 	}
+	company, roster := current.company, current.roster
 	state, ok := s.stateFor(r.Context(), company, roster, kind)
 	if !ok {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownKind, map[string]string{
@@ -2197,7 +2239,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := decode(body, &req); err != nil {
 			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-				map[string]string{"detail": err.Error()})
+				map[string]string{"detail": plainjson.Unreadable("the body", err)})
 			return
 		}
 	}
@@ -2223,15 +2265,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	if !req.Force {
 		if err := s.markDisconnecting(r.Context(), kind, req.RemoveSeats,
 			attributionOf(r)); err != nil {
-			// TRANSIENT SAID AS TRANSIENT. Both answers are 503 — the
-			// request can be repeated and may then work — but only this
-			// one is a race the caller should sit out and retry, and a
-			// caller cannot tell them apart from the status alone.
-			code, after := httpjson.CodeUnavailable, authz.RetryUndecidedSeconds
-			if errors.Is(err, errSurfaceBusy) {
-				code, after = httpjson.CodeSurfaceBusy, httpjson.RetrySeconds(RetryBusy)
-			}
-			httpjson.UnavailableWith(w, code, after, httpjson.Detail{"detail": err.Error()})
+			refuseDisconnect(w, r, kind, err)
 			return
 		}
 		log.InfoContext(r.Context(), "setup_disconnect_requested",
@@ -2259,7 +2293,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 		Expect:  strings.TrimSpace(r.Header.Get("If-Match")),
 	})
 	if err != nil {
-		s.refuse(w, r, err, setup.Result{})
+		s.refuseConditioned(w, r, err, setup.Result{}, true)
 		return
 	}
 	// FORCED, so whatever the third-party app still holds is now the operator's to
@@ -2287,8 +2321,27 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 
 // refuse maps a write failure onto this surface's answers.
 func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, partial setup.Result) {
+	s.refuseConditioned(w, r, err, partial, false)
+}
+
+// refuseConditioned is [Service.refuse] for a write whose base revision may
+// have been the request's If-Match header (headerBase): a disconnect's is, and
+// every other write here states its base as the body's `if_match` and reads
+// no header at all.
+//
+// 412 WHERE THE BASE WAS THE HEADER, 409 where it was the body: the config
+// surface's one rule ([configapi.RevisionStatus]), asked only of the write
+// that evaluated the header — asked of every write, a connect that ignored an
+// If-Match header and lost on its body's base was told its header failed.
+func (s *Service) refuseConditioned(w http.ResponseWriter, r *http.Request, err error,
+	partial setup.Result, headerBase bool) {
+
+	stale := http.StatusConflict
+	if headerBase {
+		stale = configapi.RevisionStatus(r)
+	}
 	var literal *setup.ErrLiteralInConfig
-	var stale *setup.ErrStaleBase
+	var staleBase *setup.ErrStaleBase
 	var raced *configapi.RacedError
 	var invalid *configapi.ValidationError
 	var patchErr *configapi.PatchError
@@ -2303,12 +2356,12 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 				"there is no variable to write the credential into",
 			"hint": "replace it with a whole ${VAR} reference, or clear it and submit again",
 		})
-	case errors.As(err, &stale):
+	case errors.As(err, &staleBase):
 		// REFUSED BEFORE ANYTHING WAS WRITTEN, which is the difference
 		// from the config surface's own raced answer: there is no stored
 		// revision to name, because nothing was stored.
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeRevisionAdvanced, map[string]string{
-			"your_base": stale.Base, "current_revision_id": stale.Current,
+		httpjson.FailWith(w, stale, httpjson.CodeRevisionAdvanced, map[string]string{
+			"your_base": staleBase.Base, "current_revision_id": staleBase.Current,
 			"hint": "the configuration changed since you read it; re-read the " +
 				"setup state and submit again",
 		})
@@ -2324,7 +2377,7 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 		if raced.Stored != "" {
 			extra["stored_revision_id"] = raced.Stored
 		}
-		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeRevisionAdvanced, extra)
+		httpjson.FailWith(w, stale, httpjson.CodeRevisionAdvanced, extra)
 	case errors.As(err, &invalid):
 		// THE CONFIG SURFACE'S OWN STRUCTURE, located problems and the
 		// derived hierarchy, so a screen placing a refusal on the field it
@@ -2345,16 +2398,38 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeValidationError, fields)
 	case errors.Is(err, configapi.ErrNoActiveRevision):
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision, map[string]string{
-			"hint": "import a company configuration first",
+			"detail": "No company has been configured yet",
+			"hint":   "import a company configuration first",
 		})
 	default:
-		// THE DETAIL GOES TO THE LOG, never to the caller: a third-party app's own
-		// refusal can quote the config value it was given, which on a
-		// company holding a literal would echo the credential.
-		log.ErrorContext(r.Context(), "setup_write_failed",
-			"error", err.Error(), "secrets", strings.Join(partial.Secrets, ","))
-		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+		refuseUnsettled(w, r, err, partial)
 	}
+}
+
+// refuseUnsettled answers a write that failed on something other than what
+// the caller sent, as PATCH /config answers the same failure: an activation
+// whose answer was lost is an unknown outcome to read back, a revision this
+// node cannot open names what fixes it, and a condition of the node — a
+// coordination store that did not answer, where every write here reads the
+// fleet's pointer first — is told in its own words under its own hint. Each
+// was a 500 here, saying the engine had broken, with nothing about trying
+// again. What is left is the fault it is.
+func refuseUnsettled(w http.ResponseWriter, r *http.Request, err error, partial setup.Result) {
+	sealed := strings.Join(partial.Secrets, ",")
+	if configapi.RefuseActivationUnknown(w, err) || configapi.RefuseUnreadable(w, r, err) {
+		log.WarnContext(r.Context(), "setup_write_unsettled",
+			"error", err.Error(), "secrets", sealed)
+		return
+	}
+	if operator.AnswerCondition(r.Context(), w, log, "setup_write_unavailable", err,
+		"secrets", sealed) {
+		return
+	}
+	// THE DETAIL GOES TO THE LOG, never to the caller: a third-party app's own
+	// refusal can quote the config value it was given, which on a company
+	// holding a literal would echo the credential.
+	log.ErrorContext(r.Context(), "setup_write_failed", "error", err.Error(), "secrets", sealed)
+	httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 }
 
 // attributionOf is who a write on this request is attributed to: the author,
@@ -2382,6 +2457,48 @@ type disconnectRequest struct {
 	// saying they will remove what the third-party app holds themselves, so the
 	// answer names what was left behind.
 	Force bool `json:"force"`
+}
+
+// refuseDisconnect answers a disconnect this node could not record: `503`
+// where the same request may then work, and `500` for a failure no condition
+// claims, which is this node's own fault and which no wait clears.
+//
+// TRANSIENT SAID AS TRANSIENT: a concurrent pass holding the surface is
+// `surface_busy` under its own short wait, because only that one is a race the
+// caller should sit out and retry, and a caller cannot tell it from the rest by
+// the status alone.
+//
+// IN WORDS FOR A PERSON, the error to the log: the detail was the error, so a
+// disconnect the coordination store could not take read "setupapi: this node
+// could not take slack to record the disconnect: " and the store's own
+// transport error, its hosts and ports. A condition is told in its own
+// sentence ([builtin.ConditionSentence]) under its own hint, which is none
+// where no wait clears it.
+func refuseDisconnect(w http.ResponseWriter, r *http.Request, kind integration.Kind, err error) {
+	code := httpjson.CodeUnavailable
+	var after int
+	var said string
+	switch condition, isCondition := builtin.ConditionSentence(err); {
+	case errors.Is(err, errSurfaceBusy):
+		code, after = httpjson.CodeSurfaceBusy, httpjson.RetrySeconds(RetryBusy)
+		said = "This integration is being set up right now, so the " +
+			"disconnect didn't start. Try again in a moment."
+	case isCondition:
+		said = condition
+		after = httpjson.RetrySeconds(builtin.RetryAfter(err,
+			time.Duration(authz.RetryUndecidedSeconds)*time.Second))
+	default:
+		// A FAILURE NO CONDITION CLAIMS is this node's own fault, which no
+		// wait clears: it was a 503 telling a person to try again in a
+		// moment.
+		log.ErrorContext(r.Context(), "setup_disconnect_failed",
+			"integration", kind, "error", err.Error())
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+		return
+	}
+	log.WarnContext(r.Context(), "setup_disconnect_unrecorded",
+		"integration", kind, "error", err.Error())
+	httpjson.UnavailableWith(w, code, after, httpjson.Detail{"detail": said})
 }
 
 // errSurfaceBusy is [Service.markDisconnecting] refused by a concurrent

@@ -27,6 +27,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
@@ -323,12 +324,17 @@ func DecodeArgs(raw []byte, tool string) (map[string]any, error) {
 	if err := dec.Decode(&args); err != nil {
 		log.Warn("tool_arguments_unparseable",
 			"tool", tool, "bytes", len(raw), "error", err.Error())
-		return map[string]any{}, fmt.Errorf("the arguments are not a JSON object: %w", err)
+		// IN WORDS ([plainjson.Unreadable]), because the model reads this
+		// as its call's failed result and fixes the call from it: the
+		// decoder's own words name Go's types, and the log line above
+		// keeps them.
+		return map[string]any{}, errors.New(plainjson.Unreadable("the arguments object", err))
 	}
 	if dec.More() {
 		// Two values back to back is not one object with a stray tail; it
 		// is a call nobody can say which half of to run.
-		return map[string]any{}, errors.New("the arguments are not a single JSON object")
+		return map[string]any{}, errors.New(plainjson.Unreadable("the arguments object",
+			plainjson.ErrTrailing))
 	}
 	if args == nil {
 		// A literal `null` unmarshals into a nil map without error.
@@ -344,6 +350,16 @@ func DecodeArgs(raw []byte, tool string) (map[string]any, error) {
 // null, and an assistant turn replaying `"arguments": "null"` is a message the
 // model wrote turning into one it did not.
 //
+// THROUGH [plainjson.Marshal], not `json.Marshal`, for the same reason: a
+// string field is not decoded on the host's side the way an object is — it is
+// handed to the model as the text it holds, every later round of the turn. A
+// call the model wrote as {"code": "if a < b"} came back to it as
+// {"code": "if a \u003c b"}, a message it did not write, in a spelling it
+// then copies. With the escapes off, every value the replay carries is
+// spelled as the model spelled it; the object around them is re-encoded from
+// the decoded map, so its keys come back sorted and its spacing gone, which
+// changes nothing the model wrote in any value.
+//
 // A marshal failure is an error rather than a silent "{}". By this point the
 // map came from the caller, not from a provider response — a value that cannot
 // be JSON (a NaN, an infinity) is a plumbing fault, and swapping it for empty
@@ -352,7 +368,7 @@ func EncodeArgs(args map[string]any, tool string) (string, error) {
 	if len(args) == 0 {
 		return "{}", nil
 	}
-	raw, err := json.Marshal(args)
+	raw, err := plainjson.Marshal(args, "")
 	if err != nil {
 		return "", fmt.Errorf("tool %q arguments are not JSON: %w", tool, err)
 	}

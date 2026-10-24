@@ -72,6 +72,7 @@ describe("which chunk draws a screen", () => {
         "account",
         "agents",
         "artifacts",
+        "chat",
         "home",
         "inbox",
         "knowledge",

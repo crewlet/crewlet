@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -124,16 +125,16 @@ func TestAnUnmarkedSeatRunsThePassAndMarks(t *testing.T) {
 func TestTheOnboardingPassIsNotShownRunSandbox(t *testing.T) {
 	t.Parallel()
 	prov := &scriptedProvider{onboarding: []llm.Completion{
-		activate(runner.RunSandboxTool),
+		activate(toolname.RunSandbox),
 		{ToolCalls: []llm.ToolCall{{ID: "a", Name: "mark_onboarded",
 			Arguments: map[string]any{"notes": "read the pages"}}}},
 	}}
-	r := onboardingRunner(t, &markers{claimHeld: true}, runner.NewLatch(), prov, runner.RunSandboxTool)
+	r := onboardingRunner(t, &markers{claimHeld: true}, runner.NewLatch(), prov, toolname.RunSandbox)
 	if _, err := r.Onboard(context.Background()); err != nil {
 		t.Fatalf("Onboard: %v", err)
 	}
 	system := systemOf(t, prov, "onboarding")
-	if strings.Contains(system, runner.RunSandboxTool) {
+	if strings.Contains(system, toolname.RunSandbox) {
 		t.Error("the onboarding pass's catalogue lists run_sandbox, which would start a run nothing collects")
 	}
 	if !strings.Contains(system, "reflect_and_persist") {
@@ -144,7 +145,7 @@ func TestTheOnboardingPassIsNotShownRunSandbox(t *testing.T) {
 		t.Fatalf("the pass made %d requests; the activation never got a round after it", len(requests))
 	}
 	for i, req := range requests {
-		if slices.Contains(toolNames(req.Tools), runner.RunSandboxTool) {
+		if slices.Contains(toolNames(req.Tools), toolname.RunSandbox) {
 			t.Errorf("onboarding round %d was offered run_sandbox, which activate_tool reached", i+1)
 		}
 	}
@@ -301,7 +302,7 @@ func TestTheOnboardingPassAsksOnAutoAndIsReAskedToMark(t *testing.T) {
 	if len(reqs) != 2 {
 		t.Fatalf("the pass was asked %d times, want 2", len(reqs))
 	}
-	if last := reqs[1].Messages[len(reqs[1].Messages)-1]; !isFinishingCorrective(last, runner.MarkOnboardedTool) {
+	if last := reqs[1].Messages[len(reqs[1].Messages)-1]; !isFinishingCorrective(last, toolname.MarkOnboarded) {
 		t.Errorf("the second round opened on %q, want the finishing corrective", last.Content)
 	}
 	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
@@ -393,7 +394,7 @@ func TestTheOnboardingSurfaceCanDiscoverTools(t *testing.T) {
 		t.Fatal("the pass never called the model")
 	}
 	offered := toolNames(reqs[0].Tools)
-	for _, want := range []string{runner.ListMCPToolsTool, runner.ActivateTool} {
+	for _, want := range toolname.Discovery() {
 		if !slices.Contains(offered, want) {
 			t.Errorf("the onboarding surface offers %v, without %s: the pass "+
 				"cannot reach the knowledge-base tools its prompt sends it to", offered, want)

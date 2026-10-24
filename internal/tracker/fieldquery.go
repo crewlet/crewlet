@@ -364,10 +364,10 @@ func collectFieldRefs(q Query, into map[string]bool) {
 // one whose predicate this read stops implying (`hidden = 0`, carried by
 // [liveFieldValue]) with `no query solution` — loudly, at the first filter,
 // rather than as a board that quietly got slower.
-func fieldClause(filter FieldFilter, field resolvedField) (string, []any, error) {
+func fieldClause(filter FieldFilter, field resolvedField, on alias) (string, []any, error) {
 	column := "v." + FieldValueColumn(field.Type)
 	inner := func(predicate string, args ...any) (string, []any, error) {
-		return "t.id IN (SELECT v.task_id FROM tracker_field_values v " +
+		return on.col("id") + " IN (SELECT v.task_id FROM tracker_field_values v " +
 			"INDEXED BY " + fieldValueIndex(field.Type) + " " +
 			"WHERE v.field_id = ? AND " + liveFieldValue + " AND " +
 			predicate + ")", append([]any{field.ID}, args...), nil
@@ -391,7 +391,7 @@ func fieldClause(filter FieldFilter, field resolvedField) (string, []any, error)
 		// NOT IN IS SAFE HERE because `task_id` is NOT NULL: one NULL
 		// in the subquery would make the whole comparison NULL and the
 		// predicate would match nothing at all.
-		return negated(clause), args, err
+		return negated(clause, on), args, err
 	case FieldOpNotNull:
 		return inner(column + " IS NOT NULL")
 	}
@@ -415,7 +415,7 @@ func fieldClause(filter FieldFilter, field resolvedField) (string, []any, error)
 		// one of these": a labels field holding two options satisfies
 		// the second for every option it holds beside the excluded one,
 		// so the negation has to be of the whole membership.
-		return negated(clause), args, nil
+		return negated(clause, on), args, nil
 	case FieldOpAll, FieldOpNotAll:
 		values, err := fieldValueSet(filter, field)
 		if err != nil {
@@ -444,7 +444,7 @@ func fieldClause(filter FieldFilter, field resolvedField) (string, []any, error)
 			" GROUP BY v.task_id HAVING COUNT(DISTINCT " + column + ") = ?)"
 		args = append(args, len(values))
 		if filter.Op == FieldOpNotAll {
-			return negated(all), args, nil
+			return negated(all, on), args, nil
 		}
 		return all, args, nil
 	case FieldOpRange:
@@ -478,7 +478,7 @@ func fieldClause(filter FieldFilter, field resolvedField) (string, []any, error)
 		// a labels field with two members would satisfy the second for
 		// every value it holds beside the one excluded.
 		clause, args, err := inner(column+" = ?", value)
-		return negated(clause), args, err
+		return negated(clause, on), args, err
 	case FieldOpLt:
 		return inner(column+" < ?", value)
 	case FieldOpLte:
@@ -568,8 +568,8 @@ func clipValue(value string) string {
 // TEXTUAL, on the one form [fieldClause] emits, rather than a wrapping `NOT
 // (…)` — the two are the same to SQLite and only this one reads as what it is
 // where it is called.
-func negated(clause string) string {
-	return strings.Replace(clause, "t.id IN (", "t.id NOT IN (", 1)
+func negated(clause string, on alias) string {
+	return strings.Replace(clause, on.col("id")+" IN (", on.col("id")+" NOT IN (", 1)
 }
 
 // checkFieldOp refuses an operator the field's TYPE does not admit.

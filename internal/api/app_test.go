@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
@@ -136,7 +137,7 @@ func (nobodyHolds) HolderRecord(_ context.Context, login string) (string, error)
 type noAppFlow struct{}
 
 func (noAppFlow) Complete(context.Context, string, string) (string, error) { return "", nil }
-func (noAppFlow) InstallURL(string) string                                 { return "" }
+func (noAppFlow) InstallURL(context.Context, string) string                { return "" }
 
 // active is a company revision that is active, for the cases about a
 // configured node.
@@ -268,6 +269,11 @@ func withRequired(opts api.Options) api.Options {
 	if opts.Credentials == nil {
 		opts.Credentials = &fakeCredentials{}
 	}
+	if opts.ChatLive == nil {
+		// A HUB WITH NOTHING TO SAY: no rooms to decide by, so it pushes
+		// no committed frame and no presence, and never started.
+		opts.ChatLive = stream.NewChatHub(stream.ChatHubOptions{})
+	}
 	if opts.Audit == nil {
 		opts.Audit = queuememory.New()
 	}
@@ -299,7 +305,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		"Sources.Chart", "Sources.Holders", "Sources.WithheldContacts", "Sources.Coord",
 		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
 		"Config", "Secrets", "Setup", "Retention", "Capacity", "FleetBroker", "Backup",
-		"AuthEvents", "Inbox", "Credentials", "Nodes", "Audit",
+		"AuthEvents", "Inbox", "Credentials", "ChatLive", "Nodes", "Audit",
 	} {
 		if !strings.Contains(err.Error(), "Options."+field) {
 			t.Errorf("the refusal does not name Options.%s: %v", field, err)

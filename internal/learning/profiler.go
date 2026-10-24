@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
@@ -82,6 +83,11 @@ const (
 // the failure this pass has is not refusal but prose: a model that answers
 // "Sam seems to prefer short replies" instead of {"reply_length":"short"}
 // produces a patch that parses to nothing, silently, on every turn.
+//
+// IT ENDS ON THE STANDING SENTENCE ON FENCES ([provenance.StandingInstruction]),
+// the one the seat's own prompt carries: what the turn was asked and what was
+// said to it reach this call fenced under a token minted for the call
+// (ADR-0040), and the sentence is what says a fence is somebody's words.
 const ProfilerSystemPrompt = `You are maintaining a working profile of one person a colleague deals with.
 
 Answer with a JSON object and nothing else: a flat map of trait name to a short
@@ -99,7 +105,7 @@ anything already listed as known.
 If you learned nothing durable that is not already known, answer exactly {}.
 
 Example of a good answer:
-{"reply_style":"bullet points","timezone":"Europe/Berlin","owns":"billing service"}`
+{"reply_style":"bullet points","timezone":"Europe/Berlin","owns":"billing service"}` + "\n\n" + provenance.StandingInstruction
 
 // NewProfiler builds the worker over a profile store.
 func NewProfiler(models Models, c *Counterparties, opts ProfilerOptions) (*Profiler, error) {
@@ -247,10 +253,14 @@ func (p *Profiler) patch(ctx context.Context, t Turn, s subjectMessages,
 	}
 	call, cancel := context.WithTimeout(ctx, p.timeout)
 	defer cancel()
+	// ONE TOKEN FOR THE CALL, minted for it and never a turn's: what the
+	// person said is fenced under it, and what this call answers is a trait
+	// every later prompt about them carries.
+	fence := provenance.NewBoundary()
 	completion, err := member.Provider.Complete(call, llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: ProfilerSystemPrompt},
-			{Role: llm.RoleUser, Content: p.prompt(s, existing)},
+			{Role: llm.RoleUser, Content: p.prompt(fence, s, existing)},
 		},
 		Temperature: llm.Temp(auxTemperature),
 		Effort:      auxEffort,
@@ -281,39 +291,45 @@ func (p *Profiler) patch(ctx context.Context, t Turn, s subjectMessages,
 }
 
 // prompt renders one subject's messages and what is already on file.
-func (p *Profiler) prompt(s subjectMessages, existing Profile) string {
-	var b strings.Builder
-	b.WriteString("## The person\n")
-	b.WriteString(subjectLine(s.subject))
-	b.WriteString("\n\n## Already known about them\n")
+//
+// WHAT THEY SAID IS FENCED under b as the turn read it ([inboundBody],
+// ADR-0040), and everything else — the name they chose, the traits an
+// earlier pass wrote — is neutralised under it: what this call answers is a
+// trait carried into every later prompt about the person, so a message that
+// tells the profiler what to write down must read as that person's words.
+func (p *Profiler) prompt(b provenance.Boundary, s subjectMessages, existing Profile) string {
+	var out strings.Builder
+	out.WriteString("## The person\n")
+	out.WriteString(provenance.Neutralise(b, orElse(DescribeSubject(s.subject), "(unidentified)")))
+	out.WriteString("\n\n## Already known about them\n")
 	if len(existing.Traits) == 0 {
-		b.WriteString("Nothing on file yet.\n")
+		out.WriteString("Nothing on file yet.\n")
 	} else {
 		for _, k := range sortedKeys(existing.Traits) {
-			fmt.Fprintf(&b, "- %s: %v\n", k, existing.Traits[k])
+			out.WriteString(provenance.Neutralise(b, fmt.Sprintf("- %s: %v", k, existing.Traits[k])))
+			out.WriteString("\n")
 		}
 	}
-	b.WriteString("\n## What they said this time\n")
-	for _, body := range s.bodies {
-		body = strings.TrimSpace(body)
-		if body == "" {
-			continue
+	out.WriteString("\n## What they said this time\n")
+	for _, in := range s.said {
+		// WHOLE, never cut. This is what the person actually said, and it
+		// is the only evidence the profiler has for the trait it is about
+		// to write down and keep — a message cut at 2000 bytes teaches a
+		// preference from half a sentence. A fence per message, so a
+		// pasted log's own lines stay inside the message they came in.
+		if body := inboundBody(b, in); body != "" {
+			out.WriteString(body)
+			out.WriteString("\n")
 		}
-		// WHOLE, and collapsed rather than cut. This is what the person
-		// actually said, and it is the only evidence the profiler has for
-		// the trait it is about to write down and keep — a message cut at
-		// 2000 bytes teaches a preference from half a sentence. The cut
-		// also ran BEFORE the newline collapse, so its byte budget was
-		// being spent on whitespace the next call removed.
-		fmt.Fprintf(&b, "- %s\n", collapseLines(body))
 	}
-	return b.String()
+	return out.String()
 }
 
-// subjectMessages is one party and everything they said this turn.
+// subjectMessages is one party and everything they said this turn, each
+// message with the label the turn read it under.
 type subjectMessages struct {
 	subject Subject
-	bodies  []string
+	said    []types.InboundInteraction
 }
 
 // subjectsOf groups a turn's interactions by the party who sent them.
@@ -346,14 +362,14 @@ func (p *Profiler) subjectsOf(t Turn) []subjectMessages {
 			continue
 		}
 		if at, ok := index[s]; ok {
-			out[at].bodies = append(out[at].bodies, in.Body)
+			out[at].said = append(out[at].said, in)
 			continue
 		}
 		if len(out) >= p.maxSubjects {
 			continue
 		}
 		index[s] = len(out)
-		out = append(out, subjectMessages{subject: s, bodies: []string{in.Body}})
+		out = append(out, subjectMessages{subject: s, said: []types.InboundInteraction{in}})
 	}
 	return out
 }
@@ -418,24 +434,6 @@ func scalarTraits(obj map[string]any) map[string]any {
 // once and read in every later prompt about that person.
 const maxTraitValue = 200
 
-// subjectLine renders who a party is, for the profiler's prompt.
-func subjectLine(s Subject) string {
-	parts := make([]string, 0, 3)
-	if s.Name != "" {
-		parts = append(parts, s.Name)
-	}
-	if s.Handle != "" {
-		parts = append(parts, "@"+s.Handle)
-	}
-	if s.Platform != "" && s.ExternalID != "" {
-		parts = append(parts, s.Platform+" id "+s.ExternalID)
-	}
-	if len(parts) == 0 {
-		return "(unidentified)"
-	}
-	return strings.Join(parts, " · ")
-}
-
 // sortedKeys orders a trait bag so the prompt is stable between turns.
 //
 // STABLE because the provider caches on an exact prefix: a map iterated in
@@ -443,13 +441,4 @@ func subjectLine(s Subject) string {
 // every turn, for a block whose content did not change.
 func sortedKeys(m map[string]any) []string {
 	return slices.Sorted(maps.Keys(m))
-}
-
-// collapseLines folds a message onto one line.
-//
-// The prompt renders each message as a bullet, and a pasted log with its own
-// newlines would otherwise break out of the list and read as instructions
-// rather than as quoted content.
-func collapseLines(s string) string {
-	return strings.Join(strings.Fields(s), " ")
 }

@@ -127,7 +127,7 @@ func (a *Applier) addAsset(ctx context.Context, tx *sql.Tx, c applyContext, arti
 		return 0, err
 	}
 	rows += n
-	a.move(artifact, MoveAsset, head.epoch, head.head, c.position)
+	a.move(c, artifact, MoveAsset, head.epoch, head.head)
 	return rows, nil
 }
 
@@ -187,7 +187,7 @@ func (a *Applier) removeAsset(ctx context.Context, tx *sql.Tx, c applyContext, a
 		return 0, err
 	}
 	rows += n
-	a.move(artifact, MoveAsset, head.epoch, head.head, c.position)
+	a.move(c, artifact, MoveAsset, head.epoch, head.head)
 	return rows, nil
 }
 

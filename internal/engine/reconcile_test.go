@@ -503,11 +503,11 @@ func TestReactivatingTheHeldRevisionMovesItsLocalInstant(t *testing.T) {
 
 // THE FLEET'S REVISION IS THIS NODE'S ACTIVE ONE ONCE THE NODE RUNS IT.
 //
-// A node's active revision is what its GET /config serves, what it boots on,
-// and what it offers the whole fleet at its next start whenever it is newer
-// than the pointer. One that is not the fleet's, left there after the node
-// applied the fleet's epoch, is a node serving a company the fleet is not
-// running, and republishing it one restart later over the one that is.
+// A node's active revision is what it boots on, and what it offers the whole
+// fleet at its next start whenever it is newer than the pointer. One that is
+// not the fleet's, left there after the node applied the fleet's epoch, is a
+// node that boots on a company the fleet is not running, and republishes it
+// one restart later over the one that is.
 func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
 	t.Parallel()
 	activeID := func(t *testing.T, p *plane) string {
@@ -519,10 +519,10 @@ func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
 		return active.ID
 	}
 
-	// A revision marked active on this node AFTER it applied the fleet's:
-	// a write that lost a race and marked itself anyway, or one whose
-	// local activation landed after this node adopted a newer revision.
-	t.Run("a stray revision marked active after the apply", func(t *testing.T) {
+	// A revision marked active on this node that the fleet's activation
+	// post-dates: an offline import the fleet had already superseded when
+	// the node started, which the boot leaves for this loop to replace.
+	t.Run("a stray revision the fleet's activation post-dates", func(t *testing.T) {
 		t.Parallel()
 		p := newPlane(t)
 		p.activate(t.Context(), t, grownCompanyDoc)
@@ -536,7 +536,7 @@ func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
 		stray, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
 			CreatedByKind: iam.ActorOperator,
 			Source:        "test", CreatedBy: "operator", Summary: "stray",
-			Payload: yamlToJSON(t, companyDoc), CreatedAt: pinnedNow.Add(time.Hour),
+			Payload: yamlToJSON(t, companyDoc), CreatedAt: pinnedNow.Add(-time.Hour),
 		})
 		if err != nil {
 			t.Fatalf("store the stray revision: %v", err)
@@ -1428,6 +1428,48 @@ func TestAnUnreadableControlPlaneReopensTheGate(t *testing.T) {
 	}
 }
 
+// THE HEARTBEAT'S READ NAMES THE PLANE IT COULD NOT READ instead of failing
+// open, and shuts nothing the probe's read would not: it reopens the gate
+// exactly as [engine.Reconciler.Posture] does, so the admission a node
+// applies cannot depend on which of the two read last.
+func TestReadPostureReportsAnUnreadablePlaneAndStillReopensTheGate(t *testing.T) {
+	t.Parallel()
+	var blind atomic.Bool
+	p := newPlane(t, func(o *engine.ReconcilerOptions) {
+		o.Fleet = &blindPlane{planeBackend: o.Fleet, blind: &blind}
+	})
+	p.activatePayload(t, "broken", brokenRevision)
+	_ = p.recon.Tick(t.Context())
+	target, _, err := p.fleet.Target(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.fleet.RecordApply(t.Context(), coord.NodeApply{
+		NodeID: "node-b", Epoch: target.Epoch, Status: string(configplane.StatusOK),
+		UpdatedAt: pinnedNow,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := p.recon.ReadPosture(t.Context()); err != nil || got != configplane.PostureShed {
+		t.Fatalf("posture = %q, %v; want shed — the premise", got, err)
+	}
+	if p.recon.Admits() {
+		t.Fatal("a shedding node still admitted work — the premise")
+	}
+
+	blind.Store(true)
+	got, err := p.recon.ReadPosture(t.Context())
+	if err == nil {
+		t.Fatalf("an unreadable control plane answered %q, want an error", got)
+	}
+	if got != "" {
+		t.Errorf("posture = %q beside the error, want none", got)
+	}
+	if !p.recon.Admits() {
+		t.Error("the gate stayed shut on a plane the heartbeat could not read")
+	}
+}
+
 // blindPlane is a control plane that stops answering on command — a broker
 // that was reachable and is not any more, which is the state the fail-open
 // rule exists for.
@@ -2005,5 +2047,74 @@ func TestAHungApplyStaysLateAcrossANewActivation(t *testing.T) {
 	}
 	if p.recon.Applied() != next {
 		t.Fatalf("applied = %d, want %d", p.recon.Applied(), next)
+	}
+}
+
+// A FLEET WHOSE ACTIVATION POINTER IS GONE GETS THE RUNNING COMPANY BACK from
+// the next tick of a node that holds it.
+//
+// A coordination store recreated under running nodes keeps no activation, and
+// a tick with nothing activated did nothing: every node went on running its
+// company while /config, which answers the pointer, said nothing was
+// configured, and a create-only import landed over the running company. A
+// node holding a copy now offers it, create-only, and the first offer is the
+// fleet's. A copy stored without a seal is never offered, since every peer
+// would refuse it. Checked to fail with the offer taken out of the tick.
+func TestAFleetThatLostItsPointerGetsTheRunningRevisionBack(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	p := newPlane(t)
+	// THE NODE'S OWN COPY, and no pointer: the store that kept it was
+	// recreated under the running node.
+	id, err := p.store.Configs().InsertActive(ctx, store.Revision{
+		Source: "test", CreatedBy: revisionAuthor, CreatedByKind: iam.ActorHuman,
+		Summary: "running", Payload: p.seal(t, yamlToJSON(t, companyDoc)),
+		CreatedAt: pinnedNow, ActivatedAt: pinnedNow,
+	})
+	if err != nil {
+		t.Fatalf("store the running revision: %v", err)
+	}
+	if err := p.recon.Tick(ctx); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	target, found, err := p.fleet.Target(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || target.RevisionID != id {
+		t.Fatalf("the fleet's pointer after a tick = %+v (found %v), want the "+
+			"revision this node runs, %s", target, found, id)
+	}
+	if target.Origin.Author != revisionAuthor {
+		t.Errorf("the restored pointer names %q as the author, want the revision's "+
+			"own %q", target.Origin.Author, revisionAuthor)
+	}
+	// AND THE NEXT TICK RUNS ON IT, like any activation.
+	if err := p.recon.Tick(ctx); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if p.recon.Applied() != target.Epoch {
+		t.Errorf("applied epoch = %d, want the restored %d", p.recon.Applied(), target.Epoch)
+	}
+}
+
+// AN UNSEALED COPY IS NEVER OFFERED: the seal is what says a node of this
+// fleet wrote a revision, so every peer would refuse it.
+func TestAnUnsealedCopyIsNotOfferedToAFleetWithNoPointer(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	p := newPlane(t)
+	if _, err := p.store.Configs().InsertActive(ctx, store.Revision{
+		Source: "test", CreatedBy: revisionAuthor, CreatedByKind: iam.ActorHuman,
+		Summary: "plaintext", Payload: yamlToJSON(t, companyDoc),
+		CreatedAt: pinnedNow, ActivatedAt: pinnedNow,
+	}); err != nil {
+		t.Fatalf("store the copy: %v", err)
+	}
+	if err := p.recon.Tick(ctx); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if _, found, err := p.fleet.Target(ctx); err != nil || found {
+		t.Errorf("an unsealed copy was offered to the fleet (found %v, err %v)", found, err)
 	}
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // The knowledge backend: live CQL search behind the neutral seam.
@@ -159,10 +160,26 @@ func (s *Searcher) hits(pages []Page, q knowledge.Query) []knowledge.Hit {
 		out = append(out, knowledge.Hit{
 			Title: page.Title, URL: s.link(page), Container: page.Space,
 			PageID: page.ID, Ancestors: page.Ancestors, Backend: Backend,
-			Snippet: knowledge.Snippet(Flatten(page.Body), knowledge.SnippetLimit),
+			Snippet:    knowledge.Snippet(Flatten(page.Body), knowledge.SnippetLimit),
+			Provenance: HitLabel(),
 		})
 	}
 	return out
+}
+
+// HitLabel is what a Confluence hit's title and snippet are, as a model reads
+// them (ADR-0040): a page's body, written by NOBODY THIS SEARCH CAN NAME, and
+// so `external`.
+//
+// A search result says at most who last saved the page, never that one person
+// wrote every word of it — the rule a wake names a writer by — and the site is
+// not the company's alone: anybody it gives an account can edit a space they
+// can reach, so nothing about the surface vouches for whoever wrote a page the
+// way the engine's own pages do. It is how a Confluence page's body on any
+// later event reads in a wake, for the same reason.
+func HitLabel() provenance.Label {
+	return provenance.Label{Source: provenance.SourcePageBody,
+		Trust: provenance.TrustFor("", nil)}
 }
 
 // hidden reports a page the caller asked not to see.

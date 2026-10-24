@@ -10,7 +10,7 @@ import (
 // THE ID'S DERIVATION AND ITS TEXT FORM, owned by the domain that mints ids
 // (internal/artifactsdomain) and written here, in the leaf, because every
 // surface that names an artifact parses and prints one: the HTTP routes, the
-// tools, the ticket codec, the presence subject and the dashboard's contract.
+// tools, the ticket codec, the presence room and the dashboard's contract.
 // Two parsers would be two answers to whether a string names an artifact.
 
 // ErrInvalidID reports a string that is not an artifact id in its one text
@@ -28,7 +28,7 @@ func IDFor(opID string) ID { return ID(uuid.NewSHA1(IDNamespace, []byte(opID))) 
 func (id ID) IsZero() bool { return id == ID{} }
 
 // UUID is the id as the uuid it is, for the builders that take one
-// (internal/queue/topics' presence subject).
+// (internal/presence's room, and the subject it is told on).
 func (id ID) UUID() uuid.UUID { return uuid.UUID(id) }
 
 // String renders the id in its canonical form: lowercase, hyphenated, 36

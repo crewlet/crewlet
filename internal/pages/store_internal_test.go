@@ -20,6 +20,16 @@ import (
 // a model to report a failure rather than to re-read and retry.
 //
 // A test over values, because the producing condition is sixteen lost races.
+//
+// NEITHER NAMES THE SUBJECT, in the error or in its sentence: a title's is its
+// container and a DIGEST of the title, which says nothing to the person who
+// typed the title, and a page's is a broker path; the lost race carries the
+// framework's SENTINEL, so a caller reasoning in either vocabulary matches,
+// and not the framework's error, whose text names the subject again. It used
+// to carry both for the log, which any caller printing it would have shown a
+// person. Mutations: wrap the framework's error again, or the subject, and the
+// lost race's row goes red; drop the lost-race arm from Sentence and its
+// sentence does.
 func TestEveryRefusalACallerActsOnIsTranslated(t *testing.T) {
 	t.Parallel()
 
@@ -27,31 +37,38 @@ func TestEveryRefusalACallerActsOnIsTranslated(t *testing.T) {
 		in     error
 		want   error
 		framed bool // the framework's own sentinel survives the translation
+		says   string
 	}{
 		"a title somebody already holds": {
 			in: fmt.Errorf("append: %w", statelog.ErrExists), want: ErrTitleTaken,
+			says: "a page in this space already has that title. Open that page " +
+				"and edit it, or pick another title",
 		},
 		"a write that ran out of rounds": {
-			in: fmt.Errorf("append: %w", statelog.ErrConflict), want: ErrConflict,
-			framed: true,
+			in: fmt.Errorf("append: %w: crewlet.pages.title.ENG.deploy-runbook kept "+
+				"changing under this write", statelog.ErrConflict), want: ErrConflict,
+			framed: true, says: statelog.LostRace,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got := refusal(tc.in, "ENG.deploy-runbook")
+			got := refusal(tc.in, statelog.Subject{Kind: string(KindTitle),
+				ID: "ENG.deploy-runbook"})
 			if !errors.Is(got, tc.want) {
 				t.Fatalf("refusal(%v) = %v, which is not %v — the tool surface "+
 					"branches on that sentinel and would fall through to the "+
 					"answer that tells a model the change is simply lost",
 					tc.in, got, tc.want)
 			}
-			if !strings.Contains(got.Error(), "ENG.deploy-runbook") {
-				t.Errorf("the refusal does not name the subject: %v — an error "+
-					"a person reads names what they have to go and look at", got)
+			if strings.Contains(got.Error(), "ENG.deploy-runbook") {
+				t.Errorf("the refusal names the subject: %v", got)
 			}
-			if framed := errors.Is(got, tc.in); framed != tc.framed {
-				t.Errorf("the framework's own error survives = %v, want %v",
+			if framed := errors.Is(got, statelog.ErrConflict); framed != tc.framed {
+				t.Errorf("the framework's own sentinel survives = %v, want %v",
 					framed, tc.framed)
+			}
+			if said := Sentence(got); said != tc.says {
+				t.Errorf("a person is told %q, want %q", said, tc.says)
 			}
 		})
 	}
@@ -63,11 +80,12 @@ func TestEveryRefusalACallerActsOnIsTranslated(t *testing.T) {
 func TestARefusalThisPackageHasNoWordForTravelsUnchanged(t *testing.T) {
 	t.Parallel()
 
-	if got := refusal(nil, "ENG.runbook"); got != nil {
+	page := statelog.Subject{Kind: string(KindPage), ID: "ENG.runbook"}
+	if got := refusal(nil, page); got != nil {
 		t.Errorf("a write that landed came back as %v", got)
 	}
 	unreachable := fmt.Errorf("dial: %w", statelog.ErrUnavailable)
-	got := refusal(unreachable, "ENG.runbook")
+	got := refusal(unreachable, page)
 	if !errors.Is(got, statelog.ErrUnavailable) {
 		t.Fatalf("an unavailable log came back as %v", got)
 	}
@@ -75,6 +93,70 @@ func TestARefusalThisPackageHasNoWordForTravelsUnchanged(t *testing.T) {
 		if errors.Is(got, mistaken) {
 			t.Errorf("an unavailable log reads as %v, so a caller acts on a "+
 				"refusal the broker never made", mistaken)
+		}
+	}
+}
+
+// A REFUSAL ON THE LOG'S OWN SUBJECTS STAYS IN THE FRAMEWORK'S WORDS.
+//
+// A node's eviction gate, a reanchor's generation and a barrier are published
+// through the same store as a page edit, and were translated alike: two
+// operators contending over one node's gate were told "the page kept changing
+// under this write: <node id>", about an edit nobody was making. A page, a
+// title and a container are what a person edits, and only their refusals are
+// a person's.
+//
+// EVERY KIND THE DOMAIN DECLARES IS CLASSED HERE, read from [ObjectKinds]: a
+// kind added without a row is red until somebody says whether a person edits
+// it, because [refusal] translates only the kinds it names and a new kind a
+// person does edit would otherwise answer every lost race in the framework's
+// words, which the tool surface does not branch on.
+//
+// Mutation: translate whatever the subject's kind and the log's own rows go
+// red; translate nothing and the edited rows do; declare a seventh kind and
+// it is named.
+func TestARefusalOnTheLogsOwnSubjectsIsTheFrameworks(t *testing.T) {
+	t.Parallel()
+	// edited is whether a person edits a kind's objects, for every kind.
+	edited := map[ObjectKind]bool{
+		KindContainer: true, KindPage: true, KindTitle: true,
+		KindEviction: false, KindGeneration: false, KindBarrier: false,
+	}
+	for kind := range edited {
+		if !kind.Valid() {
+			t.Errorf("%s has a row here and the domain declares no such kind", kind)
+		}
+	}
+	for _, kind := range ObjectKinds {
+		person, classed := edited[kind]
+		if !classed {
+			t.Errorf("%s is a kind the domain declares and this table does not class: "+
+				"say whether a person edits it, and translate its refusals in "+
+				"refusal() if one does", kind)
+			continue
+		}
+		subject := statelog.Subject{Kind: string(kind), ID: "ENG.runbook"}
+		for _, c := range []struct{ in, translated error }{
+			{fmt.Errorf("append: %w", statelog.ErrConflict), ErrConflict},
+			{fmt.Errorf("append: %w", statelog.ErrExists), ErrTitleTaken},
+		} {
+			got := refusal(c.in, subject)
+			if person {
+				if !errors.Is(got, c.translated) {
+					t.Errorf("refusal(%v) on a %s subject = %v, want %v", c.in, kind,
+						got, c.translated)
+				}
+				continue
+			}
+			// THE SAME ERROR IN THE SAME WORDS: wrapped in this package's,
+			// it would still answer errors.Is and read as a page edit.
+			if !errors.Is(got, c.in) || got.Error() != c.in.Error() {
+				t.Errorf("refusal(%v) on a %s subject = %v, want the framework's own",
+					c.in, kind, got)
+			}
+			if errors.Is(got, c.translated) {
+				t.Errorf("a %s refusal reads as %v", kind, c.translated)
+			}
 		}
 	}
 }

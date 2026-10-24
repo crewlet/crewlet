@@ -13,6 +13,10 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/words"
+
+	turso "turso.tech/database/tursogo"
 )
 
 // Backing this file up ONLINE, and why it is VACUUM INTO.
@@ -192,6 +196,11 @@ func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 	// transaction.
 	if err := d.vacuumInto(ctx, part); err != nil {
 		_ = removeDatabaseFiles(part)
+		if tempDirRefused(err) {
+			return BackupInfo{}, fmt.Errorf("store: backup %s to %s: couldn't make "+
+				"a directory for the copy's temporary files. %s: %w",
+				d.path, dest, temporaryDirectories(), err)
+		}
 		return BackupInfo{}, fmt.Errorf("store: backup %s to %s: %w", d.path, dest, err)
 	}
 	took := now().Sub(started)
@@ -337,9 +346,9 @@ func verifyBackup(ctx context.Context, path string, want []string) ([]string, er
 	// would migrate forward from the wrong place, whether that number is
 	// zero or twelve.
 	if !slices.Equal(applied, want) {
-		return nil, fmt.Errorf("store: backup verify: the copy at %s records schema %v "+
-			"but the database it was copied from has applied %v, so a restore of it "+
-			"would migrate forward from the wrong place", path, applied, want)
+		return nil, fmt.Errorf("store: backup verify: the copy at %s records schema %s "+
+			"but the database it was copied from has applied %s, so a restore of it "+
+			"would migrate forward from the wrong place", path, words.And(applied), words.And(want))
 	}
 	return applied, nil
 }
@@ -371,7 +380,7 @@ func integrityCheck(ctx context.Context, pool *sql.DB) error {
 		return fmt.Errorf("store: integrity check: %w", err)
 	}
 	if len(faults) > 0 {
-		return fmt.Errorf("store: integrity check failed: %v", faults)
+		return fmt.Errorf("store: integrity check failed: %s", words.And(faults))
 	}
 	return nil
 }
@@ -425,6 +434,56 @@ func (d *DB) vacuumInto(ctx context.Context, part string) error {
 	defer func() { _ = conn.Close() }()
 	_, err = conn.ExecContext(ctx, "VACUUM INTO "+sqlStringLiteral(part))
 	return err
+}
+
+// tempDirRefused reports a VACUUM INTO that failed because the driver could
+// not make a directory for its temporary files.
+//
+// THE ONE STATEMENT HERE THAT STILL NEEDS ONE, and two things run it: a
+// backup, and the state-log snapshot every data node takes for its peers.
+// Every connection this package opens keeps its temporary storage in memory
+// (see [openPool]), but VACUUM INTO builds the copy on a connection the driver
+// opens for itself, which no session pragma reaches: it keeps a temporary
+// database in a fresh directory under TURSO_TMPDIR, then SQLITE_TMPDIR, then
+// TMPDIR (/tmp unset), and sorts past its buffer into another under TMPDIR,
+// removing both when the copy ends. Measured at the pinned driver, a temporary
+// directory that does not exist fails every copy, a one-table copy included.
+//
+// MATCHED ON THE MESSAGE, because the driver gives an I/O failure no status of
+// its own: it arrives as the generic error carrying `I/O error (tempdir)`,
+// the label upstream gives both of those directories. Matched, the refusal
+// names the variables to change and the directories they hold
+// ([temporaryDirectories]), where the driver's own words name neither.
+func tempDirRefused(err error) bool {
+	return errors.Is(err, turso.ErrTursoGeneric) && strings.Contains(err.Error(), "(tempdir)")
+}
+
+// temporaryDirectories says where the driver puts a copy's temporary files,
+// resolved the way the driver resolves them: the temporary database under the
+// first of TURSO_TMPDIR and SQLITE_TMPDIR that is set, else TMPDIR, and a
+// large sort under TMPDIR whatever the others say.
+//
+// RESOLVED, NEVER TMPDIR ALONE: the driver labels both directories
+// "(tempdir)", so the error cannot say which one refused, and naming TMPDIR's
+// directory where TURSO_TMPDIR's was the missing one pointed an operator at a
+// directory that was fine. So both are named when they differ.
+func temporaryDirectories() string {
+	spill := os.TempDir()
+	for _, name := range []string{"TURSO_TMPDIR", "SQLITE_TMPDIR"} {
+		dir, set := os.LookupEnv(name)
+		if !set {
+			continue
+		}
+		if dir == spill {
+			return fmt.Sprintf("They go under %s and TMPDIR (%s). Make sure "+
+				"the engine's user can write there", name, dir)
+		}
+		return fmt.Sprintf("The temporary database goes under %s (%s) and a "+
+			"large sort under TMPDIR (%s). Make sure the engine's user can "+
+			"write to both", name, dir, spill)
+	}
+	return fmt.Sprintf("They go under TMPDIR (%s). Make sure the engine's "+
+		"user can write there", spill)
 }
 
 // sqlStringLiteral renders s as a SQL string literal.

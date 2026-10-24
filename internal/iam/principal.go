@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Stage is how far through enrolment a principal is.
@@ -248,10 +250,10 @@ func (p Principal) Validate() error {
 		return fmt.Errorf("%w: id is the nil uuid — a principal no row can key on", ErrInvalidPrincipal)
 	}
 	if !p.Kind.Valid() {
-		return fmt.Errorf("%w: kind %q is not one of %v", ErrInvalidPrincipal, p.Kind, Kinds)
+		return fmt.Errorf("%w: kind %q is not one of %s", ErrInvalidPrincipal, p.Kind, words.Or(Kinds))
 	}
 	if !p.Stage.Valid() {
-		return fmt.Errorf("%w: stage %q is not one of %v", ErrInvalidPrincipal, p.Stage, Stages)
+		return fmt.Errorf("%w: stage %q is not one of %s", ErrInvalidPrincipal, p.Stage, words.Or(Stages))
 	}
 	switch p.Kind {
 	case KindSeat:

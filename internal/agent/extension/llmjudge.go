@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerfit"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/provenance"
 	llm "github.com/crewlet/crewlet/internal/providers/llm"
 )
 
@@ -191,7 +192,12 @@ func (j *LLMJudge) Decide(ctx context.Context, req Request) (Decision, error) {
 	if j == nil || j.model == nil {
 		return Decision{}, ErrNoVerdict
 	}
-	evidence := j.render(ctx, req)
+	// UNDER A TOKEN OF THE CALL'S OWN (ADR-0040): the task's fences are moved
+	// off the turn's token onto one minted here, and everything else the
+	// evidence carries — the plan, the calls, what the phase last said, a
+	// rewrite — is neutralised under it, so the judge reads somebody else's
+	// words as theirs and never meets the turn's token to echo.
+	evidence := provenance.Rekey(j.render(ctx, req), req.Boundary, provenance.NewBoundary())
 	if j.hold != nil {
 		if held := j.hold.Held(ctx); held != nil {
 			// NOT ASKED: no call was made, so there is nothing to report
@@ -288,7 +294,9 @@ or
 
 <rounds> is how many additional tool-call rounds you believe finishes the work.
 Never exceed the maximum you are told. When in doubt, answer RESCUE: more rounds
-cost real money and a phase that is looping will loop in them too.`
+cost real money and a phase that is looping will loop in them too.
+
+` + provenance.StandingInstruction
 
 // render turns the evidence into the user message.
 //

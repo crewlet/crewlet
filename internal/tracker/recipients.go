@@ -141,12 +141,7 @@ func (r Reason) WakesActor() bool { return r == ReasonUnblocked }
 // commit leaves no notification row either. Without it a quiet walk would
 // write rows nobody would ever be woken for, and an inbox would fill with
 // changes the company deliberately did not announce.
-//
-// `batched` is an argument rather than a field of the notification because it
-// is a property of the CALL that produced the record — a bulk re-tag is
-// thirty facts to absorb rather than thirty asks — and the notification is
-// about one change.
-func Candidates(n *Notify, batched bool) []Candidate {
+func Candidates(n *Notify) []Candidate {
 	if n == nil {
 		return nil
 	}
@@ -158,7 +153,7 @@ func Candidates(n *Notify, batched bool) []Candidate {
 		}
 		seen[handle] = true
 		out = append(out, Candidate{
-			Handle: handle, Reason: reason, Addressed: addressed && !batched,
+			Handle: handle, Reason: reason, Addressed: addressed,
 		})
 	}
 	addAll := func(handles []string, reason Reason, addressed bool) {

@@ -130,10 +130,19 @@ type Config struct {
 	//
 	// It takes a context because answering may mean reading a store, and
 	// this runs on the path that renews presence: the beat bounds it to
-	// [StatusBudgetRatio] of an interval and publishes nothing if it
-	// overruns, so a slow control plane costs a column rather than the
-	// node's seats.
-	Status func(context.Context) coord.NodeStatus
+	// [StatusBudgetRatio] of an interval, so a slow control plane costs a
+	// column rather than the node's seats.
+	//
+	// THE ERROR IS THE HOOK'S OWN ANSWER to "did I answer?", and the beat
+	// publishes nothing when it is not nil — a hook whose context ended
+	// before its reads finished returns that context's error. The beat
+	// used to infer it instead, from its own clock after the hook had
+	// returned, and a clock read after the fact cannot tell a hook that
+	// was cut short from one that finished and was then descheduled past
+	// the deadline: a complete answer was discarded whenever the
+	// goroutine lost the CPU at the wrong moment, which a short budget on
+	// a loaded machine made routine.
+	Status func(context.Context) (coord.NodeStatus, error)
 
 	// Hooks is what the engine does with a seat. Nil is legal.
 	Hooks Hooks
@@ -158,8 +167,17 @@ type Config struct {
 	// the company's records going stale is a reason to stop taking work,
 	// never a reason to drop the work already in hand.
 	//
-	// It runs on the sweep path and must not block: read a flag, do not
-	// query a store.
+	// IT RUNS ON THE SWEEP PATH, [Host.Start]'s first pass included, and
+	// must never wait without a bound: it may make a request — the engine's
+	// asks a data node whether its copy admits a seat, bounded by a budget
+	// of its own and cached between sweeps — and its context is the sweep's,
+	// which a stop cancels. A read of a store that can hang is not a gate.
+	//
+	// THE HOST CANNOT SEE IT CHANGE, so whoever owns it asks for a pass
+	// when it opens ([Host.Resweep]): only it knows which events can open
+	// it. A refusal is otherwise answered by the next tick, up to
+	// [SweepInterval] of a node holding nothing it could have held — the
+	// whole of a node's company when the refusal was [Host.Start]'s.
 	Ready func(ctx context.Context) bool
 
 	// Serviceable reports whether this node may KEEP the seats it holds,
@@ -217,7 +235,7 @@ type Host struct {
 	// serviceable is Config.Serviceable — whether held seats may stay.
 	serviceable func(ctx context.Context) (bool, string)
 	profile     placement.NodeProfile
-	status      func(context.Context) coord.NodeStatus
+	status      func(context.Context) (coord.NodeStatus, error)
 	hooks       Hooks
 	clock       func() time.Time
 	protocol    int
@@ -443,7 +461,10 @@ func (h *Host) WithHeldSeat(handle string, fn func(lease coord.Lease) error) (bo
 // inside one heartbeat interval. Every turn that starts is then certified
 // owned for at least ttl-heartbeat (30 s at the shipped constants), and the
 // first failed renew stops NEW turns immediately while the store-unavailable
-// grace still keeps the seat so in-flight work can finish.
+// grace still keeps the seat so in-flight work can finish. The window is the
+// heartbeat and the renews go out a beat inside it ([Host.renewPeriod]), so a
+// healthy node's own renews never leave it — widening the window instead would
+// admit on a proof older than that certificate.
 //
 // This is an OPTIMIZATION, not the safety property. Correctness comes from
 // epoch-fenced writes: the returned epoch is the fencing token, and a write
@@ -530,9 +551,12 @@ func (h *Host) EpochFor(handle string) (int64, bool) {
 // scheduled by a beat count rounded UP, so consecutive renews were one
 // heartbeat apart PLUS the rounding, and every cycle had a window where a
 // healthy, renewing seat answered false — a sixth of every cycle at a three
-// second TTL. [Host.ticksPerPass] is what removed that. This is still
-// required, because the window is now reached by real lateness rather than
-// by arithmetic.
+// second TTL. Rounded down, the pass still went out at the very instant the
+// window closed wherever the beat divided the heartbeat — the shipped 45 s
+// among them — so each on-time renew refused the seat for its own round trip.
+// [Host.renewPeriod] is what removed both: it sends each renew a beat early,
+// on a ticker no long pass can delay. This is still required, because the
+// window is now reached by real lateness rather than by arithmetic.
 //
 // Deliberately NOT inside MayStart. The in-turn fence calls that too, where
 // a refusal abandons a turn and stops no consumer — marking there would
@@ -573,11 +597,14 @@ func (h *Host) NoteDeliveryDeferred(handle string) {
 // the shipped number — which is the drift [HeartbeatRatio] exists to name.
 func (h *Host) TTL() time.Duration { return h.ttl }
 
-// HeartbeatInterval is how often this host renews its leases — the EFFECTIVE interval
-// [New] resolved — and therefore how long a [Host.MayStart] refusal for want of
-// a fresh renew can last on a seat it still holds: the next renew is what
-// re-proves it. A caller waiting for MayStart to admit a seat again waits this
-// long, rather than re-asking on a clock of its own.
+// HeartbeatInterval is the window this host admits a seat within after its last
+// renew — the EFFECTIVE interval [New] resolved — and so the longest a held
+// seat goes between two renews when nothing is late: the host sends each a beat
+// inside it ([Host.renewPeriod]), so that it is answered before the one it
+// replaces stops admitting. It is therefore also how long a [Host.MayStart]
+// refusal for want of a fresh renew can last on a seat it still holds: the next
+// renew is what re-proves it. A caller waiting for MayStart to admit a seat
+// again waits this long, rather than re-asking on a clock of its own.
 func (h *Host) HeartbeatInterval() time.Duration { return h.heartbeat }
 
 // Held is the seats whose leases this node holds, sorted.
@@ -683,14 +710,33 @@ func (h *Host) stampBeat() {
 
 // --- lifecycle ------------------------------------------------------------
 
-// Start announces this node, takes a first share of the seats, and spins the
-// heartbeat and sweep loops.
+// Start spins the heartbeat loop, announces this node, takes a first share of
+// the seats, and spins the sweep loop.
+//
+// THE HEARTBEAT FIRST, before anything the start claims. The first pass runs
+// each claimed seat's acquire hook inline, and a hook spawns MCP children,
+// hydrates the seat's memory and recovers its interrupted sandbox run, which
+// can outlast a TTL: the seat is in the held set while it does precisely so
+// that the heartbeat renews its lease throughout ([heldSeat]). Started after
+// that pass, as it was, the heartbeat renewed nothing on the one pass where
+// every seat is new — a hook that ran past the TTL let the lease lapse under a
+// seat this node was halfway through building, and the presence lease with it
+// — and the watchdog, which reads this loop's beat, read the whole pass as the
+// heartbeat wedged: every beat gap past two seconds measured across 126
+// started engines under load was that pass, 5.1 s the longest, and past the
+// TTL the watchdog ends the process. The sweep loop still starts after the
+// pass, which is the start's own.
 //
 // Presence is announced BEFORE the first sweep: capacity divides by the live
 // node count, and a node that has not registered itself would compute a
-// share that excludes itself. The first sweep runs synchronously, so boot is
-// not eventually-consistent — a node is useful the moment it reports
-// started.
+// share that excludes itself. The first sweep runs synchronously, so a node
+// whose claim gate admits as it starts holds its share the moment it reports
+// started. One whose gate does not — a data node still catching up with its
+// logs, the commonest boot — claims nothing yet and keeps renewing its
+// presence, and its seats wait for the pass the gate's owner asks for as the
+// gate opens ([Config.Ready], [Host.Resweep]). A boot is therefore not
+// synchronous in general, and a caller that needs the seats held waits for
+// them.
 //
 // It reports no error because none of its work has a failure a caller could
 // act on: an unreachable store means this node claims nothing yet and
@@ -711,10 +757,9 @@ func (h *Host) Start(ctx context.Context) {
 	h.resweep = asks
 	h.mu.Unlock()
 
+	h.wg.Go(func() { h.heartbeatLoop(loopCtx) })
 	h.renewNodePresence(ctx)
 	h.Sweep(ctx)
-
-	h.wg.Go(func() { h.heartbeatLoop(loopCtx) })
 	h.wg.Go(func() { h.sweepLoop(loopCtx, asks) })
 
 	log.InfoContext(ctx, "seat_host_started", "node", h.nodeID, "owner", h.owner, "held", len(h.Held()))

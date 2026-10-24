@@ -23,11 +23,12 @@ import (
 // The same reason `budgets` does, twice over. A node's durable state is two
 // estates and neither is reachable from outside the process that holds them:
 //
-//   - THE STORE is one file the engine locks exclusively for the life of the
-//     handle, and the driver does not support a second process on a database
-//     file. So there is no safe way for this command to open it while the
-//     engine runs — and copying it anyway is worse than useless, because
-//     committed data lives in the file and its -wal together.
+//   - THE STORE is two files on a data node — its own and the replicated
+//     estate beside it — each locked exclusively by the engine for the life
+//     of its handle, and the driver does not support a second process on a
+//     database file. So there is no safe way for this command to open either
+//     while the engine runs — and copying one anyway is worse than useless,
+//     because committed data lives in a file and its -wal together.
 //   - THE STREAM ESTATE — the agent mailboxes and every coordination bucket,
 //     which is where the fleet's leases, ledgers, counters and sealed
 //     credentials live — runs on a broker embedded in the engine that binds
@@ -63,7 +64,7 @@ func runBackup(environ config.Source, args []string, stdout, stderr io.Writer) e
 		// travels as an HTTP error and this one can say the thing that
 		// actually matters: the path is resolved somewhere else.
 		return fmt.Errorf("-dir %s is relative, and it is resolved on the engine's "+
-			"host rather than in this shell — give an absolute path", *dir)
+			"host rather than in this shell. Give an absolute path", *dir)
 	}
 
 	// DECODED INTO A SHAPE OF THIS COMMAND'S OWN rather than into

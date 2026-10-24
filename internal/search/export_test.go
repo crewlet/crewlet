@@ -9,6 +9,25 @@ import (
 // statement [Semantic] issues rather than a copy that can drift from it.
 var SemanticStatement = semanticStatement
 
+// The lexical index's statements, for its plan gate, on [SemanticStatement]'s
+// terms.
+const (
+	LexicalCorpusStatement        = lexicalCorpusStatement
+	LexicalTermDocsStatement      = lexicalTermDocsStatement
+	LexicalClearPostingsStatement = lexicalClearPostingsStatement
+	LexicalRemoveDocStatement     = lexicalRemoveDocStatement
+	LexicalOrphanWalkStatement    = lexicalOrphanWalkStatement
+	LexicalIndexedCountStatement  = lexicalIndexedCountStatement
+	LinkedFromStatement           = linkedFromStatement
+)
+
+// The lexical index's statement builders, on the same terms.
+var (
+	LexicalPostingScanStatement = lexicalPostingScanStatement
+	LexicalHydrateStatement     = lexicalHydrateStatement
+	LexicalHeldStatement        = lexicalHeldStatement
+)
+
 // TrainingReading is what [readTrainingSet] reads, exported so a test trains
 // an index from a store's rows exactly as the duty does.
 type TrainingReading struct {
@@ -59,15 +78,6 @@ func HeldOf(docs ...Document) Held {
 	return held
 }
 
-// PageSelection, PageOpeningRead, PageWithdrawals and PageCoverageCount are
-// the page corpus's four statements, for the plan gate.
-var (
-	PageSelection     = pageSelection
-	PageOpeningRead   = pageOpeningRead
-	PageWithdrawals   = pageWithdrawals
-	PageCoverageCount = pageCoverageCount
-)
-
 // EmbedReadChars is [embedReadChars], for the gate that holds a selection to
 // reading only the opening of a body.
 const EmbedReadChars = embedReadChars
@@ -106,3 +116,46 @@ const (
 	StaleRowsStatement     = staleRowsStatement
 	StoredVectorStatement  = storedVectorStatement
 )
+
+// The chat index's statements, for its plan gate: it explains what the index
+// issues rather than copies that can drift from it.
+var (
+	ChatChangedReachStatement     = chatChangedReachStatement
+	ChatChangedRowsStatement      = chatChangedRowsStatement
+	ChatErasedReachStatement      = chatErasedReachStatement
+	ChatErasedRowsStatement       = chatErasedRowsStatement
+	ChatPastWatermarkStatement    = chatPastWatermarkStatement
+	ChatPastErasedStatement       = chatPastErasedStatement
+	ChatLiveOldestStatement       = chatLiveOldestStatement
+	ChatHeldOldestStatement       = chatHeldOldestStatement
+	ChatRoomRotationStatement     = chatRoomRotationStatement
+	ChatHeldDocStatement          = chatHeldDocStatement
+	ChatDocTermsStatement         = chatDocTermsStatement
+	ChatClearPostingsStatement    = chatClearPostingsStatement
+	ChatRemoveDocStatement        = chatRemoveDocStatement
+	ChatDocUpsertStatement        = chatDocUpsertStatement
+	ChatRangeSizeStatement        = chatRangeSizeStatement
+	ChatRangeTermsStatement       = chatRangeTermsStatement
+	ChatRangeDropStatement        = chatRangeDropStatement
+	ChatWatermarkStatement        = chatWatermarkStatement
+	ChatErasedThroughStatement    = chatErasedThroughStatement
+	ChatAdvanceWatermarkStatement = chatAdvanceWatermarkStatement
+	ChatAdvanceErasedStatement    = chatAdvanceErasedStatement
+	ChatBeginRebuildStatement     = chatBeginRebuildStatement
+	ChatStateStatement            = chatStateStatement
+	ChatRecordInstanceStatement   = chatRecordInstanceStatement
+	ChatDropBatchStatement        = chatDropBatchStatement
+	ChatRebuiltStatement          = chatRebuiltStatement
+	ChatCorpusStatement           = chatCorpusStatement
+	ChatRebuiltDrops              = chatRebuiltDrops
+	ChatRoomsCorpusStatement      = chatRoomsCorpusStatement
+	ChatTermDocsStatement         = chatTermDocsStatement
+	ChatPostingScanStatement      = chatPostingScanStatement
+	ChatHydrateStatement          = chatHydrateStatement
+	ChatEmptiedRoomsStatement     = chatEmptiedRoomsStatement
+	ChatEmptiedTermsStatement     = chatEmptiedTermsStatement
+)
+
+// MaxPostingScan is [maxPostingScan], for the gate that holds which postings a
+// frequent chat term keeps.
+const MaxPostingScan = maxPostingScan

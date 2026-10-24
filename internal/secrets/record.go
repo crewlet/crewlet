@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Record is one stored secret's row, in whichever store holds it.
@@ -50,6 +51,36 @@ type Record struct {
 	// one: what a write or a delete conditioned on "nothing has changed
 	// since I read it" names. Zero where the store keeps none.
 	Version uint64
+}
+
+// Removal is a secret an operator removed while this node's engine was
+// stopped: the name, when, by whom and through which path — a DATED REMOVAL,
+// which the engine carries onto the fleet at its next start exactly as it
+// carries a value written then.
+//
+// # Why a removal is a row and not just a missing one
+//
+// A stopped node cannot reach the fleet's store (on the default topology its
+// broker is inside the engine's process), so `crewlet secrets unset` there can
+// only change this node's own table — and deleting a row the fleet's value
+// never came from changes nothing the fleet reads. The removal has to be
+// RECORDED, with the instant it was made, so that the next start can remove
+// the fleet's value when the removal is the later write and keep it when it
+// is not: the same later-wins rule an offline write is carried by. A table of
+// values alone can say what was set, never what was taken away.
+type Removal struct {
+	Name string
+
+	// RemovedAt is when the operator removed it, on the writing node's own
+	// clock, which is what the fleet's write is compared against.
+	RemovedAt time.Time
+
+	// RemovedBy, RemovedByKind, OperatorID and Source are the provenance a
+	// value's row carries ([Record]), for the removal.
+	RemovedBy     string
+	RemovedByKind string
+	OperatorID    string
+	Source        Source
 }
 
 // Source is the write path a stored secret arrived by, stamped by that path.
@@ -126,7 +157,7 @@ func CheckSource(s Source) error {
 		return nil
 	}
 	return fmt.Errorf("secrets: %q is not a write path's source; a row "+
-		"records one of %q, stamped by the path that wrote it", string(s), Sources)
+		"records one of %s, stamped by the path that wrote it", string(s), words.Or(Sources))
 }
 
 // Author is who writes a secret: the three facts every other trail in the

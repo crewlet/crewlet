@@ -31,8 +31,9 @@
  * somebody is looking for.
  *
  * The kinds are held apart and LABELLED rather than filtered down to one,
- * because "the engine did this" is as much an answer as "a person did": a bulk
- * edit nobody asked for is the thing an operator opens an audit to find.
+ * because "the engine did this" is as much an answer as "a person did": a
+ * duty's repair nobody asked for is the thing an operator opens an audit to
+ * find.
  *
  * # And THROUGH WHICH CREDENTIAL
  *
@@ -136,7 +137,7 @@ import { indexOrg, kindOfAuthor, type SeatKind } from "~/lib/seats.ts";
 import { useTimeRange, windowParam, type Offer } from "~/lib/range.ts";
 import { isLogRefusal, rest, RestError } from "~/protocol/index.ts";
 import { useRest, type RestResult } from "~/lib/useRest.ts";
-import { needsWords } from "~/lib/access.ts";
+import { authorityWords } from "~/lib/refusal.ts";
 import { throughOf } from "~/lib/attribution.ts";
 import type {
   ArtifactTrailEntry,
@@ -1022,7 +1023,7 @@ export function Audit() {
     ...reads
       .filter(({ read }) => read.error === "unauthorized")
       .map(({ read, gesture }) =>
-        needsWords(gesture, read.refusal && !isLogRefusal(read.refusal) ? read.refusal.grants : []),
+        authorityWords(gesture, read.refusal && !isLogRefusal(read.refusal) ? read.refusal : null),
       ),
     secrets.withheld,
     identity.withheld,
@@ -1228,7 +1229,7 @@ const IDENTITY_WITHHELD: Withheld = {
 function withheldSentence(source: Withheld, read: RestResult<unknown>): string {
   if (read.error === null) return "";
   if (read.error.unauthorized) {
-    return needsWords(source.gesture, read.error instanceof RestError ? read.error.grants : []);
+    return authorityWords(source.gesture, read.error instanceof RestError ? read.error : null);
   }
   return read.data === null
     ? `${source.subject} could not be read, so none of ${source.rows} are listed here.`

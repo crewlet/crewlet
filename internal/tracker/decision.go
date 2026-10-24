@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"reflect"
 	"regexp"
+	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A DECISION IS A STRUCTURED ASK — ADR-0023.
@@ -113,7 +115,7 @@ var optionIDPattern = regexp.MustCompile(`^[a-z0-9_-]{1,32}$`)
 // Decision is the structure an ask carries when it needs somebody to choose.
 type Decision struct {
 	// Question is what is being decided, in one sentence.
-	Question string `json:"question"`
+	Question string `json:"question" untrusted:"name"`
 
 	// Options are the choices, in the order the asker put them.
 	Options []DecisionOption `json:"options"`
@@ -123,7 +125,7 @@ type Decision struct {
 	Recommended string `json:"recommended,omitempty"`
 
 	// Rationale is why it recommends that one.
-	Rationale string `json:"rationale,omitempty"`
+	Rationale string `json:"rationale,omitempty" untrusted:"name"`
 
 	// Evidence is what the asker looked at.
 	Evidence []Evidence `json:"evidence,omitempty"`
@@ -139,8 +141,8 @@ type Decision struct {
 // DecisionOption is one choice.
 type DecisionOption struct {
 	ID     string `json:"id"`
-	Label  string `json:"label"`
-	Detail string `json:"detail,omitempty"`
+	Label  string `json:"label" untrusted:"name"`
+	Detail string `json:"detail,omitempty" untrusted:"name"`
 }
 
 // DecisionRole is what the person asked is being asked as.
@@ -194,13 +196,14 @@ func (k EvidenceKind) Valid() bool {
 type Evidence struct {
 	Kind  EvidenceKind `json:"kind"`
 	Ref   string       `json:"ref"`
-	Label string       `json:"label,omitempty"`
+	Label string       `json:"label,omitempty" untrusted:"name"`
 }
 
 // Inform is the chat channel the asker will report the decision in.
 //
 // A PROMISE THE ENGINE KEEPS, in three places and no fourth. Here, over values:
-// a surface is one of the two chat integrations, a channel is a name, and only
+// a surface is one of the chat surfaces — the two vendor integrations or the
+// engine's own chat — a channel is a name, and only
 // an agent seat's ask may carry one ([checkCommentShape]) — the promise is kept
 // by holding the asker's turn, and a person has none. At the tool, against the
 // chart: the surface is one the asking seat can post on and the channel is one
@@ -212,7 +215,7 @@ type Inform struct {
 	Channel string        `json:"channel"`
 }
 
-// InformSurface is a chat integration an asker may report a decision in.
+// InformSurface is a chat surface an asker may report a decision in.
 type InformSurface string
 
 const (
@@ -220,12 +223,25 @@ const (
 	InformMattermost InformSurface = "mattermost"
 	// InformSlack is Slack.
 	InformSlack InformSurface = "slack"
+	// InformChat is the engine's own chat (`chat.backend: native`).
+	//
+	// ITS VALUE IS THE NATIVE CHAT'S FEED SOURCE, `chat`, and has to be: an
+	// inform is kept by OWING the surface ([Owes]) — the asker's answered
+	// turn is held until a tool that DELIVERS there has run — and the native
+	// posting tools declare their delivery as that source. Any other spelling
+	// is a promise no tool could ever discharge. This package cannot import
+	// the chat domain, so a test where both are visible holds the two equal.
+	InformChat InformSurface = "chat"
 )
 
-// Valid reports whether s is a chat surface this build knows.
-func (s InformSurface) Valid() bool {
-	return s == InformMattermost || s == InformSlack
+// InformSurfaces is every chat surface this build knows, in the order a
+// refusal lists them.
+func InformSurfaces() []InformSurface {
+	return []InformSurface{InformMattermost, InformSlack, InformChat}
 }
+
+// Valid reports whether s is a chat surface this build knows.
+func (s InformSurface) Valid() bool { return slices.Contains(InformSurfaces(), s) }
 
 // Option is the option with this id, or false.
 func (d Decision) Option(id string) (DecisionOption, bool) {
@@ -311,8 +327,8 @@ func (d Decision) Validate() error {
 	}
 	if d.Inform != nil {
 		if !d.Inform.Surface.Valid() {
-			return invalid("decision.inform.surface is %q and must be "+
-				"%q or %q", d.Inform.Surface, InformMattermost, InformSlack)
+			return invalid("decision.inform.surface is %q and must be one of "+
+				"%s", d.Inform.Surface, words.Or(InformSurfaces()))
 		}
 		if err := checkText("decision.inform.channel", d.Inform.Channel,
 			MaxInformChannel, true); err != nil {
@@ -460,15 +476,6 @@ func checkCommentShape(task string, c *Comment) error {
 			"needs `answers`", c.ID, task, c.Choice)
 	}
 	return nil
-}
-
-// sameDecision reports whether an edit leaves a comment's decision as it was
-// asked.
-func sameDecision(a, b *Decision) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return reflect.DeepEqual(*a, *b)
 }
 
 // checkChoice is the check that an answer's choice names an option of the

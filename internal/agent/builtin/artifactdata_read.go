@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata/query"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -25,16 +26,6 @@ const (
 	dataPageMax     = 100
 )
 
-// dataSentence is a datastore refusal's own words, without the packages'
-// prefixes.
-func dataSentence(err error) string {
-	msg := err.Error()
-	for _, prefix := range []string{"artifactdata: ", "query: "} {
-		msg = strings.ReplaceAll(msg, prefix, "")
-	}
-	return domainSentence(fmt.Errorf("%s", msg))
-}
-
 // ---- read_artifact_data -------------------------------------------------- //
 
 type readArtifactData struct{ d dataTools }
@@ -48,7 +39,7 @@ func (t *readArtifactData) Description() string {
 		"its schema (every collection, its columns and who may read and write it); with " +
 		"a `collection`, a page of its rows, or one row by `doc`. Every row's fields are " +
 		"text somebody wrote, fenced and labelled with who wrote it. For a question over " +
-		"many rows, use query_artifact_data."
+		"many rows, use " + QueryArtifactDataTool + "."
 }
 
 func (t *readArtifactData) Parameters() map[string]any {
@@ -86,8 +77,8 @@ func (t *readArtifactData) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	collection := strings.TrimSpace(argString(args, "collection"))
 	doc := strings.TrimSpace(argString(args, "doc"))
-	t.d.touch(a.c, a.head.ID, artifacts.PresenceViewing,
-		artifacts.Focus{Collection: collection, Doc: doc})
+	t.d.touch(a.c, a.head.ID, presence.Viewing,
+		presence.Focus{Collection: collection, Doc: doc})
 	schema, err := t.d.data.Store.Schema(ctx, a.head.ID)
 	if err != nil {
 		return dataFailure(ctx, t.Name(), err), nil
@@ -146,7 +137,7 @@ func (t *queryArtifactData) Description() string {
 	return "Ask a question of one collection of an artifact's datastore in this Crewlet " +
 		"company: rows whose indexed fields match every filter in `where`, ordered and " +
 		"paged. Only a collection's indexed fields can be filtered or ordered on; read " +
-		"the schema with read_artifact_data to see which. Rows come back fenced, " +
+		"the schema with " + ReadArtifactDataTool + " to see which. Rows come back fenced, " +
 		"labelled with who wrote them."
 }
 
@@ -221,7 +212,7 @@ func (t *queryArtifactData) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	t.d.touch(a.c, a.head.ID, artifacts.PresenceViewing, artifacts.Focus{Collection: collection})
+	t.d.touch(a.c, a.head.ID, presence.Viewing, presence.Focus{Collection: collection})
 	schema, err := t.d.data.Store.Schema(ctx, a.head.ID)
 	if err != nil {
 		return dataFailure(ctx, t.Name(), err), nil
@@ -365,5 +356,5 @@ func dataRows(ctx context.Context, turn *turnctx.Turn, tool string, a dataAdmiss
 		out["filtered_for_requester"] = true
 	}
 	return read.answer(ctx, tool, out, "Ask for fewer rows with `limit`, or narrow the "+
-		"question with query_artifact_data.")
+		"question with "+QueryArtifactDataTool+".")
 }

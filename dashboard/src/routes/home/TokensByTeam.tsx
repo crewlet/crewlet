@@ -21,12 +21,12 @@
 import { BarList, Card, DATA_COLOR_OTHER, DATA_COLORS, type BarPart } from "@crewlethq/ui";
 import { CoinsGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
 import { fmtCount, plural } from "~/lib/format.ts";
 import { useSeatBadgeOf } from "~/lib/seats.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type { SeriesPart, TokenSeries } from "~/protocol/index.ts";
 import type { HomeRange } from "./model.ts";
+import { WidgetQuery } from "./board/kit.tsx";
 
 /** How many teams the card ranks before the rest are counted. */
 export const TEAM_ROWS = 5;
@@ -60,10 +60,13 @@ export function TokensByTeam({
         <Card.Title as="h3">Tokens by team</Card.Title>
       </Card.Header>
       <Card.Body className="home-chart">
-        <QueryState
+        <WidgetQuery
           error={spend.error}
           refusal={spend.refusal}
           loading={spend.loading && !data}
+          // NOTHING TO READ A GAP FROM: a named window's spend is the
+          // replicated usage days, which carry no flag of what they missed.
+          gaps={[]}
           empty={
             data && bands.length === 0
               ? {
@@ -99,7 +102,7 @@ export function TokensByTeam({
                 : { parts: seatParts(b.parts, (key) => badgeOf(key).name) }),
             }))}
           />
-        </QueryState>
+        </WidgetQuery>
       </Card.Body>
     </Card>
   );

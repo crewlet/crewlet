@@ -2,12 +2,38 @@ package config_test
 
 import (
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 )
+
+// everyLogAtItsUnsetSize writes every state log's ceiling at what it takes
+// unset at its smallest: the gibibyte the corpus-sized logs are scaled down to
+// and the usage log's default is, and the identity log's 512 MiB default.
+//
+// READ OFF [config.Stream], as the operator floor's advisory test reads the
+// same fields, so a log added with its ceiling is in the sum without anybody
+// adding it here; and a reflection that matched fewer fields than the seven
+// logs this was written beside would make the cases that use it say nothing,
+// so it panics instead.
+func everyLogAtItsUnsetSize(b *config.Bootstrap) {
+	stream := reflect.ValueOf(&b.Stream).Elem()
+	set := 0
+	for i := range stream.NumField() {
+		name, _, _ := strings.Cut(stream.Type().Field(i).Tag.Get("yaml"), ",")
+		if strings.HasSuffix(name, "_max_bytes") && name != "store_max_bytes" {
+			stream.Field(i).SetInt(1 << 30)
+			set++
+		}
+	}
+	if set < 7 {
+		panic("config.Stream declares fewer than seven state logs' ceilings")
+	}
+	b.Stream.IamLogMaxBytes = config.DefaultIamLogMaxBytes
+}
 
 // retentionBoot is a valid Tier A with a retention block to vary.
 func retentionBoot(t *testing.T, r config.TrackerRetention) config.Bootstrap {
@@ -267,13 +293,16 @@ func TestThePagesCeilingIsAQuarterOfTheMutationLogs(t *testing.T) {
 func TestALogThatGrowsWithNoCorpusTakesAFloorFarUnderOneThatDoes(t *testing.T) {
 	t.Parallel()
 
-	// THE THREE CORPUS-SIZED FLOORS, read through a map rather than
+	// THE FOUR CORPUS-SIZED FLOORS, read through a map rather than
 	// compared as constants: they are equal today, and `go vet` reads a
-	// constant comparison that cannot be false as a mistake.
+	// constant comparison that cannot be false as a mistake. The chat log
+	// is one of them — it grows with what the company says, as the
+	// mutation log grows with what it files.
 	corpus := map[string]int64{
 		"tracker_log_max_bytes":     config.TrackerLogMaxBytesFloor,
 		"pages_log_max_bytes":       config.PagesLogMaxBytesFloor,
 		"tracker_vectors_max_bytes": config.TrackerVectorsMaxBytesFloor,
+		"chat_log_max_bytes":        config.ChatLogMaxBytesFloor,
 	}
 	corpusFloor := config.TrackerLogMaxBytesFloor
 	for name, floor := range corpus {
@@ -405,6 +434,12 @@ func TestTheByteCeilingsAreBounded(t *testing.T) {
 		"usage at its floor":       {func(b *config.Bootstrap) { b.Stream.UsageLogMaxBytes = mib * 64 }, true, ""},
 		"usage at 64 GiB":          {func(b *config.Bootstrap) { b.Stream.UsageLogMaxBytes = 64 * gib }, true, ""},
 		"usage past 64 GiB":        {func(b *config.Bootstrap) { b.Stream.UsageLogMaxBytes = 64*gib + 1 }, false, "usage_log_max_bytes"},
+		// THE CHAT LOG TAKES THE CORPUS-SIZED LOGS' GIBIBYTE: it grows with
+		// what the company says.
+		"chat below a gibibyte": {func(b *config.Bootstrap) { b.Stream.ChatLogMaxBytes = gib - 1 }, false, "chat_log_max_bytes"},
+		"chat at a gibibyte":    {func(b *config.Bootstrap) { b.Stream.ChatLogMaxBytes = gib }, true, ""},
+		"chat at 256 GiB":       {func(b *config.Bootstrap) { b.Stream.ChatLogMaxBytes = 256 * gib }, true, ""},
+		"chat past 256 GiB":     {func(b *config.Bootstrap) { b.Stream.ChatLogMaxBytes = 256*gib + 1 }, false, "chat_log_max_bytes"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := config.RunnableBootstrap()
@@ -474,33 +509,31 @@ func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *test
 		says   string
 	}{
 		"unset": {func(*config.Bootstrap) {}, true, ""},
-		// SIX: what five state logs reserve at their smallest unset
-		// ceilings (4.5 GiB), and about 1.5 GiB for every stream that
-		// reserves nothing.
-		"below six gibibytes": {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 6*gib - 1 }, false, "store_max_bytes"},
-		"at six gibibytes":    {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 6 * gib }, true, ""},
-		"at 64 TiB":           {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65536 * gib }, true, ""},
-		"past 64 TiB":         {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65537 * gib }, false, "store_max_bytes"},
-		// THE FLOOR IS WHY THE FLOOR MOVED. Five state-log domains at the
-		// ceilings they take unset come to 4.5 GiB, which fits the old
-		// five-gibibyte limit — and the cross-field rule below refuses
-		// only a sum GREATER than the limit, so at five this document
-		// validated and the node was left half a gibibyte for every
-		// mailbox, the event stream and every coordination bucket. The
-		// floor is what moves that refusal forward to `crewlet validate`.
-		"every domain at its unset size inside the floor": {func(b *config.Bootstrap) {
-			b.Stream.StoreMaxBytes = 6 * gib
-			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = gib, gib
-			b.Stream.PagesLogMaxBytes, b.Stream.UsageLogMaxBytes = gib, gib
-			b.Stream.IamLogMaxBytes = 512 * mib
+		// THE FLOOR IS THE DEFAULT DOCUMENT'S, held to the engine's own
+		// sizing by engine.TestStoreMaxBytesFloorIsWhatTheDefaultDocumentBootsIn,
+		// so the cases here read the constant rather than restate it.
+		"below the floor": {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = config.StoreMaxBytesFloor - 1 }, false, "store_max_bytes"},
+		"at the floor":    {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = config.StoreMaxBytesFloor }, true, ""},
+		"at 64 TiB":       {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65536 * gib }, true, ""},
+		"past 64 TiB":     {func(b *config.Bootstrap) { b.Stream.StoreMaxBytes = 65537 * gib }, false, "store_max_bytes"},
+		// THE FLOOR IS WHAT REFUSES A LIMIT THE LOGS FIT AND NOTHING ELSE
+		// DOES. Every log written at the ceiling it takes unset fits a
+		// limit a gibibyte under the floor — and the cross-field rule below
+		// refuses only a sum GREATER than the limit, while the object
+		// bucket it cannot see is reserved before any of them. So at that
+		// limit this document would validate and leave the mailboxes, the
+		// event stream and every coordination bucket nothing to grow into.
+		// The floor is what moves that refusal forward to `crewlet
+		// validate`.
+		"every log at its unset size at the floor": {func(b *config.Bootstrap) {
+			b.Stream.StoreMaxBytes = config.StoreMaxBytesFloor
+			everyLogAtItsUnsetSize(b)
 		}, true, ""},
-		"every domain at its unset size inside the old limit": {func(b *config.Bootstrap) {
-			b.Stream.StoreMaxBytes = 5 * gib
-			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = gib, gib
-			b.Stream.PagesLogMaxBytes, b.Stream.UsageLogMaxBytes = gib, gib
-			b.Stream.IamLogMaxBytes = 512 * mib
+		"every log at its unset size a gibibyte under the floor": {func(b *config.Bootstrap) {
+			b.Stream.StoreMaxBytes = config.StoreMaxBytesFloor - gib
+			everyLogAtItsUnsetSize(b)
 		}, false, "store_max_bytes"},
-		// EACH OF THE FIVE IS IN THE SUM: ceilings that fit exactly, and
+		// EVERY STATE LOG IS IN THE SUM: ceilings that fit exactly, and
 		// the one log that tips them past the limit.
 		"tipped past it by the knowledge base's log": {func(b *config.Bootstrap) {
 			b.Stream.StoreMaxBytes = 16 * gib
@@ -537,6 +570,11 @@ func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *test
 			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib
 			b.Stream.UsageLogMaxBytes = 1 * gib
 		}, false, "usage_log_max_bytes"},
+		"tipped past it by the chat log": {func(b *config.Bootstrap) {
+			b.Stream.StoreMaxBytes = 48 * gib
+			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib
+			b.Stream.ChatLogMaxBytes = 1 * gib
+		}, false, "chat_log_max_bytes"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := config.RunnableBootstrap()

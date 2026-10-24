@@ -26,6 +26,7 @@ const READER: ViewerState = {
   admin: false,
   tracker: false,
   knowledge: false,
+  chat: false,
   handle: "",
   owner: "jane.doe",
   name: "",
@@ -38,6 +39,7 @@ const READER: ViewerState = {
   asking: false,
   configWriter: false,
   configManagedBy: [],
+  chatVendors: [],
 };
 
 class InertWebSocket {

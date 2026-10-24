@@ -38,6 +38,7 @@ const JANE: ViewerState = {
   admin: true,
   tracker: true,
   knowledge: true,
+  chat: true,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -57,6 +58,7 @@ const JANE: ViewerState = {
   asking: false,
   configWriter: true,
   configManagedBy: [],
+  chatVendors: [],
 };
 
 let sent: { tool: string; body: { request_id: string; args: Record<string, unknown> } }[];

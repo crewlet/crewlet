@@ -18,6 +18,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // maxBundle bounds a credential bundle on the way IN, decompressed.
@@ -602,21 +603,18 @@ func (p *Provider) loggedOutError() error {
 // export or a file the profile names; an import needs nothing, so it is always
 // there.
 func (p *Provider) loginRoutes() string {
-	var routes []string
+	var routes []words.Said
 	if len(p.profile.LoginArgs) > 0 {
-		routes = append(routes, fmt.Sprintf("`crewlet llm login %s`", p.key))
+		routes = append(routes, words.Said(fmt.Sprintf("`crewlet llm login %s`", p.key)))
 	}
 	if p.profile.StdinLogin != nil {
-		routes = append(routes, fmt.Sprintf("`crewlet llm login %s -username <name> -password-stdin`", p.key))
+		routes = append(routes, words.Said(fmt.Sprintf("`crewlet llm login %s -username <name> -password-stdin`", p.key)))
 	}
 	if p.profile.CredentialStore != nil || len(p.hostSources()) > 0 {
-		routes = append(routes, fmt.Sprintf("`crewlet llm login %s -from-host`", p.key))
+		routes = append(routes, words.Said(fmt.Sprintf("`crewlet llm login %s -from-host`", p.key)))
 	}
-	routes = append(routes, fmt.Sprintf("`crewlet llm import %s`", p.key))
-	if len(routes) == 1 {
-		return routes[0]
-	}
-	return strings.Join(routes[:len(routes)-1], ", ") + " or " + routes[len(routes)-1]
+	routes = append(routes, words.Said(fmt.Sprintf("`crewlet llm import %s`", p.key)))
+	return words.Or(routes)
 }
 
 // LogoutNotice is what `crewlet llm logout` tells the operator about the
@@ -660,14 +658,24 @@ func (p *Provider) bundleSource() string {
 
 // retireBundle says what removes the entry's configured bundle, which is what
 // a fresh state volume restores.
+//
+// THE FLEET'S STORE, AND HOW TO REACH IT. A bundle in the secret store is the
+// fleet's, and this notice is printed by `crewlet llm logout`, which runs only
+// where no engine holds this node's store: `crewlet secrets unset` there
+// reaches this node's own table and removes the fleet's value only at the
+// engine's next start, so the notice names `-api` too — the way to remove it
+// from a running fleet now.
 func (p *Provider) retireBundle() string {
 	if p.bundleConfigured {
 		return fmt.Sprintf("remove providers.llm.%s.cli.auth.credential_bundle from the company "+
-			"document, or the secret it references", p.key)
+			"document, or the secret it references from the fleet's secret store "+
+			"(`crewlet secrets unset NAME -api URL` through a node that is up)", p.key)
 	}
 	name := BundleVarName(p.key)
-	return fmt.Sprintf("remove %s from the secret store (`crewlet secrets unset %s`) and from "+
-		"the engine's environment", name, name)
+	return fmt.Sprintf("remove %s from the fleet's secret store and from the engine's "+
+		"environment: `crewlet secrets unset %s -api URL` through a node that is up removes "+
+		"it now, and run where this node's engine is stopped it is removed at that "+
+		"engine's next start", name, name)
 }
 
 // ImportBundle is [Provider.RestoreBundle] for an operator who asked for it,

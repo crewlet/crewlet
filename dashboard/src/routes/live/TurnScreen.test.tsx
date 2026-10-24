@@ -263,7 +263,7 @@ test("each phase's prompt size is rendered rather than banded and dropped", asyn
   // THE TOOL ARRAY IS ON THE PAGE, which is the term this panel was blind to
   // and the dominant one: a measured turn read ~6,900 tokens here against the
   // provider's 205,000.
-  expect(screen.getByTitle("11 tool definitions, as compact JSON").textContent).toBe("3.7 KB");
+  expect(screen.getByTitle("11 tool definitions, as compact JSON").textContent).toBe("3.7 KiB");
   expect(screen.getByTitle("Size of the resumed conversation")).toBeTruthy();
 });
 
@@ -306,7 +306,7 @@ test("a phase that suspended draws its opening and its re-entry, not one merged 
   // destroyed — the re-entry's 0 replaced it, and the panel reported a phase
   // that opened with no prompt at all.
   const systems = screen.getAllByTitle("bytes in the system prompt");
-  expect(systems.map((s) => s.textContent)).toEqual(["23 KB", "0 B"]);
+  expect(systems.map((s) => s.textContent)).toEqual(["23 KiB", "0 B"]);
   // And exactly the second row says why its opening is empty.
   expect(screen.getAllByText("resumed")).toHaveLength(1);
 });

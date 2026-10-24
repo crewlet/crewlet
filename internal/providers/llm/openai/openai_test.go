@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"testing/iotest"
+	"testing/synctest"
 	"time"
 
 	sdk "github.com/openai/openai-go/v3"
@@ -29,6 +30,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/credential"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/httpapi"
+	"github.com/crewlet/crewlet/internal/providers/llm/httpapi/httpapitest"
 
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 )
@@ -56,6 +58,9 @@ type fakeAPI struct {
 	mu       sync.Mutex
 	attempts []attempt
 	handle   func(w http.ResponseWriter, n int)
+	// serve, when set, answers in handle's place and is handed the request,
+	// for a case that pauses and must stop when the client goes away.
+	serve func(w http.ResponseWriter, r *http.Request, n int)
 }
 
 func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +77,10 @@ func (f *fakeAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	n := len(f.attempts)
 	f.mu.Unlock()
 
+	if f.serve != nil {
+		f.serve(w, r, n)
+		return
+	}
 	f.handle(w, n)
 }
 
@@ -730,6 +739,33 @@ func TestToolCallWithNoArgumentsSendsAnEmptyObject(t *testing.T) {
 	call := api.seen()[0].body["messages"].([]any)[1].(map[string]any)["tool_calls"].([]any)[0]
 	if got := dig(t, call.(map[string]any), "function", "arguments"); got != "{}" {
 		t.Fatalf("arguments = %q, want an empty object", got)
+	}
+}
+
+// A REPLAYED CALL CARRIES ITS ARGUMENTS AS THE MODEL WROTE THEM. On this wire
+// they are a JSON string, which the host hands the model as the text it holds
+// on every later round of the turn — so the string must spell `<`, `>` and
+// `&` as themselves, not as the `\u003c` escapes json.Marshal writes, or the
+// model is shown a call it did not make. Read from the decoded body: the
+// request's own encoding of the outer document is the SDK's business and is
+// undone by any decoder, while an escape inside the string survives it.
+// Mutation: put json.Marshal back in httpapi.EncodeArgs and this fails.
+func TestAReplayedCallCarriesItsArgumentsAsTheModelWroteThem(t *testing.T) {
+	t.Parallel()
+	api, url := serve(t, func(w http.ResponseWriter, _ int) { writeJSON(w, 200, okCompletion("ok")) })
+	p := newProvider(t, url, nil)
+	_, err := p.Complete(context.Background(), llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleUser, Content: "hi"},
+		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "c", Name: "run",
+			Arguments: map[string]any{"code": "if a < b && c > d"}}}},
+		{Role: llm.RoleTool, ToolCallID: "c", Name: "run", Content: "done"},
+	}})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	call := api.seen()[0].body["messages"].([]any)[1].(map[string]any)["tool_calls"].([]any)[0]
+	if got := dig(t, call.(map[string]any), "function", "arguments"); got != `{"code":"if a < b && c > d"}` {
+		t.Fatalf("arguments = %q, want the call as the model wrote it", got)
 	}
 }
 
@@ -1440,16 +1476,61 @@ func TestAnEndpointThatCannotStreamStillAnswers(t *testing.T) {
 	}
 }
 
+// The cases that time a stream run in a synctest bubble, served IN MEMORY
+// (httpapitest says why a listener cannot be): the only time that passes is
+// the server's own pauses, so a bound is asserted on its edge rather than
+// with slack for a reading goroutine that waited to be scheduled — the slack
+// the talking case was widened from 200 ms to a second for, which only moved
+// the edge it could fail at.
+
+// streamTimeout is the idle bound of the timed cases. On the bubble's clock
+// any value is exact; a minute reads as the order an entry is configured in.
+const streamTimeout = time.Minute
+
+// inMemory is [serve] without a listener: the provider reaches the fake
+// through httpapitest's transport, on the caller's bubble, with the entry's
+// timeout set to timeout. The handler is handed the request, so a pause it
+// takes ends when the client goes away, as a server's write to a closed
+// connection would: a goroutine still asleep when the case ends is a bubble
+// that cannot end. The key pool reads the bubble's clock too: its default is
+// the time since the process started, which a bubble's synthetic now, years
+// before it, makes negative.
+func inMemory(t *testing.T, timeout time.Duration,
+	handle func(w http.ResponseWriter, r *http.Request),
+) (*fakeAPI, *Provider) {
+	t.Helper()
+	api := &fakeAPI{serve: func(w http.ResponseWriter, r *http.Request, _ int) { handle(w, r) }}
+	start := time.Now()
+	return api, newProvider(t, "http://openai.test/v1", func(c *Config) {
+		c.Timeout = timeout
+		c.HTTPClient = httpapitest.NewClient(api)
+		c.Clock = func() time.Duration { return time.Since(start) }
+	})
+}
+
+// pause waits d, or until ctx ends, reporting whether the whole of d passed.
+func pause(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-time.After(d):
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // writeChunks answers as a chat-completions stream, pausing before every chunk
-// — and, when done, before the closing [DONE] too.
-func writeChunks(w http.ResponseWriter, gap time.Duration, done bool, parts ...string) {
+// — and, when done, before the closing [DONE] too — and stops once the client
+// has gone. It reports how many it wrote.
+func writeChunks(ctx context.Context, w http.ResponseWriter, gap time.Duration, done bool, parts ...string) int {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.WriteHeader(http.StatusOK)
 	if done {
 		parts = append(parts, "")
 	}
-	for _, part := range parts {
-		time.Sleep(gap)
+	for i, part := range parts {
+		if !pause(ctx, gap) {
+			return i
+		}
 		data := "[DONE]"
 		if part != "" {
 			data = `{"id":"1","object":"chat.completion.chunk","created":1,"model":"gpt-test",` +
@@ -1460,58 +1541,62 @@ func writeChunks(w http.ResponseWriter, gap time.Duration, done bool, parts ...s
 			f.Flush()
 		}
 	}
+	return len(parts)
 }
 
 // A STREAMED CALL IS BOUNDED BY SILENCE, NOT LENGTH: a reasoning round that
 // writes for longer than the entry's timeout, never pausing for as long, runs
-// to the end. A stream that does go silent is ended at about the timeout as a
-// timeout, so lifting the total bound leaves no dead connection holding a seat.
+// to the end. A stream that does go silent is ended at the timeout as a
+// timeout, so lifting the total bound leaves no dead connection holding a
+// seat. On the bubble's clock both are exact: the talking round takes its
+// thirteen pauses, each a millisecond short of the bound, and the silent one
+// is ended one bound after its only chunk.
+//
+// Mutations, each red: the watchdog's middleware left off the stream, or a
+// per-attempt deadline of the timeout put back on it (the talking round), and
+// the watchdog armed at twice the timeout (the silent one).
 func TestAStreamIsBoundedBySilenceNotLength(t *testing.T) {
 	t.Parallel()
-	const timeout = 200 * time.Millisecond
+	request := llm.Request{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+		OnDelta:  func(llm.Delta) {},
+	}
 	t.Run("long but talking", func(t *testing.T) {
 		t.Parallel()
-		// A SECOND rather than the silent case's bound, so the quarter of
-		// it between chunks leaves three quarters of a second for the
-		// reading goroutine to be scheduled. At 200 ms the slack was
-		// 150 ms, and a full `make test` under the race detector on four
-		// CPUs has starved that goroutine for longer, failing the call as
-		// a stall it never was.
-		const talking = time.Second
-		_, url := serve(t, func(w http.ResponseWriter, _ int) {
-			writeChunks(w, talking/4, true, strings.Split("abcdefghijkl", "")...)
+		synctest.Test(t, func(t *testing.T) {
+			const gap = streamTimeout - time.Millisecond
+			parts := strings.Split("abcdefghijkl", "")
+			_, p := inMemory(t, streamTimeout, func(w http.ResponseWriter, r *http.Request) {
+				writeChunks(r.Context(), w, gap, true, parts...)
+			})
+			start := time.Now()
+			out, err := p.Complete(t.Context(), request)
+			if err != nil {
+				t.Fatalf("Complete after %v: %v", time.Since(start), err)
+			}
+			want := time.Duration(len(parts)+1) * gap
+			if elapsed := time.Since(start); elapsed != want || out.Content != "abcdefghijkl" {
+				t.Fatalf("took %v and answered %q; want exactly its %d pauses, %v, and the whole round",
+					elapsed, out.Content, len(parts)+1, want)
+			}
 		})
-		p := newProvider(t, url, func(c *Config) { c.Timeout = talking })
-		start := time.Now()
-		out, err := p.Complete(t.Context(), llm.Request{
-			Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
-			OnDelta:  func(llm.Delta) {},
-		})
-		if err != nil {
-			t.Fatalf("Complete after %v: %v", time.Since(start), err)
-		}
-		if elapsed := time.Since(start); elapsed < 2*talking || out.Content != "abcdefghijkl" {
-			t.Fatalf("took %v and answered %q; want past the %v bound, whole", elapsed, out.Content, talking)
-		}
 	})
 	t.Run("silent", func(t *testing.T) {
 		t.Parallel()
-		_, url := serve(t, func(w http.ResponseWriter, _ int) {
-			writeChunks(w, 0, false, "a")
-			time.Sleep(5 * timeout)
+		synctest.Test(t, func(t *testing.T) {
+			_, p := inMemory(t, streamTimeout, func(w http.ResponseWriter, r *http.Request) {
+				writeChunks(r.Context(), w, 0, false, "a")
+				pause(r.Context(), 5*streamTimeout)
+			})
+			start := time.Now()
+			_, err := p.Complete(t.Context(), request)
+			if !errors.Is(err, httpapi.ErrStalled) || llm.KindOf(err) != llm.KindTimeout {
+				t.Fatalf("err = %v (kind %s), want a stall classified as a timeout", err, llm.KindOf(err))
+			}
+			if elapsed := time.Since(start); elapsed != streamTimeout {
+				t.Fatalf("gave up after %v, want exactly the %v bound", elapsed, streamTimeout)
+			}
 		})
-		p := newProvider(t, url, func(c *Config) { c.Timeout = timeout })
-		start := time.Now()
-		_, err := p.Complete(t.Context(), llm.Request{
-			Messages: []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
-			OnDelta:  func(llm.Delta) {},
-		})
-		if !errors.Is(err, httpapi.ErrStalled) || llm.KindOf(err) != llm.KindTimeout {
-			t.Fatalf("err = %v (kind %s), want a stall classified as a timeout", err, llm.KindOf(err))
-		}
-		if elapsed := time.Since(start); elapsed > 4*timeout {
-			t.Fatalf("gave up after %v, want about the %v bound", elapsed, timeout)
-		}
 	})
 }
 

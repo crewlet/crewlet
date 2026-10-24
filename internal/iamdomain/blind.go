@@ -21,8 +21,8 @@ import (
 //
 // An email address is the thing a person signs in with, so something has to
 // resolve one to a person on every sign-in. The obvious column holds the
-// address in the clear, and then the address is in every node's database, in
-// every snapshot a node donates, in every backup, and in every record a
+// address in the clear, and then the address is in every data node's database,
+// in every snapshot a node donates, in every backup, and in every record a
 // directory decision publishes onto the log.
 //
 // # A keyed hash, and why keyed rather than plain
@@ -274,8 +274,8 @@ func (b *Blinder) PasswordLinkID(personID string) (string, error) {
 	}
 	id, err := uuid.Parse(personID)
 	if err != nil || id.Version() != 7 || id.Variant() != uuid.RFC4122 {
-		return "", fmt.Errorf("%w: person id %q is not a uuid7, and a first "+
-			"password link is derived at its person's instant", ErrInvalid,
+		return "", fmt.Errorf("%w: a first password link is derived at its "+
+			"person's instant, so their id must be a uuid7 (%q)", ErrInvalid,
 			personID)
 	}
 	return uuid7At(instantOf(id), b.mac(passwordLinkIDDomain, id.String())[:16]).

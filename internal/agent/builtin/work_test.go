@@ -138,6 +138,8 @@ type fakeTracker struct {
 	// viewQuery is the last strip the view listing asked for, so a case
 	// can assert WHOSE strip a caller was shown.
 	viewQuery tracker.ViewQuery
+	// viewListing is the strip Views answers.
+	viewListing tracker.ViewListing
 	// myWorkZone is the clock the last day was cut on, which is the half
 	// of that read a tool decides rather than the tracker.
 	myWorkZone *time.Location
@@ -152,6 +154,9 @@ type fakeTracker struct {
 	// to.
 	personQuery tracker.PersonQuery
 	inboxQuery  tracker.InboxQuery
+	// inbox is the page Inbox answers, where a case sets one; nil answers
+	// its one placeholder notice.
+	inbox *tracker.InboxAnswer
 
 	readErr  error
 	writeErr error
@@ -233,7 +238,7 @@ func (f *fakeTracker) Task(_ context.Context, idOrKey string, want tracker.Detai
 
 func (f *fakeTracker) Views(_ context.Context, q tracker.ViewQuery) (tracker.ViewListing, error) {
 	f.viewQuery = q
-	return tracker.ViewListing{}, nil
+	return f.viewListing, nil
 }
 
 func (f *fakeTracker) ExpandedQuery(_ context.Context, params map[string]any,
@@ -644,10 +649,10 @@ func callWorkAs(ctx context.Context, t *testing.T, reg *tools.Registry,
 
 // ---- the cases -------------------------------------------------------- //
 
-// THE THREE WRITES COUNT AS A DELIVERY. A turn woken by an assignment answers
-// by moving the item, commenting on it, or filing the follow-up — and without
-// this the gate sees only builtins, concludes the turn reached nobody, and
-// corrects it into another round.
+// THE FIVE WRITES COUNT AS A DELIVERY. A turn woken by an assignment answers by
+// moving the item, commenting on it, filing the follow-up, or merging it into
+// the item it duplicates — and without this the gate sees only builtins,
+// concludes the turn reached nobody, and corrects it into another round.
 func TestTheTrackerWritesCountAsDeliveries(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -1584,6 +1589,9 @@ func (f *fakeTracker) Inbox(_ context.Context, q tracker.InboxQuery,
 	_ time.Time) (tracker.InboxAnswer, error) {
 
 	f.inboxQuery = q
+	if f.inbox != nil {
+		return *f.inbox, nil
+	}
 	return tracker.InboxAnswer{
 		Handle:         q.Handle,
 		PrimaryReasons: tracker.DefaultPrimaryReasons,

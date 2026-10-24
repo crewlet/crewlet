@@ -36,6 +36,7 @@ func newPublisher(t *testing.T, node string, own, into *store.DB, now time.Time)
 	log := &loopback{t: t, into: into, node: node}
 	p, err := usage.NewPublisher(usage.PublisherDeps{
 		Store: own, Log: log, Estate: into.Replicated(), NodeID: node, Caught: caught,
+		Generations: unseen,
 		Zone:        func() *time.Location { return santiago },
 		Now:         func() time.Time { return now },
 		FireHistory: fireHistory,
@@ -402,6 +403,13 @@ func (r *refusalLines) Write(p []byte) (int, error) {
 	return r.buf.Write(p)
 }
 
+// text is every line written so far.
+func (r *refusalLines) text() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.buf.String()
+}
+
 func (r *refusalLines) count() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -417,6 +425,7 @@ func newLoggedPublisher(t *testing.T, node string, own, into *store.DB, now time
 	log := &loopback{t: t, into: into, node: node}
 	p, err := usage.NewPublisher(usage.PublisherDeps{
 		Store: own, Log: log, Estate: into.Replicated(), NodeID: node, Caught: caught,
+		Generations: unseen,
 		Zone:        func() *time.Location { return santiago },
 		Now:         func() time.Time { return now },
 		Logger:      slog.New(slog.NewTextHandler(lines, nil)),

@@ -48,7 +48,7 @@ type Ranked struct {
 	// [ItemAddress].
 	KeyCollision bool `json:"key_collision,omitempty"`
 
-	Title    string `json:"title"`
+	Title    string `json:"title" untrusted:"name"`
 	Project  string `json:"project"`
 	Type     string `json:"type"`
 	Status   Status `json:"status"`
@@ -71,7 +71,7 @@ type Ranked struct {
 
 	// Snippet is the index's own excerpt, which is what makes a ranked
 	// answer readable without opening every hit.
-	Snippet string `json:"snippet,omitempty"`
+	Snippet string `json:"snippet,omitempty" untrusted:"fence"`
 }
 
 // RankedDoc is one candidate as the INDEX knows it, before this package says
@@ -244,6 +244,16 @@ func lexicalRan(served knowledge.Mode) bool {
 	return served != "" && served.Lexical()
 }
 
+// rankedItemsStatement is [Searcher.itemsByID]'s read of n ranked hits, named
+// for the plan test.
+func rankedItemsStatement(n int) string {
+	return `
+		SELECT id, key, key_collision, project_key, type, title, status,
+		       assignee, priority
+		  FROM tracker_tasks
+		 WHERE removed_at IS NULL AND id IN (` + placeholders(n) + `)`
+}
+
 // itemsByID reads what a ranked hit has to carry, for one batch of candidates.
 //
 // ONE QUERY over the whole batch rather than a read per hit: the candidates
@@ -256,12 +266,7 @@ func (s *Searcher) itemsByID(ctx context.Context, docs map[string]RankedDoc) (ma
 	}
 	out := make(map[string]Ranked, len(ids))
 	err := s.db.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `
-			SELECT id, key, key_collision, project_key, type, title, status,
-			       assignee, priority
-			  FROM tracker_tasks
-			 WHERE removed_at IS NULL AND id IN (`+placeholders(len(ids))+`)`,
-			ids...)
+		rows, err := tx.QueryContext(ctx, rankedItemsStatement(len(ids)), ids...)
 		if err != nil {
 			return err
 		}
