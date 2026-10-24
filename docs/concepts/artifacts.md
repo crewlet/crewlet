@@ -529,19 +529,43 @@ for the authority verb it asks:
 
 | Tool | Does |
 |---|---|
-| `list_artifacts` | Lists what the seat may open: its own, shared with it, company-wide, its reports' |
+| `list_artifacts` | Lists what the seat may open: its own, shared with it, company-wide, its reports'; one folder's level by `prefix` and `delimiter`, as S3 lists a bucket |
 | `get_artifact` | Reads a head, its versions and its files, a page at a time |
-| `create_artifact` | Creates an artifact from inline files, the turn's sandbox or a project file |
+| `get_company_brand` | Reads the company's adopted brand: colours, typefaces, logos, the brand slide theme, the kit version to link and the fenced voice |
+| `create_artifact` | Creates an artifact from inline files, the turn's sandbox, a project file or the brand's logos and faces (`from_brand`), or a deck from a `starter` plan; `folder` files it |
 | `publish_artifact` | Publishes a version against a base, with whole files or edits |
 | `update_artifact` | Changes the title, description, icon or a version label |
 | `share_artifact`, `unshare_artifact` | Shares with seats and units, or removes a share |
 | `upload_artifact_asset` | Adds an asset, when the head declares `assets` |
+| `create_artifact_folder` | Creates a folder, or a chain of them, inside a folder that exists |
+| `move_artifact` | Files up to 25 artifacts in a folder, or takes them to the top level, each decided on its own |
 | `read_artifact_data`, `query_artifact_data` | Reads a store's documents |
 | `write_artifact_data` | Writes a batch of ops |
 | `set_artifact_schema` | Declares collections and columns |
 
 Per turn segment an agent may publish 20 times (10 on one artifact), write
-128 MiB, make 1000 datastore ops and send 1 MiB of inline content in one call.
+128 MiB, make 1000 datastore ops, make 5 folder records and send 1 MiB of
+inline content in one call.
+
+**Filing is an agent's; reorganising is a person's.** A [folder](#folders)
+grants nothing, so an agent files its own work and tidies what it may edit,
+each move asking editor on the artifact and contributor on the destination
+through the requester ceiling. It creates subfolders inside a tree a person
+made, and only when asked or for a set of related artifacts no folder fits.
+Top-level folders, renames, moves of a folder and removals are a person's
+gestures. A folder reference resolves only among the folders the agent and
+whoever it works for can both see, and a turn a stranger woke sees none.
+
+**The brand is applied for the agent where the engine draws.** Pages, designs,
+docs and dashboards take the [adopted brand](#the-company-brand) with no step of
+the agent's. What it writes literally, a slide's inline styles, a logo in a
+version, a typeface, it reads from `get_company_brand` and copies with
+`from_brand`; a deck begun from `starter` with `theme: "brand"` is drawn in the
+brand by the engine. The brand's voice is the one free text, fenced under the
+`company` trust: tone and wording, never the task, the tools, the recipients
+or access. The bundled artifacts skill names the kit version to link as
+`${crewlet_kit_version}`, which the engine sets to the newest kit it embeds,
+the one that reads the brand.
 A stale base version is refused with the live version, its author, its time,
 the changed paths and the start of each changed file, which is what the agent
 merges from.
