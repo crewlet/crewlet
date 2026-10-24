@@ -122,6 +122,14 @@ func TestTwoNodesConvergeOnOneLogAndAReplayRebuildsTheirEstate(t *testing.T) {
 			failures <- fmt.Errorf("%s file: %w", label, err)
 			return
 		}
+		if _, err := n.writer.Create(ctx, c, artifactsdomain.CreateInput{
+			Kind: artifacts.KindHTML, Title: "Filed by " + label, Owner: c.Authority.Actor.Name,
+			OwnerKind: c.Authority.Actor.Kind, Folder: inbox,
+			First: page(upload(t, "index.html", "<p>filed by "+label+"</p>")),
+		}); err != nil {
+			failures <- fmt.Errorf("%s create into a folder: %w", label, err)
+			return
+		}
 		if _, err := n.writer.RenameFolder(ctx, c, inbox, "Inbox of "+label); err != nil {
 			failures <- fmt.Errorf("%s rename: %w", label, err)
 			return
