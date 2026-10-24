@@ -61,20 +61,22 @@ export function useGallerySelection(order: readonly string[], question: string):
   }, [question]);
 
   const pick = useCallback((id: string, on: boolean, range: boolean) => {
+    // THE SPAN IS READ NOW, from the anchor as it stands before this press:
+    // an updater runs later, after the anchor has moved to this card.
+    const drawn = latestOrder.current;
+    const to = drawn.indexOf(id);
+    const from = range && anchor.current !== null ? drawn.indexOf(anchor.current) : -1;
+    const span =
+      from >= 0 && to >= 0 ? drawn.slice(Math.min(from, to), Math.max(from, to) + 1) : [id];
+    anchor.current = id;
     setSelected((was) => {
       const next = new Set(was);
-      const drawn = latestOrder.current;
-      const to = drawn.indexOf(id);
-      const from = range && anchor.current !== null ? drawn.indexOf(anchor.current) : -1;
-      const span =
-        from >= 0 && to >= 0 ? drawn.slice(Math.min(from, to), Math.max(from, to) + 1) : [id];
       for (const one of span) {
         if (on) next.add(one);
         else next.delete(one);
       }
       return next;
     });
-    anchor.current = id;
   }, []);
 
   const replace = useCallback((next: ReadonlySet<string>) => setSelected(new Set(next)), []);

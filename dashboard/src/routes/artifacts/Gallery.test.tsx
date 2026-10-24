@@ -173,6 +173,39 @@ test("a list row draws the kind's mark, the kind and description under the title
   expect(theirs.querySelector(".crewlet-table-cell__entity .crewlet-avatar")).not.toBeNull();
 });
 
+// WHERE IT IS KEPT, as the reader sees the tree: a folder's path in words,
+// or the top level for one in no folder they can see.
+test("a list row names the folder it is kept in, or the top level", () => {
+  asList();
+  items = [row({ folder_path: "Marketing/Q4 review/" }), row({ id: "a2", title: "Loose notes" })];
+  mount("all");
+  const filed = screen
+    .getByText("Architecture notes")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
+  expect(within(filed).getByText("Marketing › Q4 review")).toBeTruthy();
+  const loose = screen.getByText("Loose notes").closest(".crewlet-data-grid__row") as HTMLElement;
+  expect(within(loose).getByText("Top level")).toBeTruthy();
+});
+
+// PICKING IS A MODE: Select puts a box on every card, a card's body then
+// picks rather than opens, and the bar says how many with Move to….
+test("Select draws a box on every card and a bar to move what is picked; the trash offers none", () => {
+  mount("all");
+  expect(screen.getByRole("link", { name: "Architecture notes" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Select" }));
+  // WHILE CHOOSING, A CARD PICKS rather than opens: its body is no link.
+  expect(screen.queryByRole("link", { name: "Architecture notes" })).toBeNull();
+  fireEvent.click(screen.getByRole("checkbox", { name: "Select Architecture notes" }));
+  const bar = screen.getByRole("toolbar", { name: "Selection" });
+  expect(bar.textContent).toContain("1 selected");
+  expect(within(bar).getByRole("button", { name: "Move to…" })).toBeTruthy();
+  fireEvent.click(within(bar).getByRole("button", { name: "Clear" }));
+  expect(screen.queryByRole("toolbar", { name: "Selection" })).toBeNull();
+  cleanup();
+  mount("yours", "#/artifacts/yours?status=trashed");
+  expect(screen.queryByRole("button", { name: "Select" })).toBeNull();
+});
+
 test("Yours draws no owner and no role, which would say You and Owner on every row", () => {
   asList();
   mount("yours", "#/artifacts/yours");
@@ -355,7 +388,13 @@ test("a card says who can open it, and its menu stands beside its link", () => {
   const more = screen.getByRole("button", { name: "More for “Architecture notes”" });
   expect(link.contains(more)).toBe(false);
   fireEvent.click(more);
-  for (const name of ["Pin to your sidebar", "Copy link", "Rename", "Move to the trash"]) {
+  for (const name of [
+    "Pin to your sidebar",
+    "Copy link",
+    "Rename",
+    "Move to…",
+    "Move to the trash",
+  ]) {
     expect(screen.getByRole("menuitem", { name })).toBeTruthy();
   }
 });
