@@ -244,8 +244,8 @@ func loadLLMConfig(ctx context.Context, environ config.Source, companyPath, boot
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
-	resolver, _, closeResolver, err := companyResolver(ctx, environ, company,
-		llmEntryReads(keys), bootstrapPath, apiURL, notes)
+	resolver, _, closeResolver, err := companyResolver(ctx, environ,
+		llmEntryReads(company, keys), bootstrapPath, apiURL, notes)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -278,15 +278,16 @@ func llmEntries(company *config.Company, sub, key, companyPath string) ([]string
 	return []string{key}, nil
 }
 
-// llmEntryReads is the scope of these entries, whole: building one resolves
-// every ${VAR} it names, and the variables it signs in from without naming
-// them, which [config.Company.VariablesRead] reports at its own fields.
-func llmEntryReads(keys []string) readScope {
-	return func(path string) bool {
-		return slices.ContainsFunc(keys, func(key string) bool {
-			return strings.HasPrefix(path, "providers.llm."+key+".")
-		})
+// llmEntryReads is every variable these entries read, each once, sorted:
+// building one resolves every ${VAR} it names, and the variables it signs in
+// from without naming them ([config.Company.LLMEntryReads]) — the names a
+// running node is asked to reveal ([companyResolver]).
+func llmEntryReads(company *config.Company, keys []string) []string {
+	var names []string
+	for _, key := range keys {
+		names = append(names, company.LLMEntryReads(key)...)
 	}
+	return unionReads(names)
 }
 
 // cliAgents builds these entries' providers, in the order given.

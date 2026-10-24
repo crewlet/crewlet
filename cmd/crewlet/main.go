@@ -109,7 +109,21 @@ func run(args []string, stdout, stderr io.Writer) error {
 // `CREWLET_LOG_FORMAT` and `CREWLET_LOG_FILE` configure the process's one
 // logger, which is the process's state rather than the invocation's, so they
 // are read from the process.
-func runIn(environ config.Source, args []string, stdout, stderr io.Writer) error {
+func runIn(environ config.Source, args []string, stdout, stderr io.Writer) (err error) {
+	// A READ THROUGH A NODE THAT FAILED PART WAY THROUGH A COMMAND stops it
+	// with a panic, because the lookup that made it has no error to return
+	// and its only other answer, unset, is the one that mints over a working
+	// secret ([readFailed]). It is the command's failure, and answered here
+	// as one; any other panic is a bug, and goes on as it came.
+	defer func() {
+		if r := recover(); r != nil {
+			failed, ok := r.(readFailed)
+			if !ok {
+				panic(r)
+			}
+			err = failed
+		}
+	}()
 	if len(args) == 0 {
 		usage(stderr)
 		return errors.New("no command given")

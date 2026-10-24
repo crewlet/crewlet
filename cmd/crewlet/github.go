@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/github"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // `crewlet github provision` — the hosted code host's reconcile.
@@ -28,13 +29,14 @@ import (
 // webhooks, on the organization where the credential may and on each named
 // repository where it may not.
 
-// githubProvisionReads is what `crewlet github provision` resolves of the
-// company: the instance, the org token it registers hooks with and the key
-// they sign with (minted when it resolves empty), and each seat's own
-// credential, whose account it reports ([readScope], [github.CredentialOf]).
-var githubProvisionReads = anyOf(
-	companyFields("integrations.github", "url", "token", "webhook_secret"),
-	mcpEnvBlocks(github.SeatEnv))
+// githubProvisionReads is every variable `crewlet github provision` reads of
+// the company: the instance, the org token it registers hooks with and the
+// key they sign with (minted when it resolves empty), and each seat's own
+// credential, whose account it reports ([github.CredentialReads]) — the
+// names a running node is asked to reveal ([companyResolver]).
+func githubProvisionReads(cfg *config.GitHub, o *org.Organization) []string {
+	return unionReads(fieldReads(cfg.URL, cfg.Token, cfg.WebhookSecret), github.CredentialReads(o))
+}
 
 func runGitHubProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
@@ -78,8 +80,8 @@ func runGitHubProvision(environ config.Source, args []string, stdout, stderr io.
 	}
 
 	ctx := context.Background()
-	env, boot, closeEnv, err := companyResolver(ctx, environ, company,
-		githubProvisionReads, *sinks.bootstrap,
+	env, boot, closeEnv, err := companyResolver(ctx, environ,
+		githubProvisionReads(cfg, organization), *sinks.bootstrap,
 		*sinks.api, stdout)
 	if err != nil {
 		return err

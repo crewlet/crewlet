@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -283,7 +284,6 @@ const maxSecretResponseBytes = (64 << 10) + (4 << 10)
 // without end.
 const maxListingBytes = 64 << 20
 
-
 // refusal turns a status code into something an operator can act on.
 func (c *secretsClient) refusal(status int, path, contentType string, raw []byte) error {
 	var body struct {
@@ -311,12 +311,26 @@ func (c *secretsClient) refusal(status int, path, contentType string, raw []byte
 				strings.SplitN(path, "?", 2)[0], "/secrets/"), "", body.Hint))
 	}
 	if msg, ok := credentialRefusal(status, raw, true); ok {
-		return fmt.Errorf("%s: %s", c.base, msg)
+		return &nodeRefusal{Status: status, Code: body.Error, msg: c.base + ": " + msg}
 	}
 	msg := body.Error
 	if msg == "" {
 		msg = foreignAnswer(contentType, raw)
 	}
-	return fmt.Errorf("%s answered %d for %s: %s", c.base, status, path,
-		withRefusalDetail(msg, body.Detail, body.Hint))
+	// A [nodeRefusal], so a caller can tell a refused credential from a
+	// node that is failing ([refusedTheToken]): the remedy for the first is
+	// the token, and for the second the node.
+	return &nodeRefusal{Status: status, Code: body.Error, detail: body.Detail, hint: body.Hint,
+		msg: fmt.Sprintf("%s answered %d for %s: %s",
+			c.base, status, path, withRefusalDetail(msg, body.Detail, body.Hint))}
+}
+
+// refusedTheToken reports whether err is the node refusing the credential
+// this command sent: 401, or 403. A node that is down, draining or failing
+// answers the same for any token, and naming the token then sends an operator
+// to change one that works.
+func refusedTheToken(err error) bool {
+	var refusal *nodeRefusal
+	return errors.As(err, &refusal) &&
+		(refusal.Status == http.StatusUnauthorized || refusal.Status == http.StatusForbidden)
 }

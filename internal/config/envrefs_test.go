@@ -159,3 +159,57 @@ providers:
 		}
 	}
 }
+
+// ONE ENTRY'S READS ARE ITS OWN, by the rule VariablesRead uses: what the
+// entry names and what it falls back to, and nothing of an entry whose key
+// starts with the same letters and a dot — `gpt-5` beside `gpt-5.1`, which
+// a path prefix cannot tell apart. Every entry's reads together are every
+// read VariablesRead reports under providers.llm, so the two cannot drift.
+func TestAnEntrysReadsAreItsOwn(t *testing.T) {
+	t.Parallel()
+	cfg, err := ParseCompanyDocument([]byte(`
+name: Acme
+roles:
+  - name: CEO
+    handle: ceo
+    goal: Run the company
+providers:
+  llm:
+    gpt-5:
+      agent: codex
+      model: gpt-5
+      env: {HTTPS_PROXY: "${PROXY_URL}"}
+    gpt-5.1:
+      agent: codex
+      model: "${NEWER_MODEL}"
+      auth: {mode: api-key, api_key: "${NEWER_KEY}"}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	for key, want := range map[string][]string{
+		"gpt-5":   {"CREWLET_LLM_CLI_GPT_5_CREDENTIALS", "PROXY_URL"},
+		"gpt-5.1": {"CREWLET_LLM_CLI_GPT_5_1_CREDENTIALS", "NEWER_KEY", "NEWER_MODEL"},
+		"absent":  nil,
+	} {
+		if got := cfg.LLMEntryReads(key); !slices.Equal(got, want) {
+			t.Errorf("LLMEntryReads(%q) = %v, want %v", key, got, want)
+		}
+	}
+
+	var every, indexed []string
+	for key := range cfg.Providers.LLM {
+		every = append(every, cfg.LLMEntryReads(key)...)
+	}
+	for _, ref := range cfg.VariablesRead() {
+		if strings.HasPrefix(ref.Path, "providers.llm.") {
+			indexed = append(indexed, ref.Name)
+		}
+	}
+	slices.Sort(every)
+	slices.Sort(indexed)
+	if !slices.Equal(slices.Compact(every), slices.Compact(indexed)) {
+		t.Errorf("the entries' reads %v are not the reads VariablesRead reports under "+
+			"providers.llm, %v", every, indexed)
+	}
+}

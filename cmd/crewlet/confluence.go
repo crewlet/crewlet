@@ -19,11 +19,13 @@ import (
 // operator asked it to: a directory tree of markdown, one space per
 // directory, plus the tool skills the files themselves declare.
 
-// confluenceReads is what `crewlet confluence import` and `resync` resolve
-// of the company: the instance, and the org account they read and write it
-// with ([readScope]).
-var confluenceReads = companyFields("integrations.confluence",
-	"url", "cloud_id", "site_url", "email", "token")
+// confluenceReads is every variable `crewlet confluence import` and `resync`
+// read of the company: the instance's address, and the org account they read
+// and write it with — the names a running node is asked to reveal
+// ([companyResolver]).
+func confluenceReads(cfg *config.Confluence) []string {
+	return fieldReads(cfg.URL, cfg.CloudID, cfg.SiteURL, cfg.Email, cfg.Token)
+}
 
 func runConfluenceImport(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
@@ -32,6 +34,7 @@ func runConfluenceImport(environ config.Source, args []string, stdout, stderr io
 	fs := flag.NewFlagSet("confluence import", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	bootstrapPath := bootstrapFlag(fs)
+	apiURL := readAPIFlag(fs)
 	space := fs.String("space", "",
 		"the space tool-skill pages are published into; empty reads "+
 			"CREWLET_TOOL_SKILLS_SPACE, then knowledge.skills_container")
@@ -45,7 +48,7 @@ func runConfluenceImport(environ config.Source, args []string, stdout, stderr io
 	if given != 2 {
 		fmt.Fprintln(stderr,
 			"usage: crewlet confluence import <company.yaml> <directory> "+
-				"[-space KEY] [-prune] [-dry-run]")
+				"[-space KEY] [-prune] [-dry-run] [-config PATH] [-api URL]")
 		return errors.New("name exactly one company document and one directory")
 	}
 
@@ -74,8 +77,8 @@ func runConfluenceImport(environ config.Source, args []string, stdout, stderr io
 	}
 
 	ctx := context.Background()
-	env, _, closeEnv, err := companyResolver(ctx, environ, company, confluenceReads,
-		*bootstrapPath, "", stdout)
+	env, _, closeEnv, err := companyResolver(ctx, environ, confluenceReads(cfg),
+		*bootstrapPath, *apiURL, stdout)
 	if err != nil {
 		return err
 	}
@@ -168,13 +171,15 @@ func runConfluenceResync(environ config.Source, args []string, stdout, stderr io
 	space := fs.String("space", "",
 		"the skills space key; empty takes knowledge.skills_container")
 	bootstrapPath := bootstrapFlag(fs)
+	apiURL := readAPIFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	companyPath, given := onePositional(fs, companyPath)
 	if given != 1 {
 		fmt.Fprintln(stderr,
-			"usage: crewlet confluence resync <company.yaml> [-space KEY]")
+			"usage: crewlet confluence resync <company.yaml> [-space KEY] "+
+				"[-config PATH] [-api URL]")
 		return errors.New("name exactly one company document")
 	}
 
@@ -190,8 +195,8 @@ func runConfluenceResync(environ config.Source, args []string, stdout, stderr io
 	}
 
 	ctx := context.Background()
-	env, _, closeEnv, err := companyResolver(ctx, environ, company, confluenceReads,
-		*bootstrapPath, "", stdout)
+	env, _, closeEnv, err := companyResolver(ctx, environ, confluenceReads(cfg),
+		*bootstrapPath, *apiURL, stdout)
 	if err != nil {
 		return err
 	}
@@ -245,12 +250,14 @@ func runConfluenceResync(environ config.Source, args []string, stdout, stderr io
 // it registers one signed hook; on Cloud one token-bearing hook per event,
 // because Cloud signs nothing and names no event in what it delivers.
 
-// confluenceProvisionReads is what `crewlet confluence provision` resolves
-// of the company: the instance and its org account, and the two values the
-// hooks it registers authenticate with — each minted when it resolves empty,
-// which is why a value the fleet holds has to reach it ([readScope]).
-var confluenceProvisionReads = companyFields("integrations.confluence",
-	"url", "cloud_id", "site_url", "email", "token", "webhook_secret", "webhook_token")
+// confluenceProvisionReads is every variable `crewlet confluence provision`
+// reads of the company: the instance and its org account, and the two values
+// the hooks it registers authenticate with — each minted when it resolves
+// empty, which is why a value the fleet holds has to reach it
+// ([companyResolver]).
+func confluenceProvisionReads(cfg *config.Confluence) []string {
+	return unionReads(confluenceReads(cfg), fieldReads(cfg.WebhookSecret, cfg.WebhookToken))
+}
 
 func runConfluenceProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	companyPath, args := splitSubject(args)
@@ -290,9 +297,8 @@ func runConfluenceProvision(environ config.Source, args []string, stdout, stderr
 	}
 
 	ctx := context.Background()
-	env, boot, closeEnv, err := companyResolver(ctx, environ, company,
-		confluenceProvisionReads, *sinks.bootstrap,
-		*sinks.api, stdout)
+	env, boot, closeEnv, err := companyResolver(ctx, environ,
+		confluenceProvisionReads(cfg), *sinks.bootstrap, *sinks.api, stdout)
 	if err != nil {
 		return err
 	}

@@ -8,15 +8,16 @@ import (
 	"io"
 	"maps"
 	"os"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/mattermost"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/store"
@@ -55,9 +56,23 @@ func addSinkFlags(fs *flag.FlagSet) sinkFlags {
 		// writes through its API — which is also what puts a minted
 		// credential on every node rather than on this one.
 		api: fs.String("api", "",
-			"the running node to record credentials through; default is the "+
-				"api.host:port in -config"),
+			"the node to read the company's stored values and record "+
+				"credentials through; default is this node's store, or the "+
+				"running engine at the api.host:port in -config"),
 	}
+}
+
+// readAPIFlag adds -api to a command that reads the company and records
+// nothing: the node its stored values are read through ([companyResolver]).
+//
+// THE SAME FLAG the provisioning commands, `crewlet llm` and `crewlet
+// secrets` take, and needed for the same cases: a node that holds no data
+// has no store of the company's to read, and a machine that is not a node has
+// none at all, so the values are a node's that does.
+func readAPIFlag(fs *flag.FlagSet) *string {
+	return fs.String("api", "",
+		"the node to read the company's stored values through; default is "+
+			"this node's store, or the running engine holding it")
 }
 
 // bootstrapFlag adds the -config flag: the Tier A document naming this
@@ -150,21 +165,25 @@ func (s sinkStore) Set(ctx context.Context, name, value string, by secrets.Autho
 // process, so they are read through its API ([storedThroughTheRunningNode]).
 // Refusing instead made every one of these commands, and `crewlet llm`,
 // unusable beside the node they exist to serve. An explicit apiURL is the
-// write's instruction, and the read follows it rather than the local path: a
-// command run against a named node from a machine that is not one would
-// otherwise open, and create, an empty database at the Tier A path and resolve
-// every stored value as unset.
+// command's instruction, and the read follows it rather than the local path,
+// WHETHER OR NOT a Tier A is at this one: a command run against a named node
+// from a machine that is not one would otherwise open, and create, an empty
+// database at the Tier A path — or with no file there, read the environment
+// alone — and resolve every stored value as unset.
 //
-// THROUGH A NODE, ONLY WHAT THIS COMMAND READS is fetched — the fields its
-// [readScope] names, of the reads [config.Company.VariablesRead] accounts
-// for — because each value comes back through `GET /secrets/{name}?reveal=true`:
-// the one route that hands a credential out, logged by name against the
-// caller and refused to a machine token. Revealing every value the company
-// reads, for a command that reads two of them, put the whole credential set
-// in this process and the node's log for nothing: `crewlet llm login` for
-// one entry revealed every vendor's tokens, and a GitLab provision every
-// model's. See [nodeValues] for why the scope is revealed before the command
-// runs rather than one value at a time as it is read.
+// THROUGH A NODE, ONLY WHAT THIS COMMAND READS is fetched — the variables in
+// reads, which each command takes from the fields it resolves and the tables
+// its readers loop over — because each value comes back through
+// `GET /secrets/{name}?reveal=true`: the one route that hands a credential
+// out, logged by name against the caller and refused to a machine token.
+// Revealing every value the company reads, for a command that reads two of
+// them, put the whole credential set in this process and the node's log for
+// nothing: `crewlet llm login` for one entry revealed every vendor's tokens,
+// and a GitLab provision every model's. Names rather than document paths,
+// because a path prefix cannot tell an entry `gpt-5` from `gpt-5.1`, nor a
+// tool server `github` from `github.internal`. See [nodeValues] for why they
+// are revealed before the command runs rather than one at a time as each is
+// read.
 //
 // A node that holds no data (`store.scratch`) has no store of the company's
 // to open, and is refused unless apiURL names one that does.
@@ -186,29 +205,29 @@ func (s sinkStore) Set(ctx context.Context, name, value string, by secrets.Autho
 // IT ALSO HANDS BACK THE TIER A IT LOADED ([companyBootstrap]), which every
 // caller now needs and none of them should load a second time. Nil when there
 // is no Tier A file at all.
-func companyResolver(ctx context.Context, environ config.Source, company *config.Company,
-	scope readScope, bootstrapPath, apiURL string, notes io.Writer) (*config.Resolver, *config.Bootstrap, func(), error) {
+func companyResolver(ctx context.Context, environ config.Source, reads []string,
+	bootstrapPath, apiURL string, notes io.Writer) (*config.Resolver, *config.Bootstrap, func(), error) {
 
 	boot, err := companyBootstrap(bootstrapPath)
 	if err != nil {
 		return nil, nil, nil, err
-	}
-	if boot == nil {
-		fmt.Fprintf(notes, "no %s: resolving ${VAR} from the environment only.\n",
-			bootstrapPath)
-		return config.EnvOnly(), nil, func() {}, nil
 	}
 	if strings.TrimSpace(apiURL) != "" {
 		client, cerr := newSecretsClient(environ, boot, apiURL)
 		if cerr != nil {
 			return nil, nil, nil, cerr
 		}
-		values, rerr := storedThrough(ctx, client, company, scope, notes)
+		values, rerr := storedThrough(ctx, client, reads, notes)
 		if rerr != nil {
 			return nil, nil, nil, fmt.Errorf("read the company's stored values "+
-				"through %s: %w%s", client.base, rerr, revealTakesATierAToken)
+				"through %s: %w%s", client.base, rerr, revealRemedy(rerr))
 		}
 		return config.WithStore(values), boot, func() {}, nil
+	}
+	if boot == nil {
+		fmt.Fprintf(notes, "no %s: resolving ${VAR} from the environment only.\n",
+			bootstrapPath)
+		return config.EnvOnly(), nil, func() {}, nil
 	}
 	// A NODE THAT HOLDS NO DATA HAS NO STORE TO READ. Its file is scratch —
 	// the previous run's, deleted at every boot — and the company's values
@@ -224,7 +243,7 @@ func companyResolver(ctx context.Context, environ config.Source, company *config
 	sv, closeStore, err := openSecretValues(ctx, boot)
 	if err != nil {
 		values, rerr := storedThroughTheRunningNode(ctx, environ, boot, bootstrapPath,
-			company, scope, err, notes)
+			reads, err, notes)
 		if rerr != nil {
 			return nil, nil, nil, rerr
 		}
@@ -235,7 +254,7 @@ func companyResolver(ctx context.Context, environ config.Source, company *config
 		closeStore()
 		return nil, nil, nil, fmt.Errorf("read the secret store: %w", err)
 	}
-	sayWhatAStoppedNodeCannotRead(notes, company, scope, values, boot.Store.Path)
+	sayWhatAStoppedNodeCannotRead(notes, reads, values, boot.Store.Path)
 	return config.WithStore(config.MapSource(values)), boot, closeStore, nil
 }
 
@@ -253,11 +272,11 @@ func companyResolver(ctx context.Context, environ config.Source, company *config
 // refused: before a node's first start the table is the whole store, and a
 // value nobody has stored yet is exactly what `crewlet llm login` and a
 // first provisioning run are there to write.
-func sayWhatAStoppedNodeCannotRead(notes io.Writer, company *config.Company,
-	scope readScope, local map[string]string, storePath string) {
+func sayWhatAStoppedNodeCannotRead(notes io.Writer, reads []string,
+	local map[string]string, storePath string) {
 
 	var unread []string
-	for _, name := range scopedNames(company, scope) {
+	for _, name := range reads {
 		if _, stored := local[name]; stored {
 			continue
 		}
@@ -293,6 +312,17 @@ func companyBootstrap(bootstrapPath string) (*config.Bootstrap, error) {
 	return loadBootstrapForStore(bootstrapPath)
 }
 
+// revealRemedy is what a read through a node that failed tells the operator to
+// change: the token, where the node refused it, and nothing more where it did
+// not — a node that is down, draining or failing answers the same for any
+// token, and naming the token then sends an operator to change one that works.
+func revealRemedy(err error) string {
+	if refusedTheToken(err) {
+		return revealTakesATierAToken
+	}
+	return ""
+}
+
 // revealTakesATierAToken is what a read through a node that was refused
 // tells the operator to change: reading a value is a reveal, which the
 // authority table gives admin with a person present, so a machine token —
@@ -308,8 +338,8 @@ const revealTakesATierAToken = "\n\nEach value is read with a reveal, which take
 // for the same reason: every other failure is a broken node, whose own
 // message an HTTP attempt would replace with a connection refused.
 func storedThroughTheRunningNode(ctx context.Context, environ config.Source,
-	boot *config.Bootstrap, bootstrapPath string, company *config.Company,
-	scope readScope, err error, notes io.Writer) (*nodeValues, error) {
+	boot *config.Bootstrap, bootstrapPath string, reads []string,
+	err error, notes io.Writer) (*nodeValues, error) {
 
 	if !errors.Is(err, store.ErrLocked) {
 		return nil, err
@@ -317,7 +347,7 @@ func storedThroughTheRunningNode(ctx context.Context, environ config.Source,
 	client, cerr := newSecretsClient(environ, boot, "")
 	if cerr == nil {
 		var values *nodeValues
-		if values, cerr = storedThrough(ctx, client, company, scope, notes); cerr == nil {
+		if values, cerr = storedThrough(ctx, client, reads, notes); cerr == nil {
 			return values, nil
 		}
 	}
@@ -328,7 +358,7 @@ func storedThroughTheRunningNode(ctx context.Context, environ config.Source,
 	// engine is not offered as the way round.
 	return nil, fmt.Errorf("%w\n\nthe engine for %s is running and holds its "+
 		"database, so the company's stored values are read through its API — "+
-		"and they cannot be: %w%s", err, bootstrapPath, cerr, revealTakesATierAToken)
+		"and they cannot be: %w%s", err, bootstrapPath, cerr, revealRemedy(cerr))
 }
 
 // storedThrough reads, through a running node, the stored values a command
@@ -338,8 +368,8 @@ func storedThroughTheRunningNode(ctx context.Context, environ config.Source,
 // fleet does not hold is left to the environment without a request, exactly
 // as the local table's absence leaves it. A name that went between the
 // listing and its read is absent the same way.
-func storedThrough(ctx context.Context, client *secretsClient, company *config.Company,
-	scope readScope, notes io.Writer) (*nodeValues, error) {
+func storedThrough(ctx context.Context, client *secretsClient, reads []string,
+	notes io.Writer) (*nodeValues, error) {
 
 	rows, err := client.List(ctx)
 	if err != nil {
@@ -355,7 +385,7 @@ func storedThrough(ctx context.Context, client *secretsClient, company *config.C
 	for _, row := range rows {
 		values.held[row.Name] = true
 	}
-	for _, name := range scopedNames(company, scope) {
+	for _, name := range unionReads(reads) {
 		if _, _, err := values.revealLocked(name); err != nil {
 			return nil, err
 		}
@@ -424,9 +454,9 @@ func (n *nodeValues) Lookup(name string) (string, bool) {
 	}
 	value, ok, err := n.revealLocked(name)
 	if err != nil {
-		panic(fmt.Errorf("read ${%s} through the running node at %s: %w — stopping "+
-			"rather than resolving a stored value as unset%s",
-			name, n.where, err, revealTakesATierAToken))
+		panic(readFailed{fmt.Errorf("read ${%s} through the running node at %s: %w — "+
+			"stopping rather than resolving a stored value as unset%s",
+			name, n.where, err, revealRemedy(err))})
 	}
 	if ok {
 		fmt.Fprintf(n.notes, "revealed ${%s} through the running node at %s as it "+
@@ -435,6 +465,15 @@ func (n *nodeValues) Lookup(name string) (string, bool) {
 	}
 	return value, ok
 }
+
+// readFailed is a read through a running node that failed part way through a
+// command, carried by a panic out of the [nodeValues.Lookup] that has no error
+// to return, and answered at the command's top as the error it is ([runIn]).
+// A panic, because the alternative answer — unset — is the one that mints.
+type readFailed struct{ err error }
+
+func (r readFailed) Error() string { return r.err.Error() }
+func (r readFailed) Unwrap() error { return r.err }
 
 // revealLocked reveals one held name, reporting whether the node still held
 // it. n.mu is held, or n is not yet shared.
@@ -454,64 +493,20 @@ func (n *nodeValues) revealLocked(name string) (string, bool, error) {
 	return value, true, nil
 }
 
-// readScope is the fields of the company one command resolves, each named by
-// the path [config.Company.VariablesRead] reports a read at.
-//
-// DECLARED BESIDE THE COMMAND, as a set of fields rather than of variable
-// names, because a field is what the command's code reads: the name behind
-// it is the document's, and differs from one company to the next.
-type readScope func(path string) bool
-
-// companyFields is the scope of these fields of one block at the document's
-// root: companyFields("integrations.gitlab", "url").
-func companyFields(block string, fields ...string) readScope {
-	return func(path string) bool {
-		field, ok := strings.CutPrefix(path, block+".")
-		return ok && slices.Contains(fields, field)
-	}
-}
-
-// memberPath is the start of a path inside a seat or a unit, wherever the
-// hierarchy puts it: `roles[2].`, `units[0].children[1].roles[0].`,
-// `units[3].`.
-var memberPath = regexp.MustCompile(`^(?:units\[\d+\]\.(?:children\[\d+\]\.)*)?(?:roles\[\d+\]\.)?`)
-
-// memberFields is the scope of every field under prefix on a seat or a unit:
-// a seat's `integrations.mattermost.bot_token`, or the `mcp_env.github.`
-// block a seat holds or inherits from its unit.
-func memberFields(prefix string) readScope {
-	return func(path string) bool {
-		end := memberPath.FindStringIndex(path)[1]
-		return end > 0 && strings.HasPrefix(path[end:], prefix)
-	}
-}
-
-// anyOf is the scope of every field one of scopes covers.
-func anyOf(scopes ...readScope) readScope {
-	return func(path string) bool {
-		return slices.ContainsFunc(scopes, func(scope readScope) bool { return scope(path) })
-	}
-}
-
-// mcpEnvBlocks is the scope of these mcp_env servers' blocks, on every seat
-// and every unit — where a seat's own credential at a vendor sits.
-func mcpEnvBlocks(servers ...string) readScope {
-	scopes := make([]readScope, len(servers))
-	for i, server := range servers {
-		scopes[i] = memberFields("mcp_env." + server + ".")
-	}
-	return anyOf(scopes...)
-}
-
-// scopedNames is every variable the company reads at a field in scope, each
-// once, sorted.
-func scopedNames(company *config.Company, scope readScope) []string {
+// fieldReads is every variable these fields reference, each once, sorted:
+// what a command reads behind the fields of the document it resolves.
+func fieldReads(fields ...string) []string {
 	var names []string
-	for _, ref := range company.VariablesRead() {
-		if scope(ref.Path) {
-			names = append(names, ref.Name)
-		}
+	for _, field := range fields {
+		names = append(names, envref.Names(field)...)
 	}
+	slices.Sort(names)
+	return slices.Compact(names)
+}
+
+// unionReads is every name in these lists, each once, sorted.
+func unionReads(lists ...[]string) []string {
+	names := slices.Concat(lists...)
 	slices.Sort(names)
 	return slices.Compact(names)
 }
@@ -531,12 +526,15 @@ func operatorCredential(name string) string {
 	return strings.TrimSpace(config.EnvOnly().Lookup(name))
 }
 
-// gitlabProvisionReads is what `crewlet gitlab provision` resolves of the
-// company: the instance, and the key its hooks sign with, which it mints
-// when that resolves empty ([readScope]). Not the engine's read token, which
-// it never uses: it works with the operator's admin token, read from the
-// environment alone ([operatorCredential]).
-var gitlabProvisionReads = companyFields("integrations.gitlab", "url", "signing_secret")
+// gitlabProvisionReads is every variable `crewlet gitlab provision` reads of
+// the company: the instance, and the key its hooks sign with, which it mints
+// when that resolves empty — the names a running node is asked to reveal
+// ([companyResolver]). Not the engine's read token, which it never uses: it
+// works with the operator's admin token, read from the environment alone
+// ([operatorCredential]).
+func gitlabProvisionReads(cfg *config.GitLab) []string {
+	return fieldReads(cfg.URL, cfg.SigningSecret)
+}
 
 // runGitLabProvision is `crewlet gitlab provision`.
 func runGitLabProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
@@ -628,8 +626,8 @@ func runGitLabProvision(environ config.Source, args []string, stdout, stderr io.
 	// so a -dry-run does it too — a dry run that could not say this would
 	// be silent about the one outcome an operator most needs warning of.
 	ctx := context.Background()
-	env, boot, closeEnv, err := companyResolver(ctx, environ, company,
-		gitlabProvisionReads, *sinks.bootstrap,
+	env, boot, closeEnv, err := companyResolver(ctx, environ,
+		gitlabProvisionReads(cfg), *sinks.bootstrap,
 		*sinks.api, stdout)
 	if err != nil {
 		return err
@@ -894,10 +892,16 @@ func soleVarOf(value string) string {
 	return name
 }
 
-// mattermostProvisionReads is what `crewlet mattermost provision` resolves of
-// the company: the instance alone. The bots' tokens are what it mints, and
-// it works with the operator's admin token ([readScope]).
-var mattermostProvisionReads = companyFields("integrations.mattermost", "url")
+// mattermostProvisionReads is every variable `crewlet mattermost provision`
+// reads of the company: the instance's address alone — the name a running
+// node is asked to reveal ([companyResolver]). The bots' tokens are what it
+// mints, and it works with the operator's admin token.
+func mattermostProvisionReads(cfg *config.Mattermost) []string {
+	if cfg == nil {
+		return nil
+	}
+	return fieldReads(cfg.URL)
+}
 
 // runMattermostProvision is `crewlet mattermost provision`.
 func runMattermostProvision(environ config.Source, args []string, stdout, stderr io.Writer) error {
@@ -959,8 +963,8 @@ func runMattermostProvision(environ config.Source, args []string, stdout, stderr
 	}
 	defer closeSink()
 
-	env, _, closeEnv, err := companyResolver(ctx, environ, company,
-		mattermostProvisionReads, *sinks.bootstrap,
+	env, _, closeEnv, err := companyResolver(ctx, environ,
+		mattermostProvisionReads(cfg), *sinks.bootstrap,
 		*sinks.api, stdout)
 	if err != nil {
 		return err
@@ -1030,12 +1034,13 @@ func sortedKeys(m map[string][]string) []string {
 	return out
 }
 
-// mattermostDoctorReads is what `crewlet mattermost doctor` resolves of the
-// company: the instance and its team, and each seat's bot token, which its
-// checks authenticate with ([readScope], [mattermost.SeatTokens]).
-var mattermostDoctorReads = anyOf(
-	companyFields("integrations.mattermost", "url", "team"),
-	memberFields("integrations.mattermost.bot_token"))
+// mattermostDoctorReads is every variable `crewlet mattermost doctor` reads
+// of the company: the instance and its team, and each seat's bot token, which
+// its checks authenticate with ([mattermost.SeatTokenReads]) — the names a
+// running node is asked to reveal ([companyResolver]).
+func mattermostDoctorReads(cfg *config.Mattermost, o *org.Organization) []string {
+	return unionReads(fieldReads(cfg.URL, cfg.Team), mattermost.SeatTokenReads(o))
+}
 
 // runMattermostDoctor is `crewlet mattermost doctor`.
 func runMattermostDoctor(environ config.Source, args []string, stdout, stderr io.Writer) error {
@@ -1052,6 +1057,7 @@ func runMattermostDoctor(environ config.Source, args []string, stdout, stderr io
 			"reads MATTERMOST_PUBLIC_URL; with neither, the Site URL is judged "+
 			"on its own")
 	bootstrap := bootstrapFlag(fs)
+	apiURL := readAPIFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -1059,7 +1065,7 @@ func runMattermostDoctor(environ config.Source, args []string, stdout, stderr io
 	if given != 1 {
 		fmt.Fprintln(stderr,
 			"usage: crewlet mattermost doctor <company.yaml> [-admin-token TOKEN] "+
-				"[-browser-url URL]")
+				"[-browser-url URL] [-config PATH] [-api URL]")
 		return errors.New("name exactly one company document")
 	}
 
@@ -1077,8 +1083,8 @@ func runMattermostDoctor(environ config.Source, args []string, stdout, stderr io
 	}
 
 	ctx := context.Background()
-	env, _, closeEnv, err := companyResolver(ctx, environ, company, mattermostDoctorReads,
-		*bootstrap, "", stdout)
+	env, _, closeEnv, err := companyResolver(ctx, environ,
+		mattermostDoctorReads(cfg, organization), *bootstrap, *apiURL, stdout)
 	if err != nil {
 		return err
 	}

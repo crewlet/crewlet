@@ -14,6 +14,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -518,9 +519,30 @@ func checkSeats(ctx context.Context, report *Report, opts DoctorOptions, dial Di
 	}
 }
 
+// SeatTokenReads is every variable [SeatTokens] reads for the seats the doctor
+// checks ([chatSeats]), each once, sorted: a bot token that is one whole
+// ${VAR} reads that variable, and any other value is a literal the transport
+// sends as written, reading none.
+//
+// For `crewlet mattermost doctor`, which asks a running node for exactly
+// these, each a reveal logged by name.
+func SeatTokenReads(o *org.Organization) []string {
+	var names []string
+	for _, seat := range chatSeats(o) {
+		if name, ok := envref.Whole(seat.Mattermost.BotToken); ok {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return slices.Compact(names)
+}
+
 // chatSeats is every agent seat that declares a Mattermost bot, in a stable
 // order.
 func chatSeats(o *org.Organization) []*org.Role {
+	if o == nil {
+		return nil
+	}
 	var out []*org.Role
 	for seat := range o.AllRoles() {
 		if seat.IsAgent() && !seat.Mattermost.IsZero() {

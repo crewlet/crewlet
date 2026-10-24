@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -18,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -38,7 +40,7 @@ func TestAProvisioningRunResolvesThroughTheSecretStore(t *testing.T) {
 	}
 
 	var notes bytes.Buffer
-	env, _, closeEnv, err := companyResolver(t.Context(), noEnviron, nil, nil, cfg, "", &notes)
+	env, _, closeEnv, err := companyResolver(t.Context(), noEnviron, nil, cfg, "", &notes)
 	if err != nil {
 		t.Fatalf("companyResolver: %v", err)
 	}
@@ -68,7 +70,7 @@ func TestAStoredSecretWinsOverAStaleExport(t *testing.T) {
 	}
 	t.Setenv("CONFLUENCE_TOKEN", "the-stale-export")
 
-	env, _, closeEnv, err := companyResolver(t.Context(), noEnviron, nil, nil, cfg, "", &bytes.Buffer{})
+	env, _, closeEnv, err := companyResolver(t.Context(), noEnviron, nil, cfg, "", &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("companyResolver: %v", err)
 	}
@@ -112,7 +114,7 @@ func TestWithoutAStoreTheRunSaysWhichChainItUsed(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "not-here.yaml")
 
 	var notes bytes.Buffer
-	env, _, closeEnv, err := companyResolver(t.Context(), noEnviron, nil, nil, missing, "", &notes)
+	env, _, closeEnv, err := companyResolver(t.Context(), noEnviron, nil, missing, "", &notes)
 	if err != nil {
 		t.Fatalf("a missing bootstrap is a supported deployment: %v", err)
 	}
@@ -146,7 +148,7 @@ func TestABootstrapWithNoKeyringIsRefused(t *testing.T) {
 	}
 
 	var notes bytes.Buffer
-	_, _, _, err := companyResolver(t.Context(), noEnviron, nil, nil, path, "", &notes)
+	_, _, _, err := companyResolver(t.Context(), noEnviron, nil, path, "", &notes)
 	if err == nil {
 		t.Fatal("a keyringless bootstrap was resolved rather than refused")
 	}
@@ -173,7 +175,7 @@ func TestABrokenBootstrapRefusesRatherThanResolvingFromTheEnvironment(t *testing
 	}
 
 	var notes bytes.Buffer
-	if _, _, _, err := companyResolver(t.Context(), noEnviron, nil, nil, path, "", &notes); err == nil {
+	if _, _, _, err := companyResolver(t.Context(), noEnviron, nil, path, "", &notes); err == nil {
 		t.Fatal("a bootstrap that cannot be read was treated as no bootstrap, " +
 			"so a configured store silently became a stale environment")
 	}
@@ -305,10 +307,13 @@ providers:
 var errLockedStore = fmt.Errorf("open store: %w: /var/lib/crewlet/index.db is held by "+
 	"pid 41 on host-a since 2026-01-01T00:00:00Z", store.ErrLocked)
 
-// scopeCompanyDoc reads a variable at every kind of field a command's scope
-// names: two providers.llm entries, one signing in from a token it does not
-// name; company-level vendor blocks; and seat credentials on a seat at the
-// root, on a seat two units down, and inherited from a unit.
+// scopeCompanyDoc reads variables at every kind of field a command reads, and
+// beside each one a variable that command must not read: an entry whose key
+// is another's and a dot; a vendor block's field the command never resolves;
+// a unit's credential its direct member inherits, and one that no seat
+// inherits; a key of a seat's vendor block that no reader consults; a tool
+// server whose name starts with the vendor's; and a Confluence-only token in
+// the block Jira shares with it.
 const scopeCompanyDoc = `
 name: Acme
 providers:
@@ -317,11 +322,19 @@ providers:
       model: sonnet
       env:
         CREWLET_TEST_SETTING: "${PROXY_URL}"
+    default.fast:
+      model: haiku
+      auth:
+        mode: api-key
+        api_key: "${FAST_KEY}"
     metered:
       model: sonnet
       auth:
         mode: api-key
         api_key: "${METERED_KEY}"
+mcp_servers:
+  - name: github.internal
+    command: github-mcp-server
 integrations:
   gitlab:
     enabled: true
@@ -336,6 +349,10 @@ integrations:
     enabled: true
     url: "${MATTERMOST_URL}"
     team: acme
+  confluence:
+    url: "${CONFLUENCE_URL}"
+    email: "${CONFLUENCE_EMAIL}"
+    token: "${CONFLUENCE_TOKEN}"
 roles:
   - name: Chief Executive
     handle: ceo
@@ -349,6 +366,14 @@ units:
     mcp_env:
       github:
         GITHUB_TOKEN: "${GITHUB_TOKEN_ENG}"
+        GITHUB_HOST: "${GITHUB_HOST}"
+    roles:
+      - name: Architect
+        handle: architect
+        llm: default
+        mcp_env:
+          github.internal:
+            GITHUB_TOKEN: "${GHE_TOKEN}"
     children:
       - name: Platform
         roles:
@@ -358,35 +383,56 @@ units:
             mcp_env:
               jira:
                 JIRA_API_TOKEN: "${JIRA_TOKEN_SWE}"
+              atlassian:
+                CONFLUENCE_PERSONAL_TOKEN: "${CONFLUENCE_PAT_SWE}"
             integrations:
               mattermost:
                 bot_token: "${MATTERMOST_BOT_SWE}"
+  - name: Research
+    lead: ceo
+    mcp_env:
+      github:
+        GITHUB_TOKEN: "${GITHUB_TOKEN_RESEARCH}"
+    children:
+      - name: Lab
+        roles:
+          - name: Scientist
+            handle: scientist
+            llm: default
 `
 
-// scopeNode is a node holding every value scopeCompanyDoc reads, and one it
-// does not read, each stored as "v-" and its name.
+// scopeNode is a node holding every value scopeCompanyDoc names, and the ones
+// it reads without naming them, and one it does not read, each stored as "v-"
+// and its name.
 func scopeNode(t *testing.T) *revealNode {
 	t.Helper()
 	held := map[string]string{}
 	for _, name := range []string{
-		"PROXY_URL", "CLAUDE_CODE_OAUTH_TOKEN", "METERED_KEY",
+		"PROXY_URL", "CLAUDE_CODE_OAUTH_TOKEN", "FAST_KEY",
+		"CREWLET_LLM_CLI_DEFAULT_FAST_CREDENTIALS", "METERED_KEY",
 		"CREWLET_LLM_CLI_METERED_CREDENTIALS", "GITLAB_URL", "GITLAB_READ_TOKEN",
 		"GITLAB_SIGNING_SECRET", "GITHUB_ORG_TOKEN", "GITHUB_WEBHOOK_SECRET",
-		"GITHUB_TOKEN_ENG", "MATTERMOST_URL", "MATTERMOST_BOT_CEO",
-		"MATTERMOST_BOT_SWE", "JIRA_TOKEN_SWE", "READ_BY_NOTHING",
+		"GITHUB_TOKEN_ENG", "GITHUB_HOST", "GITHUB_TOKEN_RESEARCH", "GHE_TOKEN",
+		"MATTERMOST_URL", "MATTERMOST_BOT_CEO", "MATTERMOST_BOT_SWE",
+		"JIRA_TOKEN_SWE", "CONFLUENCE_PAT_SWE", "CONFLUENCE_URL",
+		"CONFLUENCE_EMAIL", "CONFLUENCE_TOKEN", "READ_BY_NOTHING",
 	} {
 		held[name] = "v-" + name
 	}
 	return newRevealNode(t, held)
 }
 
-func scopeCompany(t *testing.T) *config.Company {
+func scopeCompany(t *testing.T) (*config.Company, *org.Organization) {
 	t.Helper()
 	company, err := config.ParseCompanyDocument([]byte(scopeCompanyDoc))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return company
+	organization, err := company.Organization()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return company, organization
 }
 
 // BESIDE A RUNNING ENGINE THE COMPANY'S VALUES ARE READ THROUGH IT — AND A
@@ -397,58 +443,63 @@ func scopeCompany(t *testing.T) *config.Company {
 // command that reads the company — `crewlet llm` and the vendor commands —
 // used to stop at the lock, which made `crewlet llm login` impossible beside
 // the seats it signs in. And each value comes back through a REVEAL, logged
-// by name against the caller, so a command asks for the fields it reads and
-// nothing else: one entry's sign-in for `crewlet llm login`, not every
-// vendor's tokens; a GitLab provision's instance and signing key, not the
-// engine's GitLab token or any model's. A name the fleet does not hold is
-// left to the environment without a request.
+// by name against the caller, so a command asks for what it reads and
+// nothing else: one entry's sign-in for `crewlet llm login`, not its dotted
+// neighbour's, nor every vendor's tokens; a GitLab provision's instance and
+// signing key, not the engine's GitLab token; the seat credentials a reader
+// consults, not the rest of the block they sit in, a unit's credential no
+// seat inherits, or a tool server's that only shares the vendor's name. A
+// name the fleet does not hold is left to the environment without a request.
 func TestARunningEngineRevealsOnlyWhatTheCommandReads(t *testing.T) {
 	t.Parallel()
+	company, organization := scopeCompany(t)
+	integrations := company.Integrations
 	for _, tc := range []struct {
 		command string
-		scope   readScope
+		reads   []string
 		want    []string
 	}{
 		{
 			// The token it signs in from without naming it, and the env
 			// its CLI runs with; the bundle is not stored.
-			"crewlet llm login default", llmEntryReads([]string{"default"}),
+			"crewlet llm login default", llmEntryReads(company, []string{"default"}),
 			[]string{"CLAUDE_CODE_OAUTH_TOKEN", "PROXY_URL"},
 		},
 		{
-			"crewlet llm status metered", llmEntryReads([]string{"metered"}),
-			[]string{"CREWLET_LLM_CLI_METERED_CREDENTIALS", "METERED_KEY"},
+			"crewlet llm status default.fast", llmEntryReads(company, []string{"default.fast"}),
+			[]string{"CREWLET_LLM_CLI_DEFAULT_FAST_CREDENTIALS", "FAST_KEY"},
 		},
 		{
-			"crewlet llm list", llmEntryReads([]string{"default", "metered"}),
-			[]string{"CLAUDE_CODE_OAUTH_TOKEN", "CREWLET_LLM_CLI_METERED_CREDENTIALS",
-				"METERED_KEY", "PROXY_URL"},
+			"crewlet llm list", llmEntryReads(company, company.Providers.ProviderOrder()),
+			[]string{"CLAUDE_CODE_OAUTH_TOKEN", "CREWLET_LLM_CLI_DEFAULT_FAST_CREDENTIALS",
+				"CREWLET_LLM_CLI_METERED_CREDENTIALS", "FAST_KEY", "METERED_KEY", "PROXY_URL"},
 		},
 		{
-			"crewlet gitlab provision", gitlabProvisionReads,
+			"crewlet gitlab provision", gitlabProvisionReads(integrations.GitLab),
 			[]string{"GITLAB_SIGNING_SECRET", "GITLAB_URL"},
 		},
 		{
-			// The seat credential a unit gives its members, as well as
-			// the org's.
-			"crewlet github provision", githubProvisionReads,
+			// The org's, and the seat credential the Architect inherits
+			// from Engineering.
+			"crewlet github provision", githubProvisionReads(integrations.GitHub, organization),
 			[]string{"GITHUB_ORG_TOKEN", "GITHUB_TOKEN_ENG", "GITHUB_WEBHOOK_SECRET"},
 		},
 		{
-			"crewlet jira provision", jiraProvisionReads,
+			"crewlet jira provision", jiraProvisionReads(&config.Jira{}, organization),
 			[]string{"JIRA_TOKEN_SWE"},
 		},
 		{
-			"crewlet mattermost provision", mattermostProvisionReads,
+			"crewlet mattermost provision", mattermostProvisionReads(integrations.Mattermost),
 			[]string{"MATTERMOST_URL"},
 		},
 		{
 			// A bot token at the root and two units down.
-			"crewlet mattermost doctor", mattermostDoctorReads,
+			"crewlet mattermost doctor", mattermostDoctorReads(integrations.Mattermost, organization),
 			[]string{"MATTERMOST_BOT_CEO", "MATTERMOST_BOT_SWE", "MATTERMOST_URL"},
 		},
 		{
-			"crewlet confluence import", confluenceReads, nil,
+			"crewlet confluence import", confluenceReads(integrations.Confluence),
+			[]string{"CONFLUENCE_EMAIL", "CONFLUENCE_TOKEN", "CONFLUENCE_URL"},
 		},
 	} {
 		t.Run(tc.command, func(t *testing.T) {
@@ -456,7 +507,7 @@ func TestARunningEngineRevealsOnlyWhatTheCommandReads(t *testing.T) {
 			node := scopeNode(t)
 			var notes bytes.Buffer
 			values, err := storedThroughTheRunningNode(t.Context(), tokenEnviron("ops-token"),
-				node.boot(t), "crewlet.yaml", scopeCompany(t), tc.scope, errLockedStore, &notes)
+				node.boot(t), "crewlet.yaml", tc.reads, errLockedStore, &notes)
 			if err != nil {
 				t.Fatalf("a running engine's store was refused rather than read through it: %v", err)
 			}
@@ -483,17 +534,20 @@ func TestARunningEngineRevealsOnlyWhatTheCommandReads(t *testing.T) {
 	}
 }
 
-// A READ BEYOND THE SCOPE IS STILL THE FLEET'S VALUE, revealed as it is made
-// and said: a command whose scope missed a field it reads resolves what the
-// engine would, rather than reading the stored value as unset — which, for
-// a key a provisioner mints when it resolves empty, replaces a working one.
-// And a name the fleet does not hold costs no request.
+// A READ BEYOND WHAT THE COMMAND REVEALS FIRST IS STILL THE FLEET'S VALUE,
+// revealed as it is made and said: a command whose list missed a field it
+// reads resolves what the engine would, rather than reading the stored value
+// as unset — which, for a key a provisioner mints when it resolves empty,
+// replaces a working one. And a name the fleet does not hold costs no
+// request.
 func TestAReadBeyondTheScopeIsStillTheFleetsValue(t *testing.T) {
 	t.Parallel()
 	node := scopeNode(t)
+	company, _ := scopeCompany(t)
 	var notes bytes.Buffer
 	values, err := storedThroughTheRunningNode(t.Context(), tokenEnviron("ops-token"),
-		node.boot(t), "crewlet.yaml", scopeCompany(t), gitlabProvisionReads, errLockedStore, &notes)
+		node.boot(t), "crewlet.yaml", gitlabProvisionReads(company.Integrations.GitLab),
+		errLockedStore, &notes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -514,37 +568,62 @@ func TestAReadBeyondTheScopeIsStillTheFleetsValue(t *testing.T) {
 	}
 }
 
-// A REFUSED READ BEYOND THE SCOPE STOPS THE RUN. A lookup has no error to
-// return, and the only other answer it has — unset — is the one that mints
-// over a working secret.
+// A FAILED READ BEYOND WHAT THE COMMAND REVEALS FIRST STOPS THE RUN, and says
+// what to change. A lookup has no error to return, and the only other answer
+// it has — unset — is the one that mints over a working secret; the command's
+// top answers the stop as the error it is ([runIn]). The token is named only
+// where the node refused it: a node failing answers the same for any token,
+// and naming one then sends an operator to change a token that works.
 func TestARefusedReadBeyondTheScopeStopsTheRun(t *testing.T) {
 	t.Parallel()
-	node := scopeNode(t)
-	values, err := storedThroughTheRunningNode(t.Context(), tokenEnviron("ops-token"),
-		node.boot(t), "crewlet.yaml", scopeCompany(t), gitlabProvisionReads, errLockedStore,
-		&bytes.Buffer{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	node.mu.Lock()
-	node.refuse = http.StatusForbidden
-	node.mu.Unlock()
+	for _, tc := range []struct {
+		status    int
+		nameToken bool
+	}{
+		{http.StatusForbidden, true},
+		{http.StatusServiceUnavailable, false},
+	} {
+		t.Run(strconv.Itoa(tc.status), func(t *testing.T) {
+			t.Parallel()
+			node := scopeNode(t)
+			company, _ := scopeCompany(t)
+			values, err := storedThroughTheRunningNode(t.Context(), tokenEnviron("ops-token"),
+				node.boot(t), "crewlet.yaml", gitlabProvisionReads(company.Integrations.GitLab),
+				errLockedStore, &bytes.Buffer{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			node.mu.Lock()
+			node.refuse = tc.status
+			node.mu.Unlock()
 
-	defer func() {
-		stopped, ok := recover().(error)
-		if !ok || !strings.Contains(stopped.Error(), "${GITLAB_READ_TOKEN}") ||
-			!strings.Contains(stopped.Error(), "403") {
-			t.Fatalf("a refused reveal stopped the run with %v, want an error naming "+
-				"the variable and the refusal", stopped)
-		}
-	}()
-	got, _ := values.Lookup("GITLAB_READ_TOKEN")
-	t.Fatalf("a refused reveal resolved as %q, which a provisioner reads as unset", got)
+			stopped := func() (stopped error) {
+				defer func() {
+					failed, ok := recover().(readFailed)
+					if ok {
+						stopped = failed
+					}
+				}()
+				got, _ := values.Lookup("GITLAB_READ_TOKEN")
+				t.Fatalf("a failed reveal resolved as %q, which a provisioner reads as unset", got)
+				return nil
+			}()
+			if stopped == nil || !strings.Contains(stopped.Error(), "${GITLAB_READ_TOKEN}") ||
+				!strings.Contains(stopped.Error(), strconv.Itoa(tc.status)) {
+				t.Fatalf("the run stopped with %v, want an error naming the variable and "+
+					"the node's answer", stopped)
+			}
+			if named := strings.Contains(stopped.Error(), apiTokenEnv); named != tc.nameToken {
+				t.Errorf("a %d names the token: %v, want %v: %v", tc.status, named,
+					tc.nameToken, stopped)
+			}
+		})
+	}
 }
 
 // A GITLAB PROVISION BESIDE A RUNNING ENGINE KEEPS THE KEY ITS HOOK SIGNS
 // WITH, reading it through the node — and reveals the two fields it reads
-// and nothing else, none of them as a read beyond its scope.
+// and nothing else, none of them as a read beyond its list.
 func TestAGitLabProvisionThroughANodeRevealsOnlyItsOwnFields(t *testing.T) {
 	t.Parallel()
 	node := scopeNode(t)
@@ -570,6 +649,30 @@ func TestAGitLabProvisionThroughANodeRevealsOnlyItsOwnFields(t *testing.T) {
 	}
 }
 
+// A NAMED NODE IS READ WHETHER OR NOT A TIER A IS HERE. A command run against
+// a node from a machine that is not one has no Tier A at its default path,
+// and used to resolve from the environment alone, so a GitLab provision run
+// from a workstation with -api read the signing key as unset and minted a new
+// one over the hook's.
+func TestANamedNodeIsReadWithNoTierAHere(t *testing.T) {
+	t.Parallel()
+	node := scopeNode(t)
+	missing := filepath.Join(t.TempDir(), "crewlet.yaml")
+	var notes bytes.Buffer
+	env, boot, closeEnv, err := companyResolver(t.Context(), tokenEnviron("ops-token"),
+		[]string{"GITLAB_SIGNING_SECRET"}, missing, node.server.URL, &notes)
+	if err != nil {
+		t.Fatalf("a named node with no Tier A here: %v", err)
+	}
+	defer closeEnv()
+	if got := env.Lookup("GITLAB_SIGNING_SECRET"); got != "v-GITLAB_SIGNING_SECRET" {
+		t.Errorf("the signing key resolved to %q, not the named node's", got)
+	}
+	if boot != nil || strings.Contains(notes.String(), "environment only") {
+		t.Errorf("the run read the environment alone (Tier A %v): %q", boot, notes.String())
+	}
+}
+
 // A STOPPED NODE NAMES WHAT IT CANNOT READ. Its own table holds only what
 // was stored while the engine was stopped — the engine moves those rows onto
 // the fleet at its next start — so a value the command reads that neither
@@ -584,27 +687,28 @@ func TestAStoppedNodeNamesTheValuesItCannotRead(t *testing.T) {
 		t.Fatalf("seed the store: %v (%s)", err, errs)
 	}
 	t.Setenv("MATTERMOST_URL", "https://chat.example.com")
+	company, organization := scopeCompany(t)
+	integrations := company.Integrations
 
 	for _, tc := range []struct {
 		command      string
-		scope        readScope
+		reads        []string
 		unread, read []string
 	}{
 		{
-			"crewlet gitlab provision", gitlabProvisionReads,
+			"crewlet gitlab provision", gitlabProvisionReads(integrations.GitLab),
 			[]string{"${GITLAB_SIGNING_SECRET}"},
 			[]string{"${GITLAB_URL}", "${GITLAB_READ_TOKEN}"},
 		},
 		{
-			"crewlet mattermost doctor", mattermostDoctorReads,
+			"crewlet mattermost doctor", mattermostDoctorReads(integrations.Mattermost, organization),
 			[]string{"${MATTERMOST_BOT_CEO}", "${MATTERMOST_BOT_SWE}"},
 			[]string{"${MATTERMOST_URL}"},
 		},
-		{"crewlet mattermost provision", mattermostProvisionReads, nil, nil},
+		{"crewlet mattermost provision", mattermostProvisionReads(integrations.Mattermost), nil, nil},
 	} {
 		var notes bytes.Buffer
-		_, _, closeEnv, err := companyResolver(t.Context(), noEnviron, scopeCompany(t),
-			tc.scope, cfg, "", &notes)
+		_, _, closeEnv, err := companyResolver(t.Context(), noEnviron, tc.reads, cfg, "", &notes)
 		if err != nil {
 			t.Fatalf("%s: companyResolver on a stopped node: %v", tc.command, err)
 		}
@@ -644,7 +748,7 @@ func TestARefusedReadThroughTheNodeSaysBothWhyAndWhatItTakes(t *testing.T) {
 	node.refuse = http.StatusForbidden
 
 	_, err := storedThroughTheRunningNode(t.Context(), tokenEnviron("pat-of-a-person"),
-		node.boot(t), "crewlet.yaml", readingCompany(t), llmEntryReads([]string{"default"}),
+		node.boot(t), "crewlet.yaml", llmEntryReads(readingCompany(t), []string{"default"}),
 		errLockedStore, &bytes.Buffer{})
 	if err == nil {
 		t.Fatal("a refused reveal resolved anyway, so a stored value would read as unset")
@@ -672,7 +776,7 @@ func TestOnlyALockedStoreIsReadThroughTheNode(t *testing.T) {
 	other := errors.New("the keyring cannot open this store")
 
 	_, err := storedThroughTheRunningNode(t.Context(), tokenEnviron("ops-token"),
-		node.boot(t), "crewlet.yaml", readingCompany(t), llmEntryReads([]string{"default"}),
+		node.boot(t), "crewlet.yaml", llmEntryReads(readingCompany(t), []string{"default"}),
 		other, &bytes.Buffer{})
 	if !errors.Is(err, other) || err.Error() != other.Error() {
 		t.Fatalf("an unrelated failure was not returned as it was: %v", err)
@@ -694,7 +798,7 @@ func TestANamedNodeIsReadAndTheLocalStoreIsLeftAlone(t *testing.T) {
 	storePath := filepath.Join(filepath.Dir(cfg), "index.db")
 
 	env, _, closeEnv, err := companyResolver(t.Context(), tokenEnviron("ops-token"),
-		readingCompany(t), llmEntryReads([]string{"default"}), cfg, node.server.URL, &bytes.Buffer{})
+		llmEntryReads(readingCompany(t), []string{"default"}), cfg, node.server.URL, &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("companyResolver through a named node: %v", err)
 	}
@@ -811,6 +915,27 @@ func TestASeatsNodeReadsAndStoresThroughTheDataNodeItNames(t *testing.T) {
 	for _, e := range entries {
 		if e.Name() != "config.yaml" && e.Name() != "company.yaml" {
 			t.Errorf("a seats node's run left %s behind: its scratch store was opened", e.Name())
+		}
+	}
+}
+
+// EVERY COMMAND THAT READS THE COMPANY TAKES -api. Each one's values are read
+// through a node when its own has no store of the company's — a seats node,
+// or a machine that is not a node — and both the scratch refusal and the
+// stopped-node note name -api as the way there, so a command without the
+// flag was told to use one it would refuse.
+func TestEveryCommandThatReadsTheCompanyTakesAPI(t *testing.T) {
+	t.Parallel()
+	for _, command := range [][]string{
+		{"confluence", "import"}, {"confluence", "resync"}, {"confluence", "provision"},
+		{"github", "provision"}, {"jira", "provision"}, {"gitlab", "provision"},
+		{"mattermost", "provision"}, {"mattermost", "doctor"}, {"llm", "list"},
+	} {
+		var out, errs bytes.Buffer
+		err := run(append(command, "-api", "http://127.0.0.1:1", "-h"), &out, &errs)
+		if !errors.Is(err, flag.ErrHelp) {
+			t.Errorf("crewlet %s -api URL -h = %v, want the help: it does not take -api\n%s",
+				strings.Join(command, " "), err, errs.String())
 		}
 	}
 }

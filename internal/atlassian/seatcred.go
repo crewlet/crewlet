@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -101,12 +102,8 @@ type Credential struct{ Token, Email string }
 // Held reports a seat that carries a credential at all.
 func (c Credential) Held() bool { return strings.TrimSpace(c.Token) != "" }
 
-// Servers is the mcp_env blocks this product reads a seat's credential from,
-// in order. Exported for the one caller that has to know WHERE a seat's
-// credential can sit without reading it: `crewlet jira provision` asks a
-// running node for exactly the stored values it is about to read, and each
-// one it asks for is a reveal logged by name.
-func (p Product) Servers() []string {
+// servers is the mcp_env blocks this product reads, in order.
+func (p Product) servers() []string {
 	switch p {
 	case ProductJira:
 		return []string{org.MCPEnvJira, sharedServer}
@@ -211,7 +208,7 @@ func CredentialAt(
 	if value == nil {
 		return Credential{}, ""
 	}
-	for _, server := range p.Servers() {
+	for _, server := range p.servers() {
 		block := env[server]
 		if len(block) == 0 {
 			continue
@@ -242,6 +239,27 @@ func CredentialAt(
 		}
 	}
 	return Credential{}, ""
+}
+
+// CredentialReads is every variable [CredentialAt] may read from one seat's
+// mcp_env for this product: each spelling of the token it tries, in each
+// block it tries, and the address keys it pairs a token with. Unsorted, and a
+// name may repeat.
+//
+// FROM THE TABLES THE SCAN LOOPS OVER, for a caller that has to know what it
+// will read before it runs: `crewlet jira provision` asks a running node for
+// exactly these, each a reveal logged by name. A product's reads stop at its
+// own spellings, so a Data Center PAT for the other product, which never
+// authenticates this one, is never among them.
+func CredentialReads(p Product, env map[string]map[string]string) []string {
+	var names []string
+	for _, server := range p.servers() {
+		block := env[server]
+		for _, key := range slices.Concat(p.tokenKeys(server == sharedServer), p.emailKeys()) {
+			names = append(names, envref.Names(block[key])...)
+		}
+	}
+	return names
 }
 
 // credentialOfHeader reads a value that may be a whole `Authorization` header,
@@ -331,7 +349,7 @@ func SeatEmail(env map[string]map[string]string) string {
 
 // seatEmail finds a seat's address slot, and says where.
 func seatEmail(env map[string]map[string]string) (where, value string) {
-	for _, server := range ProductAny.Servers() {
+	for _, server := range ProductAny.servers() {
 		block := env[server]
 		if len(block) == 0 {
 			continue
@@ -350,7 +368,7 @@ func seatEmail(env map[string]map[string]string) (where, value string) {
 // UNRESOLVED, because the provisioner needs the `${VAR}` reference itself:
 // what it plans is where a minted token will be WRITTEN.
 func seatCredential(env map[string]map[string]string) (where, value string) {
-	for _, server := range ProductAny.Servers() {
+	for _, server := range ProductAny.servers() {
 		block := env[server]
 		if len(block) == 0 {
 			continue

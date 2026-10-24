@@ -2530,17 +2530,20 @@ a headless token, an API key under `api-key`, a token or key forwarded under
 `inherit-env`, and a [credential-named](#6-a-provider-key-in-env-opencode-hermes-pi)
 variable in `env` on a CLI that reads its key from its environment.
 
-`${VAR}` references, the conventional variables an entry falls back to, and
-the variables `inherit-env` forwards, are resolved in the process running
-`crewlet llm` — the secret store first, then *that shell's* environment — so
-run it with the engine's environment to get the engine's answer. Beside a
+`${VAR}` references and the conventional variables an entry falls back to
+are resolved in the process running `crewlet llm` — the secret store first,
+then *that shell's* environment — and the variables `inherit-env` forwards
+come from that shell's environment alone, as the engine forwards its own and
+never the store's; so run it with the engine's environment to get the
+engine's answer. Beside a
 running engine the store is the fleet's and is read through the engine's API,
 so every `crewlet llm` command runs while the seats do. It reveals only what
 the entries it works on read — `login`, `status`, `logout`, `export`,
 `import` and a `doctor` that names a key resolve and build that one entry,
 and `list` and a bare `doctor` every entry — so signing in `plan` reveals
 `plan`'s token, key or bundle and the `${VAR}`s its model and `env` name,
-and no other entry's credentials or any vendor's. Each reveal is logged by
+and no other entry's credentials, not even an entry keyed `plan.fast`, nor
+any vendor's. Each reveal is logged by
 name on the node and takes `admin` and a person present, so
 `CREWLET_API_TOKEN` holds one of Tier A's tokens for it
 ([CLI reference](../reference/cli.md#commands)). A `seats` node holds no
