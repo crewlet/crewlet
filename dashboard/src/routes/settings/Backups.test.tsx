@@ -328,7 +328,7 @@ test("taking a backup posts the directory and says what was written", async () =
   await settle();
   expect(calls).toEqual(["POST /backup?dir=%2Fvar%2Fbackups%2Ftonight"]);
   expect((await screen.findAllByText("Backup written on node-a")).length).toBeGreaterThan(0);
-  expect(screen.getAllByText(/\/var\/backups\/tonight: 2\.0 KB in 4s/).length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/\/var\/backups\/tonight: 2\.0 KiB in 4s/).length).toBeGreaterThan(0);
   // AND THE HISTORY IS READ AGAIN, so the row it just made appears.
   expect(query.mock.calls.filter(([what]) => what === "backups").length).toBeGreaterThan(1);
 });

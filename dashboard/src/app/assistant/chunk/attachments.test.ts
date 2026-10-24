@@ -74,7 +74,7 @@ test("a file of another type, or too large, is refused in words that say what to
   const { admitted, refusals } = admit([big, pdf, svg, png("ok.png")], 0);
   expect(admitted.map((f) => f.name)).toEqual(["ok.png"]);
   expect(refusals).toEqual([
-    "huge.png is larger than 5.0 MB. Attach a smaller image.",
+    "huge.png is larger than 5.0 MiB. Attach a smaller image.",
     "brief.pdf cannot be attached. Attach a PNG, JPEG, WebP or GIF image.",
     "logo.svg cannot be attached. Attach a PNG, JPEG, WebP or GIF image.",
   ]);
