@@ -83,7 +83,7 @@ import {
 } from "~/protocol/index.ts";
 import { DashboardWidget } from "../DashboardWidget.tsx";
 import { CreateShell, useLeaveCreate } from "./CreateShell.tsx";
-import { titleHold, titleProblem, useWorkItem } from "./create.ts";
+import { titleHold, titleProblem, useSaveIn, useWorkItem } from "./create.ts";
 import { artifactTaskBody, useFileArtifactTask } from "./fileTask.ts";
 import { useWhoBuildsIt } from "./WhoBuildsIt.tsx";
 import {
@@ -176,6 +176,7 @@ export function DashboardCreate() {
   const toast = useToast();
   const leave = useLeaveCreate();
   const workItem = useWorkItem();
+  const { folder } = useSaveIn();
   const [title, setTitle] = useState("");
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [open, setOpen] = useState<string | null>(null);
@@ -283,6 +284,7 @@ export function DashboardCreate() {
         files: brought.files,
         entry: SPEC_PATH,
         ...(workItem ? { workItem } : {}),
+        ...(folder ? { folder } : {}),
       }),
     );
     if (answer?.kind === "refused") uploaded.current = null;
