@@ -21,6 +21,7 @@ import {
 import { useBrandAssets } from "~/lib/brand/useBrand.ts";
 import { useBrandSave } from "~/lib/brand/useBrandSave.ts";
 import { PUBLIC_FACE } from "./AdoptDialog.tsx";
+import { ContrastRow } from "./BrandCards.tsx";
 
 /** A brand with nothing chosen but the company's name and the kit's own face. */
 function blank(name: string): BrandDocument {
@@ -160,6 +161,10 @@ export function SetupDialog({
             setEdit({ ...edit, document: { ...doc, colors: { ...doc.colors, primary: value } } })
           }
         />
+        {/* HOW IT READS, as the Colours card says it: the roles not chosen
+            yet take Crewlet's own, and a pair that falls short is said
+            before the brand is adopted. */}
+        {doc.colors.primary ? <ContrastRow results={brandContrast(doc.colors)} /> : null}
         <Text as="p" variant="body" tone="secondary">
           {PUBLIC_FACE}
         </Text>
