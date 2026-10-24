@@ -36,9 +36,7 @@ import {
 } from "~/routes/brand/BrandCards.tsx";
 import { BrandPreview } from "~/routes/brand/BrandPreview.tsx";
 import { ReviewAdopt } from "~/routes/brand/ReviewAdopt.tsx";
-
-/** Where the company's adopted brand is shown and changed. */
-const BRAND_PAGE = ["company", "brand"];
+import { BRAND_PAGE } from "~/components/brand.tsx";
 
 export function BrandView({ detail, version }: { detail: ArtifactDetail; version: number }) {
   const viewer = useViewer();
