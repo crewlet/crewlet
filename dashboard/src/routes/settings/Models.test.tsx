@@ -173,15 +173,24 @@ test("no credential's value and no mask reaches the page", async () => {
     auth: { token: "__redacted__", credential_bundle: "sk-leaked-literal" },
     env: { HTTPS_PROXY: "http://user:hunter2@proxy.example.com" },
   };
-  const { view } = mount(undefined, { answer });
+  const list = mount(undefined, { answer });
   await settle();
   expect(within(row("smart")).getByText("token written inline")).toBeDefined();
+  // READ WHILE IT IS MOUNTED: cleanup() unmounts the list and empties its
+  // container, so a check made after it reads "" and passes whatever the list
+  // drew. And off the base element rather than the container, so what the
+  // page sends through LayerHost (a tooltip, a layer) is read too.
+  const listHtml = list.view.baseElement.innerHTML;
   cleanup();
   const page = mount("smart", { answer });
   await settle();
   // Inline is said, by name of the field, never drawn as what the document holds.
   expect(screen.getAllByText("written inline").length).toBe(3);
-  for (const html of [view.container.innerHTML, page.view.container.innerHTML]) {
+  const pageHtml = page.view.baseElement.innerHTML;
+  for (const html of [listHtml, pageHtml]) {
+    // Each read holds the screen it was taken of, so neither check is of an
+    // emptied tree.
+    expect(html).toContain("written inline");
     expect(html).not.toContain("__redacted__");
     expect(html).not.toContain("sk-leaked-literal");
     expect(html).not.toContain("hunter2");
