@@ -514,6 +514,28 @@ func (r *reader) files(src Source, b Brand) ([]KitFile, error) {
 			}
 		}
 	}
+	// A KIT IS CLOSED: its index and the files the index names, nothing else.
+	// A file nothing names is one no brand surface shows and no adoption
+	// copies, so it is refused rather than kept as a stowaway the version
+	// carries from publish to publish.
+	named := map[string]bool{EntryPath: true}
+	for _, p := range []string{b.Logos.Primary, b.Logos.OnDark, b.Logos.Mark} {
+		named[p] = true
+	}
+	for _, face := range []Face{b.Type.Heading, b.Type.Body} {
+		for _, f := range face.Files {
+			named[f.Path] = true
+		}
+	}
+	paths := slices.Clone(src.Paths())
+	slices.Sort(paths)
+	for _, p := range paths {
+		if !named[p] {
+			r.found = append(r.found, Finding{Path: p, Rule: RuleReference, Message: "brand.json names " +
+				"no logo or face at this path, and a kit holds its index and the files it names " +
+				"alone: remove it, or name it in brand.json"})
+		}
+	}
 	return out, nil
 }
 

@@ -286,3 +286,36 @@ func TestTheRatioIsTheLogosShape(t *testing.T) {
 		t.Errorf("a 30 by 7 viewBox reads as ratio %v", got)
 	}
 }
+
+// A KIT IS CLOSED: a file brand.json names no slot for is refused, named by
+// its path, so a version cannot carry a stowaway no brand surface shows and
+// no adoption copies.
+//
+// Mutation: drop the closed-kit walk in files and the stray file reads.
+func TestAKitHoldsOnlyTheFilesItsIndexNames(t *testing.T) {
+	t.Parallel()
+	src := kit(t)
+	src["notes.txt"] = []byte("draft notes")
+	if !names(readRefused(t, src), brandformat.RuleReference, "notes.txt") {
+		t.Error("a file brand.json names no slot for was read")
+	}
+}
+
+// A KIT'S SEARCH TEXT IS ITS WORDS: the name, the tagline and the voice, so
+// the gallery finds a kit by what it says and never by a path or a colour.
+func TestAKitIsSearchedByItsWords(t *testing.T) {
+	t.Parallel()
+	b, err := brandformat.Read(kit(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := b.Text()
+	for _, want := range []string{b.Name} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the search text %q leaves out %q", text, want)
+		}
+	}
+	if strings.Contains(text, b.Colors.Primary) || strings.Contains(text, b.Logos.Primary) {
+		t.Errorf("the search text %q carries a colour or a path", text)
+	}
+}
