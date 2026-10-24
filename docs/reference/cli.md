@@ -1008,7 +1008,9 @@ what to do: `409 record_unreadable` (a log the backup replays holds a newer
 build's record — take it from a node running that build), `409
 log_recreated` (this node's copy is keyed to a log since recreated — take it
 once the node has re-keyed, or from one that has) and `503 log_gap` or `503
-objects_unreachable` (take it again).
+objects_unreachable` (take it again: the node's `Retry-After` is one second
+for `log_gap`, since the next copy stands past the gap at once, and four for
+`objects_unreachable`, the broker's own election timeout).
 
 See [Backups & Restore](../guides/backup.md) for what the directory contains,
 what the copy is a copy *of*, and how a restore uses it.
@@ -1226,12 +1228,15 @@ web — active, owned by unit:engineering, default branch main
   pushes:       340 ever, the last 2026-10-10 14:02 UTC
   created:      2026-09-01 10:00 UTC
 
-PUSHED AT             BY              NODE    REFS  RESULT
-2026-10-10 14:02 UTC  jane (founder)  data-b  1     ok refs/heads/main 1a2b3c4..3f2a91c
-2026-10-10 13:40 UTC  ci              data-a  2     ok refs/heads/x 0000000..9e8d7c6; ng refs/heads/main 1a2b3c4..77aa001 (stale)
+PUSHED AT             BY                                                  NODE    REFS  RESULT
+2026-10-10 14:02 UTC  pat:019a2f4e-5c1d-7a3b-8e2f-6d4c3b2a1908 (founder)  data-b  1     ok refs/heads/main 1a2b3c4..3f2a91c
+2026-10-10 13:40 UTC  token:ci (release-desk)                             data-a  2     ok refs/heads/x 0000000..9e8d7c6; ng refs/heads/main 1a2b3c4..77aa001 (stale)
 ```
 
-`BY` is the token that pushed and, in parentheses, the person it is bound to;
+`BY` is the credential that pushed, as every record a write leaves names it —
+`pat:<credential id>` for a machine token, `token:<id>` for a Tier A token —
+and, in parentheses, the human seat its principal holds: a person's own, or the
+one the identity directory binds a token to;
 each ref's result is `ok`, `noop` or `ng`, with git's own `..` for a fast
 forward and `...` for a forced move, and an `ng`'s reason. `limits` are the
 serving node's `code.limits`. A deleted repository's header says when it was

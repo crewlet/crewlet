@@ -330,7 +330,7 @@ owner, default branch and its head, refs, packs, size and last push — and
 became of every ref, `ng` with git's reason where a push was refused. Run it
 beside a node's Tier A file, or anywhere with `-url` and the token exported in
 `CREWLET_API_TOKEN`, which needs no Tier A file at all; it reads with the same
-token git uses, as the person it is bound to:
+token git uses, as the principal that token acts as:
 
 ```sh
 crewlet code status
@@ -359,7 +359,9 @@ crewlet code verify -url https://git-1.internal.example.com:8080
 crewlet code verify -url https://git-1.internal.example.com:8080 -repo web -repair
 ```
 
-The check runs on the node, not on your connection: it reads every byte of the
+A verify is one of the deployment's own controls, as a backup is, so the token
+must carry **`admin`**: any other is refused naming it before the node checks
+anything. The check runs on the node, not on your connection: it reads every byte of the
 copy — measured at about nine seconds a gigabyte — and the command waits for it
 while a proxy's timeout ends nothing, by the deadline the node states for the
 check from what the copy holds. A sweep checks every repository at the position

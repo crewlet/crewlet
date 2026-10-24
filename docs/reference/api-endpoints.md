@@ -313,11 +313,17 @@ node means nothing was done.
 
 **Except under `/git/*`, where the node answers in git's form instead.** A git
 client prints a refusal's body only when it is `text/plain` — each line as
-`remote: …` — and prints the API's JSON as nothing at all, so the node's own
-refusals there are one `text/plain` line with no `error` code: the guard's
-`401` Basic challenge ([the auth note under Routes](#routes)) and the drain's
-`503` ([During a drain](#during-a-drain)). So the inference above — no code
-means something in front of the node wrote it — holds on every route but
+`remote: …` — and prints the API's JSON as nothing at all, so every refusal the node
+writes there is one `text/plain` line and no envelope: the guard's `401` Basic
+challenge ([the auth note under Routes](#routes)); its `403` for a credential
+acting as a seat the org chart no longer holds as a human seat, or a session
+that may only enrol a second factor, and its `503` for a node that cannot tell
+who the credential is (`Retry-After: 2`), each the sentence the envelope
+carries on every other route; a refusal of the route's own authority verb, its
+sentence with the code in brackets after it; a node that serves no code host
+now, likewise ([git's smart HTTP](#gits-smart-http)); and the drain's `503`
+([During a drain](#during-a-drain)). So the inference above — no code means
+something in front of the node wrote it — holds on every route but
 `/git/*`. There, a refusal the node wrote is told from a proxy's by its
 `text/plain` sentence, which is the node's own (`authentication required: …`,
 `this node is draining …`), and git prints it to the person who ran the
@@ -6806,7 +6812,7 @@ a repository a caller may not read is left out of a listing, and answered
 |---|---|
 | `GET /code/repos` | The repositories the caller may read, by name, a page at a time: `?status=` a comma list of `active`, `archived`, `deleted` and `purging` (unset is `active,archived`), `?limit=` (1–500, unset or `0` is 100) and `?cursor=` (the `next` of the page before). Each carries its id, name, status, owner, `visibility`, default branch, protection rules, ref and pack counts and bytes, the default branch's head, how many pushes it has ever had, and `access`, what the caller may do to it (`maintain` for a person, `read` for a credential bound to nobody). A page counts the repositories it **scanned**, so one may hold fewer than its limit — even none — and still carry a `next`: page until no `next` comes back |
 | `GET /code/repos/{name}` | One repository in detail: the listing's fields, its branch, tag and ref-tombstone counts, when it was created, and the `code.limits` of the node that served the read |
-| `GET /code/repos/{name}/pushes` | Its push history, newest first: `?limit=` (1–200, unset or `0` is 50) and `?cursor=`. Each push names its id, the token that pushed it (`actor`) and the person it is bound to (`actor_seat`), the node that received it, every ref it moved or was refused with the reason, its pack, and the position its record landed at. A ref the engine refused for being longer than 255 bytes or not UTF-8 is named in a bounded form: as much of it as fits in 255 bytes, then its length and a digest of the whole |
+| `GET /code/repos/{name}/pushes` | Its push history, newest first: `?limit=` (1–200, unset or `0` is 50) and `?cursor=`. Each push names its id, the credential that pushed it (`actor` — `pat:<credential id>` for a machine token, `token:<id>` for a Tier A token, `session:<lineage>` for a signed-in session — as every record a write leaves names it), the human seat its principal holds (`actor_seat`: a person's own, or the seat the identity directory binds a token to), the node that received it, every ref it moved or was refused with the reason, its pack, and the position its record landed at. A ref the engine refused for being longer than 255 bytes or not UTF-8 is named in a bounded form: as much of it as fits in 255 bytes, then its length and a digest of the whole |
 
 Every answer carries the `position` and the `level` it was read at. They read
 at the REST read path's level — `stale` by default — through the same
@@ -6831,9 +6837,12 @@ A refusal is the read surface's:
   `visibility: unit` repository shuts out, that visibility and who among the
   seats does read it ([Visibility](../concepts/code-host.md#visibility)). A
   person reads every repository, so a person is never answered it;
-- `403 operator_required` for a request that carries no principal at all —
-  which only a route mounted past the guard could meet, since the guard
-  resolves every request it admits;
+- the guard's own answers for a caller it could not resolve, which a read
+  repeats rather than judge a request for nobody: `401 invalid_token` for one
+  that presented no credential the node accepts, and `503
+  identity_unavailable` with `Retry-After: 2` for one this node could not tell
+  who it is — a node that cannot read its identity estate, or a request that
+  reached the route past no guard at all;
 - `400 bad_params` naming the parameter or the level refused;
 - `503 unavailable` with `Retry-After` for what clears by waiting — this node
   behind the code log, no quorum, no data node serving the read;
@@ -7835,7 +7844,9 @@ Eight refusals, each pointing somewhere different:
 - **503 `objects_unreachable`** — the store copy names objects holding the
   company's files that the object store did not answer for. Nothing is wrong
   with this node or the command: check that it reaches the store and take the
-  backup again. A backup without those objects is refused rather than written,
+  backup again — `Retry-After: 4`, the broker's own election timeout, since
+  the default store is the data nodes' NATS bucket, which answers again no
+  sooner than its group elects a leader. A backup without those objects is refused rather than written,
   because they may well be intact there — and the first object the store still
   does not answer for once it has been asked four times stops the copy, since
   the backup is refused for it whatever the rest do. An object the store
@@ -7869,8 +7880,11 @@ Eight refusals, each pointing somewhere different:
   re-keyed to the live log, or from a node that has.
 - **503 `log_gap`** — a log a restore replays from the store copy no longer
   holds every record between the copy's position and its snapshot: the trim
-  ran past the copy, or the log has a hole in it. Take the backup again — the
-  next copy stands past the gap — and if it is refused the same way, look for
+  ran past the copy, or the log has a hole in it. Take the backup again —
+  `Retry-After: 1`, at once, since the next take makes a fresh copy whose
+  position stands past the gap and nothing has to happen in between (a second
+  is the smallest wait the header carries, and zero would say not to come
+  back) — and if it is refused the same way, look for
   `backup_hold_not_renewed` in the node's log: the trim hold did not cover the
   copy.
 - **A copy without the stream estate.** A node that dialled an external NATS
