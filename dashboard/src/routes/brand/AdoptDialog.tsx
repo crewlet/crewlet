@@ -86,7 +86,7 @@ export function AdoptDialog({
         {changes.length > 0 ? (
           <dl className="brand-diff" aria-label="What changes">
             {changes.map((c) => (
-              <div key={c.label} className="brand-diff-row">
+              <div key={c.key} className="brand-diff-row">
                 <dt>{c.label}</dt>
                 <dd>
                   {c.was ? (

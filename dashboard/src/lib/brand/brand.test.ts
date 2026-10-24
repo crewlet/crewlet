@@ -165,10 +165,10 @@ describe("what adopting changes", () => {
       after: { primary: "aaa", mark: "bbb" },
     });
     expect(changes).toEqual([
-      { label: "Mark", now: "Added" },
-      { label: "Primary", was: "#0f7b5f", now: "#0b6e55" },
-      { label: "Text", was: "Not set", now: "#111418" },
-      { label: "Voice", now: "2 lines changed" },
+      { key: "logo.mark", label: "Mark", now: "Added" },
+      { key: "color.primary", label: "Primary colour", was: "#0f7b5f", now: "#0b6e55" },
+      { key: "color.text", label: "Text colour", was: "Not set", now: "#111418" },
+      { key: "voice", label: "Voice", now: "2 lines changed" },
     ]);
   });
 
@@ -179,11 +179,23 @@ describe("what adopting changes", () => {
       { before: { primary: "aaa" }, after: { primary: "path:logos/primary.svg" } },
     );
     expect(changes).toEqual([
-      { label: "Primary", now: "Replaced" },
-      { label: "Headings", was: "Geist", now: "System serif" },
+      { key: "logo.primary", label: "Primary logo", now: "Replaced" },
+      { key: "face.heading", label: "Headings typeface", was: "Geist", now: "System serif" },
     ]);
     const first = brandChanges(null, doc(), { before: {}, after: { primary: "aaa" } });
-    expect(first[0]).toEqual({ label: "Name", now: "FairSplit" });
+    expect(first[0]).toEqual({ key: "name", label: "Name", now: "FairSplit" });
+  });
+
+  // A LOGO AND A COLOUR SHARE THEIR ROLE'S WORD, so each change names its
+  // card and carries a key of its own: two rows both saying "Primary" were
+  // ambiguous, and drew two children under one key.
+  test("the primary logo and the primary colour changing at once are two distinct rows", () => {
+    const changes = brandChanges(doc(), doc({ colors: { primary: "#34b38a" } }), {
+      before: { primary: "aaa" },
+      after: { primary: "bbb" },
+    });
+    expect(changes.map((c) => c.label)).toEqual(["Primary logo", "Primary colour"]);
+    expect(new Set(changes.map((c) => c.key)).size).toBe(changes.length);
   });
 
   test("nothing changed lists nothing", () => {

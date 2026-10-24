@@ -101,6 +101,8 @@ export interface BrandLogoSpec {
   /** The adoption's file slot (`brandformat.SlotLogo*`). */
   fileSlot: string;
   label: string;
+  /** What adopting calls a change to it, naming it as a logo: "Primary logo". */
+  changeLabel: string;
   description: string;
   ground: "light" | "dark";
   shape: "wide" | "square";
@@ -113,6 +115,7 @@ export const BRAND_LOGO_SLOTS: readonly BrandLogoSpec[] = [
     slot: "primary",
     fileSlot: "logo.primary",
     label: "Primary",
+    changeLabel: "Primary logo",
     description: "On light grounds",
     ground: "light",
     shape: "wide",
@@ -122,6 +125,7 @@ export const BRAND_LOGO_SLOTS: readonly BrandLogoSpec[] = [
     slot: "on_dark",
     fileSlot: "logo.on_dark",
     label: "For dark grounds",
+    changeLabel: "Logo for dark grounds",
     description: "On dark grounds and dark mode",
     ground: "dark",
     shape: "wide",
@@ -131,6 +135,7 @@ export const BRAND_LOGO_SLOTS: readonly BrandLogoSpec[] = [
     slot: "mark",
     fileSlot: "logo.mark",
     label: "Mark",
+    changeLabel: "Mark",
     description: "For chips, slide corners and favicons",
     ground: "light",
     shape: "square",
@@ -487,7 +492,13 @@ export function adoptedFile(adoption: Adoption | null, slot: string): BrandFileR
 
 /** One change between two versions of a brand, as the adopt dialog lists it. */
 export interface BrandChange {
-  /** What changed: "Primary", "Mark", "Voice". */
+  /** Which part changed, unique among the changes: `name`, `logo.primary`, `color.primary`. */
+  key: string;
+  /**
+   * What changed, said so it names one part alone: "Primary logo", "Primary
+   * colour", "Headings typeface", "Voice". A logo and a colour share their
+   * role's word, so the card is part of the name.
+   */
   label: string;
   /** What it was, where a value says it. */
   was?: string;
@@ -533,38 +544,55 @@ export function brandChanges(
 ): BrandChange[] {
   const out: BrandChange[] = [];
   if ((before?.name ?? "") !== after.name) {
-    out.push({ label: "Name", ...(before ? { was: before.name } : {}), now: after.name });
+    out.push({
+      key: "name",
+      label: "Name",
+      ...(before ? { was: before.name } : {}),
+      now: after.name,
+    });
   }
   if ((before?.tagline ?? "") !== (after.tagline ?? "")) {
     out.push({
+      key: "tagline",
       label: "Tagline",
       ...(before?.tagline ? { was: before.tagline } : {}),
       now: after.tagline || NOT_SET,
     });
   }
-  for (const { slot, label } of BRAND_LOGO_SLOTS) {
+  for (const { slot, changeLabel } of BRAND_LOGO_SLOTS) {
     const was = digests.before[slot] ?? "";
     const now = digests.after[slot] ?? "";
     if (was === now) continue;
-    out.push({ label, now: was === "" ? "Added" : now === "" ? "Removed" : "Replaced" });
+    out.push({
+      key: `logo.${slot}`,
+      label: changeLabel,
+      now: was === "" ? "Added" : now === "" ? "Removed" : "Replaced",
+    });
   }
   for (const { role, label } of BRAND_COLOR_ROLES) {
     const was = before?.colors[role] ?? "";
     const now = after.colors[role] ?? "";
     if (was === now) continue;
-    out.push({ label, was: was || NOT_SET, now: now || NOT_SET });
+    out.push({
+      key: `color.${role}`,
+      label: `${label} colour`,
+      was: was || NOT_SET,
+      now: now || NOT_SET,
+    });
   }
   for (const { role, label } of BRAND_FACE_ROLES) {
     if (faceKey(before?.type[role]) === faceKey(after.type[role])) continue;
     const was = before ? faceDrawing(before.type[role]).name : "";
     out.push({
-      label,
+      key: `face.${role}`,
+      label: `${label} typeface`,
       ...(was ? { was } : {}),
       now: faceDrawing(after.type[role]).name,
     });
   }
   const lines = lineChanges(voiceLines(before), voiceLines(after));
-  if (lines > 0) out.push({ label: "Voice", now: `${plural(lines, "line")} changed` });
+  if (lines > 0)
+    out.push({ key: "voice", label: "Voice", now: `${plural(lines, "line")} changed` });
   return out;
 }
 
