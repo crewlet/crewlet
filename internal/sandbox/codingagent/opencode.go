@@ -203,6 +203,7 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 	next := shellQuote(paths.CredentialDocument() + ".next")
 	loop := shellQuote(paths.CredentialDocument() + ".sync")
 	srv := shellQuote(paths.WorkDir() + "/opencode-server")
+	vrr := shellQuote(paths.WorkDir() + "/opencode-version")
 	sid := "ses_" + session
 
 	run := []string{"opencode", "run", "--server", `"$url"`, "--format", "json",
@@ -220,8 +221,15 @@ func openCodeScript(req sandbox.RunRequest, paths Paths, session string, times o
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 
+	// ABSENT AND FAILING ARE TWO ANSWERS. One sentence for any failure of
+	// `--version` told a run whose opencode was installed but could not start
+	// (not executable, busy, crashing) to install it, and dropped the words it
+	// failed with, though that stderr is the run's transcript when nothing else
+	// was written.
+	line(`command -v opencode > /dev/null || { echo 'crewlet: no opencode on the box PATH' >&2; exit 127; }`)
 	// 1.x prints a bare version, 2.x `opencode v2.…`.
-	line(`v=$(opencode --version < /dev/null 2> /dev/null) || { echo 'crewlet: no opencode on the box PATH' >&2; exit 127; }`)
+	line(`v=$(opencode --version < /dev/null 2> %s) || { st=$?; echo "crewlet: opencode is on the box PATH, but opencode --version failed with exit $st:" >&2; cat %s >&2; rm -f %s; exit 1; }`, vrr, vrr, vrr)
+	line(`rm -f %s`, vrr)
 	line(`case "$v" in [0-9]*) echo "crewlet: this box runs OpenCode $v; the opencode runner drives OpenCode 2 (the @opencode/cli package) — install it in the box image" >&2; exit 1;; esac`)
 	line(`unset OPENCODE_PASSWORD OPENCODE_SERVER_PASSWORD`)
 	line(`imported= spid= xpid= xout=%s`, loop)

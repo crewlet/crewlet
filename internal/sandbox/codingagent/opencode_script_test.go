@@ -65,7 +65,9 @@ authed() {
   echo "Error: Server at http://127.0.0.1:4242 rejected the password" >&2; exit 1
 }
 case "$1" in
---version) echo "${FAKE_VERSION:-opencode v2.0.32}" ;;
+--version)
+  [ -z "${FAKE_VERSION_FAIL:-}" ] || { echo "$FAKE_VERSION_FAIL" >&2; exit 3; }
+  echo "${FAKE_VERSION:-opencode v2.0.32}" ;;
 auth)
   case "$2" in
   import) cat > "$d/imported"; cp "$d/imported" "$d/db" ;;
@@ -1296,6 +1298,34 @@ func TestTheFakeRunsTheMomentItIsWritten(t *testing.T) {
 	if n := len(busy); n > 0 {
 		t.Fatalf("%d of 64 fakes could not be started the moment they were written: %v", n, <-busy)
 	}
+}
+
+// AN OPENCODE THAT IS THERE BUT FAILS IS NOT CALLED MISSING. The script said
+// "no opencode on the box PATH" whenever `opencode --version` failed, so a
+// binary that was installed but could not start, or crashed on --version, was
+// told to be installed, and what it failed with was dropped. That stderr is
+// the run's transcript when nothing else was written.
+//
+// Mutation: answer a failing --version with the PATH sentence, or drop its
+// stderr, and the first row goes red; answer absence with the failure's, and
+// the second does.
+func TestAnOpenCodeThatFailsIsToldFromOneThatIsMissing(t *testing.T) {
+	t.Parallel()
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		failing := runScript(t, scriptOpts{shell: sh,
+			env: []string{"FAKE_VERSION_FAIL=opencode: libstdc++ not found"}})
+		if failing.code == 0 || strings.Contains(failing.stderr, "no opencode on the box PATH") ||
+			!strings.Contains(failing.stderr, "opencode --version failed with exit 3") ||
+			!strings.Contains(failing.stderr, "libstdc++ not found") {
+			t.Errorf("an opencode that failed --version said (exit %d):\n%s", failing.code,
+				failing.stderr)
+		}
+		missing := runScript(t, scriptOpts{shell: sh, env: []string{"PATH=/usr/bin:/bin"}})
+		if missing.code != 127 || !strings.Contains(missing.stderr, "no opencode on the box PATH") ||
+			strings.Contains(missing.stderr, "--version failed") {
+			t.Errorf("a box with no opencode said (exit %d):\n%s", missing.code, missing.stderr)
+		}
+	})
 }
 
 // 1.x CANNOT RUN THIS SCRIPT, and says so in its own words rather than leaving
