@@ -63,6 +63,22 @@ func everyLog() *stateLog {
 	return &stateLog{logs: newLogSet(runs)}
 }
 
+// trimCounts is every registered domain, in the register's order, whose log
+// the trim counts something of from this node's own rows: the logs that claim
+// identity, whose evictions it counts, and the logs that write anchors, whose
+// anchors it counts. Read off the register rather than listed, because the
+// set grows with every domain that claims identity — the identity estate, the
+// artifacts and their datastores among them.
+func trimCounts() []string {
+	var out []string
+	for _, d := range registeredDomains() {
+		if d.ClaimsIdentity() || statelog.WritesAnchors(d.Stream()) {
+			out = append(out, d.Name())
+		}
+	}
+	return out
+}
+
 // collectorReferences is the collector's references as the engine builds them,
 // from the declared tables over every estate a data node offers
 // ([collectorEstates]).
@@ -105,7 +121,7 @@ func TestADutyDeclinesWhileACopyItDecidesFromIsOutOfService(t *testing.T) {
 			},
 		},
 		"the trim": {
-			decidesFrom: []string{trackerName, pagesName, codeName},
+			decidesFrom: trimCounts(),
 			turn: func(t *testing.T, e *Engine, claim *countingClaim) {
 				r := &retention{state: everyLog(), nodeID: "node-a", claim: claim.claim,
 					giveBack: claim.giveBack, copies: e.copyOutOfService}
@@ -174,12 +190,7 @@ func TestEveryDutyNamesTheDomainsItDecidesFrom(t *testing.T) {
 		t.Errorf("the embedding duty decides from %v, want %v", embed, want)
 	}
 
-	var counted []string
-	for _, d := range registeredDomains() {
-		if d.ClaimsIdentity() || statelog.WritesAnchors(d.Stream()) {
-			counted = append(counted, d.Name())
-		}
-	}
+	counted := trimCounts()
 	if trim := (&retention{state: everyLog()}).decidesFrom(); !slices.Equal(trim, counted) {
 		t.Errorf("the trim decides from %v, want the logs whose evictions or "+
 			"anchors it counts, %v", trim, counted)
