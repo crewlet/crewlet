@@ -667,7 +667,7 @@ Settings and Preferences as glyphs beside them.
 | **Inbox** | `#/inbox` | the accent **badge**: unread notices under a reason the person's record counts as PRIMARY — the only filled figure in the chrome. Not every unread notice: most of a busy company's are things it merely told you, nobody answers those, and a count that never reaches zero reads as a broken counter. Asked of the engine as `unread` + `primary_only` over one page, so a page that fills is drawn as a floor ("50+"). It moves the moment the person's inbox does: the frame watches their own record and asks again within half a second of an `inbox_changed` frame, and the minute-long poll behind it is only the fallback |
 | **My work** | `#/me` | the open work assigned to you — the SAME figure the Queue tab carries on your own day, read once by the frame for both, so the row and the tab can never name two numbers. The engine's own total, counted in full rather than the length of a page and written as a floor ("200+") where the count stopped at its ceiling; nothing on you draws no figure. The questions put to you are counted on their own tab (Asked of me) and each reached you as an Inbox notice |
 | *Company* | | |
-| **Principles** | `#/company/principles` (and `#/company`) | none: the company's name, clock, mission, vision and policies are every reader's |
+| **Principles** | `#/company/principles` (and `#/company`) | none: the company's mission, vision and policies are every reader's |
 | **Org chart** | `#/company/org` | none |
 | **Schedules** | `#/company/schedules` | none |
 | **Integrations** | `#/company/integrations` | none; every reader opens it, and an app's state and connecting are an Admin's on the page itself |
@@ -1156,7 +1156,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` `mode=hybrid\|keyword\|semantic` |
 | `#/work/{KEY}` | **Project**: one project as Work's scope: its Tasks lens, About, History and Files | `lens=about\|history\|files` (Tasks, the first, takes no key) · the same view strip and filter grammar, scoped to the project |
 | `#/work/{KEY}-{n}` · `#/work/{id}` | **Task** — description, checklists, sub-tasks, activity (changes, comments, agent turns), properties and cost | `activity=all\|comments\|turns\|changes` · `list=` |
-| `#/company` · `#/company/principles` | **Company › Principles** (the sidebar's **Principles** row, and the Company landing): who the company is, its name, its clock (the zone every day the engine cuts is cut on), its mission and its vision in one card, then the standing policies every agent reads on every turn, numbered in a readable column, then Settings › Limits as a related row to a reader who may open it. An unwritten mission, vision or policy list each says so. **Edit principles** opens the builder at the charter. Read from the org projection by every reader | |
+| `#/company` · `#/company/principles` | **Company › Principles** (the sidebar's **Principles** row, and the Company landing): the mission and the vision as two equal cards side by side, then the standing policies every agent reads on every turn, numbered in one card across the page, each card under its own glyph (a target, a telescope, a scroll), then Settings › Limits as a related row to a reader who may open it. An unwritten mission, vision or policy list each says so inside its card. Each card carries its own Edit, and each unwritten part its Add, for a reader who may write the charter, and nothing for anybody else. Read from the org projection by every reader | |
 | `#/company/org` | **Org chart**, the hierarchy every seat works inside; every human seat with its kind; what holds each one for an admin and for the holder themselves; and, for an admin, where a person is invited or created onto the vacant human seat they will hold | `unit=` · `seat=` |
 | `#/company/org/roster` | **Org chart › Roster**, every seat, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
 | `#/company/org/teams` · `#/company/org/teams/{unit}` | **Org chart › Teams**, every unit with what it is for and its goals; one unit's page | |
@@ -3267,11 +3267,8 @@ It is the same bar on every section of the Org chart. **Edit org is one
 control** (`EditOrgButton`): the chart's bar draws it as a secondary button,
 asked the builder's own gate, so a reader who may not write the chart sees it
 held with the reason rather than a link to a refusal. Company › Principles
-draws the same button named for what it edits (`EditCharterButton`: **Edit
-principles**), which opens the company's editor in the builder
-(`edit=charter`) rather than
-the whole chart, asked the company's gate, since the charter is the company
-grant's and not a unit lead's. Company › Schedules is its own row and its bar is its own:
+draws none of it: each of its cards carries its own Edit, for a reader who
+may write the charter. Company › Schedules is its own row and its bar is its own:
 it carries none of the chart's controls.
 The section tabs carry the Roster and Teams figures on every section of the
 Org chart, as the kit's count beside each name (the figure an object's own
@@ -4039,6 +4036,15 @@ every person's page they would be noise on the company's busiest screens,
 read by everybody — never news, since the one access that would enable them
 is Admin. So they are drawn for an admin and left out for everybody else, and
 the engine refuses whatever reaches it all the same.
+
+**The charter's writes are the second set.** Company › Principles is every
+reader's page and one admin's text: an **Edit** on each of its three cards and
+an **Add** in each unwritten one, held for everybody who reads the company's
+charter and never writes it, would be three or six disabled controls on a
+page whose whole content is reading. So a reader without the grant to write
+the charter is offered none, while an admin whose write is held (offline,
+not yet known, a managed document) is shown the control disabled with its
+reason, as everywhere else.
 
 **One press at a time, by every way in.** A write control refuses a press
 while its last one is still out, and so does every other way into the same
@@ -7359,28 +7365,34 @@ Company › Policies) is what every agent is told about the company, in the
 order an agent reads it. It is read from the org projection, so every
 signed-in reader can open it: it is the overview's, like the org chart. Under
 its heading (the kit's `ObjectHeader`: *Who the company is and the rules every
-agent works by.*) it is a main column and an aside (the kit's `AsideLayout`,
-the aside beside the main column from 56rem of the page's own width and under
-it, past one hairline, below that):
+agent works by.*) it is three kit `Card`s, each a region named by its title
+and headed by its own glyph:
 
-- **The main column** is the three things the company says, each a kit
-  `Statement` under the same small label: the **Mission** and the **Vision**,
-  set a step over the body at the reading measure with their author's line
-  breaks kept, and the **Standing policies**, numbered (a reader cites "policy
-  2") and divided in one card. A mission and a vision are statements to read,
-  never a key and a value beside "Clock: UTC".
-- **An unwritten part says so**, as an inline empty state with its own way to
-  write it (**Add a mission**, **Add a vision**, **Add a policy**), which opens
-  the company's editor in the builder with the focus in that field
-  (`edit=mission`, `edit=vision`, `edit=policies`). Those controls are offered
-  only to a reader who may write the charter: for anybody else the page bar's
-  **Edit principles** says once, disabled, why it is not theirs to edit.
-- **The aside** holds the company's facts (its name, and its clock with the
-  time it reads there now, the zone every day the engine cuts is cut on), how
-  agents use the page, and **Engine limits** as a related row for a reader who
-  may open Settings › Limits.
+- **Mission** (a target) and **Vision** (a telescope) are two equal cards
+  side by side, since neither outranks the other, each holding its statement
+  as the kit's `passage` text. The mission is one line by the engine's rule
+  and wraps as prose; the vision may hold paragraphs, and keeps them as
+  written. The
+  pair shares its rows on a subgrid, so the two heads are one height whatever
+  controls each carries and the two bodies one height however long either
+  runs. Below 720px of the page's own width they stack.
+- **Standing policies** (a scroll of text) is one card across the page under
+  them, its count in the head once there is one and its rules numbered (a
+  reader cites "policy 2") in the kit's compact divided rows, each rule one
+  line by the engine's rule, wrapping as prose at the kit's wide reading
+  measure while the rows and their rules span the card.
+- **An unwritten part says so** inside its card, as the kit's inline empty
+  state saying what the part is for, with its own way to write it (**Add a
+  mission**, **Add a vision**, **Add a policy**) for a reader who may write the
+  charter. A written part carries its own **Edit** in its card's head.
+- **A reader who may not write the charter** reads the cards with no control
+  on the page at all: no Edit, no Add, and no disabled copy of either (see
+  [A write control is never hidden](#a-write-control-is-never-hidden)).
+- **Engine limits** follows the cards as a related row, for a reader who may
+  open Settings › Limits.
 
-It is edited in the org builder (**Edit principles**).
+The company's name and clock are not principles and are not on the page: the
+name is the shell's, and the clock is the company document's.
 The caps the engine holds a turn to are not policies the company writes for
 its agents to read: they are **Settings › Limits** (`#/settings/limits`), in
 the Runtime group, the engine's own answer for each (the turn's guardrails,
@@ -7391,7 +7403,7 @@ the company document under it, the value in tabular figures, and its source,
 *Default* as a quiet word where the value is the engine's and a marked
 *Changed from* the default otherwise, *Off* rather than 0 where a value
 switches its limit off (the answer's `off` and `default_off`). Limits is
-read-only and admin's, and Policies offers it as a related row to a reader
+read-only and admin's, and Principles offers it as a related row to a reader
 who may open it.
 
 **Access** is the identity directory, over the routes `/iam` serves to an

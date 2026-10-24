@@ -11626,26 +11626,51 @@ a.live-row:focus-visible {
 }
 
 /* ---- Company › Principles ----------------------------------------------------
-   The layout is the kit's (ObjectHeader, AsideLayout, Statement); what is
-   left is this page's own content inside it. */
+   Two equal statement cards side by side, the standing policies one card
+   across the page under them, the engine's caps a related row under that.
+   The cards, the statements' passage text and the compact rows are the
+   kit's; what is here is how the two statement cards stand together. */
 
-/* A POLICY IS READ: the body's own step and the relaxed leading, so a rule
-   that runs to two lines reads as one sentence. */
-.principles-policies > li {
-  font-size: var(--font-size-md);
-  line-height: var(--font-line-height-relaxed);
-}
-
-/* The zone, and the time it reads there now under it. */
-.principles-clock {
-  display: inline-flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-}
-
-/* The label over its sentence, a small step apart, as the rail's groups. */
-.principles-uses {
+.principles {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-2);
+  gap: var(--spacing-4);
+}
+
+/* NEITHER OUTRANKS THE OTHER: two equal columns sharing their rows on a
+   SUBGRID, so the two heads are one height whatever controls each carries (a
+   head with an Edit stood 3px taller than one without), the bodies one height
+   however long either statement runs, and an editor's Save and Cancel on one
+   line across the pair. */
+.principles-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: auto 1fr auto;
+  column-gap: var(--spacing-4);
+}
+
+.principles-card {
+  min-width: 0;
+}
+
+.principles-pair > .principles-card {
+  display: grid;
+  grid-row: span 3;
+  grid-template-rows: subgrid;
+  row-gap: 0;
+}
+
+/* 720px OF THE PAGE'S OWN WIDTH is where two statements of a few lines each
+   stop fitting side by side at a readable measure: one column below it. */
+@container page (width < 720px) {
+  .principles-pair {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-4);
+  }
+
+  .principles-pair > .principles-card {
+    display: flex;
+    flex-direction: column;
+  }
 }

@@ -5,7 +5,7 @@ export { Backups } from "./Backups.tsx";
 export { ConfigScreen, RevisionPeek } from "./Config.tsx";
 export { FileStoragePage } from "./FileStorage.tsx";
 export { Fleet, NodePeek } from "./Fleet.tsx";
-export { Principles } from "./Principles.tsx";
+export { Principles } from "./principles/Principles.tsx";
 export { IntegrationPeek } from "./integrations/catalogue.tsx";
 export { Integrations } from "./integrations/Directory.tsx";
 export { Limits } from "./Limits.tsx";

@@ -1,8 +1,7 @@
 /**
  * What the Org chart's sections carry in the page bar: a way to find a seat,
- * the way into the builder ([EditOrgButton], and Company › Principles'
- * [EditCharterButton]), and the one write the bar offers, adding a seat, plus
- * the section tabs' figures. Company › Schedules is its own row and draws
+ * the way into the builder ([EditOrgButton]), and the one write the bar
+ * offers, adding a seat, plus the section tabs' figures. Company › Schedules is its own row and draws
  * none of these: its bar offered Add seat as a schedules page's main action. The chart's other writes are a seat's own
  * and live on it: a vacant human seat's card, peek and page offer Invite and
  * Create to an admin (`components/people.tsx`), since
@@ -179,53 +178,6 @@ export function AgentsHeader({
  */
 export function EditOrgButton() {
   return <OrgEditLink label="Edit org" target="anywhere" to={href(ORG_EDIT_PATH)} />;
-}
-
-/**
- * The way into the builder from Company › Principles, named for what it edits:
- * Edit principles opens the company's editor in the builder (`edit=charter`),
- * where the name, mission, vision and policies are written, rather than the
- * whole chart at fit-to-view with the card to find and press again.
- *
- * ASKED OF THE COMPANY, not of anywhere: a lead may edit their own unit, and
- * the charter is the company grant's, so a lead is told why rather than sent
- * to an editor that holds every field.
- */
-export function EditCharterButton() {
-  return (
-    <OrgEditLink
-      label="Edit principles"
-      target="company"
-      to={href(ORG_EDIT_PATH, { edit: "charter" })}
-    />
-  );
-}
-
-/** A part of the charter a page can ask the builder to open its editor at. */
-export type CharterPart = "mission" | "vision" | "policies";
-
-/**
- * The way to write one part of the charter from where its absence is said:
- * "Add a mission" opens the company's editor in the builder with the focus in
- * the Mission field (`edit=mission`).
- *
- * NOTHING FOR A READER WHO MAY NOT WRITE IT, unlike [EditCharterButton]: the
- * page bar already says, once, why the charter is not theirs to edit, and a
- * disabled copy of it beside every empty part would say it three times more.
- */
-export function CharterPartLink({ part, label }: { part: CharterPart; label: string }) {
-  const access = useOrgWriteAccess("company");
-  if (!access.can) return null;
-  return (
-    <ButtonLink
-      size="small"
-      variant="secondary"
-      href={href(ORG_EDIT_PATH, { edit: part })}
-      leadingIcon={<PlusGlyph size="sm" />}
-    >
-      {label}
-    </ButtonLink>
-  );
 }
 
 /** A way into the builder, or the same control disabled with the builder's own reason. */
