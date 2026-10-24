@@ -176,7 +176,7 @@ func pngChunks(b []byte) ([]pngChunk, error) {
 func inflatePNG(stream []byte, width, height, bits int, interlaced bool) error {
 	z, err := zlib.NewReader(bytes.NewReader(stream))
 	if err != nil {
-		return fmt.Errorf("the PNG's image data cannot be inflated: %v", err)
+		return fmt.Errorf("the PNG's image data cannot be inflated: %w", err)
 	}
 	defer func() { _ = z.Close() }()
 	type pass struct{ w, h int }
@@ -197,8 +197,8 @@ func inflatePNG(stream []byte, width, height, bits int, interlaced bool) error {
 	for _, p := range passes {
 		line := row[:1+(p.w*bits+7)/8]
 		for range p.h {
-			if _, err := io.ReadFull(z, line); err != nil {
-				return fmt.Errorf("the PNG's image data holds fewer rows than its header promises: %v", err)
+			if _, short := io.ReadFull(z, line); short != nil {
+				return fmt.Errorf("the PNG's image data holds fewer rows than its header promises: %w", short)
 			}
 			if line[0] > 4 {
 				return fmt.Errorf("the PNG's image data names filter %d, which PNG does not define", line[0])
@@ -209,7 +209,7 @@ func inflatePNG(stream []byte, width, height, bits int, interlaced bool) error {
 	rest, err := io.ReadAll(io.LimitReader(z, 1))
 	switch {
 	case err != nil:
-		return fmt.Errorf("the PNG's image data is damaged: %v", err)
+		return fmt.Errorf("the PNG's image data is damaged: %w", err)
 	case len(rest) > 0:
 		return errors.New("the PNG's image data holds more than its header promises")
 	}
