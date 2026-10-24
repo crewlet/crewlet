@@ -205,14 +205,14 @@ test("the description is the brief, then what to publish and where", () => {
   );
 });
 
-// WHERE A NEW ONE IS FILED, by its path and the id a rename cannot change;
-// an artifact already made was filed when it was made.
-test("the description names the folder a new artifact is filed in", () => {
-  const folder = { id: "f1", path: "Marketing › Q4 review" };
-  expect(artifactTaskBody("doc", "Notes.", undefined, folder)).toBe(
-    "Notes.\n\nPublish it as a Doc artifact (kind `doc`) for this task. File it in the folder “Marketing › Q4 review” (folder f1).",
+// WHERE A NEW ONE IS FILED, by the id a rename cannot change and never by its
+// path, which would tell whoever reads the task the names in a private
+// folder; an artifact already made was filed when it was made.
+test("the description names the folder a new artifact is filed in by its id alone", () => {
+  expect(artifactTaskBody("doc", "Notes.", undefined, "f1")).toBe(
+    "Notes.\n\nPublish it as a Doc artifact (kind `doc`) for this task. File it in the folder whose id is f1 (`folder` on `create_artifact`).",
   );
-  expect(artifactTaskBody("design", "Screens.", "a1", folder)).not.toContain("folder f1");
+  expect(artifactTaskBody("design", "Screens.", "a1", "f1")).not.toContain("f1");
 });
 
 // A REAL TASK, as the person: the tracker's own create, filed to the seat in

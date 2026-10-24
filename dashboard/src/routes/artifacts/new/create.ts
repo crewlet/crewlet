@@ -78,9 +78,13 @@ export function useSaveIn(): SaveIn {
   };
 }
 
-/** The folder a task's brief names for an agent to file in, or undefined at the top level. */
-export function briefFolder(saveIn: SaveIn): { id: string; path: string } | undefined {
-  return saveIn.folder && saveIn.path ? { id: saveIn.folder, path: saveIn.path } : undefined;
+/**
+ * The id of the folder a task's brief names for an agent to file in, or
+ * undefined at the top level and while the tree that confirms the folder is
+ * still being read. By id alone (`artifactTaskBody` says why).
+ */
+export function briefFolder(saveIn: SaveIn): string | undefined {
+  return saveIn.folder && !saveIn.reading ? saveIn.folder : undefined;
 }
 
 /**

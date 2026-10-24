@@ -68,14 +68,18 @@ export function artifactTaskBody(
   kind: ArtifactKind,
   brief: string,
   artifact?: string,
-  folder?: { id: string; path: string },
+  folder?: string,
 ): string {
   const word = KIND_WORDS[kind];
-  // WHERE A NEW ONE IS FILED, by the folder's path as the reader saw it and
-  // its id, which `create_artifact`'s `folder` takes and which a rename
-  // cannot change. An artifact already made was filed when it was made.
+  // WHERE A NEW ONE IS FILED, by the folder's id alone, which
+  // `create_artifact`'s `folder` takes and which a rename cannot change. Never
+  // by its path: a task is read by people the folder may not be shown to (an
+  // "Only you" folder), and its path would tell them the names in it. An
+  // artifact already made was filed when it was made.
   const filed =
-    folder && !artifact ? ` File it in the folder “${folder.path}” (folder ${folder.id}).` : "";
+    folder && !artifact
+      ? ` File it in the folder whose id is ${folder} (\`folder\` on \`create_artifact\`).`
+      : "";
   const ask = artifact
     ? `Build it in the ${word} artifact already linked to this task (artifact ${artifact}), and publish your work as new versions of it.`
     : `Publish it as ${KIND_ARTICLES[kind]} ${word} artifact (kind \`${kind}\`) for this task.${filed}`;
