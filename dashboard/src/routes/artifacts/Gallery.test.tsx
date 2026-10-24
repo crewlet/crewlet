@@ -84,7 +84,7 @@ beforeEach(() => {
   ];
   vi.mocked(useQuery).mockImplementation(((what: string, params?: { pinned?: boolean }) => {
     const data =
-      what === "artifacts" ? { items: params?.pinned ? [] : items, total: items.length } : null;
+      what === "artifacts" ? { contents: params?.pinned ? [] : items, total: items.length } : null;
     return { data, loading: false, error: null, refusal: null, refetch: vi.fn() };
   }) as never);
 });
@@ -295,7 +295,7 @@ test("pins stand above the rest on All, as a group of their own", () => {
   vi.mocked(useQuery).mockImplementation(((what: string, params?: { pinned?: boolean }) => {
     const data =
       what === "artifacts"
-        ? { items: params?.pinned ? [items[1]!] : items, total: items.length }
+        ? { contents: params?.pinned ? [items[1]!] : items, total: items.length }
         : null;
     return { data, loading: false, error: null, refusal: null, refetch: vi.fn() };
   }) as never);

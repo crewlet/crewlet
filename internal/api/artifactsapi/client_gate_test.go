@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/datasetsapi"
 	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/artifacts/brandformat"
 	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifacts/docindex"
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
@@ -43,6 +44,10 @@ func TestTheDashboardSpeaksTheArtifactsVocabulary(t *testing.T) {
 		"ARTIFACT_LIST_SCOPES":  names(artifactsdomain.ListScopes),
 		"ARTIFACT_LIST_SORTS":   names(artifactsdomain.ListSorts),
 		"ARTIFACT_HISTORY_OPS":  names(artifactsdomain.HistoryOps),
+
+		"ARTIFACT_FOLDER_VISIBILITIES": names(artifactsdomain.FolderVisibilities),
+		"BRAND_KIT_FACES":              brandformat.KitFaces,
+		"BRAND_SYSTEM_STACKS":          brandformat.SystemStacks,
 	} {
 		body, err := clientsource.Literal(tree, name)
 		if err != nil {
@@ -120,6 +125,14 @@ func TestTheDashboardBoundsArtifactTextAtTheEnginesCaps(t *testing.T) {
 		"DECK_PLAN_MAX_SLIDES":           slideformat.MaxPlanSlides,
 		"DECK_SLIDE_TITLE_MAX_BYTES":     slideformat.MaxSlideTitleBytes,
 		"ARTIFACT_TRASH_RETENTION_DAYS":  int(artifacts.TrashRetention / (24 * time.Hour)),
+		"ARTIFACT_FOLDER_NAME_MAX_BYTES": artifacts.MaxFolderNameBytes,
+		"ARTIFACT_FOLDER_MAX_DEPTH":      artifacts.MaxFolderDepth,
+		"ARTIFACT_MOVE_MAX_ITEMS":        artifacts.MaxMovesPerCall,
+		"BRAND_NAME_MAX_BYTES":           brandformat.MaxNameBytes,
+		"BRAND_TAGLINE_MAX_BYTES":        brandformat.MaxTaglineBytes,
+		"BRAND_VOICE_SUMMARY_MAX_BYTES":  brandformat.MaxVoiceSummaryBytes,
+		"BRAND_VOICE_MAX_EXAMPLES":       brandformat.MaxVoiceExamples,
+		"BRAND_VOICE_EXAMPLE_MAX_BYTES":  brandformat.MaxVoiceExampleBytes,
 	} {
 		raw, err := clientsource.Scalar(clientsource.Tree(t), name)
 		if err != nil {
@@ -133,6 +146,21 @@ func TestTheDashboardBoundsArtifactTextAtTheEnginesCaps(t *testing.T) {
 			t.Errorf("the dashboard bounds %s at %d and the engine at %d: change "+
 				"contract/artifacts.ts to the engine's figure", name, client, engine)
 		}
+	}
+}
+
+// THE DASHBOARD LISTS FOLDERS WITH THE ENGINE'S DELIMITER: a folder page asks
+// for one level with `delimiter`, and a delimiter the engine does not take is a
+// listing refused with a 400.
+func TestTheDashboardListsWithTheEnginesDelimiter(t *testing.T) {
+	t.Parallel()
+	got, err := clientsource.Scalar(clientsource.Tree(t), "ARTIFACT_LIST_DELIMITER")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != artifactsdomain.ListDelimiter {
+		t.Errorf("the dashboard lists with delimiter %q and the engine takes %q", got,
+			artifactsdomain.ListDelimiter)
 	}
 }
 

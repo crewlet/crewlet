@@ -518,7 +518,7 @@ function Loaded({
   const pins = usePins();
   const pin = usePinToggle(
     detail.id,
-    (pins.data?.items ?? []).some((item) => item.id === detail.id),
+    (pins.data?.contents ?? []).some((item) => item.id === detail.id),
   );
   const renameAccess = useArtifactAccess({ role: "editor", held: detail.role });
   const trashAccess = useArtifactAccess({ role: "owner", held: detail.role, person: true });

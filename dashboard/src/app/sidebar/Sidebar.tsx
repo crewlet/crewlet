@@ -428,7 +428,7 @@ function usePinned({
   const artifacts = usePins(enabled);
   return {
     views: tracker ? (views.data?.views ?? []).filter((v) => v.pinned && v.id) : [],
-    artifacts: artifacts.data?.items ?? [],
+    artifacts: artifacts.data?.contents ?? [],
   };
 }
 

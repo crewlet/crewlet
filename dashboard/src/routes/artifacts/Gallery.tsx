@@ -244,7 +244,7 @@ function listParams(
   return {
     scope,
     sort,
-    limit: PAGE,
+    "max-keys": PAGE,
     ...(kind ? { kind } : {}),
     ...(q.trim() ? { q: q.trim() } : {}),
     ...(trashed ? { status: "trashed" } : {}),
@@ -269,17 +269,17 @@ function useListing(params: Record<string, unknown>, enabled = true) {
   });
   const [loadingMore, setLoadingMore] = useState(false);
   const extra = more.key === key ? more : { key, items: [], after: "" };
-  const after = extra.items.length > 0 ? extra.after : (first.data?.after ?? "");
+  const after = extra.items.length > 0 ? extra.after : (first.data?.next_continuation_token ?? "");
   const loadMore = useCallback(() => {
     if (!after || loadingMore) return;
     setLoadingMore(true);
     socket
-      .query("artifacts", { ...params, cursor: after })
+      .query("artifacts", { ...params, "continuation-token": after })
       .then((page: ArtifactListAnswer) =>
         setMore((was) => ({
           key,
-          items: [...(was.key === key ? was.items : []), ...page.items],
-          after: page.after ?? "",
+          items: [...(was.key === key ? was.items : []), ...page.contents],
+          after: page.next_continuation_token ?? "",
         })),
       )
       .catch(() => {
@@ -291,7 +291,7 @@ function useListing(params: Record<string, unknown>, enabled = true) {
   const items = useMemo(() => {
     const seen = new Set<string>();
     const out: ArtifactListItem[] = [];
-    for (const item of [...(first.data?.items ?? []), ...extra.items]) {
+    for (const item of [...(first.data?.contents ?? []), ...extra.items]) {
       if (seen.has(item.id)) continue;
       seen.add(item.id);
       out.push(item);

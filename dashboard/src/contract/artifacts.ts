@@ -122,6 +122,47 @@ export const DECK_SLIDE_TITLE_MAX_BYTES = 200;
  */
 export const ARTIFACT_TRASH_RETENTION_DAYS = 30;
 
+/**
+ * The visibility a new top-level folder may be given
+ * (`artifactsdomain.FolderVisibilities`): everyone at the company, or only its
+ * owner. A subfolder takes its top-level folder's. A folder grants nothing on
+ * what it holds.
+ */
+export const ARTIFACT_FOLDER_VISIBILITIES = ["company", "private"] as const;
+
+/** The longest folder name, in UTF-8 bytes (`artifacts.MaxFolderNameBytes`). */
+export const ARTIFACT_FOLDER_NAME_MAX_BYTES = 80;
+
+/** How deep a folder may sit, a top-level folder at depth one (`artifacts.MaxFolderDepth`). */
+export const ARTIFACT_FOLDER_MAX_DEPTH = 4;
+
+/** The most artifacts one move files (`artifacts.MaxMovesPerCall`): the bulk Move dialog's batch. */
+export const ARTIFACT_MOVE_MAX_ITEMS = 25;
+
+/** The one delimiter a listing takes (`artifactsdomain.ListDelimiter`), as S3's ListObjectsV2 names it. */
+export const ARTIFACT_LIST_DELIMITER = "/";
+
+/** The longest brand name, in UTF-8 bytes (`brandformat.MaxNameBytes`). */
+export const BRAND_NAME_MAX_BYTES = 80;
+
+/** The longest brand tagline, in UTF-8 bytes (`brandformat.MaxTaglineBytes`). */
+export const BRAND_TAGLINE_MAX_BYTES = 140;
+
+/** The longest voice summary, in UTF-8 bytes (`brandformat.MaxVoiceSummaryBytes`). */
+export const BRAND_VOICE_SUMMARY_MAX_BYTES = 300;
+
+/** The most lines in "Write like this" and in "Avoid" (`brandformat.MaxVoiceExamples`). */
+export const BRAND_VOICE_MAX_EXAMPLES = 5;
+
+/** The longest voice line, in UTF-8 bytes (`brandformat.MaxVoiceExampleBytes`). */
+export const BRAND_VOICE_EXAMPLE_MAX_BYTES = 160;
+
+/** The faces the artifact kit ships, which a brand may name with no file (`brandformat.KitFaces`). */
+export const BRAND_KIT_FACES = ["geist", "geist-mono"] as const;
+
+/** The curated system font stacks a brand may name (`brandformat.SystemStacks`). */
+export const BRAND_SYSTEM_STACKS = ["system-sans", "system-serif", "system-mono"] as const;
+
 /** Every column type a datastore validates (`artifacts.ColumnTypes`). */
 export const COLUMN_TYPES = [
   "text",
