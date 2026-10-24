@@ -274,8 +274,9 @@ func TestASpentPlanFallsThroughWithNoSpecialCase(t *testing.T) {
 	}
 }
 
-// A malformed request will be refused identically by every member, so trying
-// them is two more seconds and another log line saying the same thing.
+// A fatal is a call the engine or its host cannot make — a prompt that cannot
+// be rendered fails identically on every member — so trying them is two more
+// seconds and another log line saying the same thing.
 func TestAFatalFailureStopsTheWalk(t *testing.T) {
 	t.Parallel()
 	backup := answering("backup-model", "y")

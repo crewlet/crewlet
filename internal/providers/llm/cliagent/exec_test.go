@@ -17,6 +17,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/chain"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // helperEnv marks a re-execution of this test binary as the fake CLI rather
@@ -487,6 +489,95 @@ func TestAnEmptyAnswerIsRetryableRatherThanFatal(t *testing.T) {
 	}
 	if err := p.benched(); err != nil {
 		t.Errorf("an empty answer sat the entry out: %v", err)
+	}
+}
+
+// claudeOverloaded is how Claude Code reports an overloaded API once its own
+// retries are spent: a failed run whose result is the API's error, relayed.
+const claudeOverloaded = `{"type":"result","subtype":"success","is_error":true,` +
+	`"result":"API Error: 529 {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}"}`
+
+// claudeCodeShape is the overrides that make the fake CLI read like Claude
+// Code: one JSON document, the answer at `result`, the failure flag at
+// `is_error`, and the shipped profile's own markers — so a case built on it
+// says what the real entry would do with the same output.
+func claudeCodeShape(t *testing.T) map[string]any {
+	t.Helper()
+	builtin, ok := cliprofile.Builtin("claude-code")
+	if !ok {
+		t.Fatal("no built-in claude-code profile")
+	}
+	limits := make([]any, 0, len(builtin.LimitMarkers))
+	for _, m := range builtin.LimitMarkers {
+		limits = append(limits, map[string]any{"sentinel": m.Sentinel})
+	}
+	auths := make([]any, 0, len(builtin.AuthMarkers))
+	for _, m := range builtin.AuthMarkers {
+		auths = append(auths, map[string]any{"sentinel": m.Sentinel})
+	}
+	return map[string]any{
+		"output":        "json",
+		"text_paths":    []any{[]any{"result"}},
+		"error_paths":   []any{[]any{"is_error"}},
+		"limit_markers": limits,
+		"auth_markers":  auths,
+	}
+}
+
+// A VENDOR OUTAGE IS A SERVER FAILURE, NOT A FATAL ONE. Claude Code relays an
+// overloaded API as a failed run — a non-zero exit with the API's error as its
+// result — and no marker matches it, because it is neither a spent plan nor a
+// login. Nothing about it says the request is one no model could take, so it
+// is retryable, and the next member of the seat's chain gets the call; and it
+// does not sit the entry out, because an overload the next call may not meet
+// must not hold every seat on the node off a working entry.
+//
+// Mutation: classify a failed run as fatal again, and the kind is wrong.
+func TestAFailedRunIsAServerFailureThatDoesNotSitTheEntryOut(t *testing.T) {
+	t.Parallel()
+	p := fakeProvider(t, map[string]string{"FAKE_STDOUT": claudeOverloaded, "FAKE_EXIT": "1"},
+		claudeCodeShape(t))
+	_, err := ask(t, p, llm.Request{})
+	if got := llm.KindOf(err); got != llm.KindServer {
+		t.Fatalf("kind = %v, want server (err %v)", got, err)
+	}
+	if !strings.Contains(err.Error(), "overloaded_error") {
+		t.Errorf("err = %v, want the error the CLI relayed", err)
+	}
+	if err := p.benched(); err != nil {
+		t.Errorf("a failed run sat the entry out: %v", err)
+	}
+}
+
+// THE CHAIN CARRIES THE SEAT PAST A HEAD WHOSE CLI FAILED. The point of a
+// fallback list is surviving one vendor's outage; when a failed run was fatal,
+// the walk stopped at the head and the turn failed against the same dead head
+// on every redelivery, with the next entry never asked.
+//
+// Mutation: classify a failed run as fatal again, and the backup is never
+// called and no fallback fires.
+func TestAChainWalksPastAHeadWhoseCLIFailed(t *testing.T) {
+	t.Parallel()
+	head := fakeProvider(t, map[string]string{"FAKE_STDOUT": claudeOverloaded, "FAKE_EXIT": "1"},
+		claudeCodeShape(t))
+	backup := fakeProvider(t, map[string]string{"FAKE_STDOUT": "from the backup"}, nil)
+	var seen []chain.Fallback
+	walk, err := chain.New([]chain.Member{{Key: "plan", Provider: head}, {Key: "key", Provider: backup}},
+		chain.Options{OnFallback: func(f chain.Fallback) { seen = append(seen, f) }})
+	if err != nil {
+		t.Fatalf("chain.New: %v", err)
+	}
+	comp, err := walk.Complete(t.Context(), llm.Request{
+		Messages: []llm.Message{{Role: llm.RoleUser, Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatalf("the chain stopped at the failed head: %v", err)
+	}
+	if comp.Content != "from the backup" || comp.ProviderKey != "key" {
+		t.Errorf("answered %q from %q, want the backup's answer", comp.Content, comp.ProviderKey)
+	}
+	if len(seen) != 1 || seen[0].From != "plan" || seen[0].To != "key" || seen[0].Kind != llm.KindServer {
+		t.Errorf("fallbacks = %+v, want one from plan to key, of kind server", seen)
 	}
 }
 

@@ -603,9 +603,28 @@ func (p *Provider) completion(
 		return nil, p.fail(hit.Kind, fmt.Errorf("%s", reason))
 	}
 
+	// A RUN THE CLI SAYS FAILED, FOR NO REASON A PROFILE RECOGNISES, IS A
+	// SERVER FAILURE — the CLI or its vendor did not answer: an overload or
+	// a 5xx it relayed once its own retries ran out, a crash, a reason in
+	// words no marker knows. It used to be FATAL, on the reasoning that every
+	// member of the seat's chain would refuse the call identically, and that
+	// is true only of a call the engine cannot make at all ([llm.KindFatal]).
+	// The next member is another login, another vendor or another binary,
+	// which does not share this one's outage: trying it costs one process
+	// launch, and stopping cost the seat every turn for as long as the outage
+	// lasted, each redelivered against the same dead head. Nothing is
+	// repeated by the walk, either — a text call runs none of the seat's
+	// tools; the engine runs those once an answer is back.
+	//
+	// NOT BENCHED: only a spent plan sits the entry out ([Provider.bench]),
+	// because only a spent plan is known to last. A failure the next call
+	// may not meet must not hold every seat on the node off a working entry.
 	if res.exitCode != 0 || out.failed {
-		return nil, p.fail(llm.KindFatal, fmt.Errorf(
-			"the CLI exited %d:\n%s", res.exitCode,
+		what := fmt.Sprintf("the %s CLI exited %d", p.agent, res.exitCode)
+		if res.exitCode == 0 {
+			what = fmt.Sprintf("the %s CLI exited 0 and reported that the run failed", p.agent)
+		}
+		return nil, p.fail(llm.KindServer, fmt.Errorf("%s:\n%s", what,
 			tail(nonEmpty(res.stderr, out.text, res.stdout))))
 	}
 	if strings.TrimSpace(res.stdout) == "" {

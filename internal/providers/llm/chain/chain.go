@@ -4,9 +4,11 @@
 // The rule it exists to hold is the contract's, not its own. A backend
 // classifies a failure and this decides what the classification means for the
 // NEXT model: [llm.ErrorKind.Retryable] says whether another member is worth
-// trying at all. A fatal is where the walk stops — a malformed request will be
-// refused identically by every member, so trying them is two more seconds and
-// another log line saying the same thing.
+// trying at all. A fatal is where the walk stops — a call the engine or its
+// host cannot make, which is the operator's to fix rather than an outage for
+// the next member to carry the seat through. A CLI that ran and failed is not
+// one: its vendor's outage or its own crash is not the next member's, so the
+// walk moves on.
 //
 // Fallback is per CALL, not per round. A member that fails is dropped along
 // with whatever it produced, and the next one starts the call from scratch,

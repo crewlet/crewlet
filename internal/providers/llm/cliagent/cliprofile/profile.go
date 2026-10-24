@@ -453,9 +453,10 @@ const DefaultSystemPromptFile = "crewlet-system-prompt.txt"
 // AuthMarker recognises a login the CLI has stopped honouring.
 //
 // Same reasoning as [LimitMarker]: an expired OAuth login exits non-zero with
-// prose on stderr, and the chain needs AUTH rather than the FATAL an
-// unrecognised failure would get, so that a role keeps working off its
-// metered fallback while the operator re-runs `crewlet llm login`.
+// prose on stderr. Unrecognised, that is the SERVER failure any failed run is,
+// which moves the seat's chain on as AUTH does — so what the marker buys is
+// the NAME: a seat working off its metered fallback says its login is what
+// failed, and the operator knows that `crewlet llm login` is what mends it.
 type AuthMarker struct {
 	// Sentinel is matched exactly as a [LimitMarker]'s is, in the same scope.
 	Sentinel string `yaml:"sentinel,omitempty"`

@@ -142,22 +142,33 @@ func TestTextOutputIsTakenVerbatim(t *testing.T) {
 }
 
 // A vendor that reports a failure INSIDE a zero exit must not be read as a
-// successful answer.
-func TestAFailureFlagInsideAZeroExitIsAFailure(t *testing.T) {
+// successful answer — and, saying nothing a marker recognises, it is a SERVER
+// failure the seat's chain walks past, not a fatal that stops it: the next
+// member is another login or vendor, which this run's failure says nothing
+// about.
+//
+// Mutation: classify a failed run as fatal again, and the kind is wrong.
+func TestAFailureFlagInsideAZeroExitIsAServerFailure(t *testing.T) {
 	t.Parallel()
 	p, err := cliprofile.Load("claude-code", nil)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	prov := &Provider{profile: p, model: "sonnet", now: time.Now}
+	prov := &Provider{profile: p, model: "sonnet", agent: "claude-code", now: time.Now}
 	_, err = prov.completion(t.Context(), "prompt", true, &rawResult{
 		stdout: `{"is_error":true,"result":"the model refused","type":"result"}`,
 	}, "")
 	if err == nil {
 		t.Fatal("a CLI-reported failure was returned as a completion")
 	}
-	if got := llm.KindOf(err); got != llm.KindFatal {
-		t.Errorf("kind = %v, want fatal", got)
+	if got := llm.KindOf(err); got != llm.KindServer {
+		t.Errorf("kind = %v, want server", got)
+	}
+	if !strings.Contains(err.Error(), "the model refused") {
+		t.Errorf("err = %v, want what the CLI said", err)
+	}
+	if err := prov.benched(); err != nil {
+		t.Errorf("a failed run sat the entry out: %v", err)
 	}
 }
 

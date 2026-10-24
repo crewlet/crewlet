@@ -133,11 +133,12 @@ claude-code:
   # MEASURED AGAINST THE INSTALLED CLI, NOT REMEMBERED. The sentinel this
   # profile shipped — "Claude AI usage limit reached", with the reset instant
   # after a pipe — appears NOWHERE in 2.1.263: it was 1.x's wording, and the
-  # pipe-and-epoch field went with it. A sentinel that cannot match is worse
-  # than none, because a spent plan then classifies FATAL instead of
-  # RATE_LIMIT and the fallback chain never carries the seat onto a metered
-  # key — the exact failure this mechanism exists to prevent, silent for as
-  # long as nobody hits their cap.
+  # pipe-and-epoch field went with it. A sentinel that cannot match is a
+  # silent hole: a spent plan the CLI reports as a failed run then reaches
+  # the chain as SERVER, which moves the seat on but never sits the entry
+  # out, so every round of every seat starts a CLI to hear the same
+  # sentence again — and one it reports on a clean exit is taken for the
+  # model's answer. Nothing says so until somebody hits their cap.
   #
   # Two sentinels, because a spent window reaches the operator either way:
   # the CLI's own line (every live variant begins with this exact prefix —
@@ -519,10 +520,10 @@ opencode:
   # `provider.rate-limit`, `provider.auth`, every one exiting 1 with stdout
   # holding the event. 1.x's sentinels ("usage limit", "not authenticated",
   # "no credentials") were never printed by either major, so a spent plan or
-  # a dead key was classified fatal and the fallback chain never moved. 2.0
-  # retries a rate limit itself, with no setting to bound it — ~86s,
-  # measured — so a transient one holds the seat up to timeout_seconds
-  # before this sentinel can hand it on.
+  # a dead key went unrecognised — and while a failed run was still fatal,
+  # the fallback chain never moved. 2.0 retries a rate limit itself, with no
+  # setting to bound it — ~86s, measured — so a transient one holds the seat
+  # up to timeout_seconds before this sentinel can hand it on.
   marker_scope: events
   marker_events: ["error"]
   marker_path: ["error", "type"]
@@ -711,9 +712,11 @@ muse-code:
   # failed run writes the fixed string "run ended with Failed" there and
   # nothing else, and the real reason exists only in the `run.terminal.failed`
   # event's `payload.reason`. Without --json a spent plan and a dead login
-  # reach this backend as a bare exit 1, no marker can fire, and the seat's
-  # fallback chain never carries it onto a metered key — the exact silent
-  # failure limit_markers exist to prevent.
+  # reach this backend as a bare exit 1 that no marker can read. The seat's
+  # chain still moves on, a failed run being a SERVER failure, but a spent
+  # plan then never sits the entry out — every round of every seat starts a
+  # CLI to be refused again, the waste limit_markers exist to prevent — and
+  # all the operator is told is "run ended with Failed".
   #
   # --no-session-log is this CLI's isolation flag and the counterpart of
   # claude-code's --no-session-persistence: no retained session event log, so
@@ -887,7 +890,8 @@ muse-code:
   # credential and belongs on the fallback chain. `rate_limit_error` is the
   # published type for 429; no 429 from this CLI has been captured, so if your
   # plan's wording differs, put it in overrides.limit_markers rather than
-  # letting a spent plan classify FATAL and strand the chain. The error CODES
+  # letting a spent plan pass as an unexplained SERVER failure, which moves
+  # the chain on but never sits the entry out. The error CODES
   # (`rate_limit_exceeded`, `invalid_api_key`) are deliberately not used: the
   # observed template carries the type, not the code.
   limit_markers:

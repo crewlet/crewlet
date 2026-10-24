@@ -281,10 +281,19 @@ type Provider interface {
 type ErrorKind int
 
 const (
-	// KindFatal is any non-retryable failure: a prompt that cannot be
-	// rendered, a CLI that exited in error. The chain does NOT try another
-	// provider — the next one will refuse it identically, and trying is two
-	// more seconds and another log line saying the same thing.
+	// KindFatal is a call the engine itself cannot make: a prompt it cannot
+	// render, a file of the call's it cannot write, a CLI it cannot start,
+	// a seat's home this host cannot prepare. The chain does NOT try another
+	// provider. The fault is in front of the CLI, on the engine's side of
+	// the exec, so it is the operator's to fix rather than an outage to wait
+	// out: a prompt that cannot be rendered fails identically on every
+	// member, and a host that cannot start a CLI or write its files is a
+	// deployment fault that a walk would paper over by carrying every call on
+	// the node to the next member — and its bill — until somebody read why.
+	//
+	// NOT a CLI that started and failed, however it failed: that is
+	// [KindServer], or a marker's kind where the CLI said why in words its
+	// profile recognises.
 	KindFatal ErrorKind = iota
 
 	// KindRateLimit is a spent plan or a rate limit the CLI reported in its
@@ -302,8 +311,13 @@ const (
 	// chain.
 	KindTimeout
 
-	// KindServer is a CLI that answered with nothing usable: no output at
-	// all, or none where its profile looks. Same treatment as a timeout.
+	// KindServer is a CLI that ran and gave no usable answer, for no reason
+	// its profile recognises: a run it reports failed — a non-zero exit, or
+	// its own failure flag — over a vendor error it relayed, a crash or
+	// words no marker knows; no output at all; output clipped past the cap;
+	// none where its profile looks. Same treatment as a timeout: the next
+	// member is another login, vendor or binary that may well answer, and
+	// the entry is not sat out, since nothing says the failure lasts.
 	KindServer
 )
 
@@ -323,7 +337,9 @@ func (k ErrorKind) String() string {
 }
 
 // Retryable reports whether another member of a fallback chain is worth
-// trying. A fatal is not — the next member refuses it identically.
+// trying: every kind but a fatal, which is a fault of the engine's or its
+// host's for the operator to fix rather than a failure one member's CLI or
+// vendor had.
 func (k ErrorKind) Retryable() bool { return k != KindFatal }
 
 // Error is a classified provider failure.

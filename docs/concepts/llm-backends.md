@@ -539,8 +539,13 @@ to be cut off at thirty seconds.
 A seat's `llm` (and every per-phase field) takes a **list**, tried in order for
 every call, and the walk moves on whenever a failure is one another entry might
 not share: a spent plan or a rate limit (`rate_limit`), a missing or expired
-login (`auth`), a `timeout`, or a CLI this build can no longer read (`server`).
-A fatal failure stops it, since every entry would refuse the same request.
+login (`auth`), a `timeout`, or a run that failed for no reason the profile
+recognises (`server`) — an error or an overload the CLI relayed from its vendor,
+a crash, output this build can no longer read. Only a `fatal` failure stops it,
+and that is a call the engine itself cannot make: a prompt it cannot render, a
+file of the call's it cannot write, a CLI it cannot start on this host. Those
+are yours to fix, and walking past one would only carry every call to the next
+entry, and its bill, until somebody read why.
 
 The natural chain is **one CLI, two ways to pay**: the plan first, the key
 after it.
@@ -611,11 +616,14 @@ stack trace's line number, a token count, or any ten-digit epoch. Every
 one of those took a working subscription out of service.
 
 The other way a sentinel stops working is quieter — the vendor reworded
-it, so it simply never fires, a spent plan classifies as fatal, and the chain
-never moves. Both are fixed the same way, with `overrides.limit_markers`; see
+it, so it simply never fires. A spent plan the CLI reports as a failed run
+then reaches the chain as `server`: the seat still moves on, but the entry
+never sits out, so every round of every seat on it starts a CLI to hear the
+same sentence again. One it reports on a successful exit is taken for the
+model's answer. Both are fixed the same way, with `overrides.limit_markers`; see
 [CLI flags drift](#cli-flags-drift--and-thats-a-config-edit-not-a-release)
 for the shape, and take the wording from the sentence your CLI actually
-printed, which a `fatal` failure carries verbatim so that you can.
+printed, which a `server` failure carries verbatim so that you can.
 
 ---
 
@@ -2176,10 +2184,12 @@ actually produced. See
 field fails visibly when it goes stale — a renamed flag is a non-zero exit
 `doctor` reports on the spot. A sentinel is matched *verbatim* against the
 CLI's own prose, so one the vendor has reworded simply never fires: a spent
-plan then classifies as a fatal error instead of `rate_limit`, the
-[fallback chain](#falling-back-between-entries) never carries the seat onto
-its next entry, and nothing says so until somebody hits their cap. If your
-CLI's wording differs from the built-in profile's, override it:
+plan the CLI reports as a failed run then reaches the
+[fallback chain](#falling-back-between-entries) as `server` rather than
+`rate_limit` — the seat still moves to its next entry, but the entry never sits
+out, so every round of every seat on it starts a CLI to be told the same thing —
+and nothing says so until somebody hits their cap. If your CLI's wording
+differs from the built-in profile's, override it:
 
 ```yaml
 providers:
@@ -2262,11 +2272,10 @@ refused without a `jsonl` output, an `event_type_path`, `marker_events` and
 marker may not carry a `reset_separator`, since the class is compared whole;
 and `marker_events` and `marker_path` are refused beside any other scope,
 which reads neither. (1.x's sentinels — "usage limit", "not authenticated" —
-were printed by neither major, so a spent OpenCode plan used to classify as
-fatal and never moved the fallback chain.) OpenCode retries a rate limit
-itself, with no setting to bound it (about 86 seconds, measured), so a
-transient one holds the seat until then — or until `timeout_seconds` — before
-the sentinel can hand it on.
+were printed by neither major, so a spent OpenCode plan was never recognised.)
+OpenCode retries a rate limit itself, with no setting to bound it (about 86
+seconds, measured), so a transient one holds the seat until then — or until
+`timeout_seconds` — before the sentinel can hand it on.
 
 **And check where it prints it.** A sentinel can only match what the CLI
 puts on stdout or stderr, and one vendor puts the failure *nowhere a
@@ -2275,8 +2284,9 @@ with Failed` to stderr and carries the real reason only in its
 `run.terminal.failed` event. That is why the `muse-code` profile runs
 with `--json` even though the event stream buys it no token counts — the
 answer would read fine without it, and a spent plan would arrive as a
-bare exit 1 that no marker could classify, so the seat would never fall
-through to its next entry.
+bare exit 1 that no marker could classify: a `server` failure, which moves
+the seat to its next entry but never sits this one out, and tells you
+nothing but `run ended with Failed`.
 
 ### Profile fields
 

@@ -29,9 +29,9 @@ func TestTheStopReasonSetIsClosedAndEmptyIsUnreported(t *testing.T) {
 }
 
 // ONLY A FATAL STOPS THE CHAIN. Retryable is what the fallback chain reads:
-// a fatal is a request every member would refuse identically, and every other
-// kind — a spent plan, a login, a slow or silent CLI — is one the next member
-// may well answer.
+// a fatal is a call the engine or its host cannot make, and every other kind —
+// a spent plan, a login, a slow, silent or failed CLI run — is one the next
+// member may well answer.
 func TestOnlyAFatalStopsTheChain(t *testing.T) {
 	t.Parallel()
 	for kind, retryable := range map[llm.ErrorKind]bool{
