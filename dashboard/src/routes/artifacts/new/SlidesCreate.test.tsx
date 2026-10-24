@@ -154,6 +154,31 @@ test("it opens on the title, in Nightshade, with the engine's four starting slid
   );
 });
 
+// THE COMPANY'S BRAND IS THE FIRST THEME, CHOSEN, AND SAYS SO ON ITS TILE: its
+// tag is drawn there, where the product's themes keep theirs in the name read
+// to a screen reader alone.
+test("the company's brand tile comes first, chosen, and shows its tag", async () => {
+  const brand = {
+    ...starters.themes[0]!,
+    id: "brand",
+    name: "FairSplit",
+    tag: "Your company brand",
+  };
+  vi.mocked(readSlidesStarters).mockResolvedValue({
+    ...starters,
+    themes: [brand, ...starters.themes],
+  });
+  mount();
+  await title();
+  const tile = screen.getByRole("radio", { name: /Your company brand/ });
+  expect(tile.getAttribute("aria-checked")).toBe("true");
+  expect(within(tile).getByText("Your company brand")).toBeTruthy();
+  const other = screen.getByRole("radio", { name: /^Nightshade,/ });
+  expect(
+    within(other).queryByText(starters.themes.find((t) => t.name === "Nightshade")!.tag),
+  ).toBeNull();
+});
+
 test("Create deck sends the title, the theme and every slide as one plan, then opens the deck", async () => {
   mount();
   fireEvent.change(await title(), { target: { value: "Board review" } });

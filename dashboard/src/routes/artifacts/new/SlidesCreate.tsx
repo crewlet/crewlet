@@ -589,6 +589,10 @@ function DeckComposer({ starters }: { starters: SlidesStartersAnswer }) {
                       id: t.id,
                       name: adoption?.document.name ?? t.name,
                       tag: "Your company brand",
+                      // THE COMPANY'S OWN THEME SAYS SO ON ITS TILE, in the
+                      // accent's pill; the product's themes keep their tag
+                      // in the accessible name alone.
+                      tagTone: "brand",
                       group: "",
                     }
                   : { id: t.id, name: t.name, tag: t.tag, group: "" },
