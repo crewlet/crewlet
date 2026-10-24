@@ -300,9 +300,8 @@ notifications_coalesced    # N same-conversation inbox events merged into one
 turn_trigger_skipped       # a redelivery the completion ledger had already
                            # worked, emitted precisely so it is not invisible —
                            # or a trigger whose turn was ABANDONED rather than
-                           # redelivered (it panicked, wrote outside the engine
-                           # before breaking, or its model declined), with the
-                           # reason
+                           # redelivered (it panicked, or wrote outside the
+                           # engine before breaking), with the reason
 
 # learning: the reflection subsystem and the skill lifecycle, grouped so a
 #           dashboard can include or exclude all of it with one toggle

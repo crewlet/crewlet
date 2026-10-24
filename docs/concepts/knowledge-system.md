@@ -891,9 +891,10 @@ sequenceDiagram
 - **Charged to the company.** It runs on the auxiliary model of the asker's
   seat and is judged against the company's day, week and month — a person has
   no seat budget. A company window with no room refuses it before the call; after the
-  call, exactly what the reply spent is recorded on the company's counter — a
-  reply the model **refused** included, since its prompt was billed even though
-  the answer is refused rather than shown.
+  call, exactly what the reply spent is recorded on the company's counter,
+  whatever becomes of the answer — an empty reply the tool declines to show
+  ("The model wrote no answer") included, since its tokens are spent the moment
+  the CLI replies.
 - **Cached at a corpus position.** Each node keeps 256 answers, keyed on the
   question (case and spacing folded) and where its tracker, pages and vector
   logs are applied through. Any write that could change an answer moves the
