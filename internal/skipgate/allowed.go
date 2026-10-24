@@ -276,10 +276,11 @@ var allowed = []Allowance{
 		Package: "internal/engine",
 		Test:    "TestTheStateLogsFitTheBrokerTheyBootOn",
 		When:    Environment,
-		Why: "Needs a volume whose broker can reserve 5.7 GiB plus a gibibyte to spend " +
-			"around it. It is the only case that proves the five logs fit one budget " +
-			"against a real broker; fitCeilings' table covers the arithmetic with no " +
-			"broker in it, and would agree with a ceiling reserved outside the budget.",
+		Why: "Needs a volume whose broker can reserve 7.6 GiB (three quarters of the " +
+			"10.1 GiB host the eight logs' 7.5 GiB of floors boot on) plus a gibibyte to " +
+			"spend around it. It is the only case that proves the eight logs fit one " +
+			"budget against a real broker; fitCeilings' table covers the arithmetic with " +
+			"no broker in it, and would agree with a ceiling reserved outside the budget.",
 	},
 	{
 		Package: "internal/engine",
