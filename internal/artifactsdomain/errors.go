@@ -97,14 +97,6 @@ var (
 	// that refuses rather than warns.
 	ErrBrandContrast = errors.New("artifactsdomain: the brand's text colour " +
 		"does not contrast enough with its light ground to be read")
-
-	// ErrNotBuilt reports a folder or brand operation whose body has not
-	// landed yet. It exists ONLY on the integration branch the folder and
-	// brand work is assembled on, where the foundation declares every
-	// signature before the bodies arrive; the branch that merges carries
-	// no call that answers it, and no declaration of it.
-	ErrNotBuilt = errors.New("artifactsdomain: this folder or brand operation " +
-		"is not built on this branch yet")
 )
 
 // FolderAmbiguous is a folder path that names more than one folder the caller
