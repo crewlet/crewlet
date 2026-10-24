@@ -452,8 +452,10 @@ func (n *nodeChild) exitedWith(t *testing.T, code int) {
 //
 // A FAILURE rather than an answer, because the case is about the node that
 // waits for the turn and not about the turn: a CLI that exits non-zero ends
-// the call as a fatal one, with no retry (the backend makes none) and no
-// second model to fall back to.
+// the call as a `server` failure, which the backend does not retry. The seat's
+// chain holds this one entry alone, so there is no second model to fall back
+// to: the chain is exhausted and the turn fails. Nothing in the case turns on
+// the kind, only on the turn ending once the CLI is let go.
 //
 // /bin/sh UNDER THE `custom` PROFILE rather than this binary re-executed: a
 // held call computes nothing, and both of its halves — the mark that a call
