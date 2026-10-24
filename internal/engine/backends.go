@@ -648,9 +648,12 @@ func openObjects(ctx context.Context, b *config.Bootstrap, out *Backends, js nat
 const objectsCoordinationFloor int64 = 1 << 30
 
 // objectsBucketShare is the most of the broker's limit the derived reservation
-// takes: a quarter, the review's figure. Half of the limit is the state logs',
-// and a quarter left over keeps the coordination remainder as large as the
-// bucket however full the bucket gets.
+// takes: a quarter, the review's figure. The bucket is reserved first and the
+// state logs take [StreamBudgetShare] of the three quarters it leaves, so the
+// coordination remainder is (1 − share) of those three quarters — at five
+// eighths, nine thirty-seconds of the limit — and stays as large as the bucket
+// however full the bucket gets for any share up to two thirds
+// (TestTheLogsShareLeavesTheEstateTheBucketsRoom).
 const objectsBucketShare = 4
 
 // budgetReader is the broker as the bucket's reservation is sized against it:

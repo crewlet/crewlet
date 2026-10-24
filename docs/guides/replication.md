@@ -903,49 +903,49 @@ ceilings the fleet keeps:
 | Step | What happens |
 |---|---|
 | **What the broker can grant** | Read from the broker itself. An embedded broker's limit is `stream.store_max_bytes` where you set one, and otherwise three quarters of the free space on the volume holding `stream.store_dir`, counting what its own streams already hold there; an external one's is the NATS account's JetStream limit. What counts against it is the ceilings already granted, not the bytes stored. |
-| **The logs' share** | Half of that, with the ceilings the logs' own streams already hold counted as theirs, so a restart divides the same half the first boot did. Where the broker states no limit, the share is half of the stream volume's free space less what the broker has already reserved for other streams (the `nats` object bucket's reservation, say), and nothing is added for the logs: a reservation never spends free space, so that figure already contains what the logs hold. Where the broker's budget cannot be read at all, the share is half of the free space. The other half is for everything that reserves nothing: every mailbox, every coordination bucket and the snapshot a joining node reads. |
-| **Each log's ask** | Its Tier A field when you set one. Unset, the mutation log asks for a quarter of the stream volume's free space (4..64 GiB); the knowledge base's log for a quarter of the mutation log's ceiling (the one you set, or the one it derived) because both hold a trailing window of records and the knowledge base's grows at about a quarter of the rate (1..16 GiB from a volume alone); the artifacts log (`stream.artifacts_log_max_bytes`, 1..256 GiB) for the same quarter of the mutation log's ceiling, for the same reason: a publish is a human-scale event whose records are a version's manifest, not its bytes, which the object store keeps; the artifact datastore's log (`stream.artifact_data_log_max_bytes`, 1..512 GiB) for the same quarter (1..16 GiB from a volume alone), the largest share the pool can give it beside a vector changelog that holds a model change, although its records carry the rows themselves, every cell an artifact page or a seat writes, and a busy sheet writes at the tracker's rate or above it: a company whose pages write heavily sets the field, which accepts twice the artifacts log's bound for that reason; the vector changelog for the same quarter of the volume the mutation log derives, whatever the mutation log is set to, because its peak is the whole corpus rather than a window of it; the code log (`stream.code_log_max_bytes`) for two thirds of the mutation log's ceiling, set or derived, because it too holds a trailing window of records: once seats push, a company's push records (1 332 bytes a push, measured) and the barriers its git clients' reads append (176 bytes a read) take about half to seven tenths of what its tracker writes and its seats' reads take a day, and the ratio is taken past the middle of that range because the changes, reviews and checks of later releases join the same log and a log keeps the ceiling it was created with (2⅔..42⅔ GiB from a volume alone) — a push record never carries its pack, so how large the repositories grow is the object store's to hold, not this log's; the identity estate's log a flat 512 MiB (`stream.iam_log_max_bytes`, 64 MiB..16 GiB) and the usage log a flat 1 GiB (`stream.usage_log_max_bytes`, 64 MiB..64 GiB): neither of those two grows with anything the volume has a say in: the identity log grows with headcount and sign-ins, and the usage log is a count of node-days, which more disk does not grow. The code log asks whether or not the company hosts any code, and below about 783 GiB free its ask is room the others give up in the fit below (the figures are under [What the code log's reservation costs](#what-the-code-logs-reservation-costs)); a company that hosts no code and is short of broker room sets `stream.code_log_max_bytes: 1073741824`, its floor, **before the first boot**. |
-| **The fit** | A log whose stream already exists takes the ceiling it **holds** off the logs' half first, whatever its field says now. A ceiling you set for a log being created comes off next, and is never scaled. The unset ones being created share what is left in proportion to what each asked for, none goes below 1 GiB, and none is created above what it would get if no log existed yet — the figure every later boot reports its stream against. The 1 GiB is a floor on scaling DOWN, never a raise: an unset ask already below it, the identity log's, is held at exactly what it asked for, whatever the pool. |
+| **The logs' share** | Five eighths of that, with the ceilings the logs' own streams already hold counted as theirs, so a restart divides the same share the first boot did. Where the broker states no limit, the share is five eighths of the stream volume's free space less what the broker has already reserved for other streams (the `nats` object bucket's reservation, say), and nothing is added for the logs: a reservation never spends free space, so that figure already contains what the logs hold. Where the broker's budget cannot be read at all, the share is five eighths of the free space. The other three eighths are for everything that reserves nothing: every mailbox, every coordination bucket and the snapshot a joining node reads. Five eighths because a re-embedding of the reference company's fifth-year corpus has to fit the vector changelog beside the other seven logs' asks on a 64 GiB volume with nothing else reserved, which half did not once the code log was registered; and no more than two thirds, which would leave the mailboxes and coordination less than the `nats` bucket's quarter. |
+| **Each log's ask** | Its Tier A field when you set one. Unset, the mutation log asks for a quarter of the stream volume's free space (4..64 GiB); the knowledge base's log for a quarter of the mutation log's ceiling (the one you set, or the one it derived) because both hold a trailing window of records and the knowledge base's grows at about a quarter of the rate (1..16 GiB from a volume alone); the artifacts log (`stream.artifacts_log_max_bytes`, 1..256 GiB) for the same quarter of the mutation log's ceiling, for the same reason: a publish is a human-scale event whose records are a version's manifest, not its bytes, which the object store keeps; the artifact datastore's log (`stream.artifact_data_log_max_bytes`, 1..512 GiB) for the same quarter (1..16 GiB from a volume alone), the largest share the pool can give it beside a vector changelog that holds a model change, although its records carry the rows themselves, every cell an artifact page or a seat writes, and a busy sheet writes at the tracker's rate or above it: a company whose pages write heavily sets the field, which accepts twice the artifacts log's bound for that reason; the vector changelog for the same quarter of the volume the mutation log derives, whatever the mutation log is set to, because its peak is the whole corpus rather than a window of it; the code log (`stream.code_log_max_bytes`) for two thirds of the mutation log's ceiling, set or derived, because it too holds a trailing window of records: once seats push, a company's push records (1 332 bytes a push, measured) and the barriers its git clients' reads append (176 bytes a read) take about half to seven tenths of what its tracker writes and its seats' reads take a day, and the ratio is taken past the middle of that range because the changes, reviews and checks of later releases join the same log and a log keeps the ceiling it was created with (2⅔..42⅔ GiB from a volume alone) — a push record never carries its pack, so how large the repositories grow is the object store's to hold, not this log's; the identity estate's log a flat 512 MiB (`stream.iam_log_max_bytes`, 64 MiB..16 GiB) and the usage log a flat 1 GiB (`stream.usage_log_max_bytes`, 64 MiB..64 GiB): neither of those two grows with anything the volume has a say in: the identity log grows with headcount and sign-ins, and the usage log is a count of node-days, which more disk does not grow. The code log asks whether or not the company hosts any code, and below about 626 GiB free its ask is room the others give up in the fit below (the figures are under [What the code log's reservation costs](#what-the-code-logs-reservation-costs)); a company that hosts no code and is short of broker room sets `stream.code_log_max_bytes: 1073741824`, its floor, **before the first boot**. |
+| **The fit** | A log whose stream already exists takes the ceiling it **holds** off the logs' share first, whatever its field says now. A ceiling you set for a log being created comes off next, and is never scaled. The unset ones being created share what is left in proportion to what each asked for, none goes below 1 GiB, and none is created above what it would get if no log existed yet — the figure every later boot reports its stream against. The 1 GiB is a floor on scaling DOWN, never a raise: an unset ask already below it, the identity log's, is held at exactly what it asked for, whatever the pool. |
 
 #### What the code log's reservation costs
 
 The code log asks on every node that runs a state log, whether or not the
-company hosts any code, and on a first boot with less than about 783 GiB free
-the eight asks are more than the logs' share of it — half of what an embedded
-broker can grant once the object store's `nats` bucket has taken its quarter of
-the broker's limit, nine thirty-seconds of the free space — so its share comes
-out of the others'. The ceilings a first boot creates with every field unset,
+company hosts any code, and on a first boot with less than about 626 GiB free
+the eight asks are more than the logs' share of it — five eighths of what an
+embedded broker can grant once the object store's `nats` bucket has taken its
+quarter of the broker's limit, about 35 % of the free space — so its share
+comes out of the others'. The ceilings a first boot creates with every field unset,
 without the code log and with it:
 
 | Free on the stream volume | Mutation log and vector changelog, each | Knowledge base's log, artifacts log and artifact datastore's log, each | Code log |
 |---|---|---|---|
-| 50 GiB | 4.6 → 3.6 GiB | 1.1 → 1.0 GiB | 2.4 GiB |
-| 100 GiB | 9.7 → 7.8 GiB | 2.4 → 1.9 GiB | 5.2 GiB |
-| 256 GiB | 25.6 → 20.6 GiB | 6.4 → 5.2 GiB | 13.8 GiB |
-| 400 GiB | 40.4 → 32.5 GiB | 10.1 → 8.1 GiB | 21.7 GiB |
-| 600 GiB | 60.8 → 49.0 GiB | 15.2 → 12.2 GiB | 32.6 GiB |
-| 783 GiB and up | 64 GiB | 16 GiB | 42⅔ GiB |
+| 50 GiB | 5.8 → 4.7 GiB | 1.5 → 1.2 GiB | 3.1 GiB |
+| 100 GiB | 12.2 → 9.9 GiB | 3.1 → 2.5 GiB | 6.6 GiB |
+| 256 GiB | 32.2 → 25.9 GiB | 8.0 → 6.5 GiB | 17.3 GiB |
+| 400 GiB | 50.6 → 40.7 GiB | 12.6 → 10.2 GiB | 27.1 GiB |
+| 600 GiB | 64 → 61.3 GiB | 16 → 15.3 GiB | 40.9 GiB |
+| 626 GiB and up | 64 GiB | 16 GiB | 42⅔ GiB |
 
 A shorter mutation log is a shorter blocked trim survived before it refuses
-appends — about a fifth (19.5 %) shorter on any first boot between about 55
-and 630 GiB free, a little more below that and less above it.
+appends — about a fifth (19.5 %) shorter on any first boot between about 44
+and 505 GiB free, a little more below that and less above it.
 
 A smaller vector changelog is less room for a full re-embedding, which
 republishes the whole corpus at once — 8.46 GB at the reference company's
-fifth year. The changelog is created at 7.8 GiB on 100 GiB free, where it
-would be 9.7 GiB without the code log: that re-embedding then no longer fits
-in it at all, where without the code log it leaves about 19 % of it free. It
-raises `log_headroom`, which fires within a tenth of a ceiling, on any first
-boot below about 112 GiB free, where the line would be about 91 GiB without
-the code log, and it does not fit below about 101 GiB (about 82 GiB without
-the code log) ([the designed excursions](retention.md#the-storage-forecast)).
+fifth year. The changelog is created at 9.9 GiB on 100 GiB free, where it
+would be 12.2 GiB without the code log: that re-embedding then leaves 20 % of
+it free, where without the code log it leaves about 36 %. It raises
+`log_headroom`, which fires within a tenth of a ceiling, on any first boot
+below about 89 GiB free, where the line would be about 73 GiB without the code
+log, and it does not fit below about 81 GiB (about 66 GiB without the code
+log) ([the designed excursions](retention.md#the-storage-forecast)).
 
 A company that hosts no code and is short of broker room sets
 `stream.code_log_max_bytes: 1073741824` before the first boot: a ceiling you
 set comes off the logs' share whole and is never scaled, so the others divide
 all but that gibibyte (at 100 GiB free, the mutation log and the vector
-changelog are each created at 9.3 GiB, which a year-five re-embedding leaves
-about 15 % free, and the line below which it alarms moves to about 94 GiB).
+changelog are each created at 11.9 GiB, which a year-five re-embedding leaves
+about 34 % free, and the line below which it alarms moves to about 76 GiB).
 Once the streams exist they keep their ceilings, and the
 same trade is two
 [`crewlet retention set-capacity`](retention.md#changing-a-logs-ceiling) calls:
@@ -963,7 +963,7 @@ harmless. To reclaim it (or to raise any log), use
 
 **And it counts at that ceiling when another log is created beside it.** A log
 a new version adds, or one whose stream was deleted, is sized from what the
-existing logs leave of the half, not from what they would ask for today — so a
+existing logs leave of the share, not from what they would ask for today — so a
 log being created fits inside what the existing logs leave of their share,
 past it only by the 1 GiB floor and a ceiling you set for it. What the existing
 logs already hold is not reduced: when they hold more than the share (a ceiling

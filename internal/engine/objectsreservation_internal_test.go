@@ -9,8 +9,8 @@ import (
 )
 
 // THE BUCKET'S RESERVATION IS A QUARTER OF THE BROKER, AND NEVER EATS THE
-// COORDINATION REMAINDER: the logs' half and a gibibyte are always left, and
-// the field's own bounds hold whatever the broker says.
+// COORDINATION REMAINDER: the logs' share ([StreamBudgetShare]) and a gibibyte
+// are always left, and the field's own bounds hold whatever the broker says.
 func TestTheBucketReservationLeavesTheCoordinationRemainder(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -29,7 +29,8 @@ func TestTheBucketReservationLeavesTheCoordinationRemainder(t *testing.T) {
 		if got != c.want {
 			t.Errorf("%s: %d bytes, want %d", c.name, got, c.want)
 		}
-		if c.limit >= 8*gib && got+max(c.limit/2, c.declared)+objectsCoordinationFloor > c.limit {
+		share := int64(float64(c.limit) * StreamBudgetShare)
+		if c.limit >= 8*gib && got+max(share, c.declared)+objectsCoordinationFloor > c.limit {
 			t.Errorf("%s: %d bytes leaves no coordination remainder in a %d-byte broker",
 				c.name, got, c.limit)
 		}

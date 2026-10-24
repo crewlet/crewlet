@@ -87,13 +87,35 @@ type domainCeiling struct {
 // their ceilings may reserve between them — the ceilings their existing
 // streams hold included, whatever Tier A would size those at today.
 //
-// HALF. The same broker holds every seat's mailbox, every coordination bucket
-// (the leases, the ledgers, the counters, the company's sealed credentials)
-// and the snapshot a joining node reads. None of those reserves anything, so
-// the broker would hand the logs all of it; a log allowed to reserve the whole
-// account starves the estate it is part of, and the failure is not a full log,
-// it is a company that cannot claim a seat.
-const StreamBudgetShare = 0.5
+// FIVE EIGHTHS, inside two bounds and taken from the register rather than
+// chosen.
+//
+// AT MOST TWO THIRDS. The same broker holds every seat's mailbox, every
+// coordination bucket (the leases, the ledgers, the counters, the company's
+// sealed credentials) and the snapshot a joining node reads. None of those
+// reserves anything, so the broker would hand the logs all of it; a log
+// allowed to reserve the whole account starves the estate it is part of, and
+// the failure is not a full log, it is a company that cannot claim a seat. So
+// what the logs leave must stay at least as large as the `nats` object
+// bucket's reservation, which is taken of the limit first — a quarter of it
+// ([objectsBucketShare]) — and the logs' share of the three quarters it leaves
+// leaves that quarter for any share up to two thirds.
+//
+// AT LEAST 0.593, because the vector changelog's peak is a DESIGNED operation:
+// a re-embedding puts the whole corpus in its window at once, 8.46 GB at the
+// reference company's fifth year, and on a 64 GiB volume under an embedded
+// broker with nothing else reserved — the 48 GiB such a broker can grant —
+// the share must create the changelog that large beside the other seven
+// logs' asks (TestTheVectorChangelogIsCreatedToHoldAModelChange). It was HALF
+// while seven logs were registered; the eighth, the code log, asks two thirds
+// of the mutation log's ceiling, and at half the changelog was created at
+// 6.6 GiB there, under the corpus. Five eighths is the smallest eighth past
+// the bound and creates it at 8.3 GiB; a log a later release registers moves
+// the bound again, and that case is what says so. Under the default `nats`
+// bucket, which takes its quarter first, the same re-embedding fits from
+// about 81 GiB free (docs/guides/replication.md, "What the code log's
+// reservation costs").
+const StreamBudgetShare = 0.625
 
 // MinDomainCeiling is the floor a scaled-down ceiling never goes below.
 //

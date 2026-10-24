@@ -2148,22 +2148,23 @@ only on a small volume:
    17 MB per agent seat per year of history, 8.46 GB (7.88 GiB) for the
    reference company in its fifth year. What that leaves free depends on the
    ceiling a first boot created the vector log with, every field unset: about
-   88 % of the 64 GiB clamp, which a volume of about 783 GiB free or more
-   gets; about 51 % of the 16.0 GiB a 200 GiB volume gets; about 22 % of the
-   10.1 GiB a 128 GiB volume gets; and on a 100 GiB volume, whose 7.8 GiB is
-   less than the corpus, it does not fit at all — there the eight logs' asks
-   are scaled down to the share they divide, half of what the broker can grant
-   once the object store's `nats` bucket has its quarter. The alarm fires
-   within a tenth of the ceiling, so **on a volume of less than about 112 GiB
-   free, a year-five re-embedding raises `log_headroom`**, and below about
-   101 GiB the log refuses it. The line would be about 91 GiB without the code
-   log's share of the same budget
+   88 % of the 64 GiB clamp, which a volume of about 626 GiB free or more
+   gets; about 61 % of the 20.1 GiB a 200 GiB volume gets; about 38 % of the
+   12.7 GiB a 128 GiB volume gets; about 20 % of the 9.9 GiB a 100 GiB volume
+   gets; and on a 64 GiB volume, whose 6.1 GiB is less than the corpus, it
+   does not fit at all — there the eight logs' asks are scaled down to the
+   share they divide, five eighths of what the broker can grant once the
+   object store's `nats` bucket has its quarter. The alarm fires within a
+   tenth of the ceiling, so **on a volume of less than about 89 GiB free, a
+   year-five re-embedding raises `log_headroom`**, and below about 81 GiB the
+   log refuses it. The line would be about 73 GiB without the code log's share
+   of the same budget
    ([what the code log's reservation costs](replication.md#what-the-code-logs-reservation-costs)).
    Below it, set `stream.tracker_vectors_max_bytes` at about twice the corpus
    — 34 MB per agent seat per year of history — which the log is created with
    whole; or, for a company that hosts no code, set `stream.code_log_max_bytes`
-   to its 1 GiB floor, which moves the line to about 94 GiB and leaves a
-   100 GiB volume's year-five re-embedding about 15 % free. Either takes effect
+   to its 1 GiB floor, which moves the line to about 76 GiB and leaves a
+   100 GiB volume's year-five re-embedding about 34 % free. Either takes effect
    at the first boot; once the streams exist, the same trade is
    [`crewlet retention set-capacity`](#changing-a-logs-ceiling). A larger or
    older company sets `stream.tracker_vectors_max_bytes` the same way,
@@ -2183,7 +2184,7 @@ What a production fleet should actually be set to:
 | restore test | **monthly**, `crewlet retention verify --restore` | Justified against `min_age = 7d`: a restore path broken for longer than one replay window means the log can no longer bridge the gap. Monthly gives four windows of margin. |
 | snapshot volume | **×4.2** of the store, on its own volume | The rotation state above. |
 | rejoin window | **30 m** | Against a conservative projection of 5.1 / 12.8 / 20.7 minutes at years 1 / 3 / 5. |
-| broker storage | `stream.store_max_bytes` **unset** on a host running one engine; **divided** where several share a filesystem | Unset, the embedded broker takes three quarters of `stream.store_dir`'s free space, measured once at boot — right when it is the only tenant. Free space bounds the *sum* of the engines on a volume, so two that each size themselves from what they can see over-commit it, and the failure is `insufficient storage resources available` — or, on a fleet, `no suitable peers for placement, insufficient storage` — on whichever stream was provisioned last. The engine names the ceiling that did not fit and this field beside either of them, and adds the limit in force and what is already reserved on the standalone one, where this node can read them. Half of whatever is in force is what the state logs may reserve between them, a log that already exists counting at the ceiling it holds and the derived ceilings of the ones being created sharing what that leaves; the other half is for the streams that reserve nothing and grow — the mailboxes, the event log, the dead-letter stream, the memory changelog and every coordination bucket. |
+| broker storage | `stream.store_max_bytes` **unset** on a host running one engine; **divided** where several share a filesystem | Unset, the embedded broker takes three quarters of `stream.store_dir`'s free space, measured once at boot — right when it is the only tenant. Free space bounds the *sum* of the engines on a volume, so two that each size themselves from what they can see over-commit it, and the failure is `insufficient storage resources available` — or, on a fleet, `no suitable peers for placement, insufficient storage` — on whichever stream was provisioned last. The engine names the ceiling that did not fit and this field beside either of them, and adds the limit in force and what is already reserved on the standalone one, where this node can read them. Five eighths of whatever is in force is what the state logs may reserve between them, a log that already exists counting at the ceiling it holds and the derived ceilings of the ones being created sharing what that leaves; the other three eighths are for the streams that reserve nothing and grow — the mailboxes, the event log, the dead-letter stream, the memory changelog and every coordination bucket. |
 
 **Full replay with no snapshot is 5.2 hours at year five** — 10 to 16 hours
 accounting for index depth. That is 15 to 46× the snapshot path, which is what

@@ -578,13 +578,13 @@ the node. "Reachable" can disagree with itself for no longer than a reconnect.
 
 **The state logs share one byte budget on that broker.** Each state log's
 stream reserves its whole byte ceiling when it is created, so the logs are
-sized together: `StreamBudgetShare` — half — of what the broker can grant,
-divided over every domain this build registers
+sized together: `StreamBudgetShare` — five eighths — of what the broker can
+grant, divided over every domain this build registers
 (`internal/engine/statelogceilings.go`) rather than over the ones a node's
 roles apply, because every node creates every log's stream and a stream keeps
-the ceiling its creator gave it. The other half is for what reserves nothing:
-every seat's mailbox, every coordination bucket and the snapshot a joining
-node reads. A log allowed the whole broker would starve the estate it is part
+the ceiling its creator gave it. The other three eighths are for what reserves
+nothing: every seat's mailbox, every coordination bucket and the snapshot a
+joining node reads. A log allowed the whole broker would starve the estate it is part
 of, and the failure would not be a full log but a company that cannot claim a
 seat. See
 [Replication § How the byte ceilings are sized](../guides/replication.md#how-the-byte-ceilings-are-sized).

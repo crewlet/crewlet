@@ -448,12 +448,15 @@ func (h sizingHost) DomainStreamCeiling(_ context.Context, stream string) (int64
 //
 // Its peak is the whole corpus — a model change republishes every source, and
 // for a week all of them are in the window — which is 8.46 GB for the reference
-// company in its fifth year. On a 64 GiB volume under an embedded broker (whose
-// limit is three quarters of the free space, so the logs share 24 GiB) that is
-// what the created ceiling must hold, whatever the mutation log is set to: the
-// rule that took half the mutation log's ceiling asked for 8 GiB there and the
-// share scaled it to 6.9 GiB, under the peak — and beside an operator's 4 GiB
-// mutation log it asked for 2 GiB.
+// company in its fifth year. On a 64 GiB volume under an embedded broker with
+// nothing else reserved (whose limit is three quarters of the free space, so
+// the logs share five eighths of 48 GiB, 30 GiB) that is what the created
+// ceiling must hold, whatever the mutation log is set to: the rule that took
+// half the mutation log's ceiling asked for 8 GiB there and the share scaled it
+// to 6.9 GiB, under the peak — and beside an operator's 4 GiB mutation log it
+// asked for 2 GiB. And the share itself is held to it: at half, the eighth log
+// the register gained, the code log, took the changelog to 6.6 GiB there
+// ([StreamBudgetShare]).
 func TestTheVectorChangelogIsCreatedToHoldAModelChange(t *testing.T) {
 	t.Parallel()
 	const free = 64 * gib
@@ -473,6 +476,30 @@ func TestTheVectorChangelogIsCreatedToHoldAModelChange(t *testing.T) {
 			t.Errorf("%s: the vector changelog is created at %d bytes on %d free, "+
 				"under the reference company's fifth-year model change (%d)",
 				name, got, free, yearFivePeak)
+		}
+	}
+}
+
+// THE LOGS' SHARE LEAVES THE ESTATE AT LEAST WHAT THE BUCKET RESERVES — the
+// other bound on [StreamBudgetShare]. The mailboxes, the coordination buckets
+// and the snapshot a joining node reads reserve nothing and grow in what the
+// logs and the `nats` object bucket leave, so the logs may not take so much of
+// what the bucket leaves that the remainder is smaller than the bucket itself:
+// sized as the boot sizes them — the bucket's reservation spent first, the
+// logs' pool a share of what is left ([logsGrantable]) — on every broker large
+// enough to hold the bucket's quarter, from 8 GiB to a petabyte.
+func TestTheLogsShareLeavesTheEstateTheBucketsRoom(t *testing.T) {
+	t.Parallel()
+	for limit := 8 * gib; limit <= 1<<50; limit *= 2 {
+		bucket := derivedObjectsReservation(limit, 0)
+		budget := jetstream.StorageBudget{Limit: limit, Committed: bucket,
+			Source: jetstream.BudgetServerStore}
+		logs := int64(float64(logsGrantable(budget, nil, limit, 0)) * StreamBudgetShare)
+		if left := limit - bucket - logs; left < bucket {
+			t.Errorf("on a %d-byte broker the bucket reserves %d and the logs' share %d, "+
+				"leaving the mailboxes and coordination %d, less than the bucket: a "+
+				"share of %v of what the bucket leaves is past the two thirds that "+
+				"keeps them its size", limit, bucket, logs, left, StreamBudgetShare)
 		}
 	}
 }

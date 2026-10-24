@@ -109,8 +109,8 @@ ceiling in full, up front, or refuses to create the stream at all. Its limit is
 `stream.store_max_bytes` where you set one, and otherwise three quarters of
 that volume's free space.
 
-The node sizes the ceilings together to fit half of what that limit leaves
-once the object store's `nats` bucket (below) has its reservation. A log
+The node sizes the ceilings together to fit five eighths of what that limit
+leaves once the object store's `nats` bucket (below) has its reservation. A log
 derived from the disk that would be scaled below 1 GiB is **held at 1 GiB**
 instead, and a log whose own default is smaller than that is held at what it
 asked for, so a fresh node has a floor it cannot go below.
@@ -176,16 +176,16 @@ less than 1 GiB, so setting them only moves the figure up.
   disk at all, because the identity log grows with headcount and the usage
   log's size is a count of node-days rather than a rate, so more disk buys
   either nothing. They are scaled down together whenever they ask for more
-  than the logs' share — half of what the broker's limit leaves once the
-  `nats` bucket has taken its quarter of it, nine thirty-seconds of the free
-  space on a first boot — which is every volume with less than about 783 GiB
+  than the logs' share — five eighths of what the broker's limit leaves once
+  the `nats` bucket has taken its quarter of it, about 35 % of the free space
+  on a first boot — which is every volume with less than about 626 GiB
   free (with the mutation log at its 64 GiB clamp the eight ask for about
   220 GiB: 64 + 64 + 16 + 16 + 16 + 42⅔ + 1 + ½); from there up each log gets
   what it asked for.
 - **The code log's ask is paid whether or not anything pushes.** Below about
-  783 GiB free it comes out of the other logs' share: at 100 GiB free the
-  mutation log and the vector changelog are created at 7.8 GiB each rather
-  than 9.7, at 256 GiB at 20.6 rather than 25.6 — windows about a fifth
+  626 GiB free it comes out of the other logs' share: at 100 GiB free the
+  mutation log and the vector changelog are created at 9.9 GiB each rather
+  than 12.2, at 256 GiB at 25.9 rather than 32.2 — windows about a fifth
   shorter for a blocked trim — and the knowledge base's, the artifacts and
   the artifact datastore's logs by the same proportion. A company that hosts
   no code and is short of room sets `stream.code_log_max_bytes: 1073741824`
@@ -479,11 +479,11 @@ stream:
 
 It is measured once, at boot, on both paths: a volume that later grows or
 shrinks does not move the limit, and a node that should see a resized disk is
-restarted. Half of whatever is in force is what the state logs' derived
-ceilings may reserve between them; the other half is for the streams that
-reserve nothing and simply grow against it — the seats' mailboxes, the event
-log, the dead-letter stream, the memory changelog and every coordination
-bucket. A refusal names the ceiling that did not fit and the Tier A field
+restarted. Five eighths of whatever is in force is what the state logs'
+derived ceilings may reserve between them; the other three eighths are for the
+streams that reserve nothing and simply grow against it — the seats'
+mailboxes, the event log, the dead-letter stream, the memory changelog and
+every coordination bucket. A refusal names the ceiling that did not fit and the Tier A field
 that sets it on either topology; it adds the limit in force and what is already
 reserved only where this node can read them, which is the standalone one. On a
 fleet the room that refused is another member's disk, and no member can read
@@ -774,8 +774,8 @@ identity; a solo broker has no name to carry and the attribute is empty.
 
 **And it needs room for the state logs.** Every state log reserves its byte
 ceiling against the account's JetStream storage limit when its stream is
-created, and the node sizes them to half of what that limit has left. An
-untiered limit counts every replica, so a `replicas: 3` fleet needs three
+created, and the node sizes them to five eighths of what that limit has left.
+An untiered limit counts every replica, so a `replicas: 3` fleet needs three
 times the bytes; a tiered one needs its `R3` tier. An account that states no
 limit leaves the node nothing to size against but its own disk, and a server's
 own cap then refuses what does not fit, by name. See

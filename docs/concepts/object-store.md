@@ -250,9 +250,9 @@ store:
 
 - **Unset, it is derived** from the broker's limit (`stream.store_max_bytes`,
   or the share of its volume the embedded broker takes): the smaller of a
-  quarter of the limit, and what the limit leaves once the state logs' half
-  (or the log ceilings you set, where they are larger) and a 1 GiB floor for
-  the coordination remainder are taken out. It is never below 1 GiB, the
+  quarter of the limit, and what the limit leaves once the state logs' five
+  eighths (or the log ceilings you set, where they are larger) and a 1 GiB
+  floor for the coordination remainder are taken out. It is never below 1 GiB, the
   smallest value the field accepts. Where the broker states no limit, the
   stream volume's free space stands in for it. The bucket is created before
   the state logs are sized, so the logs size themselves from what the broker

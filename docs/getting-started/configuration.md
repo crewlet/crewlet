@@ -1074,9 +1074,10 @@ stream:
                                     #   BUDGET FOR EVERY STATE LOG: the broker
                                     #   reserves each ceiling in full when it
                                     #   creates the stream, so this field and
-                                    #   the seven below share half of what the
-                                    #   broker can grant them, less the ceiling
-                                    #   any of them that already exists holds.
+                                    #   the seven below share five eighths of
+                                    #   what the broker can grant them, less
+                                    #   the ceiling any of them that already
+                                    #   exists holds.
                                     #   The unset ones are scaled down together
                                     #   to fit, never below 1 GiB each — and an
                                     #   unset ask already below it (the
