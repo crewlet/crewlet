@@ -159,7 +159,10 @@ func TestCodeRoutesServeACompanyAppliedAfterBoot(t *testing.T) {
 		Detail string `json:"detail"`
 	}
 	_ = json.Unmarshal([]byte(body), &refusal)
-	if status != http.StatusNotFound || refusal.Error != "not_found" || refusal.Detail != notHosted {
+	// THE ENVELOPE'S DETAIL IS A SENTENCE ([httpjson.Sentence]), and git's
+	// one line the bare clause it prints as `remote:` text.
+	if status != http.StatusNotFound || refusal.Error != "not_found" ||
+		refusal.Detail != httpjson.Sentence(notHosted) {
 		t.Fatalf("GET /code/repos before any company = %d %s, want 404 not_found naming code.native",
 			status, body)
 	}
@@ -241,9 +244,9 @@ code:
 // refuses to take — still serves the previous epoch, one that hosts no code;
 // read off that epoch, the person who had just turned code.native on was told
 // "this company does not host code". The answer is read off what the fleet
-// activated instead: 503 naming config_apply_failed, with no Retry-After —
-// waiting clears nothing, another node serves it — in the read vocabulary on a
-// /code/ read and in git's own form on a git route.
+// activated instead: 503 config_apply_failed, with no Retry-After — waiting
+// clears nothing, another node serves it — as the envelope's code on a /code/
+// read and in brackets on git's one line on a git route.
 //
 // Mutation: answer from the published epoch alone (engine.CodeUnserved), and
 // the read says the company hosts no code.
@@ -270,7 +273,6 @@ code:
 
 	var refusal struct {
 		Error  string `json:"error"`
-		Reason string `json:"reason"`
 		Detail string `json:"detail"`
 	}
 	var (
@@ -307,9 +309,9 @@ code:
 			t.Fatal(err)
 		}
 		status, body, after = res.StatusCode, string(raw), res.Header.Get("Retry-After")
-		refusal.Reason = ""
+		refusal.Error = ""
 		_ = json.Unmarshal(raw, &refusal)
-		if refusal.Reason == "config_apply_failed" {
+		if refusal.Error == string(httpjson.CodeConfigApplyFailed) {
 			break
 		}
 		unread := status == http.StatusNotFound && !read &&
@@ -320,9 +322,9 @@ code:
 				"naming config_apply_failed", status, body)
 		}
 	}
-	if status != http.StatusServiceUnavailable || refusal.Error != "unavailable" || after != "" ||
+	if status != http.StatusServiceUnavailable || after != "" ||
 		strings.Contains(refusal.Detail, "does not host code") {
-		t.Errorf("GET /code/repos = %d %s (Retry-After %q), want 503 unavailable naming the failed apply "+
+		t.Errorf("GET /code/repos = %d %s (Retry-After %q), want 503 config_apply_failed naming the failed apply "+
 			"and no Retry-After", status, body, after)
 	}
 	status, kind, text := gitGet(t, n, n.base+"/git/web.git/info/refs?service=git-upload-pack", token)
