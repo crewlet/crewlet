@@ -2886,18 +2886,20 @@ func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sa
 // in whose environment signs its CLI in, carrying the remedy for THIS entry.
 //
 // THE REMEDY FOLLOWS THE AUTH MODE BEFORE THE PROFILE, because the mode decides
-// what the entry reads at all ([cliagent.Auth]). Chosen by the profile alone,
-// an api-key Claude Code entry whose key resolved to nothing was told to mint
-// a subscription token: `-capture-token` stored one the entry never reads
-// (api-key gives the token no fallback, and the child has the token variable
-// removed), and the next launch was refused with the same advice. An
-// inherit-env entry reads neither the secret store nor its own credentials,
-// only the engine's process environment. So:
+// what the entry reads at all ([cliagent.Provider.ModeSignIn]). Chosen by the
+// profile alone, an api-key Claude Code entry whose key resolved to nothing was
+// told to mint a subscription token: `-capture-token` stored one the entry
+// never reads (api-key gives the token no fallback, and the child has the token
+// variable removed), and the next launch was refused with the same advice. An
+// inherit-env entry reads the engine's process environment and never the secret
+// store the token lands in; its credential files are seeded as under every
+// mode, but those never leave the engine host. So:
 //
-//   - api-key: the key — auth.api_key, else the CLI's own key variable, which
-//     the entry reads through the secret store — or the seat's own;
-//   - inherit-env: one of the two variables it forwards, in the engine's
-//     environment, or the seat's own;
+//   - api-key: the key, worded once in cliagent for every message that names
+//     it, or the seat's own in role.sandbox.env;
+//   - inherit-env: one of the variables it forwards, in the engine's
+//     environment or the seat's role.sandbox.env, or a local cell, which is
+//     seeded with the entry's login;
 //   - subscription: a token that travels where the CLI mints one, the
 //     provider's key where the CLI reads it from its environment, and
 //     otherwise a local cell, which is seeded with the login itself.
@@ -2905,32 +2907,25 @@ func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sa
 // Its own function rather than the tail of [sandboxCredentials] so that the
 // guard's VERDICT — which runs are refused — reads apart from its wording.
 func credentialRefusal(agent *cliagent.Provider, key, seat string, placement sandbox.Placement) *SandboxCredentialError {
-	profile := agent.Profile()
 	localCell := fmt.Sprintf("role.sandbox.run_in: %q or %q", sandbox.Direct, sandbox.Container)
-	switch mode := agent.AuthMode(); {
-	case mode == cliagent.AuthAPIKey && profile.APIKeyEnv != "":
-		return &SandboxCredentialError{msg: fmt.Sprintf(
-			"seat %q runs code in %q, and nothing in this run's environment authenticates "+
-				"%q: its auth.mode is api-key, and its key — the variable "+
-				"providers.llm.%s.auth.api_key references, else %s — resolved to nothing. "+
-				"Set that key: export it in the engine's environment, or store it with "+
-				"`crewlet secrets set`; or give this seat its own %s in role.sandbox.env",
-			seat, placement, key, key, profile.APIKeyEnv, profile.APIKeyEnv)}
-	case mode == cliagent.AuthInheritEnv:
-		forwarded := make([]string, 0, 2)
-		for _, name := range []string{profile.TokenEnv, profile.APIKeyEnv} {
-			if name != "" {
-				forwarded = append(forwarded, name)
-			}
+	if sign, fromEnv := agent.ModeSignIn(); fromEnv {
+		lead := fmt.Sprintf("seat %q runs code in %q, and nothing in this run's environment "+
+			"authenticates %q: %s", seat, placement, key, sign.Missing())
+		switch {
+		case len(sign.Variables) == 0:
+			// The mode hands the CLI nothing, so the remedy is the mode
+			// — and the login it names reaches a box only in a local cell.
+			return &SandboxCredentialError{msg: fmt.Sprintf(
+				"%s; that login reaches this seat's box only in a local cell (%s)", lead, localCell)}
+		case sign.Mode == cliagent.AuthAPIKey:
+			return &SandboxCredentialError{msg: fmt.Sprintf(
+				"%s; or give this seat its own %s in role.sandbox.env", lead, sign.Variables[0])}
+		default:
+			return &SandboxCredentialError{msg: fmt.Sprintf(
+				"%s; or set %s in this seat's role.sandbox.env, or give this seat a local cell "+
+					"(%s), which is seeded with the entry's login",
+				lead, strings.Join(sign.Variables, " or "), localCell)}
 		}
-		return &SandboxCredentialError{msg: fmt.Sprintf(
-			"seat %q runs code in %q, and nothing in this run's environment authenticates "+
-				"%q: its auth.mode is inherit-env, which forwards only %s from the engine's "+
-				"own process environment — never the secret store — and none of them is set "+
-				"there. Export one in the engine's environment, set one in this seat's "+
-				"role.sandbox.env, or give this seat a local cell (%s), which is seeded "+
-				"with the entry's login",
-			seat, placement, key, strings.Join(forwarded, " or "), localCell)}
 	}
 	remedy := "Give this seat a local cell — " + localCell
 	switch {

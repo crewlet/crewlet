@@ -117,7 +117,7 @@ func TestTheRemedyFollowsTheEntrysAuthMode(t *testing.T) {
 		},
 		{
 			mode:    cliagent.AuthInheritEnv,
-			want:    []string{"inherit-env", "CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY", "engine's", "never the secret store", "role.sandbox.env", string(sandbox.Direct)},
+			want:    []string{"inherit-env", "CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY", "engine's", "never from the secret store", "role.sandbox.env", string(sandbox.Direct)},
 			notWant: []string{"capture-token", "subscription login", "crewlet secrets set"},
 		},
 		{
@@ -185,6 +185,32 @@ func TestEachModesRemedySignsTheRunIn(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-not-a-real-key")
 	if err := launch(inherit, inheritSeat, nil); err != nil {
 		t.Errorf("an inherit-env entry whose engine environment holds the key was refused: %v", err)
+	}
+}
+
+// A MODE WHOSE PROFILE NAMES NO VARIABLE FOR IT HANDS THE CLI NOTHING —
+// api-key on OpenCode, which reads each provider's key from that provider's own
+// variable and so names no api_key_env. Every write of the configuration
+// refuses the pairing, but an apply only warns, so a node can run it. Its
+// refusal names the mode as the remedy, and the local cell the login it then
+// signs in with needs; never a variable to set, since none would reach the CLI.
+func TestARemedyNamesNoVariableTheModeDoesNotHave(t *testing.T) {
+	t.Parallel()
+	c, seat := creditedCompanyAuth(t, "opencode", cliagent.Auth{Mode: cliagent.AuthAPIKey})
+	err := sandboxCredentials(c, seat, phase.Sandbox, sandbox.E2B, nil)
+	var credErr *SandboxCredentialError
+	if !errors.As(err, &credErr) {
+		t.Fatalf("a remote run nothing signs in answered %v, want a *SandboxCredentialError", err)
+	}
+	for _, want := range []string{"no api_key_env", "set auth.mode: subscription", string(sandbox.Direct)} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %q: %v", want, err)
+		}
+	}
+	for _, bad := range []string{"capture-token", "role.sandbox.env", "crewlet secrets set"} {
+		if strings.Contains(err.Error(), bad) {
+			t.Errorf("the refusal names %q, which reaches nothing under this mode: %v", bad, err)
+		}
 	}
 }
 
