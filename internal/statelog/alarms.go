@@ -888,8 +888,12 @@ var table = []rule{
 		},
 		remedy: "This node is running a build that cannot decode records its peers " +
 			"are writing. Upgrade it. Its copy of each log named has already gone " +
-			"out of service, and that log's operations are answered by the other " +
-			"data nodes; every other log's copy keeps serving here.",
+			"out of service, and what the estate routes to that log is answered " +
+			"by the other data nodes; every other log's copy keeps serving here. " +
+			"On the identity log, what this node answers from its own rows is " +
+			"not routed: the sign-ins, sessions and tokens of anybody the held " +
+			"record may be about, and every directory decision, answer 503 here " +
+			"until the node can read the record.",
 	},
 	{
 		// PER LOG, for the same reason: a read of one log refuses on that
