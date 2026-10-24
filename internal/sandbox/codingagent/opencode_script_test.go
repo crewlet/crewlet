@@ -1107,6 +1107,91 @@ func TestAStopAsTheExporterStartsItsSleepLeavesNoSleep(t *testing.T) {
 	})
 }
 
+// A STOPPED EXPORT LEAVES NO COPY OF THE LOGIN. The exporter is stopped part
+// way through an export, and the stop is acted on as the export ends, before
+// keep has moved it over the document: the file it was writing is dropped
+// with it, so the box holds the login in one place, the document, which is
+// the one place a teardown writes back by its rule.
+//
+// Mutation: leave the exporter's file when it goes, and the box keeps a
+// second copy beside the document.
+func TestAStoppedExportLeavesNoCopyOfTheLogin(t *testing.T) {
+	t.Parallel()
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		j := startScript(t, scriptOpts{
+			shell: sh,
+			login: seededLogin,
+			env:   []string{"FAKE_REFRESH=" + refreshedLogin, "FAKE_EXPORT_SLEEP=1", "FAKE_RUN_UNTIL=released"},
+			times: &codingagent.OpenCodeTimes{Sync: 10 * time.Millisecond},
+		})
+		j.await("the exporter part way through an export", func() bool {
+			_, err := os.Stat(filepath.Join(j.dir, "exporting"))
+			return err == nil
+		})
+		if err := os.WriteFile(filepath.Join(j.dir, "released"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		run := j.wait()
+		if run.code != 0 {
+			t.Fatalf("exit %d:\n%s", run.code, run.stderr)
+		}
+		if run.document != refreshedLogin {
+			t.Errorf("the box's login is %q, want the refreshed export", run.document)
+		}
+		doc := j.paths.CredentialDocument()
+		entries, err := os.ReadDir(filepath.Dir(doc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if e.Name() != filepath.Base(doc) {
+				t.Errorf("the run left %s beside the box's login", e.Name())
+			}
+		}
+	})
+}
+
+// AN EXPORT THE STOP OUTLASTS LEAVES NO COPY EITHER. An exporter in an export
+// longer than the stop's bound never hears the stop: end kills it, which runs
+// no trap, so the file it was writing is unsync's to drop.
+//
+// Mutation: leave the drop to the exporter's own trap, and the box keeps the
+// copy beside the document.
+func TestAnExportTheStopOutlastsLeavesNoCopy(t *testing.T) {
+	t.Parallel()
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		j := startScript(t, scriptOpts{
+			shell: sh,
+			login: seededLogin,
+			env: []string{"FAKE_REFRESH=" + refreshedLogin, "FAKE_EXPORT_SLEEP=5",
+				"FAKE_RUN_UNTIL=released"},
+			times: &codingagent.OpenCodeTimes{Sync: 10 * time.Millisecond,
+				Stop: 300 * time.Millisecond},
+		})
+		j.await("the exporter part way through an export", func() bool {
+			_, err := os.Stat(filepath.Join(j.dir, "exporting"))
+			return err == nil
+		})
+		if err := os.WriteFile(filepath.Join(j.dir, "released"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		run := j.wait()
+		if run.code != 0 {
+			t.Fatalf("exit %d:\n%s", run.code, run.stderr)
+		}
+		doc := j.paths.CredentialDocument()
+		entries, err := os.ReadDir(filepath.Dir(doc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if e.Name() != filepath.Base(doc) {
+				t.Errorf("the run left %s beside the box's login", e.Name())
+			}
+		}
+	})
+}
+
 // A SIGNALLED RUN EXPORTS ITS LOGIN BEFORE IT GOES, beside a server that is
 // going with the group, and exits with the conventional status — PROMPTLY, and
 // leaving nothing behind. A plain sh runs no EXIT trap on a signal it does not
