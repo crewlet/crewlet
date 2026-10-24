@@ -1933,6 +1933,15 @@ The entry reads the token from `auth.token` where it names one, and otherwise
 from the profile's own variable — through the secret store first, then the
 environment — so the token `-capture-token` stores needs no YAML change.
 
+**Only under `auth.mode: subscription`.** `api-key` removes the token variable
+from the CLI's environment, and `inherit-env` forwards it from the engine's own
+environment and never reads the secret store, so for either mode `crewlet llm
+login` refuses `-capture-token` and `-token-stdin` before it mints, reads or
+stores anything, and names what the mode reads instead. An `inherit-env` entry
+can still take a minted token: `-capture-token -print-token` writes it to
+stdout, storing nothing, for you to export as `CLAUDE_CODE_OAUTH_TOKEN` in the
+engine's environment.
+
 ### 3. Username / password, where the CLI genuinely has one
 
 ```bash
@@ -2508,7 +2517,8 @@ run it with the engine's environment to get the engine's answer.
 When none of those authenticates the CLI, `doctor` reports "no sign-in" as a
 problem, naming first a route you configured whose `${VAR}` resolved to
 nothing, and then the routes the entry's `auth.mode` reads — the remedy a
-[remote coding run's refusal](code-sandbox.md#failure-modes) gives too:
+[remote coding run's refusal](code-sandbox.md#failure-modes) gives too, and the
+one `crewlet llm login` names when it refuses a token the mode never reads:
 
 | `auth.mode` | Routes `doctor` names |
 |---|---|

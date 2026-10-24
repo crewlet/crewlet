@@ -261,3 +261,194 @@ func TestDoctorNamesTheEntriesItExamines(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+// tokenLoginProvider is a claude-code entry under mode whose token mint is `sh`
+// printing one, so a capture that ran would have a token to store.
+func tokenLoginProvider(t *testing.T, mode cliagent.AuthMode) []cliAgentProvider {
+	t.Helper()
+	p, err := cliagent.New(cliagent.Config{
+		Key: "claude", Agent: "claude-code", Model: "sonnet", StateDir: t.TempDir(),
+		Timeout: 30 * time.Second, MaxConcurrent: 1,
+		Overrides: map[string]any{
+			"binary":             "sh",
+			"capture_token_args": []any{"-c", "echo sk-ant-oat01-MINTED"},
+		},
+		Auth: cliagent.Auth{Mode: mode},
+	})
+	if err != nil {
+		t.Fatalf("cliagent.New: %v", err)
+	}
+	return []cliAgentProvider{{key: "claude", provider: p}}
+}
+
+// A HEADLESS TOKEN IS STORED ONLY WHERE THE ENTRY'S AUTH MODE READS ONE. Under
+// api-key the token variable is removed from the CLI's environment, and under
+// inherit-env it is forwarded from the engine's own environment, never the
+// secret store — yet `-capture-token` and `-token-stdin` minted and stored one
+// under both, and printed an auth.token snippet that validation refuses under
+// either. Each is now refused before anything is minted, read or stored,
+// naming what the mode reads; inherit-env keeps -print-token, whose token
+// reaches the CLI once exported in the engine's environment. Subscription is
+// the control: it stores, so "nothing stored" below is a refusal and not a
+// store the harness could not reach.
+//
+// Mutation: drop the refusal, and every api-key and inherit-env case stores a
+// token (or prints one under api-key) and goes red.
+func TestATokenIsStoredOnlyWhereTheEntrysAuthModeReadsIt(t *testing.T) {
+	t.Parallel()
+	const tokenVar = "CLAUDE_CODE_OAUTH_TOKEN"
+	for _, tc := range []struct {
+		name    string
+		mode    cliagent.AuthMode
+		req     loginRequest
+		stdin   string
+		stored  string
+		printed string
+		// refused is what the error must name, empty for a run that
+		// succeeds; never is what the error and the output must not.
+		refused []string
+		hint    string
+		never   []string
+	}{
+		{
+			name: "subscription mints and stores", mode: cliagent.AuthSubscription,
+			req: loginRequest{captureToken: true}, stored: "sk-ant-oat01-MINTED",
+		},
+		{
+			name: "subscription stores a token it is handed", mode: cliagent.AuthSubscription,
+			req: loginRequest{tokenStdin: true}, stdin: "sk-ant-oat01-PASTED\n", stored: "sk-ant-oat01-PASTED",
+		},
+		{
+			name: "api-key refuses a mint", mode: cliagent.AuthAPIKey,
+			req: loginRequest{captureToken: true},
+			refused: []string{"auth.mode api-key", "removes " + tokenVar,
+				"providers.llm.claude.auth.api_key, else ANTHROPIC_API_KEY", "`crewlet secrets set`"},
+			never: []string{"${" + tokenVar + "}"},
+		},
+		{
+			name: "api-key refuses a token it is handed", mode: cliagent.AuthAPIKey,
+			req: loginRequest{tokenStdin: true}, stdin: "sk-ant-oat01-PASTED\n",
+			refused: []string{"auth.mode api-key", "ANTHROPIC_API_KEY"},
+			never:   []string{"sk-ant-oat01-PASTED"},
+		},
+		{
+			name: "api-key refuses a mint even to stdout", mode: cliagent.AuthAPIKey,
+			req:     loginRequest{captureToken: true, printToken: true},
+			refused: []string{"auth.mode api-key"},
+			never:   []string{"sk-ant-oat01-MINTED"},
+		},
+		{
+			name: "inherit-env refuses to store a mint", mode: cliagent.AuthInheritEnv,
+			req: loginRequest{captureToken: true},
+			refused: []string{"auth.mode inherit-env", "never from the secret store",
+				"`crewlet llm login claude -capture-token -print-token`", "export it as " + tokenVar},
+			never: []string{"${" + tokenVar + "}"},
+		},
+		{
+			name: "inherit-env refuses to store a token it is handed", mode: cliagent.AuthInheritEnv,
+			req: loginRequest{tokenStdin: true}, stdin: "sk-ant-oat01-PASTED\n",
+			refused: []string{"auth.mode inherit-env", "export the token you have as " + tokenVar},
+			never:   []string{"sk-ant-oat01-PASTED"},
+		},
+		{
+			name: "inherit-env prints a mint to export", mode: cliagent.AuthInheritEnv,
+			req: loginRequest{captureToken: true, printToken: true}, printed: "sk-ant-oat01-MINTED",
+			hint:  "Export it as " + tokenVar + " in the engine's environment",
+			never: []string{"${" + tokenVar + "}"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := bootstrapWithKeyring(t, "k1")
+			req := tc.req
+			req.providers, req.key, req.bootstrapPath = tokenLoginProvider(t, tc.mode), "claude", cfg
+			stdin := strings.NewReader(tc.stdin)
+			req.stdin = stdin
+			var out, errOut bytes.Buffer
+			err := loginLLM(t.Context(), noEnviron, req, &out, &errOut)
+
+			switch {
+			case len(tc.refused) > 0 && err == nil:
+				t.Fatalf("a token the mode never reads was accepted:\n%s%s", out.String(), errOut.String())
+			case len(tc.refused) == 0 && err != nil:
+				t.Fatalf("loginLLM: %v\n%s", err, errOut.String())
+			}
+			for _, want := range tc.refused {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal does not name %q: %v", want, err)
+				}
+			}
+			if len(tc.refused) > 0 && stdin.Len() != len(tc.stdin) {
+				t.Error("the token was read from stdin before the refusal")
+			}
+			if tc.hint != "" && !strings.Contains(errOut.String(), tc.hint) {
+				t.Errorf("stderr does not say %q:\n%s", tc.hint, errOut.String())
+			}
+			if got := strings.TrimSpace(out.String()); tc.printed != "" && got != tc.printed {
+				t.Errorf("stdout = %q, want the token %q alone", got, tc.printed)
+			}
+			said := out.String() + errOut.String()
+			if err != nil {
+				said += err.Error()
+			}
+			for _, bad := range tc.never {
+				if strings.Contains(said, bad) {
+					t.Errorf("the command said %q, which this mode never reads:\n%s", bad, said)
+				}
+			}
+
+			got, _, getErr := secretsCmd(t, cfg, "get", tokenVar, "-reveal")
+			switch {
+			case tc.stored == "" && getErr == nil:
+				t.Errorf("%s was stored as %q, where this run must store nothing", tokenVar, got)
+			case tc.stored != "" && got != tc.stored:
+				t.Errorf("%s = %q (%v), want %q", tokenVar, got, getErr, tc.stored)
+			}
+		})
+	}
+}
+
+// -FROM-HOST RECOMMENDS A TOKEN ONLY WHERE THE ENTRY WOULD READ ONE. After an
+// adopted login it says to prefer `-capture-token`, which avoids the shared
+// refresh token — advice that, under api-key or inherit-env, leads to the
+// refusal above. Subscription is the control: it is told.
+//
+// Mutation: print the preference whatever the mode, and the api-key and
+// inherit-env cases go red.
+func TestAdoptingAHostLoginRecommendsATokenOnlyWhereOneIsRead(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		mode   cliagent.AuthMode
+		prefer bool
+	}{
+		{cliagent.AuthSubscription, true},
+		{cliagent.AuthAPIKey, false},
+		{cliagent.AuthInheritEnv, false},
+	} {
+		t.Run(string(tc.mode), func(t *testing.T) {
+			t.Parallel()
+			home := t.TempDir()
+			path := filepath.Join(home, ".claude", ".credentials.json")
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(`{"token":"personal"}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var out, errOut bytes.Buffer
+			err := loginLLM(t.Context(), noEnviron, loginRequest{
+				providers: tokenLoginProvider(t, tc.mode), key: "claude", home: home,
+				fromHost: true, stdin: strings.NewReader(""),
+			}, &out, &errOut)
+			if err != nil {
+				t.Fatalf("-from-host: %v\n%s", err, errOut.String())
+			}
+			if !strings.Contains(out.String(), "Adopted") {
+				t.Fatalf("the premise: nothing was adopted:\n%s", out.String())
+			}
+			if got := strings.Contains(out.String(), "-capture-token"); got != tc.prefer {
+				t.Errorf("recommends -capture-token = %v, want %v:\n%s", got, tc.prefer, out.String())
+			}
+		})
+	}
+}

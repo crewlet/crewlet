@@ -150,7 +150,7 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 			providers: providers, key: key, home: *home,
 			fromHost: *fromHost, captureToken: *captureToken,
 			tokenStdin: *tokenStdin, username: *username, passwordStdin: *passwordStdin,
-			bootstrapPath: *bootstrapPath, printToken: *printToken,
+			bootstrapPath: *bootstrapPath, printToken: *printToken, stdin: os.Stdin,
 		}, stdout, stderr)
 	case "status":
 		p, err := oneProvider(providers, key)
@@ -449,6 +449,9 @@ type loginRequest struct {
 	passwordStdin bool
 	bootstrapPath string
 	printToken    bool
+	// stdin is what a token, a password or the vendor's own login prompts
+	// are read from — os.Stdin, and the suite's own reader in a test.
+	stdin io.Reader
 }
 
 func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdout, stderr io.Writer) error {
@@ -491,6 +494,12 @@ func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdo
 			"\nThis is a COPY: your own login is untouched, but both copies now share\n"+
 				"one refresh token, and a vendor that rotates them can log out whichever\n"+
 				"side refreshes second.")
+		// ONLY WHERE THE ENTRY READS A STORED TOKEN: under api-key or
+		// inherit-env the token this would recommend reaches nothing
+		// ([refuseUnreadToken]).
+		if _, fromEnv := p.ModeSignIn(); fromEnv {
+			return nil
+		}
 		if tokenVar, err := cliagent.TokenVarName(p.Profile()); err == nil {
 			fmt.Fprintf(stdout,
 				"Prefer `crewlet llm login %s -capture-token`, which mints a headless\n"+
@@ -499,10 +508,13 @@ func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdo
 		return nil
 
 	case req.captureToken, req.tokenStdin:
+		if err = refuseUnreadToken(p, key, req); err != nil {
+			return err
+		}
 		var token string
 		if req.tokenStdin {
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			raw, err := io.ReadAll(os.Stdin)
+			raw, err := io.ReadAll(req.stdin)
 			if err != nil {
 				return fmt.Errorf("reading the token from stdin: %w", err)
 			}
@@ -511,7 +523,7 @@ func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdo
 				return errors.New("stdin held no token")
 			}
 		} else {
-			token, err = p.CaptureToken(ctx, os.Stdin, stderr)
+			token, err = p.CaptureToken(ctx, req.stdin, stderr)
 			if err != nil {
 				return err
 			}
@@ -539,6 +551,16 @@ func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdo
 						"or redirect it to a file you then remove")
 			}
 			fmt.Fprintln(stdout, token)
+			if sign, fromEnv := p.ModeSignIn(); fromEnv && sign.Mode == cliagent.AuthInheritEnv {
+				// Reached only under inherit-env: api-key was refused
+				// above. That mode reads no auth.token, which validation
+				// refuses beside it, so the reference would be one more
+				// thing to undo.
+				fmt.Fprintf(stderr,
+					"Wrote the headless token to stdout and stored NOTHING. Export it as %s "+
+						"in the engine's environment, which auth.mode inherit-env forwards.\n", tokenVar)
+				return nil
+			}
 			fmt.Fprintf(stderr,
 				"Wrote the headless token to stdout and stored NOTHING. "+
 					"Reference it as ${%s}.\n", tokenVar)
@@ -559,7 +581,7 @@ func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdo
 			return errors.New("-username requires -password-stdin: a password on argv is " +
 				"visible in ps and lands in shell history")
 		}
-		raw, err := io.ReadAll(os.Stdin)
+		raw, err := io.ReadAll(req.stdin)
 		if err != nil {
 			return fmt.Errorf("reading the password from stdin: %w", err)
 		}
@@ -574,13 +596,60 @@ func loginLLM(ctx context.Context, environ config.Source, req loginRequest, stdo
 		return nil
 
 	default:
-		if err := p.BrokerLogin(ctx, os.Stdin, stdout, stderr); err != nil {
+		if err := p.BrokerLogin(ctx, req.stdin, stdout, stderr); err != nil {
 			return err
 		}
 		fmt.Fprintf(stdout, "\nLogin written to %s.\n", p.Workspace().CredentialsDir())
 		fmt.Fprintf(stdout, "Verify it with `crewlet llm doctor %s`.\n", key)
 		return nil
 	}
+}
+
+// refuseUnreadToken refuses `-capture-token` and `-token-stdin` for an entry
+// whose auth mode would never read the token, BEFORE one is minted, read or
+// stored.
+//
+// THE MODE DECIDES WHAT THE ENTRY READS, and the command used to ask only the
+// CLI. Under api-key the token variable is removed from the CLI's environment
+// and given no fallback, so a token reaches nothing wherever it is put; under
+// inherit-env the variable is forwarded from the engine's own process
+// environment and the secret store is never read, so a STORED token reaches
+// nothing, while one written to stdout with -print-token does, once exported
+// there. Each was minted and stored all the same, and the `auth.token` snippet
+// printed after it is one validation refuses under either mode — so an
+// operator who followed it was refused, and one who did not was signed in to
+// nothing, which a remote run's refusal and the doctor then reported again.
+//
+// The error says what the mode reads instead, in the words the doctor and the
+// run's refusal use ([cliagent.Provider.ModeSignIn]). A CLI that mints no token
+// at all is left to the mint and the store, which refuse it by name.
+func refuseUnreadToken(p *cliagent.Provider, key string, req loginRequest) error {
+	sign, fromEnv := p.ModeSignIn()
+	tokenVar := p.Profile().TokenEnv
+	if !fromEnv || tokenVar == "" {
+		return nil
+	}
+	if sign.Mode == cliagent.AuthAPIKey {
+		return fmt.Errorf(
+			"%s runs under auth.mode api-key, which removes %s from the CLI's environment, so a "+
+				"headless token would reach nothing, and none was minted or stored. The mode %s: "+
+				"%s — or set auth.mode: subscription to sign it in with a token",
+			key, tokenVar, sign.Reads, sign.Supply)
+	}
+	if req.printToken {
+		return nil
+	}
+	instead := fmt.Sprintf("export the token you have as %s in the engine's environment", tokenVar)
+	if req.captureToken {
+		instead = fmt.Sprintf("mint it to stdout, storing nothing, with `crewlet llm login %s "+
+			"-capture-token -print-token`, and export it as %s in the engine's environment",
+			key, tokenVar)
+	}
+	return fmt.Errorf(
+		"%s runs under auth.mode inherit-env, which %s, so a stored token would reach nothing, "+
+			"and none was minted or stored. Instead, %s — or set auth.mode: subscription, "+
+			"which reads a stored token",
+		key, sign.Reads, instead)
 }
 
 func exportLLM(ctx context.Context, environ config.Source, providers []cliAgentProvider, key string, toStore bool, bootstrapPath string, stdout io.Writer) error {

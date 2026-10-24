@@ -2119,6 +2119,18 @@ export` as the fix, since the engine would run that entry signed out.
 | `-capture-token -print-token` | The same mint, written to **stdout** and stored nowhere — for an operator whose secrets live in somebody else's manager. It **refuses to run on a terminal**: this is a credential, and a token in a scrollback outlives the command, while a screen-share or a shell history outlives the scrollback. Pipe it or redirect it. The two-step alternative (`-capture-token`, then `secrets get -reveal`) writes the token into the store on the way past, which is precisely what this avoids. |
 | `-token-stdin` / `-username U -password-stdin` | Store a credential you already hold, where the CLI genuinely has one |
 
+A headless token is read only under `auth.mode: subscription`, so `-capture-token`
+and `-token-stdin` are **refused before anything is minted, read or stored** for
+an entry whose mode would never read one, naming what that mode reads instead —
+the words `doctor` uses. Under `api-key` the CLI's token variable is removed from
+its environment, so the error names the key: `auth.api_key`, else the CLI's key
+variable, stored with `crewlet secrets set` or exported. Under `inherit-env` the
+token variable is forwarded from the engine's own environment and the secret
+store is never read, so storing a token is refused while `-capture-token
+-print-token` is not: export what it prints as that variable in the engine's
+environment, which is what the line it ends with says. `-from-host` recommends
+`-capture-token` after it runs only under `subscription`.
+
 The brokered and `-username` shapes **fail when the CLI left no login** where
 the entry reads one — exiting 0 having stored nothing, as backing out of the
 vendor's sign-in does — rather than printing that a login was written. `login`,
