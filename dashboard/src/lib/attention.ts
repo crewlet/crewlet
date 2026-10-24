@@ -216,7 +216,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       id: "unconfigured",
       severity: "critical",
       subject: "engine",
-      icon: "sliders-vertical",
+      icon: "settings",
       title: "No company configuration is active",
       detail: "Import a company to start.",
       path: ["settings", "config"],

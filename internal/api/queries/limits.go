@@ -72,6 +72,10 @@ type LimitRow struct {
 	// anything: a `notification_rate_limit` of 0 is no rate limit, and an
 	// `onboarding_max_tool_rounds` of 0 is no onboarding pass.
 	Off bool `json:"off"`
+	// DefaultOff is the same question asked of Default, so a screen that
+	// says which default a set value replaced says Off where the default is
+	// no limit, rather than keeping its own copy of which zeros are off.
+	DefaultOff bool `json:"default_off"`
 }
 
 // LimitsAnswer is what `limits` answers.
@@ -140,11 +144,12 @@ func limitsAnswer(c *config.Company) LimitsAnswer {
 	defaults := config.DefaultCompany()
 	out := LimitsAnswer{Limits: make([]LimitRow, 0, len(limits))}
 	for _, l := range limits {
-		value := l.read(c)
+		value, def := l.read(c), l.read(&defaults)
 		out.Limits = append(out.Limits, LimitRow{
 			Key: l.key, Group: l.group, Unit: l.unit,
-			Value: value, Default: l.read(&defaults),
-			Off: l.zeroIsOff && value == 0,
+			Value: value, Default: def,
+			Off:        l.zeroIsOff && value == 0,
+			DefaultOff: l.zeroIsOff && def == 0,
 		})
 	}
 	return out

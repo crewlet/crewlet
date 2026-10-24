@@ -50,6 +50,7 @@ import {
   TableEntityCell,
   TableStatusCell,
   TableTextCell,
+  type DataGridActivationEvent,
 } from "@crewlethq/ui";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
@@ -511,7 +512,7 @@ export function Runs() {
   const { open: openPeek } = usePeekControls();
 
   const openRun = useCallback(
-    (r: SandboxRun, e: React.MouseEvent | React.KeyboardEvent) => {
+    (r: SandboxRun, e: DataGridActivationEvent) => {
       const go = () => openPeek({ kind: "run", id: r.turn_id });
       // THE GRID HANDS THIS BOTH EVENTS. `rowPeekHandler` is the frame's one
       // copy of "which clicks mean elsewhere" and reads a mouse event — ⌘,

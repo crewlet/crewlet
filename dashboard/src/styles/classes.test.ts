@@ -235,8 +235,8 @@ function args(list: string): string[] {
  *
  * BALANCED RATHER THAN LINE-BY-LINE, which is the one thing this grew. The
  * reader it replaced matched `className={cx(` and then took `[^)]*` on that
- * one line, so every `cx(` prettier had broken across lines — `grid-th`,
- * `grid-row`, `phase-card`, `tool-row` and a hundred others — contributed
+ * one line, so every `cx(` prettier had broken across lines — `crewlet-data-grid__th`,
+ * `crewlet-data-grid__row`, `phase-card`, `tool-row` and a hundred others — contributed
  * NOTHING, while the doc claimed "anything a screen hard-codes is covered".
  * Ten more names are checked now and none of them was undeclared, which is
  * luck rather than evidence: nothing had been looking.
@@ -604,8 +604,18 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
-    name: "crewlet-card",
-    why: "uilet's Card writes it on every card. styles/frame.css draws the dashboard's own DataGrid flush inside one (`.crewlet-card .grid-wrap`): the card is the frame, and a bordered grid a pixel inside its border was a double edge on fifteen pages that each had to remember the `flush` prop. A rule about OUR grid's composition inside the package's component; the card itself is untouched.",
+    name: "crewlet-data-grid",
+    why: "uilet's DataGrid writes it on every list's root. styles/screens.css composes Spend's two phone tables inside it (`.spend-tasks`, `.spend-agents`): a task's compact row reads along its title's baseline and its key is a column, and a seat's day bar steps aside on the compact row. Rules about OUR composition of the package's component; the grid itself is untouched.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-data-grid__row",
+    why: "uilet's DataGrid writes it on every row. styles/screens.css gives the artifacts list's rows their two-line height (`.artifacts-list`) and sets a task's compact phone row on its baseline (`.spend-tasks`). Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-data-grid__cell",
+    why: "uilet's DataGrid writes it on every cell. styles/frame.css lets a turn's summary and its item key wrap inside a phone card's cell (`.turn-what`), and styles/screens.css sets the artifacts list's quieter facts and a revision's author line inside one. Rules about OUR cells' content inside the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -687,21 +697,6 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
-    name: "crewlet-stat-group",
-    why: "uilet's StatGroup writes it on the tile row. Below 1024px the kit folds any row into two columns, so an ODD count leaves its last tile beside an empty half-row that reads as a tile failing to load (Secrets' and Models & keys' three tiles stood 2 + 1 on a phone, the third tile's hairline stopping mid-panel). styles/screens.css lets that last tile take the whole row, restating the kit's own step because a media query cannot be borrowed — and makes each tile in the row a subgrid over its lines (see crewlet-statcard). Another rule about OUR composition of the package's component.",
-    pkg: "@crewlethq/ui/styles.css",
-  },
-  {
-    name: "crewlet-statcard",
-    why: "uilet's StatCard writes it on each tile. Inside a StatGroup, styles/screens.css makes the tile a subgrid over the group's rows, one per line the tile draws: the kit stacks label, number and sub in a flex column per tile, so a label that wrapped pushed its own number down and no other (\"Behind on config\" beside a node's peek at 1440, its figure 18px below the other three). styles/stats.test.tsx holds the span to the lines the kit renders. Another rule about OUR composition of the package's component.",
-    pkg: "@crewlethq/ui/styles.css",
-  },
-  {
-    name: "crewlet-statcard__sub",
-    why: "uilet's StatCard writes it for the line under the number. styles/screens.css lets it wrap rather than end in an ellipsis: inside a StatGroup the grid already stretches every tile in a row to one height, so the kit's one-line reserve buys nothing there, and `nowrap` cut every longer sentence — \"6 seats idle and waiting for …\" on a phone, the input/output caption at 1440. Another rule about OUR composition of the package's component.",
-    pkg: "@crewlethq/ui/styles.css",
-  },
-  {
     name: "crewlet-disclosure__trigger",
     why: "uilet's Disclosure writes it. styles/screens.css widens its gap inside a .tool-row, which is a rule about OUR composition of the package's component — the one kind of class this tree declares and never writes.",
     pkg: "@crewlethq/ui/styles.css",
@@ -712,8 +707,13 @@ const ALLOWED: Allowed[] = [
     pkg: "@crewlethq/ui/styles.css",
   },
   {
-    name: "crewlet-tabs",
-    why: "uilet's Tabs writes it on its row. styles/frame.css sizes the row inside ObjectTabs's measuring twin (`.object-tabs-twin-row .crewlet-tabs`) to its max-content width with no scroll, because the twin exists to be measured at every tab's natural width and the package's underline row is `width: 100%` and scrolls — a twin laid out that way reports the box's width, not the tabs'. Another rule about OUR composition of the package's component.",
+    name: "crewlet-property-list",
+    why: "uilet's PropertyList writes it. styles/screens.css pulls an inline picker's ghost trigger (`.cell-edit`) inside a properties rail's value back by its own padding, so Status, Priority, Type and Labels start on the column Assignee and Due start on rather than ten pixels right of it. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-description-list__detail",
+    why: "uilet's DescriptionList, which PropertyList draws each section with, writes it. styles/screens.css pulls an inline picker's ghost trigger (`.cell-edit`) inside a properties rail's value back by its own padding, so Status, Priority, Type and Labels start on the column Assignee and Due start on rather than ten pixels right of it. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
 ];

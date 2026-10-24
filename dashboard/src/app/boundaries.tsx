@@ -28,7 +28,16 @@
  */
 
 import { Suspense, type ReactNode } from "react";
-import { Button, Callout, ErrorBoundary, Modal, Skeleton, SidebarNav } from "@crewlethq/ui";
+import {
+  AppShell,
+  Button,
+  Callout,
+  ErrorBoundary,
+  Modal,
+  Skeleton,
+  SidebarNav,
+  StatusDot,
+} from "@crewlethq/ui";
 import { ChunkLoadError } from "./lazyScreen.ts";
 
 /** Reload the page — the one fix for a chunk from another engine version. */
@@ -203,29 +212,45 @@ export function LayerBoundary({
  * `resetKey` is the path, as for the screen: the sidebar is re-rendered on
  * every navigation, and a section that threw on one screen's data gets a
  * fresh chance on the next.
+ *
+ * `compact` is for the rail head's status, which has a dot's room rather than
+ * a section's: the fallback is the kit's head status in danger, named for
+ * what failed, and pressing it tries again.
  */
 export function RailBoundary({
   label,
   resetKey,
+  compact = false,
   children,
 }: {
   label: string;
   resetKey: string;
+  compact?: boolean;
   children: ReactNode;
 }) {
   return (
     <ErrorBoundary
       resetKey={resetKey}
-      fallback={(_error, reset) => (
-        <SidebarNav.Group label={label}>
-          <p className="side-failed" role="alert">
-            Could not be drawn.{" "}
-            <Button variant="ghost" size="small" onClick={reset}>
-              Try again
-            </Button>
-          </p>
-        </SidebarNav.Group>
-      )}
+      fallback={(_error, reset) =>
+        compact ? (
+          <AppShell.RailStatus
+            icon={<StatusDot tone="danger" />}
+            label={`${label} could not be drawn. Try again`}
+            onClick={reset}
+          >
+            {`${label} could not be drawn`}
+          </AppShell.RailStatus>
+        ) : (
+          <SidebarNav.Group label={label}>
+            <p className="side-failed" role="alert">
+              Could not be drawn.{" "}
+              <Button variant="ghost" size="small" onClick={reset}>
+                Try again
+              </Button>
+            </p>
+          </SidebarNav.Group>
+        )
+      }
     >
       {children}
     </ErrorBoundary>

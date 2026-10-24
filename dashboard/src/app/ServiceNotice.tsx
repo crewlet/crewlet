@@ -10,12 +10,12 @@
  * opens one. It draws this notice in its place: what the company runs
  * instead, in the engine's word, and why the page asked for is not here.
  *
- * It was a redirect to the service's card on Company › Integrations once, and
- * Integrations is an administrator's page: a reader holding only Tracker
- * followed a link to Work and landed on "You need Admin access". So the
- * notice is drawn where the address is, readable by anybody signed in, and
- * offers Integrations only to a reader who may open it (`closedBy`, the rule
- * every lock is drawn by).
+ * It was a redirect to the service's page on Company › Integrations once,
+ * which took a reader away from the address they followed to a page about
+ * what the company runs. So the notice is drawn where the address is,
+ * readable by anybody signed in, and offers Integrations to a reader who may
+ * open it (`closedBy`, the rule every lock is drawn by), which is every reader
+ * now: the services' pages are the overview everybody holds.
  */
 
 import { ButtonLink, EmptyState } from "@crewlethq/ui";
@@ -69,7 +69,10 @@ export function ServiceNotice({ service, path }: { service: Service; path: reado
       description={noticeText(service, path)}
       action={
         canOpen ? (
-          <ButtonLink variant="secondary" href={href(INTEGRATIONS_PATH)}>
+          <ButtonLink
+            variant="secondary"
+            href={href([...INTEGRATIONS_PATH, service === "tracker" ? "works" : "knowledge"])}
+          >
             See what is built into Crewlet
           </ButtonLink>
         ) : undefined

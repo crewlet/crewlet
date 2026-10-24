@@ -219,6 +219,21 @@ test("the Data panel lists the engine's sources with the rows each reader may re
   expect(sent.some((r) => r.path.includes("/versions/"))).toBe(false);
 });
 
+// GROUPED BY AREA, one list per area named by it: a tag on every row naming
+// its area was a column a reader learned to skip.
+test("the Data panel groups its sources by area, with no tag per row", async () => {
+  mount();
+  const panel = data();
+  await waitFor(() => expect(within(panel).getByText("Work items")).toBeTruthy());
+  const lists = within(panel).getAllByRole("list");
+  expect(lists.length).toBeGreaterThan(0);
+  for (const list of lists) {
+    const name = list.getAttribute("aria-label") ?? "";
+    expect(within(panel).getByRole("heading", { level: 3, name })).toBeTruthy();
+  }
+  expect(panel.querySelector(".crewlet-dataset-source__kind")).toBeNull();
+});
+
 test("a source the reader may not read says why and offers no figure", async () => {
   mount();
   const panel = data();

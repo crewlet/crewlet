@@ -37,7 +37,8 @@ import { useRest } from "~/lib/useRest.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { rest, type SecretRow } from "~/protocol/index.ts";
 import { OPERATOR_SOURCE } from "~/contract/audit.ts";
-import { CATALOG, entryState } from "~/routes/settings/Integrations.tsx";
+import { CATALOG, entryState } from "~/routes/settings/integrations/catalogue.tsx";
+import { ADMIN } from "~/lib/access.ts";
 import { useRetentionReport } from "~/routes/settings/Retention.tsx";
 import {
   FINDING_WORDS,
@@ -637,6 +638,8 @@ export const widgets = defineWidgets([
     label: "Integrations",
     description: "Connected tools and any that need attention",
     icon: PlugGlyph,
+    // THE CONNECTED APPS ARE AN ADMIN'S READING on a page every reader opens.
+    grants: [ADMIN],
     hue: "purple",
     size: { w: 4, minW: 3, minH: 6, vertical: true },
     once: true,

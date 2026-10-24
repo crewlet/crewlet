@@ -89,13 +89,13 @@
 import { useMemo } from "react";
 import { EmptyValue, Tag, TableKeyCell, TableDateCell, TableEntityCell } from "@crewlethq/ui";
 
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import {
   columnChoicesOf,
-  DataGrid,
   type ColumnChoice,
-  type GridBand,
-  type GridColumn,
-} from "~/app/frame/DataGrid.tsx";
+  type DataGridBand,
+  type DataGridColumn,
+} from "@crewlethq/ui";
 import { linkedSeat } from "~/app/frame/cells.tsx";
 import { peekRow } from "~/app/frame/DetailRail.tsx";
 import { Assignee, DueMark, TypeIcon, blockedBy, type RowChrome } from "~/components/work.tsx";
@@ -154,7 +154,7 @@ type SortKey = (typeof COLUMN_SORT_KEYS)[number];
  * inert — which is the honest rendering for `status`, `assignee` and the key
  * itself, none of which the engine has an order for.
  */
-function sorted(key: SortKey, column: Omit<GridColumn<WorkSummary>, "key">) {
+function sorted(key: SortKey, column: Omit<DataGridColumn<WorkSummary>, "key">) {
   return { key, ...column };
 }
 
@@ -210,9 +210,9 @@ interface ColumnContext {
  * one — and they sit where they would be drawn if it did, before the type and
  * the seat, so the timestamp stays the row's last column either way.
  */
-function listColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
+function listColumns(ctx: ColumnContext): DataGridColumn<WorkSummary>[] {
   const { chrome, detail, now, workspace } = ctx;
-  const out: GridColumn<WorkSummary>[] = [
+  const out: DataGridColumn<WorkSummary>[] = [
     {
       key: "priority",
       // A GLYPH HEAD AND THEREFORE NOT SORTABLE. The mark is the whole column
@@ -338,9 +338,9 @@ function listColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
  * finding the same badge at a different x on every row, because the badge's
  * position depends on how long the title above it was.
  */
-function tableColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
+function tableColumns(ctx: ColumnContext): DataGridColumn<WorkSummary>[] {
   const { chrome, detail, now, workspace } = ctx;
-  const out: GridColumn<WorkSummary>[] = [
+  const out: DataGridColumn<WorkSummary>[] = [
     {
       key: "key",
       header: "Key",
@@ -446,7 +446,7 @@ function tableColumns(ctx: ColumnContext): GridColumn<WorkSummary>[] {
  * opens with the project and a row whose whole point is that the title has the
  * space cannot spend a column saying it twice.
  */
-function projectColumn(optional: boolean): GridColumn<WorkSummary> {
+function projectColumn(optional: boolean): DataGridColumn<WorkSummary> {
   return {
     key: "project",
     header: "Project",
@@ -456,7 +456,7 @@ function projectColumn(optional: boolean): GridColumn<WorkSummary> {
   };
 }
 
-function startColumn(now: number): GridColumn<WorkSummary> {
+function startColumn(now: number): DataGridColumn<WorkSummary> {
   return sorted("start", {
     header: "Start",
     shrink: true,
@@ -471,7 +471,7 @@ function startColumn(now: number): GridColumn<WorkSummary> {
 // PROJECT, and the engine orders by one or the other — so a single "Size"
 // column falling back from one to the other would sort by a number half its
 // cells were not showing.
-function pointsColumn(): GridColumn<WorkSummary> {
+function pointsColumn(): DataGridColumn<WorkSummary> {
   return sorted("points", {
     header: "Points",
     shrink: true,
@@ -483,7 +483,7 @@ function pointsColumn(): GridColumn<WorkSummary> {
   });
 }
 
-function estimateColumn(): GridColumn<WorkSummary> {
+function estimateColumn(): DataGridColumn<WorkSummary> {
   return sorted("estimate", {
     header: "Estimate",
     shrink: true,
@@ -502,7 +502,7 @@ function estimateColumn(): GridColumn<WorkSummary> {
 // RELATIVE, WITH THE INSTANT ON THE TITLE: [TableDateCell]'s own rendering, which
 // is what the compact row spelled by hand. One value, one drawing, wherever it
 // appears: that is the rule `app/frame/cells.tsx` exists for.
-function updatedColumn(now: number): GridColumn<WorkSummary> {
+function updatedColumn(now: number): DataGridColumn<WorkSummary> {
   return sorted("updated", {
     header: "Updated",
     shrink: true,
@@ -516,7 +516,7 @@ function updatedColumn(now: number): GridColumn<WorkSummary> {
 }
 
 /**
- * WHAT GIVES WAY FIRST when a set does not fit its box — `GridColumn.drop`,
+ * WHAT GIVES WAY FIRST when a set does not fit its box — `DataGridColumn.drop`,
  * lowest first. Beside a peek at 1280 the list is about 450px wide, and with
  * every column kept the title was 70px of "Which regi…".
  *
@@ -560,9 +560,9 @@ const TABLE_GIVES_WAY: Record<string, number> = {
 const TITLE_FLOOR = "16rem";
 
 function givingWay(
-  columns: GridColumn<WorkSummary>[],
+  columns: DataGridColumn<WorkSummary>[],
   order: Record<string, number>,
-): GridColumn<WorkSummary>[] {
+): DataGridColumn<WorkSummary>[] {
   return columns.map((c) => {
     if (c.key === "title") return { ...c, floor: TITLE_FLOOR };
     // THE STATUS IS DRAWN WHOLE. It is the one fact a queue is scanned for,
@@ -583,7 +583,7 @@ function givingWay(
  * second declaration of them, wrong the first time a column is added and
  * looking exactly like a correct one.
  */
-function buildColumns(shape: GridShape, ctx: ColumnContext): GridColumn<WorkSummary>[] {
+function buildColumns(shape: GridShape, ctx: ColumnContext): DataGridColumn<WorkSummary>[] {
   const out =
     shape === "table"
       ? givingWay(tableColumns(ctx), TABLE_GIVES_WAY)
@@ -714,7 +714,7 @@ export function WorkGrid({
     [detail, chrome],
   );
 
-  const bands = useMemo<GridBand<WorkSummary>[] | undefined>(() => {
+  const bands = useMemo<DataGridBand<WorkSummary>[] | undefined>(() => {
     if (groups.length === 0) return undefined;
     return groups.map((group) => ({
       key: group.key || "—",
@@ -839,7 +839,7 @@ function trashColumns(
   removals: Removals,
   chrome: RowChrome,
   now: number,
-): GridColumn<WorkSummary>[] {
+): DataGridColumn<WorkSummary>[] {
   return [
     sorted("removed", {
       header: "Removed",

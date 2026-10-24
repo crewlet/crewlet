@@ -9,30 +9,35 @@
  *
  * THE BARS ARE THE CALLER'S, never folded here, and WHERE THEY CAME FROM IS A
  * REQUIRED PROP. The event log asks the ENGINE for its series over the whole
- * window, which is the better answer wherever it exists — the same rule
- * `internal/tokens` states for the spend series one screen over — while the
+ * window, which is the better answer wherever it exists (the same rule
+ * `internal/tokens` states for the spend series one screen over), while the
  * tracker's change log has no such read and buckets the pages it is holding.
  * Those are two different claims, so `over` says which, once, in the one
  * sentence on this component a sighted reader never sees. It is required for
  * the reason `FacetRail`'s is: a number whose scope is optional is a number
- * that will be wrong on the second caller, and it was — this component
+ * that will be wrong on the second caller, and it was: this component
  * announced "3 events in this window" over a chart whose visible caption said
  * three changes on one page, which is the wrong scope AND the wrong noun on a
  * screen where nothing is an event.
  *
  * A BAR IS A CONTROL, not a picture. Clicking one narrows the window to it,
- * which is the gesture a reader already expects from every log they have used —
+ * which is the gesture a reader already expects from every log they have used,
  * and the reason the axis is worth having at all, since "what happened in that
  * spike" is the question the spike creates.
  *
  * AND AN AXIS WITHOUT DATES IS NOT AN AXIS. A seven-day window holding one busy
  * day drew a single bar hard against the right edge of an empty plot with
  * nothing under it, which reads as a chart that failed to load rather than as a
- * company that was quiet until yesterday. `axis` puts the dates back — see
- * [ticksFor] for what is labelled and why.
+ * company that was quiet until yesterday. `axis` puts the dates back; the
+ * kit's `histogramTicks` decides which buckets are labelled and why.
+ *
+ * THE DRAWING IS THE KIT'S `Histogram` (the slot and its fill, the floors, the
+ * failed foot, the tick placement). What lives here is what only this product
+ * can answer: the engine's bar shape, the bucket a click narrows to, the
+ * caller's noun and scope, and every date in the reader's chosen zone.
  */
 
-import type { CSSProperties } from "react";
+import { Histogram as KitHistogram, type HistogramBar } from "@crewlethq/ui";
 
 import { fmtDate, fmtDateCompact, fmtMinute, plural, toWall } from "~/lib/format.ts";
 import type { FacetScope } from "~/ui/FacetRail.tsx";
@@ -44,31 +49,13 @@ export interface Bar {
   at: string;
   count: number;
   /**
-   * How many of `count` failed, where the engine split them — `event_series`
-   * sends it on every bar. Drawn as the danger-toned foot of the fill and
+   * How many of `count` failed, where the engine split them (`event_series`
+   * sends it on every bar). Drawn as the danger-toned foot of the fill and
    * said in the bar's title; absent draws the plain fill, because a split the
    * answer did not carry is not a split of zero.
    */
   failed?: number;
 }
-
-/**
- * The floor is in PIXELS, not in percent, and the height is the TRUE ratio.
- *
- * A percentage floor scales with the panel and swallows real differences: over
- * a day whose busiest hour holds six thousand events, a floor of 8% drew a
- * bucket of 4 and a bucket of 400 at exactly the same height — an order of
- * magnitude erased to make a sliver visible. Two pixels is what "visible"
- * actually means, it does not grow with the chart, and every count above it
- * keeps its real proportion.
- *
- * Empty gets one pixel less than the smallest real count, because the two are
- * different facts: a zero-height element is invisible, so an empty stretch
- * would read as a gap in the CHART rather than as a quiet stretch in the
- * COMPANY, and a reader who has not counted the bars cannot tell those apart.
- */
-const EMPTY_PX = 2;
-const MIN_PX = 3;
 
 /** What the total is a total OF, as the sentence that says it. */
 const SCOPE_SENTENCE: Record<FacetScope, string> = {
@@ -93,7 +80,7 @@ export function Histogram({
   bucket: "minute" | "hour" | "day";
   /** How many of them there are, over whatever `over` names. */
   total: number;
-  /** What one of them IS — "event", "change" — in the singular. */
+  /** What one of them IS ("event", "change"), in the singular. */
   noun: string;
   /** Whether the bars and the total cover the whole window or only the pages
    *  this client is holding. Required, never inferred: see the module doc. */
@@ -101,11 +88,11 @@ export function Histogram({
   /** Narrow the window to one bar. Omitted leaves the bars as a picture. */
   onPick?: (next: Interval) => void;
   /** Draw the labelled time axis under the bars. Optional because a chart can
-   *  be narrower than its own labels — an inline strip beside a figure has no
-   *  room for a date — and a tick row that collides with itself is worse than
+   *  be narrower than its own labels (an inline strip beside a figure has no
+   *  room for a date), and a tick row that collides with itself is worse than
    *  none. Every full-width log in this product passes it. */
   axis?: boolean;
-  /** The clock the axis's own date rule reads — [fmtDateCompact] drops the year
+  /** The clock the axis's own date rule reads: [fmtDateCompact] drops the year
    *  in the reader's CURRENT year, and a component that read the clock itself
    *  would decide that separately from every other date on the screen. Every
    *  caller drawing an axis holds a `useNow()` and passes it. */
@@ -113,96 +100,41 @@ export function Histogram({
   height?: number;
   label?: string;
 }) {
-  const peak = Math.max(1, ...bars.map((b) => b.count));
   const step = STEP_MS[bucket];
+  // THE ENGINE'S ADDRESS FOR A BUCKET IS ITS START, and the kit's is the same
+  // instant in milliseconds; the index carries the original string back, so
+  // every label reads the engine's own spelling of the bucket.
+  const drawn: HistogramBar[] = bars.map((b) => ({
+    t: Date.parse(b.at),
+    v: b.count,
+    part: b.failed,
+  }));
+  const title = (bar: HistogramBar, index: number) => {
+    const failed = Math.min(bar.v, bar.part ?? 0);
+    return (
+      `${when(bars[index]!.at, bucket)} · ${plural(bar.v, noun)}` +
+      (failed > 0 ? `, ${failed.toLocaleString()} failed` : "")
+    );
+  };
   return (
-    <div className="histogram-figure">
-      <div className="histogram" style={{ height }} role="group" aria-label={label}>
-        {bars.map((b) => {
-          const at = Date.parse(b.at);
-          const failed = Math.min(b.count, b.failed ?? 0);
-          const title =
-            `${when(b.at, bucket)} · ${plural(b.count, noun)}` +
-            (failed > 0 ? `, ${failed.toLocaleString()} failed` : "");
-          const size = {
-            height: `${(b.count / peak) * 100}%`,
-            minHeight: b.count === 0 ? EMPTY_PX : MIN_PX,
-          };
-          // THE FAILED SHARE IS THE FOOT OF THE SAME FILL, not a second bar
-          // beside it: the column's height is still the bucket's whole count,
-          // so a reader compares totals as before and reads the failures as a
-          // part of each rather than as a series of their own.
-          const fill = (
-            <span className="histogram-fill" style={size}>
-              {failed > 0 && (
-                <span
-                  className="histogram-failed"
-                  style={{ height: `${(failed / b.count) * 100}%` }}
-                />
-              )}
-            </span>
-          );
-          // THE CONTROL IS THE SLOT AND THE BAR IS A FILL INSIDE IT. Drawn as
-          // the slot itself, a seven-day window holding one busy day painted a
-          // solid block a seventh of the card wide — a panel rather than a
-          // quantity — which is the defect the spend chart's columns already
-          // had fixed. The fill takes the kit's column proportion (see
-          // `.histogram-fill`), while the click target stays the whole slot,
-          // because a narrower bar is no reason for a smaller control.
-          //
-          // A BUTTON WHEN IT DOES SOMETHING AND A DIV WHEN IT DOES NOT, rather
-          // than a button that ignores the click: a keyboard reader tabbing
-          // through eighty inert controls is worse served than one that is
-          // told there is nothing to operate.
-          return onPick && Number.isFinite(at) ? (
-            <button
-              key={b.at}
-              type="button"
-              className="histogram-bar"
-              title={title}
-              aria-label={title}
-              data-empty={b.count === 0 ? "" : undefined}
-              onClick={() => onPick({ from: at, to: at + step })}
-            >
-              {fill}
-            </button>
-          ) : (
-            <div
-              key={b.at}
-              className="histogram-bar"
-              title={title}
-              data-empty={b.count === 0 ? "" : undefined}
-            >
-              {fill}
-            </div>
-          );
-        })}
-        {/* THE TOTAL IS THE CALLER'S, stated rather than summed by the reader
-            or by this component: summed here it would agree today and stop
-            agreeing the first time a cap is added to either half — and it
-            carries the caller's own noun and scope, because those are facts
-            about the question rather than about the drawing. */}
-        <span className="sr-only">
-          {plural(total, noun)} {SCOPE_SENTENCE[over]}
-        </span>
-      </div>
-      {axis && bars.length > 0 && (
-        // ARIA-HIDDEN: every bar already carries its own bucket in `title`,
-        // and a screen reader walking five loose dates under a chart it has
-        // just been given a total for is told nothing it can place.
-        <div className="histogram-axis" aria-hidden="true">
-          {ticksFor(bars.length).map((index) => (
-            <span
-              key={bars[index]!.at}
-              className="histogram-tick"
-              style={edgeOf(index, bars.length)}
-            >
-              {tick(bars[index]!.at, bucket, now)}
-            </span>
-          ))}
-        </div>
-      )}
-    </div>
+    <KitHistogram
+      bars={drawn}
+      label={label}
+      height={height}
+      // THE TOTAL IS THE CALLER'S, stated rather than summed: summed it would
+      // agree today and stop agreeing the first time a cap is added to either
+      // half, and it carries the caller's own noun and scope.
+      summary={`${plural(total, noun)} ${SCOPE_SENTENCE[over]}`}
+      formatTitle={title}
+      formatTick={axis ? (_bar, index) => tick(bars[index]!.at, bucket, now) : undefined}
+      onSelect={
+        onPick
+          ? (bar) => {
+              if (Number.isFinite(bar.t)) onPick({ from: bar.t, to: bar.t + step });
+            }
+          : undefined
+      }
+    />
   );
 }
 
@@ -212,79 +144,6 @@ const STEP_MS: Record<"minute" | "hour" | "day", number> = {
   hour: 60 * 60_000,
   day: 24 * 60 * 60_000,
 };
-
-/**
- * How many labels an axis carries at most.
- *
- * FIVE, which is what the narrowest layout this product supports can hold: a
- * chart there is about 320px wide and a date at the axis's own size measures
- * about 45px — the width `lib/timeline.ts` measured for the roadmap's own
- * ticks — so five labels sit 80px apart and a sixth starts crowding the fifth.
- * A cap rather than a pixel calculation because a bar's width is the flex
- * layout's answer and is not known here; the one thing that IS known is how
- * many labels fit, and dropping a tick changes what the axis SAYS rather than
- * how it looks.
- */
-const MAX_TICKS = 5;
-
-/**
- * Which bars get a label: the first, the last, and an EVEN STRIDE between.
- *
- * ONE WHOLE STRIDE, never a rounded fraction. Rounding `i * (n - 1) / 4`
- * spread five labels over a seven-day window as Sep 22, 24, 25, 27, 28 — gaps
- * of two, one, two and one days, which reads as days missing from the data.
- * So the stride is the smallest whole number of bars that keeps the labels at
- * or under [MAX_TICKS], preferring one that lands exactly on the last bar
- * (seven days: every other day, four labels); where none does, the stride
- * holds between the interior labels and a label that would crowd the last one
- * — nearer than half a stride — gives way to it.
- *
- * EVENLY OVER THE BARS rather than on the calendar. `lib/timeline.ts` rules its
- * axis on weeks because a roadmap's columns are days and a reader navigates it
- * by date; a histogram's columns are whatever bucket the window chose — minutes,
- * hours or days — and a calendar rule over minute buckets would put one tick on
- * an axis of sixty. So the spread is positional, and every tick names the bucket
- * it actually sits over.
- *
- * BOTH ENDS ALWAYS, because they are the two the window's own control already
- * names: an axis whose first and last labels disagree with the picker above it
- * is the one failure a reader cannot diagnose.
- */
-export function ticksFor(bars: number): number[] {
-  if (bars <= 0) return [];
-  if (bars <= MAX_TICKS) return Array.from({ length: bars }, (_, i) => i);
-  const span = bars - 1;
-  const least = Math.ceil(span / (MAX_TICKS - 1));
-  // AN EXACT STRIDE WHERE ONE IS NEAR: up to half again the least one, so a
-  // prime span does not fall back to its two ends alone.
-  let stride = least;
-  for (let s = least; s <= Math.ceil(least * 1.5); s++) {
-    if (span % s === 0) {
-      stride = s;
-      break;
-    }
-  }
-  const out: number[] = [];
-  for (let at = 0; at < span; at += stride) out.push(at);
-  if (span - out[out.length - 1]! < stride / 2) out.pop();
-  out.push(span);
-  return out;
-}
-
-/**
- * Where one tick sits, as a style.
- *
- * ON THE BUCKET'S OWN CENTRE, which is `(i + 0.5) / n` of the width — a label
- * placed at `i / n` names the boundary between two buckets rather than either
- * of them. The two ENDS are pinned to the edges instead: centred, the first
- * label would hang half its width off the left of the chart and the last off
- * the right, which is the one place a tick row overflows its card.
- */
-function edgeOf(index: number, bars: number): CSSProperties {
-  if (index === 0) return { left: 0 };
-  if (index === bars - 1) return { right: 0 };
-  return { left: `${((index + 0.5) / bars) * 100}%`, transform: "translateX(-50%)" };
-}
 
 /**
  * What one tick is called.
@@ -297,7 +156,7 @@ function edgeOf(index: number, bars: number): CSSProperties {
  * range control directly above it.
  *
  * [toWall] is the one formatter that renders an instant in the VIEWER'S chosen
- * zone with no date beside it — it is the `datetime-local` spelling,
+ * zone with no date beside it: it is the `datetime-local` spelling,
  * `YYYY-MM-DDTHH:mm`, so the eleven characters after the `T` are that zone's
  * own wall clock. Reading the browser's clock instead would put a tick an hour
  * out for every reader who set the preference.

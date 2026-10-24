@@ -16,7 +16,7 @@
  */
 
 import { WrenchGlyph } from "@crewlethq/icons/glyphs";
-import { BarList, Card, DATA_COLORS, Skeleton } from "@crewlethq/ui";
+import { BarList, Card, DATA_COLORS, EmptyState, Skeleton } from "@crewlethq/ui";
 import { purposeLabel } from "~/lib/auxiliary.ts";
 import { fmtCount, plural } from "~/lib/format.ts";
 import type { Rollup } from "~/protocol/types.ts";
@@ -33,17 +33,29 @@ export function Workers({
   const rows = (rollup?.by_worker ?? []).filter((w) => w.total_tokens > 0);
   return (
     <Card className="spend-card spend-list" padding="none">
-      <Card.Header icon={<WrenchGlyph size="sm" />} subtitle={words ?? undefined}>
+      <Card.Header
+        icon={<WrenchGlyph size="sm" />}
+        subtitle={words ?? undefined}
+        subtitlePlacement="below"
+      >
         <Card.Title>Auxiliary model</Card.Title>
       </Card.Header>
       <Card.Body padding="md">
         {loading && !rollup ? (
           <Skeleton height="4.5rem" />
+        ) : rows.length === 0 ? (
+          // ONE EMPTY STATE FOR EVERY EMPTY CARD ON THE PAGE: a ranked list's
+          // bare sentence beside the tables' and the chart's empty states read
+          // as two kinds of answer to one question.
+          <EmptyState
+            size="compact"
+            title="The auxiliary model spent no tokens in this window"
+            description="Its calls appear here once it makes them."
+          />
         ) : (
           <BarList
             className="spend-bars"
             layout="beside"
-            emptyLabel="The auxiliary model spent no tokens in this window."
             data={rows
               .slice()
               .sort((a, b) => b.total_tokens - a.total_tokens)

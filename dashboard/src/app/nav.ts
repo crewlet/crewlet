@@ -255,8 +255,8 @@ export interface WorkspaceRow {
   /**
    * A sentence at the end of the section tabs that holds for every section —
    * how to read what the workspace draws. It gives way to the tabs: drawn only
-   * where the strip has room for it beside every tab (`noteFits` in
-   * `header/PageHeader.tsx`), so never on a phone.
+   * where the strip has room for it beside every tab (the kit's `Tabs` note,
+   * with `overflow="menu"`), so never on a phone.
    */
   note?: string;
 }
@@ -566,9 +566,11 @@ export const WORKSPACES: WorkspaceRow[] = [
     sections: [],
   },
   {
-    // THE SERVICES BUILT INTO CREWLET above the third-party apps the company
-    // connects, on one page: a company sees what it already has before what
-    // it could connect. ADMIN'S, as connecting a tool always was.
+    // THE SERVICES BUILT INTO CREWLET beside the third-party apps the company
+    // connects, in one directory grouped by need. EVERY READER'S: what the
+    // company runs is the overview every reader holds, so a reader without
+    // Admin sees the services in full and the apps with no state, while
+    // connecting and the apps' own state stay an Admin's.
     key: "integrations",
     label: "Integrations",
     icon: "plug",
@@ -578,7 +580,6 @@ export const WORKSPACES: WorkspaceRow[] = [
     chord: "n",
     place: "company",
     renderer: "none",
-    grants: ["admin"],
     sections: [],
   },
   {
@@ -826,7 +827,8 @@ export const WORKSPACES: WorkspaceRow[] = [
     // its own row.
     key: "settings",
     label: "Settings",
-    icon: "sliders-vertical",
+    // THE GEAR: what a reader looks for to change how the engine runs.
+    icon: "settings",
     path: ["settings", "models"],
     owns: ["settings"],
     hint: "What the engine runs: models, tools, spend, access and its nodes",

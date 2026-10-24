@@ -129,7 +129,7 @@ describe("the faint rung is decoration", () => {
     },
     {
       selector: ".work-type",
-      why: "A work item's type mark: a `Mark` with an `.sr-only` name beside it and a `title`.",
+      why: "A work item's type mark: a `NamedGlyph` with an `.sr-only` name beside it and a `title`.",
     },
     {
       selector: ".work-nobody",

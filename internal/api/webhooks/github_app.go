@@ -389,14 +389,14 @@ func (r *Receiver) githubAppLanding(w http.ResponseWriter, req *http.Request) {
 		// rather than a failure, and the operator is told which they are
 		// waiting on rather than a number that is right in one case.
 		if r.askRecheck() {
-			view.Message = "Crewlet is looking at GitHub now. The Integrations " +
-				"screen shows this agent ready in a moment."
+			view.Message = "Crewlet is looking at GitHub now. GitHub's page " +
+				"under Company › Integrations shows this agent ready in a moment."
 		} else {
 			view.Message = "Crewlet picks the installation up on its next " +
 				"reconcile pass, within a minute if this agent was set up " +
 				"just now and up to ten minutes on a surface that has been " +
-				"waiting a while. Press Recheck in Settings › Integrations " +
-				"to look immediately."
+				"waiting a while. Press Check now on GitHub's Agents tab, under " +
+				"Company › Integrations, to look immediately."
 		}
 
 	case strings.TrimSpace(q.Get("code")) == "":

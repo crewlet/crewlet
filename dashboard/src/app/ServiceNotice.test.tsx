@@ -61,22 +61,22 @@ function mount(service: Service, path: string[], services: OrgServices, grants: 
 
 const JIRA: OrgServices = { tracker: "jira", knowledge: "native" };
 
-// INTEGRATIONS IS AN ADMINISTRATOR'S PAGE: a reader holding only Tracker who
-// followed a link to Work was sent there and refused. They are told in place,
-// and offered no link they could not follow. Mutation: drop the access check
-// and the first case finds a link.
-test("a reader who cannot open Integrations is told in place and offered no link", async () => {
+// THE SERVICES' PAGES ARE EVERY READER'S: a reader holding only Tracker who
+// followed a link to Work is told in place and offered the page about the
+// service that is off, not the directory's front. Mutation: gate the link on
+// Admin again and the first case finds none.
+test("a reader without Admin is told in place and offered the service's own page", async () => {
   mount("tracker", ["work"], JIRA, ["tracker"]);
   expect(await screen.findByText("Jira handles this company's work")).toBeTruthy();
   expect(screen.getByText("Work is part of Crewlet Works, which is not in use here.")).toBeTruthy();
-  await new Promise((r) => setTimeout(r, 0));
-  expect(screen.queryByRole("link")).toBeNull();
+  const link = await screen.findByRole("link", { name: "See what is built into Crewlet" });
+  expect(link.getAttribute("href")).toBe("#/company/integrations/works");
 });
 
-test("an administrator is offered the services built into Crewlet", async () => {
-  mount("tracker", ["me"], JIRA, ["admin"]);
+test("a hidden knowledge base offers Crewlet Knowledge's page", async () => {
+  mount("knowledge", ["knowledge"], { tracker: "native", knowledge: "confluence" }, ["admin"]);
   const link = await screen.findByRole("link", { name: "See what is built into Crewlet" });
-  expect(link.getAttribute("href")).toBe("#/company/integrations");
+  expect(link.getAttribute("href")).toBe("#/company/integrations/knowledge");
 });
 
 // WHAT THE READER ASKED FOR IS NAMED: a New design address says why design is

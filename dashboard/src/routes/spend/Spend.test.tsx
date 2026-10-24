@@ -947,16 +947,40 @@ test("the hero's tiles row holds only the tiles that have something to say", asy
   expect(document.querySelectorAll(".spend-tiles > .spend-tile")).toHaveLength(1);
 });
 
-// AN EMPTY CARD SAYS SO AT THE CAPTION STEP, as every ranked list's empty
-// sentence does: the task card's was set at the body size, one step larger
-// than its neighbours' on the same row.
-test("the empty task card says so at the caption step", async () => {
+// EVERY EMPTY CARD ON THE PAGE SAYS SO ONE WAY: the kit's compact empty
+// state, as the agent table and the chart already did. The ranked lists and
+// the task card said it as a bare sentence beside them, two treatments for
+// one answer. Mutation: draw a ranked list's empty sentence again and the
+// second query finds no empty state round it.
+test("every empty Spend card says so with the one compact empty state", async () => {
   mount("#/settings/spend?window=30d", <Spend />, {
     tokens: rollup(1),
     work_items: items([]),
     viewer: VIEWER,
   });
   await settle();
-  const line = screen.getByText("No task last changed in this window has spent tokens yet.");
-  expect(line.classList.contains("spend-caption")).toBe(true);
+  const task = screen.getByText("No task last changed in this window has spent tokens");
+  expect(task.closest(".crewlet-empty-state")).not.toBeNull();
+  const aux = screen.getByText("The auxiliary model spent no tokens in this window");
+  expect(aux.closest(".crewlet-empty-state")).not.toBeNull();
+});
+
+// ONE HEAD HEIGHT ACROSS A ROW: the wide card and the side cards beside it
+// stack their subtitle under the title at every width, so a row does not
+// draw one head inline and its neighbour's stacked.
+test("every Spend card with a subtitle stacks it under its title", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  for (const file of [
+    "ByAgent.tsx",
+    "ByModel.tsx",
+    "ByUnit.tsx",
+    "Workers.tsx",
+    "ExpensiveTasks.tsx",
+  ]) {
+    const source = readFileSync(join(process.cwd(), "src/routes/spend", file), "utf8");
+    const subtitles = source.match(/\bsubtitle=/g)?.length ?? 0;
+    expect(subtitles, file).toBeGreaterThan(0);
+    expect(source.match(/subtitlePlacement="below"/g)?.length ?? 0, file).toBe(subtitles);
+  }
 });

@@ -1191,7 +1191,7 @@ test("the setup card reads the chart's model and tools, and the document's own r
   expect(setup.textContent).toContain("anthropic-main");
   expect(setup.textContent).toContain("openai-fallback");
   expect(setup.textContent).toContain("gitlab");
-  expect(setup.textContent).toContain("nodes labelled pool=build");
+  expect(setup.textContent).toContain("Nodes labelled pool=build");
   expect(setup.textContent).toContain("test-writer, reviewer-lite");
   expect(within(setup).getByRole("link", { name: "Edit" }).getAttribute("href")).toBe(
     "#/company/org/edit?seat=swe",
@@ -1209,7 +1209,7 @@ test("without the document the setup card says whose read it is, not that nothin
   // THE PUBLIC HALF STILL DRAWS.
   expect(setup.textContent).toContain("anthropic-main");
   expect(setup.textContent).toContain("Some setup is only visible to admins.");
-  expect(setup.textContent).not.toContain("not offered");
+  expect(setup.textContent).not.toContain("Not offered");
 });
 
 // ---------------------------------------------------------------------------
@@ -1557,14 +1557,14 @@ test("a running turn's row says what it is doing, and has no figures yet", async
     },
   });
   const doing = await screen.findByText("running · executing · round 7 of 25");
-  const row = doing.closest(".grid-row") as HTMLElement;
+  const row = doing.closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(row).getByText("ENG-412")).toBeTruthy();
   expect(within(row).queryByText("no summary recorded")).toBeNull();
   expect(within(row).getAllByText("Not settled")).toHaveLength(2);
   // A SETTLED TURN'S STATE CELL HOLDS NOTHING AT ALL, which is what a phone's
   // card drops: an empty wrapper left a "STATE" label alone on its line.
-  const settled = screen.getByText("did thing 1").closest(".grid-row") as HTMLElement;
-  const cells = [...settled.querySelectorAll(".grid-cell")];
+  const settled = screen.getByText("did thing 1").closest(".crewlet-data-grid__row") as HTMLElement;
+  const cells = [...settled.querySelectorAll(".crewlet-data-grid__cell")];
   const state = cells.find((c) => c.getAttribute("data-label") === "State")!;
   expect(state.childNodes).toHaveLength(0);
 });
@@ -1586,7 +1586,9 @@ test("the turns tab leads with the running turn and titles the transcripts", asy
   expect(order(live, table), "Running now comes before the table").toBe(true);
   expect(order(table, transcripts), "the transcripts follow it, titled").toBe(true);
   await screen.findByText("did thing 1");
-  const heads = [...document.querySelectorAll(".grid-th")].map((h) => h.textContent?.trim());
+  const heads = [...document.querySelectorAll(".crewlet-data-grid__th")].map((h) =>
+    h.textContent?.trim(),
+  );
   expect(heads).toContain("State");
   expect(heads).not.toContain("");
 });
@@ -1926,7 +1928,8 @@ test("an episode says what woke it apart from what it did, and a compacted row i
   const headers = screen.getAllByRole("columnheader").map((h) => h.textContent?.trim());
   expect(headers).toContain("Woken by");
   expect(headers).toContain("What it did");
-  const row = (text: string) => screen.getByText(text).closest(".grid-row") as HTMLElement;
+  const row = (text: string) =>
+    screen.getByText(text).closest(".crewlet-data-grid__row") as HTMLElement;
   const cellUnder = (tr: HTMLElement, header: string) =>
     tr.querySelector(`[data-label="${header}"]`) as HTMLElement;
   // The turn: its label and its ask under Woken by, its account under What it did.
@@ -1991,7 +1994,7 @@ test("a long ask is listed as its marked opening and read whole on demand", asyn
   await waitFor(() => expect(screen.getByText("Message from Ana: Slack message")).toBeTruthy());
   const row = screen
     .getByText("Message from Ana: Slack message")
-    .closest(".grid-row") as HTMLElement;
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   const woken = row.querySelector('[data-label="Woken by"]') as HTMLElement;
   expect(woken.textContent).toContain(`Asked: ${opening}…`);
   // A WHOLE ACCOUNT IS NOT MARKED and offers nothing to open.

@@ -41,7 +41,7 @@
 import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { href, samePath, useNavigator, useRoute } from "../router.tsx";
 import { KINDS, parseRef, pathOf, refToken, type ObjectRef } from "./objects.ts";
-import { ButtonLink, IconButton } from "@crewlethq/ui";
+import { ButtonLink, IconButton, type DataGridActivationEvent } from "@crewlethq/ui";
 import {
   ArrowUpRightGlyph,
   XGlyph,
@@ -162,9 +162,7 @@ export function rowPeekHandler(open?: () => void): ((e: React.MouseEvent) => voi
  * a grid's `enter` is the reader saying "this row" with nothing to say
  * "elsewhere" with, and the browser will not navigate on its own behalf.
  */
-export function peekRow<T>(
-  open: (row: T) => void,
-): (row: T, e: React.MouseEvent | React.KeyboardEvent) => void {
+export function peekRow<T>(open: (row: T) => void): (row: T, e: DataGridActivationEvent) => void {
   return (row, e) => {
     if (!("button" in e)) {
       open(row);

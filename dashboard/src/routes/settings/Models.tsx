@@ -27,6 +27,7 @@
 import { Fragment, useMemo, useState } from "react";
 import {
   Button,
+  ButtonLink,
   Callout,
   Card,
   EmptyState,
@@ -193,14 +194,27 @@ function ModelList({
 
       <Card padding="none">
         <Card.Header icon={<CpuGlyph size="sm" />} count={providers.length}>
-          Models
+          <Card.Title>Models</Card.Title>
         </Card.Header>
         {providers.length === 0 ? (
-          <div style={{ padding: "var(--spacing-4)" }}>
-            <p className="t-body muted">
-              No model configured. Add one under <InlineCode>providers.llm</InlineCode>.
-            </p>
-          </div>
+          // THE KIT'S EMPTY STATE, as the MCP servers card beside it draws its
+          // own, with the way to where a model is added: a plain sentence in
+          // a padded box was the one empty card on Settings drawn by hand.
+          <EmptyState
+            size="compact"
+            icon={<CpuGlyph size="xl" />}
+            title="No model configured yet"
+            description={
+              <>
+                Add one under <InlineCode>providers.llm</InlineCode> in the company document.
+              </>
+            }
+            action={
+              <ButtonLink variant="secondary" size="small" href={href(["settings", "config"])}>
+                Open Configuration
+              </ButtonLink>
+            }
+          />
         ) : (
           <DataGrid<CredentialPoolRow>
             rows={providers}
@@ -379,7 +393,7 @@ function ModelPage({
       {row.state !== "login" && (
         <Card padding="none">
           <Card.Header icon={<KeyGlyph size="sm" />} count={row.keys.length}>
-            Keys
+            <Card.Title>Keys</Card.Title>
           </Card.Header>
           {row.keys.length === 0 ? (
             <div style={{ padding: "var(--spacing-4)" }}>
@@ -482,7 +496,7 @@ function ModelPage({
 
       <Card padding="none">
         <Card.Header icon={<UsersGlyph size="sm" />} count={uses.length}>
-          Seats on it
+          <Card.Title>Seats on it</Card.Title>
         </Card.Header>
         {uses.length === 0 ? (
           <div style={{ padding: "var(--spacing-4)" }}>

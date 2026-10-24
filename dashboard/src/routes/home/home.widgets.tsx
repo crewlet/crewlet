@@ -29,7 +29,7 @@ import { DESTINATIONS, serviceShown, type Service } from "~/app/nav.ts";
 import { useServicesRun } from "~/lib/services.ts";
 import { href } from "~/app/router.tsx";
 import { useViewer } from "~/lib/viewer.ts";
-import { Mark } from "~/ui/glyph.tsx";
+import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { useSharedHomeData } from "./useHomeData.ts";
 import { Figures, SectionView, type SectionId } from "./sections.tsx";
 import { KPI_IDS, KPI_LABELS, KPI_SERVICES, kpisShown, type KpiId } from "./Kpis.tsx";
@@ -185,7 +185,7 @@ function Shortcut({ params }: { params: Readonly<Record<string, string>> }) {
     <Card padding="md" interactive asChild>
       <a className="home-shortcut" href={href(dest.path)}>
         <IconTile hue="blue">
-          <Mark name={dest.icon} size="sm" />
+          <NamedGlyph name={dest.icon} size="sm" />
         </IconTile>
         <span className="home-shortcut-text">
           <span className="home-shortcut-name">{pageName(dest)}</span>

@@ -63,10 +63,11 @@ import {
   TableKeyCell,
   TableDateCell,
   TableStatusCell,
+  type Tone,
 } from "@crewlethq/ui";
 import {
   DatabaseGlyph,
-  ServerGlyph,
+  CopyGlyph,
   PackageGlyph,
   ClockGlyph,
   TriangleAlertGlyph,
@@ -132,14 +133,7 @@ const ALARMS_ID = "retention-alarms";
  * page's diagnosis and leads it; every panel below states facts and points back
  * up to it rather than saying it again.
  */
-export function RetentionStatus({
-  retention,
-  onTakeBackup,
-}: {
-  retention: QueryResult<RetentionReport>;
-  /** Opens this page's backup dialog, offered to an admin. */
-  onTakeBackup?: () => void;
-}) {
+export function RetentionStatus({ retention }: { retention: QueryResult<RetentionReport> }) {
   const now = useNow();
   const { data, error } = retention;
   // ARRIVING FOR THE ALARMS (`at=alarms`, the engine panel's "Open alarms")
@@ -165,37 +159,33 @@ export function RetentionStatus({
       )}
       {data?.maintenance && <MaintenanceBanner op={data.maintenance} now={now} />}
       <ServedLevelBanner level={data?.read_level} />
-      {data && standing > 0 && (
-        <AlarmList alarms={data.alarms} now={now} onTakeBackup={onTakeBackup} />
-      )}
+      {data && standing > 0 && <AlarmList alarms={data.alarms} now={now} />}
     </>
   );
 }
 
-/** The one alarm whose remedy is a gesture this page offers. */
-const BACKUP_AGE = "backup_age";
-
-/** The standing alarms, each drawn once with the logs it stands on. */
-export function AlarmList({
-  alarms,
-  now,
-  onTakeBackup,
-}: {
-  alarms: RetentionAlarm[];
-  now: number;
-  onTakeBackup?: () => void;
-}) {
+/**
+ * The standing alarms, each drawn once with the logs it stands on.
+ *
+ * ROWS OF THE CARD, NOT CALLOUTS IN IT: a bordered warning callout inside the
+ * bordered card was a frame in a frame. Each alarm is a row on the card's own
+ * inset, ruled from the one above, its warning glyph in the warning ink. And
+ * no alarm carries a Take a backup of its own: the page bar's is one press
+ * away on the same screen, and a second identical button beside the alarm
+ * read as a different gesture.
+ */
+export function AlarmList({ alarms, now }: { alarms: RetentionAlarm[]; now: number }) {
   return (
-    <Card id={ALARMS_ID}>
+    <Card id={ALARMS_ID} padding="none">
       <Card.Header icon={<TriangleAlertGlyph size="sm" />} count={alarms.length}>
-        Alarms
+        <Card.Title>Alarms</Card.Title>
       </Card.Header>
-      <div className="col gap-2">
+      <ul className="alarm-rows">
         {alarms.map((alarm) => (
           // THE KIND IS THE IDENTITY: the engine raises each one once.
-          <AlarmItem key={alarm.kind} alarm={alarm} now={now} onTakeBackup={onTakeBackup} />
+          <AlarmItem key={alarm.kind} alarm={alarm} now={now} />
         ))}
-      </div>
+      </ul>
     </Card>
   );
 }
@@ -213,15 +203,7 @@ export function AlarmList({
  * says how many records it keeps past its window and the second log of a
  * blocked trim is not read as the first one's.
  */
-export function AlarmItem({
-  alarm,
-  now,
-  onTakeBackup,
-}: {
-  alarm: RetentionAlarm;
-  now: number;
-  onTakeBackup?: () => void;
-}) {
+export function AlarmItem({ alarm, now }: { alarm: RetentionAlarm; now: number }) {
   const lines = alarmLogLines(alarm);
   const only = lines.length === 1 ? lines[0] : undefined;
   const folded = only && !only.term && only.detail === alarm.detail ? only : undefined;
@@ -230,18 +212,12 @@ export function AlarmItem({
   const headlined =
     only?.term !== undefined && only.logs?.length === 1 && only.logs[0]?.detail === alarm.detail;
   return (
-    <Callout
-      variant="warning"
-      title={alarmKindTitle(alarm.kind)}
-      action={
-        alarm.kind === BACKUP_AGE && onTakeBackup ? (
-          <Button variant="secondary" size="small" onClick={onTakeBackup}>
-            Take a backup
-          </Button>
-        ) : undefined
-      }
-    >
+    <li className="alarm-row">
+      <span className="alarm-row-glyph" aria-hidden>
+        <TriangleAlertGlyph size="sm" />
+      </span>
       <div className="alarm-body">
+        <p className="alarm-title">{alarmKindTitle(alarm.kind)}</p>
         <p>
           {folded && (
             <>
@@ -261,7 +237,7 @@ export function AlarmItem({
         )}
         <p className="t-caption muted">{marked(alarm.remedy)}</p>
       </div>
-    </Callout>
+    </li>
   );
 }
 
@@ -408,8 +384,8 @@ export function RetentionPanels({
         ))}
 
       <Card padding="none">
-        <Card.Header icon={<ServerGlyph size="sm" />} count={nodes.length}>
-          Replication
+        <Card.Header icon={<CopyGlyph size="sm" />} count={nodes.length}>
+          <Card.Title>Replication</Card.Title>
         </Card.Header>
         <DataGrid<RetentionNode>
           rows={nodes}
@@ -565,7 +541,7 @@ export function SnapshotsCard({
           solo ? undefined : `${donorsCounted(snapshots)} of ${SNAPSHOT_DONORS_REQUIRED} donors`
         }
       >
-        Snapshots and joining
+        <Card.Title>Snapshots and joining</Card.Title>
       </Card.Header>
       {solo ? (
         <Card.Body padding="md">
@@ -1006,22 +982,52 @@ function PositionStanding({ d }: { d: RetentionNodeDomain }) {
  * and told a healthy single node to evict itself.
  */
 export function LogRetention({ domains }: { domains: RetentionDomain[] }) {
+  // THE SHARED STATE IS SAID ONCE, in the head, and only a log that differs
+  // carries a tag: "held by the backup" on all seven rows was one cause said
+  // seven times, and at a phone's width it was the tag that kept its width
+  // while the log's own name was cut to "track...".
+  const shared = sharedTrimStatus(domains);
   return (
     <Card padding="none">
       <Card.Header
-        icon={<DatabaseGlyph size="sm" />}
+        icon={<ClockGlyph size="sm" />}
         count={domains.length}
-        subtitle="A log trims old history once all six checks allow it"
+        subtitle={
+          shared
+            ? `${asSentence(shared.label).replace(/\.$/, "")} on ${shared.count === domains.length ? "every log" : `${shared.count} of ${domains.length} logs`}`
+            : "A log trims old history once all six checks allow it"
+        }
       >
-        Log retention
+        <Card.Title>Log retention</Card.Title>
       </Card.Header>
       <div>
         {domains.map((d) => (
-          <LogRow key={d.domain} domain={d} />
+          <LogRow key={d.domain} domain={d} quiet={shared?.key === trimStatusOf(d).key} />
         ))}
       </div>
     </Card>
   );
+}
+
+/**
+ * The trim state more than half of the logs share, with how many share it,
+ * or null where there is no such state (one log, or no majority): then every
+ * row says its own.
+ */
+export function sharedTrimStatus(
+  domains: RetentionDomain[],
+): { key: string; label: string; count: number } | null {
+  if (domains.length < 2) return null;
+  const counts = new Map<string, { label: string; count: number }>();
+  for (const d of domains) {
+    const { key, label } = trimStatusOf(d);
+    const seen = counts.get(key);
+    counts.set(key, { label, count: (seen?.count ?? 0) + 1 });
+  }
+  for (const [key, { label, count }] of counts) {
+    if (count * 2 > domains.length) return { key, label, count };
+  }
+  return null;
 }
 
 /**
@@ -1032,7 +1038,14 @@ export function LogRetention({ domains }: { domains: RetentionDomain[] }) {
  * status and the same checks: two renderings of a log let the card and the
  * page disagree about whether it is advancing.
  */
-export function LogRow({ domain: d }: { domain: RetentionDomain }) {
+export function LogRow({
+  domain: d,
+  quiet = false,
+}: {
+  domain: RetentionDomain;
+  /** The state is the one its card's head already says for most logs: no tag. */
+  quiet?: boolean;
+}) {
   return (
     <div className="log-row">
       <DomainRefusals domain={d} />
@@ -1041,7 +1054,7 @@ export function LogRow({ domain: d }: { domain: RetentionDomain }) {
         mono
         size="compact"
         meta={<LogFacts domain={d} />}
-        actions={<TrimStatus domain={d} />}
+        actions={quiet ? undefined : <TrimStatus domain={d} />}
       >
         <div className="col gap-2">
           <Checks domain={d} />
@@ -1096,19 +1109,35 @@ function LogFacts({ domain: d }: { domain: RetentionDomain }) {
  * the name is what the CLI prints and the guide is indexed by.
  */
 export function TrimStatus({ domain: d }: { domain: RetentionDomain }) {
+  const { label, tone, title } = trimStatusOf(d);
+  return (
+    <Tag variant={tone} title={title}>
+      {label}
+    </Tag>
+  );
+}
+
+/** The trim's status in words, one source for the tag and the card's shared line. */
+function trimStatusOf(d: RetentionDomain): {
+  key: string;
+  label: string;
+  tone: Tone;
+  title?: string;
+} {
   switch (d.trim_floor_state) {
     case "published":
-      return d.blocked_by ? (
-        <Tag variant="warning" title={`Held by the ${d.blocked_by} check`}>
-          held by {TERM_WORDS[d.blocked_by].holds}
-        </Tag>
-      ) : (
-        <Tag variant="success">advancing</Tag>
-      );
+      return d.blocked_by
+        ? {
+            key: `held:${d.blocked_by}`,
+            label: `held by ${TERM_WORDS[d.blocked_by].holds}`,
+            tone: "warning",
+            title: `Held by the ${d.blocked_by} check`,
+          }
+        : { key: "advancing", label: "advancing", tone: "success" };
     case "unreadable":
-      return <Tag variant="warning">floor unreadable</Tag>;
+      return { key: "unreadable", label: "floor unreadable", tone: "warning" };
     default:
-      return <Tag variant="neutral">no conclusion yet</Tag>;
+      return { key: "none", label: "no conclusion yet", tone: "neutral" };
   }
 }
 

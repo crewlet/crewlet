@@ -443,7 +443,7 @@ test("a seat with no manager reports to nobody, at the top of the chart", async 
 
 test("the tools name their source, and more than three fold into a count", async () => {
   await mount(ANONYMOUS);
-  expect(screen.getByText("built-in")).toBeTruthy();
+  expect(screen.getByText("Built-in")).toBeTruthy();
   expect(screen.getByText("gitlab")).toBeTruthy();
   expect(screen.getByText("+1")).toBeTruthy();
 });

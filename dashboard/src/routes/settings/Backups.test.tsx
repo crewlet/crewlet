@@ -196,7 +196,8 @@ test("the newest counted point is the engine's, and the others say why they are 
   mount();
   await settle();
   const points = screen.getByText("Newest per owner").closest(".crewlet-card") as HTMLElement;
-  const row = (text: string) => within(points).getByText(text).closest(".grid-row") as HTMLElement;
+  const row = (text: string) =>
+    within(points).getByText(text).closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(row("node-a")).getByText("counted · newest")).toBeTruthy();
   expect(within(row("node-c")).getByText("not verified")).toBeTruthy();
   expect(within(row("Operator acknowledgement")).getByText("counted")).toBeTruthy();
@@ -216,13 +217,15 @@ test("the history lists each backup with its node, its person and its outcome", 
   mount();
   await settle();
   const history = screen.getByText("Backup history").closest(".crewlet-card") as HTMLElement;
-  const failed = within(history).getByText("/full/disk").closest(".grid-row") as HTMLElement;
+  const failed = within(history)
+    .getByText("/full/disk")
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(failed).getByText("Failed")).toBeTruthy();
   expect(within(failed).getByText("node-b")).toBeTruthy();
   expect(within(failed).getByText("ops-cron")).toBeTruthy();
   const landed = within(history)
     .getByText("/var/backups/crewlet-20260929-0200")
-    .closest(".grid-row") as HTMLElement;
+    .closest(".crewlet-data-grid__row") as HTMLElement;
   expect(within(landed).getByText("Written")).toBeTruthy();
   expect(within(landed).getByRole("link", { name: /Jane Founder/ })).toBeTruthy();
   expect(within(landed).getByText("session:s-1")).toBeTruthy();
@@ -470,7 +473,7 @@ test("an empty history some node could not answer still draws its lists", async 
 
 // WHAT IS WRONG LEADS THE PAGE: the alarms come before the record of backups
 // and the panels, and the backup alarm offers the backup it asks for.
-test("the alarms lead the page, and the backup alarm offers the backup", async () => {
+test("the alarms lead the page, and the backup they ask for is the page bar's one", async () => {
   const report = {
     v: 1,
     node_id: "node-a",
@@ -496,7 +499,11 @@ test("the alarms lead the page, and the backup alarm offers the backup", async (
   expect(alarms.compareDocumentPosition(record) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   // THE OWNER IS A FIGURE OF THE RECORD, named once.
   expect(screen.getByText("platform-oncall")).toBeTruthy();
-  fireEvent.click(within(alarms).getByRole("button", { name: "Take a backup" }));
+  // ONE TAKE A BACKUP ON THE SCREEN: the bar's, never a second beside the alarm.
+  expect(within(alarms).queryByRole("button", { name: "Take a backup" })).toBeNull();
+  const take = screen.getAllByRole("button", { name: "Take a backup" });
+  expect(take).toHaveLength(1);
+  fireEvent.click(take[0]!);
   expect(await screen.findByRole("dialog")).toBeTruthy();
 });
 

@@ -11,7 +11,7 @@
 
 import { UsersGlyph } from "@crewlethq/icons/glyphs";
 import { useMemo } from "react";
-import { BarList, Card, DATA_COLORS, Skeleton } from "@crewlethq/ui";
+import { BarList, Card, DATA_COLORS, EmptyState, Skeleton } from "@crewlethq/ui";
 import { href } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { fmtCount, plural } from "~/lib/format.ts";
@@ -44,7 +44,11 @@ export function ByUnit({
   const index = useMemo(() => indexOrg(org), [org]);
   return (
     <Card className="spend-card spend-list" padding="none">
-      <Card.Header icon={<UsersGlyph size="sm" />} subtitle={words ?? undefined}>
+      <Card.Header
+        icon={<UsersGlyph size="sm" />}
+        subtitle={words ?? undefined}
+        subtitlePlacement="below"
+      >
         <Card.Title>By team</Card.Title>
       </Card.Header>
       <Card.Body padding="md">
@@ -56,13 +60,21 @@ export function ByUnit({
         >
           {units.loading && !units.data ? (
             <Skeleton height="4.5rem" />
+          ) : rows.length === 0 ? (
+            // ONE EMPTY STATE FOR EVERY EMPTY CARD ON THE PAGE: a ranked list's
+            // bare sentence beside the tables' and the chart's empty states read
+            // as two kinds of answer to one question.
+            <EmptyState
+              size="compact"
+              title="No team's seats spent tokens in this window"
+              description="A team appears once its seats spend tokens."
+            />
           ) : (
             <BarList
               className="spend-bars"
               layout="beside"
               limit={8}
               moreLabel={(n) => plural(n, "more team")}
-              emptyLabel="No team's seats spent tokens in this window."
               data={rows.map((b) => ({
                 id: b.group || "other",
                 label: b.other ? "Everyone else" : b.label || b.group,

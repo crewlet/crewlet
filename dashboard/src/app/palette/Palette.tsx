@@ -123,7 +123,7 @@ import { SEARCH_MODES, modeLabel, searchTooLong, servedNote } from "~/lib/search
 import { PriorityMark, StatusMark } from "~/components/work.tsx";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { KIND_LIST } from "~/lib/artifacts/words.ts";
-import { Mark } from "~/ui/glyph.tsx";
+import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { QueryState } from "~/components/common.tsx";
 import {
   ALL_ROWS,
@@ -631,7 +631,7 @@ export function CommandPalette({
       icon: h.kind ? (
         <ArtifactKindGlyph kind={h.kind} size="sm" />
       ) : (
-        <Mark name={h.icon} size="sm" />
+        <NamedGlyph name={h.icon} size="sm" />
       ),
       label: h.label,
       ...(h.hint ? { hint: h.hint } : {}),

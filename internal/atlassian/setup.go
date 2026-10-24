@@ -72,6 +72,7 @@ func Requirements(in *config.Atlassian, resolve func(string) (string, bool)) []s
 			ConfigPath: "integrations.atlassian.api_key",
 			SecretName: "ATLASSIAN_ORG_API_KEY",
 			Required:   true,
+			Checkable:  true,
 			// UNSCOPED, and the form says so because getting it wrong is
 			// invisible: a scoped key authenticates for everything here
 			// except the one call that creates an account, which answers

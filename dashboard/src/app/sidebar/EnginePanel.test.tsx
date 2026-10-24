@@ -411,26 +411,29 @@ describe("the row", () => {
 
   // A STATEMENT WEARS NOTHING A CONTROL WEARS. A refusal drew a chevron, a
   // pointer and a hover border on a card that did nothing and could not be
-  // focused. It is repaired by an admin, so the row says it and is no
-  // control: no button, no chevron, no place in the tab order, and nothing a
-  // press opens. Mutation: give it the panel's trigger, or the sign-in's
-  // button, and a line here goes red.
+  // focused. It is repaired by an admin, so the status says it and is no
+  // control: no button, no place in the tab order, and nothing a press
+  // opens. Mutation: give it the panel's trigger, or the sign-in's button,
+  // and a line here goes red.
   test("a refusal is a statement, with nothing to press", () => {
     for (const statement of [EVERY.refused]) {
       const { view } = panel(statement);
-      const row = view.container.querySelector(".crewlet-app-shell__rail-row")!;
-      expect(row.tagName, statement.state).toBe("DIV");
-      expect(row.textContent).toBe(statement.title);
+      const mark = view.container.querySelector(".crewlet-app-shell__rail-status-mark")!;
+      expect(mark.tagName, statement.state).toBe("SPAN");
+      // ITS WORDS ARE ITS TITLE AND ITS TEXT FOR A SCREEN READER, never drawn.
+      expect(mark.getAttribute("title")).toBe(statement.title);
+      expect(within(mark as HTMLElement).getByText(statement.title)).toBeTruthy();
       expect(screen.queryByRole("button")).toBeNull();
       expect(view.container.querySelector("a, button, [tabindex]")).toBeNull();
-      expect(view.container.querySelector(".crewlet-app-shell__rail-row-opens")).toBeNull();
-      fireEvent.click(row);
+      fireEvent.click(mark);
       expect(screen.queryByRole("dialog")).toBeNull();
       cleanup();
     }
-    // THE CONTROLS KEEP THEIR MARKS: the row that opens the panel ends in
-    // its chevron.
-    const { view } = panel(read());
-    expect(view.container.querySelector(".crewlet-app-shell__rail-row-opens")).not.toBeNull();
+    // THE CONTROL SAYS IT OPENS A PANEL, by the attribute a popup trigger
+    // carries, and its words are its name and its title.
+    panel(read());
+    const trigger = screen.getByRole("button", { name: "Engine healthy" });
+    expect(trigger.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(trigger.getAttribute("title")).toBe("Engine healthy");
   });
 });

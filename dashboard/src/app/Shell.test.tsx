@@ -745,7 +745,8 @@ describe("the sidebar's figures", () => {
   // EVERY "NEW TASK" OPENS THE FRAME'S ONE SHEET: Home's in its page bar, not
   // a second form, and not the palette it stood in for until the sheet landed.
   // AND IT IS THE ONLY ONE ON HOME: the sidebar's head carries no `+`, so a
-  // second New task there is a door nobody decided to put back.
+  // second New task there is a door nobody decided to put back. Its one
+  // control is the engine's status.
   test("Home's New task opens the frame's New task sheet, the only one on the page", async () => {
     location.hash = "#/home";
     const { store, socket } = answering({
@@ -757,7 +758,10 @@ describe("the sidebar's figures", () => {
     await settle();
     const presses = screen.getAllByRole("button", { name: /^New task$/ });
     expect(presses).toHaveLength(1);
-    expect(document.querySelector(".side-head button")).toBeNull();
+    const headControls = [...document.querySelectorAll(".crewlet-app-shell__rail-head button")];
+    expect(headControls.every((press) => press.closest(".crewlet-app-shell__rail-status"))).toBe(
+      true,
+    );
     await act(async () => {
       fireEvent.click(presses[0]!);
     });
@@ -788,13 +792,24 @@ describe("the sidebar's figures", () => {
   });
 
   // SETTINGS IS NEVER HIDDEN; the lock is what changes.
-  test("Settings is a row for an operator without the lock", async () => {
+  test("Settings is at the foot for an operator, without the lock, and not current off Settings", async () => {
     const { store, socket } = answering({});
     mountShell(store, socket);
     await settle();
-    const foot = screen.getByRole("navigation", { name: "Settings" });
-    expect(foot.textContent).toContain("Settings");
-    expect(foot.textContent).not.toContain("operator credential");
+    const foot = document.querySelector<HTMLElement>(".crewlet-app-shell__rail-foot")!;
+    const settings = within(foot).getByRole("link", { name: "Settings" });
+    expect(settings.getAttribute("title")).toBe("Settings");
+    expect(settings.hasAttribute("aria-current")).toBe(false);
+    // BEFORE PREFERENCES, in the account row's controls.
+    const controls = [
+      ...foot.querySelectorAll(
+        ".crewlet-account-row__actions a, .crewlet-account-row__actions button",
+      ),
+    ];
+    expect(controls.map((control) => control.getAttribute("aria-label"))).toEqual([
+      "Settings",
+      "Preferences",
+    ]);
   });
 });
 
@@ -892,11 +907,32 @@ describe("the page header", () => {
     const column = screen.getByRole("navigation", { name: "Settings sections" });
     const current = column.querySelector('[aria-current="page"]');
     expect(current?.textContent).toContain("Secrets");
-    expect(current?.textContent).toContain("needs Admin");
+    expect(current?.textContent).toContain("Needs Admin");
     const spend = Array.from(column.querySelectorAll("a")).find(
       (a) => a.getAttribute("href") === "#/settings/spend",
     );
-    expect(spend?.textContent).not.toContain("needs");
+    expect(spend?.textContent).not.toContain("Needs");
+  });
+
+  // ONE KEY FOR A GROUP THE READER HOLDS NONE OF, on the group's label, the
+  // sidebar's rule too: a Tracker-only reader met a key on 13 of 15 rows. A
+  // group with an open row keeps the key on each locked row, and every locked
+  // row still says why, as its title and after its name.
+  test("a Settings group the reader holds none of draws its key once, on its label", async () => {
+    location.hash = "#/settings/spend";
+    const { store, socket } = answering({
+      viewer: { login: "t", grants: ["tracker"], handle: "", owner: "t", name: "", kind: "" },
+    });
+    mountShell(store, socket);
+    await settle();
+    const column = screen.getByRole("navigation", { name: "Settings sections" });
+    const access = within(column).getByRole("group", { name: "Access, Needs Admin access" });
+    expect(access.querySelectorAll("svg.crewlet-locked-label__key")).toHaveLength(1);
+    const people = within(access).getByRole("link", { name: /^People, Needs Admin access/ });
+    expect(people.querySelector("[title='Needs Admin access']")).not.toBeNull();
+    // SPEND HOLDS AN OPEN ROW, so its group is not locked and names no reason.
+    const spend = within(column).getByRole("group", { name: "Spend" });
+    expect(spend.closest(".crewlet-nav-group--locked")).toBeNull();
   });
 
   // ON A PHONE THE COLUMN IS ONE ROW NAMING THE SECTION. Stacked whole it put
@@ -911,7 +947,7 @@ describe("the page header", () => {
     await settle();
     // BY ITS CLASS: jsdom applies the wide half of the stylesheet, where the
     // toggle is not drawn — the fold is the phone block's, held by frame.test.
-    const toggle = document.querySelector<HTMLButtonElement>(".section-picker-toggle")!;
+    const toggle = document.querySelector<HTMLButtonElement>(".crewlet-section-frame__toggle")!;
     // WHAT IT IS CALLED, its decoration left out — what it SHOWS ("Section ·
     // Secrets") is the picker's own suite's (`PageHeader.test.tsx`).
     const spoken = (el: HTMLElement) => {
@@ -923,18 +959,18 @@ describe("the page header", () => {
     const list = document.getElementById(toggle.getAttribute("aria-controls") ?? "");
     expect(list?.querySelector("nav[aria-label='Settings sections']")).not.toBeNull();
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(toggle.closest(".section-picker")?.hasAttribute("data-open")).toBe(false);
+    expect(toggle.closest(".crewlet-section-frame__nav")?.hasAttribute("data-open")).toBe(false);
 
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(toggle.closest(".section-picker")?.hasAttribute("data-open")).toBe(true);
+    expect(toggle.closest(".crewlet-section-frame__nav")?.hasAttribute("data-open")).toBe(true);
 
     await act(async () => {
       location.hash = "#/settings/nodes";
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     });
     await settle();
-    const moved = document.querySelector<HTMLButtonElement>(".section-picker-toggle")!;
+    const moved = document.querySelector<HTMLButtonElement>(".crewlet-section-frame__toggle")!;
     expect(spoken(moved)).toBe("Settings Section: Nodes");
     expect(moved.getAttribute("aria-expanded"), "a picked section left the list open").toBe(
       "false",
@@ -949,9 +985,9 @@ describe("the page header", () => {
     const { store, socket } = answering({});
     mountShell(store, socket);
     await settle();
-    const toggle = document.querySelector<HTMLButtonElement>(".section-picker-toggle")!;
+    const toggle = document.querySelector<HTMLButtonElement>(".crewlet-section-frame__toggle")!;
     expect(toggle.textContent).toBe("Settings sections");
-    expect(document.querySelector(".section-picker-list [aria-current]")).toBeNull();
+    expect(document.querySelector(".crewlet-section-frame__list [aria-current]")).toBeNull();
   });
 
   // NO OPERATOR POLL OUTSIDE SETTINGS. The frame is mounted for the life of
@@ -1008,7 +1044,7 @@ describe("the page header", () => {
     const column = screen.getByRole("navigation", { name: "Settings sections" });
     const row = (start: string) =>
       Array.from(column.querySelectorAll("a")).find((a) => a.textContent?.startsWith(start));
-    expect(row("Nodes")?.textContent).toMatch(/needs Admin/);
+    expect(row("Nodes")?.textContent).toMatch(/Needs Admin/);
     expect(row("Nodes")?.textContent).not.toMatch(/node live/);
     expect(row("Configuration")?.textContent).not.toMatch(/epoch/);
   });
