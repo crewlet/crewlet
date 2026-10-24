@@ -93,31 +93,46 @@ type surface struct {
 	caller *iam.Principal
 
 	// held is what the directory this surface asks says holds each seat,
-	// and directoryDown makes every read of it fail; asked is every list of
-	// seats the surface asked about, in order, and askedAt the instant it
-	// asked at.
+	// and directoryDown makes every read of it fail; asked is every question
+	// the surface put to it, in order (the seats each admits, read with
+	// [surface.admitted]), and askedAt the instant each was asked at.
 	held          map[string]configapi.SeatHolder
 	directoryDown error
-	asked         [][]string
+	asked         []func(string) bool
 	askedAt       []time.Time
 }
 
 // holders is the directory a case's surface asks, answering from s.held.
-func (s *surface) holders(_ context.Context, seats []string, now time.Time) (
+func (s *surface) holders(_ context.Context, asked func(string) bool, now time.Time) (
 	map[string]configapi.SeatHolder, error) {
 
-	s.asked = append(s.asked, slices.Clone(seats))
+	s.asked = append(s.asked, asked)
 	s.askedAt = append(s.askedAt, now)
 	if s.directoryDown != nil {
 		return nil, s.directoryDown
 	}
 	out := map[string]configapi.SeatHolder{}
-	for _, seat := range seats {
-		if held, ok := s.held[seat]; ok {
+	for seat, held := range s.held {
+		if asked(seat) {
 			out[seat] = held
 		}
 	}
 	return out, nil
+}
+
+// admitted is which of seats the i-th question this surface put to the
+// directory asked about, in the order given; none when there was no i-th.
+func (s *surface) admitted(i int, seats ...string) []string {
+	if i >= len(s.asked) {
+		return nil
+	}
+	var out []string
+	for _, seat := range seats {
+		if s.asked[i](seat) {
+			out = append(out, seat)
+		}
+	}
+	return out
 }
 
 // newSurface is the service over a store, a plane and a KEYRING of the case's
@@ -1297,7 +1312,7 @@ func TestNewRefusesAMissingStorePlaneOrKeyring(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	fleet, cipher := coordmemory.NewFleet(), testCipher(t)
 
-	nobody := func(context.Context, []string, time.Time) (
+	nobody := func(context.Context, func(string) bool, time.Time) (
 		map[string]configapi.SeatHolder, error) {
 
 		return nil, nil

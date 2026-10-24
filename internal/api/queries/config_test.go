@@ -83,7 +83,7 @@ func configSurface(t *testing.T, docs ...string) (*configapi.Service, []string) 
 	}
 	svc, err := configapi.New(configapi.Options{
 		Store: db, Plane: plane, Cipher: cipher, Node: "core-1",
-		Holders: func(context.Context, []string, time.Time) (
+		Holders: func(context.Context, func(string) bool, time.Time) (
 			map[string]configapi.SeatHolder, error) {
 
 			return nil, nil
@@ -338,7 +338,7 @@ func TestAConfigQuestionOnARevisionThisNodeCannotOpenSaysWhatFixesIt(t *testing.
 	}
 	svc, err := configapi.New(configapi.Options{
 		Store: db, Plane: plane, Cipher: keyring(), Node: "core-1",
-		Holders: func(context.Context, []string, time.Time) (
+		Holders: func(context.Context, func(string) bool, time.Time) (
 			map[string]configapi.SeatHolder, error) {
 
 			return nil, nil

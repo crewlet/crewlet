@@ -2309,6 +2309,7 @@ var QUERY_ERROR_CODES = {
 	unsealed_revision: true,
 	unreadable_fleet_revision: true,
 	unsealed_fleet_revision: true,
+	unknown_seal_revision: true,
 	timeout: true,
 	closed: true
 };
@@ -2390,7 +2391,8 @@ var DETAILED_QUERY_ERRORS = /* @__PURE__ */ new Set([
 	"unreadable_revision",
 	"unsealed_revision",
 	"unreadable_fleet_revision",
-	"unsealed_fleet_revision"
+	"unsealed_fleet_revision",
+	"unknown_seal_revision"
 ]);
 /**
 * The sentence a refusal written for the reader carries — a `bad_params`

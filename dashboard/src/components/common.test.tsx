@@ -191,6 +191,20 @@ test("a revision the node cannot open shows what fixes it", () => {
   cleanup();
   render(<QueryState error="unsealed_fleet_revision" loading={false} />);
   expect(screen.getByText(/arrived without a seal/)).toBeTruthy();
+  cleanup();
+  // A SEAL THIS BUILD DOESN'T READ is no missing seal: it names the newer
+  // build, and its sentence is shown as the others are.
+  render(
+    <QueryState
+      error="unknown_seal_revision"
+      detail="A newer build of Crewlet most likely sealed it. Upgrade this node."
+      loading={false}
+    />,
+  );
+  expect(screen.getByText(/Upgrade this node/)).toBeTruthy();
+  cleanup();
+  render(<QueryState error="unknown_seal_revision" loading={false} />);
+  expect(screen.getByText(/sealed in a form this build doesn’t read/)).toBeTruthy();
 });
 
 // A REFUSAL NO ACCESS WOULD CLEAR SAYS WHICH RULE DECIDED, in that rule's own

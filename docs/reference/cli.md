@@ -700,6 +700,13 @@ nothing and says so — and names the revision this node boots on where that is
 another — and an edited one imports once. A revision stored **without a seal**
 is never compared — nothing vouches for what it says — and the import replaces
 it, which is why every command that refuses such a revision names this one.
+Through a running node it does the same: `PUT /config` replaces an unsealed
+revision without reading anything from it (see [A whole document replaces an
+unsealed revision](api-endpoints.md#a-whole-document-replaces-an-unsealed-revision)).
+A revision **sealed in a form this build does not read**, most likely by a newer
+build, is not unsealed: it is somebody's document, so the import refuses it
+rather than replace it, and so does every other command, naming the build that
+sealed it as the way to read it.
 Offline, `created_by` is the invoking operator (`$CREWLET_OPERATOR`, else
 `$USER`, else `$LOGNAME`, of the `operator` kind, with no credential beside them: none made the
 write) and `source` is `file`; both are recorded for you, and neither is
@@ -866,7 +873,7 @@ Rotates the master key: re-encrypts the config document this node **boots on** �
 
 It opens the store directly, so it runs on a **stopped** node. The re-sealed copy is an [offer](#what-a-nodes-store-knows) whose base is the revision it re-seals — or, where that is itself an offline change not yet published, the revision that change was built on — so the next start publishes it only while the fleet still runs that base: a re-sealed copy of a revision the fleet has moved past is this node's alone, withheld with `offline_revision_not_published` on every start until the node applies the fleet's revision, and never replaces the company that superseded it. While the engine holds the store it refuses and names the running node's equivalent, `POST /config/reload`, which stores the fleet's document again under that node's active key. A reload re-seals the fleet's revision, which a node that refused it does not boot on: on such a node run this command too before the old key goes, or its next start cannot open the revision it boots on and is refused. Workflow, in outline: `crewlet secrets keygen -key-id <new>` → add the new key to `secrets.keys` on every node and restart → set `active_key_id: <new>` and restart again → `crewlet secrets rekey` **and** this command, or a reload → drop the old key only once [the rotation runbook](../concepts/secret-store.md#rotating-the-keyring-with-nothing-in-flight-lost)'s conditions hold.
 
-`-dry-run` reports what would move by reading the key id off the envelope, decrypting nothing. Idempotent: a document already under the active key is skipped and says so. A **plaintext** revision is refused like every other reader refuses one: it has no key to rotate, and nothing vouches for who wrote it, so the refusal names `crewlet config import`, which stores the document sealed again from your own copy. Fails clearly, naming the key, if the document is sealed under one no longer in the keyring.
+`-dry-run` reports what would move by reading the key id off the envelope, decrypting nothing. Idempotent: a document already under the active key is skipped and says so. A **plaintext** revision is refused like every other reader refuses one: it has no key to rotate, and nothing vouches for who wrote it, so the refusal names `crewlet config import`, which stores the document sealed again from your own copy. Fails clearly, naming the key, if the document is sealed under one no longer in the keyring, and refuses one sealed in a form this build does not read, naming the build that sealed it.
 
 ---
 

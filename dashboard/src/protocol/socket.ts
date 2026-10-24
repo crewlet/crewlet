@@ -168,6 +168,7 @@ const QUERY_ERROR_CODES: Record<QueryErrorCode, true> = {
   unsealed_revision: true,
   unreadable_fleet_revision: true,
   unsealed_fleet_revision: true,
+  unknown_seal_revision: true,
   timeout: true,
   closed: true,
 };
@@ -260,6 +261,7 @@ export const DETAILED_QUERY_ERRORS: ReadonlySet<QueryErrorCode> = new Set<QueryE
   "unsealed_revision",
   "unreadable_fleet_revision",
   "unsealed_fleet_revision",
+  "unknown_seal_revision",
 ]);
 
 /**

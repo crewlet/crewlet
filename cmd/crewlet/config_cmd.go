@@ -312,9 +312,16 @@ func importConfig(ctx context.Context, cs *configStore, path string,
 		case errors.Is(err, secrets.ErrUnsealedWithKey):
 			// AN UNSEALED REVISION IS REPLACED, NEVER COMPARED: this import
 			// is the remedy every reader's refusal of one names
-			// ([refuseUnsealed]), so refusing it here too left a store
-			// whose company is plaintext with no way out at all. Nothing is
-			// read from it — it is only the new one's parent.
+			// ([refuseUnsealed]; configapi's UnreadableRevisionError.Remedy
+			// names it beside PUT /config), so refusing it here too left a
+			// store whose company is plaintext with no way out at all.
+			// Nothing is read from it — it is only the new one's parent.
+			// PUT /config is the same rule held online, and it is also where
+			// this command goes while a node holds the store (configapi's
+			// prepare reads nothing from an unsealed base either). A revision
+			// SEALED in a form this build does not read is not this:
+			// [openStored] refuses it, and the import with it, since it is
+			// somebody's document and only the build that sealed it reads it.
 		case err != nil:
 			return err
 		case bytes.Equal(current, document):
@@ -639,23 +646,37 @@ func renderValue(v any) string {
 }
 
 // openStored opens a revision this node's store holds, and a refusal says what
-// brings it back.
+// brings it back ([storedRefusal]).
+func openStored(cipher secrets.Cipher, rev store.Revision) ([]byte, error) {
+	document, err := secrets.Open(cipher, rev.Payload)
+	if err != nil {
+		return nil, storedRefusal(rev.ID, err)
+	}
+	return document, nil
+}
+
+// storedRefusal is why a revision this node's store holds does not open, and
+// what brings it back, for every command that meets one, a rekey's check of
+// its seal included.
 //
 // An UNSEALED revision is refused: nothing vouches for who wrote it, and its
 // document comes back only by importing it again from the operator's own
-// copy. A revision sealed under a key the keyring does not hold needs that key
-// back.
-func openStored(cipher secrets.Cipher, rev store.Revision) ([]byte, error) {
-	document, err := secrets.Open(cipher, rev.Payload)
+// copy. A revision SEALED IN A FORM THIS BUILD DOES NOT READ is somebody's
+// document, most likely a newer build's, which that build reads and nothing
+// here replaces. A revision sealed under a key the keyring does not hold needs
+// that key back.
+func storedRefusal(revisionID string, err error) error {
 	switch {
-	case err == nil:
-		return document, nil
 	case errors.Is(err, secrets.ErrUnsealedWithKey):
-		return nil, refuseUnsealed(rev.ID)
+		return refuseUnsealed(revisionID)
+	case errors.Is(err, secrets.ErrUnknownEnvelope):
+		return fmt.Errorf("revision %s is sealed in a form this build of crewlet "+
+			"doesn't read, most likely by a newer build, so nothing here reads or "+
+			"replaces it; run the build that sealed it: %w", revisionID, err)
 	default:
-		return nil, fmt.Errorf("revision %s does not open under this node's "+
+		return fmt.Errorf("revision %s does not open under this node's "+
 			"keyring; restore the key it was sealed under to secrets.keys: %w",
-			rev.ID, err)
+			revisionID, err)
 	}
 }
 

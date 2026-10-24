@@ -266,11 +266,13 @@ const (
 	// three-valued rule internal/coord states, applied to authentication.
 	CodeIdentityUnavailable Code = "identity_unavailable"
 	// CodeSeatHoldersUnavailable is a /config write that removes a human
-	// seat, answered while this node could not read the identity directory to
-	// learn whether anybody holds it: nothing was written. Its own code
-	// because [CodeIdentityUnavailable]'s sentence is about the CALLER, and
-	// the caller here was resolved; what could not be read is who holds the
-	// seats the write takes away. 503, under the identity estate's hint.
+	// seat, or a whole document replacing an unsealed revision (which asks
+	// about every seat it does not keep), answered while this node could not
+	// read the identity directory to learn whether anybody holds them:
+	// nothing was written. Its own code because [CodeIdentityUnavailable]'s
+	// sentence is about the CALLER, and the caller here was resolved; what
+	// could not be read is who holds the seats the write takes away. 503,
+	// under the identity estate's hint.
 	CodeSeatHoldersUnavailable Code = "seat_holders_unavailable"
 
 	// CodeCSRFOrigin is a state-changing request a cross-site page could
@@ -410,6 +412,18 @@ const (
 	// pointer without a seal. Every node seals what it activates, so it came
 	// from outside the fleet, and no node reads it.
 	CodeUnsealedFleetRevision Code = "unsealed_fleet_revision"
+
+	// CodeUnknownSealRevision is a revision SEALED in a form this build does
+	// not read, most likely by a newer build: this node's own copy (a node
+	// that ran the newer build and was taken back to this one) or the
+	// fleet's, met through its pointer. ONE code for both, because the
+	// remedy is one: run the build that sealed it. Its own code rather than
+	// [CodeUnsealedRevision], because the two send a caller opposite ways: a
+	// whole document replaces an unsealed revision, reading nothing from it,
+	// while a replacement here would discard a document somebody sealed. And
+	// rather than [CodeUnreadableRevision], whose message names a key to put
+	// back, when no key opens a form this build does not parse.
+	CodeUnknownSealRevision Code = "unknown_seal_revision"
 
 	// CodeInvalidRevisionID is a revision route with no revision named.
 	CodeInvalidRevisionID Code = "invalid_revision_id"
@@ -1413,6 +1427,9 @@ var codes = map[Code]string{
 		"fixes it.",
 	CodeUnsealedFleetRevision: "The fleet's revision arrived without a seal, " +
 		"so this node won't read it. The hint says what to do.",
+	CodeUnknownSealRevision: "That revision is sealed in a form this build of " +
+		"Crewlet doesn't read, most likely by a newer build, so this node can't " +
+		"read or replace it. The hint says what fixes it.",
 	CodeInvalidRevisionID: "Name the revision this is about.",
 	CodeAgainstNotFound:   "The revision to compare against is not held here.",
 	CodeUnsupportedPatchMediaType: "This endpoint takes a JSON Merge Patch: an " +

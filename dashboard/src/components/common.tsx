@@ -447,6 +447,11 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
       The fleet’s revision arrived without a seal, so this node won’t read it.
     </Callout>
   ),
+  unknown_seal_revision: (
+    <Callout variant="warning">
+      That revision is sealed in a form this build doesn’t read, most likely by a newer build.
+    </Callout>
+  ),
   timeout: (
     <Callout variant="warning" icon={<ClockGlyph size="md" />}>
       The engine didn’t answer in time.
