@@ -110,6 +110,12 @@ func TestEveryFieldIsHeldToItsRule(t *testing.T) {
 		"long name":       {`"Acme"`, `"` + strings.Repeat("a", 81) + `"`, brandformat.RuleBound, "at most 80"},
 		"url in name":     {`"Acme"`, `"Acme https://evil.test"`, brandformat.RuleField, "link"},
 		"www in tagline":  {`"Tools for people who make things"`, `"see www.evil.test"`, brandformat.RuleField, "link"},
+		"host and path":   {`"Tools for people who make things"`, `"acme.io/promo"`, brandformat.RuleField, "link"},
+		"scheme-relative": {`"Acme"`, `"Acme //evil.example/x"`, brandformat.RuleField, "link"},
+		"mail address":    {`"Acme"`, `"ops@evil.example"`, brandformat.RuleField, "link"},
+		"markdown link":   {`"Tools for people who make things"`, `"[tools](evil.example)"`, brandformat.RuleField, "link"},
+		"bare host":       {`"Tools for people who make things"`, `"Tools at evil.example"`, brandformat.RuleField, "web address"},
+		"host in a line":  {`"We fixed it on Tuesday."`, `"Read more at acme.io"`, brandformat.RuleField, "web address"},
 		"markup":          {`"Tools for people who make things"`, `"<b>Tools</b>"`, brandformat.RuleField, "< or >"},
 		"control":         {`"Acme"`, `"Ac\u0007me"`, brandformat.RuleField, "control character"},
 		"bidi":            {`"Acme"`, `"Ac\u202eme"`, brandformat.RuleField, "U+202E"},
@@ -155,6 +161,12 @@ func TestEveryFieldIsHeldToItsRule(t *testing.T) {
 	// PROSE IS NOT A LINK: "data: we keep it" is a sentence.
 	if _, err := brandformat.ReadKit(with(t, `"Revolutionary"`, `"Vague data: say the number"`)); err != nil {
 		t.Errorf("a sentence holding \"data:\" was refused: %v", err)
+	}
+	// A COMPANY'S NAME MAY BE A DOMAIN: the name is what the brand shows as
+	// its name, and "Booking.com" is one. A path or a scheme is still refused
+	// there (above).
+	if _, err := brandformat.ReadKit(with(t, `"Acme"`, `"Booking.com"`)); err != nil {
+		t.Errorf("a company named as its domain was refused: %v", err)
 	}
 }
 

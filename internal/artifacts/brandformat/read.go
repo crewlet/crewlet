@@ -299,11 +299,22 @@ func lineAt(raw []byte, offset int64) int {
 // ---- the field rules ------------------------------------------------------ //
 
 var (
-	// urlPattern is what reads as a link in plain text: a scheme and `//`,
-	// a `javascript:` or `data:` address, or a bare `www.` host. A link is
-	// the cheapest beacon an injected instruction asks a model for, and a
-	// brand's name or voice has no use for one.
-	urlPattern = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://|\bjavascript:|\bdata:\S|\bwww\.\S`)
+	// linkPattern is what reads as a link in plain text anywhere: a scheme
+	// and `//`, a `javascript:` or `data:` address, a bare `www.` host, a
+	// scheme-relative `//host`, a mail address, a Markdown link's `](`, and
+	// a host with a path (`acme.io/promo`). A link is the cheapest beacon an
+	// injected instruction asks a model for, and a brand's text has no use
+	// for one.
+	linkPattern = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://|\bjavascript:|\bdata:\S|\bwww\.\S|` +
+		`(?:^|[\s(\[{"'])//\S|[^\s@]@[a-z0-9-]+(?:\.[a-z0-9-]+)+|\]\(|` +
+		`\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}/`)
+
+	// hostPattern is a bare host (`acme.io`, `evil.example`), which a model
+	// reads as an address too. Refused in every field but the name: a
+	// company's own name can be a domain ("Booking.com"), and is what the
+	// brand shows as its name.
+	hostPattern = regexp.MustCompile(`(?i)\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?` +
+		`(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.[a-z]{2,24}\b`)
 )
 
 // fields holds every field of a decoded index to its rule.
@@ -318,6 +329,7 @@ func (r *reader) fields(b Brand) {
 		r.text("name", b.Name, MaxNameBytes, false)
 	}
 	r.text("tagline", b.Tagline, MaxTaglineBytes, false)
+	r.noHost("tagline", b.Tagline)
 
 	if b.Logos.Primary == "" {
 		r.field("logos.primary", RuleField, "is required: the path of the logo on a light ground")
@@ -338,8 +350,19 @@ func (r *reader) fields(b Brand) {
 	r.face("type.body", b.Type.Body)
 
 	r.text("voice.summary", b.Voice.Summary, MaxVoiceSummaryBytes, true)
+	r.noHost("voice.summary", b.Voice.Summary)
 	r.lines2("voice.write_like", b.Voice.WriteLike)
 	r.lines2("voice.avoid", b.Voice.Avoid)
+}
+
+// noHost refuses a bare host in a field other than the name ([hostPattern]),
+// where [plainText] has not already refused the field.
+func (r *reader) noHost(name, s string) {
+	if s == "" || plainText(s, true) != "" || !hostPattern.MatchString(s) {
+		return
+	}
+	r.field(name, RuleField, "holds %q, which reads as a web address: a brand's text names "+
+		"no link, so write it in words", hostPattern.FindString(s))
 }
 
 // text holds one plain-text field: at most max bytes, NFC, trimmed, no control
@@ -367,7 +390,7 @@ func plainText(s string, newlines bool) string {
 		return "begins or ends with white space"
 	case strings.ContainsAny(s, "<>"):
 		return "holds < or >: it is plain text, never markup"
-	case urlPattern.MatchString(s):
+	case linkPattern.MatchString(s):
 		return "holds a link or an address: a brand's text names no link"
 	}
 	for _, c := range s {
@@ -393,6 +416,7 @@ func (r *reader) lines2(name string, list []string) {
 			continue
 		}
 		r.text(item, s, MaxVoiceExampleBytes, false)
+		r.noHost(item, s)
 	}
 }
 
