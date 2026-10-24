@@ -10446,6 +10446,15 @@ a.live-row:focus-visible {
 .artifacts-selection {
   margin-top: calc(-1 * var(--spacing-2));
 }
+/* UNDER THE PHONE BREAKPOINT THE BAR DOCKS to the window's foot (the kit's
+   `SelectionBar`, at the same 640px), over the content, so the content keeps
+   room under its last card for the bar and the gap around it: the last card
+   was otherwise under the bar, out of a thumb's reach. */
+@media (width < 640px) {
+  .app .crewlet-app-shell__content:has(.artifacts-selection) {
+    padding-bottom: calc(var(--size-control-lg) + var(--spacing-8));
+  }
+}
 
 /* A FOLDER DIALOG'S BODY: the field, the choice of who sees it, and the
    sentence every folder gesture ends on, in the tertiary step. */
