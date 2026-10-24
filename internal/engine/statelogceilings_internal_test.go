@@ -1260,10 +1260,12 @@ func TestAnUnmeasuredVolumeNamesTheCeilingsItDecides(t *testing.T) {
 	}{
 		{"nothing set", config.Stream{}, []string{"stream.tracker_log_max_bytes",
 			"stream.tracker_vectors_max_bytes", "stream.pages_log_max_bytes",
-			"stream.artifacts_log_max_bytes", "stream.artifact_data_log_max_bytes"}},
-		// THE KNOWLEDGE BASE'S LOG, THE ARTIFACTS LOG AND THE DATASTORE LOG
-		// FOLLOW THE MUTATION LOG'S CEILING, set or derived
-		// ([config.Stream.PagesMaxBytes], [config.Stream.ArtifactsMaxBytes],
+			"stream.code_log_max_bytes", "stream.artifacts_log_max_bytes",
+			"stream.artifact_data_log_max_bytes"}},
+		// THE KNOWLEDGE BASE'S LOG, THE CODE LOG, THE ARTIFACTS LOG AND THE
+		// DATASTORE LOG FOLLOW THE MUTATION LOG'S CEILING, set or derived
+		// ([config.Stream.PagesMaxBytes], [config.Stream.CodeMaxBytes],
+		// [config.Stream.ArtifactsMaxBytes],
 		// [config.Stream.ArtifactDataMaxBytes]), so once the mutation log is
 		// set the volume decides them no more than it does the mutation
 		// log's own.
